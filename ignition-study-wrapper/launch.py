@@ -934,6 +934,8 @@ def _feed_tick() -> None:
         # whichever source reports an action first wins. It also re-syncs
         # committed/maxBet so the tap's math is coherent when it resumes.
         prev_seats = p.get("seats") or {}
+        if time.time() < _ws_state.get("domGraceUntil", 0):
+            prev_seats = {}  # deal animation — the previous hand's pixels lie
         bbc = _ws_state.get("bb") or 0
         bb_known = bool(bbc and _ws_state.get("bbSeen"))
 
@@ -1258,6 +1260,12 @@ def _on_game_msg(d: dict) -> None:
         # /hand exports null and the poller simply waits a beat.
         _ws_state["dealer"] = None
         _ws_state["dealt"] = []
+        # DOM-backfill grace: the finished hand's badges/cards re-render
+        # through the deal animation, so the seat-diff would file them as the
+        # NEW hand's opening actions (three phantom folds one second in —
+        # including hero's, which killed the panel with 'waiting for your
+        # turn' forever). The WS tap still captures real early actions.
+        _ws_state["domGraceUntil"] = time.time() + 2.5
         # Drop the BB calibration each hand: a stale value from a previous
         # table renders every amount at the wrong scale ("calls 0.02 BB"),
         # and the upcoming CO_BLIND_INFO re-establishes it immediately.
@@ -1526,6 +1534,15 @@ def _hand_state() -> dict | None:
     action_on = _ws_state.get("actionOn")
     hero_owed = (_ws_state.get("maxBet", 0)
                  - (_ws_state.get("committed") or {}).get(hero, 0))
+    hero_folded = bool(_ws_state.get("heroFolded"))
+    # Uncontested win: every dealt villain has folded — the hand is over and
+    # there is no decision left to solve (the panel shows "you win", not a
+    # solver failure).
+    folded_seats = {a["seat"] for a in _ws_state.get("actions") or []
+                    if a["type"] == "fold"}
+    villains = [s for s in dealt if s != hero]
+    hero_won = (not hero_folded and bool(villains)
+                and all(s in folded_seats for s in villains))
     return {
         "handId": _hand_no,
         "heroSeatId": hero,
@@ -1547,7 +1564,9 @@ def _hand_state() -> dict | None:
             "legalActions": [],
             "complete": False,
         },
-        "ended": bool(_ws_state.get("heroFolded")),
+        "heroFolded": hero_folded,
+        "heroWon": hero_won,
+        "ended": hero_folded or hero_won,
     }
 
 

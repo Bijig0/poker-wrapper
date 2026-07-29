@@ -628,11 +628,15 @@
     // or the spot genuinely couldn't be mapped/solved (failure streak > 0).
     const navFail = saHealth?.lastNavFailure;
     const freshFail = navFail && (Date.now() - navFail.at) < 15000;
+    // Hand-over states beat everything except a live answer: an uncontested
+    // win or a fold is a RESULT, not a solver failure.
     $("sa-answer").textContent = answer
       ? answer.text.replace(/ · roll \d+ → .*$/, "")
-      : (!myTurn ? "waiting for your turn…"
-          : freshFail ? "no answer — couldn't solve this spot"
-          : "solving your spot…");
+      : myTurn === "won" ? "— you win, hand over —"
+      : myTurn === "folded" ? "— folded, next hand —"
+      : !myTurn ? "waiting for your turn…"
+      : freshFail ? "no answer — couldn't solve this spot"
+      : "solving your spot…";
     const spoken = answer ? (pick ? pick + ". " + answer.text : answer.text) : null;
     if (spoken && spoken !== saLastSpoken) { saLastSpoken = spoken; speak(spoken); }
     if (!spoken) saLastSpoken = "";
@@ -657,8 +661,12 @@
         else if (s.panelVersion !== panelVersion) { location.reload(); return; }
       }
       saOn = !!s.studyAnswers;
-      const myTurn = !!(s.hand && s.hand.currentNode
-        && s.hand.currentNode.toActIsHero && !s.hand.ended);
+      // myTurn: true | false | "won" | "folded" — the strings are hand-over
+      // results, rendered as such instead of solver placeholders.
+      const myTurn = s.hand?.heroWon ? "won"
+        : s.hand?.heroFolded ? "folded"
+        : !!(s.hand && s.hand.currentNode
+             && s.hand.currentNode.toActIsHero && !s.hand.ended);
       // Tolerate both answer shapes (older servers pushed a bare string).
       const a = typeof s.panelAnswer === "string"
         ? { text: s.panelAnswer, pick: null, roll: null } : s.panelAnswer;
