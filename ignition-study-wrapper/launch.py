@@ -228,17 +228,20 @@ _EXTRACT_DEEP_JS = r"""(() => {
 # /panel/answer; the TTL mirrors assistive-play's run.ts so a dead poller
 # degrades to a blank card, never a stale verdict.
 STUDY_ANSWER_TTL_MS = 3000
-_study = {"on": False, "text": None, "at": 0.0}
+_study = {"on": False, "text": None, "pick": None, "roll": None, "at": 0.0}
 # Hero's table status, cached by _feed_tick (which polls the DOM anyway) so
 # /state never needs an extra CDP eval to answer the poller's 1 Hz probe.
 _live_status = {"hero": "unknown"}
 
 
-def _current_answer() -> str | None:
+def _current_answer() -> dict | None:
+    """The displayable answer {text, pick, roll} — only while the toggle is on
+    and the last push is fresh (dead poller ⇒ blank card, never stale advice)."""
     if not _study["on"] or not _study["text"]:
         return None
-    fresh = (time.time() - _study["at"]) * 1000 < STUDY_ANSWER_TTL_MS
-    return _study["text"] if fresh else None
+    if (time.time() - _study["at"]) * 1000 >= STUDY_ANSWER_TTL_MS:
+        return None
+    return {"text": _study["text"], "pick": _study["pick"], "roll": _study["roll"]}
 
 
 def state(light: bool = False) -> dict:
@@ -1840,7 +1843,11 @@ class Handler(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 text = body.get("text")
-                _study["text"] = text if isinstance(text, str) and text.strip() else None
+                live = isinstance(text, str) and bool(text.strip())
+                _study["text"] = text if live else None
+                pick = body.get("pick")
+                _study["pick"] = pick if live and isinstance(pick, str) else None
+                _study["roll"] = body.get("roll") if live else None
                 _study["at"] = time.time()
                 self._send(200, "application/json", json.dumps({"ok": True}).encode())
             elif path == "/debug":
