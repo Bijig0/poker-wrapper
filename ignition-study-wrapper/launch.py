@@ -927,40 +927,60 @@ def _feed_tick() -> None:
         # "this seat's committed chips went up". Those states survive until
         # something else changes them, so a missed poll delays a line but never
         # loses it — and an animation replaying a badge can't invent one.
-        # Actions, blinds, streets, hand boundaries and hole cards now come from
-        # the WebSocket tap (authoritative). The DOM path stays for live state
-        # (pot/board/turn/options) that the controls and panel read.
+        # The WebSocket tap is the PRIMARY action source (exact, instant) but
+        # it dies across Zone table hops and misses whatever happened in the
+        # gap. The DOM diff below BACKFILLS those actions into the same
+        # structured log + feed, deduped via the shared _act_seen keys —
+        # whichever source reports an action first wins. It also re-syncs
+        # committed/maxBet so the tap's math is coherent when it resumes.
         prev_seats = p.get("seats") or {}
-        if False:
-            prev_max = max((_pot_val(s.get("bet")) or 0
-                            for s in prev_seats.values()), default=0.0)
-            for num in sorted(seats):
-                cur, old = seats[num], prev_seats.get(num)
-                if not old:
-                    continue
-                oc, cc = old.get("cards", 0), cur.get("cards", 0)
-                if oc >= 1 and cc == 0 and ("fold", num) not in _round_seen:
-                    _round_seen.add(("fold", num))
-                    _feed_add(f"Seat {num} folds")
-                    continue
-                # A missing bet reading means UNKNOWN, never zero — treating a
-                # parse miss as 0 made the next good read look like a new bet,
-                # which is what produced repeated phantom calls.
-                ob, cb = _pot_val(old.get("bet")), _pot_val(cur.get("bet"))
-                if ob is None or cb is None or cb <= ob + 1e-9:
-                    continue
-                key = ("bet", num, round(cb, 2))
-                if key in _round_seen:
-                    continue  # same committed total already reported
-                _round_seen.add(key)
-                if (_pot_val(cur.get("stack")) or 0) == 0:
-                    verb = f"is ALL-IN ({cur['bet']})"
-                elif cb > prev_max + 1e-9:
-                    verb = (f"raises to {cur['bet']}" if prev_max > 0
-                            else f"bets {cur['bet']}")
-                else:
-                    verb = f"calls {cur['bet']}"
-                _feed_add(f"Seat {num} {verb}")
+        bbc = _ws_state.get("bb") or 0
+        bb_known = bool(bbc and _ws_state.get("bbSeen"))
+
+        def dom_cents(v: float | None) -> int | None:
+            return int(round(v * bbc)) if bb_known and v is not None else None
+
+        prev_max = max((_pot_val(s.get("bet")) or 0
+                        for s in prev_seats.values()), default=0.0)
+        for num in sorted(seats):
+            cs, old = seats[num], prev_seats.get(num)
+            if not old:
+                continue
+            badge = (cs.get("badge") or "").upper()
+            oc, cc = old.get("cards", 0), cs.get("cards", 0)
+            if (badge == "FOLD" or (oc >= 1 and cc == 0)) and not _act_seen(("fold", num)):
+                if num == _ws_state.get("heroSeat"):
+                    _ws_state["heroFolded"] = True
+                _act_add(num, "fold")
+                _feed_add(f"Seat {num} folds")
+                continue
+            if badge == "CHECK" and not _act_seen(("check", num)):
+                _act_add(num, "check")
+                _feed_add(f"Seat {num} checks")
+                continue
+            # A missing bet reading means UNKNOWN, never zero — treating a
+            # parse miss as 0 made the next good read look like a new bet,
+            # which is what produced repeated phantom calls.
+            ob, cb = _pot_val(old.get("bet")), _pot_val(cs.get("bet"))
+            if ob is None or cb is None or cb <= ob + 1e-9:
+                continue
+            total_c = dom_cents(cb)
+            if total_c is None or _act_seen((num, total_c)):
+                continue
+            com = _ws_state.setdefault("committed", {})
+            top_c = _ws_state.get("maxBet", 0)
+            if (_pot_val(cs.get("stack")) or 0) == 0:
+                _act_add(num, "all-in", total_c)
+                _feed_add(f"Seat {num} is ALL-IN ({cs['bet']})")
+            elif total_c > max(top_c, dom_cents(prev_max) or 0):
+                kind = "raise" if prev_max > 0 or top_c > (dom_cents(1.0) or 0) else "bet"
+                _act_add(num, kind, total_c)
+                _feed_add(f"Seat {num} {'raises to' if kind == 'raise' else 'bets'} {cs['bet']}")
+            else:
+                _act_add(num, "call", total_c - (com.get(num, 0) or 0))
+                _feed_add(f"Seat {num} calls {cs['bet']}")
+            com[num] = total_c
+            _ws_state["maxBet"] = max(top_c, total_c)
         if cur["toAct"] and not p.get("toAct"):
             _feed_add("YOUR TURN: " + " / ".join(
                 a["text"] for a in actions if "%" not in a["text"]))
@@ -1185,6 +1205,18 @@ def _act_add(seat: int | None, kind: str, cents: int | None = None) -> None:
         {"seat": seat, "type": kind, "cents": cents, "street": _street_now()})
 
 
+def _act_seen(key: tuple) -> bool:
+    """Cross-source dedupe for one betting round: the WS tap and the DOM diff
+    both observe actions, and whichever reports first wins. Keys: ('fold'|
+    'check', seat) for the unique actions, (seat, committed_total_cents) for
+    money actions. Cleared with the round (new hand / new street)."""
+    seen = _ws_state.setdefault("actSeen", set())
+    if key in seen:
+        return True
+    seen.add(key)
+    return False
+
+
 def _amt(cents: int | None) -> str:
     """Format a wire amount (cents) in big blinds when the BB is known."""
     if cents is None:
@@ -1216,6 +1248,7 @@ def _on_game_msg(d: dict) -> None:
         _ws_state["actionOn"] = None
         _ws_state["committed"] = {}
         _ws_state["actions"] = []
+        _ws_state["actSeen"] = set()
         _ws_state["heroCards"] = []
         _ws_state["potCents"] = None
         # Zone deals a NEW table every hand: the previous hand's dealer/dealt
@@ -1267,8 +1300,9 @@ def _on_game_msg(d: dict) -> None:
             total = prior + rz
             com[seat] = total
             _ws_state["maxBet"] = max(top, total)
-            _act_add(seat, "raise", total)
-            _feed_add(f"Seat {seat} raises to {_amt(total)}")
+            if not _act_seen((seat, total)):
+                _act_add(seat, "raise", total)
+                _feed_add(f"Seat {seat} raises to {_amt(total)}")
         elif verb == "calls":
             # Matching the standing bet is a call; exceeding it (or acting when
             # nothing is owed) is a bet — the bitmask alone can't tell these
@@ -1276,9 +1310,10 @@ def _on_game_msg(d: dict) -> None:
             com[seat] = prior + bet
             if prior + bet > top:
                 _ws_state["maxBet"] = prior + bet
-                _act_add(seat, "bet", prior + bet)
-                _feed_add(f"Seat {seat} bets {_amt(bet)}")
-            else:
+                if not _act_seen((seat, prior + bet)):
+                    _act_add(seat, "bet", prior + bet)
+                    _feed_add(f"Seat {seat} bets {_amt(bet)}")
+            elif not _act_seen((seat, prior + bet)):
                 # A call reports the amount called (the top-up), which is the
                 # standard hand-history convention — unlike "raises to".
                 _act_add(seat, "call", bet)
@@ -1287,13 +1322,16 @@ def _on_game_msg(d: dict) -> None:
             total = prior + max(bet, rz)
             com[seat] = total
             _ws_state["maxBet"] = max(top, total)
-            _act_add(seat, "all-in", total)
-            _feed_add(f"Seat {seat} is ALL-IN ({_amt(total)})")
+            if not _act_seen((seat, total)):
+                _act_add(seat, "all-in", total)
+                _feed_add(f"Seat {seat} is ALL-IN ({_amt(total)})")
         else:
             if verb == "folds" and seat == _ws_state.get("heroSeat"):
                 _ws_state["heroFolded"] = True
-            _act_add(seat, "fold" if verb == "folds" else "check")
-            _feed_add(f"Seat {seat} {verb}")
+            kind = "fold" if verb == "folds" else "check"
+            if not _act_seen((kind, seat)):
+                _act_add(seat, kind)
+                _feed_add(f"Seat {seat} {verb}")
     elif pid == "CO_BCARD3_INFO":                      # the flop, all three at once
         names = [n for n in (_card_name(f"card{c}") for c in (d.get("bcard") or []))
                  if n]
@@ -1301,6 +1339,7 @@ def _on_game_msg(d: dict) -> None:
             _ws_state["board"] = names
             _ws_state["maxBet"] = 0                    # bets reset each round
             _ws_state["committed"] = {}
+            _ws_state["actSeen"] = set()
             _feed_add(f"— FLOP — {' '.join(names)} — pot {_ws_state['pot'] or '?'}")
     elif pid == "CO_BCARD1_INFO":                      # turn (pos 4), river (pos 5)
         pos, name = d.get("pos") or 0, _card_name(f"card{d.get('card')}")
@@ -1314,6 +1353,7 @@ def _on_game_msg(d: dict) -> None:
         shown = [c for c in b if c]
         _ws_state["maxBet"] = 0
         _ws_state["committed"] = {}
+        _ws_state["actSeen"] = set()
         street = "TURN" if pos == 4 else "RIVER"
         _feed_add(f"— {street} — {' '.join(shown)} — pot {_ws_state['pot'] or '?'}")
     # CO_RABBITCARD_INFO is deliberately ignored: rabbit-hunt cards are shown
@@ -1602,18 +1642,24 @@ def history(limit: int = 20) -> dict:
 
 
 def _ws_tap() -> None:
-    """Follow the table's WebSocket via CDP, forever, reconnecting as needed."""
+    """Follow the table's WebSocket via CDP, forever, reconnecting as needed.
+    Every reconnect is a blind window (Zone table hops kill the connection) —
+    keep it SHORT and make it VISIBLE; the DOM diff backfills what was missed."""
     import websocket
+    was_up = False
     while True:
         try:
             t = ignition_target()
             if not t:
-                time.sleep(3)
+                time.sleep(1)
                 continue
             c = websocket.create_connection(t["webSocketDebuggerUrl"], timeout=60,
                                             suppress_origin=True)
             c.send(json.dumps({"id": 1, "method": "Network.enable"}))
             print("[ws] tapped table game protocol")
+            if was_up:
+                _feed_add("(capture reconnected — DOM backfill covered the gap)")
+            was_up = True
             while True:
                 m = json.loads(c.recv())
                 if m.get("method") != "Network.webSocketFrameReceived":
@@ -1630,7 +1676,7 @@ def _ws_tap() -> None:
                     except Exception:
                         pass
         except Exception:
-            time.sleep(2)
+            time.sleep(0.5)
 
 
 def _feed_loop() -> None:
