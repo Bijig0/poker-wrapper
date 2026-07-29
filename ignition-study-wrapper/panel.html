@@ -135,10 +135,31 @@
   </div>
 
   <div class="card">
-    <h2>Phase-1 probe</h2>
-    <button id="dump">Dump DOM sample</button>
-    <div id="verdict"></div>
-    <pre id="sample" style="display:none"></pre>
+    <h2>Feed — actual table vs study table</h2>
+    <div id="fs-status" class="sub">waiting for a hand…</div>
+    <div id="fs-grid" style="display:none">
+      <div class="fs-cols">
+        <div>
+          <div class="fs-title">ACTUAL TABLE (observed)</div>
+          <div id="fs-actual"></div>
+        </div>
+        <div>
+          <div class="fs-title shown">STUDY TABLE (what answers use)</div>
+          <div id="fs-shown"></div>
+        </div>
+      </div>
+      <div class="fs-title" style="margin-top:10px">DISCREPANCIES</div>
+      <div id="fs-discs"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Study answers <span id="sa-health" class="badge">off</span></h2>
+    <div id="sa-answer" class="big">— off —</div>
+    <div class="sub">GTO verdict for your pending decision, pushed live by
+      gto-trainer's study poller (see CONTRACT.md). Spoken aloud when it
+      changes. Study/practice tables only.</div>
+    <button id="sa-toggle" style="margin-top:8px">Turn ON</button>
   </div>
 
   <div class="card">
@@ -173,36 +194,22 @@
   </div>
 
   <div class="card">
+    <h2>History <span id="hist-count" class="badge"></span></h2>
+    <div class="sub">Finished hands, archived to data/hands.db in
+      assistive-play's schema (newest first).</div>
+    <div id="hist"><div class="sub">no archived hands yet</div></div>
+  </div>
+
+  <div class="card">
     <h2>Debug recordings <button id="recsreload" class="mini">↻</button></h2>
     <div id="recs"><div class="sub">loading…</div></div>
   </div>
 
   <div class="card">
-    <h2>Feed — actual table vs study table</h2>
-    <div id="fs-status" class="sub">waiting for a hand…</div>
-    <div id="fs-grid" style="display:none">
-      <div class="fs-cols">
-        <div>
-          <div class="fs-title">ACTUAL TABLE (observed)</div>
-          <div id="fs-actual"></div>
-        </div>
-        <div>
-          <div class="fs-title shown">STUDY TABLE (what answers use)</div>
-          <div id="fs-shown"></div>
-        </div>
-      </div>
-      <div class="fs-title" style="margin-top:10px">DISCREPANCIES</div>
-      <div id="fs-discs"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Study answers <span id="sa-health" class="badge">off</span></h2>
-    <div id="sa-answer" class="big">— off —</div>
-    <div class="sub">GTO verdict for your pending decision, pushed live by
-      gto-trainer's study poller (see CONTRACT.md). Spoken aloud when it
-      changes. Study/practice tables only.</div>
-    <button id="sa-toggle" style="margin-top:8px">Turn ON</button>
+    <h2>Phase-1 probe</h2>
+    <button id="dump">Dump DOM sample</button>
+    <div id="verdict"></div>
+    <pre id="sample" style="display:none"></pre>
   </div>
 
 <script>
@@ -680,6 +687,30 @@
     setTimeout(pollFeedSpot, next);
   }
   pollFeedSpot();
+
+  // ---- History: finished hands archived by the server (data/hands.db) ----
+  const cardSpanH = c =>
+    `<span style="font-weight:800;color:${/[♥♦]/.test(c) ? "#ff6b70" : "#e8edf2"}">${c}</span>`;
+  async function pollHistory() {
+    try {
+      const h = await (await fetch("/history")).json();
+      $("hist-count").textContent = h.count ? h.count + " hands" : "";
+      const sig = JSON.stringify(h.hands?.map(x => x.dbId));
+      if (h.hands?.length && $("hist").dataset.sig !== sig) {
+        $("hist").dataset.sig = sig;
+        $("hist").innerHTML = h.hands.map(x => {
+          const t = x.playedAt ? new Date(x.playedAt).toLocaleTimeString() : "";
+          const cards = (x.heroCards || "").split(",").filter(Boolean).map(cardSpanH).join(" ");
+          return `<div class="fl"><span class="ts">${t}</span>` +
+            `#${x.handId}${x.stakes ? " · " + x.stakes : ""} · ${x.street}` +
+            (cards ? " · " + cards : "") + ` · ${x.actions} actions` +
+            (x.result ? `<br><span class="sub">${x.result}</span>` : "") + "</div>";
+        }).join("");
+      }
+    } catch (e) { /* server restarting */ }
+    setTimeout(pollHistory, 5000);
+  }
+  pollHistory();
 
   $("dump").onclick = async () => {
     $("dump").disabled = true; $("verdict").textContent = "reading every frame…";

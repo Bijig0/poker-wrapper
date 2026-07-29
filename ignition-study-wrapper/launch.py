@@ -32,6 +32,7 @@ import ctypes.wintypes
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1198,6 +1199,7 @@ def _on_game_msg(d: dict) -> None:
         # check that spawned a phantom hand carrying the previous hand's id.
         if hid and hid == _hand_ids.get(_hand_no):
             return
+        _archive_hand()   # the finished hand, an instant before its state resets
         _hand_no += 1
         _hand_ids[_hand_no] = hid
         _ws_state["board"] = []
@@ -1486,6 +1488,96 @@ def _hand_state() -> dict | None:
     }
 
 
+# ---- Hand history (assistive-play's exact schema) --------------------------
+# Every finished hand is archived into data/hands.db with the same DDL and
+# column semantics as assistive-play's HandStore (src/store/handStore.ts), so
+# its History/replay/MDA tooling reads Windows hands unchanged. The `data`
+# blob is the structured /hand export plus this hand's feed lines.
+DATA_DIR = ROOT / "data"
+_DB_DDL = """CREATE TABLE IF NOT EXISTS hands (
+  rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+  hand_id INTEGER,
+  played_at INTEGER,
+  stakes TEXT,
+  street TEXT,
+  result_text TEXT,
+  result_amount REAL,
+  hero_cards TEXT,
+  action_count INTEGER,
+  data TEXT NOT NULL
+)"""
+
+
+def _db() -> sqlite3.Connection:
+    DATA_DIR.mkdir(exist_ok=True)
+    c = sqlite3.connect(DATA_DIR / "hands.db", timeout=5)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute(_DB_DDL)
+    return c
+
+
+def _stakes_str() -> str | None:
+    bb = _ws_state.get("bb") or 0
+    if not (bb and _ws_state.get("bbSeen")):
+        return None
+    return f"${bb / 200:.2f}/${bb / 100:.2f}"
+
+
+def _archive_hand() -> None:
+    """Persist the finishing hand. Called at the NEXT hand's PLAY_STAGE_INFO —
+    the only reliable end-of-hand signal — so the state read here is the
+    completed hand, an instant before it is reset."""
+    try:
+        h = _hand_state()
+        if not h or not h["actions"]:
+            return
+        lines = [f["line"] for f in _feed if f.get("hand") == _hand_no]
+        result = next((x for x in reversed(lines)
+                       if re.search(r"\bwins?\b|Result for hand", x)), None)
+        h["playedAt"] = int(time.time() * 1000)
+        h["stakes"] = _stakes_str()
+        h["clientHandId"] = _hand_ids.get(_hand_no)
+        h["feedLines"] = lines
+        if result:
+            h["result"] = {"text": result}
+        c = _db()
+        try:
+            cur = c.execute(
+                "INSERT INTO hands (hand_id, played_at, stakes, street, result_text,"
+                " result_amount, hero_cards, action_count, data)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (h["handId"], h["playedAt"], h["stakes"], h["street"], result, None,
+                 ",".join(h["heroCards"]), len(h["actions"]), json.dumps(h)))
+            h["dbId"] = cur.lastrowid
+            c.execute("UPDATE hands SET data = ? WHERE rowid = ?",
+                      (json.dumps(h), h["dbId"]))
+            c.commit()
+        finally:
+            c.close()
+        print(f"[history] archived hand #{h['handId']} ({len(h['actions'])} actions)")
+    except Exception as e:
+        print(f"[history] archive failed: {e}")
+
+
+def history(limit: int = 20) -> dict:
+    try:
+        c = _db()
+        try:
+            n = c.execute("SELECT COUNT(*) FROM hands").fetchone()[0]
+            rows = c.execute(
+                "SELECT rowid, hand_id, played_at, stakes, street, result_text,"
+                " hero_cards, action_count FROM hands ORDER BY rowid DESC LIMIT ?",
+                (limit,)).fetchall()
+        finally:
+            c.close()
+        return {"count": n, "hands": [
+            {"dbId": r[0], "handId": r[1], "playedAt": r[2], "stakes": r[3],
+             "street": r[4], "result": r[5], "heroCards": r[6], "actions": r[7]}
+            for r in rows]}
+    except Exception as e:
+        return {"count": 0, "hands": [], "error": str(e)}
+
+
 def _ws_tap() -> None:
     """Follow the table's WebSocket via CDP, forever, reconnecting as needed."""
     import websocket
@@ -1680,6 +1772,8 @@ class Handler(BaseHTTPRequestHandler):
                 h = _hand_state()
                 self._send(200, "application/json",
                            json.dumps({"ok": h is not None, "hand": h}).encode())
+            elif path == "/history":
+                self._send(200, "application/json", json.dumps(history()).encode())
             elif path == "/debug":
                 self._send(200, "application/json", json.dumps(
                     {"on": _dbg["on"], "dir": _dbg["dir"],
