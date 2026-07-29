@@ -626,10 +626,12 @@
     }
     // No answer yet: say WHY, not "…" — waiting for a turn, actively solving,
     // or the spot genuinely couldn't be mapped/solved (failure streak > 0).
+    const navFail = saHealth?.lastNavFailure;
+    const freshFail = navFail && (Date.now() - navFail.at) < 15000;
     $("sa-answer").textContent = answer
       ? answer.text.replace(/ · roll \d+ → .*$/, "")
       : (!myTurn ? "waiting for your turn…"
-          : saHealth?.distinctFailureStreak > 0 ? "no answer — couldn't solve this spot"
+          : freshFail ? "no answer — couldn't solve this spot"
           : "solving your spot…");
     const spoken = answer ? (pick ? pick + ". " + answer.text : answer.text) : null;
     if (spoken && spoken !== saLastSpoken) { saLastSpoken = spoken; speak(spoken); }
