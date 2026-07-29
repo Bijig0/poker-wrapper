@@ -1331,8 +1331,13 @@ def _on_game_msg(d: dict) -> None:
             if not (m := re.fullmatch(r"seat(\d+)", str(k))) or not isinstance(v, list):
                 continue
             dealt.append(int(m.group(1)))
-            if any(_card_name(f"card{c}") for c in v):
+            names = [n for n in (_card_name(f"card{c}") for c in v) if n]
+            if names:
                 _ws_state["heroSeat"] = int(m.group(1))
+                # Store the cards too: CO_PCARD_INFO doesn't arrive every hand
+                # and the DOM minis are blank between hands, so without this
+                # the archive (and any boundary-time read) lost hero's cards.
+                _ws_state["heroCards"] = names
         _ws_state["dealt"] = sorted(dealt)
     elif pid == "CO_CHIPTABLE_INFO":
         pots = d.get("curPot") or []
