@@ -228,7 +228,8 @@ _EXTRACT_DEEP_JS = r"""(() => {
 # /panel/answer; the TTL mirrors assistive-play's run.ts so a dead poller
 # degrades to a blank card, never a stale verdict.
 STUDY_ANSWER_TTL_MS = 3000
-_study = {"on": False, "text": None, "pick": None, "roll": None, "at": 0.0}
+_study = {"on": False, "text": None, "pick": None, "roll": None, "note": None,
+          "at": 0.0}
 # Hero's table status, cached by _feed_tick (which polls the DOM anyway) so
 # /state never needs an extra CDP eval to answer the poller's 1 Hz probe.
 _live_status = {"hero": "unknown"}
@@ -241,7 +242,8 @@ def _current_answer() -> dict | None:
         return None
     if (time.time() - _study["at"]) * 1000 >= STUDY_ANSWER_TTL_MS:
         return None
-    return {"text": _study["text"], "pick": _study["pick"], "roll": _study["roll"]}
+    return {"text": _study["text"], "pick": _study["pick"],
+            "roll": _study["roll"], "note": _study["note"]}
 
 
 def state(light: bool = False) -> dict:
@@ -778,6 +780,9 @@ def _feed_tick() -> None:
     if not d.get("seated"):
         if p.get("seated"):
             _feed_add("table closed")
+            # No next PLAY_STAGE_INFO will ever come — flush the in-progress
+            # hand to the history now or it is lost with the table.
+            _archive_hand()
             _feed_prev = {}
             _seat_mem.clear()
         return
@@ -994,7 +999,11 @@ def _feed_tick() -> None:
             total_c = dom_cents(cb)
             if total_c is None or _act_seen(_mkey(num, total_c)):
                 continue
-            com = _ws_state.setdefault("committed", {})
+            # READ-ONLY with respect to the WS bookkeeping: a DOM misread that
+            # synced committed/maxBet once poisoned every later WS amount in
+            # the hand (a phantom 11bb raise turned a real 8.28 bet into a
+            # recorded 19.28). The backfill contributes actions, never math.
+            com = _ws_state.get("committed") or {}
             top_c = _ws_state.get("maxBet", 0)
             if (_pot_val(cs.get("stack")) or 0) == 0:
                 _act_add(num, "all-in", total_c, street=street_dom)
@@ -1006,8 +1015,6 @@ def _feed_tick() -> None:
             else:
                 _act_add(num, "call", total_c - (com.get(num, 0) or 0), street=street_dom)
                 _feed_add(f"Seat {num} calls {cs['bet']}")
-            com[num] = total_c
-            _ws_state["maxBet"] = max(top_c, total_c)
         if cur["toAct"] and not p.get("toAct"):
             _feed_add("YOUR TURN: " + " / ".join(
                 a["text"] for a in actions if "%" not in a["text"]))
@@ -1394,6 +1401,9 @@ def _on_game_msg(d: dict) -> None:
             _ws_state["maxBet"] = 0                    # bets reset each round
             _ws_state["committed"] = {}
             _ws_state["actSeen"] = set()
+            # street-deal animation lies just like the hand-deal one: chips
+            # sliding to the pot read as fresh bets for a moment
+            _ws_state["domGraceUntil"] = time.time() + 1.2
             _feed_add(f"— FLOP — {' '.join(names)} — pot {_ws_state['pot'] or '?'}")
     elif pid == "CO_BCARD1_INFO":                      # turn (pos 4), river (pos 5)
         pos, name = d.get("pos") or 0, _card_name(f"card{d.get('card')}")
@@ -1408,6 +1418,7 @@ def _on_game_msg(d: dict) -> None:
         _ws_state["maxBet"] = 0
         _ws_state["committed"] = {}
         _ws_state["actSeen"] = set()
+        _ws_state["domGraceUntil"] = time.time() + 1.2
         street = "TURN" if pos == 4 else "RIVER"
         _feed_add(f"— {street} — {' '.join(shown)} — pot {_ws_state['pot'] or '?'}")
     # CO_RABBITCARD_INFO is deliberately ignored: rabbit-hunt cards are shown
@@ -1655,14 +1666,19 @@ def _stakes_str() -> str | None:
     return f"${bb / 200:.2f}/${bb / 100:.2f}"
 
 
+_last_archived = {"no": 0}
+
+
 def _archive_hand() -> None:
-    """Persist the finishing hand. Called at the NEXT hand's PLAY_STAGE_INFO —
-    the only reliable end-of-hand signal — so the state read here is the
-    completed hand, an instant before it is reset."""
+    """Persist the finishing hand. Called at the NEXT hand's PLAY_STAGE_INFO
+    (the reliable end-of-hand signal) and at table close (no next hand will
+    ever come) — the dedupe guard makes the two triggers safe together."""
     try:
         h = _hand_state()
         if not h or not h["actions"]:
             return
+        if h["handId"] == _last_archived["no"]:
+            return  # already flushed (table close followed by a rejoin)
         lines = [f["line"] for f in _feed if f.get("hand") == _hand_no]
         result = next((x for x in reversed(lines)
                        if re.search(r"\bwins?\b|Result for hand", x)), None)
@@ -1686,6 +1702,7 @@ def _archive_hand() -> None:
             c.commit()
         finally:
             c.close()
+        _last_archived["no"] = h["handId"]
         print(f"[history] archived hand #{h['handId']} ({len(h['actions'])} actions)")
     except Exception as e:
         print(f"[history] archive failed: {e}")
@@ -1983,6 +2000,8 @@ class Handler(BaseHTTPRequestHandler):
                 pick = body.get("pick")
                 _study["pick"] = pick if live and isinstance(pick, str) else None
                 _study["roll"] = body.get("roll") if live else None
+                note = body.get("note")
+                _study["note"] = note if live and isinstance(note, str) else None
                 _study["at"] = time.time()
                 self._send(200, "application/json", json.dumps({"ok": True}).encode())
             elif path == "/debug":

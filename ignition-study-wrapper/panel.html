@@ -169,6 +169,7 @@
     <h2>Study answers <span id="sa-health" class="badge">off</span></h2>
     <div id="sa-pick" style="display:none"></div>
     <div id="sa-answer" class="big">— off —</div>
+    <div id="sa-note" class="sub" style="display:none;color:#ffce56"></div>
     <div class="sub">GTO verdict for your pending decision, pushed live by
       gto-trainer's study poller (see CONTRACT.md). Mixed strategies are
       RNG-rolled into one pick, spoken aloud. Study/practice tables only.</div>
@@ -637,6 +638,14 @@
       : !myTurn ? "waiting for your turn…"
       : freshFail ? "no answer — couldn't solve this spot"
       : "solving your spot…";
+    // The solve's caveat (snapped sizes, generic ranges) — how much to trust
+    // this verdict. Shown, not spoken.
+    if (answer?.note) {
+      $("sa-note").textContent = "⚠ " + answer.note;
+      $("sa-note").style.display = "block";
+    } else {
+      $("sa-note").style.display = "none";
+    }
     const spoken = answer ? (pick ? pick + ". " + answer.text : answer.text) : null;
     if (spoken && spoken !== saLastSpoken) { saLastSpoken = spoken; speak(spoken); }
     if (!spoken) saLastSpoken = "";

@@ -51,10 +51,13 @@ defaults). Invariants the wrapper guarantees at the export boundary:
 ## 2. `POST :7700/panel/answer` — answer push (poller → wrapper)
 
 Body `{ "text": "PREFLOP — Raise 2.5 63% · Fold 37% · roll 81 → FOLD",
-"pick": "Fold", "roll": 81 }` or `{ "text": null }` to clear. `pick` is the
-RNG-sampled action for mixed strategies (the panel headlines it); `roll` is
-the 1-100 sample, `null` when the spot is pure (pick = the ~100% action).
-Both are optional — assistive-play's original panel reads only `text`.
+"pick": "Fold", "roll": 81, "note": null }` or `{ "text": null }` to clear.
+`pick` is the RNG-sampled action for mixed strategies (the panel headlines
+it); `roll` is the 1-100 sample, `null` when the spot is pure (pick = the
+~100% action). `note` is the solve's own caveat (snapped sizes, generic
+ranges) — the panel shows it under the answer so the verdict's trust level
+is visible. All three are optional — assistive-play's original panel reads
+only `text`.
 The wrapper stores the push with a timestamp; the panel shows it only while
 the toggle is on **and** the push is fresher than `STUDY_ANSWER_TTL_MS =
 3000` — so a dead poller degrades to a blank card, never a stale verdict.
