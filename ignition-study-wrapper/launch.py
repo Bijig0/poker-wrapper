@@ -953,6 +953,10 @@ def _feed_tick() -> None:
         street_dom = ("river" if len(board_cards) >= 5 else
                       "turn" if len(board_cards) == 4 else
                       "flop" if len(board_cards) == 3 else "preflop")
+        # Published for /hand: when the WS board is BEHIND (missed street
+        # message), the export can use the DOM's board instead of solving a
+        # closed preflop line while hero stares at a flop.
+        _live_status["board"] = list(board_cards)
         folded_seats = _ws_state.setdefault("foldedSeats", set())
         prev_max = max((_pot_val(s.get("bet")) or 0
                         for s in prev_seats.values()), default=0.0)
@@ -1573,6 +1577,16 @@ def _hand_state() -> dict | None:
     # downstream card parser (normalizeHand, gtowApi boards) understands it.
     short = lambda c: c.replace("10", "T")  # noqa: E731
     board = [short(c) for c in (_ws_state.get("board") or []) if c]
+    # WS board is authoritative but can lag (missed CO_BCARD during a tap
+    # gap) — hero then sits on a flop while the export still says preflop
+    # ("line ends on a terminal" no-answers). Fall back to the DOM's board,
+    # guarded: outside the deal grace and only once the hand has real action
+    # (a lingering previous-hand board fails both).
+    if time.time() >= _ws_state.get("domGraceUntil", 0):
+        dom_board = [short(c) for c in (_live_status.get("board") or []) if c]
+        has_voluntary = any(a["type"] not in ("post-sb", "post-bb") for a in acts_src)
+        if has_voluntary and len(dom_board) in (3, 4, 5) and len(dom_board) > len(board):
+            board = dom_board
     street = ("river" if len(board) >= 5 else "turn" if len(board) == 4
               else "flop" if len(board) == 3 else "preflop")
     actions = []
