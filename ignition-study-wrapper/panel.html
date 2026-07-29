@@ -644,13 +644,23 @@
       renderSa(null, false);
     } catch (e) { speak("toggle failed"); }
   };
+  let panelVersion = null;
   (async function pollSa() {
     try {
       const s = await (await fetch("/state?light=1")).json();
+      // Self-heal version skew: a long-lived panel window running old page
+      // code against a newer server is how "[object Object]" bugs happen.
+      if (s.panelVersion) {
+        if (panelVersion === null) panelVersion = s.panelVersion;
+        else if (s.panelVersion !== panelVersion) { location.reload(); return; }
+      }
       saOn = !!s.studyAnswers;
       const myTurn = !!(s.hand && s.hand.currentNode
         && s.hand.currentNode.toActIsHero && !s.hand.ended);
-      renderSa(s.panelAnswer, myTurn);
+      // Tolerate both answer shapes (older servers pushed a bare string).
+      const a = typeof s.panelAnswer === "string"
+        ? { text: s.panelAnswer, pick: null, roll: null } : s.panelAnswer;
+      renderSa(a, myTurn);
     } catch (e) { /* server restarting */ }
     setTimeout(pollSa, 1000);
   })();

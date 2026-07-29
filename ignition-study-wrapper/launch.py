@@ -248,7 +248,12 @@ def state(light: bool = False) -> dict:
     """Full state for the panel's connection card; `light` skips the DOM eval
     and target listing — enough for the 1 Hz study-answer poll and the
     poller's probe (CONTRACT.md §1) without extra CDP traffic."""
+    try:  # page-code fingerprint: the panel reloads itself when this changes
+        pv = int((ROOT / "panel.html").stat().st_mtime)
+    except OSError:
+        pv = 0
     out = {"cdp": cdp.available(CDP_PORT), "ignition": None, "targets": [],
+           "panelVersion": pv,
            # live-feed contract (CONTRACT.md §1) — what resolveHand consumes
            "connected": False, "hand": None, "studyAnswers": _study["on"],
            "panelAnswer": _current_answer(),
