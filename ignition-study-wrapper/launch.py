@@ -958,6 +958,14 @@ def _feed_tick() -> None:
             # dedupe keys re-filed a phantom fold for them.
             if not old or num in folded_seats:
                 continue
+            # HERO's seat is off-limits for DOM action detection: the action
+            # panel (CHECK/FOLD buttons, pre-selects) renders near hero's
+            # seat anchor and its text reads as a "badge" — observed live as
+            # a phantom hero check while FACING A RAISE. The WS tap owns
+            # hero's actions; a hero action missed in a tap gap lands in the
+            # last-resort AI net instead of poisoning the line.
+            if num == _ws_state.get("heroSeat"):
+                continue
             badge = (cs.get("badge") or "").upper()
             ob_badge = (old.get("badge") or "").upper()
             oc, cc = old.get("cards", 0), cs.get("cards", 0)
