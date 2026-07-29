@@ -581,7 +581,7 @@
   // gto-trainer's poller status at 2.5 s for the health badge. New verdicts
   // are spoken aloud — the whole point is not having to read the screen.
   let saOn = false, saHealth = null, saLastSpoken = "";
-  function renderSa(answer) {
+  function renderSa(answer, myTurn) {
     $("sa-toggle").textContent = saOn ? "Turn OFF" : "Turn ON";
     const b = $("sa-health");
     if (!saOn) {
@@ -603,7 +603,12 @@
       b.className = "badge " + (reason ? "bad" : "ok");
       b.textContent = reason ? "ON ⚠ " + reason : "ON ●";
     }
-    $("sa-answer").textContent = answer || "…";
+    // No answer yet: say WHY, not "…" — waiting for a turn, actively solving,
+    // or the spot genuinely couldn't be mapped/solved (failure streak > 0).
+    $("sa-answer").textContent = answer
+      || (!myTurn ? "waiting for your turn…"
+          : saHealth?.distinctFailureStreak > 0 ? "no answer — couldn't solve this spot"
+          : "solving your spot…");
     if (answer && answer !== saLastSpoken) { saLastSpoken = answer; speak(answer); }
     if (!answer) saLastSpoken = "";
   }
@@ -613,14 +618,16 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ on: !saOn }) })).json();
       saOn = !!r.on;
-      renderSa(null);
+      renderSa(null, false);
     } catch (e) { speak("toggle failed"); }
   };
   (async function pollSa() {
     try {
       const s = await (await fetch("/state?light=1")).json();
       saOn = !!s.studyAnswers;
-      renderSa(s.panelAnswer);
+      const myTurn = !!(s.hand && s.hand.currentNode
+        && s.hand.currentNode.toActIsHero && !s.hand.ended);
+      renderSa(s.panelAnswer, myTurn);
     } catch (e) { /* server restarting */ }
     setTimeout(pollSa, 1000);
   })();
