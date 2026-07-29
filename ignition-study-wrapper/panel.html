@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ignition Study</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101418; color: #e8edf2; font: 16px/1.45 "Segoe UI", system-ui, sans-serif; padding: 14px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: #8fa1b3; font-size: 12.5px; margin-bottom: 12px; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 20px; padding: 2px 10px; margin: 0 6px 6px 0; background: #26303a; color: #8fa1b3; }
+  .badge.ok { background: #123524; color: #5ee39a; }
+  .badge.bad { background: #3a1a1a; color: #ff8a80; }
+  .card { background: #171d24; border: 1px solid #26303a; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #8fa1b3; margin: 0 0 8px; }
+  #mirror { width: 100%; border-radius: 6px; display: none; }
+  button { background: #1f6feb; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button:disabled { background: #26303a; color: #5b6b7a; cursor: default; }
+  #verdict { font-size: 15px; font-weight: 600; margin: 10px 0 6px; }
+  #verdict.ok { color: #5ee39a; } #verdict.warn { color: #ffce56; }
+  pre { background: #0c1013; border-radius: 6px; padding: 8px; font-size: 11.5px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .big { font-size: 22px; font-weight: 700; color: #ffce56; }
+  .toggle { opacity: .45; }
+  #ctl-status { font-size: 26px; font-weight: 800; margin: 2px 0 10px; color: #8fa1b3; }
+  #ctl-status.turn { color: #ffce56; }
+  #btns { display: flex; flex-direction: column; gap: 10px; }
+  .act { width: 100%; padding: 18px 10px; font-size: 24px; font-weight: 800;
+         border-radius: 12px; border: 2px solid transparent; color: #fff; }
+  .act:disabled { opacity: .35; }
+  .act.fold { background: #8c2f39; }
+  .act.check, .act.call { background: #1f7a4d; }
+  .act.raise, .act.bet { background: #b96a1f; }
+  .act.allin { background: #6d3fa8; }
+  .cs-board { display: flex; gap: 7px; margin: 8px 0; min-height: 52px; }
+  .cs-board .cardb { width: 38px; height: 52px; border-radius: 6px; background: #22303d;
+                     border: 1.5px solid #46586a; display: flex; align-items: center;
+                     justify-content: center; font-size: 17px; font-weight: 800; background: #f4f6f8; color: #111; }
+  .cs-board .cardb.back { background: #b3541e; border-color: #8c3f12; }
+  .cs-board .cardb.red { color: #c42126; }
+  .cs-facts { font-size: 19px; line-height: 1.5; }
+  .cs-facts .you { color: #5ee39a; font-weight: 800; }
+  .cs-facts .onseat { color: #ffce56; font-weight: 700; }
+  #cs-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  #cs-pills .pill { font-size: 13px; font-weight: 800; border-radius: 20px;
+                    padding: 3px 12px; background: #22303d; color: #cfe0ef;
+                    border: 1px solid #3a4a5a; }
+  #cs-pills .pill.pos { background: #1f3b57; color: #8fd0ff; border-color: #2f5c86; }
+  #cs-pills .pill.out { background: #3a2c1e; color: #ffce56; border-color: #5c4626; }
+  #cs-pills .pill.fold { background: #3a1a1a; color: #ff8a80; border-color: #5c2626; }
+  .cs-facts .folded { color: #ff8a80; font-weight: 700; }
+  #cs-history { margin-top: 10px; }
+  #cs-history .hl { font-size: 16px; padding: 2px 0 2px 10px; border-left: 2px solid #26303a; }
+  #cs-history .hs-title { font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+                          color: #ffce56; font-weight: 700; margin: 8px 0 3px; }
+  #cs-history details { margin: 4px 0; }
+  #cs-history summary { cursor: pointer; font-size: 13px; text-transform: uppercase;
+                        letter-spacing: .05em; color: #8fa1b3; font-weight: 700; padding: 3px 0; }
+  #cs-history summary:hover { color: #cfe0ef; }
+  .curhand { font-size: 20px; line-height: 1.55; max-height: 260px; overflow-y: auto; }
+  .curhand .fl { padding: 2px 0; border-bottom: 1px solid #1e2731; }
+  .curhand .fl .ts, #feed .fl .ts { color: #5b6b7a; font-size: 12px; margin-right: 8px; }
+  #feed .hgrp { color: #8fa1b3; font-weight: 700; margin-top: 8px; font-size: 13px;
+                text-transform: uppercase; letter-spacing: .05em; }
+  #feed { max-height: 300px; overflow-y: auto; font-size: 17px; line-height: 1.5; }
+  #feed .fl { padding: 2px 0; border-bottom: 1px solid #1e2731; }
+  #feed .fl .ts { color: #5b6b7a; font-size: 12px; margin-right: 8px; }
+  #feed .fl.street { color: #ffce56; font-weight: 700; }
+  #feed .fl.turn { color: #5ee39a; font-weight: 700; }
+  #feed .fl.hand { color: #8fd0ff; }
+  #raiserow { display: flex; gap: 8px; margin-bottom: 10px; }
+  #raiserow input { flex: 1; min-width: 0; font-size: 24px; font-weight: 800; padding: 10px;
+                    border-radius: 10px; border: 2px solid #3a4a5a; background: #0c1013;
+                    color: #ffce56; text-align: center; }
+  #raiserow button { padding: 10px; font-size: 20px; }
+  .mini { padding: 2px 10px; font-size: 13px; border-radius: 6px; border: 1px solid #3a4a5a;
+          background: #22303d; color: #cfe0ef; cursor: pointer; }
+  .rec { border: 1px solid #26303a; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+  .rec-h { font-size: 13.5px; color: #cfe0ef; margin-bottom: 6px; }
+  .rec-h .ids { color: #8fd0ff; }
+  .rec textarea { width: 100%; box-sizing: border-box; min-height: 44px; font-size: 14px;
+                  background: #0c1013; color: #e8edf2; border: 1px solid #3a4a5a;
+                  border-radius: 6px; padding: 6px; resize: vertical; }
+  .rec .mini { margin-top: 4px; }
+  .rec-view { margin-top: 8px; border-top: 1px solid #26303a; padding-top: 8px; }
+  .rec-view img { width: 100%; border-radius: 6px; display: block; background: #0c1013; }
+  .rec-ctl { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .rec-ctl input[type=range] { flex: 1; }
+  .rec-ctl .pos { font-size: 12.5px; color: #8fa1b3; min-width: 92px; text-align: right; }
+  .rec-state { font-size: 12.5px; background: #0c1013; border-radius: 6px; padding: 7px;
+               max-height: 190px; overflow: auto; white-space: pre-wrap; line-height: 1.45; }
+  .rec-state b { color: #ffce56; }
+  #presets { display: flex; gap: 8px; margin-bottom: 10px; }
+  .preset { flex: 1; padding: 12px 6px; font-size: 18px; font-weight: 700;
+            border-radius: 10px; border: 1px solid #3a4a5a; background: #22303d; color: #cfe0ef; }
+  .preset:disabled { opacity: .35; }
+  /* Feed audit: actual table vs the study table answers are drawn from */
+  .fs-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .fs-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+              color: #8fa1b3; font-weight: 700; margin-bottom: 5px; }
+  .fs-title.shown { color: #8fd0ff; }
+  .fs-kv { font-size: 14.5px; line-height: 1.6; }
+  .fs-kv b { color: #e8edf2; font-weight: 700; }
+  .fs-kv .k { color: #8fa1b3; }
+  .fs-line { font-family: Consolas, monospace; font-size: 13.5px; color: #ffce56; }
+  .disc { font-size: 14.5px; padding: 4px 8px; border-radius: 6px; margin: 3px 0;
+          border-left: 3px solid; }
+  .disc .dv { font-weight: 800; }
+  .disc .dn { color: #8fa1b3; font-size: 12.5px; }
+  .disc.info  { border-color: #46586a; background: #1a222b; color: #cfe0ef; }
+  .disc.minor { border-color: #b98a1f; background: #2a2416; color: #ffce56; }
+  .disc.major { border-color: #b9401f; background: #2a1816; color: #ff8a80; }
+  .disc.none  { border-color: #2f7c56; background: #14261c; color: #5ee39a; }
+</style>
+</head>
+<body>
+  <h1>Ignition Study <span class="badge">skeleton</span></h1>
+  <div class="sub">Accessible play panel — large-print hand feed and switch-friendly controls.</div>
+
+  <div class="card">
+    <h2>Connection</h2>
+    <span id="b-cdp" class="badge">CDP …</span>
+    <span id="b-page" class="badge">table page …</span>
+    <span id="b-mode" class="badge">DOM/canvas …</span>
+    <button id="fitscreen" style="margin-top:8px;padding:8px 14px;font-size:14px;font-weight:700;border-radius:8px;border:1px solid #3a4a5a;background:#22303d;color:#cfe0ef;cursor:pointer">⇱ Fit to best screen</button>
+    <button id="recbtn" style="margin-top:8px;padding:8px 14px;font-size:14px;font-weight:700;border-radius:8px;border:1px solid #3a4a5a;background:#22303d;color:#cfe0ef;cursor:pointer">● Record debug</button>
+    <span id="fitmsg" class="sub"></span>
+    <div id="pagetitle" class="sub" style="margin:4px 0 0"></div>
+  </div>
+
+  <div class="card">
+    <h2>Live table mirror (CDP screenshot)</h2>
+    <img id="mirror" alt="table screenshot">
+    <div id="mirror-msg" class="sub">waiting for the table page…</div>
+  </div>
+
+  <div class="card">
+    <h2>Phase-1 probe</h2>
+    <button id="dump">Dump DOM sample</button>
+    <div id="verdict"></div>
+    <pre id="sample" style="display:none"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Table controls</h2>
+    <div id="ctl-status">no table</div>
+    <div id="ctl-info" class="sub"></div>
+    <div id="presets"></div>
+    <div id="raiserow" style="display:none">
+      <input id="raiseamt" type="number" inputmode="decimal" min="0" placeholder="BB">
+      <button id="raisego" class="act raise" style="flex:1.4">RAISE TO …</button>
+    </div>
+    <div id="btns"></div>
+  </div>
+
+  <div class="card">
+    <h2>Current state</h2>
+    <div id="cs-pills"></div>
+    <div id="cs-street" class="big">—</div>
+    <div id="cs-board" class="cs-board"></div>
+    <div id="cs-facts" class="cs-facts"></div>
+    <div id="cs-history"></div>
+  </div>
+
+  <div class="card">
+    <h2>Current hand <span id="handno" class="badge"></span></h2>
+    <div id="curhand" class="curhand"><div class="sub">waiting for the next hand…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Master hand feed</h2>
+    <div id="feed"><div class="sub">waiting for the first hand…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Debug recordings <button id="recsreload" class="mini">↻</button></h2>
+    <div id="recs"><div class="sub">loading…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Feed — actual table vs study table</h2>
+    <div id="fs-status" class="sub">waiting for a hand…</div>
+    <div id="fs-grid" style="display:none">
+      <div class="fs-cols">
+        <div>
+          <div class="fs-title">ACTUAL TABLE (observed)</div>
+          <div id="fs-actual"></div>
+        </div>
+        <div>
+          <div class="fs-title shown">STUDY TABLE (what answers use)</div>
+          <div id="fs-shown"></div>
+        </div>
+      </div>
+      <div class="fs-title" style="margin-top:10px">DISCREPANCIES</div>
+      <div id="fs-discs"></div>
+    </div>
+  </div>
+
+  <div class="card toggle">
+    <h2>Study answers</h2>
+    <div class="big">— off —</div>
+    <div class="sub">GTO verdicts (gto-trainer) wire in at phase 3.</div>
+  </div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const badge = (id, ok, txt) => { const b = $(id); b.className = "badge " + (ok ? "ok" : "bad"); b.textContent = txt; };
+
+  async function poll() {
+    try {
+      const s = await (await fetch("/state")).json();
+      badge("b-cdp", s.cdp, s.cdp ? "CDP connected" : "CDP down");
+      const ign = s.ignition;
+      badge("b-page", !!ign, ign ? "table page found" : "no table page");
+      if (ign) {
+        $("pagetitle").textContent = (ign.title || "") + " — " + (ign.url || "");
+        const dom = (ign.textNodes || 0) >= 40;
+        badge("b-mode", dom, dom ? `DOM: ${ign.textNodes} text nodes` :
+              `${ign.textNodes || 0} nodes / ${ign.canvases || 0} canvas`);
+        $("mirror").src = "/shot?t=" + Date.now();
+        $("mirror").style.display = "block";
+        $("mirror-msg").style.display = "none";
+      }
+    } catch (e) { badge("b-cdp", false, "panel server down"); }
+    setTimeout(poll, 2500);
+  }
+  poll();
+
+  // ---- Play-by-play hand feed (large print, auto-scrolling) ----
+  // Per-street action history inside Current state: the live street's actions
+  // inline, earlier streets as collapsed accordions (open state preserved).
+  const openStreets = new Set();
+  function renderHistory(lines, curHand) {
+    const rows = lines.filter(l => l.hand === curHand &&
+      !/^─|^Table opened|^YOUR TURN|^table broke/.test(l.line));
+    const sec = { PREFLOP: { board: "", lines: [] } };
+    let s = "PREFLOP";
+    for (const l of rows) {
+      const m = l.line.match(/^— (FLOP|TURN|RIVER) — (.*?) — pot/);
+      if (m) { s = m[1]; sec[s] = { board: m[2], lines: [] }; continue; }
+      sec[s].lines.push(l.line);
+    }
+    const present = ["PREFLOP", "FLOP", "TURN", "RIVER"].filter(k => sec[k]);
+    const curStreet = present[present.length - 1];
+    let html = "";
+    for (const k of present) {
+      const body = sec[k].lines.map(x => `<div class="hl">${x}</div>`).join("")
+        || '<div class="hl sub">no action yet</div>';
+      const label = k + (sec[k].board ? " · " + sec[k].board : "")
+        + ` — ${sec[k].lines.length} action${sec[k].lines.length === 1 ? "" : "s"}`;
+      if (k === curStreet)
+        html += `<div><div class="hs-title">${label} (now)</div>${body}</div>`;
+      else
+        html += `<details data-k="${k}"${openStreets.has(k) ? " open" : ""}>` +
+                `<summary>${label}</summary>${body}</details>`;
+    }
+    const host = $("cs-history");
+    if (host.dataset.sig === html) return;
+    host.dataset.sig = html;
+    host.innerHTML = html;
+    host.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () =>
+      d.open ? openStreets.add(d.dataset.k) : openStreets.delete(d.dataset.k)));
+  }
+
+  let feedCount = -1;
+  const lineHtml = l => {
+    const k = /FLOP|TURN|RIVER|new hand/.test(l.line) ? "street"
+      : /^YOUR TURN/.test(l.line) ? "turn"
+      : /^Your hand/.test(l.line) ? "hand" : "";
+    return `<div class="fl ${k}"><span class="ts">${l.t}</span>${l.line}</div>`;
+  };
+  async function pollFeed() {
+    try {
+      const f = await (await fetch("/feed")).json();
+      const lines = f.lines || [];
+      if (lines.length !== feedCount) {
+        feedCount = lines.length;
+        renderHistory(lines, f.hand);
+        // Current hand: only this hand's lines, minus the separator noise.
+        const cur = lines.filter(l => l.hand === f.hand && !/^─/.test(l.line));
+        $("handno").textContent = f.hand ? "hand #" + f.hand : "";
+        $("curhand").innerHTML = cur.length ? cur.map(lineHtml).join("")
+          : '<div class="sub">waiting for the next hand…</div>';
+        $("curhand").scrollTop = $("curhand").scrollHeight;
+        // Master feed: everything, with a heading per hand (client id when known).
+        let html = "", seen = -1;
+        for (const l of lines) {
+          if (l.hand !== seen) {
+            seen = l.hand;
+            const id = (f.handIds || {})[seen];
+            html += `<div class="hgrp">Hand #${seen}${id ? " · id " + id : ""}</div>`;
+          }
+          if (!/^─/.test(l.line)) html += lineHtml(l);
+        }
+        $("feed").innerHTML = html || '<div class="sub">waiting for the first hand…</div>';
+        $("feed").scrollTop = $("feed").scrollHeight;
+      }
+    } catch (e) { /* server restarting */ }
+    setTimeout(pollFeed, 1000);
+  }
+  pollFeed();
+
+  // Custom raise-to: exact amount in BB typed by the user, relayed through the
+  // client's own bet field + RAISE TO button.
+  let raising = false;
+  $("raisego").onclick = async () => {
+    if (raising) return;
+    const amt = $("raiseamt").value.trim();
+    if (!amt) { speak("enter an amount in big blinds"); return; }
+    raising = true;
+    document.querySelectorAll(".act,.preset").forEach(x => x.disabled = true);
+    try {
+      const r = await (await fetch("/act", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "raise-to", amount: amt }) })).json();
+      speak(r.ok ? "raise to " + amt + " big blinds" : (r.reason || "not available"));
+      if (r.ok) $("raiseamt").value = "";
+    } catch (e) { speak("error"); }
+    raising = false;
+    document.querySelectorAll(".act,.preset").forEach(x => x.disabled = false);
+  };
+  $("raiseamt").addEventListener("keydown", e => {
+    if (e.key === "Enter") $("raisego").click();
+  });
+
+  // ---- Live table controls: mirror the client's own action
+  // buttons; a press relays the human's choice as one real click. ----
+  let acting = false;
+  const cls = t => { t = t.toLowerCase();
+    return t.startsWith("fold") ? "fold" : t.startsWith("check") ? "check"
+      : t.startsWith("call") ? "call" : t.startsWith("raise") ? "raise"
+      : t.startsWith("bet") ? "bet" : "allin"; };
+  const speak = txt => { try { speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(txt)); } catch (e) {} };
+  let lastTurn = false;
+  async function pollTable() {
+    try {
+      const t = await (await fetch("/table")).json();
+      const st = $("ctl-status");
+      if (!t.seated) { st.textContent = "no table"; st.className = ""; $("btns").innerHTML = ""; $("ctl-info").textContent = t.reason || ""; $("raiserow").style.display = "none"; }
+      else {
+        // Current state card: street, board, pot, whose action, hand strength.
+        const streetName = t.board >= 5 ? "RIVER" : t.board === 4 ? "TURN"
+          : t.board === 3 ? "FLOP" : "PREFLOP";
+        $("cs-street").textContent = streetName + (t.pot ? " — pot " + t.pot : "");
+        const cardsHtml = (t.boardCards && t.boardCards.length)
+          ? t.boardCards.map(c =>
+              `<div class="cardb ${/[♥♦]/.test(c) ? "red" : ""}">${c}</div>`).join("")
+          : Array.from({length: t.board || 0}, () => '<div class="cardb back"></div>').join("");
+        $("cs-board").innerHTML = cardsHtml ||
+          '<span class="sub">no board yet</span>';
+        const cardSpan = c =>
+          `<span style="font-weight:800;color:${/[♥♦]/.test(c) ? "#ff6b70" : "#e8edf2"}">${c}</span>`;
+        // Pills: your seat, your position this hand, and any out-of-hand state.
+        const STATUS = {
+          "sitting-out": ["out", "SITTING OUT"],
+          "waiting-for-bb": ["out", "WAITING FOR BIG BLIND"],
+          "not-in-hand": ["out", "NOT IN THIS HAND"],
+          "folded": ["fold", "FOLDED"],
+        };
+        const pills = [];
+        if (t.heroSeat != null) pills.push(`<span class="pill">Seat ${t.heroSeat}</span>`);
+        if (t.position) pills.push(`<span class="pill pos">${t.position}</span>`);
+        const s = STATUS[t.heroStatus];
+        if (s) pills.push(`<span class="pill ${s[0]}">${s[1]}</span>`);
+        const psig = pills.join("");
+        if ($("cs-pills").dataset.sig !== psig) {
+          $("cs-pills").dataset.sig = psig;
+          $("cs-pills").innerHTML = psig;
+        }
+        // Whose turn it is, straight from the client's CO_CURRENT_PLAYER.
+        const who = t.heroStatus === "sitting-out" ? '<span class="folded">Sitting out — press I AM BACK to rejoin</span>'
+          : t.heroStatus === "waiting-for-bb" ? '<span class="folded">Waiting for the big blind to be dealt in</span>'
+          : t.heroFolded ? '<span class="folded">FOLDED — sitting this one out</span>'
+          : t.toAct ? '<span class="you">YOUR ACTION</span>'
+          : (t.actionOn != null
+              ? `<span class="onseat">Action on Seat ${t.actionOn}${t.actionOn === t.heroSeat ? " (you)" : ""}</span>`
+              : "waiting…");
+        $("cs-facts").innerHTML = who +
+          (t.heroCards && t.heroCards.length
+            ? `<br>Your cards: ${t.heroCards.map(cardSpan).join(" ")}` : "") +
+          (t.heroHand ? `<br>Your hand: <b>${t.heroHand}</b>` : "");
+        $("ctl-info").textContent = (t.title || "") + (t.pot ? " — pot " + t.pot : "");
+        st.textContent = t.toAct ? "YOUR TURN" : "waiting…";
+        st.className = t.toAct ? "turn" : "";
+        if (t.toAct && !lastTurn) speak("Your turn. " + t.actions.map(a => a.text).join(", "));
+        lastTurn = t.toAct;
+        const relay = async (label, kind, announce) => {
+          if (acting) return; acting = true;
+          document.querySelectorAll(".act,.preset").forEach(x => x.disabled = true);
+          try {
+            const r = await (await fetch("/act", { method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ label, kind }) })).json();
+            speak(r.ok ? announce : "not available");
+          } catch (e) { speak("error"); }
+          acting = false;
+          pollTable();
+        };
+        const render = (host, list, mk) => {
+          const sig = list.map(a => a.text).join("|");
+          if (host.dataset.sig === sig) return;
+          host.dataset.sig = sig;
+          host.innerHTML = "";
+          for (const a of list) host.appendChild(mk(a));
+        };
+        render($("presets"), t.presets || [], a => {
+          const b = document.createElement("button");
+          b.className = "preset"; b.textContent = a.text;
+          b.onclick = () => relay(a.text, "preset", "size " + a.text);
+          return b;
+        });
+        render($("btns"), t.actions || [], a => {
+          const b = document.createElement("button");
+          b.className = "act " + cls(a.text); b.textContent = a.text;
+          b.onclick = () => relay(a.text, "action", a.text);
+          return b;
+        });
+        // Custom raise input only when the client itself offers a raise/bet.
+        $("raiserow").style.display =
+          (t.actions || []).some(a => /^(raise|bet)/i.test(a.text)) ? "flex" : "none";
+      }
+    } catch (e) { /* server restarting — keep polling */ }
+    setTimeout(pollTable, lastTurn ? 400 : 1000);
+  }
+  pollTable();
+
+  $("fitscreen").onclick = async () => {
+    $("fitmsg").textContent = "moving…";
+    try {
+      const r = await (await fetch("/layout", { method: "POST" })).json();
+      $("fitmsg").textContent = r.ok
+        ? `placed on ${r.monitors > 1 ? (r.monitor.primary ? "primary" : "2nd") : "the"} screen (${r.monitor.w}x${r.monitor.h})`
+        : "windows not found";
+    } catch (e) { $("fitmsg").textContent = "failed: " + e; }
+  };
+
+  // Debug recorder toggle: while red, every read tick saves screenshot +
+  // parsed state + feed tail for offline misread-chasing.
+  let recOn = false;
+  const updateRec = r => {
+    if (recOn && !r.on) setTimeout(() => $("recsreload").click(), 400);
+    recOn = r.on;
+    $("recbtn").textContent = r.on ? `■ Stop recording (${r.frames})` : "● Record debug";
+    $("recbtn").style.background = r.on ? "#8c2f39" : "#22303d";
+  };
+  $("recbtn").onclick = async () => {
+    try {
+      updateRec(await (await fetch("/debug", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: !recOn }) })).json());
+    } catch (e) {}
+  };
+  (async function pollRec() {
+    try { updateRec(await (await fetch("/debug")).json()); } catch (e) {}
+    setTimeout(pollRec, 3000);
+  })();
+
+  // Debug recordings list: each saved session with an annotation box — write
+  // hand ids or "between HH:MM:SS and HH:MM:SS" notes; they save next to the
+  // frames so Claude can read them when working through a misread together.
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  async function loadRecs() {
+    try {
+      const recs = await (await fetch("/recordings")).json();
+      $("recs").innerHTML = recs.length ? recs.map(s => `
+        <div class="rec">
+          <div class="rec-h"><b>${s.name.replace("session_", "")}</b>
+            · ${s.start || "?"}–${s.end || "?"} · ${s.frames} frames
+            <span class="ids">${Object.entries(s.handIds || {})
+              .map(([k, v]) => `#${k}→${v}`).join("  ")}</span></div>
+          <textarea data-s="${s.name}"
+            placeholder="e.g. hand 4907246283 — between 05:02:41 and 05:04:10 the raise amount read wrong">${esc(s.note || "")}</textarea>
+          <button class="mini" data-save="${s.name}">Save note</button>
+          <button class="mini" data-play="${s.name}">▶ View frames</button>
+          <div class="rec-view" id="view-${s.name}" style="display:none"></div>
+        </div>`).join("") : '<div class="sub">no recordings yet — use ● Record debug above</div>';
+      $("recs").querySelectorAll("[data-play]").forEach(b => b.onclick =
+        () => openViewer(b.dataset.play, b));
+      $("recs").querySelectorAll("[data-save]").forEach(b => b.onclick = async () => {
+        const name = b.dataset.save;
+        const ta = $("recs").querySelector(`textarea[data-s="${name}"]`);
+        b.textContent = "…";
+        try {
+          const r = await (await fetch("/recnote", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session: name, note: ta.value }) })).json();
+          b.textContent = r.ok ? "Saved ✓" : "failed";
+        } catch (e) { b.textContent = "failed"; }
+        setTimeout(() => b.textContent = "Save note", 1800);
+      });
+    } catch (e) { $("recs").innerHTML = '<div class="sub">list failed</div>'; }
+  }
+  $("recsreload").onclick = loadRecs;
+  loadRecs();
+
+  // Frame viewer: scrub through a recording's screenshots with the parsed
+  // state for that exact frame beside them — the pixels and what we made of
+  // them, together, which is the whole point of the recorder.
+  const viewers = {};
+  async function openViewer(name, btn) {
+    const host = document.getElementById("view-" + name);
+    if (host.style.display === "block") {
+      host.style.display = "none"; btn.textContent = "▶ View frames";
+      if (viewers[name]) viewers[name].playing = false;
+      return;
+    }
+    host.style.display = "block"; btn.textContent = "▼ Hide frames";
+    if (!viewers[name]) {
+      host.innerHTML = '<div class="sub">loading frames…</div>';
+      let log = [];
+      try { log = await (await fetch(`/rec/${name}/log`)).json(); } catch (e) {}
+      if (!log.length) { host.innerHTML = '<div class="sub">no frames in this recording</div>'; return; }
+      viewers[name] = { log, i: 0, playing: false };
+      host.innerHTML = `
+        <img id="img-${name}" alt="frame">
+        <div class="rec-ctl">
+          <button class="mini" data-step="-1">◀</button>
+          <button class="mini" data-toggle="1">▶ Play</button>
+          <button class="mini" data-step="1">▶</button>
+          <input type="range" min="0" max="${log.length - 1}" value="0">
+          <span class="pos"></span>
+        </div>
+        <div class="rec-state"></div>`;
+      const range = host.querySelector("input[type=range]");
+      range.oninput = () => show(name, +range.value);
+      host.querySelectorAll("[data-step]").forEach(b => b.onclick =
+        () => show(name, viewers[name].i + (+b.dataset.step)));
+      host.querySelector("[data-toggle]").onclick = e => {
+        const v = viewers[name];
+        v.playing = !v.playing;
+        e.target.textContent = v.playing ? "⏸ Pause" : "▶ Play";
+        if (v.playing) tick(name);
+      };
+    }
+    show(name, viewers[name].i);
+  }
+  function tick(name) {
+    const v = viewers[name];
+    if (!v || !v.playing) return;
+    show(name, v.i + 1 >= v.log.length ? 0 : v.i + 1);
+    setTimeout(() => tick(name), 700);
+  }
+  function show(name, i) {
+    const v = viewers[name];
+    if (!v) return;
+    i = Math.max(0, Math.min(v.log.length - 1, i));
+    v.i = i;
+    const f = v.log[i], host = document.getElementById("view-" + name);
+    document.getElementById("img-" + name).src = `/rec/${name}/frame/${f.seq}.png`;
+    host.querySelector("input[type=range]").value = i;
+    host.querySelector(".pos").textContent = `${i + 1}/${v.log.length} · ${f.t}`;
+    const seats = Object.entries(f.seats || {}).map(([n, s]) =>
+      `  seat ${n}: stack ${s.stack ?? "—"}, bet ${s.bet ?? "—"}${s.badge ? ", " + s.badge : ""}`).join("\n");
+    const offered = (f.actions || []).length
+      ? `offered: ${(f.actions || []).join(" / ")}\n` : "";
+    host.querySelector(".rec-state").innerHTML =
+      `<b>hand ${f.hand}</b>  pot ${f.pot ?? "—"}  board ${(f.board || []).join(" ") || "—"}\n` +
+      `your cards ${(f.heroCards || []).join(" ") || "—"}${f.toAct ? "  YOUR TURN" : ""}\n` +
+      offered + (seats ? seats + "\n" : "") +
+      `<b>feed:</b>\n  ${(f.feedTail || []).join("\n  ")}`;
+  }
+
+  // ---- Feed audit: the actual table beside the study table whose answers we
+  // show, every divergence named. GET /hand (this server's structured export)
+  // → POST gto-trainer's /api/feed-spot → render both configs + discrepancies.
+  const GTOW_API = "http://127.0.0.1:2000";
+  const kv = rows => '<div class="fs-kv">' + rows
+    .filter(r => r[1] !== null && r[1] !== undefined && r[1] !== "")
+    .map(([k, v]) => `<span class="k">${k}</span> <b>${v}</b>`).join("<br>") + "</div>";
+  const lineStr = t => (t && (t.preflop || []).length)
+    ? [t.preflop.join("-"), (t.flop || []).join("-"), (t.turn || []).join("-"),
+       (t.river || []).join("-")].filter(Boolean).join(" | ")
+    : "—";
+  async function pollFeedSpot() {
+    let next = 2000;
+    try {
+      const h = await (await fetch("/hand")).json();
+      if (!h.ok || !h.hand) {
+        $("fs-status").textContent = "waiting for a hand…";
+        $("fs-status").style.display = "block"; $("fs-grid").style.display = "none";
+      } else {
+        let fs;
+        try {
+          fs = await (await fetch(GTOW_API + "/api/feed-spot", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hand: h.hand }) })).json();
+        } catch (e) {
+          $("fs-status").textContent = "solve API (:2000) unreachable — start it with the GTOW AI launcher";
+          $("fs-status").style.display = "block"; $("fs-grid").style.display = "none";
+          setTimeout(pollFeedSpot, 5000); return;
+        }
+        if (!fs.ok) {
+          $("fs-status").textContent = "feed-spot: " + (fs.error || "no answer");
+          $("fs-status").style.display = "block"; $("fs-grid").style.display = "none";
+        } else {
+          const a = fs.actual, s = fs.shown;
+          $("fs-actual").innerHTML = kv([
+            ["hand", "#" + a.handId + " · " + a.street.toUpperCase()],
+            ["table", a.tableSeats + "-handed, " + a.playersInHand + " in hand"],
+            ["you", (a.heroPos || "?") + ((a.heroCards || []).length ? " · " + a.heroCards.join(" ") : "")],
+            ["eff stack", a.effStackBb != null ? a.effStackBb + " bb" : null],
+            ["pot / to call", a.potBb + " bb / " + a.toCallBb + " bb"],
+            ["open raise", a.openRaiseBb != null ? a.openRaiseBb + " bb" : "none yet"],
+            ["limpers", a.limpers || null],
+            ["board", a.board],
+          ]) + `<div class="fs-line">${lineStr(a.tokens)}</div>`;
+          $("fs-shown").innerHTML = kv([
+            ["chart", s.label],
+            ["tree", s.gametype + " @ " + s.depth + "bb"],
+            ["seats", s.seats.join(" ")],
+            ["open raise", s.openRaiseBb != null ? s.openRaiseBb + " bb" : "none yet"],
+            ["postflop", s.postflop],
+            ["charts", s.chartsAvailable ? "local DB ✓" : "local DB missing"],
+          ]) + `<div class="fs-line">${lineStr(s.tokens)}</div>`;
+          $("fs-discs").innerHTML = fs.discrepancies.length
+            ? fs.discrepancies.map(d =>
+                `<div class="disc ${d.severity}"><span class="dv">${d.field}:</span> ` +
+                `${d.actual ?? "—"} → ${d.shown ?? "—"}` +
+                (d.note ? ` <span class="dn">${d.note}</span>` : "") + "</div>").join("")
+            : '<div class="disc none">table matches the solved config exactly</div>';
+          $("fs-status").style.display = "none"; $("fs-grid").style.display = "block";
+        }
+      }
+    } catch (e) { /* panel server restarting */ next = 4000; }
+    setTimeout(pollFeedSpot, next);
+  }
+  pollFeedSpot();
+
+  $("dump").onclick = async () => {
+    $("dump").disabled = true; $("verdict").textContent = "reading every frame…";
+    try {
+      const d = await (await fetch("/dom")).json();
+      $("verdict").textContent = d.verdict;
+      $("verdict").className = /DOM-READABLE/.test(d.verdict) ? "ok" : "warn";
+      const best = d.frames[0];
+      $("sample").style.display = "block";
+      $("sample").textContent = !best ? "(no frames)" :
+        best.nodes.slice(0, 250).map(n => `${n.x},${n.y} ${n.w}x${n.h}  ${n.text}`).join("\n");
+    } catch (e) { $("verdict").textContent = "dump failed: " + e; $("verdict").className = "warn"; }
+    $("dump").disabled = false;
+  };
+</script>
+</body>
+</html>
