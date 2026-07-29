@@ -1009,6 +1009,13 @@ def _feed_tick() -> None:
             # recorded 19.28). The backfill contributes actions, never math.
             com = _ws_state.get("committed") or {}
             top_c = _ws_state.get("maxBet", 0)
+            # An action must INCREASE the seat's committed total. A label that
+            # doesn't (the DOM showing the 1.6 top-up while the WS already
+            # booked the 2.0 total) is an echo of a recorded action — filing
+            # it produced a duplicate call with a NEGATIVE amount that walked
+            # the line past its close.
+            if total_c <= (com.get(num, 0) or 0):
+                continue
             if (_pot_val(cs.get("stack")) or 0) == 0:
                 _act_add(num, "all-in", total_c, street=street_dom)
                 _feed_add(f"Seat {num} is ALL-IN ({cs['bet']})")
