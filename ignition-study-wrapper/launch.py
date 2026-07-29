@@ -54,7 +54,7 @@ if sys.stdout is None or sys.stderr is None:
 
 PANEL_PORT = int(os.environ.get("PANEL_PORT", "7700"))
 CDP_PORT = int(os.environ.get("CDP_PORT", "9333"))
-IGNITION_URL = os.environ.get("IGNITION_URL", "https://www.ignitioncasino.eu/")
+IGNITION_URL = os.environ.get("IGNITION_URL", "https://www.ignitioncasino.eu/poker-lobby")
 def _default_browser() -> str:
     """Brave if installed (the PWA-style setup used before), else Chrome."""
     local = os.environ.get("LOCALAPPDATA", "")
