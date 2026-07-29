@@ -975,17 +975,16 @@ def _feed_tick() -> None:
                 _act_add(num, "check", street=street_dom)
                 _feed_add(f"Seat {num} checks")
                 continue
-            # A bet reading of None on a seat whose stack DID parse means
-            # "genuinely no bet in front" — treat as zero so the street's
-            # FIRST bet is visible. A seat where nothing parsed stays UNKNOWN
-            # (treating a parse miss as 0 produced repeated phantom calls).
+            # A missing bet reading means UNKNOWN, never zero: treating it as
+            # zero turned any stray money label (a seat's STACK drifting into
+            # the bet slot for one tick) into a huge phantom raise — observed
+            # live as "raises to 97.5". The DOM therefore never reports a
+            # street's first bet; the WS tap owns those.
             ob, cb = _pot_val(old.get("bet")), _pot_val(cs.get("bet"))
-            if ob is None and old.get("stack") is not None:
-                ob = 0.0
             if ob is None or cb is None or cb <= ob + 1e-9:
                 continue
             total_c = dom_cents(cb)
-            if total_c is None or _act_seen((num, total_c)):
+            if total_c is None or _act_seen(_mkey(num, total_c)):
                 continue
             com = _ws_state.setdefault("committed", {})
             top_c = _ws_state.get("maxBet", 0)
@@ -1231,13 +1230,20 @@ def _act_add(seat: int | None, kind: str, cents: int | None = None,
 def _act_seen(key: tuple) -> bool:
     """Cross-source dedupe for one betting round: the WS tap and the DOM diff
     both observe actions, and whichever reports first wins. Keys: ('fold'|
-    'check', seat) for the unique actions, (seat, committed_total_cents) for
-    money actions. Cleared with the round (new hand / new street)."""
+    'check', seat) for the unique actions, _mkey(seat, cents) for money
+    actions. Cleared with the round (new hand / new street)."""
     seen = _ws_state.setdefault("actSeen", set())
     if key in seen:
         return True
     seen.add(key)
     return False
+
+
+def _mkey(seat: int | None, cents: int) -> tuple:
+    """Money-action dedupe key: committed total rounded to the nearest 5 wire
+    cents — the DOM displays ROUNDED amounts (1.7 BB) while the WS has exact
+    ones (1.72 BB), and exact-cent keys let the same action through twice."""
+    return (seat, int(round(cents / 5)))
 
 
 def _amt(cents: int | None) -> str:
@@ -1338,7 +1344,7 @@ def _on_game_msg(d: dict) -> None:
             total = prior + rz
             com[seat] = total
             _ws_state["maxBet"] = max(top, total)
-            if not _act_seen((seat, total)):
+            if not _act_seen(_mkey(seat, total)):
                 _act_add(seat, "raise", total)
                 _feed_add(f"Seat {seat} raises to {_amt(total)}")
         elif verb == "calls":
@@ -1348,10 +1354,10 @@ def _on_game_msg(d: dict) -> None:
             com[seat] = prior + bet
             if prior + bet > top:
                 _ws_state["maxBet"] = prior + bet
-                if not _act_seen((seat, prior + bet)):
+                if not _act_seen(_mkey(seat, prior + bet)):
                     _act_add(seat, "bet", prior + bet)
                     _feed_add(f"Seat {seat} bets {_amt(bet)}")
-            elif not _act_seen((seat, prior + bet)):
+            elif not _act_seen(_mkey(seat, prior + bet)):
                 # A call reports the amount called (the top-up), which is the
                 # standard hand-history convention — unlike "raises to".
                 _act_add(seat, "call", bet)
@@ -1360,7 +1366,7 @@ def _on_game_msg(d: dict) -> None:
             total = prior + max(bet, rz)
             com[seat] = total
             _ws_state["maxBet"] = max(top, total)
-            if not _act_seen((seat, total)):
+            if not _act_seen(_mkey(seat, total)):
                 _act_add(seat, "all-in", total)
                 _feed_add(f"Seat {seat} is ALL-IN ({_amt(total)})")
         else:
