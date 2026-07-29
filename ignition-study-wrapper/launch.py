@@ -1218,6 +1218,13 @@ def _on_game_msg(d: dict) -> None:
         _ws_state["actions"] = []
         _ws_state["heroCards"] = []
         _ws_state["potCents"] = None
+        # Zone deals a NEW table every hand: the previous hand's dealer/dealt
+        # must not leak into this one (stale geometry = wrong positions = the
+        # study line walks the wrong seats). Both are re-announced within the
+        # same message burst (CO_DEALER_SEAT / CO_CARDTABLE_INFO); until then
+        # /hand exports null and the poller simply waits a beat.
+        _ws_state["dealer"] = None
+        _ws_state["dealt"] = []
         # Drop the BB calibration each hand: a stale value from a previous
         # table renders every amount at the wrong scale ("calls 0.02 BB"),
         # and the upcoming CO_BLIND_INFO re-establishes it immediately.
@@ -1437,6 +1444,9 @@ def _hand_state() -> dict | None:
     hero = _ws_state.get("heroSeat")
     if not _hand_no or not dealt or hero is None:
         return None
+    positions = _positions_all()
+    if not positions:
+        return None  # dealer not yet announced — geometry unknown, don't guess
     bb = _ws_state.get("bb") or 0
     scaled = bb and _ws_state.get("bbSeen")
 
@@ -1481,7 +1491,7 @@ def _hand_state() -> dict | None:
         "liveSeats": sorted(dealt),
         "committed": committed,
         "potByStreet": {},
-        "positions": _positions_all(),
+        "positions": positions,
         "stacks": stacks or None,
         "currentNode": {
             "street": street,
