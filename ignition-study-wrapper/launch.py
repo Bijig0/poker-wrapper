@@ -221,14 +221,49 @@ _EXTRACT_DEEP_JS = r"""(() => {
 })()"""
 
 
-def state() -> dict:
-    out = {"cdp": cdp.available(CDP_PORT), "ignition": None, "targets": []}
+# ---- Study Answers state (CONTRACT.md §§1-3) ----
+# The panel's toggle is THE gate: gto-trainer's studyPoller reads it from
+# /state every tick and idles while it's off. Answers arrive as pushes on
+# /panel/answer; the TTL mirrors assistive-play's run.ts so a dead poller
+# degrades to a blank card, never a stale verdict.
+STUDY_ANSWER_TTL_MS = 3000
+_study = {"on": False, "text": None, "at": 0.0}
+# Hero's table status, cached by _feed_tick (which polls the DOM anyway) so
+# /state never needs an extra CDP eval to answer the poller's 1 Hz probe.
+_live_status = {"hero": "unknown"}
+
+
+def _current_answer() -> str | None:
+    if not _study["on"] or not _study["text"]:
+        return None
+    fresh = (time.time() - _study["at"]) * 1000 < STUDY_ANSWER_TTL_MS
+    return _study["text"] if fresh else None
+
+
+def state(light: bool = False) -> dict:
+    """Full state for the panel's connection card; `light` skips the DOM eval
+    and target listing — enough for the 1 Hz study-answer poll and the
+    poller's probe (CONTRACT.md §1) without extra CDP traffic."""
+    out = {"cdp": cdp.available(CDP_PORT), "ignition": None, "targets": [],
+           # live-feed contract (CONTRACT.md §1) — what resolveHand consumes
+           "connected": False, "hand": None, "studyAnswers": _study["on"],
+           "panelAnswer": _current_answer(),
+           "snapshot": {"status": _live_status["hero"],
+                        "seats": [{"hero": True,
+                                   "sittingOut": _live_status["hero"] == "sitting-out"}]}}
     if not out["cdp"]:
+        return out
+    if light:
+        out["connected"] = bool(ignition_target())
+        if out["connected"]:
+            out["hand"] = _hand_state()
         return out
     out["targets"] = [{"title": t.get("title", ""), "url": t.get("url", "")}
                       for t in cdp.page_targets(CDP_PORT)]
     t = ignition_target()
     if t:
+        out["connected"] = True
+        out["hand"] = _hand_state()
         try:
             d = cdp._eval(t["webSocketDebuggerUrl"], _EXTRACT_DEEP_JS) or {}
         except Exception:
@@ -723,6 +758,12 @@ def _feed_tick() -> None:
         d = cdp._eval(t["webSocketDebuggerUrl"], _TABLE_JS, timeout=6) or {}
     except Exception:
         return
+    # Cache hero's status for /state (the poller probes at 1 Hz; this tick
+    # already paid for the DOM read, so /state never needs its own eval).
+    try:
+        _live_status["hero"] = _hero_status(d, d.get("nodes") or [])
+    except Exception:
+        pass
     p = _feed_prev
     if not d.get("seated"):
         if p.get("seated"):
@@ -1626,7 +1667,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "text/html; charset=utf-8",
                            (ROOT / "panel.html").read_bytes())
             elif path == "/state":
-                self._send(200, "application/json", json.dumps(state()).encode())
+                light = "light=1" in (self.path.split("?", 1) + [""])[1]
+                self._send(200, "application/json",
+                           json.dumps(state(light=light)).encode())
             elif path == "/table":
                 self._send(200, "application/json", json.dumps(table_state()).encode())
             elif path == "/feed":
@@ -1690,6 +1733,22 @@ class Handler(BaseHTTPRequestHandler):
                 res = apply_layout()
                 print(f"[layout] -> {res}")
                 self._send(200, "application/json", json.dumps(res).encode())
+            elif path == "/study-answers":       # the toggle (CONTRACT.md §3)
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                _study["on"] = bool(body.get("on"))
+                if not _study["on"]:
+                    _study["text"] = None        # switch off = card goes blank now
+                print(f"[study] answers {'ON' if _study['on'] else 'off'}")
+                self._send(200, "application/json",
+                           json.dumps({"ok": True, "on": _study["on"]}).encode())
+            elif path == "/panel/answer":        # poller push (CONTRACT.md §2)
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                text = body.get("text")
+                _study["text"] = text if isinstance(text, str) and text.strip() else None
+                _study["at"] = time.time()
+                self._send(200, "application/json", json.dumps({"ok": True}).encode())
             elif path == "/debug":
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")

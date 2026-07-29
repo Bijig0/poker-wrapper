@@ -196,10 +196,13 @@
     </div>
   </div>
 
-  <div class="card toggle">
-    <h2>Study answers</h2>
-    <div class="big">— off —</div>
-    <div class="sub">GTO verdicts (gto-trainer) wire in at phase 3.</div>
+  <div class="card">
+    <h2>Study answers <span id="sa-health" class="badge">off</span></h2>
+    <div id="sa-answer" class="big">— off —</div>
+    <div class="sub">GTO verdict for your pending decision, pushed live by
+      gto-trainer's study poller (see CONTRACT.md). Spoken aloud when it
+      changes. Study/practice tables only.</div>
+    <button id="sa-toggle" style="margin-top:8px">Turn ON</button>
   </div>
 
 <script>
@@ -561,10 +564,61 @@
       `<b>feed:</b>\n  ${(f.feedTail || []).join("\n  ")}`;
   }
 
+  const GTOW_API = "http://127.0.0.1:2000";
+
+  // ---- Study answers: the toggle + the live pushed verdict (CONTRACT.md).
+  // The card polls /state?light=1 at 1 Hz (answer TTL is 3 s server-side) and
+  // gto-trainer's poller status at 2.5 s for the health badge. New verdicts
+  // are spoken aloud — the whole point is not having to read the screen.
+  let saOn = false, saHealth = null, saLastSpoken = "";
+  function renderSa(answer) {
+    $("sa-toggle").textContent = saOn ? "Turn OFF" : "Turn ON";
+    const b = $("sa-health");
+    if (!saOn) {
+      b.className = "badge"; b.textContent = "off";
+      $("sa-answer").textContent = "— off —";
+      saLastSpoken = "";
+      return;
+    }
+    const reason = saHealth === null ? null
+      : !saHealth.running ? "poller stopped"
+      : saHealth.lastError ? saHealth.lastError
+      : !saHealth.gtoWizardConnected ? "GTO Wizard not connected" : null;
+    b.className = "badge " + (reason ? "bad" : "ok");
+    b.textContent = reason ? "ON ⚠ " + reason : "ON ●";
+    $("sa-answer").textContent = answer || "…";
+    if (answer && answer !== saLastSpoken) { saLastSpoken = answer; speak(answer); }
+    if (!answer) saLastSpoken = "";
+  }
+  $("sa-toggle").onclick = async () => {
+    try {
+      const r = await (await fetch("/study-answers", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: !saOn }) })).json();
+      saOn = !!r.on;
+      renderSa(null);
+    } catch (e) { speak("toggle failed"); }
+  };
+  (async function pollSa() {
+    try {
+      const s = await (await fetch("/state?light=1")).json();
+      saOn = !!s.studyAnswers;
+      renderSa(s.panelAnswer);
+    } catch (e) { /* server restarting */ }
+    setTimeout(pollSa, 1000);
+  })();
+  (async function pollSaHealth() {
+    try {
+      saHealth = await (await fetch(GTOW_API + "/api/study-poller/status")).json();
+    } catch (e) {
+      saHealth = { running: false, lastError: "solve API (:2000) unreachable" };
+    }
+    setTimeout(pollSaHealth, 2500);
+  })();
+
   // ---- Feed audit: the actual table beside the study table whose answers we
   // show, every divergence named. GET /hand (this server's structured export)
   // → POST gto-trainer's /api/feed-spot → render both configs + discrepancies.
-  const GTOW_API = "http://127.0.0.1:2000";
   const kv = rows => '<div class="fs-kv">' + rows
     .filter(r => r[1] !== null && r[1] !== undefined && r[1] !== "")
     .map(([k, v]) => `<span class="k">${k}</span> <b>${v}</b>`).join("<br>") + "</div>";
