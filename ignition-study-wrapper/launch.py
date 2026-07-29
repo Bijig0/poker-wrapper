@@ -259,7 +259,8 @@ def state(light: bool = False) -> dict:
            "panelAnswer": _current_answer(),
            "snapshot": {"status": _live_status["hero"],
                         "seats": [{"hero": True,
-                                   "sittingOut": _live_status["hero"] == "sitting-out"}]}}
+                                   "sittingOut": _live_status["hero"]
+                                   in ("sitting-out", "waiting-for-bb")}]}}
     if not out["cdp"]:
         return out
     if light:
@@ -942,28 +943,45 @@ def _feed_tick() -> None:
         def dom_cents(v: float | None) -> int | None:
             return int(round(v * bbc)) if bb_known and v is not None else None
 
+        # The DOM's OWN street — during a tap gap the WS board is stale, and
+        # backfilled actions stamped with the wrong street corrupt the walk.
+        street_dom = ("river" if len(board_cards) >= 5 else
+                      "turn" if len(board_cards) == 4 else
+                      "flop" if len(board_cards) == 3 else "preflop")
+        folded_seats = _ws_state.setdefault("foldedSeats", set())
         prev_max = max((_pot_val(s.get("bet")) or 0
                         for s in prev_seats.values()), default=0.0)
         for num in sorted(seats):
             cs, old = seats[num], prev_seats.get(num)
-            if not old:
+            # Folded seats keep their FOLD badge (and empty cards) for the
+            # rest of the hand — without this guard every street-reset of the
+            # dedupe keys re-filed a phantom fold for them.
+            if not old or num in folded_seats:
                 continue
             badge = (cs.get("badge") or "").upper()
+            ob_badge = (old.get("badge") or "").upper()
             oc, cc = old.get("cards", 0), cs.get("cards", 0)
-            if (badge == "FOLD" or (oc >= 1 and cc == 0)) and not _act_seen(("fold", num)):
+            # Badges are EDGE-detected (changed since last tick) — a lingering
+            # badge is old news, not a new action.
+            if ((badge == "FOLD" and ob_badge != "FOLD") or (oc >= 1 and cc == 0)) \
+                    and not _act_seen(("fold", num)):
+                folded_seats.add(num)
                 if num == _ws_state.get("heroSeat"):
                     _ws_state["heroFolded"] = True
-                _act_add(num, "fold")
+                _act_add(num, "fold", street=street_dom)
                 _feed_add(f"Seat {num} folds")
                 continue
-            if badge == "CHECK" and not _act_seen(("check", num)):
-                _act_add(num, "check")
+            if badge == "CHECK" and ob_badge != "CHECK" and not _act_seen(("check", num)):
+                _act_add(num, "check", street=street_dom)
                 _feed_add(f"Seat {num} checks")
                 continue
-            # A missing bet reading means UNKNOWN, never zero — treating a
-            # parse miss as 0 made the next good read look like a new bet,
-            # which is what produced repeated phantom calls.
+            # A bet reading of None on a seat whose stack DID parse means
+            # "genuinely no bet in front" — treat as zero so the street's
+            # FIRST bet is visible. A seat where nothing parsed stays UNKNOWN
+            # (treating a parse miss as 0 produced repeated phantom calls).
             ob, cb = _pot_val(old.get("bet")), _pot_val(cs.get("bet"))
+            if ob is None and old.get("stack") is not None:
+                ob = 0.0
             if ob is None or cb is None or cb <= ob + 1e-9:
                 continue
             total_c = dom_cents(cb)
@@ -972,14 +990,14 @@ def _feed_tick() -> None:
             com = _ws_state.setdefault("committed", {})
             top_c = _ws_state.get("maxBet", 0)
             if (_pot_val(cs.get("stack")) or 0) == 0:
-                _act_add(num, "all-in", total_c)
+                _act_add(num, "all-in", total_c, street=street_dom)
                 _feed_add(f"Seat {num} is ALL-IN ({cs['bet']})")
             elif total_c > max(top_c, dom_cents(prev_max) or 0):
                 kind = "raise" if prev_max > 0 or top_c > (dom_cents(1.0) or 0) else "bet"
-                _act_add(num, kind, total_c)
+                _act_add(num, kind, total_c, street=street_dom)
                 _feed_add(f"Seat {num} {'raises to' if kind == 'raise' else 'bets'} {cs['bet']}")
             else:
-                _act_add(num, "call", total_c - (com.get(num, 0) or 0))
+                _act_add(num, "call", total_c - (com.get(num, 0) or 0), street=street_dom)
                 _feed_add(f"Seat {num} calls {cs['bet']}")
             com[num] = total_c
             _ws_state["maxBet"] = max(top_c, total_c)
@@ -1197,14 +1215,17 @@ def _street_now() -> str:
     return "river" if n >= 5 else "turn" if n == 4 else "flop" if n == 3 else "preflop"
 
 
-def _act_add(seat: int | None, kind: str, cents: int | None = None) -> None:
+def _act_add(seat: int | None, kind: str, cents: int | None = None,
+             street: str | None = None) -> None:
     """Structured mirror of the feed lines, for the /hand export. Amounts stay
     in wire cents — the BB scale may only be learned mid-hand, so conversion
-    happens at export time."""
+    happens at export time. `street` lets the DOM backfill stamp its OWN board
+    state — during a tap gap the WS board is stale."""
     if seat is None:
         return
     _ws_state.setdefault("actions", []).append(
-        {"seat": seat, "type": kind, "cents": cents, "street": _street_now()})
+        {"seat": seat, "type": kind, "cents": cents,
+         "street": street or _street_now()})
 
 
 def _act_seen(key: tuple) -> bool:
@@ -1251,7 +1272,9 @@ def _on_game_msg(d: dict) -> None:
         _ws_state["committed"] = {}
         _ws_state["actions"] = []
         _ws_state["actSeen"] = set()
+        _ws_state["foldedSeats"] = set()
         _ws_state["heroCards"] = []
+        _ws_state["pot"] = None
         _ws_state["potCents"] = None
         # Zone deals a NEW table every hand: the previous hand's dealer/dealt
         # must not leak into this one (stale geometry = wrong positions = the
@@ -1294,6 +1317,13 @@ def _on_game_msg(d: dict) -> None:
                   + (f"{label} ({_amt(bet)})" if label else f"({_amt(bet)})"))
     elif pid == "CO_SELECT_INFO":
         seat, btn = d.get("seat"), d.get("btn")
+        # Ghost/echo guard: actions from seats never dealt this hand, or from
+        # seats that already folded, are the client re-rendering old state —
+        # recording them corrupts the line walk.
+        dealt_now = _ws_state.get("dealt") or []
+        if seat is not None and ((dealt_now and seat not in dealt_now)
+                                 or seat in _ws_state.get("foldedSeats", set())):
+            return
         bet, rz = d.get("bet") or 0, d.get("raise") or 0
         verb = _BTN.get(btn)
         if verb is None:                               # unmapped code: infer
@@ -1337,6 +1367,8 @@ def _on_game_msg(d: dict) -> None:
             if verb == "folds" and seat == _ws_state.get("heroSeat"):
                 _ws_state["heroFolded"] = True
             kind = "fold" if verb == "folds" else "check"
+            if kind == "fold":
+                _ws_state.setdefault("foldedSeats", set()).add(seat)
             if not _act_seen((kind, seat)):
                 _act_add(seat, kind)
                 _feed_add(f"Seat {seat} {verb}")
@@ -1493,13 +1525,19 @@ def _stack_bb(text: str | None) -> float | None:
 
 
 def _hand_state() -> dict | None:
-    dealt = _ws_state.get("dealt") or []
+    # SNAPSHOT shared mutables up front: this runs on HTTP threads while the
+    # WS tap and DOM feed threads append/assign concurrently — iterating the
+    # live dict/list can raise mid-request and 500 the poller's probe.
+    dealt = list(_ws_state.get("dealt") or [])
     hero = _ws_state.get("heroSeat")
     if not _hand_no or not dealt or hero is None:
         return None
     positions = _positions_all()
     if not positions:
         return None  # dealer not yet announced — geometry unknown, don't guess
+    acts_src = list(_ws_state.get("actions") or [])
+    committed_src = dict(_ws_state.get("committed") or {})
+    seats_src = dict(_feed_prev.get("seats") or {})
     bb = _ws_state.get("bb") or 0
     scaled = bb and _ws_state.get("bbSeen")
 
@@ -1513,17 +1551,17 @@ def _hand_state() -> dict | None:
     street = ("river" if len(board) >= 5 else "turn" if len(board) == 4
               else "flop" if len(board) == 3 else "preflop")
     actions = []
-    for a in _ws_state.get("actions") or []:
+    for a in acts_src:
         rec = {"seatId": a["seat"], "hero": a["seat"] == hero,
                "type": a["type"], "street": a["street"]}
         amt = to_bb(a.get("cents"))
         if amt is not None:
             rec["amount"] = amt
         actions.append(rec)
-    committed = {s: to_bb(c) for s, c in (_ws_state.get("committed") or {}).items()
+    committed = {s: to_bb(c) for s, c in committed_src.items()
                  if to_bb(c) is not None}
     stacks = {}
-    for num, s in (_feed_prev.get("seats") or {}).items():
+    for num, s in seats_src.items():
         v = _stack_bb(s.get("stack"))
         if v is not None:
             stacks[num] = v
@@ -1532,14 +1570,12 @@ def _hand_state() -> dict | None:
         hero_cards = str(_feed_prev["heroCards"]).split()
     hero_cards = [short(c) for c in hero_cards]
     action_on = _ws_state.get("actionOn")
-    hero_owed = (_ws_state.get("maxBet", 0)
-                 - (_ws_state.get("committed") or {}).get(hero, 0))
+    hero_owed = _ws_state.get("maxBet", 0) - (committed_src.get(hero, 0) or 0)
     hero_folded = bool(_ws_state.get("heroFolded"))
     # Uncontested win: every dealt villain has folded — the hand is over and
     # there is no decision left to solve (the panel shows "you win", not a
     # solver failure).
-    folded_seats = {a["seat"] for a in _ws_state.get("actions") or []
-                    if a["type"] == "fold"}
+    folded_seats = {a["seat"] for a in acts_src if a["type"] == "fold"}
     villains = [s for s in dealt if s != hero]
     hero_won = (not hero_folded and bool(villains)
                 and all(s in folded_seats for s in villains))
