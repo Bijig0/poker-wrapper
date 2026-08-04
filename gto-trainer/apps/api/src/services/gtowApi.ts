@@ -39,7 +39,8 @@ export interface SpotSolutionParams {
   flop_actions?: string; // e.g. "X" | "X-R3" ...
   turn_actions?: string;
   river_actions?: string;
-  board: string; // concatenated, e.g. "Ts7h2d"
+  /** Concatenated, e.g. "Ts7h2d". Omit or "" for a preflop node. */
+  board?: string;
   stacks?: string;
 }
 
@@ -191,7 +192,11 @@ class GtowApi {
       flop_actions: p.flop_actions ?? "",
       turn_actions: p.turn_actions ?? "",
       river_actions: p.river_actions ?? "",
-      board: p.board,
+      // `?? ""` like every field above it. Without the fallback URLSearchParams
+      // stringifies undefined to the literal "undefined" and the API 422s with
+      // `Invalid board: 'undefined'` — which is every preflop node, since a
+      // preflop spot has no board.
+      board: p.board ?? "",
     });
     return `${API_BASE}/v4/solutions/spot-solution/?${q}`;
   }
