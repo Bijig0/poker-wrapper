@@ -74,6 +74,8 @@ app.post("/", async (c) => {
       toAct: heroTurn,
     },
     hand: {
+      handId: hand.handId,
+      clientHandId: hand.clientHandId ?? null,
       heroCards: hand.heroCards,
       board: hand.board,
       street: hand.street,

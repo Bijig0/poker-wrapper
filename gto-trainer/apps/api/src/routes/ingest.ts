@@ -117,6 +117,10 @@ app.post("/", async (c) => {
           : "No hand in the feed (waiting for the next deal).",
         tableStatus,
         heroSittingOut,
+        // The study poller keys its idle/active branch on this — omitting it
+        // here made "between hands" indistinguishable from "toggle off", so
+        // the poller never refreshed its GTO Wizard health flag while idle.
+        studyAnswersOn,
         warnings,
       },
       422

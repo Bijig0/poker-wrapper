@@ -70,10 +70,12 @@ describe("walkPreflopLine", () => {
     if (!r.ok) expect(r.missingAt).toBe("R2.5-R12.5");
   });
 
-  it("fails cleanly when a non-sized action isn't offered", () => {
+  it("drops an impossible check instead of failing (capture phantom)", () => {
+    // A check where checking isn't offered (e.g. facing a raise) can only be
+    // a mis-captured action — the walk skips it and the line survives.
     const r = walkPreflopLine(["X"], getNode); // no check at SB root
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('action "X" not offered');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.tokens).toEqual([]);
   });
 
   it("fails cleanly when the line ends on a terminal", () => {

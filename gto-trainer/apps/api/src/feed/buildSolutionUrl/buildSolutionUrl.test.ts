@@ -109,6 +109,47 @@ describe("buildSolutionUrl", () => {
     expect(buildPreflopTokens(threeBet)).toEqual(["F", "F", "F", "R2.5", "R11", "F", "C"]);
   });
 
+  it("pads vacant seats when hero is FIRST to act with no actions yet (short table)", () => {
+    // 3-handed Zone, hero BTN first-in: the empty UTG/HJ/CO must walk as
+    // folds so the answer comes from the BTN node — an early return on
+    // "no actions" answered every first-in spot from the ROOT (UTG's node),
+    // folding hands the BTN opens (the Q9o incident).
+    const firstIn = {
+      handId: 41,
+      heroSeatId: 1,
+      heroCards: ["Qs", "9d"],
+      board: [],
+      street: "preflop" as const,
+      actions: [
+        { seatId: 2, hero: false, type: "post-sb" as const, amount: 0.4, street: "preflop" as const },
+        { seatId: 3, hero: false, type: "post-bb" as const, amount: 1, street: "preflop" as const },
+      ],
+      liveSeats: [1, 2, 3],
+      committed: {},
+      potByStreet: {},
+      positions: { 1: "BTN", 2: "SB", 3: "BB" },
+      currentNode: {
+        street: "preflop" as const,
+        toActSeatId: 1,
+        toActIsHero: true,
+        pot: 1.4,
+        toCall: 1,
+        legalActions: [],
+        complete: false,
+      },
+      ended: false,
+    };
+    expect(buildPreflopTokens(firstIn)).toEqual(["F", "F", "F"]);
+
+    // …but with no actions AND no pending hero decision there is no line to
+    // express — padding would fabricate an all-fold walk into a terminal.
+    const villainToAct = {
+      ...firstIn,
+      currentNode: { ...firstIn.currentNode, toActSeatId: 2, toActIsHero: false },
+    };
+    expect(buildPreflopTokens(villainToAct)).toEqual([]);
+  });
+
   it("needs an explicit heroPos when hero never posts a blind (e.g. BTN)", () => {
     const btnOpensBbCalls = parse(
       rows([

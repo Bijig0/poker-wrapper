@@ -39,7 +39,8 @@ export function reconstructFlopRanges(
     const offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
     if (tok !== "F" && !offered.includes(tok)) {
       const s = snapToken(tok, node.actions.map((a) => a.action));
-      if (s.snapped && offered.includes(s.token)) tok = s.token;
+      // accept both a genuine snap and a same-size canonicalization (R2.52 → R2.5)
+      if (offered.includes(s.token)) tok = s.token;
       else return { ok: false, reason: `action "${tok}" not offered at "${out.join("-")}"` };
     }
     lastToken.set(pos, tok);

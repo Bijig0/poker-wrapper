@@ -71,7 +71,14 @@ export function snapToken(token: string, labels: string[], tau = SNAP_TAU): Snap
   }
 
   const onTree = Math.abs(best.amount - want) <= Math.max(ABS_TOL, want * REL_TOL);
-  if (onTree && !best.allin) return { token, snapped: false, logDist: bestDist };
+  if (onTree && !best.allin) {
+    // Same size, but return the TREE's canonical token (R2.52 → R2.5):
+    // URL navigation absorbs the drift, but exact-token consumers (the
+    // chart walks, the spot-solution API) match strings — leaving the
+    // drifted token in place made "close enough" fail as "not offered".
+    const canonical = Math.round(best.amount * 100) / 100;
+    return { token: `R${canonical}`, snapped: false, logDist: bestDist };
+  }
 
   const far = bestDist > tau;
   // The tree's all-in action encodes as the literal "RAI" in URLs, never

@@ -1,0 +1,6 @@
+.profile-table/
+.profile-panel/
+__pycache__/
+debug/
+server.log
+data/

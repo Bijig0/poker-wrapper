@@ -1,44 +1,57 @@
-import { describe, it, expect } from "bun:test";
-import { pollDelayMs } from "./gtowApi";
+import { describe, it, expect, afterEach } from "bun:test";
+import { GtowApi } from "./gtowApi";
 
 /**
- * The poll schedule is what turns "the cloud solved it at 1.6s" into "we saw it
- * at 1.6s" rather than 3.0s. These lock in its shape: sit out the dead period
- * once, poll tightly through the window solves land in, back off after.
+ * The token keeper's guard rails. `primeToken` is called from studyPoller's 1s
+ * tick, so the thing that matters is that it stays cheap and can't turn into a
+ * sniff storm against a client that's reachable but has no token to give.
  */
-describe("pollDelayMs", () => {
-  it("waits out the dead period in one hop rather than polling into it", () => {
-    // Nothing lands before ~0.7s, so the first re-poll should be scheduled
-    // exactly at the edge of that window regardless of when we ask.
-    expect(pollDelayMs(0)).toBe(700);
-    expect(pollDelayMs(300)).toBe(400);
-    expect(pollDelayMs(699)).toBe(1);
+
+const realFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = realFetch; });
+
+/** Count CDP target-list hits — the first thing sniffToken does. */
+function countingCdp(): () => number {
+  let n = 0;
+  globalThis.fetch = (async (input: any) => {
+    if (String(input).includes("/json/list")) n++;
+    return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  return () => n;
+}
+
+describe("primeToken", () => {
+  it("collapses a burst of calls into a single sniff attempt", async () => {
+    const sniffs = countingCdp();
+    const api = new GtowApi();
+
+    for (let i = 0; i < 25; i++) api.primeToken();
+    await Bun.sleep(20);
+
+    // No token exists, so every call WANTS to sniff; the attempt rate limit is
+    // what keeps the 1s poll loop from re-navigating the client forever.
+    expect(sniffs()).toBe(1);
   });
 
-  it("polls tightly through the window where solves actually land", () => {
-    for (const t of [700, 1_500, 2_500, 5_999]) expect(pollDelayMs(t)).toBe(300);
+  it("is a no-op while a healthy token is in hand", async () => {
+    const sniffs = countingCdp();
+    const api = new GtowApi();
+    const g = api as unknown as { token: string; tokenExpMs: number };
+    g.token = "live";
+    g.tokenExpMs = Date.now() + 3_600_000;
+
+    api.primeToken();
+    await Bun.sleep(20);
+
+    expect(sniffs()).toBe(0);
+    expect(api.hasLiveToken()).toBe(true);
   });
 
-  it("backs off once a solve is clearly queued behind others", () => {
-    expect(pollDelayMs(6_000)).toBe(1_500);
-    expect(pollDelayMs(20_000)).toBe(1_500);
-  });
-
-  it("never returns a non-positive delay (would spin the poll loop)", () => {
-    for (let t = 0; t <= 30_000; t += 97) expect(pollDelayMs(t)).toBeGreaterThan(0);
-  });
-
-  it("beats the old flat interval to a typical 1.8s solve", () => {
-    // Walk both schedules to the first poll at-or-after the solve landing.
-    const firstPollAfter = (landMs: number, next: (t: number) => number) => {
-      let t = 0;
-      while (t < landMs) t += next(t);
-      return t;
-    };
-    const adaptive = firstPollAfter(1_800, pollDelayMs);
-    const flat = firstPollAfter(1_800, () => 1_500);
-    expect(flat).toBe(3_000);
-    expect(adaptive).toBeLessThanOrEqual(1_900);
-    expect(adaptive).toBeLessThan(flat);
+  it("reports a token near expiry as not ready", () => {
+    const api = new GtowApi();
+    const g = api as unknown as { token: string; tokenExpMs: number };
+    g.token = "stale";
+    g.tokenExpMs = Date.now() + 5_000; // inside the 60s skew
+    expect(api.hasLiveToken()).toBe(false);
   });
 });

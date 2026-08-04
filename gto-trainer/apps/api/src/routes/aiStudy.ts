@@ -7,6 +7,7 @@ import { classWeightsToSpec, reconstructFlopRanges } from "../utils/reconstructF
 import {
   actionKindOf,
   actionLabelOf,
+  HU_SEATS,
   labelBetBb,
   matchActionIndex,
   matchActionLoose,
@@ -129,21 +130,28 @@ app.post("/", async (c) => {
     if (!preflopDb.available(gametype, depth)) {
       return c.json({ ok: false, error: `preflop charts for ${gametype} @${depth} aren't crawled — can't reconstruct ranges.` }, 503);
     }
+    // HU gametypes flip the postflop order: the SB IS the dealer, so the BB
+    // acts first (OOP) — the 6-max blind-vs-blind convention (SB OOP) is
+    // exactly backwards there. Same for the pot walk: HU lines have no other
+    // seats to pad, and the 6-max rotation double-counts the blinds as dead.
+    const hu = /^CashHu/i.test(gametype);
+    const seatOrder = hu ? HU_SEATS : undefined;
+    const postflopOrder = hu ? ["BB", "SB"] : POSTFLOP_ORDER;
     // guard against crawl holes falsely marked terminal (open betting = the
     // last raiser's opponent never responded; ranges would be unconditioned)
-    if (!preflopClosed(pre)) {
+    if (!preflopClosed(pre, seatOrder)) {
       return c.json({ ok: false, error: "preflop betting hasn't closed after this line — a response node is missing from the crawl." }, 422);
     }
     const recon = reconstructFlopRanges(pre, (line) => preflopDb.rawNode(gametype, depth, line));
     if (!recon.ok) return c.json({ ok: false, error: `preflop ranges: ${recon.reason}` }, 422);
     const positions = Object.keys(recon.ranges);
     [oopPos, ipPos] =
-      POSTFLOP_ORDER.indexOf(positions[0]!.toUpperCase()) < POSTFLOP_ORDER.indexOf(positions[1]!.toUpperCase())
+      postflopOrder.indexOf(positions[0]!.toUpperCase()) < postflopOrder.indexOf(positions[1]!.toUpperCase())
         ? [positions[0]!, positions[1]!]
         : [positions[1]!, positions[0]!];
     oop = buildRangeArray(classWeightsToSpec(recon.ranges[oopPos]!));
     ip = buildRangeArray(classWeightsToSpec(recon.ranges[ipPos]!));
-    ({ pot: flopPot, stack: flopStack } = preflopPotStack(pre, depth));
+    ({ pot: flopPot, stack: flopStack } = preflopPotStack(pre, depth, seatOrder));
   }
   if (rangeCombos(oop) <= 0 || rangeCombos(ip) <= 0) {
     return c.json({ ok: false, error: "a reconstructed range is empty — uncrawled subtree?" }, 422);

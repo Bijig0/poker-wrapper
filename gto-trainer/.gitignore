@@ -52,3 +52,11 @@ tmp_log.txt
 
 # vendored TexasSolver reference (its own git repo, 182 MB, superseded by postflop-solver/PioSOLVER)
 gto-source/
+
+# SQLite runtime companions — regenerated on every open, and restoring a stale
+# -wal/-shm alongside a checked-out .sqlite corrupts the database.
+*.sqlite-wal
+*.sqlite-shm
+
+# Per-machine answer log (services/answerLog.ts) — runtime output, not source.
+apps/api/data/answers.sqlite

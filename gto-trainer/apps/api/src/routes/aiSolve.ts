@@ -55,13 +55,8 @@ interface AiSolveBody extends ResolveBody {
   heroPos?: string;
   /** default true — force hero's held combo into their range so it always gets a decision. */
   forceHeroHand?: boolean;
-  /**
-   * Pre-solve the line's COMPLETED streets and return immediately, without
-   * solving hero's node. Send this from the live feed as each street's action
-   * closes: the prior-street solves are the slow half of a deep line, and they
-   * only depend on action that already happened, so paying for them here takes
-   * them off hero's clock. The real request later hits them warm.
-   */
+  /** pre-solve the line's COMPLETED streets and return immediately, without
+   *  hero's node — see the warm path below. */
   warm?: boolean;
 }
 
@@ -144,6 +139,21 @@ app.post("/", async (c) => {
     };
   }
 
+  // Warm path: walk the line's COMPLETED streets and return without solving
+  // hero's node. Fire it the moment a street completes — the propagation solves
+  // land in gtowApi's cache during villain's think time, so hero's real request
+  // later pays for one solve instead of the whole chain. Best-effort: it always
+  // answers 200 so a failed warm can't trip the caller's error handling.
+  if (b.warm) {
+    if (!lineCtx) return c.json({ ok: false, error: "warm needs a hand — an explicit-field request has no prior streets to walk." }, 400);
+    const w = await warmExploitLine({
+      boardFull: lineCtx.boardFull, streets: lineCtx.streets, current: lineCtx.current,
+      oopRange, ipRange, oopPos: spot.oopPos, ipPos: spot.ipPos,
+      flopPot: lineCtx.flopPot, effStack: lineCtx.effStack,
+    });
+    return c.json(w.ok ? { ok: true, warmed: true, solves: w.solves } : { ok: false, warmed: false, error: w.error, unsupported: w.unsupported });
+  }
+
   // Force hero's ACTUAL combo into hero's INPUT range (whatever we're sending for
   // that seat), so it always gets a decision rather than reading "not in range"
   // when the combo isn't in that range. Common case: the default hero range is the
@@ -158,15 +168,6 @@ app.post("/", async (c) => {
   // sizing (no prior-street context available).
   let heroForced = false;
   let result: { ok: true; customSolutionId?: string; solveSecs: number; cached: boolean; data: any } | { ok: false; status: number; error: string };
-  if (lineCtx && b.warm) {
-    const warmed = await warmExploitLine({
-      boardFull: lineCtx.boardFull, streets: lineCtx.streets, current: lineCtx.current,
-      oopRange, ipRange, oopPos: spot.oopPos, ipPos: spot.ipPos,
-      flopPot: lineCtx.flopPot, effStack: lineCtx.effStack,
-    });
-    // A warm miss is never fatal — the real solve just pays what it would have.
-    return c.json({ ok: true, warmed: warmed.ok, solves: warmed.ok ? warmed.solves : 0, ...(warmed.ok ? {} : { error: warmed.error }) });
-  }
   if (lineCtx) {
     const line = await solveExploitLine({
       boardFull: lineCtx.boardFull, streets: lineCtx.streets, current: lineCtx.current,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { preflopClosed } from "./aiStudyLine";
+import { HU_SEATS, preflopClosed, preflopPotStack } from "./aiStudyLine";
 
 describe("preflopClosed", () => {
   it("closed: fold-arounds and single raiser called", () => {
@@ -32,5 +32,38 @@ describe("preflopClosed", () => {
 
   it("closed: everyone folds to a raise once all have acted", () => {
     expect(preflopClosed(["R2", "F", "F", "F", "F", "F"])).toBe(true); // hand over
+  });
+});
+
+describe("preflopClosed — heads-up (HU_SEATS order)", () => {
+  it("closed: SB open called, limp checked, 3-bet called", () => {
+    expect(preflopClosed(["R2.5", "C"], HU_SEATS)).toBe(true);
+    expect(preflopClosed(["C", "X"], HU_SEATS)).toBe(true);
+    expect(preflopClosed(["R2.5", "R10", "C"], HU_SEATS)).toBe(true);
+  });
+  it("OPEN: unanswered SB open / limp", () => {
+    expect(preflopClosed(["R2.5"], HU_SEATS)).toBe(false);
+    expect(preflopClosed(["C"], HU_SEATS)).toBe(false);
+  });
+  it("the 6-max default MISREADS a closed HU line (the bug this guards)", () => {
+    // with the 6-max rotation the walker thinks four more seats are pending
+    expect(preflopClosed(["R2.5", "C"])).toBe(false);
+  });
+});
+
+describe("preflopPotStack — heads-up (HU_SEATS order)", () => {
+  it("SB open 2.5 called: pot 5, stacks 97.5 behind", () => {
+    const { pot, stack } = preflopPotStack(["R2.5", "C"], 100, HU_SEATS);
+    expect(pot).toBeCloseTo(5, 5);      // 2.5 + 2.5, blinds absorbed into the raise
+    expect(stack).toBeCloseTo(97.5, 5);
+  });
+  it("limped pot: 1 + 1", () => {
+    const { pot, stack } = preflopPotStack(["C", "X"], 100, HU_SEATS);
+    expect(pot).toBeCloseTo(2, 5);
+    expect(stack).toBeCloseTo(99, 5);
+  });
+  it("3-bet pot: 10 + 10", () => {
+    const { pot } = preflopPotStack(["R2.5", "R10", "C"], 100, HU_SEATS);
+    expect(pot).toBeCloseTo(20, 5);
   });
 });

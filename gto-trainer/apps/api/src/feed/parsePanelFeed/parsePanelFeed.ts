@@ -51,6 +51,10 @@ export interface ParsedNode {
 /** Structurally compatible with assistive-play's Hand (panelFeed-relevant fields). */
 export interface ParsedHand {
   handId: number;
+  /** The site's own globally-unique hand id (Ignition stage id), when the
+   *  source provides one — the stable join key between live answers and the
+   *  archived hand history (wrapper handIds reset every restart). */
+  clientHandId?: string;
   heroSeatId: number;
   heroCards: string[]; // short form, e.g. "As"
   board: string[]; // short form

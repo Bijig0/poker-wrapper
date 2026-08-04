@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Study Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0e1116; color: #dfe6ee; font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 18px; padding: 10px 16px; background: #151a22; border-bottom: 1px solid #232b37; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .4px; }
+  .tabs button { background: none; border: none; color: #8fa1b6; font: inherit; padding: 6px 10px; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: #fff; border-color: #4da3ff; }
+  main { padding: 14px 16px 60px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 4px 8px; text-align: left; white-space: nowrap; }
+  thead th { color: #8fa1b6; font-weight: 600; border-bottom: 1px solid #232b37; position: sticky; top: 44px; background: #0e1116; cursor: pointer; }
+  tbody tr { border-bottom: 1px solid #1a212c; cursor: pointer; }
+  tbody tr:hover { background: #161d28; }
+  .pos, .neg { font-variant-numeric: tabular-nums; }
+  .pos { color: #61d095; } .neg { color: #ff7373; }
+  .badge { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 11px; margin-right: 3px; }
+  .b-major { background: #57222a; color: #ff9a9a; } .b-minor { background: #4d3d1e; color: #ffce56; } .b-info { background: #1e3247; color: #9ecbff; }
+  .card { background: #151a22; border: 1px solid #232b37; border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+  .card h2 { margin: 0 0 8px; font-size: 13px; color: #9db1c7; text-transform: uppercase; letter-spacing: .6px; }
+  .cardsuit { font-weight: 700; }
+  .red { color: #ff7d7d; } .blk { color: #cfd8e3; }
+  .mini { background: #1d2836; border: 1px solid #2c3a4d; color: #cfe0f2; border-radius: 5px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
+  .mini:hover { background: #24344a; }
+  .mini:disabled { opacity: .4; cursor: default; }
+  .sub { color: #8fa1b6; font-size: 12px; }
+  details { margin-top: 8px; } summary { cursor: pointer; color: #9db1c7; }
+  pre { background: #10151d; padding: 8px; border-radius: 6px; overflow: auto; max-height: 280px; font-size: 11px; }
+  .warn { color: #ffce56; }
+  input[type=text] { background: #10151d; border: 1px solid #2c3a4d; color: inherit; border-radius: 5px; padding: 3px 8px; }
+  /* ---- detail page ---- */
+  .dt-top { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
+  .dt-grid { display: grid; grid-template-columns: minmax(560px, 1.15fr) minmax(340px, .85fr); gap: 14px; align-items: start; }
+  @media (max-width: 1080px) { .dt-grid { grid-template-columns: 1fr; } }
+  #mirror svg { width: 100%; height: auto; display: block; }
+  .rp-controls { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 8px; }
+  .rp-controls button { background: #1d2836; border: 1px solid #2c3a4d; color: #dfe6ee; border-radius: 6px; padding: 4px 14px; font-size: 14px; cursor: pointer; }
+  .rp-controls button:hover { background: #24344a; }
+  #feed-sync { max-height: 430px; overflow: auto; font-size: 12px; line-height: 1.55; }
+  #feed-sync div { padding: 1px 6px; border-radius: 4px; color: #55647a; }
+  #feed-sync div.past { color: #c7d3e0; }
+  #feed-sync div.now { background: #1c2f45; color: #fff; }
+  .tl-row { display: flex; gap: 8px; align-items: center; padding: 3px 6px; border-radius: 5px; cursor: pointer; }
+  .tl-row:nth-child(odd) { background: #10151d; }
+  .tl-row.cur { background: #1c2f45; }
+  .tl-row.hero .who { color: #7fc4ff; font-weight: 700; }
+  .tl-row .who { width: 118px; color: #8fa1b6; }
+  .tl-row .what { flex: 1; }
+  .street-h { margin: 8px 0 3px; color: #9db1c7; font-weight: 700; }
+  #grid { display: grid; grid-template-columns: repeat(13, 30px); gap: 2px; margin-top: 8px; }
+  #grid div { width: 30px; height: 26px; font-size: 10px; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: #10151d; color: #b9c6d6; }
+  #grid div.hero { outline: 2px solid #ffd35c; z-index: 1; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .tiles { display: flex; flex-wrap: wrap; gap: 10px; }
+  .tile { background: #151a22; border: 1px solid #232b37; border-radius: 8px; padding: 10px 16px; min-width: 110px; }
+  .tile .v { font-size: 20px; font-weight: 700; } .tile .k { color: #8fa1b6; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🃏 Study Dashboard</h1>
+  <div class="tabs">
+    <button id="tab-hands" class="on">Hands</button>
+    <button id="tab-analytics">Analytics</button>
+  </div>
+  <span id="count" class="sub"></span>
+  <span style="flex:1"></span>
+  <input id="filter" type="text" placeholder="filter: pos, cards, stakes…">
+  <label class="sub"><input id="only-flop" type="checkbox"> saw flop</label>
+  <label class="sub"><input id="only-disc" type="checkbox"> has discrepancy</label>
+</header>
+<main>
+  <div id="view-hands">
+    <table>
+      <thead><tr>
+        <th data-k="playedAt">time</th><th data-k="stakes">stakes</th><th data-k="pos">pos</th>
+        <th data-k="cards">cards</th><th data-k="street">street</th><th data-k="pot">pot</th>
+        <th data-k="net">net bb</th><th>flags</th><th>disc</th>
+      </tr></thead>
+      <tbody id="hands-body"></tbody>
+    </table>
+  </div>
+  <div id="view-detail" style="display:none"></div>
+  <div id="view-analytics" style="display:none"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const SUITS = { s: ["♠", "#cfd8e3"], h: ["♥", "#ff7d7d"], d: ["♦", "#ff7d7d"], c: ["♣", "#cfd8e3"] };
+const cardHtml = (c) => {
+  if (!c || c.length < 2) return esc(c);
+  const [sym, col] = SUITS[c[1]] ?? ["?", "#cfd8e3"];
+  return `<span class="cardsuit" style="color:${col}">${esc(c[0])}${sym}</span>`;
+};
+const cardsHtml = (cs) => (cs || []).map(cardHtml).join(" ");
+const fmtT = (ms) => ms ? new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+const netCls = (n) => n == null ? "" : n >= 0 ? "pos" : "neg";
+const netStr = (n) => n == null ? "?" : (n > 0 ? "+" : "") + n.toFixed(2);
+const r2 = (x) => Math.round(x * 100) / 100;
+
+/* ================= hands list ================= */
+let HANDS = [], sortK = "playedAt", sortDir = -1;
+
+async function loadHands() {
+  try {
+    const j = await (await fetch("/api/dashboard/hands")).json();
+    HANDS = j.hands || [];
+    $("count").textContent = `${HANDS.length} hands`;
+    renderHands();
+  } catch (e) { /* server restarting */ }
+}
+const sortVal = (h, k) => k === "pos" ? (h.summary.heroPos ?? "") : k === "cards" ? h.heroCards.join("")
+  : k === "street" ? h.summary.finalStreet : k === "pot" ? h.summary.potBb : k === "net" ? (h.netBb ?? -1e9) : (h[k] ?? "");
+
+function renderHands() {
+  const q = $("filter").value.trim().toLowerCase();
+  let rows = HANDS.filter((h) => {
+    if ($("only-flop").checked && !h.summary.sawFlop) return false;
+    if ($("only-disc").checked && !(h.discrepancies && (h.discrepancies.major || h.discrepancies.minor))) return false;
+    if (!q) return true;
+    return `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet}`.toLowerCase().includes(q);
+  });
+  rows = rows.slice().sort((a, b) => {
+    const va = sortVal(a, sortK), vb = sortVal(b, sortK);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
+  });
+  $("hands-body").innerHTML = rows.map((h) => {
+    const s = h.summary;
+    const flags = [s.limpedPot ? "limped" : "", s.threeBet ? "3bet" : "", s.wentToShowdown ? "SD" : "", s.heroWonUncontested ? "steal" : ""].filter(Boolean).join(" ");
+    const d = h.discrepancies;
+    const disc = d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?";
+    return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
+      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${s.potBb}</td>
+      <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
+  }).join("");
+  for (const tr of $("hands-body").querySelectorAll("tr")) tr.onclick = () => { location.hash = `#hand/${tr.dataset.id}`; };
+}
+document.querySelectorAll("thead th[data-k]").forEach((th) => {
+  th.onclick = () => { const k = th.dataset.k; sortDir = sortK === k ? -sortDir : -1; sortK = k; renderHands(); };
+});
+$("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("only-disc").onchange = renderHands;
+
+/* ================= replayer state ================= */
+const STREET_N = { preflop: 0, flop: 3, turn: 4, river: 5 };
+function replayState(hand, step) {
+  // per-seat committed for the CURRENT street, pot carried from prior streets
+  const st = { street: "preflop", potPrev: 0, cur: {}, folded: new Set(), invested: {} };
+  for (let i = 0; i < step; i++) {
+    const a = hand.actions[i];
+    if (a.street !== st.street) {
+      st.potPrev += Object.values(st.cur).reduce((s, x) => s + x, 0);
+      st.cur = {}; st.street = a.street;
+    }
+    const amt = a.amount ?? 0;
+    if (a.type === "post-sb" || a.type === "post-bb" || a.type === "call") st.cur[a.seatId] = (st.cur[a.seatId] ?? 0) + amt;
+    else if (a.type === "bet" || a.type === "raise" || a.type === "all-in") st.cur[a.seatId] = amt;
+    else if (a.type === "fold") st.folded.add(a.seatId);
+    st.invested[a.seatId] = (st.invested[a.seatId] ?? 0);
+  }
+  // total invested per seat (for stack display)
+  const inv = {};
+  {
+    let street = "preflop", cur = {};
+    for (let i = 0; i < step; i++) {
+      const a = hand.actions[i];
+      if (a.street !== street) { for (const [s, v] of Object.entries(cur)) inv[s] = (inv[s] ?? 0) + v; cur = {}; street = a.street; }
+      const amt = a.amount ?? 0;
+      if (a.type === "post-sb" || a.type === "post-bb" || a.type === "call") cur[a.seatId] = (cur[a.seatId] ?? 0) + amt;
+      else if (a.type === "bet" || a.type === "raise" || a.type === "all-in") cur[a.seatId] = amt;
+    }
+    for (const [s, v] of Object.entries(cur)) inv[s] = (inv[s] ?? 0) + v;
+  }
+  const next = hand.actions[step] ?? null;
+  const shownStreet = next ? next.street : st.street;
+  return {
+    street: st.street,
+    board: hand.board.slice(0, STREET_N[shownStreet] ?? hand.board.length),
+    pot: r2(st.potPrev + Object.values(st.cur).reduce((s, x) => s + x, 0)),
+    bets: st.cur,
+    folded: st.folded,
+    invested: inv,
+    toAct: next ? next.seatId : null,
+    next,
+  };
+}
+
+/* ================= SVG table mirror ================= */
+function svgCard(x, y, c, w = 26, h = 36) {
+  if (!c) return `<rect x="${x}" y="${y}" rx="3" width="${w}" height="${h}" fill="#1b2f4d" stroke="#33507a"/>
+    <rect x="${x + 4}" y="${y + 4}" rx="2" width="${w - 8}" height="${h - 8}" fill="none" stroke="#3d5f8f" stroke-width="1"/>`;
+  const [sym, col] = SUITS[c[1]] ?? ["?", "#cfd8e3"];
+  return `<rect x="${x}" y="${y}" rx="3" width="${w}" height="${h}" fill="#eef2f7"/>
+    <text x="${x + w / 2}" y="${y + h / 2 - 3}" text-anchor="middle" font-size="13" font-weight="700" fill="${col === "#cfd8e3" ? "#22303f" : "#d3364b"}">${c[0]}</text>
+    <text x="${x + w / 2}" y="${y + h / 2 + 12}" text-anchor="middle" font-size="12" fill="${col === "#cfd8e3" ? "#22303f" : "#d3364b"}">${sym}</text>`;
+}
+
+function renderMirror(hand, rs) {
+  const W = 640, H = 380, cx = W / 2, cy = H / 2 - 6, RX = 240, RY = 128;
+  const seats = [...new Set([...Object.keys(hand.positions).map(Number), ...hand.liveSeats, hand.heroSeatId])].sort((a, b) => a - b);
+  const heroIdx = Math.max(0, seats.indexOf(hand.heroSeatId));
+  const n = seats.length;
+  const btnSeat = seats.find((s) => hand.positions[s] === "BTN") ?? seats.find((s) => hand.positions[s] === "SB");
+  let g = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="${cx}" cy="${cy}" rx="${RX + 44}" ry="${RY + 44}" fill="#12202e" stroke="#243447" stroke-width="3"/>
+    <ellipse cx="${cx}" cy="${cy}" rx="${RX + 22}" ry="${RY + 22}" fill="#173042" stroke="#2c4a63" stroke-width="2"/>`;
+  // board
+  const b0 = cx - (5 * 30) / 2;
+  for (let i = 0; i < 5; i++) g += svgCard(b0 + i * 30, cy - 30, rs.board[i] ?? null, 26, 36).replace(/#1b2f4d/g, i < STREET_N[rs.next ? rs.next.street : rs.street] || rs.board[i] ? "#1b2f4d" : "none");
+  for (let i = rs.board.length; i < 5; i++) { /* empty slots drawn faint above */ }
+  g = g.replace(/fill="none" stroke="#33507a"/g, 'fill="#132030" stroke="#22364e"');
+  g += `<text x="${cx}" y="${cy + 34}" text-anchor="middle" font-size="14" fill="#ffd35c" font-weight="700">pot ${rs.pot} bb</text>`;
+  for (let k = 0; k < n; k++) {
+    const seat = seats[(heroIdx + k) % n];
+    const ang = Math.PI / 2 + (k * 2 * Math.PI) / n; // hero at bottom, clockwise
+    const sx = cx + RX * Math.cos(ang), sy = cy + RY * Math.sin(ang);
+    const isHero = seat === hand.heroSeatId;
+    const folded = rs.folded.has(seat);
+    const toAct = rs.toAct === seat;
+    const stack0 = hand.stacks?.[seat];
+    const stackStr = stack0 != null ? `${r2(Math.max(0, stack0 - (rs.invested[seat] ?? 0)))} bb` : "";
+    const op = folded ? 0.35 : 1;
+    // hole cards
+    const cardY = sy - 52;
+    if (!folded && (isHero ? hand.heroCards.length : hand.liveSeats.includes(seat))) {
+      const c1 = isHero ? hand.heroCards[0] : null, c2 = isHero ? hand.heroCards[1] : null;
+      g += `<g opacity="${op}">${svgCard(sx - 27, cardY, c1)}${svgCard(sx + 1, cardY, c2)}</g>`;
+    }
+    // pod
+    g += `<g opacity="${op}">
+      <rect x="${sx - 46}" y="${sy - 12}" rx="7" width="92" height="36" fill="${isHero ? "#1c3550" : "#182230"}"
+        stroke="${toAct ? "#ffd35c" : isHero ? "#3f6d9e" : "#2a3a4e"}" stroke-width="${toAct ? 2.5 : 1.2}"/>
+      <text x="${sx}" y="${sy + 2}" text-anchor="middle" font-size="12" font-weight="700" fill="${isHero ? "#9fd1ff" : "#c8d5e2"}">
+        ${isHero ? "YOU" : "seat " + seat}${hand.positions[seat] ? " · " + esc(hand.positions[seat]) : ""}</text>
+      <text x="${sx}" y="${sy + 17}" text-anchor="middle" font-size="11" fill="#8fa1b6">${folded ? "folded" : stackStr}</text></g>`;
+    // dealer button
+    if (seat === btnSeat) {
+      const bx = sx + (cx - sx) * 0.26, by = sy + (cy - sy) * 0.26;
+      g += `<circle cx="${bx - 26}" cy="${by}" r="9" fill="#e8ecf2"/><text x="${bx - 26}" y="${by + 3.5}" text-anchor="middle" font-size="10" font-weight="800" fill="#22303f">D</text>`;
+    }
+    // committed chips this street
+    const bet = rs.bets[seat];
+    if (bet) {
+      const bx = sx + (cx - sx) * 0.34, by = sy + (cy - sy) * 0.34;
+      g += `<rect x="${bx - 24}" y="${by - 10}" rx="9" width="48" height="18" fill="#0f1a26" stroke="#3b556f"/>
+        <text x="${bx}" y="${by + 3.5}" text-anchor="middle" font-size="11" font-weight="700" fill="#ffd35c">${r2(bet)}</text>`;
+    }
+  }
+  return g + "</svg>";
+}
+
+/* ================= feed ↔ step sync ================= */
+function feedStepMap(feedLines, actions) {
+  // Map each feed line to "actions consumed so far": action lines advance the
+  // counter; everything else inherits the current count.
+  const isAction = (l) => /^Seat \d+ (posts|folds|checks|calls|bets|raises to|is ALL-IN)/.test(l);
+  let k = 0;
+  return feedLines.map((l) => {
+    if (isAction(l) && k < actions.length) k++;
+    return k;
+  });
+}
+
+/* ================= detail page ================= */
+let DETAIL = null, STEP = 0, PLAY = null;
+
+async function showDetail(dbId) {
+  $("view-hands").style.display = "none"; $("view-analytics").style.display = "none";
+  const v = $("view-detail"); v.style.display = ""; v.innerHTML = '<div class="card sub">loading…</div>';
+  const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
+  if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
+  DETAIL = j; STEP = j.hand.actions.length; // start at the end (full hand)
+  const s = j.summary;
+  v.innerHTML = `
+    <div class="dt-top">
+      <button class="mini" onclick="location.hash=''">← all hands</button>
+      <h2 style="margin:0">Hand #${j.dbId} · ${cardsHtml(j.hand.heroCards)} ${esc(s.heroPos ?? "?")} · ${esc(j.stakes ?? "?")} · ${fmtT(j.playedAt)}</h2>
+      <span class="sub">${esc(j.clientHandId ?? "no site id")}${j.resultText ? " · " + esc(j.resultText) : ""}</span>
+    </div>
+    <div class="dt-grid">
+      <div class="card" style="margin:0">
+        <div id="mirror"></div>
+        <div class="rp-controls">
+          <button id="rp-first">⏮</button><button id="rp-prev">◀</button>
+          <span id="rp-pos" class="sub" style="min-width:90px;text-align:center"></span>
+          <button id="rp-next">▶</button><button id="rp-last">⏭</button>
+          <button id="rp-play">▶ play</button>
+        </div>
+      </div>
+      <div class="card" style="margin:0"><h2>Live hand feed</h2><div id="feed-sync">
+        ${j.feedLines.map((l, i) => `<div data-fl="${i}">${esc(l)}</div>`).join("")}
+      </div></div>
+    </div>
+    <div class="card"><h2>Timeline — click a node, solve it, open it</h2><div id="timeline"></div></div>
+    <div id="solution"></div>
+    ${j.answers?.length ? `<div class="card"><h2>Live answers pushed during play</h2>` + j.answers.map((a) =>
+      `<div class="tl-row"><span class="who">${esc(a.street ?? "?")}</span>
+       <span class="what">${a.text ? esc(a.text) : `<span class="warn">no answer — ${esc(a.fail_reason ?? "?")}</span>`}</span>
+       <span class="sub">${esc(a.tier ?? "")} · ${a.latency_ms ?? "?"}ms</span></div>`).join("") + `</div>` : ""}
+    ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
+      `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
+       <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
+  DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
+  renderTimeline();
+  setStep(STEP);
+  $("rp-first").onclick = () => setStep(0);
+  $("rp-prev").onclick = () => setStep(STEP - 1);
+  $("rp-next").onclick = () => setStep(STEP + 1);
+  $("rp-last").onclick = () => setStep(DETAIL.hand.actions.length);
+  $("rp-play").onclick = () => {
+    if (PLAY) { clearInterval(PLAY); PLAY = null; $("rp-play").textContent = "▶ play"; return; }
+    if (STEP >= DETAIL.hand.actions.length) setStep(0);
+    $("rp-play").textContent = "⏸";
+    PLAY = setInterval(() => {
+      if (STEP >= DETAIL.hand.actions.length) { clearInterval(PLAY); PLAY = null; $("rp-play").textContent = "▶ play"; return; }
+      setStep(STEP + 1);
+    }, 900);
+  };
+}
+
+function renderTimeline() {
+  const h = DETAIL.hand, s = DETAIL.summary;
+  const posOf = (a) => a.hero ? `YOU (${s.heroPos ?? "?"})` : `seat ${a.seatId} ${h.positions[a.seatId] ?? ""}`;
+  let cur = "", html = "";
+  h.actions.forEach((a, i) => {
+    if (a.street !== cur) {
+      cur = a.street;
+      const bd = h.board.slice(0, STREET_N[cur] ?? 0);
+      html += `<div class="street-h">${cur.toUpperCase()}${bd.length ? " · " + cardsHtml(bd) : ""}</div>`;
+    }
+    const amt = a.amount != null ? ` ${a.amount}` : "";
+    const solvable = a.street !== "preflop" && a.type !== "post-sb" && a.type !== "post-bb";
+    html += `<div class="tl-row ${a.hero ? "hero" : ""}" data-step="${i}">
+      <span class="who">${esc(posOf(a))}</span><span class="what">${esc(a.type)}${esc(amt)}</span>
+      ${solvable ? `<button class="mini" data-solve="${i}">▶ solve</button><button class="mini" data-gtow="${i}">↗ GTOW</button>` : ""}</div>`;
+  });
+  $("timeline").innerHTML = html;
+  for (const row of $("timeline").querySelectorAll(".tl-row")) row.onclick = (e) => { if (e.target.tagName !== "BUTTON") setStep(Number(row.dataset.step)); };
+  for (const b of $("timeline").querySelectorAll("[data-solve]")) b.onclick = () => solveNode(DETAIL.dbId, Number(b.dataset.solve), b);
+  for (const b of $("timeline").querySelectorAll("[data-gtow]")) b.onclick = () => openGtow(DETAIL.dbId, Number(b.dataset.gtow), b);
+}
+
+function setStep(n) {
+  STEP = Math.max(0, Math.min(n, DETAIL.hand.actions.length));
+  const rs = replayState(DETAIL.hand, STEP);
+  $("mirror").innerHTML = renderMirror(DETAIL.hand, rs);
+  $("rp-pos").textContent = `${STEP} / ${DETAIL.hand.actions.length}`;
+  for (const row of $("timeline").querySelectorAll(".tl-row")) row.classList.toggle("cur", Number(row.dataset.step) === STEP);
+  // feed sync: lines whose step <= STEP are past; the last of them is "now"
+  const lines = $("feed-sync").querySelectorAll("[data-fl]");
+  let last = null;
+  lines.forEach((el, i) => {
+    const past = DETAIL.flMap[i] <= STEP;
+    el.className = past ? "past" : "";
+    if (past) last = el;
+  });
+  if (last) {
+    last.className = "past now";
+    // Scroll INSIDE the feed panel only — scrollIntoView walks ancestor
+    // scrollers and yanked the whole window down to the feed during play.
+    const box = $("feed-sync");
+    const top = last.offsetTop - box.offsetTop;
+    if (top < box.scrollTop || top > box.scrollTop + box.clientHeight - 24) {
+      box.scrollTop = Math.max(0, top - box.clientHeight / 2);
+    }
+  }
+}
+
+async function openGtow(dbId, upto, btn) {
+  btn.disabled = true; btn.textContent = "…";
+  try {
+    const j = await (await fetch("/api/dashboard/open-gtow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbId, upto }) })).json();
+    btn.textContent = j.ok ? "✓ opened" : "✗ " + (j.error ?? "failed");
+  } catch (e) { btn.textContent = "✗"; }
+  setTimeout(() => { btn.disabled = false; btn.textContent = "↗ GTOW"; }, 2500);
+}
+
+/* ================= node solution + AI inputs ================= */
+const ACT_COLORS = ["#d64550", "#e8933a", "#ceba4c", "#4da3ff", "#61d095", "#b07fe8", "#5cc8c8"];
+const colorFor = (label, i) => /^fold/i.test(label) ? "#3d6fb4" : /^(check|call)/i.test(label) ? "#61d095" : ACT_COLORS[i % ACT_COLORS.length];
+const RANKS = "AKQJT98765432";
+
+async function solveNode(dbId, upto, btn) {
+  setStep(upto); // mirror shows the node being solved
+  const sol = $("solution");
+  sol.innerHTML = `<div class="card"><span class="warn">solving node… (fresh streets take a few seconds)</span></div>`;
+  if (btn) btn.disabled = true;
+  let j;
+  try {
+    j = await (await fetch("/api/dashboard/node-solution", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbId, upto }) })).json();
+  } catch (e) { sol.innerHTML = `<div class="card warn">solve failed: ${esc(String(e))}</div>`; if (btn) btn.disabled = false; return; }
+  if (btn) btn.disabled = false;
+  const inputs = j.request ? `<details open><summary>inputs sent to GTO Wizard AI</summary><pre>${esc(JSON.stringify(j.request, null, 1))}</pre>
+    ${j.meta ? `<div class="sub">solver meta: ${esc(j.meta.oopPos)} vs ${esc(j.meta.ipPos)} · flop pot ${j.meta.flopPot}bb · eff stack ${j.meta.effStack}bb ·
+    ${j.meta.solves} fresh solve(s) in ${j.meta.solveSecs}s · custom solution ${esc(j.meta.customSolutionId ?? "—")}</div>` : ""}</details>` : "";
+  if (!j.ok || !j.solution) {
+    sol.innerHTML = `<div class="card"><span class="warn">${esc(j.error ?? "no solution at this node")}</span>${inputs}</div>`;
+    return;
+  }
+  const s = j.solution;
+  const heroCombo = (j.node?.heroCards || []).join("");
+  const cls = {};
+  s.holes.forEach((holeStr, ci) => {
+    const r1 = holeStr[0], s1 = holeStr[1], r2c = holeStr[2], s2 = holeStr[3];
+    const i1 = RANKS.indexOf(r1), i2 = RANKS.indexOf(r2c);
+    const hi = Math.min(i1, i2), lo = Math.max(i1, i2);
+    const key = i1 === i2 ? r1 + r2c : RANKS[hi] + RANKS[lo] + (s1 === s2 ? "s" : "o");
+    const w = s.weights?.[ci] ?? 0;
+    const e = (cls[key] ??= { w: 0, acts: new Array(s.actions.length).fill(0) });
+    e.w += w;
+    s.actions.forEach((_, ai) => { e.acts[ai] += w * (s.strategy[ai]?.[ci] ?? 0); });
+  });
+  const heroKey = heroCombo.length === 4 ? (() => {
+    const i1 = RANKS.indexOf(heroCombo[0]), i2 = RANKS.indexOf(heroCombo[2]);
+    if (i1 === i2) return heroCombo[0] + heroCombo[2];
+    const hi = Math.min(i1, i2), lo = Math.max(i1, i2);
+    return RANKS[hi] + RANKS[lo] + (heroCombo[1] === heroCombo[3] ? "s" : "o");
+  })() : null;
+  const totals = s.actions.map((_, ai) => {
+    let num = 0, den = 0;
+    for (const k in cls) { num += cls[k].acts[ai]; den += cls[k].w; }
+    return den ? (100 * num) / den : 0;
+  });
+  let html = `<div class="card"><h2>Node solution · ${esc(j.node.street)} · board ${cardsHtml(j.node.board)} · pot ${(s.pot / 100).toFixed(2)}bb · actor ${s.player === 1 ? "IP" : "OOP"}</h2>
+    <div class="legend">` + s.actions.map((a, ai) =>
+      `<span><span class="sw" style="background:${colorFor(a, ai)}"></span>${esc(a)} ${totals[ai].toFixed(1)}%</span>`).join("") + `</div><div id="grid">`;
+  for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) {
+    const key = r === c ? RANKS[r] + RANKS[c] : r < c ? RANKS[r] + RANKS[c] + "s" : RANKS[c] + RANKS[r] + "o";
+    const e = cls[key];
+    let bg = "#10151d";
+    if (e && e.w > 0.0005) {
+      const stops = []; let acc = 0;
+      s.actions.forEach((a, ai) => {
+        const p = (100 * e.acts[ai]) / e.w;
+        if (p > 0.5) { stops.push(`${colorFor(a, ai)} ${acc}% ${acc + p}%`); acc += p; }
+      });
+      if (stops.length) bg = `linear-gradient(to right, ${stops.join(", ")})`;
+    }
+    const op = e ? Math.min(1, 0.25 + e.w / 4) : 0.15;
+    html += `<div class="${key === heroKey ? "hero" : ""}" style="background:${bg};opacity:${op}" title="${key}${e ? ` w=${e.w.toFixed(1)} ` + s.actions.map((a, ai) => `${a}:${((100 * e.acts[ai]) / (e.w || 1)).toFixed(0)}%`).join(" ") : ""}">${key.slice(0, 2)}</div>`;
+  }
+  html += `</div><div class="sub" style="margin-top:6px">hero combo outlined · opacity = range weight · hover for the mix</div>${inputs}</div>`;
+  sol.innerHTML = html;
+  sol.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/* ================= analytics ================= */
+async function loadAnalytics() {
+  const v = $("view-analytics");
+  v.innerHTML = '<div class="card sub">loading…</div>';
+  const j = await (await fetch("/api/dashboard/stats")).json();
+  if (!j.ok) { v.innerHTML = '<div class="card warn">stats unavailable</div>'; return; }
+  const o = j.overall;
+  const tile = (k, val, sub) => `<div class="tile"><div class="v">${val}</div><div class="k">${k}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  const p = (x) => x == null ? "—" : x + "%";
+  let html = `<div class="tiles">
+    ${tile("hands", o.hands)}
+    ${tile("bb/100", o.bb100 == null ? "—" : o.bb100, `${o.netKnownHands}/${o.hands} known net (${netStr(o.netBb)} bb)`)}
+    ${tile("VPIP", p(o.vpip))} ${tile("PFR", p(o.pfr))} ${tile("3Bet", p(o.threeBet))}
+    ${tile("WTSD", p(o.wtsd))} ${tile("limped pots", p(o.limpedPots))} ${tile("major disc.", o.discrepancies.major)}
+  </div>`;
+  const row = (label, a) => `<tr><td>${esc(label)}</td><td>${a.hands}</td><td>${p(a.vpip)}</td><td>${p(a.pfr)}</td>
+    <td>${p(a.threeBet)}</td><td>${p(a.wtsd)}</td><td class="${netCls(a.netBb)}">${netStr(a.netBb)}</td>
+    <td>${a.bb100 == null ? "—" : a.bb100}</td><td>${a.discrepancies.major}/${a.discrepancies.minor}/${a.discrepancies.info}</td></tr>`;
+  const tbl = (title, rows) => `<div class="card"><h2>${title}</h2><table><thead><tr>
+    <th></th><th>hands</th><th>VPIP</th><th>PFR</th><th>3Bet</th><th>WTSD</th><th>net bb</th><th>bb/100</th><th>disc M/m/i</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`;
+  html += tbl("By session", j.sessions.map((s) => row(`${fmtT(s.start)} (${s.stakes ?? "?"})`, s)).join(""));
+  html += tbl("By stakes", Object.entries(j.byStakes).map(([k, a]) => row(k, a)).join(""));
+  html += tbl("By position", Object.entries(j.byPosition).map(([k, a]) => row(k, a)).join(""));
+  const t = j.answers?.tiers ?? {};
+  html += `<div class="card"><h2>Study answers (last 60 days)</h2>
+    <div class="sub">${j.answers.answered} answered · ${j.answers.failed} failed</div>
+    <table><thead><tr><th>tier</th><th>n</th><th>p50 ms</th><th>p90 ms</th><th>max ms</th></tr></thead><tbody>
+    ${Object.entries(t).map(([k, x]) => `<tr><td>${esc(k)}</td><td>${x.n}</td><td>${x.p50}</td><td>${x.p90}</td><td>${x.max}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  v.innerHTML = html;
+}
+
+/* ================= routing ================= */
+function route() {
+  if (PLAY) { clearInterval(PLAY); PLAY = null; }
+  const m = location.hash.match(/^#hand\/(\d+)/);
+  if (m) { showDetail(Number(m[1])); return; }
+  $("view-detail").style.display = "none";
+  if ($("tab-analytics").classList.contains("on")) { $("view-analytics").style.display = ""; $("view-hands").style.display = "none"; }
+  else { $("view-hands").style.display = ""; $("view-analytics").style.display = "none"; }
+}
+window.onhashchange = route;
+$("tab-hands").onclick = () => { $("tab-hands").classList.add("on"); $("tab-analytics").classList.remove("on"); location.hash = ""; route(); };
+$("tab-analytics").onclick = () => { $("tab-analytics").classList.add("on"); $("tab-hands").classList.remove("on"); location.hash = ""; loadAnalytics(); route(); };
+
+loadHands();
+route();
+setInterval(() => {
+  if ($("view-hands").style.display !== "none" && !location.hash) loadHands();
+}, 15000);
+</script>
+</body>
+</html>

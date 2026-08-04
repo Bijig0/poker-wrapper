@@ -19,14 +19,26 @@ export const normCard = (c: string): string => {
   return m[1]!.toUpperCase() + m[2]!.toLowerCase();
 };
 
+/** Preflop acting order for HU token lines (buildPreflopTokensHu's grammar):
+ *  the SB/dealer acts first and there are no other seats to pad. Pass this as
+ *  `seats` to preflopPotStack/preflopClosed for CashHu* lines — walking them
+ *  with the 6-max rotation misassigns every action and double-counts the
+ *  blinds as dead money. */
+export const HU_SEATS: readonly string[] = ["SB", "BB"];
+
 /**
  * Pot entering the flop and the effective stack behind, from a GTOW-grammar
- * preflop line ("F-F-R2.5-F-C-F"). Simulates the 6-max rotation so folded
- * players' dead money (blinds AND abandoned raises, e.g. squeeze pots) counts.
+ * preflop line ("F-F-R2.5-F-C-F"). Simulates the table rotation (6-max by
+ * default, HU_SEATS for heads-up lines) so folded players' dead money
+ * (blinds AND abandoned raises, e.g. squeeze pots) counts.
  */
-export function preflopPotStack(tokens: string[], depth: number): { pot: number; stack: number } {
+export function preflopPotStack(
+  tokens: string[],
+  depth: number,
+  seats: readonly string[] = SEATS
+): { pot: number; stack: number } {
   const committed: Record<string, number> = { SB: 0.5, BB: 1 };
-  let active: string[] = [...SEATS];
+  let active: string[] = [...seats];
   let p = 0;
   let level = 1;
   for (const tok of tokens) {
@@ -55,11 +67,11 @@ export function preflopPotStack(tokens: string[], depth: number): { pot: number;
  * from such a node pairs an opener's UNCONDITIONED range against the raiser's,
  * which is garbage. Callers must reject open lines before reconstructing.
  */
-export function preflopClosed(tokens: string[]): boolean {
-  let active: string[] = [...SEATS];
+export function preflopClosed(tokens: string[], seats: readonly string[] = SEATS): boolean {
+  let active: string[] = [...seats];
   // everyone is owed an action preflop (the blinds keep their option), and
   // every raise re-opens all other remaining players
-  let pending = new Set<string>(SEATS);
+  let pending = new Set<string>(seats);
   let p = 0;
   for (const tok of tokens) {
     if (active.length < 2) break;

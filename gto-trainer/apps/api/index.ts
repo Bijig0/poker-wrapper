@@ -8,10 +8,13 @@ import analysisRoutes from "./src/routes/analysis";
 import studyPollerRoutes from "./src/routes/studyPoller";
 import preflopDbRoutes from "./src/routes/preflopDb";
 import gtowApiRoutes from "./src/routes/gtowApi";
+import feedSpotRoutes from "./src/routes/feedSpot";
 import fastSolverRoutes from "./src/routes/fastSolver";
 import aiSolveRoutes from "./src/routes/aiSolve";
 import aiStudyRoutes from "./src/routes/aiStudy";
+import dashboardRoutes from "./src/routes/dashboard";
 import { studyPoller } from "./src/services/studyPoller";
+import { gtowApi } from "./src/services/gtowApi";
 
 const app = new Hono();
 
@@ -27,9 +30,18 @@ app.route("/api/analysis", analysisRoutes);
 app.route("/api/study-poller", studyPollerRoutes);
 app.route("/api/preflop-db", preflopDbRoutes);
 app.route("/api/gtow-api", gtowApiRoutes);
+app.route("/api/feed-spot", feedSpotRoutes);
 app.route("/api/fast-solver", fastSolverRoutes);
 app.route("/api/ai-solve", aiSolveRoutes);
 app.route("/api/ai-study", aiStudyRoutes);
+app.route("/api/dashboard", dashboardRoutes);
+
+// The study dashboard UI — hands table, per-node solution replayer, analytics.
+app.get("/dashboard", () =>
+  new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  })
+);
 
 // Root endpoint
 app.get("/", (c) => {
@@ -71,6 +83,11 @@ console.log(`🃏 Poker GTO Bot API starting on port ${port}...`);
 // (see services/studyPoller.ts) — that toggle is the single control; no
 // separate start step needed for normal use.
 studyPoller.start();
+
+// Keep a live GTOW access token on hand at all times: the CDP sniff costs
+// 4-8s, and paying it inline made whichever solve hit the ~15-min expiry miss
+// the decision window entirely.
+gtowApi.startTokenKeeper();
 
 export default {
   port,

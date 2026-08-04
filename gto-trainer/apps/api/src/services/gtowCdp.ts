@@ -156,8 +156,15 @@ export class GtowCdp {
     if (this.connecting) return this.connecting;
 
     this.connecting = (async () => {
+      // EVERY step is bounded: this in-flight promise is cached, so a single
+      // hung attempt (a wedged debug port, a WS handshake that never fires —
+      // both observed racing the app's boot) would otherwise poison
+      // isConnected() FOREVER — the "connected=false while the port answers
+      // fine" deadlock of 2026-07-31.
       // /json/list rather than /json — the latter can hang on some app builds
-      const list = await fetch(`http://${DEBUG_HOST}:${DEBUG_PORT}/json/list`).then(
+      const list = await fetch(`http://${DEBUG_HOST}:${DEBUG_PORT}/json/list`, {
+        signal: AbortSignal.timeout(5_000),
+      }).then(
         (r) => r.json() as Promise<Array<{ type: string; url: string; webSocketDebuggerUrl: string }>>
       );
       const page = list.find((t) => t.type === "page" && t.url.includes(TARGET_MATCH));
@@ -176,8 +183,12 @@ export class GtowCdp {
         if (this.ws === ws) this.ws = null;
       });
       await new Promise<void>((res, rej) => {
-        ws.addEventListener("open", () => res());
-        ws.addEventListener("error", () => rej(new Error("CDP websocket error")));
+        const deadline = setTimeout(() => {
+          try { ws.close(); } catch {}
+          rej(new Error("CDP websocket didn't open within 8s"));
+        }, 8_000);
+        ws.addEventListener("open", () => { clearTimeout(deadline); res(); });
+        ws.addEventListener("error", () => { clearTimeout(deadline); rej(new Error("CDP websocket error")); });
       });
       this.ws = ws;
       await this.rpc("Runtime.enable");
@@ -194,8 +205,14 @@ export class GtowCdp {
     const ws = this.ws;
     if (!ws) return Promise.reject(new Error("not connected"));
     const id = this.nextId++;
-    return new Promise((res) => {
-      this.pending.set(id, res);
+    return new Promise((res, rej) => {
+      // A reply that never comes (app hung, renderer gone mid-call) must not
+      // strand the caller — waitUntil/evaluate loops retry on rejection.
+      const deadline = setTimeout(() => {
+        this.pending.delete(id);
+        rej(new Error(`CDP ${method} got no reply within 20s`));
+      }, 20_000);
+      this.pending.set(id, (r) => { clearTimeout(deadline); res(r); });
       ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -228,10 +245,32 @@ export class GtowCdp {
     }
   }
 
+  /** Minimize GTO Wizard's window (Windows). Electron ignores the launcher's
+   *  minimized-start hint, so an unattended (re)launch minimizes explicitly
+   *  once the renderer is up — the solver is a background service here; its
+   *  window must never cover the table or the study panel. Fire-and-forget. */
+  private minimizeAppWindow(): void {
+    Bun.spawn(
+      [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Add-Type -Namespace U -Name W -MemberDefinition " +
+          "'[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int n);'; " +
+          "Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | " +
+          "Where-Object { $_.MainWindowHandle -ne 0 } | " +
+          "ForEach-Object { $null = [U.W]::ShowWindow($_.MainWindowHandle, 6) }",
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+  }
+
   /** True once the debug port is serving the GTO Wizard page target. */
   private async debugPortReady(): Promise<boolean> {
     try {
-      const list = await fetch(`http://${DEBUG_HOST}:${DEBUG_PORT}/json/list`).then(
+      const list = await fetch(`http://${DEBUG_HOST}:${DEBUG_PORT}/json/list`, {
+        signal: AbortSignal.timeout(5_000),
+      }).then(
         (r) => r.json() as Promise<Array<{ type: string; url: string }>>
       );
       return list.some((t) => t.type === "page" && t.url.includes(TARGET_MATCH));
@@ -261,37 +300,66 @@ export class GtowCdp {
     try { this.ws?.close(); } catch { /* ignore */ }
     this.ws = null;
 
-    const running = async () => {
-      const p = Bun.spawn(["pgrep", "-x", "GTO Wizard"], { stdout: "pipe", stderr: "ignore" });
-      await p.exited;
-      return (await new Response(p.stdout).text()).trim().length > 0;
-    };
-
     let relaunched = false;
-    if (await running()) {
-      relaunched = true;
-      // Ask it to quit cleanly, then wait for the process to actually exit.
-      Bun.spawn(["osascript", "-e", 'quit app "GTO Wizard"'], { stdout: "ignore", stderr: "ignore" });
-      let waited = 0;
-      while ((await running()) && waited < 8000) {
-        await this.sleep(400);
-        waited += 400;
-      }
-      // Still alive after 8s → force it, then give the OS a moment to reap it.
+    if (process.platform === "win32") {
+      // Windows: same quit-then-relaunch-with-CDP dance via PowerShell
+      // (scripts/start_gtow_ai.ps1 at the repo root is the manual twin).
+      const ps = (cmd: string) =>
+        Bun.spawn(["powershell", "-NoProfile", "-Command", cmd], { stdout: "pipe", stderr: "ignore" });
+      const running = async () => {
+        const p = ps("[bool](Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue)");
+        await p.exited;
+        return (await new Response(p.stdout).text()).trim() === "True";
+      };
       if (await running()) {
-        Bun.spawn(["pkill", "-x", "GTO Wizard"], { stdout: "ignore", stderr: "ignore" });
+        relaunched = true;
+        // Close the main window politely, then force whatever survives.
+        const q = ps(
+          "Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | " +
+            "ForEach-Object { $null = $_.CloseMainWindow() }; Start-Sleep -Seconds 3; " +
+            "Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false",
+        );
+        await q.exited;
         await this.sleep(1200);
       }
-    }
+      // Minimized ≈ macOS `open -g`: unattended relaunch must never cover
+      // what the user is looking at (Ignition, the study panel) mid-session.
+      ps(
+        "Start-Process -FilePath 'C:\\Program Files\\GTO Wizard\\GTO Wizard.exe' " +
+          `-ArgumentList '--remote-debugging-port=${DEBUG_PORT}' -WindowStyle Minimized`,
+      );
+    } else {
+      const running = async () => {
+        const p = Bun.spawn(["pgrep", "-x", "GTO Wizard"], { stdout: "pipe", stderr: "ignore" });
+        await p.exited;
+        return (await new Response(p.stdout).text()).trim().length > 0;
+      };
 
-    // -g: don't bring GTO Wizard to the foreground — it can now relaunch
-    // itself unattended (the study poller's auto-connect/wedge-recovery),
-    // and doing that with focus would cover whatever the user is actually
-    // looking at (Ignition, the assistive-play panel) mid-session.
-    Bun.spawn(["open", "-g", "-a", "GTO Wizard", "--args", `--remote-debugging-port=${DEBUG_PORT}`], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
+      if (await running()) {
+        relaunched = true;
+        // Ask it to quit cleanly, then wait for the process to actually exit.
+        Bun.spawn(["osascript", "-e", 'quit app "GTO Wizard"'], { stdout: "ignore", stderr: "ignore" });
+        let waited = 0;
+        while ((await running()) && waited < 8000) {
+          await this.sleep(400);
+          waited += 400;
+        }
+        // Still alive after 8s → force it, then give the OS a moment to reap it.
+        if (await running()) {
+          Bun.spawn(["pkill", "-x", "GTO Wizard"], { stdout: "ignore", stderr: "ignore" });
+          await this.sleep(1200);
+        }
+      }
+
+      // -g: don't bring GTO Wizard to the foreground — it can now relaunch
+      // itself unattended (the study poller's auto-connect/wedge-recovery),
+      // and doing that with focus would cover whatever the user is actually
+      // looking at (Ignition, the assistive-play panel) mid-session.
+      Bun.spawn(["open", "-g", "-a", "GTO Wizard", "--args", `--remote-debugging-port=${DEBUG_PORT}`], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+    }
 
     // The renderer needs a few seconds to boot and open its debug target.
     let waited = 0;
@@ -300,6 +368,7 @@ export class GtowCdp {
       waited += 700;
       if (await this.debugPortReady()) {
         const connected = await this.isConnected();
+        if (process.platform === "win32") this.minimizeAppWindow();
         return { ok: true, connected, relaunched };
       }
     }

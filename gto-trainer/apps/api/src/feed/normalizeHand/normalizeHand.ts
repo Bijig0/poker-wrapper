@@ -147,6 +147,9 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
 
   const hand: ParsedHand = {
     handId: Number(input.handId ?? 0) || 0,
+    ...(typeof input.clientHandId === "string" && input.clientHandId
+      ? { clientHandId: input.clientHandId }
+      : {}),
     heroSeatId,
     heroCards,
     board,

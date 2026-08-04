@@ -38,9 +38,14 @@ export function snapPreflopLine(
     let tok = intended[i]!;
     const offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
     if (!offered.includes(tok)) {
+      // An impossible check (facing a bet) is a capture phantom — drop it
+      // and keep walking, mirroring walkPreflopLine.
+      if (tok === "X") continue;
       const s = snapToken(tok, node.actions.map((a) => a.action));
-      if (s.snapped && offered.includes(s.token)) {
-        repaired.push({ index: i, from: s.from!, to: s.to! });
+      if (offered.includes(s.token)) {
+        // snapped: a genuinely different size (report the repair);
+        // un-snapped: the same size canonicalized (R2.52 → R2.5) — no repair.
+        if (s.snapped) repaired.push({ index: i, from: s.from!, to: s.to! });
         tok = s.token;
       } else {
         return { ok: false, reason: `action "${tok}" not offered (have: ${offered.join(", ")})`, at: line };

@@ -96,7 +96,11 @@ const buildPreflopTokensWalk = (
   const preflop = hand.actions.filter(
     (a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb"
   );
-  if (!preflop.length) return [];
+  // NOTE: no early return on zero actions — hero first to act on a short
+  // table still needs the empty seats padded as folds (BTN first-in on a
+  // 3-handed table = F-F-F, not the root). Bailing here answered every
+  // first-in spot from UTG's node. The no-tokens case falls out naturally
+  // below: hero UTG pending breaks immediately and returns [].
 
   const normalize = hu?.normalize ?? ((p: string) => p);
   // hero's own seatId is -1 in row-parsed hands and absent from positions;
@@ -125,6 +129,11 @@ const buildPreflopTokensWalk = (
   const pendingPos =
     !hand.ended && node.toActIsHero && node.street === "preflop" ? heroPos : null;
   const heroActedPreflop = preflop.some((a) => a.hero);
+
+  // Nothing has happened and hero has no pending decision (e.g. a villain
+  // acts first and hasn't yet): there is no line to express — padding here
+  // would fabricate an all-fold walk into a terminal.
+  if (!preflop.length && !pendingPos) return [];
 
   const tokens: string[] = [];
   let ai = 0; // index into preflop actions (which are in action order)
