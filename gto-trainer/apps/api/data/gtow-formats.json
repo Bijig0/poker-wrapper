@@ -1,0 +1,52 @@
+{
+  "url": {
+    "href": "https://app.gtowizard.com/",
+    "gametype": null,
+    "depth": null,
+    "params": {}
+  },
+  "probes": [
+    {
+      "path": "/v4/solutions/gametypes/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    {
+      "path": "/v4/solutions/game-types/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    {
+      "path": "/v4/gametypes/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    {
+      "path": "/v4/gameformats/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    {
+      "path": "/v4/solutions/formats/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch (api.gtowizard.com)"
+    },
+    {
+      "path": "/v4/meta/gametypes/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch (api.gtowizard.com)"
+    },
+    {
+      "path": "/v4/solutions/catalog/",
+      "status": 0,
+      "ok": false,
+      "error": "TypeError: Failed to fetch (api.gtowizard.com)"
+    }
+  ]
+}
