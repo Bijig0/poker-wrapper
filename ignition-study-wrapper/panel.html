@@ -177,6 +177,16 @@
   </div>
 
   <div class="card">
+    <h2>WS message dump <span id="ws-count" class="badge"></span>
+      <button id="ws-pause" class="mini">⏸ pause</button></h2>
+    <div class="sub">Every game-protocol frame the capture receives and what
+      was done with it — drops name the guard that fired (red). Full history
+      in debug/ws_dump.jsonl.</div>
+    <pre id="ws-dump" style="max-height:260px;overflow:auto;font-size:10px;
+      line-height:1.5;margin:6px 0 0;white-space:pre-wrap">waiting…</pre>
+  </div>
+
+  <div class="card">
     <h2>Table controls</h2>
     <div id="ctl-status">no table</div>
     <div id="ctl-info" class="sub"></div>
@@ -690,6 +700,46 @@
       saHealth = { running: false, lastError: "solve API (:2000) unreachable" };
     }
     setTimeout(pollSaHealth, 2500);
+  })();
+
+  // ---- WS message dump: the tap's frame-by-frame audit trail. Compact one-
+  // line rows, newest last; drops (guard fired) render red so a missed action
+  // is a one-look diagnosis. Pausable for reading during play.
+  let wsDumpPaused = false;
+  $("ws-pause").onclick = () => {
+    wsDumpPaused = !wsDumpPaused;
+    $("ws-pause").textContent = wsDumpPaused ? "▶ resume" : "⏸ pause";
+  };
+  const wsRow = (l) => {
+    const d = l.data || {};
+    let detail = "";
+    if (l.pid === "CO_SELECT_INFO") {
+      detail = `btn=${d.btn ?? "?"} bet=${d.bet ?? 0} raise=${d.raise ?? 0}`;
+    } else if (l.pid === "CO_BLIND_INFO") {
+      detail = `btn=${d.btn ?? "?"} bet=${d.bet ?? 0}`;
+    } else if (l.pid === "<unparsed>") {
+      detail = String(d.raw ?? "").slice(0, 60);
+    } else if (l.pid === "<tap-lost>") {
+      detail = String(d.err ?? "").slice(0, 60);
+    }
+    const seat = l.seat != null ? ` s${l.seat}` : "";
+    const bad = l.status !== "ok";
+    const line = `${l.t} #${l.hand} ${l.pid}${seat} ${detail}` +
+      (bad ? `  ← ${l.status}` : "");
+    return bad ? `<span style="color:#ff7373">${esc(line)}</span>` : esc(line);
+  };
+  (async function pollWsDump() {
+    if (!wsDumpPaused) {
+      try {
+        const j = await (await fetch("/ws-dump?n=120")).json();
+        $("ws-count").textContent = j.count;
+        const el = $("ws-dump");
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+        el.innerHTML = (j.lines || []).map(wsRow).join("\n") || "no frames yet";
+        if (atBottom) el.scrollTop = el.scrollHeight;
+      } catch (e) { /* server restarting */ }
+    }
+    setTimeout(pollWsDump, 2000);
   })();
 
   // ---- Feed audit: the actual table beside the study table whose answers we

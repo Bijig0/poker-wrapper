@@ -3,20 +3,14 @@
   "configurations": [
     {
       "name": "poker-analysis",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "--prefix", "analysis", "run", "dev", "--",
-        "--port", "5199", "--strictPort"
-      ],
+      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
+      "runtimeArgs": ["5199"],
       "port": 5199
     },
     {
       "name": "poker-analysis-alt",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "--prefix", "analysis", "run", "dev", "--",
-        "--port", "5198", "--strictPort"
-      ],
+      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
+      "runtimeArgs": ["5198"],
       "port": 5198
     }
   ]

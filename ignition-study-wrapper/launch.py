@@ -30,6 +30,7 @@ TABLE_FRAC (0.70 = table share of work-area width).
 import ctypes
 import ctypes.wintypes
 import json
+from collections import deque
 import os
 import re
 import sqlite3
@@ -1285,6 +1286,130 @@ def _amt(cents: int | None) -> str:
     return f"{cents / 100:.2f}"
 
 
+# ---- WS message dump (debugging) -------------------------------------------
+# Every game-protocol frame the tap receives, with the OUTCOME of processing
+# it — "ok", or the exact guard that dropped it. A missed action then reads as
+# DATA ("dropped: ghost-guard …") instead of an absence nobody can explain
+# after the fact. Ring buffer feeds the panel's "WS message dump" card;
+# debug/ws_dump.jsonl keeps the full history for post-mortems (rotated at
+# ~20 MB). Tap lifecycle markers ("<tap-connected>" / "<tap-lost>") land in the
+# same stream, so a blind window shows exactly which frames it swallowed.
+_WS_DUMP_PATH = ROOT / "debug" / "ws_dump.jsonl"
+_ws_dump: deque = deque(maxlen=3000)
+_ws_dump_cur: dict | None = None
+
+
+def _dump_begin(d: dict) -> dict:
+    global _ws_dump_cur
+    now = time.time()
+    e = {"ts": round(now, 3),
+         "t": time.strftime("%H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}",
+         "hand": _hand_no, "pid": d.get("pid"), "seat": d.get("seat"),
+         "status": "ok", "data": d}
+    _ws_dump.append(e)
+    _ws_dump_cur = e
+    return e
+
+
+def _dump_mark(reason: str) -> None:
+    """Called from inside _on_game_msg's guards: stamps the frame currently
+    being processed with WHY it was ignored."""
+    if _ws_dump_cur is not None:
+        _ws_dump_cur["status"] = reason
+
+
+def _dump_commit(e: dict) -> None:
+    global _ws_dump_cur
+    _ws_dump_cur = None
+    try:
+        _WS_DUMP_PATH.parent.mkdir(exist_ok=True)
+        if _WS_DUMP_PATH.exists() and _WS_DUMP_PATH.stat().st_size > 20_000_000:
+            _WS_DUMP_PATH.replace(_WS_DUMP_PATH.with_suffix(".jsonl.1"))
+        with _WS_DUMP_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(e, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _dump_event(pid: str, **extra) -> None:
+    """A non-frame marker (tap connected/lost) in the same stream."""
+    _dump_commit(_dump_begin({"pid": pid, **extra}))
+
+
+def _apply_select(seat: int | None, btn: int | None, bet: int, rz: int) -> None:
+    """One player action, from a live CO_SELECT_INFO frame OR one slot of a
+    batched CO_SELECT_SPEED_INFO (Zone pre-selected actions) — identical
+    semantics: `raise` is chips ADDED (running total = prior + rz), `bet` is
+    the matching amount, unmapped btn codes are inferred from the amounts
+    (the speed batch uses its own codes, e.g. 512 for a pre-raise)."""
+    # Ghost/echo guard: actions from seats never dealt this hand, or from
+    # seats that already folded, are the client re-rendering old state —
+    # recording them corrupts the line walk.
+    dealt_now = _ws_state.get("dealt") or []
+    if seat is not None and ((dealt_now and seat not in dealt_now)
+                             or seat in _ws_state.get("foldedSeats", set())):
+        _dump_mark(f"dropped: ghost-guard (dealt={dealt_now}, "
+                   f"folded={sorted(_ws_state.get('foldedSeats', set()))})")
+        return
+    verb = _BTN.get(btn)
+    if verb is None:                               # unmapped code: infer
+        verb = "raises to" if rz else ("calls" if bet else "checks")
+    top = _ws_state.get("maxBet", 0)
+    com = _ws_state.setdefault("committed", {})
+    prior = com.get(seat, 0)
+    if verb == "raises to":
+        # `raise` is the chips ADDED by this action; "raises to" means the
+        # seat's running total for the round, so add what they already had
+        # in front (a blind, or an earlier bet this street).
+        total = prior + rz
+        com[seat] = total
+        _ws_state["maxBet"] = max(top, total)
+        if not _act_seen(_mkey(seat, total)):
+            _act_add(seat, "raise", total)
+            _feed_add(f"Seat {seat} raises to {_amt(total)}")
+        else:
+            _dump_mark("dup: money action already recorded")
+    elif verb == "calls":
+        # Matching the standing bet is a call; exceeding it (or acting when
+        # nothing is owed) is a bet — the bitmask alone can't tell these
+        # apart, so compare against the round's high-water mark.
+        com[seat] = prior + bet
+        if prior + bet > top:
+            _ws_state["maxBet"] = prior + bet
+            if not _act_seen(_mkey(seat, prior + bet)):
+                _act_add(seat, "bet", prior + bet)
+                _feed_add(f"Seat {seat} bets {_amt(bet)}")
+            else:
+                _dump_mark("dup: money action already recorded")
+        elif not _act_seen(_mkey(seat, prior + bet)):
+            # A call reports the amount called (the top-up), which is the
+            # standard hand-history convention — unlike "raises to".
+            _act_add(seat, "call", bet)
+            _feed_add(f"Seat {seat} calls {_amt(bet)}")
+        else:
+            _dump_mark("dup: money action already recorded")
+    elif verb == "is ALL-IN":
+        total = prior + max(bet, rz)
+        com[seat] = total
+        _ws_state["maxBet"] = max(top, total)
+        if not _act_seen(_mkey(seat, total)):
+            _act_add(seat, "all-in", total)
+            _feed_add(f"Seat {seat} is ALL-IN ({_amt(total)})")
+        else:
+            _dump_mark("dup: money action already recorded")
+    else:
+        if verb == "folds" and seat == _ws_state.get("heroSeat"):
+            _ws_state["heroFolded"] = True
+        kind = "fold" if verb == "folds" else "check"
+        if kind == "fold":
+            _ws_state.setdefault("foldedSeats", set()).add(seat)
+        if not _act_seen((kind, seat)):
+            _act_add(seat, kind)
+            _feed_add(f"Seat {seat} {verb}")
+        else:
+            _dump_mark(f"dup: {kind} already recorded")
+
+
 def _on_game_msg(d: dict) -> None:
     global _hand_no
     pid = d.get("pid")
@@ -1293,6 +1418,7 @@ def _on_game_msg(d: dict) -> None:
         # The client repeats this message for the same hand; without an id
         # check that spawned a phantom hand carrying the previous hand's id.
         if hid and hid == _hand_ids.get(_hand_no):
+            _dump_mark("dup: repeated PLAY_STAGE_INFO for the same hand id")
             return
         _archive_hand()   # the finished hand, an instant before its state resets
         _hand_no += 1
@@ -1308,6 +1434,8 @@ def _on_game_msg(d: dict) -> None:
         _ws_state["heroCards"] = []
         _ws_state["pot"] = None
         _ws_state["potCents"] = None
+        _ws_state["handOver"] = False
+        _ws_state["endedSince"] = None
         # Zone deals a NEW table every hand: the previous hand's dealer/dealt
         # must not leak into this one (stale geometry = wrong positions = the
         # study line walks the wrong seats). Both are re-announced within the
@@ -1348,62 +1476,29 @@ def _on_game_msg(d: dict) -> None:
         _feed_add(f"Seat {d.get('seat')} posts "
                   + (f"{label} ({_amt(bet)})" if label else f"({_amt(bet)})"))
     elif pid == "CO_SELECT_INFO":
-        seat, btn = d.get("seat"), d.get("btn")
-        # Ghost/echo guard: actions from seats never dealt this hand, or from
-        # seats that already folded, are the client re-rendering old state —
-        # recording them corrupts the line walk.
-        dealt_now = _ws_state.get("dealt") or []
-        if seat is not None and ((dealt_now and seat not in dealt_now)
-                                 or seat in _ws_state.get("foldedSeats", set())):
-            return
-        bet, rz = d.get("bet") or 0, d.get("raise") or 0
-        verb = _BTN.get(btn)
-        if verb is None:                               # unmapped code: infer
-            verb = "raises to" if rz else ("calls" if bet else "checks")
-        top = _ws_state.get("maxBet", 0)
-        com = _ws_state.setdefault("committed", {})
-        prior = com.get(seat, 0)
-        if verb == "raises to":
-            # `raise` is the chips ADDED by this action; "raises to" means the
-            # seat's running total for the round, so add what they already had
-            # in front (a blind, or an earlier bet this street).
-            total = prior + rz
-            com[seat] = total
-            _ws_state["maxBet"] = max(top, total)
-            if not _act_seen(_mkey(seat, total)):
-                _act_add(seat, "raise", total)
-                _feed_add(f"Seat {seat} raises to {_amt(total)}")
-        elif verb == "calls":
-            # Matching the standing bet is a call; exceeding it (or acting when
-            # nothing is owed) is a bet — the bitmask alone can't tell these
-            # apart, so compare against the round's high-water mark.
-            com[seat] = prior + bet
-            if prior + bet > top:
-                _ws_state["maxBet"] = prior + bet
-                if not _act_seen(_mkey(seat, prior + bet)):
-                    _act_add(seat, "bet", prior + bet)
-                    _feed_add(f"Seat {seat} bets {_amt(bet)}")
-            elif not _act_seen(_mkey(seat, prior + bet)):
-                # A call reports the amount called (the top-up), which is the
-                # standard hand-history convention — unlike "raises to".
-                _act_add(seat, "call", bet)
-                _feed_add(f"Seat {seat} calls {_amt(bet)}")
-        elif verb == "is ALL-IN":
-            total = prior + max(bet, rz)
-            com[seat] = total
-            _ws_state["maxBet"] = max(top, total)
-            if not _act_seen(_mkey(seat, total)):
-                _act_add(seat, "all-in", total)
-                _feed_add(f"Seat {seat} is ALL-IN ({_amt(total)})")
-        else:
-            if verb == "folds" and seat == _ws_state.get("heroSeat"):
-                _ws_state["heroFolded"] = True
-            kind = "fold" if verb == "folds" else "check"
-            if kind == "fold":
-                _ws_state.setdefault("foldedSeats", set()).add(seat)
-            if not _act_seen((kind, seat)):
-                _act_add(seat, kind)
-                _feed_add(f"Seat {seat} {verb}")
+        _apply_select(d.get("seat"), d.get("btn"), d.get("bet") or 0, d.get("raise") or 0)
+    elif pid == "CO_SELECT_SPEED_INFO":
+        # Zone's PRE-SELECTED ("speed") actions arrive BATCHED in seat-indexed
+        # arrays, not as individual CO_SELECT_INFO frames — a player who
+        # pre-folds or pre-raises never emits one. This was every "missed
+        # early villain action" (proved by hand 4907488490's dump: seat 3's
+        # raise lived in btn=[…,512,…]/raise=[…,75,…] while the wrapper only
+        # knew CO_SELECT_INFO). Apply each armed seat in acting order starting
+        # from firstSeat, through the same guard/dedupe path as live actions.
+        btns = d.get("btn") or []
+        bets = d.get("bet") or []
+        rzs = d.get("raise") or []
+        n = max(len(btns), len(bets), len(rzs))
+        first = d.get("firstSeat") or 1
+        for k in range(n):
+            seat = ((first - 1 + k) % n) + 1
+            i = seat - 1
+            b = btns[i] if i < len(btns) else 0
+            be = bets[i] if i < len(bets) else 0
+            rz = rzs[i] if i < len(rzs) else 0
+            if not (b or be or rz):
+                continue
+            _apply_select(seat, b, be, rz)
     elif pid == "CO_BCARD3_INFO":                      # the flop, all three at once
         names = [n for n in (_card_name(f"card{c}") for c in (d.get("bcard") or []))
                  if n]
@@ -1436,6 +1531,11 @@ def _on_game_msg(d: dict) -> None:
     # after a hand ends and were never actually dealt to the board.
     elif pid == "CO_CURRENT_PLAYER":                   # authoritative "action on"
         _ws_state["actionOn"] = d.get("seat")
+    elif pid == "PLAY_STAGE_END_REQ":
+        # The client's own end-of-hand marker — covers SHOWDOWN hands, whose
+        # `ended` flag stays false (it means folded-or-uncontested), so the
+        # idle flush (_maybe_flush_ended) can archive them too.
+        _ws_state["handOver"] = True
     elif pid == "CO_DEALER_SEAT":
         _ws_state["dealer"] = d.get("seat")
     elif pid == "CO_CARDTABLE_INFO":
@@ -1627,6 +1727,9 @@ def _hand_state() -> dict | None:
                 and all(s in folded_seats for s in villains))
     return {
         "handId": _hand_no,
+        # the site's own hand id — stable across wrapper restarts, so live
+        # study answers can be joined to the archived hand later
+        "clientHandId": _hand_ids.get(_hand_no),
         "heroSeatId": hero,
         "heroCards": hero_cards,
         "board": board,
@@ -1764,32 +1867,78 @@ def _ws_tap() -> None:
                                             suppress_origin=True)
             c.send(json.dumps({"id": 1, "method": "Network.enable"}))
             print("[ws] tapped table game protocol")
+            _dump_event("<tap-connected>", target=t.get("url", ""))
             if was_up:
                 _feed_add("(capture reconnected — DOM backfill covered the gap)")
             was_up = True
+            ping_id = 1
             while True:
-                m = json.loads(c.recv())
+                try:
+                    m = json.loads(c.recv())
+                except websocket.WebSocketTimeoutException:
+                    # An idle table sends nothing for minutes; that is NOT a
+                    # dead socket. Tearing down on the 60s read timeout cycled
+                    # the connection every minute, each cycle a blind window
+                    # (183 reconnect markers in one day's feed). Probe the SAME
+                    # connection instead; a real corpse fails the send.
+                    ping_id += 1
+                    c.send(json.dumps({"id": ping_id, "method": "Network.enable"}))
+                    continue
                 if m.get("method") != "Network.webSocketFrameReceived":
                     continue
                 raw = m["params"]["response"].get("payloadData", "")
                 try:
                     o = json.loads(re.sub(r"^\d+\|", "", raw))
                 except Exception:
+                    # Heartbeats ("2"/"3") are noise; anything longer that
+                    # fails to parse is worth seeing in the dump.
+                    if len(raw) > 4:
+                        _dump_event("<unparsed>", raw=raw[:300])
                     continue
                 d = o.get("data") if isinstance(o, dict) else None
                 if isinstance(d, dict) and d.get("pid"):
+                    e = _dump_begin(d)
                     try:
                         _on_game_msg(d)
-                    except Exception:
-                        pass
-        except Exception:
+                    except Exception as ex:
+                        e["status"] = f"handler-error: {ex}"
+                    _dump_commit(e)
+        except Exception as ex:
+            if was_up:
+                # Log the loss ONCE; was_up re-arms on the next successful
+                # connect (which also prints the feed's reconnect note).
+                _dump_event("<tap-lost>", err=str(ex)[:200])
+                was_up = False
+                _feed_add("(capture connection lost — reconnecting)")
             time.sleep(0.5)
+
+
+def _maybe_flush_ended() -> None:
+    """Archive a FINISHED hand after a short grace even when no next hand ever
+    arrives (player pauses / sits out after it) — otherwise it waits for the
+    next PLAY_STAGE_INFO indefinitely and never reaches the dashboard. The
+    grace lets the result/win feed lines land first; _archive_hand's id guard
+    makes the eventual next-hand trigger a harmless no-op."""
+    h = _hand_state()
+    over = bool(_ws_state.get("handOver")) or bool(h and h.get("ended"))
+    if not h or not over or not h.get("actions") or h["handId"] == _last_archived["no"]:
+        _ws_state["endedSince"] = None
+        return
+    since = _ws_state.get("endedSince")
+    if since is None:
+        _ws_state["endedSince"] = time.time()
+    elif time.time() - since > 8:
+        _archive_hand()
 
 
 def _feed_loop() -> None:
     while True:
         try:
             _feed_tick()
+        except Exception:
+            pass
+        try:
+            _maybe_flush_ended()
         except Exception:
             pass
         # State reads are cheap (~35ms DOM eval); sampling often is what keeps
@@ -1954,6 +2103,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", json.dumps(
                     {"on": _dbg["on"], "dir": _dbg["dir"],
                      "frames": _dbg["seq"]}).encode())
+            elif path == "/ws-dump":
+                q = (self.path.split("?", 1) + [""])[1]
+                mm = re.search(r"n=(\d+)", q)
+                n = min(int(mm.group(1)) if mm else 200, 3000)
+                self._send(200, "application/json", json.dumps(
+                    {"count": len(_ws_dump), "file": str(_WS_DUMP_PATH),
+                     "lines": list(_ws_dump)[-n:]}, default=str).encode())
             elif path == "/recordings":
                 self._send(200, "application/json", json.dumps(recordings()).encode())
             elif path.startswith("/rec/"):
