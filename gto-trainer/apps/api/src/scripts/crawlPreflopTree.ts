@@ -27,7 +27,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { gtowCdp, SOLUTION_SETS } from "../services/gtowCdp";
+import { gtowCdp, SOLUTION_SETS, CP_ANTE_SETS } from "../services/gtowCdp";
 import { parseBetLabel } from "../utils/parseBetLabel/parseBetLabel";
 
 // ---- Config ----
@@ -54,6 +54,45 @@ const PLAN: { setId: string; depth: number }[] = [
   { setId: "hu-simple", depth: 60 }, { setId: "hu-simple", depth: 40 }, { setId: "hu-simple", depth: 20 },
   { setId: "6max-complex", depth: 100 },
 ];
+
+/**
+ * Ante plan, crawled with `--ante`: every CoinPoker 6-max tree, both rake
+ * levels and all four opening sizes, 200bb down to 20bb. 8 gametypes x 12
+ * depths = 96 crawl targets, so this is a long, resumable run — the crawler
+ * checkpoints each node and picks up where it stopped.
+ *
+ * Kept separate from PLAN because these are a different GAME, not more of the
+ * same one. Folding them together would make "resume where it stopped"
+ * ambiguous about which game was being resumed.
+ *
+ * Ordering is deliberate, because a daily-limit 429 can end a run at any
+ * point and whatever finished first is what you get:
+ *   - NL200 @ 2.5x leads. It is the exact match for the postflop solve
+ *     fleet (5% cap 3BB, 2.5x opens), so on its own it unblocks the re-solve.
+ *   - 100bb leads the depths for the same reason — the fleet is built there.
+ *   - Everything else fans out from those.
+ */
+const ANTE_DEPTHS = [
+  100.166, 150.166, 200.166, 125.166, 90.166, 80.166,
+  70.166, 60.166, 50.166, 40.166, 30.166, 20.166,
+];
+const ANTE_SET_ORDER = [
+  "6max-cp-ante-nl200-25", // exact fleet match — crawl this first
+  "6max-cp-ante-nl200-2", "6max-cp-ante-nl200-225", "6max-cp-ante-nl200-3",
+  "6max-cp-ante-nl100-25", "6max-cp-ante-nl100-2", "6max-cp-ante-nl100-225", "6max-cp-ante-nl100-3",
+];
+const ANTE_PLAN: { setId: string; depth: number }[] = ANTE_SET_ORDER.flatMap((setId) =>
+  ANTE_DEPTHS.map((depth) => ({ setId, depth }))
+);
+
+// A typo'd id would otherwise surface as 12 silent "unknown set" skips per
+// entry, hours into a 96-target run. Fail before the first navigation.
+for (const id of ANTE_SET_ORDER) {
+  if (!CP_ANTE_SETS.some((s) => s.id === id)) {
+    throw new Error(`ANTE_SET_ORDER references unknown set "${id}" — check CP_ANTE_SETS in gtowCdp.ts`);
+  }
+}
+
 
 // ---- DB ----
 const dataDir = join(import.meta.dir, "..", "..", "data");
@@ -330,13 +369,20 @@ async function crawlSet(setId: string, depth: number, budget: { left: number }):
 
 // ---- Main ----
 const single = args.has("set") || args.has("depth");
+// parseFloat, NOT parseInt: ante depths are fractional (100.166) because the
+// ante rides in the depth string. parseInt would silently truncate to 100 and
+// crawl a page that doesn't exist.
 const plan = single
-  ? [{ setId: args.get("set") ?? "6max", depth: parseInt(args.get("depth") ?? "100", 10) }]
-  : PLAN;
+  ? [{ setId: args.get("set") ?? "6max", depth: parseFloat(args.get("depth") ?? "100") }]
+  : args.has("ante")
+    ? ANTE_PLAN
+    : PLAN;
 
-if (!args.has("all") && !single) {
-  console.log("Pass --all for the full plan, or --set <id> --depth <bb> for one crawl.");
-  console.log(`Plan: ${PLAN.map((p) => `${p.setId}@${p.depth}`).join(", ")}`);
+if (!args.has("all") && !args.has("ante") && !single) {
+  console.log("Pass --all for the full plan, --ante for the CoinPoker/ante plan,");
+  console.log("or --set <id> --depth <bb> for one crawl.");
+  console.log(`Plan:      ${PLAN.map((p) => `${p.setId}@${p.depth}`).join(", ")}`);
+  console.log(`Ante plan: ${ANTE_PLAN.map((p) => `${p.setId}@${p.depth}`).join(", ")}`);
   process.exit(0);
 }
 

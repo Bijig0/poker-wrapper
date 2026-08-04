@@ -88,10 +88,59 @@ export interface SolutionSet {
   seats: string[];
 }
 
+/*
+ * ---- CoinPoker ANTE sets ----
+ *
+ * Every non-ante set below is the wrong range source for CoinPoker, which
+ * posts an ante every hand — that mismatch is how the postflop solve fleet
+ * ended up conditioned on ranges from a different game.
+ *
+ * GTO Wizard ships CoinPoker-specific trees whose `info` block matches the
+ * live game on every axis that matters:
+ *   ante 0.166/player  (0.16 measured across 75,572 real hands — same number)
+ *   rake 5%, cap 3BB at NL200  (== configs.json rake_rate/rake_cap_bb)
+ *   no_flop_no_drop
+ *
+ * Generated rather than hand-listed: rake × opening-size is a clean product,
+ * and eight copy-pasted blocks would drift.
+ *
+ * Two gotchas worth stating, both of which produce a silently empty page:
+ *   - Depths are FRACTIONAL. The ante rides in the depth string, so 100bb is
+ *     `100.166`, never `100`.
+ *   - BCC, not NCC. That axis is "BTN cold call" vs "No cold calls", and
+ *     srp_co_vs_btn / srp_hj_vs_btn in the solve configs are BTN cold-calling
+ *     an earlier open — a line NCC's tree cannot express.
+ *
+ * NL100 caps rake at 5BB and NL200 at 3BB; the fleet's configs use 3.0, so
+ * NL200 is the drop-in. NL100 is crawled alongside it for the other stake.
+ */
+const CP_ANTE_DEPTHS = [
+  20.166, 30.166, 40.166, 50.166, 60.166, 70.166, 80.166, 90.166, 100.166, 125.166, 150.166, 200.166,
+];
+/** Suffix is the open size with the decimal dropped: R225 = 2.25x. */
+const CP_ANTE_OPENS = [
+  { sfx: "R2", x: "2", id: "2" },
+  { sfx: "R225", x: "2.25", id: "225" },
+  { sfx: "R25", x: "2.5", id: "25" },
+  { sfx: "R3", x: "3", id: "3" },
+] as const;
+const CP_ANTE_RAKES = ["NL100", "NL200"] as const;
+
+export const CP_ANTE_SETS: SolutionSet[] = CP_ANTE_RAKES.flatMap((rake) =>
+  CP_ANTE_OPENS.map((o) => ({
+    id: `6max-cp-ante-${rake.toLowerCase()}-${o.id}`,
+    label: `6-max · CoinPoker ante 0.166 · ${rake} · ${o.x}x opens`,
+    gametype: `Cash6mSimple_6mCPante0166BCC${rake}${o.sfx}`,
+    depths: CP_ANTE_DEPTHS,
+    defaultDepth: 100.166,
+    seats: ["UTG", "HJ", "CO", "BTN", "SB", "BB"],
+  }))
+);
+
 /**
  * The solution sets exposed to the trainer — the full-postflop subset of GTO
  * Wizard's cash catalog (inventoried from the app's own gameformat store;
- * everything else in the library is preflop-only).
+ * everything else in the library is preflop-only), plus the ante sets above.
  */
 export const SOLUTION_SETS: SolutionSet[] = [
   {
@@ -142,6 +191,9 @@ export const SOLUTION_SETS: SolutionSet[] = [
     defaultDepth: 100,
     seats: ["SB", "BB"],
   },
+
+
+  ...CP_ANTE_SETS,
 ];
 
 export class GtowCdp {
