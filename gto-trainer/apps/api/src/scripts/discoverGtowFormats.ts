@@ -1,27 +1,38 @@
 /**
  * Inventory GTO Wizard's solution catalogue — which game formats exist, at
- * which stack depths, and which of them are ANTE formats.
+ * which stack depths, and specifically the CASH ANTE ones.
  *
  * Why this exists: SOLUTION_SETS was hand-inventoried once and covers only the
  * non-ante cash catalog (Cash6m/CashHu * General/Complex/Simple). CoinPoker
  * posts a 0.16bb/player ante, so the ranges feeding the postflop solve fleet
- * are from the wrong game. Before crawling ante trees we need GTO Wizard's
- * exact `gametype` identifiers — they are opaque strings and guessing them
- * just produces empty pages.
+ * are from the wrong game. GTO Wizard's `gametype` values are opaque strings
+ * and a wrong one navigates to an empty page, so the real identifiers have to
+ * be read out of the client before anything can be crawled.
  *
- * This script is DISCOVERY ONLY. It reads the catalogue and writes a JSON
- * report; it never opens a node or pulls a range. Run crawlPreflopTree.ts for
- * that, once the identifiers below have been added to SOLUTION_SETS.
+ * DISCOVERY ONLY. No node is opened and no range is fetched.
  *
- * Method: evaluate in the PAGE context so requests carry the app's own
- * session — no bearer-token handling here. Several endpoint shapes are probed
- * because the catalogue route isn't documented; whichever answers wins, and
- * the raw payload is saved so the shape can be inspected by hand.
+ * Three methods, most reliable first — none of them guess:
  *
- * Usage (GTO Wizard must be running with --remote-debugging-port=9222):
- *   bun run src/scripts/discoverGtowFormats.ts            # probe + report
- *   bun run src/scripts/discoverGtowFormats.ts --launch   # launch it first
- *   bun run src/scripts/discoverGtowFormats.ts --out /tmp/formats.json
+ *   --url     You navigate to any ante spot in the client; this reads
+ *             location.href and extracts gametype + depth. Five seconds, and
+ *             it cannot be wrong. Start here.
+ *
+ *   --watch   Installs a fetch/XHR recorder in the page, then polls while you
+ *             click through the ante section. Captures whatever endpoint the
+ *             app itself uses to populate its format and depth pickers —
+ *             including the full depth list per format.
+ *
+ *   --probe   Guesses catalogue routes. Kept only as a last resort; it is the
+ *             one method here that can silently come up empty.
+ *
+ * `--watch` exists because gtowCdp's CDP client only dispatches messages with
+ * an `id` — protocol EVENTS are dropped — so Network.enable/responseReceived
+ * is unavailable. Patching fetch in-page needs nothing but Runtime.evaluate.
+ *
+ * Usage (GTO Wizard running with --remote-debugging-port=9222):
+ *   bun run src/scripts/discoverGtowFormats.ts --url
+ *   bun run src/scripts/discoverGtowFormats.ts --watch 90
+ *   bun run src/scripts/discoverGtowFormats.ts --launch --probe
  */
 
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -37,9 +48,8 @@ for (let i = 2; i < process.argv.length; i++) {
   }
 }
 const OUT = args.get("out") ?? "data/gtow-formats.json";
+const WATCH_SECS = parseInt(args.get("watch") ?? "0", 10) || 0;
 
-/** Candidate catalogue routes. The app requests one of these on boot; we don't
- *  know which, so ask for all and keep whatever returns a usable body. */
 const CANDIDATES = [
   "/v4/solutions/gametypes/",
   "/v4/solutions/game-types/",
@@ -50,127 +60,187 @@ const CANDIDATES = [
   "/v4/solutions/catalog/",
 ];
 
-/** Runs inside the page. Probes each route and, separately, sweeps `window`
- *  for anything that looks like a format catalogue the SPA already loaded —
- *  that store is how the original inventory was taken. */
+/** Read the live URL and pull the solution coordinates out of it. */
+const READ_URL = /* js */ `(() => {
+  const u = new URL(location.href);
+  const p = Object.fromEntries(u.searchParams.entries());
+  return { href: location.href, gametype: p.gametype ?? null, depth: p.depth ?? null, params: p };
+})()`;
+
+/**
+ * Install a recorder over fetch and XHR. Idempotent — re-running must not
+ * double-wrap, or one navigation would be recorded several times.
+ */
+const INSTALL_RECORDER = /* js */ `(() => {
+  if (window.__gtowCap) return { installed: false, already: true, count: window.__gtowCap.length };
+  window.__gtowCap = [];
+  const keep = (url, status, text) => {
+    try {
+      if (!/gtowizard\\.com/.test(url)) return;
+      if (window.__gtowCap.length > 400) return;
+      let body = null;
+      try { body = JSON.parse(text); } catch { body = String(text).slice(0, 400); }
+      window.__gtowCap.push({ url, status, size: (text || "").length, body });
+    } catch {}
+  };
+  const of = window.fetch;
+  window.fetch = async function (...a) {
+    const r = await of.apply(this, a);
+    try {
+      const url = typeof a[0] === "string" ? a[0] : (a[0] && a[0].url) || "";
+      r.clone().text().then((t) => keep(url, r.status, t)).catch(() => {});
+    } catch {}
+    return r;
+  };
+  const OX = window.XMLHttpRequest;
+  function Wrapped() {
+    const x = new OX();
+    let u = "";
+    const oo = x.open;
+    x.open = function (m, url, ...rest) { u = url; return oo.call(this, m, url, ...rest); };
+    x.addEventListener("load", () => keep(u, x.status, x.responseText));
+    return x;
+  }
+  Wrapped.prototype = OX.prototype;
+  window.XMLHttpRequest = Wrapped;
+  return { installed: true, already: false, count: 0 };
+})()`;
+
+const DRAIN = /* js */ `(() => {
+  const c = window.__gtowCap || [];
+  return { count: c.length, entries: c };
+})()`;
+
 const PROBE = /* js */ `(async () => {
-  const out = { probes: [], stores: [], location: location.href };
-  const BASE = "https://api.gtowizard.com";
+  const out = [];
   for (const path of ${JSON.stringify(CANDIDATES)}) {
     try {
-      const r = await fetch(BASE + path, { credentials: "include" });
+      const r = await fetch("https://api.gtowizard.com" + path, { credentials: "include" });
       const text = await r.text();
       let body = null;
       try { body = JSON.parse(text); } catch { body = text.slice(0, 300); }
-      out.probes.push({
-        path,
-        status: r.status,
-        ok: r.ok,
-        size: text.length,
-        body: r.ok ? body : (typeof body === "string" ? body : JSON.stringify(body).slice(0, 300)),
-      });
+      out.push({ path, status: r.status, ok: r.ok, size: text.length, body });
     } catch (e) {
-      out.probes.push({ path, status: 0, ok: false, error: String(e).slice(0, 200) });
+      out.push({ path, status: 0, ok: false, error: String(e).slice(0, 200) });
     }
-  }
-  // Sweep global state for a preloaded catalogue: any array of objects whose
-  // entries carry a gametype-ish key. Depth-limited so this can't run away.
-  const seen = new Set();
-  const looksLikeFormat = (o) =>
-    o && typeof o === "object" && !Array.isArray(o) &&
-    ["gametype","game_type","gameType","format","id"].some((k) => k in o) &&
-    JSON.stringify(o).length < 4000;
-  const visit = (node, path, depth) => {
-    if (depth > 4 || node == null || seen.has(node)) return;
-    if (typeof node === "object") {
-      if (seen.size > 4000) return;
-      seen.add(node);
-      if (Array.isArray(node)) {
-        if (node.length && node.length < 500 && node.every(looksLikeFormat)) {
-          const s = JSON.stringify(node);
-          if (/ante/i.test(s) || /cash|mtt|spin/i.test(s)) {
-            out.stores.push({ path, count: node.length, sample: node.slice(0, 3), hasAnte: /ante/i.test(s) });
-          }
-          return;
-        }
-        for (let i = 0; i < Math.min(node.length, 40); i++) visit(node[i], path + "[" + i + "]", depth + 1);
-      } else {
-        for (const k of Object.keys(node).slice(0, 80)) {
-          try { visit(node[k], path + "." + k, depth + 1); } catch {}
-        }
-      }
-    }
-  };
-  for (const k of Object.keys(window).slice(0, 400)) {
-    if (/^(webkit|chrome|on[a-z]+)/.test(k)) continue;
-    try { visit(window[k], "window." + k, 0); } catch {}
   }
   return out;
 })()`;
 
-function anteish(s: string): boolean {
-  return /ante/i.test(s);
+const isAnte = (s: string) => /ante/i.test(s);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Pull anything that looks like a gametype id out of an arbitrary payload. */
+function harvestGametypes(node: unknown, acc = new Set<string>()): Set<string> {
+  if (node == null) return acc;
+  if (typeof node === "string") {
+    if (/^(Cash|Mtt|MTT|Spin|Hu)[A-Za-z0-9]{4,}$/.test(node)) acc.add(node);
+    return acc;
+  }
+  if (Array.isArray(node)) {
+    for (const v of node) harvestGametypes(v, acc);
+    return acc;
+  }
+  if (typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (/^(gametype|game_type|gameType|id|slug|value)$/.test(k) && typeof v === "string") {
+        if (v.length > 4 && /[A-Z]/.test(v)) acc.add(v);
+      }
+      harvestGametypes(v, acc);
+    }
+  }
+  return acc;
 }
 
 async function main() {
   if (args.has("launch")) {
     process.stdout.write("launching GTO Wizard (--remote-debugging-port=9222)…\n");
     const r = await gtowCdp.launchApp();
-    if (!r.ok) {
-      console.error(`could not launch: ${r.error ?? "unknown"}`);
-      process.exit(1);
-    }
+    if (!r.ok) { console.error(`could not launch: ${r.error ?? "unknown"}`); process.exit(1); }
   }
-
   if (!(await gtowCdp.isConnected())) {
     console.error(
       "GTO Wizard is not reachable on CDP 9222.\n" +
         '  macOS:   open -a "GTO Wizard" --args --remote-debugging-port=9222\n' +
-        "  or re-run this script with --launch"
+        "  or re-run with --launch"
     );
     process.exit(1);
   }
 
-  process.stdout.write("probing catalogue…\n");
-  const res = await gtowCdp.evalInPage<{
-    probes: { path: string; status: number; ok: boolean; size?: number; body?: unknown; error?: string }[];
-    stores: { path: string; count: number; sample: unknown[]; hasAnte: boolean }[];
-    location: string;
-  }>(PROBE);
+  const report: Record<string, unknown> = {};
+
+  // ---- 1. current URL (never wrong) ----
+  const url = await gtowCdp.evalInPage<{ href: string; gametype: string | null; depth: string | null }>(READ_URL, false);
+  report.url = url;
+  console.log("\n── current page ──");
+  console.log(`  ${url.href}`);
+  if (url.gametype) {
+    console.log(`  gametype = ${url.gametype}${isAnte(url.gametype) ? "   ← ANTE" : ""}`);
+    console.log(`  depth    = ${url.depth ?? "(unset)"}`);
+  } else {
+    console.log("  (no gametype in URL — open a solution in the client first)");
+  }
+
+  // ---- 2. watch ----
+  if (WATCH_SECS) {
+    const ins = await gtowCdp.evalInPage<{ installed: boolean; already: boolean }>(INSTALL_RECORDER, false);
+    console.log(`\n── watching ${WATCH_SECS}s ${ins.already ? "(recorder already installed)" : "(recorder installed)"} ──`);
+    console.log("  Now, in GTO Wizard: open the ANTE section and click through");
+    console.log("  4-max and 6-max, and the stack-depth selector (150 → 20).");
+    for (let i = 0; i < WATCH_SECS; i += 5) {
+      await sleep(5000);
+      const d = await gtowCdp.evalInPage<{ count: number }>(DRAIN, false);
+      process.stdout.write(`\r  captured ${d.count} API responses…   `);
+    }
+    console.log();
+    const drained = await gtowCdp.evalInPage<{ count: number; entries: { url: string; status: number; body: unknown }[] }>(DRAIN, false);
+    report.captured = drained.entries;
+    const anteHits = drained.entries.filter((e) => isAnte(JSON.stringify(e.body)) || isAnte(e.url));
+    console.log(`\n  ${drained.count} responses captured, ${anteHits.length} mentioning "ante"`);
+    for (const h of anteHits.slice(0, 8)) console.log(`    ${h.status}  ${h.url.slice(0, 110)}`);
+  }
+
+  // ---- 3. probe (last resort) ----
+  if (args.has("probe")) {
+    const probes = await gtowCdp.evalInPage<{ path: string; ok: boolean; status: number; size?: number; body?: unknown }[]>(PROBE);
+    report.probes = probes;
+    console.log("\n── endpoint probes ──");
+    for (const p of probes) {
+      console.log(`  ${p.ok ? "OK " : "   "} ${p.path.padEnd(30)} ${p.ok ? `${p.size} bytes` : p.status || "err"}`);
+    }
+  }
+
+  // ---- roll up every gametype seen anywhere ----
+  const all = harvestGametypes(report);
+  const ante = [...all].filter(isAnte).sort();
+  const other = [...all].filter((g) => !isAnte(g)).sort();
 
   mkdirSync(dirname(OUT), { recursive: true });
-  writeFileSync(OUT, JSON.stringify(res, null, 2));
+  writeFileSync(OUT, JSON.stringify(report, null, 2));
 
-  console.log(`\npage: ${res.location}`);
-  console.log("\n── endpoint probes ──");
-  for (const p of res.probes) {
-    const mark = p.ok ? "OK " : "   ";
-    const note = p.ok ? `${p.size} bytes${anteish(JSON.stringify(p.body)) ? "  ← mentions ANTE" : ""}` : `${p.status || "err"}`;
-    console.log(`  ${mark} ${p.path.padEnd(30)} ${note}`);
+  console.log("\n══ gametypes seen ══");
+  if (ante.length) {
+    console.log("  ANTE:");
+    for (const g of ante) console.log(`    ${g}`);
+  } else {
+    console.log("  ANTE: none seen yet");
   }
-
-  console.log("\n── in-page catalogue stores ──");
-  if (!res.stores.length) console.log("  (none found — inspect the JSON report by hand)");
-  for (const s of res.stores) {
-    console.log(`  ${s.path}  (${s.count} entries)${s.hasAnte ? "  ← mentions ANTE" : ""}`);
-  }
-
-  const anyAnte =
-    res.probes.some((p) => p.ok && anteish(JSON.stringify(p.body))) || res.stores.some((s) => s.hasAnte);
+  if (other.length) console.log(`  other: ${other.slice(0, 14).join(", ")}${other.length > 14 ? ` (+${other.length - 14})` : ""}`);
 
   console.log(`\nfull report → ${OUT}`);
-  console.log(
-    anyAnte
-      ? "\nANTE formats present. Next: pull their exact `gametype` strings and depth lists\n" +
-          "from the report, add them to SOLUTION_SETS in services/gtowCdp.ts, then extend\n" +
-          "the PLAN in crawlPreflopTree.ts. No ranges were fetched by this script."
-      : "\nNo ante formats surfaced. Either the catalogue lives behind a route not probed\n" +
-          "here, or this account's plan doesn't expose them — check the report, and check\n" +
-          "the format picker in the UI by hand before assuming they don't exist."
-  );
+  if (!ante.length) {
+    console.log(
+      "\nNothing ante-flavoured surfaced. Fastest fix: open an ante spot in the\n" +
+        "client yourself, then re-run with --url — that reads the gametype straight\n" +
+        "off the address bar and cannot miss. Or --watch 90 and click through the\n" +
+        "ante section while it records."
+    );
+  } else {
+    console.log(
+      "\nNext: add these to SOLUTION_SETS in services/gtowCdp.ts (with their depth\n" +
+        "lists), then extend the PLAN in crawlPreflopTree.ts. No ranges were fetched."
+    );
+  }
 }
 
-main().catch((e) => {
-  console.error(e instanceof Error ? e.message : String(e));
-  process.exit(1);
-});
+main().catch((e) => { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); });
