@@ -235,6 +235,18 @@ export class GtowCdp {
     return payload?.result?.value as T;
   }
 
+  /**
+   * Escape hatch for read-only introspection of the client (catalogue dumps,
+   * probing which formats exist). Runs in the PAGE context, so `fetch` here
+   * carries the app's own session — no token handling needed at the caller.
+   *
+   * Deliberately not used by the live path: everything the trainer relies on
+   * has a typed method above, and this bypasses all of them.
+   */
+  async evalInPage<T>(expression: string, awaitPromise = true): Promise<T> {
+    return this.evaluate<T>(expression, awaitPromise);
+  }
+
   /** True if GTO Wizard is reachable over CDP. */
   async isConnected(): Promise<boolean> {
     try {
