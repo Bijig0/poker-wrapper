@@ -1,0 +1,42 @@
+{
+  "hero": {
+    "position": "BTN",
+    "holding": ["Ad", "Kc"]
+  },
+  "players": [
+    {
+      "position": "BB",
+      "stack": 100
+    },
+    {
+      "position": "BTN",
+      "stack": 100
+    }
+  ],
+  "board": {
+    "flop": ["Kh", "9s", "3c"]
+  },
+  "bigBlind": 1,
+  "actionHistory": [
+    {
+      "position": "BTN",
+      "actionType": "raise",
+      "amount": 1.5,
+      "street": "preflop"
+    },
+    {
+      "position": "BB",
+      "actionType": "call",
+      "amount": 0.5,
+      "street": "preflop"
+    }
+  ],
+  "currentStreet": "flop",
+  "gameType": "holdem",
+  "solverConfig": {
+    "accuracy": 0.5,
+    "maxIterations": 20,
+    "threadCount": 4,
+    "useIsomorphism": true
+  }
+}

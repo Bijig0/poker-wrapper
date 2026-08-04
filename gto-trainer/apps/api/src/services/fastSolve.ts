@@ -1,0 +1,669 @@
+import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
+import { buildPreflopTokens, buildPreflopTokensHu, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { preflopDb } from "./preflopDb";
+import { gtowApi } from "./gtowApi";
+import { SOLUTION_SETS } from "./gtowCdp";
+import { parseHandClass } from "../utils/parseHandClass/parseHandClass";
+import { comboIndex } from "../utils/comboIndex/comboIndex";
+import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
+import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
+import { SNAP_TAU } from "../utils/snapToken/snapToken";
+import { reconstructFlopRanges, classWeightsToSpec } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
+import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
+import { solveAiChain } from "./aiChain";
+import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
+
+/**
+ * Fast-solver: answer a hand node the clean way — the local crawled preflop
+ * charts for preflop, and a GTO Wizard AI custom solve for postflop (observed
+ * pot/stack/board, chart-reconstructed ranges) — with no live GTO Wizard DOM
+ * navigation. The pre-solved spot-solution library is kept only as a postflop
+ * backup for when the cloud solve itself fails. See [[gtow-preflop-local-db]]
+ * and services/gtowApi.ts.
+ */
+
+export interface FastSolveOpts {
+  setId?: string;
+  depth?: number;
+  heroPos?: string | null;
+}
+
+interface ActionFreq {
+  action: string;
+  frequency: number;
+  ev?: number;
+  betsize?: string;
+}
+
+export type FastSolveResult =
+  | {
+      ok: true;
+      source: "local-preflop" | "gtow-api-postflop";
+      /** which cascade layer answered (postflop only). */
+      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain";
+      street: string;
+      setId: string;
+      gametype: string;
+      depth: number;
+      line: string;
+      pos: string | null;
+      heroClass: string | null;
+      actions: ActionFreq[];
+      decision: WeightedPick | null;
+      notInRange?: boolean;
+      approx?: boolean;
+      warning?: string | null;
+    }
+  | { ok: false; reason: string; street?: string };
+
+/** Depth: explicit > min live stack snapped to a library depth. */
+export const resolveDepth = (hand: ParsedHand, depths: number[], explicit?: number): number => {
+  if (explicit) return explicit;
+  const stacks = hand.stacks ?? {};
+  const heroStack = stacks[hand.heroSeatId];
+  const candidates =
+    heroStack != null && heroStack > 0
+      ? [heroStack]
+      : Object.values(stacks).filter((s) => Number.isFinite(s) && s > 0);
+  const eff = candidates.length ? Math.min(...candidates) : 100;
+  return depths.reduce((a, b) => (Math.abs(b - eff) < Math.abs(a - eff) ? b : a));
+};
+
+/** Action label with its size folded in: the API's display_name is bare
+ *  ("BET") with the bb amount in a separate betsize field — a panel verdict
+ *  saying "BET" without an amount is unusable at the table. Names that
+ *  already carry a number (chart labels like "Raise 2.5") pass through. */
+const labelOf = (a: any): string => {
+  const name = String(a?.action?.display_name ?? "");
+  const size = parseFloat(a?.action?.betsize);
+  return size > 0 && !/\d/.test(name) ? `${name} ${Math.round(size * 100) / 100}` : name;
+};
+
+const heroClassOf = (hand: ParsedHand): string | null => {
+  const cards = hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c));
+  if (cards.length !== 2) return null;
+  try {
+    return parseHandClass(cards.join(""));
+  } catch {
+    return null;
+  }
+};
+
+/** Pick hero's set: explicit > 2-handed→HU (dealer BTN→SB) > 6-max. */
+export const resolveSet = (hand: ParsedHand, heroPos: string | null, setId?: string) => {
+  const present = new Set([...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])]);
+  const id = setId ?? (present.size <= 2 ? "hu" : "6max");
+  return SOLUTION_SETS.find((s) => s.id === id) ?? null;
+};
+
+/** Preflop answer from the local crawled DB. */
+function solvePreflop(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): FastSolveResult {
+  const set = resolveSet(hand, heroPos, opts.setId);
+  if (!set) return { ok: false, reason: `Unknown solution set: ${opts.setId}`, street: "preflop" };
+  const isHu = set.seats.length === 2;
+  const depth = resolveDepth(hand, set.depths?.length ? set.depths : [100], opts.depth);
+  if (!preflopDb.available(set.gametype, depth)) {
+    return { ok: false, reason: `No local preflop chart for ${set.gametype} @ ${depth}bb.`, street: "preflop" };
+  }
+  const tokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
+  const heroClass = heroClassOf(hand);
+  const ans = preflopDb.answer(set.gametype, depth, tokens, heroClass);
+  if (!ans.ok) return { ok: false, reason: ans.reason, street: "preflop" };
+
+  return {
+    ok: true,
+    source: "local-preflop",
+    street: "preflop",
+    setId: set.id,
+    gametype: set.gametype,
+    depth,
+    line: ans.line,
+    pos: ans.pos,
+    heroClass,
+    actions: ans.actions,
+    decision: ans.decision,
+    notInRange: ans.notInRange || undefined,
+    approx: ans.repaired.length > 0 || undefined,
+  };
+}
+
+/** Nearest on-tree size (log-space) among the offered bb amounts + its distance. */
+const nearestSize = (intendedBb: number, offered: number[]): { size: number; logDist: number } | null => {
+  if (!offered.length || !(intendedBb > 0)) return null;
+  let best = offered[0]!;
+  let bestD = Infinity;
+  for (const s of offered) {
+    const d = Math.abs(Math.log(intendedBb) - Math.log(s));
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  return { size: best, logDist: bestD };
+};
+
+/** Bet/raise bb sizes the acting player is offered at a node (from the API). */
+const offeredBetSizes = (data: any): number[] =>
+  (data?.action_solutions ?? [])
+    .filter((a: any) => /^(BET|RAISE|ALLIN)/i.test(a.action?.display_name ?? ""))
+    .map((a: any) => parseFloat(a.action?.betsize))
+    .filter((x: number) => Number.isFinite(x) && x > 0);
+
+/**
+ * Snap off-tree POSTFLOP bet sizes to the tree's real ones. The spot-solution
+ * API is a LOOKUP of pre-solved trees — it only knows the bet sizes baked into
+ * the tree (e.g. 1.65 / 3.35 / 5 on a given flop), so a live "bet 2" has no
+ * stored solution. We walk the postflop line and, before each numeric bet,
+ * query the node just before it, read its offered sizes, and snap. One extra
+ * API call per off-tree bet (only invoked on a miss). Returns null if a query
+ * fails or a size can't be snapped.
+ */
+async function snapPostflopStreets(
+  gametype: string,
+  depth: number,
+  board: string,
+  preflopActions: string,
+  streets: { flop: string[]; turn: string[]; river: string[] }
+): Promise<{ flop: string[]; turn: string[]; river: string[]; maxLogDist: number; far: boolean } | null> {
+  const acc = { flop: [] as string[], turn: [] as string[], river: [] as string[] };
+  let changed = false;
+  let maxLogDist = 0;
+  // Probe boards are truncated to the PROBED street: the API answers a
+  // flop-node query with an empty node when the board runs past the flop
+  // (found 2026-07-30 — full-board probes made turn/river snapping a no-op).
+  const boardTo = { flop: 6, turn: 8, river: 10 } as const;
+  for (const st of ["flop", "turn", "river"] as const) {
+    for (const tok of streets[st]) {
+      if (/^R[\d.]+$/.test(tok)) {
+        const probe = await gtowApi.spotSolution({
+          gametype,
+          depth,
+          preflop_actions: preflopActions,
+          flop_actions: acc.flop.join("-"),
+          turn_actions: acc.turn.join("-"),
+          river_actions: acc.river.join("-"),
+          board: board.slice(0, boardTo[st]),
+        });
+        if (!probe.ok || !probe.data?.action_solutions?.length) return null;
+        const offered = offeredBetSizes(probe.data);
+        const snapped = nearestSize(parseFloat(tok.slice(1)), offered);
+        if (snapped == null) return null;
+        maxLogDist = Math.max(maxLogDist, snapped.logDist);
+        const snappedTok = `R${Math.round(snapped.size * 100) / 100}`;
+        if (snappedTok !== tok) changed = true;
+        acc[st].push(snappedTok);
+      } else {
+        acc[st].push(tok);
+      }
+    }
+  }
+  if (!changed) return null; // nothing off-tree — no point retrying
+  return { ...acc, maxLogDist, far: maxLogDist > SNAP_TAU };
+}
+
+const SHORT_C = (c: string): string => {
+  const m = c.trim().match(/^([2-9TJQKAtjqka])([shdcSHDC])$/);
+  return m ? m[1]!.toUpperCase() + m[2]!.toLowerCase() : c;
+};
+
+/**
+ * The PRIMARY postflop solver: an AI custom solve rooted at the CURRENT
+ * street, with pot/stack taken from the OBSERVED table rather than replaying
+ * the line. A postflop spot is fully determined by ranges + pot + stack +
+ * board, so this answers regardless of whether the action history walks the
+ * library trees (limps, missed WS frames, off-tree sizes all stop mattering).
+ * Ranges are chart-reconstructed when the preflop walks, else GENERIC full
+ * ranges (loudly flagged).
+ */
+async function solvePostflopAi(
+  hand: ParsedHand,
+  heroPos: string | null,
+  set: (typeof SOLUTION_SETS)[number],
+  depth: number,
+  tk: { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string }
+): Promise<{ res: FastSolveResult | null; why: string | null }> {
+  const fail = (why: string) => ({ res: null, why });
+  const cur = hand.currentNode.street as "flop" | "turn" | "river";
+  // The broken-feed case leaves folded seats "live" in positions (their fold
+  // was never observed), tripping the heads-up check. The villain we can
+  // actually KNOW: a non-hero postflop actor, else the last non-hero
+  // voluntary actor observed anywhere in the hand.
+  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => a.seatId));
+  const postActors = hand.actions.filter((a) => a.street !== "preflop" && !a.hero && !folded.has(a.seatId));
+  let villainSeat: number | null = postActors.length ? postActors[postActors.length - 1]!.seatId : null;
+  if (villainSeat == null) {
+    const vol = hand.actions.filter(
+      (a) => !a.hero && a.type !== "post-sb" && a.type !== "post-bb" && !folded.has(a.seatId)
+    );
+    villainSeat = vol.length ? vol[vol.length - 1]!.seatId : null;
+  }
+  if (villainSeat == null || !hand.positions[villainSeat]) {
+    // No observed villain action at all (phantom-fold captures) — any live,
+    // unfolded, position-labeled seat is a better answer than none.
+    const live = hand.liveSeats.filter(
+      (s) => s !== hand.heroSeatId && !folded.has(s) && hand.positions[s]
+    );
+    villainSeat = live.length ? live[live.length - 1]! : null;
+  }
+  if (villainSeat == null || !hand.positions[villainSeat]) return fail("no identifiable villain (no observed non-hero actions or live labeled seats)");
+  const heroPosName = hand.positions[hand.heroSeatId] ?? heroPos;
+  if (!heroPosName) return fail("hero position unknown");
+  const pruned: ParsedHand = {
+    ...hand,
+    positions: { [hand.heroSeatId]: heroPosName, [villainSeat]: hand.positions[villainSeat]! },
+  };
+  const d = deriveExploitSpot(pruned, heroPos);
+  if (!d.ok) return fail(`exploit-spot: ${d.error}`); // e.g. genuinely multiway
+  const spot = d.spot;
+
+  const isHu = set.seats.length === 2;
+  // Snap the observed sizes to the tree's before reconstructing ranges: the
+  // charts store canonical sizes (R2.5, not the live R2.52), and walking the
+  // raw tokens made chart-reconstruction fail on hands that were one rounding
+  // artifact away — silently downgrading them to generic ranges.
+  let preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
+  if (preflopDb.available(set.gametype, depth)) {
+    const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+    if (snapped.ok) preTokens = snapped.tokens;
+  }
+  const recon = reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  let oopArr: number[] | null = null;
+  let ipArr: number[] | null = null;
+  if (recon.ok) {
+    // HU trees seat the dealer as SB; the vision layer may label him BTN.
+    const posName = (p: string) => (isHu && p.toUpperCase() === "BTN" ? "SB" : p);
+    const byPos = (pos: string) =>
+      Object.entries(recon.ranges).find(([p]) => p.toUpperCase() === posName(pos).toUpperCase())?.[1];
+    const oopW = byPos(spot.oopPos);
+    const ipW = byPos(spot.ipPos);
+    if (oopW && ipW) {
+      oopArr = buildRangeArray(classWeightsToSpec(oopW));
+      ipArr = buildRangeArray(classWeightsToSpec(ipW));
+    }
+  }
+  const genericRanges = !oopArr || !ipArr;
+  if (!oopArr) oopArr = new Array(1326).fill(1);
+  if (!ipArr) ipArr = new Array(1326).fill(1);
+
+  // Observed geometry: the pot is authoritative (the client reports it); the
+  // stack falls back to depth minus a half-pot contribution when unreadable.
+  const toCall = Math.max(0, hand.currentNode.toCall || 0);
+  const potNow = hand.currentNode.pot > 0 ? hand.currentNode.pot : 4;
+  const potBefore = Math.max(1, Math.round((potNow - toCall) * 100) / 100);
+  const stacks = hand.stacks ?? {};
+  const heroStack = stacks[hand.heroSeatId];
+  const liveStacks = Object.values(stacks).filter((s) => Number.isFinite(s) && s > 0);
+  const stack = Math.max(
+    2,
+    Math.round((heroStack ?? (liveStacks.length ? Math.min(...liveStacks) : depth - potBefore / 2)) * 10) / 10
+  );
+
+  const heroCards = hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/i.test(c)).map(SHORT_C);
+  const heroArr = spot.heroSeat === "oop" ? oopArr : ipArr;
+  if (heroCards.length === 2) {
+    const idx = comboIndex(heroCards[0]!, heroCards[1]!);
+    if ((heroArr[idx] ?? 0) < 1) heroArr[idx] = 1;
+  }
+
+  const curKey = cur.toUpperCase() as "FLOP" | "TURN" | "RIVER";
+  const pct = toCall > 0 ? Math.round((toCall / potBefore) * 1000) / 10 : null;
+  const tree = {
+    board: tk.board,
+    pot: potBefore,
+    stack,
+    oopRange: oopArr,
+    ipRange: ipArr,
+    oopPos: spot.oopPos,
+    ipPos: spot.ipPos,
+    startingStreet: curKey,
+    ...(pct != null ? { fixedBets: { [curKey]: pct } } : {}),
+  };
+  const streetActs = (k: string) => ({
+    flopActions: cur === "flop" ? k : "",
+    turnActions: cur === "turn" ? k : "",
+    riverActions: cur === "river" ? k : "",
+  });
+
+  // Walk to hero's node using the TREE'S OWN action codes: a fixed-% tree
+  // rounds its bet sizes internally, so guessing bb tokens ("R4.72") lands
+  // on NODE_DOES_NOT_EXIST. The tree is cached after the first call, so the
+  // extra node queries are cheap.
+  const observed = spot.actions ? spot.actions.split("-").filter(Boolean) : [];
+  const prefix: string[] = [];
+  let res = await gtowApi.customSolve({ ...tree, ...streetActs("") });
+  for (const t of observed) {
+    if (!res.ok || !res.data?.action_solutions?.length) break;
+    if (/^R/.test(t)) {
+      const agg = res.data.action_solutions.find((a: any) =>
+        /^(BET|RAISE|ALLIN)/i.test(a.action?.display_name ?? "")
+      );
+      if (!agg?.action?.code) return fail("custom tree offered no aggressive action to walk");
+      prefix.push(String(agg.action.code));
+    } else {
+      prefix.push(t === "C" ? "C" : "X");
+    }
+    res = await gtowApi.customSolve({ ...tree, ...streetActs(prefix.join("-")) });
+  }
+  if (!res.ok || !res.data?.action_solutions?.length) {
+    // The observed street tokens couldn't even walk the custom tree (corrupt
+    // capture can pollute the current street too). Approximate from the
+    // street root: hero's node directly, or one tree bet when facing one —
+    // the warning already flags this tier as approximate.
+    res = await gtowApi.customSolve({ ...tree, ...streetActs("") });
+    if (toCall > 0 && res.ok && res.data?.action_solutions?.length) {
+      const agg = res.data.action_solutions.find((a: any) =>
+        /^(BET|RAISE|ALLIN)/i.test(a.action?.display_name ?? "")
+      );
+      if (agg?.action?.code) {
+        res = await gtowApi.customSolve({ ...tree, ...streetActs(String(agg.action.code)) });
+      }
+    }
+    if (!res.ok || !res.data?.action_solutions?.length) {
+      return fail(`custom solve: ${res.ok === false ? res.error : "empty node"}`);
+    }
+  }
+
+  const j = res.data;
+  let actions: ActionFreq[];
+  let notInRange = false;
+  if (heroCards.length === 2) {
+    const idx = comboIndex(heroCards[0]!, heroCards[1]!);
+    actions = j.action_solutions.map((a: any) => ({ action: labelOf(a), frequency: (a.strategy?.[idx] ?? 0) * 100, ev: a.evs?.[idx], betsize: a.action.betsize }));
+    notInRange = actions.every((a) => a.frequency <= 0);
+  } else {
+    actions = j.action_solutions.map((a: any) => ({ action: labelOf(a), frequency: (a.total_frequency ?? 0) * 100, ev: a.total_ev, betsize: a.action.betsize }));
+  }
+  return { why: null, res: {
+    ok: true,
+    source: "gtow-api-postflop",
+    tier: "ai-exact",
+    street: cur,
+    setId: set.id,
+    gametype: set.gametype,
+    depth,
+    line: `${cur} root · AI (pot ${potBefore}bb, stack ${stack}bb${toCall > 0 ? `, facing ${toCall}bb` : ""})`,
+    pos: j.action_solutions?.[0]?.action?.position ?? null,
+    heroClass: heroClassOf(hand),
+    actions,
+    decision: notInRange ? null : pickWeightedAction(actions),
+    notInRange: notInRange || undefined,
+    approx: true,
+    warning: genericRanges
+      ? "AI solve with GENERIC full ranges — the preflop line couldn't be walked in the charts (limps/missed actions?); treat as board-texture guidance."
+      : null,
+  } };
+}
+
+/**
+ * Postflop via the PER-STREET AI CHAIN (services/aiChain.ts) — the primary
+ * path. Flop tree from chart-reconstructed preflop ranges; each observed
+ * action multiplies the actor's range by its equilibrium frequency; each
+ * later street re-roots with the conditioned ranges and rolled-forward
+ * pot/stack, observed wager sizes pinned exactly (FIXED trees). The answer at
+ * hero's node therefore reflects everything that happened on earlier streets
+ * — unlike the street-root shortcut below, whose flop-entry ranges produced
+ * the K9o river-donk misfire this replaced.
+ */
+async function solvePostflopViaChain(
+  hand: ParsedHand,
+  heroPos: string | null,
+  set: (typeof SOLUTION_SETS)[number],
+  depth: number,
+  tk: { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string }
+): Promise<{ res: FastSolveResult | null; why: string | null }> {
+  const fail = (why: string) => ({ res: null, why });
+  const cur = hand.currentNode.street as "flop" | "turn" | "river";
+
+  // Villain identification + heads-up pruning — same policy as the street-root
+  // net: the last observed non-hero actor, else any live labeled seat.
+  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => a.seatId));
+  const postActors = hand.actions.filter((a) => a.street !== "preflop" && !a.hero && !folded.has(a.seatId));
+  let villainSeat: number | null = postActors.length ? postActors[postActors.length - 1]!.seatId : null;
+  if (villainSeat == null) {
+    const vol = hand.actions.filter(
+      (a) => !a.hero && a.type !== "post-sb" && a.type !== "post-bb" && !folded.has(a.seatId)
+    );
+    villainSeat = vol.length ? vol[vol.length - 1]!.seatId : null;
+  }
+  if (villainSeat == null || !hand.positions[villainSeat]) {
+    const live = hand.liveSeats.filter((s) => s !== hand.heroSeatId && !folded.has(s) && hand.positions[s]);
+    villainSeat = live.length ? live[live.length - 1]! : null;
+  }
+  if (villainSeat == null || !hand.positions[villainSeat]) return fail("no identifiable villain");
+  const heroPosName = hand.positions[hand.heroSeatId] ?? heroPos;
+  if (!heroPosName) return fail("hero position unknown");
+  const pruned: ParsedHand = {
+    ...hand,
+    positions: { [hand.heroSeatId]: heroPosName, [villainSeat]: hand.positions[villainSeat]! },
+  };
+  const d = deriveExploitSpot(pruned, heroPos);
+  if (!d.ok) return fail(`exploit-spot: ${d.error}`);
+  const spot = d.spot;
+
+  // Flop-entering ranges need a WALKABLE, CLOSED preflop line — the chain's
+  // whole point is conditioning, and conditioning on fiction is worse than
+  // the flagged street-root fallback.
+  const isHu = set.seats.length === 2;
+  if (!preflopDb.available(set.gametype, depth)) return fail(`no charts for ${set.gametype}@${depth}`);
+  let preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
+  const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  if (!snapped.ok) return fail(`preflop line: ${snapped.reason}`);
+  preTokens = snapped.tokens;
+  // HU lines walk the [SB, BB] rotation — the 6-max default misassigns every
+  // action (the line never "closes") and double-counts the blinds as dead.
+  const seatOrder = isHu ? HU_SEATS : undefined;
+  if (!preflopClosed(preTokens, seatOrder)) return fail("preflop betting didn't close (missed action?)");
+  const recon = reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  if (!recon.ok) return fail(`range reconstruction: ${recon.reason}`);
+  // HU trees seat the dealer as SB; the vision layer may label him BTN.
+  const posName = (p: string) => (isHu && p.toUpperCase() === "BTN" ? "SB" : p);
+  const oopPos = posName(spot.oopPos);
+  const ipPos = posName(spot.ipPos);
+  const byPos = (pos: string) => Object.entries(recon.ranges).find(([p]) => p.toUpperCase() === pos.toUpperCase())?.[1];
+  const oopW = byPos(oopPos);
+  const ipW = byPos(ipPos);
+  if (!oopW || !ipW) return fail("reconstructed ranges don't cover both seats");
+  const { pot: flopPot, stack: flopStack } = preflopPotStack(preTokens, depth, seatOrder);
+  if (flopStack <= 0.5) return fail("preflop line is (near) all-in");
+
+  const heroCards = hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/i.test(c)).map(SHORT_C);
+  const heroComboIdx = heroCards.length === 2 ? comboIndex(heroCards[0]!, heroCards[1]!) : null;
+  const streets = cur === "flop" ? [tk.flop] : cur === "turn" ? [tk.flop, tk.turn] : [tk.flop, tk.turn, tk.river];
+
+  const chain = await solveAiChain({
+    oopPos,
+    ipPos,
+    oopRange: buildRangeArray(classWeightsToSpec(oopW)),
+    ipRange: buildRangeArray(classWeightsToSpec(ipW)),
+    flopPot,
+    flopStack,
+    board: tk.board,
+    streets,
+    heroSeat: spot.heroSeat,
+    heroComboIdx,
+  });
+  if (!chain.ok) return fail(chain.why);
+
+  const j = chain.data;
+  let actions: ActionFreq[];
+  let notInRange = false;
+  if (heroComboIdx != null) {
+    actions = (j.action_solutions ?? []).map((a: any) => ({
+      action: labelOf(a), frequency: (a.strategy?.[heroComboIdx] ?? 0) * 100, ev: a.evs?.[heroComboIdx], betsize: a.action.betsize,
+    }));
+    notInRange = actions.every((a) => a.frequency <= 0);
+  } else {
+    actions = (j.action_solutions ?? []).map((a: any) => ({
+      action: labelOf(a), frequency: (a.total_frequency ?? 0) * 100, ev: a.total_ev, betsize: a.action.betsize,
+    }));
+  }
+  return { why: null, res: {
+    ok: true,
+    source: "gtow-api-postflop",
+    tier: "ai-chain",
+    street: cur,
+    setId: set.id,
+    gametype: set.gametype,
+    depth,
+    line: `${preTokens.join("-")} / ${chain.line}`,
+    pos: j.action_solutions?.[0]?.action?.position ?? null,
+    heroClass: heroClassOf(hand),
+    actions,
+    decision: notInRange ? null : pickWeightedAction(actions),
+    notInRange: notInRange || undefined,
+    approx: true,
+    warning: null,
+  } };
+}
+
+/**
+ * Postflop: the per-street AI chain first (conditioned ranges — see
+ * solvePostflopViaChain); the street-root AI shortcut as the net for broken
+ * captures; the spot-solution library last, for when the cloud itself fails
+ * (unreachable client, daily quota, timeout).
+ */
+async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
+  const street = hand.currentNode.street;
+  const set = resolveSet(hand, heroPos, opts.setId);
+  if (!set) return { ok: false, reason: `Unknown solution set: ${opts.setId}`, street };
+  const isHu = set.seats.length === 2;
+  const depth = resolveDepth(hand, set.depths?.length ? set.depths : [100], opts.depth);
+
+  const tk = buildSpotSolutionTokens(hand, heroPos, isHu);
+
+  // The per-street chain answers with ranges conditioned on the actual line —
+  // the correct equilibrium at hero's node. It requires a clean, walkable
+  // capture; anything broken falls through to the street-root net.
+  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk);
+  if (chain.res) return chain.res;
+
+  // Street-root net: solves the current street with FLOP-ENTRY ranges and
+  // observed pot/stack. Always constructible (no walkable line needed), but
+  // earlier-street action never conditions the ranges — hence the warning.
+  const ai = await solvePostflopAi(hand, heroPos, set, depth, tk);
+  if (ai.res) {
+    if (ai.res.ok && ai.res.warning == null) {
+      ai.res.warning = `Ranges NOT conditioned on earlier streets (chain: ${chain.why}) — treat as approximate.`;
+    }
+    return ai.res;
+  }
+
+  // Snap the preflop line to the tree's real sizes (live 2.5 → 2.3 in 6-max
+  // General); the API rejects off-tree preflop lines. Needs the local charts.
+  let preflopActions = tk.preflop.join("-");
+  if (preflopDb.available(set.gametype, depth)) {
+    const snapped = snapPreflopLine(tk.preflop, (line) => preflopDb.rawNode(set.gametype, depth, line));
+    if (snapped.ok) preflopActions = snapped.tokens.join("-");
+  }
+
+  let flopActions = tk.flop;
+  let turnActions = tk.turn;
+  let riverActions = tk.river;
+  const query = () =>
+    gtowApi.spotSolution({
+      gametype: set.gametype,
+      depth,
+      preflop_actions: preflopActions,
+      flop_actions: flopActions.join("-"),
+      turn_actions: turnActions.join("-"),
+      river_actions: riverActions.join("-"),
+      board: tk.board,
+    });
+
+  let res = await query();
+  // Tier: which layer of the cascade answered this spot.
+  //   library-exact — on-tree, no snap
+  //   library-snap  — off-tree bet size snapped to a NEARBY tree size (safe, τ-ok)
+  //   far-snap      — nearest tree size is > τ away; snapping costs real EV, so
+  //                   this spot should be re-solved at the exact size (AI solver).
+  let tier: "library-exact" | "library-snap" | "far-snap" = "library-exact";
+  let snapLogDist = 0;
+  const hasNumericBet = [...tk.flop, ...tk.turn, ...tk.river].some((t) => /^R[\d.]+$/.test(t));
+  if (res.ok && !res.data?.action_solutions?.length && hasNumericBet) {
+    const snapped = await snapPostflopStreets(set.gametype, depth, tk.board, preflopActions, {
+      flop: tk.flop,
+      turn: tk.turn,
+      river: tk.river,
+    });
+    if (snapped) {
+      flopActions = snapped.flop;
+      turnActions = snapped.turn;
+      riverActions = snapped.river;
+      snapLogDist = snapped.maxLogDist;
+      tier = snapped.far ? "far-snap" : "library-snap";
+      res = await query();
+    }
+  }
+
+  if (!res.ok) {
+    return { ok: false, reason: `AI chain: ${chain.why}; street-root AI: ${ai.why}; library spot-solution ${res.status}: ${res.error}`, street };
+  }
+  if (!res.data?.action_solutions?.length) {
+    return { ok: false, reason: `AI chain: ${chain.why}; street-root AI: ${ai.why}; no library solution for this line either`, street };
+  }
+
+  const j = res.data;
+  const heroClass = heroClassOf(hand);
+  const heroCards = hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c));
+  const sizeSnapped =
+    flopActions.join("-") !== tk.flop.join("-") ||
+    turnActions.join("-") !== tk.turn.join("-") ||
+    riverActions.join("-") !== tk.river.join("-");
+  const line = [preflopActions, flopActions.join("-"), turnActions.join("-"), riverActions.join("-")]
+    .filter(Boolean)
+    .join(" / ");
+  const activePos: string | null = j.action_solutions?.[0]?.action?.position ?? null;
+
+  // Extract hero's specific combo strategy from each action's 1326 array.
+  let actions: ActionFreq[];
+  let notInRange = false;
+  if (heroCards.length === 2) {
+    const idx = comboIndex(heroCards[0]!, heroCards[1]!);
+    actions = (j.action_solutions ?? []).map((a: any) => ({
+      action: labelOf(a),
+      frequency: (a.strategy?.[idx] ?? 0) * 100,
+      ev: a.evs?.[idx],
+      betsize: a.action.betsize,
+    }));
+    notInRange = actions.every((a) => a.frequency <= 0);
+  } else {
+    // No hero cards — return the node's aggregate action frequencies instead.
+    actions = (j.action_solutions ?? []).map((a: any) => ({
+      action: labelOf(a),
+      frequency: (a.total_frequency ?? 0) * 100,
+      ev: a.total_ev,
+      betsize: a.action.betsize,
+    }));
+  }
+
+  const farWarn =
+    tier === "far-snap"
+      ? `Villain's bet is far from the nearest tree size (log-dist ${snapLogDist.toFixed(2)} > τ ${SNAP_TAU}); snapping costs real EV — an exact-size AI solve is recommended.`
+      : null;
+
+  return {
+    ok: true,
+    source: "gtow-api-postflop",
+    tier,
+    street,
+    setId: set.id,
+    gametype: set.gametype,
+    depth,
+    line,
+    pos: activePos,
+    heroClass,
+    actions,
+    decision: notInRange ? null : pickWeightedAction(actions),
+    notInRange: notInRange || undefined,
+    approx: sizeSnapped || undefined,
+    warning: farWarn ?? j.warning ?? null,
+  };
+}
+
+/**
+ * Solve a hand node: preflop from the local charts, postflop from the
+ * spot-solution API. Assumes hero is to act (the caller checks `toActIsHero`).
+ */
+export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
+  return hand.currentNode.street === "preflop"
+    ? solvePreflop(hand, heroPos, opts)
+    : solvePostflop(hand, heroPos, opts);
+}

@@ -1,0 +1,48 @@
+{
+  "hero": {
+    "position": "IP",
+    "holding": ["7h", "6h"]
+  },
+  "players": [
+    {
+      "position": "OOP",
+      "stack": 100
+    },
+    {
+      "position": "IP",
+      "stack": 100
+    }
+  ],
+  "board": {
+    "flop": ["Kd", "9c", "2s"],
+    "turn": "8h"
+  },
+  "bigBlind": 1,
+  "actionHistory": [
+    {
+      "position": "OOP",
+      "actionType": "bet",
+      "amount": 2.5,
+      "street": "flop"
+    },
+    {
+      "position": "IP",
+      "actionType": "call",
+      "amount": 2.5,
+      "street": "flop"
+    },
+    {
+      "position": "OOP",
+      "actionType": "check",
+      "street": "turn"
+    }
+  ],
+  "currentStreet": "turn",
+  "gameType": "holdem",
+  "solverConfig": {
+    "accuracy": 0.5,
+    "maxIterations": 20,
+    "threadCount": 4,
+    "useIsomorphism": true
+  }
+}
