@@ -1,0 +1,89 @@
+{
+  "hero": {
+    "position": "BB",
+    "holding": ["Kd", "Qd"]
+  },
+  "players": [
+    {
+      "position": "BB",
+      "stack": 100
+    },
+    {
+      "position": "BTN",
+      "stack": 100
+    }
+  ],
+  "board": {
+    "flop": ["Kh", "Tc", "5s"],
+    "turn": "3d",
+    "river": "Qc"
+  },
+  "bigBlind": 1,
+  "actionHistory": [
+    {
+      "position": "BTN",
+      "actionType": "raise",
+      "amount": 2.5,
+      "street": "preflop"
+    },
+    {
+      "position": "BB",
+      "actionType": "call",
+      "amount": 2,
+      "street": "preflop"
+    },
+    {
+      "position": "BB",
+      "actionType": "check",
+      "street": "flop"
+    },
+    {
+      "position": "BTN",
+      "actionType": "bet",
+      "amount": 3.5,
+      "street": "flop"
+    },
+    {
+      "position": "BB",
+      "actionType": "call",
+      "amount": 3.5,
+      "street": "flop"
+    },
+    {
+      "position": "BB",
+      "actionType": "check",
+      "street": "turn"
+    },
+    {
+      "position": "BTN",
+      "actionType": "bet",
+      "amount": 7,
+      "street": "turn"
+    },
+    {
+      "position": "BB",
+      "actionType": "call",
+      "amount": 7,
+      "street": "turn"
+    },
+    {
+      "position": "BB",
+      "actionType": "check",
+      "street": "river"
+    },
+    {
+      "position": "BTN",
+      "actionType": "bet",
+      "amount": 15,
+      "street": "river"
+    }
+  ],
+  "currentStreet": "river",
+  "gameType": "holdem",
+  "solverConfig": {
+    "accuracy": 0.5,
+    "maxIterations": 20,
+    "threadCount": 4,
+    "useIsomorphism": true
+  }
+}

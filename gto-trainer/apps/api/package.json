@@ -1,0 +1,27 @@
+{
+  "name": "@poker/api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "No-limit Hold'em heads-up postflop GTO solver API (Hono + postflop-solver WASM)",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun --watch index.ts",
+    "setup": "./setup.sh",
+    "demo": "bun run src/demo/liveSolveWasm.ts",
+    "demo:derive": "bun run src/demo/deriveRanges.ts",
+    "build:wasm": "./solver-wasm/build.sh",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "compare:ranges": "bun run src/scripts/compareRanges.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.7.5",
+    "hono": "^4.11.1",
+    "zod": "^4.2.0"
+  }
+}

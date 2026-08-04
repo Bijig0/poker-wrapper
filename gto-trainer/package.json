@@ -1,0 +1,25 @@
+{
+  "name": "poker-gto-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Poker GTO monorepo — Hono solver API + dashboard",
+  "type": "module",
+  "packageManager": "bun@1.3.5",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:api": "turbo run dev --filter=@poker/api",
+    "dev:dashboard": "turbo run dev --filter=@poker/dashboard",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  }
+}

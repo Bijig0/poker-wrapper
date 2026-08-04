@@ -1,0 +1,40 @@
+{
+  "hero": {
+    "position": "BTN",
+    "holding": ["Ac", "Js"]
+  },
+  "players": [
+    {
+      "position": "BB",
+      "stack": 100
+    },
+    {
+      "position": "BTN",
+      "stack": 100
+    }
+  ],
+  "board": {},
+  "bigBlind": 1,
+  "actionHistory": [
+    {
+      "position": "BTN",
+      "actionType": "raise",
+      "amount": 2.5,
+      "street": "preflop"
+    },
+    {
+      "position": "BB",
+      "actionType": "raise",
+      "amount": 8.5,
+      "street": "preflop"
+    }
+  ],
+  "currentStreet": "preflop",
+  "gameType": "holdem",
+  "solverConfig": {
+    "accuracy": 0.5,
+    "maxIterations": 20,
+    "threadCount": 4,
+    "useIsomorphism": true
+  }
+}

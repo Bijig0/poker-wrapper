@@ -1,0 +1,54 @@
+# dependencies
+node_modules/
+jspm_packages/
+
+# builds
+dist/
+build/
+build/Release
+.next/
+out/
+
+# monorepo / turbo
+.turbo/
+
+# rust / wasm build artifacts (solver-wasm/pkg IS committed so the demo runs; ignore target)
+**/target/
+
+# TypeScript / caches
+*.tsbuildinfo
+.cache
+.eslintcache
+.npm
+
+# env
+.env
+.env.*
+!.env.example
+
+# logs
+logs
+*.log
+npm-debug.log*
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# coverage
+coverage
+*.lcov
+.nyc_output
+
+# editor / OS
+.DS_Store
+.vscode-test
+.idea
+.yarn/*
+
+# misc temp
+tmp_log.txt
+**/temp/
+
+# vendored TexasSolver reference (its own git repo, 182 MB, superseded by postflop-solver/PioSOLVER)
+gto-source/

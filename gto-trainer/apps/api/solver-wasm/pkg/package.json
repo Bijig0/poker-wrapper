@@ -1,0 +1,12 @@
+{
+  "name": "solver-wasm",
+  "description": "WASM bindings around postflop-solver for live GTO river solving",
+  "version": "0.1.0",
+  "files": [
+    "solver_wasm_bg.wasm",
+    "solver_wasm.js",
+    "solver_wasm.d.ts"
+  ],
+  "main": "solver_wasm.js",
+  "types": "solver_wasm.d.ts"
+}
