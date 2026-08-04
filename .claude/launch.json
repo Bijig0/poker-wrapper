@@ -27,12 +27,13 @@
     },
     {
       "name": "gto-dashboard",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "/usr/local/bin/node",
       "runtimeArgs": [
-        "--prefix",
+        "gto-trainer/apps/dashboard/node_modules/vite/bin/vite.js",
         "gto-trainer/apps/dashboard",
-        "run",
-        "dev"
+        "--port",
+        "2100",
+        "--strictPort"
       ],
       "port": 2100
     },
