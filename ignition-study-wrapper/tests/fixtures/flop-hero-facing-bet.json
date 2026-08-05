@@ -1,0 +1,62 @@
+{
+  "name": "flop-hero-facing-bet",
+  "why": "Hero on the flop facing a pot-sized bet — the ordinary decision the study panel exists for.",
+  "spec": {
+    "title": "$1/$2 No Limit Hold'em",
+    "capacity": 6,
+    "potBB": 24.8,
+    "board": ["Tc", "5s", "5h"],
+    "heroSeat": 4,
+    "dealerSeat": 1,
+    "heroCards": ["Th", "Td"],
+    "seats": {
+      "1": {"stack": 98.6, "bet": 24.8, "badge": "BET", "cards": 2},
+      "2": {"stack": 140.4, "cards": 0},
+      "3": {"stack": 54.6, "cards": 0},
+      "4": {"stack": 97.2, "cards": 2},
+      "5": {"stack": 100, "cards": 0},
+      "6": {"stack": 84.2, "cards": 0}
+    },
+    "offer": {
+      "fold": true, "call": 24.8, "raise": 60,
+      "selectors": ["Pot", "ALL-IN"]
+    },
+    "node": {
+      "dealt": [1, 2, 3, 4, 5, 6],
+      "toActSeat": 4,
+      "committed": {"1": 24.8},
+      "actions": [
+        {"seat": 2, "type": "post-sb", "amount": 0.5, "street": "preflop"},
+        {"seat": 3, "type": "post-bb", "amount": 1, "street": "preflop"},
+        {"seat": 4, "type": "raise", "amount": 2.5, "street": "preflop"},
+        {"seat": 5, "type": "fold", "street": "preflop"},
+        {"seat": 6, "type": "fold", "street": "preflop"},
+        {"seat": 1, "type": "call", "amount": 2.5, "street": "preflop"},
+        {"seat": 2, "type": "fold", "street": "preflop"},
+        {"seat": 3, "type": "fold", "street": "preflop"},
+        {"seat": 1, "type": "bet", "amount": 24.8, "street": "flop"}
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "flop",
+      "board": ["T♣", "5♠", "5♥"],
+      "heroSeatId": 4,
+      "heroCards": ["T♥", "T♦"],
+      "positions": {"1": "BTN", "2": "SB", "3": "BB", "4": "UTG", "5": "HJ", "6": "CO"},
+      "actionCount": 9,
+      "toActSeatId": 4,
+      "toActIsHero": true,
+      "toCall": 24.8,
+      "ended": false
+    },
+    "relay": [
+      {"label": "FOLD", "kind": "action", "fires": "foldButton"},
+      {"label": "CALL 24.8 BB", "kind": "action", "fires": "callButton"},
+      {"label": "RAISE TO 60 BB", "kind": "action", "fires": "raiseButton"},
+      {"label": "Pot", "kind": "preset", "fires": "potSelector"}
+    ],
+    "refuse": ["CHECK"]
+  }
+}
