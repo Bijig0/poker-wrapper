@@ -1,4 +1,10 @@
 /**
+ * SUPERSEDED by exportAnteFlopRanges.ts — keep for the crawl-DB tooling, but
+ * do NOT use its output for the solve fleet: at a player's second decision it
+ * writes P(action | reached), not the arrival weight, which made the SB's
+ * 3-bet-defend range ~10x too wide. The replacement reads each config's
+ * flop-entering ranges directly from GTO Wizard's API.
+ *
  * Export solver-format preflop ranges for the CoinPoker ANTE tree, from the
  * crawled preflop DB into analysis/pipeline/solve/ranges/ante/.
  *
