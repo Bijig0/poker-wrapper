@@ -2298,21 +2298,48 @@ def _sibling_pids() -> list[int]:
     here = str(Path(__file__).resolve()).lower()
     out = []
     try:
-        for p in psutil.process_iter(["pid", "cmdline"]):
+        for p in psutil.process_iter(["pid", "name", "cmdline"]):
             if p.info["pid"] == me:
                 continue
-            for a in p.info.get("cmdline") or []:
-                if not a.lower().endswith("launch.py"):
-                    continue
-                try:
-                    if str(Path(a).resolve()).lower() == here:
-                        out.append(p.info["pid"])
-                except OSError:
-                    pass
-                break
+            # Interpreters only, and the EXACT absolute path only. Anything
+            # looser is lethal in practice: a bare `launch.py` token inside a
+            # shell's -Command string resolves against OUR cwd to this very
+            # file, and terminating that shell kills our own parent — the
+            # launcher silently dies with it (observed repeatedly as exit 15,
+            # from tooling shim processes that are themselves python). The
+            # desktop icon always passes the absolute path, which is the case
+            # this exists for.
+            if not (p.info.get("name") or "").lower().startswith("python"):
+                continue
+            if any(a.lower() == here for a in p.info.get("cmdline") or []):
+                out.append(p.info["pid"])
     except Exception:
         return out
     return out
+
+
+def _port_owner() -> int | None:
+    """Pid of whatever LISTENS on the panel port, if it isn't us.
+
+    Ground truth the command-line scan cannot provide: shells and tooling
+    shims mention launch.py, but only a real wrapper instance holds the
+    panel socket. This is what lets takeover work even on instances the
+    scan cannot recognise (started via -c strings, odd interpreters, or
+    older builds).
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    me = os.getpid()
+    try:
+        for c in psutil.net_connections("tcp"):
+            if (c.status == "LISTEN" and c.laddr and c.laddr.port == PANEL_PORT
+                    and c.pid and c.pid != me):
+                return c.pid
+    except Exception:
+        pass
+    return None
 
 
 def _takeover() -> None:
@@ -2339,7 +2366,11 @@ def _takeover() -> None:
                 break
             time.sleep(0.25)
 
-    stale = _sibling_pids()
+    # An instance that ignored /quit (an older build without the route, or a
+    # wedged one) is found by what it cannot hide: the panel socket it holds.
+    stale = set(_sibling_pids())
+    if (owner := _port_owner()) is not None:
+        stale.add(owner)
     if not stale:
         return
     try:
@@ -2360,7 +2391,7 @@ def _takeover() -> None:
             p.kill()
         except Exception:
             pass
-    print(f"[panel] replaced previous instance(s): {stale}")
+    print(f"[panel] replaced previous instance(s): {sorted(stale)}")
 
 
 def _stand_down() -> None:
