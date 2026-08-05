@@ -839,10 +839,18 @@ def _parse_seats(d: dict) -> dict:
     and cards held. Structural when the capture carries seatQa (read straight
     from each playerContainer); otherwise the geometric fallback below groups
     the frame's text nodes by proximity to the seat-number chip."""
+    # An EMPTY structural result is not an empty table — it means the capture's
+    # seatQa is not the shape this reader expects, so fall through to geometry
+    # rather than reporting nobody at the table. A recorded session from the
+    # first (capture-only) seatQa shape had every field this pass needs absent,
+    # and six seated players parsed as zero seats; a future field rename would
+    # do the same to live play.
     structural = _seats_structural(d)
-    if structural is not None:
+    if structural:
         return structural
-    fr = d["frame"]
+    fr = d.get("frame")
+    if not fr:
+        return {}
     strip_y = fr["y"] + fr["h"] * 0.72
     cx, cy = fr["x"] + fr["w"] / 2, fr["y"] + fr["h"] / 2
     nodes = [n for n in d.get("nodes", []) if n["y"] < strip_y]
