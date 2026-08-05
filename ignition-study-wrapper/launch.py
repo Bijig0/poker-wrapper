@@ -419,11 +419,16 @@ _TABLE_JS = r"""(() => {
     }
     return 1;
   };
-  const zoomRef = doc.querySelector('svg[data-qa]');
+  // Any tagged element will do as a starting point, not a card specifically:
+  // between hands there are no cards, and defaulting to 1 there would be
+  // indistinguishable from a genuinely unzoomed table. null means "no
+  // reference element" so a consumer normalising coordinates can refuse rather
+  // than quietly divide by the wrong factor.
+  const zoomRef = doc.querySelector('svg[data-qa], [data-qa]');
   return {seated: true, practice: (tf.src || '').includes('playMode=fun'),
           frame: {x: Math.round(fb.x), y: Math.round(fb.y),
                   w: Math.round(fb.width), h: Math.round(fb.height)},
-          zoom: zoomRef ? zoomOf(zoomRef) : 1,
+          zoom: zoomRef ? zoomOf(zoomRef) : null,
           nodes: out, buttons: btns, cards: cardEls, allCards, heroMini,
           canvases: doc.querySelectorAll('canvas').length};
 })()"""
