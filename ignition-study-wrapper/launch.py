@@ -393,6 +393,17 @@ _TABLE_JS = r"""(() => {
     return {text: t, x: Math.round(fb.x + r.x), y: Math.round(fb.y + r.y),
             w: Math.round(r.width), h: Math.round(r.height)};
   }).filter(b => b.text && b.text.length < 40 && b.w > 0 && b.h > 0);
+  // STRUCTURAL ownership, read from the client's own containment: which
+  // playerContainer a card sits under, and whether it is under the table
+  // element at all. The geometric board/hole split (band + modal row) has
+  // recorded near-misses — hero cards flood the board band on small layouts
+  // and 13 ticks across sessions had mixed-width cards sharing a y-row — so
+  // ownership is captured per element to let the split become pure DOM.
+  const seatOf = el => {
+    const s = el.closest && el.closest("[data-qa^='playerContainer-']");
+    return s ? +s.getAttribute('data-qa').split('-')[1] : null;
+  };
+  const tblEl = doc.querySelector("[data-qa='table']");
   // EVERY visible card element with its position — seat card presence is the
   // reliable fold signal (a folded seat's cards are mucked and stay gone,
   // unlike action badges which animate and re-render).
@@ -402,7 +413,14 @@ _TABLE_JS = r"""(() => {
             y: Math.round(r.y + r.height / 2), w: Math.round(r.width), el: s};
   }).filter(c => /^card/.test(c.qa) && c.w >= 20 &&
                  doc.defaultView.getComputedStyle(c.el).visibility === 'visible')
-    .map(c => ({qa: c.qa, x: c.x, y: c.y, w: c.w}));
+    .map(c => ({qa: c.qa, x: c.x, y: c.y, w: c.w,
+                seat: seatOf(c.el), tbl: !!(tblEl && tblEl.contains(c.el))}));
+  // Per-seat structural summary: the hooks the pure-DOM reader would key on.
+  const seatQa = [...doc.querySelectorAll("[data-qa^='playerContainer-']")].map(s => ({
+    seat: +s.getAttribute('data-qa').split('-')[1],
+    balance: !!s.querySelector("[data-qa='playerBalance']"),
+    me: !!s.querySelector("[data-qa='myPlayerTag']"),
+    nCards: s.querySelectorAll("[data-qa^='card']").length}));
   // The client scales its fixed-size table with CSS `zoom`. Every coordinate
   // above is viewport pixels, so design units = (viewport - frame origin) /
   // zoom. The factor cannot be recovered from the coordinates afterwards and
@@ -429,7 +447,7 @@ _TABLE_JS = r"""(() => {
           frame: {x: Math.round(fb.x), y: Math.round(fb.y),
                   w: Math.round(fb.width), h: Math.round(fb.height)},
           zoom: zoomRef ? zoomOf(zoomRef) : null,
-          nodes: out, buttons: btns, cards: cardEls, allCards, heroMini,
+          nodes: out, buttons: btns, cards: cardEls, allCards, heroMini, seatQa,
           canvases: doc.querySelectorAll('canvas').length};
 })()"""
 
