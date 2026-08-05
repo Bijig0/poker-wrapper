@@ -1,11 +1,46 @@
-"""Icon entry point. Imports launch and runs main() — module mode."""
+"""Icon entry point. Imports launch and runs main() — module mode.
+
+Guarantees a fresh start every open, on two levels:
+
+  1. Bytecode. Python caches compiled .pyc keyed by SOURCE MTIME, and files on
+     this machine get rewritten by the mac sync — a sync that restores an
+     older mtime makes Python run the STALE .pyc even though the source on
+     disk is new. Close-time cleanup cannot cover this (a killed process runs
+     no cleanup), so the caches are purged HERE, before launch is imported,
+     every single open. `dont_write_bytecode` then keeps the run from leaving
+     a new cache that a later mtime shuffle could resurrect.
+
+  2. Process. launch.main() itself replaces any still-running instance (see
+     _takeover), so the newly-loaded code always becomes the live one.
+
+Between them, opening from the icon always runs the code as it is on disk.
+"""
+import shutil
 import sys
 from pathlib import Path
+
 HERE = Path(__file__).resolve().parent
 MARK = HERE / "debug" / "last-start.txt"
+
+# Never trust or write cached bytecode for this run.
+sys.dont_write_bytecode = True
+
+# Purge every __pycache__ under the wrapper AND its scout dependency (imported
+# from a sibling tree, with its own cache). rglob covers nested packages.
+_purged = 0
+for base in (HERE, HERE.parent / "aof-model" / "scout"):
+    if not base.exists():
+        continue
+    for pc in base.rglob("__pycache__"):
+        try:
+            shutil.rmtree(pc)
+            _purged += 1
+        except OSError:
+            pass  # a locked cache is not worth aborting the launch over
+
 try:
     MARK.parent.mkdir(exist_ok=True)
-    MARK.write_text("start\n", encoding="utf-8")
+    MARK.write_text(f"start (purged {_purged} caches)\n", encoding="utf-8")
     sys.path.insert(0, str(HERE))
     import launch
     with MARK.open("a", encoding="utf-8") as f:
