@@ -49,8 +49,11 @@ from scout import cdp  # noqa: E402  (reuses the Windows-validated CDP reader)
 import faketable  # noqa: E402  (local fake-Ignition renderer for the state tester)
 
 # The game-state spec the /faketable routes render. Set via POST /faketable/spec
-# by the tester; None falls back to faketable.EXAMPLE_SPEC.
+# by the tester; None falls back to faketable.EXAMPLE_SPEC. _fake_mode marks the
+# wrapper as driving the LOCAL fake table: the target search prefers it, the
+# archiver refuses authored hands, and the DOM-diff inference stays frozen.
 _faketable_spec: dict | None = None
+_fake_mode = False
 
 # Under pythonw (the desktop shortcut) there is no console: sys.stdout is None
 # and any print() would crash. Route output to the log file instead.
@@ -176,6 +179,12 @@ def apply_layout() -> dict:
 def ignition_target():
     """The table window's page target — the one that isn't our own panel."""
     pages = cdp.page_targets(CDP_PORT)
+    # In test mode the fake table IS the table — prefer it even when the real
+    # client is also open, so an authored state is never read off live felt.
+    if _fake_mode:
+        for t in pages:
+            if "/faketable" in t.get("url", ""):
+                return t
     # The actual game lives on /static/poker-game/ — prefer it over the lobby.
     for pat in ("poker-game", "ignition"):
         for t in pages:
@@ -961,6 +970,18 @@ def _feed_tick() -> None:
         d = cdp._eval(t["webSocketDebuggerUrl"], _TABLE_JS, timeout=6) or {}
     except Exception:
         return
+    if _fake_mode:
+        # The authored state owns everything the feed would otherwise derive.
+        # Only hero's status is refreshed (it drives /state's badges); the
+        # hand counter, feed lines and DOM-diff backfill all stand down —
+        # this tick's "first sighting of a table" branch was silently
+        # advancing the hand number the moment the fake page loaded.
+        try:
+            _live_status["hero"] = _hero_status(d, d.get("nodes") or [])
+            _live_status["board"] = list(_board_cards(d))
+        except Exception:
+            pass
+        return
     # Cache hero's status for /state (the poller probes at 1 Hz; this tick
     # already paid for the DOM read, so /state never needs its own eval).
     try:
@@ -1637,6 +1658,12 @@ def _apply_select(seat: int | None, btn: int | None, bet: int, rz: int) -> None:
 
 def _on_game_msg(d: dict) -> None:
     global _hand_no
+    if _fake_mode:
+        # Test mode owns the hand state. A real client left open in the
+        # background keeps its socket alive, and its frames would otherwise
+        # advance the hand counter and rewrite the authored line mid-test.
+        _dump_mark("dropped: fake-table test mode")
+        return
     pid = d.get("pid")
     if pid == "PLAY_STAGE_INFO":                       # authoritative new hand
         hid = str(d.get("stageNo") or "")
@@ -2026,6 +2053,8 @@ def _archive_hand() -> None:
     """Persist the finishing hand. Called at the NEXT hand's PLAY_STAGE_INFO
     (the reliable end-of-hand signal) and at table close (no next hand will
     ever come) — the dedupe guard makes the two triggers safe together."""
+    if _fake_mode:
+        return  # authored test states are not hand history
     try:
         h = _hand_state()
         if not h or not h["actions"]:
@@ -2303,8 +2332,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # The dashboard app (localhost:2100) drives the state tester cross-
+        # origin; everything here is already loopback-only.
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):  # CORS preflight for the dashboard's JSON POSTs
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -2328,6 +2367,25 @@ class Handler(BaseHTTPRequestHandler):
                 spec = _faketable_spec or faketable.EXAMPLE_SPEC
                 self._send(200, "text/html; charset=utf-8",
                            faketable.render_inner(spec).encode())
+            elif path == "/faketable/lastclick":
+                # What the relay actually pressed on the fake page — the
+                # page records every button click into window.__lastClick.
+                t = ignition_target()
+                res = None
+                if t and "/faketable" in (t.get("url") or ""):
+                    try:
+                        # The buttons live in the table frame, so the record is
+                        # written there; read it from the frame rather than
+                        # relying on it having propagated to the top window.
+                        res = cdp._eval(t["webSocketDebuggerUrl"], """(() => {
+                            const f = document.querySelector('iframe');
+                            return (f && f.contentWindow.__lastClick)
+                                   || window.__lastClick || null;
+                        })()""", timeout=4)
+                    except Exception:
+                        res = None
+                self._send(200, "application/json",
+                           json.dumps({"ok": True, "click": res}).encode())
             elif path == "/feed":
                 self._send(200, "application/json",
                            json.dumps({"lines": _feed, "hand": _hand_no,
@@ -2397,11 +2455,19 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/quit":                # a new instance is taking over
                 self._send(200, "application/json", b'{"ok": true}')
                 threading.Thread(target=_stand_down, daemon=True).start()
-            elif path == "/faketable/spec":       # the state tester sets the spot
+            elif path == "/faketable/spec":       # set the spot (render only)
                 global _faketable_spec
                 n = int(self.headers.get("Content-Length") or 0)
                 _faketable_spec = json.loads(self.rfile.read(n) or b"{}")
                 self._send(200, "application/json", b'{"ok": true}')
+            elif path == "/faketable/load":       # full test mode: render + node
+                n = int(self.headers.get("Content-Length") or 0)
+                spec = json.loads(self.rfile.read(n) or b"{}")
+                res = _faketable_load(spec)
+                self._send(200, "application/json", json.dumps(res).encode())
+            elif path == "/faketable/stop":
+                self._send(200, "application/json",
+                           json.dumps(_faketable_stop()).encode())
             elif path == "/layout":
                 res = apply_layout()
                 print(f"[layout] -> {res}")
@@ -2587,6 +2653,107 @@ def _takeover() -> None:
         except Exception:
             pass
     print(f"[panel] replaced previous instance(s): {sorted(stale)}")
+
+
+def _faketable_load(spec: dict) -> dict:
+    """Enter test mode with an authored state: store the spec, seed the
+    WS-side hand state from its `node` section, and make sure a CDP-visible
+    browser is showing the fake page.
+
+    The WS tap is the authoritative source live; here there is no socket, so
+    the node's history is written straight into _ws_state in the same units
+    the tap uses (wire cents, bb = 100 so spec amounts are plain BB). The
+    DOM-diff inference is frozen for the whole session — every fact of an
+    authored state is authored, so anything the diff would add is by
+    definition a phantom.
+    """
+    global _faketable_spec, _fake_mode, _hand_no, _action_grace_until
+    _faketable_spec = spec
+    _fake_mode = True
+    node = spec.get("node") or {}
+    bb = 100
+
+    def cents(v) -> int | None:
+        return None if v is None else int(round(float(v) * bb))
+
+    seats = spec.get("seats") or {}
+    dealt = node.get("dealt") or sorted(
+        int(k) for k, s in seats.items()
+        if not (s or {}).get("empty") and (s or {}).get("cards"))
+    acts = [{"seat": int(a["seat"]), "type": a["type"],
+             "cents": cents(a.get("amount")),
+             "street": a.get("street", "preflop")}
+            for a in node.get("actions") or []]
+    committed = {int(k): cents(v) or 0
+                 for k, v in (node.get("committed") or {}).items()}
+    hero = int(spec.get("heroSeat") or 1)
+
+    _hand_no += 1
+    _hand_ids[_hand_no] = str(node.get("clientHandId") or (9_000_000 + _hand_no))
+    _ws_state.update({
+        "bb": bb, "bbSeen": True,
+        "dealt": [int(x) for x in dealt],
+        "heroSeat": hero,
+        "dealer": int(spec.get("dealerSeat") or hero),
+        "board": [faketable.display_card(c) for c in spec.get("board") or []],
+        "heroCards": [faketable.display_card(c) for c in spec.get("heroCards") or []],
+        "actions": acts,
+        "committed": committed,
+        "maxBet": cents(node.get("maxBet")) or max(committed.values(), default=0),
+        "actionOn": int(node.get("toActSeat") or hero),
+        "potCents": cents(spec.get("potBB")),
+        "heroFolded": False, "handOver": False, "endedSince": None,
+        "actSeen": set(), "foldedSeats": set(),
+        "domGraceUntil": time.time() + 1e9,
+    })
+    _action_grace_until = time.time() + 1e9
+
+    # A browser for the page: reuse a /faketable tab on the CDP port, retarget
+    # an existing CDP browser via DevTools' HTTP API, or launch the standard
+    # table window at the fake URL if no CDP browser exists at all.
+    url = f"http://127.0.0.1:{PANEL_PORT}/faketable"
+    opened = "reused"
+    existing = next((t for t in (cdp.page_targets(CDP_PORT) or [])
+                     if "/faketable" in (t.get("url") or "")), None)
+    if existing:
+        # The page renders the spec at REQUEST time, so a tab already showing
+        # a previous state must be reloaded or the test runs against the old
+        # spot. Both documents are re-fetched (no-store defeats caching).
+        try:
+            cdp._eval(existing["webSocketDebuggerUrl"],
+                      "location.reload(); true", timeout=4)
+            time.sleep(1.2)
+            opened = "reloaded"
+        except Exception:
+            pass
+    if not existing:
+        if cdp.available(CDP_PORT):
+            import urllib.request as _rq
+            for method in ("PUT", "GET"):
+                try:
+                    _rq.urlopen(_rq.Request(
+                        f"http://127.0.0.1:{CDP_PORT}/json/new?{url}",
+                        method=method), timeout=4)
+                    opened = "new tab"
+                    break
+                except Exception:
+                    continue
+        else:
+            area = target_area()
+            chrome_window(url, ".profile-faketest", area["x"], area["y"],
+                          int(area["w"] * TABLE_FRAC), area["h"], CDP_PORT)
+            opened = "launched"
+    print(f"[faketable] test mode ON — hand {_hand_no}, browser {opened}")
+    return {"ok": True, "hand": _hand_no, "browser": opened}
+
+
+def _faketable_stop() -> dict:
+    """Leave test mode; live reading resumes untouched next hand."""
+    global _fake_mode
+    _fake_mode = False
+    _ws_state["domGraceUntil"] = 0
+    print("[faketable] test mode off")
+    return {"ok": True}
 
 
 def _stand_down() -> None:

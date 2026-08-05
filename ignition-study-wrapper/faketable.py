@@ -25,6 +25,16 @@ _RANKS = "A23456789TJQK"
 _SUITS = "cdhs"
 
 
+def display_card(code: str) -> str:
+    """"Tc" -> "10♣" — the wrapper's internal display form (_card_name's
+    output), which _hand_state shortens back to solver form at the boundary."""
+    c = code.strip()
+    r = "10" if c[0].upper() == "T" or c.startswith("10") else c[0].upper()
+    s = {"s": "♠", "h": "♥", "d": "♦", "c": "♣"}[c[-1].lower()] \
+        if c[-1].lower() in "shdc" else c[-1]
+    return r + s
+
+
 def encode_card(code: str) -> int:
     """"Ah" -> 26. Accepts "10♥"/"Th"/"AS" forms."""
     c = code.strip().replace("10", "T")
@@ -177,9 +187,13 @@ def render_inner(spec: dict) -> str:
 <div class='strip'>{''.join(strip)}</div>
 <script>
   // Echo every button click so the relay test can assert what actually fired
-  // (act() dispatches a real CDP click at the button's centre).
+  // (act() dispatches a real CDP click at the button's centre). Recorded on
+  // BOTH windows: the buttons live in this frame, but the CDP page target the
+  // reader drives is the top document, and that is where the test looks.
   document.querySelectorAll('button[data-qa]').forEach(b => b.addEventListener('click', () => {{
-    window.__lastClick = {{ qa: b.getAttribute('data-qa'), text: b.innerText, t: Date.now() }};
+    const hit = {{ qa: b.getAttribute('data-qa'), text: b.innerText, t: Date.now() }};
+    window.__lastClick = hit;
+    try {{ window.parent.__lastClick = hit; }} catch (e) {{ /* same origin, cannot fail */ }}
   }}));
 </script>
 </body></html>"""
