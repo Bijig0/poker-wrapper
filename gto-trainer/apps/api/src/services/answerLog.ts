@@ -29,6 +29,9 @@ export interface AnswerRow {
   warning: string | null;
   latencyMs: number | null;
   failReason: string | null;
+  /** Chart/gametype the answer came from (e.g. ign200_3maxasym_D100_s40_sb),
+   *  the join key to the chart catalog's "recently queried" view. */
+  chart?: string | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS answers (
@@ -65,6 +68,11 @@ class AnswerLog {
     this.db = new Database(this.path);
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(DDL);
+    // Additive migration: chart column (which chart/gametype answered).
+    const cols = this.db.query<{ name: string }, []>("PRAGMA table_info(answers)").all();
+    if (!cols.some((c) => c.name === "chart")) {
+      this.db.exec("ALTER TABLE answers ADD COLUMN chart TEXT");
+    }
     return this.db;
   }
 
@@ -74,16 +82,32 @@ class AnswerLog {
       this.open()
         .query(
           `INSERT INTO answers (ts, wrapper_hand_id, client_hand_id, street, board,
-             hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
           row.heroCards, row.decisionKey, row.text, row.pick, row.roll,
-          row.tier, row.warning, row.latencyMs, row.failReason
+          row.tier, row.warning, row.latencyMs, row.failReason, row.chart ?? null
         );
     } catch {
       /* never propagate */
+    }
+  }
+
+  /** Charts that actually answered live spots recently, most recent first. */
+  recentCharts(days = 30): { chart: string; n: number; lastTs: number }[] {
+    try {
+      const since = Date.now() - days * 86_400_000;
+      return this.open()
+        .query<{ chart: string; n: number; lastTs: number }, [number]>(
+          `SELECT chart, COUNT(*) n, MAX(ts) lastTs FROM answers
+           WHERE ts >= ? AND chart IS NOT NULL AND text IS NOT NULL
+           GROUP BY chart ORDER BY lastTs DESC`
+        )
+        .all(since);
+    } catch {
+      return [];
     }
   }
 

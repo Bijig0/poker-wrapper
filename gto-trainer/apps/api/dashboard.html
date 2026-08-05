@@ -70,6 +70,7 @@
   <div class="tabs">
     <button id="tab-hands" class="on">Hands</button>
     <button id="tab-analytics">Analytics</button>
+    <button id="tab-catalog">Catalog</button>
   </div>
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
@@ -90,6 +91,7 @@
   </div>
   <div id="view-detail" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
+  <div id="view-catalog" style="display:none"></div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -484,18 +486,121 @@ async function loadAnalytics() {
   v.innerHTML = html;
 }
 
+/* ================= chart catalog ================= */
+let CAT = null, catFam = "", catQ = "";
+
+const stacksStr = (e) => {
+  if (!e.stacksBB) return e.depth != null ? `${e.depth}bb` : "—";
+  const seats = e.seats ?? Object.keys(e.stacksBB);
+  const vals = seats.map((s) => e.stacksBB[s]);
+  return vals.every((v) => v === vals[0]) ? `${vals[0]}bb even`
+    : seats.map((s) => `${s} ${e.stacksBB[s]}`).join(" · ");
+};
+const fmtAgo = (ms) => {
+  const m = Math.round((Date.now() - ms) / 60000);
+  return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+};
+
+async function loadCatalog() {
+  const v = $("view-catalog");
+  v.innerHTML = '<div class="card sub">loading catalog…</div>';
+  let j;
+  try {
+    j = await (await fetch("/api/dashboard/catalog")).json();
+  } catch (e) { v.innerHTML = '<div class="card warn">catalog unavailable</div>'; return; }
+  if (!j.ok) { v.innerHTML = '<div class="card warn">catalog unavailable</div>'; return; }
+  CAT = j;
+  renderCatalog();
+}
+
+function renderCatalog() {
+  const v = $("view-catalog");
+  const s = CAT.summary;
+  const tile = (k, val, sub) => `<div class="tile"><div class="v">${val}</div><div class="k">${k}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  const famNames = Object.keys(s.byFamily).sort();
+
+  // recently-queried strip: live answers joined back to their chart
+  const recent = (CAT.recent || []).slice(0, 12);
+  const recentHtml = recent.length
+    ? `<div class="card"><h2>Recently queried by live study (30d)</h2><table><thead><tr>
+        <th>chart</th><th>answers</th><th>last used</th></tr></thead><tbody>` +
+      recent.map((r) => `<tr><td>${esc(r.chart)}</td><td>${r.n}</td><td class="sub">${fmtAgo(r.lastTs)}</td></tr>`).join("") +
+      `</tbody></table></div>`
+    : `<div class="card sub">No live study answers logged against a chart yet — play a session with Study Answers on and the charts used will appear here.</div>`;
+
+  let rows = CAT.entries;
+  if (catFam) rows = rows.filter((e) => e.family === catFam);
+  if (catQ) rows = rows.filter((e) => `${e.id} ${e.label} ${e.site ?? ""} ${e.routed ?? ""}`.toLowerCase().includes(catQ));
+  const shown = rows.slice(0, 800);
+
+  v.innerHTML = `
+    <div class="tiles">
+      ${tile("charts", s.total, `${s.routed} live-routed`)}
+      ${famNames.map((f) => tile(f, s.byFamily[f])).join("")}
+    </div>
+    <div class="card sub" style="line-height:1.7">
+      <b style="color:#9db1c7">Sources:</b>
+      HRC corpus ${s.solutionsDir ? `sidecars at <code>${esc(s.solutionsDir)}</code>` : '<span class="warn">solutions dir NOT found</span>'} (bodies canonical in R2, fetched on demand) ·
+      GTOW crawl ${s.gtowDb ? "<code>data/preflop-db.sqlite</code>" : '<span class="warn">sqlite missing</span>'} ·
+      <b style="color:#9db1c7">routed</b> = what the Ignition study poller answers from today; everything else is browsable in SolverStudy.
+    </div>
+    ${recentHtml}
+    <div class="card">
+      <h2>All charts
+        <select id="cat-fam" style="margin-left:10px;background:#10151d;border:1px solid #2c3a4d;color:inherit;border-radius:5px;padding:2px 6px">
+          <option value="">all families</option>
+          ${famNames.map((f) => `<option value="${f}" ${f === catFam ? "selected" : ""}>${f} (${s.byFamily[f]})</option>`).join("")}
+        </select>
+        <input id="cat-q" type="text" placeholder="filter id, site, routed…" value="${esc(catQ)}" style="margin-left:8px">
+        <button id="cat-refresh" class="mini" style="margin-left:8px">↻ rescan</button>
+        <span class="sub" style="margin-left:10px">${rows.length} match${shown.length < rows.length ? ` · showing ${shown.length}` : ""}</span>
+      </h2>
+      <table><thead><tr>
+        <th>id</th><th>family</th><th>site</th><th>players</th><th>stacks</th><th>sizes</th><th>nodes</th><th>cached</th><th>routed</th>
+      </tr></thead><tbody>
+      ${shown.map((e) => `<tr style="cursor:default">
+        <td title="${esc(e.location)}">${esc(e.id)}</td>
+        <td>${esc(e.family)}</td>
+        <td>${esc(e.site ?? "—")}</td>
+        <td>${e.players ?? "—"}</td>
+        <td>${esc(stacksStr(e))}</td>
+        <td class="sub">${e.open != null ? `o${e.open}` : ""}${e.threeBet != null ? ` 3b${e.threeBet}` : ""}</td>
+        <td>${e.nodes ?? "—"}</td>
+        <td>${e.source !== "hrc" ? "bundled" : e.cachedLocally ? "✓" : '<span class="sub">R2</span>'}</td>
+        <td>${e.routed ? `<span class="badge b-info">${esc(e.routed)}</span>` : '<span class="sub">browse-only</span>'}</td>
+      </tr>`).join("")}
+      </tbody></table>
+    </div>`;
+  $("cat-fam").onchange = (ev) => { catFam = ev.target.value; renderCatalog(); };
+  $("cat-q").oninput = (ev) => { catQ = ev.target.value.trim().toLowerCase(); renderCatalog(); };
+  // keep typing focus through re-render
+  const q = $("cat-q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+  $("cat-refresh").onclick = async () => {
+    $("cat-refresh").textContent = "…";
+    try { CAT = await (await fetch("/api/dashboard/catalog?refresh=1")).json(); } catch (e) {}
+    renderCatalog();
+  };
+}
+
 /* ================= routing ================= */
 function route() {
   if (PLAY) { clearInterval(PLAY); PLAY = null; }
   const m = location.hash.match(/^#hand\/(\d+)/);
   if (m) { showDetail(Number(m[1])); return; }
   $("view-detail").style.display = "none";
-  if ($("tab-analytics").classList.contains("on")) { $("view-analytics").style.display = ""; $("view-hands").style.display = "none"; }
-  else { $("view-hands").style.display = ""; $("view-analytics").style.display = "none"; }
+  const on = ["tab-hands", "tab-analytics", "tab-catalog"].find((t) => $(t).classList.contains("on"));
+  $("view-hands").style.display = on === "tab-hands" ? "" : "none";
+  $("view-analytics").style.display = on === "tab-analytics" ? "" : "none";
+  $("view-catalog").style.display = on === "tab-catalog" ? "" : "none";
 }
 window.onhashchange = route;
-$("tab-hands").onclick = () => { $("tab-hands").classList.add("on"); $("tab-analytics").classList.remove("on"); location.hash = ""; route(); };
-$("tab-analytics").onclick = () => { $("tab-analytics").classList.add("on"); $("tab-hands").classList.remove("on"); location.hash = ""; loadAnalytics(); route(); };
+const selectTab = (id) => {
+  for (const t of ["tab-hands", "tab-analytics", "tab-catalog"]) $(t).classList.toggle("on", t === id);
+  location.hash = "";
+};
+$("tab-hands").onclick = () => { selectTab("tab-hands"); route(); };
+$("tab-analytics").onclick = () => { selectTab("tab-analytics"); loadAnalytics(); route(); };
+$("tab-catalog").onclick = () => { selectTab("tab-catalog"); loadCatalog(); route(); };
 
 loadHands();
 route();

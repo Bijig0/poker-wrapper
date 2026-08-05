@@ -105,6 +105,8 @@ interface FastSolveLikeResponse {
         approx?: boolean;
         notInRange?: boolean;
         tier?: string;
+        /** Chart/solution-set id the answer came from (answer-log join key). */
+        gametype?: string;
         warning?: string | null;
       }
     | { ok: false; reason: string; street?: string }
@@ -327,6 +329,7 @@ class StudyPoller {
       heroCards: (full.hero?.cards ?? []).join("") || null,
       decisionKey: key,
       latencyMs: Date.now() - t0,
+      chart: (sol?.ok === true ? sol.gametype : null) ?? null,
     };
     this.status.lastError = null;
     if (!(sol?.ok === true && sol.decision != null)) {

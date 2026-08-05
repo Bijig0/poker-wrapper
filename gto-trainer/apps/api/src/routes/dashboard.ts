@@ -11,6 +11,7 @@ import { resolveSet, resolveDepth } from "../services/fastSolve";
 import { preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
 import { wagerLabelForWalk } from "../utils/aiChainTokens/aiChainTokens";
 import { answerLog } from "../services/answerLog";
+import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -348,6 +349,13 @@ app.post("/open-gtow", async (c) => {
   const { search } = buildSolutionUrl({ gametype: set.gametype, depth, hand: node, heroPos });
   const nav = await gtowCdp.gotoNodeUrl(search);
   return c.json({ ok: nav.ok, error: nav.error ?? null });
+});
+
+/** The chart catalog + which charts recently answered live spots. */
+app.get("/catalog", (c) => {
+  const force = c.req.query("refresh") === "1";
+  const cat = getCatalog(force);
+  return c.json({ ok: true, ...cat, recent: answerLog.recentCharts(30) });
 });
 
 app.get("/stats", async (c) => {
