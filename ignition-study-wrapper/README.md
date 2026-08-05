@@ -52,9 +52,17 @@ only prove the reader agrees with itself. Each entry carries the client's CSS
 `zoom` alongside viewport coordinates, so design units are
 `(viewport - frame origin) / zoom`.
 
-Costs roughly 5–8 KB/tick at the 4 Hz feed loop (~90 MB/h) on top of ~200 MB/h
-of frames; `_prune_debug` counts it against `DEBUG_BUDGET_MB` (default 2000)
-and drops oldest-first, never the newest two or any session with a `note.txt`.
+Measured cost at the 4 Hz feed loop: frames 63 KB each (~900 MB/h) plus
+`dom.jsonl` at 5–8 KB/tick (~90 MB/h). `_prune_debug` counts both against
+`DEBUG_BUDGET_MB` (default 2000) and drops oldest-first, never the newest two
+or any session with a `note.txt` — so about two hours of recording fits before
+older sessions start going. Record deliberately, and drop a note in any session
+worth keeping.
+
+Frames are captured with **no CDP `clip`**. A clip with `scale != 1` makes
+Chrome relayout the page at that scale and snap back, which on a headed window
+strobes the table you are playing on. Lower `_shot_jpeg`'s `quality` to buy
+disk; never reintroduce the clip.
 
 ## Phases
 

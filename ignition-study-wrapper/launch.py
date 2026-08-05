@@ -1084,30 +1084,33 @@ def set_debug(on: bool) -> dict:
     return {"on": _dbg["on"], "dir": _dbg["dir"], "frames": _dbg["seq"]}
 
 
-def _shot_jpeg(ws: str, out: str, quality: int = 55, scale: float = 0.6) -> bool:
-    """Screenshot as scaled JPEG. Full-res PNG frames cost ~405 KB each; at the
-    sampling rates we want for accuracy that is the difference between ~2 GB
-    and ~0.2 GB per recorded hour, for pixels we only ever eyeball."""
+def _shot_jpeg(ws: str, out: str, quality: int = 40) -> bool:
+    """Screenshot as JPEG, capturing the composited frame as-is.
+
+    NO `clip`. A clip whose scale is not 1 makes Chrome apply a device-metrics
+    override, relayout the page at that scale, capture, then clear the
+    override — on a HEADED window that is a visible resize and snap-back, and
+    at the feed's 4 Hz tick it strobes the table the user is playing on. The
+    panel's live mirror (scout/cdp.screenshot) has always passed no clip and
+    has never flashed; this now matches it.
+
+    Quality now carries the whole size budget, since without a clip there is
+    no downscale left to apply. Measured against the live client at q40: 63 KB
+    per frame, 117 ms per capture. At the feed's 4 Hz that is ~900 MB/hour, so
+    DEBUG_BUDGET_MB (2000) holds roughly two hours before pruning oldest-first.
+    Lower `quality` to trade fidelity for hours; the flash does not come back
+    either way, because quality is a pure encoder setting that never touches
+    layout. Do NOT reintroduce a scaled clip to win the space back.
+    """
     import base64
     import websocket
     conn = websocket.create_connection(ws, timeout=8, suppress_origin=True)
     try:
-        conn.send(json.dumps({"id": 1, "method": "Page.getLayoutMetrics"}))
-        w = h = None
+        conn.send(json.dumps({"id": 1, "method": "Page.captureScreenshot",
+                              "params": {"format": "jpeg", "quality": quality}}))
         for _ in range(30):
             m = json.loads(conn.recv())
             if m.get("id") == 1:
-                cs = m.get("result", {}).get("cssVisualViewport", {})
-                w, h = int(cs.get("clientWidth", 0)), int(cs.get("clientHeight", 0))
-                break
-        params: dict = {"format": "jpeg", "quality": quality}
-        if w and h:
-            params["clip"] = {"x": 0, "y": 0, "width": w, "height": h, "scale": scale}
-        conn.send(json.dumps({"id": 2, "method": "Page.captureScreenshot",
-                              "params": params}))
-        for _ in range(30):
-            m = json.loads(conn.recv())
-            if m.get("id") == 2:
                 data = m.get("result", {}).get("data")
                 if not data:
                     return False
