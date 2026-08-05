@@ -811,7 +811,16 @@ def _feed_tick() -> None:
             _seat_mem.clear()
         return
 
+    # The table-broke interstitial renders in the table's middle band. The
+    # message feed at the BOTTOM must not trip this: "Player 5 has joined you
+    # from another table with $1.45" matches the regex, persists for as long
+    # as the message shows, and classified every tick as waiting — freezing
+    # the feed, the archiver and the debug recorder mid-session while the WS
+    # tap carried on. Position, not wording, is what separates the two.
+    _fr = d.get("frame") or {}
+    _mid = _fr.get("y", 0) + _fr.get("h", 0) * 0.7
     waiting = any(re.search(r"please wait|another table", n["text"], re.I)
+                  and n["y"] < _mid
                   for n in d.get("nodes", []))
     if waiting:
         if not p.get("waiting"):
@@ -1779,6 +1788,10 @@ def _hand_state() -> dict | None:
         # the site's own hand id — stable across wrapper restarts, so live
         # study answers can be joined to the archived hand later
         "clientHandId": _hand_ids.get(_hand_no),
+        # the table's big blind in wire cents (200 = $1/$2, 500 = $2.50/$5),
+        # once this hand's BB post has calibrated the scale — lets the solver
+        # pick the rake-matched chart set (ign200 vs ign500) for 3-max
+        "bbCents": bb if scaled else None,
         "heroSeatId": hero,
         "heroCards": hero_cards,
         "board": board,
