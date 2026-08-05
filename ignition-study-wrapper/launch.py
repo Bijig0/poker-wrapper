@@ -2378,6 +2378,19 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, got[1], got[0])
                 else:
                     self._send(404, "text/plain", b"no asset")
+            elif path == "/faketable/fixtures":
+                # The suite's fixtures, served to the State Tester so authored
+                # spots and regression cases are the same files.
+                fdir = ROOT / "tests" / "fixtures"
+                out = []
+                for f in sorted(fdir.glob("*.json")):
+                    try:
+                        out.append({"file": f.name,
+                                    "fixture": json.loads(f.read_text(encoding="utf-8"))})
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                self._send(200, "application/json",
+                           json.dumps({"ok": True, "fixtures": out}).encode())
             elif path == "/faketable/lastclick":
                 # What the relay actually pressed on the fake page — the
                 # page records every button click into window.__lastClick.
@@ -2479,6 +2492,24 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/faketable/stop":
                 self._send(200, "application/json",
                            json.dumps(_faketable_stop()).encode())
+            elif path == "/faketable/fixture":   # save an authored fixture
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                name = re.sub(r"[^a-z0-9-]", "-",
+                              str(body.get("name") or "").lower()).strip("-")
+                fx = body.get("fixture")
+                if not name or not isinstance(fx, dict):
+                    self._send(400, "application/json",
+                               b'{"ok": false, "error": "name and fixture required"}')
+                else:
+                    fdir = ROOT / "tests" / "fixtures"
+                    fdir.mkdir(parents=True, exist_ok=True)
+                    p = fdir / f"{name}.json"
+                    p.write_text(json.dumps(fx, indent=2, ensure_ascii=False) + "\n",
+                                 encoding="utf-8")
+                    print(f"[faketable] fixture saved: {p.name}")
+                    self._send(200, "application/json",
+                               json.dumps({"ok": True, "file": p.name}).encode())
             elif path == "/layout":
                 res = apply_layout()
                 print(f"[layout] -> {res}")
