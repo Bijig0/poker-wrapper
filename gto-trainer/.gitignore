@@ -60,3 +60,4 @@ gto-source/
 
 # Per-machine answer log (services/answerLog.ts) — runtime output, not source.
 apps/api/data/answers.sqlite
+.profile-study-tool/
