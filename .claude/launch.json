@@ -2,16 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "poker-analysis",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": [
-        "analysis/node_modules/vite/bin/vite.js",
-        "analysis",
-        "--port",
-        "5199",
-        "--strictPort"
-      ],
-      "port": 5199
+      "name": "gto-api",
+      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-api.cmd",
+      "runtimeArgs": [],
+      "port": 2000
     },
     {
       "name": "gto-dashboard",
@@ -20,43 +14,15 @@
       "port": 2100
     },
     {
-      "name": "poker-analysis-alt",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": [
-        "analysis/node_modules/vite/bin/vite.js",
-        "analysis",
-        "--port",
-        "5198",
-        "--strictPort"
-      ],
-      "port": 5198
-    },
-    {
-      "name": "gto-dashboard",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": [
-        "gto-trainer/apps/dashboard/node_modules/vite/bin/vite.js",
-        "gto-trainer/apps/dashboard",
-        "--port",
-        "2100",
-        "--strictPort"
-      ],
-      "port": 2100
-    },
-    {
-      "name": "poker-analysis-win",
+      "name": "poker-analysis",
       "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
-      "runtimeArgs": [
-        "5199"
-      ],
+      "runtimeArgs": ["5199"],
       "port": 5199
     },
     {
-      "name": "poker-analysis-alt-win",
+      "name": "poker-analysis-alt",
       "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
-      "runtimeArgs": [
-        "5198"
-      ],
+      "runtimeArgs": ["5198"],
       "port": 5198
     }
   ]

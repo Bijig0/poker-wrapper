@@ -71,6 +71,7 @@
     <button id="tab-hands" class="on">Hands</button>
     <button id="tab-analytics">Analytics</button>
     <button id="tab-catalog">Catalog</button>
+    <button id="tab-replay">Replay Review</button>
   </div>
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
@@ -92,6 +93,16 @@
   <div id="view-detail" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
   <div id="view-catalog" style="display:none"></div>
+  <!-- Side-by-side replay review lives in the React dashboard (it renders the
+       Ignition table replica); this tab embeds it so review stays reachable
+       from the study dashboard the recordings belong to. -->
+  <div id="view-replay" style="display:none">
+    <iframe id="replay-frame" style="width:100%;height:calc(100vh - 90px);border:0;border-radius:8px;background:#0d141c"></iframe>
+    <div id="replay-hint" class="card warn" style="display:none;margin-top:8px">
+      The dashboard app on :2100 is not running — start it
+      (<code>gto-trainer/apps/dashboard: bun run dev</code>) and reopen this tab.
+    </div>
+  </div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -531,6 +542,11 @@ function renderCatalog() {
   let rows = CAT.entries;
   if (catFam) rows = rows.filter((e) => e.family === catFam);
   if (catQ) rows = rows.filter((e) => `${e.id} ${e.label} ${e.site ?? ""} ${e.routed ?? ""}`.toLowerCase().includes(catQ));
+  // Live-routed families first — alphabetical order buried the 3-max corpus
+  // under a screenful of browse-only HU grids.
+  const famRank = { "3max-asym": 0, gtow: 1, "3max": 2, "hu-grid": 3, "hu-size": 4, husng: 5 };
+  rows = rows.slice().sort((a, b) =>
+    ((famRank[a.family] ?? 8) - (famRank[b.family] ?? 8)) || a.id.localeCompare(b.id));
   const shown = rows.slice(0, 800);
 
   v.innerHTML = `
@@ -588,19 +604,32 @@ function route() {
   const m = location.hash.match(/^#hand\/(\d+)/);
   if (m) { showDetail(Number(m[1])); return; }
   $("view-detail").style.display = "none";
-  const on = ["tab-hands", "tab-analytics", "tab-catalog"].find((t) => $(t).classList.contains("on"));
+  const on = ["tab-hands", "tab-analytics", "tab-catalog", "tab-replay"].find((t) => $(t).classList.contains("on"));
   $("view-hands").style.display = on === "tab-hands" ? "" : "none";
   $("view-analytics").style.display = on === "tab-analytics" ? "" : "none";
   $("view-catalog").style.display = on === "tab-catalog" ? "" : "none";
+  $("view-replay").style.display = on === "tab-replay" ? "" : "none";
 }
 window.onhashchange = route;
 const selectTab = (id) => {
-  for (const t of ["tab-hands", "tab-analytics", "tab-catalog"]) $(t).classList.toggle("on", t === id);
+  for (const t of ["tab-hands", "tab-analytics", "tab-catalog", "tab-replay"]) $(t).classList.toggle("on", t === id);
   location.hash = "";
 };
 $("tab-hands").onclick = () => { selectTab("tab-hands"); route(); };
 $("tab-analytics").onclick = () => { selectTab("tab-analytics"); loadAnalytics(); route(); };
 $("tab-catalog").onclick = () => { selectTab("tab-catalog"); loadCatalog(); route(); };
+$("tab-replay").onclick = async () => {
+  selectTab("tab-replay"); route();
+  // Probe the React app before pointing the iframe at it, so a dead :2100
+  // shows a hint instead of a blank pane.
+  try {
+    await fetch("http://localhost:2100/", { mode: "no-cors" });
+    $("replay-hint").style.display = "none";
+    if (!$("replay-frame").src) $("replay-frame").src = "http://localhost:2100/replay";
+  } catch (e) {
+    $("replay-hint").style.display = "";
+  }
+};
 
 loadHands();
 route();
