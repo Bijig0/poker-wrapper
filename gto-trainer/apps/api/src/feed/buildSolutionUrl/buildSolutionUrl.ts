@@ -88,6 +88,19 @@ export const buildPreflopTokensHu = (hand: ParsedHand, heroPosOverride?: string 
     normalize: (p) => (p === "BTN" ? "SB" : p),
   });
 
+/**
+ * 3-max variant: the HRC BTN/SB/BB trees act in [BTN, SB, BB] preflop order
+ * (button opens like the UTG of a 3-handed ring), which is also exactly how
+ * the wrapper labels a 3-handed table — no seat renaming needed. Without
+ * this, the 6-max default pads UTG/HJ/CO phantom folds in front of every
+ * line, which no 3-max chart contains.
+ */
+export const buildPreflopTokens3max = (hand: ParsedHand, heroPosOverride?: string | null): string[] =>
+  buildPreflopTokensWalk(hand, heroPosOverride ?? null, {
+    order: ["BTN", "SB", "BB"],
+    normalize: (p) => p,
+  });
+
 const buildPreflopTokensWalk = (
   hand: ParsedHand,
   heroPosOverride: string | null,

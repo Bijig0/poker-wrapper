@@ -55,6 +55,9 @@ export interface ParsedHand {
    *  source provides one — the stable join key between live answers and the
    *  archived hand history (wrapper handIds reset every restart). */
   clientHandId?: string;
+  /** Table big blind in cents (200 = $1/$2, 500 = $2.50/$5), when the feed
+   *  has calibrated the scale — selects the rake-matched chart set. */
+  bbCents?: number;
   heroSeatId: number;
   heroCards: string[]; // short form, e.g. "As"
   board: string[]; // short form

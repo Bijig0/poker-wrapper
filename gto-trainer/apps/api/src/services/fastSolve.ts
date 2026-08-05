@@ -1,5 +1,6 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
-import { buildPreflopTokens, buildPreflopTokensHu, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { preflopDb } from "./preflopDb";
 import { gtowApi } from "./gtowApi";
 import { SOLUTION_SETS } from "./gtowCdp";
@@ -39,9 +40,9 @@ interface ActionFreq {
 export type FastSolveResult =
   | {
       ok: true;
-      source: "local-preflop" | "gtow-api-postflop";
-      /** which cascade layer answered (postflop only). */
-      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain";
+      source: "local-preflop" | "hrc-3max-preflop" | "gtow-api-postflop";
+      /** which cascade layer answered. */
+      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max";
       street: string;
       setId: string;
       gametype: string;
@@ -96,6 +97,61 @@ export const resolveSet = (hand: ParsedHand, heroPos: string | null, setId?: str
   const id = setId ?? (present.size <= 2 ? "hu" : "6max");
   return SOLUTION_SETS.find((s) => s.id === id) ?? null;
 };
+
+/** A 3-handed table: exactly BTN/SB/BB present. The asym HRC charts cover
+ *  this shape with the real 3-max rake and per-seat stack asymmetry — the
+ *  6-max phantom-fold walk is the wrong tree on every axis (rake model, no
+ *  limps, symmetric 100bb only). */
+const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
+  const present = new Set(
+    [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
+  );
+  return present.size === 3 && ["BTN", "SB", "BB"].every((p) => present.has(p));
+};
+
+/**
+ * Preflop from the asymmetric 3-max chart corpus (services/hrc3max.ts).
+ * Chart = stake-matched site x canonical stack state; tokens walk the
+ * BTN/SB/BB rotation. Returns null ONLY when the chart server is
+ * unreachable — a missing line/node is a real answer about the hand and is
+ * reported as such, not silently retried against the wrong 6-max tree.
+ */
+async function solvePreflop3max(
+  hand: ParsedHand,
+  heroPos: string | null
+): Promise<FastSolveResult | null> {
+  const chart = chartFor(hand, heroPos);
+  const tokens = buildPreflopTokens3max(hand, heroPos);
+  const walk = await walk3max(tokens, (line) => fetchNode(chart.id, line));
+  if (!walk.ok) {
+    if (walk.unreachable) return null; // solve-DB server down — 6-max net below
+    return { ok: false, reason: `3-max chart ${chart.id}: ${walk.reason}`, street: "preflop" };
+  }
+
+  const line = walk.tokens.join("-");
+  const heroClass = heroClassOf(hand);
+  const cell = heroClass ? walk.node.cells.find((c) => c.hand === heroClass) : undefined;
+  const actions = cell
+    ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency }))
+    : [];
+  return {
+    ok: true,
+    source: "hrc-3max-preflop",
+    tier: "chart-3max",
+    street: "preflop",
+    setId: "3max-asym",
+    gametype: chart.id,
+    depth: chart.depth,
+    line: line || "(root)",
+    pos: walk.node.pos,
+    heroClass,
+    actions,
+    decision: actions.length ? pickWeightedAction(actions) : null,
+    notInRange: (heroClass != null && !cell) || undefined,
+    approx: walk.repaired.length > 0 || undefined,
+    warning: chart.note,
+  };
+}
 
 /** Preflop answer from the local crawled DB. */
 function solvePreflop(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): FastSolveResult {
@@ -663,7 +719,22 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
  * spot-solution API. Assumes hero is to act (the caller checks `toActIsHero`).
  */
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
-  return hand.currentNode.street === "preflop"
-    ? solvePreflop(hand, heroPos, opts)
-    : solvePostflop(hand, heroPos, opts);
+  if (hand.currentNode.street !== "preflop") return solvePostflop(hand, heroPos, opts);
+
+  // 3-handed preflop answers from the asym HRC charts (unless the caller
+  // pinned a set explicitly). A dead chart server falls back to the 6-max
+  // walk — wrong tree, but an approximate answer beats none — flagged loudly.
+  if (!opts.setId && is3Handed(hand, heroPos)) {
+    const tri = await solvePreflop3max(hand, heroPos);
+    if (tri) return tri;
+    const net = solvePreflop(hand, heroPos, opts);
+    if (net.ok) {
+      net.approx = true;
+      net.warning =
+        "3-max chart server (:8777) unreachable — answered from the 6-MAX tree (wrong rake, no limps); treat as approximate.";
+    }
+    return net;
+  }
+
+  return solvePreflop(hand, heroPos, opts);
 }

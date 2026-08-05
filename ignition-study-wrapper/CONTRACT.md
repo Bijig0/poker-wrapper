@@ -90,4 +90,11 @@ when the poller can't deliver (GTO Wizard down, feed unreachable, …).
 ## Ports
 
 7700 wrapper (assistive-play-compatible) · 2000 gto-trainer API ·
+8777 solve-DB server (3-max asym preflop charts — run
+`analysis/pipeline/solve/exploit_ui/server.py`; 3-handed preflop answers
+degrade to the 6-max tree, loudly flagged, when it's down) ·
 9222 GTO Wizard CDP · 9333 Ignition browser CDP (9223 = CoinPoker's, avoid).
+
+The wrapper's `hand.bbCents` (big blind in wire cents, once the blind post
+calibrates the scale) is what selects ign200 vs ign500 charts 3-handed;
+absent → ign200.

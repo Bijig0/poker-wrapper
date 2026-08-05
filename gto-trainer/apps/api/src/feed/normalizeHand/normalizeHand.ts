@@ -150,6 +150,9 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     ...(typeof input.clientHandId === "string" && input.clientHandId
       ? { clientHandId: input.clientHandId }
       : {}),
+    ...(Number.isFinite(Number(input.bbCents)) && Number(input.bbCents) > 0
+      ? { bbCents: Number(input.bbCents) }
+      : {}),
     heroSeatId,
     heroCards,
     board,
