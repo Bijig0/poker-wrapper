@@ -48,6 +48,13 @@ HEADER_H = 26
 CARD_ASPECT = 100 / 150
 
 SEAT_MAPS = {
+    # 3-max is not a layout of its own: the client seats three players on the
+    # six-slot ring, at hero's bottom-centre chair and the two LOWER side
+    # chairs flanking it (6-max slots 0, 1 and 5). Seat order runs the same
+    # way the six-slot ring runs — hero, then screen-left, then screen-right —
+    # so hero on the button gives SB screen-left and BB screen-right, which is
+    # what the replica's own 3-max preset shows.
+    3: [(343, 290), (63, 236), (623, 236)],
     6: [(343, 290), (63, 236), (63, 66), (343, 14), (623, 66), (623, 236)],
     9: [(343, 290), (183, 279), (45, 210), (51, 66), (234, 8),
         (452, 8), (636, 66), (641, 210), (502, 279)],
@@ -65,6 +72,8 @@ CHIPS = {
     9: [(34.7, -10), (34.7, 5), (96, 25), (118, 93), (34.7, 109),
         (34.7, 109), (-48.6, 93), (-26.6, 25), (34.7, 5)],
 }
+# 3-max borrows the anchors of the three 6-max chairs it occupies (0, 1, 5).
+CHIPS[3] = [CHIPS[6][0], CHIPS[6][1], CHIPS[6][5]]
 PILL = dict(x=0, y=58, w=114, h=28, radius=50)
 BADGE = dict(d=24, x=3)
 STRIP = dict(y=72, h=29, visible=15)
@@ -304,7 +313,8 @@ def _button(qa: str, label: str, kind: str = "action") -> str:
 
 
 def render_inner(spec: dict) -> str:
-    cap = 9 if int(spec.get("capacity", 6)) > 6 else 6
+    raw_cap = int(spec.get("capacity", 6))
+    cap = 3 if raw_cap <= 3 else 9 if raw_cap > 6 else 6
     hero = int(spec.get("heroSeat") or 1)
     dealer = spec.get("dealerSeat")
     seats_in = spec.get("seats") or {}
