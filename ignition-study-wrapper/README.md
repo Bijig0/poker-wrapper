@@ -64,6 +64,30 @@ Chrome relayout the page at that scale and snap back, which on a headed window
 strobes the table you are playing on. Lower `_shot_jpeg`'s `quality` to buy
 disk; never reintroduce the clip.
 
+## Game-state tester (`/faketable`)
+
+Author any Ignition state and run the study tools against it locally — no
+client, no network, no real table. `faketable.py` renders a spec as BOTH the
+client's structural DOM contract (the data-qa hooks the reader consumes) and a
+faithful visual replica (measured geometry from types.ts, the real card art
+and harvested client SVGs), in the same document — so what the reader parses
+and what you eyeball are the same table by construction.
+
+- `POST /faketable/load` — spec in, test mode on: seeds the hand state from
+  the spec's `node`, renders the table, reloads the tab. `/hand`, the study
+  poller and the `/act` relay then run unchanged.
+- `POST /faketable/stop` — back to live reading.
+- `GET /faketable/lastclick` — what the relay actually pressed (the page
+  records every button hit).
+- Fixture suite: `tests/run_state_suite.py` over `tests/fixtures/*.json` —
+  each fixture asserts the /hand export field by field, that each expected
+  action fires the right control, and that unoffered actions are refused.
+- Authoring UI: the dashboard's State Tester page (:2100/state-tester).
+
+Test mode stands down the WS tap, the DOM feed diff and the archiver: every
+fact of an authored state is authored, so anything inferred is a phantom and
+nothing lands in hands.db.
+
 ## Phases
 
 1. ✅ this skeleton
