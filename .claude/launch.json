@@ -8,6 +8,12 @@
       "port": 5199
     },
     {
+      "name": "gto-dashboard",
+      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-dashboard.cmd",
+      "runtimeArgs": ["2100"],
+      "port": 2100
+    },
+    {
       "name": "poker-analysis-alt",
       "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
       "runtimeArgs": ["5198"],
