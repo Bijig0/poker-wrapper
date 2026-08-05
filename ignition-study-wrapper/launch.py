@@ -466,8 +466,29 @@ def _card_name(qa: str | None) -> str | None:
 
 
 def _board_cards(d: dict) -> list[str]:
-    """Identified community cards, left to right (the board is the y-row with
-    the most identified cards; duplicates from animation buffers collapse)."""
+    """Identified community cards, left to right.
+
+    STRUCTURAL: a board card is a real-id card element under the client's own
+    [data-qa='table'] and under NO playerContainer — the client's containment,
+    not our geometry. Verified against the live client: across fold, deal and
+    street animations every card element was either seat-owned or table-only
+    (zero orphans), the board tracked turn and river through containment, and
+    a fresh hand's hero faces landed seat-owned with the board empty. A deck
+    has no duplicate cards, so animation double-buffers collapse by id.
+
+    The geometric band/modal-row/>=3 stack this replaces survived on layered
+    guards: hero's cards flood the 40-80px band on small layouts and recorded
+    sessions show mixed-width cards sharing a y-row. Kept only as the fallback
+    for a capture without the structural fields.
+    """
+    ac = d.get("allCards") or []
+    if any("seat" in c for c in ac):
+        seen: dict[str, dict] = {}
+        for c in ac:
+            if c.get("tbl") and c.get("seat") is None and _card_name(c.get("qa")):
+                seen.setdefault(c["qa"], c)
+        row = sorted(seen.values(), key=lambda c: c["x"])
+        return [_card_name(c["qa"]) for c in row]
     cs = [c for c in d.get("cards", []) if _card_name(c.get("qa"))]
     if not cs:
         return []
@@ -486,6 +507,24 @@ def _board_cards(d: dict) -> list[str]:
 
 
 def _hero_cards(d: dict) -> list[str]:
+    """Hero's hole cards.
+
+    STRUCTURAL: the cards owned by the playerContainer carrying myPlayerTag —
+    read where the client actually deals them, so they exist whenever hero is
+    in the hand. The tab-strip mini path stays as fallback; it renders outside
+    the table frame and recorded sessions show it blind for whole stretches
+    (239 zero-mini ticks in one session while hero held cards).
+    """
+    ac = d.get("allCards") or []
+    me = next((s.get("seat") for s in d.get("seatQa") or [] if s.get("me")), None)
+    if me is not None and any("seat" in c for c in ac):
+        seen: dict[str, dict] = {}
+        for c in ac:
+            if c.get("seat") == me and _card_name(c.get("qa")):
+                seen.setdefault(c["qa"], c)
+        row = sorted(seen.values(), key=lambda c: c["x"])
+        if row:
+            return [_card_name(c["qa"]) for c in row][:2]
     minis = sorted(d.get("heroMini", []), key=lambda c: c["x"])
     out: list[dict] = []
     for c in minis:  # collapse animation double-buffers at the same spot
