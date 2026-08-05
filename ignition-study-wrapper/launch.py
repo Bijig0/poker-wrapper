@@ -415,12 +415,50 @@ _TABLE_JS = r"""(() => {
                  doc.defaultView.getComputedStyle(c.el).visibility === 'visible')
     .map(c => ({qa: c.qa, x: c.x, y: c.y, w: c.w,
                 seat: seatOf(c.el), tbl: !!(tblEl && tblEl.contains(c.el))}));
-  // Per-seat structural summary: the hooks the pure-DOM reader would key on.
-  const seatQa = [...doc.querySelectorAll("[data-qa^='playerContainer-']")].map(s => ({
-    seat: +s.getAttribute('data-qa').split('-')[1],
-    balance: !!s.querySelector("[data-qa='playerBalance']"),
-    me: !!s.querySelector("[data-qa='myPlayerTag']"),
-    nCards: s.querySelectorAll("[data-qa^='card']").length}));
+  // Per-seat structural facts, read from the client's own containment — every
+  // value the geometric _parse_seats reconstructs by proximity is available
+  // inside the seat's playerContainer, so no distances are needed.
+  //   stack  : the playerBalance hook (data-qa, stable)
+  //   bet    : the one 'X BB' money node that is NOT playerBalance
+  //   badge  : the action word (FOLD/CHECK/...), animation-doubled -> first
+  //   num    : the displayed seat number (bare single digit; differs from the
+  //            0-indexed container id and is what the WS feed keys on)
+  //   nHole  : holeCards hooks = real hole-card slots (0 = folded/not dealt)
+  const SM = /^[\d,]+(\.\d+)?\s*BB$/i;
+  const BW = /^(FOLD|CHECK|CALL|BET|RAISE|ALL[ -]?IN|POST SB|POST BB)$/i;
+  // Same visibility test the main node walk uses: the client leaves stale
+  // labels (a folded seat's old FOLD, a settled 0 BB bet) in the DOM at
+  // opacity 0, and a plain textContent read would resurrect them onto a seat
+  // that has since acted again.
+  const vw = doc.defaultView;
+  const opShown = el => {
+    for (let e = el; e && e !== doc.body; e = e.parentElement)
+      if (+vw.getComputedStyle(e).opacity < 0.5) return false;
+    return true;
+  };
+  const vis = el => el && vw.getComputedStyle(el).visibility === 'visible' && opShown(el);
+  const seatQa = [...doc.querySelectorAll("[data-qa^='playerContainer-']")].map(s => {
+    const bal = s.querySelector("[data-qa='playerBalance']");
+    let bet = null, badge = null, num = null;
+    const wk = doc.createTreeWalker(s, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = wk.nextNode())) {
+      const tx = (n.nodeValue || '').trim();
+      if (!tx) continue;
+      const pe = n.parentElement;
+      if (SM.test(tx)) { if (!(bal && bal.contains(pe)) && bet === null && vis(pe)) bet = tx; }
+      else if (BW.test(tx)) { if (badge === null && vis(pe)) badge = tx.toUpperCase(); }
+      else if (/^[1-9]$/.test(tx) && num === null) num = +tx;
+    }
+    return {
+      seat: +s.getAttribute('data-qa').split('-')[1],
+      num, me: !!s.querySelector("[data-qa='myPlayerTag']"),
+      empty: !!s.querySelector("[data-qa^='player-empty-seat']"),
+      stack: bal ? bal.textContent.trim() : null,
+      bet, badge,
+      nHole: s.querySelectorAll("[data-qa='holeCards']").length,
+    };
+  });
   // The client scales its fixed-size table with CSS `zoom`. Every coordinate
   // above is viewport pixels, so design units = (viewport - frame origin) /
   // zoom. The factor cannot be recovered from the coordinates afterwards and
@@ -718,11 +756,48 @@ def _drain_actions() -> list[dict]:
         return []
 
 
+def _seats_structural(d: dict) -> dict | None:
+    """Per-seat facts from the client's containment (seatQa), or None if the
+    capture predates the structural fields.
+
+    Every value the geometric pass reconstructs by proximity is read here from
+    inside the seat's own playerContainer: no anchor detection, no toward-centre
+    test, no 90px radius. Keyed by the DISPLAYED seat number to match the WS
+    feed and the geometric path it replaces. A seat with no displayed number or
+    no stack is UI noise (a flapping ghost seat) and is dropped, exactly as
+    before."""
+    sq = d.get("seatQa")
+    if not sq:
+        return None
+    out: dict[int, dict] = {}
+    for s in sq:
+        if s.get("empty"):
+            continue
+        num = s.get("num")
+        stack = s.get("stack")
+        if num is None or stack is None:
+            continue
+        bet = s.get("bet")
+        # "0 BB" is not a live bet — the client shows it on every idle seat.
+        if bet is not None and _pot_val(bet) == 0:
+            bet = None
+        out[num] = {
+            "stack": stack,
+            "bet": bet,
+            "badge": s["badge"].replace(" ", "-") if s.get("badge") else None,
+            "cards": s.get("nHole") or 0,
+        }
+    return out
+
+
 def _parse_seats(d: dict) -> dict:
-    """Group the frame's text nodes into per-seat facts: stack (adjacent to the
-    seat-number chip), the transient action badge above it, and chips bet in
-    front of it. Two passes so a neighbour's STACK can never be mistaken for a
-    bet, and bets must sit toward the table centre relative to their seat."""
+    """Per-seat facts: stack, the transient action badge, chips bet in front,
+    and cards held. Structural when the capture carries seatQa (read straight
+    from each playerContainer); otherwise the geometric fallback below groups
+    the frame's text nodes by proximity to the seat-number chip."""
+    structural = _seats_structural(d)
+    if structural is not None:
+        return structural
     fr = d["frame"]
     strip_y = fr["y"] + fr["h"] * 0.72
     cx, cy = fr["x"] + fr["w"] / 2, fr["y"] + fr["h"] / 2
