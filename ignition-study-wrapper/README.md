@@ -34,6 +34,28 @@ profile keeps the session across launches) and open a **practice-money** table.
   verdict — DOM-readable (CoinPoker-style feed, phase 2 gets cheap) vs
   canvas-rendered (OCR path, port the assistive-play vision pipeline).
 
+## Debug recordings (`debug/session_*/`)
+
+Toggled from the panel. Each tick writes three joinable artefacts, keyed by the
+same `seq`:
+
+| file | contents | role |
+|---|---|---|
+| `fNNNNN.jpg` | the exact frame | human adjudication only — lossy (q55 @ 0.6), never assert on it |
+| `log.jsonl` | the **parsed** state + feed tail | what we made of the table |
+| `dom.jsonl` | the **raw** `_TABLE_JS` output | what the client actually gave us |
+
+`dom.jsonl` is the one that cannot be reconstructed later. It is both the replay
+fixture for testing the reader against real DOM and the parity target any table
+replica has to match — a replica checked against our own parsed output would
+only prove the reader agrees with itself. Each entry carries the client's CSS
+`zoom` alongside viewport coordinates, so design units are
+`(viewport - frame origin) / zoom`.
+
+Costs roughly 5–8 KB/tick at the 4 Hz feed loop (~90 MB/h) on top of ~200 MB/h
+of frames; `_prune_debug` counts it against `DEBUG_BUDGET_MB` (default 2000)
+and drops oldest-first, never the newest two or any session with a `note.txt`.
+
 ## Phases
 
 1. ✅ this skeleton

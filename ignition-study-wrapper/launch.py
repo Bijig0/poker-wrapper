@@ -403,9 +403,27 @@ _TABLE_JS = r"""(() => {
   }).filter(c => /^card/.test(c.qa) && c.w >= 20 &&
                  doc.defaultView.getComputedStyle(c.el).visibility === 'visible')
     .map(c => ({qa: c.qa, x: c.x, y: c.y, w: c.w}));
+  // The client scales its fixed-size table with CSS `zoom`. Every coordinate
+  // above is viewport pixels, so design units = (viewport - frame origin) /
+  // zoom. The factor cannot be recovered from the coordinates afterwards and
+  // the frame rect is the iframe (not the felt), so it is read here or not at
+  // all. Walk up from a card: the factor is only ever set on the container,
+  // and Chrome computes unset `zoom` to "1" (not "normal") on every ancestor,
+  // so the walk must skip 1 and keep climbing rather than stop at the first
+  // parsable value. Verified: from a card 54.24px deep under a 1.4275 host the
+  // walk returns 1.4275 and 54.24/1.4275 lands back on the declared 38du.
+  const zoomOf = el => {
+    for (let e = el; e; e = e.parentElement) {
+      const z = parseFloat(doc.defaultView.getComputedStyle(e).zoom);
+      if (z && z !== 1) return z;
+    }
+    return 1;
+  };
+  const zoomRef = doc.querySelector('svg[data-qa]');
   return {seated: true, practice: (tf.src || '').includes('playMode=fun'),
           frame: {x: Math.round(fb.x), y: Math.round(fb.y),
                   w: Math.round(fb.width), h: Math.round(fb.height)},
+          zoom: zoomRef ? zoomOf(zoomRef) : 1,
           nodes: out, buttons: btns, cards: cardEls, allCards, heroMini,
           canvases: doc.querySelectorAll('canvas').length};
 })()"""
@@ -1038,7 +1056,7 @@ def _feed_tick() -> None:
         "hand": _hand_no, "pot": pot, "board": board_cards,
         "heroCards": hero_cards, "toAct": to_act, "seats": seats,
         "actions": [a["text"] for a in actions], "events": events,
-        "feedTail": [line["line"] for line in _feed[-4:]]})
+        "feedTail": [line["line"] for line in _feed[-4:]]}, raw=d)
     _feed_prev = cur
 
 
@@ -1129,7 +1147,28 @@ def _prune_debug() -> None:
             pass
 
 
-def _dbg_record(ws: str, state: dict) -> None:
+def _dbg_dom(seq: int, raw: dict | None) -> bool:
+    """Persist the tick's UNPARSED _TABLE_JS output, keyed by the same seq as
+    log.jsonl and the frame.
+
+    log.jsonl records what we MADE of the client; this is what the client
+    actually handed us. Only the raw form can (a) replay real DOM through the
+    reader in a test and (b) serve as the parity target a replica has to hit —
+    neither is reachable from parsed output, and neither can be recovered after
+    the fact, so it is captured whenever the recorder runs. Sibling file rather
+    than extra keys so log.jsonl stays skimmable by eye.
+    """
+    if not raw:
+        return False
+    try:
+        with open(os.path.join(_dbg["dir"], "dom.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"seq": seq, **raw}, ensure_ascii=False) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def _dbg_record(ws: str, state: dict, raw: dict | None = None) -> None:
     if not (_dbg["on"] and _dbg["dir"]):
         return
     try:
@@ -1137,9 +1176,11 @@ def _dbg_record(ws: str, state: dict) -> None:
         _dbg["seq"] += 1
         img = f"f{seq:05d}.jpg"
         _shot_jpeg(ws, os.path.join(_dbg["dir"], img))
+        dom = _dbg_dom(seq, raw)
         with open(os.path.join(_dbg["dir"], "log.jsonl"), "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"seq": seq, "t": time.strftime("%H:%M:%S"),
-                                 "ts": round(time.time(), 2), "png": img, **state},
+                                 "ts": round(time.time(), 2), "png": img,
+                                 "dom": dom, **state},
                                 ensure_ascii=False) + "\n")
     except Exception:
         pass  # never let the recorder break the feed
