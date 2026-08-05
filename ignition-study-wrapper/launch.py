@@ -390,8 +390,13 @@ _TABLE_JS = r"""(() => {
   const btns = [...doc.querySelectorAll('button, [role=button]')].map(el => {
     const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
     const r = el.getBoundingClientRect();
+    // The client tags each control: foldButton/callButton/raiseButton/etc are
+    // turn actions, *Selector are sizing presets, *PreselectButton are the
+    // between-turn pre-arm checkboxes. Carrying the hook lets the action/preset
+    // split read the client's own roles instead of guessing by row geometry.
     return {text: t, x: Math.round(fb.x + r.x), y: Math.round(fb.y + r.y),
-            w: Math.round(r.width), h: Math.round(r.height)};
+            w: Math.round(r.width), h: Math.round(r.height),
+            qa: el.getAttribute('data-qa') || null};
   }).filter(b => b.text && b.text.length < 40 && b.w > 0 && b.h > 0);
   // STRUCTURAL ownership, read from the client's own containment: which
   // playerContainer a card sits under, and whether it is under the table
@@ -576,11 +581,36 @@ def _hero_cards(d: dict) -> list[str]:
 _ACTION_RE = re.compile(r"^(fold|check|call|raise|bet|all[ -]?in)\b", re.I)
 
 
+# The client's own control roles. Turn actions end in "Button" (but the
+# between-turn pre-arm checkboxes end in "PreselectButton", and buyMoreChips is
+# not an action); sizing presets end in "Selector".
+_ACTION_QA = re.compile(r"^(fold|check|call|bet|raise|allIn)Button$", re.I)
+_PRESET_QA = re.compile(r"Selector$")
+
+
 def _split_strip(d: dict) -> tuple[list[dict], list[dict]]:
     """Split the bottom strip's buttons into (turn actions, sizing presets).
-    The sizing row (X2.5 / X3 / Pot / a plain ALL-IN that only SETS the raise
-    amount) is identified by its unambiguous members, then everything sharing
-    that row is a preset — so the sizing ALL-IN never poses as the shove."""
+
+    STRUCTURAL when the buttons carry the client's data-qa: fold/call/raise/etc
+    Button are actions, *Selector are sizing presets, *PreselectButton (the
+    between-turn pre-arm) is neither. This is the client's own labelling, so the
+    sizing ALL-IN (allInSelector) can never pose as the shove (raiseButton) and
+    a pre-armed Fold never counts as a live turn. Falls back to the row-geometry
+    split for captures whose buttons predate the hook."""
+    tagged = [b for b in d.get("buttons", []) if b.get("qa")]
+    if tagged:
+        actions, presets = [], []
+        for b in tagged:
+            if _ACTION_QA.match(b["qa"]):
+                actions.append(b)
+            elif _PRESET_QA.search(b["qa"]):
+                presets.append(b)
+            # everything else (buyMoreChipsButton, *PreselectButton) is ignored
+        seen: dict[str, dict] = {}
+        for a in actions:
+            seen.setdefault(a["text"].lower(), a)
+        return list(seen.values()), presets
+
     fr = d["frame"]
     bottom = fr["y"] + fr["h"] * 0.72
     strip = [b for b in d.get("buttons", []) if b["y"] + b["h"] / 2 >= bottom]
