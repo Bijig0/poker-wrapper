@@ -2367,6 +2367,17 @@ class Handler(BaseHTTPRequestHandler):
                 spec = _faketable_spec or faketable.EXAMPLE_SPEC
                 self._send(200, "text/html; charset=utf-8",
                            faketable.render_inner(spec).encode())
+            elif path.startswith("/faketable/assets/"):
+                # The replica's asset library: 104 card faces plus the five
+                # SVGs harvested from the real client (card back, chip, dealer
+                # button, watermark). Serving them here lets the fake table
+                # draw the actual Ignition art instead of coloured boxes.
+                rel = path[len("/faketable/assets/"):]
+                got = faketable.asset(rel)
+                if got:
+                    self._send(200, got[1], got[0])
+                else:
+                    self._send(404, "text/plain", b"no asset")
             elif path == "/faketable/lastclick":
                 # What the relay actually pressed on the fake page — the
                 # page records every button click into window.__lastClick.

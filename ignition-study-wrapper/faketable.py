@@ -1,28 +1,96 @@
-"""Fake Ignition table: render a game-state spec as the exact DOM contract the
-reader consumes, so the study panel can be tested locally against any state.
+"""Fake Ignition table: render a game-state spec as a faithful local table.
 
-This is NOT the replica (that draws a pretty table for human review). This
-emits the CLIENT's structural contract — the data-qa hooks and containment
-_TABLE_JS keys on — so the wrapper reads a specified state exactly as it reads
-real Ignition: same playerContainer-N seats, same playerBalance/myPlayerTag/
-holeCards/card<N>, same [data-qa='table'] board, same fold/call/raise buttons.
+Two jobs at once, and both matter:
 
-Two documents, mirroring the client: an OUTER page holding an <iframe> whose
-src carries `playMode` (what _TABLE_JS searches for), and the INNER frame
-carrying the table itself. Same origin, so contentDocument is readable.
+  * STRUCTURE — it emits the client's own DOM contract (the data-qa hooks and
+    containment _TABLE_JS keys on), so the wrapper reads a specified state
+    exactly as it reads real Ignition: playerContainer-N seats carrying
+    playerBalance / myPlayerTag / holeCards, board card<N> svgs under
+    [data-qa='table'] and under no seat, and fold/call/raise/*Selector
+    controls.
 
-The spec is the single source; the wrapper stores the current one and both
-routes render from it. See CONTRACT-faketable below for the shape.
+  * APPEARANCE — the geometry and art are the replica's, not invented here.
+    Every constant below was measured off the live client (see
+    gto-trainer/apps/dashboard/src/components/table/types.ts, whose comments
+    record how each was measured and how it was mismeasured first), and the
+    card faces, card back, chip, dealer button and watermark are the real
+    assets — the last four harvested from the client's own DOM.
+
+Keeping both in one document is the point: what the reader parses and what a
+human eyeballs are then guaranteed to be the same table.
+
+Layout mirrors the client exactly: an 800x400 "design unit" seat container
+inset inside a larger painted felt, scaled to the window with CSS `zoom`.
 """
 from __future__ import annotations
 
 import html
-import json
+import mimetypes
+from pathlib import Path
 
-# Card id = suit*13 + rank, suit c/d/h/s = 0..3, rank A,2..T,J,Q,K = 0..12 —
-# the client's own encoding, inverse of launch._card_name.
+ROOT = Path(__file__).resolve().parent
+# The replica's asset library (card faces + the SVGs harvested from the client).
+ASSETS = ROOT.parent / "gto-trainer" / "apps" / "dashboard" / "public"
+
 _RANKS = "A23456789TJQK"
 _SUITS = "cdhs"
+_GLYPH = {"s": "♠", "h": "♥", "d": "♦", "c": "♣"}
+
+# ---- geometry, measured off the live client (types.ts) ---------------------
+DESIGN = (800, 400)
+FELT = (955, 512)
+SEAT_INSET = (77.5, 16.7)
+OVAL = (162, 107, 476, 186)
+POT_PILL = (340, 124, 120, 21)
+BOARD_BOX = (251, 176)
+SEAT_BOX = (114, 100)
+HEADER_H = 26
+CARD_ASPECT = 100 / 150
+
+SEAT_MAPS = {
+    6: [(343, 290), (63, 236), (63, 66), (343, 14), (623, 66), (623, 236)],
+    9: [(343, 290), (183, 279), (45, 210), (51, 66), (234, 8),
+        (452, 8), (636, 66), (641, 210), (502, 279)],
+}
+# Per-seat bet-chip anchors: the client places each seat's chips on the side
+# facing the table centre, so this is a lookup, not a uniform offset.
+CHIPS = {
+    # Slot 3 (6-max top-centre) is the one anchor types.ts flags as UNVERIFIED —
+    # it borrows the 9-max top seats' offset and was never observed with a bet.
+    # Borrowed verbatim it lands at (377,123), straight on top of the measured
+    # pot pill at (340,124): the top seat's chips and the pot readout overwrite
+    # each other whenever the button bets. Nudged left of the pill instead. The
+    # 9-max top seats sit at x=234/452 and clear the pill on their own.
+    6: [(34.7, -10), (96, 25), (118, 93), (-66, 100), (-48.6, 93), (-26.6, 25)],
+    9: [(34.7, -10), (34.7, 5), (96, 25), (118, 93), (34.7, 109),
+        (34.7, 109), (-48.6, 93), (-26.6, 25), (34.7, 5)],
+}
+PILL = dict(x=0, y=58, w=114, h=28, radius=50)
+BADGE = dict(d=24, x=3)
+STRIP = dict(y=72, h=29, visible=15)
+HOLE = dict(w=36, pitch=39, x=18, y=7.3)
+VILLAIN = dict(w=30, pitch=32, x=25, y=24.3)
+BOARD_CARD = dict(w=51, pitch=61)
+ACTION_BAR = dict(h=76, btn_w=132, btn_h=40, raise_h=48, gap=10)
+
+FELT_RED = ("radial-gradient(rgb(204,0,0) 0%, rgb(109,0,0) 80%, "
+            "rgb(70,2,2) 100%)")
+C = dict(oval="rgba(255,255,255,0.2)", pill="#ffffff",
+         pill_folded="rgba(196,214,217,0.45)", badge="#00c9b7",
+         pot_bg="rgba(0,0,0,0.25)", chip_bg="rgba(0,0,0,0.3)",
+         strip="#00c9b7", strip_fold="rgba(0,0,0,0.45)", text="#0b1516")
+
+
+def asset(rel: str) -> tuple[bytes, str] | None:
+    """Serve one file from the replica's public/ directory. Path-checked: only
+    files that really sit under ASSETS are returned."""
+    try:
+        p = (ASSETS / rel).resolve()
+        if not str(p).startswith(str(ASSETS.resolve())) or not p.is_file():
+            return None
+        return p.read_bytes(), mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    except OSError:
+        return None
 
 
 def display_card(code: str) -> str:
@@ -30,116 +98,204 @@ def display_card(code: str) -> str:
     output), which _hand_state shortens back to solver form at the boundary."""
     c = code.strip()
     r = "10" if c[0].upper() == "T" or c.startswith("10") else c[0].upper()
-    s = {"s": "♠", "h": "♥", "d": "♦", "c": "♣"}[c[-1].lower()] \
-        if c[-1].lower() in "shdc" else c[-1]
+    s = _GLYPH.get(c[-1].lower(), c[-1])
     return r + s
 
 
 def encode_card(code: str) -> int:
-    """"Ah" -> 26. Accepts "10♥"/"Th"/"AS" forms."""
+    """"Ah" -> 26, the client's own id (suit*13 + rank, ace low)."""
     c = code.strip().replace("10", "T")
     r = _RANKS.index(c[0].upper())
-    suit_ch = {"♠": "s", "♥": "h", "♦": "d", "♣": "c"}.get(c[-1], c[-1].lower())
-    s = _SUITS.index(suit_ch)
-    return s * 13 + r
+    suit = {v: k for k, v in _GLYPH.items()}.get(c[-1], c[-1].lower())
+    return _SUITS.index(suit) * 13 + r
 
 
-def _card_svg(code: str, w: int = 40) -> str:
-    """A card element the reader recognises: <svg data-qa='card<N>'>. The inner
-    shapes are irrelevant to a structural read; width carries the geometry the
-    fallback path and the replica-side classifier still sample."""
+def _art(code: str, kind: str) -> str:
+    c = code.strip().replace("10", "T")
+    suit = {v: k for k, v in _GLYPH.items()}.get(c[-1], c[-1].lower())
+    return f"/faketable/assets/cards/{kind}/{c[0].upper()}{suit}.png"
+
+
+def _card(code: str, w: float, kind: str) -> str:
+    """A real card. The element is an <svg data-qa='card<N>'> because that is
+    what the reader looks for; the face is the replica's own art, drawn inside
+    it. Height is derived from the width via the 2:3 aspect every client card
+    svg uses, so faces are never stretched."""
+    h = w / CARD_ASPECT
     n = encode_card(code)
-    h = round(w * 1.5)
-    return (f"<svg data-qa='card{n}' width='{w}' height='{h}' "
-            f"style='width:{w}px;height:{h}px;display:inline-block'>"
-            f"<rect width='{w}' height='{h}' rx='3' fill='#fff'/></svg>")
+    return (f"<svg data-qa='card{n}' width='{w:.1f}' height='{h:.1f}' "
+            f"viewBox='0 0 100 150' style='display:block;border-radius:{w*0.09:.1f}px;"
+            f"box-shadow:0 1px 3px rgba(0,0,0,.55);background:#fff'>"
+            f"<image href='{_art(code, kind)}' width='100' height='150' "
+            f"preserveAspectRatio='none'/></svg>")
 
 
-def _back_svg(w: int = 40) -> str:
-    """Face-down card: the hidden sentinel id (-1), still under holeCards so it
-    counts toward the seat's card total without leaking identity."""
-    h = round(w * 1.5)
-    return (f"<svg data-qa='card-1' width='{w}' height='{h}' "
-            f"style='width:{w}px;height:{h}px;display:inline-block'>"
-            f"<rect width='{w}' height='{h}' rx='3' fill='#356'/></svg>")
+def _back(w: float) -> str:
+    """Face-down card: the client's own back art, under the hidden sentinel id."""
+    h = w / CARD_ASPECT
+    return (f"<svg data-qa='card-1' width='{w:.1f}' height='{h:.1f}' "
+            f"viewBox='0 0 100 150' style='display:block;border-radius:{w*0.09:.1f}px;"
+            f"box-shadow:0 1px 3px rgba(0,0,0,.55)'>"
+            f"<image href='/faketable/assets/ign/card-back.svg' width='100' height='150' "
+            f"preserveAspectRatio='none'/></svg>")
 
 
 def _bb(v) -> str:
     if v is None:
         return ""
-    return f"{v:g} BB"
+    return f"{float(v):g} BB"
 
 
-def _seat_html(num: int, s: dict, is_hero: bool, w: int) -> str:
-    """One playerContainer-N. `num` is the DISPLAYED seat number (what the WS
-    feed and _parse_seats key on); the container index is num-1 for a 1-based
-    table, but the reader reads the displayed number from the bare digit, so
-    both are emitted consistently."""
+def _seat(num: int, slot: int, s: dict, is_hero: bool, cap: int,
+          hero_cards: list[str], dealer: bool, acting: bool) -> str:
+    """One playerContainer-N, laid out exactly as the replica lays out a seat."""
+    ox, oy = SEAT_MAPS[cap][slot]
     idx = num - 1
+    box = (f"position:absolute;left:{ox}px;top:{oy}px;"
+           f"width:{SEAT_BOX[0]}px;height:{SEAT_BOX[1]}px")
+
     if s.get("empty"):
-        return (f"<div data-qa='playerContainer-{idx}' class='seat'>"
-                f"<div data-qa='player-empty-seat-panel'>"
-                f"<div data-qa='player-empty-seat-label'>Vacant seat</div></div></div>")
+        return (
+            f"<div data-qa='playerContainer-{idx}' style='{box};display:flex;"
+            f"flex-direction:column;align-items:center;justify-content:center;gap:5px;"
+            f"color:rgba(255,255,255,.55)'>"
+            f"<div data-qa='player-empty-seat-panel' style='display:flex;flex-direction:column;"
+            f"align-items:center;gap:5px'>"
+            f"<div style='width:32px;height:32px;border-radius:50%;"
+            f"border:1.5px solid rgba(255,255,255,.5);display:flex;align-items:center;"
+            f"justify-content:center'>"
+            f"<svg width='17' height='17' viewBox='0 0 24 24'>"
+            f"<circle cx='12' cy='8.2' r='3.6' fill='currentColor'/>"
+            f"<path d='M4.6 20c0-4 3.3-6.2 7.4-6.2S19.4 16 19.4 20Z' fill='currentColor'/>"
+            f"</svg></div>"
+            f"<div data-qa='player-empty-seat-label' style='font-size:9px;text-align:center;"
+            f"line-height:1.2'>Vacant<br>seat</div></div></div>")
 
-    # Hole cards under holeCards hooks: hero shows faces, live villains show
-    # backs, folded/empty shows none — matching the renderer's own contract.
-    cards = s.get("cards")
-    hole = ""
-    if is_hero and s.get("heroCards"):
-        hole = "".join(
-            f"<div data-qa='holeCards'>{_card_svg(c, round(w * 0.9))}</div>"
-            for c in s["heroCards"])
-    elif cards:
-        hole = "".join(
-            f"<div data-qa='holeCards'>{_back_svg(round(w * 0.75))}</div>"
-            for _ in range(int(cards)))
+    folded = not s.get("cards")
+    cw = HOLE if is_hero else VILLAIN
 
-    bet = s.get("bet")
-    bet_html = f"<div class='bet'>{_bb(bet)}</div>" if bet else ""
+    # Hole cards: hero shows faces, a live villain shows backs. They tuck BEHIND
+    # the stack pill by design, so the pill carries a z-index above them.
+    cards_html = ""
+    if is_hero and hero_cards:
+        cards_html = "".join(
+            f"<div data-qa='holeCards' style='position:absolute;left:{i*cw['pitch']}px;top:0'>"
+            f"{_card(c, cw['w'], 'hole')}</div>"
+            for i, c in enumerate(hero_cards))
+    elif not folded:
+        cards_html = "".join(
+            f"<div data-qa='holeCards' style='position:absolute;left:{i*cw['pitch']}px;top:0'>"
+            f"{_back(cw['w'])}</div>"
+            for i in range(int(s.get("cards") or 2)))
+    cards_block = (f"<div style='position:absolute;left:{cw['x']}px;top:{cw['y']}px;"
+                   f"opacity:{0.4 if folded else 1}'>{cards_html}</div>"
+                   if cards_html else "")
+
+    # Status strip, sliding out from under the pill.
     badge = s.get("badge")
-    badge_html = f"<div class='badge'>{html.escape(str(badge))}</div>" if badge else ""
-    tag_open = "<div data-qa='myPlayerTag'>" if is_hero else "<div class='tag'>"
+    strip = ""
+    if badge:
+        strip = (
+            f"<div style='position:absolute;left:{PILL['x']}px;top:{STRIP['y']}px;"
+            f"width:{PILL['w']}px;height:{STRIP['h']}px;"
+            f"background:{C['strip_fold'] if folded else C['strip']};"
+            f"border-radius:4px 4px 6px 6px;color:#fff;font-size:12px;font-weight:700;"
+            f"letter-spacing:.3px;display:flex;align-items:center;justify-content:center;"
+            f"padding-top:{STRIP['h']-STRIP['visible']}px'>{html.escape(str(badge))}</div>")
 
-    # Seat number (bare digit) + playerBalance inside the name tag, exactly as
-    # the client nests them (textContent of myPlayerTag reads "3245.4 BB").
-    return (
-        f"<div data-qa='playerContainer-{idx}' class='seat'>"
+    # Committed chips, in front of the seat, at this seat's own anchor.
+    bet = s.get("bet")
+    chips = ""
+    if bet:
+        bx, by = CHIPS[cap][slot]
+        chips = (
+            f"<div style='position:absolute;left:{bx}px;top:{by}px;height:15px;"
+            f"display:flex;align-items:center;gap:3px'>"
+            f"<span style='background:{C['chip_bg']};border-radius:9999px;padding:0 6px;"
+            f"color:#fff;font-size:12px;line-height:15px;white-space:nowrap'>{_bb(bet)}</span>"
+            f"<img src='/faketable/assets/ign/chip-icon.svg' style='width:14px;height:15px;"
+            f"display:block'></div>")
+
+    halo = ""
+    if acting:
+        halo = (f"<div style='position:absolute;left:{SEAT_BOX[0]/2}px;"
+                f"top:{PILL['y']+PILL['h']/2}px;width:160px;height:160px;"
+                f"transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;"
+                f"background:radial-gradient(circle,rgba(255,255,255,.13) 38%,"
+                f"rgba(255,255,255,.05) 58%,transparent 68%)'></div>")
+
+    dealer_btn = ""
+    if dealer:
+        dx = -8 if ox > 400 else SEAT_BOX[0] - 8
+        dealer_btn = (
+            f"<div style='position:absolute;left:{dx}px;top:{PILL['y']-6}px;width:17px;"
+            f"height:17px;border-radius:50%;background:#e6e6e6;"
+            f"border:.5px solid rgba(0,0,0,.3);display:flex;align-items:center;"
+            f"justify-content:center;z-index:3'>"
+            f"<img src='/faketable/assets/ign/dealer-d.svg' style='width:10px;height:10px;"
+            f"display:block'></div>")
+
+    # The stack pill. myPlayerTag marks hero — the hook the reader keys on.
+    tag_open = ("<div data-qa='myPlayerTag' style='display:contents'>" if is_hero
+                else "<div style='display:contents'>")
+    pill = (
         f"{tag_open}"
-        f"<span class='seatnum'>{num}</span>"
-        f"<span data-qa='playerBalance'>{_bb(s.get('stack'))}</span>"
-        f"</div>"
-        f"{badge_html}{bet_html}"
-        f"<div class='hole'>{hole}</div>"
-        f"</div>"
-    )
+        f"<div style='position:absolute;left:{PILL['x']}px;top:{PILL['y']}px;"
+        f"width:{PILL['w']}px;height:{PILL['h']}px;border-radius:{PILL['radius']}px;"
+        f"background:{C['pill_folded'] if folded else C['pill']};"
+        f"box-shadow:0 1px 10px 4px rgba(0,0,0,.5);display:flex;align-items:center;"
+        f"z-index:2'>"
+        f"<span style='width:{BADGE['d']}px;height:{BADGE['d']}px;margin-left:{BADGE['x']}px;"
+        f"flex:0 0 auto;border-radius:50%;"
+        f"background:{'rgba(0,201,183,.5)' if folded else C['badge']};color:#fff;"
+        f"font-size:12px;font-weight:700;display:flex;align-items:center;"
+        f"justify-content:center'>{num}</span>"
+        f"<span data-qa='playerBalance' style='flex:1;text-align:center;padding-right:6px;"
+        f"font-size:16px;font-weight:700;color:{C['text']};"
+        f"opacity:{0.7 if folded else 1}'>{_bb(s.get('stack'))}</span>"
+        f"</div></div>")
+
+    return (f"<div data-qa='playerContainer-{idx}' style='{box}'>"
+            f"{halo}{chips}{cards_block}{strip}{pill}{dealer_btn}</div>")
 
 
-def _button(qa: str, label: str) -> str:
-    return (f"<button data-qa='{qa}' class='act'>{html.escape(label)}</button>")
+def _button(qa: str, label: str, kind: str = "action") -> str:
+    h = ACTION_BAR["raise_h"] if qa == "raiseButton" else ACTION_BAR["btn_h"]
+    bg = "rgba(0,0,0,0.3)" if qa == "raiseButton" else (
+        "rgba(255,255,255,0.25)" if kind == "preset" else "rgba(0,0,0,0.55)")
+    fs = 10 if kind == "preset" else 14
+    w = 97.8 if kind == "preset" else ACTION_BAR["btn_w"]
+    return (f"<button data-qa='{qa}' style='width:{w}px;height:{h}px;border:0;"
+            f"border-radius:8px;background:{bg};color:#fff;font:inherit;font-size:{fs}px;"
+            f"font-weight:600;cursor:pointer;white-space:pre-line'>"
+            f"{html.escape(label)}</button>")
 
 
 def render_inner(spec: dict) -> str:
-    """The table frame document: every hook the structural reader consumes."""
-    w = 40
-    cap = int(spec.get("capacity", 6))
-    hero = spec.get("heroSeat")
-    seats_in = spec.get("seats", {})
+    cap = 9 if int(spec.get("capacity", 6)) > 6 else 6
+    hero = int(spec.get("heroSeat") or 1)
+    dealer = spec.get("dealerSeat")
+    seats_in = spec.get("seats") or {}
+    to_act = (spec.get("node") or {}).get("toActSeat")
+    hero_cards = [c for c in (spec.get("heroCards") or [])]
 
-    seat_divs = []
-    for num in range(1, cap + 1):
-        s = seats_in.get(str(num)) or seats_in.get(num) or {"empty": True}
-        if num == hero and spec.get("heroCards"):
-            s = {**s, "heroCards": spec["heroCards"]}
-        seat_divs.append(_seat_html(num, s, num == hero, w))
+    # Hero is pinned bottom-centre (slot 0) and the ring rotates around them —
+    # the client's own convention, which is why the seat maps are lookups.
+    order = [((hero - 1 + i) % cap) + 1 for i in range(cap)]
+    seat_html = "".join(
+        _seat(num, slot, seats_in.get(str(num)) or seats_in.get(num) or {"empty": True},
+              num == hero, cap, hero_cards, num == dealer, num == to_act)
+        for slot, num in enumerate(order))
 
-    # Board under [data-qa='table'] and under NO seat -> structural board.
+    # The board is a STATIC five-slot rack the client fills left to right, so
+    # the flop never moves when the turn and river land.
     board = spec.get("board") or []
-    board_svgs = "".join(_card_svg(c, 51) for c in board)
-    placeholders = "".join(
-        f"<svg data-qa='card-placeholder' width='51' height='76'></svg>"
-        for _ in range(max(0, 5 - len(board))))
+    bx, by = BOARD_BOX
+    board_html = "".join(
+        f"<div style='position:absolute;left:{i*BOARD_CARD['pitch']}px;top:0'>"
+        f"{_card(c, BOARD_CARD['w'], 'board')}</div>"
+        for i, c in enumerate(board))
 
-    # Action strip: only what the node offers.
     offer = spec.get("offer") or {}
     strip = []
     if offer.get("fold"):
@@ -152,48 +308,78 @@ def render_inner(spec: dict) -> str:
         strip.append(_button("betButton", f"BET {_bb(offer['bet'])}"))
     if offer.get("raise") is not None:
         strip.append(_button("raiseButton", f"RAISE TO {_bb(offer['raise'])}"))
-    for sel in offer.get("selectors") or []:
-        qa = {"X2.5": "x2.5Selector", "X3": "x3Selector", "X4": "x4Selector",
+    sel_qa = {"X2.5": "x2.5Selector", "X3": "x3Selector", "X4": "x4Selector",
               "Pot": "potSelector", "1/3 Pot": "third_potSelector",
-              "3/4 Pot": "threeQuarter_potSelector",
-              "ALL-IN": "allInSelector"}.get(sel, f"{sel}Selector")
-        strip.append(_button(qa, sel))
+              "3/4 Pot": "threeQuarter_potSelector", "ALL-IN": "allInSelector"}
+    presets = [_button(sel_qa.get(s, f"{s}Selector"), s, "preset")
+               for s in offer.get("selectors") or []]
 
     title = html.escape(spec.get("title") or "$1/$2 No Limit Hold'em")
     pot = _bb(spec.get("potBB"))
+    fw, fh = FELT
+    total_h = fh + HEADER_H + (ACTION_BAR["h"] if strip or presets else 0)
+    ix, iy = SEAT_INSET
+    ox_, oy_, ow, oh = OVAL
+    px, py, pw, ph = POT_PILL
+
+    pot_html = (f"<div style='position:absolute;left:{px}px;top:{py}px;width:{pw}px;"
+                f"height:{ph}px;border-radius:9999px;background:{C['pot_bg']};color:#fff;"
+                f"font-size:13px;display:flex;align-items:center;justify-content:center'>"
+                f"Total pot:&nbsp;<b>{pot}</b></div>") if pot else ""
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-  body {{ margin:0; font-family:Roboto,system-ui,sans-serif; background:#123; color:#fff; }}
-  [data-qa='table'] {{ position:relative; width:800px; height:400px; margin:0 auto; }}
-  .title {{ padding:4px 8px; background:rgba(0,0,0,.45); font-size:12px; }}
-  .board {{ text-align:center; padding:8px; }}
-  .seats {{ display:flex; flex-wrap:wrap; gap:6px; padding:8px; }}
-  .seat {{ border:1px solid #345; border-radius:6px; padding:4px 8px; min-width:120px; }}
-  .seatnum {{ display:inline-block; width:16px; }}
-  .badge {{ font-size:11px; color:#0c9; font-weight:700; }}
-  .bet {{ font-size:11px; }}
-  .hole svg {{ margin:1px; }}
-  .strip {{ position:fixed; bottom:0; left:0; right:0; text-align:center;
-            padding:8px; background:rgba(0,0,0,.35); }}
-  .act {{ font:inherit; font-weight:700; margin:0 4px; padding:8px 14px;
-          border:0; border-radius:8px; background:#0a2233; color:#fff; cursor:pointer; }}
+  html,body {{ margin:0; background:#0b1416; overflow:hidden; }}
+  #felt {{ position:relative; width:{fw}px; height:{total_h}px;
+           background:{FELT_RED}; font-family:Roboto,system-ui,sans-serif;
+           user-select:none; }}
 </style></head><body>
-<div class='title'>&#9432; {title}</div>
-<div data-qa='table'>
-  <div class='board'>Total pot: <b>{pot}</b><div>{board_svgs}{placeholders}</div></div>
-  <div class='seats'>{''.join(seat_divs)}</div>
+<div id='felt'>
+  <div style='position:absolute;inset:0;pointer-events:none;opacity:.35;
+       background-image:radial-gradient(rgba(0,0,0,.05) 1px, transparent 1px);
+       background-size:20px 20px'></div>
+  <div style='position:absolute;left:{ix}px;top:{HEADER_H + iy}px;width:{DESIGN[0]}px;
+       height:{DESIGN[1]}px;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;gap:6px;opacity:.12;pointer-events:none'>
+    <img src='/faketable/assets/ign/watermark-flame.svg' style='width:38px'>
+    <img src='/faketable/assets/ign/watermark-text.svg' style='width:90px'>
+  </div>
+  <div style='position:absolute;left:0;right:0;top:0;height:{HEADER_H}px;
+       background:rgba(0,0,0,.45);display:flex;align-items:center;padding:0 10px;gap:8px;
+       color:rgba(255,255,255,.9);font-size:12px'>
+    <span style='opacity:.6'>&#9432;</span><span>{title}</span>
+    <span style='margin-left:auto;opacity:.6'>&#10005;</span>
+  </div>
+  <div data-qa='table' style='position:absolute;left:{ix}px;top:{HEADER_H + iy}px;
+       width:{DESIGN[0]}px;height:{DESIGN[1]}px'>
+    <div style='position:absolute;left:{ox_}px;top:{oy_}px;width:{ow}px;height:{oh}px;
+         border-radius:9999px;border:2px solid {C['oval']};box-sizing:border-box'></div>
+    {pot_html}
+    <div style='position:absolute;left:{bx}px;top:{by}px'>{board_html}</div>
+    {seat_html}
+  </div>
+  <div style='position:absolute;left:0;right:0;top:{fh + HEADER_H}px;
+       height:{ACTION_BAR['h']}px;background:rgba(0,0,0,.35);display:flex;
+       align-items:center;justify-content:center;gap:{ACTION_BAR['gap']}px'>
+    {''.join(strip)}
+    <div style='display:flex;gap:6px'>{''.join(presets)}</div>
+  </div>
 </div>
-<div class='strip'>{''.join(strip)}</div>
 <script>
-  // Echo every button click so the relay test can assert what actually fired
-  // (act() dispatches a real CDP click at the button's centre). Recorded on
-  // BOTH windows: the buttons live in this frame, but the CDP page target the
-  // reader drives is the top document, and that is where the test looks.
+  // Scale to the window the way the client does — CSS zoom, so descendants
+  // keep laying out in design units and the reader's geometry stays readable.
+  const fit = () => {{ document.getElementById('felt').style.zoom =
+      Math.min(1, window.innerWidth / {fw}); }};
+  fit(); window.addEventListener('resize', fit);
+  // Echo every button click so the relay test can assert what actually fired.
+  // Recorded on BOTH windows: the buttons live in this frame, but the CDP
+  // page target the reader drives is the top document.
   document.querySelectorAll('button[data-qa]').forEach(b => b.addEventListener('click', () => {{
     const hit = {{ qa: b.getAttribute('data-qa'), text: b.innerText, t: Date.now() }};
     window.__lastClick = hit;
-    try {{ window.parent.__lastClick = hit; }} catch (e) {{ /* same origin, cannot fail */ }}
+    try {{ window.parent.__lastClick = hit; }} catch (e) {{}}
   }}));
 </script>
 </body></html>"""
@@ -201,22 +387,21 @@ def render_inner(spec: dict) -> str:
 
 def render_outer(frame_url: str) -> str:
     """The top page: an iframe whose src carries `playMode`, which is how
-    _TABLE_JS locates the table frame. `playMode=fun` marks it practice so the
-    study path treats it like a play-money table."""
+    _TABLE_JS locates the table frame. `playMode=fun` marks it practice."""
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <title>Fake Ignition Table (test)</title>
-<style>html,body{{margin:0;height:100%}}iframe{{border:0;width:100%;height:100vh}}</style>
+<style>html,body{{margin:0;height:100%;background:#0b1416}}
+iframe{{border:0;width:100%;height:100vh;display:block}}</style>
 </head><body>
 <iframe src="{html.escape(frame_url)}"></iframe>
 </body></html>"""
 
 
-# CONTRACT-faketable — the spec shape (a superset of the render fields; the node
-# fields drive Phase 2's /hand and Study Answers, ignored by the DOM render):
+# CONTRACT-faketable — the spec shape:
 #   title, capacity, potBB, board[], heroSeat, dealerSeat, heroCards[],
 #   seats { "<num>": {stack, bet, badge, cards, empty} },
 #   offer { fold, check, call, bet, raise, selectors[] },
-#   node  { positions{}, actions[], street, toCall, ... }   # Phase 2
+#   node  { dealt[], toActSeat, committed{}, maxBet, actions[] }
 EXAMPLE_SPEC = {
     "title": "$1/$2 No Limit Hold'em",
     "capacity": 6,
@@ -226,18 +411,14 @@ EXAMPLE_SPEC = {
     "dealerSeat": 1,
     "heroCards": ["Th", "Td"],
     "seats": {
-        "1": {"stack": 98.6, "bet": 24.8, "badge": None, "cards": 2},
-        "2": {"stack": 140.4, "cards": 2},
-        "3": {"stack": 54.6, "cards": 2},
+        "1": {"stack": 98.6, "bet": 24.8, "badge": "BET", "cards": 2},
+        "2": {"stack": 140.4, "cards": 0},
+        "3": {"stack": 54.6, "cards": 0},
         "4": {"stack": 97.2, "cards": 2},
-        "5": {"stack": 100, "cards": 2},
-        "6": {"stack": 84.2, "cards": 2},
+        "5": {"stack": 100, "cards": 0},
+        "6": {"stack": 84.2, "cards": 0},
     },
-    "offer": {"fold": True, "check": True, "bet": 1,
-              "selectors": ["1/3 Pot", "3/4 Pot", "Pot", "ALL-IN"]},
+    "offer": {"fold": True, "call": 24.8, "raise": 60,
+              "selectors": ["Pot", "ALL-IN"]},
+    "node": {"toActSeat": 4},
 }
-
-
-if __name__ == "__main__":
-    # Emit the example inner frame for eyeballing.
-    print(render_inner(EXAMPLE_SPEC))
