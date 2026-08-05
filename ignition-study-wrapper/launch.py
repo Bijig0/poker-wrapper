@@ -2204,6 +2204,9 @@ class Handler(BaseHTTPRequestHandler):
                               str(body.get("kind", "action"))[:12])
                 print(f"[act] {body.get('label') or body.get('amount')!r} -> {res}")
                 self._send(200, "application/json", json.dumps(res).encode())
+            elif path == "/quit":                # a new instance is taking over
+                self._send(200, "application/json", b'{"ok": true}')
+                threading.Thread(target=_stand_down, daemon=True).start()
             elif path == "/layout":
                 res = apply_layout()
                 print(f"[layout] -> {res}")
@@ -2275,27 +2278,140 @@ def _server_alive() -> bool:
         return False
 
 
+def _sibling_pids() -> list[int]:
+    """Live processes running THIS script, excluding us.
+
+    Matched on the script path in the command line rather than on the port or
+    a pid file: an instance that lost a bind race, or crashed before writing
+    anything, still sits there running its own copy of this file — and that is
+    exactly the stray that makes edits look like they did nothing. Two were
+    found running for hours.
+
+    The path match is deliberately narrow: the CoinPoker wrapper is a sibling
+    script sharing this venv and must never be caught here.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return []
+    me = os.getpid()
+    here = str(Path(__file__).resolve()).lower()
+    out = []
+    try:
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            if p.info["pid"] == me:
+                continue
+            for a in p.info.get("cmdline") or []:
+                if not a.lower().endswith("launch.py"):
+                    continue
+                try:
+                    if str(Path(a).resolve()).lower() == here:
+                        out.append(p.info["pid"])
+                except OSError:
+                    pass
+                break
+    except Exception:
+        return out
+    return out
+
+
+def _takeover() -> None:
+    """Replace any previous instance rather than deferring to it.
+
+    The icon is the only control the user has, so relaunching from it must be
+    enough to pick up a new build. The old behaviour — spot a live sibling,
+    ensure the windows are up, exit — left an instance started hours earlier
+    serving its own stale copy of this file, invisible from the outside with
+    no obvious way to stop it.
+
+    Ask politely first so the hand in flight is archived, then terminate
+    whatever is still standing.
+    """
+    if _server_alive():
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{PANEL_PORT}/quit", method="POST"), timeout=3)
+            print("[panel] asked the running instance to stand down")
+        except Exception:
+            pass
+        for _ in range(24):                      # ~6 s for a clean exit
+            if not _server_alive():
+                break
+            time.sleep(0.25)
+
+    stale = _sibling_pids()
+    if not stale:
+        return
+    try:
+        import psutil
+    except ImportError:
+        return
+    procs = []
+    for pid in stale:
+        try:
+            p = psutil.Process(pid)
+            p.terminate()
+            procs.append(p)
+        except Exception:
+            pass
+    gone, alive = psutil.wait_procs(procs, timeout=4)
+    for p in alive:                              # wedged: no longer negotiable
+        try:
+            p.kill()
+        except Exception:
+            pass
+    print(f"[panel] replaced previous instance(s): {stale}")
+
+
+def _stand_down() -> None:
+    """Archive the hand in flight, then go. Runs off the request thread so the
+    /quit response is delivered before the process ends.
+
+    os._exit rather than srv.shutdown(): the main thread parks in a long sleep
+    and the tap/feed threads are daemons, so a graceful shutdown would leave
+    the process alive and the port held — the very thing being fixed.
+    """
+    time.sleep(0.2)
+    try:
+        _archive_hand()
+    except Exception:
+        pass
+    print("[panel] standing down for a new instance")
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+
 def main() -> None:
-    # One-click friendly: if another instance already serves the panel, don't
-    # start a second server — just make sure the windows are open, then bow
-    # out. NB: reuse must be OFF or Windows lets a second listener bind the
-    # port silently.
+    # Launching REPLACES whatever was running. Deferring to a live sibling is
+    # what let an hours-old process keep serving stale code with the icon as
+    # the user's only control.
     class _Srv(ThreadingHTTPServer):
         allow_reuse_address = False
 
-    # Named mutex = atomic single-instance guard (HTTP probes and bind races
-    # both lose sub-second double-launch races; this can't).
+    _takeover()
+
+    # The mutex still guards the sub-second double-click: two icons clicked
+    # together both find nothing to take over, and only this separates them.
+    # Created AFTER the takeover, or we would race the instance we just asked
+    # to exit.
     ctypes.windll.kernel32.CreateMutexW(None, False, "IgnitionStudyPanelServer")
     already = ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
 
     srv = None
-    if already or _server_alive():
-        print(f"[panel] server already running on :{PANEL_PORT} — reusing it")
+    if already:
+        print("[panel] another launch is starting up — deferring to it")
     else:
-        try:
-            srv = _Srv(("127.0.0.1", PANEL_PORT), Handler)
-        except OSError:
-            print(f"[panel] port :{PANEL_PORT} busy — reusing existing server")
+        for _ in range(12):              # the dead listener releases the port
+            try:                          # a moment after its process goes
+                srv = _Srv(("127.0.0.1", PANEL_PORT), Handler)
+                break
+            except OSError:
+                time.sleep(0.25)
+        if srv is None:
+            print(f"[panel] port :{PANEL_PORT} still held — reusing existing server")
     if srv:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         threading.Thread(target=_feed_loop, daemon=True).start()
