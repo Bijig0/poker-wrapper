@@ -46,6 +46,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "aof-model"))
 from scout import cdp  # noqa: E402  (reuses the Windows-validated CDP reader)
+import faketable  # noqa: E402  (local fake-Ignition renderer for the state tester)
+
+# The game-state spec the /faketable routes render. Set via POST /faketable/spec
+# by the tester; None falls back to faketable.EXAMPLE_SPEC.
+_faketable_spec: dict | None = None
 
 # Under pythonw (the desktop shortcut) there is no console: sys.stdout is None
 # and any print() would crash. Route output to the log file instead.
@@ -2313,6 +2318,16 @@ class Handler(BaseHTTPRequestHandler):
                            json.dumps(state(light=light)).encode())
             elif path == "/table":
                 self._send(200, "application/json", json.dumps(table_state()).encode())
+            elif path == "/faketable":
+                # Outer page: an iframe whose src carries playMode, so the
+                # reader's frame search finds the table below.
+                self._send(200, "text/html; charset=utf-8",
+                           faketable.render_outer("/faketable/frame?playMode=fun")
+                           .encode())
+            elif path == "/faketable/frame":
+                spec = _faketable_spec or faketable.EXAMPLE_SPEC
+                self._send(200, "text/html; charset=utf-8",
+                           faketable.render_inner(spec).encode())
             elif path == "/feed":
                 self._send(200, "application/json",
                            json.dumps({"lines": _feed, "hand": _hand_no,
@@ -2382,6 +2397,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/quit":                # a new instance is taking over
                 self._send(200, "application/json", b'{"ok": true}')
                 threading.Thread(target=_stand_down, daemon=True).start()
+            elif path == "/faketable/spec":       # the state tester sets the spot
+                global _faketable_spec
+                n = int(self.headers.get("Content-Length") or 0)
+                _faketable_spec = json.loads(self.rfile.read(n) or b"{}")
+                self._send(200, "application/json", b'{"ok": true}')
             elif path == "/layout":
                 res = apply_layout()
                 print(f"[layout] -> {res}")

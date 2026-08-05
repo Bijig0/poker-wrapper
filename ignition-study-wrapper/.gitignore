@@ -4,3 +4,4 @@ __pycache__/
 debug/
 server.log
 data/
+.profile-faketest/
