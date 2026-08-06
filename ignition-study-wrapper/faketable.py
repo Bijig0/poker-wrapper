@@ -198,11 +198,20 @@ def _seat(num: int, slot: int, s: dict, is_hero: bool, cap: int,
     # Hole cards: hero shows faces, a live villain shows backs. They tuck BEHIND
     # the stack pill by design, so the pill carries a z-index above them.
     cards_html = ""
-    if is_hero and hero_cards:
+    if is_hero and hero_cards and not folded:
+        # Hero's slot COUNT comes from the seat like everyone else's, not from
+        # how many faces the spec happens to carry: a folded hero must show no
+        # cards, and a seat observed holding more slots than faces (the client's
+        # animation double-buffer, which the geometric reader counts twice) has
+        # to be reproducible or the round trip loses it. Faces first, backs for
+        # any remainder.
+        want_n = int(s.get("cards") or len(hero_cards))
         cards_html = "".join(
             f"<div data-qa='holeCards' style='position:absolute;left:{i*cw['pitch']}px;top:0'>"
-            f"{_card(c, cw['w'], 'hole')}</div>"
-            for i, c in enumerate(hero_cards))
+            + (_card(hero_cards[i], cw["w"], "hole") if i < len(hero_cards)
+               else _back(cw["w"]))
+            + "</div>"
+            for i in range(want_n))
     elif not folded:
         cards_html = "".join(
             f"<div data-qa='holeCards' style='position:absolute;left:{i*cw['pitch']}px;top:0'>"

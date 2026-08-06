@@ -37,6 +37,11 @@ sys.path.insert(0, str(ROOT))
 import launch  # noqa: E402  (the reader under test)
 
 BASE = "http://127.0.0.1:7700"
+# States checked by default. Enough to catch a systematic loss; the whole
+# corpus (--all) is a deliberate, much longer sweep.
+SAMPLE = 120
+# States the corpus contains but no table could show — counted, not hidden.
+SKIPPED: Counter = Counter()
 # Cards come back in the wrapper's display form ("10♣"); the fake table takes
 # solver form ("Tc"). One conversion, so the projection is lossless.
 _SUIT = {"♠": "s", "♥": "h", "♦": "d", "♣": "c"}
@@ -112,6 +117,15 @@ def project(f: dict, d: dict) -> dict | None:
     containers = len(d.get("seatQa") or [])
     cap = containers if containers in (3, 6, 9) else (6 if max(nums) <= 6 else 9)
     if max(nums) > cap or hero not in nums:
+        return None
+
+    # A state the reader contradicts itself about cannot be projected onto any
+    # table: hero holding identified cards while hero's own seat reports zero
+    # of them describes no table that can exist. Reproducing it would mean
+    # choosing which half to honour, so it is reported as a source
+    # inconsistency instead of scored as a parity loss.
+    if f["hero"] and not (seats[str(hero)]["cards"] or 0):
+        SKIPPED["hero holds cards at a seat reporting none"] += 1
         return None
 
     spec_seats: dict[str, dict] = {}
@@ -202,7 +216,9 @@ def main() -> int:
         print(f"wrapper not reachable on {BASE} — launch Ignition Study first ({e})")
         return 2
 
-    wanted = set(sys.argv[1:])
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    every = "--all" in sys.argv
+    wanted = set(args)
     sessions = sorted((ROOT / "debug").glob("session_*"))
     if wanted:
         sessions = [s for s in sessions if s.name in wanted]
@@ -235,12 +251,28 @@ def main() -> int:
                 continue
             cases.append((s.name, d.get("seq", -1), f, spec))
 
+    if SKIPPED:
+        print("source states no table could reproduce (reader self-contradictions):")
+        for why, n in SKIPPED.most_common():
+            print(f"  x{n:<4} {why}")
+        print()
     if not cases:
         print("no projectable states in the corpus — record a session first")
         return 2
 
-    limit = int(len(cases))
-    print(f"{len(cases)} distinct states from {len(sessions)} session(s)\n")
+    # Each state costs a page reload and a settle poll, so the whole corpus is
+    # a ~50-minute sweep — worth running deliberately, too slow to run on every
+    # change. Default to an EVENLY SPREAD sample so every session and every
+    # phase of every session is represented (contiguous ticks repeat the same
+    # few spots, so a head-of-list cut would only ever test the first hand).
+    total = len(cases)
+    if not every and total > SAMPLE:
+        step = total / SAMPLE
+        cases = [cases[int(i * step)] for i in range(SAMPLE)]
+    limit = len(cases)
+    print(f"{total} distinct states from {len(sessions)} session(s)"
+          + ("" if limit == total else f" — sampling {limit} (--all for every one)")
+          + "\n")
 
     fails: list[tuple[str, int, list[str]]] = []
     reasons: Counter = Counter()
