@@ -201,6 +201,16 @@ class StudyPoller {
     };
     this.status.running = true;
     this.status.lastError = null;
+    // start() re-points a RUNNING poller at a different wrapper (the panel
+    // calls it whenever Study Answers goes on, so the one poller follows
+    // whichever rig you switched). Carrying the old target's progress across
+    // that switch is wrong in every case: a solved-key from the other table
+    // suppresses the new table's first solve, and a solve still in flight
+    // holds the single-flight guard against a spot it was never for.
+    this.lastSolvedKey = null;
+    this.lastFailedKey = null;
+    this.lastProbeKey = null;
+    this.nav = null;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.intervalMs);
     return this.getStatus();
@@ -252,6 +262,10 @@ class StudyPoller {
       if (!this.status.gtoWizardConnected) {
         this.ensureGtoWizardLaunching();
         this.status.lastError = null;
+        // Blanking the answer means the spot is unsolved again, so forget
+        // that it was ever solved — otherwise the keep-alive above matches a
+        // key whose answer no longer exists.
+        this.lastSolvedKey = null;
         await this.push(null);
         return;
       }
@@ -277,7 +291,14 @@ class StudyPoller {
 
       const key = decisionKey(probe);
       this.lastProbeKey = key;
-      if (key === this.lastSolvedKey) {
+      // Only keep alive an answer that EXISTS. Any push(null) — GTO Wizard
+      // dropping for a single tick was enough — blanks lastAnswer while
+      // leaving lastSolvedKey set, and this branch then re-pushed that null
+      // every tick and never re-solved. The panel sat on "solving your
+      // spot…" for a spot the fast path answers in 0.2s, while the poller
+      // reported running, connected, no error: healthy and permanently
+      // silent, which is the worst way to fail.
+      if (key === this.lastSolvedKey && this.status.lastAnswer) {
         // Already navigated GTO Wizard here and it's already showing the
         // right answer — don't reload the same page again every tick. But DO
         // re-push the same text: the panel expires answers 3s after the last

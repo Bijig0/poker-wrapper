@@ -2978,6 +2978,18 @@ def main() -> None:
         chrome_window(f"http://127.0.0.1:{PANEL_PORT}/panel", PROFILE_PANEL,
                       ax + table_w, ay, w - table_w, h)
         print(f"[panel] window beside table ({w - table_w}x{h})")
+
+    # A fresh test rig RENDERS a table (the page falls back to the example
+    # spec) but had no hand behind it until something called /faketable/load,
+    # so the panel showed cards, seats and a pending decision while /hand was
+    # empty and Study Answers waited forever for a turn that had not been
+    # dealt. Seed the same spot the page is already showing.
+    if srv and _fake_mode:
+        try:
+            _faketable_load(_faketable_spec or faketable.EXAMPLE_SPEC)
+        except Exception as e:
+            print(f"[faketable] could not seed the opening spot: {e}")
+
     if not srv:
         return  # the running instance keeps serving; windows are ensured
     print("Ctrl+C stops the panel server (browser windows stay open).")
