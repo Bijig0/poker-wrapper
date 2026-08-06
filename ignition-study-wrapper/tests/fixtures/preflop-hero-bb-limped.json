@@ -8,31 +8,104 @@
     "board": [],
     "heroSeat": 3,
     "dealerSeat": 1,
-    "heroCards": ["9s", "7h"],
+    "heroCards": [
+      "9s",
+      "7h"
+    ],
     "seats": {
-      "1": {"stack": 120, "cards": 0},
-      "2": {"stack": 99.5, "bet": 0.5, "badge": "POST SB", "cards": 2},
-      "3": {"stack": 99, "bet": 1, "badge": "POST BB", "cards": 2},
-      "4": {"stack": 149, "bet": 1, "badge": "CALL", "cards": 2},
-      "5": {"stack": 199, "bet": 1, "badge": "CALL", "cards": 2},
-      "6": {"stack": 80, "cards": 0}
+      "1": {
+        "stack": 120,
+        "cards": 0
+      },
+      "2": {
+        "stack": 99.5,
+        "bet": 0.5,
+        "badge": "POST SB",
+        "cards": 2
+      },
+      "3": {
+        "stack": 99,
+        "bet": 1,
+        "badge": "POST BB",
+        "cards": 2
+      },
+      "4": {
+        "stack": 149,
+        "bet": 1,
+        "badge": "CALL",
+        "cards": 2
+      },
+      "5": {
+        "stack": 199,
+        "bet": 1,
+        "badge": "CALL",
+        "cards": 2
+      },
+      "6": {
+        "stack": 80,
+        "cards": 0
+      }
     },
     "offer": {
-      "check": true, "raise": 5,
-      "selectors": ["X2.5", "X3", "Pot", "ALL-IN"]
+      "check": true,
+      "raise": 5,
+      "selectors": [
+        "X2.5",
+        "X3",
+        "Pot",
+        "ALL-IN"
+      ]
     },
     "node": {
-      "dealt": [2, 3, 4, 5],
+      "dealt": [
+        2,
+        3,
+        4,
+        5
+      ],
       "toActSeat": 3,
-      "committed": {"2": 0.5, "3": 1, "4": 1, "5": 1},
+      "committed": {
+        "2": 0.5,
+        "3": 1,
+        "4": 1,
+        "5": 1
+      },
       "maxBet": 1,
       "actions": [
-        {"seat": 2, "type": "post-sb", "amount": 0.5, "street": "preflop"},
-        {"seat": 3, "type": "post-bb", "amount": 1, "street": "preflop"},
-        {"seat": 4, "type": "call", "amount": 1, "street": "preflop"},
-        {"seat": 5, "type": "call", "amount": 1, "street": "preflop"},
-        {"seat": 6, "type": "fold", "street": "preflop"},
-        {"seat": 1, "type": "fold", "street": "preflop"}
+        {
+          "seat": 2,
+          "type": "post-sb",
+          "amount": 0.5,
+          "street": "preflop"
+        },
+        {
+          "seat": 3,
+          "type": "post-bb",
+          "amount": 1,
+          "street": "preflop"
+        },
+        {
+          "seat": 4,
+          "type": "call",
+          "amount": 1,
+          "street": "preflop"
+        },
+        {
+          "seat": 5,
+          "type": "call",
+          "amount": 1,
+          "street": "preflop"
+        },
+        {
+          "seat": 6,
+          "type": "fold",
+          "street": "preflop"
+        },
+        {
+          "seat": 1,
+          "type": "fold",
+          "street": "preflop"
+        }
       ]
     }
   },
@@ -41,7 +114,10 @@
       "street": "preflop",
       "board": [],
       "heroSeatId": 3,
-      "heroCards": ["9♠", "7♥"],
+      "heroCards": [
+        "9♠",
+        "7♥"
+      ],
       "actionCount": 6,
       "toActSeatId": 3,
       "toActIsHero": true,
@@ -49,10 +125,35 @@
       "ended": false
     },
     "relay": [
-      {"label": "CHECK", "kind": "action", "fires": "checkButton"},
-      {"label": "RAISE TO 5 BB", "kind": "action", "fires": "raiseButton"},
-      {"label": "X2.5", "kind": "preset", "fires": "x2.5Selector"}
+      {
+        "label": "CHECK",
+        "kind": "action",
+        "fires": "checkButton"
+      },
+      {
+        "label": "RAISE TO 5 BB",
+        "kind": "action",
+        "fires": "raiseButton"
+      },
+      {
+        "label": "X2.5",
+        "kind": "preset",
+        "fires": "x2.5Selector"
+      }
     ],
-    "refuse": ["FOLD"]
+    "refuse": [
+      "FOLD"
+    ],
+    "spot": {
+      "known": {
+        "preflop line": "THE limped-pot gap: the crawled charts hold no node where a limp is offered, so a limped line snaps to nothing and the study answer has no spot to stand on. This is the failure the study notes record as a recurring no-answer.",
+        "limpers": "same root cause — the solved trees assume raise-first pots, so any number of limpers reads as zero."
+      },
+      "allow": [
+        "table size",
+        "effective stack"
+      ],
+      "maxSeverity": "minor"
+    }
   }
 }

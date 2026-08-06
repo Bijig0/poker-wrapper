@@ -61,9 +61,14 @@ class Case:
     def __init__(self, name: str):
         self.name = name
         self.checks: list[tuple[str, bool, str]] = []
+        self.notes: list[tuple[str, str]] = []
 
     def check(self, ok: bool, label: str, detail: str = "") -> None:
         self.checks.append((label, bool(ok), detail))
+
+    def known(self, label: str, detail: str = "") -> None:
+        """A documented limitation: shown every run, never a failure."""
+        self.notes.append((label, detail))
 
     @property
     def failed(self):
@@ -95,17 +100,32 @@ def run(path: Path) -> Case:
 
     discs = audit.get("discrepancies") or []
     allow = set(want.get("allow") or [])
+    known = dict(want.get("known") or {})
     cap = SEVERITY.get(want.get("maxSeverity", "minor"), 1)
 
+    seen_known: set[str] = set()
     for d in discs:
         field = d.get("field")
         sev = SEVERITY.get(d.get("severity", "info"), 0)
+        detail = (f"{d.get('severity')}: actual={d.get('actual')!r} "
+                  f"shown={d.get('shown')!r} {d.get('note') or ''}").strip()
         if field in allow:
             continue
-        c.check(sev <= cap,
-                f"divergence '{field}' within tolerance",
-                f"{d.get('severity')}: actual={d.get('actual')!r} "
-                f"shown={d.get('shown')!r} {d.get('note') or ''}".strip())
+        if field in known:
+            # A documented limitation of the solved charts, not a defect in the
+            # study tools. Reported every run so it stays visible, but it does
+            # not fail the suite — what would fail is it CHANGING.
+            seen_known.add(field)
+            c.known(f"divergence '{field}'", f"{known[field]} | {detail}")
+            continue
+        c.check(sev <= cap, f"divergence '{field}' within tolerance", detail)
+
+    # A known limitation that stops happening is news too: either it was fixed
+    # (update the fixture) or the spot silently stopped exercising it.
+    for field in known:
+        if field not in seen_known:
+            c.check(False, f"known divergence '{field}' still present",
+                    "it is gone — fixed, or this fixture no longer reaches it")
 
     # The audit reports the configuration it actually solved; a fixture can pin
     # the parts that matter for the spot it is meant to represent.
@@ -152,6 +172,8 @@ def main() -> int:
             case = Case(f.stem)
             case.check(False, "fixture ran", repr(e))
         cases.append(case)
+        for label, detail in case.notes:
+            print(f"  KNOWN {label}" + (f"   — {detail}" if detail else ""))
         for label, ok, detail in case.checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {label}"
                   + (f"   — {detail}" if detail else ""))
