@@ -36,7 +36,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-WRAPPER = "http://127.0.0.1:7700"
+import os
+# The rig under test. The test rig (7701) is the one showing a fake table;
+# override for a different one.
+WRAPPER = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
 API = "http://127.0.0.1:2000"
 
 SEVERITY = {"info": 0, "minor": 1, "major": 2}
@@ -135,6 +138,9 @@ def run(path: Path) -> Case:
         if key in want:
             got = shown.get(key, actual.get(key))
             c.check(got == want[key], f"solved {key}", f"got {got!r}, want {want[key]!r}")
+    if "chart" in want:
+        got = (shown.get("chart3max") or {}).get("id")
+        c.check(got == want["chart"], "solved from chart", f"got {got!r}, want {want['chart']!r}")
 
     warn = audit.get("warnings") or []
     c.check(not any("no chart" in str(w).lower() for w in warn),

@@ -116,9 +116,7 @@
       "CHECK"
     ],
     "spot": {
-      "known": {
-        "table size": "3-handed is solved on the 6-max tree (empty seats fold instantly). Dedicated 3-max charts exist for other formats but are not what this spot resolves to."
-      },
+      "chart": "ign200_3maxasym_D100_s85_sb",
       "allow": [
         "effective stack"
       ],

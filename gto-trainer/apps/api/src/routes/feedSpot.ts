@@ -7,6 +7,7 @@ import {
 } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { resolveDepth, resolveSet } from "../services/fastSolve";
+import { chartFor } from "../services/hrc3max";
 import { preflopDb } from "../services/preflopDb";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -123,8 +124,41 @@ app.post("/", async (c) => {
         : "solved";
 
   // ---- discrepancies: one row per divergence between the two tables ----
+  // 3-handed preflop does NOT go through the 6-max resolver at all: fastSolve
+  // routes it to the asymmetric 3-max HRC corpus, chart chosen by the
+  // canonical stack state (sort, cap big to mid, snap each to the rung
+  // ladder, short seat identity). Before this branch existed the audit
+  // described the 6-max path here — "3-handed -> 6-max chart", "87.5bb ->
+  // 100bb solve" — for answers that were actually coming from D100_s85_sb.
+  const posSet = new Set(
+    [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => String(p).toUpperCase())
+  );
+  const three = hand.street === "preflop" && posSet.size === 3 &&
+    ["BTN", "SB", "BB"].every((p) => posSet.has(p));
+  const chart3 = three ? chartFor(hand, heroPos) : null;
+
   const d: Discrepancy[] = [];
-  if (tableSeats !== set.seats.length) {
+  if (chart3) {
+    d.push({
+      field: "chart family",
+      actual: "3-handed preflop",
+      shown: chart3.id,
+      severity: "info",
+      note: chart3.shortSeat === "EQ"
+        ? `even-stack chart at ${chart3.depth}bb`
+        : `asymmetric corpus: deep ${chart3.depth}bb, ${chart3.shortSeat} short at ${chart3.shortDepth}bb`,
+    });
+    if (chart3.note) {
+      d.push({
+        field: "stacks",
+        actual: JSON.stringify(hand.stacks ?? {}),
+        shown: chart3.id,
+        severity: "major",
+        note: chart3.note,
+      });
+    }
+  }
+  if (!chart3 && tableSeats !== set.seats.length) {
     d.push({
       field: "table size",
       actual: `${tableSeats}-handed`,
@@ -142,7 +176,7 @@ app.post("/", async (c) => {
       note: "in HU trees the dealer IS the small blind",
     });
   }
-  if (effStackBb != null && Math.abs(effStackBb - depth) / depth > 0.1) {
+  if (!chart3 && effStackBb != null && Math.abs(effStackBb - depth) / depth > 0.1) {
     d.push({
       field: "effective stack",
       actual: `${effStackBb}bb`,
@@ -212,6 +246,7 @@ app.post("/", async (c) => {
       tokens: { preflop: tk.preflop, flop: tk.flop, turn: tk.turn, river: tk.river },
     },
     shown: {
+      chart3max: chart3,
       setId: set.id,
       label: set.label,
       gametype: set.gametype,
