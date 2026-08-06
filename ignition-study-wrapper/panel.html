@@ -129,6 +129,31 @@
   <h1>Ignition Study <span class="badge">skeleton</span></h1>
   <div class="sub">Accessible play panel — large-print hand feed and switch-friendly controls.</div>
 
+  <div class="card" id="fake-card" style="display:none;border-color:#4da3ff">
+    <h2>Table setup <span class="badge">test rig</span></h2>
+    <div class="sub">This panel is driving the LOCAL replica, not a real table.
+      Everything below it — the reader, the feed, study answers, the action
+      buttons — is the real thing running against it.</div>
+    <div style="margin-top:8px">
+      <select id="fk-fixture" style="width:100%;padding:6px;font-size:14px"></select>
+      <button id="fk-load" style="margin-top:6px">Load this spot</button>
+    </div>
+    <div id="fk-quick" style="margin-top:10px;display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;font-size:13px">
+      <label for="fk-board">board</label><input id="fk-board" placeholder="Tc 5s 5h">
+      <label for="fk-hero">hero</label><input id="fk-hero" placeholder="Th Td">
+      <label for="fk-pot">pot BB</label><input id="fk-pot" type="number" step="any">
+      <label for="fk-toact">to act</label><input id="fk-toact" type="number" min="1" max="9">
+      <label for="fk-call">call BB</label><input id="fk-call" type="number" step="any" placeholder="(blank = not offered)">
+      <label for="fk-raise">raise to</label><input id="fk-raise" type="number" step="any" placeholder="(blank = not offered)">
+    </div>
+    <div style="margin-top:6px">
+      <label class="sub"><input type="checkbox" id="fk-fold"> FOLD</label>
+      <label class="sub"><input type="checkbox" id="fk-check"> CHECK</label>
+    </div>
+    <button id="fk-apply" style="margin-top:8px">Apply to table</button>
+    <div id="fk-msg" class="sub" style="margin-top:6px"></div>
+  </div>
+
   <div class="card">
     <h2>Connection</h2>
     <span id="b-cdp" class="badge">CDP …</span>
@@ -660,12 +685,77 @@
     if (spoken && spoken !== saLastSpoken) { saLastSpoken = spoken; speak(spoken); }
     if (!spoken) saLastSpoken = "";
   }
+
+  /* ---------------- Table setup (test rig only) ----------------------------
+     The panel edits the SPEC the fake table renders from, then reloads it
+     through the same /faketable/load the suites use — so a spot set up by
+     hand and a spot set up by a test are the same code path. */
+  let FK_SPEC = null;
+  const fkNum = (id) => { const v = $(id).value.trim(); return v === "" ? null : Number(v); };
+  const fkCards = (id) => $(id).value.trim().split(/[\s,]+/).filter(Boolean);
+
+  async function fkInit() {
+    let list = [];
+    try { list = (await (await fetch("/faketable/fixtures")).json()).fixtures || []; } catch (e) {}
+    $("fk-fixture").innerHTML = list.map((f, i) =>
+      `<option value="${i}">${f.fixture.name || f.file}</option>`).join("");
+    window.__fkList = list;
+    if (list.length) fkUse(list[0].fixture.spec);
+  }
+  function fkUse(spec) {
+    FK_SPEC = JSON.parse(JSON.stringify(spec));
+    $("fk-board").value = (spec.board || []).join(" ");
+    $("fk-hero").value = (spec.heroCards || []).join(" ");
+    $("fk-pot").value = spec.potBB ?? "";
+    $("fk-toact").value = (spec.node && spec.node.toActSeat) || spec.heroSeat || 1;
+    $("fk-call").value = spec.offer && spec.offer.call != null ? spec.offer.call : "";
+    $("fk-raise").value = spec.offer && spec.offer.raise != null ? spec.offer.raise : "";
+    $("fk-fold").checked = !!(spec.offer && spec.offer.fold);
+    $("fk-check").checked = !!(spec.offer && spec.offer.check);
+  }
+  async function fkPush() {
+    if (!FK_SPEC) return;
+    const s = FK_SPEC;
+    s.board = fkCards("fk-board");
+    s.heroCards = fkCards("fk-hero");
+    const pot = fkNum("fk-pot"); if (pot !== null) s.potBB = pot;
+    s.node = s.node || {};
+    const ta = fkNum("fk-toact"); if (ta !== null) s.node.toActSeat = ta;
+    s.offer = s.offer || {};
+    s.offer.call = fkNum("fk-call");
+    s.offer.raise = fkNum("fk-raise");
+    s.offer.fold = $("fk-fold").checked || undefined;
+    s.offer.check = $("fk-check").checked || undefined;
+    $("fk-msg").textContent = "loading…";
+    try {
+      const r = await (await fetch("/faketable/load", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(s) })).json();
+      $("fk-msg").textContent = r.ok ? `loaded — hand ${r.hand}` : `failed: ${JSON.stringify(r)}`;
+    } catch (e) { $("fk-msg").textContent = "load failed: " + e; }
+  }
+  $("fk-load").onclick = () => {
+    const f = (window.__fkList || [])[+$("fk-fixture").value];
+    if (f) { fkUse(f.fixture.spec); fkPush(); }
+  };
+  $("fk-apply").onclick = fkPush;
+
   $("sa-toggle").onclick = async () => {
     try {
       const r = await (await fetch("/study-answers", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ on: !saOn }) })).json();
       saOn = !!r.on;
+      // One poller serves every rig, so switching answers ON here re-points it
+      // at THIS wrapper. Without that, a test rig on another port turns the
+      // switch on and the poller keeps answering the other table.
+      if (saOn) {
+        try {
+          await fetch(GTOW_API + "/api/study-poller/start", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ assistiveUrl: location.origin }) });
+        } catch (e) { /* the badge will report the poller unreachable */ }
+      }
       renderSa(null, false);
     } catch (e) { speak("toggle failed"); }
   };
@@ -680,6 +770,13 @@
         else if (s.panelVersion !== panelVersion) { location.reload(); return; }
       }
       saOn = !!s.studyAnswers;
+      // The setup card exists only on a test rig, and only needs building once.
+      if (s.fakeTable && $("fake-card").style.display === "none") {
+        $("fake-card").style.display = "";
+        document.querySelector("h1").innerHTML =
+          'Ignition Study <span class="badge" style="background:#1d4e78">TEST RIG</span>';
+        fkInit();
+      }
       // myTurn: true | false | "won" | "folded" — the strings are hand-over
       // results, rendered as such instead of solver placeholders.
       const myTurn = s.hand?.heroWon ? "won"

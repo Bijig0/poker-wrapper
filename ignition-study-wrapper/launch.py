@@ -53,7 +53,13 @@ import faketable  # noqa: E402  (local fake-Ignition renderer for the state test
 # wrapper as driving the LOCAL fake table: the target search prefers it, the
 # archiver refuses authored hands, and the DOM-diff inference stays frozen.
 _faketable_spec: dict | None = None
-_fake_mode = False
+# FAKE_TABLE=1 makes this instance a TEST RIG: the table window opens the local
+# fake table instead of Ignition, and everything downstream — reader, /hand,
+# relay, the answer poller — runs unchanged against it. That is the whole point:
+# the study tools cannot tell the difference, so testing them here tests them.
+# Launched on its own ports (see study-tool.pyw) so a real session can run at
+# the same time and neither can disturb the other.
+_fake_mode = os.environ.get("FAKE_TABLE") == "1"
 
 # Under pythonw (the desktop shortcut) there is no console: sys.stdout is None
 # and any print() would crash. Route output to the log file instead.
@@ -81,6 +87,14 @@ CHROME = os.environ.get("CHROME_EXE") or _default_browser()
 # CoinPoker); pin it here so no code path ever talks to the wrong client.
 cdp.PORT = CDP_PORT
 TABLE_FRAC = float(os.environ.get("TABLE_FRAC", "0.70"))
+# Per-rig browser profiles and window title. A shared profile dir puts both
+# rigs' windows in ONE Chrome process, where --window-position/--window-size and
+# the CDP port stop sticking; a shared title makes each panel's
+# bring-to-front surface the other rig's window.
+_RIG = "-fake" if os.environ.get("FAKE_TABLE") == "1" else ""
+PROFILE_TABLE = f".profile-table{_RIG}"
+PROFILE_PANEL = f".profile-panel{_RIG}"
+PANEL_TITLE = "Ignition Study Tool" if _RIG else "Ignition Study"
 
 
 def work_area() -> tuple[int, int]:
@@ -271,6 +285,11 @@ def state(light: bool = False) -> dict:
         pv = 0
     out = {"cdp": cdp.available(CDP_PORT), "ignition": None, "targets": [],
            "panelVersion": pv,
+           # Which rig this is. The panel shows its Table Setup card only on a
+           # test rig, and points the answer poller at its OWN wrapper — one
+           # poller exists, so whichever panel you switch answers on becomes
+           # the one it watches.
+           "fakeTable": _fake_mode, "panelPort": PANEL_PORT,
            # live-feed contract (CONTRACT.md §1) — what resolveHand consumes
            "connected": False, "hand": None, "studyAnswers": _study["on"],
            "panelAnswer": _current_answer(),
@@ -979,14 +998,27 @@ def _feed_tick() -> None:
     except Exception:
         return
     if _fake_mode:
-        # The authored state owns everything the feed would otherwise derive.
-        # Only hero's status is refreshed (it drives /state's badges); the
-        # hand counter, feed lines and DOM-diff backfill all stand down —
-        # this tick's "first sighting of a table" branch was silently
-        # advancing the hand number the moment the fake page loaded.
+        # The authored state owns the hand's HISTORY, so the DOM-diff backfill,
+        # the feed lines and the hand counter all stand down (this tick's
+        # "first sighting of a table" branch was silently advancing the hand
+        # number the moment the fake page loaded).
+        #
+        # But the per-tick SNAPSHOT is read from the table, not authored, and
+        # _hand_state takes hero's cards and every seat's stack from here.
+        # Returning without publishing it meant the export carried no stacks at
+        # all, so answers fell back to "stacks unreadable for N seat(s) — using
+        # the even 100bb chart" — and on 3-max, where the chart is CHOSEN by
+        # the stack distribution, that is the wrong chart every time.
         try:
+            board_cards = _board_cards(d)
             _live_status["hero"] = _hero_status(d, d.get("nodes") or [])
-            _live_status["board"] = list(_board_cards(d))
+            _live_status["board"] = list(board_cards)
+            _feed_prev = {
+                "seated": True,
+                "seats": _parse_seats(d),
+                "board": len(board_cards),
+                "heroCards": " ".join(_hero_cards(d)),
+            }
         except Exception:
             pass
         return
@@ -2589,6 +2621,26 @@ def _server_alive() -> bool:
         return False
 
 
+def _port_of(cmdline: list[str]) -> int:
+    """The panel port another instance was launched on, from its own argv.
+
+    Environment is not readable across processes, so the launcher passes
+    --panel-port; an instance without one is a default (7700) instance.
+    """
+    for i, a in enumerate(cmdline):
+        if a == "--panel-port" and i + 1 < len(cmdline):
+            try:
+                return int(cmdline[i + 1])
+            except ValueError:
+                return 7700
+        if a.startswith("--panel-port="):
+            try:
+                return int(a.split("=", 1)[1])
+            except ValueError:
+                return 7700
+    return 7700
+
+
 def _sibling_pids() -> list[int]:
     """Live processes running THIS script, excluding us.
 
@@ -2622,8 +2674,17 @@ def _sibling_pids() -> list[int]:
             # this exists for.
             if not (p.info.get("name") or "").lower().startswith("python"):
                 continue
-            if any(a.lower() == here for a in p.info.get("cmdline") or []):
-                out.append(p.info["pid"])
+            cmd = p.info.get("cmdline") or []
+            if not any(a.lower() == here for a in cmd):
+                continue
+            # Same script, DIFFERENT panel port, is a different rig — the test
+            # instance and a real session run side by side on purpose, and
+            # taking over by script path alone would have each one killing the
+            # other on launch. The port is carried in argv precisely so this
+            # check can see it.
+            if _port_of(cmd) != PANEL_PORT:
+                continue
+            out.append(p.info["pid"])
     except Exception:
         return out
     return out
@@ -2840,7 +2901,11 @@ def main() -> None:
     # together both find nothing to take over, and only this separates them.
     # Created AFTER the takeover, or we would race the instance we just asked
     # to exit.
-    ctypes.windll.kernel32.CreateMutexW(None, False, "IgnitionStudyPanelServer")
+    # Port-scoped: the single-instance guard is per RIG, not per machine. A
+    # machine-wide name made the test instance defer to a running real session
+    # and exit without ever serving.
+    ctypes.windll.kernel32.CreateMutexW(
+        None, False, f"IgnitionStudyPanelServer:{PANEL_PORT}")
     already = ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
 
     srv = None
@@ -2867,24 +2932,50 @@ def main() -> None:
     table_w = int(w * TABLE_FRAC)
     # Idempotent: a rerun while windows are already open just restarts the
     # panel server, it never spawns duplicate browser windows.
+    # In test mode the TABLE IS THE FAKE TABLE. Everything downstream reads it
+    # exactly as it reads Ignition, so the layout, the panel and the answer
+    # pipeline are the real ones being exercised — not a mock of them.
+    table_url = (f"http://127.0.0.1:{PANEL_PORT}/faketable" if _fake_mode
+                 else IGNITION_URL)
     if cdp.available(CDP_PORT):
+        # Reusing the window is the point (a rerun must not spawn duplicates),
+        # but reusing whatever URL happens to be in it is not: a rig that was
+        # last used the other way round leaves a real table in the test rig's
+        # window, or a fake one in the real rig's, and the reader believes it.
+        # Correct the URL in place instead of relaunching the window.
+        want_fake = _fake_mode
+        for t in (cdp.page_targets(CDP_PORT) or []):
+            url = t.get("url") or ""
+            if url.startswith("devtools"):
+                continue
+            if ("/faketable" in url) != want_fake:
+                try:
+                    cdp._eval(t["webSocketDebuggerUrl"],
+                              f"location.href = {json.dumps(table_url)}; true",
+                              timeout=5)
+                    print(f"[table] window was showing the other rig's table — "
+                          f"sent it to {table_url}")
+                except Exception as e:
+                    print(f"[table] could not retarget the window: {e}")
+            break
         print("[table] already open (CDP up) — not relaunching")
     else:
-        chrome_window(IGNITION_URL, ".profile-table", ax, ay, table_w, h, CDP_PORT)
-        print(f"[table] Ignition app window {table_w}x{h} (CDP :{CDP_PORT})")
+        chrome_window(table_url, PROFILE_TABLE, ax, ay, table_w, h, CDP_PORT)
+        print(f"[table] {'fake' if _fake_mode else 'Ignition'} app window "
+              f"{table_w}x{h} (CDP :{CDP_PORT})")
         for _ in range(40):  # wait for CDP before opening the panel beside it
             if cdp.available(CDP_PORT):
                 break
             time.sleep(0.5)
         print(f"[table] CDP {'up' if cdp.available(CDP_PORT) else 'NOT up (panel will keep retrying)'}")
 
-    if hwnd := ctypes.windll.user32.FindWindowW(None, "Ignition Study"):
+    if hwnd := ctypes.windll.user32.FindWindowW(None, PANEL_TITLE):
         # A double-click must always DO something visible: surface the panel.
         ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
         ctypes.windll.user32.SetForegroundWindow(hwnd)
         print("[panel] window already open — brought to front")
     else:
-        chrome_window(f"http://127.0.0.1:{PANEL_PORT}/panel", ".profile-panel",
+        chrome_window(f"http://127.0.0.1:{PANEL_PORT}/panel", PROFILE_PANEL,
                       ax + table_w, ay, w - table_w, h)
         print(f"[panel] window beside table ({w - table_w}x{h})")
     if not srv:

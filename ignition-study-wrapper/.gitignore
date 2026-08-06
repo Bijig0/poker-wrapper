@@ -6,3 +6,5 @@ server.log
 data/
 .profile-faketest/
 debug/study-tool.log
+.profile-table-fake/
+.profile-panel-fake/
