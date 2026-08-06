@@ -199,6 +199,7 @@
       gto-trainer's study poller (see CONTRACT.md). Mixed strategies are
       RNG-rolled into one pick, spoken aloud. Study/practice tables only.</div>
     <button id="sa-toggle" style="margin-top:8px">Turn ON</button>
+    <button id="sa-gtow" style="margin-top:8px">Connect GTO Wizard</button>
   </div>
 
   <div class="card">
@@ -648,6 +649,15 @@
         : !saHealth.gtoWizardConnected ? "GTO Wizard not connected" : null;
       b.className = "badge " + (reason ? "bad" : "ok");
       b.textContent = reason ? "ON ⚠ " + reason : "ON ●";
+      // A disconnect while answers are on is exactly when the user is least
+      // able to help, so retry it once on our own instead of leaving the
+      // badge as a dead end. Once — a wedged client should surface, not spin.
+      if (saHealth && saHealth.running && !saHealth.gtoWizardConnected
+          && !saHealth.gtoWizardLaunching && !gtowRetried) {
+        gtowRetried = true;
+        connectGtow("reconnecting GTO Wizard…");
+      }
+      if (saHealth && saHealth.gtoWizardConnected) gtowRetried = false;
     }
     // answer is {text, pick, roll} | null. The rolled pick is the headline —
     // the single actionable answer — with the frequency mix as detail below.
@@ -740,6 +750,38 @@
   };
   $("fk-apply").onclick = fkPush;
 
+  /* Bring GTO Wizard up and attach to it. POST /api/gtow/launch is a no-op
+     when the debug port is already answering, so calling it is always safe —
+     it is the "make it connected" verb, not "restart it". */
+  let gtowBusy = false;
+  let gtowRetried = false;   // one automatic reconnect per outage
+  async function connectGtow(label) {
+    if (gtowBusy) return;
+    gtowBusy = true;
+    const b = $("sa-gtow");
+    const was = b.textContent;
+    b.textContent = label || "connecting…";
+    b.disabled = true;
+    try {
+      const r = await (await fetch(GTOW_API + "/api/gtow/launch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: "{}" })).json();
+      b.textContent = r.connected ? "GTO Wizard connected" : "connect failed — retry";
+      // Re-probe now rather than waiting for the 2.5s health poll, so the
+      // badge stops saying "not connected" the moment it is.
+      try { saHealth = await (await fetch(GTOW_API + "/api/study-poller/status")).json(); } catch (e) {}
+      renderSa(null, false);
+      setTimeout(() => { b.textContent = was; }, 4000);
+    } catch (e) {
+      b.textContent = "connect failed — is the API up?";
+      setTimeout(() => { b.textContent = was; }, 4000);
+    } finally {
+      b.disabled = false;
+      gtowBusy = false;
+    }
+  }
+  $("sa-gtow").onclick = () => connectGtow();
+
   $("sa-toggle").onclick = async () => {
     try {
       const r = await (await fetch("/study-answers", { method: "POST",
@@ -755,6 +797,10 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ assistiveUrl: location.origin }) });
         } catch (e) { /* the badge will report the poller unreachable */ }
+        // Switching answers on MEANS "I want answers", so bring the solver up
+        // too. Waiting for the poller's own auto-launch left the panel sitting
+        // on "GTO Wizard not connected" with no way to act on it.
+        connectGtow("starting GTO Wizard…");
       }
       renderSa(null, false);
     } catch (e) { speak("toggle failed"); }
