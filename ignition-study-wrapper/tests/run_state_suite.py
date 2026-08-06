@@ -103,8 +103,17 @@ def run_fixture(path: Path) -> Case:
             c.truthy(f"relay {want['label']}", False,
                      f"refused: {res.get('reason')} (offer {res.get('offer')})")
             continue
-        time.sleep(0.6)
-        click = (_req("/faketable/lastclick") or {}).get("click") or {}
+        # Poll for the page's click record rather than sleeping a fixed
+        # interval: the click is dispatched over CDP and echoed by the page, and
+        # under load (a GTO Wizard relaunch storm was enough) that round trip
+        # outran a 0.6s sleep and the suite reported a miss for a press that
+        # landed correctly a moment later.
+        click: dict = {}
+        for _ in range(20):
+            time.sleep(0.25)
+            click = (_req("/faketable/lastclick") or {}).get("click") or {}
+            if click.get("qa") == want["fires"]:
+                break
         c.eq(f"relay {want['label']} fires", click.get("qa"), want["fires"])
 
     # ---- actions the state does not offer --------------------------------

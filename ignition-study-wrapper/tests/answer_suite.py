@@ -33,6 +33,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 WRAPPER = "http://127.0.0.1:7700"
 API = "http://127.0.0.1:2000"
 GTOW_CDP = "http://127.0.0.1:9222/json/version"
+GTOW_LIST = "http://127.0.0.1:9222/json/list"
 
 ANSWER_TIMEOUT = 90     # a cold solve navigates GTOW; that is not fast
 
@@ -52,12 +53,33 @@ def _req(url: str, body: dict | None = None, timeout: float = 30):
             return {"ok": False, "error": f"HTTP {e.code}"}
 
 
-def gtow_up() -> bool:
+def gtow_state() -> tuple[bool, str]:
+    """Is GTO Wizard actually drivable, and if not, why?
+
+    The debug port answering is not enough: the poller drives a page whose URL
+    contains app.gtowizard.com (gtowCdp.TARGET_MATCH), and the client can be
+    running with CDP up while showing something else entirely — an activation
+    or login screen has no such page, so every solve reports
+    gtoWizardConnected=false and each fixture burns its full timeout before
+    failing with nothing useful to say. Name the actual state instead.
+    """
     try:
         urllib.request.urlopen(GTOW_CDP, timeout=4).read()
-        return True
-    except OSError:
-        return False
+    except OSError as e:
+        return False, f"debug port 9222 not answering ({e}) — run scripts/start_gtow_ai.ps1"
+    try:
+        raw = urllib.request.urlopen(GTOW_LIST, timeout=6).read()
+        targets = json.loads(raw or b"[]")
+    except (OSError, json.JSONDecodeError) as e:
+        return False, f"debug port up but /json/list unreadable ({e})"
+    pages = [t for t in targets if t.get("type") == "page"]
+    if any("app.gtowizard.com" in (t.get("url") or "") for t in pages):
+        return True, "app page found"
+    if not pages:
+        return False, "no page targets yet — the client is still starting"
+    where = ", ".join((t.get("url") or "")[:70] for t in pages[:3])
+    return False, (f"the client is not on the app — showing: {where}. "
+                   "Sign in / activate GTO Wizard, then rerun.")
 
 
 class Case:
@@ -139,10 +161,11 @@ def run(path: Path) -> Case:
 
 
 def main() -> int:
-    if not gtow_up():
-        print("GTO Wizard CDP not up on 9222 — skipping Tier 3.")
-        print("  start it:  powershell -File scripts/start_gtow_ai.ps1")
+    ok, why = gtow_state()
+    if not ok:
+        print(f"SKIPPING Tier 3 — GTO Wizard is not drivable: {why}")
         return 0
+    print(f"GTO Wizard ready ({why})")
     for name, url in (("wrapper", f"{WRAPPER}/state"), ("api", f"{API}/")):
         try:
             _req(url)

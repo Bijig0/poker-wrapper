@@ -88,6 +88,34 @@ Test mode stands down the WS tap, the DOM feed diff and the archiver: every
 fact of an authored state is authored, so anything inferred is a phantom and
 nothing lands in hands.db.
 
+## Test tiers (`tests/run_all.py`)
+
+Four tiers, cheapest and most local first, so the FIRST failure is the cause.
+A tier whose dependency is absent skips rather than fails.
+
+| tier | asks | needs |
+|---|---|---|
+| `run_state_suite.py` | does an authored state export the right ParsedHand, and does the relay fire the right control | fake table |
+| `reader_parity.py` | does the fake table lose anything the reader reads, replaying recorded REAL states | fake table + a recording |
+| `spot_audit.py` | did the study tool solve the RIGHT spot (feed-spot's divergence audit) | + API on :2000 |
+| `answer_suite.py` | did an answer actually arrive | + GTO Wizard signed in |
+
+Two things the tiers deliberately do NOT assert. The answer's **pick**:
+`rollAction` samples the mixed strategy with `Math.random()` per decision, so
+pinning it builds a test that fails for the correct reason. And **money as a
+string**: the client renders some readings without the BB suffix, so amounts
+compare numerically.
+
+`reader_parity` samples 120 of the corpus's ~1000 projectable states by
+default (the full sweep is ~50 minutes); `--all` runs every one.
+
+Known chart-coverage limits are declared per fixture under `expect.spot.known`.
+They print on every run so they stay visible, never fail the suite, and DO fail
+if they stop happening — which means either they were fixed or the fixture
+quietly stopped reaching them. The headline one is the limped pot: no crawled
+node offers a limp, so a limped line snaps to nothing and the answer has no
+spot to stand on.
+
 ## Phases
 
 1. ✅ this skeleton
