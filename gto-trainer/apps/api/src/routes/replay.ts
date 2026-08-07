@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { tickToHand, type Tick } from "../feed/tickToHand/tickToHand";
+import { fastSolve } from "../services/fastSolve";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -293,6 +295,139 @@ replay.post("/verdict", async (c) => {
     return c.json({ ok: false, error: String(e) }, 500);
   }
   return c.json({ ok: true, id, verdict: all[id] });
+});
+
+/**
+ * The STUDY ANSWER for one recorded state — the answer the panel would have
+ * given at the table, with its provenance.
+ *
+ * Two questions the review queue could not previously answer: would the tools
+ * have said anything here, and if so on what basis? A reader that extracts a
+ * state correctly can still be handed to the wrong chart, and nothing in the
+ * frame-vs-extract comparison would show it. So this reports the SOURCE (the
+ * local preflop charts, the 3-max asymmetric HRC set, or a GTO Wizard AI
+ * solve), the cascade TIER within it, and the whole node that was fed in —
+ * position, street, board, pot, what hero owes, and the action line.
+ *
+ * Read-only and side-effect free: fastSolve reads charts and the solver API,
+ * and unlike driving the wrapper's parser it archives nothing. (Replaying
+ * through the wrapper once wrote thirteen replayed hands into the live
+ * hands.db, which is why this path deliberately does not go near it.)
+ */
+/**
+ * The whole hand's feed up to this tick, rebuilt from the per-tick tails.
+ *
+ * The reader used to record only the last four lines each tick, which cut the
+ * blind posts off the top of any hand with more than two actions — and without
+ * the small blind there is no button, so no positions and no chart. Successive
+ * tails OVERLAP, though, so the hand's story can be stitched back out of them.
+ *
+ * Merging on the overlap rather than de-duplicating lines: a hand can contain
+ * the same line twice ("Seat 1 checks" on the flop and again on the turn), and
+ * dropping the repeat would silently rewrite the action.
+ */
+function mergeTail(acc: string[], tail: string[]): string[] {
+  for (let k = Math.min(acc.length, tail.length); k > 0; k--) {
+    if (acc.slice(-k).every((v, i) => v === tail[i])) return [...acc, ...tail.slice(k)];
+  }
+  return [...acc, ...tail];
+}
+
+function feedForHand(ticks: Tick[], seq: number, hand: number | undefined): string[] {
+  let acc: string[] = [];
+  for (const t of ticks) {
+    if (t.seq == null || t.seq > seq) break;
+    if (t.hand !== hand) continue;
+    acc = mergeTail(acc, t.feedTail ?? []);
+  }
+  return acc;
+}
+
+/** Hero's seat from the raw capture, for ticks recorded before log.jsonl had it. */
+function withHeroFromDom(dir: string, seq: number, tick: Tick): { tick: Tick; note?: string } {
+  if (Object.values(tick.seats ?? {}).some((s) => s.hero !== undefined)) return { tick };
+  const domPath = join(dir, "dom.jsonl");
+  if (!existsSync(domPath)) return { tick };
+  // The file is large (tens of MB), so parse only the line that opens with
+  // this seq rather than every line. The writer is Python's json.dump, which
+  // spaces its separators ("seq": 188) — matched loosely so a change of writer
+  // cannot silently turn this into "hero was never recorded".
+  const head = /^\{\s*"seq"\s*:\s*(\d+)/;
+  let raw: any = null;
+  for (const line of readFileSync(domPath, "utf-8").split("\n")) {
+    const m = head.exec(line);
+    if (!m || Number(m[1]) !== seq) continue;
+    raw = JSON.parse(line);
+    break;
+  }
+  const me = (raw?.seatQa ?? []).find((s: any) => s.me)?.num;
+  if (me == null) return { tick };
+  const seats = { ...(tick.seats ?? {}) };
+  for (const k of Object.keys(seats)) seats[k] = { ...seats[k], hero: Number(k) === me };
+  return {
+    tick: { ...tick, seats },
+    note: `hero's seat (${me}) was recovered from the raw capture — this recording predates the reader recording it`,
+  };
+}
+
+replay.get("/:name/answer/:seq", async (c) => {
+  const dir = sessionDir(c.req.param("name"));
+  if (!dir) return c.json({ ok: false, error: "no such session" }, 404);
+  const seq = Number(c.req.param("seq"));
+
+  const logPath = join(dir, "log.jsonl");
+  if (!existsSync(logPath)) return c.json({ ok: false, error: "no log.jsonl" }, 404);
+  const ticks = jsonl(logPath) as Tick[];
+  const tick = ticks.find((t) => t.seq === seq);
+  if (!tick) return c.json({ ok: false, error: `no tick at seq ${seq}` }, 404);
+
+  // Stitch the hand's whole story back together (see mergeTail): older
+  // recordings kept four lines a tick, which is not enough to reach the blinds.
+  const feed = feedForHand(ticks, seq, tick.hand);
+
+  // log.jsonl only began carrying hero's seat once the reader was fixed to
+  // record it, but every structural capture has always had it in the RAW dom
+  // (seatQa.me, the client's own myPlayerTag). Recovering it from there makes
+  // the whole existing corpus answerable instead of stranding it behind a
+  // re-recording.
+  const grafted = withHeroFromDom(dir, seq, { ...tick, feedTail: feed });
+  const { hand, notes, buttonSeat } = tickToHand(grafted.tick);
+  if (grafted.note) notes.unshift(grafted.note);
+  if (!hand)
+    return c.json({ ok: true, seq, solvable: false, notes, buttonSeat, hand: null, solution: null });
+
+  const heroPos = hand.positions[hand.heroSeatId] ?? null;
+  const input = {
+    heroSeat: hand.heroSeatId,
+    heroPos,
+    buttonSeat,
+    heroCards: hand.heroCards,
+    board: hand.board,
+    street: hand.street,
+    positions: hand.positions,
+    stacks: hand.stacks ?? null,
+    node: hand.currentNode,
+    // The action line as the solver sees it — the thing a chart is chosen by.
+    line: hand.actions
+      .map((a) => `${hand.positions[a.seatId] ?? `seat ${a.seatId}`} ${a.type}${a.amount != null ? ` ${a.amount}` : ""}`)
+      .join(" · "),
+  };
+
+  if (!hand.currentNode.toActIsHero)
+    return c.json({
+      ok: true, seq, solvable: false, hand: input, notes, buttonSeat,
+      solution: null, deferred: hand.ended ? "hero is out of the hand" : "not hero's turn",
+    });
+
+  try {
+    const solution = await fastSolve(hand, heroPos, { heroPos: heroPos ?? undefined });
+    return c.json({ ok: true, seq, solvable: true, hand: input, notes, buttonSeat, feed, solution });
+  } catch (e) {
+    return c.json({
+      ok: true, seq, solvable: true, hand: input, notes, buttonSeat,
+      solution: { ok: false, reason: String((e as Error)?.message ?? e) },
+    });
+  }
 });
 
 export default replay;

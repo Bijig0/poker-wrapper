@@ -864,6 +864,12 @@ def _seats_structural(d: dict) -> dict | None:
             "bet": bet,
             "badge": s["badge"].replace(" ", "-") if s.get("badge") else None,
             "cards": s.get("nHole") or 0,
+            # The client tags hero's own seat (myPlayerTag). Recording it means
+            # nothing downstream has to INFER which seat is hero -- the previous
+            # consumer guessed "the seat holding more than two cards", which
+            # only worked while hero's cards were double-counted, and silently
+            # anchored the whole table on seat 1 once that was fixed.
+            "hero": bool(s.get("me")),
         }
     return out
 
@@ -1313,7 +1319,10 @@ def _feed_tick() -> None:
         "hand": _hand_no, "pot": pot, "board": board_cards,
         "heroCards": hero_cards, "toAct": to_act, "seats": seats,
         "actions": [a["text"] for a in actions], "events": events,
-        "feedTail": [line["line"] for line in _feed[-4:]]}, raw=d)
+        # The whole hand's story, not the last four lines. Four dropped the
+        # blind posts from every hand with more than two actions, which reads
+        # as "the reader missed the blinds" when it had them all along.
+        "feedTail": [line["line"] for line in _feed[-40:]]}, raw=d)
     _feed_prev = cur
 
 
@@ -1574,6 +1583,21 @@ def _mkey(seat: int | None, cents: int) -> tuple:
     return (seat, int(round(cents / 5)))
 
 
+def _refeed_blind_guess() -> None:
+    """Re-render feed lines printed while the big blind was only a guess.
+
+    Just the small-blind post in practice: it is the one line emitted between
+    the SB frame and the BB frame that carries a BB-denominated amount. Its
+    raw cents were stashed when it was written, so this reformats from the
+    source number rather than trying to parse the wrong text back out."""
+    for line in _feed:
+        cents = line.get("guessCents")
+        if cents is None:
+            continue
+        line["line"] = re.sub(r"\(([^)]*)\)$", f"({_amt(cents)})", line["line"])
+        line.pop("guessCents", None)
+
+
 def _amt(cents: int | None) -> str:
     """Format a wire amount (cents) in big blinds when the BB is known."""
     if cents is None:
@@ -1767,9 +1791,18 @@ def _on_game_msg(d: dict) -> None:
         btn, bet = d.get("btn"), d.get("bet")
         if bet:
             if btn == 4:                               # BB post = exact scale
+                if _ws_state.pop("bbGuessed", None) and _ws_state.get("bb") != bet:
+                    _ws_state["bb"] = bet          # correct BEFORE re-rendering
+                    _refeed_blind_guess()
                 _ws_state["bb"] = bet
             elif btn == 2 and not _ws_state.get("bbSeen"):
-                _ws_state["bb"] = bet * 2              # SB arrives first; infer
+                # SB arrives first, so the BB is not known yet. Doubling it is
+                # only right where the SB is half the BB, which Ignition's
+                # 0.02/0.05 is not: the true SB is 0.4 BB and this renders it
+                # "0.5 BB". Mark the guess so the real post can correct both
+                # the rate and the line already printed with it.
+                _ws_state["bb"] = bet * 2
+                _ws_state["bbGuessed"] = True
             _ws_state["bbSeen"] = True
             # Blinds are live bets: without this the first caller's matching
             # amount looks like an opening bet rather than a call, and a raise
@@ -1782,6 +1815,8 @@ def _on_game_msg(d: dict) -> None:
             _act_add(d.get("seat"), "post-sb" if btn == 2 else "post-bb", bet)
         _feed_add(f"Seat {d.get('seat')} posts "
                   + (f"{label} ({_amt(bet)})" if label else f"({_amt(bet)})"))
+        if _ws_state.get("bbGuessed"):
+            _feed[-1]["guessCents"] = bet
     elif pid == "CO_SELECT_INFO":
         _apply_select(d.get("seat"), d.get("btn"), d.get("bet") or 0, d.get("raise") or 0)
     elif pid == "CO_SELECT_SPEED_INFO":
