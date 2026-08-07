@@ -1,0 +1,119 @@
+{
+  "name": "threemax-sb-first-in",
+  "why": "18.2% — folded to hero in the small blind, heads-up against the big blind with position reversed against him for the rest of the hand. 95bb, the second most common depth (11.0%).",
+  "spec": {
+    "title": "$0.10/$0.25 No Limit Hold'em - 3-max Zone",
+    "capacity": 3,
+    "potBB": 1.5,
+    "board": [],
+    "heroSeat": 1,
+    "dealerSeat": 3,
+    "heroCards": [
+      "Kh",
+      "9s"
+    ],
+    "seats": {
+      "1": {
+        "stack": 94.9,
+        "cards": 2,
+        "bet": 0.5,
+        "badge": "POST SB",
+        "timer": 24
+      },
+      "2": {
+        "stack": 111.6,
+        "cards": 2,
+        "bet": 1.0,
+        "badge": "POST BB"
+      },
+      "3": {
+        "stack": 78.2,
+        "cards": 0,
+        "badge": "FOLD"
+      }
+    },
+    "offer": {
+      "fold": true,
+      "call": 0.5,
+      "raise": 3,
+      "selectors": [
+        "X3",
+        "Pot",
+        "ALL-IN"
+      ]
+    },
+    "node": {
+      "dealt": [
+        1,
+        2,
+        3
+      ],
+      "toActSeat": 1,
+      "committed": {
+        "1": 0.5,
+        "2": 1.0
+      },
+      "maxBet": 1.0,
+      "actions": [
+        {
+          "seat": 1,
+          "type": "post-sb",
+          "street": "preflop",
+          "amount": 0.5
+        },
+        {
+          "seat": 2,
+          "type": "post-bb",
+          "street": "preflop",
+          "amount": 1.0
+        },
+        {
+          "seat": 3,
+          "type": "fold",
+          "street": "preflop"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "preflop",
+      "board": [],
+      "heroSeatId": 1,
+      "heroCards": [
+        "K♥",
+        "9♠"
+      ],
+      "positions": {
+        "1": "SB",
+        "2": "BB",
+        "3": "BTN"
+      },
+      "actionCount": 3,
+      "toActSeatId": 1,
+      "toActIsHero": true,
+      "toCall": 0.5,
+      "ended": false
+    },
+    "relay": [
+      {
+        "label": "FOLD",
+        "kind": "action",
+        "fires": "foldButton"
+      },
+      {
+        "label": "CALL 0.5 BB",
+        "kind": "action",
+        "fires": "callButton"
+      },
+      {
+        "label": "RAISE TO 3 BB",
+        "kind": "action",
+        "fires": "raiseButton"
+      }
+    ],
+    "refuse": [
+      "CHECK"
+    ]
+  }
+}

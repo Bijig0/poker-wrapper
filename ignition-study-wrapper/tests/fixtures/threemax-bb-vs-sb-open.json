@@ -1,0 +1,125 @@
+{
+  "name": "threemax-bb-vs-sb-open",
+  "why": "9.7% — the blind battle. Button folds, small blind opens, hero defends out of position with the widest ranges either player uses. 100bb.",
+  "spec": {
+    "title": "$0.10/$0.25 No Limit Hold'em - 3-max Zone",
+    "capacity": 3,
+    "potBB": 4.0,
+    "board": [],
+    "heroSeat": 1,
+    "dealerSeat": 2,
+    "heroCards": [
+      "9h",
+      "8h"
+    ],
+    "seats": {
+      "1": {
+        "stack": 99.0,
+        "cards": 2,
+        "bet": 1.0,
+        "badge": "POST BB",
+        "timer": 24
+      },
+      "2": {
+        "stack": 88.0,
+        "cards": 0,
+        "badge": "FOLD"
+      },
+      "3": {
+        "stack": 100.5,
+        "cards": 2,
+        "bet": 3.0,
+        "badge": "RAISE"
+      }
+    },
+    "offer": {
+      "fold": true,
+      "call": 2,
+      "raise": 10,
+      "selectors": [
+        "X3",
+        "Pot",
+        "ALL-IN"
+      ]
+    },
+    "node": {
+      "dealt": [
+        1,
+        2,
+        3
+      ],
+      "toActSeat": 1,
+      "committed": {
+        "1": 1.0,
+        "3": 3.0
+      },
+      "maxBet": 3.0,
+      "actions": [
+        {
+          "seat": 3,
+          "type": "post-sb",
+          "street": "preflop",
+          "amount": 0.5
+        },
+        {
+          "seat": 1,
+          "type": "post-bb",
+          "street": "preflop",
+          "amount": 1.0
+        },
+        {
+          "seat": 2,
+          "type": "fold",
+          "street": "preflop"
+        },
+        {
+          "seat": 3,
+          "type": "raise",
+          "street": "preflop",
+          "amount": 3.0
+        }
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "preflop",
+      "board": [],
+      "heroSeatId": 1,
+      "heroCards": [
+        "9♥",
+        "8♥"
+      ],
+      "positions": {
+        "1": "BB",
+        "2": "BTN",
+        "3": "SB"
+      },
+      "actionCount": 4,
+      "toActSeatId": 1,
+      "toActIsHero": true,
+      "toCall": 2,
+      "ended": false
+    },
+    "relay": [
+      {
+        "label": "FOLD",
+        "kind": "action",
+        "fires": "foldButton"
+      },
+      {
+        "label": "CALL 2 BB",
+        "kind": "action",
+        "fires": "callButton"
+      },
+      {
+        "label": "RAISE TO 10 BB",
+        "kind": "action",
+        "fires": "raiseButton"
+      }
+    ],
+    "refuse": [
+      "CHECK"
+    ]
+  }
+}

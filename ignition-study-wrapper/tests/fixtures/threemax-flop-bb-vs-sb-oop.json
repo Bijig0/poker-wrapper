@@ -1,0 +1,127 @@
+{
+  "name": "threemax-flop-bb-vs-sb-oop",
+  "why": "The other flop geometry: hero defended the big blind and now acts FIRST for the rest of the hand, out of position against the preflop raiser. Blind-vs-blind single-raised pot, 100bb.",
+  "spec": {
+    "title": "$0.10/$0.25 No Limit Hold'em - 3-max Zone",
+    "capacity": 3,
+    "potBB": 6.0,
+    "board": [
+      "Js",
+      "6c",
+      "3d"
+    ],
+    "heroSeat": 1,
+    "dealerSeat": 2,
+    "heroCards": [
+      "Ah",
+      "5h"
+    ],
+    "seats": {
+      "1": {
+        "stack": 97.0,
+        "cards": 2,
+        "timer": 24
+      },
+      "2": {
+        "stack": 88.0,
+        "cards": 0,
+        "badge": "FOLD"
+      },
+      "3": {
+        "stack": 100.5,
+        "cards": 2
+      }
+    },
+    "offer": {
+      "fold": false,
+      "check": true,
+      "bet": 3,
+      "selectors": [
+        "1/2 Pot",
+        "Pot",
+        "ALL-IN"
+      ]
+    },
+    "node": {
+      "dealt": [
+        1,
+        2,
+        3
+      ],
+      "toActSeat": 1,
+      "committed": {},
+      "maxBet": 0,
+      "actions": [
+        {
+          "seat": 3,
+          "type": "post-sb",
+          "street": "preflop",
+          "amount": 0.5
+        },
+        {
+          "seat": 1,
+          "type": "post-bb",
+          "street": "preflop",
+          "amount": 1.0
+        },
+        {
+          "seat": 2,
+          "type": "fold",
+          "street": "preflop"
+        },
+        {
+          "seat": 3,
+          "type": "raise",
+          "street": "preflop",
+          "amount": 3.0
+        },
+        {
+          "seat": 1,
+          "type": "call",
+          "street": "preflop",
+          "amount": 2.0
+        }
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "flop",
+      "board": [
+        "J♠",
+        "6♣",
+        "3♦"
+      ],
+      "heroSeatId": 1,
+      "heroCards": [
+        "A♥",
+        "5♥"
+      ],
+      "positions": {
+        "1": "BB",
+        "2": "BTN",
+        "3": "SB"
+      },
+      "actionCount": 5,
+      "toActSeatId": 1,
+      "toActIsHero": true,
+      "toCall": 0,
+      "ended": false
+    },
+    "relay": [
+      {
+        "label": "CHECK",
+        "kind": "action",
+        "fires": "checkButton"
+      },
+      {
+        "label": "BET 3 BB",
+        "kind": "action",
+        "fires": "betButton"
+      }
+    ],
+    "refuse": [
+      "FOLD"
+    ]
+  }
+}
