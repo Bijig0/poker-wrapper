@@ -57,6 +57,25 @@ def to_code(display: str) -> str:
     return rank + _SUIT.get(d[-1], d[-1].lower())
 
 
+def adopt_rig_cdp() -> int:
+    """Point the reader at the browser belonging to the rig we are driving.
+
+    launch.CDP_PORT is read from this PROCESS's environment, which has none —
+    so it defaulted to the live rig's 9333 while every state was being posted
+    to the test rig on 7701. The fake table was never in the browser being
+    read, so all 120 states came back empty and were scored as parity losses.
+    Ask the rig which port is its own.
+    """
+    try:
+        with urllib.request.urlopen(f"{BASE}/state?light=1", timeout=5) as f:
+            port = (json.loads(f.read() or b"{}") or {}).get("cdpPort")
+        if isinstance(port, int) and port > 0:
+            launch.CDP_PORT = port
+    except Exception:
+        pass
+    return launch.CDP_PORT
+
+
 def _post(path: str, body: dict, timeout: float = 20):
     r = urllib.request.Request(BASE + path, data=json.dumps(body).encode(),
                                method="POST",
@@ -216,6 +235,7 @@ def diff(a: dict, b: dict) -> list[str]:
 def main() -> int:
     try:
         urllib.request.urlopen(BASE + "/state", timeout=5)
+        print(f"driving {BASE}, reading its browser on CDP :{adopt_rig_cdp()}")
     except (urllib.error.URLError, OSError) as e:
         print(f"wrapper not reachable on {BASE} — launch Ignition Study first ({e})")
         return 2

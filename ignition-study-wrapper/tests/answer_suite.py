@@ -30,7 +30,10 @@ import urllib.request
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-WRAPPER = "http://127.0.0.1:7700"
+import os
+# The Study Tool runs the TEST rig on 7701; 7700 is the live rig and has no
+# fake table to load, so a suite pointed there reports "unavailable".
+WRAPPER = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
 API = "http://127.0.0.1:2000"
 GTOW_CDP = "http://127.0.0.1:9222/json/version"
 GTOW_LIST = "http://127.0.0.1:9222/json/list"

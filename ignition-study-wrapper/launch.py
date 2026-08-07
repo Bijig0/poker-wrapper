@@ -289,7 +289,11 @@ def state(light: bool = False) -> dict:
            # test rig, and points the answer poller at its OWN wrapper — one
            # poller exists, so whichever panel you switch answers on becomes
            # the one it watches.
-           "fakeTable": _fake_mode, "panelPort": PANEL_PORT,
+           # cdpPort so a tool driving THIS rig reads THIS rig's browser. A
+           # test that posts to one rig's panel and then reads the other rig's
+           # CDP port finds no fake table and reports every state as a parity
+           # loss — which is what an hour-long run of 120/120 failures was.
+           "fakeTable": _fake_mode, "panelPort": PANEL_PORT, "cdpPort": CDP_PORT,
            # live-feed contract (CONTRACT.md §1) — what resolveHand consumes
            "connected": False, "hand": None, "studyAnswers": _study["on"],
            "panelAnswer": _current_answer(),
