@@ -114,6 +114,10 @@ interface QueueItem {
   seats: number;
   heroToAct: boolean;
   dupes: number;
+  /** Whether this state's session captured the RAW DOM alongside the frame.
+   *  Without it a disagreement can only be reported, not traced to the element
+   *  that caused it — so a state that has it is worth more of your time. */
+  hasDom: boolean;
 }
 
 const streetOf = (board: unknown): string => {
@@ -179,6 +183,7 @@ function buildQueue(): QueueItem[] {
   for (const name of sessions) {
     const p = join(DEBUG_DIR, name, "log.jsonl");
     if (!existsSync(p)) continue;
+    const hasDom = existsSync(join(DEBUG_DIR, name, "dom.jsonl"));
     for (const line of readFileSync(p, "utf-8").split("\n")) {
       if (!line.trim()) continue;
       let t: any;
@@ -188,11 +193,23 @@ function buildQueue(): QueueItem[] {
       const key = contentKey(t);
       const id = createHash("sha1").update(key).digest("hex").slice(0, 10);
       const hit = seen.get(id);
-      if (hit) { hit.dupes++; continue; }
+      if (hit) {
+        hit.dupes++;
+        // Keep the occurrence that can be TRACED. The same state captured in
+        // an old session (frame only) and a newer one (frame + raw DOM) is one
+        // item, and the reviewable copy is the one with the DOM behind it.
+        if (hasDom && !hit.hasDom) {
+          hit.session = name;
+          hit.seq = t.seq ?? -1;
+          hit.hasDom = true;
+        }
+        continue;
+      }
       seen.set(id, {
         id, session: name, seq: t.seq ?? -1, shape: shapeKey(t),
         hand: t.hand ?? null, street: streetOf(t.board),
         seats: Object.keys(t.seats).length, heroToAct: !!t.toAct, dupes: 1,
+        hasDom,
       });
     }
   }
@@ -210,7 +227,13 @@ function buildQueue(): QueueItem[] {
   // where a rendering path is least likely to have been exercised.
   const shapeCount = new Map<string, number>();
   for (const it of items) shapeCount.set(it.shape, (shapeCount.get(it.shape) ?? 0) + 1);
-  firstOfShape.sort((a, b) => (shapeCount.get(a.shape)! - shapeCount.get(b.shape)!));
+  // Diagnosable first, then rarest shape. Ordering purely by rarity led with
+  // the oldest sessions — which predate the raw-DOM capture — so the states
+  // presented first were the ones a disagreement could least be acted on.
+  firstOfShape.sort((a, b) =>
+    (Number(b.hasDom) - Number(a.hasDom)) ||
+    (shapeCount.get(a.shape)! - shapeCount.get(b.shape)!));
+  rest.sort((a, b) => Number(b.hasDom) - Number(a.hasDom));
   const out = [...firstOfShape, ...rest];
   queueCache = { built: Date.now(), items: out };
   return out;
