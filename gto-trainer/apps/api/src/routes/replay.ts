@@ -118,6 +118,10 @@ interface QueueItem {
    *  Without it a disagreement can only be reported, not traced to the element
    *  that caused it — so a state that has it is worth more of your time. */
   hasDom: boolean;
+  /** Whether the capture carries the FULL seatQa the structural reader needs.
+   *  Recordings that predate it can only exercise the geometric fallback — a
+   *  path that still runs, but not the one the panel takes live. */
+  structural: boolean;
 }
 
 const streetOf = (board: unknown): string => {
@@ -183,7 +187,19 @@ function buildQueue(): QueueItem[] {
   for (const name of sessions) {
     const p = join(DEBUG_DIR, name, "log.jsonl");
     if (!existsSync(p)) continue;
-    const hasDom = existsSync(join(DEBUG_DIR, name, "dom.jsonl"));
+    const domPath = join(DEBUG_DIR, name, "dom.jsonl");
+    const hasDom = existsSync(domPath);
+    // Sniff the first tick: does this capture carry the fields the structural
+    // pass reads? Older shapes have seatQa absent, or present without
+    // stack/bet, and both fall through to geometry.
+    let structural = false;
+    if (hasDom) {
+      try {
+        const first = readFileSync(domPath, "utf-8").split("\n", 1)[0];
+        const sq = JSON.parse(first || "{}")?.seatQa;
+        structural = Array.isArray(sq) && sq.length > 0 && sq[0]?.stack != null;
+      } catch { /* unreadable sniff just means "assume not" */ }
+    }
     for (const line of readFileSync(p, "utf-8").split("\n")) {
       if (!line.trim()) continue;
       let t: any;
@@ -198,10 +214,14 @@ function buildQueue(): QueueItem[] {
         // Keep the occurrence that can be TRACED. The same state captured in
         // an old session (frame only) and a newer one (frame + raw DOM) is one
         // item, and the reviewable copy is the one with the DOM behind it.
-        if (hasDom && !hit.hasDom) {
+        // Prefer the copy that exercises the live reader, then the traceable
+        // one. The same state captured in an old session and the new one is a
+        // single item, and only the newer copy tests the path that runs.
+        if ((structural && !hit.structural) || (hasDom && !hit.hasDom)) {
           hit.session = name;
           hit.seq = t.seq ?? -1;
-          hit.hasDom = true;
+          hit.hasDom = hasDom || hit.hasDom;
+          hit.structural = structural || hit.structural;
         }
         continue;
       }
@@ -209,7 +229,7 @@ function buildQueue(): QueueItem[] {
         id, session: name, seq: t.seq ?? -1, shape: shapeKey(t),
         hand: t.hand ?? null, street: streetOf(t.board),
         seats: Object.keys(t.seats).length, heroToAct: !!t.toAct, dupes: 1,
-        hasDom,
+        hasDom, structural,
       });
     }
   }
@@ -230,10 +250,14 @@ function buildQueue(): QueueItem[] {
   // Diagnosable first, then rarest shape. Ordering purely by rarity led with
   // the oldest sessions — which predate the raw-DOM capture — so the states
   // presented first were the ones a disagreement could least be acted on.
+  // Structural first, then traceable, then rarest shape. Ordering by rarity
+  // alone led with the oldest sessions, which exercise only the geometric
+  // fallback — real defects, but not in the path the panel takes live.
+  const rank = (x: QueueItem) => Number(x.structural) * 2 + Number(x.hasDom);
   firstOfShape.sort((a, b) =>
-    (Number(b.hasDom) - Number(a.hasDom)) ||
+    (rank(b) - rank(a)) ||
     (shapeCount.get(a.shape)! - shapeCount.get(b.shape)!));
-  rest.sort((a, b) => Number(b.hasDom) - Number(a.hasDom));
+  rest.sort((a, b) => rank(b) - rank(a));
   const out = [...firstOfShape, ...rest];
   queueCache = { built: Date.now(), items: out };
   return out;

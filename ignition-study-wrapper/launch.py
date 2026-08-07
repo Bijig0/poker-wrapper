@@ -498,7 +498,15 @@ _TABLE_JS = r"""(() => {
       empty: !!s.querySelector("[data-qa^='player-empty-seat']"),
       stack: bal ? bal.textContent.trim() : null,
       bet, badge,
-      nHole: s.querySelectorAll("[data-qa='holeCards']").length,
+      // VISIBLE hole-card slots only. The client keeps a folded seat's
+      // holeCards hooks in the DOM and merely hides them, so counting hooks
+      // reported two cards for a seat that mucked and never dropped: across a
+      // recorded session, 99 seats kept "holding" cards after the feed said
+      // they folded, for a median of 20 ticks and up to 145 — not the muck
+      // animation, which is one or two. Card presence IS the fold signal, so
+      // that left folded players live in every downstream read. The same
+      // filter the bet and badge already use fixes it.
+      nHole: [...s.querySelectorAll("[data-qa='holeCards']")].filter(vis).length,
     };
   });
   // The client scales its fixed-size table with CSS `zoom`. Every coordinate
