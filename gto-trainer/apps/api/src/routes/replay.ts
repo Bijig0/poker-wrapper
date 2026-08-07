@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 /**
@@ -82,9 +83,169 @@ replay.get("/:name/frame/:seq", (c) => {
   if (!dir) return c.json({ ok: false, error: "no such session" }, 404);
   const seq = Number(c.req.param("seq"));
   if (!Number.isInteger(seq) || seq < 0) return c.json({ ok: false }, 400);
-  const p = join(dir, `f${String(seq).padStart(5, "0")}.jpg`);
-  if (!existsSync(p)) return c.json({ ok: false, error: "no frame" }, 404);
-  return new Response(Bun.file(p), { headers: { "Content-Type": "image/jpeg" } });
+  // Recordings made before the JPEG switch hold PNGs, and the review queue
+  // leads with the oldest sessions — so serving only .jpg left every frame in
+  // those broken while the replica rendered fine beside it, which reads as a
+  // replica bug rather than a missing file.
+  const base = join(dir, `f${String(seq).padStart(5, "0")}`);
+  for (const [ext, mime] of [[".jpg", "image/jpeg"], [".png", "image/png"]] as const) {
+    if (existsSync(base + ext)) {
+      return new Response(Bun.file(base + ext), { headers: { "Content-Type": mime } });
+    }
+  }
+  return c.json({ ok: false, error: "no frame" }, 404);
+});
+
+/* ------------------------------------------------------- the review queue */
+
+/**
+ * A state's identity is its CONTENT, not where it was recorded: the same table
+ * captured twice, or by two sessions, is one thing to review and must keep one
+ * id across re-recordings. Provenance (session + seq) rides along so the id
+ * still resolves to a frame.
+ */
+interface QueueItem {
+  id: string;
+  session: string;
+  seq: number;
+  shape: string;
+  hand: number | null;
+  street: string;
+  seats: number;
+  heroToAct: boolean;
+  dupes: number;
+}
+
+const streetOf = (board: unknown): string => {
+  const n = Array.isArray(board) ? board.length : 0;
+  return n >= 5 ? "river" : n === 4 ? "turn" : n === 3 ? "flop" : "preflop";
+};
+
+/** The fields a reviewer is actually judging — everything else is noise. */
+function contentKey(t: any): string {
+  const seats = Object.entries(t.seats ?? {})
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([n, s]: [string, any]) =>
+      `${n}:${s?.stack ?? ""}/${s?.bet ?? ""}/${s?.badge ?? ""}/${s?.cards ?? 0}`);
+  return JSON.stringify({
+    board: t.board ?? [], hero: t.heroCards ?? [], pot: t.pot ?? null,
+    toAct: !!t.toAct, actions: t.actions ?? [], seats,
+  });
+}
+
+/**
+ * A coarse signature of what the state LOOKS like. Two states with the same
+ * shape exercise the same rendering and reading paths, so reviewing the second
+ * teaches nothing the first did not — the queue leads with one of each.
+ */
+function shapeKey(t: any): string {
+  const seats = Object.values(t.seats ?? {}) as any[];
+  const badges = [...new Set(seats.map((s) => s?.badge).filter(Boolean))].sort();
+  const bets = seats.filter((s) => s?.bet).length;
+  const cards = seats.map((s) => s?.cards ?? 0).sort().join("");
+  return [seats.length, streetOf(t.board), t.toAct ? "act" : "wait",
+          badges.join("+") || "-", `bet${bets}`, `c${cards}`].join("|");
+}
+
+const VERDICT_FILE = join(DEBUG_DIR, "parity-verdicts.json");
+
+interface Verdict {
+  reader?: "ok" | "bad" | "unsure";
+  replica?: "ok" | "bad" | "unsure";
+  note?: string;
+  at?: number;
+  session?: string;
+  seq?: number;
+}
+
+function readVerdicts(): Record<string, Verdict> {
+  try {
+    return existsSync(VERDICT_FILE)
+      ? JSON.parse(readFileSync(VERDICT_FILE, "utf-8"))
+      : {};
+  } catch {
+    return {};   // a corrupt file must not take the queue down with it
+  }
+}
+
+let queueCache: { built: number; items: QueueItem[] } | null = null;
+
+function buildQueue(): QueueItem[] {
+  if (queueCache && Date.now() - queueCache.built < 30_000) return queueCache.items;
+  const seen = new Map<string, QueueItem>();
+  const sessions = existsSync(DEBUG_DIR)
+    ? readdirSync(DEBUG_DIR).filter((n) => /^session_\d{8}_\d{6}$/.test(n)).sort()
+    : [];
+  for (const name of sessions) {
+    const p = join(DEBUG_DIR, name, "log.jsonl");
+    if (!existsSync(p)) continue;
+    for (const line of readFileSync(p, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      let t: any;
+      try { t = JSON.parse(line); } catch { continue; }
+      // A tick with no seats is the table between hands — nothing to judge.
+      if (!t.seats || !Object.keys(t.seats).length) continue;
+      const key = contentKey(t);
+      const id = createHash("sha1").update(key).digest("hex").slice(0, 10);
+      const hit = seen.get(id);
+      if (hit) { hit.dupes++; continue; }
+      seen.set(id, {
+        id, session: name, seq: t.seq ?? -1, shape: shapeKey(t),
+        hand: t.hand ?? null, street: streetOf(t.board),
+        seats: Object.keys(t.seats).length, heroToAct: !!t.toAct, dupes: 1,
+      });
+    }
+  }
+  // Lead with one of each shape, then everything else. Reviewing 900 folds
+  // that differ by a stack digit finds nothing the first one did not.
+  const items = [...seen.values()];
+  const firstOfShape: QueueItem[] = [];
+  const rest: QueueItem[] = [];
+  const shapesSeen = new Set<string>();
+  for (const it of items) {
+    if (shapesSeen.has(it.shape)) rest.push(it);
+    else { shapesSeen.add(it.shape); firstOfShape.push(it); }
+  }
+  // Within the leading group, the rarest shapes first: a shape seen once is
+  // where a rendering path is least likely to have been exercised.
+  const shapeCount = new Map<string, number>();
+  for (const it of items) shapeCount.set(it.shape, (shapeCount.get(it.shape) ?? 0) + 1);
+  firstOfShape.sort((a, b) => (shapeCount.get(a.shape)! - shapeCount.get(b.shape)!));
+  const out = [...firstOfShape, ...rest];
+  queueCache = { built: Date.now(), items: out };
+  return out;
+}
+
+replay.get("/queue", (c) => {
+  const items = buildQueue();
+  const verdicts = readVerdicts();
+  const shapes = new Set(items.map((i) => i.shape));
+  return c.json({
+    ok: true,
+    total: items.length,
+    shapes: shapes.size,
+    reviewed: Object.keys(verdicts).filter((k) => items.some((i) => i.id === k)).length,
+    items,
+    verdicts,
+  });
+});
+
+replay.post("/verdict", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | (Verdict & { id?: string })
+    | null;
+  if (!body?.id) return c.json({ ok: false, error: "id required" }, 400);
+  const all = readVerdicts();
+  const { id, ...rest } = body;
+  // Merge, so recording a replica verdict does not wipe an existing reader
+  // one — the two are judged independently and often in separate passes.
+  all[id] = { ...(all[id] ?? {}), ...rest, at: Date.now() };
+  try {
+    writeFileSync(VERDICT_FILE, JSON.stringify(all, null, 1), "utf-8");
+  } catch (e) {
+    return c.json({ ok: false, error: String(e) }, 500);
+  }
+  return c.json({ ok: true, id, verdict: all[id] });
 });
 
 export default replay;

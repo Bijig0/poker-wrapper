@@ -8,3 +8,4 @@ data/
 debug/study-tool.log
 .profile-table-fake/
 .profile-panel-fake/
+debug/parity-verdicts.json
