@@ -86,7 +86,10 @@ CHROME = os.environ.get("CHROME_EXE") or _default_browser()
 # scout/cdp.py routes every call through its module-global PORT (default 9223 =
 # CoinPoker); pin it here so no code path ever talks to the wrong client.
 cdp.PORT = CDP_PORT
-TABLE_FRAC = float(os.environ.get("TABLE_FRAC", "0.70"))
+# The test rig's side window hosts the full Study Tool (review queue, state
+# tester), which needs real width; the live rig's panel is a narrow column.
+TABLE_FRAC = float(os.environ.get(
+    "TABLE_FRAC", "0.55" if os.environ.get("FAKE_TABLE") == "1" else "0.70"))
 # Per-rig browser profiles and window title. A shared profile dir puts both
 # rigs' windows in ONE Chrome process, where --window-position/--window-size and
 # the CDP port stop sticking; a shared title makes each panel's
@@ -2443,6 +2446,13 @@ class Handler(BaseHTTPRequestHandler):
                         pass
                 self._send(200, "application/json",
                            json.dumps({"ok": True, "fixtures": out}).encode())
+            elif path == "/tool":
+                # The Study Tool's single window: the panel plus every
+                # dashboard surface as tabs. The panel iframe is NEVER
+                # unloaded — it is what polls for answers and speaks them, and
+                # unloading it on a tab switch would silence the tool.
+                self._send(200, "text/html; charset=utf-8",
+                           _tool_shell().encode())
             elif path == "/faketable/lastclick":
                 # What the relay actually pressed on the fake page — the
                 # page records every button click into window.__lastClick.
@@ -2778,6 +2788,67 @@ def _takeover() -> None:
     print(f"[panel] replaced previous instance(s): {sorted(stale)}")
 
 
+def _tool_shell() -> str:
+    """One window for the whole Study Tool.
+
+    Tab 1 is the wrapper's own panel (same origin). The rest are the dashboard
+    app's surfaces, iframed from :2100 — authored there in React and not worth
+    porting to vanilla JS just to share a window. Each iframe loads on first
+    open and stays alive after, so the review queue keeps its place and the
+    panel keeps announcing answers from behind whichever tab is in front.
+    """
+    dash = "http://127.0.0.1:2100"
+    tabs = [
+        ("study", "Study Answers", f"http://127.0.0.1:{PANEL_PORT}/panel"),
+        ("review", "Review Queue", f"{dash}/replay"),
+        ("setup", "State Tester", f"{dash}/state-tester"),
+        ("verify", "Reader Verify", f"{dash}/table"),
+    ]
+    buttons = "".join(
+        f"<button data-tab='{k}'>{label}</button>" for k, label, _ in tabs)
+    frames = "".join(
+        f"<iframe data-pane='{k}' data-src='{url}'></iframe>" for k, _, url in tabs)
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<title>{PANEL_TITLE}</title>
+<style>
+  html,body {{ margin:0; height:100%; background:#0d141c; color:#cfe0ef;
+    font:13px system-ui,sans-serif; display:flex; flex-direction:column; }}
+  nav {{ display:flex; gap:2px; padding:4px 6px 0; background:#0a0f15;
+    border-bottom:1px solid #1d2833; flex:0 0 auto; }}
+  nav button {{ font:inherit; border:1px solid #1d2833; border-bottom:none;
+    background:#101823; color:#8fa1b6; padding:6px 14px; cursor:pointer;
+    border-radius:6px 6px 0 0; }}
+  nav button.on {{ background:#16212e; color:#fff; border-color:#2a3a4c; }}
+  nav .hint {{ margin-left:auto; align-self:center; font-size:11px;
+    color:#ffce56; padding-right:8px; display:none; }}
+  main {{ flex:1; position:relative; }}
+  iframe {{ position:absolute; inset:0; width:100%; height:100%; border:0;
+    display:none; background:#0d141c; }}
+  iframe.on {{ display:block; }}
+</style></head><body>
+<nav>{buttons}<span class="hint" id="hint">dashboard on :2100 is not running —
+  these tabs need it (the launcher starts it; see study-tool.log)</span></nav>
+<main>{frames}</main>
+<script>
+  const frames = [...document.querySelectorAll("iframe")];
+  const btns = [...document.querySelectorAll("nav button")];
+  function show(k) {{
+    btns.forEach(b => b.classList.toggle("on", b.dataset.tab === k));
+    frames.forEach(f => {{
+      const on = f.dataset.pane === k;
+      f.classList.toggle("on", on);
+      if (on && !f.src) f.src = f.dataset.src;   // lazy, then persistent
+    }});
+  }}
+  btns.forEach(b => b.onclick = () => show(b.dataset.tab));
+  show("study");
+  // The dashboard tabs are dead without :2100 — say so instead of a blank pane.
+  fetch("http://127.0.0.1:2100/", {{ mode: "no-cors" }})
+    .catch(() => document.getElementById("hint").style.display = "inline");
+</script>
+</body></html>"""
+
+
 def _faketable_load(spec: dict) -> dict:
     """Enter test mode with an authored state: store the spec, seed the
     WS-side hand state from its `node` section, and make sure a CDP-visible
@@ -2987,8 +3058,9 @@ def main() -> None:
         ctypes.windll.user32.SetForegroundWindow(hwnd)
         print("[panel] window already open — brought to front")
     else:
-        chrome_window(f"http://127.0.0.1:{PANEL_PORT}/panel", PROFILE_PANEL,
-                      ax + table_w, ay, w - table_w, h)
+        side_url = (f"http://127.0.0.1:{PANEL_PORT}/tool" if _fake_mode
+                    else f"http://127.0.0.1:{PANEL_PORT}/panel")
+        chrome_window(side_url, PROFILE_PANEL, ax + table_w, ay, w - table_w, h)
         print(f"[panel] window beside table ({w - table_w}x{h})")
 
     # A fresh test rig RENDERS a table (the page falls back to the example
