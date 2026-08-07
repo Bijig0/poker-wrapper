@@ -24,6 +24,7 @@ Run:  aof-model/.venv/Scripts/python.exe tests/reader_parity.py [session ...]
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -36,7 +37,10 @@ sys.path.insert(0, str(ROOT))
 
 import launch  # noqa: E402  (the reader under test)
 
-BASE = "http://127.0.0.1:7700"
+# The rig under test. The Study Tool runs the TEST rig on 7701 with the fake
+# table; 7700 is the live rig and has no fake table to load, so a suite
+# pointed there reports "unavailable" and silently tests nothing.
+BASE = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
 # States checked by default. Enough to catch a systematic loss; the whole
 # corpus (--all) is a deliberate, much longer sweep.
 SAMPLE = 120

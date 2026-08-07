@@ -20,6 +20,7 @@ Run:  aof-model/.venv/Scripts/python.exe tests/run_state_suite.py [name ...]
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -28,7 +29,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-BASE = "http://127.0.0.1:7700"
+# The rig under test. The Study Tool runs the TEST rig on 7701 with the fake
+# table; 7700 is the live rig and has no fake table to load, so a suite
+# pointed there reports "unavailable" and silently tests nothing.
+BASE = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
 
 
 def _req(path: str, body: dict | None = None, timeout: float = 15):
