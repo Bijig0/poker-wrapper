@@ -102,6 +102,9 @@ export const resolveSet = (hand: ParsedHand, heroPos: string | null, setId?: str
  *  this shape with the real 3-max rake and per-seat stack asymmetry — the
  *  6-max phantom-fold walk is the wrong tree on every axis (rake model, no
  *  limps, symmetric 100bb only). */
+/** Preflop acting order 3-handed: the button is first in, the blinds behind. */
+const THREE_MAX_SEATS: readonly string[] = ["BTN", "SB", "BB"];
+
 const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
   const present = new Set(
     [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
@@ -320,7 +323,34 @@ async function solvePostflopAi(
     const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
     if (snapped.ok) preTokens = snapped.tokens;
   }
-  const recon = reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  // A 3-handed flop was dealt by a 3-handed preflop, so the ranges that REACH
+  // it belong to the asymmetric 3-max corpus, not the 6-max charts: a 3-max
+  // button opens a materially wider range than a 6-max one, and blind-vs-blind
+  // differs more still. The solve is a custom solve at the observed
+  // pot/stack/board either way — this decides only what ranges it starts from,
+  // which is the difference between the right answer and a plausible one.
+  //
+  // The 6-max reconstruction stays as the fallback rather than dropping to
+  // generic full ranges: a dead chart server should cost accuracy, not the
+  // answer.
+  let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> | null = null;
+  let rangeSource: string | null = null;
+  if (is3Handed(hand, heroPos)) {
+    const chart = chartFor(hand, heroPos);
+    const tri = await reconstructFlopRanges(buildPreflopTokens3max(hand, heroPos), async (line) => {
+      const n = await fetchNode(chart.id, line);
+      return n === "unreachable" ? null : n;
+    });
+    if (tri.ok) {
+      recon = tri;
+      rangeSource = chart.id;
+    } else {
+      rangeSource = `6max (3-max chart ${chart.id}: ${tri.reason})`;
+    }
+  }
+  if (!recon) {
+    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  }
   let oopArr: number[] | null = null;
   let ipArr: number[] | null = null;
   if (recon.ok) {
@@ -444,7 +474,12 @@ async function solvePostflopAi(
     approx: true,
     warning: genericRanges
       ? "AI solve with GENERIC full ranges — the preflop line couldn't be walked in the charts (limps/missed actions?); treat as board-texture guidance."
-      : null,
+      // Which preflop ranges seeded the solve is not cosmetic: the same board,
+      // pot and stacks solved from 6-max ranges is a different answer, so a
+      // 3-handed spot that quietly fell back says so.
+      : rangeSource && rangeSource.startsWith("6max")
+        ? `3-handed spot solved from 6-MAX preflop ranges — ${rangeSource}; treat as approximate.`
+        : null,
   } };
 }
 
@@ -498,16 +533,42 @@ async function solvePostflopViaChain(
   // whole point is conditioning, and conditioning on fiction is worse than
   // the flagged street-root fallback.
   const isHu = set.seats.length === 2;
-  if (!preflopDb.available(set.gametype, depth)) return fail(`no charts for ${set.gametype}@${depth}`);
-  let preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
-  const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
-  if (!snapped.ok) return fail(`preflop line: ${snapped.reason}`);
-  preTokens = snapped.tokens;
-  // HU lines walk the [SB, BB] rotation — the 6-max default misassigns every
-  // action (the line never "closes") and double-counts the blinds as dead.
-  const seatOrder = isHu ? HU_SEATS : undefined;
-  if (!preflopClosed(preTokens, seatOrder)) return fail("preflop betting didn't close (missed action?)");
-  const recon = reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+
+  // A 3-handed flop is entered from a 3-handed preflop, so its ranges come from
+  // the asymmetric 3-max corpus. Tried FIRST and fallen back from rather than
+  // replacing the 6-max walk: if the chart server is down, conditioned 6-max
+  // ranges still beat losing the chain (and the street-root solve flags it).
+  let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> | null = null;
+  let preTokens: string[] = [];
+  if (is3Handed(hand, heroPos)) {
+    const chart = chartFor(hand, heroPos);
+    const tri3 = buildPreflopTokens3max(hand, heroPos);
+    // reconstructFlopRanges snaps tokens against the nodes it is given, so the
+    // 3-max line needs no separate pre-snap pass.
+    if (preflopClosed(tri3, THREE_MAX_SEATS)) {
+      const tri = await reconstructFlopRanges(tri3, async (line) => {
+        const n = await fetchNode(chart.id, line);
+        return n === "unreachable" ? null : n;
+      });
+      if (tri.ok) {
+        recon = tri;
+        preTokens = tri3;
+      }
+    }
+  }
+
+  if (!recon) {
+    if (!preflopDb.available(set.gametype, depth)) return fail(`no charts for ${set.gametype}@${depth}`);
+    preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
+    const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+    if (!snapped.ok) return fail(`preflop line: ${snapped.reason}`);
+    preTokens = snapped.tokens;
+    // HU lines walk the [SB, BB] rotation — the 6-max default misassigns every
+    // action (the line never "closes") and double-counts the blinds as dead.
+    const seatOrder = isHu ? HU_SEATS : undefined;
+    if (!preflopClosed(preTokens, seatOrder)) return fail("preflop betting didn't close (missed action?)");
+    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  }
   if (!recon.ok) return fail(`range reconstruction: ${recon.reason}`);
   // HU trees seat the dealer as SB; the vision layer may label him BTN.
   const posName = (p: string) => (isHu && p.toUpperCase() === "BTN" ? "SB" : p);

@@ -277,7 +277,7 @@ const heroPosOf = (hand: ParsedHand, override?: string): string | null => {
   return override ?? hand.positions[hand.heroSeatId] ?? (post ? (post.type === "post-sb" ? "SB" : "BB") : null);
 };
 
-const reconstructChartRanges = (hand: ParsedHand, heroPos: string, oopPos: string, ipPos: string): { oop: string; ip: string; source: "charts" | "full" } => {
+const reconstructChartRanges = async (hand: ParsedHand, heroPos: string, oopPos: string, ipPos: string): Promise<{ oop: string; ip: string; source: "charts" | "full" }> => {
   // Detect table size from how many seats were DEALT (acted preflop), NOT from how
   // many still carry a position label. A fold-to-the-blinds hand often only labels
   // the two live blinds, which would misread as heads-up and look up the wrong (HU)
@@ -294,7 +294,7 @@ const reconstructChartRanges = (hand: ParsedHand, heroPos: string, oopPos: strin
   if (!preflopDb.available(set.gametype, depth)) return { oop: "full", ip: "full", source: "full" };
 
   const tokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
-  const recon = reconstructFlopRanges(tokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+  const recon = await reconstructFlopRanges(tokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
   if (!recon.ok) return { oop: "full", ip: "full", source: "full" };
 
   const byPos = (pos: string) => Object.entries(recon.ranges).find(([p]) => p.toUpperCase() === pos.toUpperCase())?.[1];
@@ -314,7 +314,7 @@ app.post("/setup", async (c) => {
   const d = deriveExploitSpot(hand, heroPos);
   if (!d.ok) return c.json({ ok: false, error: d.error }, 422);
 
-  const ranges = reconstructChartRanges(hand, heroPos!, d.spot.oopPos, d.spot.ipPos);
+  const ranges = await reconstructChartRanges(hand, heroPos!, d.spot.oopPos, d.spot.ipPos);
   const warning = ranges.source === "full"
     ? "⚠ No solved chart ranges for this preflop line — the grids are prefilled with full 100% ranges, not GTO ranges. Solving as-is gives garbage (strong hands bet ~always). Set real ranges before solving."
     : null;

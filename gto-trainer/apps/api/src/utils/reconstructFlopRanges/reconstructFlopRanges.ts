@@ -20,16 +20,24 @@ export type ReconstructResult =
   | { ok: true; ranges: Record<string, Record<string, number>> } // position → (class → weight)
   | { ok: false; reason: string };
 
-export function reconstructFlopRanges(
+/**
+ * `getNode` may be async. The locally crawled charts are an in-memory table and
+ * answer synchronously, but the 3-max asymmetric corpus is served over HTTP,
+ * and it cannot be pre-fetched into a cache instead: this walk SNAPS tokens as
+ * it goes, so which node comes next is not known until the previous one has
+ * been read. Awaiting the accessor keeps the snapping in one place rather than
+ * duplicating it in a pre-walk.
+ */
+export async function reconstructFlopRanges(
   tokens: string[],
-  getNode: (line: string) => RawNode | null
-): ReconstructResult {
+  getNode: (line: string) => RawNode | null | Promise<RawNode | null>
+): Promise<ReconstructResult> {
   const ranges = new Map<string, Map<string, number>>();
   const lastToken = new Map<string, string>();
   const out: string[] = []; // snapped prefix so far
 
   for (let k = 0; k < tokens.length; k++) {
-    const node = getNode(out.join("-"));
+    const node = await getNode(out.join("-"));
     if (!node) return { ok: false, reason: `preflop node "${out.join("-")}" not in the charts` };
     if (node.terminal) return { ok: false, reason: `preflop node "${out.join("-")}" is terminal before the line ends` };
     const pos = node.pos;

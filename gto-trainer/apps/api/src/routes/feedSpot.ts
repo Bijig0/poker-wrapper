@@ -87,7 +87,16 @@ app.post("/", async (c) => {
   const tk = buildSpotSolutionTokens(hand, heroPos, isHu);
   const { openBb, limpers } = openAndLimps(hand);
   const stacks = hand.stacks ?? {};
-  const liveStacks = Object.values(stacks).filter((s) => Number.isFinite(s) && s > 0);
+  // Effective stack is over the players STILL IN THE HAND. Taking the minimum
+  // across every seat let a folded player set it: a flop between two 97.5bb
+  // stacks reported 71bb because the small blind had folded preflop holding
+  // that much, and the audit then flagged a 100bb solve as 29bb off when it
+  // was within 3.
+  const foldedSeats = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => a.seatId));
+  const liveStacks = Object.entries(stacks)
+    .filter(([seat]) => !foldedSeats.has(Number(seat)))
+    .map(([, s]) => s)
+    .filter((s) => Number.isFinite(s) && s > 0);
   const effStackBb = liveStacks.length ? Math.round(Math.min(...liveStacks) * 10) / 10 : null;
   const tableSeats = new Set([
     ...Object.keys(hand.positions).map(Number),

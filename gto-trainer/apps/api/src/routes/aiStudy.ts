@@ -142,7 +142,7 @@ app.post("/", async (c) => {
     if (!preflopClosed(pre, seatOrder)) {
       return c.json({ ok: false, error: "preflop betting hasn't closed after this line — a response node is missing from the crawl." }, 422);
     }
-    const recon = reconstructFlopRanges(pre, (line) => preflopDb.rawNode(gametype, depth, line));
+    const recon = await reconstructFlopRanges(pre, (line) => preflopDb.rawNode(gametype, depth, line));
     if (!recon.ok) return c.json({ ok: false, error: `preflop ranges: ${recon.reason}` }, 422);
     const positions = Object.keys(recon.ranges);
     [oopPos, ipPos] =

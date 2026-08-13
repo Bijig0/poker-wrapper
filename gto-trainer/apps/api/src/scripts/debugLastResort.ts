@@ -48,7 +48,7 @@ if (!d.ok) process.exit(1);
 
 const preTokens = buildPreflopTokens(hand, heroPos);
 console.log("preTokens:", preTokens);
-const recon = reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode("Cash6m500zGeneral", 100, line));
+const recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode("Cash6m500zGeneral", 100, line));
 console.log("recon ok:", recon.ok, recon.ok ? Object.keys((recon as any).ranges) : (recon as any).reason);
 
 const toCall = 4.72;

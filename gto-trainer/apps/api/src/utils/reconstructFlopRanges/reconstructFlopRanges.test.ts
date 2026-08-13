@@ -26,8 +26,8 @@ const nodes: Record<string, RawNode> = {
 const getNode = (l: string): RawNode | null => nodes[l] ?? null;
 
 describe("reconstructFlopRanges", () => {
-  it("recovers both flop players' weighted ranges by position", () => {
-    const r = reconstructFlopRanges("F-F-R2.5-F-F-C".split("-"), getNode);
+  it("recovers both flop players' weighted ranges by position", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.5-F-F-C".split("-"), getNode);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.ranges["CO"]!["AA"]).toBeCloseTo(1);
@@ -37,19 +37,19 @@ describe("reconstructFlopRanges", () => {
     expect(r.ranges["BB"]!["KQo"]).toBeCloseTo(0.5);
   });
 
-  it("snaps an off-tree open (2.6 → 2.5)", () => {
-    const r = reconstructFlopRanges("F-F-R2.6-F-F-C".split("-"), getNode);
+  it("snaps an off-tree open (2.6 → 2.5)", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.6-F-F-C".split("-"), getNode);
     expect(r.ok).toBe(true);
   });
 
-  it("fails when not exactly two reach the flop", () => {
-    const r = reconstructFlopRanges("F-F-R2.5-F-F-F".split("-"), getNode);
+  it("fails when not exactly two reach the flop", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.5-F-F-F".split("-"), getNode);
     expect(r.ok).toBe(false);
   });
 });
 
 describe("classWeightsToSpec", () => {
-  it("bare for full weight, class:weight otherwise", () => {
+  it("bare for full weight, class:weight otherwise", async () => {
     expect(classWeightsToSpec({ AA: 1, AKs: 0.8, T9s: 0 })).toBe("AA,AKs:0.8");
   });
 });
