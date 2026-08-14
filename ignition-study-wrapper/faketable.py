@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import html
 import mimetypes
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -223,6 +224,13 @@ def _seat(num: int, slot: int, s: dict, is_hero: bool, cap: int,
 
     # Status strip, sliding out from under the pill.
     badge = s.get("badge")
+    # The reader NORMALIZES the client's "POST SB" to "POST-SB", and specs
+    # round-tripped from recordings carry that form. The real client never
+    # renders the hyphen, so neither can this table — rendering it verbatim
+    # made the reader's own badge regex miss it, and parity blamed the reader
+    # for a badge this table had drawn wrong.
+    if badge:
+        badge = re.sub(r"^POST-(SB|BB)$", r"POST \1", str(badge))
     strip = ""
     if badge:
         strip = (

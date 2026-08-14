@@ -98,16 +98,28 @@ class Case:
         return [c for c in self.checks if not c[1]]
 
 
-def wait_for_answer(deadline: float) -> dict:
-    """Poll the poller until it has an answer or a reason it cannot get one."""
+def wait_for_answer(deadline: float, before: dict) -> dict:
+    """Poll the poller until THIS fixture's answer (or failure) arrives.
+
+    The poller's status is a running log, not a per-request reply: lastAnswer
+    and lastNavFailure persist until something overwrites them, and nothing
+    clears them between fixtures. Waiting for a merely-truthy value therefore
+    returned the PREVIOUS fixture's answer in milliseconds — six fixtures
+    "answered" in 0-30ms and then failed on the panel check, and three
+    inherited a stale navFailure and were reported unanswerable while the
+    fast-solver answered them fine. Only a value DIFFERENT from the snapshot
+    taken before this fixture loaded counts.
+    """
+    prev_answer = before.get("lastAnswer")
+    prev_nav = json.dumps(before.get("lastNavFailure") or {}, sort_keys=True)
     last: dict = {}
     while time.time() < deadline:
         st = _req(f"{API}/api/study-poller/status") or {}
         last = st
-        if st.get("lastAnswer"):
+        if st.get("lastAnswer") and st.get("lastAnswer") != prev_answer:
             return st
         nav = st.get("lastNavFailure")
-        if nav and nav.get("reason"):
+        if nav and nav.get("reason")                 and json.dumps(nav, sort_keys=True) != prev_nav:
             return st          # a definite failure — stop waiting for a miracle
         time.sleep(1.5)
     return last
@@ -118,6 +130,11 @@ def run(path: Path) -> Case:
     c = Case(fx.get("name") or path.stem)
     want = (fx.get("expect") or {}).get("answer") or {}
 
+    # Snapshot BEFORE the load: the poller can answer the new state within its
+    # first tick, and a snapshot taken after would call that fresh answer
+    # stale and wait the full timeout for nothing.
+    before = _req(f"{API}/api/study-poller/status") or {}
+
     load = _req(f"{WRAPPER}/faketable/load", fx["spec"])
     if not load.get("ok"):
         c.check(False, "state loaded", json.dumps(load))
@@ -127,10 +144,16 @@ def run(path: Path) -> Case:
     # The panel switch is the poller's gate; without it the poller idles by
     # design and pushes null forever.
     _req(f"{WRAPPER}/study-answers", {"on": True})
-    _req(f"{API}/api/study-poller/start", {})
+    # ONE poller serves every rig, and started with no assistiveUrl it falls
+    # back to the LIVE rig's port — where nothing listens under test, so every
+    # poll died with "Unable to connect" for the full timeout and the whole
+    # suite reported 0/12 against a perfectly healthy stack. Point it at the
+    # rig actually under test, exactly as panel.html does when the switch is
+    # flipped by hand.
+    _req(f"{API}/api/study-poller/start", {"assistiveUrl": WRAPPER})
 
     t0 = time.time()
-    st = wait_for_answer(t0 + ANSWER_TIMEOUT)
+    st = wait_for_answer(t0 + ANSWER_TIMEOUT, before)
     elapsed = int((time.time() - t0) * 1000)
 
     text = st.get("lastAnswer")

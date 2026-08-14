@@ -22,6 +22,23 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
 
+# Reader parity imports launch.py, which needs the aof-model venv
+# (websocket-client). Run under the system python and that tier fails on
+# import in seconds — a red suite that says nothing about the reader. Re-exec
+# under the venv rather than documenting the right interpreter and hoping.
+_VENV_PY = HERE.parent.parent / "aof-model" / ".venv" / "Scripts" / "python.exe"
+try:
+    import websocket  # noqa: F401
+except ModuleNotFoundError:
+    if _VENV_PY.exists() and Path(PY).resolve() != _VENV_PY.resolve():
+        # subprocess rather than os.exec*: on Windows exec does not replace
+        # the process, so the caller would read an exit code from the wrong
+        # one.
+        raise SystemExit(
+            subprocess.run([str(_VENV_PY), "-u", *sys.argv]).returncode)
+    print("websocket-client missing and the aof-model venv was not found — "
+          "tier 2 (reader parity) cannot import the reader")
+
 TIERS = [
     ("state suite   ", "run_state_suite.py", []),
     ("reader parity ", "reader_parity.py", ["--all"] if "--all" in sys.argv else []),
