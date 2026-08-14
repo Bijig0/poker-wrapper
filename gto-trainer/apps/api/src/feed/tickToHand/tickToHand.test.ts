@@ -137,6 +137,31 @@ describe("tickToHand", () => {
     expect(hand!.currentNode.toCall).toBeCloseTo(1.4, 5);
   });
 
+  it("prefers the client's dealer marker over the SB derivation", () => {
+    // Same hand, but the reader carried the dealer flag. Marker and
+    // derivation agree here (seat 2), so no note is raised.
+    const withMarker = {
+      ...HAND_6,
+      seats: { ...HAND_6.seats, "2": { ...HAND_6.seats!["2"], dealer: true } },
+    };
+    const { hand, buttonSeat, notes } = tickToHand(withMarker as Tick);
+    expect(buttonSeat).toBe(2);
+    expect(hand!.positions[4]).toBe("BB");
+    expect(notes.some((n) => n.includes("disagrees"))).toBe(false);
+  });
+
+  it("says so when the marker and the SB post disagree", () => {
+    // Marker on seat 5 while the SB post says the button is seat 2 — the
+    // reader misread one of them, and the note names both.
+    const clash = {
+      ...HAND_6,
+      seats: { ...HAND_6.seats, "5": { ...HAND_6.seats!["5"], dealer: true } },
+    };
+    const { buttonSeat, notes } = tickToHand(clash as Tick);
+    expect(buttonSeat).toBe(5); // the marker wins
+    expect(notes.some((n) => n.includes("disagrees"))).toBe(true);
+  });
+
   it("refuses to build a hand when hero's seat was never recorded", () => {
     const noHero = { ...HAND_6, seats: { ...HAND_6.seats } };
     delete (noHero.seats as any)["4"].hero;

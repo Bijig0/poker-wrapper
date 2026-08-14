@@ -36,6 +36,9 @@ export interface TickSeat {
   badge?: string | null;
   cards?: number;
   hero?: boolean;
+  /** The dealer button, read from the client's own marker. Absent on captures
+   *  made before the reader carried it — absent means unknown, not "not BTN". */
+  dealer?: boolean;
 }
 
 export interface Tick {
@@ -185,15 +188,27 @@ export function tickToHand(tick: Tick, handId = 0): BuildResult {
     notes.push("the recorded feed does not reach this hand's start, so early action may be missing");
 
   // ---- position -----------------------------------------------------------
+  // The read dealer wins over the SB derivation: the button is the client's
+  // own marker, while the derivation depends on the feed reaching the blind
+  // posts. When BOTH are present they cross-check each other — a disagreement
+  // means the reader misread one of them, and saying so beats picking quietly.
   let buttonSeat: number | null = null;
   let positions: Record<number, string> = {};
+  const marked = dealt.filter((s) => seatMap[String(s)]?.dealer);
+  const readBtn = marked.length === 1 ? marked[0]! : null;
+  let derivedBtn: number | null = null;
   if (sbSeat != null) {
     const i = dealt.indexOf(sbSeat);
-    buttonSeat = i >= 0 ? dealt[(i - 1 + dealt.length) % dealt.length] : null;
-    if (buttonSeat != null) positions = positionsFor(dealt, buttonSeat);
+    derivedBtn = i >= 0 ? dealt[(i - 1 + dealt.length) % dealt.length]! : null;
   }
+  buttonSeat = readBtn ?? derivedBtn;
+  if (readBtn != null && derivedBtn != null && readBtn !== derivedBtn)
+    notes.push(
+      `the client's dealer marker (seat ${readBtn}) disagrees with the button derived from the small-blind post (seat ${derivedBtn}) — the reader misread one of them; using the marker`
+    );
+  if (buttonSeat != null) positions = positionsFor(dealt, buttonSeat);
   if (!Object.keys(positions).length)
-    notes.push("no small-blind post in the feed, so positions could not be established");
+    notes.push("no dealer marker and no small-blind post in the feed, so positions could not be established");
 
   // ---- the node -----------------------------------------------------------
   const board = (tick.board ?? []).map(toShortCard).filter(Boolean) as string[];

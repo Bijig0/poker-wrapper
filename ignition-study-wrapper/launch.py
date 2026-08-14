@@ -510,6 +510,15 @@ _TABLE_JS = r"""(() => {
       // that left folded players live in every downstream read. The same
       // filter the bet and badge already use fixes it.
       nHole: [...s.querySelectorAll("[data-qa='holeCards']")].filter(vis).length,
+      // The dealer button. It has NO text node (it is drawn, not written), so
+      // the geometric pass can never see it and no capture has ever carried
+      // it — the one seat fact the review queue confirmed missing on every
+      // path. The asset harvested from the client's own DOM is dealer-d.svg,
+      // so an <img> under the seat container whose src names the dealer is
+      // the client's marker; data-qa is checked too in case a build swaps the
+      // img for a hooked element.
+      dealer: !!([...s.querySelectorAll("img")].some(i => /dealer/i.test(i.src || ""))
+                 || s.querySelector("[data-qa*='dealer' i]")),
     };
   });
   // The client scales its fixed-size table with CSS `zoom`. Every coordinate
@@ -864,6 +873,9 @@ def _seats_structural(d: dict) -> dict | None:
             "bet": bet,
             "badge": s["badge"].replace(" ", "-") if s.get("badge") else None,
             "cards": s.get("nHole") or 0,
+            # The button, read from the client's own marker — previously only
+            # inferable from the WS dealer frame or the small-blind post.
+            "dealer": bool(s.get("dealer")),
             # The client tags hero's own seat (myPlayerTag). Recording it means
             # nothing downstream has to INFER which seat is hero -- the previous
             # consumer guessed "the seat holding more than two cards", which
