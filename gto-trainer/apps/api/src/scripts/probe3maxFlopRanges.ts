@@ -12,6 +12,7 @@ import { chartFor, fetchNode } from "../services/hrc3max";
 import { preflopDb } from "../services/preflopDb";
 import { buildPreflopTokens, buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { reconstructFlopRanges } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { preflopClosed } from "../utils/aiStudyLine/aiStudyLine";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 const WRAPPER = process.env.WRAPPER_URL ?? "http://127.0.0.1:7701";
@@ -41,7 +42,12 @@ const top = (r: Record<string, number>) =>
 // ---- the 3-max corpus ------------------------------------------------------
 const chart = chartFor(hand, heroPos);
 const tokens3 = buildPreflopTokens3max(hand, heroPos);
+// The chain path gates on this before it will use the 3-max ranges: if the
+// line does not close under the BTN/SB/BB rotation it falls back to 6-max
+// SILENTLY, so a solve that "worked" can still have used the wrong ranges.
+const closed = preflopClosed(tokens3, ["BTN", "SB", "BB"]);
 console.log(`\n3-MAX  chart=${chart.id}  line=${tokens3.join("-") || "(root)"}`);
+console.log(`   preflopClosed(BTN/SB/BB) = ${closed}${closed ? "" : "  <-- would fall back to 6-max"}`);
 const tri = await reconstructFlopRanges(tokens3, async (line) => {
   const n = await fetchNode(chart.id, line);
   return n === "unreachable" ? null : n;

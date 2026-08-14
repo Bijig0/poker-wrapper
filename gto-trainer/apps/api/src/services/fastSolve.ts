@@ -98,13 +98,13 @@ export const resolveSet = (hand: ParsedHand, heroPos: string | null, setId?: str
   return SOLUTION_SETS.find((s) => s.id === id) ?? null;
 };
 
+/** Preflop acting order 3-handed: the button is first in, the blinds behind. */
+const THREE_MAX_SEATS: readonly string[] = ["BTN", "SB", "BB"];
+
 /** A 3-handed table: exactly BTN/SB/BB present. The asym HRC charts cover
  *  this shape with the real 3-max rake and per-seat stack asymmetry — the
  *  6-max phantom-fold walk is the wrong tree on every axis (rake model, no
  *  limps, symmetric 100bb only). */
-/** Preflop acting order 3-handed: the button is first in, the blinds behind. */
-const THREE_MAX_SEATS: readonly string[] = ["BTN", "SB", "BB"];
-
 const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
   const present = new Set(
     [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
@@ -540,6 +540,10 @@ async function solvePostflopViaChain(
   // ranges still beat losing the chain (and the street-root solve flags it).
   let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> | null = null;
   let preTokens: string[] = [];
+  // The rotation must match whichever token set won: preflopPotStack replays
+  // the line below to size the flop pot, and walking 3-max tokens through the
+  // 6-max rotation misassigns every action and double-counts the blinds.
+  let seatOrder: readonly string[] | undefined;
   if (is3Handed(hand, heroPos)) {
     const chart = chartFor(hand, heroPos);
     const tri3 = buildPreflopTokens3max(hand, heroPos);
@@ -553,6 +557,7 @@ async function solvePostflopViaChain(
       if (tri.ok) {
         recon = tri;
         preTokens = tri3;
+        seatOrder = THREE_MAX_SEATS;
       }
     }
   }
@@ -565,7 +570,7 @@ async function solvePostflopViaChain(
     preTokens = snapped.tokens;
     // HU lines walk the [SB, BB] rotation — the 6-max default misassigns every
     // action (the line never "closes") and double-counts the blinds as dead.
-    const seatOrder = isHu ? HU_SEATS : undefined;
+    seatOrder = isHu ? HU_SEATS : undefined;
     if (!preflopClosed(preTokens, seatOrder)) return fail("preflop betting didn't close (missed action?)");
     recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
   }
