@@ -2480,6 +2480,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, got[1], got[0])
                 else:
                     self._send(404, "text/plain", b"no asset")
+            elif path == "/faketable/current":
+                # The spec the fake table is showing right now. Lets the State
+                # Tester BUILD OUT the current table (e.g. a Solve Audit row
+                # that was just clicked onto it) instead of starting blank.
+                self._send(200, "application/json",
+                           json.dumps({"ok": True, "spec": _faketable_spec
+                                       if _fake_mode else None}).encode())
             elif path == "/faketable/fixtures":
                 # The suite's fixtures, served to the State Tester so authored
                 # spots and regression cases are the same files.
@@ -2899,6 +2906,11 @@ def _tool_shell() -> str:
     }});
   }}
   btns.forEach(b => b.onclick = () => show(b.dataset.tab));
+  // Iframes can ask the shell to switch tabs (the Solve Audit does after
+  // loading a clicked spot onto the fake table).
+  window.addEventListener("message", e => {{
+    if (e.data && typeof e.data.tab === "string") show(e.data.tab);
+  }});
   show("study");
   // The dashboard tabs are dead without :2100 — say so instead of a blank pane.
   fetch("http://127.0.0.1:2100/", {{ mode: "no-cors" }})
