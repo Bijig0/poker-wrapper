@@ -51,12 +51,24 @@ PRE_ACTS = {  # (pos, type, amount|None) after the blinds; calls are increments
                          ("BTN", "raise", 7.5), ("SB", "fold", None), ("BB", "fold", None),
                          ("CO", "call", 5)],
 }
-# Hands that LIVE in a caller's range: AKo defaults mostly 3-bet preflop, so
-# giving hero AKo produced an in-spec state whose study answer was "not in
-# range at this node" — technically honest, useless to stand in. Suited
-# middling connectors flat near-always.
-HERO_CARD_PAIRS = [["Th", "9h"], ["9c", "8c"], ["8d", "7d"], ["6s", "5s"],
-                   ["Jd", "Td"], ["7s", "6s"]]
+# Default hero hands VERIFIED against the crawled 500z charts (2026-08-15
+# probe), per line and per role — because "surely T9s flats" was wrong: this
+# chart family 3-bets T9s at 100% from the BB, so a T9s hero in a flat-caller
+# seat got the honest-but-useless "not in range at this node". Openers and
+# 3-bettors keep T9s (opens BTN/CO 100%, 3-bets vs CO 63%, SB opens 68%);
+# each CALLER seat gets hands that call >=90% at that exact node.
+CALLER_POS = {"btn-open-bb-call": "BB", "co-open-bb-call": "BB",
+              "sb-open-bb-call": "BB", "bb-3bet-btn-call": "BTN",
+              "btn-3bet-co-call": "CO"}
+OPENER_PAIRS = [["Th", "9h"], ["Tc", "9c"], ["Td", "9d"], ["Ts", "9s"]]
+CALLER_PAIRS = {
+    "btn-open-bb-call": [["6c", "6d"], ["5c", "5d"], ["4c", "4d"],
+                         ["Ad", "2d"], ["Kc", "3c"]],
+    "co-open-bb-call": [["Ad", "Td"], ["Ah", "9h"], ["9c", "9d"], ["Td", "8d"]],
+    "sb-open-bb-call": [["Ah", "9h"], ["Ad", "8d"], ["Kd", "8d"], ["Qc", "8c"]],
+    "bb-3bet-btn-call": [["Th", "9h"], ["Ad", "Jd"], ["Kc", "Qc"], ["Ah", "Th"]],
+    "btn-3bet-co-call": [["Ac", "Qc"], ["Ad", "Jd"], ["Kh", "Qh"], ["7c", "7d"]],
+}
 
 
 def build_spec(r: dict) -> dict:
@@ -75,7 +87,14 @@ def build_spec(r: dict) -> dict:
 
     b = r["board"]
     board = [b[i:i + 2] for i in range(0, len(b), 2)]
-    hero_cards = next(p for p in HERO_CARD_PAIRS
+    role_pairs = (CALLER_PAIRS[line] if hero_pos == CALLER_POS[line]
+                  else OPENER_PAIRS)
+    # A ten-heavy board can consume every preferred pair, so a broad reserve
+    # backstops the choice — in-range beats crash, exact class beats reserve.
+    reserve = [[r + s1, r2 + s2] for (r, r2) in
+               [("9", "8"), ("8", "7"), ("7", "6"), ("6", "5"), ("A", "5")]
+               for (s1, s2) in [("h", "h"), ("c", "c"), ("d", "d"), ("s", "s")]]
+    hero_cards = next(p for p in role_pairs + reserve
                       if p[0] not in board and p[1] not in board)
 
     seats: dict = {}
