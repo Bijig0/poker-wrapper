@@ -2903,6 +2903,13 @@ def _tool_shell() -> str:
       const on = f.dataset.pane === k;
       f.classList.toggle("on", on);
       if (on && !f.src) f.src = f.dataset.src;   // lazy, then persistent
+      // Tabs stay alive behind each other, so a page cannot know it was
+      // re-fronted — tell it. The State Tester re-pulls the fake table's
+      // current spec on this, which is how an audit-row click that loaded a
+      // NEW spot replaces the stale one it was still showing.
+      if (on && f.src) {{
+        try {{ f.contentWindow.postMessage({{ shown: k }}, "*"); }} catch (e) {{}}
+      }}
     }});
   }}
   btns.forEach(b => b.onclick = () => show(b.dataset.tab));
