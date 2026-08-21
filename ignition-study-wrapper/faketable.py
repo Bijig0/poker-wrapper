@@ -242,19 +242,28 @@ def _seat(num: int, slot: int, s: dict, is_hero: bool, cap: int,
             f"padding-top:{STRIP['h']-STRIP['visible']}px'>{html.escape(str(badge))}</div>")
 
     # Committed chips, in front of the seat, at this seat's own anchor. The
-    # client shows "0 BB" on every seated player between actions (recorded
-    # sessions and live probes both show it), so an idle seat renders one too —
-    # which also keeps the reader's zero-bet filter exercised.
+    # client keeps a "0 BB" chip on every seated player between actions: the
+    # reader RECORDS it (and its vis() rejects opacity/visibility tricks, so
+    # the text must be first-class visible in the client's DOM), yet no
+    # recorded FRAME ever shows one — the client paints idle chips with
+    # transparent ink rather than hiding the element. Rendering them in solid
+    # colour here dressed every seat in a 0 BB chip the real table never
+    # displays. Transparent ink reproduces both truths: the reader still reads
+    # "0 BB" (exercising its zero-bet filter, exactly as live), and the felt
+    # looks like the client's.
     bet = s.get("bet")
+    live = bet is not None and bet != 0
+    ink = "" if live else "background:transparent;color:transparent;"
+    img_ink = "" if live else "visibility:hidden;"
     bx, by = CHIPS[cap][slot]
     chips = (
         f"<div style='position:absolute;left:{bx}px;top:{by}px;height:15px;"
         f"display:flex;align-items:center;gap:3px'>"
         f"<span style='background:{C['chip_bg']};border-radius:9999px;padding:0 6px;"
-        f"color:#fff;font-size:12px;line-height:15px;white-space:nowrap'>"
+        f"color:#fff;font-size:12px;line-height:15px;white-space:nowrap;{ink}'>"
         f"{_bb(bet if bet is not None else 0)}</span>"
         f"<img src='/faketable/assets/ign/chip-icon.svg' style='width:14px;height:15px;"
-        f"display:block'></div>")
+        f"display:block;{img_ink}'></div>")
 
     halo = ""
     if acting:
