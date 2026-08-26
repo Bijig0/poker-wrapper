@@ -272,6 +272,11 @@ const SHORT_C = (c: string): string => {
  * Ranges are chart-reconstructed when the preflop walks, else GENERIC full
  * ranges (loudly flagged).
  */
+/** Hero's name in the CHART's namespace, for the villain-size-merge exemption:
+ *  HU trees seat the dealer as SB while the vision layer may say BTN. */
+const mergeHeroPos = (heroPosName: string | null, isHu: boolean): string | undefined =>
+  heroPosName == null ? undefined : isHu && heroPosName.toUpperCase() === "BTN" ? "SB" : heroPosName;
+
 async function solvePostflopAi(
   hand: ParsedHand,
   heroPos: string | null,
@@ -340,7 +345,7 @@ async function solvePostflopAi(
     const tri = await reconstructFlopRanges(buildPreflopTokens3max(hand, heroPos), async (line) => {
       const n = await fetchNode(chart.id, line);
       return n === "unreachable" ? null : n;
-    });
+    }, { heroPos: mergeHeroPos(hand.positions[hand.heroSeatId] ?? heroPos, false) });
     if (tri.ok) {
       recon = tri;
       rangeSource = chart.id;
@@ -349,7 +354,8 @@ async function solvePostflopAi(
     }
   }
   if (!recon) {
-    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line),
+      { heroPos: mergeHeroPos(hand.positions[hand.heroSeatId] ?? heroPos, isHu) });
   }
   let oopArr: number[] | null = null;
   let ipArr: number[] | null = null;
@@ -553,7 +559,7 @@ async function solvePostflopViaChain(
       const tri = await reconstructFlopRanges(tri3, async (line) => {
         const n = await fetchNode(chart.id, line);
         return n === "unreachable" ? null : n;
-      });
+      }, { heroPos: mergeHeroPos(heroPosName, false) });
       if (tri.ok) {
         recon = tri;
         preTokens = tri3;
@@ -572,7 +578,8 @@ async function solvePostflopViaChain(
     // action (the line never "closes") and double-counts the blinds as dead.
     seatOrder = isHu ? HU_SEATS : undefined;
     if (!preflopClosed(preTokens, seatOrder)) return fail("preflop betting didn't close (missed action?)");
-    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line),
+      { heroPos: mergeHeroPos(heroPosName, isHu) });
   }
   if (!recon.ok) return fail(`range reconstruction: ${recon.reason}`);
   // HU trees seat the dealer as SB; the vision layer may label him BTN.

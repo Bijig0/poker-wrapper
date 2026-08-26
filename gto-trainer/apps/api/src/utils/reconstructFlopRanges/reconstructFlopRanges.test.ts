@@ -53,3 +53,53 @@ describe("classWeightsToSpec", () => {
     expect(classWeightsToSpec({ AA: 1, AKs: 0.8, T9s: 0 })).toBe("AA,AKs:0.8");
   });
 });
+
+describe("villain size-merging (ReconstructOpts.heroPos)", () => {
+  // BTN opens 3x then BB calls. AJs opens ONLY at 2x in equilibrium (50%),
+  // never at 3x — a single-sizing human 3x-opener still holds it.
+  const nodes: Record<string, RawNode> = {
+    "": {
+      pos: "BTN", terminal: false,
+      actions: [
+        { action: "Fold", token: "F" },
+        { action: "Raise 2", token: "R2" },
+        { action: "Raise 3", token: "R3" },
+      ],
+      cells: [
+        { hand: "AJs", actions: { "Raise 2": 50, Fold: 50 } },
+        { hand: "AA", actions: { "Raise 3": 100 } },
+      ],
+    },
+    "R3": {
+      pos: "BB", terminal: false,
+      actions: [{ action: "Fold", token: "F" }, { action: "Call", token: "C" }],
+      cells: [{ hand: "KQs", actions: { Call: 100 } }],
+    },
+  };
+  const getNode = (line: string) => nodes[line] ?? null;
+
+  it("a villain's 3x open conditions on the UNION of raise sizes", async () => {
+    const r = await reconstructFlopRanges("R3-C".split("-"), getNode, { heroPos: "BB" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // AJs never 3x-opens in equilibrium, but a 3x-only human still holds it
+    expect(r.ranges["BTN"]!["AJs"]).toBeCloseTo(0.5, 5);
+    expect(r.ranges["BTN"]!["AA"]).toBeCloseTo(1.0, 5);
+  });
+
+  it("hero's own 3x open stays conditioned on the exact size", async () => {
+    const r = await reconstructFlopRanges("R3-C".split("-"), getNode, { heroPos: "BTN" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.ranges["BTN"]!["AJs"]).toBeUndefined(); // 0% at 3x specifically
+    expect(r.ranges["BTN"]!["AA"]).toBeCloseTo(1.0, 5);
+  });
+
+  it("without opts nothing merges (backwards compatible)", async () => {
+    const r = await reconstructFlopRanges("R3-C".split("-"), getNode);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.ranges["BTN"]!["AJs"]).toBeUndefined();
+  });
+});
+
