@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { tickToHand, type Tick } from "../feed/tickToHand/tickToHand";
+import { readLine, tickToHand, type Tick } from "../feed/tickToHand/tickToHand";
 import { fastSolve } from "../services/fastSolve";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -342,6 +342,117 @@ function feedForHand(ticks: Tick[], seq: number, hand: number | undefined): stri
   }
   return acc;
 }
+
+/**
+ * The session parsed into HANDS, each hand into NODES — the review's natural
+ * shape, derived from the same feed grammar the answer path parses (readLine),
+ * so the reviewer's nodes and the solver's hands can never drift apart.
+ *
+ * Tick correlation falls out of the stitching itself: while merging the
+ * per-tick feed tails, the seq at which each feed LINE first appeared is
+ * recorded — every node therefore owns the tick (and frame) that first showed
+ * it. A hero decision node additionally picks its best ANSWER tick: the first
+ * to-act tick at/after the decision that also has hero's two cards (the first
+ * to-act tick is often the deal animation, cards not yet rendered).
+ */
+interface HandNode {
+  i: number;
+  kind: "action" | "street" | "decision" | "info";
+  label: string;
+  seat?: number;
+  type?: string;
+  amount?: number;
+  street: string;
+  seq: number;
+  /** decision nodes: the tick to ask /answer with, and what hero then did. */
+  answerSeq?: number;
+  heroDid?: string;
+}
+
+replay.get("/:name/hands", (c) => {
+  const dir = sessionDir(c.req.param("name"));
+  if (!dir) return c.json({ ok: false, error: "no such session" }, 404);
+  const logPath = join(dir, "log.jsonl");
+  if (!existsSync(logPath)) return c.json({ ok: false, error: "no log.jsonl" }, 404);
+  const ticks = jsonl(logPath) as Tick[];
+
+  const byHand = new Map<number, Tick[]>();
+  for (const t of ticks) {
+    if (t.hand == null || t.seq == null) continue;
+    if (!byHand.has(t.hand)) byHand.set(t.hand, []);
+    byHand.get(t.hand)!.push(t);
+  }
+
+  const hands = [...byHand.entries()].sort(([a], [b]) => a - b).map(([handNo, hts]) => {
+    // stitch, remembering which tick each line FIRST appeared in
+    let acc: string[] = [];
+    const lineSeq: number[] = [];
+    for (const t of hts) {
+      const before = acc.length;
+      acc = mergeTail(acc, t.feedTail ?? []);
+      for (let k = before; k < acc.length; k++) lineSeq[k] = t.seq!;
+    }
+    const heroSeat = (() => {
+      for (const t of hts)
+        for (const [n, s] of Object.entries(t.seats ?? {}))
+          if ((s as any).hero) return Number(n);
+      return null;
+    })();
+    const heroCards = hts.map((t) => t.heroCards ?? []).find((c) => c.length === 2) ?? [];
+
+    let clientHandId: string | null = null;
+    let street = "preflop";
+    const nodes: HandNode[] = [];
+    acc.forEach((line, k) => {
+      const seq = lineSeq[k]!;
+      const idM = line.match(/hand id (\d+)/);
+      if (idM) { clientHandId = idM[1]!; return; }
+      if (/new hand/.test(line)) return;
+      const stM = line.match(/^—\s*(FLOP|TURN|RIVER)\s*—/i);
+      if (stM) {
+        street = stM[1]!.toLowerCase();
+        nodes.push({ i: nodes.length, kind: "street", label: line, street, seq });
+        return;
+      }
+      if (line.startsWith("YOUR TURN")) {
+        // best answer tick: to-act with cards, at/after this line appeared
+        const win = hts.filter((t) => t.seq! >= seq && t.toAct);
+        const best = win.find((t) => (t.heroCards?.length ?? 0) === 2) ?? win[0];
+        // what hero then did: his next action line after this one
+        let heroDid: string | undefined;
+        for (let j = k + 1; j < acc.length; j++) {
+          const a2 = readLine(acc[j]!);
+          if (a2 && heroSeat != null && a2.seat === heroSeat) { heroDid = acc[j]!; break; }
+          if (acc[j]!.startsWith("YOUR TURN")) break;
+        }
+        nodes.push({ i: nodes.length, kind: "decision", label: line, street, seq,
+                     answerSeq: best?.seq ?? seq, heroDid });
+        return;
+      }
+      const a = readLine(line);
+      if (a) {
+        nodes.push({ i: nodes.length, kind: "action", label: line, seat: a.seat,
+                     type: a.type, amount: a.amount, street, seq });
+        return;
+      }
+      nodes.push({ i: nodes.length, kind: "info", label: line, street, seq });
+    });
+
+    return {
+      hand: handNo,
+      clientHandId,
+      heroSeat,
+      heroCards,
+      firstSeq: hts[0]!.seq,
+      lastSeq: hts[hts.length - 1]!.seq,
+      streets: [...new Set(nodes.map((n) => n.street))],
+      decisions: nodes.filter((n) => n.kind === "decision").length,
+      nodes,
+    };
+  });
+
+  return c.json({ ok: true, hands });
+});
 
 /** Hero's seat from the raw capture, for ticks recorded before log.jsonl had it. */
 function withHeroFromDom(dir: string, seq: number, tick: Tick): { tick: Tick; note?: string } {

@@ -90,8 +90,10 @@ export function positionsFor(dealt: number[], btn: number): Record<number, strin
 const STREET_OF_BOARD = (n: number): Street =>
   n >= 5 ? "river" : n === 4 ? "turn" : n === 3 ? "flop" : "preflop";
 
-/** One feed line -> an action, or null for narration (hand id, your hand, …). */
-function readLine(line: string): { seat: number; type: string; amount?: number } | null {
+/** One feed line -> an action, or null for narration (hand id, your hand, …).
+ *  Exported: the replay hand-index parses the SAME grammar, so nodes in the
+ *  reviewer and hands in the solver can never drift apart. */
+export function readLine(line: string): { seat: number; type: string; amount?: number } | null {
   let m: RegExpMatchArray | null;
   if ((m = line.match(/^Seat (\d+) posts small blind \(([\d.]+)/i)))
     return { seat: +m[1], type: "post-sb", amount: +m[2] };
