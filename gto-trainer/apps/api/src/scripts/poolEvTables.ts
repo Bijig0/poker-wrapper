@@ -150,12 +150,40 @@ async function familyTables(fams: Fam[]) {
   return tables;
 }
 
+/** Modal raise token at a node by combo-mass (mirrors the accountant). */
+function modalRaiseTok(n: HrcNode): string {
+  let best = 0, tok = "";
+  for (const a of n.actions) {
+    if (!/^Raise [\d.]+$/.test(a.action)) continue;
+    const f = n.cells.reduce((s, c) => s + (c.actions[a.action] ?? 0), 0);
+    if (f > best) { best = f; tok = a.token!; }
+  }
+  return tok;
+}
+const tokSize = (t: string) => parseFloat(t.slice(1));
+
 const root = await node("");
 const nF = await node("F");
+const nSbResp = await node("R2.5");
+const nBbResp = await node("R2.5-F");
+const nBbVsSb = await node("F-R3");
 const heroBtnOpen = unionRange(root);
 const heroSbOpen = unionRange(nF);
-const heroBbFlatVsBtn = callRange(await node("R2.5-F"));
-const heroBbFlatVsSb = callRange(await node("F-R3"));
+const heroBbFlatVsBtn = callRange(nBbResp);
+const heroBbFlatVsSb = callRange(nBbVsSb);
+
+// 3-bet pot inputs: modal 3-bet size per node, hero's 3-bet unions and
+// facing-3-bet call ranges from the chart
+const sb3 = modalRaiseTok(nSbResp);   // pool/hero SB 3-bet size vs BTN 2.5x
+const bb3 = modalRaiseTok(nBbResp);
+const bvb3 = modalRaiseTok(nBbVsSb);
+const heroSb3bet = unionRange(nSbResp);
+const heroBb3bet = unionRange(nBbResp);
+const heroBb3betBvb = unionRange(nBbVsSb);
+const heroBtnCallVsSb3 = callRange(await node(`R2.5-${sb3}`));
+const heroBtnCallVsBb3 = callRange(await node(`R2.5-F-${bb3}`));
+const heroSbCallVsBvb3 = callRange(await node(`F-R3-${bvb3}`));
+console.log(`3-bet tokens: sb3=${sb3} bb3=${bb3} bvb3=${bvb3}`);
 
 const fams: Fam[] = [
   { name: "F1_heroBTN_vs_poolBBflat", heroIp: true, pot: 5.5, stack: 97.5,
@@ -168,8 +196,39 @@ const fams: Fam[] = [
     hero: heroBbFlatVsSb, villain: MODEL.ranges.sb_open_bvb, heroPos: "BB", villainPos: "SB" },
   { name: "F5_heroBTN_vs_poolSBflat", heroIp: true, pot: 6, stack: 97.5,
     hero: heroBtnOpen, villain: MODEL.ranges.sb_flat_vs_btn, heroPos: "BTN", villainPos: "SB" },
+  // ---- 3-bet pots (tightening pass). Geometry at the modal 3-bet size. ----
+  { name: "F6_heroBB3bet_vs_poolBTNcall", heroIp: false,
+    pot: 2 * tokSize(bb3) + 0.5, stack: 100 - tokSize(bb3),
+    hero: heroBb3bet, villain: MODEL.ranges.btn_call_vs_3bet, heroPos: "BB", villainPos: "BTN" },
+  { name: "F7_heroSB3bet_vs_poolBTNcall", heroIp: false,
+    pot: 2 * tokSize(sb3) + 1, stack: 100 - tokSize(sb3),
+    hero: heroSb3bet, villain: MODEL.ranges.btn_call_vs_3bet, heroPos: "SB", villainPos: "BTN" },
+  { name: "F8a_heroBTNcall_vs_poolSB3bet", heroIp: true,
+    pot: 2 * tokSize(sb3) + 1, stack: 100 - tokSize(sb3),
+    hero: heroBtnCallVsSb3, villain: MODEL.ranges.sb_3bet_vs_btn, heroPos: "BTN", villainPos: "SB" },
+  { name: "F8b_heroBTNcall_vs_poolBB3bet", heroIp: true,
+    pot: 2 * tokSize(bb3) + 0.5, stack: 100 - tokSize(bb3),
+    hero: heroBtnCallVsBb3, villain: MODEL.ranges.bb_3bet_vs_btn, heroPos: "BTN", villainPos: "BB" },
+  { name: "F9a_heroSBcall_vs_poolBB3bet_bvb", heroIp: false,
+    pot: 2 * tokSize(bvb3), stack: 100 - tokSize(bvb3),
+    hero: heroSbCallVsBvb3, villain: MODEL.ranges.bb_3bet_vs_sb, heroPos: "SB", villainPos: "BB" },
+  { name: "F9b_heroBB3bet_bvb_vs_poolSBcall", heroIp: true,
+    pot: 2 * tokSize(bvb3), stack: 100 - tokSize(bvb3),
+    hero: heroBb3betBvb, villain: MODEL.ranges.sb_call_vs_3bet_bvb, heroPos: "BB", villainPos: "SB" },
 ];
 
-const tables = await familyTables(fams);
-writeFileSync(OUT, JSON.stringify({ nBoards: N_BOARDS, chart: CHART, tables }, null, 1));
+// Merge with the existing artifact: only solve families not already present,
+// so the SRP tables (F1-F5) are not burned again on a tightening run.
+let existing: Record<string, Record<string, number>> = {};
+try {
+  existing = JSON.parse(readFileSync(OUT, "utf-8")).tables ?? {};
+} catch { /* first run */ }
+const todo = fams.filter((f) => !(f.name in existing) || !Object.keys(existing[f.name]!).length);
+console.log(`families to solve: ${todo.map((f) => f.name).join(", ") || "(none)"}`);
+
+const tables = { ...existing, ...(await familyTables(todo)) };
+writeFileSync(OUT, JSON.stringify({
+  nBoards: N_BOARDS, chart: CHART,
+  tokens: { sb3, bb3, bvb3 }, tables,
+}, null, 1));
 console.log(`wrote ${OUT}`);
