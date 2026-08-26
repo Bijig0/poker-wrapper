@@ -1334,7 +1334,15 @@ def _feed_tick() -> None:
         # The whole hand's story, not the last four lines. Four dropped the
         # blind posts from every hand with more than two actions, which reads
         # as "the reader missed the blinds" when it had them all along.
-        "feedTail": [line["line"] for line in _feed[-40:]]}, raw=d)
+        "feedTail": [line["line"] for line in _feed[-40:]],
+        # What the panel was actually recommending at this moment — the study
+        # answer as pushed by the poller and shown/spoken to the player. Until
+        # this rode along, a recording could say what the TABLE showed but not
+        # what WE said about it, so "was the live advice right?" was
+        # unanswerable in review. None when answers are off or stale.
+        "liveAnswer": ({"text": _study["text"], "pick": _study["pick"],
+                        "roll": _study["roll"]} if _study.get("text") else None)},
+        raw=d)
     _feed_prev = cur
 
 
