@@ -28,6 +28,11 @@ export interface FastSolveOpts {
   setId?: string;
   depth?: number;
   heroPos?: string | null;
+  /** Which preflop strategy is PRIMARY: "exploit" (pool best-response, when
+   *  EXPLOIT_CHART is armed and the spot is covered) or "chart" (equilibrium).
+   *  Both answers ride in the result either way; this only picks `decision`.
+   *  Default: "exploit" when armed. */
+  strategy?: "exploit" | "chart";
 }
 
 interface ActionFreq {
@@ -40,9 +45,16 @@ interface ActionFreq {
 export type FastSolveResult =
   | {
       ok: true;
-      source: "local-preflop" | "hrc-3max-preflop" | "gtow-api-postflop";
+      source: "local-preflop" | "hrc-3max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop";
       /** which cascade layer answered. */
-      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max";
+      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "exploit-3max";
+      /** Both preflop strategies when the exploit overlay covers the spot:
+       *  the pool best-response and the equilibrium chart's pick. `decision`
+       *  equals one of them per `strategyMode`. */
+      exploitDecision?: WeightedPick;
+      chartDecision?: WeightedPick;
+      exploitTag?: string;
+      strategyMode?: "exploit" | "chart";
       street: string;
       setId: string;
       gametype: string;
@@ -153,7 +165,8 @@ function exploitLookup(line: string, heroPos: string, heroClass: string | null):
 
 async function solvePreflop3max(
   hand: ParsedHand,
-  heroPos: string | null
+  heroPos: string | null,
+  strategy?: "exploit" | "chart",
 ): Promise<FastSolveResult | null> {
   const chart = chartFor(hand, heroPos);
   const tokens = buildPreflopTokens3max(hand, heroPos);
@@ -170,16 +183,21 @@ async function solvePreflop3max(
     ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency }))
     : [];
 
-  // exploit overlay: replace the DECISION with the pool best-response where a
-  // modeled node covers this spot; the chart mix stays visible as `actions`
+  // exploit overlay: BOTH answers always ride in the result — `strategy`
+  // (or the armed default) only decides which one is `decision`, so every
+  // UI can offer an MES/GTO tab without a second solve.
   const ex = exploitLookup(line, walk.node.pos ?? heroPos ?? "", heroClass ?? null);
   const exAction = ex && walk.node.actions.some((a) => a.action === ex.action)
     ? ex : null;
+  const chartDecision = actions.length ? pickWeightedAction(actions) : null;
+  const exploitDecision = exAction ? { action: exAction.action, frequency: 100 } : null;
+  const mode = strategy ?? (process.env.EXPLOIT_CHART ? "exploit" : "chart");
+  const useExploit = mode === "exploit" && exploitDecision != null;
 
   return {
     ok: true,
-    source: exAction ? "pool-exploit-preflop" : "hrc-3max-preflop",
-    tier: exAction ? "exploit-3max" : "chart-3max",
+    source: useExploit ? "pool-exploit-preflop" : "hrc-3max-preflop",
+    tier: useExploit ? "exploit-3max" : "chart-3max",
     street: "preflop",
     setId: "3max-asym",
     gametype: chart.id,
@@ -188,13 +206,15 @@ async function solvePreflop3max(
     pos: walk.node.pos,
     heroClass,
     actions,
-    decision: exAction
-      ? { action: exAction.action, frequency: 100 }
-      : actions.length ? pickWeightedAction(actions) : null,
+    decision: useExploit ? exploitDecision : chartDecision,
+    exploitDecision: exploitDecision ?? undefined,
+    chartDecision: chartDecision ?? undefined,
+    exploitTag: exAction?.tag,
+    strategyMode: mode,
     notInRange: (heroClass != null && !cell) || undefined,
     approx: walk.repaired.length > 0 || undefined,
-    warning: exAction
-      ? `pool-exploit best response (${exAction.tag}, derived @100bb${chart.depth !== 100 ? `, state ${chart.depth}bb` : ""}); chart mix shown alongside`
+    warning: useExploit
+      ? `pool-exploit best response (${exAction!.tag}, derived @100bb${chart.depth !== 100 ? `, state ${chart.depth}bb` : ""}); chart mix shown alongside`
       : chart.note,
   };
 }
@@ -841,7 +861,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   // pinned a set explicitly). A dead chart server falls back to the 6-max
   // walk — wrong tree, but an approximate answer beats none — flagged loudly.
   if (!opts.setId && is3Handed(hand, heroPos)) {
-    const tri = await solvePreflop3max(hand, heroPos);
+    const tri = await solvePreflop3max(hand, heroPos, opts.strategy);
     if (tri) return tri;
     const net = solvePreflop(hand, heroPos, opts);
     if (net.ok) {

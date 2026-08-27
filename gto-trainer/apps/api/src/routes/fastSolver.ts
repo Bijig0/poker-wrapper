@@ -29,7 +29,7 @@ app.post("/", async (c) => {
 
   const resolved = await resolveHand(body);
   if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn } = resolved;
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode } = resolved;
 
   if (!hand) {
     return c.json(
@@ -65,6 +65,7 @@ app.post("/", async (c) => {
     warnings,
     tableStatus,
     studyAnswersOn,
+    studyMode,
     rerendered: renderPanelRows(hand),
     hero: {
       pos: heroPos,
@@ -93,7 +94,12 @@ app.post("/", async (c) => {
     return c.json({ ...base, solution: null, deferred: hand.ended ? "Hand is over." : "Not hero's turn." });
   }
 
-  const solution = await fastSolve(hand, heroPos, { setId: body.setId, depth: body.depth, heroPos });
+  const solution = await fastSolve(hand, heroPos, {
+    setId: body.setId, depth: body.depth, heroPos,
+    ...(body.strategy === "exploit" || body.strategy === "chart"
+      ? { strategy: body.strategy }
+      : studyMode ? { strategy: studyMode } : {}),
+  });
   return c.json({ ...base, solution });
 });
 

@@ -106,7 +106,7 @@ app.post("/", async (c) => {
   // (shared with /fast-solver — see feed/resolveHand)
   const resolved = await resolveHand(body);
   if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn } = resolved;
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode } = resolved;
 
   if (!hand) {
     return c.json(
@@ -121,6 +121,7 @@ app.post("/", async (c) => {
         // here made "between hands" indistinguishable from "toggle off", so
         // the poller never refreshed its GTO Wizard health flag while idle.
         studyAnswersOn,
+        studyMode,
         warnings,
       },
       422
@@ -152,6 +153,7 @@ app.post("/", async (c) => {
     warnings,
     tableStatus,
     studyAnswersOn,
+    studyMode,
     // round-trip proof surfaced to the caller: the hand re-rendered as rows
     rerendered: renderPanelRows(hand),
     hero: {

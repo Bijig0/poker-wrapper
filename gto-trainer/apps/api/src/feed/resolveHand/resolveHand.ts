@@ -31,6 +31,7 @@ export interface ResolvedHand {
   tableStatus: string | null;
   heroSittingOut: boolean;
   studyAnswersOn: boolean | null;
+  studyMode?: "exploit" | "chart" | null;
 }
 
 export interface ResolveError {
@@ -83,6 +84,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
   let tableStatus: string | null = null;
   let heroSittingOut = false;
   let studyAnswersOn: boolean | null = null;
+  let studyMode: "exploit" | "chart" | null = null;
 
   if (body.hand != null) {
     try {
@@ -92,7 +94,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
           ? (body.hand as { hand: unknown }).hand
           : body.hand;
       const normalized = normalizeHand(raw);
-      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn };
+      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode };
     } catch (e) {
       return { ok: false, status: 400, error: `Hand JSON not understood: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -105,6 +107,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       hand?: ParsedHand | null;
       snapshot?: { status?: string; seats?: { hero?: boolean; sittingOut?: boolean }[] };
       studyAnswers?: boolean;
+      studyMode?: "exploit" | "chart";
     };
     try {
       const res = await fetch(`${url.replace(/\/$/, "")}/state`, { signal: AbortSignal.timeout(3000) });
@@ -117,16 +120,17 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     }
     tableStatus = state.snapshot?.status ?? null;
     studyAnswersOn = state.studyAnswers ?? false;
+    studyMode = state.studyMode ?? null;
     heroSittingOut = !!state.snapshot?.seats?.find((s) => s.hero)?.sittingOut;
     if (state.hand != null) {
       try {
         const normalized = normalizeHand(state.hand);
-        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn };
+        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode };
       } catch (e) {
         return { ok: false, status: 502, error: `Live hand not understood: ${e instanceof Error ? e.message : String(e)}` };
       }
     }
-    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn };
+    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn, studyMode };
   }
 
   if (body.rows || body.text) {
@@ -136,7 +140,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       return { ok: false, status: 400, error: "rows must be a PanelRow[] or { rows: PanelRow[] }." };
     }
     const parsed = parsePanelFeed(rawRows);
-    return { ok: true, hand: parsed.hand, source, warnings: parsed.warnings, tableStatus, heroSittingOut, studyAnswersOn };
+    return { ok: true, hand: parsed.hand, source, warnings: parsed.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode };
   }
 
   return { ok: false, status: 400, error: "Body needs one of: hand, rows, text, or live." };

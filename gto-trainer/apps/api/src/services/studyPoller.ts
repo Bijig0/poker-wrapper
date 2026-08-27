@@ -62,6 +62,7 @@ interface IngestLikeResponse {
   // for the live source — the single gate: this poller runs continuously, but
   // only actually pushes an answer while the panel's own switch is on.
   studyAnswersOn?: boolean | null;
+  studyMode?: "exploit" | "chart" | null;
   navigation?: {
     ok?: boolean;
     /** True when the failure is the SPOT being off-tree/unsolvable — a fact
@@ -97,6 +98,7 @@ interface FastSolveLikeResponse {
     node?: { toCall?: number };
   };
   studyAnswersOn?: boolean | null;
+  studyMode?: "exploit" | "chart" | null;
   solution?:
     | {
         ok: true;
@@ -171,6 +173,8 @@ class StudyPoller {
   /** Study Answers was on as of the last tick — the false→true edge is what we
    *  treat as "the panel just opened". */
   private studyWasOn = false;
+  /** The rig's MES/GTO tab as of the last probe — passed to the solver. */
+  private lastStudyMode: "exploit" | "chart" | null = null;
   private probing = false;
   private readonly PROBE_COOLDOWN_MS = 5 * 60_000;
   // Identity of the decision GTO Wizard last successfully navigated to and
@@ -247,6 +251,10 @@ class StudyPoller {
       const probe = await this.fetchIngest(false);
       if (!probe) return; // error already recorded, null already pushed
 
+      // an MES/GTO tab flip is a NEW question about the same spot — drop the
+      // solved-key so the next tick re-answers instead of re-pushing the cache
+      if ((probe.studyMode ?? null) !== this.lastStudyMode) this.lastSolvedKey = null;
+      this.lastStudyMode = probe.studyMode ?? null;
       if (probe.studyAnswersOn !== true) {
         this.studyWasOn = false; // switching it back on re-arms the readiness probe
         this.status.lastError = null;
@@ -411,6 +419,7 @@ class StudyPoller {
           live: { url: this.config.assistiveUrl },
           setId: this.config.setId,
           depth: this.config.depth,
+          strategy: this.lastStudyMode ?? undefined,
         }),
         // Library lookups return in ~1-2s; the far-snap AI escape can take
         // a cloud solve (~5-30s). Generous, but nothing blocks behind it.

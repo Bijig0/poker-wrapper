@@ -198,6 +198,11 @@
     <div class="sub">GTO verdict for your pending decision, pushed live by
       gto-trainer's study poller (see CONTRACT.md). Mixed strategies are
       RNG-rolled into one pick, spoken aloud. Study/practice tables only.</div>
+    <div id="sa-mode" style="margin-top:8px; display:flex; gap:0; width:fit-content;
+         border:1px solid #555; border-radius:8px; overflow:hidden">
+      <button id="sa-mode-exploit" style="margin:0; border:0; border-radius:0; padding:6px 14px">MES</button>
+      <button id="sa-mode-chart" style="margin:0; border:0; border-radius:0; padding:6px 14px">GTO</button>
+    </div>
     <button id="sa-toggle" style="margin-top:8px">Turn ON</button>
     <button id="sa-gtow" style="margin-top:8px">Connect GTO Wizard</button>
   </div>
@@ -782,11 +787,38 @@
   }
   $("sa-gtow").onclick = () => connectGtow();
 
+  // MES / GTO strategy tab — persisted, POSTed with the toggle route so
+  // /state carries it to the study poller (which passes it to fastSolve).
+  let saMode = localStorage.getItem("sa-mode") || "exploit";
+  function paintMode() {
+    for (const [id, m] of [["sa-mode-exploit", "exploit"], ["sa-mode-chart", "chart"]]) {
+      const b = $(id);
+      b.style.background = saMode === m ? "#b96a1f" : "#2b2b2b";
+      b.style.color = saMode === m ? "#fff" : "#aaa";
+      b.style.fontWeight = saMode === m ? "800" : "400";
+    }
+  }
+  async function setMode(m) {
+    saMode = m;
+    localStorage.setItem("sa-mode", m);
+    paintMode();
+    try {
+      await fetch("/study-answers", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: saOn, mode: m }) });
+    } catch (e) {}
+  }
+  $("sa-mode-exploit").onclick = () => setMode("exploit");
+  $("sa-mode-chart").onclick = () => setMode("chart");
+  paintMode();
+  // announce the persisted mode to the wrapper on load (it defaults exploit)
+  setMode(saMode);
+
   $("sa-toggle").onclick = async () => {
     try {
       const r = await (await fetch("/study-answers", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ on: !saOn }) })).json();
+        body: JSON.stringify({ on: !saOn, mode: saMode }) })).json();
       saOn = !!r.on;
       // One poller serves every rig, so switching answers ON here re-points it
       // at THIS wrapper. Without that, a test rig on another port turns the

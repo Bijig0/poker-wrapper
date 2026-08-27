@@ -531,7 +531,11 @@ replay.get("/:name/answer/:seq", async (c) => {
     });
 
   try {
-    const solution = await fastSolve(hand, heroPos, { heroPos: heroPos ?? undefined });
+    const strat = c.req.query("strategy");
+    const solution = await fastSolve(hand, heroPos, {
+      heroPos: heroPos ?? undefined,
+      ...(strat === "exploit" || strat === "chart" ? { strategy: strat } : {}),
+    });
     return c.json({ ok: true, seq, solvable: true, hand: input, notes, buttonSeat, feed, solution });
   } catch (e) {
     return c.json({

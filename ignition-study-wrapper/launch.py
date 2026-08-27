@@ -261,7 +261,11 @@ _EXTRACT_DEEP_JS = r"""(() => {
 # degrades to a blank card, never a stale verdict.
 STUDY_ANSWER_TTL_MS = 3000
 _study = {"on": False, "text": None, "pick": None, "roll": None, "note": None,
-          "at": 0.0}
+          "at": 0.0,
+          # which preflop strategy the poller should ask for: "exploit" (pool
+          # best-response / MES) or "chart" (equilibrium). The panel's tab
+          # sets it; /state carries it to gto-trainer's poller.
+          "mode": "exploit"}
 # Hero's table status, cached by _feed_tick (which polls the DOM anyway) so
 # /state never needs an extra CDP eval to answer the poller's 1 Hz probe.
 _live_status = {"hero": "unknown"}
@@ -299,6 +303,7 @@ def state(light: bool = False) -> dict:
            "fakeTable": _fake_mode, "panelPort": PANEL_PORT, "cdpPort": CDP_PORT,
            # live-feed contract (CONTRACT.md §1) — what resolveHand consumes
            "connected": False, "hand": None, "studyAnswers": _study["on"],
+           "studyMode": _study["mode"],
            "panelAnswer": _current_answer(),
            "snapshot": {"status": _live_status["hero"],
                         "seats": [{"hero": True,
@@ -2652,11 +2657,15 @@ class Handler(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 _study["on"] = bool(body.get("on"))
+                if body.get("mode") in ("exploit", "chart"):
+                    _study["mode"] = body["mode"]
+                    _study["text"] = None        # mode flip = re-answer now
                 if not _study["on"]:
                     _study["text"] = None        # switch off = card goes blank now
-                print(f"[study] answers {'ON' if _study['on'] else 'off'}")
+                print(f"[study] answers {'ON' if _study['on'] else 'off'} mode={_study['mode']}")
                 self._send(200, "application/json",
-                           json.dumps({"ok": True, "on": _study["on"]}).encode())
+                           json.dumps({"ok": True, "on": _study["on"],
+                                       "mode": _study["mode"]}).encode())
             elif path == "/panel/answer":        # poller push (CONTRACT.md §2)
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
