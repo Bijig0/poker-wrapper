@@ -372,7 +372,13 @@ class StudyPoller {
     // fresh fast solve, not the exact sizes played. Honest, and short
     // enough for the large-print panel.
     const approx = sol.approx === true ? "≈ " : "";
-    const rolled = rollAction(sol.actions, sol.decision.action);
+    // A pure decision (>=99%) IS the answer — never roll over the display
+    // mix. The pool-exploit overlay returns decision 100% with the chart mix
+    // in `actions` for context; rolling over that mix served the chart's
+    // action instead of the exploit's (caught live on the fake table).
+    const rolled = sol.decision.frequency >= 99
+      ? { pick: sol.decision.action, roll: null }
+      : rollAction(sol.actions, sol.decision.action);
     const text = approx + buildAnswerText({
       street: full.hand!.street!,
       decision: sol.decision,
