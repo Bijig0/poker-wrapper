@@ -805,6 +805,10 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
       net.approx = true;
       net.warning =
         "3-max chart server (:8777) unreachable — answered from the 6-MAX tree (wrong rake, no limps); treat as approximate.";
+    } else {
+      // don't let the fallback's own miss (e.g. "no 6-max chart @ 200bb")
+      // masquerade as the root cause — the audit chased that ghost once
+      net.reason = `3-max chart server (:8777) unreachable; 6-max fallback also failed: ${net.reason}`;
     }
     return net;
   }

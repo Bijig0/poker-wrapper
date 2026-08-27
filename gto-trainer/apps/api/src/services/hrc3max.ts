@@ -144,17 +144,22 @@ export const fetchNode: (source: string, line: string) => Promise<HrcNode | null
     const key = `${source}|${line}`;
     if (nodeCache.has(key)) return nodeCache.get(key)!;
     let body: any;
-    try {
-      // Generous: the server's first open of a chart pulls a 15-20MB body
-      // from R2 and parses it (~3s warm-disk, longer cold). The poller
-      // retries the same spot next tick, so a timeout only delays an answer.
-      const res = await fetch(
-        `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(source)}&line=${encodeURIComponent(line)}`,
-        { signal: AbortSignal.timeout(30000) }
-      );
-      body = await res.json();
-    } catch {
-      return "unreachable";
+    // Two attempts: a chart's first open pulls a 15-20MB body from R2 and
+    // parses it (~3s warm-disk, much longer cold or under batch load). The
+    // corpus audit showed a single timeout here cascades into the 6-max
+    // fallback with a misleading "no chart @ 200bb" error — the retry rides
+    // out the cold pull the first attempt itself triggered.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(
+          `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(source)}&line=${encodeURIComponent(line)}`,
+          { signal: AbortSignal.timeout(30000) }
+        );
+        body = await res.json();
+        break;
+      } catch {
+        if (attempt === 1) return "unreachable";
+      }
     }
     const node: HrcNode | null =
       body?.ok === true

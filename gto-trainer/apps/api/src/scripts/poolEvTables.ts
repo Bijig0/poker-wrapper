@@ -26,10 +26,11 @@ import { classWeightsToSpec } from "../utils/reconstructFlopRanges/reconstructFl
 import { comboIndex } from "../utils/comboIndex/comboIndex";
 
 const N_BOARDS = Number(process.argv[2] ?? 14);
-const CHART = "ign200_3maxasym_D100_s100_eq";
+const CHART = process.env.CHART_ID ?? "ign200_3maxasym_D100_s100_eq";
+const SUFFIX = process.env.OUT_SUFFIX ?? "";
 const MODEL = JSON.parse(readFileSync(
-  "C:/Users/Brady/poker/analysis/pipeline/limp_study/pool_model.json", "utf-8"));
-const OUT = "C:/Users/Brady/poker/analysis/pipeline/limp_study/pool_ev_tables.json";
+  `C:/Users/Brady/poker/analysis/pipeline/limp_study/pool_model${SUFFIX}.json`, "utf-8"));
+const OUT = `C:/Users/Brady/poker/analysis/pipeline/limp_study/pool_ev_tables${SUFFIX}.json`;
 
 let seed = 0xace5;
 const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
