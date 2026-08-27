@@ -21,17 +21,32 @@ function Test-Gtow {
 }
 
 Write-Output "gtow watchdog up (pid $PID)"
+# Startup is SLOW: after an update the app sits on activate.html and cycles
+# renderers for ~4 minutes before app.gtowizard appears. The original 90s
+# grace period killed it mid-startup every time — a permanent kill-loop that
+# cost an overnight audit run (2026-08-27). Grace is now 8 minutes, and two
+# consecutive failed probes are required before killing anything, so a single
+# slow/flaky poll never triggers a restart.
+$miss = 0
 while ($true) {
-    if (-not (Test-Gtow)) {
-        Write-Output "$(Get-Date -Format HH:mm:ss) GTOW not drivable - restarting with CDP flag"
-        Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Start-Process -FilePath 'C:\Program Files\GTO Wizard\GTO Wizard.exe' -ArgumentList '--remote-debugging-port=9222' -WindowStyle Minimized
-        for ($i = 0; $i -lt 18; $i++) {
-            Start-Sleep -Seconds 5
-            $dlg = Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match '更新|update' }
-            if ($dlg) { $null = $dlg.CloseMainWindow() }
-            if (Test-Gtow) { Write-Output "$(Get-Date -Format HH:mm:ss) GTOW back"; break }
+    if (Test-Gtow) {
+        $miss = 0
+    } else {
+        $miss++
+        if ($miss -lt 2) {
+            Write-Output "$(Get-Date -Format HH:mm:ss) GTOW probe failed (1/2) - waiting"
+        } else {
+            Write-Output "$(Get-Date -Format HH:mm:ss) GTOW not drivable - restarting with CDP flag"
+            Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            Start-Process -FilePath 'C:\Program Files\GTO Wizard\GTO Wizard.exe' -ArgumentList '--remote-debugging-port=9222' -WindowStyle Minimized
+            for ($i = 0; $i -lt 96; $i++) {          # up to 8 minutes
+                Start-Sleep -Seconds 5
+                $dlg = Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match '更新|update' }
+                if ($dlg) { $null = $dlg.CloseMainWindow() }
+                if (Test-Gtow) { Write-Output "$(Get-Date -Format HH:mm:ss) GTOW back after $($i * 5)s"; break }
+            }
+            $miss = 0
         }
     }
     Start-Sleep -Seconds 60
