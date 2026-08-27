@@ -119,6 +119,38 @@ const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
  * unreachable — a missing line/node is a real answer about the hand and is
  * reported as such, not silently retried against the wrong 6-max tree.
  */
+/**
+ * Pool-exploit overlay: the constrained preflop best-response vs the measured
+ * pool (analysis/pipeline/limp_study/exploit_ranges.json — derived at 100bb
+ * with 1.5-SE-shrunk thin-sample frequencies). Enabled by setting
+ * EXPLOIT_CHART to that file's path; covers the five modeled first-decision
+ * shapes and lets everything deeper fall through to the equilibrium chart.
+ */
+let exploitChoices: Record<string, Record<string, string>> | null | undefined;
+function exploitLookup(line: string, heroPos: string, heroClass: string | null):
+    { action: string; tag: string } | null {
+  if (!process.env.EXPLOIT_CHART || !heroClass) return null;
+  if (exploitChoices === undefined) {
+    try {
+      exploitChoices = JSON.parse(
+        require("node:fs").readFileSync(process.env.EXPLOIT_CHART, "utf-8")).choices;
+    } catch { exploitChoices = null; }
+  }
+  if (!exploitChoices) return null;
+  // line SHAPE -> modeled node (sizes snap: any single raise reads as "open")
+  const toks = line ? line.split("-") : [];
+  const isR = (t: string) => /^R[\d.]+$/.test(t);
+  let tag: string | null = null;
+  if (toks.length === 0 && heroPos === "BTN") tag = "btn_root";
+  else if (toks.length === 1 && isR(toks[0]!) && heroPos === "SB") tag = "sb_vs_open";
+  else if (toks.length === 2 && isR(toks[0]!) && toks[1] === "F" && heroPos === "BB") tag = "bb_vs_open";
+  else if (toks.length === 1 && toks[0] === "F" && heroPos === "SB") tag = "sb_bvb";
+  else if (toks.length === 2 && toks[0] === "F" && isR(toks[1]!) && heroPos === "BB") tag = "bb_vs_sb";
+  if (!tag) return null;
+  const action = exploitChoices[tag]?.[heroClass];
+  return action ? { action, tag } : null;
+}
+
 async function solvePreflop3max(
   hand: ParsedHand,
   heroPos: string | null
@@ -137,10 +169,17 @@ async function solvePreflop3max(
   const actions = cell
     ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency }))
     : [];
+
+  // exploit overlay: replace the DECISION with the pool best-response where a
+  // modeled node covers this spot; the chart mix stays visible as `actions`
+  const ex = exploitLookup(line, walk.node.pos ?? heroPos ?? "", heroClass ?? null);
+  const exAction = ex && walk.node.actions.some((a) => a.action === ex.action)
+    ? ex : null;
+
   return {
     ok: true,
-    source: "hrc-3max-preflop",
-    tier: "chart-3max",
+    source: exAction ? "pool-exploit-preflop" : "hrc-3max-preflop",
+    tier: exAction ? "exploit-3max" : "chart-3max",
     street: "preflop",
     setId: "3max-asym",
     gametype: chart.id,
@@ -149,10 +188,14 @@ async function solvePreflop3max(
     pos: walk.node.pos,
     heroClass,
     actions,
-    decision: actions.length ? pickWeightedAction(actions) : null,
+    decision: exAction
+      ? { action: exAction.action, frequency: 100 }
+      : actions.length ? pickWeightedAction(actions) : null,
     notInRange: (heroClass != null && !cell) || undefined,
     approx: walk.repaired.length > 0 || undefined,
-    warning: chart.note,
+    warning: exAction
+      ? `pool-exploit best response (${exAction.tag}, derived @100bb${chart.depth !== 100 ? `, state ${chart.depth}bb` : ""}); chart mix shown alongside`
+      : chart.note,
   };
 }
 
