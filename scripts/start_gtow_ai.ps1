@@ -36,6 +36,13 @@ if ($apiUp) {
     Write-Host 'gto-trainer API already up on 2000'
 } else {
     $env:Path = "$env:APPDATA\npm;$env:LOCALAPPDATA\Programs\node-v24.18.0-win-x64;$env:Path"
+    # Pool-exploit overlay: the constrained preflop best-response vs the
+    # measured pool (MES +5.2 bb/100 @ NL25 rake, +8.9 @ NL200 vs -7.2/-4.8
+    # for the equilibrium mix). The five modeled first-decision shapes answer
+    # with the exploit, labeled "pool-exploit-preflop"; everything deeper
+    # falls back to the equilibrium chart. Comment out to run pure GTO.
+    $exploit = "$PSScriptRoot\..\analysis\pipeline\limp_study\exploit_ranges.json"
+    if (Test-Path $exploit) { $env:EXPLOIT_CHART = (Resolve-Path $exploit).Path }
     Start-Process -WorkingDirectory "$PSScriptRoot\..\gto-trainer\apps\api" -FilePath 'bun.cmd' -ArgumentList 'run', 'index.ts' -WindowStyle Minimized
-    Write-Host 'started gto-trainer API on 2000'
+    Write-Host "started gto-trainer API on 2000 (exploit overlay: $(if ($env:EXPLOIT_CHART) {'ARMED'} else {'off'}))"
 }
