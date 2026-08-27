@@ -168,19 +168,30 @@ const nF = await node("F");
 const nSbResp = await node("R2.5");
 const nBbResp = await node("R2.5-F");
 const nBbVsSb = await node("F-R3");
-const heroBtnOpen = unionRange(root);
-const heroSbOpen = unionRange(nF);
-const heroBbFlatVsBtn = callRange(nBbResp);
-const heroBbFlatVsSb = callRange(nBbVsSb);
+
+// HERO_RANGES: path to exploit_ranges.json — overrides hero's arriving
+// ranges (the consistency iteration of the preflop best-response). The
+// pool's ranges stay measured; only hero's side is re-aimed.
+const heroOverride: Record<string, Record<string, number>> = process.env.HERO_RANGES
+  ? JSON.parse(readFileSync(process.env.HERO_RANGES, "utf-8")).ranges
+  : {};
+const ov = (key: string, fallback: Record<string, number>) =>
+  heroOverride[key] && Object.keys(heroOverride[key]!).length
+    ? heroOverride[key]! : fallback;
+
+const heroBtnOpen = ov("btn_open", unionRange(root));
+const heroSbOpen = ov("sb_open_bvb", unionRange(nF));
+const heroBbFlatVsBtn = ov("bb_flat_vs_btn", callRange(nBbResp));
+const heroBbFlatVsSb = ov("bb_flat_vs_sb", callRange(nBbVsSb));
 
 // 3-bet pot inputs: modal 3-bet size per node, hero's 3-bet unions and
 // facing-3-bet call ranges from the chart
 const sb3 = modalRaiseTok(nSbResp);   // pool/hero SB 3-bet size vs BTN 2.5x
 const bb3 = modalRaiseTok(nBbResp);
 const bvb3 = modalRaiseTok(nBbVsSb);
-const heroSb3bet = unionRange(nSbResp);
-const heroBb3bet = unionRange(nBbResp);
-const heroBb3betBvb = unionRange(nBbVsSb);
+const heroSb3bet = ov("sb_3bet_vs_btn", unionRange(nSbResp));
+const heroBb3bet = ov("bb_3bet_vs_btn", unionRange(nBbResp));
+const heroBb3betBvb = ov("bb_3bet_vs_sb", unionRange(nBbVsSb));
 const heroBtnCallVsSb3 = callRange(await node(`R2.5-${sb3}`));
 const heroBtnCallVsBb3 = callRange(await node(`R2.5-F-${bb3}`));
 const heroSbCallVsBvb3 = callRange(await node(`F-R3-${bvb3}`));
