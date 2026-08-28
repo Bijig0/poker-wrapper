@@ -76,10 +76,20 @@ export interface ChartChoice {
  * V2CI_RUNGS is the manifest of what has actually been solved; RESOLVED_OFF=1
  * disables the preference entirely (A/B the generations).
  */
-const V2CI_RUNGS: Record<string, Set<number>> = {
-  ign200: new Set([100]),   // extended as plan_v2gen.json lands each rung
-  ign500: new Set<number>(),
-};
+function loadV2ciRungs(): Record<string, Set<number>> {
+  const fallback = { ign200: new Set([100]), ign500: new Set<number>() };
+  try {
+    const raw = JSON.parse(require("node:fs").readFileSync(
+      require("node:path").resolve(import.meta.dir, "../../data/resolved-charts.json"),
+      "utf-8")) as Record<string, number[]>;
+    const out: Record<string, Set<number>> = {};
+    for (const [site, rungs] of Object.entries(raw)) out[site] = new Set(rungs);
+    return Object.keys(out).length ? out : fallback;
+  } catch {
+    return fallback;   // manifest absent = only the hand-verified D100 chart
+  }
+}
+const V2CI_RUNGS: Record<string, Set<number>> = loadV2ciRungs();
 
 const v2ciId = (site: string, d: number): string | null =>
   !process.env.RESOLVED_OFF && V2CI_RUNGS[site]?.has(d)
