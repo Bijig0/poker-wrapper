@@ -59,6 +59,33 @@ export interface ChartChoice {
  * collapses to the _eq chart. Stacks the wrapper couldn't read fall back to
  * the even chart at hero's depth (or 100bb), loudly noted.
  */
+
+/**
+ * The re-solved chart generation ("v2ci": real river betting + explicit CFR
+ * refinement, vs the original grid's no-river-betting + CI-10 auto-solve).
+ *
+ * These are EQUAL-STACK charts on the traffic-ranked rungs, because chartFor
+ * snaps to the deep rung and Zone stacks cluster there: six rungs cover 88%
+ * of corpus hands and ten cover 96.5%, where the most-used exact asymmetric
+ * chart is 4.8%. So when a state's deep rung has a v2ci chart, that chart is
+ * a better answer than a same-shaped chart from the defective generation —
+ * even for an asymmetric state, since the asymmetry it drops is a smaller
+ * error than the missing river betting it fixes. States whose rung has no
+ * v2ci chart keep the original asymmetric chart untouched.
+ *
+ * V2CI_RUNGS is the manifest of what has actually been solved; RESOLVED_OFF=1
+ * disables the preference entirely (A/B the generations).
+ */
+const V2CI_RUNGS: Record<string, Set<number>> = {
+  ign200: new Set([100]),   // extended as plan_v2gen.json lands each rung
+  ign500: new Set<number>(),
+};
+
+const v2ciId = (site: string, d: number): string | null =>
+  !process.env.RESOLVED_OFF && V2CI_RUNGS[site]?.has(d)
+    ? `${site}_3maxasym2ci_D${d}_s${d}_eq`
+    : null;
+
 export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice {
   const site = siteFor(hand.bbCents);
   const posOf: Record<number, string> = hand.positions;
@@ -87,7 +114,7 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
     const hero = stacks[hand.heroSeatId];
     const d = snapRung(Number.isFinite(hero) && hero! > 0 ? hero! : 100);
     return {
-      id: `${site}_3maxasym_D${d}_s${d}_eq`,
+      id: v2ciId(site, d) ?? `${site}_3maxasym_D${d}_s${d}_eq`,
       site,
       depth: d,
       shortDepth: d,
@@ -101,7 +128,7 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
   const d = snapRung(sorted[1]![1]); // cap the biggest to the middle
   if (s >= d) {
     return {
-      id: `${site}_3maxasym_D${d}_s${d}_eq`,
+      id: v2ciId(site, d) ?? `${site}_3maxasym_D${d}_s${d}_eq`,
       site,
       depth: d,
       shortDepth: d,
@@ -110,6 +137,17 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
     };
   }
   const seat = sorted[0]![0];
+  const resolved = v2ciId(site, d);
+  if (resolved) {
+    return {
+      id: resolved,
+      site,
+      depth: d,
+      shortDepth: s,
+      shortSeat: seat,
+      note: `re-solved ${d}bb even chart (${seat} is short at ${s}bb — asymmetry approximated; this generation has real river betting)`,
+    };
+  }
   return {
     id: `${site}_3maxasym_D${d}_s${s}_${seat.toLowerCase()}`,
     site,
