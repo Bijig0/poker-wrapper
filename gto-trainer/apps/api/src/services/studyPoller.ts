@@ -384,7 +384,7 @@ class StudyPoller {
     // mix. The pool-exploit overlay returns decision 100% with the chart mix
     // in `actions` for context; rolling over that mix served the chart's
     // action instead of the exploit's (caught live on the fake table).
-    const rolled = sol.decision.frequency >= 99
+    const rolled = (sol.decision.frequency ?? 0) >= 99
       ? { pick: sol.decision.action, roll: null }
       : rollAction(sol.actions, sol.decision.action);
     const text = approx + buildAnswerText({

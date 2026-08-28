@@ -163,6 +163,54 @@ function exploitLookup(line: string, heroPos: string, heroClass: string | null):
   return action ? { action, tag } : null;
 }
 
+
+/**
+ * Which exploit range hero's preflop line actually puts him on.
+ *
+ * When the exploit overlay is armed hero opens ~50% and 3-bets 43-60%, but
+ * the flop solve reconstructs his range from the equilibrium chart (~33%
+ * opens) — so GTOW would solve a spot where hero's range is far stronger
+ * than the one he really has, biasing every line toward over-aggression.
+ * This maps the canonical flop-reaching shapes onto exploit_ranges.json.
+ *
+ * Only shapes where hero acted ONCE are mapped: if he opened and then called
+ * a 3-bet, that second decision is not modeled by the exploit and the chart
+ * reconstruction is the honest source for his (narrower) range.
+ */
+const EXPLOIT_LINE_RANGE: Record<string, Record<string, string>> = {
+  // BTN opens, SB folds, BB calls
+  "R-F-C": { BTN: "btn_open", BB: "bb_flat_vs_btn" },
+  // BTN opens, SB calls, BB folds
+  "R-C-F": { BTN: "btn_open", SB: "sb_flat_vs_btn" },
+  // BTN folds, SB opens, BB calls
+  "F-R-C": { SB: "sb_open_bvb", BB: "bb_flat_vs_sb" },
+  // BTN opens, SB folds, BB 3-bets, BTN calls (BTN's call is unmodeled)
+  "R-F-R-C": { BB: "bb_3bet_vs_btn" },
+  // BTN opens, SB 3-bets, BB folds, BTN calls
+  "R-R-F-C": { SB: "sb_3bet_vs_btn" },
+  // BTN folds, SB opens, BB 3-bets, SB calls
+  "F-R-R-C": { BB: "bb_3bet_vs_sb" },
+};
+
+let exploitRanges: Record<string, Record<string, number>> | null | undefined;
+function exploitFlopRange(tokens: string[], heroPos: string):
+    { weights: Record<string, number>; key: string } | null {
+  if (!process.env.EXPLOIT_CHART) return null;
+  if (exploitRanges === undefined) {
+    try {
+      exploitRanges = JSON.parse(
+        require("node:fs").readFileSync(process.env.EXPLOIT_CHART, "utf-8")).ranges;
+    } catch { exploitRanges = null; }
+  }
+  if (!exploitRanges) return null;
+  const shape = tokens
+    .map((t) => (/^R[\d.]+$/.test(t) ? "R" : t === "X" ? "C" : t))
+    .join("-");
+  const key = EXPLOIT_LINE_RANGE[shape]?.[heroPos.toUpperCase()];
+  const weights = key ? exploitRanges[key] : undefined;
+  return weights && Object.keys(weights).length ? { weights, key } : null;
+}
+
 async function solvePreflop3max(
   hand: ParsedHand,
   heroPos: string | null,
@@ -190,7 +238,10 @@ async function solvePreflop3max(
   const exAction = ex && walk.node.actions.some((a) => a.action === ex.action)
     ? ex : null;
   const chartDecision = actions.length ? pickWeightedAction(actions) : null;
-  const exploitDecision = exAction ? { action: exAction.action, frequency: 100 } : null;
+  // a pure pick: no roll happened, and its band is the whole 0-100 range
+  const exploitDecision: WeightedPick | null = exAction
+    ? { action: exAction.action, frequency: 100, roll: 100, band: [0, 100] }
+    : null;
   const mode = strategy ?? (process.env.EXPLOIT_CHART ? "exploit" : "chart");
   const useExploit = mode === "exploit" && exploitDecision != null;
 
@@ -412,6 +463,17 @@ async function solvePostflopAi(
     if (tri.ok) {
       recon = tri;
       rangeSource = chart.id;
+      // hero's OWN range comes from the strategy he is actually playing
+      const heroName = (hand.positions[hand.heroSeatId] ?? heroPos ?? "").toUpperCase();
+      const exRange = exploitFlopRange(buildPreflopTokens3max(hand, heroPos), heroName);
+      if (exRange) {
+        for (const p of Object.keys(recon.ranges)) {
+          if (p.toUpperCase() === heroName) {
+            (recon.ranges as Record<string, unknown>)[p] = exRange.weights;
+            rangeSource = `${chart.id} + exploit hero range (${exRange.key})`;
+          }
+        }
+      }
     } else {
       rangeSource = `6max (3-max chart ${chart.id}: ${tri.reason})`;
     }

@@ -21,6 +21,9 @@ interface FastSolverBody extends ResolveBody {
   setId?: string;
   depth?: number;
   heroPos?: string;
+  /** MES/GTO tab: which preflop strategy is primary. Omitted = the rig's own
+   *  studyMode, so a caller that forgets it still honours the user's choice. */
+  strategy?: "exploit" | "chart";
 }
 
 app.post("/", async (c) => {
