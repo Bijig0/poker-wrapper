@@ -1,0 +1,94 @@
+{
+ "_meta": {
+  "source": "ignition_hh",
+  "min_n": 25,
+  "kept": 9,
+  "omitted_thin": 2,
+  "grid": "exploitsolve.rs node_ctx/bucket_of"
+ },
+ "freqs": {
+  "flop|first": {
+   "bet_b": 0.0435,
+   "bet_m": 0.249,
+   "bet_o": 0.0042,
+   "bet_s": 0.1274,
+   "call": 0.0026,
+   "check": 0.5692,
+   "fold": 0.0042,
+   "_n": 1908
+  },
+  "flop|vs_m": {
+   "call": 0.3443,
+   "fold": 0.5779,
+   "raise_b": 0.0779,
+   "_n": 244
+  },
+  "flop|vs_s": {
+   "call": 0.4726,
+   "fold": 0.3991,
+   "raise_b": 0.1033,
+   "raise_m": 0.025,
+   "_n": 639
+  },
+  "river|first": {
+   "bet_b": 0.0692,
+   "bet_m": 0.177,
+   "bet_o": 0.0469,
+   "bet_s": 0.0739,
+   "call": 0.0223,
+   "check": 0.5475,
+   "fold": 0.0633,
+   "_n": 853
+  },
+  "river|vs_m": {
+   "call": 0.2923,
+   "fold": 0.6308,
+   "raise_b": 0.0692,
+   "raise_s": 0.0077,
+   "_n": 130
+  },
+  "river|vs_s": {
+   "call": 0.3416,
+   "fold": 0.4969,
+   "raise_b": 0.1366,
+   "raise_m": 0.0248,
+   "_n": 161
+  },
+  "turn|first": {
+   "bet_b": 0.0543,
+   "bet_m": 0.2311,
+   "bet_o": 0.0187,
+   "bet_s": 0.1119,
+   "call": 0.0089,
+   "check": 0.5645,
+   "fold": 0.0105,
+   "_n": 1233
+  },
+  "turn|vs_m": {
+   "call": 0.4052,
+   "fold": 0.5302,
+   "raise_b": 0.0603,
+   "raise_m": 0.0043,
+   "_n": 232
+  },
+  "turn|vs_s": {
+   "call": 0.4793,
+   "fold": 0.405,
+   "raise_b": 0.0785,
+   "raise_m": 0.0331,
+   "raise_s": 0.0041,
+   "_n": 242
+  }
+ },
+ "_thin": {
+  "river|vs_b": {
+   "call": 0.2,
+   "fold": 0.8,
+   "_n": 5
+  },
+  "turn|vs_b": {
+   "fold": 1.0,
+   "_n": 2
+  }
+ }
+}
