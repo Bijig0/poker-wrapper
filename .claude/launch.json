@@ -2,56 +2,22 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "poker-study",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/a61403/Desktop/poker-study && npx eleventy --serve --port 8123"],
+      "port": 8123
+    },
+    {
+      "name": "exploit-api",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/a61403/Desktop/poker/analysis/pipeline/solve && python3 -u exploit_ui/server.py"],
+      "port": 8777
+    },
+    {
       "name": "poker-analysis",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": [
-        "analysis/node_modules/vite/bin/vite.js",
-        "analysis",
-        "--port",
-        "5199",
-        "--strictPort"
-      ],
-      "port": 5199
-    },
-    {
-      "name": "poker-analysis-alt",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": [
-        "analysis/node_modules/vite/bin/vite.js",
-        "analysis",
-        "--port",
-        "5198",
-        "--strictPort"
-      ],
-      "port": 5198
-    },
-    {
-      "name": "gto-dashboard",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": [
-        "gto-trainer/apps/dashboard/node_modules/vite/bin/vite.js",
-        "gto-trainer/apps/dashboard",
-        "--port",
-        "2100",
-        "--strictPort"
-      ],
-      "port": 2100
-    },
-    {
-      "name": "poker-analysis-win",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
-      "runtimeArgs": [
-        "5199"
-      ],
-      "port": 5199
-    },
-    {
-      "name": "poker-analysis-alt-win",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
-      "runtimeArgs": [
-        "5198"
-      ],
-      "port": 5198
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/a61403/Desktop/poker/analysis && npm run dev"],
+      "port": 5180
     }
   ]
 }
