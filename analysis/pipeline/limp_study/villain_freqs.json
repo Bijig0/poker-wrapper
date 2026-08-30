@@ -2,8 +2,10 @@
  "_meta": {
   "source": "ignition_hh",
   "min_n": 25,
+  "min_class_n": 15,
   "kept": 9,
   "omitted_thin": 2,
+  "class_contexts": 9,
   "grid": "exploitsolve.rs node_ctx/bucket_of"
  },
  "freqs": {
@@ -79,6 +81,285 @@
    "raise_s": 0.0041,
    "_n": 242
   }
+ },
+ "class_freqs": {
+  "flop|first": {
+   "air": {
+    "bet_b": 0.0336,
+    "bet_m": 0.1805,
+    "bet_o": 0.0031,
+    "bet_s": 0.1123,
+    "check": 0.6642,
+    "fold": 0.0063
+   },
+   "draw": {
+    "bet_b": 0.0507,
+    "bet_m": 0.3986,
+    "bet_o": 0.0072,
+    "bet_s": 0.1014,
+    "check": 0.4348,
+    "fold": 0.0072
+   },
+   "marginal": {
+    "bet_b": 0.0548,
+    "bet_m": 0.2143,
+    "bet_o": 0.0095,
+    "bet_s": 0.1548,
+    "check": 0.5643,
+    "fold": 0.0024
+   },
+   "strong": {
+    "bet_b": 0.0529,
+    "bet_m": 0.398,
+    "bet_s": 0.1436,
+    "call": 0.0126,
+    "check": 0.3929
+   }
+  },
+  "flop|vs_m": {
+   "air": {
+    "call": 0.1221,
+    "fold": 0.855,
+    "raise_b": 0.0229
+   },
+   "draw": {
+    "call": 0.6818,
+    "fold": 0.0455,
+    "raise_b": 0.2727
+   },
+   "marginal": {
+    "call": 0.5179,
+    "fold": 0.4643,
+    "raise_b": 0.0179
+   },
+   "strong": {
+    "call": 0.6857,
+    "fold": 0.0571,
+    "raise_b": 0.2571
+   }
+  },
+  "flop|vs_s": {
+   "air": {
+    "call": 0.3079,
+    "fold": 0.6334,
+    "raise_b": 0.0528,
+    "raise_m": 0.0059
+   },
+   "draw": {
+    "call": 0.75,
+    "raise_b": 0.2083,
+    "raise_m": 0.0417
+   },
+   "marginal": {
+    "call": 0.625,
+    "fold": 0.2647,
+    "raise_b": 0.0662,
+    "raise_m": 0.0441
+   },
+   "strong": {
+    "call": 0.6667,
+    "fold": 0.0263,
+    "raise_b": 0.2544,
+    "raise_m": 0.0526
+   }
+  },
+  "river|first": {
+   "air": {
+    "bet_b": 0.0595,
+    "bet_m": 0.1892,
+    "bet_o": 0.027,
+    "bet_s": 0.0595,
+    "call": 0.0081,
+    "check": 0.6,
+    "fold": 0.0568
+   },
+   "draw": {
+    "bet_b": 0.0345,
+    "bet_m": 0.1954,
+    "bet_o": 0.1034,
+    "bet_s": 0.1149,
+    "call": 0.023,
+    "check": 0.4253,
+    "fold": 0.1034
+   },
+   "marginal": {
+    "bet_b": 0.0582,
+    "bet_m": 0.0899,
+    "bet_o": 0.0212,
+    "bet_s": 0.0529,
+    "call": 0.0212,
+    "check": 0.6772,
+    "fold": 0.0794
+   },
+   "strong": {
+    "bet_b": 0.1111,
+    "bet_m": 0.2271,
+    "bet_o": 0.0821,
+    "bet_s": 0.1014,
+    "call": 0.0483,
+    "check": 0.3865,
+    "fold": 0.0435
+   }
+  },
+  "river|vs_m": {
+   "air": {
+    "call": 0.1692,
+    "fold": 0.8,
+    "raise_b": 0.0308
+   },
+   "marginal": {
+    "call": 0.3214,
+    "fold": 0.6429,
+    "raise_b": 0.0357
+   },
+   "strong": {
+    "call": 0.5484,
+    "fold": 0.2258,
+    "raise_b": 0.1935,
+    "raise_s": 0.0323
+   }
+  },
+  "river|vs_s": {
+   "air": {
+    "call": 0.1954,
+    "fold": 0.7011,
+    "raise_b": 0.092,
+    "raise_m": 0.0115
+   },
+   "marginal": {
+    "call": 0.525,
+    "fold": 0.3,
+    "raise_b": 0.175
+   },
+   "strong": {
+    "call": 0.5517,
+    "fold": 0.1379,
+    "raise_b": 0.2414,
+    "raise_m": 0.069
+   }
+  },
+  "turn|first": {
+   "air": {
+    "bet_b": 0.033,
+    "bet_m": 0.2,
+    "bet_o": 0.0104,
+    "bet_s": 0.0991,
+    "check": 0.6435,
+    "fold": 0.0139
+   },
+   "draw": {
+    "bet_b": 0.0556,
+    "bet_m": 0.3148,
+    "bet_o": 0.0463,
+    "bet_s": 0.1111,
+    "call": 0.0093,
+    "check": 0.4537,
+    "fold": 0.0093
+   },
+   "marginal": {
+    "bet_b": 0.0772,
+    "bet_m": 0.1581,
+    "bet_o": 0.0147,
+    "bet_s": 0.114,
+    "call": 0.011,
+    "check": 0.6176,
+    "fold": 0.0074
+   },
+   "strong": {
+    "bet_b": 0.0755,
+    "bet_m": 0.3345,
+    "bet_o": 0.0288,
+    "bet_s": 0.1367,
+    "call": 0.0252,
+    "check": 0.3921,
+    "fold": 0.0072
+   }
+  },
+  "turn|vs_m": {
+   "air": {
+    "call": 0.2826,
+    "fold": 0.6957,
+    "raise_b": 0.0217
+   },
+   "draw": {
+    "call": 0.48,
+    "fold": 0.48,
+    "raise_b": 0.04
+   },
+   "marginal": {
+    "call": 0.3788,
+    "fold": 0.5758,
+    "raise_b": 0.0303,
+    "raise_m": 0.0152
+   },
+   "strong": {
+    "call": 0.6327,
+    "fold": 0.1837,
+    "raise_b": 0.1837
+   }
+  },
+  "turn|vs_s": {
+   "air": {
+    "call": 0.2981,
+    "fold": 0.6154,
+    "raise_b": 0.0769,
+    "raise_m": 0.0096
+   },
+   "draw": {
+    "call": 0.75,
+    "fold": 0.125,
+    "raise_b": 0.125
+   },
+   "marginal": {
+    "call": 0.5362,
+    "fold": 0.3623,
+    "raise_b": 0.058,
+    "raise_m": 0.0435
+   },
+   "strong": {
+    "call": 0.6792,
+    "fold": 0.1321,
+    "raise_b": 0.0943,
+    "raise_m": 0.0755,
+    "raise_s": 0.0189
+   }
+  }
+ },
+ "_class_n": {
+  "flop|first|air": 953,
+  "flop|first|draw": 138,
+  "flop|first|marginal": 420,
+  "flop|first|strong": 397,
+  "flop|vs_m|air": 131,
+  "flop|vs_m|draw": 22,
+  "flop|vs_m|marginal": 56,
+  "flop|vs_m|strong": 35,
+  "flop|vs_s|air": 341,
+  "flop|vs_s|draw": 48,
+  "flop|vs_s|marginal": 136,
+  "flop|vs_s|strong": 114,
+  "river|first|air": 370,
+  "river|first|draw": 87,
+  "river|first|marginal": 189,
+  "river|first|strong": 207,
+  "river|vs_m|air": 65,
+  "river|vs_m|marginal": 28,
+  "river|vs_m|strong": 31,
+  "river|vs_s|air": 87,
+  "river|vs_s|marginal": 40,
+  "river|vs_s|strong": 29,
+  "turn|first|air": 575,
+  "turn|first|draw": 108,
+  "turn|first|marginal": 272,
+  "turn|first|strong": 278,
+  "turn|vs_m|air": 92,
+  "turn|vs_m|draw": 25,
+  "turn|vs_m|marginal": 66,
+  "turn|vs_m|strong": 49,
+  "turn|vs_s|air": 104,
+  "turn|vs_s|draw": 16,
+  "turn|vs_s|marginal": 69,
+  "turn|vs_s|strong": 53
  },
  "_thin": {
   "river|vs_b": {
