@@ -14,6 +14,7 @@ import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
 import { solveAiChain } from "./aiChain";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
+import { mesPostflopLookup } from "./mesPostflop";
 
 /**
  * Fast-solver: answer a hand node the clean way — the local crawled preflop
@@ -45,9 +46,9 @@ interface ActionFreq {
 export type FastSolveResult =
   | {
       ok: true;
-      source: "local-preflop" | "hrc-3max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop";
+      source: "local-preflop" | "hrc-3max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop" | "mes-postflop";
       /** which cascade layer answered. */
-      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "exploit-3max";
+      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "exploit-3max" | "exploit-postflop";
       /** Both preflop strategies when the exploit overlay covers the spot:
        *  the pool best-response and the equilibrium chart's pick. `decision`
        *  equals one of them per `strategyMode`. */
@@ -913,11 +914,84 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
 }
 
 /**
+ * Postflop with the MES overlay: our own locked-villain exploit solves answer
+ * the modeled flop spots (mesPostflop.ts), mirroring the preflop overlay's
+ * contract — BOTH answers ride in the result (`exploitDecision` = pool MES,
+ * `chartDecision` = equilibrium), `strategyMode` picks the primary, and the
+ * GTOW cascade stays the answer everywhere the overlay doesn't cover.
+ */
+async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
+  let mes = null;
+  if (hand.currentNode.street === "flop") {
+    try {
+      const tk = buildSpotSolutionTokens(hand, heroPos);
+      // hand.positions only labels seats the FEED named — hero's own position
+      // usually arrives via the caller (derived from his blind post), so fold
+      // it back in before the 3-max shape check
+      const heroPosName = (hand.positions[hand.heroSeatId] ?? heroPos ?? "").toUpperCase() || null;
+      mes = mesPostflopLookup({
+        positions: [...Object.values(hand.positions), ...(heroPosName ? [heroPosName] : [])],
+        heroPos: heroPosName,
+        pf3Tokens: buildPreflopTokens3max(hand, heroPos),
+        flopTokens: tk.flop,
+        board: hand.board,
+        heroCards: hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c)),
+      });
+    } catch { mes = null; /* overlay must never break the GTO path */ }
+  }
+
+  const mode: "exploit" | "chart" = opts.strategy ?? "exploit";
+
+  // The overlay alone can answer a covered spot even when the GTOW cascade is
+  // down — but a covered spot also shouldn't WAIT on a cloud solve when MES is
+  // the primary anyway. Chart mode still consults GTOW (its equilibrium is the
+  // established reference); exploit mode answers instantly from our solve.
+  if (mes && !mes.notInRange && mode === "exploit") {
+    const set = resolveSet(hand, heroPos, opts.setId);
+    return {
+      ok: true,
+      source: "mes-postflop",
+      tier: "exploit-postflop",
+      street: "flop",
+      setId: set?.id ?? "mes",
+      gametype: set?.gametype ?? "3max",
+      depth: resolveDepth(hand, set?.depths?.length ? set.depths : [100], opts.depth),
+      line: mes.tag,
+      pos: hand.positions[hand.heroSeatId] ?? heroPos,
+      heroClass: heroClassOf(hand),
+      actions: mes.actions,
+      decision: mes.exploitDecision,
+      exploitDecision: mes.exploitDecision ?? undefined,
+      chartDecision: mes.chartDecision ?? undefined,
+      exploitTag: mes.tag,
+      strategyMode: "exploit",
+      approx: !mes.exact || undefined,
+      warning: mes.warning,
+    };
+  }
+
+  const res = await solvePostflop(hand, heroPos, opts);
+  if (mes && res.ok) {
+    // chart mode (or hero off the exploit range): GTOW answer stays primary,
+    // the MES answer rides along so the tabs can flip without a re-solve
+    res.exploitDecision = mes.exploitDecision ?? undefined;
+    res.chartDecision = res.decision ?? mes.chartDecision ?? undefined;
+    res.exploitTag = mes.tag;
+    res.strategyMode = mode;
+    if (mes.notInRange && mode === "exploit") {
+      res.warning = [res.warning, "Hero's combo is outside the exploit flop range — equilibrium answer shown."]
+        .filter(Boolean).join(" ");
+    }
+  }
+  return res;
+}
+
+/**
  * Solve a hand node: preflop from the local charts, postflop from the
  * spot-solution API. Assumes hero is to act (the caller checks `toActIsHero`).
  */
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
-  if (hand.currentNode.street !== "preflop") return solvePostflop(hand, heroPos, opts);
+  if (hand.currentNode.street !== "preflop") return solvePostflopWithMes(hand, heroPos, opts);
 
   // 3-handed preflop answers from the asym HRC charts (unless the caller
   // pinned a set explicitly). A dead chart server falls back to the 6-max
