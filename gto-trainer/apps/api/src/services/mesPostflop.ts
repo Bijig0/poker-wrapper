@@ -282,3 +282,43 @@ export function mesPostflopLookup(args: {
     warning,
   };
 }
+
+// ---------------------------------------------------------- server-side helpers
+
+/** Nearest solved board (and its ev_gain) for a family + flop — the dashboard
+ *  uses this to price a hand's arrival without re-running a full lookup. */
+export function mesBoardFor(familyId: string, flop: string[]):
+    { board: string; evGainBb: number; exact: boolean; dist: number } | null {
+  const data = load();
+  const fam = data?.families[familyId];
+  const actual = parseFlop(flop.slice(0, 3).join(""));
+  if (!fam || !actual) return null;
+  const fa = features(actual.cards);
+  let best: string | null = null, bd = Infinity, bc: { r: number; s: string }[] = [];
+  for (const b of Object.keys(fam.boards)) {
+    const pc = parseFlop(b);
+    if (!pc) continue;
+    const d = texDist(fa, features(pc.cards));
+    if (d < bd) { bd = d; best = b; bc = pc.cards; }
+  }
+  if (!best) return null;
+  const exact = bd === 0 &&
+    actual.cards.map((c) => c.r).sort().join() === bc.map((c) => c.r).sort().join();
+  return { board: best, evGainBb: fam.boards[best]!.ev_gain_bb, exact, dist: bd };
+}
+
+/** Which modeled family a hand's positional preflop tokens + hero seat are, if
+ *  any — same shape test the answer path uses, exposed for arrival counting. */
+export function mesFamilyFor(pf3Tokens: string[], heroPos: string | null): string | null {
+  const data = load();
+  if (!data || !heroPos || pf3Tokens.length !== 3) return null;
+  for (const [id, f] of Object.entries(data.families)) {
+    if (f.hero_pos !== heroPos.toUpperCase()) continue;
+    const ok = f.pf3.every((want, i) => {
+      const got = pf3Tokens[i]!;
+      return want === "R" ? /^R[\d.]+$/.test(got) : got === want;
+    });
+    if (ok) return id;
+  }
+  return null;
+}

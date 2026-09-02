@@ -489,6 +489,26 @@ async function loadAnalytics() {
   html += tbl("By stakes", Object.entries(j.byStakes).map(([k, a]) => row(k, a)).join(""));
   html += tbl("By position", Object.entries(j.byPosition).map(([k, a]) => row(k, a)).join(""));
   const t = j.answers?.tiers ?? {};
+  // ---- formalized winrate picture (GET /api/dashboard/mes-value) ----------
+  try {
+    const mv = await (await fetch("/api/dashboard/mes-value")).json();
+    if (mv.ok) {
+      const f1 = (x) => x == null ? "—" : (x >= 0 ? "+" : "") + Number(x).toFixed(1);
+      html += `<div class="card"><h2>Winrate ladder — graded backtest, measured rake (bb/100)</h2>
+        <table><thead><tr><th>strategy</th><th>no rake</th><th>NL200 rake</th><th>NL25 rake</th><th>footing</th></tr></thead><tbody>` +
+        mv.ladder.map((r) => `<tr><td>${esc(r.strategy)}</td><td>${f1(r.norake)}</td><td><b>${f1(r.nl200)}</b></td><td><b>${f1(r.nl25)}</b></td><td class="sub">${esc(r.note)}</td></tr>`).join("") +
+        `</tbody></table></div>`;
+      const famRow = (name, f, src) => f ? `<tr><td>${esc(name)}</td><td>${esc(src)}</td><td>${f.arrivals}</td><td>${f.arrival_pct_of_hands}%</td><td>${f1(f.mean_ev_gain_per_arrival)} bb</td><td><b>${f1(f.uplift_bb100)}</b></td></tr>` : "";
+      const fams = ["M1_heroSB_bvb_cbet", "M2_heroBTN_srp_vs_BB"];
+      html += `<div class="card"><h2>Postflop MES uplift — v3 locked solves, per arrival → bb/100</h2>
+        <table><thead><tr><th>family</th><th>source</th><th>arrivals</th><th>% of hands</th><th>mean ev_gain / arrival</th><th>uplift bb/100</th></tr></thead><tbody>` +
+        fams.map((k) => famRow(k, mv.corpus?.families?.[k], `corpus (${mv.corpus?.hands ?? 0} hands)`) + famRow(k, mv.live?.families?.[k], `live (${mv.live?.hands ?? 0} hands)`)).join("") +
+        `<tr><td><b>total</b></td><td>corpus</td><td></td><td></td><td></td><td><b>${f1(mv.corpus?.total_uplift_bb100)}</b></td></tr>
+         <tr><td><b>total</b></td><td>live</td><td></td><td></td><td></td><td><b>${f1(mv.live?.total_uplift_bb100)}</b></td></tr>
+        </tbody></table>
+        <div class="sub" style="margin-top:8px">${(mv.caveats || []).map((t) => "• " + esc(t)).join("<br>")}</div></div>`;
+    }
+  } catch (e) { html += `<div class="card warn">mes-value unavailable: ${esc(String(e))}</div>`; }
   html += `<div class="card"><h2>Study answers (last 60 days)</h2>
     <div class="sub">${j.answers.answered} answered · ${j.answers.failed} failed</div>
     <table><thead><tr><th>tier</th><th>n</th><th>p50 ms</th><th>p90 ms</th><th>max ms</th></tr></thead><tbody>

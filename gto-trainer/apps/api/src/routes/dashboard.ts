@@ -14,6 +14,9 @@ import { answerLog } from "../services/answerLog";
 import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
+import { readFileSync } from "node:fs";
+import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { mesBoardFor, mesFamilyFor } from "../services/mesPostflop";
 
 /**
  * Study dashboard backend: reads the wrapper's hand archive (hands.db),
@@ -424,6 +427,73 @@ app.get("/stats", async (c) => {
       }))
       .reverse(),
     answers: answerLog.stats(60),
+  });
+});
+
+/**
+ * GET /mes-value — the formalized winrate picture, in one place.
+ *
+ * Three layers, kept visibly separate because they rest on different footing:
+ *   ladder   — the graded backtest (chart EV accounting over the replayed corpus,
+ *              measured rake): equilibrium vs preflop exploit, NL25 vs NL200.
+ *              Postflop is priced at the solver FLOOR here (villain's postflop
+ *              mistakes count for zero), so these are conservative.
+ *   corpus   — the postflop MES uplift over the whole HH corpus: every hand
+ *              where hero arrived at an M1/M2 flop, priced at the nearest solved
+ *              board's v3 ev_gain, summed per 100 hands (mes_reach_value.py).
+ *   live     — the same arithmetic over hero's OWN hands in hands.db.
+ * The postflop numbers are RAW MODEL VALUE: vs the tilted-pool model, with no
+ * execution haircut, and the nemesis bound for v3 is reported when it exists.
+ */
+const LADDER = [
+  { strategy: "Equilibrium charts", nl25: -10.1, nl200: -6.6, norake: -1.5,
+    note: "maximin floor; every postflop leg priced at equilibrium value" },
+  { strategy: "Preflop exploit + GTOW AI postflop", nl25: 5.2, nl200: 8.9, norake: null,
+    note: "argmax vs measured pool preflop (shrunk 1.5 SE); postflop still the floor" },
+];
+
+app.get("/mes-value", async (c) => {
+  let corpus: any = null;
+  try { corpus = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "data", "mes_reach_value.json"), "utf-8")); } catch {}
+
+  // live: classify hero's own hands the same way the corpus crunch does
+  const rows = allRows();
+  const enriched = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
+  const live: Record<string, { arrivals: number; sumEv: number; boards: Record<string, number> }> = {};
+  let liveFlops = 0;
+  for (const e of enriched) {
+    const h = e.hand;
+    if (!e.summary.sawFlop || h.board.length < 3) continue;
+    liveFlops++;
+    const heroPos = e.summary.heroPos;
+    const fam = mesFamilyFor(buildPreflopTokens3max(h, heroPos), heroPos);
+    if (!fam) continue;
+    const m = mesBoardFor(fam, h.board);
+    if (!m) continue;
+    const slot = (live[fam] ??= { arrivals: 0, sumEv: 0, boards: {} });
+    slot.arrivals++; slot.sumEv += m.evGainBb;
+    slot.boards[m.board] = (slot.boards[m.board] ?? 0) + 1;
+  }
+  const liveHands = enriched.length;
+  const liveFam = Object.fromEntries(Object.entries(live).map(([k, v]) => [k, {
+    arrivals: v.arrivals,
+    arrival_pct_of_hands: liveHands ? Math.round(10000 * v.arrivals / liveHands) / 100 : 0,
+    mean_ev_gain_per_arrival: v.arrivals ? Math.round(1000 * v.sumEv / v.arrivals) / 1000 : 0,
+    uplift_bb100: liveHands ? Math.round(1000 * 100 * v.sumEv / liveHands) / 1000 : 0,
+    boards: v.boards,
+  }]));
+  const liveTotal = Object.values(liveFam).reduce((s, f) => s + f.uplift_bb100, 0);
+
+  return c.json({
+    ok: true,
+    ladder: LADDER,
+    corpus,
+    live: { hands: liveHands, flops: liveFlops, families: liveFam, total_uplift_bb100: Math.round(liveTotal * 1000) / 1000 },
+    caveats: [
+      "Postflop uplift is raw model value vs the tilted-pool model (v3, control ≈ 0); no execution haircut applied.",
+      "ev_gain is per ARRIVAL at the flop root and includes all later streets; hero must play the MES continuation to realize it.",
+      "Ladder numbers price postflop at the solver floor, so the true total is ladder + some fraction of the postflop uplift, not their sum.",
+    ],
   });
 });
 

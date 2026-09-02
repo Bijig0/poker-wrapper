@@ -1,0 +1,167 @@
+{
+ "hands": 4872,
+ "flops": 1852,
+ "families": {
+  "M1_heroSB_bvb_cbet": {
+   "arrivals": 196,
+   "arrival_pct_of_hands": 4.02,
+   "arrival_pct_of_flops": 10.58,
+   "mean_ev_gain_per_arrival": 5.758,
+   "uplift_bb100": 23.164,
+   "boards": {
+    "Qs8s4d": {
+     "n": 40,
+     "ev_gain": 6.79
+    },
+    "Ks8d8c": {
+     "n": 19,
+     "ev_gain": 8.55
+    },
+    "Jh9h3c": {
+     "n": 19,
+     "ev_gain": 7.83
+    },
+    "Kc7d2h": {
+     "n": 15,
+     "ev_gain": 3.17
+    },
+    "8h6s3h": {
+     "n": 14,
+     "ev_gain": 7.71
+    },
+    "QhJc6d": {
+     "n": 14,
+     "ev_gain": 3.21
+    },
+    "AcTh4s": {
+     "n": 12,
+     "ev_gain": 3.45
+    },
+    "7c5c4h": {
+     "n": 11,
+     "ev_gain": 7.55
+    },
+    "AsKd7c": {
+     "n": 10,
+     "ev_gain": 3.35
+    },
+    "9s5h2c": {
+     "n": 10,
+     "ev_gain": 3.53
+    },
+    "Jd7h5c": {
+     "n": 10,
+     "ev_gain": 3.41
+    },
+    "6h6d2s": {
+     "n": 9,
+     "ev_gain": 8.06
+    },
+    "Tc9d2s": {
+     "n": 7,
+     "ev_gain": 3.48
+    },
+    "Ah9c3d": {
+     "n": 6,
+     "ev_gain": 3.52
+    }
+   }
+  },
+  "M2_heroBTN_srp_vs_BB": {
+   "arrivals": 217,
+   "arrival_pct_of_hands": 4.45,
+   "arrival_pct_of_flops": 11.72,
+   "mean_ev_gain_per_arrival": 6.137,
+   "uplift_bb100": 27.336,
+   "boards": {
+    "Qs8s4d": {
+     "n": 51,
+     "ev_gain": 7.41
+    },
+    "Ks8d8c": {
+     "n": 27,
+     "ev_gain": 7.69
+    },
+    "Jh9h3c": {
+     "n": 23,
+     "ev_gain": 8.59
+    },
+    "7c5c4h": {
+     "n": 17,
+     "ev_gain": 7.48
+    },
+    "8h6s3h": {
+     "n": 14,
+     "ev_gain": 7.75
+    },
+    "Kc7d2h": {
+     "n": 13,
+     "ev_gain": 3.69
+    },
+    "AcTh4s": {
+     "n": 11,
+     "ev_gain": 3.16
+    },
+    "QhJc6d": {
+     "n": 11,
+     "ev_gain": 3.47
+    },
+    "9s5h2c": {
+     "n": 11,
+     "ev_gain": 3.38
+    },
+    "AsKd7c": {
+     "n": 10,
+     "ev_gain": 3.35
+    },
+    "Jd7h5c": {
+     "n": 9,
+     "ev_gain": 3.2
+    },
+    "Ah9c3d": {
+     "n": 8,
+     "ev_gain": 3.53
+    },
+    "6h6d2s": {
+     "n": 6,
+     "ev_gain": 7.43
+    },
+    "Tc9d2s": {
+     "n": 6,
+     "ev_gain": 3.34
+    }
+   }
+  }
+ },
+ "by_stake": {
+  "$0.10-$0.25": {
+   "hands": 3328,
+   "uplift_bb100": 51.71
+  },
+  "$1-$2": {
+   "hands": 768,
+   "uplift_bb100": 50.08
+  },
+  "$0.50-$1": {
+   "hands": 455,
+   "uplift_bb100": 42.05
+  },
+  "$0.25-$0.50": {
+   "hands": 252,
+   "uplift_bb100": 51.68
+  },
+  "$0.02-$0.05": {
+   "hands": 45,
+   "uplift_bb100": 23.48
+  },
+  "$2.50-$5": {
+   "hands": 23,
+   "uplift_bb100": 99.07
+  },
+  "$0.05-$0.10": {
+   "hands": 1,
+   "uplift_bb100": 0
+  }
+ },
+ "total_uplift_bb100": 50.5
+}
