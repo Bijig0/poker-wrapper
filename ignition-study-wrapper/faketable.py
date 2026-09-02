@@ -31,7 +31,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 # The replica's asset library (card faces + the SVGs harvested from the client).
-ASSETS = ROOT.parent / "gto-trainer" / "apps" / "dashboard" / "public"
+# card art used to live in the (now deleted) :2100 dashboard app's public/
+ASSETS = ROOT / "assets"
 
 _RANKS = "A23456789TJQK"
 _SUITS = "cdhs"
