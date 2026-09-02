@@ -8,6 +8,12 @@
       "port": 2000
     },
     {
+      "name": "hrc-charts",
+      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-charts.cmd",
+      "runtimeArgs": [],
+      "port": 8777
+    },
+    {
       "name": "poker-analysis",
       "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
       "runtimeArgs": [
