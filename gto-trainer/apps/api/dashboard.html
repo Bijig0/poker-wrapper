@@ -97,11 +97,9 @@
        Ignition table replica); this tab embeds it so review stays reachable
        from the study dashboard the recordings belong to. -->
   <div id="view-replay" style="display:none">
+    <!-- Replay Review is served by this same API (studyUi.ts -> /replay), so the
+         tab is a same-origin iframe with no second process behind it. -->
     <iframe id="replay-frame" style="width:100%;height:calc(100vh - 90px);border:0;border-radius:8px;background:#0d141c"></iframe>
-    <div id="replay-hint" class="card warn" style="display:none;margin-top:8px">
-      The dashboard app on :2100 is not running — start it
-      (<code>gto-trainer/apps/dashboard: bun run dev</code>) and reopen this tab.
-    </div>
   </div>
 </main>
 <script>
@@ -638,17 +636,10 @@ const selectTab = (id) => {
 $("tab-hands").onclick = () => { selectTab("tab-hands"); route(); };
 $("tab-analytics").onclick = () => { selectTab("tab-analytics"); loadAnalytics(); route(); };
 $("tab-catalog").onclick = () => { selectTab("tab-catalog"); loadCatalog(); route(); };
-$("tab-replay").onclick = async () => {
+$("tab-replay").onclick = () => {
   selectTab("tab-replay"); route();
-  // Probe the React app before pointing the iframe at it, so a dead :2100
-  // shows a hint instead of a blank pane.
-  try {
-    await fetch("http://localhost:2100/", { mode: "no-cors" });
-    $("replay-hint").style.display = "none";
-    if (!$("replay-frame").src) $("replay-frame").src = "http://localhost:2100/replay";
-  } catch (e) {
-    $("replay-hint").style.display = "";
-  }
+  // lazy-load on first open; same origin, nothing to probe
+  if (!$("replay-frame").src) $("replay-frame").src = "/replay";
 };
 
 loadHands();
