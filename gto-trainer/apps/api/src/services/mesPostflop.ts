@@ -587,3 +587,67 @@ export function mesRiverContext(args: MesNodeArgs & { riverCard: string }): MesR
     evGainBb: rb.ev_gain_bb, exact: nb.exact, snapped, bd: nb.dist,
   };
 }
+
+// ------------------------------------------------------------ walkthrough API
+
+/** Every solved spot: family x board, for the registry's clickable list. */
+export function mesSpots() {
+  const d = load();
+  if (!d) return [];
+  const out: { family: string; heroPos: string; pf3: string[]; line: string[]; board: string;
+               evGainBb: number; gen: string | undefined; pot: number; effStack: number; hasTurn: boolean }[] = [];
+  for (const [fid, f] of Object.entries(d.families)) {
+    for (const [b, rb] of Object.entries(f.boards)) {
+      let hasTurn = false;
+      try { hasTurn = statSync(join(TURN_DIR, `${fid}_${b}.turn.json`)).size > 0; } catch {}
+      out.push({ family: fid, heroPos: f.hero_pos, pf3: f.pf3, line: f.line ?? [], board: b,
+                 evGainBb: rb.ev_gain_bb, gen: (rb as any).gen, pot: f.pot, effStack: f.eff_stack, hasTurn });
+    }
+  }
+  return out;
+}
+
+/** One flop node of a solved board by relative history, with everything the
+ *  walker renders: action labels, per-combo MES/GTO mixes + EVs, weights,
+ *  the hole list, and the child histories that exist (to know where the
+ *  street ends). */
+export function mesFlopNode(family: string, board: string, hist: number[]) {
+  const d = load();
+  const f = d?.families[family]; const rb = f?.boards[board];
+  if (!f || !rb) return null;
+  const byH = new Map(rb.nodes.map((n) => [n.h.join(","), n]));
+  const n = byH.get(hist.join(","));
+  if (!n) return null;
+  const children = n.acts.map((_, a) => byH.has([...hist, a].join(",")));
+  // path labels for the breadcrumb
+  const path: string[] = [...(f.line ?? [])];
+  let h: number[] = [];
+  for (const a of hist) { const pn = byH.get(h.join(",")); if (pn) path.push(pn.acts[a]!); h = [...h, a]; }
+  return { family, board, heroPlayer: f.hero_player, heroPos: f.hero_pos, pot: f.pot, evGainBb: rb.ev_gain_bb,
+           spotLine: f.line ?? [], path, hist, player: n.p, acts: n.acts, children, isHero: n.p === f.hero_player,
+           holes: rb.holes, w: n.w ?? null, mes: n.mes ?? null, gto: n.gto ?? null, mesEv: n.mes_ev ?? null, gtoEv: n.gto_ev ?? null };
+}
+
+/** Turn: the extracted lines for a board (which flop histories reached the
+ *  turn), and one turn node by (flop history, card, turn history). */
+export function mesTurnLines(family: string, board: string) {
+  const tf = loadTurn(family, board);
+  if (!tf) return null;
+  return Object.entries(tf.lines).map(([k, v]) => ({ hist: k.split(",").filter(Boolean).map(Number), labels: v.labels, cards: Object.keys(v.cards) }));
+}
+export function mesTurnNode(family: string, board: string, flopHist: number[], card: string, hist: number[]) {
+  const tf = loadTurn(family, board);
+  const line = tf?.lines[flopHist.join(",")];
+  const tc = line?.cards[card];
+  if (!tf || !line || !tc) return null;
+  const byH = new Map(tc.nodes.map((n) => [n.h.join(","), n]));
+  const n = byH.get(hist.join(","));
+  if (!n) return null;
+  const children = n.acts.map((_, a) => byH.has([...hist, a].join(",")));
+  const path: string[] = [];
+  let h: number[] = [];
+  for (const a of hist) { const pn = byH.get(h.join(",")); if (pn) path.push(pn.acts[a]!); h = [...h, a]; }
+  return { family, board, card, flopLabels: line.labels, pot: tc.pot, heroPlayer: tf.hero_player, path, hist,
+           player: n.p, acts: n.acts, children, isHero: n.p === tf.hero_player, holes: tf.holes, w: tc.w,
+           mes: n.mes ?? null, mesEv: n.ev ?? null };
+}

@@ -15,7 +15,10 @@
   main { padding: 14px 16px 60px; }
   table { border-collapse: collapse; width: 100%; }
   th, td { padding: 4px 8px; text-align: left; white-space: nowrap; }
-  thead th { color: #8fa1b6; font-weight: 600; border-bottom: 1px solid #232b37; position: sticky; top: 44px; background: #0e1116; cursor: pointer; }
+  thead th { color: #8fa1b6; font-weight: 600; border-bottom: 1px solid #232b37; background: transparent; }
+  /* only the main hands table pins its header under the app bar; a table
+     inside a card must not (the pinned header floated over its first row) */
+  #view-hands thead th { position: sticky; top: 44px; background: #0e1116; cursor: pointer; }
   tbody tr { border-bottom: 1px solid #1a212c; cursor: pointer; }
   tbody tr:hover { background: #161d28; }
   .pos, .neg { font-variant-numeric: tabular-nums; }
@@ -62,6 +65,176 @@
   .tiles { display: flex; flex-wrap: wrap; gap: 10px; }
   .tile { background: #151a22; border: 1px solid #232b37; border-radius: 8px; padding: 10px 16px; min-width: 110px; }
   .tile .v { font-size: 20px; font-weight: 700; } .tile .k { color: #8fa1b6; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .tile .s { color: #8fa1b6; font-size: 11px; }
+  /* ---- Sources tab ---- */
+  .mono { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .armed { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .armed .cell { background: #151a22; border: 1px solid #232b37; border-radius: 8px; padding: 9px 12px; display: flex; flex-direction: column; gap: 3px; }
+  .armed .k { color: #8fa1b6; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .armed .v { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+  .armed .s { color: #8fa1b6; font-size: 11px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.good { background: #61d095; } .dot.warn { background: #ffce56; } .dot.crit { background: #ff7373; } .dot.off { background: #3a4453; }
+  .mode { display: inline-block; padding: 0 7px; border-radius: 8px; font-size: 11px; font-weight: 700; line-height: 17px; }
+  .mode.mes { background: rgba(232,119,46,.18); color: #e8772e; }
+  .mode.gto { background: rgba(59,139,216,.18); color: #3b8bd8; }
+  .chip { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 17px; background: #1e3247; color: #9ecbff; margin-right: 3px; }
+  .chip.warn { background: #4d3d1e; color: #ffce56; } .chip.crit { background: #57222a; color: #ff9a9a; }
+  .chip.good { background: #1c3b2c; color: #61d095; } .chip.dim { background: #1a212c; color: #8fa1b6; }
+  .sub-tabs { display: flex; gap: 4px; border-bottom: 1px solid #232b37; margin-bottom: 14px; }
+  .sub-tabs button { background: none; border: none; color: #8fa1b6; font: inherit; padding: 7px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .sub-tabs button.on { color: #fff; border-color: #4da3ff; }
+  .sub-tabs .n { color: #8fa1b6; font-size: 11px; margin-left: 5px; }
+  .pane { display: none; } .pane.on { display: block; }
+  .banner { background: #1c2f45; border: 1px solid #2a4a6e; color: #cfe0f2; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
+  .banner b { color: #fff; }
+  .reg { display: grid; grid-template-columns: repeat(auto-fill, minmax(410px, 1fr)); gap: 12px; }
+  .src { background: #151a22; border: 1px solid #232b37; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .src.click { cursor: pointer; } .src.click:hover { border-color: #2c3a4d; }
+  .src .head { display: flex; align-items: center; gap: 8px; }
+  .src .head h3 { margin: 0; font-size: 14px; flex: 1; }
+  .src .tiers { display: flex; flex-wrap: wrap; gap: 4px; }
+  .src dl { display: grid; grid-template-columns: 96px 1fr; gap: 3px 10px; margin: 0; font-size: 12px; }
+  .src dt { color: #8fa1b6; } .src dd { margin: 0; white-space: normal; word-break: break-word; }
+  .src .foot { display: flex; gap: 14px; align-items: baseline; border-top: 1px solid #232b37; padding-top: 8px; margin-top: 2px; }
+  .src .foot .big { font-size: 18px; font-weight: 700; } .src .foot .k { color: #8fa1b6; font-size: 11px; }
+  .src .caveat { color: #ffce56; font-size: 12px; }
+  .spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; margin-left: auto; }
+  .spark i { display: block; width: 4px; background: #2f78bd; border-radius: 2px 2px 0 0; min-height: 1px; }
+  .spark i.m { background: #cf6a24; }
+  .scroll { overflow-x: auto; }
+  .ev { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; border-radius: 4px; }
+  .ev.p { background: rgba(97,208,149,.14); color: #61d095; } .ev.n { background: rgba(255,115,115,.14); color: #ff7373; }
+  .ev.z { background: rgba(143,161,182,.10); color: #8fa1b6; font-weight: 400; }
+  .ev .se { color: #8fa1b6; font-weight: 400; font-size: 11px; }
+  .row-group td { background: #10151d; color: #9db1c7; font-weight: 700; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; cursor: default; }
+  .reuse { border-left: 2px dashed #2c3a4d; }
+  .ev-link { color: #4da3ff; text-decoration: none; font-size: 11.5px; } .ev-link:hover { text-decoration: underline; }
+  .bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; gap: 2px; background: #0e1116; width: 180px; }
+  .bar i { display: block; } .bar .agree { background: #3a4453; } .bar .mes { background: #cf6a24; } .bar .gto { background: #2f78bd; } .bar .unk { background: #1a212c; }
+  .g2 { display: grid; grid-template-columns: 1.1fr .9fr; gap: 12px; }
+  @media (max-width: 1000px) { .g2 { grid-template-columns: 1fr; } }
+  .reach { display: inline-flex; align-items: center; gap: 8px; }
+  .reach i { display: block; height: 8px; background: #2f78bd; border-radius: 2px; } .reach i.built { background: #cf6a24; }
+  .st { display: inline-flex; align-items: center; gap: 6px; }
+  .src-static tr { cursor: default; }
+  /* the hands table's sticky header must not float over the panes' own tables */
+  #view-sources thead th { position: static; cursor: default; background: transparent; }
+  #view-sources td { white-space: normal; }
+  #view-sources td.num, #view-sources td.ev, #view-sources td.mono { white-space: nowrap; }
+  #src-matrix td:last-child { min-width: 300px; }
+  .src-dl { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
+  .src-dl dt { color: #8fa1b6; } .src-dl dd { margin: 0; white-space: normal; word-break: break-word; }
+  /* hand detail: logged answers as structured cards (verdict → mix → provenance) */
+  .ans { display: grid; grid-template-columns: 150px 1fr; gap: 6px 16px; background: #10151d; border: 1px solid #1f2936; border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+  .ans.compact { grid-template-columns: 130px 1fr; padding: 8px 10px; margin: 2px 0 8px 12px; border-left: 3px solid #2c3a4d; }
+  .ans.failed { border-color: #57222a; }
+  .ans-where { display: flex; flex-direction: column; gap: 3px; }
+  .ans-street { font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: #9db1c7; font-weight: 700; }
+  .ans-node { color: #8fa1b6; font-size: 11.5px; }
+  .ans-lat { color: #55647a; font-size: 11px; }
+  .ans-main { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .ans-verdict { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .ans-pick { font-size: 18px; font-weight: 800; letter-spacing: .3px; color: #fff; }
+  .ans-pick.fold { color: #8fb3e6; } .ans-pick.call, .ans-pick.check { color: #61d095; } .ans-pick.bet, .ans-pick.raise { color: #ffb454; }
+  .ans-how { color: #8fa1b6; font-size: 12px; }
+  .ans-approx { display: inline-flex; align-items: center; gap: 4px; background: #4d3d1e; color: #ffce56; border-radius: 8px; padding: 0 7px; font-size: 11px; line-height: 17px; cursor: help; }
+  .mix { display: flex; flex-direction: column; gap: 4px; max-width: 520px; }
+  .mix-bar { position: relative; display: flex; height: 12px; border-radius: 3px; overflow: visible; gap: 2px; margin-top: 16px; }
+  .mix-bar i { display: block; height: 100%; border-radius: 3px; opacity: .55; }
+  .mix-bar i.picked { opacity: 1; box-shadow: 0 0 0 1px #0e1116 inset; }
+  .mix-bar .roll { position: absolute; top: -4px; width: 2px; height: 20px; background: #fff; border-radius: 1px; }
+  .mix-bar .roll::after { content: attr(data-roll); position: absolute; top: -13px; left: 50%; transform: translateX(-50%); font-size: 10px; color: #dfe6ee; white-space: nowrap; }
+  .mix-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: #c7d3e0; }
+  .mix-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .mix-legend .sw { width: 10px; height: 10px; border-radius: 2px; }
+  .mix-legend b { font-variant-numeric: tabular-nums; }
+  .prov { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 5px 14px; font-size: 12px; }
+  .prov .f { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .prov .k { color: #8fa1b6; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .prov .v { color: #dfe6ee; overflow-wrap: anywhere; }
+  .prov .v a { color: #4da3ff; text-decoration: none; } .prov .v a:hover { text-decoration: underline; }
+  .prov .v .mono { font-size: 11px; color: #b9c6d6; }
+  .picks { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .picks .pk { display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; padding: 1px 7px; font-weight: 700; }
+  .picks .pk.mes { background: rgba(232,119,46,.16); color: #ffb98a; } .picks .pk.gto { background: rgba(59,139,216,.16); color: #9ecbff; }
+  .picks .pk small { font-weight: 400; opacity: .8; font-size: 10px; }
+  .ans-note { color: #ffce56; font-size: 12px; }
+  .ans-none { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px 12px; padding: 6px 10px; border-left: 3px solid #2c3a4d; color: #55647a; font-style: italic; font-size: 12px; }
+  .ans-fail { color: #ff9a9a; font-weight: 600; }
+  /* node viewer (the exact chart / MES node behind an answer) */
+  .grid169 { display: grid; grid-template-columns: repeat(13, 30px); gap: 2px; margin-top: 8px; }
+  .grid169 div { width: 30px; height: 26px; font-size: 10px; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: #10151d; color: #b9c6d6; }
+  .grid169 div.hero { outline: 2px solid #ffd35c; z-index: 1; }
+  .nv-head { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 8px; }
+  .nv-crumb { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .nv-crumb span { background: #1d2836; border: 1px solid #2c3a4d; border-radius: 5px; padding: 1px 8px; font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .nv-crumb span.snap { border-color: #ffce56; color: #ffce56; }
+  .nv-crumb .sep { background: none; border: none; color: #55647a; padding: 0; }
+  .nv-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
+  .nv-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 5px 14px; font-size: 12px; margin: 6px 0 10px; }
+  .nv-facts .f { display: flex; flex-direction: column; gap: 1px; }
+  .nv-facts .k { color: #8fa1b6; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .nv-facts .v { color: #dfe6ee; }
+  .nv-hero { background: #1c3550; border: 1px solid #3f6d9e; border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+  .nv-hero .big { font-size: 15px; font-weight: 700; color: #fff; }
+  /* miss queue */
+  .mq-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 10px; }
+  .mq-ctl select { background: #1d2836; border: 1px solid #2c3a4d; color: #cfe0f2; border-radius: 5px; padding: 2px 6px; font-size: 11.5px; }
+  .mq-kind { display: inline-block; padding: 0 7px; border-radius: 8px; font-size: 11px; line-height: 17px; font-weight: 700; white-space: nowrap; }
+  .mq-kind.size-snapped { background: #4d3d1e; color: #ffce56; }
+  .mq-kind.size-off-tree { background: #57222a; color: #ff9a9a; }
+  .mq-kind.action-not-in-tree, .mq-kind.jam-not-offered { background: #3b2a57; color: #d3b7ff; }
+  .mq-kind.node-missing, .mq-kind.past-terminal, .mq-kind.other { background: #57222a; color: #ff9a9a; }
+  .mq-kind.beyond-ladder { background: #1e3247; color: #9ecbff; }
+  .mq-state b { font-weight: 600; }
+  .mq-node .arrow { color: #ffce56; font-weight: 700; }
+  .mq-job { max-width: 340px; }
+  .mq-job .id { word-break: break-all; }
+  .mq-prog { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: #8fa1b6; }
+  .mq-prog .bar { width: 140px; height: 6px; background: #232b37; border-radius: 3px; overflow: hidden; }
+  .mq-prog .bar i { display: block; height: 100%; background: #4da3ff; }
+  tr.mq-solved td, tr.mq-dismissed td { opacity: .55; }
+  /* sessions */
+  .sess-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .sess-grid .card { margin: 0; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 12.5px; }
+  .kv .k { color: #8fa1b6; } .kv .v { overflow-wrap: anywhere; }
+  .ev-line { display: grid; grid-template-columns: 120px 1fr; gap: 10px; padding: 4px 6px; border-left: 2px solid #2c3a4d; margin-left: 4px; font-size: 12.5px; }
+  .ev-line .t { color: #8fa1b6; font-variant-numeric: tabular-nums; }
+  .pf-row { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; align-items: center; padding: 3px 0; font-size: 12.5px; }
+  .pf-row .sub { font-size: 11.5px; }
+  .preset-chip { display: inline-block; border-radius: 8px; padding: 1px 8px; font-size: 11px; font-weight: 700; background: #1e3247; color: #9ecbff; }
+  .preset-chip.silent { background: #1a212c; color: #8fa1b6; } .preset-chip.capture-qa { background: #57222a; color: #ff9a9a; } .preset-chip.test-rig { background: #4d3d1e; color: #ffce56; }
+  /* AI-chain walkthrough */
+  .walk { display: grid; grid-template-columns: 300px 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .walk { grid-template-columns: 1fr; } }
+  .walk-list { display: flex; flex-direction: column; gap: 3px; }
+  .walk-street { color: #9db1c7; font-weight: 700; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; margin: 8px 0 2px; }
+  .walk-node { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; padding: 6px 8px; border-radius: 6px; background: #10151d; border: 1px solid #1f2936; cursor: pointer; }
+  .walk-node:hover { border-color: #2c3a4d; } .walk-node.on { border-color: #4da3ff; background: #14243a; }
+  .walk-node.hero { border-left: 3px solid #ffd35c; }
+  .walk-node .n { color: #55647a; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .walk-node .who { font-weight: 700; } .walk-node .took { color: #c7d3e0; font-size: 12px; } .walk-node .took b { color: #fff; }
+  .walk-node .pct { color: #8fa1b6; font-size: 11px; }
+  .walk-grids { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; }
+  .walk-grids .card { margin: 0; }
+  .grid169.sm { grid-template-columns: repeat(13, 24px); } .grid169.sm div { width: 24px; height: 20px; font-size: 9px; }
+  .diff-tbl td.num { text-align: right; }
+  .diff-pos { color: #61d095; } .diff-neg { color: #ff7373; }
+  .seg { display: inline-flex; border: 1px solid #2c3a4d; border-radius: 6px; overflow: hidden; }
+  .seg button { background: none; border: none; color: #8fa1b6; font: inherit; padding: 3px 10px; cursor: pointer; }
+  .seg button.on.mes { background: rgba(232,119,46,.2); color: #ffb98a; } .seg button.on.gto { background: rgba(59,139,216,.2); color: #9ecbff; }
+  /* hand detail: per-decision provenance + session line */
+  .tl-prov { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 3px 6px 7px 130px; font-size: 12px; color: #9db1c7; border-left: 2px solid #2c3a4d; margin-left: 6px; }
+  .tl-prov .ans { color: #dfe6ee; font-weight: 600; }
+  .tl-prov .none { color: #55647a; font-style: italic; }
+  .tl-prov a { color: #4da3ff; text-decoration: none; } .tl-prov a:hover { text-decoration: underline; }
+  .sess-line { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 6px 0 10px; font-size: 12.5px; }
+  .sess-line a { color: #4da3ff; text-decoration: none; } .sess-line a:hover { text-decoration: underline; }
+  .prov-grid { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; font-size: 12.5px; }
+  .prov-grid .k { color: #8fa1b6; }
 </style>
 </head>
 <body>
@@ -69,8 +242,9 @@
   <h1>🃏 Study Dashboard</h1>
   <div class="tabs">
     <button id="tab-hands" class="on">Hands</button>
+    <button id="tab-sessions">Sessions</button>
     <button id="tab-analytics">Analytics</button>
-    <button id="tab-catalog">Catalog</button>
+    <button id="tab-sources">Sources</button>
     <button id="tab-replay">Replay Review</button>
   </div>
   <span id="count" class="sub"></span>
@@ -91,8 +265,9 @@
     </table>
   </div>
   <div id="view-detail" style="display:none"></div>
+  <div id="view-sessions" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
-  <div id="view-catalog" style="display:none"></div>
+  <div id="view-sources" style="display:none"></div>
   <!-- Side-by-side replay review lives in the React dashboard (it renders the
        Ignition table replica); this tab embeds it so review stays reachable
        from the study dashboard the recordings belong to. -->
@@ -120,12 +295,22 @@ const r2 = (x) => Math.round(x * 100) / 100;
 /* ================= hands list ================= */
 let HANDS = [], sortK = "playedAt", sortDir = -1;
 
+// The discrepancy audits are computed by the server in the background after a
+// restart; while any are still pending the disc column shows "?" — re-poll
+// until they are all in (one timer, whichever loader asked last).
+let auditTimer = null;
+function pollWhilePending(j, reload) {
+  clearTimeout(auditTimer);
+  if (j.auditPending > 0) auditTimer = setTimeout(reload, 2500);
+}
+
 async function loadHands() {
   try {
     const j = await (await fetch("/api/dashboard/hands")).json();
     HANDS = j.hands || [];
-    $("count").textContent = `${HANDS.length} hands`;
+    $("count").textContent = `${HANDS.length} hands` + (j.auditPending ? ` · auditing ${j.auditPending}…` : "");
     renderHands();
+    pollWhilePending(j, () => { if (PATH.view === "hands" && !PATH.id) loadHands(); });
   } catch (e) { /* server restarting */ }
 }
 const sortVal = (h, k) => k === "pos" ? (h.summary.heroPos ?? "") : k === "cards" ? h.heroCards.join("")
@@ -152,7 +337,7 @@ function renderHands() {
       <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${s.potBb}</td>
       <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
   }).join("");
-  for (const tr of $("hands-body").querySelectorAll("tr")) tr.onclick = () => { location.hash = `#hand/${tr.dataset.id}`; };
+  for (const tr of $("hands-body").querySelectorAll("tr")) tr.onclick = () => go(`/hands/${tr.dataset.id}`);
 }
 document.querySelectorAll("thead th[data-k]").forEach((th) => {
   th.onclick = () => { const k = th.dataset.k; sortDir = sortK === k ? -sortDir : -1; sortK = k; renderHands(); };
@@ -251,15 +436,33 @@ function renderMirror(hand, rs) {
       <text x="${sx}" y="${sy + 2}" text-anchor="middle" font-size="12" font-weight="700" fill="${isHero ? "#9fd1ff" : "#c8d5e2"}">
         ${isHero ? "YOU" : "seat " + seat}${hand.positions[seat] ? " · " + esc(hand.positions[seat]) : ""}</text>
       <text x="${sx}" y="${sy + 17}" text-anchor="middle" font-size="11" fill="#8fa1b6">${folded ? "folded" : stackStr}</text></g>`;
+    // Things drawn on the seat→pot line (dealer button, committed chips)
+    // must never sit on the hole cards. The cards are always ABOVE the pod,
+    // so for seats in the lower half of the table a fixed fraction of the
+    // way to the pot lands right on them (hero's 2.52 covered his cards).
+    // Slide along the line until clear of the card rectangle, so the marker
+    // ends up between the cards and the pot for every seat angle.
+    const cardsDrawn = !folded && (isHero ? hand.heroCards.length > 0 : hand.liveSeats.includes(seat));
+    const cardRect = cardsDrawn ? { x1: sx - 30, y1: cardY - 3, x2: sx + 30, y2: cardY + 39 } : null;
+    const alongLine = (t0, w, h, dx) => {
+      let t = t0, x = 0, y = 0;
+      for (; t <= 0.72; t += 0.03) {
+        x = sx + (cx - sx) * t + dx; y = sy + (cy - sy) * t;
+        const clear = !cardRect || x + w / 2 < cardRect.x1 || x - w / 2 > cardRect.x2 || y + h / 2 < cardRect.y1 || y - h / 2 > cardRect.y2;
+        if (clear) break;
+      }
+      return { x, y };
+    };
     // dealer button
     if (seat === btnSeat) {
-      const bx = sx + (cx - sx) * 0.26, by = sy + (cy - sy) * 0.26;
-      g += `<circle cx="${bx - 26}" cy="${by}" r="9" fill="#e8ecf2"/><text x="${bx - 26}" y="${by + 3.5}" text-anchor="middle" font-size="10" font-weight="800" fill="#22303f">D</text>`;
+      // -40: clear of the chip (48 wide, centred on the line) when both slide to the same spot
+      const { x: dxp, y: dyp } = alongLine(0.26, 20, 20, -40);
+      g += `<circle cx="${dxp}" cy="${dyp}" r="9" fill="#e8ecf2"/><text x="${dxp}" y="${dyp + 3.5}" text-anchor="middle" font-size="10" font-weight="800" fill="#22303f">D</text>`;
     }
     // committed chips this street
     const bet = rs.bets[seat];
     if (bet) {
-      const bx = sx + (cx - sx) * 0.34, by = sy + (cy - sy) * 0.34;
+      const { x: bx, y: by } = alongLine(0.34, 52, 22, 0);
       g += `<rect x="${bx - 24}" y="${by - 10}" rx="9" width="48" height="18" fill="#0f1a26" stroke="#3b556f"/>
         <text x="${bx}" y="${by + 3.5}" text-anchor="middle" font-size="11" font-weight="700" fill="#ffd35c">${r2(bet)}</text>`;
     }
@@ -283,18 +486,19 @@ function feedStepMap(feedLines, actions) {
 let DETAIL = null, STEP = 0, PLAY = null;
 
 async function showDetail(dbId) {
-  $("view-hands").style.display = "none"; $("view-analytics").style.display = "none";
-  const v = $("view-detail"); v.style.display = ""; v.innerHTML = '<div class="card sub">loading…</div>';
+  const v = $("view-detail"); v.innerHTML = '<div class="card sub">loading…</div>';
   const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
   if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
   DETAIL = j; STEP = j.hand.actions.length; // start at the end (full hand)
   const s = j.summary;
   v.innerHTML = `
     <div class="dt-top">
-      <button class="mini" onclick="location.hash=''">← all hands</button>
+      <button class="mini" onclick="go('/hands')">← all hands</button>
       <h2 style="margin:0">Hand #${j.dbId} · ${cardsHtml(j.hand.heroCards)} ${esc(s.heroPos ?? "?")} · ${esc(j.stakes ?? "?")} · ${fmtT(j.playedAt)}</h2>
       <span class="sub">${esc(j.clientHandId ?? "no site id")}${j.resultText ? " · " + esc(j.resultText) : ""}</span>
     </div>
+    ${sessionLine(j)}
+    ${provenanceCard(j)}
     <div class="dt-grid">
       <div class="card" style="margin:0">
         <div id="mirror"></div>
@@ -311,10 +515,7 @@ async function showDetail(dbId) {
     </div>
     <div class="card"><h2>Timeline — click a node, solve it, open it</h2><div id="timeline"></div></div>
     <div id="solution"></div>
-    ${j.answers?.length ? `<div class="card"><h2>Live answers pushed during play</h2>` + j.answers.map((a) =>
-      `<div class="tl-row"><span class="who">${esc(a.street ?? "?")}</span>
-       <span class="what">${a.text ? esc(a.text) : `<span class="warn">no answer — ${esc(a.fail_reason ?? "?")}</span>`}</span>
-       <span class="sub">${esc(a.tier ?? "")} · ${a.latency_ms ?? "?"}ms</span></div>`).join("") + `</div>` : ""}
+    ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
     ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
       `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
        <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
@@ -336,6 +537,172 @@ async function showDetail(dbId) {
   };
 }
 
+/* ---- provenance: which source answered each decision, stated outright ---- */
+const SOURCE_INFO = {
+  "pool-exploit-preflop": { label: "Pool-exploit preflop overlay", card: "exploit-preflop", mode: "mes" },
+  "hrc-3max-preflop": { label: "HRC 3-max asymmetric grid", card: "hrc-3max", mode: "gto" },
+  "local-preflop": { label: "GTO Wizard crawled charts", card: "gtow-charts", mode: "gto" },
+  "mes-postflop": { label: "MES locked flop solves", card: "mes-postflop", mode: "mes" },
+  "gtow-api-postflop": { label: "GTO Wizard AI (cloud)", card: "gtow-ai", mode: "gto" },
+};
+const srcLink = (src) => {
+  const i = SOURCE_INFO[src];
+  return i ? `<a href="/sources/registry/${i.card}" onclick="go('/sources/registry/${i.card}');return false">${esc(i.label)}</a>` : `<span>${esc(src ?? "unknown source")}</span>`;
+};
+const modeChip = (m) => m === "exploit" ? '<span class="mode mes">MES</span>' : m === "chart" ? '<span class="mode gto">GTO</span>' : "";
+/** One line of provenance for a logged answer: source · tier · chart · mode · both picks · latency. */
+function provenanceInline(a) {
+  if (!a.text) return `solve failed after ${a.latency_ms ?? "?"} ms`;
+  const bits = [];
+  bits.push(`from ${srcLink(a.source)}`);
+  if (a.tier) bits.push(`tier <span class="chip">${esc(a.tier)}</span>`);
+  if (a.chart) bits.push(`chart <span class="mono">${esc(a.chart)}</span>`);
+  if (a.strategy_mode) bits.push(`${modeChip(a.strategy_mode)} primary`);
+  if (a.exploit_pick || a.chart_pick) bits.push(`MES <b>${esc(a.exploit_pick ?? "—")}</b> · GTO <b>${esc(a.chart_pick ?? "—")}</b>${a.exploit_pick && a.chart_pick && a.exploit_pick !== a.chart_pick ? ' <span class="chip warn">disagree</span>' : ""}`);
+  if (a.mes_board) bits.push(`MES board <span class="mono">${esc(a.mes_board)}</span>${a.mes_exact === 0 ? " (nearest texture)" : ""}${a.mes_ev_gain_bb != null ? ` · ${a.mes_ev_gain_bb > 0 ? "+" : ""}${a.mes_ev_gain_bb} bb at stake` : ""}`);
+  if (a.band_lo != null) bits.push(`band ${a.band_lo}–${a.band_hi}`);
+  bits.push(`${a.latency_ms ?? "?"} ms`);
+  if (a.warning) bits.push(`<span class="warn">⚠ ${esc(a.warning)}</span>`);
+  return bits.join(" · ");
+}
+/** The answer(s) under a hero decision in the timeline — the same card, compact. */
+function provenanceRow(actionIndex) {
+  const hits = (DETAIL.answers || []).filter((a) => a.actionIndex === actionIndex);
+  if (!hits.length) return `<div class="ans-none">no study answer was logged at this decision</div>`;
+  return hits.map((a) => answerCard(a, { compact: true })).join("");
+}
+
+/* ---- one logged answer as a card: verdict → strategy mix → provenance ---- */
+const verbClass = (label) => { const s = String(label ?? "").toLowerCase(); return s.startsWith("fold") ? "fold" : s.startsWith("check") ? "check" : s.startsWith("call") || s.startsWith("limp") ? "call" : s.startsWith("bet") ? "bet" : s.startsWith("raise") || s.startsWith("all") ? "raise" : ""; };
+const fmtLatency = (ms) => ms == null ? "" : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+/** Strategy mix: from the logged action list when present, else parsed off the panel text ("Fold 93% · Raise 21 6%"). */
+function answerMix(a) {
+  try {
+    const acts = JSON.parse(a.decision_json ?? "null");
+    if (Array.isArray(acts) && acts.length) return acts.map((x) => ({ label: x.action, pct: Number(x.frequency) || 0, ev: x.ev })).filter((x) => x.pct > 0);
+  } catch { /* legacy */ }
+  const body = String(a.text ?? "").replace(/^≈\s*/, "").split(" — ").slice(1).join(" — ").split(" · roll ")[0];
+  return body.split(" · ").map((seg) => { const m = seg.match(/^(.*?)\s(\d+(?:\.\d+)?)%$/); return m ? { label: m[1], pct: Number(m[2]) } : null; }).filter(Boolean);
+}
+/** Human name for a chart id, with the raw id kept in the tooltip. */
+function chartName(id) {
+  if (!id) return "";
+  let m = id.match(/^(\w+?)_3maxasym(2ci)?_D(\d+)_s(\d+)_(eq|btn|sb|bb)$/i);
+  if (m) return `3-max ${m[1]} · ${m[3]}bb${m[5] === "eq" ? " even" : ` · ${m[5].toUpperCase()} short ${m[4]}bb`}${m[2] ? " · re-solved" : ""}`;
+  m = id.match(/^Cash(\d)m(\d+)z(\w+)$/);
+  if (m) return `GTO Wizard ${m[1]}-max NL${m[2]} ${m[3]}`;
+  m = id.match(/^CashHu(\d+)z(\w+)$/);
+  if (m) return `GTO Wizard heads-up NL${m[1]} ${m[2]}`;
+  return id;
+}
+function answerCard(a, opt = {}) {
+  const compact = !!opt.compact;
+  const street = (a.street ?? "?").toUpperCase();
+  const decisionNo = (DETAIL?.answers || []).filter((x) => x.text && x.ts <= a.ts).length;
+  const where = `<div class="ans-where">
+      <span class="ans-street">${esc(street)}${a.board ? ` <span class="sub">${esc(a.board)}</span>` : ""}</span>
+      <span class="ans-node">${a.actionIndex != null ? `at action ${a.actionIndex}` : "action unknown"}${a.text ? ` · answer ${decisionNo}` : ""}</span>
+      <span class="ans-lat">${fmtLatency(a.latency_ms)}${a.latency_ms != null ? " to answer" : ""}</span>
+    </div>`;
+  if (!a.text) {
+    return `<div class="ans ${compact ? "compact" : ""} failed">${where}<div class="ans-main">
+      <div class="ans-verdict"><span class="ans-fail">No answer</span><span class="ans-how">${esc(a.fail_reason ?? "the solve produced nothing")}</span></div></div></div>`;
+  }
+  const mix = answerMix(a);
+  const approx = /^≈/.test(a.text);
+  const pick = a.pick ?? (mix[0]?.label ?? "");
+  const rolled = a.roll != null;
+  const picked = (label) => pick && verbClass(label) === verbClass(pick) && (label.match(/\d+(?:\.\d+)?/)?.[0] ?? "") === (pick.match(/\d+(?:\.\d+)?/)?.[0] ?? "");
+  const total = mix.reduce((s, x) => s + x.pct, 0) || 100;
+  const bar = mix.length ? `<div class="mix">
+      <div class="mix-bar">${mix.map((x, i) => `<i class="${picked(x.label) ? "picked" : ""}" style="width:${(100 * x.pct / total).toFixed(1)}%;background:${colorFor(x.label, i)}" title="${esc(x.label)} ${x.pct}%"></i>`).join("")}
+        ${rolled ? `<span class="roll" data-roll="roll ${a.roll}" style="left:${Math.min(99, Math.max(0, a.roll))}%"></span>` : ""}</div>
+      <div class="mix-legend">${mix.map((x, i) => `<span><i class="sw" style="background:${colorFor(x.label, i)}"></i>${esc(x.label)} <b>${x.pct}%</b>${x.ev != null && !compact ? ` <span class="sub">ev ${x.ev}</span>` : ""}</span>`).join("")}</div>
+    </div>` : "";
+  const how = mix.length <= 1 || (mix[0] && mix[0].pct >= 99)
+    ? "pure — the chart plays this every time"
+    : rolled ? `mixed — a roll of ${a.roll} out of 100 landed on ${esc(pick)}` : "mixed strategy";
+  const f = (k, v) => v ? `<div class="f"><span class="k">${k}</span><span class="v">${v}</span></div>` : "";
+  const picksHtml = (a.exploit_pick || a.chart_pick)
+    ? `<span class="picks"><span class="pk mes"><small>MES</small>${esc(a.exploit_pick ?? "—")}</span><span class="pk gto"><small>GTO</small>${esc(a.chart_pick ?? "—")}</span>${a.exploit_pick && a.chart_pick && !sameLabel(a.exploit_pick, a.chart_pick) ? '<span class="chip warn">they disagree</span>' : a.exploit_pick && a.chart_pick ? '<span class="chip dim">same action</span>' : ""}</span>`
+    : "";
+  const prov = `<div class="prov">
+      ${f("answered by", `${srcLink(a.source)}${a.actionIndex != null ? ` · <a href="/hands/${DETAIL?.dbId}/node/${a.actionIndex}" onclick="go('/hands/${DETAIL?.dbId}/node/${a.actionIndex}');return false"><b>open the exact node ↗</b></a>` : ""}`)}
+      ${f("tier", a.tier ? `<span class="chip">${esc(a.tier)}</span>` : "")}
+      ${f("chart", a.chart ? `<span title="${esc(a.chart)}">${esc(chartName(a.chart))}</span>${compact ? "" : ` <span class="mono">${esc(a.chart)}</span>`}` : "")}
+      ${f("primary strategy", a.strategy_mode ? `${modeChip(a.strategy_mode)} <span class="sub">${a.strategy_mode === "exploit" ? "pool exploit" : "equilibrium"}</span>` : "")}
+      ${f("both strategies said", picksHtml)}
+      ${f("MES board", a.mes_board ? `<span class="mono">${esc(a.mes_board)}</span>${a.mes_exact === 0 ? ' <span class="chip warn">nearest texture</span>' : ""}${a.mes_ev_gain_bb != null ? ` · <b>${a.mes_ev_gain_bb > 0 ? "+" : ""}${a.mes_ev_gain_bb} bb</b> at stake` : ""}` : "")}
+      ${f("confidence band", a.band_lo != null ? `${a.band_lo}–${a.band_hi}` : "")}
+      ${f("stored solve", a.solve_id != null ? `chain #${a.solve_id} — inputs and every node kept` : (a.tier === "ai-chain" ? '<span class="sub">not stored (logged before solve capture)</span>' : ""))}
+    </div>`;
+  const notes = [
+    approx ? `<span class="ans-approx" title="The exact line or bet sizes were not in the solved tree; the nearest tree line answered.">≈ approximate — nearest tree line</span>` : "",
+    a.warning ? `<span class="ans-note">⚠ ${esc(a.warning)}</span>` : "",
+  ].filter(Boolean).join(" ");
+  return `<div class="ans ${compact ? "compact" : ""}">${where}<div class="ans-main">
+      <div class="ans-verdict"><span class="ans-pick ${verbClass(pick)}">${esc(pick.toUpperCase())}</span><span class="ans-how">${how}</span>${notes}</div>
+      ${bar}${prov}</div></div>`;
+}
+const sameLabel = (x, y) => verbClass(x) === verbClass(y) && (String(x).match(/\d+(?:\.\d+)?/)?.[0] ?? "") === (String(y).match(/\d+(?:\.\d+)?/)?.[0] ?? "");
+/** Card above the timeline: preflop vs postflop, which sources, how many decisions each answered. */
+function provenanceCard(j) {
+  const answered = (j.answers || []).filter((a) => a.text);
+  const failed = (j.answers || []).filter((a) => !a.text);
+  const heroDecisions = j.hand.actions.filter((a) => a.hero && a.type !== "post-sb" && a.type !== "post-bb").length;
+  const byStreet = (pred) => {
+    const xs = answered.filter(pred);
+    if (!xs.length) return '<span class="sub">no logged answer</span>';
+    const bySrc = {};
+    for (const a of xs) (bySrc[a.source] ??= []).push(a);
+    return Object.entries(bySrc).map(([src, as]) => `${srcLink(src)} <span class="sub">× ${as.length}</span> ${[...new Set(as.map((a) => a.tier).filter(Boolean))].map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${[...new Set(as.map((a) => a.strategy_mode).filter(Boolean))].map(modeChip).join("")}`).join(" · ");
+  };
+  const row = (label, pred) => {
+    const xs = answered.filter(pred);
+    if (!xs.length) return `<tr class="src-static"><td>${label}</td><td colspan="4" class="sub">no answer was logged on this street</td></tr>`;
+    const bySrc = {};
+    for (const a of xs) (bySrc[a.source] ??= []).push(a);
+    return Object.entries(bySrc).map(([src, as], i) => `<tr class="src-static">
+      <td>${i === 0 ? label : ""}</td>
+      <td>${srcLink(src)}</td>
+      <td class="num">${as.length}</td>
+      <td>${[...new Set(as.map((a) => a.tier).filter(Boolean))].map((t) => `<span class="chip">${esc(t)}</span>`).join(" ") || "—"}</td>
+      <td>${[...new Set(as.map((a) => a.strategy_mode).filter(Boolean))].map(modeChip).join(" ") || '<span class="sub">not recorded</span>'}</td>
+    </tr>`).join("");
+  };
+  return `<div class="card"><h2>Where the answers came from <span class="sub">— ${answered.length} answered · ${failed.length} failed · ${heroDecisions} hero decision${heroDecisions === 1 ? "" : "s"} in the archived hand</span></h2>
+    <div class="scroll"><table><thead><tr><th>street</th><th>source</th><th class="num">answers</th><th>tier</th><th>primary strategy</th></tr></thead>
+    <tbody>${row("preflop", (a) => a.street === "preflop")}${row("postflop", (a) => a.street !== "preflop")}</tbody></table></div></div>`;
+}
+/** Session line: gap cluster + recording, with the Replay Review link that follows the current node. */
+function sessionLine(j) {
+  const s = j.session;
+  if (!s) return "";
+  const rec = s.recording;
+  const d = s.declared;
+  return `<div class="sess-line">
+    ${d ? `<span><span class="sub">Session</span> <a href="/sessions/${encodeURIComponent(d.id)}" onclick="go('/sessions/${encodeURIComponent(d.id)}');return false"><b>${esc(d.label || presetLabel(d.preset))}</b></a> <span class="preset-chip ${esc(d.preset ?? "")}">${esc(presetLabel(d.preset))}</span> <span class="sub">· declared ${fmtT(d.startedAt)}${d.endedAt ? "" : " · still open"} · ${d.config?.answers ? `answers on, ${d.config.mode === "exploit" ? "MES" : "GTO"} primary` : "answers off"} · hand ${s.position} of ${s.hands}</span></span>`
+        : `<span><span class="sub">Session</span> <a href="/sessions/cluster-${s.start}" onclick="go('/sessions/cluster-${s.start}');return false"><b>${fmtT(s.start)} – ${fmtT(s.end)}</b></a> <span class="chip dim">undeclared</span> <span class="sub">· ${esc(s.stakes ?? "?")} · hand ${s.position} of ${s.hands} · inferred from a 45-min gap, played before sessions were declared</span></span>`}
+    ${rec ? `<span><span class="dot good"></span> <span class="sub">recorded as</span> <span class="mono">${esc(rec.session)}</span> <span class="sub">· hand ${rec.hand} · ${rec.decisions.length} decision${rec.decisions.length === 1 ? "" : "s"} on tape</span></span>
+             <a id="rec-link" href="${recordingHref(rec, 0)}" target="_blank" rel="noopener">open in Replay Review at this node ↗</a>
+             <a href="${recordingHref(rec, -1)}" target="_blank" rel="noopener" class="sub">from the start ↗</a>`
+        : `<span><span class="dot off"></span> <span class="sub">not recorded — the wrapper's debug recording was off for this session, so there is no frame-by-frame replay</span></span>`}
+  </div>`;
+}
+/** Replay Review deep link for the decision hero is at (or has just passed) at STEP; -1 = start of the hand. */
+function recordingHref(rec, step) {
+  const hand = DETAIL?.hand;
+  let node = 0;
+  if (step >= 0 && hand && rec.decisions.length) {
+    const heroIdx = hand.actions.map((a, i) => (a.hero && a.type !== "post-sb" && a.type !== "post-bb") ? i : -1).filter((i) => i >= 0);
+    const before = heroIdx.filter((i) => i < step).length;
+    const atHero = heroIdx.includes(step);
+    const k = atHero ? before : before - 1;
+    if (k >= 0) node = rec.decisions[Math.min(k, rec.decisions.length - 1)].nodeIndex;
+  }
+  return `/replay?session=${encodeURIComponent(rec.session)}&hand=${encodeURIComponent(DETAIL?.clientHandId ?? "")}&node=${node}`;
+}
+
 function renderTimeline() {
   const h = DETAIL.hand, s = DETAIL.summary;
   const posOf = (a) => a.hero ? `YOU (${s.heroPos ?? "?"})` : `seat ${a.seatId} ${h.positions[a.seatId] ?? ""}`;
@@ -350,7 +717,8 @@ function renderTimeline() {
     const solvable = a.street !== "preflop" && a.type !== "post-sb" && a.type !== "post-bb";
     html += `<div class="tl-row ${a.hero ? "hero" : ""}" data-step="${i}">
       <span class="who">${esc(posOf(a))}</span><span class="what">${esc(a.type)}${esc(amt)}</span>
-      ${solvable ? `<button class="mini" data-solve="${i}">▶ solve</button><button class="mini" data-gtow="${i}">↗ GTOW</button>` : ""}</div>`;
+      ${solvable ? `<button class="mini" data-solve="${i}" title="re-solve this node through the live answer chain and walk the result">▶ solve (live chain)</button><button class="mini" data-gtow="${i}">↗ GTOW</button>` : ""}</div>`;
+    if (a.hero && a.type !== "post-sb" && a.type !== "post-bb") html += provenanceRow(i);
   });
   $("timeline").innerHTML = html;
   for (const row of $("timeline").querySelectorAll(".tl-row")) row.onclick = (e) => { if (e.target.tagName !== "BUTTON") setStep(Number(row.dataset.step)); };
@@ -363,6 +731,8 @@ function setStep(n) {
   const rs = replayState(DETAIL.hand, STEP);
   $("mirror").innerHTML = renderMirror(DETAIL.hand, rs);
   $("rp-pos").textContent = `${STEP} / ${DETAIL.hand.actions.length}`;
+  const rl = $("rec-link");
+  if (rl && DETAIL.session?.recording) rl.href = recordingHref(DETAIL.session.recording, STEP);
   for (const row of $("timeline").querySelectorAll(".tl-row")) row.classList.toggle("cur", Number(row.dataset.step) === STEP);
   // feed sync: lines whose step <= STEP are past; the last of them is "now"
   const lines = $("feed-sync").querySelectorAll("[data-fl]");
@@ -393,73 +763,267 @@ async function openGtow(dbId, upto, btn) {
   setTimeout(() => { btn.disabled = false; btn.textContent = "↗ GTOW"; }, 2500);
 }
 
+/* ================= the exact node behind an answer ================= */
+const COMBOS = (k) => k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12;
+const classKey = (r, c) => r === c ? RANKS[r] + RANKS[c] : r < c ? RANKS[r] + RANKS[c] + "s" : RANKS[c] + RANKS[r] + "o";
+/** 13×13 grid from {class: {w, acts[]}} with an action legend; opacity = weight. */
+function classGrid(cls, actions, heroKey, opt = {}) {
+  const totals = actions.map((_, ai) => { let n = 0, d = 0; for (const k in cls) { n += cls[k].acts[ai]; d += cls[k].w; } return d ? (100 * n) / d : 0; });
+  let html = opt.single ? "" : `<div class="legend">` + actions.map((a, ai) => `<span><span class="sw" style="background:${colorFor(a, ai)}"></span>${esc(a)} <b>${totals[ai].toFixed(1)}%</b></span>`).join("") + `</div>`;
+  html += `<div class="grid169${opt.small ? " sm" : ""}">`;
+  for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) {
+    const key = classKey(r, c), e = cls[key];
+    let bg = "#10151d";
+    if (e && e.w > 0.0005) {
+      if (opt.single) bg = opt.single;
+      else {
+        const stops = []; let acc = 0;
+        actions.forEach((a, ai) => { const p = (100 * e.acts[ai]) / e.w; if (p > 0.5) { stops.push(`${colorFor(a, ai)} ${acc}% ${acc + p}%`); acc += p; } });
+        if (stops.length) bg = `linear-gradient(to right, ${stops.join(", ")})`;
+      }
+    }
+    const op = e ? (opt.single ? Math.min(1, 0.12 + 0.88 * (e.w / COMBOS(key))) : Math.min(1, (opt.flat ? 1 : 0.25) + e.w / (opt.wmax ?? 4))) : 0.12;
+    html += `<div class="${key === heroKey ? "hero" : ""}" style="background:${bg};opacity:${op}" title="${key}${e ? ` · ` + actions.map((a, ai) => `${a} ${((100 * e.acts[ai]) / (e.w || 1)).toFixed(0)}%`).join(" · ") : " · not in range"}">${key.slice(0, 2)}</div>`;
+  }
+  return html + `</div><div class="sub" style="margin-top:6px">${opt.foot ?? "hero's class outlined · hover any cell for its mix"}</div>`;
+}
+const crumb = (line, snapped = []) => {
+  const toks = (line ?? "").split("-").filter(Boolean);
+  const snappedTo = new Set(snapped.map((x) => x.to));
+  return `<span class="nv-crumb"><span>root</span>${toks.map((t) => `<span class="sep">›</span><span class="${snappedTo.has(t) ? "snap" : ""}" title="${snappedTo.has(t) ? "size snapped to the tree" : ""}">${esc(t)}</span>`).join("")}</span>`;
+};
+const fact = (k, v) => v == null || v === "" ? "" : `<div class="f"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+async function openAnswerNode(upto) {
+  if (!DETAIL) return;
+  setStep(upto);
+  const sol = $("solution");
+  sol.innerHTML = `<div class="card sub">fetching the node that answered…</div>`;
+  let j;
+  try { j = await (await fetch(`/api/dashboard/answer-node?dbId=${DETAIL.dbId}&upto=${upto}`)).json(); }
+  catch (e) { sol.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
+  if (!j.ok) { sol.innerHTML = `<div class="card warn">${esc(j.error ?? "no node")}</div>`; return; }
+  const lg = j.logged;
+  const loggedLine = lg ? `<div class="sub" style="margin-bottom:8px">This is the node behind answer <b>#${lg.id}</b> at action ${upto}${lg.tier ? ` · tier <span class="chip">${esc(lg.tier)}</span>` : ""}${lg.line ? " · line as logged live" : " · line rebuilt from the archive (this answer predates line logging)"}</div>` : `<div class="sub" style="margin-bottom:8px">No answer was logged at action ${upto}; this is the node the resolver would use today.</div>`;
+  const heroKey = j.heroClass;
+
+  if (j.kind === "hrc" || j.kind === "gtow") {
+    const n = j.node;
+    let body = "";
+    if (n) {
+      const cls = {};
+      for (const c of n.cells) {
+        const acts = n.actions.map((a) => c.actions[a.action] ?? 0);
+        cls[c.hand] = { w: COMBOS(c.hand), acts: acts.map((p) => (COMBOS(c.hand) * p) / 100) };
+      }
+      const heroCell = n.cells.find((c) => c.hand === heroKey);
+      body = classGrid(cls, n.actions.map((a) => a.action), heroKey, { flat: true, wmax: 1e9, foot: "every class in the chart at this node · hero's class outlined · hover for the mix" }) +
+        (heroKey ? `<div class="nv-hero">${heroCell ? `<span class="big">${esc(heroKey)}</span> <span class="sub">— the chart says</span> ${Object.entries(heroCell.actions).filter(([, p]) => p > 0.5).sort((a, b) => b[1] - a[1]).map(([a, p]) => `<b>${esc(a)}</b> ${p.toFixed(0)}%`).join(" · ")}` : `<span class="big">${esc(heroKey)}</span> <span class="warn">is not in the range at this node</span>`}</div>` : "");
+    } else {
+      body = `<div class="warn">No node to show: ${esc(j.note ?? "unknown reason")}.</div>`;
+    }
+    const ex = j.exploit;
+    const exHtml = ex ? (() => {
+      const acts = [...new Set(Object.values(ex.choices))].sort();
+      const cls = {};
+      for (const [k, a] of Object.entries(ex.choices)) cls[k] = { w: COMBOS(k), acts: acts.map((x) => (x === a ? COMBOS(k) : 0)) };
+      return `<div class="card" style="margin:0"><h2>Pool-exploit overlay · node <span class="mono">${esc(ex.tag)}</span> <span class="mode mes">MES</span></h2>
+        <div class="nv-facts">${fact("derived on chart", ex.chart)}${fact("file", `<span class="mono">${esc(ex.path)}</span>`)}${fact("the exploit says", ex.heroChoice ? `<b>${esc(ex.heroChoice)}</b> for ${esc(heroKey)}` : `${esc(heroKey ?? "hero")} is not in the exploit's range here`)}</div>
+        ${classGrid(cls, acts, heroKey, { flat: true, wmax: 1e9, foot: "one action per class — a best response, not a mix · hero outlined" })}</div>`;
+    })() : "";
+    sol.innerHTML = `<div class="card"><h2>${j.kind === "hrc" ? "HRC chart node" : "GTO Wizard chart node"} <span class="sub">— what answered at action ${upto}</span></h2>
+      ${loggedLine}
+      <div class="nv-head"><span><span class="sub">chart</span> <b title="${esc(j.chart ?? "")}">${esc(chartName(j.chart))}</b> <span class="mono">${esc(j.chart ?? "")}</span></span>${j.depth ? `<span><span class="sub">depth</span> ${j.depth}bb</span>` : ""}<span><span class="sub">line</span> ${crumb(j.line ?? j.rawLine, j.snapped)}</span>${n?.pos ? `<span><span class="sub">to act</span> <b>${esc(n.pos)}</b></span>` : ""}</div>
+      ${j.note ? `<div class="ans-note" style="margin-bottom:8px">⚠ ${esc(j.note)}</div>` : ""}
+      <div class="nv-two"><div class="card" style="margin:0"><h2>Chart strategy at this node <span class="mode gto">GTO</span></h2>${body}
+        <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/registry/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}" onclick="go('/sources/registry/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
+  } else if (j.kind === "mes") {
+    const m = j.mes;
+    let mode = "mes";
+    const render = () => {
+      const strat = mode === "mes" ? m.mes : m.gto, evs = mode === "mes" ? m.mesEv : m.gtoEv;
+      const cls = {};
+      m.holes.forEach((h, ci) => {
+        const i1 = RANKS.indexOf(h[0]), i2 = RANKS.indexOf(h[2]);
+        const key = i1 === i2 ? h[0] + h[2] : RANKS[Math.min(i1, i2)] + RANKS[Math.max(i1, i2)] + (h[1] === h[3] ? "s" : "o");
+        const w = m.weights[ci] ?? 0;
+        const e = (cls[key] ??= { w: 0, acts: new Array(m.acts.length).fill(0) });
+        e.w += w; m.acts.forEach((_, ai) => { e.acts[ai] += w * (strat?.[ai]?.[ci] ?? 0); });
+      });
+      const hi = m.heroIdx;
+      const heroRow = hi != null && hi >= 0 ? m.acts.map((a, ai) => ({ a, p: (strat?.[ai]?.[hi] ?? 0) * 100, ev: evs?.[ai]?.[hi] })) : null;
+      const labels = m.acts.map((a) => a.replace(/\((\d+(?:\.\d+)?)\)/, (_, x) => ` ${(x / 100).toFixed(1)}bb`));
+      $("nv-mes-body").innerHTML = classGrid(cls, labels, heroKey, { foot: "hero's range at this node, by class · opacity = weight · hover for the mix" }) +
+        (heroRow ? `<div class="nv-hero"><span class="big">${esc(j.heroCards.join(""))}</span> <span class="sub">${mode === "mes" ? "MES plays" : "equilibrium plays"}</span> ${heroRow.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x, i) => `<b>${esc(labels[m.acts.indexOf(x.a)])}</b> ${x.p.toFixed(0)}%${x.ev != null ? ` <span class="sub">ev ${(x.ev / 100).toFixed(2)}bb</span>` : ""}`).join(" · ")}</div>` : `<div class="nv-hero"><span class="warn">hero's combo never reaches this line under the exploit preflop scheme</span></div>`);
+      $("nv-seg").querySelectorAll("button").forEach((b) => b.className = (b.dataset.m === mode ? "on " : "") + b.dataset.m);
+    };
+    sol.innerHTML = `<div class="card"><h2>MES node <span class="sub">— what answered at action ${upto}</span></h2>
+      ${loggedLine}
+      <div class="nv-head"><span><span class="sub">family</span> <b>${esc(m.family)}</b> <span class="sub">hero ${esc(m.heroPos)}</span></span><span><span class="sub">solved board</span> <b class="mono">${esc(m.board)}</b>${m.exact ? ' <span class="chip good">exact flop</span>' : ` <span class="chip warn">nearest texture to ${esc(m.actualBoard)}</span>`}</span><span><span class="sub">flop line</span> ${crumb((j.flopTokens || []).join("-"))}${m.snapped ? ' <span class="chip warn">a size was snapped</span>' : ""}</span><span><span class="sub">pot at flop</span> ${(m.potChips / 100).toFixed(1)}bb · eff ${(m.effStackChips / 100).toFixed(0)}bb</span><span><span class="sub">edge on this board</span> <b class="pos">+${m.evGainBb} bb</b> per arrival</span></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px"><span class="seg" id="nv-seg"><button data-m="mes">MES · pool-locked villain</button><button data-m="gto">GTO · same tree, equilibrium</button></span><span class="sub">both come from the same solve; switch to compare</span></div>
+      <div id="nv-mes-body"></div>
+      <div class="sub" style="margin-top:8px"><a class="ev-link" href="/sources/registry/mes-postflop" onclick="go('/sources/registry/mes-postflop');return false">source page ↗</a> · served from data/mes_postflop.json · node history [${m.history.join(", ")}]</div></div>`;
+    $("nv-seg").querySelectorAll("button").forEach((b) => b.onclick = () => { mode = b.dataset.m; render(); });
+    render();
+  } else {
+    const solveId = lg?.solveId ?? null;
+    sol.innerHTML = `<div class="card"><h2>GTO Wizard AI chain <span class="sub">— what answered at action ${upto}</span></h2>${loggedLine}
+      <div id="walk-host">${solveId != null ? '<div class="sub">loading the stored solve…</div>' : `<div class="sub" style="margin-bottom:10px">${esc(j.note)} No trace was stored for this answer (solve capture started 2026-09-03).</div>`}</div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap">
+        <button class="mini" id="nv-resolve">▶ ${solveId != null ? "re-solve now and compare" : "re-solve this node with the same chain"}</button>
+        <span class="sub">re-runs the live path on the archived hand · stored as a replay solve · costs GTO Wizard quota when the trees are not cached</span>
+      </div>
+      <div id="walk-compare"></div></div>`;
+    if (solveId != null) renderWalkthrough(solveId, "walk-host", upto);
+    $("nv-resolve").onclick = async () => {
+      const b = $("nv-resolve"); b.disabled = true; b.textContent = "solving…";
+      let r;
+      try { r = await (await fetch("/api/dashboard/resolve-chain", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbId: DETAIL.dbId, upto }) })).json(); }
+      catch (e) { r = { ok: false, error: String(e) }; }
+      b.disabled = false; b.textContent = "▶ re-solve again";
+      if (!r.ok) { $("walk-compare").innerHTML = `<div class="card warn" style="margin-top:10px">re-solve failed: ${esc(r.error)}</div>`; return; }
+      if (r.tier !== "ai-chain" || r.solveId == null) { $("walk-compare").innerHTML = `<div class="card warn" style="margin-top:10px">the re-solve answered from ${esc(r.tier ?? r.source ?? "another tier")}, not the AI chain, so there is no chain trace to compare.</div>`; return; }
+      if (solveId != null) renderCompare(solveId, r.solveId, "walk-compare");
+      else { $("walk-host").innerHTML = ""; renderWalkthrough(r.solveId, "walk-host", upto); }
+    };
+  }
+  sol.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ---- walkthrough of a stored AI-chain solve: every node, the ranges assumed, the conditioning ---- */
+const weightGrid = (agg, heroKey, hue) => {
+  const cls = {}; for (const k in agg) cls[k] = { w: agg[k].w, acts: [agg[k].w] };
+  const combos = Object.values(agg).reduce((s, x) => s + x.w, 0);
+  return classGrid(cls, ["in range"], heroKey, { single: hue, small: true, foot: `${combos.toFixed(1)} combos · opacity = share of the class still in range` });
+};
+async function renderWalkthrough(solveId, hostId, upto) {
+  const host = $(hostId);
+  let w;
+  try { w = await (await fetch(`/api/dashboard/solve/${solveId}`)).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
+  if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return; }
+  const sp = w.spec, heroKey = DETAIL?.summary ? classOfCardsJs(DETAIL.hand.heroCards) : null;
+  const heroSeatPos = sp.heroSeat === "oop" ? sp.oopPos : sp.ipPos;
+  // chain node k ↔ the k-th postflop action of the archived hand (hero's pending node ↔ upto)
+  const postIdx = DETAIL.hand.actions.map((a, i) => (a.street !== "preflop" ? i : -1)).filter((i) => i >= 0);
+  let sel = w.nodes.findIndex((n) => n.heroNode); if (sel < 0) sel = w.nodes.length - 1;
+  const facts = `<div class="nv-facts">
+      ${fact("stored", `#${w.row.id} · ${esc(w.row.origin)} · ${fmtT(w.row.ts)}`)}
+      ${fact("seats", `<b>OOP</b> ${esc(sp.oopPos)} · <b>IP</b> ${esc(sp.ipPos)} · you are <b>${esc(String(sp.heroSeat).toUpperCase())}</b> (${esc(heroSeatPos)})`)}
+      ${fact("your combo", sp.heroCombo ? `<span class="mono">${esc(sp.heroCombo)}</span>` : "unknown")}
+      ${fact("entering the flop", `pot ${sp.flopPot}bb · stack ${sp.flopStack}bb`)}
+      ${fact("board", `<span class="mono">${esc(sp.board)}</span>`)}
+      ${fact("tokens walked", sp.streets.map((t, i) => `<span class="chip dim">${["flop", "turn", "river"][i]}</span> ${esc(t.join("-") || "root")}`).join(" "))}
+      ${fact("cloud solutions", w.streets.map((st) => `${st.street.toLowerCase()} <span class="mono" title="${esc(st.solId ?? "")}">${esc((st.solId ?? "—").slice(0, 8))}</span> <span class="chip ${st.created ? "good" : "dim"}">${st.created ? "fresh solve" : "cached"}</span>${st.fixedLevels ? ` <span class="chip warn" title="${esc(st.fixedLevels.join(", "))}">sizes pinned</span>` : ""}`).join(" · "))}
+      ${fact("verdict", w.result?.ok ? `reached hero's node · ${w.result.solves} fresh solve${w.result.solves === 1 ? "" : "s"} · ${w.row.solveMs != null ? fmtLatency(w.row.solveMs) : ""}` : `<span class="warn">failed: ${esc(w.result?.why ?? "?")}</span>`)}
+    </div>`;
+  const list = () => {
+    let cur = null, html = "";
+    w.nodes.forEach((n, i) => {
+      if (n.street !== cur) { cur = n.street; html += `<div class="walk-street">${cur} · ${esc(n.board)}</div>`; }
+      html += `<div class="walk-node${i === sel ? " on" : ""}${n.heroNode ? " hero" : ""}" data-i="${i}">
+        <span class="n">${i + 1}</span>
+        <span><span class="who">${esc(n.actorPos)} <span class="sub">(${n.actor.toUpperCase()})</span>${n.heroNode ? " ★ your decision" : ""}</span><br>
+          ${n.taken != null ? `<span class="took">took <b>${esc(n.takenName)}</b></span> <span class="pct">${n.takenOverallPct != null ? `· ${n.takenOverallPct}% of the range does this` : ""}</span>` : `<span class="took">${n.heroNode ? "the answer was read here" : "pending"}</span>`}
+          <div class="pct">pot ${n.potNode}bb${n.codes.length ? ` · after ${esc(n.codes.join("-"))}` : " · street root"}</div></span></div>`;
+    });
+    return html;
+  };
+  const view = () => {
+    const n = w.nodes[sel];
+    const labels = n.actions.map((a) => a.name + (a.betsize != null && !/\d/.test(a.name) ? ` ${a.betsize}` : ""));
+    const stratCls = n.actorStrategy;
+    const hero = n.heroRow;
+    const isHeroActor = n.actor === sp.heroSeat;
+    return `<div>
+      <div class="nv-head"><span><span class="sub">node ${sel + 1} of ${w.nodes.length}</span></span><span><b>${esc(n.street)}</b> <span class="mono">${esc(n.board)}</span></span><span><span class="sub">to act</span> <b>${esc(n.actorPos)}</b> (${n.actor.toUpperCase()}${isHeroActor ? ", you" : ", villain"})</span><span><span class="sub">pot</span> ${n.potNode}bb</span><span><span class="sub">invested this street</span> OOP ${n.invested[0]} · IP ${n.invested[1]}</span></div>
+      <div class="walk-grids">
+        <div class="card"><h2>OOP range entering this node <span class="sub">${esc(sp.oopPos)}</span></h2>${weightGrid(n.rangesIn.oop, sp.heroSeat === "oop" ? heroKey : null, "#3b8bd8")}</div>
+        <div class="card"><h2>IP range entering this node <span class="sub">${esc(sp.ipPos)}</span></h2>${weightGrid(n.rangesIn.ip, sp.heroSeat === "ip" ? heroKey : null, "#e8772e")}</div>
+      </div>
+      <div class="card" style="margin-top:12px"><h2>${esc(n.actorPos)}'s strategy at this node <span class="sub">— what the solve says the whole range does here${n.taken != null ? `; the observed action was <b style="color:#fff">${esc(n.takenName)}</b>` : ""}</span></h2>
+        ${classGrid(stratCls, labels, isHeroActor ? heroKey : null, { foot: isHeroActor ? "your class outlined · hover for the mix" : "villain's range · hover for the mix" })}
+        ${hero ? `<div class="nv-hero"><span class="big">${esc(sp.heroCombo ?? "")}</span> <span class="sub">${n.heroNode ? "the answer:" : "the solve has you playing"}</span> ${hero.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x) => `<b>${esc(x.name)}${x.betsize != null && !/\d/.test(x.name) ? ` ${x.betsize}` : ""}</b> ${x.p}%${x.ev != null ? ` <span class="sub">ev ${x.ev}</span>` : ""}`).join(" · ")}${n.heroWeightIn != null ? ` <span class="sub">· weight in range ${n.heroWeightIn}</span>` : ""}</div>` : ""}
+      </div>
+      ${n.rangesOut ? `<div class="card" style="margin-top:12px"><h2>After conditioning on ${esc(n.takenName)} <span class="sub">— ${esc(n.actorPos)}'s range × the frequency of that action, combo by combo; this is what the next node sees</span></h2>
+        <div class="walk-grids"><div>${weightGrid(n.rangesOut.oop, sp.heroSeat === "oop" ? heroKey : null, "#3b8bd8")}</div><div>${weightGrid(n.rangesOut.ip, sp.heroSeat === "ip" ? heroKey : null, "#e8772e")}</div></div></div>` : ""}
+    </div>`;
+  };
+  host.innerHTML = `${facts}<div class="walk"><div class="walk-list" id="walk-list">${list()}</div><div id="walk-view">${view()}</div></div>`;
+  const bind = () => host.querySelectorAll(".walk-node").forEach((el) => el.onclick = () => {
+    sel = Number(el.dataset.i);
+    $("walk-list").innerHTML = list(); $("walk-view").innerHTML = view(); bind();
+    // keep the table replica on the same moment
+    const n = w.nodes[sel];
+    setStep(n.heroNode ? upto : (postIdx[sel] ?? upto));
+  });
+  bind();
+}
+const classOfCardsJs = (cards) => {
+  const cs = (cards || []).filter((c) => /^[2-9TJQKA][shdc]$/.test(c));
+  if (cs.length !== 2) return null;
+  const i1 = RANKS.indexOf(cs[0][0]), i2 = RANKS.indexOf(cs[1][0]);
+  if (i1 === i2) return cs[0][0] + cs[1][0];
+  return RANKS[Math.min(i1, i2)] + RANKS[Math.max(i1, i2)] + (cs[0][1] === cs[1][1] ? "s" : "o");
+};
+
+/* ---- live solve vs re-solve, node by node ---- */
+async function renderCompare(aId, bId, hostId) {
+  const host = $(hostId);
+  host.innerHTML = `<div class="card sub" style="margin-top:10px">comparing #${aId} with #${bId}…</div>`;
+  let c;
+  try { c = await (await fetch(`/api/dashboard/solve-compare?a=${aId}&b=${bId}`)).json(); } catch (e) { host.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
+  if (!c.ok) { host.innerHTML = `<div class="card warn">${esc(c.error)}</div>`; return; }
+  const s = c.summary;
+  const flag = s.flag === "discrepancy" ? '<span class="chip crit">discrepancy</span>' : s.flag === "minor drift" ? '<span class="chip warn">minor drift</span>' : s.flag === "same" ? '<span class="chip good">same answer</span>' : `<span class="chip dim">${esc(s.flag)}</span>`;
+  const d = (x) => x == null ? "—" : `<span class="${x > 0 ? "diff-pos" : x < 0 ? "diff-neg" : ""}">${x > 0 ? "+" : ""}${x}</span>`;
+  const rows = c.nodes.map((n) => n.missingInB
+    ? `<tr class="src-static"><td>${esc(n.street)} ${esc(n.codes.join("-") || "root")}</td><td colspan="6" class="warn">not reached by the re-solve</td></tr>`
+    : n.actions.map((x, i) => `<tr class="src-static">${i === 0 ? `<td rowspan="${n.actions.length}"><b>${esc(n.street)}</b> ${esc(n.codes.join("-") || "root")}<div class="sub">${esc(n.actorPos)}${n.heroNode ? " ★ you" : ""}${n.takenName ? ` · took ${esc(n.takenName)}` : ""}</div><div class="sub">ranges in: Δ OOP ${n.rangeTv.oop} · IP ${n.rangeTv.ip}</div></td>` : ""}
+        <td>${esc(x.name)}${x.betsize != null && !/\d/.test(x.name) ? ` ${x.betsize}` : ""}</td>
+        <td class="num">${x.overallA ?? "—"}</td><td class="num">${x.overallB ?? "—"}</td>
+        <td class="num">${x.heroA ?? "—"}</td><td class="num">${x.heroB ?? "—"}</td><td class="num">${d(x.heroDiff)}</td></tr>`).join("")).join("");
+  host.innerHTML = `<div class="card" style="margin-top:12px"><h2>Live solve #${aId} vs re-solve #${bId} ${flag}</h2>
+    <div class="nv-facts">
+      ${fact("your decision", s.heroMaxDiffPts != null ? `largest change in your mix: <b>${s.heroMaxDiffPts} pts</b>` : "no matching hero node")}
+      ${fact("cloud solutions", s.solIdsSame ? "identical solution ids — the same trees were served" : "different solution ids — the trees were solved again")}
+      ${fact("ranges", s.rangesSame ? "identical ranges at every node" : "ranges differ somewhere — see Δ per node (total variation, 0 = same)")}
+      ${fact("stored", `live ${fmtT(c.a.ts)} · replay ${fmtT(c.b.ts)}`)}
+    </div>
+    <div class="scroll"><table class="diff-tbl"><thead><tr><th>node</th><th>action</th><th class="num">range % live</th><th class="num">range % now</th><th class="num">you % live</th><th class="num">you % now</th><th class="num">Δ you</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="sub" style="margin-top:6px">"range %" is how much of the actor's whole range takes the action; "you %" is your combo's frequency. A discrepancy of 5 points or more in your mix is flagged.</div></div>`;
+}
+
 /* ================= node solution + AI inputs ================= */
-const ACT_COLORS = ["#d64550", "#e8933a", "#ceba4c", "#4da3ff", "#61d095", "#b07fe8", "#5cc8c8"];
+// fold is always blue (colorFor), so no series colour may be a blue: a 4th
+// aggressive size / all-in next to a fold cell became unreadable
+const ACT_COLORS = ["#d64550", "#e8933a", "#ceba4c", "#b07fe8", "#5cc8c8", "#ff8fb1", "#a3d977"];
 const colorFor = (label, i) => /^fold/i.test(label) ? "#3d6fb4" : /^(check|call)/i.test(label) ? "#61d095" : ACT_COLORS[i % ACT_COLORS.length];
 const RANKS = "AKQJT98765432";
 
 async function solveNode(dbId, upto, btn) {
-  setStep(upto); // mirror shows the node being solved
+  // The ONLY postflop solver on the dashboard is the live answer chain
+  // (services/aiChain.ts via POST /resolve-chain): same ranges, same pinned
+  // sizes, same conditioning as the answer at the table, and every run is
+  // stored and walkable. (The old AI-study route is SolverStudy's, not ours.)
+  setStep(upto);
   const sol = $("solution");
-  sol.innerHTML = `<div class="card"><span class="warn">solving node… (fresh streets take a few seconds)</span></div>`;
-  if (btn) btn.disabled = true;
-  let j;
+  sol.innerHTML = `<div class="card"><span class="warn">re-solving this node through the live chain… fresh streets take a few seconds</span></div>`;
+  if (btn) { btn.disabled = true; btn.textContent = "solving…"; }
+  let r;
   try {
-    j = await (await fetch("/api/dashboard/node-solution", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbId, upto }) })).json();
-  } catch (e) { sol.innerHTML = `<div class="card warn">solve failed: ${esc(String(e))}</div>`; if (btn) btn.disabled = false; return; }
-  if (btn) btn.disabled = false;
-  const inputs = j.request ? `<details open><summary>inputs sent to GTO Wizard AI</summary><pre>${esc(JSON.stringify(j.request, null, 1))}</pre>
-    ${j.meta ? `<div class="sub">solver meta: ${esc(j.meta.oopPos)} vs ${esc(j.meta.ipPos)} · flop pot ${j.meta.flopPot}bb · eff stack ${j.meta.effStack}bb ·
-    ${j.meta.solves} fresh solve(s) in ${j.meta.solveSecs}s · custom solution ${esc(j.meta.customSolutionId ?? "—")}</div>` : ""}</details>` : "";
-  if (!j.ok || !j.solution) {
-    sol.innerHTML = `<div class="card"><span class="warn">${esc(j.error ?? "no solution at this node")}</span>${inputs}</div>`;
+    r = await (await fetch("/api/dashboard/resolve-chain", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbId, upto }) })).json();
+  } catch (e) { r = { ok: false, error: String(e) }; }
+  if (btn) { btn.disabled = false; btn.textContent = "▶ solve (live chain)"; }
+  if (!r.ok) { sol.innerHTML = `<div class="card warn">solve failed: ${esc(r.error ?? "unknown")}</div>`; return; }
+  if (r.tier !== "ai-chain" || r.solveId == null) {
+    sol.innerHTML = `<div class="card"><h2>Re-solve at action ${upto}</h2><div class="sub">The live path answered this node from <b>${esc(r.tier ?? r.source ?? "another tier")}</b>, not the AI chain, so there is no chain trace to walk.${r.warning ? ` ⚠ ${esc(r.warning)}` : ""}</div>
+      <div class="ans-verdict" style="margin-top:8px"><span class="ans-pick ${verbClass(r.decision?.action)}">${esc((r.decision?.action ?? "").toUpperCase())}</span><span class="ans-how">${(r.actions || []).map((a) => `${esc(a.action)} ${Math.round(a.frequency)}%`).join(" · ")}</span></div>
+      <div class="sub" style="margin-top:8px"><a class="ev-link" href="/hands/${dbId}/node/${upto}" onclick="go('/hands/${dbId}/node/${upto}');return false">open the exact node it used ↗</a></div></div>`;
     return;
   }
-  const s = j.solution;
-  const heroCombo = (j.node?.heroCards || []).join("");
-  const cls = {};
-  s.holes.forEach((holeStr, ci) => {
-    const r1 = holeStr[0], s1 = holeStr[1], r2c = holeStr[2], s2 = holeStr[3];
-    const i1 = RANKS.indexOf(r1), i2 = RANKS.indexOf(r2c);
-    const hi = Math.min(i1, i2), lo = Math.max(i1, i2);
-    const key = i1 === i2 ? r1 + r2c : RANKS[hi] + RANKS[lo] + (s1 === s2 ? "s" : "o");
-    const w = s.weights?.[ci] ?? 0;
-    const e = (cls[key] ??= { w: 0, acts: new Array(s.actions.length).fill(0) });
-    e.w += w;
-    s.actions.forEach((_, ai) => { e.acts[ai] += w * (s.strategy[ai]?.[ci] ?? 0); });
-  });
-  const heroKey = heroCombo.length === 4 ? (() => {
-    const i1 = RANKS.indexOf(heroCombo[0]), i2 = RANKS.indexOf(heroCombo[2]);
-    if (i1 === i2) return heroCombo[0] + heroCombo[2];
-    const hi = Math.min(i1, i2), lo = Math.max(i1, i2);
-    return RANKS[hi] + RANKS[lo] + (heroCombo[1] === heroCombo[3] ? "s" : "o");
-  })() : null;
-  const totals = s.actions.map((_, ai) => {
-    let num = 0, den = 0;
-    for (const k in cls) { num += cls[k].acts[ai]; den += cls[k].w; }
-    return den ? (100 * num) / den : 0;
-  });
-  let html = `<div class="card"><h2>Node solution · ${esc(j.node.street)} · board ${cardsHtml(j.node.board)} · pot ${(s.pot / 100).toFixed(2)}bb · actor ${s.player === 1 ? "IP" : "OOP"}</h2>
-    <div class="legend">` + s.actions.map((a, ai) =>
-      `<span><span class="sw" style="background:${colorFor(a, ai)}"></span>${esc(a)} ${totals[ai].toFixed(1)}%</span>`).join("") + `</div><div id="grid">`;
-  for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) {
-    const key = r === c ? RANKS[r] + RANKS[c] : r < c ? RANKS[r] + RANKS[c] + "s" : RANKS[c] + RANKS[r] + "o";
-    const e = cls[key];
-    let bg = "#10151d";
-    if (e && e.w > 0.0005) {
-      const stops = []; let acc = 0;
-      s.actions.forEach((a, ai) => {
-        const p = (100 * e.acts[ai]) / e.w;
-        if (p > 0.5) { stops.push(`${colorFor(a, ai)} ${acc}% ${acc + p}%`); acc += p; }
-      });
-      if (stops.length) bg = `linear-gradient(to right, ${stops.join(", ")})`;
-    }
-    const op = e ? Math.min(1, 0.25 + e.w / 4) : 0.15;
-    html += `<div class="${key === heroKey ? "hero" : ""}" style="background:${bg};opacity:${op}" title="${key}${e ? ` w=${e.w.toFixed(1)} ` + s.actions.map((a, ai) => `${a}:${((100 * e.acts[ai]) / (e.w || 1)).toFixed(0)}%`).join(" ") : ""}">${key.slice(0, 2)}</div>`;
-  }
-  html += `</div><div class="sub" style="margin-top:6px">hero combo outlined · opacity = range weight · hover for the mix</div>${inputs}</div>`;
-  sol.innerHTML = html;
-  sol.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  sol.innerHTML = `<div class="card"><h2>Live-chain re-solve at action ${upto} <span class="sub">— stored as replay #${r.solveId}; every node below is walkable</span></h2><div id="walk-host"></div></div>`;
+  renderWalkthrough(r.solveId, "walk-host", upto);
+  sol.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /* ================= analytics ================= */
@@ -468,6 +1032,8 @@ async function loadAnalytics() {
   v.innerHTML = '<div class="card sub">loading…</div>';
   const j = await (await fetch("/api/dashboard/stats")).json();
   if (!j.ok) { v.innerHTML = '<div class="card warn">stats unavailable</div>'; return; }
+  // disc counts fill in as the background audits land — refresh quietly
+  pollWhilePending(j, () => { if ($("view-analytics").style.display !== "none") loadAnalytics(); });
   const o = j.overall;
   const tile = (k, val, sub) => `<div class="tile"><div class="v">${val}</div><div class="k">${k}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
   const p = (x) => x == null ? "—" : x + "%";
@@ -512,7 +1078,121 @@ async function loadAnalytics() {
     <table><thead><tr><th>tier</th><th>n</th><th>p50 ms</th><th>p90 ms</th><th>max ms</th></tr></thead><tbody>
     ${Object.entries(t).map(([k, x]) => `<tr><td>${esc(k)}</td><td>${x.n}</td><td>${x.p50}</td><td>${x.p90}</td><td>${x.max}</td></tr>`).join("")}
     </tbody></table></div>`;
+  html += `<div id="miss-queue"><div class="card sub">loading the preflop miss queue…</div></div>`;
   v.innerHTML = html;
+  loadMissQueue();
+}
+
+/* ================= preflop miss queue ================= */
+// Postflop is complete (the AI chain solves any board on demand). Preflop has
+// no live equivalent, so every chart miss is written down with the state to
+// solve it; the HRC runner works the queue between sessions.
+let MQ = null, mqFilter = "active", mqTimer = null;
+const MQ_KIND = {
+  "size-snapped": ["size snapped", "answered, but from a size ≥0.1 log-bb away (e.g. a 3.9x open served from the 3.5x node)"],
+  "size-off-tree": ["size off tree", "the played size is further than τ from every size in the tree — no answer"],
+  "action-not-in-tree": ["action not in tree", "a limp / call / check the tree shape does not contain — no answer"],
+  "jam-not-offered": ["jam not offered", "an all-in at a node with no aggressive action — no answer"],
+  "node-missing": ["node missing", "the walked line is not in the solution — no answer"],
+  "past-terminal": ["past terminal", "the line runs on past a terminal node — no answer"],
+  "beyond-ladder": ["beyond ladder", "deep stacks past the 150bb rung — answered from the 150bb chart"],
+  other: ["other", "an unclassified walk failure"],
+};
+const mqKind = (k) => `<span class="mq-kind ${esc(k)}" title="${esc((MQ_KIND[k] || MQ_KIND.other)[1])}">${esc((MQ_KIND[k] || MQ_KIND.other)[0])}</span>`;
+
+async function loadMissQueue() {
+  const host = $("miss-queue");
+  if (!host) return;
+  let j;
+  try { j = await (await fetch("/api/dashboard/miss-queue")).json(); } catch (e) { host.innerHTML = '<div class="card warn">miss queue unavailable</div>'; return; }
+  if (!j.ok) { host.innerHTML = '<div class="card warn">miss queue unavailable</div>'; return; }
+  MQ = j;
+  renderMissQueue();
+  clearTimeout(mqTimer);
+  if (j.sweep.running) mqTimer = setTimeout(loadMissQueue, 2000);
+}
+
+function renderMissQueue() {
+  const host = $("miss-queue");
+  if (!host || !MQ) return;
+  const st = MQ.stats, sw = MQ.sweep;
+  const bs = st.byStatus || {};
+  const tile = (k, val, sub) => `<div class="tile"><div class="v num">${val}</div><div class="k">${k}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+  const kinds = Object.entries(st.byKind || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${mqKind(k)} <span class="sub num">${n}</span>`).join(" &nbsp; ");
+  const sweepHtml = sw.running
+    ? `<span class="mq-prog">sweeping ${esc(sw.source)} <span class="bar"><i style="width:${sw.total ? Math.round(100 * sw.done / sw.total) : 0}%"></i></span> ${sw.done}/${sw.total} decisions · ${sw.misses} inexact · ${sw.charts} charts</span>`
+    : sw.finishedAt
+      ? `<span class="sub">last sweep: ${esc(sw.source)} · ${sw.decisions} decisions, ${sw.misses} inexact · ${sw.error ? `<span class="warn">${esc(sw.error)}</span>` : `${fmtAgo(sw.finishedAt)}`}</span>`
+      : `<span class="sub">no sweep yet this run</span>`;
+  const active = (MQ.items || []).filter((x) => mqFilter === "all" ? true : mqFilter === "active" ? (x.status === "open" || x.status === "queued") : x.status === mqFilter);
+  const rows = active.map(mqRow).join("");
+  host.innerHTML = `<div class="card">
+    <h2>Preflop miss queue <span class="sub">— ${bs.open || 0} open · ${bs.queued || 0} queued · ${bs.solved || 0} solved · ${bs.dismissed || 0} dismissed</span></h2>
+    <div class="banner">🧭 <b>Preflop is completed offline.</b> Postflop has the AI chain to solve any board on demand; a 3-handed preflop state takes HRC 12–90 min, so it can't be solved live. Instead every spot the chart corpus couldn't answer <i>exactly</i> is written down here with its state — stacks, line, the size or action the tree lacked — and a suggested HRC job. Queue the ones worth solving, write the plan, run it in HRC Runner; when the chart lands, <b>re-check</b> marks the item solved.</div>
+    <div class="tiles">
+      ${tile("open", bs.open || 0)} ${tile("queued", bs.queued || 0)} ${tile("solved", bs.solved || 0)}
+      ${tile("decisions affected", (st.hands.live + st.hands.archive + st.hands.corpus), `live ${st.hands.live} · archive ${st.hands.archive} · corpus ${st.hands.corpus}`)}
+    </div>
+    <div class="sub" style="margin:10px 0 4px">${kinds || "no open misses"}</div>
+    <div class="mq-ctl">
+      <select id="mq-filter" onchange="mqFilter=this.value;renderMissQueue()">
+        ${[["active", "open + queued"], ["all", "everything"], ["open", "open"], ["queued", "queued"], ["solved", "solved"], ["dismissed", "dismissed"]].map(([v, l]) => `<option value="${v}" ${mqFilter === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select>
+      <button class="mini" onclick="mqSweep('archive')" ${sw.running ? "disabled" : ""} title="walk every hero preflop decision in hands.db through the charts">sweep archive</button>
+      <button class="mini" onclick="mqSweep('corpus')" ${sw.running || !MQ.corpus ? "disabled" : ""} title="walk every preflop node of the 4k-hand Zone corpus through the charts (all actors) — minutes">sweep 4k corpus</button>
+      <button class="mini" onclick="mqPlan()" ${(bs.queued || 0) ? "" : "disabled"} title="write one HRC plan per queued job + a runner queue">write HRC plan (${bs.queued || 0} queued)</button>
+      ${sweepHtml}
+    </div>
+    <div class="scroll"><table><thead><tr><th>kind</th><th>state</th><th>node</th><th class="num">seen</th><th>hands</th><th>suggested HRC job</th><th>status</th></tr></thead>
+    <tbody>${rows || `<tr class="src-static"><td colspan="7" class="sub">nothing here — run a sweep, or play with Study Answers on</td></tr>`}</tbody></table></div>
+    <div class="sub" style="margin-top:8px">Items are keyed by chart · line · wanted token. A "seen" count is decisions, not hands. Sweeps reset their own counts before re-walking, so they never double count; live counts only grow. Store: <span class="mono">${esc(MQ.store)}</span> · plans: <span class="mono">${esc(MQ.planDir)}</span></div>
+  </div>`;
+}
+
+function mqRow(x) {
+  const stk = x.state?.stacksBB || {};
+  const stacks = ["BTN", "SB", "BB"].filter((p) => stk[p] != null).map((p) => `${p} ${stk[p]}`).join(" · ");
+  const shape = x.shortSeat === "EQ" ? `${x.depth}bb even` : `${x.depth}/${x.depth} + ${esc(x.shortSeat)} ${x.shortDepth}bb`;
+  const state = `<div class="mq-state"><b>${esc(x.site)}</b> · ${shape}${x.kind === "beyond-ladder" ? ` <span class="chip warn">deep</span>` : ""}<div class="sub">${esc(stacks || "stacks unreadable")}${x.state?.heroPos ? ` · hero ${esc(x.state.heroPos)}` : ""}</div><div class="mono sub">${esc(x.chart)}</div></div>`;
+  const node = `<div class="mq-node"><span class="mono">${esc(x.line || "(root)")}</span>
+    ${x.want ? `<div><span class="mono">${esc(x.want)}</span> <span class="arrow">→</span> ${x.got ? `<span class="mono">${esc(x.got)}</span>` : '<span class="crit">nothing</span>'}</div>` : ""}
+    ${x.offered?.length ? `<div class="sub">offered: <span class="mono">${esc(x.offered.join(" "))}</span></div>` : ""}
+    <div class="sub" title="${esc(x.reason)}">${esc(x.reason.length > 90 ? x.reason.slice(0, 90) + "…" : x.reason)}</div></div>`;
+  const seen = `<div class="num"><b>${x.n}</b><div class="sub">${[x.nLive ? `live ${x.nLive}` : "", x.nArchive ? `archive ${x.nArchive}` : "", x.nCorpus ? `corpus ${x.nCorpus}` : ""].filter(Boolean).join(" · ")}</div><div class="sub">${x.lastSeen ? fmtT(x.lastSeen) : ""}</div></div>`;
+  const linked = (x.refs || []).filter((r) => r.dbId != null).slice(-3);
+  const corpusRefs = (x.refs || []).filter((r) => r.dbId == null).slice(-3);
+  const hands = `<div>${linked.map((r) => `<a href="/hands/${r.dbId}/node/${r.actionIndex ?? ""}" onclick="go('/hands/${r.dbId}/node/${r.actionIndex ?? ""}');return false">#${r.dbId}</a>`).join(" ")}
+    ${corpusRefs.length ? `<div class="sub">corpus ${corpusRefs.map((r) => esc(String(r.handId ?? "?"))).join(", ")}</div>` : ""}</div>`;
+  const job = x.job
+    ? `<div class="mq-job"><div class="mono id">${esc(x.job.id)}</div><div class="sub">${esc(x.job.change)}</div><div class="sub">stacks ${x.job.stacksBB.join("/")} · opens ${esc(String(x.job.sizes[0]))}</div></div>`
+    : '<span class="sub">no job suggested</span>';
+  const status = `<div style="display:flex;flex-direction:column;gap:4px">
+    <select onchange="mqStatus(${x.id}, this.value)">${["open", "queued", "solved", "dismissed"].map((s) => `<option value="${s}" ${x.status === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+    <button class="mini" onclick="mqRecheck(${x.id}, this)" title="re-walk this state through today's charts; an exact walk marks it solved">re-check</button>
+    ${x.note ? `<div class="sub" title="${esc(x.note)}">${esc(x.note.length > 60 ? x.note.slice(0, 60) + "…" : x.note)}</div>` : ""}</div>`;
+  return `<tr class="src-static mq-${esc(x.status)}"><td>${mqKind(x.kind)}</td><td>${state}</td><td>${node}</td><td class="num">${seen}</td><td>${hands}</td><td>${job}</td><td>${status}</td></tr>`;
+}
+
+async function mqSweep(source) {
+  const r = await (await fetch("/api/dashboard/miss-queue/sweep", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })).json();
+  if (!r.ok) alert(r.error || "sweep failed");
+  loadMissQueue();
+}
+async function mqStatus(id, status) {
+  await fetch(`/api/dashboard/miss-queue/${id}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+  loadMissQueue();
+}
+async function mqRecheck(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "checking…"; }
+  const r = await (await fetch(`/api/dashboard/miss-queue/${id}/recheck`, { method: "POST" })).json();
+  if (!r.ok) alert(r.error || "re-check failed");
+  else if (!r.exact) alert(`still inexact on ${r.chart}: ${r.walk.reason || ("snapped " + JSON.stringify(r.walk.repaired))}`);
+  loadMissQueue();
+}
+async function mqPlan() {
+  const r = await (await fetch("/api/dashboard/miss-queue/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+  if (!r.ok) { alert(r.error || "plan failed"); return; }
+  alert(`wrote ${r.jobs} job(s)\n\nplan: ${r.plan}\nrunner queue: ${r.queue}\n\nOpen HRC Runner and load the queue file.`);
 }
 
 /* ================= chart catalog ================= */
@@ -531,7 +1211,8 @@ const fmtAgo = (ms) => {
 };
 
 async function loadCatalog() {
-  const v = $("view-catalog");
+  const v = $("src-catalog");
+  if (!v) return;
   v.innerHTML = '<div class="card sub">loading catalog…</div>';
   let j;
   try {
@@ -543,7 +1224,8 @@ async function loadCatalog() {
 }
 
 function renderCatalog() {
-  const v = $("view-catalog");
+  const v = $("src-catalog");
+  if (!v) return;
   const s = CAT.summary;
   const tile = (k, val, sub) => `<div class="tile"><div class="v">${val}</div><div class="k">${k}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
   const famNames = Object.keys(s.byFamily).sort();
@@ -616,36 +1298,543 @@ function renderCatalog() {
   };
 }
 
-/* ================= routing ================= */
-function route() {
-  if (PLAY) { clearInterval(PLAY); PLAY = null; }
-  const m = location.hash.match(/^#hand\/(\d+)/);
-  if (m) { showDetail(Number(m[1])); return; }
-  $("view-detail").style.display = "none";
-  const on = ["tab-hands", "tab-analytics", "tab-catalog", "tab-replay"].find((t) => $(t).classList.contains("on"));
-  $("view-hands").style.display = on === "tab-hands" ? "" : "none";
-  $("view-analytics").style.display = on === "tab-analytics" ? "" : "none";
-  $("view-catalog").style.display = on === "tab-catalog" ? "" : "none";
-  $("view-replay").style.display = on === "tab-replay" ? "" : "none";
+/* ================= Sessions (declared by the wrapper's setup page) ================= */
+const PRESET_LABEL = { "study-mes": "Study answers · MES", "study-gto": "Study answers · GTO", silent: "Silent play", "capture-qa": "Capture QA", "test-rig": "Test rig" };
+const presetLabel = (p) => PRESET_LABEL[p] ?? (p ?? "undeclared");
+const modeChipOf = (m) => m === "exploit" ? '<span class="mode mes">MES</span>' : m === "chart" ? '<span class="mode gto">GTO</span>' : "";
+const durStr = (min) => min == null ? "—" : min >= 60 ? `${Math.floor(min / 60)} h ${Math.round(min % 60)} min` : `${Math.round(min)} min`;
+
+async function loadSessions() {
+  const v = $("view-sessions");
+  v.innerHTML = '<div class="card sub">loading sessions…</div>';
+  let j;
+  try { j = await (await fetch("/api/dashboard/sessions")).json(); } catch (e) { v.innerHTML = '<div class="card warn">sessions unavailable</div>'; return; }
+  if (!j.ok) { v.innerHTML = '<div class="card warn">sessions unavailable</div>'; return; }
+  const row = (x) => `<tr data-id="${esc(x.id)}">
+      <td>${fmtT(x.startedAt)}${x.declared && !x.endedAt ? ' <span class="chip good">open</span>' : ""}</td>
+      <td>${x.declared ? `<span class="preset-chip ${esc(x.preset ?? "")}">${esc(presetLabel(x.preset))}</span>` : '<span class="chip dim">undeclared</span>'}</td>
+      <td>${esc(x.label ?? "")}</td>
+      <td>${x.declared ? (x.answersOn ? modeChipOf(x.mode) : '<span class="sub">off</span>') : '<span class="sub">—</span>'}</td>
+      <td>${esc(x.stakes ?? "?")}</td>
+      <td class="num">${x.hands}</td>
+      <td class="num">${x.answers ?? "—"}${x.failed ? ` <span class="sub">+${x.failed} failed</span>` : ""}</td>
+      <td class="num">${x.disagreements ?? "—"}</td>
+      ${evCell(x.bb100, {})}
+      <td>${x.recorded ? '<span class="chip">● recorded</span>' : '<span class="sub">—</span>'}</td>
+      <td class="num">${durStr(x.durationMin)}</td>
+    </tr>`;
+  const declared = j.declared || [], clusters = j.clusters || [];
+  v.innerHTML = `
+    <div class="banner">🗂 A session is declared on the wrapper's setup page before the table opens: the mode, the sources allowed, the preflight that passed, and the version of every source in force are written down with it. Hands played before that are shown below as undeclared gaps.</div>
+    <div class="card"><h2>Declared sessions <span class="sub">— ${declared.length} · from ${esc(j.store)}</span></h2>
+      ${declared.length ? `<div class="scroll"><table><thead><tr><th>started</th><th>mode</th><th>label</th><th>strategy</th><th>stakes</th><th class="num">hands</th><th class="num">answers</th><th class="num">MES≠GTO</th><th class="num">bb/100</th><th>recording</th><th class="num">length</th></tr></thead><tbody>${declared.map(row).join("")}</tbody></table></div>`
+        : '<div class="sub">None yet. The next time the wrapper is started it opens on <span class="mono">/setup</span>; the session declared there appears here.</div>'}
+    </div>
+    <div class="card"><h2>Before sessions were declared <span class="sub">— ${clusters.length} gap clusters, inferred</span></h2>
+      <div class="scroll"><table><thead><tr><th>started</th><th></th><th></th><th></th><th>stakes</th><th class="num">hands</th><th class="num">answers</th><th class="num">MES≠GTO</th><th class="num">bb/100</th><th>recording</th><th class="num">length</th></tr></thead><tbody>${clusters.map(row).join("")}</tbody></table></div>
+    </div>`;
+  v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/sessions/${encodeURIComponent(tr.dataset.id)}`));
 }
-window.onhashchange = route;
-const selectTab = (id) => {
-  for (const t of ["tab-hands", "tab-analytics", "tab-catalog", "tab-replay"]) $(t).classList.toggle("on", t === id);
-  location.hash = "";
+
+async function loadSession(id) {
+  const v = $("view-sessions");
+  v.innerHTML = '<div class="card sub">loading session…</div>';
+  let j;
+  try { j = await (await fetch(`/api/dashboard/sessions/${encodeURIComponent(id)}`)).json(); } catch (e) { v.innerHTML = '<div class="card warn">session unavailable</div>'; return; }
+  if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)} <button class="mini" onclick="go('/sessions')">← sessions</button></div>`; return; }
+  const s = j.session, cfg = s.config || {}, src = cfg.sources || {};
+  const handRows = (j.hands || []).map((h) => `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(h.heroPos ?? "?")}</td><td>${cardsHtml(h.heroCards)}</td><td>${esc(h.finalStreet)}</td><td class="num">${h.potBb}</td>${evCell(h.netBb, {})}<td class="num">${h.answers}</td></tr>`).join("");
+  const kv = (k, val) => `<span class="k">${k}</span><span class="v">${val}</span>`;
+  const head = `<div class="dt-top">
+      <button class="mini" onclick="go('/sessions')">← sessions</button>
+      <h2 style="margin:0">${s.declared ? `${esc(s.label || presetLabel(s.preset))} <span class="preset-chip ${esc(s.preset ?? "")}">${esc(presetLabel(s.preset))}</span>` : `Undeclared session · ${fmtT(s.startedAt)}`}</h2>
+      <span class="sub">${fmtT(s.startedAt)} → ${s.endedAt ? fmtT(s.endedAt) : '<span class="chip good">still open</span>'} · ${esc(s.stakes ?? "")}</span>
+    </div>`;
+  if (!s.declared) {
+    v.innerHTML = head + `<div class="card sub">This is a gap cluster inferred from the archive: hands played before sessions were declared. Nothing was written down at the time, so there is no config, preflight or version snapshot.</div>
+      <div class="card"><h2>Hands <span class="sub">— ${j.hands.length}</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows}</tbody></table></div></div>`;
+    v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/hands/${tr.dataset.id}`));
+    return;
+  }
+  const ver = s.versions || {};
+  const verRows = [
+    ["API", ver.api ? `probed ${fmtT(ver.api.at)} · mode ${ver.api.strategyMode ?? "?"}` : "not reachable at start"],
+    ["exploit preflop", ver.exploitPreflop ? `${ver.exploitPreflop.armed ? "armed" : "not armed"} · ${esc(ver.exploitPreflop.freshness ?? "")} · ${esc(ver.exploitPreflop["fit to"] ?? "")}` : "—"],
+    ["MES flops", ver.mesPostflop ? `${ver.mesPostflop.loaded ? `${ver.mesPostflop.boards} boards` : "not loaded"} · ${esc(ver.mesPostflop.generation ?? "")} · built ${esc(ver.mesPostflop.built ?? "")}` : "—"],
+    ["3-max charts", ver.hrc ? `${ver.hrc.up ? "up" : "down"} · ${esc(ver.hrc.charts ?? "")} · ${esc(ver.hrc["re-solved rungs"] ?? "")}` : "—"],
+    ["GTO Wizard", ver.gtow ? (ver.gtow.tokenLive ? "token live" : "no token") : "—"],
+    ["wrapper git", ver.wrapperGit ?? "—"],
+  ];
+  const pf = s.preflight || {};
+  const events = (s.eventsList || []).map((e) => `<div class="ev-line"><span class="t">${fmtT(e.at)}</span><span>${esc(e.kind)}${e.kind === "study-toggle" ? ` → answers ${e.on ? "on" : "off"}, ${e.mode === "exploit" ? "MES" : "GTO"}` : ""}${e.hand != null ? ` <span class="sub">· at hand ${e.hand}</span>` : ""}</span></div>`).join("");
+  const ansRows = (j.answers || []).slice(0, 60).map((a) => `<tr class="src-static"><td>${fmtT(a.ts)}</td><td>${esc(a.street ?? "")}${a.board ? ` <span class="mono">${esc(a.board)}</span>` : ""}</td><td>${a.tier ? `<span class="chip">${esc(a.tier)}</span>` : '<span class="chip crit">failed</span>'}</td><td>${a.text ? esc(a.text) : `<span class="sub">${esc(a.failReason ?? "")}</span>`}</td><td>${a.exploitPick || a.chartPick ? `<span class="picks"><span class="pk mes"><small>MES</small>${esc(a.exploitPick ?? "—")}</span><span class="pk gto"><small>GTO</small>${esc(a.chartPick ?? "—")}</span></span>` : ""}</td><td class="num">${fmtMs(a.latencyMs)}</td></tr>`).join("");
+  v.innerHTML = head + `
+    <div class="sess-grid">
+      <div class="card"><h2>Declared config</h2><div class="kv">
+        ${kv("study answers", cfg.answers ? `on · ${modeChipOf(cfg.mode)} primary` : "off")}
+        ${kv("sources allowed", [src.exploitPreflop ? "exploit preflop" : null, src.mesPostflop ? "MES flops" : null, src.aiChain ? "AI chain" : null].filter(Boolean).join(" · ") || "none")}
+        ${kv("recording", cfg.recording ? "on" : "off")}
+        ${kv("budget", cfg.budget && (cfg.budget.hands || cfg.budget.minutes) ? `${cfg.budget.hands ? `${cfg.budget.hands} hands` : ""} ${cfg.budget.minutes ? `${cfg.budget.minutes} min` : ""}` : "none")}
+        ${kv("note", s.note ? esc(s.note) : '<span class="sub">—</span>')}
+        ${kv("session id", `<span class="mono">${esc(s.id)}</span>`)}
+      </div></div>
+      <div class="card"><h2>Preflight at start ${pf.ok ? '<span class="chip good">passed</span>' : '<span class="chip crit">blocked</span>'}</h2>
+        ${(pf.checks || []).map((c) => `<div class="pf-row"><span class="dot ${c.ok ? "good" : c.required ? "crit" : "warn"}"></span><span>${esc(c.label)} <span class="sub">${esc(c.detail)}</span></span><span class="sub">${c.required ? "required" : "optional"}</span></div>`).join("") || '<div class="sub">no preflight recorded</div>'}</div>
+      <div class="card"><h2>Sources in force</h2><div class="kv">${verRows.map(([k, val]) => kv(k, val)).join("")}</div></div>
+      <div class="card"><h2>Outcome</h2><div class="tiles">
+        <div class="tile"><div class="v num">${s.hands}</div><div class="k">hands</div></div>
+        <div class="tile"><div class="v num">${s.answers}</div><div class="k">answers</div><div class="s">${s.failed} failed</div></div>
+        <div class="tile"><div class="v num">${s.disagreements}</div><div class="k">MES ≠ GTO</div></div>
+        <div class="tile"><div class="v num ${s.bb100 > 0 ? "pos" : s.bb100 < 0 ? "neg" : ""}">${s.bb100 == null ? "—" : (s.bb100 > 0 ? "+" : "") + s.bb100}</div><div class="k">bb/100</div><div class="s">${s.knownHands} known</div></div>
+        <div class="tile"><div class="v num">${s.solves}</div><div class="k">chain solves stored</div></div>
+        <div class="tile"><div class="v">${durStr(s.durationMin)}</div><div class="k">length</div></div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${j.recording ? `<a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}" target="_blank" rel="noopener" style="text-decoration:none">open the recording in Replay Review ↗</a><a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}&mode=scrub" target="_blank" rel="noopener" style="text-decoration:none">scrub it ↗</a>` : '<span class="sub">no frame recording for this session</span>'}</div></div>
+    </div>
+    <div class="card"><h2>Timeline <span class="sub">— every declared change, in order</span></h2>${events || '<div class="sub">no events</div>'}</div>
+    <div class="card"><h2>Hands <span class="sub">— ${j.hands.length} · click to open</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows || '<tr class="src-static"><td colspan="8" class="sub">no hands archived under this session yet</td></tr>'}</tbody></table></div></div>
+    <div class="card"><h2>Answers <span class="sub">— ${(j.answers || []).length}${(j.answers || []).length > 60 ? ", showing 60" : ""}</span></h2><div class="scroll"><table><thead><tr><th>when</th><th>node</th><th>tier</th><th>answer</th><th>both strategies</th><th class="num">latency</th></tr></thead><tbody>${ansRows || '<tr class="src-static"><td colspan="6" class="sub">no answers logged under this session</td></tr>'}</tbody></table></div></div>`;
+  v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/hands/${tr.dataset.id}`));
+}
+
+/* ================= Sources (mission control) ================= */
+let SRC = null, srcPane = "registry", srcLoaded = {};
+const fmtIso = (iso) => { const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+const fmtMs = (ms) => ms == null ? "—" : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+const spark = (byDay, mes) => {
+  const xs = (byDay || []).slice(-14); const mx = Math.max(1, ...xs);
+  return `<span class="spark" aria-hidden="true">${xs.map((x) => `<i class="${mes ? "m" : ""}" style="height:${Math.max(1, Math.round(22 * x / mx))}px"></i>`).join("")}</span>`;
 };
-$("tab-hands").onclick = () => { selectTab("tab-hands"); route(); };
-$("tab-analytics").onclick = () => { selectTab("tab-analytics"); loadAnalytics(); route(); };
-$("tab-catalog").onclick = () => { selectTab("tab-catalog"); loadCatalog(); route(); };
-$("tab-replay").onclick = () => {
-  selectTab("tab-replay"); route();
-  // lazy-load on first open; same origin, nothing to probe
-  if (!$("replay-frame").src) $("replay-frame").src = "/replay";
+const evCell = (v, opt = {}) => {
+  if (v == null) return `<td class="ev z${opt.reuse ? " reuse" : ""}">${esc(opt.why ?? "—")}</td>`;
+  const cls = v > 0.05 ? "p" : v < -0.05 ? "n" : "z";
+  const se = opt.se != null ? ` <span class="se">±${opt.se}</span>` : opt.tag ? ` <span class="se">${esc(opt.tag)}</span>` : "";
+  return `<td class="ev ${cls}${opt.reuse ? " reuse" : ""}">${v > 0 ? "+" : ""}${Number(v).toFixed(1)}${se}</td>`;
 };
 
-loadHands();
+async function loadSources() {
+  const v = $("view-sources");
+  if (!SRC) v.innerHTML = '<div class="card sub">probing sources…</div>';
+  let j;
+  try { j = await (await fetch("/api/dashboard/sources/registry")).json(); }
+  catch (e) { v.innerHTML = '<div class="card warn">sources unavailable</div>'; return; }
+  if (!j.ok) { v.innerHTML = '<div class="card warn">sources unavailable</div>'; return; }
+  SRC = j;
+  // A periodic refresh only repaints the armed strip and the registry cards;
+  // the other panes keep whatever they loaded (re-rendering them left
+  // "loading…" placeholders behind, since their loaders run once).
+  if ($("src-armed")) { $("src-armed").outerHTML = armedStrip(); if (srcPane === "registry" && !PATH.id) renderRegistry(); return; }
+  renderSources();
+}
+
+function armedStrip() {
+  const a = SRC.armed;
+  const dot = (ok, warn) => `<span class="dot ${ok ? (warn ? "warn" : "good") : "crit"}"></span>`;
+  const tokenMin = a.gtow.expiresInMs != null ? Math.round(a.gtow.expiresInMs / 60000) : null;
+  const modeChip = a.strategyMode === "exploit" ? '<span class="mode mes">MES</span> primary'
+    : a.strategyMode === "chart" ? '<span class="mode gto">GTO</span> primary' : '<span class="chip dim">no probe yet</span>';
+  return `
+    <div class="armed" id="src-armed">
+      <div class="cell"><span class="k">Strategy mode now</span><span class="v">${modeChip}</span><span class="s">${a.strategyMode ? "the other answer rides along on every solve" : "wrapper toggle not seen this session"}</span></div>
+      <div class="cell"><span class="k">Exploit preflop</span><span class="v">${a.exploitPreflop ? '<span class="dot good"></span>Armed' : '<span class="dot off"></span>Not armed'}</span><span class="s">EXPLOIT_CHART in the API's env</span></div>
+      <div class="cell"><span class="k">MES postflop</span><span class="v">${a.mesPostflop ? '<span class="dot good"></span>Loaded' : '<span class="dot off"></span>Missing'}</span><span class="s">${a.mesBoards} boards served</span></div>
+      <div class="cell"><span class="k">3-max charts :8777</span><span class="v">${dot(a.hrc.up)}${a.hrc.up ? "Up" : "Down"}</span><span class="s">probe ${a.hrc.ms} ms</span></div>
+      <div class="cell"><span class="k">GTO Wizard cloud</span><span class="v">${dot(a.gtow.tokenLive, tokenMin != null && tokenMin < 4)}${a.gtow.tokenLive ? `Token ${tokenMin} min` : a.gtow.clientUp ? "No token" : "Client down"}</span><span class="s">keeper refreshes at 3 min</span></div>
+      <div class="cell"><span class="k">Study wrapper</span><span class="v">${dot(a.wrapper.up)}${a.wrapper.up ? "Live" : "Down"}</span><span class="s">${esc(a.wrapper.url.replace(/^https?:\/\//, ""))}${a.wrapper.studyAnswersOn != null ? ` · answers ${a.wrapper.studyAnswersOn ? "on" : "off"}` : ""}</span></div>
+    </div>`;
+}
+
+function renderSources() {
+  const v = $("view-sources");
+  const tierCount = Object.values(SRC.tiers).reduce((s, x) => s + x, 0);
+  v.innerHTML = `
+    ${armedStrip()}
+    <div class="sub-tabs" role="tablist">
+      <button data-pane="registry" role="tab">Registry <span class="n">${SRC.cards.length} sources</span></button>
+      <button data-pane="matrix" role="tab">Strategy matrix</button>
+      <button data-pane="grading" role="tab">Live grading <span class="n">${tierCount} answers</span></button>
+      <button data-pane="roadmap" role="tab">Roadmap</button>
+    </div>
+    <section class="pane" id="src-registry"></section>
+    <section class="pane" id="src-matrix"><div class="card sub">loading…</div></section>
+    <section class="pane" id="src-grading"><div class="card sub">loading…</div></section>
+    <section class="pane" id="src-roadmap"><div class="card sub">loading…</div></section>`;
+  renderRegistry();
+  v.querySelectorAll(".sub-tabs button").forEach((b) => b.onclick = () => go(`/sources/${b.dataset.pane}`));
+  showSrcPane(srcPane, PATH.id);
+}
+
+function showSrcPane(id, cardId) {
+  srcPane = id;
+  const v = $("view-sources");
+  if (!v.querySelector(".sub-tabs")) return; // not rendered yet — renderSources() will call back
+  v.querySelectorAll(".sub-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.pane === id));
+  v.querySelectorAll(".pane").forEach((p) => p.classList.toggle("on", p.id === `src-${id}`));
+  if (id === "registry") { if (cardId) renderSourceDetail(cardId); else renderRegistry(); }
+  if (id === "matrix" && !srcLoaded.matrix) loadMatrix();
+  if (id === "grading" && !srcLoaded.grading) loadGrading();
+  if (id === "roadmap" && !srcLoaded.roadmap) loadRoadmap();
+}
+
+/* ============================ MES walkthrough (registry → mes-postflop) ============================ */
+let MES_SPOTS = [];
+async function loadMesSpots() {
+  const el = $("mes-spots"); if (!el) return;
+  try { MES_SPOTS = (await (await fetch("/api/dashboard/sources/mes/spots")).json()).spots || []; } catch (e) { el.innerHTML = `<span class="warn">${esc(String(e))}</span>`; return; }
+  const fams = [...new Set(MES_SPOTS.map((s) => s.family))];
+  el.className = "";
+  el.innerHTML = fams.map((fid) => {
+    const rows = MES_SPOTS.filter((s) => s.family === fid);
+    const f = rows[0];
+    return `<h3 style="margin:10px 0 4px">${esc(fid)} <span class="sub">hero ${esc(f.heroPos)} · preflop ${esc(f.pf3.join("-"))}${f.line.length ? ` · then ${esc(f.line.join(" "))}` : ""} · pot ${(f.pot / 100).toFixed(1)}bb · ${(f.effStack / 100).toFixed(0)}bb behind</span></h3>
+      <div class="scroll"><table class="src-static"><thead><tr><th>board</th><th class="num">ev_gain / arrival</th><th>generation</th><th>turn data</th><th></th></tr></thead><tbody>` +
+      rows.sort((a, b) => b.evGainBb - a.evGainBb).map((s) => `<tr class="mes-spot" data-f="${esc(s.family)}" data-b="${esc(s.board)}" style="cursor:pointer">
+        <td class="mono">${cardsHtml(s.board.match(/.{2}/g))}</td>${evCell(s.evGainBb)}<td>${s.gen ? `<span class="chip ${s.gen === "refit" ? "good" : ""}">${esc(s.gen)}</span>` : '<span class="chip dim">—</span>'}</td>
+        <td>${s.hasTurn ? '<span class="chip good">turn ✓</span>' : '<span class="chip dim">flop only</span>'}</td><td><button class="mini">walk ↗</button></td></tr>`).join("") + `</tbody></table></div>`;
+  }).join("");
+  el.querySelectorAll("tr.mes-spot").forEach((tr) => tr.onclick = () => mesWalk(tr.dataset.f, tr.dataset.b, []));
+}
+// state of the current walk
+let WALK = null;
+function mesGridHtml(holes, w, strat, ev, acts, heroIdx) {
+  // 13x13 by hand class: aggregate the per-combo mix into classes (weighted)
+  const R = "AKQJT98765432";
+  const cls = {};
+  holes.forEach((h, j) => {
+    if (!w || w[j] <= 0) return;
+    const a = h.slice(0, 2), b = h.slice(2, 4);
+    const ia = R.indexOf(a[0]), ib = R.indexOf(b[0]);
+    const hi = Math.min(ia, ib), lo = Math.max(ia, ib);
+    const key = ia === ib ? R[hi] + R[lo] : a[1] === b[1] ? R[hi] + R[lo] + "s" : R[hi] + R[lo] + "o";
+    const c = (cls[key] ??= { w: 0, s: new Array(acts.length).fill(0), ev: new Array(acts.length).fill(0) });
+    c.w += w[j];
+    acts.forEach((_, ai) => { c.s[ai] += w[j] * (strat?.[ai]?.[j] ?? 0); c.ev[ai] += w[j] * (ev?.[ai]?.[j] ?? 0); });
+  });
+  const colorFor = (lab, i) => /^Fold/.test(lab) ? "#5b7fa6" : /^(Check|Call)/.test(lab) ? "#41a368" : ["#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"][Math.min(i, 4)];
+  let html = `<div class="legend">${acts.map((a, i) => `<span><span class="sw" style="background:${colorFor(a, i)}"></span>${esc(a)}</span>`).join("")}</div><div id="grid">`;
+  for (let n = 0; n < 169; n++) {
+    const i = Math.floor(n / 13), k = n % 13;
+    const hi = R[Math.min(i, k)], lo = R[Math.max(i, k)];
+    const key = i === k ? hi + lo : hi + lo + (k > i ? "s" : "o");
+    const c = cls[key];
+    if (!c) { html += `<div style="opacity:.25">${key}</div>`; continue; }
+    let acc = 0; const stops = [];
+    acts.forEach((a, ai) => { const f = c.s[ai] / c.w; if (f < 0.005) return; stops.push(`${colorFor(a, ai)} ${acc * 100}% ${(acc + f) * 100}%`); acc += f; });
+    const tip = `${key}: ` + acts.map((a, ai) => `${a} ${(100 * c.s[ai] / c.w).toFixed(0)}%${c.ev ? ` (${(c.ev[ai] / c.w / 100).toFixed(2)}bb)` : ""}`).join(" · ");
+    html += `<div title="${esc(tip)}" style="background:linear-gradient(135deg,${stops.join(",")})">${key}</div>`;
+  }
+  return html + `</div>`;
+}
+async function mesWalk(family, board, hist, stage = { street: "flop" }) {
+  const el = $("mes-walk"); if (!el) return;
+  el.innerHTML = `<div class="card sub">loading ${esc(stage.street)} node…</div>`;
+  let j;
+  try {
+    if (stage.street === "flop") j = await (await fetch(`/api/dashboard/sources/mes/node?family=${encodeURIComponent(family)}&board=${board}&hist=${hist.join(",")}`)).json();
+    else if (stage.street === "turn") j = await (await fetch(`/api/dashboard/sources/mes/turn?family=${encodeURIComponent(family)}&board=${board}&flop=${stage.flop.join(",")}&card=${stage.card}&hist=${hist.join(",")}`)).json();
+    else j = await (await fetch(`/api/dashboard/sources/mes/river?family=${encodeURIComponent(family)}&board=${board}&line=${encodeURIComponent(stage.line.join("|"))}&hist=${hist.join(",")}`)).json();
+  } catch (e) { el.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
+  if (!j.ok) { el.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
+  const n = j.node;
+  WALK = { family, board, hist, stage, node: n, view: WALK?.view ?? "mes" };
+  const who = n.isHero ? `<span class="mode mes">HERO (${esc(n.heroPos ?? (n.heroPlayer === 0 ? "OOP" : "IP"))}) to act</span>` : `<span class="chip">villain to act</span>`;
+  // n.path already begins with the spot line on the flop; later streets carry their own prefix
+  const crumbs = stage.street === "flop" ? n.path
+    : stage.street === "turn" ? [...(stage.flopLabels ?? n.flopLabels ?? []), stage.card, ...n.path]
+    : [...(stage.flopLabels ?? []), stage.card, ...(stage.turnLabels ?? []), stage.rcard, ...n.path];
+  const agg = (strat) => strat ? n.acts.map((_, ai) => { let s = 0, t = 0; (n.w || []).forEach((wj, j) => { s += wj * (strat[ai]?.[j] ?? 0); t += wj; }); return t ? 100 * s / t : 0; }) : null;
+  const aggMes = agg(n.mes), aggGto = agg(n.gto);
+  const canToggle = !!n.gto;
+  const strat = WALK.view === "gto" && n.gto ? n.gto : n.mes;
+  const ev = WALK.view === "gto" && n.gtoEv ? n.gtoEv : n.mesEv;
+  let html = `<div class="card">
+    <div class="dt-top"><button class="mini" onclick="mesWalk('${esc(family)}','${board}',[])">⏮ flop root</button>
+      <h2 style="margin:0">${cardsHtml((n.board5 || board).match(/.{2}/g))} · ${esc(stage.street)} · pot ${(n.pot / 100).toFixed(2)}bb · ${who}</h2>
+      ${canToggle ? `<span class="strat-toggle"><button class="mini ${WALK.view === "mes" ? "on" : ""}" onclick="WALK.view='mes';mesWalk('${esc(family)}','${board}',${JSON.stringify(hist)},WALK.stage)">MES</button><button class="mini ${WALK.view === "gto" ? "on" : ""}" onclick="WALK.view='gto';mesWalk('${esc(family)}','${board}',${JSON.stringify(hist)},WALK.stage)">GTO</button></span>` : `<span class="chip dim">MES only on this street</span>`}
+    </div>
+    <div class="sub mono" style="margin:6px 0">line: ${esc(crumbs.join(" › ") || "(root)")}</div>
+    <div class="sub">${n.isHero ? (WALK.view === "gto" ? "equilibrium mix (the baseline the MES improves on)" : "MES mix — best response to the pool at this node") : "villain's node: the locked pool frequencies decide here; pick an action to continue"}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">` +
+    n.acts.map((a, ai) => `<button class="mini" ${n.children[ai] ? `onclick="mesStep(${ai})"` : `disabled title="street ends here"`}>${esc(a)}${aggMes ? ` <span class="sub">MES ${aggMes[ai].toFixed(0)}%${aggGto ? ` · GTO ${aggGto[ai].toFixed(0)}%` : ""}</span>` : ""}${n.children[ai] ? " ›" : " ⏹"}</button>`).join("") +
+    `</div>` + (n.isHero && strat ? mesGridHtml(n.holes || [], n.w, strat, ev, n.acts, null) : "") + `</div>`;
+  // street ended? offer the next card
+  const ended = n.children.every((x) => !x) || n.acts.every((_, ai) => !n.children[ai]);
+  if (stage.street === "flop") {
+    const lines = await (await fetch(`/api/dashboard/sources/mes/turn-lines?family=${encodeURIComponent(family)}&board=${board}`)).json().catch(() => null);
+    const here = lines?.ok ? lines.lines.filter((l) => l.hist.join(",") === hist.join(",") || n.acts.some((_, ai) => !n.children[ai] && l.hist.join(",") === [...hist, ai].join(","))) : [];
+    if (lines?.ok && here.length) {
+      html += `<div class="card"><h2>Deal the turn <span class="sub">— extracted for the flop lines that carry ~97% of hero's reach</span></h2>` +
+        here.map((l) => `<div style="margin:6px 0"><span class="mono sub">after ${esc(l.labels.join(" › "))}:</span> ` +
+          l.cards.map((cd) => `<button class="mini" onclick="mesWalk('${esc(family)}','${board}',[], {street:'turn', flop:${JSON.stringify(l.hist)}, flopLabels:${JSON.stringify(l.labels)}, card:'${cd}'})">${cardsHtml([cd])}</button>`).join(" ") + `</div>`).join("") + `</div>`;
+    } else if (lines && !lines.ok) html += `<div class="card sub">${esc(lines.error)}</div>`;
+  } else if (stage.street === "turn" && ended) {
+    const R = "23456789TJQKA", S = "shdc"; const used = new Set([...board.match(/.{2}/g), stage.card]);
+    const cards = []; for (const r of R) for (const s of S) if (!used.has(r + s)) cards.push(r + s);
+    const line = [...(n.flopLabels || []), stage.card, ...n.path];
+    html += `<div class="card"><h2>Deal the river <span class="sub">— extracted on demand from the locked tree (~1 min the first time, then cached)</span></h2>` +
+      cards.map((cd) => `<button class="mini" onclick="mesWalk('${esc(family)}','${board}',[], {street:'river', line:${JSON.stringify([...line, cd])}, flopLabels:${JSON.stringify(n.flopLabels || [])}, card:'${stage.card}', turnLabels:${JSON.stringify(n.path)}, rcard:'${cd}'})">${cardsHtml([cd])}</button>`).join(" ") + `</div>`;
+  }
+  el.innerHTML = html;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function mesStep(ai) { if (!WALK) return; mesWalk(WALK.family, WALK.board, [...WALK.hist, ai], WALK.stage); }
+
+/* ---- one source, as its own page: /sources/registry/:id ---- */
+async function renderSourceDetail(cardId) {
+  const el = $("src-registry");
+  const c = SRC.cards.find((x) => x.id === cardId);
+  if (!c) { el.innerHTML = `<div class="card warn">No source called “${esc(cardId)}”. <button class="mini" onclick="go('/sources/registry')">← registry</button></div>`; return; }
+  el.innerHTML = `
+    <div class="dt-top">
+      <button class="mini" onclick="go('/sources/registry')">← registry</button>
+      <h2 style="margin:0;display:flex;align-items:center;gap:10px"><span class="dot ${c.state}"></span>${esc(c.label)}${c.mode ? `<span class="mode ${c.mode}">${c.mode.toUpperCase()}</span>` : ""}</h2>
+      <span class="sub">${esc(c.stateText)}</span>
+    </div>
+    <div class="g2">
+      <div class="card">
+        <h2>What it is</h2>
+        <div class="tiers" style="margin-bottom:8px">${c.tiers.map((t) => `<span class="chip${c.state === "off" ? " dim" : ""}">${esc(t)}</span>`).join("")}</div>
+        <dl class="src-dl"><dt>routes</dt><dd>${esc(c.routes)}</dd>${c.facts.map(([k, val]) => `<dt>${esc(k)}</dt><dd${/[\\/]/.test(val) && !/ /.test(val.slice(0, 20)) ? ' class="mono"' : ""}>${esc(val)}</dd>`).join("")}</dl>
+        ${c.caveats.map((x) => `<div class="caveat">⚠ ${esc(x)}</div>`).join("")}
+      </div>
+      <div class="card">
+        <h2>Last 30 days</h2>
+        <div class="tiles">
+          <div class="tile"><div class="v num">${c.answers30d}</div><div class="k">answers</div></div>
+          ${c.p50Ms != null ? `<div class="tile"><div class="v num">${fmtMs(c.p50Ms)}</div><div class="k">p50 latency</div></div>` : ""}
+          ${c.lastTs ? `<div class="tile"><div class="v">${fmtAgo(c.lastTs)}</div><div class="k">last answer</div></div>` : ""}
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:flex-end;gap:2px;height:40px">${(c.byDay || []).map((x, i, xs) => `<i title="${x}" style="display:block;flex:1;background:${c.mode === "mes" ? "#cf6a24" : "#2f78bd"};height:${Math.max(1, Math.round(40 * x / Math.max(1, ...xs)))}px;border-radius:2px 2px 0 0"></i>`).join("")}</div>
+        <div class="sub" style="margin-top:4px">answers per day, oldest → newest</div>
+      </div>
+    </div>
+    <div id="src-detail-drill"></div>
+    <div class="card"><h2>Answer trail <span class="sub">— newest first · rows with an archived hand open it</span></h2><div id="src-detail-answers" class="sub">loading…</div></div>`;
+  // drill-down content belongs to the page now
+  const d = $("src-detail-drill");
+  if (c.drilldown === "charts") {
+    d.innerHTML = '<div class="card"><h2>Charts <span class="sub">— the chart catalog, live-routed first</span></h2><div id="src-catalog" class="src-static"></div></div>';
+    loadCatalog();
+  } else if (c.drilldown === "boards") {
+    d.innerHTML = `<div class="card"><h2>Solved spots <span class="sub">— click a board to walk its MES node by node (flop → turn card → river)</span></h2><div id="mes-spots" class="sub">loading…</div></div><div id="mes-walk"></div>`;
+    loadMesSpots();
+  } else if (c.drilldown === "log") {
+    d.innerHTML = `<div class="card sub">The graded view of this log — MES vs GTO, bb at stake, what you did — is the <a class="ev-link" href="/sources/grading" onclick="go('/sources/grading');return false">Live grading</a> pane.</div>`;
+  }
+  // answer trail for this source
+  const qs = c.id === "gtow-library" ? "tier=library-exact,library-snap,far-snap" : c.sourceKeys?.length ? `source=${c.sourceKeys.join(",")}` : "failed=1";
+  try {
+    const j = await (await fetch(`/api/dashboard/sources/answers?days=60&limit=80&${qs}`)).json();
+    const rows = (j.answers || []).map((a) => `<tr data-id="${a.dbId ?? ""}" ${a.dbId ? "" : 'class="src-static"'}>
+      <td>${fmtT(a.ts)}</td><td>${esc(a.heroPos ?? "?")} ${cardsHtml(a.heroCards ? a.heroCards.match(/.{2}/g) : [])}</td>
+      <td class="mono">${esc(a.street ?? "")}${a.board ? ` ${esc(a.board)}` : ""}</td>
+      <td>${a.tier ? `<span class="chip">${esc(a.tier)}</span>` : '<span class="chip crit">failed</span>'}</td>
+      <td>${a.text ? esc(a.text) : `<span class="sub">${esc(a.failReason ?? "")}</span>`}</td>
+      <td class="mono">${esc(a.chart ?? "")}</td><td class="num">${fmtMs(a.latencyMs)}</td></tr>`).join("");
+    $("src-detail-answers").innerHTML = rows
+      ? `<div class="scroll"><table><thead><tr><th>when</th><th>hand</th><th>node</th><th>tier</th><th>answer</th><th>chart</th><th class="num">latency</th></tr></thead><tbody>${rows}</tbody></table></div><div class="sub" style="margin-top:6px">${j.total} in the last 60 days${j.total > 80 ? ", showing 80" : ""}</div>`
+      : '<span class="sub">no answers from this source in the last 60 days</span>';
+    $("src-detail-answers").querySelectorAll("tr[data-id]").forEach((tr) => { if (tr.dataset.id) tr.onclick = () => go(`/hands/${tr.dataset.id}`); });
+  } catch (e) { $("src-detail-answers").innerHTML = '<span class="warn">answer log unavailable</span>'; }
+}
+
+function renderRegistry() {
+  const el = $("src-registry");
+  const card = (c) => `
+    <div class="src click" data-id="${c.id}">
+      <div class="head"><span class="dot ${c.state}"></span><h3>${esc(c.label)}</h3>${c.mode ? `<span class="mode ${c.mode}">${c.mode.toUpperCase()}</span>` : ""}</div>
+      <div class="sub">${esc(c.stateText)}</div>
+      <div class="tiers">${c.tiers.map((t) => `<span class="chip${c.state === "off" ? " dim" : ""}">${esc(t)}</span>`).join("")}</div>
+      <dl><dt>routes</dt><dd>${esc(c.routes)}</dd>${c.facts.map(([k, val]) => `<dt>${esc(k)}</dt><dd${/[\\/]/.test(val) && !/ /.test(val.slice(0, 20)) ? ' class="mono"' : ""}>${esc(val)}</dd>`).join("")}</dl>
+      ${c.caveats.map((x) => `<div class="caveat">⚠ ${esc(x)}</div>`).join("")}
+      <div class="foot">
+        <span><span class="big num">${c.answers30d}</span> <span class="k">answers / 30d</span></span>
+        ${c.p50Ms != null ? `<span><span class="big num">${fmtMs(c.p50Ms)}</span> <span class="k">p50</span></span>` : ""}
+        ${c.lastTs ? `<span class="k">last ${fmtAgo(c.lastTs)}</span>` : ""}
+        ${spark(c.byDay, c.mode === "mes")}
+      </div>
+    </div>`;
+  el.innerHTML = `
+    <p class="sub" style="margin:0 0 10px">Every source a Study Answer can come from: what it is routing for right now, its freshness, and how many live answers it produced in the last 30 days. Click a card for its page.</p>
+    <div class="reg">${SRC.cards.map(card).join("")}</div>`;
+  el.querySelectorAll(".src").forEach((d) => d.onclick = () => go(`/sources/registry/${d.dataset.id}`));
+}
+
+/* ---- strategy matrix ---- */
+async function loadMatrix() {
+  const el = $("src-matrix");
+  let j;
+  try { j = await (await fetch("/api/dashboard/sources/matrix")).json(); } catch (e) { el.innerHTML = '<div class="card warn">matrix unavailable</div>'; return; }
+  srcLoaded.matrix = true;
+  const m = j.matrix;
+  const realized = j.realized || {};
+  const rl = (mode) => { const r = realized[mode]; return r && r.bb100 != null ? `<td class="ev ${r.bb100 > 0 ? "p" : "n"}">${r.bb100 > 0 ? "+" : ""}${r.bb100} <span class="se">${r.knownHands} h</span></td>` : '<td class="ev z">no sessions yet</td>'; };
+  const missing = (j.missing || []).length ? `<div class="card warn">${j.missing.map(esc).join("<br>")}</div>` : "";
+  if (!m) { el.innerHTML = missing + '<div class="card sub">The matrix artifact has not been built. Run <code>analysis/pipeline/limp_study/strategy_matrix.py</code>.</div>'; return; }
+  const modeTag = (k) => k === "exploit" ? '<span class="mode mes">MES</span> exploit' : k === "mes" ? '<span class="mode mes">MES</span>' : k === "chart" ? '<span class="mode gto">GTO</span> charts' : k === "gto" ? '<span class="mode gto">GTO</span> AI chain' : esc(k);
+  const cell = (c, key) => {
+    if (!c) return evCell(null, { why: "—" });
+    if (c.kind === "legs") return `<td class="ev ${c.pre > 0 ? "p" : "n"}">${c.pre > 0 ? "+" : ""}${c.pre} <span class="se">pre</span> ⊕ ${c.post > 0 ? "+" : ""}${c.post} <span class="se">${esc(c.postTag || "raw")}</span></td>`;
+    if (c.v == null) return evCell(null, { why: c.why || "pending", reuse: c.reuse });
+    return evCell(c.v, { reuse: c.reuse, se: c.se, tag: c.tag });
+  };
+  const rows = (m.groups || []).map((g) => `<tr class="row-group"><td colspan="10">${esc(g.title)}</td></tr>` +
+    g.rows.map((r) => `<tr class="src-static">
+      <td>${r.indent ? `<span class="sub" style="padding-left:24px">${esc(r.label || "")}</span>` : modeTag(r.preflop)}</td>
+      <td class="sub">${r.indent ? "" : "→"}</td>
+      <td>${r.indent ? "" : modeTag(r.postflop) + (r.mesGen ? ` ${esc(r.mesGen)}` : "")}</td>
+      <td>${esc(r.family || "")}</td>
+      ${cell(r.cells?.norake)}${cell(r.cells?.nl200)}${cell(r.cells?.nl25)}
+      ${r.haircut ? evCell(-Math.abs(r.haircut.v), { tag: r.haircut.tag }) : evCell(null, { why: r.haircutWhy || "n/a" })}
+      ${r.realizedMode ? rl(r.realizedMode) : '<td class="ev z">—</td>'}
+      <td>${(r.evidence || []).map((e) => `<a class="ev-link" href="#" title="${esc(e.path || "")}" onclick="return false">${esc(e.label)}${e.date ? ` · ${esc(e.date)}` : ""}</a>`).join(" · ")}${(r.flags || []).map((f) => ` <span class="chip ${f.kind || ""}">${esc(f.text)}</span>`).join("")}${r.note ? `<div class="sub">${esc(r.note)}</div>` : ""}</td>
+    </tr>`).join("")).join("");
+  const chain = (m.evidenceChain || []);
+  el.innerHTML = `${missing}
+    <div class="banner">📐 Each row is one way to play the whole hand. Columns are the same corpus priced under three rake models. A <b>combined</b> cell is one corpus walk that plays both legs; a <b>legs</b> cell (⊕) is two separate numbers that must not be added.</div>
+    <div class="card"><h2>Strategy matrix <span class="sub">— bb/100 · 3-max Zone · ${esc(m.inputs?.corpusNote || "")} · built ${esc(m.generatedAt || "?")}</span></h2>
+      <div class="scroll"><table><thead><tr><th>preflop</th><th></th><th>postflop</th><th>family</th><th class="num">no rake</th><th class="num">NL200 cap 1bb</th><th class="num">NL25 cap 4bb</th><th class="num">coverage haircut</th><th class="num">realized bb/100</th><th>evidence</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="legend"><span><span class="sw" style="background:rgba(97,208,149,.14);border:1px solid #61d095"></span> positive</span><span><span class="sw" style="background:rgba(255,115,115,.14);border:1px solid #ff7373"></span> negative</span><span><span class="sw" style="background:rgba(143,161,182,.10);border:1px solid #8fa1b6"></span> no number yet, and why</span><span><span class="sw" style="border-left:2px dashed #2c3a4d"></span> reused from the 100bb ign200 state</span><span>⊕ two legs, do not sum</span><span>realized = hero's own sessions, by the strategy mode logged in them</span></div>
+    </div>
+    ${chain.length ? `<div class="card"><h2>What moves a cell <span class="sub">— the evidence chain, oldest to newest</span></h2><div class="scroll"><table class="src-static"><thead><tr><th>step</th><th>artifact</th><th>date</th><th>what it changed</th></tr></thead><tbody>${chain.map((e) => `<tr><td>${esc(e.step)}</td><td class="mono">${esc(e.artifact)}</td><td>${esc(e.date || "")}</td><td>${esc(e.what)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
+}
+
+/* ---- live grading ---- */
+async function loadGrading() {
+  const el = $("src-grading");
+  let j;
+  try { j = await (await fetch("/api/dashboard/sources/grading?days=60")).json(); } catch (e) { el.innerHTML = '<div class="card warn">grading unavailable</div>'; return; }
+  srcLoaded.grading = true;
+  const s = j.summary;
+  const tile = (k, val, sub) => `<div class="tile"><div class="v num">${val}</div><div class="k">${k}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+  const pct = (x) => x == null ? "—" : `${x}%`;
+  const rb = s.realizedByMode || {};
+  const modeLine = ["exploit", "chart"].map((m) => rb[m] ? `${m === "exploit" ? "MES" : "GTO"} ${rb[m].bb100 > 0 ? "+" : ""}${rb[m].bb100 ?? "—"} (${rb[m].knownHands} h)` : null).filter(Boolean).join(" · ");
+  const famRows = Object.entries(j.byFamily).sort((a, b) => b[1].answers - a[1].answers).map(([f, x]) => {
+    const n = x.answers; const w = (k) => Math.round(100 * x[k] / n);
+    return `<tr class="src-static"><td>${esc(f)}</td><td class="num">${n}</td><td><div class="bar"><i class="agree" style="width:${w("agree")}%"></i><i class="mes" style="width:${w("mesOnly")}%"></i><i class="gto" style="width:${w("gtoOnly")}%"></i><i class="unk" style="width:${w("unknown")}%"></i></div></td>${x.atStakeN ? evCell(x.atStakeBb / x.atStakeN) : evCell(null, { why: "—" })}<td class="num">${x.graded ? `${x.followedMes} / ${x.graded}` : '<span class="sub">no archived hand to grade</span>'}</td></tr>`;
+  }).join("");
+  const sessRows = (j.sessions || []).slice(0, 12).map((x) => `<tr class="src-static"><td>${fmtT(x.start)} · ${esc(x.stakes ?? "?")}</td><td>${x.mode === "exploit" ? '<span class="mode mes">MES</span>' : x.mode === "chart" ? '<span class="mode gto">GTO</span>' : '<span class="chip dim">unknown</span>'}</td><td class="num">${x.hands}</td><td class="num">${x.answered}</td>${evCell(x.netBb, {})}${evCell(x.bb100, {})}</tr>`).join("");
+  const trail = (j.trail || []).slice(0, 80).map((g) => `<tr data-id="${g.dbId ?? ""}" ${g.dbId ? "" : 'class="src-static"'}>
+      <td>${fmtT(g.ts)}</td><td>${esc(g.heroPos ?? "?")} ${cardsHtml(g.heroCards ? g.heroCards.match(/.{2}/g) : [])} · ${esc(g.stakes ?? "")}</td><td class="mono">${esc(g.node)}</td>
+      <td><span class="chip${g.source === "gtow-api-postflop" ? " dim" : ""}">${esc(g.tier ?? "?")}</span></td>
+      <td>${g.mesPick ? `<span class="mode mes">${esc(g.mesPick)}</span>` : '<span class="sub">no MES</span>'}</td>
+      <td>${g.gtoPick ? `<span class="mode gto">${esc(g.gtoPick)}</span>` : '<span class="sub">—</span>'}</td>
+      ${g.disagreed === false ? '<td class="ev z">agree</td>' : g.disagreed ? evCell(g.atStakeBb, { why: "?" }) : '<td class="ev z">—</td>'}
+      <td>${g.heroDid ? `${esc(g.heroDid)} ${g.followed === "neither" ? "✗" : g.followed ? "✓" : ""}` : '<span class="sub">—</span>'}</td>
+      <td class="sub">${g.band ? `${g.band[0]}–${g.band[1]}` : ""}</td></tr>`).join("");
+  const none = j.provenanceRows === 0 ? `<div class="banner">🎯 No answers with provenance yet — MES vs GTO picks, EV at stake and strategy mode are logged from 2026-09-03 on. Play a session with Study Answers on and this pane fills itself in.</div>` : "";
+  el.innerHTML = `${none}
+    <div class="tiles">
+      ${tile("answers", s.answers, `${j.days} days`)}
+      ${tile("MES ≠ GTO", pct(s.disagreementRate), `${s.disagreements} of ${s.withBothPicks} with both picks`)}
+      ${tile("bb at stake / disagreement", s.meanAtStakeBb == null ? "—" : (s.meanAtStakeBb > 0 ? "+" : "") + s.meanAtStakeBb, "mean MES ev_gain")}
+      ${tile("you followed MES", pct(s.followedMesWhenDisagreed), "when they disagreed")}
+      ${tile("realized by mode", modeLine || "—", "bb/100 of your sessions")}
+    </div>
+    <div class="g2">
+      <div class="card"><h2>Disagreement by family</h2><div class="scroll"><table><thead><tr><th>family</th><th class="num">answers</th><th>agree / MES-only / GTO-only / unknown</th><th class="num">bb at stake</th><th class="num">followed MES</th></tr></thead><tbody>${famRows || '<tr class="src-static"><td colspan="5" class="sub">nothing logged in this window</td></tr>'}</tbody></table></div>
+        <div class="legend"><span><span class="sw" style="background:#3a4453"></span> same action</span><span><span class="sw" style="background:#cf6a24"></span> disagreed, MES was primary</span><span><span class="sw" style="background:#2f78bd"></span> disagreed, GTO was primary</span><span><span class="sw" style="background:#1a212c"></span> one pick only</span></div></div>
+      <div class="card"><h2>Realized by session &amp; mode</h2><div class="scroll"><table><thead><tr><th>session</th><th>mode</th><th class="num">hands</th><th class="num">answered</th><th class="num">net bb</th><th class="num">bb/100</th></tr></thead><tbody>${sessRows}</tbody></table></div>
+        <p class="sub" style="margin:8px 0 0">Mode per session = the strategy mode logged on the majority of its answers. Sessions before the provenance logging show as unknown.</p></div>
+    </div>
+    <div class="card"><h2>Decision trail <span class="sub">— newest first · click a row to open the hand</span></h2><div class="scroll"><table><thead><tr><th>when</th><th>hand</th><th>node</th><th>tier</th><th>MES</th><th>GTO</th><th class="num">at stake</th><th>you did</th><th>band</th></tr></thead><tbody>${trail || '<tr class="src-static"><td colspan="9" class="sub">no answers logged</td></tr>'}</tbody></table></div></div>`;
+  el.querySelectorAll("tr[data-id]").forEach((tr) => { if (tr.dataset.id) tr.onclick = () => go(`/hands/${tr.dataset.id}`); });
+}
+
+/* ---- roadmap ---- */
+async function loadRoadmap() {
+  const el = $("src-roadmap");
+  let j;
+  try { j = await (await fetch("/api/dashboard/sources/roadmap")).json(); } catch (e) { el.innerHTML = '<div class="card warn">roadmap unavailable</div>'; return; }
+  srcLoaded.roadmap = true;
+  const st = (s) => s === "built" ? '<span class="st"><span class="dot good"></span>built</span>' : s === "partial" ? '<span class="st"><span class="dot warn"></span>flop only</span>' : '<span class="st"><span class="dot off"></span>not built</span>';
+  const gen = (g) => Object.entries(g || {}).map(([k, n]) => `<span class="chip ${k === "refit" ? "good" : k === "v2" ? "warn" : k === "unknown" ? "dim" : ""}">${esc(k)} ×${n}</span>`).join("") || "—";
+  const fam = (j.families || []).map((f) => `<tr class="src-static"><td><b>${esc(f.label)}</b><div class="sub">${esc(f.shape)}</div></td>
+      <td><span class="reach"><i class="${f.built ? "built" : ""}" style="width:${Math.round(4 * f.reachPct)}px"></i><span class="num">${f.reachPct}%</span></span></td>
+      <td>${st(f.status)}</td><td>${f.built ? `${f.boards} boards · ${gen(f.generations)}` : "—"}</td>
+      ${f.meanEvGainPerArrival != null ? evCell(f.meanEvGainPerArrival, { tag: f.upliftBb100 != null ? `${f.upliftBb100 > 0 ? "+" : ""}${f.upliftBb100} bb/100` : null }) : evCell(null, { why: f.status === "partial" ? "inside the flop number" : "no solve yet" })}
+      <td>${esc(f.whatItTakes)}${f.note ? `<div class="sub">${esc(f.note)}</div>` : ""}</td><td class="sub">${esc(f.cost)}</td></tr>`).join("");
+  const pre = (j.preflop || []).map((p) => `<tr class="src-static"><td><b>${esc(p.label)}</b></td><td>${esc(p.reach)}</td><td><span class="st"><span class="dot ${p.status}"></span>${esc(p.statusText)}</span></td><td>${esc(p.why)}</td><td>${esc(p.whatItTakes)}</td></tr>`).join("");
+  el.innerHTML = `
+    <div class="banner">🗺 Where the next bb/100 is. Reach is the share of hero's flops (or hands) each item covers, from the same corpus the matrix uses, so an unbuilt row already says what it would be worth to build.</div>
+    <div class="card"><h2>Postflop families</h2><div class="scroll"><table><thead><tr><th>family</th><th>reach</th><th>status</th><th>served</th><th class="num">edge / arrival</th><th>what it takes</th><th>cost</th></tr></thead><tbody>${fam}</tbody></table></div></div>
+    <div class="card"><h2>Preflop &amp; coverage</h2><div class="scroll"><table><thead><tr><th>item</th><th>reach</th><th>status</th><th>why it matters</th><th>what it takes</th></tr></thead><tbody>${pre}</tbody></table></div></div>`;
+}
+
+/* ================= routing =================
+   Real paths, served by the API for every one of them (index.ts):
+     /hands            the table            /hands/:dbId              one hand
+     /analytics                             /review                   Replay Review (embeds /replay)
+     /sources          → /sources/registry  /sources/:pane            registry | matrix | grading | roadmap
+     /sources/registry/:id                  one source's page
+   Old #hand/N links still resolve. */
+let PATH = { view: "hands", pane: null, id: null };
+const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay" };
+const SRC_PANES = ["registry", "matrix", "grading", "roadmap"];
+
+function parsePath() {
+  const legacy = location.hash.match(/^#hand\/(\d+)/);
+  if (legacy) return { view: "hands", pane: null, id: legacy[1] };
+  const seg = location.pathname.split("/").filter(Boolean);
+  const view = seg[0] || "hands";
+  if (view === "hands") return { view, pane: null, id: seg[1] && /^\d+$/.test(seg[1]) ? seg[1] : null, node: seg[2] === "node" && /^\d+$/.test(seg[3] ?? "") ? Number(seg[3]) : null };
+  if (view === "sources") {
+    const pane = SRC_PANES.includes(seg[1]) ? seg[1] : "registry";
+    return { view, pane, id: pane === "registry" && seg[2] ? decodeURIComponent(seg[2]) : null };
+  }
+  if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
+  if (view === "analytics" || view === "review") return { view, pane: null, id: null };
+  return { view: "hands", pane: null, id: null };
+}
+function canonical(p) {
+  if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
+  if (p.view === "sources") return p.id ? `/sources/registry/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
+  if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}` : "/sessions";
+  return `/${p.view}`;
+}
+function go(path) {
+  if (location.pathname + location.hash === path) { route(); return; }
+  history.pushState({}, "", path);
+  route();
+}
+function route() {
+  if (PLAY) { clearInterval(PLAY); PLAY = null; }
+  PATH = parsePath();
+  const want = canonical(PATH);
+  if (location.pathname + location.hash !== want) history.replaceState({}, "", want);
+  for (const [v, tab] of Object.entries(TABS)) $(tab).classList.toggle("on", v === PATH.view);
+  $("view-hands").style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
+  $("view-detail").style.display = PATH.view === "hands" && PATH.id ? "" : "none";
+  $("view-analytics").style.display = PATH.view === "analytics" ? "" : "none";
+  $("view-sessions").style.display = PATH.view === "sessions" ? "" : "none";
+  $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
+  $("view-replay").style.display = PATH.view === "review" ? "" : "none";
+  document.title = PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
+    : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
+    : PATH.view === "sessions" ? `${PATH.id ? `Session ${PATH.id}` : "Sessions"} · Study Dashboard`
+    : `${PATH.view[0].toUpperCase()}${PATH.view.slice(1)} · Study Dashboard`;
+  if (PATH.view === "hands") {
+    if (PATH.id) {
+      const id = Number(PATH.id), node = PATH.node;
+      // same hand already on screen: only the node panel changes
+      if (DETAIL && DETAIL.dbId === id && $("view-detail").innerHTML.length > 200) { if (node != null) openAnswerNode(node); }
+      else showDetail(id).then(() => { if (node != null && DETAIL?.dbId === id) openAnswerNode(node); });
+    } else if (!HANDS.length) loadHands();
+  }
+  if (PATH.view === "analytics") loadAnalytics();
+  if (PATH.view === "sessions") { if (PATH.id) loadSession(PATH.id); else loadSessions(); }
+  if (PATH.view === "sources") { srcPane = PATH.pane; if (SRC) showSrcPane(PATH.pane, PATH.id); else loadSources(); }
+  if (PATH.view === "review" && !$("replay-frame").src) $("replay-frame").src = "/replay"; // lazy, same origin
+}
+window.onpopstate = route;
+window.onhashchange = route; // legacy #hand/N
+for (const [v, tab] of Object.entries(TABS)) $(tab).onclick = () => go(v === "sources" ? "/sources/registry" : `/${v}`);
+
 route();
 setInterval(() => {
-  if ($("view-hands").style.display !== "none" && !location.hash) loadHands();
+  if (PATH.view === "hands" && !PATH.id) loadHands();
+  if (PATH.view === "sources" && PATH.pane === "registry" && !PATH.id) loadSources();
 }, 15000);
 </script>
 </body>
