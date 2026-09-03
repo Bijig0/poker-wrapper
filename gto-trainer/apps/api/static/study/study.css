@@ -236,7 +236,7 @@ pre {
 .freq .pc { width: 48px; text-align: right; font-size: 10px; }
 .dual { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 5px; padding: 5px; margin-top: 5px; font-size: 11px; }
 .tag { border-radius: 4px; padding: 2px 6px; font-family: ui-monospace, monospace; font-weight: 700; color: #fff; }
-.tag.mes { background: #c2410c; } .tag.gto { background: #0369a1; }
+.tag.mes { background: #e8772e; } .tag.gto { background: #3b8bd8; } /* = MODE_COLOR in answer-panel.js */
 .differs { background: rgba(255,206,86,.2); color: var(--warn); border-radius: 3px; padding: 0 4px; font-size: 10px; }
 .chip { background: var(--sunk); border-radius: 4px; padding: 2px 6px; font: 10px ui-monospace, monospace; }
 
@@ -299,4 +299,24 @@ pre {
 .grid-size { display: flex; align-items: center; gap: 4px; margin: 2px 0 6px; }
 .grid-size button { background: rgba(255,255,255,.05); border: 1px solid var(--line); color: var(--dim); border-radius: 4px; padding: 1px 7px; font-size: 10px; cursor: pointer; }
 .grid-size button.on { color: #fff; border-color: var(--accent); background: rgba(255,255,255,.1); }
+
+/* ---- verdict banner, roll bar, confidence, stakes, hero mix ---- */
+.banner { border-left: 4px solid #888; background: rgba(255,255,255,.04); padding: 7px 10px; margin: 2px 0 8px; font-size: 13px; line-height: 1.4; }
+.banner b { font-family: ui-monospace, monospace; }
+.rollbar { position: relative; height: 14px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,.06); margin: 4px 0 2px; }
+.rollbar i { position: absolute; top: 0; bottom: 0; display: block; }
+.rollbar b { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #000; }
+.rollbar-sub { font-size: 10px; margin-bottom: 6px; }
+.conf, .stakes { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.4; }
+.conf .k, .stakes .k { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); margin-right: 6px; }
+.conf.warn { color: #e6b35a; }
+.stakes { color: #dfe6ee; }
+.stakes b { color: #fff; }
+.tag { color: #fff; }
+.dual .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.legend-mode { padding-right: 8px; margin-right: 4px; border-right: 1px solid var(--line); }
+.c169 { position: relative; overflow: visible; }
+.hero-mix { display: none; position: absolute; left: 50%; bottom: calc(100% + 4px); transform: translateX(-50%); z-index: 5; background: #0d141c; border: 1px solid var(--accent); border-radius: 5px; padding: 4px 7px; font: 10px ui-monospace, monospace; white-space: nowrap; color: #dfe6ee; pointer-events: none; }
+.hero-mix.show { display: block; }
+.hero-mix b { color: #ffd35c; margin-right: 6px; }
 

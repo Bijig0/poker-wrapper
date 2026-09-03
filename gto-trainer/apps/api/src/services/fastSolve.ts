@@ -56,6 +56,12 @@ export type FastSolveResult =
       chartDecision?: WeightedPick;
       exploitTag?: string;
       strategyMode?: "exploit" | "chart";
+      /** Postflop MES overlay provenance: the solved board that answered, the
+       *  measured per-arrival ev_gain of that spot (bb), and whether the
+       *  actual flop was that board or a nearest-texture mapping. */
+      mesBoard?: string;
+      mesEvGainBb?: number;
+      mesExact?: boolean;
       street: string;
       setId: string;
       gametype: string;
@@ -965,6 +971,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
       chartDecision: mes.chartDecision ?? undefined,
       exploitTag: mes.tag,
       strategyMode: "exploit",
+      mesBoard: mes.board, mesEvGainBb: mes.evGainBb, mesExact: mes.exact,
       approx: !mes.exact || undefined,
       warning: mes.warning,
     };
@@ -978,6 +985,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
     res.chartDecision = res.decision ?? mes.chartDecision ?? undefined;
     res.exploitTag = mes.tag;
     res.strategyMode = mode;
+    res.mesBoard = mes.board; res.mesEvGainBb = mes.evGainBb; res.mesExact = mes.exact;
     if (mes.notInRange && mode === "exploit") {
       res.warning = [res.warning, "Hero's combo is outside the exploit flop range — equilibrium answer shown."]
         .filter(Boolean).join(" ");

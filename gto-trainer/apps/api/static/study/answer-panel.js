@@ -74,11 +74,95 @@ export function strategyTabs() {
   mk("chart", "GTO");
   const paint = () => {
     const m = getStrategyMode();
-    wrap.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+    wrap.querySelectorAll("button").forEach((b) => {
+      const on = b.dataset.mode === m;
+      b.classList.toggle("on", on);
+      // the same MES-orange / GTO-blue as every tag, legend and roll bar
+      b.style.background = on ? MODE_COLOR[b.dataset.mode] : "";
+      b.style.borderColor = MODE_COLOR[b.dataset.mode];
+    });
   };
   paint();
   window.addEventListener(EVENT, paint);
   return wrap;
+}
+
+/* ---------------------------------------------------- verdict helpers --- */
+export const MODE_COLOR = { exploit: "#e8772e", chart: "#3b8bd8" };   // MES orange, GTO blue
+const modeName = (m) => m === "exploit" ? "MES" : m === "chart" ? "GTO" : "?";
+
+/** The roll, drawn: the 0-100 strip with each action's band coloured and a
+ *  marker where the roll landed. Bands are built the way pickWeightedAction
+ *  builds them — positive-frequency actions in array order, cumulative. */
+function rollBar(actions, decision, labelsForColor) {
+  const pos = (actions ?? []).filter((a) => a.frequency > 0);
+  const total = pos.reduce((t, a) => t + a.frequency, 0) || 1;
+  let acc = 0;
+  const segs = pos.map((a) => {
+    const w = (a.frequency / total) * 100;
+    const seg = `<i style="left:${acc}%;width:${w}%;background:${actionColor(a.action, labelsForColor)}" title="${esc(a.action)} ${(w).toFixed(1)}%"></i>`;
+    acc += w;
+    return seg;
+  }).join("");
+  const roll = decision?.roll;
+  const marker = roll == null ? "" : `<b style="left:${Math.min(99.5, Math.max(0, roll))}%" title="rolled ${Number(roll).toFixed(1)}"></b>`;
+  const pure = pos.length === 1;
+  return `<div class="rollbar" title="${pure ? "pure pick — one action holds the whole strip" : "the random roll (0-100) picks the band it lands in"}">${segs}${marker}</div>` +
+    `<div class="rollbar-sub sub">${pure ? "pure pick — no roll needed" :
+      roll == null ? "bands = the mix; no roll recorded" :
+      `rolled <b class="mono">${Number(roll).toFixed(1)}</b> → landed in <b class="mono">${esc(decision.action)}</b>`}</div>`;
+}
+
+/** One sentence a newcomer can act on (1). */
+function verdictBanner({ live, s, isEx, nowPick, otherPick, agree }) {
+  const mode = modeName(s.strategyMode);
+  const other = modeName(isEx ? "chart" : "exploit");
+  let text;
+  if (live?.pick) {
+    if (live.pick === nowPick) text = `You picked <b>${esc(live.pick)}</b> and the tool still says <b>${esc(nowPick)}</b> (${mode}).`;
+    else {
+      const sameChart = live.chart && (s.gametype ?? s.setId) && live.chart === (s.gametype ?? s.setId);
+      const sameMode = live.strategy && s.strategyMode && live.strategy === s.strategyMode;
+      const why = sameChart && sameMode ? "same chart and strategy — it was a mixed-strategy roll, both are right"
+        : live.strategy && !sameMode ? `you were shown ${modeName(live.strategy)} then; ${mode} is primary now`
+        : "the chart or pipeline changed since";
+      text = `You picked <b>${esc(live.pick)}</b>; the tool now says <b>${esc(nowPick)}</b> (${mode}) — ${why}.`;
+    }
+  } else {
+    text = `The tool says <b>${esc(nowPick)}</b> (${mode}).`;
+  }
+  if (otherPick != null) {
+    text += agree ? ` ${other} agrees.` : ` ${other} would <b>${esc(otherPick)}</b>.`;
+  }
+  return `<div class="banner" style="border-left-color:${MODE_COLOR[s.strategyMode] ?? "#888"}">${text}</div>`;
+}
+
+/** How much to trust this answer, always shown (5). */
+function confidenceLine(s) {
+  const bits = [];
+  const kind = s.source === "pool-exploit-preflop" ? "pool read — best response to measured frequencies (not a floor)"
+    : s.source === "mes-postflop" ? "pool read — locked-villain solve (not a floor)"
+    : s.source === "hrc-3max-preflop" ? "equilibrium chart — an unexploitable floor"
+    : s.source === "gtow-api-postflop" ? "equilibrium AI solve — a floor" : (s.source ?? "unknown source");
+  bits.push(kind);
+  const exact = s.tier === "far-snap" ? "size snapped FAR from the tree — approximate"
+    : s.tier === "library-snap" ? "bet size snapped to the nearest tree size"
+    : s.approx ? "approximate (mapped/fallback)" : "exact node";
+  bits.push(exact);
+  if (s.mesBoard) bits.push(`solved board ${s.mesBoard}${s.mesExact ? "" : " (nearest texture)"}`);
+  if (s.tier) bits.push(s.tier);
+  const cls = s.tier === "far-snap" || (s.approx && s.source !== "mes-postflop") ? "conf warn" : "conf";
+  return `<div class="${cls}"><span class="k">confidence</span> ${bits.map(esc).join(" · ")}</div>` +
+    (s.warning ? `<div class="conf warn"><span class="k">caveat</span> ${esc(s.warning)}</div>` : "");
+}
+
+/** Postflop: what this decision is worth (7). */
+function stakesLine(s) {
+  if (s.mesEvGainBb == null) return "";
+  const v = Number(s.mesEvGainBb);
+  return `<div class="stakes"><span class="k">what's at stake</span> playing the pool MES here instead of GTO is worth ` +
+    `<b class="mono">${v >= 0 ? "+" : ""}${v.toFixed(2)} bb</b> per arrival on this texture` +
+    `${s.mesExact ? "" : ` (solved board ${esc(s.mesBoard ?? "?")}, nearest to this flop)`}</div>`;
 }
 
 /* ---------------------------------------------------------- chart grid --- */
@@ -152,6 +236,10 @@ export function chartNodeGrid(host, { source, line, heroClass }) {
     host.appendChild(sizer);
     const legend = document.createElement("div");
     legend.className = "legend";
+    const modeChip = document.createElement("span");
+    modeChip.className = "legend-mode";
+    modeChip.innerHTML = `<i style="background:${MODE_COLOR.chart}"></i>GTO chart node`;
+    legend.appendChild(modeChip);
     labels.forEach((lab) => {
       const s = document.createElement("span");
       s.innerHTML = `<i style="background:${actionColor(lab, labels)}"></i>${lab}`;
@@ -199,7 +287,18 @@ export function chartNodeGrid(host, { source, line, heroClass }) {
         acc += f;
       }
       b.style.background = stops.length ? `linear-gradient(135deg, ${stops.join(",")})` : "#333";
-      if (key === heroClass) b.classList.add("hero");
+      if (key === heroClass) {
+        b.classList.add("hero");
+        // hero's own mix rides on the cell so it's readable without a click
+        const mix = labels.map((lab) => `${lab} ${(cell.actions[lab] ?? 0).toFixed(0)}%`)
+          .filter((x) => !x.endsWith(" 0%")).join(" · ");
+        const tip = document.createElement("div");
+        tip.className = "hero-mix";
+        tip.innerHTML = `<b>${key} (you)</b> ${esc(mix)}`;
+        b.appendChild(tip);
+        b.onmouseenter = () => tip.classList.add("show");
+        b.onmouseleave = () => tip.classList.remove("show");
+      }
       b.title = `${key} — ` + labels
         .map((lab) => `${lab} ${(cell.actions[lab] ?? 0).toFixed(0)}%`)
         .filter((s) => !s.endsWith(" 0%")).join(", ");
@@ -394,7 +493,7 @@ export function mountAnswerPanel(host, { session, seq, tick, auto }) {
     const nowChart = s?.gametype ?? s?.setId ?? null;
     const fmtRoll = (roll, band) => {
       if (roll == null) return "no roll (pure pick)";
-      if (band && band[0] <= 0.05 && band[1] >= 99.95) return "pure pick — 100% of the mix, no roll needed";
+      if (band && band[1] - band[0] >= 99.5) return `effectively pure — ${(band[1] - band[0]).toFixed(1)}% of the mix, the roll couldn't miss`;
       return `rolled ${Number(roll).toFixed(1)}` + (band ? ` in [${band[0].toFixed(1)}–${band[1].toFixed(1)})` : "");
     };
     const modeTag = (m) => m === "exploit" ? `<span class="tag mes">MES</span>` : m === "chart" ? `<span class="tag gto">GTO</span>` : "";
@@ -412,44 +511,40 @@ export function mountAnswerPanel(host, { session, seq, tick, auto }) {
       const nowPick = s.decision?.action ?? "—";
       const otherPick = isEx ? s.chartDecision?.action : s.exploitDecision?.action;
       const agree = otherPick != null && otherPick === nowPick;
+      const labelsForColor = (s.actions ?? []).map((a) => a.action);
+      const modeTagC = (m) => m ? `<span class="tag" style="background:${MODE_COLOR[m] ?? "#666"}">${modeName(m)}</span>` : "";
+      const banner = verdictBanner({ live, s, isEx, nowPick, otherPick, agree });
       let verdict = `<table class="verdict"><tbody>`;
       if (live) {
         verdict += `<tr><th>LIVE game picked</th><td><b class="mono big">${esc(live.pick ?? live.text)}</b></td>` +
-          `<td class="sub">${modeTag(live.strategy)} ${esc(fmtRoll(live.roll, live.band))}` +
+          `<td class="sub">${modeTagC(live.strategy)} ${esc(fmtRoll(live.roll, live.band))}` +
           (live.chart ? ` · chart <span class="mono">${esc(live.chart)}</span>` : "") +
           (live.tier ? ` · ${esc(live.tier)}` : "") + `</td></tr>`;
       } else {
         verdict += `<tr><th>LIVE game picked</th><td colspan="2" class="sub">no live answer recorded at this tick</td></tr>`;
       }
       verdict += `<tr><th>NOW picks</th><td><b class="mono big">${esc(nowPick)}</b></td>` +
-        `<td class="sub">${modeTag(s.strategyMode)} ${esc(fmtRoll(s.decision?.roll, s.decision?.band))}` +
+        `<td class="sub">${modeTagC(s.strategyMode)} ${esc(fmtRoll(s.decision?.roll, s.decision?.band))}` +
         (nowChart ? ` · chart <span class="mono">${esc(nowChart)}</span>` : "") +
         (s.tier ? ` · ${esc(s.tier)}` : "") + `</td></tr>`;
       verdict += `</tbody></table>`;
-      if (live?.pick && s.decision?.action && live.pick !== s.decision.action) {
-        const sameChart = live.chart && nowChart && live.chart === nowChart;
-        const sameMode = live.strategy && s.strategyMode && live.strategy === s.strategyMode;
-        const why = sameChart && sameMode ? "same chart, same strategy — a different mixed-strategy roll"
-          : !sameMode && live.strategy ? `strategy differs (live ${live.strategy}, now ${s.strategyMode})`
-          : "different chart or the pipeline changed";
-        verdict += `<p class="differs">live ≠ now: ${esc(why)}</p>`;
-      }
+      verdict += rollBar(s.actions, s.decision, labelsForColor);
 
       // ---- clickable MES/GTO swap ----------------------------------------
       let extra = "";
       if (s.exploitDecision || s.chartDecision) {
         const swapTo = isEx ? "chart" : "exploit";
         extra += `<div class="dual">` +
-          `<span class="tag ${isEx ? "mes" : "gto"}">${isEx ? "MES" : "GTO"} · ${esc(nowPick)}</span>` +
-          `<button class="swap" data-mode="${swapTo}" title="switch the primary strategy and show its range + roll">` +
-          `${isEx ? "GTO" : "MES"} would: <b class="mono">${esc(otherPick ?? "(not covered)")}</b> ↗</button>` +
+          `<span class="tag" style="background:${MODE_COLOR[s.strategyMode] ?? "#666"}">${modeName(s.strategyMode)} · ${esc(nowPick)}</span>` +
+          `<button class="swap" data-mode="${swapTo}" style="border-color:${MODE_COLOR[swapTo]}" title="switch the primary strategy and show its range + roll">` +
+          `<span class="dot" style="background:${MODE_COLOR[swapTo]}"></span>${modeName(swapTo)} would: <b class="mono">${esc(otherPick ?? "(not covered)")}</b> ↗</button>` +
           (otherPick == null ? "" : agree
             ? `<span class="same">✓ same action in both — the ranges differ only in mix, not in this pick</span>`
-            : `<span class="sub">click to open the ${isEx ? "GTO" : "MES"} range and its roll</span>`) +
+            : `<span class="sub">click to open the ${modeName(swapTo)} range and its roll</span>`) +
           `</div>`;
       }
-      ans.innerHTML += verdict + rows + extra +
-        (s.warning ? `<p class="warn" style="font-size:10px">${esc(s.warning)}</p>` : "");
+      extra += stakesLine(s) + confidenceLine(s);
+      ans.innerHTML += banner + verdict + rows + extra;
       const swapBtn = ans.querySelector("button.swap");
       if (swapBtn) swapBtn.onclick = () => setStrategyMode(swapBtn.dataset.mode);
     } else {

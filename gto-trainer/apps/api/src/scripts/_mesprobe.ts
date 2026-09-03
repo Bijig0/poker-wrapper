@@ -26,7 +26,7 @@ async function probe(label: string, r: PanelRow[], strategy?: "exploit" | "chart
   if (!res.ok) { console.log(label, "FAIL:", res.reason.slice(0, 120)); return; }
   console.log(`\n### ${label}`);
   console.log("  source:", res.source, "| tier:", res.tier, "| mode:", res.strategyMode);
-  console.log("  tag:", res.exploitTag);
+  console.log("  tag:", res.exploitTag, "| mesBoard:", res.mesBoard, "| mesEvGainBb:", res.mesEvGainBb, "| exact:", res.mesExact);
   console.log("  actions:", res.actions.map((a) => `${a.action} ${a.frequency.toFixed(0)}%${a.ev != null ? ` (${a.ev}bb)` : ""}`).join("  "));
   console.log("  decision:", res.decision?.action, "| exploit:", res.exploitDecision?.action, "| chart:", res.chartDecision?.action);
   if (res.warning) console.log("  warning:", res.warning);
