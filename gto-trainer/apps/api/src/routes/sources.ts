@@ -6,6 +6,7 @@ import { answerLog, sourceForTier, type LoggedAnswer } from "../services/answerL
 import { getCatalog } from "../services/chartCatalog";
 import { mesPostflopInfo, mesSpots, mesFlopNode, mesTurnLines, mesTurnNode } from "../services/mesPostflop";
 import { extractLine } from "../services/mesRiver";
+import { fetchNode } from "../services/hrc3max";
 import { gtowApi } from "../services/gtowApi";
 import { HRC3MAX_BASE } from "../services/hrc3max";
 import { studyPoller } from "../services/studyPoller";
@@ -81,7 +82,7 @@ export interface SourceCard {
   p50Ms: number | null;
   lastTs: number | null;
   byDay: number[];
-  drilldown: "charts" | "boards" | "log" | null;
+  drilldown: "charts" | "boards" | "log" | "exploit" | null;
   /** answers.sqlite `source` value(s) this card owns — the detail view's answer trail filter. */
   sourceKeys?: string[];
 }
@@ -150,12 +151,14 @@ app.get("/registry", async (c) => {
         ["ranges", ranges.length ? `${ranges.length} derived range sets` : "—"],
         ["freshness", exploitFile.mtimeMs ? fmtAge(exploitFile.mtimeMs) : "—"],
         ["armed by", "dev-api.cmd / start_gtow_ai.ps1 (process env)"],
+        ["feeds MES", mes.families.filter((f) => f.inputs).map((f) => `${f.id.split("_")[0]} ← ${f.inputs!.hero_range.key}`).join(" · ") || "—"],
       ],
       caveats: [
         "one 100bb ign200 state, reused at every stake",
         "loaded once per process — a re-derived file needs an API restart",
+        "the MES flop solves are conditioned on these ranges — refit here, then re-run the MES batch (the MES card checks the two agree)",
       ],
-      answers30d: t.n, p50Ms: t.p50, lastTs: t.lastTs, byDay: t.byDay, drilldown: null,
+      answers30d: t.n, p50Ms: t.p50, lastTs: t.lastTs, byDay: t.byDay, drilldown: "exploit",
     });
   }
 
@@ -210,10 +213,41 @@ app.get("/registry", async (c) => {
     const gens: Record<string, number> = {};
     for (const f of fams) for (const [g, n] of Object.entries(f.generations)) gens[g] = (gens[g] ?? 0) + n;
     const genText = Object.entries(gens).map(([g, n]) => `${g} ×${n}`).join(" · ") || "—";
+    // Every MES solve is conditioned on a hero range (exploit_ranges.json) and a
+    // villain range (pool_model). The build stamps both; here they are checked
+    // against the files in force NOW, class by class — a preflop refit that is
+    // promoted without re-running the MES batch shows up here, never silently.
+    const diffClasses = (a: Record<string, number>, b: Record<string, number>) => {
+      let n = 0;
+      for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (Math.abs(Number(a[k] ?? 0) - Number(b[k] ?? 0)) > 1e-3) n++;
+      return n;
+    };
+    const rangeFacts: string[] = [];
+    const driftCaveats: string[] = [];
+    let unstamped = 0;
+    for (const f of fams) {
+      const inp = f.inputs;
+      if (!inp) { unstamped++; continue; }
+      const fam = f.id.split("_")[0];
+      const liveHero = (exploit?.ranges as Record<string, Record<string, number>> | undefined)?.[inp.hero_range.key];
+      const pm = inp.pool_model.exists ? readJson(inp.pool_model.path) : null;
+      const liveVillain = (pm?.ranges as Record<string, Record<string, number>> | undefined)?.[inp.villain_range.key];
+      const heroDiff = liveHero ? diffClasses(inp.hero_range.weights, liveHero) : null;
+      const villainDiff = liveVillain ? diffClasses(inp.villain_range.weights, liveVillain) : null;
+      const mark = (d: number | null) => d == null ? "live file unreadable" : d === 0 ? "in sync" : `${d} classes differ`;
+      rangeFacts.push(`${fam}: hero ${inp.hero_range.key} (${inp.hero_range.classes} cls) ${mark(heroDiff)} · villain ${inp.villain_range.key} (${inp.villain_range.classes} cls) ${mark(villainDiff)}`);
+      if (heroDiff) driftCaveats.push(`${fam} was solved against a hero range that differs from the live exploit file in ${heroDiff} classes — the preflop layer moved on; re-run the MES batch (run_batch_win.py → build_mes_study.py)`);
+      if (villainDiff) driftCaveats.push(`${fam} was solved against a villain range that differs from the live pool model in ${villainDiff} classes — re-run the MES batch`);
+      if (heroDiff == null) driftCaveats.push(`${fam}: cannot check hero-range drift — exploit overlay not armed or key ${inp.hero_range.key} missing`);
+    }
+    const stamp = fams.find((f) => f.inputs)?.inputs;
+    const stampText = stamp
+      ? `exploit_ranges ${stamp.exploit_ranges.sha256 ?? "?"} @ ${stamp.exploit_ranges.mtime ?? "?"} · pool_model ${stamp.pool_model.sha256 ?? "?"} @ ${stamp.pool_model.mtime ?? "?"}`
+      : "not stamped (rebuild with build_mes_study.py)";
     cards.push({
       id: "mes-postflop", label: "MES locked flop solves", mode: "mes",
-      state: mes.exists && fams.length ? (gens["unknown"] ? "warn" : "good") : "off",
-      stateText: mes.exists && fams.length ? "Loaded" : "mes_postflop.json missing",
+      state: mes.exists && fams.length ? (gens["unknown"] || driftCaveats.length || unstamped ? "warn" : "good") : "off",
+      stateText: mes.exists && fams.length ? (driftCaveats.length ? "Loaded — preflop inputs drifted" : "Loaded") : "mes_postflop.json missing",
       tiers: ["exploit-postflop"],
       routes: "flop, 3-handed, hero in range, family shape matches · answers without a cloud call in MES mode",
       facts: [
@@ -221,10 +255,15 @@ app.get("/registry", async (c) => {
         ["families", fams.map((f) => `${f.id.split("_")[0]} ${f.heroPos} · ${f.boards.length} boards`).join(" · ") || "—"],
         ["generation", genText],
         ["built", mes.meta?.built_at ? String(mes.meta.built_at) : fmtAge(mes.mtimeMs)],
+        ["solved against", stampText],
+        ...rangeFacts.map((r, i) => [i === 0 ? "preflop ranges" : "", r] as [string, string]),
       ],
       caveats: [
         "flop street only — turn/river continuation waits on the .locked.bin extracts",
         "off-list flops answer from the nearest texture, flagged approximate",
+        "conditioned on the preflop layer: a hero-range refit (exploit_ranges.json) or a new pool model changes the inputs, and the batch must be re-run behind it — the check above says when",
+        ...driftCaveats,
+        ...(unstamped ? [`${unstamped} famil${unstamped === 1 ? "y is" : "ies are"} not stamped with their preflop inputs — rebuild with build_mes_study.py`] : []),
         ...(gens["unknown"] ? ["generation not stamped on this build — rebuild with build_mes_study.py to tag v2/v3/refit"] : []),
       ],
       answers30d: t.n, p50Ms: t.p50, lastTs: t.lastTs, byDay: t.byDay, drilldown: "boards",
@@ -308,6 +347,41 @@ app.get("/registry", async (c) => {
     cards,
     mes,
   });
+});
+
+// -------------------------------------------------------------- playthrough
+// The Playthrough tab: OUR solver browser. Config first (only what is solved is
+// offered), then a 3-max table you walk preflop -> flop -> turn -> river with a
+// strategy chosen per seat: hero MES (exploit) or GTO chart; villains pool or GTO.
+const LIMP = join(DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
+app.get("/play/config", (c) => {
+  const pool = readJson(join(LIMP, "pool_model_v4.json"));
+  const exploit = process.env.EXPLOIT_CHART ? readJson(process.env.EXPLOIT_CHART) : null;
+  const chart = pool?.chart ?? "ign200_3maxasym2ci_D100_s100_eq";
+  return c.json({
+    ok: true,
+    configs: [
+      { id: "ign25-3max-100", label: "Ignition NL25 · 3-max · 100bb", rake: "5% / cap 4bb", available: true, chart,
+        note: "preflop: HRC asym charts (:8777) · postflop: M1/M2 locked solves" },
+      { id: "ign200-3max-100", label: "Ignition NL200 · 3-max · 100bb", rake: "5% / cap 1bb", available: false,
+        note: "preflop charts exist; postflop locks not solved at this rake yet" },
+    ],
+    strategies: {
+      hero: [{ id: "mes", label: "MES preflop (pool exploit)", available: !!exploit }, { id: "gto", label: "GTO chart (HRC equilibrium)", available: true }],
+      villain: [{ id: "pool", label: "Pool (measured frequencies + calling ranges)", available: !!pool }, { id: "gto", label: "GTO chart", available: true }],
+    },
+    exploit: exploit ? { choices: exploit.choices, ranges: exploit.ranges } : null,
+    pool: pool ? { freq: pool.freq, ranges: pool.ranges, n: pool.n, tokens: pool.tokens } : null,
+    postflop: { spots: mesSpots(), turnDir: "data/mes_turn", note: "14 boards per family; any other flop maps to the nearest solved texture" },
+  });
+});
+app.get("/play/preflop", async (c) => {
+  const chart = c.req.query("chart") ?? "";
+  const line = c.req.query("line") ?? "";
+  const n = await fetchNode(chart, line);
+  if (n === "unreachable") return c.json({ ok: false, error: "chart server :8777 unreachable" }, 503);
+  if (!n) return c.json({ ok: false, error: `no node in ${chart} at line "${line}"` }, 404);
+  return c.json({ ok: true, node: n });
 });
 
 // ------------------------------------------------------------ MES walkthrough
@@ -594,6 +668,80 @@ app.get("/roadmap", (c) => {
     };
   });
   return c.json({ ok: true, families, preflop: road.preflop, generatedAt: road.generatedAt ?? null });
+});
+
+/**
+ * GET /exploit-preflop/detail — the overlay's actual content, node by node:
+ * the five choice nodes (169 classes → one pure action, sizes included), the
+ * line shapes each node answers (villain's open SIZE is not distinguished —
+ * any single raise reads as "open"), and the nine derived range sets the AI
+ * chain uses to reconstruct hero's flop range.
+ */
+app.get("/exploit-preflop/detail", (c) => {
+  const path = process.env.EXPLOIT_CHART;
+  if (!path || !existsSync(path)) return c.json({ ok: false, error: "EXPLOIT_CHART is not armed or the file is missing", path: path ?? null }, 404);
+  let doc: any;
+  try { doc = JSON.parse(readFileSync(path, "utf-8")); } catch (e) { return c.json({ ok: false, error: `unreadable: ${String(e)}` }, 500); }
+  const combos = (k: string) => (k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12);
+  const NODE_META: Record<string, { label: string; heroPos: string; lines: string[]; note: string }> = {
+    btn_root: { label: "BTN first in", heroPos: "BTN", lines: ["(root)"], note: "hero's own open; the size in the answer is hero's" },
+    sb_vs_open: { label: "SB facing a BTN open", heroPos: "SB", lines: ["R2", "R2.2", "R2.5", "R2.8", "R3", "R3.5"], note: "one node for every BTN open size — the pool's 2x, 2.5x and 3x opens are treated as one range" },
+    bb_vs_open: { label: "BB facing a BTN open, SB folded", heroPos: "BB", lines: ["R2-F", "R2.2-F", "R2.5-F", "R2.8-F", "R3-F", "R3.5-F"], note: "one node for every BTN open size" },
+    sb_bvb: { label: "SB first in, BTN folded", heroPos: "SB", lines: ["F"], note: "hero's own blind-vs-blind open" },
+    bb_vs_sb: { label: "BB facing an SB open", heroPos: "BB", lines: ["F-R2", "F-R2.2", "F-R2.5", "F-R2.8", "F-R3", "F-R3.5"], note: "one node for every SB open size — the pool's 3x and 3.9x opens are treated as one range" },
+  };
+  const RANGE_META: Record<string, { label: string; usedFor: string }> = {
+    btn_open: { label: "BTN open range", usedFor: "hero BTN on the flop after R-F-C or R-C-F" },
+    btn_limp: { label: "BTN limp range", usedFor: "not used by the chain (limped pots take the chart)" },
+    sb_3bet_vs_btn: { label: "SB 3-bet range vs BTN", usedFor: "hero SB on the flop after R-R-F-C" },
+    sb_flat_vs_btn: { label: "SB flat range vs BTN", usedFor: "hero SB on the flop after R-C-F" },
+    sb_open_bvb: { label: "SB open range, blind vs blind", usedFor: "hero SB on the flop after F-R-C" },
+    bb_3bet_vs_btn: { label: "BB 3-bet range vs BTN", usedFor: "hero BB on the flop after R-F-R-C" },
+    bb_flat_vs_btn: { label: "BB flat range vs BTN", usedFor: "hero BB on the flop after R-F-C" },
+    bb_3bet_vs_sb: { label: "BB 3-bet range vs SB", usedFor: "hero BB on the flop after F-R-R-C" },
+    bb_flat_vs_sb: { label: "BB flat range vs SB", usedFor: "hero BB on the flop after F-R-C" },
+  };
+  const nodes = Object.entries(doc.choices ?? {}).map(([tag, cells]: [string, any]) => {
+    const byAction: Record<string, { classes: number; combos: number }> = {};
+    let total = 0;
+    for (const [cls, act] of Object.entries(cells as Record<string, string>)) {
+      const b = (byAction[act] ??= { classes: 0, combos: 0 });
+      b.classes++; b.combos += combos(cls); total += combos(cls);
+    }
+    const order = (a: string) => /^fold/i.test(a) ? 0 : /^limp|^call|^check/i.test(a) ? 1 : 2 + (parseFloat(a.replace(/[^\d.]/g, "")) || 0);
+    const actions = Object.keys(byAction).sort((a, b) => order(a) - order(b));
+    return {
+      tag, ...(NODE_META[tag] ?? { label: tag, heroPos: "?", lines: [], note: "" }),
+      actions, cells,
+      mix: actions.map((a) => ({ action: a, classes: byAction[a]!.classes, pct: Math.round((1000 * byAction[a]!.combos) / total) / 10 })),
+    };
+  });
+  const ranges = Object.entries(doc.ranges ?? {}).map(([key, w]: [string, any]) => {
+    let n = 0;
+    for (const [cls, wt] of Object.entries(w as Record<string, number>)) n += combos(cls) * Number(wt);
+    return { key, ...(RANGE_META[key] ?? { label: key, usedFor: "" }), weights: w, combos: Math.round(n), pct: Math.round((1000 * n) / 1326) / 10, classes: Object.keys(w).length };
+  });
+  // The follow-on: LOCKED-ROOT charts. One HRC rich-tree solve per villain
+  // seat x open size x rung with villain's root frozen to the pool-width
+  // range; every node below it is solved, so hero's 3-bet/flat and villain's
+  // 4-bet/5-bet/jam lines all get a best-response answer — the overlay above
+  // stops at hero's first decision. Listed here as charts (planned or solved)
+  // so this page shows the whole preflop-exploit source, not just the overlay.
+  const catalogIds = new Set(getCatalog().entries.map((e: any) => e.id));
+  const poolShare: Record<string, number> = { "btn_2": 15.8, "btn_2.5": 28.2, "btn_3": 50.0, "sb_3": 44.5, "sb_4": 26.8 };
+  const rung = 100;
+  const lockedRoot = {
+    rung,
+    tree: "rich 3-max tree as the grid (limps on, flats 1/2/1/1, opens 2–3.5 + 4bb, 3-bets 9–14, 4-bets 22–33 + jam) — every node below the lock is solved",
+    lock: "villain's root at ONE size, range = chart union across sizes scaled to the pool's measured open frequency (composition per pool_model); hero and the third seat free",
+    jobs: (["ign200", "ign500"] as const).flatMap((site) => [
+      ...[2, 2.5, 3].map((size) => ({ site, villain: "BTN", size, line: `R${size}`, servesHero: ["SB", "BB"], poolShare: poolShare[`btn_${size}`] ?? null, id: `${site}_3maxlock_D${rung}_s${rung}_eq_btn_o${String(size).replace(".", "_")}`, lockRange: "btn_open @ pool width" })),
+      ...[3, 4].map((size) => ({ site, villain: "SB", size, line: `F-R${size}`, servesHero: ["BB"], poolShare: poolShare[`sb_${size}`] ?? null, id: `${site}_3maxlock_D${rung}_s${rung}_eq_sb_o${String(size).replace(".", "_")}`, lockRange: "sb_open_bvb @ pool width" })),
+    ]).map((j) => ({ ...j, solved: catalogIds.has(j.id), status: catalogIds.has(j.id) ? "solved" : "planned" })),
+    covers: ["hero SB / BB facing the open: 3-bet (all sizes), flat, fold", "villain's response to the 3-bet: fold / call / 4-bet at every 4-bet size", "hero facing the 4-bet: fold / call / 5-bet / jam", "the third seat's squeeze and cold-call lines (free seat, Nash)"],
+    notCovered: ["hero BTN first in (the overlay's btn_root answers it; villain 3-bet responses stay equilibrium until second-level locks have the sample)", "depth rungs other than 100bb until the set is extended"],
+  };
+  return c.json({ ok: true, path, chart: doc.chart ?? null, nodes, ranges, lockedRoot });
 });
 
 export default app;

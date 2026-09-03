@@ -235,6 +235,31 @@
   .sess-line a { color: #4da3ff; text-decoration: none; } .sess-line a:hover { text-decoration: underline; }
   .prov-grid { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; font-size: 12.5px; }
   .prov-grid .k { color: #8fa1b6; }
+
+  /* ---- playthrough ---- */
+  #view-play .felt { position: relative; height: 300px; border-radius: 150px/110px; background: radial-gradient(ellipse at center, #1d5a3a 0%, #123c27 70%, #0d2a1c 100%); border: 6px solid #3b2a1a; margin: 8px auto; max-width: 720px; }
+  #view-play .seat { position: absolute; width: 150px; transform: translate(-50%, -50%); background: #0d141c; border: 1px solid #2a3442; border-radius: 8px; padding: 6px 8px; text-align: center; font-size: 12px; }
+  #view-play .seat.hero { border-color: #ffd35c; }
+  #view-play .seat.toact { box-shadow: 0 0 0 2px #4da3ff; }
+  #view-play .seat .pos { font-weight: 700; font-size: 13px; }
+  #view-play .seat .strat { font-size: 10px; color: #8fa1b6; }
+  #view-play .seat .did { font-family: ui-monospace, monospace; font-size: 11px; color: #dfe6ee; min-height: 14px; }
+  #view-play .mid { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; }
+  #view-play .mid .pot { font-size: 12px; color: #dfe6ee; margin-top: 4px; }
+  #view-play .cfg { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  #view-play .cfg select { background: #10151d; color: #dfe6ee; border: 1px solid #2a3442; border-radius: 5px; padding: 3px 6px; }
+  #view-play .avail { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; }
+  #view-play .avail.on { background: rgba(97,208,149,.15); color: #61d095; }
+  #view-play .avail.off { background: rgba(255,255,255,.06); color: #8fa1b6; }
+  #view-play .avail.near { background: rgba(230,179,90,.15); color: #e6b35a; }
+  #view-play .boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+  #view-play .board { border: 1px solid #2a3442; border-radius: 6px; padding: 6px; cursor: pointer; background: #10151d; }
+  #view-play .board:hover { border-color: #4da3ff; }
+  #view-play .board .ev { font-family: ui-monospace, monospace; font-size: 11px; color: #8fa1b6; }
+  #view-play .actrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  #view-play .actrow button.mes { border-color: #e8772e; }
+  #view-play .rng { border: 1px solid #2a3442; border-radius: 6px; padding: 6px 8px; margin: 6px 0; font-size: 12px; }
+  #view-play .rng input { width: 70px; background: #10151d; color: #dfe6ee; border: 1px solid #2a3442; border-radius: 4px; padding: 2px 5px; font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
@@ -246,6 +271,7 @@
     <button id="tab-analytics">Analytics</button>
     <button id="tab-sources">Sources</button>
     <button id="tab-replay">Replay Review</button>
+    <button id="tab-play">Playthrough</button>
   </div>
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
@@ -268,6 +294,7 @@
   <div id="view-sessions" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
   <div id="view-sources" style="display:none"></div>
+  <div id="view-play" style="display:none"></div>
   <!-- Side-by-side replay review lives in the React dashboard (it renders the
        Ignition table replica); this tab embeds it so review stays reachable
        from the study dashboard the recordings belong to. -->
@@ -1087,7 +1114,7 @@ async function loadAnalytics() {
 // Postflop is complete (the AI chain solves any board on demand). Preflop has
 // no live equivalent, so every chart miss is written down with the state to
 // solve it; the HRC runner works the queue between sessions.
-let MQ = null, mqFilter = "active", mqTimer = null;
+let MQ = null, mqFilter = "active", mqTimer = null, mqShowAll = false, mqShowAllJobs = false;
 const MQ_KIND = {
   "size-snapped": ["size snapped", "answered, but from a size ≥0.1 log-bb away (e.g. a 3.9x open served from the 3.5x node)"],
   "size-off-tree": ["size off tree", "the played size is further than τ from every size in the tree — no answer"],
@@ -1125,7 +1152,29 @@ function renderMissQueue() {
       ? `<span class="sub">last sweep: ${esc(sw.source)} · ${sw.decisions} decisions, ${sw.misses} inexact · ${sw.error ? `<span class="warn">${esc(sw.error)}</span>` : `${fmtAgo(sw.finishedAt)}`}</span>`
       : `<span class="sub">no sweep yet this run</span>`;
   const active = (MQ.items || []).filter((x) => mqFilter === "all" ? true : mqFilter === "active" ? (x.status === "open" || x.status === "queued") : x.status === mqFilter);
-  const rows = active.map(mqRow).join("");
+  const rows = (mqShowAll ? active : active.slice(0, 120)).map(mqRow).join("");
+  // the runner's unit is a job, not an item: group the filtered items by the chart they'd produce
+  const byJob = new Map();
+  for (const x of active) {
+    if (!x.job) continue;
+    const g = byJob.get(x.job.id) || { job: x.job, n: 0, items: 0, kinds: {}, status: {}, live: 0, chart: x.chart };
+    g.n += x.n; g.items++; g.live += x.nLive; g.kinds[x.kind] = (g.kinds[x.kind] || 0) + x.n; g.status[x.status] = (g.status[x.status] || 0) + 1;
+    byJob.set(x.job.id, g);
+  }
+  const jobs = [...byJob.values()].sort((a, b) => b.n - a.n);
+  const jobRows = (mqShowAllJobs ? jobs : jobs.slice(0, 25)).map((g) => {
+    const st = g.status.queued ? (g.status.open ? "partly queued" : "queued") : g.status.solved && !g.status.open ? "solved" : g.status.dismissed && !g.status.open ? "dismissed" : "open";
+    return `<tr class="src-static">
+      <td><div class="mono">${esc(g.job.id)}</div><div class="sub">${esc(g.job.change)}</div></td>
+      <td class="mq-state"><b>${esc(g.job.site)}</b> · ${g.job.stacksBB.join("/")}bb<div class="sub">from ${esc(g.chart)}</div></td>
+      <td>${Object.entries(g.kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${mqKind(k)} <span class="sub num">${n}</span>`).join(" ")}</td>
+      <td class="num"><b>${g.n}</b><div class="sub">${g.items} item${g.items === 1 ? "" : "s"}${g.live ? ` · live ${g.live}` : ""}</div></td>
+      <td><span class="chip ${st === "queued" ? "good" : st === "open" ? "warn" : "dim"}">${st}</span></td>
+      <td><div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button class="mini" onclick="mqJobStatus('${esc(g.job.id)}','queued')" ${st === "queued" ? "disabled" : ""}>queue</button>
+        <button class="mini" onclick="mqJobStatus('${esc(g.job.id)}','open')" ${st === "open" ? "disabled" : ""}>open</button>
+        <button class="mini" onclick="mqJobStatus('${esc(g.job.id)}','dismissed')">dismiss</button></div></td></tr>`;
+  }).join("");
   host.innerHTML = `<div class="card">
     <h2>Preflop miss queue <span class="sub">— ${bs.open || 0} open · ${bs.queued || 0} queued · ${bs.solved || 0} solved · ${bs.dismissed || 0} dismissed</span></h2>
     <div class="banner">🧭 <b>Preflop is completed offline.</b> Postflop has the AI chain to solve any board on demand; a 3-handed preflop state takes HRC 12–90 min, so it can't be solved live. Instead every spot the chart corpus couldn't answer <i>exactly</i> is written down here with its state — stacks, line, the size or action the tree lacked — and a suggested HRC job. Queue the ones worth solving, write the plan, run it in HRC Runner; when the chart lands, <b>re-check</b> marks the item solved.</div>
@@ -1143,6 +1192,10 @@ function renderMissQueue() {
       <button class="mini" onclick="mqPlan()" ${(bs.queued || 0) ? "" : "disabled"} title="write one HRC plan per queued job + a runner queue">write HRC plan (${bs.queued || 0} queued)</button>
       ${sweepHtml}
     </div>
+    <h2 style="margin-top:14px">Suggested HRC jobs <span class="sub">— ${jobs.length} distinct, by decisions covered${jobs.length > 25 && !mqShowAllJobs ? ` · showing 25 <a href="#" onclick="mqShowAllJobs=true;renderMissQueue();return false">show all</a>` : ""}</span></h2>
+    <div class="scroll"><table><thead><tr><th>job</th><th>state</th><th>what it fixes</th><th class="num">decisions</th><th>status</th><th></th></tr></thead>
+    <tbody>${jobRows || `<tr class="src-static"><td colspan="6" class="sub">no jobs to suggest</td></tr>`}</tbody></table></div>
+    <h2 style="margin-top:14px">Items <span class="sub">— ${active.length}${active.length > 120 && !mqShowAll ? ` · showing 120 <a href="#" onclick="mqShowAll=true;renderMissQueue();return false">show all</a>` : ""}</span></h2>
     <div class="scroll"><table><thead><tr><th>kind</th><th>state</th><th>node</th><th class="num">seen</th><th>hands</th><th>suggested HRC job</th><th>status</th></tr></thead>
     <tbody>${rows || `<tr class="src-static"><td colspan="7" class="sub">nothing here — run a sweep, or play with Study Answers on</td></tr>`}</tbody></table></div>
     <div class="sub" style="margin-top:8px">Items are keyed by chart · line · wanted token. A "seen" count is decisions, not hands. Sweeps reset their own counts before re-walking, so they never double count; live counts only grow. Store: <span class="mono">${esc(MQ.store)}</span> · plans: <span class="mono">${esc(MQ.planDir)}</span></div>
@@ -1176,6 +1229,10 @@ function mqRow(x) {
 async function mqSweep(source) {
   const r = await (await fetch("/api/dashboard/miss-queue/sweep", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })).json();
   if (!r.ok) alert(r.error || "sweep failed");
+  loadMissQueue();
+}
+async function mqJobStatus(jobId, status) {
+  await fetch("/api/dashboard/miss-queue/status-by-job", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId, status }) });
   loadMissQueue();
 }
 async function mqStatus(id, status) {
@@ -1476,6 +1533,210 @@ function showSrcPane(id, cardId) {
   if (id === "roadmap" && !srcLoaded.roadmap) loadRoadmap();
 }
 
+/* ================================= Playthrough: our own solver browser ================================= */
+const PT = { cfg: null, hero: "SB", strat: { hero: "mes", villain: "pool" }, line: [], street: "preflop", combo: "", node: null, spot: null };
+const P_ORDER = ["BTN", "SB", "BB"];                // 3-max preflop acting order
+const RANKS13 = "AKQJT98765432";
+const posOf = (i) => P_ORDER[i % 3];
+async function loadPlay() {
+  const v = $("view-play");
+  if (!PT.cfg) {
+    v.innerHTML = `<div class="card sub">loading configs…</div>`;
+    try { PT.cfg = await (await fetch("/api/dashboard/sources/play/config")).json(); } catch (e) { v.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
+  }
+  renderPlay();
+}
+function playChart() { return PT.cfg.configs[0].chart; }
+/** which seat acts at the current preflop line (tokens are positional BTN,SB,BB, folds close a seat) */
+function playActor() {
+  // walk the line: seats act in order; a seat that folded is skipped; the round ends when action closes
+  const alive = [true, true, true]; let i = 0, last = null;
+  for (const tok of PT.line) {
+    while (!alive[i % 3]) i++;
+    if (tok === "F") alive[i % 3] = false;
+    i++;
+  }
+  while (!alive[i % 3]) i++;
+  return posOf(i);
+}
+function playShapeTag() {
+  // the exploit's five modeled first-decision shapes (services/fastSolve exploitLookup)
+  const toks = PT.line, hero = PT.hero, isR = (x) => /^R[\d.]+$/.test(x);
+  if (toks.length === 0 && hero === "BTN") return "btn_root";
+  if (toks.length === 1 && isR(toks[0]) && hero === "SB") return "sb_vs_open";
+  if (toks.length === 2 && isR(toks[0]) && toks[1] === "F" && hero === "BB") return "bb_vs_open";
+  if (toks.length === 1 && toks[0] === "F" && hero === "SB") return "sb_bvb";
+  if (toks.length === 2 && toks[0] === "F" && isR(toks[1]) && hero === "BB") return "bb_vs_sb";
+  return null;
+}
+function playPostflopFamily() {
+  const l = PT.line.join("-"), h = PT.hero;
+  if (h === "SB" && /^F-R[\d.]+-C$/.test(l)) return "M1_heroSB_bvb_cbet";
+  if (h === "BTN" && /^R[\d.]+-F-C$/.test(l)) return "M2_heroBTN_srp_vs_BB";
+  return null;
+}
+function renderPlay() {
+  const v = $("view-play"), cfg = PT.cfg, c0 = cfg.configs[0];
+  const actor = playActor();
+  const seatHtml = (pos, x, y) => {
+    const isHero = pos === PT.hero, s = isHero ? cfg.strategies.hero.find((s) => s.id === PT.strat.hero) : cfg.strategies.villain.find((s) => s.id === PT.strat.villain);
+    const did = PT.line.map((tok, i) => [tok, i]).filter(([_, i]) => actorAt(i) === pos).map(([tok]) => tok).join(" ");
+    return `<div class="seat ${isHero ? "hero" : ""} ${actor === pos && PT.street === "preflop" ? "toact" : ""}" style="left:${x}%;top:${y}%"><div class="pos">${pos}${isHero ? " · you" : ""}</div><div class="strat">${esc(s?.label ?? "")}</div><div class="did">${esc(did) || "&nbsp;"}</div></div>`;
+  };
+  // seats clockwise from hero at the bottom
+  const order = [PT.hero, ...P_ORDER.filter((p) => p !== PT.hero)];
+  const spots = [[50, 88], [12, 35], [88, 35]];
+  const fam = playPostflopFamily();
+  v.innerHTML = `
+    <div class="card"><h2>Playthrough <span class="sub">— our solver browser: pick the config and strategies, then walk the hand</span></h2>
+      <div class="cfg">
+        <label>config <select id="pl-cfg">${cfg.configs.map((c) => `<option ${c.available ? "" : "disabled"}>${esc(c.label)} · rake ${esc(c.rake)}${c.available ? "" : " — not solved"}</option>`).join("")}</select></label>
+        <label>hero seat <select id="pl-hero">${P_ORDER.map((p) => `<option ${p === PT.hero ? "selected" : ""}>${p}</option>`).join("")}</select></label>
+        <label>hero strategy <select id="pl-hs">${cfg.strategies.hero.map((s) => `<option value="${s.id}" ${s.id === PT.strat.hero ? "selected" : ""} ${s.available ? "" : "disabled"}>${esc(s.label)}${s.available ? "" : " (not armed)"}</option>`).join("")}</select></label>
+        <label>villains <select id="pl-vs">${cfg.strategies.villain.map((s) => `<option value="${s.id}" ${s.id === PT.strat.villain ? "selected" : ""} ${s.available ? "" : "disabled"}>${esc(s.label)}</option>`).join("")}</select></label>
+        <span class="rng">your hand <input id="pl-combo" placeholder="AhQs" value="${esc(PT.combo)}"> <span class="sub">optional — the RNG then rolls an action for you at every node</span></span>
+        <button class="mini" id="pl-reset">↺ new hand</button>
+      </div>
+      <div class="sub" style="margin-top:6px">${esc(c0.note)} · chart <span class="mono">${esc(c0.chart)}</span></div>
+      <div class="felt">${order.map((p, i) => seatHtml(p, spots[i][0], spots[i][1])).join("")}
+        <div class="mid"><div id="pl-board">${PT.board ? cardsHtml(PT.board.match(/.{2}/g)) : '<span class="sub">preflop</span>'}</div><div class="pot" id="pl-pot"></div></div>
+      </div>
+    </div>
+    <div id="pl-node" class="card"><div class="sub">loading node…</div></div>
+    <div id="pl-post"></div>`;
+  $("pl-hero").onchange = (e) => { PT.hero = e.target.value; PT.line = []; PT.street = "preflop"; PT.board = null; renderPlay(); };
+  $("pl-hs").onchange = (e) => { PT.strat.hero = e.target.value; renderPlay(); };
+  $("pl-vs").onchange = (e) => { PT.strat.villain = e.target.value; renderPlay(); };
+  $("pl-combo").onchange = (e) => { PT.combo = e.target.value.trim(); renderPlay(); };
+  $("pl-reset").onclick = () => { PT.line = []; PT.street = "preflop"; PT.board = null; PT.spot = null; renderPlay(); };
+  if (PT.street === "preflop") loadPlayPreflop(actor);
+  else renderPlayPostflop(fam);
+}
+function actorAt(i) { // who took token i of the line
+  const alive = [true, true, true]; let k = 0;
+  for (let j = 0; j <= i; j++) {
+    while (!alive[k % 3]) k++;
+    if (j === i) return posOf(k);
+    if (PT.line[j] === "F") alive[k % 3] = false;
+    k++;
+  }
+  return null;
+}
+function playClosed() {
+  // preflop closed: everyone still alive has matched the last raise, or all but one folded
+  const toks = PT.line; if (!toks.length) return false;
+  const alive = [true, true, true]; let k = 0; let lastRaiseAt = -1; const acted = [false, false, false];
+  toks.forEach((tok, j) => { while (!alive[k % 3]) k++; const s = k % 3; if (tok === "F") alive[s] = false; if (/^R/.test(tok)) { lastRaiseAt = j; } acted[s] = true; k++; });
+  const nAlive = alive.filter(Boolean).length;
+  if (nAlive <= 1) return true;
+  // closed if every alive seat has acted since the last raise (or since the start when no raise: limps then BB check)
+  let sinceCount = 0; k = 0; let idx = 0; const seen = new Set();
+  const alive2 = [true, true, true];
+  toks.forEach((tok, j) => { while (!alive2[k % 3]) k++; const s = k % 3; if (j > lastRaiseAt) seen.add(s); if (tok === "F") alive2[s] = false; k++; });
+  const need = [0, 1, 2].filter((s) => alive[s] && (lastRaiseAt < 0 || actorAt(lastRaiseAt) !== posOf(s)));
+  return need.every((s) => seen.has(s)) && (lastRaiseAt >= 0 || toks.length >= 3);
+}
+async function loadPlayPreflop(actor) {
+  const el = $("pl-node");
+  if (playClosed()) {
+    const fam = playPostflopFamily();
+    const l = PT.line.join("-");
+    el.innerHTML = `<h2>Preflop closed <span class="sub">line ${esc(l)}</span></h2>` + (fam
+      ? `<div class="sub">This line is a solved postflop family: <b>${esc(fam)}</b>. Pick a flop below.</div>`
+      : `<div class="caveat">⚠ Not a solved postflop family. Covered: SB opens bvb + BB calls (hero SB) and BTN opens + BB calls (hero BTN). Anything else is answered live by GTO Wizard AI at the table — nothing to walk here.</div>`);
+    PT.street = "flop"; renderPlayPostflop(fam); return;
+  }
+  el.innerHTML = `<div class="sub">loading ${esc(actor)}'s node…</div>`;
+  const line = PT.line.join("-");
+  let j;
+  try { j = await (await fetch(`/api/dashboard/sources/play/preflop?chart=${encodeURIComponent(playChart())}&line=${encodeURIComponent(line)}`)).json(); }
+  catch (e) { el.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
+  if (!j.ok) { el.innerHTML = `<div class="warn">${esc(j.error)}</div>`; return; }
+  const n = j.node; PT.node = n;
+  const isHero = actor === PT.hero;
+  const useMes = isHero && PT.strat.hero === "mes";
+  const usePool = !isHero && PT.strat.villain === "pool";
+  const tag = useMes ? playShapeTag() : null;
+  const choices = tag && PT.cfg.exploit ? PT.cfg.exploit.choices[tag] : null;
+  // per-action aggregate under the chosen strategy
+  let stratNote = `<span class="avail on">GTO chart node</span>`;
+  const acts = n.actions.map((a) => a.action);
+  const clsW = (h) => h.length === 2 ? 6 : h.endsWith("s") ? 4 : 12;
+  const totW = (n.cells || []).reduce((t, c) => t + clsW(c.hand), 0) || 1;
+  const chartPct = acts.map((a) => 100 * (n.cells || []).reduce((t, c) => t + clsW(c.hand) * (c.actions[a] ?? 0) / 100, 0) / totW);
+  let aggPct = chartPct;
+  if (useMes) {
+    if (choices) {
+      // MES: every hand class picks one action; aggregate by weighting classes equally by combos (approx via rangePct not available) -> count classes
+      const counts = {}; for (const [cls, act] of Object.entries(choices)) counts[act] = (counts[act] ?? 0) + (cls.length === 2 ? 6 : cls.endsWith("s") ? 4 : 12);
+      const tot = Object.values(counts).reduce((a, b) => a + b, 0);
+      aggPct = acts.map((a) => 100 * (counts[a] ?? 0) / tot);
+      stratNote = `<span class="avail on">MES preflop · ${esc(tag)}</span> <span class="sub">pool best-response per hand class (pure picks); chart mix shown for comparison</span>`;
+    } else stratNote = `<span class="avail off">MES not modeled at this node</span> <span class="sub">the exploit covers the five first-decision shapes; deeper nodes use the GTO chart</span>`;
+  } else if (usePool) {
+    stratNote = `<span class="avail on">Pool</span> <span class="sub">measured pool frequencies where read (${esc(Object.keys(PT.cfg.pool?.freq ?? {}).length)} nodes); chart mix elsewhere</span>`;
+  }
+  // RNG for hero
+  let rng = "";
+  const combo = PT.combo && /^[2-9TJQKA][shdc][2-9TJQKA][shdc]$/.test(PT.combo) ? PT.combo : null;
+  const clsOf = (cb) => { const a = cb[0], b = cb[2]; const ia = RANKS13.indexOf(a), ib = RANKS13.indexOf(b); const hi = RANKS13[Math.min(ia, ib)], lo = RANKS13[Math.max(ia, ib)]; return ia === ib ? hi + lo : hi + lo + (cb[1] === cb[3] ? "s" : "o"); };
+  if (isHero && combo) {
+    const cls = clsOf(combo);
+    const cell = (n.cells || []).find((x) => x.hand === cls);
+    let pick, how;
+    if (useMes && choices?.[cls]) { pick = choices[cls]; how = "MES pure pick"; }
+    else if (cell) { const roll = Math.random() * 100; let acc = 0; for (const a of acts) { acc += cell.actions[a] ?? 0; if (roll < acc) { pick = a; break; } } how = `rolled ${roll.toFixed(1)} in the chart mix`; }
+    rng = `<div class="rng">your <b class="mono">${esc(combo)}</b> (${esc(cls)}): <b class="mono">${esc(pick ?? "not in range")}</b> <span class="sub">— ${esc(how ?? "")}</span>` +
+      (cell ? ` <span class="sub">· chart mix ${acts.map((a) => `${a} ${(cell.actions[a] ?? 0).toFixed(0)}%`).filter((s) => !s.endsWith(" 0%")).join(", ")}</span>` : "") + `</div>`;
+  }
+  el.innerHTML = `<h2>${esc(actor)} to act${isHero ? " · you" : ""} <span class="sub">line ${esc(line || "(root)")}</span></h2><div style="margin:4px 0">${stratNote}</div>${rng}
+    <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${useMes && choices ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
+    <div id="pl-grid"></div>`;
+  // grid: chart cells, MES overlay when active
+  const g = $("pl-grid");
+  const colorFor = (lab, i) => /^Fold/.test(lab) ? "#5b7fa6" : /^(Check|Call|Limp)/.test(lab) ? "#41a368" : ["#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"][Math.min(i, 4)];
+  let html = `<div class="legend">${acts.map((a, i) => `<span><span class="sw" style="background:${colorFor(a, i)}"></span>${esc(a)}</span>`).join("")}${useMes && choices ? ` <span class="sub">· MES overlay: each class shows its single exploit pick</span>` : ""}</div><div id="grid">`;
+  const byHand = new Map((n.cells || []).map((c) => [c.hand, c]));
+  for (let k = 0; k < 169; k++) {
+    const i = Math.floor(k / 13), m = k % 13; const hi = RANKS13[Math.min(i, m)], lo = RANKS13[Math.max(i, m)];
+    const key = i === m ? hi + lo : hi + lo + (m > i ? "s" : "o");
+    const cell = byHand.get(key);
+    if (!cell) { html += `<div style="opacity:.25">${key}</div>`; continue; }
+    let bg;
+    if (useMes && choices) { const pick = choices[key]; const idx = acts.indexOf(pick); bg = pick ? colorFor(pick, idx < 0 ? 0 : idx) : "#333"; }
+    else { let acc = 0; const stops = []; acts.forEach((a, ai) => { const f = (cell.actions[a] ?? 0) / 100; if (f < 0.005) return; stops.push(`${colorFor(a, ai)} ${acc * 100}% ${(acc + f) * 100}%`); acc += f; }); bg = stops.length ? `linear-gradient(135deg,${stops.join(",")})` : "#333"; }
+    const tip = `${key}: ` + (useMes && choices ? `MES ${choices[key] ?? "—"} · chart ` : "") + acts.map((a) => `${a} ${(cell.actions[a] ?? 0).toFixed(0)}%`).filter((s) => !s.endsWith(" 0%")).join(", ");
+    html += `<div class="${combo && clsOf(combo) === key ? "hero" : ""}" title="${esc(tip)}" style="background:${bg}">${key}</div>`;
+  }
+  g.innerHTML = html + `</div>`;
+}
+function playStep(tok) { PT.line.push(tok); renderPlay(); }
+function renderPlayPostflop(fam) {
+  const el = $("pl-post");
+  if (!fam) { el.innerHTML = ""; return; }
+  const spots = PT.cfg.postflop.spots.filter((s) => s.family === fam);
+  if (!PT.spot) {
+    el.innerHTML = `<div class="card"><h2>Flop <span class="sub">— ${esc(fam)} · ${spots.length} solved boards · any other flop answers from the nearest solved texture</span></h2>
+      <div class="boards">${spots.sort((a, b) => b.evGainBb - a.evGainBb).map((s) => `<div class="board" onclick="playBoard('${esc(fam)}','${s.board}')">${cardsHtml(s.board.match(/.{2}/g))}<div class="ev">+${s.evGainBb.toFixed(2)} bb/arrival · <span class="avail on">solved</span> ${s.hasTurn ? '<span class="avail on">turn</span>' : '<span class="avail off">turn pending</span>'}</div></div>`).join("")}</div>
+      <div style="margin-top:8px"><span class="sub">or type a flop:</span> <input id="pl-flop" class="mono" placeholder="Kh8s3h" style="width:80px"> <button class="mini" onclick="playNearest('${esc(fam)}')">nearest solved texture</button> <span id="pl-near" class="sub"></span></div></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="card"><h2>${cardsHtml(PT.spot.board.match(/.{2}/g))} <span class="sub">${esc(fam)} · +${PT.spot.evGainBb.toFixed(2)} bb/arrival${PT.spot.nearestOf ? ` · nearest texture to ${esc(PT.spot.nearestOf)}` : ""}</span> <button class="mini" onclick="PT.spot=null;renderPlayPostflop('${esc(fam)}')">← other flop</button></h2><div id="mes-walk"></div></div>`;
+  mesWalk(fam, PT.spot.board, []);
+}
+function playBoard(fam, board) { PT.spot = PT.cfg.postflop.spots.find((s) => s.family === fam && s.board === board); PT.board = board; renderPlayPostflop(fam); $("pl-board").innerHTML = cardsHtml(board.match(/.{2}/g)); }
+function playNearest(fam) {
+  const f = ($("pl-flop").value || "").trim();
+  if (!/^([2-9TJQKA][shdc]){3}$/.test(f)) { $("pl-near").textContent = "need three cards like Kh8s3h"; return; }
+  // same texture distance as the server (mesPostflop.ts texDist)
+  const R = { 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, T: 10, J: 11, Q: 12, K: 13, A: 14 };
+  const feat = (b) => { const cs = b.match(/.{2}/g); const ranks = cs.map((c) => R[c[0]]).sort((a, b) => b - a); return { ranks, paired: 3 - new Set(ranks).size, suit: 3 - new Set(cs.map((c) => c[1])).size, span: ranks[0] - ranks[2] }; };
+  const dist = (a, b) => 3 * Math.abs(a.paired - b.paired) + 1.6 * Math.abs(a.suit - b.suit) + 0.7 * Math.abs(a.ranks[0] - b.ranks[0]) + 0.35 * Math.abs(a.ranks[1] - b.ranks[1]) + 0.2 * Math.abs(a.ranks[2] - b.ranks[2]) + 0.3 * Math.abs(Math.min(a.span, 9) - Math.min(b.span, 9));
+  const fa = feat(f); let best = null, bd = Infinity;
+  for (const s of PT.cfg.postflop.spots.filter((s) => s.family === fam)) { const dd = dist(fa, feat(s.board)); if (dd < bd) { bd = dd; best = s; } }
+  PT.spot = { ...best, nearestOf: f }; PT.board = best.board; renderPlayPostflop(fam); $("pl-board").innerHTML = cardsHtml(best.board.match(/.{2}/g)) + `<div class="sub">nearest to ${esc(f)} (dist ${bd.toFixed(1)})</div>`;
+}
+
 /* ============================ MES walkthrough (registry → mes-postflop) ============================ */
 let MES_SPOTS = [];
 async function loadMesSpots() {
@@ -1618,6 +1879,9 @@ async function renderSourceDetail(cardId) {
   } else if (c.drilldown === "boards") {
     d.innerHTML = `<div class="card"><h2>Solved spots <span class="sub">— click a board to walk its MES node by node (flop → turn card → river)</span></h2><div id="mes-spots" class="sub">loading…</div></div><div id="mes-walk"></div>`;
     loadMesSpots();
+  } else if (c.drilldown === "exploit") {
+    d.innerHTML = '<div class="card sub">loading the overlay…</div>';
+    loadExploitDetail();
   } else if (c.drilldown === "log") {
     d.innerHTML = `<div class="card sub">The graded view of this log — MES vs GTO, bb at stake, what you did — is the <a class="ev-link" href="/sources/grading" onclick="go('/sources/grading');return false">Live grading</a> pane.</div>`;
   }
@@ -1636,6 +1900,54 @@ async function renderSourceDetail(cardId) {
       : '<span class="sub">no answers from this source in the last 60 days</span>';
     $("src-detail-answers").querySelectorAll("tr[data-id]").forEach((tr) => { if (tr.dataset.id) tr.onclick = () => go(`/hands/${tr.dataset.id}`); });
   } catch (e) { $("src-detail-answers").innerHTML = '<span class="warn">answer log unavailable</span>'; }
+}
+
+/* ---- the pool-exploit preflop overlay, node by node ---- */
+async function loadExploitDetail() {
+  const d = $("src-detail-drill");
+  let j;
+  try { j = await (await fetch("/api/dashboard/sources/exploit-preflop/detail")).json(); } catch (e) { d.innerHTML = '<div class="card warn">overlay unavailable</div>'; return; }
+  if (!j.ok) { d.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
+  // a choice node is pure: each class carries its whole combo weight on one action
+  const nodeHtml = j.nodes.map((n) => {
+    const cls = {};
+    for (const [k, act] of Object.entries(n.cells)) { const ai = n.actions.indexOf(act); const w = COMBOS(k); cls[k] = { w, acts: n.actions.map((_, i) => (i === ai ? w : 0)) }; }
+    return `<div class="card">
+      <h2>${esc(n.label)} <span class="sub">— hero ${esc(n.heroPos)} · node <span class="mono">${esc(n.tag)}</span></span></h2>
+      <div class="sub" style="margin-bottom:6px">answers the chart lines ${n.lines.map((l) => `<span class="mono">${esc(l)}</span>`).join(" ")} — ${esc(n.note)}</div>
+      ${classGrid(cls, n.actions, null, { flat: true, foot: "one pure action per class · colour = the action, size included · legend = % of all combos · hover a cell" })}
+    </div>`;
+  }).join("");
+  const rangeHtml = j.ranges.map((r) => {
+    const cls = {};
+    for (const [k, wt] of Object.entries(r.weights)) cls[k] = { w: COMBOS(k) * Number(wt), acts: [COMBOS(k) * Number(wt)] };
+    return `<div class="card">
+      <h2>${esc(r.label)} <span class="sub">— <span class="mono">${esc(r.key)}</span> · ${r.combos} combos (${r.pct}% of hands), ${r.classes} classes</span></h2>
+      <div class="sub" style="margin-bottom:6px">used for: ${esc(r.usedFor)}</div>
+      ${classGrid(cls, ["in range"], null, { single: "#cf6a24", foot: "shade = weight of the class in the range" })}
+    </div>`;
+  }).join("");
+  const lr = j.lockedRoot;
+  const lrHtml = lr ? `<div class="card">
+      <h2>Locked-root charts <span class="sub">— the follow-on set, ${lr.jobs.filter((x) => x.solved).length} of ${lr.jobs.length} solved · ${lr.rung}bb</span></h2>
+      <div class="sub" style="margin-bottom:8px">The overlay above stops at hero's first decision. These charts carry the same pool-fitted premise through the <b>whole tree</b>: one HRC solve per villain seat × open size, villain's root frozen to the pool's range at that size, every other node solved — so a 4-bet after our 3-bet is answered as a best response to the range villain actually opened, not to the equilibrium's per-size sub-range.</div>
+      <dl class="src-dl"><dt>tree</dt><dd>${esc(lr.tree)}</dd><dt>lock</dt><dd>${esc(lr.lock)}</dd></dl>
+      <div class="scroll"><table><thead><tr><th>chart</th><th>villain</th><th>line</th><th>pool share</th><th>serves hero</th><th>lock range</th><th>status</th></tr></thead><tbody>
+        ${lr.jobs.map((x) => `<tr class="src-static"><td class="mono">${esc(x.id)}</td><td>${esc(x.villain)} opens ${x.size}x</td><td class="mono">${esc(x.line)}</td><td class="num">${x.poolShare != null ? x.poolShare + "%" : "—"}</td><td>${x.servesHero.join(" · ")}</td><td class="sub">${esc(x.lockRange)}</td><td>${x.solved ? '<span class="chip good">solved</span>' : '<span class="chip warn">planned</span>'}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="g2" style="margin-top:10px">
+        <div><div class="sub" style="text-transform:uppercase;letter-spacing:.5px;font-size:11px">covers</div>${lr.covers.map((t) => `<div class="sub">✓ ${esc(t)}</div>`).join("")}</div>
+        <div><div class="sub" style="text-transform:uppercase;letter-spacing:.5px;font-size:11px">not covered</div>${lr.notCovered.map((t) => `<div class="sub">– ${esc(t)}</div>`).join("")}</div>
+      </div>
+    </div>` : "";
+  d.innerHTML = `
+    <div class="banner">📐 <b>This is the whole overlay.</b> Five decision nodes, each 169 classes → one pure action with its size, fitted as a best response to the pool model on <span class="mono">${esc(j.chart ?? "")}</span> (100bb even, NL200 rake). Villain's open <i>size</i> is not a dimension here: every single-raise line maps to the same node, so a 2x and a 3.5x open get the same response. Hero's own sizes are in the answers (Raise 2 / Raise 9 …) and must also exist at the equilibrium chart's node, or the chart answers instead. Below the nodes: the nine derived range sets the AI chain uses as hero's flop range.</div>
+    <h2 class="sub" style="margin:12px 0 4px;text-transform:uppercase;letter-spacing:.6px">Decision nodes</h2>
+    <div class="sess-grid" style="grid-template-columns:repeat(auto-fit,minmax(470px,1fr))">${nodeHtml}</div>
+    <h2 class="sub" style="margin:12px 0 4px;text-transform:uppercase;letter-spacing:.6px">Derived range sets</h2>
+    <div class="sess-grid" style="grid-template-columns:repeat(auto-fit,minmax(470px,1fr))">${rangeHtml}</div>
+    <h2 class="sub" style="margin:12px 0 4px;text-transform:uppercase;letter-spacing:.6px">Follow-on charts</h2>
+    ${lrHtml}`;
 }
 
 function renderRegistry() {
@@ -1770,8 +2082,9 @@ async function loadRoadmap() {
      /sources/registry/:id                  one source's page
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay" };
+const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
 const SRC_PANES = ["registry", "matrix", "grading", "roadmap"];
+$("tab-play").onclick = () => go("/playthrough");
 
 function parsePath() {
   const legacy = location.hash.match(/^#hand\/(\d+)/);
@@ -1784,7 +2097,7 @@ function parsePath() {
     return { view, pane, id: pane === "registry" && seg[2] ? decodeURIComponent(seg[2]) : null };
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
-  if (view === "analytics" || view === "review") return { view, pane: null, id: null };
+  if (view === "analytics" || view === "review" || view === "playthrough") return { view, pane: null, id: null };
   return { view: "hands", pane: null, id: null };
 }
 function canonical(p) {
@@ -1810,6 +2123,8 @@ function route() {
   $("view-sessions").style.display = PATH.view === "sessions" ? "" : "none";
   $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
   $("view-replay").style.display = PATH.view === "review" ? "" : "none";
+  $("view-play").style.display = PATH.view === "playthrough" ? "" : "none";
+  if (PATH.view === "playthrough") loadPlay();
   document.title = PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
     : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
     : PATH.view === "sessions" ? `${PATH.id ? `Session ${PATH.id}` : "Sessions"} · Study Dashboard`

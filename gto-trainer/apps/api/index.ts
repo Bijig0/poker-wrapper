@@ -13,7 +13,10 @@ import fastSolverRoutes from "./src/routes/fastSolver";
 import aiSolveRoutes from "./src/routes/aiSolve";
 import aiStudyRoutes from "./src/routes/aiStudy";
 import dashboardRoutes from "./src/routes/dashboard";
+import sourcesRoutes from "./src/routes/sources";
+import missQueueRoutes from "./src/routes/missQueue";
 import replayRoutes from "./src/routes/replay";
+import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
 import { gtowApi } from "./src/services/gtowApi";
 
@@ -36,17 +39,34 @@ app.route("/api/fast-solver", fastSolverRoutes);
 app.route("/api/ai-solve", aiSolveRoutes);
 app.route("/api/ai-study", aiStudyRoutes);
 app.route("/api/dashboard", dashboardRoutes);
+app.route("/api/dashboard/sources", sourcesRoutes);
+app.route("/api/dashboard/miss-queue", missQueueRoutes);
 app.route("/api/replay", replayRoutes);
 
+// The study tool UI — Reader Verify, Replay Review, State Tester, plus the
+// replica's card art. Mounted at the root so the page paths match the ones
+// they had on the dashboard app.
+app.route("/", studyUiRoutes);
+
 // The study dashboard UI — hands table, per-node solution replayer, analytics.
-app.get("/dashboard", () =>
+// It is the entry point: :2000/ is the dashboard, the JSON API lives under /api.
+// The dashboard is one page routing on the path: /hands, /hands/:id,
+// /analytics, /sources/:pane, /sources/registry/:source, /review. Every
+// one of those serves the same HTML and the page picks the view — so a URL
+// can be bookmarked, reloaded, or pasted. (/replay stays the Replay Review
+// page itself, which the /review tab embeds.)
+const dashboardPage = () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
     headers: { "Content-Type": "text/html; charset=utf-8" },
-  })
-);
+  });
+for (const p of ["/", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/review", "/playthrough"]) {
+  app.get(p, dashboardPage);
+}
+// Old bookmarks and links still land on the dashboard.
+app.get("/dashboard", (c) => c.redirect("/", 301));
 
-// Root endpoint
-app.get("/", (c) => {
+// API index — what the JSON endpoints are and where they live.
+app.get("/api", (c) => {
   return c.json({
     name: "Poker GTO Bot API",
     version: "1.0.0",
@@ -68,7 +88,7 @@ app.get("/", (c) => {
       ingest: "POST /api/ingest — { rows | text | live } from the panel live feed",
       fastSolver: "POST /api/fast-solver — { hand | live | rows | text } → local preflop charts + GTOW spot-solution API (no live nav)",
       aiSolve: "POST /api/ai-solve — { board, pot, stack, oopRange, ipRange, heroSeat, heroCards? } → exploit solve vs CUSTOM ranges (GTOW cloud, ~2s)",
-      aiStudy: "POST /api/ai-study — { preflop, board, tokens } → study-UI node solution for ANY HU line via GTOW cloud (chart-reconstructed ranges)",
+      aiStudy: "POST /api/ai-study — SolverStudy (analysis app) ONLY: { preflop, board, tokens } → HU node solution via GTOW cloud, 6-max crawl ranges. NOT the live answer path and not used by the dashboard — live answers and dashboard re-solves go through services/aiChain.ts (POST /api/dashboard/resolve-chain)",
       studyPollerStart: "POST /api/study-poller/start — push live GTO answers into assistive-play's panel (study/practice only)",
       studyPollerStop: "POST /api/study-poller/stop",
       studyPollerStatus: "GET /api/study-poller/status",
