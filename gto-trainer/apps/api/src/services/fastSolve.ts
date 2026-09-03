@@ -15,7 +15,8 @@ import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
 import { solveAiChain } from "./aiChain";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
-import { mesPostflopLookup } from "./mesPostflop";
+import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
+import { mesRiverLookup } from "./mesRiver";
 
 /**
  * Fast-solver: answer a hand node the clean way — the local crawled preflop
@@ -952,7 +953,29 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
  */
 async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
   let mes = null;
-  if (hand.currentNode.street === "flop" || hand.currentNode.street === "turn") {
+  if (hand.currentNode.street === "river") {
+    // extracted on demand from the locked tree (cold ~1 min, then cached)
+    try {
+      const tk = buildSpotSolutionTokens(hand, heroPos);
+      const heroPosName = (hand.positions[hand.heroSeatId] ?? heroPos ?? "").toUpperCase() || null;
+      const ctx = hand.board.length >= 5 ? mesRiverContext({
+        positions: [...Object.values(hand.positions), ...(heroPosName ? [heroPosName] : [])],
+        heroPos: heroPosName, pf3Tokens: buildPreflopTokens3max(hand, heroPos),
+        flopTokens: tk.flop, turnTokens: tk.turn, board: hand.board,
+        heroCards: hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c)), riverCard: hand.board[4]!,
+      }) : null;
+      if (ctx) {
+        const hit = await mesRiverLookup({ family: ctx.family, board: ctx.board, heroPlayer: ctx.heroPlayer,
+          holesHint: ctx.holes, line: ctx.line, riverTokens: tk.river, heroCardsMapped: ctx.heroCardsMapped });
+        if (hit) {
+          hit.evGainBb = ctx.evGainBb; hit.exact = ctx.exact;
+          hit.tag = `${ctx.family} @ ${ctx.board}${ctx.exact ? "" : "~"} river (+${ctx.evGainBb}bb pool MES)`;
+          if (!ctx.exact) hit.warning = `Flop ${hand.board.slice(0, 3).join("")} answered from nearest solved texture ${ctx.board} (dist ${ctx.bd.toFixed(1)}) — approximate. ` + (hit.warning ?? "");
+          mes = hit;
+        }
+      }
+    } catch { mes = null; }
+  } else if (hand.currentNode.street === "flop" || hand.currentNode.street === "turn") {
     try {
       const tk = buildSpotSolutionTokens(hand, heroPos);
       // hand.positions only labels seats the FEED named — hero's own position

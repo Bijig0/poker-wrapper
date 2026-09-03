@@ -502,3 +502,88 @@ export function mesFamilyFor(pf3Tokens: string[], heroPos: string | null): strin
   }
   return null;
 }
+
+// ------------------------------------------------------------- river context
+
+export interface MesRiverContext {
+  family: string; board: string; heroPlayer: number; holes: string[];
+  /** solver labels from the flop root: spot prefix + flop actions + turn card
+   *  + turn actions + river card (cards suit-mapped into the solved board) */
+  line: string[];
+  heroCardsMapped: string[];
+  evGainBb: number; exact: boolean; snapped: boolean; bd: number;
+}
+
+/** Everything mesRiver.ts needs to extract hero's river node on demand: the
+ *  same family/board match and flop+turn walks as the flop/turn answers, but
+ *  returning LABELS (extract.exe walks labels) and requiring both earlier
+ *  streets to be complete. Null = not a modeled spot / line not extracted. */
+export function mesRiverContext(args: MesNodeArgs & { riverCard: string }): MesRiverContext | null {
+  const data = load();
+  if (!data || !args.heroPos || args.heroCards.length !== 2) return null;
+  const posSet = new Set(args.positions.map((p) => p.toUpperCase()));
+  if (posSet.size !== 3 || !posSet.has("BTN") || !posSet.has("SB") || !posSet.has("BB")) return null;
+  const famId = mesFamilyFor(args.pf3Tokens, args.heroPos);
+  if (!famId) return null;
+  const fam = data.families[famId]!;
+  const actual = parseFlop(args.board.slice(0, 3).join(""));
+  if (!actual) return null;
+  const nb = mesBoardFor(famId, args.board);
+  if (!nb) return null;
+  const rb = fam.boards[nb.board]!;
+  const solved = parseFlop(nb.board)!;
+  const smap = suitMap(actual.cards, solved.cards);
+  const mapCard = (c: string) => c[0]! + (smap[c[1]!] ?? c[1]!);
+
+  // flop: consume the spot prefix, then walk the relative dump to a street end
+  const prefix = fam.line ?? [];
+  const flopToks = [...args.flopTokens];
+  for (const want of prefix) {
+    const got = flopToks.shift();
+    const ok = got != null && (want === "Check" ? got === "X" : want === "Call" ? got === "C" : /^R/.test(got));
+    if (!ok) return null;
+  }
+  const byH = new Map(rb.nodes.map((n) => [n.h.join(","), n]));
+  const labels: string[] = [...prefix];
+  let h: number[] = [];
+  let snapped = false;
+  for (const tok of flopToks) {
+    const node = byH.get(h.join(","));
+    if (!node) return null;
+    const r = resolveToken(tok, node.acts);
+    if (!r) return null;
+    snapped ||= r.snapped;
+    labels.push(node.acts[r.idx]!);
+    h = [...h, r.idx];
+  }
+  if (byH.has(h.join(","))) return null;            // flop not finished
+
+  // turn: the extracted line for this flop history, then walk its nodes
+  const tf = loadTurn(famId, nb.board);
+  if (!tf) return null;
+  const tline = tf.lines[h.join(",")];
+  if (!tline) return null;
+  const tc = mapCard(args.board[3]!);
+  const card = tline.cards[tc] ?? tline.cards[args.board[3]!];
+  if (!card) return null;
+  labels.push(tc);
+  const tByH = new Map(card.nodes.map((n) => [n.h.join(","), n]));
+  let th: number[] = [];
+  for (const tok of args.turnTokens ?? []) {
+    const tn = tByH.get(th.join(","));
+    if (!tn) return null;
+    const r = resolveToken(tok, tn.acts);
+    if (!r) return null;
+    snapped ||= r.snapped;
+    labels.push(tn.acts[r.idx]!);
+    th = [...th, r.idx];
+  }
+  if (tByH.has(th.join(","))) return null;          // turn not finished
+  labels.push(mapCard(args.riverCard));
+
+  return {
+    family: famId, board: nb.board, heroPlayer: fam.hero_player, holes: tf.holes,
+    line: labels, heroCardsMapped: args.heroCards.map(mapCard),
+    evGainBb: rb.ev_gain_bb, exact: nb.exact, snapped, bd: nb.dist,
+  };
+}
