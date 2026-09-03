@@ -1346,7 +1346,8 @@ def _feed_tick() -> None:
         # what WE said about it, so "was the live advice right?" was
         # unanswerable in review. None when answers are off or stale.
         "liveAnswer": ({"text": _study["text"], "pick": _study["pick"],
-                        "roll": _study["roll"]} if _study.get("text") else None)},
+                        "roll": _study["roll"], **(_study.get("prov") or {})}
+                       if _study.get("text") else None)},
         raw=d)
     _feed_prev = cur
 
@@ -2447,8 +2448,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        # The dashboard app (localhost:2100) drives the state tester cross-
-        # origin; everything here is already loopback-only.
+        # The study pages (served by the API on :2000) drive the state tester
+        # cross-origin; everything here is already loopback-only.
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
@@ -2677,6 +2678,11 @@ class Handler(BaseHTTPRequestHandler):
                 _study["roll"] = body.get("roll") if live else None
                 note = body.get("note")
                 _study["note"] = note if live and isinstance(note, str) else None
+                # provenance: which strategy/chart answered and where the roll fell,
+                # so review can show the LIVE pick with the same detail as NOW
+                _study["prov"] = ({k: body.get(k) for k in
+                                   ("band", "strategy", "source", "tier", "chart", "exploitPick", "chartPick")}
+                                  if live else None)
                 _study["at"] = time.time()
                 self._send(200, "application/json", json.dumps({"ok": True}).encode())
             elif path == "/debug":
@@ -2872,13 +2878,19 @@ def _takeover() -> None:
 def _tool_shell() -> str:
     """One window for the whole Study Tool.
 
-    Tab 1 is the wrapper's own panel (same origin). The rest are the dashboard
-    app's surfaces, iframed from :2100 — authored there in React and not worth
-    porting to vanilla JS just to share a window. Each iframe loads on first
-    open and stays alive after, so the review queue keeps its place and the
-    panel keeps announcing answers from behind whichever tab is in front.
+    Tab 1 is the wrapper's own panel (same origin). The rest are study surfaces
+    iframed from the API on :2000 — they used to live on the dashboard app's
+    Vite server (:2100), which meant keeping a second node process alive purely
+    to host three pages; they were rebuilt as plain pages on the API, which
+    already served the data behind them. Each iframe loads on first open and
+    stays alive after, so the review queue keeps its place and the panel keeps
+    announcing answers from behind whichever tab is in front.
+
+    The State Tester deliberately gets no ?wrapper= override: it defaults to the
+    TEST rig (7701) whichever rig opened this shell, so the live rig's window
+    can never push an authored spot onto a real table.
     """
-    dash = "http://127.0.0.1:2100"
+    dash = "http://127.0.0.1:2000"
     tabs = [
         ("study", "Study Answers", f"http://127.0.0.1:{PANEL_PORT}/panel"),
         ("review", "Review Queue", f"{dash}/replay"),
@@ -2908,7 +2920,7 @@ def _tool_shell() -> str:
     display:none; background:#0d141c; }}
   iframe.on {{ display:block; }}
 </style></head><body>
-<nav>{buttons}<span class="hint" id="hint">dashboard on :2100 is not running —
+<nav>{buttons}<span class="hint" id="hint">the API on :2000 is not running —
   these tabs need it (the launcher starts it; see study-tool.log)</span></nav>
 <main>{frames}</main>
 <script>
@@ -2936,8 +2948,8 @@ def _tool_shell() -> str:
     if (e.data && typeof e.data.tab === "string") show(e.data.tab);
   }});
   show("study");
-  // The dashboard tabs are dead without :2100 — say so instead of a blank pane.
-  fetch("http://127.0.0.1:2100/", {{ mode: "no-cors" }})
+  // These tabs are dead without :2000 — say so instead of a blank pane.
+  fetch("http://127.0.0.1:2000/", {{ mode: "no-cors" }})
     .catch(() => document.getElementById("hint").style.display = "inline");
 </script>
 </body></html>"""

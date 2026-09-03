@@ -102,13 +102,20 @@ interface FastSolveLikeResponse {
   solution?:
     | {
         ok: true;
-        decision?: { action: string; frequency?: number } | null;
+        decision?: { action: string; frequency?: number; band?: [number, number] } | null;
         actions?: AnswerAction[];
         approx?: boolean;
         notInRange?: boolean;
         tier?: string;
         /** Chart/solution-set id the answer came from (answer-log join key). */
         gametype?: string;
+        setId?: string;
+        source?: string;
+        /** MES/GTO provenance (services/fastSolve.ts) — which strategy was
+         *  primary and what the other one would have picked. */
+        strategyMode?: "exploit" | "chart";
+        exploitDecision?: { action: string } | null;
+        chartDecision?: { action: string } | null;
         warning?: string | null;
       }
     | { ok: false; reason: string; street?: string }
@@ -406,7 +413,18 @@ class StudyPoller {
     });
     // The solve's own caveat (snapped sizes, generic ranges, …) rides along
     // so the panel can show HOW MUCH to trust this verdict.
-    await this.push(text, rolled, (sol as { warning?: string | null }).warning ?? null);
+    // Provenance rides along with the pick so a recording can say not just
+    // WHAT we advised but from WHICH strategy/chart and WHERE the roll fell.
+    await this.push(text, {
+      ...rolled,
+      band: sol.decision?.band ?? null,
+      strategy: sol.strategyMode ?? null,
+      source: sol.source ?? null,
+      tier: sol.tier ?? null,
+      chart: sol.setId ?? null,
+      exploitPick: sol.exploitDecision?.action ?? null,
+      chartPick: sol.chartDecision?.action ?? null,
+    }, (sol as { warning?: string | null }).warning ?? null);
   }
 
   /** POST /api/fast-solver — same body as ingest, no navigation, no navLock. */
@@ -537,7 +555,9 @@ class StudyPoller {
 
   /** The rolled pick for the current answer, repeated verbatim by the
    *  keep-alive so the sampled action never re-rolls mid-decision. */
-  private lastExtra: { pick: string; roll: number | null } | null = null;
+  private lastExtra: { pick: string; roll: number | null; band?: [number, number] | null;
+                       strategy?: string | null; source?: string | null; tier?: string | null;
+                       chart?: string | null; exploitPick?: string | null; chartPick?: string | null } | null = null;
   /** The solve's caveat (snapped sizes, generic ranges) for the current
    *  answer — repeated by the keep-alive alongside it. */
   private lastNote: string | null = null;
@@ -552,7 +572,9 @@ class StudyPoller {
 
   private async push(
     text: string | null,
-    extra?: { pick: string; roll: number | null } | null,
+    extra?: { pick: string; roll: number | null; band?: [number, number] | null;
+              strategy?: string | null; source?: string | null; tier?: string | null;
+              chart?: string | null; exploitPick?: string | null; chartPick?: string | null } | null,
     note?: string | null,
   ): Promise<void> {
     this.status.lastAnswer = text;
@@ -569,6 +591,13 @@ class StudyPoller {
           text,
           pick: this.lastExtra?.pick ?? null,
           roll: this.lastExtra?.roll ?? null,
+          band: this.lastExtra?.band ?? null,
+          strategy: this.lastExtra?.strategy ?? null,
+          source: this.lastExtra?.source ?? null,
+          tier: this.lastExtra?.tier ?? null,
+          chart: this.lastExtra?.chart ?? null,
+          exploitPick: this.lastExtra?.exploitPick ?? null,
+          chartPick: this.lastExtra?.chartPick ?? null,
           note: this.lastNote,
         }),
         signal: AbortSignal.timeout(3000),
