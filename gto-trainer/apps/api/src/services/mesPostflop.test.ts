@@ -72,3 +72,48 @@ describe("mesPostflopLookup", () => {
     expect(hit).toBeNull();
   });
 });
+
+describe("turn street (per-board turn file)", () => {
+  // M2: BTN opens, SB folds, BB calls; flop Kc7d2h checks through; turn 2c; BB checks -> hero (BTN) to act
+  const m2turn = (over: Partial<Parameters<typeof mesPostflopLookup>[0]> = {}) => ({
+    positions: ["BTN", "SB", "BB"],
+    heroPos: "BTN",
+    pf3Tokens: ["R2.5", "F", "C"],
+    flopTokens: ["X", "X"],
+    turnTokens: ["X"],
+    board: ["Kc", "7d", "2h", "2c"],
+    heroCards: ["Ah", "Qs"],
+    ...over,
+  });
+
+  test("answers hero's turn decision from the locked tree", () => {
+    const hit = mesPostflopLookup(m2turn());
+    expect(hit).not.toBeNull(); // data/mes_turn/M2_heroBTN_srp_vs_BB_Kc7d2h.turn.json must be installed
+    expect(hit!.board).toBe("Kc7d2h");
+    expect(hit!.notInRange).toBe(false);
+    const total = hit!.actions.reduce((s, a) => s + a.frequency, 0);
+    expect(total).toBeGreaterThan(95);
+    expect(hit!.warning).toContain("Turn answer");
+  });
+
+  test("a flop line still open (hero yet to act on the flop) is not a turn lookup", () => {
+    const hit = mesPostflopLookup(m2turn({ flopTokens: ["X"], turnTokens: [] }));
+    expect(hit).toBeNull();
+  });
+});
+
+describe("M2 flop (IP hero: BB's check is the spot prefix)", () => {
+  test("BB checks, hero to act on the flop", () => {
+    const hit = mesPostflopLookup({ positions: ["BTN", "SB", "BB"], heroPos: "BTN", pf3Tokens: ["R2.5", "F", "C"],
+      flopTokens: ["X"], board: ["Kc", "7d", "2h"], heroCards: ["Ah", "Qs"] });
+    expect(hit).not.toBeNull();
+    expect(hit!.notInRange).toBe(false);
+    expect(hit!.actions.length).toBeGreaterThanOrEqual(4);
+  });
+  test("BB donk-bets: not the modeled spot", () => {
+    const hit = mesPostflopLookup({ positions: ["BTN", "SB", "BB"], heroPos: "BTN", pf3Tokens: ["R2.5", "F", "C"],
+      flopTokens: ["R2"], board: ["Kc", "7d", "2h"], heroCards: ["Ah", "Qs"] });
+    expect(hit).toBeNull();
+  });
+});
+

@@ -156,7 +156,7 @@ describe("studyPoller", () => {
     expect(status.distinctFailureStreak).toBe(0);
     expect(launchAppCalls.length).toBe(0);
     const pushed = pushCalls();
-    expect(pushed[pushed.length - 1]!.body).toEqual({ text: null, pick: null, roll: null, note: null });
+    expect(pushed[pushed.length - 1]!.body).toMatchObject({ text: null, pick: null, roll: null, note: null });
   });
 
   it("also answers a preflop decision through the fast path", async () => {
@@ -229,7 +229,7 @@ describe("studyPoller", () => {
     await wait(20);
 
     const pushed = pushCalls();
-    expect(pushed[pushed.length - 1]!.body).toEqual({ text: null, pick: null, roll: null, note: null });
+    expect(pushed[pushed.length - 1]!.body).toMatchObject({ text: null, pick: null, roll: null, note: null });
     expect(studyPoller.getStatus().lastAnswer).toBeNull();
   });
 
@@ -256,7 +256,7 @@ describe("studyPoller", () => {
     const status = await studyPoller.stop();
     expect(status.running).toBe(false);
     expect(status.lastAnswer).toBeNull();
-    expect(pushCalls()[pushCalls().length - 1]!.body).toEqual({ text: null, pick: null, roll: null, note: null });
+    expect(pushCalls()[pushCalls().length - 1]!.body).toMatchObject({ text: null, pick: null, roll: null, note: null });
   });
 
   it("surfaces a fetch failure in lastError and clears the answer", async () => {

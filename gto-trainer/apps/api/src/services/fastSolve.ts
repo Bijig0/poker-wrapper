@@ -6,6 +6,7 @@ import { gtowApi } from "./gtowApi";
 import { SOLUTION_SETS } from "./gtowCdp";
 import { parseHandClass } from "../utils/parseHandClass/parseHandClass";
 import { comboIndex } from "../utils/comboIndex/comboIndex";
+import { solveStore } from "./solveStore";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
@@ -34,6 +35,9 @@ export interface FastSolveOpts {
    *  Both answers ride in the result either way; this only picks `decision`.
    *  Default: "exploit" when armed. */
   strategy?: "exploit" | "chart";
+  /** Who is asking — recorded on every stored AI-chain solve ("live" from the
+   *  study poller, "replay" from the dashboard's re-solve, else "adhoc"). */
+  origin?: string;
 }
 
 interface ActionFreq {
@@ -62,6 +66,8 @@ export type FastSolveResult =
       mesBoard?: string;
       mesEvGainBb?: number;
       mesExact?: boolean;
+      /** id in data/solves.sqlite of the stored AI-chain trace (inputs + every node). */
+      solveId?: number | null;
       street: string;
       setId: string;
       gametype: string;
@@ -636,7 +642,8 @@ async function solvePostflopViaChain(
   heroPos: string | null,
   set: (typeof SOLUTION_SETS)[number],
   depth: number,
-  tk: { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string }
+  tk: { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string },
+  origin?: string
 ): Promise<{ res: FastSolveResult | null; why: string | null }> {
   const fail = (why: string) => ({ res: null, why });
   const cur = hand.currentNode.street as "flop" | "turn" | "river";
@@ -729,6 +736,7 @@ async function solvePostflopViaChain(
   const heroComboIdx = heroCards.length === 2 ? comboIndex(heroCards[0]!, heroCards[1]!) : null;
   const streets = cur === "flop" ? [tk.flop] : cur === "turn" ? [tk.flop, tk.turn] : [tk.flop, tk.turn, tk.river];
 
+  const t0 = Date.now();
   const chain = await solveAiChain({
     oopPos,
     ipPos,
@@ -741,7 +749,22 @@ async function solvePostflopViaChain(
     heroSeat: spot.heroSeat,
     heroComboIdx,
   });
-  if (!chain.ok) return fail(chain.why);
+  // Every chain walk is kept — inputs, every node, the verdict — so the
+  // answer can be inspected later exactly as it was, and diffed against a
+  // re-solve (services/solveStore.ts).
+  const solveMeta = {
+    origin: origin ?? "adhoc",
+    clientHandId: hand.clientHandId ?? null,
+    wrapperHandId: hand.handId ?? null,
+    decisionKey: JSON.stringify([hand.street, hand.board, hand.heroCards, hand.currentNode.toCall, hand.actions.length]),
+    street: cur, board: tk.board, heroCards: heroCards.join("") || null, heroPos: heroPosName,
+    tier: "ai-chain", solveMs: Date.now() - t0,
+  };
+  if (!chain.ok) {
+    if (chain.trace) solveStore.save({ ...solveMeta, line: null, solves: null, ok: false, why: chain.why }, chain.trace);
+    return fail(chain.why);
+  }
+  const solveId = solveStore.save({ ...solveMeta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace);
 
   const j = chain.data;
   let actions: ActionFreq[];
@@ -760,6 +783,7 @@ async function solvePostflopViaChain(
     ok: true,
     source: "gtow-api-postflop",
     tier: "ai-chain",
+    solveId,
     street: cur,
     setId: set.id,
     gametype: set.gametype,
@@ -793,7 +817,7 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
   // The per-street chain answers with ranges conditioned on the actual line —
   // the correct equilibrium at hero's node. It requires a clean, walkable
   // capture; anything broken falls through to the street-root net.
-  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk);
+  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk, opts.origin);
   if (chain.res) return chain.res;
 
   // Street-root net: solves the current street with FLOP-ENTRY ranges and
@@ -928,7 +952,7 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
  */
 async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
   let mes = null;
-  if (hand.currentNode.street === "flop") {
+  if (hand.currentNode.street === "flop" || hand.currentNode.street === "turn") {
     try {
       const tk = buildSpotSolutionTokens(hand, heroPos);
       // hand.positions only labels seats the FEED named — hero's own position
@@ -940,6 +964,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
         heroPos: heroPosName,
         pf3Tokens: buildPreflopTokens3max(hand, heroPos),
         flopTokens: tk.flop,
+        turnTokens: hand.currentNode.street === "turn" ? tk.turn : undefined,
         board: hand.board,
         heroCards: hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c)),
       });
@@ -958,7 +983,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
       ok: true,
       source: "mes-postflop",
       tier: "exploit-postflop",
-      street: "flop",
+      street: hand.currentNode.street,
       setId: set?.id ?? "mes",
       gametype: set?.gametype ?? "3max",
       depth: resolveDepth(hand, set?.depths?.length ? set.depths : [100], opts.depth),
