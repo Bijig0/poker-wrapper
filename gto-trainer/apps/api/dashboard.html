@@ -1674,7 +1674,23 @@ async function loadPlayPreflop(actor) {
       stratNote = `<span class="avail on">MES preflop · ${esc(tag)}</span> <span class="sub">pool best-response per hand class (pure picks); chart mix shown for comparison</span>`;
     } else stratNote = `<span class="avail off">MES not modeled at this node</span> <span class="sub">the exploit covers the five first-decision shapes; deeper nodes use the GTO chart</span>`;
   } else if (usePool) {
-    stratNote = `<span class="avail on">Pool</span> <span class="sub">measured pool frequencies where read (${esc(Object.keys(PT.cfg.pool?.freq ?? {}).length)} nodes); chart mix elsewhere</span>`;
+    // the pool's measured fold/call/raise split at the shapes we have reads for;
+    // the raise mass is spread over the chart's raise sizes in the chart's own proportion
+    const pf = PT.cfg.pool?.freq ?? {}, pn = PT.cfg.pool?.n ?? {};
+    const toks = PT.line, isR = (x) => /^R[\d.]+$/.test(x);
+    let keys = null, nKey = null;
+    if (actor === "BTN" && toks.length === 0) { keys = { open: "btn_open", limp: "btn_limp" }; nKey = "btn_first"; }
+    else if (actor === "SB" && toks.length === 1 && toks[0] === "F") { keys = { open: "sb_open_bvb", limp: "sb_limp_bvb" }; nKey = "sb_first"; }
+    else if (actor === "SB" && toks.length === 1 && isR(toks[0])) { keys = { fold: "sb_fold_vs_open", call: "sb_flat_vs_open", raise: "sb_3bet_vs_open" }; nKey = "sb_vs_open"; }
+    else if (actor === "BB" && toks.length === 2 && isR(toks[0]) && toks[1] === "F") { keys = { fold: "bb_fold_vs_open", call: "bb_flat_vs_open", raise: "bb_3bet_vs_open" }; nKey = "bb_vs_open"; }
+    else if (actor === "BB" && toks.length === 2 && toks[0] === "F" && isR(toks[1])) { keys = { fold: "bb_fold_vs_sb", call: "bb_flat_vs_sb", raise: "bb_3bet_vs_sb" }; nKey = "bb_vs_sb"; }
+    if (keys) {
+      const bucketOf = (a) => /^Fold/.test(a) ? "fold" : /^Limp/.test(a) ? "limp" : /^(Call|Check)/.test(a) ? "call" : /^Raise/.test(a) ? (keys.open ? "open" : "raise") : null;
+      const mass = {}; for (const [b, k] of Object.entries(keys)) mass[b] = 100 * (pf[k] ?? 0);
+      if (keys.open) mass.fold = Math.max(0, 100 - (mass.open ?? 0) - (mass.limp ?? 0));
+      aggPct = acts.map((a, i) => { const b = bucketOf(a); if (!b || mass[b] == null) return chartPct[i]; const sib = acts.map((x, j) => bucketOf(x) === b ? chartPct[j] : 0); const tot = sib.reduce((x, y) => x + y, 0); return tot > 0 ? mass[b] * chartPct[i] / tot : mass[b] / sib.filter(Boolean).length; });
+      stratNote = `<span class="avail on">Pool · n=${esc(String(pn[nKey] ?? "?"))}</span> <span class="sub">measured fold/call/raise split from the corpus; raise mass spread over the chart's sizes · chart mix in the grid</span>`;
+    } else stratNote = `<span class="avail off">Pool read not available at this node</span> <span class="sub">chart mix shown</span>`;
   }
   // RNG for hero
   let rng = "";
@@ -1690,7 +1706,7 @@ async function loadPlayPreflop(actor) {
       (cell ? ` <span class="sub">· chart mix ${acts.map((a) => `${a} ${(cell.actions[a] ?? 0).toFixed(0)}%`).filter((s) => !s.endsWith(" 0%")).join(", ")}</span>` : "") + `</div>`;
   }
   el.innerHTML = `<h2>${esc(actor)} to act${isHero ? " · you" : ""} <span class="sub">line ${esc(line || "(root)")}</span></h2><div style="margin:4px 0">${stratNote}</div>${rng}
-    <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${useMes && choices ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
+    <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${(useMes && choices) || (usePool && Math.abs(aggPct[i] - chartPct[i]) > 0.5) ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
     <div id="pl-grid"></div>`;
   // grid: chart cells, MES overlay when active
   const g = $("pl-grid");
