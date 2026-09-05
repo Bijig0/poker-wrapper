@@ -2,7 +2,7 @@
  * Strategy catalogue — the single authority on the WHOLE-HAND strategies we can
  * actually play, and the safeguards that stop us playing an incoherent one.
  *
- * A strategy is a preflop layer + a postflop layer. Each layer declares what it
+ * A strategy is three pieces: preflop + postflop + opponent model. Each declares what it
  * PROVIDES and what it REQUIRES, and the validator refuses combinations whose
  * requirements aren't met by their partner or by what's installed:
  *
@@ -37,49 +37,70 @@ export interface PreflopLayer {
   arrival: "exploit" | "chart";   // which arriving range this produces
   requiresEnv?: string;           // env var that must be set (e.g. EXPLOIT_CHART)
   source: string;                 // registry source id it routes through
+  builtAgainst?: "pool";          // opponent model the best-response was computed against
 }
 export interface PostflopLayer {
   id: string; label: string; short: string;
   assumesArrival: "exploit" | "chart" | "any"; // arrival the solve was conditioned on
   needsMes?: boolean;             // requires the mes_postflop artifact
   source: string;
+  builtAgainst?: "pool";          // opponent model the solve was locked against
 }
+/** The opponent model: what hero ASSUMES villains do. MES pieces are a
+ *  best-response to one specific model and are meaningless against another. */
+export interface OpponentLayer {
+  id: string; label: string; short: string;
+  source: string;
+}
+
+/** The pieces a whole-hand strategy is assembled from, in the order the hand
+ *  is played. Surfaced by the registry so the Pieces page can group sources. */
+export const PIECES = [
+  { id: "preflop", label: "Preflop", what: "every decision before the flop: opens, 3-bets, calls, folds", sources: ["exploit-preflop", "hrc-3max", "gtow-charts"] },
+  { id: "postflop", label: "Postflop", what: "flop, turn and river play from the range the preflop piece arrives with", sources: ["mes-postflop", "gtow-ai", "gtow-library"] },
+  { id: "opponent", label: "Opponent model", what: "what hero assumes the villains do; the MES pieces are best-responses to exactly one of these", sources: ["pool-model", "hrc-3max"] },
+  { id: "ground-truth", label: "Ground truth", what: "not a piece: the evidence the pieces are graded against", sources: ["log"] },
+] as const;
 
 const PREFLOP: Record<string, PreflopLayer> = {
   exploit: { id: "exploit", label: "MES preflop (pool best-response)", short: "MES pre",
-    arrival: "exploit", requiresEnv: "EXPLOIT_CHART", source: "exploit-preflop" },
+    arrival: "exploit", requiresEnv: "EXPLOIT_CHART", source: "exploit-preflop", builtAgainst: "pool" },
   chart: { id: "chart", label: "GTO preflop (HRC asym charts)", short: "GTO pre",
     arrival: "chart", source: "hrc-3max" },
 };
 const POSTFLOP: Record<string, PostflopLayer> = {
   mes: { id: "mes", label: "MES postflop (locked solves, refit)", short: "MES post",
-    assumesArrival: "exploit", needsMes: true, source: "mes-postflop" },
+    assumesArrival: "exploit", needsMes: true, source: "mes-postflop", builtAgainst: "pool" },
   gto: { id: "gto", label: "GTO postflop (equilibrium / GTOW AI)", short: "GTO post",
     assumesArrival: "any", source: "gtow-ai" },
+};
+const OPPONENT: Record<string, OpponentLayer> = {
+  pool: { id: "pool", label: "Measured pool (pool_model + villain_freqs)", short: "pool", source: "pool-model" },
+  gto: { id: "gto", label: "Equilibrium villains (chart ranges)", short: "GTO villains", source: "hrc-3max" },
 };
 
 // ---- catalogue ------------------------------------------------------------
 export interface StrategyDef {
-  id: string; name: string; tagline: string; preflop: string; postflop: string;
+  id: string; name: string; tagline: string; preflop: string; postflop: string; opponent: string;
   matrixRow: string;   // id in strategy_matrix groups[].rows[]
   recommended?: boolean;
 }
 // Names are the ones you'll see at the table — deliberately plain.
 export const STRATEGIES: StrategyDef[] = [
   { id: "apex", name: "Apex", tagline: "Full pool exploit — MES preflop and postflop",
-    preflop: "exploit", postflop: "mes", matrixRow: "combined_refit", recommended: true },
+    preflop: "exploit", postflop: "mes", opponent: "pool", matrixRow: "combined_refit", recommended: true },
   { id: "vanguard", name: "Vanguard", tagline: "Exploit preflop, safe equilibrium postflop",
-    preflop: "exploit", postflop: "gto", matrixRow: "ex_eq" },
+    preflop: "exploit", postflop: "gto", opponent: "pool", matrixRow: "ex_eq" },
   { id: "bedrock", name: "Bedrock", tagline: "Equilibrium everywhere — the unexploitable floor",
-    preflop: "chart", postflop: "gto", matrixRow: "eq_eq" },
+    preflop: "chart", postflop: "gto", opponent: "gto", matrixRow: "eq_eq" },
   // deliberately incoherent — kept to demonstrate the safeguard, never served
   { id: "mirage", name: "Mirage", tagline: "GTO preflop with MES postflop — mis-specified, do not play",
-    preflop: "chart", postflop: "mes", matrixRow: "combined_refit" },
+    preflop: "chart", postflop: "mes", opponent: "pool", matrixRow: "combined_refit" },
 ];
 
 export type StratStatus = "ok" | "misspecified" | "unavailable" | "drift";
 export interface StrategyView extends StrategyDef {
-  preflopLayer: PreflopLayer; postflopLayer: PostflopLayer;
+  preflopLayer: PreflopLayer; postflopLayer: PostflopLayer; opponentLayer: OpponentLayer;
   status: StratStatus; reasons: string[]; preconditions: { check: string; pass: boolean; detail: string }[];
 }
 
@@ -94,9 +115,19 @@ export function evaluate(): StrategyView[] {
   const poolDrift = poolMtime != null && mesBuilt != null && poolMtime > mesBuilt;
 
   return STRATEGIES.map((s) => {
-    const pre = PREFLOP[s.preflop]!, post = POSTFLOP[s.postflop]!;
+    const pre = PREFLOP[s.preflop]!, post = POSTFLOP[s.postflop]!, opp = OPPONENT[s.opponent]!;
     const pc: { check: string; pass: boolean; detail: string }[] = [];
     const reasons: string[] = [];
+
+    // 0. opponent coherence: a best-response piece only means something
+    //    against the model it was computed for
+    const needsPool = [pre.builtAgainst, post.builtAgainst].filter(Boolean) as string[];
+    const oppOk = needsPool.every((m) => m === opp.id);
+    pc.push({ check: "opponent model matches the best-response pieces",
+      pass: oppOk,
+      detail: needsPool.length === 0 ? "no piece is a best-response; any opponent model is coherent"
+        : `${needsPool.length === 2 ? "both MES pieces were" : "the MES piece was"} locked against the ${needsPool[0]} model; opponent piece is ${opp.short}` });
+    if (!oppOk) reasons.push(`the MES pieces are a best-response to the measured pool, but this strategy assumes ${opp.label}. The exploit has nothing to exploit. Not served.`);
 
     // 1. arrival-range coherence — the load-bearing safeguard
     const arrivalOk = post.assumesArrival === "any" || post.assumesArrival === pre.arrival;
@@ -121,16 +152,16 @@ export function evaluate(): StrategyView[] {
 
     // 3. villain drift (warning, not fatal)
     if (post.needsMes && poolDrift) {
-      pc.push({ check: "pool model matches the MES lock", pass: false, detail: "pool_model_v4.json is newer than the served MES build — re-lock behind it" });
+      pc.push({ check: "opponent piece unchanged since the MES lock", pass: false, detail: "pool_model_v4.json is newer than the served MES build; re-lock behind it" });
       reasons.push("the live pool model is newer than the MES solve it was locked against — values may have drifted (re-run the batch).");
     }
 
     let status: StratStatus = "ok";
-    if (!arrivalOk) status = "misspecified";
-    else if (pc.some((x) => !x.pass && x.check !== "pool model matches the MES lock")) status = "unavailable";
+    if (!arrivalOk || !oppOk) status = "misspecified";
+    else if (pc.some((x) => !x.pass && x.check !== "opponent piece unchanged since the MES lock")) status = "unavailable";
     else if (post.needsMes && poolDrift) status = "drift";
 
-    return { ...s, preflopLayer: pre, postflopLayer: post, status, reasons, preconditions: pc };
+    return { ...s, preflopLayer: pre, postflopLayer: post, opponentLayer: opp, status, reasons, preconditions: pc };
   });
 }
 

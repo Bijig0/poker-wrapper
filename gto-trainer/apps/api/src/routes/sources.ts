@@ -7,7 +7,7 @@ import { getCatalog } from "../services/chartCatalog";
 import { mesPostflopInfo, mesSpots, mesFlopNode, mesTurnLines, mesTurnNode } from "../services/mesPostflop";
 import { extractLine } from "../services/mesRiver";
 import { fetchNode } from "../services/hrc3max";
-import { evaluate as evaluateStrategies, strategyIdForAnswer } from "../services/strategies";
+import { evaluate as evaluateStrategies, strategyIdForAnswer, PIECES } from "../services/strategies";
 import { gtowApi } from "../services/gtowApi";
 import { HRC3MAX_BASE } from "../services/hrc3max";
 import { studyPoller } from "../services/studyPoller";
@@ -86,7 +86,22 @@ export interface SourceCard {
   drilldown: "charts" | "boards" | "log" | "exploit" | null;
   /** answers.sqlite `source` value(s) this card owns — the detail view's answer trail filter. */
   sourceKeys?: string[];
+  /** which piece of a whole-hand strategy this source serves (services/strategies.ts PIECES) */
+  piece?: "preflop" | "postflop" | "opponent" | "ground-truth";
+  /** primary = first in tier order for its piece; fallback = only reached when the primary can't answer */
+  role?: "primary" | "fallback" | null;
 }
+
+const PIECE_OF: Record<string, { piece: SourceCard["piece"]; role: SourceCard["role"] }> = {
+  "exploit-preflop": { piece: "preflop", role: "primary" },
+  "hrc-3max": { piece: "preflop", role: "primary" },
+  "gtow-charts": { piece: "preflop", role: "fallback" },
+  "mes-postflop": { piece: "postflop", role: "primary" },
+  "gtow-ai": { piece: "postflop", role: "primary" },
+  "gtow-library": { piece: "postflop", role: "fallback" },
+  "pool-model": { piece: "opponent", role: "primary" },
+  log: { piece: "ground-truth", role: null },
+};
 
 const SOURCE_KEYS: Record<string, string[]> = {
   "exploit-preflop": ["pool-exploit-preflop"],
@@ -95,6 +110,7 @@ const SOURCE_KEYS: Record<string, string[]> = {
   "mes-postflop": ["mes-postflop"],
   "gtow-ai": ["gtow-api-postflop"],
   "gtow-library": ["gtow-api-postflop"],
+  "pool-model": [],
   log: [],
 };
 
@@ -307,6 +323,44 @@ app.get("/registry", async (c) => {
     });
   }
 
+  // 6b. the opponent model: the piece every MES best-response is computed against
+  {
+    const pmPath = join(LIMP, "pool_model_v4.json");
+    const vfPath = join(LIMP, "villain_freqs.json");
+    const pmFile = fileInfo(pmPath), vfFile = fileInfo(vfPath);
+    const pm = pmFile.exists ? readJson(pmPath) : null;
+    const vf = vfFile.exists ? readJson(vfPath) : null;
+    const vfMeta = (vf?._meta ?? {}) as Record<string, unknown>;
+    const stamp = mes.families.find((f) => f.inputs)?.inputs;
+    const stampedMtime = stamp?.pool_model?.mtime ? Date.parse(String(stamp.pool_model.mtime)) : null;
+    const newer = stampedMtime != null && pmFile.mtimeMs != null && pmFile.mtimeMs > stampedMtime + 1000;
+    const caveats: string[] = [];
+    if (!pmFile.exists) caveats.push("pool_model_v4.json missing: the MES pieces have no opponent to best-respond to");
+    if (!vfFile.exists) caveats.push("villain_freqs.json missing: the postflop locks have no action frequencies");
+    if (newer) caveats.push("the pool model changed after the served MES build was locked against it, so the MES pieces answer against a villain that no longer exists; re-run the batch");
+    cards.push({
+      id: "pool-model", label: "Measured pool model", mode: "mes",
+      state: !pmFile.exists || !vfFile.exists ? "crit" : newer ? "warn" : "good",
+      stateText: !pmFile.exists ? "Missing" : newer ? "Newer than the MES lock" : "In force",
+      tiers: ["pool_model_v4", "villain_freqs"],
+      routes: "never answers directly. It is the villain every MES piece was solved against, and the ranges the exploit preflop overlay best-responds to",
+      facts: [
+        ["pool_model", pmFile.exists ? `${pmPath} · ${((pmFile.sizeBytes ?? 0) / 1e3).toFixed(0)} KB · ${fmtAge(pmFile.mtimeMs)}` : "missing"],
+        ["decisions measured", pm?.n && typeof pm.n === "object"
+          ? `${Object.values(pm.n as Record<string, number>).reduce((a, b) => a + b, 0)} across ${Object.keys(pm.n).length} spots: ${Object.entries(pm.n as Record<string, number>).map(([k, v]) => `${k} ${v}`).join(", ")}`
+          : pm?.n != null ? String(pm.n) : "?"],
+        ["chart basis", pm?.chart ? String(pm.chart) : "?"],
+        ["calling ranges", pm?.ranges ? `${Object.keys(pm.ranges).length} contexts: ${Object.keys(pm.ranges).join(", ")}` : "none"],
+        ["villain_freqs", vfFile.exists ? `${vfPath} · ${fmtAge(vfFile.mtimeMs)}` : "missing"],
+        ["freq contexts", vf?.freqs ? `${Object.keys(vf.freqs).length} action contexts · ${Object.keys(vf.class_freqs ?? {}).length} per-class` : "none"],
+        ["freq thresholds", vfMeta.min_n != null || vfMeta.min_class_n != null ? `min-n ${vfMeta.min_n ?? "?"} per context · ${vfMeta.min_class_n ?? "?"} per class` : Object.keys(vfMeta).length ? JSON.stringify(vfMeta).slice(0, 120) : "none"],
+        ["stamped into MES", stamp?.pool_model ? `${stamp.pool_model.sha256 ?? "?"} @ ${stamp.pool_model.mtime ?? "?"}` : "not stamped"],
+      ],
+      caveats,
+      answers30d: 0, p50Ms: null, lastTs: null, byDay: new Array(30).fill(0), drilldown: null,
+    });
+  }
+
   // 7. answer log & ground truth
   {
     const stats60 = answerLog.stats(60) as { answered: number; failed: number };
@@ -331,8 +385,11 @@ app.get("/registry", async (c) => {
 
   for (const card of cards) card.sourceKeys = SOURCE_KEYS[card.id] ?? [];
 
+  for (const card of cards) Object.assign(card, PIECE_OF[card.id] ?? { piece: undefined, role: null });
+
   return c.json({
     ok: true,
+    pieces: PIECES,
     at: Date.now(),
     armed: {
       strategyMode: mode,
@@ -669,7 +726,7 @@ app.get("/grading", (c) => {
 // ------------------------------------------------------------------ answers
 
 /** Recent logged answers, optionally filtered to one card's sources or tiers —
- *  the trail on a source's detail page (/sources/registry/:id). */
+ *  the trail on a source's detail page (/sources/pieces/:id). */
 app.get("/answers", (c) => {
   const days = Number(c.req.query("days") ?? 60) || 60;
   const limit = Math.min(500, Number(c.req.query("limit") ?? 80) || 80);

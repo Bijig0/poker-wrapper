@@ -280,6 +280,12 @@
   .pc-row .mark { width: 14px; }
   .pc-row .mark.ok { color: #61d095; } .pc-row .mark.no { color: #e06c75; }
   .pc-row .det { color: var(--dim); }
+  .piece-h { margin: 18px 0 8px; font-size: 14px; display: flex; align-items: baseline; gap: 10px; }
+  .piece-h .sub { font-weight: 400; }
+  .card.explain p { margin: 6px 0; line-height: 1.45; }
+  .src .head .tag2 { font-size: 10px; padding: 1px 7px; border-radius: 10px; margin-right: 2px; }
+  .src .head .tag2.ok { background: rgba(97,208,149,.15); color: #61d095; }
+  .src .head .tag2.warn { background: rgba(230,179,90,.15); color: #e6b35a; }
 </style>
 </head>
 <body>
@@ -594,7 +600,7 @@ const SOURCE_INFO = {
 };
 const srcLink = (src) => {
   const i = SOURCE_INFO[src];
-  return i ? `<a href="/sources/registry/${i.card}" onclick="go('/sources/registry/${i.card}');return false">${esc(i.label)}</a>` : `<span>${esc(src ?? "unknown source")}</span>`;
+  return i ? `<a href="/sources/pieces/${i.card}" onclick="go('/sources/pieces/${i.card}');return false">${esc(i.label)}</a>` : `<span>${esc(src ?? "unknown source")}</span>`;
 };
 const modeChip = (m) => m === "exploit" ? '<span class="mode mes">MES</span>' : m === "chart" ? '<span class="mode gto">GTO</span>' : "";
 /** One line of provenance for a logged answer: source · tier · chart · mode · both picks · latency. */
@@ -883,7 +889,7 @@ async function openAnswerNode(upto) {
       <div class="nv-head"><span><span class="sub">chart</span> <b title="${esc(j.chart ?? "")}">${esc(chartName(j.chart))}</b> <span class="mono">${esc(j.chart ?? "")}</span></span>${j.depth ? `<span><span class="sub">depth</span> ${j.depth}bb</span>` : ""}<span><span class="sub">line</span> ${crumb(j.line ?? j.rawLine, j.snapped)}</span>${n?.pos ? `<span><span class="sub">to act</span> <b>${esc(n.pos)}</b></span>` : ""}</div>
       ${j.note ? `<div class="ans-note" style="margin-bottom:8px">⚠ ${esc(j.note)}</div>` : ""}
       <div class="nv-two"><div class="card" style="margin:0"><h2>Chart strategy at this node <span class="mode gto">GTO</span></h2>${body}
-        <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/registry/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}" onclick="go('/sources/registry/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
+        <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/pieces/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}" onclick="go('/sources/pieces/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
   } else if (j.kind === "mes") {
     const m = j.mes;
     let mode = "mes";
@@ -909,7 +915,7 @@ async function openAnswerNode(upto) {
       <div class="nv-head"><span><span class="sub">family</span> <b>${esc(m.family)}</b> <span class="sub">hero ${esc(m.heroPos)}</span></span><span><span class="sub">solved board</span> <b class="mono">${esc(m.board)}</b>${m.exact ? ' <span class="chip good">exact flop</span>' : ` <span class="chip warn">nearest texture to ${esc(m.actualBoard)}</span>`}</span><span><span class="sub">flop line</span> ${crumb((j.flopTokens || []).join("-"))}${m.snapped ? ' <span class="chip warn">a size was snapped</span>' : ""}</span><span><span class="sub">pot at flop</span> ${(m.potChips / 100).toFixed(1)}bb · eff ${(m.effStackChips / 100).toFixed(0)}bb</span><span><span class="sub">edge on this board</span> <b class="pos">+${m.evGainBb} bb</b> per arrival</span></div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px"><span class="seg" id="nv-seg"><button data-m="mes">MES · pool-locked villain</button><button data-m="gto">GTO · same tree, equilibrium</button></span><span class="sub">both come from the same solve; switch to compare</span></div>
       <div id="nv-mes-body"></div>
-      <div class="sub" style="margin-top:8px"><a class="ev-link" href="/sources/registry/mes-postflop" onclick="go('/sources/registry/mes-postflop');return false">source page ↗</a> · served from data/mes_postflop.json · node history [${m.history.join(", ")}]</div></div>`;
+      <div class="sub" style="margin-top:8px"><a class="ev-link" href="/sources/pieces/mes-postflop" onclick="go('/sources/pieces/mes-postflop');return false">source page ↗</a> · served from data/mes_postflop.json · node history [${m.history.join(", ")}]</div></div>`;
     $("nv-seg").querySelectorAll("button").forEach((b) => b.onclick = () => { mode = b.dataset.m; render(); });
     render();
   } else {
@@ -1475,7 +1481,7 @@ async function loadSession(id) {
 }
 
 /* ================= Sources (mission control) ================= */
-let SRC = null, srcPane = "registry", srcLoaded = {};
+let SRC = null, srcPane = "strategies", srcLoaded = {};
 const fmtIso = (iso) => { const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
 const fmtMs = (ms) => ms == null ? "—" : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
 const spark = (byDay, mes) => {
@@ -1500,7 +1506,7 @@ async function loadSources() {
   // A periodic refresh only repaints the armed strip and the registry cards;
   // the other panes keep whatever they loaded (re-rendering them left
   // "loading…" placeholders behind, since their loaders run once).
-  if ($("src-armed")) { $("src-armed").outerHTML = armedStrip(); if (srcPane === "registry" && !PATH.id) renderRegistry(); return; }
+  if ($("src-armed")) { $("src-armed").outerHTML = armedStrip(); if (srcPane === "pieces" && !PATH.id) renderRegistry(); return; }
   renderSources();
 }
 
@@ -1527,14 +1533,14 @@ function renderSources() {
   v.innerHTML = `
     ${armedStrip()}
     <div class="sub-tabs" role="tablist">
-      <button data-pane="registry" role="tab">Registry <span class="n">${SRC.cards.length} sources</span></button>
       <button data-pane="strategies" role="tab">Strategies</button>
+      <button data-pane="pieces" role="tab">Pieces <span class="n">${SRC.cards.length} sources</span></button>
       <button data-pane="matrix" role="tab">Strategy matrix</button>
       <button data-pane="grading" role="tab">Live grading <span class="n">${tierCount} answers</span></button>
       <button data-pane="roadmap" role="tab">Roadmap</button>
     </div>
-    <section class="pane" id="src-registry"></section>
     <section class="pane" id="src-strategies"><div class="card sub">loading…</div></section>
+    <section class="pane" id="src-pieces"></section>
     <section class="pane" id="src-matrix"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-grading"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-roadmap"><div class="card sub">loading…</div></section>`;
@@ -1549,7 +1555,7 @@ function showSrcPane(id, cardId) {
   if (!v.querySelector(".sub-tabs")) return; // not rendered yet — renderSources() will call back
   v.querySelectorAll(".sub-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.pane === id));
   v.querySelectorAll(".pane").forEach((p) => p.classList.toggle("on", p.id === `src-${id}`));
-  if (id === "registry") { if (cardId) renderSourceDetail(cardId); else renderRegistry(); }
+  if (id === "pieces") { if (cardId) renderSourceDetail(cardId); else renderRegistry(); }
   if (id === "strategies") loadStrategies(cardId);
   if (id === "matrix" && !srcLoaded.matrix) loadMatrix();
   if (id === "grading" && !srcLoaded.grading) loadGrading();
@@ -1588,13 +1594,13 @@ function renderStrategyCards() {
     : s.status === "drift" ? `<span class="tag2 warn">drift</span>`
     : s.status === "misspecified" ? `<span class="tag2 bad">mis-specified</span>`
     : `<span class="tag2 warn">unavailable</span>`;
-  el.innerHTML = `<div class="card"><h2>Strategies <span class="sub">— whole-hand: a preflop layer + a postflop layer. Only coherent ones can be selected; the rest say why.</span></h2>
+  el.innerHTML = `<div class="card"><h2>Strategies <span class="sub">— whole-hand: preflop + postflop + opponent model, assembled from <a href="/sources/pieces" onclick="go('/sources/pieces');return false">pieces</a>. Only coherent ones can be selected; the rest say why.</span></h2>
     <div class="strat-cards">${STRAT.strategies.map((s) => {
       const w25 = wrText(wrOf(s.matrix, "nl25")), w200 = wrText(wrOf(s.matrix, "nl200"));
       return `<div class="strat-card ${s.status === "ok" || s.status === "drift" ? "" : "bad"}" onclick="go('/sources/strategies/${esc(s.id)}')">
         <h3>${esc(s.name)} ${badge(s)}${s.recommended ? '<span class="tag2 ok">default</span>' : ""}</h3>
         <div class="sub">${esc(s.tagline)}</div>
-        <div class="layers">preflop <b>${esc(s.preflopLayer.label)}</b><br>postflop <b>${esc(s.postflopLayer.label)}</b></div>
+        <div class="layers">preflop <b>${esc(s.preflopLayer.label)}</b><br>postflop <b>${esc(s.postflopLayer.label)}</b><br>opponent <b>${esc(s.opponentLayer.label)}</b></div>
         <div class="wr">${esc(w25.v)} <span class="u">bb/100 · NL25</span></div>
         <div class="foot">${esc(w25.foot)}${w200.v !== "—" ? ` · NL200 ${esc(w200.v)}` : ""}</div>
         ${s.realized?.hands ? `<div class="foot">played ${s.realized.hands} hands under this mode · realized ${(100 * s.realized.netBb / s.realized.hands).toFixed(1)} bb/100</div>` : ""}
@@ -1616,8 +1622,9 @@ function renderStrategyDetail(id) {
     <div class="g2">
       <div class="card"><h2>What it plays</h2>
         <dl class="src-dl">
-          <dt>preflop</dt><dd>${esc(s.preflopLayer.label)} <a class="ev-link" href="/sources/registry/${esc(s.preflopLayer.source)}" onclick="go('/sources/registry/${esc(s.preflopLayer.source)}');return false">source ↗</a></dd>
-          <dt>postflop</dt><dd>${esc(s.postflopLayer.label)} <a class="ev-link" href="/sources/registry/${esc(s.postflopLayer.source)}" onclick="go('/sources/registry/${esc(s.postflopLayer.source)}');return false">source ↗</a></dd>
+          <dt>preflop</dt><dd>${esc(s.preflopLayer.label)} <a class="ev-link" href="/sources/pieces/${esc(s.preflopLayer.source)}" onclick="go('/sources/pieces/${esc(s.preflopLayer.source)}');return false">source ↗</a></dd>
+          <dt>postflop</dt><dd>${esc(s.postflopLayer.label)} <a class="ev-link" href="/sources/pieces/${esc(s.postflopLayer.source)}" onclick="go('/sources/pieces/${esc(s.postflopLayer.source)}');return false">source ↗</a></dd>
+          <dt>opponent model</dt><dd>${esc(s.opponentLayer.label)} <a class="ev-link" href="/sources/pieces/${esc(s.opponentLayer.source)}" onclick="go('/sources/pieces/${esc(s.opponentLayer.source)}');return false">source ↗</a></dd>
           <dt>arrival range</dt><dd>hero reaches the flop on the <b>${esc(s.preflopLayer.arrival)}</b> range; the postflop layer ${s.postflopLayer.assumesArrival === "any" ? "is arrival-agnostic" : `was solved for the <b>${esc(s.postflopLayer.assumesArrival)}</b> range`}</dd>
           <dt>coverage</dt><dd>${s.postflop === "mes" ? "M1 (SB bvb) and M2 (BTN vs BB), 14 solved boards each; every other spot falls through to the equilibrium answer" : "every postflop spot (equilibrium)"}</dd>
         </dl>
@@ -1646,6 +1653,8 @@ function renderStrategyDetail(id) {
 
 /* ================================= Playthrough: our own solver browser ================================= */
 const PT = { cfg: null, hero: "SB", strategy: "apex", strat: { hero: "mes", villain: "pool" }, line: [], street: "preflop", combo: "", node: null, spot: null };
+/** keep the half-strategy fields (used by the walkers) in step with the whole strategy */
+function ptSync() { const st = ptStrat(); if (!st) return; PT.strat.hero = st.preflop === "exploit" ? "mes" : "gto"; PT.strat.villain = st.opponent; }
 /** the selected whole-hand strategy, and its two layers */
 function ptStrat() { return (PT.cfg?.strategies?.hero ?? []).find((s) => s.id === PT.strategy) ?? null; }
 const P_ORDER = ["BTN", "SB", "BB"];                // 3-max preflop acting order
@@ -1689,6 +1698,7 @@ function playPostflopFamily() {
   return null;
 }
 function renderPlay() {
+  ptSync();
   const v = $("view-play"), cfg = PT.cfg, c0 = cfg.configs[0];
   const actor = playActor();
   const seatHtml = (pos, x, y) => {
@@ -1707,13 +1717,13 @@ function renderPlay() {
         <label>config <select id="pl-cfg">${cfg.configs.map((c) => `<option ${c.available ? "" : "disabled"}>${esc(c.label)} · rake ${esc(c.rake)}${c.available ? "" : " — not solved"}</option>`).join("")}</select></label>
         <label>hero seat <select id="pl-hero">${P_ORDER.map((p) => `<option ${p === PT.hero ? "selected" : ""}>${p}</option>`).join("")}</select></label>
         <label>strategy <select id="pl-hs">${cfg.strategies.hero.map((s) => `<option value="${s.id}" ${s.id === PT.strategy ? "selected" : ""} ${s.status === "ok" || s.status === "drift" ? "" : "disabled"}>${esc(s.name)} — ${esc(s.tagline)}${s.status === "ok" ? "" : ` [${esc(s.status)}]`}</option>`).join("")}</select></label>
-        <label>villains <select id="pl-vs">${cfg.strategies.villain.map((s) => `<option value="${s.id}" ${s.id === PT.strat.villain ? "selected" : ""} ${s.available ? "" : "disabled"}>${esc(s.label)}</option>`).join("")}</select></label>
+        <label title="fixed by the strategy's opponent piece">villains <select id="pl-vs" disabled>${cfg.strategies.villain.map((s) => `<option value="${s.id}" ${s.id === (ptStrat()?.opponent ?? PT.strat.villain) ? "selected" : ""}>${esc(s.label)}</option>`).join("")}</select> <span class="sub">set by the strategy</span></label>
         <span class="rng">your hand <input id="pl-combo" placeholder="AhQs" value="${esc(PT.combo)}"> <span class="sub">optional — the RNG then rolls an action for you at every node</span></span>
         <button class="mini" id="pl-reset">↺ new hand</button>
       </div>
       <div class="sub" style="margin-top:6px">${esc(c0.note)} · chart <span class="mono">${esc(c0.chart)}</span></div>
       ${(() => { const st = ptStrat(); if (!st) return ""; const bad = st.status !== "ok" && st.status !== "drift";
-        return `<div class="${bad ? "caveat" : "sub"}" style="margin-top:4px">${bad ? "⚠ " : ""}<b>${esc(st.name)}</b> — preflop ${esc(st.preflopLayer.label)}, postflop ${esc(st.postflopLayer.label)}${st.reasons.length ? ` · ${esc(st.reasons[0])}` : ""} <a class="ev-link" href="/sources/strategies/${esc(st.id)}" onclick="go('/sources/strategies/${esc(st.id)}');return false">details ↗</a></div>`; })()}
+        return `<div class="${bad ? "caveat" : "sub"}" style="margin-top:4px">${bad ? "⚠ " : ""}<b>${esc(st.name)}</b> — preflop ${esc(st.preflopLayer.label)}, postflop ${esc(st.postflopLayer.label)}, opponent ${esc(st.opponentLayer.label)}${st.reasons.length ? ` · ${esc(st.reasons[0])}` : ""} <a class="ev-link" href="/sources/strategies/${esc(st.id)}" onclick="go('/sources/strategies/${esc(st.id)}');return false">details ↗</a></div>`; })()}
       <div class="felt">${order.map((p, i) => seatHtml(p, spots[i][0], spots[i][1])).join("")}
         <div class="mid"><div id="pl-board">${PT.board ? cardsHtml(PT.board.match(/.{2}/g)) : '<span class="sub">preflop</span>'}</div><div class="pot" id="pl-pot"></div></div>
       </div>
@@ -1721,7 +1731,7 @@ function renderPlay() {
     <div id="pl-node" class="card"><div class="sub">loading node…</div></div>
     <div id="pl-post"></div>`;
   $("pl-hero").onchange = (e) => { PT.hero = e.target.value; PT.line = []; PT.street = "preflop"; PT.board = null; renderPlay(); };
-  $("pl-hs").onchange = (e) => { PT.strategy = e.target.value; const st = ptStrat(); PT.strat.hero = st?.preflop === "exploit" ? "mes" : "gto"; renderPlay(); };
+  $("pl-hs").onchange = (e) => { PT.strategy = e.target.value; const st = ptStrat(); PT.strat.hero = st?.preflop === "exploit" ? "mes" : "gto"; PT.strat.villain = st?.opponent ?? PT.strat.villain; renderPlay(); };
   $("pl-vs").onchange = (e) => { PT.strat.villain = e.target.value; renderPlay(); };
   $("pl-combo").onchange = (e) => { PT.combo = e.target.value.trim(); renderPlay(); };
   $("pl-reset").onclick = () => { PT.line = []; PT.street = "preflop"; PT.board = null; PT.spot = null; renderPlay(); };
@@ -1972,14 +1982,14 @@ async function mesWalk(family, board, hist, stage = { street: "flop" }) {
 }
 function mesStep(ai) { if (!WALK) return; mesWalk(WALK.family, WALK.board, [...WALK.hist, ai], WALK.stage); }
 
-/* ---- one source, as its own page: /sources/registry/:id ---- */
+/* ---- one source, as its own page: /sources/pieces/:id ---- */
 async function renderSourceDetail(cardId) {
-  const el = $("src-registry");
+  const el = $("src-pieces");
   const c = SRC.cards.find((x) => x.id === cardId);
-  if (!c) { el.innerHTML = `<div class="card warn">No source called “${esc(cardId)}”. <button class="mini" onclick="go('/sources/registry')">← registry</button></div>`; return; }
+  if (!c) { el.innerHTML = `<div class="card warn">No source called “${esc(cardId)}”. <button class="mini" onclick="go('/sources/pieces')">← pieces</button></div>`; return; }
   el.innerHTML = `
     <div class="dt-top">
-      <button class="mini" onclick="go('/sources/registry')">← registry</button>
+      <button class="mini" onclick="go('/sources/pieces')">← pieces</button>
       <h2 style="margin:0;display:flex;align-items:center;gap:10px"><span class="dot ${c.state}"></span>${esc(c.label)}${c.mode ? `<span class="mode ${c.mode}">${c.mode.toUpperCase()}</span>` : ""}</h2>
       <span class="sub">${esc(c.stateText)}</span>
     </div>
@@ -2083,7 +2093,7 @@ async function loadExploitDetail() {
 }
 
 function renderRegistry() {
-  const el = $("src-registry");
+  const el = $("src-pieces");
   const card = (c) => `
     <div class="src click" data-id="${c.id}">
       <div class="head"><span class="dot ${c.state}"></span><h3>${esc(c.label)}</h3>${c.mode ? `<span class="mode ${c.mode}">${c.mode.toUpperCase()}</span>` : ""}</div>
@@ -2098,10 +2108,29 @@ function renderRegistry() {
         ${spark(c.byDay, c.mode === "mes")}
       </div>
     </div>`;
+  const pieces = SRC.pieces ?? [];
+  const byPiece = (pid) => SRC.cards.filter((c) => c.piece === pid);
+  const orphan = SRC.cards.filter((c) => !pieces.some((p) => p.id === c.piece));
+  const roleTag = (c) => c.role === "primary" ? `<span class="tag2 ok" title="first in tier order for this piece">primary</span>`
+    : c.role === "fallback" ? `<span class="tag2 warn" title="only reached when the primary cannot answer">fallback</span>` : "";
+  const section = (p, cards) => cards.length ? `
+    <h2 class="piece-h">${esc(p.label)} <span class="sub">${esc(p.what)}</span></h2>
+    <div class="reg">${cards.map((c) => card(c).replace('<div class="head">', `<div class="head">${roleTag(c)}`)).join("")}</div>` : "";
   el.innerHTML = `
-    <p class="sub" style="margin:0 0 10px">Every source a Study Answer can come from: what it is routing for right now, its freshness, and how many live answers it produced in the last 30 days. Click a card for its page.</p>
-    <div class="reg">${SRC.cards.map(card).join("")}</div>`;
-  el.querySelectorAll(".src").forEach((d) => d.onclick = () => go(`/sources/registry/${d.dataset.id}`));
+    <div class="card explain">
+      <h2>Pieces are what Strategies are made of</h2>
+      <p>A whole-hand <a href="/sources/strategies" onclick="go('/sources/strategies');return false">strategy</a> is assembled from three pieces:
+        <b>preflop</b> (how hero plays before the flop), <b>postflop</b> (flop, turn, river from the range preflop arrives with) and the
+        <b>opponent model</b> (what hero assumes the villains do). Each piece is served by one or more <b>sources</b> below, tried in tier order:
+        the <span class="tag2 ok">primary</span> answers when it can, a <span class="tag2 warn">fallback</span> only when it cannot.</p>
+      <p class="sub">A source is a file or service that produces answers; a piece is the role it plays in a strategy. The same source can serve two pieces
+        (the HRC 3-max grid is both the GTO preflop piece and the equilibrium opponent model). Every MES piece is a best-response to one specific
+        opponent model, which is why the Strategies page refuses to pair them with any other. Cards show what each source is routing for right now,
+        its freshness, and its live answers over 30 days; click one for its page.</p>
+    </div>
+    ${pieces.map((p) => section(p, byPiece(p.id))).join("")}
+    ${orphan.length ? section({ label: "Unassigned", what: "sources not mapped to a piece" }, orphan) : ""}`;
+  el.querySelectorAll(".src").forEach((d) => d.onclick = () => go(`/sources/pieces/${d.dataset.id}`));
 }
 
 /* ---- strategy matrix ---- */
@@ -2210,12 +2239,13 @@ async function loadRoadmap() {
    Real paths, served by the API for every one of them (index.ts):
      /hands            the table            /hands/:dbId              one hand
      /analytics                             /review                   Replay Review (embeds /replay)
-     /sources          → /sources/registry  /sources/:pane            registry | matrix | grading | roadmap
-     /sources/registry/:id                  one source's page
+     /sources          → /sources/strategies  /sources/:pane          strategies | pieces | matrix | grading | roadmap
+     /sources/pieces/:id                    one source's page   (/sources/registry/… still accepted)
+     /sources/strategies/:id                one whole-hand strategy's page
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
 const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
-const SRC_PANES = ["registry", "strategies", "matrix", "grading", "roadmap"];
+const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "roadmap"];
 $("tab-play").onclick = () => go("/playthrough");
 
 function parsePath() {
@@ -2225,8 +2255,9 @@ function parsePath() {
   const view = seg[0] || "hands";
   if (view === "hands") return { view, pane: null, id: seg[1] && /^\d+$/.test(seg[1]) ? seg[1] : null, node: seg[2] === "node" && /^\d+$/.test(seg[3] ?? "") ? Number(seg[3]) : null };
   if (view === "sources") {
-    const pane = SRC_PANES.includes(seg[1]) ? seg[1] : "registry";
-    return { view, pane, id: (pane === "registry" || pane === "strategies") && seg[2] ? decodeURIComponent(seg[2]) : null };
+    const seg1 = seg[1] === "registry" ? "pieces" : seg[1];
+    const pane = SRC_PANES.includes(seg1) ? seg1 : "strategies";
+    return { view, pane, id: (pane === "pieces" || pane === "strategies") && seg[2] ? decodeURIComponent(seg[2]) : null };
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   if (view === "analytics" || view === "review" || view === "playthrough") return { view, pane: null, id: null };
@@ -2234,7 +2265,7 @@ function parsePath() {
 }
 function canonical(p) {
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
-  if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "registry"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
+  if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
   if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}` : "/sessions";
   return `/${p.view}`;
 }
@@ -2276,12 +2307,12 @@ function route() {
 }
 window.onpopstate = route;
 window.onhashchange = route; // legacy #hand/N
-for (const [v, tab] of Object.entries(TABS)) $(tab).onclick = () => go(v === "sources" ? "/sources/registry" : `/${v}`);
+for (const [v, tab] of Object.entries(TABS)) $(tab).onclick = () => go(v === "sources" ? "/sources/strategies" : `/${v}`);
 
 route();
 setInterval(() => {
   if (PATH.view === "hands" && !PATH.id) loadHands();
-  if (PATH.view === "sources" && PATH.pane === "registry" && !PATH.id) loadSources();
+  if (PATH.view === "sources" && PATH.pane === "pieces" && !PATH.id) loadSources();
 }, 15000);
 </script>
 </body>
