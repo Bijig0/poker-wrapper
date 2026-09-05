@@ -7,6 +7,7 @@ import { getCatalog } from "../services/chartCatalog";
 import { mesPostflopInfo, mesSpots, mesFlopNode, mesTurnLines, mesTurnNode } from "../services/mesPostflop";
 import { extractLine } from "../services/mesRiver";
 import { fetchNode } from "../services/hrc3max";
+import { evaluate as evaluateStrategies, strategyIdForAnswer } from "../services/strategies";
 import { gtowApi } from "../services/gtowApi";
 import { HRC3MAX_BASE } from "../services/hrc3max";
 import { studyPoller } from "../services/studyPoller";
@@ -349,6 +350,49 @@ app.get("/registry", async (c) => {
   });
 });
 
+// ------------------------------------------------------------- strategies
+/** The whole-hand strategy catalogue: what we can play, whether each is
+ *  coherent (safeguards in services/strategies.ts), its winrate row from the
+ *  matrix, and hero's realized bb/100 while it was the active mode. */
+app.get("/strategies", (c) => {
+  const views = evaluateStrategies();
+  const matrix = readJson(join(DATA_DIR, "strategy_matrix.json"));
+  const rowById: Record<string, any> = {};
+  for (const g of matrix?.groups ?? []) for (const row of g.rows ?? []) rowById[row.id] = { ...row, group: g.title };
+  // realized: answers tagged with the mode that was live, joined to hand nets
+  const rows = answerLog.rows(365);
+  const seen = new Map<string, string>();      // clientHandId -> strategy id
+  for (const a of rows) {
+    const sid = strategyIdForAnswer(a as any);
+    const h = (a as any).client_hand_id;
+    if (sid && h && !seen.has(h)) seen.set(h, sid);
+    else if (sid && h && seen.get(h) !== "apex" && sid === "apex") seen.set(h, sid);
+  }
+  const realized: Record<string, { hands: number; netBb: number }> = {};
+  // reuse the dashboard's own enrichment + net accounting (same numbers the
+  // Analytics tab shows) rather than a second, divergent query
+  const enriched = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
+  const nets = computeNets(enriched);
+  for (const e of enriched) {
+    const sid = e.clientHandId ? seen.get(e.clientHandId) : null;
+    if (!sid) continue;
+    const r = (realized[sid] ??= { hands: 0, netBb: 0 });
+    r.hands++;
+    r.netBb += nets.get(e.dbId) ?? 0;
+  }
+  return c.json({
+    ok: true,
+    strategies: views.map((v) => ({
+      ...v,
+      matrix: rowById[v.matrixRow] ?? null,
+      realized: realized[v.id] ?? { hands: 0, netBb: 0 },
+    })),
+    haircut: matrix?.haircut ?? null,
+    evidenceChain: matrix?.evidenceChain ?? null,
+    matrixBuilt: matrix?.generatedAt ?? null,
+  });
+});
+
 // -------------------------------------------------------------- playthrough
 // The Playthrough tab: OUR solver browser. Config first (only what is solved is
 // offered), then a 3-max table you walk preflop -> flop -> turn -> river with a
@@ -367,7 +411,9 @@ app.get("/play/config", (c) => {
         note: "preflop charts exist; postflop locks not solved at this rake yet" },
     ],
     strategies: {
-      hero: [{ id: "mes", label: "MES preflop (pool exploit)", available: !!exploit }, { id: "gto", label: "GTO chart (HRC equilibrium)", available: true }],
+      // whole-hand strategies (services/strategies.ts) — the picker only enables
+      // the coherent ones; the rest carry the reason they are refused
+      hero: evaluateStrategies(),
       villain: [{ id: "pool", label: "Pool (measured frequencies + calling ranges)", available: !!pool }, { id: "gto", label: "GTO chart", available: true }],
     },
     exploit: exploit ? { choices: exploit.choices, ranges: exploit.ranges } : null,

@@ -260,6 +260,26 @@
   #view-play .actrow button.mes { border-color: #e8772e; }
   #view-play .rng { border: 1px solid #2a3442; border-radius: 6px; padding: 6px 8px; margin: 6px 0; font-size: 12px; }
   #view-play .rng input { width: 70px; background: #10151d; color: #dfe6ee; border: 1px solid #2a3442; border-radius: 4px; padding: 2px 5px; font-family: ui-monospace, monospace; }
+
+  /* ---- strategies ---- */
+  .strat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+  .strat-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: rgba(255,255,255,.02); cursor: pointer; position: relative; }
+  .strat-card:hover { border-color: var(--accent); }
+  .strat-card.bad { opacity: .72; border-style: dashed; }
+  .strat-card h3 { margin: 0 0 2px; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  .strat-card .tag2 { font-size: 10px; padding: 1px 7px; border-radius: 10px; }
+  .strat-card .tag2.ok { background: rgba(97,208,149,.15); color: #61d095; }
+  .strat-card .tag2.warn { background: rgba(230,179,90,.15); color: #e6b35a; }
+  .strat-card .tag2.bad { background: rgba(224,108,117,.15); color: #e06c75; }
+  .strat-card .layers { font-size: 11px; color: var(--dim); margin: 6px 0; }
+  .strat-card .layers b { color: #dfe6ee; font-weight: 600; }
+  .strat-card .wr { font-family: ui-monospace, monospace; font-size: 20px; margin-top: 8px; }
+  .strat-card .wr .u { font-size: 11px; color: var(--dim); font-family: inherit; }
+  .strat-card .foot { font-size: 10px; color: var(--dim); margin-top: 2px; }
+  .pc-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 3px 0; border-bottom: 1px solid var(--line-soft); }
+  .pc-row .mark { width: 14px; }
+  .pc-row .mark.ok { color: #61d095; } .pc-row .mark.no { color: #e06c75; }
+  .pc-row .det { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -349,7 +369,7 @@ function renderHands() {
     if ($("only-flop").checked && !h.summary.sawFlop) return false;
     if ($("only-disc").checked && !(h.discrepancies && (h.discrepancies.major || h.discrepancies.minor))) return false;
     if (!q) return true;
-    return `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet}`.toLowerCase().includes(q);
+    return `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet} ${h.strategy?.name ?? ""}`.toLowerCase().includes(q);
   });
   rows = rows.slice().sort((a, b) => {
     const va = sortVal(a, sortK), vb = sortVal(b, sortK);
@@ -361,7 +381,7 @@ function renderHands() {
     const d = h.discrepancies;
     const disc = d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?";
     return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
-      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${s.potBb}</td>
+      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "apex" ? "good" : ""}">${esc(h.strategy.name)}</span>` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
       <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
   }).join("");
   for (const tr of $("hands-body").querySelectorAll("tr")) tr.onclick = () => go(`/hands/${tr.dataset.id}`);
@@ -1409,7 +1429,7 @@ async function loadSession(id) {
     </div>`;
   if (!s.declared) {
     v.innerHTML = head + `<div class="card sub">This is a gap cluster inferred from the archive: hands played before sessions were declared. Nothing was written down at the time, so there is no config, preflight or version snapshot.</div>
-      <div class="card"><h2>Hands <span class="sub">— ${j.hands.length}</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows}</tbody></table></div></div>`;
+      <div class="card"><h2>Hands <span class="sub">— ${j.hands.length}</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th>strategy</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows}</tbody></table></div></div>`;
     v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/hands/${tr.dataset.id}`));
     return;
   }
@@ -1449,7 +1469,7 @@ async function loadSession(id) {
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${j.recording ? `<a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}" target="_blank" rel="noopener" style="text-decoration:none">open the recording in Replay Review ↗</a><a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}&mode=scrub" target="_blank" rel="noopener" style="text-decoration:none">scrub it ↗</a>` : '<span class="sub">no frame recording for this session</span>'}</div></div>
     </div>
     <div class="card"><h2>Timeline <span class="sub">— every declared change, in order</span></h2>${events || '<div class="sub">no events</div>'}</div>
-    <div class="card"><h2>Hands <span class="sub">— ${j.hands.length} · click to open</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows || '<tr class="src-static"><td colspan="8" class="sub">no hands archived under this session yet</td></tr>'}</tbody></table></div></div>
+    <div class="card"><h2>Hands <span class="sub">— ${j.hands.length} · click to open</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th>strategy</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows || '<tr class="src-static"><td colspan="8" class="sub">no hands archived under this session yet</td></tr>'}</tbody></table></div></div>
     <div class="card"><h2>Answers <span class="sub">— ${(j.answers || []).length}${(j.answers || []).length > 60 ? ", showing 60" : ""}</span></h2><div class="scroll"><table><thead><tr><th>when</th><th>node</th><th>tier</th><th>answer</th><th>both strategies</th><th class="num">latency</th></tr></thead><tbody>${ansRows || '<tr class="src-static"><td colspan="6" class="sub">no answers logged under this session</td></tr>'}</tbody></table></div></div>`;
   v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/hands/${tr.dataset.id}`));
 }
@@ -1508,11 +1528,13 @@ function renderSources() {
     ${armedStrip()}
     <div class="sub-tabs" role="tablist">
       <button data-pane="registry" role="tab">Registry <span class="n">${SRC.cards.length} sources</span></button>
+      <button data-pane="strategies" role="tab">Strategies</button>
       <button data-pane="matrix" role="tab">Strategy matrix</button>
       <button data-pane="grading" role="tab">Live grading <span class="n">${tierCount} answers</span></button>
       <button data-pane="roadmap" role="tab">Roadmap</button>
     </div>
     <section class="pane" id="src-registry"></section>
+    <section class="pane" id="src-strategies"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-matrix"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-grading"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-roadmap"><div class="card sub">loading…</div></section>`;
@@ -1528,13 +1550,104 @@ function showSrcPane(id, cardId) {
   v.querySelectorAll(".sub-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.pane === id));
   v.querySelectorAll(".pane").forEach((p) => p.classList.toggle("on", p.id === `src-${id}`));
   if (id === "registry") { if (cardId) renderSourceDetail(cardId); else renderRegistry(); }
+  if (id === "strategies") loadStrategies(cardId);
   if (id === "matrix" && !srcLoaded.matrix) loadMatrix();
   if (id === "grading" && !srcLoaded.grading) loadGrading();
   if (id === "roadmap" && !srcLoaded.roadmap) loadRoadmap();
 }
 
+/* ================================= Sources → Strategies ================================= */
+let STRAT = null;
+const FOOTING = {
+  est: ["graded estimate", "priced by replaying the corpus through the charts with measured rake; postflop legs sit at the solver floor"],
+  legs: ["two legs — do not add", "the preflop number and the postflop uplift are priced separately and must not be summed"],
+  combined: ["combined corpus walk", "one pass over the corpus pricing both legs together"],
+  partial: ["combined, partial coverage", "one pass, but only the spots that are actually solved carry the MES value"],
+  raw: ["raw model uplift", "per-arrival solver value x arrival frequency; no execution haircut, not a winrate on its own"],
+  pending: ["pending", "the artifact that would fill this does not exist yet"],
+};
+async function loadStrategies(id) {
+  const el = $("src-strategies");
+  if (!STRAT) {
+    el.innerHTML = `<div class="card sub">loading…</div>`;
+    try { STRAT = await (await fetch("/api/dashboard/sources/strategies")).json(); }
+    catch (e) { el.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
+  }
+  if (id) renderStrategyDetail(id); else renderStrategyCards();
+}
+const wrOf = (row, rake) => row?.cells?.[rake] ?? null;
+function wrText(cell) {
+  if (!cell) return { v: "—", foot: "no matrix row" };
+  const f = FOOTING[cell.kind] ?? [cell.kind, ""];
+  if (cell.v == null) return { v: cell.legs ? cell.legs.map((l) => `${l.v > 0 ? "+" : ""}${l.v}`).join(" ⊕ ") : "—", foot: f[0] };
+  return { v: `${cell.v > 0 ? "+" : ""}${cell.v.toFixed(1)}`, foot: f[0], lo: cell.lo, hi: cell.hi };
+}
+function renderStrategyCards() {
+  const el = $("src-strategies");
+  const badge = (s) => s.status === "ok" ? `<span class="tag2 ok">ready</span>`
+    : s.status === "drift" ? `<span class="tag2 warn">drift</span>`
+    : s.status === "misspecified" ? `<span class="tag2 bad">mis-specified</span>`
+    : `<span class="tag2 warn">unavailable</span>`;
+  el.innerHTML = `<div class="card"><h2>Strategies <span class="sub">— whole-hand: a preflop layer + a postflop layer. Only coherent ones can be selected; the rest say why.</span></h2>
+    <div class="strat-cards">${STRAT.strategies.map((s) => {
+      const w25 = wrText(wrOf(s.matrix, "nl25")), w200 = wrText(wrOf(s.matrix, "nl200"));
+      return `<div class="strat-card ${s.status === "ok" || s.status === "drift" ? "" : "bad"}" onclick="go('/sources/strategies/${esc(s.id)}')">
+        <h3>${esc(s.name)} ${badge(s)}${s.recommended ? '<span class="tag2 ok">default</span>' : ""}</h3>
+        <div class="sub">${esc(s.tagline)}</div>
+        <div class="layers">preflop <b>${esc(s.preflopLayer.label)}</b><br>postflop <b>${esc(s.postflopLayer.label)}</b></div>
+        <div class="wr">${esc(w25.v)} <span class="u">bb/100 · NL25</span></div>
+        <div class="foot">${esc(w25.foot)}${w200.v !== "—" ? ` · NL200 ${esc(w200.v)}` : ""}</div>
+        ${s.realized?.hands ? `<div class="foot">played ${s.realized.hands} hands under this mode · realized ${(100 * s.realized.netBb / s.realized.hands).toFixed(1)} bb/100</div>` : ""}
+        ${s.reasons.length ? `<div class="caveat" style="margin-top:8px">⚠ ${esc(s.reasons[0])}</div>` : ""}
+      </div>`;
+    }).join("")}</div>
+    <div class="sub" style="margin-top:10px">Numbers come from <span class="mono">data/strategy_matrix.json</span>${STRAT.matrixBuilt ? ` · built ${esc(String(STRAT.matrixBuilt).slice(0, 19))}` : ""}. Every figure carries its footing — see a strategy's page for what kind of number it is.</div>
+  </div>`;
+}
+function renderStrategyDetail(id) {
+  const el = $("src-strategies");
+  const s = STRAT.strategies.find((x) => x.id === id);
+  if (!s) { el.innerHTML = `<div class="card warn">No strategy “${esc(id)}”. <button class="mini" onclick="go('/sources/strategies')">← strategies</button></div>`; return; }
+  const rakes = [["nl25", "NL25 (5% / cap 4bb)"], ["nl200", "NL200 (5% / cap 1bb)"], ["norake", "no rake"]];
+  const hc = STRAT.haircut?.haircuts ?? {};
+  el.innerHTML = `
+    <div class="dt-top"><button class="mini" onclick="go('/sources/strategies')">← strategies</button>
+      <h2 style="margin:0">${esc(s.name)}</h2><span class="sub">${esc(s.tagline)}</span></div>
+    <div class="g2">
+      <div class="card"><h2>What it plays</h2>
+        <dl class="src-dl">
+          <dt>preflop</dt><dd>${esc(s.preflopLayer.label)} <a class="ev-link" href="/sources/registry/${esc(s.preflopLayer.source)}" onclick="go('/sources/registry/${esc(s.preflopLayer.source)}');return false">source ↗</a></dd>
+          <dt>postflop</dt><dd>${esc(s.postflopLayer.label)} <a class="ev-link" href="/sources/registry/${esc(s.postflopLayer.source)}" onclick="go('/sources/registry/${esc(s.postflopLayer.source)}');return false">source ↗</a></dd>
+          <dt>arrival range</dt><dd>hero reaches the flop on the <b>${esc(s.preflopLayer.arrival)}</b> range; the postflop layer ${s.postflopLayer.assumesArrival === "any" ? "is arrival-agnostic" : `was solved for the <b>${esc(s.postflopLayer.assumesArrival)}</b> range`}</dd>
+          <dt>coverage</dt><dd>${s.postflop === "mes" ? "M1 (SB bvb) and M2 (BTN vs BB), 14 solved boards each; every other spot falls through to the equilibrium answer" : "every postflop spot (equilibrium)"}</dd>
+        </dl>
+        ${s.reasons.map((x) => `<div class="caveat">⚠ ${esc(x)}</div>`).join("")}
+      </div>
+      <div class="card"><h2>Safeguards <span class="sub">— all must pass before this can be selected</span></h2>
+        ${s.preconditions.map((p) => `<div class="pc-row"><span class="mark ${p.pass ? "ok" : "no"}">${p.pass ? "✓" : "✕"}</span><span>${esc(p.check)}</span><span class="det">${esc(p.detail)}</span></div>`).join("")}
+      </div>
+    </div>
+    <div class="card"><h2>Expected winrate <span class="sub">— from the strategy matrix; each cell says what kind of number it is</span></h2>
+      <table><thead><tr><th>rake model</th><th class="num">bb/100</th><th>footing</th><th>what that means</th></tr></thead><tbody>
+      ${rakes.map(([k, lbl]) => { const c = wrOf(s.matrix, k), w = wrText(c); const f = FOOTING[c?.kind] ?? ["—", ""];
+        return `<tr><td>${esc(lbl)}</td><td class="num mono">${esc(w.v)}${w.lo != null ? ` <span class="sub">[${w.lo.toFixed(1)}, ${w.hi.toFixed(1)}]</span>` : ""}</td><td>${esc(f[0])}</td><td class="sub">${esc(f[1])}</td></tr>`; }).join("")}
+      </tbody></table>
+      ${s.matrix?.haircutWhy ? `<div class="sub" style="margin-top:8px">execution haircut: ${esc(s.matrix.haircutWhy)}</div>` : ""}
+      ${Object.keys(hc).length ? `<div class="sub">haircut models available: ${Object.entries(hc).map(([k, v]) => `${esc(k)} — ${esc(v.label ?? "")}`).join(" · ")}</div>` : ""}
+    </div>
+    <div class="card"><h2>Realized <span class="sub">— your own hands while this was the live mode</span></h2>
+      ${s.realized?.hands ? `<div class="tiles"><div class="tile"><div class="v num">${s.realized.hands}</div><div class="k">hands</div></div>
+        <div class="tile"><div class="v num">${(100 * s.realized.netBb / s.realized.hands).toFixed(1)}</div><div class="k">bb/100 realized</div></div></div>
+        <div class="caveat">⚠ 3-max NLHE runs ≈100 bb/100 of standard deviation per 1,000 hands — ${s.realized.hands} hands cannot distinguish +5 from +30. Treat as a tally, not a measurement.</div>`
+        : `<div class="sub">no hands recorded under this strategy yet.</div>`}
+    </div>
+    ${s.matrix?.evidence?.length ? `<div class="card"><h2>Evidence</h2><ul class="prov-list">${s.matrix.evidence.map((e) => `<li>${esc(e.label)}${e.date ? ` <span class="sub">· ${esc(e.date)}</span>` : ""}</li>`).join("")}</ul></div>` : ""}`;
+}
+
 /* ================================= Playthrough: our own solver browser ================================= */
-const PT = { cfg: null, hero: "SB", strat: { hero: "mes", villain: "pool" }, line: [], street: "preflop", combo: "", node: null, spot: null };
+const PT = { cfg: null, hero: "SB", strategy: "apex", strat: { hero: "mes", villain: "pool" }, line: [], street: "preflop", combo: "", node: null, spot: null };
+/** the selected whole-hand strategy, and its two layers */
+function ptStrat() { return (PT.cfg?.strategies?.hero ?? []).find((s) => s.id === PT.strategy) ?? null; }
 const P_ORDER = ["BTN", "SB", "BB"];                // 3-max preflop acting order
 const RANKS13 = "AKQJT98765432";
 const posOf = (i) => P_ORDER[i % 3];
@@ -1579,7 +1692,8 @@ function renderPlay() {
   const v = $("view-play"), cfg = PT.cfg, c0 = cfg.configs[0];
   const actor = playActor();
   const seatHtml = (pos, x, y) => {
-    const isHero = pos === PT.hero, s = isHero ? cfg.strategies.hero.find((s) => s.id === PT.strat.hero) : cfg.strategies.villain.find((s) => s.id === PT.strat.villain);
+    const st = ptStrat();
+    const isHero = pos === PT.hero, s = isHero ? { label: `${st?.name ?? "?"} · ${st?.preflopLayer?.short ?? ""} + ${st?.postflopLayer?.short ?? ""}` } : cfg.strategies.villain.find((s) => s.id === PT.strat.villain);
     const did = PT.line.map((tok, i) => [tok, i]).filter(([_, i]) => actorAt(i) === pos).map(([tok]) => tok).join(" ");
     return `<div class="seat ${isHero ? "hero" : ""} ${actor === pos && PT.street === "preflop" ? "toact" : ""}" style="left:${x}%;top:${y}%"><div class="pos">${pos}${isHero ? " · you" : ""}</div><div class="strat">${esc(s?.label ?? "")}</div><div class="did">${esc(did) || "&nbsp;"}</div></div>`;
   };
@@ -1592,12 +1706,14 @@ function renderPlay() {
       <div class="cfg">
         <label>config <select id="pl-cfg">${cfg.configs.map((c) => `<option ${c.available ? "" : "disabled"}>${esc(c.label)} · rake ${esc(c.rake)}${c.available ? "" : " — not solved"}</option>`).join("")}</select></label>
         <label>hero seat <select id="pl-hero">${P_ORDER.map((p) => `<option ${p === PT.hero ? "selected" : ""}>${p}</option>`).join("")}</select></label>
-        <label>hero strategy <select id="pl-hs">${cfg.strategies.hero.map((s) => `<option value="${s.id}" ${s.id === PT.strat.hero ? "selected" : ""} ${s.available ? "" : "disabled"}>${esc(s.label)}${s.available ? "" : " (not armed)"}</option>`).join("")}</select></label>
+        <label>strategy <select id="pl-hs">${cfg.strategies.hero.map((s) => `<option value="${s.id}" ${s.id === PT.strategy ? "selected" : ""} ${s.status === "ok" || s.status === "drift" ? "" : "disabled"}>${esc(s.name)} — ${esc(s.tagline)}${s.status === "ok" ? "" : ` [${esc(s.status)}]`}</option>`).join("")}</select></label>
         <label>villains <select id="pl-vs">${cfg.strategies.villain.map((s) => `<option value="${s.id}" ${s.id === PT.strat.villain ? "selected" : ""} ${s.available ? "" : "disabled"}>${esc(s.label)}</option>`).join("")}</select></label>
         <span class="rng">your hand <input id="pl-combo" placeholder="AhQs" value="${esc(PT.combo)}"> <span class="sub">optional — the RNG then rolls an action for you at every node</span></span>
         <button class="mini" id="pl-reset">↺ new hand</button>
       </div>
       <div class="sub" style="margin-top:6px">${esc(c0.note)} · chart <span class="mono">${esc(c0.chart)}</span></div>
+      ${(() => { const st = ptStrat(); if (!st) return ""; const bad = st.status !== "ok" && st.status !== "drift";
+        return `<div class="${bad ? "caveat" : "sub"}" style="margin-top:4px">${bad ? "⚠ " : ""}<b>${esc(st.name)}</b> — preflop ${esc(st.preflopLayer.label)}, postflop ${esc(st.postflopLayer.label)}${st.reasons.length ? ` · ${esc(st.reasons[0])}` : ""} <a class="ev-link" href="/sources/strategies/${esc(st.id)}" onclick="go('/sources/strategies/${esc(st.id)}');return false">details ↗</a></div>`; })()}
       <div class="felt">${order.map((p, i) => seatHtml(p, spots[i][0], spots[i][1])).join("")}
         <div class="mid"><div id="pl-board">${PT.board ? cardsHtml(PT.board.match(/.{2}/g)) : '<span class="sub">preflop</span>'}</div><div class="pot" id="pl-pot"></div></div>
       </div>
@@ -1605,7 +1721,7 @@ function renderPlay() {
     <div id="pl-node" class="card"><div class="sub">loading node…</div></div>
     <div id="pl-post"></div>`;
   $("pl-hero").onchange = (e) => { PT.hero = e.target.value; PT.line = []; PT.street = "preflop"; PT.board = null; renderPlay(); };
-  $("pl-hs").onchange = (e) => { PT.strat.hero = e.target.value; renderPlay(); };
+  $("pl-hs").onchange = (e) => { PT.strategy = e.target.value; const st = ptStrat(); PT.strat.hero = st?.preflop === "exploit" ? "mes" : "gto"; renderPlay(); };
   $("pl-vs").onchange = (e) => { PT.strat.villain = e.target.value; renderPlay(); };
   $("pl-combo").onchange = (e) => { PT.combo = e.target.value.trim(); renderPlay(); };
   $("pl-reset").onclick = () => { PT.line = []; PT.street = "preflop"; PT.board = null; PT.spot = null; renderPlay(); };
@@ -1813,7 +1929,7 @@ async function mesWalk(family, board, hist, stage = { street: "flop" }) {
   } catch (e) { el.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   if (!j.ok) { el.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
   const n = j.node;
-  WALK = { family, board, hist, stage, node: n, view: WALK?.view ?? "mes" };
+  WALK = { family, board, hist, stage, node: n, view: WALK?.view ?? (typeof PT !== "undefined" && ptStrat()?.postflop === "gto" ? "gto" : "mes") };
   const who = n.isHero ? `<span class="mode mes">HERO (${esc(n.heroPos ?? (n.heroPlayer === 0 ? "OOP" : "IP"))}) to act</span>` : `<span class="chip">villain to act</span>`;
   // n.path already begins with the spot line on the flop; later streets carry their own prefix
   const crumbs = stage.street === "flop" ? n.path
@@ -2099,7 +2215,7 @@ async function loadRoadmap() {
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
 const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
-const SRC_PANES = ["registry", "matrix", "grading", "roadmap"];
+const SRC_PANES = ["registry", "strategies", "matrix", "grading", "roadmap"];
 $("tab-play").onclick = () => go("/playthrough");
 
 function parsePath() {
@@ -2110,7 +2226,7 @@ function parsePath() {
   if (view === "hands") return { view, pane: null, id: seg[1] && /^\d+$/.test(seg[1]) ? seg[1] : null, node: seg[2] === "node" && /^\d+$/.test(seg[3] ?? "") ? Number(seg[3]) : null };
   if (view === "sources") {
     const pane = SRC_PANES.includes(seg[1]) ? seg[1] : "registry";
-    return { view, pane, id: pane === "registry" && seg[2] ? decodeURIComponent(seg[2]) : null };
+    return { view, pane, id: (pane === "registry" || pane === "strategies") && seg[2] ? decodeURIComponent(seg[2]) : null };
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   if (view === "analytics" || view === "review" || view === "playthrough") return { view, pane: null, id: null };
@@ -2118,7 +2234,7 @@ function parsePath() {
 }
 function canonical(p) {
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
-  if (p.view === "sources") return p.id ? `/sources/registry/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
+  if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "registry"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
   if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}` : "/sessions";
   return `/${p.view}`;
 }
