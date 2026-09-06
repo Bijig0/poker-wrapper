@@ -150,6 +150,34 @@ export function evaluate(): StrategyView[] {
       if (!ok) reasons.push("the MES postflop artifact is not installed.");
     }
 
+    // 2b. arrival POT: the lock must have been solved at the pot the preflop
+    //     piece actually creates (a 2bb open makes a 4bb pot, not the 6bb the
+    //     original 3x locks assume). Checked per family shape.
+    if (post.needsMes && pre.id === "exploit") {
+      const chart = readJson(process.env.EXPLOIT_CHART ?? "") as { choices?: Record<string, Record<string, string>> } | null;
+      const dominant = (ctx: string): number | null => {
+        const ch = chart?.choices?.[ctx]; if (!ch) return null;
+        const w: Record<string, number> = {};
+        for (const [h, a] of Object.entries(ch)) if (a.startsWith("Raise ")) w[a] = (w[a] ?? 0) + (h.length === 2 ? 6 : h.endsWith("s") ? 4 : 12);
+        const top = Object.entries(w).sort((a, b) => b[1] - a[1])[0];
+        return top ? Number(top[0].slice(6)) : null;
+      };
+      const shapes = [
+        { label: "SB open bvb, BB calls", ctx: "sb_bvb", heroPos: "SB", pot: (o: number) => 2 * o },
+        { label: "BTN open, SB folds, BB calls", ctx: "btn_root", heroPos: "BTN", pot: (o: number) => 2 * o + 0.5 },
+      ];
+      for (const sh of shapes) {
+        const o = dominant(sh.ctx); if (o == null) continue;
+        const want = sh.pot(o);
+        const fams = mes.families.filter((f) => f.heroPos === sh.heroPos);
+        const near = fams.map((f) => ({ id: f.id, pot: f.pot / 100 })).sort((a, b) => Math.abs(a.pot - want) - Math.abs(b.pot - want))[0];
+        const ok = !!near && Math.abs(near.pot - want) / want <= 0.15;
+        pc.push({ check: `lock pot matches the ${sh.label} arrival`, pass: ok,
+          detail: `preflop piece opens ${o}bb → ${want}bb pot; ${near ? `nearest lock ${near.id} at ${near.pot}bb` : "no lock for this shape"}` });
+        if (!ok) reasons.push(`${sh.label}: the preflop piece opens to ${o}bb (pot ${want}bb) but the postflop lock was solved at ${near?.pot ?? "?"}bb — served as an approximation until the pot-${want} re-lock lands.`);
+      }
+    }
+
     // 3. villain drift (warning, not fatal)
     if (post.needsMes && poolDrift) {
       pc.push({ check: "opponent piece unchanged since the MES lock", pass: false, detail: "pool_model_v4.json is newer than the served MES build; re-lock behind it" });
@@ -158,8 +186,8 @@ export function evaluate(): StrategyView[] {
 
     let status: StratStatus = "ok";
     if (!arrivalOk || !oppOk) status = "misspecified";
-    else if (pc.some((x) => !x.pass && x.check !== "opponent piece unchanged since the MES lock")) status = "unavailable";
-    else if (post.needsMes && poolDrift) status = "drift";
+    else if (pc.some((x) => !x.pass && x.check !== "opponent piece unchanged since the MES lock" && !x.check.startsWith("lock pot matches"))) status = "unavailable";
+    else if (post.needsMes && (poolDrift || pc.some((x) => !x.pass && x.check.startsWith("lock pot matches")))) status = "drift";
 
     return { ...s, preflopLayer: pre, postflopLayer: post, opponentLayer: opp, status, reasons, preconditions: pc };
   });

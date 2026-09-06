@@ -79,6 +79,20 @@ interface RawFamily {
   /** villain's flop actions before hero's first decision (M2: ["Check"]);
    *  node histories are relative to this spot line */
   line?: string[];
+  /** build_mes_study.py: the preflop ranges the family was solved against
+   *  (hero = exploit_ranges.json, villain = pool_model), with file
+   *  fingerprints — the Sources page checks them against the live files. */
+  inputs?: MesInputs;
+}
+export interface MesRangeInput {
+  spec_field: string; key: string; classes: number; combos: number;
+  weights: Record<string, number>; differs_from_live_classes: number | null;
+}
+export interface MesInputs {
+  exploit_ranges: { path: string; exists: boolean; sha256?: string; mtime?: string; bytes?: number; chart?: string | null };
+  pool_model: { path: string; exists: boolean; sha256?: string; mtime?: string; bytes?: number; chart?: string | null };
+  hero_range: MesRangeInput;
+  villain_range: MesRangeInput;
 }
 interface RawData { families: Record<string, RawFamily> }
 
@@ -113,8 +127,11 @@ export interface MesPostflopInfo {
     id: string;
     heroPos: string;
     pf3: string[];
+    pot: number;
+    effStack: number;
     boards: { board: string; evGainBb: number; gen: string | null }[];
     generations: Record<string, number>;
+    inputs: MesInputs | null;
   }[];
 }
 
@@ -132,7 +149,7 @@ export function mesPostflopInfo(): MesPostflopInfo {
         }));
         const generations: Record<string, number> = {};
         for (const b of boards) generations[b.gen ?? "unknown"] = (generations[b.gen ?? "unknown"] ?? 0) + 1;
-        return { id, heroPos: f.hero_pos, pf3: f.pf3, boards, generations };
+        return { id, heroPos: f.hero_pos, pf3: f.pf3, pot: f.pot, effStack: f.eff_stack, boards, generations, inputs: f.inputs ?? null };
       })
     : [];
   return { path: DATA_PATH, exists, mtimeMs, sizeBytes, meta: d?._meta ?? null, families };
@@ -240,12 +257,45 @@ export interface MesNodeArgs {
   turnTokens?: string[];
   board: string[];
   heroCards: string[];
+  /** live flop pot in bb (parsePanelFeed potByStreet.flop). Used to pick, among
+   *  the families of this preflop shape, the lock solved nearest to the pot
+   *  hero actually arrived with (pot-6 3x lock vs pot-4 2x lock). */
+  potBb?: number | null;
+}
+
+/** Families whose preflop shape + hero seat match, nearest-pot first when the
+ *  live pot is known. Shared by the flop/turn resolver, the river context and
+ *  the arrival counter so every path agrees on which lock answers. */
+export function mesFamiliesFor(pf3Tokens: string[], heroPos: string | null, potBb?: number | null): string[] {
+  const data = load();
+  if (!data || !heroPos || pf3Tokens.length !== 3) return [];
+  const hit: { id: string; pot: number }[] = [];
+  for (const [id, f] of Object.entries(data.families)) {
+    if (f.hero_pos !== heroPos.toUpperCase()) continue;
+    const ok = f.pf3.every((want, i) => {
+      const got = pf3Tokens[i]!;
+      return want === "R" ? /^R[\d.]+$/.test(got) : got === want;
+    });
+    if (ok) hit.push({ id, pot: f.pot / 100 });
+  }
+  if (potBb != null && potBb > 0) hit.sort((a, b) => Math.abs(a.pot - potBb) - Math.abs(b.pot - potBb));
+  return hit.map((h) => h.id);
+}
+
+/** Text for a pot that is materially off the lock's pot; null when within 15%. */
+export function potMismatchText(famPotChips: number, effChips: number, potBb: number | null | undefined): string | null {
+  if (potBb == null || potBb <= 0) return null;
+  const lock = famPotChips / 100;
+  if (Math.abs(potBb - lock) / lock <= 0.15) return null;
+  const spr = (effChips / 100 / potBb).toFixed(1), lockSpr = (effChips / 100 / lock).toFixed(1);
+  return `Live pot ${potBb}bb vs lock pot ${lock}bb (SPR ${spr} vs ${lockSpr}) — no lock solved at this pot yet; approximate.`;
 }
 
 interface ResolvedMesNode {
   famId: string; fam: RawFamily; board: string; rb: RawBoard; node: RawNode;
   exact: boolean; snapped: boolean; mapped: string[]; idx: number | undefined;
   pot: number; bd: number; inRange: boolean; onTurn: boolean;
+  potWarning: string | null;
 }
 
 /**
@@ -260,17 +310,11 @@ function resolveMesNode(args: MesNodeArgs): ResolvedMesNode | null {
   const posSet = new Set(args.positions.map((p) => p.toUpperCase()));
   if (posSet.size !== 3 || !posSet.has("BTN") || !posSet.has("SB") || !posSet.has("BB")) return null;
   if (args.pf3Tokens.length !== 3) return null;
-  // family whose preflop shape + hero seat this hand IS
-  let famId: string | null = null, fam: RawFamily | null = null;
-  for (const [id, f] of Object.entries(data.families)) {
-    if (f.hero_pos !== args.heroPos.toUpperCase()) continue;
-    const ok = f.pf3.every((want, i) => {
-      const got = args.pf3Tokens[i]!;
-      return want === "R" ? /^R[\d.]+$/.test(got) : got === want;
-    });
-    if (ok) { famId = id; fam = f; break; }
-  }
+  // family whose preflop shape + hero seat this hand IS, nearest to the live pot
+  const famId = mesFamiliesFor(args.pf3Tokens, args.heroPos, args.potBb)[0] ?? null;
+  const fam = famId ? data.families[famId] ?? null : null;
   if (!famId || !fam) return null;
+  const potWarning = potMismatchText(fam.pot, fam.eff_stack, args.potBb);
 
   const actual = parseFlop(args.board.slice(0, 3).join(""));
   if (!actual) return null;
@@ -375,7 +419,7 @@ function resolveMesNode(args: MesNodeArgs): ResolvedMesNode | null {
   // (e.g. the exploit preflop scheme LIMPS AA/KK/AK bvb, so they can't reach
   // the "SB raised" flop) — same treatment as a zero-weight combo, but say so.
   const inRange = idx != null && (node.w?.[idx] ?? 0) > 0;
-  return { famId, fam, board, rb, node, exact, snapped, mapped, idx, pot, bd, inRange, onTurn };
+  return { famId, fam, board, rb, node, exact, snapped, mapped, idx, pot, bd, inRange, onTurn , potWarning };
 }
 
 export interface MesNodeDetail {
@@ -420,6 +464,7 @@ export function mesPostflopLookup(args: {
   heroPos: string | null;
   pf3Tokens: string[];          // positional [BTN, SB, BB] preflop tokens
   flopTokens: string[];         // observed flop actions (complete if a turn was dealt)
+  potBb?: number | null;        // live flop pot in bb, picks the nearest-pot lock
   turnTokens?: string[];        // observed turn actions so far (hero to act next)
   board: string[];              // short cards, at least the flop
   heroCards: string[];
@@ -446,6 +491,7 @@ export function mesPostflopLookup(args: {
   const actions = idx != null && node.mes ? toFreqs(node.mes, node.mes_ev) : [];
   const gtoActions = idx != null && node.gto ? toFreqs(node.gto, node.gto_ev) : [];
   const warning = [
+    r.potWarning,
     exact ? null : `Flop ${args.board.slice(0, 3).join("")} answered from nearest solved texture ${board} (dist ${bd.toFixed(1)}) — approximate.`,
     snapped ? "An observed bet size was snapped to the solved tree's nearest size." : null,
     idx == null ? "Hero's combo never reaches this line under the exploit preflop scheme (it takes a different preflop action)." : null,
@@ -523,7 +569,7 @@ export function mesRiverContext(args: MesNodeArgs & { riverCard: string }): MesR
   if (!data || !args.heroPos || args.heroCards.length !== 2) return null;
   const posSet = new Set(args.positions.map((p) => p.toUpperCase()));
   if (posSet.size !== 3 || !posSet.has("BTN") || !posSet.has("SB") || !posSet.has("BB")) return null;
-  const famId = mesFamilyFor(args.pf3Tokens, args.heroPos);
+  const famId = mesFamiliesFor(args.pf3Tokens, args.heroPos, args.potBb)[0] ?? null;
   if (!famId) return null;
   const fam = data.families[famId]!;
   const actual = parseFlop(args.board.slice(0, 3).join(""));

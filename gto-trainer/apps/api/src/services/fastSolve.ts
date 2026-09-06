@@ -1,6 +1,7 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
+import { missQueue } from "./missQueue";
 import { preflopDb } from "./preflopDb";
 import { gtowApi } from "./gtowApi";
 import { SOLUTION_SETS } from "./gtowCdp";
@@ -39,6 +40,8 @@ export interface FastSolveOpts {
   /** Who is asking — recorded on every stored AI-chain solve ("live" from the
    *  study poller, "replay" from the dashboard's re-solve, else "adhoc"). */
   origin?: string;
+  /** The wrapper's declared session, stamped on the stored trace. */
+  sessionId?: string | null;
 }
 
 interface ActionFreq {
@@ -82,7 +85,12 @@ export type FastSolveResult =
       approx?: boolean;
       warning?: string | null;
     }
-  | { ok: false; reason: string; street?: string };
+  | {
+      ok: false; reason: string; street?: string;
+      /** For chart misses: which chart, and how far the walk got — logged
+       *  with the failure so the miss queue and the answer trail agree. */
+      gametype?: string; depth?: number; line?: string;
+    };
 
 /** Depth: explicit > min live stack snapped to a library depth. */
 export const resolveDepth = (hand: ParsedHand, depths: number[], explicit?: number): number => {
@@ -229,13 +237,20 @@ async function solvePreflop3max(
   hand: ParsedHand,
   heroPos: string | null,
   strategy?: "exploit" | "chart",
+  origin?: string,
 ): Promise<FastSolveResult | null> {
   const chart = chartFor(hand, heroPos);
   const tokens = buildPreflopTokens3max(hand, heroPos);
   const walk = await walk3max(tokens, (line) => fetchNode(chart.id, line));
+  // The miss queue (services/missQueue.ts) writes down every inexact walk —
+  // a miss, a far snap, a beyond-ladder state — with the state to solve it.
+  missQueue.observe({
+    chart, hand, heroPos, tokens, walk,
+    ref: { origin: origin === "replay" ? "replay" : "live", clientHandId: hand.clientHandId ?? null, handId: hand.handId ?? null, actionIndex: hand.actions.length, ts: Date.now() },
+  });
   if (!walk.ok) {
     if (walk.unreachable) return null; // solve-DB server down — 6-max net below
-    return { ok: false, reason: `3-max chart ${chart.id}: ${walk.reason}`, street: "preflop" };
+    return { ok: false, reason: `3-max chart ${chart.id}: ${walk.reason}`, street: "preflop", gametype: chart.id, depth: chart.depth, line: walk.missingAt ?? "" };
   }
 
   const line = walk.tokens.join("-");
@@ -644,7 +659,8 @@ async function solvePostflopViaChain(
   set: (typeof SOLUTION_SETS)[number],
   depth: number,
   tk: { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string },
-  origin?: string
+  origin?: string,
+  sessionId?: string | null
 ): Promise<{ res: FastSolveResult | null; why: string | null }> {
   const fail = (why: string) => ({ res: null, why });
   const cur = hand.currentNode.street as "flop" | "turn" | "river";
@@ -755,6 +771,7 @@ async function solvePostflopViaChain(
   // re-solve (services/solveStore.ts).
   const solveMeta = {
     origin: origin ?? "adhoc",
+    sessionId: sessionId ?? hand.sessionId ?? null,
     clientHandId: hand.clientHandId ?? null,
     wrapperHandId: hand.handId ?? null,
     decisionKey: JSON.stringify([hand.street, hand.board, hand.heroCards, hand.currentNode.toCall, hand.actions.length]),
@@ -818,7 +835,7 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
   // The per-street chain answers with ranges conditioned on the actual line —
   // the correct equilibrium at hero's node. It requires a clean, walkable
   // capture; anything broken falls through to the street-root net.
-  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk, opts.origin);
+  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk, opts.origin, opts.sessionId);
   if (chain.res) return chain.res;
 
   // Street-root net: solves the current street with FLOP-ENTRY ranges and
@@ -963,6 +980,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
         heroPos: heroPosName, pf3Tokens: buildPreflopTokens3max(hand, heroPos),
         flopTokens: tk.flop, turnTokens: tk.turn, board: hand.board,
         heroCards: hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c)), riverCard: hand.board[4]!,
+        potBb: hand.potByStreet.flop ?? null,
       }) : null;
       if (ctx) {
         const hit = await mesRiverLookup({ family: ctx.family, board: ctx.board, heroPlayer: ctx.heroPlayer,
@@ -990,6 +1008,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
         turnTokens: hand.currentNode.street === "turn" ? tk.turn : undefined,
         board: hand.board,
         heroCards: hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/.test(c)),
+        potBb: hand.potByStreet.flop ?? null,
       });
     } catch { mes = null; /* overlay must never break the GTO path */ }
   }
@@ -1053,7 +1072,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   // pinned a set explicitly). A dead chart server falls back to the 6-max
   // walk — wrong tree, but an approximate answer beats none — flagged loudly.
   if (!opts.setId && is3Handed(hand, heroPos)) {
-    const tri = await solvePreflop3max(hand, heroPos, opts.strategy);
+    const tri = await solvePreflop3max(hand, heroPos, opts.strategy, opts.origin);
     if (tri) return tri;
     const net = solvePreflop(hand, heroPos, opts);
     if (net.ok) {
