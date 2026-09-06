@@ -290,6 +290,13 @@
   #view-play .seat .pos { font-weight: 700; font-size: 13px; }
   #view-play .seat .strat { font-size: 10px; color: #8fa1b6; }
   #view-play .seat .did { font-family: ui-monospace, monospace; font-size: 11px; color: #dfe6ee; min-height: 14px; }
+  #view-play .seat .holes { display: flex; justify-content: center; gap: 3px; margin: 4px 0 2px; min-height: 30px; }
+  #view-play .seat .holes .back { width: 21px; height: 29px; border-radius: 3px; background: repeating-linear-gradient(135deg, #2c5aa0 0 3px, #24487f 3px 6px); border: 1px solid #9db4d8; box-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  #view-play .seat .holes .back:first-child { transform: rotate(-6deg); } #view-play .seat .holes .back:last-child { transform: rotate(6deg); }
+  #view-play .seat .holes .face { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 29px; border-radius: 3px; background: #f7f7f2; color: #111; font-weight: 700; font-size: 13px; line-height: 1; border: 1px solid #c9c9c0; box-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  #view-play .seat .holes .face .s { font-size: 11px; margin-left: 1px; }
+  #view-play .seat.folded .holes { opacity: .25; }
+  #view-play .seat.hero .holes .face { box-shadow: 0 0 0 2px #ffd35c, 0 1px 2px rgba(0,0,0,.5); }
   #view-play .mid { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; }
   #view-play .mid .pot { font-size: 12px; color: #dfe6ee; margin-top: 4px; }
   #view-play .cfg { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -1913,7 +1920,11 @@ function renderPlay() {
     const st = ptStrat();
     const isHero = pos === PT.hero, s = isHero ? { label: `${st?.name ?? "?"} · ${st?.preflopLayer?.short ?? ""} + ${st?.postflopLayer?.short ?? ""}` } : cfg.strategies.villain.find((s) => s.id === PT.strat.villain);
     const did = PT.line.map((tok, i) => [tok, i]).filter(([_, i]) => actorAt(i) === pos).map(([tok]) => tok).join(" ");
-    return `<div class="seat ${isHero ? "hero" : ""} ${actor === pos && PT.street === "preflop" ? "toact" : ""}" style="left:${x}%;top:${y}%"><div class="pos">${pos}${isHero ? " · you" : ""}</div><div class="strat">${esc(s?.label ?? "")}</div><div class="did">${esc(did) || "&nbsp;"}</div></div>`;
+    const folded = PT.line.some((tok, i) => tok === "F" && actorAt(i) === pos);
+    const hero2 = isHero ? ((PT.combo || "").trim().match(/^([2-9TJQKA][shdc])([2-9TJQKA][shdc])$/) || null) : null;
+    const faceUp = (c) => { const [sym, col] = SUITS[c[1]] ?? ["?", "#cfd8e3"]; return `<span class="face" style="color:${col}">${esc(c[0])}<span class="s">${sym}</span></span>`; };
+    const holes = hero2 ? faceUp(hero2[1]) + faceUp(hero2[2]) : '<span class="back"></span><span class="back"></span>';
+    return `<div class="seat ${isHero ? "hero" : ""} ${folded ? "folded" : ""} ${actor === pos && PT.street === "preflop" ? "toact" : ""}" style="left:${x}%;top:${y}%"><div class="pos">${pos}${isHero ? " · you" : ""}</div><div class="strat">${esc(s?.label ?? "")}</div><div class="holes" title="${isHero ? (hero2 ? "your hand" : "pick your hand to reveal it") : "villain's hole cards"}">${holes}</div><div class="did">${esc(did) || "&nbsp;"}</div></div>`;
   };
   // seats clockwise from hero at the bottom
   const order = [PT.hero, ...P_ORDER.filter((p) => p !== PT.hero)];
