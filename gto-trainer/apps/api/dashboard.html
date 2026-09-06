@@ -311,6 +311,13 @@
   #view-play .board .ev { font-family: ui-monospace, monospace; font-size: 11px; color: #8fa1b6; }
   #view-play .actrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
   #view-play .actrow button.mes { border-color: #e8772e; }
+  #view-play .actrow button.picked { box-shadow: 0 0 0 2px #ffd35c; background: rgba(255,211,92,.14); }
+  #view-play .actrow button.picked::before { content: "✓ "; color: #ffd35c; }
+  #view-play .pf-answer { border: 1px solid #ffd35c55; background: rgba(255,211,92,.06); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+  #view-play .pf-answer .big { font-size: 16px; font-weight: 700; color: #ffd35c; }
+  #view-play .pf-answer .bands { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 6px 0 2px; max-width: 420px; position: relative; }
+  #view-play .pf-answer .bands i { display: block; height: 100%; }
+  #view-play .pf-answer .bands .mark { position: absolute; top: -3px; width: 2px; height: 14px; background: #fff; box-shadow: 0 0 3px #000; }
   #view-play .rng { border: 1px solid #2a3442; border-radius: 6px; padding: 6px 8px; margin: 6px 0; font-size: 12px; }
   #view-play .rng input { width: 70px; background: #10151d; color: #dfe6ee; border: 1px solid #2a3442; border-radius: 4px; padding: 2px 5px; font-family: ui-monospace, monospace; }
 
@@ -2049,20 +2056,36 @@ async function loadPlayPreflop(actor) {
     } else stratNote = `<span class="avail off">Pool read not available at this node</span> <span class="sub">chart mix shown</span>`;
   }
   // RNG for hero
+  const colorForAct = (lab, i) => /^Fold/.test(lab) ? "#5b7fa6" : /^(Check|Call|Limp)/.test(lab) ? "#41a368" : ["#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"][Math.min(Math.max(i, 0), 4)];
   let rng = "";
   const combo = PT.combo && /^[2-9TJQKA][shdc][2-9TJQKA][shdc]$/.test(PT.combo) ? PT.combo : null;
   const clsOf = (cb) => { const a = cb[0], b = cb[2]; const ia = RANKS13.indexOf(a), ib = RANKS13.indexOf(b); const hi = RANKS13[Math.min(ia, ib)], lo = RANKS13[Math.max(ia, ib)]; return ia === ib ? hi + lo : hi + lo + (cb[1] === cb[3] ? "s" : "o"); };
+  let pickIdx = -1;
   if (isHero && combo) {
     const cls = clsOf(combo);
     const cell = (n.cells || []).find((x) => x.hand === cls);
-    let pick, how;
-    if (useMes && choices?.[cls]) { pick = choices[cls]; how = "MES pure pick"; }
-    else if (cell) { const roll = Math.random() * 100; let acc = 0; for (const a of acts) { acc += cell.actions[a] ?? 0; if (roll < acc) { pick = a; break; } } how = `rolled ${roll.toFixed(1)} in the chart mix`; }
-    rng = `<div class="rng">your <b class="mono">${esc(combo)}</b> (${esc(cls)}): <b class="mono">${esc(pick ?? "not in range")}</b> <span class="sub">— ${esc(how ?? "")}</span>` +
-      (cell ? ` <span class="sub">· chart mix ${acts.map((a) => `${a} ${(cell.actions[a] ?? 0).toFixed(0)}%`).filter((s) => !s.endsWith(" 0%")).join(", ")}</span>` : "") + `</div>`;
+    // one roll per node+hand, kept across re-renders; ↻ re-rolls
+    const rollKey = `${line}|${combo}`;
+    if (!PT.pfRoll || PT.pfRoll.key !== rollKey) PT.pfRoll = { key: rollKey, roll: Math.random() * 100 };
+    const roll = PT.pfRoll.roll;
+    let pick = null, how = "", bands = "";
+    if (useMes && choices?.[cls]) { pick = choices[cls]; how = `MES pure pick for ${cls} — no roll needed (the exploit plays every class one way)`; }
+    else if (cell) {
+      let acc = 0; const segs = [];
+      for (const a of acts) { const f = cell.actions[a] ?? 0; if (f <= 0) continue; segs.push({ a, lo: acc, hi: acc + f }); acc += f; }
+      const hit = segs.find((s) => roll >= s.lo && roll < s.hi) ?? segs[segs.length - 1];
+      pick = hit?.a ?? null;
+      how = hit ? `${cls} is ${hit.hi - hit.lo < 99.5 ? `${(hit.hi - hit.lo).toFixed(0)}% ${hit.a} (${hit.lo.toFixed(0)}–${hit.hi.toFixed(0)})` : `always ${hit.a}`} · rolled <b>${roll.toFixed(0)}</b>` : "";
+      bands = `<div class="bands">${segs.map((s) => `<i style="width:${(s.hi - s.lo).toFixed(1)}%;background:${colorForAct(s.a, acts.indexOf(s.a))}" title="${esc(s.a)} ${s.lo.toFixed(0)}–${s.hi.toFixed(0)}"></i>`).join("")}<span class="mark" style="left:${roll.toFixed(1)}%"></span></div>` +
+        `<div class="sub">${segs.map((s) => `${esc(s.a)} ${s.lo.toFixed(0)}–${s.hi.toFixed(0)}`).join(" · ")}</div>`;
+    }
+    pickIdx = pick ? acts.indexOf(pick) : -1;
+    const tok = pickIdx >= 0 ? n.actions[pickIdx].token : null;
+    rng = `<div class="pf-answer">📣 Study answer for <b class="mono">${esc(combo)}</b>: <span class="big">${esc(pick ?? "not in range")}</span> <span class="sub">— ${how}</span>${bands}
+      <div class="pl-take" style="margin-top:6px">${tok ? `<button class="mini" onclick="playStep('${esc(tok)}')">take it: ${esc(pick)} ›</button>` : ""}${!(useMes && choices?.[cls]) && cell ? `<button class="mini" onclick="PT.pfRoll=null;renderPlay()" title="new random number, same chart">↻ re-roll</button>` : ""}<span class="sub">the highlighted pill is the answer; any pill still plays</span></div></div>`;
   }
   el.innerHTML = `<h2>${esc(actor)} to act${isHero ? " · you" : ""} <span class="sub">line ${esc(line || "(root)")}</span></h2><div style="margin:4px 0">${stratNote}</div>${rng}
-    <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${(useMes && choices) || (usePool && Math.abs(aggPct[i] - chartPct[i]) > 0.5) ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
+    <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""} ${i === pickIdx ? "picked" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${(useMes && choices) || (usePool && Math.abs(aggPct[i] - chartPct[i]) > 0.5) ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
     ${isHero ? `<div class="pl-take"><button class="mini" id="pl-ask" onclick="playStudyAnswer()" title="the answer the table would give: same solve, same roll, same text">📣 Study answer${combo ? ` for ${esc(combo)}` : " — pick your hand"}</button><span class="sub">what the panel would say at the table — same solve, same roll</span></div><div id="pl-answer"></div>` : ""}
     <div id="pl-grid"></div>`;
   // grid: chart cells, MES overlay when active
