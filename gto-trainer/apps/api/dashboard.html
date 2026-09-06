@@ -179,6 +179,52 @@
   .nv-facts .v { color: #dfe6ee; }
   .nv-hero { background: #1c3550; border: 1px solid #3f6d9e; border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
   .nv-hero .big { font-size: 15px; font-weight: 700; color: #fff; }
+  /* click-in card picker (Playthrough): 4 suit rows x 13 ranks, used cards dimmed */
+  .cardpicker { display: inline-block; background: #10151d; border: 1px solid #2a3442; border-radius: 8px; padding: 8px 10px; margin: 4px 0; vertical-align: top; }
+  .cp-head { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 6px; font-size: 12px; }
+  .cp-chip { display: inline-block; padding: 2px 7px; border-radius: 5px; background: #1c2b26; font-weight: 800; font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 13px; }
+  .cp-chip.red { color: #ff6b6b; }
+  .cp-chip.slot { background: transparent; border: 1px dashed #3a4a5e; color: #5f7186; font-weight: 400; }
+  .cp-row { display: flex; gap: 3px; margin-bottom: 3px; }
+  .cp-card { width: 30px; height: 26px; padding: 0; border-radius: 4px; border: 1px solid #2a3442; background: #151d27; color: #dfe6ee; font: 700 12px/1 "IBM Plex Mono", ui-monospace, Consolas, monospace; cursor: pointer; }
+  .cp-card.red { color: #ff6b6b; }
+  .cp-card:hover:not(:disabled) { background: #24344a; border-color: #4da3ff; }
+  .cp-card.sel { background: #4da3ff; color: #06111f; border-color: #4da3ff; }
+  .cp-card.used, .cp-card:disabled { opacity: .22; cursor: default; }
+  .cp-done { display: inline-flex; align-items: center; gap: 8px; }
+  /* GTO Wizard client down — the postflop fallback is gone, say so loudly */
+  #gtow-down { position: fixed; inset: 0; z-index: 60; background: rgba(6, 9, 14, .78); display: none; align-items: center; justify-content: center; padding: 20px; }
+  #gtow-down.on { display: flex; }
+  #gtow-down .box { background: #1a1114; border: 2px solid #ff7373; border-radius: 12px; padding: 22px 26px; max-width: 640px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  #gtow-down h1 { margin: 0 0 6px; font-size: 22px; color: #ff9a9a; display: flex; align-items: center; gap: 10px; }
+  #gtow-down p { margin: 6px 0; color: #e6d3d3; font-size: 13.5px; line-height: 1.45; }
+  #gtow-down .big { font-size: 17px; font-weight: 700; padding: 12px 22px; border-radius: 8px; border: 0; background: #4da3ff; color: #06111f; cursor: pointer; }
+  #gtow-down .big:disabled { opacity: .5; cursor: default; }
+  #gtow-down .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  #gtow-down .st { font-size: 12px; color: #ffce56; min-height: 16px; margin-top: 8px; }
+  #gtow-pill { position: fixed; right: 14px; bottom: 14px; z-index: 59; border-radius: 20px; padding: 7px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.5); border: 1px solid #3a4453; background: #1a212c; color: #b9c6d6; }
+  #gtow-pill .dot { width: 9px; height: 9px; }
+  #gtow-pill.up { background: #14281e; color: #61d095; border-color: #2f6b4a; }
+  #gtow-pill.notoken { background: #4d3d1e; color: #ffce56; border-color: #8a6a22; }
+  #gtow-pill.down { background: #57222a; color: #ff9a9a; border-color: #ff7373; animation: gtowpulse 1.6s ease-in-out infinite; }
+  #gtow-pill .act { background: #4da3ff; color: #06111f; border: 0; border-radius: 12px; padding: 2px 9px; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+  @keyframes gtowpulse { 0%, 100% { box-shadow: 0 6px 20px rgba(0,0,0,.5); } 50% { box-shadow: 0 0 0 6px rgba(255,115,115,.25); } }
+  @media (prefers-reduced-motion: reduce) { #gtow-pill.down { animation: none; } }
+  .ans-gtow { border: 1px solid #ff7373; background: #2a1518; border-radius: 8px; padding: 10px 12px; margin-top: 6px; }
+  .ans-gtow b { color: #ff9a9a; }
+  .ans-gtow .mini.big { font-size: 13px; padding: 6px 14px; background: #4da3ff; color: #06111f; border: 0; font-weight: 700; }
+  /* grid hover popover (every 13x13 strategy grid) */
+  #gridtip { position: fixed; z-index: 50; pointer-events: none; background: #0e131a; border: 1px solid #34435a; border-radius: 7px; padding: 8px 10px; font-size: 12px; min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,.5); display: none; }
+  #gridtip .h { font-weight: 700; font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; margin-bottom: 5px; display: flex; justify-content: space-between; gap: 10px; }
+  #gridtip .h .sub { font-weight: 400; }
+  #gridtip .r { display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; margin: 2px 0; }
+  #gridtip .r .bar { height: 6px; background: #1b2330; border-radius: 3px; overflow: hidden; }
+  #gridtip .r .bar i { display: block; height: 100%; }
+  #gridtip .r .lab { display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; }
+  #gridtip .r .pct { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  #gridtip .note { color: #8fa1b6; font-size: 11px; margin-top: 4px; }
+  #pl-answer .ans { margin-top: 10px; }
+  .pl-take { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   /* miss queue */
   .mq-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 10px; }
   .mq-ctl select { background: #1d2836; border: 1px solid #2c3a4d; color: #cfe0f2; border-radius: 5px; padding: 2px 6px; font-size: 11.5px; }
@@ -628,11 +674,138 @@ function provenanceRow(actionIndex) {
 /* ---- one logged answer as a card: verdict → strategy mix → provenance ---- */
 const verbClass = (label) => { const s = String(label ?? "").toLowerCase(); return s.startsWith("fold") ? "fold" : s.startsWith("check") ? "check" : s.startsWith("call") || s.startsWith("limp") ? "call" : s.startsWith("bet") ? "bet" : s.startsWith("raise") || s.startsWith("all") ? "raise" : ""; };
 const fmtLatency = (ms) => ms == null ? "" : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+/* ---- hover popover for every 13x13 grid: the cell's action split as bars ----
+   Cells carry their mix in `title` ("AQo: Raise 2.5 60% · Fold 40%"); the
+   native tooltip is slow and easy to miss, so the title is lifted into
+   data-tip on first hover and drawn as a proper popover next to the cell. */
+(function gridTip() {
+  const tip = document.createElement("div"); tip.id = "gridtip"; document.body.appendChild(tip);
+  const cellOf = (e) => e.target && e.target.closest ? e.target.closest("#grid > div, .grid169 > div") : null;
+  const render = (raw) => {
+    const [head, ...rest] = raw.split(/:\s(.*)/s).filter(Boolean);
+    const body = (rest[0] ?? "").trim();
+    if (!body || /not in range/i.test(body)) return `<div class="h">${esc(head)}</div><div class="note">${esc(body || "not in range")}</div>`;
+    // "MES Raise 2 · chart Fold 55%, Raise 2 45%" (playthrough preflop) or "Fold 55% · Raise 2 45% (0.12bb)"
+    let pre = "";
+    let text = body;
+    const mesPick = text.match(/^MES\s+(.+?)\s+·\s+chart\s+/);
+    if (mesPick) { pre = `<div class="note">MES pick: <b>${esc(mesPick[1])}</b> · chart mix below</div>`; text = text.slice(mesPick[0].length); }
+    const segs = text.split(/\s·\s|,\s(?=[A-Z])/).map((x) => x.trim()).filter(Boolean);
+    const rows = segs.map((sg) => { const m = sg.match(/^(.*?)\s(\d+(?:\.\d+)?)%(?:\s\((.*?)\))?$/); return m ? { label: m[1], pct: Number(m[2]), ev: m[3] } : { label: sg, pct: null }; });
+    const withPct = rows.filter((r) => r.pct != null);
+    const total = withPct.reduce((s, r) => s + r.pct, 0) || 100;
+    return `<div class="h"><span>${esc(head)}</span><span class="sub">${withPct.length ? `${withPct.length} action${withPct.length === 1 ? "" : "s"}` : ""}</span></div>${pre}` +
+      rows.map((r, i) => r.pct == null ? `<div class="note">${esc(r.label)}</div>` :
+        `<div class="r"><div><div class="lab"><span>${esc(r.label)}</span>${r.ev ? `<span class="sub">${esc(r.ev)}</span>` : ""}</div><div class="bar"><i style="width:${Math.min(100, 100 * r.pct / total).toFixed(1)}%;background:${colorFor(r.label, i)}"></i></div></div><div class="pct">${r.pct}%</div></div>`).join("");
+  };
+  const place = (e) => { const x = Math.min(window.innerWidth - tip.offsetWidth - 12, e.clientX + 14), y = e.clientY + 16 + tip.offsetHeight > window.innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16; tip.style.left = `${Math.max(4, x)}px`; tip.style.top = `${Math.max(4, y)}px`; };
+  document.addEventListener("mouseover", (e) => {
+    const c = cellOf(e); if (!c) return;
+    if (c.title) { c.dataset.tip = c.title; c.removeAttribute("title"); }
+    const raw = c.dataset.tip; if (!raw) return;
+    tip.innerHTML = render(raw); tip.style.display = "block"; place(e);
+  });
+  document.addEventListener("mousemove", (e) => { if (tip.style.display === "block" && cellOf(e)) place(e); });
+  document.addEventListener("mouseout", (e) => { const c = cellOf(e); if (c && !(e.relatedTarget && c.contains(e.relatedTarget))) tip.style.display = "none"; });
+})();
+
+/* ---- click-in card picker: cpMount(containerId, { need, used, onDone, label, value })
+   draws 4 suit rows x 13 ranks (like the analysis app / GTO Wizard); cards
+   already out are dimmed; picking `need` cards calls onDone(["Ah","Qs"]). A set
+   value collapses to chips + "change". Delegated clicks, no per-render wiring. ---- */
+const CP = {};
+const CP_RANKS = "AKQJT98765432", CP_SUITS = [["s", "♠", false], ["h", "♥", true], ["d", "♦", true], ["c", "♣", false]];
+function cpMount(id, o) {
+  CP[id] = { need: o.need, used: new Set(o.used || []), sel: [], onDone: o.onDone, label: o.label || "", value: o.value || null, open: !(o.value && o.value.length), hint: o.hint || "" };
+  cpDraw(id);
+}
+function cpDraw(id) {
+  const p = CP[id], el = $(id); if (!p || !el) return;
+  const red = (c) => c[1] === "h" || c[1] === "d";
+  const chip = (c) => `<span class="cp-chip ${red(c) ? "red" : ""}">${esc(c[0])}${CP_SUITS.find((s) => s[0] === c[1])?.[1] ?? ""}</span>`;
+  if (!p.open && p.value && p.value.length) {
+    el.innerHTML = `<span class="cp-done">${p.label ? `<span class="sub">${esc(p.label)}</span>` : ""}${p.value.map(chip).join(" ")}<button class="mini" onclick="CP['${id}'].open=true;CP['${id}'].sel=[];cpDraw('${id}')">change</button></span>`;
+    return;
+  }
+  const slots = []; for (let i = 0; i < p.need; i++) slots.push(p.sel[i] ? chip(p.sel[i]) : `<span class="cp-chip slot">${i === p.sel.length ? "pick" : "·"}</span>`);
+  el.innerHTML = `<div class="cardpicker" data-cp="${id}">
+    <div class="cp-head">${p.label ? `<span class="sub">${esc(p.label)}</span>` : ""}${slots.join(" ")}${p.sel.length ? `<button class="mini" onclick="CP['${id}'].sel=[];cpDraw('${id}')">clear</button>` : ""}${p.value && p.value.length ? `<button class="mini" onclick="CP['${id}'].open=false;cpDraw('${id}')">keep ${p.value.join("")}</button>` : ""}${p.hint ? `<span class="sub">${esc(p.hint)}</span>` : ""}</div>
+    ${CP_SUITS.map(([s, sym, isRed]) => `<div class="cp-row">${[...CP_RANKS].map((r) => { const c = r + s; const used = p.used.has(c) && !p.sel.includes(c); const sel = p.sel.includes(c); return `<button class="cp-card ${isRed ? "red" : ""} ${sel ? "sel" : ""} ${used ? "used" : ""}" data-card="${c}" ${used ? "disabled" : ""}>${r}${sym}</button>`; }).join("")}</div>`).join("")}
+  </div>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest(".cp-card[data-card]") : null; if (!b) return;
+  const host = b.closest("[data-cp]"); const id = host && host.dataset.cp; const p = CP[id]; if (!p) return;
+  const c = b.dataset.card;
+  if (p.sel.includes(c)) { p.sel = p.sel.filter((x) => x !== c); cpDraw(id); return; }
+  if (p.used.has(c) || p.sel.length >= p.need) return;
+  p.sel.push(c);
+  if (p.sel.length === p.need) { const cards = p.sel.slice(); p.value = cards; p.sel = []; p.open = false; cpDraw(id); p.onDone(cards); }
+  else cpDraw(id);
+});
+const cpUsed = () => [...((PT.board && PT.free && PT.free.board.length ? PT.free.board : (PT.board || "").match(/[2-9TJQKA][shdc]/g) || [])), ...((PT.combo || "").match(/[2-9TJQKA][shdc]/g) || [])];
+
+/* ---- GTO Wizard AI client watch: the postflop fallback for everything the MES
+   overlay does not cover. Down = a page-covering alert with a Connect button
+   (POST /api/dashboard/gtow-connect launches the client with its debug port and
+   waits for a token). Snooze hides it for 10 minutes behind a red pill. ---- */
+const GTOW = { st: null, snoozeUntil: 0, connecting: false, timer: null };
+const isGtowDownReason = (r) => /No access token|CDP on 9222|Client unreachable|GTO Wizard client|debug port/i.test(String(r ?? ""));
+(function gtowWatch() {
+  const ov = document.createElement("div"); ov.id = "gtow-down";
+  ov.innerHTML = `<div class="box"><h1>🔌 GTO Wizard AI client is down</h1>
+    <p><b>Every postflop spot the MES overlay does not cover has no answer right now.</b> The AI chain is the fallback for all of postflop — off-family lines, off-tree sizes, rivers, and every spot in GTO mode — so until the client is back those spots fail at the table and in the playthrough.</p>
+    <p id="gtow-why" class="sub"></p>
+    <div class="row"><button class="big" id="gtow-connect" onclick="gtowConnect()">Connect GTO Wizard</button><button class="mini" onclick="gtowSnooze()">keep working, remind me in 10 min</button></div>
+    <div class="st" id="gtow-st"></div>
+    <p class="sub" style="margin-top:10px">Connect starts <span class="mono">GTO Wizard.exe --remote-debugging-port=9222</span> minimized and waits for a token (up to a minute). If it comes up without a token, log in inside the client window.</p></div>`;
+  document.body.appendChild(ov);
+  const pill = document.createElement("div"); pill.id = "gtow-pill"; pill.title = "GTO Wizard AI client — the postflop fallback for every spot the MES overlay does not cover";
+  document.body.appendChild(pill);
+  gtowPoll(); GTOW.timer = setInterval(gtowPoll, 20000);
+})();
+async function gtowPoll() {
+  try { GTOW.st = await (await fetch("/api/dashboard/gtow-status")).json(); } catch { GTOW.st = null; }
+  gtowRender();
+}
+function gtowRender() {
+  const st = GTOW.st; const ov = $("gtow-down"), pill = $("gtow-pill");
+  if (!ov) return;
+  const down = st && !st.usable;
+  const snoozed = Date.now() < GTOW.snoozeUntil;
+  ov.classList.toggle("on", !!down && !snoozed && !GTOW.connecting ? true : !!down && GTOW.connecting);
+  // the pill is ALWAYS there: green up, amber no-token, red down (with connect)
+  const mins = st?.expiresInMs != null ? Math.max(0, Math.round(st.expiresInMs / 60000)) : null;
+  pill.className = !st ? "" : st.state === "up" ? "up" : st.state === "no-token" ? "notoken" : "down";
+  pill.innerHTML = GTOW.connecting ? `<span class="dot warn"></span>GTO Wizard AI · connecting…`
+    : !st ? `<span class="dot off"></span>GTO Wizard AI · status unknown (API?)`
+    : st.state === "up" ? `<span class="dot good"></span>GTO Wizard AI · connected${mins != null ? ` · token ${mins} min` : ""}`
+    : st.state === "no-token" ? `<span class="dot warn"></span>GTO Wizard AI · client up, no token <button class="act" onclick="event.stopPropagation();gtowConnect()">retry</button>`
+    : `<span class="dot crit"></span>GTO Wizard AI · DOWN <button class="act" onclick="event.stopPropagation();gtowConnect()">connect</button>`;
+  pill.onclick = () => { if (st && !st.usable) { GTOW.snoozeUntil = 0; gtowRender(); } else gtowPoll(); };
+  if (st) $("gtow-why").textContent = st.state === "no-token" ? `The client is reachable on ${st.cdpHost} but has no session token — it is probably logged out or the desktop is locked.` : st.state === "down" ? `Nothing is listening on ${st.cdpHost}: the client is not running, or was started without its debug port.` : "";
+  document.querySelectorAll(".ans-gtow").forEach((el) => { if (st?.usable) el.querySelector(".now-up") ? null : el.insertAdjacentHTML("beforeend", '<div class="sub now-up">✓ the client is back — ask again</div>'); });
+}
+function gtowSnooze() { GTOW.snoozeUntil = Date.now() + 10 * 60000; gtowRender(); }
+async function gtowConnect() {
+  if (GTOW.connecting) return;
+  GTOW.connecting = true; gtowRender();
+  const btn = $("gtow-connect"), st = $("gtow-st");
+  if (btn) { btn.disabled = true; btn.textContent = "connecting…"; }
+  if (st) st.textContent = "launching the client with its debug port and waiting for a token (up to a minute)…";
+  document.querySelectorAll(".ans-gtow .st").forEach((x) => x.textContent = "connecting…");
+  let r = null;
+  try { r = await (await fetch("/api/dashboard/gtow-connect", { method: "POST" })).json(); } catch (e) { r = { ok: false, hint: String(e) }; }
+  GTOW.connecting = false;
+  if (btn) { btn.disabled = false; btn.textContent = "Connect GTO Wizard"; }
+  if (r?.connected) { if (st) st.textContent = `connected — ${r.text}`; GTOW.st = r; gtowRender(); }
+  else { if (st) st.textContent = r?.hint ?? "could not connect"; document.querySelectorAll(".ans-gtow .st").forEach((x) => x.textContent = r?.hint ?? "could not connect"); GTOW.st = r; GTOW.snoozeUntil = 0; gtowRender(); }
+}
 /** Strategy mix: from the logged action list when present, else parsed off the panel text ("Fold 93% · Raise 21 6%"). */
 function answerMix(a) {
   try {
     const acts = JSON.parse(a.decision_json ?? "null");
-    if (Array.isArray(acts) && acts.length) return acts.map((x) => ({ label: x.action, pct: Number(x.frequency) || 0, ev: x.ev })).filter((x) => x.pct > 0);
+    if (Array.isArray(acts) && acts.length) return acts.map((x) => ({ label: x.action, pct: Math.round((Number(x.frequency) || 0) * 10) / 10, ev: x.ev != null && Number.isFinite(Number(x.ev)) ? Math.round(Number(x.ev) * 100) / 100 : x.ev })).filter((x) => x.pct > 0);
   } catch { /* legacy */ }
   const body = String(a.text ?? "").replace(/^≈\s*/, "").split(" — ").slice(1).join(" — ").split(" · roll ")[0];
   return body.split(" · ").map((seg) => { const m = seg.match(/^(.*?)\s(\d+(?:\.\d+)?)%$/); return m ? { label: m[1], pct: Number(m[2]) } : null; }).filter(Boolean);
@@ -640,6 +813,12 @@ function answerMix(a) {
 /** Human name for a chart id, with the raw id kept in the tooltip. */
 function chartName(id) {
   if (!id) return "";
+  // postflop range sources: "<chart> + exploit hero range (key)", "MES <fam> @ <board> (…)", "6max …"
+  let mm = String(id).match(/^(\S+) \+ exploit hero range \((\w+)\)$/);
+  if (mm) return `${chartName(mm[1])} for villain · your exploit range (${mm[2]}) for you`;
+  mm = String(id).match(/^MES (\S+) @ (\w+)/);
+  if (mm) return `MES locked solve ${mm[1]} on ${mm[2]} · your exploit range vs the pool's calling range`;
+  if (/^6max /.test(id)) return "6-max GTO Wizard charts (fallback — 3-max chart unavailable)";
   let m = id.match(/^(\w+?)_3maxasym(2ci)?_D(\d+)_s(\d+)_(eq|btn|sb|bb)$/i);
   if (m) return `3-max ${m[1]} · ${m[3]}bb${m[5] === "eq" ? " even" : ` · ${m[5].toUpperCase()} short ${m[4]}bb`}${m[2] ? " · re-solved" : ""}`;
   m = id.match(/^Cash(\d)m(\d+)z(\w+)$/);
@@ -654,12 +833,14 @@ function answerCard(a, opt = {}) {
   const decisionNo = (DETAIL?.answers || []).filter((x) => x.text && x.ts <= a.ts).length;
   const where = `<div class="ans-where">
       <span class="ans-street">${esc(street)}${a.board ? ` <span class="sub">${esc(a.board)}</span>` : ""}</span>
-      <span class="ans-node">${a.actionIndex != null ? `at action ${a.actionIndex}` : "action unknown"}${a.text ? ` · answer ${decisionNo}` : ""}</span>
+      <span class="ans-node">${a.actionIndex != null ? `at action ${a.actionIndex}` : a.node_label ? esc(a.node_label) : "action unknown"}${a.text && !a.node_label ? ` · answer ${decisionNo}` : ""}</span>
       <span class="ans-lat">${fmtLatency(a.latency_ms)}${a.latency_ms != null ? " to answer" : ""}</span>
     </div>`;
   if (!a.text) {
+    const gtowDown = typeof isGtowDownReason === "function" && isGtowDownReason(a.fail_reason);
     return `<div class="ans ${compact ? "compact" : ""} failed">${where}<div class="ans-main">
-      <div class="ans-verdict"><span class="ans-fail">No answer</span><span class="ans-how">${esc(a.fail_reason ?? "the solve produced nothing")}</span></div></div></div>`;
+      <div class="ans-verdict"><span class="ans-fail">No answer</span><span class="ans-how">${gtowDown ? "the GTO Wizard AI client was down — this spot has no other source" : esc(a.fail_reason ?? "the solve produced nothing")}</span></div>
+      ${gtowDown ? `<div class="ans-gtow"><b>🔌 GTO Wizard AI client is down.</b> <span class="sub">The AI chain is the fallback for every postflop spot the MES overlay does not cover.</span><div class="pl-take"><button class="mini big" onclick="gtowConnect()">Connect GTO Wizard</button><span class="st sub">${esc(a.fail_reason ?? "")}</span></div></div>` : ""}</div></div>`;
   }
   const mix = answerMix(a);
   const approx = /^≈/.test(a.text);
@@ -682,7 +863,7 @@ function answerCard(a, opt = {}) {
   const prov = `<div class="prov">
       ${f("answered by", `${srcLink(a.source)}${a.actionIndex != null ? ` · <a href="/hands/${DETAIL?.dbId}/node/${a.actionIndex}" onclick="go('/hands/${DETAIL?.dbId}/node/${a.actionIndex}');return false"><b>open the exact node ↗</b></a>` : ""}`)}
       ${f("tier", a.tier ? `<span class="chip">${esc(a.tier)}</span>` : "")}
-      ${f("chart", a.chart ? `<span title="${esc(a.chart)}">${esc(chartName(a.chart))}</span>${compact ? "" : ` <span class="mono">${esc(a.chart)}</span>`}` : "")}
+      ${f(a.street && a.street !== "preflop" ? "ranges from" : "chart", a.chart ? `<span title="${esc(a.chart)}">${esc(chartName(a.chart))}</span>${compact ? "" : ` <span class="mono">${esc(a.chart)}</span>`}` : "")}
       ${f("primary strategy", a.strategy_mode ? `${modeChip(a.strategy_mode)} <span class="sub">${a.strategy_mode === "exploit" ? "pool exploit" : "equilibrium"}</span>` : "")}
       ${f("both strategies said", picksHtml)}
       ${f("MES board", a.mes_board ? `<span class="mono">${esc(a.mes_board)}</span>${a.mes_exact === 0 ? ' <span class="chip warn">nearest texture</span>' : ""}${a.mes_ev_gain_bb != null ? ` · <b>${a.mes_ev_gain_bb > 0 ? "+" : ""}${a.mes_ev_gain_bb} bb</b> at stake` : ""}` : "")}
@@ -954,10 +1135,10 @@ async function renderWalkthrough(solveId, hostId, upto) {
   let w;
   try { w = await (await fetch(`/api/dashboard/solve/${solveId}`)).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
   if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return; }
-  const sp = w.spec, heroKey = DETAIL?.summary ? classOfCardsJs(DETAIL.hand.heroCards) : null;
+  const sp = w.spec, heroKey = DETAIL?.summary ? classOfCardsJs(DETAIL.hand.heroCards) : (sp.heroCombo ? classOfCardsJs(sp.heroCombo.match(/.{2}/g) || []) : null);
   const heroSeatPos = sp.heroSeat === "oop" ? sp.oopPos : sp.ipPos;
   // chain node k ↔ the k-th postflop action of the archived hand (hero's pending node ↔ upto)
-  const postIdx = DETAIL.hand.actions.map((a, i) => (a.street !== "preflop" ? i : -1)).filter((i) => i >= 0);
+  const postIdx = DETAIL?.hand ? DETAIL.hand.actions.map((a, i) => (a.street !== "preflop" ? i : -1)).filter((i) => i >= 0) : [];
   let sel = w.nodes.findIndex((n) => n.heroNode); if (sel < 0) sel = w.nodes.length - 1;
   const facts = `<div class="nv-facts">
       ${fact("stored", `#${w.row.id} · ${esc(w.row.origin)} · ${fmtT(w.row.ts)}`)}
@@ -965,6 +1146,7 @@ async function renderWalkthrough(solveId, hostId, upto) {
       ${fact("your combo", sp.heroCombo ? `<span class="mono">${esc(sp.heroCombo)}</span>` : "unknown")}
       ${fact("entering the flop", `pot ${sp.flopPot}bb · stack ${sp.flopStack}bb`)}
       ${fact("board", `<span class="mono">${esc(sp.board)}</span>`)}
+      ${fact("ranges from", sp.rangeSource ? `<span title="${esc(sp.rangeSource)}">${esc(chartName(sp.rangeSource))}</span>` : '<span class="sub">not recorded on this solve (pre-2026-09-06) — equilibrium chart ranges for both seats</span>')}
       ${fact("tokens walked", sp.streets.map((t, i) => `<span class="chip dim">${["flop", "turn", "river"][i]}</span> ${esc(t.join("-") || "root")}`).join(" "))}
       ${fact("cloud solutions", w.streets.map((st) => `${st.street.toLowerCase()} <span class="mono" title="${esc(st.solId ?? "")}">${esc((st.solId ?? "—").slice(0, 8))}</span> <span class="chip ${st.created ? "good" : "dim"}">${st.created ? "fresh solve" : "cached"}</span>${st.fixedLevels ? ` <span class="chip warn" title="${esc(st.fixedLevels.join(", "))}">sizes pinned</span>` : ""}`).join(" · "))}
       ${fact("verdict", w.result?.ok ? `reached hero's node · ${w.result.solves} fresh solve${w.result.solves === 1 ? "" : "s"} · ${w.row.solveMs != null ? fmtLatency(w.row.solveMs) : ""}` : `<span class="warn">failed: ${esc(w.result?.why ?? "?")}</span>`)}
@@ -1007,7 +1189,7 @@ async function renderWalkthrough(solveId, hostId, upto) {
     $("walk-list").innerHTML = list(); $("walk-view").innerHTML = view(); bind();
     // keep the table replica on the same moment
     const n = w.nodes[sel];
-    setStep(n.heroNode ? upto : (postIdx[sel] ?? upto));
+    if (upto != null && DETAIL?.hand) setStep(n.heroNode ? upto : (postIdx[sel] ?? upto));
   });
   bind();
 }
@@ -1652,7 +1834,20 @@ function renderStrategyDetail(id) {
 }
 
 /* ================================= Playthrough: our own solver browser ================================= */
-const PT = { cfg: null, hero: "SB", strategy: "apex", strat: { hero: "mes", villain: "pool" }, line: [], street: "preflop", combo: "", node: null, spot: null };
+const PT = { cfg: null, hero: "SB", strategy: "apex", strat: { hero: "mes", villain: "pool" }, line: [], street: "preflop", combo: "", node: null, spot: null,
+  // auto-ask the Study answer at hero's postflop nodes (per-viewer convenience, remembered in this browser)
+  autoAsk: (() => { try { return localStorage.getItem("pt_auto_ask") !== "0"; } catch { return true; } })(),
+  autoAskMes: (() => { try { return localStorage.getItem("pt_auto_ask_mes") === "1"; } catch { return false; } })(),
+  autoKey: null };
+/** fire the Study answer once per hero node when auto-ask is on and a hand is set;
+ *  `mesCovered` = the node comes from a MES lock (needs the second toggle). */
+function ptAutoAsk(key, mesCovered) {
+  if (!PT.autoAsk || (mesCovered && !PT.autoAskMes)) return;
+  if (!/^[2-9TJQKA][shdc][2-9TJQKA][shdc]$/.test((PT.combo || "").trim())) return;
+  if (PT.autoKey === key) return;
+  PT.autoKey = key;
+  setTimeout(playStudyAnswer, 50);
+}
 /** keep the half-strategy fields (used by the walkers) in step with the whole strategy */
 function ptSync() { const st = ptStrat(); if (!st) return; PT.strat.hero = st.preflop === "exploit" ? "mes" : "gto"; PT.strat.villain = st.opponent; }
 /** the selected whole-hand strategy, and its two layers */
@@ -1666,7 +1861,20 @@ async function loadPlay() {
     v.innerHTML = `<div class="card sub">loading configs…</div>`;
     try { PT.cfg = await (await fetch("/api/dashboard/sources/play/config")).json(); } catch (e) { v.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   }
+  // /playthrough/spot/<family>/<board>: land on the flop of a solved MES spot,
+  // with the family's preflop line already played — the Pieces page hands
+  // every solved board over here instead of walking it in place.
+  const m = (PATH.id || "").match(/^spot\/([^/]+)\/([2-9TJQKA][shdc]{1}[2-9TJQKA][shdc][2-9TJQKA][shdc])$/);
+  if (m && !(PT.spot && PT.spot.family === m[1] && PT.spot.board === m[2])) playOpenSpot(m[1], m[2]);
   renderPlay();
+}
+/** The family's own preflop line (M1: BTN folds, SB opens 3x, BB calls; M2: BTN opens 2.5x, SB folds, BB calls). */
+const FAMILY_LINE = { M1_heroSB_bvb_cbet: { hero: "SB", line: ["F", "R3", "C"] }, M2_heroBTN_srp_vs_BB: { hero: "BTN", line: ["R2.5", "F", "C"] } };
+function playOpenSpot(family, board) {
+  const spot = (PT.cfg?.postflop?.spots || []).find((s) => s.family === family && s.board === board);
+  const fl = FAMILY_LINE[family];
+  if (!spot || !fl) { PT.spot = null; PT.street = "preflop"; PT.line = []; PT.board = null; return; }
+  PT.hero = fl.hero; PT.line = [...fl.line]; PT.street = "flop"; PT.board = board; PT.spot = spot; WALK = null;
 }
 function playChart() { return PT.cfg.configs[0].chart; }
 /** which seat acts at the current preflop line (tokens are positional BTN,SB,BB, folds close a seat) */
@@ -1718,8 +1926,10 @@ function renderPlay() {
         <label>hero seat <select id="pl-hero">${P_ORDER.map((p) => `<option ${p === PT.hero ? "selected" : ""}>${p}</option>`).join("")}</select></label>
         <label>strategy <select id="pl-hs">${cfg.strategies.hero.map((s) => `<option value="${s.id}" ${s.id === PT.strategy ? "selected" : ""} ${s.status === "ok" || s.status === "drift" ? "" : "disabled"}>${esc(s.name)} — ${esc(s.tagline)}${s.status === "ok" ? "" : ` [${esc(s.status)}]`}</option>`).join("")}</select></label>
         <label title="fixed by the strategy's opponent piece">villains <select id="pl-vs" disabled>${cfg.strategies.villain.map((s) => `<option value="${s.id}" ${s.id === (ptStrat()?.opponent ?? PT.strat.villain) ? "selected" : ""}>${esc(s.label)}</option>`).join("")}</select> <span class="sub">set by the strategy</span></label>
-        <span class="rng">your hand <input id="pl-combo" placeholder="AhQs" value="${esc(PT.combo)}"> <span class="sub">optional — the RNG then rolls an action for you at every node</span></span>
+        <span class="rng" style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap">your hand <span id="pl-combo-pick"></span> <input id="pl-combo" placeholder="AhQs" value="${esc(PT.combo)}" title="or type it"> <span class="sub">the Study answer and the RNG roll need it</span></span>
         <button class="mini" id="pl-reset">↺ new hand</button>
+        <label class="sub" title="at every postflop node that is yours and has no MES lock, ask the Study answer automatically (fast-solve → GTO Wizard AI chain) instead of clicking"><input type="checkbox" id="pl-auto" ${PT.autoAsk ? "checked" : ""}> auto Study answer at my postflop nodes (AI fallback)</label>
+        <label class="sub" title="also at nodes a MES lock already covers — costs a resolver call per node"><input type="checkbox" id="pl-auto-mes" ${PT.autoAskMes ? "checked" : ""} ${PT.autoAsk ? "" : "disabled"}> …also at MES-covered nodes</label>
       </div>
       <div class="sub" style="margin-top:6px">${esc(c0.note)} · chart <span class="mono">${esc(c0.chart)}</span></div>
       ${(() => { const st = ptStrat(); if (!st) return ""; const bad = st.status !== "ok" && st.status !== "drift";
@@ -1730,13 +1940,20 @@ function renderPlay() {
     </div>
     <div id="pl-node" class="card"><div class="sub">loading node…</div></div>
     <div id="pl-post"></div>`;
-  $("pl-hero").onchange = (e) => { PT.hero = e.target.value; PT.line = []; PT.street = "preflop"; PT.board = null; renderPlay(); };
+  $("pl-hero").onchange = (e) => { PT.hero = e.target.value; PT.line = []; PT.street = "preflop"; PT.board = null; PT.spot = null; PT.free = null; renderPlay(); };
   $("pl-hs").onchange = (e) => { PT.strategy = e.target.value; const st = ptStrat(); PT.strat.hero = st?.preflop === "exploit" ? "mes" : "gto"; PT.strat.villain = st?.opponent ?? PT.strat.villain; renderPlay(); };
   $("pl-vs").onchange = (e) => { PT.strat.villain = e.target.value; renderPlay(); };
+  $("pl-auto").onchange = (e) => { PT.autoAsk = e.target.checked; try { localStorage.setItem("pt_auto_ask", PT.autoAsk ? "1" : "0"); } catch {} $("pl-auto-mes").disabled = !PT.autoAsk; };
+  $("pl-auto-mes").onchange = (e) => { PT.autoAskMes = e.target.checked; try { localStorage.setItem("pt_auto_ask_mes", PT.autoAskMes ? "1" : "0"); } catch {} };
   $("pl-combo").onchange = (e) => { PT.combo = e.target.value.trim(); renderPlay(); };
-  $("pl-reset").onclick = () => { PT.line = []; PT.street = "preflop"; PT.board = null; PT.spot = null; renderPlay(); };
+  cpMount("pl-combo-pick", { need: 2, used: (PT.board ? (PT.free && PT.free.board.length ? PT.free.board : PT.board.match(/[2-9TJQKA][shdc]/g)) : []) || [], value: (PT.combo || "").match(/[2-9TJQKA][shdc]/g), label: "", hint: "pick two", onDone: (cards) => { PT.combo = cards.join(""); renderPlay(); } });
+  $("pl-reset").onclick = () => { PT.line = []; PT.street = "preflop"; PT.board = null; PT.spot = null; PT.free = null; renderPlay(); };
   if (PT.street === "preflop") loadPlayPreflop(actor);
-  else renderPlayPostflop(fam);
+  else {
+    // landed here on a deep link (Pieces → play through): say what preflop was
+    $("pl-node").innerHTML = `<h2>Preflop closed <span class="sub">line ${esc(PT.line.join("-"))}</span></h2><div class="sub">${fam ? `Solved postflop family <b>${esc(fam)}</b> — ${esc(FAMILY_LINE[fam] ? { M1_heroSB_bvb_cbet: "BTN folds, SB opens 3x, BB calls", M2_heroBTN_srp_vs_BB: "BTN opens 2.5x, SB folds, BB calls" }[fam] : "")}. The flop below is walked node by node.` : "not a solved postflop family"}</div>`;
+    renderPlayPostflop(fam);
+  }
 }
 function actorAt(i) { // who took token i of the line
   const alive = [true, true, true]; let k = 0;
@@ -1764,12 +1981,13 @@ function playClosed() {
 }
 async function loadPlayPreflop(actor) {
   const el = $("pl-node");
+  if (!el) return; // view re-rendered underneath us
   if (playClosed()) {
     const fam = playPostflopFamily();
     const l = PT.line.join("-");
     el.innerHTML = `<h2>Preflop closed <span class="sub">line ${esc(l)}</span></h2>` + (fam
       ? `<div class="sub">This line is a solved postflop family: <b>${esc(fam)}</b>. Pick a flop below.</div>`
-      : `<div class="caveat">⚠ Not a solved postflop family. Covered: SB opens bvb + BB calls (hero SB) and BTN opens + BB calls (hero BTN). Anything else is answered live by GTO Wizard AI at the table — nothing to walk here.</div>`);
+      : `<div class="sub">Not one of the two MES-solved families (SB opens bvb + BB calls, hero SB · BTN opens + BB calls, hero BTN). Postflop here is what the table does for it too: <b>GTO Wizard AI, re-solved per street</b>. Deal a flop below and ask for a Study answer at your nodes — it needs the client up.</div>`);
     PT.street = "flop"; renderPlayPostflop(fam); return;
   }
   el.innerHTML = `<div class="sub">loading ${esc(actor)}'s node…</div>`;
@@ -1777,6 +1995,7 @@ async function loadPlayPreflop(actor) {
   let j;
   try { j = await (await fetch(`/api/dashboard/sources/play/preflop?chart=${encodeURIComponent(playChart())}&line=${encodeURIComponent(line)}`)).json(); }
   catch (e) { el.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
+  if (!$("pl-node") || $("pl-node") !== el) return; // a newer render owns the card now
   if (!j.ok) { el.innerHTML = `<div class="warn">${esc(j.error)}</div>`; return; }
   const n = j.node; PT.node = n;
   const isHero = actor === PT.hero;
@@ -1833,6 +2052,7 @@ async function loadPlayPreflop(actor) {
   }
   el.innerHTML = `<h2>${esc(actor)} to act${isHero ? " · you" : ""} <span class="sub">line ${esc(line || "(root)")}</span></h2><div style="margin:4px 0">${stratNote}</div>${rng}
     <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${(useMes && choices) || (usePool && Math.abs(aggPct[i] - chartPct[i]) > 0.5) ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
+    ${isHero ? `<div class="pl-take"><button class="mini" id="pl-ask" onclick="playStudyAnswer()" title="the answer the table would give: same solve, same roll, same text">📣 Study answer${combo ? ` for ${esc(combo)}` : " — pick your hand"}</button><span class="sub">what the panel would say at the table — same solve, same roll</span></div><div id="pl-answer"></div>` : ""}
     <div id="pl-grid"></div>`;
   // grid: chart cells, MES overlay when active
   const g = $("pl-grid");
@@ -1853,20 +2073,170 @@ async function loadPlayPreflop(actor) {
   g.innerHTML = html + `</div>`;
 }
 function playStep(tok) { PT.line.push(tok); renderPlay(); }
+/** The Study Answer for the current playthrough node — same solve, roll and
+ *  text as the table (POST /api/dashboard/study-answer), drawn with the same
+ *  answer card as a hand's logged answers. */
+async function playStudyAnswer() {
+  const slot = $("pl-answer"); if (!slot) return;
+  const combo = (PT.combo || "").trim();
+  if (!/^[2-9TJQKA][shdc][2-9TJQKA][shdc]$/.test(combo)) {
+    // no hand yet: ask for it right here, then answer
+    slot.innerHTML = '<div class="caveat" style="margin-bottom:6px">The Study answer is per hand — pick yours:</div><div id="pl-ask-pick"></div>';
+    cpMount("pl-ask-pick", { need: 2, used: cpUsed(), hint: "pick two", onDone: (cards) => { PT.combo = cards.join(""); const keep = { free: PT.free, spot: PT.spot }; renderPlay(); PT.free = keep.free; PT.spot = keep.spot; setTimeout(playStudyAnswer, 400); } });
+    slot.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  const body = { hero: PT.hero, line: PT.line, combo, strategy: PT.strat.hero === "mes" ? "exploit" : "chart", depth: 100, bbCents: 200 };
+  let takeTok = null;
+  if (PT.street !== "preflop" && PT.free && PT.free.board.length >= 3) {
+    body.board = PT.free.board.join("");
+    body.flop = PT.free.acts.flop; if (PT.free.street !== "flop") body.turn = PT.free.acts.turn; if (PT.free.street === "river") body.river = PT.free.acts.river;
+  } else if (PT.street !== "preflop" && WALK) {
+    const st = WALK.stage, n = WALK.node;
+    const flopLabels = st.street === "flop" ? n.path : (st.flopLabels ?? n.flopLabels ?? []);
+    body.board = PT.board + (st.street !== "flop" ? st.card : "") + (st.street === "river" ? st.rcard : "");
+    body.flop = flopLabels;
+    if (st.street === "turn") body.turn = n.path;
+    if (st.street === "river") { body.turn = st.turnLabels ?? []; body.river = n.path; }
+  }
+  slot.innerHTML = '<div class="sub">asking the resolver…</div>';
+  let j;
+  try { j = await (await fetch("/api/dashboard/study-answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }
+  catch (e) { slot.innerHTML = `<div class="caveat">${esc(String(e))}</div>`; return; }
+  if (!j.ok) { slot.innerHTML = `<div class="caveat">${esc(j.error)}</div>`; return; }
+  const a = j.answer;
+  a.node_label = `playthrough · ${PT.street === "preflop" ? `preflop line ${PT.line.join("-") || "(root)"}` : `${WALK?.stage?.street ?? "flop"} · ${(WALK?.node?.path || []).join(" › ") || "(root)"}`} · ${PT.strat.hero === "mes" ? "MES" : "GTO"} primary`;
+  // "take it": map the pick onto this node's action and play it
+  let take = "";
+  if (a.pick) {
+    if (PT.street === "preflop" && PT.node) {
+      const hit = (PT.node.actions || []).find((x) => sameLabel(x.action, a.pick));
+      if (hit) takeTok = hit.token;
+      take = takeTok ? `<button class="mini" onclick="playStep('${esc(takeTok)}')">take it: ${esc(a.pick)} ›</button>` : `<span class="sub">pick "${esc(a.pick)}" is not one of this node's actions</span>`;
+    } else if (PT.free && PT.free.board.length >= 3) {
+      const v = verbClass(a.pick); const m = String(a.pick).match(/(\d+(?:\.\d+)?)\s*bb/i); const bb = m ? Number(m[1]) : null;
+      const lab = v === "check" ? "Check" : v === "fold" ? "Fold" : v === "call" ? "Call" : v === "bet" && bb != null ? `Bet(${Math.round(bb * 100)})` : v === "raise" && bb != null ? `Raise(${Math.round(bb * 100)})` : /all/i.test(a.pick) ? "AllIn" : null;
+      take = lab ? `<button class="mini" onclick="freeAct('${lab}')">take it: ${esc(a.pick)} ›</button>` : `<span class="sub">could not map "${esc(a.pick)}" onto an action here</span>`;
+    } else if (WALK) {
+      const amtOf = (s) => { const m = String(s).match(/(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : null; };
+      const idx = (WALK.node.acts || []).findIndex((lab) => { const v = verbClass(lab) === verbClass(a.pick); const la = amtOf(lab), pa = amtOf(a.pick); return v && (la == null || pa == null || Math.abs(la / 100 - pa) < 0.06 || Math.abs(la - pa) < 0.06); });
+      take = idx >= 0 && WALK.node.children[idx] ? `<button class="mini" onclick="mesStep(${idx})">take it: ${esc(a.pick)} ›</button>` : idx >= 0 ? `<span class="sub">"${esc(a.pick)}" ends the street here</span>` : `<span class="sub">pick "${esc(a.pick)}" is not one of this node's actions</span>`;
+    }
+  }
+  slot.innerHTML = answerCard(a) + (take ? `<div class="pl-take">${take}<span class="sub">or choose any action above</span></div>` : "")
+    + (a.solve_id != null ? `<div class="card" style="margin-top:10px"><h2>The solve behind it <span class="sub">— chain #${a.solve_id}: the ranges assumed, every node walked, and the full strategy grid at your node</span></h2><div id="pl-walk" class="sub">loading the stored solve…</div></div>` : "");
+  if (a.solve_id != null) renderWalkthrough(a.solve_id, "pl-walk", null);
+}
 function renderPlayPostflop(fam) {
   const el = $("pl-post");
-  if (!fam) { el.innerHTML = ""; return; }
+  if (!fam) { renderPlayFree(); return; }
   const spots = PT.cfg.postflop.spots.filter((s) => s.family === fam);
   if (!PT.spot) {
     el.innerHTML = `<div class="card"><h2>Flop <span class="sub">— ${esc(fam)} · ${spots.length} solved boards · any other flop answers from the nearest solved texture</span></h2>
       <div class="boards">${spots.sort((a, b) => b.evGainBb - a.evGainBb).map((s) => `<div class="board" onclick="playBoard('${esc(fam)}','${s.board}')">${cardsHtml(s.board.match(/.{2}/g))}<div class="ev">+${s.evGainBb.toFixed(2)} bb/arrival · <span class="avail on">solved</span> ${s.hasTurn ? '<span class="avail on">turn</span>' : '<span class="avail off">turn pending</span>'}</div></div>`).join("")}</div>
-      <div style="margin-top:8px"><span class="sub">or type a flop:</span> <input id="pl-flop" class="mono" placeholder="Kh8s3h" style="width:80px"> <button class="mini" onclick="playNearest('${esc(fam)}')">nearest solved texture</button> <span id="pl-near" class="sub"></span></div></div>`;
+      <div style="margin-top:8px"><span class="sub">or pick any flop — it maps to the nearest solved texture:</span> <span id="pl-flop-pick"></span> <input id="pl-flop" class="mono" placeholder="Kh8s3h" style="width:80px" title="or type it"> <button class="mini" onclick="playNearest('${esc(fam)}')">nearest solved texture</button> <span id="pl-near" class="sub"></span></div></div>`;
+    cpMount("pl-flop-pick", { need: 3, used: cpUsed(), hint: "pick three", onDone: (cards) => { $("pl-flop").value = cards.join(""); playNearest(fam); } });
     return;
   }
-  el.innerHTML = `<div class="card"><h2>${cardsHtml(PT.spot.board.match(/.{2}/g))} <span class="sub">${esc(fam)} · +${PT.spot.evGainBb.toFixed(2)} bb/arrival${PT.spot.nearestOf ? ` · nearest texture to ${esc(PT.spot.nearestOf)}` : ""}</span> <button class="mini" onclick="PT.spot=null;renderPlayPostflop('${esc(fam)}')">← other flop</button></h2><div id="mes-walk"></div></div>`;
+  el.innerHTML = `<div class="card"><h2>${cardsHtml(PT.spot.board.match(/.{2}/g))} <span class="sub">${esc(fam)} · +${PT.spot.evGainBb.toFixed(2)} bb/arrival${PT.spot.nearestOf ? ` · nearest texture to ${esc(PT.spot.nearestOf)}` : ""}</span> <button class="mini" onclick="PT.spot=null;history.replaceState({},'','/playthrough');PATH={view:'playthrough',pane:null,id:null};renderPlayPostflop('${esc(fam)}')">← other flop</button> <a class="mini" href="/sources/pieces/mes-postflop" onclick="go('/sources/pieces/mes-postflop');return false" style="text-decoration:none">MES source page ↗</a></h2><div id="mes-walk"></div></div>`;
   mesWalk(fam, PT.spot.board, []);
 }
-function playBoard(fam, board) { PT.spot = PT.cfg.postflop.spots.find((s) => s.family === fam && s.board === board); PT.board = board; renderPlayPostflop(fam); $("pl-board").innerHTML = cardsHtml(board.match(/.{2}/g)); }
+/* ---- free postflop (no MES family): the line the table would send to the AI
+   chain. Board typed card by card, actions chosen for BOTH seats (villain's
+   too — the chain conditions on the observed line), Study answer at hero's
+   nodes = POST /study-answer → fastSolve → AI chain, same as the panel. ---- */
+function freeLive() {
+  const alive = { BTN: true, SB: true, BB: true };
+  PT.line.forEach((tok, i) => { if (tok === "F") alive[actorAt(i)] = false; });
+  return ["SB", "BB", "BTN"].filter((p) => alive[p]);
+}
+function freePotPre() {
+  const c = { BTN: 0, SB: 0.5, BB: 1 }; let bet = 1;
+  PT.line.forEach((tok, i) => { const p = actorAt(i); if (/^R[\d.]+$/.test(tok)) { bet = parseFloat(tok.slice(1)); c[p] = bet; } else if (tok === "RAI") { bet = 100; c[p] = bet; } else if (tok === "C") c[p] = bet; });
+  return c.BTN + c.SB + c.BB;
+}
+const freeAmt = (lab) => { const m = String(lab).match(/\((\d+(?:\.\d+)?)\)/); return m ? Number(m[1]) / 100 : null; };
+/** pot, who acts, what it costs, and whether the street/hand is over — from the labels so far */
+function freeState() {
+  const live = freeLive(), f = PT.free;
+  let pot = freePotPre(), ended = false, actor = null, toCall = 0, closed = false, inS = {};
+  const streets = ["flop", "turn", "river"];
+  for (const s of streets) {
+    const arr = f.acts[s] || [];
+    let i = 0, sPot = 0; toCall = 0; inS = {}; closed = false;
+    let checks = 0;
+    for (const lab of arr) {
+      const p = live[i % live.length]; i++;
+      const a = freeAmt(lab);
+      if (/^Check/.test(lab)) { checks++; if (checks >= live.length) closed = true; }
+      else if (/^Fold/.test(lab)) { ended = true; closed = true; }
+      else if (/^Call/.test(lab)) { sPot += toCall - (inS[p] || 0); inS[p] = toCall; closed = true; }
+      else if (/^Bet/.test(lab) && a != null) { sPot += a; inS[p] = a; toCall = a; checks = 0; }
+      else if (/^Raise/.test(lab) && a != null) { sPot += a - (inS[p] || 0); inS[p] = a; toCall = a; }
+      else if (/^AllIn/.test(lab)) { const am = 100 - freePotPre() / 2; sPot += am - (inS[p] || 0); inS[p] = am; toCall = am; }
+    }
+    pot += sPot;
+    if (s === f.street) { actor = closed || ended ? null : live[i % live.length]; break; }
+  }
+  const me = actor ? (inS[actor] || 0) : 0;
+  return { live, pot, actor, toCall: Math.max(0, toCall - me), closed, ended, inS };
+}
+function renderPlayFree() {
+  const el = $("pl-post");
+  if (!PT.free) PT.free = { board: [], acts: { flop: [], turn: [], river: [] }, street: "flop" };
+  const f = PT.free;
+  const live = freeLive();
+  if (live.length < 2) { el.innerHTML = `<div class="card sub">Preflop ended with one player — nothing postflop to play.</div>`; return; }
+  if (f.board.length < 3) {
+    el.innerHTML = `<div class="card"><h2>Flop <span class="sub">— off-family line, answered by the GTO Wizard AI chain</span></h2>
+      <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap"><span id="pl-freeflop-pick"></span><span><span class="sub">or type it:</span> <input id="pl-freeflop" class="mono" placeholder="Kh8s3h" style="width:80px"> <button class="mini" onclick="freeDeal('flop')">deal</button> <span id="pl-freeerr" class="sub"></span></span></div></div>`;
+    cpMount("pl-freeflop-pick", { need: 3, used: cpUsed(), hint: "pick the flop", onDone: (cards) => freeDealCards("flop", cards) });
+    return;
+  }
+  const st = freeState();
+  const board = f.board.join("");
+  $("pl-board").innerHTML = cardsHtml(f.board);
+  PT.board = f.board.slice(0, 3).join("");
+  const crumbs = ["flop", "turn", "river"].map((s) => (f.acts[s] || []).length ? `<span class="mono sub">${s}:</span> ${f.acts[s].map(esc).join(" › ")}` : "").filter(Boolean).join(" &nbsp; ");
+  const nextStreet = f.street === "flop" ? "turn" : f.street === "turn" ? "river" : null;
+  let body = "";
+  if (st.ended) body = `<div class="sub">Hand over — someone folded.</div>`;
+  else if (st.closed && nextStreet) body = `<div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap"><span id="pl-freecard-pick"></span><span><span class="sub">${f.street} closed · or type the ${nextStreet}:</span> <input id="pl-freecard" class="mono" placeholder="${nextStreet === "turn" ? "Th" : "2c"}" style="width:40px"> <button class="mini" onclick="freeDeal('${nextStreet}')">deal ${nextStreet}</button> <span id="pl-freeerr" class="sub"></span></span></div>`;
+  else if (st.closed) body = `<div class="sub">River closed — showdown. Nothing more to decide.</div>`;
+  else {
+    const isHero = st.actor === PT.hero;
+    const chips = (bb) => Math.round(bb * 100);
+    const btn = (lab, txt) => `<button class="mini" onclick="freeAct('${lab}')">${txt} ›</button>`;
+    const acts = [];
+    if (st.toCall === 0) { acts.push(btn("Check", "Check")); for (const [pc, nm] of [[0.33, "⅓ pot"], [0.5, "½ pot"], [0.75, "¾ pot"], [1, "pot"]]) acts.push(btn(`Bet(${chips(st.pot * pc)})`, `Bet ${nm} (${(st.pot * pc).toFixed(1)}bb)`)); }
+    else { acts.push(btn("Fold", "Fold")); acts.push(btn("Call", `Call ${st.toCall.toFixed(1)}bb`)); const me = st.inS[st.actor] || 0; for (const x of [2.5, 3.5]) { const to = (me + st.toCall) * x; acts.push(btn(`Raise(${chips(to)})`, `Raise ${x}x (to ${to.toFixed(1)}bb)`)); } }
+    acts.push(btn("AllIn", "All-in"));
+    body = `<h3 style="margin:8px 0 4px">${esc(st.actor)} to act${isHero ? " · you" : ""} <span class="sub">pot ${st.pot.toFixed(2)}bb${st.toCall ? ` · ${st.toCall.toFixed(2)}bb to call` : ""}</span></h3>
+      <div class="sub">${isHero ? "your node — ask for the Study answer (AI chain, live re-solve) or pick an action" : "villain's node — pick what villain does; the chain conditions on it"}</div>
+      <div class="actrow">${acts.join("")}</div>
+      ${isHero ? `<div class="pl-take"><button class="mini" onclick="playStudyAnswer()" title="the answer the table would give: fast-solve → GTO Wizard AI chain, same roll, same text">📣 Study answer${PT.combo ? ` for ${esc(PT.combo)}` : " — pick your hand"}</button><span class="sub">what the panel would say — through the GTO Wizard AI chain</span></div><div id="pl-answer"></div>` : ""}`;
+  }
+  el.innerHTML = `<div class="card"><h2>${cardsHtml(f.board)} <span class="sub">${esc(f.street)} · pot ${st.pot.toFixed(2)}bb · ${live.join(" vs ")} · AI chain (no MES family)</span> <button class="mini" onclick="PT.free=null;PT.board=null;renderPlayFree()">← new flop</button></h2>
+    ${crumbs ? `<div class="sub mono" style="margin:4px 0 8px">${crumbs}</div>` : ""}${body}</div>`;
+  if (st.closed && !st.ended && nextStreet) cpMount("pl-freecard-pick", { need: 1, used: cpUsed(), hint: `pick the ${nextStreet}`, onDone: (cards) => freeDealCards(nextStreet, cards) });
+  if (!st.closed && !st.ended && st.actor === PT.hero) ptAutoAsk(`free|${f.board.join("")}|${f.street}|${(f.acts[f.street] || []).join(",")}`, false);
+}
+/** deal from the picker (or the typed box, via freeDeal) */
+function freeDealCards(street, cards) {
+  const used = new Set([...PT.free.board, ...((PT.combo || "").match(/[2-9TJQKA][shdc]/g) || [])]);
+  if (cards.some((c) => used.has(c))) return;
+  PT.free.board.push(...cards); PT.free.street = street; renderPlayFree();
+}
+function freeDeal(street) {
+  const inp = $(street === "flop" ? "pl-freeflop" : "pl-freecard"); const v = (inp?.value || "").trim();
+  const want = street === "flop" ? 3 : 1;
+  const cards = v.match(/[2-9TJQKA][shdc]/g) || [];
+  const used = new Set([...PT.free.board, ...((PT.combo || "").match(/[2-9TJQKA][shdc]/g) || [])]);
+  if (cards.length !== want || v.length !== want * 2 || cards.some((c) => used.has(c)) || new Set(cards).size !== want) { const e = $("pl-freeerr"); if (e) e.textContent = street === "flop" ? "need three distinct cards like Kh8s3h, not in your hand" : "need one card not already out"; return; }
+  PT.free.board.push(...cards); PT.free.street = street; renderPlayFree();
+}
+function freeAct(lab) { PT.free.acts[PT.free.street].push(lab); renderPlayFree(); }
+function playBoard(fam, board) { PT.spot = PT.cfg.postflop.spots.find((s) => s.family === fam && s.board === board); PT.board = board; PATH = { view: "playthrough", pane: null, id: `spot/${fam}/${board}` }; history.replaceState({}, "", `/playthrough/spot/${encodeURIComponent(fam)}/${board}`); renderPlayPostflop(fam); $("pl-board").innerHTML = cardsHtml(board.match(/.{2}/g)); }
 function playNearest(fam) {
   const f = ($("pl-flop").value || "").trim();
   if (!/^([2-9TJQKA][shdc]){3}$/.test(f)) { $("pl-near").textContent = "need three cards like Kh8s3h"; return; }
@@ -1893,9 +2263,12 @@ async function loadMesSpots() {
       <div class="scroll"><table class="src-static"><thead><tr><th>board</th><th class="num">ev_gain / arrival</th><th>generation</th><th>turn data</th><th></th></tr></thead><tbody>` +
       rows.sort((a, b) => b.evGainBb - a.evGainBb).map((s) => `<tr class="mes-spot" data-f="${esc(s.family)}" data-b="${esc(s.board)}" style="cursor:pointer">
         <td class="mono">${cardsHtml(s.board.match(/.{2}/g))}</td>${evCell(s.evGainBb)}<td>${s.gen ? `<span class="chip ${s.gen === "refit" ? "good" : ""}">${esc(s.gen)}</span>` : '<span class="chip dim">—</span>'}</td>
-        <td>${s.hasTurn ? '<span class="chip good">turn ✓</span>' : '<span class="chip dim">flop only</span>'}</td><td><button class="mini">walk ↗</button></td></tr>`).join("") + `</tbody></table></div>`;
+        <td>${s.hasTurn ? '<span class="chip good">turn ✓</span>' : '<span class="chip dim">flop only</span>'}</td><td><button class="mini">play through ↗</button></td></tr>`).join("") + `</tbody></table></div>`;
   }).join("");
-  el.querySelectorAll("tr.mes-spot").forEach((tr) => tr.onclick = () => mesWalk(tr.dataset.f, tr.dataset.b, []));
+  // a board opens in the Playthrough tab at that spot: the family's preflop
+  // line is already played, the flop is dealt, and the MES walk continues
+  // from there (flop → turn card → river) with the strategy pickers in reach
+  el.querySelectorAll("tr.mes-spot").forEach((tr) => tr.onclick = () => go(`/playthrough/spot/${encodeURIComponent(tr.dataset.f)}/${tr.dataset.b}`));
 }
 // state of the current walk
 let WALK = null;
@@ -1959,7 +2332,8 @@ async function mesWalk(family, board, hist, stage = { street: "flop" }) {
     <div class="sub">${n.isHero ? (WALK.view === "gto" ? "equilibrium mix (the baseline the MES improves on)" : "MES mix — best response to the pool at this node") : "villain's node: the locked pool frequencies decide here; pick an action to continue"}</div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">` +
     n.acts.map((a, ai) => `<button class="mini" ${n.children[ai] ? `onclick="mesStep(${ai})"` : `disabled title="street ends here"`}>${esc(a)}${aggMes ? ` <span class="sub">MES ${aggMes[ai].toFixed(0)}%${aggGto ? ` · GTO ${aggGto[ai].toFixed(0)}%` : ""}</span>` : ""}${n.children[ai] ? " ›" : " ⏹"}</button>`).join("") +
-    `</div>` + (n.isHero && strat ? mesGridHtml(n.holes || [], n.w, strat, ev, n.acts, null) : "") + `</div>`;
+    `</div>` + (n.isHero && typeof PT !== "undefined" && PT.street !== "preflop" ? `<div class="pl-take"><button class="mini" onclick="playStudyAnswer()" title="the answer the table would give: same solve, same roll, same text">📣 Study answer${PT.combo ? ` for ${esc(PT.combo)}` : " — pick your hand"}</button><span class="sub">what the panel would say at the table — same solve, same roll</span></div><div id="pl-answer"></div>` : "") +
+    (n.isHero && strat ? mesGridHtml(n.holes || [], n.w, strat, ev, n.acts, null) : "") + `</div>`;
   // street ended? offer the next card
   const ended = n.children.every((x) => !x) || n.acts.every((_, ai) => !n.children[ai]);
   if (stage.street === "flop") {
@@ -1978,6 +2352,7 @@ async function mesWalk(family, board, hist, stage = { street: "flop" }) {
       cards.map((cd) => `<button class="mini" onclick="mesWalk('${esc(family)}','${board}',[], {street:'river', line:${JSON.stringify([...line, cd])}, flopLabels:${JSON.stringify(n.flopLabels || [])}, card:'${stage.card}', turnLabels:${JSON.stringify(n.path)}, rcard:'${cd}'})">${cardsHtml([cd])}</button>`).join(" ") + `</div>`;
   }
   el.innerHTML = html;
+  if (n.isHero && typeof PT !== "undefined" && PT.street !== "preflop") ptAutoAsk(`mes|${family}|${board}|${stage.street}|${(n.path || []).join(",")}`, true);
   el.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 function mesStep(ai) { if (!WALK) return; mesWalk(WALK.family, WALK.board, [...WALK.hist, ai], WALK.stage); }
@@ -2019,7 +2394,7 @@ async function renderSourceDetail(cardId) {
     d.innerHTML = '<div class="card"><h2>Charts <span class="sub">— the chart catalog, live-routed first</span></h2><div id="src-catalog" class="src-static"></div></div>';
     loadCatalog();
   } else if (c.drilldown === "boards") {
-    d.innerHTML = `<div class="card"><h2>Solved spots <span class="sub">— click a board to walk its MES node by node (flop → turn card → river)</span></h2><div id="mes-spots" class="sub">loading…</div></div><div id="mes-walk"></div>`;
+    d.innerHTML = `<div class="card"><h2>Solved spots <span class="sub">— click a board to play it through in the Playthrough tab: preflop line already played, flop dealt, then node by node (flop → turn card → river)</span></h2><div id="mes-spots" class="sub">loading…</div></div>`;
     loadMesSpots();
   } else if (c.drilldown === "exploit") {
     d.innerHTML = '<div class="card sub">loading the overlay…</div>';
@@ -2260,13 +2635,15 @@ function parsePath() {
     return { view, pane, id: (pane === "pieces" || pane === "strategies") && seg[2] ? decodeURIComponent(seg[2]) : null };
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
-  if (view === "analytics" || view === "review" || view === "playthrough") return { view, pane: null, id: null };
+  if (view === "playthrough") return { view, pane: null, id: seg[1] === "spot" && seg[2] && seg[3] ? `spot/${decodeURIComponent(seg[2])}/${seg[3]}` : null };
+  if (view === "analytics" || view === "review") return { view, pane: null, id: null };
   return { view: "hands", pane: null, id: null };
 }
 function canonical(p) {
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
   if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
   if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}` : "/sessions";
+  if (p.view === "playthrough") return p.id ? `/playthrough/${p.id}` : "/playthrough";
   return `/${p.view}`;
 }
 function go(path) {
