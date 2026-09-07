@@ -81,8 +81,41 @@
   <div class="presets" id="presets"></div>
 </section>
 
+<section class="step" id="step-table">
+  <h2><span class="n">2</span> Table <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— which format to play, how much to bring, and who signs in</span></h2>
+  <div class="card">
+    <div class="settings">
+      <div class="field" style="grid-column: 1 / -1"><span class="k">Format <span id="fmt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
+        <div class="presets" id="formats" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))"></div>
+        <span class="help">The strategy names the formats its layers were built for; the others are greyed out. Start opens the table window and the wrapper drives the lobby to this table. The badge on the panel warns when the open table is not this one.</span></div>
+      <div class="field"><span class="k">Buy-in</span>
+        <div class="row"><input type="number" id="buyin" min="1" step="1" value="100"> <span class="sub">big blinds</span></div>
+        <span class="help">Entered in the Buy-In modal's OTHER box, clamped to the table's own minimum and maximum.</span></div>
+      <div class="field"><span class="k">Sign in as</span>
+        <div class="row"><select id="profile" style="background:#0c1013;border:1px solid #3a4a5a;color:inherit;border-radius:8px;padding:7px 10px;font:inherit"><option value="">— sign in by hand —</option></select> <button class="mini" id="profile-edit">profiles…</button></div>
+        <span class="help">A profile is an account: e-mail, remember-me, and a password kept in Windows Credential Manager. The wrapper fills the login form from it; the Authy code is always typed by you.</span></div>
+      <div class="field" style="grid-column: 1 / -1"><span class="k">Table window</span>
+        <div id="tw-state" class="check pending"><span class="dot"></span><span class="l"><b>…</b><span></span></span><span><button class="mini" id="tw-open">Open window</button></span></div>
+        <div id="tw-code" class="row" style="display:none;margin-top:6px"><input type="text" id="code" inputmode="numeric" maxlength="8" placeholder="Authy code" style="width:130px"> <button class="mini" id="code-send">Submit code</button> <span class="sub" id="code-msg"></span></div>
+      </div>
+    </div>
+    <div id="profiles-card" class="card" style="display:none;margin-top:12px;background:#0c1013">
+      <div class="row" style="justify-content:space-between"><b>Profiles</b><button class="mini" id="profiles-close">close</button></div>
+      <div id="profiles-list" class="sub" style="margin:8px 0"></div>
+      <div class="settings">
+        <div class="field"><span class="k">Name</span><input type="text" id="p-name" placeholder="e.g. main"></div>
+        <div class="field"><span class="k">E-mail</span><input type="text" id="p-email" autocomplete="off"></div>
+        <div class="field"><span class="k">Password</span><input type="password" id="p-pass" autocomplete="new-password" placeholder="leave blank to keep the stored one"></div>
+        <div class="field"><span class="k">Remember me</span><label class="row"><input type="checkbox" id="p-remember" checked> tick the site's Remember Me box</label></div>
+        <div class="field"><span class="k">Trust this browser</span><label class="row"><input type="checkbox" id="p-trust"> tick "Trust this browser and skip the 2FA verification for future logins" when submitting the code</label></div>
+      </div>
+      <div class="row" style="margin-top:8px"><button class="mini" id="p-save">Save profile</button><span class="sub" id="p-msg">the password goes to Credential Manager and is never shown again</span></div>
+    </div>
+  </div>
+</section>
+
 <section class="step" id="step-settings">
-  <h2><span class="n">2</span> Settings <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— the mode decides what answers you get; these are the session's own knobs</span></h2>
+  <h2><span class="n">3</span> Settings <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— the mode decides what answers you get; these are the session's own knobs</span></h2>
   <div class="card">
     <div class="settings">
       <div class="field" style="grid-column: 1 / -1"><span class="k">Answers · set by the mode</span>
@@ -101,7 +134,7 @@
 </section>
 
 <section class="step" id="step-preflight">
-  <h2><span class="n">3</span> Preflight <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400" id="pf-when"></span></h2>
+  <h2><span class="n">4</span> Preflight <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400" id="pf-when"></span></h2>
   <div class="card">
     <div class="checks" id="checks"></div>
     <div class="verdict">
@@ -138,7 +171,9 @@ function renderPresets() {
   const card = ([id, p]) => {
     const s = p.strategy;
     const status = s ? `<span class="st ${esc(s.status)}">${s.status === "ok" ? "coherent" : s.status === "drift" ? "drift — approximated" : s.status === "misspecified" ? "mis-specified · not served" : esc(s.status)}</span>${s.recommended ? ' <span class="st rec">recommended</span>' : ""}` : "";
-    const layers = s ? `<span class="layers">${s.layers.map((l) => `<span class="k">${esc(l.role)}</span><span>${esc(l.label ?? "")}</span>`).join("")}</span>` : "";
+    const fmtName = (id) => ((FORMATS.find((f) => f.id === id) || { name: id }).name || id).replace(/ Ignition$/, "");
+    const fmtRow = s ? `<span class="k">formats</span><span>${Array.isArray(p.formats) ? p.formats.map(fmtName).map(esc).join(" · ") : "any format"}${p.defaultFormat ? ` <span style="color:#6f8196">(default ${esc(fmtName(p.defaultFormat))})</span>` : ""}</span>` : "";
+    const layers = s ? `<span class="layers">${s.layers.map((l) => `<span class="k">${esc(l.role)}</span><span>${esc(l.label ?? "")}</span>`).join("")}${fmtRow}</span>` : "";
     const why = s && s.reasons && s.reasons.length ? `<span class="why">⚠ ${esc(s.reasons[0])}</span>` : "";
     const lnk = s ? `<a class="lnk" href="${esc(s.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">strategy page on the dashboard ↗</a>` : "";
     return `<button class="preset${id === preset ? " on" : ""}" data-id="${id}" ${p.disabled ? "disabled" : ""} ${id === "test-rig" && !fake ? 'title="launch with FAKE_TABLE=1 to use the test rig"' : ""}>
@@ -154,16 +189,114 @@ function renderPresets() {
 function choose(id) {
   preset = id;
   cfg = JSON.parse(JSON.stringify(PRESETS[id].config));
+  if (cfg.buyinBb == null) cfg.buyinBb = 100;
+  const allowed = allowedFormats();
+  if (cfg.format && allowed && !allowed.includes(cfg.format)) cfg.format = null;
+  if (!cfg.format) cfg.format = PRESETS[id].defaultFormat || (allowed ? allowed[0] : null) || null;
   $("step-preset").classList.add("done");
   renderPresets();
+  renderFormats();
   fillSettings();
   schedulePreflight();
+}
+
+// ---- step 2: the table — format, buy-in, profile, window state ----------
+let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null;
+const allowedFormats = () => (preset && PRESETS[preset] && Array.isArray(PRESETS[preset].formats)) ? PRESETS[preset].formats : null;
+
+function renderFormats() {
+  const allowed = allowedFormats();
+  const groups = [["zone", "Zone"], ["ring", "Ring"], ["practice", "Practice"]];
+  $("formats").innerHTML = groups.map(([g, label]) => {
+    const rows = FORMATS.filter((f) => f.gameType === g && (!allowed || allowed.includes(f.id)));
+    if (!rows.length) return "";
+    const cov = (preset && PRESETS[preset] && PRESETS[preset].formatCoverage) || [];
+    return `<div class="presets-h">${label}</div>` + rows.map((f) => {
+      const ok = !allowed || allowed.includes(f.id);
+      const c = cov.find((x) => x.id === f.id);
+      const lvl = c ? `<span class="st ${c.level === "ready" ? "ok" : c.level === "approx" ? "drift" : "misspecified"}">${c.level === "ready" ? "built for this" : c.level === "approx" ? "approximation" : "not served"}</span>` : "";
+      const why = c && c.why && c.why.length ? `<span class="why" title="${esc(c.why.join("\n"))}">${esc(c.why[0])}</span>` : "";
+      return `<button class="preset${cfg && cfg.format === f.id ? " on" : ""}" data-id="${esc(f.id)}" ${ok ? "" : 'disabled title="not a format this strategy was built for"'}>
+        <b>${esc(f.name)}</b>${lvl ? `<span>${lvl}</span>` : ""}<span class="tag">${f.stake ? esc(f.stake) + " · " : ""}${esc(f.gameType)}${f.seats ? ` · ${f.seats}-max` : ""}${f.path && f.path.practice ? " · practice chips" : ""}</span>
+        ${why || (f._doc ? `<span class="why" style="color:#8fa1b3">${esc(f._doc)}</span>` : "")}</button>`;
+    }).join("");
+  }).join("");
+  $("formats").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => { cfg.format = b.dataset.id; renderFormats(); schedulePreflight(); });
+  const s = preset && PRESETS[preset] && PRESETS[preset].strategy;
+  $("fmt-note").textContent = allowed ? `— only the ${allowed.length} format${allowed.length === 1 ? "" : "s"} ${s ? s.name : PRESETS[preset].label} was built for; ${FORMATS.length - allowed.length} other${FORMATS.length - allowed.length === 1 ? "" : "s"} hidden` : "— any format (no restriction declared)";
+}
+
+function renderProfiles() {
+  const sel = $("profile"), cur = cfg ? cfg.profile : null;
+  sel.innerHTML = `<option value="">— sign in by hand —</option>` + PROFILES_LIST.map((p) => `<option value="${esc(p.name)}"${p.name === cur ? " selected" : ""}>${esc(p.name)} · ${esc(p.email)}${p.hasPassword ? "" : " (no password stored)"}</option>`).join("");
+  $("profiles-list").innerHTML = PROFILES_LIST.length ? PROFILES_LIST.map((p) => `<div class="row" style="justify-content:space-between;padding:4px 0;border-bottom:1px solid #1f2731"><span><b>${esc(p.name)}</b> · ${esc(p.email)} · ${p.rememberMe ? "remember me" : "no remember-me"} · ${p.hasPassword ? '<span class="chip on">password stored</span>' : '<span class="chip rec">no password</span>'}</span><span><button class="mini" data-edit="${esc(p.name)}">edit</button> <button class="mini" data-del="${esc(p.name)}">delete</button></span></div>`).join("") : "no profiles yet";
+  $("profiles-list").querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => { const p = PROFILES_LIST.find((x) => x.name === b.dataset.edit); $("p-name").value = p.name; $("p-email").value = p.email; $("p-pass").value = ""; $("p-remember").checked = !!p.rememberMe; $("p-trust").checked = !!p.trustDevice; });
+  $("profiles-list").querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => { if (!confirm(`Delete profile ${b.dataset.del}? Its password is removed from Credential Manager.`)) return; await fetch("/auth/profiles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: b.dataset.del }) }); await loadProfiles(); });
+}
+async function loadProfiles() {
+  try { PROFILES_LIST = (await (await fetch("/auth/profiles")).json()).profiles || []; } catch (e) { PROFILES_LIST = []; }
+  renderProfiles();
+}
+$("profile-edit").onclick = () => { $("profiles-card").style.display = ""; };
+$("profiles-close").onclick = () => { $("profiles-card").style.display = "none"; };
+$("p-save").onclick = async () => {
+  const body = { name: $("p-name").value.trim(), site: "ignition", email: $("p-email").value.trim(), password: $("p-pass").value || null, rememberMe: $("p-remember").checked, trustDevice: $("p-trust").checked };
+  let r; try { r = await (await fetch("/auth/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); } catch (e) { r = { ok: false, error: String(e) }; }
+  $("p-msg").textContent = r.ok ? `saved ${r.profile.name}${r.profile.hasPassword ? " · password in Credential Manager" : " · no password stored yet"}` : `failed: ${r.error}`;
+  $("p-pass").value = "";
+  await loadProfiles();
+  if (r.ok && cfg) { cfg.profile = r.profile.name; renderProfiles(); }
+};
+$("profile").onchange = () => { if (cfg) { cfg.profile = $("profile").value || null; schedulePreflight(); } };
+$("buyin").onchange = () => { if (cfg) { cfg.buyinBb = Number($("buyin").value) || 100; } };
+$("tw-open").onclick = async () => { $("tw-open").disabled = true; await fetch("/table/open", { method: "POST" }); setTimeout(() => { $("tw-open").disabled = false; }, 4000); };
+$("code-send").onclick = async () => {
+  const code = $("code").value.trim(); if (!code) return;
+  $("code-send").disabled = true; $("code-msg").textContent = "submitting…";
+  const prof = cfg && cfg.profile ? PROFILES_LIST.find((p) => p.name === cfg.profile) : null;
+  let r; try { r = await (await fetch("/auth/code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, profile: cfg ? cfg.profile : null, trustDevice: !!(prof && prof.trustDevice) }) })).json(); } catch (e) { r = { ok: false, error: String(e) }; }
+  $("code").value = ""; $("code-send").disabled = false;
+  $("code-msg").textContent = r.ok ? `accepted — ${r.detail || "signed in"}` : `not accepted: ${r.error || r.detail || r.state}${(r.errors || []).length ? " · " + r.errors.join(" · ") : ""}`;
+  pollTable();
+};
+async function signInNow() {
+  const b = $("tw-signin"); if (b) { b.disabled = true; b.textContent = "signing in…"; }
+  let r; try { r = await (await fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: cfg.profile }) })).json(); } catch (e) { r = { ok: false, error: String(e) }; }
+  lastTw = null; pollTable();
+  if (!r.ok && b) { b.disabled = false; b.textContent = `Sign in as ${cfg.profile} (failed: ${r.error || r.detail})`; }
+}
+async function pollTable() {
+  clearTimeout(twTimer);
+  let t, a = null;
+  try { t = await (await fetch("/table/state")).json(); } catch (e) { t = { state: "closed", cdp: false }; }
+  if (t.state === "signed-out") { try { a = await (await fetch("/auth/state")).json(); } catch (e) { a = null; } }
+  const el = $("tw-state"), b = el.querySelector("b"), d = el.querySelector(".l span");
+  let cls = "pending", title = "", detail = "", extra = "";
+  if (t.state === "closed") { cls = "bad"; title = "Table window closed"; detail = t.cdp ? "CDP up, no Ignition page" : "Open it here or press Start — it opens on the secondary monitor"; }
+  else if (t.state === "signed-out") {
+    const st = a ? a.state : "login";
+    if (st === "code-form") { cls = "pending"; title = "Authy code needed"; detail = "type the 6 digits below — the wrapper submits them"; }
+    else if (st === "captcha") { cls = "bad"; title = "reCAPTCHA challenge"; detail = "solve it in the table window, then this row updates on its own"; }
+    else if (st === "error") { cls = "bad"; title = "Sign-in error"; detail = a.detail || ""; }
+    else { cls = "bad"; title = "Signed out"; detail = cfg && cfg.profile ? `login page · the wrapper signs in as ${cfg.profile} at Start, or now:` : "login page · pick a profile above, or sign in by hand in the window"; }
+    if (cfg && cfg.profile && (st === "login-form" || st === "error")) extra = `<button class="mini" id="tw-signin" onclick="signInNow()">Sign in as ${esc(cfg.profile)}</button>`;
+  }
+  else if (t.state === "signed-in") { cls = "ok"; title = "Signed in · lobby"; detail = "no table open — Start routes to the chosen format"; }
+  else if (t.state === "seated") { cls = "ok"; title = `Seated · ${t.detected ? t.detected.name : "table"}`; detail = t.detected ? `${t.detected.buyInBb ?? "?"} bb · ${t.detected.title || ""}` : ""; if (cfg && cfg.format && t.detected && t.detected.formatId !== cfg.format) { cls = "bad"; detail += ` — not the declared format (${(FORMATS.find((f) => f.id === cfg.format) || {}).name || cfg.format})`; } }
+  const r = t.routing || {};
+  if (r.state && r.state !== "idle" && r.text) detail += ` · router: ${r.text}`;
+  el.className = "check " + cls; b.textContent = title; d.innerHTML = esc(detail) + (extra ? " " + extra : "");
+  $("tw-code").style.display = (a && a.state === "code-form") ? "" : "none";
+  lastTw = t;
+  twTimer = setTimeout(pollTable, 2500);
 }
 
 function fillSettings() {
   const seg = (id, val) => $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === String(val)));
   seg("recording", cfg.recording ? 1 : 0);
   $("budget-hands").value = cfg.budget.hands ?? ""; $("budget-min").value = cfg.budget.minutes ?? "";
+  $("buyin").value = cfg.buyinBb ?? 100;
+  renderProfiles();
   const p = PRESETS[preset] || {}, s = p.strategy;
   const src = cfg.sources || {};
   const srcs = [src.exploitPreflop ? "pool-exploit preflop overlay" : null, src.mesPostflop ? "MES locked flop solves" : null, src.aiChain ? "GTO Wizard AI chain" : null].filter(Boolean);
@@ -178,6 +311,8 @@ function readSettings() {
   // answers / primary / sources are the MODE's — only the session's own knobs are read back
   cfg.recording = $("recording").querySelector("button.on")?.dataset.v === "1";
   cfg.budget = { hands: Number($("budget-hands").value) || null, minutes: Number($("budget-min").value) || null };
+  cfg.buyinBb = Number($("buyin").value) || 100;
+  cfg.profile = $("profile").value || null;
 }
 
 ["recording"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
@@ -274,8 +409,15 @@ setInterval(async () => {
   const j = await (await fetch("/session")).json();
   PRESETS = j.presets; fake = !!j.fakeTable;
   if (j.current) { location.href = "/panel"; return; }
+  try { FORMATS = (await (await fetch("/formats")).json()).formats || []; } catch (e) { FORMATS = []; }
+  await loadProfiles();
+  pollTable();
   renderPresets();
-  choose(fake ? "test-rig" : (j.lastPreset && PRESETS[j.lastPreset] ? j.lastPreset : Object.keys(PRESETS)[0]));
+  // a fresh page starts on the recommended strategy (Apex); the last-used
+  // preset is only honoured when it is itself a strategy
+  const firstStrategy = Object.keys(PRESETS).find((k) => PRESETS[k].strategy) || Object.keys(PRESETS)[0];
+  const last = j.lastPreset && PRESETS[j.lastPreset] && PRESETS[j.lastPreset].strategy ? j.lastPreset : null;
+  choose(fake ? "test-rig" : (last || firstStrategy));
   loadRecent();
 })();
 </script>

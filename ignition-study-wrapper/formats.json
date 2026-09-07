@@ -1,0 +1,285 @@
+{
+  "_doc": "Table FORMATS the study tool knows, and where each lives in the Ignition web lobby. Captured 2026-09-07 from the live client (Chrome, logged in). The wrapper's go-to-er reads `path` to drive the lobby wizard; the detector reads `tableIframe` to name the format of whatever table is actually open. Selectors live in code (launch.py), not here.",
+  "version": 1,
+  "site": "ignition",
+  "stakes": {
+    "_doc": "Project-wide stake enum (NL<bb in cents>). `label` is the exact dropdown text in the Buy-In modal; practice stakes are in practice chips and carry no $ sign.",
+    "NL5": {
+      "sbCents": 2,
+      "bbCents": 5,
+      "label": "$0.02 / $0.05"
+    },
+    "NL10": {
+      "sbCents": 5,
+      "bbCents": 10,
+      "label": "$0.05 / $0.10"
+    },
+    "NL25": {
+      "sbCents": 10,
+      "bbCents": 25,
+      "label": "$0.10 / $0.25"
+    },
+    "NL50": {
+      "sbCents": 25,
+      "bbCents": 50,
+      "label": "$0.25 / $0.50"
+    },
+    "NL100": {
+      "sbCents": 50,
+      "bbCents": 100,
+      "label": "$0.50 / $1.00"
+    },
+    "NL200": {
+      "sbCents": 100,
+      "bbCents": 200,
+      "label": "$1.00 / $2.00"
+    },
+    "NL500": {
+      "sbCents": 250,
+      "bbCents": 500,
+      "label": "$2.50 / $5.00"
+    },
+    "NL1000": {
+      "sbCents": 500,
+      "bbCents": 1000,
+      "label": "$5.00 / $10.00"
+    },
+    "NL2000": {
+      "sbCents": 1000,
+      "bbCents": 2000,
+      "label": "$10.00 / $20.00"
+    }
+  },
+  "lobby": {
+    "client": "https://www.ignitioncasino.eu/static/poker-game/?lobby=",
+    "sections": {
+      "ring": "/poker-lobby/cash-game",
+      "zone": "/poker-lobby/zone-poker",
+      "home": "/poker-lobby/home"
+    },
+    "wizard": {
+      "_doc": "Both sections show the same 'Start … Game' wizard: CARD GAME / LIMIT / NUMBER OF SEATS buttons (class `active` marks the choice), a PRACTICE MODE toggle (`.custom-toggle label` class switch-btn-on|off) and NEXT. The wizard REMEMBERS the last choice per section — set every field explicitly. NEXT opens the Buy-In modal: 'Select Stake' custom dropdown (li rows carry the stake label), MAXIMUM / MINIMUM / OTHER amount (OTHER is a text input in dollars), 'Wait for Big Blind' checkbox (ring only), TAKE MY SEAT (disabled until stake picked and balance covers the minimum), close = button.close-btn. In PRACTICE MODE the 6-seat button is disabled: practice tables are 9-max only.",
+      "cardGame": "HOLD'EM",
+      "limit": "NO",
+      "seatsOptions": [
+        6,
+        9
+      ]
+    },
+    "observedStakeLists": {
+      "_doc": "The dropdown rows seen per section x seats on 2026-09-07 (real money) and in practice mode.",
+      "zone6": [
+        "$0.02 / $0.05",
+        "$0.10 / $0.25",
+        "$0.25 / $0.50",
+        "$1.00 / $2.00",
+        "$2.50 / $5.00"
+      ],
+      "zone9": [
+        "$0.02 / $0.05",
+        "$0.10 / $0.25",
+        "$0.25 / $0.50",
+        "$1.00 / $2.00",
+        "$2.50 / $5.00"
+      ],
+      "ring6": [
+        "$0.02 / $0.05",
+        "$0.05 / $0.10",
+        "$0.10 / $0.25",
+        "$0.25 / $0.50",
+        "$0.50 / $1.00",
+        "$1.00 / $2.00",
+        "$2.50 / $5.00",
+        "$5.00 / $10.00",
+        "$10.00 / $20.00"
+      ],
+      "ring9": [
+        "$0.02 / $0.05",
+        "$0.05 / $0.10",
+        "$0.10 / $0.25",
+        "$0.25 / $0.50",
+        "$0.50 / $1.00",
+        "$1.00 / $2.00",
+        "$2.50 / $5.00"
+      ],
+      "practiceRing": [
+        "2.00 / 4.00"
+      ],
+      "practiceZone": [
+        "25.00 / 50.00"
+      ]
+    },
+    "buyInBounds": {
+      "_doc": "Observed MAXIMUM / MINIMUM in big blinds. Practice Zone needs 2,500 practice chips minimum; a practice balance below that disables TAKE MY SEAT.",
+      "zone": {
+        "minBb": 50,
+        "maxBb": 100
+      },
+      "ring": {
+        "minBb": 30,
+        "maxBb": 100
+      },
+      "practiceRing": {
+        "minBb": 30,
+        "maxBb": 100
+      },
+      "practiceZone": {
+        "minBb": 50,
+        "maxBb": 100
+      }
+    }
+  },
+  "tableIframe": {
+    "_doc": "Once seated, the client adds an iframe to /static/poker-game/ whose query string names the table exactly. These are the params the detector reads (identity params — user, txId, connectionUuid, tableId — are deliberately NOT read or stored).",
+    "params": {
+      "gameType": "holdem",
+      "gameFormat": "cash | (zone value TBC on first real Zone seat)",
+      "seat": "6 | 9 — the table's seat count (NOT the wizard choice: practice ring returned 9 after choosing 6)",
+      "playMode": "fun = practice; anything else = real money",
+      "limit": "NL",
+      "quickSeatSmallBlind": "cents (practice: practice-chip cents, e.g. 200)",
+      "quickSeatBigBlind": "cents (e.g. 400)",
+      "quickSeatBuyInAmount": "cents actually bought in",
+      "quickSeatMinBuyIn": "cents",
+      "quickSeatMaxBuyIn": "cents",
+      "waitForBigBlind": "true|false",
+      "gameTableUrl": "/poker-lobby/cash-game | /poker-lobby/zone-poker — the section the seat came from",
+      "tableName": "string (empty for quick-seat)"
+    },
+    "wsFrames": {
+      "CO_OPTION_INFO": "on table join: bblind, sblind (cents), maxSeat, gameType, real (1 = real money)",
+      "CO_ZONE_WAITING_PLAYERS_INFO": "present only at Zone tables"
+    },
+    "leave": "table header X (top right) -> 'Are you sure you want to leave this table?' -> YES"
+  },
+  "formats": [
+    {
+      "id": "ign-zone-NL25",
+      "site": "ignition",
+      "gameType": "zone",
+      "stake": "NL25",
+      "seats": 6,
+      "name": "NL25 Zone Ignition",
+      "path": {
+        "section": "zone",
+        "seats": 6,
+        "practice": false,
+        "stakeLabel": "$0.10 / $0.25"
+      }
+    },
+    {
+      "id": "ign-zone-NL50",
+      "site": "ignition",
+      "gameType": "zone",
+      "stake": "NL50",
+      "seats": 6,
+      "name": "NL50 Zone Ignition",
+      "path": {
+        "section": "zone",
+        "seats": 6,
+        "practice": false,
+        "stakeLabel": "$0.25 / $0.50"
+      }
+    },
+    {
+      "id": "ign-zone-NL200",
+      "site": "ignition",
+      "gameType": "zone",
+      "stake": "NL200",
+      "seats": 6,
+      "name": "NL200 Zone Ignition",
+      "path": {
+        "section": "zone",
+        "seats": 6,
+        "practice": false,
+        "stakeLabel": "$1.00 / $2.00"
+      }
+    },
+    {
+      "id": "ign-ring-NL100-6",
+      "site": "ignition",
+      "gameType": "ring",
+      "stake": "NL100",
+      "seats": 6,
+      "name": "NL100 Ring 6-max Ignition",
+      "path": {
+        "section": "ring",
+        "seats": 6,
+        "practice": false,
+        "stakeLabel": "$0.50 / $1.00"
+      }
+    },
+    {
+      "id": "ign-ring-NL100-9",
+      "site": "ignition",
+      "gameType": "ring",
+      "stake": "NL100",
+      "seats": 9,
+      "name": "NL100 Ring 9-max Ignition",
+      "path": {
+        "section": "ring",
+        "seats": 9,
+        "practice": false,
+        "stakeLabel": "$0.50 / $1.00"
+      }
+    },
+    {
+      "id": "ign-ring-NL200-6",
+      "site": "ignition",
+      "gameType": "ring",
+      "stake": "NL200",
+      "seats": 6,
+      "name": "NL200 Ring 6-max Ignition",
+      "path": {
+        "section": "ring",
+        "seats": 6,
+        "practice": false,
+        "stakeLabel": "$1.00 / $2.00"
+      }
+    },
+    {
+      "id": "ign-ring-NL200-9",
+      "site": "ignition",
+      "gameType": "ring",
+      "stake": "NL200",
+      "seats": 9,
+      "name": "NL200 Ring 9-max Ignition",
+      "path": {
+        "section": "ring",
+        "seats": 9,
+        "practice": false,
+        "stakeLabel": "$1.00 / $2.00"
+      }
+    },
+    {
+      "id": "ign-practice-ring",
+      "site": "ignition",
+      "gameType": "practice",
+      "stake": null,
+      "seats": 9,
+      "name": "Practice Ring Ignition",
+      "_doc": "Practice chips, one stake (2/4), 9-max only (the 6 button is disabled in practice mode). Stakes recorded as detail, not identity.",
+      "path": {
+        "section": "ring",
+        "seats": 9,
+        "practice": true,
+        "stakeLabel": "2.00 / 4.00"
+      }
+    },
+    {
+      "id": "ign-practice-zone",
+      "site": "ignition",
+      "gameType": "practice",
+      "stake": null,
+      "seats": 9,
+      "name": "Practice Zone Ignition",
+      "_doc": "Practice chips, one stake (25/50), 2,500 minimum — unusable until the practice balance is topped up.",
+      "path": {
+        "section": "zone",
+        "seats": 9,
+        "practice": true,
+        "stakeLabel": "25.00 / 50.00"
+      }
+    }
+  ]
+}

@@ -23,7 +23,7 @@ does, via CDP against the table window:
 
 Run:  launch.cmd    (uses the aof-model venv python)
 
-Env overrides: IGNITION_URL, CDP_PORT (9333), PANEL_PORT (7700), CHROME_EXE,
+Env overrides: IGNITION_URL, CDP_PORT (9333), PANEL_PORT (7700), PANEL_PUBLIC_URL, CHROME_EXE,
 TABLE_FRAC (0.70 = table share of work-area width).
 """
 
@@ -48,6 +48,8 @@ sys.path.insert(0, str(ROOT.parent / "aof-model"))
 from scout import cdp  # noqa: E402  (reuses the Windows-validated CDP reader)
 import faketable  # noqa: E402  (local fake-Ignition renderer for the state tester)
 import sessions as S  # noqa: E402  (declared sessions: presets, preflight, record)
+import formats as F  # noqa: E402  (table formats: detect / go-to / leave, formats.json)
+import auth as A  # noqa: E402  (login profiles + sign-in driver; passwords in Credential Manager)
 
 # The declared session (sessions.py). Nothing opens until one is started from
 # /setup; its id is stamped on every archived hand, carried on /state for the
@@ -2528,6 +2530,25 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/setup":
                 self._send(200, "text/html; charset=utf-8",
                            (ROOT / "setup.html").read_bytes())
+            elif path == "/formats":
+                # every known format + what the client has open right now
+                self._send(200, "application/json", json.dumps({
+                    "formats": F.all_formats(), "stakes": F.data()["stakes"],
+                    "detected": F.detect(CDP_PORT) if cdp.available(CDP_PORT) else None}).encode())
+            elif path == "/auth/profiles":
+                self._send(200, "application/json", json.dumps({"profiles": A.profiles()}).encode())
+            elif path == "/auth/state":
+                st = A.page_state(CDP_PORT) if not _fake_mode else {"state": "signed-in", "detail": "fake table"}
+                st["routing"] = {k: _router[k] for k in ("state", "text", "steps", "at", "format")}
+                self._send(200, "application/json", json.dumps(st).encode())
+            elif path == "/table/state":
+                st = F.window_state(CDP_PORT) if not _fake_mode else {"state": "signed-in", "cdp": True, "url": "faketable", "detected": None}
+                st["routing"] = {k: _router[k] for k in ("state", "text", "steps", "at", "format")}
+                self._send(200, "application/json", json.dumps(st).encode())
+            elif path == "/format/detect":
+                self._send(200, "application/json", json.dumps({
+                    "detected": F.detect(CDP_PORT) if cdp.available(CDP_PORT) else None,
+                    "cdp": cdp.available(CDP_PORT)}).encode())
             elif path == "/session/checks":
                 self._send(200, "application/json", json.dumps(_session_checks()).encode())
             elif path == "/session":
@@ -2739,6 +2760,60 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     self._send(200, "application/json", json.dumps({"ok": False, "connected": False,
                                "hint": f"the study API on {S.API} did not answer: {e}"}).encode())
+            elif path == "/auth/profiles":
+                # create / update. The password goes straight to Credential Manager and is not echoed back.
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                try:
+                    row = A.save_profile(body.get("name"), body.get("site") or "ignition", body.get("email"), body.get("password") or None,
+                                         body.get("rememberMe", True) is not False, bool(body.get("trustDevice")))
+                    self._send(200, "application/json", json.dumps({"ok": True, "profile": row}).encode())
+                except Exception as e:
+                    self._send(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode())
+            elif path == "/auth/profiles/delete":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                self._send(200, "application/json", json.dumps({"ok": A.delete_profile(body.get("name") or "")}).encode())
+            elif path == "/auth/login":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                if not cdp.available(CDP_PORT):
+                    res = {"ok": False, "error": "table window not up"}
+                else:
+                    _router["loginAt"] = time.time()
+                    res = A.login(body.get("profile") or "", CDP_PORT)
+                self._send(200, "application/json", json.dumps(res).encode())
+            elif path == "/auth/code":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                prof = A.get(body.get("profile") or ((_session["rec"] or {}).get("config") or {}).get("profile"))
+                trust = body.get("trustDevice") if "trustDevice" in body else (prof or {}).get("trustDevice", False)
+                res = A.submit_code(body.get("code") or "", CDP_PORT, trust_device=bool(trust)) if cdp.available(CDP_PORT) else {"ok": False, "error": "table window not up"}
+                if res.get("ok") and _session["id"]:
+                    _sessions.event(_session["id"], "code-accepted", {})
+                self._send(200, "application/json", json.dumps(res).encode())
+            elif path == "/table/open":
+                # the table window alone (no session) — for the go-to-er and tests
+                threading.Thread(target=_open_table_window, daemon=True).start()
+                self._send(200, "application/json", json.dumps({"ok": True}).encode())
+            elif path == "/format/goto":
+                # Drive the lobby to a format and take a seat. Synchronous (up to ~90 s):
+                # the caller wants the step log and the detected table back.
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                fid = body.get("format")
+                try:
+                    buyin = float(body.get("buyinBb") or 100)
+                except (TypeError, ValueError):
+                    buyin = 100.0
+                if not cdp.available(CDP_PORT):
+                    res = {"ok": False, "error": f"table window not up (CDP :{CDP_PORT})"}
+                else:
+                    res = F.goto(fid, buyin, CDP_PORT, wait_for_bb=body.get("waitForBb", True) is not False)
+                self._send(200 if res.get("ok") else 409, "application/json", json.dumps(res).encode())
+            elif path == "/format/leave":
+                res = F.leave(CDP_PORT) if cdp.available(CDP_PORT) else {"ok": False, "error": "table window not up"}
+                self._send(200, "application/json", json.dumps(res).encode())
             elif path == "/session/preflight":
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
@@ -2763,6 +2838,7 @@ class Handler(BaseHTTPRequestHandler):
                     _sessions.event(rec["id"], "resumed")
                     _end_other_open(rec["id"], "ended: another session was resumed")
                     _open_table_window()
+                    _start_router(rec.get("config") or {}, rec["id"])
                 self._send(200, "application/json", json.dumps({"ok": bool(rec), "session": rec}).encode())
             elif path == "/study-answers":       # the toggle (CONTRACT.md §3)
                 n = int(self.headers.get("Content-Length") or 0)
@@ -3358,7 +3434,11 @@ def _api_post(path: str, body: dict | None = None, timeout: float = 5.0) -> dict
 def _ensure_answer_chain(reason: str) -> None:
     """Point the poller here and get GTO Wizard connected — in the background,
     never twice at once, at most one launch attempt per two minutes."""
-    r = _api_post("/api/study-poller/start", {"assistiveUrl": f"http://127.0.0.1:{PANEL_PORT}"})
+    # PANEL_PUBLIC_URL = what the API must call to reach THIS wrapper. Same-machine
+    # runs use loopback; a remote box (deploy/winbox) advertises the Zenbook-side
+    # end of its SSH tunnel instead (e.g. http://127.0.0.1:17700).
+    public = os.environ.get("PANEL_PUBLIC_URL") or f"http://127.0.0.1:{PANEL_PORT}"
+    r = _api_post("/api/study-poller/start", {"assistiveUrl": public})
     if not (r or {}).get("ok", True):
         print(f"[chain] poller start: {r}")
     reg = S.fetch_registry()
@@ -3376,6 +3456,145 @@ def _ensure_answer_chain(reason: str) -> None:
                                                             "text": (res or {}).get("text") or (res or {}).get("hint") or (res or {}).get("error")}})
         print(f"[chain] connect -> {_chain['lastResult']}")
     threading.Thread(target=go, daemon=True).start()
+
+
+# ---- the table router: auth gate, then go to the declared format ------------
+# The session declares a FORMAT (formats.json id), a buy-in and optionally a
+# login PROFILE (auth.py). Starting it opens the table window; if that window
+# is on the login page the router signs in from the profile (or waits for the
+# human when there is none), waits for the human's Authy code when the site
+# asks for one, then drives the lobby to the format and takes the seat. It
+# keeps watching for the life of the session: a mid-session sign-out shows up
+# in the checklist and the panel badge, and the gate runs again. State is on
+# /session (brief.routing), /table/state and /auth/state.
+_router = {"state": "idle", "text": "", "steps": [], "at": 0.0, "format": None, "thread": None, "cancel": False, "loginAt": 0.0}
+
+
+def _router_set(state: str, text: str, steps: list | None = None) -> None:
+    changed = (state, text) != (_router["state"], _router["text"])
+    _router.update({"state": state, "text": text, "at": time.time()})
+    if steps is not None:
+        _router["steps"] = list(steps)
+    if changed:
+        print(f"[router] {state}: {text}")
+
+
+def _route_session(cfg: dict, sid: str) -> None:
+    """The session's table keeper: auth gate → route to the declared format →
+    watch. Runs for the life of the session. Sign-in uses the session's
+    PROFILE (auth.py) when it has one; the Authy code is always typed by the
+    human (setup page / panel → POST /auth/code); a reCAPTCHA challenge is
+    always solved by the human in the real window."""
+    fid = cfg.get("format")
+    profile = cfg.get("profile")
+    if _fake_mode:
+        _router_set("idle", "test rig — no routing")
+        return
+    f = F.get(fid) if fid else None
+    if fid and not f:
+        _router_set("failed", f"unknown format {fid}")
+        return
+    _router.update({"format": fid, "cancel": False, "loginAt": 0.0})
+    seated_by_us = False
+    was_signed_out = False
+
+    def alive() -> bool:
+        return not _router["cancel"] and _session["id"] == sid
+
+    while alive():
+        # ---- 1. the auth gate: the window, then sign-in ----------------------
+        st = F.window_state(CDP_PORT)
+        if st["state"] == "closed":
+            _router_set("waiting-window", "waiting for the table window")
+            time.sleep(2)
+            continue
+        if st["state"] == "signed-out":
+            was_signed_out = True
+            a = A.page_state(CDP_PORT)
+            if a["state"] == "code-form":
+                if _router["state"] != "waiting-code":
+                    _sessions.event(sid, "code-needed", {})
+                _router_set("waiting-code", "Authy code needed — type the 6 digits on the setup page or the panel")
+            elif a["state"] == "captcha":
+                _router_set("waiting-captcha", "reCAPTCHA challenge — solve it in the table window")
+            elif a["state"] in ("login-form", "error") and profile and A.get(profile):
+                if a["state"] == "error" and _router["loginAt"]:
+                    _router_set("login-error", f"sign-in as {profile} failed: {a['detail']}")
+                    time.sleep(5)
+                elif time.time() - _router["loginAt"] > 45:
+                    _router_set("logging-in", f"signing in as {profile}")
+                    _router["loginAt"] = time.time()
+                    res = A.login(profile, CDP_PORT, log=lambda m: (_router["steps"].append(m.replace("[auth] ", "")), print(m)))
+                    _sessions.event(sid, "login", {"profile": profile, "ok": res.get("ok"), "state": res.get("state")})
+                    if not res.get("ok"):
+                        _router_set("login-error", res.get("error") or res.get("detail") or "sign-in failed")
+            elif a["state"] == "error":
+                _router_set("login-error", a["detail"])
+            else:
+                if _router["state"] != "waiting-signin":
+                    _sessions.event(sid, "sign-in-needed", {"profile": profile})
+                _router_set("waiting-signin", "table window is on the Ignition login page — no profile on this session, sign in there (e-mail, password, Authy)")
+            time.sleep(2)
+            continue
+        if was_signed_out:
+            was_signed_out = False
+            _sessions.event(sid, "signed-in", {"profile": profile})
+        _resume_recording_if_pending()
+
+        # ---- 2. the table --------------------------------------------------
+        if st["state"] == "seated":
+            v = F.compare(fid, st["detected"]) if fid else {"state": "undeclared", "text": st["detected"]["name"]}
+            if _router["state"] not in ("done", "off-format"):
+                _router_set("done" if v["state"] in ("ok", "undeclared") else "off-format",
+                            f"seated: {st['detected']['name']} — {v['text']}")
+                _sessions.event(sid, "routed", {"format": fid, "seated": st["detected"], "verdict": v, "byRouter": seated_by_us})
+                seated_by_us = False
+            time.sleep(5)
+            continue
+        # signed in, no table
+        if not fid:
+            _router_set("idle", "signed in · no format declared, nothing to route to")
+            time.sleep(5)
+            continue
+        if _router["state"] in ("done", "off-format"):
+            # the table went away while signed in: the human left it — do not re-seat them
+            _router_set("left", f"table closed — not re-seating (declared {f['name']})")
+            time.sleep(5)
+            continue
+        if _router["state"] in ("left", "failed"):
+            time.sleep(5)
+            continue
+        _router_set("routing", f"going to {f['name']} · buy-in {cfg.get('buyinBb', 100)} bb", [])
+        res = F.goto(fid, float(cfg.get("buyinBb") or 100), CDP_PORT, wait_for_bb=cfg.get("waitForBb", True) is not False,
+                     log=lambda m: (_router["steps"].append(m.replace("[goto] ", "")), print(m)))
+        if res.get("ok"):
+            seated_by_us = True
+            v = res.get("verdict") or {}
+            _router_set("done" if v.get("state") == "ok" else "off-format", v.get("text") or "seated", res.get("steps"))
+            _sessions.event(sid, "routed", {"format": fid, "seated": res.get("detected"), "verdict": v, "byRouter": True})
+        else:
+            _router_set("failed", res.get("error") or "routing failed", res.get("steps"))
+            _sessions.event(sid, "route-failed", {"format": fid, "error": res.get("error"), "steps": res.get("steps")})
+    _router_set("cancelled" if _router["cancel"] else "idle", "session ended")
+
+
+def _start_router(cfg: dict, sid: str) -> None:
+    _router["cancel"] = True
+    time.sleep(0.1)
+    t = threading.Thread(target=_route_session, args=(cfg, sid), daemon=True)
+    _router["thread"] = t
+    t.start()
+
+
+# Recording never starts on a signed-out window (no frame of the login page
+# is ever captured): it is deferred until the router sees the lobby.
+_rec_pending = {"on": False}
+
+
+def _resume_recording_if_pending() -> None:
+    if _rec_pending["on"]:
+        _rec_pending["on"] = False
+        set_debug(True)
 
 
 def _chain_keeper() -> None:
@@ -3411,7 +3630,17 @@ def _session_checks() -> dict:
              "detail": (f"{(tgt.get('title') or 'table page')} · CDP :{CDP_PORT}" if tgt
                         else f"CDP :{CDP_PORT} up, no table page yet" if cdp_up
                         else "no table window — it opens when a session starts")}
-    checks = [table] + pf["checks"]
+    ws_state = F.window_state(CDP_PORT) if not _fake_mode else {"state": "signed-in", "detected": None}
+    signin = {"id": "signin", "label": "Table window signed in", "required": bool(rec and not _fake_mode),
+              "ok": ws_state["state"] in ("signed-in", "seated"),
+              "detail": {"closed": "no table window", "signed-out": f"Ignition login page · {_router['text'] or 'waiting'}",
+                         "signed-in": "lobby up", "seated": f"seated: {(ws_state.get('detected') or {}).get('name')}"}.get(ws_state["state"], ws_state["state"])}
+    fid = cfg.get("format")
+    verdict = F.compare(fid, ws_state.get("detected")) if fid else None
+    fmt = {"id": "format", "label": "Table format matches the declaration", "required": False,
+           "ok": bool(verdict) and verdict["state"] in ("ok", "unknown"),
+           "detail": (verdict["text"] if verdict else "no format declared") + (f" · router: {_router['text']}" if _router["state"] not in ("idle", "done") else "")}
+    checks = [table, signin] + ([fmt] if fid else []) + pf["checks"]
     blockers = [c["label"] for c in checks if c["required"] and not c["ok"]]
     _chain["lastCheck"] = time.time()
     return {"ok": not blockers, "checks": checks, "blockers": blockers, "checkedAt": int(time.time() * 1000),
@@ -3429,8 +3658,14 @@ def _session_brief() -> dict | None:
     budget = cfg.get("budget") or {}
     elapsed_min = (time.time() - _session["started"]) / 60 if _session["started"] else 0
     hands = _session_hands(rec["id"])
+    fid = cfg.get("format")
+    observed = F.detect(CDP_PORT) if (not _fake_mode and cdp.available(CDP_PORT)) else None
     return {"id": rec["id"], "preset": rec.get("preset"), "label": rec.get("label"),
             "strategy": cfg.get("strategy"), "strategyName": cfg.get("strategyName"),
+            "format": fid, "formatName": (F.get(fid) or {}).get("name"), "buyinBb": cfg.get("buyinBb"),
+            "observed": observed, "verdict": F.compare(fid, observed) if fid else None,
+            "profile": cfg.get("profile"),
+            "routing": {k: _router[k] for k in ("state", "text", "steps", "at")},
             "answers": cfg.get("answers"), "mode": cfg.get("mode"), "recording": cfg.get("recording"),
             "startedAt": rec.get("started_at"), "elapsedMin": round(elapsed_min, 1), "hands": hands,
             "budget": budget,
@@ -3463,7 +3698,12 @@ def _apply_session_config(cfg: dict) -> None:
     _study["on"] = bool(cfg.get("answers"))
     _study["mode"] = cfg.get("mode") if cfg.get("mode") in ("exploit", "chart") else _study["mode"]
     _study["text"] = None
-    set_debug(bool(cfg.get("recording")))
+    if cfg.get("recording") and not _fake_mode and F.window_state(CDP_PORT)["state"] in ("closed", "signed-out"):
+        _rec_pending["on"] = True       # starts once the window shows the lobby (router)
+        set_debug(False)
+    else:
+        _rec_pending["on"] = False
+        set_debug(bool(cfg.get("recording")))
 
 
 def _session_start(body: dict) -> tuple[int, dict]:
@@ -3489,6 +3729,7 @@ def _session_start(body: dict) -> tuple[int, dict]:
         _open_table_window()
     except Exception as e:
         print(f"[session] table window: {e}")
+    _start_router(cfg, sid)
     return 200, {"ok": True, "session": rec}
 
 
@@ -3533,6 +3774,8 @@ def _session_end(body: dict) -> dict:
         _study["on"] = False
         _study["text"] = None
         set_debug(False)
+        _rec_pending["on"] = False
+        _router["cancel"] = True
         _sessions.event(sid, "ended", {"hand": _hand_no})
         _session.update({"id": None, "rec": None, "started": 0.0})
         print(f"[session] {sid} ended · {summary}")

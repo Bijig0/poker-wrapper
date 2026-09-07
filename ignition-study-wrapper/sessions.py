@@ -38,13 +38,28 @@ API = os.environ.get("STUDY_API", "http://localhost:2000")
 # are the wrapper's own.
 STRATEGY_PREFIX = "strategy:"
 
+# Formats (formats.json ids) per strategy while the dashboard does not serve
+# `formats`/`defaultFormat` itself. Pool-exploit layers (MES preflop, MES
+# postflop, measured pool) were built for NL25 Zone; equilibrium layers route
+# by stake and are valid anywhere. Practice tables are allowed for every
+# strategy (flagged in the archive, never graded).
+_PRACTICE = ["ign-practice-ring", "ign-practice-zone"]
+FORMAT_FALLBACK = {
+    "apex": {"formats": ["ign-zone-NL25"] + _PRACTICE, "default": "ign-zone-NL25"},
+    "vanguard": {"formats": ["ign-zone-NL25"] + _PRACTICE, "default": "ign-zone-NL25"},
+    "bedrock": {"formats": None, "default": "ign-zone-NL25"},
+    "mirage": {"formats": ["ign-zone-NL25"] + _PRACTICE, "default": "ign-zone-NL25"},
+}
+
 BASE_PRESETS: dict[str, dict] = {
     "study-mes": {
         "label": "Study answers · MES",
         "tagline": "Play with answers on. Pool-exploit preflop and MES flops lead; GTO Wizard fills the rest.",
         "config": {"answers": True, "mode": "exploit",
                    "sources": {"exploitPreflop": True, "mesPostflop": True, "aiChain": True},
-                   "recording": False, "budget": {"hands": None, "minutes": None}},
+                   "recording": False, "budget": {"hands": None, "minutes": None},
+                   "format": None, "buyinBb": 100, "waitForBb": True, "profile": None},
+        "formats": None, "defaultFormat": None,
         "requires": ["api", "hrc", "exploit", "mes", "gtow"],
     },
     "study-gto": {
@@ -52,7 +67,9 @@ BASE_PRESETS: dict[str, dict] = {
         "tagline": "Play with answers on. Equilibrium charts and the GTO Wizard chain; the MES answer rides along for comparison.",
         "config": {"answers": True, "mode": "chart",
                    "sources": {"exploitPreflop": False, "mesPostflop": False, "aiChain": True},
-                   "recording": False, "budget": {"hands": None, "minutes": None}},
+                   "recording": False, "budget": {"hands": None, "minutes": None},
+                   "format": None, "buyinBb": 100, "waitForBb": True, "profile": None},
+        "formats": None, "defaultFormat": None,
         "requires": ["api", "hrc", "gtow"],
     },
     "silent": {
@@ -60,7 +77,9 @@ BASE_PRESETS: dict[str, dict] = {
         "tagline": "No answers. Every hand is still archived and graded afterwards — the control group.",
         "config": {"answers": False, "mode": "chart",
                    "sources": {"exploitPreflop": False, "mesPostflop": False, "aiChain": False},
-                   "recording": False, "budget": {"hands": None, "minutes": None}},
+                   "recording": False, "budget": {"hands": None, "minutes": None},
+                   "format": "ign-practice-ring", "buyinBb": 100, "waitForBb": True, "profile": None},
+        "formats": None, "defaultFormat": "ign-practice-ring",
         "requires": [],
     },
     "capture-qa": {
@@ -68,7 +87,9 @@ BASE_PRESETS: dict[str, dict] = {
         "tagline": "Answers off, frame-by-frame recording on. For checking the reader and the replica against the real client.",
         "config": {"answers": False, "mode": "chart",
                    "sources": {"exploitPreflop": False, "mesPostflop": False, "aiChain": False},
-                   "recording": True, "budget": {"hands": None, "minutes": None}},
+                   "recording": True, "budget": {"hands": None, "minutes": None},
+                   "format": "ign-practice-ring", "buyinBb": 100, "waitForBb": True, "profile": None},
+        "formats": None, "defaultFormat": "ign-practice-ring",
         "requires": ["recording"],
     },
     "test-rig": {
@@ -76,7 +97,9 @@ BASE_PRESETS: dict[str, dict] = {
         "tagline": "The fake table with authored spots. Answers on, nothing archived as played hands.",
         "config": {"answers": True, "mode": "exploit",
                    "sources": {"exploitPreflop": True, "mesPostflop": True, "aiChain": True},
-                   "recording": False, "budget": {"hands": None, "minutes": None}},
+                   "recording": False, "budget": {"hands": None, "minutes": None},
+                   "format": None, "buyinBb": 100, "waitForBb": True, "profile": None},
+        "formats": None, "defaultFormat": None,
         "requires": ["fake"],
     },
 }
@@ -115,7 +138,15 @@ def _strategy_preset(s: dict) -> dict:
         "config": {"answers": True, "mode": "exploit" if exploit else "chart",
                    "sources": {"exploitPreflop": exploit, "mesPostflop": mes, "aiChain": True},
                    "recording": False, "budget": {"hands": None, "minutes": None},
-                   "strategy": s["id"], "strategyName": s.get("name")},
+                   "strategy": s["id"], "strategyName": s.get("name"),
+                   "format": s.get("defaultFormat"), "buyinBb": 100, "waitForBb": True, "profile": None},
+        # the formats (formats.json ids) the strategy's layers were built for —
+        # the intersection, computed by the dashboard; None = no restriction.
+        # Until the dashboard serves them, FORMAT_FALLBACK carries Brady's rule
+        # (2026-09-07): the pool-exploit pieces are NL25 Zone only.
+        "formats": s.get("formats") if s.get("formats") is not None else FORMAT_FALLBACK.get(s["id"], {}).get("formats"),
+        "defaultFormat": s.get("defaultFormat") or FORMAT_FALLBACK.get(s["id"], {}).get("default") or "ign-zone-NL25",
+        "formatCoverage": s.get("formatCoverage"),   # per format: level ready|approx|none + why (dashboard's coverage model)
         "requires": requires,
     }
 
@@ -193,6 +224,17 @@ def merged_config(preset: str, overrides: dict | None) -> dict:
             base[k] = bool(v)
         elif k == "mode" and v in ("exploit", "chart"):
             base[k] = v
+        elif k == "format":
+            base[k] = str(v) if v else None
+        elif k == "buyinBb":
+            try:
+                base[k] = max(1.0, float(v))
+            except (TypeError, ValueError):
+                pass
+        elif k == "waitForBb":
+            base[k] = bool(v)
+        elif k == "profile":
+            base[k] = str(v) if v else None
     return base
 
 

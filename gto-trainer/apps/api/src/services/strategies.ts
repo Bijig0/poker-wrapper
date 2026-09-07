@@ -63,12 +63,16 @@ export const PIECES = [
 ] as const;
 
 const PREFLOP: Record<string, PreflopLayer> = {
+  // The pool it best-responds to was measured mostly at NL25 Zone; the tree
+  // and cell EVs underneath are the NL200-rake HRC equilibrium (no NL25-rake
+  // preflop tree exists) — see analysis/pipeline/limp_study/export_exploit_ranges.py.
   exploit: { id: "exploit", label: "MES preflop (pool best-response)", short: "MES pre",
     arrival: "exploit", requiresEnv: "EXPLOIT_CHART", source: "exploit-preflop", builtAgainst: "pool" },
-  chart: { id: "chart", label: "GTO preflop (HRC asym charts)", short: "GTO pre",
+  chart: { id: "chart", label: "GTO preflop (HRC asym charts, rake by stake)", short: "GTO pre",
     arrival: "chart", source: "hrc-3max" },
 };
 const POSTFLOP: Record<string, PostflopLayer> = {
+  // locked at the NL25 rake schedule (5%, cap 4bb) behind the NL25 Zone pool ranges
   mes: { id: "mes", label: "MES postflop (locked solves, refit)", short: "MES post",
     assumesArrival: "exploit", needsMes: true, source: "mes-postflop", builtAgainst: "pool" },
   gto: { id: "gto", label: "GTO postflop (equilibrium / GTOW AI)", short: "GTO post",
