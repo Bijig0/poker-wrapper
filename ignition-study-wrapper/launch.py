@@ -29,6 +29,18 @@ TABLE_FRAC (0.70 = table share of work-area width).
 
 import ctypes
 import ctypes.wintypes
+
+# Window placement is done in PHYSICAL pixels. Without this the process is DPI-
+# virtualised (the Zenbook panel runs at 200%, an external monitor at 100%) and
+# a MoveWindow aimed at the right-hand strip lands on top of the table instead.
+# Must run before the first user32 call.
+try:
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))   # PER_MONITOR_AWARE_V2
+except Exception:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
 import json
 from collections import deque
 import os
@@ -188,6 +200,9 @@ def apply_layout() -> dict:
     table_w = int(area["w"] * TABLE_FRAC)
     table, panel = _wrapper_windows()
     moved = {}
+    for h in (table, panel):          # a maximized window ignores MoveWindow
+        if h and ctypes.windll.user32.IsZoomed(h):
+            ctypes.windll.user32.ShowWindow(h, 9)   # SW_RESTORE
     if table:
         ctypes.windll.user32.MoveWindow(table, area["x"], area["y"],
                                         table_w, area["h"], True)
