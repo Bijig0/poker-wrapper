@@ -12,6 +12,7 @@ import { answerLog } from "../services/answerLog";
 import { strategyIdForAnswer, STRATEGIES } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
+import { gtowApi } from "../services/gtowApi";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -25,6 +26,8 @@ import { sessionsStore } from "../services/sessionsStore";
 import { existsSync as fsExists } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
+import { rollAction } from "../services/studyPoller";
+import { buildAnswerText } from "../feed/buildAnswerText/buildAnswerText";
 
 /**
  * Study dashboard backend: reads the wrapper's hand archive (hands.db),
@@ -303,6 +306,18 @@ app.get("/hands", async (c) => {
   const enriched = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
   const nets = computeNets(enriched);
   const strat = strategyByHand();
+  // the session's declared strategy wins over the heuristic: Apex is Apex even
+  // on a hand where no MES spot arose (a 5-handed Zone hand, say)
+  const byName = new Map(STRATEGIES.map((x) => [x.id, x.name]));
+  const declared = new Map<string, string>();
+  for (const sess of sessionsStore.list(500)) { const id = sess.config?.strategy; if (typeof id === "string" && byName.has(id)) declared.set(sess.id, id); }
+  const strategyOf = (e: Enriched) => {
+    const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
+    const d = sid ? declared.get(sid) : undefined;
+    if (d) return { id: d, name: byName.get(d) ?? d, declared: true };
+    const h = e.clientHandId ? strat.get(e.clientHandId) : null;
+    return h ? { ...h, declared: false } : null;
+  };
   const hands = enriched
     .map((e) => ({
       dbId: e.dbId,
@@ -312,7 +327,7 @@ app.get("/hands", async (c) => {
       stakes: e.stakes,
       heroCards: e.heroCards,
       netBb: nets.get(e.dbId) ?? null,
-      strategy: (e.clientHandId ? strat.get(e.clientHandId) : null) ?? null,
+      strategy: strategyOf(e),
       summary: e.summary,
       discrepancies: e.discrepancies
         ? {
@@ -817,7 +832,7 @@ function expandTrace(trace: any) {
   });
   return {
     spec: { oopPos: spec.oopPos, ipPos: spec.ipPos, flopPot: spec.flopPot, flopStack: spec.flopStack, board: spec.board, streets: spec.streets,
-            heroSeat: spec.heroSeat, heroCombo, heroComboIdx: heroIdx, rake: spec.rake ?? null,
+            heroSeat: spec.heroSeat, heroCombo, heroComboIdx: heroIdx, rake: spec.rake ?? null, rangeSource: spec.rangeSource ?? null,
             oopRange: classAgg(spec.oopRange ?? []), ipRange: classAgg(spec.ipRange ?? []) },
     streets, nodes, result: trace.result ?? null,
   };
@@ -940,6 +955,8 @@ function sessionCard(s: ReturnType<typeof sessionsStore.list>[number], all: Enri
   return {
     id: s.id, declared: true, startedAt: s.startedAt, endedAt: s.endedAt, preset: s.preset, label: s.label, note: s.note,
     answersOn: !!cfg.answers, mode: cfg.mode ?? null, recordingOn: !!cfg.recording, budget: cfg.budget ?? null,
+    // the whole-hand strategy the session was declared with (services/strategies.ts id), when the mode was one
+    strategy: cfg.strategy ?? null, strategyName: cfg.strategyName ?? null,
     hands: hands.length, knownHands: known.length, netBb, bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
     stakes: hands[0]?.stakes ?? null,
     answers: answered.length, failed: answers.length - answered.length, tiers, disagreements,
@@ -1003,3 +1020,154 @@ app.get("/sessions/:id", (c) => {
 });
 
 export default app;
+
+/**
+ * POST /study-answer — the Study Answer for a PLAYTHROUGH state.
+ *
+ * Same mechanism as the table, deliberately: the playthrough state is turned
+ * into the ParsedHand the wrapper would have produced, fastSolve answers it
+ * (exploit overlay / 3-max chart preflop, MES overlay postflop), the poller's
+ * rollAction rolls the mix ONCE and buildAnswerText writes the panel line.
+ * The reply is shaped like a row of answers.sqlite so the dashboard renders
+ * it with the very same answer card as a hand's logged answers. Nothing is
+ * logged: a playthrough is study, not a session.
+ *
+ * body: { hero: "SB", line: ["F","R3","C"], combo: "AhQs", strategy?: "exploit"|"chart",
+ *         board?: "Qs8s4d" | "Qs8s4dTh" | ..., flop?: ["Check","Bet(300)"], turn?: [...], river?: [...],
+ *         depth?: 100, bbCents?: 200 }
+ */
+app.post("/study-answer", async (c) => {
+  const b = (await c.req.json().catch(() => ({}))) as {
+    hero?: string; line?: string[]; combo?: string; strategy?: "exploit" | "chart"; board?: string;
+    flop?: string[]; turn?: string[]; river?: string[]; depth?: number; bbCents?: number;
+  };
+  const t0 = Date.now();
+  const hero = String(b.hero ?? "").toUpperCase();
+  const seatOf: Record<string, number> = { BTN: 1, SB: 2, BB: 3 };
+  if (!seatOf[hero]) return c.json({ ok: false, error: "hero must be BTN, SB or BB" }, 400);
+  const combo = String(b.combo ?? "").trim();
+  if (!/^[2-9TJQKA][shdc][2-9TJQKA][shdc]$/.test(combo)) return c.json({ ok: false, error: "combo must look like AhQs" }, 400);
+  const heroCards = [combo.slice(0, 2), combo.slice(2, 4)];
+  const depth = Number(b.depth) > 0 ? Number(b.depth) : 100;
+  const boardStr = String(b.board ?? "");
+  const board: string[] = boardStr.match(/[2-9TJQKA][shdc]/g) ?? [];
+  const street = board.length >= 5 ? "river" : board.length === 4 ? "turn" : board.length === 3 ? "flop" : "preflop";
+  const heroSeat = seatOf[hero]!;
+  // the wrapper labels the seats the FEED named, never hero's own — the MES
+  // lookup folds heroPos back in, so listing it here would count hero twice
+  const positions: Record<number, string> = { 1: "BTN", 2: "SB", 3: "BB" };
+  delete positions[heroSeat];
+  const stacks: Record<number, number> = { 1: depth, 2: depth, 3: depth };
+  const committed: Record<number, number> = { 1: 0, 2: 0.5, 3: 1 };
+  type A = { seatId: number; hero: boolean; type: any; amount?: number; street: any };
+  const actions: A[] = [
+    { seatId: 2, hero: heroSeat === 2, type: "post-sb", amount: 0.5, street: "preflop" },
+    { seatId: 3, hero: heroSeat === 3, type: "post-bb", amount: 1, street: "preflop" },
+  ];
+  // preflop tokens are positional BTN, SB, BB; a fold closes the seat
+  const order = [1, 2, 3];
+  const alive: Record<number, boolean> = { 1: true, 2: true, 3: true };
+  let k = 0, bet = 1;
+  for (const tok of b.line ?? []) {
+    while (!alive[order[k % 3]!]) k++;
+    const seat = order[k % 3]!; k++;
+    if (tok === "F") { alive[seat] = false; actions.push({ seatId: seat, hero: seat === heroSeat, type: "fold", street: "preflop" }); }
+    else if (tok === "C") { committed[seat] = bet; actions.push({ seatId: seat, hero: seat === heroSeat, type: "call", amount: bet, street: "preflop" }); }
+    else if (tok === "X") actions.push({ seatId: seat, hero: seat === heroSeat, type: "check", street: "preflop" });
+    else if (/^R[\d.]+$/.test(tok)) { bet = parseFloat(tok.slice(1)); committed[seat] = bet; actions.push({ seatId: seat, hero: seat === heroSeat, type: "raise", amount: bet, street: "preflop" }); }
+    else if (tok === "RAI") { bet = depth; committed[seat] = bet; actions.push({ seatId: seat, hero: seat === heroSeat, type: "all-in", amount: bet, street: "preflop" }); }
+  }
+  const potPre = committed[1]! + committed[2]! + committed[3]!;
+  const potByStreet: Record<string, number> = { preflop: potPre };
+  // postflop: heads-up after one fold, SB/BB/BTN order, strictly alternating
+  const live = [2, 3, 1].filter((s) => alive[s]);
+  const labels = (a: string) => a.replace(/\s+/g, "");
+  let pot = potPre;
+  for (const [st, arr] of [["flop", b.flop], ["turn", b.turn], ["river", b.river]] as const) {
+    if (!arr?.length) continue;
+    let i = 0; let streetPot = 0; let toCall = 0; const inStreet: Record<number, number> = {};
+    for (const raw of arr) {
+      const seat = live[i % live.length]!; i++;
+      const lab = labels(raw);
+      const amt = lab.match(/\((\d+(?:\.\d+)?)\)/) ? parseFloat(lab.match(/\((\d+(?:\.\d+)?)\)/)![1]!) / 100 : null;
+      const isHero = seat === heroSeat;
+      if (/^Check/i.test(lab)) actions.push({ seatId: seat, hero: isHero, type: "check", street: st });
+      else if (/^Fold/i.test(lab)) { alive[seat] = false; actions.push({ seatId: seat, hero: isHero, type: "fold", street: st }); }
+      else if (/^Call/i.test(lab)) { const add = toCall - (inStreet[seat] ?? 0); inStreet[seat] = toCall; streetPot += add; actions.push({ seatId: seat, hero: isHero, type: "call", amount: toCall, street: st }); }
+      else if (/^Bet/i.test(lab) && amt != null) { inStreet[seat] = amt; toCall = amt; streetPot += amt; actions.push({ seatId: seat, hero: isHero, type: "bet", amount: amt, street: st }); }
+      else if (/^Raise/i.test(lab) && amt != null) { streetPot += amt - (inStreet[seat] ?? 0); inStreet[seat] = amt; toCall = amt; actions.push({ seatId: seat, hero: isHero, type: "raise", amount: amt, street: st }); }
+      else if (/^All/i.test(lab)) { const amt2 = depth - potPre / 2; streetPot += amt2 - (inStreet[seat] ?? 0); inStreet[seat] = amt2; toCall = amt2; actions.push({ seatId: seat, hero: isHero, type: "all-in", amount: amt2, street: st }); }
+    }
+    pot += streetPot; potByStreet[st] = pot;
+  }
+  const hand = {
+    handId: 0, clientHandId: null, bbCents: Number(b.bbCents) > 0 ? Number(b.bbCents) : 200, heroSeatId: heroSeat, heroCards, board, street,
+    actions, liveSeats: [1, 2, 3], committed, potByStreet, positions, stacks,
+    currentNode: { street, toActSeatId: heroSeat, toActIsHero: true, pot, toCall: 0, legalActions: [], complete: false }, ended: false,
+  } as unknown as ParsedHand;
+  const strategy = b.strategy === "chart" ? "chart" : "exploit";
+  if (heroCards.some((c) => board.includes(c))) {
+    return c.json({ ok: true, answer: { ts: Date.now(), street, board: board.join("") || null, hero_cards: heroCards.join(""), actionIndex: null, latency_ms: 0, text: null, pick: null, roll: null, tier: null, warning: null, fail_reason: `your hand ${combo} shares a card with the board ${board.join("")} — pick a hand that is not on the board` }, hand });
+  }
+  const sol = await fastSolve(hand, hero, { heroPos: hero, strategy, origin: "playthrough" });
+  const base = {
+    ts: Date.now(), street, board: board.join("") || null, hero_cards: heroCards.join(""), actionIndex: null as number | null,
+    latency_ms: Date.now() - t0, chart: sol.ok ? (sol.rangeSource ?? sol.gametype) : (sol.gametype ?? null),
+    strategy_mode: sol.ok ? sol.strategyMode ?? strategy : strategy, source: sol.ok ? sol.source : null,
+    band_lo: sol.ok ? sol.decision?.band?.[0] ?? null : null, band_hi: sol.ok ? sol.decision?.band?.[1] ?? null : null,
+    exploit_pick: sol.ok ? sol.exploitDecision?.action ?? null : null, chart_pick: sol.ok ? sol.chartDecision?.action ?? null : null,
+    exploit_tag: sol.ok ? sol.exploitTag ?? null : null, mes_board: sol.ok ? sol.mesBoard ?? null : null,
+    mes_ev_gain_bb: sol.ok ? sol.mesEvGainBb ?? null : null, mes_exact: sol.ok ? (sol.mesExact == null ? null : sol.mesExact ? 1 : 0) : null,
+    hero_pos: hero, depth: sol.ok ? sol.depth : depth, set_id: sol.ok ? sol.setId : null,
+    decision_json: sol.ok && sol.actions ? JSON.stringify(sol.actions) : null, line: sol.ok ? sol.line : (sol.line ?? null), solve_id: sol.ok ? sol.solveId ?? null : null,
+  };
+  if (!(sol.ok && sol.decision)) {
+    const reason = sol.ok ? (sol.notInRange ? "hero's hand isn't in the chart range at this node" : "no decision in response") : sol.reason;
+    return c.json({ ok: true, answer: { ...base, text: null, pick: null, roll: null, tier: sol.ok ? sol.tier ?? null : null, warning: null, fail_reason: reason }, hand });
+  }
+  const rolled = (sol.decision.frequency ?? 0) >= 99 ? { pick: sol.decision.action, roll: null } : rollAction(sol.actions, sol.decision.action);
+  const text = (sol.approx ? "≈ " : "") + buildAnswerText({ street, decision: sol.decision, actions: sol.actions }) + (rolled.roll != null ? ` · roll ${rolled.roll} → ${rolled.pick.toUpperCase()}` : "");
+  return c.json({ ok: true, answer: { ...base, text, pick: rolled.pick, roll: rolled.roll, tier: sol.tier ?? (street === "preflop" ? "local-preflop" : null), warning: sol.warning ?? null, fail_reason: null }, hand });
+});
+
+/**
+ * GTO Wizard AI client — the postflop fallback for everything the MES overlay
+ * does not cover, so its state must be loud. GET /gtow-status is cheap (one
+ * CDP probe, no sniff); POST /gtow-connect launches the desktop client with
+ * the debug port (services/gtowCdp.launchApp, the twin of
+ * scripts/start_gtow_ai.ps1) and waits for a token, up to ~60 s.
+ */
+async function gtowStatus() {
+  const cdpHost = process.env.GTOW_CDP_HOST ?? "127.0.0.1:9222";
+  const t0 = Date.now();
+  let clientUp = false, browser: string | null = null;
+  try {
+    const r = await fetch(`http://${cdpHost}/json/version`, { signal: AbortSignal.timeout(1500) });
+    clientUp = r.ok;
+    try { browser = ((await r.json()) as any)?.Browser ?? null; } catch { /* not json */ }
+  } catch { clientUp = false; }
+  const t = gtowApi.tokenStatus();
+  return {
+    ok: true as const, clientUp, cdpHost, browser, probeMs: Date.now() - t0,
+    tokenLive: t.live, expiresInMs: t.expiresInMs, keeperRunning: t.keeperRunning, lastAttemptMs: t.lastAttemptMs,
+    usable: t.live,
+    state: t.live ? "up" : clientUp ? "no-token" : "down",
+    text: t.live ? `token live, ${Math.max(0, Math.round((t.expiresInMs ?? 0) / 60000))} min left` : clientUp ? "client reachable but no token — is GTO Wizard logged in and unlocked?" : "GTO Wizard client is not running with its debug port",
+  };
+}
+app.get("/gtow-status", async (c) => c.json(await gtowStatus()));
+app.post("/gtow-connect", async (c) => {
+  const t0 = Date.now();
+  const launch = await gtowCdp.launchApp();
+  // wait for the debug port, then for a token (the sniff needs the client's page up)
+  let live = false;
+  for (let i = 0; i < 30 && !live; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const st = await gtowStatus();
+    if (!st.clientUp) continue;
+    live = await gtowApi.forceRefresh();
+  }
+  const st = await gtowStatus();
+  return c.json({ ...st, launch, waitedMs: Date.now() - t0, connected: live,
+    hint: live ? null : st.clientUp ? "the client is up but no token came back — log in to GTO Wizard in the client window (it was started minimized) and try again" : "the client did not come up — start it by hand: scripts/start_gtow_ai.ps1" });
+});

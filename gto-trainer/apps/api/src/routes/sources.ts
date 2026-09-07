@@ -8,8 +8,11 @@ import { mesPostflopInfo, mesSpots, mesFlopNode, mesTurnLines, mesTurnNode } fro
 import { extractLine } from "../services/mesRiver";
 import { fetchNode } from "../services/hrc3max";
 import { evaluate as evaluateStrategies, strategyIdForAnswer, PIECES } from "../services/strategies";
+import { sessionsStore } from "../services/sessionsStore";
 import { gtowApi } from "../services/gtowApi";
 import { HRC3MAX_BASE } from "../services/hrc3max";
+import { missQueue } from "../services/missQueue";
+import { formatsForSource } from "../services/ledger";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "./ingest";
 import {
@@ -35,6 +38,7 @@ import {
  */
 
 const DATA_DIR = join(import.meta.dir, "..", "..", "data");
+const LIMP_DIR = join(DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
 const app = new Hono();
 
 // ------------------------------------------------------------------ helpers
@@ -88,8 +92,108 @@ export interface SourceCard {
   sourceKeys?: string[];
   /** which piece of a whole-hand strategy this source serves (services/strategies.ts PIECES) */
   piece?: "preflop" | "postflop" | "opponent" | "ground-truth";
+  /** every role it plays (a source can serve two pieces) — the Type chips */
+  pieces?: string[];
+  /** the formats it is valid for — ONE entry per full combination (site · seats · stake · depth);
+   *  a source valid at two stakes lists two formats. `note` = a caveat on that format only. */
+  formats?: { site: string; seats: string; stake: string; depth: string; note?: string; ledgerId?: string }[];
+  /** what it covers, with the gap named */
+  coverage?: { text: string; gap: string | null };
+  /** its edge in bb/100 from the strategy matrix, attributed to this piece */
+  edge?: { nl25: number | null; nl200: number | null; norake: number | null; kind: "floor" | "gain" | "increment" | "construction" | "none"; note: string } | null;
   /** primary = first in tier order for its piece; fallback = only reached when the primary can't answer */
   role?: "primary" | "fallback" | null;
+}
+
+/**
+ * The five things every card answers — Type, Edge, Formats, Coverage, Usage
+ * (Brady, 2026-09-07). Edge is READ from the strategy matrix, not typed in;
+ * coverage gaps come from the miss queue and the reach file, so they move
+ * with the data. "Where it lives" (paths, sizes, env) stays in `facts` for
+ * the detail page only.
+ */
+function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPostflopInfo>; exploit: any }): void {
+  // formats are the LEDGER's (data/ledger.json → sources map); a per-format note is the card's own
+  const fmts = (cardId: string, notes: Record<string, string>) => formatsForSource(cardId).map((f) => ({
+    site: f.site, seats: f.seats === 2 ? "heads-up" : `${f.seats}-handed`, stake: f.stake,
+    depth: f.depths.length > 1 ? `${Math.min(...f.depths)}–${Math.max(...f.depths)}bb` : f.depths.length === 1 ? `${f.depths[0]}bb` : "any",
+    note: [f.rake ? `rake ${Math.round(f.rake.pct * 100)}%, cap ${f.rake.capBb}bb` : null, notes[f.id] ?? null].filter(Boolean).join(" · ") || undefined,
+    ledgerId: f.id,
+  }));
+  const st60 = answerLog.stats(60) as { answered: number; failed: number };
+  const matrix = readJson(join(DATA_DIR, "strategy_matrix.json"));
+  const rows: Record<string, any> = {};
+  for (const g of matrix?.groups ?? []) for (const r of g.rows ?? []) rows[r.id] = r;
+  const cell = (id: string, k: string): number | null => { const v = rows[id]?.cells?.[k]?.v; return typeof v === "number" ? v : null; };
+  const eq = { nl25: cell("eq_eq", "nl25"), nl200: cell("eq_eq", "nl200"), norake: cell("eq_eq", "norake") };
+  const ex = { nl25: cell("ex_eq", "nl25"), nl200: cell("ex_eq", "nl200"), norake: cell("ex_eq", "norake") };
+  const mesRow = rows["combined_refit"] ? "combined_refit" : "combined_served";
+  const mx = { nl25: cell(mesRow, "nl25"), nl200: cell(mesRow, "nl200"), norake: cell(mesRow, "norake") };
+  const f1 = (x: number | null) => x == null ? "—" : `${x > 0 ? "+" : ""}${x.toFixed(1)}`;
+  const reach = readJson(join(DATA_DIR, "mes_reach_value.json"));
+  const fams = ctx.mes.families;
+  const arrival = Object.values((reach?.families ?? {}) as Record<string, any>).reduce((s, f: any) => s + (Number(f?.arrival_pct_of_hands) || 0), 0);
+  const mq = missQueue.stats();
+  const openMiss = (mq.byStatus?.open ?? 0) + (mq.byStatus?.queued ?? 0);
+  const beyond = mq.byKind?.["beyond-ladder"] ?? 0;
+  const sizeGaps = (mq.byKind?.["size-snapped"] ?? 0) + (mq.byKind?.["size-off-tree"] ?? 0);
+  const catalog = getCatalog();
+  const asym = catalog.entries.filter((e: any) => e.family === "3max-asym").length;
+  const manifest = readJson(join(DATA_DIR, "resolved-charts.json")) ?? {};
+  const resolvedRungs = Object.values(manifest as Record<string, number[]>).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
+  const choices = ctx.exploit?.choices ? Object.keys(ctx.exploit.choices).length : 0;
+  const poolN = (() => { try { const pm = readJson(join(LIMP_DIR, "pool_model_v4.json")); const n = pm?.n ?? {}; return Object.values(n as Record<string, number>).reduce((s, x) => s + (Number(x) || 0), 0); } catch { return 0; } })();
+  const A: Record<string, Partial<SourceCard>> = {
+    "exploit-preflop": {
+      pieces: ["preflop"],
+      formats: fmts("exploit-preflop", { "ign-zone-3max-nl25": "fitted at NL200 rake (kept, see Strategies); reused as an approximation at other depths" }),
+      coverage: { text: `${choices || 5} first-decision nodes at 100bb: BTN open, SB vs open, SB bvb open, BB vs open, BB vs SB`, gap: "nothing past hero's first decision — facing a 4-bet, limp lines and every other depth fall to the equilibrium chart; locked-root charts are the planned fix" },
+      edge: { ...ex, kind: "gain", note: `whole-hand vs the equilibrium floor (${f1(eq.nl25)} at NL25 rake) with postflop priced at the floor` },
+    },
+    "hrc-3max": {
+      pieces: ["preflop", "opponent"],
+      formats: fmts("hrc-3max", { "ign-3max-nl200": "asymmetric stacks", "ign-3max-nl500": "asymmetric stacks" }),
+      coverage: { text: `${asym} charts · 21 depth rungs · ${resolvedRungs} rungs re-solved with river betting`, gap: openMiss ? `${openMiss} open items in the miss queue: ${beyond} past the 150bb rung, ${sizeGaps} size gaps (SB 3.9x open)` : "no open misses" },
+      edge: { ...eq, kind: "floor", note: "equilibrium everywhere — the maximin floor every exploit is measured from" },
+    },
+    "gtow-charts": {
+      pieces: ["preflop"],
+      formats: fmts("gtow-charts", { "gtow-6max-nl500": "no 200bb", "gtow-hu-nl500": "no 200bb" }),
+      coverage: { text: "27 gametype × depth pairs, crawled", gap: "3-handed spots only when :8777 is down (wrong rake, no limps) — flagged approximate" },
+      edge: { nl25: null, nl200: null, norake: null, kind: "none", note: "fallback only — no row of its own" },
+    },
+    "mes-postflop": {
+      pieces: ["postflop"],
+      formats: fmts("mes-postflop", { "ign-zone-3max-nl25": "single-raised pots, heads-up on the flop" }),
+      coverage: { text: `${fams.length} families × ${fams[0]?.boards.length ?? 14} boards · ${arrival.toFixed(1)}% of hands arrive (corpus)`, gap: "flop + turn stored, rivers from the trees on demand; every other postflop line goes to the AI chain" },
+      edge: { ...mx, kind: "increment", note: `exploit preflop + MES flops, refit; ${f1(mx.nl25 != null && ex.nl25 != null ? mx.nl25 - ex.nl25 : null)} over exploit-preflop-only at NL25 — raw model value, no execution haircut` },
+    },
+    "gtow-ai": {
+      pieces: ["postflop"],
+      formats: fmts("gtow-ai", { "any-hu-postflop": "GTO Wizard cloud solve per spot; rake as solved" }),
+      coverage: { text: "every postflop spot the MES does not cover — per-street re-solve from the flop-entering ranges", gap: "client must be up with a token; 3-way flops are not solved" },
+      edge: { nl25: 0, nl200: 0, norake: 0, kind: "construction", note: "priced at the floor by construction — unexploitable, villain's postflop mistakes count for zero" },
+    },
+    "gtow-library": {
+      pieces: ["postflop"],
+      formats: fmts("gtow-library", {}),
+      coverage: { text: "standby — last resort when both AI paths fail", gap: null },
+      edge: { nl25: null, nl200: null, norake: null, kind: "none", note: "fallback only" },
+    },
+    "pool-model": {
+      pieces: ["opponent"],
+      formats: fmts("pool-model", { "ign-zone-3max-nl25": "measured on $0.10–$2 blinds, 68% at 25NL" }),
+      coverage: { text: `${poolN.toLocaleString()} measured decisions across 7 preflop spots + 10 calling contexts`, gap: "fold-vs-3-bet reads are thin (n≈266 / 170) and shrunk 1.5 SE before use" },
+      edge: { nl25: null, nl200: null, norake: null, kind: "none", note: `no edge of its own — the exploit preflop (${f1(ex.nl25)}) and MES (${f1(mx.nl25)}) rows both rest on it` },
+    },
+    log: {
+      pieces: ["ground-truth"],
+      formats: [],
+      coverage: { text: `${st60.answered} answered · ${st60.failed} failed in 60 days`, gap: null },
+      edge: null,
+    },
+  };
+  for (const c of cards) Object.assign(c, A[c.id] ?? {});
 }
 
 const PIECE_OF: Record<string, { piece: SourceCard["piece"]; role: SourceCard["role"] }> = {
@@ -157,7 +261,7 @@ app.get("/registry", async (c) => {
     const choices = exploit?.choices ? Object.keys(exploit.choices) : [];
     const ranges = exploit?.ranges ? Object.keys(exploit.ranges) : [];
     cards.push({
-      id: "exploit-preflop", label: "Pool-exploit preflop overlay", mode: "mes",
+      id: "exploit-preflop", label: "3-handed Zone 25NL preflop exploit charts", mode: "mes",
       state: armed ? "good" : "off",
       stateText: armed ? "Armed" : exploitPath ? "Env set, file missing" : "Not armed",
       tiers: ["exploit-3max", "hero flop ranges → ai-chain"],
@@ -386,6 +490,7 @@ app.get("/registry", async (c) => {
   for (const card of cards) card.sourceKeys = SOURCE_KEYS[card.id] ?? [];
 
   for (const card of cards) Object.assign(card, PIECE_OF[card.id] ?? { piece: undefined, role: null });
+  attributeCards(cards, { mes, exploit });
 
   return c.json({
     ok: true,
@@ -430,8 +535,11 @@ app.get("/strategies", (c) => {
   // Analytics tab shows) rather than a second, divergent query
   const enriched = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
   const nets = computeNets(enriched);
+  const declared = new Map<string, string>();
+  for (const sess of sessionsStore.list(500)) { const id = sess.config?.strategy; if (typeof id === "string") declared.set(sess.id, id); }
   for (const e of enriched) {
-    const sid = e.clientHandId ? seen.get(e.clientHandId) : null;
+    const sessId = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
+    const sid = (sessId && declared.get(sessId)) || (e.clientHandId ? seen.get(e.clientHandId) : null);
     if (!sid) continue;
     const r = (realized[sid] ??= { hands: 0, netBb: 0 });
     r.hands++;

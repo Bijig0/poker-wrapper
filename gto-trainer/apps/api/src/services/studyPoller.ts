@@ -88,7 +88,7 @@ interface IngestLikeResponse {
  *  of `navigation` — charts + spot-solution API, no DOM, no navLock. */
 interface FastSolveLikeResponse {
   ok?: boolean;
-  hero?: { toAct?: boolean; cards?: string[] };
+  hero?: { toAct?: boolean; cards?: string[]; pos?: string | null };
   hand?: {
     handId?: number;
     clientHandId?: string | null;
@@ -96,9 +96,13 @@ interface FastSolveLikeResponse {
     board?: string[];
     actions?: unknown[];
     node?: { toCall?: number };
+    /** Wrapper-exported stake/seating facts, persisted with each answer. */
+    bbCents?: number | null;
+    liveSeats?: number[];
   };
   studyAnswersOn?: boolean | null;
   studyMode?: "exploit" | "chart" | null;
+  sessionId?: string | null;
   solution?:
     | {
         ok: true;
@@ -116,15 +120,36 @@ interface FastSolveLikeResponse {
         strategyMode?: "exploit" | "chart";
         exploitDecision?: { action: string } | null;
         chartDecision?: { action: string } | null;
+        exploitTag?: string | null;
+        mesBoard?: string | null;
+        mesEvGainBb?: number | null;
+        mesExact?: boolean | null;
+        depth?: number;
+        pos?: string | null;
+        line?: string;
+        solveId?: number | null;
+      rangeSource?: string;
         warning?: string | null;
       }
-    | { ok: false; reason: string; street?: string }
+    | { ok: false; reason: string; street?: string; gametype?: string; depth?: number; line?: string }
+    /* ok:true also carries rangeSource?: string (see fastSolve.ts) */
     | null;
   deferred?: string;
 }
 
 const DEFAULT_SELF_BASE_URL = "http://localhost:2000/api";
 const DEFAULT_INTERVAL_MS = 1000;
+
+/** MES family of a postflop overlay answer: the tag names it when the
+ *  overlay set one, else hero's position implies it (M1 = hero SB bvb,
+ *  M2 = hero BTN SRP) — the only two families served today. */
+const mesFamilyOf = (tag: string | null | undefined, pos: string | null | undefined): string | null => {
+  const m = tag?.match(/^(M\d+_[A-Za-z0-9_]+)/);
+  if (m) return m[1]!;
+  if (pos === "SB") return "M1_heroSB_bvb_cbet";
+  if (pos === "BTN") return "M2_heroBTN_srp_vs_BB";
+  return null;
+};
 
 /** A decision's identity — a new key means a new spot worth navigating to.
  *  Mirrors the dashboard's own spotKey/lastNavKey fallback formula. */
@@ -136,7 +161,7 @@ const decisionKey = (r: IngestLikeResponse): string =>
  *  human would RNG it at the table. Rolled ONCE when the spot is first solved
  *  — the keep-alive re-push repeats the same pick, so it never flickers
  *  while hero deliberates. Pure (≥99%) spots get the pick without a roll. */
-const rollAction = (
+export const rollAction = (
   actions: AnswerAction[] | undefined,
   fallback: string,
 ): { pick: string; roll: number | null } => {
@@ -182,6 +207,10 @@ class StudyPoller {
   private studyWasOn = false;
   /** The rig's MES/GTO tab as of the last probe — passed to the solver. */
   private lastStudyMode: "exploit" | "chart" | null = null;
+  /** The wrapper's current MES/GTO toggle as last probed (Sources registry). */
+  get studyMode(): "exploit" | "chart" | null {
+    return this.lastStudyMode;
+  }
   private probing = false;
   private readonly PROBE_COOLDOWN_MS = 5 * 60_000;
   // Identity of the decision GTO Wizard last successfully navigated to and
@@ -365,7 +394,28 @@ class StudyPoller {
       heroCards: (full.hero?.cards ?? []).join("") || null,
       decisionKey: key,
       latencyMs: Date.now() - t0,
-      chart: (sol?.ok === true ? sol.gametype : null) ?? null,
+      chart: (sol?.ok === true ? (sol.rangeSource ?? sol.gametype) : sol?.ok === false ? sol.gametype : null) ?? null,
+      // Provenance persisted since 2026-09-03 (Sources tab live grading).
+      strategyMode: (sol?.ok === true ? sol.strategyMode : null) ?? this.lastStudyMode ?? null,
+      source: (sol?.ok === true ? sol.source : null) ?? null,
+      bandLo: (sol?.ok === true ? sol.decision?.band?.[0] : null) ?? null,
+      bandHi: (sol?.ok === true ? sol.decision?.band?.[1] : null) ?? null,
+      exploitPick: (sol?.ok === true ? sol.exploitDecision?.action : null) ?? null,
+      chartPick: (sol?.ok === true ? sol.chartDecision?.action : null) ?? null,
+      exploitTag: (sol?.ok === true ? sol.exploitTag : null) ?? null,
+      mesFamily: (sol?.ok === true && sol.mesBoard ? mesFamilyOf(sol.exploitTag, sol.pos) : null) ?? null,
+      mesBoard: (sol?.ok === true ? sol.mesBoard : null) ?? null,
+      mesEvGainBb: (sol?.ok === true ? sol.mesEvGainBb : null) ?? null,
+      mesExact: (sol?.ok === true ? sol.mesExact : null) ?? null,
+      bbCents: full.hand?.bbCents ?? null,
+      tableSeats: Array.isArray(full.hand?.liveSeats) ? full.hand.liveSeats.length : full.hand?.liveSeats && typeof full.hand.liveSeats === "object" ? Object.keys(full.hand.liveSeats).length : null,
+      heroPos: (sol?.ok === true ? sol.pos : null) ?? full.hero?.pos ?? null,
+      depth: (sol?.ok === true ? sol.depth : sol?.ok === false ? sol.depth : null) ?? null,
+      setId: (sol?.ok === true ? sol.setId : null) ?? null,
+      decisionJson: sol?.ok === true && sol.actions ? JSON.stringify(sol.actions) : null,
+      line: (sol?.ok === true ? sol.line : sol?.ok === false ? sol.line : null) ?? null,
+      solveId: (sol?.ok === true ? sol.solveId : null) ?? null,
+      sessionId: full.sessionId ?? null,
     };
     this.status.lastError = null;
     if (!(sol?.ok === true && sol.decision != null)) {
@@ -438,6 +488,7 @@ class StudyPoller {
           setId: this.config.setId,
           depth: this.config.depth,
           strategy: this.lastStudyMode ?? undefined,
+          origin: "live",
         }),
         // Library lookups return in ~1-2s; the far-snap AI escape can take
         // a cloud solve (~5-30s). Generous, but nothing blocks behind it.
