@@ -47,6 +47,13 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "aof-model"))
 from scout import cdp  # noqa: E402  (reuses the Windows-validated CDP reader)
 import faketable  # noqa: E402  (local fake-Ignition renderer for the state tester)
+import sessions as S  # noqa: E402  (declared sessions: presets, preflight, record)
+
+# The declared session (sessions.py). Nothing opens until one is started from
+# /setup; its id is stamped on every archived hand, carried on /state for the
+# answer poller, and used as the debug recording's directory name.
+_session = {"id": None, "rec": None, "started": 0.0}
+_sessions = S.SessionStore()
 
 # The game-state spec the /faketable routes render. Set via POST /faketable/spec
 # by the tester; None falls back to faketable.EXAMPLE_SPEC. _fake_mode marks the
@@ -290,8 +297,12 @@ def state(light: bool = False) -> dict:
         pv = int((ROOT / "panel.html").stat().st_mtime)
     except OSError:
         pv = 0
+    try:
+        sv = int((ROOT / "setup.html").stat().st_mtime)
+    except OSError:
+        sv = 0
     out = {"cdp": cdp.available(CDP_PORT), "ignition": None, "targets": [],
-           "panelVersion": pv,
+           "panelVersion": pv, "setupVersion": sv,
            # Which rig this is. The panel shows its Table Setup card only on a
            # test rig, and points the answer poller at its OWN wrapper — one
            # poller exists, so whichever panel you switch answers on becomes
@@ -304,6 +315,8 @@ def state(light: bool = False) -> dict:
            # live-feed contract (CONTRACT.md §1) — what resolveHand consumes
            "connected": False, "hand": None, "studyAnswers": _study["on"],
            "studyMode": _study["mode"],
+           "sessionId": _session["id"],
+           "session": _session_brief(),
            "panelAnswer": _current_answer(),
            "snapshot": {"status": _live_status["hero"],
                         "seats": [{"hero": True,
@@ -1361,7 +1374,12 @@ _dbg = {"on": False, "dir": None, "seq": 0}
 def set_debug(on: bool) -> dict:
     if on and not _dbg["on"]:
         _prune_debug()
-        d = ROOT / "debug" / time.strftime("session_%Y%m%d_%H%M%S")
+        # Under the session's own id when a session is on and nothing is
+        # there yet — one key for the archive, the answers, the solves and
+        # the frames. A second recording in the same session gets a timestamp.
+        sid = _session["id"]
+        name = sid if sid and not (ROOT / "debug" / sid).exists() else time.strftime("session_%Y%m%d_%H%M%S")
+        d = ROOT / "debug" / name
         d.mkdir(parents=True, exist_ok=True)
         _dbg.update({"on": True, "dir": str(d), "seq": 0})
         print(f"[debug] recording to {d}")
@@ -2162,15 +2180,40 @@ def _stakes_str() -> str | None:
     return f"${bb / 200:.2f}/${bb / 100:.2f}"
 
 
-_last_archived = {"no": 0}
+_last_archived = {"no": 0, "fp": None}
+_archive_lock = threading.Lock()
+
+
+def _archive_fp(h: dict) -> tuple:
+    """What makes two archive attempts the SAME hand, independent of the
+    wrapper's own hand counter: the site's hand id when we have one, else the
+    hand's content. The counter is not enough — a table close followed by a
+    reopen (Zone table break, re-seat) bumps _hand_no on the DOM tick without
+    a PLAY_STAGE_INFO to reset the WS state, so the previous hand's actions
+    were re-archived under a fresh number and no client id, once per
+    open/close, until the next real deal (hands.db rows 125/126, 186/187,
+    224/225 were exactly that)."""
+    if h.get("clientHandId"):
+        return ("id", h["clientHandId"])
+    return ("body", h.get("stakes"), tuple(h["heroCards"]),
+            tuple((a["seatId"], a["type"], a.get("amount")) for a in h["actions"]))
 
 
 def _archive_hand() -> None:
     """Persist the finishing hand. Called at the NEXT hand's PLAY_STAGE_INFO
-    (the reliable end-of-hand signal) and at table close (no next hand will
-    ever come) — the dedupe guard makes the two triggers safe together."""
+    (the reliable end-of-hand signal), at table close (no next hand will
+    ever come), after the ended-hand grace, and at stand-down — the dedupe
+    guards make the triggers safe together. The lock is what makes them safe
+    concurrently: two triggers on different threads (WS tap + feed loop) both
+    passed the id guard before either had set it, and wrote the same hand
+    twice in the same second (rows 190/191, 273/274)."""
     if _fake_mode:
         return  # authored test states are not hand history
+    with _archive_lock:
+        _archive_hand_locked()
+
+
+def _archive_hand_locked() -> None:
     try:
         h = _hand_state()
         if not h or not h["actions"]:
@@ -2183,9 +2226,18 @@ def _archive_hand() -> None:
         h["playedAt"] = int(time.time() * 1000)
         h["stakes"] = _stakes_str()
         h["clientHandId"] = _hand_ids.get(_hand_no)
+        h["sessionId"] = _session["id"]
         h["feedLines"] = lines
         if result:
             h["result"] = {"text": result}
+        fp = _archive_fp(h)
+        if fp == _last_archived["fp"]:
+            # Same hand as the last archive under a new counter value — the
+            # previous hand's state replayed by a reopen, not a new hand.
+            _last_archived["no"] = h["handId"]
+            print(f"[history] skipped hand #{h['handId']}: same hand as the last "
+                  f"archive (table reopen replayed the previous hand's state)")
+            return
         c = _db()
         try:
             cur = c.execute(
@@ -2201,6 +2253,7 @@ def _archive_hand() -> None:
         finally:
             c.close()
         _last_archived["no"] = h["handId"]
+        _last_archived["fp"] = fp
         print(f"[history] archived hand #{h['handId']} ({len(h['actions'])} actions)")
     except Exception as e:
         print(f"[history] archive failed: {e}")
@@ -2464,9 +2517,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         try:
-            if path in ("/", "/panel"):
+            if path in ("/", "/panel") and not _session["id"] and not _fake_mode:
+                # Nothing is declared yet — the setup page is the front door.
+                self.send_response(302)
+                self.send_header("Location", "/setup")
+                self.end_headers()
+            elif path in ("/", "/panel"):
                 self._send(200, "text/html; charset=utf-8",
                            (ROOT / "panel.html").read_bytes())
+            elif path == "/setup":
+                self._send(200, "text/html; charset=utf-8",
+                           (ROOT / "setup.html").read_bytes())
+            elif path == "/session/checks":
+                self._send(200, "application/json", json.dumps(_session_checks()).encode())
+            elif path == "/session":
+                self._send(200, "application/json", json.dumps({
+                    "ok": True, "current": _session["rec"], "brief": _session_brief(),
+                    "presets": S.presets(refresh=True), "presetsFromApi": S.presets_from_api(), "fakeTable": _fake_mode,
+                    "lastPreset": (_sessions.list(1) or [{}])[0].get("preset"),
+                }).encode())
+            elif path == "/sessions":
+                self._send(200, "application/json", json.dumps({
+                    "ok": True, "sessions": _sessions.list(50), "open": _sessions.open_session() if not _session["id"] else None,
+                    # every never-ended session (the live one excluded): the setup card ends ALL of them at once
+                    "openAll": [r for r in _sessions.open_sessions() if r["id"] != _session["id"]],
+                }).encode())
             elif path == "/state":
                 light = "light=1" in (self.path.split("?", 1) + [""])[1]
                 self._send(200, "application/json",
@@ -2654,9 +2729,45 @@ class Handler(BaseHTTPRequestHandler):
                 res = apply_layout()
                 print(f"[layout] -> {res}")
                 self._send(200, "application/json", json.dumps(res).encode())
+            elif path == "/session/gtow-connect":
+                # proxy to the study API: launch the client with its debug port
+                # and wait for a token (≤ ~60 s), then the page re-runs preflight
+                try:
+                    req = urllib.request.Request(f"{S.API}/api/dashboard/gtow-connect", method="POST")
+                    with urllib.request.urlopen(req, timeout=90) as r:
+                        self._send(200, "application/json", r.read())
+                except Exception as e:
+                    self._send(200, "application/json", json.dumps({"ok": False, "connected": False,
+                               "hint": f"the study API on {S.API} did not answer: {e}"}).encode())
+            elif path == "/session/preflight":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                preset = body.get("preset") if body.get("preset") in S.PRESETS else next(iter(S.presets()))
+                cfg = S.merged_config(preset, body.get("config"))
+                self._send(200, "application/json",
+                           json.dumps(S.run_preflight(preset, cfg, _fake_mode, S.fetch_registry())).encode())
+            elif path == "/session/start":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                code, res = _session_start(body)
+                self._send(code, "application/json", json.dumps(res).encode())
+            elif path == "/session/end":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                self._send(200, "application/json", json.dumps(_session_end(body)).encode())
+            elif path == "/session/resume":
+                rec = _sessions.open_session()
+                if rec:
+                    _session.update({"id": rec["id"], "rec": rec, "started": rec["started_at"] / 1000})
+                    _apply_session_config(rec["config"])
+                    _sessions.event(rec["id"], "resumed")
+                    _end_other_open(rec["id"], "ended: another session was resumed")
+                    _open_table_window()
+                self._send(200, "application/json", json.dumps({"ok": bool(rec), "session": rec}).encode())
             elif path == "/study-answers":       # the toggle (CONTRACT.md §3)
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
+                before = (_study["on"], _study["mode"])
                 _study["on"] = bool(body.get("on"))
                 if body.get("mode") in ("exploit", "chart"):
                     _study["mode"] = body["mode"]
@@ -2664,6 +2775,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not _study["on"]:
                     _study["text"] = None        # switch off = card goes blank now
                 print(f"[study] answers {'ON' if _study['on'] else 'off'} mode={_study['mode']}")
+                # A mid-session flip is a fact about the session — recorded,
+                # never silently absorbed into "the mode".
+                if _session["id"] and before != (_study["on"], _study["mode"]):
+                    _sessions.event(_session["id"], "study-toggle",
+                                    {"on": _study["on"], "mode": _study["mode"], "hand": _hand_no})
                 self._send(200, "application/json",
                            json.dumps({"ok": True, "on": _study["on"],
                                        "mode": _study["mode"]}).encode())
@@ -3052,6 +3168,13 @@ def _faketable_stop() -> dict:
     global _fake_mode
     _fake_mode = False
     _ws_state["domGraceUntil"] = 0
+    # The authored state is still what _hand_state() returns until the next
+    # real deal resets it. _archive_hand skips it while _fake_mode is on, but
+    # once off, the ended-hand grace / a table close / stand-down archived
+    # it as a played hand (hands.db rows with the synthetic 9000xxx ids).
+    # Mark it flushed so no trigger can.
+    with _archive_lock:
+        _last_archived["no"] = _hand_no
     print("[faketable] test mode off")
     return {"ok": True}
 
@@ -3113,14 +3236,63 @@ def main() -> None:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         threading.Thread(target=_feed_loop, daemon=True).start()
         threading.Thread(target=_ws_tap, daemon=True).start()
+        threading.Thread(target=_chain_keeper, daemon=True).start()
         print(f"[panel] serving on http://127.0.0.1:{PANEL_PORT}/panel")
 
     # Prefer the secondary monitor when one is attached.
     area = target_area()
     w, h, ax, ay = area["w"], area["h"], area["x"], area["y"]
     table_w = int(w * TABLE_FRAC)
-    # Idempotent: a rerun while windows are already open just restarts the
-    # panel server, it never spawns duplicate browser windows.
+    # A session left open by a crashed/restarted wrapper is offered on the
+    # setup page (resume or end); nothing is assumed.
+    # The TABLE opens when a session is STARTED (see _open_table_window), not
+    # here — with two exceptions that need no declaration: the test rig, and a
+    # table window that is already up from before (never relaunch it).
+    if _fake_mode or cdp.available(CDP_PORT):
+        _open_table_window()
+
+    if hwnd := ctypes.windll.user32.FindWindowW(None, PANEL_TITLE):
+        # A double-click must always DO something visible: surface the panel.
+        ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+        print("[panel] window already open — brought to front")
+    else:
+        side_url = (f"http://127.0.0.1:{PANEL_PORT}/tool" if _fake_mode
+                    else f"http://127.0.0.1:{PANEL_PORT}/setup")
+        # No table yet (setup first): the panel takes the WHOLE target monitor
+        # so the setup page has room; _open_table_window refits it to the side
+        # strip the moment a session starts and the table opens.
+        table_up = _fake_mode or cdp.available(CDP_PORT)
+        if table_up:
+            chrome_window(side_url, PROFILE_PANEL, ax + table_w, ay, w - table_w, h)
+            print(f"[panel] window beside table ({w - table_w}x{h}) at {side_url}")
+        else:
+            chrome_window(side_url, PROFILE_PANEL, ax, ay, w, h)
+            print(f"[panel] setup window on the {'secondary' if not area['primary'] else 'primary'} monitor ({w}x{h}) at {side_url}")
+
+    # A fresh test rig RENDERS a table (the page falls back to the example
+    # spec) but had no hand behind it until something called /faketable/load,
+    # so the panel showed cards, seats and a pending decision while /hand was
+    # empty and Study Answers waited forever for a turn that had not been
+    # dealt. Seed the same spot the page is already showing.
+    if srv and _fake_mode:
+        try:
+            _faketable_load(_faketable_spec or faketable.EXAMPLE_SPEC)
+        except Exception as e:
+            print(f"[faketable] could not seed the opening spot: {e}")
+
+    if not srv:
+        return  # the running instance keeps serving; windows are ensured
+    _main_tail()
+
+
+def _open_table_window() -> None:
+    """Open (or retarget) the table window — the Ignition lobby, or the fake
+    table on the test rig. Idempotent: a window that is already up is reused,
+    its URL corrected in place if it shows the other rig's table."""
+    area = target_area()
+    w, h, ax, ay = area["w"], area["h"], area["x"], area["y"]
+    table_w = int(w * TABLE_FRAC)
     # In test mode the TABLE IS THE FAKE TABLE. Everything downstream reads it
     # exactly as it reads Ignition, so the layout, the panel and the answer
     # pipeline are the real ones being exercised — not a mock of them.
@@ -3152,36 +3324,228 @@ def main() -> None:
         chrome_window(table_url, PROFILE_TABLE, ax, ay, table_w, h, CDP_PORT)
         print(f"[table] {'fake' if _fake_mode else 'Ignition'} app window "
               f"{table_w}x{h} (CDP :{CDP_PORT})")
-        for _ in range(40):  # wait for CDP before opening the panel beside it
+        # the panel had the whole monitor during setup — tuck it beside the table
+        threading.Timer(2.5, lambda: print(f"[layout] {apply_layout()}")).start()
+        for _ in range(40):  # wait for CDP before the reader starts polling
             if cdp.available(CDP_PORT):
                 break
             time.sleep(0.5)
         print(f"[table] CDP {'up' if cdp.available(CDP_PORT) else 'NOT up (panel will keep retrying)'}")
 
-    if hwnd := ctypes.windll.user32.FindWindowW(None, PANEL_TITLE):
-        # A double-click must always DO something visible: surface the panel.
-        ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
-        print("[panel] window already open — brought to front")
-    else:
-        side_url = (f"http://127.0.0.1:{PANEL_PORT}/tool" if _fake_mode
-                    else f"http://127.0.0.1:{PANEL_PORT}/panel")
-        chrome_window(side_url, PROFILE_PANEL, ax + table_w, ay, w - table_w, h)
-        print(f"[panel] window beside table ({w - table_w}x{h})")
 
-    # A fresh test rig RENDERS a table (the page falls back to the example
-    # spec) but had no hand behind it until something called /faketable/load,
-    # so the panel showed cards, seats and a pending decision while /hand was
-    # empty and Study Answers waited forever for a turn that had not been
-    # dealt. Seed the same spot the page is already showing.
-    if srv and _fake_mode:
+# ---- Declared sessions (sessions.py) ---------------------------------------
+
+# ---- the answer chain, kept connected for the session -------------------------
+# A declared session with answers means "I want answers": the poller must be
+# pointed at THIS wrapper and GTO Wizard must have a live token. Neither is a
+# button any more — session start ensures both, and a keeper re-checks every
+# 20 s and reconnects the client on its own (once per 2 min at most). The
+# panel shows the same checklist the setup page's preflight uses.
+_chain = {"attempting": False, "lastAt": 0.0, "lastResult": None, "lastCheck": None}
+
+
+def _api_post(path: str, body: dict | None = None, timeout: float = 5.0) -> dict | None:
+    try:
+        data = json.dumps(body or {}).encode()
+        req = urllib.request.Request(f"{S.API}{path}", data=data, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _ensure_answer_chain(reason: str) -> None:
+    """Point the poller here and get GTO Wizard connected — in the background,
+    never twice at once, at most one launch attempt per two minutes."""
+    r = _api_post("/api/study-poller/start", {"assistiveUrl": f"http://127.0.0.1:{PANEL_PORT}"})
+    if not (r or {}).get("ok", True):
+        print(f"[chain] poller start: {r}")
+    reg = S.fetch_registry()
+    g = ((reg or {}).get("armed") or {}).get("gtow") or {}
+    if g.get("tokenLive"):
+        return
+    if _chain["attempting"] or time.time() - _chain["lastAt"] < 120:
+        return
+
+    def go():
+        _chain.update({"attempting": True, "lastAt": time.time()})
+        print(f"[chain] GTO Wizard not connected ({reason}) — connecting")
+        res = _api_post("/api/dashboard/gtow-connect", {}, timeout=95)
+        _chain.update({"attempting": False, "lastResult": {"at": time.time(), "connected": bool((res or {}).get("connected")),
+                                                            "text": (res or {}).get("text") or (res or {}).get("hint") or (res or {}).get("error")}})
+        print(f"[chain] connect -> {_chain['lastResult']}")
+    threading.Thread(target=go, daemon=True).start()
+
+
+def _chain_keeper() -> None:
+    while True:
+        time.sleep(20)
         try:
-            _faketable_load(_faketable_spec or faketable.EXAMPLE_SPEC)
+            rec = _session["rec"]
+            if rec and (rec.get("config") or {}).get("answers"):
+                _ensure_answer_chain("keeper")
         except Exception as e:
-            print(f"[faketable] could not seed the opening spot: {e}")
+            print(f"[chain] keeper: {e}")
 
-    if not srv:
-        return  # the running instance keeps serving; windows are ensured
+
+def _session_checks() -> dict:
+    """The live checklist for the panel: the session's own preflight, re-run
+    now, plus the keeper's state. Without a session: the same checks, none
+    required, so the panel still shows what is up."""
+    rec = _session["rec"]
+    registry = S.fetch_registry()
+    presets = S.presets()
+    if rec and rec.get("preset") in presets:
+        preset, cfg = rec["preset"], rec.get("config") or {}
+    else:
+        preset = next(iter(presets))
+        cfg = {"answers": False, "mode": "chart", "sources": {}, "recording": False, "budget": {}}
+    pf = S.run_preflight(preset, cfg, _fake_mode, registry)
+    # The table link is one more row of the same list (Brady: one place that
+    # answers "is everything connected"). Required while a session with
+    # answers is running — no table page means nothing to answer.
+    cdp_up = cdp.available(CDP_PORT)
+    tgt = ignition_target() if cdp_up else None
+    table = {"id": "table", "label": "Table window linked (CDP)", "required": bool(rec and cfg.get("answers")), "ok": bool(tgt),
+             "detail": (f"{(tgt.get('title') or 'table page')} · CDP :{CDP_PORT}" if tgt
+                        else f"CDP :{CDP_PORT} up, no table page yet" if cdp_up
+                        else "no table window — it opens when a session starts")}
+    checks = [table] + pf["checks"]
+    blockers = [c["label"] for c in checks if c["required"] and not c["ok"]]
+    _chain["lastCheck"] = time.time()
+    return {"ok": not blockers, "checks": checks, "blockers": blockers, "checkedAt": int(time.time() * 1000),
+            "preset": rec.get("preset") if rec else None,
+            "session": _session_brief(), "chain": {"attempting": _chain["attempting"], "lastResult": _chain["lastResult"]}}
+
+
+def _session_brief() -> dict | None:
+    """What /state carries every second: enough for the panel's session card
+    and the answer poller's provenance, without the JSON columns."""
+    rec = _session["rec"]
+    if not rec:
+        return None
+    cfg = rec.get("config") or {}
+    budget = cfg.get("budget") or {}
+    elapsed_min = (time.time() - _session["started"]) / 60 if _session["started"] else 0
+    hands = _session_hands(rec["id"])
+    return {"id": rec["id"], "preset": rec.get("preset"), "label": rec.get("label"),
+            "strategy": cfg.get("strategy"), "strategyName": cfg.get("strategyName"),
+            "answers": cfg.get("answers"), "mode": cfg.get("mode"), "recording": cfg.get("recording"),
+            "startedAt": rec.get("started_at"), "elapsedMin": round(elapsed_min, 1), "hands": hands,
+            "budget": budget,
+            "budgetHit": bool((budget.get("hands") and hands >= budget["hands"]) or
+                              (budget.get("minutes") and elapsed_min >= budget["minutes"]))}
+
+
+_hands_cache = {"id": None, "at": 0.0, "n": 0}
+
+
+def _session_hands(sid: str) -> int:
+    """Archived hands stamped with this session (cached 5 s — /state is polled at 1 Hz)."""
+    now = time.time()
+    if _hands_cache["id"] == sid and now - _hands_cache["at"] < 5:
+        return _hands_cache["n"]
+    n = 0
+    try:
+        c = _db()
+        try:
+            n = c.execute("SELECT COUNT(*) FROM hands WHERE json_extract(data, '$.sessionId') = ?", (sid,)).fetchone()[0]
+        finally:
+            c.close()
+    except Exception:
+        pass
+    _hands_cache.update({"id": sid, "at": now, "n": n})
+    return n
+
+
+def _apply_session_config(cfg: dict) -> None:
+    _study["on"] = bool(cfg.get("answers"))
+    _study["mode"] = cfg.get("mode") if cfg.get("mode") in ("exploit", "chart") else _study["mode"]
+    _study["text"] = None
+    set_debug(bool(cfg.get("recording")))
+
+
+def _session_start(body: dict) -> tuple[int, dict]:
+    if _session["id"]:
+        return 409, {"ok": False, "error": f"session {_session['id']} is already running — end it first"}
+    preset = body.get("preset") if body.get("preset") in S.PRESETS else None
+    if not preset:
+        return 400, {"ok": False, "error": "unknown preset"}
+    cfg = S.merged_config(preset, body.get("config"))
+    registry = S.fetch_registry()
+    pf = S.run_preflight(preset, cfg, _fake_mode, registry)
+    if not pf["ok"]:
+        return 409, {"ok": False, "error": "blocked by preflight: " + " · ".join(pf["blockers"]), "preflight": pf}
+    sid = S.new_session_id()
+    rec = _sessions.start(sid, preset, body.get("label"), body.get("note"), cfg, pf, S.versions_snapshot(registry))
+    _session.update({"id": sid, "rec": rec, "started": time.time()})
+    _apply_session_config(cfg)
+    if cfg.get("answers"):
+        threading.Thread(target=_ensure_answer_chain, args=("session start",), daemon=True).start()
+    _sessions.event(sid, "started", {"hand": _hand_no})
+    print(f"[session] {sid} started · {preset} · answers={'on' if cfg['answers'] else 'off'} mode={cfg['mode']} recording={'on' if cfg['recording'] else 'off'}")
+    try:
+        _open_table_window()
+    except Exception as e:
+        print(f"[session] table window: {e}")
+    return 200, {"ok": True, "session": rec}
+
+
+def _end_other_open(keep: str | None, note: str) -> list[str]:
+    """End every never-ended session except `keep` (the one in use). Returns the ids ended."""
+    ended = []
+    for r in _sessions.open_sessions():
+        if r["id"] == keep:
+            continue
+        _sessions.end(r["id"], {"hands": _session_hands(r["id"]),
+                                "durationMin": round(((time.time() * 1000) - r["started_at"]) / 60000, 1),
+                                "events": len(r.get("events") or []), "recording": None, "orphaned": True}, note)
+        _sessions.event(r["id"], "ended", {"orphaned": True})
+        ended.append(r["id"])
+    if ended:
+        print(f"[session] ended {len(ended)} leftover session(s): {', '.join(ended)}")
+    return ended
+
+
+def _session_end(body: dict) -> dict:
+    if body.get("all"):
+        # "End all and start fresh": clear every leftover; the live session (if any) stays on
+        ended = _end_other_open(_session["id"], body.get("note") or "ended from setup (all leftovers)")
+        return {"ok": True, "ended": ended, "kept": _session["id"]}
+    sid = body.get("id") or _session["id"]
+    if not sid:
+        return {"ok": False, "error": "no session to end"}
+    rec = _sessions.get(sid)
+    if not rec:
+        return {"ok": False, "error": f"no session {sid}"}
+    live = sid == _session["id"]
+    if live:
+        try:
+            _archive_hand()  # the hand in flight belongs to this session
+        except Exception:
+            pass
+    summary = {"hands": _session_hands(sid),
+               "durationMin": round(((time.time() * 1000) - rec["started_at"]) / 60000, 1),
+               "events": len(rec.get("events") or []),
+               "recording": _dbg["dir"] if live and _dbg["on"] else None}
+    if live:
+        _study["on"] = False
+        _study["text"] = None
+        set_debug(False)
+        _sessions.event(sid, "ended", {"hand": _hand_no})
+        _session.update({"id": None, "rec": None, "started": 0.0})
+        print(f"[session] {sid} ended · {summary}")
+    out = _sessions.end(sid, summary, body.get("note"))
+    return {"ok": True, "session": out}
+
+
+def _main_tail() -> None:
+    """Called after the server is up: a session left open by a restart is NOT
+    auto-resumed — the setup page offers resume/end so the choice is explicit."""
+    opened = _sessions.open_sessions()
+    if opened:
+        print(f"[session] {len(opened)} left open ({', '.join(r['id'] for r in opened)}) — resume the newest or end them all on /setup")
     print("Ctrl+C stops the panel server (browser windows stay open).")
     try:
         while True:
