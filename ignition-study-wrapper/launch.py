@@ -3414,6 +3414,9 @@ def _open_table_window() -> None:
                     print(f"[table] could not retarget the window: {e}")
             break
         print("[table] already open (CDP up) — not relaunching")
+        # the panel had the whole monitor during setup — tuck it beside the table
+        # here too, not only when the window is freshly launched
+        threading.Timer(1.0, lambda: print(f"[layout] {apply_layout()}")).start()
     else:
         chrome_window(table_url, PROFILE_TABLE, ax, ay, table_w, h, CDP_PORT)
         print(f"[table] {'fake' if _fake_mode else 'Ignition'} app window "
