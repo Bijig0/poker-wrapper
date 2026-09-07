@@ -879,7 +879,12 @@
         `<br><span class="mono" style="font-size:11px">${esc(b.id)}</span>`;
       if ($("sess-reseat")) $("sess-reseat").onclick = async () => {
         $("sess-reseat").disabled = true; $("sess-reseat-msg").textContent = "asking the router…";
-        let res; try { res = await (await fetch("/format/reseat", { method: "POST" })).json(); } catch (e) { res = { ok: false, error: String(e) }; }
+        let res;
+        try {
+          const rr = await fetch("/format/reseat", { method: "POST" });
+          const txt = await rr.text();
+          try { res = JSON.parse(txt); } catch (e) { res = { ok: false, error: rr.status === 404 || /not found/i.test(txt) ? "the running wrapper predates this button — restart the wrapper (launch.py) and try again" : `${rr.status}: ${txt.slice(0, 80)}` }; }
+        } catch (e) { res = { ok: false, error: String(e) }; }
         $("sess-reseat-msg").textContent = res.ok ? "on its way — this card follows the router" : `refused: ${res.error || "unknown"}`;
       };
       if ($("sess-code")) {
