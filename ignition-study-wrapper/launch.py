@@ -2818,6 +2818,22 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     res = F.goto(fid, buyin, CDP_PORT, wait_for_bb=body.get("waitForBb", True) is not False)
                 self._send(200 if res.get("ok") else 409, "application/json", json.dumps(res).encode())
+            elif path == "/format/reseat":
+                # "Re-seat in the declared format": the session's router leaves a wrong
+                # table (if seated) and routes to the declared one. Asynchronous — the
+                # panel's session card follows the router's state.
+                cfg = ((_session["rec"] or {}).get("config") or {}) if _session["id"] else {}
+                if not _session["id"]:
+                    res = {"ok": False, "error": "no session"}
+                elif not cfg.get("format"):
+                    res = {"ok": False, "error": "the session declared no format"}
+                elif not cdp.available(CDP_PORT):
+                    res = {"ok": False, "error": f"table window not up (CDP :{CDP_PORT})"}
+                else:
+                    _router["reseat"] = True
+                    _router_set("routing", f"re-seat requested: going to {(F.get(cfg['format']) or {}).get('name', cfg['format'])}", [])
+                    res = {"ok": True}
+                self._send(200 if res.get("ok") else 409, "application/json", json.dumps(res).encode())
             elif path == "/format/leave":
                 res = F.leave(CDP_PORT) if cdp.available(CDP_PORT) else {"ok": False, "error": "table window not up"}
                 self._send(200, "application/json", json.dumps(res).encode())
@@ -3570,6 +3586,20 @@ def _route_session(cfg: dict, sid: str) -> None:
         _resume_recording_if_pending()
 
         # ---- 2. the table --------------------------------------------------
+        if _router.get("reseat"):
+            _router["reseat"] = False
+            if st["state"] == "seated":
+                _router_set("routing", "re-seat: leaving the current table", [])
+                res = F.leave(CDP_PORT, log=lambda m: (_router["steps"].append(m.replace("[leave] ", "")), print(m)))
+                _sessions.event(sid, "reseat", {"left": res.get("ok"), "was": st.get("detected")})
+                if not res.get("ok"):
+                    _router_set("failed", f"could not leave the table: {res.get('error') or 'unknown'}", res.get("steps"))
+                    time.sleep(5)
+                    continue
+                time.sleep(2)
+                continue          # next pass: signed in, no table → routes to the declared format
+            _router_set("routing", "re-seat: no table open — routing", [])
+            # fall through: signed in, no table, state 'routing' → the routing block below runs
         if st["state"] == "seated":
             v = F.compare(fid, st["detected"]) if fid else {"state": "undeclared", "text": st["detected"]["name"]}
             if _router["state"] not in ("done", "off-format"):

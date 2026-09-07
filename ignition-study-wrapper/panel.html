@@ -848,9 +848,27 @@
       const authWait = ["waiting-code", "waiting-captcha", "waiting-signin", "login-error"].includes(r.state);
       $("sess-badge").textContent = offFormat ? "off format" : authWait ? (r.state === "waiting-code" ? "Authy code needed" : "signed out") : b.budgetHit ? "budget reached" : "live";
       $("sess-badge").className = "badge " + ((offFormat || authWait || b.budgetHit) ? "warn" : "ok");
-      const fmtLine = b.format
-        ? `format <b>${esc(b.formatName || b.format)}</b> · ${b.observed ? `table: <span class="badge ${offFormat ? "warn" : "ok"}" style="margin:0">${esc(b.observed.name)}${b.observed.buyInBb != null ? ` · ${b.observed.buyInBb} bb` : ""}</span>` : "no table open"}${offFormat ? ` — <span style="color:#ffce56">${esc(v.text)}</span>` : ""}`
-        : `no format declared${b.observed ? ` · table: ${esc(b.observed.name)}` : ""}`;
+      // ---- the format card: declared vs what the table window actually shows ----
+      const declared = b.formatName || b.format;
+      const atTable = !!b.observed, onFormat = atTable && v && v.state === "ok";
+      const settling = atTable && v && v.state === "unknown";
+      const busy = ["routing", "logging-in", "waiting-window"].includes(r.state) || authWait;
+      let fmtLine;
+      if (!b.format) fmtLine = `<div style="margin-top:6px;padding:8px 10px;border-radius:8px;background:#0c1013;border:1px solid #26303a">no format declared${atTable ? ` · at ${esc(b.observed.name)}` : ""}</div>`;
+      else {
+        const state = onFormat ? "ok" : settling || busy ? "wait" : "bad";
+        const col = state === "ok" ? "#5ee39a" : state === "wait" ? "#ffce56" : "#ff8a80";
+        const bg = state === "ok" ? "#0f2a1c" : state === "wait" ? "#2a2410" : "#2a1416";
+        const head = state === "ok" ? `✓ At the declared table` : settling ? `… seated, reading the table` : busy ? `… ${esc(r.text || "getting to the table")}` : atTable ? `✕ Wrong table` : `✕ Not at a table`;
+        const detail = onFormat ? `${esc(b.observed.name)}${b.observed.buyInBb != null ? ` · ${b.observed.buyInBb} bb` : ""}`
+          : atTable ? `you are at <b>${esc(b.observed.name)}</b>${b.observed.buyInBb != null ? ` (${b.observed.buyInBb} bb)` : ""} — the session declared <b>${esc(declared)}</b>`
+          : `the table window shows no table — the session declared <b>${esc(declared)}</b>`;
+        const reseat = state === "bad" ? `<div class="row" style="margin-top:6px"><button class="mini" id="sess-reseat" style="border-color:${col}">↻ Re-seat in ${esc(declared)}</button><span class="sub" id="sess-reseat-msg"></span></div>` : "";
+        fmtLine = `<div style="margin-top:6px;padding:8px 10px;border-radius:8px;background:${bg};border:1px solid ${col}55">
+          <div style="color:${col};font-weight:700">${head}</div>
+          <div class="sub" style="margin-top:2px">declared format: <b>${esc(declared)}</b>${b.buyinBb ? ` · ${esc(String(b.buyinBb))} bb` : ""}</div>
+          <div class="sub">${detail}</div>${reseat}</div>`;
+      }
       const routeLine = r.state && r.state !== "idle" && r.state !== "done" ? `<br><span style="color:${authWait || r.state === "failed" ? "#ffce56" : "#8fa1b3"}">${esc(r.state)}: ${esc(r.text || "")}</span>` : "";
       const codeBox = r.state === "waiting-code" ? `<div class="row" style="margin-top:6px"><input type="text" id="sess-code" inputmode="numeric" maxlength="8" placeholder="Authy code" style="width:120px;background:#0c1013;border:1px solid #3a4a5a;color:inherit;border-radius:8px;padding:6px 10px;font:inherit"> <button class="mini" id="sess-code-send">Submit code</button> <span class="sub" id="sess-code-msg"></span></div>` : "";
       const codeVal = $("sess-code") ? $("sess-code").value : "";
@@ -859,6 +877,11 @@
         `${b.recording ? " · ● recording" : ""} · ${b.hands} hand${b.hands === 1 ? "" : "s"} · ${b.elapsedMin} min` +
         `<br>${fmtLine}${routeLine}${codeBox}` +
         `<br><span class="mono" style="font-size:11px">${esc(b.id)}</span>`;
+      if ($("sess-reseat")) $("sess-reseat").onclick = async () => {
+        $("sess-reseat").disabled = true; $("sess-reseat-msg").textContent = "asking the router…";
+        let res; try { res = await (await fetch("/format/reseat", { method: "POST" })).json(); } catch (e) { res = { ok: false, error: String(e) }; }
+        $("sess-reseat-msg").textContent = res.ok ? "on its way — this card follows the router" : `refused: ${res.error || "unknown"}`;
+      };
       if ($("sess-code")) {
         $("sess-code").value = codeVal;
         $("sess-code-send").onclick = async () => {
