@@ -102,7 +102,17 @@ export type StratStatus = "ok" | "misspecified" | "unavailable" | "drift";
 export interface StrategyView extends StrategyDef {
   preflopLayer: PreflopLayer; postflopLayer: PostflopLayer; opponentLayer: OpponentLayer;
   status: StratStatus; reasons: string[]; preconditions: { check: string; pass: boolean; detail: string }[];
+  /** known limits that do NOT block play: accepted trade-offs, with the date they were accepted */
+  advisories: string[];
 }
+
+// Every preflop piece (grid and exploit alike) is solved at the NL200 rake
+// structure (5%, cap 1bb). NL25 rakes 5% cap 4bb. Re-running the exploit
+// argmax with the NL25 charges flips ~5-11% of hands per node toward limps and
+// folds and leaves ~+0.3 bb/100 of modelled preflop edge; the shipped chart
+// earns less than that at NL25. Accepted 2026-09-07 while NL25 is the starter
+// stake: the postflop MES carries the edge. Re-derive before moving up.
+const PREFLOP_RAKE_ADVISORY = "Preflop piece is solved at the NL200 rake structure (5% / cap 1bb); at NL25 (cap 4bb) its modelled preflop edge is ~0 (a re-tuned chart would flip 5–11% of hands toward limps/folds). Accepted 2026-09-07 for the NL25 starter stake — re-derive at the real rake before moving up.";
 
 /** Validate every strategy against what's installed and the arrival-range rule. */
 export function evaluate(): StrategyView[] {
@@ -189,7 +199,8 @@ export function evaluate(): StrategyView[] {
     else if (pc.some((x) => !x.pass && x.check !== "opponent piece unchanged since the MES lock" && !x.check.startsWith("lock pot matches"))) status = "unavailable";
     else if (post.needsMes && (poolDrift || pc.some((x) => !x.pass && x.check.startsWith("lock pot matches")))) status = "drift";
 
-    return { ...s, preflopLayer: pre, postflopLayer: post, opponentLayer: opp, status, reasons, preconditions: pc };
+    const advisories = [PREFLOP_RAKE_ADVISORY];
+    return { ...s, preflopLayer: pre, postflopLayer: post, opponentLayer: opp, status, reasons, preconditions: pc, advisories };
   });
 }
 
