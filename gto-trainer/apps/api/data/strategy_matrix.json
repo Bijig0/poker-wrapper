@@ -1,0 +1,665 @@
+{
+ "generatedAt": "2026-09-07T19:13:57",
+ "gitSha": "ab803cb9",
+ "inputs": {
+  "ladder": true,
+  "combined": true,
+  "reach": true,
+  "haircut": true,
+  "corpusNote": "4872 hero hands (MES reach)",
+  "abRuns": {
+   "ab_counter": 6.89,
+   "ab_counter_control": 6.89,
+   "ab_eqclass": 4.98,
+   "ab_lower": 6.94,
+   "ab_new": 6.89,
+   "ab_old": 6.89,
+   "ab_prefix": 2.67,
+   "ab_q84_control": 0.0,
+   "ab_tilt": 3.17,
+   "ab_tilt_control": 0.0,
+   "ab_tilt_counter": 3.17,
+   "ab_tilt_drift": 6.34,
+   "ab_trust25": 8.52,
+   "ab_trust50": 7.71,
+   "ab_trust75": 7.17
+  }
+ },
+ "groups": [
+  {
+   "title": "Equilibrium everywhere \u2014 the floor",
+   "rows": [
+    {
+     "id": "eq_eq",
+     "preflop": "chart",
+     "postflop": "gto",
+     "family": "all",
+     "cells": {
+      "norake": {
+       "v": -0.5,
+       "kind": "est",
+       "lo": -4.2,
+       "hi": -0.7,
+       "byPos": {
+        "BTN": 0.342,
+        "SB": -0.169,
+        "BB": -0.188
+       }
+      },
+      "nl200": {
+       "v": -3.4,
+       "kind": "est",
+       "lo": -7.3,
+       "hi": -3.6,
+       "byPos": {
+        "BTN": 0.308,
+        "SB": -0.201,
+        "BB": -0.209
+       }
+      },
+      "nl25": {
+       "v": -5.7,
+       "kind": "est",
+       "lo": -9.8,
+       "hi": -5.9,
+       "byPos": {
+        "BTN": 0.285,
+        "SB": -0.227,
+        "BB": -0.23
+       }
+      }
+     },
+     "haircutWhy": "n/a \u2014 unaided play is the reference",
+     "realizedMode": "chart",
+     "evidence": [
+      {
+       "label": "backtest_study_answers.py",
+       "path": "backtest_study_answers.py",
+       "date": "2026-09-03"
+      },
+      {
+       "label": "measure_rake_winrate.py",
+       "path": "measure_rake_winrate.py",
+       "date": "Aug 27"
+      }
+     ],
+     "flags": [
+      {
+       "kind": "",
+       "text": "chart ign200_3maxasym2ci_D100_s100_eq \u00b7 pool _v3 n=7898"
+      }
+     ],
+     "note": "maximin floor; every postflop leg priced at equilibrium value"
+    }
+   ]
+  },
+  {
+   "title": "Exploit preflop \u2014 postflop still priced at the floor",
+   "rows": [
+    {
+     "id": "ex_eq",
+     "preflop": "exploit",
+     "postflop": "gto",
+     "family": "all",
+     "cells": {
+      "norake": {
+       "v": 10.8,
+       "kind": "est",
+       "lo": 7.8,
+       "hi": 10.8,
+       "byPos": {
+        "BTN": 0.382,
+        "SB": -0.047,
+        "BB": -0.013
+       }
+      },
+      "nl200": {
+       "v": 6.4,
+       "kind": "est",
+       "lo": 3.4,
+       "hi": 6.5,
+       "byPos": {
+        "BTN": 0.337,
+        "SB": -0.094,
+        "BB": -0.051
+       }
+      },
+      "nl25": {
+       "v": 3.0,
+       "kind": "est",
+       "lo": -0.1,
+       "hi": 3.1,
+       "byPos": {
+        "BTN": 0.312,
+        "SB": -0.131,
+        "BB": -0.09
+       }
+      }
+     },
+     "haircut": {
+      "v": 0.36,
+      "tag": "half-pool est",
+      "scenarios": {
+       "pessimistic": 0.716,
+       "half": 0.358,
+       "quarter": 0.179
+      }
+     },
+     "haircutWhy": "coverage_winrate.py needs corpus_answers.jsonl",
+     "realizedMode": "exploit",
+     "evidence": [
+      {
+       "label": "backtest_study_answers.py",
+       "path": "backtest_study_answers.py",
+       "date": "2026-09-03"
+      },
+      {
+       "label": "export_exploit_ranges.py",
+       "path": "export_exploit_ranges.py",
+       "date": "Sep 06"
+      },
+      {
+       "label": "coverage_winrate.py",
+       "path": "coverage_winrate.py",
+       "date": "Sep 03"
+      }
+     ],
+     "flags": [
+      {
+       "kind": "",
+       "text": "argmax vs pool, thin freqs shrunk 1.5 SE"
+      }
+     ],
+     "note": "the preflop leg alone; villain's postflop mistakes count for zero here"
+    }
+   ]
+  },
+  {
+   "title": "Exploit preflop + MES flop \u2014 legs shown separately (do not sum)",
+   "rows": [
+    {
+     "id": "ex_mes_legs",
+     "preflop": "exploit",
+     "postflop": "mes",
+     "mesGen": "served",
+     "family": "M1 + M2",
+     "cells": {
+      "norake": {
+       "kind": "legs",
+       "pre": 10.8,
+       "post": 49.5,
+       "postTag": "raw, corpus arrival"
+      },
+      "nl200": {
+       "kind": "legs",
+       "pre": 6.4,
+       "post": 49.5,
+       "postTag": "raw, corpus arrival"
+      },
+      "nl25": {
+       "kind": "legs",
+       "pre": 3.0,
+       "post": 49.5,
+       "postTag": "raw, corpus arrival"
+      }
+     },
+     "haircutWhy": "pending",
+     "realizedMode": "exploit",
+     "evidence": [
+      {
+       "label": "backtest_study_answers.py",
+       "path": "backtest_study_answers.py",
+       "date": "2026-09-03"
+      },
+      {
+       "label": "mes_reach_value.py",
+       "path": "mes_reach_value.py",
+       "date": "Sep 06"
+      }
+     ],
+     "flags": [
+      {
+       "kind": "warn",
+       "text": "arrival mix = corpus lines, not the exploit's"
+      }
+     ],
+     "note": "the postflop leg is priced on the corpus's observed arrival rate; the combined rows below re-price it on the exploit's own arrival rate"
+    },
+    {
+     "id": "fam_M1",
+     "indent": true,
+     "label": "per family, raw uplift per arrival",
+     "family": "M1 \u00b7 SB bvb c-bet",
+     "cells": {
+      "norake": {
+       "v": null,
+       "why": "\u2014"
+      },
+      "nl200": {
+       "v": 27.0,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      },
+      "nl25": {
+       "v": 27.0,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      }
+     },
+     "note": "194 arrivals \u00b7 3.98% of hands \u00b7 +6.8 bb each",
+     "evidence": [
+      {
+       "label": "mes_reach_value.py",
+       "path": "mes_reach_value.py",
+       "date": "Sep 06"
+      }
+     ]
+    },
+    {
+     "id": "fam_M2",
+     "indent": true,
+     "label": "per family, raw uplift per arrival",
+     "family": "M2 \u00b7 BTN SRP vs BB",
+     "cells": {
+      "norake": {
+       "v": null,
+       "why": "\u2014"
+      },
+      "nl200": {
+       "v": 21.5,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      },
+      "nl25": {
+       "v": 21.5,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      }
+     },
+     "note": "209 arrivals \u00b7 4.29% of hands \u00b7 +5.0 bb each",
+     "evidence": [
+      {
+       "label": "mes_reach_value.py",
+       "path": "mes_reach_value.py",
+       "date": "Sep 06"
+      }
+     ]
+    },
+    {
+     "id": "fam_M1",
+     "indent": true,
+     "label": "per family, raw uplift per arrival",
+     "family": "M1 \u00b7 SB bvb c-bet",
+     "cells": {
+      "norake": {
+       "v": null,
+       "why": "\u2014"
+      },
+      "nl200": {
+       "v": 0.2,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      },
+      "nl25": {
+       "v": 0.2,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      }
+     },
+     "note": "2 arrivals \u00b7 0.04% of hands \u00b7 +5.3 bb each",
+     "evidence": [
+      {
+       "label": "mes_reach_value.py",
+       "path": "mes_reach_value.py",
+       "date": "Sep 06"
+      }
+     ]
+    },
+    {
+     "id": "fam_M2",
+     "indent": true,
+     "label": "per family, raw uplift per arrival",
+     "family": "M2 \u00b7 BTN SRP vs BB",
+     "cells": {
+      "norake": {
+       "v": null,
+       "why": "\u2014"
+      },
+      "nl200": {
+       "v": 0.7,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      },
+      "nl25": {
+       "v": 0.7,
+       "kind": "raw",
+       "tag": "corpus arrival"
+      }
+     },
+     "note": "8 arrivals \u00b7 0.16% of hands \u00b7 +4.1 bb each",
+     "evidence": [
+      {
+       "label": "mes_reach_value.py",
+       "path": "mes_reach_value.py",
+       "date": "Sep 06"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "Combined \u2014 one corpus walk, both legs (backtest_combined.py)",
+   "rows": [
+    {
+     "id": "combined_served",
+     "preflop": "exploit",
+     "postflop": "mes",
+     "mesGen": "served locks",
+     "family": "M1 + M2",
+     "cells": {
+      "norake": {
+       "v": 60.4,
+       "kind": "combined",
+       "tag": null,
+       "pre": 10.757,
+       "post": 49.6
+      },
+      "nl200": {
+       "v": 56.0,
+       "kind": "combined",
+       "tag": "rake cap mismatch",
+       "pre": 6.384,
+       "post": 49.6
+      },
+      "nl25": {
+       "v": 52.6,
+       "kind": "combined",
+       "tag": null,
+       "pre": 3.029,
+       "post": 49.6
+      }
+     },
+     "haircut": {
+      "v": 0.36,
+      "tag": "half-pool est",
+      "scenarios": {
+       "pessimistic": 0.716,
+       "half": 0.358,
+       "quarter": 0.179
+      }
+     },
+     "realizedMode": "exploit",
+     "evidence": [
+      {
+       "label": "backtest_combined.py",
+       "path": "backtest_combined.py",
+       "date": "2026-09-03"
+      }
+     ],
+     "flags": [],
+     "note": "what the study answers use right now"
+    },
+    {
+     "id": "combined_v3",
+     "preflop": "exploit",
+     "postflop": "mes",
+     "mesGen": "v3 tilt",
+     "family": "M1 + M2",
+     "cells": {
+      "norake": {
+       "v": 60.4,
+       "kind": "combined",
+       "tag": null,
+       "pre": 10.757,
+       "post": 49.6
+      },
+      "nl200": {
+       "v": 56.0,
+       "kind": "combined",
+       "tag": "rake cap mismatch",
+       "pre": 6.384,
+       "post": 49.6
+      },
+      "nl25": {
+       "v": 52.6,
+       "kind": "combined",
+       "tag": null,
+       "pre": 3.029,
+       "post": 49.6
+      }
+     },
+     "haircut": {
+      "v": 0.36,
+      "tag": "half-pool est",
+      "scenarios": {
+       "pessimistic": 0.716,
+       "half": 0.358,
+       "quarter": 0.179
+      }
+     },
+     "realizedMode": "exploit",
+     "evidence": [
+      {
+       "label": "backtest_combined.py",
+       "path": "backtest_combined.py",
+       "date": "2026-09-03"
+      }
+     ],
+     "flags": [
+      {
+       "kind": "good",
+       "text": "control +0.0016"
+      },
+      {
+       "kind": "crit",
+       "text": "nemesis \u221243.0 (Kc7d2h)"
+      },
+      {
+       "kind": "",
+       "text": "Kc7d2h +3.17 / arrival"
+      }
+     ],
+     "note": "per-combo equilibrium \u00d7 pool/eq ratio tilt; under-applies big-bet river folds"
+    },
+    {
+     "id": "combined_refit",
+     "preflop": "exploit",
+     "postflop": "mes",
+     "mesGen": "IPF refit",
+     "family": "M1 + M2",
+     "cells": {
+      "norake": {
+       "v": 31.2,
+       "kind": "partial",
+       "tag": "partial locks",
+       "pre": 10.757,
+       "post": 20.45
+      },
+      "nl200": {
+       "v": 26.8,
+       "kind": "partial",
+       "tag": "partial locks",
+       "pre": 6.384,
+       "post": 20.45
+      },
+      "nl25": {
+       "v": 23.5,
+       "kind": "partial",
+       "tag": "partial locks",
+       "pre": 3.029,
+       "post": 20.45
+      }
+     },
+     "haircut": {
+      "v": 0.36,
+      "tag": "half-pool est",
+      "scenarios": {
+       "pessimistic": 0.716,
+       "half": 0.358,
+       "quarter": 0.179
+      }
+     },
+     "realizedMode": "exploit",
+     "evidence": [
+      {
+       "label": "backtest_combined.py",
+       "path": "backtest_combined.py",
+       "date": "2026-09-03"
+      }
+     ],
+     "flags": [
+      {
+       "kind": "good",
+       "text": "control +0.0016"
+      },
+      {
+       "kind": "",
+       "text": "Kc7d2h +6.34 / arrival"
+      }
+     ],
+     "note": "IPF refit of the tilt \u2014 only the boards re-locked so far"
+    },
+    {
+     "id": "combined_v2",
+     "preflop": "exploit",
+     "postflop": "mes",
+     "mesGen": "v2",
+     "family": "M1 + M2",
+     "cells": {
+      "norake": {
+       "v": 65.9,
+       "kind": "combined",
+       "tag": null,
+       "pre": 10.757,
+       "post": 55.16
+      },
+      "nl200": {
+       "v": 61.5,
+       "kind": "combined",
+       "tag": "rake cap mismatch",
+       "pre": 6.384,
+       "post": 55.16
+      },
+      "nl25": {
+       "v": 58.2,
+       "kind": "combined",
+       "tag": null,
+       "pre": 3.029,
+       "post": 55.16
+      }
+     },
+     "haircut": {
+      "v": 0.36,
+      "tag": "half-pool est",
+      "scenarios": {
+       "pessimistic": 0.716,
+       "half": 0.358,
+       "quarter": 0.179
+      }
+     },
+     "realizedMode": "exploit",
+     "evidence": [
+      {
+       "label": "backtest_combined.py",
+       "path": "backtest_combined.py",
+       "date": "2026-09-03"
+      }
+     ],
+     "flags": [],
+     "note": "superseded: control leaked +4.98"
+    }
+   ]
+  }
+ ],
+ "evidenceChain": [
+  {
+   "step": "measured pool",
+   "artifact": "pool_model_v3.json",
+   "date": "Aug 28",
+   "what": "revealed-card frequencies, hero excluded, width + composition corrected"
+  },
+  {
+   "step": "rake",
+   "artifact": "measure_rake_winrate.py",
+   "date": "Aug 27",
+   "what": "NL25 SRP 0.87bb \u00b7 3-bet 2.15 \u00b7 4-bet 3.32 \u2192 39.9 bb/100 table drain"
+  },
+  {
+   "step": "argmax preflop",
+   "artifact": "exploit_ranges.json",
+   "date": "Sep 06",
+   "what": "constrained best response vs the pool; the served EXPLOIT_CHART"
+  },
+  {
+   "step": "flop legs",
+   "artifact": "pool_ev_tables_v3.json",
+   "date": "Aug 28",
+   "what": "hero per-class flop EV vs the pool's range (GTOW range-vs-range solves)"
+  },
+  {
+   "step": "ladder",
+   "artifact": "winrate_ladder.json",
+   "date": "2026-09-03",
+   "what": "seat-cycle expectation of both preflop strategies under three rake models"
+  },
+  {
+   "step": "MES locks",
+   "artifact": "mes_handoff/runs_v3",
+   "date": "Sep 03",
+   "what": "villain locked to the tilted pool per class; ev_gain per arrival vs the same tree's equilibrium"
+  },
+  {
+   "step": "reach",
+   "artifact": "mes_reach_value.json",
+   "date": "Sep 07",
+   "what": "corpus arrival rate x board-weighted ev_gain \u2192 raw bb/100"
+  },
+  {
+   "step": "combined",
+   "artifact": "backtest_combined.json",
+   "date": "2026-09-03",
+   "what": "arrival re-priced under the exploit preflop; added to the ladder's exploit row"
+  },
+  {
+   "step": "haircut",
+   "artifact": "coverage_winrate.py",
+   "date": "Sep 03",
+   "what": "silence rate x cost per silent decision, structural failures only"
+  }
+ ],
+ "haircut": {
+  "preflop": {
+   "n": 4164,
+   "ok": 4087,
+   "structural": 77,
+   "silent_rate": 0.018491834774255523
+  },
+  "postflop": {
+   "n": 2201,
+   "ok": 2188,
+   "structural": 4,
+   "silent_rate": 0.001817355747387551
+  },
+  "hands": 4314,
+  "silentPerHand": 0.01909,
+  "poolLossPerDecision": 0.33162,
+  "haircuts": {
+   "pessimistic": {
+    "label": "hero unaided = pool quality (pessimistic)",
+    "mult": 1.0,
+    "bb100": 0.716
+   },
+   "half": {
+    "label": "hero unaided = half the pool's error",
+    "mult": 0.5,
+    "bb100": 0.358
+   },
+   "quarter": {
+    "label": "hero unaided = quarter (he studies)",
+    "mult": 0.25,
+    "bb100": 0.179
+   }
+  },
+  "note": "silence rate x cost per silent decision; structural failures only (retryable ones re-ask next tick)"
+ }
+}

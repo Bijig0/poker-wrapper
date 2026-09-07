@@ -3,11 +3,11 @@
  "flops": 1852,
  "families": {
   "M1_heroSB_bvb_cbet": {
-   "arrivals": 196,
-   "arrival_pct_of_hands": 4.02,
-   "arrival_pct_of_flops": 10.58,
-   "mean_ev_gain_per_arrival": 6.788,
-   "uplift_bb100": 27.309,
+   "arrivals": 194,
+   "arrival_pct_of_hands": 3.98,
+   "arrival_pct_of_flops": 10.48,
+   "mean_ev_gain_per_arrival": 6.787,
+   "uplift_bb100": 27.026,
    "boards": {
     "Qs8s4d": {
      "n": 40,
@@ -30,7 +30,7 @@
      "ev_gain": 7.21
     },
     "QhJc6d": {
-     "n": 14,
+     "n": 13,
      "ev_gain": 6.64
     },
     "AcTh4s": {
@@ -57,25 +57,25 @@
      "n": 9,
      "ev_gain": 6.1
     },
-    "Tc9d2s": {
-     "n": 7,
-     "ev_gain": 7.19
-    },
     "Ah9c3d": {
      "n": 6,
      "ev_gain": 6.38
+    },
+    "Tc9d2s": {
+     "n": 6,
+     "ev_gain": 7.19
     }
    }
   },
   "M2_heroBTN_srp_vs_BB": {
-   "arrivals": 217,
-   "arrival_pct_of_hands": 4.45,
-   "arrival_pct_of_flops": 11.72,
-   "mean_ev_gain_per_arrival": 5.019,
-   "uplift_bb100": 22.357,
+   "arrivals": 209,
+   "arrival_pct_of_hands": 4.29,
+   "arrival_pct_of_flops": 11.29,
+   "mean_ev_gain_per_arrival": 5.021,
+   "uplift_bb100": 21.539,
    "boards": {
     "Qs8s4d": {
-     "n": 51,
+     "n": 49,
      "ev_gain": 5.22
     },
     "Ks8d8c": {
@@ -94,28 +94,28 @@
      "n": 14,
      "ev_gain": 5.04
     },
-    "Kc7d2h": {
-     "n": 13,
-     "ev_gain": 4.81
-    },
     "AcTh4s": {
      "n": 11,
      "ev_gain": 4.56
     },
-    "QhJc6d": {
+    "Kc7d2h": {
      "n": 11,
+     "ev_gain": 4.81
+    },
+    "QhJc6d": {
+     "n": 10,
      "ev_gain": 5.03
     },
     "9s5h2c": {
-     "n": 11,
+     "n": 10,
      "ev_gain": 5.09
     },
     "AsKd7c": {
-     "n": 10,
+     "n": 9,
      "ev_gain": 4.74
     },
     "Jd7h5c": {
-     "n": 9,
+     "n": 8,
      "ev_gain": 4.95
     },
     "Ah9c3d": {
@@ -131,20 +131,70 @@
      "ev_gain": 4.99
     }
    }
+  },
+  "M1_heroSB_bvb_cbet_p4": {
+   "arrivals": 2,
+   "arrival_pct_of_hands": 0.04,
+   "arrival_pct_of_flops": 0.11,
+   "mean_ev_gain_per_arrival": 5.303,
+   "uplift_bb100": 0.218,
+   "boards": {
+    "Tc9d2s": {
+     "n": 1,
+     "ev_gain": 5.53
+    },
+    "QhJc6d": {
+     "n": 1,
+     "ev_gain": 5.07
+    }
+   }
+  },
+  "M2_heroBTN_srp_vs_BB_p4": {
+   "arrivals": 8,
+   "arrival_pct_of_hands": 0.16,
+   "arrival_pct_of_flops": 0.43,
+   "mean_ev_gain_per_arrival": 4.091,
+   "uplift_bb100": 0.672,
+   "boards": {
+    "Kc7d2h": {
+     "n": 2,
+     "ev_gain": 4.18
+    },
+    "Qs8s4d": {
+     "n": 2,
+     "ev_gain": 4.08
+    },
+    "AsKd7c": {
+     "n": 1,
+     "ev_gain": 4.0
+    },
+    "Jd7h5c": {
+     "n": 1,
+     "ev_gain": 4.06
+    },
+    "QhJc6d": {
+     "n": 1,
+     "ev_gain": 4.17
+    },
+    "9s5h2c": {
+     "n": 1,
+     "ev_gain": 3.97
+    }
+   }
   }
  },
  "by_stake": {
   "$0.10-$0.25": {
    "hands": 3328,
-   "uplift_bb100": 51.74
+   "uplift_bb100": 51.65
   },
   "$1-$2": {
    "hands": 768,
-   "uplift_bb100": 49.16
+   "uplift_bb100": 48.71
   },
   "$0.50-$1": {
    "hands": 455,
-   "uplift_bb100": 38.51
+   "uplift_bb100": 37.71
   },
   "$0.25-$0.50": {
    "hands": 252,
@@ -163,5 +213,5 @@
    "uplift_bb100": 0
   }
  },
- "total_uplift_bb100": 49.666
+ "total_uplift_bb100": 49.454
 }
