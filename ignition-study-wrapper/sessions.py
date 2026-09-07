@@ -52,26 +52,6 @@ FORMAT_FALLBACK = {
 }
 
 BASE_PRESETS: dict[str, dict] = {
-    "study-mes": {
-        "label": "Study answers · MES",
-        "tagline": "Play with answers on. Pool-exploit preflop and MES flops lead; GTO Wizard fills the rest.",
-        "config": {"answers": True, "mode": "exploit",
-                   "sources": {"exploitPreflop": True, "mesPostflop": True, "aiChain": True},
-                   "recording": False, "budget": {"hands": None, "minutes": None},
-                   "format": None, "buyinBb": 100, "waitForBb": True, "profile": None},
-        "formats": None, "defaultFormat": None,
-        "requires": ["api", "hrc", "exploit", "mes", "gtow"],
-    },
-    "study-gto": {
-        "label": "Study answers · GTO",
-        "tagline": "Play with answers on. Equilibrium charts and the GTO Wizard chain; the MES answer rides along for comparison.",
-        "config": {"answers": True, "mode": "chart",
-                   "sources": {"exploitPreflop": False, "mesPostflop": False, "aiChain": True},
-                   "recording": False, "budget": {"hands": None, "minutes": None},
-                   "format": None, "buyinBb": 100, "waitForBb": True, "profile": None},
-        "formats": None, "defaultFormat": None,
-        "requires": ["api", "hrc", "gtow"],
-    },
     "silent": {
         "label": "Silent play",
         "tagline": "No answers. Every hand is still archived and graded afterwards — the control group.",
@@ -103,7 +83,7 @@ BASE_PRESETS: dict[str, dict] = {
         "requires": ["fake"],
     },
 }
-GENERIC_STUDY = ("study-mes", "study-gto")     # stand-ins, only when the API is down
+# (there are deliberately NO stand-in answering modes: see presets())
 NO_ANSWER_MODES = ("silent", "capture-qa", "test-rig")
 
 
@@ -151,7 +131,7 @@ def _strategy_preset(s: dict) -> dict:
     }
 
 
-_presets_cache: dict = {"at": 0.0, "value": None, "fromApi": False}
+_presets_cache: dict = {"at": 0.0, "value": None, "fromApi": False, "error": None}
 
 
 def presets(refresh: bool = False) -> dict[str, dict]:
@@ -166,12 +146,12 @@ def presets(refresh: bool = False) -> dict[str, dict]:
         for s in strategies:
             out[STRATEGY_PREFIX + s["id"]] = _strategy_preset(s)
         _presets_cache["fromApi"] = True
+        _presets_cache["error"] = None
     else:
-        for k in GENERIC_STUDY:
-            p = json.loads(json.dumps(BASE_PRESETS[k]))
-            p["tagline"] = "(generic — the dashboard's strategy catalogue on :2000 could not be reached) " + p["tagline"]
-            out[k] = p
+        # NO stand-ins. The catalogue (the study API's strategies endpoint) is the only
+        # source of a mode that answers; without it the setup page blocks with the reason.
         _presets_cache["fromApi"] = False
+        _presets_cache["error"] = f"strategy catalogue unreachable: {API}/api/dashboard/sources/strategies"
     for k in NO_ANSWER_MODES:
         out[k] = json.loads(json.dumps(BASE_PRESETS[k]))
     _presets_cache.update({"at": now, "value": out})
@@ -180,6 +160,11 @@ def presets(refresh: bool = False) -> dict[str, dict]:
 
 def presets_from_api() -> bool:
     return bool(_presets_cache["fromApi"])
+
+
+def presets_error() -> str | None:
+    """Why no answering mode is on offer (None when the catalogue was read)."""
+    return _presets_cache.get("error")
 
 
 class _PresetsView(dict):
@@ -205,7 +190,7 @@ PRESETS = _PresetsView()
 CHECK_LABELS = {
     "api": "Study API on :2000",
     "hrc": "3-max chart server on :8777",
-    "exploit": "Pool-exploit preflop overlay armed",
+    "exploit": "3-handed Zone 25NL preflop exploit charts armed",
     "mes": "MES flop solves loaded",
     "gtow": "GTO Wizard client with a live token",
     "recording": "Debug recording directory writable",

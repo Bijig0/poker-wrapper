@@ -2560,7 +2560,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/session":
                 self._send(200, "application/json", json.dumps({
                     "ok": True, "current": _session["rec"], "brief": _session_brief(),
-                    "presets": S.presets(refresh=True), "presetsFromApi": S.presets_from_api(), "fakeTable": _fake_mode,
+                    "presets": S.presets(refresh=True), "presetsFromApi": S.presets_from_api(), "catalogueError": S.presets_error(),
+                    "fakeTable": _fake_mode,
                     "lastPreset": (_sessions.list(1) or [{}])[0].get("preset"),
                 }).encode())
             elif path == "/sessions":

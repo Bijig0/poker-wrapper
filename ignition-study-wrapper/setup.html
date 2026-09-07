@@ -89,8 +89,8 @@
         <div class="presets" id="formats" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))"></div>
         <span class="help">The strategy names the formats its layers were built for; the others are greyed out. Start opens the table window and the wrapper drives the lobby to this table. The badge on the panel warns when the open table is not this one.</span></div>
       <div class="field"><span class="k">Buy-in</span>
-        <div class="row"><input type="number" id="buyin" min="1" step="1" value="100"> <span class="sub">big blinds</span></div>
-        <span class="help">Entered in the Buy-In modal's OTHER box, clamped to the table's own minimum and maximum.</span></div>
+        <div class="row"><input type="number" id="buyin" min="1" step="1" value="100"> <span class="sub">big blinds</span> <span class="sub" id="buyin-usd"></span></div>
+        <span class="help">Big blinds × the format's big blind = the dollar amount typed into the Buy-In modal's OTHER box, clamped to the table's own minimum and maximum (Zone 50–100 bb, ring 30–100 bb).</span></div>
       <div class="field"><span class="k">Sign in as</span>
         <div class="row"><select id="profile" style="background:#0c1013;border:1px solid #3a4a5a;color:inherit;border-radius:8px;padding:7px 10px;font:inherit"><option value="">— sign in by hand —</option></select> <button class="mini" id="profile-edit">profiles…</button></div>
         <span class="help">A profile is an account: e-mail, remember-me, and a password kept in Windows Credential Manager. The wrapper fills the login form from it; the Authy code is always typed by you.</span></div>
@@ -167,8 +167,7 @@ const presetChips = (p) => {
 function renderPresets() {
   const entries = Object.entries(PRESETS);
   const strategies = entries.filter(([, p]) => p.strategy);
-  const generic = entries.filter(([id, p]) => !p.strategy && (id === "study-mes" || id === "study-gto"));
-  const own = entries.filter(([id, p]) => !p.strategy && id !== "study-mes" && id !== "study-gto");
+  const own = entries.filter(([, p]) => !p.strategy);
   const card = ([id, p]) => {
     const s = p.strategy;
     const status = s ? `<span class="st ${esc(s.status)}">${s.status === "ok" ? "coherent" : s.status === "drift" ? "drift — approximated" : s.status === "misspecified" ? "mis-specified · not served" : esc(s.status)}</span>${s.recommended ? ' <span class="st rec">recommended</span>' : ""}` : "";
@@ -180,9 +179,11 @@ function renderPresets() {
     return `<button class="preset${id === preset ? " on" : ""}" data-id="${id}" ${p.disabled ? "disabled" : ""} ${id === "test-rig" && !fake ? 'title="launch with FAKE_TABLE=1 to use the test rig"' : ""}>
       <b>${esc(p.label)}</b>${status ? `<span>${status}</span>` : ""}<span class="tag">${esc(p.tagline)}</span>${layers}${why}<span class="chips">${presetChips(p)}</span>${lnk}</button>`;
   };
+  const down = !strategies.length && !fake;
   $("presets").innerHTML =
     (strategies.length ? `<div class="presets-h">Play with answers — a whole-hand strategy, the same definitions as the dashboard's Sources → Strategies and the Playthrough picker</div>` + strategies.map(card).join("") : "") +
-    (generic.length ? `<div class="presets-h">Play with answers — generic (the dashboard on :2000 is down, so the strategy catalogue could not be read)</div>` + generic.map(card).join("") : "") +
+    (down ? `<div class="card" style="grid-column:1/-1;border-color:#ff8a80;background:#1c1214"><b style="color:#ff8a80">No answering mode can be declared: the strategy catalogue is unreachable.</b>
+        <div class="sub" style="margin-top:4px">${esc(CATALOGUE_ERROR || "the study API did not answer")}. The strategies live in the study API; there is no stand-in. Start it (dev-api.cmd / the gto-api launch config) — this page re-checks every 5 s and offers the strategies the moment it is back.</div></div>` : "") +
     `<div class="presets-h">Without answers · rigs</div>` + own.map(card).join("");
   $("presets").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => choose(b.dataset.id));
 }
@@ -202,7 +203,21 @@ function choose(id) {
 }
 
 // ---- step 2: the table — format, buy-in, profile, window state ----------
-let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null;
+let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null, CATALOGUE_ERROR = null;
+// the catalogue is the only source of answering modes: keep asking until it is back
+async function watchCatalogue() {
+  try {
+    const j = await (await fetch("/session")).json();
+    const had = Object.values(PRESETS).some((p) => p.strategy), has = Object.values(j.presets || {}).some((p) => p.strategy);
+    CATALOGUE_ERROR = j.catalogueError || null;
+    if (had !== has) {
+      PRESETS = j.presets; renderPresets();
+      if (has && (!preset || !PRESETS[preset] || !PRESETS[preset].strategy)) { const first = Object.keys(PRESETS).find((k) => PRESETS[k].strategy); if (first) choose(first); }
+      if (!has && preset && !PRESETS[preset]) { preset = null; cfg = null; $("start").disabled = true; }
+    }
+  } catch (e) { /* wrapper restarting */ }
+  setTimeout(watchCatalogue, 5000);
+}
 const allowedFormats = () => (preset && PRESETS[preset] && Array.isArray(PRESETS[preset].formats)) ? PRESETS[preset].formats : null;
 
 function renderFormats() {
@@ -223,6 +238,7 @@ function renderFormats() {
     }).join("");
   }).join("");
   $("formats").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => { cfg.format = b.dataset.id; renderFormats(); schedulePreflight(); });
+  buyinPreview();
   const s = preset && PRESETS[preset] && PRESETS[preset].strategy;
   $("fmt-note").textContent = allowed ? `— only the ${allowed.length} format${allowed.length === 1 ? "" : "s"} ${s ? s.name : PRESETS[preset].label} was built for; ${FORMATS.length - allowed.length} other${FORMATS.length - allowed.length === 1 ? "" : "s"} hidden` : "— any format (no restriction declared)";
 }
@@ -249,7 +265,24 @@ $("p-save").onclick = async () => {
   if (r.ok && cfg) { cfg.profile = r.profile.name; renderProfiles(); }
 };
 $("profile").onchange = () => { if (cfg) { cfg.profile = $("profile").value || null; schedulePreflight(); } };
-$("buyin").onchange = () => { if (cfg) { cfg.buyinBb = Number($("buyin").value) || 100; } };
+let STAKES = {};
+function buyinPreview() {
+  const f = cfg && FORMATS.find((x) => x.id === cfg.format);
+  const bb = Number($("buyin").value) || 0;
+  const el = $("buyin-usd");
+  if (!f || !bb) { el.textContent = ""; return; }
+  if (f.gameType === "practice") {
+    const per = Number((f.path && f.path.stakeLabel || "").split("/")[1]) || 0;
+    el.textContent = per ? `= ${(bb * per).toFixed(2)} practice chips` : "";
+    return;
+  }
+  const st = STAKES[f.stake];
+  if (!st) { el.textContent = ""; return; }
+  const lo = f.gameType === "zone" ? 50 : 30, hi = 100;
+  const clamped = Math.min(hi, Math.max(lo, bb));
+  el.textContent = `= $${(bb * st.bbCents / 100).toFixed(2)} at ${f.stake}` + (clamped !== bb ? ` → table allows ${lo}–${hi} bb, so $${(clamped * st.bbCents / 100).toFixed(2)}` : "");
+}
+$("buyin").oninput = () => { if (cfg) { cfg.buyinBb = Number($("buyin").value) || 100; } buyinPreview(); };
 $("tw-open").onclick = async () => { $("tw-open").disabled = true; await fetch("/table/open", { method: "POST" }); setTimeout(() => { $("tw-open").disabled = false; }, 4000); };
 $("code-send").onclick = async () => {
   const code = $("code").value.trim(); if (!code) return;
@@ -297,6 +330,7 @@ function fillSettings() {
   seg("recording", cfg.recording ? 1 : 0);
   $("budget-hands").value = cfg.budget.hands ?? ""; $("budget-min").value = cfg.budget.minutes ?? "";
   $("buyin").value = cfg.buyinBb ?? 100;
+  buyinPreview();
   renderProfiles();
   const p = PRESETS[preset] || {}, s = p.strategy;
   const src = cfg.sources || {};
@@ -410,9 +444,10 @@ setInterval(async () => {
 
 (async () => {
   const j = await (await fetch("/session")).json();
-  PRESETS = j.presets; fake = !!j.fakeTable;
+  PRESETS = j.presets; fake = !!j.fakeTable; CATALOGUE_ERROR = j.catalogueError || null;
   if (j.current) { location.href = "/panel"; return; }
-  try { FORMATS = (await (await fetch("/formats")).json()).formats || []; } catch (e) { FORMATS = []; }
+  setTimeout(watchCatalogue, 5000);
+  try { const fj = await (await fetch("/formats")).json(); FORMATS = fj.formats || []; STAKES = fj.stakes || {}; } catch (e) { FORMATS = []; }
   await loadProfiles();
   pollTable();
   renderPresets();
@@ -420,7 +455,9 @@ setInterval(async () => {
   // preset is only honoured when it is itself a strategy
   const firstStrategy = Object.keys(PRESETS).find((k) => PRESETS[k].strategy) || Object.keys(PRESETS)[0];
   const last = j.lastPreset && PRESETS[j.lastPreset] && PRESETS[j.lastPreset].strategy ? j.lastPreset : null;
-  choose(fake ? "test-rig" : (last || firstStrategy));
+  if (fake) choose("test-rig");
+  else if (last || (firstStrategy && PRESETS[firstStrategy] && PRESETS[firstStrategy].strategy)) choose(last || firstStrategy);
+  // catalogue down: nothing is pre-selected — the banner explains, Start stays disabled
   loadRecent();
 })();
 </script>
