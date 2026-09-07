@@ -2966,10 +2966,21 @@ def _sibling_pids() -> list[int]:
         return []
     me = os.getpid()
     here = str(Path(__file__).resolve()).lower()
+    # Our own ancestors are never siblings. On Windows a venv's python.exe is
+    # a REDIRECTOR: it spawns the base interpreter with the identical command
+    # line and waits for it, so the scan below would find our parent — same
+    # script path, same port — and terminate it. From a desktop icon that only
+    # orphans us; under a scheduled task the action's root process (cmd) then
+    # returns and Task Scheduler kills the whole tree, us included, before a
+    # single line is logged. (Seen on the Vultr box, 2026-09-07.)
+    try:
+        ancestors = {a.pid for a in psutil.Process(me).parents()}
+    except Exception:
+        ancestors = {os.getppid()}
     out = []
     try:
         for p in psutil.process_iter(["pid", "name", "cmdline"]):
-            if p.info["pid"] == me:
+            if p.info["pid"] == me or p.info["pid"] in ancestors:
                 continue
             # Interpreters only, and the EXACT absolute path only. Anything
             # looser is lethal in practice: a bare `launch.py` token inside a
