@@ -2530,6 +2530,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/setup":
                 self._send(200, "text/html; charset=utf-8",
                            (ROOT / "setup.html").read_bytes())
+            elif path == "/bridge":
+                # between Start and the panel: window → sign-in → (Authy code, only if asked) → table
+                self._send(200, "text/html; charset=utf-8",
+                           (ROOT / "bridge.html").read_bytes())
+            elif path == "/auth/snapshots":
+                self._send(200, "application/json", json.dumps({"snapshots": A.snapshots()}).encode())
             elif path == "/formats":
                 # every known format + what the client has open right now
                 self._send(200, "application/json", json.dumps({
@@ -3511,6 +3517,13 @@ def _route_session(cfg: dict, sid: str) -> None:
         if st["state"] == "signed-out":
             was_signed_out = True
             a = A.page_state(CDP_PORT)
+            # keep a redacted picture of every auth page we meet (login form, code box, error, captcha)
+            if a["state"] in ("login-form", "code-form", "error", "captcha") and a["state"] != _router.get("snapState"):
+                _router["snapState"] = a["state"]
+                try:
+                    A.snapshot(CDP_PORT, a["state"])
+                except Exception as e:
+                    print(f"[auth] snapshot: {e}")
             if a["state"] == "code-form":
                 if _router["state"] != "waiting-code":
                     _sessions.event(sid, "code-needed", {})

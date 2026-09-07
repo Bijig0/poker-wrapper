@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ignition Study · Getting to the table</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101418; color: #e8edf2; font: 15px/1.45 "Segoe UI", system-ui, sans-serif; padding: 18px 18px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #8fa1b3; font-size: 13px; }
+  .card { background: #171d24; border: 1px solid #26303a; border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .steps { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .st { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; padding: 9px 12px; border-radius: 10px; background: #0c1013; border: 1px solid #1f2731; }
+  .st .n { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: #26303a; color: #cfe0ef; font-size: 12px; font-weight: 700; }
+  .st.done .n { background: #123524; color: #5ee39a; } .st.now .n { background: #1f6feb; color: #fff; } .st.bad .n { background: #57222a; color: #ff9a9a; }
+  .st.now { border-color: #1f6feb; } .st.bad { border-color: #6a2a2a; }
+  .st b { display: block; } .st span.d { color: #8fa1b3; font-size: 12.5px; }
+  .st.wait .n { background: #4d3d1e; color: #ffce56; } .st.wait { border-color: #6a5a2a; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  input[type=text] { background: #0c1013; border: 1px solid #3a4a5a; color: inherit; border-radius: 8px; padding: 9px 12px; font: inherit; font-size: 20px; letter-spacing: .2em; width: 170px; }
+  .mini { background: #22303d; color: #cfe0ef; border: 1px solid #3a4a5a; border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  .go { background: #1f6feb; color: #fff; border: 0; border-radius: 10px; padding: 10px 18px; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .go:disabled { background: #26303a; color: #5b6b7a; cursor: default; }
+  .log { font-family: ui-monospace, monospace; font-size: 11.5px; color: #8fa1b3; max-height: 160px; overflow: auto; margin-top: 8px; white-space: pre-wrap; }
+  .msg.ok { color: #5ee39a; } .msg.bad { color: #ff8a80; } .msg.warn { color: #ffce56; }
+</style>
+</head>
+<body>
+<h1>Getting to the table</h1>
+<div class="sub" id="who">session declared — the wrapper is opening the client and signing in; the panel opens by itself once you are seated.</div>
+
+<div class="card">
+  <div class="steps" id="steps"></div>
+  <div id="codebox" style="display:none">
+    <div class="row"><input type="text" id="code" inputmode="numeric" maxlength="8" placeholder="6 digits" autocomplete="one-time-code"> <button class="go" id="code-send">Submit code</button> <span class="msg" id="code-msg"></span></div>
+    <div class="sub">Ignition asked for the Authy code just now — it is only requested here, at the moment the client shows the LOGIN VERIFICATION box, so it cannot expire while you set up. Type it and Enter.</div>
+  </div>
+  <div class="row" id="actions">
+    <button class="mini" id="retry" style="display:none">Retry sign-in</button>
+    <button class="mini" id="openwin" style="display:none">Open the table window</button>
+    <button class="mini" id="topanel">Skip to the panel</button>
+    <button class="mini" id="tosetup">Back to setup</button>
+    <span class="msg" id="msg"></span>
+  </div>
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let SESSION = null, redirectAt = 0, lastState = "";
+
+// The five things that happen, in order. Each is derived from /table/state + /auth/state + the router.
+const STEPS = [
+  { id: "window", label: "Table window", d: "the client window on the secondary monitor" },
+  { id: "signin", label: "Sign in", d: "e-mail + password from the profile (Credential Manager)" },
+  { id: "code", label: "Authy code", d: "only if Ignition asks — typed here, once" },
+  { id: "route", label: "Go to the table", d: "lobby → format → seat, with the declared buy-in" },
+  { id: "seated", label: "Seated", d: "the study panel opens" },
+];
+
+function render(model) {
+  $("steps").innerHTML = STEPS.map((s, i) => {
+    const m = model[s.id] || {};
+    return `<div class="st ${m.cls || ""}"><span class="n">${m.cls === "done" ? "✓" : m.cls === "bad" ? "!" : i + 1}</span><span><b>${esc(s.label)}</b><span class="d">${esc(m.text || s.d)}</span></span></div>`;
+  }).join("");
+}
+
+async function tick() {
+  let t, a = null;
+  try { t = await (await fetch("/table/state")).json(); } catch (e) { t = { state: "closed", routing: {} }; }
+  if (t.state === "signed-out") { try { a = await (await fetch("/auth/state")).json(); } catch (e) { a = null; } }
+  const r = t.routing || {};
+  const model = {};
+  const profile = SESSION && SESSION.config ? SESSION.config.profile : null;
+  const fmt = SESSION && SESSION.config ? (SESSION.config.formatName || SESSION.config.format) : null;
+  // window
+  if (t.state === "closed") { model.window = { cls: "now", text: r.state === "waiting-window" ? "opening… (if nothing appears, open it below)" : (t.cdp ? "CDP up, no Ignition page yet" : "closed — opening") }; $("openwin").style.display = ""; }
+  else { model.window = { cls: "done", text: "open" }; $("openwin").style.display = "none"; }
+  // sign-in + code
+  const st = a ? a.state : null;
+  $("retry").style.display = "none";
+  if (t.state === "signed-out") {
+    if (st === "code-form") {
+      model.signin = { cls: "done", text: profile ? `password accepted for ${profile}` : "password accepted" };
+      model.code = { cls: "wait", text: "Ignition is asking for the code — type it below" };
+    } else if (st === "captcha") {
+      model.signin = { cls: "wait", text: "reCAPTCHA challenge — solve it in the table window, this page continues on its own" };
+    } else if (r.state === "logging-in") {
+      model.signin = { cls: "now", text: `signing in as ${profile}…` };
+    } else if (r.state === "login-error" || st === "error") {
+      model.signin = { cls: "bad", text: r.text || (a && a.detail) || "sign-in failed" }; $("retry").style.display = profile ? "" : "none";
+    } else if (!profile) {
+      model.signin = { cls: "wait", text: "no profile on this session — sign in by hand in the table window (e-mail, password, Authy); this page continues once you are in" };
+    } else {
+      model.signin = { cls: "now", text: `login page — signing in as ${profile}` };
+    }
+  } else if (t.state === "signed-in" || t.state === "seated") {
+    model.signin = { cls: "done", text: profile ? `signed in as ${profile}` : "signed in" };
+    model.code = { cls: "done", text: "not asked, or accepted" };
+  }
+  // routing
+  if (t.state === "seated") {
+    model.route = { cls: "done", text: r.text || "at the table" };
+    model.seated = { cls: r.state === "off-format" ? "bad" : "done", text: t.detected ? `${t.detected.name}${r.state === "off-format" ? " — not the declared format" : ""}` : "seated" };
+  } else if (t.state === "signed-in") {
+    if (r.state === "routing") model.route = { cls: "now", text: r.text };
+    else if (r.state === "failed") { model.route = { cls: "bad", text: r.text || "routing failed" }; }
+    else if (r.state === "left") { model.route = { cls: "bad", text: r.text }; }
+    else if (!fmt) { model.route = { cls: "done", text: "no format declared — open a table yourself" }; }
+    else model.route = { cls: "now", text: `going to ${fmt}` };
+  }
+  render(model);
+  $("codebox").style.display = st === "code-form" ? "" : "none";
+  if (st === "code-form" && lastState !== "code-form") { setTimeout(() => $("code").focus(), 50); }
+  lastState = st || t.state;
+  $("log").textContent = (r.steps || []).slice(-12).join("\n");
+  // done → the panel (a moment to read the last line), also when no format was declared and we are simply signed in
+  const arrived = t.state === "seated" || (t.state === "signed-in" && !fmt);
+  if (arrived) {
+    if (!redirectAt) redirectAt = Date.now() + 2500;
+    $("msg").className = "msg ok"; $("msg").textContent = r.state === "off-format" ? "seated, but not at the declared format — opening the panel" : "seated — opening the panel";
+    if (Date.now() >= redirectAt) { location.href = "/panel"; return; }
+  } else { redirectAt = 0; if (r.state === "failed") { $("msg").className = "msg bad"; $("msg").textContent = "the lobby did not reach the format — go there by hand, or back to setup"; } else $("msg").textContent = ""; }
+  setTimeout(tick, 1200);
+}
+
+$("code-send").onclick = async () => {
+  const code = $("code").value.trim(); if (!code) return;
+  $("code-send").disabled = true; $("code-msg").className = "msg"; $("code-msg").textContent = "submitting…";
+  let r; try { r = await (await fetch("/auth/code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) })).json(); } catch (e) { r = { ok: false, error: String(e) }; }
+  $("code").value = ""; $("code-send").disabled = false;
+  $("code-msg").className = "msg " + (r.ok ? "ok" : "bad");
+  $("code-msg").textContent = r.ok ? `accepted — ${r.detail || "signed in"}` : `not accepted: ${r.error || r.detail || r.state}${(r.errors || []).length ? " · " + r.errors.join(" · ") : ""}`;
+};
+$("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("code-send").click(); });
+$("retry").onclick = async () => { $("retry").disabled = true; try { await fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: SESSION && SESSION.config ? SESSION.config.profile : null }) }); } catch (e) {} setTimeout(() => { $("retry").disabled = false; }, 5000); };
+$("openwin").onclick = async () => { $("openwin").disabled = true; try { await fetch("/table/open", { method: "POST" }); } catch (e) {} setTimeout(() => { $("openwin").disabled = false; }, 5000); };
+$("topanel").onclick = () => { location.href = "/panel"; };
+$("tosetup").onclick = () => { location.href = "/setup"; };
+
+(async () => {
+  try {
+    const j = await (await fetch("/session")).json();
+    SESSION = j.current || null;
+    if (!SESSION) { location.href = "/setup"; return; }
+    const c = SESSION.config || {};
+    if (j.brief && j.brief.formatName) c.formatName = j.brief.formatName;   // the human name lives in the brief
+    $("who").innerHTML = `<b>${esc(c.strategyName || SESSION.preset)}</b>${c.profile ? ` · signing in as <b>${esc(c.profile)}</b>` : " · no profile — sign in by hand"}${c.format ? ` · going to <b>${esc(c.formatName || c.format)}</b> with ${esc(c.buyinBb || 100)} bb` : " · no format declared"}`;
+  } catch (e) {}
+  render({}); tick();
+})();
+</script>
+</body>
+</html>

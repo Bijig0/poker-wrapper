@@ -97,6 +97,7 @@
       <div class="field" style="grid-column: 1 / -1"><span class="k">Table window</span>
         <div id="tw-state" class="check pending"><span class="dot"></span><span class="l"><b>…</b><span></span></span><span><button class="mini" id="tw-open">Open window</button></span></div>
         <div id="tw-code" class="row" style="display:none;margin-top:6px"><input type="text" id="code" inputmode="numeric" maxlength="8" placeholder="Authy code" style="width:130px"> <button class="mini" id="code-send">Submit code</button> <span class="sub" id="code-msg"></span></div>
+        <span class="help">Nothing signs in from here. Press Start: the wrapper opens the window, signs in as the profile, asks for the Authy code only if Ignition shows the verification box, then goes to the table.</span>
       </div>
     </div>
     <div id="profiles-card" class="card" style="display:none;margin-top:12px;background:#0c1013">
@@ -278,15 +279,15 @@ async function pollTable() {
     if (st === "code-form") { cls = "pending"; title = "Authy code needed"; detail = "type the 6 digits below — the wrapper submits them"; }
     else if (st === "captcha") { cls = "bad"; title = "reCAPTCHA challenge"; detail = "solve it in the table window, then this row updates on its own"; }
     else if (st === "error") { cls = "bad"; title = "Sign-in error"; detail = a.detail || ""; }
-    else { cls = "bad"; title = "Signed out"; detail = cfg && cfg.profile ? `login page · the wrapper signs in as ${cfg.profile} at Start, or now:` : "login page · pick a profile above, or sign in by hand in the window"; }
-    if (cfg && cfg.profile && (st === "login-form" || st === "error")) extra = `<button class="mini" id="tw-signin" onclick="signInNow()">Sign in as ${esc(cfg.profile)}</button>`;
+    else { cls = "bad"; title = "Signed out"; detail = cfg && cfg.profile ? `login page · the wrapper signs in as ${cfg.profile} after Start` : "login page · pick a profile above (or sign in by hand in the window after Start)"; }
+    if (st === "code-form") { cls = "pending"; title = "Authy code needed"; detail = "Ignition is showing the verification box — press Start and type the code on the next page (it is requested there so it cannot expire)"; }
   }
   else if (t.state === "signed-in") { cls = "ok"; title = "Signed in · lobby"; detail = "no table open — Start routes to the chosen format"; }
   else if (t.state === "seated") { cls = "ok"; title = `Seated · ${t.detected ? t.detected.name : "table"}`; detail = t.detected ? `${t.detected.buyInBb ?? "?"} bb · ${t.detected.title || ""}` : ""; if (cfg && cfg.format && t.detected && t.detected.formatId !== cfg.format) { cls = "bad"; detail += ` — not the declared format (${(FORMATS.find((f) => f.id === cfg.format) || {}).name || cfg.format})`; } }
   const r = t.routing || {};
   if (r.state && r.state !== "idle" && r.text) detail += ` · router: ${r.text}`;
   el.className = "check " + cls; b.textContent = title; d.innerHTML = esc(detail) + (extra ? " " + extra : "");
-  $("tw-code").style.display = (a && a.state === "code-form") ? "" : "none";
+  $("tw-code").style.display = "none";   // the code is typed on the bridge page, after Start
   lastTw = t;
   twTimer = setTimeout(pollTable, 2500);
 }
@@ -359,7 +360,9 @@ $("start").onclick = async () => {
   try { j = await (await fetch("/session/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preset, config: cfg, label: $("label").value.trim() || null, note: $("note").value.trim() || null }) })).json(); }
   catch (e) { j = { ok: false, error: String(e) }; }
   if (!j.ok) { $("start").disabled = false; $("start").textContent = "Start session"; $("pf-msg").className = "msg bad"; $("pf-msg").textContent = j.error ?? "start refused"; if (j.preflight) { lastPf = j.preflight; runPreflight(); } return; }
-  location.href = "/panel";
+  // the session is declared; sign-in (and the Authy code, only if asked) and the
+  // trip to the table happen on the bridge page, after this — never before Start
+  location.href = fake ? "/panel" : "/bridge";
 };
 
 async function loadRecent() {
