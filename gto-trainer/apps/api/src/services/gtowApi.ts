@@ -149,6 +149,14 @@ class GtowApi {
     void this.refreshIfExpiring();
   }
 
+  /** Sniff NOW, ignoring the attempt rate-limit — for the dashboard's Connect
+   *  button, which has just (re)launched the client and is waiting on it. */
+  async forceRefresh(): Promise<boolean> {
+    this.lastRefreshAttemptMs = 0;
+    await this.refreshIfExpiring();
+    return this.hasLiveToken();
+  }
+
   private async refreshIfExpiring(): Promise<void> {
     if (this.refreshing) return;
     // 3-min margin: two keeper ticks of slack before a solve would block.
@@ -171,6 +179,16 @@ class GtowApi {
    *  without forcing a sniff. */
   hasLiveToken(): boolean {
     return Boolean(this.token) && Date.now() < this.tokenExpMs - TOKEN_SKEW_MS;
+  }
+
+  /** Token keeper state for the Sources registry — no sniff, no side effects. */
+  tokenStatus(): { live: boolean; expiresInMs: number | null; lastAttemptMs: number | null; keeperRunning: boolean } {
+    return {
+      live: this.hasLiveToken(),
+      expiresInMs: this.token ? this.tokenExpMs - Date.now() : null,
+      lastAttemptMs: this.lastRefreshAttemptMs || null,
+      keeperRunning: this.keeper != null,
+    };
   }
 
   /** A valid access token, cached until shortly before it expires. */

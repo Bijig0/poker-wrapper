@@ -50,6 +50,8 @@ export interface ParsedNode {
 
 /** Structurally compatible with assistive-play's Hand (panelFeed-relevant fields). */
 export interface ParsedHand {
+  /** The wrapper's declared session this hand was played in (archived hands since 2026-09-04). */
+  sessionId?: string | null;
   handId: number;
   /** The site's own globally-unique hand id (Ignition stage id), when the
    *  source provides one — the stable join key between live answers and the

@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State Tester</title>
+<link rel="stylesheet" href="/study/study.css">
+</head>
+<body>
+<header>
+  <h1>State Tester</h1>
+  <span class="sub">drive the study tools against an authored table &middot; served by the API on :2000</span>
+</header>
+
+<main>
+  <p class="sub" style="max-width:78ch;margin:0 0 10px">
+    Build a state, <b>Push to fake table</b>, then press an action &mdash; it goes
+    through the panel's real relay onto a local table the reader parses exactly
+    like Ignition. Nothing here touches a live table.
+  </p>
+
+  <div id="err" class="box bad-box" style="display:none"></div>
+
+  <div class="row" style="margin-bottom:10px">
+    <span class="fld-l">Start from</span>
+    <span id="fixtures"></span>
+    <button class="mini" id="btn-reset">reset</button>
+  </div>
+
+  <!--
+    Two fluid halves rather than a fixed sidebar: at exactly 1280px a fixed
+    620px panel left the table 341px and unreadable. Both columns are
+    minmax(0,1fr) so the replica — laid out at the client's real 955px felt —
+    scales down instead of dragging the row wider than the viewport.
+  -->
+  <div class="st-grid">
+    <div>
+      <div class="card" style="margin-top:0">
+        <h2>Authored spot</h2>
+        <div class="sub">the replica preview — the fake table renders this same state</div>
+        <div id="stage"></div>
+
+        <!-- walk the story: every authored action is a step -->
+        <div class="row" style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px">
+          <button class="mini" id="st-first">⏮</button>
+          <button class="mini" id="st-prev">◀</button>
+          <input type="range" id="st-range" style="flex:1" min="0" max="0" value="0">
+          <button class="mini" id="st-next">▶</button>
+          <button class="mini" id="st-last">⏭</button>
+          <span class="mono sub" style="width:100%" id="st-label"></span>
+          <button class="mini" id="st-push-step"
+            title="load THIS step onto the fake table — the study answer card then answers it">Push this step</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Drive the study tools</h2>
+        <div class="sub" id="drive-hint">push the state first</div>
+        <div class="row" style="margin-top:8px">
+          <button class="mini" id="btn-push">Push to fake table</button>
+          <button class="mini" id="btn-open">Open fake table</button>
+          <button class="mini" id="btn-stop">Stop test mode</button>
+        </div>
+        <div class="row" id="offer-btns" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px"></div>
+        <pre id="log" style="max-height:150px;margin-top:8px">—</pre>
+        <div class="row" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px">
+          <input type="text" id="fix-name" placeholder="fixture-name" style="width:220px">
+          <button class="mini" id="btn-save" disabled>Save as fixture</button>
+          <span class="sub">→ tests/fixtures/, picked up by the suite</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Study answers</h2>
+        <div class="sub">what the panel would say for THIS state — local charts preflop, GTO Wizard AI postflop, with its source named</div>
+        <div id="live-answer"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:0">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">Build the state</h2>
+        <button class="mini" id="btn-json">JSON</button>
+      </div>
+
+      <div id="pane-json" style="display:none;margin-top:10px">
+        <textarea id="json" spellcheck="false" style="height:560px;width:100%"></textarea>
+        <button class="mini" id="btn-apply" style="margin-top:8px">Apply JSON</button>
+      </div>
+
+      <div id="pane-form" style="margin-top:10px">
+        <div class="row" style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px" id="tbl-row"></div>
+        <div style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px">
+          <div class="row" style="margin-bottom:6px"><span class="sub" style="width:44px">board</span><span id="board-slots" class="row"></span></div>
+          <div class="row"><span class="sub" style="width:44px">hero</span><span id="hero-slots" class="row"></span>
+            <input type="text" id="strength" placeholder="hand strength label" style="flex:1;min-width:120px"></div>
+        </div>
+        <div style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px">
+          <div class="seat-hdr"><span>#</span><span>stack</span><span>bet</span><span>badge</span><span>cards</span></div>
+          <div id="seat-rows"></div>
+        </div>
+        <div>
+          <div class="fld-l" style="margin-bottom:6px">Actions offered to hero</div>
+          <div class="row" id="offer-row"></div>
+          <div class="row" id="selector-row" style="margin-top:8px"></div>
+          <p class="sub" style="margin-top:8px">
+            The action history that <code>/hand</code> exports lives in
+            <code>node.actions</code> — edit it in the JSON view.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Exported hand (/hand)</h2>
+    <div class="sub">what the study answer pipeline consumes for this state</div>
+    <pre id="hand" style="max-height:290px">— push a state to see its export —</pre>
+  </div>
+</main>
+
+<script type="module">
+import { renderTable } from "/study/ignition-table.js";
+import { cardSlot } from "/study/spot-editor.js";
+import { strategyTabs, getStrategyMode } from "/study/answer-panel.js";
+import {
+  WRAPPER, fakeTableUrl, fetchCurrentSpec, fetchFixtures, fetchHand, fetchStudyAnswer,
+  lastClick, loadState, relay, saveFixture, specToSpot, stepsOf, stopTest,
+} from "/study/state-tester-api.js";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+const BLANK_SEAT = { stack: 100, cards: 2 };
+const BADGES = ["", "FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL-IN", "POST SB", "POST BB"];
+const SELECTORS = ["X2.5", "X3", "X4", "1/3 Pot", "3/4 Pot", "Pot", "ALL-IN"];
+
+const START = {
+  title: "$1/$2 No Limit Hold'em",
+  capacity: 6,
+  potBB: 24.8,
+  board: ["Tc", "5s", "5h"],
+  heroSeat: 4,
+  dealerSeat: 1,
+  heroCards: ["Th", "Td"],
+  handStrength: "Three of a kind, tens",
+  seats: {
+    "1": { stack: 98.6, bet: 24.8, badge: "BET", cards: 2 },
+    "2": { stack: 140.4, cards: 0 },
+    "3": { stack: 54.6, cards: 0 },
+    "4": { stack: 97.2, cards: 2, timer: 18 },
+    "5": { stack: 100, cards: 0 },
+    "6": { stack: 84.2, cards: 0 },
+  },
+  offer: { fold: true, call: 24.8, raise: 60, selectors: ["Pot", "ALL-IN"] },
+  node: {
+    dealt: [1, 2, 3, 4, 5, 6],
+    toActSeat: 4,
+    committed: { "1": 24.8 },
+    actions: [
+      { seat: 2, type: "post-sb", amount: 0.5, street: "preflop" },
+      { seat: 3, type: "post-bb", amount: 1, street: "preflop" },
+      { seat: 4, type: "raise", amount: 2.5, street: "preflop" },
+      { seat: 1, type: "call", amount: 2.5, street: "preflop" },
+      { seat: 1, type: "bet", amount: 24.8, street: "flop" },
+    ],
+  },
+};
+
+let spec = structuredClone(START);
+let steps = stepsOf(spec);
+let stepIdx = steps.length - 1;
+let loaded = false;
+let log = [];
+let table = null;
+
+const say = (s) => { log = [s, ...log].slice(0, 14); $("log").textContent = log.join("\n") || "—"; };
+
+/** The action labels the offer exposes, spelled as the relay names them. */
+function offerLabels(sp) {
+  const out = [];
+  if (sp.offer?.fold) out.push({ label: "FOLD", kind: "action" });
+  if (sp.offer?.check) out.push({ label: "CHECK", kind: "action" });
+  if (sp.offer?.call != null) out.push({ label: `CALL ${sp.offer.call} BB`, kind: "action" });
+  if (sp.offer?.bet != null) out.push({ label: `BET ${sp.offer.bet} BB`, kind: "action" });
+  if (sp.offer?.raise != null) out.push({ label: `RAISE TO ${sp.offer.raise} BB`, kind: "action" });
+  for (const s of sp.offer?.selectors ?? []) out.push({ label: s, kind: "preset" });
+  return out;
+}
+
+/** Every card already placed — a real deck has no duplicates. */
+const usedCards = () => new Set([...(spec.board ?? []), ...(spec.heroCards ?? [])]);
+
+const capOf = () => (spec.capacity <= 3 ? 3 : spec.capacity > 6 ? 9 : 6);
+const seatNums = () => Array.from({ length: capOf() }, (_, i) => i + 1);
+
+/** Single funnel for edits, so the JSON view never drifts from the form. */
+function edit(fn, rebuild = true) {
+  const next = structuredClone(spec);
+  fn(next);
+  spec = next;
+  $("json").value = JSON.stringify(spec, null, 2);
+  loaded = false;
+  steps = stepsOf(spec);
+  stepIdx = steps.length - 1;   // land on the authored decision point
+  drawStep();
+  paintOffer();
+  paintDrive();
+  if (rebuild) buildForm();
+}
+
+/* ------------------------------------------------------------------ table */
+
+function drawStep() {
+  const at = steps[Math.min(stepIdx, steps.length - 1)] ?? steps[steps.length - 1];
+  table?.destroy();
+  table = renderTable($("stage"), specToSpot(at.spec), { theme: spec.theme ?? "red" });
+  $("st-range").max = steps.length - 1;
+  $("st-range").value = stepIdx;
+  $("st-label").textContent = `${stepIdx}/${steps.length - 1} — ${at.label}`;
+  $("st-first").disabled = $("st-prev").disabled = stepIdx === 0;
+  $("st-last").disabled = $("st-next").disabled = stepIdx >= steps.length - 1;
+}
+
+const goStep = (k) => { stepIdx = Math.max(0, Math.min(steps.length - 1, k)); drawStep(); };
+$("st-first").onclick = () => goStep(0);
+$("st-prev").onclick = () => goStep(stepIdx - 1);
+$("st-next").onclick = () => goStep(stepIdx + 1);
+$("st-last").onclick = () => goStep(steps.length - 1);
+$("st-range").oninput = (e) => goStep(Number(e.target.value));
+
+$("st-push-step").onclick = async () => {
+  const at = steps[Math.min(stepIdx, steps.length - 1)];
+  try {
+    const r = await loadState(at.spec);
+    say(r.ok ? `step ${stepIdx}/${steps.length - 1} on the table — ${at.label}`
+             : `step load failed: ${JSON.stringify(r)}`);
+    if (r.ok) setTimeout(async () => { await refreshHand(); void askAnswer(); }, 1500);
+  } catch (e) {
+    say(`step push failed: ${e}`);
+  }
+};
+
+/* ------------------------------------------------------------ drive tools */
+
+function paintDrive() {
+  $("drive-hint").textContent = loaded
+    ? "each press goes through the panel's real relay onto the fake table"
+    : "push the state first";
+}
+
+function paintOffer() {
+  const box = $("offer-btns");
+  box.textContent = "";
+  for (const o of offerLabels(spec)) {
+    const b = document.createElement("button");
+    b.className = "mini" + (o.kind === "preset" ? "" : " on");
+    b.textContent = o.label;
+    b.disabled = !loaded;
+    b.onclick = () => fire(o.label, o.kind);
+    box.appendChild(b);
+  }
+}
+
+async function fire(label, kind) {
+  const r = await relay(label, kind);
+  if (!r.ok) { say(`✗ ${label} refused — ${r.reason}`); return; }
+  await new Promise((res) => setTimeout(res, 500));
+  const c = await lastClick();
+  say(c ? `✓ ${label} → fired ${c.qa}` : `? ${label} — no click recorded`);
+}
+
+async function refreshHand() {
+  const h = await fetchHand();
+  $("hand").textContent = h ? JSON.stringify(h, null, 1) : "— push a state to see its export —";
+}
+
+$("btn-push").onclick = async () => {
+  try {
+    const r = await loadState(spec);
+    loaded = !!r.ok;
+    paintDrive(); paintOffer();
+    say(r.ok ? `loaded — hand ${r.hand}, browser ${r.browser}` : `load failed: ${JSON.stringify(r)}`);
+    // The state is on the table now — ask for its study answer.
+    setTimeout(async () => { await refreshHand(); void askAnswer(); }, 1600);
+  } catch (e) {
+    // Name the rig this page actually drives; an earlier build said :7700 here
+    // while pointing at 7701, which sent people to restart the wrong process.
+    $("err").style.display = "";
+    $("err").textContent = `wrapper unreachable on ${WRAPPER} — is the study tool's test rig running? (${e})`;
+  }
+};
+$("btn-open").onclick = () => window.open(fakeTableUrl, "_blank");
+$("btn-stop").onclick = async () => {
+  await stopTest();
+  loaded = false;
+  paintDrive(); paintOffer();
+  say("test mode off");
+};
+
+$("fix-name").oninput = () => { $("btn-save").disabled = !$("fix-name").value.trim(); };
+$("btn-save").onclick = async () => {
+  const name = $("fix-name").value.trim();
+  if (!name) return;
+  const r = await saveFixture(name, { name, spec, expect: { hand: {}, relay: [], refuse: [] } });
+  say(r.ok ? `saved fixture ${r.file} — fill in its expect{} to assert` : `save failed: ${r.error}`);
+  loadFixtures();
+};
+
+/* --------------------------------------------------------- study answers */
+
+const SOURCE_LABEL = {
+  "local-preflop": "local preflop charts",
+  "hrc-3max-preflop": "HRC 3-max asymmetric charts",
+  "gtow-api-postflop": "GTO Wizard AI solve",
+  "mes-postflop": "pool MES (locked-villain flop solve)",
+};
+
+/**
+ * The live study answer for whatever the FAKE TABLE currently shows — the same
+ * verdict the panel would speak at a real table, produced by the same call
+ * (wrapper /hand -> fast-solver). Postflop answers cost a live solve (seconds),
+ * so the card shows it is working rather than sitting silent, and the answer
+ * names its SOURCE — an answer without provenance is not reviewable.
+ */
+const la = $("live-answer");
+const laBar = document.createElement("div");
+laBar.className = "row";
+const laBtn = document.createElement("button");
+laBtn.className = "mini";
+laBtn.textContent = "Get study answer";
+laBar.appendChild(laBtn);
+laBar.appendChild(strategyTabs());
+const laBusy = document.createElement("span");
+laBusy.className = "sub";
+laBusy.style.display = "none";
+laBusy.textContent = "postflop needs a live GTO Wizard solve — a few seconds";
+laBar.appendChild(laBusy);
+const laBody = document.createElement("div");
+laBody.innerHTML = `<p class="sub" style="font-style:italic">push a state, or press the button — answers the table as it stands</p>`;
+la.appendChild(laBar);
+la.appendChild(laBody);
+
+async function askAnswer() {
+  laBtn.disabled = true;
+  laBtn.textContent = "solving…";
+  laBusy.style.display = "";
+  let data;
+  try { data = await fetchStudyAnswer(getStrategyMode()); }
+  catch (e) { data = { ok: false, error: String(e) }; }
+  laBtn.disabled = false;
+  laBtn.textContent = "Get study answer";
+  laBusy.style.display = "none";
+
+  const s = data?.solution;
+  if (!data.ok) {
+    laBody.innerHTML = `<p class="box bad-box">${esc(data.error ?? "the fast-solver refused the state")}</p>`;
+    return;
+  }
+  if (data.deferred) {
+    laBody.innerHTML = `<p class="box warn-box">no decision here — ${esc(data.deferred)}</p>`;
+    return;
+  }
+  if (s && !s.ok) {
+    laBody.innerHTML = `<p class="box warn-box"><b>No answer.</b> ${esc(s.reason)}</p>`;
+    return;
+  }
+  if (!s?.ok) { laBody.innerHTML = `<p class="sub">no solution returned</p>`; return; }
+
+  const rows = (s.actions ?? []).map((a) =>
+    `<div class="freq"><span class="mono nm">${esc(a.action)}</span>` +
+    `<span class="track"><i style="width:${a.frequency}%"></i></span>` +
+    `<span class="mono pc">${Number(a.frequency).toFixed(1)}%</span></div>`).join("");
+
+  laBody.innerHTML =
+    `<div class="box ok-box">` +
+    `<div class="row" style="margin-bottom:5px">` +
+    `<span class="src-tag">${esc(SOURCE_LABEL[s.source] ?? s.source)}</span>` +
+    `<span class="mono sub" style="font-size:10px">${esc(s.setId)} · ${esc(s.depth)}bb · ${esc(s.pos ?? "—")} · ${esc(s.heroClass ?? "?")} @ ${esc(s.line)}</span>` +
+    `</div>${rows}` +
+    (s.decision ? `<p style="margin-top:6px;font-size:11px">picks <b class="mono">${esc(s.decision.action)}</b>` +
+      (s.decision.roll != null ? ` <span class="sub">(roll ${esc(s.decision.roll)})</span>` : "") + `</p>` : "") +
+    (s.notInRange ? `<p class="warn" style="font-size:10px">hero's hand is not in the range at this node</p>` : "") +
+    (s.warning ? `<p class="warn" style="font-size:10px">${esc(s.warning)}</p>` : "") +
+    `</div>`;
+}
+laBtn.onclick = () => void askAnswer();
+
+/* ----------------------------------------------------------------- editor */
+
+$("btn-json").onclick = () => {
+  const showJson = $("pane-json").style.display === "none";
+  $("pane-json").style.display = showJson ? "" : "none";
+  $("pane-form").style.display = showJson ? "none" : "";
+  $("btn-json").textContent = showJson ? "form" : "JSON";
+};
+
+function applyJson() {
+  try {
+    spec = JSON.parse($("json").value);
+    $("err").style.display = "none";
+    loaded = false;
+    steps = stepsOf(spec);
+    stepIdx = steps.length - 1;
+    drawStep(); paintOffer(); paintDrive(); buildForm();
+  } catch (e) {
+    $("err").style.display = "";
+    $("err").textContent = `spec is not valid JSON — ${e.message}`;
+  }
+}
+$("btn-apply").onclick = applyJson;
+$("json").onblur = applyJson;
+
+function sel(value, options, onChange) {
+  const s = document.createElement("select");
+  for (const o of options) {
+    const op = document.createElement("option");
+    op.value = String(o.v ?? o);
+    op.textContent = String(o.t ?? (o === "" ? "—" : o));
+    if (String(op.value) === String(value)) op.selected = true;
+    s.appendChild(op);
+  }
+  s.onchange = () => onChange(s.value);
+  return s;
+}
+
+function labelled(text, node, w) {
+  const l = document.createElement("label");
+  l.className = "row";
+  l.style.gap = "4px";
+  l.innerHTML = `<span class="sub">${text}</span>`;
+  if (w) node.style.width = w;
+  l.appendChild(node);
+  return l;
+}
+
+function numInput(value, onChange, w = "70px") {
+  const i = document.createElement("input");
+  i.type = "number"; i.step = "any";
+  i.value = value ?? "";
+  i.style.width = w;
+  i.oninput = () => onChange(i.value === "" ? undefined : Number(i.value));
+  return i;
+}
+
+function buildForm() {
+  /* table row */
+  const tr = $("tbl-row");
+  tr.textContent = "";
+  tr.appendChild(labelled("seats", sel(capOf(), [{ v: 3, t: "3-max" }, { v: 6, t: "6-max" }, { v: 9, t: "9-max" }], (v) =>
+    edit((d) => {
+      const n = Number(v);
+      d.capacity = n;
+      // Seats are keyed by number, so shrinking a table has to drop the seats
+      // that no longer exist — and hero / button / to-act have to come back
+      // inside the ring or the spot renders with nobody acting.
+      const keep = {};
+      for (let i = 1; i <= n; i++) keep[String(i)] = d.seats[String(i)] ?? { ...BLANK_SEAT };
+      d.seats = keep;
+      const clamp = (x) => (x && x <= n ? x : 1);
+      d.heroSeat = clamp(d.heroSeat);
+      d.dealerSeat = clamp(d.dealerSeat);
+      d.node = { ...(d.node ?? {}), toActSeat: clamp(d.node?.toActSeat) };
+    }))));
+  tr.appendChild(labelled("hero", sel(spec.heroSeat ?? 1, seatNums(), (v) =>
+    edit((d) => { d.heroSeat = Number(v); }))));
+  tr.appendChild(labelled("button", sel(spec.dealerSeat ?? 1, seatNums(), (v) =>
+    edit((d) => { d.dealerSeat = Number(v); }))));
+  tr.appendChild(labelled("to act", sel(spec.node?.toActSeat ?? spec.heroSeat ?? 1, seatNums(), (v) =>
+    edit((d) => { d.node = { ...(d.node ?? {}), toActSeat: Number(v) }; }))));
+  tr.appendChild(labelled("pot", numInput(spec.potBB, (v) => edit((d) => { d.potBB = v; }, false))));
+
+  /* board + hero cards */
+  const bs = $("board-slots");
+  bs.textContent = "";
+  [0, 1, 2, 3, 4].forEach((i) => {
+    bs.appendChild(cardSlot({
+      value: (spec.board ?? [])[i],
+      getUsed: usedCards,
+      onPick: (c) => edit((d) => {
+        const b = [...(d.board ?? [])];
+        if (c) b[i] = c; else b.splice(i);
+        d.board = b.filter(Boolean);
+      }),
+    }).node);
+  });
+
+  const hs = $("hero-slots");
+  hs.textContent = "";
+  [0, 1].forEach((i) => {
+    hs.appendChild(cardSlot({
+      value: (spec.heroCards ?? [])[i],
+      getUsed: usedCards,
+      onPick: (c) => edit((d) => {
+        const h = [...(d.heroCards ?? [])];
+        if (c) h[i] = c; else h.splice(i, 1);
+        d.heroCards = h.filter(Boolean);
+      }),
+    }).node);
+  });
+
+  const strength = $("strength");
+  strength.value = spec.handStrength ?? "";
+  strength.oninput = () => edit((d) => { d.handStrength = strength.value || undefined; }, false);
+
+  /* seats */
+  const rows = $("seat-rows");
+  rows.textContent = "";
+  for (const n of seatNums()) {
+    const s = spec.seats[String(n)];
+    const on = !!s && !s.empty;
+    const row = document.createElement("div");
+    row.className = "seat-grid";
+
+    const dot = document.createElement("button");
+    dot.className = "seat-dot" + (on ? " on" : "") + (n === spec.heroSeat ? " hero" : "");
+    dot.textContent = n;
+    dot.title = on ? "seat occupied — click to empty" : "empty seat — click to seat";
+    dot.onclick = () => edit((d) => {
+      d.seats = { ...d.seats };
+      d.seats[String(n)] = on ? { empty: true } : { ...BLANK_SEAT };
+    });
+    row.appendChild(dot);
+
+    const stack = numInput(s?.stack, (v) => edit((d) => {
+      d.seats[String(n)] = { ...d.seats[String(n)], stack: v };
+    }, false), "100%");
+    stack.disabled = !on;
+    row.appendChild(stack);
+
+    const bet = numInput(s?.bet, (v) => edit((d) => {
+      d.seats[String(n)] = { ...d.seats[String(n)], bet: v };
+    }, false), "100%");
+    bet.disabled = !on;
+    row.appendChild(bet);
+
+    const badge = sel(s?.badge ?? "", BADGES, (v) => edit((d) => {
+      d.seats[String(n)] = { ...d.seats[String(n)], badge: v || undefined };
+    }, false));
+    badge.disabled = !on;
+    row.appendChild(badge);
+
+    const cards = sel(s?.cards ?? 2, [{ v: 2, t: "in hand" }, { v: 0, t: "folded" }], (v) =>
+      edit((d) => { d.seats[String(n)] = { ...d.seats[String(n)], cards: Number(v) }; }, false));
+    cards.disabled = !on;
+    row.appendChild(cards);
+
+    rows.appendChild(row);
+  }
+
+  /* offer */
+  const or = $("offer-row");
+  or.textContent = "";
+  for (const k of ["fold", "check"]) {
+    const l = document.createElement("label");
+    l.className = "row";
+    l.style.gap = "4px";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!spec.offer?.[k];
+    cb.onchange = () => edit((d) => {
+      d.offer = { ...(d.offer ?? {}), [k]: cb.checked || undefined };
+    }, false);
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(k.toUpperCase()));
+    or.appendChild(l);
+  }
+  or.appendChild(labelled("call", numInput(spec.offer?.call, (v) =>
+    edit((d) => { d.offer = { ...(d.offer ?? {}), call: v }; }, false))));
+  or.appendChild(labelled("bet", numInput(spec.offer?.bet, (v) =>
+    edit((d) => { d.offer = { ...(d.offer ?? {}), bet: v }; }, false))));
+  or.appendChild(labelled("raise to", numInput(spec.offer?.raise, (v) =>
+    edit((d) => { d.offer = { ...(d.offer ?? {}), raise: v }; }, false))));
+
+  const sr = $("selector-row");
+  sr.textContent = "";
+  for (const s of SELECTORS) {
+    const on = (spec.offer?.selectors ?? []).includes(s);
+    const b = document.createElement("button");
+    b.className = "mini" + (on ? " on" : "");
+    b.textContent = s;
+    b.onclick = () => edit((d) => {
+      const cur = new Set(d.offer?.selectors ?? []);
+      if (on) cur.delete(s); else cur.add(s);
+      d.offer = { ...(d.offer ?? {}), selectors: SELECTORS.filter((x) => cur.has(x)) };
+    });
+    sr.appendChild(b);
+  }
+}
+
+/* --------------------------------------------------------------- fixtures */
+
+/**
+ * Say plainly when the rig is not answering.
+ *
+ * Everything on the right half of this page works offline — it is just an
+ * editor — so a dead wrapper looks like a working page with no fixtures and a
+ * Push button that does nothing, and the only evidence is a CORS error in the
+ * console. Name the port and what is expected on it instead.
+ */
+function wrapperDown(why) {
+  $("err").style.display = "";
+  $("err").innerHTML =
+    `<b>No test rig on ${esc(WRAPPER)}.</b> Authoring still works, but Push, ` +
+    `the relay buttons and the fixtures list need it. Start the study tool's ` +
+    `test rig (<code>study-tool.pyw</code>), or point this page at another rig ` +
+    `with <code>?wrapper=http://127.0.0.1:PORT</code>.` +
+    (why ? `<br><span class="sub">${esc(why)}</span>` : "");
+}
+
+async function loadFixtures() {
+  let fx = [];
+  try {
+    fx = await fetchFixtures();
+    $("err").style.display = "none";
+  } catch (e) {
+    wrapperDown(String(e.message ?? e));
+    fx = [];
+  }
+  const box = $("fixtures");
+  box.textContent = "";
+  for (const f of fx) {
+    const b = document.createElement("button");
+    b.className = "mini";
+    b.textContent = f.fixture.name ?? f.file;
+    if (f.fixture.why) b.title = f.fixture.why;
+    b.onclick = () => { spec = structuredClone(f.fixture.spec); afterSpecSwap(); };
+    box.appendChild(b);
+  }
+}
+
+function afterSpecSwap() {
+  $("json").value = JSON.stringify(spec, null, 2);
+  loaded = false;
+  steps = stepsOf(spec);
+  stepIdx = steps.length - 1;
+  drawStep(); paintOffer(); paintDrive(); buildForm();
+}
+
+$("btn-reset").onclick = () => { spec = structuredClone(START); afterSpecSwap(); };
+
+/* -------------------------------------------------------- pull the table */
+
+/*
+ * The fake table may already be showing a spot this page never authored — a
+ * Solve Audit row clicked onto it, or a spot pushed in an earlier visit. Build
+ * the editor out from the table rather than starting blank, and answer it.
+ *
+ * Pulls on load and again whenever the tool shell fronts this tab (its {shown}
+ * message): the tabs stay alive behind each other, so without the re-pull a
+ * second audit click loaded the table with a new spot while this page kept
+ * showing the previous one — same hero cards (the audit defaults repeat),
+ * different board and stacks, maximally confusing.
+ */
+let lastPulled = "";
+function pull() {
+  fetchCurrentSpec().then((cur) => {
+    if (!cur) return;
+    const key = JSON.stringify(cur);
+    if (key === lastPulled) return;   // table unchanged — keep local edits
+    lastPulled = key;
+    spec = cur;
+    afterSpecSwap();
+    loaded = true;
+    paintDrive(); paintOffer();
+    // Give the wrapper a beat to finish rendering the pulled state — asking at
+    // 400ms raced the table and the first answer came back empty until the
+    // button was pressed by hand.
+    setTimeout(async () => { await refreshHand(); void askAnswer(); }, 1500);
+  }).catch(() => {});
+}
+window.addEventListener("message", (e) => {
+  if (e.data && e.data.shown === "setup") pull();
+});
+
+$("json").value = JSON.stringify(spec, null, 2);
+buildForm();
+drawStep();
+paintOffer();
+paintDrive();
+loadFixtures();
+pull();
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"(root)","pos":"BTN","take":"R2","cls":"A7o","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2","pos":"SB","take":"F","cls":"42o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F","pos":"BB","take":"C","cls":"33","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"33","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"33","ok":true,"source":"gtow-api-postflop","decision":"CALL 2.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"33","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"33","ok":true,"source":"gtow-api-postflop","decision":"CALL 2.3","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"(root)","pos":"BTN","take":"F","cls":"62o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"F","pos":"SB","take":"R2","cls":"A6s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"F-R2","pos":"BB","take":"C","cls":"Q8o","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Kc7d2h","node":"first to act","pos":"SB","cls":"Q8o","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Kc7d2h","node":"facing half-pot","pos":"BB","cls":"Q8o","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Qs8s4d","node":"first to act","pos":"SB","cls":"Q8o","ok":true,"source":"gtow-api-postflop","decision":"BET 1","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Qs8s4d","node":"facing half-pot","pos":"BB","cls":"Q8o","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"(root)","pos":"BTN","take":"R2","cls":"A7o","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2","pos":"SB","take":"F","cls":"42o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F","pos":"BB","take":"R9","cls":"A7s","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-R9","pos":"BTN","take":"C","cls":"A8s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"A8s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"A8s","ok":true,"source":"gtow-api-postflop","decision":"CALL 9.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"A8s","ok":true,"source":"gtow-api-postflop","decision":"BET 13.25","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"A8s","ok":true,"source":"gtow-api-postflop","decision":"CALL 9.3","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"(root)","pos":"BTN","take":"R2","cls":"33","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2","pos":"SB","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F","pos":"BB","take":"C","cls":"Q8s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"Q8s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"Q8s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"Q8s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"Q8s","ok":true,"source":"gtow-api-postflop","decision":"RAISE 6.35","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"(root)","pos":"BTN","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"F","pos":"SB","take":"R2","cls":"Q3s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"F-R2","pos":"BB","take":"C","cls":"T9o","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"F-R2-C","board":"Kc7d2h","node":"first to act","pos":"SB","cls":"T9o","ok":true,"source":"gtow-api-postflop","decision":"BET 1.6","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"F-R2-C","board":"Kc7d2h","node":"facing half-pot","pos":"BB","cls":"T9o","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"F-R2-C","board":"Qs8s4d","node":"first to act","pos":"SB","cls":"T9o","ok":true,"source":"gtow-api-postflop","decision":"BET 1","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"F-R2-C","board":"Qs8s4d","node":"facing half-pot","pos":"BB","cls":"T9o","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"(root)","pos":"BTN","take":"R2","cls":"33","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2","pos":"SB","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F","pos":"BB","take":"R7.5","cls":"QQ","ok":true,"source":"hrc-3max-preflop","decision":"Raise 14"}
+{"kind":"preflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-R7.5","pos":"BTN","take":"C","cls":"A9s","ok":true,"source":"hrc-3max-preflop","decision":"All-in"}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-R7.5-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"A9s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-R7.5-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"A9s","ok":true,"source":"gtow-api-postflop","decision":"CALL 7.8","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-R7.5-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"A9s","ok":true,"source":"gtow-api-postflop","decision":null,"warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D100_s40_bb","line":"R2-F-R7.5-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"A9s","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"(root)","pos":"BTN","take":"R2","cls":"75s","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2","pos":"SB","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F","pos":"BB","take":"C","cls":"65s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"65s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"65s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"65s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"65s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2.3","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"(root)","pos":"BTN","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"F","pos":"SB","take":"R2","cls":"97s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 3"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"F-R2","pos":"BB","take":"C","cls":"Q4s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"F-R2-C","board":"Kc7d2h","node":"first to act","pos":"SB","cls":"Q4s","ok":true,"source":"gtow-api-postflop","decision":"BET 1","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"F-R2-C","board":"Kc7d2h","node":"facing half-pot","pos":"BB","cls":"Q4s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"F-R2-C","board":"Qs8s4d","node":"first to act","pos":"SB","cls":"Q4s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"F-R2-C","board":"Qs8s4d","node":"facing half-pot","pos":"BB","cls":"Q4s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"(root)","pos":"BTN","take":"R2","cls":"75s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2","pos":"SB","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F","pos":"BB","take":"R8","cls":"K2s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 8"}
+{"kind":"preflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-R8","pos":"BTN","take":"C","cls":"98s","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-R8-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"98s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-R8-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"98s","ok":true,"source":"gtow-api-postflop","decision":"CALL 8.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-R8-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"98s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D95_s80_btn","line":"R2-F-R8-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"98s","ok":true,"source":"gtow-api-postflop","decision":"CALL 6.75","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"(root)","pos":"BTN","take":"R2","cls":"76o","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2","pos":"SB","take":"F","cls":"92o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F","pos":"BB","take":"C","cls":"62s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"62s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"62s","ok":true,"source":"gtow-api-postflop","decision":"RAISE 6.9","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"62s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"62s","ok":true,"source":"gtow-api-postflop","decision":null,"warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"(root)","pos":"BTN","take":"F","cls":"82o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"F","pos":"SB","take":"R2","cls":"Q2s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"F-R2","pos":"BB","take":"C","cls":"J9o","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"F-R2-C","board":"Kc7d2h","node":"first to act","pos":"SB","cls":"J9o","ok":true,"source":"gtow-api-postflop","decision":"BET 1","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"F-R2-C","board":"Kc7d2h","node":"facing half-pot","pos":"BB","cls":"J9o","ok":true,"source":"gtow-api-postflop","decision":"RAISE 6","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"F-R2-C","board":"Qs8s4d","node":"first to act","pos":"SB","cls":"J9o","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"F-R2-C","board":"Qs8s4d","node":"facing half-pot","pos":"BB","cls":"J9o","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"(root)","pos":"BTN","take":"R2","cls":"76o","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2","pos":"SB","take":"F","cls":"92o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F","pos":"BB","take":"R8","cls":"Q4o","ok":true,"source":"hrc-3max-preflop","decision":"Raise 8"}
+{"kind":"preflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-R8","pos":"BTN","take":"C","cls":"97s","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-R8-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"97s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-R8-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"97s","ok":true,"source":"gtow-api-postflop","decision":"CALL 8.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-R8-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"97s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D110_s90_sb","line":"R2-F-R8-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"97s","ok":true,"source":"gtow-api-postflop","decision":null,"warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"(root)","pos":"BTN","take":"R2","cls":"KQs","ok":true,"source":"hrc-3max-preflop","decision":"Raise 3"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2","pos":"SB","take":"F","cls":"42o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F","pos":"BB","take":"C","cls":"74s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"74s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"74s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2.3","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"74s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"74s","ok":true,"source":"gtow-api-postflop","decision":null,"warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"(root)","pos":"BTN","take":"F","cls":"32o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"F","pos":"SB","take":"R2","cls":"J8s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"F-R2","pos":"BB","take":"C","cls":"K5s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"F-R2-C","board":"Kc7d2h","node":"first to act","pos":"SB","cls":"K5s","ok":true,"source":"gtow-api-postflop","decision":"BET 1","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"F-R2-C","board":"Kc7d2h","node":"facing half-pot","pos":"BB","cls":"K5s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"F-R2-C","board":"Qs8s4d","node":"first to act","pos":"SB","cls":"K5s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"F-R2-C","board":"Qs8s4d","node":"facing half-pot","pos":"BB","cls":"K5s","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"(root)","pos":"BTN","take":"R2","cls":"KQs","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2.2"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2","pos":"SB","take":"F","cls":"42o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F","pos":"BB","take":"R7.5","cls":"AA","ok":true,"source":"hrc-3max-preflop","decision":"Raise 12"}
+{"kind":"preflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-R7.5","pos":"BTN","take":"C","cls":"ATs","ok":true,"source":"hrc-3max-preflop","decision":"All-in"}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-R7.5-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"ATs","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-R7.5-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"ATs","ok":true,"source":"gtow-api-postflop","decision":"CALL 7.8","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-R7.5-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"ATs","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign200_3maxasym_D125_s45_bb","line":"R2-F-R7.5-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"ATs","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"(root)","pos":"BTN","take":"R2","cls":"A2s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2","pos":"SB","take":"F","cls":"72o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F","pos":"BB","take":"C","cls":"T5s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"T5s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"T5s","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"T5s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"T5s","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"(root)","pos":"BTN","take":"F","cls":"62o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"F","pos":"SB","take":"R2","cls":"K4o","ok":true,"source":"hrc-3max-preflop","decision":"Raise 3"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"F-R2","pos":"BB","take":"C","cls":"Q6s","ok":true,"source":"hrc-3max-preflop","decision":"Call"}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Kc7d2h","node":"first to act","pos":"SB","cls":"Q6s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Kc7d2h","node":"facing half-pot","pos":"BB","cls":"Q6s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Qs8s4d","node":"first to act","pos":"SB","cls":"Q6s","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"F-R2-C","board":"Qs8s4d","node":"facing half-pot","pos":"BB","cls":"Q6s","ok":true,"source":"gtow-api-postflop","decision":"CALL 2","warning":null}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"(root)","pos":"BTN","take":"R2","cls":"A2s","ok":true,"source":"hrc-3max-preflop","decision":"Raise 2"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2","pos":"SB","take":"F","cls":"72o","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F","pos":"BB","take":"R9","cls":"AA","ok":true,"source":"hrc-3max-preflop","decision":"Raise 9"}
+{"kind":"preflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-R9","pos":"BTN","take":"C","cls":"QTo","ok":true,"source":"hrc-3max-preflop","decision":"Fold"}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Kc7d2h","node":"first to act","pos":"BB","cls":"QTo","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Kc7d2h","node":"facing half-pot","pos":"BTN","cls":"QTo","ok":true,"source":"gtow-api-postflop","decision":"FOLD","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Qs8s4d","node":"first to act","pos":"BB","cls":"QTo","ok":true,"source":"gtow-api-postflop","decision":"CHECK","warning":null}
+{"kind":"postflop","chart":"ign500_3maxasym_D100_s100_eq","line":"R2-F-R9-C","board":"Qs8s4d","node":"facing half-pot","pos":"BTN","cls":"QTo","ok":true,"source":"gtow-api-postflop","decision":null,"warning":null}

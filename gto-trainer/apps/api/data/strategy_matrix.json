@@ -1,6 +1,6 @@
 {
- "generatedAt": "2026-09-07T19:13:57",
- "gitSha": "ab803cb9",
+ "generatedAt": "2026-09-09T05:43:51",
+ "gitSha": "ee8bf161",
  "inputs": {
   "ladder": true,
   "combined": true,
@@ -156,7 +156,7 @@
       {
        "label": "export_exploit_ranges.py",
        "path": "export_exploit_ranges.py",
-       "date": "Sep 06"
+       "date": "Sep 09"
       },
       {
        "label": "coverage_winrate.py",
@@ -587,7 +587,7 @@
   {
    "step": "argmax preflop",
    "artifact": "exploit_ranges.json",
-   "date": "Sep 06",
+   "date": "Sep 09",
    "what": "constrained best response vs the pool; the served EXPLOIT_CHART"
   },
   {

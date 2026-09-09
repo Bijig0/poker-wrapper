@@ -22,7 +22,15 @@ import { streetFixedPcts } from "../utils/streetFixedPcts/streetFixedPcts";
 /**
  * AI-study: postflop study of ANY heads-up preflop line via GTO Wizard's cloud
  * AI solver — the analysis app's "Gto Wizard UI" tab uses this as an extra
- * "config" beside its locally-solved trees. Both flop-entering ranges are
+ * "config" beside its locally-solved trees.
+ *
+ * ⚠ SolverStudy ONLY (analysis/src/gtowui/api.ts → fetchAiStudyNode). This is
+ * NOT the live answer path and the study dashboard no longer calls it: live
+ * answers, the dashboard's "▶ solve (live chain)" and its discrepancy re-solves
+ * all go through services/aiChain.ts (routes/dashboard.ts POST /resolve-chain),
+ * which uses the hand's own ranges (3-max HRC grid when 3-handed) and stores
+ * every walk in services/solveStore.ts. Its defaults here are the 6-max NL500
+ * crawl at 100bb, so its answers are NOT comparable to the live ones. Both flop-entering ranges are
  * reconstructed from the crawled preflop charts, one custom solution is minted
  * per street (nodes within a street are free queries on the same solve), and
  * later streets re-root with both ranges conditioned on every action taken —

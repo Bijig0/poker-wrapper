@@ -49,7 +49,13 @@ export interface ChartChoice {
   shortSeat: "BTN" | "SB" | "BB" | "EQ";
   /** Set when selection had to guess (missing stacks) — ride it to the panel. */
   note: string | null;
+  /** The observed deep-pair depth (bb) when it lies past the last rung — the
+   *  chart answers from that rung, and the miss queue records the state. */
+  beyondLadder: number | null;
 }
+
+/** Past this depth the 150bb chart is a guess, not a snap. */
+export const LADDER_TOP = RUNGS[RUNGS.length - 1]! + 10;
 
 /**
  * Canonical chart for the observed table state. With sorted stacks a<=b<=c the
@@ -130,12 +136,18 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
       shortDepth: d,
       shortSeat: "EQ",
       note: `stacks unreadable for ${3 - have.length} seat(s) — using the even ${d}bb chart`,
+      beyondLadder: null,
     };
   }
 
   const sorted = [...have].sort((x, y) => x[1] - y[1]);
   const s = snapRung(sorted[0]![1]);
   const d = snapRung(sorted[1]![1]); // cap the biggest to the middle
+  const mid = Math.round(sorted[1]![1]);
+  const beyondLadder = mid > LADDER_TOP ? mid : null;
+  const beyondNote = beyondLadder != null
+    ? `deep stacks ${mid}bb are past the ${RUNGS[RUNGS.length - 1]}bb rung — answered from the ${d}bb chart (miss queued)`
+    : null;
   if (s >= d) {
     return {
       id: v2ciId(site, d) ?? `${site}_3maxasym_D${d}_s${d}_eq`,
@@ -143,7 +155,8 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
       depth: d,
       shortDepth: d,
       shortSeat: "EQ",
-      note: null,
+      note: beyondNote,
+      beyondLadder,
     };
   }
   const seat = sorted[0]![0];
@@ -155,7 +168,8 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
       depth: d,
       shortDepth: s,
       shortSeat: seat,
-      note: `re-solved ${d}bb even chart (${seat} is short at ${s}bb — asymmetry approximated; this generation has real river betting)`,
+      note: [`re-solved ${d}bb even chart (${seat} is short at ${s}bb — asymmetry approximated; this generation has real river betting)`, beyondNote].filter(Boolean).join(" "),
+      beyondLadder,
     };
   }
   return {
@@ -164,7 +178,8 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
     depth: d,
     shortDepth: s,
     shortSeat: seat,
-    note: null,
+    note: beyondNote,
+    beyondLadder,
   };
 }
 

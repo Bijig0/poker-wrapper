@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { readLine, tickToHand, type Tick } from "../feed/tickToHand/tickToHand";
 import { fastSolve } from "../services/fastSolve";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
@@ -369,11 +369,33 @@ interface HandNode {
   heroDid?: string;
 }
 
-replay.get("/:name/hands", (c) => {
-  const dir = sessionDir(c.req.param("name"));
-  if (!dir) return c.json({ ok: false, error: "no such session" }, 404);
+export interface SessionHand {
+  hand: number;
+  clientHandId: string | null;
+  heroSeat: number | null;
+  heroCards: string[];
+  firstSeq: number | undefined;
+  lastSeq: number | undefined;
+  streets: string[];
+  decisions: number;
+  nodes: HandNode[];
+}
+
+const handsCache = new Map<string, { mtimeMs: number; hands: SessionHand[] }>();
+
+/**
+ * The session as HANDS, each hand as NODES, parsed from the stitched feed
+ * with the same grammar the answer path uses. Cached per session by the
+ * log's mtime — a finished recording never changes, the live one grows.
+ */
+export function parseSessionHands(name: string): SessionHand[] | null {
+  const dir = sessionDir(name);
+  if (!dir) return null;
   const logPath = join(dir, "log.jsonl");
-  if (!existsSync(logPath)) return c.json({ ok: false, error: "no log.jsonl" }, 404);
+  if (!existsSync(logPath)) return null;
+  const mtimeMs = statSync(logPath).mtimeMs;
+  const hit = handsCache.get(name);
+  if (hit && hit.mtimeMs === mtimeMs) return hit.hands;
   const ticks = jsonl(logPath) as Tick[];
 
   const byHand = new Map<number, Tick[]>();
@@ -451,8 +473,60 @@ replay.get("/:name/hands", (c) => {
     };
   });
 
+  handsCache.set(name, { mtimeMs, hands });
+  return hands;
+}
+
+replay.get("/:name/hands", (c) => {
+  const hands = parseSessionHands(c.req.param("name"));
+  if (!hands) return c.json({ ok: false, error: "no such session (or no log.jsonl)" }, 404);
   return c.json({ ok: true, hands });
 });
+
+/** Recorded session names, newest first. */
+export function listSessionNames(): string[] {
+  if (!existsSync(DEBUG_DIR)) return [];
+  return readdirSync(DEBUG_DIR).filter((n) => /^session_\d{8}_\d{6}$/.test(n)).sort().reverse();
+}
+
+export interface HandRecording {
+  session: string;
+  hand: number;
+  firstSeq: number;
+  lastSeq: number;
+  nodeCount: number;
+  /** Hero decision nodes in order — the k-th hero decision of the archived hand is decisions[k]. */
+  decisions: { nodeIndex: number; street: string; seq: number; answerSeq: number; label: string; heroDid?: string }[];
+}
+
+const cidIndex = new Map<string, HandRecording>();
+
+/**
+ * Which recording holds this hand (by the site's hand id), and where its
+ * hero decisions sit in that recording — the hand detail's "open in Replay
+ * Review at this node" link. A hit is cached forever (recordings are
+ * immutable once the session ends); a miss re-scans, which is cheap because
+ * every session's parse is cached by mtime.
+ */
+export function recordingForHand(clientHandId: string): HandRecording | null {
+  const hit = cidIndex.get(clientHandId);
+  if (hit) return hit;
+  for (const name of listSessionNames()) {
+    const hands = parseSessionHands(name);
+    if (!hands) continue;
+    const h = hands.find((x) => x.clientHandId === clientHandId);
+    if (!h) continue;
+    const rec: HandRecording = {
+      session: name, hand: h.hand, firstSeq: h.firstSeq ?? 0, lastSeq: h.lastSeq ?? 0, nodeCount: h.nodes.length,
+      decisions: h.nodes.filter((n) => n.kind === "decision").map((n) => ({
+        nodeIndex: n.i, street: n.street, seq: n.seq, answerSeq: n.answerSeq ?? n.seq, label: n.label, heroDid: n.heroDid,
+      })),
+    };
+    cidIndex.set(clientHandId, rec);
+    return rec;
+  }
+  return null;
+}
 
 /** Hero's seat from the raw capture, for ticks recorded before log.jsonl had it. */
 function withHeroFromDom(dir: string, seq: number, tick: Tick): { tick: Tick; note?: string } {

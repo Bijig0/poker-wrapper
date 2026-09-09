@@ -100,6 +100,19 @@
   .src .foot { display: flex; gap: 14px; align-items: baseline; border-top: 1px solid #232b37; padding-top: 8px; margin-top: 2px; }
   .src .foot .big { font-size: 18px; font-weight: 700; } .src .foot .k { color: #8fa1b6; font-size: 11px; }
   .src .caveat { color: #ffce56; font-size: 12px; }
+  .src .pieces { display: flex; gap: 4px; }
+  .pc { display: inline-block; padding: 0 7px; border-radius: 8px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; line-height: 17px; background: #1a2230; color: #9db1c7; border: 1px solid #2c3a4d; }
+  .pc.preflop { color: #9ecbff; } .pc.postflop { color: #d3b7ff; } .pc.opponent { color: #ffb86b; } .pc.ground-truth { color: #8fa1b6; }
+  .src .edge { display: grid; grid-template-columns: auto auto 1fr; gap: 0 14px; align-items: baseline; background: #10151d; border-radius: 6px; padding: 8px 10px; }
+  .src .edge .v { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; } .src .edge .v.pos { color: #61d095; } .src .edge .v.neg { color: #ff8a80; } .src .edge .v.zero { color: #9db1c7; }
+  .src .edge .k { font-size: 10.5px; color: #8fa1b6; text-transform: uppercase; letter-spacing: .04em; display: block; }
+  .src .edge .n { grid-column: 1 / -1; color: #8fa1b6; font-size: 11.5px; margin-top: 2px; }
+  .src .edge.none .v { font-size: 14px; font-weight: 600; }
+  .src .fmts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .fmt { display: inline-block; padding: 2px 9px; border-radius: 8px; font-size: 11.5px; font-weight: 600; background: #1e3247; color: #cfe0f2; }
+  .fmt .sub { font-weight: 400; margin: 0; }
+  .src .cov { font-size: 12.5px; } .src .cov .gap { color: #ffce56; display: block; margin-top: 2px; font-size: 12px; }
+  .src .field-k { font-size: 10.5px; color: #8fa1b6; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
   .spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; margin-left: auto; }
   .spark i { display: block; width: 4px; background: #2f78bd; border-radius: 2px 2px 0 0; min-height: 1px; }
   .spark i.m { background: #cf6a24; }
@@ -225,6 +238,60 @@
   #gridtip .note { color: #8fa1b6; font-size: 11px; margin-top: 4px; }
   #pl-answer .ans { margin-top: 10px; }
   .pl-take { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  /* ledger */
+  .lg-plan { border-left: 3px solid #4da3ff; }
+  .lg-steps { display: grid; gap: 6px; margin-top: 8px; }
+  .lg-step { display: grid; grid-template-columns: 26px 1fr auto auto; gap: 10px; align-items: center; background: #10151d; border-radius: 6px; padding: 8px 10px; }
+  .lg-step .n { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: #1e3247; color: #9ecbff; }
+  .lg-step.done .n { background: #1c3b2c; color: #61d095; } .lg-step.stale .n { background: #4d3d1e; color: #ffce56; } .lg-step.blocked .n { background: #57222a; color: #ff9a9a; }
+  .rb-cfg { border-left: 3px solid #1e3247; } .rb-cfg.done { border-left-color: #61d095; } .rb-cfg.stale { border-left-color: #ffce56; } .rb-cfg.blocked { border-left-color: #ff9a9a; } .rb-cfg.planned { border-left-color: #4da3ff; }
+  .rb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 18px; margin: 8px 0; font-size: 12.5px; }
+  .rb-grid b { display: block; color: #8fa1b6; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 2px; }
+  .rb-steps { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 6px; }
+  .rb-steps li { background: #10151d; border-radius: 6px; padding: 8px 10px; }
+  .rb-steps .how { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; padding: 1px 6px; border-radius: 3px; background: #1e3247; color: #9ecbff; margin-left: 6px; }
+  .rb-steps .how.hrc { background: #2b1f3d; color: #d3b7ff; } .rb-steps .how.fleet { background: #3d2a1e; color: #ffb27a; } .rb-steps .how.manual { background: #1a212c; color: #8fa1b6; } .rb-steps .how.blocked { background: #57222a; color: #ff9a9a; }
+  .rb-cmd { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; background: #0b0f14; border: 1px solid #1c2430; border-radius: 4px; padding: 6px 8px; margin: 4px 0; white-space: pre-wrap; word-break: break-all; color: #cfe3ff; }
+  .rb-cmd .dim { color: #6f8196; }
+  .rb-list { margin: 2px 0 0 16px; padding: 0; font-size: 12.5px; } .rb-list li { margin: 2px 0; }
+  .rb-block { color: #ff9a9a; }
+  .rb-order { font-size: 13px; margin: 6px 0; } .rb-order .g { display: inline-block; background: #10151d; border-radius: 6px; padding: 4px 8px; margin: 2px; } .rb-order .g.par { border: 1px dashed #4da3ff; }
+  .rb-pre { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 14px; font-size: 12.5px; }
+  .prop { border-left: 3px solid #4da3ff; padding: 14px 18px; } .prop.approved { border-left-color: #61d095; }
+  .prop h2 { font-size: 17px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .prop-t { border-collapse: collapse; width: 100%; max-width: 1100px; } .prop-t th { text-align: left; vertical-align: top; width: 84px; padding: 5px 10px 5px 0; color: #8fa1b6; font-size: 10.5px; letter-spacing: .7px; font-weight: 600; }
+  .prop-t td { padding: 5px 0; font-size: 13.5px; line-height: 1.5; vertical-align: top; white-space: normal; max-width: 1000px; } .prop-t tr + tr td, .prop-t tr + tr th { border-top: 1px solid #161d27; }
+  .prop-t .ln { display: block; } .prop-t .solve { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start; margin-bottom: 6px; } .prop-t .solve .sub { font-size: 12px; margin-top: 1px; }
+  .prop-t .solve .k { color: #8fa1b6; font-variant-numeric: tabular-nums; } .prop-t .solve .mono { font-size: 11px; }
+  .prop .st-pill.approved { background: #1c3b2c; color: #61d095; } .prop .st-pill.draft { background: #1a212c; color: #8fa1b6; }
+  .prop details { margin-top: 10px; } .prop summary { cursor: pointer; color: #8fa1b6; font-size: 12px; } .prop details .card { margin-top: 8px; }
+  .prop .steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .prop-t tr.part th, .prop-t tr.part td { padding-top: 14px; border-top: 2px solid #1e3247; } .prop-t tr.part td b { font-size: 14.5px; }
+  .prop .live { font-size: 12px; margin-top: 3px; color: #d3b7ff; } .prop .live.failed { color: #ff9a9a; } .prop .live.queued { color: #8fa1b6; } .prop .live .mono { font-size: 11px; }
+  .prop .big { font-size: 13px; padding: 6px 12px; } .prop .big.go { background: #1c3b2c; color: #61d095; border-color: #2c5a40; }
+  /* progress: the bar + the per-solve page */
+  .pbar { display: inline-block; height: 8px; width: 160px; background: #1a212c; border-radius: 4px; overflow: hidden; vertical-align: middle; } .pbar i { display: block; height: 100%; background: #61d095; border-radius: 4px; transition: width .4s; } .pbar i.live { background: #b48cff; }
+  .pbar.wide { display: block; width: 100%; height: 12px; margin: 6px 0 8px; }
+  .prop h2 a.pg { color: inherit; text-decoration: none; } .prop h2 a.pg:hover { text-decoration: underline; }
+  .pg-card { border-left: 3px solid #1e3247; } .pg-card.live { border-left-color: #b48cff; } .pg-card.done { border-left-color: #61d095; } .pg-card.failed { border-left-color: #ff9a9a; }
+  .pg-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; margin-bottom: 6px; }
+  .pg-boxes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 8px; }
+  .pg-box { background: #0e131a; border: 1px solid #1c2430; border-radius: 6px; padding: 10px 12px; } .pg-box h3 { font-size: 13px; margin: 0 0 6px; display: flex; gap: 8px; align-items: center; } .pg-box h3 .sub { margin-left: auto; font-weight: 400; }
+  .pg-box .cur { margin: 6px 0; font-size: 12.5px; } .pg-box .cur b { color: #d3b7ff; }
+  .pg-dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; } .pg-dots span { width: 14px; height: 14px; border-radius: 3px; background: #1a212c; display: inline-block; } .pg-dots .done { background: #61d095; } .pg-dots .locking { background: #d3b7ff; } .pg-dots .solving { background: #7a5cc4; } .pg-dots .failed { background: #ff6b6b; }
+  .pg-log { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 10.5px; color: #8fa1b6; white-space: pre-wrap; word-break: break-all; margin-top: 6px; max-height: 96px; overflow: auto; }
+  .pg-rows { width: 100%; border-collapse: collapse; margin-top: 6px; } .pg-rows td { padding: 2px 8px 2px 0; font-size: 12px; border-top: 1px solid #161d27; }
+  .wd-panel { margin: 8px 0 4px; padding: 10px 12px; background: #0b0f14; border: 1px solid #1c2430; border-radius: 6px; }
+  .wd-title { font-weight: 600; margin-bottom: 6px; } .wd-grid { display: flex; flex-wrap: wrap; gap: 14px 26px; } .wd-sec { max-width: 420px; } .wd-sec.wide { max-width: 100%; flex-basis: 100%; } .wd-sec > b { font-size: 12.5px; }
+  .wc-row > td { padding: 8px 6px 12px; background: #0e1420; } .wc-row .wd-grid { gap: 12px 22px; }
+  .wd-btn { padding: 0 6px; font-size: 10.5px; }
+  .rb-num { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: #1e3247; color: #9ecbff; font-size: 11px; align-items: center; justify-content: center; margin-right: 6px; }
+  .lg-step .est { font-variant-numeric: tabular-nums; color: #8fa1b6; font-size: 12px; text-align: right; }
+  .st-pill { display: inline-block; padding: 0 8px; border-radius: 8px; font-size: 11px; font-weight: 700; line-height: 17px; }
+  .st-pill.done { background: #1c3b2c; color: #61d095; } .st-pill.stale { background: #4d3d1e; color: #ffce56; } .st-pill.planned { background: #1e3247; color: #9ecbff; } .st-pill.blocked, .st-pill.missing, .st-pill.failed { background: #57222a; color: #ff9a9a; } .st-pill.running { background: #2b1f3d; color: #d3b7ff; } .st-pill.queued { background: #1a212c; color: #8fa1b6; }
+  .lg-why { color: #ffce56; font-size: 12px; }
+  .lg-log { background: #0c1013; border-radius: 6px; padding: 8px; font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 11px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .lg-fmt td { vertical-align: top; }
   /* miss queue */
   .mq-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 10px; }
   .mq-ctl select { background: #1d2836; border: 1px solid #2c3a4d; color: #cfe0f2; border-radius: 5px; padding: 2px 6px; font-size: 11.5px; }
@@ -359,6 +426,7 @@
     <button id="tab-sources">Sources</button>
     <button id="tab-replay">Replay Review</button>
     <button id="tab-play">Playthrough</button>
+    <button id="tab-ledger" title="solve proposals: what is being solved, from what, into what, at what cost — approve one, run it, watch it">Solve Proposals</button>
   </div>
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
@@ -379,6 +447,7 @@
   </div>
   <div id="view-detail" style="display:none"></div>
   <div id="view-sessions" style="display:none"></div>
+  <div id="view-ledger" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
   <div id="view-sources" style="display:none"></div>
   <div id="view-play" style="display:none"></div>
@@ -653,7 +722,7 @@ async function showDetail(dbId) {
 
 /* ---- provenance: which source answered each decision, stated outright ---- */
 const SOURCE_INFO = {
-  "pool-exploit-preflop": { label: "Pool-exploit preflop overlay", card: "exploit-preflop", mode: "mes" },
+  "pool-exploit-preflop": { label: "3-handed Zone 25NL preflop exploit charts", card: "exploit-preflop", mode: "mes" },
   "hrc-3max-preflop": { label: "HRC 3-max asymmetric grid", card: "hrc-3max", mode: "gto" },
   "local-preflop": { label: "GTO Wizard crawled charts", card: "gtow-charts", mode: "gto" },
   "mes-postflop": { label: "MES locked flop solves", card: "mes-postflop", mode: "mes" },
@@ -1578,6 +1647,312 @@ function renderCatalog() {
   };
 }
 
+/* ================= Ledger: formats · configs · plans · jobs ================= */
+let LG = null, lgJobTimer = null, lgOpenLog = null;
+const minsStr = (m) => m >= 48 * 60 ? `${(m / 1440).toFixed(m >= 14400 ? 0 : 1)} days` : m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)} h` : `${Math.round(m)} min`;
+async function loadLedger() {
+  const v = $("view-ledger");
+  if (!LG) v.innerHTML = '<div class="card sub">loading the ledger…</div>';
+  try { LG = await (await fetch("/api/ledger")).json(); } catch (e) { v.innerHTML = '<div class="card warn">ledger unavailable</div>'; return; }
+  if (!LG.ok) { v.innerHTML = '<div class="card warn">ledger unavailable</div>'; return; }
+  if ((PATH.pane === "runbook" || PATH.pane === "plan") && PATH.id) { await renderRunbook(PATH.id); return; }
+  if (PATH.pane === "ledger") { renderLedger(); return; }
+  if (PATH.pane === "detail") { renderOperatorDetail(); return; }
+  if (PATH.pane === "progress" && PATH.id) { await renderProgress(PATH.id); return; }
+  renderProposalPage();
+  clearTimeout(lgJobTimer);
+  if ((LG.jobs || []).some((j) => j.status === "running" || j.status === "queued")) lgJobTimer = setTimeout(loadLedger, 4000);
+}
+function renderLedger() {
+  const v = $("view-ledger"), L = LG;
+  const cById = new Map(L.configs.map((c) => [c.id, c]));
+  const stPill = (s) => `<span class="st-pill ${esc(s)}">${esc(s)}</span>`;
+  const estStr = (c) => `${minsStr(c.estimate.wallMinutes)}${c.runner === "fleet" ? " on 4 boxes" : c.runner === "hrc-zenbook" ? " on the Zenbook" : ""}${c.estimate.eur ? ` · €${c.estimate.eur}` : ""}`;
+  const inputsReady = (c) => c.inputs.every((x) => cById.get(x)?.effective === "done");
+  const runBtn = (c) => c.effective === "done" ? "" : !inputsReady(c) ? `<span class="sub" title="${esc(c.inputs.filter((x) => cById.get(x)?.effective !== "done").map((x) => cById.get(x)?.label ?? x).join(", "))}">waiting on inputs</span>` : c.recipe && c.kind !== "locked-root" && c.runner !== "fleet"
+    ? `<button class="mini" onclick="lgRun('${esc(c.id)}')">▶ run</button>`
+    : c.runner === "fleet" ? `<button class="mini" onclick="lgRun('${esc(c.id)}')" title="the fleet solve is started by hand from the runbook; this builds/installs the result">build</button> <button class="mini" onclick="lgMark('${esc(c.id)}','done')">mark done</button>`
+    : c.kind === "locked-root" ? `<span class="sub">needs the lock step in the grid runner</span>` : `<button class="mini" onclick="lgMark('${esc(c.id)}','done')">mark done</button>`;
+  const plans = L.plans.map((p) => `<div class="card lg-plan"><h2>${esc(p.label)} <span class="sub">— ${p.remaining} of ${p.steps.length} steps left · ${minsStr(p.totalWallMinutes)} wall-clock${p.totalEur ? ` · €${p.totalEur}` : ""}</span> <button class="mini" style="margin-left:10px" onclick="go('/ledger/runbook/${esc(p.id)}')">📋 open the runbook — every step spelled out</button></h2>
+      <div class="sub">${esc(p.why)}</div>
+      <div class="lg-steps">${p.steps.map((s, i) => `<div class="lg-step ${esc(s.effective)}"><span class="n">${i + 1}</span><span><b>${esc(s.label)}</b> <span class="sub">${esc(s.kind)} · ${esc(s.formatLabel)}${s.inputs.length ? ` · needs ${s.inputs.map((x) => esc(cById.get(x)?.label ?? x)).join(", ")}` : ""}</span>${s.staleWhy.length ? `<div class="lg-why">⚠ ${esc(s.staleWhy[0])}</div>` : ""}${s.note ? `<div class="sub">${esc(s.note)}</div>` : ""}</span><span class="est">${estStr(s)}</span><span>${stPill(s.effective)} ${runBtn(s)}</span></div>`).join("")}</div>
+      ${(p.parallel || []).length ? `<div class="sub" style="margin-top:6px">runs side by side: ${p.parallel.map((g) => g.map((x) => esc(cById.get(x)?.label ?? x)).join(" + ")).join("; ")}</div>` : ""}
+    </div>`).join("");
+  const cfgRows = L.configs.map((c) => `<tr class="src-static"><td><b>${esc(c.label)}</b><div class="mono sub">${esc(c.id)}</div>${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}</td><td>${esc(c.kind)}</td><td>${esc(c.formatLabel)}${c.tree ? `<div class="sub">${esc(c.tree)}</div>` : ""}</td>
+      <td>${c.inputs.map((x) => `<div>${esc(cById.get(x)?.label ?? x)}</div>`).join("") || '<span class="sub">—</span>'}</td>
+      <td>${c.producesFound.map((p) => `<div class="${p.found ? "" : "sub"}">${p.found ? "✓" : "–"} <span class="mono">${esc(p.key)}</span> <span class="sub">${esc(p.detail.replace(/^C:\\Users\\Brady\\poker\\/, ""))}</span></div>`).join("")}</td>
+      <td>${stPill(c.effective)}${c.staleWhy.map((w) => `<div class="lg-why">${esc(w)}</div>`).join("")}</td><td class="num">${estStr(c)}</td><td>${runBtn(c)}${c.effective === "done" ? ` <button class="mini" onclick="lgMark('${esc(c.id)}','planned')" title="mark as needing a re-run">re-plan</button>` : ""}</td></tr>`).join("");
+  const fmtRows = L.formats.map((f) => `<tr class="src-static lg-fmt"><td><b>${esc(f.label)}</b><div class="mono sub">${esc(f.id)}</div></td><td>${esc(f.site)}</td><td>${f.seats === 2 ? "heads-up" : `${f.seats}-handed`}</td><td>${esc(f.stake)}${f.blinds ? ` <span class="sub">${esc(f.blinds)}</span>` : ""}</td><td>${f.rake ? `${Math.round(f.rake.pct * 100)}% · cap ${f.rake.capBb}bb` : '<span class="sub">as solved</span>'}</td><td class="mono">${f.depths.length ? (f.depths.length > 6 ? `${f.depths[0]}–${f.depths[f.depths.length - 1]}bb (${f.depths.length} rungs)` : f.depths.map((d) => d + "bb").join(", ")) : "any"}</td><td class="sub">${esc(f.note ?? "")}</td>
+      <td>${Object.entries(L.sources).filter(([, ids]) => ids.includes(f.id)).map(([src]) => `<a href="/sources/pieces/${esc(src)}" onclick="go('/sources/pieces/${esc(src)}');return false" class="chip">${esc(src)}</a>`).join(" ")}</td></tr>`).join("");
+  const jobRows = (L.jobs || []).map((j) => `<tr class="src-static"><td class="num">#${j.id}</td><td><b>${esc(cById.get(j.config)?.label ?? j.config)}</b><div class="sub">${esc(j.note ?? "")}</div></td><td>${esc(j.lane)}</td><td>${stPill(j.status)}</td><td class="sub">${j.started ? fmtT(j.started) : fmtT(j.created)}${j.ended ? ` → ${fmtT(j.ended)}` : ""}${j.exitCode != null && j.exitCode !== 0 ? ` · exit ${j.exitCode}` : ""}</td><td><button class="mini" onclick="lgLog(${j.id})">log</button>${j.status === "queued" || j.status === "running" ? ` <button class="mini" onclick="lgCancel(${j.id})">cancel</button>` : ""}</td></tr>`).join("");
+  v.innerHTML = `
+    <div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button> the tables underneath the proposal — the source of truth it is built from (data/ledger.json)</div>
+    <div class="card"><h2>Jobs <span class="sub">— one at a time per lane · logs under data/jobs/</span></h2>
+      <div class="scroll"><table><thead><tr><th>#</th><th>config</th><th>lane</th><th>status</th><th>when</th><th></th></tr></thead><tbody>${jobRows || '<tr class="src-static"><td colspan="6" class="sub">nothing queued</td></tr>'}</tbody></table></div>
+      <div id="lg-log" style="margin-top:8px"></div></div>
+    <div class="banner">📒 <b>The ledger is the source of truth.</b> A <b>format</b> is one combination of site, seats, stake with its rake model, and depth. A <b>config</b> is a solve under one format and one tree, built from named inputs. Every chart, lock, export and model on this rig traces to a config here; a config whose input moved after it was built shows as <span class="st-pill stale">stale</span> and says why. Jobs run a config's recipe from this definition — never from a shell with the wrong env. Edit <span class="mono">data/ledger.json</span> to add a format or config.</div>
+    <h2 class="sub" style="text-transform:uppercase;letter-spacing:.6px;margin:12px 0 4px">Plans</h2>${plans}
+    <div class="card"><h2>Configs <span class="sub">— ${L.configs.length} · ${L.configs.filter((c) => c.effective === "done").length} done · ${L.configs.filter((c) => c.effective === "stale").length} stale · ${L.configs.filter((c) => c.effective === "planned" || c.effective === "blocked").length} to do</span></h2>
+      <div class="scroll"><table><thead><tr><th>config</th><th>kind</th><th>format · tree</th><th>built from</th><th>produces</th><th>status</th><th class="num">estimate</th><th></th></tr></thead><tbody>${cfgRows}</tbody></table></div></div>
+    <div class="card"><h2>Formats <span class="sub">— ${L.formats.length} · one row is one full combination</span></h2>
+      <div class="scroll"><table><thead><tr><th>format</th><th>site</th><th>seats</th><th>stake</th><th>rake</th><th>depths</th><th>note</th><th>served by</th></tr></thead><tbody>${fmtRows}</tbody></table></div></div>
+    `;
+  if (lgOpenLog) lgLog(lgOpenLog, true);
+}
+const rbPill = (s) => `<span class="st-pill ${esc(s)}">${esc(s)}</span>`;
+const __ORDER__ = (R, byId, idx) => R.order.map((g) => `<span class="g ${g.length > 1 ? "par" : ""}">${g.map((id) => `<a href="#rb-${esc(id)}" style="color:inherit">${idx.get(id)}. ${esc(byId.get(id)?.label ?? id)}</a> ${rbPill(byId.get(id)?.effective ?? "")}`).join(' <span class="sub">∥</span> ')}</span>`).join(' <span class="sub">→</span> ');
+const __PRE__ = (R) => R.preflight.map((c) => `<div>${c.ok ? "✅" : "❌"} <b>${esc(c.label)}</b> <span class="sub">${esc(c.detail)}</span></div>`).join("");
+const rbRunBtn = (s) => s.runnable ? `<button class="mini" onclick="lgRun('${esc(s.id)}', ${s.estimate.eur || 0})">▶ run this step</button>` : `<span class="sub">${esc(s.whyNotRunnable ?? "")}</span>`;
+const rbCmd = (st) => st.cmd ? `<div class="rb-cmd">$ ${esc(st.cmd)}${st.cwd ? `\n<span class="dim">cwd ${esc(st.cwd)}</span>` : ""}${st.env ? `\n<span class="dim">env ${esc(Object.entries(st.env).map(([k, x]) => `${k}=${x}`).join("  "))}</span>` : ""}</div>` : "";
+const rbCard = (s, i) => `<div class="card rb-cfg ${esc(s.effective)}" id="rb-${esc(s.id)}">
+      <h2><span class="rb-num">${i + 1}</span>${esc(s.label)} ${rbPill(s.effective)} <span class="sub">${esc(s.kind)} · ${esc(s.runner)}</span> <span class="sub" style="float:right">${esc(s.estimate.text)} &nbsp; ${rbRunBtn(s)}</span></h2>
+      ${s.note ? `<div class="sub">${esc(s.note)}</div>` : ""}
+      <div class="rb-grid">
+        <div><b>Where it runs</b>${esc(s.where)}</div>
+        ${s.format ? `<div><b>Format</b>${esc(s.format.label)}${s.format.blinds ? ` (${esc(s.format.blinds)})` : ""} · rake ${esc(s.format.rake)} · ${esc(s.format.depths)}<div class="mono sub">${esc(s.format.id)}</div></div>` : ""}
+        ${s.tree ? `<div><b>Tree</b>${esc(s.tree.label)}<div class="sub">${s.tree.lines.map(esc).join(" · ")}</div></div>` : ""}
+        <div><b>Built from</b>${s.inputs.length ? s.inputs.map((x) => `<div>${rbPill(x.effective)} ${esc(x.label)}${x.artifact ? `<div class="mono sub">${esc(x.artifact.path)} ${x.artifact.exists ? `· ${esc(x.artifact.sha256 ?? "")} · ${esc(x.artifact.mtime ?? "")}` : "· not on disk"}</div>` : ""}</div>`).join("") : '<span class="sub">nothing — a root solve</span>'}</div>
+        <div><b>Produces</b>${s.produces.length ? s.produces.map((p) => `<div>${p.exists ? "✓" : "–"} <span class="mono">${esc(p.key)}</span> <span class="sub">${esc(p.detail)}</span></div>`).join("") : '<span class="sub">no artifact — a cutover</span>'}</div>
+      </div>
+      ${s.blockers.length ? `<div class="rb-block"><b>⛔ Blocked:</b><ul class="rb-list">${s.blockers.map((b) => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
+      <div style="margin-top:6px"><b>Exactly what runs</b></div>
+      <ol class="rb-steps">${s.steps.map((st) => `<li><b>${st.n}. ${esc(st.title)}</b><span class="how ${esc(st.how)}">${esc(st.how)}</span>${rbCmd(st)}${st.detail.length ? `<ul class="rb-list">${st.detail.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ol>
+      <div class="rb-grid">
+        <div><b>Done when</b><ul class="rb-list">${s.doneWhen.map((d) => `<li>${esc(d)}</li>`).join("") || "<li class='sub'>marked by hand</li>"}</ul></div>
+        <div><b>Check afterwards</b><ul class="rb-list">${s.verify.map((d) => `<li>${esc(d)}</li>`).join("") || "<li class='sub'>—</li>"}</ul></div>
+      </div>
+    </div>`;
+
+/* The runbook: a plan spelled out — order, preflight, and for every config the exact work (commands, cwd, env,
+   inputs with fingerprints, outputs, done-when, checks, blockers). All of it comes from /api/ledger/runbook/<plan>,
+   which derives it from data/ledger.json + the recipes the job runner executes — the page and the runner cannot disagree. */
+async function renderRunbook(planId) {
+  const v = $("view-ledger");
+  let R;
+  try { R = await (await fetch(`/api/ledger/runbook/${encodeURIComponent(planId)}`)).json(); } catch (e) { R = null; }
+  if (!R || !R.ok) { v.innerHTML = `<div class="card warn">no runbook for "${esc(planId)}" <button class="mini" onclick="go('/ledger')">back to the ledger</button></div>`; return; }
+  const byId = new Map(R.steps.map((s) => [s.id, s]));
+  const idx = new Map(R.steps.map((s, i) => [s.id, i + 1]));
+  const order = __ORDER__(R, byId, idx);
+  const pre = __PRE__(R);
+  v.innerHTML = `
+    <div class="banner">📋 <b>Runbook · ${esc(R.plan.label)}</b> <button class="mini" onclick="go('/ledger')">← ledger</button><div class="sub" style="margin-top:4px">${esc(R.plan.why)}</div></div>
+    <div class="card"><h2>${R.plan.remaining} of ${R.plan.total} steps left <span class="sub">· ${minsStr(R.plan.totalWallMinutes)} wall-clock · €${R.plan.totalEur}${R.money.length ? ` (money is spent only in: ${R.money.map((m) => `${esc(m.label)} €${m.eur}`).join(", ")})` : ""}${R.plan.next ? ` · next: <b>${esc(byId.get(R.plan.next)?.label ?? R.plan.next)}</b>` : ""}</span></h2>
+      <div class="rb-order">${order}</div>
+      <div class="sub">a dashed box = runs side by side. Every step is gated: it refuses to start until each thing it is built from is done — the order above is enforced, not advisory.</div></div>
+    <div class="card"><h2>Preflight <span class="sub">— what this machine needs for the steps that are left</span></h2><div class="rb-pre">${pre}</div></div>
+    ${R.steps.map(rbCard).join("")}`;
+  document.title = `Runbook · ${R.plan.label} · Study Dashboard`;
+  if (location.hash) { const el = document.querySelector(location.hash); if (el) el.scrollIntoView({ block: "start" }); }
+}
+/* The runbook page: ONE proposal, at the level of WHAT is being worked on. Parts (preflop, postflop) each
+   say INPUT → WORK → OUTPUT → CHECK. No machines, scripts or paths here — those live under "operator detail". */
+const propPill = (x) => `<span class="st-pill ${esc(x)}">${esc(x)}</span>`;
+function partBlock(pt, k) {
+  const lines = (xs) => xs.map((x) => `<span class="ln">${esc(x)}</span>`).join("");
+  const liveLine = (w) => {
+    if (!w.live || (w.status !== "running" && w.status !== "queued" && w.status !== "failed")) return "";
+    const box = w.live.lane.startsWith("hrc-box:") ? w.live.lane.slice(8) : w.live.lane;
+    const since = w.live.started ? ` · ${durStr((Date.now() - w.live.started) / 60000)}${w.live.ended ? "" : " so far"}` : "";
+    return `<div class="live ${esc(w.live.status)}">${w.live.status === "running" ? "▶" : w.live.status === "queued" ? "…" : "✗"} ${esc(box)}${since}${w.live.phase ? ` · <span class="mono">${esc(w.live.phase)}</span>` : ""} <a href="#" onclick="go('/runbook/ledger');lgOpenLog=${w.live.job};return false">log</a></div>`;
+  };
+  const work = pt.work.map((w) => `<span class="solve"><span class="k">${w.n}</span><span>${esc(w.what)}<div class="sub">${esc(w.how)} · <b>${minsStr(w.minutes)}</b>${w.data && w.data.kind !== "none" ? ` · <button class="mini wd-btn" data-enc="${esc(encodeURIComponent(JSON.stringify(w.data)))}" onclick="workData(this, this.dataset.enc)">${w.status === "done" ? "charts" : w.status === "running" ? "live" : "data"}</button>` : ""}</div>${liveLine(w)}<div class="wd-panel" hidden></div></span>${propPill(w.status)}</span>`).join("");
+  return `<tr class="part"><th>PART ${k + 1}</th><td><b>${esc(pt.title)}</b> <span class="sub">· ${pt.numbers.done} of ${pt.numbers.solves} solves done · about ${minsStr(pt.numbers.wallMinutes)}${pt.numbers.eur ? ` · about €${pt.numbers.eur}` : ""}</span></td></tr>
+      <tr><th>INPUT</th><td>${lines(pt.input)}</td></tr>
+      <tr><th>HOW</th><td>${lines(pt.how || [])}</td></tr>
+      <tr><th>WORK</th><td>${work}</td></tr>
+      <tr><th>TIME</th><td>${esc(pt.numbers.text)}</td></tr>
+      <tr><th>OUTPUT</th><td><b>${esc(pt.output.name)}</b>${lines(pt.output.items)}</td></tr>
+      <tr><th>CHECK</th><td>${lines(pt.check)}</td></tr>
+      ${pt.blocked.length ? `<tr><th style="color:#ff9a9a">BLOCKED</th><td class="rb-block">${lines(pt.blocked)}</td></tr>` : ""}`;
+}
+function propCard(P) {
+  const actions = P.state === "done" && !P.approved
+    ? `<span class="big go" style="opacity:.75;cursor:default">✓ Everything is done — nothing to run</span>`
+    : P.approved
+    ? (P.canRunAll
+        ? `<button class="big go" onclick="propRunAll('${esc(P.id)}', ${P.totals.eur})" title="queue the whole run; each part waits for the one before it">▶ Run everything</button>`
+        : `<span class="big go" style="opacity:.75;cursor:default" title="approving already queued every step that can run">${P.state === "running" ? "▶ Running — every step that can run is queued; blocked steps wait" : P.state === "done" ? "✓ Everything is done" : "nothing to start — everything is queued, blocked, or by hand"}</span>`) + `
+       <button class="mini" onclick="propApprove('${esc(P.id)}', false)">revoke approval</button>`
+    : `<button class="big" onclick="propApprove('${esc(P.id)}', true)">Approve this proposal</button> <span class="sub">approving starts the run: every step that can run is queued in order; blocked steps wait</span>`;
+  const activity = P.activity.length ? `<div class="sub" style="margin-top:6px">in the queue now: ${P.activity.map((a) => `<span class="chip">${esc(a.label)} ${propPill(a.status)} <a href="#" onclick="go('/proposals/ledger');lgOpenLog=${a.job};return false">log</a></span>`).join(" ")}</div>` : "";
+  const pgHref = `/proposals/progress/${encodeURIComponent(P.id)}`;
+  const pct = P.totals.solves ? Math.round(100 * P.totals.done / P.totals.solves) : 0;
+  return `<div class="card prop ${P.approved ? "approved" : ""}" id="prop-${esc(P.id)}">
+    <h2><a class="pg" href="${pgHref}" onclick="go('${pgHref}');return false" title="open the progress of this run — every box, every solve">${esc(P.run)}</a> ${P.state === "running" ? '<span class="st-pill running">RUNNING</span>' : P.state === "done" ? '<span class="st-pill done">DONE</span>' : P.state === "attention" ? '<span class="st-pill failed">NEEDS ATTENTION</span>' : P.approved ? `<span class="st-pill approved" title="approved ${esc(P.approved.at)}">approved ${esc(P.approved.at.slice(0, 10))}</span>` : '<span class="st-pill draft">proposal — not approved</span>'}
+      <span class="sub" style="margin-left:auto">${esc(P.totals.text)} <a href="${pgHref}" onclick="go('${pgHref}');return false" title="${pct}% of the solves done"><span class="pbar"><i class="${P.activity.length ? "live" : ""}" style="width:${pct}%"></i></span> progress ›</a></span></h2>
+    <table class="prop-t">
+      <tr><th>WHY</th><td>${esc(P.why)}</td></tr>
+      <tr><th>FORMAT</th><td>${esc(P.format)}</td></tr>
+      ${P.parts.map(partBlock).join("")}
+      <tr><th>RUN</th><td><div class="steps">${actions}</div>${activity}</td></tr>
+    </table>
+  </div>`;
+}
+function renderProposalPage() {
+  const v = $("view-ledger"), L = LG;
+  setTimeout(wdReopen, 0);
+  v.innerHTML = `${(L.proposals || []).map(propCard).join("") || '<div class="card sub">no proposal in the ledger</div>'}
+    <div class="sub" style="margin:10px 2px">the how, if you ever need it: <a href="/proposals/detail" onclick="go('/proposals/detail');return false">operator detail</a> (every command, input hash and output path, per step) · <a href="/proposals/ledger" onclick="go('/proposals/ledger');return false">the tables underneath</a> (formats, configs, jobs)</div>`;
+}
+/* The progress page: ONE proposal while it runs — per part, per solve config: how many units are done, what the
+   job is on, and underneath the live detail: every Hetzner box with its boards (done / locking / solving), the
+   HRC Runner's queue rows, the tail of a script's log. Polls every 5 s while anything is live. */
+let pgTimer = null;
+const ago = (ms) => { if (!ms) return ""; const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; };
+const durS = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+function pgBox(b) {
+  const pct = b.total ? Math.round(100 * b.done / b.total) : 0;
+  const st = !b.reachable ? `<span class="st-pill failed">unreachable</span>` : b.noRuns ? `<span class="st-pill queued">provisioning</span>` : b.allDone ? `<span class="st-pill done">all done</span>` : b.current ? `<span class="st-pill running">solving</span>` : `<span class="st-pill queued">idle</span>`;
+  const cur = b.current ? `<div class="cur">on <b>${esc(b.current.board)}</b> <span class="sub">${esc(b.current.family.replace(/_/g, " "))}</span> — ${esc(b.current.phase)}${b.current.elapsedS ? ` for ${durS(b.current.elapsedS)}` : ""}</div>` : b.allDone ? `<div class="cur sub">finished its shard — waiting for the archive to R2 and the delete</div>` : "";
+  const dots = b.boards.length ? `<div class="pg-dots">${b.boards.map((x) => `<span class="${esc(x.state)}" title="${esc(x.family)} ${esc(x.board)} — ${esc(x.state)}"></span>`).join("")}</div>` : "";
+  return `<div class="pg-box"><h3>${esc(b.name)} ${st}<span class="sub">${esc(b.ip)}</span></h3>
+    <div><b>${b.done}</b> of <b>${b.total}</b> flops locked <span class="pbar" style="width:120px;margin-left:8px"><i class="${b.current ? "live" : ""}" style="width:${pct}%"></i></span></div>
+    ${cur}${dots}
+    ${b.error ? `<div class="sub" style="color:#ff9a9a;margin-top:4px">${esc(b.error)}</div>` : ""}
+    ${b.load ? `<div class="sub" style="margin-top:4px">load ${esc(b.load)}${b.mem ? ` · mem ${esc(b.mem)}` : ""}</div>` : ""}
+    ${b.lastLines.length ? `<div class="pg-log">${esc(b.lastLines.join("\n"))}</div>` : ""}</div>`;
+}
+function pgFleet(f) {
+  if (!f.hasIps) return `<div class="sub" style="margin-top:6px">no boxes yet — they appear here once the fleet step has created them</div>`;
+  const when = f.at ? `boxes read ${ago(f.at)} ago${f.polling ? " · reading again…" : ""}` : "reading the boxes over ssh…";
+  return `<div class="sub" style="margin-top:6px">${f.boxes.length} box${f.boxes.length === 1 ? "" : "es"} · ${f.done} of ${f.total} flops locked on them · ${esc(when)}</div>
+    <div class="pg-boxes">${f.boxes.map(pgBox).join("") || '<div class="sub">waiting for the first read…</div>'}</div>`;
+}
+function pgHrc(h) {
+  if (!h.exists) return `<div class="sub" style="margin-top:6px">no HRC Runner queue written yet — it appears here once the plan step has run</div>`;
+  const rows = h.rows.map((r) => `<tr><td>${propPill(r.status)}</td><td>${esc(r.id)}</td><td class="sub">${esc(r.note || "")}${r.at ? ` · ${esc(r.at)}` : ""}</td></tr>`).join("");
+  return `<div class="sub" style="margin-top:6px">HRC Runner: ${h.done} of ${h.total} queue rows done${h.current ? ` · running <b>${esc(h.current.id)}</b>` : ""}${h.runnerLogAt ? ` · runner log written ${ago(h.runnerLogAt)} ago` : ""}</div>
+    <table class="pg-rows">${rows}</table>
+    ${h.runnerLog.length ? `<div class="pg-log">${esc(h.runnerLog.join("\n"))}</div>` : ""}`;
+}
+function pgConfig(c) {
+  const pct = c.units.total ? Math.round(100 * c.units.done / c.units.total) : 0;
+  const j = c.job;
+  const jobLine = j ? `<div class="sub" style="margin-top:4px">job #${j.id} ${propPill(j.status)}${j.status === "running" && j.stepLabel != null ? ` · step ${j.step + 1} of ${j.steps}: <b>${esc(j.stepLabel)}</b> for ${ago(j.stepStarted)}` : ""}${j.status === "running" && j.started ? ` · running ${ago(j.started)}` : j.status === "queued" && j.note ? ` · ${esc(j.note)}` : j.ended ? ` · ended ${fmtT(j.ended)}${j.exitCode ? ` (exit ${j.exitCode})` : ""}` : ""} <a href="#" onclick="go('/proposals/ledger');lgOpenLog=${j.id};return false">log</a></div>` : "";
+  const unitTxt = c.units.total === 1 && c.units.unit === "step" ? (c.units.done ? "done" : c.effective) : `${c.units.done} of ${c.units.total} ${c.units.unit}${c.units.note ? ` · ${c.units.note}` : ""}`;
+  return `<div class="card pg-card ${c.live ? "live" : c.effective === "done" ? "done" : c.job?.status === "failed" ? "failed" : ""}">
+    <div class="pg-row"><div><b>${esc(c.label)}</b> ${propPill(c.live ? "running" : c.effective)} <span class="sub">· ${esc(c.runner === "fleet" ? "Hetzner boxes" : c.runner === "hrc-zenbook" ? "HRC on this machine" : c.runner === "scripts" ? "calculation on this machine" : "by hand")}</span></div>
+      <div><span class="sub">${esc(unitTxt)}</span> <span class="pbar"><i class="${c.live ? "live" : ""}" style="width:${pct}%"></i></span></div></div>
+    ${jobLine}
+    ${c.fleet ? pgFleet(c.fleet) : ""}
+    ${c.hrc ? pgHrc(c.hrc) : ""}
+    ${j && j.logTail && j.logTail.length ? `<div class="pg-log">${esc(j.logTail.join("\n"))}</div>` : ""}
+  </div>`;
+}
+async function renderProgress(id) {
+  clearTimeout(pgTimer); clearTimeout(lgJobTimer);
+  const v = $("view-ledger");
+  let R = null;
+  try { R = await (await fetch(`/api/ledger/proposals/${encodeURIComponent(id)}/progress`)).json(); } catch (e) { R = null; }
+  if (!R || !R.ok) { v.innerHTML = `<div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button></div><div class="card warn">no progress for "${esc(id)}"</div>`; return; }
+  const pct = R.totals.total ? Math.round(100 * R.totals.done / R.totals.total) : 0;
+  v.innerHTML = `<div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button> progress — what this run is doing right now · ${R.live ? "live, refreshes every 5 s" : "nothing running — refreshes every 30 s"}</div>
+    <div class="card prop ${R.live ? "approved" : ""}"><h2>${esc(R.run)} ${R.live ? propPill("running") : ""}<span class="sub" style="margin-left:auto">${R.totals.done} of ${R.totals.total} solves done · ${pct}%</span></h2>
+      <span class="pbar wide"><i class="${R.live ? "live" : ""}" style="width:${pct}%"></i></span></div>
+    ${R.parts.map((p, k) => `<h2 class="sub" style="text-transform:uppercase;letter-spacing:.6px;margin:12px 0 4px">Part ${k + 1} · ${esc(p.title)}</h2>${p.configs.map(pgConfig).join("")}`).join("")}`;
+  document.title = `Progress · ${R.run} · Study Dashboard`;
+  pgTimer = setTimeout(() => { if (PATH.view === "ledger" && PATH.pane === "progress" && PATH.id === id) renderProgress(id); }, R.live ? 5000 : 30000);
+}
+function renderOperatorDetail() {
+  const v = $("view-ledger"), L = LG;
+  const cards = (L.proposals || []).flatMap((P) => P.details).map((d, i) => rbCard(d, i)).join("");
+  v.innerHTML = `<div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button> operator detail — the how, per step, derived from the same ledger the proposal is</div>${cards}`;
+}
+/* the data behind a WORK line: chart nodes, ranges, tables — fetched on demand, shown inline under the line */
+/* data panels stay open across the 4-second re-render while a run is live: opened panels are remembered by their
+   encoded descriptor and re-fetched after each render; the same for chart views opened inside a table */
+const wdOpen = new Set(), wcOpen = new Set(), wdCache = new Map();
+function wdReopen() {
+  document.querySelectorAll(".wd-btn").forEach((b) => { if (wdOpen.has(b.dataset.enc)) workData(b, b.dataset.enc, true); });
+}
+async function viewChart(btn, id, keep) {
+  const tr = btn.closest("tr"); let row = tr.nextElementSibling;
+  if (!(row && row.classList.contains("wc-row"))) { row = document.createElement("tr"); row.className = "wc-row"; row.innerHTML = `<td colspan="${tr.children.length}"></td>`; tr.after(row); }
+  if (!keep && !row.hidden && row.firstChild.innerHTML) { row.hidden = true; row.firstChild.innerHTML = ""; btn.textContent = "view chart"; wcOpen.delete(id); return; }
+  wcOpen.add(id); row.hidden = false; row.firstChild.innerHTML = '<div class="sub">fetching the chart…</div>'; btn.textContent = "…";
+  let j; try { j = await (await fetch(`/api/ledger/work-data?d=${encodeURIComponent(JSON.stringify({ kind: "chart", id, seats: 3 }))}`)).json(); } catch (e) { j = { ok: false, error: String(e) }; }
+  btn.textContent = "hide chart";
+  row.firstChild.innerHTML = j.ok ? `<div class="wd-title">${esc(j.title)}</div><div class="wd-grid">${wdSections(j.sections)}</div>` : `<div class="warn">${esc(j.error ?? "no data")}</div>`;
+}
+async function workData(btn, enc, keep) {
+  const panel = btn.closest("span").querySelector(".wd-panel");
+  if (!keep && !panel.hidden) { panel.hidden = true; btn.textContent = btn.dataset.label || "data"; wdOpen.delete(enc); return; }
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  wdOpen.add(enc);
+  // after a live re-render show the last content at once and refresh it in the background — no flashing "fetching…"
+  if (panel.hidden) { panel.hidden = false; panel.innerHTML = wdCache.get(enc) || '<div class="sub">fetching…</div>'; }
+  btn.textContent = keep && wdCache.has(enc) ? "hide" : "…";
+  let j; try { j = await (await fetch(`/api/ledger/work-data?d=${enc}`)).json(); } catch (e) { j = { ok: false, error: String(e) }; }
+  btn.textContent = "hide";
+  if (!j.ok) { if (!wdCache.has(enc)) panel.innerHTML = `<div class="warn">${esc(j.error ?? "no data")}</div>`; return; }
+  const html = `<div class="wd-title">${esc(j.title)}</div><div class="wd-grid">${wdSections(j.sections)}</div>`;
+  wdCache.set(enc, html);
+  if (!wdOpen.has(enc)) return;   // closed while fetching
+  panel.innerHTML = html;
+  // chart views that were open inside this panel before the re-render
+  panel.querySelectorAll("button.wc-btn").forEach((b) => { if (wcOpen.has(b.dataset.id)) viewChart(b, b.dataset.id, true); });
+}
+function wdSections(sections) {
+  const secs = sections.map((sec) => {
+    let body = "";
+    if (sec.node) {
+      const cls = {};
+      for (const [hand, acts] of Object.entries(sec.node.cells)) cls[hand] = { w: COMBOS(hand), acts: sec.node.actions.map((a) => (COMBOS(hand) * (acts[a] ?? 0)) / 100) };
+      body = classGrid(cls, sec.node.actions, null, { flat: true, wmax: 1e9, small: true, foot: "hover a cell for its mix" });
+    } else if (sec.range) {
+      const cls = {}; let mass = 0;
+      for (const [hand, w] of Object.entries(sec.range)) { cls[hand] = { w: COMBOS(hand) * w, acts: [COMBOS(hand) * w] }; mass += COMBOS(hand) * w; }
+      body = classGrid(cls, ["in range"], null, { single: "#4da3ff", small: true, foot: `${(100 * mass / 1326).toFixed(1)}% of hands · opacity = weight` });
+    } else if (sec.table) {
+      const T = sec.table, hasView = T.chart != null;
+      const stCls = (s) => s === "done" ? "done" : String(s).startsWith("solving") ? "running" : "queued";
+      body = `<div class="scroll"><table><thead><tr>${T.cols.map((c) => `<th>${esc(String(c))}</th>`).join("")}${hasView ? "<th></th>" : ""}</tr></thead><tbody>${T.rows.map((r) => `<tr class="src-static">${r.map((v, i) => `<td>${i === T.status ? `<span class="st-pill ${stCls(v)}">${esc(String(v))}</span>` : esc(String(v))}</td>`).join("")}${hasView ? `<td>${r[T.status] === "done" ? `<button class="mini wc-btn" data-id="${esc(String(r[T.chart]))}" onclick="viewChart(this, this.dataset.id)">view chart</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+    } else if (sec.list) {
+      body = `<ul class="rb-list">${sec.list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+    }
+    return `<div class="wd-sec${sec.table ? " wide" : ""}"><b>${esc(sec.title)}</b>${sec.note ? `<div class="sub">${esc(sec.note)}</div>` : ""}${body}</div>`;
+  }).join("");
+  return secs;
+}
+async function propApprove(id, on) {
+  if (!on && !confirm("Revoke the approval? Nothing new can start until it is approved again.")) return;
+  const r = await (await fetch(`/api/ledger/proposals/${encodeURIComponent(id)}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved: on }) })).json();
+  if (!r.ok) alert(r.error); loadLedger();
+}
+async function propRunAll(id, eur) {
+  if (!confirm(`Queue every step of this run, in order? Each step waits for the one before it.${eur ? ` About €${eur} will be spent on Hetzner boxes when the fleet step starts.` : ""}`)) return;
+  const r = await (await fetch(`/api/ledger/proposals/${encodeURIComponent(id)}/run`, { method: "POST" })).json();
+  if (!r.ok) alert(r.error);
+  else {
+    const q = r.queued.filter((x) => x.job); if (q.length) lgOpenLog = q[0].job;
+    const sk = r.queued.filter((x) => !x.job);
+    const NL = String.fromCharCode(10);
+    alert(`${q.length ? `queued ${q.length} step(s): ${q.map((x) => x.config).join(", ")}` : "nothing new to queue"}${sk.length ? NL + NL + "not started:" + NL + sk.map((x) => `  ${x.config} — ${x.skipped}`).join(NL) : ""}`);
+  }
+  loadLedger();
+}
+async function lgRun(id, eur) {
+  if (eur && !confirm(`This step spends money: about €${eur} on Hetzner boxes (deleted automatically when it finishes). Start it?`)) return;
+  const r = await (await fetch("/api/ledger/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: id }) })).json();
+  if (!r.ok) alert(r.error); else lgOpenLog = r.job.id;
+  loadLedger();
+}
+async function lgMark(id, status) {
+  if (!confirm(`Mark "${id}" as ${status}?`)) return;
+  await fetch(`/api/ledger/configs/${encodeURIComponent(id)}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+  loadLedger();
+}
+async function lgCancel(id) { await fetch(`/api/ledger/jobs/${id}/cancel`, { method: "POST" }); loadLedger(); }
+async function lgLog(id, quiet) {
+  lgOpenLog = id;
+  const r = await (await fetch(`/api/ledger/jobs/${id}/log?lines=300`)).json();
+  const host = $("lg-log"); if (!host) return;
+  host.innerHTML = `<div class="sub">job #${id} · ${esc(r.job?.config ?? "")} · ${esc(r.job?.status ?? "")} <button class="mini" onclick="lgOpenLog=null;$('lg-log').innerHTML=''">close</button></div><div class="lg-log">${esc(r.log || "(empty)")}</div>`;
+  if (!quiet) host.scrollIntoView({ behavior: "smooth", block: "center" });
+  const el = host.querySelector(".lg-log"); if (el) el.scrollTop = el.scrollHeight;
+}
+
 /* ================= Sessions (declared by the wrapper's setup page) ================= */
 const PRESET_LABEL = { "study-mes": "Study answers · MES (generic)", "study-gto": "Study answers · GTO (generic)", silent: "Silent play", "capture-qa": "Capture QA", "test-rig": "Test rig" };
 // a "strategy:<id>" preset is one of the whole-hand strategies (Sources → Strategies); name it and link it
@@ -2410,11 +2785,17 @@ async function renderSourceDetail(cardId) {
       <span class="sub">${esc(c.stateText)}</span>
     </div>
     <div class="g2">
-      <div class="card">
-        <h2>What it is</h2>
-        <div class="tiers" style="margin-bottom:8px">${c.tiers.map((t) => `<span class="chip${c.state === "off" ? " dim" : ""}">${esc(t)}</span>`).join("")}</div>
-        <dl class="src-dl"><dt>routes</dt><dd>${esc(c.routes)}</dd>${c.facts.map(([k, val]) => `<dt>${esc(k)}</dt><dd${/[\\/]/.test(val) && !/ /.test(val.slice(0, 20)) ? ' class="mono"' : ""}>${esc(val)}</dd>`).join("")}</dl>
+      <div class="card src" style="cursor:default">
+        <h2>What it is ${pieceChips(c)}</h2>
+        <div class="sub">${esc(c.routes)}</div>
+        ${edgeBlock(c)}
+        ${formatChips(c)}
+        ${coverageLine(c)}
+        <div class="tiers" style="margin-top:4px">${c.tiers.map((t) => `<span class="chip${c.state === "off" ? " dim" : ""}">${esc(t)}</span>`).join("")}</div>
         ${c.caveats.map((x) => `<div class="caveat">⚠ ${esc(x)}</div>`).join("")}
+        <details style="margin-top:6px"><summary class="sub" style="cursor:pointer">where it lives — files, services, versions</summary>
+          <dl class="src-dl" style="margin-top:6px">${c.facts.map(([k, val]) => `<dt>${esc(k)}</dt><dd${/[\/]/.test(val) && !/ /.test(val.slice(0, 20)) ? ' class="mono"' : ""}>${esc(val)}</dd>`).join("")}</dl>
+        </details>
       </div>
       <div class="card">
         <h2>Last 30 days</h2>
@@ -2508,15 +2889,31 @@ async function loadExploitDetail() {
     ${lrHtml}`;
 }
 
+/* ---- the five fields, shared by the cards and the detail page ---- */
+const pieceChips = (c) => `<span class="pieces">${(c.pieces || (c.piece ? [c.piece] : [])).map((p) => `<span class="pc ${esc(p)}" title="the piece this source serves">${esc(p)}</span>`).join("")}</span>`;
+const edgeV = (x) => x == null ? '<span class="v">—</span>' : `<span class="v ${x > 0 ? "pos" : x < 0 ? "neg" : "zero"}">${x > 0 ? "+" : ""}${Number(x).toFixed(1)}</span>`;
+function edgeBlock(c) {
+  const e = c.edge;
+  if (!e) return "";
+  if (e.kind === "none") return `<div class="edge none"><span><span class="k">edge</span><span class="v">none of its own</span></span><span></span><span></span><span class="n">${esc(e.note)}</span></div>`;
+  const label = e.kind === "floor" ? "floor" : e.kind === "construction" ? "by construction" : e.kind === "increment" ? "with MES" : "edge";
+  return `<div class="edge ${e.kind}"><span><span class="k">${label} · NL25 rake</span>${edgeV(e.nl25)}</span><span><span class="k">NL200 rake</span>${edgeV(e.nl200)}</span><span><span class="k">no rake</span>${edgeV(e.norake)}</span><span class="n">bb/100 · ${esc(e.note)}</span></div>`;
+}
+// one pill per FORMAT — a format is the full combination site · seats · stake · depth
+const formatChips = (c) => Array.isArray(c.formats) && c.formats.length
+  ? `<div><div class="field-k">formats · ${c.formats.length}</div><div class="fmts">${c.formats.map((f) => `<span class="fmt" title="${esc(f.note || "")}">${[f.site, f.seats, f.stake, f.depth].filter((v) => v && v !== "—").map(esc).join(" · ")}${f.note ? ` <span class="sub" style="font-size:10.5px">(${esc(f.note)})</span>` : ""}</span>`).join("")}</div></div>`
+  : "";
+const coverageLine = (c) => c.coverage ? `<div><div class="field-k">coverage</div><div class="cov">${esc(c.coverage.text)}${c.coverage.gap ? `<span class="gap">gap: ${esc(c.coverage.gap)}</span>` : ""}</div></div>` : "";
+
 function renderRegistry() {
   const el = $("src-pieces");
   const card = (c) => `
     <div class="src click" data-id="${c.id}">
-      <div class="head"><span class="dot ${c.state}"></span><h3>${esc(c.label)}</h3>${c.mode ? `<span class="mode ${c.mode}">${c.mode.toUpperCase()}</span>` : ""}</div>
-      <div class="sub">${esc(c.stateText)}</div>
-      <div class="tiers">${c.tiers.map((t) => `<span class="chip${c.state === "off" ? " dim" : ""}">${esc(t)}</span>`).join("")}</div>
-      <dl><dt>routes</dt><dd>${esc(c.routes)}</dd>${c.facts.map(([k, val]) => `<dt>${esc(k)}</dt><dd${/[\\/]/.test(val) && !/ /.test(val.slice(0, 20)) ? ' class="mono"' : ""}>${esc(val)}</dd>`).join("")}</dl>
-      ${c.caveats.map((x) => `<div class="caveat">⚠ ${esc(x)}</div>`).join("")}
+      <div class="head"><span class="dot ${c.state}"></span><h3>${esc(c.label)}</h3>${pieceChips(c)}${c.mode ? `<span class="mode ${c.mode}">${c.mode.toUpperCase()}</span>` : ""}</div>
+      <div class="sub">${esc(c.stateText)} · ${esc(c.routes)}</div>
+      ${edgeBlock(c)}
+      ${formatChips(c)}
+      ${coverageLine(c)}
       <div class="foot">
         <span><span class="big num">${c.answers30d}</span> <span class="k">answers / 30d</span></span>
         ${c.p50Ms != null ? `<span><span class="big num">${fmtMs(c.p50Ms)}</span> <span class="k">p50</span></span>` : ""}
@@ -2660,7 +3057,8 @@ async function loadRoadmap() {
      /sources/strategies/:id                one whole-hand strategy's page
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
+const TABS = { hands: "tab-hands", sessions: "tab-sessions", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play", ledger: "tab-ledger" };
+$("tab-ledger").onclick = () => go("/proposals");
 const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "roadmap"];
 $("tab-play").onclick = () => go("/playthrough");
 
@@ -2677,6 +3075,7 @@ function parsePath() {
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   if (view === "playthrough") return { view, pane: null, id: seg[1] === "spot" && seg[2] && seg[3] ? `spot/${decodeURIComponent(seg[2])}/${seg[3]}` : null };
+  if (view === "ledger" || view === "runbook" || view === "proposals") return { view: "ledger", pane: seg[1] || null, id: seg[2] ? decodeURIComponent(seg[2]) : null };
   if (view === "analytics" || view === "review") return { view, pane: null, id: null };
   return { view: "hands", pane: null, id: null };
 }
@@ -2685,6 +3084,7 @@ function canonical(p) {
   if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
   if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}` : "/sessions";
   if (p.view === "playthrough") return p.id ? `/playthrough/${p.id}` : "/playthrough";
+  if (p.view === "ledger") return p.pane ? `/proposals/${p.pane}${p.id ? `/${encodeURIComponent(p.id)}` : ""}` : "/proposals";
   return `/${p.view}`;
 }
 function go(path) {
@@ -2705,9 +3105,12 @@ function route() {
   $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
   $("view-replay").style.display = PATH.view === "review" ? "" : "none";
   $("view-play").style.display = PATH.view === "playthrough" ? "" : "none";
+  $("view-ledger").style.display = PATH.view === "ledger" ? "" : "none";
+  if (PATH.view === "ledger") loadLedger();
   if (PATH.view === "playthrough") loadPlay();
   document.title = PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
     : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
+    : PATH.view === "ledger" ? "Solve Proposals · Study Dashboard"
     : PATH.view === "sessions" ? `${PATH.id ? `Session ${PATH.id}` : "Sessions"} · Study Dashboard`
     : `${PATH.view[0].toUpperCase()}${PATH.view.slice(1)} · Study Dashboard`;
   if (PATH.view === "hands") {

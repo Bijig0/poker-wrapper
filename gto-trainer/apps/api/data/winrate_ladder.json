@@ -1,0 +1,180 @@
+{
+ "generatedAt": "2026-09-03T18:58:17",
+ "script": "analysis/pipeline/limp_study/backtest_study_answers.py",
+ "gitSha": "b36ac26a",
+ "chart": "ign200_3maxasym2ci_D100_s100_eq",
+ "poolModel": {
+  "suffix": "_v3",
+  "n": {
+   "btn_first": 2926,
+   "sb_first": 1484,
+   "bb_vs_open": 1004,
+   "sb_vs_open": 1316,
+   "bb_vs_sb": 732,
+   "btn_vs_3bet": 266,
+   "sb_vs_3bet_bvb": 170
+  }
+ },
+ "stacks": "100bb equal, ign200 chart rake embedded",
+ "baseline": {
+  "bb100": -6.599,
+  "byPos": {
+   "BTN": 0.249,
+   "SB": -0.242,
+   "BB": -0.205
+  },
+  "note": "chart vs its own equilibrium assumptions \u2014 the sanity anchor"
+ },
+ "rows": [
+  {
+   "id": "eq_charts",
+   "strategy": "Equilibrium charts",
+   "heroMode": "chart",
+   "note": "maximin floor; every postflop leg priced at equilibrium value",
+   "cells": {
+    "norake": {
+     "label": "no rake (reference)",
+     "bb100": -0.49,
+     "floor": -4.177,
+     "chart": -0.669,
+     "byPos": {
+      "BTN": 0.342,
+      "SB": -0.169,
+      "BB": -0.188
+     },
+     "rakeFlopBb": 0.0,
+     "rake3betBb": 0.0,
+     "shrunk": false
+    },
+    "nl200": {
+     "label": "NL200 $1-$2 measured (srp 0.28, 3bet 0.48)",
+     "bb100": -3.416,
+     "floor": -7.271,
+     "chart": -3.595,
+     "byPos": {
+      "BTN": 0.308,
+      "SB": -0.201,
+      "BB": -0.209
+     },
+     "rakeFlopBb": 0.28,
+     "rake3betBb": 0.48,
+     "shrunk": false
+    },
+    "nl25": {
+     "label": "NL25 $0.10-$0.25 measured (srp 0.44, 3bet 1.08)",
+     "bb100": -5.728,
+     "floor": -9.794,
+     "chart": -5.907,
+     "byPos": {
+      "BTN": 0.285,
+      "SB": -0.227,
+      "BB": -0.23
+     },
+     "rakeFlopBb": 0.44,
+     "rake3betBb": 1.08,
+     "shrunk": false
+    }
+   }
+  },
+  {
+   "id": "exploit_preflop",
+   "strategy": "Preflop exploit + GTOW AI postflop",
+   "heroMode": "argmax",
+   "note": "argmax vs measured pool preflop (thin-sample response freqs shrunk 1.5 SE); postflop still the floor",
+   "cells": {
+    "norake": {
+     "label": "no rake (reference)",
+     "bb100": 10.757,
+     "floor": 7.816,
+     "chart": 10.825,
+     "byPos": {
+      "BTN": 0.382,
+      "SB": -0.047,
+      "BB": -0.013
+     },
+     "rakeFlopBb": 0.0,
+     "rake3betBb": 0.0,
+     "shrunk": true
+    },
+    "nl200": {
+     "label": "NL200 $1-$2 measured (srp 0.28, 3bet 0.48)",
+     "bb100": 6.384,
+     "floor": 3.374,
+     "chart": 6.463,
+     "byPos": {
+      "BTN": 0.337,
+      "SB": -0.094,
+      "BB": -0.051
+     },
+     "rakeFlopBb": 0.28,
+     "rake3betBb": 0.48,
+     "shrunk": true
+    },
+    "nl25": {
+     "label": "NL25 $0.10-$0.25 measured (srp 0.44, 3bet 1.08)",
+     "bb100": 3.029,
+     "floor": -0.065,
+     "chart": 3.094,
+     "byPos": {
+      "BTN": 0.312,
+      "SB": -0.131,
+      "BB": -0.09
+     },
+     "rakeFlopBb": 0.44,
+     "rake3betBb": 1.08,
+     "shrunk": true
+    }
+   }
+  },
+  {
+   "id": "exploit_preflop_unshrunk",
+   "strategy": "Preflop exploit, unshrunk read of the pool",
+   "heroMode": "argmax",
+   "note": "same argmax on the raw frequencies \u2014 the optimistic end of the exploit bracket",
+   "cells": {
+    "norake": {
+     "label": "no rake (reference)",
+     "bb100": 18.241,
+     "floor": 16.356,
+     "chart": 18.219,
+     "byPos": {
+      "BTN": 0.382,
+      "SB": 0.013,
+      "BB": 0.152
+     },
+     "rakeFlopBb": 0.0,
+     "rake3betBb": 0.0,
+     "shrunk": false
+    },
+    "nl200": {
+     "label": "NL200 $1-$2 measured (srp 0.28, 3bet 0.48)",
+     "bb100": 13.651,
+     "floor": 11.696,
+     "chart": 13.653,
+     "byPos": {
+      "BTN": 0.337,
+      "SB": -0.036,
+      "BB": 0.109
+     },
+     "rakeFlopBb": 0.28,
+     "rake3betBb": 0.48,
+     "shrunk": false
+    },
+    "nl25": {
+     "label": "NL25 $0.10-$0.25 measured (srp 0.44, 3bet 1.08)",
+     "bb100": 9.844,
+     "floor": 7.806,
+     "chart": 9.873,
+     "byPos": {
+      "BTN": 0.312,
+      "SB": -0.076,
+      "BB": 0.06
+     },
+     "rakeFlopBb": 0.44,
+     "rake3betBb": 1.08,
+     "shrunk": false
+    }
+   }
+  }
+ ]
+}

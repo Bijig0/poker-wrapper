@@ -15,6 +15,8 @@ import aiStudyRoutes from "./src/routes/aiStudy";
 import dashboardRoutes from "./src/routes/dashboard";
 import sourcesRoutes from "./src/routes/sources";
 import missQueueRoutes from "./src/routes/missQueue";
+import ledgerRoutes from "./src/routes/ledger";
+import { jobs } from "./src/services/jobs";
 import replayRoutes from "./src/routes/replay";
 import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
@@ -41,6 +43,7 @@ app.route("/api/ai-study", aiStudyRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/dashboard/sources", sourcesRoutes);
 app.route("/api/dashboard/miss-queue", missQueueRoutes);
+app.route("/api/ledger", ledgerRoutes);
 app.route("/api/replay", replayRoutes);
 
 // The study tool UI — Reader Verify, Replay Review, State Tester, plus the
@@ -59,7 +62,7 @@ const dashboardPage = () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
-for (const p of ["/", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/review", "/playthrough"]) {
+for (const p of ["/", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/review", "/playthrough", "/playthrough/*", "/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*"]) {
   app.get(p, dashboardPage);
 }
 // Old bookmarks and links still land on the dashboard.
@@ -104,17 +107,29 @@ console.log(`🃏 Poker GTO Bot API starting on port ${port}...`);
 // Always running, self-gating on assistive-play's own "Study Answers" toggle
 // (see services/studyPoller.ts) — that toggle is the single control; no
 // separate start step needed for normal use.
-studyPoller.start();
+// DASHBOARD_ONLY=1 (the cloud deployment): no poker client, no GTO Wizard, no study wrapper on the
+// box — the poller and the token keeper would only log connection errors every few seconds.
+const dashboardOnly = process.env.DASHBOARD_ONLY === "1";
+if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token keeper are off");
+if (!dashboardOnly) studyPoller.start();
 
 // Keep a live GTOW access token on hand at all times: the CDP sniff costs
 // 4-8s, and paying it inline made whichever solve hit the ~15-min expiry miss
 // the decision window entirely.
-gtowApi.startTokenKeeper();
+if (!dashboardOnly) gtowApi.startTokenKeeper();
+
+// The ledger's job runner: one job per lane at a time, logs under data/jobs/.
+jobs.start();
 
 export default {
   port,
+  hostname: process.env.HOST ?? "0.0.0.0", // the cloud box binds 127.0.0.1 and lets Caddy front it
   fetch: app.fetch,
   // Tier-2 AI re-solves hold the request open for up to a few minutes
   // (solve + line replay + on-demand street solves); Bun's default is 10s.
   idleTimeout: 255,
+  // Windows: children spawned by a previous worker (box runners, and HRC launched through them) inherit the listening
+  // socket handle and keep the port "in use" after the worker restarts under bun --watch; reusePort lets the new worker
+  // bind anyway and take the connections (seen 2026-09-09: every request hung until HRC exited).
+  reusePort: true,
 };

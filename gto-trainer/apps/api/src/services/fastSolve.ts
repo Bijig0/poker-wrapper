@@ -72,6 +72,11 @@ export type FastSolveResult =
       mesExact?: boolean;
       /** id in data/solves.sqlite of the stored AI-chain trace (inputs + every node). */
       solveId?: number | null;
+      /** Postflop: where the flop-entering ranges came from (the 3-max chart +
+       *  the exploit hero range, the MES spec, or the 6-max fallback). This is
+       *  what the answer log shows as "chart" for a postflop answer — `gametype`
+       *  is only the GTO Wizard library set the tree is referenced against. */
+      rangeSource?: string;
       street: string;
       setId: string;
       gametype: string;
@@ -212,6 +217,9 @@ const EXPLOIT_LINE_RANGE: Record<string, Record<string, string>> = {
   "R-R-F-C": { SB: "sb_3bet_vs_btn" },
   // BTN folds, SB opens, BB 3-bets, SB calls
   "F-R-R-C": { BB: "bb_3bet_vs_sb" },
+  // BTN limps (the exploit's limp-trap: AA/AK/…), SB folds, BB checks — hero
+  // BTN's flop range is the exploit LIMP range, not the chart's limp mix
+  "C-F-C": { BTN: "btn_limp" },
 };
 
 let exploitRanges: Record<string, Record<string, number>> | null | undefined;
@@ -621,6 +629,7 @@ async function solvePostflopAi(
     ok: true,
     source: "gtow-api-postflop",
     tier: "ai-exact",
+    rangeSource: rangeSource ?? undefined,
     street: cur,
     setId: set.id,
     gametype: set.gametype,
@@ -702,6 +711,7 @@ async function solvePostflopViaChain(
   // ranges still beat losing the chain (and the street-root solve flags it).
   let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> | null = null;
   let preTokens: string[] = [];
+  let rangeSource: string | null = null;
   // The rotation must match whichever token set won: preflopPotStack replays
   // the line below to size the flop pot, and walking 3-max tokens through the
   // 6-max rotation misassigns every action and double-counts the blinds.
@@ -720,11 +730,28 @@ async function solvePostflopViaChain(
         recon = tri;
         preTokens = tri3;
         seatOrder = THREE_MAX_SEATS;
+        rangeSource = chart.id;
+        // hero's OWN flop-entering range is the strategy he actually plays:
+        // when the exploit overlay covers his preflop line, the chain must
+        // start from that (wider) range, not the equilibrium chart's — the
+        // same swap the single-solve path makes. Villain keeps the chart.
+        const exRange = exploitFlopRange(tri3, heroPosName);
+        if (exRange) {
+          for (const p of Object.keys(recon.ranges)) {
+            if (p.toUpperCase() === heroPosName.toUpperCase()) {
+              (recon.ranges as Record<string, unknown>)[p] = exRange.weights;
+              rangeSource = `${chart.id} + exploit hero range (${exRange.key})`;
+            }
+          }
+        }
+      } else {
+        rangeSource = `6max (3-max chart ${chart.id}: ${tri.reason})`;
       }
     }
   }
 
   if (!recon) {
+    if (!rangeSource) rangeSource = `6max ${set.gametype}@${depth}`;
     if (!preflopDb.available(set.gametype, depth)) return fail(`no charts for ${set.gametype}@${depth}`);
     preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
     const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
@@ -765,6 +792,7 @@ async function solvePostflopViaChain(
     streets,
     heroSeat: spot.heroSeat,
     heroComboIdx,
+    rangeSource: rangeSource ?? undefined,
   });
   // Every chain walk is kept — inputs, every node, the verdict — so the
   // answer can be inspected later exactly as it was, and diffed against a
@@ -802,6 +830,7 @@ async function solvePostflopViaChain(
     source: "gtow-api-postflop",
     tier: "ai-chain",
     solveId,
+    rangeSource: rangeSource ?? undefined,
     street: cur,
     setId: set.id,
     gametype: set.gametype,
@@ -1038,6 +1067,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
       chartDecision: mes.chartDecision ?? undefined,
       exploitTag: mes.tag,
       strategyMode: "exploit",
+      rangeSource: `MES ${mes.family} @ ${mes.board} (hero: exploit range, villain: pool calling range, villain locked to pool frequencies)`,
       mesBoard: mes.board, mesEvGainBb: mes.evGainBb, mesExact: mes.exact,
       approx: !mes.exact || undefined,
       warning: mes.warning,

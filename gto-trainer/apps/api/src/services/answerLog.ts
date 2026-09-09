@@ -11,6 +11,12 @@ import { join, dirname } from "node:path";
  *
  * Joins to the wrapper's archived hands via clientHandId (the site's own
  * globally-unique id — wrapper handIds reset every restart).
+ *
+ * 2026-09-03: the provenance that rode on every panel push but was never
+ * persisted (strategy mode, source, MES/GTO picks, MES EV at stake, band,
+ * stake, seats, position, depth, the full action mix) is now logged too —
+ * the Sources tab's live grading is built entirely on it. Rows before that
+ * date have those columns null.
  */
 
 export interface AnswerRow {
@@ -32,6 +38,31 @@ export interface AnswerRow {
   /** Chart/gametype the answer came from (e.g. ign200_3maxasym_D100_s40_sb),
    *  the join key to the chart catalog's "recently queried" view. */
   chart?: string | null;
+  // ---- provenance (2026-09-03) ----
+  strategyMode?: string | null;
+  source?: string | null;
+  bandLo?: number | null;
+  bandHi?: number | null;
+  exploitPick?: string | null;
+  chartPick?: string | null;
+  exploitTag?: string | null;
+  mesFamily?: string | null;
+  mesBoard?: string | null;
+  mesEvGainBb?: number | null;
+  mesExact?: boolean | null;
+  bbCents?: number | null;
+  tableSeats?: number | null;
+  heroPos?: string | null;
+  depth?: number | null;
+  setId?: string | null;
+  /** The full action mix (JSON) so a decision can be re-graded later. */
+  decisionJson?: string | null;
+  /** The (snapped) line the chart answered at — with `chart`, the exact node. */
+  line?: string | null;
+  /** data/solves.sqlite id of the stored AI-chain trace, when the chain answered. */
+  solveId?: number | null;
+  /** The wrapper's declared session (sessions.py). */
+  sessionId?: string | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS answers (
@@ -54,6 +85,70 @@ const DDL = `CREATE TABLE IF NOT EXISTS answers (
 CREATE INDEX IF NOT EXISTS idx_answers_client_hand ON answers(client_hand_id);
 CREATE INDEX IF NOT EXISTS idx_answers_ts ON answers(ts)`;
 
+/** Additive migrations, in the order they were introduced. */
+const EXTRA_COLUMNS: [string, string][] = [
+  ["chart", "TEXT"],
+  ["strategy_mode", "TEXT"],
+  ["source", "TEXT"],
+  ["band_lo", "REAL"],
+  ["band_hi", "REAL"],
+  ["exploit_pick", "TEXT"],
+  ["chart_pick", "TEXT"],
+  ["exploit_tag", "TEXT"],
+  ["mes_family", "TEXT"],
+  ["mes_board", "TEXT"],
+  ["mes_ev_gain_bb", "REAL"],
+  ["mes_exact", "INTEGER"],
+  ["bb_cents", "INTEGER"],
+  ["table_seats", "INTEGER"],
+  ["hero_pos", "TEXT"],
+  ["depth", "INTEGER"],
+  ["set_id", "TEXT"],
+  ["decision_json", "TEXT"],
+  ["line", "TEXT"],
+  ["solve_id", "INTEGER"],
+  ["session_id", "TEXT"],
+];
+
+export interface LoggedAnswer {
+  id: number;
+  ts: number;
+  wrapper_hand_id: number | null;
+  client_hand_id: string | null;
+  street: string | null;
+  board: string | null;
+  hero_cards: string | null;
+  decision_key: string | null;
+  text: string | null;
+  pick: string | null;
+  roll: number | null;
+  tier: string | null;
+  warning: string | null;
+  latency_ms: number | null;
+  fail_reason: string | null;
+  chart: string | null;
+  strategy_mode: string | null;
+  source: string | null;
+  band_lo: number | null;
+  band_hi: number | null;
+  exploit_pick: string | null;
+  chart_pick: string | null;
+  exploit_tag: string | null;
+  mes_family: string | null;
+  mes_board: string | null;
+  mes_ev_gain_bb: number | null;
+  mes_exact: number | null;
+  bb_cents: number | null;
+  table_seats: number | null;
+  hero_pos: string | null;
+  depth: number | null;
+  set_id: string | null;
+  decision_json: string | null;
+  line: string | null;
+  solve_id: number | null;
+  session_id: string | null;
+}
+
 class AnswerLog {
   private db: Database | null = null;
   private readonly path: string;
@@ -62,16 +157,21 @@ class AnswerLog {
     this.path = path ?? join(import.meta.dir, "..", "..", "data", "answers.sqlite");
   }
 
+  get dbPath(): string {
+    return this.path;
+  }
+
   private open(): Database {
     if (this.db) return this.db;
     mkdirSync(dirname(this.path), { recursive: true });
     this.db = new Database(this.path);
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(DDL);
-    // Additive migration: chart column (which chart/gametype answered).
-    const cols = this.db.query<{ name: string }, []>("PRAGMA table_info(answers)").all();
-    if (!cols.some((c) => c.name === "chart")) {
-      this.db.exec("ALTER TABLE answers ADD COLUMN chart TEXT");
+    const cols = new Set(
+      this.db.query<{ name: string }, []>("PRAGMA table_info(answers)").all().map((c) => c.name)
+    );
+    for (const [name, type] of EXTRA_COLUMNS) {
+      if (!cols.has(name)) this.db.exec(`ALTER TABLE answers ADD COLUMN ${name} ${type}`);
     }
     return this.db;
   }
@@ -82,13 +182,22 @@ class AnswerLog {
       this.open()
         .query(
           `INSERT INTO answers (ts, wrapper_hand_id, client_hand_id, street, board,
-             hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
+             strategy_mode, source, band_lo, band_hi, exploit_pick, chart_pick, exploit_tag,
+             mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, hero_pos,
+             depth, set_id, decision_json, line, solve_id, session_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
           row.heroCards, row.decisionKey, row.text, row.pick, row.roll,
-          row.tier, row.warning, row.latencyMs, row.failReason, row.chart ?? null
+          row.tier, row.warning, row.latencyMs, row.failReason, row.chart ?? null,
+          row.strategyMode ?? null, row.source ?? null, row.bandLo ?? null, row.bandHi ?? null,
+          row.exploitPick ?? null, row.chartPick ?? null, row.exploitTag ?? null,
+          row.mesFamily ?? null, row.mesBoard ?? null, row.mesEvGainBb ?? null,
+          row.mesExact == null ? null : row.mesExact ? 1 : 0,
+          row.bbCents ?? null, row.tableSeats ?? null, row.heroPos ?? null,
+          row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null
         );
     } catch {
       /* never propagate */
@@ -121,6 +230,74 @@ class AnswerLog {
     }
   }
 
+  /** Every logged row of one declared session, oldest first. */
+  forSession(sessionId: string): LoggedAnswer[] {
+    try {
+      return this.open()
+        .query<LoggedAnswer, [string]>("SELECT * FROM answers WHERE session_id = ? ORDER BY ts")
+        .all(sessionId);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Every logged row in the window, oldest first. */
+  rows(days = 60): LoggedAnswer[] {
+    try {
+      const since = Date.now() - days * 86_400_000;
+      return this.open()
+        .query<LoggedAnswer, [number]>("SELECT * FROM answers WHERE ts >= ? ORDER BY ts")
+        .all(since);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Answered counts per source and per tier in the window, plus a per-day
+   * series for the registry's trend strips. Failed solves are counted
+   * separately (they have no source).
+   */
+  bySource(days = 30): {
+    sources: Record<string, { n: number; p50: number | null; lastTs: number | null; byDay: number[] }>;
+    tiers: Record<string, number>;
+    failed: number;
+    provenanceRows: number;
+  } {
+    const out = { sources: {} as Record<string, { n: number; p50: number | null; lastTs: number | null; byDay: number[] }>, tiers: {} as Record<string, number>, failed: 0, provenanceRows: 0 };
+    try {
+      const since = Date.now() - days * 86_400_000;
+      const rows = this.open()
+        .query<{ ts: number; tier: string | null; source: string | null; latency_ms: number | null; text: string | null; strategy_mode: string | null }, [number]>(
+          "SELECT ts, tier, source, latency_ms, text, strategy_mode FROM answers WHERE ts >= ?"
+        )
+        .all(since);
+      const lat: Record<string, number[]> = {};
+      for (const r of rows) {
+        if (r.text == null) { out.failed++; continue; }
+        if (r.strategy_mode != null) out.provenanceRows++;
+        const tier = r.tier ?? "unknown";
+        out.tiers[tier] = (out.tiers[tier] ?? 0) + 1;
+        // Rows before the provenance columns existed have no source — infer
+        // it from the tier so the registry can still attribute them.
+        const src = r.source ?? sourceForTier(tier);
+        const s = (out.sources[src] ??= { n: 0, p50: null, lastTs: null, byDay: new Array(days).fill(0) });
+        s.n++;
+        s.lastTs = Math.max(s.lastTs ?? 0, r.ts);
+        const day = Math.min(days - 1, Math.max(0, Math.floor((r.ts - since) / 86_400_000)));
+        s.byDay[day]++;
+        if (r.latency_ms != null) (lat[src] ??= []).push(r.latency_ms);
+      }
+      for (const [src, xs] of Object.entries(lat)) {
+        xs.sort((a, b) => a - b);
+        out.sources[src]!.p50 = xs[Math.floor(xs.length / 2)] ?? null;
+      }
+    } catch {
+      /* empty */
+    }
+    return out;
+  }
+
   /** Latency percentiles + counts per tier, over the last `days`. */
   stats(days = 30): unknown {
     try {
@@ -150,6 +327,22 @@ class AnswerLog {
     } catch {
       return { answered: 0, failed: 0, tiers: {} };
     }
+  }
+}
+
+/** Tier → source, for rows logged before `source` was persisted. */
+export function sourceForTier(tier: string | null): string {
+  switch (tier) {
+    case "exploit-3max": return "pool-exploit-preflop";
+    case "chart-3max": return "hrc-3max-preflop";
+    case "local-preflop": return "local-preflop";
+    case "exploit-postflop": return "mes-postflop";
+    case "ai-chain":
+    case "ai-exact":
+    case "library-exact":
+    case "library-snap":
+    case "far-snap": return "gtow-api-postflop";
+    default: return "unknown";
   }
 }
 

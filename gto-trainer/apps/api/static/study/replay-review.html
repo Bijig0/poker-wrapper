@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay Review</title>
+<link rel="stylesheet" href="/study/study.css">
+</head>
+<body>
+<header>
+  <h1>Replay Review</h1>
+  <span class="sub">recorded frame vs the replica &middot; served by the API on :2000</span>
+</header>
+
+<main>
+  <p class="sub" style="max-width:78ch;margin:0 0 10px">
+    A debug recording's exact frame beside the replica drawing the state the
+    reader extracted from that same moment. Disagreement means a reader bug or
+    a replica bug &mdash; the raw tick underneath names the field.
+  </p>
+
+  <div id="err" class="box bad-box" style="display:none"></div>
+
+  <div class="seg" style="width:fit-content">
+    <button data-mode="hands" class="on">Hands</button>
+    <button data-mode="queue">Review queue</button>
+    <button data-mode="scrub">Scrub a session</button>
+  </div>
+
+  <!-- session picker, shared by Hands and Scrub -->
+  <div class="row" id="sessions-row">
+    <span class="fld-l">Session</span>
+    <span id="sessions"></span>
+  </div>
+
+  <div id="view"></div>
+</main>
+
+<script type="module">
+import { renderTable } from "/study/ignition-table.js";
+import {
+  fetchSessions, fetchLog, fetchDom, fetchQueue, saveVerdict, frameUrl, tickToSpot,
+} from "/study/replay-spot.js";
+import { mountAnswerPanel } from "/study/answer-panel.js";
+import { renderReaderExtract } from "/study/reader-extract.js";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+let mode = "hands";
+let sessions = [];
+let name = null;
+let log = [];
+let dom = new Map();
+let i = 0;
+let playing = false;
+let timer = null;
+const tables = [];   // live renderTable handles, torn down on every redraw
+
+function fail(e) {
+  $("err").style.display = "";
+  $("err").textContent = `${e} — is the gto-trainer API on :2000 running?`;
+}
+
+function clearTables() {
+  while (tables.length) tables.pop().destroy();
+}
+
+/* --------------------------------------------------------------- sessions */
+
+/* Deep link from the study dashboard's hand detail:
+ *   /replay?session=session_YYYYMMDD_HHMMSS&hand=<client hand id>&node=<index>[&mode=hands|scrub]
+ * lands on that hand's node instead of the first decision of the first hand. */
+const PARAMS = new URLSearchParams(location.search);
+let DEEP = PARAMS.get("session")
+  ? { session: PARAMS.get("session"), hand: PARAMS.get("hand"), node: Number(PARAMS.get("node") ?? 0) || 0 }
+  : null;
+if (DEEP && PARAMS.get("mode")) {
+  const b = document.querySelector(`.seg button[data-mode="${PARAMS.get("mode")}"]`);
+  if (b) { document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b)); mode = b.dataset.mode; }
+}
+
+fetchSessions().then((s) => {
+  sessions = s;
+  paintSessions();
+  if (DEEP && sessions.some((x) => x.name === DEEP.session)) pickSession(DEEP.session);
+  else if (DEEP) { DEEP = null; fail(`recording ${PARAMS.get("session")} not found`); }
+}).catch(fail);
+
+function paintSessions() {
+  const box = $("sessions");
+  box.textContent = "";
+  if (!sessions.length) {
+    box.innerHTML = `<span class="sub">loading…</span>`;
+    return;
+  }
+  for (const s of sessions) {
+    const b = document.createElement("button");
+    b.className = "mini" + (name === s.name ? " on" : "");
+    b.textContent = `${s.name.replace("session_", "")} · ${s.ticks}${s.note ? " 📝" : ""}`;
+    if (s.note) b.title = s.note;
+    b.onclick = () => pickSession(s.name);
+    box.appendChild(b);
+  }
+}
+
+async function pickSession(n) {
+  name = n;
+  log = []; dom = new Map(); i = 0; playing = false;
+  clearInterval(timer);
+  paintSessions();
+  render();
+  try {
+    const [l, d] = await Promise.all([fetchLog(n), fetchDom(n).catch(() => [])]);
+    log = l;
+    dom = new Map(d.map((t) => [t.seq, t]));
+    render();
+  } catch (e) { fail(e); }
+}
+
+/* ------------------------------------------------------------------ modes */
+
+document.querySelectorAll(".seg button").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
+    mode = b.dataset.mode;
+    $("sessions-row").style.display = mode === "queue" ? "none" : "";
+    render();
+  };
+});
+
+function render() {
+  clearTables();
+  clearInterval(timer);
+  const v = $("view");
+  v.textContent = "";
+  if (mode === "queue") return renderQueue(v);
+  if (!name) { v.innerHTML = `<p class="sub">pick a session above</p>`; return; }
+  if (mode === "hands") return renderHands(v);
+  return renderScrub(v);
+}
+
+/* ------------------------------------------------------------------ hands */
+
+/**
+ * The session as HANDS, each hand as NODES — the review's natural shape.
+ *
+ * The server parses each hand's stitched feed with the same grammar the answer
+ * path uses, and the stitching records which tick every line first appeared in
+ * — so each node owns a frame, and every hero DECISION node owns the tick
+ * worth answering (to-act, cards visible).
+ */
+async function renderHands(v) {
+  v.innerHTML = `<p class="sub">parsing session into hands…</p>`;
+  let hands;
+  try {
+    const j = await (await fetch(`/api/replay/${name}/hands`)).json();
+    if (!j.ok) throw new Error(j.error);
+    hands = j.hands;
+  } catch (e) { v.innerHTML = `<p class="bad">${esc(e.message ?? e)}</p>`; return; }
+  if (mode !== "hands") return;   // user switched while we were fetching
+
+  const tickBySeq = new Map(log.map((t) => [t.seq, t]));
+  let hi = 0, ni = 0;
+
+  v.innerHTML = `<div class="hands-grid">
+    <div class="card" style="margin:0"><h2 id="h-count"></h2><div id="hand-list"></div></div>
+    <div class="card" style="margin:0"><h2 id="n-title"></h2>
+      <div class="row" style="margin-bottom:6px">
+        <button class="mini" id="n-prev">◀</button>
+        <button class="mini" id="n-next">▶</button>
+        <span class="sub">click any node, or step through the hand</span>
+      </div>
+      <ol id="node-list"></ol></div>
+    <div id="node-view"></div>
+  </div>`;
+
+  $("h-count").textContent = `Hands (${hands.length})`;
+
+  const listBox = $("hand-list");
+  hands.forEach((h, k) => {
+    const b = document.createElement("button");
+    b.className = "hand-btn";
+    b.innerHTML =
+      `<div class="row" style="justify-content:space-between"><b>hand ${h.hand}</b>` +
+      `<span class="mono" style="font-size:10px">${esc(h.heroCards.join(" ") || "—")}</span></div>` +
+      `<div class="sub" style="font-size:10px">${esc(h.clientHandId ?? "no id")} · ` +
+      `${esc(h.streets.join("→"))} · ${h.decisions} decision${h.decisions === 1 ? "" : "s"}</div>`;
+    b.onclick = () => { hi = k; landOnDecision(); };
+    listBox.appendChild(b);
+  });
+
+  /** Land each hand on its FIRST DECISION — the reviewable moment. */
+  function landOnDecision() {
+    const d = hands[hi].nodes.findIndex((n) => n.kind === "decision");
+    ni = d >= 0 ? d : 0;
+    paint();
+  }
+
+  function paint() {
+    const hand = hands[hi];
+    const node = hand?.nodes[ni];
+    [...listBox.children].forEach((b, k) => b.classList.toggle("on", k === hi));
+    $("n-title").textContent = `hand ${hand?.hand} — node ${ni + 1}/${hand?.nodes.length}`;
+    $("n-prev").disabled = ni === 0;
+    $("n-next").disabled = !hand || ni >= hand.nodes.length - 1;
+
+    const nl = $("node-list");
+    nl.className = "node-list";
+    nl.textContent = "";
+    hand?.nodes.forEach((n, k) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.className = `node-btn ${n.kind}` + (k === ni ? " on" : "");
+      b.textContent = (n.kind === "decision" ? "◆ " : "") + n.label;
+      if (n.kind === "decision" && n.heroDid) {
+        const s = document.createElement("span");
+        s.className = "did";
+        s.textContent = ` → ${n.heroDid}`;
+        b.appendChild(s);
+      }
+      b.onclick = () => { ni = k; paint(); };
+      li.appendChild(b);
+      nl.appendChild(li);
+    });
+
+    const nv = $("node-view");
+    nv.textContent = "";
+    if (!node) return;
+
+    const seq = (node.kind === "decision" ? node.answerSeq : null) ?? node.seq;
+    const frame = document.createElement("div");
+    frame.className = "card";
+    frame.style.marginTop = "0";
+    frame.innerHTML = `<h2>at this node (seq ${node.seq})</h2>
+      <div class="sub">the recorded frame when this node first appeared</div>
+      <img class="frame" src="${frameUrl(name, seq)}" alt="frame ${node.seq}" draggable="false">`;
+    nv.appendChild(frame);
+
+    if (node.kind === "decision") {
+      const ans = document.createElement("div");
+      ans.className = "card";
+      ans.innerHTML = `<h2>study answer at this decision</h2><div class="sub">` +
+        (node.heroDid ? `you actually did: <b class="mono">${esc(node.heroDid)}</b>`
+                      : "hand ended here or action unrecorded") + `</div>`;
+      const holder = document.createElement("div");
+      ans.appendChild(holder);
+      nv.appendChild(ans);
+      mountAnswerPanel(holder, { session: name, seq, tick: tickBySeq.get(seq), auto: true });
+    }
+  }
+
+  $("n-prev").onclick = () => { ni = Math.max(0, ni - 1); paint(); };
+  $("n-next").onclick = () => { ni = Math.min(hands[hi].nodes.length - 1, ni + 1); paint(); };
+
+  // A deep link names the hand (site id) and the node; consume it once —
+  // on the render that follows the log load (pickSession renders twice:
+  // immediately, then again once log.jsonl is in), or the second render
+  // would land back on the first hand.
+  if (DEEP && DEEP.session === name && log.length) {
+    const k = hands.findIndex((h) => h.clientHandId && h.clientHandId === DEEP.hand);
+    const target = DEEP;
+    DEEP = null;
+    if (k >= 0) {
+      hi = k;
+      ni = Math.max(0, Math.min(target.node, hands[hi].nodes.length - 1));
+      paint();
+      listBox.children[hi]?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+  }
+  landOnDecision();
+}
+
+/* ------------------------------------------------------------------ scrub */
+
+function renderScrub(v) {
+  if (!log.length) { v.innerHTML = `<p class="sub">loading session…</p>`; return; }
+
+  v.innerHTML = `
+    <div class="row" style="margin-bottom:8px">
+      <button class="mini" id="s-prev">◀</button>
+      <button class="mini" id="s-play">▶ Play</button>
+      <button class="mini" id="s-next">▶</button>
+      <input type="range" id="s-range" style="flex:1" min="0" max="${log.length - 1}" value="${i}">
+      <span class="mono sub" id="s-pos"></span>
+      <input type="text" id="s-q" placeholder="hand id · hand N · seq N" style="width:200px" class="mono">
+      <button class="mini" id="s-find">find</button>
+    </div>
+    <p class="warn" id="s-note" style="font-size:11px"></p>
+    <div class="cmp2">
+      <div class="card" style="margin:0"><h2>Real client (recorded frame)</h2><img class="frame" id="s-frame"></div>
+      <div class="card" style="margin:0"><h2>Replica (rendered from the reader's state)</h2><div id="s-table"></div></div>
+    </div>
+    <div class="card"><h2>Translated state &amp; study answer</h2>
+      <div class="sub">recording → hand → answer, with the node stepper, the live-vs-now verdicts, and where every input came from</div>
+      <div id="s-answer"></div></div>
+    <div class="cmp2">
+      <div class="card" style="margin:0"><h2>Recorded tick (log.jsonl)</h2>
+        <div class="sub">what the reader made of the frame — the replica draws exactly this</div>
+        <pre id="s-tick"></pre></div>
+      <div class="card" style="margin:0"><h2>Feed tail</h2>
+        <div class="sub">the wrapper's play-by-play at this moment</div>
+        <pre id="s-feed"></pre></div>
+    </div>`;
+
+  const paint = () => {
+    const tick = log[i];
+    if (!tick) return;
+    $("s-range").value = i;
+    $("s-pos").textContent = `${i + 1}/${log.length} · hand ${tick.hand ?? "?"} · seq ${tick.seq}`;
+    $("s-frame").src = frameUrl(name, tick.seq);
+    clearTables();
+    tables.push(renderTable($("s-table"), tickToSpot(tick, dom.get(tick.seq)), { theme: "red" }));
+    $("s-tick").textContent = JSON.stringify(tick, null, 1);
+    $("s-feed").textContent = (tick.feedTail ?? []).join("\n") || "—";
+    mountAnswerPanel($("s-answer"), { session: name, seq: tick.seq, tick, auto: false });
+  };
+
+  const go = (k) => { i = Math.max(0, Math.min(log.length - 1, k)); paint(); };
+  $("s-prev").onclick = () => go(i - 1);
+  $("s-next").onclick = () => go(i + 1);
+  $("s-range").oninput = (e) => go(Number(e.target.value));
+  $("s-play").onclick = () => {
+    playing = !playing;
+    $("s-play").textContent = playing ? "⏸ Pause" : "▶ Play";
+    clearInterval(timer);
+    if (playing) timer = setInterval(() => go(i + 1 >= log.length ? 0 : i + 1), 500);
+  };
+
+  /**
+   * Jump to a hand by id. Three shapes, most specific first:
+   *  - a long number is Ignition's own hand id ("4913946061") — found by
+   *    searching the recorded feeds, since every hand's first ticks carry
+   *    "(hand id N)";
+   *  - "hand 3" / a short number is the wrapper's per-session hand counter;
+   *  - "seq 12" / "#12" is a raw tick.
+   * Lands on the hand's first HERO-TO-ACT tick when it has one (that is the
+   * tick worth reviewing), else its first tick.
+   */
+  function jumpTo(q) {
+    const t = q.trim().toLowerCase();
+    if (!t) return;
+    const note = $("s-note");
+    note.textContent = "";
+    const seqM = t.match(/^(?:seq\s*|#)(\d+)$/);
+    if (seqM) {
+      const k = log.findIndex((x) => x.seq === Number(seqM[1]));
+      if (k >= 0) return go(k);
+      note.textContent = `no tick with seq ${seqM[1]} in this session`;
+      return;
+    }
+    const digits = t.replace(/^hand\s*/, "");
+    if (!/^\d+$/.test(digits)) { note.textContent = "enter a hand id, 'hand N', or 'seq N'"; return; }
+    let handNo = null;
+    if (digits.length >= 8) {
+      const hit = log.find((x) => (x.feedTail ?? []).some((l) => l.includes(`hand id ${digits}`)));
+      if (!hit) { note.textContent = `hand id ${digits} is not in this session — pick the right session first`; return; }
+      handNo = hit.hand ?? null;
+    } else {
+      handNo = Number(digits);
+    }
+    const ofHand = log.map((x, k) => [x, k]).filter(([x]) => x.hand === handNo);
+    if (!ofHand.length) { note.textContent = `hand ${handNo} not found in this session`; return; }
+    // The FIRST to-act tick is often the deal animation: buttons up, hero's
+    // cards not rendered yet — an honest capture that answers with no hand
+    // class. Prefer the first to-act tick that also HAS the cards.
+    const best = ofHand.find(([x]) => x.toAct && (x.heroCards?.length ?? 0) === 2)
+      ?? ofHand.find(([x]) => x.toAct) ?? ofHand[0];
+    go(best[1]);
+  }
+  $("s-find").onclick = () => jumpTo($("s-q").value);
+  $("s-q").onkeydown = (e) => { if (e.key === "Enter") jumpTo($("s-q").value); };
+
+  paint();
+}
+
+/* ------------------------------------------------------------------ queue */
+
+/**
+ * Review queue over every recorded state, with TWO verdicts per state kept
+ * apart on purpose:
+ *
+ *   READER  — do the parsed stacks, cards, bets and to-act match what the
+ *             frame shows? This is the one thing the automated tiers cannot
+ *             settle: both sides run the same reader, so a misreading is
+ *             reproduced identically on the fake table and passes parity.
+ *   REPLICA — does the drawn table look like the real client?
+ *
+ * They fail for different reasons and are fixed in different files, so a
+ * single "looks wrong" would lose which.
+ */
+const MARKS = [
+  { key: "ok", label: "Correct", cls: "m-ok" },
+  { key: "bad", label: "Wrong", cls: "m-bad" },
+  { key: "unsure", label: "Unsure", cls: "m-unsure" },
+];
+
+async function renderQueue(v) {
+  v.innerHTML = `<p class="sub">loading queue…</p>`;
+  let q;
+  try { q = await fetchQueue(); } catch (e) { fail(e); v.textContent = ""; return; }
+  if (mode !== "queue") return;
+
+  let idx = 0;
+  let onlyUnreviewed = true;
+  let note = "";
+  let tick = null, domTick = undefined;
+
+  v.innerHTML = `
+    <div class="row card" id="q-progress" style="margin-top:0"></div>
+    <div id="q-body"></div>`;
+
+  const shownItems = () => onlyUnreviewed
+    ? q.items.filter((it) => !q.verdicts[it.id])
+    : q.items;
+
+  function paintProgress() {
+    const done = Object.keys(q.verdicts).length;
+    const bad = Object.values(q.verdicts).filter((x) => x.reader === "bad" || x.replica === "bad").length;
+    $("q-progress").innerHTML =
+      `<span><b class="mono">${done}</b><span class="sub"> / ${q.total} states reviewed</span></span>` +
+      `<span class="sub">${q.shapes} distinct shapes — the queue leads with one of each, rarest first</span>` +
+      (bad ? `<span class="bad">${bad} flagged wrong</span>` : "") +
+      `<label class="sub" style="margin-left:auto;display:flex;gap:6px;align-items:center">` +
+      `<input type="checkbox" id="q-hide" ${onlyUnreviewed ? "checked" : ""}>hide reviewed</label>`;
+    $("q-hide").onchange = (e) => { onlyUnreviewed = e.target.checked; idx = 0; paint(); };
+  }
+
+  async function loadState(cur) {
+    tick = null; domTick = undefined;
+    // The queue carries only an id and its provenance; the state itself is
+    // fetched per item so the client never holds every session's log at once.
+    try {
+      const [l, d] = await Promise.all([fetchLog(cur.session), fetchDom(cur.session).catch(() => [])]);
+      tick = l.find((t) => t.seq === cur.seq) ?? null;
+      domTick = d.find((t) => t.seq === cur.seq);
+    } catch (e) { fail(e); }
+  }
+
+  async function record(cur, patch) {
+    try {
+      q.verdicts[cur.id] = await saveVerdict(cur.id, patch);
+      paintProgress();
+      paint();
+    } catch (e) { fail(e); }
+  }
+
+  async function paint() {
+    paintProgress();
+    const shown = shownItems();
+    const cur = shown[Math.min(idx, shown.length - 1)];
+    const body = $("q-body");
+    clearTables();
+
+    if (!cur) {
+      body.innerHTML = `<p class="sub">Nothing left in the queue — untick "hide reviewed" to go back through them.</p>`;
+      return;
+    }
+    const verdict = q.verdicts[cur.id] ?? {};
+    note = verdict.note ?? "";
+
+    body.innerHTML = `
+      <div class="row" style="margin-bottom:8px">
+        <button class="mini" id="q-prev">◀ Prev</button>
+        <button class="mini" id="q-next">Next ▶</button>
+        <code class="qid">${esc(cur.id)}</code>
+        <span class="sub">${idx + 1}/${shown.length} · ${esc(cur.street)} · ${cur.seats} seats${cur.heroToAct ? " · hero to act" : ""} · seen ${cur.dupes}×</span>
+        <span class="sub mono">${esc(cur.session.replace("session_", ""))} seq ${cur.seq}</span>
+      </div>
+      <div class="cmp4">
+        <div class="card" style="margin:0"><h2>Real client — the truth</h2>
+          <div class="sub">what was actually on screen</div>
+          <img class="frame" src="${frameUrl(cur.session, cur.seq)}" alt="frame ${cur.seq}"></div>
+        <div class="card" style="margin:0"><h2>Reader extract → judge READER</h2>
+          <div class="sub">the values, literally, with gaps shown as —</div>
+          <div id="q-extract"></div></div>
+        <div class="card" style="margin:0"><h2>Replica → judge REPLICA</h2>
+          <div class="sub">the same values, drawn as a table</div>
+          <div id="q-table"></div></div>
+        <div class="card" style="margin:0"><h2>Study answer</h2>
+          <div class="sub">what the tools would have said, and on what basis</div>
+          <div id="q-answer"></div></div>
+      </div>
+      <div class="card"><h2>Verdict</h2>
+        <div class="sub">Judged separately: a misparse and a misdraw are different bugs in different files.</div>
+        <div class="cmp2" style="margin-top:8px">
+          <div id="q-mark-reader"></div>
+          <div id="q-mark-replica"></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" id="q-note" style="flex:1" value="${esc(note)}"
+            placeholder="what's wrong with it — kept with the id so we can work through them">
+          <button class="mini" id="q-both">Both correct → next</button>
+        </div>
+      </div>
+      <div class="card"><h2>What the reader extracted</h2>
+        <div class="sub">the replica draws exactly this — a disagreement names the field</div>
+        <pre id="q-raw">—</pre></div>`;
+
+    const markRow = (host, title, hint, value, onPick) => {
+      host.innerHTML = `<div class="row" style="align-items:baseline"><span class="fld-l">${title}</span><span class="sub">${hint}</span></div>`;
+      const r = document.createElement("div");
+      r.className = "row";
+      r.style.marginTop = "4px";
+      MARKS.forEach((m) => {
+        const b = document.createElement("button");
+        b.className = "mini" + (value === m.key ? ` on ${m.cls}` : "");
+        b.textContent = m.label;
+        b.onclick = () => onPick(m.key);
+        r.appendChild(b);
+      });
+      host.appendChild(r);
+    };
+    markRow($("q-mark-reader"), "Reader", "do the numbers and cards match the frame?",
+      verdict.reader, (m) => record(cur, { reader: m }));
+    markRow($("q-mark-replica"), "Replica", "does it look like the real table?",
+      verdict.replica, (m) => record(cur, { replica: m }));
+
+    $("q-prev").onclick = () => { idx = Math.max(0, idx - 1); paint(); };
+    $("q-next").onclick = () => { idx = Math.min(shown.length - 1, idx + 1); paint(); };
+    $("q-note").onblur = (e) => {
+      if (e.target.value !== (verdict.note ?? "")) record(cur, { note: e.target.value });
+    };
+    $("q-both").onclick = async () => {
+      await record(cur, { reader: "ok", replica: "ok" });
+      if (!onlyUnreviewed) { idx += 1; paint(); }
+    };
+
+    mountAnswerPanel($("q-answer"), { session: cur.session, seq: cur.seq, auto: false });
+
+    await loadState(cur);
+    // The user may have moved on while the session log was loading.
+    if (!document.getElementById("q-extract")) return;
+    renderReaderExtract($("q-extract"), tick);
+    $("q-raw").textContent = tick ? JSON.stringify(tick, null, 1) : "—";
+    if (tick) {
+      clearTables();
+      tables.push(renderTable($("q-table"), tickToSpot(tick, domTick), { theme: "red" }));
+    } else {
+      $("q-table").innerHTML = `<p class="sub">loading state…</p>`;
+    }
+  }
+
+  paint();
+}
+
+render();
+</script>
+</body>
+</html>

@@ -127,6 +127,22 @@
         "minBb": 50,
         "maxBb": 100
       }
+    },
+    "chronology": [
+      "1. client: /static/poker-game/?lobby=%2Fpoker-lobby (site origin + /poker-lobby lands here too)",
+      "2. section: left menu 'Cash games' (/poker-lobby/cash-game) or 'Zone poker' (/poker-lobby/zone-poker)",
+      "3. wizard 'Start Cash Game' / 'Start Zone Game': CARD GAME (HOLD'EM) - LIMIT (NO) - NUMBER OF SEATS (6|9) - PRACTICE MODE toggle - NEXT",
+      "4. Buy-In modal (inside the lobby iframe, over the wizard): Playable Balance -> Select Stake dropdown (li rows) -> Select Buy-In Amount: MAXIMUM $x | MINIMUM $y | OTHER (input#small-input name=otherAmount, pre-filled with the maximum) -> [Wait for Big Blind checkbox, ring only] -> TAKE MY SEAT (disabled until a stake is picked and the balance covers the minimum); Close = button.close-btn",
+      "5. a table tab opens: iframe /static/poker-game/?...playMode=real|fun&gameFormat=cash|zone&seat=6|9. Ring: quickSeat* params carry blinds + buy-in. Zone: blinds only in the table title, buy-in NOT echoed -> the modal amount is authoritative (goto records it as buyInSource=modal)",
+      "6. leave: .iconItem.close in the table iframe header (top right, real mouse click) -> 'Are you sure you want to leave this table?' -> YES"
+    ],
+    "buyInModal": {
+      "stakeInput": "text input showing the picked stake label (random id)",
+      "amountInput": "input#small-input[name=otherAmount] - dollars (practice: chips); pre-filled with MAXIMUM",
+      "presets": "buttons 'MAXIMUM $x' and 'MINIMUM $y' (click = fill amount); the 'OTHER' button is active while typing",
+      "waitForBigBlind": "checkbox (ring only)",
+      "seat": "button 'TAKE MY SEAT' (.custom-cta.primary)",
+      "close": "button.close-btn"
     }
   },
   "tableIframe": {

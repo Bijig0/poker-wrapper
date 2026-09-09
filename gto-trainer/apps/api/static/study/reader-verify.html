@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader Verify</title>
+<link rel="stylesheet" href="/study/study.css">
+</head>
+<body>
+<header>
+  <h1>Reader Verify</h1>
+  <span class="sub">table reader correctness &middot; served by the API on :2000</span>
+</header>
+
+<main>
+  <p class="sub" style="max-width:74ch;margin:0 0 4px">
+    Confirms the DOM reader sees your live table correctly. The reader extracts
+    state from the running client; this page draws that extraction back out so
+    it can be checked against the real table by eye. It is a correctness check
+    on the reader &mdash; not a simulator, and not a way to play.
+  </p>
+
+  <!-- Where the rendered spot came from. This is the whole point of the page,
+       so it is surfaced loudly rather than tucked away: an imported render is
+       evidence about the reader, an authored one is not. -->
+  <div class="prov authored" id="prov">
+    <div class="hd"><span class="dot"></span><span id="prov-title">HAND-AUTHORED SPOT</span></div>
+    <p id="prov-body">
+      You composed this. It exercises the renderer only and says nothing about
+      whether the reader works &mdash; for that, use Verify against a live table.
+    </p>
+  </div>
+
+  <div class="split">
+    <div>
+      <div class="stage" id="stage"></div>
+
+      <div class="row" style="margin-top:10px">
+        <button class="mini" id="btn-spec">Spec overlay</button>
+        <button class="mini" id="btn-theme">Theme: red</button>
+      </div>
+
+      <div class="card" id="raw-card" style="display:none">
+        <h2>Reader output</h2>
+        <div class="sub">The raw extraction the drawing was built from &mdash; every rendered element traces to a value here</div>
+        <pre id="raw"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Measured geometry</h2>
+        <div class="sub">Read from the client's DOM, in design units</div>
+        <div class="kv" id="geom"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:0">
+      <div class="seg">
+        <button data-tab="verify" class="on">Verify against live table</button>
+        <button data-tab="build">Build a spot</button>
+      </div>
+
+      <div id="pane-verify">
+        <ol class="steps">
+          <li><b>1.</b> Open your Ignition table, press F12, go to the Console.</li>
+          <li><b>2.</b> Paste the reader below and hit enter. It only reads &mdash; it never clicks, types, or sends anything.</li>
+          <li><b>3.</b> Paste the JSON it prints into the box underneath.</li>
+          <li><b>4.</b> Compare the drawing to your real table. Any mismatch is a reader bug, and the raw output tells you which field.</li>
+        </ol>
+        <button class="mini wide" id="btn-copy" style="margin:10px 0">Copy reader snippet</button>
+        <textarea id="paste" spellcheck="false" style="height:180px;width:100%"
+          placeholder="Paste the JSON the console printed…"></textarea>
+        <button class="mini wide" id="btn-render" style="margin-top:8px" disabled>Render what the reader saw</button>
+        <p class="bad" id="err" style="font-size:12px"></p>
+      </div>
+
+      <div id="pane-build" style="display:none">
+        <div class="row" style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px">
+          <span class="sub" style="text-transform:uppercase;font-size:10px;letter-spacing:.5px">Start from</span>
+          <button class="mini" data-preset="three">3-max</button>
+          <button class="mini" data-preset="blank">Empty 6-max</button>
+        </div>
+        <div id="editor"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import { renderTable } from "/study/ignition-table.js";
+import { LIVE_READER_SNIPPET, parseLivePayload } from "/study/live-import.js";
+import { CARD_ASPECT, DESIGN, OVAL, PARTS, SEAT_BOX, SEAT_MAPS } from "/study/table-spec.js";
+import { mountSpotEditor } from "/study/spot-editor.js";
+
+const $ = (id) => document.getElementById(id);
+
+const BLANK = {
+  capacity: 6,
+  title: "$1/$2 No Limit Hold'em",
+  potBB: 3,
+  board: [],
+  seats: [
+    { slot: 0, status: "active", seatNo: 1, stackBB: 100, isHero: true, cards: [] },
+    { slot: 1, status: "empty" }, { slot: 2, status: "empty" },
+    { slot: 3, status: "empty" }, { slot: 4, status: "empty" }, { slot: 5, status: "empty" },
+  ],
+};
+
+/**
+ * 3-max as Ignition actually renders it: a 6-max table with only the three
+ * lower positions occupied — hero bottom-centre plus slots 1 and 5, the two
+ * lower side seats. The client does not have a dedicated 3-handed layout; it
+ * seats fewer players on the same six-slot map.
+ *
+ * Hero is on the button, so the other two post the blinds.
+ */
+const THREE_MAX = {
+  capacity: 6,
+  title: "$1/$2 No Limit Hold'em - 3-max",
+  potBB: 1.5,
+  board: [],
+  seats: [
+    { slot: 0, status: "acting", seatNo: 1, stackBB: 100, cards: ["Ah", "Kd"], timer: 24, isHero: true, isDealer: true },
+    { slot: 1, status: "active", seatNo: 2, stackBB: 87.5, betBB: 0.5, action: "POST SB" },
+    { slot: 2, status: "empty" }, { slot: 3, status: "empty" }, { slot: 4, status: "empty" },
+    { slot: 5, status: "active", seatNo: 3, stackBB: 143.2, betBB: 1, action: "POST BB" },
+  ],
+  actions: { buttons: ["FOLD", "CALL\n1 BB"], raise: "RAISE TO\n2.5 BB" },
+};
+
+const THEMES = ["red", "orange", "purple", "teal"];
+
+let spot = structuredClone(BLANK);
+let prov = { kind: "authored" };
+let theme = "red";
+let showSpec = false;
+let handle = null;
+
+function draw() {
+  handle?.destroy();
+  handle = renderTable($("stage"), spot, { theme, showSpec });
+  $("stage").classList.toggle("live", prov.kind === "live");
+
+  const live = prov.kind === "live";
+  const box = $("prov");
+  box.className = "prov " + (live ? "live" : "authored");
+  $("prov-title").textContent = live
+    ? `READ FROM LIVE TABLE · ${prov.at}`
+    : "HAND-AUTHORED SPOT";
+  $("prov-body").innerHTML = live
+    ? "Every value below was extracted from the running client. Nothing here was typed, and nothing was sent to the table &mdash; this is a one-way read, drawn back out for comparison. If it matches your real table, the reader is correct for this spot."
+    : "You composed this. It exercises the renderer only and says nothing about whether the reader works &mdash; for that, use Verify against a live table.";
+
+  $("raw-card").style.display = live ? "" : "none";
+  if (live) $("raw").textContent = JSON.stringify(JSON.parse(prov.raw), null, 2);
+
+  drawGeom();
+}
+
+function drawGeom() {
+  const rows = [
+    ["design space", `${DESIGN.w} x ${DESIGN.h}`],
+    ["oval", `(${OVAL.x}, ${OVAL.y}) ${OVAL.w}x${OVAL.h}`],
+    ["seat box", `${SEAT_BOX.w} x ${SEAT_BOX.h}`],
+    ["stack pill", `${PARTS.pill.w}x${PARTS.pill.h} @y${PARTS.pill.y}`],
+    ["card aspect", `100:150 = ${CARD_ASPECT.toFixed(4)}`],
+    ["hole card", `${PARTS.holeCard.w} x ${(PARTS.holeCard.w / CARD_ASPECT).toFixed(1)}`],
+    ["board card", `${PARTS.boardCard.w} x ${(PARTS.boardCard.w / CARD_ASPECT).toFixed(1)}, pitch ${PARTS.boardCard.pitch}`],
+    ["hero slot", `(${SEAT_MAPS[spot.capacity][0].x}, ${SEAT_MAPS[spot.capacity][0].y})`],
+  ];
+  $("geom").innerHTML = rows
+    .map(([k, v]) => `<div><span class="k">${k}</span><span>${v}</span></div>`)
+    .join("");
+}
+
+function authored(next) {
+  spot = next;
+  prov = { kind: "authored" };
+  draw();
+  remountEditor();
+}
+
+function remountEditor() {
+  mountSpotEditor($("editor"), spot, (next) => {
+    spot = next;
+    prov = { kind: "authored" };
+    draw();
+  });
+}
+
+/* ------------------------------------------------------------------ wiring */
+
+$("btn-spec").onclick = (e) => {
+  showSpec = !showSpec;
+  e.target.classList.toggle("on", showSpec);
+  draw();
+};
+$("btn-theme").onclick = (e) => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  e.target.textContent = `Theme: ${theme}`;
+  draw();
+};
+
+$("btn-copy").onclick = async (e) => {
+  try {
+    await navigator.clipboard.writeText(LIVE_READER_SNIPPET);
+    e.target.textContent = "Copied — paste into the console";
+  } catch {
+    // Clipboard is blocked in some embedded contexts; select it instead so
+    // the user can still copy by hand rather than hitting a dead button.
+    const ta = $("paste");
+    ta.value = LIVE_READER_SNIPPET;
+    ta.select();
+    e.target.textContent = "Clipboard blocked — snippet put in the box, copy it";
+  }
+  setTimeout(() => (e.target.textContent = "Copy reader snippet"), 2600);
+};
+
+$("paste").oninput = () => {
+  $("btn-render").disabled = !$("paste").value.trim();
+};
+
+$("btn-render").onclick = () => {
+  try {
+    spot = parseLivePayload($("paste").value.trim());
+    prov = { kind: "live", at: new Date().toLocaleTimeString(), raw: $("paste").value.trim() };
+    $("err").textContent = "";
+    draw();
+  } catch (e) {
+    $("err").textContent = e.message;
+  }
+};
+
+document.querySelectorAll(".seg button").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
+    const build = b.dataset.tab === "build";
+    $("pane-build").style.display = build ? "" : "none";
+    $("pane-verify").style.display = build ? "none" : "";
+  };
+});
+
+document.querySelectorAll("[data-preset]").forEach((b) => {
+  b.onclick = () => authored(structuredClone(b.dataset.preset === "three" ? THREE_MAX : BLANK));
+});
+
+remountEditor();
+draw();
+</script>
+</body>
+</html>

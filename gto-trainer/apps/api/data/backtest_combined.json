@@ -1,0 +1,315 @@
+{
+ "generatedAt": "2026-09-03T18:58:21",
+ "script": "analysis/pipeline/limp_study/backtest_combined.py",
+ "gitSha": "b36ac26a",
+ "inputs": {
+  "pool": "pool_model_v3.json",
+  "exploit": "exploit_ranges.json",
+  "exploitChart": "ign200_3maxasym2ci_D100_s100_eq",
+  "ladder": "C:\\Users\\Brady\\poker\\gto-trainer\\apps\\api\\data\\winrate_ladder.json",
+  "ladderGeneratedAt": "2026-09-03T18:58:17",
+  "reach": true
+ },
+ "arrivals": {
+  "M1_heroSB_bvb_cbet": {
+   "shape": "BTN folds, SB raises (hero), BB calls",
+   "heroSeatProb": 0.3333,
+   "heroActionShare": 0.5762,
+   "villain": {
+    "btn_fold": 0.5314,
+    "bb_flat_vs_sb": 0.4126
+   },
+   "pExploit": 0.04211,
+   "pctOfHandsExploit": 4.211,
+   "pctOfHandsCorpus": 4.02
+  },
+  "M2_heroBTN_srp_vs_BB": {
+   "shape": "BTN raises (hero), SB folds, BB calls",
+   "heroSeatProb": 0.3333,
+   "heroActionShare": 0.4962,
+   "villain": {
+    "sb_fold_vs_open": 0.731,
+    "bb_flat_vs_open": 0.3416
+   },
+   "pExploit": 0.04131,
+   "pctOfHandsExploit": 4.131,
+   "pctOfHandsCorpus": 4.45
+  }
+ },
+ "generations": {
+  "served": {
+   "dir": "mes_handoff/runs",
+   "families": {
+    "M1_heroSB_bvb_cbet": {
+     "boards": 14,
+     "meanEvGainBb": 5.758,
+     "weighting": "corpus texture distribution",
+     "upliftBb100Exploit": 24.247,
+     "perBoard": {
+      "6h6d2s": 8.06,
+      "7c5c4h": 7.55,
+      "8h6s3h": 7.71,
+      "9s5h2c": 3.53,
+      "AcTh4s": 3.45,
+      "Ah9c3d": 3.52,
+      "AsKd7c": 3.35,
+      "Jd7h5c": 3.41,
+      "Jh9h3c": 7.83,
+      "Kc7d2h": 3.17,
+      "Ks8d8c": 8.55,
+      "QhJc6d": 3.21,
+      "Qs8s4d": 6.79,
+      "Tc9d2s": 3.48
+     }
+    },
+    "M2_heroBTN_srp_vs_BB": {
+     "boards": 14,
+     "meanEvGainBb": 6.137,
+     "weighting": "corpus texture distribution",
+     "upliftBb100Exploit": 25.354,
+     "perBoard": {
+      "6h6d2s": 7.43,
+      "7c5c4h": 7.48,
+      "8h6s3h": 7.75,
+      "9s5h2c": 3.38,
+      "AcTh4s": 3.16,
+      "Ah9c3d": 3.53,
+      "AsKd7c": 3.35,
+      "Jd7h5c": 3.2,
+      "Jh9h3c": 8.59,
+      "Kc7d2h": 3.69,
+      "Ks8d8c": 7.69,
+      "QhJc6d": 3.47,
+      "Qs8s4d": 7.41,
+      "Tc9d2s": 3.34
+     }
+    }
+   },
+   "upliftBb100Exploit": 49.601,
+   "complete": true
+  },
+  "v3": {
+   "dir": "mes_handoff/runs_v3",
+   "families": {
+    "M1_heroSB_bvb_cbet": {
+     "boards": 14,
+     "meanEvGainBb": 5.758,
+     "weighting": "corpus texture distribution",
+     "upliftBb100Exploit": 24.247,
+     "perBoard": {
+      "6h6d2s": 8.06,
+      "7c5c4h": 7.55,
+      "8h6s3h": 7.71,
+      "9s5h2c": 3.53,
+      "AcTh4s": 3.45,
+      "Ah9c3d": 3.52,
+      "AsKd7c": 3.35,
+      "Jd7h5c": 3.41,
+      "Jh9h3c": 7.83,
+      "Kc7d2h": 3.17,
+      "Ks8d8c": 8.55,
+      "QhJc6d": 3.21,
+      "Qs8s4d": 6.79,
+      "Tc9d2s": 3.48
+     }
+    },
+    "M2_heroBTN_srp_vs_BB": {
+     "boards": 14,
+     "meanEvGainBb": 6.137,
+     "weighting": "corpus texture distribution",
+     "upliftBb100Exploit": 25.354,
+     "perBoard": {
+      "6h6d2s": 7.43,
+      "7c5c4h": 7.48,
+      "8h6s3h": 7.75,
+      "9s5h2c": 3.38,
+      "AcTh4s": 3.16,
+      "Ah9c3d": 3.53,
+      "AsKd7c": 3.35,
+      "Jd7h5c": 3.2,
+      "Jh9h3c": 8.59,
+      "Kc7d2h": 3.69,
+      "Ks8d8c": 7.69,
+      "QhJc6d": 3.47,
+      "Qs8s4d": 7.41,
+      "Tc9d2s": 3.34
+     }
+    }
+   },
+   "upliftBb100Exploit": 49.601,
+   "complete": true
+  },
+  "refit": {
+   "dir": "mes_handoff/runs_refit",
+   "families": {
+    "M2_heroBTN_srp_vs_BB": {
+     "boards": 9,
+     "meanEvGainBb": 4.95,
+     "weighting": "uniform over solved boards",
+     "upliftBb100Exploit": 20.45,
+     "perBoard": {
+      "7c5c4h": 4.95,
+      "8h6s3h": 5.04,
+      "9s5h2c": 5.09,
+      "Ah9c3d": 4.78,
+      "AsKd7c": 4.74,
+      "Jd7h5c": 4.95,
+      "Kc7d2h": 4.81,
+      "Qs8s4d": 5.22,
+      "Tc9d2s": 4.99
+     }
+    }
+   },
+   "upliftBb100Exploit": 20.45,
+   "complete": false
+  },
+  "v2": {
+   "dir": "mes_handoff/stale_v2_locks",
+   "families": {
+    "M1_heroSB_bvb_cbet": {
+     "boards": 14,
+     "meanEvGainBb": 7.538,
+     "weighting": "corpus texture distribution",
+     "upliftBb100Exploit": 31.743,
+     "perBoard": {
+      "6h6d2s": 6.5,
+      "7c5c4h": 8.33,
+      "8h6s3h": 8.15,
+      "9s5h2c": 7.39,
+      "AcTh4s": 7.3,
+      "Ah9c3d": 6.98,
+      "AsKd7c": 7.16,
+      "Jd7h5c": 7.74,
+      "Jh9h3c": 8.21,
+      "Kc7d2h": 6.89,
+      "Ks8d8c": 7.05,
+      "QhJc6d": 7.5,
+      "Qs8s4d": 7.67,
+      "Tc9d2s": 7.97
+     }
+    },
+    "M2_heroBTN_srp_vs_BB": {
+     "boards": 14,
+     "meanEvGainBb": 5.668,
+     "weighting": "corpus texture distribution",
+     "upliftBb100Exploit": 23.414,
+     "perBoard": {
+      "6h6d2s": 4.86,
+      "7c5c4h": 5.65,
+      "8h6s3h": 5.72,
+      "9s5h2c": 5.62,
+      "AcTh4s": 5.3,
+      "Ah9c3d": 5.32,
+      "AsKd7c": 5.49,
+      "Jd7h5c": 5.69,
+      "Jh9h3c": 6.37,
+      "Kc7d2h": 5.25,
+      "Ks8d8c": 5.32,
+      "QhJc6d": 5.89,
+      "Qs8s4d": 5.85,
+      "Tc9d2s": 5.7
+     }
+    }
+   },
+   "upliftBb100Exploit": 55.157,
+   "complete": true
+  }
+ },
+ "combined": {
+  "norake": {
+   "served": {
+    "bb100": 60.358,
+    "preflopLeg": 10.757,
+    "postflopLeg": 49.601,
+    "complete": true,
+    "rakeMismatch": false
+   },
+   "v3": {
+    "bb100": 60.358,
+    "preflopLeg": 10.757,
+    "postflopLeg": 49.601,
+    "complete": true,
+    "rakeMismatch": false
+   },
+   "refit": {
+    "bb100": 31.207,
+    "preflopLeg": 10.757,
+    "postflopLeg": 20.45,
+    "complete": false,
+    "rakeMismatch": false
+   },
+   "v2": {
+    "bb100": 65.914,
+    "preflopLeg": 10.757,
+    "postflopLeg": 55.157,
+    "complete": true,
+    "rakeMismatch": false
+   }
+  },
+  "nl200": {
+   "served": {
+    "bb100": 55.985,
+    "preflopLeg": 6.384,
+    "postflopLeg": 49.601,
+    "complete": true,
+    "rakeMismatch": true
+   },
+   "v3": {
+    "bb100": 55.985,
+    "preflopLeg": 6.384,
+    "postflopLeg": 49.601,
+    "complete": true,
+    "rakeMismatch": true
+   },
+   "refit": {
+    "bb100": 26.834,
+    "preflopLeg": 6.384,
+    "postflopLeg": 20.45,
+    "complete": false,
+    "rakeMismatch": true
+   },
+   "v2": {
+    "bb100": 61.541,
+    "preflopLeg": 6.384,
+    "postflopLeg": 55.157,
+    "complete": true,
+    "rakeMismatch": true
+   }
+  },
+  "nl25": {
+   "served": {
+    "bb100": 52.63,
+    "preflopLeg": 3.029,
+    "postflopLeg": 49.601,
+    "complete": true,
+    "rakeMismatch": false
+   },
+   "v3": {
+    "bb100": 52.63,
+    "preflopLeg": 3.029,
+    "postflopLeg": 49.601,
+    "complete": true,
+    "rakeMismatch": false
+   },
+   "refit": {
+    "bb100": 23.479,
+    "preflopLeg": 3.029,
+    "postflopLeg": 20.45,
+    "complete": false,
+    "rakeMismatch": false
+   },
+   "v2": {
+    "bb100": 58.186,
+    "preflopLeg": 3.029,
+    "postflopLeg": 55.157,
+    "complete": true,
+    "rakeMismatch": false
+   }
+  }
+ },
+ "caveats": [
+  "postflop leg = arrival probability under the exploit preflop x board-weighted ev_gain; no execution haircut",
+  "MES trees carry the NL25 4bb rake cap; the NL200 combined cell mixes that with the ladder's 1bb cap (rakeMismatch)",
+  "a generation is 'complete' only with all 14 boards per family; partial generations are shown but not the headline"
+ ]
+}

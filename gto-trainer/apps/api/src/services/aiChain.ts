@@ -45,7 +45,49 @@ export interface AiChainSpec {
   heroSeat: "oop" | "ip";
   heroComboIdx: number | null;
   rake?: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };
+  /** Which preflop layer the flop-entering ranges came from — e.g.
+   *  "ign200_3maxasym2ci_D100_s100_eq + exploit hero range (btn_open)". Not
+   *  used by the solve; kept so a stored trace says what it assumed. */
+  rangeSource?: string;
 }
+
+/**
+ * The whole walk, recorded as it happens (services/solveStore.ts keeps it):
+ * the spec, each street's tree, and every node visited with its full
+ * action_solutions and the action taken. Enough to replay the conditioning
+ * step by step, and to diff a later re-solve against what answered live.
+ */
+export interface ChainTraceNode {
+  si: number;
+  ti: number;
+  street: "FLOP" | "TURN" | "RIVER";
+  board: string;
+  /** action codes walked on this street before this node */
+  codes: string[];
+  actor: 0 | 1;
+  potNode: number;
+  invested: [number, number];
+  actions: {
+    name: string; code: string; betsize: number | null; position: string | null;
+    totalFrequency: number | null; totalEv: number | null;
+    strategy: number[]; evs: number[];
+  }[];
+  /** index into `actions` of the observed action, null at hero's pending node */
+  taken: number | null;
+  heroNode: boolean;
+}
+export interface ChainTrace {
+  spec: AiChainSpec;
+  streets: {
+    si: number; street: "FLOP" | "TURN" | "RIVER"; board: string; potIn: number; stackIn: number;
+    labels: string[]; fixedLevels: string[] | null; solId: string | null; created: boolean;
+    oopIn: number[]; ipIn: number[];
+  }[];
+  nodes: ChainTraceNode[];
+  result: { ok: boolean; why?: string; potNode?: number; stackStreet?: number; line?: string; solves?: number };
+}
+
+const r4 = (xs: number[] | undefined): number[] => (xs ?? []).map((x) => Math.round((x ?? 0) * 10000) / 10000);
 
 export type AiChainResult =
   | {
@@ -60,17 +102,20 @@ export type AiChainResult =
       line: string;
       /** Cloud solves that ran fresh for this call (0 = fully cached). */
       solves: number;
+      trace: ChainTrace;
     }
-  | { ok: false; why: string };
+  | { ok: false; why: string; trace?: ChainTrace };
 
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
+  const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
+  const fail = (why: string): AiChainResult => { trace.result = { ok: false, why }; return { ok: false, why, trace }; };
   const cards = spec.board.match(/.{2}/g) ?? [];
-  if (cards.length < 3) return { ok: false, why: `board too short ("${spec.board}")` };
+  if (cards.length < 3) return fail(`board too short ("${spec.board}")`);
   if (spec.streets.length < 1 || spec.streets.length > 3) {
-    return { ok: false, why: `need 1-3 streets, got ${spec.streets.length}` };
+    return fail(`need 1-3 streets, got ${spec.streets.length}`);
   }
   if (cards.length < 2 + spec.streets.length) {
-    return { ok: false, why: "board has fewer cards than streets walked" };
+    return fail("board has fewer cards than streets walked");
   }
 
   let oop = spec.oopRange.slice();
@@ -100,7 +145,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     try {
       labels = wagerLabelForWalk(toks, stack);
     } catch (e) {
-      return { ok: false, why: `tokens: ${e instanceof Error ? e.message : e}` };
+      return fail(`tokens: ${e instanceof Error ? e.message : e}`);
     }
 
     // Any wager street is solved FIXED with the observed sizes pinned — live
@@ -111,9 +156,14 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       try {
         fixedLevels = streetFixedPcts(labels, pot).pcts;
       } catch (e) {
-        return { ok: false, why: `fixed sizing: ${e instanceof Error ? e.message : e}` };
+        return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
       }
     }
+    const streetRec = {
+      si, street: STREET[si]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
+      solId: null as string | null, created: false, oopIn: r4(oop), ipIn: r4(ip),
+    };
+    trace.streets.push(streetRec);
 
     const ens = await gtowApi.ensureCustomSolution({
       board: streetBoard,
@@ -127,8 +177,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       ...(spec.rake ? { rake: spec.rake } : {}),
       ...(fixedLevels ? { fixedLevels: { [STREET[si]!]: fixedLevels } } : {}),
     });
-    if (!ens.ok) return { ok: false, why: `solve: ${ens.error}` };
+    if (!ens.ok) return fail(`solve: ${ens.error}`);
     if (ens.created) solves++;
+    streetRec.solId = String(ens.solId);
+    streetRec.created = !!ens.created;
 
     const inv: [number, number] = [0, 0];
     const codes: string[] = [];
@@ -139,35 +191,46 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         [QKEY[si]!]: codes.join("-"),
         board: streetBoard,
       });
-      if (!nq.ok) return { ok: false, why: `node: ${nq.error}` };
+      if (!nq.ok) return fail(`node: ${nq.error}`);
       const sols: any[] = nq.data?.action_solutions ?? [];
-      if (!sols.length) return { ok: false, why: "empty node mid-walk" };
+      if (!sols.length) return fail("empty node mid-walk");
       const actor = (codes.length % 2) as 0 | 1; // OOP first, strict alternation
+      const nodeRec: ChainTraceNode = {
+        si, ti, street: STREET[si]!, board: streetBoard, codes: codes.slice(), actor,
+        potNode: Math.round((pot + inv[0] + inv[1]) * 100) / 100, invested: [inv[0], inv[1]],
+        actions: sols.map((a) => ({
+          name: String(a.action?.display_name ?? "?"), code: String(a.action?.code ?? ""),
+          betsize: a.action?.betsize != null && a.action.betsize !== "" ? Number(a.action.betsize) : null,
+          position: a.action?.position ?? null,
+          totalFrequency: a.total_frequency ?? null, totalEv: a.total_ev ?? null,
+          strategy: r4(a.strategy), evs: r4(a.evs),
+        })),
+        taken: null, heroNode: false,
+      };
+      trace.nodes.push(nodeRec);
 
       if (ti === labels.length) {
         if (!isLast) break; // street walked through; next street's tree re-roots
         // Hero's pending decision — sanity: it must actually be hero's turn.
         const heroActor = spec.heroSeat === "oop" ? 0 : 1;
         if (actor !== heroActor) {
-          return { ok: false, why: "walked line ends on villain's turn (capture missed an action?)" };
+          return fail("walked line ends on villain's turn (capture missed an action?)");
         }
-        return {
-          ok: true,
-          data: nq.data,
-          potNode: Math.round((pot + inv[0] + inv[1]) * 100) / 100,
-          stackStreet: stack,
-          line: [...walked, `(${STREET[si]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / "),
-          solves,
-        };
+        nodeRec.heroNode = true;
+        const line = [...walked, `(${STREET[si]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
+        const potNode = Math.round((pot + inv[0] + inv[1]) * 100) / 100;
+        trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
+        return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace };
       }
 
       const label = labels[ti]!;
       const ai = matchActionLoose(label, sols, stack);
       if (ai < 0) {
         const offered = sols.map((a) => a.action?.display_name ?? "?").join(", ");
-        return { ok: false, why: `"${label}" not walkable at ${STREET[si]}#${ti} (offered: ${offered})` };
+        return fail(`"${label}" not walkable at ${STREET[si]}#${ti} (offered: ${offered})`);
       }
       const a = sols[ai]!;
+      nodeRec.taken = ai;
       const kind = actionKindOf(a);
 
       // Condition the actor's range on the observed action — the step that
@@ -177,7 +240,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       else ip = ip.map((w, i) => w * (strat[i] ?? 0));
 
       const toCall = Math.abs(inv[0] - inv[1]);
-      if (kind === "Fold") return { ok: false, why: "line contains a fold before hero's node" };
+      if (kind === "Fold") return fail("line contains a fold before hero's node");
       if (kind === "Call") inv[actor] = inv[1 - actor]!;
       else if (kind !== "Check") inv[actor] = Number(a.action?.betsize ?? inv[1 - actor]!);
       codes.push(String(a.action?.code ?? ""));
@@ -185,19 +248,19 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       closed = (kind === "Call" && toCall > 0) || (kind === "Check" && actor === 1);
       if (closed) {
         if (ti !== labels.length - 1) {
-          return { ok: false, why: "street closed but more actions follow (capture corruption?)" };
+          return fail("street closed but more actions follow (capture corruption?)");
         }
         const paid = Math.max(inv[0], inv[1]);
         pot += 2 * paid;
         stack -= paid;
         walked.push(`${STREET[si]!.toLowerCase()} ${codes.join("-")}`);
-        if (stack <= 0.005) return { ok: false, why: "line is all-in — no pending decision to solve" };
+        if (stack <= 0.005) return fail("line is all-in — no pending decision to solve");
         break;
       }
     }
     if (!closed && !isLast) {
-      return { ok: false, why: `street ${STREET[si]} didn't close before the next card (missed action?)` };
+      return fail(`street ${STREET[si]} didn't close before the next card (missed action?)`);
     }
   }
-  return { ok: false, why: "walk exhausted without reaching hero's node" };
+  return fail("walk exhausted without reaching hero's node");
 }

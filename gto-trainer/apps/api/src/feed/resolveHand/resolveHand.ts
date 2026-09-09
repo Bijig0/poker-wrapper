@@ -32,6 +32,8 @@ export interface ResolvedHand {
   heroSittingOut: boolean;
   studyAnswersOn: boolean | null;
   studyMode?: "exploit" | "chart" | null;
+  /** The wrapper's DECLARED session (sessions.py) — stamped on answers and solves. */
+  sessionId?: string | null;
 }
 
 export interface ResolveError {
@@ -85,6 +87,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
   let heroSittingOut = false;
   let studyAnswersOn: boolean | null = null;
   let studyMode: "exploit" | "chart" | null = null;
+  let sessionId: string | null = null;
 
   if (body.hand != null) {
     try {
@@ -94,7 +97,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
           ? (body.hand as { hand: unknown }).hand
           : body.hand;
       const normalized = normalizeHand(raw);
-      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode };
+      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId: normalized.hand.sessionId ?? null };
     } catch (e) {
       return { ok: false, status: 400, error: `Hand JSON not understood: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -108,6 +111,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       snapshot?: { status?: string; seats?: { hero?: boolean; sittingOut?: boolean }[] };
       studyAnswers?: boolean;
       studyMode?: "exploit" | "chart";
+      sessionId?: string | null;
     };
     try {
       const res = await fetch(`${url.replace(/\/$/, "")}/state`, { signal: AbortSignal.timeout(3000) });
@@ -121,16 +125,17 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     tableStatus = state.snapshot?.status ?? null;
     studyAnswersOn = state.studyAnswers ?? false;
     studyMode = state.studyMode ?? null;
+    sessionId = state.sessionId ?? null;
     heroSittingOut = !!state.snapshot?.seats?.find((s) => s.hero)?.sittingOut;
     if (state.hand != null) {
       try {
         const normalized = normalizeHand(state.hand);
-        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode };
+        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId };
       } catch (e) {
         return { ok: false, status: 502, error: `Live hand not understood: ${e instanceof Error ? e.message : String(e)}` };
       }
     }
-    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn, studyMode };
+    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId };
   }
 
   if (body.rows || body.text) {
@@ -140,7 +145,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       return { ok: false, status: 400, error: "rows must be a PanelRow[] or { rows: PanelRow[] }." };
     }
     const parsed = parsePanelFeed(rawRows);
-    return { ok: true, hand: parsed.hand, source, warnings: parsed.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode };
+    return { ok: true, hand: parsed.hand, source, warnings: parsed.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId: null };
   }
 
   return { ok: false, status: 400, error: "Body needs one of: hand, rows, text, or live." };

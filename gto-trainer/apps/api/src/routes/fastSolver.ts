@@ -32,7 +32,7 @@ app.post("/", async (c) => {
 
   const resolved = await resolveHand(body);
   if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode } = resolved;
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId } = resolved;
 
   if (!hand) {
     return c.json(
@@ -69,6 +69,7 @@ app.post("/", async (c) => {
     tableStatus,
     studyAnswersOn,
     studyMode,
+    sessionId: sessionId ?? null,
     rerendered: renderPanelRows(hand),
     hero: {
       pos: heroPos,
@@ -99,6 +100,9 @@ app.post("/", async (c) => {
 
   const solution = await fastSolve(hand, heroPos, {
     setId: body.setId, depth: body.depth, heroPos,
+    // who asked — stamped on every stored AI-chain trace (services/solveStore.ts)
+    ...(typeof (body as { origin?: unknown }).origin === "string" ? { origin: (body as { origin: string }).origin } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(body.strategy === "exploit" || body.strategy === "chart"
       ? { strategy: body.strategy }
       : studyMode ? { strategy: studyMode } : {}),
