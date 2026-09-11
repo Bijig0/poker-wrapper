@@ -17,6 +17,7 @@ import sourcesRoutes from "./src/routes/sources";
 import missQueueRoutes from "./src/routes/missQueue";
 import ledgerRoutes from "./src/routes/ledger";
 import { jobs } from "./src/services/jobs";
+import { boxKeeper } from "./src/services/boxKeeper";
 import replayRoutes from "./src/routes/replay";
 import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
@@ -120,6 +121,8 @@ if (!dashboardOnly) gtowApi.startTokenKeeper();
 
 // The ledger's job runner: one job per lane at a time, logs under data/jobs/.
 jobs.start();
+// The box keeper: keeps the HRC boxes solving on their own (relaunch HRC, restart a hung one, re-queue a failed shard).
+if (!dashboardOnly) boxKeeper.start();
 
 export default {
   port,

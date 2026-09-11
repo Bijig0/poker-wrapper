@@ -89,7 +89,12 @@ class GtowApi {
         resolve(tok);
       };
       const hardTimer = setTimeout(() => finish(null), timeoutMs);
-      const send = (method: string, params: unknown = {}) => ws.send(JSON.stringify({ id: ++seq, method, params }));
+      // only on an OPEN socket: the passive timer can fire before onopen, or after the client went away — ws.send then
+      // throws InvalidStateError inside a timer callback, which is uncaught and took the whole API down (2026-09-11)
+      const send = (method: string, params: unknown = {}) => {
+        if (ws.readyState !== WebSocket.OPEN) { finish(null); return; }
+        try { ws.send(JSON.stringify({ id: ++seq, method, params })); } catch { finish(null); }
+      };
 
       // PASSIVE-FIRST: the token rides every authenticated request, and the study
       // poller drives the client constantly — so just watch its natural traffic.
@@ -120,6 +125,7 @@ class GtowApi {
         }
       };
       ws.onerror = () => finish(null);
+      ws.onclose = () => finish(null);
     });
   }
 

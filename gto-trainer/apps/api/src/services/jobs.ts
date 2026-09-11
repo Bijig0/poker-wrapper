@@ -31,9 +31,12 @@ const LOG_DIR = join(DATA_DIR, "jobs");
  */
 if (process.platform === "win32") {
   try {
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command",
+    // fire-and-forget: WMI on this laptop sometimes takes minutes and spawnSync's timeout is not honoured on Windows —
+    // a synchronous sweep then blocks the whole boot (the API never listened for 10+ min, 2026-09-12). The leftover
+    // runners die a moment later either way; the keeper re-queues their jobs.
+    Bun.spawn(["powershell", "-NoProfile", "-Command",
       "Get-CimInstance Win32_Process -Filter \"Name='bun.exe'\" | Where-Object { $_.CommandLine -like '*scripts?boxJob.ts*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
-      { stdout: "ignore", stderr: "ignore", timeout: 15000 });
+      { stdout: "ignore", stderr: "ignore" });
   } catch { /* best effort */ }
 }
 
@@ -129,7 +132,7 @@ export function recipeFor(c: LedgerConfig, ro: RunOpts = {}): Recipe | null {
 
 class Jobs {
   private db: Database | null = null;
-  private running: Map<string, { id: number; proc: ReturnType<typeof Bun.spawn> | null; cancel: boolean; step: number; stepStarted: number }> = new Map();
+  private running: Map<string, { id: number; proc: ReturnType<typeof Bun.spawn> | null; pid?: number; cancel: boolean; step: number; stepStarted: number }> = new Map();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   private open(): Database {
@@ -187,7 +190,7 @@ class Jobs {
     const j = this.get(id); if (!j) return false;
     if (j.status === "queued") { this.open().query("UPDATE jobs SET status='cancelled', ended=? WHERE id=?").run(Date.now(), id); return true; }
     const run = this.running.get(j.lane);
-    if (run && run.id === id) { run.cancel = true; try { run.proc?.kill(); } catch { /* ignore */ } return true; }
+    if (run && run.id === id) { run.cancel = true; try { run.proc?.kill(); if (run.pid) Bun.spawnSync(["taskkill", "/PID", String(run.pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" }); } catch { /* ignore */ } return true; }
     return false;
   }
   /** For a running job: the step it is on (0-based), how many there are, and when that step started. */
@@ -217,9 +220,39 @@ class Jobs {
       }
     }
   }
+  /**
+   * Run one step WITHOUT making it a child that inherits this server's handles. A Bun.spawn child on Windows inherits the
+   * listening socket, and once the API worker restarts the port stays "in use" until every such child exits (2026-09-09:
+   * every request hung). So the step is written to a small .cmd file and launched through Start-Process (ShellExecute,
+   * no handle inheritance); it appends its own output and "--- step exited N" to the job log, which we poll.
+   */
+  private async runStepDetached(j: JobRow, i: number, step: Step, state: { pid?: number; cancel: boolean }, log: (s: string) => void): Promise<number> {
+    const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    const env = { PYTHONIOENCODING: "utf-8", ...(step.env ?? {}) };
+    const cmdFile = `${j.logPath}.step${i + 1}.cmd`;
+    const lines = ["@echo off", ...Object.entries(env).map(([k, v]) => `set ${k}=${v}`), `cd /d ${q(step.cwd)}`,
+      `${step.cmd.map((a, k) => (k === 0 || /[\s"&|<>^]/.test(a) ? q(a) : a)).join(" ")} >> ${q(j.logPath)} 2>&1`,
+      `echo --- step exited %errorlevel% >> ${q(j.logPath)}`];
+    writeFileSync(cmdFile, lines.join("\r\n") + "\r\n");
+    const startLen = (() => { try { return require("node:fs").statSync(j.logPath).size; } catch { return 0; } })();
+    const ps = `$p = Start-Process -FilePath "$env:SystemRoot\\System32\\cmd.exe" -ArgumentList '/c', '"${cmdFile.replace(/'/g, "''")}"' -WindowStyle Hidden -PassThru; $p.Id`;
+    const launcher = Bun.spawn(["powershell", "-NoProfile", "-EncodedCommand", Buffer.from(ps, "utf16le").toString("base64")], { stdout: "pipe", stderr: "pipe" });
+    const [out, lcode] = await Promise.all([new Response(launcher.stdout).text(), launcher.exited]);
+    const pid = Number(out.trim().split("\n").pop());
+    if (lcode !== 0 || !(pid > 0)) { log(`\n!!! could not launch the step: ${out}\n`); return 1; }
+    state.pid = pid;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const tail = readFileSyncSafe(j.logPath).slice(startLen);
+      const m = tail.match(/^--- step exited (-?\d+)/m);
+      if (m) return Number(m[1]);
+      if (state.cancel) { try { Bun.spawnSync(["taskkill", "/PID", String(pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" }); } catch { /* ignore */ } log("\n--- step cancelled\n"); return -1; }
+    }
+  }
+
   private async run(j: JobRow): Promise<void> {
     const db = this.open();
-    const state = { id: j.id, proc: null as ReturnType<typeof Bun.spawn> | null, cancel: false, step: 0, stepStarted: Date.now() };
+    const state = { id: j.id, proc: null as ReturnType<typeof Bun.spawn> | null, pid: undefined as number | undefined, cancel: false, step: 0, stepStarted: Date.now() };
     this.running.set(j.lane, state);
     db.query("UPDATE jobs SET status='running', started=? WHERE id=?").run(Date.now(), j.id);
     const log = (s: string) => appendFileSync(j.logPath, s);
@@ -229,12 +262,7 @@ class Jobs {
         if (state.cancel) { code = -1; break; }
         state.step = i; state.stepStarted = Date.now();
         log(`\n=== step ${i + 1}/${j.steps.length}: ${step.label}\n$ ${step.cmd.join(" ")}\n  (cwd ${step.cwd}${step.env && Object.keys(step.env).length ? ` · env ${JSON.stringify(step.env)}` : ""})\n`);
-        const proc = Bun.spawn(step.cmd, { cwd: step.cwd, env: { ...process.env, PYTHONIOENCODING: "utf-8", ...(step.env ?? {}) }, stdout: "pipe", stderr: "pipe" });
-        state.proc = proc;
-        const pump = async (stream: ReadableStream<Uint8Array> | null) => { if (!stream) return; const reader = stream.getReader(); const dec = new TextDecoder(); for (;;) { const { done, value } = await reader.read(); if (done) break; log(dec.decode(value)); } };
-        await Promise.all([pump(proc.stdout as any), pump(proc.stderr as any)]);
-        code = await proc.exited;
-        log(`\n--- step exited ${code}\n`);
+        code = await this.runStepDetached(j, i, step, state, log);
         if (code !== 0) break;
       }
     } catch (e) {

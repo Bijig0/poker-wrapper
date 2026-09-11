@@ -8,7 +8,8 @@ import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buil
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { preflopDb } from "../services/preflopDb";
 import { resolveSet, resolveDepth } from "../services/fastSolve";
-import { answerLog } from "../services/answerLog";
+import { answerLog, type LoggedAnswer } from "../services/answerLog";
+import { sameAction, heroActionAt } from "../services/adherence";
 import { strategyIdForAnswer, STRATEGIES } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
@@ -318,6 +319,8 @@ app.get("/hands", async (c) => {
     const h = e.clientHandId ? strat.get(e.clientHandId) : null;
     return h ? { ...h, declared: false } : null;
   };
+  const sess = sessionsIndex(enriched);
+  const byCid = answersByHand(answerLog.rows(3650));
   const hands = enriched
     .map((e) => ({
       dbId: e.dbId,
@@ -328,6 +331,9 @@ app.get("/hands", async (c) => {
       heroCards: e.heroCards,
       netBb: nets.get(e.dbId) ?? null,
       strategy: strategyOf(e),
+      // the session this hand belongs to — the same id the Sessions tab uses
+      session: sess.byHand.get(e.dbId) ?? null,
+      answerStatus: answerStatusOf(e, byCid),
       summary: e.summary,
       discrepancies: e.discrepancies
         ? {
@@ -338,7 +344,272 @@ app.get("/hands", async (c) => {
         : null,
     }))
     .reverse(); // newest first
-  return c.json({ ok: true, total: hands.length, auditPending: auditPending(), hands });
+  return c.json({ ok: true, total: hands.length, auditPending: auditPending(), sessions: sess.list, hands });
+});
+
+/** Session per hand, for the Hands tab filter: the declared session the hand
+ *  was stamped with, else the undeclared gap cluster the Sessions tab shows it
+ *  in. Ids match GET /sessions (declared id, or `cluster-<startedAt>`). */
+function sessionsIndex(all: Enriched[]) {
+  type Card = { id: string; declared: boolean; label: string | null; preset: string | null; strategyName: string | null; mode: string | null; startedAt: number | null; endedAt: number | null; stakes: string | null; hands: number };
+  const byHand = new Map<number, string>();
+  const list: Card[] = [];
+  const declared = new Map(sessionsStore.list(500).map((s) => [s.id, s]));
+  const stamped = new Map<string, Enriched[]>();
+  const unstamped: Enriched[] = [];
+  for (const e of all) {
+    const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
+    if (!sid) { unstamped.push(e); continue; }
+    byHand.set(e.dbId, sid);
+    const hs = stamped.get(sid);
+    if (hs) hs.push(e); else stamped.set(sid, [e]);
+  }
+  for (const [sid, hs] of stamped) {
+    const s = declared.get(sid);
+    const cfg: any = s?.config ?? {};
+    list.push({
+      id: sid, declared: true, label: s?.label ?? null, preset: s?.preset ?? null,
+      strategyName: typeof cfg.strategyName === "string" ? cfg.strategyName : null, mode: typeof cfg.mode === "string" ? cfg.mode : null,
+      startedAt: s?.startedAt ?? hs[0]!.playedAt ?? null, endedAt: s?.endedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length,
+    });
+  }
+  for (const hs of sessionsOf(unstamped)) {
+    const id = `cluster-${hs[0]!.playedAt}`;
+    for (const e of hs) byHand.set(e.dbId, id);
+    list.push({ id, declared: false, label: null, preset: null, strategyName: null, mode: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length });
+  }
+  list.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)); // newest first, like the table
+  return { byHand, list };
+}
+
+/** Per-hand study-answer status, the one definition every review surface reads
+ *  (Hands table, session page, Analytics link-through). "no-decision" means the
+ *  archive shows no hero action beyond the blinds — often because the capture
+ *  stopped before hero's own last action — so read it as "no decision SEEN". */
+export type AnswerStatus = { status: "answered" | "failed" | "missing" | "no-decision" | "unknown"; answered: number; failed: number; reason: string | null };
+function answersByHand(rows: LoggedAnswer[]): Map<string, LoggedAnswer[]> {
+  const m = new Map<string, LoggedAnswer[]>();
+  for (const a of rows) if (a.client_hand_id) { const xs = m.get(a.client_hand_id); if (xs) xs.push(a); else m.set(a.client_hand_id, [a]); }
+  return m;
+}
+function answerStatusOf(e: Enriched, byCid: Map<string, LoggedAnswer[]>): AnswerStatus {
+  if (!e.clientHandId) return { status: "unknown", answered: 0, failed: 0, reason: "the hand has no site id, so answers cannot be joined to it" };
+  const rows = byCid.get(e.clientHandId) ?? [];
+  const answered = rows.filter((a) => a.text != null).length, failed = rows.length - answered;
+  if (answered) return { status: "answered", answered, failed, reason: null };
+  if (failed) return { status: "failed", answered, failed, reason: rows.find((a) => a.text == null)?.fail_reason ?? "solve failed" };
+  const acted = (e.hand.actions as { hero?: boolean; type?: string }[]).some((a) => a.hero && a.type !== "post-sb" && a.type !== "post-bb");
+  return acted
+    ? { status: "missing", answered, failed, reason: "hero acted but no answer was logged" }
+    : { status: "no-decision", answered, failed, reason: "no hero action in the archive beyond the blinds — the capture may have stopped before it" };
+}
+
+// ------------------------------------------------------------ analytics (scoped)
+//
+// The Analytics tab is scope → core → global. A SCOPE is a set of hands (all,
+// some sessions, some months, some stakes, a date range); the CORE is the same
+// aggregate, per-session breakdown, hand series and answer grading computed for
+// that set, and a second scope rides along for comparison. The global block
+// (winrate ladder, MES uplift, latency, miss queue) is about the solver and the
+// corpus, so it is served by the routes it always was and ignores the scope.
+
+type Scope = { kind: "all" | "sessions" | "months" | "stakes" | "range"; items: string[]; from: number | null; to: number | null };
+type SessionsIdx = ReturnType<typeof sessionsIndex>;
+
+/** `all` · `sessions:a,b` · `months:2026-09,2026-08` · `stakes:$0.12/$0.25` · `range:<fromMs>-<toMs>` */
+function parseScope(spec: string | undefined | null): Scope {
+  const s = (spec ?? "all").trim();
+  const m = s.match(/^(sessions|months|stakes|range):(.*)$/);
+  if (!m) return { kind: "all", items: [], from: null, to: null };
+  const kind = m[1] as Scope["kind"];
+  if (kind === "range") {
+    const r = m[2]!.match(/^(\d+)-(\d+)$/);
+    return { kind, items: [], from: r ? Number(r[1]) : null, to: r ? Number(r[2]) : null };
+  }
+  return { kind, items: m[2]!.split(",").map((x) => x.trim()).filter(Boolean), from: null, to: null };
+}
+
+const monthKey = (ms: number | null) => {
+  if (ms == null) return "?";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+const monthLabel = (key: string) => {
+  const [y, m] = key.split("-").map(Number);
+  return y && m ? new Date(y, m - 1, 1).toLocaleString("en-US", { month: "short", year: "numeric" }) : key;
+};
+const shortDay = (ms: number | null) => ms == null ? "?" : new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+function scopeHands(scope: Scope, all: Enriched[], idx: SessionsIdx): Enriched[] {
+  const want = new Set(scope.items);
+  switch (scope.kind) {
+    case "all": return all;
+    case "sessions": return all.filter((e) => want.has(idx.byHand.get(e.dbId) ?? ""));
+    case "months": return all.filter((e) => want.has(monthKey(e.playedAt)));
+    case "stakes": return all.filter((e) => want.has(e.stakes ?? "?"));
+    case "range": return all.filter((e) => e.playedAt != null && (scope.from == null || e.playedAt >= scope.from) && (scope.to == null || e.playedAt <= scope.to));
+  }
+}
+
+function scopeLabel(scope: Scope, idx: SessionsIdx): string {
+  switch (scope.kind) {
+    case "all": return "All hands";
+    case "sessions": {
+      const cards = scope.items.map((id) => idx.list.find((s) => s.id === id)).filter((x): x is SessionsIdx["list"][number] => !!x);
+      if (cards.length === 1) { const s = cards[0]!; return `Session ${shortDay(s.startedAt)} · ${s.declared ? (s.strategyName ?? s.label ?? s.preset ?? "declared") : "undeclared"}`; }
+      return `${cards.length} sessions`;
+    }
+    case "months": return scope.items.length === 1 ? monthLabel(scope.items[0]!) : `${scope.items.length} months`;
+    case "stakes": return scope.items.join(", ");
+    case "range": return `${shortDay(scope.from)} – ${shortDay(scope.to)}`;
+  }
+}
+
+/** The analytics core's aggregate over one set of hands: frequencies, net with
+ *  its standard error, and discrepancy counts. */
+export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>) {
+  const n = hs.length;
+  const pct = (k: (s: HandSummary) => boolean, base?: (s: HandSummary) => boolean) => {
+    const denom = base ? hs.filter((h) => base(h.summary)).length : n;
+    const num = hs.filter((h) => k(h.summary) && (!base || base(h.summary))).length;
+    return denom ? Math.round((1000 * num) / denom) / 10 : null;
+  };
+  const known = hs.map((h) => nets.get(h.dbId)).filter((x): x is number => x != null);
+  const netBb = Math.round(known.reduce((s, x) => s + x, 0) * 100) / 100;
+  const mean = known.length ? netBb / known.length : 0;
+  const sd = known.length > 1 ? Math.sqrt(known.reduce((s, x) => s + (x - mean) ** 2, 0) / (known.length - 1)) : null;
+  const disc = { major: 0, minor: 0, info: 0 };
+  for (const h of hs) {
+    for (const dd of h.discrepancies ?? []) {
+      if (dd.severity === "major") disc.major++;
+      else if (dd.severity === "minor") disc.minor++;
+      else disc.info++;
+    }
+  }
+  return {
+    hands: n,
+    vpip: pct((s) => s.vpip),
+    pfr: pct((s) => s.pfr),
+    threeBet: pct((s) => s.threeBet, (s) => s.threeBetOpp),
+    wtsd: pct((s) => s.wentToShowdown, (s) => s.sawFlop),
+    sawFlop: pct((s) => s.sawFlop),
+    limpedPots: pct((s) => s.limpedPot),
+    netBb,
+    netKnownHands: known.length,
+    bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
+    // 100 × SE of the per-hand mean, over the hands whose net is known
+    bb100Se: sd != null && known.length ? Math.round((10000 * sd) / Math.sqrt(known.length)) / 100 : null,
+    discrepancies: disc,
+    discPer100: n ? Math.round((10000 * (disc.major + disc.minor)) / n) / 100 : null,
+  };
+}
+
+/** Study-answer grading over one set of hands. The poller logs an answer every
+ *  time the state changes, so one decision often has several rows: counts are
+ *  per DISTINCT decision (hand + decision key, last answered row wins), and
+ *  "hands with an answer" is the coverage figure — the archive often stops
+ *  before hero's own last action, so hero's decisions cannot be counted from
+ *  it, and only decisions whose action IS archived can be graded told-vs-did. */
+function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
+  const byCid = new Map<string, Enriched>();
+  for (const e of hs) if (e.clientHandId) byCid.set(e.clientHandId, e);
+  let answers = 0, failed = 0;
+  const tiers: Record<string, { n: number; lat: number[] }> = {};
+  const last = new Map<string, LoggedAnswer>(); // decision → its last answered row
+  for (const a of rows) {
+    if (!a.client_hand_id || !byCid.has(a.client_hand_id)) continue;
+    if (a.text == null) { failed++; continue; }
+    answers++;
+    const t = (tiers[a.tier ?? "unknown"] ??= { n: 0, lat: [] });
+    t.n++;
+    if (a.latency_ms != null) t.lat.push(a.latency_ms);
+    last.set(`${a.client_hand_id}|${a.decision_key ?? a.id}`, a);
+  }
+  let withBoth = 0, disagreements = 0, graded = 0, followed = 0, followedMesWhenDisagreed = 0;
+  const handsAnswered = new Set<string>();
+  for (const a of last.values()) {
+    handsAnswered.add(a.client_hand_id!);
+    const disagreed = a.exploit_pick && a.chart_pick ? !sameAction(a.exploit_pick, a.chart_pick) : null;
+    if (disagreed != null) withBoth++;
+    if (disagreed) disagreements++;
+    const did = heroActionAt(byCid.get(a.client_hand_id!)!, a);
+    if (did) {
+      const f = sameAction(a.pick, did.label);
+      if (f != null) { graded++; if (f) followed++; }
+      if (disagreed && sameAction(a.exploit_pick, did.label)) followedMesWhenDisagreed++;
+    }
+  }
+  const pct = (xs: number[], p: number) => xs.length ? xs.slice().sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))]! : null;
+  return {
+    answers, failed, decisions: last.size,
+    handsAnswered: handsAnswered.size,
+    handsAnsweredPct: hs.length ? Math.round((1000 * handsAnswered.size) / hs.length) / 10 : null,
+    withBoth, disagreements, graded, followed,
+    followedPct: graded ? Math.round((1000 * followed) / graded) / 10 : null,
+    disagreementRate: withBoth ? Math.round((1000 * disagreements) / withBoth) / 10 : null,
+    followedMesWhenDisagreed: disagreements ? Math.round((1000 * followedMesWhenDisagreed) / disagreements) / 10 : null,
+    tiers: Object.fromEntries(Object.entries(tiers).map(([k, x]) => [k, { n: x.n, p50: pct(x.lat, 50), p90: pct(x.lat, 90) }])),
+  };
+}
+
+/** One scope's core: aggregate, per-position / per-stakes / per-session
+ *  breakdowns, the hand series for the winnings graph, and the answer grading. */
+function analyticsCore(spec: string, all: Enriched[], idx: SessionsIdx, nets: Map<number, number | null>, rows: LoggedAnswer[]) {
+  const scope = parseScope(spec);
+  const hs = scopeHands(scope, all, idx);
+  const byPos: Record<string, Enriched[]> = {}, byStakes: Record<string, Enriched[]> = {}, byMonth: Record<string, Enriched[]> = {};
+  for (const e of hs) {
+    (byPos[e.summary.heroPos ?? "?"] ??= []).push(e);
+    (byStakes[e.stakes ?? "?"] ??= []).push(e);
+    (byMonth[monthKey(e.playedAt)] ??= []).push(e);
+  }
+  const sessions = idx.list.slice().reverse() // oldest first: the trend graphs read left to right
+    .map((s) => {
+      const shs = hs.filter((e) => idx.byHand.get(e.dbId) === s.id);
+      if (!shs.length) return null;
+      return { ...s, ...aggregateHands(shs, nets), answers: answersFor(shs, rows) };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+  return {
+    spec, kind: scope.kind, label: scopeLabel(scope, idx),
+    hands: aggregateHands(hs, nets),
+    byPosition: Object.fromEntries(Object.entries(byPos).map(([k, v]) => [k, aggregateHands(v, nets)])),
+    byStakes: Object.fromEntries(Object.entries(byStakes).map(([k, v]) => [k, aggregateHands(v, nets)])),
+    byMonth: Object.fromEntries(Object.entries(byMonth).map(([k, v]) => [k, { label: monthLabel(k), ...aggregateHands(v, nets) }])),
+    sessions,
+    series: hs.map((e) => ({ id: e.dbId, t: e.playedAt, net: nets.get(e.dbId) ?? null, s: idx.byHand.get(e.dbId) ?? null })),
+    answers: answersFor(hs, rows),
+  };
+}
+
+/** GET /analytics?scope=<spec>&vs=<spec> — the scoped Analytics tab payload. */
+app.get("/analytics", async (c) => {
+  const rows = allRows();
+  const all = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
+  const nets = computeNets(all);
+  const idx = sessionsIndex(all);
+  const answers = answerLog.rows(3650);
+  const months: Record<string, number> = {}, stakes: Record<string, number> = {};
+  for (const e of all) {
+    const mk = monthKey(e.playedAt), sk = e.stakes ?? "?";
+    months[mk] = (months[mk] ?? 0) + 1;
+    stakes[sk] = (stakes[sk] ?? 0) + 1;
+  }
+  const times = all.map((e) => e.playedAt).filter((x): x is number => x != null);
+  const vs = c.req.query("vs");
+  return c.json({
+    ok: true,
+    auditPending: auditPending(),
+    options: {
+      sessions: idx.list,
+      months: Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).map(([key, n]) => ({ key, label: monthLabel(key), hands: n })),
+      stakes: Object.entries(stakes).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({ key, hands: n })),
+      range: { from: times.length ? Math.min(...times) : null, to: times.length ? Math.max(...times) : null },
+    },
+    primary: analyticsCore(c.req.query("scope") ?? "all", all, idx, nets, answers),
+    compare: vs ? analyticsCore(vs, all, idx, nets, answers) : null,
+    global: { answers: answerLog.stats(60) },
+  });
 });
 
 app.get("/hand/:dbId", async (c) => {
@@ -375,13 +646,20 @@ app.get("/hand/:dbId", async (c) => {
   const recording = e.clientHandId ? recordingForHand(e.clientHandId) : null;
   const declaredId: string | null = typeof e.raw.sessionId === "string" ? e.raw.sessionId : null;
   const declared = declaredId ? sessionsStore.get(declaredId) : null;
+  // walk the session hand by hand: neighbours under the SAME partition the Sessions tab and the Hands filter use
+  const idx = sessionsIndex(all);
+  const sid = idx.byHand.get(dbId) ?? null;
+  const mates = sid ? all.filter((h) => idx.byHand.get(h.dbId) === sid) : [];
+  const mi = mates.findIndex((h) => h.dbId === dbId);
+  const nav = { sessionId: sid, position: mi + 1, hands: mates.length, prev: mi > 0 ? mates[mi - 1]!.dbId : null, next: mi >= 0 && mi < mates.length - 1 ? mates[mi + 1]!.dbId : null };
   const session = cluster
     ? {
         index: ci + 1,
         start: cluster[0]!.playedAt,
         end: cluster[cluster.length - 1]!.playedAt,
-        hands: cluster.length,
-        position: cluster.findIndex((h) => h.dbId === dbId) + 1,
+        // counted under the declared session when there is one, else the gap cluster
+        hands: nav.hands || cluster.length,
+        position: nav.hands ? nav.position : cluster.findIndex((h) => h.dbId === dbId) + 1,
         stakes: cluster[0]!.stakes,
         recorded: !!recording,
         recording,
@@ -403,6 +681,7 @@ app.get("/hand/:dbId", async (c) => {
     discrepancies: e.discrepancies ?? [],
     answers,
     session,
+    nav,
   });
 });
 
@@ -993,11 +1272,17 @@ app.get("/sessions/:id", (c) => {
   const id = c.req.param("id");
   const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
   const nets = computeNets(all);
-  const handRow = (e: Enriched) => ({
-    dbId: e.dbId, clientHandId: e.clientHandId, playedAt: e.playedAt, stakes: e.stakes, heroCards: e.heroCards,
-    heroPos: e.summary.heroPos, finalStreet: e.summary.finalStreet, potBb: e.summary.potBb, netBb: nets.get(e.dbId) ?? null,
-    sawFlop: e.summary.sawFlop, answers: e.clientHandId ? (answerLog.forHand(e.clientHandId) as any[]).filter((a) => a.text).length : 0,
-  });
+  const byCid = answersByHand(answerLog.rows(3650));
+  const handRow = (e: Enriched) => {
+    const st = answerStatusOf(e, byCid);
+    return {
+      dbId: e.dbId, clientHandId: e.clientHandId, playedAt: e.playedAt, stakes: e.stakes, heroCards: e.heroCards,
+      heroPos: e.summary.heroPos, finalStreet: e.summary.finalStreet, potBb: e.summary.potBb, netBb: nets.get(e.dbId) ?? null,
+      sawFlop: e.summary.sawFlop, answers: st.answered, status: st,
+      // the frame recording holding this hand, when one exists (gap clusters are not keyed by session id)
+      recording: e.clientHandId ? (recordingForHand(e.clientHandId)?.session ?? null) : null,
+    };
+  };
   if (id.startsWith("cluster-")) {
     const start = Number(id.slice(8));
     const hs = sessionsOf(all).find((h) => h[0]!.playedAt === start);

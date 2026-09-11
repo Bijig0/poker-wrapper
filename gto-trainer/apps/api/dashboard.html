@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Study Dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" data-chartjs></script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -32,11 +34,14 @@
   .mini { background: #1d2836; border: 1px solid #2c3a4d; color: #cfe0f2; border-radius: 5px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
   .mini:hover { background: #24344a; }
   .mini:disabled { opacity: .4; cursor: default; }
+  .mini.on { background: #1e3247; border-color: #4da3ff; color: #fff; }
+  .hand-nav { display: inline-flex; align-items: center; gap: 6px; }
   .sub { color: #8fa1b6; font-size: 12px; }
   details { margin-top: 8px; } summary { cursor: pointer; color: #9db1c7; }
   pre { background: #10151d; padding: 8px; border-radius: 6px; overflow: auto; max-height: 280px; font-size: 11px; }
   .warn { color: #ffce56; }
   input[type=text] { background: #10151d; border: 1px solid #2c3a4d; color: inherit; border-radius: 5px; padding: 3px 8px; }
+  header select { background: #10151d; border: 1px solid #2c3a4d; color: inherit; border-radius: 5px; padding: 3px 6px; font: inherit; max-width: 340px; }
   /* ---- detail page ---- */
   .dt-top { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
   .dt-grid { display: grid; grid-template-columns: minmax(560px, 1.15fr) minmax(340px, .85fr); gap: 14px; align-items: start; }
@@ -284,6 +289,11 @@
   .wd-panel { margin: 8px 0 4px; padding: 10px 12px; background: #0b0f14; border: 1px solid #1c2430; border-radius: 6px; }
   .wd-title { font-weight: 600; margin-bottom: 6px; } .wd-grid { display: flex; flex-wrap: wrap; gap: 14px 26px; } .wd-sec { max-width: 420px; } .wd-sec.wide { max-width: 100%; flex-basis: 100%; } .wd-sec > b { font-size: 12.5px; }
   .wc-row > td { padding: 8px 6px 12px; background: #0e1420; } .wc-row .wd-grid { gap: 12px 22px; }
+  .prop-t .solve.has-data { cursor: pointer; border-radius: 6px; margin: 0 -6px 6px; padding: 2px 6px; }
+  .prop-t .solve.has-data:hover { background: #131a24; }
+  .wd-caret { display: inline-block; width: 10px; color: #6f8196; transition: transform .15s; font-size: 10px; margin-right: 2px; }
+  .prop-t .solve.has-data:hover .wd-caret { color: #9ecbff; }
+  .prop-t .solve:has(.wd-panel:not([hidden])) .wd-caret { transform: rotate(90deg); color: #9ecbff; }
   .wd-btn { padding: 0 6px; font-size: 10.5px; }
   .rb-num { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: #1e3247; color: #9ecbff; font-size: 11px; align-items: center; justify-content: center; margin-right: 6px; }
   .lg-step .est { font-variant-numeric: tabular-nums; color: #8fa1b6; font-size: 12px; text-align: right; }
@@ -414,6 +424,58 @@
   .src .head .tag2 { font-size: 10px; padding: 1px 7px; border-radius: 10px; margin-right: 2px; }
   .src .head .tag2.ok { background: rgba(97,208,149,.15); color: #61d095; }
   .src .head .tag2.warn { background: rgba(230,179,90,.15); color: #e6b35a; }
+  /* analytics: the "Ignition Cash Results" design — its dark tokens, type, panels, chips and tiles, scoped to the tab */
+  #view-analytics { --bg:#121715; --surface:#1B211E; --surface2:#242B27; --line:#2E3733; --grid:#273029; --ink:#E7ECE8; --muted:#9AA69E; --faint:#6E7A72;
+    --win:#4CC382; --win-soft:rgba(76,195,130,.14); --ev:#E5AE4A; --loss:#E0675C; --loss-soft:rgba(224,103,92,.16);
+    --chip:#262E29; --chip-on:#E7ECE8; --chip-on-ink:#121715; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.35);
+    font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif; font-size: 15px; line-height: 1.45; color: var(--ink); }
+  #view-analytics .pos { color: var(--win); } #view-analytics .neg { color: var(--loss); }
+  .ig-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 6px 0 16px; }
+  .ig-head h1 { font-family: Sora, "Segoe UI", system-ui, sans-serif; font-weight: 600; font-size: 26px; letter-spacing: -.01em; margin: 0; }
+  .ig-head p { margin: 4px 0 0; color: var(--muted); } .ig-head p b { color: var(--ink); font-weight: 600; }
+  .ig-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ig-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .ig-seg button { border: 0; background: transparent; color: var(--muted); padding: 6px 12px; font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; }
+  .ig-seg button[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-ink); }
+  .ig-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+  .ig-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .ig-chips .lab { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; margin: 0 4px; }
+  .ig-chip { border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 999px; padding: 6px 12px; font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  .ig-chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-ink); border-color: var(--chip-on); }
+  .ig-chips input[type=date] { background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 13px; color-scheme: dark; }
+  .ig-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .ig-tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .ig-tile .lab { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+  .ig-tile .val { font-size: 24px; font-weight: 600; margin-top: 4px; line-height: 1.1; font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .ig-tile .sub { font-size: 12px; color: var(--faint); margin-top: 4px; }
+  .ig-tile .sub.pos { color: var(--win); } .ig-tile .sub.neg { color: var(--loss); }
+  .ig-panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 16px 18px; margin-bottom: 22px; }
+  .ig-panel h2 { font-family: Sora, "Segoe UI", system-ui, sans-serif; font-size: 15px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 0 0 12px; }
+  .ig-chart { position: relative; height: 420px; }
+  .ig-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .ig-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .ig-legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--win); }
+  .ig-legend i.ev { border-top-style: dashed; border-top-color: var(--ev); } .ig-legend i.unk { border-top: 2px dashed var(--faint); } .ig-legend i.zero { border-top: 1px solid var(--faint); }
+  .ig-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 820px) { .ig-grid2 { grid-template-columns: 1fr; } }
+  .ig-panel .tbl { overflow-x: auto; }
+  .ig-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .ig-panel th, .ig-panel td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; background: none; }
+  .ig-panel th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; position: static; cursor: default; }
+  .ig-panel th:first-child, .ig-panel td:first-child { text-align: left; }
+  .ig-panel td.num { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .ig-panel td.ig-meaning { text-align: left; color: var(--muted); white-space: normal; }
+  .ig-panel tbody tr:last-child td { border-bottom: 0; }
+  .ig-panel tfoot td { font-weight: 600; border-top: 1px solid var(--line); }
+  .ig-panel tr:hover td { background: none; }
+  .ig-panel tr.pick { cursor: pointer; } .ig-panel tr.pick:hover td { background: var(--surface2); }
+  .ig-dim { color: var(--muted); font-size: 13px; text-decoration: none; }
+  .ig-link { color: inherit; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; } .ig-link:hover { color: var(--win); }
+  #view-sessions tr.unanswered td:first-child { box-shadow: inset 3px 0 0 #e6b35a; }
+  .ig-bar { display: inline-block; height: 8px; border-radius: 2px; vertical-align: middle; }
+  .ig-note { color: var(--muted); font-size: 13px; max-width: 90ch; margin: 0 0 22px; line-height: 1.5; } .ig-note b { color: var(--ink); }
+  .ig-global { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; color: inherit; }
+  .an-h { color: #9db1c7; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; margin: 16px 0 4px; }
 </style>
 </head>
 <body>
@@ -431,16 +493,18 @@
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
   <input id="filter" type="text" placeholder="filter: pos, cards, stakes…">
+  <select id="sess-filter" title="show only the hands of one session — declared sessions first, then the undeclared gap clusters from before sessions were declared (same partition as the Sessions tab)"><option value="">all sessions</option></select>
   <label class="sub"><input id="only-flop" type="checkbox"> saw flop</label>
   <label class="sub"><input id="only-disc" type="checkbox"> has discrepancy</label>
+  <label class="sub" title="hands with no study answer: failed, never logged, or no hero decision seen"><input id="only-unanswered" type="checkbox"> unanswered</label>
 </header>
 <main>
   <div id="view-hands">
     <table>
       <thead><tr>
         <th data-k="playedAt">time</th><th data-k="stakes">stakes</th><th data-k="pos">pos</th>
-        <th data-k="cards">cards</th><th data-k="street">street</th><th data-k="pot">pot</th>
-        <th data-k="net">net bb</th><th>flags</th><th>disc</th>
+        <th data-k="cards">cards</th><th data-k="street">street</th><th data-k="strategy">strategy</th><th data-k="pot">pot</th>
+        <th data-k="net">net bb</th><th data-k="ans">answers</th><th>flags</th><th>disc</th>
       </tr></thead>
       <tbody id="hands-body"></tbody>
     </table>
@@ -476,7 +540,7 @@ const netStr = (n) => n == null ? "?" : (n > 0 ? "+" : "") + n.toFixed(2);
 const r2 = (x) => Math.round(x * 100) / 100;
 
 /* ================= hands list ================= */
-let HANDS = [], sortK = "playedAt", sortDir = -1;
+let HANDS = [], SESSIONS = [], AUDIT_NOTE = "", sortK = "playedAt", sortDir = -1;
 
 // The discrepancy audits are computed by the server in the background after a
 // restart; while any are still pending the disc column shows "?" — re-poll
@@ -491,19 +555,50 @@ async function loadHands() {
   try {
     const j = await (await fetch("/api/dashboard/hands")).json();
     HANDS = j.hands || [];
-    $("count").textContent = `${HANDS.length} hands` + (j.auditPending ? ` · auditing ${j.auditPending}…` : "");
+    SESSIONS = j.sessions || [];
+    AUDIT_NOTE = j.auditPending ? ` · auditing ${j.auditPending}…` : "";
+    buildSessionFilter();
     renderHands();
     pollWhilePending(j, () => { if (PATH.view === "hands" && !PATH.id) loadHands(); });
   } catch (e) { /* server restarting */ }
 }
 const sortVal = (h, k) => k === "pos" ? (h.summary.heroPos ?? "") : k === "cards" ? h.heroCards.join("")
-  : k === "street" ? h.summary.finalStreet : k === "pot" ? h.summary.potBb : k === "net" ? (h.netBb ?? -1e9) : (h[k] ?? "");
+  : k === "street" ? h.summary.finalStreet : k === "strategy" ? (h.strategy?.name ?? "") : k === "pot" ? h.summary.potBb : k === "net" ? (h.netBb ?? -1e9)
+  : k === "ans" ? (ANS_RANK[h.answerStatus?.status] ?? 9) : (h[k] ?? "");
+
+// Study-answer status per hand (server: answerStatusOf) as a chip. The reason is the tooltip.
+const ANS_RANK = { failed: 0, missing: 1, "no-decision": 2, unknown: 3, answered: 4 };
+const ansChip = (st) => !st ? '<span class="sub">—</span>'
+  : st.status === "answered" ? `<span class="chip good" title="${st.failed ? `${st.failed} failed attempt${st.failed === 1 ? "" : "s"} as well` : "every logged answer succeeded"}">${st.answered} answered</span>`
+  : st.status === "failed" ? `<span class="chip crit" title="${esc(st.reason ?? "")}">failed ×${st.failed}</span>`
+  : st.status === "missing" ? `<span class="chip warn" title="${esc(st.reason ?? "")}">no answer</span>`
+  : st.status === "no-decision" ? `<span class="chip dim" title="${esc(st.reason ?? "")}">no decision seen</span>`
+  : `<span class="chip dim" title="${esc(st.reason ?? "")}">unknown</span>`;
+
+// Session dropdown: one option per session the /hands payload knows about, in
+// the Sessions tab's own words (preset / strategy, label, stakes, hand count).
+// Declared sessions come first, the inferred gap clusters after; the current
+// pick survives a reload as long as that session still exists.
+const sessionOptionLabel = (s) => {
+  const when = fmtT(s.startedAt);
+  const what = s.declared ? [presetLabel(s.preset, s), s.label].filter(Boolean).join(" · ") : "undeclared";
+  return `${when} · ${what} · ${s.stakes ?? "?"} · ${s.hands} hand${s.hands === 1 ? "" : "s"}${s.declared && !s.endedAt ? " · open" : ""}`;
+};
+function buildSessionFilter() {
+  const sel = $("sess-filter"), keep = sel.value;
+  const group = (label, xs) => xs.length ? `<optgroup label="${esc(label)}">${xs.map((s) => `<option value="${esc(s.id)}">${esc(sessionOptionLabel(s))}</option>`).join("")}</optgroup>` : "";
+  sel.innerHTML = `<option value="">all sessions</option>` + group("Declared sessions", SESSIONS.filter((s) => s.declared)) + group("Before sessions were declared (inferred)", SESSIONS.filter((s) => !s.declared));
+  sel.value = SESSIONS.some((s) => s.id === keep) ? keep : "";
+}
 
 function renderHands() {
   const q = $("filter").value.trim().toLowerCase();
+  const sid = $("sess-filter").value;
   let rows = HANDS.filter((h) => {
+    if (sid && h.session !== sid) return false;
     if ($("only-flop").checked && !h.summary.sawFlop) return false;
     if ($("only-disc").checked && !(h.discrepancies && (h.discrepancies.major || h.discrepancies.minor))) return false;
+    if ($("only-unanswered").checked && h.answerStatus?.status === "answered") return false;
     if (!q) return true;
     return `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet} ${h.strategy?.name ?? ""}`.toLowerCase().includes(q);
   });
@@ -511,6 +606,7 @@ function renderHands() {
     const va = sortVal(a, sortK), vb = sortVal(b, sortK);
     return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
   });
+  $("count").textContent = (rows.length === HANDS.length ? `${HANDS.length} hands` : `${rows.length} of ${HANDS.length} hands`) + AUDIT_NOTE;
   $("hands-body").innerHTML = rows.map((h) => {
     const s = h.summary;
     const flags = [s.limpedPot ? "limped" : "", s.threeBet ? "3bet" : "", s.wentToShowdown ? "SD" : "", s.heroWonUncontested ? "steal" : ""].filter(Boolean).join(" ");
@@ -518,14 +614,14 @@ function renderHands() {
     const disc = d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?";
     return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
       <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "apex" ? "good" : ""}">${esc(h.strategy.name)}</span>` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
-      <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
+      <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td>${ansChip(h.answerStatus)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
   }).join("");
   for (const tr of $("hands-body").querySelectorAll("tr")) tr.onclick = () => go(`/hands/${tr.dataset.id}`);
 }
 document.querySelectorAll("thead th[data-k]").forEach((th) => {
   th.onclick = () => { const k = th.dataset.k; sortDir = sortK === k ? -sortDir : -1; sortK = k; renderHands(); };
 });
-$("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("only-disc").onchange = renderHands;
+$("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("only-disc").onchange = renderHands; $("only-unanswered").onchange = renderHands; $("sess-filter").onchange = renderHands;
 
 /* ================= replayer state ================= */
 const STREET_N = { preflop: 0, flop: 3, turn: 4, river: 5 };
@@ -677,6 +773,7 @@ async function showDetail(dbId) {
   v.innerHTML = `
     <div class="dt-top">
       <button class="mini" onclick="go('/hands')">← all hands</button>
+      ${j.nav?.sessionId ? `<span class="hand-nav"><button class="mini" id="nav-prev" ${j.nav.prev == null ? "disabled" : ""} title="previous hand in this session (←)">← prev</button><a class="sub" href="/sessions/${encodeURIComponent(j.nav.sessionId)}" onclick="go('/sessions/${encodeURIComponent(j.nav.sessionId)}');return false" title="the session review">hand ${j.nav.position} of ${j.nav.hands}</a><button class="mini" id="nav-next" ${j.nav.next == null ? "disabled" : ""} title="next hand in this session (→)">next →</button></span>` : ""}
       <h2 style="margin:0">Hand #${j.dbId} · ${cardsHtml(j.hand.heroCards)} ${esc(s.heroPos ?? "?")} · ${esc(j.stakes ?? "?")} · ${fmtT(j.playedAt)}</h2>
       <span class="sub">${esc(j.clientHandId ?? "no site id")}${j.resultText ? " · " + esc(j.resultText) : ""}</span>
     </div>
@@ -1346,33 +1443,223 @@ async function solveNode(dbId, upto, btn) {
 }
 
 /* ================= analytics ================= */
+/* ================= Analytics =================
+   Design follows the "Ignition Cash Results" artifact: one cumulative-result
+   chart (Chart.js), a row of tiles, and plain tables in panels — no small
+   multiples. SCOPE is a set of hands (all · sessions · months · stakes · a date
+   range) picked with a segmented control and chips; a second scope can be laid
+   over the chart as a dashed line, with its difference shown on the tiles. The
+   scope lives in the URL (/analytics?scope=…&vs=…) so a view can be linked to.
+   The Solver & model block underneath is corpus-level and ignores the scope. */
+let AN = { options: null, chart: null };
+const anQuery = (scope, vs) => { const q = new URLSearchParams(); if (scope && scope !== "all") q.set("scope", scope); if (vs) q.set("vs", vs); const s = q.toString(); return s ? `?${s}` : ""; };
+const anGo = (scope, vs) => go("/analytics" + anQuery(scope, vs));
+const anParse = (spec) => { const m = String(spec || "all").match(/^(sessions|months|stakes|range):(.*)$/); return m ? { kind: m[1], items: m[1] === "range" ? [] : m[2].split(",").filter(Boolean), raw: m[2] } : { kind: "all", items: [], raw: "" }; };
+const fmtD = (ms) => ms == null ? "?" : new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
+const sgn = (x, d = 1) => x == null ? "–" : (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(Number(x)).toFixed(d);
+const pctS = (x) => x == null ? "–" : x.toFixed(1) + "%";
+const anCls = (x) => x > 0 ? "pos" : x < 0 ? "neg" : "";
+const anCss = (v) => getComputedStyle($("view-analytics")).getPropertyValue(v).trim();
+const AN_KINDS = [["all", "All"], ["sessions", "Sessions"], ["months", "Months"], ["stakes", "Stakes"], ["range", "Range"]];
+
 async function loadAnalytics() {
   const v = $("view-analytics");
-  v.innerHTML = '<div class="card sub">loading…</div>';
-  const j = await (await fetch("/api/dashboard/stats")).json();
-  if (!j.ok) { v.innerHTML = '<div class="card warn">stats unavailable</div>'; return; }
+  const scope = PATH.scope || "all", vs = PATH.vs || null;
+  if (!v.querySelector(".ig-head")) v.innerHTML = '<div class="card sub">loading…</div>';
+  let j;
+  try { j = await (await fetch(`/api/dashboard/analytics${anQuery(scope, vs)}`)).json(); } catch (e) { v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
+  if (!j.ok) { v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
+  if (PATH.view !== "analytics") return; // navigated away while the fetch was in flight
+  AN.options = j.options;
   // disc counts fill in as the background audits land — refresh quietly
-  pollWhilePending(j, () => { if ($("view-analytics").style.display !== "none") loadAnalytics(); });
-  const o = j.overall;
-  const tile = (k, val, sub) => `<div class="tile"><div class="v">${val}</div><div class="k">${k}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
-  const p = (x) => x == null ? "—" : x + "%";
-  let html = `<div class="tiles">
-    ${tile("hands", o.hands)}
-    ${tile("bb/100", o.bb100 == null ? "—" : o.bb100, `${o.netKnownHands}/${o.hands} known net (${netStr(o.netBb)} bb)`)}
-    ${tile("VPIP", p(o.vpip))} ${tile("PFR", p(o.pfr))} ${tile("3Bet", p(o.threeBet))}
-    ${tile("WTSD", p(o.wtsd))} ${tile("limped pots", p(o.limpedPots))} ${tile("major disc.", o.discrepancies.major)}
-  </div>`;
-  const row = (label, a) => `<tr><td>${esc(label)}</td><td>${a.hands}</td><td>${p(a.vpip)}</td><td>${p(a.pfr)}</td>
-    <td>${p(a.threeBet)}</td><td>${p(a.wtsd)}</td><td class="${netCls(a.netBb)}">${netStr(a.netBb)}</td>
-    <td>${a.bb100 == null ? "—" : a.bb100}</td><td>${a.discrepancies.major}/${a.discrepancies.minor}/${a.discrepancies.info}</td></tr>`;
-  const tbl = (title, rows) => `<div class="card"><h2>${title}</h2><table><thead><tr>
-    <th></th><th>hands</th><th>VPIP</th><th>PFR</th><th>3Bet</th><th>WTSD</th><th>net bb</th><th>bb/100</th><th>disc M/m/i</th>
-    </tr></thead><tbody>${rows}</tbody></table></div>`;
-  html += tbl("By session", j.sessions.map((s) => row(`${fmtT(s.start)} (${s.stakes ?? "?"})`, s)).join(""));
-  html += tbl("By stakes", Object.entries(j.byStakes).map(([k, a]) => row(k, a)).join(""));
-  html += tbl("By position", Object.entries(j.byPosition).map(([k, a]) => row(k, a)).join(""));
-  const t = j.answers?.tiers ?? {};
-  // ---- formalized winrate picture (GET /api/dashboard/mes-value) ----------
+  pollWhilePending(j, () => { if (PATH.view === "analytics") loadAnalytics(); });
+  v.innerHTML = anRender(j, scope, vs) + `<div class="ig-global"><div class="an-h">Solver &amp; model <span class="sub">— the corpus and the solvers, not hero's hands: this block does not change with the scope</span></div>${await anGlobal(j.global)}</div>`;
+  anWire(v, scope, vs);
+  anDrawChart(j.primary, j.compare);
+  loadMissQueue();
+}
+
+/* ---- scope controls: a segmented control for the kind, chips for the items */
+function anItems(kind) {
+  const o = AN.options;
+  if (kind === "sessions") return o.sessions.map((s) => ({ id: s.id, label: `${fmtD(s.startedAt)} · ${s.declared ? presetLabel(s.preset, s) : (s.stakes ?? "?")} · ${s.hands}h` }));
+  if (kind === "months") return o.months.map((m) => ({ id: m.key, label: `${m.label} · ${m.hands}h` }));
+  if (kind === "stakes") return o.stakes.map((s) => ({ id: s.key, label: `${s.key} · ${s.hands}h` }));
+  return [];
+}
+const anKindSeg = (which, spec) => `<div class="ig-seg" data-which="${which}">${AN_KINDS.map(([k, l]) => `<button aria-pressed="${anParse(spec).kind === k}" data-kind="${k}">${l}</button>`).join("")}</div>`;
+const dv = (ms) => { if (!ms) return ""; const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+function anChips(which, spec) {
+  const cur = anParse(spec), isVs = which === "vs";
+  const lead = isVs ? `<span class="lab">Compare to</span>${anKindSeg("vs", spec)}` : "";
+  const off = isVs ? `<button class="ig-chip" data-act="uncompare" title="stop comparing">✕</button>` : "";
+  if (cur.kind === "all") return isVs ? `<div class="ig-chips">${lead}<span class="lab">every hand</span>${off}</div>` : "";
+  if (cur.kind === "range") {
+    const [f, t] = cur.raw.split("-").map(Number);
+    return `<div class="ig-chips" data-which="${which}">${lead}<input type="date" class="an-from" value="${dv(f)}"><span class="lab">to</span><input type="date" class="an-to" value="${dv(t)}"><button class="ig-chip" data-act="range">Apply</button>${off}</div>`;
+  }
+  return `<div class="ig-chips" data-which="${which}" data-kind="${cur.kind}">${lead}${anItems(cur.kind).map((it) => `<button class="ig-chip" aria-pressed="${cur.items.includes(it.id)}" data-item="${esc(it.id)}">${esc(it.label)}</button>`).join("")}${off}</div>`;
+}
+function anWire(v, scope, vs) {
+  const set = (which, spec) => which === "scope" ? anGo(spec, vs) : anGo(scope, spec);
+  const allOf = (kind) => kind === "all" ? "all" : kind === "range" ? `range:${AN.options.range.from}-${AN.options.range.to}` : `${kind}:${anItems(kind).map((x) => x.id).join(",")}`;
+  v.querySelectorAll(".ig-seg[data-which] button").forEach((b) => b.onclick = () => set(b.closest(".ig-seg").dataset.which, allOf(b.dataset.kind)));
+  v.querySelectorAll(".ig-chips[data-kind] .ig-chip[data-item]").forEach((b) => b.onclick = () => {
+    const row = b.closest(".ig-chips"), which = row.dataset.which, cur = anParse(which === "scope" ? scope : vs);
+    const on = new Set(cur.items);
+    if (on.has(b.dataset.item)) { if (on.size === 1) return; on.delete(b.dataset.item); } else on.add(b.dataset.item);
+    set(which, `${cur.kind}:${anItems(cur.kind).map((x) => x.id).filter((id) => on.has(id)).join(",")}`);
+  });
+  v.querySelectorAll("[data-act=range]").forEach((b) => b.onclick = () => {
+    const row = b.closest(".ig-chips"), f = row.querySelector(".an-from").valueAsNumber, t = row.querySelector(".an-to").valueAsNumber;
+    if (!Number.isFinite(f) || !Number.isFinite(t)) return;
+    // date inputs give UTC midnight; the scope wants the local day's bounds
+    const day = (ms, end) => { const d = new Date(ms); return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), end ? 23 : 0, end ? 59 : 0, end ? 59 : 0, end ? 999 : 0).getTime(); };
+    set(row.dataset.which, `range:${day(f)}-${day(t, true)}`);
+  });
+  const cmp = v.querySelector("[data-act=compare]"); if (cmp) cmp.onclick = () => anGo(scope, vs ? null : "all");
+  v.querySelectorAll("[data-act=uncompare]").forEach((b) => b.onclick = () => anGo(scope, null));
+  v.querySelectorAll("tr[data-scope]").forEach((tr) => tr.onclick = () => set("scope", tr.dataset.scope));
+  v.querySelectorAll("tr[data-review]").forEach((tr) => tr.onclick = () => go(`/sessions/${encodeURIComponent(tr.dataset.review)}?show=unanswered`));
+}
+
+/* ---- the page ---------------------------------------------------------------- */
+function anRender(j, scope, vs) {
+  const P = j.primary, C = j.compare, a = P.hands, o = C ? C.hands : null, ans = P.answers;
+  const first = P.series[0]?.t, last = P.series[P.series.length - 1]?.t;
+  const delta = (k, d = 1, suf = "") => o && a[k] != null && o[k] != null ? `<div class="sub ${anCls(a[k] - o[k])}">${sgn(a[k] - o[k], d)}${suf} vs ${esc(C.label)}</div>` : "";
+  const tile = (lab, val, sub, c = "", d = "") => `<div class="ig-tile"><div class="lab">${lab}</div><div class="val ${c}">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}${d}</div>`;
+  return `<header class="ig-head">
+    <div><h1>Analytics</h1><p>${a.hands} hands${first ? `, ${fmtD(first)} to ${fmtD(last)}` : ""} · <b>${esc(P.label)}</b>${C ? ` · compared with <b>${esc(C.label)}</b> (${o.hands} hands, dashed on the chart)` : ""}</p></div>
+    <div class="ig-controls">${anKindSeg("scope", scope)}<div class="ig-sep"></div><div class="ig-seg"><button aria-pressed="${!!C}" data-act="compare">Compare</button></div></div>
+  </header>
+  ${anChips("scope", scope)}${C ? anChips("vs", vs) : ""}
+  ${a.hands ? "" : '<div class="ig-note">No hands in this scope.</div>'}
+  <div class="ig-tiles">
+    ${tile("Hands", a.hands, `${P.sessions.length} session${P.sessions.length === 1 ? "" : "s"}`, "", delta("hands", 0))}
+    ${tile("Net won", `${sgn(a.netBb, 0)} bb`, `${a.netKnownHands} of ${a.hands} hands with a known net`, anCls(a.netBb), delta("netBb", 0, " bb"))}
+    ${tile("bb/100", sgn(a.bb100, 1), a.bb100Se != null ? `±${a.bb100Se.toFixed(1)} standard error` : "over hands with a known net", anCls(a.bb100), delta("bb100"))}
+    ${tile("VPIP", pctS(a.vpip), "voluntarily put money in preflop", "", delta("vpip", 1, " pp"))}
+    ${tile("PFR", pctS(a.pfr), "raised preflop", "", delta("pfr", 1, " pp"))}
+    ${tile("3-bet", pctS(a.threeBet), "re-raised when facing a raise", "", delta("threeBet", 1, " pp"))}
+    ${tile("WTSD", pctS(a.wtsd), "went to showdown after seeing the flop", "", delta("wtsd", 1, " pp"))}
+    ${tile("Discrepancies", a.discPer100 == null ? "–" : a.discPer100.toFixed(0), `per 100 hands · ${a.discrepancies.major} major`, "", delta("discPer100", 0))}
+    ${tile("Answered", P.kind === "sessions" && P.sessions.length === 1 ? `<a class="ig-link" href="/sessions/${encodeURIComponent(P.sessions[0].id)}?show=unanswered" onclick="go('/sessions/${encodeURIComponent(P.sessions[0].id)}?show=unanswered');return false" title="review the unanswered hands">${pctS(ans.handsAnsweredPct)}</a>` : pctS(ans.handsAnsweredPct), `of hands · ${ans.decisions} decisions${P.kind === "sessions" && P.sessions.length === 1 ? " · click to review" : ""}`)}
+    ${tile("Followed", pctS(ans.followedPct), `${ans.followed} of ${ans.graded} graded decisions`)}
+  </div>
+  <section class="ig-panel"><h2>Cumulative result by hand</h2><div class="ig-chart"><canvas id="an-canvas"></canvas></div><div class="ig-legend" id="an-legend"></div></section>
+  <div class="ig-grid2">
+    <section class="ig-panel"><h2>By session <span class="ig-dim">— ${P.kind === "sessions" && P.sessions.length === 1 ? "click the session again to open its page, with the unanswered hands on top" : "click a session to scope the analytics to it"}</span></h2><div class="tbl">${anSessionsTable(P)}</div></section>
+    <section class="ig-panel"><h2>Preflop and postflop stats</h2><div class="tbl">${anStatsTable(P)}</div></section>
+  </div>
+  <div class="ig-grid2">
+    <section class="ig-panel"><h2>By position</h2><div class="tbl">${anBreakdownTable(P.byPosition, "Seat", null)}</div></section>
+    <section class="ig-panel"><h2>By stakes</h2><div class="tbl">${anBreakdownTable(P.byStakes, "Stakes", "stakes")}</div></section>
+  </div>
+  <div class="ig-grid2">
+    <section class="ig-panel"><h2>By month</h2><div class="tbl">${anBreakdownTable(P.byMonth, "Month", "months")}</div></section>
+    <section class="ig-panel"><h2>Study answers</h2><div class="tbl">${anAnswersTable(P)}</div></section>
+  </div>
+  <p class="ig-note"><b>How the numbers are made.</b> Net per hand is exact when the pot was uncontested or you folded (pot minus what you put in, or minus what you put in); a showdown hand takes the change in your stack to the next hand at the same stakes, when that is plausible for the pot, and is otherwise unknown. Unknown hands are drawn flat and dashed on the chart and left out of net, bb/100 and its standard error (100 × the standard deviation of the per-hand net over √n). Sessions are the ones declared on the wrapper's setup page; hands played before that are grouped by 45-minute gaps. Study answers are counted per distinct decision (the panel re-answers as villains act); the archive often stops before your own last action, so only decisions whose action was captured can be graded told-versus-did. Discrepancies are the audit of what the panel showed against what the archive recorded.</p>`;
+}
+
+const AN_POS = ["BTN", "SB", "BB", "CO", "HJ", "MP", "UTG"];
+function anBreakdownTable(map, first, kind) {
+  const keys = Object.keys(map || {});
+  if (!keys.length) return '<div class="ig-note" style="margin:0">nothing in this scope</div>';
+  const pos = (k) => { const i = AN_POS.indexOf(k); return i < 0 ? 99 : i; };
+  keys.sort((x, y) => kind === "months" ? y.localeCompare(x) : kind ? map[y].hands - map[x].hands : pos(x) - pos(y));
+  const maxAbs = Math.max(1, ...keys.map((k) => Math.abs(map[k].bb100 ?? 0)));
+  const rows = keys.map((k) => {
+    const x = map[k], b = x.bb100, w = b == null ? 0 : Math.round((60 * Math.abs(b)) / maxAbs);
+    return `<tr${kind ? ` class="pick" data-scope="${esc(kind)}:${esc(k)}" title="scope to this"` : ""}><td>${esc(x.label ?? k)}</td><td class="num">${x.hands}</td><td class="num ${anCls(x.netBb)}">${sgn(x.netBb, 0)}</td><td class="num ${anCls(b)}">${sgn(b, 1)}</td><td class="num">${pctS(x.vpip)}</td><td class="num">${pctS(x.pfr)}</td><td style="text-align:left"><span class="ig-bar" style="width:${w}px;background:${b >= 0 ? "var(--win)" : "var(--loss)"}"></span></td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>${first}</th><th>Hands</th><th>Net bb</th><th>bb/100</th><th>VPIP</th><th>PFR</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function anSessionsTable(P) {
+  if (!P.sessions.length) return '<div class="ig-note" style="margin:0">no sessions in this scope</div>';
+  // first click scopes the analytics to the session; once it IS the scope, the click goes on to the session page
+  const scopedTo = P.kind === "sessions" && P.sessions.length === 1 ? P.sessions[0].id : null;
+  const rows = P.sessions.slice().reverse().map((s) => `<tr class="pick" ${s.id === scopedTo ? `data-review="${esc(s.id)}" title="open this session's page — its hands, the unanswered ones on top"` : `data-scope="sessions:${esc(s.id)}" title="scope the analytics to this session"`}>
+      <td>${fmtT(s.startedAt)} <span class="ig-dim">· ${s.declared ? esc(presetLabel(s.preset, s)) : "undeclared"}</span> <a class="ig-dim" href="/sessions/${encodeURIComponent(s.id)}" onclick="event.stopPropagation();go('/sessions/${encodeURIComponent(s.id)}');return false">page ↗</a></td>
+      <td class="num">${s.hands}</td><td class="num ${anCls(s.netBb)}">${sgn(s.netBb, 0)}</td><td class="num ${anCls(s.bb100)}">${sgn(s.bb100, 1)}</td>
+      <td class="num">${pctS(s.vpip)}</td><td class="num">${pctS(s.pfr)}</td><td class="num">${s.discPer100 == null ? "–" : s.discPer100.toFixed(0)}</td>
+      <td class="num"><a class="ig-link" href="/sessions/${encodeURIComponent(s.id)}?show=unanswered" onclick="event.stopPropagation();go('/sessions/${encodeURIComponent(s.id)}?show=unanswered');return false" title="review this session's hands with the unanswered ones on top">${pctS(s.answers.handsAnsweredPct)}</a></td><td class="num">${pctS(s.answers.followedPct)}</td></tr>`).join("");
+  const a = P.hands;
+  return `<table><thead><tr><th>Session</th><th>Hands</th><th>Net bb</th><th>bb/100</th><th>VPIP</th><th>PFR</th><th>Disc/100</th><th>Answered</th><th>Followed</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot><tr><td>Selected</td><td class="num">${a.hands}</td><td class="num ${anCls(a.netBb)}">${sgn(a.netBb, 0)}</td><td class="num ${anCls(a.bb100)}">${sgn(a.bb100, 1)}</td><td class="num">${pctS(a.vpip)}</td><td class="num">${pctS(a.pfr)}</td><td class="num">${a.discPer100 == null ? "–" : a.discPer100.toFixed(0)}</td><td class="num">${pctS(P.answers.handsAnsweredPct)}</td><td class="num">${pctS(P.answers.followedPct)}</td></tr></tfoot></table>`;
+}
+const anStatRows = (rows) => `<table><thead><tr><th>Stat</th><th>Value</th><th style="text-align:left">Meaning</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="ig-meaning">${r[2]}</td></tr>`).join("")}</tbody></table>`;
+function anStatsTable(P) {
+  const a = P.hands;
+  return anStatRows([
+    ["VPIP", pctS(a.vpip), "voluntarily put money in preflop"],
+    ["PFR", pctS(a.pfr), "raised preflop"],
+    ["3-bet", pctS(a.threeBet), "re-raised when facing a raise"],
+    ["WTSD", pctS(a.wtsd), "went to showdown after seeing the flop"],
+    ["Flops seen", pctS(a.sawFlop), "hands that reached the flop with you in"],
+    ["Limped pots", pctS(a.limpedPots), "hands where the pot was limped"],
+    ["Discrepancies", a.discPer100 == null ? "–" : a.discPer100.toFixed(1), `per 100 hands · ${a.discrepancies.major} major, ${a.discrepancies.minor} minor, ${a.discrepancies.info} info`],
+    ["Known net", pctS(a.hands ? Math.round((1000 * a.netKnownHands) / a.hands) / 10 : null), "hands whose net result could be established"],
+  ]);
+}
+function anAnswersTable(P) {
+  const x = P.answers, tiers = Object.entries(x.tiers || {});
+  return anStatRows([
+    ["Decisions answered", x.decisions, `${x.answers} answers logged, ${x.failed} failed`],
+    ["Hands answered", pctS(x.handsAnsweredPct), `${x.handsAnswered} of ${P.hands.hands} hands got at least one answer`],
+    ["Followed advice", pctS(x.followedPct), `${x.followed} of ${x.graded} graded decisions went the way the panel said`],
+    ["MES ≠ GTO", pctS(x.disagreementRate), `${x.disagreements} of ${x.withBoth} decisions where the two picks disagreed`],
+    ["Followed MES", pctS(x.followedMesWhenDisagreed), "when the two disagreed"],
+    ...tiers.map(([k, t]) => [esc(k), t.n, `answers from this tier · p50 ${t.p50 ?? "–"} ms, p90 ${t.p90 ?? "–"} ms`]),
+  ]);
+}
+
+/* ---- the chart: cumulative result by hand, Chart.js like the artifact ------- */
+function anDrawChart(P, C) {
+  const cv = $("an-canvas");
+  if (!cv) return;
+  if (!window.Chart) {
+    const s = document.querySelector("script[data-chartjs]");
+    if (s && !s.dataset.failed) { s.addEventListener("load", () => anDrawChart(P, C), { once: true }); s.addEventListener("error", () => { s.dataset.failed = "1"; anDrawChart(P, C); }, { once: true }); }
+    if (!s || s.dataset.failed) cv.parentElement.innerHTML = '<div class="ig-note" style="margin:0">Chart.js did not load (offline?) — the tables carry the same numbers.</div>';
+    return;
+  }
+  const cum = (series) => { let c = 0; return series.map((h, i) => { if (h.net != null) c += h.net; return { x: i, y: Math.round(c * 100) / 100, known: h.net != null, id: h.id, t: h.t }; }); };
+  const p = cum(P.series), q = C ? cum(C.series) : null;
+  const win = anCss("--win"), evc = anCss("--ev"), muted = anCss("--muted"), grid = anCss("--grid"), ink = anCss("--ink"), faint = anCss("--faint");
+  if (AN.chart) { AN.chart.destroy(); AN.chart = null; }
+  AN.chart = new Chart(cv, {
+    type: "line",
+    data: { datasets: [
+      { label: P.label, data: p, borderColor: win, borderWidth: 2, pointRadius: 0, tension: 0, order: 2,
+        fill: { target: "origin", above: anCss("--win-soft"), below: anCss("--loss-soft") },
+        segment: { borderDash: (c) => p[c.p1DataIndex]?.known ? undefined : [4, 4], borderColor: (c) => p[c.p1DataIndex]?.known ? undefined : faint } },
+      ...(q ? [{ label: C.label, data: q, borderColor: evc, borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, tension: 0, order: 1, fill: false }] : []),
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: {
+          title: (it) => { const r = it[0].raw; return `Hand ${it[0].parsed.x + 1} · #${r.id} · ${fmtT(r.t)}`; },
+          label: (it) => ` ${it.dataset.label}: ${sgn(it.parsed.y, 1)} bb${it.raw.known ? "" : " · this hand's net is unknown"}`,
+        },
+        backgroundColor: anCss("--surface"), titleColor: ink, bodyColor: ink, borderColor: anCss("--line"), borderWidth: 1, titleFont: { family: "JetBrains Mono, ui-monospace, Consolas, monospace" }, bodyFont: { family: "JetBrains Mono, ui-monospace, Consolas, monospace" } } },
+      scales: {
+        x: { type: "linear", min: 0, max: Math.max(1, Math.max(p.length, q ? q.length : 0) - 1), ticks: { color: muted, font: { family: "JetBrains Mono, ui-monospace, Consolas, monospace", size: 11 }, maxTicksLimit: 12, callback: (v) => v }, grid: { color: grid }, title: { display: true, text: "hands", color: muted } },
+        y: { ticks: { color: muted, font: { family: "JetBrains Mono, ui-monospace, Consolas, monospace", size: 11 }, callback: (v) => `${v} bb` }, grid: { color: (c) => c.tick.value === 0 ? muted : grid, lineWidth: (c) => c.tick.value === 0 ? 1.5 : 1 } },
+      },
+    },
+  });
+  // the axes are sized with whatever font is loaded at draw time; re-lay them out once the web fonts arrive
+  if (document.fonts && document.fonts.status !== "loaded") document.fonts.ready.then(() => { if (AN.chart && AN.chart.canvas === cv) AN.chart.update(); });
+  const unk = p.filter((x) => !x.known).length;
+  $("an-legend").innerHTML = `<span><i></i>${esc(P.label)}</span>${C ? `<span><i class="ev"></i>${esc(C.label)}</span>` : ""}${unk ? `<span><i class="unk"></i>net unknown (${unk} hands, carried flat)</span>` : ""}<span><i class="zero"></i>Break-even</span>`;
+}
+
+/* ---- global block: solver and corpus, unchanged by the scope --------------- */
+async function anGlobal(g) {
+  let html = "";
   try {
     const mv = await (await fetch("/api/dashboard/mes-value")).json();
     if (mv.ok) {
@@ -1392,14 +1679,14 @@ async function loadAnalytics() {
         <div class="sub" style="margin-top:8px">${(mv.caveats || []).map((t) => "• " + esc(t)).join("<br>")}</div></div>`;
     }
   } catch (e) { html += `<div class="card warn">mes-value unavailable: ${esc(String(e))}</div>`; }
-  html += `<div class="card"><h2>Study answers (last 60 days)</h2>
-    <div class="sub">${j.answers.answered} answered · ${j.answers.failed} failed</div>
+  const t = g?.answers?.tiers ?? {};
+  html += `<div class="card"><h2>Study answers (last 60 days, every hand)</h2>
+    <div class="sub">${g?.answers?.answered ?? 0} answered · ${g?.answers?.failed ?? 0} failed</div>
     <table><thead><tr><th>tier</th><th>n</th><th>p50 ms</th><th>p90 ms</th><th>max ms</th></tr></thead><tbody>
     ${Object.entries(t).map(([k, x]) => `<tr><td>${esc(k)}</td><td>${x.n}</td><td>${x.p50}</td><td>${x.p90}</td><td>${x.max}</td></tr>`).join("")}
     </tbody></table></div>`;
   html += `<div id="miss-queue"><div class="card sub">loading the preflop miss queue…</div></div>`;
-  v.innerHTML = html;
-  loadMissQueue();
+  return html;
 }
 
 /* ================= preflop miss queue ================= */
@@ -1756,7 +2043,14 @@ function partBlock(pt, k) {
     const since = w.live.started ? ` · ${durStr((Date.now() - w.live.started) / 60000)}${w.live.ended ? "" : " so far"}` : "";
     return `<div class="live ${esc(w.live.status)}">${w.live.status === "running" ? "▶" : w.live.status === "queued" ? "…" : "✗"} ${esc(box)}${since}${w.live.phase ? ` · <span class="mono">${esc(w.live.phase)}</span>` : ""} <a href="#" onclick="go('/runbook/ledger');lgOpenLog=${w.live.job};return false">log</a></div>`;
   };
-  const work = pt.work.map((w) => `<span class="solve"><span class="k">${w.n}</span><span>${esc(w.what)}<div class="sub">${esc(w.how)} · <b>${minsStr(w.minutes)}</b>${w.data && w.data.kind !== "none" ? ` · <button class="mini wd-btn" data-enc="${esc(encodeURIComponent(JSON.stringify(w.data)))}" onclick="workData(this, this.dataset.enc)">${w.status === "done" ? "charts" : w.status === "running" ? "live" : "data"}</button>` : ""}</div>${liveLine(w)}<div class="wd-panel" hidden></div></span>${propPill(w.status)}</span>`).join("");
+  const work = pt.work.map((w) => {
+    const hasData = w.data && w.data.kind !== "none";
+    const label = w.status === "done" ? "charts" : w.status === "running" ? "live" : "data";
+    const btn = hasData ? ` · <button class="mini wd-btn" data-enc="${esc(encodeURIComponent(JSON.stringify(w.data)))}" onclick="workData(this, this.dataset.enc)">${label}</button>` : "";
+    // the whole line is the click target when there is something to open (a solved/running chart, a table, a range) —
+    // click anywhere on it to expand the panel; a link/button inside still does its own thing
+    return `<span class="solve${hasData ? " has-data" : ""}"${hasData ? ` onclick="wdLineClick(event, this)" title="click to see what was solved"` : ""}><span class="k">${hasData ? '<span class="wd-caret">▸</span>' : ""}${w.n}</span><span>${esc(w.what)}<div class="sub">${esc(w.how)} · <b>${minsStr(w.minutes)}</b>${btn}</div>${liveLine(w)}<div class="wd-panel" hidden></div></span>${propPill(w.status)}</span>`;
+  }).join("");
   return `<tr class="part"><th>PART ${k + 1}</th><td><b>${esc(pt.title)}</b> <span class="sub">· ${pt.numbers.done} of ${pt.numbers.solves} solves done · about ${minsStr(pt.numbers.wallMinutes)}${pt.numbers.eur ? ` · about €${pt.numbers.eur}` : ""}</span></td></tr>
       <tr><th>INPUT</th><td>${lines(pt.input)}</td></tr>
       <tr><th>HOW</th><td>${lines(pt.how || [])}</td></tr>
@@ -1865,6 +2159,11 @@ function renderOperatorDetail() {
 const wdOpen = new Set(), wcOpen = new Set(), wdCache = new Map();
 function wdReopen() {
   document.querySelectorAll(".wd-btn").forEach((b) => { if (wdOpen.has(b.dataset.enc)) workData(b, b.dataset.enc, true); });
+}
+/* click anywhere on a WORK line to open its data panel — unless the click landed on a link/button inside it */
+function wdLineClick(ev, span) {
+  if (ev.target.closest("a, button")) return;
+  const btn = span.querySelector(".wd-btn"); if (btn) workData(btn, btn.dataset.enc);
 }
 async function viewChart(btn, id, keep) {
   const tr = btn.closest("tr"); let row = tr.nextElementSibling;
@@ -2002,17 +2301,18 @@ async function loadSession(id) {
   try { j = await (await fetch(`/api/dashboard/sessions/${encodeURIComponent(id)}`)).json(); } catch (e) { v.innerHTML = '<div class="card warn">session unavailable</div>'; return; }
   if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)} <button class="mini" onclick="go('/sessions')">← sessions</button></div>`; return; }
   const s = j.session, cfg = s.config || {}, src = cfg.sources || {};
-  const handRows = (j.hands || []).map((h) => `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(h.heroPos ?? "?")}</td><td>${cardsHtml(h.heroCards)}</td><td>${esc(h.finalStreet)}</td><td class="num">${h.potBb}</td>${evCell(h.netBb, {})}<td class="num">${h.answers}</td></tr>`).join("");
+  const handsCard = sessionHandsCard(j, id, PATH.show);
   const kv = (k, val) => `<span class="k">${k}</span><span class="v">${val}</span>`;
   const head = `<div class="dt-top">
       <button class="mini" onclick="go('/sessions')">← sessions</button>
       <h2 style="margin:0">${s.declared ? `${esc(s.label || presetLabel(s.preset, s))} ${presetChip(s.preset, s)}` : `Undeclared session · ${fmtT(s.startedAt)}`}</h2>
+      <a class="mini" href="/analytics?scope=sessions:${encodeURIComponent(s.id)}" onclick="go('/analytics?scope=sessions:${encodeURIComponent(s.id)}');return false" style="text-decoration:none" title="the Analytics tab scoped to this session">analytics for this session ↗</a>
       <span class="sub">${fmtT(s.startedAt)} → ${s.endedAt ? fmtT(s.endedAt) : '<span class="chip good">still open</span>'} · ${esc(s.stakes ?? "")}</span>
     </div>`;
   if (!s.declared) {
     v.innerHTML = head + `<div class="card sub">This is a gap cluster inferred from the archive: hands played before sessions were declared. Nothing was written down at the time, so there is no config, preflight or version snapshot.</div>
-      <div class="card"><h2>Hands <span class="sub">— ${j.hands.length}</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th>strategy</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows}</tbody></table></div></div>`;
-    v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/hands/${tr.dataset.id}`));
+      ${handsCard}`;
+    wireSessionHands(v, id);
     return;
   }
   const ver = s.versions || {};
@@ -2027,7 +2327,7 @@ async function loadSession(id) {
   const pf = s.preflight || {};
   const events = (s.eventsList || []).map((e) => `<div class="ev-line"><span class="t">${fmtT(e.at)}</span><span>${esc(e.kind)}${e.kind === "study-toggle" ? ` → answers ${e.on ? "on" : "off"}, ${e.mode === "exploit" ? "MES" : "GTO"}` : ""}${e.hand != null ? ` <span class="sub">· at hand ${e.hand}</span>` : ""}</span></div>`).join("");
   const ansRows = (j.answers || []).slice(0, 60).map((a) => `<tr class="src-static"><td>${fmtT(a.ts)}</td><td>${esc(a.street ?? "")}${a.board ? ` <span class="mono">${esc(a.board)}</span>` : ""}</td><td>${a.tier ? `<span class="chip">${esc(a.tier)}</span>` : '<span class="chip crit">failed</span>'}</td><td>${a.text ? esc(a.text) : `<span class="sub">${esc(a.failReason ?? "")}</span>`}</td><td>${a.exploitPick || a.chartPick ? `<span class="picks"><span class="pk mes"><small>MES</small>${esc(a.exploitPick ?? "—")}</span><span class="pk gto"><small>GTO</small>${esc(a.chartPick ?? "—")}</span></span>` : ""}</td><td class="num">${fmtMs(a.latencyMs)}</td></tr>`).join("");
-  v.innerHTML = head + `
+  v.innerHTML = head + (PATH.show ? handsCard : "") + `
     <div class="sess-grid">
       <div class="card"><h2>Declared config</h2><div class="kv">
         ${kv("study answers", cfg.answers ? `on · ${modeChipOf(cfg.mode)} primary` : "off")}
@@ -2051,9 +2351,34 @@ async function loadSession(id) {
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${j.recording ? `<a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}" target="_blank" rel="noopener" style="text-decoration:none">open the recording in Replay Review ↗</a><a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}&mode=scrub" target="_blank" rel="noopener" style="text-decoration:none">scrub it ↗</a>` : '<span class="sub">no frame recording for this session</span>'}</div></div>
     </div>
     <div class="card"><h2>Timeline <span class="sub">— every declared change, in order</span></h2>${events || '<div class="sub">no events</div>'}</div>
-    <div class="card"><h2>Hands <span class="sub">— ${j.hands.length} · click to open</span></h2><div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th>strategy</th><th class="num">pot</th><th class="num">net bb</th><th class="num">answers</th></tr></thead><tbody>${handRows || '<tr class="src-static"><td colspan="8" class="sub">no hands archived under this session yet</td></tr>'}</tbody></table></div></div>
+    ${PATH.show ? "" : handsCard}
     <div class="card"><h2>Answers <span class="sub">— ${(j.answers || []).length}${(j.answers || []).length > 60 ? ", showing 60" : ""}</span></h2><div class="scroll"><table><thead><tr><th>when</th><th>node</th><th>tier</th><th>answer</th><th>both strategies</th><th class="num">latency</th></tr></thead><tbody>${ansRows || '<tr class="src-static"><td colspan="6" class="sub">no answers logged under this session</td></tr>'}</tbody></table></div></div>`;
+  wireSessionHands(v, id);
+}
+
+/* The session review: every hand of the session with its study-answer status,
+   filterable to the ones that got no answer (the Analytics "Answered" cell links
+   here with the Unanswered chip on), and a per-hand jump into Replay Review's
+   frame recording when the session has one. */
+function sessionHandsCard(j, id, show) {
+  const hands = j.hands || [];
+  // the session's recording, or (gap clusters) the recording its hands were found in
+  const rec = j.recording ?? (hands.find((h) => h.recording) ? { name: hands.find((h) => h.recording).recording } : null);
+  const n = (st) => hands.filter((h) => h.status?.status === st).length;
+  const unanswered = hands.filter((h) => h.status?.status !== "answered");
+  const rows = show === "unanswered" ? unanswered : show === "failed" ? hands.filter((h) => h.status?.status === "failed") : hands;
+  const chip = (key, label, count) => `<button class="mini ${(show ?? "all") === key ? "on" : ""}" data-show="${key}">${label} <span class="sub">${count}</span></button>`;
+  const tr = (h) => `<tr data-id="${h.dbId}" class="${h.status?.status === "answered" ? "" : "unanswered"}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(h.heroPos ?? "?")}</td><td>${cardsHtml(h.heroCards)}</td><td>${esc(h.finalStreet)}</td><td class="num">${h.potBb}</td>${evCell(h.netBb, {})}<td>${ansChip(h.status)}</td>
+    <td>${(h.recording || rec) && h.clientHandId ? `<a class="mini" href="/replay?session=${encodeURIComponent(h.recording || rec.name)}&hand=${encodeURIComponent(h.clientHandId)}" target="_blank" rel="noopener" style="text-decoration:none" onclick="event.stopPropagation()" title="frame-by-frame, as the screen showed it">as recorded ↗</a>` : '<span class="sub">—</span>'}</td></tr>`;
+  return `<div class="card"><h2>Hands <span class="sub">— ${hands.length} · ${n("answered")} answered · ${n("failed")} failed · ${n("missing")} no answer · ${n("no-decision")} no decision seen${n("unknown") ? ` · ${n("unknown")} unknown` : ""} · click a row to open the hand</span></h2>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px">${chip("all", "All", hands.length)}${chip("unanswered", "Unanswered", unanswered.length)}${chip("failed", "Failed", n("failed"))}
+      ${rec ? `<a class="mini" href="/replay?session=${encodeURIComponent(rec.name)}" target="_blank" rel="noopener" style="text-decoration:none;margin-left:auto">open the recording in Replay Review ↗</a>` : '<span class="sub" style="margin-left:auto">no frame recording for this session — hands open in the archive replayer</span>'}</div>
+    <div class="scroll"><table><thead><tr><th>time</th><th>stakes</th><th>pos</th><th>cards</th><th>street</th><th class="num">pot</th><th class="num">net bb</th><th>answers</th><th>recording</th></tr></thead>
+    <tbody>${rows.map(tr).join("") || `<tr class="src-static"><td colspan="9" class="sub">${hands.length ? "nothing in this filter" : "no hands archived under this session yet"}</td></tr>`}</tbody></table></div></div>`;
+}
+function wireSessionHands(v, id) {
   v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/hands/${tr.dataset.id}`));
+  v.querySelectorAll("button[data-show]").forEach((b) => b.onclick = () => go(`/sessions/${encodeURIComponent(id)}${b.dataset.show === "all" ? "" : `?show=${b.dataset.show}`}`));
 }
 
 /* ================= Sources (mission control) ================= */
@@ -3073,22 +3398,24 @@ function parsePath() {
     const pane = SRC_PANES.includes(seg1) ? seg1 : "strategies";
     return { view, pane, id: (pane === "pieces" || pane === "strategies") && seg[2] ? decodeURIComponent(seg[2]) : null };
   }
-  if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
+  if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null, show: new URLSearchParams(location.search).get("show") || null };
   if (view === "playthrough") return { view, pane: null, id: seg[1] === "spot" && seg[2] && seg[3] ? `spot/${decodeURIComponent(seg[2])}/${seg[3]}` : null };
   if (view === "ledger" || view === "runbook" || view === "proposals") return { view: "ledger", pane: seg[1] || null, id: seg[2] ? decodeURIComponent(seg[2]) : null };
-  if (view === "analytics" || view === "review") return { view, pane: null, id: null };
+  if (view === "analytics") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, scope: q.get("scope") || "all", vs: q.get("vs") || null }; }
+  if (view === "review") return { view, pane: null, id: null };
   return { view: "hands", pane: null, id: null };
 }
 function canonical(p) {
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
   if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
-  if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}` : "/sessions";
+  if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}${p.show ? `?show=${encodeURIComponent(p.show)}` : ""}` : "/sessions";
   if (p.view === "playthrough") return p.id ? `/playthrough/${p.id}` : "/playthrough";
   if (p.view === "ledger") return p.pane ? `/proposals/${p.pane}${p.id ? `/${encodeURIComponent(p.id)}` : ""}` : "/proposals";
+  if (p.view === "analytics") return "/analytics" + anQuery(p.scope, p.vs);
   return `/${p.view}`;
 }
 function go(path) {
-  if (location.pathname + location.hash === path) { route(); return; }
+  if (location.pathname + location.search + location.hash === path) { route(); return; }
   history.pushState({}, "", path);
   route();
 }
@@ -3096,9 +3423,10 @@ function route() {
   if (PLAY) { clearInterval(PLAY); PLAY = null; }
   PATH = parsePath();
   const want = canonical(PATH);
-  if (location.pathname + location.hash !== want) history.replaceState({}, "", want);
+  if (location.pathname + location.search + location.hash !== want) history.replaceState({}, "", want);
   for (const [v, tab] of Object.entries(TABS)) $(tab).classList.toggle("on", v === PATH.view);
   $("view-hands").style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
+  for (const el of [$("filter"), $("sess-filter"), $("only-flop").parentElement, $("only-disc").parentElement, $("only-unanswered").parentElement]) el.style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
   $("view-detail").style.display = PATH.view === "hands" && PATH.id ? "" : "none";
   $("view-analytics").style.display = PATH.view === "analytics" ? "" : "none";
   $("view-sessions").style.display = PATH.view === "sessions" ? "" : "none";
@@ -3127,6 +3455,19 @@ function route() {
   if (PATH.view === "review" && !$("replay-frame").src) $("replay-frame").src = "/replay"; // lazy, same origin
 }
 window.onpopstate = route;
+// hand walkthrough: ← / → move through the session from a hand page (buttons are wired in showDetail's render)
+document.addEventListener("keydown", (ev) => {
+  if (PATH.view !== "hands" || !PATH.id || !DETAIL?.nav) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName ?? "")) return;
+  if (ev.key === "ArrowLeft" && DETAIL.nav.prev != null) { ev.preventDefault(); go(`/hands/${DETAIL.nav.prev}`); }
+  if (ev.key === "ArrowRight" && DETAIL.nav.next != null) { ev.preventDefault(); go(`/hands/${DETAIL.nav.next}`); }
+});
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("#nav-prev, #nav-next");
+  if (!b || !DETAIL?.nav) return;
+  const to = b.id === "nav-prev" ? DETAIL.nav.prev : DETAIL.nav.next;
+  if (to != null) go(`/hands/${to}`);
+});
 window.onhashchange = route; // legacy #hand/N
 for (const [v, tab] of Object.entries(TABS)) $(tab).onclick = () => go(v === "sources" ? "/sources/strategies" : `/${v}`);
 

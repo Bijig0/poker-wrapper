@@ -6,6 +6,7 @@ import { jobs } from "../services/jobs";
 import { runbookFor, planRunbook } from "../services/runbook";
 import { proposals, approve, runAll } from "../services/proposals";
 import { proposalProgress } from "../services/progress";
+import { boxKeeper } from "../services/boxKeeper";
 import { workData } from "../services/workData";
 
 /**
@@ -53,6 +54,7 @@ app.get("/proposals/:id/progress", (c) => { const r = proposalProgress(c.req.par
 app.get("/runbook/:plan", (c) => { const r = planRunbook(c.req.param("plan")); return r ? c.json({ ok: true, ...r }) : c.json({ ok: false, error: "no such plan" }, 404); });
 app.get("/configs/:id/runbook", (c) => { const r = runbookFor(c.req.param("id")); return r ? c.json({ ok: true, runbook: r }) : c.json({ ok: false, error: "no such config" }, 404); });
 
+app.get("/keeper", (c) => c.json({ ok: true, ...boxKeeper.status() }));
 app.get("/jobs", (c) => c.json({ ok: true, jobs: jobs.list(Number(c.req.query("limit") ?? 50)) }));
 app.post("/jobs", async (c) => {
   const b = (await c.req.json().catch(() => ({}))) as { config?: string; boxes?: string[]; argsByBox?: Record<string, string[]> };
