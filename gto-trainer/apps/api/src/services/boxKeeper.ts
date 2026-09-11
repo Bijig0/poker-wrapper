@@ -1,4 +1,4 @@
-import { existsSync, appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR, loadLedger, evaluate } from "./ledger";
 import { jobs, HRC_API_ZENBOOK, BASH, type JobRow } from "./jobs";
@@ -228,8 +228,14 @@ class BoxKeeper {
       if (pulled.length) this.log("linux-pull", `${pulled.length} chart(s) pulled + parsed: ${pulled.join(", ")}`);
     } catch { /* first run */ }
     try {
+      // MSYS bash started hidden with no console never got past its own startup (2026-09-12: 12 copies, 19 h old, no
+      // children, no log) — give it a console through cmd.exe exactly like jobs.ts launches its steps. pull_linux.sh is
+      // single-flight (lock dir), so a pull that is still parsing is not doubled.
+      const win = (p: string) => p.replace(/\//g, "\\");
+      const cmdFile = join(DATA_DIR, "jobs", "linux_pull.cmd");
+      writeFileSync(cmdFile, `@echo off\r\ncd /d "${win(HRC_API_ZENBOOK)}"\r\n"${win(BASH)}" hetzner/pull_linux.sh >> "${win(logPath)}" 2>&1\r\n`);
       Bun.spawn(["powershell", "-NoProfile", "-Command",
-        `Start-Process -WindowStyle Hidden -FilePath '${BASH}' -ArgumentList '-c','bash hetzner/pull_linux.sh > solves/threemax_asym/linux_pull.log 2>&1' -WorkingDirectory '${HRC_API_ZENBOOK}'`],
+        `Start-Process -WindowStyle Hidden -FilePath "$env:SystemRoot\\System32\\cmd.exe" -ArgumentList '/c','"${win(cmdFile)}"'`],
         { stdout: "ignore", stderr: "ignore" });
     } catch (e) { this.log("linux-pull", `failed to start: ${String(e).slice(0, 160)}`); }
   }
@@ -276,7 +282,11 @@ function extraArgsOf(j: JobRow): string[] {
   const step = j.steps.find((s) => s.cmd.some((x) => /boxJob\.ts$/.test(x)));
   if (!step) return [];
   const i = step.cmd.indexOf("--name");
-  return i >= 0 ? step.cmd.slice(i + 2) : [];
+  const extra = i >= 0 ? step.cmd.slice(i + 2) : [];
+  // a re-queue is a one-box fan-out (--shard 0/1): carry the ORIGINAL shard so a member of a 4-box run keeps its quarter
+  // instead of walking the whole plan against the other three (boxJob: the last --shard wins). Seen 2026-09-12 (#118).
+  const s = step.cmd.indexOf("--shard");
+  return s >= 0 && !extra.includes("--shard") ? ["--shard", step.cmd[s + 1]!, ...extra] : extra;
 }
 
 export const boxKeeper = new BoxKeeper();

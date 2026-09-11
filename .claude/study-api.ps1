@@ -9,6 +9,18 @@ $root = 'C:\Users\Brady\poker\gto-trainer\apps\api'
 $sup = Join-Path $root 'data\jobs\supervisor.log'
 # the scheduled task's PATH has no bun (the npm shim lives in Roaming\npm): use the binary the orchestrator uses
 $bun = 'C:\Users\Brady\AppData\Local\Programs\node-v24.18.0-win-x64\node_modules\bun\bin\bun.exe'
+# ... and the worker's CHILDREN (box relays: `bun run threeMaxGrid.ts --parse-only`, the converter's `python`, `unzip`, `ssh`)
+# resolve their tools from the worker's PATH, so give it the same PATH an interactive shell has
+$env:Path = (@(
+  'C:\Users\Brady\AppData\Local\Programs\node-v24.18.0-win-x64\node_modules\bun\bin',
+  'C:\Users\Brady\AppData\Roaming\npm',
+  'C:\Users\Brady\AppData\Local\Programs\node-v24.18.0-win-x64',
+  'C:\Users\Brady\AppData\Local\Programs\Python\Python312',
+  'C:\Users\Brady\AppData\Local\Programs\Python\Python312\Scripts',
+  'C:\Program Files\Git\cmd', 'C:\Program Files\Git\usr\bin', 'C:\Program Files\Git\bin',
+  "$env:SystemRoot\System32\OpenSSH"
+) | Where-Object { Test-Path $_ }) -join ';'
+$env:Path = "$env:Path;" + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 function Log($m) { Add-Content -Path $sup -Value "[$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')] $m" }
 
 Log "supervisor started (pid $PID)"
