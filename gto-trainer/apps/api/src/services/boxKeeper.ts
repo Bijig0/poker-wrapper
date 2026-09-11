@@ -26,7 +26,15 @@ const SSH = existsSync("C:/Program Files/Git/usr/bin/ssh.exe") ? "C:/Program Fil
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "C:/Users/Brady";
 const KEY = join(HOME, ".ssh", "id_ed25519");
 const TICK_MS = 3 * 60_000;
-const STALL_MIN = 5 * 60;             // batch log untouched this long while HRCJob says Running = HRC is hung
+// Windows: the box log gets a "[lock] n%" / refine line every ~5 min while solving and the longest silent stretch (tree
+// build + lock at 150bb) is ~20 min — 45 min without a line while HRCJob says Running = HRC is hung. Was 5 h; Brady
+// (2026-09-12): "runs will not be randomly stopped and hang for hours on end".
+const STALL_MIN = 45;
+// Linux: the shard log only gets a line per finished chart (~40-65 min), so the JVM's CPU is the hang signal there:
+// solving = 1000%+ of a core, a wedged/idle JVM sits under 60% — three quiet ticks (9 min) with the runner alive = hung.
+const LINUX_STALL_MIN = 120;
+const LINUX_QUIET_TICKS = 3;
+const CPU_CALM = 60;
 const RDP_IDLE_MIN = 10;              // move an RDP session to the console only once its user has walked away
 const RESTART_COOLDOWN_MS = 30 * 60_000;
 const MAX_AUTO_REQUEUE = 8;
@@ -36,11 +44,11 @@ const LOG_PATH = join(DATA_DIR, "jobs", "box_keeper.log");
 interface Box { label: string; host: string }
 /** A Linux HRC box (hetzner kit, bridge driver): HRC as a systemd unit, one template hand open, a shard runner on `plan`. */
 interface LinuxBox { label: string; host: string; plan: string }
-export interface LinuxProbe { at: number; ok: boolean; error?: string; hrc: string; hands: number; runner: number; logAgeMin: number | null; left: number | null; actions: string[] }
+export interface LinuxProbe { at: number; ok: boolean; error?: string; hrc: string; hands: number; runner: number; logAgeMin: number | null; left: number | null; cpuPct: number | null; quietTicks: number; actions: string[] }
 export interface Probe {
   at: number; ok: boolean; error?: string;
   hrc: boolean; job: string; logAgeMin: number | null; session: string; sessionId: string | null; idleMin: number | null; restartTask: boolean;
-  actions: string[];
+  lastErr: string; actions: string[];
 }
 interface Attempts { n: number; lastFailedJob: number; gaveUp?: boolean }
 
@@ -50,6 +58,7 @@ $p = Get-Process hrc -ErrorAction SilentlyContinue; "hrc=" + [bool]$p
 $l = Get-Item C:\\poker\\jobs\\threeMaxGrid.log -ErrorAction SilentlyContinue; "logage=" + $(if ($l) { [int]((Get-Date) - $l.LastWriteTime).TotalMinutes } else { -1 })
 "session=" + (((quser 2>$null | Select-String administrator) -replace '\\s+', ' ') -join ' | ')
 "restarttask=" + [bool](Get-ScheduledTask HRCRestart -ErrorAction SilentlyContinue)
+"lasterr=" + ((Get-Content C:\\poker\\jobs\\threeMaxGrid.log -Tail 8 -ErrorAction SilentlyContinue | Select-String "window not found|not found \\(have:|stopping batch" | Select-Object -Last 1) -replace '\\s+', ' ')
 `;
 
 // the graceful restart, run INSIDE the interactive session (UIA needs the desktop): the driver's own restart-hrc
@@ -126,7 +135,7 @@ class BoxKeeper {
   start(): void {
     if (this.timer) return;
     mkdirSync(join(DATA_DIR, "jobs"), { recursive: true });
-    this.log("keeper", `started: tick ${TICK_MS / 60000} min, stall ${STALL_MIN / 60} h, rdp idle ${RDP_IDLE_MIN} min, max ${MAX_AUTO_REQUEUE} auto re-queues`);
+    this.log("keeper", `started: tick ${TICK_MS / 60000} min, stall ${STALL_MIN} min (linux ${LINUX_STALL_MIN} min or ${LINUX_QUIET_TICKS} quiet ticks), rdp idle ${RDP_IDLE_MIN} min, max ${MAX_AUTO_REQUEUE} auto re-queues`);
     setTimeout(() => void this.tick(), 20_000);
     this.timer = setInterval(() => void this.tick(), TICK_MS);
   }
@@ -153,11 +162,11 @@ class BoxKeeper {
 
   /** One box: probe, then repair whatever is wrong. */
   private async keepBox(b: Box): Promise<void> {
-    const pr: Probe = { at: Date.now(), ok: false, hrc: false, job: "?", logAgeMin: null, session: "?", sessionId: null, idleMin: null, restartTask: false, actions: [] };
+    const pr: Probe = { at: Date.now(), ok: false, hrc: false, job: "?", logAgeMin: null, session: "?", sessionId: null, idleMin: null, restartTask: false, lastErr: "", actions: [] };
     const r = await ssh(b.host, REMOTE_PROBE);
     if (r.code !== 0) { pr.error = r.out.trim().split("\n").pop()?.slice(0, 160) ?? `ssh exited ${r.code}`; this.probes.set(b.label, pr); this.log(b.label, `unreachable: ${pr.error}`); return; }
     const kv = Object.fromEntries(r.out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.includes("=")).map((l) => { const i = l.indexOf("="); return [l.slice(0, i), l.slice(i + 1)]; }));
-    pr.ok = true; pr.hrc = kv.hrc === "True"; pr.job = kv.job || "none"; pr.restartTask = kv.restarttask === "True";
+    pr.ok = true; pr.hrc = kv.hrc === "True"; pr.job = kv.job || "none"; pr.restartTask = kv.restarttask === "True"; pr.lastErr = (kv.lasterr ?? "").trim();
     pr.logAgeMin = kv.logage != null && Number(kv.logage) >= 0 ? Number(kv.logage) : null;
     const s = parseSession((kv.session ?? "").split(" | ")[0] ?? ""); pr.session = s.name; pr.sessionId = s.id; pr.idleMin = s.idleMin;
 
@@ -182,14 +191,27 @@ class BoxKeeper {
         pr.actions.push(`batch silent ${pr.logAgeMin} min with HRCJob Running → HRCRestart (${t.code === 0 ? "started" : "failed"})`);
       }
     }
+    // 4. HRC is up but its window is gone for the driver ("HRC main SWT window not found", "menu item ... not found (have:
+    //    [...])") — the batch stops after 2 failures and every re-queue fails the same way (hrc-3, 2026-09-11, for 12 h).
+    //    A graceful restart via the UIA driver puts a real window back; the relay's next attempt then goes through.
+    else if (pr.job !== "Running" && /window not found|not found \(have:/.test(pr.lastErr)) {
+      const last = this.lastRestart.get(b.label) ?? 0;
+      if (Date.now() - last > RESTART_COOLDOWN_MS && pr.restartTask) {
+        const t = await ssh(b.host, `Start-ScheduledTask HRCRestart; "started"`);
+        this.lastRestart.set(b.label, Date.now());
+        pr.actions.push(`driver cannot see HRC's window ("${pr.lastErr.slice(0, 90)}") → HRCRestart (${t.code === 0 ? "started" : "failed"})`);
+      }
+    }
     this.probes.set(b.label, pr);
     for (const a of pr.actions) this.log(b.label, a);
   }
 
   /** One Linux box: HRC unit up, the bridge's template hand open, the shard runner alive while its plan has work left. */
   private async keepLinuxBox(b: LinuxBox): Promise<void> {
-    const pr: LinuxProbe = { at: Date.now(), ok: false, hrc: "?", hands: 0, runner: 0, logAgeMin: null, left: null, actions: [] };
-    const probe = `systemctl is-active hrc; cd /root/hrc-api; echo "runner=$(pgrep -fc '[t]hreeMaxGrid')"; echo "hands=-1"; L=/tmp/$(basename ${b.plan} .json).log; echo "logage=$(( ($(date +%s) - $(stat -c %Y $L 2>/dev/null || echo 0)) / 60 ))"; echo "left=$(python3 -c "import json,os; p=json.load(open('${b.plan}')); d=os.path.dirname('${b.plan}'); print(sum(1 for j in p if not os.path.exists(os.path.join(d, j['id']+'.strategies.zip'))))" 2>/dev/null)"`;
+    const prev = this.linuxProbes.get(b.label);
+    const pr: LinuxProbe = { at: Date.now(), ok: false, hrc: "?", hands: 0, runner: 0, logAgeMin: null, left: null, cpuPct: null, quietTicks: prev?.quietTicks ?? 0, actions: [] };
+    // cpu = the JVM's % of one core over 2 s from /proc (ps pcpu is a lifetime average and useless here)
+    const probe = `systemctl is-active hrc; cd /root/hrc-api; echo "runner=$(pgrep -fc '[t]hreeMaxGrid')"; echo "hands=-1"; L=/tmp/$(basename ${b.plan} .json).log; echo "logage=$(( ($(date +%s) - $(stat -c %Y $L 2>/dev/null || echo 0)) / 60 ))"; echo "left=$(python3 -c "import json,os; p=json.load(open('${b.plan}')); d=os.path.dirname('${b.plan}'); print(sum(1 for j in p if not os.path.exists(os.path.join(d, j['id']+'.strategies.zip'))))" 2>/dev/null)"; pids=$(pgrep -f 'java|/opt/hrc/hrc' | tr '\\n' ' '); a=0; for q in $pids; do t=$(awk '{print $14+$15}' /proc/$q/stat 2>/dev/null); a=$((a+\${t:-0})); done; sleep 2; c=0; for q in $pids; do t=$(awk '{print $14+$15}' /proc/$q/stat 2>/dev/null); c=$((c+\${t:-0})); done; echo "cpu=$(( (c-a)*100/$(getconf CLK_TCK)/2 ))"`;
     const r = await sshLinux(b.host, probe);
     if (r.code !== 0 && !r.out.includes("runner=")) { pr.error = r.out.trim().split("\n").pop()?.slice(0, 160) ?? `ssh exited ${r.code}`; this.linuxProbes.set(b.label, pr); this.log(b.label, `unreachable: ${pr.error}`); return; }
     const lines = r.out.split(/\r?\n/).map((l) => l.trim());
@@ -197,12 +219,16 @@ class BoxKeeper {
     const kv = Object.fromEntries(lines.filter((l) => l.includes("=")).map((l) => { const i = l.indexOf("="); return [l.slice(0, i), l.slice(i + 1)]; }));
     pr.runner = Number(kv.runner ?? 0); pr.hands = Number(kv.hands ?? 0); pr.left = kv.left !== undefined && kv.left !== "" ? Number(kv.left) : null;
     pr.logAgeMin = kv.logage !== undefined ? Number(kv.logage) : null;
+    pr.cpuPct = kv.cpu !== undefined && kv.cpu !== "" ? Number(kv.cpu) : null;
+    // quiet = runner alive, log not fresh (a chart just finished also idles the JVM for a minute), JVM under CPU_CALM
+    pr.quietTicks = pr.runner > 0 && pr.cpuPct != null && pr.cpuPct < CPU_CALM && (pr.logAgeMin ?? 0) > 5 ? pr.quietTicks + 1 : 0;
     // 1. HRC unit down -> start it (the licence token is on disk; it comes back Pro)
     if (pr.hrc !== "active") { const t = await sshLinux(b.host, "systemctl start hrc; sleep 40; systemctl is-active hrc"); const st = t.out.trim().split("\n").pop() ?? pr.hrc; pr.actions.push(`hrc was ${pr.hrc} -> systemctl start -> ${st}`); pr.hrc = st; pr.hands = 0; }
-    // 2. runner alive but silent for hours -> HRC hung: recycle HRC and let step 4 relaunch the shard
-    if (pr.runner > 0 && pr.logAgeMin != null && pr.logAgeMin >= STALL_MIN) {
+    // 2. runner alive but HRC hung (JVM idle for 3 ticks, or no chart finished in 2 h) -> recycle HRC and the runner; step 4 relaunches
+    const hung = pr.runner > 0 && ((pr.logAgeMin != null && pr.logAgeMin >= LINUX_STALL_MIN) || pr.quietTicks >= LINUX_QUIET_TICKS);
+    if (hung) {
       const last = this.lastRestart.get(b.label) ?? 0;
-      if (Date.now() - last > RESTART_COOLDOWN_MS) { await sshLinux(b.host, "pkill -f '[t]hreeMaxGrid'; systemctl restart hrc; sleep 40"); this.lastRestart.set(b.label, Date.now()); pr.actions.push(`shard silent ${pr.logAgeMin} min -> HRC + runner recycled`); pr.runner = 0; pr.hands = 0; }
+      if (Date.now() - last > RESTART_COOLDOWN_MS) { await sshLinux(b.host, "pkill -f '[t]hreeMaxGrid'; systemctl restart hrc; sleep 40"); this.lastRestart.set(b.label, Date.now()); pr.actions.push(`shard silent ${pr.logAgeMin} min, JVM ${pr.cpuPct}% for ${pr.quietTicks} tick(s) -> HRC + runner recycled`); pr.runner = 0; pr.hands = 0; pr.quietTicks = 0; }
     }
     // 3. (no template hand needed since the mark-II driver: the wizard creates every hand, the bridge solves/exports it)
     // 4. work left but nothing running -> relaunch the shard runner (resumable: solved zips are skipped)
