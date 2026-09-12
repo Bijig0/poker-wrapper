@@ -226,7 +226,7 @@ class BoxKeeper {
     const prev = this.linuxProbes.get(b.label);
     const pr: LinuxProbe = { at: Date.now(), ok: false, hrc: "?", hands: 0, runner: 0, logAgeMin: null, left: null, cpuPct: null, quietTicks: prev?.quietTicks ?? 0, actions: [] };
     // cpu = the JVM's % of one core over 2 s from /proc (ps pcpu is a lifetime average and useless here)
-    const probe = `systemctl is-active hrc; cd /root/hrc-api; echo "runner=$(pgrep -fc '[t]hreeMaxGrid')"; echo "hands=-1"; L=/tmp/$(basename ${b.plan} .json).log; echo "logage=$(( ($(date +%s) - $(stat -c %Y $L 2>/dev/null || echo 0)) / 60 ))"; echo "left=$(python3 -c "import json,os; p=json.load(open('${b.plan}')); d=os.path.dirname('${b.plan}'); print(sum(1 for j in p if not os.path.exists(os.path.join(d, j['id']+'.strategies.zip'))))" 2>/dev/null)"; pids=$(pgrep -f 'java|/opt/hrc/hrc' | tr '\\n' ' '); a=0; for q in $pids; do t=$(awk '{print $14+$15}' /proc/$q/stat 2>/dev/null); a=$((a+\${t:-0})); done; sleep 2; c=0; for q in $pids; do t=$(awk '{print $14+$15}' /proc/$q/stat 2>/dev/null); c=$((c+\${t:-0})); done; echo "cpu=$(( (c-a)*100/$(getconf CLK_TCK)/2 ))"`;
+    const probe = `systemctl is-active hrc; cd /root/hrc-api; echo "runner=$(pgrep -fc '[t]hreeMaxGrid')"; echo "hands=-1"; L=/tmp/$(basename ${b.plan} .json).log; echo "logage=$(( ($(date +%s) - $(stat -c %Y $L 2>/dev/null || echo 0)) / 60 ))"; echo "left=$(python3 -c "import json,os; p=json.load(open('${b.plan}')); d=os.path.dirname('${b.plan}'); print(sum(1 for j in p if not os.path.exists(os.path.join(d, j['id']+'.strategies.zip'))))" 2>/dev/null)"; pids=$(pgrep -f 'java|/opt/hrc/hrc' | tr '\\n' ' '); a=0; for q in $pids; do t=$(awk '{print $14+$15}' /proc/$q/stat 2>/dev/null); a=$((a+\${t:-0})); done; sleep 2; c=0; for q in $pids; do t=$(awk '{print $14+$15}' /proc/$q/stat 2>/dev/null); c=$((c+\${t:-0})); done; echo "cpu=$(( (c-a)*100/$(getconf CLK_TCK)/2 ))"; T=$(python3 -c "import json;print(json.load(open('/root/.hrc-bridge/bridge.json'))['token'])" 2>/dev/null); echo "bridge=$(curl -sf -m 4 -H "X-Hrc-Token: $T" http://127.0.0.1:8791/status >/dev/null 2>&1 && echo up || echo down)"`;
     const r = await sshLinux(b.host, probe);
     if (r.code !== 0 && !r.out.includes("runner=")) { pr.error = r.out.trim().split("\n").pop()?.slice(0, 160) ?? `ssh exited ${r.code}`; this.linuxProbes.set(b.label, pr); this.log(b.label, `unreachable: ${pr.error}`); return; }
     const lines = r.out.split(/\r?\n/).map((l) => l.trim());
@@ -237,6 +237,13 @@ class BoxKeeper {
     pr.cpuPct = kv.cpu !== undefined && kv.cpu !== "" ? Number(kv.cpu) : null;
     // quiet = runner alive, log not fresh (a chart just finished also idles the JVM for a minute), JVM under CPU_CALM
     pr.quietTicks = pr.runner > 0 && pr.cpuPct != null && pr.cpuPct < CPU_CALM && (pr.logAgeMin ?? 0) > 5 ? pr.quietTicks + 1 : 0;
+    // 0. HRC up but its in-process bridge agent no longer answers on :8791 (seen on l1 and l4 at once, 2026-09-12 20:06Z,
+    //    same JVM pid): every lock/refine/export call fails "nothing is answering on port 8791" and the runner exits with
+    //    its charts marked FAIL. Re-injecting the agent into the running JVM fixes it in seconds — no restart, no lost hand.
+    if (pr.hrc === "active" && kv.bridge === "down") {
+      const t = await sshLinux(b.host, "HRC_BRIDGE_JAR=/root/hrc-api/bridge/build/hrc-bridge.jar /usr/local/bin/hrc-attach-bridge 2>&1 | tail -1", 120_000);
+      pr.actions.push(`bridge agent was not answering -> re-attached: ${t.out.trim().split("\n").pop()?.slice(0, 80)}`);
+    }
     // 1. HRC unit down -> start it (the licence token is on disk; it comes back Pro)
     if (pr.hrc !== "active") { const t = await sshLinux(b.host, "systemctl start hrc; sleep 40; systemctl is-active hrc"); const st = t.out.trim().split("\n").pop() ?? pr.hrc; pr.actions.push(`hrc was ${pr.hrc} -> systemctl start -> ${st}`); pr.hrc = st; pr.hands = 0; }
     // 2. runner alive but HRC hung (JVM idle for 3 ticks, or no chart finished in 2 h) -> recycle HRC and the runner; step 4 relaunches
