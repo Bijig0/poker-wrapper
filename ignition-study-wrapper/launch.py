@@ -200,8 +200,8 @@ def apply_layout() -> dict:
     table_w = int(area["w"] * TABLE_FRAC)
     table, panel = _wrapper_windows()
     moved = {}
-    for h in (table, panel):          # a maximized window ignores MoveWindow
-        if h and ctypes.windll.user32.IsZoomed(h):
+    for h in (table, panel):          # a maximized window ignores MoveWindow; a minimized one stays hidden
+        if h and (ctypes.windll.user32.IsZoomed(h) or ctypes.windll.user32.IsIconic(h)):
             ctypes.windll.user32.ShowWindow(h, 9)   # SW_RESTORE
     if table:
         ctypes.windll.user32.MoveWindow(table, area["x"], area["y"],
@@ -2849,6 +2849,27 @@ class Handler(BaseHTTPRequestHandler):
                     _router_set("routing", f"re-seat requested: going to {(F.get(cfg['format']) or {}).get('name', cfg['format'])}", [])
                     res = {"ok": True}
                 self._send(200 if res.get("ok") else 409, "application/json", json.dumps(res).encode())
+            elif path == "/router/retry":
+                # "Retry" on a failed bridge step (Brady, 2026-09-12): whatever stopped the router — a window that never
+                # came, a sign-in error, a lobby run that did not reach the format, a table we left — push it back into
+                # motion from where it is. Asynchronous; the bridge page follows the router's state. The auth gate's 45 s
+                # hold-off is cleared so a sign-in retry happens at once; when signed in, the re-seat path leaves a wrong
+                # table (if any) and routes to the declared format again.
+                if not _session["id"]:
+                    res = {"ok": False, "error": "no session"}
+                else:
+                    was = _router["state"]
+                    _router.update({"steps": [], "loginAt": 0.0, "snapState": None})
+                    if not cdp.available(CDP_PORT):
+                        threading.Thread(target=_open_table_window, daemon=True).start()
+                        _router_set("waiting-window", "retry: opening the table window", [])
+                    else:
+                        _router["reseat"] = True
+                        _router_set("routing", f"retry requested (was: {was})", [])
+                    if _session["id"]:
+                        _sessions.event(_session["id"], "retry", {"was": was})
+                    res = {"ok": True, "was": was}
+                self._send(200 if res.get("ok") else 409, "application/json", json.dumps(res).encode())
             elif path == "/format/leave":
                 res = F.leave(CDP_PORT) if cdp.available(CDP_PORT) else {"ok": False, "error": "table window not up"}
                 self._send(200, "application/json", json.dumps(res).encode())
@@ -2935,18 +2956,81 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
 
+def _dpi_at(x: int, y: int) -> int:
+    """DPI of the monitor containing the (physical) point; 96 when unknown."""
+    try:
+        pt = ctypes.wintypes.POINT(x, y)
+        hmon = ctypes.windll.user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST
+        dx, dy = ctypes.wintypes.UINT(), ctypes.wintypes.UINT()
+        if ctypes.windll.shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dx), ctypes.byref(dy)) == 0:
+            return int(dx.value) or 96
+    except Exception:
+        pass
+    return 96
+
+
+def _place_when_shown(proc: subprocess.Popen, x: int, y: int, w: int, h: int,
+                      timeout: float = 20.0) -> None:
+    """Pin a freshly launched browser window to (x, y, w, h) in PHYSICAL pixels.
+
+    --window-position/--window-size are read by Chromium in logical (DIP)
+    pixels, but this process is per-monitor DPI aware and measures monitors in
+    physical pixels — on a 200% screen the flags land the window at twice the
+    coordinates, off the right edge of every monitor (seen 2026-09-12: the
+    setup window at x=5760 on a desktop that ends at 5440, visible only in the
+    taskbar). MoveWindow from this process takes physical pixels, so once the
+    window exists we move it where the flags were meant to put it."""
+    proto = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        hit: list[int] = []
+
+        def cb(hwnd, _lp):
+            if not ctypes.windll.user32.IsWindowVisible(hwnd):
+                return 1
+            pid = ctypes.wintypes.DWORD()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == proc.pid and ctypes.windll.user32.GetWindowTextLengthW(hwnd):
+                hit.append(hwnd)
+            return 1
+
+        ctypes.windll.user32.EnumWindows(proto(cb), 0)
+        if hit:
+            hwnd = hit[0]
+            # a maximized window ignores MoveWindow; a MINIMIZED one takes the move
+            # but stays in the taskbar (the table window sat minimized at -32000,
+            # -32000 on 2026-09-12 — "I can't open the ignition client")
+            if ctypes.windll.user32.IsZoomed(hwnd) or ctypes.windll.user32.IsIconic(hwnd):
+                ctypes.windll.user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+            ctypes.windll.user32.MoveWindow(hwnd, x, y, w, h, True)
+            r = ctypes.wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
+            print(f"[layout] window pinned at ({r.left},{r.top}) {r.right - r.left}x{r.bottom - r.top} (physical px)")
+            return
+        time.sleep(0.25)
+    print("[layout] window not found within the timeout — left where the flags put it")
+
+
 def chrome_window(url: str, profile: str, x: int, y: int, w: int, h: int,
                   cdp_port: int | None = None) -> subprocess.Popen:
     """One app-mode (chromeless, PWA-style) Chrome window. Each window gets its
     own user-data-dir: that keeps it a separate process, which is what makes
     the --window-position/--window-size flags and the CDP port actually stick
-    (a shared profile would just join the existing process and ignore them)."""
+    (a shared profile would just join the existing process and ignore them).
+
+    x/y/w/h are PHYSICAL pixels (what monitors()/target_area() measure). The
+    flags want logical pixels, so they get a DPI-scaled hint; the exact
+    placement is then applied by handle (_place_when_shown)."""
+    scale = _dpi_at(x, y) / 96.0
+    lx, ly, lw, lh = (round(v / scale) for v in (x, y, w, h))
     args = [CHROME, f"--app={url}", f"--user-data-dir={ROOT / profile}",
-            f"--window-position={x},{y}", f"--window-size={w},{h}",
+            f"--window-position={lx},{ly}", f"--window-size={lw},{lh}",
             "--no-first-run", "--no-default-browser-check"]
     if cdp_port:
         args.insert(2, f"--remote-debugging-port={cdp_port}")
-    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    threading.Thread(target=_place_when_shown, args=(proc, x, y, w, h), daemon=True).start()
+    return proc
 
 
 def _server_alive() -> bool:

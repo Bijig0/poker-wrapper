@@ -12,7 +12,9 @@
   .sub { color: #8fa1b3; font-size: 13px; }
   .card { background: #171d24; border: 1px solid #26303a; border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
   .steps { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
-  .st { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; padding: 9px 12px; border-radius: 10px; background: #0c1013; border: 1px solid #1f2731; }
+  .st { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: start; padding: 9px 12px; border-radius: 10px; background: #0c1013; border: 1px solid #1f2731; }
+  .st .retry-step { align-self: center; border-color: #6a2a2a; color: #ffb4b4; white-space: nowrap; }
+  .st .retry-step:disabled { opacity: .5; cursor: default; }
   .st .n { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: #26303a; color: #cfe0ef; font-size: 12px; font-weight: 700; }
   .st.done .n { background: #123524; color: #5ee39a; } .st.now .n { background: #1f6feb; color: #fff; } .st.bad .n { background: #57222a; color: #ff9a9a; }
   .st.now { border-color: #1f6feb; } .st.bad { border-color: #6a2a2a; }
@@ -61,12 +63,38 @@ const STEPS = [
   { id: "seated", label: "Seated", d: "the study panel opens" },
 ];
 
+// A failed step gets its own ↻ Retry: the router is pushed back into motion from that step (window → open it,
+// sign-in → sign in again, route/seated → leave a wrong table if any and go to the declared format again).
+let retrying = false;
 function render(model) {
   $("steps").innerHTML = STEPS.map((s, i) => {
     const m = model[s.id] || {};
-    return `<div class="st ${m.cls || ""}"><span class="n">${m.cls === "done" ? "✓" : m.cls === "bad" ? "!" : i + 1}</span><span><b>${esc(s.label)}</b><span class="d">${esc(m.text || s.d)}</span></span></div>`;
+    const retry = m.cls === "bad" || m.retry ? `<button class="mini retry-step" data-step="${s.id}" ${retrying ? "disabled" : ""}>↻ Retry</button>` : "";
+    return `<div class="st ${m.cls || ""}"><span class="n">${m.cls === "done" ? "✓" : m.cls === "bad" ? "!" : i + 1}</span><span><b>${esc(s.label)}</b><span class="d">${esc(m.text || s.d)}</span></span>${retry}</div>`;
   }).join("");
 }
+
+// One retry path for every step. Prefers POST /router/retry (does the right thing for the router's current state);
+// a wrapper started before that route existed answers 404, so fall back to the step's own endpoint.
+async function retryStep(step) {
+  if (retrying) return;
+  retrying = true; $("msg").className = "msg warn"; $("msg").textContent = "retrying…";
+  const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  try {
+    let r = await post("/router/retry");
+    if (r.status === 404) {
+      const profile = SESSION && SESSION.config ? SESSION.config.profile : null;
+      if (step === "window") r = await post("/table/open");
+      else if (step === "signin" || step === "code") r = await post("/auth/login", { profile });
+      else r = await post("/format/reseat");
+    }
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok && j.error) { $("msg").className = "msg bad"; $("msg").textContent = `retry refused: ${j.error}`; }
+    else $("msg").textContent = "";
+  } catch (e) { $("msg").className = "msg bad"; $("msg").textContent = `retry failed: ${e}`; }
+  setTimeout(() => { retrying = false; }, 4000);
+}
+$("steps").addEventListener("click", (e) => { const b = e.target.closest(".retry-step"); if (b) retryStep(b.dataset.step); });
 
 async function tick() {
   let t, a = null;
@@ -123,7 +151,7 @@ async function tick() {
     if (!redirectAt) redirectAt = Date.now() + 2500;
     $("msg").className = "msg ok"; $("msg").textContent = r.state === "off-format" ? "seated, but not at the declared format — opening the panel" : "seated — opening the panel";
     if (Date.now() >= redirectAt) { location.href = "/panel"; return; }
-  } else { redirectAt = 0; if (r.state === "failed") { $("msg").className = "msg bad"; $("msg").textContent = "the lobby did not reach the format — go there by hand, or back to setup"; } else $("msg").textContent = ""; }
+  } else { redirectAt = 0; if (r.state === "failed" && !retrying) { $("msg").className = "msg bad"; $("msg").textContent = "the lobby did not reach the format — press ↻ Retry on the step, go there by hand, or back to setup"; } else if (!retrying) $("msg").textContent = ""; }
   setTimeout(tick, 1200);
 }
 
@@ -136,7 +164,7 @@ $("code-send").onclick = async () => {
   $("code-msg").textContent = r.ok ? `accepted — ${r.detail || "signed in"}` : `not accepted: ${r.error || r.detail || r.state}${(r.errors || []).length ? " · " + r.errors.join(" · ") : ""}`;
 };
 $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("code-send").click(); });
-$("retry").onclick = async () => { $("retry").disabled = true; try { await fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: SESSION && SESSION.config ? SESSION.config.profile : null }) }); } catch (e) {} setTimeout(() => { $("retry").disabled = false; }, 5000); };
+$("retry").onclick = () => retryStep("signin");
 $("openwin").onclick = async () => { $("openwin").disabled = true; try { await fetch("/table/open", { method: "POST" }); } catch (e) {} setTimeout(() => { $("openwin").disabled = false; }, 5000); };
 $("topanel").onclick = () => { location.href = "/panel"; };
 $("tosetup").onclick = () => { location.href = "/setup"; };
