@@ -59,6 +59,8 @@ $l = Get-Item C:\\poker\\jobs\\threeMaxGrid.log -ErrorAction SilentlyContinue; "
 "session=" + (((quser 2>$null | Select-String administrator) -replace '\\s+', ' ') -join ' | ')
 "restarttask=" + [bool](Get-ScheduledTask HRCRestart -ErrorAction SilentlyContinue)
 "lasterr=" + ((Get-Content C:\\poker\\jobs\\threeMaxGrid.log -Tail 8 -ErrorAction SilentlyContinue | Select-String "window not found|not found \\(have:|stopping batch" | Select-Object -Last 1) -replace '\\s+', ' ')
+$r = Get-Item C:\\poker\\jobs\\restart_hrc.log -ErrorAction SilentlyContinue; "restartfail=" + $(if ($r -and ((Get-Date) - $r.LastWriteTime).TotalMinutes -lt 40 -and ((Get-Content $r.FullName -Tail 4) -join ' ') -match 'did not quit within') { 'True' } else { 'False' })
+"responding=" + $(if ($p) { [bool]($p | Where-Object { $_.Responding }).Count } else { 'True' })
 `;
 
 // the graceful restart, run INSIDE the interactive session (UIA needs the desktop): the driver's own restart-hrc
@@ -194,9 +196,22 @@ class BoxKeeper {
     // 4. HRC is up but its window is gone for the driver ("HRC main SWT window not found", "menu item ... not found (have:
     //    [...])") — the batch stops after 2 failures and every re-queue fails the same way (hrc-3, 2026-09-11, for 12 h).
     //    A graceful restart via the UIA driver puts a real window back; the relay's next attempt then goes through.
-    else if (pr.job !== "Running" && /window not found|not found \(have:/.test(pr.lastErr)) {
+    //    "stopping batch" counts too: the log's LAST matching line is that one, the FAIL reason sits above it (hrc-1 idled
+    //    4 h on 2026-09-12 because only the FAIL text was matched).
+    else if (pr.job !== "Running" && /window not found|not found \(have:|stopping batch/.test(pr.lastErr)) {
       const last = this.lastRestart.get(b.label) ?? 0;
-      if (Date.now() - last > RESTART_COOLDOWN_MS && pr.restartTask) {
+      // 4b. the graceful restart already gave up ("HRC did not quit within 90s") or the JVM is Not Responding: it is wedged
+      //     (a 4-day-old heap at 20380M/20480M on hrc-1, 2026-09-12) and nothing but a kill brings it back. On these Vultr
+      //     boxes a kill + the HRC logon task came back as "HRC Pro" every time (hrc-3 09-11, hrc-2 and hrc-1 09-12) — the
+      //     licence is machine-bound. (The zenbook is different: its HRC dropped to Free Mode after a kill — never do this
+      //     to a box that is not in ledger boxes["hrc-box"].)
+      if (kv.restartfail === "True" || kv.responding === "False") {
+        if (Date.now() - last > 10 * 60_000) {
+          const t = await ssh(b.host, `Stop-ScheduledTask HRCJob -ErrorAction SilentlyContinue; Stop-Process -Name hrc -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 8; Start-ScheduledTask HRC; Start-Sleep -Seconds 45; "hrc=" + [bool](Get-Process hrc -ErrorAction SilentlyContinue)`, 90_000);
+          this.lastRestart.set(b.label, Date.now());
+          pr.actions.push(`HRC wedged (graceful restart failed / not responding) → killed + Start-ScheduledTask HRC → ${t.out.trim().split("\n").pop()}`);
+        }
+      } else if (Date.now() - last > RESTART_COOLDOWN_MS && pr.restartTask) {
         const t = await ssh(b.host, `Start-ScheduledTask HRCRestart; "started"`);
         this.lastRestart.set(b.label, Date.now());
         pr.actions.push(`driver cannot see HRC's window ("${pr.lastErr.slice(0, 90)}") → HRCRestart (${t.code === 0 ? "started" : "failed"})`);
