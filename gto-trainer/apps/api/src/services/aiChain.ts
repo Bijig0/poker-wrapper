@@ -81,6 +81,8 @@ export interface ChainTrace {
   streets: {
     si: number; street: "FLOP" | "TURN" | "RIVER"; board: string; potIn: number; stackIn: number;
     labels: string[]; fixedLevels: string[] | null; solId: string | null; created: boolean;
+    /** wall-clock ms: the cloud solve (ensureCustomSolution) and the node walk on it (since 2026-09-12) */
+    solveMs?: number; walkMs?: number;
     oopIn: number[]; ipIn: number[];
   }[];
   nodes: ChainTraceNode[];
@@ -105,6 +107,30 @@ export type AiChainResult =
       trace: ChainTrace;
     }
   | { ok: false; why: string; trace?: ChainTrace };
+
+// ---- 1326-combo arithmetic (GTO Wizard's ordering, see utils/comboIndex): card = rank*4 + suit, combo(a<b) = b(b-1)/2 + a
+const RANKS_ = "23456789TJQKA", SUITS_ = "cdhs";
+const cardIdx = (card: string): number => RANKS_.indexOf(card[0]!.toUpperCase()) * 4 + SUITS_.indexOf(card[1]!.toLowerCase());
+const comboCards = (idx: number): [number, number] => {
+  let b = 1;
+  while ((b + 1) * b / 2 <= idx) b++;
+  return [idx - (b * (b - 1)) / 2, b];
+};
+/** Every combo of the same 169-class as `idx` (same two ranks, same suitedness), including `idx` itself. */
+const classCombos = (idx: number): number[] => {
+  const [a, b] = comboCards(idx);
+  const ra = Math.floor(a / 4), rb = Math.floor(b / 4), suited = a % 4 === b % 4;
+  const out: number[] = [];
+  for (let s1 = 0; s1 < 4; s1++) for (let s2 = 0; s2 < 4; s2++) {
+    if (ra === rb && s2 <= s1) continue;              // a pair: each unordered suit pair once
+    if (ra !== rb && (s1 === s2) !== suited) continue;
+    const x = ra * 4 + s1, y = rb * 4 + s2;
+    if (x === y) continue;
+    const [lo, hi] = x < y ? [x, y] : [y, x];
+    out.push((hi * (hi - 1)) / 2 + lo);
+  }
+  return out;
+};
 
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
@@ -134,9 +160,20 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // multiplies weights by equilibrium frequencies, and a hero who took a
     // low-frequency line earlier would otherwise vanish from his own range —
     // leaving no strategy to read at his node.
+    // THE FLOOR COVERS HERO'S WHOLE HAND CLASS, NOT ONE COMBO (2026-09-17). GTO Wizard rejects beliefs that
+    // break suit isomorphism on the street's board ("Provided beliefs don't respect suit isomorphism"): lifting
+    // 8c7c alone while 8h7h stays at the chart's weight is exactly that when clubs and hearts are interchangeable
+    // on Ad9s6d. It surfaced with the 6-max charts, whose 2-4% mixes put hero's class under the floor often
+    // (3 of the first 30 postflop spots). Lifting every unblocked combo of the class is suit-symmetric by
+    // construction and changes villain's picture of hero by a rounding error.
     if (spec.heroComboIdx != null) {
       const heroArr = spec.heroSeat === "oop" ? oop : ip;
-      heroArr[spec.heroComboIdx] = Math.max(heroArr[spec.heroComboIdx] ?? 0, 0.05);
+      const boardIdx = new Set(cards.slice(0, 3 + si).map(cardIdx));
+      for (const idx of classCombos(spec.heroComboIdx)) {
+        const [a, b] = comboCards(idx);
+        if (boardIdx.has(a) || boardIdx.has(b)) continue;   // card removal stays absolute
+        heroArr[idx] = Math.max(heroArr[idx] ?? 0, 0.05);
+      }
     }
 
     // Engine labels for this street's tokens (Bet vs Raise by outstanding
@@ -161,10 +198,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     }
     const streetRec = {
       si, street: STREET[si]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
-      solId: null as string | null, created: false, oopIn: r4(oop), ipIn: r4(ip),
+      solId: null as string | null, created: false, solveMs: 0, walkMs: 0, oopIn: r4(oop), ipIn: r4(ip),
     };
     trace.streets.push(streetRec);
 
+    const tSolve = Date.now();
     const ens = await gtowApi.ensureCustomSolution({
       board: streetBoard,
       pot,
@@ -181,6 +219,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     if (ens.created) solves++;
     streetRec.solId = String(ens.solId);
     streetRec.created = !!ens.created;
+    streetRec.solveMs = Date.now() - tSolve;
+    const tWalk = Date.now();
 
     const inv: [number, number] = [0, 0];
     const codes: string[] = [];
@@ -258,6 +298,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         break;
       }
     }
+    streetRec.walkMs = Date.now() - tWalk;
     if (!closed && !isLast) {
       return fail(`street ${STREET[si]} didn't close before the next card (missed action?)`);
     }
