@@ -1,6 +1,8 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
+import { chartFor6max, resolveChart6max, nodeGetter } from "./hrc6max";
+import { preflopArrivalFor } from "./strategies";
 import { missQueue } from "./missQueue";
 import { preflopDb } from "./preflopDb";
 import { gtowApi } from "./gtowApi";
@@ -32,10 +34,13 @@ export interface FastSolveOpts {
   setId?: string;
   depth?: number;
   heroPos?: string | null;
-  /** Which preflop strategy is PRIMARY: "exploit" (pool best-response, when
-   *  EXPLOIT_CHART is armed and the spot is covered) or "chart" (equilibrium).
-   *  Both answers ride in the result either way; this only picks `decision`.
-   *  Default: "exploit" when armed. */
+  /** The DECLARED strategy (services/strategies.ts id). It alone decides which
+   *  preflop piece answers — see preflopArrivalFor. Pass this from any caller that
+   *  has a session; `strategy` below is the low-level override for callers that
+   *  have no strategy to declare (the playthrough tester, offline sweeps). */
+  strategyId?: string | null;
+  /** Low-level override of the preflop piece, for callers with no declared
+   *  strategy. Ignored when `strategyId` is given. */
   strategy?: "exploit" | "chart";
   /** Who is asking — recorded on every stored AI-chain solve ("live" from the
    *  study poller, "replay" from the dashboard's re-solve, else "adhoc"). */
@@ -54,9 +59,9 @@ interface ActionFreq {
 export type FastSolveResult =
   | {
       ok: true;
-      source: "local-preflop" | "hrc-3max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop" | "mes-postflop";
+      source: "local-preflop" | "hrc-3max-preflop" | "hrc-6max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop" | "mes-postflop";
       /** which cascade layer answered. */
-      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "exploit-3max" | "exploit-postflop";
+      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "chart-6max" | "exploit-3max" | "exploit-postflop";
       /** Both preflop strategies when the exploit overlay covers the spot:
        *  the pool best-response and the equilibrium chart's pick. `decision`
        *  equals one of them per `strategyMode`. */
@@ -84,7 +89,13 @@ export type FastSolveResult =
       line: string;
       pos: string | null;
       heroClass: string | null;
+      /** The mix of the piece that ANSWERED — what the panel rolls and the hand
+       *  card draws. Never another piece's distribution. */
       actions: ActionFreq[];
+      /** Preflop only: the equilibrium chart's own mix, kept for the Sources
+       *  comparison (MES-vs-GTO is a question about the pieces, not about the
+       *  action) — the table surfaces never read it. */
+      chartActions?: ActionFreq[];
       decision: WeightedPick | null;
       notInRange?: boolean;
       approx?: boolean;
@@ -149,6 +160,22 @@ const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
     [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
   );
   return present.size === 3 && ["BTN", "SB", "BB"].every((p) => present.has(p));
+};
+
+/** A 5- or 6-handed ring table. Five-handed is the 6-dealt tree with UTG folded — which is how the set was
+ *  solved and how the plan counts it (the rake cap differs by half a blind, second order) — so both shapes
+ *  route to the same charts. */
+const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
+  const six = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+  const present = new Set(
+    [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
+  );
+  // FOUR-HANDED IS THE SAME GAME (2026-09-17, Brady): a short table is the six-seat tree with its early seats
+  // folded - the token walk already pads UTG/HJ as folds - so 4-6 seats all route to the 6-max charts; only the
+  // rake cap differs, which he accepts. Three-handed stays the Zone 3-max set.
+  return present.size >= 4 && present.size <= 6
+    && [...present].every((p) => six.includes(p))
+    && ["BTN", "SB", "BB"].every((p) => present.has(p));
 };
 
 /**
@@ -246,6 +273,7 @@ async function solvePreflop3max(
   heroPos: string | null,
   strategy?: "exploit" | "chart",
   origin?: string,
+  strategyId?: string | null,
 ): Promise<FastSolveResult | null> {
   const chart = chartFor(hand, heroPos);
   const tokens = buildPreflopTokens3max(hand, heroPos);
@@ -279,7 +307,15 @@ async function solvePreflop3max(
   const exploitDecision: WeightedPick | null = exAction
     ? { action: exAction.action, frequency: 100, roll: 100, band: [0, 100] }
     : null;
-  const mode = strategy ?? (process.env.EXPLOIT_CHART ? "exploit" : "chart");
+  // WHICH PIECE ANSWERS is a property of the declared strategy and nothing else.
+  // It used to default to `process.env.EXPLOIT_CHART ? "exploit" : "chart"`, so an
+  // API started without that variable silently answered every preflop spot off the
+  // equilibrium chart while the session still called itself an Exploit strategy.
+  // `strategy` remains only for callers with no strategy to declare (the playthrough
+  // tester, the offline sweeps), which is why the env fallback survives there.
+  const mode = preflopArrivalFor(strategyId)
+    ?? strategy
+    ?? (process.env.EXPLOIT_CHART ? "exploit" : "chart");
   const useExploit = mode === "exploit" && exploitDecision != null;
 
   return {
@@ -293,8 +329,14 @@ async function solvePreflop3max(
     line: line || "(root)",
     pos: walk.node.pos,
     heroClass,
-    actions,
     decision: useExploit ? exploitDecision : chartDecision,
+    // The mix that ships is the ANSWERING piece's own. It used to be the chart's
+    // either way, which is why the panel once rolled the chart's action over an
+    // exploit answer (see studyPoller.rollAction) and why the hand card drew a
+    // "Fold 100%" bar under a "Raise 2.5" headline. The equilibrium mix is still
+    // carried, as chartActions, for the Sources comparison.
+    actions: useExploit ? [{ action: exploitDecision!.action, frequency: 100 }] : actions,
+    chartActions: actions,
     exploitDecision: exploitDecision ?? undefined,
     chartDecision: chartDecision ?? undefined,
     exploitTag: exAction?.tag,
@@ -302,7 +344,7 @@ async function solvePreflop3max(
     notInRange: (heroClass != null && !cell) || undefined,
     approx: walk.repaired.length > 0 || undefined,
     warning: useExploit
-      ? `pool-exploit best response (${exAction!.tag}, derived @100bb${chart.depth !== 100 ? `, state ${chart.depth}bb` : ""}); chart mix shown alongside`
+      ? `pool best response (${exAction!.tag}, derived @100bb${chart.depth !== 100 ? `, state ${chart.depth}bb` : ""})`
       : chart.note,
   };
 }
@@ -669,9 +711,12 @@ async function solvePostflopViaChain(
   depth: number,
   tk: { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string },
   origin?: string,
-  sessionId?: string | null
+  sessionId?: string | null,
+  /** the 6-max ring strategy: both seats' flop-entering ranges come from OUR 6-max chart, never the library */
+  sixMax = false
 ): Promise<{ res: FastSolveResult | null; why: string | null }> {
   const fail = (why: string) => ({ res: null, why });
+  let sixNote: string | null = null;
   const cur = hand.currentNode.street as "flop" | "turn" | "river";
 
   // Villain identification + heads-up pruning — same policy as the street-root
@@ -750,6 +795,19 @@ async function solvePostflopViaChain(
     }
   }
 
+  // THE 6-MAX STRATEGY CONDITIONS ON ITS OWN CHARTS (2026-09-17). The flop is entered from the preflop the
+  // charts prescribe, so both seats' arrival ranges are walked from the very 6-max chart the preflop picker
+  // chooses for this hand (effective stack, live shorts, open size). There is no library behind this branch:
+  // conditioning a NL200 6-max solve on NL500 library ranges is the wrong answer dressed as one.
+  if (!recon && sixMax) {
+    const six = await recon6max(hand, heroPos, heroPosName);
+    if (!six.ok) return fail(six.reason);
+    recon = six.recon;
+    preTokens = six.tokens;
+    seatOrder = undefined;
+    rangeSource = six.id;
+    sixNote = six.note;
+  }
   if (!recon) {
     if (!rangeSource) rangeSource = `6max ${set.gametype}@${depth}`;
     if (!preflopDb.available(set.gametype, depth)) return fail(`no charts for ${set.gametype}@${depth}`);
@@ -832,8 +890,8 @@ async function solvePostflopViaChain(
     solveId,
     rangeSource: rangeSource ?? undefined,
     street: cur,
-    setId: set.id,
-    gametype: set.gametype,
+    setId: sixMax ? "6max-ign200" : set.id,
+    gametype: sixMax && rangeSource ? rangeSource : set.gametype,
     depth,
     line: `${preTokens.join("-")} / ${chain.line}`,
     pos: j.action_solutions?.[0]?.action?.position ?? null,
@@ -842,8 +900,57 @@ async function solvePostflopViaChain(
     decision: notInRange ? null : pickWeightedAction(actions),
     notInRange: notInRange || undefined,
     approx: true,
-    warning: null,
+    warning: sixNote,
   } };
+}
+
+/** The 6-max ring strategy's id (services/strategies.ts) - the one strategy whose every layer is our own solve. */
+const SIX_MAX_STRATEGY = "ign200-ring-6max-equilibrium";
+
+/**
+ * Flop-entering ranges for every seat from the 6-max chart the preflop picker chooses for this hand: the same
+ * chart, the same token walk (buildPreflopTokens pads a short table's early seats as folds), so what the postflop
+ * solve starts from is exactly what the preflop answers said the seats arrive with.
+ */
+async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: string | null): Promise<
+  | { ok: true; recon: Awaited<ReturnType<typeof reconstructFlopRanges>>; id: string; tokens: string[]; note: string | null }
+  | { ok: false; reason: string }
+> {
+  const tokens = buildPreflopTokens(hand, heroPos);
+  if (!preflopClosed(tokens)) return { ok: false, reason: "preflop betting didn't close (missed action?)" };
+  const choice = chartFor6max(hand, heroPos, tokens);
+  const resolved = await resolveChart6max(choice);
+  if (resolved === "unreachable") return { ok: false, reason: "6-max chart server (:8777) unreachable" };
+  if (!resolved) return { ok: false, reason: `no 6-max chart for this state (${choice.id})` };
+  const recon = await reconstructFlopRanges(tokens, async (line) => {
+    const n = await fetchNode(resolved.id, line);
+    return n === "unreachable" ? null : n;
+  }, { heroPos: mergeHeroPos(heroPosName, false) });
+  if (!recon.ok) return { ok: false, reason: `6-max chart ${resolved.id}: ${recon.reason}` };
+  const note = [
+    choice.note,
+    resolved.fellBack ? `no ${choice.id} tree in the set — ranges from ${resolved.id}` : null,
+  ].filter(Boolean).join(" · ");
+  return { ok: true, recon, id: resolved.id, tokens, note: note || null };
+}
+
+/**
+ * Postflop under the 6-max ring strategy: the per-street AI chain, conditioned on our 6-max chart's ranges, and
+ * nothing behind it. A spot the chain cannot solve (multiway flop, unreadable line, dead chart server, AI down)
+ * is a miss said out loud - the street-root and library tiers answer from a different game and are not offered.
+ */
+async function solvePostflop6maxStrategy(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
+  const street = hand.currentNode.street;
+  const set = resolveSet(hand, heroPos, opts.setId);
+  if (!set) return { ok: false, reason: `Unknown solution set: ${opts.setId}`, street };
+  // the effective stack as it stands - the AI solve takes any stack, so no snapping to a library rung
+  const stacks = Object.values(hand.stacks ?? {}).filter((x) => Number.isFinite(x) && x > 0);
+  const heroStack = (hand.stacks ?? {})[hand.heroSeatId];
+  const depth = Math.round(opts.depth ?? (heroStack != null && heroStack > 0 ? heroStack : stacks.length ? Math.min(...stacks) : 100));
+  const tk = buildSpotSolutionTokens(hand, heroPos, false);
+  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, true);
+  if (chain.res) return chain.res;
+  return { ok: false, reason: `6-max strategy postflop: ${chain.why} — no library fallback under this strategy`, street, gametype: "6max-ign200", depth };
 }
 
 /**
@@ -1095,14 +1202,94 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
  * Solve a hand node: preflop from the local charts, postflop from the
  * spot-solution API. Assumes hero is to act (the caller checks `toActIsHero`).
  */
+/**
+ * Preflop from OUR 6-max NL200 ring charts (services/hrc6max.ts) instead of the GTO Wizard NL500 library that
+ * answers 6-handed spots by default at a fraction of our rake (cap 0.6bb there, 2bb here).
+ *
+ * Opt-in per strategy: the set is still being solved, so only a session that declares the 6-max strategy reaches
+ * it, and a state whose tree has not landed yet falls back down the chart picker's preference list, then out to
+ * the library — every step of that said out loud in `warning`, never silently.
+ *
+ * Equilibrium only: there is no 6-handed pool model yet, so unlike the 3-max path there is no exploit overlay.
+ */
+async function solvePreflop6max(
+  hand: ParsedHand,
+  heroPos: string | null,
+  origin?: string,
+  strategyId?: string | null,
+): Promise<FastSolveResult | null> {
+  void origin; void strategyId;
+  const tokens = buildPreflopTokens(hand, heroPos);
+  const choice = chartFor6max(hand, heroPos, tokens);
+  const resolved = await resolveChart6max(choice);
+  if (resolved === "unreachable" || resolved === null) return null;
+
+  const walk = await walk3max(tokens, nodeGetter(resolved.id));
+  if (!walk.ok) {
+    if (walk.unreachable) return null;
+    return { ok: false, reason: `6-max chart ${resolved.id}: ${walk.reason}`, street: "preflop",
+      gametype: resolved.id, depth: choice.depth, line: walk.missingAt ?? "" };
+  }
+
+  const line = walk.tokens.join("-");
+  const heroClass = heroClassOf(hand);
+  const cell = heroClass ? walk.node.cells.find((c) => c.hand === heroClass) : undefined;
+  const actions = cell ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency })) : [];
+  const decision = actions.length ? pickWeightedAction(actions) : null;
+
+  const notes = [
+    choice.note,
+    resolved.fellBack ? `no ${choice.id} tree in the set — answered from ${resolved.id}` : null,
+    walk.repaired.length ? `${walk.repaired.length} action(s) snapped to the tree's sizes` : null,
+  ].filter(Boolean) as string[];
+
+  return {
+    ok: true,
+    source: "hrc-6max-preflop",
+    tier: "chart-6max",
+    street: "preflop",
+    setId: "6max-ign200",
+    gametype: resolved.id,
+    depth: choice.depth,
+    line: line || "(root)",
+    pos: walk.node.pos,
+    heroClass,
+    decision,
+    actions,
+    chartActions: actions,
+    chartDecision: decision ?? undefined,
+    strategyMode: "chart",
+    notInRange: (heroClass != null && !cell) || undefined,
+    approx: true,
+    warning: notes.join(" · "),
+  };
+}
+
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
-  if (hand.currentNode.street !== "preflop") return solvePostflopWithMes(hand, heroPos, opts);
+  // THE 6-MAX RING STRATEGY IS OUR OWN SOLVE END TO END (2026-09-17, Brady). Preflop from the 6-max charts,
+  // postflop from the AI chain conditioned on those charts' ranges; a spot neither can answer is a miss, never a
+  // GTO Wizard library answer - that library is a different game (NL500, a third of the rake, no limps).
+  const sixStrategy = !opts.setId && opts.strategyId === SIX_MAX_STRATEGY;
+  if (hand.currentNode.street !== "preflop") {
+    if (sixStrategy && is6Handed(hand, heroPos)) return solvePostflop6maxStrategy(hand, heroPos, opts);
+    return solvePostflopWithMes(hand, heroPos, opts);
+  }
+  if (sixStrategy && is6Handed(hand, heroPos)) {
+    const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
+    if (six) return six;
+    return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: "",
+      reason: "6-max charts unreachable (chart server :8777 down or the state's tree missing) — the 6-max strategy never answers from the GTO Wizard library" };
+  }
+  if (sixStrategy && !is3Handed(hand, heroPos)) {
+    return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: "",
+      reason: "table shape outside the 6-max strategy (needs 4-6 seats with BTN, SB and BB; 3-handed plays the Zone charts)" };
+  }
 
   // 3-handed preflop answers from the asym HRC charts (unless the caller
   // pinned a set explicitly). A dead chart server falls back to the 6-max
   // walk — wrong tree, but an approximate answer beats none — flagged loudly.
   if (!opts.setId && is3Handed(hand, heroPos)) {
-    const tri = await solvePreflop3max(hand, heroPos, opts.strategy, opts.origin);
+    const tri = await solvePreflop3max(hand, heroPos, opts.strategy, opts.origin, opts.strategyId);
     if (tri) return tri;
     const net = solvePreflop(hand, heroPos, opts);
     if (net.ok) {
