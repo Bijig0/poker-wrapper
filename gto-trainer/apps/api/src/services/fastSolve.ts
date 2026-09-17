@@ -20,6 +20,7 @@ import { solveAiChain } from "./aiChain";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
 import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
 import { mesRiverLookup } from "./mesRiver";
+import { rakeCapCents } from "./profiles";
 
 /**
  * Fast-solver: answer a hand node the clean way — the local crawled preflop
@@ -839,7 +840,14 @@ async function solvePostflopViaChain(
   const streets = cur === "flop" ? [tk.flop] : cur === "turn" ? [tk.flop, tk.turn] : [tk.flop, tk.turn, tk.river];
 
   const t0 = Date.now();
+  // THE SOLVE RAKES LIKE THE GAME (2026-09-17). Without a rake spec the AI custom solve defaults to GTO Wizard's
+  // 5% / 0.6bb cap (their NL500). Ignition NL200 ring is 5% with a cap by players DEALT ($1/$2/$3/$4 at 2/3/4-5/6+,
+  // profiles.rakeCapCents) - 2bb six-handed, more than three times the default. Chart preflop, AI postflop: both
+  // now at the table's own rake under the 6-max strategy.
+  const dealt = Object.keys(hand.positions ?? {}).length + (hand.positions?.[hand.heroSeatId] ? 0 : 1);
+  const rake6 = sixMax ? { pct_of_pot: 5, cap_in_chips: rakeCapCents(Math.max(2, dealt)) / 200, preflop_rake_type: null } : null;
   const chain = await solveAiChain({
+    ...(rake6 ? { rake: rake6 } : {}),
     oopPos,
     ipPos,
     oopRange: buildRangeArray(classWeightsToSpec(oopW)),
