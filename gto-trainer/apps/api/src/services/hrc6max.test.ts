@@ -161,3 +161,25 @@ describe("chartFor6max — effective stack, live seats", () => {
     expect(r.after).toEqual(["BB"]); // BTN acts now; the BB is still to act behind him
   });
 });
+
+describe("chartFor6max — postflop reads stacks as dealt", () => {
+  test("a turn node after a 3x open, call, and a 6bb flop bet still picks the 100bb chart", () => {
+    // hero SB opened 3x (100 → 97 behind), BB called, hero bet 6 on the flop and was called: 91 behind on the turn
+    const t = {
+      heroSeatId: 5, committed: {},
+      positions: { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" } as Record<number, string>,
+      stacks: { 1: 100, 2: 100, 3: 100, 4: 100, 5: 91, 6: 91 } as Record<number, number>,
+      currentNode: { street: "turn" },
+      actions: [
+        { seatId: 5, type: "post-sb", amount: 0.5, street: "preflop", hero: true }, { seatId: 6, type: "post-bb", amount: 1, street: "preflop" },
+        { seatId: 1, type: "fold", street: "preflop" }, { seatId: 2, type: "fold", street: "preflop" }, { seatId: 3, type: "fold", street: "preflop" }, { seatId: 4, type: "fold", street: "preflop" },
+        { seatId: 5, type: "raise", amount: 3, street: "preflop", hero: true }, { seatId: 6, type: "call", amount: 2, street: "preflop" },
+        { seatId: 5, type: "bet", amount: 6, street: "flop", hero: true }, { seatId: 6, type: "call", amount: 6, street: "flop" },
+      ],
+    };
+    const c = chartFor6max(t as any, "SB", ["F", "F", "F", "F", "R3", "C"]);
+    expect(c.id).toBe("ign200_6max_D100_o3");
+    expect(c.effective).toBe(100);
+    expect(c.note ?? "").not.toContain("unreadable");
+  });
+});

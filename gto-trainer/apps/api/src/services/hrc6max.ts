@@ -74,18 +74,44 @@ export interface Chart6Choice {
   relevant?: Seat6 | null;
 }
 
-/** Each seat's stack as DEALT: what is behind plus what it has already put in this hand. */
+/**
+ * Each seat's stack as DEALT: what is behind, plus this round's bet, plus what earlier streets took.
+ *
+ * THE POT HOLDS THE EARLIER STREETS (2026-09-17). `committed` is this betting round only; by the turn a hero who
+ * opened 3x and bet 6 on the flop reads 9bb short, and a 3-bet pot's hero 25bb short - the picker then took him for
+ * a "not reloaded" 75bb player and conditioned the postflop solve on the 75bb chart while his preflop had been
+ * answered from the 100bb one (36% of the walkthrough hands drifted rungs this way). The earlier rounds are rebuilt
+ * from the actions under the feed contract: raise/bet/all-in amounts are the seat's round TOTAL, a call is the top-up.
+ */
 function dealtByPos(hand: ParsedHand, heroPos: string | null): Partial<Record<Seat6, number>> {
   const out: Partial<Record<Seat6, number>> = {};
   const stacks = hand.stacks ?? {};
   const committed = hand.committed ?? {};
+  const earlier: Record<number, number> = {};
+  const ORDER = ["preflop", "flop", "turn", "river"];
+  const upto = ORDER.indexOf(String(hand.currentNode?.street ?? "preflop"));
+  if (upto > 0) {
+    const rounds = new Map<string, Map<number, number>>();
+    for (const a of (hand.actions ?? []) as any[]) {
+      const si = ORDER.indexOf(String(a.street));
+      if (si < 0 || si >= upto) continue;
+      const m = rounds.get(a.street) ?? new Map<number, number>();
+      rounds.set(a.street, m);
+      const seat = a.hero ? hand.heroSeatId : Number(a.seatId);
+      const amt = Number(a.amount ?? 0);
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      if (a.type === "call") m.set(seat, (m.get(seat) ?? 0) + amt);
+      else if (a.type === "post-sb" || a.type === "post-bb" || a.type === "raise" || a.type === "bet" || a.type === "all-in") m.set(seat, Math.max(m.get(seat) ?? 0, amt));
+    }
+    for (const m of rounds.values()) for (const [seat, v] of m) earlier[seat] = (earlier[seat] ?? 0) + v;
+  }
   const put = (pos: string, seatId: number) => {
     const p = pos.toUpperCase() as Seat6;
     if (!SEATS6.includes(p)) return;
     const behind = Number(stacks[seatId]);
     if (!Number.isFinite(behind) || behind < 0) return;
     const inPot = Number(committed[seatId] ?? 0);
-    const total = behind + (Number.isFinite(inPot) ? inPot : 0);
+    const total = behind + (Number.isFinite(inPot) ? inPot : 0) + (earlier[seatId] ?? 0);
     if (total > 0) out[p] = total;
   };
   for (const [seat, pos] of Object.entries(hand.positions ?? {})) put(String(pos), Number(seat));
@@ -190,7 +216,7 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
   const relevant: Seat6 | null = readableAgg ?? deepest?.[0] ?? null;
   const relevantStack = relevant ? oppStack(relevant)! : DEEP6;
   if (!relevant) notes.push("no opponent's stack readable — taken as 100bb");
-  else if (aggressor && !readableAgg && !folded.has(aggressor)) notes.push(`the ${aggressor}'s stack is unreadable — measured against the ${relevant}`);
+  else if (aggressor && aggressor !== me && !readableAgg && !folded.has(aggressor)) notes.push(`the ${aggressor}'s stack is unreadable — measured against the ${relevant}`);
 
   const effective = Math.min(hero, relevantStack);
   const rung = snapRung6(effective);
