@@ -17,7 +17,7 @@ export interface RawNode {
 }
 
 export type ReconstructResult =
-  | { ok: true; ranges: Record<string, Record<string, number>> } // position → (class → weight)
+  | { ok: true; ranges: Record<string, Record<string, number>>; notes?: string[] } // position → (class → weight)
   | { ok: false; reason: string };
 
 /**
@@ -46,6 +46,16 @@ export interface ReconstructOpts {
    * own range must stay conditioned on what hero actually chose.
    */
   heroPos?: string;
+  /**
+   * THE BORROWED-CALLER SHORTCUT (2026-09-17, Brady's call). The HRC 6-max trees cap callers - two cold-callers
+   * after an open, one caller of a 3-bet, two limpers - so a third caller / second 3-bet caller / third limper has
+   * no branch and the walk used to stop there, losing the whole postflop spot. With this on, a call the tree does
+   * not offer is conditioned on the NEAREST node the tree does have: the same seat calling the same price with
+   * one earlier caller folded instead. The borrowed range is a little too wide (calling behind two is tighter
+   * than behind one); pot, stacks and board stay exact; the answer says so in `notes`. Only when no raise follows
+   * in the line - a later squeeze would need the missing branch's own responses.
+   */
+  borrowCaller?: boolean;
 }
 
 const isJamLabel = (l: string) => /all-?in/i.test(l);
@@ -62,25 +72,44 @@ export async function reconstructFlopRanges(
 ): Promise<ReconstructResult> {
   const ranges = new Map<string, Map<string, number>>();
   const lastToken = new Map<string, string>();
-  const out: string[] = []; // snapped prefix so far
+  let out: string[] = []; // snapped prefix so far (the TREE path; after a borrow it has one caller fewer than reality)
+  const walkedPos: string[] = []; // acting position of each token in `out`
+  const notes: string[] = [];
 
   for (let k = 0; k < tokens.length; k++) {
-    const node = await getNode(out.join("-"));
+    let node = await getNode(out.join("-"));
     if (!node) return { ok: false, reason: `preflop node "${out.join("-")}" not in the charts` };
     if (node.terminal) return { ok: false, reason: `preflop node "${out.join("-")}" is terminal before the line ends` };
-    const pos = node.pos;
+    let pos = node.pos;
     if (!pos) return { ok: false, reason: `preflop node "${out.join("-")}" has no acting position` };
 
     let tok = tokens[k]!;
-    const offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
+    let offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
     if (tok !== "F" && !offered.includes(tok)) {
       const s = snapToken(tok, node.actions.map((a) => a.action));
       // accept both a genuine snap and a same-size canonicalization (R2.52 → R2.5)
       if (offered.includes(s.token)) tok = s.token;
+      else if (tok === "C" && opts.borrowCaller && !tokens.slice(k + 1).some((t) => /^R/i.test(t))) {
+        // the borrowed-caller shortcut (see ReconstructOpts): fold the EARLIEST other caller out of the tree path
+        // and read this call at the node that leaves - the same seat, the same price, one caller fewer
+        let borrowed: { node: RawNode; path: string[]; dropped: string } | null = null;
+        for (let j = 0; j < out.length && !borrowed; j++) {
+          if (out[j] !== "C" || walkedPos[j] === pos) continue;
+          const path = out.slice(); path[j] = "F";
+          const alt = await getNode(path.join("-"));
+          if (!alt || alt.terminal || alt.pos !== pos) continue;
+          if (!alt.actions.some((a) => a.token === "C")) continue;
+          borrowed = { node: alt, path, dropped: walkedPos[j]! };
+        }
+        if (!borrowed) return { ok: false, reason: `action "${tok}" not offered at "${out.join("-")}" (no neighbouring node to borrow from)` };
+        notes.push(`${pos}'s call at "${out.join("-")}" is not in the tree (caller cap) — range borrowed from the node with the ${borrowed.dropped}'s call folded`);
+        node = borrowed.node; out = borrowed.path; pos = node.pos!;
+        offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
+      }
       else return { ok: false, reason: `action "${tok}" not offered at "${out.join("-")}"` };
     }
     lastToken.set(pos, tok);
-    out.push(tok);
+    out.push(tok); walkedPos.push(pos);
     if (tok === "F") continue;
 
     const label = node.actions.find((a) => a.token === tok)?.action;
@@ -120,7 +149,7 @@ export async function reconstructFlopRanges(
     if (!m.size) return { ok: false, reason: `reconstructed range for ${p} is empty (uncrawled subtree?)` };
     outRanges[p] = Object.fromEntries(m);
   }
-  return { ok: true, ranges: outRanges };
+  return { ok: true, ranges: outRanges, ...(notes.length ? { notes } : {}) };
 }
 
 /** class→weight map → solver range spec ("AA,AKs:0.8,…"); weight ≥0.9995 emitted bare. */

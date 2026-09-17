@@ -925,11 +925,12 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   const recon = await reconstructFlopRanges(tokens, async (line) => {
     const n = await fetchNode(resolved.id, line);
     return n === "unreachable" ? null : n;
-  }, { heroPos: mergeHeroPos(heroPosName, false) });
+  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true });
   if (!recon.ok) return { ok: false, reason: `6-max chart ${resolved.id}: ${recon.reason}` };
   const note = [
     choice.note,
     resolved.fellBack ? `no ${choice.id} tree in the set — ranges from ${resolved.id}` : null,
+    ...(recon.notes ?? []).map((n) => `RANGE SHORTCUT: ${n}`),
   ].filter(Boolean).join(" · ");
   return { ok: true, recon, id: resolved.id, tokens, note: note || null };
 }
