@@ -253,17 +253,19 @@ class GtowApi {
     return JSON.stringify([
       input.board, input.pot, input.stack, input.startingStreet ?? "FLOP",
       input.oopRange, input.ipRange, input.rake ?? null, input.fixedBets ?? null,
-      input.fixedLevels ?? null,
+      input.fixedLevels ?? null, input.mid?.range ?? null,
     ]);
   }
 
   private buildCustomTree(input: CustomTreeInput) {
-    const auto = (position: "OOP" | "IP") => ({ position, type: "AUTOMATIC" as const, allow_limp: false });
+    // Seats in acting order. A third seat makes it GTO Wizard's 3-player tree ("OOP+1" between the two).
+    const seats: string[] = input.mid ? ["OOP", "OOP+1", "IP"] : ["OOP", "IP"];
+    const auto = (position: string) => ({ position, type: "AUTOMATIC" as const, allow_limp: false });
     // FIXED sizing pins a street's bets to an exact % of pot (validated format:
     // bet_sizes:["90%"]). Used to solve the villain's EXACT off-tree bet when the
-    // nearest library size is too far to snap (see snapToken τ). Applies to both
-    // seats on that street; the string list is what the API expects.
-    const fixed = (position: "OOP" | "IP", pct: string) => ({
+    // nearest library size is too far to snap (see snapToken τ). Applies to every
+    // seat on that street; the string list is what the API expects.
+    const fixed = (position: string, pct: string) => ({
       position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
       bet_sizes: [pct], raise_sizes: [pct], second_raise_sizes: [pct], third_plus_raise_sizes: [pct],
     });
@@ -271,7 +273,7 @@ class GtowApi {
     // the raise over it, lv[2] the re-raise, lv[3]+ beyond. Levels past the
     // supplied list fall back to the last given pct — they only shape the
     // (rarely reached) deeper raise war, not the studied line itself.
-    const fixedPerLevel = (position: "OOP" | "IP", lv: string[]) => {
+    const fixedPerLevel = (position: string, lv: string[]) => {
       const at = (i: number) => lv[Math.min(i, lv.length - 1)] ?? "50%";
       return {
         position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
@@ -279,14 +281,28 @@ class GtowApi {
         second_raise_sizes: [at(2)], third_plus_raise_sizes: [at(3)],
       };
     };
+    // A 3-player tree is FIXED on every street or the API refuses it (422 "Dynamic/Automatic sizings is
+    // currently not supported for 3+ players", probed 2026-09-19), so a wager-free street gets this grid
+    // where a heads-up tree would get AUTOMATIC.
+    const threeWay = (position: string) => ({
+      position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
+      bet_sizes: THREE_WAY_SIZES.bet, raise_sizes: THREE_WAY_SIZES.raise,
+      second_raise_sizes: THREE_WAY_SIZES.raise, third_plus_raise_sizes: THREE_WAY_SIZES.raise,
+    });
     const fb = input.fixedBets;
     const fl = input.fixedLevels;
     const street = (s: "FLOP" | "TURN" | "RIVER") =>
       fl && fl[s]?.length
-        ? { street: s, position_bet_sizes: [fixedPerLevel("OOP", fl[s]!), fixedPerLevel("IP", fl[s]!)] }
+        ? { street: s, position_bet_sizes: seats.map((p) => fixedPerLevel(p, fl[s]!)) }
         : fb && fb[s] != null
-          ? { street: s, position_bet_sizes: [fixed("OOP", `${fb[s]}%`), fixed("IP", `${fb[s]}%`)] }
-          : { street: s, position_bet_sizes: [auto("OOP"), auto("IP")] };
+          ? { street: s, position_bet_sizes: seats.map((p) => fixed(p, `${fb[s]}%`)) }
+          : input.mid
+            ? { street: s, position_bet_sizes: seats.map(threeWay) }
+            : { street: s, position_bet_sizes: seats.map(auto) };
+    const player = (position: string, display: string, range: number[]) => ({
+      position, display_position: display, blind: null, range, stack: input.stack,
+      tournament_instant_bounty: null, tournament_total_bounty: null,
+    });
     return {
       starting_street: input.startingStreet ?? "FLOP",
       pot: input.pot,
@@ -300,8 +316,9 @@ class GtowApi {
         street_bet_sizes: [street("FLOP"), street("TURN"), street("RIVER")],
       },
       players: [
-        { position: "OOP", display_position: input.oopPos ?? "BB", blind: null, range: input.oopRange, stack: input.stack, tournament_instant_bounty: null, tournament_total_bounty: null },
-        { position: "IP", display_position: input.ipPos ?? "CO", blind: null, range: input.ipRange, stack: input.stack, tournament_instant_bounty: null, tournament_total_bounty: null },
+        player("OOP", input.oopPos ?? "BB", input.oopRange),
+        ...(input.mid ? [player("OOP+1", input.mid.pos, input.mid.range)] : []),
+        player("IP", input.ipPos ?? "CO", input.ipRange),
       ],
       tree_operations: [],
       resolving_policy: null,
@@ -350,16 +367,29 @@ class GtowApi {
    * of the same tree — one cloud solve serves a whole street's navigation.
    * Doesn't wait for the solve; `customNode`'s poll does.
    */
+  // ONE CLOUD SOLVE PER TREE, HOWEVER MANY ASK AT ONCE (2026-09-19). The poller's solve, the street warm-up
+  // (fastSolve.warmPostflop6max) and the panel's own feed-spot can all want the same street within a second;
+  // each used to mint its own custom solution — two cloud solves for one spot, both slower (hand 4919059283's
+  // turn: two 19-24 s answers for the same key). Later callers now join the first request.
+  private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean } | { ok: false; status: number; error: string }>>();
+  private nodePending = new Map<string, Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }>>();
+
   async ensureCustomSolution(
     input: CustomTreeInput
   ): Promise<{ ok: true; solId: string; created: boolean } | { ok: false; status: number; error: string }> {
     const key = this.treeKey(input);
     const hit = this.treeSolCache.get(key);
     if (hit) return { ok: true, solId: hit, created: false };
-    const made = await this.createCustomSolution(input);
-    if (!made.ok) return made;
-    this.treeSolCache.set(key, made.solId);
-    return { ok: true, solId: made.solId, created: true };
+    const pending = this.treePending.get(key);
+    if (pending) return pending.then((r) => (r.ok ? { ...r, created: false } : r));
+    const p = (async () => {
+      const made = await this.createCustomSolution(input);
+      if (!made.ok) return made;
+      this.treeSolCache.set(key, made.solId);
+      return { ok: true as const, solId: made.solId, created: true };
+    })().finally(() => this.treePending.delete(key));
+    this.treePending.set(key, p);
+    return p;
   }
 
   /**
@@ -375,6 +405,19 @@ class GtowApi {
     const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
     const hit = this.nodeCache.get(key);
     if (hit) return { ok: true, data: hit, solveSecs: 0, cached: true };
+    const pending = this.nodePending.get(key);
+    if (pending) return pending;   // the same node is already being polled — share it (see treePending)
+    const p = this.customNodeFetch(solId, q, timeoutMs).finally(() => this.nodePending.delete(key));
+    this.nodePending.set(key, p);
+    return p;
+  }
+
+  private async customNodeFetch(
+    solId: string,
+    q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string },
+    timeoutMs: number
+  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }> {
+    const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
 
     const params = new URLSearchParams({
       custom_solution_id: solId,
@@ -446,6 +489,13 @@ class GtowApi {
 }
 
 /** Everything that defines the custom TREE (and so the cloud solve). */
+/**
+ * Bet grid for a 3-player tree's wager-free streets (see buildCustomTree). Two bets and one raise size keep
+ * the cloud solve in the same 3-5 s band as heads-up (probed 2026-09-19: root 3.5 s, nodes 1.3-3.1 s);
+ * a street that DID see a wager is pinned to the observed sizes instead, exactly as heads-up.
+ */
+export const THREE_WAY_SIZES = { bet: ["33%", "75%"], raise: ["60%"] } as const;
+
 export interface CustomTreeInput {
   board: string; // concatenated, e.g. "Ts7h2d"
   pot: number; // bb
@@ -455,6 +505,10 @@ export interface CustomTreeInput {
   ipRange: number[];
   oopPos?: string;
   ipPos?: string;
+  /** A THIRD seat (2026-09-19, Ultra): the middle player of a 3-way flop, GTO Wizard's "OOP+1". Present ⇒ a
+   *  3-player tree, which the API accepts only with FIXED sizes on every street (THREE_WAY_SIZES on a
+   *  wager-free street). Absent ⇒ the heads-up tree exactly as before. Same stack as the other two. */
+  mid?: { pos: string; range: number[] };
   startingStreet?: "FLOP" | "TURN" | "RIVER";
   rake?: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };
   /** Pin each street's bets to an exact % of pot (solve villain's exact sizes). */

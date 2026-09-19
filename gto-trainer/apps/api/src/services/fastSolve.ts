@@ -21,6 +21,10 @@ import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/a
 import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
 import { mesRiverLookup } from "./mesRiver";
 import { rakeCapCents } from "./profiles";
+import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
+import { THREE_WAY_SIZES } from "./gtowApi";
+import type { AiChainSpec } from "./aiChain";
+import { solvePreflopGtowAi, warmPreflopGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER } from "./gtowAiPreflop";
 
 /**
  * Fast-solver: answer a hand node the clean way — the local crawled preflop
@@ -60,9 +64,9 @@ interface ActionFreq {
 export type FastSolveResult =
   | {
       ok: true;
-      source: "local-preflop" | "hrc-3max-preflop" | "hrc-6max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop" | "mes-postflop";
+      source: "local-preflop" | "hrc-3max-preflop" | "hrc-6max-preflop" | "pool-exploit-preflop" | "gtow-api-postflop" | "mes-postflop" | "gtow-ai-preflop";
       /** which cascade layer answered. */
-      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "chart-6max" | "exploit-3max" | "exploit-postflop";
+      tier?: "library-exact" | "library-snap" | "far-snap" | "ai-exact" | "ai-chain" | "chart-3max" | "chart-6max" | "exploit-3max" | "exploit-postflop" | "ai-preflop";
       /** Both preflop strategies when the exploit overlay covers the spot:
        *  the pool best-response and the equilibrium chart's pick. `decision`
        *  equals one of them per `strategyMode`. */
@@ -824,16 +828,50 @@ async function solvePostflopViaChain(
       { heroPos: mergeHeroPos(heroPosName, isHu) });
   }
   if (!recon.ok) return fail(`range reconstruction: ${recon.reason}`);
-  // HU trees seat the dealer as SB; the vision layer may label him BTN.
-  const posName = (p: string) => (isHu && p.toUpperCase() === "BTN" ? "SB" : p);
-  const oopPos = posName(spot.oopPos);
-  const ipPos = posName(spot.ipPos);
   const byPos = (pos: string) => Object.entries(recon.ranges).find(([p]) => p.toUpperCase() === pos.toUpperCase())?.[1];
-  const oopW = byPos(oopPos);
-  const ipW = byPos(ipPos);
-  if (!oopW || !ipW) return fail("reconstructed ranges don't cover both seats");
   const { pot: flopPot, stack: flopStack } = preflopPotStack(preTokens, depth, seatOrder);
   if (flopStack <= 0.5) return fail("preflop line is (near) all-in");
+
+  // The chain's seats. Heads-up: OOP/IP as the exploit spot derived them. THREE-WAY (2026-09-19, Ultra): only
+  // the 6-max strategy's reconstruction lets three reach the flop (recon6max asks for up to 3; every other
+  // path still stops at two, so nothing else can land here with three). Order them by postflop position —
+  // the middle one is GTO Wizard's "OOP+1" — and hero is whichever of the three he is. Every seat is modelled
+  // at the chart-derived effective stack, as heads-up already is: the table's per-seat stacks are "last read"
+  // and may already reflect this street's bet, so rolling them forward would double-count.
+  const flopSeats = Object.keys(recon.ranges);
+  let seatSpec: Pick<AiChainSpec, "oopPos" | "ipPos" | "oopRange" | "ipRange" | "midPos" | "midRange" | "heroSeat">;
+  if (flopSeats.length === 3) {
+    const ordered = [...flopSeats].sort(
+      (a, b) => POSTFLOP_ORDER.indexOf(a.toUpperCase()) - POSTFLOP_ORDER.indexOf(b.toUpperCase())
+    );
+    const heroAt = ordered.findIndex((p) => p.toUpperCase() === heroPosName.toUpperCase());
+    if (heroAt < 0) return fail(`hero (${heroPosName}) is not among the three seats reaching the flop (${ordered.join("/")})`);
+    const arr = (p: string) => buildRangeArray(classWeightsToSpec(recon.ranges[p]!));
+    seatSpec = {
+      oopPos: ordered[0]!, midPos: ordered[1]!, ipPos: ordered[2]!,
+      oopRange: arr(ordered[0]!), midRange: arr(ordered[1]!), ipRange: arr(ordered[2]!),
+      heroSeat: heroAt === 0 ? "oop" : heroAt === 1 ? "mid" : "ip",
+    };
+    const note =
+      `3-way flop — GTO Wizard AI 3-player tree (Ultra): wager-free streets use fixed bets of ` +
+      `${THREE_WAY_SIZES.bet.join("/")} pot and ${THREE_WAY_SIZES.raise.join("/")} raises; ` +
+      `every seat modelled at the effective stack (${flopStack}bb)`;
+    sixNote = sixNote ? `${sixNote} · ${note}` : note;
+  } else {
+    // HU trees seat the dealer as SB; the vision layer may label him BTN.
+    const posName = (p: string) => (isHu && p.toUpperCase() === "BTN" ? "SB" : p);
+    const oopPos = posName(spot.oopPos);
+    const ipPos = posName(spot.ipPos);
+    const oopW = byPos(oopPos);
+    const ipW = byPos(ipPos);
+    if (!oopW || !ipW) return fail("reconstructed ranges don't cover both seats");
+    seatSpec = {
+      oopPos, ipPos,
+      oopRange: buildRangeArray(classWeightsToSpec(oopW)),
+      ipRange: buildRangeArray(classWeightsToSpec(ipW)),
+      heroSeat: spot.heroSeat,
+    };
+  }
 
   const heroCards = hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/i.test(c)).map(SHORT_C);
   const heroComboIdx = heroCards.length === 2 ? comboIndex(heroCards[0]!, heroCards[1]!) : null;
@@ -848,15 +886,11 @@ async function solvePostflopViaChain(
   const rake6 = sixMax ? { pct_of_pot: 5, cap_in_chips: rakeCapCents(Math.max(2, dealt)) / 200, preflop_rake_type: null } : null;
   const chain = await solveAiChain({
     ...(rake6 ? { rake: rake6 } : {}),
-    oopPos,
-    ipPos,
-    oopRange: buildRangeArray(classWeightsToSpec(oopW)),
-    ipRange: buildRangeArray(classWeightsToSpec(ipW)),
+    ...seatSpec,
     flopPot,
     flopStack,
     board: tk.board,
     streets,
-    heroSeat: spot.heroSeat,
     heroComboIdx,
     rangeSource: rangeSource ?? undefined,
   });
@@ -873,7 +907,7 @@ async function solvePostflopViaChain(
     tier: "ai-chain", solveMs: Date.now() - t0,
   };
   if (!chain.ok) {
-    if (chain.trace) solveStore.save({ ...solveMeta, line: null, solves: null, ok: false, why: chain.why }, chain.trace);
+    if (chain.trace && origin !== "warm") solveStore.save({ ...solveMeta, line: null, solves: null, ok: false, why: chain.why }, chain.trace);
     return fail(chain.why);
   }
   const solveId = solveStore.save({ ...solveMeta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace);
@@ -933,7 +967,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   const recon = await reconstructFlopRanges(tokens, async (line) => {
     const n = await fetchNode(resolved.id, line);
     return n === "unreachable" ? null : n;
-  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true });
+  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 3 });
   if (!recon.ok) return { ok: false, reason: `6-max chart ${resolved.id}: ${recon.reason}` };
   const note = [
     choice.note,
@@ -945,8 +979,9 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
 
 /**
  * Postflop under the 6-max ring strategy: the per-street AI chain, conditioned on our 6-max chart's ranges, and
- * nothing behind it. A spot the chain cannot solve (multiway flop, unreadable line, dead chart server, AI down)
+ * nothing behind it. A spot the chain cannot solve (a four-way flop, unreadable line, dead chart server, AI down)
  * is a miss said out loud - the street-root and library tiers answer from a different game and are not offered.
+ * Three-way flops solve since 2026-09-19 (GTO Wizard AI Ultra's 3-player trees, see services/aiChain.ts).
  */
 async function solvePostflop6maxStrategy(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
   const street = hand.currentNode.street;
@@ -1274,6 +1309,60 @@ async function solvePreflop6max(
   };
 }
 
+/**
+ * Pre-touch the 6-max tree a hand will need, as soon as its stacks are known (the poller's
+ * ingest tick fires every second from the deal), so hero's turn never pays the chart
+ * server's cold open. Measured 2026-09-19: a tree's first open on :8777 is 4-10 s, warm
+ * it is 2-120 ms; 8 of 22 chart answers that night took 2.4-7.6 s for exactly this
+ * reason. One touch per hand; the server keeps the last few trees resident.
+ */
+const warmedHands = new Map<string, number>();
+/**
+ * THE STREET IS SOLVED WHEN ITS CARD LANDS, NOT WHEN HERO IS ASKED (2026-09-19). Every postflop street is a
+ * fresh cloud tree (services/aiChain.ts): 1.7 s p50 to create, 3-7 s with the observed size pinned, 9-24 s on
+ * a slow evening (session 220727 hand 4, the "answer only came after the time bank" report). Kicked from the
+ * poller's tick the moment a street opens with no action on it yet, so by hero's turn the street's tree and its
+ * root are cached: hero first to act or facing a check = a node read; facing a bet leaves only the pinned-size
+ * tree to solve. A warm that ends on villain's turn is expected (hero in position) and leaves no trace row;
+ * a warm that reaches hero's node is a real solve, shared with the poller's through gtowApi's pending maps.
+ */
+const warmedStreets = new Map<string, number>();
+export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): void {
+  if (strategyId !== SIX_MAX_STRATEGY) return;
+  const street = hand.currentNode.street;
+  if (street !== "flop" && street !== "turn" && street !== "river") return;
+  if (hand.ended || hand.actions.some((a) => a.hero && a.type === "fold")) return;
+  if (hand.actions.some((a) => a.street === street)) return;   // the street is under way: the real solve owns it
+  if (!is6Handed(hand, heroPos)) return;
+  const id = hand.clientHandId ?? hand.handId;
+  if (id == null) return;
+  const key = `${id}:${street}`;
+  if (warmedStreets.has(key)) return;
+  warmedStreets.set(key, Date.now());
+  if (warmedStreets.size > 60) { const first = warmedStreets.keys().next().value; if (first !== undefined) warmedStreets.delete(first); }
+  const t0 = Date.now();
+  void solvePostflop6maxStrategy(hand, heroPos, { origin: "warm", strategyId }).then((r) => {
+    console.log(`[warm6max] ${key}: ${r.ok ? "hero's root node answered" : "street tree opened"} in ${Date.now() - t0} ms${r.ok ? "" : ` (${r.reason.slice(0, 100)})`}`);
+  }).catch(() => { /* a warm-up never fails anything */ });
+}
+
+export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): void {
+  if (strategyId !== SIX_MAX_STRATEGY || hand.currentNode.street !== "preflop") return;
+  if (!is6Handed(hand, heroPos)) { warmPreflopGtowAi(hand, heroPos); return; }   // 2-5 seats: the AI piece will answer
+  const key = String(hand.clientHandId ?? hand.handId ?? "");
+  if (!key || warmedHands.has(key)) return;
+  warmedHands.set(key, Date.now());
+  if (warmedHands.size > 50) { const first = warmedHands.keys().next().value; if (first !== undefined) warmedHands.delete(first); }
+  const t0 = Date.now();
+  try {
+    const choice = chartFor6max(hand, heroPos, buildPreflopTokens(hand, heroPos));
+    void resolveChart6max(choice).then((r) => {
+      const ms = Date.now() - t0;
+      if (ms > 400) console.log(`[warm6max] hand ${key}: ${r && r !== "unreachable" ? r.id : "no tree"} opened in ${ms} ms`);
+    }).catch(() => { /* a warm-up never fails anything */ });
+  } catch { /* ditto */ }
+}
+
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // THE 6-MAX RING STRATEGY IS OUR OWN SOLVE END TO END (2026-09-17, Brady). Preflop from the 6-max charts,
   // postflop from the AI chain conditioned on those charts' ranges; a spot neither can answer is a miss, never a
@@ -1283,15 +1372,31 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
     if (sixStrategy && is6Handed(hand, heroPos)) return solvePostflop6maxStrategy(hand, heroPos, opts);
     return solvePostflopWithMes(hand, heroPos, opts);
   }
-  if (sixStrategy && is6Handed(hand, heroPos)) {
-    const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
-    if (six) return six;
-    return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: "",
-      reason: "6-max charts unreachable (chart server :8777 down or the state's tree missing) — the 6-max strategy never answers from the GTO Wizard library" };
-  }
-  if (sixStrategy && !is3Handed(hand, heroPos)) {
-    return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: "",
-      reason: "table shape outside the 6-max strategy (needs 4-6 seats with BTN, SB and BB; 3-handed plays the Zone charts)" };
+  if (sixStrategy) {
+    // THE FALLBACK PIECE (2026-09-19, Brady): the charts answer first; whatever they cannot — a table thinned to
+    // 2-5 seats, an off-tree size, a stack past the ladder, a limped pot, a straddle — goes to GTO Wizard AI
+    // preflop (Ultra), built from the actual table (services/gtowAiPreflop.ts). Never the GTO Wizard LIBRARY:
+    // that is a different game (NL500, a third of the rake, no limps).
+    let why: string;
+    if (is6Handed(hand, heroPos)) {
+      const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
+      if (six && six.ok) return six;
+      why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
+    } else {
+      why = `table shape outside the 6-max charts (${Object.keys(hand.positions).length + (hand.positions[hand.heroSeatId] ? 0 : 1)} seats; the charts cover 4-6)`;
+    }
+    const ai = await solvePreflopGtowAi(hand, heroPos, why);
+    if (ai.ok) {
+      return {
+        ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
+        setId: "gtow-ai-preflop", gametype: `gtow-ai · ${ai.shape.n}-handed · ${ai.shape.positions.map((p) => `${p}:${ai.shape.stacks[p]}`).join("/")}`,
+        depth: Math.round(Math.min(...ai.shape.positions.map((p) => ai.shape.stacks[p] ?? 100))),
+        line: ai.line, pos: ai.pos, heroClass: ai.heroClass, actions: ai.actions, decision: ai.decision,
+        warning: ai.note, approx: ai.shape.deadSb || undefined,
+      };
+    }
+    return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
+      reason: `${why}; ${ai.reason}` };
   }
 
   // 3-handed preflop answers from the asym HRC charts (unless the caller

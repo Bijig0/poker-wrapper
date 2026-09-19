@@ -24,6 +24,7 @@ import {
   type LineState,
   type PostflopStreet,
 } from "../utils/buildLinePlan/buildLinePlan";
+import { existsSync } from "node:fs";
 import { pickWeightedAction } from "../utils/pickWeightedAction/pickWeightedAction";
 import { pseudoHarmonicProbLow, bracket } from "../utils/pseudoHarmonic/pseudoHarmonic";
 import {
@@ -36,6 +37,90 @@ import {
 const DEBUG_HOST = "127.0.0.1";
 const DEBUG_PORT = 9222;
 const TARGET_MATCH = "app.gtowizard.com";
+
+/**
+ * Which desktop client to drive. Two builds can sit side by side: the
+ * international one at "GTO Wizard", and the Chinese regional build — renamed
+ * (folder AND exe) to "Chinese GTO Wizard" on 2026-09-18, because Windows takes
+ * a process's name from the exe, so two installs called "GTO Wizard.exe" are
+ * indistinguishable to Get-Process and a relaunch would kill the wrong one.
+ * GTOW_CLIENT_PATH pins a build; otherwise the international one wins when
+ * installed and we fall back to the Chinese build.
+ */
+const CLIENT_CANDIDATES = [
+  "C:\\Program Files\\GTO Wizard\\GTO Wizard.exe",
+  "C:\\Program Files\\Chinese GTO Wizard\\Chinese GTO Wizard.exe",
+];
+
+const CHROME_CANDIDATES = [
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+];
+
+/**
+ * Two ways to hold a GTO Wizard session we can sniff a token from:
+ *  - `electron`: a desktop client exe (what we used until 2026-09-18).
+ *  - `chrome`:   app.gtowizard.com in a DEDICATED Chrome profile. GTO Wizard
+ *                ships no native client — their own "install on PC" is a PWA —
+ *                so this is the fallback when no Electron build is installed.
+ *                A dedicated --user-data-dir is required: Chrome refuses
+ *                --remote-debugging-port on an already-running profile.
+ * `scripts/start_gtow_chrome.ps1` is the manual twin of the chrome branch.
+ */
+type WinClient =
+  | { kind: "electron"; exe: string }
+  | { kind: "chrome"; exe: string; profileDir: string };
+
+function resolveWinClient(): WinClient | null {
+  const pinned = process.env.GTOW_CLIENT_PATH?.trim();
+  if (pinned) return { kind: "electron", exe: pinned };
+  const electron = CLIENT_CANDIDATES.find((c) => existsSync(c));
+  if (electron) return { kind: "electron", exe: electron };
+  const chrome = CHROME_CANDIDATES.find((c) => existsSync(c));
+  if (chrome) {
+    const profileDir =
+      process.env.GTOW_CHROME_PROFILE?.trim() ||
+      `${process.env.LOCALAPPDATA ?? "C:\\Users\\Brady\\AppData\\Local"}\\gtow-cdp-profile`;
+    return { kind: "chrome", exe: chrome, profileDir };
+  }
+  return null;
+}
+
+/** PowerShell selecting ONLY this client's processes — never anything else's. */
+function scopedProcPs(c: WinClient): string {
+  if (c.kind === "electron") {
+    // Windows names a process after its exe, so two installs both called
+    // "GTO Wizard.exe" are indistinguishable by name — match the full path.
+    const name = (c.exe.split("\\").pop() ?? c.exe).replace(/\.exe$/i, "");
+    return `Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${c.exe}' }`;
+  }
+  // NEVER match chrome.exe by name or path: that is the user's entire browser,
+  // and a relaunch would close every tab they have open. The dedicated
+  // --user-data-dir on the command line is the only safe discriminator.
+  return (
+    `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | ` +
+    `Where-Object { $_.CommandLine -and $_.CommandLine -like '*--user-data-dir=${c.profileDir}*' } | ` +
+    `ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }`
+  );
+}
+
+function launchClientPs(c: WinClient): string {
+  if (c.kind === "electron") {
+    return `Start-Process -FilePath '${c.exe}' -ArgumentList '--remote-debugging-port=${DEBUG_PORT}' -WindowStyle Minimized`;
+  }
+  const args = [
+    `--user-data-dir=${c.profileDir}`,
+    `--remote-debugging-port=${DEBUG_PORT}`,
+    // Chrome rejects CDP websockets with an unexpected Origin without this.
+    "--remote-allow-origins=*",
+    "--no-first-run",
+    "--no-default-browser-check",
+    `https://${TARGET_MATCH}/`,
+  ]
+    .map((a) => `'${a}'`)
+    .join(",");
+  return `Start-Process -FilePath '${c.exe}' -ArgumentList ${args} -WindowStyle Minimized`;
+}
 
 interface CdpResult {
   result?: { value?: unknown };
@@ -370,8 +455,23 @@ export class GtowCdp {
       // (scripts/start_gtow_ai.ps1 at the repo root is the manual twin).
       const ps = (cmd: string) =>
         Bun.spawn(["powershell", "-NoProfile", "-Command", cmd], { stdout: "pipe", stderr: "ignore" });
+      // Scope every process lookup to OUR exe's full path: with both the
+      // international and the Chinese build installed, a name-only match would
+      // quit whichever one the user happens to have open.
+      const client = resolveWinClient();
+      if (!client) {
+        return {
+          ok: false,
+          connected: false,
+          relaunched: false,
+          error:
+            "no GTO Wizard client available: install a desktop build at " +
+            "C:\\Program Files\\GTO Wizard, or install Chrome for the dedicated-profile fallback",
+        };
+      }
+      const scoped = scopedProcPs(client);
       const running = async () => {
-        const p = ps("[bool](Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue)");
+        const p = ps(`[bool](${scoped})`);
         await p.exited;
         return (await new Response(p.stdout).text()).trim() === "True";
       };
@@ -379,19 +479,15 @@ export class GtowCdp {
         relaunched = true;
         // Close the main window politely, then force whatever survives.
         const q = ps(
-          "Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | " +
-            "ForEach-Object { $null = $_.CloseMainWindow() }; Start-Sleep -Seconds 3; " +
-            "Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false",
+          `${scoped} | ForEach-Object { $null = $_.CloseMainWindow() }; Start-Sleep -Seconds 3; ` +
+            `${scoped} | Stop-Process -Force -Confirm:$false`,
         );
         await q.exited;
         await this.sleep(1200);
       }
       // Minimized ≈ macOS `open -g`: unattended relaunch must never cover
       // what the user is looking at (Ignition, the study panel) mid-session.
-      ps(
-        "Start-Process -FilePath 'C:\\Program Files\\GTO Wizard\\GTO Wizard.exe' " +
-          `-ArgumentList '--remote-debugging-port=${DEBUG_PORT}' -WindowStyle Minimized`,
-      );
+      ps(launchClientPs(client));
     } else {
       const running = async () => {
         const p = Bun.spawn(["pgrep", "-x", "GTO Wizard"], { stdout: "pipe", stderr: "ignore" });

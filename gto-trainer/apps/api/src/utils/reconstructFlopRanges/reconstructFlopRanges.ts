@@ -56,6 +56,12 @@ export interface ReconstructOpts {
    * in the line - a later squeeze would need the missing branch's own responses.
    */
   borrowCaller?: boolean;
+  /**
+   * How many players may reach the flop. Default 2 — every heads-up tree (the GTO Wizard library, the HU chain).
+   * The 6-max ring strategy passes 3 since 2026-09-19: GTO Wizard AI on Ultra solves 3-way postflop, so a
+   * three-way flop is a solvable spot there rather than a miss. Four or more is nobody's tree.
+   */
+  maxPlayers?: 2 | 3;
 }
 
 const isJamLabel = (l: string) => /all-?in/i.test(l);
@@ -140,8 +146,10 @@ export async function reconstructFlopRanges(
   }
 
   const flopPositions = [...lastToken.entries()].filter(([, t]) => t !== "F").map(([p]) => p);
-  if (flopPositions.length !== 2) {
-    return { ok: false, reason: `${flopPositions.length} players reach the flop — need exactly 2` };
+  const maxPlayers = opts.maxPlayers ?? 2;
+  if (flopPositions.length < 2 || flopPositions.length > maxPlayers) {
+    const need = maxPlayers > 2 ? `2 to ${maxPlayers}` : "exactly 2";
+    return { ok: false, reason: `${flopPositions.length} players reach the flop — need ${need}` };
   }
   const outRanges: Record<string, Record<string, number>> = {};
   for (const p of flopPositions) {

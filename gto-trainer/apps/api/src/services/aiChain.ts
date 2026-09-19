@@ -4,20 +4,27 @@ import {
   matchActionLoose,
   wagerLabelForWalk,
 } from "../utils/aiChainTokens/aiChainTokens";
-import { streetFixedPcts } from "../utils/streetFixedPcts/streetFixedPcts";
+import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
 
 /**
  * Per-street AI chain — the live-play version of routes/aiStudy.ts's walk:
- * one custom solution per street, each rooted with BOTH ranges conditioned on
- * every action already taken (range × the equilibrium frequency of the
- * observed action, combo by combo), pot/stack rolled forward street by
- * street. Off-tree wager sizes never miss: any street containing wagers is
- * solved as a FIXED tree with the observed sizes pinned per raise level, so
- * the tree contains the EXACT line played.
+ * one custom solution per street, each rooted with EVERY seat's range
+ * conditioned on every action already taken (range × the equilibrium
+ * frequency of the observed action, combo by combo), pot/stack rolled forward
+ * street by street. Off-tree wager sizes never miss: any street containing
+ * wagers is solved as a FIXED tree with the observed sizes pinned per raise
+ * level, so the tree contains the EXACT line played.
  *
  * This replaces the "root at the current street with flop-entry ranges"
  * shortcut, whose river answers came from ranges that had never seen the
  * flop/turn action (the K9o 40%-pot river donk of 2026-07-30).
+ *
+ * THREE SEATS (2026-09-19). GTO Wizard AI on Ultra solves 3-player postflop
+ * trees, so a three-way flop is walked the same way: the seats act in
+ * postflop order (OOP, then "OOP+1", then IP), a fold drops a seat for the
+ * rest of the hand, and the street after a fold re-roots a heads-up tree for
+ * the two left. The node itself names the seat to act (game.players[].is_hero)
+ * and the walk refuses to continue when its own rotation disagrees.
  *
  * Trees and nodes are cached inside gtowApi by content key, so the flop tree
  * solved for hero's flop decision is reused verbatim when the turn and river
@@ -28,12 +35,20 @@ import { streetFixedPcts } from "../utils/streetFixedPcts/streetFixedPcts";
 const STREET = ["FLOP", "TURN", "RIVER"] as const;
 const QKEY = ["flopActions", "turnActions", "riverActions"] as const;
 
+/** A seat's role on the flop: "mid" is the OOP+1 seat of a three-way flop. */
+export type SeatLabel = "oop" | "mid" | "ip";
+
 export interface AiChainSpec {
   oopPos: string;
   ipPos: string;
   /** 1326-combo weight arrays ENTERING THE FLOP (chart-reconstructed). */
   oopRange: number[];
   ipRange: number[];
+  /** THE THIRD SEAT of a three-way flop (2026-09-19): GTO Wizard's "OOP+1", acting between OOP and IP. Present ⇒
+   *  every street is a 3-player FIXED tree until someone folds, after which the two left re-root a heads-up tree
+   *  as usual. Absent ⇒ the heads-up chain exactly as before. */
+  midPos?: string;
+  midRange?: number[];
   flopPot: number;
   flopStack: number;
   /** Concatenated short cards for the full observed board ("7cKdAh8c3s"). */
@@ -42,7 +57,7 @@ export interface AiChainSpec {
    *  CURRENT street; the last street's tokens end at hero's pending node. */
   streets: string[][];
   /** Hero's postflop seat and combo index (null = unknown cards). */
-  heroSeat: "oop" | "ip";
+  heroSeat: SeatLabel;
   heroComboIdx: number | null;
   rake?: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };
   /** Which preflop layer the flop-entering ranges came from — e.g.
@@ -64,9 +79,11 @@ export interface ChainTraceNode {
   board: string;
   /** action codes walked on this street before this node */
   codes: string[];
-  actor: 0 | 1;
+  /** index into the street's `players` (0 = first to act) */
+  actor: number;
   potNode: number;
-  invested: [number, number];
+  /** committed this street, one entry per seat of the street's `players` */
+  invested: number[];
   actions: {
     name: string; code: string; betsize: number | null; position: string | null;
     totalFrequency: number | null; totalEv: number | null;
@@ -83,6 +100,11 @@ export interface ChainTrace {
     labels: string[]; fixedLevels: string[] | null; solId: string | null; created: boolean;
     /** wall-clock ms: the cloud solve (ensureCustomSolution) and the node walk on it (since 2026-09-12) */
     solveMs?: number; walkMs?: number;
+    /** The street's seats in acting order and their entering ranges, parallel arrays (since 2026-09-19): a
+     *  three-way flop lists three, the street after a fold lists the two left. oopIn/ipIn are the first and
+     *  last of them, kept for readers of older traces. */
+    players?: string[];
+    rangesIn?: number[][];
     oopIn: number[]; ipIn: number[];
   }[];
   nodes: ChainTraceNode[];
@@ -90,13 +112,14 @@ export interface ChainTrace {
 }
 
 const r4 = (xs: number[] | undefined): number[] => (xs ?? []).map((x) => Math.round((x ?? 0) * 10000) / 10000);
+const r2 = (x: number): number => Math.round(x * 100) / 100;
 
 export type AiChainResult =
   | {
       ok: true;
       /** GTOW node JSON at hero's pending decision (action_solutions et al). */
       data: any;
-      /** Pot in bb at hero's node (street-entering pot + both commits). */
+      /** Pot in bb at hero's node (street-entering pot + every seat's commit). */
       potNode: number;
       /** Stack behind (bb) entering the current street. */
       stackStreet: number;
@@ -132,6 +155,70 @@ const classCombos = (idx: number): number[] => {
   return out;
 };
 
+export type ActionKind = "Fold" | "Check" | "Call" | "Bet" | "Raise" | "AllIn";
+
+/**
+ * The betting state of one postflop street for N seats in acting order: who acts next, what each has put in,
+ * who is still in, and whether the betting has closed. Heads-up this is strict alternation; three-way it is a
+ * rotation that a fold shortens, and "outstanding" is the most any seat has put in rather than "the other's".
+ * A street is closed once no seat still in owes an action since the last wager (everyone checked, or everyone
+ * matched the last bet or left) — or when one seat is left.
+ */
+export class StreetState {
+  /** seat indices still in the hand, acting order */
+  live: number[];
+  /** committed this street, per seat index */
+  inv: number[];
+  private p = 0;
+  private owed: Set<number>;
+
+  constructor(n: number) {
+    this.live = Array.from({ length: n }, (_, i) => i);
+    this.inv = new Array(n).fill(0);
+    this.owed = new Set(this.live);
+  }
+  get actor(): number { return this.live[this.p % this.live.length]!; }
+  get outstanding(): number { return Math.max(...this.inv); }
+  get potIn(): number { return this.inv.reduce((s, x) => s + x, 0); }
+  get closed(): boolean { return this.live.length < 2 || !this.live.some((s) => this.owed.has(s)); }
+
+  /** Apply the acting seat's action; wagers give the raise-to size in bb. */
+  apply(kind: ActionKind, raiseTo?: number): void {
+    const a = this.actor;
+    if (kind === "Fold") {
+      this.live = this.live.filter((s) => s !== a);
+      this.owed.delete(a);
+      // the pointer now indexes the next seat (it wraps when the folder was last)
+      this.p = this.live.length ? this.p % this.live.length : 0;
+      return;
+    }
+    if (kind === "Check") this.owed.delete(a);
+    else if (kind === "Call") { this.inv[a] = this.outstanding; this.owed.delete(a); }
+    else {
+      const to = raiseTo ?? NaN;
+      if (!(to > this.outstanding)) throw new Error(`${kind} to ${to}bb is not over the ${this.outstanding}bb outstanding`);
+      this.inv[a] = to;
+      this.owed = new Set(this.live.filter((s) => s !== a));   // a wager re-opens everyone else
+    }
+    this.p = (this.p + 1) % this.live.length;
+  }
+}
+
+const kindOfLabel = (label: string): ActionKind =>
+  label === "Fold" || label === "Check" || label === "Call" ? label
+    : label.startsWith("AllIn") ? "AllIn" : label.startsWith("Raise") ? "Raise" : "Bet";
+
+/** Who acts on each engine label of a street, for N seats in acting order — the rotation streetFixedPcts needs. */
+export function actorsOf(labels: string[], n: number): number[] {
+  const st = new StreetState(n);
+  const out: number[] = [];
+  for (const l of labels) {
+    out.push(st.actor);
+    st.apply(kindOfLabel(l), wagerBb(l) ?? undefined);
+  }
+  return out;
+}
+
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
   const fail = (why: string): AiChainResult => { trace.result = { ok: false, why }; return { ok: false, why, trace }; };
@@ -143,9 +230,17 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   if (cards.length < 2 + spec.streets.length) {
     return fail("board has fewer cards than streets walked");
   }
+  const threeWay = spec.midPos != null && spec.midRange != null;
+  if (spec.heroSeat === "mid" && !threeWay) return fail("hero is the middle seat but the spec has no middle seat");
 
-  let oop = spec.oopRange.slice();
-  let ip = spec.ipRange.slice();
+  // Seats in acting order. Folds remove a seat for the rest of the hand.
+  type Seat = { pos: string; label: SeatLabel; range: number[] };
+  let seats: Seat[] = [
+    { pos: spec.oopPos, label: "oop", range: spec.oopRange.slice() },
+    ...(threeWay ? [{ pos: spec.midPos!, label: "mid" as const, range: spec.midRange!.slice() }] : []),
+    { pos: spec.ipPos, label: "ip", range: spec.ipRange.slice() },
+  ];
+  const heroPos = seats.find((s) => s.label === spec.heroSeat)!.pos;
   let pot = spec.flopPot;
   let stack = spec.flopStack;
   let solves = 0;
@@ -155,6 +250,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const streetBoard = cards.slice(0, 3 + si).join("");
     const toks = spec.streets[si]!;
     const isLast = si === spec.streets.length - 1;
+    const n = seats.length;
+    const heroIdx = seats.findIndex((s) => s.pos === heroPos);
+    if (heroIdx < 0) return fail("hero is no longer in the hand — nothing to solve");
+    if (n < 2) return fail("only one player left in the hand — no decision to solve");
 
     // Keep hero's actual combo alive in his own entering range: conditioning
     // multiplies weights by equilibrium frequencies, and a hero who took a
@@ -167,7 +266,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // (3 of the first 30 postflop spots). Lifting every unblocked combo of the class is suit-symmetric by
     // construction and changes villain's picture of hero by a rounding error.
     if (spec.heroComboIdx != null) {
-      const heroArr = spec.heroSeat === "oop" ? oop : ip;
+      const heroArr = seats[heroIdx]!.range;
       const boardIdx = new Set(cards.slice(0, 3 + si).map(cardIdx));
       for (const idx of classCombos(spec.heroComboIdx)) {
         const [a, b] = comboCards(idx);
@@ -177,28 +276,33 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     }
 
     // Engine labels for this street's tokens (Bet vs Raise by outstanding
-    // wager; RAI = all-in to the street-entering stack).
+    // wager; RAI = all-in to the street-entering stack), and who acts on each.
     let labels: string[];
+    let actors: number[];
     try {
       labels = wagerLabelForWalk(toks, stack);
+      actors = actorsOf(labels, n);
     } catch (e) {
       return fail(`tokens: ${e instanceof Error ? e.message : e}`);
     }
 
     // Any wager street is solved FIXED with the observed sizes pinned — live
     // capture sizes are essentially never on the AUTOMATIC grid, and a tree
-    // that lacks the size played cannot be walked.
+    // that lacks the size played cannot be walked. (A 3-player tree is FIXED
+    // on every street regardless — gtowApi supplies the grid.)
     let fixedLevels: string[] | null = null;
     if (labels.some((l) => /\(/.test(l))) {
       try {
-        fixedLevels = streetFixedPcts(labels, pot).pcts;
+        fixedLevels = streetFixedPcts(labels, pot, actors).pcts;
       } catch (e) {
         return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
       }
     }
     const streetRec = {
       si, street: STREET[si]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
-      solId: null as string | null, created: false, solveMs: 0, walkMs: 0, oopIn: r4(oop), ipIn: r4(ip),
+      solId: null as string | null, created: false, solveMs: 0, walkMs: 0,
+      players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
+      oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
     };
     trace.streets.push(streetRec);
 
@@ -207,10 +311,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       board: streetBoard,
       pot,
       stack,
-      oopRange: oop,
-      ipRange: ip,
-      oopPos: spec.oopPos,
-      ipPos: spec.ipPos,
+      oopRange: seats[0]!.range,
+      ipRange: seats[n - 1]!.range,
+      oopPos: seats[0]!.pos,
+      ipPos: seats[n - 1]!.pos,
+      ...(n === 3 ? { mid: { pos: seats[1]!.pos, range: seats[1]!.range } } : {}),
       startingStreet: STREET[si]!,
       ...(spec.rake ? { rake: spec.rake } : {}),
       ...(fixedLevels ? { fixedLevels: { [STREET[si]!]: fixedLevels } } : {}),
@@ -222,7 +327,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     streetRec.solveMs = Date.now() - tSolve;
     const tWalk = Date.now();
 
-    const inv: [number, number] = [0, 0];
+    const st = new StreetState(n);
     const codes: string[] = [];
     let closed = false;
 
@@ -234,10 +339,18 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       if (!nq.ok) return fail(`node: ${nq.error}`);
       const sols: any[] = nq.data?.action_solutions ?? [];
       if (!sols.length) return fail("empty node mid-walk");
-      const actor = (codes.length % 2) as 0 | 1; // OOP first, strict alternation
+      const actor = st.actor;
+      // A three-way node names the seat to act; the rotation here must agree or the ranges being conditioned
+      // belong to the wrong seat — refuse rather than answer from a scrambled tree.
+      if (threeWay) {
+        const said = nq.data?.game?.players?.find?.((p: any) => p?.is_hero)?.position;
+        if (said && String(said).toUpperCase() !== seats[actor]!.pos.toUpperCase()) {
+          return fail(`seat rotation disagrees with GTO Wizard at ${STREET[si]}#${ti}: we have ${seats[actor]!.pos} to act, the node says ${said}`);
+        }
+      }
       const nodeRec: ChainTraceNode = {
         si, ti, street: STREET[si]!, board: streetBoard, codes: codes.slice(), actor,
-        potNode: Math.round((pot + inv[0] + inv[1]) * 100) / 100, invested: [inv[0], inv[1]],
+        potNode: r2(pot + st.potIn), invested: st.inv.slice(),
         actions: sols.map((a) => ({
           name: String(a.action?.display_name ?? "?"), code: String(a.action?.code ?? ""),
           betsize: a.action?.betsize != null && a.action.betsize !== "" ? Number(a.action.betsize) : null,
@@ -252,13 +365,12 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       if (ti === labels.length) {
         if (!isLast) break; // street walked through; next street's tree re-roots
         // Hero's pending decision — sanity: it must actually be hero's turn.
-        const heroActor = spec.heroSeat === "oop" ? 0 : 1;
-        if (actor !== heroActor) {
+        if (actor !== heroIdx) {
           return fail("walked line ends on villain's turn (capture missed an action?)");
         }
         nodeRec.heroNode = true;
         const line = [...walked, `(${STREET[si]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
-        const potNode = Math.round((pot + inv[0] + inv[1]) * 100) / 100;
+        const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace };
       }
@@ -272,29 +384,33 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const a = sols[ai]!;
       nodeRec.taken = ai;
       const kind = actionKindOf(a);
+      if (kind === "Fold" && actor === heroIdx) return fail("hero folds inside the line before his node (capture corruption?)");
 
       // Condition the actor's range on the observed action — the step that
       // makes the NEXT street's tree see post-action ranges.
       const strat: number[] = a.strategy ?? [];
-      if (actor === 0) oop = oop.map((w, i) => w * (strat[i] ?? 0));
-      else ip = ip.map((w, i) => w * (strat[i] ?? 0));
+      seats[actor]!.range = seats[actor]!.range.map((w, i) => w * (strat[i] ?? 0));
 
-      const toCall = Math.abs(inv[0] - inv[1]);
-      if (kind === "Fold") return fail("line contains a fold before hero's node");
-      if (kind === "Call") inv[actor] = inv[1 - actor]!;
-      else if (kind !== "Check") inv[actor] = Number(a.action?.betsize ?? inv[1 - actor]!);
+      try {
+        const to = Number(a.action?.betsize);
+        st.apply(kind, Number.isFinite(to) && to > 0 ? to : undefined);
+      } catch (e) {
+        return fail(`${STREET[si]}#${ti}: ${e instanceof Error ? e.message : e}`);
+      }
       codes.push(String(a.action?.code ?? ""));
 
-      closed = (kind === "Call" && toCall > 0) || (kind === "Check" && actor === 1);
-      if (closed) {
+      if (st.closed) {
         if (ti !== labels.length - 1) {
           return fail("street closed but more actions follow (capture corruption?)");
         }
-        const paid = Math.max(inv[0], inv[1]);
-        pot += 2 * paid;
+        const paid = st.outstanding;
+        pot += st.potIn;
         stack -= paid;
+        seats = st.live.map((i) => seats[i]!);   // folded seats leave the hand
         walked.push(`${STREET[si]!.toLowerCase()} ${codes.join("-")}`);
+        if (seats.length < 2) return fail("everyone else folded — no decision left to solve");
         if (stack <= 0.005) return fail("line is all-in — no pending decision to solve");
+        closed = true;
         break;
       }
     }

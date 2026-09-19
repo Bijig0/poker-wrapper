@@ -46,6 +46,34 @@ describe("reconstructFlopRanges", () => {
     const r = await reconstructFlopRanges("F-F-R2.5-F-F-F".split("-"), getNode);
     expect(r.ok).toBe(false);
   });
+
+  it("lets three reach the flop only when the caller allows it (the 6-max strategy's 3-way AI trees)", async () => {
+    // CO opens, BTN calls, SB folds, BB calls → a three-way flop.
+    const three: Record<string, RawNode> = {
+      ...nodes,
+      "F-F-R2.5": {
+        pos: "BTN", terminal: false, actions: [{ action: "Fold", token: "F" }, { action: "Call", token: "C" }],
+        cells: [{ hand: "JTs", actions: { Call: 70, Fold: 30 } }],
+      },
+      "F-F-R2.5-C": { pos: "SB", terminal: false, actions: [{ action: "Fold", token: "F" }, { action: "Call", token: "C" }], cells: [] },
+      "F-F-R2.5-C-F": {
+        pos: "BB", terminal: false, actions: [{ action: "Fold", token: "F" }, { action: "Call", token: "C" }],
+        cells: [{ hand: "T9s", actions: { Call: 60, Fold: 40 } }],
+      },
+    };
+    const get = (l: string): RawNode | null => three[l] ?? null;
+    const line = "F-F-R2.5-C-F-C".split("-");
+    const two = await reconstructFlopRanges(line, get);
+    expect(two.ok).toBe(false);
+    if (!two.ok) expect(two.reason).toContain("3 players reach the flop");
+    const r = await reconstructFlopRanges(line, get, { maxPlayers: 3 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(Object.keys(r.ranges).sort()).toEqual(["BB", "BTN", "CO"]);
+    expect(r.ranges["BTN"]!["JTs"]).toBeCloseTo(0.7);
+    expect(r.ranges["BB"]!["T9s"]).toBeCloseTo(0.6);
+    expect(r.ranges["CO"]!["AKs"]).toBeCloseTo(0.8);
+  });
 });
 
 describe("classWeightsToSpec", () => {

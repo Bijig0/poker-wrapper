@@ -8,9 +8,13 @@ import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buil
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { preflopDb } from "../services/preflopDb";
 import { resolveSet, resolveDepth } from "../services/fastSolve";
-import { answerLog, type LoggedAnswer } from "../services/answerLog";
+import { answerLog, failKindOf, type LoggedAnswer } from "../services/answerLog";
 import { sameAction, heroActionAt } from "../services/adherence";
-import { strategyIdForAnswer, STRATEGIES } from "../services/strategies";
+import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
+import { loadTasks, createTask, updateTask, reorderTasks } from "../services/tasks";
+import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
+import { fxRate, toAudCents } from "../services/fx";
+import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi } from "../services/gtowApi";
@@ -24,6 +28,7 @@ import { fetchNode as hrcFetchNode, chartFor, walk3max, HRC3MAX_BASE } from "../
 import { mesNodeDetail } from "../services/mesPostflop";
 import { solveStore } from "../services/solveStore";
 import { sessionsStore } from "../services/sessionsStore";
+import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { existsSync as fsExists } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
@@ -69,6 +74,7 @@ const openDb = (): Database | null => {
   if (db) return db;
   if (!existsSync(HANDS_DB)) return null;
   db = new Database(HANDS_DB, { readonly: true });
+  db.exec("PRAGMA busy_timeout = 5000"); // the wrapper writes hands.db while we read it
   return db;
 };
 
@@ -287,7 +293,7 @@ export function computeNets(hands: Enriched[]): Map<number, number | null> {
 }
 
 /** clientHandId -> the whole-hand strategy that was live for it, from the
- *  answer log (a hand that got any MES-postflop answer is Apex, else the mode). */
+ *  answer log (a hand that got any MES-postflop answer is the full exploit strategy, else the mode). */
 function strategyByHand(): Map<string, { id: string; name: string }> {
   const byName = new Map(STRATEGIES.map((x) => [x.id, x.name]));
   const out = new Map<string, { id: string; name: string }>();
@@ -296,8 +302,8 @@ function strategyByHand(): Map<string, { id: string; name: string }> {
     const sid = strategyIdForAnswer(a as never);
     if (!h || !sid) continue;
     const cur = out.get(h);
-    // apex wins over the mode-only tag: a postflop MES answer proves both layers
-    if (!cur || (sid === "apex" && cur.id !== "apex")) out.set(h, { id: sid, name: byName.get(sid) ?? sid });
+    // the full exploit wins over the mode-only tag: a postflop MES answer proves both layers
+    if (!cur || (sid === FULL_EXPLOIT_ID && cur.id !== FULL_EXPLOIT_ID)) out.set(h, { id: sid, name: byName.get(sid) ?? sid });
   }
   return out;
 }
@@ -307,11 +313,12 @@ app.get("/hands", async (c) => {
   const enriched = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
   const nets = computeNets(enriched);
   const strat = strategyByHand();
-  // the session's declared strategy wins over the heuristic: Apex is Apex even
-  // on a hand where no MES spot arose (a 5-handed Zone hand, say)
+  // the session's declared strategy wins over the heuristic: a declared exploit session
+  // stays that even on a hand where no MES spot arose (a 5-handed Zone hand, say).
+  // Old sessions carry the pre-2026-09-12 ids (apex, …) — canonicalStrategyId maps them.
   const byName = new Map(STRATEGIES.map((x) => [x.id, x.name]));
   const declared = new Map<string, string>();
-  for (const sess of sessionsStore.list(500)) { const id = sess.config?.strategy; if (typeof id === "string" && byName.has(id)) declared.set(sess.id, id); }
+  for (const sess of sessionsStore.list(500)) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id && byName.has(id)) declared.set(sess.id, id); }
   const strategyOf = (e: Enriched) => {
     const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
     const d = sid ? declared.get(sid) : undefined;
@@ -334,6 +341,8 @@ app.get("/hands", async (c) => {
       // the session this hand belongs to — the same id the Sessions tab uses
       session: sess.byHand.get(e.dbId) ?? null,
       answerStatus: answerStatusOf(e, byCid),
+      // severe integrity faults among THIS hand's answers — normally 0
+      integrityFaults: integrityTotals(e.clientHandId ? byCid.get(e.clientHandId) ?? [] : []).faults,
       summary: e.summary,
       discrepancies: e.discrepancies
         ? {
@@ -351,7 +360,7 @@ app.get("/hands", async (c) => {
  *  was stamped with, else the undeclared gap cluster the Sessions tab shows it
  *  in. Ids match GET /sessions (declared id, or `cluster-<startedAt>`). */
 function sessionsIndex(all: Enriched[]) {
-  type Card = { id: string; declared: boolean; label: string | null; preset: string | null; strategyName: string | null; mode: string | null; startedAt: number | null; endedAt: number | null; stakes: string | null; hands: number };
+  type Card = { id: string; declared: boolean; label: string | null; preset: string | null; strategyName: string | null; startedAt: number | null; endedAt: number | null; stakes: string | null; hands: number };
   const byHand = new Map<number, string>();
   const list: Card[] = [];
   const declared = new Map(sessionsStore.list(500).map((s) => [s.id, s]));
@@ -369,14 +378,14 @@ function sessionsIndex(all: Enriched[]) {
     const cfg: any = s?.config ?? {};
     list.push({
       id: sid, declared: true, label: s?.label ?? null, preset: s?.preset ?? null,
-      strategyName: typeof cfg.strategyName === "string" ? cfg.strategyName : null, mode: typeof cfg.mode === "string" ? cfg.mode : null,
+      strategyName: typeof cfg.strategyName === "string" ? cfg.strategyName : null,
       startedAt: s?.startedAt ?? hs[0]!.playedAt ?? null, endedAt: s?.endedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length,
     });
   }
   for (const hs of sessionsOf(unstamped)) {
     const id = `cluster-${hs[0]!.playedAt}`;
     for (const e of hs) byHand.set(e.dbId, id);
-    list.push({ id, declared: false, label: null, preset: null, strategyName: null, mode: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length });
+    list.push({ id, declared: false, label: null, preset: null, strategyName: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length });
   }
   list.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)); // newest first, like the table
   return { byHand, list };
@@ -386,22 +395,149 @@ function sessionsIndex(all: Enriched[]) {
  *  (Hands table, session page, Analytics link-through). "no-decision" means the
  *  archive shows no hero action beyond the blinds — often because the capture
  *  stopped before hero's own last action — so read it as "no decision SEEN". */
-export type AnswerStatus = { status: "answered" | "failed" | "missing" | "no-decision" | "unknown"; answered: number; failed: number; reason: string | null };
-function answersByHand(rows: LoggedAnswer[]): Map<string, LoggedAnswer[]> {
+export type DecisionRef = {
+  index: number; street: string | null;
+  /** for an UNANSWERED decision: why, from the last failed row at this node
+   *  (services/answerLog FAIL_KINDS; null when nothing was ever logged here) */
+  kind: string | null; reason: string | null;
+};
+export type AnswerStatus = {
+  status: "answered" | "partial" | "failed" | "missing" | "no-decision" | "unknown";
+  /** rows, not decisions: the poller logs one every time the state changes */
+  answered: number; failed: number; reason: string | null;
+  /** hero's decisions in this hand, and how many of them an answer covered */
+  decisions: number; covered: number; uncovered: DecisionRef[];
+  /** answers keyed to a node that was never one of hero's decisions */
+  stray: number;
+};
+
+/** The last element of `decision_key` is hero's action index in the archived
+ *  hand — the only thing that joins an answer to the decision it answered. */
+export function decisionIndexOf(a: LoggedAnswer): number | null {
+  try {
+    const k = JSON.parse(a.decision_key ?? "");
+    const last = Array.isArray(k) ? k[k.length - 1] : null;
+    return typeof last === "number" ? last : null;
+  } catch { return null; }
+}
+
+/** Hero's own decisions in the archive: every hero action bar the blinds. */
+function heroDecisionsOf(e: Enriched): DecisionRef[] {
+  const acts = e.hand.actions as { hero?: boolean; type?: string; street?: string }[];
+  const out: DecisionRef[] = [];
+  acts.forEach((a, index) => {
+    if (a.hero && a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post-ante") out.push({ index, street: a.street ?? null, kind: null, reason: null });
+  });
+  return out;
+}
+
+/**
+ * Which of hero's decisions actually got an answer.
+ *
+ * Counting ROWS says nothing about coverage: the poller logs a row on every
+ * state change, so one decision often has several, and a failed capture can be
+ * keyed to a node hero never acted on (a stale read — hand #353's river failure
+ * is keyed to the turn). Only the join by decision index answers "which nodes
+ * were left unanswered", and duplicates collapse on it.
+ *
+ * The denominator is the archive's hero actions UNION the indices that produced
+ * a REAL answer: the archive sometimes stops before hero's last action (see
+ * answersFor), and an answered node is proof the decision existed whatever the
+ * archive kept. Failed rows never widen it — they are exactly the ones that can
+ * point at a node that was never hero's to act on.
+ */
+export function coverageOf(e: Enriched, rows: LoggedAnswer[]) {
+  const byIndex = new Map<number, DecisionRef>(heroDecisionsOf(e).map((d) => [d.index, d]));
+  const answeredIdx = new Set<number>(), allIdx = new Set<number>();
+  for (const a of rows) {
+    const i = decisionIndexOf(a);
+    if (i == null) continue;
+    allIdx.add(i);
+    if (a.text != null) answeredIdx.add(i);
+  }
+  for (const i of answeredIdx) if (!byIndex.has(i)) byIndex.set(i, { index: i, street: null, kind: null, reason: null });
+  const decisions = [...byIndex.values()].sort((a, b) => a.index - b.index);
+  const uncovered = decisions.filter((d) => !answeredIdx.has(d.index)).map((d) => {
+    // the last thing that went wrong at this node, when anything was logged at all
+    const last = rows.filter((a) => a.text == null && decisionIndexOf(a) === d.index).pop();
+    return last ? { ...d, kind: last.fail_kind ?? failKindOf(last.fail_reason), reason: last.fail_reason } : d;
+  });
+  const stray = [...allIdx].filter((i) => !byIndex.has(i)).length;
+  return { decisions, covered: decisions.length - uncovered.length, uncovered, stray };
+}
+
+/** Session/scope totals of the same join. */
+function coverageTotals(hs: Enriched[], byCid: Map<string, LoggedAnswer[]>) {
+  let decisions = 0, covered = 0, stray = 0, unansweredNodes = 0, partialHands = 0;
+  // why the unanswered ones were unanswered, counted per DECISION
+  const kinds: Record<string, number> = {};
+  for (const e of hs) {
+    const cov = coverageOf(e, e.clientHandId ? byCid.get(e.clientHandId) ?? [] : []);
+    decisions += cov.decisions.length; covered += cov.covered; stray += cov.stray;
+    unansweredNodes += cov.uncovered.length;
+    for (const u of cov.uncovered) { const k = u.kind ?? "unexplained"; kinds[k] = (kinds[k] ?? 0) + 1; }
+    if (cov.uncovered.length && cov.covered) partialHands++;
+  }
+  return { decisions, covered, stray, unansweredNodes, partialHands, kinds, coveredPct: decisions ? Math.round((1000 * covered) / decisions) / 10 : null };
+}
+/**
+ * Does one logged answer agree with its own evidence? (services/answerIntegrity.ts)
+ * Computed at READ time from the row's own columns rather than stamped at write
+ * time, so rows logged before the check existed are audited too — including the
+ * 2026-09-14 fault this was built for. `checkable` is false for answers logged
+ * before decision_json existed: those are UNCHECKED, never "clean".
+ */
+export function integrityOf(a: { pick?: string | null; roll?: number | null; decision_json?: string | null }) {
+  let actions: { action: string; frequency: number }[] | null = null;
+  try { const p = JSON.parse(a.decision_json ?? "null"); if (Array.isArray(p) && p.length) actions = p; } catch { /* legacy row */ }
+  const spec = { pick: a.pick ?? null, roll: a.roll ?? null, actions };
+  return { checkable: isCheckable(spec), faults: checkAnswerIntegrity(spec) };
+}
+
+/** Severe integrity faults over a set of logged answers, with what could not be checked. */
+export function integrityTotals(rows: { pick?: string | null; roll?: number | null; decision_json?: string | null; text?: string | null }[]) {
+  let faults = 0, servedOffMix = 0, rollMismatch = 0, checked = 0, unchecked = 0;
+  for (const a of rows) {
+    if (a.text == null) continue; // a failed answer has nothing to disagree with
+    const v = integrityOf(a);
+    if (!v.checkable) { unchecked++; continue; }
+    checked++;
+    for (const f of v.faults) {
+      faults++;
+      if (f.kind === "served-off-mix") servedOffMix++; else rollMismatch++;
+    }
+  }
+  return { faults, servedOffMix, rollMismatch, checked, unchecked };
+}
+
+export function answersByHand(rows: LoggedAnswer[]): Map<string, LoggedAnswer[]> {
   const m = new Map<string, LoggedAnswer[]>();
   for (const a of rows) if (a.client_hand_id) { const xs = m.get(a.client_hand_id); if (xs) xs.push(a); else m.set(a.client_hand_id, [a]); }
   return m;
 }
 function answerStatusOf(e: Enriched, byCid: Map<string, LoggedAnswer[]>): AnswerStatus {
-  if (!e.clientHandId) return { status: "unknown", answered: 0, failed: 0, reason: "the hand has no site id, so answers cannot be joined to it" };
+  const none = { decisions: 0, covered: 0, uncovered: [] as DecisionRef[], stray: 0 };
+  if (!e.clientHandId) return { status: "unknown", answered: 0, failed: 0, reason: "the hand has no site id, so answers cannot be joined to it", ...none };
   const rows = byCid.get(e.clientHandId) ?? [];
-  const answered = rows.filter((a) => a.text != null).length, failed = rows.length - answered;
-  if (answered) return { status: "answered", answered, failed, reason: null };
-  if (failed) return { status: "failed", answered, failed, reason: rows.find((a) => a.text == null)?.fail_reason ?? "solve failed" };
+  const answered = rows.filter((a) => a.text != null).length;
+  // A no-probe row is the reconciler's note that nobody ASKED here; it is not a
+  // solve that failed, and counting it as one turned "no answer" into "failed ×1".
+  const fails = rows.filter((a) => a.text == null && (a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe");
+  const failed = fails.length;
+  const cov = coverageOf(e, rows);
+  const base = { answered, failed, decisions: cov.decisions.length, covered: cov.covered, uncovered: cov.uncovered, stray: cov.stray };
+  // PARTIAL is the case a hand-level status used to hide: one good answer made the
+  // whole hand "answered" however many of its nodes went unanswered (hand #353).
+  if (cov.covered && cov.uncovered.length) {
+    const where = cov.uncovered.map((d) => d.street ?? `action ${d.index}`).join(", ");
+    return { ...base, status: "partial", reason: `${cov.uncovered.length} of ${cov.decisions.length} decisions never answered: ${where}` };
+  }
+  if (cov.covered) return { ...base, status: "answered", reason: null };
+  if (failed) return { ...base, status: "failed", reason: fails[0]?.fail_reason ?? "solve failed" };
   const acted = (e.hand.actions as { hero?: boolean; type?: string }[]).some((a) => a.hero && a.type !== "post-sb" && a.type !== "post-bb");
   return acted
-    ? { status: "missing", answered, failed, reason: "hero acted but no answer was logged" }
-    : { status: "no-decision", answered, failed, reason: "no hero action in the archive beyond the blinds — the capture may have stopped before it" };
+    ? { ...base, status: "missing", reason: "hero acted but no answer was logged" }
+    : { ...base, status: "no-decision", reason: "no hero action in the archive beyond the blinds — the capture may have stopped before it" };
 }
 
 // ------------------------------------------------------------ analytics (scoped)
@@ -476,6 +612,26 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
   };
   const known = hs.map((h) => nets.get(h.dbId)).filter((x): x is number => x != null);
   const netBb = Math.round(known.reduce((s, x) => s + x, 0) * 100) / 100;
+  // RAKE PAID — the site's schedule on the pots hero won (services/profiles.ts
+  // rakePaidBb). `unseen` is the part computeNets never saw: an uncontested win
+  // after a flop is priced off the displayed, pre-rake pot, so net-after-rake
+  // takes it off; a showdown win came from the stack delta and already has it.
+  let rakeBb = 0, rakeUnseenBb = 0, rakeCents = 0, rakedHands = 0;
+  for (const h of hs) {
+    const bb = bbUsdOf(h.stakes);
+    // the July-era rows lost their board, so sawFlop AND wentToShowdown are both false on
+    // hands the client itself settled "with (Two pair…)": the result text is the one
+    // showdown signal that survived, and a showdown is a raked pot
+    const resultText = String((h.raw as any)?.result?.text ?? "");
+    const showdownByText = / with \(/.test(resultText);
+    // the archive says who won in two places that survive a lost board: the hand's
+    // heroWon flag and the client's own "★ wins …" line
+    const won = (h.raw as any)?.heroWon === true || /^★\s*wins/.test(resultText);
+    const r = rakePaidBb({ ...h.summary, wentToShowdown: h.summary.wentToShowdown || showdownByText, won }, bb, nets.get(h.dbId) ?? null);
+    if (r.bb > 0) { rakedHands++; rakeBb += r.bb; if (r.unseen) rakeUnseenBb += r.bb; if (bb != null) rakeCents += Math.round(r.bb * bb * 100); }
+  }
+  rakeBb = Math.round(rakeBb * 100) / 100; rakeUnseenBb = Math.round(rakeUnseenBb * 100) / 100;
+  const netAfterRakeBb = Math.round((netBb - rakeUnseenBb) * 100) / 100;
   const mean = known.length ? netBb / known.length : 0;
   const sd = known.length > 1 ? Math.sqrt(known.reduce((s, x) => s + (x - mean) ** 2, 0) / (known.length - 1)) : null;
   const disc = { major: 0, minor: 0, info: 0 };
@@ -497,6 +653,15 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
     netBb,
     netKnownHands: known.length,
     bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
+    // rake paid on won pots: total, in money, per 100 hands, and the net once the
+    // part the recorded net never saw is taken off
+    rakePaidBb: rakeBb,
+    rakePaidCents: rakeCents,
+    rakedHands,
+    rakePer100: n ? Math.round((10000 * rakeBb) / n) / 100 : null,
+    rakeUnseenBb,
+    netAfterRakeBb,
+    bb100AfterRake: known.length ? Math.round((10000 * netAfterRakeBb) / known.length) / 100 : null,
     // 100 × SE of the per-hand mean, over the hands whose net is known
     bb100Se: sd != null && known.length ? Math.round((10000 * sd) / Math.sqrt(known.length)) / 100 : null,
     discrepancies: disc,
@@ -513,12 +678,17 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
 function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
   const byCid = new Map<string, Enriched>();
   for (const e of hs) if (e.clientHandId) byCid.set(e.clientHandId, e);
+  // answers that disagreed with their own mix — a bug counter, normally 0, kept
+  // apart from the discrepancy audit so it can never be buried in it
+  const integrity = integrityTotals(rows.filter((a) => a.client_hand_id && byCid.has(a.client_hand_id)));
   let answers = 0, failed = 0;
   const tiers: Record<string, { n: number; lat: number[] }> = {};
   const last = new Map<string, LoggedAnswer>(); // decision → its last answered row
   for (const a of rows) {
     if (!a.client_hand_id || !byCid.has(a.client_hand_id)) continue;
-    if (a.text == null) { failed++; continue; }
+    // a no-probe row records a decision nobody asked about — counting it as a
+    // failed solve would blame the solver for a capture fault
+    if (a.text == null) { if ((a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe") failed++; continue; }
     answers++;
     const t = (tiers[a.tier ?? "unknown"] ??= { n: 0, lat: [] });
     t.n++;
@@ -540,8 +710,13 @@ function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
     }
   }
   const pct = (xs: number[], p: number) => xs.length ? xs.slice().sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))]! : null;
+  // Coverage is per DECISION (services/answerLog decision_key ↔ hero's action index),
+  // not per hand: a hand with three answers and an unanswered river is not covered.
+  const cov = coverageTotals(hs, answersByHand(rows.filter((a) => a.client_hand_id && byCid.has(a.client_hand_id))));
   return {
-    answers, failed, decisions: last.size,
+    answers, failed, answeredDecisions: last.size,
+    decisions: cov.decisions, decisionsCovered: cov.covered, decisionsCoveredPct: cov.coveredPct,
+    unansweredNodes: cov.unansweredNodes, partialHands: cov.partialHands, strayCaptures: cov.stray, failKinds: cov.kinds,
     handsAnswered: handsAnswered.size,
     handsAnsweredPct: hs.length ? Math.round((1000 * handsAnswered.size) / hs.length) / 10 : null,
     withBoth, disagreements, graded, followed,
@@ -549,6 +724,7 @@ function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
     disagreementRate: withBoth ? Math.round((1000 * disagreements) / withBoth) / 10 : null,
     followedMesWhenDisagreed: disagreements ? Math.round((1000 * followedMesWhenDisagreed) / disagreements) / 10 : null,
     tiers: Object.fromEntries(Object.entries(tiers).map(([k, x]) => [k, { n: x.n, p50: pct(x.lat, 50), p90: pct(x.lat, 90) }])),
+    integrity,
   };
 }
 
@@ -635,7 +811,7 @@ app.get("/hand/:dbId", async (c) => {
       const k = JSON.parse(a.decision_key ?? "null");
       if (Array.isArray(k) && Number.isFinite(Number(k[4]))) actionIndex = Number(k[4]);
     } catch { /* legacy row */ }
-    return { ...a, actionIndex, source: a.source ?? sourceForTier(a.tier) };
+    return { ...a, actionIndex, source: a.source ?? sourceForTier(a.tier), integrity: integrityOf(a) };
   });
   // Session: the gap cluster this hand sits in (same rule as Analytics), and
   // the debug recording that holds it when one exists.
@@ -936,7 +1112,7 @@ app.get("/answer-node", async (c) => {
     .map((a) => {
       let actionIndex: number | null = null;
       try { const k = JSON.parse(a.decision_key ?? "null"); if (Array.isArray(k)) actionIndex = Number(k[4]); } catch { /* legacy */ }
-      return { ...a, actionIndex, source: a.source ?? sourceForTier(a.tier) };
+      return { ...a, actionIndex, source: a.source ?? sourceForTier(a.tier), integrity: integrityOf(a) };
     })
     .filter((a) => (answerId != null ? a.id === answerId : a.actionIndex === upto && a.text))
     .pop() ?? null;
@@ -1065,43 +1241,68 @@ const tv = (a: number[], b: number[]): number => {
   return Math.round((d / 2) * 1000) / 1000;
 };
 
+/** A street's seats in acting order and their entering ranges. Traces since 2026-09-19 carry them (`players` /
+ *  `rangesIn`, two or three seats); older ones have oopIn/ipIn only. */
+const traceSeats = (spec: any, st: any): { players: string[]; ranges: number[][] } => ({
+  players: st?.players ?? [spec.oopPos, spec.ipPos],
+  ranges: (st?.rangesIn ?? [st?.oopIn ?? [], st?.ipIn ?? []]).map((r: number[]) => r.slice()),
+});
+const seatLabel = (i: number, n: number): "oop" | "mid" | "ip" => (i === 0 ? "oop" : i === n - 1 ? "ip" : "mid");
+/** Ranges keyed the way the viewer reads them: oop / ip, plus mid on a three-way street. */
+const keyedRanges = (players: string[], ranges: number[][]) => ({
+  oop: classAgg(ranges[0] ?? []),
+  ip: classAgg(ranges[ranges.length - 1] ?? []),
+  ...(players.length === 3 ? { mid: classAgg(ranges[1] ?? []) } : {}),
+});
+
 /** Walk a stored trace and produce the per-node view the dashboard renders. */
 function expandTrace(trace: any) {
   const spec = trace.spec ?? {};
   const heroIdx: number | null = spec.heroComboIdx ?? null;
   const heroCombo = heroIdx != null ? COMBOS[heroIdx]?.hand ?? null : null;
-  const heroActor = spec.heroSeat === "oop" ? 0 : 1;
-  const posOf = (actor: number) => (actor === 0 ? spec.oopPos : spec.ipPos) ?? (actor === 0 ? "OOP" : "IP");
-  const streets = (trace.streets ?? []).map((st: any) => ({
-    si: st.si, street: st.street, board: st.board, potIn: st.potIn, stackIn: st.stackIn, labels: st.labels,
-    fixedLevels: st.fixedLevels, solId: st.solId, created: st.created,
-    oopIn: classAgg(st.oopIn ?? []), ipIn: classAgg(st.ipIn ?? []),
-    oopCombos: (st.oopIn ?? []).reduce((s: number, x: number) => s + x, 0), ipCombos: (st.ipIn ?? []).reduce((s: number, x: number) => s + x, 0),
-  }));
+  const heroPos: string | null = spec.heroSeat === "oop" ? spec.oopPos : spec.heroSeat === "mid" ? spec.midPos : spec.ipPos;
+  const sum = (xs: number[] | undefined) => (xs ?? []).reduce((s: number, x: number) => s + x, 0);
+  const streets = (trace.streets ?? []).map((st: any) => {
+    const { players, ranges } = traceSeats(spec, st);
+    return {
+      si: st.si, street: st.street, board: st.board, potIn: st.potIn, stackIn: st.stackIn, labels: st.labels,
+      fixedLevels: st.fixedLevels, solId: st.solId, created: st.created,
+      // per-street timing (recorded since 2026-09-12): the cloud solve itself and the node walk
+      solveMs: st.solveMs ?? null, walkMs: st.walkMs ?? null,
+      players,
+      oopIn: classAgg(ranges[0] ?? []), ipIn: classAgg(ranges[ranges.length - 1] ?? []),
+      oopCombos: sum(ranges[0]), ipCombos: sum(ranges[ranges.length - 1]),
+      ...(players.length === 3 ? { midIn: classAgg(ranges[1] ?? []), midCombos: sum(ranges[1]) } : {}),
+    };
+  });
   // replay the conditioning within each street from the stored entering ranges
-  const cur: Record<number, { oop: number[]; ip: number[] }> = {};
+  const cur: Record<number, { players: string[]; ranges: number[][] }> = {};
   const nodes = (trace.nodes ?? []).map((n: any, i: number) => {
     const st = (trace.streets ?? []).find((x: any) => x.si === n.si);
-    if (!cur[n.si]) cur[n.si] = { oop: (st?.oopIn ?? []).slice(), ip: (st?.ipIn ?? []).slice() };
+    if (!cur[n.si]) cur[n.si] = traceSeats(spec, st);
     const r = cur[n.si]!;
-    const actorRange = n.actor === 0 ? r.oop : r.ip;
+    const nSeats = r.players.length;
+    const actorRange: number[] = r.ranges[n.actor] ?? [];
+    const heroAt = heroPos ? r.players.findIndex((p) => String(p).toUpperCase() === String(heroPos).toUpperCase()) : -1;
     const strategies: number[][] = (n.actions ?? []).map((a: any) => a.strategy ?? []);
     const actorStrategy = classStrategy(actorRange, strategies);
-    const rangesIn = { oop: classAgg(r.oop), ip: classAgg(r.ip) };
-    const heroInActor = n.actor === heroActor && heroIdx != null;
+    const rangesIn = keyedRanges(r.players, r.ranges);
+    const isHero = n.actor === heroAt;
+    const heroInActor = isHero && heroIdx != null;
     const heroRow = heroInActor
       ? (n.actions ?? []).map((a: any) => ({ name: a.name, betsize: a.betsize, p: Math.round((a.strategy?.[heroIdx!] ?? 0) * 1000) / 10, ev: a.evs?.[heroIdx!] ?? null }))
       : null;
-    const heroWeightIn = heroIdx != null ? (n.actor === heroActor ? actorRange[heroIdx] ?? 0 : (heroActor === 0 ? r.oop : r.ip)[heroIdx] ?? 0) : null;
-    let rangesOut: { oop: any; ip: any } | null = null;
+    const heroWeightIn = heroIdx != null && heroAt >= 0 ? (r.ranges[heroAt]?.[heroIdx] ?? 0) : null;
+    let rangesOut: ReturnType<typeof keyedRanges> | null = null;
     if (n.taken != null) {
       const strat = strategies[n.taken] ?? [];
-      const next = actorRange.map((w, ci) => w * (strat[ci] ?? 0));
-      if (n.actor === 0) r.oop = next; else r.ip = next;
-      rangesOut = { oop: classAgg(r.oop), ip: classAgg(r.ip) };
+      r.ranges[n.actor] = actorRange.map((w, ci) => w * (strat[ci] ?? 0));
+      rangesOut = keyedRanges(r.players, r.ranges);
     }
     return {
-      i, si: n.si, ti: n.ti, street: n.street, board: n.board, codes: n.codes, actor: n.actor === 0 ? "oop" : "ip", actorPos: posOf(n.actor),
+      i, si: n.si, ti: n.ti, street: n.street, board: n.board, codes: n.codes,
+      actor: seatLabel(n.actor, nSeats), actorPos: r.players[n.actor] ?? (n.actor === 0 ? "OOP" : "IP"),
+      isHero, heroSeatLabel: heroAt >= 0 ? seatLabel(heroAt, nSeats) : null, players: r.players,
       potNode: n.potNode, invested: n.invested, heroNode: !!n.heroNode,
       actions: (n.actions ?? []).map((a: any) => ({ name: a.name, code: a.code, betsize: a.betsize, totalFrequency: a.totalFrequency, totalEv: a.totalEv })),
       taken: n.taken, takenName: n.taken != null ? n.actions?.[n.taken]?.name ?? null : null,
@@ -1110,9 +1311,11 @@ function expandTrace(trace: any) {
     };
   });
   return {
-    spec: { oopPos: spec.oopPos, ipPos: spec.ipPos, flopPot: spec.flopPot, flopStack: spec.flopStack, board: spec.board, streets: spec.streets,
+    spec: { oopPos: spec.oopPos, ipPos: spec.ipPos, midPos: spec.midPos ?? null, heroPos, flopPot: spec.flopPot, flopStack: spec.flopStack,
+            board: spec.board, streets: spec.streets,
             heroSeat: spec.heroSeat, heroCombo, heroComboIdx: heroIdx, rake: spec.rake ?? null, rangeSource: spec.rangeSource ?? null,
-            oopRange: classAgg(spec.oopRange ?? []), ipRange: classAgg(spec.ipRange ?? []) },
+            oopRange: classAgg(spec.oopRange ?? []), ipRange: classAgg(spec.ipRange ?? []),
+            ...(spec.midRange ? { midRange: classAgg(spec.midRange) } : {}) },
     streets, nodes, result: trace.result ?? null,
   };
 }
@@ -1164,18 +1367,16 @@ app.get("/solve-compare", (c) => {
   const byKey = new Map<string, any>(eb.nodes.map((n: any) => [key(n), n] as [string, any]));
   // raw 1326 arrays for TV distance: re-walk both traces' entering ranges
   const rawRanges = (trace: any) => {
-    const out: Record<string, { oop: number[]; ip: number[] }> = {};
-    const cur: Record<number, { oop: number[]; ip: number[] }> = {};
+    const out: Record<string, Record<string, number[]>> = {};
+    const cur: Record<number, { players: string[]; ranges: number[][] }> = {};
     for (const n of trace.nodes ?? []) {
       const st = (trace.streets ?? []).find((x: any) => x.si === n.si);
-      if (!cur[n.si]) cur[n.si] = { oop: (st?.oopIn ?? []).slice(), ip: (st?.ipIn ?? []).slice() };
+      if (!cur[n.si]) cur[n.si] = traceSeats(trace.spec ?? {}, st);
       const r = cur[n.si]!;
-      out[`${n.street}|${n.codes.join("-")}`] = { oop: r.oop.slice(), ip: r.ip.slice() };
+      out[`${n.street}|${n.codes.join("-")}`] = Object.fromEntries(r.ranges.map((x, i) => [seatLabel(i, r.players.length), x.slice()]));
       if (n.taken != null) {
         const strat = n.actions?.[n.taken]?.strategy ?? [];
-        const arr = n.actor === 0 ? r.oop : r.ip;
-        const next = arr.map((w: number, ci: number) => w * (strat[ci] ?? 0));
-        if (n.actor === 0) r.oop = next; else r.ip = next;
+        r.ranges[n.actor] = (r.ranges[n.actor] ?? []).map((w: number, ci: number) => w * (strat[ci] ?? 0));
       }
     }
     return out;
@@ -1194,7 +1395,10 @@ app.get("/solve-compare", (c) => {
     const k = key(na);
     return {
       key: k, street: na.street, codes: na.codes, actor: na.actor, actorPos: na.actorPos, heroNode: na.heroNode, takenName: na.takenName,
-      rangeTv: { oop: tv(ra[k]?.oop ?? [], rb[k]?.oop ?? []), ip: tv(ra[k]?.ip ?? [], rb[k]?.ip ?? []) },
+      rangeTv: {
+        oop: tv(ra[k]?.oop ?? [], rb[k]?.oop ?? []), ip: tv(ra[k]?.ip ?? [], rb[k]?.ip ?? []),
+        ...(ra[k]?.mid || rb[k]?.mid ? { mid: tv(ra[k]?.mid ?? [], rb[k]?.mid ?? []) } : {}),
+      },
       actions,
       maxHeroDiff: Math.max(0, ...actions.map((x: any) => Math.abs(x.heroDiff ?? 0))),
     };
@@ -1227,24 +1431,245 @@ function sessionCard(s: ReturnType<typeof sessionsStore.list>[number], all: Enri
   const netBb = Math.round(known.reduce((a, b) => a + b, 0) * 100) / 100;
   const answers = answerLog.forSession(s.id);
   const answered = answers.filter((a) => a.text != null);
+  // hands are the unit of the table, decisions the unit of the answer accounting
+  const cov = coverageTotals(hands, answersByHand(answers));
   const tiers: Record<string, number> = {};
   for (const a of answered) tiers[a.tier ?? "unknown"] = (tiers[a.tier ?? "unknown"] ?? 0) + 1;
   const disagreements = answered.filter((a) => a.exploit_pick && a.chart_pick && a.exploit_pick !== a.chart_pick).length;
   const cfg = s.config ?? {};
   return {
     id: s.id, declared: true, startedAt: s.startedAt, endedAt: s.endedAt, preset: s.preset, label: s.label, note: s.note,
-    answersOn: !!cfg.answers, mode: cfg.mode ?? null, recordingOn: !!cfg.recording, budget: cfg.budget ?? null,
+    answersOn: !!cfg.answers, recordingOn: !!cfg.recording, budget: cfg.budget ?? null,
     // the whole-hand strategy the session was declared with (services/strategies.ts id), when the mode was one
     strategy: cfg.strategy ?? null, strategyName: cfg.strategyName ?? null,
+    // the ACCOUNT it was played on (ignition-study-wrapper/auth.py) — null for
+    // sessions declared before profiles existed, and for every gap cluster
+    profile: (cfg.profile as string) ?? null,
     hands: hands.length, knownHands: known.length, netBb, bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
     stakes: hands[0]?.stakes ?? null,
-    answers: answered.length, failed: answers.length - answered.length, tiers, disagreements,
+    // no-probe rows are decisions nobody asked about, not solves that failed
+    answers: answered.length, failed: answers.filter((a) => a.text == null && (a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe").length, tiers, disagreements,
+    decisions: cov.decisions, decisionsCovered: cov.covered, decisionsCoveredPct: cov.coveredPct,
+    unansweredNodes: cov.unansweredNodes, partialHands: cov.partialHands, strayCaptures: cov.stray, failKinds: cov.kinds,
     solves: solveStore.forSession(s.id).length,
     recorded: fsExists(join(DEBUG_DIR_FOR_SESSIONS, s.id)),
     preflightOk: s.preflight?.ok ?? null, events: (s.events ?? []).length,
     durationMin: s.summary?.durationMin ?? (s.endedAt ? Math.round((s.endedAt - s.startedAt) / 6000) / 10 : Math.round((Date.now() - s.startedAt) / 6000) / 10),
   };
 }
+
+/**
+ * GET /profiles — the accounts hands are played on, and whether their money adds up.
+ *
+ * A hand belongs to an account through the session it was stamped with: the wrapper
+ * declares the profile at Start (auth.py), so hands from before that flow, and every
+ * undeclared gap cluster, are simply UNATTRIBUTED. That is deliberate — guessing an
+ * owner would corrupt the one check this page exists for.
+ *
+ * The check: between two balance snapshots the money may move by exactly what poker
+ * did (services/profiles.ts). Whatever is left over entered or left the account for
+ * a non-poker reason, and is reported as such rather than absorbed.
+ */
+function pricedHandsByProfile() {
+  const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
+  const nets = computeNets(all);
+  const declared = sessionsStore.list(500);
+  const profileOfSession = new Map<string, string | null>();
+  for (const s of declared) profileOfSession.set(s.id, (s.config?.profile as string) ?? null);
+
+  const handsOf = new Map<string, PricedHand[]>();
+  const statsOf = new Map<string, { hands: number; priced: number; netCents: number; firstAt: number | null; lastAt: number | null }>();
+  let unattributedHands = 0;
+  for (const e of all) {
+    const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
+    const prof = sid ? profileOfSession.get(sid) ?? null : null;
+    if (!prof) { unattributedHands++; continue; }
+    const bb = bbUsdOf(e.stakes);
+    const net = nets.get(e.dbId) ?? null;
+    // a hand is priced only when we know BOTH its net in bb and what a bb is worth
+    const netCents = bb != null && net != null ? Math.round(net * bb * 100) : null;
+    const bbCents = bb != null ? Math.round(bb * 100) : null;
+    // the rake our net does not see: an uncontested win that saw a flop is priced
+    // off the displayed (pre-rake) pot — services/profiles.ts explains and subtracts it
+    const rake = bbCents != null
+      ? rakeEstCents({ heroWonUncontested: !!e.summary.heroWonUncontested, sawFlop: !!e.summary.sawFlop,
+                       potCents: Math.round((e.summary.potBb ?? 0) * bbCents), playersDealt: e.summary.tableSeats ?? 3 })
+      : 0;
+    (handsOf.get(prof) ?? handsOf.set(prof, []).get(prof)!).push({ playedAt: e.playedAt, netCents, rakeEstCents: rake, bbCents });
+    const st = statsOf.get(prof) ?? statsOf.set(prof, { hands: 0, priced: 0, netCents: 0, firstAt: null, lastAt: null }).get(prof)!;
+    st.hands++;
+    if (netCents != null) { st.priced++; st.netCents += netCents; }
+    if (e.playedAt != null) {
+      st.firstAt = st.firstAt == null ? e.playedAt : Math.min(st.firstAt, e.playedAt);
+      st.lastAt = st.lastAt == null ? e.playedAt : Math.max(st.lastAt, e.playedAt);
+    }
+  }
+  return { all, declared, handsOf, statsOf, unattributedHands };
+}
+
+app.get("/profiles", (c) => {
+  const { all, declared, handsOf, statsOf, unattributedHands } = pricedHandsByProfile();
+  const acked = balanceAcks();
+  const rows = accountProfiles().map((p) => {
+    const hs = handsOf.get(p.name) ?? [];
+    const st = statsOf.get(p.name) ?? { hands: 0, priced: 0, netCents: 0, firstAt: null, lastAt: null };
+    const snaps = balanceSnapshots(p.name);
+    const intervals = reconcileBalances(snaps, hs, acked);
+    // only MOVEMENT counts toward the headline: noise is residue, and an
+    // unverifiable interval is a caveat, not an accusation
+    const moved = intervals.filter((i) => i.tier === "movement");
+    const unexplainedCents = moved.reduce((sum, i) => sum + i.unexplainedCents, 0);
+    const bal = snaps.length ? snaps[snaps.length - 1]! : null;
+    const sessions = declared.filter((s) => (s.config?.profile as string) === p.name)
+      .map((s) => ({ id: s.id, startedAt: s.startedAt, endedAt: s.endedAt, label: s.label,
+                     strategyName: s.config?.strategyName ?? null, stakes: null as string | null }));
+    return {
+      ...p,
+      balance: bal,
+      // the first reading is the SEED — the anchor every later check hangs off.
+      // Until it exists the account is nil: nothing can be checked and no figure
+      // is shown as if it could.
+      seeded: snaps.length > 0,
+      seed: snaps[0] ?? null,
+      // AUD is a display-time conversion at the house rate below, never a stored amount
+      balanceAudCents: bal ? toAudCents(bal.equityCents) : null,
+      netAudCents: toAudCents(st.netCents),
+      // NET = what the account actually did since its anchor (equity now − seed). Poker,
+      // rake and any residue are how that figure is accounted for, not rivals to it.
+      netSinceSeedCents: bal && snaps[0] ? bal.equityCents - snaps[0]!.equityCents : null,
+      netSinceSeedAudCents: bal && snaps[0] ? toAudCents(bal.equityCents - snaps[0]!.equityCents) : null,
+      // every reading after the seed carries its own check: what the math said
+      // equity should be (previous reading + poker after rake) against what was
+      // scraped, and the verdict of that comparison
+      snapshots: snaps.slice(-50).reverse().map((sn) => {
+        const iv = intervals.find((i) => i.to.id === sn.id);
+        return {
+          ...sn,
+          check: iv ? { mathCents: iv.from.equityCents + iv.pokerCents - iv.rakeEstCents, deltaCents: iv.unexplainedCents,
+                        toleranceCents: iv.toleranceCents, tier: iv.tier, flaggedTier: iv.flaggedTier, accepted: iv.accepted,
+                        matched: iv.tier === "clean" || iv.tier === "noise" || iv.tier === "accepted" }
+                    : sn.id === snaps[0]?.id ? { seed: true } : null,
+        };
+      }),
+      intervals: intervals.slice(-50).reverse(),
+      unexplainedCents,
+      movementIntervals: moved.length,
+      unverifiableIntervals: intervals.filter((i) => i.tier === "unverifiable").length,
+      acceptedIntervals: intervals.filter((i) => i.tier === "accepted").length,
+      sessions: sessions.length,
+      sessionList: sessions.reverse().slice(0, 50),
+      ...st,
+    };
+  });
+  const fx = fxRate();
+  return c.json({ ok: true, profiles: rows, unattributedHands, totalHands: all.length,
+    fx: fx.rate ? { rate: fx.rate.rate, at: fx.rate.at, asOf: fx.rate.asOf, source: fx.rate.source, stale: fx.stale } : null });
+});
+
+/**
+ * POST /profiles/:name/seed — take an account's FIRST equity reading, from the
+ * client. Proxied to the wrapper because it is the only writer of the balance
+ * record and the only thing that can see the client; nothing here is typed in.
+ */
+app.post("/profiles/:name/seed", async (c) => {
+  const name = c.req.param("name");
+  let r: Response;
+  try {
+    r = await fetch(`${DEFAULT_LIVE_URL}/balance/seed`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: name }), signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    return c.json({ ok: false, error: `the wrapper is not answering at ${DEFAULT_LIVE_URL} — it is the only thing that can read the client` }, 503);
+  }
+  const j = (await r.json().catch(() => null)) as any;
+  if (!j?.ok) return c.json({ ok: false, error: j?.error ?? j?.reason ?? `the wrapper refused: HTTP ${r.status}`, candidates: j?.candidates ?? null }, r.status === 409 ? 409 : 502);
+  return c.json({ ok: true, seed: j });
+});
+
+/**
+ * POST /profiles/:name/accept { ids?: number[], all?: boolean, note?: string } — mark
+ * readings CORRECT. A wrong scrape flags the interval that ends at it as money moved;
+ * this keeps the residue on record but takes it out of the verdict, and the math
+ * carries on from the reading (it always did). `all` marks every reading whose
+ * interval is flagged right now (movement or unverifiable). Undo one with
+ * POST /profiles/:name/unaccept { id }.
+ */
+app.post("/profiles/:name/accept", async (c) => {
+  const name = c.req.param("name");
+  const body = (await c.req.json().catch(() => ({}))) as { ids?: number[]; all?: boolean; note?: string };
+  const snaps = balanceSnapshots(name);
+  if (!snaps.length) return c.json({ ok: false, error: "no readings for this profile" }, 404);
+  const { handsOf } = pricedHandsByProfile();
+  const intervals = reconcileBalances(snaps, handsOf.get(name) ?? [], balanceAcks());
+  const ids = Array.isArray(body.ids) ? body.ids.map(Number) : [];
+  const wanted = body.all
+    ? intervals.filter((i) => i.tier === "movement" || i.tier === "unverifiable")
+    : intervals.filter((i) => ids.includes(i.to.id) && i.tier !== "accepted");
+  if (!wanted.length) return c.json({ ok: false, error: body.all ? "nothing is flagged" : "no open flag ends at that reading" }, 404);
+  const note = typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 200) : null;
+  const accepted = wanted.map((i) => ({ id: i.to.id, ack: acceptReading(name, i.to.id, note, i.unexplainedCents, i.tier) }));
+  return c.json({ ok: true, accepted });
+});
+/**
+ * POST /profiles/:name/reset { note? } — "the actual reading now is correct": take a
+ * FRESH reading from the client (wrapper /balance/reread) so the baseline is what the
+ * client shows now rather than a stored reading that may itself be the wrong one,
+ * then accept every interval that is flagged — including the one that ends at the
+ * fresh reading. When the client is not open, no reading is taken and only the stored
+ * flags are accepted; the reply says which happened.
+ */
+app.post("/profiles/:name/reset", async (c) => {
+  const name = c.req.param("name");
+  const body = (await c.req.json().catch(() => ({}))) as { note?: string };
+  if (!balanceSnapshots(name).length) return c.json({ ok: false, error: "no readings for this profile" }, 404);
+  let fresh: any = null, freshError: string | null = null;
+  try {
+    const r = await fetch(`${DEFAULT_LIVE_URL}/balance/reread`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: name }), signal: AbortSignal.timeout(20_000),
+    });
+    const j = (await r.json().catch(() => null)) as any;
+    if (j?.ok) fresh = j; else freshError = j?.error ?? j?.reason ?? `the wrapper refused: HTTP ${r.status}`;
+  } catch {
+    freshError = `the wrapper is not answering at ${DEFAULT_LIVE_URL}`;
+  }
+  const snaps = balanceSnapshots(name);
+  const { handsOf } = pricedHandsByProfile();
+  const intervals = reconcileBalances(snaps, handsOf.get(name) ?? [], balanceAcks());
+  const flagged = intervals.filter((i) => i.tier === "movement" || i.tier === "unverifiable");
+  const custom = typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 200) : null;
+  const note = custom ?? (fresh ? "reset: marked correct against a fresh reading" : `reset: marked correct against the stored reading (no fresh reading — ${freshError})`);
+  const accepted = flagged.map((i) => ({ id: i.to.id, ack: acceptReading(name, i.to.id, note, i.unexplainedCents, i.tier) }));
+  return c.json({ ok: true, fresh, freshError, accepted: accepted.length, baseline: snaps[snaps.length - 1] ?? null });
+});
+app.post("/profiles/:name/unaccept", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { id?: number };
+  if (typeof body.id !== "number") return c.json({ ok: false, error: "id required" }, 400);
+  return c.json({ ok: unacceptReading(body.id) });
+});
+
+/**
+ * The hand-off board (services/tasks.ts): GET /tasks; POST /tasks {title,...} creates;
+ * POST /tasks/reorder {ids}; POST /tasks/:id {status?, brief?, next?, doneWhen?, needsYou?,
+ * goal?, title?, links?, note?} updates (a note appends a dated log line).
+ */
+app.get("/tasks", (c) => c.json({ ok: true, tasks: loadTasks() }));
+app.post("/tasks", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as any;
+  if (!body?.title) return c.json({ ok: false, error: "title required" }, 400);
+  return c.json({ ok: true, task: createTask(body) });
+});
+app.post("/tasks/reorder", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { ids?: string[] };
+  if (!Array.isArray(body.ids)) return c.json({ ok: false, error: "ids required" }, 400);
+  return c.json({ ok: true, tasks: reorderTasks(body.ids) });
+});
+app.post("/tasks/:id", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as any;
+  const t = updateTask(c.req.param("id"), body);
+  return t ? c.json({ ok: true, task: t }) : c.json({ ok: false, error: "no such task" }, 404);
+});
 
 /** GET /sessions — declared sessions (newest first) plus the undeclared gap clusters of older hands. */
 app.get("/sessions", (c) => {
@@ -1267,18 +1692,76 @@ app.get("/sessions", (c) => {
   return c.json({ ok: true, store: sessionsStore.path, declared, clusters });
 });
 
+/** POST /sessions/:id/end { note? } — end a session that was left open, from
+ *  the dashboard instead of the panel's End button. A session is open purely
+ *  because nothing ever wrote its `ended_at` (sessions.py): closing the table
+ *  tab, quitting the wrapper or rebooting all leave the row standing.
+ *
+ *  The wrapper OWNS the record, so this proxies to its /session/end rather
+ *  than writing sessions.sqlite here: when the session being ended is the LIVE
+ *  one, only the wrapper can also stop the study answers, the recording and
+ *  the router that belong to it. If it is not running there is nothing to end
+ *  it with, and we say so instead of writing behind its back. */
+app.post("/sessions/:id/end", async (c) => {
+  const id = c.req.param("id");
+  const s = sessionsStore.get(id);
+  if (!s) return c.json({ ok: false, error: `no declared session ${id}` }, 404);
+  if (s.endedAt) return c.json({ ok: false, error: "that session is already ended" }, 409);
+  const b = (await c.req.json().catch(() => ({}))) as { note?: string };
+  const note = (b.note ?? "").trim() || "ended from the dashboard";
+  let r: Response;
+  try {
+    r = await fetch(`${DEFAULT_LIVE_URL}/session/end`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, note }), signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return c.json({ ok: false, error: `the wrapper is not answering at ${DEFAULT_LIVE_URL}, and it is the only writer of the session record — start it and end the session again` }, 503);
+  }
+  const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return c.json({ ok: false, error: j?.error ?? `the wrapper refused: HTTP ${r.status}` }, 502);
+  // re-read: the row the wrapper just wrote, summary and all
+  return c.json({ ok: true, session: sessionsStore.get(id) });
+});
+
+/**
+ * POST /reconcile-answers { days? , all? } — settle WHY the unanswered
+ * decisions were unanswered, over history rather than live.
+ *
+ * Runs on a timer over the last day (services/answerReconciler.ts); this is the
+ * one-shot for older sessions. It only ever ADDS a reason to a decision that
+ * has none, so running it twice changes nothing the second time.
+ */
+app.post("/reconcile-answers", async (c) => {
+  const b = (await c.req.json().catch(() => ({}))) as { days?: number; all?: boolean };
+  const since = b.all ? 0 : Date.now() - Math.max(1, Number(b.days ?? 1)) * 86_400_000;
+  const { reconcileAnswers } = await import("../services/answerReconciler");
+  return c.json({ ok: true, ...reconcileAnswers(since) });
+});
+
+/** Big blind in dollars, read off a stakes label like "$1.00/$2.00" (the last
+ *  number is the big blind). Null when the label is missing or unparseable —
+ *  the session page then shows the bb figures and omits the money ones. */
+function bbUsdOf(stakes: string | null | undefined): number | null {
+  const ns = String(stakes ?? "").match(/[\d.]+/g);
+  const bb = ns?.length ? Number(ns[ns.length - 1]) : NaN;
+  return Number.isFinite(bb) && bb > 0 ? bb : null;
+}
+
 /** GET /sessions/:id — one declared session (or an undeclared cluster) in full. */
 app.get("/sessions/:id", (c) => {
   const id = c.req.param("id");
   const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
   const nets = computeNets(all);
   const byCid = answersByHand(answerLog.rows(3650));
+  // oldest first, for the cumulative graph — the same shape analyticsCore serves
+  const seriesRow = (e: Enriched) => ({ id: e.dbId, t: e.playedAt, net: nets.get(e.dbId) ?? null });
   const handRow = (e: Enriched) => {
     const st = answerStatusOf(e, byCid);
     return {
       dbId: e.dbId, clientHandId: e.clientHandId, playedAt: e.playedAt, stakes: e.stakes, heroCards: e.heroCards,
       heroPos: e.summary.heroPos, finalStreet: e.summary.finalStreet, potBb: e.summary.potBb, netBb: nets.get(e.dbId) ?? null,
-      sawFlop: e.summary.sawFlop, answers: st.answered, status: st,
+      sawFlop: e.summary.sawFlop, wentToShowdown: e.summary.wentToShowdown ?? null, answers: st.answered, status: st,
       // the frame recording holding this hand, when one exists (gap clusters are not keyed by session id)
       recording: e.clientHandId ? (recordingForHand(e.clientHandId)?.session ?? null) : null,
     };
@@ -1287,7 +1770,12 @@ app.get("/sessions/:id", (c) => {
     const start = Number(id.slice(8));
     const hs = sessionsOf(all).find((h) => h[0]!.playedAt === start);
     if (!hs) return c.json({ ok: false, error: "no such cluster" }, 404);
-    return c.json({ ok: true, session: { id, declared: false, startedAt: hs[0]!.playedAt, endedAt: hs[hs.length - 1]!.playedAt, stakes: hs[0]!.stakes }, hands: hs.map(handRow).reverse(), answers: [], solves: [], recording: null });
+    return c.json({
+      ok: true,
+      session: { id, declared: false, startedAt: hs[0]!.playedAt, endedAt: hs[hs.length - 1]!.playedAt, stakes: hs[0]!.stakes, bbUsd: bbUsdOf(hs[0]!.stakes) },
+      stats: aggregateHands(hs, nets), series: hs.map(seriesRow),
+      hands: hs.map(handRow).reverse(), answers: [], solves: [], recording: null,
+    });
   }
   const s = sessionsStore.get(id);
   if (!s) return c.json({ ok: false, error: `no declared session ${id}` }, 404);
@@ -1296,9 +1784,14 @@ app.get("/sessions/:id", (c) => {
   const recDir = join(DEBUG_DIR_FOR_SESSIONS, id);
   return c.json({
     ok: true,
-    session: { ...sessionCard(s, all, nets), config: s.config, preflight: s.preflight, versions: s.versions, eventsList: s.events, summary: s.summary },
+    session: { ...sessionCard(s, all, nets), bbUsd: bbUsdOf(hands[0]?.stakes ?? null), config: s.config, preflight: s.preflight, versions: s.versions, eventsList: s.events, summary: s.summary },
+    // the same aggregate and hand series the Analytics tab is built from, so the
+    // session's own Outcome card and `/analytics?scope=sessions:<id>` cannot drift
+    stats: aggregateHands(hands, nets),
+    series: hands.map(seriesRow),
     hands: hands.map(handRow).reverse(),
-    answers: answers.map((a) => ({ id: a.id, ts: a.ts, clientHandId: a.client_hand_id, street: a.street, board: a.board, heroCards: a.hero_cards, tier: a.tier, source: a.source ?? sourceForTier(a.tier), text: a.text, pick: a.pick, exploitPick: a.exploit_pick, chartPick: a.chart_pick, strategyMode: a.strategy_mode, latencyMs: a.latency_ms, failReason: a.fail_reason, solveId: a.solve_id })).reverse(),
+    answers: answers.map((a) => ({ id: a.id, ts: a.ts, clientHandId: a.client_hand_id, street: a.street, board: a.board, heroCards: a.hero_cards, tier: a.tier, source: a.source ?? sourceForTier(a.tier), text: a.text, pick: a.pick, exploitPick: a.exploit_pick, chartPick: a.chart_pick, strategyMode: a.strategy_mode, latencyMs: a.latency_ms, failReason: a.fail_reason, solveId: a.solve_id, integrity: integrityOf(a) })).reverse(),
+    integrity: integrityTotals(answers),
     solves: solveStore.forSession(id),
     recording: fsExists(recDir) ? { dir: recDir, name: id } : null,
   });

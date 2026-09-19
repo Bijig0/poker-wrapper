@@ -33,19 +33,25 @@ export interface StreetFixedPcts {
 /**
  * @param tokens one street's action tokens (no dealt cards)
  * @param potStart pot in bb entering the street
+ * @param actors who acts on each token, as seat indices in acting order (0 = OOP). Omitted = heads-up strict
+ *   alternation. A 3-way street (since 2026-09-19) passes the rotation the walker computed — folds mean the
+ *   seats do not simply alternate, and the outstanding wager is the most any seat has put in, not "the other's".
  */
-export function streetFixedPcts(tokens: string[], potStart: number): StreetFixedPcts {
-  const inv: [number, number] = [0, 0];
+export function streetFixedPcts(tokens: string[], potStart: number, actors?: number[]): StreetFixedPcts {
+  const n = actors ? Math.max(1, ...actors) + 1 : 2;
+  const inv: number[] = new Array(n).fill(0);
   const pcts: string[] = [];
   const sizesBb: number[] = [];
-  let actor: 0 | 1 = 0;
-  for (const tok of tokens) {
+  let alt: 0 | 1 = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    const actor = actors ? actors[i]! : alt;
     const x = wagerBb(tok);
+    const outstanding = Math.max(...inv);
     if (x != null) {
-      const own = inv[actor];
-      const outstanding = inv[1 - actor]!;
+      const own = inv[actor]!;
       const toCall = outstanding - own;
-      const potNow = potStart + inv[0] + inv[1];
+      const potNow = potStart + inv.reduce((s, v) => s + v, 0);
       const denom = potNow + toCall;
       const pct = (100 * (x - outstanding)) / denom;
       if (!(pct > 0)) {
@@ -57,10 +63,10 @@ export function streetFixedPcts(tokens: string[], potStart: number): StreetFixed
       sizesBb.push(x);
       inv[actor] = x;
     } else if (tok === "Call") {
-      inv[actor] = inv[1 - actor]!;
+      inv[actor] = outstanding;
     }
     // Check/Fold commit nothing
-    actor = (1 - actor) as 0 | 1;
+    alt = (1 - alt) as 0 | 1;
   }
   return { pcts, sizesBb };
 }

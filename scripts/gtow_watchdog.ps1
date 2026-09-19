@@ -20,7 +20,38 @@ function Test-Gtow {
     } catch { return $false }
 }
 
-Write-Output "gtow watchdog up (pid $PID)"
+# Which client to watch. The Chinese regional build was renamed (folder AND exe)
+# to "Chinese GTO Wizard" on 2026-09-18: Windows names a process after its exe,
+# so with both builds installed a name-only Get-Process would kill either one.
+# Match on the full path instead. $env:GTOW_CLIENT_PATH pins a build.
+$gtowExe = $env:GTOW_CLIENT_PATH
+if (-not $gtowExe) {
+    foreach ($c in @('C:\Program Files\GTO Wizard\GTO Wizard.exe',
+                     'C:\Program Files\Chinese GTO Wizard\Chinese GTO Wizard.exe')) {
+        if (Test-Path -LiteralPath $c) { $gtowExe = $c; break }
+    }
+}
+# No desktop build? GTO Wizard ships none of their own (their official "install
+# on PC" is a PWA), so watch app.gtowizard.com in a dedicated Chrome profile.
+$useChrome = -not $gtowExe
+if ($useChrome) {
+    $chromeProfile = if ($env:GTOW_CHROME_PROFILE) { $env:GTOW_CHROME_PROFILE } else { "$env:LOCALAPPDATA\gtow-cdp-profile" }
+    # NEVER match chrome.exe by name: that is the user's entire browser, and
+    # this loop KILLS what it matches. The dedicated --user-data-dir is the
+    # only safe discriminator.
+    function Get-GtowProcs {
+        Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -like "*--user-data-dir=$chromeProfile*" } |
+            ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
+    }
+    $clientLabel = "chrome dedicated profile ($chromeProfile)"
+} else {
+    $gtowName = [IO.Path]::GetFileNameWithoutExtension($gtowExe)
+    function Get-GtowProcs { Get-Process -Name $gtowName -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $gtowExe } }
+    $clientLabel = $gtowExe
+}
+
+Write-Output "gtow watchdog up (pid $PID) - client: $clientLabel"
 # Startup is SLOW: after an update the app sits on activate.html and cycles
 # renderers for ~4 minutes before app.gtowizard appears. The original 90s
 # grace period killed it mid-startup every time — a permanent kill-loop that
@@ -37,12 +68,16 @@ while ($true) {
             Write-Output "$(Get-Date -Format HH:mm:ss) GTOW probe failed (1/2) - waiting"
         } else {
             Write-Output "$(Get-Date -Format HH:mm:ss) GTOW not drivable - restarting with CDP flag"
-            Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
+            Get-GtowProcs | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 3
-            Start-Process -FilePath 'C:\Program Files\GTO Wizard\GTO Wizard.exe' -ArgumentList '--remote-debugging-port=9222' -WindowStyle Minimized
+            if ($useChrome) {
+                & (Join-Path $PSScriptRoot 'start_gtow_chrome.ps1') -Force | Out-Null
+            } else {
+                Start-Process -FilePath $gtowExe -ArgumentList '--remote-debugging-port=9222' -WindowStyle Minimized
+            }
             for ($i = 0; $i -lt 96; $i++) {          # up to 8 minutes
                 Start-Sleep -Seconds 5
-                $dlg = Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match '更新|update' }
+                $dlg = Get-GtowProcs | Where-Object { $_.MainWindowTitle -match '更新|update' }
                 if ($dlg) { $null = $dlg.CloseMainWindow() }
                 if (Test-Gtow) { Write-Output "$(Get-Date -Format HH:mm:ss) GTOW back after $($i * 5)s"; break }
             }

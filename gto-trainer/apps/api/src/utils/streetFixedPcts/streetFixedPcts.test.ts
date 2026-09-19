@@ -49,4 +49,12 @@ describe("streetFixedPcts", () => {
   it("throws when the wager is not a raise", () => {
     expect(() => streetFixedPcts(["Bet(300)", "Raise(200)"], 6)).toThrow();
   });
+
+  it("follows an explicit 3-way rotation with a fold in it", () => {
+    // pot 7.5: OOP checks, OOP+1 checks, IP bets 2.5 (33.3%), OOP folds, OOP+1 raises to 10:
+    // raise-by 7.5 over pot-after-call 7.5+2.5+2.5 = 12.5 → 60%
+    const r = streetFixedPcts(["Check", "Check", "Bet(250)", "Fold", "Raise(1000)"], 7.5, [0, 1, 2, 0, 1]);
+    expect(r.pcts).toEqual(["33.3%", "60%"]);
+    expect(r.sizesBb).toEqual([2.5, 10]);
+  });
 });
