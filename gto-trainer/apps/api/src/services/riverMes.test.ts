@@ -29,6 +29,7 @@ describe("riverMes — pinned to the Python reference", () => {
       const ln = riverLine(c.trace)!;
       expect(ln.line).toEqual(c.expect.line);
       expect(ln.extra).toEqual(c.expect.extra);
+      expect(ln.raiseExtra).toEqual(c.expect.raiseExtra);
 
       const g = gateOf(c.dump, ctx.hero === "oop" ? 0 : 1, c.heroCards, { tau: 0.5, gMinBb: 0.1 });
       expect(g.ok).toBe(true);

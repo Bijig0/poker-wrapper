@@ -211,13 +211,14 @@ export function lockFreqs(lock: any, ctx: RiverCtx): { freqs: Record<string, any
 
 /** The chain's river line up to hero's node, as exploitsolve tokens, plus the observed first-wager sizes
  *  (they join the menu so the line exists in our tree exactly, instead of snapping). */
-export function riverLine(trace: Trace): { line: string[]; extra: string[] } | null {
+export function riverLine(trace: Trace): { line: string[]; extra: string[]; raiseExtra: string[] } | null {
   const nodes = (trace?.nodes ?? []).filter((n: any) => n.street === "RIVER").sort((a: any, b: any) => a.ti - b.ti);
   const heroNodes = nodes.filter((n: any) => n.heroNode);
   if (!heroNodes.length) return null;
   const heroTi = heroNodes[heroNodes.length - 1].ti;
   const line: string[] = [];
   const extra: string[] = [];
+  const raiseExtra: string[] = [];
   for (const n of nodes) {
     if (n.ti >= heroTi || n.taken == null) continue;
     const a = n.actions[n.taken];
@@ -227,12 +228,17 @@ export function riverLine(trace: Trace): { line: string[]; extra: string[] } | n
     else if (code === "F") line.push("Fold");
     else {
       line.push(`~${Math.round(Number(a.betsize) * 100)}`);
-      if ((n.invested ?? [0, 0]).every((v: number) => v === 0) && Number(n.potNode) > 0) {
+      const inv: number[] = n.invested ?? [0, 0];
+      if (inv.every((v) => v === 0) && Number(n.potNode) > 0) {
         extra.push(`${((100 * Number(a.betsize)) / Number(n.potNode)).toFixed(1)}%`);
+      } else if (Math.max(...inv) > 0) {
+        // a RAISE, exact as a multiple of the wager it raised ("2.5x" = raise to 2.5x the previous bet);
+        // snapped to the menu raise instead, hero's call is priced against a raise he never faced
+        raiseExtra.push(`${(Number(a.betsize) / Math.max(...inv)).toFixed(4)}x`);
       }
     }
   }
-  return { line, extra };
+  return { line, extra, raiseExtra };
 }
 
 /** postflop-solver label -> the chain's label ("Bet(1880)" -> "BET 18.8"), sizes as street totals in bb —
@@ -362,7 +368,7 @@ export async function solveRiverMes(input: RiverMesInput, cfg = riverMesConfig()
       board: rv.board, pot: Math.round(Number(rv.potIn) * 100), eff_stack: Math.round(Number(rv.stackIn) * 100),
       rake_rate: Number(rake.pct_of_pot ?? 5) / 100, rake_cap: Number(rake.cap_in_chips ?? 2) * 100,
       oop_raw: rv.oopIn, ip_raw: rv.ipIn,
-      river_bets: [cfg.menu, ...ln.extra].join(", "), raise: cfg.raise,
+      river_bets: [cfg.menu, ...ln.extra].join(", "), raise: [cfg.raise, ...ln.raiseExtra].join(", "),
       accuracy_pct: cfg.accuracyPct, save_tree: tree,
     }, dir, deadline);
     if (!r1?.ok) return done({ ok: false, why: Date.now() >= deadline ? "timeout (equilibrium solve)" : "riverroot failed", ctx });
