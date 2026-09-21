@@ -1,0 +1,5308 @@
+{
+ "_meta": {
+  "built_at": "2026-09-22T00:30:44",
+  "shape": "CoinPoker 9.1M-hand corpus, heads-up rivers",
+  "level": "Ignition villains (hero excluded), all stakes pooled",
+  "k_cell": 150.0,
+  "k_level": 150.0,
+  "key_first": "pot|villain_pos|villain_line|river_tex",
+  "key_resp": "facing[:raise]|pot|wagerer_pos|wagerer_line|river_tex",
+  "facing": "vs_s <.40, vs_m <.75, vs_b <1.0, vs_o >=1.0 of the pot before the wager; :raise = he had already wagered this street (exploitsolve raise_ctx)",
+  "pot": [
+   "limped",
+   "srp",
+   "3bp"
+  ],
+  "pos": [
+   "oop",
+   "ip"
+  ],
+  "line": [
+   "turn",
+   "flop",
+   "none"
+  ],
+  "tex": [
+   "brick",
+   "flush",
+   "straight",
+   "pair"
+  ],
+  "validation_logloss": {
+   "Ignition marginals only (today)": 1.1614,
+   "CoinPoker cells only": 1.14745,
+   "CoinPoker marginal + Ignition level": 1.15789,
+   "CP shape + Ignition level (chosen)": 1.13211
+  },
+  "n_ignition": {
+   "first": 8148,
+   "resp": 3579
+  },
+  "n_coinpoker": {
+   "first": 3005413,
+   "resp": 1299198
+  }
+ },
+ "first": {
+  "3bp|ip|flop|brick": {
+   "check": 0.59447,
+   "bet_s": 0.04644,
+   "bet_m": 0.13697,
+   "bet_b": 0.15412,
+   "bet_o": 0.01394,
+   "allin": 0.05407
+  },
+  "3bp|ip|flop|flush": {
+   "check": 0.61619,
+   "bet_s": 0.04132,
+   "bet_m": 0.12333,
+   "bet_b": 0.13766,
+   "bet_o": 0.01736,
+   "allin": 0.06414
+  },
+  "3bp|ip|flop|pair": {
+   "check": 0.62956,
+   "bet_s": 0.04889,
+   "bet_m": 0.12078,
+   "bet_b": 0.13093,
+   "bet_o": 0.01378,
+   "allin": 0.05606
+  },
+  "3bp|ip|flop|straight": {
+   "check": 0.60505,
+   "bet_s": 0.05773,
+   "bet_m": 0.13161,
+   "bet_b": 0.13396,
+   "bet_o": 0.01698,
+   "allin": 0.05467
+  },
+  "3bp|ip|none|brick": {
+   "check": 0.59551,
+   "bet_s": 0.05211,
+   "bet_m": 0.12491,
+   "bet_b": 0.11352,
+   "bet_o": 0.01234,
+   "allin": 0.1016
+  },
+  "3bp|ip|none|flush": {
+   "check": 0.57432,
+   "bet_s": 0.04993,
+   "bet_m": 0.12375,
+   "bet_b": 0.11579,
+   "bet_o": 0.01478,
+   "allin": 0.12142
+  },
+  "3bp|ip|none|pair": {
+   "check": 0.60281,
+   "bet_s": 0.05676,
+   "bet_m": 0.11861,
+   "bet_b": 0.10347,
+   "bet_o": 0.01334,
+   "allin": 0.10501
+  },
+  "3bp|ip|none|straight": {
+   "check": 0.56595,
+   "bet_s": 0.05601,
+   "bet_m": 0.12611,
+   "bet_b": 0.12425,
+   "bet_o": 0.01732,
+   "allin": 0.11035
+  },
+  "3bp|ip|turn|brick": {
+   "check": 0.50556,
+   "bet_s": 0.04127,
+   "bet_m": 0.09757,
+   "bet_b": 0.08424,
+   "bet_o": 0.00941,
+   "allin": 0.26195
+  },
+  "3bp|ip|turn|flush": {
+   "check": 0.55127,
+   "bet_s": 0.04333,
+   "bet_m": 0.09307,
+   "bet_b": 0.07368,
+   "bet_o": 0.00761,
+   "allin": 0.23104
+  },
+  "3bp|ip|turn|pair": {
+   "check": 0.53511,
+   "bet_s": 0.04088,
+   "bet_m": 0.10143,
+   "bet_b": 0.07978,
+   "bet_o": 0.00922,
+   "allin": 0.23359
+  },
+  "3bp|ip|turn|straight": {
+   "check": 0.54902,
+   "bet_s": 0.05074,
+   "bet_m": 0.09607,
+   "bet_b": 0.07606,
+   "bet_o": 0.00816,
+   "allin": 0.21995
+  },
+  "3bp|oop|flop|brick": {
+   "check": 0.6464,
+   "bet_s": 0.11454,
+   "bet_m": 0.09173,
+   "bet_b": 0.07956,
+   "bet_o": 0.00844,
+   "allin": 0.05934
+  },
+  "3bp|oop|flop|flush": {
+   "check": 0.66693,
+   "bet_s": 0.12164,
+   "bet_m": 0.08724,
+   "bet_b": 0.06123,
+   "bet_o": 0.00644,
+   "allin": 0.05652
+  },
+  "3bp|oop|flop|pair": {
+   "check": 0.64602,
+   "bet_s": 0.11641,
+   "bet_m": 0.0932,
+   "bet_b": 0.07328,
+   "bet_o": 0.00783,
+   "allin": 0.06325
+  },
+  "3bp|oop|flop|straight": {
+   "check": 0.66395,
+   "bet_s": 0.12662,
+   "bet_m": 0.09529,
+   "bet_b": 0.05793,
+   "bet_o": 0.00678,
+   "allin": 0.04943
+  },
+  "3bp|oop|none|brick": {
+   "check": 0.65452,
+   "bet_s": 0.09754,
+   "bet_m": 0.10616,
+   "bet_b": 0.09075,
+   "bet_o": 0.01545,
+   "allin": 0.03557
+  },
+  "3bp|oop|none|flush": {
+   "check": 0.63611,
+   "bet_s": 0.10151,
+   "bet_m": 0.10747,
+   "bet_b": 0.09561,
+   "bet_o": 0.01525,
+   "allin": 0.04406
+  },
+  "3bp|oop|none|pair": {
+   "check": 0.62845,
+   "bet_s": 0.10864,
+   "bet_m": 0.11621,
+   "bet_b": 0.09437,
+   "bet_o": 0.01649,
+   "allin": 0.03584
+  },
+  "3bp|oop|none|straight": {
+   "check": 0.61554,
+   "bet_s": 0.11319,
+   "bet_m": 0.11508,
+   "bet_b": 0.09712,
+   "bet_o": 0.0154,
+   "allin": 0.04367
+  },
+  "3bp|oop|turn|brick": {
+   "check": 0.42837,
+   "bet_s": 0.10829,
+   "bet_m": 0.12746,
+   "bet_b": 0.08299,
+   "bet_o": 0.01044,
+   "allin": 0.24245
+  },
+  "3bp|oop|turn|flush": {
+   "check": 0.47201,
+   "bet_s": 0.11454,
+   "bet_m": 0.11611,
+   "bet_b": 0.07301,
+   "bet_o": 0.00924,
+   "allin": 0.2151
+  },
+  "3bp|oop|turn|pair": {
+   "check": 0.44751,
+   "bet_s": 0.10922,
+   "bet_m": 0.13503,
+   "bet_b": 0.07953,
+   "bet_o": 0.01042,
+   "allin": 0.21829
+  },
+  "3bp|oop|turn|straight": {
+   "check": 0.46123,
+   "bet_s": 0.13188,
+   "bet_m": 0.13071,
+   "bet_b": 0.08243,
+   "bet_o": 0.01135,
+   "allin": 0.18241
+  },
+  "limped|ip|flop|brick": {
+   "check": 0.63191,
+   "bet_s": 0.04322,
+   "bet_m": 0.14542,
+   "bet_b": 0.14311,
+   "bet_o": 0.03187,
+   "allin": 0.00446
+  },
+  "limped|ip|flop|flush": {
+   "check": 0.62212,
+   "bet_s": 0.03336,
+   "bet_m": 0.14458,
+   "bet_b": 0.13898,
+   "bet_o": 0.05144,
+   "allin": 0.00952
+  },
+  "limped|ip|flop|pair": {
+   "check": 0.60875,
+   "bet_s": 0.04481,
+   "bet_m": 0.13978,
+   "bet_b": 0.15279,
+   "bet_o": 0.04477,
+   "allin": 0.0091
+  },
+  "limped|ip|flop|straight": {
+   "check": 0.59473,
+   "bet_s": 0.03901,
+   "bet_m": 0.14493,
+   "bet_b": 0.16484,
+   "bet_o": 0.0476,
+   "allin": 0.0089
+  },
+  "limped|ip|none|brick": {
+   "check": 0.69379,
+   "bet_s": 0.038,
+   "bet_m": 0.1074,
+   "bet_b": 0.11745,
+   "bet_o": 0.03901,
+   "allin": 0.00434
+  },
+  "limped|ip|none|flush": {
+   "check": 0.66762,
+   "bet_s": 0.03534,
+   "bet_m": 0.12077,
+   "bet_b": 0.12408,
+   "bet_o": 0.04651,
+   "allin": 0.00568
+  },
+  "limped|ip|none|pair": {
+   "check": 0.69799,
+   "bet_s": 0.03832,
+   "bet_m": 0.10668,
+   "bet_b": 0.11163,
+   "bet_o": 0.041,
+   "allin": 0.00438
+  },
+  "limped|ip|none|straight": {
+   "check": 0.6357,
+   "bet_s": 0.03639,
+   "bet_m": 0.12203,
+   "bet_b": 0.1451,
+   "bet_o": 0.05399,
+   "allin": 0.00679
+  },
+  "limped|ip|turn|brick": {
+   "check": 0.45549,
+   "bet_s": 0.05042,
+   "bet_m": 0.18968,
+   "bet_b": 0.20894,
+   "bet_o": 0.07176,
+   "allin": 0.02371
+  },
+  "limped|ip|turn|flush": {
+   "check": 0.48961,
+   "bet_s": 0.05076,
+   "bet_m": 0.16013,
+   "bet_b": 0.22161,
+   "bet_o": 0.05915,
+   "allin": 0.01873
+  },
+  "limped|ip|turn|pair": {
+   "check": 0.47122,
+   "bet_s": 0.05889,
+   "bet_m": 0.19136,
+   "bet_b": 0.19147,
+   "bet_o": 0.06083,
+   "allin": 0.02623
+  },
+  "limped|ip|turn|straight": {
+   "check": 0.51457,
+   "bet_s": 0.05071,
+   "bet_m": 0.1626,
+   "bet_b": 0.19105,
+   "bet_o": 0.05788,
+   "allin": 0.02319
+  },
+  "limped|oop|flop|brick": {
+   "check": 0.67526,
+   "bet_s": 0.08757,
+   "bet_m": 0.0878,
+   "bet_b": 0.11291,
+   "bet_o": 0.03328,
+   "allin": 0.00317
+  },
+  "limped|oop|flop|flush": {
+   "check": 0.66238,
+   "bet_s": 0.08266,
+   "bet_m": 0.09039,
+   "bet_b": 0.12295,
+   "bet_o": 0.03493,
+   "allin": 0.0067
+  },
+  "limped|oop|flop|pair": {
+   "check": 0.6622,
+   "bet_s": 0.08454,
+   "bet_m": 0.09478,
+   "bet_b": 0.11464,
+   "bet_o": 0.03689,
+   "allin": 0.00695
+  },
+  "limped|oop|flop|straight": {
+   "check": 0.63266,
+   "bet_s": 0.09987,
+   "bet_m": 0.10563,
+   "bet_b": 0.13303,
+   "bet_o": 0.0226,
+   "allin": 0.00622
+  },
+  "limped|oop|none|brick": {
+   "check": 0.72709,
+   "bet_s": 0.06266,
+   "bet_m": 0.08561,
+   "bet_b": 0.09308,
+   "bet_o": 0.02963,
+   "allin": 0.00194
+  },
+  "limped|oop|none|flush": {
+   "check": 0.71578,
+   "bet_s": 0.06336,
+   "bet_m": 0.08878,
+   "bet_b": 0.0996,
+   "bet_o": 0.02974,
+   "allin": 0.00273
+  },
+  "limped|oop|none|pair": {
+   "check": 0.71111,
+   "bet_s": 0.07025,
+   "bet_m": 0.09057,
+   "bet_b": 0.09514,
+   "bet_o": 0.03102,
+   "allin": 0.00192
+  },
+  "limped|oop|none|straight": {
+   "check": 0.68593,
+   "bet_s": 0.07731,
+   "bet_m": 0.09571,
+   "bet_b": 0.10705,
+   "bet_o": 0.03025,
+   "allin": 0.00376
+  },
+  "limped|oop|turn|brick": {
+   "check": 0.41733,
+   "bet_s": 0.10388,
+   "bet_m": 0.15338,
+   "bet_b": 0.22822,
+   "bet_o": 0.07812,
+   "allin": 0.01907
+  },
+  "limped|oop|turn|flush": {
+   "check": 0.44132,
+   "bet_s": 0.1322,
+   "bet_m": 0.14659,
+   "bet_b": 0.20888,
+   "bet_o": 0.05582,
+   "allin": 0.01518
+  },
+  "limped|oop|turn|pair": {
+   "check": 0.45135,
+   "bet_s": 0.09662,
+   "bet_m": 0.1774,
+   "bet_b": 0.19965,
+   "bet_o": 0.05754,
+   "allin": 0.01745
+  },
+  "limped|oop|turn|straight": {
+   "check": 0.45494,
+   "bet_s": 0.15773,
+   "bet_m": 0.14064,
+   "bet_b": 0.18773,
+   "bet_o": 0.0453,
+   "allin": 0.01366
+  },
+  "srp|ip|flop|brick": {
+   "check": 0.60562,
+   "bet_s": 0.03995,
+   "bet_m": 0.13687,
+   "bet_b": 0.18302,
+   "bet_o": 0.02831,
+   "allin": 0.00624
+  },
+  "srp|ip|flop|flush": {
+   "check": 0.61513,
+   "bet_s": 0.03578,
+   "bet_m": 0.13074,
+   "bet_b": 0.17309,
+   "bet_o": 0.03612,
+   "allin": 0.00915
+  },
+  "srp|ip|flop|pair": {
+   "check": 0.62636,
+   "bet_s": 0.04001,
+   "bet_m": 0.12941,
+   "bet_b": 0.16123,
+   "bet_o": 0.03415,
+   "allin": 0.00884
+  },
+  "srp|ip|flop|straight": {
+   "check": 0.58533,
+   "bet_s": 0.04442,
+   "bet_m": 0.14286,
+   "bet_b": 0.1876,
+   "bet_o": 0.03256,
+   "allin": 0.00723
+  },
+  "srp|ip|none|brick": {
+   "check": 0.61807,
+   "bet_s": 0.04671,
+   "bet_m": 0.14058,
+   "bet_b": 0.15791,
+   "bet_o": 0.02557,
+   "allin": 0.01116
+  },
+  "srp|ip|none|flush": {
+   "check": 0.61106,
+   "bet_s": 0.04379,
+   "bet_m": 0.13838,
+   "bet_b": 0.16072,
+   "bet_o": 0.03058,
+   "allin": 0.01547
+  },
+  "srp|ip|none|pair": {
+   "check": 0.63598,
+   "bet_s": 0.05108,
+   "bet_m": 0.13032,
+   "bet_b": 0.14048,
+   "bet_o": 0.02798,
+   "allin": 0.01416
+  },
+  "srp|ip|none|straight": {
+   "check": 0.60125,
+   "bet_s": 0.04521,
+   "bet_m": 0.14288,
+   "bet_b": 0.1687,
+   "bet_o": 0.02997,
+   "allin": 0.01199
+  },
+  "srp|ip|turn|brick": {
+   "check": 0.48084,
+   "bet_s": 0.03635,
+   "bet_m": 0.13957,
+   "bet_b": 0.22552,
+   "bet_o": 0.05571,
+   "allin": 0.06202
+  },
+  "srp|ip|turn|flush": {
+   "check": 0.54086,
+   "bet_s": 0.03743,
+   "bet_m": 0.13565,
+   "bet_b": 0.19883,
+   "bet_o": 0.04074,
+   "allin": 0.04649
+  },
+  "srp|ip|turn|pair": {
+   "check": 0.53751,
+   "bet_s": 0.041,
+   "bet_m": 0.13121,
+   "bet_b": 0.18967,
+   "bet_o": 0.04757,
+   "allin": 0.05304
+  },
+  "srp|ip|turn|straight": {
+   "check": 0.54143,
+   "bet_s": 0.04264,
+   "bet_m": 0.14468,
+   "bet_b": 0.19251,
+   "bet_o": 0.03528,
+   "allin": 0.04345
+  },
+  "srp|oop|flop|brick": {
+   "check": 0.6662,
+   "bet_s": 0.09142,
+   "bet_m": 0.09618,
+   "bet_b": 0.1105,
+   "bet_o": 0.02658,
+   "allin": 0.00912
+  },
+  "srp|oop|flop|flush": {
+   "check": 0.65248,
+   "bet_s": 0.10106,
+   "bet_m": 0.09826,
+   "bet_b": 0.10987,
+   "bet_o": 0.02359,
+   "allin": 0.01474
+  },
+  "srp|oop|flop|pair": {
+   "check": 0.66505,
+   "bet_s": 0.0933,
+   "bet_m": 0.0985,
+   "bet_b": 0.10391,
+   "bet_o": 0.02673,
+   "allin": 0.01251
+  },
+  "srp|oop|flop|straight": {
+   "check": 0.63762,
+   "bet_s": 0.11624,
+   "bet_m": 0.10415,
+   "bet_b": 0.10757,
+   "bet_o": 0.02128,
+   "allin": 0.01314
+  },
+  "srp|oop|none|brick": {
+   "check": 0.68305,
+   "bet_s": 0.08423,
+   "bet_m": 0.09716,
+   "bet_b": 0.10123,
+   "bet_o": 0.03045,
+   "allin": 0.00389
+  },
+  "srp|oop|none|flush": {
+   "check": 0.66355,
+   "bet_s": 0.08959,
+   "bet_m": 0.10299,
+   "bet_b": 0.10809,
+   "bet_o": 0.02927,
+   "allin": 0.00651
+  },
+  "srp|oop|none|pair": {
+   "check": 0.66004,
+   "bet_s": 0.09508,
+   "bet_m": 0.10303,
+   "bet_b": 0.10468,
+   "bet_o": 0.03263,
+   "allin": 0.00456
+  },
+  "srp|oop|none|straight": {
+   "check": 0.63701,
+   "bet_s": 0.10445,
+   "bet_m": 0.10962,
+   "bet_b": 0.11636,
+   "bet_o": 0.02614,
+   "allin": 0.00642
+  },
+  "srp|oop|turn|brick": {
+   "check": 0.42209,
+   "bet_s": 0.10566,
+   "bet_m": 0.16044,
+   "bet_b": 0.19738,
+   "bet_o": 0.05464,
+   "allin": 0.05979
+  },
+  "srp|oop|turn|flush": {
+   "check": 0.43977,
+   "bet_s": 0.13198,
+   "bet_m": 0.15701,
+   "bet_b": 0.18003,
+   "bet_o": 0.04115,
+   "allin": 0.05006
+  },
+  "srp|oop|turn|pair": {
+   "check": 0.46098,
+   "bet_s": 0.10367,
+   "bet_m": 0.16329,
+   "bet_b": 0.1745,
+   "bet_o": 0.04787,
+   "allin": 0.0497
+  },
+  "srp|oop|turn|straight": {
+   "check": 0.43239,
+   "bet_s": 0.15578,
+   "bet_m": 0.15861,
+   "bet_b": 0.17161,
+   "bet_o": 0.03516,
+   "allin": 0.04645
+  }
+ },
+ "resp": {
+  "vs_b|3bp|ip|flop|brick": {
+   "fold": 0.67186,
+   "call": 0.28193,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01307,
+   "allin": 0.03314
+  },
+  "vs_b|3bp|ip|flop|flush": {
+   "fold": 0.65887,
+   "call": 0.29654,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0129,
+   "allin": 0.03169
+  },
+  "vs_b|3bp|ip|flop|pair": {
+   "fold": 0.67853,
+   "call": 0.28077,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01555,
+   "allin": 0.02515
+  },
+  "vs_b|3bp|ip|flop|straight": {
+   "fold": 0.64375,
+   "call": 0.32686,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01493,
+   "allin": 0.01446
+  },
+  "vs_b|3bp|ip|none|brick": {
+   "fold": 0.75203,
+   "call": 0.22417,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.006,
+   "allin": 0.0178
+  },
+  "vs_b|3bp|ip|none|flush": {
+   "fold": 0.76816,
+   "call": 0.20982,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0067,
+   "allin": 0.01532
+  },
+  "vs_b|3bp|ip|none|pair": {
+   "fold": 0.74851,
+   "call": 0.2309,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00819,
+   "allin": 0.0124
+  },
+  "vs_b|3bp|ip|none|straight": {
+   "fold": 0.75163,
+   "call": 0.22571,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01189,
+   "allin": 0.01078
+  },
+  "vs_b|3bp|ip|turn|brick": {
+   "fold": 0.70036,
+   "call": 0.28237,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0032,
+   "allin": 0.01407
+  },
+  "vs_b|3bp|ip|turn|flush": {
+   "fold": 0.68885,
+   "call": 0.28934,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00516,
+   "allin": 0.01665
+  },
+  "vs_b|3bp|ip|turn|pair": {
+   "fold": 0.6365,
+   "call": 0.33948,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00579,
+   "allin": 0.01824
+  },
+  "vs_b|3bp|ip|turn|straight": {
+   "fold": 0.68465,
+   "call": 0.29233,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00919,
+   "allin": 0.01383
+  },
+  "vs_b|3bp|oop|flop|brick": {
+   "fold": 0.67646,
+   "call": 0.28186,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00822,
+   "allin": 0.03345
+  },
+  "vs_b|3bp|oop|flop|flush": {
+   "fold": 0.6697,
+   "call": 0.27205,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01481,
+   "allin": 0.04345
+  },
+  "vs_b|3bp|oop|flop|pair": {
+   "fold": 0.65973,
+   "call": 0.29554,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01077,
+   "allin": 0.03395
+  },
+  "vs_b|3bp|oop|flop|straight": {
+   "fold": 0.68178,
+   "call": 0.26764,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01868,
+   "allin": 0.03191
+  },
+  "vs_b|3bp|oop|none|brick": {
+   "fold": 0.68409,
+   "call": 0.27949,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01066,
+   "allin": 0.02576
+  },
+  "vs_b|3bp|oop|none|flush": {
+   "fold": 0.68909,
+   "call": 0.26895,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01287,
+   "allin": 0.02909
+  },
+  "vs_b|3bp|oop|none|pair": {
+   "fold": 0.66631,
+   "call": 0.29641,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01266,
+   "allin": 0.02463
+  },
+  "vs_b|3bp|oop|none|straight": {
+   "fold": 0.69503,
+   "call": 0.26183,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01884,
+   "allin": 0.0243
+  },
+  "vs_b|3bp|oop|turn|brick": {
+   "fold": 0.66634,
+   "call": 0.30895,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0048,
+   "allin": 0.01991
+  },
+  "vs_b|3bp|oop|turn|flush": {
+   "fold": 0.65834,
+   "call": 0.3037,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01033,
+   "allin": 0.02763
+  },
+  "vs_b|3bp|oop|turn|pair": {
+   "fold": 0.62136,
+   "call": 0.3524,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0076,
+   "allin": 0.01864
+  },
+  "vs_b|3bp|oop|turn|straight": {
+   "fold": 0.66501,
+   "call": 0.29848,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01104,
+   "allin": 0.02547
+  },
+  "vs_b|limped|ip|flop|brick": {
+   "fold": 0.63672,
+   "call": 0.31772,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03302,
+   "allin": 0.01254
+  },
+  "vs_b|limped|ip|flop|flush": {
+   "fold": 0.64396,
+   "call": 0.31537,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03228,
+   "allin": 0.0084
+  },
+  "vs_b|limped|ip|flop|pair": {
+   "fold": 0.60136,
+   "call": 0.36213,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02634,
+   "allin": 0.01017
+  },
+  "vs_b|limped|ip|flop|straight": {
+   "fold": 0.6656,
+   "call": 0.29886,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02192,
+   "allin": 0.01362
+  },
+  "vs_b|limped|ip|none|brick": {
+   "fold": 0.73217,
+   "call": 0.24098,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02067,
+   "allin": 0.00618
+  },
+  "vs_b|limped|ip|none|flush": {
+   "fold": 0.736,
+   "call": 0.23295,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02612,
+   "allin": 0.00493
+  },
+  "vs_b|limped|ip|none|pair": {
+   "fold": 0.68524,
+   "call": 0.28416,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02508,
+   "allin": 0.00553
+  },
+  "vs_b|limped|ip|none|straight": {
+   "fold": 0.70641,
+   "call": 0.24623,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03898,
+   "allin": 0.00837
+  },
+  "vs_b|limped|ip|turn|brick": {
+   "fold": 0.58362,
+   "call": 0.37292,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0327,
+   "allin": 0.01076
+  },
+  "vs_b|limped|ip|turn|flush": {
+   "fold": 0.60741,
+   "call": 0.33853,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0386,
+   "allin": 0.01546
+  },
+  "vs_b|limped|ip|turn|pair": {
+   "fold": 0.54675,
+   "call": 0.40061,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03762,
+   "allin": 0.01503
+  },
+  "vs_b|limped|ip|turn|straight": {
+   "fold": 0.65685,
+   "call": 0.28364,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04928,
+   "allin": 0.01023
+  },
+  "vs_b|limped|oop|flop|brick": {
+   "fold": 0.60726,
+   "call": 0.32534,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05896,
+   "allin": 0.00843
+  },
+  "vs_b|limped|oop|flop|flush": {
+   "fold": 0.60358,
+   "call": 0.30569,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.07479,
+   "allin": 0.01595
+  },
+  "vs_b|limped|oop|flop|pair": {
+   "fold": 0.61033,
+   "call": 0.3,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.07694,
+   "allin": 0.01273
+  },
+  "vs_b|limped|oop|flop|straight": {
+   "fold": 0.66103,
+   "call": 0.27779,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04997,
+   "allin": 0.01121
+  },
+  "vs_b|limped|oop|none|brick": {
+   "fold": 0.67022,
+   "call": 0.27292,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05335,
+   "allin": 0.00351
+  },
+  "vs_b|limped|oop|none|flush": {
+   "fold": 0.67124,
+   "call": 0.25912,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06411,
+   "allin": 0.00552
+  },
+  "vs_b|limped|oop|none|pair": {
+   "fold": 0.64266,
+   "call": 0.29383,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05761,
+   "allin": 0.0059
+  },
+  "vs_b|limped|oop|none|straight": {
+   "fold": 0.64575,
+   "call": 0.25893,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.08747,
+   "allin": 0.00785
+  },
+  "vs_b|limped|oop|turn|brick": {
+   "fold": 0.57401,
+   "call": 0.34406,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06713,
+   "allin": 0.01481
+  },
+  "vs_b|limped|oop|turn|flush": {
+   "fold": 0.58474,
+   "call": 0.31973,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.07845,
+   "allin": 0.01709
+  },
+  "vs_b|limped|oop|turn|pair": {
+   "fold": 0.59087,
+   "call": 0.33199,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06498,
+   "allin": 0.01216
+  },
+  "vs_b|limped|oop|turn|straight": {
+   "fold": 0.60042,
+   "call": 0.31866,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06465,
+   "allin": 0.01627
+  },
+  "vs_b|srp|ip|flop|brick": {
+   "fold": 0.62611,
+   "call": 0.30716,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05294,
+   "allin": 0.01379
+  },
+  "vs_b|srp|ip|flop|flush": {
+   "fold": 0.62325,
+   "call": 0.31741,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04534,
+   "allin": 0.014
+  },
+  "vs_b|srp|ip|flop|pair": {
+   "fold": 0.61202,
+   "call": 0.33098,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04351,
+   "allin": 0.01349
+  },
+  "vs_b|srp|ip|flop|straight": {
+   "fold": 0.65778,
+   "call": 0.28962,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04058,
+   "allin": 0.01203
+  },
+  "vs_b|srp|ip|none|brick": {
+   "fold": 0.73769,
+   "call": 0.22918,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02468,
+   "allin": 0.00846
+  },
+  "vs_b|srp|ip|none|flush": {
+   "fold": 0.72746,
+   "call": 0.23959,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02323,
+   "allin": 0.00973
+  },
+  "vs_b|srp|ip|none|pair": {
+   "fold": 0.71083,
+   "call": 0.26153,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01593,
+   "allin": 0.01171
+  },
+  "vs_b|srp|ip|none|straight": {
+   "fold": 0.72226,
+   "call": 0.24376,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02343,
+   "allin": 0.01055
+  },
+  "vs_b|srp|ip|turn|brick": {
+   "fold": 0.60594,
+   "call": 0.35289,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01836,
+   "allin": 0.0228
+  },
+  "vs_b|srp|ip|turn|flush": {
+   "fold": 0.62255,
+   "call": 0.31467,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02458,
+   "allin": 0.03819
+  },
+  "vs_b|srp|ip|turn|pair": {
+   "fold": 0.55976,
+   "call": 0.38723,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02103,
+   "allin": 0.03199
+  },
+  "vs_b|srp|ip|turn|straight": {
+   "fold": 0.66116,
+   "call": 0.29539,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02374,
+   "allin": 0.01971
+  },
+  "vs_b|srp|oop|flop|brick": {
+   "fold": 0.59299,
+   "call": 0.34224,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04759,
+   "allin": 0.01718
+  },
+  "vs_b|srp|oop|flop|flush": {
+   "fold": 0.62528,
+   "call": 0.29508,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05139,
+   "allin": 0.02826
+  },
+  "vs_b|srp|oop|flop|pair": {
+   "fold": 0.59411,
+   "call": 0.34026,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04607,
+   "allin": 0.01956
+  },
+  "vs_b|srp|oop|flop|straight": {
+   "fold": 0.62997,
+   "call": 0.29673,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05308,
+   "allin": 0.02022
+  },
+  "vs_b|srp|oop|none|brick": {
+   "fold": 0.67195,
+   "call": 0.28291,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03802,
+   "allin": 0.00712
+  },
+  "vs_b|srp|oop|none|flush": {
+   "fold": 0.68502,
+   "call": 0.25459,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04686,
+   "allin": 0.01352
+  },
+  "vs_b|srp|oop|none|pair": {
+   "fold": 0.64422,
+   "call": 0.30512,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04135,
+   "allin": 0.00931
+  },
+  "vs_b|srp|oop|none|straight": {
+   "fold": 0.6995,
+   "call": 0.23752,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05009,
+   "allin": 0.0129
+  },
+  "vs_b|srp|oop|turn|brick": {
+   "fold": 0.59424,
+   "call": 0.34836,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03229,
+   "allin": 0.02511
+  },
+  "vs_b|srp|oop|turn|flush": {
+   "fold": 0.60485,
+   "call": 0.31617,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04464,
+   "allin": 0.03435
+  },
+  "vs_b|srp|oop|turn|pair": {
+   "fold": 0.55684,
+   "call": 0.38291,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03617,
+   "allin": 0.02407
+  },
+  "vs_b|srp|oop|turn|straight": {
+   "fold": 0.63091,
+   "call": 0.30589,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04003,
+   "allin": 0.02317
+  },
+  "vs_b:raise|3bp|ip|flop|brick": {
+   "fold": 0.5722,
+   "call": 0.36139,
+   "raise_s": 0.0,
+   "raise_m": 0.00041,
+   "raise_b": 0.01258,
+   "allin": 0.05342
+  },
+  "vs_b:raise|3bp|ip|flop|flush": {
+   "fold": 0.57638,
+   "call": 0.36534,
+   "raise_s": 0.0,
+   "raise_m": 0.00076,
+   "raise_b": 0.02662,
+   "allin": 0.0309
+  },
+  "vs_b:raise|3bp|ip|flop|pair": {
+   "fold": 0.54243,
+   "call": 0.40539,
+   "raise_s": 0.0,
+   "raise_m": 0.00082,
+   "raise_b": 0.02125,
+   "allin": 0.03012
+  },
+  "vs_b:raise|3bp|ip|flop|straight": {
+   "fold": 0.56825,
+   "call": 0.37325,
+   "raise_s": 0.0,
+   "raise_m": 0.00106,
+   "raise_b": 0.02728,
+   "allin": 0.03016
+  },
+  "vs_b:raise|3bp|ip|none|brick": {
+   "fold": 0.60711,
+   "call": 0.35374,
+   "raise_s": 0.0,
+   "raise_m": 0.00021,
+   "raise_b": 0.01389,
+   "allin": 0.02505
+  },
+  "vs_b:raise|3bp|ip|none|flush": {
+   "fold": 0.58841,
+   "call": 0.36093,
+   "raise_s": 0.0,
+   "raise_m": 0.00042,
+   "raise_b": 0.01092,
+   "allin": 0.03931
+  },
+  "vs_b:raise|3bp|ip|none|pair": {
+   "fold": 0.58417,
+   "call": 0.36367,
+   "raise_s": 0.0,
+   "raise_m": 0.00049,
+   "raise_b": 0.02175,
+   "allin": 0.02991
+  },
+  "vs_b:raise|3bp|ip|none|straight": {
+   "fold": 0.5711,
+   "call": 0.36588,
+   "raise_s": 0.0,
+   "raise_m": 0.0028,
+   "raise_b": 0.02203,
+   "allin": 0.03819
+  },
+  "vs_b:raise|3bp|ip|turn|brick": {
+   "fold": 0.53181,
+   "call": 0.40961,
+   "raise_s": 0.0,
+   "raise_m": 0.00092,
+   "raise_b": 0.02385,
+   "allin": 0.03381
+  },
+  "vs_b:raise|3bp|ip|turn|flush": {
+   "fold": 0.56608,
+   "call": 0.35875,
+   "raise_s": 0.0,
+   "raise_m": 0.0012,
+   "raise_b": 0.02539,
+   "allin": 0.04859
+  },
+  "vs_b:raise|3bp|ip|turn|pair": {
+   "fold": 0.58107,
+   "call": 0.35964,
+   "raise_s": 0.0,
+   "raise_m": 0.00127,
+   "raise_b": 0.02692,
+   "allin": 0.0311
+  },
+  "vs_b:raise|3bp|ip|turn|straight": {
+   "fold": 0.54663,
+   "call": 0.38585,
+   "raise_s": 0.0,
+   "raise_m": 0.00144,
+   "raise_b": 0.03066,
+   "allin": 0.03542
+  },
+  "vs_b:raise|3bp|oop|flop|brick": {
+   "fold": 0.60363,
+   "call": 0.33443,
+   "raise_s": 0.0,
+   "raise_m": 0.00113,
+   "raise_b": 0.024,
+   "allin": 0.03682
+  },
+  "vs_b:raise|3bp|oop|flop|flush": {
+   "fold": 0.5284,
+   "call": 0.40567,
+   "raise_s": 0.0,
+   "raise_m": 0.00141,
+   "raise_b": 0.02994,
+   "allin": 0.03458
+  },
+  "vs_b:raise|3bp|oop|flop|pair": {
+   "fold": 0.53653,
+   "call": 0.38849,
+   "raise_s": 0.0,
+   "raise_m": 0.00148,
+   "raise_b": 0.03135,
+   "allin": 0.04216
+  },
+  "vs_b:raise|3bp|oop|flop|straight": {
+   "fold": 0.54061,
+   "call": 0.39157,
+   "raise_s": 0.0,
+   "raise_m": 0.00159,
+   "raise_b": 0.0337,
+   "allin": 0.03254
+  },
+  "vs_b:raise|3bp|oop|none|brick": {
+   "fold": 0.58334,
+   "call": 0.37445,
+   "raise_s": 0.0,
+   "raise_m": 0.00062,
+   "raise_b": 0.01887,
+   "allin": 0.02271
+  },
+  "vs_b:raise|3bp|oop|none|flush": {
+   "fold": 0.55648,
+   "call": 0.39098,
+   "raise_s": 0.0,
+   "raise_m": 0.00104,
+   "raise_b": 0.02196,
+   "allin": 0.02954
+  },
+  "vs_b:raise|3bp|oop|none|pair": {
+   "fold": 0.53735,
+   "call": 0.41314,
+   "raise_s": 0.0,
+   "raise_m": 0.00106,
+   "raise_b": 0.02248,
+   "allin": 0.02597
+  },
+  "vs_b:raise|3bp|oop|none|straight": {
+   "fold": 0.55776,
+   "call": 0.37638,
+   "raise_s": 0.0,
+   "raise_m": 0.00513,
+   "raise_b": 0.02818,
+   "allin": 0.03255
+  },
+  "vs_b:raise|3bp|oop|turn|brick": {
+   "fold": 0.53293,
+   "call": 0.41086,
+   "raise_s": 0.0,
+   "raise_m": 0.00132,
+   "raise_b": 0.02793,
+   "allin": 0.02697
+  },
+  "vs_b:raise|3bp|oop|turn|flush": {
+   "fold": 0.52632,
+   "call": 0.41242,
+   "raise_s": 0.0,
+   "raise_m": 0.00143,
+   "raise_b": 0.03043,
+   "allin": 0.02939
+  },
+  "vs_b:raise|3bp|oop|turn|pair": {
+   "fold": 0.53199,
+   "call": 0.40672,
+   "raise_s": 0.0,
+   "raise_m": 0.00143,
+   "raise_b": 0.03045,
+   "allin": 0.0294
+  },
+  "vs_b:raise|3bp|oop|turn|straight": {
+   "fold": 0.51895,
+   "call": 0.40649,
+   "raise_s": 0.0,
+   "raise_m": 0.0016,
+   "raise_b": 0.03386,
+   "allin": 0.03911
+  },
+  "vs_b:raise|limped|ip|flop|brick": {
+   "fold": 0.51701,
+   "call": 0.42063,
+   "raise_s": 0.0,
+   "raise_m": 0.00114,
+   "raise_b": 0.02416,
+   "allin": 0.03707
+  },
+  "vs_b:raise|limped|ip|flop|flush": {
+   "fold": 0.5114,
+   "call": 0.41787,
+   "raise_s": 0.0,
+   "raise_m": 0.00139,
+   "raise_b": 0.02957,
+   "allin": 0.03977
+  },
+  "vs_b:raise|limped|ip|flop|pair": {
+   "fold": 0.51863,
+   "call": 0.40952,
+   "raise_s": 0.0,
+   "raise_m": 0.00138,
+   "raise_b": 0.04209,
+   "allin": 0.02837
+  },
+  "vs_b:raise|limped|ip|flop|straight": {
+   "fold": 0.526,
+   "call": 0.39558,
+   "raise_s": 0.0,
+   "raise_m": 0.00153,
+   "raise_b": 0.03944,
+   "allin": 0.03746
+  },
+  "vs_b:raise|limped|ip|none|brick": {
+   "fold": 0.50517,
+   "call": 0.41894,
+   "raise_s": 0.0,
+   "raise_m": 0.00291,
+   "raise_b": 0.04494,
+   "allin": 0.02803
+  },
+  "vs_b:raise|limped|ip|none|flush": {
+   "fold": 0.52138,
+   "call": 0.38834,
+   "raise_s": 0.0,
+   "raise_m": 0.00277,
+   "raise_b": 0.06128,
+   "allin": 0.02623
+  },
+  "vs_b:raise|limped|ip|none|pair": {
+   "fold": 0.51301,
+   "call": 0.37957,
+   "raise_s": 0.0,
+   "raise_m": 0.00092,
+   "raise_b": 0.06565,
+   "allin": 0.04086
+  },
+  "vs_b:raise|limped|ip|none|straight": {
+   "fold": 0.51584,
+   "call": 0.40961,
+   "raise_s": 0.0,
+   "raise_m": 0.00371,
+   "raise_b": 0.05119,
+   "allin": 0.01966
+  },
+  "vs_b:raise|limped|ip|turn|brick": {
+   "fold": 0.49383,
+   "call": 0.42347,
+   "raise_s": 0.0,
+   "raise_m": 0.00504,
+   "raise_b": 0.04567,
+   "allin": 0.032
+  },
+  "vs_b:raise|limped|ip|turn|flush": {
+   "fold": 0.51347,
+   "call": 0.41518,
+   "raise_s": 0.0,
+   "raise_m": 0.00151,
+   "raise_b": 0.03893,
+   "allin": 0.03091
+  },
+  "vs_b:raise|limped|ip|turn|pair": {
+   "fold": 0.4928,
+   "call": 0.44396,
+   "raise_s": 0.0,
+   "raise_m": 0.00148,
+   "raise_b": 0.03142,
+   "allin": 0.03034
+  },
+  "vs_b:raise|limped|ip|turn|straight": {
+   "fold": 0.50746,
+   "call": 0.41343,
+   "raise_s": 0.0,
+   "raise_m": 0.00152,
+   "raise_b": 0.04635,
+   "allin": 0.03124
+  },
+  "vs_b:raise|limped|oop|flop|brick": {
+   "fold": 0.51841,
+   "call": 0.4143,
+   "raise_s": 0.0,
+   "raise_m": 0.00158,
+   "raise_b": 0.03343,
+   "allin": 0.03228
+  },
+  "vs_b:raise|limped|oop|flop|flush": {
+   "fold": 0.53055,
+   "call": 0.39812,
+   "raise_s": 0.0,
+   "raise_m": 0.00167,
+   "raise_b": 0.03544,
+   "allin": 0.03422
+  },
+  "vs_b:raise|limped|oop|flop|pair": {
+   "fold": 0.53282,
+   "call": 0.39721,
+   "raise_s": 0.0,
+   "raise_m": 0.00164,
+   "raise_b": 0.03476,
+   "allin": 0.03357
+  },
+  "vs_b:raise|limped|oop|flop|straight": {
+   "fold": 0.52756,
+   "call": 0.40065,
+   "raise_s": 0.0,
+   "raise_m": 0.00168,
+   "raise_b": 0.03567,
+   "allin": 0.03444
+  },
+  "vs_b:raise|limped|oop|none|brick": {
+   "fold": 0.49014,
+   "call": 0.44154,
+   "raise_s": 0.0,
+   "raise_m": 0.00122,
+   "raise_b": 0.03715,
+   "allin": 0.02996
+  },
+  "vs_b:raise|limped|oop|none|flush": {
+   "fold": 0.53583,
+   "call": 0.39594,
+   "raise_s": 0.0,
+   "raise_m": 0.00146,
+   "raise_b": 0.03098,
+   "allin": 0.03579
+  },
+  "vs_b:raise|limped|oop|none|pair": {
+   "fold": 0.50288,
+   "call": 0.42531,
+   "raise_s": 0.0,
+   "raise_m": 0.0014,
+   "raise_b": 0.03611,
+   "allin": 0.0343
+  },
+  "vs_b:raise|limped|oop|none|straight": {
+   "fold": 0.50695,
+   "call": 0.43083,
+   "raise_s": 0.0,
+   "raise_m": 0.00146,
+   "raise_b": 0.03091,
+   "allin": 0.02985
+  },
+  "vs_b:raise|limped|oop|turn|brick": {
+   "fold": 0.51998,
+   "call": 0.39986,
+   "raise_s": 0.0,
+   "raise_m": 0.00154,
+   "raise_b": 0.04696,
+   "allin": 0.03165
+  },
+  "vs_b:raise|limped|oop|turn|flush": {
+   "fold": 0.53282,
+   "call": 0.39721,
+   "raise_s": 0.0,
+   "raise_m": 0.00164,
+   "raise_b": 0.03476,
+   "allin": 0.03357
+  },
+  "vs_b:raise|limped|oop|turn|pair": {
+   "fold": 0.5234,
+   "call": 0.39679,
+   "raise_s": 0.0,
+   "raise_m": 0.00622,
+   "raise_b": 0.03415,
+   "allin": 0.03945
+  },
+  "vs_b:raise|limped|oop|turn|straight": {
+   "fold": 0.5299,
+   "call": 0.39969,
+   "raise_s": 0.0,
+   "raise_m": 0.00165,
+   "raise_b": 0.03498,
+   "allin": 0.03378
+  },
+  "vs_b:raise|srp|ip|flop|brick": {
+   "fold": 0.50489,
+   "call": 0.39892,
+   "raise_s": 0.0,
+   "raise_m": 0.00319,
+   "raise_b": 0.05173,
+   "allin": 0.04127
+  },
+  "vs_b:raise|srp|ip|flop|flush": {
+   "fold": 0.52076,
+   "call": 0.38909,
+   "raise_s": 0.0,
+   "raise_m": 0.00116,
+   "raise_b": 0.0407,
+   "allin": 0.04829
+  },
+  "vs_b:raise|srp|ip|flop|pair": {
+   "fold": 0.5164,
+   "call": 0.39714,
+   "raise_s": 0.0,
+   "raise_m": 0.00114,
+   "raise_b": 0.04707,
+   "allin": 0.03825
+  },
+  "vs_b:raise|srp|ip|flop|straight": {
+   "fold": 0.54768,
+   "call": 0.36611,
+   "raise_s": 0.0,
+   "raise_m": 0.00045,
+   "raise_b": 0.04912,
+   "allin": 0.03663
+  },
+  "vs_b:raise|srp|ip|none|brick": {
+   "fold": 0.51928,
+   "call": 0.39932,
+   "raise_s": 0.0,
+   "raise_m": 0.00085,
+   "raise_b": 0.05019,
+   "allin": 0.03035
+  },
+  "vs_b:raise|srp|ip|none|flush": {
+   "fold": 0.54914,
+   "call": 0.36661,
+   "raise_s": 0.0,
+   "raise_m": 0.00059,
+   "raise_b": 0.04573,
+   "allin": 0.03794
+  },
+  "vs_b:raise|srp|ip|none|pair": {
+   "fold": 0.53936,
+   "call": 0.37688,
+   "raise_s": 0.0,
+   "raise_m": 0.00339,
+   "raise_b": 0.04504,
+   "allin": 0.03534
+  },
+  "vs_b:raise|srp|ip|none|straight": {
+   "fold": 0.54301,
+   "call": 0.37526,
+   "raise_s": 0.0,
+   "raise_m": 0.00452,
+   "raise_b": 0.04409,
+   "allin": 0.03312
+  },
+  "vs_b:raise|srp|ip|turn|brick": {
+   "fold": 0.51228,
+   "call": 0.41338,
+   "raise_s": 0.0,
+   "raise_m": 0.00263,
+   "raise_b": 0.03698,
+   "allin": 0.03473
+  },
+  "vs_b:raise|srp|ip|turn|flush": {
+   "fold": 0.51338,
+   "call": 0.40903,
+   "raise_s": 0.0,
+   "raise_m": 0.00277,
+   "raise_b": 0.02838,
+   "allin": 0.04644
+  },
+  "vs_b:raise|srp|ip|turn|pair": {
+   "fold": 0.52007,
+   "call": 0.42364,
+   "raise_s": 0.0,
+   "raise_m": 0.00235,
+   "raise_b": 0.02683,
+   "allin": 0.02711
+  },
+  "vs_b:raise|srp|ip|turn|straight": {
+   "fold": 0.46692,
+   "call": 0.45878,
+   "raise_s": 0.0,
+   "raise_m": 0.00082,
+   "raise_b": 0.04008,
+   "allin": 0.03339
+  },
+  "vs_b:raise|srp|oop|flop|brick": {
+   "fold": 0.48741,
+   "call": 0.43846,
+   "raise_s": 0.0,
+   "raise_m": 0.00088,
+   "raise_b": 0.03064,
+   "allin": 0.04261
+  },
+  "vs_b:raise|srp|oop|flop|flush": {
+   "fold": 0.51991,
+   "call": 0.40523,
+   "raise_s": 0.0,
+   "raise_m": 0.00125,
+   "raise_b": 0.03797,
+   "allin": 0.03564
+  },
+  "vs_b:raise|srp|oop|flop|pair": {
+   "fold": 0.53617,
+   "call": 0.39903,
+   "raise_s": 0.0,
+   "raise_m": 0.00117,
+   "raise_b": 0.03022,
+   "allin": 0.03341
+  },
+  "vs_b:raise|srp|oop|flop|straight": {
+   "fold": 0.51461,
+   "call": 0.42488,
+   "raise_s": 0.0,
+   "raise_m": 0.00142,
+   "raise_b": 0.03007,
+   "allin": 0.02903
+  },
+  "vs_b:raise|srp|oop|none|brick": {
+   "fold": 0.51232,
+   "call": 0.43247,
+   "raise_s": 0.0,
+   "raise_m": 0.00085,
+   "raise_b": 0.01979,
+   "allin": 0.03457
+  },
+  "vs_b:raise|srp|oop|none|flush": {
+   "fold": 0.50587,
+   "call": 0.43261,
+   "raise_s": 0.0,
+   "raise_m": 0.00048,
+   "raise_b": 0.0188,
+   "allin": 0.04224
+  },
+  "vs_b:raise|srp|oop|none|pair": {
+   "fold": 0.52367,
+   "call": 0.4124,
+   "raise_s": 0.0,
+   "raise_m": 0.00046,
+   "raise_b": 0.02449,
+   "allin": 0.03897
+  },
+  "vs_b:raise|srp|oop|none|straight": {
+   "fold": 0.49522,
+   "call": 0.44746,
+   "raise_s": 0.0,
+   "raise_m": 0.00649,
+   "raise_b": 0.02059,
+   "allin": 0.03024
+  },
+  "vs_b:raise|srp|oop|turn|brick": {
+   "fold": 0.49892,
+   "call": 0.45877,
+   "raise_s": 0.0,
+   "raise_m": 0.00265,
+   "raise_b": 0.01456,
+   "allin": 0.0251
+  },
+  "vs_b:raise|srp|oop|turn|flush": {
+   "fold": 0.49946,
+   "call": 0.43248,
+   "raise_s": 0.0,
+   "raise_m": 0.00106,
+   "raise_b": 0.03235,
+   "allin": 0.03465
+  },
+  "vs_b:raise|srp|oop|turn|pair": {
+   "fold": 0.49203,
+   "call": 0.45164,
+   "raise_s": 0.0,
+   "raise_m": 0.00095,
+   "raise_b": 0.02448,
+   "allin": 0.03089
+  },
+  "vs_b:raise|srp|oop|turn|straight": {
+   "fold": 0.49488,
+   "call": 0.42053,
+   "raise_s": 0.0,
+   "raise_m": 0.0083,
+   "raise_b": 0.02618,
+   "allin": 0.05011
+  },
+  "vs_m|3bp|ip|flop|brick": {
+   "fold": 0.51018,
+   "call": 0.40678,
+   "raise_s": 0.0,
+   "raise_m": 0.00055,
+   "raise_b": 0.02268,
+   "allin": 0.05981
+  },
+  "vs_m|3bp|ip|flop|flush": {
+   "fold": 0.5016,
+   "call": 0.42455,
+   "raise_s": 0.0,
+   "raise_m": 0.00018,
+   "raise_b": 0.02185,
+   "allin": 0.0518
+  },
+  "vs_m|3bp|ip|flop|pair": {
+   "fold": 0.48623,
+   "call": 0.43654,
+   "raise_s": 0.0,
+   "raise_m": 0.00322,
+   "raise_b": 0.02251,
+   "allin": 0.0515
+  },
+  "vs_m|3bp|ip|flop|straight": {
+   "fold": 0.48786,
+   "call": 0.43912,
+   "raise_s": 0.0,
+   "raise_m": 0.00042,
+   "raise_b": 0.03444,
+   "allin": 0.03817
+  },
+  "vs_m|3bp|ip|none|brick": {
+   "fold": 0.63736,
+   "call": 0.32494,
+   "raise_s": 0.0,
+   "raise_m": 0.00027,
+   "raise_b": 0.0125,
+   "allin": 0.02494
+  },
+  "vs_m|3bp|ip|none|flush": {
+   "fold": 0.64284,
+   "call": 0.31698,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.01604,
+   "allin": 0.02406
+  },
+  "vs_m|3bp|ip|none|pair": {
+   "fold": 0.61706,
+   "call": 0.34698,
+   "raise_s": 0.0,
+   "raise_m": 0.00075,
+   "raise_b": 0.01076,
+   "allin": 0.02446
+  },
+  "vs_m|3bp|ip|none|straight": {
+   "fold": 0.62402,
+   "call": 0.34188,
+   "raise_s": 0.0,
+   "raise_m": 0.00017,
+   "raise_b": 0.01282,
+   "allin": 0.02112
+  },
+  "vs_m|3bp|ip|turn|brick": {
+   "fold": 0.53058,
+   "call": 0.42722,
+   "raise_s": 0.0,
+   "raise_m": 0.0003,
+   "raise_b": 0.00744,
+   "allin": 0.03446
+  },
+  "vs_m|3bp|ip|turn|flush": {
+   "fold": 0.55491,
+   "call": 0.39971,
+   "raise_s": 0.0,
+   "raise_m": 0.00011,
+   "raise_b": 0.01065,
+   "allin": 0.03461
+  },
+  "vs_m|3bp|ip|turn|pair": {
+   "fold": 0.47848,
+   "call": 0.47675,
+   "raise_s": 0.0,
+   "raise_m": 0.0017,
+   "raise_b": 0.009,
+   "allin": 0.03407
+  },
+  "vs_m|3bp|ip|turn|straight": {
+   "fold": 0.5652,
+   "call": 0.38864,
+   "raise_s": 0.0,
+   "raise_m": 0.00233,
+   "raise_b": 0.01583,
+   "allin": 0.028
+  },
+  "vs_m|3bp|oop|flop|brick": {
+   "fold": 0.51615,
+   "call": 0.38936,
+   "raise_s": 0.0,
+   "raise_m": 0.00205,
+   "raise_b": 0.02202,
+   "allin": 0.07042
+  },
+  "vs_m|3bp|oop|flop|flush": {
+   "fold": 0.47675,
+   "call": 0.39843,
+   "raise_s": 0.0,
+   "raise_m": 0.0002,
+   "raise_b": 0.02728,
+   "allin": 0.09734
+  },
+  "vs_m|3bp|oop|flop|pair": {
+   "fold": 0.47631,
+   "call": 0.43345,
+   "raise_s": 0.0,
+   "raise_m": 0.00431,
+   "raise_b": 0.02548,
+   "allin": 0.06046
+  },
+  "vs_m|3bp|oop|flop|straight": {
+   "fold": 0.49064,
+   "call": 0.38021,
+   "raise_s": 0.0,
+   "raise_m": 0.01001,
+   "raise_b": 0.05484,
+   "allin": 0.06431
+  },
+  "vs_m|3bp|oop|none|brick": {
+   "fold": 0.53859,
+   "call": 0.39262,
+   "raise_s": 0.0,
+   "raise_m": 0.0026,
+   "raise_b": 0.02704,
+   "allin": 0.03914
+  },
+  "vs_m|3bp|oop|none|flush": {
+   "fold": 0.53071,
+   "call": 0.38132,
+   "raise_s": 0.0,
+   "raise_m": 0.00148,
+   "raise_b": 0.03374,
+   "allin": 0.05275
+  },
+  "vs_m|3bp|oop|none|pair": {
+   "fold": 0.50581,
+   "call": 0.4305,
+   "raise_s": 0.0,
+   "raise_m": 0.00192,
+   "raise_b": 0.02328,
+   "allin": 0.03849
+  },
+  "vs_m|3bp|oop|none|straight": {
+   "fold": 0.56812,
+   "call": 0.34742,
+   "raise_s": 0.0,
+   "raise_m": 0.00548,
+   "raise_b": 0.04483,
+   "allin": 0.03416
+  },
+  "vs_m|3bp|oop|turn|brick": {
+   "fold": 0.50901,
+   "call": 0.43739,
+   "raise_s": 0.0,
+   "raise_m": 0.00121,
+   "raise_b": 0.01043,
+   "allin": 0.04195
+  },
+  "vs_m|3bp|oop|turn|flush": {
+   "fold": 0.49155,
+   "call": 0.437,
+   "raise_s": 0.0,
+   "raise_m": 0.00111,
+   "raise_b": 0.01997,
+   "allin": 0.05038
+  },
+  "vs_m|3bp|oop|turn|pair": {
+   "fold": 0.46747,
+   "call": 0.47435,
+   "raise_s": 0.0,
+   "raise_m": 0.00157,
+   "raise_b": 0.01447,
+   "allin": 0.04214
+  },
+  "vs_m|3bp|oop|turn|straight": {
+   "fold": 0.49957,
+   "call": 0.42757,
+   "raise_s": 0.0,
+   "raise_m": 0.00264,
+   "raise_b": 0.01733,
+   "allin": 0.0529
+  },
+  "vs_m|limped|ip|flop|brick": {
+   "fold": 0.48753,
+   "call": 0.44837,
+   "raise_s": 0.0,
+   "raise_m": 0.00027,
+   "raise_b": 0.05772,
+   "allin": 0.00612
+  },
+  "vs_m|limped|ip|flop|flush": {
+   "fold": 0.47613,
+   "call": 0.44839,
+   "raise_s": 0.0,
+   "raise_m": 0.0006,
+   "raise_b": 0.06502,
+   "allin": 0.00985
+  },
+  "vs_m|limped|ip|flop|pair": {
+   "fold": 0.44906,
+   "call": 0.49012,
+   "raise_s": 0.0,
+   "raise_m": 0.00059,
+   "raise_b": 0.0467,
+   "allin": 0.01352
+  },
+  "vs_m|limped|ip|flop|straight": {
+   "fold": 0.54208,
+   "call": 0.38566,
+   "raise_s": 0.0,
+   "raise_m": 0.00097,
+   "raise_b": 0.05224,
+   "allin": 0.01904
+  },
+  "vs_m|limped|ip|none|brick": {
+   "fold": 0.5956,
+   "call": 0.3656,
+   "raise_s": 0.0,
+   "raise_m": 0.00067,
+   "raise_b": 0.03375,
+   "allin": 0.00438
+  },
+  "vs_m|limped|ip|none|flush": {
+   "fold": 0.57898,
+   "call": 0.38131,
+   "raise_s": 0.0,
+   "raise_m": 0.00158,
+   "raise_b": 0.03236,
+   "allin": 0.00576
+  },
+  "vs_m|limped|ip|none|pair": {
+   "fold": 0.54119,
+   "call": 0.41037,
+   "raise_s": 0.0,
+   "raise_m": 0.00177,
+   "raise_b": 0.03895,
+   "allin": 0.00772
+  },
+  "vs_m|limped|ip|none|straight": {
+   "fold": 0.57158,
+   "call": 0.3658,
+   "raise_s": 0.0,
+   "raise_m": 0.00038,
+   "raise_b": 0.05122,
+   "allin": 0.01103
+  },
+  "vs_m|limped|ip|turn|brick": {
+   "fold": 0.43916,
+   "call": 0.49748,
+   "raise_s": 0.0,
+   "raise_m": 0.00233,
+   "raise_b": 0.05154,
+   "allin": 0.00948
+  },
+  "vs_m|limped|ip|turn|flush": {
+   "fold": 0.45389,
+   "call": 0.45413,
+   "raise_s": 0.0,
+   "raise_m": 0.00228,
+   "raise_b": 0.07225,
+   "allin": 0.01745
+  },
+  "vs_m|limped|ip|turn|pair": {
+   "fold": 0.37901,
+   "call": 0.54217,
+   "raise_s": 0.0,
+   "raise_m": 0.00026,
+   "raise_b": 0.06266,
+   "allin": 0.01591
+  },
+  "vs_m|limped|ip|turn|straight": {
+   "fold": 0.5302,
+   "call": 0.37392,
+   "raise_s": 0.0,
+   "raise_m": 0.00475,
+   "raise_b": 0.07037,
+   "allin": 0.02075
+  },
+  "vs_m|limped|oop|flop|brick": {
+   "fold": 0.4473,
+   "call": 0.45496,
+   "raise_s": 0.0,
+   "raise_m": 0.00421,
+   "raise_b": 0.08135,
+   "allin": 0.01218
+  },
+  "vs_m|limped|oop|flop|flush": {
+   "fold": 0.46761,
+   "call": 0.41389,
+   "raise_s": 0.0,
+   "raise_m": 0.00055,
+   "raise_b": 0.10895,
+   "allin": 0.00899
+  },
+  "vs_m|limped|oop|flop|pair": {
+   "fold": 0.46868,
+   "call": 0.40712,
+   "raise_s": 0.0,
+   "raise_m": 0.00057,
+   "raise_b": 0.11061,
+   "allin": 0.01303
+  },
+  "vs_m|limped|oop|flop|straight": {
+   "fold": 0.48648,
+   "call": 0.38873,
+   "raise_s": 0.0,
+   "raise_m": 0.00087,
+   "raise_b": 0.10967,
+   "allin": 0.01424
+  },
+  "vs_m|limped|oop|none|brick": {
+   "fold": 0.5479,
+   "call": 0.36065,
+   "raise_s": 0.0,
+   "raise_m": 0.00709,
+   "raise_b": 0.0786,
+   "allin": 0.00577
+  },
+  "vs_m|limped|oop|none|flush": {
+   "fold": 0.53708,
+   "call": 0.35141,
+   "raise_s": 0.0,
+   "raise_m": 0.00453,
+   "raise_b": 0.10159,
+   "allin": 0.0054
+  },
+  "vs_m|limped|oop|none|pair": {
+   "fold": 0.52397,
+   "call": 0.37511,
+   "raise_s": 0.0,
+   "raise_m": 0.00345,
+   "raise_b": 0.08977,
+   "allin": 0.0077
+  },
+  "vs_m|limped|oop|none|straight": {
+   "fold": 0.5359,
+   "call": 0.29577,
+   "raise_s": 0.0,
+   "raise_m": 0.01194,
+   "raise_b": 0.14302,
+   "allin": 0.01337
+  },
+  "vs_m|limped|oop|turn|brick": {
+   "fold": 0.44761,
+   "call": 0.4293,
+   "raise_s": 0.0,
+   "raise_m": 0.00589,
+   "raise_b": 0.10432,
+   "allin": 0.01288
+  },
+  "vs_m|limped|oop|turn|flush": {
+   "fold": 0.4207,
+   "call": 0.40435,
+   "raise_s": 0.0,
+   "raise_m": 0.01514,
+   "raise_b": 0.13899,
+   "allin": 0.02083
+  },
+  "vs_m|limped|oop|turn|pair": {
+   "fold": 0.44053,
+   "call": 0.43174,
+   "raise_s": 0.0,
+   "raise_m": 0.00895,
+   "raise_b": 0.10681,
+   "allin": 0.01197
+  },
+  "vs_m|limped|oop|turn|straight": {
+   "fold": 0.41853,
+   "call": 0.42263,
+   "raise_s": 0.0,
+   "raise_m": 0.00648,
+   "raise_b": 0.13613,
+   "allin": 0.01623
+  },
+  "vs_m|srp|ip|flop|brick": {
+   "fold": 0.50097,
+   "call": 0.4072,
+   "raise_s": 0.0,
+   "raise_m": 0.00065,
+   "raise_b": 0.07551,
+   "allin": 0.01567
+  },
+  "vs_m|srp|ip|flop|flush": {
+   "fold": 0.48991,
+   "call": 0.4227,
+   "raise_s": 0.0,
+   "raise_m": 0.00069,
+   "raise_b": 0.07177,
+   "allin": 0.01493
+  },
+  "vs_m|srp|ip|flop|pair": {
+   "fold": 0.45299,
+   "call": 0.46695,
+   "raise_s": 0.0,
+   "raise_m": 0.00075,
+   "raise_b": 0.06602,
+   "allin": 0.01329
+  },
+  "vs_m|srp|ip|flop|straight": {
+   "fold": 0.48967,
+   "call": 0.43773,
+   "raise_s": 0.0,
+   "raise_m": 0.00088,
+   "raise_b": 0.05898,
+   "allin": 0.01275
+  },
+  "vs_m|srp|ip|none|brick": {
+   "fold": 0.6305,
+   "call": 0.32033,
+   "raise_s": 0.0,
+   "raise_m": 0.00051,
+   "raise_b": 0.04063,
+   "allin": 0.00802
+  },
+  "vs_m|srp|ip|none|flush": {
+   "fold": 0.62243,
+   "call": 0.32656,
+   "raise_s": 0.0,
+   "raise_m": 0.00048,
+   "raise_b": 0.04116,
+   "allin": 0.00936
+  },
+  "vs_m|srp|ip|none|pair": {
+   "fold": 0.60552,
+   "call": 0.35399,
+   "raise_s": 0.0,
+   "raise_m": 0.00019,
+   "raise_b": 0.03021,
+   "allin": 0.01008
+  },
+  "vs_m|srp|ip|none|straight": {
+   "fold": 0.6125,
+   "call": 0.33844,
+   "raise_s": 0.0,
+   "raise_m": 0.00041,
+   "raise_b": 0.03844,
+   "allin": 0.01021
+  },
+  "vs_m|srp|ip|turn|brick": {
+   "fold": 0.45624,
+   "call": 0.47507,
+   "raise_s": 0.0,
+   "raise_m": 0.00081,
+   "raise_b": 0.0393,
+   "allin": 0.02858
+  },
+  "vs_m|srp|ip|turn|flush": {
+   "fold": 0.46252,
+   "call": 0.43787,
+   "raise_s": 0.0,
+   "raise_m": 0.00145,
+   "raise_b": 0.05258,
+   "allin": 0.04557
+  },
+  "vs_m|srp|ip|turn|pair": {
+   "fold": 0.38638,
+   "call": 0.53005,
+   "raise_s": 0.0,
+   "raise_m": 0.00115,
+   "raise_b": 0.051,
+   "allin": 0.03142
+  },
+  "vs_m|srp|ip|turn|straight": {
+   "fold": 0.49934,
+   "call": 0.4248,
+   "raise_s": 0.0,
+   "raise_m": 0.00315,
+   "raise_b": 0.0466,
+   "allin": 0.02611
+  },
+  "vs_m|srp|oop|flop|brick": {
+   "fold": 0.46209,
+   "call": 0.43434,
+   "raise_s": 0.0,
+   "raise_m": 0.00337,
+   "raise_b": 0.07985,
+   "allin": 0.02034
+  },
+  "vs_m|srp|oop|flop|flush": {
+   "fold": 0.45935,
+   "call": 0.40882,
+   "raise_s": 0.0,
+   "raise_m": 0.00225,
+   "raise_b": 0.09237,
+   "allin": 0.03722
+  },
+  "vs_m|srp|oop|flop|pair": {
+   "fold": 0.41899,
+   "call": 0.46975,
+   "raise_s": 0.0,
+   "raise_m": 0.00533,
+   "raise_b": 0.08202,
+   "allin": 0.02391
+  },
+  "vs_m|srp|oop|flop|straight": {
+   "fold": 0.48863,
+   "call": 0.38518,
+   "raise_s": 0.0,
+   "raise_m": 0.00187,
+   "raise_b": 0.10257,
+   "allin": 0.02176
+  },
+  "vs_m|srp|oop|none|brick": {
+   "fold": 0.52928,
+   "call": 0.39093,
+   "raise_s": 0.0,
+   "raise_m": 0.00203,
+   "raise_b": 0.06916,
+   "allin": 0.0086
+  },
+  "vs_m|srp|oop|none|flush": {
+   "fold": 0.54518,
+   "call": 0.3566,
+   "raise_s": 0.0,
+   "raise_m": 0.00143,
+   "raise_b": 0.08303,
+   "allin": 0.01376
+  },
+  "vs_m|srp|oop|none|pair": {
+   "fold": 0.49856,
+   "call": 0.4255,
+   "raise_s": 0.0,
+   "raise_m": 0.00146,
+   "raise_b": 0.06484,
+   "allin": 0.00964
+  },
+  "vs_m|srp|oop|none|straight": {
+   "fold": 0.58825,
+   "call": 0.31357,
+   "raise_s": 0.0,
+   "raise_m": 0.00259,
+   "raise_b": 0.08507,
+   "allin": 0.01052
+  },
+  "vs_m|srp|oop|turn|brick": {
+   "fold": 0.43086,
+   "call": 0.46175,
+   "raise_s": 0.0,
+   "raise_m": 0.00217,
+   "raise_b": 0.07206,
+   "allin": 0.03316
+  },
+  "vs_m|srp|oop|turn|flush": {
+   "fold": 0.44781,
+   "call": 0.40784,
+   "raise_s": 0.0,
+   "raise_m": 0.00199,
+   "raise_b": 0.09622,
+   "allin": 0.04613
+  },
+  "vs_m|srp|oop|turn|pair": {
+   "fold": 0.3866,
+   "call": 0.5016,
+   "raise_s": 0.0,
+   "raise_m": 0.00346,
+   "raise_b": 0.0804,
+   "allin": 0.02795
+  },
+  "vs_m|srp|oop|turn|straight": {
+   "fold": 0.46175,
+   "call": 0.40802,
+   "raise_s": 0.0,
+   "raise_m": 0.00584,
+   "raise_b": 0.09181,
+   "allin": 0.03259
+  },
+  "vs_m:raise|3bp|ip|flop|brick": {
+   "fold": 0.52386,
+   "call": 0.41572,
+   "raise_s": 0.00061,
+   "raise_m": 0.00415,
+   "raise_b": 0.01111,
+   "allin": 0.04455
+  },
+  "vs_m:raise|3bp|ip|flop|flush": {
+   "fold": 0.50763,
+   "call": 0.43206,
+   "raise_s": 0.00132,
+   "raise_m": 0.00264,
+   "raise_b": 0.02078,
+   "allin": 0.03557
+  },
+  "vs_m:raise|3bp|ip|flop|pair": {
+   "fold": 0.50165,
+   "call": 0.44329,
+   "raise_s": 0.00122,
+   "raise_m": 0.00442,
+   "raise_b": 0.01933,
+   "allin": 0.03008
+  },
+  "vs_m:raise|3bp|ip|flop|straight": {
+   "fold": 0.48386,
+   "call": 0.46256,
+   "raise_s": 0.00877,
+   "raise_m": 0.00326,
+   "raise_b": 0.01744,
+   "allin": 0.02411
+  },
+  "vs_m:raise|3bp|ip|none|brick": {
+   "fold": 0.51491,
+   "call": 0.43388,
+   "raise_s": 0.00175,
+   "raise_m": 0.00275,
+   "raise_b": 0.00845,
+   "allin": 0.03825
+  },
+  "vs_m:raise|3bp|ip|none|flush": {
+   "fold": 0.5223,
+   "call": 0.42779,
+   "raise_s": 0.0007,
+   "raise_m": 0.00251,
+   "raise_b": 0.00921,
+   "allin": 0.03749
+  },
+  "vs_m:raise|3bp|ip|none|pair": {
+   "fold": 0.49002,
+   "call": 0.44975,
+   "raise_s": 0.00078,
+   "raise_m": 0.00663,
+   "raise_b": 0.01438,
+   "allin": 0.03845
+  },
+  "vs_m:raise|3bp|ip|none|straight": {
+   "fold": 0.50872,
+   "call": 0.43402,
+   "raise_s": 0.00521,
+   "raise_m": 0.0035,
+   "raise_b": 0.01529,
+   "allin": 0.03327
+  },
+  "vs_m:raise|3bp|ip|turn|brick": {
+   "fold": 0.4912,
+   "call": 0.46351,
+   "raise_s": 0.00109,
+   "raise_m": 0.0057,
+   "raise_b": 0.01168,
+   "allin": 0.02682
+  },
+  "vs_m:raise|3bp|ip|turn|flush": {
+   "fold": 0.45944,
+   "call": 0.48954,
+   "raise_s": 0.00179,
+   "raise_m": 0.00359,
+   "raise_b": 0.01916,
+   "allin": 0.02649
+  },
+  "vs_m:raise|3bp|ip|turn|pair": {
+   "fold": 0.46902,
+   "call": 0.47665,
+   "raise_s": 0.00828,
+   "raise_m": 0.00308,
+   "raise_b": 0.01646,
+   "allin": 0.02651
+  },
+  "vs_m:raise|3bp|ip|turn|straight": {
+   "fold": 0.4594,
+   "call": 0.46748,
+   "raise_s": 0.00191,
+   "raise_m": 0.00383,
+   "raise_b": 0.02044,
+   "allin": 0.04695
+  },
+  "vs_m:raise|3bp|oop|flop|brick": {
+   "fold": 0.467,
+   "call": 0.48703,
+   "raise_s": 0.00176,
+   "raise_m": 0.00353,
+   "raise_b": 0.01888,
+   "allin": 0.02179
+  },
+  "vs_m:raise|3bp|oop|flop|flush": {
+   "fold": 0.44788,
+   "call": 0.48641,
+   "raise_s": 0.00212,
+   "raise_m": 0.00425,
+   "raise_b": 0.02272,
+   "allin": 0.03661
+  },
+  "vs_m:raise|3bp|oop|flop|pair": {
+   "fold": 0.48922,
+   "call": 0.45397,
+   "raise_s": 0.00218,
+   "raise_m": 0.00437,
+   "raise_b": 0.02333,
+   "allin": 0.02693
+  },
+  "vs_m:raise|3bp|oop|flop|straight": {
+   "fold": 0.45382,
+   "call": 0.47792,
+   "raise_s": 0.00227,
+   "raise_m": 0.00819,
+   "raise_b": 0.02426,
+   "allin": 0.03354
+  },
+  "vs_m:raise|3bp|oop|none|brick": {
+   "fold": 0.46959,
+   "call": 0.46845,
+   "raise_s": 0.00112,
+   "raise_m": 0.00224,
+   "raise_b": 0.01479,
+   "allin": 0.04382
+  },
+  "vs_m:raise|3bp|oop|none|flush": {
+   "fold": 0.43033,
+   "call": 0.51368,
+   "raise_s": 0.00181,
+   "raise_m": 0.00362,
+   "raise_b": 0.01936,
+   "allin": 0.0312
+  },
+  "vs_m:raise|3bp|oop|none|pair": {
+   "fold": 0.48408,
+   "call": 0.45321,
+   "raise_s": 0.00174,
+   "raise_m": 0.00349,
+   "raise_b": 0.02748,
+   "allin": 0.03001
+  },
+  "vs_m:raise|3bp|oop|none|straight": {
+   "fold": 0.44294,
+   "call": 0.488,
+   "raise_s": 0.0116,
+   "raise_m": 0.00779,
+   "raise_b": 0.02306,
+   "allin": 0.02661
+  },
+  "vs_m:raise|3bp|oop|turn|brick": {
+   "fold": 0.46373,
+   "call": 0.48658,
+   "raise_s": 0.00191,
+   "raise_m": 0.00382,
+   "raise_b": 0.02041,
+   "allin": 0.02355
+  },
+  "vs_m:raise|3bp|oop|turn|flush": {
+   "fold": 0.46031,
+   "call": 0.48283,
+   "raise_s": 0.00218,
+   "raise_m": 0.00437,
+   "raise_b": 0.02335,
+   "allin": 0.02695
+  },
+  "vs_m:raise|3bp|oop|turn|pair": {
+   "fold": 0.4804,
+   "call": 0.46245,
+   "raise_s": 0.00219,
+   "raise_m": 0.00439,
+   "raise_b": 0.02347,
+   "allin": 0.02709
+  },
+  "vs_m:raise|3bp|oop|turn|straight": {
+   "fold": 0.45125,
+   "call": 0.48487,
+   "raise_s": 0.00245,
+   "raise_m": 0.00491,
+   "raise_b": 0.02624,
+   "allin": 0.03028
+  },
+  "vs_m:raise|limped|ip|flop|brick": {
+   "fold": 0.42504,
+   "call": 0.5081,
+   "raise_s": 0.00189,
+   "raise_m": 0.00685,
+   "raise_b": 0.03473,
+   "allin": 0.0234
+  },
+  "vs_m:raise|limped|ip|flop|flush": {
+   "fold": 0.45513,
+   "call": 0.48865,
+   "raise_s": 0.00216,
+   "raise_m": 0.00432,
+   "raise_b": 0.02309,
+   "allin": 0.02665
+  },
+  "vs_m:raise|limped|ip|flop|pair": {
+   "fold": 0.46987,
+   "call": 0.46369,
+   "raise_s": 0.0022,
+   "raise_m": 0.00795,
+   "raise_b": 0.02913,
+   "allin": 0.02717
+  },
+  "vs_m:raise|limped|ip|flop|straight": {
+   "fold": 0.46302,
+   "call": 0.47589,
+   "raise_s": 0.00234,
+   "raise_m": 0.0047,
+   "raise_b": 0.02509,
+   "allin": 0.02896
+  },
+  "vs_m:raise|limped|ip|none|brick": {
+   "fold": 0.47653,
+   "call": 0.45852,
+   "raise_s": 0.00093,
+   "raise_m": 0.00486,
+   "raise_b": 0.04311,
+   "allin": 0.01605
+  },
+  "vs_m:raise|limped|ip|none|flush": {
+   "fold": 0.46353,
+   "call": 0.48842,
+   "raise_s": 0.0013,
+   "raise_m": 0.0068,
+   "raise_b": 0.02386,
+   "allin": 0.01608
+  },
+  "vs_m:raise|limped|ip|none|pair": {
+   "fold": 0.45154,
+   "call": 0.47891,
+   "raise_s": 0.00151,
+   "raise_m": 0.0103,
+   "raise_b": 0.03913,
+   "allin": 0.01861
+  },
+  "vs_m:raise|limped|ip|none|straight": {
+   "fold": 0.45011,
+   "call": 0.46031,
+   "raise_s": 0.01645,
+   "raise_m": 0.0088,
+   "raise_b": 0.03942,
+   "allin": 0.02491
+  },
+  "vs_m:raise|limped|ip|turn|brick": {
+   "fold": 0.47456,
+   "call": 0.44702,
+   "raise_s": 0.00195,
+   "raise_m": 0.00705,
+   "raise_b": 0.03577,
+   "allin": 0.03364
+  },
+  "vs_m:raise|limped|ip|turn|flush": {
+   "fold": 0.44248,
+   "call": 0.48328,
+   "raise_s": 0.00221,
+   "raise_m": 0.00443,
+   "raise_b": 0.0349,
+   "allin": 0.0327
+  },
+  "vs_m:raise|limped|ip|turn|pair": {
+   "fold": 0.46866,
+   "call": 0.46259,
+   "raise_s": 0.00222,
+   "raise_m": 0.00445,
+   "raise_b": 0.02378,
+   "allin": 0.03831
+  },
+  "vs_m:raise|limped|ip|turn|straight": {
+   "fold": 0.45925,
+   "call": 0.47167,
+   "raise_s": 0.00229,
+   "raise_m": 0.00829,
+   "raise_b": 0.02455,
+   "allin": 0.03394
+  },
+  "vs_m:raise|limped|oop|flop|brick": {
+   "fold": 0.46243,
+   "call": 0.47004,
+   "raise_s": 0.00244,
+   "raise_m": 0.00882,
+   "raise_b": 0.02612,
+   "allin": 0.03015
+  },
+  "vs_m:raise|limped|oop|flop|flush": {
+   "fold": 0.4631,
+   "call": 0.47134,
+   "raise_s": 0.00252,
+   "raise_m": 0.00504,
+   "raise_b": 0.02693,
+   "allin": 0.03108
+  },
+  "vs_m:raise|limped|oop|flop|pair": {
+   "fold": 0.46616,
+   "call": 0.46785,
+   "raise_s": 0.00253,
+   "raise_m": 0.00507,
+   "raise_b": 0.0271,
+   "allin": 0.03128
+  },
+  "vs_m:raise|limped|oop|flop|straight": {
+   "fold": 0.4631,
+   "call": 0.47134,
+   "raise_s": 0.00252,
+   "raise_m": 0.00504,
+   "raise_b": 0.02693,
+   "allin": 0.03108
+  },
+  "vs_m:raise|limped|oop|none|brick": {
+   "fold": 0.44911,
+   "call": 0.47287,
+   "raise_s": 0.00193,
+   "raise_m": 0.00698,
+   "raise_b": 0.04525,
+   "allin": 0.02386
+  },
+  "vs_m:raise|limped|oop|none|flush": {
+   "fold": 0.46021,
+   "call": 0.47908,
+   "raise_s": 0.00233,
+   "raise_m": 0.00467,
+   "raise_b": 0.02494,
+   "allin": 0.02878
+  },
+  "vs_m:raise|limped|oop|none|pair": {
+   "fold": 0.47545,
+   "call": 0.46349,
+   "raise_s": 0.00234,
+   "raise_m": 0.00469,
+   "raise_b": 0.02508,
+   "allin": 0.02894
+  },
+  "vs_m:raise|limped|oop|none|straight": {
+   "fold": 0.46179,
+   "call": 0.46881,
+   "raise_s": 0.00237,
+   "raise_m": 0.01239,
+   "raise_b": 0.02537,
+   "allin": 0.02928
+  },
+  "vs_m:raise|limped|oop|turn|brick": {
+   "fold": 0.45617,
+   "call": 0.48197,
+   "raise_s": 0.00237,
+   "raise_m": 0.00476,
+   "raise_b": 0.02541,
+   "allin": 0.02933
+  },
+  "vs_m:raise|limped|oop|turn|flush": {
+   "fold": 0.45906,
+   "call": 0.46692,
+   "raise_s": 0.00246,
+   "raise_m": 0.00889,
+   "raise_b": 0.02631,
+   "allin": 0.03637
+  },
+  "vs_m:raise|limped|oop|turn|pair": {
+   "fold": 0.45698,
+   "call": 0.47616,
+   "raise_s": 0.00235,
+   "raise_m": 0.0047,
+   "raise_b": 0.0251,
+   "allin": 0.03471
+  },
+  "vs_m:raise|limped|oop|turn|straight": {
+   "fold": 0.45243,
+   "call": 0.47331,
+   "raise_s": 0.00246,
+   "raise_m": 0.00888,
+   "raise_b": 0.03256,
+   "allin": 0.03036
+  },
+  "vs_m:raise|srp|ip|flop|brick": {
+   "fold": 0.46277,
+   "call": 0.45035,
+   "raise_s": 0.00173,
+   "raise_m": 0.0053,
+   "raise_b": 0.05078,
+   "allin": 0.02908
+  },
+  "vs_m:raise|srp|ip|flop|flush": {
+   "fold": 0.47577,
+   "call": 0.43933,
+   "raise_s": 0.00074,
+   "raise_m": 0.00625,
+   "raise_b": 0.03987,
+   "allin": 0.03805
+  },
+  "vs_m:raise|srp|ip|flop|pair": {
+   "fold": 0.48106,
+   "call": 0.44097,
+   "raise_s": 0.00073,
+   "raise_m": 0.00381,
+   "raise_b": 0.04304,
+   "allin": 0.0304
+  },
+  "vs_m:raise|srp|ip|flop|straight": {
+   "fold": 0.47816,
+   "call": 0.43414,
+   "raise_s": 0.00963,
+   "raise_m": 0.00356,
+   "raise_b": 0.04064,
+   "allin": 0.03387
+  },
+  "vs_m:raise|srp|ip|none|brick": {
+   "fold": 0.45942,
+   "call": 0.47401,
+   "raise_s": 0.00248,
+   "raise_m": 0.00486,
+   "raise_b": 0.03438,
+   "allin": 0.02485
+  },
+  "vs_m:raise|srp|ip|none|flush": {
+   "fold": 0.46696,
+   "call": 0.46293,
+   "raise_s": 0.0004,
+   "raise_m": 0.00334,
+   "raise_b": 0.0354,
+   "allin": 0.03098
+  },
+  "vs_m:raise|srp|ip|none|pair": {
+   "fold": 0.46404,
+   "call": 0.46134,
+   "raise_s": 0.00045,
+   "raise_m": 0.00593,
+   "raise_b": 0.03432,
+   "allin": 0.03392
+  },
+  "vs_m:raise|srp|ip|none|straight": {
+   "fold": 0.48556,
+   "call": 0.44404,
+   "raise_s": 0.0052,
+   "raise_m": 0.00535,
+   "raise_b": 0.02464,
+   "allin": 0.0352
+  },
+  "vs_m:raise|srp|ip|turn|brick": {
+   "fold": 0.47852,
+   "call": 0.44402,
+   "raise_s": 0.00362,
+   "raise_m": 0.00677,
+   "raise_b": 0.0209,
+   "allin": 0.04617
+  },
+  "vs_m:raise|srp|ip|turn|flush": {
+   "fold": 0.42233,
+   "call": 0.51086,
+   "raise_s": 0.00113,
+   "raise_m": 0.00589,
+   "raise_b": 0.03211,
+   "allin": 0.02769
+  },
+  "vs_m:raise|srp|ip|turn|pair": {
+   "fold": 0.46389,
+   "call": 0.45124,
+   "raise_s": 0.0059,
+   "raise_m": 0.00749,
+   "raise_b": 0.02845,
+   "allin": 0.04301
+  },
+  "vs_m:raise|srp|ip|turn|straight": {
+   "fold": 0.45051,
+   "call": 0.48169,
+   "raise_s": 0.00138,
+   "raise_m": 0.00721,
+   "raise_b": 0.02529,
+   "allin": 0.03391
+  },
+  "vs_m:raise|srp|oop|flop|brick": {
+   "fold": 0.45562,
+   "call": 0.48772,
+   "raise_s": 0.00169,
+   "raise_m": 0.00338,
+   "raise_b": 0.02664,
+   "allin": 0.02496
+  },
+  "vs_m:raise|srp|oop|flop|flush": {
+   "fold": 0.4365,
+   "call": 0.50007,
+   "raise_s": 0.00204,
+   "raise_m": 0.00409,
+   "raise_b": 0.02706,
+   "allin": 0.03023
+  },
+  "vs_m:raise|srp|oop|flop|pair": {
+   "fold": 0.41946,
+   "call": 0.51642,
+   "raise_s": 0.00196,
+   "raise_m": 0.0071,
+   "raise_b": 0.02601,
+   "allin": 0.02905
+  },
+  "vs_m:raise|srp|oop|flop|straight": {
+   "fold": 0.41245,
+   "call": 0.50596,
+   "raise_s": 0.01189,
+   "raise_m": 0.00798,
+   "raise_b": 0.02364,
+   "allin": 0.03808
+  },
+  "vs_m:raise|srp|oop|none|brick": {
+   "fold": 0.39213,
+   "call": 0.55127,
+   "raise_s": 0.00061,
+   "raise_m": 0.00417,
+   "raise_b": 0.02047,
+   "allin": 0.03136
+  },
+  "vs_m:raise|srp|oop|none|flush": {
+   "fold": 0.40548,
+   "call": 0.53336,
+   "raise_s": 0.00116,
+   "raise_m": 0.00418,
+   "raise_b": 0.0359,
+   "allin": 0.01993
+  },
+  "vs_m:raise|srp|oop|none|pair": {
+   "fold": 0.45165,
+   "call": 0.48251,
+   "raise_s": 0.00118,
+   "raise_m": 0.00806,
+   "raise_b": 0.02762,
+   "allin": 0.02898
+  },
+  "vs_m:raise|srp|oop|none|straight": {
+   "fold": 0.38068,
+   "call": 0.5429,
+   "raise_s": 0.00807,
+   "raise_m": 0.00783,
+   "raise_b": 0.02367,
+   "allin": 0.03684
+  },
+  "vs_m:raise|srp|oop|turn|brick": {
+   "fold": 0.41811,
+   "call": 0.53334,
+   "raise_s": 0.00138,
+   "raise_m": 0.005,
+   "raise_b": 0.01832,
+   "allin": 0.02384
+  },
+  "vs_m:raise|srp|oop|turn|flush": {
+   "fold": 0.40308,
+   "call": 0.54246,
+   "raise_s": 0.00191,
+   "raise_m": 0.00383,
+   "raise_b": 0.02045,
+   "allin": 0.02827
+  },
+  "vs_m:raise|srp|oop|turn|pair": {
+   "fold": 0.46924,
+   "call": 0.47013,
+   "raise_s": 0.00169,
+   "raise_m": 0.00338,
+   "raise_b": 0.02235,
+   "allin": 0.03321
+  },
+  "vs_m:raise|srp|oop|turn|straight": {
+   "fold": 0.44836,
+   "call": 0.48693,
+   "raise_s": 0.01145,
+   "raise_m": 0.00426,
+   "raise_b": 0.02275,
+   "allin": 0.02625
+  },
+  "vs_o|3bp|ip|flop|brick": {
+   "fold": 0.81706,
+   "call": 0.16728,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00444,
+   "allin": 0.01122
+  },
+  "vs_o|3bp|ip|flop|flush": {
+   "fold": 0.79792,
+   "call": 0.18251,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01071,
+   "allin": 0.00886
+  },
+  "vs_o|3bp|ip|flop|pair": {
+   "fold": 0.78227,
+   "call": 0.20246,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00458,
+   "allin": 0.01069
+  },
+  "vs_o|3bp|ip|flop|straight": {
+   "fold": 0.78369,
+   "call": 0.19456,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01181,
+   "allin": 0.00994
+  },
+  "vs_o|3bp|ip|none|brick": {
+   "fold": 0.8471,
+   "call": 0.14147,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00462,
+   "allin": 0.00681
+  },
+  "vs_o|3bp|ip|none|flush": {
+   "fold": 0.84919,
+   "call": 0.14082,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00407,
+   "allin": 0.00592
+  },
+  "vs_o|3bp|ip|none|pair": {
+   "fold": 0.84494,
+   "call": 0.14602,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00393,
+   "allin": 0.00512
+  },
+  "vs_o|3bp|ip|none|straight": {
+   "fold": 0.83615,
+   "call": 0.15232,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00702,
+   "allin": 0.0045
+  },
+  "vs_o|3bp|ip|turn|brick": {
+   "fold": 0.78044,
+   "call": 0.21368,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00106,
+   "allin": 0.00482
+  },
+  "vs_o|3bp|ip|turn|flush": {
+   "fold": 0.79453,
+   "call": 0.19623,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00341,
+   "allin": 0.00583
+  },
+  "vs_o|3bp|ip|turn|pair": {
+   "fold": 0.74355,
+   "call": 0.24721,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00327,
+   "allin": 0.00596
+  },
+  "vs_o|3bp|ip|turn|straight": {
+   "fold": 0.77381,
+   "call": 0.21577,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00546,
+   "allin": 0.00496
+  },
+  "vs_o|3bp|oop|flop|brick": {
+   "fold": 0.81903,
+   "call": 0.16893,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00185,
+   "allin": 0.0102
+  },
+  "vs_o|3bp|oop|flop|flush": {
+   "fold": 0.7642,
+   "call": 0.22099,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00594,
+   "allin": 0.00887
+  },
+  "vs_o|3bp|oop|flop|pair": {
+   "fold": 0.80184,
+   "call": 0.18969,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0046,
+   "allin": 0.00387
+  },
+  "vs_o|3bp|oop|flop|straight": {
+   "fold": 0.78933,
+   "call": 0.19157,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00858,
+   "allin": 0.01052
+  },
+  "vs_o|3bp|oop|none|brick": {
+   "fold": 0.80163,
+   "call": 0.1826,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00652,
+   "allin": 0.00925
+  },
+  "vs_o|3bp|oop|none|flush": {
+   "fold": 0.80127,
+   "call": 0.17832,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00834,
+   "allin": 0.01207
+  },
+  "vs_o|3bp|oop|none|pair": {
+   "fold": 0.78463,
+   "call": 0.20273,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00549,
+   "allin": 0.00716
+  },
+  "vs_o|3bp|oop|none|straight": {
+   "fold": 0.80842,
+   "call": 0.17104,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00949,
+   "allin": 0.01105
+  },
+  "vs_o|3bp|oop|turn|brick": {
+   "fold": 0.76222,
+   "call": 0.2255,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00289,
+   "allin": 0.0094
+  },
+  "vs_o|3bp|oop|turn|flush": {
+   "fold": 0.76434,
+   "call": 0.22198,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00529,
+   "allin": 0.0084
+  },
+  "vs_o|3bp|oop|turn|pair": {
+   "fold": 0.74062,
+   "call": 0.24702,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00405,
+   "allin": 0.00831
+  },
+  "vs_o|3bp|oop|turn|straight": {
+   "fold": 0.75177,
+   "call": 0.21961,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01541,
+   "allin": 0.01321
+  },
+  "vs_o|limped|ip|flop|brick": {
+   "fold": 0.75883,
+   "call": 0.2033,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03053,
+   "allin": 0.00734
+  },
+  "vs_o|limped|ip|flop|flush": {
+   "fold": 0.73431,
+   "call": 0.2173,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03936,
+   "allin": 0.00904
+  },
+  "vs_o|limped|ip|flop|pair": {
+   "fold": 0.75534,
+   "call": 0.20642,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02994,
+   "allin": 0.0083
+  },
+  "vs_o|limped|ip|flop|straight": {
+   "fold": 0.7262,
+   "call": 0.1989,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06712,
+   "allin": 0.00779
+  },
+  "vs_o|limped|ip|none|brick": {
+   "fold": 0.82426,
+   "call": 0.15288,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01953,
+   "allin": 0.00333
+  },
+  "vs_o|limped|ip|none|flush": {
+   "fold": 0.83584,
+   "call": 0.13811,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02199,
+   "allin": 0.00406
+  },
+  "vs_o|limped|ip|none|pair": {
+   "fold": 0.77941,
+   "call": 0.19456,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02268,
+   "allin": 0.00335
+  },
+  "vs_o|limped|ip|none|straight": {
+   "fold": 0.80886,
+   "call": 0.16445,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02392,
+   "allin": 0.00277
+  },
+  "vs_o|limped|ip|turn|brick": {
+   "fold": 0.70923,
+   "call": 0.25759,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02711,
+   "allin": 0.00607
+  },
+  "vs_o|limped|ip|turn|flush": {
+   "fold": 0.72493,
+   "call": 0.23945,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02664,
+   "allin": 0.00898
+  },
+  "vs_o|limped|ip|turn|pair": {
+   "fold": 0.67212,
+   "call": 0.28294,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03175,
+   "allin": 0.01319
+  },
+  "vs_o|limped|ip|turn|straight": {
+   "fold": 0.72256,
+   "call": 0.22955,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04018,
+   "allin": 0.00772
+  },
+  "vs_o|limped|oop|flop|brick": {
+   "fold": 0.6773,
+   "call": 0.26546,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05408,
+   "allin": 0.00316
+  },
+  "vs_o|limped|oop|flop|flush": {
+   "fold": 0.73724,
+   "call": 0.2094,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04586,
+   "allin": 0.0075
+  },
+  "vs_o|limped|oop|flop|pair": {
+   "fold": 0.69876,
+   "call": 0.25051,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04585,
+   "allin": 0.00488
+  },
+  "vs_o|limped|oop|flop|straight": {
+   "fold": 0.74771,
+   "call": 0.22119,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02211,
+   "allin": 0.00899
+  },
+  "vs_o|limped|oop|none|brick": {
+   "fold": 0.74793,
+   "call": 0.19231,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05608,
+   "allin": 0.00368
+  },
+  "vs_o|limped|oop|none|flush": {
+   "fold": 0.73969,
+   "call": 0.19883,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0571,
+   "allin": 0.00438
+  },
+  "vs_o|limped|oop|none|pair": {
+   "fold": 0.72926,
+   "call": 0.20461,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06145,
+   "allin": 0.00468
+  },
+  "vs_o|limped|oop|none|straight": {
+   "fold": 0.7451,
+   "call": 0.17818,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.07224,
+   "allin": 0.00447
+  },
+  "vs_o|limped|oop|turn|brick": {
+   "fold": 0.69192,
+   "call": 0.23867,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06106,
+   "allin": 0.00835
+  },
+  "vs_o|limped|oop|turn|flush": {
+   "fold": 0.65555,
+   "call": 0.24946,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.08353,
+   "allin": 0.01145
+  },
+  "vs_o|limped|oop|turn|pair": {
+   "fold": 0.67822,
+   "call": 0.24421,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.06893,
+   "allin": 0.00864
+  },
+  "vs_o|limped|oop|turn|straight": {
+   "fold": 0.71515,
+   "call": 0.22679,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04661,
+   "allin": 0.01145
+  },
+  "vs_o|srp|ip|flop|brick": {
+   "fold": 0.73722,
+   "call": 0.21484,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03625,
+   "allin": 0.01169
+  },
+  "vs_o|srp|ip|flop|flush": {
+   "fold": 0.72604,
+   "call": 0.23496,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02863,
+   "allin": 0.01037
+  },
+  "vs_o|srp|ip|flop|pair": {
+   "fold": 0.725,
+   "call": 0.24084,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02422,
+   "allin": 0.00995
+  },
+  "vs_o|srp|ip|flop|straight": {
+   "fold": 0.74153,
+   "call": 0.22295,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02522,
+   "allin": 0.01031
+  },
+  "vs_o|srp|ip|none|brick": {
+   "fold": 0.81352,
+   "call": 0.15873,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02197,
+   "allin": 0.00578
+  },
+  "vs_o|srp|ip|none|flush": {
+   "fold": 0.81493,
+   "call": 0.16103,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01634,
+   "allin": 0.0077
+  },
+  "vs_o|srp|ip|none|pair": {
+   "fold": 0.81326,
+   "call": 0.16548,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01553,
+   "allin": 0.00573
+  },
+  "vs_o|srp|ip|none|straight": {
+   "fold": 0.80663,
+   "call": 0.16927,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0178,
+   "allin": 0.0063
+  },
+  "vs_o|srp|ip|turn|brick": {
+   "fold": 0.75066,
+   "call": 0.23153,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00718,
+   "allin": 0.01062
+  },
+  "vs_o|srp|ip|turn|flush": {
+   "fold": 0.76194,
+   "call": 0.21172,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01004,
+   "allin": 0.0163
+  },
+  "vs_o|srp|ip|turn|pair": {
+   "fold": 0.72518,
+   "call": 0.25028,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0112,
+   "allin": 0.01334
+  },
+  "vs_o|srp|ip|turn|straight": {
+   "fold": 0.78138,
+   "call": 0.20157,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.00942,
+   "allin": 0.00763
+  },
+  "vs_o|srp|oop|flop|brick": {
+   "fold": 0.73142,
+   "call": 0.2311,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02616,
+   "allin": 0.01131
+  },
+  "vs_o|srp|oop|flop|flush": {
+   "fold": 0.72072,
+   "call": 0.23312,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03099,
+   "allin": 0.01517
+  },
+  "vs_o|srp|oop|flop|pair": {
+   "fold": 0.74438,
+   "call": 0.2202,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.0248,
+   "allin": 0.01062
+  },
+  "vs_o|srp|oop|flop|straight": {
+   "fold": 0.72442,
+   "call": 0.21391,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.05244,
+   "allin": 0.00923
+  },
+  "vs_o|srp|oop|none|brick": {
+   "fold": 0.75501,
+   "call": 0.21137,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02799,
+   "allin": 0.00564
+  },
+  "vs_o|srp|oop|none|flush": {
+   "fold": 0.76343,
+   "call": 0.1959,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03123,
+   "allin": 0.00945
+  },
+  "vs_o|srp|oop|none|pair": {
+   "fold": 0.74515,
+   "call": 0.21846,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03005,
+   "allin": 0.00634
+  },
+  "vs_o|srp|oop|none|straight": {
+   "fold": 0.77118,
+   "call": 0.18079,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.04143,
+   "allin": 0.0066
+  },
+  "vs_o|srp|oop|turn|brick": {
+   "fold": 0.72147,
+   "call": 0.24975,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01657,
+   "allin": 0.01221
+  },
+  "vs_o|srp|oop|turn|flush": {
+   "fold": 0.72989,
+   "call": 0.2297,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02264,
+   "allin": 0.01778
+  },
+  "vs_o|srp|oop|turn|pair": {
+   "fold": 0.68816,
+   "call": 0.27519,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02322,
+   "allin": 0.01344
+  },
+  "vs_o|srp|oop|turn|straight": {
+   "fold": 0.74101,
+   "call": 0.22555,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02237,
+   "allin": 0.01107
+  },
+  "vs_o:raise|3bp|ip|flop|brick": {
+   "fold": 0.75952,
+   "call": 0.22522,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.00316,
+   "allin": 0.01209
+  },
+  "vs_o:raise|3bp|ip|flop|flush": {
+   "fold": 0.76242,
+   "call": 0.2151,
+   "raise_s": 0.0,
+   "raise_m": 3e-05,
+   "raise_b": 0.007,
+   "allin": 0.01546
+  },
+  "vs_o:raise|3bp|ip|flop|pair": {
+   "fold": 0.72248,
+   "call": 0.25423,
+   "raise_s": 0.0,
+   "raise_m": 3e-05,
+   "raise_b": 0.00435,
+   "allin": 0.0189
+  },
+  "vs_o:raise|3bp|ip|flop|straight": {
+   "fold": 0.67935,
+   "call": 0.29601,
+   "raise_s": 0.0,
+   "raise_m": 6e-05,
+   "raise_b": 0.00736,
+   "allin": 0.01723
+  },
+  "vs_o:raise|3bp|ip|none|brick": {
+   "fold": 0.73947,
+   "call": 0.23954,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.00273,
+   "allin": 0.01825
+  },
+  "vs_o:raise|3bp|ip|none|flush": {
+   "fold": 0.72889,
+   "call": 0.25004,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.00444,
+   "allin": 0.0166
+  },
+  "vs_o:raise|3bp|ip|none|pair": {
+   "fold": 0.72924,
+   "call": 0.24169,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.00592,
+   "allin": 0.02313
+  },
+  "vs_o:raise|3bp|ip|none|straight": {
+   "fold": 0.73314,
+   "call": 0.24277,
+   "raise_s": 0.0,
+   "raise_m": 4e-05,
+   "raise_b": 0.00739,
+   "allin": 0.01666
+  },
+  "vs_o:raise|3bp|ip|turn|brick": {
+   "fold": 0.72927,
+   "call": 0.2411,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.00885,
+   "allin": 0.02072
+  },
+  "vs_o:raise|3bp|ip|turn|flush": {
+   "fold": 0.70183,
+   "call": 0.26941,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01226,
+   "allin": 0.01641
+  },
+  "vs_o:raise|3bp|ip|turn|pair": {
+   "fold": 0.6674,
+   "call": 0.29969,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01228,
+   "allin": 0.02054
+  },
+  "vs_o:raise|3bp|ip|turn|straight": {
+   "fold": 0.66631,
+   "call": 0.28572,
+   "raise_s": 0.0,
+   "raise_m": 0.00011,
+   "raise_b": 0.01432,
+   "allin": 0.03354
+  },
+  "vs_o:raise|3bp|oop|flop|brick": {
+   "fold": 0.67769,
+   "call": 0.30104,
+   "raise_s": 0.0,
+   "raise_m": 5e-05,
+   "raise_b": 0.00706,
+   "allin": 0.01417
+  },
+  "vs_o:raise|3bp|oop|flop|flush": {
+   "fold": 0.70862,
+   "call": 0.26373,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01178,
+   "allin": 0.01577
+  },
+  "vs_o:raise|3bp|oop|flop|pair": {
+   "fold": 0.71183,
+   "call": 0.26251,
+   "raise_s": 0.0,
+   "raise_m": 8e-05,
+   "raise_b": 0.01093,
+   "allin": 0.01464
+  },
+  "vs_o:raise|3bp|oop|flop|straight": {
+   "fold": 0.69369,
+   "call": 0.26868,
+   "raise_s": 0.0,
+   "raise_m": 0.00011,
+   "raise_b": 0.01404,
+   "allin": 0.02349
+  },
+  "vs_o:raise|3bp|oop|none|brick": {
+   "fold": 0.73492,
+   "call": 0.24127,
+   "raise_s": 0.0,
+   "raise_m": 0.00077,
+   "raise_b": 0.00389,
+   "allin": 0.01915
+  },
+  "vs_o:raise|3bp|oop|none|flush": {
+   "fold": 0.73543,
+   "call": 0.23814,
+   "raise_s": 0.0,
+   "raise_m": 4e-05,
+   "raise_b": 0.00978,
+   "allin": 0.01662
+  },
+  "vs_o:raise|3bp|oop|none|pair": {
+   "fold": 0.68304,
+   "call": 0.29106,
+   "raise_s": 0.0,
+   "raise_m": 4e-05,
+   "raise_b": 0.01022,
+   "allin": 0.01563
+  },
+  "vs_o:raise|3bp|oop|none|straight": {
+   "fold": 0.68189,
+   "call": 0.28784,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.0142,
+   "allin": 0.01601
+  },
+  "vs_o:raise|3bp|oop|turn|brick": {
+   "fold": 0.69397,
+   "call": 0.27454,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.00855,
+   "allin": 0.02288
+  },
+  "vs_o:raise|3bp|oop|turn|flush": {
+   "fold": 0.69724,
+   "call": 0.26682,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01192,
+   "allin": 0.02393
+  },
+  "vs_o:raise|3bp|oop|turn|pair": {
+   "fold": 0.67974,
+   "call": 0.28486,
+   "raise_s": 0.0,
+   "raise_m": 0.0001,
+   "raise_b": 0.0132,
+   "allin": 0.0221
+  },
+  "vs_o:raise|3bp|oop|turn|straight": {
+   "fold": 0.68819,
+   "call": 0.2771,
+   "raise_s": 0.0,
+   "raise_m": 0.00011,
+   "raise_b": 0.01479,
+   "allin": 0.0198
+  },
+  "vs_o:raise|limped|ip|flop|brick": {
+   "fold": 0.65049,
+   "call": 0.31127,
+   "raise_s": 0.0,
+   "raise_m": 0.00219,
+   "raise_b": 0.02474,
+   "allin": 0.01131
+  },
+  "vs_o:raise|limped|ip|flop|flush": {
+   "fold": 0.63144,
+   "call": 0.33969,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.01714,
+   "allin": 0.01166
+  },
+  "vs_o:raise|limped|ip|flop|pair": {
+   "fold": 0.66513,
+   "call": 0.28407,
+   "raise_s": 0.0,
+   "raise_m": 6e-05,
+   "raise_b": 0.02847,
+   "allin": 0.02227
+  },
+  "vs_o:raise|limped|ip|flop|straight": {
+   "fold": 0.67659,
+   "call": 0.2664,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.02722,
+   "allin": 0.0297
+  },
+  "vs_o:raise|limped|ip|none|brick": {
+   "fold": 0.66176,
+   "call": 0.2821,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.03783,
+   "allin": 0.01831
+  },
+  "vs_o:raise|limped|ip|none|flush": {
+   "fold": 0.68157,
+   "call": 0.27866,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.02862,
+   "allin": 0.01114
+  },
+  "vs_o:raise|limped|ip|none|pair": {
+   "fold": 0.65884,
+   "call": 0.2932,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.03162,
+   "allin": 0.01632
+  },
+  "vs_o:raise|limped|ip|none|straight": {
+   "fold": 0.62957,
+   "call": 0.30818,
+   "raise_s": 0.0,
+   "raise_m": 3e-05,
+   "raise_b": 0.03861,
+   "allin": 0.02361
+  },
+  "vs_o:raise|limped|ip|turn|brick": {
+   "fold": 0.65677,
+   "call": 0.29507,
+   "raise_s": 0.0,
+   "raise_m": 6e-05,
+   "raise_b": 0.02855,
+   "allin": 0.01954
+  },
+  "vs_o:raise|limped|ip|turn|flush": {
+   "fold": 0.69087,
+   "call": 0.27466,
+   "raise_s": 0.0,
+   "raise_m": 8e-05,
+   "raise_b": 0.01616,
+   "allin": 0.01822
+  },
+  "vs_o:raise|limped|ip|turn|pair": {
+   "fold": 0.65416,
+   "call": 0.31435,
+   "raise_s": 0.0,
+   "raise_m": 8e-05,
+   "raise_b": 0.01045,
+   "allin": 0.02097
+  },
+  "vs_o:raise|limped|ip|turn|straight": {
+   "fold": 0.65883,
+   "call": 0.30367,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01759,
+   "allin": 0.01983
+  },
+  "vs_o:raise|limped|oop|flop|brick": {
+   "fold": 0.68948,
+   "call": 0.2797,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.0183,
+   "allin": 0.01245
+  },
+  "vs_o:raise|limped|oop|flop|flush": {
+   "fold": 0.68909,
+   "call": 0.27227,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01154,
+   "allin": 0.02702
+  },
+  "vs_o:raise|limped|oop|flop|pair": {
+   "fold": 0.67016,
+   "call": 0.30176,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01196,
+   "allin": 0.01602
+  },
+  "vs_o:raise|limped|oop|flop|straight": {
+   "fold": 0.68361,
+   "call": 0.28309,
+   "raise_s": 0.0,
+   "raise_m": 0.00011,
+   "raise_b": 0.01419,
+   "allin": 0.019
+  },
+  "vs_o:raise|limped|oop|none|brick": {
+   "fold": 0.64194,
+   "call": 0.31456,
+   "raise_s": 0.0,
+   "raise_m": 3e-05,
+   "raise_b": 0.02113,
+   "allin": 0.02234
+  },
+  "vs_o:raise|limped|oop|none|flush": {
+   "fold": 0.67194,
+   "call": 0.28049,
+   "raise_s": 0.0,
+   "raise_m": 5e-05,
+   "raise_b": 0.02187,
+   "allin": 0.02566
+  },
+  "vs_o:raise|limped|oop|none|pair": {
+   "fold": 0.64274,
+   "call": 0.30648,
+   "raise_s": 0.0,
+   "raise_m": 5e-05,
+   "raise_b": 0.0276,
+   "allin": 0.02313
+  },
+  "vs_o:raise|limped|oop|none|straight": {
+   "fold": 0.61183,
+   "call": 0.32854,
+   "raise_s": 0.0,
+   "raise_m": 0.00341,
+   "raise_b": 0.03858,
+   "allin": 0.01764
+  },
+  "vs_o:raise|limped|oop|turn|brick": {
+   "fold": 0.66087,
+   "call": 0.30264,
+   "raise_s": 0.0,
+   "raise_m": 6e-05,
+   "raise_b": 0.01864,
+   "allin": 0.0178
+  },
+  "vs_o:raise|limped|oop|turn|flush": {
+   "fold": 0.60982,
+   "call": 0.35408,
+   "raise_s": 0.0,
+   "raise_m": 8e-05,
+   "raise_b": 0.02143,
+   "allin": 0.01458
+  },
+  "vs_o:raise|limped|oop|turn|pair": {
+   "fold": 0.68302,
+   "call": 0.27724,
+   "raise_s": 0.0,
+   "raise_m": 9e-05,
+   "raise_b": 0.01686,
+   "allin": 0.0228
+  },
+  "vs_o:raise|limped|oop|turn|straight": {
+   "fold": 0.66665,
+   "call": 0.30321,
+   "raise_s": 0.0,
+   "raise_m": 0.0001,
+   "raise_b": 0.01285,
+   "allin": 0.0172
+  },
+  "vs_o:raise|srp|ip|flop|brick": {
+   "fold": 0.67843,
+   "call": 0.2757,
+   "raise_s": 0.0,
+   "raise_m": 0.00015,
+   "raise_b": 0.02043,
+   "allin": 0.02529
+  },
+  "vs_o:raise|srp|ip|flop|flush": {
+   "fold": 0.67233,
+   "call": 0.28445,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.01647,
+   "allin": 0.02675
+  },
+  "vs_o:raise|srp|ip|flop|pair": {
+   "fold": 0.68777,
+   "call": 0.26808,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.01883,
+   "allin": 0.02531
+  },
+  "vs_o:raise|srp|ip|flop|straight": {
+   "fold": 0.66077,
+   "call": 0.28312,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.03599,
+   "allin": 0.02011
+  },
+  "vs_o:raise|srp|ip|none|brick": {
+   "fold": 0.67784,
+   "call": 0.27431,
+   "raise_s": 0.0,
+   "raise_m": 0.00024,
+   "raise_b": 0.02268,
+   "allin": 0.02492
+  },
+  "vs_o:raise|srp|ip|none|flush": {
+   "fold": 0.69795,
+   "call": 0.25976,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01725,
+   "allin": 0.02504
+  },
+  "vs_o:raise|srp|ip|none|pair": {
+   "fold": 0.68437,
+   "call": 0.26027,
+   "raise_s": 0.0,
+   "raise_m": 0.00024,
+   "raise_b": 0.02444,
+   "allin": 0.03067
+  },
+  "vs_o:raise|srp|ip|none|straight": {
+   "fold": 0.67061,
+   "call": 0.28281,
+   "raise_s": 0.0,
+   "raise_m": 0.00042,
+   "raise_b": 0.02002,
+   "allin": 0.02614
+  },
+  "vs_o:raise|srp|ip|turn|brick": {
+   "fold": 0.6896,
+   "call": 0.27706,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.01308,
+   "allin": 0.02024
+  },
+  "vs_o:raise|srp|ip|turn|flush": {
+   "fold": 0.70436,
+   "call": 0.26634,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.00959,
+   "allin": 0.01969
+  },
+  "vs_o:raise|srp|ip|turn|pair": {
+   "fold": 0.6862,
+   "call": 0.27698,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.01511,
+   "allin": 0.02169
+  },
+  "vs_o:raise|srp|ip|turn|straight": {
+   "fold": 0.69172,
+   "call": 0.28272,
+   "raise_s": 0.0,
+   "raise_m": 4e-05,
+   "raise_b": 0.0142,
+   "allin": 0.01132
+  },
+  "vs_o:raise|srp|oop|flop|brick": {
+   "fold": 0.71845,
+   "call": 0.2607,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.00474,
+   "allin": 0.01609
+  },
+  "vs_o:raise|srp|oop|flop|flush": {
+   "fold": 0.69392,
+   "call": 0.27599,
+   "raise_s": 0.0,
+   "raise_m": 4e-05,
+   "raise_b": 0.00686,
+   "allin": 0.02319
+  },
+  "vs_o:raise|srp|oop|flop|pair": {
+   "fold": 0.71904,
+   "call": 0.25701,
+   "raise_s": 0.0,
+   "raise_m": 4e-05,
+   "raise_b": 0.0055,
+   "allin": 0.0184
+  },
+  "vs_o:raise|srp|oop|flop|straight": {
+   "fold": 0.68547,
+   "call": 0.2834,
+   "raise_s": 0.0,
+   "raise_m": 7e-05,
+   "raise_b": 0.00929,
+   "allin": 0.02176
+  },
+  "vs_o:raise|srp|oop|none|brick": {
+   "fold": 0.70086,
+   "call": 0.2717,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.01015,
+   "allin": 0.01728
+  },
+  "vs_o:raise|srp|oop|none|flush": {
+   "fold": 0.70414,
+   "call": 0.26453,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.00935,
+   "allin": 0.02198
+  },
+  "vs_o:raise|srp|oop|none|pair": {
+   "fold": 0.68376,
+   "call": 0.28286,
+   "raise_s": 0.0,
+   "raise_m": 0.00035,
+   "raise_b": 0.00912,
+   "allin": 0.02391
+  },
+  "vs_o:raise|srp|oop|none|straight": {
+   "fold": 0.67049,
+   "call": 0.28675,
+   "raise_s": 0.0,
+   "raise_m": 2e-05,
+   "raise_b": 0.02002,
+   "allin": 0.02273
+  },
+  "vs_o:raise|srp|oop|turn|brick": {
+   "fold": 0.69059,
+   "call": 0.27964,
+   "raise_s": 0.0,
+   "raise_m": 1e-05,
+   "raise_b": 0.01068,
+   "allin": 0.01908
+  },
+  "vs_o:raise|srp|oop|turn|flush": {
+   "fold": 0.71588,
+   "call": 0.26207,
+   "raise_s": 0.0,
+   "raise_m": 3e-05,
+   "raise_b": 0.00329,
+   "allin": 0.01872
+  },
+  "vs_o:raise|srp|oop|turn|pair": {
+   "fold": 0.71284,
+   "call": 0.26535,
+   "raise_s": 0.0,
+   "raise_m": 3e-05,
+   "raise_b": 0.00826,
+   "allin": 0.01352
+  },
+  "vs_o:raise|srp|oop|turn|straight": {
+   "fold": 0.69721,
+   "call": 0.28203,
+   "raise_s": 0.0,
+   "raise_m": 5e-05,
+   "raise_b": 0.00881,
+   "allin": 0.01191
+  },
+  "vs_s|3bp|ip|flop|brick": {
+   "fold": 0.39362,
+   "call": 0.50541,
+   "raise_s": 0.002,
+   "raise_m": 0.01325,
+   "raise_b": 0.04836,
+   "allin": 0.03736
+  },
+  "vs_s|3bp|ip|flop|flush": {
+   "fold": 0.34159,
+   "call": 0.53235,
+   "raise_s": 0.00318,
+   "raise_m": 0.01836,
+   "raise_b": 0.06546,
+   "allin": 0.03906
+  },
+  "vs_s|3bp|ip|flop|pair": {
+   "fold": 0.35371,
+   "call": 0.5425,
+   "raise_s": 0.00104,
+   "raise_m": 0.01253,
+   "raise_b": 0.05808,
+   "allin": 0.03213
+  },
+  "vs_s|3bp|ip|flop|straight": {
+   "fold": 0.37064,
+   "call": 0.51398,
+   "raise_s": 0.00172,
+   "raise_m": 0.02071,
+   "raise_b": 0.06148,
+   "allin": 0.03147
+  },
+  "vs_s|3bp|ip|none|brick": {
+   "fold": 0.48664,
+   "call": 0.45693,
+   "raise_s": 0.00188,
+   "raise_m": 0.0069,
+   "raise_b": 0.02284,
+   "allin": 0.02481
+  },
+  "vs_s|3bp|ip|none|flush": {
+   "fold": 0.46414,
+   "call": 0.47782,
+   "raise_s": 0.00136,
+   "raise_m": 0.00885,
+   "raise_b": 0.0272,
+   "allin": 0.02062
+  },
+  "vs_s|3bp|ip|none|pair": {
+   "fold": 0.46214,
+   "call": 0.47526,
+   "raise_s": 0.00282,
+   "raise_m": 0.00711,
+   "raise_b": 0.032,
+   "allin": 0.02068
+  },
+  "vs_s|3bp|ip|none|straight": {
+   "fold": 0.41896,
+   "call": 0.52076,
+   "raise_s": 0.00253,
+   "raise_m": 0.00721,
+   "raise_b": 0.03086,
+   "allin": 0.01968
+  },
+  "vs_s|3bp|ip|turn|brick": {
+   "fold": 0.3673,
+   "call": 0.56965,
+   "raise_s": 0.00116,
+   "raise_m": 0.01077,
+   "raise_b": 0.01705,
+   "allin": 0.03406
+  },
+  "vs_s|3bp|ip|turn|flush": {
+   "fold": 0.35455,
+   "call": 0.56262,
+   "raise_s": 0.00066,
+   "raise_m": 0.01592,
+   "raise_b": 0.03329,
+   "allin": 0.03297
+  },
+  "vs_s|3bp|ip|turn|pair": {
+   "fold": 0.301,
+   "call": 0.6004,
+   "raise_s": 0.00067,
+   "raise_m": 0.01889,
+   "raise_b": 0.03717,
+   "allin": 0.04187
+  },
+  "vs_s|3bp|ip|turn|straight": {
+   "fold": 0.36114,
+   "call": 0.52273,
+   "raise_s": 0.00793,
+   "raise_m": 0.02763,
+   "raise_b": 0.04649,
+   "allin": 0.03409
+  },
+  "vs_s|3bp|oop|flop|brick": {
+   "fold": 0.33016,
+   "call": 0.48429,
+   "raise_s": 0.00894,
+   "raise_m": 0.03734,
+   "raise_b": 0.05697,
+   "allin": 0.0823
+  },
+  "vs_s|3bp|oop|flop|flush": {
+   "fold": 0.30064,
+   "call": 0.499,
+   "raise_s": 0.00672,
+   "raise_m": 0.03961,
+   "raise_b": 0.06033,
+   "allin": 0.0937
+  },
+  "vs_s|3bp|oop|flop|pair": {
+   "fold": 0.30979,
+   "call": 0.51206,
+   "raise_s": 0.00739,
+   "raise_m": 0.03406,
+   "raise_b": 0.06435,
+   "allin": 0.07234
+  },
+  "vs_s|3bp|oop|flop|straight": {
+   "fold": 0.29106,
+   "call": 0.47445,
+   "raise_s": 0.01299,
+   "raise_m": 0.06985,
+   "raise_b": 0.08186,
+   "allin": 0.06978
+  },
+  "vs_s|3bp|oop|none|brick": {
+   "fold": 0.38312,
+   "call": 0.46659,
+   "raise_s": 0.00627,
+   "raise_m": 0.02769,
+   "raise_b": 0.07504,
+   "allin": 0.04129
+  },
+  "vs_s|3bp|oop|none|flush": {
+   "fold": 0.39263,
+   "call": 0.44707,
+   "raise_s": 0.00415,
+   "raise_m": 0.0215,
+   "raise_b": 0.08455,
+   "allin": 0.0501
+  },
+  "vs_s|3bp|oop|none|pair": {
+   "fold": 0.37624,
+   "call": 0.47396,
+   "raise_s": 0.00616,
+   "raise_m": 0.02905,
+   "raise_b": 0.06828,
+   "allin": 0.04631
+  },
+  "vs_s|3bp|oop|none|straight": {
+   "fold": 0.39695,
+   "call": 0.4237,
+   "raise_s": 0.00869,
+   "raise_m": 0.03616,
+   "raise_b": 0.09286,
+   "allin": 0.04165
+  },
+  "vs_s|3bp|oop|turn|brick": {
+   "fold": 0.31459,
+   "call": 0.5215,
+   "raise_s": 0.00596,
+   "raise_m": 0.02812,
+   "raise_b": 0.04701,
+   "allin": 0.08282
+  },
+  "vs_s|3bp|oop|turn|flush": {
+   "fold": 0.2796,
+   "call": 0.53196,
+   "raise_s": 0.00763,
+   "raise_m": 0.02896,
+   "raise_b": 0.05802,
+   "allin": 0.09382
+  },
+  "vs_s|3bp|oop|turn|pair": {
+   "fold": 0.28891,
+   "call": 0.55827,
+   "raise_s": 0.00926,
+   "raise_m": 0.0234,
+   "raise_b": 0.04576,
+   "allin": 0.0744
+  },
+  "vs_s|3bp|oop|turn|straight": {
+   "fold": 0.29176,
+   "call": 0.52399,
+   "raise_s": 0.00722,
+   "raise_m": 0.03731,
+   "raise_b": 0.05216,
+   "allin": 0.08756
+  },
+  "vs_s|limped|ip|flop|brick": {
+   "fold": 0.39267,
+   "call": 0.51265,
+   "raise_s": 0.00149,
+   "raise_m": 0.01181,
+   "raise_b": 0.07288,
+   "allin": 0.0085
+  },
+  "vs_s|limped|ip|flop|flush": {
+   "fold": 0.37939,
+   "call": 0.49465,
+   "raise_s": 0.0028,
+   "raise_m": 0.01655,
+   "raise_b": 0.09059,
+   "allin": 0.01602
+  },
+  "vs_s|limped|ip|flop|pair": {
+   "fold": 0.32731,
+   "call": 0.53395,
+   "raise_s": 0.00247,
+   "raise_m": 0.01461,
+   "raise_b": 0.1047,
+   "allin": 0.01696
+  },
+  "vs_s|limped|ip|flop|straight": {
+   "fold": 0.36797,
+   "call": 0.49161,
+   "raise_s": 0.00938,
+   "raise_m": 0.01987,
+   "raise_b": 0.09194,
+   "allin": 0.01923
+  },
+  "vs_s|limped|ip|none|brick": {
+   "fold": 0.49923,
+   "call": 0.44055,
+   "raise_s": 0.00268,
+   "raise_m": 0.00505,
+   "raise_b": 0.04865,
+   "allin": 0.00384
+  },
+  "vs_s|limped|ip|none|flush": {
+   "fold": 0.49584,
+   "call": 0.43931,
+   "raise_s": 0.00103,
+   "raise_m": 0.0061,
+   "raise_b": 0.05063,
+   "allin": 0.00708
+  },
+  "vs_s|limped|ip|none|pair": {
+   "fold": 0.4303,
+   "call": 0.50318,
+   "raise_s": 0.00097,
+   "raise_m": 0.00969,
+   "raise_b": 0.0492,
+   "allin": 0.00666
+  },
+  "vs_s|limped|ip|none|straight": {
+   "fold": 0.42954,
+   "call": 0.47187,
+   "raise_s": 0.00191,
+   "raise_m": 0.01522,
+   "raise_b": 0.06833,
+   "allin": 0.01313
+  },
+  "vs_s|limped|ip|turn|brick": {
+   "fold": 0.30848,
+   "call": 0.57876,
+   "raise_s": 0.00535,
+   "raise_m": 0.01054,
+   "raise_b": 0.08566,
+   "allin": 0.01122
+  },
+  "vs_s|limped|ip|turn|flush": {
+   "fold": 0.32105,
+   "call": 0.5448,
+   "raise_s": 0.00143,
+   "raise_m": 0.01429,
+   "raise_b": 0.09882,
+   "allin": 0.01961
+  },
+  "vs_s|limped|ip|turn|pair": {
+   "fold": 0.2901,
+   "call": 0.55369,
+   "raise_s": 0.00371,
+   "raise_m": 0.01598,
+   "raise_b": 0.12285,
+   "allin": 0.01367
+  },
+  "vs_s|limped|ip|turn|straight": {
+   "fold": 0.33866,
+   "call": 0.528,
+   "raise_s": 0.00229,
+   "raise_m": 0.01822,
+   "raise_b": 0.0971,
+   "allin": 0.01573
+  },
+  "vs_s|limped|oop|flop|brick": {
+   "fold": 0.31586,
+   "call": 0.49508,
+   "raise_s": 0.00389,
+   "raise_m": 0.03846,
+   "raise_b": 0.13903,
+   "allin": 0.00768
+  },
+  "vs_s|limped|oop|flop|flush": {
+   "fold": 0.32975,
+   "call": 0.46223,
+   "raise_s": 0.00397,
+   "raise_m": 0.02577,
+   "raise_b": 0.16691,
+   "allin": 0.01137
+  },
+  "vs_s|limped|oop|flop|pair": {
+   "fold": 0.29773,
+   "call": 0.50911,
+   "raise_s": 0.00397,
+   "raise_m": 0.02002,
+   "raise_b": 0.15777,
+   "allin": 0.0114
+  },
+  "vs_s|limped|oop|flop|straight": {
+   "fold": 0.30759,
+   "call": 0.50192,
+   "raise_s": 0.00581,
+   "raise_m": 0.02079,
+   "raise_b": 0.14724,
+   "allin": 0.01666
+  },
+  "vs_s|limped|oop|none|brick": {
+   "fold": 0.42378,
+   "call": 0.43768,
+   "raise_s": 0.00253,
+   "raise_m": 0.02179,
+   "raise_b": 0.11009,
+   "allin": 0.00414
+  },
+  "vs_s|limped|oop|none|flush": {
+   "fold": 0.4044,
+   "call": 0.43028,
+   "raise_s": 0.00488,
+   "raise_m": 0.03545,
+   "raise_b": 0.11739,
+   "allin": 0.00759
+  },
+  "vs_s|limped|oop|none|pair": {
+   "fold": 0.37936,
+   "call": 0.47274,
+   "raise_s": 0.00311,
+   "raise_m": 0.02244,
+   "raise_b": 0.11538,
+   "allin": 0.00696
+  },
+  "vs_s|limped|oop|none|straight": {
+   "fold": 0.36934,
+   "call": 0.42075,
+   "raise_s": 0.00217,
+   "raise_m": 0.02673,
+   "raise_b": 0.16505,
+   "allin": 0.01596
+  },
+  "vs_s|limped|oop|turn|brick": {
+   "fold": 0.25241,
+   "call": 0.52674,
+   "raise_s": 0.00826,
+   "raise_m": 0.04487,
+   "raise_b": 0.15394,
+   "allin": 0.01378
+  },
+  "vs_s|limped|oop|turn|flush": {
+   "fold": 0.25342,
+   "call": 0.4768,
+   "raise_s": 0.00504,
+   "raise_m": 0.05666,
+   "raise_b": 0.19477,
+   "allin": 0.0133
+  },
+  "vs_s|limped|oop|turn|pair": {
+   "fold": 0.27232,
+   "call": 0.52731,
+   "raise_s": 0.00445,
+   "raise_m": 0.04824,
+   "raise_b": 0.13332,
+   "allin": 0.01436
+  },
+  "vs_s|limped|oop|turn|straight": {
+   "fold": 0.24074,
+   "call": 0.48794,
+   "raise_s": 0.0054,
+   "raise_m": 0.05851,
+   "raise_b": 0.18999,
+   "allin": 0.01741
+  },
+  "vs_s|srp|ip|flop|brick": {
+   "fold": 0.37325,
+   "call": 0.50613,
+   "raise_s": 0.00102,
+   "raise_m": 0.01367,
+   "raise_b": 0.09627,
+   "allin": 0.00966
+  },
+  "vs_s|srp|ip|flop|flush": {
+   "fold": 0.35533,
+   "call": 0.50895,
+   "raise_s": 0.00038,
+   "raise_m": 0.01781,
+   "raise_b": 0.10663,
+   "allin": 0.01089
+  },
+  "vs_s|srp|ip|flop|pair": {
+   "fold": 0.34408,
+   "call": 0.55066,
+   "raise_s": 0.00162,
+   "raise_m": 0.01726,
+   "raise_b": 0.0795,
+   "allin": 0.00688
+  },
+  "vs_s|srp|ip|flop|straight": {
+   "fold": 0.36428,
+   "call": 0.5201,
+   "raise_s": 0.00073,
+   "raise_m": 0.01176,
+   "raise_b": 0.09312,
+   "allin": 0.01001
+  },
+  "vs_s|srp|ip|none|brick": {
+   "fold": 0.50154,
+   "call": 0.43613,
+   "raise_s": 0.0012,
+   "raise_m": 0.00528,
+   "raise_b": 0.04888,
+   "allin": 0.00698
+  },
+  "vs_s|srp|ip|none|flush": {
+   "fold": 0.49381,
+   "call": 0.44638,
+   "raise_s": 0.00103,
+   "raise_m": 0.00591,
+   "raise_b": 0.04583,
+   "allin": 0.00703
+  },
+  "vs_s|srp|ip|none|pair": {
+   "fold": 0.48208,
+   "call": 0.46019,
+   "raise_s": 0.00038,
+   "raise_m": 0.0098,
+   "raise_b": 0.04032,
+   "allin": 0.00723
+  },
+  "vs_s|srp|ip|none|straight": {
+   "fold": 0.48425,
+   "call": 0.44805,
+   "raise_s": 0.00101,
+   "raise_m": 0.00951,
+   "raise_b": 0.04974,
+   "allin": 0.00744
+  },
+  "vs_s|srp|ip|turn|brick": {
+   "fold": 0.30788,
+   "call": 0.59221,
+   "raise_s": 0.00169,
+   "raise_m": 0.01527,
+   "raise_b": 0.06582,
+   "allin": 0.01713
+  },
+  "vs_s|srp|ip|turn|flush": {
+   "fold": 0.30453,
+   "call": 0.55408,
+   "raise_s": 0.00415,
+   "raise_m": 0.01722,
+   "raise_b": 0.08989,
+   "allin": 0.03013
+  },
+  "vs_s|srp|ip|turn|pair": {
+   "fold": 0.26721,
+   "call": 0.60928,
+   "raise_s": 0.00357,
+   "raise_m": 0.02131,
+   "raise_b": 0.07869,
+   "allin": 0.01994
+  },
+  "vs_s|srp|ip|turn|straight": {
+   "fold": 0.37719,
+   "call": 0.49466,
+   "raise_s": 0.00336,
+   "raise_m": 0.02457,
+   "raise_b": 0.07679,
+   "allin": 0.02344
+  },
+  "vs_s|srp|oop|flop|brick": {
+   "fold": 0.29959,
+   "call": 0.5004,
+   "raise_s": 0.0068,
+   "raise_m": 0.03668,
+   "raise_b": 0.14102,
+   "allin": 0.01551
+  },
+  "vs_s|srp|oop|flop|flush": {
+   "fold": 0.29542,
+   "call": 0.48431,
+   "raise_s": 0.00777,
+   "raise_m": 0.03049,
+   "raise_b": 0.1625,
+   "allin": 0.01951
+  },
+  "vs_s|srp|oop|flop|pair": {
+   "fold": 0.28127,
+   "call": 0.50149,
+   "raise_s": 0.00524,
+   "raise_m": 0.04269,
+   "raise_b": 0.15068,
+   "allin": 0.01862
+  },
+  "vs_s|srp|oop|flop|straight": {
+   "fold": 0.30552,
+   "call": 0.4489,
+   "raise_s": 0.00603,
+   "raise_m": 0.04621,
+   "raise_b": 0.17503,
+   "allin": 0.01831
+  },
+  "vs_s|srp|oop|none|brick": {
+   "fold": 0.3908,
+   "call": 0.44655,
+   "raise_s": 0.00315,
+   "raise_m": 0.01964,
+   "raise_b": 0.13366,
+   "allin": 0.00621
+  },
+  "vs_s|srp|oop|none|flush": {
+   "fold": 0.39418,
+   "call": 0.43541,
+   "raise_s": 0.0022,
+   "raise_m": 0.01799,
+   "raise_b": 0.14102,
+   "allin": 0.0092
+  },
+  "vs_s|srp|oop|none|pair": {
+   "fold": 0.36851,
+   "call": 0.4761,
+   "raise_s": 0.0029,
+   "raise_m": 0.0177,
+   "raise_b": 0.12666,
+   "allin": 0.00812
+  },
+  "vs_s|srp|oop|none|straight": {
+   "fold": 0.42212,
+   "call": 0.39721,
+   "raise_s": 0.00348,
+   "raise_m": 0.02898,
+   "raise_b": 0.13879,
+   "allin": 0.00941
+  },
+  "vs_s|srp|oop|turn|brick": {
+   "fold": 0.27225,
+   "call": 0.51845,
+   "raise_s": 0.00586,
+   "raise_m": 0.0325,
+   "raise_b": 0.1463,
+   "allin": 0.02464
+  },
+  "vs_s|srp|oop|turn|flush": {
+   "fold": 0.26584,
+   "call": 0.47693,
+   "raise_s": 0.00464,
+   "raise_m": 0.03147,
+   "raise_b": 0.17471,
+   "allin": 0.04642
+  },
+  "vs_s|srp|oop|turn|pair": {
+   "fold": 0.25157,
+   "call": 0.53695,
+   "raise_s": 0.00551,
+   "raise_m": 0.03417,
+   "raise_b": 0.14622,
+   "allin": 0.02559
+  },
+  "vs_s|srp|oop|turn|straight": {
+   "fold": 0.28247,
+   "call": 0.46109,
+   "raise_s": 0.00752,
+   "raise_m": 0.05124,
+   "raise_b": 0.16175,
+   "allin": 0.03592
+  },
+  "vs_s:raise|3bp|ip|flop|brick": {
+   "fold": 0.20115,
+   "call": 0.70164,
+   "raise_s": 0.01187,
+   "raise_m": 0.01995,
+   "raise_b": 0.02339,
+   "allin": 0.04199
+  },
+  "vs_s:raise|3bp|ip|flop|flush": {
+   "fold": 0.24006,
+   "call": 0.66854,
+   "raise_s": 0.01487,
+   "raise_m": 0.01277,
+   "raise_b": 0.02323,
+   "allin": 0.04054
+  },
+  "vs_s:raise|3bp|ip|flop|pair": {
+   "fold": 0.22874,
+   "call": 0.66124,
+   "raise_s": 0.01417,
+   "raise_m": 0.01217,
+   "raise_b": 0.02213,
+   "allin": 0.06155
+  },
+  "vs_s:raise|3bp|ip|flop|straight": {
+   "fold": 0.22953,
+   "call": 0.67857,
+   "raise_s": 0.01495,
+   "raise_m": 0.01284,
+   "raise_b": 0.02336,
+   "allin": 0.04076
+  },
+  "vs_s:raise|3bp|ip|none|brick": {
+   "fold": 0.27703,
+   "call": 0.63245,
+   "raise_s": 0.01302,
+   "raise_m": 0.01172,
+   "raise_b": 0.01819,
+   "allin": 0.04759
+  },
+  "vs_s:raise|3bp|ip|none|flush": {
+   "fold": 0.26508,
+   "call": 0.62701,
+   "raise_s": 0.01692,
+   "raise_m": 0.01031,
+   "raise_b": 0.02854,
+   "allin": 0.05215
+  },
+  "vs_s:raise|3bp|ip|none|pair": {
+   "fold": 0.20533,
+   "call": 0.69549,
+   "raise_s": 0.02206,
+   "raise_m": 0.01041,
+   "raise_b": 0.01894,
+   "allin": 0.04777
+  },
+  "vs_s:raise|3bp|ip|none|straight": {
+   "fold": 0.24267,
+   "call": 0.65642,
+   "raise_s": 0.0193,
+   "raise_m": 0.01737,
+   "raise_b": 0.02139,
+   "allin": 0.04285
+  },
+  "vs_s:raise|3bp|ip|turn|brick": {
+   "fold": 0.24217,
+   "call": 0.66038,
+   "raise_s": 0.01768,
+   "raise_m": 0.01077,
+   "raise_b": 0.01959,
+   "allin": 0.04941
+  },
+  "vs_s:raise|3bp|ip|turn|flush": {
+   "fold": 0.22174,
+   "call": 0.68466,
+   "raise_s": 0.01523,
+   "raise_m": 0.01308,
+   "raise_b": 0.02379,
+   "allin": 0.04151
+  },
+  "vs_s:raise|3bp|ip|turn|pair": {
+   "fold": 0.21624,
+   "call": 0.68037,
+   "raise_s": 0.01485,
+   "raise_m": 0.01885,
+   "raise_b": 0.0232,
+   "allin": 0.04649
+  },
+  "vs_s:raise|3bp|ip|turn|straight": {
+   "fold": 0.22516,
+   "call": 0.66394,
+   "raise_s": 0.01505,
+   "raise_m": 0.01911,
+   "raise_b": 0.02352,
+   "allin": 0.05322
+  },
+  "vs_s:raise|3bp|oop|flop|brick": {
+   "fold": 0.22182,
+   "call": 0.67838,
+   "raise_s": 0.01523,
+   "raise_m": 0.01308,
+   "raise_b": 0.0238,
+   "allin": 0.04769
+  },
+  "vs_s:raise|3bp|oop|flop|flush": {
+   "fold": 0.2199,
+   "call": 0.68467,
+   "raise_s": 0.01552,
+   "raise_m": 0.01333,
+   "raise_b": 0.02425,
+   "allin": 0.04232
+  },
+  "vs_s:raise|3bp|oop|flop|pair": {
+   "fold": 0.22174,
+   "call": 0.68466,
+   "raise_s": 0.01523,
+   "raise_m": 0.01308,
+   "raise_b": 0.02379,
+   "allin": 0.04151
+  },
+  "vs_s:raise|3bp|oop|flop|straight": {
+   "fold": 0.23556,
+   "call": 0.67013,
+   "raise_s": 0.01534,
+   "raise_m": 0.01317,
+   "raise_b": 0.02397,
+   "allin": 0.04183
+  },
+  "vs_s:raise|3bp|oop|none|brick": {
+   "fold": 0.23142,
+   "call": 0.67692,
+   "raise_s": 0.01399,
+   "raise_m": 0.01201,
+   "raise_b": 0.02186,
+   "allin": 0.0438
+  },
+  "vs_s:raise|3bp|oop|none|flush": {
+   "fold": 0.22137,
+   "call": 0.68257,
+   "raise_s": 0.01563,
+   "raise_m": 0.01342,
+   "raise_b": 0.02441,
+   "allin": 0.0426
+  },
+  "vs_s:raise|3bp|oop|none|pair": {
+   "fold": 0.22325,
+   "call": 0.67621,
+   "raise_s": 0.01533,
+   "raise_m": 0.01946,
+   "raise_b": 0.02395,
+   "allin": 0.0418
+  },
+  "vs_s:raise|3bp|oop|none|straight": {
+   "fold": 0.2264,
+   "call": 0.68055,
+   "raise_s": 0.01513,
+   "raise_m": 0.013,
+   "raise_b": 0.02365,
+   "allin": 0.04126
+  },
+  "vs_s:raise|3bp|oop|turn|brick": {
+   "fold": 0.21702,
+   "call": 0.68881,
+   "raise_s": 0.01532,
+   "raise_m": 0.01315,
+   "raise_b": 0.02393,
+   "allin": 0.04177
+  },
+  "vs_s:raise|3bp|oop|turn|flush": {
+   "fold": 0.21702,
+   "call": 0.68881,
+   "raise_s": 0.01532,
+   "raise_m": 0.01315,
+   "raise_b": 0.02393,
+   "allin": 0.04177
+  },
+  "vs_s:raise|3bp|oop|turn|pair": {
+   "fold": 0.22137,
+   "call": 0.68257,
+   "raise_s": 0.01563,
+   "raise_m": 0.01342,
+   "raise_b": 0.02441,
+   "allin": 0.0426
+  },
+  "vs_s:raise|3bp|oop|turn|straight": {
+   "fold": 0.22767,
+   "call": 0.67622,
+   "raise_s": 0.01563,
+   "raise_m": 0.01343,
+   "raise_b": 0.02443,
+   "allin": 0.04262
+  },
+  "vs_s:raise|limped|ip|flop|brick": {
+   "fold": 0.22767,
+   "call": 0.67622,
+   "raise_s": 0.01563,
+   "raise_m": 0.01343,
+   "raise_b": 0.02443,
+   "allin": 0.04262
+  },
+  "vs_s:raise|limped|ip|flop|flush": {
+   "fold": 0.22137,
+   "call": 0.68257,
+   "raise_s": 0.01563,
+   "raise_m": 0.01342,
+   "raise_b": 0.02441,
+   "allin": 0.0426
+  },
+  "vs_s:raise|limped|ip|flop|pair": {
+   "fold": 0.23242,
+   "call": 0.67206,
+   "raise_s": 0.01554,
+   "raise_m": 0.01334,
+   "raise_b": 0.02428,
+   "allin": 0.04236
+  },
+  "vs_s:raise|limped|ip|flop|straight": {
+   "fold": 0.22437,
+   "call": 0.67827,
+   "raise_s": 0.01584,
+   "raise_m": 0.0136,
+   "raise_b": 0.02475,
+   "allin": 0.04318
+  },
+  "vs_s:raise|limped|ip|none|brick": {
+   "fold": 0.2272,
+   "call": 0.67486,
+   "raise_s": 0.01407,
+   "raise_m": 0.01208,
+   "raise_b": 0.02772,
+   "allin": 0.04406
+  },
+  "vs_s:raise|limped|ip|none|flush": {
+   "fold": 0.21427,
+   "call": 0.68655,
+   "raise_s": 0.02132,
+   "raise_m": 0.01299,
+   "raise_b": 0.02363,
+   "allin": 0.04124
+  },
+  "vs_s:raise|limped|ip|none|pair": {
+   "fold": 0.22767,
+   "call": 0.67622,
+   "raise_s": 0.01563,
+   "raise_m": 0.01343,
+   "raise_b": 0.02443,
+   "allin": 0.04262
+  },
+  "vs_s:raise|limped|ip|none|straight": {
+   "fold": 0.21851,
+   "call": 0.68035,
+   "raise_s": 0.02174,
+   "raise_m": 0.01325,
+   "raise_b": 0.0241,
+   "allin": 0.04205
+  },
+  "vs_s:raise|limped|ip|turn|brick": {
+   "fold": 0.22937,
+   "call": 0.67636,
+   "raise_s": 0.01533,
+   "raise_m": 0.01317,
+   "raise_b": 0.02396,
+   "allin": 0.04181
+  },
+  "vs_s:raise|limped|ip|turn|flush": {
+   "fold": 0.22137,
+   "call": 0.68257,
+   "raise_s": 0.01563,
+   "raise_m": 0.01342,
+   "raise_b": 0.02441,
+   "allin": 0.0426
+  },
+  "vs_s:raise|limped|ip|turn|pair": {
+   "fold": 0.22286,
+   "call": 0.68043,
+   "raise_s": 0.01573,
+   "raise_m": 0.01351,
+   "raise_b": 0.02458,
+   "allin": 0.04289
+  },
+  "vs_s:raise|limped|ip|turn|straight": {
+   "fold": 0.22927,
+   "call": 0.6675,
+   "raise_s": 0.02219,
+   "raise_m": 0.01352,
+   "raise_b": 0.0246,
+   "allin": 0.04292
+  },
+  "vs_s:raise|limped|oop|flop|brick": {
+   "fold": 0.22767,
+   "call": 0.67622,
+   "raise_s": 0.01563,
+   "raise_m": 0.01343,
+   "raise_b": 0.02443,
+   "allin": 0.04262
+  },
+  "vs_s:raise|limped|oop|flop|flush": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  },
+  "vs_s:raise|limped|oop|flop|pair": {
+   "fold": 0.22437,
+   "call": 0.67827,
+   "raise_s": 0.01584,
+   "raise_m": 0.0136,
+   "raise_b": 0.02475,
+   "allin": 0.04318
+  },
+  "vs_s:raise|limped|oop|flop|straight": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  },
+  "vs_s:raise|limped|oop|none|brick": {
+   "fold": 0.22767,
+   "call": 0.67622,
+   "raise_s": 0.01563,
+   "raise_m": 0.01343,
+   "raise_b": 0.02443,
+   "allin": 0.04262
+  },
+  "vs_s:raise|limped|oop|none|flush": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  },
+  "vs_s:raise|limped|oop|none|pair": {
+   "fold": 0.22929,
+   "call": 0.66755,
+   "raise_s": 0.01574,
+   "raise_m": 0.01352,
+   "raise_b": 0.0246,
+   "allin": 0.0493
+  },
+  "vs_s:raise|limped|oop|none|straight": {
+   "fold": 0.22004,
+   "call": 0.67182,
+   "raise_s": 0.0219,
+   "raise_m": 0.01334,
+   "raise_b": 0.02427,
+   "allin": 0.04863
+  },
+  "vs_s:raise|limped|oop|turn|brick": {
+   "fold": 0.2292,
+   "call": 0.67404,
+   "raise_s": 0.01574,
+   "raise_m": 0.01352,
+   "raise_b": 0.02459,
+   "allin": 0.04291
+  },
+  "vs_s:raise|limped|oop|turn|flush": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  },
+  "vs_s:raise|limped|oop|turn|pair": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  },
+  "vs_s:raise|limped|oop|turn|straight": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  },
+  "vs_s:raise|srp|ip|flop|brick": {
+   "fold": 0.19132,
+   "call": 0.70135,
+   "raise_s": 0.01011,
+   "raise_m": 0.00868,
+   "raise_b": 0.03641,
+   "allin": 0.05212
+  },
+  "vs_s:raise|srp|ip|flop|flush": {
+   "fold": 0.22523,
+   "call": 0.6843,
+   "raise_s": 0.01299,
+   "raise_m": 0.01116,
+   "raise_b": 0.03089,
+   "allin": 0.03543
+  },
+  "vs_s:raise|srp|ip|flop|pair": {
+   "fold": 0.21147,
+   "call": 0.67873,
+   "raise_s": 0.01802,
+   "raise_m": 0.01098,
+   "raise_b": 0.0356,
+   "allin": 0.0452
+  },
+  "vs_s:raise|srp|ip|flop|straight": {
+   "fold": 0.22254,
+   "call": 0.6765,
+   "raise_s": 0.01449,
+   "raise_m": 0.0184,
+   "raise_b": 0.02855,
+   "allin": 0.03952
+  },
+  "vs_s:raise|srp|ip|none|brick": {
+   "fold": 0.24121,
+   "call": 0.67853,
+   "raise_s": 0.01025,
+   "raise_m": 0.01222,
+   "raise_b": 0.02914,
+   "allin": 0.02865
+  },
+  "vs_s:raise|srp|ip|none|flush": {
+   "fold": 0.22898,
+   "call": 0.67777,
+   "raise_s": 0.01606,
+   "raise_m": 0.01446,
+   "raise_b": 0.02708,
+   "allin": 0.03566
+  },
+  "vs_s:raise|srp|ip|none|pair": {
+   "fold": 0.20164,
+   "call": 0.68366,
+   "raise_s": 0.01718,
+   "raise_m": 0.02048,
+   "raise_b": 0.03395,
+   "allin": 0.0431
+  },
+  "vs_s:raise|srp|ip|none|straight": {
+   "fold": 0.24196,
+   "call": 0.66756,
+   "raise_s": 0.01731,
+   "raise_m": 0.01054,
+   "raise_b": 0.02418,
+   "allin": 0.03844
+  },
+  "vs_s:raise|srp|ip|turn|brick": {
+   "fold": 0.22705,
+   "call": 0.6733,
+   "raise_s": 0.01561,
+   "raise_m": 0.01406,
+   "raise_b": 0.02633,
+   "allin": 0.04364
+  },
+  "vs_s:raise|srp|ip|turn|flush": {
+   "fold": 0.21467,
+   "call": 0.67651,
+   "raise_s": 0.01971,
+   "raise_m": 0.02349,
+   "raise_b": 0.02184,
+   "allin": 0.04377
+  },
+  "vs_s:raise|srp|ip|turn|pair": {
+   "fold": 0.23053,
+   "call": 0.66058,
+   "raise_s": 0.01875,
+   "raise_m": 0.02234,
+   "raise_b": 0.02078,
+   "allin": 0.04702
+  },
+  "vs_s:raise|srp|ip|turn|straight": {
+   "fold": 0.22547,
+   "call": 0.68653,
+   "raise_s": 0.01431,
+   "raise_m": 0.01229,
+   "raise_b": 0.02237,
+   "allin": 0.03903
+  },
+  "vs_s:raise|srp|oop|flop|brick": {
+   "fold": 0.21749,
+   "call": 0.6907,
+   "raise_s": 0.01493,
+   "raise_m": 0.01282,
+   "raise_b": 0.02333,
+   "allin": 0.04072
+  },
+  "vs_s:raise|srp|oop|flop|flush": {
+   "fold": 0.22467,
+   "call": 0.68049,
+   "raise_s": 0.01543,
+   "raise_m": 0.01325,
+   "raise_b": 0.0241,
+   "allin": 0.04206
+  },
+  "vs_s:raise|srp|oop|flop|pair": {
+   "fold": 0.22286,
+   "call": 0.68043,
+   "raise_s": 0.01573,
+   "raise_m": 0.01351,
+   "raise_b": 0.02458,
+   "allin": 0.04289
+  },
+  "vs_s:raise|srp|oop|flop|straight": {
+   "fold": 0.2199,
+   "call": 0.68467,
+   "raise_s": 0.01552,
+   "raise_m": 0.01333,
+   "raise_b": 0.02425,
+   "allin": 0.04232
+  },
+  "vs_s:raise|srp|oop|none|brick": {
+   "fold": 0.22591,
+   "call": 0.67102,
+   "raise_s": 0.01399,
+   "raise_m": 0.01201,
+   "raise_b": 0.03326,
+   "allin": 0.04381
+  },
+  "vs_s:raise|srp|oop|none|flush": {
+   "fold": 0.22366,
+   "call": 0.67232,
+   "raise_s": 0.01495,
+   "raise_m": 0.01284,
+   "raise_b": 0.02336,
+   "allin": 0.05286
+  },
+  "vs_s:raise|srp|oop|none|pair": {
+   "fold": 0.22387,
+   "call": 0.68053,
+   "raise_s": 0.02055,
+   "raise_m": 0.01252,
+   "raise_b": 0.02278,
+   "allin": 0.03975
+  },
+  "vs_s:raise|srp|oop|none|straight": {
+   "fold": 0.21709,
+   "call": 0.68247,
+   "raise_s": 0.01532,
+   "raise_m": 0.01316,
+   "raise_b": 0.03019,
+   "allin": 0.04178
+  },
+  "vs_s:raise|srp|oop|turn|brick": {
+   "fold": 0.21884,
+   "call": 0.69013,
+   "raise_s": 0.01389,
+   "raise_m": 0.01193,
+   "raise_b": 0.02171,
+   "allin": 0.0435
+  },
+  "vs_s:raise|srp|oop|turn|flush": {
+   "fold": 0.22624,
+   "call": 0.67197,
+   "raise_s": 0.01553,
+   "raise_m": 0.01334,
+   "raise_b": 0.02427,
+   "allin": 0.04864
+  },
+  "vs_s:raise|srp|oop|turn|pair": {
+   "fold": 0.23409,
+   "call": 0.66594,
+   "raise_s": 0.02149,
+   "raise_m": 0.01309,
+   "raise_b": 0.02382,
+   "allin": 0.04157
+  },
+  "vs_s:raise|srp|oop|turn|straight": {
+   "fold": 0.2263,
+   "call": 0.66551,
+   "raise_s": 0.02191,
+   "raise_m": 0.01334,
+   "raise_b": 0.02428,
+   "allin": 0.04866
+  }
+ },
+ "marginal": {
+  "first": {
+   "check": 0.6008,
+   "bet_s": 0.0761,
+   "bet_m": 0.12067,
+   "bet_b": 0.13551,
+   "bet_o": 0.03149,
+   "allin": 0.03543
+  },
+  "vs_b": {
+   "fold": 0.65158,
+   "call": 0.30039,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.03027,
+   "allin": 0.01777
+  },
+  "vs_b:raise": {
+   "fold": 0.53122,
+   "call": 0.3965,
+   "raise_s": 0.0,
+   "raise_m": 0.00169,
+   "raise_b": 0.03591,
+   "allin": 0.03468
+  },
+  "vs_m": {
+   "fold": 0.51436,
+   "call": 0.4055,
+   "raise_s": 0.0,
+   "raise_m": 0.00174,
+   "raise_b": 0.05576,
+   "allin": 0.02264
+  },
+  "vs_m:raise": {
+   "fold": 0.46616,
+   "call": 0.46785,
+   "raise_s": 0.00253,
+   "raise_m": 0.00507,
+   "raise_b": 0.0271,
+   "allin": 0.03128
+  },
+  "vs_o": {
+   "fold": 0.75678,
+   "call": 0.21306,
+   "raise_s": 0.0,
+   "raise_m": 0.0,
+   "raise_b": 0.02104,
+   "allin": 0.00912
+  },
+  "vs_o:raise": {
+   "fold": 0.68997,
+   "call": 0.27185,
+   "raise_s": 0.0,
+   "raise_m": 0.00012,
+   "raise_b": 0.01627,
+   "allin": 0.02179
+  },
+  "vs_s": {
+   "fold": 0.35973,
+   "call": 0.47964,
+   "raise_s": 0.00402,
+   "raise_m": 0.02375,
+   "raise_b": 0.10988,
+   "allin": 0.02298
+  },
+  "vs_s:raise": {
+   "fold": 0.2259,
+   "call": 0.67607,
+   "raise_s": 0.01594,
+   "raise_m": 0.01369,
+   "raise_b": 0.02491,
+   "allin": 0.04347
+  }
+ }
+}
