@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import { chartFor6max, openFromTokens, replayTokens6 } from "./hrc6max";
 
 /**
@@ -181,5 +181,54 @@ describe("chartFor6max — postflop reads stacks as dealt", () => {
     expect(c.id).toBe("ign200_6max_D100_o3");
     expect(c.effective).toBe(100);
     expect(c.note ?? "").not.toContain("unreadable");
+  });
+});
+
+// The picker's fallback prose is also a list of solves we do not own. This is the
+// exact note from a real spot (2026-09-20):
+//   "the uneven set has 2.5x and 3x only — using its 2.5x tree ·
+//    the BB has 81bb — answered from the 70bb short chart"
+// Two separate chart gaps, each with its own minimal job — the open at the short
+// rung we HAVE, and the rung at the open we HAVE. Solving one grid cell that
+// combined both would be a tree we would not otherwise build.
+describe("chart-selection gaps (Approx6)", () => {
+  const handWith = (bbStack: number) => ({
+    heroSeatId: 1,
+    positions: { 1: "BTN", 2: "SB", 3: "BB", 4: "UTG" },
+    stacks: { 1: 100, 2: 100, 3: bbStack, 4: 100 },
+    committed: {}, actions: [], currentNode: { street: "preflop" },
+  }) as never;
+
+  it("names the missing 2x uneven tree, and the missing 80bb rung, separately", () => {
+    const c = chartFor6max(handWith(81), "BTN", ["R2"]);
+    const by = Object.fromEntries((c.approx ?? []).map((a) => [a.kind, a]));
+
+    expect(by["open-not-in-set"]).toMatchObject({
+      want: 2, got: 2.5, seat: "BB",
+      solve: "ign200_6max_D100_s70_BB_o2",
+      asym: "deep=100;shorts=70;opens=2;seats=BB",
+    });
+    expect(by["short-rung-snapped"]).toMatchObject({
+      want: 80, got: 70, seat: "BB",
+      solve: "ign200_6max_D100_s80_BB_o2_5",
+    });
+    // the prose the panel shows is unchanged — the structure is additive
+    expect(c.note).toContain("the uneven set has 2.5x and 3x only");
+    expect(c.note).toContain("the BB has 81bb");
+  });
+
+  it("records nothing when the state lands on a tree we actually own", () => {
+    const c = chartFor6max(handWith(70), "BTN", ["R2.5"]);
+    expect(c.id).toBe("ign200_6max_D100_s70_BB_o2_5");
+    expect(c.approx ?? []).toHaveLength(0);
+  });
+
+  // A reader fault is not a chart gap: no tree fixes an unreadable stack, and
+  // suggesting one would send a solve box after a chart we already have.
+  it("keeps reader faults out of the gap list", () => {
+    const blind: any = { heroSeatId: 1, positions: { 1: "BTN" }, stacks: {}, committed: {}, actions: [], currentNode: { street: "preflop" } };
+    const c = chartFor6max(blind, "BTN", []);
+    expect(c.note).toContain("unreadable");
+    expect(c.approx ?? []).toHaveLength(0);
   });
 });

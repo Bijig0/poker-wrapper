@@ -3,7 +3,8 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import type { ChartChoice, Walk3Result } from "./hrc3max";
-import { RUNGS } from "./hrc3max";
+import { RUNGS, type Site } from "./hrc3max";
+import { SEATS6, type Chart6Choice } from "./hrc6max";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
 
 /**
@@ -34,12 +35,33 @@ import { SNAP_TAU } from "../utils/snapToken/snapToken";
 
 export type MissKind =
   | "size-off-tree" | "size-snapped" | "action-not-in-tree" | "jam-not-offered"
-  | "node-missing" | "past-terminal" | "beyond-ladder" | "other";
+  | "node-missing" | "past-terminal" | "beyond-ladder" | "other"
+  // 6-max CHART-SELECTION gaps (2026-09-20). The three above are about the walk
+  // through a chart; these are about the chart the picker had to settle for,
+  // because the 6-max set is indexed by (depth, short seat, OPEN SIZE) and is
+  // not complete. See hrc6max.ts Approx6.
+  | "open-not-in-set" | "short-rung-snapped" | "no-limp-uneven"
+  // HERO'S OWN CALL IS NOT IN THE TREE (2026-09-21). The charts cap callers, so hero arriving as the third
+  // player in the pot lands on a node offering only FOLD and RAISE. The walk SUCCEEDS, so this was invisible
+  // here until now; the answer is borrowed from the node with one caller folded (utils/borrowHeroCall), and
+  // the real fix is wider trees. 1.12% of hero's preflop decisions.
+  | "caller-cap";
 export type MissStatus = "open" | "queued" | "solved" | "dismissed";
 export type MissOrigin = "live" | "archive" | "corpus" | "replay";
 
 /** A snap this far (log-space) or further is worth writing down. 3.9x→3.5x is 0.108. */
 export const SNAP_NOTE = 0.1;
+
+/**
+ * What a `size-snapped` row says. A snap PAST τ is the loud case (2026-09-21):
+ * before that change the walk refused these outright and the spot had no answer
+ * at all, so these rows are now the todo list of sizes that are costing EV
+ * every time they come up — not a note about a size we handled cleanly.
+ */
+const snapNote = (from: string, to: string, d: number): string =>
+  d > SNAP_TAU
+    ? `${from} answered from ${to} — PAST τ (log-dist ${d.toFixed(2)} > ${SNAP_TAU}): answered anyway, at an EV cost. A tree with ${from} would close it.`
+    : `${from} answered from ${to} (log-dist ${d.toFixed(2)}, τ ${SNAP_TAU})`;
 
 export interface MissRef {
   dbId?: number | null;
@@ -51,10 +73,14 @@ export interface MissRef {
 }
 
 export interface MissState {
-  site: "ign200" | "ign500";
+  // `Site`, not a hand-written pair: the NL25 grid (ign25_3maxasym2ci) has been
+  // in this store since the cutover, so the narrower type was already a lie.
+  site: Site;
   bbCents: number | null;
-  /** observed per-seat stacks (bb), as read at the table */
-  stacksBB: Partial<Record<"BTN" | "SB" | "BB", number>>;
+  /** observed per-seat stacks (bb), as read at the table. Six seats since
+   *  2026-09-20 — the 3-max corpus only ever fills BTN/SB/BB, which is a
+   *  subset, so nothing about the 3-max rows changes. */
+  stacksBB: Partial<Record<"UTG" | "HJ" | "CO" | "BTN" | "SB" | "BB", number>>;
   heroPos: string | null;
   /** the intended token line (what was played), before any snapping */
   tokens: string[];
@@ -83,9 +109,47 @@ export interface MissItem {
   firstSeen: number;
   lastSeen: number;
   refs: MissRef[];
-  job: SuggestedJob | null;
+  job: SuggestedJob | SuggestedJob6 | null;
   note: string | null;
   updatedAt: number;
+}
+
+/**
+ * A 6-max chart gap's job. Unlike SuggestedJob (which mirrors what
+ * genThreeMaxAsymPlan.ts emits), this is simply the genSixMaxPlan.ts `--asym`
+ * cell that would build the missing tree — one short rung, one open, one seat —
+ * because that generator already derives the 3-bet/4-bet menus and the rake from
+ * (open, depth). Solving the smallest cell that closes the gap keeps the grid
+ * from exploding: an 81bb BB facing a 2x open wants BOTH a new rung and a new
+ * open, and those are two cells, not one combined tree we would never reuse.
+ */
+export interface SuggestedJob6 {
+  id: string;                 // the chart id that would answer the state exactly
+  site: string;
+  /** genSixMaxPlan.ts --asym spec, e.g. "deep=100;shorts=70;opens=2;seats=BB" */
+  asym: string;
+  /** ready to paste: the generator invocation that builds this cell */
+  cmd: string;
+  stacksBB: number[];
+  sizes: (number | string)[];
+  change: string;
+}
+
+/** The generator lives in the zenbook worktree beside the other HRC plan scripts. */
+export const SIXMAX_PLAN_SCRIPT = "hrc-api/scripts/genSixMaxPlan.ts";
+
+export function suggestJob6(a: { kind: string; solve: string | null; asym: string | null; note: string },
+                            site: string, deep: number, short: number, open: number | string): SuggestedJob6 | null {
+  if (!a.solve || !a.asym) return null;
+  const name = a.solve.replace(/^ign\d+_6max_/, "6max-");
+  return {
+    id: a.solve, site, asym: a.asym,
+    cmd: `bun run ${SIXMAX_PLAN_SCRIPT} --sites ${site} --grid off --asym "${a.asym}" `
+       + `--out solves/sixmax_grid/${name} --name ${name}`,
+    stacksBB: [deep, short],
+    sizes: [open],
+    change: a.note,
+  };
 }
 
 /** The HRC job spec in the shape genThreeMaxAsymPlan.ts emits / threeMaxGrid.ts runs. */
@@ -254,6 +318,22 @@ function classify(reason: string, missingAt: string | undefined, tokens: string[
   return { kind: "other", want, got: null, line, index };
 }
 
+/** All record() reads off a chart choice — 3-max and 6-max alike. */
+type ChartLike = { id: string; site: string; depth: number; shortDepth: number; shortSeat: string };
+
+export interface Observe6Args {
+  choice: Chart6Choice;
+  hand: ParsedHand;
+  heroPos: string | null;
+  tokens: string[];
+  /** omit when the chart could not be resolved at all — the gaps still count */
+  walk?: Walk3Result | null;
+  /** set when hero's own CALL was missing from the tree and had to be borrowed (services/fastSolve.ts) —
+   *  the walk succeeds in that case, so nothing else here would notice it */
+  callerCap?: { pos: string; callers: number; donor: string; dropped: string; offered: string[] } | null;
+  ref: MissRef;
+}
+
 export interface ObserveArgs {
   chart: ChartChoice;
   hand: ParsedHand;
@@ -265,6 +345,9 @@ export interface ObserveArgs {
 
 // ---- the store -------------------------------------------------------------------
 
+/** Exported at the foot of the file, so tests can build an isolated store — the
+ *  singleton writes to the live queue, which holds real rows and must never be
+ *  a test fixture. */
 class MissQueue {
   private db: Database | null = null;
   readonly path: string;
@@ -277,6 +360,7 @@ class MissQueue {
     if (this.db) return this.db;
     mkdirSync(dirname(this.path), { recursive: true });
     this.db = new Database(this.path);
+    this.db.exec("PRAGMA busy_timeout = 5000"); // see services/jobs.ts — a held lock must wait, not throw
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(DDL);
     return this.db;
@@ -311,13 +395,14 @@ class MissQueue {
       if (a.chart.beyondLadder != null) {
         this.record("beyond-ladder", a.chart, state, a.tokens, a.tokens.length, null, null, [],
           `deep stack ${a.chart.beyondLadder}bb is past the ${RUNGS[RUNGS.length - 1]}bb rung — answered from the ${a.chart.depth}bb chart`,
-          a.tokens.join("-"), a.ref);
+          a.tokens.join("-"), a.ref, suggestJob("beyond-ladder", a.chart, state, a.tokens, a.tokens.length, null));
         out.push("beyond-ladder");
       }
       if (!a.walk.ok) {
         if (a.walk.unreachable) return out;
         const c = classify(a.walk.reason, a.walk.missingAt, a.tokens);
-        this.record(c.kind, a.chart, state, a.tokens, c.index, c.want, c.got, parseOffered(a.walk.reason), a.walk.reason, c.line, a.ref);
+        this.record(c.kind, a.chart, state, a.tokens, c.index, c.want, c.got, parseOffered(a.walk.reason), a.walk.reason, c.line, a.ref,
+          suggestJob(c.kind, a.chart, state, a.tokens, c.index, c.want));
         out.push(c.kind);
         return out;
       }
@@ -328,7 +413,8 @@ class MissQueue {
         if (d < SNAP_NOTE) continue;
         const line = a.walk.tokens.slice(0, r.index).join("-");
         this.record("size-snapped", a.chart, state, a.tokens, r.index, r.from, r.to, [],
-          `${r.from} answered from ${r.to} (log-dist ${d.toFixed(2)}, τ ${SNAP_TAU})`, line, a.ref);
+          snapNote(r.from, r.to, d), line, a.ref,
+          suggestJob("size-snapped", a.chart, state, a.tokens, r.index, r.from));
         out.push("size-snapped");
       }
     } catch {
@@ -337,9 +423,95 @@ class MissQueue {
     return out;
   }
 
-  private record(kind: MissKind, chart: ChartChoice, state: MissState, tokens: string[], index: number, want: string | null, got: string | null, offered: string[], reason: string, line: string, ref: MissRef): void {
+  /**
+   * The 6-max ring path. Two different things can go wrong and both belong here:
+   *
+   *   1. the CHART the picker had to settle for (hrc6max.ts Approx6) — "the
+   *      uneven set has 2.5x and 3x only, using its 2.5x tree", "the BB has
+   *      81bb, answered from the 70bb short chart". Each is its own solve.
+   *   2. the WALK through whichever chart answered — identical to 3-max.
+   *
+   * A state can raise several at once, and they are deliberately separate rows:
+   * an 81bb BB facing a 2x open wants a new open AND a new rung, and solving one
+   * combined tree would build a cell nothing else reuses.
+   */
+  observe6max(a: Observe6Args): MissKind[] {
+    const out: MissKind[] = [];
+    try {
+      const chart: ChartLike = {
+        id: a.choice.id, site: a.choice.site, depth: a.choice.depth,
+        shortDepth: a.choice.shortDepth, shortSeat: String(a.choice.shortSeat),
+      };
+      const state = MissQueue.state6Of(a.hand, a.heroPos, a.choice, a.tokens);
+      const line = a.tokens.join("-");
+
+      for (const ap of a.choice.approx ?? []) {
+        if (!ap.solve) continue;                       // a gap no tree would close
+        const kind: MissKind =
+          ap.kind === "open-not-in-set" ? "open-not-in-set"
+          : ap.kind === "short-rung-snapped" ? "short-rung-snapped"
+          : ap.kind === "no-limp-uneven" ? "no-limp-uneven"
+          : ap.kind === "beyond-ladder" ? "beyond-ladder"
+          : "size-snapped";                            // open-snapped: answered from another size
+        const job = suggestJob6(ap, a.choice.site, a.choice.depth, a.choice.shortDepth,
+          a.choice.openSize);
+        this.record(kind, chart, state, a.tokens, a.tokens.length,
+          ap.want == null ? null : String(ap.want), ap.got == null ? null : String(ap.got),
+          [], ap.note, line, a.ref, job);
+        out.push(kind);
+      }
+
+      // The caller cap does not fail the walk — it silently removes hero's call — so the preflop solver reports
+      // it explicitly rather than the walk's own reason carrying it.
+      if (a.callerCap) {
+        this.record("caller-cap", chart, state, a.tokens, a.tokens.length, "C", null, a.callerCap.offered,
+          `${a.callerCap.pos} has no call at "${line}" after ${a.callerCap.callers} callers — answered from ` +
+          `"${a.callerCap.donor}" with ${a.callerCap.dropped}'s call folded`, line, a.ref, null);
+        out.push("caller-cap");
+      }
+
+      if (!a.walk) return out;
+      if (!a.walk.ok) {
+        if (a.walk.unreachable) return out;
+        const c = classify(a.walk.reason, a.walk.missingAt, a.tokens);
+        this.record(c.kind, chart, state, a.tokens, c.index, c.want, c.got,
+          parseOffered(a.walk.reason), a.walk.reason, c.line, a.ref, null);
+        out.push(c.kind);
+        return out;
+      }
+      for (const r of a.walk.repaired) {
+        const from = tokSize(r.from), to = tokSize(r.to);
+        if (from == null || to == null) continue;
+        const d = Math.abs(Math.log(from / to));
+        if (d < SNAP_NOTE) continue;
+        this.record("size-snapped", chart, state, a.tokens, r.index, r.from, r.to, [],
+          snapNote(r.from, r.to, d),
+          a.walk.tokens.slice(0, r.index).join("-"), a.ref, null);
+        out.push("size-snapped");
+      }
+    } catch {
+      /* the queue never breaks an answer */
+    }
+    return out;
+  }
+
+  /** Like stateOf, but fills all six seats. */
+  static state6Of(hand: ParsedHand, heroPos: string | null, choice: Chart6Choice, tokens: string[]): MissState {
+    const stacksBB: MissState["stacksBB"] = {};
+    const put = (pos: string | null | undefined, seatId: number) => {
+      const p = String(pos ?? "").toUpperCase() as keyof MissState["stacksBB"];
+      const v = hand.stacks?.[seatId];
+      if (SEATS6.includes(p as never) && stacksBB[p] == null && Number.isFinite(v) && v! > 0) {
+        stacksBB[p] = Math.round(v! * 10) / 10;
+      }
+    };
+    for (const [seat, pos] of Object.entries(hand.positions ?? {})) put(pos, Number(seat));
+    if (heroPos) put(heroPos, hand.heroSeatId);
+    return { site: choice.site as MissState["site"], bbCents: hand.bbCents ?? null, stacksBB, heroPos, tokens };
+  }
+
+  private record(kind: MissKind, chart: ChartLike, state: MissState, tokens: string[], index: number, want: string | null, got: string | null, offered: string[], reason: string, line: string, ref: MissRef, job: SuggestedJob | SuggestedJob6 | null): void {
     const db = this.open();
-    const job = suggestJob(kind, chart, state, tokens, index, want);
     // a beyond-ladder state at 175bb and one at 225bb are different jobs
     const key = `${chart.id}|${line}|${want ?? ""}|${kind}${kind === "beyond-ladder" && job ? `|${job.id}` : ""}`;
     const now = ref.ts ?? Date.now();
@@ -440,6 +612,30 @@ class MissQueue {
       out.hands = { live: s?.l ?? 0, archive: s?.a ?? 0, corpus: s?.c ?? 0 };
     } catch {
       /* ignore */
+    }
+    return out;
+  }
+
+  /**
+   * Per-kind volume for the approximations register: how many distinct states
+   * are open, and how many times each was hit in LIVE play (`n_live`) as
+   * opposed to a replay sweep.
+   *
+   * Rows and hits say different things and the register shows both: 863
+   * beyond-ladder rows with 4 live hits is a big backlog that rarely bites,
+   * while 17 no-limp-uneven rows with 33 live hits is a small one that bites
+   * constantly — and it is the second kind that is worth solving first.
+   */
+  volumeByKind(): Record<string, { rows: number; live: number; corpus: number; lastSeen: number | null }> {
+    const out: Record<string, { rows: number; live: number; corpus: number; lastSeen: number | null }> = {};
+    try {
+      const rows = this.open().query<{ kind: string; rows: number; live: number; corpus: number; last_seen: number | null }, []>(
+        "SELECT kind, COUNT(*) rows, COALESCE(SUM(n_live),0) live, COALESCE(SUM(n_corpus),0) corpus, MAX(last_seen) last_seen" +
+        " FROM misses WHERE status IN ('open','queued') GROUP BY kind"
+      ).all();
+      for (const r of rows) out[r.kind] = { rows: r.rows, live: r.live, corpus: r.corpus, lastSeen: r.last_seen ?? null };
+    } catch {
+      /* the register degrades to "unmeasured", it never throws */
     }
     return out;
   }

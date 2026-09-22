@@ -13,6 +13,7 @@ import { preflopDb } from "../services/preflopDb";
 import { gtowCdp, isRecoverableBlocker, SOLUTION_SETS } from "../services/gtowCdp";
 import { navLock } from "../services/navLock";
 import { resolveHand, DEFAULT_LIVE_URL as SHARED_LIVE_URL } from "../feed/resolveHand/resolveHand";
+import { warmPreflop6max, warmPostflop6max } from "../services/fastSolve";
 
 /**
  * Feed ingestion: turn a hand — the live one from assistive-play's /state, a
@@ -26,6 +27,55 @@ const app = new Hono();
 // Re-exported from the shared hand resolver so existing importers (studyPoller)
 // keep working after the parsing logic moved there.
 export const DEFAULT_LIVE_URL = SHARED_LIVE_URL;
+
+/**
+ * Say WHY a resolve failed. Until 2026-09-21 this path was silent: api.log
+ * carried only "POST /api/ingest 502 1ms", and the study poller read the body
+ * as "Study Answers is off" (see services/studyPoller.ts), so a wrapper that
+ * had gone away looked exactly like an idle one. A dead :7700 went unnoticed
+ * for ~14h that way, and — because the poller ticks once a second — billed
+ * 317k access-log lines doing it.
+ *
+ * Which is also why this is throttled rather than a bare console.warn: the
+ * first occurrence of each distinct reason prints immediately, identical
+ * repeats fold into one line every 5 minutes, and a recovery prints once.
+ *
+ * 409 is exempt — "assistive-play is running but no table is detected" is the
+ * DESIGNED idle reply between sessions (148k of them in this log), not a fault.
+ * studyPoller.ts exempts exactly the same status, and the two must agree: a
+ * status one of them treats as idle and the other as broken is the bug this
+ * whole change exists to remove. (422 never reaches here — it is an ok:false
+ * the route returns after resolveHand has already succeeded with hand: null.)
+ */
+const RESOLVE_FAIL_REPEAT_MS = 5 * 60_000;
+const IDLE_STATUSES = new Set([409]);
+let lastResolveFail: { key: string; at: number; suppressed: number } | null = null;
+
+function logResolveFailure(status: number, error: string): void {
+  // Reaching an idle status proves the wrapper ANSWERED, so it also ends any
+  // run of real failures — otherwise a wrapper that came back and then sat
+  // table-less for hours would hold the "recovered" line until the next hand.
+  if (IDLE_STATUSES.has(status)) return noteResolveOk();
+  const key = `${status}: ${error}`;
+  const now = Date.now();
+  if (lastResolveFail?.key === key) {
+    lastResolveFail.suppressed++;
+    if (now - lastResolveFail.at < RESOLVE_FAIL_REPEAT_MS) return;
+    console.warn(`[ingest] still failing — ${key} (${lastResolveFail.suppressed} more since the last line)`);
+    lastResolveFail = { key, at: now, suppressed: 0 };
+    return;
+  }
+  console.warn(`[ingest] ${key}`);
+  lastResolveFail = { key, at: now, suppressed: 0 };
+}
+
+/** First success after a run of failures — closes the story in the log. */
+function noteResolveOk(): void {
+  if (!lastResolveFail) return;
+  const { key, suppressed } = lastResolveFail;
+  lastResolveFail = null;
+  console.warn(`[ingest] recovered after ${suppressed + 1} failure(s) — last was ${key}`);
+}
 
 interface IngestBody {
   /** Panel-feed rows, either the envelope { ok, rows } or the bare array. */
@@ -105,8 +155,19 @@ app.post("/", async (c) => {
   // --- 1) resolve a hand from one of the four sources ------------------------
   // (shared with /fast-solver — see feed/resolveHand)
   const resolved = await resolveHand(body);
-  if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode } = resolved;
+  if (!resolved.ok) {
+    logResolveFailure(resolved.status, resolved.error);
+    return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
+  }
+  noteResolveOk();
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, liveExtras } = resolved;
+
+  // the tree this hand will need is opened now, not at hero's turn (fastSolve.warmPreflop6max)
+  if (hand) {
+    try { warmPreflop6max(hand, body.heroPos ?? hand.positions[hand.heroSeatId] ?? null, strategyId); } catch { /* never the ingest's problem */ }
+    // and each postflop street's cloud tree the moment its card lands (fastSolve.warmPostflop6max)
+    try { warmPostflop6max(hand, body.heroPos ?? hand.positions[hand.heroSeatId] ?? null, strategyId); } catch { /* ditto */ }
+  }
 
   if (!hand) {
     return c.json(
@@ -121,7 +182,7 @@ app.post("/", async (c) => {
         // here made "between hands" indistinguishable from "toggle off", so
         // the poller never refreshed its GTO Wizard health flag while idle.
         studyAnswersOn,
-        studyMode,
+        strategyId,
         warnings,
       },
       422
@@ -153,7 +214,7 @@ app.post("/", async (c) => {
     warnings,
     tableStatus,
     studyAnswersOn,
-    studyMode,
+    strategyId,
     // round-trip proof surfaced to the caller: the hand re-rendered as rows
     rerendered: renderPanelRows(hand),
     hero: {
@@ -164,6 +225,12 @@ app.post("/", async (c) => {
       actions: hand.actions.filter((a) => a.hero),
       // a sitting-out hero can't have a live turn, whatever the stale hand says
       toAct: !heroSittingOut && !hand.ended && hand.currentNode.toActIsHero,
+      // state provenance (wrapper /hand, 2026-09-19): the poller says WHY it did
+      // not ask instead of staying silent when the buttons are up
+      buttonsUp: liveExtras?.buttonsUp ?? null,
+      toActSources: liveExtras?.toActSources ?? null,
+      status: liveExtras?.heroStatus ?? null,
+      notToActWhy: liveExtras?.notToActWhy ?? null,
     },
     hand: {
       heroCards: hand.heroCards,
@@ -174,6 +241,9 @@ app.post("/", async (c) => {
       ended: hand.ended,
       node: hand.currentNode,
       result: hand.result ?? null,
+      lineSource: liveExtras?.lineSource ?? null,
+      lineUncertain: liveExtras?.lineUncertain ?? null,
+      lineNote: liveExtras?.lineNote ?? null,
     },
   };
 

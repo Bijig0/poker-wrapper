@@ -84,6 +84,7 @@ class SolveStore {
     if (this.db) return this.db;
     mkdirSync(dirname(this.path), { recursive: true });
     this.db = new Database(this.path);
+    this.db.exec("PRAGMA busy_timeout = 5000"); // see services/jobs.ts — a held lock must wait, not throw
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(DDL);
     const cols = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(solves)").all().map((c) => c.name));

@@ -21,8 +21,11 @@ interface FastSolverBody extends ResolveBody {
   setId?: string;
   depth?: number;
   heroPos?: string;
-  /** MES/GTO tab: which preflop strategy is primary. Omitted = the rig's own
-   *  studyMode, so a caller that forgets it still honours the user's choice. */
+  /** The DECLARED strategy (services/strategies.ts id). It alone decides which
+   *  preflop piece answers. Omitted = the one the live session declared. */
+  strategyId?: string | null;
+  /** Low-level override of the preflop piece, for callers with no declared
+   *  strategy (the playthrough tester, offline sweeps). */
   strategy?: "exploit" | "chart";
 }
 
@@ -32,7 +35,7 @@ app.post("/", async (c) => {
 
   const resolved = await resolveHand(body);
   if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId } = resolved;
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras } = resolved;
 
   if (!hand) {
     return c.json(
@@ -68,7 +71,6 @@ app.post("/", async (c) => {
     warnings,
     tableStatus,
     studyAnswersOn,
-    studyMode,
     sessionId: sessionId ?? null,
     rerendered: renderPanelRows(hand),
     hero: {
@@ -77,6 +79,8 @@ app.post("/", async (c) => {
       folded: heroFolded,
       sittingOut: heroSittingOut,
       toAct: heroTurn,
+      buttonsUp: liveExtras?.buttonsUp ?? null,
+      notToActWhy: liveExtras?.notToActWhy ?? null,
     },
     hand: {
       handId: hand.handId,
@@ -89,6 +93,11 @@ app.post("/", async (c) => {
       ended: hand.ended,
       node: hand.currentNode,
       result: hand.result ?? null,
+      // which betting line the wrapper exported and whether it can be trusted
+      // (the level reconciler cut-over, launch.py _reconciled_line)
+      lineSource: liveExtras?.lineSource ?? null,
+      lineUncertain: liveExtras?.lineUncertain ?? null,
+      lineNote: liveExtras?.lineNote ?? null,
     },
     spot: spotOutcome.ok ? spotOutcome.spot : null,
     notes: spotOutcome.ok ? spotOutcome.notes : [],
@@ -103,9 +112,11 @@ app.post("/", async (c) => {
     // who asked — stamped on every stored AI-chain trace (services/solveStore.ts)
     ...(typeof (body as { origin?: unknown }).origin === "string" ? { origin: (body as { origin: string }).origin } : {}),
     ...(sessionId ? { sessionId } : {}),
-    ...(body.strategy === "exploit" || body.strategy === "chart"
-      ? { strategy: body.strategy }
-      : studyMode ? { strategy: studyMode } : {}),
+    // The session's declared strategy resolves the preflop piece. `strategy` is
+    // only the override for callers with no session; the rig's old MES/GTO tab
+    // no longer exists.
+    ...((body.strategyId ?? strategyId) ? { strategyId: body.strategyId ?? strategyId } : {}),
+    ...(body.strategy === "exploit" || body.strategy === "chart" ? { strategy: body.strategy } : {}),
   });
   return c.json({ ...base, solution });
 });

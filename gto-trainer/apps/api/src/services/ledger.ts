@@ -35,6 +35,15 @@ export interface LedgerConfig {
   blockedWhy?: string; locks?: { pos: string; size: number | "limp"; rangeKey: string }[];
   /** preflop-grid-asym: repo-relative path of the uneven-stack state list ({states:[{deep, short, shortSeat}]}) */ states?: string;
   /** site tag override for the chart ids (else ign<stake>) */ site?: string;
+  /** charts this config will never produce, with the reason - a solver that refuses to build a tree would otherwise
+   *  hold the config at "planned" for ever and block everything downstream of it. Excluded from expectedChartIds, so
+   *  the set can be complete WITHOUT them, and shown as a known gap rather than silently dropped. */
+  skipCharts?: { id: string; why: string }[];
+  /** machines running this config side by side (else machines[runner]) — e.g. the 6-max grid spans the Windows AND Linux HRC boxes */ lanes?: number;
+  /** restrict the box fan-out to these labels (Brady, 2026-09-19: "the 7 boxes on vultr + hetzner, not locally" —
+   *  the Zenbook runs the live study tool, the wrapper, the API and the chart server, so it must not also solve).
+   *  Empty/absent = every box the ledger lists for the runner. Passed through to the recipe as RunOpts.boxes. */
+  boxes?: string[];
 }
 
 /**
@@ -42,20 +51,86 @@ export interface LedgerConfig {
  * (even rungs, × locks for a locked-root config, or the uneven-stack states). A config is done only when EVERY one is there;
  * a "charts:<prefix>" produce alone would call a 22-rung set done as soon as the first chart of the family landed.
  */
+/** The configs the box fan-out solves (recipe hrc-box-6max): the 6-seat trees and the heads-up SnG grid share one plan
+ *  layout (solves/sixmax_grid/<config>/plan_6max.json), one keeper pull, one progress page. Only the generator differs. */
+export const BOX_GRID_KINDS = ["preflop-grid-6max", "preflop-grid-hu"];
+export const isBoxGrid = (c: { kind: string }) => BOX_GRID_KINDS.includes(c.kind);
+export function boxGridDir(c: LedgerConfig): string { return join(c.env?.HRC_API ?? process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api", "solves", "sixmax_grid", c.id); }
+
+/**
+ * The 3-max trees a box-run config solves, read from the plan the generator writes.
+ *
+ * THE PLAN IS THE TRUTH (2026-09-20). A `preflop-grid` config fell through to the even `_D<d>_s<d>_eq` ladder below,
+ * which is right for the Zenbook's own even grid and wrong for anything the 3-max box recipe runs: the resolve
+ * proposal's pilot solves `_D100_s50_btn` and friends, so the keeper's id set never contained them and every finished
+ * zip was skipped - three boxes solved for six hours and nothing reached the catalog. genThreeMaxAsymPlan writes
+ * plan_3max.json on every job from the config's own env, so its ids are exactly what this config will produce.
+ */
+export function threeMaxChartIds(c: LedgerConfig): string[] {
+  const dir = join(c.env?.HRC_API ?? process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api", "solves", "threemax_asym", c.id);
+  try {
+    return (JSON.parse(readFileSync(join(dir, "plan_3max.json"), "utf-8")) as { id: string }[]).map((j) => j.id);
+  } catch {
+    return [];   // before the first job the plan does not exist yet; the next tick has it
+  }
+}
+
 export function expectedChartIds(c: LedgerConfig, fmt: LedgerFormat | null | undefined): string[] {
-  if (!fmt || !["preflop-grid", "preflop-grid-asym", "locked-root"].includes(c.kind)) return [];
+  const skip = new Set((c.skipCharts ?? []).map((x) => x.id));
+  const drop = (ids: string[]) => (skip.size ? ids.filter((id) => !skip.has(id)) : ids);
+  if (!fmt || !["preflop-grid", "preflop-grid-asym", ...BOX_GRID_KINDS, "locked-root"].includes(c.kind)) return [];
   if (!["hrc-box", "hrc-plan", "hrc-zenbook"].includes(c.runner) && c.recipe !== "hrc-box" && c.recipe !== "hrc-plan") return [];
+  if (isBoxGrid(c)) return drop(sixMaxChartIds(c, fmt));
+  if (c.recipe === "hrc-box-3max") return drop(threeMaxChartIds(c));
   const num = (n: number | string) => String(n).replace(".", "_");
   const site = c.site ?? `ign${String(fmt.stake).replace(/^NL/i, "")}`;
-  const seats = (fmt.seats ?? 3) === 4 ? "4max" : "3max";
+  const seats = (fmt.seats ?? 3) === 6 ? "6max" : (fmt.seats ?? 3) === 4 ? "4max" : "3max";
   const gen = c.kind === "locked-root" ? `${seats}lock` : seats === "4max" ? "4max" : "3maxasym2ci";
   if (c.kind === "preflop-grid-asym") {
     if (!c.states) return [];
-    try { return (JSON.parse(readFileSync(resolve(REPO, c.states), "utf-8")).states as { deep: number; short: number; shortSeat: string }[]).map((s) => `${site}_${gen}_D${num(s.deep)}_s${num(s.short)}_${s.shortSeat}`); } catch { return []; }
+    try { return drop((JSON.parse(readFileSync(resolve(REPO, c.states), "utf-8")).states as { deep: number; short: number; shortSeat: string }[]).map((s) => `${site}_${gen}_D${num(s.deep)}_s${num(s.short)}_${s.shortSeat}`)); } catch { return []; }
   }
   const depths: number[] = (c.depths && c.depths.length) ? c.depths : fmt.depths.length ? fmt.depths : [100];
   const locks: ({ pos: string; size: number | "limp" } | null)[] = c.kind === "locked-root" ? (c.locks ?? []) : [null];
-  return depths.flatMap((D) => locks.map((lk) => `${site}_${gen}_D${num(D)}_s${num(D)}_eq${lk ? (lk.size === "limp" ? `_${lk.pos}limp` : `_${lk.pos}${num(lk.size)}x`) : ""}`));
+  return drop(depths.flatMap((D) => locks.map((lk) => `${site}_${gen}_D${num(D)}_s${num(D)}_eq${lk ? (lk.size === "limp" ? `_${lk.pos}limp` : `_${lk.pos}${num(lk.size)}x`) : ""}`)));
+}
+/** The 6-seat trees the generator (poker-zenbook/hrc-api/scripts/genSixMaxPlan.ts) writes for a config — the same
+ *  ids, in the same order (open-major for the even grid; short depth × open × seat for the uneven states), so the
+ *  ledger's hand-written WORK lines slice them by their `solves` counts. Driven by the config's env:
+ *  SITES · DEPTHS · OPENS · GRID=off · ASYM="deep=100;shorts=30,50;opens=2.5,3;seats=all". */
+export const SIX_MAX_SEATS = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+export function sixMaxAsym(c: LedgerConfig): { deep: number; shorts: number[]; opens: string[]; seats: string[] } | null {
+  const a = c.env?.ASYM; if (!a) return null;
+  const kv = Object.fromEntries(a.split(";").map((p) => p.split("=").map((x) => x.trim()) as [string, string]));
+  return { deep: Number(kv.deep ?? 100), shorts: (kv.shorts ?? "30,50").split(",").map(Number), opens: (kv.opens ?? "2.5,3").split(",").map((s) => s.trim()),
+    seats: !kv.seats || kv.seats === "all" ? SIX_MAX_SEATS : kv.seats.split(",").map((s) => s.trim().toUpperCase()) };
+}
+export function sixMaxChartIds(c: LedgerConfig, fmt: LedgerFormat | null | undefined): string[] {
+  // the heads-up SnG grid: its ids are whatever genHuSngPlan.ts wrote (depth ladder × open × 3-bet menu), in plan order —
+  // the hand-written WORK lines slice them by depth band, so the plan file is the one source of that order
+  if (c.kind === "preflop-grid-hu") {
+    try { return (JSON.parse(readFileSync(join(boxGridDir(c), "plan_6max.json"), "utf-8")) as { id: string }[]).map((j) => j.id); } catch { return []; }
+  }
+  const num = (n: number | string) => String(n).replace(".", "_");
+  const env = c.env ?? {};
+  const site = c.site ?? env.SITES?.split(",")[0]?.trim() ?? `ign${String(fmt?.stake ?? "").replace(/^NL/i, "")}`;
+  const ids: string[] = [];
+  // patch charts: one tree per explicit stack vector, ids taken straight from the states file the queue writes
+  if (env.STATES) {
+    try {
+      const api = c.env?.HRC_API ?? process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api";
+      const st = JSON.parse(readFileSync(join(api, env.STATES), "utf-8")) as { id: string }[];
+      ids.push(...st.map((x) => x.id));
+    } catch { /* not written yet */ }
+  }
+  if (env.GRID !== "off") {
+    const depths: number[] = env.DEPTHS ? env.DEPTHS.split(",").map(Number) : (c.depths && c.depths.length) ? c.depths : fmt?.depths?.length ? fmt.depths : [100];
+    const opens = (env.OPENS ?? "2.5,3,2,3.5,limp").split(",").map((s) => s.trim());
+    for (const o of opens) for (const D of depths) ids.push(`${site}_6max_D${num(D)}_o${o === "limp" ? "limp" : num(o)}`);
+  }
+  const asym = sixMaxAsym(c);
+  if (asym) for (const short of asym.shorts) for (const o of asym.opens) for (const seat of asym.seats) ids.push(`${site}_6max_D${num(asym.deep)}_s${num(short)}_${seat}_o${o === "limp" ? "limp" : num(o)}`);
+  return ids;
 }
 export interface Ledger {
   _note?: string; formats: LedgerFormat[]; trees: Record<string, any>; configs: LedgerConfig[];
@@ -115,7 +190,7 @@ export interface EvaluatedConfig extends LedgerConfig {
 
 function estimateOf(c: LedgerConfig): EvaluatedConfig["estimate"] {
   const minutes = c.cost.jobs * c.cost.minPerJob;
-  const lanes = Math.max(1, Number((loadLedger() as any).machines?.[c.runner] ?? (c.runner === "fleet" ? 4 : 1)));
+  const lanes = Math.max(1, Number(c.lanes ?? (loadLedger() as any).machines?.[c.runner] ?? (c.runner === "fleet" ? 4 : 1)));
   // jobs run one per machine, side by side: wall-clock = rounds × minutes per job
   const wall = Math.ceil(c.cost.jobs / lanes) * c.cost.minPerJob;
   const eur = c.cost.eurPerJob ? Math.round(c.cost.jobs * c.cost.eurPerJob * 100) / 100 : 0;
@@ -136,6 +211,13 @@ export function evaluate() {
       if (p.startsWith("charts:")) {
         // per-chart: every id this config is expected to solve must be in the catalog
         const want = expectedChartIds(c, f);
+        if (want.length && c.env?.PASS2 === "1") {
+          // a second refinement pass re-solves ids the catalog already has: done = re-solved charts pulled into ITS plan dir
+          const dir = join(c.env?.HRC_API ?? process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api", "solves", "sixmax_grid", c.id);
+          let prog: Record<string, any> = {}; try { prog = JSON.parse(readFileSync(join(dir, "progress.json"), "utf-8")); } catch { /* none yet */ }
+          const have = want.filter((id) => prog[id] || existsSync(join(dir, `${id}.charts.json.gz`))).length;
+          return { key: p, found: have === want.length, detail: `${have} of ${want.length} charts re-solved (second pass)` };
+        }
         if (want.length) { const have = want.filter((id) => catIds.has(id)).length; return { key: p, found: have === want.length, detail: `${have} of ${want.length} charts in the catalog` }; }
         const a = A[p]; return { key: p, found: !!a?.exists, detail: a?.exists ? `${a.meta?.charts} charts in the catalog` : "no charts with this prefix" };
       }
@@ -186,6 +268,32 @@ export function evaluate() {
     return { ...p, steps, totalWallMinutes: serial + parallelMax, totalEur: Math.round(eur * 100) / 100, remaining: remaining.length, next: remaining[0]?.id ?? null };
   });
   return { formats: L.formats, trees: L.trees, configs, plans, sources: L.sources, artifacts: A, note: L._note };
+}
+
+/**
+ * How much of a solve config's chart set has actually landed in the catalog.
+ *
+ * The cheap half of `evaluate()`: no artifact fingerprinting, no hashing — just
+ * "of the ids this config is expected to solve, how many exist". A strategy
+ * whose preflop piece is still being solved reads this to decide whether it can
+ * be played at all, and its Sources card reads it to say how far the run is.
+ */
+export function chartsLanded(configIds: string[]): {
+  have: number; want: number; complete: boolean;
+  perConfig: { id: string; label: string; have: number; want: number }[];
+} {
+  const L = loadLedger();
+  let catIds = new Set<string>();
+  try { catIds = new Set((getCatalog().entries as any[]).map((e) => String(e.id))); } catch { /* catalog unavailable */ }
+  const perConfig = configIds.map((id) => {
+    const c = L.configs.find((x) => x.id === id);
+    if (!c) return { id, label: id, have: 0, want: 0 };
+    const want = expectedChartIds(c, L.formats.find((f) => f.id === c.format));
+    return { id, label: c.label, have: want.filter((w) => catIds.has(w)).length, want: want.length };
+  });
+  const have = perConfig.reduce((s, x) => s + x.have, 0);
+  const want = perConfig.reduce((s, x) => s + x.want, 0);
+  return { have, want, complete: want > 0 && have === want, perConfig };
 }
 
 /** Formats for a Sources card, from the ledger's source→format map. */

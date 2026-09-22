@@ -21,7 +21,7 @@ mock.module("./gtowCdp", () => ({
   SOLUTION_SETS: [],
 }));
 
-const { studyPoller } = await import("./studyPoller");
+const { studyPoller, studyPollers } = await import("./studyPoller");
 
 let originalFetch: typeof fetch;
 let calls: { url: string; body: unknown }[] = [];
@@ -44,6 +44,9 @@ beforeEach(() => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
     if (url.includes("/fast-solver")) {
+      // "REJECT" = the request itself fails, the way a wedged client does:
+      // this is the real message Bun's fetch throws on a refused connection.
+      if (fastSolveResponse === "REJECT") throw new Error("Unable to connect. Is the computer able to access the url?");
       return new Response(JSON.stringify(fastSolveResponse), { status: 200 });
     }
     if (url.includes("/ingest")) {
@@ -98,6 +101,43 @@ describe("studyPoller", () => {
     expect(body.roll).toBeGreaterThanOrEqual(1);
     expect(body.roll).toBeLessThanOrEqual(100);
     expect(studyPoller.getStatus().lastAnswer).toBe(body.text);
+  });
+
+  // Hand 4919236052 asked the same unanswerable question 13 times, ~1 s apart, and got the
+  // same sentence back every time — clock and solve budget spent on a question whose
+  // answer could not change, behind a blank panel. Re-asking is only worth something when
+  // something has changed.
+  it("rests a decision that keeps failing the same way, and says why", async () => {
+    ingestResponse = {
+      ok: true,
+      studyAnswersOn: true,
+      hero: { toAct: true, cards: ["Ac", "Qc"] },
+      hand: { street: "preflop", board: [], node: { toCall: 5.2 }, actions: [1, 2, 3, 4, 5, 6, 7, 8, 9] },
+    };
+    const reason = "GTO Wizard AI preflop: node 'R2.5-F-C-R4-R9.2-F-R14.4' — NODE_DOES_NOT_EXIST";
+    fastSolveResponse = { ok: true, hand: { street: "preflop" }, solution: { ok: false, reason } };
+    studyPoller.start({ intervalMs: 20 });
+    await wait(300);                       // many ticks, all identical
+    const tries = solveCalls().length;
+    expect(tries).toBeGreaterThan(0);
+    expect(tries).toBeLessThanOrEqual(3);  // rested, not asked once per tick
+
+    // and the panel is TOLD, rather than left blank behind an invisible retry loop
+    const said = calls.filter((c) => c.url.includes("/panel/answer")).map((c) => (c.body as any)?.note).filter(Boolean);
+    expect(said.some((n: string) => n.includes("no answer for this spot after"))).toBe(true);
+
+    // ANY change re-arms it at once — that is the whole point of resting rather than giving up
+    ingestResponse = {
+      ...(ingestResponse as object),
+      hand: { street: "flop", board: ["2d", "9h", "5s"], node: { toCall: 0 }, actions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+    };
+    fastSolveResponse = {
+      ok: true, hand: { street: "flop" },
+      solution: { ok: true, decision: { action: "Check", frequency: 88 }, actions: [] },
+    };
+    await wait(120);
+    expect(solveCalls().length).toBeGreaterThan(tries);
+    expect(studyPoller.getStatus().lastAnswer).toContain("Check");
   });
 
   it("does not re-solve while the same decision is still pending", async () => {
@@ -156,7 +196,12 @@ describe("studyPoller", () => {
     expect(status.distinctFailureStreak).toBe(0);
     expect(launchAppCalls.length).toBe(0);
     const pushed = pushCalls();
-    expect(pushed[pushed.length - 1]!.body).toMatchObject({ text: null, pick: null, roll: null, note: null });
+    // A failure clears the answer. The FIRST ones say nothing more than that; once the
+    // same spot has failed the same way its limit of times the poller rests it and the
+    // note says so, rather than leaving a blank card behind an invisible retry loop.
+    expect(pushed[0]!.body).toMatchObject({ text: null, pick: null, roll: null, note: null });
+    expect(pushed[pushed.length - 1]!.body).toMatchObject({ text: null, pick: null, roll: null });
+    expect((pushed[pushed.length - 1]!.body as any).note).toContain("no answer for this spot after");
   });
 
   it("also answers a preflop decision through the fast path", async () => {
@@ -267,5 +312,159 @@ describe("studyPoller", () => {
     const status = studyPoller.getStatus();
     expect(status.lastError).toBe("network down");
     expect(status.lastAnswer).toBeNull();
+  });
+});
+
+// MULTI-TABLE: one poller per wrapper. The hazard being designed against is two pollers
+// on the SAME wrapper — they double-answer a decision and, because rollAction samples
+// the mix, can roll two different actions for one spot. A map keyed by assistiveUrl
+// cannot express that; four different wrappers are four different tables.
+describe("one poller per table", () => {
+  afterEach(async () => { await studyPollers.stop(); });
+
+  it("starting the same wrapper twice is one poller, not two", () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    expect(studyPollers.list().map((p) => p.assistiveUrl)).toEqual(["http://127.0.0.1:7700"]);
+  });
+
+  it("four wrappers get four pollers", () => {
+    for (const port of [7700, 7710, 7720, 7730]) {
+      studyPollers.start({ assistiveUrl: `http://127.0.0.1:${port}`, intervalMs: 100_000 });
+    }
+    const urls = studyPollers.list().map((p) => p.assistiveUrl);
+    expect(urls).toHaveLength(4);
+    expect(new Set(urls).size).toBe(4);
+    expect(studyPollers.list().every((p) => p.status.running)).toBe(true);
+  });
+
+  it("stopping one table leaves the others answering, and drops it from the set", async () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7710", intervalMs: 100_000 });
+    await studyPollers.stop("http://127.0.0.1:7700");
+    const byUrl = Object.fromEntries(studyPollers.list().map((p) => [p.assistiveUrl, p.status.running]));
+    expect(byUrl["http://127.0.0.1:7700"]).toBeUndefined();   // gone, not lingering as stopped
+    expect(byUrl["http://127.0.0.1:7710"]).toBe(true);
+  });
+
+  it("stopping with no url stops every table", async () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7710", intervalMs: 100_000 });
+    await studyPollers.stop();
+    expect(studyPollers.list().some((p) => p.status.running)).toBe(false);
+  });
+
+  it("the flat status still answers 'is the chain live', across tables", async () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7710", intervalMs: 100_000 });
+    await studyPollers.stop("http://127.0.0.1:7700");          // table 1 off, table 2 still on
+    const st = studyPoller.getStatus() as ReturnType<typeof studyPollers.status>;
+    expect(st.running).toBe(true);
+    expect(st.pollers.map((p) => p.assistiveUrl)).toEqual(["http://127.0.0.1:7710"]);
+  });
+
+  // THE WEDGED-BUT-CONNECTED CLIENT (2026-09-19). GTO Wizard's debug port kept
+  // answering isConnected() while every solve through it failed, so the tick
+  // loop's "is it up?" check saw a healthy client and never relaunched. The
+  // recovery for exactly this was written — distinctFailureStreak, lastFailedKey
+  // and launchApp({force}) — but nothing ever incremented the counter or passed
+  // force, so it was unreachable code that READ as a working safety net. It cost
+  // the answers tier 14 of 15 fixtures, each blaming the cloud, and recovered
+  // only when the port happened to drop and the ordinary relaunch fired.
+});
+
+describe("wedged-but-connected recovery", () => {
+  const spot = (n: number) => ({
+    ok: true,
+    studyAnswersOn: true,
+    hero: { toAct: true, cards: ["Ac", "Qc"] },
+    hand: { street: "flop", board: ["2c", "7d", "9s"], actions: Array.from({ length: n }, (_, i) => i) },
+  });
+  const forced = () => launchAppCalls.filter((c) => c.force === true).length;
+
+  it("forces a relaunch once DISTINCT decisions keep failing in the solve chain", async () => {
+    gtowConnected = true;             // the port answers — nothing else can catch this
+    fastSolveResponse = "REJECT";
+
+    ingestResponse = spot(1);
+    studyPoller.start({ intervalMs: 20 });
+    await wait(120);
+    expect(forced()).toBe(0);         // one dead spot is not a wedge
+
+    ingestResponse = spot(2);
+    await wait(120);
+    expect(forced()).toBe(0);         // nor two
+
+    ingestResponse = spot(3);
+    await wait(150);
+    expect(forced()).toBe(1);         // three distinct failures: stop believing it
+    expect(studyPoller.getStatus().distinctFailureStreak).toBe(0);
+  });
+
+  it("does not count ONE spot re-asked, however long hero sits there", async () => {
+    gtowConnected = true;
+    fastSolveResponse = "REJECT";
+    ingestResponse = spot(1);
+    studyPoller.start({ intervalMs: 20 });
+    await wait(400);                  // many ticks, one decision
+    expect(forced()).toBe(0);
+  });
+
+  // A solver that ANSWERS "not in range" is working correctly. Counting a
+  // poker refusal as a client fault would quit GTO Wizard mid-session for
+  // three hands hero happened to be out of range with.
+  it("does not count the solver's own poker refusals", async () => {
+    gtowConnected = true;
+    ingestResponse = spot(1);
+    fastSolveResponse = { ok: true, hand: { street: "flop" }, solution: { ok: false, reason: "hand isn't in the chart range" } };
+    studyPoller.start({ intervalMs: 20 });
+    await wait(120);
+    ingestResponse = spot(2);
+    await wait(120);
+    ingestResponse = spot(3);
+    await wait(150);
+    expect(forced()).toBe(0);
+  });
+});
+
+// TWO POLLERS ON ONE WRAPPER (2026-09-20). index.ts starts a poller at boot with no
+// config — DEFAULT_LIVE_URL, i.e. "http://localhost:7700" — and the wrapper then
+// registers itself as "http://127.0.0.1:7700". Keyed on the raw string those are two
+// instances on one table, each with its own single-flight guard, each rolling the mix
+// independently and POSTing to /panel/answer. The panel kept whichever landed last, so
+// the displayed pick flickered and the relay executed a coin flip. Every hand of the
+// 2026-09-19 20:47-21:12 session doubled this way.
+describe("one poller per wrapper, however its URL is spelled", () => {
+  afterEach(async () => { await studyPollers.stop(); });
+
+  it("folds localhost and 127.0.0.1 onto a single poller", () => {
+    studyPollers.start({ assistiveUrl: "http://localhost:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    expect(studyPollers.list().map((p) => p.assistiveUrl)).toEqual(["http://127.0.0.1:7700"]);
+  });
+
+  it("folds a trailing slash and upper case too", () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700/", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "HTTP://LocalHost:7700", intervalMs: 100_000 });
+    expect(studyPollers.list()).toHaveLength(1);
+  });
+
+  it("the boot default and the wrapper's own registration are the same table", () => {
+    studyPollers.start({ intervalMs: 100_000 });                       // index.ts at boot
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 }); // launch.py
+    expect(studyPollers.list()).toHaveLength(1);
+  });
+
+  it("still keeps genuinely different tables apart", () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7710", intervalMs: 100_000 });
+    expect(studyPollers.list()).toHaveLength(2);
+  });
+
+  it("stops by any spelling of the URL", async () => {
+    studyPollers.start({ assistiveUrl: "http://127.0.0.1:7700", intervalMs: 100_000 });
+    await studyPollers.stop("http://localhost:7700/");
+    expect(studyPollers.list()).toHaveLength(0);
   });
 });

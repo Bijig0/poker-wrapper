@@ -56,10 +56,24 @@ export interface AiChainSpec {
   /** GTOW tokens per street (X/C/F/R<bb>/RAI), up to and including the
    *  CURRENT street; the last street's tokens end at hero's pending node. */
   streets: string[][];
+  /** WHO took each token, as a postflop position name, parallel to `streets`
+   *  (2026-09-19). The walk is positional — tokens carry no seat — so a line
+   *  whose actions are right but ORDERED wrong lands hero's pending decision
+   *  on another seat's node and fails as "line ends on villain's turn", with
+   *  nothing to say which capture went wrong. Given these, the walk checks its
+   *  rotation against the capture at every node and names the disagreement.
+   *  Entries may be null (position unknown); those are skipped. */
+  streetSeats?: (string | null)[][];
   /** Hero's postflop seat and combo index (null = unknown cards). */
   heroSeat: SeatLabel;
   heroComboIdx: number | null;
   rake?: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };
+  /** Force a HEADS-UP tree onto an explicit FIXED size grid instead of AUTOMATIC (2026-09-20). Opt-in and
+   *  unused in production: the collapse-calibration harness (scripts/collapseCalibration.ts) needs a two-seat
+   *  tree whose action menu is identical to the three-seat tree it is being compared against, and AUTOMATIC
+   *  picks its own single size per node. Ignored when the spec has three seats (a 3-player tree is FIXED on
+   *  every street already). */
+  huGrid?: { bet: readonly string[]; raise: readonly string[] };
   /** Which preflop layer the flop-entering ranges came from — e.g.
    *  "ign200_3maxasym2ci_D100_s100_eq + exploit hero range (btn_open)". Not
    *  used by the solve; kept so a stored trace says what it assumed. */
@@ -307,7 +321,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     trace.streets.push(streetRec);
 
     const tSolve = Date.now();
-    const ens = await gtowApi.ensureCustomSolution({
+    const treeInput = {
       board: streetBoard,
       pot,
       stack,
@@ -316,11 +330,14 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       oopPos: seats[0]!.pos,
       ipPos: seats[n - 1]!.pos,
       ...(n === 3 ? { mid: { pos: seats[1]!.pos, range: seats[1]!.range } } : {}),
+      ...(n === 2 && spec.huGrid ? { huGrid: spec.huGrid } : {}),
       startingStreet: STREET[si]!,
       ...(spec.rake ? { rake: spec.rake } : {}),
       ...(fixedLevels ? { fixedLevels: { [STREET[si]!]: fixedLevels } } : {}),
-    });
+    };
+    let ens = await gtowApi.ensureCustomSolution(treeInput);
     if (!ens.ok) return fail(`solve: ${ens.error}`);
+    let rerouted = false;
     if (ens.created) solves++;
     streetRec.solId = String(ens.solId);
     streetRec.created = !!ens.created;
@@ -332,19 +349,61 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     let closed = false;
 
     for (let ti = 0; ti <= labels.length; ti++) {
-      const nq = await gtowApi.customNode(ens.solId, {
+      let nq = await gtowApi.customNode(ens.solId, {
         [QKEY[si]!]: codes.join("-"),
         board: streetBoard,
       });
+      // THE OWNING ACCOUNT HIT ITS DAILY WALL MID-WALK (a 429 on the poll). A solve lives on the account that
+      // made it, so it cannot be polled anywhere else — re-create the same tree once; routing now skips the
+      // walled account, and the node addresses are identical on the new solve.
+      if (!nq.ok && nq.status === 429 && !rerouted) {
+        rerouted = true;
+        gtowApi.forgetSolution(ens.solId);
+        const again = await gtowApi.ensureCustomSolution(treeInput);
+        if (again.ok) {
+          ens = again;
+          if (again.created) solves++;
+          streetRec.solId = String(again.solId);
+          nq = await gtowApi.customNode(ens.solId, { [QKEY[si]!]: codes.join("-"), board: streetBoard });
+        }
+      }
       if (!nq.ok) return fail(`node: ${nq.error}`);
       const sols: any[] = nq.data?.action_solutions ?? [];
       if (!sols.length) return fail("empty node mid-walk");
       const actor = st.actor;
-      // A three-way node names the seat to act; the rotation here must agree or the ranges being conditioned
-      // belong to the wrong seat — refuse rather than answer from a scrambled tree.
-      if (threeWay) {
+      // THE CAPTURE NAMES WHO ACTED; the walk works it out from the rotation. They must agree (2026-09-19,
+      // hand 4919211085): the reconciler had stamped hero's preflop check onto the flop, so the flop read
+      // "hero checks, SB checks" instead of "SB checks, hero checks" — the same two actions, and every probe
+      // for 11 s died on the bare "line ends on villain's turn" below with nothing pointing at the capture.
+      // Checking each token against the seat the capture named turns a silent shift into a named one.
+      // Only when the capture names a seat this street actually HAS: a name the tree doesn't share
+      // (position vocabularies drift — LJ/UTG1, BTN/SB heads-up) is the caller's mismatch, not evidence
+      // about the line, and must never turn an answerable spot into a miss.
+      const said0 = ti < labels.length ? spec.streetSeats?.[si]?.[ti] ?? null : null;
+      const saidSeat = said0 && seats.some((s) => s.pos.toUpperCase() === said0.toUpperCase()) ? said0 : null;
+      if (saidSeat && saidSeat.toUpperCase() !== seats[actor]!.pos.toUpperCase()) {
+        return fail(
+          `the capture's line disagrees with the rotation at ${STREET[si]}#${ti}: it has ${saidSeat} acting, ` +
+            `but ${seats[actor]!.pos} is to act after ${codes.join("-") || "the deal"} ` +
+            `(seats ${seats.map((s) => s.pos).join("/")}) — the capture's actions are out of order`
+        );
+      }
+      // EVERY node names the seat to act, not just a three-way one, and this is the only check that can catch
+      // OUR rotation being wrong rather than the capture's — the one above compares us against the capture,
+      // which is no help when both agree and the TREE disagrees. It was gated to three-way because heads-up
+      // the vocabularies genuinely differ (the dealer is our BTN and GTO Wizard's SB), so a bare comparison
+      // failed every heads-up node; alias that one pair and the check holds everywhere. Un-gated in the
+      // 2026-09-22 audit, after the 6-max limp charts were found answering hero from another seat's node —
+      // the same class of fault, one piece over.
+      {
         const said = nq.data?.game?.players?.find?.((p: any) => p?.is_hero)?.position;
-        if (said && String(said).toUpperCase() !== seats[actor]!.pos.toUpperCase()) {
+        // heads-up only: BTN and SB are the same seat under two names. Never alias them 3+ handed, where
+        // they are different players and a mismatch is exactly what we want to catch.
+        const norm = (p: string) => {
+          const u = p.toUpperCase();
+          return seats.length === 2 && (u === "BTN" || u === "SB") ? "BTN~SB" : u;
+        };
+        if (said && norm(String(said)) !== norm(seats[actor]!.pos)) {
           return fail(`seat rotation disagrees with GTO Wizard at ${STREET[si]}#${ti}: we have ${seats[actor]!.pos} to act, the node says ${said}`);
         }
       }
@@ -366,9 +425,17 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         if (!isLast) break; // street walked through; next street's tree re-roots
         // Hero's pending decision — sanity: it must actually be hero's turn.
         if (actor !== heroIdx) {
-          return fail("walked line ends on villain's turn (capture missed an action?)");
+          return fail(
+            `walked line ends on villain's turn — ${seats[actor]!.pos} is to act after ` +
+              `${codes.join("-") || "the deal"}, not hero (${heroPos}); the capture missed an action ` +
+              `or ordered them wrong (seats ${seats.map((s) => s.pos).join("/")})`
+          );
         }
         nodeRec.heroNode = true;
+        // The decision street returns from INSIDE the walk, so the loop's own walkMs assignment below never runs
+        // for it: every recorded trace had the answering street's walk at 0 ms and its real cost (~2.5 s p50 on
+        // the river) showing up as unexplained time. Record it here. (2026-09-22)
+        streetRec.walkMs = Date.now() - tWalk;
         const line = [...walked, `(${STREET[si]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };

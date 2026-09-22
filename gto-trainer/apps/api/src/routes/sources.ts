@@ -8,12 +8,16 @@ import { getCatalog } from "../services/chartCatalog";
 import { mesPostflopInfo, mesSpots, mesFlopNode, mesTurnLines, mesTurnNode } from "../services/mesPostflop";
 import { extractLine } from "../services/mesRiver";
 import { fetchNode } from "../services/hrc3max";
-import { evaluate as evaluateStrategies, strategyIdForAnswer, PIECES } from "../services/strategies";
+import { hrc6maxDb } from "../services/hrc6maxDb";
+import { evaluate as evaluateStrategies, strategyIdForAnswer, canonicalStrategyId, PIECES, STRATEGIES, FULL_EXPLOIT_ID } from "../services/strategies";
 import { sessionsStore } from "../services/sessionsStore";
 import { gtowApi } from "../services/gtowApi";
+import { gtowSessions } from "../services/gtowSessions";
 import { HRC3MAX_BASE } from "../services/hrc3max";
 import { missQueue } from "../services/missQueue";
-import { formatsForSource } from "../services/ledger";
+import { APPROXIMATIONS, type Approximation } from "../services/approximations";
+import { STRATEGY_COVERAGE } from "../services/strategyCoverage";
+import { formatsForSource, chartsLanded } from "../services/ledger";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "./ingest";
 import {
@@ -36,6 +40,11 @@ import {
  *               hand — MES pick vs GTO pick, whether they disagreed, bb at
  *               stake, and what hero actually did.
  *   /roadmap    what is built, what is not, and what each item would reach.
+ *   /approximations
+ *               every place the strategy is knowingly not exact, in ONE list,
+ *               each joined to how often it actually fires (miss-queue rows
+ *               and live hits, answer-warning counts) so they can be ranked.
+ *               The register itself is services/approximations.ts.
  */
 
 const DATA_DIR = join(import.meta.dir, "..", "..", "data");
@@ -63,6 +72,11 @@ async function probe(url: string, timeoutMs: number): Promise<{ ok: boolean; ms:
     return { ok: false, ms: Date.now() - t0, status: null, body: null };
   }
 }
+
+/** The pool model in force: POOL_MODEL when a launcher names it (the NL25 cutover
+ *  points it at pool_model_nl25.json), else the v4 default — the same rule
+ *  services/ledger.ts and services/strategies.ts follow. */
+const poolModelPath = (): string => process.env.POOL_MODEL ?? join(LIMP_DIR, "pool_model_v4.json");
 
 const sqliteCount = (path: string, sql: string): number | null => {
   try {
@@ -143,11 +157,15 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
   const manifest = readJson(join(DATA_DIR, "resolved-charts.json")) ?? {};
   const resolvedRungs = Object.values(manifest as Record<string, number[]>).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
   const choices = ctx.exploit?.choices ? Object.keys(ctx.exploit.choices).length : 0;
-  const poolN = (() => { try { const pm = readJson(join(LIMP_DIR, "pool_model_v4.json")); const n = pm?.n ?? {}; return Object.values(n as Record<string, number>).reduce((s, x) => s + (Number(x) || 0), 0); } catch { return 0; } })();
+  const poolN = (() => { try { const pm = readJson(poolModelPath()); const n = pm?.n ?? {}; return Object.values(n as Record<string, number>).reduce((s, x) => s + (Number(x) || 0), 0); } catch { return 0; } })();
   const A: Record<string, Partial<SourceCard>> = {
     "exploit-preflop": {
       pieces: ["preflop"],
-      formats: fmts("exploit-preflop", { "ign-zone-3max-nl25": "fitted at NL200 rake (kept, see Strategies); reused as an approximation at other depths" }),
+      // the note names the chart the armed export was actually fit to — since the
+      // NL25 cutover (2026-09-14) that is the ign25 grid at the real 4bb cap
+      formats: fmts("exploit-preflop", { "ign-zone-3max-nl25": String(ctx.exploit?.chart ?? "").startsWith("ign25")
+        ? "fitted at the NL25 rake (ign25 grid, 5% / cap 4bb); reused as an approximation at other depths"
+        : "fitted at NL200 rake (kept, see Strategies); reused as an approximation at other depths" }),
       coverage: { text: `${choices || 5} first-decision nodes at 100bb: BTN open, SB vs open, SB bvb open, BB vs open, BB vs SB`, gap: "nothing past hero's first decision — facing a 4-bet, limp lines and every other depth fall to the equilibrium chart; locked-root charts are the planned fix" },
       edge: { ...ex, kind: "gain", note: `whole-hand vs the equilibrium floor (${f1(eq.nl25)} at NL25 rake) with postflop priced at the floor` },
     },
@@ -156,6 +174,15 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
       formats: fmts("hrc-3max", { "ign-3max-nl200": "asymmetric stacks", "ign-3max-nl500": "asymmetric stacks" }),
       coverage: { text: `${asym} charts · 21 depth rungs · ${resolvedRungs} rungs re-solved with river betting`, gap: openMiss ? `${openMiss} open items in the miss queue: ${beyond} past the 150bb rung, ${sizeGaps} size gaps (SB 3.9x open)` : "no open misses" },
       edge: { ...eq, kind: "floor", note: "equilibrium everywhere — the maximin floor every exploit is measured from" },
+    },
+    "hrc-6max": {
+      pieces: ["preflop", "opponent"],
+      formats: fmts("hrc-6max", { "ign-6max-nl200": "solving — our own rake (2bb cap with six dealt), not the NL500 library's 0.6bb" }),
+      coverage: (() => { const cl = chartsLanded(["grid-6max-nl200", "grid-6max-nl200-asym"]);
+        return { text: `${cl.have} of ${cl.want} charts solved · 30 even-stack trees + 36 uneven ones at 30–150bb`,
+          gap: cl.complete ? "no pool model at six seats — the exploit layer is 3-handed only, so ring spots get the equilibrium mix"
+            : `${cl.want - cl.have} charts still on the boxes — those spots fall down the picker's preference list until they land` }; })(),
+      edge: { nl25: null, nl200: null, norake: null, kind: "none", note: "no row yet — the 6-max equilibrium has not been backtested against a corpus (matrix row eq_eq_6max is unbuilt)" },
     },
     "gtow-charts": {
       pieces: ["preflop"],
@@ -200,6 +227,8 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
 const PIECE_OF: Record<string, { piece: SourceCard["piece"]; role: SourceCard["role"] }> = {
   "exploit-preflop": { piece: "preflop", role: "primary" },
   "hrc-3max": { piece: "preflop", role: "primary" },
+  "hrc-6max": { piece: "preflop", role: "primary" },
+  "gtow-ai-preflop": { piece: "preflop", role: "fallback" },
   "gtow-charts": { piece: "preflop", role: "fallback" },
   "mes-postflop": { piece: "postflop", role: "primary" },
   "gtow-ai": { piece: "postflop", role: "primary" },
@@ -211,6 +240,8 @@ const PIECE_OF: Record<string, { piece: SourceCard["piece"]; role: SourceCard["r
 const SOURCE_KEYS: Record<string, string[]> = {
   "exploit-preflop": ["pool-exploit-preflop"],
   "hrc-3max": ["hrc-3max-preflop"],
+  "hrc-6max": ["hrc-6max-preflop"],
+  "gtow-ai-preflop": ["gtow-ai-preflop"],
   "gtow-charts": ["local-preflop"],
   "mes-postflop": ["mes-postflop"],
   "gtow-ai": ["gtow-api-postflop"],
@@ -230,7 +261,13 @@ app.get("/registry", async (c) => {
     // stalls behind a running batch on the single-threaded server.
     probe(`${HRC3MAX_BASE}/api/progress`, 2500),
     probe(`http://${cdpHost}/json/version`, 1200),
-    probe(`${DEFAULT_LIVE_URL}/state`, 1500),
+    // 4 s, not 1.5: the wrapper's /state calls cdp.available on the table
+    // window's debug port, and a port with NOTHING listening costs the full
+    // 2 s urlopen timeout on Windows (a dropped SYN, not a refusal). So
+    // between sessions — exactly when you open mission control to check
+    // whether the rig is ready — a live wrapper reported "not reachable"
+    // (2026-09-13). Once a session is up, CDP answers and /state is ~30 ms.
+    probe(`${DEFAULT_LIVE_URL}/state?light=1`, 4000),
   ]);
 
   // --- files ---
@@ -248,8 +285,13 @@ app.get("/registry", async (c) => {
   const handRows = hands.exists ? sqliteCount(HANDS_DB, "SELECT COUNT(*) n FROM hands") : null;
   const answersFile = fileInfo(answerLog.dbPath);
   const token = gtowApi.tokenStatus();
+  // PROBE each session rather than trusting the cached view: without a CDP
+  // probe a token-less session cannot be told from a session whose client is
+  // not running, and the wrapper's preflight would tell Brady "nothing
+  // listening" about a client that is up and merely signed out.
+  const tokenSessions = await gtowSessions.statusProbed();
   const pollerStatus = studyPoller.getStatus();
-  const mode = studyPoller.studyMode;
+  const liveStrategyId = studyPoller.strategyId;
 
   const fmtAge = (ms: number | null) => ms == null ? "unknown" : new Date(ms).toISOString();
 
@@ -272,7 +314,7 @@ app.get("/registry", async (c) => {
         ["fit to", exploit?.chart ? `chart ${exploit.chart}` : "—"],
         ["ranges", ranges.length ? `${ranges.length} derived range sets` : "—"],
         ["freshness", exploitFile.mtimeMs ? fmtAge(exploitFile.mtimeMs) : "—"],
-        ["armed by", "dev-api.cmd / start_gtow_ai.ps1 (process env)"],
+        ["armed by", "EXPLOIT_CHART in .claude/study-api.ps1 (the StudyAPI supervisor), .claude/dev-api.cmd and scripts/start_gtow_ai.ps1 — all three name the same file"],
         ["feeds MES", mes.families.filter((f) => f.inputs).map((f) => `${f.id.split("_")[0]} ← ${f.inputs!.hero_range.key}`).join(" · ") || "—"],
       ],
       caveats: [
@@ -306,6 +348,72 @@ app.get("/registry", async (c) => {
       ],
       answers30d: t.n, p50Ms: t.p50, lastTs: t.lastTs, byDay: t.byDay, drilldown: "charts",
     });
+  }
+
+  // 2b. HRC 6-max NL200 ring grid — SOLVING (ledger proposal sixmax-nl200,
+  // approved 2026-09-13). The card exists before the charts do: it is the
+  // preflop piece of the Ignition 200NL Ring 6-max Equilibrium strategy, which
+  // stays unavailable until every expected chart is in the catalog.
+  {
+    const t = tally("hrc-6max-preflop");
+    const cl = chartsLanded(["grid-6max-nl200", "grid-6max-nl200-asym"]);
+    const routed = existsSync(join(import.meta.dir, "..", "services", "hrc6max.ts"));
+    cards.push({
+      id: "hrc-6max", label: "HRC 6-max NL200 ring grid", mode: "gto",
+      state: cl.complete ? (routed ? "good" : "warn") : "off",
+      stateText: cl.complete ? (routed ? `Up · ${cl.want} charts` : `${cl.want} charts solved — no 6-seat picker yet`)
+        : `Solving · ${cl.have} of ${cl.want} charts`,
+      tiers: [routed ? "chart-6max" : "chart-6max (not routed yet)"],
+      routes: routed ? "6-handed preflop at NL200 ring · rung by table depth and the short seat"
+        : "nothing yet — 6-handed preflop still answers from the GTO Wizard NL500 library (0.6bb cap) until a 6-seat chart picker lands",
+      facts: [
+        // NOT :8777. The whole family is baked into SQLite and read in ~0.1ms per node
+        // (services/hrc6maxDb.ts); the server is only the fallback for a chart the bake
+        // does not cover, which for the picker's id space is none of them.
+        ["served by", hrc6maxDb.size > 0
+          ? `data/hrc6max-preflop.sqlite · ${hrc6maxDb.size} trees baked · :8777 only for what it misses`
+          : `no local bake on this machine — every node goes to ${HRC3MAX_BASE} (build_6max_preflop_db.py)`],
+        ["progress", cl.perConfig.map((p) => `${p.id}: ${p.have}/${p.want}`).join(" · ") || "no configs"],
+        ["rake", "5% of the pot, cap $4 = 2bb with six dealt (Ignition's table, checked 2026-09-13)"],
+        ["trees", "5 opens (2x / 2.5x / 3x / 3.5x / limp) × 6 depths, plus one short seat (30 / 50 / 70bb) at a 100bb table in every position"],
+        ["running on", "the 3 Vultr Windows HRC boxes + the 4 Hetzner Linux boxes (not the Zenbook)"],
+        ["proposal", "sixmax-nl200 — approved 2026-09-13 (/proposals)"],
+        ["6-seat picker", routed ? "services/hrc6max.ts" : "not written — hrc3max.ts builds 3-seat canonical states only"],
+      ],
+      caveats: [
+        ...(cl.complete ? [] : ["still solving — the strategy that plays it is held unavailable until every chart is in the catalog"]),
+        ...(routed ? [] : ["no 6-seat chart picker: even a complete set cannot answer at the table yet (ledger step postflop-6max-nl200)"]),
+        "no pool model at 6-handed yet — pool-model-6max-nl200 is blocked (the builder walks a 3-seat tree)",
+      ],
+      answers30d: t.n, p50Ms: t.p50, lastTs: t.lastTs, byDay: t.byDay, drilldown: "charts",
+    });
+    // GTO Wizard AI preflop (Ultra) — the 6-max strategy's PREFLOP FALLBACK PIECE (2026-09-19).
+    {
+      const ai = tally("gtow-ai-preflop");
+      cards.push({
+        id: "gtow-ai-preflop", label: "GTO Wizard AI preflop (Ultra)", mode: "gto",
+        state: "good", stateText: ai.n ? `Live · ${ai.n} answers in 30 days` : "Live · fallback, none needed yet",
+        tiers: ["ai-preflop"],
+        routes: "the 6-max ring strategy's fallback: every preflop spot the HRC 6-max charts cannot answer — a table thinned to 2-5 seats, a size off the tree, a stack past the 150bb ladder, a limped pot, a straddle — solved in GTO Wizard's cloud from the ACTUAL table (live stacks, blinds as posted, Ignition's rake for the players dealt, our size menu plus every size seen in the line). Never the GTO Wizard library.",
+        facts: [
+          ["what answers", "hero's exact combo read from the solved node (1,326-combo strategy), rolled like a chart mix"],
+          ["speed", "2-4 s for a new table shape (tree + solve), 1-2 s per node after; shapes are cached, and a 2-5 seat table is pre-built from the poller's tick"],
+          ["rake in the tree", "5% of pot, cap by players dealt ($1 / $2 / $3 / $4 at 2 / 3 / 4-5 / 6+), no flop no drop"],
+          ["sizes", "opens 2x 2.2x 2.5x 3x 3.5x · 3-bets 3.2x 3.8x 4.5x · 4-bets 2.2x 2.6x · 5-bet+ 2.2x — plus the line's own sizes"],
+          ["limps", "one non-SB limper plus the SB complete (the API's ceiling)"],
+          ["source id", "answers.sqlite source gtow-ai-preflop · tier ai-preflop — that is what the hand page shows"],
+          ["code", "services/gtowAiPreflop.ts; the hand-off in fastSolve.ts (6-max strategy branch)"],
+        ],
+        caveats: [
+          "two-limper pots are not in the tree (the API stops at one limper)",
+          "a dead small blind cannot be expressed: the missing SB is modelled as a seat holding exactly its blind (flagged approx)",
+          "solved fresh in the cloud — an answer can differ slightly between two identical spots (solver noise), unlike a stored chart",
+          "needs the GTO Wizard session on CDP 9222 (dedicated-profile Chrome) for the token",
+        ],
+        answers30d: ai.n, p50Ms: ai.p50, lastTs: ai.lastTs, byDay: ai.byDay,
+        drilldown: "log", sourceKeys: ["gtow-ai-preflop"],
+      });
+    }
   }
 
   // 3. GTO Wizard crawled charts
@@ -430,7 +538,7 @@ app.get("/registry", async (c) => {
 
   // 6b. the opponent model: the piece every MES best-response is computed against
   {
-    const pmPath = join(LIMP, "pool_model_v4.json");
+    const pmPath = poolModelPath();
     const vfPath = join(LIMP, "villain_freqs.json");
     const pmFile = fileInfo(pmPath), vfFile = fileInfo(vfPath);
     const pm = pmFile.exists ? readJson(pmPath) : null;
@@ -440,7 +548,7 @@ app.get("/registry", async (c) => {
     const stampedMtime = stamp?.pool_model?.mtime ? Date.parse(String(stamp.pool_model.mtime)) : null;
     const newer = stampedMtime != null && pmFile.mtimeMs != null && pmFile.mtimeMs > stampedMtime + 1000;
     const caveats: string[] = [];
-    if (!pmFile.exists) caveats.push("pool_model_v4.json missing: the MES pieces have no opponent to best-respond to");
+    if (!pmFile.exists) caveats.push(`${pmPath.replace(/^.*[\/]/, "")} missing: the MES pieces have no opponent to best-respond to`);
     if (!vfFile.exists) caveats.push("villain_freqs.json missing: the postflop locks have no action frequencies");
     if (newer) caveats.push("the pool model changed after the served MES build was locked against it, so the MES pieces answer against a villain that no longer exists; re-run the batch");
     cards.push({
@@ -498,13 +606,40 @@ app.get("/registry", async (c) => {
     pieces: PIECES,
     at: Date.now(),
     armed: {
-      strategyMode: mode,
+      // what the live session DECLARED — the strategy is the whole answer to
+      // "which pieces are answering right now" (services/strategies.ts)
+      strategyId: liveStrategyId,
+      strategyName: STRATEGIES.find((x) => x.id === canonicalStrategyId(liveStrategyId))?.name ?? null,
       exploitPreflop: !!exploitPath && exploitFile.exists,
       mesPostflop: mes.exists && mes.families.length > 0,
       mesBoards: mes.families.reduce((s, f) => s + f.boards.length, 0),
       hrc: { up: hrc.ok, ms: hrc.ms },
-      gtow: { tokenLive: token.live, expiresInMs: token.expiresInMs, clientUp: cdp.ok },
-      wrapper: { up: wrapper.ok, url: DEFAULT_LIVE_URL, studyAnswersOn: wrapper.body?.studyAnswersOn ?? null, studyMode: wrapper.body?.studyMode ?? null },
+      // The 6-max ring charts do NOT come from :8777 on this machine: they are baked
+      // into data/hrc6max-preflop.sqlite and read by services/hrc6maxDb.ts, chart
+      // RESOLUTION included. So a 6-max session needs the bake, not the server, and the
+      // wrapper's preflight (sessions.py) checks this instead of `hrc` for that strategy.
+      // `trees` is the bake's own coverage count; 0 = no bake here, and the 6-max path
+      // falls back to :8777 for every node.
+      hrc6max: { db: hrc6maxDb.size > 0, trees: hrc6maxDb.size },
+      // The GTO Wizard POOL, not one client: the Elite session takes heads-up
+      // solves so the Ultra session's daily allowance is spent only on the
+      // multiway trees that need it (services/gtowSessions.ts). `tokenLive`
+      // stays "can we answer anything at all" for callers that predate the
+      // pool; `multiwayLive` is the one that decides whether 3+ player spots
+      // have an answer, and the wrapper's preflight checks it separately.
+      gtow: {
+        tokenLive: token.live,
+        expiresInMs: token.expiresInMs,
+        clientUp: cdp.ok,
+        multiwayLive: token.multiwayLive,
+        sessions: tokenSessions.map((x) => ({
+          id: x.id, label: x.label, state: x.state, text: x.text,
+          tokenLive: x.tokenLive, expiresInMs: x.expiresInMs, multiway: x.multiway,
+          cdpHost: x.cdpHost, enabled: x.enabled, launchHint: x.launchHint,
+          blockedKind: x.blockedKind, blockedReason: x.blockedReason, trees: x.trees,
+        })),
+      },
+      wrapper: { up: wrapper.ok, url: DEFAULT_LIVE_URL, studyAnswersOn: wrapper.body?.studyAnswersOn ?? null },
       poller: { running: pollerStatus.running, lastTickAt: pollerStatus.lastTickAt },
     },
     tiers: log.tiers,
@@ -529,7 +664,7 @@ app.get("/strategies", (c) => {
     const sid = strategyIdForAnswer(a as any);
     const h = (a as any).client_hand_id;
     if (sid && h && !seen.has(h)) seen.set(h, sid);
-    else if (sid && h && seen.get(h) !== "apex" && sid === "apex") seen.set(h, sid);
+    else if (sid && h && seen.get(h) !== FULL_EXPLOIT_ID && sid === FULL_EXPLOIT_ID) seen.set(h, sid);
   }
   const realized: Record<string, { hands: number; netBb: number }> = {};
   // reuse the dashboard's own enrichment + net accounting (same numbers the
@@ -537,7 +672,7 @@ app.get("/strategies", (c) => {
   const enriched = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
   const nets = computeNets(enriched);
   const declared = new Map<string, string>();
-  for (const sess of sessionsStore.list(500)) { const id = sess.config?.strategy; if (typeof id === "string") declared.set(sess.id, id); }
+  for (const sess of sessionsStore.list(500)) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
   for (const e of enriched) {
     const sessId = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
     const sid = (sessId && declared.get(sessId)) || (e.clientHandId ? seen.get(e.clientHandId) : null);
@@ -546,12 +681,31 @@ app.get("/strategies", (c) => {
     r.hands++;
     r.netBb += nets.get(e.dbId) ?? 0;
   }
+  // how each strategy answers every spot (services/strategyCoverage.ts), with the register's live counts joined:
+  // per row, the fires of the approximations it leans on; per strategy, its HOLES = the register filtered to its sources
+  const approx = Object.keys(STRATEGY_COVERAGE).length ? approximationRows(30) : [];
+  const brief = (r: (typeof approx)[number]) => ({ id: r.id, title: r.title, what: r.what, fix: r.fix, status: r.status,
+    cost: r.cost ?? null, fires: r.fires, measured: r.measured, openRows: r.miss?.rows ?? 0 });
+  const coverageOf = (id: string) => {
+    const cov = STRATEGY_COVERAGE[id];
+    if (!cov) return null;
+    const byId = new Map(approx.map((r) => [r.id, r]));
+    return {
+      ...cov,
+      sections: cov.sections.map((sec) => ({ ...sec, rows: sec.rows.map((row) => ({
+        ...row, approxLive: (row.approx ?? []).map((a) => byId.get(a)).filter(Boolean).map((r) => brief(r!)),
+      })) })),
+      holes: approx.filter((r) => cov.holeSources.includes(r.source)).map(brief),
+      days: 30,
+    };
+  };
   return c.json({
     ok: true,
     strategies: views.map((v) => ({
       ...v,
       matrix: rowById[v.matrixRow] ?? null,
       realized: realized[v.id] ?? { hands: 0, netBb: 0 },
+      coverage: coverageOf(v.id),
     })),
     haircut: matrix?.haircut ?? null,
     evidenceChain: matrix?.evidenceChain ?? null,
@@ -565,7 +719,7 @@ app.get("/strategies", (c) => {
 // strategy chosen per seat: hero MES (exploit) or GTO chart; villains pool or GTO.
 const LIMP = join(DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
 app.get("/play/config", (c) => {
-  const pool = readJson(join(LIMP, "pool_model_v4.json"));
+  const pool = readJson(poolModelPath());
   const exploit = process.env.EXPLOIT_CHART ? readJson(process.env.EXPLOIT_CHART) : null;
   const chart = pool?.chart ?? "ign200_3maxasym2ci_D100_s100_eq";
   return c.json({
@@ -575,6 +729,13 @@ app.get("/play/config", (c) => {
         note: "preflop: HRC asym charts (:8777) · postflop: M1/M2 locked solves" },
       { id: "ign200-3max-100", label: "Ignition NL200 · 3-max · 100bb", rake: "5% / cap 1bb", available: false,
         note: "preflop charts exist; postflop locks not solved at this rake yet" },
+      // The 6-max ring set ANSWERS already — services/hrc6max.ts routes a 6-handed spot to it and the
+      // "Ignition 200NL Ring 6-max Equilibrium" strategy is selectable. What is missing is only this page's
+      // table: it lays out three seats (BTN/SB/BB) and walks that rotation, so there is nothing here to seat
+      // six players in yet. Until that view exists the charts are readable at
+      // /api/ledger/charts.html?prefix=ign200_6max_D100 — every seat's range and the blind defences, per tree.
+      { id: "ign200-6max-100", label: "Ignition NL200 · 6-max ring · 100bb", rake: "5% / cap 2bb", available: false,
+        note: "charts are solved and the study answers use them; this browser still seats three — read them at /api/ledger/charts.html?prefix=ign200_6max_D100" },
     ],
     strategies: {
       // whole-hand strategies (services/strategies.ts) — the picker only enables
@@ -815,6 +976,86 @@ app.get("/answers", (c) => {
 });
 
 // ------------------------------------------------------------------ roadmap
+
+/**
+ * GET /approximations — the known-imperfections register, ranked by how often
+ * each one actually fires.
+ *
+ * The register (services/approximations.ts) is hand-authored: it says what we
+ * do instead of the exact thing and why. Everything else here is JOINED, so
+ * the page moves with the data:
+ *
+ *   - `miss`  the miss-queue kinds this entry owns, rolled up — how many
+ *             distinct states are open and how many LIVE hands hit them.
+ *   - `warn`  how many logged answers in the window actually carried this
+ *             approximation's phrase.
+ *   - `measured`  whether either key produced anything. An entry with no
+ *             telemetry at all is the interesting case, not a blank row: we
+ *             know we approximate, we cannot say how often. Those sort last
+ *             and are labelled, because the instrumentation gap IS the finding.
+ *
+ * `claimedCaveats` closes the loop the other way: the caveat phrases this
+ * register accounts for. The page holds the registry cards already, so it
+ * subtracts the two and shows any caveat no entry claims — which is how this
+ * list is kept from quietly going stale as the cards change.
+ */
+/** The register with its live telemetry joined — shared by /approximations and the strategies' coverage maps. */
+function approximationRows(days: number) {
+  const vol = missQueue.volumeByKind();
+  const needles = [...new Set(APPROXIMATIONS.map((a) => a.warn).filter(Boolean) as string[])];
+  const warns = answerLog.countWarnings(needles, days);
+
+  const rows = APPROXIMATIONS.map((a: Approximation) => {
+    const kinds = (a.missKinds ?? []).map((k) => ({ kind: k, ...(vol[k] ?? { rows: 0, live: 0, corpus: 0, lastSeen: null }) }));
+    const miss = kinds.length
+      ? {
+          kinds,
+          rows: kinds.reduce((s, k) => s + k.rows, 0),
+          live: kinds.reduce((s, k) => s + k.live, 0),
+          corpus: kinds.reduce((s, k) => s + k.corpus, 0),
+          lastSeen: kinds.reduce<number | null>((m, k) => (k.lastSeen != null && (m == null || k.lastSeen > m) ? k.lastSeen : m), null),
+        }
+      : null;
+    const warn = a.warn ? { needle: a.warn, ...warns[a.warn]! } : null;
+    const measured = miss != null || warn != null;
+    // What to sort on. Live hits are the truth — a hand that actually took the
+    // approximation — and an answer that printed the warning is the same
+    // event seen from the other side. Open rows are a backlog, not a rate, so
+    // they only break ties.
+    const fires = (miss?.live ?? 0) + (warn?.n ?? 0);
+    return { ...a, miss, warn, measured, fires };
+  });
+
+  rows.sort((x, y) =>
+    Number(y.measured) - Number(x.measured) ||
+    y.fires - x.fires ||
+    (y.miss?.rows ?? 0) - (x.miss?.rows ?? 0) ||
+    x.title.localeCompare(y.title));
+  return rows;
+}
+
+app.get("/approximations", (c) => {
+  const days = Math.max(1, Math.min(365, Number(c.req.query("days") ?? 30) || 30));
+  const rows = approximationRows(days);
+
+  // Drift check, half of it: the caveat phrases this register claims. The
+  // registry's cards are built inside that endpoint (live probes and all), and
+  // the page already holds them — so the comparison happens client-side rather
+  // than rebuilding every card here just to read its caveats.
+  const claimedCaveats = [...new Set(APPROXIMATIONS.flatMap((a) =>
+    a.coversCaveat == null ? [] : Array.isArray(a.coversCaveat) ? a.coversCaveat : [a.coversCaveat]))];
+
+  return c.json({
+    ok: true, days, rows, claimedCaveats,
+    totals: {
+      all: rows.length,
+      measured: rows.filter((r) => r.measured).length,
+      unmeasured: rows.filter((r) => !r.measured).length,
+      byStatus: rows.reduce<Record<string, number>>((m, r) => { m[r.status] = (m[r.status] ?? 0) + 1; return m; }, {}),
+      liveHits: rows.reduce((s, r) => s + (r.miss?.live ?? 0) + (r.warn?.n ?? 0), 0),
+    },
+  });
+});
 
 app.get("/roadmap", (c) => {
   const road = readJson(join(DATA_DIR, "roadmap.json")) ?? { families: [], preflop: [] };

@@ -69,6 +69,17 @@ describe("buildSolutionUrl", () => {
     expect(tk.river).toEqual([]);
   });
 
+  // The seats must stay in STEP with the tokens — the AI walk checks its rotation against them, so a
+  // list that drifts by one would accuse the capture of the walker's own mistake (hand 4919211085).
+  it("buildSpotSolutionTokens names who took each postflop token, in step", () => {
+    const tk = buildSpotSolutionTokens(FACING_FLOP_BET);
+    const flopActs = FACING_FLOP_BET.actions.filter((a) => a.street === "flop");
+    expect(tk.seats.flop).toHaveLength(tk.flop.length);
+    expect(tk.seats.flop).toEqual(flopActs.map((a) => a.seatId));
+    expect(tk.seats.turn).toEqual([]);
+    expect(tk.seats.river).toEqual([]);
+  });
+
   it("stops the preflop line at hero's pending seat, leaving it active", () => {
     const heroBbPending = parse(
       rows([

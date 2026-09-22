@@ -415,3 +415,15 @@ Contributions are welcome! Please ensure:
 For issues related to:
 - **This API**: Open an issue in this repository
 - **TexasSolver**: Visit [TexasSolver repository](https://github.com/bupticybee/TexasSolver)
+
+
+## Preflop pieces of the Ignition 200NL Ring 6-max strategy (2026-09-19)
+
+| order | piece | registry id | answers.sqlite `source` / `tier` | what it answers |
+|---|---|---|---|---|
+| 1 | HRC 6-max NL200 ring charts | `hrc-6max` | `hrc-6max-preflop` / `chart-6max` | 4–6 seats, the solved size ladder, 30–150 bb — instant, our own rake |
+| 2 | **GTO Wizard AI preflop (Ultra)** | `gtow-ai-preflop` | `gtow-ai-preflop` / `ai-preflop` | everything the charts cannot: a table thinned to 2–5 seats, a size off the tree, a stack past the ladder, a limped pot, a straddle — solved live in GTO Wizard's cloud from the ACTUAL table |
+
+The fallback (`src/services/gtowAiPreflop.ts`, hand-off in `fastSolve.ts`'s 6-max branch) builds one custom preflop tree per table shape — live stacks, blinds as posted, Ignition's rake for the players dealt (5%, cap $1/$2/$3/$4 at 2/3/4-5/6+), our size menu (opens 2x 2.2x 2.5x 3x 3.5x · 3-bets 3.2x 3.8x 4.5x · 4-bets 2.2x 2.6x) plus every size the line actually contains — solves it (2–4 s), walks the line (`F` / `C` / `X` / `R<bb>`), and reads hero's exact combo from the node. Shapes are cached; a 2–5 seat table is pre-built from the poller's tick so hero's turn only pays the node fetch (1–2 s). The hand page's "Where the answers came from" names it, the Sources tab has its card, and the strategy's preflop layer declares it as `fallbackSource`.
+
+API limits that shape it (probed 2026-09-19): multiway trees need fixed size menus; positions are fixed sets by player count; limps = one non-SB limper + the SB complete (a second limper is not modelled); a dead small blind cannot be expressed (approximated as a seat holding its blind, flagged `approx`); 3-way postflop exists (`OOP`/`OOP+1`/`IP`) but 4+ does not. Token comes from the dedicated-profile Chrome on CDP 9222 (`scripts/start_gtow_chrome.ps1`).

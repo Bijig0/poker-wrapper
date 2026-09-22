@@ -31,10 +31,43 @@ export interface ResolvedHand {
   tableStatus: string | null;
   heroSittingOut: boolean;
   studyAnswersOn: boolean | null;
-  studyMode?: "exploit" | "chart" | null;
+  /** The session's DECLARED strategy (services/strategies.ts id). The preflop piece
+   *  that answers is resolved from this — never from a mode flag or an env var. */
+  strategyId?: string | null;
   /** The wrapper's DECLARED session (sessions.py) — stamped on answers and solves. */
   sessionId?: string | null;
+  /** STATE PROVENANCE from the wrapper's /hand (2026-09-19): the independent views of
+   *  "hero to act", why the export says it is not hero's turn, hero's status word, and
+   *  which betting line the export carries and whether it can be trusted. Live source
+   *  only; absent for pasted/authored hands. */
+  liveExtras?: LiveExtras;
 }
+
+export interface LiveExtras {
+  buttonsUp: boolean;
+  toActSources: { buttons?: boolean; ws?: boolean; actionOn?: boolean; wsAt?: number | null; timeBank?: number | null } | null;
+  heroStatus: string | null;
+  notToActWhy: string | null;
+  lineSource: string | null;
+  lineUncertain: string | null;
+  lineNote: string | null;
+}
+
+const liveExtrasOf = (raw: unknown): LiveExtras | undefined => {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const h = raw as Record<string, unknown>;
+  if (!("buttonsUp" in h) && !("lineSource" in h)) return undefined;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  return {
+    buttonsUp: h.buttonsUp === true,
+    toActSources: typeof h.toActSources === "object" && h.toActSources !== null ? (h.toActSources as LiveExtras["toActSources"]) : null,
+    heroStatus: str(h.heroStatus),
+    notToActWhy: str(h.notToActWhy),
+    lineSource: str(h.lineSource),
+    lineUncertain: str(h.lineUncertain),
+    lineNote: str(h.lineNote),
+  };
+};
 
 export interface ResolveError {
   ok: false;
@@ -86,8 +119,8 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
   let tableStatus: string | null = null;
   let heroSittingOut = false;
   let studyAnswersOn: boolean | null = null;
-  let studyMode: "exploit" | "chart" | null = null;
   let sessionId: string | null = null;
+  let strategyId: string | null = null;
 
   if (body.hand != null) {
     try {
@@ -97,7 +130,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
           ? (body.hand as { hand: unknown }).hand
           : body.hand;
       const normalized = normalizeHand(raw);
-      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId: normalized.hand.sessionId ?? null };
+      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId: normalized.hand.sessionId ?? null };
     } catch (e) {
       return { ok: false, status: 400, error: `Hand JSON not understood: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -110,8 +143,8 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       hand?: ParsedHand | null;
       snapshot?: { status?: string; seats?: { hero?: boolean; sittingOut?: boolean }[] };
       studyAnswers?: boolean;
-      studyMode?: "exploit" | "chart";
       sessionId?: string | null;
+      session?: { strategy?: string | null } | null;
     };
     try {
       const res = await fetch(`${url.replace(/\/$/, "")}/state`, { signal: AbortSignal.timeout(3000) });
@@ -122,20 +155,28 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     if (!state.connected) {
       return { ok: false, status: 409, error: "assistive-play is running but no table is detected." };
     }
+    // POKER WRAPPER, 2026-09-22: the wrapper also plays CoinPoker (state.site). Nothing here
+    // answers CoinPoker yet — every chart set this resolves to is an Ignition one (siteFor,
+    // ign* rake, no antes), so a CoinPoker hand is refused rather than answered from the
+    // wrong game. Remove when a CoinPoker strategy exists.
+    if ((state as { site?: string }).site === "coinpoker") {
+      return { ok: false, status: 409, error: "CoinPoker table: no strategy answers CoinPoker yet (the Ignition charts are a different rake and structure)." };
+    }
     tableStatus = state.snapshot?.status ?? null;
     studyAnswersOn = state.studyAnswers ?? false;
-    studyMode = state.studyMode ?? null;
     sessionId = state.sessionId ?? null;
+    strategyId = state.session?.strategy ?? null;
     heroSittingOut = !!state.snapshot?.seats?.find((s) => s.hero)?.sittingOut;
     if (state.hand != null) {
       try {
         const normalized = normalizeHand(state.hand);
-        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId };
+        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId,
+                 liveExtras: liveExtrasOf(state.hand) };
       } catch (e) {
         return { ok: false, status: 502, error: `Live hand not understood: ${e instanceof Error ? e.message : String(e)}` };
       }
     }
-    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId };
+    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId };
   }
 
   if (body.rows || body.text) {
@@ -145,7 +186,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       return { ok: false, status: 400, error: "rows must be a PanelRow[] or { rows: PanelRow[] }." };
     }
     const parsed = parsePanelFeed(rawRows);
-    return { ok: true, hand: parsed.hand, source, warnings: parsed.warnings, tableStatus, heroSittingOut, studyAnswersOn, studyMode, sessionId: null };
+    return { ok: true, hand: parsed.hand, source, warnings: parsed.warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId: null };
   }
 
   return { ok: false, status: 400, error: "Body needs one of: hand, rows, text, or live." };

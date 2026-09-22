@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { evaluate, loadLedger, MES_HANDOFF, HRC_API, type EvaluatedConfig } from "./ledger";
+import { evaluate, loadLedger, expectedChartIds, isBoxGrid, BOX_GRID_KINDS, MES_HANDOFF, HRC_API, type EvaluatedConfig } from "./ledger";
+import { chartStates, runEstimate } from "./chartProgress";
 import { jobs, HRC_API_ZENBOOK, type JobRow } from "./jobs";
 import { hrcJobsFor } from "./runbook";
 import { getCatalog } from "./chartCatalog";
@@ -191,15 +192,13 @@ function configProgress(c: EvaluatedConfig, all: JobRow[], catalogIds: Set<strin
       P.hrc = hrcSnapshot(join(HRC_API, "solves", "threemax_asym", "ledger", c.id, "queue.json"), HRC_API);
       if (P.hrc.current) P.live = true;
     }
-  } else if (c.kind === "preflop-grid-6max") {
-    const root = c.env?.HRC_API ?? HRC_API_ZENBOOK;
-    const sites = (c.env?.SITES ?? "ign200,ign25").split(",").map((s) => s.trim()).filter(Boolean);
-    const plan = readJson<{ id: string; site?: string }[]>(join(root, "solves", "sixmax_grid", "plan_6max.json")) ?? [];
-    const mine = plan.filter((j) => sites.includes(j.site ?? j.id.split("_")[0]!));
-    const doneN = mine.filter((j) => existsSync(join(root, "solves", "sixmax_grid", `${j.id}.charts.json.gz`)) || existsSync(join(root, "solves", "sixmax_grid", `${j.id}.charts.json`))).length;
-    P.units = { done: doneN, total: mine.length || c.cost.jobs, unit: "trees" };
-    P.hrc = hrcSnapshot(join(root, "solves", "sixmax_grid", "queue_6max.json"), root, (id) => sites.some((s) => id.startsWith(`${s} `) || id.startsWith(`pilot ${s}`)));
-    if (P.hrc.current) P.live = true;
+  } else if (isBoxGrid(c)) {
+    const fmt = L.formats.find((f) => f.id === c.format);
+    const st = chartStates(c, expectedChartIds(c, fmt));
+    const lanes = Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1);
+    const est = runEstimate(c, st, lanes);
+    P.units = { done: est.done, total: st.length || c.cost.jobs, unit: "trees", note: `${est.solved ? `${est.solved} solved on the boxes, pulling · ` : ""}${est.running ? `${est.running} solving now on ${[...new Set(st.filter((x) => x.state === "running").map((x) => x.box))].join(", ")} · ` : ""}${est.text}` };
+    if (est.running) P.live = true;
   }
   return P;
 }
@@ -220,7 +219,7 @@ export function proposalProgress(id: string): ProposalProgress | null {
   try { catalogIds = new Set((getCatalog().entries as any[]).map((e) => String(e.id))); } catch { /* none */ }
   const all = jobs.list(200);
   const parts: ProposalProgress["parts"] = (P.parts ?? []).map((pp: any) => ({ title: String(pp.title), configs: (pp.steps as string[]).map((s) => byId.get(s)).filter((c): c is EvaluatedConfig => !!c).map((c) => configProgress(c, all, catalogIds)) }));
-  const solveKinds = ["preflop-grid", "preflop-grid-asym", "preflop-grid-6max", "locked-root", "mes-lock"];
+  const solveKinds = ["preflop-grid", "preflop-grid-asym", ...BOX_GRID_KINDS, "locked-root", "mes-lock"];
   const solveCfgs = parts.flatMap((p) => p.configs).filter((c) => solveKinds.includes(c.kind));
   return {
     id, run: P.run, at: Date.now(), live: parts.some((p) => p.configs.some((c) => c.live)),

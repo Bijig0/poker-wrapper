@@ -177,6 +177,59 @@ describe("solveAiChain three-way", () => {
     if (!r.ok) expect(r.why).toContain("rotation disagrees");
   });
 
+  // Hand 4919211085 (dashboard #425): the reconciler stamped hero's preflop check onto the flop, so the
+  // captured flop read "hero checks, SB checks" — the right two actions, the wrong order. The walk is
+  // positional, so hero's pending node came out as the THIRD seat's and 13 probes died on the bare "line
+  // ends on villain's turn". With the seats carried alongside the tokens the walk names what disagreed.
+  it("names the seat when the capture's actions are out of order", async () => {
+    const s = script({
+      "sol-FLOP|": { toAct: "SB", acts: [X, B(2.5)] },
+      "sol-FLOP|X": { toAct: "BB", acts: [X, B(2.5)] },
+      "sol-FLOP|X-X": { toAct: "CO", acts: [X, B(2.5)] },
+    });
+    restore = s.restore;
+    const r = await solveAiChain({ ...base, streets: [["X", "X"]], streetSeats: [["BB", "SB"]] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.why).toContain("capture's line disagrees with the rotation");
+      expect(r.why).toContain("it has BB acting");
+      expect(r.why).toContain("SB is to act");
+    }
+  });
+
+  it("walks the same spot once the capture's order is right", async () => {
+    const s = script({
+      "sol-FLOP|": { toAct: "SB", acts: [X, B(2.5)] },
+      "sol-FLOP|X": { toAct: "BB", acts: [X, B(2.5)] },
+    });
+    restore = s.restore;
+    const r = await solveAiChain({ ...base, streets: [["X"]], streetSeats: [["SB"]] });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.trace.nodes.at(-1)!.heroNode).toBe(true);
+  });
+
+  it("ignores a seat name this street doesn't have rather than inventing a miss", async () => {
+    const s = script({
+      "sol-FLOP|": { toAct: "SB", acts: [X, B(2.5)] },
+      "sol-FLOP|X": { toAct: "BB", acts: [X, B(2.5)] },
+    });
+    restore = s.restore;
+    const r = await solveAiChain({ ...base, streets: [["X"]], streetSeats: [["LJ"]] });
+    expect(r.ok).toBe(true);
+  });
+
+  it("names the seat to act when the line stops short of hero", async () => {
+    const s = script({ "sol-FLOP|": { toAct: "SB", acts: [X, B(2.5)] } });
+    restore = s.restore;
+    const r = await solveAiChain({ ...base, streets: [[]] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.why).toContain("walked line ends on villain's turn");
+      expect(r.why).toContain("SB is to act");
+      expect(r.why).toContain("not hero (BB)");
+    }
+  });
+
   it("has nothing to solve once everyone else has folded", async () => {
     const s = script({
       "sol-FLOP|": { toAct: "SB", acts: [X, B(3)] },

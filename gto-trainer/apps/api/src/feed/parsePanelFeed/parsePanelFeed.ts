@@ -52,6 +52,12 @@ export interface ParsedNode {
 export interface ParsedHand {
   /** The wrapper's declared session this hand was played in (archived hands since 2026-09-04). */
   sessionId?: string | null;
+  /** Which of the session's 1-4 tables this hand was played on (wrapper
+   *  `tableSlot`; null on a single-table session, where tables.py deliberately
+   *  has no slot). Carried so an answer can be attributed to a table — until
+   *  2026-09-20 normalizeHand dropped it, so answers.sqlite.table_slot was null
+   *  in all 2,129 rows despite both ends of the chain being wired for it. */
+  tableSlot?: number | null;
   handId: number;
   /** The site's own globally-unique hand id (Ignition stage id), when the
    *  source provides one — the stable join key between live answers and the

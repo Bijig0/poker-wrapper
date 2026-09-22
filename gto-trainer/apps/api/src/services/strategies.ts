@@ -46,6 +46,8 @@ export interface PreflopLayer {
    *  being solved, evaluate() counts how many of its charts are in the catalog and
    *  refuses the strategy until they are all there (services/ledger.ts chartsLanded) */
   chartConfigs?: string[];
+  /** the piece that answers what this one cannot (registry source id) — stated on the strategy, never implied */
+  fallbackSource?: string; fallbackLabel?: string;
   /** seats at the table this layer is solved for (default 3) — a 6-seat set needs a
    *  6-seat chart picker before an answer can route to it */
   seats?: number;
@@ -97,7 +99,10 @@ const PREFLOP: Record<string, PreflopLayer> = {
   // holds the strategy `unavailable` and says which of the two is missing.
   chart6maxNl200: { id: "chart-6max-nl200", label: "GTO preflop (HRC NL200 6-max ring equilibrium charts, 5% / cap 2bb)", short: "GTO pre 6-max",
     arrival: "chart", source: "hrc-6max", seats: 6,
-    chartConfigs: ["grid-6max-nl200", "grid-6max-nl200-asym"] },
+    chartConfigs: ["grid-6max-nl200", "grid-6max-nl200-asym"],
+    // 2026-09-19: what the charts cannot answer (2-5 seats, off-tree sizes, past the ladder, limped pots,
+    // straddles) is solved live by GTO Wizard AI preflop (Ultra) from the actual table — services/gtowAiPreflop.ts
+    fallbackSource: "gtow-ai-preflop", fallbackLabel: "GTO Wizard AI preflop (Ultra, live cloud solve of the actual table)" },
 };
 const POSTFLOP: Record<string, PostflopLayer> = {
   // locked at the NL25 rake schedule (5%, cap 4bb) behind the NL25 Zone pool ranges
@@ -147,7 +152,7 @@ export const STRATEGIES: StrategyDef[] = [
   // No pool model — the 6-handed pool measurement (pool-model-6max-nl200) is a
   // later part of the same proposal and gets its own, exploit strategy.
   { id: "ign200-ring-6max-equilibrium", name: "Ignition 200NL Ring 6-max Equilibrium",
-    tagline: "Equilibrium only — our own NL200 6-max HRC charts preflop (5% / cap 2bb), GTO Wizard AI postflop; no pool model",
+    tagline: "Equilibrium only — our own NL200 6-max HRC charts preflop (5% / cap 2bb) at 4-6 seats, GTO Wizard AI preflop for everything they cannot answer (a table thinned to 2-3 seats, off-tree sizes, past the ladder, limps, straddles), GTO Wizard AI postflop conditioned on whichever of the two answered; no pool model, and no 3-max corpus pending a re-solve of its shallow rungs",
     preflop: "chart6maxNl200", postflop: "gto", opponent: "gto6max", matrixRow: "eq_eq_6max",
     format: "ign-6max-nl200", stake: "nl200", formats: ["ign-ring-NL200-6", ...PRACTICE], defaultFormat: "ign-ring-NL200-6" },
 ];
@@ -336,8 +341,6 @@ export function evaluate(): StrategyView[] {
     if (pre.id === "chart-6max-nl200") {
       advisories.push(
         "NO POOL MODEL: equilibrium end to end. The 6-handed pool measurement and the locked continuation charts are a later part of the same proposal, so nothing here exploits how the Ignition 6-max pool actually plays.");
-      advisories.push(
-        "MULTIWAY POSTFLOP: GTO Wizard AI solves heads-up only, so a flop with three or more players has NO answer under this strategy (no library fallback).");
       advisories.push(
         "RANGE SHORTCUT IN USE (2026-09-17): the HRC 6-max trees cap callers - two cold-callers after an open, one caller of a 3-bet, two limpers - so a third caller, a second caller of a 3-bet or a third limper has NO branch in any chart. Rather than re-solve the 100bb rung wider (~3 fleet-days, and HRC may refuse the bigger trees), the postflop range walk BORROWS that seat's calling range from the neighbouring node with one earlier caller folded. The borrowed range is somewhat too wide; pot, stacks and board stay exact. Every affected answer carries 'RANGE SHORTCUT' in its warning. What it buys is small: of 38 such misses in the fake-table test only 6 were heads-up at the flop (the rest were multiway, which the heads-up AI cannot solve anyway), so ~0.6% of postflop spots come back, plus correct preflop range context for a future multiway solver. Hero's own third-call decisions (0.08% of preflop decisions) still have no chart answer. Exact fix = wider trees (genSixMaxPlan flats [0,3,2,1] / [3,3,2,1]); pilot D100_o2_5 first.");
     }

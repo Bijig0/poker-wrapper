@@ -29,6 +29,8 @@ export interface AnswerRow {
   decisionKey: string | null;
   /** Panel text, null for a failed solve. */
   text: string | null;
+  /** WHY there is no text — one of FAIL_KINDS, set whenever text is null. */
+  failKind?: FailKind | null;
   pick: string | null;
   roll: number | null;
   tier: string | null;
@@ -52,6 +54,8 @@ export interface AnswerRow {
   mesExact?: boolean | null;
   bbCents?: number | null;
   tableSeats?: number | null;
+  /** 1-4 when several tables are open; null on the single-table setup. */
+  tableSlot?: number | null;
   heroPos?: string | null;
   depth?: number | null;
   setId?: string | null;
@@ -101,6 +105,11 @@ const EXTRA_COLUMNS: [string, string][] = [
   ["mes_exact", "INTEGER"],
   ["bb_cents", "INTEGER"],
   ["table_seats", "INTEGER"],
+  // WHICH TABLE (2026-09-19): 1-4 when several are open, null on the single-table
+  // setup. wrapper_hand_id is a per-PROCESS counter and collides across tables;
+  // this is what attributes an answer to one of them within a session that spans
+  // all four. The wrapper stamps it on /hand as `tableSlot`.
+  ["table_slot", "INTEGER"],
   ["hero_pos", "TEXT"],
   ["depth", "INTEGER"],
   ["set_id", "TEXT"],
@@ -108,7 +117,55 @@ const EXTRA_COLUMNS: [string, string][] = [
   ["line", "TEXT"],
   ["solve_id", "INTEGER"],
   ["session_id", "TEXT"],
+  // WHY a decision got no answer, as a countable token rather than free text:
+  // 180 of the first 203 failures were the single string "no solution for this
+  // spot", which cannot be aggregated or acted on. See FAIL_KINDS.
+  ["fail_kind", "TEXT"],
 ];
+
+/**
+ * The ways a decision ends up with no answer.
+ *
+ *  no-solution          the solve chain had nothing for this spot
+ *  off-tree             the line contains a size the tree does not offer
+ *  not-in-range         hero's combo has no weight in the chart at this node
+ *  not-heros-turn       the solver re-read the table and hero was not on the clock
+ *  hand-over            the hand had ended by the time the solve ran
+ *  solver-timeout       the fast-solver request passed its deadline
+ *  solver-unreachable   the fast-solver could not be reached at all
+ *  solver-bad-response  it answered, but not with JSON
+ *  gtow-down            GTO Wizard was not connected while hero was on the clock
+ *  abandoned-stale      the verdict arrived after hero had already acted
+ *  no-probe             hero's decision was never asked about at all
+ *
+ * The last five used to leave no trace whatsoever: the poller returned early
+ * and the node simply had no row.
+ */
+export const FAIL_KINDS = [
+  "no-solution", "off-tree", "not-in-range", "not-heros-turn", "hand-over",
+  "solver-timeout", "solver-unreachable", "solver-bad-response", "gtow-down",
+  "abandoned-stale", "no-probe",
+  // hero's buttons were up for 2 s while the wrapper's export said "not hero's
+  // turn" — the reason (notToActWhy) is in failReason. Written LIVE, the first
+  // time it happens, so this class can never again pass in silence (2026-09-19,
+  // hand 4919080696: a villain's SITTING OUT label read as hero's, 19 s silent).
+  "not-to-act-live", "unknown",
+] as const;
+export type FailKind = (typeof FAIL_KINDS)[number];
+
+/** Classify the solve chain's own free-text refusal. The poller passes an
+ *  explicit kind for everything it knows first-hand; this covers what comes
+ *  back from the chain, and re-classifies the history on read. */
+export function failKindOf(reason: string | null | undefined): FailKind {
+  const r = (reason ?? "").toLowerCase();
+  if (!r) return "unknown";
+  if (r.includes("not hero's turn")) return "not-heros-turn";
+  if (r.includes("hand is over")) return "hand-over";
+  if (r.includes("isn't in the chart range") || r.includes("not in range")) return "not-in-range";
+  if (r.includes("not offered (have")) return "off-tree";
+  if (r.includes("no solution for this spot")) return "no-solution";
+  return "unknown";
+}
 
 export interface LoggedAnswer {
   id: number;
@@ -126,6 +183,7 @@ export interface LoggedAnswer {
   warning: string | null;
   latency_ms: number | null;
   fail_reason: string | null;
+  fail_kind: string | null;
   chart: string | null;
   strategy_mode: string | null;
   source: string | null;
@@ -140,6 +198,7 @@ export interface LoggedAnswer {
   mes_exact: number | null;
   bb_cents: number | null;
   table_seats: number | null;
+  table_slot: number | null;
   hero_pos: string | null;
   depth: number | null;
   set_id: string | null;
@@ -165,6 +224,7 @@ class AnswerLog {
     if (this.db) return this.db;
     mkdirSync(dirname(this.path), { recursive: true });
     this.db = new Database(this.path);
+    this.db.exec("PRAGMA busy_timeout = 5000"); // see services/jobs.ts — a held lock must wait, not throw
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(DDL);
     const cols = new Set(
@@ -173,6 +233,16 @@ class AnswerLog {
     for (const [name, type] of EXTRA_COLUMNS) {
       if (!cols.has(name)) this.db.exec(`ALTER TABLE answers ADD COLUMN ${name} ${type}`);
     }
+    // Classify the failures written before the column existed, once. The read
+    // paths fall back to failKindOf anyway; this makes plain SQL over the table
+    // agree with them.
+    try {
+      for (const row of this.db.query<{ id: number; fail_reason: string | null }, []>(
+        "SELECT id, fail_reason FROM answers WHERE text IS NULL AND fail_kind IS NULL"
+      ).all()) {
+        this.db.query("UPDATE answers SET fail_kind = ? WHERE id = ?").run(failKindOf(row.fail_reason), row.id);
+      }
+    } catch { /* classification is a convenience, never a boot blocker */ }
     return this.db;
   }
 
@@ -184,9 +254,9 @@ class AnswerLog {
           `INSERT INTO answers (ts, wrapper_hand_id, client_hand_id, street, board,
              hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
              strategy_mode, source, band_lo, band_hi, exploit_pick, chart_pick, exploit_tag,
-             mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, hero_pos,
-             depth, set_id, decision_json, line, solve_id, session_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, table_slot, hero_pos,
+             depth, set_id, decision_json, line, solve_id, session_id, fail_kind)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
@@ -196,9 +266,25 @@ class AnswerLog {
           row.exploitPick ?? null, row.chartPick ?? null, row.exploitTag ?? null,
           row.mesFamily ?? null, row.mesBoard ?? null, row.mesEvGainBb ?? null,
           row.mesExact == null ? null : row.mesExact ? 1 : 0,
-          row.bbCents ?? null, row.tableSeats ?? null, row.heroPos ?? null,
-          row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null
+          row.bbCents ?? null, row.tableSeats ?? null, row.tableSlot ?? null, row.heroPos ?? null,
+          row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null,
+          row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null
         );
+    } catch {
+      /* never propagate */
+    }
+  }
+
+  /**
+   * Give an unattributed failure its hand. The poller writes timeouts and
+   * client-down rows from a PROBE, which carries no hand id; once the hand is
+   * archived services/answerReconciler.ts knows which one it belonged to.
+   */
+  attach(id: number, clientHandId: string, sessionId: string | null, wrapperHandId: number | null): void {
+    try {
+      this.open()
+        .query("UPDATE answers SET client_hand_id = ?, session_id = COALESCE(session_id, ?), wrapper_hand_id = COALESCE(wrapper_hand_id, ?) WHERE id = ? AND client_hand_id IS NULL")
+        .run(clientHandId, sessionId, wrapperHandId, id);
     } catch {
       /* never propagate */
     }
@@ -294,6 +380,45 @@ class AnswerLog {
       }
     } catch {
       /* empty */
+    }
+    return out;
+  }
+
+  /**
+   * How many logged answers actually SAID each of these things.
+   *
+   * The register of known approximations (services/approximations.ts) names
+   * the phrase each one writes into an answer's warning; this turns that into
+   * a frequency. Matching is a plain case-insensitive substring on `warning`,
+   * because the warnings are composed prose — the needles are chosen to be
+   * distinctive ("OFF-TREE SIZE", "CALLER CAP"), not parsed.
+   *
+   * Only ANSWERED rows count: a warning on a row with no text is a failure
+   * that happened to carry a note, not an approximation we acted on.
+   */
+  countWarnings(needles: string[], days = 30): Record<string, { n: number; lastTs: number | null }> {
+    const out: Record<string, { n: number; lastTs: number | null }> = {};
+    for (const n of needles) out[n] = { n: 0, lastTs: null };
+    if (!needles.length) return out;
+    try {
+      const since = Date.now() - days * 86_400_000;
+      const rows = this.open()
+        .query<{ ts: number; warning: string | null }, [number]>(
+          "SELECT ts, warning FROM answers WHERE ts >= ? AND text IS NOT NULL AND warning IS NOT NULL AND warning <> ''"
+        )
+        .all(since);
+      const lowered = needles.map((x) => [x, x.toLowerCase()] as const);
+      for (const r of rows) {
+        const w = (r.warning ?? "").toLowerCase();
+        for (const [key, needle] of lowered) {
+          if (!w.includes(needle)) continue;
+          const o = out[key]!;
+          o.n++;
+          o.lastTs = Math.max(o.lastTs ?? 0, r.ts);
+        }
+      }
+    } catch {
+      /* the register degrades to "unmeasured", it never throws */
     }
     return out;
   }

@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { evaluate, loadLedger, expectedChartIds, DATA_DIR, MES_HANDOFF, LIMP, type EvaluatedConfig } from "./ledger";
+import { evaluate, loadLedger, expectedChartIds, isBoxGrid, BOX_GRID_KINDS, DATA_DIR, MES_HANDOFF, LIMP, type EvaluatedConfig } from "./ledger";
 import { runbookFor, hrcJobsFor, type Runbook } from "./runbook";
 import { getCatalog } from "./chartCatalog";
 import { jobs } from "./jobs";
+import { chartStates, runEstimate, type ChartState } from "./chartProgress";
 
 /**
  * PROPOSALS — the run at the level Brady reads: WHAT is being worked on,
@@ -15,7 +16,7 @@ import { jobs } from "./jobs";
  * its inputs.
  */
 
-export interface Work { n: number; what: string; how: string; minutes: number; status: "done" | "planned" | "blocked" | "running" | "queued" | "failed"; ref?: string; data?: any; live?: { job: number; lane: string; status: string; started: number | null; ended: number | null; phase: string } }
+export interface Work { n: number; what: string; how: string; minutes: number; status: "done" | "planned" | "blocked" | "running" | "queued" | "failed"; ref?: string; data?: any; /** charts of this line already done (per-chart count, for the totals) */ doneCharts?: number; live?: { job: number; lane: string; status: string; started: number | null; ended: number | null; phase: string } }
 export interface Part {
   title: string; input: string[]; how: string[]; work: Work[]; output: { name: string; items: string[] }; check: string[]; blocked: string[];
   numbers: { solves: number; done: number; wallMinutes: number; eur: number; text: string }; steps: string[];
@@ -70,6 +71,7 @@ export function proposals(): Proposal[] {
       const fmt = L.formats.find((f) => f.id === cfgs[0]?.format);
       const work: Work[] = [];
       const blocked: string[] = [];
+      const measured: { label: string; est: ReturnType<typeof runEstimate> }[] = [];
       let n = 1;
       for (const c of cfgs) {
         const lj = liveJob(c.id);
@@ -80,28 +82,43 @@ export function proposals(): Proposal[] {
           // hand-written lines (uneven-stack batches, the 4-handed pieces): status from the config
           let from = 0;
           const allIds = expectedChartIds(c, fmt);
+          const allStates: ChartState[] = allIds.length ? chartStates(c, allIds) : [];
+          const stateOf = new Map(allStates.map((x) => [x.id, x]));
           for (const w of c.work) {
-            // a batch of solves (uneven-stack states): its own chart ids, counted in the catalog
+            // a batch of solves (uneven-stack states, 6-max trees): its own chart ids — done in the catalog, solving on a box, queued
             const ids = w.solves ? allIds.slice(from, from + w.solves) : [];
-            const done = ids.filter((id) => catalogIds.has(id)).length;
-            const batchStatus = ids.length ? (done === ids.length ? "done" : c.effective === "blocked" ? "blocked" : live ?? "planned") : (c.effective === "done" ? "done" : c.effective === "blocked" ? "blocked" : live ?? "planned");
-            work.push({ n: n++, what: `${w.what}${ids.length && done && done < ids.length ? ` · ${done} of ${ids.length} done` : ""}`, how: w.how, minutes: w.minutes, ref: ids.length ? ids.join(" ") : (w.solves && w.solves > 1 ? Array(w.solves).fill("·").join(" ") : undefined), status: batchStatus,
-            data: c.kind === "preflop-grid-asym" ? { kind: "asym", config: c.id, from, to: from + (w.solves ?? 0) } : c.kind === "opponent-model" ? { kind: "pool", config: c.id, file: c.produces[0] ? join(LIMP, c.produces[0]) : undefined } : c.kind === "exploit-export" ? { kind: "exploit", config: c.id, file: c.produces[0] ? join(LIMP, c.produces[0]) : undefined } : { kind: "none", config: c.id } }); from += w.solves ?? 0; }
+            const st = ids.map((id) => stateOf.get(id)!).filter(Boolean);
+            const done = st.filter((x) => x.state === "done").length, solved = st.filter((x) => x.state === "solved").length, running = st.filter((x) => x.state === "running");
+            const short = (id: string) => id.replace(/^ign\d+_(6max|3max\w*|4max\w*)_/, "");
+            const progress = ids.length && done < ids.length && (done || solved || running.length)
+              ? ` · ${done} of ${ids.length} done${solved ? `, ${solved} solved on the boxes (pulling)` : ""}${running.length ? ` · solving now: ${running.map((r) => `${short(r.id)} on ${r.box}${r.sinceMin != null ? ` (${r.sinceMin} min)` : ""}`).join(", ")}` : ""}` : "";
+            const batchStatus = ids.length ? (done === ids.length ? "done" : c.effective === "blocked" ? "blocked" : running.length ? "running" : live ? "queued" : "planned") : (c.effective === "done" ? "done" : c.effective === "blocked" ? "blocked" : live ?? "planned");
+            work.push({ n: n++, what: `${w.what}${progress}`, how: w.how, minutes: w.minutes, ref: ids.length ? ids.join(" ") : (w.solves && w.solves > 1 ? Array(w.solves).fill("·").join(" ") : undefined), status: batchStatus, doneCharts: ids.length ? done : undefined,
+            data: c.kind === "preflop-grid-asym" ? { kind: "asym", config: c.id, from, to: from + (w.solves ?? 0) } : c.kind === "opponent-model" ? { kind: "pool", config: c.id, file: c.produces[0] ? join(LIMP, c.produces[0]) : undefined } : c.kind === "exploit-export" ? { kind: "exploit", config: c.id, file: c.produces[0] ? join(LIMP, c.produces[0]) : undefined } : ids.length ? { kind: "charts", config: c.id, ids } : { kind: "none", config: c.id },
+            ...(running.length ? { live: { job: liveJob(c.id)?.id ?? 0, lane: `hrc-box:${[...new Set(running.map((r) => r.box))].join("+")}`, status: "running", started: null, ended: null, phase: running.map((r) => `${r.box}: ${short(r.id)}${r.phase ? ` · ${r.phase}` : ""}${r.sinceMin != null ? ` · ${r.sinceMin} min` : ""}`).join(" · ").slice(0, 240) } } : {}) }); from += w.solves ?? 0; }
+          if (allIds.length && (isBoxGrid(c) || c.kind === "locked-root" || c.kind === "preflop-grid-asym")) measured.push({ label: c.label, est: runEstimate(c, allStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1)) });
           if (c.effective === "blocked" && c.blockedWhy) blocked.push(c.blockedWhy);
         } else if (c.kind === "preflop-grid" || c.kind === "locked-root") {
           const t = c.tree ? L.trees[c.tree] : null;
           if (!fmt || !t) continue;
           const H = hrcJobsFor(c, fmt, t);
           const rungs = (c.depths && c.depths.length) ? c.depths : fmt.depths;
+          // per chart: done in the catalog, solved on a box (pulling), solving now (which box, how long), queued
+          const hStates = chartStates(c, H.jobs.map((j) => j.id)); const hState = new Map(hStates.map((x) => [x.id, x]));
+          const shortId = (id: string) => id.replace(/^ign\d+_(6max|3max\w*|4max\w*)_/, "");
+          const liveFor = (ids: string[]) => { const r = ids.map((id) => hState.get(id)!).filter((x) => x && x.state === "running"); return r.length ? { job: liveJob(c.id)?.id ?? 0, lane: `hrc-box:${[...new Set(r.map((x) => x.box))].join("+")}`, status: "running", started: null, ended: null, phase: r.map((x) => `${x.box}: ${shortId(x.id)}${x.phase ? ` · ${x.phase}` : ""}${x.sinceMin != null ? ` · ${x.sinceMin} min` : ""}`).join(" · ").slice(0, 240) } : undefined; };
+          if (c.kind === "locked-root" || c.kind === "preflop-grid") measured.push({ label: c.label, est: runEstimate(c, hStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1)) });
           if (c.kind === "locked-root" && rungs.length > 1) {
             // many rungs: one line per rung, not one per lock
             const locksTxt = (c.locks ?? []).map((l) => (l.size === "limp" ? `${l.pos} limp` : `${l.pos} ${l.size}bb`)).join(", ");
             for (const D of rungs) {
               const ids = H.jobs.filter((j) => j.id.includes(`_D${String(D).replace(".", "_")}_`)).map((j) => j.id);
-              const done = ids.filter((id) => catalogIds.has(id)).length;
-              work.push({ n: n++, ref: ids.join(" "), minutes: c.cost.minPerJob * ids.length, data: { kind: "lockrung", config: c.id, depth: D, locks: c.locks ?? [] }, what: `the ${ids.length} continuation charts at ${D}bb (${locksTxt})${done ? ` · ${done} done` : ""}`,
+              const sts = ids.map((id) => hState.get(id)!).filter(Boolean);
+              const done = sts.filter((x) => x.state === "done").length, solved = sts.filter((x) => x.state === "solved").length, running = sts.filter((x) => x.state === "running");
+              const progress = done < ids.length && (done || solved || running.length) ? ` · ${done} of ${ids.length} done${solved ? `, ${solved} solved on the boxes (pulling)` : ""}${running.length ? ` · solving now: ${running.map((r) => `${shortId(r.id)} on ${r.box}${r.sinceMin != null ? ` (${r.sinceMin} min)` : ""}`).join(", ")}` : ""}` : done === ids.length && ids.length ? "" : "";
+              work.push({ n: n++, ref: ids.join(" "), minutes: c.cost.minPerJob * ids.length, doneCharts: done, data: { kind: "lockrung", config: c.id, depth: D, locks: c.locks ?? [] }, what: `the ${ids.length} continuation charts at ${D}bb (${locksTxt})${progress}`,
                 how: `HRC, each with the opener's root fixed to the pool's measured range, re-cut on the ${D}bb chart's ranking; everything below in equilibrium`,
-                status: ids.length && done === ids.length ? "done" : c.effective === "blocked" ? "blocked" : live ?? "planned" });
+                status: ids.length && done === ids.length ? "done" : c.effective === "blocked" ? "blocked" : running.length ? "running" : live ? "queued" : "planned", ...(liveFor(ids) ? { live: liveFor(ids) } : {}) });
             }
             if (c.effective === "blocked" && c.blockedWhy) blocked.push(c.blockedWhy);
             else if (c.effective === "blocked") blocked.push(`the ${c.cost.jobs} continuation charts wait on the same solver feature as the first run (the root lock)`);
@@ -113,7 +130,7 @@ export function proposals(): Proposal[] {
             work.push({ n: n++, ref: j.id, minutes: c.cost.minPerJob, data: { kind: "chart", config: c.id, id: j.id, seats: fmt.seats, lock: lk ?? null, poolFile: c.env?.POOL_MODEL },
               what: lk ? (limp ? `continuation chart: the ${lk.pos} limps with the pool's limping range — every node below solved (our iso-raise, the over-limp / check, the pool's answer, the rest)` : `continuation chart: ${lk.pos} opens ${lk.size}bb with the pool's range — every node below solved (our 3-bet, the call, the 4-bet, the jam)`) : `the equilibrium chart at ${j.stacks.split("/")[0]}bb${fmt.seats === 4 ? " (4-handed)" : ""} — every position, every size in the tree`,
               how: lk ? (limp ? `HRC, with the ${lk.pos}'s root fixed to the pool's measured limp (${lk.pos === "BTN" ? "4.2%" : "9.2%"} of hands, the best hands it does not open with); everything below in equilibrium` : `HRC, with the ${lk.pos}'s root fixed to the pool's measured opening range at ${lk.size}bb (one measured width — the size changes the pot and the tree below, not the range); everything below in equilibrium`) : "HRC solves the whole 3-handed game from the format alone — both players perfect, NL25 rake in the tree, no pool data",
-              status: catalogIds.has(j.id) ? "done" : c.effective === "blocked" ? "blocked" : live ?? "planned" });
+              status: catalogIds.has(j.id) ? "done" : c.effective === "blocked" ? "blocked" : hState.get(j.id)?.state === "running" ? "running" : live ?? "planned", ...(liveFor([j.id]) ? { live: liveFor([j.id]) } : {}) });
           }
           if (c.effective === "blocked" && c.blockedWhy) blocked.push(c.blockedWhy);
           else if (c.kind === "locked-root" && c.effective === "blocked") blocked.push(`the ${c.cost.jobs} continuation charts wait on a solver feature we still have to build (fixing the opponent's opening range at the root before solving); everything else in this run can go ahead without them`);
@@ -142,18 +159,22 @@ export function proposals(): Proposal[] {
           }
         }
       }
-      for (const w of work) { const cid = (w.data && (w.data.config as string)) || null; if (cid) { const l = liveOf(cid); if (l) w.live = l; } }
-      const solves = cfgs.reduce((s, c) => s + (["preflop-grid", "preflop-grid-asym", "preflop-grid-6max", "locked-root", "mes-lock", "acceptance"].includes(c.kind) ? c.cost.jobs : 0), 0);
-      const doneSolves = work.filter((w) => w.status === "done").reduce((s, w) => s + (w.ref && w.ref.includes(" ") ? w.ref.split(" ").length : 1), 0);
-      const wallMinutes = cfgs.reduce((s, c) => s + (c.effective === "done" ? 0 : c.estimate.wallMinutes), 0);
+      for (const w of work) { if (w.live || (w.ref && w.ref.includes("ign"))) continue; const cid = (w.data && (w.data.config as string)) || null; if (cid) { const l = liveOf(cid); if (l) w.live = l; } }
+      const solves = cfgs.reduce((s, c) => s + (["preflop-grid", "preflop-grid-asym", ...BOX_GRID_KINDS, "locked-root", "mes-lock", "acceptance"].includes(c.kind) ? c.cost.jobs : 0), 0);
+      // per chart, not per line: a line of six trees with two finished counts two
+      const doneSolves = work.reduce((s, w) => s + (w.doneCharts != null ? w.doneCharts : w.status === "done" ? (w.ref && w.ref.includes(" ") ? w.ref.split(" ").length : 1) : 0), 0);
+      // measured pace beats the ledger's guess once a chart of the run has finished
+      const measuredLeft = new Map(measured.filter((m) => m.est.leftMinutes != null).map((m) => [m.label, m.est.leftMinutes!]));
+      const wallMinutes = cfgs.reduce((s, c) => s + (c.effective === "done" ? 0 : measuredLeft.has(c.label) ? measuredLeft.get(c.label)! : c.estimate.wallMinutes), 0);
       const eurPart = Math.round(cfgs.reduce((s, c) => s + (c.effective === "done" ? 0 : c.estimate.eur), 0) * 100) / 100;
       // collated: "6 HRC solves × 75 min = 7.5 h + 15 min of calculation"
       const groups: string[] = [];
-      const hrcC = cfgs.filter((c) => c.runner === "hrc-zenbook" || c.runner === "hrc-box"); const hrcLanes = cfgs.some((c) => c.runner === "hrc-box") ? Number((L as any).machines?.["hrc-box"] ?? 2) : Number((L as any).machines?.["hrc-zenbook"] ?? 1);
+      const hrcC = cfgs.filter((c) => c.runner === "hrc-zenbook" || c.runner === "hrc-box"); const hrcLanes = Math.max(1, ...hrcC.map((c) => Number(c.lanes ?? (L as any).machines?.[c.runner] ?? 1)));
       if (hrcC.length) groups.push(`${hrcC.reduce((s, c) => s + c.cost.jobs, 0)} HRC solves × ${hrcC[0]!.cost.minPerJob} min = ${minsStr(hrcC.reduce((s, c) => s + c.cost.jobs * c.cost.minPerJob, 0))} of machine time, ${minsStr(hrcC.reduce((s, c) => s + c.estimate.wallMinutes, 0))} on ${hrcLanes} HRC machine${hrcLanes > 1 ? "s side by side" : ""}`);
       const fleetC = cfgs.filter((c) => c.runner === "fleet"); for (const c of fleetC) groups.push(`${c.cost.jobs} flops × ${c.cost.minPerJob} min = ${minsStr(c.cost.jobs * c.cost.minPerJob)} of solving, ${minsStr(c.estimate.wallMinutes)} on 4 boxes side by side, about €${c.estimate.eur}`);
       const calcC = cfgs.filter((c) => c.runner === "scripts"); if (calcC.length) groups.push(`${minsStr(calcC.reduce((s, c) => s + c.estimate.wallMinutes, 0))} of calculation`);
       const manC = cfgs.filter((c) => c.runner === "manual"); if (manC.length) groups.push(`${minsStr(manC.reduce((s, c) => s + c.estimate.wallMinutes, 0))} by hand`);
+      for (const m of measured) if (m.est.total - m.est.done - m.est.solved > 0 && (m.est.done || m.est.solved || m.est.running)) groups.push(`${m.label.split(" · ")[0]}: ${m.est.text}`);
       return {
         title: pp.title, input: pp.input ?? [], how: pp.how ?? [], work, output: pp.output ?? { name: "", items: [] }, check: pp.check ?? [], blocked, steps: pp.steps,
         numbers: { solves, done: doneSolves, wallMinutes, eur: eurPart, text: `${groups.join(" + ")} → about ${minsStr(wallMinutes)} for this part` },
@@ -204,7 +225,8 @@ export function runAll(id: string): { ok: boolean; error?: string; queued: { con
     if (c.effective === "blocked") { queued.push({ config: id, skipped: "blocked" }); continue; }
     if (c.runner === "manual") { queued.push({ config: id, skipped: "by hand — see the operator detail" }); continue; }
     if (P.activity.some((a) => a.config === id)) { queued.push({ config: id, skipped: "already queued" }); continue; }
-    const r = jobs.enqueue(id, { chain: true });
+    // a config may pin its own box fan-out (LedgerConfig.boxes) — the chain gate is kept either way
+    const r = jobs.enqueue(id, { chain: true, ...((c as { boxes?: string[] }).boxes?.length ? { boxes: (c as { boxes?: string[] }).boxes } : {}) });
     queued.push(r.ok ? { config: id, job: r.job.id } : { config: id, skipped: r.error });
   }
   return { ok: true, queued };

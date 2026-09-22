@@ -236,23 +236,38 @@ export const buildSearchFromTokens = (spec: {
  * services/gtowApi.ts). Preflop tokens are positional (6-max) or HU-ordered
  * when `hu` is set; postflop tokens are in action order. Only actions already
  * taken appear, so the resulting spot's active node is hero's pending decision.
+ *
+ * `seats` names WHO took each postflop token, parallel to flop/turn/river
+ * (2026-09-19). A token stream alone is positional — a walker assigns the
+ * first token to the first seat to act — so a capture that recorded the right
+ * actions in the wrong order shifts hero's node silently. Carrying the seat
+ * lets the walker check its rotation against the capture instead.
  */
 export const buildSpotSolutionTokens = (
   hand: ParsedHand,
   heroPos?: string | null,
   hu?: boolean
-): { preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string } => {
-  const streetToks = (street: Street): string[] =>
+): {
+  preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string;
+  seats: { flop: number[]; turn: number[]; river: number[] };
+} => {
+  const streetPairs = (street: Street): { tok: string; seat: number }[] =>
     hand.actions
       .filter((a) => a.street === street)
-      .map(actionToken)
-      .filter((t): t is string => t !== null);
+      .map((a) => ({ tok: actionToken(a), seat: a.seatId }))
+      .filter((p): p is { tok: string; seat: number } => p.tok !== null);
+  const flop = streetPairs("flop");
+  const turn = streetPairs("turn");
+  const river = streetPairs("river");
+  const toks = (ps: { tok: string }[]) => ps.map((p) => p.tok);
+  const seats = (ps: { seat: number }[]) => ps.map((p) => p.seat);
   return {
     preflop: hu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos),
-    flop: streetToks("flop"),
-    turn: streetToks("turn"),
-    river: streetToks("river"),
+    flop: toks(flop),
+    turn: toks(turn),
+    river: toks(river),
     board: hand.board.map(SHORT).join(""),
+    seats: { flop: seats(flop), turn: seats(turn), river: seats(river) },
   };
 };
 

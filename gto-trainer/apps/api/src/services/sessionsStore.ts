@@ -41,7 +41,8 @@ const rowOf = (r: any): DeclaredSession => ({
 
 function open(): Database | null {
   if (!existsSync(PATH)) return null;
-  try { return new Database(PATH, { readonly: true }); } catch { return null; }
+  // the wrapper writes this file while we read it — wait out a held lock rather than throwing
+  try { const d = new Database(PATH, { readonly: true }); d.exec("PRAGMA busy_timeout = 5000"); return d; } catch { return null; }
 }
 
 export const sessionsStore = {

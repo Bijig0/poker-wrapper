@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { chartFor, siteFor, snapRung, walk3max, type HrcNode } from "./hrc3max";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { chartFor, resetChartPins, siteFor, snapRung, walk3max, type HrcNode } from "./hrc3max";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -32,6 +32,9 @@ const hand3 = (over: Partial<ParsedHand> = {}): ParsedHand => ({
   ...over,
 });
 
+// every fixture shares handId 1 — a chart pinned by one test must not leak into the next
+beforeEach(() => resetChartPins());
+
 describe("siteFor", () => {
   test("$1/$2 → ign200, $2.50/$5 → ign500, unknown defaults to ign200", () => {
     expect(siteFor(200)).toBe("ign200");
@@ -55,6 +58,15 @@ describe("snapRung", () => {
 });
 
 describe("chartFor", () => {
+  // These assert the CANONICAL-STATE maths: which rung, which short seat, which site.
+  // Which GENERATION then answers is a separate layer (v2ciId swaps in the re-solved
+  // even chart at every rung listed in data/resolved-charts.json), and leaving it on
+  // made these tests depend on a data file — three of them went red the day the ign200
+  // re-solve landed, asserting an id the picker had stopped returning months earlier.
+  const resolvedWas = process.env.RESOLVED_OFF;
+  beforeAll(() => { process.env.RESOLVED_OFF = "1"; });
+  afterAll(() => { if (resolvedWas == null) delete process.env.RESOLVED_OFF; else process.env.RESOLVED_OFF = resolvedWas; });
+
   test("even stacks collapse to the _eq chart", () => {
     const c = chartFor(hand3(), "BTN");
     expect(c.id).toBe("ign200_3maxasym_D100_s100_eq");
@@ -143,6 +155,18 @@ const NODES: Record<string, HrcNode> = {
   },
   F: { pos: "SB", terminal: false, actions: [{ action: "Fold", token: "F" }], cells: [] },
   "R2.5-F-F": { pos: null, terminal: true, actions: [], cells: [] },
+  // hero's node after a 3-bet — the shape of the real 2026-09-21 miss (AA in
+  // the CO facing a 21bb 3-bet with only 12.5 in the tree)
+  "R2.5-R9": {
+    pos: "BTN",
+    terminal: false,
+    actions: [
+      { action: "Fold", token: "F" },
+      { action: "Call", token: "C" },
+      { action: "All-in", token: "R100" },
+    ],
+    cells: [{ hand: "AA", actions: { Fold: 0, Call: 11, "All-in": 89 } }],
+  },
   R100: {
     pos: "SB",
     terminal: false,
@@ -168,7 +192,7 @@ describe("walk3max", () => {
     expect(w.ok).toBe(true);
     if (w.ok) {
       expect(w.tokens).toEqual(["R2.5", "F"]);
-      expect(w.repaired).toEqual([{ index: 0, from: "R2.3", to: "R2.5" }]);
+      expect(w.repaired).toEqual([{ index: 0, from: "R2.3", to: "R2.5", logDist: expect.closeTo(0.083, 3), far: false }]);
     }
   });
 
@@ -177,7 +201,7 @@ describe("walk3max", () => {
     expect(w.ok).toBe(true);
     if (w.ok) {
       expect(w.tokens).toEqual(["R100"]);
-      expect(w.repaired).toEqual([{ index: 0, from: "RAI", to: "R100" }]);
+      expect(w.repaired).toEqual([{ index: 0, from: "RAI", to: "R100", logDist: 0, far: false }]);
     }
   });
 
@@ -193,10 +217,159 @@ describe("walk3max", () => {
     if (!w.ok) expect(w.unreachable).toBe(true);
   });
 
-  test("far off-tree size refuses to snap", async () => {
-    // 30bb open vs offered 2.5/100: log-dist to both > τ
+  // 2026-09-21: this used to REFUSE, and the spot went unanswered — AA in the
+  // CO facing a 21bb 3-bet with 12.5 the nearest tree size (log-dist 0.52),
+  // while the tree's own node said All-in 88.9% / Call 11.1%. Past τ a snap is
+  // no longer clean, but it still beats no answer; the answer says so and the
+  // miss queue files the size.
+  test("a size past τ but under 2x snaps anyway, flagged far", async () => {
+    const w = await walk3max(["R2.5", "R15"], stub);   // 15 vs the node's 9 — log-dist 0.51
+    expect(w.ok).toBe(true);
+    if (w.ok) {
+      expect(w.tokens).toEqual(["R2.5", "R9"]);
+      expect(w.repaired).toEqual([{ index: 1, from: "R15", to: "R9", logDist: expect.closeTo(0.511, 3), far: true }]);
+      expect(w.node.cells.find((c) => c.hand === "AA")?.actions["All-in"]).toBe(89);
+    }
+  });
+
+  test("a size more than 2x from the nearest still refuses", async () => {
+    // 30bb open vs offered 2.5/100: nearest is 2.5x away — past the point
+    // where the snapped node still resembles the spot
     const w = await walk3max(["R30"], stub);
     expect(w.ok).toBe(false);
-    if (!w.ok) expect(w.reason).toContain("too far");
+    if (!w.ok) expect(w.reason).toContain("more than 2x away");
+  });
+});
+
+describe("chartFor — one chart per hand (hand 4917810302, 2026-09-12)", () => {
+  // BTN 74bb (hero), SB 103bb, BB 146bb at the deal: deep pair snaps to 105,
+  // BTN short at 75.
+  const dealt = () => hand3({
+    clientHandId: "4917810302",
+    positions: { 1: "BB", 2: "BTN", 3: "SB" },
+    heroSeatId: 2,
+    stacks: { 1: 145, 2: 73.5, 3: 102.6 },
+    committed: { 1: 1, 2: 0.5, 3: 0 },   // blinds posted: dealt stacks are behind + in the pot
+  });
+
+  test("the first full reading is pinned and reused for the rest of the hand", () => {
+    resetChartPins();
+    const first = chartFor(dealt(), "BTN");
+    expect(first.depth).toBe(105);
+    expect(first.shortDepth).toBe(75);
+    expect(first.shortSeat).toBe("BTN");
+    // facing the jam: hero 48 behind + 26 in, SB 0 behind + 101.8 in, BB folded with 1 in
+    const later = chartFor(hand3({
+      clientHandId: "4917810302", positions: { 1: "BB", 2: "BTN", 3: "SB" }, heroSeatId: 2,
+      stacks: { 1: 142.2, 2: 48, 3: 0 }, committed: { 1: 1, 2: 26, 3: 101.8 },
+    }), "BTN");
+    expect(later.id).toBe(first.id);
+    expect(later.depth).toBe(105);
+    expect(later.note).toBe(first.note);
+  });
+
+  test("an all-in villain (0 behind) is a known stack, not an unreadable seat", () => {
+    resetChartPins();
+    const jam = hand3({
+      clientHandId: "unpinned-jam", positions: { 1: "BB", 2: "BTN", 3: "SB" }, heroSeatId: 2,
+      stacks: { 1: 142.2, 2: 48, 3: 0 }, committed: { 1: 1, 2: 26, 3: 101.8 },
+    });
+    const c = chartFor(jam, "BTN");
+    expect(c.note ?? "").not.toContain("unreadable");
+    // dealt stacks: BTN 74, SB 101.8, BB 143.2 → short BTN 75, deep pair 100
+    expect(c.shortSeat).toBe("BTN");
+    expect(c.shortDepth).toBe(75);
+    expect(c.depth).toBe(100);
+  });
+
+  test("a guessed chart (missing seat) is never pinned — the next full reading wins", () => {
+    resetChartPins();
+    const partial = hand3({ clientHandId: "partial-1", stacks: { 1: 75 } });
+    expect(chartFor(partial, "BTN").note).toContain("unreadable");
+    const full = hand3({ clientHandId: "partial-1", stacks: { 1: 100, 2: 40, 3: 100 } });
+    expect(chartFor(full, "BTN").shortSeat).toBe("SB");
+  });
+
+  test("hands are keyed by the site's hand id, so two hands never share a pin", () => {
+    resetChartPins();
+    const a = chartFor(hand3({ clientHandId: "A", stacks: { 1: 100, 2: 100, 3: 100 } }), "BTN");
+    const b = chartFor(hand3({ clientHandId: "B", stacks: { 1: 100, 2: 40, 3: 100 } }), "BTN");
+    expect(a.shortSeat).toBe("EQ");
+    expect(b.shortSeat).toBe("SB");
+  });
+});
+
+// ---- NL25 routing (ledger cutover-nl25, 2026-09-14) -------------------------
+// The stake we actually play has its own grid, solved at the NL25 rake (5% /
+// cap 4bb). Before this the router could only name ign200/ign500, so every NL25
+// answer came from the 1bb-cap grid.
+describe("siteFor / snapRung at NL25", () => {
+  test("routes the NL25 Zone stake to its own rake set", () => {
+    expect(siteFor(25)).toBe("ign25");
+    expect(siteFor(10)).toBe("ign25");
+    expect(siteFor(50)).toBe("ign200");    // NL50 stays on ign200 until verified
+    expect(siteFor(200)).toBe("ign200");
+  });
+  test("keeps the two deeper rungs the NL25 grid solved", () => {
+    expect(snapRung(200, "ign25")).toBe(200);
+    expect(snapRung(170, "ign25")).toBe(175);
+    expect(snapRung(200, "ign200")).toBe(150);   // the NL200 ladder still tops out at 150
+  });
+});
+
+describe("chartFor at NL25", () => {
+  test("names an ign25 chart, in the one generation that set has", () => {
+    const c = chartFor(hand3({ bbCents: 25 }), "BTN");
+    expect(c.site).toBe("ign25");
+    expect(c.id).toBe("ign25_3maxasym2ci_D100_s100_eq");
+  });
+  test("uses the real uneven chart when that state was solved", () => {
+    const c = chartFor(hand3({ bbCents: 25, stacks: { 1: 30, 2: 100, 3: 100 } }), "BTN");
+    expect(c.id).toBe("ign25_3maxasym2ci_D100_s30_btn");
+    expect(c.shortSeat).toBe("BTN");
+  });
+  test("falls back to the even chart when the uneven state was never solved", () => {
+    // the uneven grid is traffic-ranked: s25 was never solved at D100
+    const c = chartFor(hand3({ bbCents: 25, stacks: { 1: 100, 2: 100, 3: 25 } }), "BTN");
+    expect(c.id).toBe("ign25_3maxasym2ci_D100_s100_eq");
+    expect(c.note).toContain("asymmetry approximated");
+  });
+});
+
+// BORROW AT THE WALK (2026-09-22). A villain's third limp is past the tree's flats cap, so the node at
+// "C-C" offers no C. With borrowCaller the walk folds the EARLIEST other limper and reads the same seat's
+// call one limper fewer — accepted only when that donor node is the same seat and offers the call.
+describe("walk3max borrowCaller", () => {
+  const n = (pos: string, toks: string[], terminal = false) =>
+    ({ pos, terminal, actions: toks.map((t) => ({ action: t, token: t })), cells: [] });
+  const TREE: Record<string, any> = {
+    "": n("UTG", ["F", "C", "R2.5"]),
+    "C": n("HJ", ["F", "C", "R2.5"]),
+    "C-C": n("CO", ["F", "R2.5"]),          // the third limp is not in the tree
+    "F": n("HJ", ["F", "C", "R2.5"]),
+    "F-C": n("CO", ["F", "C", "R2.5"]),     // the donor: same seat, one limper fewer, offers C
+    "F-C-C": n("BTN", ["F", "C", "R2.5"]),  // hero's node
+  };
+  const get = async (l: string) => TREE[l] ?? null;
+
+  test("without the option a third limp still ends the walk", async () => {
+    const w = await walk3max(["C", "C", "C"], get);
+    expect(w.ok).toBe(false);
+  });
+
+  test("with it, the earliest limp is folded and the walk reaches hero", async () => {
+    const w = await walk3max(["C", "C", "C"], get, { borrowCaller: true });
+    expect(w.ok).toBe(true);
+    if (w.ok) {
+      expect(w.tokens).toEqual(["F", "C", "C"]);
+      expect(w.node.pos).toBe("BTN");
+      expect(w.repaired).toEqual([{ index: 0, from: "C", to: "F", logDist: 0, far: false, borrowed: "UTG" }]);
+    }
+  });
+
+  test("a donor node that belongs to another seat is refused, not read", async () => {
+    const bad: Record<string, any> = { ...TREE, "F-C": n("BTN", ["F", "C"]) };
+    const w = await walk3max(["C", "C", "C"], async (l) => bad[l] ?? null, { borrowCaller: true });
+    expect(w.ok).toBe(false);
   });
 });

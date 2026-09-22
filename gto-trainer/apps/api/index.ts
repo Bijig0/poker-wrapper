@@ -1,3 +1,5 @@
+import nodeFs from "node:fs";
+import nodePath from "node:path";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
@@ -6,6 +8,7 @@ import gtowRoutes from "./src/routes/gtow";
 import ingestRoutes from "./src/routes/ingest";
 import analysisRoutes from "./src/routes/analysis";
 import studyPollerRoutes from "./src/routes/studyPoller";
+import buildRoutes from "./src/routes/build";
 import preflopDbRoutes from "./src/routes/preflopDb";
 import gtowApiRoutes from "./src/routes/gtowApi";
 import feedSpotRoutes from "./src/routes/feedSpot";
@@ -18,10 +21,12 @@ import missQueueRoutes from "./src/routes/missQueue";
 import ledgerRoutes from "./src/routes/ledger";
 import { jobs } from "./src/services/jobs";
 import { boxKeeper } from "./src/services/boxKeeper";
+import { answerReconciler } from "./src/services/answerReconciler";
 import replayRoutes from "./src/routes/replay";
 import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
 import { gtowApi } from "./src/services/gtowApi";
+import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
 
 const app = new Hono();
 
@@ -35,6 +40,7 @@ app.route("/api/gtow", gtowRoutes);
 app.route("/api/ingest", ingestRoutes);
 app.route("/api/analysis", analysisRoutes);
 app.route("/api/study-poller", studyPollerRoutes);
+app.route("/api/build", buildRoutes);
 app.route("/api/preflop-db", preflopDbRoutes);
 app.route("/api/gtow-api", gtowApiRoutes);
 app.route("/api/feed-spot", feedSpotRoutes);
@@ -63,7 +69,13 @@ const dashboardPage = () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
-for (const p of ["/", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/review", "/playthrough", "/playthrough/*", "/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*"]) {
+// The dashboard's stylesheet lives beside the page (dashboard.css) so it can be
+// read and edited as one file; served uncached, like the page, so an edit is live.
+app.get("/dashboard.css", () =>
+  new Response(Bun.file(`${import.meta.dir}/dashboard.css`), {
+    headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" },
+  }));
+for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*", "/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*", "/tasks", "/tasks/*"]) {
   app.get(p, dashboardPage);
 }
 // Old bookmarks and links still land on the dashboard.
@@ -105,24 +117,79 @@ const port = process.env.PORT || 2000;
 
 console.log(`🃏 Poker GTO Bot API starting on port ${port}...`);
 
-// Always running, self-gating on assistive-play's own "Study Answers" toggle
-// (see services/studyPoller.ts) — that toggle is the single control; no
-// separate start step needed for normal use.
 // DASHBOARD_ONLY=1 (the cloud deployment): no poker client, no GTO Wizard, no study wrapper on the
 // box — the poller and the token keeper would only log connection errors every few seconds.
+// Bun exits the process on an unhandled promise rejection, and a background tick that rejects (a box going
+// unreachable mid-await, an scp/rclone spawn failing) would take the whole API down with exit 1 and no log line —
+// 91 silent worker deaths on 2026-09-13/14, each one killing every box relay. Log it and keep serving instead.
+// WHY DID IT DIE (2026-09-14). The handlers below print to api.log, but a run of silent exit-1 deaths every
+// 5-18 min left nothing there at all: stdout through cmd.exe's `>>` is buffered, so anything console.error
+// writes in the last moments is lost with the process. This log is appendFileSync - it reaches disk before the
+// next statement runs - and it records the one fact that splits the two possible stories: if `exit` fires we
+// died from inside (with the stack of whoever called it), and if the log simply stops at a heartbeat then
+// something outside killed the process, which is a different hunt entirely.
+const deathLog = nodePath.join(import.meta.dir, "data", "jobs", "exit_reason.log");
+const say = (m: string) => {
+  try {
+    // a heartbeat every 20 s is 15 KB an hour: keep the last few days, never let a diagnostic fill the disk
+    try { if (nodeFs.statSync(deathLog).size > 4_000_000) nodeFs.writeFileSync(deathLog, ""); } catch { /* no file yet */ }
+    nodeFs.appendFileSync(deathLog, `[${new Date().toISOString()}] pid ${process.pid} ${m}\n`);
+  } catch { /* never let the recorder be the crash */ }
+};
+say("boot");
+process.on("unhandledRejection", (reason) => {
+  const m = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  say(`unhandledRejection ${m.slice(0, 800)}`);
+  console.error(`[unhandledRejection] ${m}`);
+});
+process.on("uncaughtException", (err) => {
+  say(`uncaughtException ${(err?.stack ?? String(err)).slice(0, 800)}`);
+  console.error(`[uncaughtException] ${err?.stack ?? String(err)}`);
+});
+process.on("exit", (code) => say(`exit ${code} - from ${(new Error("exit").stack ?? "").split(String.fromCharCode(10)).slice(1, 6).join(" | ")}`));
+process.on("beforeExit", (code) => say(`beforeExit ${code} (event loop empty)`));
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP", "SIGBREAK"] as const) {
+  try { process.on(sig as any, () => { say(`signal ${sig}`); process.exit(0); }); } catch { /* not on this platform */ }
+}
+// A heartbeat, so a log that stops without an `exit` line dates the kill to within 20 s and carries the memory
+// trace next to it - an OOM climbs, an external kill does not.
+setInterval(() => {
+  const mb = (n: number) => Math.round(n / 1048576);
+  const m = process.memoryUsage();
+  say(`alive rss ${mb(m.rss)}MB heap ${mb(m.heapUsed)}/${mb(m.heapTotal)}MB ext ${mb(m.external)}MB`);
+}, 20_000);
+
 const dashboardOnly = process.env.DASHBOARD_ONLY === "1";
 if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token keeper are off");
-if (!dashboardOnly) studyPoller.start();
 
-// Keep a live GTOW access token on hand at all times: the CDP sniff costs
-// 4-8s, and paying it inline made whichever solve hit the ~15-min expiry miss
-// the decision window entirely.
-if (!dashboardOnly) gtowApi.startTokenKeeper();
+// One owner for the background work. A second API process is allowed to serve HTTP (that is what
+// `dev-api.cmd --watch` is for) but must not run a second poller / dispatcher / keeper: see
+// services/backgroundLock.ts for what two of each actually broke on 2026-09-13.
+// The services also self-guard, so a route that starts the poller on a demoted instance is refused.
+startBackgroundLock();
+onBackgroundOwnership(() => {
+  // Always running, self-gating on assistive-play's own "Study Answers" toggle
+  // (see services/studyPoller.ts) — that toggle is the single control; no
+  // separate start step needed for normal use.
+  if (!dashboardOnly) studyPoller.start();
 
-// The ledger's job runner: one job per lane at a time, logs under data/jobs/.
+  // Keep a live GTOW access token on hand at all times: the CDP sniff costs
+  // 4-8s, and paying it inline made whichever solve hit the ~15-min expiry miss
+  // the decision window entirely.
+  if (!dashboardOnly) gtowApi.startTokenKeeper();
+
+  // The box keeper: keeps the HRC boxes solving on their own (relaunch HRC, restart a hung one, re-queue a failed shard).
+  if (!dashboardOnly) boxKeeper.start();
+
+  // Settles WHY a decision got no answer once its hand is archived: attaches the
+  // failures the poller could not pin to a hand, and writes a no-probe row for a
+  // decision nobody ever asked about (services/answerReconciler.ts).
+  if (!dashboardOnly) answerReconciler.start();
+});
+
+// The ledger's job runner: one job per lane at a time, logs under data/jobs/. The timer always runs
+// (the routes read job rows through it); its dispatch tick is what the lock gates.
 jobs.start();
-// The box keeper: keeps the HRC boxes solving on their own (relaunch HRC, restart a hung one, re-queue a failed shard).
-if (!dashboardOnly) boxKeeper.start();
 
 export default {
   port,

@@ -2,7 +2,9 @@ import { DEFAULT_LIVE_URL } from "../routes/ingest";
 import { buildAnswerText, type AnswerAction } from "../feed/buildAnswerText/buildAnswerText";
 import { gtowCdp } from "./gtowCdp";
 import { gtowApi } from "./gtowApi";
-import { answerLog } from "./answerLog";
+import { answerLog, type FailKind } from "./answerLog";
+import { isBackgroundOwner } from "./backgroundLock";
+import { checkAnswerIntegrity } from "./answerIntegrity";
 
 /**
  * Backend poller: reads assistive-play's live hand via gto-trainer's own
@@ -52,17 +54,31 @@ export interface StudyPollerStatus {
   tokenReady: boolean;
   /** Result of the readiness probe fired when Study Answers came on. */
   startupProbe: { at: number; ok: boolean; ms: number; error: string | null } | null;
+  /** Answers this process served that disagreed with their own mix — a bug
+   *  counter that should read 0 (see services/answerIntegrity.ts). */
+  integrityFaults: number;
+  lastIntegrityFault: { at: number; kind: string; detail: string } | null;
 }
 
 interface IngestLikeResponse {
   ok?: boolean;
-  hero?: { toAct?: boolean; cards?: string[] };
+  /** HTTP status of the /api/ingest reply, stamped on by fetchIngest — the only
+   *  way to tell a FAILED ingest from an idle one (both are ok:false). */
+  httpStatus?: number;
+  /** routes/ingest.ts's failure text on any ok:false reply. */
+  error?: string;
+  hero?: { toAct?: boolean; cards?: string[];
+           /** wrapper state provenance (2026-09-19): the client's turn buttons are on
+            *  screen, and why the export nevertheless says it is not hero's turn */
+           buttonsUp?: boolean | null; notToActWhy?: string | null; status?: string | null };
   hand?: { street?: string; board?: string[]; actions?: unknown[]; node?: { toCall?: number } };
   // assistive-play's own local "Study Answers" toggle, forwarded by /api/ingest
   // for the live source — the single gate: this poller runs continuously, but
   // only actually pushes an answer while the panel's own switch is on.
   studyAnswersOn?: boolean | null;
-  studyMode?: "exploit" | "chart" | null;
+  /** the session's declared strategy (services/strategies.ts id) — what decides
+   *  which preflop piece answers, forwarded by /api/ingest from the wrapper */
+  strategyId?: string | null;
   navigation?: {
     ok?: boolean;
     /** True when the failure is the SPOT being off-tree/unsolvable — a fact
@@ -99,9 +115,14 @@ interface FastSolveLikeResponse {
     /** Wrapper-exported stake/seating facts, persisted with each answer. */
     bbCents?: number | null;
     liveSeats?: number[];
+    /** which betting line the wrapper exported and whether it can be trusted */
+    lineSource?: string | null;
+    lineUncertain?: string | null;
+    lineNote?: string | null;
   };
   studyAnswersOn?: boolean | null;
-  studyMode?: "exploit" | "chart" | null;
+  /** the session's declared strategy — what actually decides the preflop piece */
+  strategyId?: string | null;
   sessionId?: string | null;
   solution?:
     | {
@@ -199,17 +220,26 @@ class StudyPoller {
     distinctFailureStreak: 0,
     tokenReady: false,
     startupProbe: null,
+    integrityFaults: 0,
+    lastIntegrityFault: null,
   };
   private lastLaunchAttempt = 0;
   private readonly LAUNCH_COOLDOWN_MS = 30_000;
+  /** How many DIFFERENT decisions may fail in the solve chain, back to back,
+   *  before we stop believing the client is healthy and force a relaunch.
+   *  Three is deliberately conservative: it is already three lost spots, and a
+   *  forced relaunch quits GTO Wizard out from under a live session. */
+  private readonly WEDGE_STREAK = 3;
   /** Study Answers was on as of the last tick — the false→true edge is what we
    *  treat as "the panel just opened". */
   private studyWasOn = false;
   /** The rig's MES/GTO tab as of the last probe — passed to the solver. */
-  private lastStudyMode: "exploit" | "chart" | null = null;
+
+  private lastStrategyId: string | null = null;
   /** The wrapper's current MES/GTO toggle as last probed (Sources registry). */
-  get studyMode(): "exploit" | "chart" | null {
-    return this.lastStudyMode;
+  /** the strategy the live session declared — what decides the preflop piece */
+  get strategyId(): string | null {
+    return this.lastStrategyId;
   }
   private probing = false;
   private readonly PROBE_COOLDOWN_MS = 5 * 60_000;
@@ -229,16 +259,53 @@ class StudyPoller {
   // real wedge signal.
   private lastFailedKey: string | null = null;
   private readonly WEDGE_THRESHOLD = 3;
+  /**
+   * A DECISION THAT KEEPS FAILING THE SAME WAY (2026-09-19, Brady). Hand 4919236052 asked
+   * the same unanswerable question 13 times at ~1 s apart and got the same sentence back
+   * every time — burning the clock and the solve budget on a question whose answer could
+   * not change, while the panel showed nothing but a blank card. Re-asking is only worth
+   * anything when something has CHANGED: the reader recovering (reconcile._revive), a
+   * villain acting, a card landing. So the same (decision, reason) is asked
+   * REPEAT_FAIL_LIMIT times and then rested — and the panel is told why, instead of
+   * watching an invisible retry loop. Any change in the key or the reason re-arms it
+   * immediately, because that is new information.
+   */
+  private repeatFail: { key: string; reason: string; n: number } | null = null;
+  private readonly REPEAT_FAIL_LIMIT = 3;
 
   start(config: StudyPollerConfig = {}): StudyPollerStatus {
-    if (this.timer) clearInterval(this.timer);
-    this.config = {
+    // Two pollers answer the same decision twice, and because rollAction() samples the mix with
+    // Math.random() they can roll DIFFERENT actions and both POST to /panel/answer — the panel
+    // keeps whichever landed last, so the pick the relay executes becomes a coin flip between two
+    // independent rolls (and answers.sqlite gets two rows per decision). Only the background-lock
+    // owner polls. The guard is here, not only at boot, because the wrapper's "Study Answers"
+    // toggle calls start() through routes/studyPoller.ts — and with reusePort every request lands
+    // on whichever instance the OS picked, demoted or not.
+    if (!isBackgroundOwner()) {
+      this.status.running = false;
+      this.status.lastError = "another API process owns the background work (data/background.lock) — this instance serves HTTP only and will not poll";
+      return this.getStatus();
+    }
+    const next = {
       assistiveUrl: config.assistiveUrl ?? DEFAULT_LIVE_URL,
       selfBaseUrl: config.selfBaseUrl ?? DEFAULT_SELF_BASE_URL,
       intervalMs: config.intervalMs ?? DEFAULT_INTERVAL_MS,
       setId: config.setId,
       depth: config.depth,
     };
+    // SAME TARGET, ALREADY RUNNING = NOTHING TO DO (2026-09-19). The wrapper's chain keeper calls
+    // start() every 20 s for as long as a session has answers on, and every call below wipes the
+    // in-flight guard (nav) and the probe key — so a solve still running for hero's spot was
+    // forgotten and the very next tick started a second one for the same key (session 010011:
+    // river rows 1028/1029, 14.8 s + 6.8 s, two rolls, two solve ids for one decision). Only a
+    // real re-point (a different wrapper URL / set / depth) or a stopped poller goes through.
+    if (this.timer && this.status.running
+        && this.config.assistiveUrl === next.assistiveUrl && this.config.selfBaseUrl === next.selfBaseUrl
+        && this.config.intervalMs === next.intervalMs && this.config.setId === next.setId && this.config.depth === next.depth) {
+      return this.getStatus();
+    }
+    if (this.timer) clearInterval(this.timer);
+    this.config = next;
     this.status.running = true;
     this.status.lastError = null;
     // start() re-points a RUNNING poller at a different wrapper (the panel
@@ -249,10 +316,12 @@ class StudyPoller {
     // holds the single-flight guard against a spot it was never for.
     this.lastSolvedKey = null;
     this.lastFailedKey = null;
+    this.repeatFail = null;
     this.lastProbeKey = null;
     this.nav = null;
     void this.tick();
-    this.timer = setInterval(() => void this.tick(), this.config.intervalMs);
+    // a rejected tick must not become an unhandled rejection: see services/jobs.ts start()
+    this.timer = setInterval(() => { this.tick().catch((e) => console.error(`[studyPoller] tick failed (retrying next tick): ${(e as Error)?.stack ?? String(e)}`)); }, this.config.intervalMs);
     return this.getStatus();
   }
 
@@ -276,6 +345,9 @@ class StudyPoller {
   }
 
   private async tick(): Promise<void> {
+    // Ownership can be lost after start() — the lock's heartbeat found another process had taken it
+    // over. Stop answering immediately rather than keep a second poller alive on a stale claim.
+    if (!isBackgroundOwner()) { void this.stop(); return; }
     if (this.inFlight) return;
     this.inFlight = true;
     this.status.lastTickAt = Date.now();
@@ -287,15 +359,55 @@ class StudyPoller {
       const probe = await this.fetchIngest(false);
       if (!probe) return; // error already recorded, null already pushed
 
-      // an MES/GTO tab flip is a NEW question about the same spot — drop the
-      // solved-key so the next tick re-answers instead of re-pushing the cache
-      if ((probe.studyMode ?? null) !== this.lastStudyMode) this.lastSolvedKey = null;
-      this.lastStudyMode = probe.studyMode ?? null;
+      // A different DECLARED STRATEGY is a new question about the same spot — drop
+      // the solved-key so the next tick re-answers instead of re-pushing the cache.
+      // (This keyed off the panel's MES/GTO tab until 2026-09-14; there is no such
+      // tab any more — the strategy names its preflop piece, see services/strategies.ts.)
+      if ((probe.strategyId ?? null) !== this.lastStrategyId) this.lastSolvedKey = null;
+      this.lastStrategyId = probe.strategyId ?? null;
+
+      // A FAILED ingest is not an idle table. A 502/400 body carries no
+      // studyAnswersOn, so until 2026-09-21 it fell into the toggle-off branch
+      // below — which reports healthy AND sets lastError = null, actively
+      // erasing the evidence. That is how a dead assistive-play server ran
+      // unnoticed for ~14h behind a poller whose status page read "running,
+      // no error". 409 (wrapper up, no table) and 422 (no hand in the feed)
+      // are the genuinely idle ok:false replies and still fall through.
+      if (probe.httpStatus != null && ![200, 409, 422].includes(probe.httpStatus)) {
+        this.lastSolvedKey = null;
+        // push() BEFORE recording the reason, not after: clearing the panel posts to
+        // that same wrapper, so when the wrapper is the thing that died the push
+        // fails too and its catch overwrites lastError with the vaguer "Unable to
+        // connect. Is the computer able to access the url?" — which names no URL and
+        // reads like a GTO Wizard fault. The ingest reason is the diagnostic one, so
+        // it gets the last word.
+        await this.push(null);
+        this.status.lastError = probe.error ?? `Ingest failed (HTTP ${probe.httpStatus}).`;
+        return;
+      }
+
       if (probe.studyAnswersOn !== true) {
         this.studyWasOn = false; // switching it back on re-arms the readiness probe
         this.status.lastError = null;
         await this.push(null);
         return;
+      }
+      // NEVER SILENT (2026-09-19) — a state-reading fact, checked BEFORE the GTO Wizard gate
+      // because it has nothing to do with the solver. This used to be the one place a lost
+      // decision left no trace: hero's buttons up, the export saying "not hero's turn", nothing
+      // asked, nothing logged (hand 4919080696: a villain's SITTING OUT label read as hero's,
+      // 19 s on the clock). The wrapper now says whether the buttons are up and why it still
+      // says no; when that holds for 2 s it is written as a failure row and shown on the panel,
+      // once per spot.
+      if (probe.ok === true && probe.hero?.buttonsUp === true && probe.hero?.toAct !== true && probe.hand?.street != null) {
+        const k = `${probe.hand.street}|${(probe.hand.actions ?? []).length}|${(probe.hero.cards ?? []).join("")}`;
+        if (this.buttonsUpSince?.key !== k) this.buttonsUpSince = { key: k, at: Date.now() };
+        else if (Date.now() - this.buttonsUpSince.at >= 2000) {
+          this.logNoAnswer(decisionKey(probe), probe, "not-to-act-live",
+            `your buttons are up but the state says not your turn: ${probe.hero.notToActWhy ?? "no reason given"}`, null);
+        }
+      } else {
+        this.buttonsUpSince = null;
       }
 
       // Study Answers is on — make sure GTO Wizard is actually up. Launching
@@ -304,6 +416,11 @@ class StudyPoller {
       // one attempt is already in flight or just failed.
       this.status.gtoWizardConnected = await gtowCdp.isConnected();
       if (!this.status.gtoWizardConnected) {
+        // Hero on the clock with no client to solve with: a decision is being
+        // lost right now, and until 2026-09-14 only an in-memory flag said so.
+        if (probe.ok === true && probe.hero?.toAct === true && probe.hand?.street != null) {
+          this.logNoAnswer(decisionKey(probe), probe, "gtow-down", "GTO Wizard was not connected while hero was on the clock", null);
+        }
         this.ensureGtoWizardLaunching();
         this.status.lastError = null;
         // Blanking the answer means the spot is unsolved again, so forget
@@ -329,6 +446,7 @@ class StudyPoller {
       this.status.lastError = null;
       if (!eligible) {
         this.lastSolvedKey = null; // stale — a future recurrence must re-navigate fresh
+        // (the buttons-up-but-not-to-act case was recorded above, before the GTO Wizard gate)
         await this.push(null);
         return;
       }
@@ -363,7 +481,7 @@ class StudyPoller {
       // current spot's solve on the next tick.
       if (this.nav) return;
       this.nav = { key };
-      void this.solveSpot(key).finally(() => {
+      void this.solveSpot(key, probe).finally(() => {
         this.nav = null;
       });
     } finally {
@@ -377,11 +495,36 @@ class StudyPoller {
    *  far-snap AI escape for off-tree sizes) — seconds, not tens of seconds,
    *  which is the difference between useful and useless on a Zone table.
    *  A verdict for a spot hero has already left is dropped. */
-  private async solveSpot(key: string): Promise<void> {
+  private async solveSpot(key: string, probe: IngestLikeResponse): Promise<void> {
+    // rested: this exact decision has failed the same way REPEAT_FAIL_LIMIT times, and
+    // nothing about it has changed since. Asking again costs a solve and answers nothing.
+    const rf = this.repeatFail;
+    if (rf && rf.key === key && rf.n >= this.REPEAT_FAIL_LIMIT) {
+      // keep SAYING it, at no solve cost: the panel's answer is freshness-gated, so a
+      // note pushed once would vanish a few seconds later and leave the blank card this
+      // exists to replace. A dead poller still blanks it, which is the point of the gate.
+      await this.push(null, null, `no answer for this spot after ${rf.n} tries — ${rf.reason}`);
+      return;
+    }
     const t0 = Date.now();
     const full = await this.fetchFastSolve();
-    if (!full) return;
-    if (key !== this.lastProbeKey) return; // stale — hero is on a new decision
+    if (!full) {
+      // The request itself failed — timeout, refused, or not JSON. This used to
+      // return in silence, so a decision lost this way left no trace at all:
+      // status.lastError is in memory and gone by the time anyone looks.
+      this.logNoAnswer(key, probe, this.lastFetchFailKind ?? "solver-unreachable",
+        this.status.lastError ?? "the fast-solver did not answer", Date.now() - t0);
+      return;
+    }
+    if (key !== this.lastProbeKey) {
+      // Hero acted while this solve was still running. Logged WITH the latency:
+      // "the chain is too slow for Zone" is only a measurable claim if the
+      // abandoned solves are counted, and they never were.
+      this.logNoAnswer(key, probe, "abandoned-stale",
+        `the verdict arrived ${((Date.now() - t0) / 1000).toFixed(1)}s after the probe, hero had already acted`,
+        Date.now() - t0, full);
+      return; // stale — hero is on a new decision
+    }
     const sol = full.solution;
     // Every solve outcome is persisted (services/answerLog.ts) — the
     // dashboard's per-node "what was I told" trail and latency stats.
@@ -389,6 +532,9 @@ class StudyPoller {
       ts: Date.now(),
       wrapperHandId: full.hand?.handId ?? null,
       clientHandId: full.hand?.clientHandId ?? null,
+      // which of the open tables this answer is for — the wrapper stamps it on /hand.
+      // wrapperHandId is a per-process counter and collides across tables; this does not.
+      tableSlot: (full.hand as { tableSlot?: number | null } | undefined)?.tableSlot ?? null,
       street: full.hand?.street ?? null,
       board: (full.hand?.board ?? []).join("") || null,
       heroCards: (full.hero?.cards ?? []).join("") || null,
@@ -396,7 +542,9 @@ class StudyPoller {
       latencyMs: Date.now() - t0,
       chart: (sol?.ok === true ? (sol.rangeSource ?? sol.gametype) : sol?.ok === false ? sol.gametype : null) ?? null,
       // Provenance persisted since 2026-09-03 (Sources tab live grading).
-      strategyMode: (sol?.ok === true ? sol.strategyMode : null) ?? this.lastStudyMode ?? null,
+      // which KIND of piece answered, recorded for the Sources/Analytics comparison
+      // only — the table surfaces never read it
+      strategyMode: (sol?.ok === true ? sol.strategyMode : null) ?? null,
       source: (sol?.ok === true ? sol.source : null) ?? null,
       bandLo: (sol?.ok === true ? sol.decision?.band?.[0] : null) ?? null,
       bandHi: (sol?.ok === true ? sol.decision?.band?.[1] : null) ?? null,
@@ -428,9 +576,30 @@ class StudyPoller {
           : sol?.ok === true && sol.notInRange
             ? "hero's hand isn't in the chart range at this node"
             : (full.deferred ?? "no decision in response");
+      // THE EXPORT LAGS THE BUTTONS (2026-09-19). Hero's buttons are up, but the wrapper's hand has not yet got
+      // the villain's action that put them there (hand 4919059283, turn: 13 actions facing 0, one tick later 14
+      // facing 6.89). The route answers "Not hero's turn." for that tick — not a solve failure. Recording it as
+      // one put the panel on "no answer — couldn't solve this spot" for 15 s, right through the real solve that
+      // followed: the "answer only came after the time bank" report. So no breadcrumb and no failure row; the
+      // next tick re-probes and the corrected key solves. Only a stall on the same stale key (>3 s) is logged.
+      if (sol == null && /not hero's turn/i.test(full.deferred ?? "")) {
+        const since = this.deferredSince?.key === key ? this.deferredSince.at : Date.now();
+        this.deferredSince = { key, at: since };
+        if (Date.now() - since < 3000) { await this.push(null); return; }
+      }
       this.status.lastNavFailure = { at: Date.now(), street: full.hand?.street ?? null, reason };
+      const rf = this.repeatFail;
+      this.repeatFail = rf && rf.key === key && rf.reason === reason
+        ? { ...rf, n: rf.n + 1 }
+        : { key, reason, n: 1 };
       answerLog.add({ ...logBase, text: null, pick: null, roll: null, tier: null, warning: null, failReason: reason });
-      await this.push(null); // don't cache the key — retry this same spot next tick
+      // Say it on the panel rather than leaving a blank card: this is the last ask for
+      // this spot unless something about it changes.
+      if (this.repeatFail.n >= this.REPEAT_FAIL_LIMIT) {
+        await this.push(null, null, `no answer for this spot after ${this.repeatFail.n} tries — ${reason}`);
+      } else {
+        await this.push(null); // don't cache the key — retry this same spot next tick
+      }
       return;
     }
     // "≈" — the verdict came from a snapped (nearest-tree-size) line or a
@@ -449,8 +618,27 @@ class StudyPoller {
       decision: sol.decision,
       actions: sol.actions,
     }) + (rolled.roll != null ? ` · roll ${rolled.roll} → ${rolled.pick.toUpperCase()}` : "");
+    // INTEGRITY: does this answer agree with its OWN evidence? A fault is a bug in
+    // the machine (pick and mix from different pieces, or the roll walked wrongly),
+    // never a poker judgement — so it is shouted about and counted, but it does NOT
+    // withhold the answer: on 2026-09-14 the fault was a CORRECT pick carrying the
+    // wrong mix, and refusing it would have cost a right answer mid-hand.
+    const faults = checkAnswerIntegrity({ pick: rolled.pick, roll: rolled.roll, actions: sol.actions });
+    for (const f of faults) {
+      console.error(`[integrity] SEVERE ${f.kind} - ${f.detail} | ${full.hand?.street ?? "?"} ${(full.hero?.cards ?? []).join("")} tier=${sol.tier ?? "?"}`);
+    }
+    if (faults.length) {
+      this.status.integrityFaults += faults.length;
+      this.status.lastIntegrityFault = { at: Date.now(), kind: faults[0]!.kind, detail: faults[0]!.detail };
+    }
+
     this.lastSolvedKey = key;
+    this.deferredSince = null;
+    // An answer means the client is healthy: the wedge signal starts over, key
+    // included — otherwise the next failure of this same spot would not read as
+    // a new one and the streak could never rebuild.
     this.status.distinctFailureStreak = 0;
+    this.lastFailedKey = null;
     this.status.lastNavFailure = null;
     answerLog.add({
       ...logBase,
@@ -467,6 +655,11 @@ class StudyPoller {
     // WHAT we advised but from WHICH strategy/chart and WHERE the roll fell.
     await this.push(text, {
       ...rolled,
+      // the decision this pick was rolled for: the wrapper's pick-to-relay
+      // path refuses to act unless the table still matches (launch.py
+      // _pick_ready) — a Zone hand moves on, the pick must not
+      decisionKey: key,
+      handId: full.hand?.handId ?? null,
       band: sol.decision?.band ?? null,
       strategy: sol.strategyMode ?? null,
       source: sol.source ?? null,
@@ -474,7 +667,10 @@ class StudyPoller {
       chart: sol.setId ?? null,
       exploitPick: sol.exploitDecision?.action ?? null,
       chartPick: sol.chartDecision?.action ?? null,
-    }, (sol as { warning?: string | null }).warning ?? null);
+      // the line's trust (wrapper _reconciled_line): an uncertain line holds auto-execute
+      uncertain: full.hand?.lineUncertain ?? null,
+    }, [(sol as { warning?: string | null }).warning ?? null, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
+      .filter((s): s is string => !!s).join(" · ") || null);
   }
 
   /** POST /api/fast-solver — same body as ingest, no navigation, no navLock. */
@@ -487,7 +683,8 @@ class StudyPoller {
           live: { url: this.config.assistiveUrl },
           setId: this.config.setId,
           depth: this.config.depth,
-          strategy: this.lastStudyMode ?? undefined,
+          // the declared strategy decides the preflop piece (no mode flag any more)
+          strategyId: this.lastStrategyId ?? undefined,
           origin: "live",
         }),
         // Library lookups return in ~1-2s; the far-snap AI escape can take
@@ -497,11 +694,17 @@ class StudyPoller {
       const body = (await res.json().catch(() => null)) as FastSolveLikeResponse | null;
       if (!body) {
         this.status.lastError = `Fast-solver returned non-JSON (HTTP ${res.status}).`;
+        this.lastFetchFailKind = "solver-bad-response";
         return null;
       }
+      this.lastFetchFailKind = null;
       return body;
     } catch (e) {
       this.status.lastError = e instanceof Error ? e.message : String(e);
+      // a deadline and a refused connection are different problems with the
+      // same symptom (no answer) — tell them apart in the log
+      this.lastFetchFailKind = e instanceof Error && /timeout|abort|deadline/i.test(e.name + e.message)
+        ? "solver-timeout" : "solver-unreachable";
       return null;
     }
   }
@@ -593,6 +796,7 @@ class StudyPoller {
         await this.push(null);
         return null;
       }
+      body.httpStatus = res.status;
       return body;
     } catch (e) {
       // A deliberate abort (hero moved to a new decision) is not an error —
@@ -606,9 +810,11 @@ class StudyPoller {
 
   /** The rolled pick for the current answer, repeated verbatim by the
    *  keep-alive so the sampled action never re-rolls mid-decision. */
-  private lastExtra: { pick: string; roll: number | null; band?: [number, number] | null;
+  private lastExtra: { pick: string; roll: number | null; decisionKey?: string | null; handId?: number | null;
+                       band?: [number, number] | null;
                        strategy?: string | null; source?: string | null; tier?: string | null;
-                       chart?: string | null; exploitPick?: string | null; chartPick?: string | null } | null = null;
+                       chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
+                       uncertain?: string | null } | null = null;
   /** The solve's caveat (snapped sizes, generic ranges) for the current
    *  answer — repeated by the keep-alive alongside it. */
   private lastNote: string | null = null;
@@ -620,17 +826,96 @@ class StudyPoller {
   /** decisionKey of the most recent probe — verdicts for any other key are
    *  stale and get dropped instead of pushed. */
   private lastProbeKey: string | null = null;
+  /** the first tick the fast-solver said "not hero's turn" for the current key — see solveSpot */
+  private deferredSince: { key: string; at: number } | null = null;
+  /** the first tick hero's buttons were up while the export said not-to-act — see tick() */
+  private buttonsUpSince: { key: string; at: number } | null = null;
+  private lastFetchFailKind: FailKind | null = null;
+  /** `${decisionKey}|${kind}` already written — the tick loop revisits the same
+   *  dead spot every few seconds and must not write a row each time. */
+  private noAnswerLogged = new Set<string>();
+
+  /**
+   * Record a decision that got no answer for a reason the SOLVE never spoke to:
+   * the request failed, the verdict came too late, the client was down. One row
+   * per decision per kind, with whatever attribution is available — a probe
+   * carries no hand id, so services/answerReconciler.ts attaches those to their
+   * hand once it is archived.
+   */
+  private logNoAnswer(key: string, probe: IngestLikeResponse, kind: FailKind, reason: string, latencyMs: number | null, full?: FastSolveLikeResponse): void {
+    const tag = `${key}|${kind}`;
+    if (this.noAnswerLogged.has(tag)) return;
+    if (this.noAnswerLogged.size > 500) this.noAnswerLogged.clear();
+    this.noAnswerLogged.add(tag);
+    this.status.lastNavFailure = { at: Date.now(), street: probe.hand?.street ?? null, reason };
+    this.noteWedgeSignal(key, kind);
+    answerLog.add({
+      ts: Date.now(),
+      wrapperHandId: full?.hand?.handId ?? null,
+      clientHandId: full?.hand?.clientHandId ?? null,
+      street: full?.hand?.street ?? probe.hand?.street ?? null,
+      board: (full?.hand?.board ?? probe.hand?.board ?? []).join("") || null,
+      heroCards: (full?.hero?.cards ?? probe.hero?.cards ?? []).join("") || null,
+      decisionKey: key,
+      text: null, pick: null, roll: null, tier: null, warning: null,
+      latencyMs, failReason: reason, failKind: kind,
+      sessionId: full?.sessionId ?? null,
+    });
+  }
+
+  /**
+   * THE WEDGED-BUT-CONNECTED CASE, which until 2026-09-19 was only a comment.
+   *
+   * `isConnected()` asks the debug port for its target list. A GTO Wizard that
+   * has been up for hours answers that happily while every solve through it
+   * fails — the port is alive, the page is not. So the "is it up?" check at the
+   * top of the tick loop sees nothing wrong and never relaunches, and the only
+   * recovery is the client happening to drop the port altogether.
+   *
+   * `distinctFailureStreak` and `lastFailedKey` were declared and reset for
+   * exactly this, and `ensureGtoWizardLaunching(force)` was written to act on
+   * it — but nothing ever incremented the counter or passed `force`, so the
+   * whole path was unreachable. It cost the answers tier 14 of 15 fixtures on
+   * 2026-09-19 (~91 s each, every one blaming the cloud), and it recovered only
+   * when the port finally went down of its own accord and the ORDINARY relaunch
+   * fired. In a live session that is fourteen spots answered with a blank card.
+   *
+   * Only kinds that mean "the chain failed to produce anything" count. A solver
+   * that answers "not in range" or "off tree" is working correctly and says
+   * nothing about the client's health; nor does hero having already acted.
+   * DISTINCT decisions only — the tick loop revisits one dead spot for as long
+   * as hero sits there, and that is one failure, not thirty.
+   */
+  private noteWedgeSignal(key: string, kind: FailKind): void {
+    if (kind !== "solver-unreachable" && kind !== "solver-timeout" && kind !== "solver-bad-response") return;
+    if (key === this.lastFailedKey) return;
+    this.lastFailedKey = key;
+    this.status.distinctFailureStreak += 1;
+    if (this.status.distinctFailureStreak < this.WEDGE_STREAK) return;
+    console.error(`[poller] ${this.status.distinctFailureStreak} distinct decisions failed in the solve chain `
+      + `while GTO Wizard reported connected — forcing a relaunch (last: ${kind})`);
+    this.status.distinctFailureStreak = 0;
+    this.lastFailedKey = null;
+    this.ensureGtoWizardLaunching(true);
+  }
 
   private async push(
     text: string | null,
-    extra?: { pick: string; roll: number | null; band?: [number, number] | null;
+    extra?: { pick: string; roll: number | null; decisionKey?: string | null; handId?: number | null;
+              band?: [number, number] | null;
               strategy?: string | null; source?: string | null; tier?: string | null;
-              chart?: string | null; exploitPick?: string | null; chartPick?: string | null } | null,
+              chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
+              uncertain?: string | null } | null,
     note?: string | null,
   ): Promise<void> {
     this.status.lastAnswer = text;
     this.lastExtra = text ? (extra ?? this.lastExtra) : null;
-    this.lastNote = text ? (note !== undefined ? note : this.lastNote) : null;
+    // AN EXPLICIT NOTE SURVIVES A NULL ANSWER (2026-09-19). This used to clear the note
+    // whenever the answer was cleared, which is right for a stale caveat — but it also
+    // silenced the one case where there is nothing BUT a note to show: a spot that has
+    // been asked its limit of times and will not be asked again. The panel was left with
+    // a blank card and no way to know that nothing more was coming.
+    this.lastNote = note !== undefined ? note : (text ? this.lastNote : null);
     try {
       await fetch(`${this.config.assistiveUrl}/panel/answer`, {
         method: "POST",
@@ -642,6 +927,8 @@ class StudyPoller {
           text,
           pick: this.lastExtra?.pick ?? null,
           roll: this.lastExtra?.roll ?? null,
+          decisionKey: this.lastExtra?.decisionKey ?? null,
+          handId: this.lastExtra?.handId ?? null,
           band: this.lastExtra?.band ?? null,
           strategy: this.lastExtra?.strategy ?? null,
           source: this.lastExtra?.source ?? null,
@@ -649,6 +936,7 @@ class StudyPoller {
           chart: this.lastExtra?.chart ?? null,
           exploitPick: this.lastExtra?.exploitPick ?? null,
           chartPick: this.lastExtra?.chartPick ?? null,
+          uncertain: this.lastExtra?.uncertain ?? null,
           note: this.lastNote,
         }),
         signal: AbortSignal.timeout(3000),
@@ -660,4 +948,140 @@ class StudyPoller {
   }
 }
 
-export const studyPoller = new StudyPoller();
+/**
+ * ONE POLLER PER TABLE (2026-09-19). Ignition allows four tables at once, and four
+ * tables are four wrapper processes on four panel ports — so the poller stops being a
+ * singleton and becomes a set keyed by the wrapper it answers for.
+ *
+ * Keyed by URL on purpose: the hazard this replaces is two pollers on the SAME wrapper,
+ * which double-answers every decision and — because rollAction samples the mix — can
+ * roll two different actions for one spot (see start()). A map keyed by assistiveUrl
+ * cannot express that, whereas a list could. Different wrappers are the opposite case:
+ * they are different tables, and each needs its own answer.
+ *
+ * Solving does not serialize behind this. gtowApi talks to GTO Wizard over HTTP with
+ * in-flight coalescing by content key, so four tables solve in parallel and share one
+ * cache and one token.
+ */
+/**
+ * ONE POLLER PER WRAPPER, AND SPELLING IS NOT IDENTITY (2026-09-20).
+ *
+ * The set is keyed by assistiveUrl, and it used to key on the raw string. The API
+ * starts a poller at boot with no config (index.ts), which defaults to
+ * DEFAULT_LIVE_URL = "http://localhost:7700"; the wrapper's own chain keeper then
+ * registers itself as "http://127.0.0.1:7700" (launch.py `public`). Same wrapper,
+ * two keys, two StudyPoller instances — each with its own single-flight guard, so
+ * neither could see the other. Both solved EVERY decision, both rolled the mix
+ * independently with Math.random(), and both POSTed to /panel/answer: the panel
+ * showed whichever landed last, so the pick flickered and the relay's action was a
+ * coin flip between two rolls. Measured on the 2026-09-19 session: every hand from
+ * 20:47 to 21:12 doubled, 2-400ms apart, six of them landing on different actions
+ * (hand 20 FOLD/CALL 4.6, hand 21 Raise 23/Call). Pure spots hid it — two rolls
+ * against "Fold 100%" agree.
+ *
+ * So the key is normalised. localhost / 127.0.0.1 / [::1] are the same wrapper here
+ * by construction: launch.py binds loopback and PANEL_PUBLIC_URL is only ever a
+ * loopback address or an SSH-tunnel end that is also loopback.
+ */
+const normUrl = (url: string): string => {
+  let u = String(url ?? "").trim().replace(/\/+$/, "");
+  try {
+    const p = new URL(u);
+    const host = p.hostname.toLowerCase();
+    p.hostname = host === "localhost" || host === "::1" || host === "[::1]" ? "127.0.0.1" : host;
+    p.protocol = p.protocol.toLowerCase();
+    u = p.origin + (p.pathname === "/" ? "" : p.pathname);
+  } catch {
+    u = u.toLowerCase();                 // not a URL we can parse — at least fold case
+  }
+  return u;
+};
+
+class StudyPollerSet {
+  private byUrl = new Map<string, StudyPoller>();
+  private order: string[] = [];
+
+  private ensure(url: string): StudyPoller {
+    let p = this.byUrl.get(url);
+    if (!p) {
+      p = new StudyPoller();
+      this.byUrl.set(url, p);
+      this.order.push(url);
+    }
+    return p;
+  }
+
+  start(config: StudyPollerConfig = {}): StudyPollerStatus {
+    // Normalised BEFORE the lookup and passed on normalised, so the poller's own
+    // same-target check (start() is called every 20s by the wrapper's keeper)
+    // compares like with like too.
+    const url = normUrl(config.assistiveUrl ?? DEFAULT_LIVE_URL);
+    return this.ensure(url).start({ ...config, assistiveUrl: url });
+  }
+
+  /**
+   * Stop one wrapper's poller, or every one of them. A stopped poller LEAVES the set:
+   * the set means "tables being answered right now", which is what the overview strip
+   * and `running` are asking. Keeping dead entries would have a table you closed an
+   * hour ago still listed, and its stale status counted.
+   */
+  async stop(url?: string): Promise<StudyPollerStatus> {
+    const urls = url ? [normUrl(url)] : [...this.order];
+    for (const u of urls) {
+      const p = this.byUrl.get(u);
+      if (p) await p.stop();
+      this.byUrl.delete(u);
+      this.order = this.order.filter((x) => x !== u);
+    }
+    return this.status();
+  }
+
+  /**
+   * Never started, and never in the set: what the flat status looks like with no tables
+   * open. READING MUST NOT CREATE. primary() used to ensure() a default entry, so any
+   * caller asking "is the chain live" conjured a table into the registry and the
+   * overview listed a wrapper nobody had started.
+   */
+  private readonly idle = new StudyPoller();
+
+  /** The first poller started, or the idle stand-in — whose flat status old callers read. */
+  primary(): StudyPoller {
+    const first = this.order[0];
+    return (first ? this.byUrl.get(first) : undefined) ?? this.idle;
+  }
+
+  get(url: string): StudyPoller | null {
+    return this.byUrl.get(url) ?? null;
+  }
+
+  list(): { assistiveUrl: string; status: StudyPollerStatus }[] {
+    return this.order.map((u) => ({ assistiveUrl: u, status: this.byUrl.get(u)!.getStatus() }));
+  }
+
+  /**
+   * The flat status the panel and the Sources registry have always read, plus every
+   * poller under `pollers`. `running` is true when ANY table is being answered — the
+   * question those callers are actually asking is "is the answer chain live", and with
+   * four tables the first one's timer is a worse answer to it than the set's.
+   */
+  status(): StudyPollerStatus & { pollers: { assistiveUrl: string; status: StudyPollerStatus }[] } {
+    const all = this.list();
+    const primary = this.primary().getStatus();
+    return { ...primary, running: all.some((p) => p.status.running) || primary.running, pollers: all };
+  }
+}
+
+export const studyPollers = new StudyPollerSet();
+
+/**
+ * The single-table façade every existing caller uses. Kept so routes, the Sources
+ * registry and the tests did not all have to learn about the set on the same day.
+ */
+export const studyPoller = {
+  start: (config: StudyPollerConfig = {}) => studyPollers.start(config),
+  stop: () => studyPollers.stop(),
+  getStatus: () => studyPollers.status(),
+  get strategyId(): string | null {
+    return studyPollers.primary().strategyId;
+  },
+};

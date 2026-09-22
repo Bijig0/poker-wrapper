@@ -5,20 +5,12 @@ import { fetchNode, type HrcNode } from "./hrc3max";
 import { getCatalog } from "./chartCatalog";
 import { jobs } from "./jobs";
 
-/** What every live box job of a config is doing right now, read from its log: the chart it is refining, the last one parsed. */
-export function boxActivity(configId: string): { lane: string; box: string; status: string; solving: string | null; lastDone: string | null; progress: string | null }[] {
-  const out: ReturnType<typeof boxActivity> = [];
-  for (const j of jobs.list(200)) {
-    if (j.config !== configId || (j.status !== "running" && j.status !== "queued")) continue;
-    const tail = jobs.logTail(j.id, 600).split("\n");
-    const last = (re: RegExp) => { for (let i = tail.length - 1; i >= 0; i--) { const m = tail[i]!.match(re); if (m) return m[1] ?? m[0]; } return null; };
-    out.push({ lane: j.lane, box: j.lane.split(":").pop()!, status: j.status, solving: last(/refining (\S+) for/), lastDone: last(/\] parsed (\S+):/), progress: last(/box: (\[\d+\/\d+\])/) });
-  }
-  return out;
-}
+import { boxActivity, chartStates, runEstimate } from "./chartProgress";
+export { boxActivity };
 /** status text for one chart id: done (in the catalog) / solving on hrc-N / queued */
-function chartStatus(id: string, activity: ReturnType<typeof boxActivity>): string {
+function chartStatus(id: string, activity: ReturnType<typeof boxActivity>, configId?: string): string {
   if (catalogHas(id)) return "done";
+  if (configId) { const cfg = loadLedger().configs.find((c) => c.id === configId); if (cfg) { const st = chartStates(cfg, [id])[0]!; if (st.state === "running") return `solving on ${st.box}${st.sinceMin != null ? ` (${st.sinceMin} min)` : ""}`; if (st.state === "solved") return `solved on ${st.box}, pulling`; } }
   const a = activity.find((x) => x.solving === id);
   return a ? `solving on ${a.box}` : activity.length ? "queued" : "not started";
 }
@@ -66,7 +58,7 @@ export async function workData(d: any): Promise<WorkData> {
     case "chart": {
       const id = String(d.id); const exists = catalogHas(id);
       const src = exists ? id : d.seats === 4 ? null : counterpart(id);
-      const st = d.config ? chartStatus(id, boxActivity(String(d.config))) : (exists ? "done" : "not solved yet");
+      const st = d.config ? chartStatus(id, boxActivity(String(d.config)), String(d.config)) : (exists ? "done" : "not solved yet");
       out.title = exists ? `chart ${id} — solved` : `${id} — ${st}`;
       if (!exists && st.startsWith("solving")) { const a = boxActivity(String(d.config)).find((x) => x.solving === id); out.sections.push({ title: `${st} right now`, note: a?.progress ? `the box is at ${a.progress} of its list` : "auto-solve + Run-Nash refinement in progress" }); }
       if (!src) { out.sections.push({ title: "nothing to show yet", note: `no chart with this id in the catalog and no same-depth counterpart${d.seats === 4 ? " (there is no 4-handed chart of any generation yet)" : ""}` }); break; }
@@ -93,6 +85,23 @@ export async function workData(d: any): Promise<WorkData> {
       }
       break;
     }
+    case "charts": {
+      // a WORK line's charts (the 6-max trees, any list of ids): one row per chart with what is true now; a done row opens the chart
+      const L = loadLedger(); const cfg = L.configs.find((c) => c.id === d.config);
+      const ids: string[] = Array.isArray(d.ids) ? d.ids.map(String) : [];
+      if (!cfg || !ids.length) { out.title = "no charts listed"; break; }
+      const st = chartStates(cfg, ids);
+      const lanes = Number((cfg as any).lanes ?? (L as any).machines?.[cfg.runner] ?? 1);
+      const fmt = L.formats.find((f) => f.id === cfg.format);
+      const all = chartStates(cfg, expectedChartIds(cfg, fmt));
+      const est = runEstimate(cfg, all, lanes);
+      const when = (ms: number | null | undefined) => (ms ? new Date(ms).toISOString().slice(5, 16).replace("T", " ") + "Z" : "");
+      out.title = `${st.filter((x) => x.state === "done").length} of ${ids.length} charts done${st.some((x) => x.state === "running") ? ` · ${st.filter((x) => x.state === "running").length} solving now` : ""}`;
+      out.sections.push({ title: "these charts", note: est.text, table: { cols: ["chart", "status", "where · when"], chart: 0, status: 1,
+        rows: st.map((x) => [x.id, x.state === "done" ? "done" : x.state === "solved" ? "solved on the box, pulling" : x.state === "running" ? `solving on ${x.box}${x.sinceMin != null ? ` (${x.sinceMin} min)` : ""}` : "queued",
+          x.state === "done" ? `${x.box ?? ""} ${when(x.at)}`.trim() : x.state === "solved" ? `${x.box} ${when(x.at)}` : x.state === "running" ? `${x.box} · ${x.phase ?? ""}` : ""]) } });
+      break;
+    }
     case "lockrung": {
       out.title = `the ${d.locks?.length ?? 0} continuation charts at ${d.depth}bb`;
       {
@@ -114,7 +123,7 @@ export async function workData(d: any): Promise<WorkData> {
       const act = boxActivity(String(d.config));
       out.title = `uneven-stack states ${d.from + 1}–${d.to}`;
       const rows = (st?.states ?? []).slice(d.from, d.to).map((s: any, i: number) => { const id = ids[d.from + i] ?? `ign25_3maxasym2ci_D${s.deep}_s${s.short}_${s.shortSeat}`; return [d.from + i + 1, `${s.deep} / ${s.deep} / ${s.short}bb`, s.shortSeat.toUpperCase(), s.hands, `${Math.round(100 * s.cumShareOfAllHands)}%`, id, chartStatus(id, act)]; });
-      const done = rows.filter((r) => r[6] === "done").length, solving = rows.filter((r) => String(r[6]).startsWith("solving")).length;
+      const done = rows.filter((r: unknown[]) => r[6] === "done").length, solving = rows.filter((r: unknown[]) => String(r[6]).startsWith("solving")).length;
       out.sections.push({ title: `one HRC solve per row · ${done} done${solving ? `, ${solving} solving now` : ""}`, note: "deep / deep / short stacks, which seat is short, how many of our hands sit there, cumulative coverage of all hands (even rungs included); a done row opens the chart", table: { cols: ["#", "stacks", "short seat", "hands", "coverage", "chart id", "status"], rows, chart: 5, status: 6 } });
       if (act.length) out.sections.push({ title: "boxes on this step", list: act.map((a) => `${a.box}: ${a.solving ? `solving ${a.solving}` : a.status}${a.progress ? ` · ${a.progress} of its list` : ""}${a.lastDone ? ` · last landed ${a.lastDone}` : ""}`) });
       break;

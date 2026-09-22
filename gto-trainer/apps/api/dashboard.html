@@ -10,10 +10,12 @@
 <script>/* a pinned theme, before first paint (light/dark otherwise follow the OS) */try { const t = localStorage.getItem("sd_theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; } catch {}</script>
 </head>
 <body>
+<div id="build-alert"></div>
 <header>
   <h1>🃏 Study Dashboard</h1>
   <div class="tabs">
-    <button id="tab-hands" class="on">Hands</button>
+    <button id="tab-home" class="on" title="the overall situation: results for one account over one window, and whether the machinery that answers a spot is up">Home</button>
+    <button id="tab-hands">Hands</button>
     <button id="tab-sessions">Sessions</button>
     <button id="tab-profiles" title="the accounts hands are played on: the money in them, and whether it adds up to what poker did">Profiles</button>
     <button id="tab-analytics">Analytics</button>
@@ -26,6 +28,7 @@
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
   <input id="filter" type="text" placeholder="filter: pos, cards, stakes…">
+  <select id="table-filter" style="display:none" title="which of the session's tables the hand was played on — a session opens 1, 2 or 4 and each table's hands are stamped with its slot"><option value="">all tables</option></select>
   <select id="sess-filter" title="show only the hands of one session — declared sessions first, then the undeclared gap clusters from before sessions were declared (same partition as the Sessions tab)"><option value="">all sessions</option></select>
   <label class="sub"><input id="only-flop" type="checkbox"> saw flop</label>
   <label class="sub"><input id="only-disc" type="checkbox"> has discrepancy</label>
@@ -33,11 +36,13 @@
   <div id="theme-seg" title="light and dark follow the OS unless pinned; legacy is the palette the dashboard had before the restyle, kept to compare"><button data-t="auto">Auto</button><button data-t="light">Light</button><button data-t="dark">Dark</button><button data-t="legacy">Legacy</button></div>
 </header>
 <main>
+  <div id="view-home" style="display:none"></div>
   <div id="view-hands">
     <table>
       <thead><tr>
         <th data-k="playedAt">time</th><th data-k="stakes">stakes</th><th data-k="pos">pos</th>
         <th data-k="cards">cards</th><th data-k="street">street</th><th data-k="strategy">strategy</th><th data-k="pot">pot</th>
+        <th data-k="table" title="which table of the session (1-4); — for a single-table session, which has no slot by design">tbl</th>
         <th data-k="net">net bb</th><th data-k="ans">answers</th><th>flags</th><th>disc</th>
       </tr></thead>
       <tbody id="hands-body"></tbody>
@@ -100,7 +105,9 @@ async function loadHands() {
 }
 const sortVal = (h, k) => k === "pos" ? (h.summary.heroPos ?? "") : k === "cards" ? h.heroCards.join("")
   : k === "street" ? h.summary.finalStreet : k === "strategy" ? (h.strategy?.name ?? "") : k === "pot" ? h.summary.potBb : k === "net" ? (h.netBb ?? -1e9)
-  : k === "ans" ? (ANS_RANK[h.answerStatus?.status] ?? 9) : (h[k] ?? "");
+  : k === "ans" ? (ANS_RANK[h.answerStatus?.status] ?? 9)
+  : k === "table" ? (h.table ?? 99)          // single-table hands sort last, not first
+  : (h[k] ?? "");
 
 // Study-answer status per hand (server: answerStatusOf) as a chip. The reason is the tooltip.
 const ANS_RANK = { failed: 0, missing: 1, "no-decision": 2, unknown: 3, answered: 4 };
@@ -126,6 +133,26 @@ function buildSessionFilter() {
   const group = (label, xs) => xs.length ? `<optgroup label="${esc(label)}">${xs.map((s) => `<option value="${esc(s.id)}">${esc(sessionOptionLabel(s))}</option>`).join("")}</optgroup>` : "";
   sel.innerHTML = `<option value="">all sessions</option>` + group("Declared sessions", SESSIONS.filter((s) => s.declared)) + group("Before sessions were declared (inferred)", SESSIONS.filter((s) => !s.declared));
   sel.value = SESSIONS.some((s) => s.id === keep) ? keep : "";
+  buildTableFilter();
+}
+
+/* The table filter earns its place or stays hidden. Most sessions are one table
+   and tables.py gives those no slot at all ("None is not slot 1"), so on a rig
+   that has never run multi-table this control would be a permanent "all tables"
+   over a column of dashes. */
+function buildTableFilter() {
+  const sel = $("table-filter"), keep = sel.value;
+  const slots = [...new Set(HANDS.map((h) => h.table).filter((t) => t != null))].sort((a, b) => a - b);
+  const anyUnslotted = HANDS.some((h) => h.table == null);
+  sel.dataset.avail = slots.length ? "1" : "0";
+  if (!slots.length) { sel.style.display = "none"; sel.value = ""; return; }
+  sel.style.display = "";
+  sel.innerHTML = `<option value="">all tables</option>`
+    + slots.map((t) => `<option value="${t}">table ${t}</option>`).join("")
+    // the single-table hands are a real bucket, not an absence: without this they
+    // are only reachable by clearing the filter, which also shows everything else
+    + (anyUnslotted ? `<option value="none">single table (—)</option>` : "");
+  sel.value = [...slots.map(String), "none"].includes(keep) ? keep : "";
 }
 
 function renderHands() {
@@ -133,6 +160,8 @@ function renderHands() {
   const sid = $("sess-filter").value;
   let rows = HANDS.filter((h) => {
     if (sid && h.session !== sid) return false;
+    const tf = $("table-filter").value;
+    if (tf === "none" ? h.table != null : tf && String(h.table) !== tf) return false;
     if ($("only-flop").checked && !h.summary.sawFlop) return false;
     if ($("only-disc").checked && !(h.discrepancies && (h.discrepancies.major || h.discrepancies.minor))) return false;
     if ($("only-unanswered").checked && h.answerStatus?.status === "answered") return false;
@@ -152,6 +181,7 @@ function renderHands() {
       + (d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?");
     return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
       <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "ign25-zone-3max-exploit" ? "good" : ""}">${esc(h.strategy.name)}</span>` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
+      <td>${h.table == null ? '<span class="sub">—</span>' : `<span class="chip">T${h.table}</span>`}</td>
       <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td>${ansChip(h.answerStatus)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
   }).join("");
   for (const tr of $("hands-body").querySelectorAll("tr")) tr.onclick = () => go(`/hands/${tr.dataset.id}`);
@@ -159,6 +189,7 @@ function renderHands() {
 document.querySelectorAll("thead th[data-k]").forEach((th) => {
   th.onclick = () => { const k = th.dataset.k; sortDir = sortK === k ? -sortDir : -1; sortK = k; renderHands(); };
 });
+$("table-filter").onchange = renderHands;
 $("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("only-disc").onchange = renderHands; $("only-unanswered").onchange = renderHands; $("sess-filter").onchange = renderHands;
 
 /* ================= replayer state ================= */
@@ -386,7 +417,7 @@ const fmtLatency = (ms) => ms == null ? "" : ms >= 1000 ? `${(ms / 1000).toFixed
    data-tip on first hover and drawn as a proper popover next to the cell. */
 (function gridTip() {
   const tip = document.createElement("div"); tip.id = "gridtip"; document.body.appendChild(tip);
-  const cellOf = (e) => e.target && e.target.closest ? e.target.closest("#grid > div, .grid169 > div") : null;
+  const cellOf = (e) => e.target && e.target.closest ? e.target.closest(".grid169 > div") : null;
   const render = (raw) => {
     const [head, ...rest] = raw.split(/:\s(.*)/s).filter(Boolean);
     const body = (rest[0] ?? "").trim();
@@ -455,54 +486,128 @@ const cpUsed = () => [...((PT.board && PT.free && PT.free.board.length ? PT.free
    overlay does not cover. Down = a page-covering alert with a Connect button
    (POST /api/dashboard/gtow-connect launches the client with its debug port and
    waits for a token). Snooze hides it for 10 minutes behind a red pill. ---- */
-const GTOW = { st: null, snoozeUntil: 0, connecting: false, timer: null };
-const isGtowDownReason = (r) => /No access token|CDP on 9222|Client unreachable|GTO Wizard client|debug port/i.test(String(r ?? ""));
+const GTOW = { st: null, snoozeUntil: 0, connecting: false, busy: {}, timer: null, panelOpen: false };
+const isGtowDownReason = (r) => /No access token|CDP on 92\d\d|Client unreachable|GTO Wizard|debug port|daily solution limit/i.test(String(r ?? ""));
 (function gtowWatch() {
   const ov = document.createElement("div"); ov.id = "gtow-down";
-  ov.innerHTML = `<div class="box"><h1>🔌 GTO Wizard AI client is down</h1>
-    <p><b>Every postflop spot the MES overlay does not cover has no answer right now.</b> The AI chain is the fallback for all of postflop — off-family lines, off-tree sizes, rivers, and every spot in GTO mode — so until the client is back those spots fail at the table and in the playthrough.</p>
+  ov.innerHTML = `<div class="box"><h1>🔌 No GTO Wizard session is connected</h1>
+    <p><b>Every postflop spot the MES overlay does not cover has no answer right now.</b> The AI chain is the fallback for all of postflop — off-family lines, off-tree sizes, rivers, and every spot in GTO mode — so until a session is back those spots fail at the table and in the playthrough.</p>
     <p id="gtow-why" class="sub"></p>
     <div class="row"><button class="big" id="gtow-connect" onclick="gtowConnect()">Connect GTO Wizard</button><button class="mini" onclick="gtowSnooze()">keep working, remind me in 10 min</button></div>
     <div class="st" id="gtow-st"></div>
-    <p class="sub" style="margin-top:10px">Connect starts <span class="mono">GTO Wizard.exe --remote-debugging-port=9222</span> minimized and waits for a token (up to a minute). If it comes up without a token, log in inside the client window.</p></div>`;
+    <p class="sub" style="margin-top:10px">Connect launches each session with its debug port and waits for a token (up to a minute). A session that comes up on its activation or sign-in screen needs you to type the code in its own window — it is never restarted from here.</p></div>`;
   document.body.appendChild(ov);
-  const pill = document.createElement("div"); pill.id = "gtow-pill"; pill.title = "GTO Wizard AI client — the postflop fallback for every spot the MES overlay does not cover";
+  const pill = document.createElement("div"); pill.id = "gtow-pill"; pill.title = "GTO Wizard sessions — the postflop fallback for every spot the MES overlay does not cover. Click for the per-session breakdown.";
   document.body.appendChild(pill);
+  const panel = document.createElement("div"); panel.id = "gtow-panel";
+  document.body.appendChild(panel);
   gtowPoll(); GTOW.timer = setInterval(gtowPoll, 20000);
 })();
 async function gtowPoll() {
   try { GTOW.st = await (await fetch("/api/dashboard/gtow-status")).json(); } catch { GTOW.st = null; }
   gtowRender();
 }
+/** Minutes left on a token, or null. */
+const gtowMins = (ms) => ms != null ? Math.max(0, Math.round(ms / 60000)) : null;
+
 function gtowRender() {
-  const st = GTOW.st; const ov = $("gtow-down"), pill = $("gtow-pill");
+  const st = GTOW.st; const ov = $("gtow-down"), pill = $("gtow-pill"), panel = $("gtow-panel");
   if (!ov) return;
   const down = st && !st.usable;
   const snoozed = Date.now() < GTOW.snoozeUntil;
   ov.classList.toggle("on", !!down && !snoozed && !GTOW.connecting ? true : !!down && GTOW.connecting);
-  // the pill is ALWAYS there: green up, amber no-token, red down (with connect)
-  const mins = st?.expiresInMs != null ? Math.max(0, Math.round(st.expiresInMs / 60000)) : null;
-  pill.className = !st ? "" : st.state === "up" ? "up" : st.state === "no-token" ? "notoken" : "down";
-  pill.innerHTML = GTOW.connecting ? `<span class="dot warn"></span>GTO Wizard AI · connecting…`
-    : !st ? `<span class="dot off"></span>GTO Wizard AI · status unknown (API?)`
-    : st.state === "up" ? `<span class="dot good"></span>GTO Wizard AI · connected${mins != null ? ` · token ${mins} min` : ""}`
-    : st.state === "no-token" ? `<span class="dot warn"></span>GTO Wizard AI · client up, no token <button class="act" onclick="event.stopPropagation();gtowConnect()">retry</button>`
-    : `<span class="dot crit"></span>GTO Wizard AI · DOWN <button class="act" onclick="event.stopPropagation();gtowConnect()">connect</button>`;
-  pill.onclick = () => { if (st && !st.usable) { GTOW.snoozeUntil = 0; gtowRender(); } else gtowPoll(); };
-  if (st) $("gtow-why").textContent = st.state === "no-token" ? `The client is reachable on ${st.cdpHost} but has no session token — it is probably logged out or the desktop is locked.` : st.state === "down" ? `Nothing is listening on ${st.cdpHost}: the client is not running, or was started without its debug port.` : "";
-  document.querySelectorAll(".ans-gtow").forEach((el) => { if (st?.usable) el.querySelector(".now-up") ? null : el.insertAdjacentHTML("beforeend", '<div class="sub now-up">✓ the client is back — ask again</div>'); });
+
+  // DEGRADED is its own state, and it is the one that would otherwise be
+  // invisible: sessions are live so nothing looks broken, but none of them can
+  // solve a 3+ player tree, so every multiway spot silently has no answer.
+  const sessions = st?.sessions ?? [];
+  const enabled = sessions.filter((x) => x.enabled);
+  const live = sessions.filter((x) => x.state === "up");
+  const degraded = !!st && st.usable && !st.multiwayUsable;
+  const mins = gtowMins(st?.expiresInMs);
+  pill.className = !st ? "" : st.state === "up" ? (degraded ? "degraded" : "up") : st.state === "no-token" ? "notoken" : "down";
+  pill.innerHTML = GTOW.connecting ? `<span class="dot warn"></span>GTO Wizard · connecting…`
+    : !st ? `<span class="dot off"></span>GTO Wizard · status unknown (API?)`
+    : st.state === "up" && degraded ? `<span class="dot warn"></span>GTO Wizard · ${live.length}/${enabled.length} · no multiway`
+    : st.state === "up" ? `<span class="dot good"></span>GTO Wizard · ${live.length}/${enabled.length} live${mins != null ? ` · ${mins} min` : ""}`
+    : st.state === "no-token" ? `<span class="dot warn"></span>GTO Wizard · up, no token <button class="act" onclick="event.stopPropagation();gtowConnect()">retry</button>`
+    : `<span class="dot crit"></span>GTO Wizard · DOWN <button class="act" onclick="event.stopPropagation();gtowConnect()">connect</button>`;
+  pill.onclick = () => { GTOW.panelOpen = !GTOW.panelOpen; if (GTOW.panelOpen) gtowPoll(); else gtowRender(); };
+
+  // ---- the per-session panel: one row per account, each with its own state,
+  // its own capability and its own Connect ----
+  panel.classList.toggle("on", GTOW.panelOpen);
+  if (GTOW.panelOpen) {
+    const dotOf = (x) => x.state === "up" ? "good" : (x.state === "blocked" || x.state === "no-token" || x.state === "unknown") ? "warn" : x.state === "off" ? "off" : "crit";
+    const rows = sessions.map((x) => {
+      const cls = x.state === "up" ? "" : x.state === "down" ? " bad" : " warn";
+      const busy = !!GTOW.busy[x.id];
+      return `<div class="gs">
+        <div class="hd"><span class="dot ${dotOf(x)}"></span>${esc(x.label)}
+          <span class="cap${x.multiway ? " mw" : ""}" title="${x.multiway ? "this account's AI can solve 3+ player trees" : "this account's AI is heads-up only — multiway trees go to the other session"}">${x.multiway ? "multiway" : "heads-up"}</span></div>
+        <div class="txt${cls}">${esc(x.text)} · <span class="mono">${esc(x.cdpHost)}</span>${x.trees ? ` · ${x.trees} solve${x.trees === 1 ? "" : "s"} this run` : ""}</div>
+        ${x.lastError && x.state !== "up" ? `<div class="txt bad">${esc(String(x.lastError).slice(0, 160))}</div>` : ""}
+        <div class="acts">
+          <button ${busy ? "disabled" : ""} onclick="gtowConnect('${x.id}')">${busy ? "working…" : x.state === "up" ? "Reconnect" : "Connect"}</button>
+          ${(x.blockedKind || x.multiwayRefused) ? `<button class="ghost" ${busy ? "disabled" : ""} onclick="gtowReset('${x.id}')" title="forget the quota wall or plan refusal we recorded, and offer this session work again">Clear wall</button>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+    const note = degraded
+      ? `<div class="note"><b>No multiway session.</b> 3+ player spots cannot be solved right now — only the Ultra account's AI accepts a 3-player tree. Heads-up spots are unaffected.</div>`
+      : "";
+    panel.innerHTML = `<h3>GTO Wizard sessions<button class="x" onclick="GTOW.panelOpen=false;gtowRender()" title="close">✕</button></h3>${rows || '<div class="gs"><div class="txt">no sessions configured</div></div>'}${note}`;
+  }
+
+  if (st) $("gtow-why").textContent = st.state === "no-token" ? `A client is reachable but no session has a token — it is probably signed out, parked on an activation screen, or the desktop is locked.` : st.state === "down" ? `Nothing is listening on any session's debug port (${sessions.map((x) => x.cdpHost).join(", ")}): no client is running, or they were started without the debug flag.` : "";
+  document.querySelectorAll(".ans-gtow").forEach((el) => { if (st?.usable) el.querySelector(".now-up") ? null : el.insertAdjacentHTML("beforeend", '<div class="sub now-up">✓ a session is back — ask again</div>'); });
 }
 function gtowSnooze() { GTOW.snoozeUntil = Date.now() + 10 * 60000; gtowRender(); }
-async function gtowConnect() {
+/** Clear a recorded quota wall / plan refusal and re-sniff that session. */
+async function gtowReset(source) {
+  GTOW.busy[source] = true; gtowRender();
+  try { GTOW.st = await (await fetch("/api/dashboard/gtow-reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })).json(); } catch { /* keep the old status */ }
+  GTOW.busy[source] = false; gtowRender();
+}
+
+/* ---- money facts waiting to be reviewed: the count on the Profiles tab -----
+   An alert is one interval — stored or live — whose equity moved by more than
+   the hands, the rake and the tolerance explain, and that has not been marked
+   correct. It rides on the same clock as the GTO Wizard pill because it has the
+   same job: a fact about the machinery that should be visible from any tab, not
+   only the one it belongs to. */
+async function profileAlerts() {
+  let j = null;
+  try { j = await (await fetch("/api/dashboard/profiles/alerts")).json(); } catch { return; }
+  const b = $("tab-profiles");
+  if (!b || !j?.ok) return;
+  b.querySelector(".tab-badge")?.remove();
+  if (!j.count) { b.title = "the accounts hands are played on: the money in them, and whether it adds up to what poker did"; return; }
+  const top = j.items.slice(0, 4).map((x) => `${x.profile}: ${x.detail}`).join("\n");
+  b.title = `${j.count} money fact${j.count === 1 ? "" : "s"} waiting to be reviewed
+
+${top}${j.items.length > 4 ? `
+… and ${j.items.length - 4} more` : ""}`;
+  b.insertAdjacentHTML("beforeend", `<span class="tab-badge" aria-label="${j.count} to review">${j.count > 99 ? "99+" : j.count}</span>`);
+}
+profileAlerts();
+setInterval(() => { if (!document.hidden) profileAlerts(); }, 60000);
+/** Connect one session by id, or every session that is not already up. */
+async function gtowConnect(source) {
   if (GTOW.connecting) return;
-  GTOW.connecting = true; gtowRender();
+  GTOW.connecting = true; if (source) GTOW.busy[source] = true; gtowRender();
   const btn = $("gtow-connect"), st = $("gtow-st");
   if (btn) { btn.disabled = true; btn.textContent = "connecting…"; }
-  if (st) st.textContent = "launching the client with its debug port and waiting for a token (up to a minute)…";
+  if (st) st.textContent = `launching ${source ? source : "each session"} with its debug port and waiting for a token (up to a minute)…`;
   document.querySelectorAll(".ans-gtow .st").forEach((x) => x.textContent = "connecting…");
   let r = null;
-  try { r = await (await fetch("/api/dashboard/gtow-connect", { method: "POST" })).json(); } catch (e) { r = { ok: false, hint: String(e) }; }
-  GTOW.connecting = false;
+  try {
+    r = await (await fetch("/api/dashboard/gtow-connect", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(source ? { source } : {}),
+    })).json();
+  } catch (e) { r = { ok: false, hint: String(e) }; }
+  GTOW.connecting = false; if (source) GTOW.busy[source] = false;
   if (btn) { btn.disabled = false; btn.textContent = "Connect GTO Wizard"; }
   if (r?.connected) { if (st) st.textContent = `connected — ${r.text}`; GTOW.st = r; gtowRender(); }
   else { if (st) st.textContent = r?.hint ?? "could not connect"; document.querySelectorAll(".ans-gtow .st").forEach((x) => x.textContent = r?.hint ?? "could not connect"); GTOW.st = r; GTOW.snoozeUntil = 0; gtowRender(); }
@@ -717,29 +822,169 @@ async function openGtow(dbId, upto, btn) {
   setTimeout(() => { btn.disabled = false; btn.textContent = "↗ GTOW"; }, 2500);
 }
 
+/* ================= GTO Wizard's range colouring (Brady, 2026-09-19) =================
+   Copied from the client itself (its CSS variables and the computed styles of its
+   strategy grid, read over the debug port): each cell is a dark base, and every
+   action is a solid layer laid left-to-right in GTO Wizard's order — all-in and
+   raises from the biggest size (darkest red) to the smallest (lightest), then
+   check/call (green), then fold (blue). Layer widths are CUMULATIVE from the left;
+   the first layer sits on top, so what shows of each is exactly its share. The
+   layers' HEIGHT is the class's weight in range, anchored at the bottom: a hand
+   half in range is half filled. A plain range (no actions) is the same fill in
+   GTO Wizard's range orange. Out-of-range cells stay dark with a dim label. */
+const GWPAL = { base: "rgb(30,30,30)", call: "#5AB966", fold: "#3D7CB8", range: "#FF8F00", allin: "#7D1F1F",
+               raise: ["#F03C3C", "#DD3737", "#CA3232", "#B62E2E", "#A32929", "#912424"] };
+const actKind = (label) => {
+  const l = String(label ?? "").toLowerCase();
+  if (/^(fold)/.test(l)) return "fold";
+  if (/^(check|call|limp|in range)/.test(l)) return "call";
+  if (/all-?in|jam|\brai\b/.test(l)) return "allin";
+  return "raise";
+};
+const actSize = (label) => { const m = String(label ?? "").match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
+/** colour per action label, given ALL the node's labels (raise shades rank by size) */
+function gtowColors(labels) {
+  const raises = labels.map((l, i) => ({ l, i, k: actKind(l), sz: actSize(l) })).filter((x) => x.k === "raise").sort((a, b) => a.sz - b.sz);
+  const out = labels.map((l) => { const k = actKind(l); return k === "fold" ? GWPAL.fold : k === "call" ? GWPAL.call : k === "allin" ? GWPAL.allin : GWPAL.raise[0]; });
+  const n = raises.length;
+  raises.forEach((r, rank) => {
+    const t = n <= 1 ? 0 : rank / (n - 1);              // 0 = smallest size (lightest) … 1 = biggest (darkest)
+    out[r.i] = GWPAL.raise[Math.round(t * (GWPAL.raise.length - 1))];
+  });
+  return out;
+}
+/** GTO Wizard's left-to-right order: all-in, raises biggest→smallest, call/check, fold */
+function gtowOrder(labels) {
+  const rank = (l) => { const k = actKind(l); return k === "allin" ? 0 : k === "raise" ? 1 : k === "call" ? 2 : 3; };
+  return labels.map((l, i) => i).sort((a, b) => rank(labels[a]) - rank(labels[b]) || (actKind(labels[a]) === "raise" ? actSize(labels[b]) - actSize(labels[a]) : 0));
+}
+/** inline style for one cell: `segs` = [{color, frac}] left→right (fracs of the in-range share), `weight` 0..1 */
+function gtowCellStyle(segs, weight) {
+  const h = Math.max(0, Math.min(1, weight)) * 100;
+  const live = segs.filter((x) => x.frac > 0.004);
+  if (!live.length || h <= 0.2) return `background:${GWPAL.base}`;
+  let acc = 0;
+  const layers = [], sizes = [];
+  for (const x of live) { acc = Math.min(1, acc + x.frac); layers.push(`linear-gradient(to right,${x.color},${x.color})`); sizes.push(`${(acc * 100).toFixed(2)}% ${h.toFixed(1)}%`); }
+  sizes[sizes.length - 1] = `100% ${h.toFixed(1)}%`;
+  return `background-color:${GWPAL.base};background-image:${layers.join(",")};background-size:${sizes.join(",")};background-position:${live.map(() => "0 100%").join(",")};background-repeat:no-repeat`;
+}
+const gtowColor = (label, labels) => gtowColors(labels ?? [label])[(labels ?? [label]).indexOf(label)] ?? GWPAL.raise[0];
+
 /* ================= the exact node behind an answer ================= */
 const COMBOS = (k) => k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12;
 const classKey = (r, c) => r === c ? RANKS[r] + RANKS[c] : r < c ? RANKS[r] + RANKS[c] + "s" : RANKS[c] + RANKS[r] + "o";
-/** 13×13 grid from {class: {w, acts[]}} with an action legend; opacity = weight. */
+/** 13×13 grid from {class: {w, acts[]}}, drawn the way GTO Wizard draws its strategy grid (gtowCellStyle). */
+/* PER-COMBO PANEL (Brady, 2026-09-19): a class cell opens its combos — every legal combo of KJo with
+   its own weight in range and, on a strategy grid, its own action split and EV. Blockers decide many
+   postflop spots, and a class average hides exactly that. The data rides on the node payload
+   (actorCombos / rangesInCombos); the grid registers it here and its cells call showCombos(). */
+const COMBO_DATA = {};
+let comboSeq = 0;
+const COMBO_DATA_MAX = 60;                       // every grid registers one now; keep the newest
+const SUIT_ORDER = ["s", "h", "d", "c"];
+/**
+ * The legal combos of a class, minus anything the board blocks.
+ *
+ * PREFLOP HAS NO PER-COMBO SOLUTION AND CANNOT HAVE ONE: with no board, the four combos
+ * of KJs are the same hand under suit isomorphism, which is exactly why HRC and the GTOW
+ * crawl store 169 classes and not 1,326 combos. So on a preflop chart this enumerates the
+ * combos and splits the class weight evenly across them — the panel says so in as many
+ * words. Where a real per-combo solve exists (a postflop node: the AI chain, the MES
+ * locked solves) the node's own rows are used instead and blockers show up properly.
+ */
+function comboRows(cls, weights, acts, board) {
+  const dead = new Set((board || "").match(/[2-9TJQKA][shdc]/gi)?.map((c) => c[0].toUpperCase() + c[1].toLowerCase()) ?? []);
+  const [a, b] = [cls[0], cls[1]];
+  const out = [];
+  if (cls.length === 2) {
+    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) out.push(a + SUIT_ORDER[i] + b + SUIT_ORDER[j]);
+  } else if (cls.endsWith("s")) {
+    for (const su of SUIT_ORDER) out.push(a + su + b + su);
+  } else {
+    for (const s1 of SUIT_ORDER) for (const s2 of SUIT_ORDER) if (s1 !== s2) out.push(a + s1 + b + s2);
+  }
+  const legal = out.filter((h) => !dead.has(h.slice(0, 2)) && !dead.has(h.slice(2)));
+  if (!legal.length) return [];
+  const per = weights / legal.length;                       // the class weight, spread evenly
+  const s = acts ? acts.map((x) => x / (weights || 1)) : null;
+  return legal.map((hand) => ({ hand, w: per, ...(s ? { s } : {}) }));
+}
 function classGrid(cls, actions, heroKey, opt = {}) {
+  // EVERY grid opens its combos now (2026-09-20, Brady: "be thorough, apply this to all the
+  // charts and be uniform"). Grids that carry a real per-combo solve pass `combos`; the rest
+  // get them derived from the class — see comboRows for why that is all there is preflop.
+  const cid = `cg${++comboSeq}`;
+  COMBO_DATA[cid] = { combos: opt.combos ?? null, cls, actions, single: !!opt.single, heroKey,
+                      heroCombo: opt.heroCombo ?? null, board: opt.board ?? null };
+  for (const k of Object.keys(COMBO_DATA)) {
+    if (Object.keys(COMBO_DATA).length <= COMBO_DATA_MAX) break;
+    delete COMBO_DATA[k];
+  }
   const totals = actions.map((_, ai) => { let n = 0, d = 0; for (const k in cls) { n += cls[k].acts[ai]; d += cls[k].w; } return d ? (100 * n) / d : 0; });
-  let html = opt.single ? "" : `<div class="legend">` + actions.map((a, ai) => `<span><span class="sw" style="background:${colorFor(a, ai)}"></span>${esc(a)} <b>${totals[ai].toFixed(1)}%</b></span>`).join("") + `</div>`;
+  const colors = opt.single ? [GWPAL.range] : gtowColors(actions);
+  const order = opt.single ? [0] : gtowOrder(actions);
+  let html = opt.single ? "" : `<div class="legend">` + order.map((ai) => `<span><span class="sw" style="background:${colors[ai]}"></span>${esc(actions[ai])} <b>${totals[ai].toFixed(1)}%</b></span>`).join("") + `</div>`;
   html += `<div class="grid169${opt.small ? " sm" : ""}">`;
   for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) {
     const key = classKey(r, c), e = cls[key];
-    let bg = "var(--surface2)";
-    if (e && e.w > 0.0005) {
-      if (opt.single) bg = opt.single;
-      else {
-        const stops = []; let acc = 0;
-        actions.forEach((a, ai) => { const p = (100 * e.acts[ai]) / e.w; if (p > 0.5) { stops.push(`${colorFor(a, ai)} ${acc}% ${acc + p}%`); acc += p; } });
-        if (stops.length) bg = `linear-gradient(to right, ${stops.join(", ")})`;
-      }
+    const inRange = !!(e && e.w > 0.0005);
+    let style = `background:${GWPAL.base}`;
+    if (inRange) {
+      const weight = Math.min(1, e.w / COMBOS(key));          // share of the class still in range = fill height
+      const segs = opt.single
+        ? [{ color: GWPAL.range, frac: 1 }]
+        : order.map((ai) => ({ color: colors[ai], frac: e.acts[ai] / e.w }));
+      style = gtowCellStyle(segs, weight);
     }
-    const op = e ? (opt.single ? Math.min(1, 0.12 + 0.88 * (e.w / COMBOS(key))) : Math.min(1, (opt.flat ? 1 : 0.25) + e.w / (opt.wmax ?? 4))) : 0.12;
-    html += `<div class="${key === heroKey ? "hero" : ""}" style="background:${bg};opacity:${op}" title="${key}${e ? ` · ` + actions.map((a, ai) => `${a} ${((100 * e.acts[ai]) / (e.w || 1)).toFixed(0)}%`).join(" · ") : " · not in range"}">${key.slice(0, 2)}</div>`;
+    const tip = opt.tip ? opt.tip(key, inRange, e) : key + ": " + (inRange
+      ? (opt.single ? `${(100 * Math.min(1, e.w / COMBOS(key))).toFixed(0)}% of the class in range`
+                    : `${(100 * Math.min(1, e.w / COMBOS(key))).toFixed(0)}% in range · ` + order.map((ai) => `${actions[ai]} ${((100 * e.acts[ai]) / (e.w || 1)).toFixed(0)}%`).join(" · "))
+      : "not in range");
+    const clk = inRange ? ` onclick="showCombos('${cid}','${key}')"` : "";
+    const suit = key.length > 2 ? `<i class="sfx ${key[2]}">${key[2]}</i>` : "";
+    html += `<div class="${key === heroKey ? "hero" : ""}${inRange ? "" : " off"}${clk ? " clk" : ""}" style="${style}" title="${esc(tip)}${clk ? " · click for the combos" : ""}"${clk}>${key.slice(0, 2)}${suit}</div>`;
   }
-  return html + `</div><div class="sub" style="margin-top:6px">${opt.foot ?? "hero's class outlined · hover any cell for its mix"}</div>`;
+  html += `</div><div class="sub" style="margin-top:6px">${opt.foot ?? "hero's class outlined · hover any cell for its mix"} · click a class for its combos</div>`;
+  html += `<div class="combo-panel" id="cp-${cid}"></div>`;
+  return html;
+}
+const sameCombo = (a, b) => { if (!a || !b) return false; const A = a.match(/.{2}/g) || [], B = b.match(/.{2}/g) || []; return A.length === 2 && B.length === 2 && ((A[0] === B[0] && A[1] === B[1]) || (A[0] === B[1] && A[1] === B[0])); };
+function showCombos(cid, cls) {
+  const d = COMBO_DATA[cid], host = $(`cp-${cid}`);
+  if (!d || !host) return;
+  // A real per-combo solve when the node carried one; otherwise the class spread over its
+  // legal combos, which is the whole truth preflop. `derived` decides what the head says.
+  const e = d.cls?.[cls];
+  const derived = !d.combos;
+  const rows = derived ? (e ? comboRows(cls, e.w, d.single ? null : e.acts, d.board) : []) : (d.combos[cls] || []);
+  if (host.dataset.cls === cls) { host.innerHTML = ""; host.dataset.cls = ""; return; }   // click again to fold
+  host.dataset.cls = cls;
+  const colors = d.single ? [GWPAL.range] : gtowColors(d.actions), order = d.single ? [0] : gtowOrder(d.actions);
+  const inRange = rows.reduce((a, r) => a + r.w, 0), nCls = COMBOS(cls);
+  const hand = (h) => (h.match(/.{2}/g) || []).map(cardHtml).join(" ");
+  const what = derived
+    ? (d.board ? "the class spread over the combos the board leaves" : "no board yet — every combo of this class is the same hand")
+    : (d.single ? "weight per combo" : "each combo's own split and EV");
+  let html = `<div class="cp-head"><b>${esc(cls)}</b> <span class="sub">${rows.length} legal combo${rows.length === 1 ? "" : "s"} · ${inRange.toFixed(2)} of ${nCls} in range · ${what}</span>` +
+    `<span class="sub cp-legend">${order.map((ai) => `<span><span class="sw" style="background:${colors[ai]}"></span>${esc(d.actions[ai])}</span>`).join("")}</span></div>`;
+  const collapse = derived && !d.board && rows.length > 1;
+  if (derived && rows.length > 1) html += `<div class="cp-note sub">${d.board
+    ? `This grid carries no per-combo solve, so each combo shows the CLASS average — blockers are not reflected. Only nodes solved per combo (the AI chain, the MES locked solves) split them apart.`
+    : `Preflop a solver stores 169 classes, not 1,326 combos: with no board there are no blockers, so all ${rows.length} of these are the same hand and play identically — shown as one row.`}</div>`;
+  if (!rows.length) html += `<div class="sub">no legal combo of ${esc(cls)} is in range here (blocked by the board or folded out)</div>`;
+  const drawn = collapse ? rows.slice(0, 1) : rows;
+  for (const r of drawn) {
+    const isHero = !collapse && sameCombo(r.hand, d.heroCombo);
+    const segs = d.single ? [{ color: GWPAL.range, frac: 1 }] : order.map((ai) => ({ color: colors[ai], frac: r.s?.[ai] ?? 0 }));
+    const nums = d.single ? "" : order.map((ai) => { const p = (r.s?.[ai] ?? 0) * 100; if (p < 0.5) return ""; const ev = r.ev?.[ai]; return `<span style="color:${colors[ai]}">${esc(d.actions[ai])}</span> ${p.toFixed(1)}%${ev != null ? `<span class="sub"> ev ${Number(ev).toFixed(2)}</span>` : ""}`; }).filter(Boolean).join(" · ");
+    html += `<div class="cmb${isHero ? " hero" : ""}"><span class="cards mono">${collapse ? esc(cls) : hand(r.hand)}</span><span class="w sub" title="${collapse ? "weight of each combo in the range" : "weight of this combo in the range"}">${(r.w * 100).toFixed(0)}%</span>` +
+      `<span class="bar" style="${gtowCellStyle(segs, 1)}"></span><span class="nums">${nums}</span>${
+        collapse ? `<span class="chip dim" title="every combo of ${esc(cls)}">×${rows.length}</span>` : isHero ? `<span class="chip good">you</span>` : ""}</div>`;
+  }
+  if (collapse) html += `<div class="cp-combos sub">${rows.map((r) => `<span class="mono">${hand(r.hand)}</span>`).join("")}</div>`;
+  host.innerHTML = html;
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 const crumb = (line, snapped = []) => {
   const toks = (line ?? "").split("-").filter(Boolean);
@@ -761,7 +1006,7 @@ async function openAnswerNode(upto) {
   const loggedLine = lg ? `<div class="sub" style="margin-bottom:8px">This is the node behind answer <b>#${lg.id}</b> at action ${upto}${lg.tier ? ` · tier <span class="chip">${esc(lg.tier)}</span>` : ""}${lg.line ? " · line as logged live" : " · line rebuilt from the archive (this answer predates line logging)"}</div>` : `<div class="sub" style="margin-bottom:8px">No answer was logged at action ${upto}; this is the node the resolver would use today.</div>`;
   const heroKey = j.heroClass;
 
-  if (j.kind === "hrc" || j.kind === "gtow") {
+  if (j.kind === "hrc" || j.kind === "hrc6max" || j.kind === "gtow") {
     const n = j.node;
     let body = "";
     if (n) {
@@ -785,29 +1030,37 @@ async function openAnswerNode(upto) {
         <div class="nv-facts">${fact("derived on chart", ex.chart)}${fact("file", `<span class="mono">${esc(ex.path)}</span>`)}${fact("the exploit says", ex.heroChoice ? `<b>${esc(ex.heroChoice)}</b> for ${esc(heroKey)}` : `${esc(heroKey ?? "hero")} is not in the exploit's range here`)}</div>
         ${classGrid(cls, acts, heroKey, { flat: true, wmax: 1e9, foot: "one action per class — a best response, not a mix · hero outlined" })}</div>`;
     })() : "";
-    sol.innerHTML = `<div class="card"><h2>${j.kind === "hrc" ? "HRC chart node" : "GTO Wizard chart node"} <span class="sub">— what answered at action ${upto}</span></h2>
+    const piece = j.kind === "hrc" ? "hrc-3max" : j.kind === "hrc6max" ? "hrc-6max" : "gtow-charts";
+    sol.innerHTML = `<div class="card"><h2>${j.kind === "gtow" ? "GTO Wizard chart node" : j.kind === "hrc6max" ? "HRC 6-max chart node" : "HRC chart node"} <span class="sub">— what answered at action ${upto}</span></h2>
       ${loggedLine}
       <div class="nv-head"><span><span class="sub">chart</span> <b title="${esc(j.chart ?? "")}">${esc(chartName(j.chart))}</b> <span class="mono">${esc(j.chart ?? "")}</span></span>${j.depth ? `<span><span class="sub">depth</span> ${j.depth}bb</span>` : ""}<span><span class="sub">line</span> ${crumb(j.line ?? j.rawLine, j.snapped)}</span>${n?.pos ? `<span><span class="sub">to act</span> <b>${esc(n.pos)}</b></span>` : ""}</div>
       ${j.note ? `<div class="ans-note" style="margin-bottom:8px">⚠ ${esc(j.note)}</div>` : ""}
       <div class="nv-two"><div class="card" style="margin:0"><h2>Chart strategy at this node</h2>${body}
-        <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/pieces/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}" onclick="go('/sources/pieces/${j.kind === "hrc" ? "hrc-3max" : "gtow-charts"}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
+        <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/pieces/${piece}" onclick="go('/sources/pieces/${piece}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
   } else if (j.kind === "mes") {
     const m = j.mes;
     let mode = "mes";
     const render = () => {
       const strat = mode === "mes" ? m.mes : m.gto, evs = mode === "mes" ? m.mesEv : m.gtoEv;
-      const cls = {};
+      // A LOCKED SOLVE IS PER COMBO AND ALWAYS WAS: m.holes/weights/mes/mesEv are 1,326-wide
+      // and this loop collapsed them to 169 classes and dropped the rest. On a flop that is
+      // the interesting half — Ah5h and Ac5c are not the same hand on a two-heart board.
+      const cls = {}, combos = {};
       m.holes.forEach((h, ci) => {
         const i1 = RANKS.indexOf(h[0]), i2 = RANKS.indexOf(h[2]);
         const key = i1 === i2 ? h[0] + h[2] : RANKS[Math.min(i1, i2)] + RANKS[Math.max(i1, i2)] + (h[1] === h[3] ? "s" : "o");
         const w = m.weights[ci] ?? 0;
         const e = (cls[key] ??= { w: 0, acts: new Array(m.acts.length).fill(0) });
         e.w += w; m.acts.forEach((_, ai) => { e.acts[ai] += w * (strat?.[ai]?.[ci] ?? 0); });
+        if (w > 0) (combos[key] ??= []).push({ hand: h, w,
+          s: m.acts.map((_, ai) => strat?.[ai]?.[ci] ?? 0),
+          ev: m.acts.map((_, ai) => evs?.[ai]?.[ci] ?? null) });
       });
+      for (const k in combos) combos[k].sort((a, b) => b.w - a.w || a.hand.localeCompare(b.hand));
       const hi = m.heroIdx;
       const heroRow = hi != null && hi >= 0 ? m.acts.map((a, ai) => ({ a, p: (strat?.[ai]?.[hi] ?? 0) * 100, ev: evs?.[ai]?.[hi] })) : null;
       const labels = m.acts.map((a) => a.replace(/\((\d+(?:\.\d+)?)\)/, (_, x) => ` ${(x / 100).toFixed(1)}bb`));
-      $("nv-mes-body").innerHTML = classGrid(cls, labels, heroKey, { foot: "hero's range at this node, by class · opacity = weight · hover for the mix" }) +
+      $("nv-mes-body").innerHTML = classGrid(cls, labels, heroKey, { combos, board: m.board, heroCombo: (j.heroCards || []).join(""), foot: "hero's range at this node, by class · fill height = weight in range · hover for the mix" }) +
         (heroRow ? `<div class="nv-hero"><span class="big">${esc(j.heroCards.join(""))}</span> <span class="sub">${mode === "mes" ? "this solve plays" : "against an equilibrium villain, plays"}</span> ${heroRow.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x, i) => `<b>${esc(labels[m.acts.indexOf(x.a)])}</b> ${x.p.toFixed(0)}%${x.ev != null ? ` <span class="sub">ev ${(x.ev / 100).toFixed(2)}bb</span>` : ""}`).join(" · ")}</div>` : `<div class="nv-hero"><span class="warn">hero's combo never reaches this line under the exploit preflop scheme</span></div>`);
       $("nv-seg").querySelectorAll("button").forEach((b) => b.className = (b.dataset.m === mode ? "on " : "") + b.dataset.m);
     };
@@ -845,10 +1098,10 @@ async function openAnswerNode(upto) {
 }
 
 /* ---- walkthrough of a stored AI-chain solve: every node, the ranges assumed, the conditioning ---- */
-const weightGrid = (agg, heroKey, hue) => {
+const weightGrid = (agg, heroKey, hue, combos = null, heroCombo = null, board = null) => {
   const cls = {}; for (const k in agg) cls[k] = { w: agg[k].w, acts: [agg[k].w] };
-  const combos = Object.values(agg).reduce((s, x) => s + x.w, 0);
-  return classGrid(cls, ["in range"], heroKey, { single: hue, small: true, foot: `${combos.toFixed(1)} combos · opacity = share of the class still in range` });
+  const mass = Object.values(agg).reduce((s, x) => s + x.w, 0);
+  return classGrid(cls, ["in range"], heroKey, { single: hue, small: true, board, foot: `${mass.toFixed(1)} combos · fill height = share of the class still in range`, ...(combos ? { combos, heroCombo } : {}) });
 };
 /* ---- an AI-chain answer's inputs & outputs, inline on its card ----
    What went INTO the cloud solve that produced this answer (both ranges as
@@ -900,16 +1153,16 @@ function solveIoHtml(w, hostId, upto) {
       ${fact("at your node", `${esc(n.street.toLowerCase())} <span class="mono">${esc(n.board)}</span> · pot ${n.potNode}bb · <b>${esc(n.actorPos)}</b> to act${n.heroWeightIn != null ? ` · ${(100 * n.heroWeightIn).toFixed(0)}% of your class is still in range here` : ""}`)}
     </div>
     <div class="walk-grids" style="margin-top:8px">
-      <div class="card"><h2>Input — OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])} · conditioned on every action taken</span></h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)")}</div>
-      ${n.rangesIn.mid ? `<div class="card"><h2>Input — OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · the middle seat of a three-way flop</span></h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)")}</div>` : ""}
-      <div class="card"><h2>Input — IP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])} · conditioned on every action taken</span></h2>${weightGrid(n.rangesIn.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)")}</div>
+      <div class="card"><h2>Input — OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])} · conditioned on every action taken</span></h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", n.rangesInCombos?.oop, sp.heroCombo, n.board)}</div>
+      ${n.rangesIn.mid ? `<div class="card"><h2>Input — OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · the middle seat of a three-way flop</span></h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)", n.rangesInCombos?.mid, sp.heroCombo, n.board)}</div>` : ""}
+      <div class="card"><h2>Input — IP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])} · conditioned on every action taken</span></h2>${weightGrid(n.rangesIn.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", n.rangesInCombos?.ip, sp.heroCombo, n.board)}</div>
     </div>`;
   // --- outputs ---
   const labels = n.actions.map((a) => a.name + (a.betsize != null && !/\d/.test(a.name) ? ` ${a.betsize}` : ""));
   const hero = n.heroRow;
   const isHeroActor = n.isHero ?? (n.actor === sp.heroSeat);
   const outputs = `<div class="card" style="margin-top:8px"><h2>Output — ${esc(n.actorPos)}'s strategy at this node <span class="sub">what the solve says the whole range does here</span></h2>
-      ${classGrid(n.actorStrategy, labels, isHeroActor ? heroKey : null, { foot: isHeroActor ? "your class outlined · hover any cell for its mix" : "villain's range · hover for the mix" })}
+      ${classGrid(n.actorStrategy, labels, isHeroActor ? heroKey : null, { combos: n.actorCombos, board: n.board, heroCombo: sp.heroCombo, foot: isHeroActor ? "your class outlined · hover any cell for its mix" : "villain's range · hover for the mix" })}
       ${hero ? `<div class="nv-hero"><span class="big">${esc(sp.heroCombo ?? "")}</span> <span class="sub">your exact combo:</span> ${hero.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x) => `<b>${esc(x.name)}</b> ${x.p.toFixed(1)}%`).join(" · ")}</div>` : ""}
     </div>
     <div style="margin-top:8px"><button class="mini" onclick="this.disabled=true;renderWalkthrough(${w.row.id}, '${hostId}-walk', ${upto ?? "null"})">walk every node of this chain ▸</button> <span class="sub">every street's ranges in, strategy, and the conditioning that fed the next node</span><div id="${hostId}-walk"></div></div>`;
@@ -957,16 +1210,16 @@ async function renderWalkthrough(solveId, hostId, upto) {
     return `<div>
       <div class="nv-head"><span><span class="sub">node ${sel + 1} of ${w.nodes.length}</span></span><span><b>${esc(n.street)}</b> <span class="mono">${esc(n.board)}</span></span><span><span class="sub">to act</span> <b>${esc(n.actorPos)}</b> (${n.actor.toUpperCase()}${isHeroActor ? ", you" : ", villain"})</span><span><span class="sub">pot</span> ${n.potNode}bb</span><span><span class="sub">invested this street</span> ${(n.players ?? [sp.oopPos, sp.ipPos]).map((p, i) => `${esc(p)} ${n.invested[i] ?? 0}`).join(" · ")}</span></div>
       <div class="walk-grids">
-        <div class="card"><h2>OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])}</span></h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)")}</div>
-        ${n.rangesIn.mid ? `<div class="card"><h2>OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · middle seat</span></h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)")}</div>` : ""}
-        <div class="card"><h2>IP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])}</span></h2>${weightGrid(n.rangesIn.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)")}</div>
+        <div class="card"><h2>OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])}</span></h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", n.rangesInCombos?.oop, sp.heroCombo, n.board)}</div>
+        ${n.rangesIn.mid ? `<div class="card"><h2>OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · middle seat</span></h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)", n.rangesInCombos?.mid, sp.heroCombo, n.board)}</div>` : ""}
+        <div class="card"><h2>IP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])}</span></h2>${weightGrid(n.rangesIn.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", n.rangesInCombos?.ip, sp.heroCombo, n.board)}</div>
       </div>
       <div class="card" style="margin-top:12px"><h2>${esc(n.actorPos)}'s strategy at this node <span class="sub">— what the solve says the whole range does here${n.taken != null ? `; the observed action was <b style="color:#fff">${esc(n.takenName)}</b>` : ""}</span></h2>
-        ${classGrid(stratCls, labels, isHeroActor ? heroKey : null, { foot: isHeroActor ? "your class outlined · hover for the mix" : "villain's range · hover for the mix" })}
+        ${classGrid(stratCls, labels, isHeroActor ? heroKey : null, { combos: n.actorCombos, board: n.board, heroCombo: sp.heroCombo, foot: isHeroActor ? "your class outlined · hover for the mix" : "villain's range · hover for the mix" })}
         ${hero ? `<div class="nv-hero"><span class="big">${esc(sp.heroCombo ?? "")}</span> <span class="sub">${n.heroNode ? "the answer:" : "the solve has you playing"}</span> ${hero.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x) => `<b>${esc(x.name)}${x.betsize != null && !/\d/.test(x.name) ? ` ${x.betsize}` : ""}</b> ${x.p}%${x.ev != null ? ` <span class="sub">ev ${x.ev}</span>` : ""}`).join(" · ")}${n.heroWeightIn != null ? ` <span class="sub">· weight in range ${n.heroWeightIn}</span>` : ""}</div>` : ""}
       </div>
       ${n.rangesOut ? `<div class="card" style="margin-top:12px"><h2>After conditioning on ${esc(n.takenName)} <span class="sub">— ${esc(n.actorPos)}'s range × the frequency of that action, combo by combo; this is what the next node sees</span></h2>
-        <div class="walk-grids"><div>${weightGrid(n.rangesOut.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)")}</div><div>${weightGrid(n.rangesOut.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)")}</div></div></div>` : ""}
+        <div class="walk-grids"><div>${weightGrid(n.rangesOut.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", null, null, n.board)}</div><div>${weightGrid(n.rangesOut.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", null, null, n.board)}</div></div></div>` : ""}
     </div>`;
   };
   host.innerHTML = `${facts}<div class="walk"><div class="walk-list" id="walk-list">${list()}</div><div id="walk-view">${view()}</div></div>`;
@@ -1015,10 +1268,9 @@ async function renderCompare(aId, bId, hostId) {
 }
 
 /* ================= node solution + AI inputs ================= */
-// fold is always blue (colorFor), so no series colour may be a blue: a 4th
-// aggressive size / all-in next to a fold cell became unreadable
-const ACT_COLORS = ["#5b7fa6", "#41a368", "#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"]; // fold, call, then the raise ramp — the same ramp the answer mixes use
-const colorFor = (label, i) => /^fold/i.test(label) ? "#5b7fa6" : /^(check|call)/i.test(label) ? "#41a368" : ACT_COLORS[i % ACT_COLORS.length];
+// action colours = GTO Wizard's (see GWPAL above); the raise shades rank by size within the node's labels
+const ACT_COLORS = [GWPAL.fold, GWPAL.call, ...GWPAL.raise];
+const colorFor = (label, i, labels) => labels ? gtowColor(label, labels) : (actKind(label) === "fold" ? GWPAL.fold : actKind(label) === "call" ? GWPAL.call : actKind(label) === "allin" ? GWPAL.allin : GWPAL.raise[Math.min(Math.max(i - 2, 0), GWPAL.raise.length - 1)]);
 const RANKS = "AKQJT98765432";
 
 async function solveNode(dbId, upto, btn) {
@@ -1048,6 +1300,248 @@ async function solveNode(dbId, upto, btn) {
 }
 
 /* ================= analytics ================= */
+/* ================= Home =================
+   The landing page: how the money is going, for ONE account over ONE recent
+   window, and whether the machinery that answers a spot is up right now.
+
+   It reads the same /analytics payload Analytics does — same aggregate, same
+   series, so the two can never disagree — narrowed by `profile` and `window`
+   instead of a scope. What it does differently is FIT: six tiles beside a short
+   chart, so the whole picture is above the fold at a laptop height and the rest
+   (sessions, positions) is a scroll away rather than a hunt. Whatever is on a
+   tile here is on Analytics too; Analytics is where the other six tiles, the
+   comparison line and the breakdown tables live.
+
+   The window is RELATIVE (`window=7d`, not a frozen date range), so a bookmark
+   or a pinned tab still means "the last seven days" tomorrow. Both controls
+   live in the URL, and the Home tab remembers the last pair you looked at. */
+let HOME = { profile: "all", window: "7d", data: null, health: null, liveBal: null };
+const HM_WINDOWS = [["1d", "24h"], ["7d", "7 days"], ["14d", "2 weeks"], ["30d", "1 month"], ["all", "All time"]];
+const hmQuery = (profile, win) => {
+  const q = new URLSearchParams();
+  if (profile && profile !== "all") q.set("profile", profile);
+  if (win && win !== "7d") q.set("window", win);
+  const t = q.toString();
+  return t ? `?${t}` : "";
+};
+const hmGo = (profile, win) => go("/" + hmQuery(profile, win));
+const hmAgo = (ms) => ms == null ? "never" : fmtAgo(ms);
+
+/** `quiet` is the background tick: keep whatever is on screen if a fetch fails,
+ *  and never flash a loading card over a page that is already good. */
+async function loadHome(opt = {}) {
+  const v = $("view-home");
+  HOME.profile = PATH.profile || "all";
+  HOME.window = PATH.window || "7d";
+  if (!opt.quiet && !v.querySelector(".hm-head")) v.innerHTML = '<div class="card sub">loading…</div>';
+  const q = new URLSearchParams();
+  if (HOME.profile !== "all") q.set("profile", HOME.profile);
+  q.set("window", HOME.window);
+  let j, h = null;
+  try { j = await (await fetch(`/api/dashboard/analytics?${q}`)).json(); } catch (e) { if (!opt.quiet) v.innerHTML = '<div class="card warn">the dashboard API is not answering</div>'; return; }
+  if (!j.ok) { if (!opt.quiet) v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
+  try { const r = await (await fetch("/api/dashboard/health")).json(); h = r && r.ok ? r : null; } catch { h = null; }
+  // the balance is a READING, not a running total: scrape the client now and
+  // keep the stored snapshot only as the fallback for when it is shut
+  try { const r = await (await fetch("/api/dashboard/balance-live")).json(); HOME.liveBal = r && r.ok ? r : null; } catch { HOME.liveBal = null; }
+  if (PATH.view !== "home") return; // navigated away while the fetches were in flight
+  HOME.data = j; HOME.health = h;
+  pollWhilePending(j, () => { if (PATH.view === "home") loadHome({ quiet: true }); });
+  v.innerHTML = hmRender(j, h);
+  hmWire(v);
+  // the series is the scope's, but on Home the scope is always "all" — label the
+  // line with what actually picked these hands
+  const profLabel = HOME.profile === "all" ? "All accounts" : HOME.profile === "none" ? "Unattributed" : HOME.profile;
+  const winLabel = (HM_WINDOWS.find(([id]) => id === HOME.window) ?? ["all", "All time"])[1];
+  anDrawChart({ ...j.primary, label: `${profLabel} · ${winLabel}` }, null, { slot: "homeChart", canvas: "hm-canvas", legend: "hm-legend" });
+}
+
+function hmRender(j, h) {
+  const P = j.primary, a = P.hands, ans = P.answers;
+  const o = j.options, profs = o.profiles || [], wins = o.windows || [];
+  const winOf = (id) => wins.find((w) => w.id === id);
+  const profLabel = HOME.profile === "all" ? "All accounts" : HOME.profile === "none" ? "Unattributed hands" : HOME.profile;
+  const winLabel = (HM_WINDOWS.find(([id]) => id === HOME.window) ?? ["all", "All time"])[1];
+  const first = P.series[0]?.t, last = P.series[P.series.length - 1]?.t;
+  const tile = (lab, val, sub, c = "", title = "", cls = "") => `<div class="hm-tile ${cls}"${title ? ` title="${esc(title)}"` : ""}><div class="lab">${lab}</div><div class="val ${c}">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  // one button per account the wrapper knows, plus the unattributed bucket —
+  // hidden when this window holds none of them, which is the usual case
+  const profBtn = (id, label, n) => `<button aria-pressed="${HOME.profile === id}" data-prof="${esc(id)}" title="${esc(label)}${n == null ? "" : ` — ${n} hand${n === 1 ? "" : "s"} in this window`}">${esc(label)}${n == null ? "" : ` <span class="n">${n}</span>`}</button>`;
+  const allHands = profs.reduce((t, p) => t + (p.hands ?? 0), 0);
+  const profSeg = `<div class="ig-seg hm-seg" id="hm-profile">${profBtn("all", "All", allHands)}${profs.filter((p) => p.id !== "none" || p.hands > 0).map((p) => profBtn(p.id, p.label, p.hands)).join("")}</div>`;
+  const winSeg = `<div class="ig-seg hm-seg" id="hm-window">${HM_WINDOWS.map(([id, label]) => `<button aria-pressed="${HOME.window === id}" data-win="${id}" title="${esc(label)} — ${winOf(id)?.hands ?? 0} hands">${esc(label)}${winOf(id) ? ` <span class="n">${winOf(id).hands}</span>` : ""}</button>`).join("")}</div>`;
+  const anHref = "/analytics" + anQuery("all", null, HOME.profile, HOME.window);
+
+  return `<header class="hm-head">
+    <div class="hm-title">
+      <h1>Home</h1>
+      <p>${a.hands} hand${a.hands === 1 ? "" : "s"}${first ? ` · ${fmtD(first)} to ${fmtD(last)}` : ""} · <b>${esc(profLabel)}</b> · <b>${esc(winLabel)}</b></p>
+    </div>
+    <div class="hm-controls">
+      <div class="hm-ctl"><span class="lab">Account</span>${profSeg}</div>
+      <div class="hm-ctl"><span class="lab">Window</span>${winSeg}</div>
+      <a class="hm-more" href="${anHref}" onclick="go('${anHref}');return false" title="the full page: twelve tiles, a comparison line, and the per-position / per-stakes / per-month tables">full Analytics ↗</a>
+    </div>
+  </header>
+  ${a.hands ? "" : '<div class="ig-note">No hands from this account in this window.</div>'}
+  <div class="hm-top">
+    <div class="hm-tiles">
+      ${tile("Hands", a.hands, `${P.sessions.length} session${P.sessions.length === 1 ? "" : "s"}`)}
+      ${tile("Net won", `${sgn(a.netBb, 0)} bb`, `${a.netKnownHands} of ${a.hands} with a known net`, anCls(a.netBb), "a hand's net is exact when the pot was uncontested or you folded; a showdown is priced off the stack carried into the next hand, and is otherwise unknown")}
+      ${tile("bb/100", sgn(a.bb100, 1), a.bb100Se != null ? `±${a.bb100Se.toFixed(1)} std err` : "over hands with a known net", anCls(a.bb100), "100 x the standard deviation of the per-hand net over the square root of n")}
+      ${tile("After rake", sgn(a.bb100AfterRake, 1), `${(a.rakePaidBb ?? 0).toFixed(1)} bb paid · ${a.rakePer100 == null ? "–" : a.rakePer100.toFixed(1)}/100`, anCls(a.bb100AfterRake), "the recorded net less the rake it never saw — uncontested wins are priced off the displayed, pre-rake pot")}
+      ${tile("Answered", pctS(ans.decisionsCoveredPct), `of ${ans.decisions} decision${ans.decisions === 1 ? "" : "s"}${ans.unansweredNodes ? ` · ${ans.unansweredNodes} unanswered` : ""}`, ans.decisionsCoveredPct != null && ans.decisionsCoveredPct < 90 ? "neg" : "", "counted per distinct decision, not per logged row")}
+      ${tile("Followed", pctS(ans.followedPct), `${ans.followed} of ${ans.graded} graded`, "", "of the decisions where both the answer and your own action were captured, how often you did what it said")}
+      ${hmBalanceTile(profs, tile)}
+    </div>
+    <section class="hm-panel hm-chartp">
+      <h2>Cumulative result <span class="ig-dim">— ${esc(profLabel)}, ${esc(winLabel).toLowerCase()}</span></h2>
+      <div class="hm-chart"><canvas id="hm-canvas"></canvas></div>
+      <div class="ig-legend" id="hm-legend"></div>
+    </section>
+  </div>
+  ${hmSystem(h)}
+  <div class="ig-grid2">
+    <section class="hm-panel"><h2>Recent sessions <span class="ig-dim">— click one to open it</span></h2><div class="tbl">${hmSessions(P)}</div></section>
+    <section class="hm-panel"><h2>By position <span class="ig-dim">— in this window</span></h2><div class="tbl">${anBreakdownTable(P.byPosition, "Seat", null)}</div></section>
+  </div>`;
+}
+
+/** Money in the account right now.
+ *
+ *  A READING, never a running total: scraped from the open client on every load,
+ *  with the last stored snapshot as the fallback for when the client is shut —
+ *  and labelled either way, so a figure hours old never passes for a live one.
+ *  Unlike every other tile it is a point in time and does not move with the
+ *  window. ⚠ means the reading disagrees with what the hands say it should be by
+ *  more than rake and tolerance explain; the Profiles tab has the arithmetic. */
+function hmBalanceTile(profs, tile) {
+  const money = (cents) => `$${(cents / 100).toFixed(2)}`;
+  const wide = "hm-wide"; // seventh tile: it takes the last row to itself
+  const L = HOME.liveBal;
+  if (HOME.profile === "none") return tile("Balance", "—", "unattributed hands belong to no account", "", "these hands were played before the wrapper declared a profile at Start", wide);
+
+  // a live read is one account's — the client knows one at a time. It stands for
+  // "All" only when that account is the only seeded one.
+  const seeded = profs.filter((p) => p.balance);
+  const liveFor = L?.live && L.signedInAs && (HOME.profile === L.signedInAs || (HOME.profile === "all" && seeded.length <= 1 && (!seeded.length || seeded[0].id === L.signedInAs)));
+  if (liveFor) {
+    const k = L.check, off = k && !k.agrees;
+    const warn = off ? `<span class="hm-warn" title="${esc(`the client reads ${money(k.liveCents)} where the last reading plus the hands say ${money(k.expectedCents)} — off by ${money(Math.abs(k.unexplainedCents))}, outside the ±${money(k.toleranceCents)} tolerance. Review it on the Profiles tab.`)}">⚠</span>` : "";
+    const sub = `${L.live.inPlayCents ? `${money(L.live.inPlayCents)} in play · ` : L.live.seated ? "seated · " : ""}live read ${fmtAgo(L.at)}${off ? ` · <b class="neg">off by ${money(Math.abs(k.unexplainedCents))}</b>` : k ? " · matches the hands" : ""}`;
+    return tile(`Balance ${warn}`, money(L.live.equityCents), sub, off ? "neg" : "",
+      `scraped from the client just now (${esc(L.live.how ?? "")}) — cash plus whatever is sat on a table`, wide);
+  }
+
+  // no live read: say why, and fall back to the stored reading
+  const why = L?.reason ? L.reason : "the client is not open";
+  const picked = HOME.profile === "all" ? seeded : seeded.filter((p) => p.id === HOME.profile);
+  if (!picked.length) return tile("Balance", "—", HOME.profile === "all" ? "no account has a reading yet" : "not seeded — no reading yet", "", `${why}. The Profiles tab takes an account's first reading; every later check hangs off that anchor.`, wide);
+  const eq = picked.reduce((t, p) => t + (p.balance.equityCents ?? 0), 0);
+  const inPlay = picked.reduce((t, p) => t + (p.balance.inPlayCents ?? 0), 0);
+  const at = Math.max(...picked.map((p) => p.balance.ts ?? 0));
+  const who = picked.length > 1 ? `${picked.length} accounts · ` : "";
+  return tile(`Balance <span class="hm-stale" title="${esc(why)}">stored</span>`, money(eq),
+    `${who}${inPlay ? `${money(inPlay)} in play · ` : ""}last reading ${fmtAgo(at)}`, "",
+    `no live read — ${why}. This is the account's last stored reading (${fmtT(at)}): cash plus whatever was sat on a table then.`, wide);
+}
+
+/* ---- the system strip: can a spot be answered right now, and what is queued --
+   One card per thing that can break on its own, in the order it bites at the
+   table. Red means a spot asked for NOW would go unanswered; amber means it
+   still works but something is piling up or degraded. */
+function hmCard(state, name, val, sub, href, title) {
+  const inner = `<div class="k"><span class="dot ${state}"></span>${esc(name)}</div><div class="v">${val}</div><div class="s">${sub}</div>`;
+  return href
+    ? `<a class="hm-card ${state}" href="${href}" onclick="go('${href}');return false"${title ? ` title="${esc(title)}"` : ""}>${inner}</a>`
+    : `<div class="hm-card ${state}"${title ? ` title="${esc(title)}"` : ""}>${inner}</div>`;
+}
+function hmSystem(h) {
+  if (!h) return '<section class="hm-sys"><div class="hm-card dim"><div class="k"><span class="dot dim"></span>System</div><div class="v">unknown</div><div class="s">/api/dashboard/health did not answer</div></div></section>';
+  const cards = [];
+
+  // 1 — the poller: nothing else matters if the table is not being watched
+  const p = h.poller;
+  cards.push(!p ? hmCard("dim", "Study poller", "unknown", "no status from the API", null, "")
+    : hmCard(p.running ? (p.lastError ? "warn" : "good") : "dim",
+        "Study poller",
+        p.running ? `running · ${p.tables} table${p.tables === 1 ? "" : "s"}` : "stopped",
+        p.running ? `tick ${hmAgo(p.lastTickAt)} · pushed ${hmAgo(p.lastPushAt)}` : "start it from the wrapper's setup page",
+        null,
+        p.lastError ? `last error: ${p.lastError}` : "the loop that reads the table and asks for an answer"));
+
+  // 2 — GTO Wizard AI: the fallback the WHOLE of postflop rests on
+  const g = h.gtow;
+  const mins = g?.expiresInMs != null ? Math.max(0, Math.round(g.expiresInMs / 60000)) : null;
+  cards.push(hmCard(g?.state === "up" ? "good" : g?.state === "no-token" ? "warn" : "crit",
+    "GTO Wizard AI",
+    g?.state === "up" ? "connected" : g?.state === "no-token" ? "no token" : "down",
+    g?.state === "up" ? `token ${mins == null ? "—" : `${mins} min`} · ${esc(g.cdpHost ?? "")}` : esc(g?.text ?? "unreachable"),
+    null,
+    "every postflop spot the MES overlay does not cover is answered by this client"));
+
+  // 3 — what those two actually produced, last 7 days
+  const t = h.answers?.tiers ?? {};
+  const slowest = Object.entries(t).sort((x, y) => (y[1]?.p90 ?? 0) - (x[1]?.p90 ?? 0))[0];
+  const seen = (h.answers?.answered ?? 0) + (h.answers?.failed ?? 0);
+  const failRate = seen ? (100 * h.answers.failed) / seen : 0;
+  cards.push(hmCard(!seen ? "dim" : failRate > 10 ? "warn" : "good",
+    "Answers (7d)",
+    `${h.answers?.answered ?? 0}`,
+    `${h.answers?.failed ?? 0} failed${slowest ? ` · ${esc(slowest[0])} p90 ${slowest[1].p90} ms` : ""}`,
+    null,
+    "answered and failed study answers over the last seven days, with the slowest tier's p90 latency"));
+
+  // 4 — preflop has no live solver: every miss is written down instead
+  const mq = h.missQueue;
+  const topKind = mq ? Object.entries(mq.byKind || {}).sort((x, y) => y[1] - x[1])[0] : null;
+  cards.push(hmCard(!mq ? "dim" : mq.open > 0 ? "warn" : "good",
+    "Preflop miss queue",
+    mq ? `${mq.open} open` : "unknown",
+    mq ? `${mq.total} recorded${topKind ? ` · mostly ${esc(topKind[0])} (${topKind[1]})` : ""}` : "not reachable",
+    "/analytics",
+    "preflop has no on-demand solver, so every chart miss is written down with the state to solve it — the HRC runner works the queue between sessions"));
+
+  // 5 — the boxes that work that queue off
+  const k = h.keeper;
+  cards.push(hmCard(!k || !k.total ? "dim" : k.up < k.total ? "warn" : "good",
+    "Solve boxes",
+    !k ? "unknown" : !k.total ? (k.running ? "probing…" : "none") : `${k.up}/${k.total} up`,
+    !k ? "keeper not reachable" : !k.total ? (k.running ? "the keeper has not finished its first pass" : "no boxes in the ledger") : `${k.working} running a job · keeper ${k.running ? "on" : "off"}`,
+    "/proposals",
+    k ? (k.boxes || []).map((b) => `${b.name}: ${b.ok ? (b.job === "Running" ? (b.phase || "running") : "idle") : "unreachable"}`).join("\n") : ""));
+
+  // 6 — anything the dispatcher is running right now
+  const jobs = h.jobs || [];
+  cards.push(hmCard(jobs.length ? "good" : "dim",
+    "Jobs",
+    jobs.length ? `${jobs.length} running` : "idle",
+    jobs.length ? jobs.map((x) => esc(x.config || x.recipe || `#${x.id}`)).join(", ") : "nothing in flight",
+    "/proposals",
+    "the solve dispatcher's own jobs"));
+
+  return `<section class="hm-sys">${cards.join("")}</section>`;
+}
+
+/** The last eight sessions in the window, newest first — the same numbers the
+ *  Analytics "By session" table carries, with the columns that fit a half-width
+ *  panel. */
+function hmSessions(P) {
+  if (!P.sessions.length) return '<div class="ig-note" style="margin:0">no sessions in this window</div>';
+  const rows = P.sessions.slice().reverse().slice(0, 8).map((s) => `<tr class="pick" data-sess="${esc(s.id)}" title="open this session's page">
+      <td>${fmtT(s.startedAt)}</td>
+      <td class="ig-dim">${esc(s.declared ? presetLabel(s.preset, s) : "undeclared")}</td>
+      <td class="num">${s.hands}</td><td class="num ${anCls(s.netBb)}">${sgn(s.netBb, 0)}</td><td class="num ${anCls(s.bb100)}">${sgn(s.bb100, 1)}</td>
+      <td class="num">${pctS(s.answers.decisionsCoveredPct)}</td></tr>`).join("");
+  return `<table><thead><tr><th>Started</th><th>Strategy</th><th>Hands</th><th>Net bb</th><th>bb/100</th><th>Answered</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function hmWire(v) {
+  v.querySelectorAll("#hm-profile button[data-prof]").forEach((b) => b.onclick = () => hmGo(b.dataset.prof, HOME.window));
+  v.querySelectorAll("#hm-window button[data-win]").forEach((b) => b.onclick = () => hmGo(HOME.profile, b.dataset.win));
+  v.querySelectorAll("tr[data-sess]").forEach((tr) => tr.onclick = () => go(`/sessions/${encodeURIComponent(tr.dataset.sess)}`));
+}
+
 /* ================= Analytics =================
    Design follows the "Ignition Cash Results" artifact: one cumulative-result
    chart (Chart.js), a row of tiles, and plain tables in panels — no small
@@ -1057,8 +1551,23 @@ async function solveNode(dbId, upto, btn) {
    scope lives in the URL (/analytics?scope=…&vs=…) so a view can be linked to.
    The Solver & model block underneath is corpus-level and ignores the scope. */
 let AN = { options: null, chart: null, sess: null };
-const anQuery = (scope, vs) => { const q = new URLSearchParams(); if (scope && scope !== "all") q.set("scope", scope); if (vs) q.set("vs", vs); const s = q.toString(); return s ? `?${s}` : ""; };
-const anGo = (scope, vs) => go("/analytics" + anQuery(scope, vs));
+/* The Analytics URL carries four things: the scope, an optional comparison
+   scope, and the account + window Home hands over when you click through to the
+   full page. Profile and window are NOT part of the scope grammar — they narrow
+   the hand set before the scope is applied, so the three compose. */
+const anQuery = (scope, vs, profile, win) => {
+  const q = new URLSearchParams();
+  if (scope && scope !== "all") q.set("scope", scope);
+  if (vs) q.set("vs", vs);
+  if (profile && profile !== "all") q.set("profile", profile);
+  if (win && win !== "all") q.set("window", win);
+  const s = q.toString(); return s ? `?${s}` : "";
+};
+const anGo = (scope, vs) => go("/analytics" + anQuery(scope, vs, PATH.profile, PATH.window));
+/* changing the account or the window drops the scope: a session or a month
+   picked under one account is meaningless under another, and an empty scope is
+   a worse surprise than starting from "all" */
+const anGoPW = (profile, win) => go("/analytics" + anQuery("all", null, profile, win));
 const anParse = (spec) => { const m = String(spec || "all").match(/^(sessions|months|stakes|range):(.*)$/); return m ? { kind: m[1], items: m[1] === "range" ? [] : m[2].split(",").filter(Boolean), raw: m[2] } : { kind: "all", items: [], raw: "" }; };
 const fmtD = (ms) => ms == null ? "?" : new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 const sgn = (x, d = 1) => x == null ? "–" : (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(Number(x)).toFixed(d);
@@ -1070,9 +1579,10 @@ const AN_KINDS = [["all", "All"], ["sessions", "Sessions"], ["months", "Months"]
 async function loadAnalytics() {
   const v = $("view-analytics");
   const scope = PATH.scope || "all", vs = PATH.vs || null;
+  const profile = PATH.profile || "all", win = PATH.window || "all";
   if (!v.querySelector(".ig-head")) v.innerHTML = '<div class="card sub">loading…</div>';
   let j;
-  try { j = await (await fetch(`/api/dashboard/analytics${anQuery(scope, vs)}`)).json(); } catch (e) { v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
+  try { j = await (await fetch(`/api/dashboard/analytics${anQuery(scope, vs, profile, win)}`)).json(); } catch (e) { v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
   if (!j.ok) { v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
   if (PATH.view !== "analytics") return; // navigated away while the fetch was in flight
   AN.options = j.options;
@@ -1105,7 +1615,31 @@ function anChips(which, spec) {
   }
   return `<div class="ig-chips" data-which="${which}" data-kind="${cur.kind}">${lead}${anItems(cur.kind).map((it) => `<button class="ig-chip" aria-pressed="${cur.items.includes(it.id)}" data-item="${esc(it.id)}">${esc(it.label)}</button>`).join("")}${off}</div>`;
 }
+/** The account and window in words, for the header line — only when they are
+ *  actually narrowing anything, so the default page reads as it always did. */
+function anNarrowLabel() {
+  const p = PATH.profile || "all", w = PATH.window || "all";
+  const bits = [];
+  if (p !== "all") bits.push(p === "none" ? "unattributed hands" : p);
+  if (w !== "all") bits.push((HM_WINDOWS.find(([id]) => id === w) ?? [w, w])[1].toLowerCase());
+  return bits.length ? ` · <b>${esc(bits.join(" · "))}</b>` : "";
+}
+
+/** Account and window, the two controls Home leads with — same markup here, so
+ *  clicking through from Home lands on the same hands. */
+function anProfileWindow(j) {
+  const cur = PATH.profile || "all", curW = PATH.window || "all";
+  const profs = j.options.profiles || [], wins = j.options.windows || [];
+  const all = profs.reduce((t, p) => t + (p.hands ?? 0), 0);
+  const btn = (attr, id, label, n, on) => `<button aria-pressed="${on}" data-${attr}="${esc(id)}" title="${esc(label)} — ${n} hands">${esc(label)}${n == null ? "" : ` <span class="n">${n}</span>`}</button>`;
+  const p = `<div class="ig-seg hm-seg" data-an="profile">${btn("prof", "all", "All", all, cur === "all")}${profs.filter((x) => x.id !== "none" || x.hands > 0).map((x) => btn("prof", x.id, x.label, x.hands, cur === x.id)).join("")}</div>`;
+  const w = `<div class="ig-seg hm-seg" data-an="window">${(wins.length ? wins : []).map((x) => btn("win", x.id, x.label, x.hands, curW === x.id)).join("")}</div>`;
+  return `<div class="hm-ctl"><span class="lab">Account</span>${p}</div><div class="hm-ctl"><span class="lab">Window</span>${w}</div>`;
+}
+
 function anWire(v, scope, vs) {
+  v.querySelectorAll("[data-an=profile] button[data-prof]").forEach((b) => b.onclick = () => anGoPW(b.dataset.prof, PATH.window));
+  v.querySelectorAll("[data-an=window] button[data-win]").forEach((b) => b.onclick = () => anGoPW(PATH.profile, b.dataset.win));
   const set = (which, spec) => which === "scope" ? anGo(spec, vs) : anGo(scope, spec);
   const allOf = (kind) => kind === "all" ? "all" : kind === "range" ? `range:${AN.options.range.from}-${AN.options.range.to}` : `${kind}:${anItems(kind).map((x) => x.id).join(",")}`;
   v.querySelectorAll(".ig-seg[data-which] button").forEach((b) => b.onclick = () => set(b.closest(".ig-seg").dataset.which, allOf(b.dataset.kind)));
@@ -1135,8 +1669,8 @@ function anRender(j, scope, vs) {
   const delta = (k, d = 1, suf = "") => o && a[k] != null && o[k] != null ? `<div class="sub ${anCls(a[k] - o[k])}">${sgn(a[k] - o[k], d)}${suf} vs ${esc(C.label)}</div>` : "";
   const tile = (lab, val, sub, c = "", d = "") => `<div class="ig-tile"><div class="lab">${lab}</div><div class="val ${c}">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}${d}</div>`;
   return `<header class="ig-head">
-    <div><h1>Analytics</h1><p>${a.hands} hands${first ? `, ${fmtD(first)} to ${fmtD(last)}` : ""} · <b>${esc(P.label)}</b>${C ? ` · compared with <b>${esc(C.label)}</b> (${o.hands} hands, dashed on the chart)` : ""}</p></div>
-    <div class="ig-controls">${anKindSeg("scope", scope)}<div class="ig-sep"></div><div class="ig-seg"><button aria-pressed="${!!C}" data-act="compare">Compare</button></div></div>
+    <div><h1>Analytics</h1><p>${a.hands} hands${first ? `, ${fmtD(first)} to ${fmtD(last)}` : ""}${anNarrowLabel()} · <b>${esc(P.label)}</b>${C ? ` · compared with <b>${esc(C.label)}</b> (${o.hands} hands, dashed on the chart)` : ""}</p></div>
+    <div class="ig-controls">${anProfileWindow(j)}<div class="ig-sep"></div>${anKindSeg("scope", scope)}<div class="ig-sep"></div><div class="ig-seg"><button aria-pressed="${!!C}" data-act="compare">Compare</button></div></div>
   </header>
   ${anChips("scope", scope)}${C ? anChips("vs", vs) : ""}
   ${a.hands ? "" : '<div class="ig-note">No hands in this scope.</div>'}
@@ -1475,8 +2009,21 @@ async function mqPlan() {
   alert(`wrote ${r.jobs} job(s)\n\nplan: ${r.plan}\nrunner queue: ${r.queue}\n\nOpen HRC Runner and load the queue file.`);
 }
 
-/* ================= chart catalog ================= */
-let CAT = null, catFam = "", catQ = "";
+/* ================= chart catalog: the Charts picker =================
+   WHY THIS IS FACETED AND NOT A SEARCH BOX (2026-09-20, Brady: "let me search
+   'even 100bb stacks 2.5 open size from hijack' instead of the esoteric naming
+   convention"). Every dimension of a chart is low-cardinality and enumerable —
+   ~21 depth rungs, 5 open sizes, 6 short seats, 4 rooms, 6 generations. There is
+   nothing to understand, only vocabulary to recognise, so the box parses words
+   into FACET VALUES and shows each as a chip you can take back off. Word order
+   does not matter and neither does the id's spelling: "2.5", "2.5x" and "o2_5"
+   all reach the same facet, "hijack" and "hj" the same seat.
+
+   A SEAT IS NOT A CHART FACET. One 2.5x tree holds UTG's open, HJ's open and the
+   rest — "from hijack" names a NODE inside the chart, not a different chart. So a
+   seat chip filters nothing; it turns each row's "show the node" button into that
+   seat's first-in line and renders the strategy there. */
+let CAT = null, catSel = {}, catText = "", catSug = [], catSugI = 0, catOpenRow = null, catMore = {};
 
 const stacksStr = (e) => {
   if (!e.stacksBB) return e.depth != null ? `${e.depth}bb` : "—";
@@ -1489,6 +2036,117 @@ const fmtAgo = (ms) => {
   const m = Math.round((Date.now() - ms) / 60000);
   return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
 };
+
+/* ---- the facet model ----
+   `of` maps an entry to its value in this facet (null = the facet does not apply to
+   that chart). `alias` gives the words that reach a value beyond its own label. */
+const CAT_SEATS = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+const SEAT_WORDS = { UTG: ["utg", "underthegun", "firstin"], HJ: ["hj", "hijack"], CO: ["co", "cutoff"], BTN: ["btn", "button", "dealer"], SB: ["sb", "smallblind"], BB: ["bb", "bigblind"] };
+const gameOf = (e) => e.family === "6max" ? "6-max" : e.family === "husng" ? "HU SnG"
+  : e.players === 2 ? "heads-up" : e.players === 3 ? "3-max" : e.players ? `${e.players}-max` : null;
+const CAT_FACETS = [
+  { key: "game", label: "game", of: gameOf,
+    alias: { "3-max": ["3max", "3handed", "threemax", "zone", "trio"], "6-max": ["6max", "6handed", "sixmax", "ring", "full"], "heads-up": ["hu", "headsup", "heads"], "HU SnG": ["husng", "sng", "sitngo", "tournament"] } },
+  { key: "stake", label: "stake", of: (e) => e.stake ?? null,
+    alias: { NL200: ["200nl", "nl200"], NL25: ["25nl", "nl25"], NL50: ["50nl", "nl50"], NL100: ["100nl", "nl100"], NL500: ["500nl", "nl500"] } },
+  { key: "room", label: "room", of: (e) => e.source === "gtow" ? "GTO Wizard library" : e.site ? (e.site.startsWith("cp") ? "CoinPoker" : "Ignition") : null,
+    alias: { Ignition: ["ign", "ignition", "bovada"], CoinPoker: ["cp", "coinpoker"], "GTO Wizard library": ["gtow", "wizard", "library"] } },
+  { key: "depth", label: "depth", of: (e) => e.depth != null ? `${e.depth}bb` : null, numeric: true },
+  { key: "shape", label: "stacks", of: (e) => e.shape ?? null,
+    display: { even: "all equal", short: "one seat short", patch: "bespoke stacks" },
+    alias: { even: ["even", "equal", "symmetric", "flat"], short: ["short", "asym", "asymmetric", "uneven"], patch: ["patch", "bespoke", "custom"] } },
+  { key: "shortSeat", label: "short seat", of: (e) => e.shortSeat && e.shortSeat !== "EQ" ? e.shortSeat : null, alias: SEAT_WORDS },
+  { key: "shortDepth", label: "short stack", of: (e) => e.shape === "short" && e.shortDepth != null ? `${e.shortDepth}bb` : null, numeric: true },
+  { key: "open", label: "open size", of: (e) => e.open == null ? null : e.open === "limp" ? "limp" : `${e.open}x`, numeric: true,
+    alias: { limp: ["limp", "limped", "olimp"] } },
+  { key: "threeBet", label: "3-bet", of: (e) => e.threeBet == null ? null : e.threeBet === "jam" ? "jam" : `${e.threeBet}bb`, numeric: true,
+    alias: { jam: ["jam", "shove", "allin"] } },
+  { key: "variant", label: "generation", of: (e) => e.variant ?? null,
+    display: { base: "original", v2: "v2 full postflop", v2b: "A/B flop-only", v2ci: "re-solved (v2ci)", lock: "locked root", patch: "patch", accept: "acceptance check" },
+    alias: { v2ci: ["2ci", "resolved", "resolve", "current", "latest"], lock: ["lock", "locked", "lockedroot"], base: ["base", "original", "first"], patch: ["patch"], accept: ["acceptance", "hrc1"] } },
+  { key: "routed", label: "used by", of: (e) => e.routed ?? "browse-only",
+    alias: { "browse-only": ["browse", "unused", "unrouted"] }, liveFirst: true },
+  { key: "stored", label: "stored", of: (e) => e.source !== "hrc" ? "bundled" : e.cachedLocally ? "on this disk" : "R2 only",
+    alias: { "on this disk": ["cached", "local", "disk"], "R2 only": ["r2", "remote", "cloud"] } },
+];
+/* The seat a spot is asked FROM. Not a filter — see the header comment. */
+const CAT_SEAT_FACET = { key: "seat", label: "to act", alias: SEAT_WORDS };
+
+const catNorm = (s) => String(s).toLowerCase().replace(/[^a-z0-9.]/g, "");
+const catDisplay = (f, v) => (f.display && f.display[v]) || v;
+/** every word that reaches this value */
+const catWords = (f, v) => [catNorm(v), catNorm(catDisplay(f, v)), ...((f.alias && f.alias[v]) || []).map(catNorm)];
+/** a value safe to drop into an inline onclick */
+const catArg = (v) => JSON.stringify(String(v)).replace(/"/g, "&quot;");
+
+/** rows matching every selected facet except `skip` (so a facet's own counts are drill-down counts).
+ *  `useText` false ignores what is half-typed in the box: a count must say how many charts
+ *  PICKING this value would leave, and the word being typed is about to become that chip,
+ *  not an extra filter on top of it. Typing "6max" otherwise read 66 where the answer is 74. */
+function catMatch(rows, skip, useText = true) {
+  return rows.filter((e) => CAT_FACETS.every((f) => {
+    if (f.key === skip) return true;
+    const want = catSel[f.key];
+    if (!want || !want.length) return true;
+    const v = f.of(e);
+    return v != null && want.includes(v);
+  }) && (!useText || !catText || `${e.name} ${e.id}`.toLowerCase().includes(catText)));
+}
+/** A typed word filters text ONLY when it names no facet — then it is a plain substring
+ *  search over the name and the id, so pasting an id still finds its chart. */
+const catTextOn = () => !!catText && catSug.length === 0;
+
+/** ordered distinct values of a facet over the given rows, with counts */
+function catValues(f, rows) {
+  const n = new Map();
+  for (const e of rows) { const v = f.of(e); if (v != null) n.set(v, (n.get(v) ?? 0) + 1); }
+  const vals = [...n.entries()].map(([value, count]) => ({ value, count }));
+  if (f.numeric) vals.sort((a, b) => (parseFloat(a.value) || 0) - (parseFloat(b.value) || 0));
+  else if (f.liveFirst) vals.sort((a, b) => (a.value === "browse-only" ? 1 : 0) - (b.value === "browse-only" ? 1 : 0) || b.count - a.count);
+  else vals.sort((a, b) => b.count - a.count);
+  return vals;
+}
+
+/** typed word → the facet values it could mean, best first */
+function catSuggest(word) {
+  const w = catNorm(word);
+  if (!w) return [];
+  const out = [];
+  for (const f of CAT_FACETS) {
+    const base = catMatch(CAT.entries, f.key, false);
+    for (const { value, count } of catValues(f, base)) {
+      if ((catSel[f.key] ?? []).includes(value)) continue;
+      const words = catWords(f, value);
+      const rank = words.some((x) => x === w) ? 0 : words.some((x) => x.startsWith(w)) ? 1 : words.some((x) => x.includes(w)) ? 2 : -1;
+      if (rank >= 0) out.push({ f, value, count, rank, seat: false });
+    }
+  }
+  for (const seat of CAT_SEATS) {
+    if ((catSel.seat ?? []).includes(seat)) continue;
+    const words = SEAT_WORDS[seat].map(catNorm);
+    const rank = words.some((x) => x === w) ? 0 : words.some((x) => x.startsWith(w)) ? 1 : -1;
+    if (rank < 0) continue;
+    // SPELLING THE POSITION OUT MEANS THE SPOT. "hijack" in a poker sentence is who is
+    // acting; "hj" is as likely to be the short seat of an uneven chart — and short-seat
+    // BB covers 478 charts, so the abbreviation must not jump the filtering facet.
+    const spelled = words.slice(1).some((x) => x === w);
+    out.push({ f: CAT_SEAT_FACET, value: seat, count: null, rank: rank + (spelled ? -0.1 : 0.5), seat: true });
+  }
+  return out.sort((a, b) => a.rank - b.rank || (b.count ?? 0) - (a.count ?? 0)).slice(0, 8);
+}
+
+function catAdd(key, value) {
+  if (key === "seat") catSel.seat = [value];          // one seat at a time: it picks a node
+  else (catSel[key] ??= []).push(value);
+  catText = ""; catSug = []; catSugI = 0;
+  renderCatalog(true);
+}
+function catDrop(key, value) {
+  catSel[key] = (catSel[key] ?? []).filter((v) => v !== value);
+  if (!catSel[key].length) delete catSel[key];
+  renderCatalog(true);
+}
+function catClear() { catSel = {}; catText = ""; catSug = []; catMore = {}; renderCatalog(true); }
 
 async function loadCatalog() {
   const v = $("src-catalog");
@@ -1503,79 +2161,158 @@ async function loadCatalog() {
   renderCatalog();
 }
 
-function renderCatalog() {
+/** the line that reaches this seat's first-in decision: everyone before it folds */
+const catSeatLine = (e, seat) => {
+  const order = e.seats ?? (e.players === 3 ? ["BTN", "SB", "BB"] : CAT_SEATS);
+  const i = order.indexOf(seat);
+  return i < 0 ? null : new Array(i).fill("F").join("-");
+};
+
+function renderCatalog(keepFocus) {
   const v = $("src-catalog");
-  if (!v) return;
+  if (!v || !CAT) return;
   const s = CAT.summary;
   const tile = (k, val, sub) => `<div class="tile"><div class="v">${val}</div><div class="k">${k}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
-  const famNames = Object.keys(s.byFamily).sort();
 
-  // recently-queried strip: live answers joined back to their chart
-  const recent = (CAT.recent || []).slice(0, 12);
-  const recentHtml = recent.length
-    ? `<div class="card"><h2>Recently queried by live study (30d)</h2><table><thead><tr>
-        <th>chart</th><th>answers</th><th>last used</th></tr></thead><tbody>` +
-      recent.map((r) => `<tr><td>${esc(r.chart)}</td><td>${r.n}</td><td class="sub">${fmtAgo(r.lastTs)}</td></tr>`).join("") +
-      `</tbody></table></div>`
-    : `<div class="card sub">No live study answers logged against a chart yet — play a session with Study Answers on and the charts used will appear here.</div>`;
+  const rows = catMatch(CAT.entries, null, catTextOn());
+  const seat = (catSel.seat ?? [])[0] ?? null;
+  const shown = rows.slice(0, 400);
 
-  let rows = CAT.entries;
-  if (catFam) rows = rows.filter((e) => e.family === catFam);
-  if (catQ) rows = rows.filter((e) => `${e.id} ${e.label} ${e.site ?? ""} ${e.routed ?? ""}`.toLowerCase().includes(catQ));
-  // Live-routed families first — alphabetical order buried the 3-max corpus
-  // under a screenful of browse-only HU grids.
-  const famRank = { "3max-asym": 0, gtow: 1, "3max": 2, "hu-grid": 3, "hu-size": 4, husng: 5 };
-  rows = rows.slice().sort((a, b) =>
-    ((famRank[a.family] ?? 8) - (famRank[b.family] ?? 8)) || a.id.localeCompare(b.id));
-  const shown = rows.slice(0, 800);
+  // chips for what is selected, then the box, then every facet still worth picking
+  const chips = [
+    ...CAT_FACETS.flatMap((f) => (catSel[f.key] ?? []).map((val) =>
+      `<button class="fchip on" onclick="catDrop('${f.key}', ${catArg(val)})">${esc(f.label)} ${esc(catDisplay(f, val))} <span class="x">×</span></button>`)),
+    ...(seat ? [`<button class="fchip on seat" onclick="catDrop('seat', ${catArg(seat)})">to act ${esc(seat)} <span class="x">×</span></button>`] : []),
+  ].join("");
+
+  const facetRows = CAT_FACETS.map((f) => {
+    const vals = catValues(f, catMatch(CAT.entries, f.key, catTextOn()));
+    if (vals.length < 2 && !(catSel[f.key] ?? []).length) return "";
+    const cap = catMore[f.key] ? vals.length : 12;
+    const chip = (x) => `<button class="fchip${(catSel[f.key] ?? []).includes(x.value) ? " on" : ""}" onclick="catAdd('${f.key}', ${catArg(x.value)})">${esc(catDisplay(f, x.value))}<span class="n">${x.count}</span></button>`;
+    // a selected value must stay visible even when it sorts past the cap
+    const head = vals.slice(0, cap), tail = vals.slice(cap).filter((x) => (catSel[f.key] ?? []).includes(x.value));
+    return `<div class="frow"><span class="fkey">${esc(f.label)}</span><span class="fvals">${[...head, ...tail].map(chip).join("")}${
+      vals.length > cap ? `<button class="fchip more" onclick="catMore['${f.key}']=true;renderCatalog()">+${vals.length - cap} more</button>` : ""}${
+      catMore[f.key] && vals.length > 12 ? `<button class="fchip more" onclick="catMore['${f.key}']=false;renderCatalog()">fewer</button>` : ""}</span></div>`;
+  }).join("");
+
+  const sugHtml = catSug.length
+    ? `<div class="fsug">${catSug.map((x, i) => `<div class="fsug-row${i === catSugI ? " on" : ""}" onmousedown="event.preventDefault();catAdd('${x.f.key}', ${catArg(x.value)})">
+        <span class="fsug-k">${esc(x.f.label)}</span><span class="fsug-v">${esc(catDisplay(x.f, x.value))}</span>
+        <span class="fsug-n">${x.seat ? "a node, not a filter" : `${x.count} chart${x.count === 1 ? "" : "s"}`}</span></div>`).join("")}</div>`
+    : "";
+
+  const recent = (CAT.recent || []).slice(0, 8);
+  const nameOf = (id) => (CAT.entries.find((e) => e.id === id) || {}).name || id;
 
   v.innerHTML = `
     <div class="tiles">
-      ${tile("charts", s.total, `${s.routed} live-routed`)}
-      ${famNames.map((f) => tile(f, s.byFamily[f])).join("")}
+      ${tile("charts", s.total, `${s.routed} answer live study`)}
+      ${tile("matching", rows.length, rows.length === s.total ? "no filter yet" : "after your filters")}
+      ${recent.length ? tile("used in 30d", recent.length, "by live study") : ""}
     </div>
-    <div class="card sub" style="line-height:1.7">
-      <b style="color:var(--muted)">Sources:</b>
-      HRC corpus ${s.solutionsDir ? `sidecars at <code>${esc(s.solutionsDir)}</code>` : '<span class="warn">solutions dir NOT found</span>'} (bodies canonical in R2, fetched on demand) ·
-      GTOW crawl ${s.gtowDb ? "<code>data/preflop-db.sqlite</code>" : '<span class="warn">sqlite missing</span>'} ·
-      <b style="color:var(--muted)">routed</b> = what the Ignition study poller answers from today; everything else is browsable in SolverStudy.
+    <div class="card finder">
+      <h2>Find a chart <span class="sub">— describe it in words; every word you type becomes a filter you can take back off</span></h2>
+      <div class="fbox">
+        ${chips}
+        <input id="cat-q" type="text" autocomplete="off" spellcheck="false" placeholder="${chips ? "add another…" : "100bb · 2.5 open · even stacks · hijack · 6-max…"}" value="${esc(catText)}">
+        ${sugHtml}
+      </div>
+      ${seat ? `<div class="sub" style="margin-top:8px">↓ <b>${esc(seat)}</b> is a node, not a chart — one tree holds every seat's open. Each row below opens ${esc(seat)}'s first-in decision in that chart's tree.</div>` : ""}
+      <div class="facets">${facetRows}</div>
+      <div class="frow" style="margin-top:6px">
+        ${Object.keys(catSel).length || catText ? `<button class="mini" onclick="catClear()">clear all</button>` : ""}
+        <button class="mini" id="cat-refresh">↻ rescan</button>
+        <span class="sub">${s.solutionsDir ? `HRC sidecars at <code>${esc(s.solutionsDir)}</code>, bodies canonical in R2` : '<span class="warn">solutions dir NOT found</span>'} · <b style="color:var(--muted)">used by</b> = what the live study path answers from today</span>
+      </div>
     </div>
-    ${recentHtml}
+    ${recent.length ? `<div class="card"><h2>Recently queried by live study (30d)</h2><table><thead><tr><th>chart</th><th>answers</th><th>last used</th></tr></thead><tbody>${
+      recent.map((r) => `<tr><td>${esc(nameOf(r.chart))}<div class="mono sub">${esc(r.chart)}</div></td><td class="num">${r.n}</td><td class="sub">${fmtAgo(r.lastTs)}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <div class="card">
-      <h2>All charts
-        <select id="cat-fam" style="margin-left:10px">
-          <option value="">all families</option>
-          ${famNames.map((f) => `<option value="${f}" ${f === catFam ? "selected" : ""}>${f} (${s.byFamily[f]})</option>`).join("")}
-        </select>
-        <input id="cat-q" type="text" placeholder="filter id, site, routed…" value="${esc(catQ)}" style="margin-left:8px">
-        <button id="cat-refresh" class="mini" style="margin-left:8px">↻ rescan</button>
-        <span class="sub" style="margin-left:10px">${rows.length} match${shown.length < rows.length ? ` · showing ${shown.length}` : ""}</span>
-      </h2>
-      <table><thead><tr>
-        <th>id</th><th>family</th><th>site</th><th>players</th><th>stacks</th><th>sizes</th><th>nodes</th><th>cached</th><th>routed</th>
-      </tr></thead><tbody>
-      ${shown.map((e) => `<tr style="cursor:default">
-        <td title="${esc(e.location)}">${esc(e.id)}</td>
-        <td>${esc(e.family)}</td>
-        <td>${esc(e.site ?? "—")}</td>
-        <td>${e.players ?? "—"}</td>
+      <h2>${rows.length} chart${rows.length === 1 ? "" : "s"}${shown.length < rows.length ? ` <span class="sub">— showing the first ${shown.length}</span>` : ""}</h2>
+      ${rows.length ? `<table><thead><tr><th>chart</th><th>stacks</th><th>nodes</th><th>stored</th><th>used by</th><th></th></tr></thead><tbody>
+      ${shown.map((e) => `<tr class="catrow">
+        <td><div>${esc(e.name)}</div><div class="mono sub" title="${esc(e.location)}">${esc(e.id)}</div></td>
         <td>${esc(stacksStr(e))}</td>
-        <td class="sub">${e.open != null ? `o${e.open}` : ""}${e.threeBet != null ? ` 3b${e.threeBet}` : ""}</td>
-        <td>${e.nodes ?? "—"}</td>
-        <td>${e.source !== "hrc" ? "bundled" : e.cachedLocally ? "✓" : '<span class="sub">R2</span>'}</td>
+        <td class="num">${e.nodes ?? "—"}</td>
+        <td>${e.source !== "hrc" ? '<span class="sub">bundled</span>' : e.cachedLocally ? "✓ disk" : '<span class="sub">R2</span>'}</td>
         <td>${e.routed ? `<span class="badge b-info">${esc(e.routed)}</span>` : '<span class="sub">browse-only</span>'}</td>
-      </tr>`).join("")}
-      </tbody></table>
+        <td>${e.source !== "hrc" ? "" : seat && catSeatLine(e, seat) == null
+          ? `<span class="sub">no ${esc(seat)} at this table</span>`
+          : `<button class="mini" onclick="catNode(${catArg(e.id)}, ${seat ? catArg(seat) : "null"})">${seat ? `${esc(seat)} first in ↓` : "root ↓"}</button>`}</td>
+      </tr>
+      <tr class="catnode" id="catnode-${esc(e.id)}" hidden><td colspan="6"></td></tr>`).join("")}
+      </tbody></table>` : `<div class="sub">Nothing matches all of those. Take a chip off — the counts on each chip say how many charts it would leave.</div>`}
     </div>`;
-  $("cat-fam").onchange = (ev) => { catFam = ev.target.value; renderCatalog(); };
-  $("cat-q").oninput = (ev) => { catQ = ev.target.value.trim().toLowerCase(); renderCatalog(); };
-  // keep typing focus through re-render
-  const q = $("cat-q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+
+  const q = $("cat-q");
+  q.oninput = (ev) => {
+    catText = ev.target.value.trim().toLowerCase();
+    catSug = catSuggest(catText); catSugI = 0;
+    renderCatalog(true);
+  };
+  q.onkeydown = (ev) => {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      if (!catSug.length) return;
+      ev.preventDefault();
+      catSugI = (catSugI + (ev.key === "ArrowDown" ? 1 : catSug.length - 1)) % catSug.length;
+      renderCatalog(true);
+    } else if (ev.key === "Enter" && catSug.length) {
+      ev.preventDefault(); const x = catSug[catSugI]; catAdd(x.f.key, x.value);
+    } else if (ev.key === "Escape") { catSug = []; renderCatalog(true); }
+    else if (ev.key === "Backspace" && !ev.target.value) {
+      const last = [...CAT_FACETS, CAT_SEAT_FACET].reverse().find((f) => (catSel[f.key] ?? []).length);
+      if (last) catDrop(last.key, catSel[last.key][catSel[last.key].length - 1]);
+    }
+  };
+  if (keepFocus) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   $("cat-refresh").onclick = async () => {
     $("cat-refresh").textContent = "…";
     try { CAT = await (await fetch("/api/dashboard/catalog?refresh=1")).json(); } catch (e) {}
     renderCatalog();
   };
+}
+
+/** open one chart's node inline — the row's "root ↓" / "<seat> first in ↓" button.
+ *  WALKABLE (2026-09-20, Brady asked for "BTN vs BB, BTN 2.5x open"): a seat chip can only
+ *  name a FIRST-IN decision, and most spots worth looking at are not one — BB facing a
+ *  button open is three actions deep. Every action at the node is a button that descends
+ *  into it, and the crumb walks back, so any node of the tree is reachable from the row. */
+async function catNode(id, seat, line) {
+  const host = $(`catnode-${id}`);
+  if (!host) return;
+  const e = CAT.entries.find((x) => x.id === id);
+  if (line == null) {                                   // the row button: toggle, start at the seat
+    if (!host.hidden && catOpenRow === id) { host.hidden = true; catOpenRow = null; return; }
+    line = seat ? (catSeatLine(e, seat) ?? "") : "";
+  }
+  catOpenRow = id; host.hidden = false;
+  const cell = host.firstElementChild;
+  cell.innerHTML = '<div class="sub">reading the node…</div>';
+  let j;
+  try { j = await (await fetch(`/api/dashboard/chart-node?id=${encodeURIComponent(id)}&line=${encodeURIComponent(line)}`)).json(); }
+  catch (err) { cell.innerHTML = `<div class="warn">${esc(String(err))}</div>`; return; }
+  if (!j.ok) { cell.innerHTML = `<div class="warn">${esc(j.error)}</div>`; return; }
+  const toks = line ? line.split("-") : [];
+  // the crumb is the way back: each step reopens the node that many actions in
+  const back = `<span class="nv-crumb"><button class="lnk" onclick="catNode(${catArg(id)}, null, ${catArg("")})">root</button>${
+    toks.map((t, i) => `<span class="sep">›</span><button class="lnk" onclick="catNode(${catArg(id)}, null, ${catArg(toks.slice(0, i + 1).join("-"))})">${esc(t)}</button>`).join("")}</span>`;
+  if (!j.node) { cell.innerHTML = `<div class="nv-head"><span><span class="sub">line</span> ${back}</span></div><div class="warn">${esc(j.note)}</div>`; return; }
+  const n = j.node;
+  const cls = {};
+  for (const c of n.cells) {
+    const acts = n.actions.map((a) => c.actions[a.action] ?? 0);
+    cls[c.hand] = { w: COMBOS(c.hand), acts: acts.map((p) => (COMBOS(c.hand) * p) / 100) };
+  }
+  const step = n.terminal || !n.actions.length ? '<span class="sub">the hand ends here</span>'
+    : `<span class="sub">walk on:</span> ${n.actions.map((a) => a.token == null ? "" :
+        `<button class="fchip" onclick="catNode(${catArg(id)}, null, ${catArg(line ? `${line}-${a.token}` : a.token)})">${esc(n.pos ?? "")} ${esc(a.action)} ›</button>`).join("")}`;
+  cell.innerHTML = `<div class="nv-head"><span><span class="sub">chart</span> <b>${esc(e.name)}</b></span>
+      <span><span class="sub">line</span> ${back}</span>${n.pos ? `<span><span class="sub">to act</span> <b>${esc(n.pos)}</b></span>` : ""}</div>
+    ${classGrid(cls, n.actions.map((a) => a.action), null, { flat: true, wmax: 1e9, foot: "every class in the chart at this node · hover for the mix" })}
+    <div class="nv-walk">${step}</div>
+    <div class="sub" style="margin-top:8px"><a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON ↗</a></div>`;
 }
 
 /* ================= Ledger: formats · configs · plans · jobs ================= */
@@ -1846,7 +2583,7 @@ function wdSections(sections) {
     } else if (sec.range) {
       const cls = {}; let mass = 0;
       for (const [hand, w] of Object.entries(sec.range)) { cls[hand] = { w: COMBOS(hand) * w, acts: [COMBOS(hand) * w] }; mass += COMBOS(hand) * w; }
-      body = classGrid(cls, ["in range"], null, { single: "var(--info)", small: true, foot: `${(100 * mass / 1326).toFixed(1)}% of hands · opacity = weight` });
+      body = classGrid(cls, ["in range"], null, { single: "var(--info)", small: true, foot: `${(100 * mass / 1326).toFixed(1)}% of hands · fill height = weight` });
     } else if (sec.table) {
       const T = sec.table, hasView = T.chart != null;
       const stCls = (s) => s === "done" ? "done" : String(s).startsWith("solving") ? "running" : "queued";
@@ -1921,6 +2658,20 @@ async function loadSessions() {
   let j;
   try { j = await (await fetch("/api/dashboard/sessions")).json(); } catch (e) { v.innerHTML = '<div class="card warn">sessions unavailable</div>'; return; }
   if (!j.ok) { v.innerHTML = '<div class="card warn">sessions unavailable</div>'; return; }
+  /* The tables this session's hands actually came from. A single-table session
+     has one entry with slot null and shows a dash — tables.py gives it no slot
+     on purpose. When the session DECLARED more tables than ever archived a hand,
+     say so: that gap is how a split sitting looks from here. */
+  const tablesCell = (x) => {
+    const ts = x.tables || [];
+    const slots = ts.filter((t) => t.slot != null);
+    if (!slots.length) return '<span class="sub">—</span>';
+    const chips = slots.map((t) => `<span class="chip" title="${t.hands} hand${t.hands === 1 ? "" : "s"} on table ${t.slot}">T${t.slot}</span>`).join(" ");
+    const missing = x.declaredTables && x.declaredTables > slots.length;
+    return chips + (missing
+      ? ` <span class="chip warn" title="declared ${x.declaredTables} tables; only ${slots.length} archived any hands — the sitting may have split">${slots.length}/${x.declaredTables}</span>`
+      : "");
+  };
   const row = (x) => `<tr data-id="${esc(x.id)}">
       <td>${fmtT(x.startedAt)}${x.declared && !x.endedAt ? ` <span class="chip good">open</span> <button class="mini" onclick="endSession('${esc(x.id)}', event)" title="end this session — the wrapper writes its closing summary">end</button>` : ""}</td>
       <td>${x.declared ? presetChip(x.preset, x) : '<span class="chip dim">undeclared</span>'}</td>
@@ -1928,6 +2679,7 @@ async function loadSessions() {
       <td>${x.declared ? (x.answersOn ? '<span class="chip">answers on</span>' : '<span class="sub">answers off</span>') : '<span class="sub">—</span>'}</td>
       <td>${esc(x.stakes ?? "?")}</td>
       <td class="num">${x.hands}</td>
+      <td>${tablesCell(x)}</td>
       <td class="num">${x.answers ?? "—"}${x.failed ? ` <span class="sub">+${x.failed} failed</span>` : ""}</td>
       ${evCell(x.bb100, {})}
       <td>${x.recorded ? '<span class="chip">● recorded</span>' : '<span class="sub">—</span>'}</td>
@@ -1937,11 +2689,11 @@ async function loadSessions() {
   v.innerHTML = `
     <div class="banner">🗂 A session is declared on the wrapper's setup page before the table opens: the strategy, the sources allowed, the preflight that passed, and the version of every source in force are written down with it. Hands played before that are shown below as undeclared gaps.</div>
     <div class="card"><h2>Declared sessions <span class="sub">— ${declared.length} · from ${esc(j.store)}</span></h2>
-      ${declared.length ? `<div class="scroll"><table><thead><tr><th>started</th><th>strategy</th><th>label</th><th>answers</th><th>stakes</th><th class="num">hands</th><th class="num">answered</th><th class="num">bb/100</th><th>recording</th><th class="num">length</th></tr></thead><tbody>${declared.map(row).join("")}</tbody></table></div>`
+      ${declared.length ? `<div class="scroll"><table><thead><tr><th>started</th><th>strategy</th><th>label</th><th>answers</th><th>stakes</th><th class="num">hands</th><th title="which of the session's tables archived hands">tables</th><th class="num">answered</th><th class="num">bb/100</th><th>recording</th><th class="num">length</th></tr></thead><tbody>${declared.map(row).join("")}</tbody></table></div>`
         : '<div class="sub">None yet. The next time the wrapper is started it opens on <span class="mono">/setup</span>; the session declared there appears here.</div>'}
     </div>
     <div class="card"><h2>Before sessions were declared <span class="sub">— ${clusters.length} gap clusters, inferred</span></h2>
-      <div class="scroll"><table><thead><tr><th>started</th><th></th><th></th><th></th><th>stakes</th><th class="num">hands</th><th class="num">answered</th><th class="num">bb/100</th><th>recording</th><th class="num">length</th></tr></thead><tbody>${clusters.map(row).join("")}</tbody></table></div>
+      <div class="scroll"><table><thead><tr><th>started</th><th></th><th></th><th></th><th>stakes</th><th class="num">hands</th><th></th><th class="num">answered</th><th class="num">bb/100</th><th>recording</th><th class="num">length</th></tr></thead><tbody>${clusters.map(row).join("")}</tbody></table></div>
     </div>`;
   v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => go(`/sessions/${encodeURIComponent(tr.dataset.id)}`));
 }
@@ -2130,12 +2882,34 @@ async function loadProfiles() {
   let j;
   try { j = await (await fetch("/api/dashboard/profiles")).json(); } catch (e) { v.innerHTML = '<div class="card warn">profiles unavailable</div>'; return; }
   if (!j.ok) { v.innerHTML = '<div class="card warn">profiles unavailable</div>'; return; }
+  // equity now is scraped from the client, not carried forward from the last
+  // reading — the stored snapshot is the fallback, and is labelled as one
+  let LIVE = null;
+  try { const r = await (await fetch("/api/dashboard/balance-live")).json(); LIVE = r && r.ok ? r : null; } catch { LIVE = null; }
   v.dataset.loaded = "1";
   const rows = j.profiles || [];
   const fx = j.fx && !j.fx.stale ? j.fx : null;
   CCY.rate = fx ? fx.rate : null;
   if (!CCY.rate && CCY.code === "AUD") CCY.code = "USD"; // no usable rate: AUD is not offered
   const tile = (val, k, sub, cls = "") => `<div class="tile"><div class="v num ${cls}">${val}</div><div class="k">${k}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+
+  /* EQUITY NOW is a reading taken from the client at this moment, not the last
+     stored snapshot carried forward. The stored one is shown, and said to be
+     stored, only when the client cannot be read. ⚠ when the reading disagrees
+     with the last reading plus the hands after rake, beyond tolerance. */
+  const equityTile = (p, bal) => {
+    const live = LIVE?.live && LIVE.signedInAs === p.name ? LIVE.live : null;
+    const k = live ? LIVE.check : null;
+    if (live) {
+      const off = k && !k.agrees;
+      return tile(`${usdFlat(live.equityCents)}${off ? ' <span class="hm-warn">⚠</span>' : ""}`, "equity now · live",
+        `${usdFlat(live.amountCents)} cashier${live.inPlayCents != null ? ` + ${usdFlat(live.inPlayCents)} on the table` : ""} · read just now${off ? ` · <b class="neg">off by ${usdc(k.unexplainedCents)}</b>` : k ? " · matches the hands" : ""}`,
+        off ? "neg" : "");
+    }
+    if (!bal) return tile('<span class="sub">nil</span>', "equity now", "not seeded");
+    return tile(usdFlat(bal.equityCents), "equity now · stored",
+      `${usdFlat(bal.amountCents)} cashier${bal.inPlayCents != null ? ` + ${usdFlat(bal.inPlayCents)} on the table` : ""} · ${fmtT(bal.ts)}`);
+  };
 
   const card = (p) => {
     const bal = p.balance;
@@ -2167,12 +2941,21 @@ async function loadProfiles() {
       ${!p.seeded ? `<div class="card" style="margin:10px 0;background:var(--surface2)"><b>nil — not seeded.</b> <span class="sub">This account has no equity reading yet, so nothing can be checked and no balance is shown. The seed is scraped from the client, never typed: open Ignition on the lobby (seated is fine — the stack is read too) and take the first reading.</span>
           <div style="margin-top:8px;display:flex;gap:8px;align-items:center"><button class="mini big" data-seed="${esc(p.name)}">Seed from the client</button><span class="sub" data-seed-msg="${esc(p.name)}"></span></div></div>` : ""}
       <div class="tiles" style="margin-top:10px">
-        ${tile(bal ? usdFlat(bal.equityCents) : '<span class="sub">nil</span>', "equity now", bal ? `${usdFlat(bal.amountCents)} cashier${bal.inPlayCents != null ? ` + ${usdFlat(bal.inPlayCents)} on the table` : ""} · ${fmtT(bal.ts)}` : "not seeded")}
+        ${equityTile(p, bal)}
         ${p.seeded ? tile(usdFlat(p.seed.equityCents), "seeded at", `${fmtT(p.seed.ts)} · ${esc(p.seed.how ?? p.seed.source)}`) : ""}
-        ${tile(p.seeded ? usdc(p.netSinceSeedCents) : '<span class="sub">nil</span>', "net",
-          p.seeded ? `since the seed · poker says ${usdc(p.netCents)} on ${p.priced} of ${p.hands} priced hands` : "not seeded", moneyCls(p.netSinceSeedCents))}
+        ${(() => {
+          // net = equity now − the seed, off the SAME reading "equity now" shows:
+          // a live figure above a net computed from a stored one would not add up
+          const live = LIVE?.live && LIVE.signedInAs === p.name ? LIVE.live : null;
+          const net = !p.seeded ? null : live ? live.equityCents - p.seed.equityCents : p.netSinceSeedCents;
+          return tile(p.seeded ? usdc(net) : '<span class="sub">nil</span>', live ? "net · live" : "net",
+            p.seeded ? `since the seed · poker says ${usdc(p.netCents)} on ${p.priced} of ${p.hands} priced hands` : "not seeded", moneyCls(net));
+        })()}
         ${tile(p.sessions, "sessions", p.firstAt ? `since ${fmtD(p.firstAt)}` : "")}
       </div>
+      ${LIVE?.check && LIVE.signedInAs === p.name && !LIVE.check.agrees ? `<div class="ans-severe money-severe" style="margin-top:10px"><b>⚠ the client reads ${usdFlat(LIVE.check.liveCents)}, the hands say ${usdFlat(LIVE.check.expectedCents)}</b><br>
+          Since the reading of ${fmtT(LIVE.check.sinceTs)} (${usdFlat(LIVE.check.sinceCents)}) the account's equity moved ${usdc(LIVE.check.movedCents)} while ${LIVE.check.hands} hand${LIVE.check.hands === 1 ? "" : "s"} account for ${usdc(LIVE.check.pokerCents)}${LIVE.check.rakeEstCents ? ` less ${usdFlat(LIVE.check.rakeEstCents)} of estimated rake` : ""} — <b>${usdc(LIVE.check.unexplainedCents)} unexplained</b>, outside the ±${usdFlat(LIVE.check.toleranceCents)} tolerance.${LIVE.check.unpricedHands ? ` ${LIVE.check.unpricedHands} hand${LIVE.check.unpricedHands === 1 ? "" : "s"} in the window could not be priced, so the gap may be the hand rather than the account.` : ""}
+          ${bad ? "" : `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mini" data-ack-all="${esc(p.name)}">Mark the current reading as correct</button><span class="sub" data-ack-msg="${esc(p.name)}">— takes a fresh reading and makes that the baseline.</span></div>`}</div>` : ""}
       ${bad ? `<div class="ans-severe money-severe" style="margin-top:10px"><b>unexplained ${usdc(p.unexplainedCents)} — something went wrong</b><br>
           ${p.movementIntervals} interval${p.movementIntervals === 1 ? "" : "s"} moved by more than the hands, the rake and the tolerance explain: a scrape that read wrong, a deposit, a cash-out, a bonus or a fee, or hands never captured. The flagged interval${p.movementIntervals === 1 ? " is" : "s are"} below.
           <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mini" data-ack-all="${esc(p.name)}">Mark the current reading as correct</button><span class="sub" data-ack-msg="${esc(p.name)}">— reads the client now (open Ignition on the lobby, or seated) and makes that the baseline; every flagged interval up to it is accepted. With the client closed only the stored flags are accepted. Undo per row below.</span></div></div>` : ""}
@@ -2184,6 +2967,8 @@ async function loadProfiles() {
   };
 
   v.innerHTML = `
+    ${LIVE?.live ? `<div class="banner">🔎 <b>Equity now is read from the client</b>, not carried forward — scraped ${fmtAgo(LIVE.at)} for <b>${esc(LIVE.signedInAs ?? "?")}</b>, the account the open client is signed in as. Every other account shows its last stored reading.</div>`
+      : `<div class="banner">🔎 <b>No live reading.</b> ${esc(LIVE?.reason ?? "the wrapper is not running")} — the figures below are each account's last stored reading, and are only as fresh as the session that took them. Open the wrapper with Ignition signed in to read the balance now.</div>`}
     <div class="banner">👤 A profile is an <b>account</b> — the wrapper signs in as it and stamps every session with it. Between two snapshots the account's equity may move by exactly what poker did (after rake); anything beyond tolerance is flagged below.
       <span class="seg" id="ccy-seg" style="margin-left:12px;vertical-align:middle"><button data-c="USD" class="${CCY.code === "USD" ? "on" : ""}">USD</button><button data-c="AUD" class="${CCY.code === "AUD" ? "on" : ""}" ${fx ? "" : "disabled"} title="${fx ? `at ${fx.rate.toFixed(4)} · ${esc(fx.source)}${fx.asOf ? ` · ${esc(fx.asOf)}` : ""}` : "no usable AUD rate"}">AUD</button></span>
       ${j.fx ? `<span class="sub" style="margin-left:8px">${CCY.code === "AUD" ? `at ${j.fx.rate.toFixed(4)} · ` : ""}${esc(j.fx.source)}${j.fx.asOf ? ` · ${esc(j.fx.asOf)}` : ""}${j.fx.stale ? ' · <b style="color:var(--ev)">rate stale — AUD off</b>' : ""}</span>` : '<span class="sub" style="margin-left:8px">no AUD rate yet</span>'}</div>
@@ -2355,12 +3140,14 @@ function renderSources() {
       <button data-pane="pieces" role="tab">Pieces <span class="n">${SRC.cards.length} sources</span></button>
       <button data-pane="matrix" role="tab">Strategy matrix</button>
       <button data-pane="grading" role="tab">Live grading <span class="n">${tierCount} answers</span></button>
+      <button data-pane="approx" role="tab">Approximations</button>
       <button data-pane="roadmap" role="tab">Roadmap</button>
     </div>
     <section class="pane" id="src-strategies"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-pieces"></section>
     <section class="pane" id="src-matrix"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-grading"><div class="card sub">loading…</div></section>
+    <section class="pane" id="src-approx"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-roadmap"><div class="card sub">loading…</div></section>`;
   renderRegistry();
   v.querySelectorAll(".sub-tabs button").forEach((b) => b.onclick = () => go(`/sources/${b.dataset.pane}`));
@@ -2377,6 +3164,7 @@ function showSrcPane(id, cardId) {
   if (id === "strategies") loadStrategies(cardId);
   if (id === "matrix" && !srcLoaded.matrix) loadMatrix();
   if (id === "grading" && !srcLoaded.grading) loadGrading();
+  if (id === "approx" && !srcLoaded.approx) loadApprox();
   if (id === "roadmap" && !srcLoaded.roadmap) loadRoadmap();
 }
 
@@ -2442,6 +3230,58 @@ function renderStrategyCards() {
     <div class="sub" style="margin-top:10px">Numbers come from <span class="mono">data/strategy_matrix.json</span>${STRAT.matrixBuilt ? ` · built ${esc(String(STRAT.matrixBuilt).slice(0, 19))}` : ""}. Every figure carries its footing — see a strategy's page for what kind of number it is.</div>
   </div>`;
 }
+/** "How it answers every spot" + its holes + what would fill them (services/strategyCoverage.ts; live counts from the
+ *  approximations register, joined server-side in /sources/strategies). Empty for strategies without a map. */
+function coverageCards(s) {
+  const cov = s.coverage;
+  if (!cov) return "";
+  const STATUS = { "vendor-ceiling": ["crit", "vendor ceiling"], "solvable": ["warn", "solvable"], "by-design": ["off", "by design"] };
+  const chip = (k) => { const [cls, label] = STATUS[k] || ["dim", k]; return `<span class="st"><span class="dot ${cls}"></span>${esc(label)}</span>`; };
+  // how often the approximations a row leans on fired: one big number, the breakdown underneath
+  const fired = (list) => {
+    if (!(list || []).length) return "";
+    const m = list.filter((a) => a.measured);
+    if (!m.length) return `<div class="cov-fired"><span class="cov-label">fired ${cov.days}d</span>not counted yet</div>`;
+    const n = m.reduce((t, a) => t + a.fires, 0);
+    const parts = m.filter((a) => a.fires > 0).map((a) => `${esc(a.id)} ${a.fires}`).join(" · ");
+    return `<div class="cov-fired"><span class="cov-label">fired ${cov.days}d</span><b class="${n ? "" : "zero"}">${n}</b>${parts}</div>`;
+  };
+  const row = (r) => `
+    <div class="cov-row">
+      <div class="cov-spot"><h4>${esc(r.spot)}</h4>${fired(r.approxLive)}</div>
+      <div class="cov-by"><span class="cov-label">answered by</span>${esc(r.source)}</div>
+      <div class="cov-how">${esc(r.how)}</div>
+      ${r.example ? `<div class="cov-box example"><span class="cov-label">example</span>${esc(r.example)}</div>` : ""}
+      <div class="cov-box cost"><span class="cov-label">cost against equilibrium</span>
+        <span class="cov-cost-v">${esc(r.cost.value)}</span><span class="cov-badge ${r.cost.measured ? "yes" : "no"}">${r.cost.measured ? "measured" : "not measured"}</span>
+        <div class="cov-note">${esc(r.cost.note)}</div></div>
+      ${r.future ? `<div class="cov-box todo"><span class="cov-label">to make it exact</span>${esc(r.future)}</div>` : ""}
+    </div>`;
+  const section = (sec) => `
+    <div class="card cov">
+      <div class="cov-head"><h3>${esc(sec.title)}</h3><span class="cov-kicker">which piece answers which spot</span></div>
+      ${sec.rows.map(row).join("")}
+    </div>`;
+  const holes = (cov.holes || []).filter((h) => h.status !== "by-design");
+  return `
+    ${cov.sections.map(section).join("")}
+    <div class="card cov">
+      <div class="cov-head"><h3>Holes <span class="sub" style="font-size:15px">${holes.length}</span></h3>
+        <span class="cov-kicker">from the <a class="ev-link" href="/sources/approx" onclick="go('/sources/approx');return false">approximations register</a>, this strategy's pieces only · ranked by how often each fired in ${cov.days} days</span></div>
+      <table class="cov-holes"><tbody>
+      ${holes.map((h) => `<tr>
+        <td style="width:46%"><div class="t">${esc(h.title)}</div><div class="cov-note">${esc(h.what)}</div>${h.cost ? `<div class="cov-note"><i>cost:</i> ${esc(h.cost)}</div>` : ""}</td>
+        <td style="width:12%">${chip(h.status)}</td>
+        <td class="n" style="width:8%">${h.measured ? (h.fires > 0 ? h.fires : '<span style="color:var(--faint)">0</span>') : '<span class="cov-badge no">not counted</span>'}</td>
+        <td><span class="cov-label">what closes it</span>${esc(h.fix)}</td></tr>`).join("")}
+      </tbody></table>
+    </div>
+    <div class="card cov">
+      <div class="cov-head"><h3>Next, to fill the holes</h3></div>
+      <ul class="cov-next">${(cov.roadmap || []).map((x) => `<li><b>${esc(x.title)}.</b> <span style="color:var(--muted)">${esc(x.detail)}</span></li>`).join("")}</ul>
+    </div>`;
+}
+
 function renderStrategyDetail(id) {
   const el = $("src-strategies");
   const s = STRAT.strategies.find((x) => x.id === id);
@@ -2468,6 +3308,7 @@ function renderStrategyDetail(id) {
         ${s.preconditions.map((p) => `<div class="pc-row"><span class="mark ${p.pass ? "ok" : "no"}">${p.pass ? "✓" : "✕"}</span><span>${esc(p.check)}</span><span class="det">${esc(p.detail)}</span></div>`).join("")}
       </div>
     </div>
+    ${coverageCards(s)}
     <div class="card"><h2>Expected winrate <span class="sub">— from the strategy matrix; each cell says what kind of number it is</span></h2>
       <table><thead><tr><th>rake model</th><th class="num">bb/100</th><th>footing</th><th>what that means</th></tr></thead><tbody>
       ${rakes.map(([k, lbl]) => { const c = wrOf(s.matrix, k), w = wrText(c); const f = FOOTING[c?.kind] ?? ["—", ""];
@@ -2712,7 +3553,7 @@ async function loadPlayPreflop(actor) {
     } else stratNote = `<span class="avail off">Pool read not available at this node</span> <span class="sub">chart mix shown</span>`;
   }
   // RNG for hero
-  const colorForAct = (lab, i) => /^Fold/.test(lab) ? "#5b7fa6" : /^(Check|Call|Limp)/.test(lab) ? "#41a368" : ["#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"][Math.min(Math.max(i, 0), 4)];
+  const colorForAct = (lab, i) => gtowColor(lab, acts);
   let rng = "";
   const combo = PT.combo && /^[2-9TJQKA][shdc][2-9TJQKA][shdc]$/.test(PT.combo) ? PT.combo : null;
   const clsOf = (cb) => { const a = cb[0], b = cb[2]; const ia = RANKS13.indexOf(a), ib = RANKS13.indexOf(b); const hi = RANKS13[Math.min(ia, ib)], lo = RANKS13[Math.max(ia, ib)]; return ia === ib ? hi + lo : hi + lo + (cb[1] === cb[3] ? "s" : "o"); };
@@ -2744,23 +3585,39 @@ async function loadPlayPreflop(actor) {
     <div class="actrow">${acts.map((a, i) => { const tok = n.actions[i].token; return `<button class="mini ${useMes && choices ? "mes" : ""} ${i === pickIdx ? "picked" : ""}" onclick="playStep('${esc(tok)}')">${esc(a)} <span class="sub">${aggPct[i].toFixed(0)}%${(useMes && choices) || (usePool && Math.abs(aggPct[i] - chartPct[i]) > 0.5) ? ` · chart ${chartPct[i].toFixed(0)}%` : ""}</span> ›</button>`; }).join("")}</div>
     ${isHero ? `<div class="pl-take"><button class="mini" id="pl-ask" onclick="playStudyAnswer()" title="the answer the table would give: same solve, same roll, same text">📣 Study answer${combo ? ` for ${esc(combo)}` : " — pick your hand"}</button><span class="sub">what the panel would say at the table — same solve, same roll</span></div><div id="pl-answer"></div>` : ""}
     <div id="pl-grid"></div>`;
-  // grid: chart cells, MES overlay when active
+  // grid: chart cells, MES overlay when active — on classGrid like every other chart
+  // (2026-09-20), so this one gets the suitedness label and the combo panel too. The
+  // MES overlay is a one-hot mix: each class carries its whole weight on its single pick.
   const g = $("pl-grid");
-  const colorFor = (lab, i) => /^Fold/.test(lab) ? "#5b7fa6" : /^(Check|Call|Limp)/.test(lab) ? "#41a368" : ["#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"][Math.min(i, 4)];
-  let html = `<div class="legend">${acts.map((a, i) => `<span><span class="sw" style="background:${colorFor(a, i)}"></span>${esc(a)}</span>`).join("")}${useMes && choices ? ` <span class="sub">· MES overlay: each class shows its single exploit pick</span>` : ""}</div><div id="grid">`;
   const byHand = new Map((n.cells || []).map((c) => [c.hand, c]));
+  const gcls = {};
   for (let k = 0; k < 169; k++) {
     const i = Math.floor(k / 13), m = k % 13; const hi = RANKS13[Math.min(i, m)], lo = RANKS13[Math.max(i, m)];
     const key = i === m ? hi + lo : hi + lo + (m > i ? "s" : "o");
     const cell = byHand.get(key);
-    if (!cell) { html += `<div style="opacity:.25">${key}</div>`; continue; }
-    let bg;
-    if (useMes && choices) { const pick = choices[key]; const idx = acts.indexOf(pick); bg = pick ? colorFor(pick, idx < 0 ? 0 : idx) : "#333"; }
-    else { let acc = 0; const stops = []; acts.forEach((a, ai) => { const f = (cell.actions[a] ?? 0) / 100; if (f < 0.005) return; stops.push(`${colorFor(a, ai)} ${acc * 100}% ${(acc + f) * 100}%`); acc += f; }); bg = stops.length ? `linear-gradient(135deg,${stops.join(",")})` : "#333"; }
-    const tip = `${key}: ` + (useMes && choices ? `MES ${choices[key] ?? "—"} · chart ` : "") + acts.map((a) => `${a} ${(cell.actions[a] ?? 0).toFixed(0)}%`).filter((s) => !s.endsWith(" 0%")).join(", ");
-    html += `<div class="${combo && clsOf(combo) === key ? "hero" : ""}" title="${esc(tip)}" style="background:${bg}">${key}</div>`;
+    if (!cell) continue;
+    const w = COMBOS(key);
+    if (useMes && choices) {
+      const idx = acts.indexOf(choices[key]);
+      gcls[key] = { w, acts: acts.map((_, ai) => (ai === idx ? w : 0)) };
+    } else {
+      gcls[key] = { w, acts: acts.map((a) => (w * (cell.actions[a] ?? 0)) / 100) };
+    }
   }
-  g.innerHTML = html + `</div>`;
+  g.innerHTML = classGrid(gcls, acts, combo ? clsOf(combo) : null, {
+    heroCombo: combo || null,
+    // the overlay paints one pick per class, so the CHART's own mix would otherwise be
+    // invisible here — the popover keeps showing it underneath the pick
+    tip: (key, inRange) => {
+      if (!inRange) return `${key}: not in range`;
+      const cell = byHand.get(key);
+      const mix = acts.map((a) => `${a} ${(cell.actions[a] ?? 0).toFixed(0)}%`).filter((x) => !x.endsWith(" 0%")).join(" · ");
+      return `${key}: ` + (useMes && choices ? `MES ${choices[key] ?? "—"} · chart ${mix}` : mix);
+    },
+    foot: useMes && choices
+      ? "MES overlay: each class shows its single exploit pick · your class outlined"
+      : "the chart's mix at this node · your class outlined · hover for the mix",
+  });
 }
 function playStep(tok) { PT.line.push(tok); renderPlay(); }
 /** The Study Answer for the current playthrough node — same solve, roll and
@@ -2962,34 +3819,36 @@ async function loadMesSpots() {
 }
 // state of the current walk
 let WALK = null;
-function mesGridHtml(holes, w, strat, ev, acts, heroIdx) {
-  // 13x13 by hand class: aggregate the per-combo mix into classes (weighted)
+/**
+ * The MES walk's 13x13, on the SAME grid as every other chart (2026-09-20).
+ *
+ * It used to hand-roll its own `#grid`, which meant it alone had no combo panel — and it
+ * is the one place that has genuine per-combo data to show: `holes`/`strat`/`ev` are
+ * 1,326-wide and a flop is exactly where two combos of a class stop being the same hand.
+ */
+function mesGridHtml(holes, w, strat, ev, acts, heroIdx, board, heroCombo) {
   const R = "AKQJT98765432";
-  const cls = {};
+  const cls = {}, combos = {};
   holes.forEach((h, j) => {
     if (!w || w[j] <= 0) return;
     const a = h.slice(0, 2), b = h.slice(2, 4);
     const ia = R.indexOf(a[0]), ib = R.indexOf(b[0]);
     const hi = Math.min(ia, ib), lo = Math.max(ia, ib);
     const key = ia === ib ? R[hi] + R[lo] : a[1] === b[1] ? R[hi] + R[lo] + "s" : R[hi] + R[lo] + "o";
-    const c = (cls[key] ??= { w: 0, s: new Array(acts.length).fill(0), ev: new Array(acts.length).fill(0) });
+    const c = (cls[key] ??= { w: 0, acts: new Array(acts.length).fill(0) });
     c.w += w[j];
-    acts.forEach((_, ai) => { c.s[ai] += w[j] * (strat?.[ai]?.[j] ?? 0); c.ev[ai] += w[j] * (ev?.[ai]?.[j] ?? 0); });
+    acts.forEach((_, ai) => { c.acts[ai] += w[j] * (strat?.[ai]?.[j] ?? 0); });
+    (combos[key] ??= []).push({ hand: h, w: w[j],
+      s: acts.map((_, ai) => strat?.[ai]?.[j] ?? 0),
+      ev: acts.map((_, ai) => ev?.[ai]?.[j] ?? null) });
   });
-  const colorFor = (lab, i) => /^Fold/.test(lab) ? "#5b7fa6" : /^(Check|Call)/.test(lab) ? "#41a368" : ["#d9a13d", "#d97f3d", "#cf5b36", "#b83a3a", "#8f2f4a"][Math.min(i, 4)];
-  let html = `<div class="legend">${acts.map((a, i) => `<span><span class="sw" style="background:${colorFor(a, i)}"></span>${esc(a)}</span>`).join("")}</div><div id="grid">`;
-  for (let n = 0; n < 169; n++) {
-    const i = Math.floor(n / 13), k = n % 13;
-    const hi = R[Math.min(i, k)], lo = R[Math.max(i, k)];
-    const key = i === k ? hi + lo : hi + lo + (k > i ? "s" : "o");
-    const c = cls[key];
-    if (!c) { html += `<div style="opacity:.25">${key}</div>`; continue; }
-    let acc = 0; const stops = [];
-    acts.forEach((a, ai) => { const f = c.s[ai] / c.w; if (f < 0.005) return; stops.push(`${colorFor(a, ai)} ${acc * 100}% ${(acc + f) * 100}%`); acc += f; });
-    const tip = `${key}: ` + acts.map((a, ai) => `${a} ${(100 * c.s[ai] / c.w).toFixed(0)}%${c.ev ? ` (${(c.ev[ai] / c.w / 100).toFixed(2)}bb)` : ""}`).join(" · ");
-    html += `<div title="${esc(tip)}" style="background:linear-gradient(135deg,${stops.join(",")})">${key}</div>`;
-  }
-  return html + `</div>`;
+  for (const k in combos) combos[k].sort((x, y) => y.w - x.w || x.hand.localeCompare(y.hand));
+  const heroKey = heroIdx != null && heroIdx >= 0 && holes[heroIdx] ? (() => {
+    const h = holes[heroIdx], ia = R.indexOf(h[0]), ib = R.indexOf(h[2]);
+    return ia === ib ? h[0] + h[2] : R[Math.min(ia, ib)] + R[Math.max(ia, ib)] + (h[1] === h[3] ? "s" : "o");
+  })() : null;
+  return classGrid(cls, acts, heroKey, { combos, board, heroCombo: heroCombo || (heroIdx != null ? holes[heroIdx] : null) || null,
+    foot: "fill height = weight in range · hover for the mix" });
 }
 async function mesWalk(family, board, hist, stage = { street: "flop" }) {
   const el = $("mes-walk"); if (!el) return;
@@ -3023,7 +3882,7 @@ async function mesWalk(family, board, hist, stage = { street: "flop" }) {
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">` +
     n.acts.map((a, ai) => `<button class="mini" ${n.children[ai] ? `onclick="mesStep(${ai})"` : `disabled title="street ends here"`}>${esc(a)}${aggMes ? ` <span class="sub">MES ${aggMes[ai].toFixed(0)}%${aggGto ? ` · GTO ${aggGto[ai].toFixed(0)}%` : ""}</span>` : ""}${n.children[ai] ? " ›" : " ⏹"}</button>`).join("") +
     `</div>` + (n.isHero && typeof PT !== "undefined" && PT.street !== "preflop" ? `<div class="pl-take"><button class="mini" onclick="playStudyAnswer()" title="the answer the table would give: same solve, same roll, same text">📣 Study answer${PT.combo ? ` for ${esc(PT.combo)}` : " — pick your hand"}</button><span class="sub">what the panel would say at the table — same solve, same roll</span></div><div id="pl-answer"></div>` : "") +
-    (n.isHero && strat ? mesGridHtml(n.holes || [], n.w, strat, ev, n.acts, null) : "") + `</div>`;
+    (n.isHero && strat ? mesGridHtml(n.holes || [], n.w, strat, ev, n.acts, null, n.board5 || board, typeof PT !== "undefined" ? PT.combo : null) : "") + `</div>`;
   // street ended? offer the next card
   const ended = n.children.every((x) => !x) || n.acts.every((_, ai) => !n.children[ai]);
   if (stage.street === "flop") {
@@ -3087,7 +3946,7 @@ async function renderSourceDetail(cardId) {
   // drill-down content belongs to the page now
   const d = $("src-detail-drill");
   if (c.drilldown === "charts") {
-    d.innerHTML = '<div class="card"><h2>Charts <span class="sub">— the chart catalog, live-routed first</span></h2><div id="src-catalog" class="src-static"></div></div>';
+    d.innerHTML = '<div id="src-catalog" class="src-static"></div>';
     loadCatalog();
   } else if (c.drilldown === "boards") {
     d.innerHTML = `<div class="card"><h2>Solved spots <span class="sub">— click a board to play it through in the Playthrough tab: preflop line already played, flop dealt, then node by node (flop → turn card → river)</span></h2><div id="mes-spots" class="sub">loading…</div></div>`;
@@ -3302,6 +4161,88 @@ async function loadGrading() {
   el.querySelectorAll("tr[data-id]").forEach((tr) => { if (tr.dataset.id) tr.onclick = () => go(`/hands/${tr.dataset.id}`); });
 }
 
+/* ---- approximations ----
+   The one place every knowingly-inexact thing in the strategy is listed side
+   by side. The register is authored (services/approximations.ts); the volume
+   columns are joined from the miss queue and the answer log, so the ranking
+   moves with play rather than with opinion.
+
+   The split that carries the page: MEASURED entries first, ranked by how often
+   they actually fired, then the ones we cannot count at all. An unmeasured row
+   is not a blank — it is a thing we know we approximate and have no telemetry
+   for, which is its own backlog. */
+async function loadApprox() {
+  const el = $("src-approx");
+  let j;
+  try { j = await (await fetch("/api/dashboard/sources/approximations?days=30")).json(); }
+  catch (e) { el.innerHTML = '<div class="card warn">approximations unavailable</div>'; return; }
+  if (!j.ok) { el.innerHTML = '<div class="card warn">approximations unavailable</div>'; return; }
+  srcLoaded.approx = true;
+
+  const STATUS = {
+    "vendor-ceiling": ["crit", "vendor ceiling", "no solve of ours closes this — the solver cannot express the spot"],
+    "solvable": ["warn", "solvable", "a solve would close it; the miss queue usually carries the job"],
+    "by-design": ["off", "by design", "a modelling choice we would keep even with unlimited compute"],
+  };
+  const statusChip = (k) => {
+    const [cls, label, why] = STATUS[k] || ["dim", k, ""];
+    return `<span class="st" title="${esc(why)}"><span class="dot ${cls}"></span>${esc(label)}</span>`;
+  };
+  const fires = (r) => {
+    if (!r.measured) return '<td class="num"><span class="chip dim" title="no miss-queue kind and no answer warning carries this — we know we do it, we cannot say how often">unmeasured</span></td>';
+    const bits = [];
+    if (r.warn && r.warn.n) bits.push(`${r.warn.n} answer${r.warn.n === 1 ? "" : "s"} said so`);
+    if (r.miss && r.miss.live) bits.push(`${r.miss.live} live hit${r.miss.live === 1 ? "" : "s"}`);
+    if (r.miss && r.miss.rows) bits.push(`${r.miss.rows} open state${r.miss.rows === 1 ? "" : "s"}`);
+    const n = r.fires;
+    return `<td class="num">${n > 0 ? `<b>${n}</b>` : '<span class="sub">0</span>'}<div class="sub">${esc(bits.join(" · ") || "never yet")}</div></td>`;
+  };
+
+  const rows = (j.rows || []).map((r) => `
+    <tr class="${r.measured ? "" : "reuse"}">
+      <td><b>${esc(r.title)}</b>
+        <div class="sub">${esc(r.what)}</div>
+        ${r.cost ? `<div class="sub"><i>cost:</i> ${esc(r.cost)}</div>` : ""}</td>
+      <td><span class="chip">${esc(r.source)}</span></td>
+      <td>${statusChip(r.status)}</td>
+      ${fires(r)}
+      <td class="sub">${esc(r.why)}</td>
+      <td>${esc(r.fix)}${r.code ? `<div class="sub mono">${esc(r.code)}</div>` : ""}</td>
+    </tr>`).join("");
+
+  // Drift: a caveat printed on a registry card that no register entry claims.
+  // SRC.cards is already in memory — the Sources tab loaded it.
+  const claimed = j.claimedCaveats || [];
+  const unclaimed = [];
+  for (const card of (SRC && SRC.cards) || []) {
+    for (const cav of card.caveats || []) {
+      if (!claimed.some((k) => cav.includes(k))) unclaimed.push({ source: card.id, caveat: cav });
+    }
+  }
+  const drift = unclaimed.length
+    ? `<div class="card"><h2>On a card, not in the register <span class="n">${unclaimed.length}</span></h2>
+         <div class="sub">Caveats the Sources cards print that no register entry accounts for. Some are operational (a client being down is not an approximation) — the rest are rows this page is missing.</div>
+         <div class="scroll"><table><thead><tr><th>source</th><th>caveat</th></tr></thead><tbody class="src-static">
+         ${unclaimed.map((u) => `<tr><td><span class="chip">${esc(u.source)}</span></td><td class="sub">${esc(u.caveat)}</td></tr>`).join("")}
+         </tbody></table></div></div>`
+    : "";
+
+  const t = j.totals || {};
+  el.innerHTML = `
+    <div class="banner">⚠ Every place the strategy is knowingly not exact. Ranked by how often it actually fires — live miss-queue hits plus answers that printed the warning, over ${j.days} days — not by how bad it sounds. <b>Open states are a backlog, not a rate:</b> a kind with hundreds of rows and no live hits costs less today than one with a handful that bites every session.</div>
+    <div class="armed">
+      <div class="cell"><span class="k">Known approximations</span><span class="v">${t.all ?? 0}</span><span class="s">authored in services/approximations.ts</span></div>
+      <div class="cell"><span class="k">Measured</span><span class="v">${t.measured ?? 0}</span><span class="s">a miss-queue kind or an answer warning counts them</span></div>
+      <div class="cell"><span class="k">Unmeasured</span><span class="v">${t.unmeasured ?? 0}</span><span class="s">no telemetry — instrument these next</span></div>
+      <div class="cell"><span class="k">Fired in ${j.days}d</span><span class="v">${t.liveHits ?? 0}</span><span class="s">live hits + warned answers</span></div>
+      <div class="cell"><span class="k">Vendor ceilings</span><span class="v">${(t.byStatus || {})["vendor-ceiling"] ?? 0}</span><span class="s">no solve of ours closes these</span></div>
+    </div>
+    <div class="card"><h2>The register</h2><div class="scroll"><table>
+      <thead><tr><th>what we approximate</th><th>piece</th><th>status</th><th class="num">fires (${j.days}d)</th><th>why it can't be exact</th><th>what would close it</th></tr></thead>
+      <tbody class="src-static">${rows}</tbody></table></div></div>
+    ${drift}`;
+}
+
 /* ---- roadmap ---- */
 async function loadRoadmap() {
   const el = $("src-roadmap");
@@ -3324,23 +4265,27 @@ async function loadRoadmap() {
 
 /* ================= routing =================
    Real paths, served by the API for every one of them (index.ts):
+     /                 Home (?profile=&window=) — and the landing page for any
+                       path that does not parse; /home is an alias for it
      /hands            the table            /hands/:dbId              one hand
-     /analytics                             /review                   Replay Review (embeds /replay)
-     /sources          → /sources/strategies  /sources/:pane          strategies | pieces | matrix | grading | roadmap
+     /analytics        (?scope=&vs=&profile=&window=)
+                                            /review                   Replay Review (embeds /replay)
+     /sources          → /sources/strategies  /sources/:pane          strategies | pieces | matrix | grading | approx | roadmap
      /sources/pieces/:id                    one source's page   (/sources/registry/… still accepted)
      /sources/strategies/:id                one whole-hand strategy's page
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play", ledger: "tab-ledger", tasks: "tab-tasks" };
+const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play", ledger: "tab-ledger", tasks: "tab-tasks" };
 $("tab-ledger").onclick = () => go("/proposals");
-const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "roadmap"];
+const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "approx", "roadmap"];
 $("tab-play").onclick = () => go("/playthrough");
 
 function parsePath() {
   const legacy = location.hash.match(/^#hand\/(\d+)/);
   if (legacy) return { view: "hands", pane: null, id: legacy[1] };
   const seg = location.pathname.split("/").filter(Boolean);
-  const view = seg[0] || "hands";
+  const view = seg[0] || "home";
+  if (view === "home") { const q = new URLSearchParams(location.search); return { view: "home", pane: null, id: null, profile: q.get("profile") || "all", window: q.get("window") || "7d" }; }
   if (view === "hands") return { view, pane: null, id: seg[1] && /^\d+$/.test(seg[1]) ? seg[1] : null, node: seg[2] === "node" && /^\d+$/.test(seg[3] ?? "") ? Number(seg[3]) : null };
   if (view === "sources") {
     const seg1 = seg[1] === "registry" ? "pieces" : seg[1];
@@ -3350,20 +4295,21 @@ function parsePath() {
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null, show: new URLSearchParams(location.search).get("show") || null };
   if (view === "playthrough") return { view, pane: null, id: seg[1] === "spot" && seg[2] && seg[3] ? `spot/${decodeURIComponent(seg[2])}/${seg[3]}` : seg[1] === "strategy" && seg[2] ? `strategy/${decodeURIComponent(seg[2])}` : null };
   if (view === "ledger" || view === "runbook" || view === "proposals") return { view: "ledger", pane: seg[1] || null, id: seg[2] ? decodeURIComponent(seg[2]) : null };
-  if (view === "analytics") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, scope: q.get("scope") || "all", vs: q.get("vs") || null }; }
+  if (view === "analytics") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, scope: q.get("scope") || "all", vs: q.get("vs") || null, profile: q.get("profile") || "all", window: q.get("window") || "all" }; }
   if (view === "review") return { view, pane: null, id: null };
   if (view === "profiles") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   if (view === "tasks") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
-  return { view: "hands", pane: null, id: null };
+  return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
 }
 function canonical(p) {
+  if (p.view === "home") return "/" + hmQuery(p.profile, p.window);
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
   if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
   if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}${p.show ? `?show=${encodeURIComponent(p.show)}` : ""}` : "/sessions";
   if (p.view === "tasks") return p.id ? `/tasks/${encodeURIComponent(p.id)}` : "/tasks";
   if (p.view === "playthrough") return p.id ? `/playthrough/${p.id}` : "/playthrough";
   if (p.view === "ledger") return p.pane ? `/proposals/${p.pane}${p.id ? `/${encodeURIComponent(p.id)}` : ""}` : "/proposals";
-  if (p.view === "analytics") return "/analytics" + anQuery(p.scope, p.vs);
+  if (p.view === "analytics") return "/analytics" + anQuery(p.scope, p.vs, p.profile, p.window);
   return `/${p.view}`;
 }
 /* Where a hand page's "back" goes: the last LIST view the user was actually on —
@@ -3394,8 +4340,12 @@ function route() {
   // any list view we land on becomes the one a hand page comes back to
   if (!(PATH.view === "hands" && PATH.id) && ["hands", "sessions", "analytics"].includes(PATH.view)) rememberList(want);
   for (const [v, tab] of Object.entries(TABS)) $(tab).classList.toggle("on", v === PATH.view);
+  $("view-home").style.display = PATH.view === "home" ? "" : "none";
   $("view-hands").style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
-  for (const el of [$("filter"), $("sess-filter"), $("only-flop").parentElement, $("only-disc").parentElement, $("only-unanswered").parentElement]) el.style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
+  const onHands = PATH.view === "hands" && !PATH.id;
+  for (const el of [$("filter"), $("sess-filter"), $("only-flop").parentElement, $("only-disc").parentElement, $("only-unanswered").parentElement]) el.style.display = onHands ? "" : "none";
+  // the table filter has the extra condition that there ARE tables to pick from
+  $("table-filter").style.display = onHands && $("table-filter").dataset.avail === "1" ? "" : "none";
   $("view-detail").style.display = PATH.view === "hands" && PATH.id ? "" : "none";
   $("view-analytics").style.display = PATH.view === "analytics" ? "" : "none";
   $("view-sessions").style.display = PATH.view === "sessions" ? "" : "none";
@@ -3408,7 +4358,8 @@ function route() {
   if (PATH.view === "ledger") loadLedger();
   if (PATH.view === "tasks") loadTasks();
   if (PATH.view === "playthrough") loadPlay();
-  document.title = PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
+  document.title = PATH.view === "home" ? "Study Dashboard"
+    : PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
     : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
     : PATH.view === "ledger" ? "Solve Proposals · Study Dashboard"
     : PATH.view === "tasks" ? "Tasks · Study Dashboard"
@@ -3422,6 +4373,7 @@ function route() {
       else showDetail(id).then(() => { if (node != null && DETAIL?.dbId === id) openAnswerNode(node); });
     } else if (!HANDS.length) loadHands();
   }
+  if (PATH.view === "home") loadHome();
   if (PATH.view === "analytics") loadAnalytics();
   if (PATH.view === "sessions") { if (PATH.id) loadSession(PATH.id); else loadSessions(); }
   if (PATH.view === "profiles") loadProfiles();
@@ -3460,13 +4412,76 @@ applyTheme((() => { try { return localStorage.getItem("sd_theme") || "auto"; } c
 const measureHeader = () => { const h = document.querySelector("header").offsetHeight; if (h > 0) document.documentElement.style.setProperty("--hdr", `${h}px`); };
 measureHeader(); new ResizeObserver(measureHeader).observe(document.querySelector("header")); document.fonts?.ready.then(measureHeader);
 $("theme-seg").onclick = (ev) => { const b = ev.target.closest("button"); if (b) applyTheme(b.dataset.t, true); };
-for (const [v, tab] of Object.entries(TABS)) $(tab).onclick = () => go(v === "sources" ? "/sources/strategies" : `/${v}`);
+for (const [v, tab] of Object.entries(TABS)) $(tab).onclick = () => go(v === "sources" ? "/sources/strategies" : v === "home" ? "/" + hmQuery(HOME.profile, HOME.window) : `/${v}`);
 
 route();
+// Home re-reads on its own, slower, clock: a refresh rebuilds the whole page
+// (and with it the chart), so it wants to be rare enough not to yank a tooltip
+// out from under the cursor — and pointless while the tab is in the background.
+setInterval(() => { if (PATH.view === "home" && !document.hidden) loadHome({ quiet: true }); }, 30000);
 setInterval(() => {
   if (PATH.view === "hands" && !PATH.id) loadHands();
   if (PATH.view === "sources" && PATH.pane === "pieces" && !PATH.id) loadSources();
 }, 15000);
+
+/* ================= "there's been an update" ================= */
+/* The API runs WITHOUT --watch on purpose (a --watch worker crash leaves the
+   watcher alive and hides the failure), so an edit changes nothing until the
+   process restarts — and nothing used to say so. On 2026-09-19 it stayed up from
+   19:54 while four fixes landed on disk, including the one that made every
+   decision get solved and rolled twice all evening. */
+let BUILD_DISMISSED = 0;
+
+async function checkBuild() {
+  const host = $("build-alert");
+  if (!host) return;
+  let j;
+  try { j = await (await fetch("/api/build")).json(); } catch { return; }
+  if (!j.ok || !j.stale || j.bootStamp === BUILD_DISMISSED) { host.innerHTML = ""; return; }
+  const n = j.changedCount;
+  const files = (j.changed || []).slice(0, 3).join("  ");
+  const more = n > 3 ? `  +${n - 3} more` : "";
+  host.innerHTML = `<div class="ba">
+    <span>⟳ <b>This API is running older code than the disk.</b>
+      Booted ${fmtAgo(j.bootAt)} · ${n} source file${n === 1 ? "" : "s"} changed since —
+      none of it is live until it restarts.</span>
+    <span class="files">${esc(files)}${esc(more)}</span>
+    <span class="act">
+      ${j.supervised
+        ? `<button onclick="restartApi(this)">Restart now</button>`
+        : `<button disabled title="no StudyAPI supervisor in this process — exiting would leave nothing serving :2000">Restart by hand</button>`}
+      <button class="ghost" title="hide until something else changes"
+              onclick="BUILD_DISMISSED=${j.bootStamp};$('build-alert').innerHTML='';">✕</button>
+    </span></div>`;
+}
+
+async function restartApi(btn) {
+  btn.disabled = true; btn.textContent = "restarting…";
+  let j = null;
+  try { j = await (await fetch("/api/build/restart", { method: "POST" })).json(); }
+  catch { /* the exit can cut the response — that is a restart, not a failure */ }
+  if (j && j.ok === false) { btn.textContent = "can't restart"; btn.title = j.error || ""; return; }
+  const host = $("build-alert");
+  host.innerHTML = `<div class="ba done">⟳ <b>Restarting.</b> The supervisor relaunches within ~10s; this page reloads itself when it answers again.</div>`;
+  const t0 = Date.now();
+  const tick = async () => {
+    if (Date.now() - t0 > 90000) {
+      host.innerHTML = `<div class="ba">⚠ <b>Not back after 90s.</b> <span class="files">data/jobs/api.log</span> says why.</div>`;
+      return;
+    }
+    try {
+      const r = await (await fetch("/api/build?force=1", { cache: "no-store" })).json();
+      // a LATER boot than the one we asked to kill = the new process is serving
+      if (r && r.ok && r.bootAt > t0 - 60000) { location.reload(); return; }
+    } catch { /* still down */ }
+    setTimeout(tick, 1500);
+  };
+  setTimeout(tick, 3000);
+}
+
+checkBuild();
+setInterval(() => { if (!document.hidden) checkBuild(); }, 20000);
+
 </script>
 </body>
 </html>

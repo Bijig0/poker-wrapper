@@ -153,6 +153,13 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     ...(Number.isFinite(Number(input.bbCents)) && Number(input.bbCents) > 0
       ? { bbCents: Number(input.bbCents) }
       : {}),
+    // WHICH TABLE OF THE SESSION (2026-09-20). Dropped here until now, which is
+    // why answers.sqlite.table_slot was null in every one of its 2,129 rows
+    // while the wrapper stamped it on /hand and studyPoller already read it.
+    // Null stays null: a single-table session has no slot by design.
+    ...(Number.isFinite(Number(input.tableSlot)) && Number(input.tableSlot) > 0
+      ? { tableSlot: Number(input.tableSlot) }
+      : {}),
     heroSeatId,
     heroCards,
     board,

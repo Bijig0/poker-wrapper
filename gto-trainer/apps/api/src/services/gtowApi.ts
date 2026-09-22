@@ -6,20 +6,26 @@
  * equity buckets — as ~500KB JSON. The only auth it needs is a short-lived
  * (~15 min) bearer ACCESS token.
  *
- * We don't hold credentials: the always-running desktop client self-refreshes,
+ * We don't hold credentials: an always-running GTO Wizard session self-refreshes,
  * so we sniff its live access token over CDP (the token rides every request's
  * Authorization header), cache it, and re-sniff on expiry or a 401. The refresh
  * token itself is single-use/rotating, so it can't be replayed out of band —
  * hence sniffing the access token rather than driving the refresh ourselves.
+ *
+ * There is more than one such session (services/gtowSessions.ts): the Elite
+ * account takes every heads-up solve so the Ultra account's daily allowance is
+ * spent only on the multiway trees that need it. Everything below therefore
+ * asks the pool for a token rather than holding one, walks to the next session
+ * when one refuses, and remembers which account minted each cloud solve.
  *
  * This complements the local preflop DB (see services/preflopDb.ts): preflop is
  * answered locally; this reaches GTOW's HU postflop library directly, JSON in /
  * JSON out, no DOM scraping.
  */
 
-const CDP_HOST = process.env.GTOW_CDP_HOST ?? "127.0.0.1:9222";
+import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
+
 const API_BASE = "https://api.gtowizard.com";
-const TOKEN_SKEW_MS = 60_000; // re-sniff a minute before expiry
 // Zone gives ~15s per decision and the study panel needs the verdict inside
 // ~10s — a solve that outlives this ceiling is useless for the decision it
 // was meant to answer, so fail fast and free the poller's single flight.
@@ -27,7 +33,6 @@ const CUSTOM_SOLVE_TIMEOUT_MS = 12_000;
 // Cloud solves land in ~2-5s; 1.5s polling quantized every answer up to the
 // next multiple. Env-tunable so scripts/benchAiSolve.ts can sweep it.
 const CUSTOM_SOLVE_POLL_MS = Number(process.env.GTOW_POLL_MS ?? 400);
-const REFRESH_RETRY_MS = 10_000; // floor between token-sniff ATTEMPTS (see refreshIfExpiring)
 /** Solved-node JSON is ~500KB each; bound the cache so a long live session
  *  can't grow it without limit. LRU — a hand's prior-street nodes stay hot. */
 const NODE_CACHE_MAX = 64;
@@ -44,104 +49,27 @@ export interface SpotSolutionParams {
   stacks?: string;
 }
 
-interface CdpTarget {
-  type: string;
-  url: string;
-  webSocketDebuggerUrl: string;
-}
-
-const decodeExpMs = (jwt: string): number => {
-  try {
-    return JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64").toString()).exp * 1000;
-  } catch {
-    return 0;
-  }
-};
+/** No session could take the work — the same shape every caller already handles. */
+const noSession = (need: GtowNeed) => ({
+  ok: false as const,
+  status: 0,
+  error: need.multiway
+    ? `No GTO Wizard session can solve a multiway ${need.preflop ? "preflop " : ""}tree (the Ultra account is down or out of allowance)`
+    : "No access token — is a GTO Wizard session running with its debug port? (see the dashboard's GTO Wizard panel)",
+});
 
 class GtowApi {
-  private token: string | null = null;
-  private tokenExpMs = 0;
-
-  /** Open a short-lived CDP session, provoke one authenticated request, and
-   * capture its bearer token. Returns null if the client isn't reachable. */
-  private async sniffToken(timeoutMs = 15_000, passiveMs = 3_500): Promise<string | null> {
-    let targets: CdpTarget[];
-    try {
-      // Bounded: the DevTools HTTP endpoint serves one client at a time — a
-      // busy/hung 9222 otherwise wedges every solve behind this fetch.
-      targets = await (await fetch(`http://${CDP_HOST}/json/list`, { signal: AbortSignal.timeout(5_000) })).json();
-    } catch {
-      return null;
-    }
-    const page = targets.find((t) => t.type === "page" && /gtowizard/i.test(t.url ?? ""));
-    if (!page?.webSocketDebuggerUrl) return null;
-
-    return new Promise<string | null>((resolve) => {
-      const ws = new WebSocket(page.webSocketDebuggerUrl);
-      let seq = 0;
-      let done = false;
-      const finish = (tok: string | null) => {
-        if (done) return;
-        done = true;
-        clearTimeout(hardTimer);
-        clearTimeout(passiveTimer);
-        try { ws.close(); } catch {}
-        resolve(tok);
-      };
-      const hardTimer = setTimeout(() => finish(null), timeoutMs);
-      // only on an OPEN socket: the passive timer can fire before onopen, or after the client went away — ws.send then
-      // throws InvalidStateError inside a timer callback, which is uncaught and took the whole API down (2026-09-11)
-      const send = (method: string, params: unknown = {}) => {
-        if (ws.readyState !== WebSocket.OPEN) { finish(null); return; }
-        try { ws.send(JSON.stringify({ id: ++seq, method, params })); } catch { finish(null); }
-      };
-
-      // PASSIVE-FIRST: the token rides every authenticated request, and the study
-      // poller drives the client constantly — so just watch its natural traffic.
-      // Navigating ourselves would race the poller (both own the one client) and
-      // fail. Only if nothing flies by within `passiveMs` (idle client, no poller)
-      // do we nudge a request by navigating.
-      const passiveTimer = setTimeout(() => {
-        if (done) return;
-        const s =
-          "gametype=CashHu500zComplex&depth=100&solution_type=gwiz&gmfs_solution_tab=gwiz" +
-          "&soltab=strategy&preflop_actions=R2.5-C&board=2c2d2h&flop_actions=X&history_spot=3";
-        send("Runtime.evaluate", {
-          expression: `location.href = location.origin + "/solutions?" + ${JSON.stringify(s)}`,
-        });
-      }, passiveMs);
-
-      ws.onopen = () => {
-        send("Network.enable");
-        send("Runtime.enable");
-      };
-      ws.onmessage = (ev) => {
-        let m: any;
-        try { m = JSON.parse(String(ev.data)); } catch { return; }
-        if (m.method === "Network.requestWillBeSent") {
-          const h = m.params?.request?.headers ?? {};
-          const auth: string | undefined = h.Authorization ?? h.authorization;
-          if (auth && /^Bearer eyJ/.test(auth)) finish(auth.replace(/^Bearer /, ""));
-        }
-      };
-      ws.onerror = () => finish(null);
-      ws.onclose = () => finish(null);
-    });
-  }
-
-  // ── Proactive token keeper ────────────────────────────────────────────────
-  // The sniff costs 4-8s (passive window + forced navigation), and paying it
-  // inline delayed whichever unlucky solve hit the ~15-min expiry — the
-  // recurring "10-second answer" spikes. Refreshing in the background keeps a
-  // live token on hand so no solve ever waits on CDP.
-  private keeper: ReturnType<typeof setInterval> | null = null;
-  private refreshing = false;
-  private lastRefreshAttemptMs = 0;
+  /**
+   * Which ACCOUNT minted each custom solution. A cloud solve lives on the
+   * account that created it, so every later poll of it must carry that
+   * account's token — mixing them up 404s. This is the one piece of state the
+   * multi-session pool forces on callers, and keeping it here means
+   * `customNode(solId, …)` stays a two-argument call everywhere it is used.
+   */
+  private solOwner = new Map<string, GtowSessionId>();
 
   startTokenKeeper(intervalMs = 30_000): void {
-    if (this.keeper) return;
-    this.keeper = setInterval(() => void this.refreshIfExpiring(), intervalMs);
-    void this.refreshIfExpiring(); // warm the very first token at boot too
+    gtowSessions.startKeeper(intervalMs);
   }
 
   /**
@@ -149,62 +77,62 @@ class GtowApi {
    * moment GTO Wizard becomes reachable: the keeper can't sniff before the
    * client is up, so its 30s cadence otherwise races the first decision of the
    * session — and losing that race costs the full sniff (7.2-8.6s measured,
-   * larger than any solve). No-op while the current token is healthy.
+   * larger than any solve). No-op while the current tokens are healthy.
    */
   primeToken(): void {
-    void this.refreshIfExpiring();
+    gtowSessions.prime();
   }
 
   /** Sniff NOW, ignoring the attempt rate-limit — for the dashboard's Connect
-   *  button, which has just (re)launched the client and is waiting on it. */
-  async forceRefresh(): Promise<boolean> {
-    this.lastRefreshAttemptMs = 0;
-    await this.refreshIfExpiring();
-    return this.hasLiveToken();
-  }
-
-  private async refreshIfExpiring(): Promise<void> {
-    if (this.refreshing) return;
-    // 3-min margin: two keeper ticks of slack before a solve would block.
-    if (this.token && Date.now() < this.tokenExpMs - 3 * 60_000) return;
-    // Rate-limit ATTEMPTS, not successes: primeToken is called from the 1s
-    // poll loop, and a client that's reachable but logged out has no token to
-    // find — without this it would re-sniff (and re-navigate the client) every
-    // tick, forever.
-    if (Date.now() - this.lastRefreshAttemptMs < REFRESH_RETRY_MS) return;
-    this.lastRefreshAttemptMs = Date.now();
-    this.refreshing = true;
-    try {
-      await this.accessToken(true);
-    } finally {
-      this.refreshing = false;
-    }
+   *  button, which has just (re)launched a client and is waiting on it. */
+  async forceRefresh(id?: GtowSessionId): Promise<boolean> {
+    return gtowSessions.forceRefresh(id);
   }
 
   /** True once a usable token is in hand — lets callers report readiness
    *  without forcing a sniff. */
-  hasLiveToken(): boolean {
-    return Boolean(this.token) && Date.now() < this.tokenExpMs - TOKEN_SKEW_MS;
+  hasLiveToken(need: { multiway?: boolean } = {}): boolean {
+    return gtowSessions.hasLiveToken(need);
   }
 
-  /** Token keeper state for the Sources registry — no sniff, no side effects. */
-  tokenStatus(): { live: boolean; expiresInMs: number | null; lastAttemptMs: number | null; keeperRunning: boolean } {
+  /**
+   * Token keeper state for the Sources registry — no sniff, no side effects.
+   * The top-level fields are the POOL rolled up (any session live = live, the
+   * longest-lived token's expiry), so every existing caller keeps working;
+   * `sessions` is the per-account detail the monitors render.
+   */
+  tokenStatus(): {
+    live: boolean;
+    expiresInMs: number | null;
+    lastAttemptMs: number | null;
+    keeperRunning: boolean;
+    multiwayLive: boolean;
+    sessions: ReturnType<typeof gtowSessions.status>;
+  } {
+    const sessions = gtowSessions.status();
+    const usable = sessions.filter((s) => s.tokenLive && s.state === "up");
+    const best = usable.reduce<number | null>((m, s) => (s.expiresInMs != null && (m == null || s.expiresInMs > m) ? s.expiresInMs : m), null);
+    const lastAttempt = sessions.reduce<number | null>((m, s) => (s.lastAttemptMs != null && (m == null || s.lastAttemptMs > m) ? s.lastAttemptMs : m), null);
     return {
-      live: this.hasLiveToken(),
-      expiresInMs: this.token ? this.tokenExpMs - Date.now() : null,
-      lastAttemptMs: this.lastRefreshAttemptMs || null,
-      keeperRunning: this.keeper != null,
+      live: usable.length > 0,
+      expiresInMs: best,
+      lastAttemptMs: lastAttempt,
+      keeperRunning: gtowSessions.keeperRunning(),
+      multiwayLive: gtowSessions.hasLiveToken({ multiway: true }),
+      sessions,
     };
   }
 
-  /** A valid access token, cached until shortly before it expires. */
-  private async accessToken(force = false): Promise<string | null> {
-    if (!force && this.token && Date.now() < this.tokenExpMs - TOKEN_SKEW_MS) return this.token;
-    const tok = await this.sniffToken();
-    if (!tok) return null;
-    this.token = tok;
-    this.tokenExpMs = decodeExpMs(tok);
-    return tok;
+  /** A valid access token from the best session for this work.
+   *  Kept for callers that only need a bearer (services/gtowAiPreflop.ts). */
+  async accessToken(force = false, need: GtowNeed = {}): Promise<string | null> {
+    if (force) await gtowSessions.forceRefresh();
+    return (await gtowSessions.bestToken(need))?.token ?? null;
+  }
+
+  /** The session a custom solution belongs to, for callers that must poll it. */
+  ownerOf(solId: string): GtowSessionId | null {
+    return this.solOwner.get(solId) ?? null;
   }
 
   private buildUrl(p: SpotSolutionParams): string {
@@ -232,15 +160,39 @@ class GtowApi {
    */
   async spotSolution(p: SpotSolutionParams): Promise<{ ok: true; data: any } | { ok: false; status: number; error: string }> {
     const url = this.buildUrl(p);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const token = await this.accessToken(attempt === 1);
-      if (!token) return { ok: false, status: 0, error: "No access token (is the GTO Wizard client running with CDP on 9222?)" };
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12_000) });
-      if (res.status === 401 && attempt === 0) continue; // token went stale — re-sniff and retry
-      if (!res.ok) return { ok: false, status: res.status, error: (await res.text()).slice(0, 200) };
-      return { ok: true, data: await res.json() };
+    const need: GtowNeed = {}; // library solutions: any plan, so any session may serve it
+    const ids = gtowSessions.route(need);
+    const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need);
+    if (!candidates.length) return noSession(need);
+    let last: { status: number; error: string } | null = null;
+    for (const id of candidates) {
+      // one re-sniff per session: a token that went stale between the keeper's
+      // tick and this call is the common 401, not a signed-out account
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const token = await gtowSessions.tokenFor(id, attempt === 1);
+        if (!token) { last = { status: 0, error: `${id}: no access token` }; break; }
+        let res: Response;
+        try {
+          res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12_000) });
+        } catch (e) {
+          last = { status: 0, error: `${id}: ${e instanceof Error ? e.message : e}` };
+          break;
+        }
+        if (res.status === 401 && attempt === 0) continue;
+        if (!res.ok) {
+          const body = (await res.text().catch(() => "")).slice(0, 200);
+          // 404 means this SPOT has no library solution — every account would
+          // say the same, so don't burn the pool walking to the next one.
+          if (res.status === 404) return { ok: false, status: 404, error: body };
+          gtowSessions.noteFailure(id, res.status, body, need);
+          last = { status: res.status, error: body };
+          break;
+        }
+        gtowSessions.noteSuccess(id);
+        return { ok: true, data: await res.json() };
+      }
     }
-    return { ok: false, status: 401, error: "Unauthorized after token refresh" };
+    return { ok: false, status: last?.status ?? 401, error: last?.error ?? "Unauthorized after token refresh" };
   }
 
   // ── AI-solve (custom solutions) ────────────────────────────────────────────
@@ -253,7 +205,7 @@ class GtowApi {
     return JSON.stringify([
       input.board, input.pot, input.stack, input.startingStreet ?? "FLOP",
       input.oopRange, input.ipRange, input.rake ?? null, input.fixedBets ?? null,
-      input.fixedLevels ?? null, input.mid?.range ?? null,
+      input.fixedLevels ?? null, input.mid?.range ?? null, input.huGrid ?? null,
     ]);
   }
 
@@ -289,6 +241,15 @@ class GtowApi {
       bet_sizes: THREE_WAY_SIZES.bet, raise_sizes: THREE_WAY_SIZES.raise,
       second_raise_sizes: THREE_WAY_SIZES.raise, third_plus_raise_sizes: THREE_WAY_SIZES.raise,
     });
+    // A multi-size FIXED grid for a heads-up wager-free street (2026-09-19): the
+    // alternative to AUTOMATIC, which lets the engine pick ONE size per node
+    // (hand 4919174586: a 300%-pot river bet as the only bet). Opt-in per
+    // tree (huGrid); the chain decides whether to use it.
+    const grid = (position: string, g: { bet: readonly string[]; raise: readonly string[] }) => ({
+      position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
+      bet_sizes: [...g.bet], raise_sizes: [...g.raise],
+      second_raise_sizes: [...g.raise], third_plus_raise_sizes: [...g.raise],
+    });
     const fb = input.fixedBets;
     const fl = input.fixedLevels;
     const street = (s: "FLOP" | "TURN" | "RIVER") =>
@@ -298,7 +259,9 @@ class GtowApi {
           ? { street: s, position_bet_sizes: seats.map((p) => fixed(p, `${fb[s]}%`)) }
           : input.mid
             ? { street: s, position_bet_sizes: seats.map(threeWay) }
-            : { street: s, position_bet_sizes: seats.map(auto) };
+            : input.huGrid
+              ? { street: s, position_bet_sizes: seats.map((p) => grid(p, input.huGrid!)) }
+              : { street: s, position_bet_sizes: seats.map(auto) };
     const player = (position: string, display: string, range: number[]) => ({
       position, display_position: display, blind: null, range, stack: input.stack,
       tournament_instant_bounty: null, tournament_total_bounty: null,
@@ -327,39 +290,76 @@ class GtowApi {
     };
   }
 
-  /** Create the custom tree + solution on the account (no waiting for the solve). */
+  /**
+   * Create the custom tree + solution on an account (no waiting for the solve).
+   *
+   * A 3-seat tree (`input.mid`) is multiway, which only the Ultra plan's AI
+   * will accept — so the pool is asked for a session that can take it, and a
+   * plan refusal walks to the next session rather than failing the spot.
+   */
   private async createCustomSolution(
     input: CustomTreeInput
-  ): Promise<{ ok: true; solId: string } | { ok: false; status: number; error: string }> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const token = await this.accessToken(attempt === 1);
-      if (!token) return { ok: false, status: 0, error: "No access token (is the GTO Wizard client running with CDP on 9222?)" };
-      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  ): Promise<{ ok: true; solId: string; session: GtowSessionId } | { ok: false; status: number; error: string }> {
+    // POSTFLOP: heads-up belongs to the Elite account, multiway to Ultra.
+    // `preflop` is deliberately absent — that flag is the preflop piece's
+    // (services/gtowAiPreflop.ts), and it is what sends preflop to Ultra.
+    const need: GtowNeed = { multiway: Boolean(input.mid) };
+    // Every wall we record is a GUESS about what the API meant. A wrong quota
+    // guess would otherwise disable multiway until the next daily reset, so
+    // when nothing is routable we still try the walled sessions rather than
+    // failing the spot outright — the same last-ditch rule bestToken uses.
+    const ids = gtowSessions.route(need);
+    const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need);
+    if (!candidates.length) return noSession(need);
+    let last: { status: number; error: string } | null = null;
+    for (const id of candidates) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const token = await gtowSessions.tokenFor(id, attempt === 1);
+        if (!token) { last = { status: 0, error: `${id}: no access token` }; break; }
+        const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
-      // 1. create the tree (bounded — an unbounded fetch here hung whole
-      // solves when the API stalled; nothing upstream can cancel it)
-      const treeRes = await fetch(`${API_BASE}/v4/custom-solutions/custom-trees/`, {
-        method: "POST", headers, body: JSON.stringify(this.buildCustomTree(input)),
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (treeRes.status === 401 && attempt === 0) continue;
-      if (!treeRes.ok) return { ok: false, status: treeRes.status, error: `custom-trees: ${(await treeRes.text()).slice(0, 180)}` };
-      const tree = await treeRes.json();
-      const treeId = tree.id ?? tree.custom_tree_id ?? tree.uuid;
-      if (!treeId) return { ok: false, status: 502, error: "custom-trees returned no id" };
+        // 1. create the tree (bounded — an unbounded fetch here hung whole
+        // solves when the API stalled; nothing upstream can cancel it)
+        let treeRes: Response;
+        try {
+          treeRes = await fetch(`${API_BASE}/v4/custom-solutions/custom-trees/`, {
+            method: "POST", headers, body: JSON.stringify(this.buildCustomTree(input)),
+            signal: AbortSignal.timeout(15_000),
+          });
+        } catch (e) { last = { status: 0, error: `${id}: custom-trees ${e instanceof Error ? e.message : e}` }; break; }
+        if (treeRes.status === 401 && attempt === 0) continue;
+        if (!treeRes.ok) {
+          const body = (await treeRes.text().catch(() => "")).slice(0, 180);
+          gtowSessions.noteFailure(id, treeRes.status, body, need);
+          last = { status: treeRes.status, error: `custom-trees: ${body}` };
+          break; // next session
+        }
+        const tree = await treeRes.json();
+        const treeId = tree.id ?? tree.custom_tree_id ?? tree.uuid;
+        if (!treeId) return { ok: false, status: 502, error: "custom-trees returned no id" };
 
-      // 2. create the solution
-      const solRes = await fetch(`${API_BASE}/v4/custom-solutions/`, {
-        method: "POST", headers, body: JSON.stringify({ custom_tree_id: treeId, actions: "", board: input.board }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!solRes.ok) return { ok: false, status: solRes.status, error: `custom-solutions: ${(await solRes.text()).slice(0, 180)}` };
-      const sol = await solRes.json();
-      const solId = sol.id ?? sol.custom_solution_id ?? sol.uuid;
-      if (!solId) return { ok: false, status: 502, error: "custom-solutions returned no id" };
-      return { ok: true, solId: String(solId) };
+        // 2. create the solution
+        let solRes: Response;
+        try {
+          solRes = await fetch(`${API_BASE}/v4/custom-solutions/`, {
+            method: "POST", headers, body: JSON.stringify({ custom_tree_id: treeId, actions: "", board: input.board }),
+            signal: AbortSignal.timeout(15_000),
+          });
+        } catch (e) { last = { status: 0, error: `${id}: custom-solutions ${e instanceof Error ? e.message : e}` }; break; }
+        if (!solRes.ok) {
+          const body = (await solRes.text().catch(() => "")).slice(0, 180);
+          gtowSessions.noteFailure(id, solRes.status, body, need);
+          last = { status: solRes.status, error: `custom-solutions: ${body}` };
+          break; // next session
+        }
+        const sol = await solRes.json();
+        const solId = sol.id ?? sol.custom_solution_id ?? sol.uuid;
+        if (!solId) return { ok: false, status: 502, error: "custom-solutions returned no id" };
+        gtowSessions.noteSuccess(id, { tree: true });
+        return { ok: true, solId: String(solId), session: id };
+      }
     }
-    return { ok: false, status: 401, error: "Unauthorized after token refresh" };
+    return { ok: false, status: last?.status ?? 401, error: last?.error ?? "Unauthorized after token refresh" };
   }
 
   /**
@@ -371,22 +371,31 @@ class GtowApi {
   // (fastSolve.warmPostflop6max) and the panel's own feed-spot can all want the same street within a second;
   // each used to mint its own custom solution — two cloud solves for one spot, both slower (hand 4919059283's
   // turn: two 19-24 s answers for the same key). Later callers now join the first request.
-  private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean } | { ok: false; status: number; error: string }>>();
+  private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId } | { ok: false; status: number; error: string }>>();
   private nodePending = new Map<string, Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }>>();
+
+  /**
+   * Drop a solution from the tree cache — used when the account that owns it hits its daily wall mid-walk, so
+   * the next ensureCustomSolution re-creates the SAME tree on an account that can still be polled.
+   */
+  forgetSolution(solId: string): void {
+    for (const [k, v] of this.treeSolCache) if (v === solId) this.treeSolCache.delete(k);
+  }
 
   async ensureCustomSolution(
     input: CustomTreeInput
-  ): Promise<{ ok: true; solId: string; created: boolean } | { ok: false; status: number; error: string }> {
+  ): Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId } | { ok: false; status: number; error: string }> {
     const key = this.treeKey(input);
     const hit = this.treeSolCache.get(key);
-    if (hit) return { ok: true, solId: hit, created: false };
+    if (hit) return { ok: true, solId: hit, created: false, session: this.solOwner.get(hit) ?? "primary" };
     const pending = this.treePending.get(key);
     if (pending) return pending.then((r) => (r.ok ? { ...r, created: false } : r));
     const p = (async () => {
       const made = await this.createCustomSolution(input);
       if (!made.ok) return made;
       this.treeSolCache.set(key, made.solId);
-      return { ok: true as const, solId: made.solId, created: true };
+      this.solOwner.set(made.solId, made.session);
+      return { ok: true as const, solId: made.solId, created: true, session: made.session };
     })().finally(() => this.treePending.delete(key));
     this.treePending.set(key, p);
     return p;
@@ -430,9 +439,12 @@ class GtowApi {
     const t0 = Date.now();
     let lastErr = "the cloud didn't return a strategy in time";
     let refreshed = false;
+    // The solve lives on the account that minted it: poll it with THAT
+    // session's token, never whichever token happens to be freshest.
+    const owner = this.solOwner.get(solId) ?? null;
     while (Date.now() - t0 < timeoutMs) {
-      const token = await this.accessToken();
-      if (!token) return { ok: false, status: 0, error: "No access token (is the GTO Wizard client running with CDP on 9222?)" };
+      const token = owner ? await gtowSessions.tokenFor(owner) : await this.accessToken();
+      if (!token) return { ok: false, status: 0, error: `No access token for the session that owns this solve${owner ? ` (${owner})` : ""} — is it still running with its debug port?` };
       // per-request bound: the loop's wall-clock ceiling can't fire while a
       // single fetch hangs inside it — a timed-out poll just retries
       let r: Response;
@@ -446,7 +458,7 @@ class GtowApi {
         await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
         continue;
       }
-      if (r.status === 401 && !refreshed) { refreshed = true; await this.accessToken(true); continue; }
+      if (r.status === 401 && !refreshed) { refreshed = true; if (owner) await gtowSessions.tokenFor(owner, true); else await this.accessToken(true); continue; }
       if (r.ok && r.status !== 204) {
         const j = await r.json().catch(() => null);
         if (j?.action_solutions?.length) {
@@ -457,11 +469,19 @@ class GtowApi {
           return { ok: true, data: j, solveSecs: (Date.now() - t0) / 1000, cached: false };
         }
       } else if (!r.ok) {
-        lastErr = `spot-solution ${r.status}: ${(await r.text().catch(() => "")).slice(0, 120)}`;
+        const body = (await r.text().catch(() => "")).slice(0, 120);
+        lastErr = `spot-solution ${r.status}: ${body}`;
+        // a wall hit mid-poll is worth recording: the NEXT tree goes elsewhere
+        if (owner && r.status !== 404) gtowSessions.noteFailure(owner, r.status, body);
+        // …and a QUOTA wall will not lift while we wait (2026-09-22: the stress run sat out a whole timeout on a
+        // 429). Return at once, flagged, so the caller can re-create the tree on another account (forgetSolution).
+        if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(body))) {
+          return { ok: false, status: 429, error: lastErr };
+        }
       }
       await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
     }
-    return { ok: false, status: 504, error: `AI solve timed out — ${lastErr} (GTO Wizard may have hit its daily solution limit, or the client lost connection).` };
+    return { ok: false, status: 504, error: `AI solve timed out on ${owner ?? "the GTO Wizard session"} — ${lastErr} (that account may have hit its daily solution limit, or the client lost connection).` };
   }
 
   /**
@@ -474,7 +494,7 @@ class GtowApi {
    */
   async customSolve(
     input: CustomSolveInput
-  ): Promise<{ ok: true; customSolutionId: string; solveSecs: number; cached: boolean; data: any } | { ok: false; status: number; error: string }> {
+  ): Promise<{ ok: true; customSolutionId: string; solveSecs: number; cached: boolean; data: any; session: GtowSessionId } | { ok: false; status: number; error: string }> {
     const ens = await this.ensureCustomSolution(input);
     if (!ens.ok) return ens;
     const node = await this.customNode(ens.solId, {
@@ -484,7 +504,7 @@ class GtowApi {
       board: input.queryBoard ?? input.board,
     });
     if (!node.ok) return node;
-    return { ok: true, customSolutionId: ens.solId, solveSecs: node.solveSecs, cached: node.cached, data: node.data };
+    return { ok: true, customSolutionId: ens.solId, solveSecs: node.solveSecs, cached: node.cached, data: node.data, session: ens.session };
   }
 }
 
@@ -516,6 +536,9 @@ export interface CustomTreeInput {
   /** Pin a street's bets PER RAISE LEVEL (["33%","120%"] = bet 33% pot, raise
    *  120% pot) — how ai-study solves lines containing arbitrary user sizes. */
   fixedLevels?: Partial<Record<"FLOP" | "TURN" | "RIVER", string[]>>;
+  /** A multi-size FIXED grid for heads-up wager-free streets instead of AUTOMATIC
+   *  (e.g. {bet:["33%","75%","150%"], raise:["55%","100%"]}). Part of the tree key. */
+  huGrid?: { bet: readonly string[]; raise: readonly string[] };
 }
 
 /** Tree params plus the node to query within it. */

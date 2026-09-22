@@ -221,8 +221,8 @@ for (let ci = 0; ci < N_CTX; ci++) {
       const sol = await fastSolve(hand, step.pos);
       row.cls = cls;
       row.solvedChart = (sol as any).gametype ?? null;
-      row.ok = sol.ok === true && sol.source === "hrc-3max-preflop" && !!sol.decision;
-      if (!row.ok) row.reason = (sol as any).reason ?? `source=${(sol as any).source}`;
+      row.ok = sol.ok === true && sol.source === "hrc-3max-preflop" && !!(sol.ok && sol.decision);
+      if (!sol.ok || !row.ok) row.reason = (sol as any).reason ?? `source=${(sol as any).source}`;
       else row.decision = sol.decision?.action;
     } catch (e) { row.ok = false; row.reason = String((e as Error)?.message).slice(0, 160); }
     row.ok ? pfOk++ : pfBad++;
@@ -259,8 +259,8 @@ for (let ci = 0; ci < N_CTX; ci++) {
       try {
         const sol = await fastSolve(hand, heroPos);
         row.cls = cls;
-        row.ok = sol.ok === true && sol.source === "gtow-api-postflop" && !!sol.actions?.length;
-        if (row.ok) { row.decision = sol.decision?.action ?? null; row.warning = sol.warning ?? null; }
+        row.ok = sol.ok === true && sol.source === "gtow-api-postflop" && !!(sol.ok && sol.actions?.length);
+        if (sol.ok && row.ok) { row.decision = sol.decision?.action ?? null; row.warning = sol.warning ?? null; }
         else row.reason = (sol as any).reason ?? `source=${(sol as any).source}`;
       } catch (e) { row.ok = false; row.reason = String((e as Error)?.message).slice(0, 160); }
       row.ok ? postOk++ : postBad++;

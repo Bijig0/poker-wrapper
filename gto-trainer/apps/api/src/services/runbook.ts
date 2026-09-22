@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { evaluate, loadLedger, DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, type EvaluatedConfig, type LedgerFormat } from "./ledger";
-import { recipeFor, PY, BUN, BASH, HRC_API_ZENBOOK, type Step } from "./jobs";
+import { evaluate, loadLedger, sixMaxChartIds, sixMaxAsym, DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, type EvaluatedConfig, type LedgerFormat } from "./ledger";
+import { recipeFor, sixMaxPlan, PY, BUN, BASH, HRC_API_ZENBOOK, type Step } from "./jobs";
 
 /**
  * The RUNBOOK — for a config (or a whole plan) the exact work, spelled out
@@ -115,34 +115,56 @@ export function runbookFor(id: string): Runbook | null {
       }
       break;
     }
+    case "preflop-grid-hu":
     case "preflop-grid-6max": {
-      where = "HRC on this machine (the Zenbook), driven by poker-zenbook/hrc-api/scripts/threeMaxGrid.ts through the UIA driver (6-seat mapping UTG/HJ/CO/BTN/SB/BB); queued by HRC Runner";
-      const api = env.HRC_API ?? HRC_API_ZENBOOK;
-      const sites = env.SITES ?? "ign200,ign25";
-      const site = `ign${String(fmt?.stake ?? "").replace(/^NL/i, "")}`;
-      const depths: number[] = (c.depths && c.depths.length) ? c.depths : fmt?.depths ?? [];
-      const opens = ["2_5", "3", "2", "2_3", "3_5", "4", "4_5", "limp"];
-      const ids = depths.flatMap((D) => opens.map((o) => `${site}_6max_D${D}_o${o}`));
+      // the 6-seat trees: even grid (open × depth) and / or uneven states (one short seat), one plan per config,
+      // written by poker-zenbook/hrc-api/scripts/genSixMaxPlan.ts from the config's env (SITES · DEPTHS · OPENS · ASYM)
+      const ids = sixMaxChartIds(c, fmt);
+      const asym = sixMaxAsym(c);
+      const { planDir } = sixMaxPlan(c);
+      const winBoxes: { label: string; host: string }[] = (L as any).boxes?.["hrc-box"] ?? [];
+      const linBoxes: { label: string; host: string }[] = (L as any).boxes?.["hrc-linux"] ?? [];
+      const boxes = [...winBoxes, ...linBoxes];
+      const onBoxes = c.runner === "hrc-box";
+      where = onBoxes
+        ? `HRC on ${boxes.length} machines side by side — ${winBoxes.map((b) => b.label).join(", ")} (Windows: the Vultr boxes plus this Zenbook as host "local", boxJob.ts) and ${linBoxes.map((b) => b.label).join(", ")} (the Hetzner Linux boxes, linuxShardJob.ts → the box keeper) — each solving one shard of the same plan through threeMaxGrid.ts (6-seat mapping UTG/HJ/CO/BTN/SB/BB)`
+        : "HRC on this machine (the Zenbook), driven by poker-zenbook/hrc-api/scripts/threeMaxGrid.ts through the UIA driver (6-seat mapping UTG/HJ/CO/BTN/SB/BB); queued by HRC Runner";
+      const depths: number[] = env.DEPTHS ? env.DEPTHS.split(",").map(Number) : (c.depths && c.depths.length) ? c.depths : fmt?.depths ?? [];
+      const opens = (env.OPENS ?? "2.5,3,2,3.5,limp").split(",").map((o) => (o.trim() === "limp" ? "limp tree" : `${o.trim()}x`)).join(" / ");
+      const shape = asym
+        ? `uneven states: a ${asym.deep}bb table with one seat short at ${asym.shorts.join(" / ")}bb, the short seat in each of ${asym.seats.join(" / ")}, opens ${asym.opens.map((o) => (o === "limp" ? "limp tree" : `${o}x`)).join(" / ")}${env.GRID === "off" ? "" : " (plus the even grid)"}`
+        : `depths ${depths.join(", ")}bb · opens ${opens}`;
       let n = 1;
-      steps.push({ n: n++, title: "Write the 6-max plan + runner queue", how: "command",
-        cmd: cmdStr([BUN, "run", join(api, "scripts", "genSixMaxPlan.ts"), "--sites", sites]), cwd: rel(api),
-        detail: [`writes poker-zenbook/hrc-api/solves/sixmax_grid/plan_6max.json (one threeMaxGrid job per depth × open size, every seat 100% of the tree) and queue_6max.json for HRC Runner (a pilot row, then one row per site × depth)`,
-          `rake ${fmt?.rake ? `${Math.round(fmt.rake.pct * 100)}% cap ${fmt.rake.capBb}bb` : "none!"} · depths ${depths.join(", ")}bb · size menus scale with the open and the depth (3-bets 3x/3.5x/4.2x the open deep, small-or-jam short; 4-bets from the median 3-bet; sizes above 40% of stack dropped) · flats [0,2,1,1], limp tree [2,2,1,1] · refine 60/40/20 min by depth · full postflop play in raised pots`,
-          "the plan is generated from the ledger's format (rake, depths) — regenerate with --lean to halve the menus if the pilot runs too long"] });
-      steps.push({ n: n++, title: `Solve ${ids.length} tree(s) in HRC`, how: "hrc",
-        cmd: cmdStr(["cmd", "/c", "start", "", HRC_RUNNER, join(api, "solves", "sixmax_grid", "queue_6max.json")]),
-        detail: [
-          "HRC Runner runs, per row: bun run scripts/threeMaxGrid.ts solves/sixmax_grid/plan_6max.json --out solves/sixmax_grid --clean --filter <site_depth> (each tree: wizard auto-solve, then a fixed-sample Run-Nash refinement, then Complete Export); resumable — a tree whose charts.json.gz exists is skipped",
-          "PILOT FIRST: the queue's first row is the single 100bb 2.5x tree; read its time in runner.log before letting the bands run",
-          ...ids.map((id) => `tree ${id} · done when solves/sixmax_grid/${id}.charts.json.gz exists`),
-          "CoinPoker must be closed the whole time (it quits when it sees hrc.exe); keep the machine unlocked and hands off while a tree runs",
+      const genStep = rec?.steps[0];
+      steps.push({ n: n++, title: "Write the 6-max plan + runner queue", how: "command", cmd: genStep ? cmdStr(genStep.cmd) : undefined, cwd: genStep ? rel(genStep.cwd) : undefined,
+        detail: [`writes ${rel(planDir)}\\plan_6max.json (${ids.length} threeMaxGrid jobs, one per tree, most useful first) and queue_6max.json for HRC Runner (a pilot row, then one row per band)`,
+          `rake ${fmt?.rake ? `${Math.round(fmt.rake.pct * 100)}% cap ${fmt.rake.capBb}bb` : "none!"} · ${shape} · 3-bets 3x / 3.5x / 4.2x / 5x the open at 75bb+, 3x / 3.6x + jam at 40-70bb, 2.6x + jam at ≤30bb · 4-bets 2.2x / 2.7x the median 3-bet + jam at 100bb+, 2.3x + jam at 60-99bb, jam only below · sizes above 40% of stack dropped · flats [0,2,1,1], limp tree [2,2,1,1] + SB complete · refine 60/40/20 min by depth · full postflop play in raised pots`,
+          "the plan is generated from the ledger's format (rake) and this config's env; set LEAN=1 in the env to halve the menus if the pilot runs too long"] });
+      if (onBoxes) {
+        const solve = rec?.steps[1];
+        steps.push({ n: n++, title: `Solve ${ids.length} tree(s) on the HRC boxes`, how: "hrc", cmd: solve ? cmdStr(solve.cmd) : undefined, cwd: solve ? rel(solve.cwd) : undefined, detail: [
+          `one job per machine, shard i/${boxes.length} of the plan each — Windows (${winBoxes.map((b) => b.label).join(", ")}): parity guard against the reference settings → ship the shard → HRC solves it (wizard auto-solve, fixed-sample Run-Nash refinement, Complete Export) → pull → parse into the catalog; a box joining late takes the tail (--order reverse)`,
+          `Linux (${linBoxes.map((b) => b.label).join(", ")}): the shard is shipped to /root/hrc-api/solves/sixmax_grid/${c.id}/ and the ledger's hrc-linux entry pointed at it, so the box keeper owns the runner (relaunch on death, HRC recycle on a hang) across API restarts; the job pulls each finished zip and parses it here every 5 min`,
+          "PILOT FIRST: run the first tree alone on one Windows box (Run… → boxes: hrc-1) and one Linux box (boxes: hrc-l1) and read both wall times before the fan-out; the Windows parity guard was written against the 3-seat reference — a refusal (exit 3) on a 6-seat tree means the reference settings need a 6-max twin, not that the tree is wrong; the Linux driver opens a 3-max template hand — its first 6-seat tree proves the wizard takes six stacks",
+          ...ids.map((id) => `tree ${id} · done when ${rel(planDir)}\\${id}.charts.json.gz exists`),
         ] });
+      } else {
+        steps.push({ n: n++, title: `Solve ${ids.length} tree(s) in HRC`, how: "hrc",
+          cmd: cmdStr(["cmd", "/c", "start", "", HRC_RUNNER, join(planDir, "queue_6max.json")]),
+          detail: [
+            `HRC Runner runs, per row: bun run scripts/threeMaxGrid.ts ${rel(planDir)}\\plan_6max.json --out ${rel(planDir)} --clean --filter <the row's trees> (each tree: wizard auto-solve, then a fixed-sample Run-Nash refinement, then Complete Export); resumable — a tree whose charts.json.gz exists is skipped`,
+            "PILOT FIRST: the queue's first row is the single first tree; read its time in runner.log before letting the bands run",
+            ...ids.map((id) => `tree ${id} · done when ${rel(planDir)}\\${id}.charts.json.gz exists`),
+            "CoinPoker must be closed the whole time (it quits when it sees hrc.exe); keep the machine unlocked and hands off while a tree runs",
+          ] });
+      }
       steps.push({ n: n++, title: "Catalog pickup", how: "manual", detail: [
-        `each finished tree is converted into a study-UI solution by analysis/pipeline/solve/hrc_to_preflop.py; the :8777 catalog lists it under the prefix ${c.produces.map((p) => p.replace("charts:", "")).join(", ")} — restart hrc-charts if the count does not move`,
+        `each finished tree is converted into a study-UI solution by analysis/pipeline/solve/hrc_to_preflop.py; the :8777 catalog lists it by id (prefix ${c.produces.map((p) => p.replace("charts:", "")).join(", ")}) — the config is done only when EVERY id is there; restart hrc-charts if the count does not move`,
       ] });
-      doneWhen.push(`the :8777 catalog lists ${ids.length} chart(s) with prefix ${c.produces.map((p) => p.replace("charts:", "")).join(", ")}`);
+      doneWhen.push(`the :8777 catalog lists all ${ids.length} chart(s): ${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ", …" : ""}`);
       verify.push("pilot: root node has 6 players, UTG acts first, the open size in the export equals the tree's; a hand mixing two actions shows equal EVs (the refinement did its job)");
-      verify.push("compare the 100bb 2.5x UTG/BTN opening ranges with GTO Wizard's 6-max NL500 charts — same shape, differences explained by rake");
+      verify.push("compare the 100bb 2.5x UTG/BTN opening ranges with GTO Wizard's 6-max NL500 charts — same shape; tighter flats and more 3-bet-or-fold explained by the 2bb cap");
+      if (asym) verify.push("an uneven state against the even tree at the short depth: the short seat's jam/fold mix moves the same way, the deep seats stay close to the 100bb even tree");
       break;
     }
     case "opponent-model": {

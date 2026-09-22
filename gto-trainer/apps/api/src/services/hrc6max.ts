@@ -1,5 +1,12 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
-import { fetchNode, type GetNode, type HrcNode } from "./hrc3max";
+import { type GetNode, type HrcNode } from "./hrc3max";
+// Nodes come from the baked SQLite when this machine has it, and from :8777
+// otherwise — see services/hrc6maxDb.ts for why that is worth doing. NOTE the
+// import is fetchNode6max, NOT hrc3max's fetchNode: resolveChart6max opens the
+// ROOT of each candidate, so resolution itself paid a 2-8s tree open on the
+// server and reading only the walk through SQLite would have left most of the
+// latency exactly where it was.
+import { fetchNode6max } from "./hrc6maxDb";
 
 /**
  * Chart picker for the 6-max NL200 ring set (ledger proposal `sixmax-nl200`).
@@ -54,6 +61,43 @@ export const evenChartId = (depth: number, open: number | "limp"): string =>
 export const unevenChartId = (short: number, seat: Seat6, open: number): string =>
   `${SITE_6MAX}_6max_D${num(DEEP6)}_s${num(short)}_${seat}_o${num(open)}`;
 
+/**
+ * A chart-selection APPROXIMATION: the picker answered, but from a tree that is
+ * not the one this state actually wanted.
+ *
+ * These already existed as prose in `note` and rode to the panel —
+ *   "the uneven set has 2.5x and 3x only — using its 2.5x tree · the BB has 81bb
+ *    — answered from the 70bb short chart"
+ * — and then evaporated. Each one is a solve we do not own yet, so each carries
+ * the chart id that WOULD answer it exactly and the genSixMaxPlan spec that
+ * would build it. services/missQueue.ts turns them into queue items.
+ *
+ * ONLY CHART GAPS BELONG HERE. The picker also notes things like "hero's stack
+ * unreadable — taken as 100bb", which is a READER fault: no tree would fix it,
+ * and putting it in a solve queue would suggest solving a chart we already have.
+ * Those stay prose-only.
+ */
+export type Approx6Kind =
+  | "open-not-in-set"     // the uneven set carries 2.5x/3x only — this open has no short-stack tree
+  | "open-snapped"        // the open played is not one of the solved sizes
+  | "short-rung-snapped"  // the short seat's stack answered from a different short rung
+  | "no-limp-uneven"      // a limped pot with a short seat — the uneven set has no limp tree
+  | "beyond-ladder";      // effective stack past the top rung
+
+export interface Approx6 {
+  kind: Approx6Kind;
+  /** the same sentence that goes to the panel */
+  note: string;
+  /** what the state wanted, and what answered it */
+  want: number | string | null;
+  got: number | string | null;
+  seat: Seat6 | null;
+  /** the chart that would answer this exactly, when one could be solved */
+  solve: string | null;
+  /** genSixMaxPlan.ts --asym spec that would build `solve` (null when the fix is a new even rung) */
+  asym: string | null;
+}
+
 export interface Chart6Choice {
   /** charts to try, best first — the set is still solving, so the caller takes the first one that exists */
   candidates: string[];
@@ -72,6 +116,8 @@ export interface Chart6Choice {
   effective?: number | null;
   /** that opponent: the raiser hero faces, or the deepest live seat when hero is first in */
   relevant?: Seat6 | null;
+  /** chart gaps this selection had to paper over — see Approx6 */
+  approx?: Approx6[];
 }
 
 /**
@@ -198,8 +244,16 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
   const byPos = dealtByPos(hand, heroPos);
   const { open, observed } = openFromTokens(tokens);
   const notes: string[] = [];
+  const approx: Approx6[] = [];
+  /** Record a chart GAP: the prose the panel already shows, plus the solve that would close it. */
+  const gap = (kind: Approx6Kind, note: string, want: number | string | null, got: number | string | null,
+               seat: Seat6 | null, solve: string | null, asym: string | null): void => {
+    notes.push(note);
+    approx.push({ kind, note, want, got, seat, solve, asym });
+  };
   if (observed != null && Math.abs(observed - (open as number)) > 0.2) {
-    notes.push(`the open was ${observed}bb — answered from the ${open}x tree`);
+    gap("open-snapped", `the open was ${observed}bb — answered from the ${open}x tree`,
+        observed, open, null, null, null);
   }
   const me = (heroPos ?? "").toUpperCase() as Seat6;
   const { folded, aggressor, after } = replayTokens6(tokens);
@@ -221,10 +275,14 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
   const effective = Math.min(hero, relevantStack);
   const rung = snapRung6(effective);
   const beyondLadder = effective > LADDER_TOP6 ? Math.round(effective) : null;
-  if (beyondLadder != null) notes.push(`${beyondLadder}bb effective, past the ${RUNGS6[RUNGS6.length - 1]}bb rung — answered from the ${rung}bb chart`);
+  if (beyondLadder != null) {
+    gap("beyond-ladder", `${beyondLadder}bb effective, past the ${RUNGS6[RUNGS6.length - 1]}bb rung — answered from the ${rung}bb chart`,
+        beyondLadder, rung, null, evenChartId(snapRung6(beyondLadder) === rung ? Math.round(beyondLadder / 25) * 25 : rung, open), null);
+  }
   const finish = (id: string, cands: string[], depth: number, shortDepth: number, shortSeat: Seat6 | "EQ", o: number | "limp"): Chart6Choice => ({
     candidates: cands.filter((x, i, a) => a.indexOf(x) === i), id, site: SITE_6MAX, depth, shortDepth, shortSeat,
     openSize: o, note: notes.join(" · ") || null, beyondLadder, effective: Math.round(effective), relevant,
+    approx: approx.slice(),
   });
   const evenLadder = (depth: number, o: number | "limp"): string[] => {
     // A LIMPED POT ONLY EVER FALLS BACK TO ANOTHER LIMP CHART (2026-09-16): no raise tree contains a limp. The 125
@@ -250,7 +308,12 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
   // the shorts that are still in the hand
   const shorts = opps.filter(([, bb]) => bb < DEEP6 - SHORT_GAP);
   if (!shorts.length || open === "limp") {
-    if (shorts.length && open === "limp") notes.push(`the uneven set has no limp tree — the even ${rung}bb limp chart answers`);
+    if (shorts.length && open === "limp") {
+      const seat = shorts.slice().sort((a, b) => a[1] - b[1])[0]![0];
+      gap("no-limp-uneven", `the uneven set has no limp tree — the even ${rung}bb limp chart answers`,
+          "limp", `even ${rung}bb`, seat, unevenChartId(snapShort6(oppStack(seat) ?? DEEP6), seat, 2.5),
+          `deep=${DEEP6};shorts=${snapShort6(oppStack(seat) ?? DEEP6)};opens=limp;seats=${seat}`);
+    }
     return even(rung);
   }
 
@@ -273,8 +336,17 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
 
   const s = snapShort6(shortBB);
   const o = nearest(UNEVEN_OPENS6, open as number);
-  if (o !== open) notes.push(`the uneven set has 2.5x and 3x only — using its ${o}x tree`);
-  if (Math.abs(shortBB - s) > 8) notes.push(`the ${shortSeat} has ${Math.round(shortBB)}bb — answered from the ${s}bb short chart`);
+  if (o !== open) {
+    gap("open-not-in-set", `the uneven set has ${UNEVEN_OPENS6.join("x and ")}x only — using its ${o}x tree`,
+        open, o, shortSeat, unevenChartId(s, shortSeat, open as number),
+        `deep=${DEEP6};shorts=${s};opens=${open};seats=${shortSeat}`);
+  }
+  if (Math.abs(shortBB - s) > 8) {
+    const want = Math.round(shortBB / 10) * 10;                 // the rung this state wanted
+    gap("short-rung-snapped", `the ${shortSeat} has ${Math.round(shortBB)}bb — answered from the ${s}bb short chart`,
+        want, s, shortSeat, unevenChartId(want, shortSeat, o),
+        `deep=${DEEP6};shorts=${want};opens=${o};seats=${shortSeat}`);
+  }
   const others = shorts.filter(([p]) => p !== shortSeat);
   if (others.length) notes.push(`${others.map(([p, bb]) => `${p} ${Math.round(bb)}bb`).join(", ")} also short — not modelled`);
   if (hero > DEEP6 + SHORT_GAP) notes.push(`hero has ${Math.round(hero)}bb — the short chart plays him at 100bb`);
@@ -290,7 +362,7 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
  */
 export async function resolveChart6max(
   choice: Chart6Choice,
-  get: (source: string, line: string) => Promise<HrcNode | null | "unreachable"> = fetchNode,
+  get: (source: string, line: string) => Promise<HrcNode | null | "unreachable"> = fetchNode6max,
 ): Promise<{ id: string; root: HrcNode; fellBack: boolean } | "unreachable" | null> {
   let sawServer = false;
   for (const id of choice.candidates) {
@@ -303,4 +375,4 @@ export async function resolveChart6max(
 }
 
 /** A GetNode bound to one resolved chart, for walk3max. */
-export const nodeGetter = (id: string): GetNode => (line) => fetchNode(id, line);
+export const nodeGetter = (id: string): GetNode => (line) => fetchNode6max(id, line);

@@ -18,6 +18,8 @@ import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID }
 import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi } from "../services/gtowApi";
+import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
+import { REPO } from "../services/ledger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -25,6 +27,9 @@ import { mesBoardFor, mesFamilyFor } from "../services/mesPostflop";
 import { recordingForHand } from "./replay";
 import { sourceForTier } from "../services/answerLog";
 import { fetchNode as hrcFetchNode, chartFor, walk3max, HRC3MAX_BASE } from "../services/hrc3max";
+import type { HrcNode } from "../services/hrc3max";
+import { chartFor6max, resolveChart6max, nodeGetter } from "../services/hrc6max";
+import { fetchNode6max } from "../services/hrc6maxDb";
 import { mesNodeDetail } from "../services/mesPostflop";
 import { solveStore } from "../services/solveStore";
 import { sessionsStore } from "../services/sessionsStore";
@@ -32,7 +37,10 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { existsSync as fsExists } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
-import { rollAction } from "../services/studyPoller";
+import { rollAction, studyPoller } from "../services/studyPoller";
+import { missQueue } from "../services/missQueue";
+import { boxKeeper } from "../services/boxKeeper";
+import { jobs as jobStore } from "../services/jobs";
 import { buildAnswerText } from "../feed/buildAnswerText/buildAnswerText";
 
 /**
@@ -267,20 +275,37 @@ export function computeNets(hands: Enriched[]): Map<number, number | null> {
       nets.set(h.dbId, -s.heroInvestedBb);
       continue;
     }
-    // showdown: chain hero stacks to the next hand of the same session/stakes
-    const next = hands[i + 1];
+    // SHOWDOWN, from the client's own award (2026-09-19, hand 4919174586): the
+    // wrapper archives the result box — "Player N wins ($X)" — as result.winnerSeat
+    // / wonCents. Hero won ⇒ the award minus what hero put in; lost ⇒ minus what
+    // hero put in. Exact, rake already off the award, and no stack chaining.
+    const res = (h.raw as any)?.result as { winnerSeat?: number | null; wonCents?: number | null; heroWon?: boolean | null } | undefined;
+    const bbUsd = bbUsdOf(h.stakes);
+    if (res && res.winnerSeat != null && res.wonCents != null && bbUsd) {
+      const wonBb = res.wonCents / 100 / bbUsd;
+      const heroWon = res.winnerSeat === h.hand.heroSeatId || res.heroWon === true;
+      nets.set(h.dbId, Math.round((heroWon ? wonBb - s.heroInvestedBb : -s.heroInvestedBb) * 100) / 100);
+      continue;
+    }
+    // Fallback: chain hero's stacks. The archived stack is hero's stack at the END of
+    // the hand, so the hand's result is THIS hand's end stack minus the PREVIOUS
+    // hand's end stack — until 2026-09-19 it was chained forward (next − this),
+    // which priced every showdown with the following hand's result (hand
+    // 4919174586: a 19bb loss read as −0.5). Still blind to a top-up between the
+    // two hands, which is why the award above is preferred.
+    const prev = hands[i - 1];
     const curStack = h.hand.stacks?.[h.hand.heroSeatId];
-    const nextStack = next?.hand.stacks?.[next.hand.heroSeatId];
+    const prevStack = prev?.hand.stacks?.[prev.hand.heroSeatId];
     if (
-      next &&
+      prev &&
       curStack != null &&
-      nextStack != null &&
-      next.stakes === h.stakes &&
-      next.playedAt != null &&
+      prevStack != null &&
+      prev.stakes === h.stakes &&
+      prev.playedAt != null &&
       h.playedAt != null &&
-      next.playedAt - h.playedAt < SESSION_GAP_MS
+      h.playedAt - prev.playedAt < SESSION_GAP_MS
     ) {
-      const diff = Math.round((nextStack - curStack) * 100) / 100;
+      const diff = Math.round((curStack - prevStack) * 100) / 100;
       // plausibility: can't win more than the pot or lose more than invested+pot
       if (Math.abs(diff) <= s.potBb + 5) {
         nets.set(h.dbId, diff);
@@ -340,6 +365,11 @@ app.get("/hands", async (c) => {
       strategy: strategyOf(e),
       // the session this hand belongs to — the same id the Sessions tab uses
       session: sess.byHand.get(e.dbId) ?? null,
+      // WHICH OF THE SESSION'S TABLES (2026-09-20). The wrapper has stamped
+      // `tableSlot` on every archived hand since multi-table landed; it was
+      // simply never surfaced. null = a single-table session, which tables.py
+      // gives no slot on purpose ("None is not slot 1").
+      table: typeof e.raw?.tableSlot === "number" ? e.raw.tableSlot : null,
       answerStatus: answerStatusOf(e, byCid),
       // severe integrity faults among THIS hand's answers — normally 0
       integrityFaults: integrityTotals(e.clientHandId ? byCid.get(e.clientHandId) ?? [] : []).faults,
@@ -360,7 +390,25 @@ app.get("/hands", async (c) => {
  *  was stamped with, else the undeclared gap cluster the Sessions tab shows it
  *  in. Ids match GET /sessions (declared id, or `cluster-<startedAt>`). */
 function sessionsIndex(all: Enriched[]) {
-  type Card = { id: string; declared: boolean; label: string | null; preset: string | null; strategyName: string | null; startedAt: number | null; endedAt: number | null; stakes: string | null; hands: number };
+  type Card = { id: string; declared: boolean; label: string | null; preset: string | null; strategyName: string | null; startedAt: number | null; endedAt: number | null; stakes: string | null; hands: number; profile: string | null;
+    /** hands per table of this session, ascending by slot. One entry with slot
+     *  null is the ordinary single-table session. More than one entry means the
+     *  sitting really was multi-table — and if the DECLARED count disagrees with
+     *  what actually played, that is worth seeing (session 130435 declared two
+     *  and only ever archived table 2's). */
+    tables: { slot: number | null; hands: number }[]; declaredTables: number | null };
+
+  /** hands per slot, ascending, nulls last. */
+  const tablesOf = (hs: Enriched[]): { slot: number | null; hands: number }[] => {
+    const by = new Map<number | null, number>();
+    for (const e of hs) {
+      const t = typeof e.raw?.tableSlot === "number" ? e.raw.tableSlot : null;
+      by.set(t, (by.get(t) ?? 0) + 1);
+    }
+    return [...by.entries()]
+      .map(([slot, hands]) => ({ slot, hands }))
+      .sort((a, b) => (a.slot ?? 99) - (b.slot ?? 99));
+  };
   const byHand = new Map<number, string>();
   const list: Card[] = [];
   const declared = new Map(sessionsStore.list(500).map((s) => [s.id, s]));
@@ -380,12 +428,15 @@ function sessionsIndex(all: Enriched[]) {
       id: sid, declared: true, label: s?.label ?? null, preset: s?.preset ?? null,
       strategyName: typeof cfg.strategyName === "string" ? cfg.strategyName : null,
       startedAt: s?.startedAt ?? hs[0]!.playedAt ?? null, endedAt: s?.endedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length,
+      profile: typeof cfg.profile === "string" && cfg.profile ? cfg.profile : null,
+      tables: tablesOf(hs),
+      declaredTables: Number.isFinite(Number(cfg.tables)) ? Number(cfg.tables) : null,
     });
   }
   for (const hs of sessionsOf(unstamped)) {
     const id = `cluster-${hs[0]!.playedAt}`;
     for (const e of hs) byHand.set(e.dbId, id);
-    list.push({ id, declared: false, label: null, preset: null, strategyName: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length });
+    list.push({ id, declared: false, label: null, preset: null, strategyName: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length, profile: null, tables: tablesOf(hs), declaredTables: null });
   }
   list.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)); // newest first, like the table
   return { byHand, list };
@@ -601,6 +652,50 @@ function scopeLabel(scope: Scope, idx: SessionsIdx): string {
   }
 }
 
+// ------------------------------------------------------------ profile + window
+//
+// A SCOPE picks hands by what they are (sessions, months, stakes, a fixed date
+// range). The Home page picks them by WHOSE they are and HOW RECENT they are,
+// and wants both at once, so those two ride alongside the scope as their own
+// query params and intersect with it. Keeping them out of the scope grammar
+// means a bookmark stays honest: `window=7d` is relative and re-reads "the last
+// seven days" every time it is opened, where a `range:` spec would freeze the
+// day it was made.
+
+/** Rolling windows, in days back from now; `all` is the whole corpus. */
+export const WINDOWS: { id: string; label: string; days: number | null }[] = [
+  { id: "1d", label: "24h", days: 1 },
+  { id: "7d", label: "7 days", days: 7 },
+  { id: "14d", label: "2 weeks", days: 14 },
+  { id: "30d", label: "1 month", days: 30 },
+  { id: "all", label: "All time", days: null },
+];
+const windowDays = (id: string | undefined | null) => WINDOWS.find((w) => w.id === id)?.days ?? null;
+
+/** The profile a hand was played on, via the session it belongs to: only a
+ *  DECLARED session carries one (auth.py writes it at Start), so every hand from
+ *  before that flow — and every gap cluster — is unattributed. */
+function profileOfHand(e: Enriched, idx: SessionsIdx): string | null {
+  const sid = idx.byHand.get(e.dbId);
+  if (!sid) return null;
+  return idx.list.find((s) => s.id === sid)?.profile ?? null;
+}
+
+/** `profile`: absent or `all` = every hand; `none` = the unattributed ones;
+ *  otherwise the account's name. `window`: one of WINDOWS, rolling from now. */
+function narrowHands(all: Enriched[], idx: SessionsIdx, profile: string | null | undefined, win: string | null | undefined): Enriched[] {
+  const days = windowDays(win);
+  const cut = days == null ? null : Date.now() - days * 86_400_000;
+  const p = profile && profile !== "all" ? profile : null;
+  if (p == null && cut == null) return all;
+  return all.filter((e) => {
+    if (cut != null && (e.playedAt == null || e.playedAt < cut)) return false;
+    if (p == null) return true;
+    const own = profileOfHand(e, idx);
+    return p === "none" ? own == null : own === p;
+  });
+}
+
 /** The analytics core's aggregate over one set of hands: frequencies, net with
  *  its standard error, and discrepancy counts. */
 export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>) {
@@ -624,9 +719,15 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
     // showdown signal that survived, and a showdown is a raked pot
     const resultText = String((h.raw as any)?.result?.text ?? "");
     const showdownByText = / with \(/.test(resultText);
-    // the archive says who won in two places that survive a lost board: the hand's
-    // heroWon flag and the client's own "★ wins …" line
-    const won = (h.raw as any)?.heroWon === true || /^★\s*wins/.test(resultText);
+    // the archive says who won: the hand's heroWon flag (uncontested), the client's
+    // award (result.winnerSeat, 2026-09-19), or a "★ <name> wins" line naming hero.
+    // A NAMELESS "★ wins" line is NOT hero's: the wrapper lost the winner's name on
+    // every showdown line until 2026-09-19 and this regex then credited hero with
+    // every villain showdown win.
+    const rr = (h.raw as any)?.result as { winnerSeat?: number | null; heroWon?: boolean | null } | undefined;
+    const won = (h.raw as any)?.heroWon === true || rr?.heroWon === true
+      || (rr?.winnerSeat != null && rr.winnerSeat === h.hand.heroSeatId)
+      || new RegExp(`^★\\s*Player ${h.hand.heroSeatId}\\b`).test(resultText);
     const r = rakePaidBb({ ...h.summary, wentToShowdown: h.summary.wentToShowdown || showdownByText, won }, bb, nets.get(h.dbId) ?? null);
     if (r.bb > 0) { rakedHands++; rakeBb += r.bb; if (r.unseen) rakeUnseenBb += r.bb; if (bb != null) rakeCents += Math.round(r.bb * bb * 100); }
   }
@@ -758,32 +859,66 @@ function analyticsCore(spec: string, all: Enriched[], idx: SessionsIdx, nets: Ma
   };
 }
 
-/** GET /analytics?scope=<spec>&vs=<spec> — the scoped Analytics tab payload. */
+/** GET /analytics?scope=<spec>&vs=<spec>&profile=<name|none|all>&window=<1d|7d|14d|30d|all>
+ *  — the scoped Analytics payload, which Home reads too.
+ *
+ *  `profile` and `window` narrow the hand set BEFORE the scope is applied, so
+ *  the two compose (one account, the last week, scoped to one session). Nets are
+ *  computed over the WHOLE corpus first: a showdown hand is priced off the stack
+ *  carried into the next hand, so narrowing first would silently unprice every
+ *  hand at the edge of the window. The options are narrowed the same way, so the
+ *  chips never offer a session the current profile never played. */
 app.get("/analytics", async (c) => {
   const rows = allRows();
   const all = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
   const nets = computeNets(all);
   const idx = sessionsIndex(all);
   const answers = answerLog.rows(3650);
+  const profile = c.req.query("profile") ?? "all";
+  const win = c.req.query("window") ?? "all";
+  const hs = narrowHands(all, idx, profile, win);
   const months: Record<string, number> = {}, stakes: Record<string, number> = {};
-  for (const e of all) {
+  for (const e of hs) {
     const mk = monthKey(e.playedAt), sk = e.stakes ?? "?";
     months[mk] = (months[mk] ?? 0) + 1;
     stakes[sk] = (stakes[sk] ?? 0) + 1;
   }
-  const times = all.map((e) => e.playedAt).filter((x): x is number => x != null);
+  // profile chips count hands inside the window; window chips inside the profile
+  const profileCounts = new Map<string, number>();
+  for (const e of narrowHands(all, idx, "all", win)) {
+    const k = profileOfHand(e, idx) ?? "none";
+    profileCounts.set(k, (profileCounts.get(k) ?? 0) + 1);
+  }
+  const seenIds = new Set(hs.map((e) => idx.byHand.get(e.dbId)));
+  const times = hs.map((e) => e.playedAt).filter((x): x is number => x != null);
   const vs = c.req.query("vs");
   return c.json({
     ok: true,
     auditPending: auditPending(),
+    profile, window: win,
     options: {
-      sessions: idx.list,
+      sessions: idx.list.filter((s) => seenIds.has(s.id)),
       months: Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).map(([key, n]) => ({ key, label: monthLabel(key), hands: n })),
       stakes: Object.entries(stakes).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({ key, hands: n })),
       range: { from: times.length ? Math.min(...times) : null, to: times.length ? Math.max(...times) : null },
+      profiles: [
+        // `balance` is the account's LAST reading — a point in time, not a
+        // window total, so it does not move when the window does. Null until the
+        // account has been seeded (routes /profiles explains the anchor).
+        ...accountProfiles().map((p) => {
+          const snaps = balanceSnapshots(p.name);
+          const bal = snaps.length ? snaps[snaps.length - 1]! : null;
+          return {
+            id: p.name, label: p.name, site: p.site, hands: profileCounts.get(p.name) ?? 0,
+            balance: bal ? { equityCents: bal.equityCents, amountCents: bal.amountCents, inPlayCents: bal.inPlayCents, currency: bal.currency, ts: bal.ts } : null,
+          };
+        }),
+        { id: "none", label: "Unattributed", site: null, hands: profileCounts.get("none") ?? 0, balance: null },
+      ],
+      windows: WINDOWS.map((w) => ({ ...w, hands: narrowHands(all, idx, profile, w.id).length })),
     },
-    primary: analyticsCore(c.req.query("scope") ?? "all", all, idx, nets, answers),
-    compare: vs ? analyticsCore(vs, all, idx, nets, answers) : null,
+    primary: analyticsCore(c.req.query("scope") ?? "all", hs, idx, nets, answers),
+    compare: vs ? analyticsCore(vs, hs, idx, nets, answers) : null,
     global: { answers: answerLog.stats(60) },
   });
 });
@@ -903,6 +1038,31 @@ app.get("/catalog", (c) => {
   const force = c.req.query("refresh") === "1";
   const cat = getCatalog(force);
   return c.json({ ok: true, ...cat, recent: answerLog.recentCharts(30) });
+});
+
+/**
+ * GET /chart-node?id=<chart id>&line=<token line> — one node of any chart in the
+ * catalog, for the Charts picker to render in place.
+ *
+ * The picker's whole point is that you describe a spot in words; this is the half that
+ * turns the chart it found into what the chart SAYS. Family decides the reader: the
+ * 6-max grid comes from the baked SQLite (falling back to :8777), everything else HRC
+ * goes to :8777. The GTOW crawl is a different store with a different node shape and is
+ * not served here — those rows stay browse-only in the picker.
+ */
+app.get("/chart-node", async (c) => {
+  const id = c.req.query("id") ?? "";
+  const line = c.req.query("line") ?? "";
+  if (!id) return c.json({ ok: false, error: "id required" }, 400);
+  const entry = getCatalog().entries.find((e) => e.id === id);
+  if (!entry) return c.json({ ok: false, error: `no chart ${id} in the catalog` }, 404);
+  if (entry.source !== "hrc") return c.json({ ok: false, error: "GTO Wizard crawl charts are browse-only here" }, 400);
+  const get = entry.family === "6max" ? fetchNode6max : hrcFetchNode;
+  const n = await get(id, line);
+  if (n === "unreachable") return c.json({ ok: false, error: `${HRC3MAX_BASE} is not reachable — the chart server must be up to read this node` }, 503);
+  if (!n) return c.json({ ok: true, id, line, node: null, note: `${line || "(root)"} is not a node of this chart's tree` });
+  return c.json({ ok: true, id, line, node: n,
+    browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(id)}&line=${encodeURIComponent(line)}` });
 });
 
 /** Sessions: consecutive hands with < 45 min gaps (shared with routes/sources). */
@@ -1121,11 +1281,19 @@ app.get("/answer-node", async (c) => {
     logged: logged
       ? { id: logged.id, chart: logged.chart, line: logged.line, tier: logged.tier, source: logged.source, exploitTag: logged.exploit_tag,
           strategyMode: logged.strategy_mode, pick: logged.pick, exploitPick: logged.exploit_pick, chartPick: logged.chart_pick,
-          mesBoard: logged.mes_board, depth: logged.depth }
+          mesBoard: logged.mes_board, depth: logged.depth, solveId: logged.solve_id ?? null }
       : null,
   };
 
   if (t.street === "preflop") {
+    // A multiway preflop answered by the GTO Wizard AI chain has no chart behind it:
+    // its `chart` is a shape label ("gtow-ai · 3-handed · BTN:102/…"), which looked up
+    // in the crawled DB below could only come back "not stored" — the same blank grid.
+    // The AI panel below re-solves instead, and shows the stored chain when there is one.
+    if (logged?.tier === "ai-preflop" || /^gtow-ai/.test(logged?.chart ?? "")) {
+      return c.json({ ...base, kind: "ai-chain",
+        note: "This preflop decision was answered by the GTO Wizard AI chain, not a chart — there is no stored chart node to open." });
+    }
     const live = new Set(hand.liveSeats);
     const posOf = (s: number) => (hand.positions[s] ?? (s === hand.heroSeatId ? heroPos : null) ?? "").toUpperCase();
     const threeMax = logged?.chart
@@ -1164,6 +1332,56 @@ app.get("/answer-node", async (c) => {
         ...base, kind: "hrc", chart, line: usedLine, rawLine, loggedLine, node, exploit, snapped,
         note: node ? (snapped.length ? `sizes snapped to the tree, as the live answer did: ${snapped.map((x) => `${x.from}→${x.to}`).join(", ")}` : loggedLine && usedLine !== loggedLine ? "the logged line was not found; showing the raw line instead" : null)
           : "this line is not in the chart's tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes (answers logged since 2026-09-03 carry the snapped line)",
+        browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(chart)}&line=${encodeURIComponent(usedLine ?? rawLine)}`,
+      });
+    }
+    // THE 6-MAX RING CHARTS ARE NOT IN THE CRAWLED DB (2026-09-20, Brady: "I clicked
+    // 'open the exact node' for the preflop fold but it shows nothing"). Since
+    // 2026-09-17 the ring strategy answers preflop from our own HRC grid
+    // (`ign200_6max_*`, services/hrc6max.ts), but this route only knew two preflop
+    // sources: the 3-max asym server and the crawled GTO Wizard DB. An ign200_6max_*
+    // id looked up in the GTOW DB can only ever come back "not stored", so EVERY ring
+    // answer's node opened as an empty grid. Same shape as the 3-max branch — the node
+    // comes from the baked SQLite when this machine has it, :8777 otherwise.
+    const sixMax = logged?.chart
+      ? /_6max_/.test(logged.chart)
+      : !threeMax && live.size > 3 && bbUsdOf(e.stakes) === 2;
+    if (sixMax) {
+      const tokens = buildPreflopTokens(t, heroPos);
+      const choice = chartFor6max(t, heroPos, tokens);
+      // The logged chart is the one that actually answered; without one, resolve the
+      // way the live picker does (its preference list walks the trees the set has).
+      let chart: string = logged?.chart ?? choice.id;
+      let fellBack: string | null = null;
+      if (!logged?.chart) {
+        const r = await resolveChart6max(choice);
+        if (r === "unreachable") return c.json({ ...base, ok: false, kind: "hrc6max", chart, error: `${HRC3MAX_BASE} is not reachable and this machine has no baked 6-max DB — one of the two must be up to show this node` });
+        if (r) { chart = r.id; if (r.fellBack) fellBack = `no ${choice.id} tree in the set — this is ${r.id}`; }
+      }
+      const rawLine = tokens.join("-");
+      const loggedLine = logged?.line && logged.line !== "(root)" ? logged.line : null;
+      let node: HrcNode | null = null, usedLine: string | null = null;
+      for (const ln of [...new Set([loggedLine, rawLine].filter((x): x is string => x != null))]) {
+        const n = await fetchNode6max(chart, ln);
+        if (n === "unreachable") return c.json({ ...base, ok: false, kind: "hrc6max", chart, error: `${HRC3MAX_BASE} is not reachable — the chart server must be up to show this node` });
+        if (n) { node = n; usedLine = ln; break; }
+      }
+      // No logged line, and the raw sizes are off-tree: walk it the way the live
+      // answer did, snapping each size to the node's nearest token.
+      let snapped: { from: string; to: string }[] = [];
+      if (!node && rawLine) {
+        const w = await walk3max(tokens, nodeGetter(chart));
+        if (w.ok) { node = w.node; usedLine = w.tokens.join("-"); snapped = w.repaired.map((r) => ({ from: r.from, to: r.to })); }
+      }
+      return c.json({
+        ...base, kind: "hrc6max", chart, depth: logged?.depth ?? choice.depth, line: usedLine, rawLine, loggedLine, node, snapped,
+        note: [
+          fellBack,
+          node
+            ? (snapped.length ? `sizes snapped to the tree, as the live answer did: ${snapped.map((x) => `${x.from}→${x.to}`).join(", ")}`
+              : loggedLine && usedLine !== loggedLine ? "the logged line was not found; showing the raw line instead" : null)
+            : `this line is not in ${chart}'s tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes`,
+        ].filter(Boolean).join(" · ") || null,
         browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(chart)}&line=${encodeURIComponent(usedLine ?? rawLine)}`,
       });
     }
@@ -1208,11 +1426,18 @@ app.get("/answer-node", async (c) => {
 // ------------------------------------------------------------ stored AI-chain solves
 
 /** 1326 weights → {class: {w, combos}} */
-function classAgg(w: number[]): Record<string, { w: number; combos: number }> {
+/** CARD REMOVAL (2026-09-19, Brady's "where is the missing 9.7%"): a range walked from preflop still carries
+ *  every combo that holds a board card. The solver never plays those (their strategy is 0), so a class
+ *  total that counts them under-states every action — hand 404's flop showed CHECK 90.3% for a node whose
+ *  own total is 99.97%. Every grid and combo count here drops the combos the board blocks, as GTO Wizard's do. */
+const boardCards = (board?: string | null): Set<string> => new Set((board ?? "").match(/[2-9TJQKA][shdc]/gi)?.map((c) => c[0]!.toUpperCase() + c[1]!.toLowerCase()) ?? []);
+const blockedBy = (i: number, board: Set<string>): boolean => board.size > 0 && (board.has(COMBOS[i]!.cards[0]) || board.has(COMBOS[i]!.cards[1]));
+function classAgg(w: number[], board?: string | null): Record<string, { w: number; combos: number }> {
   const out: Record<string, { w: number; combos: number }> = {};
+  const bc = boardCards(board);
   for (let i = 0; i < COMBOS.length; i++) {
     const x = w[i] ?? 0;
-    if (x <= 0) continue;
+    if (x <= 0 || blockedBy(i, bc)) continue;
     const k = COMBOS[i]!.cls;
     (out[k] ??= { w: 0, combos: 0 }).w += x;
     out[k]!.combos++;
@@ -1221,17 +1446,39 @@ function classAgg(w: number[]): Record<string, { w: number; combos: number }> {
   return out;
 }
 /** actor range + per-action strategies → {class: {w, acts[]}} (acts = weight taking each action) */
-function classStrategy(range: number[], strategies: number[][]): Record<string, { w: number; acts: number[] }> {
+function classStrategy(range: number[], strategies: number[][], board?: string | null): Record<string, { w: number; acts: number[] }> {
   const out: Record<string, { w: number; acts: number[] }> = {};
+  const bc = boardCards(board);
   for (let i = 0; i < COMBOS.length; i++) {
     const w = range[i] ?? 0;
-    if (w <= 0) continue;
+    if (w <= 0 || blockedBy(i, bc)) continue;
     const k = COMBOS[i]!.cls;
     const e = (out[k] ??= { w: 0, acts: new Array(strategies.length).fill(0) });
     e.w += w;
     for (let ai = 0; ai < strategies.length; ai++) e.acts[ai] += w * (strategies[ai]?.[i] ?? 0);
   }
   for (const k in out) { out[k]!.w = Math.round(out[k]!.w * 1000) / 1000; out[k]!.acts = out[k]!.acts.map((x) => Math.round(x * 1000) / 1000); }
+  return out;
+}
+/** PER-COMBO VIEW (2026-09-19, Brady: "expand a class into its combos — blockers make or break postflop
+ *  decisions"). For each hand class, every legal combo (card removal applied) with its weight in range and,
+ *  for the actor, its per-action frequency and EV. The grids open a class into this panel. */
+type ComboRow = { hand: string; w: number; s?: number[]; ev?: (number | null)[] };
+function classCombos(range: number[], board: string | null | undefined, strategies?: number[][], evs?: (number[] | undefined)[]): Record<string, ComboRow[]> {
+  const out: Record<string, ComboRow[]> = {};
+  const bc = boardCards(board);
+  for (let i = 0; i < COMBOS.length; i++) {
+    const w = range[i] ?? 0;
+    if (w <= 0 || blockedBy(i, bc)) continue;
+    const c = COMBOS[i]!;
+    const row: ComboRow = { hand: c.hand, w: Math.round(w * 1000) / 1000 };
+    if (strategies) {
+      row.s = strategies.map((st) => Math.round((st?.[i] ?? 0) * 10000) / 10000);
+      if (evs) row.ev = evs.map((e) => (e?.[i] == null ? null : Math.round(e![i]! * 1000) / 1000));
+    }
+    (out[c.cls] ??= []).push(row);
+  }
+  for (const k in out) out[k]!.sort((a, b) => b.w - a.w || a.hand.localeCompare(b.hand));
   return out;
 }
 const tv = (a: number[], b: number[]): number => {
@@ -1249,10 +1496,10 @@ const traceSeats = (spec: any, st: any): { players: string[]; ranges: number[][]
 });
 const seatLabel = (i: number, n: number): "oop" | "mid" | "ip" => (i === 0 ? "oop" : i === n - 1 ? "ip" : "mid");
 /** Ranges keyed the way the viewer reads them: oop / ip, plus mid on a three-way street. */
-const keyedRanges = (players: string[], ranges: number[][]) => ({
-  oop: classAgg(ranges[0] ?? []),
-  ip: classAgg(ranges[ranges.length - 1] ?? []),
-  ...(players.length === 3 ? { mid: classAgg(ranges[1] ?? []) } : {}),
+const keyedRanges = (players: string[], ranges: number[][], board?: string | null) => ({
+  oop: classAgg(ranges[0] ?? [], board),
+  ip: classAgg(ranges[ranges.length - 1] ?? [], board),
+  ...(players.length === 3 ? { mid: classAgg(ranges[1] ?? [], board) } : {}),
 });
 
 /** Walk a stored trace and produce the per-node view the dashboard renders. */
@@ -1270,9 +1517,9 @@ function expandTrace(trace: any) {
       // per-street timing (recorded since 2026-09-12): the cloud solve itself and the node walk
       solveMs: st.solveMs ?? null, walkMs: st.walkMs ?? null,
       players,
-      oopIn: classAgg(ranges[0] ?? []), ipIn: classAgg(ranges[ranges.length - 1] ?? []),
+      oopIn: classAgg(ranges[0] ?? [], st.board), ipIn: classAgg(ranges[ranges.length - 1] ?? [], st.board),
       oopCombos: sum(ranges[0]), ipCombos: sum(ranges[ranges.length - 1]),
-      ...(players.length === 3 ? { midIn: classAgg(ranges[1] ?? []), midCombos: sum(ranges[1]) } : {}),
+      ...(players.length === 3 ? { midIn: classAgg(ranges[1] ?? [], st.board), midCombos: sum(ranges[1]) } : {}),
     };
   });
   // replay the conditioning within each street from the stored entering ranges
@@ -1285,8 +1532,14 @@ function expandTrace(trace: any) {
     const actorRange: number[] = r.ranges[n.actor] ?? [];
     const heroAt = heroPos ? r.players.findIndex((p) => String(p).toUpperCase() === String(heroPos).toUpperCase()) : -1;
     const strategies: number[][] = (n.actions ?? []).map((a: any) => a.strategy ?? []);
-    const actorStrategy = classStrategy(actorRange, strategies);
-    const rangesIn = keyedRanges(r.players, r.ranges);
+    const evsByAction: (number[] | undefined)[] = (n.actions ?? []).map((a: any) => a.evs ?? undefined);
+    const actorStrategy = classStrategy(actorRange, strategies, n.board);
+    const actorCombos = classCombos(actorRange, n.board, strategies, evsByAction);
+    const rangesIn = keyedRanges(r.players, r.ranges, n.board);
+    const rangesInCombos = {
+      oop: classCombos(r.ranges[0] ?? [], n.board), ip: classCombos(r.ranges[nSeats - 1] ?? [], n.board),
+      ...(nSeats === 3 ? { mid: classCombos(r.ranges[1] ?? [], n.board) } : {}),
+    };
     const isHero = n.actor === heroAt;
     const heroInActor = isHero && heroIdx != null;
     const heroRow = heroInActor
@@ -1297,7 +1550,7 @@ function expandTrace(trace: any) {
     if (n.taken != null) {
       const strat = strategies[n.taken] ?? [];
       r.ranges[n.actor] = actorRange.map((w, ci) => w * (strat[ci] ?? 0));
-      rangesOut = keyedRanges(r.players, r.ranges);
+      rangesOut = keyedRanges(r.players, r.ranges, n.board);
     }
     return {
       i, si: n.si, ti: n.ti, street: n.street, board: n.board, codes: n.codes,
@@ -1307,7 +1560,7 @@ function expandTrace(trace: any) {
       actions: (n.actions ?? []).map((a: any) => ({ name: a.name, code: a.code, betsize: a.betsize, totalFrequency: a.totalFrequency, totalEv: a.totalEv })),
       taken: n.taken, takenName: n.taken != null ? n.actions?.[n.taken]?.name ?? null : null,
       takenOverallPct: n.taken != null && n.actions?.[n.taken]?.totalFrequency != null ? Math.round(n.actions[n.taken].totalFrequency * 1000) / 10 : null,
-      rangesIn, rangesOut, actorStrategy, heroRow, heroWeightIn: heroWeightIn == null ? null : Math.round(heroWeightIn * 1000) / 1000,
+      rangesIn, rangesOut, actorStrategy, actorCombos, rangesInCombos, heroRow, heroWeightIn: heroWeightIn == null ? null : Math.round(heroWeightIn * 1000) / 1000,
     };
   });
   return {
@@ -1437,8 +1690,22 @@ function sessionCard(s: ReturnType<typeof sessionsStore.list>[number], all: Enri
   for (const a of answered) tiers[a.tier ?? "unknown"] = (tiers[a.tier ?? "unknown"] ?? 0) + 1;
   const disagreements = answered.filter((a) => a.exploit_pick && a.chart_pick && a.exploit_pick !== a.chart_pick).length;
   const cfg = s.config ?? {};
+  // WHICH TABLES ACTUALLY PLAYED, beside the count the session DECLARED. They can
+  // differ, and the difference is worth seeing: session 130435 declared two tables
+  // and only table 2's hands are stamped with it, because the leader swept the
+  // session as a leftover and slot 2 was never told (fixed 2026-09-20, but the
+  // historical rows stay as they were).
+  const byTable = new Map<number | null, number>();
+  for (const h of hands) {
+    const t = typeof h.raw?.tableSlot === "number" ? h.raw.tableSlot : null;
+    byTable.set(t, (byTable.get(t) ?? 0) + 1);
+  }
+  const tables = [...byTable.entries()]
+    .map(([slot, n]) => ({ slot, hands: n }))
+    .sort((a, b) => (a.slot ?? 99) - (b.slot ?? 99));
   return {
     id: s.id, declared: true, startedAt: s.startedAt, endedAt: s.endedAt, preset: s.preset, label: s.label, note: s.note,
+    tables, declaredTables: Number.isFinite(Number(cfg.tables)) ? Number(cfg.tables) : null,
     answersOn: !!cfg.answers, recordingOn: !!cfg.recording, budget: cfg.budget ?? null,
     // the whole-hand strategy the session was declared with (services/strategies.ts id), when the mode was one
     strategy: cfg.strategy ?? null, strategyName: cfg.strategyName ?? null,
@@ -1565,6 +1832,121 @@ app.get("/profiles", (c) => {
   return c.json({ ok: true, profiles: rows, unattributedHands, totalHands: all.length,
     fx: fx.rate ? { rate: fx.rate.rate, at: fx.rate.at, asOf: fx.rate.asOf, source: fx.rate.source, stale: fx.stale } : null });
 });
+
+/* ---------------------------------------------------------------- live balance
+ *
+ * What an account is worth is a READING, never a running total. The stored
+ * snapshots are readings too, but they are taken at session open and close, so
+ * between sessions the newest one can be hours old — and if a reading was itself
+ * wrong (a stack scraped in the wrong unit, a seat the scrape did not see), every
+ * figure built on it inherits the error. So the balance shown is scraped from the
+ * client NOW, and the stored reading is only the fallback for when the client is
+ * shut.
+ *
+ * The check is the same one /profiles runs between two stored readings, with the
+ * live read standing in as the closing one: equity may move by exactly what poker
+ * did, after rake, within tolerance. Outside that, the account is flagged for
+ * review rather than quietly believed — services/profiles.ts has the reasoning.
+ *
+ * Only the signed-in account can be read: the probe reads whatever client is
+ * open, and the client knows one account at a time. `signedInAs` says which, so
+ * the UI never shows one account's money under another's name.
+ */
+const LIVE_TTL_MS = 10_000;
+let liveCache: { at: number; res: any } = { at: 0, res: null };
+
+/** The account the open client belongs to: the wrapper's current session, or the
+ *  last declared one when no session is open. */
+async function signedInProfile(): Promise<string | null> {
+  try {
+    const r = await fetch(`${DEFAULT_LIVE_URL}/session`, { signal: AbortSignal.timeout(3000) });
+    const j = (await r.json()) as any;
+    const p = j?.current?.config?.profile;
+    if (typeof p === "string" && p) return p;
+  } catch { /* wrapper not running — fall through to the archive */ }
+  const last = sessionsStore.list(50).find((x) => typeof (x.config as any)?.profile === "string" && (x.config as any).profile);
+  return last ? ((last.config as any).profile as string) : null;
+}
+
+/** GET /balance-live — scrape the open client and check it against the hands. */
+app.get("/balance-live", async (c) => {
+  if (c.req.query("fresh") !== "1" && Date.now() - liveCache.at < LIVE_TTL_MS && liveCache.res) return c.json(liveCache.res);
+  const at = Date.now();
+  let probe: any = null, reason: string | null = null;
+  try {
+    const r = await fetch(`${DEFAULT_LIVE_URL}/balance/probe`, { method: "POST", signal: AbortSignal.timeout(12_000) });
+    probe = await r.json().catch(() => null);
+    if (!probe?.ok) reason = probe?.reason ?? `the wrapper refused the read: HTTP ${r.status}`;
+  } catch {
+    reason = `the wrapper is not answering at ${DEFAULT_LIVE_URL} — it is the only thing that can read the client`;
+  }
+  const signedInAs = await signedInProfile();
+  let check: any = null;
+  if (probe?.ok && signedInAs) {
+    // the same verdict machinery /profiles uses, with the live read as the
+    // closing snapshot — so a live flag and a stored flag mean the same thing
+    const { handsOf } = pricedHandsByProfile();
+    const snaps = balanceSnapshots(signedInAs);
+    if (snaps.length) {
+      const live = {
+        id: -1, ts: at, profile: signedInAs, amountCents: probe.amountCents,
+        inPlayCents: probe.inPlayCents ?? null, equityCents: probe.equityCents,
+        currency: probe.currency ?? "USD", source: "live-probe", sessionId: null, phase: "live",
+        how: `${probe.how ?? ""}${probe.seated ? ` + table ${probe.inPlayHow ?? ""}` : ""}`.trim(),
+      };
+      const ivs = reconcileBalances([snaps[snaps.length - 1]!, live as any], handsOf.get(signedInAs) ?? [], {});
+      const iv = ivs[0];
+      if (iv) check = {
+        sinceTs: snaps[snaps.length - 1]!.ts, sinceCents: snaps[snaps.length - 1]!.equityCents,
+        expectedCents: iv.from.equityCents + iv.pokerCents - iv.rakeEstCents,
+        liveCents: probe.equityCents, movedCents: iv.movedCents, pokerCents: iv.pokerCents,
+        rakeEstCents: iv.rakeEstCents, unexplainedCents: iv.unexplainedCents,
+        toleranceCents: iv.toleranceCents, tier: iv.tier, hands: iv.hands, unpricedHands: iv.unpricedHands,
+        agrees: iv.tier === "clean" || iv.tier === "noise",
+      };
+    }
+  }
+  const res = {
+    ok: true, at, signedInAs, reason,
+    live: probe?.ok ? {
+      amountCents: probe.amountCents, inPlayCents: probe.inPlayCents ?? null, equityCents: probe.equityCents,
+      currency: probe.currency ?? "USD", seated: !!probe.seated, how: probe.how ?? null, inPlayHow: probe.inPlayHow ?? null,
+    } : null,
+    check,
+  };
+  liveCache = { at, res };
+  return c.json(res);
+});
+
+/**
+ * GET /profiles/alerts — how many money facts are waiting to be reviewed, for
+ * the badge on the Profiles tab. An alert is one interval whose equity moved by
+ * more than the hands, the rake and the tolerance explain and that has not been
+ * marked correct — plus the live read, when it disagrees the same way.
+ */
+app.get("/profiles/alerts", async (c) => {
+  const { handsOf } = pricedHandsByProfile();
+  const acked = balanceAcks();
+  const items: { profile: string; kind: string; cents: number; at: number | null; detail: string }[] = [];
+  for (const p of accountProfiles()) {
+    const snaps = balanceSnapshots(p.name);
+    if (!snaps.length) continue;
+    for (const iv of reconcileBalances(snaps, handsOf.get(p.name) ?? [], acked)) {
+      if (iv.tier !== "movement") continue;
+      items.push({ profile: p.name, kind: "movement", cents: iv.unexplainedCents, at: iv.to.ts,
+        detail: `equity moved ${usdCents(iv.movedCents)} where the hands say ${usdCents(iv.pokerCents - iv.rakeEstCents)} after rake` });
+    }
+  }
+  let live: any = null;
+  try { live = await (await fetch(`${SELF()}/api/dashboard/balance-live`, { signal: AbortSignal.timeout(15_000) })).json(); } catch { /* no live read */ }
+  if (live?.check && live.check.tier === "movement") {
+    items.push({ profile: live.signedInAs, kind: "live", cents: live.check.unexplainedCents, at: live.at,
+      detail: `the client reads ${usdCents(live.check.liveCents)} where the last reading plus the hands say ${usdCents(live.check.expectedCents)}` });
+  }
+  return c.json({ ok: true, count: items.length, live: live?.check ? { tier: live.check.tier, agrees: live.check.agrees } : null, items: items.slice(-50).reverse() });
+});
+
+const usdCents = (cents: number | null | undefined) => cents == null ? "—" : `${cents < 0 ? "-" : ""}$${(Math.abs(cents) / 100).toFixed(2)}`;
 
 /**
  * POST /profiles/:name/seed — take an account's FIRST equity reading, from the
@@ -1916,36 +2298,159 @@ app.post("/study-answer", async (c) => {
  * scripts/start_gtow_ai.ps1) and waits for a token, up to ~60 s.
  */
 async function gtowStatus() {
-  const cdpHost = process.env.GTOW_CDP_HOST ?? "127.0.0.1:9222";
   const t0 = Date.now();
-  let clientUp = false, browser: string | null = null;
-  try {
-    const r = await fetch(`http://${cdpHost}/json/version`, { signal: AbortSignal.timeout(1500) });
-    clientUp = r.ok;
-    try { browser = ((await r.json()) as any)?.Browser ?? null; } catch { /* not json */ }
-  } catch { clientUp = false; }
-  const t = gtowApi.tokenStatus();
+  const sessions = (await gtowSessions.statusProbed()) as Array<
+    Awaited<ReturnType<typeof gtowSessions.statusProbed>>[number] & { clientUp?: boolean; browser?: string | null }
+  >;
+  const up = sessions.filter((s) => s.state === "up");
+  // The ACTIVE session is the one the router would reach for first — it is what
+  // the single-session fields below describe, so a caller that predates the
+  // pool still gets a coherent answer out of them.
+  const active = up[0] ?? sessions.find((s) => s.enabled) ?? sessions[0]!;
+  const anyClientUp = sessions.some((s) => s.clientUp);
+  const multiwayUsable = up.some((s) => s.multiway);
+  const usable = up.length > 0;
+  const state = usable ? "up" : anyClientUp ? "no-token" : "down";
+  const enabled = sessions.filter((s) => s.enabled).length;
+  const mins = (ms: number | null | undefined) => Math.max(0, Math.round((ms ?? 0) / 60000));
+  const text = usable
+    ? `${up.length} of ${enabled} sessions live — ${up.map((s) => `${s.id} ${mins(s.expiresInMs)} min`).join(", ")}${multiwayUsable ? "" : " · NO multiway session: 3+ player spots cannot be solved"}`
+    : anyClientUp
+      ? "a client is reachable but no session has a token — is GTO Wizard signed in?"
+      : "no GTO Wizard session is running with its debug port";
   return {
-    ok: true as const, clientUp, cdpHost, browser, probeMs: Date.now() - t0,
-    tokenLive: t.live, expiresInMs: t.expiresInMs, keeperRunning: t.keeperRunning, lastAttemptMs: t.lastAttemptMs,
-    usable: t.live,
-    state: t.live ? "up" : clientUp ? "no-token" : "down",
-    text: t.live ? `token live, ${Math.max(0, Math.round((t.expiresInMs ?? 0) / 60000))} min left` : clientUp ? "client reachable but no token — is GTO Wizard logged in and unlocked?" : "GTO Wizard client is not running with its debug port",
+    ok: true as const,
+    // ── rolled up, for every caller that predates the pool ──────────────────
+    clientUp: anyClientUp,
+    cdpHost: active.cdpHost,
+    browser: active.browser ?? null,
+    probeMs: Date.now() - t0,
+    tokenLive: usable,
+    expiresInMs: active.expiresInMs,
+    keeperRunning: gtowApi.tokenStatus().keeperRunning,
+    lastAttemptMs: active.lastAttemptMs,
+    usable,
+    state,
+    text,
+    // ── the pool ────────────────────────────────────────────────────────────
+    /** can a 3+ player AI tree be solved right now (Ultra only) */
+    multiwayUsable,
+    /** which session the router reaches for first on heads-up work */
+    activeId: active.id,
+    sessions,
   };
 }
 app.get("/gtow-status", async (c) => c.json(await gtowStatus()));
+/**
+ * POST /gtow-connect — bring a session back.
+ *
+ * `{ source: "primary" | "secondary" }` targets one session; omitted, it
+ * connects whichever sessions are not already up. The two are launched
+ * differently (the primary is a Chrome profile or an Electron build driven by
+ * services/gtowCdp; the secondary is the Elite desktop build on its own port),
+ * so each has its own launcher.
+ *
+ * A client parked on its ACTIVATION or SIGN-IN screen is NOT relaunched —
+ * that would throw away whatever the user is typing. The launcher reports it
+ * (exit 3) and the hint says who has to do what.
+ */
 app.post("/gtow-connect", async (c) => {
   const t0 = Date.now();
-  const launch = await gtowCdp.launchApp();
-  // wait for the debug port, then for a token (the sniff needs the client's page up)
+  const body = await c.req.json().catch(() => ({}) as any);
+  const want: GtowSessionId[] =
+    body?.source === "primary" || body?.source === "secondary"
+      ? [body.source as GtowSessionId]
+      : (["secondary", "primary"] as GtowSessionId[]).filter((id) => {
+          const s = gtowSessions.status().find((x) => x.id === id);
+          return s?.enabled && s.state !== "up";
+        });
+
+  const launches: Record<string, unknown> = {};
+  for (const id of want) {
+    if (id === "primary") {
+      launches[id] = await gtowCdp.launchApp();
+    } else {
+      const proc = Bun.spawn(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(REPO, "scripts", "start_gtow_secondary.ps1")],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+      const code = await proc.exited;
+      const out = (await new Response(proc.stdout).text()).trim();
+      const err = (await new Response(proc.stderr).text()).trim();
+      launches[id] = { ok: code === 0, code, needsHuman: code === 3, out: out.slice(-400), error: err.slice(-400) || undefined };
+    }
+  }
+
+  // wait for the debug ports, then for tokens (the sniff needs an app page up)
   let live = false;
   for (let i = 0; i < 30 && !live; i++) {
     await new Promise((r) => setTimeout(r, 2000));
-    const st = await gtowStatus();
-    if (!st.clientUp) continue;
-    live = await gtowApi.forceRefresh();
+    const probe = await gtowStatus();
+    if (!probe.clientUp) continue;
+    live = await gtowApi.forceRefresh(want.length === 1 ? want[0] : undefined);
   }
   const st = await gtowStatus();
-  return c.json({ ...st, launch, waitedMs: Date.now() - t0, connected: live,
-    hint: live ? null : st.clientUp ? "the client is up but no token came back — log in to GTO Wizard in the client window (it was started minimized) and try again" : "the client did not come up — start it by hand: scripts/start_gtow_ai.ps1" });
+  const needsHuman = Object.values(launches).some((l: any) => l?.needsHuman);
+  return c.json({
+    ...st, launch: launches, targeted: want, waitedMs: Date.now() - t0, connected: live,
+    hint: live ? null
+      : needsHuman ? "a client is waiting for a human — enter the activation code (or sign in) in its window, then press Connect again"
+      : st.clientUp ? "a client is up but no token came back — sign in to GTO Wizard in its window (it was started minimized) and try again"
+      : "no client came up — start one by hand: scripts/start_gtow_chrome.ps1 (primary) or scripts/start_gtow_secondary.ps1",
+  });
+});
+
+/** POST /gtow-reset — forget what we learned about a session (a quota wall, a
+ *  plan refusal) so the router offers it work again immediately. */
+app.post("/gtow-reset", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as any);
+  const id: GtowSessionId | null = body?.source === "primary" || body?.source === "secondary" ? body.source : null;
+  if (!id) return c.json({ ok: false, error: "source must be 'primary' or 'secondary'" }, 400);
+  gtowSessions.reset(id);
+  await gtowApi.forceRefresh(id);
+  return c.json({ ...(await gtowStatus()), reset: id });
+});
+
+/**
+ * GET /health — the Home page's system strip: is the machinery that answers a
+ * spot actually up right now, and is anything queued behind it.
+ *
+ * Each row is one thing that can be broken independently, in the order it bites
+ * at the table: the poller that watches the table, the GTO Wizard client the
+ * whole of postflop falls back on, the answer latency those two produce, the
+ * preflop misses that have no live solver and pile up instead, and the solve
+ * boxes working them off. Every probe is already cheap and in-process except
+ * the GTO Wizard one (a single CDP call), so this is safe to poll.
+ */
+app.get("/health", async (c) => {
+  const gtow = await gtowStatus();
+  const poller: any = (() => { try { return studyPoller.getStatus(); } catch { return null; } })();
+  const mq = (() => { try { return missQueue.stats(); } catch { return null; } })();
+  const keeper = (() => {
+    try {
+      const st: any = boxKeeper.status();
+      const boxes = Object.entries(st.boxes ?? {}) as [string, any][];
+      return {
+        running: !!st.running,
+        total: boxes.length,
+        up: boxes.filter(([, b]) => b?.ok).length,
+        working: boxes.filter(([, b]) => b?.job === "Running").length,
+        boxes: boxes.map(([name, b]) => ({ name, ok: !!b?.ok, hrc: !!b?.hrc, job: b?.job ?? null, phase: b?.currentPhase ?? null, lastErr: b?.lastErr || null })),
+      };
+    } catch { return null; }
+  })();
+  const runningJobs = (() => { try { return jobStore.list(30).filter((j) => j.status === "running").map((j) => ({ id: j.id, config: j.config, recipe: j.recipe, lane: j.lane, startedAt: j.started })); } catch { return []; } })();
+  const answers = answerLog.stats(7) as { answered?: number; failed?: number; tiers?: Record<string, { n: number; p50: number; p90: number; max: number }> };
+  return c.json({
+    ok: true, at: Date.now(),
+    gtow: { state: gtow.state, usable: gtow.usable, text: gtow.text, expiresInMs: gtow.expiresInMs, cdpHost: gtow.cdpHost },
+    poller: poller ? {
+      running: !!poller.running, lastTickAt: poller.lastTickAt ?? null, lastPushAt: poller.lastPushAt ?? null,
+      lastError: poller.lastError ?? null, tokenReady: !!poller.tokenReady, integrityFaults: poller.integrityFaults ?? 0,
+      tables: Array.isArray(poller.pollers) ? poller.pollers.length : 0,
+    } : null,
+    answers: { answered: answers.answered ?? 0, failed: answers.failed ?? 0, tiers: answers.tiers ?? {} },
+    missQueue: mq ? { total: mq.total, open: (mq.byStatus?.open ?? 0) + (mq.byStatus?.queued ?? 0), byKind: mq.byKind } : null,
+    keeper, jobs: runningJobs,
+  });
 });

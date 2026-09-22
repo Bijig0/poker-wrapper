@@ -44,6 +44,20 @@ const ABS_TOL = 0.05;
  * beyond ~2x off does it reach 0.5–1.8% pot. 0.40 ≈ a 1.49x size mismatch.
  */
 export const SNAP_TAU = 0.4;
+/**
+ * The ceiling beyond which a snap is NOT worth making at all.
+ *
+ * τ and this are two different questions, and conflating them cost us a real
+ * hand (2026-09-21: AA in the CO facing a 21bb 3-bet, nearest tree size 12.5 —
+ * log-dist 0.52, refused, no answer at all, while the tree's own node said
+ * All-in 88.9% / Call 11.1% and would have been right). τ is "is this snap
+ * CLEAN"; this is "is it better than nothing". Same measurement as above:
+ * beyond ~2x off, translation reaches 0.5-1.8% pot and the answer stops
+ * meaning much — so ln(2) is where refusing beats guessing. Between τ and
+ * here, snap, say so loudly in the answer, and file it (the miss queue's
+ * `size-snapped` row is the todo list of sizes worth solving for real).
+ */
+export const SNAP_MAX = Math.log(2);
 
 export function snapToken(token: string, labels: string[], tau = SNAP_TAU): SnapResult {
   const m = token.match(/^R(\d+(?:\.\d+)?)$/);

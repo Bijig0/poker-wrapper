@@ -59,9 +59,14 @@ export interface ReconstructOpts {
   /**
    * How many players may reach the flop. Default 2 — every heads-up tree (the GTO Wizard library, the HU chain).
    * The 6-max ring strategy passes 3 since 2026-09-19: GTO Wizard AI on Ultra solves 3-way postflop, so a
-   * three-way flop is a solvable spot there rather than a miss. Four or more is nobody's tree.
+   * three-way flop is a solvable spot there rather than a miss. FOUR AND FIVE are allowed since 2026-09-20 —
+   * not because a four-way tree exists (none does anywhere) but because the postflop step COLLAPSES the field
+   * to three seats, and it needs every seat's arrival range to choose which to drop or merge. Note the 6-max
+   * charts barely contain such lines (the caller cap stops at two cold-callers: ign200_6max_D100_o2_5 holds
+   * ZERO four-way lines, olimp five, all multi-limped) — the real four-way range source is the GTO Wizard AI
+   * preflop tree, which solves the multiway preflop outright (services/gtowAiPreflop.ts).
    */
-  maxPlayers?: 2 | 3;
+  maxPlayers?: 2 | 3 | 4 | 5 | 6;
 }
 
 const isJamLabel = (l: string) => /all-?in/i.test(l);
@@ -84,6 +89,20 @@ export async function reconstructFlopRanges(
 
   for (let k = 0; k < tokens.length; k++) {
     let node = await getNode(out.join("-"));
+    // A FORCED FOLD HAS NO NODE (2026-09-22, see walk3max): the engine folds the would-be fifth entrant
+    // without a decision. That player never put money in, so he holds no range to drop — step through.
+    // …in CHAINS: once four have entered, every seat still to act is force-folded (SB and BB both).
+    if (!node && tokens[k] === "F" && out.length) {
+      let run = 0;
+      while (tokens[k + run] === "F") run++;
+      let landed = 0;
+      for (let r = 1; r <= run && !landed; r++) if (await getNode([...out, ...Array(r).fill("F")].join("-"))) landed = r;
+      if (landed) {
+        for (let r = 0; r < landed; r++) { out.push("F"); walkedPos.push(""); }
+        k += landed - 1;
+        continue;
+      }
+    }
     if (!node) return { ok: false, reason: `preflop node "${out.join("-")}" not in the charts` };
     if (node.terminal) return { ok: false, reason: `preflop node "${out.join("-")}" is terminal before the line ends` };
     let pos = node.pos;
