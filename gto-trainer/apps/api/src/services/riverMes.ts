@@ -30,9 +30,19 @@
  *   off     nothing runs
  *   shadow  runs after every heads-up river answer and is LOGGED only — the
  *           answer on the panel is untouched (default: collect evidence first)
- *   serve   MES becomes the primary pick when the gate passes; the chain's
+ *   serve   MES becomes the primary pick (see serveWhen); the chain's
  *           equilibrium rides along as the GTO tab. Any failure or timeout
  *           leaves the chain's answer exactly as it was.
+ *
+ * serveWhen (backtest 2026-09-22, 800 river decisions from Brady's Ignition 6-max corpus):
+ *   "first" (default)  serve MES only at hero's FIRST river decision — nothing to call (first to act,
+ *           or checked to) — ungated; every later hero node (facing a bet or a raise) keeps the chain.
+ *           Measured MES-first-then-GTO vs GTO Wizard: +0.97 bb/decision [+0.48, +1.42] on 565 spots,
+ *           the same with every lock variant. Facing a bet MES LOST 3.08 bb/decision: its locked range
+ *           is the pool average, and the pool bets into hero's passive lines with far more air (hero
+ *           ahead 42% out of sample vs 35% modelled), so it over-folded.
+ *   "gated" the original rule: wherever G >= gMinBb and p* <= tau. The gate's G did not predict what
+ *           MES gained (slope 0.45, corr 0.12), so this is kept for comparison only.
  * The config file is re-read on change, so switching modes needs no restart.
  *
  * Python twin: analysis/pipeline/solve/river/livemes_gate.py — same keys, same
@@ -64,6 +74,7 @@ export interface RiverMesConfig {
   accuracyPct: number;
   timeoutMs: number;
   binDir: string;
+  serveWhen: "first" | "gated";
 }
 
 const DEFAULTS: RiverMesConfig = {
@@ -76,6 +87,7 @@ const DEFAULTS: RiverMesConfig = {
   raise: "60%",
   accuracyPct: 0.5,
   timeoutMs: 1500,
+  serveWhen: "first",
   binDir: join(REPO, "analysis", "pipeline", "solve", "compare", "target", "release"),
 };
 
@@ -421,6 +433,7 @@ function logDb(): Database {
 export function logRiverMes(r: RiverMesResult, meta: {
   solveId?: number | null; clientHandId?: string | null; sessionId?: string | null; origin?: string | null;
   board?: string | null; heroCards?: string | null; mode: RiverMesMode; chainTop?: string | null;
+  served?: boolean;
 }): void {
   try {
     logDb().run(
@@ -429,7 +442,7 @@ export function logRiverMes(r: RiverMesResult, meta: {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [Date.now(), meta.solveId ?? null, meta.clientHandId ?? null, meta.sessionId ?? null, meta.origin ?? null,
         meta.board ?? null, meta.heroCards ?? null, meta.mode, r.ok ? 1 : 0,
-        r.ok && meta.mode === "serve" && r.gate?.served ? 1 : 0, r.why ?? null,
+        r.ok && meta.mode === "serve" && (meta.served ?? r.gate?.served) ? 1 : 0, r.why ?? null,
         r.mesTop ?? null, r.gtoTop ?? null, meta.chainTop ?? null,
         r.gate?.G ?? null, r.gate?.L ?? null, Number.isFinite(r.gate?.pStar) ? r.gate!.pStar! : null,
         r.counterBb ?? null, r.ms, JSON.stringify(r.ctx ?? null), JSON.stringify(r.cells ?? null),
@@ -439,6 +452,13 @@ export function logRiverMes(r: RiverMesResult, meta: {
 }
 
 // ---------------------------------------------------------------- answer overlay
+
+/** Would serve mode play MES here? "first": only where hero has nothing to call (no Fold in his menu). */
+export function servesMes(g: GateResult, cfg: Pick<RiverMesConfig, "serveWhen">): boolean {
+  if (!g.ok || !g.actions) return false;
+  if (cfg.serveWhen === "gated") return !!g.served;
+  return !g.actions.some((a) => a.startsWith("Fold"));
+}
 
 /** Minimal shape of the chain's answer this overlay reads and (in serve mode) rewrites. */
 export interface ChainAnswerLike {
@@ -472,7 +492,8 @@ export async function applyRiverMes<T extends ChainAnswerLike>(res: T, input: Ri
     return res;
   }
   const r = await solveRiverMes(input, cfg);
-  logRiverMes(r, logMeta);
+  const serve = !!r.ok && !!r.gate && servesMes(r.gate, cfg);
+  logRiverMes(r, { ...logMeta, served: serve });
   if (!r.ok || !r.actions || !r.gate) return res;
   const mesPick = pickWeightedAction(r.actions) ?? undefined;
   if (!mesPick) return res;
@@ -482,7 +503,7 @@ export async function applyRiverMes<T extends ChainAnswerLike>(res: T, input: Ri
   res.exploitDecision = mesPick;
   res.exploitTag = tag;
   res.mesEvGainBb = Math.round(g.G! * 100) / 100;
-  if (g.served) {
+  if (serve) {
     res.chartDecision = res.decision ?? undefined;
     res.decision = mesPick;
     res.actions = r.actions;
