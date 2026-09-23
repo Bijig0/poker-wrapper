@@ -7501,7 +7501,7 @@ class Handler(BaseHTTPRequestHandler):
                         if what == "snap":
                             code, res = _admin_post(port, "/layout", {})
                         elif what == "end":
-                            code, res = _admin_post(port, "/session/end", {"note": "ended from the admin page"})
+                            code, res = _admin_post(port, "/session/end", {"note": "ended from the admin page", "closeOut": True})
                         else:
                             code, res = 400, {"ok": False, "why": "action must be snap or end"}
                 self._send(code, "application/json", json.dumps(res).encode())
