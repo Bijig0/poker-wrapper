@@ -90,7 +90,9 @@ export function tableView(hand: Hand): TableView {
   const folded = new Set(acts.filter((a) => a.type === "fold").map((a) => seat(a.seatId)));
   const allin = new Set(acts.filter((a) => a.type === "all-in").map((a) => seat(a.seatId)));
   const stacks = new Map<number | null, number | null>();
-  for (const [k, v] of Object.entries(hand.stacks || {})) stacks.set(seat(k), num(v));
+  // the live export carries Maps (int seat keys); a hand read back from JSON carries string keys
+  const st = hand.stacks || {};
+  for (const [k, v] of st instanceof Map ? st : Object.entries(st)) stacks.set(seat(k), num(v));
   for (const [s, v] of stacks) {
     if (s !== null && v !== null && v <= EPS_BB && dealt.has(s) && !folded.has(s)) allin.add(s);
   }
@@ -211,7 +213,9 @@ export function isTerminal(plan: Record<string, any> | null | undefined, hand: H
   const toCall = num(node.toCall) || 0.0;
   const behind = view.stacks.has(hero) ? view.stacks.get(hero)! : null;
   const committedMap = hand.committed || {};
-  const committed = num(committedMap[String(hero)]) || num(committedMap[hero as any]) || 0.0;
+  const committed = committedMap instanceof Map
+    ? num(committedMap.get(hero)) || num(committedMap.get(String(hero))) || 0.0
+    : num(committedMap[String(hero)]) || num(committedMap[hero as any]) || 0.0;
   const details: Record<string, unknown> = {
     street, toCall, behind, committed,
     contestants: sortedNums(view.contestants), withChips: sortedNums(view.withChips),

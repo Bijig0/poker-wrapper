@@ -11,5 +11,6 @@ export const REPO = resolve(import.meta.dir, "../../../..");
 export function paths() {
   const root = process.env.WRAPPER_ROOT ? resolve(process.env.WRAPPER_ROOT) : join(REPO, "ignition-study-wrapper");
   const data = process.env.WRAPPER_DATA_DIR ? resolve(process.env.WRAPPER_DATA_DIR) : join(root, "data");
-  return { repo: REPO, root, data, debug: join(root, "debug"), assets: join(root, "assets") };
+  const debug = process.env.WRAPPER_DEBUG_DIR ? resolve(process.env.WRAPPER_DEBUG_DIR) : join(root, "debug");
+  return { repo: REPO, root, data, debug, assets: join(root, "assets") };
 }

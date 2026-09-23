@@ -1,0 +1,169 @@
+/**
+ * THE WRAPPER'S STATE — everything launch.py kept in module globals, in one object.
+ *
+ * One process reads one table and presses real buttons, so the state is still one set per process (four tables
+ * are four processes, exactly as before). What changed is only that it is NAMED: every field below is the Python
+ * global of the same name (camelCased, leading underscore dropped), and `resetState()` puts a fresh copy in place —
+ * which is what lets the golden replays run scenario after scenario in one test process.
+ *
+ * Python dicts whose iteration order matters, or whose keys are ints, are Maps (a JS object sorts integer keys).
+ * Python sets of TUPLES are TupleSets: the tuple is compared by content, and it iterates as the list of tuples the
+ * golden normaliser sorts, exactly as Python's norm() does.
+ *
+ * SEAMS: the few functions the golden harness replaces (Python monkeypatched the module: ignition_target, act,
+ * raise_to, _cdp_seq, TABLES.registry, TABLES.live_peers). Every internal call goes through `seams`, so replacing
+ * one here replaces it everywhere, as it did in Python.
+ */
+import { C } from "./config";
+import { SessionStore } from "./sessions";
+import { Site } from "./sites/coinpoker";
+
+export class TupleSet extends Set<unknown[]> {
+  private index = new Map<string, unknown[]>();
+  static key(t: unknown[]): string {
+    return JSON.stringify(t);
+  }
+  override add(t: unknown[]): this {
+    const k = TupleSet.key(t);
+    if (this.index === undefined || this.index.has(k)) return this;
+    this.index.set(k, t);
+    return super.add(t);
+  }
+  override has(t: unknown[]): boolean {
+    return this.index.has(TupleSet.key(t));
+  }
+  override delete(t: unknown[]): boolean {
+    const k = TupleSet.key(t);
+    const v = this.index.get(k);
+    if (v === undefined) return false;
+    this.index.delete(k);
+    return super.delete(v);
+  }
+  override clear(): void {
+    this.index.clear();
+    super.clear();
+  }
+  /** set(list(s)[-n:]) — keep the last n (insertion order; Python's is hash order, which no caller relies on). */
+  keepLast(n: number): TupleSet {
+    const out = new TupleSet();
+    for (const t of [...this].slice(-n)) out.add(t);
+    return out;
+  }
+}
+
+export function freshStudy(): Record<string, any> {
+  return {
+    on: false, text: null, pick: null, roll: null, note: null,
+    at: 0.0,
+    decisionKey: null, handId: null,
+    auto: false, executed: null, autoTried: null, lastExec: null,
+    autoHeld: null,
+    pendingExec: null,
+    autoDelay: "instant", autoDue: null,
+    timeBank: true, timeBankAt: 0.0, lastTimeBank: null,
+    topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
+    topUpDue: null, topUpTrigger: null,
+    // The Python wrapper had a REAL-MONEY auto-execute allowance here. It is NOT ported: auto-execute arms on a
+    // practice table or the fake table only (2026-09-24). The fields stay, permanently "not granted", so the
+    // panel's view of them is unchanged.
+    autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+    autoDeclared: false, autoDeclaredReal: false, autoDeclaredBudget: null,
+  };
+}
+
+function fresh() {
+  return {
+    site: { id: "ignition" as string },
+    session: { id: null as string | null, rec: null as any, started: 0.0 },
+    sessions: new SessionStore(),
+    faketableSpec: null as Record<string, any> | null,
+    faketableSpecs: new Map<number, Record<string, any>>(),
+    fakeMode: C.FAKE_RIG,
+    layoutLast: {} as Record<string, any>,
+    cpSnap: { room: null } as Record<string, any>,
+    cpFollow: { room: null, hwnd: null, rect: null, stable: 0, snapped: null } as Record<string, any>,
+    study: freshStudy(),
+    liveStatus: { hero: "unknown" } as Record<string, any>,
+    health: { at: 0.0, issues: [] as any[] },
+    panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,
+    feed: [] as Record<string, any>[],
+    feedPrev: {} as Record<string, any>,
+    handNo: 0,
+    seatMem: new Map<number, Record<string, any>>(),
+    handBlinds: { no: 0, sb: false, bb: false, ticks: 0, strength: false, cards: "" } as Record<string, any>,
+    handBoard: { no: 0, max: 0, armed: false } as Record<string, any>,
+    roundSeen: new Set<unknown>(),
+    actionGraceUntil: 0.0,
+    winsSeen: [] as string[],
+    handIds: new Map<number, string>(),
+    resultSeen: [] as string[],
+    dbg: { on: false, dir: null as string | null, seq: 0 },
+    ws: { bb: 0, board: [], pot: null } as Record<string, any>,
+    wsDump: [] as Record<string, any>[],
+    wsDumpCur: null as Record<string, any> | null,
+    tapBound: null as string | null,
+    tapForeign: 0,
+    tapHeld: 0,
+    tapSeen: new Map<string, number[]>(),
+    tapDealt: new Map<string, Map<number, string[]>>(),
+    tapClaims: new Map<string, number>(),
+    tapRejected: new Set<string>(),
+    tapHold: new Map<string, Record<string, any>[]>(),
+    tapReplay: [] as Record<string, any>[],
+    tapDomCards: [] as string[],
+    tapAmbiguousSaid: new TupleSet(),
+    tapMismatch: 0,
+    tapStall: { since: null as number | null, said: false },
+    stateHealth: { ticks: 0, events: [] as any[], byKind: new Map<string, number>(), streak: new Map<string, number>(), seen: new TupleSet() },
+    modalState: { lastClickAt: 0.0, reported: new Set<string>() },
+    toastsSeen: [] as [string, number][],
+    lastArchived: { no: 0, fp: null } as Record<string, any>,
+    awards: new Map<string, Record<string, any>>(),
+    net: { last: null as any, bad: 0, good: 0, sitout: null as any, history: [] as any[] },
+    shadow: { hand: null as number | null, rc: null as any, seq: 0, done: new Map<number, any>(), agree: 0, differ: 0, last: null as any },
+    topupLocked: false,
+    topupPanel: { open: false, lastCloseAt: 0.0, domTicks: 0 } as Record<string, any>,
+    topupAbort: false,
+    topupKpi: { hand: null as string | null, hands: 0, short: 0, worstBb: 0.0 },
+    topupPrefold: { active: false, key: null, hand: null, deadline: 0.0, startedAt: 0.0, banked: false } as Record<string, any>,
+    orphanCheck: { at: 0.0, said: null as string | null },
+    adoptCheck: { at: 0.0, said: null as string | null },
+    execBusy: false,
+    chain: { attempting: false, lastAt: 0.0, lastResult: null as any, lastCheck: null as number | null },
+    router: { state: "idle", text: "", steps: [] as string[], at: 0.0, format: null as string | null, cancel: false,
+              loginAt: 0.0, seats: null as any, generation: 0 } as Record<string, any>,
+    seating: { reached: 0 },
+    recPending: { on: false },
+    handsCache: { id: null as string | null, at: 0.0, n: 0 },
+    closedTables: new Set<number>(),
+    updateCache: { at: 0.0, latest: null as any, error: null as string | null },
+    ownerRelease: { at: 0.0, running: false, status: null as any },
+  };
+}
+
+export type WrapperState = ReturnType<typeof fresh>;
+
+export const S: WrapperState = fresh();
+
+/** Put a fresh state in place (tests / a replay scenario). */
+export function resetState(): void {
+  const f = fresh();
+  for (const k of Object.keys(S)) delete (S as any)[k];
+  Object.assign(S, f);
+}
+
+/** The functions a test may replace (see the header). Filled in by the modules that own them. */
+export const seams: {
+  ignitionTarget: () => Promise<Record<string, any> | null>;
+  act: (label: string, kind?: string) => Promise<Record<string, any>>;
+  raiseTo: (amount: string, strict?: boolean) => Promise<Record<string, any>>;
+  cdpSeq: (ws: string, cmds: [string, Record<string, unknown>][]) => Promise<void>;
+  registry: (now?: number) => any[];
+  livePeers: (timeoutS?: number) => Promise<any[]>;
+} = {} as any;
+
+/** The CoinPoker site (launch.CP): its log reader runs for the life of the process. */
+export const CP = new Site();
+
+export const isCp = () => S.site.id === "coinpoker";
+export const site = () => S.site.id;
