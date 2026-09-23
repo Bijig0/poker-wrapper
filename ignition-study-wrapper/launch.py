@@ -1088,6 +1088,48 @@ def _health_check() -> list[dict]:
     return issues
 
 
+# ---- a closed panel ends its session (Brady, 2026-09-24) ----------------------------------------------------
+PANEL_GONE_S = 8          # a reload blanks the title for a moment; only a window gone this long counts as closed
+_panel_watch: dict = {"sid": None, "seen": False, "missingSince": None}
+
+
+def _panel_watch_loop() -> None:
+    """Every 2 s while a session runs: is this wrapper's panel window still there? Gone for PANEL_GONE_S = you
+    closed it, and the session ends with it.
+    - CoinPoker: end + close out — this panel's process stands down, the table stays open in the client, and the
+      main panel takes its leader window with it (the same as the panel's own End button).
+    - Ignition (single table): the session RECORD ends; the table is not left and its window is not closed —
+      closing a panel must never stand you up from a real-money table.
+    Skipped: the test rig, and multi-table Ignition slots (their session is shared by every table)."""
+    while True:
+        time.sleep(2)
+        try:
+            sid = _session["id"]
+            if not sid or _fake_mode or TABLES.slot() is not None:
+                _panel_watch.update(sid=sid, seen=False, missingSince=None)
+                continue
+            if _panel_watch["sid"] != sid:
+                _panel_watch.update(sid=sid, seen=False, missingSince=None)
+            if _panel_hwnd():
+                _panel_watch.update(seen=True, missingSince=None)
+                continue
+            if not _panel_watch["seen"]:
+                continue        # no window yet this session (a panel the leader opens once its session runs)
+            if _panel_watch["missingSince"] is None:
+                _panel_watch["missingSince"] = time.time()
+                continue
+            if time.time() - _panel_watch["missingSince"] < PANEL_GONE_S:
+                continue
+            print(f"[session] {sid}: the panel window was closed — ending the session")
+            _sessions.event(sid, "panel-closed", {"goneS": round(time.time() - _panel_watch["missingSince"], 1)})
+            _panel_watch.update(seen=False, missingSince=None)
+            res = _session_end({"note": "ended: the panel window was closed"})
+            if res.get("ok") and _is_cp():
+                _close_out_after_end(sid)
+        except Exception as e:
+            print(f"[session] panel watch: {e}")
+
+
 def _health_loop() -> None:
     while True:
         try:
@@ -8125,6 +8167,7 @@ def main() -> None:
         # and hands only reach the panel/archive while the session's site is CoinPoker
         CP.start(on_line=_cp_line, on_finished=_cp_finished)
         threading.Thread(target=_health_loop, daemon=True, name="health").start()
+        threading.Thread(target=_panel_watch_loop, daemon=True, name="panel-watch").start()
         threading.Thread(target=_cp_follow_loop, daemon=True, name="cp-follow").start()
         threading.Thread(target=_chain_keeper, daemon=True).start()
         threading.Thread(target=_net_guard, daemon=True, name="net-guard").start()
