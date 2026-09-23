@@ -16,6 +16,7 @@ import { join } from "node:path";
  */
 const POLLER_EVENTS = join(import.meta.dir, "..", "..", "data", "jobs", "poller-events.jsonl");
 function pollerEvent(row: Record<string, unknown>): void {
+  if (process.env.NODE_ENV === "test") return;   // unit tests' fake pollers must not fill the real log
   try {
     mkdirSync(join(import.meta.dir, "..", "..", "data", "jobs"), { recursive: true });
     appendFileSync(POLLER_EVENTS, JSON.stringify({ ts: Date.now(), ...row }) + "\n");
