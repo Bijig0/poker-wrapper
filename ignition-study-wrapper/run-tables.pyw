@@ -2,6 +2,8 @@
 
     aof-model/.venv/Scripts/pythonw.exe run-tables.pyw [N] [--fake] [--stop]
 
+Each slot runs the TypeScript wrapper (gto-trainer/apps/wrapper); WRAPPER_IMPL=python runs the Python one.
+
 N is 1-4 (Ignition's own ceiling); it defaults to 1, which is exactly today's
 single-table setup and takes none of the multi-table paths.
 
@@ -42,6 +44,23 @@ import tables as TABLES          # noqa: E402  — the port map and the presence
 ROOT = Path(__file__).resolve().parent
 VENV_PYW = ROOT.parent / "aof-model" / ".venv" / "Scripts" / "pythonw.exe"
 RUN = ROOT / "run-study.pyw"
+# the TypeScript wrapper (2026-09-24) is what each slot runs; WRAPPER_IMPL=python runs run-study.pyw instead
+MAIN_TS = ROOT.parent / "gto-trainer" / "apps" / "wrapper" / "src" / "main.ts"
+PYTHON_IMPL = os.environ.get("WRAPPER_IMPL", "").lower() in ("py", "python")
+
+
+def _find_bun() -> str:
+    """bun: $BUN, PATH, the ZIP-installed Node's bundled bun, npm global, ~/.bun — config/env.ps1's search."""
+    import glob
+    import shutil
+    local = os.environ.get("LOCALAPPDATA", "")
+    on_path = shutil.which("bun")
+    on_path = on_path if on_path and on_path.lower().endswith(".exe") else None   # not npm's bun.CMD shim
+    cands = [os.environ.get("BUN"), on_path,
+             *sorted(glob.glob(os.path.join(local, "Programs", "node-v*", "node_modules", "bun", "bin", "bun.exe")), reverse=True),
+             os.path.join(os.environ.get("APPDATA", ""), "npm", "node_modules", "bun", "bin", "bun.exe"),
+             os.path.join(os.path.expanduser("~"), ".bun", "bin", "bun.exe")]
+    return next((c for c in cands if c and os.path.isfile(c)), "bun")
 
 MAX_TABLES = TABLES.MAX_TABLES
 TOTAL = [1]              # how many tables this run declared; every slot is told
@@ -90,9 +109,18 @@ def start_slot(slot: int, fake: bool) -> None:
     env["CDP_PORT"] = str(CDP_PORT)
     if fake:
         env["FAKE_TABLE"] = "1"
-    exe = str(VENV_PYW) if VENV_PYW.exists() else sys.executable
-    subprocess.Popen([exe, str(RUN)], env=env, cwd=str(ROOT),
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # the ports in ARGV too: the takeover scan tells one instance from another by its command line, and a slot
+    # started without them reads as :7700 — relaunching table 1 would end it
+    argv = ["--panel-port", str(port), "--cdp-port", str(CDP_PORT)] + (["--fake"] if fake else [])
+    if PYTHON_IMPL or not MAIN_TS.exists():
+        exe = str(VENV_PYW) if VENV_PYW.exists() else sys.executable
+        cmd = [exe, str(RUN), *argv]
+    else:
+        env.setdefault("WRAPPER_LOG_FILE", str(ROOT / "server.log"))
+        cmd = [_find_bun(), "run", str(MAIN_TS), *argv]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    subprocess.Popen(cmd, env=env, cwd=str(ROOT), creationflags=flags,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
     print(f"slot {slot}: starting on :{port} (CDP :{CDP_PORT})")
 
 

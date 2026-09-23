@@ -140,13 +140,16 @@ if (Test-Path $bun) {
     # prove every import resolves: a half-written bun cache entry installs "fine" and then the API cannot start
     # (seen 2026-09-22: zod@4.4.3 without its v4/ folder). On a miss, wipe the cache + node_modules and reinstall once.
     $probe = Join-Path $env:TEMP 'pokerwrapper-resolve-check.js'
+    # the wrapper (apps\wrapper, a workspace of the same install) is probed the same way
     & $bun build apps\api\index.ts --target=bun --outfile $probe 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { & $bun build apps\wrapper\src\main.ts --target=bun --outfile $probe 2>&1 | Out-Null }
     if ($LASTEXITCODE -ne 0) {
       Todo 'a package came down incomplete; clearing the package cache and reinstalling ...'
       & $bun pm cache rm 2>&1 | Out-Null
-      Remove-Item -Recurse -Force node_modules, apps\api\node_modules -ErrorAction SilentlyContinue
+      Remove-Item -Recurse -Force node_modules, apps\api\node_modules, apps\wrapper\node_modules -ErrorAction SilentlyContinue
       & $bun install --frozen-lockfile 2>&1 | Select-Object -Last 2 | ForEach-Object { "    $_" }
       & $bun build apps\api\index.ts --target=bun --outfile $probe 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0) { & $bun build apps\wrapper\src\main.ts --target=bun --outfile $probe 2>&1 | Out-Null }
     }
     $resolved = ($LASTEXITCODE -eq 0)
     Remove-Item $probe -ErrorAction SilentlyContinue
@@ -198,8 +201,10 @@ if ($SkipShortcut) { Todo 'skipped' }
 else {
   $sh = New-Object -ComObject WScript.Shell
   $lnk = $sh.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Wrapper.lnk'))
-  $lnk.TargetPath = Join-Path $root 'aof-model\.venv\Scripts\pythonw.exe'
-  $lnk.Arguments = "`"$(Join-Path $root 'ignition-study-wrapper\run-study.pyw')`""
+  # the TypeScript wrapper, started hidden by run-wrapper.vbs (log -> ignition-study-wrapper\server.log). The Python
+  # wrapper stays as the fallback: ignition-study-wrapper\launch.cmd (or pythonw run-study.pyw).
+  $lnk.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+  $lnk.Arguments = "`"$(Join-Path $root 'ignition-study-wrapper\run-wrapper.vbs')`""
   $lnk.WorkingDirectory = Join-Path $root 'ignition-study-wrapper'
   $ico = Join-Path $root 'ignition-study-wrapper\ignition-study.ico'
   if (Test-Path $ico) { $lnk.IconLocation = "$ico,0" }

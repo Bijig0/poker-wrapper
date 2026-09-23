@@ -19,7 +19,7 @@ import { Body } from "./contract";
 import * as faketable from "./faketable";
 import { log } from "./feed";
 import * as F from "./formats";
-import { pyFloat, pyInt, pyJsonDumps, pyRepr, pyStr, truthy } from "./py";
+import { fmtFixed, pyFloat, pyInt, pyJsonDumps, pyRepr, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
 import { CP, S, isCp, seams } from "./state";
 import * as TABLES from "./tables";
@@ -73,6 +73,17 @@ const layout = () => applyLayout(seams.ignitionTarget);
 export function buildApp(): Hono {
   const app = new Hono();
 
+  // SLOW REQUESTS, LOGGED (2026-09-24): the study API reads /state with a 3 s budget; a reply that takes long is a
+  // lost or late answer, and this says which request and how long (wall clock, not the injectable one)
+  app.use(async (c, next) => {
+    const t0 = performance.now();
+    await next();
+    const dt = performance.now() - t0;
+    if (dt > 400) {
+      const u = new URL(c.req.url);
+      log(`[slow] ${c.req.method} ${u.pathname}${u.search} ${fmtFixed(dt, 0)} ms -> ${c.res.status}`);
+    }
+  });
   app.onError((e: any) => json(500, { ok: false, error: `${e?.name && e.name !== "Error" ? e.name : "Exception"}: ${e?.message ?? e}` }));
   app.notFound(() => text404());
   app.options("*", () => new Response(null, { status: 204, headers: {

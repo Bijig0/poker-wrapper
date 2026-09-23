@@ -548,7 +548,11 @@ async function spawnSlot(slotN: number, n: number): Promise<Record<string, any>>
     TABLE_SLOT: String(slotN), TABLE_COUNT: String(n), PANEL_PORT: String(port), CDP_PORT: String(C.CDP_PORT) };
   if (S.fakeMode) env.FAKE_TABLE = "1";
   try {
-    const child = spawn(process.execPath, ["run", join(import.meta.dir, "main.ts")], { env, cwd: C.ROOT, detached: true, stdio: "ignore", windowsHide: true });
+    // the ports go in ARGV as well as the environment: the takeover scan tells one instance from another by the
+    // command line, and a slot started without them reads as :7700 — a relaunch of table 1 would then end it
+    const args = ["run", join(import.meta.dir, "main.ts"), "--panel-port", String(port), "--cdp-port", String(C.CDP_PORT)];
+    if (S.fakeMode) args.push("--fake");
+    const child = spawn(process.execPath, args, { env, cwd: C.ROOT, detached: true, stdio: "ignore", windowsHide: true });
     child.unref();
   } catch (e: any) {
     return { slot: slotN, panelPort: port, ok: false, error: `could not start: ${e?.message ?? e}` };

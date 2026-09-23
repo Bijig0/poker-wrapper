@@ -13,7 +13,7 @@
 param([string]$Version = '', [switch]$Check, [switch]$Yes, [switch]$Relaunch, [switch]$Force,
       # testing a second install on a machine that runs a live one: other ports, and leave the scheduled tasks alone
       [int]$ApiPort = 2000, [int]$ChartPort = 8777, [int]$PanelPort = 7700, [switch]$SkipTasks,
-      [string]$WrapperArgs = '')   # extra run-study.pyw arguments for -Relaunch (a non-default instance)
+      [string]$WrapperArgs = '')   # extra wrapper arguments for -Relaunch (a non-default instance: --panel-port N --cdp-port N)
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -26,9 +26,14 @@ function Finish([int]$code) {
   exit $code
 }
 function Start-Wrapper {
+  # the TypeScript wrapper, hidden (what the desktop shortcut runs); a release without it reopens the Python one
+  $vbs = Join-Path $root 'ignition-study-wrapper\run-wrapper.vbs'
   $pyw = Join-Path $root 'aof-model\.venv\Scripts\pythonw.exe'
   $run = Join-Path $root 'ignition-study-wrapper\run-study.pyw'
-  if ((Test-Path $pyw) -and (Test-Path $run)) {
+  if (Test-Path $vbs) {
+    Start-Process -FilePath (Join-Path $env:WINDIR 'System32\wscript.exe') -ArgumentList "`"$vbs`" $WrapperArgs" -WorkingDirectory (Split-Path $vbs)
+    Say 'reopened the Poker Wrapper' Green
+  } elseif ((Test-Path $pyw) -and (Test-Path $run)) {
     Start-Process -FilePath $pyw -ArgumentList "`"$run`" $WrapperArgs" -WorkingDirectory (Split-Path $run)
     Say 'reopened the Poker Wrapper' Green
   }
@@ -87,7 +92,7 @@ if (-not $SkipTasks) { foreach ($t in @($TaskNames.Values) + $LegacyTaskNames) {
 $mine = [regex]::Escape($root)
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
   $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -match $mine -and
-  ($_.CommandLine -match 'study-api\.ps1|chart-server\.ps1|gtow_watchdog\.ps1|run-study\.pyw|run-tables\.pyw')
+  ($_.CommandLine -match 'study-api\.ps1|chart-server\.ps1|gtow_watchdog\.ps1|run-study\.pyw|run-tables\.pyw|apps\\wrapper\\src\\main\.ts|wrapper\.cmd')
 } | ForEach-Object { & taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }
 foreach ($port in $ApiPort, $ChartPort) {
   Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |

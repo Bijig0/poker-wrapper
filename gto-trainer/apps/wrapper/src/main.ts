@@ -51,9 +51,25 @@ if (process.env.WRAPPER_LOG_FILE) {
   console.warn = write;
 }
 
+// A background thread's exception killed only that thread in the Python wrapper; the server kept serving. A stray
+// rejection must not take the whole process (and every answer on screen) down with it here either — log it and go on.
+process.on("unhandledRejection", (e: any) => console.log(`[error] unhandled rejection: ${e?.stack ?? e}`));
+process.on("uncaughtException", (e: any) => console.log(`[error] uncaught exception: ${e?.stack ?? e}`));
+
 const { reloadConfig } = await import("./config");
 reloadConfig();
 const mainModule = await import("./app");
-await mainModule.main(argv);
+try {
+  await mainModule.main(argv);
+} catch (e: any) {
+  // the hidden launcher has nowhere to print — file it where run-study.pyw filed it
+  try {
+    const { DEBUG_DIR } = await import("./config");
+    appendFileSync(join(DEBUG_DIR(), "last-start.txt"), `EXC: ${e?.stack ?? e}
+`, "utf8");
+  } catch {}
+  console.log(`[panel] startup failed: ${e?.stack ?? e}`);
+  process.exit(1);
+}
 
 export {};

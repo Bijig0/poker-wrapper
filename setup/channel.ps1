@@ -9,7 +9,7 @@
 # What is installed: VERSION.json at the install root (code version + a sha256 per file) and
 # config\installed-data.json (which version of each data part is unpacked).
 if (-not $env:PW_CHANNEL -and $root -and (Test-Path (Join-Path $root 'config\local.env'))) {
-  # the same override the wrapper sees (run-study.pyw loads config\local.env)
+  # the same override the wrapper sees (the wrapper loads config\local.env at start)
   $m = Get-Content (Join-Path $root 'config\local.env') | Where-Object { $_ -match '^\s*PW_CHANNEL\s*=\s*\S' } | Select-Object -First 1
   if ($m) { $env:PW_CHANNEL = ($m -replace '^\s*PW_CHANNEL\s*=\s*', '').Trim().Trim('"') }
 }

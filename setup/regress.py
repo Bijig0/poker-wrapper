@@ -85,6 +85,35 @@ for name, args in FAST:
     except Exception as e:
         rec(f"wrapper {name}", False, str(e))
 
+# 3b. the TypeScript wrapper (gto-trainer/apps/wrapper, what the shortcut runs since 2026-09-24): its unit ports +
+#     the goldens recorded from the Python wrapper (reader / pure / CDP trace / CoinPoker), its typecheck, and the
+#     HTTP contract replayed against a headless instance on its own ports (7791 / 9391) — never :7700 / :7701.
+#     Baselines: bun test 0 fail (2 skips: the opt-in rig test, a recording that is not on disk); contract
+#     287/287 and the transcript identical to the Python recording.
+TSW = ROOT / "gto-trainer" / "apps" / "wrapper"
+try:
+    code, out = run([BUN, "test"], TSW, 900)
+    m = re.search(r"(\d+) pass\s+(?:(\d+) skip\s+)?(\d+) fail", out)
+    fails = [l.strip()[7:120] for l in out.splitlines() if l.startswith("(fail)")]
+    rec("wrapper TS tests (bun test)", bool(m) and m.group(3) == "0",
+        (f"{m.group(1)} pass / {m.group(3)} fail" + (f": {'; '.join(fails[:3])}" if fails else "")) if m else out[-200:])
+except Exception as e:
+    rec("wrapper TS tests (bun test)", False, str(e))
+try:
+    code, out = run([BUN, ROOT / "gto-trainer" / "node_modules" / "typescript" / "bin" / "tsc", "--noEmit", "-p", "."], TSW, 600)
+    errs = [l for l in out.splitlines() if "error TS" in l]
+    rec("wrapper TS typecheck (tsc)", code == 0 and not errs, f"{len(errs)} errors" + (f": {errs[0][:120]}" if errs else ""))
+except Exception as e:
+    rec("wrapper TS typecheck (tsc)", False, str(e))
+try:
+    code, out = run([BUN, "run", "test/contract/runner.ts", "--impl", "ts"], TSW, 600)
+    m = re.search(r"ts: (\d+)/(\d+) assertions passed", out)
+    ident = "transcript identical" in out
+    rec("wrapper TS contract (vs Python)", code == 0 and bool(m) and ident,
+        (f"{m.group(1)}/{m.group(2)} assertions, transcript {'identical' if ident else 'DIFFERS'}") if m else out[-200:])
+except Exception as e:
+    rec("wrapper TS contract (vs Python)", False, str(e))
+
 
 def rig_visible():
     try:

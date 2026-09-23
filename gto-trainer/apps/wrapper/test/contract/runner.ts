@@ -19,6 +19,7 @@
 import { spawn, type Subprocess } from "bun";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { HandReply, StateReply } from "../../src/contract";
 
 const REPO = resolve(import.meta.dir, "../../../../..");
 const WRAPPER = join(REPO, "ignition-study-wrapper");
@@ -38,6 +39,21 @@ type Step = { step: string; value: unknown };
 const transcript: Step[] = [];
 const failures: string[] = [];
 let assertions = 0;
+
+// every /state and /hand reply is also parsed by the zod reply schemas the study API validates with
+// (src/contract.ts) — on BOTH implementations, so the shared schema is proven against the Python wrapper too
+let schemaReplies = 0;
+function schemaCheck(path: string, json: any) {
+  const route = path.split("?")[0];
+  const schema = route === "/hand" ? HandReply : route === "/state" ? StateReply : null;
+  if (!schema || json == null) return;
+  schemaReplies++;
+  const r = schema.safeParse(json);
+  if (!r.success) {
+    const issues = r.error.issues.slice(0, 4).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+    failures.push(`reply schema ${route}: ${issues}`);
+  }
+}
 
 function check(label: string, ok: boolean, detail = "") {
   assertions++;
@@ -66,6 +82,7 @@ async function req(path: string, body?: unknown, timeoutMs = 20000): Promise<{ s
     let json: any = null;
     if (type.includes("json")) {
       try { json = JSON.parse(text); } catch { json = { __unparsable__: text.slice(0, 200) }; }
+      if (r.status === 200) schemaCheck(path, json);
     }
     return { status: r.status, json, text, type };
   } finally {
@@ -389,7 +406,9 @@ async function main() {
   } finally {
     if (!KEEP) await stop();
   }
-  console.log(`${impl}: ${assertions - failures.length}/${assertions} assertions passed, ${transcript.length} transcript steps, ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  const schemaFails = failures.filter((f) => f.startsWith("reply schema ")).length;
+  console.log(`${impl}: ${assertions - (failures.length - schemaFails)}/${assertions} assertions passed, ${transcript.length} transcript steps, ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  console.log(`${impl}: ${schemaReplies - schemaFails}/${schemaReplies} /state + /hand replies match the reply schemas (src/contract.ts)`);
   for (const f of failures) console.log(`  FAIL ${f}`);
   let diffs = 0;
   if (RECORD) {

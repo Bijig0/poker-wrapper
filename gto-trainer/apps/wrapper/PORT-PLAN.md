@@ -32,12 +32,24 @@ files (ignition-study-wrapper/data, debug, *.html pages are served from there �
 ## Progress (update as you go)
 - [x] A1 golden recorder (Python) + data  (reader 28 scenarios, pure 29k calls, CoinPoker 7 logs, CDP trace 67)
 - [x] A2 contract suite (TS) passing against Python headless (287/287, transcript stable)
-- [ ] B  modules ported (tick when its golden passes)
-      DONE (goldens green): py.ts difflib.ts clock.ts win32.ts cdp.ts js/ | tables | formats | auth | balances
-      | netcheck | terminal | reconcile | faketable | sessions | sites/cpFeed | sites/coinpoker | sites/cpActions
-      (+ ocr.ts / win32/ocr.ps1: Windows.Media.Ocr via a kept PowerShell helper, verified on the live lobby)
-      TODO launch split:
-      reader(DOM) | ws | handState | archive | pick/relay | topup | net guard | router/session | admin/cp
-- [ ] C  Hono server + zod contract; main.ts (takeover, loops); launchers (.cmd/.vbs), setup/update/build_package
-- [ ] D  contract suite + goldens + unit ports green on TS; cutover; API validates wrapper replies with the
-         shared zod schema (packages or apps/wrapper/src/contract.ts)
+- [x] B  modules ported, every golden green
+      py.ts difflib.ts clock.ts win32.ts cdp.ts js/ | tables | formats | auth | balances | netcheck | terminal
+      | reconcile | faketable | sessions | sites/cpFeed | sites/coinpoker | sites/cpActions (+ ocr.ts)
+      | ignition/{dom,ws,hand,reader,checks,shadow,recorder} | archive | relay | topup | netguard | session
+      | admin | windows | view  — reader golden 28/28 scenarios, pure 29,391/29,391, CDP trace 67/67
+- [x] C  Hono server (server.ts) + zod contract (contract.ts); app.ts/main.ts (takeover, mutex, loops)
+- [x] D  green on TS: contract 287/287 + transcript identical to the Python recording + 44/44 /state and /hand
+         replies on the reply schemas (43/43 on Python); all 23 Python unit tests ported (bun test 0 fail);
+         tsc clean. API resolveHand soft-validates /state with contract.ts StateReply (warns, never blocks).
+- [x] Cutover 2026-09-24 (Python kept as the fallback until a live session has run on TS):
+      ignition-study-wrapper/run-wrapper.vbs (hidden, log -> server.log) -> wrapper.cmd (console; env.ps1 finds
+      bun) -> bun run src/main.ts. setup.ps1 shortcut, update.ps1 Start-Wrapper + kill regex, study-tool.pyw
+      (rig), run-tables.pyw, build_package CODE_TREES, regress.py (3 TS tiers). WRAPPER_IMPL=python makes the
+      rig / run-tables start the Python one; launch.cmd / run-study.pyw start it directly. Either implementation
+      takes over from the other on the same panel port.
+- [ ] Live session on the TS wrapper (Brady) — then retire the Python wrapper's launch paths.
+- Deliberate deviations: real-money auto-execute allowance NOT ported (practice/fake only). Fixed in both:
+  table slots are spawned with --panel-port/--cdp-port in argv (a slot without them read as :7700 to the
+  takeover scan, so relaunching table 1 would end table 2). TS only: unhandled rejections are logged, not fatal
+  (a Python thread's exception never took the server down either).
+- Not ported: the "[slow] request" log line from Python's _send.

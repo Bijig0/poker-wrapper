@@ -1,5 +1,14 @@
 # Poker Wrapper (was "Ignition Study")
 
+**Now TypeScript (2026-09-24).** The wrapper that runs is `gto-trainer/apps/wrapper` (Bun + Hono + zod) — a
+port of the Python in this folder, held to it by goldens recorded from the Python modules, the HTTP contract
+suite (identical transcript) and the unit tests ported one to one (`apps/wrapper/PORT-PLAN.md`). The desktop
+shortcut runs `run-wrapper.vbs` (hidden, log → `server.log`); `wrapper.cmd` is the same with a console. This
+folder still holds the pages, launchers and data, and the Python wrapper stays as the fallback until a live
+session has run on the TS one: `launch.cmd` / `run-study.pyw` start it, and `WRAPPER_IMPL=python` makes
+`study-tool.pyw` and `run-tables.pyw` start it. Either implementation takes over from the other on the same
+panel port. The Python below describes the behaviour both implement.
+
 **One wrapper, two sites (2026-09-22).** The session setup page starts with a
 **Site** step: **Ignition** (everything below: the web client in our own browser,
 CDP + WebSocket reader, router, sign-in, top-ups, 1-4 tables) or **CoinPoker**

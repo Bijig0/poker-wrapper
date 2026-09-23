@@ -103,7 +103,7 @@ test("the auto top-up's windows and guards", async () => {
     seed({ hero: "folded", folded: true });
     S.topupAbort = true;
     maybeTopUp();
-    check("a stale abort does not wedge the next window", S.topupAbort === false);
+    check("a stale abort does not wedge the next window", (S.topupAbort as boolean) === false);
     check("and nothing was scheduled on that tick", S.study.topUpDue !== null && S.study.topUpDue !== undefined, "the wait should be drawn, not skipped");
     S.study.topUpDue = time() + 30;
     seed();

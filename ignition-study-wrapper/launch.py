@@ -9000,7 +9000,10 @@ def _spawn_slot(slot_n: int, n: int) -> dict:
         env["FAKE_TABLE"] = "1"
     exe = str(VENV_PYW) if VENV_PYW.exists() else sys.executable
     try:
-        subprocess.Popen([exe, str(ROOT / "run-study.pyw")], env=env, cwd=str(ROOT),
+        # the ports in ARGV too: the takeover scan tells instances apart by command line, and a slot started
+        # without them reads as :7700 — a relaunch of table 1 would end it
+        subprocess.Popen([exe, str(ROOT / "run-study.pyw"), "--panel-port", str(port), "--cdp-port", str(CDP_PORT)]
+                         + (["--fake"] if _fake_mode else []), env=env, cwd=str(ROOT),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         return {"slot": slot_n, "panelPort": port, "ok": False, "error": f"could not start: {e}"}

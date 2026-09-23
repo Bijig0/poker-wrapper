@@ -6,6 +6,7 @@ import {
   type ParsedHand,
 } from "../parsePanelFeed/parsePanelFeed";
 import { normalizeHand } from "../normalizeHand/normalizeHand";
+import { StateReply } from "../../../../wrapper/src/contract";
 
 /**
  * Resolve a hand from one of the four accepted sources — a Hand-shaped JSON
@@ -113,6 +114,20 @@ export function promoteTextJson(body: ResolveBody): ResolveError | null {
   }
 }
 
+/**
+ * The wrapper's /state checked against the SHARED contract (apps/wrapper/src/contract.ts — the zod schemas the
+ * wrapper's own contract suite proves against both its implementations). SOFT on purpose: a reply off the contract
+ * is logged (once per distinct problem per wrapper) and carried as a warning, and still read the tolerant way below
+ * — answers must not stop because a field changed shape — but the drift shows the moment it happens instead of
+ * surfacing later as a wrong or missing answer.
+ */
+const offContractSeen = new Map<string, string>();
+export function wrapperContractIssues(state: unknown): string | null {
+  const r = StateReply.safeParse(state);
+  if (r.success) return null;
+  return r.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+}
+
 export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | ResolveError> {
   const promoteErr = promoteTextJson(body);
   if (promoteErr) return promoteErr;
@@ -168,6 +183,12 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     } catch {
       return { ok: false, status: 502, error: `Couldn't reach the assistive-play server at ${url} — is it running?` };
     }
+    const offContract = wrapperContractIssues(state);
+    if (offContract && offContractSeen.get(url) !== offContract) {
+      offContractSeen.set(url, offContract);
+      console.warn(`[wrapper contract] ${url} /state is off the contract: ${offContract}`);
+    }
+    const contractWarnings = offContract ? [`wrapper /state off the contract: ${offContract}`] : [];
     if (!state.connected) {
       return { ok: false, status: 409, error: "assistive-play is running but no table is detected." };
     }
@@ -188,13 +209,13 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     if (state.hand != null) {
       try {
         const normalized = normalizeHand(state.hand);
-        return { ok: true, hand: normalized.hand, source: "live", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId,
+        return { ok: true, hand: normalized.hand, source: "live", warnings: [...normalized.warnings, ...contractWarnings], tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId,
                  liveExtras: liveExtrasOf(state.hand) };
       } catch (e) {
         return { ok: false, status: 502, error: `Live hand not understood: ${e instanceof Error ? e.message : String(e)}` };
       }
     }
-    return { ok: true, hand: null, source: "live", warnings: [], tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId };
+    return { ok: true, hand: null, source: "live", warnings: contractWarnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId };
   }
 
   if (body.rows || body.text) {
