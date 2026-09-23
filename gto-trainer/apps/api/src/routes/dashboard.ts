@@ -14,7 +14,7 @@ import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
 import { loadTasks, createTask, updateTask, reorderTasks } from "../services/tasks";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
 import { fxRate, toAudCents } from "../services/fx";
-import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID } from "../services/strategies";
+import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi } from "../services/gtowApi";
@@ -343,11 +343,18 @@ app.get("/hands", async (c) => {
   // Old sessions carry the pre-2026-09-12 ids (apex, …) — canonicalStrategyId maps them.
   const byName = new Map(STRATEGIES.map((x) => [x.id, x.name]));
   const declared = new Map<string, string>();
-  for (const sess of sessionsStore.list(500)) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id && byName.has(id)) declared.set(sess.id, id); }
+  // sessions declared at a TEST STAKE (strategies.ts TEST_FORMATS): same strategy, flagged so no
+  // surface reads a 5NL reader test as evidence about the NL200 strategy
+  const testSessions = new Set<string>();
+  for (const sess of sessionsStore.list(500)) {
+    const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null);
+    if (id && byName.has(id)) declared.set(sess.id, id);
+    if (isTestFormat(sess.config?.format)) testSessions.add(sess.id);
+  }
   const strategyOf = (e: Enriched) => {
     const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
     const d = sid ? declared.get(sid) : undefined;
-    if (d) return { id: d, name: byName.get(d) ?? d, declared: true };
+    if (d) return { id: d, name: byName.get(d) ?? d, declared: true, test: testSessions.has(sid!) };
     const h = e.clientHandId ? strat.get(e.clientHandId) : null;
     return h ? { ...h, declared: false } : null;
   };
@@ -396,7 +403,9 @@ function sessionsIndex(all: Enriched[]) {
      *  sitting really was multi-table — and if the DECLARED count disagrees with
      *  what actually played, that is worth seeing (session 130435 declared two
      *  and only ever archived table 2's). */
-    tables: { slot: number | null; hands: number }[]; declaredTables: number | null };
+    tables: { slot: number | null; hands: number }[]; declaredTables: number | null;
+    /** declared at a test stake (strategies.ts TEST_FORMATS) */
+    test: boolean };
 
   /** hands per slot, ascending, nulls last. */
   const tablesOf = (hs: Enriched[]): { slot: number | null; hands: number }[] => {
@@ -431,12 +440,13 @@ function sessionsIndex(all: Enriched[]) {
       profile: typeof cfg.profile === "string" && cfg.profile ? cfg.profile : null,
       tables: tablesOf(hs),
       declaredTables: Number.isFinite(Number(cfg.tables)) ? Number(cfg.tables) : null,
+      test: isTestFormat(cfg.format),
     });
   }
   for (const hs of sessionsOf(unstamped)) {
     const id = `cluster-${hs[0]!.playedAt}`;
     for (const e of hs) byHand.set(e.dbId, id);
-    list.push({ id, declared: false, label: null, preset: null, strategyName: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length, profile: null, tables: tablesOf(hs), declaredTables: null });
+    list.push({ id, declared: false, label: null, preset: null, strategyName: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length, profile: null, tables: tablesOf(hs), declaredTables: null, test: false });
   }
   list.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)); // newest first, like the table
   return { byHand, list };
@@ -1709,6 +1719,8 @@ function sessionCard(s: ReturnType<typeof sessionsStore.list>[number], all: Enri
     answersOn: !!cfg.answers, recordingOn: !!cfg.recording, budget: cfg.budget ?? null,
     // the whole-hand strategy the session was declared with (services/strategies.ts id), when the mode was one
     strategy: cfg.strategy ?? null, strategyName: cfg.strategyName ?? null,
+    // declared at a TEST STAKE: the strategy's answers on a cheaper table (strategies.ts TEST_FORMATS)
+    format: cfg.format ?? null, test: isTestFormat(cfg.format),
     // the ACCOUNT it was played on (ignition-study-wrapper/auth.py) — null for
     // sessions declared before profiles existed, and for every gap cluster
     profile: (cfg.profile as string) ?? null,
@@ -2338,6 +2350,9 @@ async function gtowStatus() {
     /** which session the router reaches for first on heads-up work */
     activeId: active.id,
     sessions,
+    /** requests sent to api.gtowizard.com in the trailing 24 h / since 00:00 UTC, per account and kind, against
+     *  the cap the 429 body states (services/gtowRequestLog.ts — every process writes the same ledger) */
+    requests: gtowApi.requestStats(),
   };
 }
 app.get("/gtow-status", async (c) => c.json(await gtowStatus()));

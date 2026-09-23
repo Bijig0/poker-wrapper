@@ -24,6 +24,9 @@
  */
 
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
+// EVERY request to api.gtowizard.com goes through the ledger (2026-09-23): GTO Wizard caps REQUESTS, not
+// solves, and a poll loop is many requests — see services/gtowRequestLog.ts.
+import { gtowRequests } from "./gtowRequestLog";
 
 const API_BASE = "https://api.gtowizard.com";
 // Zone gives ~15s per decision and the study panel needs the verdict inside
@@ -135,6 +138,11 @@ class GtowApi {
     return this.solOwner.get(solId) ?? null;
   }
 
+  /** Requests sent to api.gtowizard.com (all processes, per account), against the stated daily cap. */
+  requestStats() {
+    return gtowRequests.stats();
+  }
+
   private buildUrl(p: SpotSolutionParams): string {
     const q = new URLSearchParams({
       gametype: p.gametype,
@@ -173,7 +181,7 @@ class GtowApi {
         if (!token) { last = { status: 0, error: `${id}: no access token` }; break; }
         let res: Response;
         try {
-          res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12_000) });
+          res = await gtowRequests.fetch(id, "library", url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12_000) });
         } catch (e) {
           last = { status: 0, error: `${id}: ${e instanceof Error ? e.message : e}` };
           break;
@@ -322,7 +330,7 @@ class GtowApi {
         // solves when the API stalled; nothing upstream can cancel it)
         let treeRes: Response;
         try {
-          treeRes = await fetch(`${API_BASE}/v4/custom-solutions/custom-trees/`, {
+          treeRes = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, {
             method: "POST", headers, body: JSON.stringify(this.buildCustomTree(input)),
             signal: AbortSignal.timeout(15_000),
           });
@@ -341,7 +349,7 @@ class GtowApi {
         // 2. create the solution
         let solRes: Response;
         try {
-          solRes = await fetch(`${API_BASE}/v4/custom-solutions/`, {
+          solRes = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, {
             method: "POST", headers, body: JSON.stringify({ custom_tree_id: treeId, actions: "", board: input.board }),
             signal: AbortSignal.timeout(15_000),
           });
@@ -449,7 +457,7 @@ class GtowApi {
       // single fetch hangs inside it — a timed-out poll just retries
       let r: Response;
       try {
-        r = await fetch(`${API_BASE}/v4/solutions/spot-solution/?${params}`, {
+        r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(8_000),
         });
