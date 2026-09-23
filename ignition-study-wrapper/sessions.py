@@ -276,6 +276,10 @@ def merged_config(preset: str, overrides: dict | None) -> dict:
         elif k == "site":
             # WHICH POKER SITE (Poker Wrapper, 2026-09-22): ignition | coinpoker
             base[k] = v if v in ("ignition", "coinpoker") else "ignition"
+        elif k == "cpTable":
+            # the CoinPoker table the session attaches to (the room name from the setup page's list). Unlisted keys
+            # are dropped here, which is how a picked table once read as "pick the table to attach to" (2026-09-23)
+            base[k] = str(v)[:200] if v else None
         elif k == "buyinBb":
             try:
                 base[k] = max(1.0, float(v))

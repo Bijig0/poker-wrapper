@@ -972,7 +972,7 @@
     $("cp-type").textContent = !t ? "no table" : t.practice ? "practice chips" : t.coinType === 1 ? "REAL MONEY" : "type unknown";
     $("cp-type").style.background = !t ? "" : t.practice ? "#1c3b2c" : "#57222a";
     $("cp-room").innerHTML = t
-      ? `<b>${esc(t.room)}</b> · ${t.heroSeated ? (t.heroSittingOut ? '<span style="color:#ffce56">you are sitting out</span>' : "you are seated") : "you are not seated (observing)"}`
+      ? `<b title="${esc(t.room)}">${esc(t.label || t.room)}</b> · ${t.heroSeated ? (t.heroSittingOut ? '<span style="color:#ffce56">you are sitting out</span>' : "you are seated") : "you are not seated (observing)"}`
         + ` · last message ${t.lastEventAgo}s ago` + (t.rake ? ` · rake ${t.rake.rake}% cap ${t.rake.rakeCap}${t.rake.isPotRakePf ? " · preflop pots raked" : ""}` : "")
       : `no table in the client's log — sit down in the CoinPoker client${s.coinpoker && s.coinpoker.client && !s.coinpoker.client.running ? " (the client is not running)" : ""}`;
     $("cp-sitout").classList.toggle("on", !!cpSitOut.sitOutNextHand);

@@ -316,13 +316,14 @@ function renderCpTables() {
   if (!el) return;
   $("cpt-note").textContent = CP_TABLES.length ? `— ${CP_TABLES.length} open` : "";
   if (!CP_TABLES.length) { el.innerHTML = `<div class="sub">No table is open in the CoinPoker client — join one there (you do not have to sit) and it appears here.</div>`; return; }
+  // two open tables with the same game and stakes are told apart by the room's number, and only then
+  const dup = (t) => CP_TABLES.filter((x) => x.label === t.label).length > 1;
   el.innerHTML = CP_TABLES.map((t) => {
-    const stakes = t.bb != null ? `${t.sb}/${t.bb}${t.ante ? ` · ante ${t.ante}` : ""}` : "stakes not logged yet";
-    const kind = t.maxSize === 2 ? "heads-up" : t.maxSize ? `${t.maxSize}-max` : "";
     const money = t.practice ? "practice chips" : t.coinType === 1 ? "REAL MONEY" : "";
     const fmt = t.format ? (FORMATS.find((f) => f.id === t.format) || {}).name : null;
-    return `<button class="preset${CP_CHOSEN === t.room ? " on" : ""}" data-room="${esc(t.room)}">
-      <b>${esc(t.room)}</b><span class="tag">${esc([stakes, kind, money].filter(Boolean).join(" · "))}</span>
+    return `<button class="preset${CP_CHOSEN === t.room ? " on" : ""}" data-room="${esc(t.room)}" title="${esc(t.room)}">
+      <b>${esc(t.label || t.room)}${dup(t) && t.number ? ` <span class="sub">#${esc(t.number)}</span>` : ""}</b>
+      ${money ? `<span class="tag">${esc(money)}</span>` : ""}
       <span class="why" style="color:#8fa1b3">${t.heroSeated ? "you are seated" : "not seated (observing)"} · ${t.players} seated${fmt ? ` · ${esc(fmt)}` : ""}</span></button>`;
   }).join("");
   el.querySelectorAll("[data-room]").forEach((b) => b.onclick = () => pickCpTable(b.dataset.room));

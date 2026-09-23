@@ -140,8 +140,9 @@ if not PUBLISH:
         for site, preset, cfg in (("ignition", "strategy:ign200-ring-6max-equilibrium", {"format": "ign-ring-NL200-6"}),
                                   ("coinpoker", "strategy:cp200-hu-equilibrium", {"format": "cp-hu-NL200", "recording": False})):
             pf = get("http://127.0.0.1:7700/session/preflight", data={"preset": preset, "config": {"site": site, **cfg}}, timeout=60)
-            # "profile" and the client-side rows are environment, not regressions
-            hard = [c["label"] for c in pf["checks"] if c["required"] and not c["ok"] and c["id"] not in ("profile",)]
+            # environment, not regressions: the Ignition profile, the live connection speed (netcheck), and
+            # the CoinPoker attached table (none is picked by this call; the setup page picks one)
+            hard = [c["label"] for c in pf["checks"] if c["required"] and not c["ok"] and c["id"] not in ("profile", "net", "cp-table")]
             rec(f"wrapper preflight {site}", not hard, f"{len(pf['checks'])} checks; blocking: {hard or 'none'}")
     except Exception as e:
         rec("wrapper :7700 (open the Poker Wrapper)", False, str(e))

@@ -119,6 +119,31 @@ class Site:
         return next((f["id"] for f in FORMATS if f.get("gameType") == kind and f.get("bb") is not None
                      and bb is not None and abs(f["bb"] - bb) < 1e-9), None)
 
+    @staticmethod
+    def label(room: str, props: dict | None) -> dict:
+        """A table as a person reads it: "NL HU 0.10-0.25 · ante 0.04" — game, size, blinds, ante — from the
+        table's own roomProperties, else parsed out of the room name ("31st NL HU 0.05-0.10 EV-INRIT-(A)
+        1392766" is the lobby's internal name). `number` is the room's id, for telling two same-stakes tables
+        apart; the page shows it only when two labels collide."""
+        import re as _re
+        p = props or {}
+        amt = lambda x: f"{x:.2f}" if x < 1 else f"{x:g}"
+        game = "PLO" if "PLO" in room.upper() else "NL"
+        size = p.get("maxSize")
+        kind = "HU" if size == 2 else f"{size}-max" if size else None
+        sb, bb, ante = p.get("smallBlind"), p.get("bigBlind"), p.get("ante")
+        if sb is not None and bb is not None:
+            text = " ".join(x for x in (game, kind, f"{amt(sb)}-{amt(bb)}") if x)
+            if ante:
+                text += f" · ante {amt(ante)}"
+        else:                                   # properties not logged yet: what the name says
+            m = _re.search(r"\b(NL|PLO)\s*(HU|\d-max)?\s*([\d.]+-[\d.]+)", room, _re.I)
+            text = " ".join(x for x in (m.group(1).upper(), m.group(2), m.group(3)) if x) if m else _re.sub(r"\s*\d{5,}$", "", room)
+            if m and "ANTE" in room.upper():
+                text += " · ante"
+        num = _re.search(r"(\d{5,})\s*$", room)
+        return {"label": text, "number": num.group(1) if num else None}
+
     def open_tables(self) -> list[dict]:
         """What the setup page lists to attach to: every open table, with what its log has said about it
         (stakes, size, real or practice chips, who sits there). A table opened a moment ago may not have
@@ -132,7 +157,7 @@ class Site:
                 p = r.props if r else {}
                 seated = [s["name"] for s in r.seats.values()] if r else []
                 out.append({
-                    "room": name, "attached": name == self.pinned,
+                    "room": name, **self.label(name, p), "attached": name == self.pinned,
                     "practice": bool(r and r.practice), "coinType": p.get("coinType"),
                     "sb": p.get("smallBlind"), "bb": p.get("bigBlind"), "ante": p.get("ante"),
                     "maxSize": p.get("maxSize"), "players": len(seated),
@@ -224,7 +249,7 @@ class Site:
             if not r:
                 return None
             hero = next((s for s in r.seats.values() if s["name"] == feed.HERO), None)
-            return {"room": r.name, "lastEventAgo": round(time.time() - r.touched, 1),
+            return {"room": r.name, **self.label(r.name, r.props), "lastEventAgo": round(time.time() - r.touched, 1),
                     "seats": {str(k): dict(v) for k, v in r.seats.items()},
                     "heroSeated": hero is not None,
                     "heroSittingOut": bool(r.sitout.get("sitOutNextHand") or r.sitout.get("sitOutAll")
@@ -342,8 +367,8 @@ class Site:
              "detail": (f"{st['log']} · last written {st['logAgeS']} s ago" if st["logExists"]
                         else f"{st['log']} does not exist — has the client ever run on this machine?")},
             {"id": "cp-table", "label": "Attached table", "required": True, "ok": bool(t),
-             "detail": (f"{t['room']} · {'PRACTICE chips' if t['practice'] else 'REAL MONEY' if t['coinType'] == 1 else 'type not logged yet'}"
+             "detail": (f"{t['label']} · {'PRACTICE chips' if t['practice'] else 'REAL MONEY' if t['coinType'] == 1 else 'type not logged yet'}"
                         + (" · you are seated" if t["heroSeated"] else " · not seated (the wrapper reads it; sit down to get answers)"))
-             if t else (f"{room} is no longer open in the client — pick another" if room
+             if t else (f"{self.label(room, None)['label']} is no longer open in the client — pick another" if room
                         else "pick the table to attach to (join one in the CoinPoker client first)")},
         ]
