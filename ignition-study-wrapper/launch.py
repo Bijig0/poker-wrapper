@@ -1851,7 +1851,18 @@ def _feed_tick() -> None:
 
     first = not p.get("seated") or p.get("waiting")
     if first:
+        # THE HAND KEEPS ITS ID ACROSS A DOM "TABLE OPENED" TICK (2026-09-23, hand 4919910444 /
+        # dashboard 714, the −82 bb 55-vs-KQ hand). One tick read the table as not-seated/waiting
+        # in the MIDDLE of a hand the WebSocket had already opened; the counter moved on here, the
+        # id stayed behind on the old number, and the whole hand was archived with clientHandId
+        # null — no join to its answers, no cross-process dedupe. The counter still moves (the
+        # DOM-side dedupe keys on it) but a hand in flight takes its id with it.
+        carried = (_hand_ids.get(_hand_no)
+                   if _ws_state.get("dealt") and not _ws_state.get("handOver") else None)
         _hand_no += 1
+        if carried:
+            _hand_ids[_hand_no] = carried
+            _feed_add(f"(table re-read mid-hand — hand id {carried} kept)")
         title = next((n["text"] for n in d.get("nodes", [])
                       if re.search(r"hold'?em|omaha", n["text"], re.I)), "table")
         _feed_add(f"Table opened — {title}")
@@ -2922,6 +2933,9 @@ def _begin_hand(hid: str | None) -> None:
     _ws_state["potCents"] = None
     _ws_state["handOver"] = False
     _ws_state["endedSince"] = None
+    # the end-of-hand frames after the id repeat (see PLAY_STAGE_INFO in _on_game_msg)
+    _ws_state["lastHandNoSeen"] = False
+    _ws_state["cleared"] = False
     # Zone deals a NEW table every hand: the previous hand's dealer/dealt
     # must not leak into this one (stale geometry = wrong positions = the
     # study line walks the wrong seats). Both are re-announced within the
@@ -2960,6 +2974,21 @@ def _on_game_msg(d: dict) -> None:
         # check that spawned a phantom hand carrying the previous hand's id.
         if hid and hid == _hand_ids.get(_hand_no):
             _dump_mark("dup: repeated PLAY_STAGE_INFO for the same hand id")
+            return
+        # A HAND THAT NEVER GOT ITS ID TAKES IT FROM THE END-OF-HAND REPEAT (2026-09-23). That
+        # repeat comes ~2 s after PLAY_STAGE_END_REQ and BEFORE CO_LAST_HAND_NUMBER, PLAY_CLEAR_INFO
+        # and the next hand's PLAY_STAGE_INFO — every boundary in the recorded dumps has that
+        # order. A hand opened without an id (the wrapper attached mid-hand, or the opening frame
+        # was lost — the tap drops frames across a reconnect) would otherwise be archived id-less,
+        # and its own repeat would then open a PHANTOM hand carrying its id. The repeat is only
+        # taken as ours while the hand is over and nothing after the repeat has arrived yet; a
+        # PLAY_STAGE_INFO after CO_LAST_HAND_NUMBER / PLAY_CLEAR_INFO is the next hand, as before.
+        if hid and not _hand_ids.get(_hand_no) and _ws_state.get("handOver") \
+                and not _ws_state.get("lastHandNoSeen") and not _ws_state.get("cleared") \
+                and (_ws_state.get("actions") or _ws_state.get("dealt")):
+            _hand_ids[_hand_no] = hid
+            _dump_mark("adopted: the end-of-hand repeat named this id-less hand")
+            _feed_add(f"(hand id {hid} — from the end-of-hand repeat)")
             return
         _begin_hand(hid)
     elif pid == "CO_BCARD3_INFO" and _board_contradicts(d):
@@ -3082,6 +3111,18 @@ def _on_game_msg(d: dict) -> None:
         # `ended` flag stays false (it means folded-or-uncontested), so the
         # idle flush (_maybe_flush_ended) can archive them too.
         _ws_state["handOver"] = True
+    elif pid == "CO_LAST_HAND_NUMBER":
+        # Names the hand that JUST FINISHED (it follows that hand's PLAY_STAGE_INFO repeat by a
+        # few ms and precedes the next hand's). For a finished hand that never got an id this
+        # is the last chance to learn it; for every other hand it only marks where we are in the
+        # end-of-hand burst, so a later PLAY_STAGE_INFO is read as the next hand (see there).
+        hid = str(d.get("stageNo") or "")
+        _ws_state["lastHandNoSeen"] = True
+        if hid and not _hand_ids.get(_hand_no) and _ws_state.get("handOver"):
+            _hand_ids[_hand_no] = hid
+            _feed_add(f"(hand id {hid} — from CO_LAST_HAND_NUMBER)")
+    elif pid == "PLAY_CLEAR_INFO":
+        _ws_state["cleared"] = True             # the table is being cleared for the next deal
     elif pid == "CO_DEALER_SEAT":
         _ws_state["dealer"] = d.get("seat")
     elif pid == "CO_CARDTABLE_INFO":
@@ -3330,6 +3371,44 @@ def _top_up_receipt(amount: str) -> None:
                                                           "at": int(now * 1000)})
 
 
+def _line_order_fault(line: list[tuple], rc) -> str | None:
+    """The first way a normalised (street, seat, type, amount) line is one no table could
+    have dealt, or None. Two rules only: a seat never acts twice running on a street (blind
+    posts aside), and a postflop street opens with the first seat after the dealer that is
+    still live and not all-in. Heads-up is left alone (its postflop order inverts). A seat
+    whose jam the line recorded as a plain call is 'live' here and may make a street look
+    misordered — that direction (refusing a substitution) is the safe one."""
+    order: list[int] | None = None
+    try:
+        ring = sorted(set(rc.dealt) | ({rc.sb, rc.bbs} - {None}))
+        if rc.sb is not None and rc.sb in ring and len(ring) >= 3:
+            i = ring.index(rc.sb)
+            order = ring[i:] + ring[:i]      # heads-up / unknown blinds: no opening-seat rule
+    except Exception:
+        order = None
+    folded: set[int] = set()
+    allin: set[int] = set()
+    prev_street = None
+    prev_seat = None
+    prev_type = None
+    for st, seat, typ, _amt in line:
+        post = isinstance(typ, str) and typ.startswith("post")
+        if st != prev_street:
+            if st != "preflop" and order is not None:
+                live = [s for s in order if s not in folded and s not in allin]
+                if len(live) >= 2 and seat != live[0]:
+                    return f"{st} opens with seat {seat}, seat {live[0]} is first to act"
+            prev_street, prev_seat, prev_type = st, None, None
+        elif seat == prev_seat and not post and not (isinstance(prev_type, str) and prev_type.startswith("post")):
+            return f"seat {seat} acts twice running on the {st}"
+        prev_seat, prev_type = seat, typ
+        if typ == "fold":
+            folded.add(seat)
+        elif typ == "all-in":
+            allin.add(seat)
+    return None
+
+
 def _reconciled_line(old: list[dict], hero: int | None, street: str):
     """CUT-OVER (2026-09-19): which betting line /hand carries.
 
@@ -3410,6 +3489,17 @@ def _reconciled_line(old: list[dict], hero: int | None, street: str):
             unmatched.pop(hit)
     if lost:
         return old, None, None, f"the derived line lacks hero's own reported action ({', '.join(lost[:3])}) — event line kept", "ws"
+    # TURN ORDER before substitution (2026-09-23). The two remaining line-desync hands of the
+    # hardening backtest (425 flop, 441 turn) were derived lines whose street OPENED with hero
+    # — a press redeemed on the wrong street — while the seat first to act had not acted; 621's
+    # had hero act twice running on the river (a check, then the pot award read as a bet). The
+    # walker is positional, so either shape answers the wrong node or none. The reconciler has
+    # since been fixed for both, but the substitution itself now refuses a line no table could
+    # have dealt: no seat acts twice in a row on a street, and a postflop street opens with the
+    # first live seat after the dealer. A refused line is not evidence against the event line.
+    disorder = _line_order_fault(r, rc)
+    if disorder:
+        return old, None, None, f"the derived line is out of turn order ({disorder}) — event line kept", "ws"
     # SHAPE before substitution: the derived line must open with the two blind
     # posts and name only seats the client dealt in (replay 202818 hand 6: a
     # fold derived from a card flicker landed BEFORE the big blind's post — a

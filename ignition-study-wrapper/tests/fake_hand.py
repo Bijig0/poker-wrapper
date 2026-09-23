@@ -35,6 +35,10 @@ the hand it cost us:
                     clearing when the pot is awarded (session 173224: the auto top-up
                     waited for a clear that never came, and sat short for five hands)
   sweep_late        the chips are pulled into the pot a tick or two AFTER the board grows
+  award_in_slot     the pot is awarded by drawing the whole pot in the WINNER'S BET SLOT for a
+                    tick while the pot label is already gone (session_20260920_193322 hand 29 /
+                    dashboard 621, seq 3545: pot=None, hero's slot "11.8 BB" after a check-check
+                    river — read as "hero bets 11.8" and a phantom decision)
   card_flicker      a seat's card count blips to 0 for a single tick and comes back —
                     the reason HOLD_TICKS exists at all ("cards flicker", reconcile's own
                     docstring). NOT a bet-slot flicker: the client has never been seen
@@ -56,7 +60,7 @@ sys.path.insert(0, str(ROOT))
 from reconcile import Tick  # noqa: E402
 
 ALL_ARTEFACTS = ("increment_first", "badge_lag", "fold_at_boundary", "pot_lingers",
-                 "sweep_late", "card_flicker")
+                 "sweep_late", "award_in_slot", "card_flicker")
 
 # NOT in ALL_ARTEFACTS, and deliberately so — run it with
 #   tests/fuzz_reconcile.py 400 --artefacts=increment_only
@@ -273,8 +277,14 @@ def simulate(script: Script, artefacts=ALL_ARTEFACTS, seed: int = 0):
     # the pot is awarded: chips clear, the winner's stack rises, and the pot label may
     # hang about until the next hand deals
     winner = next((s for s in script.stacks if r.cards[s] >= 1), script.hero)
+    won = r.pot or 0
+    if "award_in_slot" in r.a and "pot_lingers" not in r.a and won:
+        # the pot travels to the winner through his bet slot, the label already gone
+        r.bet = {winner: won}
+        r.pot = None
+        r.emit(1)
     r.bet = {}
-    r.stack[winner] = round(r.stack[winner] + (r.pot or 0), 2)
+    r.stack[winner] = round(r.stack[winner] + won, 2)
     if "pot_lingers" not in r.a:
         r.pot = None
     r.emit(4)

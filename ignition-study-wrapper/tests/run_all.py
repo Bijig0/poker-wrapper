@@ -56,6 +56,9 @@ TIERS = [
     # hardening pass (hero-fold-never-dropped, hero-in-dealt archive rule, cross-process dedupe, event kinds)
     ("terminal family", "test_terminal.py", []),
     ("terminal top-up", "test_terminal_topup.py", []),
+    # the street/hand-boundary reader rules from the backtest's last line-desync hands
+    # (pot award read as a bet, press redeemed on the next street, hand id lost mid-hand)
+    ("reader boundary", "test_reader_boundary.py", []),
     # MULTI-TABLE, and pure — no browser, no CDP, a few seconds each. They are in
     # the suite because the failure they cover is the quiet kind: on 2026-09-21 a
     # two-table session ran twenty hands with one table answering and nothing

@@ -572,12 +572,23 @@ class HandReconciler:
                 round_done = bool(self.live) and all(
                     n in self.acted and abs(self.C.get(n, 0.0) - self.max_bet) <= TOL for n in able)
                 pot_ref = tk.pot if tk.pot is not None else self.last_pot
+                # THE POT LABEL VANISHES THE TICK THE POT IS AWARDED (2026-09-23, hand 4919480043 /
+                # dashboard 621). Hero checked the river, the big blind checked behind (badge only,
+                # no chips — a check leaves nothing for the levels to see, so `round_done` stayed
+                # false), and the next tick showed pot=None with 11.8 BB — the whole pot — in
+                # hero's bet slot. No guard held, so the award was filed as "hero bets 11.8" and
+                # the BB was folded at the sweep: a phantom decision the study then failed to
+                # answer. A real bet never coincides with the pot label disappearing; the award
+                # always does. (Reading the BB's CHECK badge as "acted" instead was tried and
+                # failed the fuzzer: badges lag and linger, and a stale CHECK on the bettor's own
+                # seat turned a real flop bet into an award.)
+                pot_gone = tk.pot is None and self.prev is not None and self.prev.pot is not None
                 # ONE PLAYER WITH CHIPS IS NOT A BETTING ROUND. Betting needs two seats
                 # able to act; with the rest all-in the remaining streets are dealt out
                 # and the only chips that move are the pot's. Without `len(able) <= 1`
                 # hand 4919482454's river read the 204bb pot sliding to the winner as a
                 # 204bb BET by a hero who had 7.3 behind.
-                if self.bbs is not None and self.dealt and (round_done or len(self.live) <= 1 or len(able) <= 1) and pot_ref is not None and pot_ref >= 1.5 and level >= 0.6 * pot_ref and level > self.max_bet + TOL:
+                if self.bbs is not None and self.dealt and (round_done or pot_gone or len(self.live) <= 1 or len(able) <= 1) and pot_ref is not None and pot_ref >= 1.5 and level >= 0.6 * pot_ref and level > self.max_bet + TOL:
                     self._settle_pending(tk.seq)       # the pot moving to the winner: the hand is over
                     self.ended = True
                     return
@@ -806,6 +817,22 @@ class HandReconciler:
             if s in self.live and s != self.aggressor and self.max_bet - self.C.get(s, 0.0) > TOL:
                 self._add(s, "fold", None, seq, 0.7, "end", note="owed at the pot award")
                 self.live.discard(s); self.acted.add(s)
+        # THE AWARD CLOSES A CHECK-AROUND TOO (2026-09-23). A check leaves no chips, so the
+        # last seat to check a street is never in `acted` unless a later seat acts — and at
+        # the end of the river nobody does. With two or more seats still able to act, the
+        # pot being awarded is the client's word that they all checked (an all-in run-out
+        # has one such seat at most, and it did not act; a pot taken uncontested leaves one
+        # live seat, who did not act either). Found by the fuzzer's award_in_slot artefact:
+        # 43 of 599 hands lost their final check the moment the award was read correctly.
+        # Not after a sweep: the chips going to the pot already settled the street (`acted`
+        # and the levels were reset for the street that may follow), so there is nothing
+        # left to close — finish() skips _end_street for the same reason.
+        able = [s for s in self.live if s not in self.allin]
+        if self.sweep_at is None and len(able) >= 2:
+            for s in list(self._order() or sorted(self.live)):
+                if s in able and s not in self.acted and self.max_bet - self.C.get(s, 0.0) <= TOL:
+                    self._add(s, "check", None, seq, 0.7, "end", note="round closed at the pot award")
+                    self.acted.add(s)
 
     def finish(self, seq: int) -> None:
         if not self.ended:
