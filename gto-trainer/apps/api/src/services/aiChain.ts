@@ -78,6 +78,14 @@ export interface AiChainSpec {
    *  "ign200_3maxasym2ci_D100_s100_eq + exploit hero range (btn_open)". Not
    *  used by the solve; kept so a stored trace says what it assumed. */
   rangeSource?: string;
+  /** RE-ROOT (2026-09-22): the first entry of `streets` is this street, not the flop — 1 = turn, 2 = river. The
+   *  pot/stack/ranges passed in are then the ones ENTERING that street. Used when a 4+ way spot cannot be
+   *  collapsed from the flop (every villain has chips in on an earlier street): the earlier streets' chips become
+   *  plain pot and the current street is collapsed on its own. Default 0. */
+  firstStreet?: 0 | 1 | 2;
+  /** Walk every street to its end and return the ranges leaving the last one (`rangesOut`) instead of stopping at
+   *  hero's node — how a re-root conditions the ranges it starts from. The last street must close. */
+  walkThrough?: boolean;
 }
 
 /**
@@ -141,6 +149,8 @@ export type AiChainResult =
       line: string;
       /** Cloud solves that ran fresh for this call (0 = fully cached). */
       solves: number;
+      /** walkThrough only: each surviving seat's range leaving the last street, by position */
+      rangesOut?: Record<string, number[]>;
       trace: ChainTrace;
     }
   | { ok: false; why: string; trace?: ChainTrace };
@@ -238,10 +248,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const fail = (why: string): AiChainResult => { trace.result = { ok: false, why }; return { ok: false, why, trace }; };
   const cards = spec.board.match(/.{2}/g) ?? [];
   if (cards.length < 3) return fail(`board too short ("${spec.board}")`);
-  if (spec.streets.length < 1 || spec.streets.length > 3) {
+  const first = spec.firstStreet ?? 0;
+  if (spec.streets.length < 1 || spec.streets.length + first > 3) {
     return fail(`need 1-3 streets, got ${spec.streets.length}`);
   }
-  if (cards.length < 2 + spec.streets.length) {
+  if (cards.length < 2 + first + spec.streets.length) {
     return fail("board has fewer cards than streets walked");
   }
   const threeWay = spec.midPos != null && spec.midRange != null;
@@ -261,7 +272,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const walked: string[] = [];
 
   for (let si = 0; si < spec.streets.length; si++) {
-    const streetBoard = cards.slice(0, 3 + si).join("");
+    const k = si + first;   // the street's real index (re-rooted chains start past the flop)
+    const streetBoard = cards.slice(0, 3 + k).join("");
     const toks = spec.streets[si]!;
     const isLast = si === spec.streets.length - 1;
     const n = seats.length;
@@ -281,7 +293,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // construction and changes villain's picture of hero by a rounding error.
     if (spec.heroComboIdx != null) {
       const heroArr = seats[heroIdx]!.range;
-      const boardIdx = new Set(cards.slice(0, 3 + si).map(cardIdx));
+      const boardIdx = new Set(cards.slice(0, 3 + k).map(cardIdx));
       for (const idx of classCombos(spec.heroComboIdx)) {
         const [a, b] = comboCards(idx);
         if (boardIdx.has(a) || boardIdx.has(b)) continue;   // card removal stays absolute
@@ -313,7 +325,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
     const streetRec = {
-      si, street: STREET[si]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
+      si, street: STREET[k]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
       solId: null as string | null, created: false, solveMs: 0, walkMs: 0,
       players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
       oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
@@ -331,9 +343,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       ipPos: seats[n - 1]!.pos,
       ...(n === 3 ? { mid: { pos: seats[1]!.pos, range: seats[1]!.range } } : {}),
       ...(n === 2 && spec.huGrid ? { huGrid: spec.huGrid } : {}),
-      startingStreet: STREET[si]!,
+      startingStreet: STREET[k]!,
       ...(spec.rake ? { rake: spec.rake } : {}),
-      ...(fixedLevels ? { fixedLevels: { [STREET[si]!]: fixedLevels } } : {}),
+      ...(fixedLevels ? { fixedLevels: { [STREET[k]!]: fixedLevels } } : {}),
     };
     let ens = await gtowApi.ensureCustomSolution(treeInput);
     if (!ens.ok) return fail(`solve: ${ens.error}`);
@@ -350,7 +362,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
 
     for (let ti = 0; ti <= labels.length; ti++) {
       let nq = await gtowApi.customNode(ens.solId, {
-        [QKEY[si]!]: codes.join("-"),
+        [QKEY[k]!]: codes.join("-"),
         board: streetBoard,
       });
       // THE OWNING ACCOUNT HIT ITS DAILY WALL MID-WALK (a 429 on the poll). A solve lives on the account that
@@ -364,7 +376,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           ens = again;
           if (again.created) solves++;
           streetRec.solId = String(again.solId);
-          nq = await gtowApi.customNode(ens.solId, { [QKEY[si]!]: codes.join("-"), board: streetBoard });
+          nq = await gtowApi.customNode(ens.solId, { [QKEY[k]!]: codes.join("-"), board: streetBoard });
         }
       }
       if (!nq.ok) return fail(`node: ${nq.error}`);
@@ -383,7 +395,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const saidSeat = said0 && seats.some((s) => s.pos.toUpperCase() === said0.toUpperCase()) ? said0 : null;
       if (saidSeat && saidSeat.toUpperCase() !== seats[actor]!.pos.toUpperCase()) {
         return fail(
-          `the capture's line disagrees with the rotation at ${STREET[si]}#${ti}: it has ${saidSeat} acting, ` +
+          `the capture's line disagrees with the rotation at ${STREET[k]}#${ti}: it has ${saidSeat} acting, ` +
             `but ${seats[actor]!.pos} is to act after ${codes.join("-") || "the deal"} ` +
             `(seats ${seats.map((s) => s.pos).join("/")}) — the capture's actions are out of order`
         );
@@ -404,11 +416,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           return seats.length === 2 && (u === "BTN" || u === "SB") ? "BTN~SB" : u;
         };
         if (said && norm(String(said)) !== norm(seats[actor]!.pos)) {
-          return fail(`seat rotation disagrees with GTO Wizard at ${STREET[si]}#${ti}: we have ${seats[actor]!.pos} to act, the node says ${said}`);
+          return fail(`seat rotation disagrees with GTO Wizard at ${STREET[k]}#${ti}: we have ${seats[actor]!.pos} to act, the node says ${said}`);
         }
       }
       const nodeRec: ChainTraceNode = {
-        si, ti, street: STREET[si]!, board: streetBoard, codes: codes.slice(), actor,
+        si, ti, street: STREET[k]!, board: streetBoard, codes: codes.slice(), actor,
         potNode: r2(pot + st.potIn), invested: st.inv.slice(),
         actions: sols.map((a) => ({
           name: String(a.action?.display_name ?? "?"), code: String(a.action?.code ?? ""),
@@ -436,7 +448,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         // for it: every recorded trace had the answering street's walk at 0 ms and its real cost (~2.5 s p50 on
         // the river) showing up as unexplained time. Record it here. (2026-09-22)
         streetRec.walkMs = Date.now() - tWalk;
-        const line = [...walked, `(${STREET[si]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
+        const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace };
@@ -446,7 +458,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const ai = matchActionLoose(label, sols, stack);
       if (ai < 0) {
         const offered = sols.map((a) => a.action?.display_name ?? "?").join(", ");
-        return fail(`"${label}" not walkable at ${STREET[si]}#${ti} (offered: ${offered})`);
+        return fail(`"${label}" not walkable at ${STREET[k]}#${ti} (offered: ${offered})`);
       }
       const a = sols[ai]!;
       nodeRec.taken = ai;
@@ -462,7 +474,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const to = Number(a.action?.betsize);
         st.apply(kind, Number.isFinite(to) && to > 0 ? to : undefined);
       } catch (e) {
-        return fail(`${STREET[si]}#${ti}: ${e instanceof Error ? e.message : e}`);
+        return fail(`${STREET[k]}#${ti}: ${e instanceof Error ? e.message : e}`);
       }
       codes.push(String(a.action?.code ?? ""));
 
@@ -474,7 +486,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         pot += st.potIn;
         stack -= paid;
         seats = st.live.map((i) => seats[i]!);   // folded seats leave the hand
-        walked.push(`${STREET[si]!.toLowerCase()} ${codes.join("-")}`);
+        walked.push(`${STREET[k]!.toLowerCase()} ${codes.join("-")}`);
         if (seats.length < 2) return fail("everyone else folded — no decision left to solve");
         if (stack <= 0.005) return fail("line is all-in — no pending decision to solve");
         closed = true;
@@ -482,8 +494,15 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
     streetRec.walkMs = Date.now() - tWalk;
+    if (spec.walkThrough && isLast && closed) {
+      const rangesOut: Record<string, number[]> = {};
+      for (const x of seats) rangesOut[x.pos] = x.range;
+      const line = walked.join(" / ");
+      trace.result = { ok: true, potNode: r2(pot), stackStreet: stack, line, solves };
+      return { ok: true, data: null, potNode: r2(pot), stackStreet: stack, line, solves, trace, rangesOut };
+    }
     if (!closed && !isLast) {
-      return fail(`street ${STREET[si]} didn't close before the next card (missed action?)`);
+      return fail(`street ${STREET[k]} didn't close before the next card (missed action?)`);
     }
   }
   return fail("walk exhausted without reaching hero's node");

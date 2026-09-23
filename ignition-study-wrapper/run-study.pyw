@@ -59,6 +59,20 @@ def _opt(name: str) -> str | None:
 
 import os  # noqa: E402  (after the cache purge, before launch is imported)
 
+# MACHINE-LOCAL SETTINGS (2026-09-22): <repo>\config\local.env (template: local.env.example) - e.g. CP_HERO,
+# the CoinPoker screen name the log reader finds your seat by. KEY=VALUE, blanks and #-comments ignored; a value
+# already in the environment wins. The same file config\env.ps1 reads for the other launchers.
+_local_env = HERE.parent / "config" / "local.env"
+if _local_env.exists():
+    for _line in _local_env.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        _l = _line.split(" #", 1)[0].strip()
+        if not _l or _l.startswith("#") or "=" not in _l:
+            continue
+        _k, _v = (x.strip() for x in _l.split("=", 1))
+        _v = _v.strip('"')
+        if _k and _v and not os.environ.get(_k):
+            os.environ[_k] = _v
+
 if (_p := _opt("--panel-port")):
     os.environ["PANEL_PORT"] = _p
 if (_c := _opt("--cdp-port")):

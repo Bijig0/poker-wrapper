@@ -30,6 +30,21 @@ import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backg
 
 const app = new Hono();
 
+// PLAYER MODE (2026-09-22): the packaged install on someone else's laptop. They get the study answers (poller,
+// fastSolve, GTO Wizard token keeper) and the dashboard pages for their own sessions and hands. Everything that
+// runs the owner's solve fleet is off: no job dispatcher, no box keeper, no ledger / proposals / runbook pages,
+// no task board, no miss-queue sweeps or HRC plans. Set by the setup script in config\local.env.
+const playerMode = process.env.PLAYER_MODE === "1";
+if (playerMode) console.log("PLAYER_MODE=1: solve fleet off (no job dispatcher, box keeper, ledger/proposals/runbook/tasks)");
+app.get("/api/dashboard/config", (c) => c.json({ playerMode }));
+if (playerMode) {
+  // owner-only writes and pages answer 404 rather than half-working without the fleet behind them
+  const gone = (c: any) => c.json({ ok: false, error: "not part of this install (player mode)" }, 404);
+  app.use("/api/dashboard/miss-queue/*", async (c, next) => (c.req.method === "GET" ? next() : gone(c)));
+  app.use("/api/dashboard/tasks", gone);
+  app.use("/api/dashboard/tasks/*", gone);
+}
+
 // Middleware
 app.use("*", logger());
 app.use("*", cors());
@@ -50,7 +65,7 @@ app.route("/api/ai-study", aiStudyRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/dashboard/sources", sourcesRoutes);
 app.route("/api/dashboard/miss-queue", missQueueRoutes);
-app.route("/api/ledger", ledgerRoutes);
+if (!playerMode) app.route("/api/ledger", ledgerRoutes);
 app.route("/api/replay", replayRoutes);
 
 // The study tool UI — Reader Verify, Replay Review, State Tester, plus the
@@ -65,18 +80,28 @@ app.route("/", studyUiRoutes);
 // one of those serves the same HTML and the page picks the view — so a URL
 // can be bookmarked, reloaded, or pasted. (/replay stays the Replay Review
 // page itself, which the /review tab embeds.)
-const dashboardPage = () =>
-  new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-  });
+const PLAYER_HEAD = `<script>window.PLAYER_MODE = true;</script>
+<style>#tab-ledger, #tab-tasks, .fleet-only { display: none !important; }</style>`;
+const dashboardPage = async () => {
+  if (!playerMode) {
+    return new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
+  // player mode: the same page, told so before any of its script runs (no second copy of the page to drift)
+  const html = (await Bun.file(`${import.meta.dir}/dashboard.html`).text()).replace("</head>", `${PLAYER_HEAD}\n</head>`);
+  return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+};
 // The dashboard's stylesheet lives beside the page (dashboard.css) so it can be
 // read and edited as one file; served uncached, like the page, so an edit is live.
 app.get("/dashboard.css", () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.css`), {
     headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" },
   }));
-for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*", "/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*", "/tasks", "/tasks/*"]) {
-  app.get(p, dashboardPage);
+const OWNER_PAGES = ["/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*", "/tasks", "/tasks/*"];
+for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*", ...OWNER_PAGES]) {
+  if (playerMode && OWNER_PAGES.includes(p)) app.get(p, (c) => c.redirect("/", 302));
+  else app.get(p, dashboardPage);
 }
 // Old bookmarks and links still land on the dashboard.
 app.get("/dashboard", (c) => c.redirect("/", 301));
@@ -179,7 +204,7 @@ onBackgroundOwnership(() => {
   if (!dashboardOnly) gtowApi.startTokenKeeper();
 
   // The box keeper: keeps the HRC boxes solving on their own (relaunch HRC, restart a hung one, re-queue a failed shard).
-  if (!dashboardOnly) boxKeeper.start();
+  if (!dashboardOnly && !playerMode) boxKeeper.start();
 
   // Settles WHY a decision got no answer once its hand is archived: attaches the
   // failures the poller could not pin to a hand, and writes a no-probe row for a
@@ -189,7 +214,7 @@ onBackgroundOwnership(() => {
 
 // The ledger's job runner: one job per lane at a time, logs under data/jobs/. The timer always runs
 // (the routes read job rows through it); its dispatch tick is what the lock gates.
-jobs.start();
+if (!playerMode) jobs.start();
 
 export default {
   port,

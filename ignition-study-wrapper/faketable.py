@@ -242,6 +242,18 @@ def _seat(num: int, slot: int, s: dict, is_hero: bool, cap: int,
             f"letter-spacing:.3px;display:flex;align-items:center;justify-content:center;"
             f"padding-top:{STRIP['h']-STRIP['visible']}px'>{html.escape(str(badge))}</div>")
 
+    # A seat's STATUS word, drawn under the pill the way the client draws it
+    # ("SITTING OUT" for a sitter, "Waiting for big blind" for a joiner). Any
+    # seat can carry one — that is the point: the reader must attribute the
+    # word to the seat that shows it, never to hero (hand 4919080696).
+    status_word = ("SITTING OUT" if s.get("sittingOut")
+                   else "Waiting for big blind" if s.get("waitingForBB") else None)
+    if status_word:
+        strip += (
+            f"<div style='position:absolute;left:{PILL['x']}px;top:{PILL['y']+PILL['h']+2}px;"
+            f"width:{PILL['w']}px;text-align:center;color:#fff;font-size:11px;font-weight:700;"
+            f"letter-spacing:.3px;z-index:3'>{html.escape(status_word)}</div>")
+
     # Committed chips, in front of the seat, at this seat's own anchor. The
     # client keeps a "0 BB" chip on every seated player between actions: the
     # reader RECORDS it (and its vis() rejects opacity/visibility tricks, so
@@ -396,6 +408,21 @@ def render_inner(spec: dict) -> str:
             f"<div style='width:97.8px;height:24px;border-radius:8px;"
             f"background:rgba(255,255,255,.25);color:#fff;font-size:10px;font-weight:700;"
             f"display:flex;align-items:center;justify-content:center'>ALL-IN</div></div>")
+    # The client's bet field: the amount box the custom raise types into
+    # (launch.py raise_to finds it as the input in the strip's band and reads
+    # it back). Present whenever a bet or raise is offered. min/max mirror the
+    # client's clamp: below the offered size or above the stack the value is
+    # pulled back on change, which is what the strict readback must catch.
+    wager = offer.get("raise") if offer.get("raise") is not None else offer.get("bet")
+    if wager is not None:
+        lo = float(wager)
+        hi = float(offer.get("max") or 10_000)
+        strip.append(
+            f"<input data-qa='betInput' type='text' value='{lo:g}' "
+            f"data-min='{lo:g}' data-max='{hi:g}' "
+            f"style='width:{ACTION_BAR['btn_w']}px;height:{ACTION_BAR['btn_h']}px;border:0;"
+            f"border-radius:8px;background:rgba(0,0,0,0.55);color:#fff;font:inherit;"
+            f"font-size:14px;font-weight:600;text-align:center'>")
     sel_qa = {"X2.5": "x2.5Selector", "X3": "x3Selector", "X4": "x4Selector",
               "Pot": "potSelector", "1/3 Pot": "third_potSelector",
               "3/4 Pot": "threeQuarter_potSelector", "ALL-IN": "allInSelector"}
@@ -404,6 +431,10 @@ def render_inner(spec: dict) -> str:
 
     title = html.escape(spec.get("title") or "$1/$2 No Limit Hold'em")
     pot = _bb(spec.get("potBB"))
+    # offer.betFieldResets: the size the client snaps the bet field back to as an action
+    # button is pressed. Absent (the normal case) the field keeps what was typed.
+    _r = offer.get("betFieldResets")
+    reset_to = "null" if _r is None else f"{float(_r):g}"
     fw, fh = FELT
     # Bar height fits its rows: the action row (76 when the raise column
     # carries its ALL-IN chip, else a plain button row) plus the sizing row
@@ -438,6 +469,22 @@ def render_inner(spec: dict) -> str:
         f"<div style='position:absolute;left:24px;top:{fh + HEADER_H + 22}px;"
         f"color:#e8eded;font-size:14px;z-index:4'>{html.escape(str(strength))}</div>"
         if strength else "")
+
+    # A client NOTICE over the table (spec.modal = {text, ok}): the dark card
+    # with the message and one OK button, hooked modal.action.ok the way the
+    # client hooks it (session 100647 f00176: the buy-in maximum refusal). It
+    # sits above the action strip on purpose — that is the situation under test.
+    modal = spec.get("modal") or {}
+    modal_html = (
+        f"<div data-qa='modal' style='position:absolute;left:{ix + DESIGN[0]/2 - 210}px;"
+        f"top:{HEADER_H + iy + DESIGN[1]/2 - 40}px;width:420px;padding:22px 24px 18px;"
+        f"background:#120607;border-radius:6px;color:#fff;font-size:15px;text-align:center;"
+        f"z-index:50;box-shadow:0 4px 30px rgba(0,0,0,.6)'>"
+        f"<div style='margin-bottom:18px'>{html.escape(str(modal.get('text') or ''))}</div>"
+        f"<button data-qa='modal.action.ok' style='width:100%;height:40px;border:0;border-radius:4px;"
+        f"background:#fff;color:#111;font:inherit;font-weight:700;cursor:pointer'>"
+        f"{html.escape(str(modal.get('ok') or 'OK'))}</button></div>"
+        if modal.get("text") else "")
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -476,6 +523,7 @@ def render_inner(spec: dict) -> str:
     {seat_html}
   </div>
   {strength_html}
+  {modal_html}
   <div style='position:absolute;left:0;right:0;top:{fh + HEADER_H}px;
        height:{bar_h}px;background:rgba(0,0,0,.35);display:flex;
        flex-direction:column;align-items:center;justify-content:center;gap:6px'>
@@ -494,24 +542,86 @@ def render_inner(spec: dict) -> str:
   // Echo every button click so the relay test can assert what actually fired.
   // Recorded on BOTH windows: the buttons live in this frame, but the CDP
   // page target the reader drives is the top document.
+  // THE CLIENT TAKING THE TYPED SIZE BACK AS THE CLICK LANDS (offer.betFieldResets).
+  // Ignition re-renders the action strip on its own state ticks; on 2026-09-19 hand
+  // 4919212912 that landed between raise_to's readback (10.5, correct) and the RAISE
+  // click, so the confirmed size was the 4 bb minimum. Modelled on mousedown because
+  // that is deterministic — the real race is not, and a test of a race is a flake.
+  const RESET_TO = {reset_to};
+  if (RESET_TO !== null) {{
+    document.querySelectorAll("button[data-qa$='Button']").forEach(b =>
+      b.addEventListener('mousedown', () => {{
+        const bi2 = document.querySelector("input[data-qa='betInput']");
+        if (bi2) bi2.value = String(RESET_TO);
+      }}, true));
+  }}
   document.querySelectorAll('button[data-qa]').forEach(b => b.addEventListener('click', () => {{
-    const hit = {{ qa: b.getAttribute('data-qa'), text: b.innerText, t: Date.now() }};
+    const inp = document.querySelector("input[data-qa='betInput']");
+    const hit = {{ qa: b.getAttribute('data-qa'), text: b.innerText, t: Date.now(),
+                  // what the bet field held when the button was pressed — the
+                  // relay test asserts the typed size reached the client
+                  betValue: inp ? inp.value : null }};
     window.__lastClick = hit;
     try {{ window.parent.__lastClick = hit; }} catch (e) {{}}
   }}));
+  // The client's clamp: a typed amount outside [min, max] is pulled back to
+  // the bound. insertText fires 'input'; clamp there so a readback sees it.
+  const bi = document.querySelector("input[data-qa='betInput']");
+  if (bi) bi.addEventListener('input', () => {{
+    const v = parseFloat(bi.value), lo = parseFloat(bi.dataset.min), hi = parseFloat(bi.dataset.max);
+    if (!isNaN(v) && v < lo) bi.value = String(lo);
+    else if (!isNaN(v) && v > hi) bi.value = String(hi);
+  }});
 </script>
 </body></html>"""
 
 
-def render_outer(frame_url: str) -> str:
-    """The top page: an iframe whose src carries `playMode`, which is how
-    _TABLE_JS locates the table frame. `playMode=fun` marks it practice."""
-    return f"""<!doctype html><html><head><meta charset=utf-8>
+def render_outer(frame_url: str, tables: int = 1, ports: list[int] | None = None) -> str:
+    """The top page: one iframe per table, each carrying `playMode` (how the
+    reader finds a table frame) and `data-multitableslot` (how it tells one
+    table from another).
+
+    THE REAL CLIENT'S SHAPE, because the rig is worth nothing if it is not.
+    Ignition seats up to four tables in ONE page as sibling same-origin iframes
+    tagged `data-multitableslot=0..3`, all live at once, tiled by the client
+    itself: two side by side, four as a 2x2. Testing multi-table against a rig
+    that renders ONE frame is how a reader that always reads table 1 passes.
+
+    One table renders exactly the single iframe this always did, attribute and
+    all — the null-slot reader finds it by playMode as before."""
+    n = tables if tables in (1, 2, 4) else 1
+    if n == 1:
+        # BYTE-FOR-BYTE what this rig has always served. One table is the path
+        # every existing test runs on, so it must not acquire a grid wrapper it
+        # never had just because the multi-table shape exists — a rig that drifts
+        # is a rig whose failures you cannot attribute.
+        return f"""<!doctype html><html><head><meta charset=utf-8>
 <title>Fake Ignition Table (test)</title>
 <style>html,body{{margin:0;height:100%;background:#0b1416}}
 iframe{{border:0;width:100%;height:100vh;display:block}}</style>
 </head><body>
 <iframe src="{html.escape(frame_url)}"></iframe>
+</body></html>"""
+    cols, rows = 2, (1 if n == 2 else 2)
+    # ONE ORIGIN FOR EVERY FRAME, because that is what the real client is and it
+    # is the whole reason the tables are readable at all: same-origin iframes let
+    # the top document reach into each one. Serving each frame from its own
+    # wrapper PORT looked tidier and quietly broke it — a different port is a
+    # different origin, so `contentDocument` came back null and three of four
+    # tables read as "not seated" (2026-09-20). The slot in the query string is
+    # how one frame differs from the next; the origin must not.
+    cells = "".join(
+        f'<iframe title="Table slot" data-multitableslot="{i}" '
+        f'src="{html.escape(frame_url)}{"&" if "?" in frame_url else "?"}slot={i}"></iframe>'
+        for i in range(n))
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<title>Fake Ignition Table (test)</title>
+<style>html,body{{margin:0;height:100%;background:#0b1416}}
+.wrap{{display:grid;grid-template-columns:repeat({cols},1fr);grid-template-rows:repeat({rows},1fr);
+       width:100%;height:100vh;gap:2px}}
+iframe{{border:0;width:100%;height:100%;display:block}}</style>
+</head><body>
+<div class="wrap">{cells}</div>
 </body></html>"""
 
 

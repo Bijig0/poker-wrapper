@@ -69,9 +69,9 @@ export interface OpponentLayer {
 /** The pieces a whole-hand strategy is assembled from, in the order the hand
  *  is played. Surfaced by the registry so the Pieces page can group sources. */
 export const PIECES = [
-  { id: "preflop", label: "Preflop", what: "every decision before the flop: opens, 3-bets, calls, folds", sources: ["exploit-preflop", "hrc-3max", "hrc-6max", "gtow-charts"] },
+  { id: "preflop", label: "Preflop", what: "every decision before the flop: opens, 3-bets, calls, folds", sources: ["exploit-preflop", "hrc-3max", "hrc-6max", "hrc-hu", "gtow-charts"] },
   { id: "postflop", label: "Postflop", what: "flop, turn and river play from the range the preflop piece arrives with", sources: ["mes-postflop", "gtow-ai", "gtow-library"] },
-  { id: "opponent", label: "Opponent model", what: "what hero assumes the villains do; the MES pieces are best-responses to exactly one of these", sources: ["pool-model", "hrc-3max", "hrc-6max"] },
+  { id: "opponent", label: "Opponent model", what: "what hero assumes the villains do; the MES pieces are best-responses to exactly one of these", sources: ["pool-model", "hrc-3max", "hrc-6max", "hrc-hu"] },
   { id: "ground-truth", label: "Ground truth", what: "not a piece: the evidence the pieces are graded against", sources: ["log"] },
 ] as const;
 
@@ -103,6 +103,11 @@ const PREFLOP: Record<string, PreflopLayer> = {
     // 2026-09-19: what the charts cannot answer (2-5 seats, off-tree sizes, past the ladder, limped pots,
     // straddles) is solved live by GTO Wizard AI preflop (Ultra) from the actual table — services/gtowAiPreflop.ts
     fallbackSource: "gtow-ai-preflop", fallbackLabel: "GTO Wizard AI preflop (Ultra, live cloud solve of the actual table)" },
+  // CoinPoker HEADS-UP NL200 (ledger config grid-cp200hu, 137 HRC trees solved 2026-09-17..19): blinds 0.5/1,
+  // ANTE 0.2bb per player, rake 5% cap 0.9bb no flop no drop, SB limp in every tree, 20-150bb, opens 2/2.5/3x
+  // with two or three 3-bet sizes each. Routed by services/hrc2max.ts (depth, open, 3-bet).
+  chartHuCp200: { id: "chart-hu-cp200", label: "GTO preflop (HRC CoinPoker NL200 heads-up charts, ante 0.2bb, 5% / cap 0.9bb)", short: "GTO pre HU",
+    arrival: "chart", source: "hrc-hu", seats: 2, chartConfigs: ["grid-cp200hu"] },
 };
 const POSTFLOP: Record<string, PostflopLayer> = {
   // locked at the NL25 rake schedule (5%, cap 4bb) behind the NL25 Zone pool ranges
@@ -115,6 +120,7 @@ const OPPONENT: Record<string, OpponentLayer> = {
   pool: { id: "pool", label: "Measured pool (pool_model + villain_freqs)", short: "pool", source: "pool-model" },
   gto: { id: "gto", label: "Equilibrium villains (chart ranges)", short: "GTO villains", source: "hrc-3max" },
   gto6max: { id: "gto", label: "Equilibrium villains (6-max chart ranges)", short: "GTO villains", source: "hrc-6max" },
+  gtoHu: { id: "gto", label: "Equilibrium villain (heads-up chart ranges)", short: "GTO villain", source: "hrc-hu" },
 };
 
 // ---- catalogue ------------------------------------------------------------
@@ -126,12 +132,30 @@ export interface StrategyDef {
   format: string; stake: "nl25" | "nl200";
   /** wrapper formats.json ids the session may be declared in (practice tables always allowed) */
   formats: string[]; defaultFormat: string;
+  /** TEST-STAKE formats (also listed in `formats`): a cheaper real table of the same shape the strategy
+   *  may be declared at to exercise the reader / answers / relay. The answers are NOT re-solved for it —
+   *  the session is tagged `test` and kept out of the strategy's evidence (see TEST_FORMATS). */
+  testFormats?: string[];
   /** ids this strategy was called before 2026-09-12 (sessions + answers were tagged with them);
    *  "vanguard" (exploit preflop + GTO postflop) and "mirage" (the mis-specified demo) were removed
    *  2026-09-12 — vanguard sessions fold into the exploit strategy, mirage ones become untagged */
   legacyIds?: string[];
 }
 const PRACTICE = ["ign-practice-ring", "ign-practice-zone"];
+/**
+ * Test stakes (Brady, 2026-09-23): a real table far cheaper than the one the strategy was built for,
+ * so the reader and the relay can be tested without NL200 money. Keyed by the wrapper's formats.json
+ * id; `bbCents` is how a hand from one is recognised when only its blinds are known (miss queue).
+ * The 6-max answers are stake-blind by construction (SITE_6MAX and fastSolve's rake6 are fixed at
+ * NL200), so a test table gets exactly the NL200 answer — which is the point.
+ */
+export const TEST_FORMATS: Record<string, { testOf: string; bbCents: number }> = {
+  "ign-ring-NL5-6": { testOf: "ign-ring-NL200-6", bbCents: 5 },
+};
+export const isTestFormat = (fid: string | null | undefined): boolean => !!fid && fid in TEST_FORMATS;
+/** A hand played at a test stake of `ofFormat`, recognised by its big blind. */
+export const isTestStakeOf = (ofFormat: string, bbCents: number | null | undefined): boolean =>
+  bbCents != null && Object.values(TEST_FORMATS).some((t) => t.testOf === ofFormat && t.bbCents === bbCents);
 // Named by site · stake · game · seats · what it plays. One entry per real, playable
 // combination; the ids are stable and the names are what the table, the setup page
 // and the dashboard show.
@@ -154,7 +178,16 @@ export const STRATEGIES: StrategyDef[] = [
   { id: "ign200-ring-6max-equilibrium", name: "Ignition 200NL Ring 6-max Equilibrium",
     tagline: "Equilibrium only — our own NL200 6-max HRC charts preflop (5% / cap 2bb) at 4-6 seats, GTO Wizard AI preflop for everything they cannot answer (a table thinned to 2-3 seats, off-tree sizes, past the ladder, limps, straddles), GTO Wizard AI postflop conditioned on whichever of the two answered; no pool model, and no 3-max corpus pending a re-solve of its shallow rungs",
     preflop: "chart6maxNl200", postflop: "gto", opponent: "gto6max", matrixRow: "eq_eq_6max",
-    format: "ign-6max-nl200", stake: "nl200", formats: ["ign-ring-NL200-6", ...PRACTICE], defaultFormat: "ign-ring-NL200-6" },
+    format: "ign-6max-nl200", stake: "nl200", formats: ["ign-ring-NL200-6", "ign-ring-NL5-6", ...PRACTICE], defaultFormat: "ign-ring-NL200-6",
+    testFormats: ["ign-ring-NL5-6"] },
+  // CoinPoker 200NL heads-up (Brady, 2026-09-22). Equilibrium end to end: our own HRC heads-up charts preflop
+  // (the ante and rake the table plays), GTO Wizard AI heads-up postflop (the Elite session) conditioned on those
+  // charts' ranges, with the antes in the pot and CoinPoker's cap. No GTO Wizard library anywhere — that is
+  // NL500 with no ante. Heads-up only: a table with a third player gets no answer, said so.
+  { id: "cp200-hu-equilibrium", name: "CoinPoker 200NL Heads-Up Equilibrium",
+    tagline: "Equilibrium only — our own CoinPoker NL200 heads-up HRC charts preflop (ante 0.2bb, 5% / cap 0.9bb, 20-150bb), GTO Wizard AI heads-up postflop conditioned on their ranges at the same ante and rake; heads-up tables only, no pool model",
+    preflop: "chartHuCp200", postflop: "gto", opponent: "gtoHu", matrixRow: "eq_eq_hu_cp200",
+    format: "cp-hu-nl200", stake: "nl200", formats: ["cp-hu-NL200"], defaultFormat: "cp-hu-NL200" },
 ];
 /** The full-exploit strategy: a hand that got any MES postflop answer proves both layers were live. */
 export const FULL_EXPLOIT_ID = "ign25-zone-3max-exploit";
@@ -360,6 +393,8 @@ export function strategyIdForAnswer(a: { strategy_mode?: string | null; source?:
   // session's declared strategy (sessionsStore) overrides this heuristic anyway
   if (mode === "chart") {
     if (a.bb_cents !== 200) return null;
+    // two seats at a $2 big blind is the CoinPoker heads-up table (Ignition deals no NL200 heads-up cash)
+    if (a.table_seats === 2) return "cp200-hu-equilibrium";
     return (a.table_seats ?? 3) > 3 ? "ign200-ring-6max-equilibrium" : "ign200-zone-3max-equilibrium";
   }
   return null;

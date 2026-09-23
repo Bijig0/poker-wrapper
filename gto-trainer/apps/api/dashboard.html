@@ -180,7 +180,7 @@ function renderHands() {
     const disc = (h.integrityFaults ? `<span class="badge b-severe" title="an answer in this hand disagreed with its own mix — see the hand page">${h.integrityFaults}!</span>` : "")
       + (d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?");
     return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
-      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "ign25-zone-3max-exploit" ? "good" : ""}">${esc(h.strategy.name)}</span>` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
+      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "ign25-zone-3max-exploit" ? "good" : ""}">${esc(h.strategy.name)}</span>${h.strategy.test ? ' <span class="chip warn" title="declared at a test stake: this strategy answering on a cheaper table">test</span>' : ""}` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
       <td>${h.table == null ? '<span class="sub">—</span>' : `<span class="chip">T${h.table}</span>`}</td>
       <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td>${ansChip(h.answerStatus)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
   }).join("");
@@ -391,6 +391,7 @@ const SOURCE_INFO = {
   "pool-exploit-preflop": { label: "3-handed Zone 25NL preflop exploit charts", card: "exploit-preflop", mode: "mes" },
   "hrc-3max-preflop": { label: "HRC 3-max asymmetric grid", card: "hrc-3max", mode: "gto" },
   "hrc-6max-preflop": { label: "HRC 6-max NL200 ring charts", card: "hrc-6max", mode: "gto" },
+  "hrc-hu-preflop": { label: "HRC CoinPoker NL200 heads-up charts", card: "hrc-hu", mode: "gto" },
   "gtow-ai-preflop": { label: "GTO Wizard AI preflop (Ultra) — fallback for what the charts cannot answer", card: "gtow-ai-preflop", mode: "gto" },
   "local-preflop": { label: "GTO Wizard crawled charts", card: "gtow-charts", mode: "gto" },
   "mes-postflop": { label: "MES locked flop solves", card: "mes-postflop", mode: "mes" },
@@ -1492,6 +1493,9 @@ function hmSystem(h) {
     null,
     "answered and failed study answers over the last seven days, with the slowest tier's p90 latency"));
 
+  // player mode (the packaged install): no solve fleet, so no miss queue / boxes / jobs cards
+  if (window.PLAYER_MODE) return `<section class="hm-sys">${cards.join("")}</section>`;
+
   // 4 — preflop has no live solver: every miss is written down instead
   const mq = h.missQueue;
   const topKind = mq ? Object.entries(mq.byKind || {}).sort((x, y) => y[1] - x[1])[0] : null;
@@ -1944,9 +1948,9 @@ function renderMissQueue() {
       <select id="mq-filter" onchange="mqFilter=this.value;renderMissQueue()">
         ${[["active", "open + queued"], ["all", "everything"], ["open", "open"], ["queued", "queued"], ["solved", "solved"], ["dismissed", "dismissed"]].map(([v, l]) => `<option value="${v}" ${mqFilter === v ? "selected" : ""}>${l}</option>`).join("")}
       </select>
-      <button class="mini" onclick="mqSweep('archive')" ${sw.running ? "disabled" : ""} title="walk every hero preflop decision in hands.db through the charts">sweep archive</button>
-      <button class="mini" onclick="mqSweep('corpus')" ${sw.running || !MQ.corpus ? "disabled" : ""} title="walk every preflop node of the 4k-hand Zone corpus through the charts (all actors) — minutes">sweep 4k corpus</button>
-      <button class="mini" onclick="mqPlan()" ${(bs.queued || 0) ? "" : "disabled"} title="write one HRC plan per queued job + a runner queue">write HRC plan (${bs.queued || 0} queued)</button>
+      <button class="mini fleet-only" onclick="mqSweep('archive')" ${sw.running ? "disabled" : ""} title="walk every hero preflop decision in hands.db through the charts">sweep archive</button>
+      <button class="mini fleet-only" onclick="mqSweep('corpus')" ${sw.running || !MQ.corpus ? "disabled" : ""} title="walk every preflop node of the 4k-hand Zone corpus through the charts (all actors) — minutes">sweep 4k corpus</button>
+      <button class="mini fleet-only" onclick="mqPlan()" ${(bs.queued || 0) ? "" : "disabled"} title="write one HRC plan per queued job + a runner queue">write HRC plan (${bs.queued || 0} queued)</button>
       ${sweepHtml}
     </div>
     <h2 style="margin-top:14px">Suggested HRC jobs <span class="sub">— ${jobs.length} distinct, by decisions covered${jobs.length > 25 && !mqShowAllJobs ? ` · showing 25 <a href="#" onclick="mqShowAllJobs=true;renderMissQueue();return false">show all</a>` : ""}</span></h2>
@@ -2232,17 +2236,21 @@ function renderCatalog(keepFocus) {
     <div class="card">
       <h2>${rows.length} chart${rows.length === 1 ? "" : "s"}${shown.length < rows.length ? ` <span class="sub">— showing the first ${shown.length}</span>` : ""}</h2>
       ${rows.length ? `<table><thead><tr><th>chart</th><th>stacks</th><th>nodes</th><th>stored</th><th>used by</th><th></th></tr></thead><tbody>
-      ${shown.map((e) => `<tr class="catrow">
-        <td><div>${esc(e.name)}</div><div class="mono sub" title="${esc(e.location)}">${esc(e.id)}</div></td>
+      ${shown.map((e) => {
+        const canToggle = e.source === "hrc" && !(seat && catSeatLine(e, seat) == null);
+        const toggle = canToggle ? `catNode(${catArg(e.id)}, ${seat ? catArg(seat) : "null"})` : "";
+        return `<tr class="catrow">
+        <td${canToggle ? ` class="cat-name-cell" onclick="${toggle}" title="click to expand/collapse"` : ""}><div>${esc(e.name)}</div><div class="mono sub" title="${esc(e.location)}">${esc(e.id)}</div></td>
         <td>${esc(stacksStr(e))}</td>
         <td class="num">${e.nodes ?? "—"}</td>
         <td>${e.source !== "hrc" ? '<span class="sub">bundled</span>' : e.cachedLocally ? "✓ disk" : '<span class="sub">R2</span>'}</td>
         <td>${e.routed ? `<span class="badge b-info">${esc(e.routed)}</span>` : '<span class="sub">browse-only</span>'}</td>
         <td>${e.source !== "hrc" ? "" : seat && catSeatLine(e, seat) == null
           ? `<span class="sub">no ${esc(seat)} at this table</span>`
-          : `<button class="mini" onclick="catNode(${catArg(e.id)}, ${seat ? catArg(seat) : "null"})">${seat ? `${esc(seat)} first in ↓` : "root ↓"}</button>`}</td>
+          : `<button class="mini" onclick="event.stopPropagation();catNode(${catArg(e.id)}, ${seat ? catArg(seat) : "null"})">${seat ? `${esc(seat)} first in ↓` : "root ↓"}</button>`}</td>
       </tr>
-      <tr class="catnode" id="catnode-${esc(e.id)}" hidden><td colspan="6"></td></tr>`).join("")}
+      <tr class="catnode" id="catnode-${esc(e.id)}" hidden><td colspan="6"></td></tr>`;
+      }).join("")}
       </tbody></table>` : `<div class="sub">Nothing matches all of those. Take a chip off — the counts on each chip say how many charts it would leave.</div>`}
     </div>`;
 
@@ -2636,7 +2644,8 @@ async function lgLog(id, quiet) {
 /* ================= Sessions (declared by the wrapper's setup page) ================= */
 const PRESET_LABEL = { "study-mes": "Study answers · MES (generic)", "study-gto": "Study answers · GTO (generic)", silent: "Silent play", "capture-qa": "Capture QA", "test-rig": "Test rig" };
 // a "strategy:<id>" preset is one of the whole-hand strategies (Sources → Strategies); name it and link it
-const presetLabel = (p, x) => p && p.startsWith("strategy:") ? (x?.strategyName || x?.config?.strategyName || p.slice(9).replace(/^./, (c) => c.toUpperCase())) : (PRESET_LABEL[p] ?? (p ?? "undeclared"));
+// a session declared at a TEST STAKE (strategies.ts TEST_FORMATS) says so wherever its name is shown
+const presetLabel = (p, x) => (p && p.startsWith("strategy:") ? (x?.strategyName || x?.config?.strategyName || p.slice(9).replace(/^./, (c) => c.toUpperCase())) : (PRESET_LABEL[p] ?? (p ?? "undeclared"))) + (x?.test ? " · TEST STAKE" : "");
 /* One session's display NAME. The wrapper's setup wizard has an optional Label
    field (setup.html) and it is what a session is called when it is filled in;
    every real play session leaves it empty, and the old fallback named the
@@ -3232,6 +3241,10 @@ function renderStrategyCards() {
 }
 /** "How it answers every spot" + its holes + what would fill them (services/strategyCoverage.ts; live counts from the
  *  approximations register, joined server-side in /sources/strategies). Empty for strategies without a map. */
+/** "9.5h" / "35 min" / "2.3d" */
+function fmtDur(h) { if (h == null || !isFinite(h)) return "?"; if (h < 1) return `${Math.round(h * 60)} min`; if (h < 48) return `${(Math.round(h * 10) / 10)}h`; return `${(h / 24).toFixed(1)}d`; }
+/** a finish time in the viewer's own clock: "Wed 03:40" */
+function fmtAt(t) { if (!t) return "?"; const d = new Date(t); return d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }); }
 function coverageCards(s) {
   const cov = s.coverage;
   if (!cov) return "";
@@ -3246,9 +3259,11 @@ function coverageCards(s) {
     const parts = m.filter((a) => a.fires > 0).map((a) => `${esc(a.id)} ${a.fires}`).join(" · ");
     return `<div class="cov-fired"><span class="cov-label">fired ${cov.days}d</span><b class="${n ? "" : "zero"}">${n}</b>${parts}</div>`;
   };
+  const STATE = { exact: "Exact", approx: "Approximate", none: "No answer" };
+  const badge = (st) => `<span class="cov-state ${st}">${STATE[st] || st}</span>`;
   const row = (r) => `
-    <div class="cov-row">
-      <div class="cov-spot"><h4>${esc(r.spot)}</h4>${fired(r.approxLive)}</div>
+    <div class="cov-row ${r.state}" id="cov-${esc(r.id)}">
+      <div class="cov-spot">${badge(r.state)}<h4>${esc(r.spot)}</h4>${fired(r.approxLive)}</div>
       <div class="cov-by"><span class="cov-label">answered by</span>${esc(r.source)}</div>
       <div class="cov-how">${esc(r.how)}</div>
       ${r.example ? `<div class="cov-box example"><span class="cov-label">example</span>${esc(r.example)}</div>` : ""}
@@ -3263,7 +3278,92 @@ function coverageCards(s) {
       ${sec.rows.map(row).join("")}
     </div>`;
   const holes = (cov.holes || []).filter((h) => h.status !== "by-design");
+  // AT A GLANCE: every spot class, its state and its piece, grouped — each row jumps to its detail below
+  const all = cov.sections.flatMap((sec) => sec.rows);
+  const tally = ["exact", "approx", "none"].map((st) => `<span>${badge(st)} <b>${all.filter((r) => r.state === st).length}</b></span>`).join("");
+  const jump = (id) => `document.getElementById('cov-${id}').scrollIntoView({behavior:'smooth',block:'start'});return false`;
+  const index = `
+    <div class="card cov">
+      <div class="cov-head"><h3>At a glance</h3><span class="cov-kicker">every kind of spot, what you get, and which piece answers it — click one for the detail</span></div>
+      <div class="cov-tally">${tally}</div>
+      <table class="cov-index"><thead><tr><th style="width:130px">state</th><th>spot</th><th style="width:34%">answered by</th></tr></thead><tbody>
+      ${cov.sections.map((sec) => `<tr class="group"><td colspan="3">${esc(sec.title)}</td></tr>` + sec.rows.map((r) => `<tr>
+        <td>${badge(r.state)}</td><td><a href="#cov-${esc(r.id)}" onclick="${jump(esc(r.id))}">${esc(r.spot)}</a></td><td class="by">${esc(r.source)}</td></tr>`).join("")).join("")}
+      </tbody></table>
+    </div>`;
+  // THE WORK QUEUE: the strategy's open miss-queue rows, one line per chart that would fix them (services/strategyQueue.ts)
+  const q = cov.queue || { groups: [], solves: [], excludedSynthetic: 0 };
+  const ago = (t) => { const h = (Date.now() - t) / 3.6e6; return h < 24 ? `${Math.max(1, Math.round(h))}h ago` : `${Math.round(h / 24)}d ago`; };
+  const rollup = {};
+  for (const g of q.groups) { const r = (rollup[g.change] ??= { charts: 0, hits: 0, pri: 0, flight: 0 }); r.charts++; r.hits += g.hits; r.pri += g.priority; if (g.inFlight) r.flight++; }
+  const QSHOW = 20;
+  const qrow = (g) => `<tr class="${g.inFlight ? "flight" : ""}">
+      <td class="pri">${g.priority}</td>
+      <td><div class="chart">${esc(g.chart)}</div><div class="muted">${esc(g.change)}${g.inFlight ? " · <b>being solved</b>" : ""}</div></td>
+      <td class="num"><b>${g.hits}</b><div class="muted">${ago(g.lastSeen)}</div></td>
+      <td><span class="cov-sev s${g.severity}">S${g.severity}</span> ${esc(g.distance)}
+        <div class="muted">${g.evCost ? `EV: ${esc(g.evCost)}` : "EV cost: not measured"}</div></td>
+      <td class="muted">${g.details.slice(0, 3).map(esc).join("<br>")}${g.details.length > 3 ? `<br>+${g.details.length - 3} more` : ""}</td></tr>`;
+  const queueCard = `
+    <div class="card cov" id="cov-queue">
+      <div class="cov-head"><h3>Work queue</h3><span class="cov-kicker">every approximation real hands hit, grouped by the chart that would remove it · from the miss queue, ${q.excludedSynthetic} stress-test hits left out</span></div>
+      <span class="cov-label" style="margin-top:10px">on the boxes now — live, with estimated finish</span>
+      <div class="muted" style="font-size:12.5px;margin-bottom:6px">Ignition NL200 6-max charts always run first on every box (the box queue enforces it). Estimates come from measured wall times; a tree shape we have not timed yet says so.</div>
+      ${(q.boxes || []).map((b) => `<div class="cov-box" style="background:var(--surface2);border-left:3px solid ${b.nowSolving ? "var(--info)" : "var(--line)"};max-width:none">
+        <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+          <b style="font-family:var(--font-head);font-size:15px">${esc(b.box)}</b>
+          ${b.nowSolving
+            ? `<span class="cov-state" style="background:var(--info-soft);color:var(--info)">solving now</span>
+               <span class="chart" style="font-family:var(--font-mono);font-size:12.5px">${esc(b.nowSolving.chart)}</span>
+               <span class="muted">${esc(b.nowSolving.phase || "")} · running ${fmtDur(b.nowSolving.sinceMin / 60)} · done ≈ <b>${fmtAt(b.nowSolving.finishAt)}</b></span>`
+            : `<span class="cov-state" style="background:var(--surface3);color:var(--muted)">${b.queue.length ? "starting / between charts" : "idle"}</span>`}
+          <span class="muted" style="margin-left:auto">box free ≈ <b>${b.queue.length ? fmtAt(b.freeAt) : "now"}</b></span>
+        </div>
+        ${b.queue.length ? `<table class="cov-q" style="margin-top:6px"><tbody>${b.queue.map((it, i) => `<tr>
+          <td style="width:28px" class="muted">${i + 1}.</td>
+          <td><b>${esc(it.planDir === "patch-live" ? (it.id || "patch") : it.planDir)}${it.shard ? ` · shard ${esc(it.shard)}` : ""}</b>
+            <span class="cov-sev s${it.tier === 0 ? 3 : it.tier === 1 ? 2 : 1}" title="${esc(it.tierLabel || "")}">T${it.tier ?? 2}</span>
+            <div class="muted">${esc(it.serves || it.note || "")}</div></td>
+          <td style="width:110px"><span class="cov-state ${it.status === "running" ? "approx" : "exact"}" style="${it.status === "running" ? "" : "background:var(--surface3);color:var(--muted)"}">${esc(it.status)}</span></td>
+          <td class="num" style="width:80px"><b>${it.done}/${it.charts}</b><div class="muted">charts</div></td>
+          <td class="num" style="width:150px">${fmtDur(it.hoursLeft)} left<div class="muted">done ≈ ${fmtAt(it.finishAt)}</div></td></tr>`).join("")}</tbody></table>` : ""}
+      </div>`).join("")}
+      ${(q.waiting || []).length ? `<span class="cov-label" style="margin-top:14px">waiting for the next free box</span>
+        ${(q.waiting || []).map((w) => `<div class="cov-box" style="background:var(--surface2);max-width:none">
+          <span class="cov-sev s${w.tier === 0 ? 3 : w.tier === 1 ? 2 : 1}">T${w.tier}</span> <b>${esc(w.label)}</b> — ${w.charts} chart${w.charts === 1 ? "" : "s"}${w.limp ? ` (${w.limp} limp trees: Windows boxes only)` : ""} · ≈${fmtDur(w.hours)} of box time
+          <div class="muted" style="font-size:12.5px;margin-top:4px">next: ${w.next.map(esc).join(" · ")}${w.charts > w.next.length ? " …" : ""}</div></div>`).join("")}
+        <div class="muted" style="font-size:12.5px;margin:4px 0 0">Tiers: T0 fixes a spot that gets no answer · T1 removes an approximation a live session hit (queued automatically within a minute, two charts per state: capped at 100bb and exact to 5bb) · T2 other 6-max work. A free box always takes the lowest tier, most-hit chart first.</div>` : ""}
+      <span class="cov-label" style="margin-top:18px">by kind of work</span>
+      <table class="cov-q"><thead><tr><th>work</th><th class="num">charts</th><th class="num">real hits</th><th class="num">priority</th></tr></thead><tbody>
+      ${Object.entries(rollup).sort((a, b) => b[1].pri - a[1].pri).map(([k, r]) => `<tr><td>${esc(k)}${r.flight ? ` <span class="muted">(${r.flight} being solved)</span>` : ""}</td><td class="num">${r.charts}</td><td class="num">${r.hits}</td><td class="num pri" style="font-size:14px">${r.pri}</td></tr>`).join("")}
+      </tbody></table>
+      <span class="cov-label" style="margin-top:18px">by chart — highest priority first</span>
+      <div class="muted" style="font-size:12.5px;margin-bottom:4px">Priority = real hits × severity. Severity: S3 a big input gap (a ≤50bb short stack ignored), S2 a real gap (a size 1.5x+ off, a ≥15bb stack gap, a player folded by the line fit, a stack past 150bb), S1 a small one. EV is shown only where it was measured — today that is the size snap alone.</div>
+      <table class="cov-q"><thead><tr><th style="width:60px">priority</th><th style="width:30%">chart needed</th><th class="num" style="width:80px">hits</th><th>how far off</th><th style="width:22%">states seen</th></tr></thead>
+        <tbody id="cov-q-body">${q.groups.slice(0, QSHOW).map(qrow).join("")}</tbody></table>
+      ${q.groups.length > QSHOW ? `<button class="mini" style="margin-top:10px" onclick="document.getElementById('cov-q-body').innerHTML=window.__covQ.map(window.__covQRow).join('');this.remove()">show all ${q.groups.length}</button>` : ""}
+    </div>`;
+  window.__covQ = q.groups; window.__covQRow = qrow;
+  // RECENTLY SOLVED: every chart of the strategy solved in the last month, from the solve records (never the catalog
+  // file dates — the 2026-09-22 re-export rewrote them all)
+  const recent = q.recent || [];
+  const RSHOW = 25;
+  const rrow = (x) => `<tr><td class="muted" style="white-space:nowrap">${fmtAt(x.at)}<div>${new Date(x.at).toLocaleDateString([], { month: "short", day: "numeric" })}</div></td>
+      <td><div class="chart">${esc(x.id)}</div><div class="muted">${esc(x.pass)}${x.when === "landed" ? " · landed (no solve record)" : ""}</div></td>
+      <td class="muted">${esc(x.box || "—")}</td>
+      <td>${x.live ? '<span class="cov-state exact">used live</span>' : x.inCatalog ? '<span class="cov-state approx" title="in the chart catalog, but the live picker does not reach this chart family yet">not wired yet</span>' : '<span class="cov-state" style="background:var(--surface3);color:var(--muted)">landed, not in catalog</span>'}</td></tr>`;
+  const recentCard = `
+    <div class="card cov" id="cov-recent">
+      <div class="cov-head"><h3>Recently solved</h3><span class="cov-kicker">${recent.length} chart solve${recent.length === 1 ? "" : "s"} in the last month · newest first · "used live" = the chart picker reaches it today</span></div>
+      <table class="cov-q"><thead><tr><th style="width:110px">solved</th><th>chart</th><th style="width:80px">box</th><th style="width:150px">status</th></tr></thead>
+        <tbody id="cov-r-body">${recent.slice(0, RSHOW).map(rrow).join("")}</tbody></table>
+      ${recent.length > RSHOW ? `<button class="mini" style="margin-top:10px" onclick="document.getElementById('cov-r-body').innerHTML=window.__covR.map(window.__covRRow).join('');this.remove()">show all ${recent.length}</button>` : ""}
+    </div>`;
+  window.__covR = recent; window.__covRRow = rrow;
   return `
+    ${index}
+    ${queueCard}
+    ${recentCard}
     ${cov.sections.map(section).join("")}
     <div class="card cov">
       <div class="cov-head"><h3>Holes <span class="sub" style="font-size:15px">${holes.length}</span></h3>
@@ -4294,6 +4394,7 @@ function parsePath() {
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null, show: new URLSearchParams(location.search).get("show") || null };
   if (view === "playthrough") return { view, pane: null, id: seg[1] === "spot" && seg[2] && seg[3] ? `spot/${decodeURIComponent(seg[2])}/${seg[3]}` : seg[1] === "strategy" && seg[2] ? `strategy/${decodeURIComponent(seg[2])}` : null };
+  if (window.PLAYER_MODE && ["ledger", "runbook", "proposals", "tasks"].includes(view)) return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
   if (view === "ledger" || view === "runbook" || view === "proposals") return { view: "ledger", pane: seg[1] || null, id: seg[2] ? decodeURIComponent(seg[2]) : null };
   if (view === "analytics") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, scope: q.get("scope") || "all", vs: q.get("vs") || null, profile: q.get("profile") || "all", window: q.get("window") || "all" }; }
   if (view === "review") return { view, pane: null, id: null };

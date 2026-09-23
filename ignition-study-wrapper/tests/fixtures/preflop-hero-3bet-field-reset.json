@@ -1,0 +1,143 @@
+{
+  "name": "preflop-hero-3bet-field-reset",
+  "why": "The client takes the typed size back as the click lands. Session 125204 hand 32 (dashboard #438): the pick was Raise 10.5, raise_to typed it, read the field back as 10.5, pressed RAISE — and the client had reset the field to its 4 bb minimum, so a 3-bet six and a half blinds too small went in and the session recorded a clean success. The readback cannot close that race; only a postcondition on hero's own chips can (launch._maybe_verify_exec). This fixture pins the race itself: the relay presses, and what the CLIENT confirmed is the reset size, not the typed one.",
+  "spec": {
+    "title": "$1/$2 No Limit Hold'em",
+    "capacity": 6,
+    "potBB": 4,
+    "board": [],
+    "heroSeat": 6,
+    "dealerSeat": 5,
+    "heroCards": [
+      "J♥",
+      "T♦"
+    ],
+    "seats": {
+      "1": {
+        "stack": 57.3,
+        "bet": 1,
+        "cards": 2
+      },
+      "2": {
+        "stack": 130.1,
+        "cards": 0
+      },
+      "3": {
+        "stack": 100,
+        "cards": 0
+      },
+      "4": {
+        "stack": 100,
+        "cards": 0
+      },
+      "5": {
+        "stack": 97.5,
+        "bet": 2.5,
+        "badge": "RAISE",
+        "cards": 2
+      },
+      "6": {
+        "stack": 96.5,
+        "bet": 0.5,
+        "cards": 2
+      }
+    },
+    "offer": {
+      "fold": true,
+      "call": 2,
+      "raise": 4,
+      "max": 96.5,
+      "betFieldResets": 4,
+      "selectors": [
+        "X2.5",
+        "Pot",
+        "ALL-IN"
+      ]
+    },
+    "node": {
+      "dealt": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "toActSeat": 6,
+      "committed": {
+        "1": 1,
+        "5": 2.5,
+        "6": 0.5
+      },
+      "actions": [
+        {
+          "seat": 6,
+          "type": "post-sb",
+          "amount": 0.5,
+          "street": "preflop"
+        },
+        {
+          "seat": 1,
+          "type": "post-bb",
+          "amount": 1,
+          "street": "preflop"
+        },
+        {
+          "seat": 2,
+          "type": "fold",
+          "street": "preflop"
+        },
+        {
+          "seat": 3,
+          "type": "fold",
+          "street": "preflop"
+        },
+        {
+          "seat": 4,
+          "type": "fold",
+          "street": "preflop"
+        },
+        {
+          "seat": 5,
+          "type": "raise",
+          "amount": 2.5,
+          "street": "preflop"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "preflop",
+      "board": [],
+      "heroSeatId": 6,
+      "heroCards": [
+        "J♥",
+        "T♦"
+      ],
+      "ended": false,
+      "actionCount": 6,
+      "toActSeatId": 6,
+      "toActIsHero": true,
+      "toCall": 2,
+      "positions": {
+        "6": "SB",
+        "1": "BB",
+        "2": "UTG",
+        "3": "HJ",
+        "4": "CO",
+        "5": "BTN"
+      }
+    },
+    "raiseTo": [
+      {
+        "amount": "10.5",
+        "fires": "raiseButton",
+        "betValue": "4"
+      }
+    ],
+    "refuse": [
+      "CHECK"
+    ]
+  }
+}

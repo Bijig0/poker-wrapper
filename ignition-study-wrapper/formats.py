@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 from scout import cdp
+import tables  # noqa: E402  (which table window this slot owns)
 
 ROOT = Path(__file__).resolve().parent
 _PATH = ROOT / "formats.json"
@@ -84,8 +85,12 @@ var L = (() => { for (const f of document.querySelectorAll('iframe')) { try { co
 """
 # The seated table iframe (src carries playMode=...), as a param map. Identity
 # params (user, txId, connectionUuid, tableId) are never read.
-_TABLE_JS = r"""(() => {
-  const f = [...document.querySelectorAll('iframe')].find(f => /playMode=/.test(f.getAttribute('src') || ''));
+# Slot-aware for the same reason launch._TABLE_JS_TMPL is: four tables live in
+# ONE page as sibling iframes tagged `data-multitableslot`, so "the table iframe"
+# is no longer a thing that exists. `null` keeps the single-table reading.
+_TABLE_JS_TMPL = r"""(() => {__FRAME__
+  const SLOT = __SLOT__;
+  const f = __frame(SLOT);
   if (!f) return null;
   const keep = ['gameType','gameFormat','seat','playMode','limit','isQuickSeat','quickSeatSmallBlind','quickSeatBigBlind',
                 'quickSeatBuyInAmount','quickSeatMinBuyIn','quickSeatMaxBuyIn','waitForBigBlind','tableName','gameTableUrl','currency'];
@@ -101,12 +106,53 @@ _TABLE_JS = r"""(() => {
 })()"""
 
 
+# THE SAME RESOLVER AS launch._FRAME_JS, and for the same reason: "the table
+# iframe" is not a thing that exists once the client holds four of them. Anything
+# in this module that ACTS on a table resolves it through this, never through the
+# first frame that happens to carry playMode.
+_FRAME_FN = r"""
+  const __frame = (SLOT) => {
+    const play = f => /playMode=/.test(f.getAttribute('src') || '');
+    const all = [...document.querySelectorAll('iframe')].filter(play);
+    if (SLOT === null) return all[0];
+    // BY ORDINAL, NOT BY THE ATTRIBUTE'S VALUE (2026-09-21). This used to ask
+    // for `[data-multitableslot="0"]` and take the client's numbering on faith.
+    // Live, the leader's lookup for 0 found NOTHING while slot 2's for 1 found a
+    // table -- whatever base this build tags from, it is not the one we assumed.
+    // The leader then had no frame, so no seatQa, so no hero seat, so the tap
+    // never identified its socket and the panel read "no hand in progress" for
+    // the whole session. We do not need the client's numbers, only its ORDER:
+    // sort the tagged table frames by their own tag and take the Nth. Works
+    // 0-based, 1-based or with gaps.
+    const tagged = all.filter(f => f.getAttribute('data-multitableslot') !== null);
+    if (!tagged.length) return SLOT === 0 ? all[0] : undefined;   // untagged = the single-table client
+    tagged.sort((a, b) => Number(a.getAttribute('data-multitableslot'))
+                        - Number(b.getAttribute('data-multitableslot')));
+    return tagged[SLOT];
+  };
+"""
+
+
+def _slotted(js: str, slot: int | None) -> str:
+    """`js` with __FRAME__ defined and __SLOT__ bound to this table's slot."""
+    return js.replace("__FRAME__", _FRAME_FN).replace("__SLOT__", "null" if slot is None else str(int(slot)))
+
+
+def _table_js(slot: int | None = None) -> str:
+    return _slotted(_TABLE_JS_TMPL, slot)
+
+
 def _target(port: int) -> dict | None:
-    for t in cdp.page_targets(port):
-        u = (t.get("url") or "").lower()
-        if "poker-game" in u or "ignition" in u:
-            return t
-    return None
+    """The Ignition page THIS wrapper drives.
+
+    ONE PAGE for every table (see launch.ignition_target): the client keeps all
+    four tables in a single page as tagged iframes, so the page is shared and the
+    slot is resolved INSIDE it (_table_js), never by claiming a window."""
+    def rank(u: str) -> int | None:
+        low = u.lower()
+        return 1 if "poker-game" in low else 2 if "ignition" in low else None
+
+    return tables.pin(cdp.page_targets(port), rank, None)
 
 
 def _ev(ws: str, js: str, timeout: float = 6.0):
@@ -178,17 +224,26 @@ def _describe(p: dict) -> dict:
     }
 
 
-def detect(port: int, settle: float = 0.0) -> dict | None:
+# The sentinel for "this wrapper's own slot", which is NOT the same as slot=None
+# (None is the single-table reading: the first playMode iframe in the page).
+_MINE = object()
+
+
+def detect(port: int, settle: float = 0.0, slot: object = _MINE) -> dict | None:
     """Format of the table currently open in the client window, or None.
     `settle` > 0 keeps re-reading for that many seconds while the blinds are
-    still unknown (the table title renders a moment after the iframe appears)."""
+    still unknown (the table title renders a moment after the iframe appears).
+    `slot` names a `data-multitableslot` other than this wrapper's own — the
+    seating loop reads the table it has just opened, which by definition is not
+    the one this process drives."""
     t = _target(port)
     if not t:
         return None
+    dom = tables.dom_slot() if slot is _MINE else slot
     end = time.time() + settle
     while True:
         try:
-            p = _ev(t["webSocketDebuggerUrl"], _TABLE_JS)
+            p = _ev(t["webSocketDebuggerUrl"], _table_js(dom))
         except Exception:
             return None
         d = _describe(p) if isinstance(p, dict) else None
@@ -228,29 +283,84 @@ def _js_click_text(sel: str, text: str) -> str:
             ".filter(e=>(e.innerText||'').trim()===" + json.dumps(text) + ").pop(); if(e) e.click(); !!e }")
 
 
+# THE SIGN-IN PAGE IS NOT ALWAYS AT /login (Brady, 2026-09-17). An expired session shows the e-mail + password form
+# wherever the window was (the poker-lobby entry, the casino landing), so a URL check alone read it as "signed-in",
+# the router went routing, and the lobby wait ran its full course before anyone noticed. The form itself is the truth.
+_SIGNED_OUT_JS = r"""(() => { const vis = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0; };
+  const ins = [...document.querySelectorAll('input')].filter(vis);
+  return !!(ins.find(i => i.type === 'password') && ins.find(i => i.type === 'email' || /user|email/i.test(i.name + i.id))); })()"""
+
+
+def _signed_out(ws: str) -> bool:
+    try:
+        return bool(_ev(ws, _SIGNED_OUT_JS, timeout=4.0))
+    except Exception:
+        return False
+
+
+def _wait_lobby(ws: str, secs: float) -> str | None:
+    """Wait for the lobby document, but come back at once if the window shows the sign-in form instead:
+    'lobby' | 'signed-out' | None (timed out)."""
+    end = time.time() + secs
+    while time.time() < end:
+        try:
+            if _ev(ws, _LOBBY + "!!L", timeout=4.0):
+                return "lobby"
+        except Exception:
+            pass
+        if _signed_out(ws):
+            return "signed-out"
+        time.sleep(0.5)
+    return None
+
+
 def _close_modal(ws: str) -> None:
     _ev(ws, _LOBBY + "(() => { const c=L && L.querySelector('button.close-btn'); if (c) c.click(); return !!c; })()")
 
 
-def goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool = True, log=print) -> dict:
+def goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool = True, log=print,
+         adding: bool = False) -> dict:
     """Drive the lobby to `fid` and sit with `buyin_bb` big blinds. Returns
-    {ok, steps, detected, error?}. Refuses when a table is already open."""
+    {ok, steps, detected, slot, error?}.
+
+    Refuses when a table is already open — UNLESS `adding`, which is how a
+    multi-table session takes its second, third and fourth seats: Ignition seats
+    up to four tables in this one client, and every one of those seats but the
+    first is necessarily taken from a page that already has a table on it. The
+    refusal is the single-table rule ("you are already seated, I will not sit you
+    somewhere else"), and applying it to the seating loop refused table 2 of 2
+    with the name of table 1."""
     steps: list[str] = []
     try:
-        return _goto(fid, buyin_bb, port, wait_for_bb, log, steps)
+        return _goto(fid, buyin_bb, port, wait_for_bb, log, steps, adding)
     except Exception as e:
         log(f"[goto] EXCEPTION: {e}")
         return {"ok": False, "error": f"{type(e).__name__}: {e}", "steps": steps}
 
 
-def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: list[str]) -> dict:
+def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: list[str],
+          adding: bool = False) -> dict:
+
+    # THE RECORD FIRST, THE LOG SECOND, AND THE LOG CANNOT FAIL THE WALK. A step
+    # is progress through a lobby with money at the end of it; whether anyone
+    # could print it is not part of that. `steps` is what the panel and the
+    # session record read, so it is appended before anything is written, and the
+    # write itself is swallowed -- an encoding this console cannot render, a
+    # closed pipe, a full disk. The 2026-09-21 session lost its second table to
+    # exactly this: an arrow in "Cash games -> Start Cash Game" raised
+    # UnicodeEncodeError out of print(), and the seat was reported as failed.
+    def _say(msg: str) -> None:
+        try:
+            log(msg)
+        except Exception:
+            pass
 
     def step(s: str):
         steps.append(s)
-        log(f"[goto] {s}")
+        _say(f"[goto] {s}")
 
     def fail(err: str, **extra) -> dict:
-        log(f"[goto] FAILED: {err}")
+        _say(f"[goto] FAILED: {err}")
         return {"ok": False, "error": err, "steps": steps, **extra}
 
     f = get(fid)
@@ -262,18 +372,64 @@ def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: l
         return fail("table window not open (no Ignition page on CDP)")
     ws = t["webSocketDebuggerUrl"]
 
+    # Taken BEFORE anything is clicked: which tables the client already has is
+    # what tells us, afterwards, which one is the new one.
+    before = set(seated_slots(port))
     already = detect(port)
-    if already:
+    if already and not adding:
         return fail(f"a table is already open: {already['name']}", detected=already)
+    if adding:
+        step(f"adding a table — {len(before)} already seated (slots {sorted(before)})")
 
     # 1. lobby section
     section = path["section"]
+    if not _wait(ws, _LOBBY + "!!L", 8) and "/static/poker-game" in ((_target(port) or {}).get("url") or ""):
+        # ALREADY IN THE CLIENT SHELL - DO NOT NAVIGATE AWAY (Brady, 2026-09-17). A fresh sign-in lands here and
+        # the lobby frame boots 30-60 s later; hopping to the /poker-lobby entry from this page dropped the new
+        # session and showed the sign-in form again, and the router went round that loop four times.
+        step("client shell is up — waiting for the lobby to boot (no navigation)")
+        got = _wait_lobby(ws, 75)
+        if got == "signed-out":
+            return fail("signed out — the window shows the sign-in form", signedOut=True)
+        if got != "lobby":
+            return fail("lobby did not boot inside the client shell")
     if not _wait(ws, _LOBBY + "!!L", 8):
-        client = data()["lobby"]["client"] + data()["lobby"]["sections"][section].replace("/", "%2F")
-        _ev(ws, "location.href = " + json.dumps(client) + "; true")
-        step(f"no lobby in the window — navigated to the {section} section")
-        if not _wait(ws, _LOBBY + "!!L", 75):     # a cold client load takes 30-60 s
-            return fail("lobby did not load")
+        if adding:
+            # NAVIGATING WOULD TAKE THE SEATED TABLES WITH IT. The hops below set
+            # `location.href` on the TOP document — the one page every table
+            # iframe lives in. Harmless when nothing is seated; with 1-3 tables in
+            # hands it closes them all, mid-hand, with money in the pots. When we
+            # are adding a table, no lobby frame means stop and say so.
+            return fail("no lobby frame in the page — not navigating with tables already seated")
+        # THE ENTRY HOP FIRST (Brady, 2026-09-14). Deep-linking the client at a
+        # section — client + "?lobby=%2Fpoker-lobby%2Fzone-poker" — only boots
+        # the lobby when the window is ALREADY in the poker client. From the
+        # casino menu (/headless/poker/casino-crossplay, where a fresh sign-in
+        # lands) it never loaded: measured 75 s of nothing, and the router sat
+        # on "lobby did not load" while a seat was there for the taking. The
+        # site's own /poker-lobby entry redirects into the client shell and
+        # settles on /poker-lobby/home — measured 20 s from that same casino
+        # page. So hop there first and let the section CLICK below do the rest;
+        # the deep link stays as the second attempt for an already-warm client.
+        entry = data()["lobby"].get("entry") or "https://www.ignitioncasino.eu/poker-lobby"
+        _ev(ws, "location.href = " + json.dumps(entry) + "; true")
+        step(f"no lobby in the window — navigated to the poker lobby entry ({entry})")
+        # FASTER OUT OF THE CASINO MENU (Brady, 2026-09-17). The entry hop settles in ~20 s when it works and not
+        # at all when it does not (75 s of nothing on 09-17, then the deep link booted the lobby at once). Give the
+        # entry 25 s; past that the window is on the site's shell, i.e. warm, and the section deep link is the faster
+        # route. The deep link gets a proper cold-load allowance of its own.
+        got = _wait_lobby(ws, 25)
+        if got == "signed-out":
+            return fail("signed out — the window shows the sign-in form", signedOut=True)
+        if got != "lobby":
+            client = data()["lobby"]["client"] + data()["lobby"]["sections"][section].replace("/", "%2F")
+            _ev(ws, "location.href = " + json.dumps(client) + "; true")
+            step(f"entry did not boot the lobby in 25 s — {section} deep link")
+            got = _wait_lobby(ws, 120)     # a cold client load reached the lobby at ~70 s on 09-17; 60 s called it failed
+            if got == "signed-out":
+                return fail("signed out — the window shows the sign-in form", signedOut=True)
+            if got != "lobby":
+                return fail("lobby did not load")
     # a Buy-In modal left open (by hand, or by an earlier attempt) blocks the wizard — close it first
     if _ev(ws, _LOBBY + "!!(L && L.querySelector('button.close-btn') && /Select Stake/.test(L.body.innerText))"):
         _close_modal(ws)
@@ -304,11 +460,23 @@ def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: l
     if seat_res != "active":
         step(f"seats {seats}: {seat_res} — continuing with the client's own choice")
     step(f"wizard: {wiz['cardGame']} · {wiz['limit']} · {seats} seats · practice {'on' if want_practice else 'off'}")
-    r = _ev(ws, _js_click_text("button", "NEXT"))
-    if r is not True:
-        return fail("NEXT button not found")
-    if not _wait(ws, _LOBBY + "!!L && L.body.innerText.includes('Select Stake')", 30):   # slow right after a leave
-        return fail("Buy-In modal did not open")
+    # NEXT NEEDS A LIVE LOBBY (Brady, 2026-09-17). Right after the lobby boots, the wizard renders before the
+    # client is ready to serve it: NEXT clicked in that window does nothing, and the router sat 30 s on "Buy-In
+    # modal did not open" while a second click would have opened it in 2 s (measured on 09-17). So: press NEXT,
+    # give the modal 8 s, and if it has not come, re-press - up to four times - before giving up.
+    opened = False
+    for attempt in range(4):
+        r = _ev(ws, _js_click_text("button", "NEXT"))
+        if r is not True:
+            return fail("NEXT button not found")
+        if _wait(ws, _LOBBY + "!!L && L.body.innerText.includes('Select Stake')", 8 if attempt < 3 else 12):
+            opened = True
+            if attempt:
+                step(f"Buy-In modal opened on NEXT press {attempt + 1}")
+            break
+        time.sleep(1.5)
+    if not opened:
+        return fail("Buy-In modal did not open (NEXT pressed 4 times)")
     step("Buy-In modal open")
 
     # 3. stake
@@ -319,8 +487,27 @@ def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: l
                + json.dumps(label) + ").pop(); if (li) { li.click(); return true; } return false; })()", 8)
     if not li:
         opts = _ev(ws, _LOBBY + "[...L.querySelectorAll('li')].map(e=>(e.innerText||'').trim()).filter(t=>/\\//.test(t)&&t.length<30)")
-        _close_modal(ws)
-        return fail(f"stake {label!r} not offered; dropdown had {opts}")
+        # A PRACTICE table has exactly one NL stake, and which one it is is the
+        # client's business, not ours: on 2026-09-14 the Zone practice dropdown
+        # offered only "2.00 / 4.00" while formats.json recorded "25.00 / 50.00"
+        # (that practice stake either went away or is hidden until the practice
+        # balance is topped up), and the run failed with a seat available. A
+        # practice seat is a practice seat, so take the single numeric stake on
+        # offer and record which. Real-money stakes are NEVER guessed: there the
+        # label is the identity of the format, and picking another one would play
+        # a different game for real money.
+        numeric = [o for o in (opts or []) if re.match(r"^[\d.,]+\s*/\s*[\d.,]+$", o)]
+        if want_practice and len(numeric) == 1:
+            li = _wait(ws, _LOBBY + "(() => { const li=[...L.querySelectorAll('li')].filter(e=>(e.innerText||'').trim()==="
+                       + json.dumps(numeric[0]) + ").pop(); if (li) { li.click(); return true; } return false; })()", 8)
+            if li:
+                step(f"declared stake {label!r} not offered; took the only practice stake there is, {numeric[0]!r}")
+                label = numeric[0]
+        if not li:
+            _close_modal(ws)
+            # NO TABLE AT THIS STAKE RIGHT NOW (Brady, 2026-09-17): the lobby lists only stakes with a table running.
+            # Real-money stakes are never guessed; the router polls the lobby again in a minute instead of stopping.
+            return fail(f"no {label} table right now (lobby offers {opts})", stakeMissing=True, offered=opts)
     modal = _wait(ws, _LOBBY + "(() => { const t=L.body.innerText; return /TAKE MY SEAT/.test(t) ? t.slice(t.indexOf('Buy-In')) : null; })()", 8)
     if not modal:
         _close_modal(ws)
@@ -373,18 +560,31 @@ def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: l
 
     # 5. seat
     _ev(ws, _LOBBY + "(() => { const b=[...L.querySelectorAll('button')].filter(e=>/TAKE MY SEAT/i.test(e.innerText)).pop(); b.click(); return true; })()")
+    # WHICH TABLE DID WE JUST SIT AT? Reading our own slot answers about a table
+    # that was there before the click, so when adding, every seat would report
+    # table 1's name and verdict — a success message about the wrong table. The
+    # client hands us the number: wait for a `data-multitableslot` that was not
+    # in `before` and read THAT one.
     det = None
+    new_slot = None
     end = time.time() + 25
     while time.time() < end:
-        det = detect(port, settle=8)
+        if adding:
+            fresh = [x for x in seated_slots(port) if x not in before]
+            if fresh:
+                new_slot = fresh[0]
+                det = detect(port, settle=8, slot=new_slot)
+        else:
+            det = detect(port, settle=8)
         if det:
             break
         time.sleep(0.5)
     if not det:
-        return fail("seat taken but no table iframe appeared within 25 s")
+        return fail("seat taken but no table iframe appeared within 25 s"
+                    + (f" (slots before: {sorted(before)})" if adding else ""))
     if not det.get("bbCents"):
         # Zone: the blinds live in the table title, which can render well after the iframe — keep reading
-        det = detect(port, settle=30) or det
+        det = detect(port, settle=30, slot=new_slot if adding else _MINE) or det
         if not det.get("bbCents"):
             step("table title not rendered yet — stake unread (the router keeps re-reading)")
     if det.get("buyInCents") is None:
@@ -395,30 +595,38 @@ def _goto(fid: str, buyin_bb: float, port: int, wait_for_bb: bool, log, steps: l
     else:
         det["buyInSource"] = "iframe"
     verdict = compare(fid, det)
-    step(f"seated: {det['name']} · {det.get('buyInBb')} bb · {verdict['text']}")
-    return {"ok": True, "steps": steps, "detected": det, "verdict": verdict}
+    step(f"seated{f' (table slot {new_slot})' if adding else ''}: {det['name']} · {det.get('buyInBb')} bb · {verdict['text']}")
+    return {"ok": True, "steps": steps, "detected": det, "verdict": verdict, "slot": new_slot}
 
 
-def leave(port: int, log=print) -> dict:
-    """Leave the open table. The close control is a `.iconItem.close` div in the
+def leave(port: int, log=print, slot: object = _MINE) -> dict:
+    """Leave OUR table. The close control is a `.iconItem.close` div in the
     table iframe's own header (top-right); a real mouse click on it opens the
     "Are you sure you want to leave this table?" dialog, then YES (both inside
-    the iframe)."""
+    the iframe).
+
+    SLOT-SCOPED, corrected 2026-09-21. Both of these looked up "the first iframe
+    carrying playMode", which is table 1 no matter who asked — so slot 3 pressing
+    Leave would have opened the leave dialog on table 1 and confirmed it, closing
+    a table with money on it that nobody asked to close. The same family as the
+    four bugs of 2026-09-20 and the tap's, and the same fix: name the frame."""
     t = _target(port)
     if not t:
         return {"ok": False, "error": "no table window"}
     ws = t["webSocketDebuggerUrl"]
-    if not detect(port):
+    dom = tables.dom_slot() if slot is _MINE else slot
+    if not detect(port, slot=dom):
         return {"ok": True, "note": "no table open"}
-    find_x = r"""(() => {
-      const f=[...document.querySelectorAll('iframe')].find(f=>/playMode=/.test(f.getAttribute('src')||''));
+    find_x = _slotted(r"""(() => {__FRAME__
+      const f = __frame(__SLOT__);
       if (!f || !f.contentDocument) return null;
       const fr=f.getBoundingClientRect(); const d=f.contentDocument;
       const el = [...d.querySelectorAll('.iconItem.close')].find(e=>{const b=e.getBoundingClientRect(); return b.width>0 && b.height>0;});
       if (!el) return null; const b=el.getBoundingClientRect();
-      return {x: Math.round(fr.x + b.x + b.width/2), y: Math.round(fr.y + b.y + b.height/2)}; })()"""
-    click_yes = r"""(() => { const f=[...document.querySelectorAll('iframe')].find(f=>/playMode=/.test(f.getAttribute('src')||'')); try {
-      const b=[...f.contentDocument.querySelectorAll('button')].filter(e=>(e.innerText||'').trim()==='YES').pop(); if (b) { b.click(); return true; } } catch(e) {} return false; })()"""
+      return {x: Math.round(fr.x + b.x + b.width/2), y: Math.round(fr.y + b.y + b.height/2)}; })()""", dom)
+    click_yes = _slotted(r"""(() => {__FRAME__
+      const f = __frame(__SLOT__); try {
+      const b=[...f.contentDocument.querySelectorAll('button')].filter(e=>(e.innerText||'').trim()==='YES').pop(); if (b) { b.click(); return true; } } catch(e) {} return false; })()""", dom)
     # The header renders a moment after the iframe appears, and a stray click
     # can miss — so find, click, wait for YES, and retry a few times.
     yes = False
@@ -426,7 +634,10 @@ def leave(port: int, log=print) -> dict:
     for _ in range(5):
         if not spot:
             break
-        cdp._dispatch_click(ws, spot["x"], spot["y"])
+        # SERIALIZED, like every other real click on this shared page: these three
+        # CDP events must not interleave with another table's press (tables.press_lock).
+        with tables.press_lock():
+            cdp._dispatch_click(ws, spot["x"], spot["y"])
         yes = _wait(ws, click_yes, 4)
         if yes:
             break
@@ -436,9 +647,9 @@ def leave(port: int, log=print) -> dict:
     if not yes:
         return {"ok": False, "error": "leave confirmation did not appear"}
     end = time.time() + 10
-    while time.time() < end and detect(port):
+    while time.time() < end and detect(port, slot=dom):
         time.sleep(0.4)
-    ok = detect(port) is None
+    ok = detect(port, slot=dom) is None
     log(f"[goto] left table: {ok}")
     return {"ok": ok}
 
@@ -458,9 +669,111 @@ def window_state(port: int) -> dict:
         return {"state": "closed", "cdp": True, "url": pages[0] if pages else None, "detected": None,
                 "note": "CDP up but no Ignition page"}
     url = t.get("url") or ""
-    if "/login" in url or "originURL" in url:
+    if "/login" in url or "originURL" in url or _signed_out(t["webSocketDebuggerUrl"]):
         return {"state": "signed-out", "cdp": True, "url": url.split("?")[0], "detected": None}
     det = detect(port)
     if det:
         return {"state": "seated", "cdp": True, "url": url.split("?")[0], "detected": det}
     return {"state": "signed-in", "cdp": True, "url": url.split("?")[0], "detected": None}
+
+
+# ---- several tables in one client ------------------------------------------
+#
+# Ignition seats up to four tables in ONE page on ONE login. You do not open a
+# window per table: from a seated table you go back to the lobby and take
+# another seat, and the client adds a table and re-tiles them all itself. Each
+# one is a same-origin iframe tagged `data-multitableslot` (0..3; the lobby is
+# -1), which is also how a wrapper knows which table is its own.
+
+_SEATED_JS = r"""(() => {
+  const play = f => /playMode=/.test(f.getAttribute('src') || '');
+  const slots = [...document.querySelectorAll('iframe[data-multitableslot]')]
+    .filter(play)
+    .map(f => Number(f.getAttribute('data-multitableslot')))
+    .filter(n => Number.isFinite(n) && n >= 0)
+    .sort((a, b) => a - b);
+  // the single-table client has no such attribute at all: one playMode frame is
+  // one table, and it is slot 0 by definition
+  if (!slots.length) {
+    const one = [...document.querySelectorAll('iframe')].filter(play).length;
+    return JSON.stringify({slots: one ? [0] : [], tagged: false});
+  }
+  return JSON.stringify({slots, tagged: true});
+})()"""
+
+
+def seated_slots(port: int) -> list[int]:
+    """Which table slots are seated right now, by the client's own numbering."""
+    t = _target(port)
+    if not t:
+        return []
+    try:
+        raw = _ev(t["webSocketDebuggerUrl"], _SEATED_JS, timeout=6)
+        return list(json.loads(raw).get("slots") or []) if raw else []
+    except Exception:
+        return []
+
+
+_LOBBY_BTN_JS = r"""(() => {
+  // The Lobby control lives in the top strip of the TOP document — above every
+  // table frame, outside all of them. Take the SMALLEST element whose own text
+  // is exactly "Lobby": the strip nests, and the outer boxes span the whole bar.
+  const hits = [...document.querySelectorAll('*')].filter(e => {
+    const r = e.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0) || r.top > 70) return false;
+    const own = [...e.childNodes].filter(n => n.nodeType === 3)
+      .map(n => n.textContent.trim()).join(' ').trim();
+    return /^lobby$/i.test(own);
+  });
+  if (!hits.length) return null;
+  hits.sort((a, b) => {
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    return (ra.width * ra.height) - (rb.width * rb.height);
+  });
+  const r = hits[0].getBoundingClientRect();
+  return JSON.stringify({x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+                         w: Math.round(r.width), h: Math.round(r.height)});
+})()"""
+
+
+def to_lobby(port: int, log=print) -> dict:
+    """Bring the lobby forward from a seated table, so another seat can be taken.
+
+    A REAL mouse event, not `.click()`: the client's controls are React handlers
+    and a synthetic click is ignored by them (the same reason scout's open_table
+    dispatches input events). The lobby iframe stays mounted underneath the
+    tables the whole time — this is what raises it."""
+    t = _target(port)
+    if not t:
+        return {"ok": False, "error": "no table window"}
+    ws = t["webSocketDebuggerUrl"]
+    try:
+        raw = _ev(ws, _LOBBY_BTN_JS, timeout=6)
+    except Exception as e:
+        return {"ok": False, "error": f"could not look for the Lobby control: {e}"}
+    if not raw:
+        return {"ok": False, "error": "no Lobby control in the top strip"}
+    b = json.loads(raw)
+    # SERIALIZED WITH EVERY OTHER TABLE'S PRESSES. This is a REAL mouse click on
+    # the shared page — three CDP events — and the siblings whose seats we are
+    # about to join are in hands on that same page. Interleaved with one of their
+    # presses it becomes a drag, or a click at a coordinate nobody chose, with
+    # money on the table. Same lock as launch.act(); see tables.press_lock.
+    try:
+        with tables.press_lock():
+            cdp._dispatch_click(ws, b["x"], b["y"])
+    except Exception as e:
+        return {"ok": False, "error": f"clicking Lobby failed: {e}"}
+    log(f"[seat] back to the lobby (Lobby at {b['x']},{b['y']})")
+    # NO VERDICT ON WHETHER IT "CAME FORWARD". Two attempts at one were dropped
+    # here: waiting for the lobby to EXIST is meaningless (it stays mounted under
+    # the tables all session, so it is there before the click does anything), and
+    # hit-testing its centre is not reliable either — on the real client's 2x2
+    # that centre falls in the few-pixel gap BETWEEN two table frames.
+    # It does not matter: `goto` drives the lobby through its own DOM (.click()
+    # on the lobby document's elements), which fires whether or not the lobby is
+    # the frame on top. So this raises it if it can and gets out of the way;
+    # `goto` is the one that reports whether the seat could actually be taken,
+    # step by step, and it is the honest arbiter.
+    time.sleep(1.5)
+    return {"ok": True, "at": [b["x"], b["y"]]}

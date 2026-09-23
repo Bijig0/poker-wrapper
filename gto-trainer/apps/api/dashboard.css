@@ -778,6 +778,8 @@ a.hm-card { cursor: pointer; } a.hm-card:hover { background: var(--surface2); }
 .fkey { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; min-width: 78px; flex: none; }
 .fvals { display: flex; flex-wrap: wrap; gap: 5px; }
 tr.catrow td { vertical-align: top; }
+tr.catrow td.cat-name-cell { cursor: pointer; }
+tr.catrow td.cat-name-cell:hover { background: var(--surface2); }
 tr.catnode > td { background: var(--surface2); padding: 14px 12px; }
 .fchip.more { background: transparent; border-style: dashed; color: var(--muted); }
 /* the Charts picker's node walk: crumb steps back, the action chips step in */
@@ -822,3 +824,30 @@ tr.catnode > td { background: var(--surface2); padding: 14px 12px; }
 .cov-holes .n { font-family: var(--font-mono); font-size: 16px; font-weight: 600; text-align: right; white-space: nowrap; }
 .cov-next li { margin: 0 0 12px; font-size: 14px; line-height: 1.55; max-width: 90ch; }
 .cov-next li b { color: var(--ink); }
+/* coverage state: exact / approximate / no answer — the first thing to read on each row */
+.cov-state { flex: none; display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.cov-state.exact { background: var(--win-soft); color: var(--win); }
+.cov-state.approx { background: var(--ev-soft); color: var(--ev); }
+.cov-state.none { background: var(--loss-soft); color: var(--loss); }
+.cov-row.none { border-left: 3px solid var(--loss); padding-left: 14px; margin-left: -17px; }
+.cov-tally { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 14px; }
+.cov-tally span { font-size: 14px; }
+.cov-index { width: 100%; border-collapse: collapse; }
+.cov-index th { text-align: left; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); font-weight: 600; padding: 14px 10px 6px 0; border-bottom: 1px solid var(--line); }
+.cov-index td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--grid); font-size: 14px; vertical-align: top; }
+.cov-index td.by { color: var(--muted); font-size: 13px; }
+.cov-index a { color: var(--ink); text-decoration: none; }
+.cov-index a:hover { color: var(--info); text-decoration: underline; }
+.cov-index tr.group td { padding-top: 16px; font-family: var(--font-head); font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 0; }
+/* strategy work queue */
+.cov-q { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.cov-q th { text-align: left; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); font-weight: 600; padding: 10px 10px 6px 0; border-bottom: 1px solid var(--line); }
+.cov-q td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--grid); font-size: 13.5px; vertical-align: top; line-height: 1.45; }
+.cov-q .pri { font-family: var(--font-mono); font-size: 16px; font-weight: 700; color: var(--ink); }
+.cov-q .chart { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); word-break: break-all; }
+.cov-q .muted { color: var(--muted); font-size: 12.5px; }
+.cov-q tr.flight td { opacity: .6; }
+.cov-sev { display: inline-block; min-width: 22px; text-align: center; border-radius: 6px; font-size: 11px; font-weight: 700; padding: 1px 6px; }
+.cov-sev.s1 { background: var(--surface3); color: var(--muted); } .cov-sev.s2 { background: var(--ev-soft); color: var(--ev); } .cov-sev.s3 { background: var(--loss-soft); color: var(--loss); }
+.cov-solve { display: flex; gap: 14px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--grid); font-size: 14px; }
+.cov-solve .prog { font-family: var(--font-mono); font-weight: 700; min-width: 64px; }

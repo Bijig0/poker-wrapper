@@ -17,6 +17,8 @@ import { HRC3MAX_BASE } from "../services/hrc3max";
 import { missQueue } from "../services/missQueue";
 import { APPROXIMATIONS, type Approximation } from "../services/approximations";
 import { STRATEGY_COVERAGE } from "../services/strategyCoverage";
+import { workQueue } from "../services/strategyQueue";
+import { patchJobs } from "../services/patchJobs";
 import { formatsForSource, chartsLanded } from "../services/ledger";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "./ingest";
@@ -184,6 +186,14 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
             : `${cl.want - cl.have} charts still on the boxes — those spots fall down the picker's preference list until they land` }; })(),
       edge: { nl25: null, nl200: null, norake: null, kind: "none", note: "no row yet — the 6-max equilibrium has not been backtested against a corpus (matrix row eq_eq_6max is unbuilt)" },
     },
+    "hrc-hu": {
+      pieces: ["preflop", "opponent"],
+      formats: fmts("hrc-hu", { "cp-hu-nl200": "CoinPoker's heads-up structure: ante 0.2bb, 5% / cap 0.9bb" }),
+      coverage: (() => { const cl = chartsLanded(["grid-cp200hu"]);
+        return { text: `${cl.have} of ${cl.want} charts · 18 depths 20–150bb × 7-8 open/3-bet trees`,
+          gap: "4-bet and later sizes, and depths between rungs, are snapped; nothing past 150bb" }; })(),
+      edge: { nl25: null, nl200: null, norake: null, kind: "none", note: "no row yet — the heads-up equilibrium has not been backtested (matrix row eq_eq_hu_cp200 is unbuilt)" },
+    },
     "gtow-charts": {
       pieces: ["preflop"],
       formats: fmts("gtow-charts", { "gtow-6max-nl500": "no 200bb", "gtow-hu-nl500": "no 200bb" }),
@@ -228,6 +238,7 @@ const PIECE_OF: Record<string, { piece: SourceCard["piece"]; role: SourceCard["r
   "exploit-preflop": { piece: "preflop", role: "primary" },
   "hrc-3max": { piece: "preflop", role: "primary" },
   "hrc-6max": { piece: "preflop", role: "primary" },
+  "hrc-hu": { piece: "preflop", role: "primary" },
   "gtow-ai-preflop": { piece: "preflop", role: "fallback" },
   "gtow-charts": { piece: "preflop", role: "fallback" },
   "mes-postflop": { piece: "postflop", role: "primary" },
@@ -241,6 +252,7 @@ const SOURCE_KEYS: Record<string, string[]> = {
   "exploit-preflop": ["pool-exploit-preflop"],
   "hrc-3max": ["hrc-3max-preflop"],
   "hrc-6max": ["hrc-6max-preflop"],
+  "hrc-hu": ["hrc-hu-preflop"],
   "gtow-ai-preflop": ["gtow-ai-preflop"],
   "gtow-charts": ["local-preflop"],
   "mes-postflop": ["mes-postflop"],
@@ -406,7 +418,7 @@ app.get("/registry", async (c) => {
         ],
         caveats: [
           "two-limper pots are not in the tree (the API stops at one limper)",
-          "a dead small blind cannot be expressed: the missing SB is modelled as a seat holding exactly its blind (flagged approx)",
+          "a dead small blind cannot be expressed: the missing SB is modelled as a ghost seat all-in for a penny (flagged approx); a capture that labelled the BB poster as SB is relabelled from the post first",
           "solved fresh in the cloud — an answer can differ slightly between two identical spots (solver noise), unlike a stored chart",
           "needs the GTO Wizard session on CDP 9222 (dedicated-profile Chrome) for the token",
         ],
@@ -414,6 +426,37 @@ app.get("/registry", async (c) => {
         drilldown: "log", sourceKeys: ["gtow-ai-preflop"],
       });
     }
+  }
+
+  // 2c. HRC CoinPoker HU NL200 (ledger config grid-cp200hu) — the preflop piece of the CoinPoker 200NL
+  // Heads-Up Equilibrium strategy (2026-09-22). Bodies live in R2 and come through :8777 on demand.
+  {
+    const t = tally("hrc-hu-preflop");
+    const cl = chartsLanded(["grid-cp200hu"]);
+    const routed = existsSync(join(import.meta.dir, "..", "services", "hrc2max.ts"));
+    cards.push({
+      id: "hrc-hu", label: "HRC CoinPoker NL200 heads-up grid", mode: "gto",
+      state: cl.have > 0 ? (routed ? "good" : "warn") : "off",
+      stateText: cl.have > 0 ? (routed ? `Up · ${cl.have} charts` : `${cl.have} charts solved — no heads-up picker`)
+        : `Solving · ${cl.have} of ${cl.want} charts`,
+      tiers: ["chart-hu", "villain range → ai-chain"],
+      routes: "heads-up preflop under the CoinPoker 200NL Heads-Up strategy · chart by effective stack, the SB's open and the BB's 3-bet",
+      facts: [
+        ["served by", `${HRC3MAX_BASE} · bodies r2://poker-solve-db/hrc-ui (pulled on first use)`],
+        ["charts", `${cl.have} of ${cl.want} · hrc_hu_cp200a_d<depth>_o<open>_3b<3-bet>`],
+        ["structure", "blinds 0.5 / 1, ante 0.2bb per player, SB limp in every tree"],
+        ["rake", "5% of the pot, cap 0.9bb, no flop no drop — the postflop AI solve uses the same"],
+        ["grid", "20-150bb (20, 30, 40, 50, 60, 70, 75, 80-125 by 5, 150) · opens 2x / 2.5x everywhere, 3x from 50bb · 2-3 3-bet sizes per open"],
+        ["quality", "ev_gap_sweep: mean reach-weighted gap 0.0023 bb (3-max baseline 0.018); 3 deep nodes > 2.5bb at reach < 1%"],
+        ["picker", routed ? "services/hrc2max.ts" : "not written"],
+      ],
+      caveats: [
+        "heads-up only — a third player at the table gets no answer",
+        "the table's ante is read per hand; a table not at 0.2bb/player is answered and flagged approximate",
+        "no pool model heads-up — equilibrium only",
+      ],
+      answers30d: t.n, p50Ms: t.p50, lastTs: t.lastTs, byDay: t.byDay, drilldown: "charts",
+    });
   }
 
   // 3. GTO Wizard crawled charts
@@ -696,6 +739,7 @@ app.get("/strategies", (c) => {
         ...row, approxLive: (row.approx ?? []).map((a) => byId.get(a)).filter(Boolean).map((r) => brief(r!)),
       })) })),
       holes: approx.filter((r) => cov.holeSources.includes(r.source)).map(brief),
+      queue: workQueue(cov),
       days: 30,
     };
   };
@@ -1033,6 +1077,14 @@ function approximationRows(days: number) {
     x.title.localeCompare(y.title));
   return rows;
 }
+
+/** Patch charts the strategy's LIVE approximations call for (services/patchJobs.ts). The box queue dispatcher
+ *  (poker-zenbook/hrc-api/scripts/boxQueue.ts) polls this every minute and queues the unsolved ones at tier 1. */
+app.get("/patch-jobs", (c) => {
+  const prefix = c.req.query("prefix") ?? "ign200_6max_";
+  const jobs = patchJobs(prefix);
+  return c.json({ ok: true, prefix, jobs: jobs.filter((j) => !j.solved), solved: jobs.filter((j) => j.solved).length });
+});
 
 app.get("/approximations", (c) => {
   const days = Math.max(1, Math.min(365, Number(c.req.query("days") ?? 30) || 30));

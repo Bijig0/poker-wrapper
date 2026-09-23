@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actorsWithAllins, walkFitted } from "./fitLine";
+import { actorsWithAllins, foldEarliestCaller, walkFitted } from "./fitLine";
 
 const n = (pos: string, toks: string[], terminal = false) =>
   ({ pos, terminal, actions: toks.map((t) => ({ action: t, token: t })), cells: [] });
@@ -54,5 +54,25 @@ describe("walkFitted", () => {
     expect(w.ok).toBe(true);
     if (w.ok) expect(w.node.pos).toBe("UTG");
     expect(w.folds).toEqual([]);
+  });
+});
+
+describe("foldEarliestCaller", () => {
+  const SEATS = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+  test("eso-14: the limper who later folds goes, the limp-JAMMER stays (his raise is the spot)", () => {
+    // UTG limp, HJ limp, CO iso 5, BTN 3-bet 17, SB 4-bet 38, BB folds, UTG jams, HJ folds — hero CO to act
+    const r = foldEarliestCaller(["C", "C", "R5", "R17", "R38", "F", "R100", "F"], { keep: new Set(["CO"]), stack: 100, seats: SEATS })!;
+    expect(r.fold.seat).toBe("HJ");
+    expect(r.tokens).toEqual(["C", "F", "R5", "R17", "R38", "F", "R100"]);
+    expect(r.fold.dropped).toEqual(["F"]);
+  });
+  test("per-seat stacks: a short limper's jam ends his turn, so the next token is the next seat's", () => {
+    // UTG 30bb limps, HJ isos to 4.5, UTG jams 30 (all-in), HJ calls: the call is HJ's, and UTG may not be folded
+    const who = actorsWithAllins(["C", "R4.5", "F", "F", "F", "F", "R30", "C"], { UTG: 30, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 });
+    expect(who[7]).toBe("HJ");
+    expect(foldEarliestCaller(["C", "R4.5", "F", "F", "F", "F", "R30"], { keep: new Set(["HJ"]), stack: { UTG: 30 }, seats: SEATS })).toBeNull();
+  });
+  test("the only caller is hero: nobody left to fold, null", () => {
+    expect(foldEarliestCaller(["R2.5", "F", "C"], { keep: new Set(["CO"]), stack: 100, seats: SEATS })).toBeNull();
   });
 });

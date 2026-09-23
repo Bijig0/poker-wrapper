@@ -129,8 +129,8 @@ export interface Chart6Choice {
  * answered from the 100bb one (36% of the walkthrough hands drifted rungs this way). The earlier rounds are rebuilt
  * from the actions under the feed contract: raise/bet/all-in amounts are the seat's round TOTAL, a call is the top-up.
  */
-function dealtByPos(hand: ParsedHand, heroPos: string | null): Partial<Record<Seat6, number>> {
-  const out: Partial<Record<Seat6, number>> = {};
+export function dealtBySeat(hand: ParsedHand): Record<number, number> {
+  const out: Record<number, number> = {};
   const stacks = hand.stacks ?? {};
   const committed = hand.committed ?? {};
   const earlier: Record<number, number> = {};
@@ -151,18 +151,45 @@ function dealtByPos(hand: ParsedHand, heroPos: string | null): Partial<Record<Se
     }
     for (const m of rounds.values()) for (const [seat, v] of m) earlier[seat] = (earlier[seat] ?? 0) + v;
   }
-  const put = (pos: string, seatId: number) => {
-    const p = pos.toUpperCase() as Seat6;
-    if (!SEATS6.includes(p)) return;
-    const behind = Number(stacks[seatId]);
-    if (!Number.isFinite(behind) || behind < 0) return;
+  for (const [k, v] of Object.entries(stacks)) {
+    const seatId = Number(k);
+    const behind = Number(v);
+    if (!Number.isFinite(behind) || behind < 0) continue;
     const inPot = Number(committed[seatId] ?? 0);
     const total = behind + (Number.isFinite(inPot) ? inPot : 0) + (earlier[seatId] ?? 0);
-    if (total > 0) out[p] = total;
+    if (total > 0) out[seatId] = total;
+  }
+  return out;
+}
+
+/** dealtBySeat keyed by 6-max position name. */
+function dealtByPos(hand: ParsedHand, heroPos: string | null): Partial<Record<Seat6, number>> {
+  const out: Partial<Record<Seat6, number>> = {};
+  const bySeat = dealtBySeat(hand);
+  const put = (pos: string, seatId: number) => {
+    const p = pos.toUpperCase() as Seat6;
+    if (!SEATS6.includes(p) || bySeat[seatId] == null) return;
+    out[p] = bySeat[seatId]!;
   };
   for (const [seat, pos] of Object.entries(hand.positions ?? {})) put(String(pos), Number(seat));
   if (heroPos && out[heroPos.toUpperCase() as Seat6] == null) put(heroPos, hand.heroSeatId);
   return out;
+}
+
+/**
+ * The effective stack AS DEALT for a postflop solve: hero's dealt stack against the deepest opponent still in the
+ * hand. This is the `depth` preflopPotStack wants — it subtracts the preflop money itself, so handing it the stack
+ * left behind at the flop (or later) subtracted that money twice. null when hero's stack is unreadable.
+ */
+export function dealtEffective(hand: ParsedHand): number | null {
+  const bySeat = dealtBySeat(hand);
+  const hero = bySeat[hand.heroSeatId];
+  if (hero == null) return null;
+  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => (a.hero ? hand.heroSeatId : a.seatId)));
+  const opps = Object.entries(bySeat)
+    .filter(([k]) => Number(k) !== hand.heroSeatId && !folded.has(Number(k)) && hand.positions?.[Number(k)] != null)
+    .map(([, v]) => v);
+  return Math.round((opps.length ? Math.min(hero, Math.max(...opps)) : hero) * 100) / 100;
 }
 
 /**

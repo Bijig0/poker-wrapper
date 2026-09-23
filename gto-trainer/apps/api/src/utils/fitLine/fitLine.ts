@@ -25,7 +25,8 @@ const SEATS6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"] as const;
  * Who takes each token, all-in aware: a seat whose total reaches its stack is all-in and never acts again —
  * the rule `actorsOfLine` (utils/borrowHeroCall) omits, and which a line with a limp-JAM in it needs.
  */
-export function actorsWithAllins(tokens: string[], stack: number, seats: readonly string[] = SEATS6): (string | null)[] {
+export function actorsWithAllins(tokens: string[], stack: number | Record<string, number>, seats: readonly string[] = SEATS6): (string | null)[] {
+  const cap = (s: string) => (typeof stack === "number" ? stack : stack[s] ?? Infinity);
   // `active` = seats that can still ACT (not folded, not all-in); `inHand` = seats not folded. They differ:
   // a lone player facing a jam still has to call or fold it, so "fewer than two can act" is not the end —
   // only "fewer than two in the hand" or "nobody can act" is.
@@ -39,12 +40,12 @@ export function actorsWithAllins(tokens: string[], stack: number, seats: readonl
     p %= active.length;
     const seat = active[p]!;
     if (tok === "F") { active = active.filter((s) => s !== seat); inHand--; return seat; }
-    if (tok === "C") inFor[seat] = Math.min(Math.max(...Object.values(inFor)), stack);
+    if (tok === "C") inFor[seat] = Math.min(Math.max(...Object.values(inFor)), cap(seat));
     else if (tok !== "X") {
-      const to = tok === "RAI" ? stack : Number(/^R([\d.]+)$/.exec(tok)?.[1] ?? NaN);
-      if (Number.isFinite(to)) inFor[seat] = Math.min(to, stack);
+      const to = tok === "RAI" ? cap(seat) : Number(/^R([\d.]+)$/.exec(tok)?.[1] ?? NaN);
+      if (Number.isFinite(to)) inFor[seat] = Math.min(to, cap(seat));
     }
-    if ((inFor[seat] ?? 0) >= stack - 1e-9) active = active.filter((s) => s !== seat);
+    if ((inFor[seat] ?? 0) >= cap(seat) - 1e-9) active = active.filter((s) => s !== seat);
     else p += 1;
     return seat;
   });
@@ -66,6 +67,39 @@ export type FitResult = Walk3Result & {
 };
 
 /**
+ * ONE FIT STEP, shared by every tree we fit a line into (the HRC charts here, GTO Wizard AI's preflop tree in
+ * services/gtowAiPreflop.ts): fold the EARLIEST plain caller or limper who is not kept (hero, protected seats) and
+ * does not raise later in the hand, and drop that seat's later actions. Null when nobody may be folded.
+ */
+export function foldEarliestCaller(
+  tokens: string[],
+  opts: { keep: Set<string>; stack: number | Record<string, number>; seats: readonly string[] },
+): { tokens: string[]; fold: { at: number; seat: string; dropped: string[] }; kept: number[] } | null {
+  const who = actorsWithAllins(tokens, opts.stack, opts.seats);
+  const raisers = new Set(tokens.map((t, i) => (/^R/.test(t) || t === "RAI" ? who[i] : null)).filter((s): s is string => !!s));
+  let j = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    const s = who[i];
+    if (tokens[i] !== "C" || !s) continue;
+    if (opts.keep.has(s.toUpperCase())) continue;   // never fold hero's (or a protected seat's) action
+    if (raisers.has(s)) continue;                   // a limp-reraiser's raise is the spot itself
+    j = i;
+    break;
+  }
+  if (j < 0) return null;
+  const seat = who[j]!;
+  const dropped: string[] = [];
+  const next: string[] = [];
+  const kept: number[] = [];                        // for each token of `next`, its index in `tokens`
+  for (let i = 0; i < tokens.length; i++) {
+    if (i === j) { next.push("F"); kept.push(i); continue; }
+    if (i > j && who[i] === seat) { dropped.push(tokens[i]!); continue; }   // he folded: his later actions never happen
+    next.push(tokens[i]!); kept.push(i);
+  }
+  return { tokens: next, fold: { at: j, seat, dropped }, kept };
+}
+
+/**
  * Walk `intended` through the tree, folding callers until it fits. Returns the walk (as walk3max) plus every
  * fold made. A line that needs no fold comes back exactly as walk3max would return it.
  */
@@ -73,7 +107,7 @@ export async function walkFitted(
   intended: string[],
   getNode: GetNode,
   opts: {
-    heroSeat: string | null; stack: number; seats?: readonly string[]; maxFolds?: number;
+    heroSeat: string | null; stack: number | Record<string, number>; seats?: readonly string[]; maxFolds?: number;
     /** further seats that must not be folded — the range walk keeps the one whose range it is reading */
     protect?: string[];
     /** the line runs to the FLOP (range reconstruction): ending on a terminal is the goal, not a failure */
@@ -95,30 +129,10 @@ export async function walkFitted(
     if (w.ok || w.unreachable || endsAtFlop) return { ...w, folds, fittedLine: tokens, fitted: w.ok || endsAtFlop };
     if (attempt >= maxFolds) return { ...w, folds, fittedLine: tokens, fitted: false };
 
-    const who = actorsWithAllins(tokens, opts.stack, seats);
-    const raisers = new Set(tokens.map((t, i) => (/^R/.test(t) || t === "RAI" ? who[i] : null)).filter((s): s is string => !!s));
-    let j = -1;
-    for (let i = 0; i < tokens.length; i++) {
-      const s = who[i];
-      if (tokens[i] !== "C" || !s) continue;
-      if (keep.has(s.toUpperCase())) continue;              // never fold hero's (or a protected seat's) action
-      if (raisers.has(s)) continue;                         // a limp-reraiser's raise is the spot itself
-      j = i;
-      break;
-    }
-    if (j < 0) return { ...w, folds, fittedLine: tokens, fitted: false };  // nothing left that may be folded
-
-    const seat = who[j]!;
-    const dropped: string[] = [];
-    const next: string[] = [];
-    const nextIdx: number[] = [];
-    for (let i = 0; i < tokens.length; i++) {
-      if (i === j) { next.push("F"); nextIdx.push(origIdx[i]!); continue; }
-      if (i > j && who[i] === seat) { dropped.push(tokens[i]!); continue; }   // he folded: his later actions never happen
-      next.push(tokens[i]!); nextIdx.push(origIdx[i]!);
-    }
-    folds.push({ index: origIdx[j]!, seat, dropped });
-    tokens = next;
-    origIdx = nextIdx;
+    const step = foldEarliestCaller(tokens, { keep, stack: opts.stack, seats });
+    if (!step) return { ...w, folds, fittedLine: tokens, fitted: false };  // nothing left that may be folded
+    folds.push({ index: origIdx[step.fold.at]!, seat: step.fold.seat, dropped: step.fold.dropped });
+    origIdx = step.kept.map((i) => origIdx[i]!);
+    tokens = step.tokens;
   }
 }

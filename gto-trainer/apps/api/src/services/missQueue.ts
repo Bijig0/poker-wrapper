@@ -6,6 +6,7 @@ import type { ChartChoice, Walk3Result } from "./hrc3max";
 import { RUNGS, type Site } from "./hrc3max";
 import { SEATS6, type Chart6Choice } from "./hrc6max";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
+import { isTestStakeOf } from "./strategies";
 
 /**
  * The preflop MISS QUEUE — every spot the 3-max chart corpus could not answer
@@ -437,6 +438,9 @@ class MissQueue {
    */
   observe6max(a: Observe6Args): MissKind[] {
     const out: MissKind[] = [];
+    // A TEST-STAKE table (NL5 ring, 2026-09-23) plays the NL200 answers but not NL200 sizes — every bet
+    // rounds to the cent, so a 2.5x open arrives as 2.4x/2.6x. Its "misses" would queue solves nobody needs.
+    if (isTestStakeOf("ign-ring-NL200-6", a.hand.bbCents)) return out;
     try {
       const chart: ChartLike = {
         id: a.choice.id, site: a.choice.site, depth: a.choice.depth,

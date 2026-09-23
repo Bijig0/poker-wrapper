@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ignition Study · Getting to the table</title>
+<title>Poker Wrapper · Getting to the table</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -20,6 +20,11 @@
   .st.now { border-color: #1f6feb; } .st.bad { border-color: #6a2a2a; }
   .st b { display: block; } .st span.d { color: #8fa1b3; font-size: 12.5px; }
   .st.wait .n { background: #4d3d1e; color: #ffce56; } .st.wait { border-color: #6a5a2a; }
+  /* one row per table, indented under "Go to the tables" — the client adds them one at a time */
+  .st.sub { margin-left: 26px; padding: 6px 12px; background: transparent; border-style: dashed; }
+  .st.sub .n { width: auto; min-width: 18px; padding: 0 5px; height: 17px; border-radius: 9px; font-size: 10px; font-weight: 600; }
+  .st.sub b { font-size: 13.5px; font-weight: 600; }
+  .st.sub.idle { opacity: .55; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   input[type=text] { background: #0c1013; border: 1px solid #3a4a5a; color: inherit; border-radius: 8px; padding: 9px 12px; font: inherit; font-size: 20px; letter-spacing: .2em; width: 170px; }
   .mini { background: #22303d; color: #cfe0ef; border: 1px solid #3a4a5a; border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
@@ -30,7 +35,7 @@
 </style>
 </head>
 <body>
-<h1>Getting to the table</h1>
+<h1 id="h1">Getting to the table</h1>
 <div class="sub" id="who">session declared — the wrapper is opening the client and signing in; the panel opens by itself once you are seated.</div>
 
 <div class="card">
@@ -66,12 +71,43 @@ const STEPS = [
 // A failed step gets its own ↻ Retry: the router is pushed back into motion from that step (window → open it,
 // sign-in → sign in again, route/seated → leave a wrong table if any and go to the declared format again).
 let retrying = false;
+
+function stepRow(cls, n, label, detail, stepId, retry, extra) {
+  const badge = cls === "done" ? "✓" : cls === "bad" ? "!" : n;
+  const btn = retry ? `<button class="mini retry-step" data-step="${stepId}" ${retrying ? "disabled" : ""}>↻ Retry</button>` : "";
+  return `<div class="st ${extra || ""} ${cls || ""}"><span class="n">${badge}</span><span><b>${esc(label)}</b><span class="d">${esc(detail)}</span></span>${btn}</div>`;
+}
+
 function render(model) {
   $("steps").innerHTML = STEPS.map((s, i) => {
     const m = model[s.id] || {};
-    const retry = m.cls === "bad" || m.retry ? `<button class="mini retry-step" data-step="${s.id}" ${retrying ? "disabled" : ""}>↻ Retry</button>` : "";
-    return `<div class="st ${m.cls || ""}"><span class="n">${m.cls === "done" ? "✓" : m.cls === "bad" ? "!" : i + 1}</span><span><b>${esc(s.label)}</b><span class="d">${esc(m.text || s.d)}</span></span>${retry}</div>`;
+    // with per-table rows the Retry belongs on the table that failed, not on the step above it
+    const own = (m.cls === "bad" || m.retry) && !(m.subs || []).some((x) => x.cls === "bad");
+    const row = stepRow(m.cls, i + 1, s.label, m.text || s.d, s.id, own);
+    // A SESSION OF FOUR TABLES TAKES FOUR SEATS, ONE AT A TIME, and there is a
+    // minute or two between the first and the last: one "Go to the table" row for
+    // all of them says nothing about which are up. Each table gets its own row
+    // under the step, numbered 4.1 … 4.4, so "2 of 4" is something you can see.
+    const subs = (m.subs || []).map((sub, k) =>
+      stepRow(sub.cls, `${i + 1}.${k + 1}`, sub.label, sub.text, s.id, sub.cls === "bad", "sub" + (sub.cls ? "" : " idle"))).join("");
+    return row + subs;
   }).join("");
+}
+
+// One row per table the session asked for: seated → done, the one being taken → now
+// (or bad, with its own Retry), the rest → waiting. `have`/`want` come from the router
+// (`routing.seats`), which counts the client’s own seated tables rather than our bookkeeping.
+function tableSubs(have, want, r) {
+  const subs = [];
+  for (let k = 1; k <= want; k++) {
+    const label = `Table ${k} of ${want}`;
+    if (k <= have) subs.push({ label, cls: "done", text: k === 1 ? "seated — the session’s first seat" : "seated — the client added it and re-tiled" });
+    else if (k === have + 1) {
+      if (r.state === "failed") subs.push({ label, cls: "bad", text: r.text || "the seat did not take — trying again shortly" });
+      else subs.push({ label, cls: "now", text: r.text || (have ? "back to the lobby, taking the next seat" : "lobby → format → seat") });
+    } else subs.push({ label, cls: "", text: "waits for the seat before it — they are taken in order" });
+  }
+  return subs;
 }
 
 // One retry path for every step. Prefers POST /router/retry (does the right thing for the router's current state);
@@ -129,29 +165,48 @@ async function tick() {
     model.signin = { cls: "done", text: profile ? `signed in as ${profile}` : "signed in" };
     model.code = { cls: "done", text: "not asked, or accepted" };
   }
-  // routing
+  // routing — how many tables this session is taking, and how many it has
+  // (`seats` is the router's own count; a follower slot never drives the lobby and
+  // says so, so only the leader's reading draws per-table rows)
+  const seats = r.seats && r.seats.leader ? r.seats : null;
+  const declared = Math.max(1, Number((SESSION && SESSION.config && SESSION.config.tables) || 1));
+  const want = seats ? Math.max(1, seats.want) : (r.seats ? 1 : declared);
+  const have = seats ? seats.have : (t.state === "seated" ? 1 : 0);
+  const multi = want > 1;
+  STEPS[3].label = multi ? "Go to the tables" : "Go to the table";
+  STEPS[3].d = multi ? `lobby → format → seat, ${want} times, with the declared buy-in` : "lobby → format → seat, with the declared buy-in";
   if (t.state === "seated") {
-    model.route = { cls: "done", text: r.text || "at the table" };
-    model.seated = { cls: r.state === "off-format" ? "bad" : "done", text: t.detected ? `${t.detected.name}${r.state === "off-format" ? " — not the declared format" : ""}` : "seated" };
+    const all = have >= want;
+    model.route = multi
+      ? { cls: all ? "done" : r.state === "failed" ? "bad" : "now", text: `${have} of ${want} tables seated${all ? "" : " — the client takes them one at a time"}`, subs: tableSubs(have, want, r) }
+      : { cls: "done", text: r.text || "at the table" };
+    model.seated = { cls: r.state === "off-format" ? "bad" : all ? "done" : "now",
+                     text: t.detected ? `${t.detected.name}${r.state === "off-format" ? " — not the declared format" : ""}${multi ? ` · ${have} of ${want} up` : ""}`
+                                      : (multi ? `${have} of ${want} up` : "seated") };
   } else if (t.state === "signed-in") {
-    if (r.state === "routing") model.route = { cls: "now", text: r.text };
-    else if (r.state === "failed") { model.route = { cls: "bad", text: r.text || "routing failed" }; }
-    else if (r.state === "left") { model.route = { cls: "bad", text: r.text }; }
+    const subs = multi ? tableSubs(have, want, r) : null;
+    if (r.state === "routing" || r.state === "seating") model.route = { cls: "now", text: r.text, subs };
+    else if (r.state === "failed") { model.route = { cls: "bad", text: r.text || "routing failed", subs }; }
+    else if (r.state === "left") { model.route = { cls: "bad", text: r.text, subs }; }
     else if (!fmt) { model.route = { cls: "done", text: "no format declared — open a table yourself" }; }
-    else model.route = { cls: "now", text: `going to ${fmt}` };
+    else model.route = { cls: "now", text: multi ? `going to ${fmt} — ${want} tables` : `going to ${fmt}`, subs };
   }
   render(model);
   $("codebox").style.display = st === "code-form" ? "" : "none";
   if (st === "code-form" && lastState !== "code-form") { setTimeout(() => $("code").focus(), 50); }
   lastState = st || t.state;
   $("log").textContent = (r.steps || []).slice(-12).join("\n");
-  // done → the panel (a moment to read the last line), also when no format was declared and we are simply signed in
-  const arrived = t.state === "seated" || (t.state === "signed-in" && !fmt);
+  // done → the panel (a moment to read the last line), also when no format was declared and we are simply signed in.
+  // A MULTI-TABLE SESSION IS NOT DONE AT THE FIRST SEAT: this page is the only place the
+  // remaining seats are shown being taken, so it stays until they are all up (Skip to the
+  // panel is right there for anyone who would rather not watch).
+  const seatsPending = multi && have < want;
+  const arrived = (t.state === "seated" && !seatsPending) || (t.state === "signed-in" && !fmt);
   if (arrived) {
     if (!redirectAt) redirectAt = Date.now() + 2500;
-    $("msg").className = "msg ok"; $("msg").textContent = r.state === "off-format" ? "seated, but not at the declared format — opening the panel" : "seated — opening the panel";
+    $("msg").className = "msg ok"; $("msg").textContent = r.state === "off-format" ? "seated, but not at the declared format — opening the panel" : multi ? `all ${want} tables seated — opening the panel` : "seated — opening the panel";
     if (Date.now() >= redirectAt) { location.href = "/panel"; return; }
-  } else { redirectAt = 0; if (r.state === "failed" && !retrying) { $("msg").className = "msg bad"; $("msg").textContent = "the lobby did not reach the format — press ↻ Retry on the step, go there by hand, or back to setup"; } else if (!retrying) $("msg").textContent = ""; }
+  } else { redirectAt = 0; if (r.state === "failed" && !retrying) { $("msg").className = "msg bad"; $("msg").textContent = seatsPending ? `table ${have + 1} of ${want} did not seat — press ↻ Retry on that table, seat it by hand, or skip to the panel` : "the lobby did not reach the format — press ↻ Retry on the step, go there by hand, or back to setup"; } else if (seatsPending && !retrying) { $("msg").className = "msg warn"; $("msg").textContent = `${have} of ${want} tables seated — the panel opens when they are all up`; } else if (!retrying) $("msg").textContent = ""; }
   setTimeout(tick, 1200);
 }
 
@@ -176,7 +231,9 @@ $("tosetup").onclick = () => { location.href = "/setup"; };
     if (!SESSION) { location.href = "/setup"; return; }
     const c = SESSION.config || {};
     if (j.brief && j.brief.formatName) c.formatName = j.brief.formatName;   // the human name lives in the brief
-    $("who").innerHTML = `<b>${esc(c.strategyName || SESSION.preset)}</b>${c.profile ? ` · signing in as <b>${esc(c.profile)}</b>` : " · no profile — sign in by hand"}${c.format ? ` · going to <b>${esc(c.formatName || c.format)}</b> with ${esc(c.buyinBb || 100)} bb` : " · no format declared"}`;
+    const nTables = Math.max(1, Number(c.tables || 1));
+    if (nTables > 1) { document.title = `Poker Wrapper · Getting to the tables`; $("h1").textContent = `Getting to ${nTables} tables`; }
+    $("who").innerHTML = `<b>${esc(c.strategyName || SESSION.preset)}</b>${c.profile ? ` · signing in as <b>${esc(c.profile)}</b>` : " · no profile — sign in by hand"}${c.format ? ` · going to <b>${esc(c.formatName || c.format)}</b> with ${esc(c.buyinBb || 100)} bb` : " · no format declared"}${nTables > 1 ? ` · <b>${nTables} tables</b>, seated one at a time on this one login` : ""}`;
   } catch (e) {}
   render({}); tick();
 })();

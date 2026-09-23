@@ -66,6 +66,10 @@ export interface ParsedHand {
   /** Table big blind in cents (200 = $1/$2, 500 = $2.50/$5), when the feed
    *  has calibrated the scale — selects the rake-matched chart set. */
   bbCents?: number;
+  /** Per-player ante in BB, when the source reports one (CoinPoker's log does: pre_hand_start_info
+   *  anteAmount). Absent = unknown, NOT zero. Carried so a chart solved with antes can check the table
+   *  matches it and the postflop solve can put the dead money in the pot. */
+  anteBb?: number;
   heroSeatId: number;
   heroCards: string[]; // short form, e.g. "As"
   board: string[]; // short form

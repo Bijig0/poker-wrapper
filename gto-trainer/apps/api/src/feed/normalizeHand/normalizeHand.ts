@@ -157,6 +157,14 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     // why answers.sqlite.table_slot was null in every one of its 2,129 rows
     // while the wrapper stamped it on /hand and studyPoller already read it.
     // Null stays null: a single-table session has no slot by design.
+    // THE ANTE (2026-09-22, CoinPoker HU). The wrapper exports `ante` and `bb` in table currency; a
+    // source may also give `antePerPlayerBb` directly. Unknown stays absent — never a silent zero.
+    ...((() => {
+      const direct = Number(input.antePerPlayerBb);
+      if (Number.isFinite(direct) && direct >= 0) return { anteBb: direct };
+      const ante = Number(input.ante), bb = Number(input.bb);
+      return Number.isFinite(ante) && Number.isFinite(bb) && bb > 0 && ante >= 0 ? { anteBb: Math.round((ante / bb) * 1000) / 1000 } : {};
+    })()),
     ...(Number.isFinite(Number(input.tableSlot)) && Number(input.tableSlot) > 0
       ? { tableSlot: Number(input.tableSlot) }
       : {}),

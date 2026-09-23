@@ -172,7 +172,8 @@ export function parseHrcId(id: string): Partial<CatalogEntry> {
       variant: "base",
     };
   }
-  const patch = id.match(/^(\w+?)_6max_P_((?:(?:UTG|HJ|CO|BTN|SB|BB)[\d_]+_)*(?:UTG|HJ|CO|BTN|SB|BB)[\d_]+)_o(limp|[\d_]+)$/);
+  // a SIZE patch (2026-09-22) adds a menu-level suffix — _i20 (iso), _3b8, _4b30 — and an all-100 table is P_EVEN
+  const patch = id.match(/^(\w+?)_6max_P_((?:(?:UTG|HJ|CO|BTN|SB|BB)[\d_]+_)*(?:UTG|HJ|CO|BTN|SB|BB)[\d_]+|EVEN)_o(limp|\d+(?:_5)?)(?:_(?:i|3b|4b|5b)[\d_]+)*$/);
   if (patch) {
     const stacksBB: Record<string, number> = Object.fromEntries(SEATS.map((p) => [p, DEEP_DEFAULT]));
     for (const m of patch[2]!.matchAll(/(UTG|HJ|CO|BTN|SB|BB)([\d_]+)/g)) stacksBB[m[1]!] = num(m[2]!);

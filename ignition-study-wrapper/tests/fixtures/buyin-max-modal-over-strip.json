@@ -1,0 +1,57 @@
+{
+  "name": "buyin-max-modal-over-strip",
+  "why": "Session 100647 hand 5 (2026-09-19): the auto top-up's buy was refused at the next hand because hero had won the pot meanwhile, and the client's notice ('more than the maximum buy in amount') sat over the action strip through hero's turn, swallowing the auto-execute's click. The wrapper must see the notice, name it harmless, and hold the pick until it is gone.",
+  "spec": {
+    "title": "$1/$2 No Limit Hold'em",
+    "capacity": 6,
+    "potBB": 1.5,
+    "board": [],
+    "heroSeat": 6,
+    "dealerSeat": 3,
+    "heroCards": ["Jd", "8c"],
+    "seats": {
+      "1": {"stack": 115.5, "cards": 0, "badge": "FOLD"},
+      "2": {"stack": 100, "cards": 0},
+      "3": {"stack": 103.5, "cards": 2},
+      "4": {"stack": 100, "cards": 2, "bet": 0.5, "badge": "POST SB"},
+      "5": {"stack": 101.2, "cards": 0, "sittingOut": true},
+      "6": {"stack": 102.5, "cards": 2, "bet": 1.0, "badge": "POST BB"}
+    },
+    "offer": {
+      "fold": true,
+      "call": 1.5,
+      "raise": 4,
+      "selectors": ["X2.5", "X4", "Pot", "ALL-IN"]
+    },
+    "modal": {
+      "text": "The amount you entered is more than the maximum buy in amount allowed for this table.",
+      "ok": "OK"
+    },
+    "node": {
+      "dealt": [3, 4, 6],
+      "toActSeat": 6,
+      "committed": {"3": 2.5, "4": 0.5, "6": 1.0},
+      "maxBet": 2.5,
+      "actions": [
+        {"seat": 4, "type": "post-sb", "street": "preflop", "amount": 0.5},
+        {"seat": 6, "type": "post-bb", "street": "preflop", "amount": 1.0},
+        {"seat": 3, "type": "raise", "street": "preflop", "amount": 2.5},
+        {"seat": 4, "type": "fold", "street": "preflop"}
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "preflop",
+      "heroSeatId": 6,
+      "positions": {"3": "BTN", "4": "SB", "6": "BB"},
+      "actionCount": 4,
+      "toActIsHero": true,
+      "ended": false
+    },
+    "status": "in-hand",
+    "modal": "buy-in above the table maximum",
+    "relay": [],
+    "refuse": []
+  }
+}

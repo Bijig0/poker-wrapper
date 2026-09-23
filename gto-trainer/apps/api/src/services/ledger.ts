@@ -78,6 +78,9 @@ export function threeMaxChartIds(c: LedgerConfig): string[] {
 export function expectedChartIds(c: LedgerConfig, fmt: LedgerFormat | null | undefined): string[] {
   const skip = new Set((c.skipCharts ?? []).map((x) => x.id));
   const drop = (ids: string[]) => (skip.size ? ids.filter((id) => !skip.has(id)) : ids);
+  // a packaged (trimmed) ledger carries the ids pre-computed: its plan files and box dirs are not shipped
+  const baked = (c as unknown as { expectedIds?: string[] }).expectedIds;
+  if (Array.isArray(baked)) return drop(baked);
   if (!fmt || !["preflop-grid", "preflop-grid-asym", ...BOX_GRID_KINDS, "locked-root"].includes(c.kind)) return [];
   if (!["hrc-box", "hrc-plan", "hrc-zenbook"].includes(c.runner) && c.recipe !== "hrc-box" && c.recipe !== "hrc-plan") return [];
   if (isBoxGrid(c)) return drop(sixMaxChartIds(c, fmt));
@@ -138,10 +141,15 @@ export interface Ledger {
   proposals?: { id: string; run: string; why: string; steps: string[]; input?: string[]; output?: string[]; check?: string[]; approved: { at: string } | null }[];
 }
 
-const PATH = join(DATA_DIR, "ledger.json");
+// LEDGER_PATH: the packaged install ships a trimmed ledger (setup/build_package.py) — formats, configs with their
+// chart ids baked in, sources; no boxes, machines, proposals or plans
+const PATH = process.env.LEDGER_PATH ?? join(DATA_DIR, "ledger.json");
 let cache: { mtimeMs: number; value: Ledger } | null = null;
+/** What a missing ledger reads as: nothing to solve, nothing landed — never a crash of every page that reads it. */
+const EMPTY_LEDGER = { formats: [], trees: [], configs: [], sources: {}, plans: [], proposals: [], machines: [], boxes: {} } as unknown as Ledger;
 export function loadLedger(): Ledger {
-  const st = statSync(PATH);
+  let st: ReturnType<typeof statSync>;
+  try { st = statSync(PATH); } catch { return EMPTY_LEDGER; }
   if (cache && cache.mtimeMs === st.mtimeMs) return cache.value;
   const value = JSON.parse(readFileSync(PATH, "utf-8")) as Ledger;
   cache = { mtimeMs: st.mtimeMs, value };

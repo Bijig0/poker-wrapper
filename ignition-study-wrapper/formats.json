@@ -52,6 +52,8 @@
   },
   "lobby": {
     "client": "https://www.ignitioncasino.eu/static/poker-game/?lobby=",
+    "entry": "https://www.ignitioncasino.eu/poker-lobby",
+    "_entryDoc": "the site's own poker-lobby entry: redirects into the client shell and settles on /poker-lobby/home. Used as the FIRST hop when the window has no lobby (a fresh sign-in lands on /headless/poker/casino-crossplay, from which the ?lobby= deep links never boot).",
     "sections": {
       "ring": "/poker-lobby/cash-game",
       "zone": "/poker-lobby/zone-poker",
@@ -251,6 +253,23 @@
         "seats": 6,
         "practice": false,
         "stakeLabel": "$1.00 / $2.00"
+      }
+    },
+    {
+      "id": "ign-ring-NL5-6",
+      "site": "ignition",
+      "gameType": "ring",
+      "stake": "NL5",
+      "seats": 6,
+      "name": "NL5 Ring 6-max Ignition (TEST)",
+      "test": true,
+      "testOf": "ign-ring-NL200-6",
+      "_doc": "TEST STAKE (Brady, 2026-09-23): the cheapest real 6-max ring table, for exercising the reader, answers and relay of the NL200 6-max strategy without NL200 money. Answers are the NL200 answers unchanged (the 6-max charts and postflop rake are fixed at NL200). Sizes round to the cent (a 2.5bb open is $0.12/$0.13), so expect more size-snapping than at NL200. Sessions are tagged test; the 6-max miss queue ignores them.",
+      "path": {
+        "section": "ring",
+        "seats": 6,
+        "practice": false,
+        "stakeLabel": "$0.02 / $0.05"
       }
     },
     {

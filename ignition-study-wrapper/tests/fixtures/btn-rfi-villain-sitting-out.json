@@ -1,0 +1,58 @@
+{
+  "name": "btn-rfi-villain-sitting-out",
+  "why": "Hand 4919080696 (2026-09-19): hero on the button, first to act, with a SITTING OUT villain at the table. The reader attributed the villain's label to hero, the export said 'not hero's turn', and the poller never asked. Hero holds cards and the buttons are up: the export must say hero to act and the status in-hand.",
+  "spec": {
+    "title": "$1/$2 No Limit Hold'em",
+    "capacity": 6,
+    "potBB": 1.5,
+    "board": [],
+    "heroSeat": 6,
+    "dealerSeat": 6,
+    "heroCards": ["7c", "5h"],
+    "seats": {
+      "1": {"empty": true},
+      "2": {"stack": 291.9, "cards": 2, "bet": 0.5, "badge": "POST SB"},
+      "3": {"stack": 102.2, "cards": 0, "sittingOut": true},
+      "4": {"stack": 91.5, "cards": 2, "bet": 1.0, "badge": "POST BB"},
+      "5": {"stack": 100, "cards": 0, "waitingForBB": true},
+      "6": {"stack": 86.8, "cards": 2, "timer": 24}
+    },
+    "offer": {
+      "fold": true,
+      "call": 1,
+      "raise": 2,
+      "selectors": ["X2.5", "X4", "Pot", "ALL-IN"]
+    },
+    "node": {
+      "dealt": [2, 4, 6],
+      "toActSeat": 6,
+      "committed": {"2": 0.5, "4": 1.0},
+      "maxBet": 1.0,
+      "actions": [
+        {"seat": 2, "type": "post-sb", "street": "preflop", "amount": 0.5},
+        {"seat": 4, "type": "post-bb", "street": "preflop", "amount": 1.0}
+      ]
+    }
+  },
+  "expect": {
+    "hand": {
+      "street": "preflop",
+      "board": [],
+      "heroSeatId": 6,
+      "heroCards": ["7♣", "5♥"],
+      "positions": {"2": "SB", "4": "BB", "6": "BTN"},
+      "actionCount": 2,
+      "toActSeatId": 6,
+      "toActIsHero": true,
+      "toCall": 1,
+      "ended": false
+    },
+    "status": "in-hand",
+    "relay": [
+      {"label": "FOLD", "kind": "action", "fires": "foldButton"},
+      {"label": "CALL 1 BB", "kind": "action", "fires": "callButton"},
+      {"label": "RAISE TO 2 BB", "kind": "action", "fires": "raiseButton"}
+    ],
+    "refuse": ["CHECK"]
+  }
+}

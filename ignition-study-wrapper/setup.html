@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ignition Study · Session setup</title>
+<title>Poker Wrapper · Session setup</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -56,6 +56,16 @@
   .check .l b { display: block; } .check .l span { color: #8fa1b3; font-size: 12.5px; }
   .check .req { font-size: 11px; color: #8fa1b3; text-transform: uppercase; letter-spacing: .06em; }
   .check.bad.required .req { color: #ff8a80; }
+  /* One row per GTO Wizard session: there is more than one account answering
+     spots, and when something is down you need to know WHICH. */
+  .gsess { margin-top: 7px; display: flex; flex-direction: column; gap: 5px; }
+  .gsess .g { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #8fa1b3; }
+  .gsess .g .d { width: 8px; height: 8px; border-radius: 50%; background: #3a4a5a; flex: none; }
+  .gsess .g.up .d { background: #5ee39a; } .gsess .g.warn .d { background: #ffcf70; } .gsess .g.down .d { background: #ff8a80; }
+  .gsess .g .nm { color: #d6e2ee; font-weight: 600; }
+  .gsess .g .cap { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 999px; border: 1px solid #1f2731; }
+  .gsess .g .cap.mw { color: #5ee39a; border-color: #2c5a41; }
+  .gsess .g button { margin-left: auto; }
   .verdict { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
   .verdict .msg { font-size: 14px; }
   .verdict .msg.bad { color: #ff8a80; } .verdict .msg.ok { color: #5ee39a; }
@@ -67,34 +77,48 @@
   .recent th { text-align: left; color: #8fa1b3; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #26303a; }
   .recent td { padding: 5px 8px; border-bottom: 1px solid #1f2731; }
   .resume { border-color: #ffce56; }
+  .site-ico { font-size: 22px; line-height: 1; }
+  body[data-site="coinpoker"] .ign-only { display: none !important; }
+  body:not([data-site="coinpoker"]) .cp-only { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .preset, .check { transition: all .12s; } }
 </style>
 </head>
 <body>
-<h1>Session setup</h1>
+<h1>Poker Wrapper · Session setup</h1>
 <div class="sub">Nothing opens until this is declared. What you choose here is written down with the session, checked before Start, and read back by the dashboard and Replay Review.</div>
 
+<div id="update-banner" class="card" style="display:none;margin-top:16px;border-color:#1f6feb;background:#14243a"></div>
 <div id="resume" class="card resume" style="display:none;margin-top:16px"></div>
 
+<section class="step" id="step-site">
+  <h2><span class="n">1</span> Site</h2>
+  <div class="presets" id="sites"></div>
+</section>
+
 <section class="step" id="step-preset">
-  <h2><span class="n">1</span> Mode</h2>
+  <h2><span class="n">2</span> Mode</h2>
   <div class="presets" id="presets"></div>
 </section>
 
 <section class="step" id="step-table">
-  <h2><span class="n">2</span> Table <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— which format to play, how much to bring, and who signs in</span></h2>
+  <h2><span class="n">3</span> Table <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— which format to play, how much to bring, and who signs in</span></h2>
   <div class="card">
     <div class="settings">
       <div class="field" style="grid-column: 1 / -1"><span class="k">Format <span id="fmt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
         <div class="presets" id="formats" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))"></div>
-        <span class="help">The strategy names the formats its layers were built for; the others are greyed out. Start opens the table window and the wrapper drives the lobby to this table. The badge on the panel warns when the open table is not this one.</span></div>
-      <div class="field"><span class="k">Buy-in</span>
+        <span class="help ign-only">The strategy names the formats its layers were built for; the others are greyed out. Start opens the table window and the wrapper drives the lobby to this table. The badge on the panel warns when the open table is not this one.</span>
+        <span class="help cp-only">The format labels the session. <b>You take the seat yourself in the CoinPoker client</b> — Start opens the client if it is not running, and the wrapper follows whichever table you sit at by reading the client's own log (every card, action and stack, exactly). Presses go to the table window; auto-execute arms only on a Practice Games table.</span></div>
+      <div class="field ign-only"><span class="k">Tables</span>
+        <div class="seg" id="tables"><button data-v="1" class="plain">1</button><button data-v="2" class="plain">2</button><button data-v="4" class="plain">4</button></div>
+        <span class="help" id="tables-help">How many tables this session opens. Each one is its own wrapper with its own window and its own answers, but they share ONE session, one login and one balance — you declare it here and the rest join. They tile the table screen between them; their answers all appear on this panel. <b>Only 1, 2 and 4</b>: the screen splits into halves or quarters, so three would cost every table the smaller window and leave a quarter empty.</span>
+        <div class="sub" id="tables-size" style="margin-top:4px"></div></div>
+      <div class="field ign-only"><span class="k">Buy-in</span>
         <div class="row"><input type="number" id="buyin" min="1" step="1" value="100"> <span class="sub">big blinds</span> <span class="sub" id="buyin-usd"></span></div>
         <span class="help">Big blinds × the format's big blind = the dollar amount typed into the Buy-In modal's OTHER box, clamped to the table's own minimum and maximum (Zone 50–100 bb, ring 30–100 bb).</span></div>
-      <div class="field"><span class="k">Sign in as</span>
+      <div class="field ign-only"><span class="k">Sign in as</span>
         <div class="row"><select id="profile" style="background:#0c1013;border:1px solid #3a4a5a;color:inherit;border-radius:8px;padding:7px 10px;font:inherit"><option value="">— sign in by hand —</option></select> <button class="mini" id="profile-edit">profiles…</button></div>
         <span class="help">A profile is an account: e-mail, remember-me, and a password kept in Windows Credential Manager. The wrapper fills the login form from it; the Authy code is always typed by you.</span></div>
-      <div class="field" style="grid-column: 1 / -1"><span class="k">Table window</span>
+      <div class="field ign-only" style="grid-column: 1 / -1"><span class="k">Table window</span>
         <div id="tw-state" class="check pending"><span class="dot"></span><span class="l"><b>…</b><span></span></span><span><button class="mini" id="tw-open">Open window</button></span></div>
         <div id="tw-code" class="row" style="display:none;margin-top:6px"><input type="text" id="code" inputmode="numeric" maxlength="8" placeholder="Authy code" style="width:130px"> <button class="mini" id="code-send">Submit code</button> <span class="sub" id="code-msg"></span></div>
         <span class="help">Nothing signs in from here. Press Start: the wrapper opens the window, signs in as the profile, asks for the Authy code only if Ignition shows the verification box, then goes to the table.</span>
@@ -116,15 +140,40 @@
 </section>
 
 <section class="step" id="step-settings">
-  <h2><span class="n">3</span> Settings <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— the mode decides what answers you get; these are the session's own knobs</span></h2>
+  <h2><span class="n">4</span> Settings <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— the strategy decides what answers you get; these are the session's own knobs</span></h2>
   <div class="card">
     <div class="settings">
-      <div class="field" style="grid-column: 1 / -1"><span class="k">Answers · set by the mode</span>
-        <div id="answers-summary" class="sub">pick a mode above</div>
+      <div class="field" style="grid-column: 1 / -1"><span class="k">Answers · set by the strategy</span>
+        <div id="answers-summary" class="sub">pick a strategy above</div>
         <span class="help">A strategy is the whole answer: which preflop layer, which postflop layer, which opponent model. Every source it uses becomes a required check below.</span></div>
-      <div class="field"><span class="k">Debug recording</span>
+      <div class="field ign-only"><span class="k">Table browser</span>
+        <label class="row"><input type="checkbox" id="clearCache"> clear its cache before opening it</label>
+        <span class="help">Wipes the table window's HTTP, script and service-worker caches (not cookies, not the sign-in) when the session starts, so the lobby loads fresh. Use it after a sluggish or half-loaded lobby.</span></div>
+      <div class="field ign-only"><span class="k">Debug recording</span>
         <div class="seg" id="recording"><button data-v="1" class="plain">On</button><button data-v="0" class="plain">Off</button></div>
         <span class="help">Every tick's screenshot and parsed state, under this session's id. Needed for Replay Review.</span></div>
+      <div class="field" style="grid-column: 1 / -1"><span class="k">Auto-execute picks</span>
+        <div class="seg" id="autoExecute"><button data-v="1" class="plain">On</button><button data-v="0" class="plain">Off</button></div>
+        <div id="auto-delay-row" style="display:none;margin-top:8px">
+          <div class="row"><span class="sub">timing</span>
+            <div class="seg" id="autoDelay"><button data-v="instant" class="plain">Instant</button><button data-v="random" class="plain">Randomized 1.5–2 s</button></div></div>
+          <span class="help">Instant fires the moment the answer lands. Randomized waits a fresh 1.5–2 second draw before each pick — nothing is typed early, and a pick whose spot moves on during the wait is dropped, never played late.</span>
+        </div>
+        <div class="cp-only help" style="margin-top:6px;color:#ffce56">CoinPoker: auto-execute arms <b>only on a Practice Games table</b> (the server marks those as play chips). There is no real-money allowance for CoinPoker.</div>
+        <div id="auto-real-row" class="ign-only" style="display:none;margin-top:8px">
+          <label class="row" style="color:#ff8a80"><input type="checkbox" id="autoRealMoney"> allow it on a REAL-MONEY table</label>
+          <div class="row" style="margin-top:6px"><span class="sub">budget</span>
+            <input type="number" id="auto-min" min="1" max="120" value="30" style="width:70px"> <span class="sub">minutes</span>
+            <input type="number" id="auto-hands" min="1" max="500" value="50" style="width:70px"> <span class="sub">hands</span></div>
+          <span class="help" style="color:#ff8a80">Whichever budget runs out first disarms it. Without this box a real-money table refuses to arm and the declaration waits for a practice table.</span>
+        </div>
+        <span class="help">Plays each study pick on the table for you, with no keypress — the same relay the panel's action buttons use. This only sets how the panel OPENS; the toggle there turns it on and off during the session. Off arms nothing: you press Enter per decision, which is the assistive path and needs no declaration.</span></div>
+      <div class="field ign-only"><span class="k">Time bank</span>
+        <div class="seg" id="autoTimeBank"><button data-v="1" class="plain">Always take it</button><button data-v="0" class="plain">Leave it</button></div>
+        <span class="help">Ring tables offer a <b>+45s</b> button once your clock reaches about 9 seconds. With this on, the wrapper presses it the moment it appears — and again if it reappears — whether picks are pressed or auto-executed. It only buys time; it never chooses an action.</span></div>
+      <div class="field ign-only"><span class="k">Top-up</span>
+        <div class="seg" id="autoTopUp"><button data-v="1" class="plain">Always to the max</button><button data-v="0" class="plain">Off</button></div>
+        <span class="help">Ring tables have no auto-rebuy of their own. With this on, whenever your stack is below the table's <b>max buy-in</b> the wrapper opens <b>Buy chips</b> between hands, takes the Max the client offers and presses BUY — the amount is always the client's own number. Off = you buy chips yourself.</span></div>
       <div class="field"><span class="k">Budget</span>
         <div class="row"><input type="number" id="budget-hands" min="0" placeholder="hands"> <span class="sub">hands</span> <input type="number" id="budget-min" min="0" placeholder="min"> <span class="sub">minutes</span></div>
         <span class="help">Optional. The panel counts down and says when it's reached; it never ends the session for you.</span></div>
@@ -135,7 +184,7 @@
 </section>
 
 <section class="step" id="step-preflight">
-  <h2><span class="n">4</span> Preflight <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400" id="pf-when"></span></h2>
+  <h2><span class="n">5</span> Preflight <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400" id="pf-when"></span></h2>
   <div class="card">
     <div class="checks" id="checks"></div>
     <div class="verdict">
@@ -155,17 +204,45 @@ const fmtT = (ms) => ms ? new Date(ms).toLocaleString([], { month: "short", day:
 
 let PRESETS = {}, preset = null, cfg = null, pfTimer = null, lastPf = null, fake = false;
 
+// ---- step 1: the site (Poker Wrapper) --------------------------------------
+const SITES = [
+  { id: "ignition", name: "Ignition", ico: "♠",
+    tag: "Web client in the wrapper's own browser window. Strategies with answers, sign-in from a profile, the lobby router, top-ups, up to 4 tables." },
+  { id: "coinpoker", name: "CoinPoker", ico: "♦",
+    tag: "The CoinPoker desktop client. The table is read from the client's own log; you take the seat yourself. Answers: CoinPoker 200NL Heads-Up Equilibrium (our HRC heads-up charts + GTO Wizard AI postflop)." },
+];
+let SITE = (() => { try { return localStorage.getItem("pw.site") || "ignition"; } catch (e) { return "ignition"; } })();
+const siteOf = (p) => (p && p.sites) || ["ignition"];
+function renderSites() {
+  document.body.dataset.site = SITE;
+  $("sites").innerHTML = SITES.map((x) => `<button class="preset${x.id === SITE ? " on" : ""}" data-id="${x.id}" ${fake && x.id !== "ignition" ? "disabled title=\"the test rig is an Ignition replica\"" : ""}>
+      <b><span class="site-ico">${x.ico}</span> ${esc(x.name)}</b><span class="tag">${esc(x.tag)}</span></button>`).join("");
+  $("sites").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => chooseSite(b.dataset.id));
+  $("step-site").classList.add("done");
+}
+function chooseSite(id) {
+  SITE = id;
+  try { localStorage.setItem("pw.site", id); } catch (e) {}
+  renderSites();
+  preset = null; cfg = null; $("start").disabled = true;
+  renderPresets();
+  const first = Object.keys(PRESETS).find((k) => siteOf(PRESETS[k]).includes(SITE) && PRESETS[k].strategy && !PRESETS[k].disabled)
+    || Object.keys(PRESETS).find((k) => siteOf(PRESETS[k]).includes(SITE) && !PRESETS[k].disabled && k !== "test-rig");
+  if (first) choose(first);
+  if (SITE === "ignition") pollTable();
+}
+
 const presetChips = (p) => {
   const c = p.config;
   return [
     c.answers ? `<span class="chip on">answers on</span>` : `<span class="chip">answers off</span>`,
-    c.answers ? `<span class="chip ${c.mode === "exploit" ? "mes" : "gto"}">${c.mode === "exploit" ? "MES" : "GTO"} primary</span>` : "",
-    c.recording ? `<span class="chip rec">● recording</span>` : "",
+    c.answers ? '<span class="chip">answers on</span>' : "",
+    c.recording && SITE !== "coinpoker" ? `<span class="chip rec">● recording</span>` : "",
   ].join("");
 };
 
 function renderPresets() {
-  const entries = Object.entries(PRESETS);
+  const entries = Object.entries(PRESETS).filter(([, p]) => siteOf(p).includes(SITE));
   const strategies = entries.filter(([, p]) => p.strategy);
   const own = entries.filter(([, p]) => !p.strategy);
   const card = ([id, p]) => {
@@ -179,10 +256,11 @@ function renderPresets() {
     return `<button class="preset${id === preset ? " on" : ""}" data-id="${id}" ${p.disabled ? "disabled" : ""} ${id === "test-rig" && !fake ? 'title="launch with FAKE_TABLE=1 to use the test rig"' : ""}>
       <b>${esc(p.label)}</b>${status ? `<span>${status}</span>` : ""}<span class="tag">${esc(p.tagline)}</span>${layers}${why}<span class="chips">${presetChips(p)}</span>${lnk}</button>`;
   };
-  const down = !strategies.length && !fake;
+  const down = !strategies.length && !fake && SITE === "ignition";
   $("presets").innerHTML =
+    (SITE === "coinpoker" && !strategies.length ? `<div class="presets-h">No CoinPoker strategy is on offer right now (is the study API up?) — play without answers; every hand is still archived and graded</div>` : "") +
     (strategies.length ? `<div class="presets-h">Play with answers — a whole-hand strategy, the same definitions as the dashboard's Sources → Strategies and the Playthrough picker</div>` + strategies.map(card).join("") : "") +
-    (down ? `<div class="card" style="grid-column:1/-1;border-color:#ff8a80;background:#1c1214"><b style="color:#ff8a80">No answering mode can be declared: the strategy catalogue is unreachable.</b>
+    (down ? `<div class="card" style="grid-column:1/-1;border-color:#ff8a80;background:#1c1214"><b style="color:#ff8a80">No strategy can be declared: the strategy catalogue is unreachable.</b>
         <div class="sub" style="margin-top:4px">${esc(CATALOGUE_ERROR || "the study API did not answer")}. The strategies live in the study API; there is no stand-in. Start it (dev-api.cmd / the gto-api launch config) — this page re-checks every 5 s and offers the strategies the moment it is back.</div></div>` : "") +
     `<div class="presets-h">Without answers · rigs</div>` + own.map(card).join("");
   $("presets").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => choose(b.dataset.id));
@@ -191,10 +269,13 @@ function renderPresets() {
 function choose(id) {
   preset = id;
   cfg = JSON.parse(JSON.stringify(PRESETS[id].config));
+  cfg.site = SITE;
+  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; }
   if (cfg.buyinBb == null) cfg.buyinBb = 100;
   const allowed = allowedFormats();
-  if (cfg.format && allowed && !allowed.includes(cfg.format)) cfg.format = null;
-  if (!cfg.format) cfg.format = PRESETS[id].defaultFormat || (allowed ? allowed[0] : null) || null;
+  const onSite = (fid) => { const f = FORMATS.find((x) => x.id === fid); return !!f && (f.site || "ignition") === SITE; };
+  if (cfg.format && ((allowed && !allowed.includes(cfg.format)) || !onSite(cfg.format))) cfg.format = null;
+  if (!cfg.format) cfg.format = [PRESETS[id].defaultFormat, ...(allowed || []), ...FORMATS.filter((f) => (f.site || "ignition") === SITE).map((f) => f.id)].find(onSite) || null;
   $("step-preset").classList.add("done");
   renderPresets();
   renderFormats();
@@ -212,7 +293,7 @@ async function watchCatalogue() {
     CATALOGUE_ERROR = j.catalogueError || null;
     if (had !== has) {
       PRESETS = j.presets; renderPresets();
-      if (has && (!preset || !PRESETS[preset] || !PRESETS[preset].strategy)) { const first = Object.keys(PRESETS).find((k) => PRESETS[k].strategy); if (first) choose(first); }
+      if (SITE === "ignition" && has && (!preset || !PRESETS[preset] || !PRESETS[preset].strategy)) { const first = Object.keys(PRESETS).find((k) => PRESETS[k].strategy && siteOf(PRESETS[k]).includes(SITE)); if (first) choose(first); }
       if (!has && preset && !PRESETS[preset]) { preset = null; cfg = null; $("start").disabled = true; }
     }
   } catch (e) { /* wrapper restarting */ }
@@ -222,9 +303,9 @@ const allowedFormats = () => (preset && PRESETS[preset] && Array.isArray(PRESETS
 
 function renderFormats() {
   const allowed = allowedFormats();
-  const groups = [["zone", "Zone"], ["ring", "Ring"], ["practice", "Practice"]];
+  const groups = [["hu", "Heads-up"], ["zone", "Zone"], ["ring", "Ring"], ["practice", "Practice"]];
   $("formats").innerHTML = groups.map(([g, label]) => {
-    const rows = FORMATS.filter((f) => f.gameType === g && (!allowed || allowed.includes(f.id)));
+    const rows = FORMATS.filter((f) => f.gameType === g && (f.site || "ignition") === SITE && (!allowed || allowed.includes(f.id)));
     if (!rows.length) return "";
     const cov = (preset && PRESETS[preset] && PRESETS[preset].formatCoverage) || [];
     return `<div class="presets-h">${label}</div>` + rows.map((f) => {
@@ -233,13 +314,15 @@ function renderFormats() {
       const lvl = c ? `<span class="st ${c.level === "ready" ? "ok" : c.level === "approx" ? "drift" : "misspecified"}">${c.level === "ready" ? "built for this" : c.level === "approx" ? "approximation" : "not served"}</span>` : "";
       const why = c && c.why && c.why.length ? `<span class="why" title="${esc(c.why.join("\n"))}">${esc(c.why[0])}</span>` : "";
       return `<button class="preset${cfg && cfg.format === f.id ? " on" : ""}" data-id="${esc(f.id)}" ${ok ? "" : 'disabled title="not a format this strategy was built for"'}>
-        <b>${esc(f.name)}</b>${lvl ? `<span>${lvl}</span>` : ""}<span class="tag">${f.stake ? esc(f.stake) + " · " : ""}${esc(f.gameType)}${f.seats ? ` · ${f.seats}-max` : ""}${f.path && f.path.practice ? " · practice chips" : ""}</span>
+        <b>${esc(f.name)}</b>${lvl ? `<span>${lvl}</span>` : ""}<span class="tag">${f.stake ? esc(f.stake) + " · " : ""}${esc(f.gameType)}${f.seats ? ` · ${f.seats}-max` : ""}${f.path && f.path.practice ? " · practice chips" : ""}${f.test ? " · TEST STAKE, real money" : ""}</span>
         ${why || (f._doc ? `<span class="why" style="color:#8fa1b3">${esc(f._doc)}</span>` : "")}</button>`;
     }).join("");
   }).join("");
   $("formats").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => { cfg.format = b.dataset.id; renderFormats(); schedulePreflight(); });
   buyinPreview();
   const s = preset && PRESETS[preset] && PRESETS[preset].strategy;
+  const nSite = FORMATS.filter((f) => (f.site || "ignition") === SITE).length;
+  if (SITE === "coinpoker") { $("fmt-note").textContent = `— ${nSite} CoinPoker formats`; return; }
   $("fmt-note").textContent = allowed ? `— only the ${allowed.length} format${allowed.length === 1 ? "" : "s"} ${s ? s.name : PRESETS[preset].label} was built for; ${FORMATS.length - allowed.length} other${FORMATS.length - allowed.length === 1 ? "" : "s"} hidden` : "— any format (no restriction declared)";
 }
 
@@ -301,6 +384,7 @@ async function signInNow() {
 }
 async function pollTable() {
   clearTimeout(twTimer);
+  if (SITE !== "ignition") return;   // the Ignition table window; CoinPoker's client is checked in preflight
   let t, a = null;
   try { t = await (await fetch("/table/state")).json(); } catch (e) { t = { state: "closed", cdp: false }; }
   if (t.state === "signed-out") { try { a = await (await fetch("/auth/state")).json(); } catch (e) { a = null; } }
@@ -328,8 +412,20 @@ async function pollTable() {
 function fillSettings() {
   const seg = (id, val) => $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === String(val)));
   seg("recording", cfg.recording ? 1 : 0);
+  seg("autoExecute", cfg.autoExecute ? 1 : 0);
+  seg("autoDelay", cfg.autoDelay === "random" ? "random" : "instant");
+  seg("autoTimeBank", cfg.autoTimeBank === false ? 0 : 1);
+  seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
+  $("auto-delay-row").style.display = cfg.autoExecute ? "" : "none";
+  $("auto-real-row").style.display = cfg.autoExecute ? "" : "none";
+  $("autoRealMoney").checked = !!cfg.autoRealMoney;
+  $("clearCache").checked = !!cfg.clearCache;
+  $("auto-min").value = (cfg.autoBudget && cfg.autoBudget.minutes) || 30;
+  $("auto-hands").value = (cfg.autoBudget && cfg.autoBudget.hands) || 50;
   $("budget-hands").value = cfg.budget.hands ?? ""; $("budget-min").value = cfg.budget.minutes ?? "";
   $("buyin").value = cfg.buyinBb ?? 100;
+  seg("tables", cfg.tables ?? 1);
+  tablesNote();
   buyinPreview();
   renderProfiles();
   const p = PRESETS[preset] || {}, s = p.strategy;
@@ -339,33 +435,106 @@ function fillSettings() {
     ? `<span class="chip">answers off</span> <span class="sub">play unaided — hands are still archived and graded afterwards</span>`
     : `<span class="chip on">answers on</span> <span class="chip ${cfg.mode === "exploit" ? "mes" : "gto"}">${cfg.mode === "exploit" ? "MES" : "GTO"} primary</span>` +
       (s ? ` <b>${esc(s.name)}</b> <span class="sub">— ${esc(p.tagline)}</span><div class="sub" style="margin-top:4px">${s.layers.map((l) => `<b>${esc(l.role)}</b> ${esc(l.label ?? "")}`).join(" · ")}</div>` : "") +
-      `<div class="sub" style="margin-top:4px">sources this mode answers from: ${srcs.map(esc).join(", ") || "none"} — each is a required check below</div>`;
+      `<div class="sub" style="margin-top:4px">sources this mode answers from: ${srcs.map(esc).join(", ") || "none"} — each is a required check below</div>` +
+      (cfg.autoExecute
+        ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoRealMoney
+            ? ` for REAL MONEY — bounded to ${cfg.autoBudget.minutes} min / ${cfg.autoBudget.hands} hands, then it disarms itself`
+            : " — arms on a practice table; on a real-money table it waits until you allow it on the panel"}</div>`
+        : "");
 }
 
 function readSettings() {
   // answers / primary / sources are the MODE's — only the session's own knobs are read back
   cfg.recording = $("recording").querySelector("button.on")?.dataset.v === "1";
+  cfg.autoExecute = $("autoExecute").querySelector("button.on")?.dataset.v === "1";
+  cfg.autoDelay = $("autoDelay").querySelector("button.on")?.dataset.v === "random" ? "random" : "instant";
+  cfg.autoTimeBank = $("autoTimeBank").querySelector("button.on")?.dataset.v !== "0";
+  cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";
+  cfg.autoRealMoney = cfg.autoExecute && $("autoRealMoney").checked;
+  cfg.clearCache = $("clearCache").checked;
+  cfg.autoBudget = { minutes: Number($("auto-min").value) || 30, hands: Number($("auto-hands").value) || 50 };
   cfg.budget = { hands: Number($("budget-hands").value) || null, minutes: Number($("budget-min").value) || null };
   cfg.buyinBb = Number($("buyin").value) || 100;
+  cfg.tables = Number($("tables").querySelector("button.on")?.dataset.v) || 1;
   cfg.profile = $("profile").value || null;
+  cfg.site = SITE;
+  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; }
 }
 
-["recording"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
+/* WHAT EACH TABLE WILL ACTUALLY GET. A window narrower than the Ignition layout
+   wants is not a cosmetic problem: the action buttons fall outside it and every
+   relayed press misses in silence. The wrapper knows the screen, so the page
+   says the size before you commit to the count rather than after. */
+let LAYOUT = null;
+async function tablesNote() {
+  const n = Number($("tables").querySelector("button.on")?.dataset.v) || 1;
+  const el = $("tables-size");
+  if (!el) return;
+  if (!LAYOUT) { try { LAYOUT = await (await fetch("/layout/preview")).json(); } catch { LAYOUT = { ok: false }; } }
+  const c = LAYOUT.ok && LAYOUT.counts ? LAYOUT.counts[String(n)] : null;
+  if (!c) { el.textContent = ""; return; }
+  // The CLIENT tiles its own tables inside one window, so this is what each of
+  // them works out to — not a window we would place.
+  const win = c.winW ? `${c.winW}×${c.winH} ` : LAYOUT.window ? `${LAYOUT.window.w}×${LAYOUT.window.h} ` : "";
+  el.innerHTML = `<span style="color:#5ee39a">about ${c.w}×${c.h} per table</span>`
+    + ` — Ignition tiles them itself inside the one ${win}client window`
+    + ` on ${esc(LAYOUT.monitor || "the table screen")}`
+    + (c.fullscreen ? `, which takes that screen <b>fullscreen</b> (the panels move to the other one)` : "");
+}
+$("tables").querySelectorAll("button").forEach((b) => b.onclick = () => {
+  if (!cfg) return;
+  $("tables").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  cfg.tables = Number(b.dataset.v) || 1;
+  tablesNote();
+  schedulePreflight();
+});
+
+["recording", "autoExecute", "autoDelay", "autoTimeBank", "autoTopUp"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
   if (!cfg) return;
   $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
   readSettings(); fillSettings(); schedulePreflight();
 }));
-["budget-hands", "budget-min"].forEach((id) => $(id).onchange = () => { if (cfg) { readSettings(); schedulePreflight(); } });
+["budget-hands", "budget-min", "auto-min", "auto-hands"].forEach((id) => $(id).onchange = () => { if (cfg) { readSettings(); schedulePreflight(); } });
+$("autoRealMoney").onchange = () => { if (cfg) { readSettings(); fillSettings(); } };
+$("clearCache").onchange = () => { if (cfg) { readSettings(); fillSettings(); } };
 $("recheck").onclick = () => runPreflight();
 
 function schedulePreflight() { clearTimeout(pfTimer); pfTimer = setTimeout(runPreflight, 250); }
 
-async function gtowConnect() {
-  const b = $("gtow-connect"), m = $("gtow-connect-msg");
+/**
+ * The GTO Wizard rows of the preflight list.
+ *
+ * GTO Wizard is a POOL of accounts, not one client: the Elite session takes
+ * heads-up solves so the Ultra session's daily allowance is spent only on the
+ * multiway trees that need it. So this check cannot be one dot — when
+ * something is down you need to know WHICH session, and be able to reconnect
+ * that one. Each row carries its own state, its plan capability and its own
+ * Connect; the whole-pool button stays as the fallback when the API could not
+ * even tell us what the sessions are.
+ */
+function gtowRows(c) {
+  if (c.id !== "gtow") return "";
+  const ss = c.sessions || [];
+  if (!ss.length) {
+    return c.ok ? "" : `<span style="margin-top:6px"><button class="mini" id="gtow-connect" onclick="gtowConnect()">🔌 Connect GTO Wizard</button> <span class="sub" id="gtow-connect-msg">starts each session with its debug port and waits for a token (up to a minute)</span></span>`;
+  }
+  const cls = (x) => x.state === "up" ? "up" : (x.state === "blocked" || x.state === "no-token" || x.state === "unknown") ? "warn" : "down";
+  const rows = ss.map((x) => `<div class="g ${cls(x)}"><span class="d"></span><span class="nm">${esc(x.id)}</span><span class="cap${x.multiway ? " mw" : ""}">${x.multiway ? "multiway" : "heads-up"}</span><span>${esc(x.blockedReason || x.text || "")}</span><button class="mini" id="gtow-connect-${esc(x.id)}" onclick="gtowConnect('${esc(x.id)}')">${x.state === "up" ? "Reconnect" : "🔌 Connect"}</button></div>`).join("");
+  return `<span class="gsess">${rows}<span class="sub" id="gtow-connect-msg">a session parked on its activation or sign-in screen needs the code typed in its own window — Connect will not restart it</span></span>`;
+}
+
+/** Connect one GTO Wizard session by id, or every session that is not up. */
+async function gtowConnect(source) {
+  const b = $(source ? `gtow-connect-${source}` : "gtow-connect"), m = $("gtow-connect-msg");
   if (b) { b.disabled = true; b.textContent = "connecting…"; }
-  if (m) m.textContent = "launching GTO Wizard minimized and waiting for its token…";
+  if (m) m.textContent = `launching ${source || "each GTO Wizard session"} minimized and waiting for a token…`;
   let r;
-  try { r = await (await fetch("/session/gtow-connect", { method: "POST" })).json(); } catch (e) { r = { ok: false, hint: String(e) }; }
+  try {
+    r = await (await fetch("/session/gtow-connect", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(source ? { source } : {}),
+    })).json();
+  } catch (e) { r = { ok: false, hint: String(e) }; }
   if (m) m.textContent = r?.connected ? `connected — ${r.text || "token live"}` : (r?.hint || r?.error || "could not connect");
   runPreflight();
 }
@@ -380,7 +549,7 @@ async function runPreflight() {
   catch (e) { j = { ok: false, checks: [], blockers: ["the wrapper did not answer"], error: String(e) }; }
   lastPf = j;
   $("pf-when").textContent = `— checked ${new Date().toLocaleTimeString()}`;
-  $("checks").innerHTML = (j.checks || []).map((c) => `<div class="check ${c.ok ? "ok" : "bad"}${c.required ? " required" : ""}"><span class="dot"></span><span class="l"><b>${esc(c.label)}</b><span>${esc(c.detail)}</span>${c.id === "gtow" && !c.ok ? `<span style="margin-top:6px"><button class="mini" id="gtow-connect" onclick="gtowConnect()">🔌 Connect GTO Wizard</button> <span class="sub" id="gtow-connect-msg">starts the client with its debug port and waits for a token (up to a minute)</span></span>` : ""}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`).join("");
+  $("checks").innerHTML = (j.checks || []).map((c) => `<div class="check ${c.ok ? "ok" : "bad"}${c.required ? " required" : ""}"><span class="dot"></span><span class="l"><b>${esc(c.label)}</b><span>${esc(c.detail)}</span>${gtowRows(c)}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`).join("");
   $("step-preflight").classList.toggle("done", !!j.ok);
   if (j.ok) { $("start").disabled = false; $("pf-msg").className = "msg ok"; $("pf-msg").textContent = "Everything this mode needs is up."; }
   else { $("pf-msg").className = "msg bad"; $("pf-msg").textContent = `Blocked: ${(j.blockers || []).join(" · ")}. Fix it, or pick a mode that does not need it.`; }
@@ -396,7 +565,7 @@ $("start").onclick = async () => {
   if (!j.ok) { $("start").disabled = false; $("start").textContent = "Start session"; $("pf-msg").className = "msg bad"; $("pf-msg").textContent = j.error ?? "start refused"; if (j.preflight) { lastPf = j.preflight; runPreflight(); } return; }
   // the session is declared; sign-in (and the Authy code, only if asked) and the
   // trip to the table happen on the bridge page, after this — never before Start
-  location.href = fake ? "/panel" : "/bridge";
+  location.href = (fake || SITE === "coinpoker") ? "/panel" : "/bridge";
 };
 
 async function loadRecent() {
@@ -430,6 +599,14 @@ async function loadRecent() {
 }
 // a session ended from the panel or the API disappears from here on its own
 setInterval(loadRecent, 15000);
+// a notice handed over by the panel (an End session whose close-out could not complete)
+(() => {
+  const n = new URLSearchParams(location.search).get("notice");
+  if (!n) return;
+  document.body.insertAdjacentHTML("afterbegin",
+    `<div style="margin:10px 12px;padding:10px 12px;border:1px solid #d9a441;background:#fff7e0;color:#5a3d00;border-radius:8px;font-size:14px">${n.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</div>`);
+  history.replaceState(null, "", location.pathname);
+})();
 // Self-heal version skew: a setup window left open across a wrapper rebuild
 // would keep running old page code (the panel does the same check).
 let setupVersion = null;
@@ -442,6 +619,29 @@ setInterval(async () => {
   } catch (e) { /* wrapper restarting */ }
 }, 10000);
 
+// PACKAGED INSTALLS: a newer release on the update channel shows a banner with a one-press update
+// (the wrapper hands over to setup\update.ps1, which closes this window and reopens it when done).
+// The owner's source checkout answers packaged:false and never shows it.
+async function checkUpdate(force) {
+  let u; try { u = await (await fetch("/update" + (force ? "?force=1" : ""))).json(); } catch (e) { return; }
+  const el = $("update-banner");
+  if (!u.packaged || !u.available) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.innerHTML = `<div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <span><b>Update available</b> · ${esc(u.latest)} <span class="sub">(you have ${esc(u.installed)})</span></span>
+    <button class="mini" id="update-go">Update now</button></div>
+    ${u.notes ? `<div class="sub" style="margin-top:4px">${esc(u.notes)}</div>` : ""}
+    <div class="sub" id="update-msg" style="margin-top:4px">Takes a minute or two. This window closes and the Poker Wrapper reopens by itself.</div>`;
+  $("update-go").onclick = async () => {
+    $("update-go").disabled = true;
+    let r; try { r = await (await fetch("/update", { method: "POST" })).json(); } catch (e) { r = { ok: true }; }
+    $("update-msg").textContent = r.ok ? "Updating — follow the progress in the window that opened." : (r.why || "could not start the update");
+    if (!r.ok) $("update-go").disabled = false;
+  };
+}
+checkUpdate(false);
+setInterval(() => checkUpdate(false), 30 * 60 * 1000);
+
 (async () => {
   const j = await (await fetch("/session")).json();
   PRESETS = j.presets; fake = !!j.fakeTable; CATALOGUE_ERROR = j.catalogueError || null;
@@ -449,13 +649,16 @@ setInterval(async () => {
   setTimeout(watchCatalogue, 5000);
   try { const fj = await (await fetch("/formats")).json(); FORMATS = fj.formats || []; STAKES = fj.stakes || {}; } catch (e) { FORMATS = []; }
   await loadProfiles();
+  if (fake) SITE = "ignition";
+  renderSites();
   pollTable();
   renderPresets();
-  // a fresh page starts on the recommended strategy (Apex); the last-used
+  // a fresh page starts on the recommended strategy (the first in the catalogue); the last-used
   // preset is only honoured when it is itself a strategy
   const firstStrategy = Object.keys(PRESETS).find((k) => PRESETS[k].strategy) || Object.keys(PRESETS)[0];
   const last = j.lastPreset && PRESETS[j.lastPreset] && PRESETS[j.lastPreset].strategy ? j.lastPreset : null;
   if (fake) choose("test-rig");
+  else if (SITE !== "ignition") chooseSite(SITE);
   else if (last || (firstStrategy && PRESETS[firstStrategy] && PRESETS[firstStrategy].strategy)) choose(last || firstStrategy);
   // catalogue down: nothing is pre-selected — the banner explains, Start stays disabled
   loadRecent();

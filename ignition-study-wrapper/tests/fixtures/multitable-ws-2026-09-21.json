@@ -1,0 +1,7378 @@
+{
+"note": "Two tables on one page, from the 2026-09-21 two-table session. Sockets 9240.618 (hero in seat 1) and 9240.1035 (hero in seat 3). Both wrappers ingested both of these.",
+"frames": [
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648306"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_OPTION_INFO",
+"bblind": 200,
+"sblind": 100,
+"gameType": 2,
+"gameType2": 5,
+"hiLow": 0,
+"maxSeat": 9,
+"maxStakes": 0,
+"minStakes": 0,
+"real": 1
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_TABLE_INFO",
+"time": 8,
+"currentSeat": 6,
+"dealerSeat": 3,
+"lockSeat": 6,
+"tableState": 8,
+"seatState": [
+0,
+80,
+80,
+80,
+80,
+80,
+0,
+0,
+0
+],
+"account": [
+0,
+30683,
+20000,
+23917,
+44667,
+21955,
+0,
+0,
+0
+],
+"pcard2": [
+32896,
+32896
+],
+"pcard3": [
+32896,
+32896
+],
+"pcard4": [
+32896,
+32896
+],
+"pcard5": [
+32896,
+32896
+],
+"pcard6": [
+32896,
+32896
+],
+"pbet": [
+0,
+0,
+0,
+100,
+200,
+0,
+0,
+0,
+0
+],
+"curPot": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"curRake": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potCount": 0,
+"totalpot": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_TABLE_INFO",
+"time": 8,
+"currentSeat": 6,
+"dealerSeat": 3,
+"lockSeat": 6,
+"tableState": 8,
+"seatState": [
+0,
+80,
+80,
+80,
+80,
+80,
+0,
+0,
+0
+],
+"account": [
+0,
+30683,
+20000,
+23917,
+44667,
+21955,
+0,
+0,
+0
+],
+"pcard2": [
+32896,
+32896
+],
+"pcard3": [
+32896,
+32896
+],
+"pcard4": [
+32896,
+32896
+],
+"pcard5": [
+32896,
+32896
+],
+"pcard6": [
+32896,
+32896
+],
+"pbet": [
+0,
+0,
+0,
+100,
+200,
+0,
+0,
+0,
+0
+],
+"curPot": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"curRake": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potCount": 0,
+"totalpot": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 3,
+"data": 30,
+"dwData": 30,
+"pid": "SYS_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 1,
+"state": 16,
+"account": 0,
+"nickName": "580325546446700"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 2,
+"seat": 1,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"add": 0,
+"seat": 1,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"amountToPost": 200,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 1
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 1,
+"seat": 1,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 0,
+"allowedMin": 0,
+"account": 47438,
+"defaultBuyin": 0,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"chat": "_amIBlocked_",
+"pid": "SYS_MSG_V2"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648342"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_OPTION_INFO",
+"bblind": 200,
+"sblind": 100,
+"gameType": 2,
+"gameType2": 5,
+"hiLow": 0,
+"maxSeat": 9,
+"maxStakes": 0,
+"minStakes": 0,
+"real": 1
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_TABLE_INFO",
+"time": 2,
+"currentSeat": 4,
+"dealerSeat": 6,
+"lockSeat": 0,
+"tableState": 32768,
+"seatState": [
+48,
+0,
+0,
+80,
+0,
+16,
+0,
+0,
+0
+],
+"account": [
+20182,
+0,
+0,
+17650,
+0,
+55748,
+0,
+0,
+0
+],
+"pcard4": [
+32896,
+32896
+],
+"pcard6": [
+32896,
+32896
+],
+"pbet": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"curPot": [
+3600,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"curRake": [
+100,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potCount": 0,
+"totalpot": 3600,
+"bcard": [
+0,
+1,
+13
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 3,
+"data": 30,
+"dwData": 30,
+"pid": "SYS_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 3,
+"data": 30,
+"dwData": 30,
+"pid": "SYS_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 3,
+"state": 16,
+"account": 0,
+"nickName": "580325546446700"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 2,
+"seat": 3,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"add": 0,
+"seat": 3,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 1
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 1,
+"seat": 3,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 0,
+"allowedMin": 0,
+"account": 7437,
+"defaultBuyin": 0,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"chat": "_amIBlocked_",
+"pid": "SYS_MSG_V2"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 4,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20182,
+0,
+20000,
+21150,
+0,
+55748,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+0,
+3500,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pos": 4,
+"card": 51,
+"pid": "CO_RABBITCARD_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 4,
+"state": 32,
+"account": 21150,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648342"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648418"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"play": 1,
+"seat": 3,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 6,
+"account": 55648,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 6,
+"state": 32,
+"account": 21955,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 6,
+"state": 32,
+"account": 21955,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 3,
+"account": 19800,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat3": [
+11,
+35
+],
+"seat6": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat3": [
+11,
+35
+],
+"seat6": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 130,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"amountToPost": 200,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 21955
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 21955
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 6,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 4,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 30683
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 512,
+"bet": 100,
+"raise": 500,
+"account": 55148
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 36701952,
+"bet": 400,
+"raise": 1000,
+"maxRaise": 20000,
+"betPot": 1800,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 36701952,
+"bet": 400,
+"raise": 1000,
+"maxRaise": 20000,
+"betPot": 1800,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 512,
+"bet": 200,
+"raise": 500,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 512,
+"bet": 200,
+"raise": 500,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 23917
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 256,
+"bet": 300,
+"raise": 0,
+"account": 44367
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1100
+],
+"curRake": [
+55
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 16,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"bcard": [
+18,
+43,
+26
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "f8f0450f-306b-40de-830c-b4deda3052ba"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 44367
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 0,
+"seat": 3,
+"time": 45,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PONG",
+"uuid": "d403a8da-3679-4ff1-8b43-fbc9560de962"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PONG",
+"uuid": "d403a8da-3679-4ff1-8b43-fbc9560de962"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 1,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 256,
+"bet": 400,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "91790b4f6515ae9d62ca96b7ad8cefd4",
+"nsDuration": 40639542
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 16,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"bcard": [
+16,
+20,
+39
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"bcard": [
+16,
+20,
+39
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CARDHAND_INFO",
+"type": 0,
+"seat": 3,
+"bEnableHi": 1,
+"CardHi": [
+4,
+0,
+1,
+3,
+2
+],
+"bEnableLo": 0,
+"CardLo": [
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19400,
+"betPot": 1200,
+"halfPot": 600,
+"timeBank": 34
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19400,
+"betPot": 1200,
+"halfPot": 600,
+"timeBank": 34
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 128,
+"bet": 323,
+"raise": 0,
+"account": 19177
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 0,
+"seat": 3,
+"time": 28,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 256,
+"bet": 323,
+"raise": 0,
+"account": 44044
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 256,
+"bet": 323,
+"raise": 0,
+"account": 44044
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1746
+],
+"curRake": [
+87
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 4,
+"card": 48,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 4,
+"card": 48,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "4bd1f0f229d876776106b6964d43540a",
+"nsDuration": 14309538
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "4bd1f0f229d876776106b6964d43540a",
+"nsDuration": 14309538
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 1,
+"seat": 3,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 600,
+"allowedMin": 1,
+"account": 7437,
+"defaultBuyin": 600,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 1,
+"seat": 3,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 600,
+"allowedMin": 1,
+"account": 7437,
+"defaultBuyin": 600,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 6,
+"status": 1,
+"bData": 0,
+"dwData": 600,
+"pid": "PLAY_STATUS_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 6,
+"status": 1,
+"bData": 0,
+"dwData": 600,
+"pid": "PLAY_STATUS_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 44044
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 55148
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 32,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pos": 4,
+"card": 12,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CARDHAND_INFO",
+"type": 0,
+"seat": 3,
+"bEnableHi": 1,
+"CardHi": [
+4,
+5,
+0,
+1,
+3
+],
+"bEnableLo": 0,
+"CardLo": [
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19400,
+"betPot": 1200,
+"halfPot": 600,
+"timeBank": 34
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19177
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1746
+],
+"curRake": [
+87
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 64,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 5,
+"card": 42,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "36abd281-ff79-494e-8633-a31964edd15f"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 44044
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PONG",
+"uuid": "db7cf886-6ce6-431b-9261-067f71e1524d"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 0,
+"seat": 3,
+"time": 34,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 128,
+"bet": 1244,
+"raise": 0,
+"account": 17933
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 44044
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 44044
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 1244,
+"seat": 3,
+"potCount": 0,
+"curPot": [
+1746
+],
+"curRake": [
+87
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20000,
+30683,
+20836,
+23917,
+44044,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+1659,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+1659,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648306"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648596"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 5,
+"account": 43944,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 5,
+"account": 43944,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 1,
+"account": 19800,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 1,
+"account": 19800,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+25,
+34
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+],
+"seat5": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+25,
+34
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+],
+"seat5": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 130,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 130,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 4,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 2,
+"seat": 4,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"add": 0,
+"seat": 4,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"add": 0,
+"seat": 4,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 4,
+"chat": "_amIBlocked_",
+"pid": "SYS_MSG_V2"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "1bf96f587b62f1bb731eb5335e29317d",
+"nsDuration": 16869042
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 30683
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 55148
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 64,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pos": 5,
+"card": 2,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CARDHAND_INFO",
+"type": 0,
+"seat": 3,
+"bEnableHi": 1,
+"CardHi": [
+4,
+5,
+0,
+1,
+3
+],
+"bEnableLo": 0,
+"CardLo": [
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19400,
+"betPot": 1200,
+"halfPot": 600,
+"timeBank": 21
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19400,
+"betPot": 1200,
+"halfPot": 600,
+"timeBank": 21
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20836
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "c2ff2d6e-5501-4fcc-afde-66c179b1df93"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PONG",
+"uuid": "2319bbfb-7630-410c-969e-610798c377e6"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 512,
+"bet": 200,
+"raise": 500,
+"account": 23417
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 9,
+"selected": 0,
+"bet": 0,
+"call": 300,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "92283b263cb6c54afda9d6206934a7de",
+"nsDuration": 32194510
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 43944
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 40896256,
+"bet": 300,
+"raise": 800,
+"maxRaise": 20000,
+"betPot": 1600,
+"halfPot": 900,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 256,
+"bet": 300,
+"raise": 0,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "31a6635200561dcce44667de5ee302d1",
+"nsDuration": 25398786
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "31a6635200561dcce44667de5ee302d1",
+"nsDuration": 25398786
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1100
+],
+"curRake": [
+55
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 16,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"bcard": [
+15,
+43,
+36
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDHAND_INFO",
+"type": 0,
+"seat": 1,
+"bEnableHi": 1,
+"CardHi": [
+0,
+4,
+1,
+3,
+2
+],
+"bEnableLo": 0,
+"CardLo": [
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19500,
+"betPot": 1100,
+"halfPot": 550,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDHAND_INFO",
+"type": 0,
+"seat": 1,
+"bEnableHi": 1,
+"CardHi": [
+0,
+4,
+1,
+3,
+2
+],
+"bEnableLo": 0,
+"CardLo": [
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6291648,
+"bet": 200,
+"raise": 0,
+"maxRaise": 19500,
+"betPot": 1100,
+"halfPot": 550,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 128,
+"bet": 1140,
+"raise": 0,
+"account": 54008
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 40896256,
+"bet": 1140,
+"raise": 2280,
+"maxRaise": 19400,
+"betPot": 4620,
+"halfPot": 2310,
+"timeBank": 21
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 4,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "1400ca81-8b36-4497-8df1-6d29458ba995"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "1400ca81-8b36-4497-8df1-6d29458ba995"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 0,
+"seat": 1,
+"time": 45,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 0,
+"seat": 3,
+"time": 21,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PONG",
+"uuid": "fccd4e72-7991-44be-ba77-f7e8752f32d6"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"account": 19400,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"play": 0,
+"seat": 3,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "37579ac39278ee81f78ea994c7a7aff9",
+"nsDuration": 41976003
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 1140,
+"seat": 6,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"play": 0,
+"seat": 3,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "37579ac39278ee81f78ea994c7a7aff9",
+"nsDuration": 41976003
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 1140,
+"seat": 6,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+0,
+0,
+19400,
+0,
+0,
+56288,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+0,
+0,
+0,
+1140,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 2,
+"seat": 3,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "b8b9952355a123b23bac728adefd61f0",
+"nsDuration": 28814025
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648418"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919648418"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648736"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"play": 1,
+"seat": 3,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"play": 1,
+"seat": 3,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 3,
+"account": 19900,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 6,
+"account": 56088,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 3,
+"account": 19900,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 6,
+"account": 56088,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat3": [
+43,
+12
+],
+"seat6": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 36701952,
+"bet": 100,
+"raise": 400,
+"maxRaise": 20000,
+"betPot": 600,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 1,
+"seat": 1,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 500,
+"allowedMin": 1,
+"account": 6837,
+"defaultBuyin": 500,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 128,
+"bet": 348,
+"raise": 0,
+"account": 23069
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 40896256,
+"bet": 348,
+"raise": 696,
+"maxRaise": 19500,
+"betPot": 2144,
+"halfPot": 1072,
+"timeBank": 36
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 40896256,
+"bet": 348,
+"raise": 696,
+"maxRaise": 19500,
+"betPot": 2144,
+"halfPot": 1072,
+"timeBank": 36
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 6,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 2,
+"seat": 6,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"add": 0,
+"seat": 6,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 6,
+"chat": "_amIBlocked_",
+"pid": "SYS_MSG_V2"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 19500,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 348,
+"seat": 4,
+"potCount": 0,
+"curPot": [
+1100
+],
+"curRake": [
+55
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 348,
+"seat": 4,
+"potCount": 0,
+"curPot": [
+1100
+],
+"curRake": [
+55
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "221eb2cf479ea5f40ed59e09626fe6bc",
+"nsDuration": 26103005
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "221eb2cf479ea5f40ed59e09626fe6bc",
+"nsDuration": 26103005
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 2,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 2,
+"seat": 2,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"add": 0,
+"seat": 2,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"type": 2,
+"seat": 2,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"add": 0,
+"seat": 2,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 2,
+"chat": "_amIBlocked_",
+"pid": "SYS_MSG_V2"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+19500,
+30683,
+20836,
+24462,
+43944,
+20000,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+0,
+1045,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 4,
+"card": 7,
+"pid": "CO_RABBITCARD_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 512,
+"bet": 100,
+"raise": 400,
+"account": 19500
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 512,
+"bet": 100,
+"raise": 400,
+"account": 19500
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "ac451f53357073fee3d87676e117898a",
+"nsDuration": 30515465
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 2,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 2,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648596"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919648596"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648766"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 1,
+"account": 19400,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 2,
+"account": 30483,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+17,
+5
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+],
+"seat5": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 9,
+"selected": 0,
+"bet": 0,
+"call": 100,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 9,
+"selected": 0,
+"bet": 0,
+"call": 100,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 6,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 6,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20836
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 6,
+"btn": 512,
+"bet": 300,
+"raise": 1700,
+"account": 54388
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 36701952,
+"bet": 1400,
+"raise": 3300,
+"maxRaise": 20000,
+"betPot": 5700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "bc2978a9-61e6-4f97-a62a-d4bea97dbda8"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 1,
+"seat": 1,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 600,
+"allowedMin": 1,
+"account": 6837,
+"defaultBuyin": 600,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 24462
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 6,
+"status": 1,
+"bData": 0,
+"dwData": 600,
+"pid": "PLAY_STATUS_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"account": 19500,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"play": 0,
+"seat": 3,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 19500
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "98b25c7a8c5c91a6a275fa5a4f969c51",
+"nsDuration": 33336077
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "98b25c7a8c5c91a6a275fa5a4f969c51",
+"nsDuration": 33336077
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 1400,
+"seat": 6,
+"potCount": 0,
+"curPot": [
+1000
+],
+"curRake": [
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PONG",
+"uuid": "d3c92a2a-d215-4c6e-adc1-eb15b557245d"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 6,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+0,
+0,
+19500,
+0,
+0,
+56788,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+0,
+0,
+0,
+1000,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 512,
+"bet": 200,
+"raise": 600,
+"account": 43344
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 6293248,
+"bet": 500,
+"raise": 1000,
+"maxRaise": 19500,
+"betPot": 2000,
+"halfPot": 1050,
+"timeBank": 36
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648736"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 19400,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 19400,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919648736"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 3,
+"state": 32,
+"account": 19500,
+"nickName": "580325546446700"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 3,
+"state": 32,
+"account": 19500,
+"nickName": "580325546446700"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"pid": "CO_SHOW_BTN",
+"show": 0
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 0,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.1035",
+"d": {
+"tableState": 0,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 19400
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 512,
+"bet": 400,
+"raise": 2800,
+"account": 27683
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 256,
+"bet": 2400,
+"raise": 0,
+"account": 40944
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+6100
+],
+"curRake": [
+300
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 16,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"bcard": [
+42,
+41,
+49
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+6100
+],
+"curRake": [
+300
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 16,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"bcard": [
+42,
+41,
+49
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "a1f92a88-ec8f-475d-86bd-c17dd923ed13"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 27683
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 40944
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+6100
+],
+"curRake": [
+300
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 4,
+"card": 50,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 6,
+"state": 16,
+"account": 0,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 2,
+"seat": 6,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"add": 0,
+"seat": 6,
+"pid": "PLAY_SEAT_RESERVATION"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 6,
+"chat": "_amIBlocked_",
+"pid": "SYS_MSG_V2"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 128,
+"bet": 2000,
+"raise": 0,
+"account": 25683
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "2e019ae7-1342-4dfc-ab79-37e17e94a859"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 5,
+"state": 32,
+"account": 40944,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 1,
+"seat": 5,
+"state": 32,
+"account": 40944,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 40944
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 2000,
+"seat": 2,
+"potCount": 0,
+"curPot": [
+6100
+],
+"curRake": [
+300
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+19400,
+33483,
+20836,
+24462,
+40944,
+20000,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+5800,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 5,
+"card": 22,
+"pid": "CO_RABBITCARD_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 5,
+"card": 22,
+"pid": "CO_RABBITCARD_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 2,
+"seat": 1,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648766"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919648766"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648960"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 2,
+"account": 33383,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 3,
+"account": 20636,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919648766"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648960"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 2,
+"account": 33383,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 3,
+"account": 20636,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+5,
+29
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 9,
+"selected": 0,
+"bet": 0,
+"call": 200,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 9,
+"selected": 0,
+"bet": 0,
+"call": 200,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 24462
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 2098944,
+"bet": 200,
+"raise": 400,
+"maxRaise": 20000,
+"betPot": 700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 20000,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20000
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_SEAT_INFO",
+"type": 0,
+"seat": 5,
+"state": 32,
+"account": 40944,
+"nickName": ""
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"amountToPost": 0,
+"pid": "CO_PRESELECT_BLINDS"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 512,
+"bet": 100,
+"raise": 500,
+"account": 32883
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "6ca4f053-1726-4368-a90e-4db570fd8bc6"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 256,
+"bet": 400,
+"raise": 0,
+"account": 20236
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+1200
+],
+"curRake": [
+60
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 16,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"bcard": [
+7,
+18,
+49
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"bcard": [
+7,
+18,
+49
+],
+"pid": "CO_BCARD3_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 32883
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 0,
+"seat": 3,
+"time": 28,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "ec97b169-01df-4363-81a0-3f738c57cd7c"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 128,
+"bet": 855,
+"raise": 0,
+"account": 19381
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 256,
+"bet": 855,
+"raise": 0,
+"account": 32028
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+2910
+],
+"curRake": [
+145
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 4,
+"card": 42,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 32028
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 0,
+"seat": 3,
+"time": 23,
+"pid": "PLAY_TIMEBANK_USE_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "d32128da-0344-4514-8501-9ecece6bafec"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19381
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+2910
+],
+"curRake": [
+145
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 64,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 5,
+"card": 9,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+2910
+],
+"curRake": [
+145
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 64,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pos": 5,
+"card": 9,
+"pid": "CO_BCARD1_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 32028
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 64,
+"bet": 0,
+"raise": 0,
+"account": 19381
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 0,
+"potCount": 0,
+"curPot": [
+2910
+],
+"curRake": [
+145
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_PCARD_INFO",
+"type": 0,
+"seat": 2,
+"card": [
+36,
+21
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"btn": 8192,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"btn": 16384,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20000,
+34793,
+19381,
+24462,
+40944,
+20000,
+0,
+0,
+0
+],
+"handHi2": [
+4,
+0,
+6,
+1,
+2
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20000,
+34793,
+19381,
+24462,
+40944,
+20000,
+0,
+0,
+0
+],
+"handHi2": [
+4,
+0,
+6,
+1,
+2
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+2765,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919648960"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919648960"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649239"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 3,
+"account": 19281,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 4,
+"account": 24262,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 4,
+"account": 24262,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+34,
+44
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 2098944,
+"bet": 200,
+"raise": 400,
+"maxRaise": 20000,
+"betPot": 700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 2098944,
+"bet": 200,
+"raise": 400,
+"maxRaise": 20000,
+"betPot": 700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 1,
+"seat": 1,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 0,
+"allowedMin": 0,
+"account": 25737,
+"defaultBuyin": 0,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 20000,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20000
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "2ce1c82d685c1b23b0eae8ec1bb6e54c",
+"nsDuration": 42393823
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 34793
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "f03a24a3-958b-4e01-b6d7-4dabcb289c35"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 512,
+"bet": 100,
+"raise": 500,
+"account": 18781
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 24262
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 400,
+"seat": 3,
+"potCount": 0,
+"curPot": [
+400
+],
+"curRake": [
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20000,
+34793,
+19581,
+24262,
+40944,
+20000,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+0,
+0,
+400,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 2,
+"seat": 3,
+"cash": 20000,
+"pid": "PLAY_ACCOUNT_CASH_RES"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649239"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919649239"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649298"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 4,
+"account": 24162,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 5,
+"account": 40744,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 4,
+"account": 24162,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+48,
+50
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+],
+"seat5": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 2098944,
+"bet": 200,
+"raise": 400,
+"maxRaise": 20000,
+"betPot": 700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+48,
+50
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+],
+"seat5": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 2098944,
+"bet": 200,
+"raise": 400,
+"maxRaise": 20000,
+"betPot": 700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 512,
+"bet": 200,
+"raise": 500,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 512,
+"bet": 200,
+"raise": 500,
+"account": 19500
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 1,
+"selected": 0,
+"bet": 0,
+"call": 0,
+"raise": 0,
+"pid": "CO_SELECT_SPEED_BTN"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "f28826ba94718adb7fe487b60845aa7f",
+"nsDuration": 36659628
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 34793
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20000
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 24162
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PONG",
+"uuid": "6c53af59-cb76-4118-a52f-029637fc172a"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 40744
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"returnBet": 300,
+"seat": 1,
+"potCount": 0,
+"curPot": [
+500
+],
+"curRake": [
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"btns": 33595392,
+"pid": "CO_SHOW_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"btn": 32768,
+"pid": "CO_SHOW_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 65536,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20300,
+34793,
+20000,
+24162,
+40744,
+20000,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_RESULT_INFO",
+"account": [
+20300,
+34793,
+20000,
+24162,
+40744,
+20000,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_POT_INFO",
+"kicker": 0,
+"kickerCard": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"potNo": 0,
+"returnHi": [
+500,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+"returnLo": [
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 20300,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_END_REQ"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649298"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919649298"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649360"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649298"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_LAST_HAND_NUMBER",
+"stageNo": "4919649298"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 5,
+"account": 40644,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_CLEAR_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 6,
+"account": 19800,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "PLAY_STAGE_INFO",
+"stageNo": "4919649360"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 2,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_DEALER_SEAT"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 1,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 4,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 5,
+"account": 40644,
+"baseStakes": 0,
+"btn": 2,
+"bet": 100,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_BLIND_INFO",
+"seat": 6,
+"account": 19800,
+"baseStakes": 0,
+"btn": 4,
+"bet": 200,
+"dead": 0
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 8,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CARDTABLE_INFO",
+"seat1": [
+10,
+33
+],
+"seat2": [
+32896,
+32896
+],
+"seat3": [
+32896,
+32896
+],
+"seat4": [
+32896,
+32896
+],
+"seat5": [
+32896,
+32896
+],
+"seat6": [
+32896,
+32896
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 1,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_REQ",
+"btns": 2098944,
+"bet": 200,
+"raise": 400,
+"maxRaise": 20300,
+"betPot": 700,
+"halfPot": 0,
+"timeBank": 45
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"type": 1,
+"seat": 1,
+"displayMax": 20000,
+"displayMin": 6000,
+"allowedMax": 0,
+"allowedMin": 0,
+"account": 25737,
+"defaultBuyin": 0,
+"pid": "PLAY_BUYIN_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"account": 20300,
+"pid": "PLAY_ACCOUNT_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"play": 0,
+"seat": 1,
+"pid": "CO_SIT_PLAY"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 1,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20300
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 2,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "b83fc4b8ad4d1d9f693b9be5c01a07fc",
+"nsDuration": 38218796
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "LATENCY_REPORT",
+"id": "b83fc4b8ad4d1d9f693b9be5c01a07fc",
+"nsDuration": 38218796
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 2,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 34793
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 3,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 3,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 20000
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 4,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 4,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 24162
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 15,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 5,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_SELECT_INFO",
+"seat": 5,
+"btn": 1024,
+"bet": 0,
+"raise": 0,
+"account": 40644
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"pid": "CO_CHIPTABLE_INFO",
+"seat": 6,
+"potCount": 0,
+"curPot": [
+300
+],
+"curRake": [
+0
+]
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"tableState": 32768,
+"pid": "CO_TABLE_STATE"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"time": 2,
+"pid": "PLAY_TIME_INFO"
+}
+},
+{
+"rid": "9240.618",
+"d": {
+"seat": 6,
+"pid": "CO_CURRENT_PLAYER"
+}
+}
+]
+}

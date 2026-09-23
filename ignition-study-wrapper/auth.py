@@ -161,9 +161,11 @@ _STATE_JS = r"""(() => {
   const challenge = [...document.querySelectorAll('iframe')].some(f => /recaptcha.*bframe/.test(f.src || '') && vis(f) && f.getBoundingClientRect().width > 200);
   const errs = [...document.querySelectorAll('[role=alert], [class*=error], [class*=alert], [class*=invalid]')]
     .filter(vis).map(e => (e.innerText || '').trim().replace(/\s+/g, ' '))
-    .filter(t => t && t.length > 3 && t.length < 200 && t !== 'PASTE' && !/enter the code to proceed|6-digit code\*?\s*(PASTE)?$/i.test(t) && !/^\s*6-digit code/i.test(t));
+    .filter(t => t && t.length > 3 && t.length < 200 && t !== 'PASTE' && !/enter the code to proceed|6-digit code\*?\s*(PASTE)?$/i.test(t) && !/^\s*6-digit code/i.test(t)
+                 && !/^welcome/i.test(t));   // "Welcome!" is the site's sign-in SUCCESS toast, not an error (read as one on 09-12 and 09-17)
   const seated = [...document.querySelectorAll('iframe')].some(f => /playMode=/.test(f.getAttribute('src') || ''));
-  const lobby = /poker-lobby|poker-game/.test(path) && !login;
+  // the casino landing (/headless/poker/casino-crossplay) is where a fresh sign-in lands: signed in, no lobby yet
+  const lobby = /poker-lobby|poker-game|headless\/poker/.test(path) && !login;
   return { path, hasLogin: !!login, hasCode: !!code, codeText, challenge, errs: [...new Set(errs)].slice(0, 4), seated, lobby,
            trustField: trust ? { id: trust.id, checked: trust.checked } : null,
            codeField: code ? { name: code.name, id: code.id, ac: code.autocomplete, max: code.maxLength, type: code.type } : null,
@@ -281,10 +283,27 @@ def login(name: str, port: int, log=print, settle: float = 20.0) -> dict:
                 "error": None if st["state"] in ("signed-in", "seated") else f"not on the login form ({st['state']})"}
     t = _target(port)
     ws = t["webSocketDebuggerUrl"]
-    if not _type_into(ws, "document.querySelector('input[type=email], #username, input[name=username]')", prof.get("email") or ""):
-        return {"ok": False, "error": "e-mail field not found", "steps": steps}
-    if not _type_into(ws, "document.querySelector('input[type=password]')", pw):
-        return {"ok": False, "error": "password field not found", "steps": steps}
+    # THE FORM MUST HOLD STILL (Brady, 2026-09-17). A retry typed while the page was still re-rendering after an
+    # error toast lost the e-mail ("Please enter your E-mail address to proceed" with the field empty at LOGIN). So:
+    # let a visible error clear (up to 3 s), type, then READ BACK both fields right before LOGIN and retype whichever
+    # came up short - once. Lengths only are logged, never a value.
+    for _ in range(6):
+        if not (page_state(port).get("errors") or []):
+            break
+        time.sleep(0.5)
+    email_sel = "document.querySelector('input[type=email], #username, input[name=username]')"
+    pw_sel = "document.querySelector('input[type=password]')"
+    for attempt in range(2):
+        if not _type_into(ws, email_sel, prof.get("email") or ""):
+            return {"ok": False, "error": "e-mail field not found", "steps": steps}
+        if not _type_into(ws, pw_sel, pw):
+            return {"ok": False, "error": "password field not found", "steps": steps}
+        time.sleep(0.4)
+        got = _eval(ws, "(() => { const e = " + email_sel + ", p = " + pw_sel + "; return [e ? e.value.length : -1, p ? p.value.length : -1]; })()") or [-1, -1]
+        if got[0] == len(prof.get("email") or "") and got[1] == len(pw):
+            break
+        step(f"fields read back {got[0]}/{len(prof.get('email') or '')} and {got[1]}/{len(pw)} chars - retyping" if attempt == 0
+             else f"fields still short after retyping ({got[0]}, {got[1]} chars)")
     pw = None
     step(f"filled e-mail + password for {name}")
     _eval(ws, "(() => { const c = document.querySelector('#remember_me, input[name=remember_me]'); if (c && c.checked !== "

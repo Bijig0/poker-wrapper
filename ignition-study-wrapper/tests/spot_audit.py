@@ -40,6 +40,7 @@ import os
 # The rig under test. The test rig (7701) is the one showing a fake table;
 # override for a different one.
 WRAPPER = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
+from rig import rig_check  # noqa: E402  (is 7701 OUR rig, or CoinPoker's?)
 API = "http://127.0.0.1:2000"
 
 SEVERITY = {"info": 0, "minor": 1, "major": 2}
@@ -149,13 +150,14 @@ def run(path: Path) -> Case:
 
 
 def main() -> int:
-    try:
-        _req(f"{WRAPPER}/state")
-    except OSError as e:
-        print(f"wrapper not reachable on {WRAPPER} — launch Ignition Study ({e})")
+    if bad := rig_check(WRAPPER):
+        print(bad)
         return 2
     try:
-        _req(f"{API}/")
+        # /api, not / — the dashboard took the root in the 2026-09-17 restyle and
+        # serves HTML there, which made this reachability probe a JSONDecodeError
+        # and skipped two whole tiers of run_all.py as "FAIL" with no output.
+        _req(f"{API}/api")
     except OSError as e:
         print(f"gto-trainer API not reachable on {API} ({e})")
         return 2

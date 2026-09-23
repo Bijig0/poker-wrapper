@@ -1,0 +1,467 @@
+{
+ "decisions": 472,
+ "hands": 317,
+ "verdicts": {
+  "OK": 143,
+  "SKIPPED(cloud budget)": 163,
+  "FIXED": 17,
+  "NOT-REPLAYED": 111,
+  "CORRECT-REFUSAL": 20,
+  "NEVER-ASKED": 9,
+  "STILL(capture/line-desync)": 3,
+  "STILL(capture/street-stamp)": 4,
+  "STILL(capture/rotation)": 2
+ },
+ "verdicts_by_hand": {
+  "OK": 125,
+  "SKIPPED(cloud budget)": 150,
+  "FIXED": 12,
+  "NOT-REPLAYED": 61,
+  "CORRECT-REFUSAL": 8,
+  "NEVER-ASKED": 4,
+  "STILL(capture/line-desync)": 3,
+  "STILL(capture/street-stamp)": 1,
+  "STILL(capture/rotation)": 2
+ },
+ "by_street": {
+  "preflop": {
+   "decisions": {
+    "OK": 127,
+    "SKIPPED(cloud budget)": 163,
+    "FIXED": 5,
+    "NOT-REPLAYED": 30,
+    "NEVER-ASKED": 2,
+    "STILL(capture/rotation)": 2
+   },
+   "hands": {
+    "OK": 122,
+    "SKIPPED(cloud budget)": 150,
+    "FIXED": 5,
+    "NOT-REPLAYED": 26,
+    "NEVER-ASKED": 2,
+    "STILL(capture/rotation)": 2
+   }
+  },
+  "flop": {
+   "decisions": {
+    "OK": 7,
+    "CORRECT-REFUSAL": 11,
+    "FIXED": 3,
+    "NOT-REPLAYED": 47,
+    "STILL(capture/line-desync)": 1,
+    "STILL(capture/street-stamp)": 1,
+    "NEVER-ASKED": 2
+   },
+   "hands": {
+    "OK": 5,
+    "CORRECT-REFUSAL": 8,
+    "FIXED": 3,
+    "NOT-REPLAYED": 36,
+    "STILL(capture/line-desync)": 1,
+    "STILL(capture/street-stamp)": 1,
+    "NEVER-ASKED": 1
+   }
+  },
+  "turn": {
+   "decisions": {
+    "OK": 5,
+    "FIXED": 5,
+    "NOT-REPLAYED": 22,
+    "STILL(capture/line-desync)": 1,
+    "STILL(capture/street-stamp)": 1,
+    "CORRECT-REFUSAL": 6,
+    "NEVER-ASKED": 1
+   },
+   "hands": {
+    "OK": 4,
+    "FIXED": 4,
+    "NOT-REPLAYED": 17,
+    "STILL(capture/line-desync)": 1,
+    "STILL(capture/street-stamp)": 1,
+    "CORRECT-REFUSAL": 2,
+    "NEVER-ASKED": 1
+   }
+  },
+  "river": {
+   "decisions": {
+    "OK": 4,
+    "NOT-REPLAYED": 12,
+    "FIXED": 4,
+    "STILL(capture/street-stamp)": 2,
+    "CORRECT-REFUSAL": 3,
+    "STILL(capture/line-desync)": 1,
+    "NEVER-ASKED": 4
+   },
+   "hands": {
+    "OK": 3,
+    "NOT-REPLAYED": 9,
+    "FIXED": 4,
+    "STILL(capture/street-stamp)": 1,
+    "CORRECT-REFUSAL": 2,
+    "STILL(capture/line-desync)": 1,
+    "NEVER-ASKED": 2
+   }
+  }
+ },
+ "still_by_bucket": {
+  "capture/line-desync": 3,
+  "capture/street-stamp": 4,
+  "capture/rotation": 2
+ },
+ "still_hands_by_bucket": {
+  "capture/rotation": [
+   557,
+   583
+  ],
+  "capture/street-stamp": [
+   489
+  ],
+  "capture/line-desync": [
+   425,
+   441,
+   621
+  ]
+ },
+ "capture_ws": {
+  "ws-identical": 346,
+  "no-dump": 26,
+  "ws-divergent": 19,
+  "ws-extra-actions": 57,
+  "ws-no-turn-frame": 16,
+  "ws-missing-actions": 6,
+  "ws-not-exported": 2
+ },
+ "capture_faults_hands": 13,
+ "then": {
+  "probed": 458,
+  "answered": 350,
+  "never_probed": 14
+ },
+ "now": {
+  "answered": 167,
+  "refused": 194,
+  "not_replayed": 111
+ },
+ "exec": {
+  "executed:auto": 318,
+  "MANUAL-OR-MISSED": 18,
+  "auto armed, no answer": 62,
+  "manual session": 71,
+  "refused": 3
+ },
+ "exec_outcomes": {
+  "confirmed": 227,
+  "diverged": 2,
+  "unknown": 1
+ },
+ "followed_pick": {
+  "True": 338,
+  "False": 12
+ },
+ "rerolled_live": {
+  "decisions": 13,
+  "hands": 9,
+  "examples": [
+   [
+    365,
+    5,
+    "Call | Raise 7.5"
+   ],
+   [
+    365,
+    9,
+    "BET 7 | CHECK"
+   ],
+   [
+    370,
+    6,
+    "Call | Fold"
+   ],
+   [
+    390,
+    10,
+    "CALL 1.7 | RAISE 4.5"
+   ],
+   [
+    471,
+    7,
+    "Call | Raise 9"
+   ],
+   [
+    471,
+    9,
+    "BET 2.4 | CHECK"
+   ],
+   [
+    479,
+    8,
+    "CALL 4.6 | FOLD"
+   ],
+   [
+    480,
+    7,
+    "Call | Raise 23"
+   ],
+   [
+    489,
+    6,
+    "Call | Raise 12.5"
+   ],
+   [
+    693,
+    6,
+    "BET 1.4 | CHECK"
+   ],
+   [
+    693,
+    8,
+    "CALL 3.5 | FOLD"
+   ],
+   [
+    694,
+    6,
+    "BET 1.4 | CHECK"
+   ]
+  ]
+ },
+ "not_followed": [
+  [
+   411,
+   2,
+   "preflop",
+   "Fold",
+   "raise 2.5",
+   "MANUAL-OR-MISSED",
+   null
+  ],
+  [
+   438,
+   6,
+   "preflop",
+   "Raise 10.5",
+   "raise 4.0",
+   "executed:auto",
+   null
+  ],
+  [
+   441,
+   3,
+   "preflop",
+   "Raise 2.5",
+   "raise 2.0",
+   "executed:auto",
+   null
+  ],
+  [
+   471,
+   11,
+   "turn",
+   "FOLD",
+   "check",
+   "executed:auto",
+   "confirmed"
+  ],
+  [
+   479,
+   8,
+   "flop",
+   "CALL 4.6 | FOLD",
+   "check",
+   "executed:auto",
+   "confirmed"
+  ],
+  [
+   497,
+   11,
+   "turn",
+   "FOLD",
+   "check",
+   "executed:auto",
+   "confirmed"
+  ],
+  [
+   513,
+   5,
+   "preflop",
+   "Raise 2.5",
+   "raise 2.0",
+   "executed:auto",
+   "diverged"
+  ],
+  [
+   523,
+   13,
+   "turn",
+   "FOLD",
+   "check",
+   "executed:auto",
+   "confirmed"
+  ],
+  [
+   641,
+   10,
+   "flop",
+   "FOLD",
+   "check",
+   "executed:auto",
+   "confirmed"
+  ],
+  [
+   687,
+   3,
+   "preflop",
+   "Raise 9.5",
+   "fold",
+   "MANUAL-OR-MISSED",
+   null
+  ],
+  [
+   693,
+   8,
+   "turn",
+   "CALL 3.5 | FOLD",
+   "check",
+   "MANUAL-OR-MISSED",
+   null
+  ],
+  [
+   695,
+   11,
+   "flop",
+   "FOLD",
+   "check",
+   "executed:auto",
+   "confirmed"
+  ]
+ ],
+ "manual_or_missed_under_auto": [
+  [
+   366,
+   4,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   410,
+   3,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   411,
+   2,
+   "preflop",
+   "Fold",
+   "raise 2.5"
+  ],
+  [
+   411,
+   8,
+   "flop",
+   "FOLD",
+   "fold"
+  ],
+  [
+   425,
+   12,
+   "turn",
+   "CHECK",
+   "check"
+  ],
+  [
+   432,
+   6,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   439,
+   9,
+   "preflop",
+   "All-in",
+   "raise 96.5"
+  ],
+  [
+   501,
+   12,
+   "river",
+   "CALL 18.8",
+   "call 18.75"
+  ],
+  [
+   539,
+   7,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   662,
+   4,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   687,
+   3,
+   "preflop",
+   "Raise 9.5",
+   "fold"
+  ],
+  [
+   691,
+   4,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   693,
+   8,
+   "turn",
+   "FOLD",
+   "check"
+  ],
+  [
+   694,
+   6,
+   "flop",
+   "BET 1.4",
+   "check"
+  ],
+  [
+   694,
+   8,
+   "turn",
+   "FOLD",
+   "fold"
+  ],
+  [
+   698,
+   3,
+   "preflop",
+   "Fold",
+   "fold"
+  ],
+  [
+   729,
+   15,
+   "river",
+   "CHECK",
+   "check"
+  ],
+  [
+   729,
+   17,
+   "river",
+   "CALL 13",
+   "call 13.0"
+  ]
+ ],
+ "pick_disagreement_then_vs_now": 17,
+ "gtow_requests_spent": 358
+}

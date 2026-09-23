@@ -34,6 +34,7 @@ import os
 # The Study Tool runs the TEST rig on 7701; 7700 is the live rig and has no
 # fake table to load, so a suite pointed there reports "unavailable".
 WRAPPER = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
+from rig import rig_check  # noqa: E402  (is 7701 OUR rig, or CoinPoker's?)
 API = "http://127.0.0.1:2000"
 GTOW_CDP = "http://127.0.0.1:9222/json/version"
 GTOW_LIST = "http://127.0.0.1:9222/json/list"
@@ -192,12 +193,15 @@ def main() -> int:
         print(f"SKIPPING Tier 3 — GTO Wizard is not drivable: {why}")
         return 0
     print(f"GTO Wizard ready ({why})")
-    for name, url in (("wrapper", f"{WRAPPER}/state"), ("api", f"{API}/")):
-        try:
-            _req(url)
-        except OSError as e:
-            print(f"{name} not reachable ({e})")
-            return 2
+    if bad := rig_check(WRAPPER):
+        print(bad)
+        return 2
+    # /api, not / — the dashboard serves HTML at the root (see tests/spot_audit.py)
+    try:
+        _req(f"{API}/api")
+    except OSError as e:
+        print(f"api not reachable ({e})")
+        return 2
 
     wanted = set(sys.argv[1:])
     files = sorted(FIXTURES.glob("*.json"))

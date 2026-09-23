@@ -523,7 +523,13 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
     //    within the probe's timeout, and re-injecting it mid-solve closes the solve's socket and hands out a NEW token —
     //    every job of the shard then fails "missing or bad X-Hrc-Token" (all four boxes at once, 2026-09-13 10:50Z).
     //    With the runner alive and the JVM working (CPU above CPU_CALM), the bridge is left alone.
-    const solving = pr.runner > 0 && pr.cpuPct != null && pr.cpuPct >= CPU_CALM;
+    // NO RE-ATTACH WHILE A RUNNER IS ALIVE, whatever the CPU (2026-09-23). A solve has quiet stretches — the wizard's
+    // single-threaded tree build, the export, the gap between refinement chunks — and a probe that landed in one read
+    // "not solving" and re-attached the agent under it: the new agent's handle table is empty, so the runner's next call
+    // failed "no such handle: h9" 80 min into a refinement and the chart restarted from scratch (P_BTN85_BB80_o2_5 on
+    // hrc-l2, P_CO130_BTN85_SB120_BB80_o2_5 on hrc-l3; ~3 h lost between them). A bridge that is really dead fails the
+    // runner's own calls, the runner exits, and the next tick re-attaches with nothing in flight.
+    const solving = pr.runner > 0;
     if (pr.hrc === "active" && kv.bridge === "down" && !solving) {
       const t = await sshLinux(b.host, "HRC_BRIDGE_JAR=/root/hrc-api/bridge/build/hrc-bridge.jar /usr/local/bin/hrc-attach-bridge 2>&1 | tail -1", 120_000);
       pr.actions.push(`bridge agent was not answering -> re-attached: ${t.out.trim().split("\n").pop()?.slice(0, 80)}`);

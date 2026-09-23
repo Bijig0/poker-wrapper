@@ -41,6 +41,7 @@ import launch  # noqa: E402  (the reader under test)
 # table; 7700 is the live rig and has no fake table to load, so a suite
 # pointed there reports "unavailable" and silently tests nothing.
 BASE = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
+from rig import rig_check  # noqa: E402  (is 7701 OUR rig, or CoinPoker's?)
 # States checked by default. Enough to catch a systematic loss; the whole
 # corpus (--all) is a deliberate, much longer sweep.
 SAMPLE = 120
@@ -233,12 +234,10 @@ def diff(a: dict, b: dict) -> list[str]:
 
 
 def main() -> int:
-    try:
-        urllib.request.urlopen(BASE + "/state", timeout=5)
-        print(f"driving {BASE}, reading its browser on CDP :{adopt_rig_cdp()}")
-    except (urllib.error.URLError, OSError) as e:
-        print(f"wrapper not reachable on {BASE} — launch Ignition Study first ({e})")
+    if bad := rig_check(BASE):
+        print(bad)
         return 2
+    print(f"driving {BASE}, reading its browser on CDP :{adopt_rig_cdp()}")
 
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     every = "--all" in sys.argv

@@ -338,9 +338,11 @@ class GtowSessions {
         const s =
           "gametype=CashHu500zComplex&depth=100&solution_type=gwiz&gmfs_solution_tab=gwiz" +
           "&soltab=strategy&preflop_actions=R2.5-C&board=2c2d2h&flop_actions=X&history_spot=3";
-        send("Runtime.evaluate", {
-          expression: `location.href = location.origin + "/solutions?" + ${JSON.stringify(s)}`,
-        });
+        // A REAL RELOAD, not an in-app navigation (2026-09-23). The app is a single page: setting location.href
+        // to another /solutions route swaps a view and often fires no authenticated request, so an idle client
+        // sat at "no token" for ten minutes twice today while a Page.reload minted one in six seconds (probed).
+        send("Page.reload", {});
+        void s;
       }, SNIFF_PASSIVE_MS);
 
       ws.onopen = () => {

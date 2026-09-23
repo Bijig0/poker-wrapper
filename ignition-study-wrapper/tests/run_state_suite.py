@@ -33,6 +33,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 # table; 7700 is the live rig and has no fake table to load, so a suite
 # pointed there reports "unavailable" and silently tests nothing.
 BASE = os.environ.get("WRAPPER_URL", "http://127.0.0.1:7701")
+from rig import rig_check  # noqa: E402  (is 7701 OUR rig, or CoinPoker's?)
 
 
 def _req(path: str, body: dict | None = None, timeout: float = 15):
@@ -99,6 +100,22 @@ def run_fixture(path: Path) -> Case:
     for key in ("toActSeatId", "toActIsHero", "toCall"):
         if key in h:
             c.eq(f"currentNode.{key}", node.get(key), h[key])
+    # hero's status as the export carries it (in-hand / sitting-out / …) and,
+    # when hero is to act, that the export gives no reason for it not to be
+    if "status" in exp:
+        c.eq("hand.heroStatus", hand.get("heroStatus"), exp["status"])
+        snap = (_req("/state") or {}).get("snapshot") or {}
+        c.eq("/state snapshot.status", snap.get("status"), exp["status"])
+    if h.get("toActIsHero") is True:
+        c.eq("hand.notToActWhy", hand.get("notToActWhy"), None)
+    # a client notice rendered over the table: the wrapper must see it, name
+    # it (harmless kinds are dismissed live), and hold the pick while it is up
+    if "modal" in exp:
+        st = _req("/state") or {}
+        c.eq("/state modal kind", (st.get("modal") or {}).get("harmless"), exp["modal"])
+        c.truthy("pick held while the notice is up",
+                 "notice" in str((st.get("pickReady") or {}).get("reason") or "") or not st.get("panelAnswer"),
+                 json.dumps(st.get("pickReady")))
 
     # ---- the relay -------------------------------------------------------
     for want in exp.get("relay") or []:
@@ -120,6 +137,32 @@ def run_fixture(path: Path) -> Case:
                 break
         c.eq(f"relay {want['label']} fires", click.get("qa"), want["fires"])
 
+    # ---- a TYPED size: what reached the client, not what we typed ---------
+    # raise_to types the amount, reads it back, then presses the confirming button. The
+    # readback proves the field took it; it proves nothing about the field a moment
+    # later. Session 125204 hand 32: typed 10.5, read back 10.5, and the client had the
+    # 4 bb minimum in the field by the time RAISE took the click. The page records what
+    # the field HELD AT CLICK TIME, so a fixture can pin both halves.
+    for want in exp.get("raiseTo") or []:
+        res = _req("/act", {"kind": "raise-to", "amount": want["amount"]})
+        if want.get("refused"):
+            c.truthy(f"raise to {want['amount']} refused", res.get("ok") is False,
+                     f"expected refusal, got {json.dumps(res)}")
+            continue
+        if not res.get("ok"):
+            c.truthy(f"raise to {want['amount']}", False, f"refused: {res.get('reason')}")
+            continue
+        click: dict = {}
+        for _ in range(20):
+            time.sleep(0.25)
+            click = (_req("/faketable/lastclick") or {}).get("click") or {}
+            if click.get("qa") == want["fires"]:
+                break
+        c.eq(f"raise to {want['amount']} presses {want['fires']}", click.get("qa"), want["fires"])
+        if want.get("betValue") is not None:
+            c.eq(f"  ... the client confirmed {want['betValue']}",
+                 str(click.get("betValue")), str(want["betValue"]))
+
     # ---- actions the state does not offer --------------------------------
     for label in exp.get("refuse") or []:
         res = _req("/act", {"label": label, "kind": "action"})
@@ -129,10 +172,8 @@ def run_fixture(path: Path) -> Case:
 
 
 def main() -> int:
-    try:
-        _req("/state", timeout=5)
-    except (urllib.error.URLError, OSError) as e:
-        print(f"wrapper not reachable on {BASE} — launch Ignition Study first ({e})")
+    if bad := rig_check(BASE):
+        print(bad)
         return 2
 
     wanted = set(sys.argv[1:])
