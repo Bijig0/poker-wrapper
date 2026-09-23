@@ -104,10 +104,13 @@
   <h2><span class="n">3</span> Table <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">— which format to play, how much to bring, and who signs in</span></h2>
   <div class="card">
     <div class="settings">
+      <div class="field cp-only" style="grid-column: 1 / -1"><span class="k">Attach to table <span id="cpt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
+        <div class="presets" id="cp-tables" style="grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))"></div>
+        <span class="help">The tables open in the CoinPoker client right now — joined, you do not have to be seated. The wrapper reads the one you pick and no other, so a busier table can never take over the panel. Join a table in the client and it appears here within a few seconds.</span></div>
       <div class="field" style="grid-column: 1 / -1"><span class="k">Format <span id="fmt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
         <div class="presets" id="formats" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))"></div>
         <span class="help ign-only">The strategy names the formats its layers were built for; the others are greyed out. Start opens the table window and the wrapper drives the lobby to this table. The badge on the panel warns when the open table is not this one.</span>
-        <span class="help cp-only">The format labels the session. <b>You take the seat yourself in the CoinPoker client</b> — Start opens the client if it is not running, and the wrapper follows whichever table you sit at by reading the client's own log (every card, action and stack, exactly). Presses go to the table window; auto-execute arms only on a Practice Games table.</span></div>
+        <span class="help cp-only">The format labels the session. <b>You take the seat yourself in the CoinPoker client</b> — the wrapper reads the table you attach above from the client's own log (every card, action and stack, exactly), and only that table. Presses go to the table window; auto-execute arms only on a Practice Games table.</span></div>
       <div class="field ign-only"><span class="k">Tables</span>
         <div class="seg" id="tables"><button data-v="1" class="plain">1</button><button data-v="2" class="plain">2</button><button data-v="4" class="plain">4</button></div>
         <span class="help" id="tables-help">How many tables this session opens. Each one is its own wrapper with its own window and its own answers, but they share ONE session, one login and one balance — you declare it here and the rest join. They tile the table screen between them; their answers all appear on this panel. <b>Only 1, 2 and 4</b>: the screen splits into halves or quarters, so three would cost every table the smaller window and leave a quarter empty.</span>
@@ -230,6 +233,7 @@ function chooseSite(id) {
     || Object.keys(PRESETS).find((k) => siteOf(PRESETS[k]).includes(SITE) && !PRESETS[k].disabled && k !== "test-rig");
   if (first) choose(first);
   if (SITE === "ignition") pollTable();
+  if (SITE === "coinpoker") pollCpTables();
 }
 
 const presetChips = (p) => {
@@ -270,7 +274,7 @@ function choose(id) {
   preset = id;
   cfg = JSON.parse(JSON.stringify(PRESETS[id].config));
   cfg.site = SITE;
-  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; }
+  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; cfg.cpTable = CP_CHOSEN; }
   if (cfg.buyinBb == null) cfg.buyinBb = 100;
   const allowed = allowedFormats();
   const onSite = (fid) => { const f = FORMATS.find((x) => x.id === fid); return !!f && (f.site || "ignition") === SITE; };
@@ -281,6 +285,47 @@ function choose(id) {
   renderFormats();
   fillSettings();
   schedulePreflight();
+}
+
+// ---- CoinPoker: which open table the session attaches to ----------------
+let CP_TABLES = [], CP_CHOSEN = null, cpTimer = null;
+async function pollCpTables() {
+  clearTimeout(cpTimer);
+  if (SITE !== "coinpoker") return;
+  try { CP_TABLES = (await (await fetch("/coinpoker/tables")).json()).tables || []; } catch (e) { CP_TABLES = []; }
+  // a chosen table that has closed is un-chosen; with exactly one open, that one is the choice
+  if (CP_CHOSEN && !CP_TABLES.some((t) => t.room === CP_CHOSEN)) { CP_CHOSEN = null; if (cfg) { cfg.cpTable = null; schedulePreflight(); } }
+  if (!CP_CHOSEN && CP_TABLES.length === 1 && cfg) pickCpTable(CP_TABLES[0].room);
+  else renderCpTables();
+  cpTimer = setTimeout(pollCpTables, 3000);
+}
+function pickCpTable(room) {
+  CP_CHOSEN = room;
+  if (cfg) {
+    cfg.cpTable = room;
+    // the table says what it is: the session is labelled with that format when the strategy allows it
+    const t = CP_TABLES.find((x) => x.room === room), allowed = allowedFormats();
+    if (t && t.format && FORMATS.some((f) => f.id === t.format) && (!allowed || allowed.includes(t.format))) cfg.format = t.format;
+    renderFormats();
+    schedulePreflight();
+  }
+  renderCpTables();
+}
+function renderCpTables() {
+  const el = $("cp-tables");
+  if (!el) return;
+  $("cpt-note").textContent = CP_TABLES.length ? `— ${CP_TABLES.length} open` : "";
+  if (!CP_TABLES.length) { el.innerHTML = `<div class="sub">No table is open in the CoinPoker client — join one there (you do not have to sit) and it appears here.</div>`; return; }
+  el.innerHTML = CP_TABLES.map((t) => {
+    const stakes = t.bb != null ? `${t.sb}/${t.bb}${t.ante ? ` · ante ${t.ante}` : ""}` : "stakes not logged yet";
+    const kind = t.maxSize === 2 ? "heads-up" : t.maxSize ? `${t.maxSize}-max` : "";
+    const money = t.practice ? "practice chips" : t.coinType === 1 ? "REAL MONEY" : "";
+    const fmt = t.format ? (FORMATS.find((f) => f.id === t.format) || {}).name : null;
+    return `<button class="preset${CP_CHOSEN === t.room ? " on" : ""}" data-room="${esc(t.room)}">
+      <b>${esc(t.room)}</b><span class="tag">${esc([stakes, kind, money].filter(Boolean).join(" · "))}</span>
+      <span class="why" style="color:#8fa1b3">${t.heroSeated ? "you are seated" : "not seated (observing)"} · ${t.players} seated${fmt ? ` · ${esc(fmt)}` : ""}</span></button>`;
+  }).join("");
+  el.querySelectorAll("[data-room]").forEach((b) => b.onclick = () => pickCpTable(b.dataset.room));
 }
 
 // ---- step 2: the table — format, buy-in, profile, window state ----------
@@ -458,7 +503,7 @@ function readSettings() {
   cfg.tables = Number($("tables").querySelector("button.on")?.dataset.v) || 1;
   cfg.profile = $("profile").value || null;
   cfg.site = SITE;
-  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; }
+  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; cfg.cpTable = CP_CHOSEN; }
 }
 
 /* WHAT EACH TABLE WILL ACTUALLY GET. A window narrower than the Ignition layout

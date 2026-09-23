@@ -6593,6 +6593,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", json.dumps({"snapshots": A.snapshots()}).encode())
             elif path == "/update":              # packaged installs: is a newer release waiting?
                 self._send(200, "application/json", json.dumps(_update_status("force=1" in (self.path.split("?", 1) + [""])[1])).encode())
+            elif path == "/coinpoker/tables":    # the tables open in the client, for the setup page to attach one
+                self._send(200, "application/json", json.dumps({
+                    "tables": CP.open_tables(), "attached": CP.pinned, "client": CP.client_state()}).encode())
             elif path == "/formats":
                 # every known format + what the client has open right now
                 self._send(200, "application/json", json.dumps({
@@ -8439,6 +8442,8 @@ def _session_hands(sid: str) -> int:
 
 def _apply_session_config(cfg: dict) -> None:
     _SITE["id"] = CPS.SITE if cfg.get("site") == CPS.SITE else "ignition"
+    # CoinPoker: read the table the setup page attached (None = follow the most recently active table)
+    CP.attach(cfg.get("cpTable") if cfg.get("site") == CPS.SITE else None)
     _study["on"] = bool(cfg.get("answers"))
     _study["text"] = None
     # auto-execute (and any real-money allowance) is armed per session, never inherited
@@ -9042,7 +9047,7 @@ def _preflight(preset: str, cfg: dict, registry: dict | None = None) -> dict:
     (CoinPoker: client, log, table)."""
     pf = S.run_preflight(preset, cfg, _fake_mode, registry if registry is not None else S.fetch_registry(), CDP_PORT)
     if cfg.get("site") == CPS.SITE:
-        pf["checks"] = pf["checks"] + CP.preflight()
+        pf["checks"] = pf["checks"] + CP.preflight(cfg.get("cpTable"))
         blockers = [c for c in pf["checks"] if c["required"] and not c["ok"]]
         pf.update({"ok": not blockers, "blockers": [c["label"] for c in blockers]})
     return pf

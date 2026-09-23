@@ -82,6 +82,66 @@ class Site:
         self._thread: threading.Thread | None = None
         self._on_line = None
         self._on_finished = None
+        # THE ATTACHED TABLE (2026-09-23): the room the session chose on the setup page. While set, the wrapper
+        # reads that table and no other — a quiet table stays attached, and a busier one never steals the panel.
+        # None = the old behaviour (the most recently active table, seated first).
+        self.pinned: str | None = None
+
+    def attach(self, room: str | None) -> None:
+        with self.lock:
+            self.pinned = room or None
+
+    @staticmethod
+    def open_rooms() -> dict[str, int]:
+        """The tables OPEN in the client right now — joined, seated or not: each is its own CoinPoker.exe started
+        with roomName=<room> (the hidden --prewarm instance has none). {room: pid}."""
+        out: dict[str, int] = {}
+        for p in psutil.process_iter(["name", "cmdline"]):
+            try:
+                if (p.info["name"] or "").lower() != "coinpoker.exe":
+                    continue
+                room = next((a[len("roomName="):] for a in p.info["cmdline"] or [] if a.startswith("roomName=")), None)
+                if room:
+                    out[room] = p.pid
+            except (psutil.Error, TypeError):
+                continue
+        return out
+
+    @staticmethod
+    def _format_for(props: dict) -> str | None:
+        """The FORMATS id this table is, from its roomProperties (size, big blind, practice chips)."""
+        if not props:
+            return None
+        if props.get("coinType") == 2:
+            return "cp-practice"
+        size, bb = props.get("maxSize"), props.get("bigBlind")
+        kind = "hu" if size == 2 else "ring" if size == 6 else None
+        return next((f["id"] for f in FORMATS if f.get("gameType") == kind and f.get("bb") is not None
+                     and bb is not None and abs(f["bb"] - bb) < 1e-9), None)
+
+    def open_tables(self) -> list[dict]:
+        """What the setup page lists to attach to: every open table, with what its log has said about it
+        (stakes, size, real or practice chips, who sits there). A table opened a moment ago may not have
+        logged its properties yet — it is listed anyway, with those fields empty."""
+        rooms = self.open_rooms()
+        out = []
+        with self.lock:
+            known = self.feed.rooms if self.feed else {}
+            for name in rooms:
+                r = known.get(name)
+                p = r.props if r else {}
+                seated = [s["name"] for s in r.seats.values()] if r else []
+                out.append({
+                    "room": name, "attached": name == self.pinned,
+                    "practice": bool(r and r.practice), "coinType": p.get("coinType"),
+                    "sb": p.get("smallBlind"), "bb": p.get("bigBlind"), "ante": p.get("ante"),
+                    "maxSize": p.get("maxSize"), "players": len(seated),
+                    "heroSeated": bool(feed.HERO) and feed.HERO in seated,
+                    "lastEventAgo": round(time.time() - r.touched, 1) if r and r.touched else None,
+                    "format": self._format_for(p),
+                })
+        out.sort(key=lambda t: (not t["heroSeated"], t["lastEventAgo"] if t["lastEventAgo"] is not None else 1e9))
+        return out
 
     # ---- the reader thread ------------------------------------------------
     def start(self, on_line=None, on_finished=None) -> None:
@@ -115,6 +175,10 @@ class Site:
     # ---- what the wrapper reads -------------------------------------------
     def _room(self):
         f = self.feed
+        if self.pinned:
+            # attached: that table only — even when it is quiet (no staleness cut-off), gone once you close it
+            r = f.rooms.get(self.pinned) if f else None
+            return r if r and not r.closed else None
         r = f.active() if f else None
         return r if r and time.time() - r.touched < LOG_STALE_S else None
 
@@ -265,19 +329,21 @@ class Site:
                          creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
         return {"ok": True, "started": True, **st}
 
-    def preflight(self) -> list[dict]:
-        """The CoinPoker rows of the setup page's preflight."""
+    def preflight(self, room: str | None = None) -> list[dict]:
+        """The CoinPoker rows of the setup page's preflight. `room` = the table the session attaches to (chosen
+        from the setup page's list of open tables); it must be picked and still open."""
         st = self.client_state()
-        t = self.table()
+        t = next((x for x in self.open_tables() if x["room"] == room), None) if room else None
         return [
-            {"id": "cp-client", "label": "CoinPoker client", "required": False, "ok": st["running"],
+            {"id": "cp-client", "label": "CoinPoker client", "required": True, "ok": st["running"],
              "detail": ("running" + (f" · lobby DevTools on :{CDP_PORT}" if st["cdp"] else " (without the DevTools port — fine; only the lobby uses it)"))
-             if st["running"] else "not running — Start opens it; log in and take a seat there"},
+             if st["running"] else "not running — open CoinPoker and join a table"},
             {"id": "cp-log", "label": "CoinPoker table log readable", "required": True, "ok": st["logExists"],
              "detail": (f"{st['log']} · last written {st['logAgeS']} s ago" if st["logExists"]
                         else f"{st['log']} does not exist — has the client ever run on this machine?")},
-            {"id": "cp-table", "label": "CoinPoker table", "required": False, "ok": bool(t),
-             "detail": (f"{t['room']} · {'PRACTICE chips' if t['practice'] else 'REAL MONEY' if t['coinType'] == 1 else 'type unknown'}"
-                        + (" · you are seated" if t["heroSeated"] else " · not seated (observing)"))
-             if t else "no table open yet — open one in the client after Start"},
+            {"id": "cp-table", "label": "Attached table", "required": True, "ok": bool(t),
+             "detail": (f"{t['room']} · {'PRACTICE chips' if t['practice'] else 'REAL MONEY' if t['coinType'] == 1 else 'type not logged yet'}"
+                        + (" · you are seated" if t["heroSeated"] else " · not seated (the wrapper reads it; sit down to get answers)"))
+             if t else (f"{room} is no longer open in the client — pick another" if room
+                        else "pick the table to attach to (join one in the CoinPoker client first)")},
         ]
