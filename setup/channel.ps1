@@ -1,7 +1,7 @@
 ﻿# The update channel, shared by setup.ps1, update.ps1 and doctor.ps1 (dot-source it after setting $root).
 #
 # Releases live on R2 (the same read-only key the chart server uses), published from the owner's machine by
-# setup\build_package.py --publish:
+# setup\buildPackage.ts --publish:
 #   <channel>/latest.json                          the current release
 #   <channel>/releases/<version>/release.json      every published version (kept, so -Version <v> rolls back)
 #   <channel>/releases/<version>/PokerWrapper-code-<version>.zip

@@ -43,7 +43,7 @@ if (-not $env:BUN) {
     "$env:APPDATA\npm\node_modules\bun\bin\bun.exe",
     "$env:USERPROFILE\.bun\bin\bun.exe")
 }
-# 3. Python: the repo's venv (the wrapper and the chart server run in it)
+# 3. Python: the repo's venv (the chart server runs in it; the Poker Wrapper is TypeScript since 2026-09-24)
 if (-not $env:PYTHON) { $env:PYTHON = First-Existing @("$root\aof-model\.venv\Scripts\python.exe") }
 # 4. the data files the API arms at start (see .claude\study-api.ps1 for why they matter)
 if (-not $env:EXPLOIT_CHART) { $env:EXPLOIT_CHART = First-Existing @("$root\analysis\pipeline\limp_study\exploit_ranges_nl25.json") }

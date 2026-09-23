@@ -9,7 +9,7 @@
  * reproduce from the archive and looks "fixed". This replays `debug/ws_dump*.jsonl` through the real parser (no
  * client, no DOM, no network) and snapshots handState() at the moment the client asks HERO to act (the rising
  * edge of heroTurn), i.e. the export the poller would have read on that tick, WS-only. One JSON line per
- * snapshot, for the hardening verdict table (ignition-study-wrapper/tests/backtest/verdicts.py), which compares
+ * snapshot, for the hardening verdict table (gto-trainer/apps/api/src/scripts/hardeningVerdicts.ts), which compares
  * it to the archived hand truncated at the same decision: identical / missing actions / divergent.
  *
  * WS-only is a LOWER BOUND on what the live export had — the DOM backfill and the reconciler are not in this

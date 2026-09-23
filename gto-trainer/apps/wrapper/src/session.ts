@@ -534,7 +534,6 @@ export async function autoOpenBalance(sid: string | null, profile: string | null
 }
 
 // ---- several tables --------------------------------------------------------------------------------------
-const VENV_PY = join(REPO, "aof-model", ".venv", "Scripts", "python.exe");
 
 async function slotUp(slotN: number, timeoutS = 1.5): Promise<boolean> {
   return (await TABLES.probe(slotN, timeoutS)) !== null;
@@ -840,8 +839,8 @@ function run(cmd: string, args: string[], timeoutS: number, cwd: string = REPO):
 
 async function ownerReleaseRefresh(): Promise<void> {
   try {
-    const py = existsSync(VENV_PY) ? VENV_PY : "python";
-    const r = await run(py, [join(REPO, "setup", "build_package.py"), "--status", "--json"], 180);
+    // the packager is TypeScript (setup/buildPackage.ts, 2026-09-24): run it with the Bun running this wrapper
+    const r = await run(process.execPath, [join(REPO, "setup", "buildPackage.ts"), "--status", "--json"], 180);
     const lines = r.stdout.trim().split(/\r?\n/);
     const line = lines[lines.length - 1] || "";
     S.ownerRelease.status = line.startsWith("{") ? JSON.parse(line) : { ok: false, error: (r.stderr || r.stdout).slice(-300) };
@@ -856,7 +855,7 @@ async function ownerReleaseRefresh(): Promise<void> {
 export async function updateStatus(force = false): Promise<Record<string, any>> {
   const inst = installedVersion();
   if (inst === null) {
-    if (!existsSync(join(REPO, "setup", "build_package.py"))) return { ok: true, packaged: false };
+    if (!existsSync(join(REPO, "setup", "buildPackage.ts"))) return { ok: true, packaged: false };
     if (!S.ownerRelease.running && (force || time() - S.ownerRelease.at > 90)) {
       S.ownerRelease.running = true;
       void ownerReleaseRefresh();

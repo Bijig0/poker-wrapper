@@ -267,7 +267,7 @@ Regression replays over every debug recording: the reader golden (`apps/wrapper/
 replays every recorded session — DOM ticks and WebSocket frames — through the reader and compares the export,
 the live status and the archive after every event with what the Python reader produced when the corpus was
 recorded. `src/tools/replayWsDecisions.ts` snapshots what the poller had at every hero decision (the hardening
-verdict table, `tests/backtest/verdicts.py`, reads its output). The fake-table fixtures
+verdict table, `apps/api/src/scripts/hardeningVerdicts.ts`, reads its output). The fake-table fixtures
 `btn-rfi-villain-sitting-out` and `preflop-hero-3bet-field-reset` pin the hand-398 and hand-4919212912 cases in
 the contract suite.
 
@@ -298,11 +298,11 @@ Cheapest and most local first, so the FIRST failure is the cause.
 | `apps/wrapper: bun test` | unit tests, the hand fuzzer, and the goldens (reader / pure / browser trace / CoinPoker) | nothing |
 | `apps/wrapper: test/contract/runner.ts` | does an authored state export the right ParsedHand, and does the relay fire the right control — every fixture in `tests/fixtures`, on a headless wrapper of its own (:7791) | a browser |
 | `WRAPPER_RIG_TEST=1 bun test test/unit/pick-relay-rig.test.ts` | pick → relay end to end on a headless rig of its own (:7792) | a browser |
-| `tests/spot_audit.py` | did the study tool solve the RIGHT spot (feed-spot's divergence audit) | the rig on :7701 + API on :2000 |
-| `tests/answer_suite.py` | did an answer actually arrive | + GTO Wizard signed in |
+| `apps/wrapper: test/rig/spotAudit.ts` | did the study tool solve the RIGHT spot (feed-spot's divergence audit) | a rig (WRAPPER_URL, default :7701) + API on :2000 |
+| `apps/wrapper: test/rig/answerSuite.ts` | did an answer actually arrive | + GTO Wizard signed in |
 
-`setup/regress.py` runs the first three (and the API's own). The last two are Python HTTP clients of the rig
-(`tests/rig.py`), not part of the wrapper.
+`setup/regress.ts` (`bun setup/regress.ts`) runs the first three (and the API's own). The last two drive a rig over HTTP (`test/rig/rig.ts`
+checks the URL really is a test rig first); point WRAPPER_URL at a headless rig of your own rather than :7701.
 
 Two things the tiers deliberately do NOT assert. The answer's **pick**:
 `rollAction` samples the mixed strategy with `Math.random()` per decision, so

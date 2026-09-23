@@ -54,8 +54,15 @@ files (ignition-study-wrapper/data, debug, *.html pages are served from there �
       recorders and the Python-only replay tools. Ported first, each verified against the Python before it went:
       replayWsDecisions.ts (718/718 records identical), runTables.ts, and the hand fuzzer (test/fuzz: CPython's
       Mersenne Twister in pyRandom.ts, so seed i deals the same hand — 1,200 hands identical field by field).
-      Kept (not the wrapper — HTTP clients of the rig / analysis over its data): tests/rig.py, spot_audit.py,
-      answer_suite.py, backtest/verdicts.py, backfill_results.py, parity_report.py. The goldens stay (corpus under
+      Then ported too (Brady: "0% python"), each diffed against the Python first: test/rig/{rig,spotAudit,
+      answerSuite}.ts (spot audit output identical, 96 lines; answer suite identical but for timings),
+      api/src/scripts/hardeningVerdicts.ts (472 rows / summary / md identical, 1.0 == 1), src/tools/
+      backfillResults.ts (--dry output identical) and parityReport.ts (8/8 recordings identical); the rig launcher
+      (gto-trainer/study-tool.vbs -> src/tools/studyTool.ts; headless chain test on spare ports), the gate
+      (setup/regress.ts) and the packager (setup/buildPackage.ts + setup/zip.ps1: status JSON identical, a
+      --no-data build byte-identical entry for entry, 3,208 entries, unpacks with Windows tar), the Vultr play-box
+      kit (bootstrap installs Bun 1.3.14, install.ps1 runs bun install + a bun launcher; payload 217 files / 1.4 MB,
+      runs from the staged tree) and its chart tools (compareCharts 4/4, acceptDiff 2/2 identical). The goldens stay (corpus under
       ignition-study-wrapper/tests/golden/corpus) and are TS-owned: re-baseline with GOLDEN_UPDATE=1.
 - Deliberate deviations: real-money auto-execute allowance NOT ported (practice/fake only). Fixed in both:
   table slots are spawned with --panel-port/--cdp-port in argv (a slot without them read as :7700 to the

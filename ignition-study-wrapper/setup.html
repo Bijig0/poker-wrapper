@@ -675,7 +675,7 @@ async function checkUpdate(force) {
   let u; try { u = await (await fetch("/update" + (force ? "?force=1" : ""))).json(); } catch (e) { return; }
   const el = $("update-banner");
   if (!u.packaged && "owner" in u) {
-    // THE OWNER'S CHECKOUT: what friends have vs what this tree would publish (build_package.py --status)
+    // THE OWNER'S CHECKOUT: what friends have vs what this tree would publish (setup/buildPackage.ts --status)
     const o = u.owner;
     // the owner's bar follows publishing closely: every 20 s (forced) while a publish started here is in flight,
     // else every minute — so it disappears once the release is out, and comes back when something changes

@@ -1,7 +1,7 @@
 /**
  * HARDENING BACKTEST (2026-09-23) — every hero decision in the wrapper's whole archive, replayed through the
  * CURRENT production solve path, beside what the table actually got at the time. The solver half of the
- * per-decision verdict table; ignition-study-wrapper/tests/backtest/verdicts.py joins the executor half
+ * per-decision verdict table; src/scripts/hardeningVerdicts.ts joins the executor half
  * (sessions.sqlite pick-executed / pick-outcome events, the archived hero action) and writes the CSV.
  *
  * Extends scripts/sessionBacktest.ts (2026-09-21) in the ways that run made necessary:

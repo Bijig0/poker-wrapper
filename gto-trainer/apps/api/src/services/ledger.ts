@@ -141,7 +141,7 @@ export interface Ledger {
   proposals?: { id: string; run: string; why: string; steps: string[]; input?: string[]; output?: string[]; check?: string[]; approved: { at: string } | null }[];
 }
 
-// LEDGER_PATH: the packaged install ships a trimmed ledger (setup/build_package.py) — formats, configs with their
+// LEDGER_PATH: the packaged install ships a trimmed ledger (setup/buildPackage.ts) — formats, configs with their
 // chart ids baked in, sources; no boxes, machines, proposals or plans
 const PATH = process.env.LEDGER_PATH ?? join(DATA_DIR, "ledger.json");
 let cache: { mtimeMs: number; value: Ledger } | null = null;

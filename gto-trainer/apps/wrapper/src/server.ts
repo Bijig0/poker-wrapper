@@ -205,7 +205,7 @@ export function buildApp(): Hono {
   app.get("/sweep-report", () => {
     const rp = join(C.ROOT, "debug", "postflop_sweep_report.html");
     return existsSync(rp) ? html(readFileSync(rp))
-      : html("<body style='background:#0d141c;color:#cfe0ef;font:14px system-ui;padding:2em'>no sweep report yet - run make_pf_report.py</body>");
+      : html("<body style='background:#0d141c;color:#cfe0ef;font:14px system-ui;padding:2em'>no sweep report yet - run: bun src/scripts/makeSolveAuditReport.ts (in gto-trainer/apps/api)</body>");
   });
   app.get("/tool", () => html(toolShell()));
   app.get("/faketable/lastclick", async () => {
