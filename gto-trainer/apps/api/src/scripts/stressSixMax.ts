@@ -312,6 +312,37 @@ const S: SpotSpec[] = [
     stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BB", cards: ["Ad", "Qh"],
     pre: [["UTG", "c"], ["HJ", "f"], ["CO", "r", 5], ["BTN", "f"], ["SB", "c"]] },
 
+  // ============================ DEAD SMALL BLIND (2026-09-23, hand 732) ============================
+  // The SB seat emptied between hands: five dealt, no SB post, the pot is the big blind alone. No chart has this
+  // shape (is6Handed wants BTN/SB/BB), so the AI piece answers with the SB as a penny ghost — graded approx
+  // ("dead SB modelled"), and the seat must be hero's. The harness builds these with no SB in `stacks`.
+  { id: "deadsb-01", family: "preflop", note: "dead SB: hero HJ first in after UTG folds (hand 732, T9o)",
+    stacks: { UTG: 96, HJ: 101.5, CO: 151, BTN: 100, BB: 99 }, hero: "HJ", cards: ["Ts", "9c"],
+    pre: [["UTG", "f"]] },
+
+  { id: "deadsb-02", family: "preflop", note: "dead SB: hero BB facing a BTN open — the ghost must not take a turn between BTN and BB",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, BB: 100 }, hero: "BB", cards: ["Ad", "Qh"],
+    pre: [["UTG", "f"], ["HJ", "f"], ["CO", "f"], ["BTN", "r", 2.5]] },
+
+  { id: "deadsb-03", family: "preflop", note: "dead SB at a 4-seat table: hero BTN first in",
+    stacks: { HJ: 100, CO: 100, BTN: 100, BB: 100 }, hero: "BTN", cards: ["Kc", "8d"],
+    pre: [["HJ", "f"], ["CO", "f"]] },
+
+  // ============================ THE REFUSAL CLASS (2026-09-23) ============================
+  // Lines the line fit cannot repair: every extra limper/caller raises later, or a size no limp tree can snap.
+  // Before the LAST RESORT these were the only preflop blanks; now they answer heads-up vs the last aggressor.
+  { id: "refuse-01", family: "esoteric", note: "three limpers who ALL raise later; hero BTN with AA facing CO's limp-5-bet jam",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["Ah", "Ad"],
+    pre: [["UTG", "c"], ["HJ", "c"], ["CO", "c"], ["BTN", "r", 5], ["SB", "f"], ["BB", "f"], ["UTG", "r", 15], ["HJ", "r", 35], ["CO", "r", 100]] },
+
+  { id: "refuse-02", family: "esoteric", note: "three limpers, two raise later; a 35bb 4-bet the limp tree (jam-only 4-bets) cannot snap; hero BTN QQ",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["Qh", "Qd"],
+    pre: [["UTG", "c"], ["HJ", "c"], ["CO", "c"], ["BTN", "r", 5], ["SB", "f"], ["BB", "f"], ["UTG", "r", 15], ["HJ", "r", 35], ["CO", "f"]] },
+
+  { id: "refuse-03", family: "esoteric", note: "three cold-callers who all raise later; hero SB with KK facing two jams",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "SB", cards: ["Kh", "Kd"],
+    pre: [["UTG", "r", 2.5], ["HJ", "c"], ["CO", "c"], ["BTN", "c"], ["SB", "r", 12], ["BB", "f"], ["UTG", "f"], ["HJ", "r", 30], ["CO", "r", 100], ["BTN", "r", 100]] },
+
   // ============================ COMPLEX PREFLOP ============================
   { id: "pre-01", family: "preflop", note: "hero faces a 4-bet",
     stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "CO", cards: ["Ad", "Kd"],
@@ -455,6 +486,17 @@ const S: SpotSpec[] = [
   { id: "eso-14", family: "esoteric", note: "limp, iso, 3-bet, cold 4-bet, then a LIMPER jams: the iso raiser to act",
     stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "CO", cards: ["Ad", "Ah"],
     pre: [["UTG", "c"], ["HJ", "c"], ["CO", "r", 5], ["BTN", "r", 17], ["SB", "r", 38], ["BB", "f"], ["UTG", "r", 100], ["HJ", "f"]] },
+  // ---- the one refused postflop shape: 4-way, every villain paid on the flop, hero between (RE-ROOT, 2026-09-22) ----
+  { id: "eso-p6", family: "esoteric", note: "4-way TURN: SB bet the flop, hero (BB) and both others called; SB checks the turn — no collapse from the flop, re-rooted at the turn",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BB", cards: ["Kh", "Qh"],
+    pre: [["UTG", "r", 2.5], ["HJ", "f"], ["CO", "c"], ["BTN", "f"], ["SB", "c"], ["BB", "c"]],
+    board: ["Kd", "8s", "4h", "2c"], flop: [["SB", "r", 4], ["BB", "c"], ["UTG", "c"], ["CO", "c"]], turn: [["SB", "x"]] },
+  { id: "eso-p7", family: "esoteric", note: "4-way RIVER facing a bet: flop bet + 3 calls, turn checked through, SB bets the river — re-rooted at the river",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BB", cards: ["Ac", "Jc"],
+    pre: [["UTG", "r", 2.5], ["HJ", "f"], ["CO", "c"], ["BTN", "f"], ["SB", "c"], ["BB", "c"]],
+    board: ["Jd", "7s", "3h", "2c", "9d"], flop: [["SB", "r", 4], ["BB", "c"], ["UTG", "c"], ["CO", "c"]],
+    turn: [["SB", "x"], ["BB", "x"], ["UTG", "x"], ["CO", "x"]], river: [["SB", "r", 12]] },
+
   // ---- postflop out of those pots ----
   { id: "eso-p1", family: "esoteric", note: "FLOP of a 3-limper iso pot, blinds call: 5-way, hero the iso raiser facing a bet and a call",
     stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["Ah", "Kh"],
@@ -615,13 +657,16 @@ const S: SpotSpec[] = [
 const APPROX_MARKERS: [RegExp, string][] = [
   [/OFF-TREE SIZE/i, "size snapped past τ"],
   [/CALLER CAP/i, "caller borrowed"],
+  [/LINE FITTED/i, "line fitted"],
   [/snapped to the tree's sizes/i, "size snapped (clean)"],
   [/collapsed to three/i, "field collapsed to 3"],
+  [/RE-ROOTED/i, "re-rooted"],
   [/blended \d+ collapses/i, "collapses blended"],
   [/borrowed/i, "range borrowed"],
   [/answered from/i, "chart fallback"],
   [/dead SB approximated/i, "dead SB modelled"],
   [/past the .*rung|beyond/i, "past the ladder"],
+  [/LAST RESORT/i, "last resort (hero vs aggressor)"],
   [/GTO Wizard AI preflop/i, "answered by AI preflop"],
 ];
 
