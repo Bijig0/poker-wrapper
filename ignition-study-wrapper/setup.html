@@ -668,14 +668,24 @@ setInterval(async () => {
 // PACKAGED INSTALLS: a newer release on the update channel shows a banner with a one-press update
 // (the wrapper hands over to setup\update.ps1, which closes this window and reopens it when done).
 // The owner's source checkout answers packaged:false and never shows it.
+let ownerTimer = null, PUBLISH_WATCH_UNTIL = 0, PUBLISH_FROM = null;
 async function checkUpdate(force) {
   let u; try { u = await (await fetch("/update" + (force ? "?force=1" : ""))).json(); } catch (e) { return; }
   const el = $("update-banner");
   if (!u.packaged && "owner" in u) {
     // THE OWNER'S CHECKOUT: what friends have vs what this tree would publish (build_package.py --status)
     const o = u.owner;
-    if (!o) { el.style.display = "none"; setTimeout(() => checkUpdate(false), 15000); return; }   // first check still running
-    if (o.ok === false || (o.published && !o.pending)) { el.style.display = "none"; return; }
+    // the owner's bar follows publishing closely: every 20 s (forced) while a publish started here is in flight,
+    // else every minute — so it disappears once the release is out, and comes back when something changes
+    const watching = Date.now() < PUBLISH_WATCH_UNTIL;
+    clearTimeout(ownerTimer);
+    ownerTimer = setTimeout(() => checkUpdate(watching), watching ? 20000 : 60000);
+    if (!o) { el.style.display = "none"; return; }   // first check still running
+    if (o.ok === false || (o.published && !o.pending)) {
+      el.style.display = "none";
+      if (watching && o.published && o.published.version !== PUBLISH_FROM) PUBLISH_WATCH_UNTIL = 0;   // it landed
+      return;
+    }
     const unc = (o.uncommitted || []).length;
     el.style.display = "";
     el.innerHTML = `<div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -688,7 +698,8 @@ async function checkUpdate(force) {
     $("publish-go").onclick = async () => {
       $("publish-go").disabled = true;
       let r; try { r = await (await fetch("/publish", { method: "POST" })).json(); } catch (e) { r = { ok: false, why: String(e) }; }
-      $("publish-msg").textContent = r.ok ? "Publishing in the window that opened." : (r.why || "could not start");
+      $("publish-msg").textContent = r.ok ? "Publishing in the window that opened — this bar goes once the release is out." : (r.why || "could not start");
+      if (r.ok) { PUBLISH_FROM = o.published ? o.published.version : null; PUBLISH_WATCH_UNTIL = Date.now() + 15 * 60 * 1000; checkUpdate(true); }
       setTimeout(() => { $("publish-go").disabled = false; }, 5000);
     };
     return;

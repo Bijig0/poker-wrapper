@@ -8988,7 +8988,9 @@ def _update_status(force: bool = False) -> dict:
     if inst is None:
         if not (_REPO / "setup" / "build_package.py").exists():
             return {"ok": True, "packaged": False}
-        if not _owner_release["running"] and (force or time.time() - _owner_release["at"] > 600):
+        # 90 s: the status is ~2 s now (build_package hashes through its size+mtime cache), and a stale
+        # "N changes not published yet" after a publish was the bug (2026-09-23)
+        if not _owner_release["running"] and (force or time.time() - _owner_release["at"] > 90):
             _owner_release["running"] = True
             threading.Thread(target=_owner_release_refresh, daemon=True).start()
         return {"ok": True, "packaged": False, "owner": _owner_release["status"]}

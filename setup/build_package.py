@@ -204,12 +204,12 @@ def release_status(out: Path) -> dict:
     except Exception as e:
         return {**st, "ok": False, "error": f"cannot read the published manifest: {e}"}
     old.pop("gto-trainer/apps/api/data/ledger.json", None)   # rebuilt from the live ledger on every build
-    cur = {f: sha256_file(ROOT / f) for f in code_files()}
+    cache_path = out / "hash-cache.json"
+    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+    cur = {f: sha256_file(ROOT / f, cache) for f in code_files()}   # cached by size+mtime: cheap to ask often
     changed = sorted(f for f in cur if f in old and old[f] != cur[f])
     added = sorted(f for f in cur if f not in old)
     removed = sorted(f for f in old if f not in cur)
-    cache_path = out / "hash-cache.json"
-    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
     data_moved = []
     for part in DATA_PARTS:
         fs = data_part_files(part)
