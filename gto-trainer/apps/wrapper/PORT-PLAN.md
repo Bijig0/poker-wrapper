@@ -30,11 +30,13 @@ files (ignition-study-wrapper/data, debug, *.html pages are served from there â€
 3. The Python unit tests (ignition-study-wrapper/tests/test_*.py) ported 1:1 to bun tests.
 
 ## Progress (update as you go)
-- [ ] A1 golden recorder (Python) + data
-- [ ] A2 contract suite (TS) passing against Python headless
+- [x] A1 golden recorder (Python) + data  (reader 28 scenarios, pure 29k calls, CoinPoker 7 logs, CDP trace 67)
+- [x] A2 contract suite (TS) passing against Python headless (287/287, transcript stable)
 - [ ] B  modules ported (tick when its golden passes)
-      py.ts difflib.ts clock.ts | cdp | tables | formats | auth | balances | netcheck | terminal | reconcile
-      | faketable | sessions | sites/cpFeed | sites/coinpoker | sites/cpActions | win32/* | launch split:
+      DONE (goldens green): py.ts difflib.ts clock.ts win32.ts cdp.ts js/ | tables | formats | auth | balances
+      | netcheck | terminal | reconcile | faketable | sessions | sites/cpFeed | sites/coinpoker | sites/cpActions
+      (+ ocr.ts / win32/ocr.ps1: Windows.Media.Ocr via a kept PowerShell helper, verified on the live lobby)
+      TODO launch split:
       reader(DOM) | ws | handState | archive | pick/relay | topup | net guard | router/session | admin/cp
 - [ ] C  Hono server + zod contract; main.ts (takeover, loops); launchers (.cmd/.vbs), setup/update/build_package
 - [ ] D  contract suite + goldens + unit ports green on TS; cutover; API validates wrapper replies with the

@@ -14,7 +14,7 @@ import { FNS_EXTRA } from "./pure-fns";
 
 const verdict = (v: TERMINAL.TerminalVerdict) => ({ terminal: v.terminal, kind: v.kind, why: v.why, final_stack_known: v.finalStackKnown, details: v.details });
 
-export const FNS: Record<string, (args: any[], rec: any) => unknown> = {
+export const FNS: Record<string, (args: any[], rec: any) => unknown | Promise<unknown>> = {
   "terminal.is_terminal": ([plan, hand]) => verdict(TERMINAL.isTerminal(plan, hand)),
   "terminal.hero_done": ([hand]) => verdict(TERMINAL.heroDone(hand)),
   "reconcile.bb": ([s]) => rcBb(s),
@@ -39,7 +39,7 @@ export const FNS: Record<string, (args: any[], rec: any) => unknown> = {
   ...FNS_EXTRA,
 };
 
-test("golden: pure functions match the Python wrapper", () => {
+test("golden: pure functions match the Python wrapper", async () => {
   const pending = new Map<string, number>();
   const fails: string[] = [];
   const passed = new Map<string, number>();
@@ -51,9 +51,9 @@ test("golden: pure functions match the Python wrapper", () => {
     }
     let got: unknown;
     try {
-      got = normPy(fn(rec.args, rec));
+      got = normPy(await fn(rec.args, rec));
     } catch (e: any) {
-      got = { __error__: String(e?.message || e) };
+      got = { __error__: `${e?.name || "Error"}: ${e?.message || e}` };
     }
     if (canon(got) !== canon(rec.out)) {
       if (fails.length < 25) fails.push(`${rec.fn}(${JSON.stringify(rec.args).slice(0, 200)}): ${firstDiff(got, rec.out)}`);

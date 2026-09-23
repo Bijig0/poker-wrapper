@@ -285,16 +285,21 @@ function jsonKey(k: unknown): string {
   return String(k);
 }
 
+/** Python's exception types, so a message built from `${e.name}: ${e.message}` reads the same as Python's. */
+export class ValueError extends Error { override name = "ValueError"; }
+export class PyTypeError extends Error { override name = "TypeError"; }
+export class KeyError extends Error { override name = "KeyError"; }
+
 /** int(s) for a str: optional sign, digits, surrounding whitespace; anything else throws (ValueError). */
 export function pyInt(s: unknown): number {
   if (typeof s === "number") {
-    if (!Number.isFinite(s)) throw new Error(`cannot convert float ${s} to integer`);
+    if (!Number.isFinite(s)) throw new ValueError(`cannot convert float ${s} to integer`);
     return Math.trunc(s);
   }
   if (typeof s === "boolean") return s ? 1 : 0;
-  if (typeof s !== "string") throw new TypeError(`int() argument must be a string or a number, not '${s === null ? "NoneType" : typeof s}'`);
+  if (typeof s !== "string") throw new PyTypeError(`int() argument must be a string, a bytes-like object or a real number, not '${s === null || s === undefined ? "NoneType" : Array.isArray(s) ? "list" : typeof s === "object" ? "dict" : typeof s}'`);
   const t = s.trim().replace(/_/g, "");
-  if (!/^[+-]?\d+$/.test(t)) throw new Error(`invalid literal for int() with base 10: ${pyReprStr(s)}`);
+  if (!/^[+-]?\d+$/.test(t)) throw new ValueError(`invalid literal for int() with base 10: ${pyReprStr(s)}`);
   return Number(t);
 }
 
@@ -302,14 +307,14 @@ export function pyInt(s: unknown): number {
 export function pyFloat(s: unknown): number {
   if (typeof s === "number") return s;
   if (typeof s === "boolean") return s ? 1 : 0;
-  if (typeof s !== "string") throw new TypeError(`float() argument must be a string or a real number, not '${s === null ? "NoneType" : typeof s}'`);
+  if (typeof s !== "string") throw new PyTypeError(`float() argument must be a string or a real number, not '${s === null || s === undefined ? "NoneType" : Array.isArray(s) ? "list" : typeof s === "object" ? "dict" : typeof s}'`);
   const t = s.trim();
   if (/^[+-]?(inf|infinity)$/i.test(t)) return t.startsWith("-") ? -Infinity : Infinity;
   if (/^[+-]?nan$/i.test(t)) return NaN;
   if (/^[+-]?(\d(_?\d)*)?(\.(\d(_?\d)*)?)?([eE][+-]?\d(_?\d)*)?$/.test(t) && /\d/.test(t.replace(/[eE].*$/, ""))) {
     return Number(t.replace(/_/g, ""));
   }
-  throw new Error(`could not convert string to float: ${pyReprStr(s)}`);
+  throw new ValueError(`could not convert string to float: ${pyReprStr(s)}`);
 }
 
 /** html.escape(s, quote=True) */
