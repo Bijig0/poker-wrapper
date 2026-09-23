@@ -101,7 +101,9 @@ interface IngestBody {
 app.get("/live-status", async (c) => {
   const url = (c.req.query("url") ?? DEFAULT_LIVE_URL).replace(/\/$/, "");
   try {
-    const res = await fetch(`${url}/state`, { signal: AbortSignal.timeout(1500) });
+    // light=1 (EIP-14, 2026-09-23): everything read below is in the wrapper's light payload;
+    // the plain path adds a deep DOM eval over CDP that this status card never looks at.
+    const res = await fetch(`${url}/state?light=1`, { signal: AbortSignal.timeout(1500) });
     const state = (await res.json()) as {
       connected?: boolean;
       mode?: string;
@@ -160,7 +162,7 @@ app.post("/", async (c) => {
     return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
   }
   noteResolveOk();
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, liveExtras } = resolved;
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras } = resolved;
 
   // the tree this hand will need is opened now, not at hero's turn (fastSolve.warmPreflop6max)
   if (hand) {
@@ -215,6 +217,7 @@ app.post("/", async (c) => {
     tableStatus,
     studyAnswersOn,
     strategyId,
+    sessionId: sessionId ?? null,
     // round-trip proof surfaced to the caller: the hand re-rendered as rows
     rerendered: renderPanelRows(hand),
     hero: {
@@ -233,6 +236,18 @@ app.post("/", async (c) => {
       notToActWhy: liveExtras?.notToActWhy ?? null,
     },
     hand: {
+      // WHO THIS HAND IS (EIP-16, 2026-09-23). The poller's 1 Hz probe is THIS route, and
+      // its no-answer rows (gtow-down, not-to-act-live, unreachable) are written from this
+      // envelope alone — which carried no ids, so all 107 gtow-down and 20 not-to-act-live
+      // rows in answers.sqlite have client_hand_id NULL and the reconciler has to guess the
+      // hand by hero cards + a ±60 s window (wrong when the same cards recur or two tables
+      // are live). Same fields as /fast-solver's projection, same order.
+      handId: hand.handId,
+      clientHandId: hand.clientHandId ?? null,
+      tableSlot: hand.tableSlot ?? null,
+      bbCents: hand.bbCents ?? null,
+      liveSeats: hand.liveSeats,
+      sessionId: sessionId ?? null,
       heroCards: hand.heroCards,
       board: hand.board,
       street: hand.street,

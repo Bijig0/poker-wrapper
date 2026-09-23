@@ -85,6 +85,15 @@ app.post("/", async (c) => {
     hand: {
       handId: hand.handId,
       clientHandId: hand.clientHandId ?? null,
+      // WHICH TABLE / WHAT STAKE / HOW MANY SEATS (EIP-08, PF-12, 2026-09-23). The wrapper
+      // stamps these on /hand and normalizeHand keeps them, but this projection was built by
+      // hand and dropped them — so answers.sqlite had table_slot, bb_cents and table_seats
+      // NULL in every one of its 4,287 rows (incl. the two-table sessions 20260921_143046 /
+      // 20260922_194118), and strategyIdForAnswer could never attribute by stake or seats.
+      tableSlot: hand.tableSlot ?? null,
+      bbCents: hand.bbCents ?? null,
+      liveSeats: hand.liveSeats,
+      sessionId: sessionId ?? null,
       heroCards: hand.heroCards,
       board: hand.board,
       street: hand.street,

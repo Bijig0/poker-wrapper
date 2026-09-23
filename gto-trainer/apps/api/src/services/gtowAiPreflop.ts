@@ -19,8 +19,12 @@
  *     5 HJ/CO/BTN/SB/BB · 6 UTG..BB); our earlier seats are relabelled onto that set in order
  *   - limps: max_allowed_limps 2 = ONE non-SB limper + the SB complete; a second limper is not in the tree
  *   - a straddle is just a blind on that player; antes are per player
- *   - a dead small blind cannot be expressed (SB blind 0 is refused) — the hand is approximated with
- *     the 5-seat set and the SB seat holding exactly its blind (a forced all-in blind)
+ *   - a dead small blind cannot be expressed (SB blind 0 is refused at solve time: "Invalid Total Pot = 0",
+ *     and a 5-player set without an SB position is refused outright) — the hand is approximated with the
+ *     next set up and the SB seat as a GHOST: blind 0.01, stack 0.01, all-in for a penny. Measured
+ *     2026-09-23 on hand 732 (HJ first in, 5 dealt): the earlier ghost holding its full 0.5bb blind put
+ *     0.5bb of phantom dead money in the pot and made hero limp 1.75% of his range; the penny ghost
+ *     removes both (limp 0.01%, raise 20.6% vs 16.1%). Rake cap counts the seats actually dealt.
  *   - one tree per table shape (positions + stacks + blinds + sizes); ~2-4 s to solve the root, 1-2 s
  *     per node after that; solutions are cached per shape for the process's life
  *
@@ -31,9 +35,12 @@
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowApi } from "./gtowApi";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
+import { gtowRequests } from "./gtowRequestLog";
 import { comboIndex, toClassWeights, COMBOS } from "../utils/comboIndex/comboIndex";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 import { rakeCapCents } from "./profiles";
+import { isTestStakeOf } from "./strategies";
+import { actorsWithAllins, foldEarliestCaller } from "../utils/fitLine/fitLine";
 
 export const GTOW_AI_PREFLOP_SOURCE = "gtow-ai-preflop" as const;
 export const GTOW_AI_PREFLOP_TIER = "ai-preflop" as const;
@@ -50,6 +57,8 @@ const THREE_BETS = ["3.2x", "3.8x", "4.5x"];
 const FOUR_BETS = ["2.2x", "2.6x"];
 const FIVE_PLUS = ["2.2x"];
 const NODE_TIMEOUT_MS = 30_000;
+/** The dead-SB ghost's blind and stack: all-in for a penny, so it neither adds dead money nor competes for the pot. */
+const DEAD_SB_GHOST = 0.01;
 const POLL_MS = 1200;
 
 export interface AiPreflopShape {
@@ -62,6 +71,8 @@ export interface AiPreflopShape {
   straddle: { pos: string; bb: number } | null;
   rakeCapBb: number;
   deadSb: boolean;
+  /** dead money in the pot before the first action (bb) — chips of players the LAST RESORT folded out */
+  deadBb: number;
   heroApiPos: string | null;
 }
 
@@ -78,10 +89,23 @@ export interface AiPreflopResult {
   shape: AiPreflopShape;
   note: string;
 }
-export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string };
+/**
+ * A refusal's `kind` names the CLASS of failure when the caller should treat it differently from "the cloud
+ * could not answer". CAPTURE_FAULT (PF-26, 2026-09-23): GTO Wizard rejected the line itself with 400
+ * VALIDATION_ERROR "Incorrect actions" — the capture is not a legal betting sequence ("F-F-F-F-F" padded past a
+ * terminal, "F-F-C-F-F-F-R4.5-F"; 15 answers.sqlite rows), so no tree will ever hold it and the last resort would
+ * only re-solve the same corrupt line as heads-up. fastSolve reads this kind and stops before the last resort.
+ */
+export const CAPTURE_FAULT = "capture-fault" as const;
+export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string };
 
 const round5 = (x: number) => Math.round(x * 2) / 2;
 const num = (n: number) => String(Math.round(n * 100) / 100);
+
+/** What an action put in the pot, in the tree's own blinds: the NL5 test stake's 0.4bb small-blind post is the
+ *  NL200 game's 0.5 (PF-06 — the same pin shapeOf applies to the blind itself), everything else as recorded. */
+const putBb = (hand: ParsedHand, a: ParsedAction): number =>
+  a.type === "post-sb" && isTestStakeOf("ign-ring-NL200-6", hand.bbCents) ? 0.5 : (a.amount ?? 0);
 
 /** Hero's position: an override, his blind post, or the positions map. */
 export function heroPosOf(hand: ParsedHand, heroPos: string | null): string | null {
@@ -90,7 +114,7 @@ export function heroPosOf(hand: ParsedHand, heroPos: string | null): string | nu
 }
 
 /** The table as the API must see it. */
-export function shapeOf(hand: ParsedHand, heroPos: string | null): AiPreflopShape | { error: string } {
+export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, rakeSeats?: number): AiPreflopShape | { error: string } {
   const hp = heroPosOf(hand, heroPos);
   const seats: { seat: number; pos: string }[] = Object.entries(hand.positions).map(([s, p]) => ({ seat: Number(s), pos: p.toUpperCase() }));
   if (hp && !seats.some((x) => x.seat === hand.heroSeatId)) seats.push({ seat: hand.heroSeatId, pos: hp });
@@ -102,7 +126,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null): AiPreflopShap
     byPos.set("SB", byPos.get("BTN")!); byPos.delete("BTN"); present = present.map((p) => (p === "BTN" ? "SB" : p));
   }
   // a hand with no small blind (the seat emptied between hands): the API cannot express it —
-  // model the missing SB as a seat holding exactly its blind (a forced all-in blind)
+  // model the missing SB as a ghost all-in for a penny (see the header: measured against the 0.5bb ghost)
   const deadSb = !present.includes("SB") && present.includes("BB") && present.length >= 2;
   const ordered = present.slice().sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
   const n = ordered.length + (deadSb ? 1 : 0);
@@ -116,7 +140,15 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null): AiPreflopShap
   if (ordered.includes("BB")) apiOf.BB = "BB";
   const sbPost = hand.actions.find((a) => a.type === "post-sb");
   const bbPost = hand.actions.find((a) => a.type === "post-bb");
-  const sb = sbPost?.amount ?? 0.5, bb = bbPost?.amount ?? 1;
+  // a TEST-STAKE table (NL5 ring) plays the NL200 answers: price its rake at NL200 too, or the $4 cap
+  // becomes 80bb at $0.05 and the fallback answers a different game from the charts it stands in for
+  const testStake = isTestStakeOf("ign-ring-NL200-6", hand.bbCents);
+  const bbCents = hand.bbCents == null || testStake ? 200 : hand.bbCents;
+  // ... AND ITS SMALL BLIND (PF-06, 2026-09-23): at $0.02/$0.05 the SB posts 0.4bb (166 of 171 NL5 hands in
+  // hands.db), so the rake pin alone still built a 0.4/1 tree — a different equilibrium, keyed apart from the
+  // NL200 one and solved again in the cloud. The test stake is the NL200 game: its blinds are 0.5/1 here whatever
+  // the table posted. The starting stacks need no pin — `cur + committed` is the stack before the post either way.
+  const sb = deadSb ? DEAD_SB_GHOST : (testStake ? 0.5 : (sbPost?.amount ?? 0.5)), bb = bbPost?.amount ?? 1;
   const stacks: Record<string, number> = {};
   for (const p of ordered) {
     const seat = byPos.get(p)!;
@@ -124,10 +156,11 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null): AiPreflopShap
     const committed = hand.committed?.[seat] ?? 0;
     stacks[apiOf[p]!] = Math.min(999, Math.max(1, round5((cur != null ? cur + committed : 100))));
   }
-  if (deadSb) stacks.SB = sb;
-  const bbCents = hand.bbCents ?? 200;
-  const rakeCapBb = Math.round((rakeCapCents(n) / bbCents) * 100) / 100;
-  return { n, apiOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, heroApiPos: hp ? (apiOf[hp] ?? null) : null };
+  if (deadSb) stacks.SB = DEAD_SB_GHOST;
+  // the cap is by players DEALT — the ghost was not dealt in
+  // the LAST RESORT reduces the field to two seats but the table still dealt six: the cap follows the table
+  const rakeCapBb = Math.round((rakeCapCents(rakeSeats ?? (n - (deadSb ? 1 : 0))) / bbCents) * 100) / 100;
+  return { n, apiOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null };
 }
 
 /** The line so far as the API walks it: seat order, F / C / X / R<total bb>; also the raise totals by level. */
@@ -193,7 +226,7 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
       bet_sizes: s.opens, raise_sizes: s.three, second_raise_sizes: s.four, third_plus_raise_sizes: s.five };
   };
   return {
-    starting_street: "PREFLOP", pot: 0, ante: null, ante_distribution_method: "PER_PLAYER",
+    starting_street: "PREFLOP", pot: shape.deadBb, ante: null, ante_distribution_method: "PER_PLAYER",
     max_allowed_limps: shape.n >= 3 ? 2 : null,
     bet_sizes: { allin_threshold: 60, allin_if_less_than: 500, merge_sizes_threshold: 10, max_num_raises: 5,
       street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: shape.positions.map(sizes) }] },
@@ -209,7 +242,7 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
 }
 
 export const treeKeyOf = (shape: AiPreflopShape, m: ReturnType<typeof menus>) =>
-  JSON.stringify([shape.positions, shape.positions.map((p) => shape.stacks[p]), shape.sb, shape.bb, shape.straddle, shape.rakeCapBb, shape.heroApiPos, m]);
+  JSON.stringify([shape.positions, shape.positions.map((p) => shape.stacks[p]), shape.sb, shape.bb, shape.straddle, shape.rakeCapBb, shape.heroApiPos, m, shape.deadBb || 0]);
 
 const solutions = new Map<string, Promise<{ solId: string } | { error: string }>>();
 const nodes = new Map<string, any>();
@@ -247,7 +280,7 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
       const token = await gtowSessions.tokenFor(id);
       if (!token) { last = `${id}: no token`; continue; }
       const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-      const tr = await fetch(`${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+      const tr = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
       if (!tr.ok) {
         const b = (await tr.text().catch(() => "")).slice(0, 200);
         gtowSessions.noteFailure(id, tr.status, b, need);
@@ -255,7 +288,7 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
         continue; // a refusal here is this ACCOUNT's, not the tree's — try the next
       }
       const tree = await tr.json();
-      const so = await fetch(`${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H, body: JSON.stringify({ custom_tree_id: tree.id, actions: "", board: "" }), signal: AbortSignal.timeout(20_000) });
+      const so = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H, body: JSON.stringify({ custom_tree_id: tree.id, actions: "", board: "" }), signal: AbortSignal.timeout(20_000) });
       if (!so.ok) {
         const b = (await so.text().catch(() => "")).slice(0, 200);
         gtowSessions.noteFailure(id, so.status, b, need);
@@ -277,23 +310,44 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
   return p;
 }
 
+/**
+ * Lines the cloud answered with NO DECISION NODE (PF-15). A still-solving spot comes back 204 (or 404 before the
+ * solution exists); a solved spot with nobody left to act — a line padded past a terminal, everyone folded to
+ * the blinds' end, hero folded — comes back 200 with a body that has no action_solutions. That body used to be
+ * read as "not ready" and polled for the whole NODE_TIMEOUT_MS: hand 4919910775 (dbId 716, HJ first in at a
+ * 5-seat table, line 'F-F-F-F-X') burned 33.6 / 31.3 / 31.4 s on three ticks, 2026-09-22 19:56, and the poller's
+ * REPEAT_FAIL_LIMIT of 3 made that ~95 s of silence. Two such polls now settle it, and the verdict is kept here so
+ * the re-asks the poller makes before it rests the spot cost nothing.
+ */
+const terminals = new Set<string>();
+const TERMINAL_POLLS = 2;
+
 async function fetchNode(solId: string, line: string): Promise<{ data: any; cached: boolean } | { error: string }> {
   const k = `${solId}|${line}`;
   const hit = nodes.get(k);
   if (hit) return { data: hit, cached: true };
+  const terminalError = `line ends the hand at '${line || "root"}' — no decision node`;
+  if (terminals.has(k)) return { error: terminalError };
   const t0 = Date.now();
   let last = "the cloud did not return the node in time";
+  let emptyPolls = 0;
   const owner = owners.get(solId) ?? null;
   while (Date.now() - t0 < NODE_TIMEOUT_MS) {
     const token = owner ? await gtowSessions.tokenFor(owner) : (await gtowSessions.bestToken({ preflop: true }))?.token ?? null;
     if (!token) return { error: `no GTO Wizard token for the session that owns this solve${owner ? ` (${owner})` : ""}` };
     const params = new URLSearchParams({ custom_solution_id: solId, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
-    try { r = await fetch(`${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
+    try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
     catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
     if (r.ok && r.status !== 204) {
       const j = await r.json().catch(() => null);
       if (j?.action_solutions?.length) { nodes.set(k, j); if (nodes.size > 2000) nodes.delete(nodes.keys().next().value as string); return { data: j, cached: false }; }
+      // a 200 with an object body and no action to offer: the spot is solved and nobody is on the clock
+      if (j != null && typeof j === "object" && ++emptyPolls >= TERMINAL_POLLS) {
+        terminals.add(k);
+        if (terminals.size > 2000) terminals.delete(terminals.values().next().value as string);
+        return { error: terminalError };
+      }
     } else if (!r.ok && r.status !== 404) {
       const t = await r.text().catch(() => "");
       if (r.status === 400 || r.status === 422) return { error: `${r.status}: ${t.slice(0, 160)}` };
@@ -385,6 +439,30 @@ async function repairLine(solId: string, tokens: string[]): Promise<{ line: stri
   return { line: out.join("-"), changed };
 }
 
+/**
+ * THE LINE FIT, ON THIS TREE TOO (2026-09-22, Brady). GTO Wizard's engine holds ONE limper (plus the SB completing),
+ * so a second limp is "not offered" and the whole spot went unanswered — including a named 4-bet in a limped pot that
+ * no chart of ours holds either (the esoteric stress run's eso-14). Same rule as the charts (utils/fitLine): fold the
+ * earliest plain limper or caller who is not hero and does not raise later, drop his later actions, walk again.
+ * Returns the walked line and who was folded, or null when no fold makes it walkable.
+ */
+async function fitAiLine(solId: string, tokens: string[], shape: AiPreflopShape, keep: string[] = [], maxFolds = 4):
+    Promise<{ line: string; changed: string[]; folds: string[]; tokens: string[] } | null> {
+  const keepSet = new Set([shape.heroApiPos, ...keep].filter(Boolean).map((x) => x!.toUpperCase()));
+  let cur = tokens.slice();
+  const folds: string[] = [];
+  for (let k = 0; k < maxFolds; k++) {
+    const step = foldEarliestCaller(cur, { keep: keepSet, stack: shape.stacks, seats: shape.positions });
+    if (!step) return null;
+    cur = step.tokens;
+    folds.push(step.fold.seat);
+    const r = await repairLine(solId, cur);
+    if (!("error" in r)) return { ...r, folds, tokens: cur };
+    if (!/is not offered/.test(r.error)) return null;   // a real failure, not a cap — folding more will not help
+  }
+  return null;
+}
+
 function labelOf(action: any): string {
   const type = String(action?.type ?? action?.display_name ?? "").toUpperCase();
   const bb = Number(action?.betsize);
@@ -401,9 +479,9 @@ function labelOf(action: any): string {
  * `why` is the reason the charts could not answer — it rides along in the note so the
  * answer trail says both what answered and why the primary piece did not.
  */
-export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | null, why: string): Promise<AiPreflopOutcome> {
+export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | null, why: string, opts: { deadBb?: number; rakeSeats?: number } = {}): Promise<AiPreflopOutcome> {
   const t0 = Date.now();
-  const shape = shapeOf(hand, heroPos);
+  const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
   const { tokens, levels } = lineOf(hand, shape);
   const line = tokens.join("-");
@@ -413,14 +491,53 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop: ${sol.error}`, line };
   let node = await fetchNode(sol.solId, line);
   let snapped: string[] = [];
+  let fittedFolds: string[] = [];
+  let deadNote = "";
+  // THE LINE ITSELF IS ILLEGAL (PF-26). NODE_DOES_NOT_EXIST means "a legal line, not under these sizes" and is
+  // walked below; 400 VALIDATION_ERROR "Incorrect actions" means the sequence cannot happen in any tree — a
+  // capture padded past a terminal or otherwise corrupt. Say so, as a capture fault, and let the caller stop:
+  // walking it would fail the same way and the last resort would only re-solve the same corrupt line heads-up.
+  if ("error" in node && /VALIDATION_ERROR|Incorrect actions/i.test(node.error)) {
+    return { ok: false, kind: CAPTURE_FAULT, line,
+      reason: `GTO Wizard AI preflop: the captured line '${line || "root"}' is not a legal betting sequence (VALIDATION_ERROR)` };
+  }
   if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
     // the tree has this line, just not under the sizes we named — walk it and find out
-    const fixed = await repairLine(sol.solId, tokens);
+    let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens);
+    if ("error" in fixed && /is not offered/.test(fixed.error)) {
+      const fit = await fitAiLine(sol.solId, tokens, shape);
+      if (fit) { fixed = fit; fittedFolds = fit.folds; }
+    }
     if ("error" in fixed) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${line || "root"}' does not exist and the line could not be walked — ${fixed.error}`, line };
     }
     snapped = fixed.changed;
-    node = await fetchNode(sol.solId, fixed.line);
+    // THE FOLDED-OUT PLAYERS' CHIPS STAY IN THE POT (2026-09-23). The fit folds a limper or caller the API's tree
+    // cannot hold; until now his chips left with him, so hero faced the real raise at the wrong price. The API
+    // accepts dead money (`pot`; probed: 1bb dead moves an SB complete from 29% to 65% with A5s), so the tree is
+    // rebuilt with what the folded seats had put in, and the fitted line is read on that tree instead.
+    let solId = sol.solId;
+    if (fittedFolds.length) {
+      const handPosOf: Record<string, string> = {};
+      for (const [hp, ap] of Object.entries(shape.apiOf)) handPosOf[ap] = hp;
+      let dead = 0;
+      for (const api of fittedFolds) {
+        const hp = handPosOf[api];
+        const seat = Object.entries(hand.positions).find(([, p]) => p.toUpperCase() === hp)?.[0];
+        if (seat == null) continue;
+        const put = hand.actions.filter((x) => x.street === "preflop" && (x.hero ? hand.heroSeatId : x.seatId) === Number(seat));
+        const lastRaise = [...put].reverse().find((x) => x.type === "raise" || x.type === "bet" || x.type === "all-in");
+        dead += lastRaise ? (lastRaise.amount ?? 0) : put.filter((x) => x.type === "call" || x.type === "post-sb" || x.type === "post-bb").reduce((acc, x) => acc + putBb(hand, x), 0);
+      }
+      if (dead > 0) {
+        const shape2 = shapeOf(hand, heroPos, (opts.deadBb ?? 0) + dead, opts.rakeSeats);
+        if (!("error" in shape2)) {
+          const sol2 = await ensureSolution(treeKeyOf(shape2, m), treeBody(shape2, m), { multiway: shape2.n > 2, preflop: true });
+          if (!("error" in sol2)) { solId = sol2.solId; deadNote = `${Math.round(dead * 100) / 100}bb of the folded players' chips kept in the pot as dead money`; }
+        }
+      }
+    }
+    node = await fetchNode(solId, fixed.line);
     if ("error" in node) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${fixed.line || "root"}' (walked from '${line}') — ${node.error}`, line };
     }
@@ -441,12 +558,13 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
   const decision = actions.length ? pickWeightedAction(actions) : null;
   const secs = (Date.now() - t0) / 1000;
-  const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
+  const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
     solveSecs: secs, cached: node.cached, shape,
     note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${node.cached ? " (cached)" : ""}.`
-      + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : ""),
+      + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
+      + (fittedFolds.length ? ` LINE FITTED TO THE TREE: GTO Wizard's tree holds one limper, so ${fittedFolds.join(" and ")}'s limp/call was read as a FOLD (the earliest one who does not raise later) — hero faces one player fewer than at the table${deadNote ? `, with ${deadNote}` : ""}.` : ""),
   };
 }
 
@@ -454,17 +572,128 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
  *  hero's turn only pays the node fetch. Silent on failure. */
 export function warmPreflopGtowAi(hand: ParsedHand, heroPos: string | null): void {
   try {
+    // ONLY WHILE HERO CAN STILL BE ASKED (PF-16, 2026-09-23). The postflop warm stops when hero folded or the hand
+    // ended; this one did not, so on a thinned table every villain 3-bet/4-bet AFTER hero's fold changed the size
+    // menu, the tree key and minted another Ultra solve — api.log showed ~5 trees built per AI-preflop answer
+    // against a daily cap of 1,275 requests. A hand hero is out of has no decision left to warm for.
+    if (hand.ended || (hand as { heroFolded?: boolean }).heroFolded) return;
+    if (hand.actions.some((a) => a.hero && a.type === "fold")) return;
     const shape = shapeOf(hand, heroPos);
     if ("error" in shape) return;
     const { levels } = lineOf(hand, shape);
     const m = menus(levels, shape.n);
     const key = treeKeyOf(shape, m);
-    if (solutions.has(key)) return;
+    if (solutions.has(key)) return;   // ensureSolution keeps the PENDING promise in this map too, so a 1 Hz tick during a build joins it
     const t0 = Date.now();
     void ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true }).then((r) => {
       if ("solId" in r) console.log(`[gtow-ai-preflop] warmed ${shape.n}-handed tree in ${Date.now() - t0} ms`);
     });
   } catch { /* a warm-up never fails anything */ }
+}
+
+// ---------------------------------------------------------------------------
+// THE LAST RESORT (2026-09-23, Brady: "we need 100% coverage — anything reasonable"). A preflop line neither
+// the charts nor the exact AI tree can walk — three limpers who all raise later, a 4-bet size the limp tree
+// cannot snap, three cold-callers who then re-raise each other — is reduced to the one thing every such spot
+// still has: HERO and the LAST AGGRESSOR. Everyone else is folded out and every chip they put in stays in the
+// pot as dead money, so hero faces the real raise at the real price, from the real stacks, against the player
+// who actually made it. What it loses: the folded players' ranges and anyone still to act behind hero. That is
+// an approximation, said out loud in the answer, and it beats a blank.
+// ---------------------------------------------------------------------------
+const ORBIT = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+
+export interface HeadsUpReduction { hand: ParsedHand; deadBb: number; aggressorPos: string; keptPos: [string, string]; droppedPos: string[]; heroPos: string }
+
+/** Hero versus the last aggressor, the rest folded, their chips as dead money. null when hero's seat is unknown. */
+export function reduceToHeadsUp(hand: ParsedHand, heroPos: string | null): HeadsUpReduction | null {
+  const hp = heroPosOf(hand, heroPos);
+  if (!hp) return null;
+  const posOf = (seat: number) => (seat === hand.heroSeatId ? hp : hand.positions[seat]?.toUpperCase()) ?? null;
+  const pre = hand.actions.filter((a) => a.street === "preflop");
+  const voluntary = (a: ParsedAction) => a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "fold" && a.type !== "check";
+  const seatOf = (a: ParsedAction) => (a.hero ? hand.heroSeatId : a.seatId);
+  // the last aggressor: the last raise / bet / all-in by someone other than hero; else the last voluntary chip in
+  const agg = [...pre].reverse().find((a) => seatOf(a) !== hand.heroSeatId && (a.type === "raise" || a.type === "bet" || a.type === "all-in"))
+    ?? [...pre].reverse().find((a) => seatOf(a) !== hand.heroSeatId && voluntary(a));
+  let aggSeat: number | null = agg ? seatOf(agg) : null;
+  if (aggSeat == null) {
+    // nobody put a chip in voluntarily: the big blind is the opponent (or the small blind when hero is the BB)
+    const bbSeat = Object.entries(hand.positions).find(([, p]) => p.toUpperCase() === (hp === "BB" ? "SB" : "BB"))?.[0];
+    if (bbSeat == null) return null;
+    aggSeat = Number(bbSeat);
+  }
+  const aggPos = posOf(aggSeat);
+  if (!aggPos || aggSeat === hand.heroSeatId) return null;
+  // the two kept seats become the heads-up tree's SB (acts first) and BB, in orbit order
+  const first = ORBIT.indexOf(hp) < ORBIT.indexOf(aggPos) ? hand.heroSeatId : aggSeat;
+  const second = first === hand.heroSeatId ? aggSeat : hand.heroSeatId;
+  const newPos: Record<number, string> = { [first]: "SB", [second]: "BB" };
+  const kept = new Set([hand.heroSeatId, aggSeat]);
+  // every chip anyone put in, from the posts and the actions (raise-to totals; calls add)
+  const put: Record<number, number> = {};
+  for (const a of pre) {
+    const s = seatOf(a); const amt = putBb(hand, a);   // the NL5 test stake's 0.4bb SB post is the NL200 tree's 0.5 (PF-06)
+    if (a.type === "post-sb" || a.type === "post-bb" || a.type === "raise" || a.type === "bet" || a.type === "all-in") put[s] = Math.max(put[s] ?? 0, amt);
+    else if (a.type === "call") put[s] = (put[s] ?? 0) + amt;
+  }
+  const total = Object.values(put).reduce((x, y) => x + y, 0);
+  // what the heads-up tree itself books for the kept two: a raise-to total, a limp (1bb), or just the tree's blind
+  const treeContrib = (seat: number) => {
+    const mine = pre.filter((a) => seatOf(a) === seat && voluntary(a));
+    const lastRaise = [...mine].reverse().find((a) => a.type === "raise" || a.type === "bet" || a.type === "all-in");
+    if (lastRaise) return lastRaise.amount ?? 0;
+    if (mine.length) return 1;
+    return newPos[seat] === "SB" ? 0.5 : 1;
+  };
+  const deadBb = Math.max(0, total - treeContrib(hand.heroSeatId) - treeContrib(aggSeat));
+  const keptActs = pre.filter((a) => kept.has(seatOf(a)) && voluntary(a)).map((a) => ({ ...a, seatId: seatOf(a) }));
+  // the tree's BB behind an unraised pot CHECKS — a limp recorded as a call at the table has no "C" node there
+  // (eso-04: "C-C-R18" did not exist; the heads-up tree wants "C-X-R18")
+  let raisedYet = false;
+  for (const a of keptActs) {
+    if (a.type === "raise" || a.type === "bet" || a.type === "all-in") raisedYet = true;
+    else if (a.type === "call" && !raisedYet && a.seatId === second) { a.type = "check"; delete (a as any).amount; }
+  }
+  // A ROUND THAT CLOSED BEFORE THE FINAL RAISE (eso-04): "SB limps, BB checks" ends heads-up preflop, so the
+  // aggressor's re-raise — legal at the table only because a folded-out player had raised — has no node. Collapse
+  // everything before the aggressor's final raise into the blinds and the dead money: the line becomes one raise
+  // to his real total, hero to act. His earlier chips are inside that total; hero's limp is the big blind.
+  let closed = false, raised = false, broken = false;
+  for (const a of keptActs) {
+    if (closed) { broken = true; break; }
+    if (a.type === "raise" || a.type === "bet" || a.type === "all-in") raised = true;
+    else if (a.type === "check" && a.seatId === second && !raised) closed = true;
+  }
+  let lineActs = keptActs;
+  if (broken) {
+    const lastRaise = [...keptActs].reverse().find((a) => a.seatId === aggSeat && (a.type === "raise" || a.type === "bet" || a.type === "all-in"));
+    lineActs = lastRaise ? [lastRaise] : keptActs;
+  }
+  const actions: ParsedAction[] = [
+    { seatId: first, hero: first === hand.heroSeatId, type: "post-sb", amount: 0.5, street: "preflop" },
+    { seatId: second, hero: second === hand.heroSeatId, type: "post-bb", amount: 1, street: "preflop" },
+    ...lineActs,
+  ];
+  const stacks: Record<number, number> = {};
+  for (const s of kept) { const v = hand.stacks?.[s]; if (v != null) stacks[s] = v; }
+  const committed: Record<number, number> = {};
+  for (const s of kept) committed[s] = put[s] ?? 0;
+  const reduced: ParsedHand = { ...hand, positions: newPos, actions, liveSeats: [first, second], stacks, committed };
+  const dropped = Object.entries(hand.positions).filter(([s]) => !kept.has(Number(s))).map(([, p]) => p.toUpperCase());
+  return { hand: reduced, deadBb, aggressorPos: aggPos, keptPos: [posOf(first)!, posOf(second)!], droppedPos: dropped, heroPos: hp };
+}
+
+/** The last resort answer: the heads-up reduction solved as a GTO Wizard AI tree with the dead money in the pot. */
+export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string | null, why: string): Promise<AiPreflopOutcome> {
+  const red = reduceToHeadsUp(hand, heroPos);
+  if (!red) return { ok: false, reason: "last resort: hero's seat or the opponent's could not be read" };
+  const dealt = Object.keys(hand.positions).length + (hand.positions[hand.heroSeatId] ? 0 : 1);
+  const r = await solvePreflopGtowAi(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: red.deadBb, rakeSeats: dealt });
+  if (!r.ok) return { ok: false, kind: r.kind, reason: `last resort (hero vs ${red.aggressorPos}, ${red.droppedPos.join("/") || "nobody"} folded out): ${r.reason}` };
+  const note = `LAST RESORT — no tree holds this line, so it is played as hero (${red.heroPos}) against the last aggressor (${red.aggressorPos}) alone: ` +
+    `${red.droppedPos.length ? `${red.droppedPos.join(", ")} folded out with their ${red.deadBb}bb left in the pot as dead money` : "nobody else in the pot"}; ` +
+    `the folded players' ranges and anyone still to act behind hero are not modelled. ` + r.note;
+  return { ...r, pos: red.heroPos, note };
 }
 
 export const gtowAiPreflopStats = () => ({ trees: solutions.size, nodes: nodes.size });
@@ -508,7 +737,7 @@ export async function debugCreateTree(hand: ParsedHand, heroPos: string | null, 
   }
   const token = (await gtowSessions.bestToken({ multiway: shape.n > 2, preflop: true }))?.token ?? null;
   if (!token) return { error: "no GTO Wizard token" };
-  const r = await fetch(`${API_BASE}/v4/custom-solutions/custom-trees/`, {
+  const r = await gtowRequests.fetch(null, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -596,7 +825,36 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   const key = treeKeyOf(shape, m);
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop ranges: ${sol.error}` };
-  return walkArrivalRanges(shape, tokens, (line) => fetchNode(sol.solId, line), maxPlayers);
+  const get = (line: string) => fetchNode(sol.solId, line);
+  const first = await walkArrivalRanges(shape, tokens, get, maxPlayers);
+  if (first.ok || !/is not an action/.test(first.reason)) return first;
+  // THE LINE FIT, PER SEAT (as recon6max does on the charts): each live seat's range is read from a fitted line
+  // that keeps THAT seat's own actions, so nobody's range is conditioned on a fold he never made
+  const who = actorsWithAllins(tokens, shape.stacks, shape.positions);
+  const live = shape.positions.filter((p) => !tokens.some((t, i) => t === "F" && who[i] === p));
+  if (live.length > maxPlayers) return first;
+  const handPosOf: Record<string, string> = {};
+  for (const [handPos, apiPos] of Object.entries(shape.apiOf)) handPosOf[apiPos] = handPos;
+  const ranges: Record<string, Record<string, number>> = {};
+  const folded = new Set<string>();
+  for (const p of live) {
+    const fit = await fitAiLine(sol.solId, tokens, shape, [p]);
+    if (!fit) return first;
+    fit.folds.forEach((f) => folded.add(f));
+    const r = await walkArrivalRanges(shape, fit.tokens, get, 6);
+    if (!r.ok) return first;
+    const key = handPosOf[p] ?? p;
+    const rec = r.ranges[key];
+    if (!rec) return first;
+    ranges[key] = rec;
+  }
+  const id = `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`;
+  return {
+    ok: true, piece: "gtow-ai-preflop", id, ranges, tokens, seatOrder: shape.positions,
+    note: `flop-entering ranges walked from the GTO Wizard AI preflop tree. LINE FITTED FOR THE RANGES: the tree holds ` +
+      `one limper, so each seat's range was read from a line that keeps its own actions and folds the earliest other ` +
+      `limper or caller (${[...folded].join(", ")} folded in some of them).`,
+  };
 }
 
 /** The walk itself, pure over a node getter (tests feed synthetic nodes; live feeds the solved tree). */

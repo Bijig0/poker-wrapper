@@ -130,7 +130,15 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
           ? (body.hand as { hand: unknown }).hand
           : body.hand;
       const normalized = normalizeHand(raw);
-      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId: normalized.hand.sessionId ?? null };
+      // EIP-16 (2026-09-23): normalizeHand does not carry sessionId onto the ParsedHand, so
+      // `normalized.hand.sessionId` was always undefined and every hand-JSON resolve (a replayed
+      // archived hand, which the wrapper DOES stamp with sessionId at archive time) lost its
+      // session. Read it off the raw object; the live path takes state.sessionId below.
+      const rawSessionId =
+        typeof raw === "object" && raw !== null && typeof (raw as { sessionId?: unknown }).sessionId === "string"
+          ? (raw as { sessionId: string }).sessionId
+          : null;
+      return { ok: true, hand: normalized.hand, source: "hand", warnings: normalized.warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId: normalized.hand.sessionId ?? rawSessionId };
     } catch (e) {
       return { ok: false, status: 400, error: `Hand JSON not understood: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -146,8 +154,15 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       sessionId?: string | null;
       session?: { strategy?: string | null } | null;
     };
+    // EIP-14 (2026-09-23): the LIGHT path. The wrapper's plain /state runs its deep DOM
+    // eval (_EXTRACT_DEEP_JS, every text node of every frame) plus a CDP target listing on
+    // each call — and this fetch fires on every 1 Hz poller probe AND again on every
+    // fast-solve, competing with the wrapper's own 4 Hz feed loop for the same CDP
+    // socket. `light=1` (launch.py state(light=True)) skips both and still carries every
+    // field read below: connected, hand, snapshot, studyAnswers, sessionId, session, site.
+    // What light drops is only the panel's connection card (targets, ignition.textNodes).
     try {
-      const res = await fetch(`${url.replace(/\/$/, "")}/state`, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${url.replace(/\/$/, "")}/state?light=1`, { signal: AbortSignal.timeout(3000) });
       state = (await res.json()) as typeof state;
     } catch {
       return { ok: false, status: 502, error: `Couldn't reach the assistive-play server at ${url} — is it running?` };
@@ -159,8 +174,10 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     // answers CoinPoker yet — every chart set this resolves to is an Ignition one (siteFor,
     // ign* rake, no antes), so a CoinPoker hand is refused rather than answered from the
     // wrong game. Remove when a CoinPoker strategy exists.
-    if ((state as { site?: string }).site === "coinpoker") {
-      return { ok: false, status: 409, error: "CoinPoker table: no strategy answers CoinPoker yet (the Ignition charts are a different rake and structure)." };
+    // 2026-09-22: the CoinPoker 200NL Heads-Up strategy answers CoinPoker (fastSolve CP_HU_STRATEGY, its own
+    // charts at its own ante and rake); any OTHER strategy on a CoinPoker table is still the wrong game.
+    if ((state as { site?: string }).site === "coinpoker" && state.session?.strategy !== "cp200-hu-equilibrium") {
+      return { ok: false, status: 409, error: "CoinPoker table: only the CoinPoker 200NL Heads-Up strategy answers CoinPoker (the Ignition charts are a different rake and structure)." };
     }
     tableStatus = state.snapshot?.status ?? null;
     studyAnswersOn = state.studyAnswers ?? false;
