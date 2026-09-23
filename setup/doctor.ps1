@@ -66,7 +66,7 @@ $cfg = if (Test-Path $local) { Get-Content $local } else { @() }
 $pm = [bool]($cfg -match '^\s*PLAYER_MODE\s*=\s*1')
 Row $pm 'Player mode' $(if ($pm) { 'on' } else { 'off' }) 'run setup\setup.cmd'
 $hero = ($cfg | Where-Object { $_ -match '^\s*CP_HERO\s*=\s*\S' }) -replace '^\s*CP_HERO\s*=\s*', ''
-Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } else { '(not set — only needed for CoinPoker)' }))
+Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } else { '(learned from CoinPoker when you sit down)' }))
 
 Write-Host ""
 Write-Host " Running" -ForegroundColor Cyan

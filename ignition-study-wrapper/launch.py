@@ -7029,6 +7029,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/update":              # packaged installs: run setup\update.ps1, then stand down
                 code, res = _start_update()
                 self._send(code, "application/json", json.dumps(res).encode())
+            elif path == "/publish":             # OWNER (source checkout): open setup/publish.cmd in a console
+                if _installed_version() is not None or not (_REPO / "setup" / "publish.cmd").exists():
+                    self._send(409, "application/json", json.dumps({"ok": False, "why": "not the source checkout"}).encode())
+                else:
+                    subprocess.Popen(["cmd", "/c", "start", "Publish Poker Wrapper update", str(_REPO / "setup" / "publish.cmd")],
+                                     cwd=str(_REPO), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    _owner_release["at"] = 0.0          # re-check after it runs
+                    self._send(200, "application/json", json.dumps({"ok": True}).encode())
             elif path == "/sitout":              # CoinPoker: Sit Out Next Hand / Sit Out All
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
@@ -8765,10 +8773,34 @@ def _installed_version() -> dict | None:
         return None
 
 
+_owner_release = {"at": 0.0, "running": False, "status": None}
+
+
+def _owner_release_refresh() -> None:
+    """THE OWNER'S SIDE (source checkout): what the friends have vs what this tree would publish, from
+    setup/build_package.py --status --json (~8 s: hashes the shipped files), so the setup page can say
+    "N changes not published yet". Background thread; the page gets the last result at once."""
+    try:
+        r = subprocess.run([sys.executable, str(_REPO / "setup" / "build_package.py"), "--status", "--json"],
+                           cwd=str(_REPO), capture_output=True, text=True, timeout=180,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        line = (r.stdout.strip().splitlines() or [""])[-1]
+        _owner_release["status"] = json.loads(line) if line.startswith("{") else {"ok": False, "error": (r.stderr or r.stdout)[-300:]}
+    except Exception as e:
+        _owner_release["status"] = {"ok": False, "error": str(e)[:300]}
+    finally:
+        _owner_release["at"], _owner_release["running"] = time.time(), False
+
+
 def _update_status(force: bool = False) -> dict:
     inst = _installed_version()
     if inst is None:
-        return {"ok": True, "packaged": False}
+        if not (_REPO / "setup" / "build_package.py").exists():
+            return {"ok": True, "packaged": False}
+        if not _owner_release["running"] and (force or time.time() - _owner_release["at"] > 600):
+            _owner_release["running"] = True
+            threading.Thread(target=_owner_release_refresh, daemon=True).start()
+        return {"ok": True, "packaged": False, "owner": _owner_release["status"]}
     if force or time.time() - _update_cache["at"] > 1800:
         _update_cache["at"] = time.time()
         rc = next((c for c in (os.environ.get("RCLONE"), shutil.which("rclone"),

@@ -27,7 +27,28 @@ import time
 from pathlib import Path
 
 LOG = Path(os.environ.get("APPDATA", "")) / "CoinPoker" / "logs" / "main.log"
-HERO = os.environ.get("CP_HERO", "megturism0")
+# WHO HERO IS (2026-09-23): CP_HERO pins it; otherwise it is LEARNED from the client's own log. Every table the
+# signed-in account opens writes "Login on SFS with <name> Address ...", so a fresh install (a friend's laptop)
+# needs no setting — and the owner's name is no longer a silent default that makes someone else's hands unreadable.
+HERO = os.environ.get("CP_HERO", "").strip()
+HERO_SOURCE = "CP_HERO" if HERO else None
+_LOGIN = re.compile(r"Login on SFS with (\S+) Address")
+
+
+def _learn_hero(name: str) -> None:
+    global HERO, HERO_SOURCE
+    if os.environ.get("CP_HERO", "").strip() or not name:
+        return
+    HERO, HERO_SOURCE = name, "log"
+
+
+def _last_login(path: Path) -> str | None:
+    """The account the client last signed tables in with (whole-file scan; main.log is ~10 MB)."""
+    try:
+        hits = _LOGIN.findall(path.read_bytes().decode("utf-8", errors="replace"))
+    except OSError:
+        return None
+    return hits[-1] if hits else None
 
 _RANK = {"TWO": "2", "THREE": "3", "FOUR": "4", "FIVE": "5", "SIX": "6",
          "SEVEN": "7", "EIGHT": "8", "NINE": "9", "TEN": "T", "JACK": "J",
@@ -468,6 +489,8 @@ class Feed:
         self._tries = 0
         self.unknown: dict[str, int] = {}
         self.broken = 0                    # split messages we could not rejoin
+        if not HERO and path.exists():     # the login may be older than the replayed tail
+            _learn_hero(_last_login(path) or "")
 
     def _join(self, line: str) -> tuple[str, dict] | None:
         """The logger cuts long Unity stdout writes into chunks at arbitrary
@@ -521,6 +544,10 @@ class Feed:
             self._skip_partial = False
         out = []
         for line in lines:
+            if "Login on SFS" in line:    # a (re)sign-in: follow the account the client is using now
+                lm = _LOGIN.search(line)
+                if lm:
+                    _learn_hero(lm.group(1))
             p = self._join(line)
             if not p:
                 # closing a table never reaches the pipe as a bean — the window

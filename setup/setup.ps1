@@ -154,10 +154,8 @@ function Set-Cfg($key, $value) {
 $has = { param($k) [bool]($cfg | Where-Object { $_ -match "^\s*$k\s*=\s*\S" }) }
 Set-Cfg 'PLAYER_MODE' '1'          # this install: answers + your own sessions and hands; no solve fleet
 Set-Cfg 'GTOW_SECONDARY' '0'       # one GTO Wizard account (the main one); heads-up solves use it too
-if (-not (& $has 'CP_HERO')) {
-  $hero = Ask 'Your CoinPoker screen name (blank if you only play Ignition)'
-  if ($hero) { Set-Cfg 'CP_HERO' $hero }
-}
+# no CoinPoker name to ask for: the reader learns it from the client's own log (sites/cp_feed.py);
+# CP_HERO in local.env still pins it if that ever guesses wrong
 [IO.File]::WriteAllLines($local, [string[]]$cfg)   # no BOM: the wrapper and env.ps1 read it too
 Ok "written: PLAYER_MODE=1, GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })"
 

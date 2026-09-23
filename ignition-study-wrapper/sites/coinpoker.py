@@ -19,6 +19,7 @@ refuses `auto` unless the server said the table is practice chips (coinType 2).
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -30,11 +31,22 @@ from . import cp_actions as actions
 from . import cp_feed as feed
 
 SITE = "coinpoker"
-EXE = Path(r"C:\Program Files\CoinPoker\CoinPoker.exe")
+def _find_exe() -> Path:
+    """Where the CoinPoker client is: CP_EXE, then the usual install folders (machine-wide or per-user)."""
+    env = os.environ.get("CP_EXE")
+    cands = [Path(env)] if env else []
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        if base:
+            cands.append(Path(base) / "CoinPoker" / "CoinPoker.exe")
+    return next((c for c in cands if c.is_file()), cands[0] if cands else Path("CoinPoker.exe"))
+
+
+EXE = _find_exe()
 # the lobby's DevTools port — 9223 is the GTO Wizard Elite session (2026-09-21)
 CDP_PORT = 9235
 LOG_STALE_S = 120       # no message from any table this long = no table
-HERO = feed.HERO
+# hero's name: feed.HERO (CP_HERO, else learned from the client's log) — read live, it can be learned late
 
 # Formats offered on the setup page. The player takes the seat in the client
 # (there is no lobby router for CoinPoker yet); the format labels the session
@@ -147,12 +159,12 @@ class Site:
             r = self._room()
             if not r:
                 return None
-            hero = next((s for s in r.seats.values() if s["name"] == HERO), None)
+            hero = next((s for s in r.seats.values() if s["name"] == feed.HERO), None)
             return {"room": r.name, "lastEventAgo": round(time.time() - r.touched, 1),
                     "seats": {str(k): dict(v) for k, v in r.seats.items()},
                     "heroSeated": hero is not None,
                     "heroSittingOut": bool(r.sitout.get("sitOutNextHand") or r.sitout.get("sitOutAll")
-                                           or r.status.get(HERO) == "Sitout"),
+                                           or r.status.get(feed.HERO) == "Sitout"),
                     "sitOut": dict(r.sitout), "practice": r.practice, "coinType": r.coin_type,
                     "rake": {k: r.props.get(k) for k in ("rake", "rakeHeadsUp", "rakeCap", "isPotRakePf")
                              if k in r.props} or None,
@@ -208,7 +220,7 @@ class Site:
         r = self.room()
         if not r:
             return {"ok": False, "why": "no CoinPoker table in the log"}
-        if not any(s["name"] == HERO for s in r.seats.values()):
+        if not any(s["name"] == feed.HERO for s in r.seats.values()):
             return {"ok": False, "why": f"you are not seated at {r.name} (observing) — nothing to sit out of"}
         return actions.set_sitout(r, on, "sitOutAll" if every else "sitOutNextHand")
 

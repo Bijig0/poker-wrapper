@@ -44,11 +44,8 @@ again later — it skips everything that is already done.
 1. Open `C:\Poker\PokerWrapper\setup\` and double-click **`setup.cmd`**.
    - If Windows says *"Windows protected your PC"*: **More info → Run anyway**.
 2. It installs what it needs (Python, Bun, rclone, Chrome, Brave). A few installer windows may flash by.
-3. It asks you two things:
-   - **The download key** — paste the three values when asked (right-click pastes in that window).
-   - **Your CoinPoker screen name** — exactly as it shows at the table. Leave blank if you only play Ignition.
-
-   Then it downloads the chart data (about 2 GB, the slowest part).
+3. It asks for one thing: **the download key**. Paste the three values when asked (right-click pastes in that
+   window). Then it downloads the chart data (about 2 GB, the slowest part).
 4. At the end it runs a **checklist**. Green `[ok]` is good; red `[!!]` has a line under it saying what to do.
    Right after setup it is normal for **GTO Wizard signed in** to be red — that's the next step.
 
@@ -87,7 +84,9 @@ from CoinPoker's own log file, so you sit down in CoinPoker yourself like always
 4. **Table**: the format you're playing (and for Ignition, your profile).
 5. Wait for **Preflight** to go green, then **Start session**.
    - Ignition: it opens the table window and takes you to a table.
-   - CoinPoker: open CoinPoker and sit down; the panel follows the table you sit at.
+   - CoinPoker: open CoinPoker and sit down; the panel follows the table you sit at. Answers come for
+     **heads-up NL200** (the "CoinPoker 200NL Heads-Up" strategy). Other CoinPoker tables are read and recorded,
+     but get no answers yet.
 6. When it's your turn, the panel shows the answer. **End session** when you're done.
 
 ## 6. Looking back at your hands

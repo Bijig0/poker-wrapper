@@ -177,8 +177,83 @@ def rc(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return r
 
 
+def code_files() -> list[str]:
+    """Every file the code zip ships (repo-relative, posix), minus the trimmed ledger it adds itself."""
+    files = git_files(*CODE_TREES) + solve_closure()
+    for d, pat in CODE_GLOBS:
+        files += [p.relative_to(ROOT).as_posix() for p in (ROOT / d).glob(pat) if p.is_file()]
+    return sorted({f for f in files if not any(x.search(f) for x in CODE_EXCLUDE)})
+
+
+def release_status(out: Path) -> dict:
+    """What the friend has vs what this working tree would publish: the channel's latest release, the files that
+    changed / were added / were removed since it, the data parts that moved, and which changed files are not
+    committed (a publish ships the WORKING TREE). Used by --status, publish.cmd and the owner's setup-page bar."""
+    st: dict = {"ok": True, "channel": CHANNEL}
+    r = rc("cat", f"{CHANNEL}/latest.json", check=False)
+    if r.returncode or not r.stdout.strip():
+        return {**st, "published": None, "note": "nothing published on the channel yet (or it is unreadable)"}
+    rel = json.loads(r.stdout)
+    st["published"] = {k: rel.get(k) for k in ("version", "published", "notes", "commit")}
+    zp = out / rel["code"]["file"]
+    if not zp.exists():
+        rc("copyto", f"{CHANNEL}/releases/{rel['version']}/{rel['code']['file']}", str(zp), check=False)
+    try:
+        with zipfile.ZipFile(zp) as z:
+            old = json.loads(z.read("PokerWrapper/VERSION.json"))["files"]
+    except Exception as e:
+        return {**st, "ok": False, "error": f"cannot read the published manifest: {e}"}
+    old.pop("gto-trainer/apps/api/data/ledger.json", None)   # rebuilt from the live ledger on every build
+    cur = {f: sha256_file(ROOT / f) for f in code_files()}
+    changed = sorted(f for f in cur if f in old and old[f] != cur[f])
+    added = sorted(f for f in cur if f not in old)
+    removed = sorted(f for f in old if f not in cur)
+    cache_path = out / "hash-cache.json"
+    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+    data_moved = []
+    for part in DATA_PARTS:
+        fs = data_part_files(part)
+        h = hashlib.sha256()
+        for p in fs:
+            h.update(f"{p.relative_to(ROOT).as_posix()}|{sha256_file(p, cache)}\n".encode())
+        if fs and (rel.get("data") or {}).get(part, {}).get("version") != h.hexdigest()[:12]:
+            data_moved.append(part)
+    cache_path.write_text(json.dumps(cache))
+    touched = changed + added
+    dirty = set()
+    if touched:
+        g = subprocess.run(["git", "status", "--porcelain", "-z", "--", *touched], cwd=ROOT, capture_output=True)
+        dirty = {e[3:] for e in g.stdout.decode("utf-8", "replace").split("\0") if len(e) > 3}
+    return {**st, "changed": changed, "added": added, "removed": removed, "dataChanged": data_moved,
+            "uncommitted": sorted(dirty), "pending": len(changed) + len(added) + len(removed) + len(data_moved)}
+
+
+def print_status(s: dict) -> None:
+    if not s.get("published"):
+        print(s.get("note") or s.get("error"))
+        return
+    p = s["published"]
+    print(f"published: {p['version']}  ({p['published']})  \"{p.get('notes') or ''}\"")
+    if not s.get("pending"):
+        print("the working tree matches it - nothing to publish")
+        return
+    print(f"since then: {len(s['changed'])} changed, {len(s['added'])} added, {len(s['removed'])} removed"
+          + (f"; data changed: {', '.join(s['dataChanged'])}" if s["dataChanged"] else ""))
+    for f in (s["changed"] + s["added"])[:25]:
+        print(f"   {'+' if f in s['added'] else '~'} {f}{'   (uncommitted)' if f in s['uncommitted'] else ''}")
+    for f in s["removed"][:10]:
+        print(f"   - {f}")
+    more = len(s["changed"]) + len(s["added"]) - 25
+    if more > 0:
+        print(f"   ... and {more} more")
+    if s["uncommitted"]:
+        print(f"note: {len(s['uncommitted'])} of these are not committed - a publish ships them as they are on disk")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--status", action="store_true", help="what is published vs what this tree would publish")
+    ap.add_argument("--json", action="store_true", help="with --status: machine-readable")
     ap.add_argument("--out", default=str(Path.home() / "poker-package"))
     ap.add_argument("--no-data", action="store_true", help="code zip only (skip building data parts)")
     ap.add_argument("--publish", action="store_true", help=f"gate, then upload to {CHANNEL} and move latest.json")
@@ -187,6 +262,10 @@ def main() -> int:
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    if a.status:
+        s = release_status(out)
+        print(json.dumps(s)) if a.json else print_status(s)
+        return 0
     version = dt.datetime.now().strftime("%Y.%m.%d.%H%M")
     commit, _ = git_head()
 
@@ -233,10 +312,7 @@ def main() -> int:
     cache_path.write_text(json.dumps(cache))
 
     # 3. code, with VERSION.json = version + the manifest the updater diffs against
-    files = git_files(*CODE_TREES) + solve_closure()
-    for d, pat in CODE_GLOBS:
-        files += [p.relative_to(ROOT).as_posix() for p in (ROOT / d).glob(pat) if p.is_file()]
-    files = sorted({f for f in files if not any(x.search(f) for x in CODE_EXCLUDE)})
+    files = code_files()
     manifest = {f: sha256_file(ROOT / f) for f in files}
     ledger_rel = "gto-trainer/apps/api/data/ledger.json"
     manifest[ledger_rel] = sha256_file(trimmed)

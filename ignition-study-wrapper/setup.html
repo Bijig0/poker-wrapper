@@ -625,6 +625,28 @@ setInterval(async () => {
 async function checkUpdate(force) {
   let u; try { u = await (await fetch("/update" + (force ? "?force=1" : ""))).json(); } catch (e) { return; }
   const el = $("update-banner");
+  if (!u.packaged && "owner" in u) {
+    // THE OWNER'S CHECKOUT: what friends have vs what this tree would publish (build_package.py --status)
+    const o = u.owner;
+    if (!o) { el.style.display = "none"; setTimeout(() => checkUpdate(false), 15000); return; }   // first check still running
+    if (o.ok === false || (o.published && !o.pending)) { el.style.display = "none"; return; }
+    const unc = (o.uncommitted || []).length;
+    el.style.display = "";
+    el.innerHTML = `<div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <span><b>Friend release</b> · ${o.published
+        ? `${esc(o.published.version)} is out · <b>${o.pending} change${o.pending === 1 ? "" : "s"} not published yet</b>`
+        : "nothing published yet"}</span>
+      <button class="mini" id="publish-go">Publish…</button></div>
+      ${o.published ? `<div class="sub" style="margin-top:4px">${(o.changed || []).length} changed, ${(o.added || []).length} added, ${(o.removed || []).length} removed${(o.dataChanged || []).length ? ` · data: ${esc(o.dataChanged.join(", "))}` : ""}${unc ? ` · ${unc} not committed (published as they are on disk)` : ""}</div>` : ""}
+      <div class="sub" id="publish-msg" style="margin-top:4px">Opens a window: shows the changes, asks for a line of notes, runs the checks, uploads.</div>`;
+    $("publish-go").onclick = async () => {
+      $("publish-go").disabled = true;
+      let r; try { r = await (await fetch("/publish", { method: "POST" })).json(); } catch (e) { r = { ok: false, why: String(e) }; }
+      $("publish-msg").textContent = r.ok ? "Publishing in the window that opened." : (r.why || "could not start");
+      setTimeout(() => { $("publish-go").disabled = false; }, 5000);
+    };
+    return;
+  }
   if (!u.packaged || !u.available) { el.style.display = "none"; return; }
   el.style.display = "";
   el.innerHTML = `<div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
