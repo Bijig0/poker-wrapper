@@ -5,6 +5,22 @@ import { gtowApi } from "./gtowApi";
 import { answerLog, isFailKind, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * EVERY ANSWER ATTEMPT, ONE LINE (2026-09-24). The poller kept only its LAST error in memory, so a hand whose
+ * postflop never answered ("socket disconnected", hand 750: flop 17.9 s, turn/river never asked) left nothing to
+ * read afterwards — the ledger showed GTO Wizard itself answering in 2 s. data/jobs/poller-events.jsonl: time,
+ * panel, how long the /fast-solver call took, and the exact outcome or error text.
+ */
+const POLLER_EVENTS = join(import.meta.dir, "..", "..", "data", "jobs", "poller-events.jsonl");
+function pollerEvent(row: Record<string, unknown>): void {
+  try {
+    mkdirSync(join(import.meta.dir, "..", "..", "data", "jobs"), { recursive: true });
+    appendFileSync(POLLER_EVENTS, JSON.stringify({ ts: Date.now(), ...row }) + "\n");
+  } catch { /* the log must never cost an answer */ }
+}
 
 /**
  * Backend poller: reads assistive-play's live hand via gto-trainer's own
@@ -704,6 +720,7 @@ class StudyPoller {
 
   /** POST /api/fast-solver — same body as ingest, no navigation, no navLock. */
   private async fetchFastSolve(): Promise<FastSolveLikeResponse | null> {
+    const t0 = Date.now();
     try {
       const res = await fetch(`${this.config.selfBaseUrl}/fast-solver`, {
         method: "POST",
@@ -724,12 +741,21 @@ class StudyPoller {
       if (!body) {
         this.status.lastError = `Fast-solver returned non-JSON (HTTP ${res.status}).`;
         this.lastFetchFailKind = "solver-bad-response";
+        pollerEvent({ url: this.config.assistiveUrl, ms: Date.now() - t0, outcome: "bad-response", http: res.status });
         return null;
       }
       this.lastFetchFailKind = null;
+      const b = body as { ok?: boolean; reason?: string; error?: string; hand?: { handId?: unknown; street?: string } | null;
+                          solution?: { source?: string; tier?: string; ok?: boolean; reason?: string } | null };
+      pollerEvent({ url: this.config.assistiveUrl, ms: Date.now() - t0, outcome: b.ok === false ? "not-ok" : "ok",
+                    hand: b.hand?.handId ?? null, street: b.hand?.street ?? null,
+                    source: b.solution?.source ?? null, tier: b.solution?.tier ?? null,
+                    reason: (b.reason ?? b.error ?? b.solution?.reason ?? null)?.toString().slice(0, 300) ?? null });
       return body;
     } catch (e) {
       this.status.lastError = e instanceof Error ? e.message : String(e);
+      pollerEvent({ url: this.config.assistiveUrl, ms: Date.now() - t0, outcome: "threw",
+                    error: `${e instanceof Error ? e.name + ": " + e.message : String(e)}`.slice(0, 400) });
       // a deadline and a refused connection are different problems with the
       // same symptom (no answer) — tell them apart in the log
       this.lastFetchFailKind = e instanceof Error && /timeout|abort|deadline/i.test(e.name + e.message)
