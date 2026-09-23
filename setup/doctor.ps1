@@ -57,7 +57,7 @@ $r2 = $false
 # one known chart, stat only (~1 s; a listing of this folder takes 30 s+)
 # must come back a FILE: on R2 a key that cannot see the object (or a missing one) can answer a phantom directory, exit 0
 if ($rc) { $st = & $rc.Source lsjson --stat 'r2:poker-solve-db/hrc-ui/hrc_hu_cp200a_d100_o2_5_3b9.json.gz' 2>$null; $r2 = ($LASTEXITCODE -eq 0) -and (($st -join '') -match '"IsDir":\s*false') }
-Row $r2 'Chart downloads (R2, read-only)' $(if ($r2) { 'the chart bucket is readable' } else { 'not configured or key rejected' }) 'run setup\setup.cmd and paste the read-only key'
+Row $r2 'Chart downloads (R2)' $(if ($r2) { 'the chart bucket is readable' } else { 'not configured or key rejected' }) 'put PokerWrapper-key.txt next to the PokerWrapper folder and run setup\setup.cmd'
 
 Write-Host ""
 Write-Host " Settings" -ForegroundColor Cyan

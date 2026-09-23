@@ -2,7 +2,8 @@
 #
 # Safe to run again: every step checks first and only does what is missing. What it does:
 #   1. tools        Python 3.12, Bun, rclone, Google Chrome, Brave (winget)
-#   2. downloads    rclone remote "r2" (read-only key from the owner): chart bodies, data and UPDATES come from it
+#   2. downloads    rclone remote "r2" (the owner's key: PokerWrapper-key.txt next to the folder, else pasted):
+#                   chart bodies, data and UPDATES come from it
 #   3. data         the data parts this version expects (setup\channel.ps1): a zip next to the folder, else downloaded
 #   4. python       aof-model\.venv from aof-model\requirements.txt
 #   5. api          bun install (the study API's packages)
@@ -62,14 +63,24 @@ foreach ($t in $tools) {
 }
 
 # ---------------------------------------------------------------- 2. chart + update downloads (R2)
-Step 2 'Downloads: charts + updates (rclone remote "r2", read-only)'
+Step 2 'Downloads: charts + updates (rclone remote "r2")'
 $rclone = (Get-Command rclone -ErrorAction SilentlyContinue).Source
 if (-not $rclone) { Bad 'rclone not found' }
 else {
   $remotes = & $rclone listremotes 2>$null
+  # a key FILE handed over with the zip (PokerWrapper-key.txt, rclone "key = value" lines) is used as-is: nothing
+  # to paste. Looked for next to the PokerWrapper folder, inside it, and in Downloads.
+  $keyFile = @((Join-Path (Split-Path $root) 'PokerWrapper-key.txt'), (Join-Path $root 'PokerWrapper-key.txt'),
+               (Join-Path $env:USERPROFILE 'Downloads\PokerWrapper-key.txt')) | Where-Object { Test-Path $_ } | Select-Object -First 1
   if ($remotes -match '^r2:$') { Ok 'remote r2 already configured' }
+  elseif ($keyFile) {
+    $kv = @(Get-Content $keyFile | Where-Object { $_ -match '^\s*([a-z_]+)\s*=\s*(\S.*)$' -and $Matches[1] -ne 'type' } |
+            ForEach-Object { $null = $_ -match '^\s*([a-z_]+)\s*=\s*(\S.*)$'; "$($Matches[1])=$($Matches[2].Trim())" })
+    & $rclone config create r2 s3 @kv --non-interactive | Out-Null
+    Ok "download key read from $keyFile"
+  }
   else {
-    Todo 'the owner gave you a READ-ONLY access key for the chart bucket — paste it here'
+    Todo 'no PokerWrapper-key.txt found next to the folder — paste the download key instead'
     $keyId = Ask 'Access key ID'
     $secret = Ask 'Secret access key'
     $endpoint = Ask 'Endpoint (https://<account>.r2.cloudflarestorage.com)'

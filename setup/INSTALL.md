@@ -17,8 +17,8 @@ again later — it skips everything that is already done.
 **From the person who gave you this:**
 - `PokerWrapper-code-<version>.zip` (about 15 MB). That's all you need to be handed; setup downloads the
   rest (about 2 GB) by itself.
-- A **read-only download key**: three values — an *access key ID*, a *secret access key* and an *endpoint*
-  (a web address ending in `r2.cloudflarestorage.com`). Keep it to yourself.
+- `PokerWrapper-key.txt`, the **download key** (charts, data and updates come through it). Keep it to
+  yourself and don't share it on.
 
 **Your own accounts:**
 - **GTO Wizard** with a plan that includes GTO Wizard AI (Ultra). The answers after the flop come from it.
@@ -35,6 +35,13 @@ again later — it skips everything that is already done.
 1. Make a folder, e.g. `C:\Poker`.
 2. Right-click `PokerWrapper-code-<version>.zip` → **Extract All…** → into `C:\Poker`.
    You now have `C:\Poker\PokerWrapper\…`
+3. Put `PokerWrapper-key.txt` in `C:\Poker` too, next to the `PokerWrapper` folder.
+
+```
+C:\Poker\
+   PokerWrapper\             ← the code
+   PokerWrapper-key.txt      ← the key
+```
 
 (If you were also given `PokerWrapper-data-….zip` files, e.g. on a USB stick, put them in `C:\Poker` next to the
 `PokerWrapper` folder and leave them zipped. Setup uses them instead of downloading.)
@@ -44,8 +51,8 @@ again later — it skips everything that is already done.
 1. Open `C:\Poker\PokerWrapper\setup\` and double-click **`setup.cmd`**.
    - If Windows says *"Windows protected your PC"*: **More info → Run anyway**.
 2. It installs what it needs (Python, Bun, rclone, Chrome, Brave). A few installer windows may flash by.
-3. It asks for one thing: **the download key**. Paste the three values when asked (right-click pastes in that
-   window). Then it downloads the chart data (about 2 GB, the slowest part).
+3. It picks up the key file by itself (nothing to type), then downloads the chart data (about 2 GB, the slowest
+   part).
 4. At the end it runs a **checklist**. Green `[ok]` is good; red `[!!]` has a line under it saying what to do.
    Right after setup it is normal for **GTO Wizard signed in** to be red — that's the next step.
 
