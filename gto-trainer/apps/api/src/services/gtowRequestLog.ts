@@ -16,6 +16,7 @@
  * Whether GTO Wizard counts POLLS or distinct solves is settled by reading this ledger against the next 429,
  * not by guessing: the count at the moment of the 429 is their unit.
  */
+import { timed } from "./answerTrace";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -111,7 +112,7 @@ class GtowRequestLog {
     const blocked = this.gate(session);
     if (blocked) return blocked;
     try {
-      const r = await fetch(url, init);
+      const r = await timed(`GTO Wizard ${kind} (${session ?? "?"})`, () => fetch(url, init), (x) => `HTTP ${x.status}`);
       this.note({ session, kind, status: r.status });
       return r;
     } catch (e) {

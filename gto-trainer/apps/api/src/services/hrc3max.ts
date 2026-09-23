@@ -1,3 +1,4 @@
+import { timed } from "./answerTrace";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { SNAP_MAX, SNAP_TAU } from "../utils/snapToken/snapToken";
 
@@ -308,10 +309,10 @@ export const fetchNode: (source: string, line: string) => Promise<HrcNode | null
     // out the cold pull the first attempt itself triggered.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const res = await fetch(
+        const res = await timed(`chart node ${source} [${line || "root"}]${attempt ? " (retry)" : ""}`, () => fetch(
           `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(source)}&line=${encodeURIComponent(line)}`,
           { signal: AbortSignal.timeout(30000) }
-        );
+        ), (r) => `HTTP ${r.status}`);
         body = await res.json();
         break;
       } catch {

@@ -396,6 +396,8 @@ class StudyPoller {
       // no error". 409 (wrapper up, no table) and 422 (no hand in the feed)
       // are the genuinely idle ok:false replies and still fall through.
       if (probe.httpStatus != null && ![200, 409, 422].includes(probe.httpStatus)) {
+        pollerEvent({ url: this.config.assistiveUrl, ev: "ingest failed", http: probe.httpStatus, error: (probe.error ?? "").slice(0, 300),
+                      failures: this.ingestFailures + 1 });
         this.lastSolvedKey = null;
         // BACK OFF A DEAD WRAPPER (EIP-19, 2026-09-23). The boot poller hammered a wrapper that was not running at
         // 1 Hz for days — 1.35 M ingest lines in api.log, two per second — and posted a null to the same dead port
@@ -494,6 +496,12 @@ class StudyPoller {
 
       const key = decisionKey(probe);
       this.lastProbeKey = key;
+      if (!this.seenKeys.has(key)) {
+        this.seenKeys.add(key);
+        if (this.seenKeys.size > 200) this.seenKeys = new Set([key]);
+        pollerEvent({ url: this.config.assistiveUrl, ev: "decision seen", key, street: probe.hand?.street ?? null,
+                      inFlight: this.nav ? { key: this.nav.key, forMs: Date.now() - this.nav.at } : null });
+      }
       // Only keep alive an answer that EXISTS. Any push(null) — GTO Wizard
       // dropping for a single tick was enough — blanks lastAnswer while
       // leaving lastSolvedKey set, and this branch then re-pushed that null
@@ -520,8 +528,18 @@ class StudyPoller {
       // flight navLock and bounced every later solve as "skipped". Let it
       // finish (a verdict for a spot hero left is dropped) and start the
       // current spot's solve on the next tick.
-      if (this.nav) return;
-      this.nav = { key };
+      if (this.nav) {
+        // THE ONE-SOLVE-AT-A-TIME GATE: a decision waiting here is not being answered. Written once per key, with
+        // what it is waiting on and for how long — a slow or hung solve for an OLD spot holds every later one.
+        if (this.nav.key !== key && !this.waitLogged.has(key)) {
+          this.waitLogged.add(key);
+          if (this.waitLogged.size > 200) this.waitLogged = new Set([key]);
+          pollerEvent({ url: this.config.assistiveUrl, ev: "waiting on another solve", key, busyWith: this.nav.key, busyForMs: Date.now() - this.nav.at });
+        }
+        return;
+      }
+      this.nav = { key, at: Date.now() };
+      pollerEvent({ url: this.config.assistiveUrl, ev: "solve started", key });
       void this.solveSpot(key, probe).finally(() => {
         this.nav = null;
       });
@@ -738,6 +756,8 @@ class StudyPoller {
         signal: AbortSignal.timeout(45000),
       });
       const body = (await res.json().catch(() => null)) as FastSolveLikeResponse | null;
+      let trace: unknown = null;
+      try { const h = res.headers.get("x-answer-trace"); trace = h ? JSON.parse(h) : null; } catch { trace = null; }
       if (!body) {
         this.status.lastError = `Fast-solver returned non-JSON (HTTP ${res.status}).`;
         this.lastFetchFailKind = "solver-bad-response";
@@ -750,7 +770,7 @@ class StudyPoller {
       pollerEvent({ url: this.config.assistiveUrl, ms: Date.now() - t0, outcome: b.ok === false ? "not-ok" : "ok",
                     hand: b.hand?.handId ?? null, street: b.hand?.street ?? null,
                     source: b.solution?.source ?? null, tier: b.solution?.tier ?? null,
-                    reason: (b.reason ?? b.error ?? b.solution?.reason ?? null)?.toString().slice(0, 300) ?? null });
+                    reason: (b.reason ?? b.error ?? b.solution?.reason ?? null)?.toString().slice(0, 300) ?? null, trace });
       return body;
     } catch (e) {
       this.status.lastError = e instanceof Error ? e.message : String(e);
@@ -902,7 +922,10 @@ class StudyPoller {
   /** The in-flight background solve, if any. Never aborted mid-flight (the
    *  server-side navigation can't be cancelled and holds the navLock); a new
    *  spot simply waits for the next tick after this one completes. */
-  private nav: { key: string } | null = null;
+  private nav: { key: string; at: number } | null = null;
+  /** decision keys already written as "seen" / "waiting" (poller-events.jsonl): once per key, not once per tick */
+  private seenKeys = new Set<string>();
+  private waitLogged = new Set<string>();
   /** decisionKey of the most recent probe — verdicts for any other key are
    *  stale and get dropped instead of pushed. */
   private lastProbeKey: string | null = null;

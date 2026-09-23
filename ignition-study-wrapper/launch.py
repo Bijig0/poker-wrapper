@@ -6863,7 +6863,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # silence per-request noise
         pass
 
+    def parse_request(self):
+        self._t0 = time.time()          # when this request began, for the slow-request line in _send
+        return super().parse_request()
+
     def _send(self, code: int, ctype: str, body: bytes):
+        # SLOW REQUESTS, LOGGED (2026-09-24): the study API reads /state with a 3 s budget; a reply that takes
+        # long is a lost or late answer, and until now nothing said which request or how long
+        dt = time.time() - getattr(self, "_t0", time.time())
+        if dt > 0.4:
+            print(f"[slow] {self.command} {self.path} {dt * 1000:.0f} ms -> {code}")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))

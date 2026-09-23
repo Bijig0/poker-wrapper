@@ -1,3 +1,4 @@
+import { timed } from "../../services/answerTrace";
 import {
   parsePanelFeed,
   rowsFromText,
@@ -162,7 +163,7 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     // field read below: connected, hand, snapshot, studyAnswers, sessionId, session, site.
     // What light drops is only the panel's connection card (targets, ignition.textNodes).
     try {
-      const res = await fetch(`${url.replace(/\/$/, "")}/state?light=1`, { signal: AbortSignal.timeout(3000) });
+      const res = await timed("wrapper GET /state?light=1", () => fetch(`${url.replace(/\/$/, "")}/state?light=1`, { signal: AbortSignal.timeout(3000) }), (r) => `HTTP ${r.status}`);
       state = (await res.json()) as typeof state;
     } catch {
       return { ok: false, status: 502, error: `Couldn't reach the assistive-play server at ${url} — is it running?` };

@@ -4,6 +4,7 @@ import { handToSpot, type SpotOptions } from "../feed/handToSpot/handToSpot";
 import { renderPanelRows } from "../feed/parsePanelFeed/parsePanelFeed";
 import { fastSolve } from "../services/fastSolve";
 import { SOLUTION_SETS } from "../services/gtowCdp";
+import { runTraced, timed, tmark } from "../services/answerTrace";
 
 /**
  * Fast-solver: the same hand-node input as /ingest, answered without any live
@@ -29,12 +30,21 @@ interface FastSolverBody extends ResolveBody {
   strategy?: "exploit" | "chart";
 }
 
+// Every request carries its own timeline (services/answerTrace.ts) back in X-Answer-Trace — where an answer's
+// time went: the wrapper read, chart nodes, token sniffs, each GTO Wizard request.
 app.post("/", async (c) => {
+  const { value: res, totalMs, trace } = await runTraced(() => handleFastSolve(c));
+  try { res.headers.set("X-Answer-Trace", JSON.stringify({ totalMs, trace }).slice(0, 7500)); } catch { /* immutable headers: no trace */ }
+  return res;
+});
+
+async function handleFastSolve(c: any): Promise<Response> {
   const body = (await c.req.json().catch(() => ({}))) as FastSolverBody;
   const set = SOLUTION_SETS.find((s) => s.id === (body.setId ?? "6max"));
 
-  const resolved = await resolveHand(body);
+  const resolved = await timed("resolve hand (wrapper /state)", () => resolveHand(body), (r) => (r.ok ? "ok" : `failed: ${r.error}`));
   if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
+  tmark("hand", `${resolved.hand?.currentNode?.street ?? "?"} · ${(resolved.hand?.actions ?? []).length} actions · toActIsHero=${resolved.hand?.currentNode?.toActIsHero}`);
   const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras } = resolved;
 
   if (!hand) {
@@ -116,7 +126,7 @@ app.post("/", async (c) => {
     return c.json({ ...base, solution: null, deferred: hand.ended ? "Hand is over." : "Not hero's turn." });
   }
 
-  const solution = await fastSolve(hand, heroPos, {
+  const solution = await timed("fastSolve", () => fastSolve(hand, heroPos, {
     setId: body.setId, depth: body.depth, heroPos,
     // who asked — stamped on every stored AI-chain trace (services/solveStore.ts)
     ...(typeof (body as { origin?: unknown }).origin === "string" ? { origin: (body as { origin: string }).origin } : {}),
@@ -126,8 +136,8 @@ app.post("/", async (c) => {
     // no longer exists.
     ...((body.strategyId ?? strategyId) ? { strategyId: body.strategyId ?? strategyId } : {}),
     ...(body.strategy === "exploit" || body.strategy === "chart" ? { strategy: body.strategy } : {}),
-  });
+  }), (s) => `${(s as { ok?: boolean }).ok ? "ok" : "not ok"} · ${(s as { source?: string }).source ?? ""} · ${(s as { tier?: string }).tier ?? ""}`);
   return c.json({ ...base, solution });
-});
+}
 
 export default app;

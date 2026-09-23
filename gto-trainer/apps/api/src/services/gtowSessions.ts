@@ -43,6 +43,8 @@
  * refusal corrects it.
  */
 
+import { timed } from "./answerTrace";
+
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
 const SNIFF_TIMEOUT_MS = 15_000;
@@ -368,7 +370,7 @@ class GtowSessions {
     const s = this.sessions.get(id);
     if (!s || !s.cfg.enabled) return null;
     if (!force && this.live(s)) return s.token;
-    const tok = await this.sniff(s.cfg.cdpHost);
+    const tok = await timed(`GTO Wizard token sniff ${id} (${s.cfg.cdpHost})`, () => this.sniff(s.cfg.cdpHost), (t: string | null) => (t ? "token" : "none"));
     s.lastAttemptMs = Date.now();
     if (!tok) {
       s.lastError = `no token on ${s.cfg.cdpHost}`;
