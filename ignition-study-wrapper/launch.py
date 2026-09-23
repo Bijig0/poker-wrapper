@@ -681,10 +681,10 @@ def _open_leader() -> None:
     the rig) owns it; it closes with the main panel's CoinPoker session (_session_end)."""
     if _TAG or _fake_mode:
         return
-    h = _leader_hwnd()
-    if h:
-        ctypes.windll.user32.ShowWindow(h, 9)
-        return
+    # a leader window already up may be ANOTHER wrapper's (a stray instance on another port, or this panel's own
+    # previous process): it would show that wrapper's page and code. Replace it with ours.
+    if _leader_hwnd():
+        _kill_profile_windows(PROFILE_LEADER)
     area = other_area() or target_area()
     w, ht = min(area["w"], max(520, area["w"] // 3)), int(area["h"] * 0.7)
     chrome_window(f"http://127.0.0.1:{PANEL_PORT}/admin", PROFILE_LEADER, area["x"], area["y"], w, ht)
@@ -706,11 +706,19 @@ def _admin_post(port: int, path: str, body: dict, timeout: float = 30) -> tuple[
         return 502, {"ok": False, "why": f"panel :{port} did not answer ({e})"}
 
 
-def _admin_open(room: str) -> tuple[int, dict]:
-    """A new panel for `room`: another wrapper on the next free admin port, then a session on it that copies this
-    panel's strategy (or the CoinPoker heads-up one) attached to that table."""
+def _admin_open(room: str, preset: str | None = None) -> tuple[int, dict]:
+    """A new panel for `room`: another wrapper on the next free admin port, then a session on it — the strategy the
+    leader's Open-a-panel dialog chose (`preset`), else this panel's, else the CoinPoker heads-up one — attached to
+    that table. The new wrapper opens NO setup window (PANEL_DEFER_WINDOW); once its session runs it is told to open
+    its panel window, which then follows the table."""
     if room not in CP.open_rooms():
         return 409, {"ok": False, "why": "that table is not open in the CoinPoker client"}
+    # ONE PANEL PER TABLE: two would answer every decision twice and archive every hand into two sessions
+    busy = [x for x in (_panel_probe(p) for p in sorted(_listening(ADMIN_PORTS) | {PANEL_PORT})) if x and x.get("attached") == room]
+    if busy:
+        return 409, {"ok": False, "why": f"a panel is already on that table ({busy[0]['tag']})"}
+    if preset and preset not in S.PRESETS:
+        return 409, {"ok": False, "why": f"the mode {preset!r} is not on offer right now"}
     live = _listening(ADMIN_PORTS)
     port = next((p for p in range(7720, 7740) if p not in live), None)
     if port is None:
@@ -719,7 +727,7 @@ def _admin_open(room: str) -> tuple[int, dict]:
     exe = Path(sys.executable)
     exe = exe.with_name("pythonw.exe") if exe.with_name("pythonw.exe").exists() else exe
     subprocess.Popen([str(exe), str(ROOT / "run-study.pyw"), "--panel-port", str(port), "--cdp-port", str(9340 + port - 7720)],
-                     env={**os.environ, "PANEL_TAG": tag}, cwd=str(ROOT),
+                     env={**os.environ, "PANEL_TAG": tag, "PANEL_DEFER_WINDOW": "1"}, cwd=str(ROOT),
                      creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
     for _ in range(60):
         if _panel_probe(port):
@@ -728,12 +736,21 @@ def _admin_open(room: str) -> tuple[int, dict]:
     else:
         return 504, {"ok": False, "why": f"the new panel on :{port} did not come up"}
     rec = _session["rec"] if (_session["rec"] and _is_cp()) else None
-    preset = rec["preset"] if rec else "strategy:cp200-hu-equilibrium"
     t = next((x for x in CP.open_tables() if x["room"] == room), {})
-    cfg = dict((rec or {}).get("config") or {"answers": True}, site=CPS.SITE, cpTable=room)
+    if preset:                                    # chosen in the dialog: that mode's own defaults
+        cfg = {"answers": bool((S.PRESETS.get(preset) or {}).get("config", {}).get("answers", True))}
+    else:                                         # copy this panel's session, else the heads-up strategy
+        preset = rec["preset"] if rec else "strategy:cp200-hu-equilibrium"
+        cfg = dict((rec or {}).get("config") or {"answers": True})
+    cfg.update(site=CPS.SITE, cpTable=room)
+    cfg.pop("panelPort", None)                    # the new panel stamps its own
     if t.get("format"):
         cfg["format"] = t["format"]
     code, res = _admin_post(port, "/session/start", {"preset": preset, "config": cfg, "label": f"{t.get('label') or room} ({tag})"}, 60)
+    if res.get("ok"):
+        _admin_post(port, "/panel/open-window", {}, 20)     # now, and straight onto the panel
+    else:
+        _admin_post(port, "/quit", {}, 5)                   # a panel that could not start is not left running
     return (200 if res.get("ok") else code), {**res, "port": port, "tag": tag}
 
 
@@ -7486,13 +7503,23 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/update":              # packaged installs: run setup\update.ps1, then stand down
                 code, res = _start_update()
                 self._send(code, "application/json", json.dumps(res).encode())
+            elif path == "/panel/open-window":   # a panel started with no window (from the leader): open it now
+                if _panel_hwnd():
+                    self._send(200, "application/json", b'{"ok": true, "already": true}')
+                else:
+                    area = target_area()
+                    tw = int(area["w"] * TABLE_FRAC)
+                    chrome_window(f"http://127.0.0.1:{PANEL_PORT}/panel", PROFILE_PANEL,
+                                  area["x"] + tw, area["y"], area["w"] - tw, area["h"])
+                    _cp_follow.update(snapped=None, rect=None)   # the follow loop puts it beside the table
+                    self._send(200, "application/json", b'{"ok": true}')
             elif path in ("/coinpoker/attach", "/admin/attach", "/admin/open", "/admin/panel"):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
                 if path == "/coinpoker/attach":          # this panel reads another table
                     code, res = _cp_reattach(body.get("room"))
                 elif path == "/admin/open":              # a new panel on that table
-                    code, res = _admin_open(str(body.get("room") or ""))
+                    code, res = _admin_open(str(body.get("room") or ""), body.get("preset") or None)
                 else:
                     port = int(body.get("port") or 0)
                     if port not in ADMIN_PORTS:
@@ -8126,6 +8153,10 @@ def main() -> None:
                                             (w - table_w) if table_up else w, h, True)
         ctypes.windll.user32.SetForegroundWindow(hwnd)
         print("[panel] window already open — brought to front")
+    elif os.environ.get("PANEL_DEFER_WINDOW") == "1":
+        # started by the CoinPoker leader: no setup page — the leader starts the session and then asks for the
+        # panel window (/panel/open-window), so the only window that ever appears is the panel itself
+        print("[panel] no window yet — the leader opens it once the session runs")
     else:
         # A follower has no setup page of its own (it redirects to the leader's),
         # so opening one would give four windows all showing the leader's form.

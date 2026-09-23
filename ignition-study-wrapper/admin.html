@@ -23,6 +23,16 @@
   button.danger { border-color: #8b3a42; color: #ffb3b3; }
   #msg { min-height: 20px; margin-top: 8px; }
   .empty { color: #8fa1b3; padding: 10px 0; }
+  button.active { background: #123524; border-color: #2f7a4f; color: #5ee39a; opacity: 1; cursor: default; }
+  #dlg { position: fixed; inset: 0; background: rgba(5,8,11,.72); display: none; align-items: center; justify-content: center; padding: 16px; }
+  #dlg .box { background: #171d24; border: 1px solid #3a4a5a; border-radius: 14px; padding: 16px 18px; width: min(640px, 100%); max-height: 90vh; overflow: auto; }
+  #dlg h3 { margin: 0 0 4px; font-size: 17px; }
+  .opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid #26303a; border-radius: 10px; margin: 6px 0; cursor: pointer; }
+  .opt.on { border-color: #1f6feb; background: #14243a; }
+  .opt input { margin-top: 4px; }
+  .chk { display: flex; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .chk .d { color: #8fa1b3; }
+  .chk.bad b { color: #ff9a9a; } .chk.ok b { color: #5ee39a; } .chk.soft b { color: #ffce56; }
 </style>
 </head>
 <body>
@@ -35,6 +45,19 @@
 
 <h2>Panels <span id="p-count" class="sub" style="text-transform:none;letter-spacing:0"></span></h2>
 <div id="panels" class="grid"></div>
+
+<div id="dlg"><div class="box">
+  <h3>Open a panel on <span id="dlg-table"></span></h3>
+  <div class="sub" id="dlg-sub"></div>
+  <h2 style="margin-top:14px">Strategy</h2>
+  <div id="dlg-modes"></div>
+  <h2>Preflight <span id="dlg-pf-state" class="sub" style="text-transform:none;letter-spacing:0"></span></h2>
+  <div id="dlg-checks" class="sub">…</div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px">
+    <button id="dlg-cancel">Cancel</button>
+    <button id="dlg-go" class="primary" disabled>Open panel</button>
+  </div>
+</div></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -63,7 +86,8 @@ function render() {
       <div class="row">${money}<span class="tag">${t.heroSeated ? "you are seated" : "observing"}</span><span class="tag">${t.players} seated</span></div>
       <div class="sub">${on.length ? "Read by: " + on.map((p) => esc(panelName(p))).join(", ") : "No panel on this table"}</div>
       <div class="row">
-        <button class="primary" data-open="${esc(t.room)}" ${busy ? "disabled" : ""}>Open a panel here</button>
+        ${on.length ? `<button class="active" disabled title="${esc(on.map(panelName).join(", "))} reads this table">● Panel active</button>`
+                    : `<button class="primary" data-open="${esc(t.room)}" ${busy ? "disabled" : ""}>Open a panel here</button>`}
         ${movable.length ? `<select data-movesel="${esc(t.room)}">${movable.map((p) => `<option value="${p.port}">${esc(panelName(p))}${p.label ? " (now " + esc(p.label) + ")" : ""}</option>`).join("")}</select>
         <button data-move="${esc(t.room)}" ${busy ? "disabled" : ""}>Move here</button>` : ""}
       </div></div>`;
@@ -79,7 +103,7 @@ function render() {
         <button class="danger" data-end="${p.port}" ${busy || !p.sessionId ? "disabled" : ""}>End session</button>
       </div></div>`).join("") : '<div class="empty">No panel is running.</div>';
 
-  document.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => post("/admin/open", { room: b.dataset.open }, `opening a panel on ${labelOf(b.dataset.open)} (it starts a session with the main panel's strategy)…`));
+  document.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => openDialog(b.dataset.open));
   document.querySelectorAll("[data-move]").forEach((b) => b.onclick = () => {
     const sel = document.querySelector(`[data-movesel="${CSS.escape(b.dataset.move)}"]`);
     post("/admin/attach", { port: Number(sel.value), room: b.dataset.move }, `moving the panel to ${labelOf(b.dataset.move)}…`);
@@ -90,6 +114,55 @@ function render() {
     post("/admin/panel", { port: Number(b.dataset.end), action: "end" }, "ending that panel's session…");
   });
 }
+
+// ---- Open a panel: strategy -> preflight for this table -> confirm ---------------------------------------
+let DLG = { room: null, preset: null, modes: [], pfSeq: 0 };
+async function openDialog(room) {
+  const t = S.tables.find((x) => x.room === room) || {};
+  DLG.room = room;
+  $("dlg-table").textContent = t.label || room;
+  $("dlg-sub").textContent = [t.practice ? "practice chips" : t.coinType === 1 ? "REAL MONEY" : "", t.heroSeated ? "you are seated" : "not seated yet"].filter(Boolean).join(" · ");
+  $("dlg").style.display = "flex";
+  let j = {}; try { j = await (await fetch("/session")).json(); } catch (e) {}
+  // CoinPoker modes: strategies first, then the no-answer modes that play CoinPoker (e.g. silent)
+  DLG.modes = Object.entries(j.presets || {}).filter(([, p]) => (p.sites || []).includes("coinpoker"))
+    .sort(([, a], [, b]) => (b.strategy ? 1 : 0) - (a.strategy ? 1 : 0));
+  const main = S.panels.find((p) => p.me);
+  DLG.preset = (DLG.modes.find(([k]) => k === "strategy:cp200-hu-equilibrium") || DLG.modes[0] || [null])[0];
+  renderModes();
+  preflight();
+}
+function renderModes() {
+  $("dlg-modes").innerHTML = DLG.modes.length ? DLG.modes.map(([k, p]) => `<label class="opt ${k === DLG.preset ? "on" : ""}">
+      <input type="radio" name="mode" value="${esc(k)}" ${k === DLG.preset ? "checked" : ""}>
+      <span><b>${esc(p.label)}</b><br><span class="sub">${esc(p.tagline || "")}</span></span></label>`).join("")
+    : '<div class="sub">No CoinPoker mode is on offer — is the study API up?</div>';
+  document.querySelectorAll('#dlg-modes input[name="mode"]').forEach((r) => r.onchange = () => { DLG.preset = r.value; renderModes(); preflight(); });
+}
+async function preflight() {
+  const seq = ++DLG.pfSeq;
+  $("dlg-go").disabled = true;
+  $("dlg-pf-state").textContent = "— checking…";
+  $("dlg-checks").innerHTML = "…";
+  if (!DLG.preset) { $("dlg-pf-state").textContent = ""; $("dlg-checks").textContent = "pick a strategy"; return; }
+  const t = S.tables.find((x) => x.room === DLG.room) || {};
+  let pf; try {
+    pf = await (await fetch("/session/preflight", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preset: DLG.preset, config: { site: "coinpoker", cpTable: DLG.room, format: t.format || null } }) })).json();
+  } catch (e) { pf = { ok: false, checks: [], blockers: [String(e)] }; }
+  if (seq !== DLG.pfSeq) return;                         // a newer choice is being checked
+  $("dlg-pf-state").textContent = pf.ok ? "— all clear" : `— blocked: ${(pf.blockers || []).join(" · ")}`;
+  $("dlg-checks").innerHTML = (pf.checks || []).map((c) => `<div class="chk ${c.ok ? "ok" : c.required ? "bad" : "soft"}">
+      <b>${c.ok ? "✓" : c.required ? "✗" : "!"}</b><span>${esc(c.label)}<br><span class="d">${esc(c.detail || "")}</span></span></div>`).join("")
+    || `<div class="sub">${esc((pf.blockers || []).join(" · ") || pf.error || "no checks came back")}</div>`;
+  $("dlg-go").disabled = !pf.ok;
+}
+$("dlg-cancel").onclick = () => { $("dlg").style.display = "none"; DLG.pfSeq++; };
+$("dlg-go").onclick = async () => {
+  $("dlg").style.display = "none";
+  const room = DLG.room, preset = DLG.preset;
+  await post("/admin/open", { room, preset }, `opening a panel on ${labelOf(room)} — it starts its session and its window opens beside the table…`);
+};
 
 async function load() {
   try { S = await (await fetch("/admin/state")).json(); } catch (e) { $("msg").textContent = "this panel is not answering"; }
