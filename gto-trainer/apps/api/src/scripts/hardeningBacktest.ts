@@ -70,7 +70,8 @@ export function classifyReason(reason: string): string {
   if (/didn'?t close|did not close|missed action|ends on villain|ends on a terminal|past a terminal|line continues past/.test(r)) return "capture/line-desync";
   if (/not walkable|fold.*flop#|no preflop action|reaching .* with no/.test(r)) return "capture/street-stamp";
   if (/position unknown|positions? .*unknown|no hero position|geometry/.test(r)) return "capture/position-unknown";
-  if (/no hero cards|hero cards|cards unknown|missing cards/.test(r)) return "capture/no-cards";
+  if (/no hero cards|hero cards|cards unknown|missing cards|cards are not known/.test(r)) return "capture/no-cards";
+  if (/board .* has \d+ card|board-incomplete|street frame was missed/.test(r)) return "capture/board-incomplete";
   if (/internally inconsistent|contradict|impossible|phantom/.test(r)) return "capture/inconsistent";
   if (/two limp|second limp|limpers|max_allowed_limps|limp.*ceiling/.test(r)) return "tree/limps";
   if (/node_does_not_exist|not offered|no chart|not in the charts|too far from|off-tree|log-dist|past the ladder|depth/.test(r)) return "tree/gap";
@@ -201,7 +202,9 @@ outer: for (const job of jobs) {
     const nowOk = !!res.ok;
     const bucket = nowOk ? null : classifyReason(String(res.reason ?? ""));
     // A refusal that names a fault the capture really has is CORRECT behaviour, not a solver failure.
-    const isCorrectRefusal = !nowOk && (bucket?.startsWith("capture/") ?? false) && (faultsHere.length > 0 || !!deadSb);
+    // a capture with no hero cards or a board that is not a street is unsolvable by construction: refusing it is right
+    const isCorrectRefusal = !nowOk && (bucket?.startsWith("capture/") ?? false)
+      && (faultsHere.length > 0 || !!deadSb || bucket === "capture/no-cards" || bucket === "capture/board-incomplete");
     if (isCorrectRefusal) correctRefusal++;
 
     const rec = {

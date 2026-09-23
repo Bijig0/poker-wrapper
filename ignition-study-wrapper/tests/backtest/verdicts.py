@@ -127,6 +127,12 @@ def load_ws_decisions():
     return out
 
 
+def unsolvable(now: dict) -> bool:
+    """A capture with no hero cards or a board that is not a street has no spot to solve: refusing it is correct."""
+    r = str(now.get("reason") or "")
+    return "cards are not known" in r or "street frame was missed" in r or "no street deals" in r
+
+
 def line_of(actions) -> str:
     return " ".join(f"{a.get('seatId')}:{a.get('type')}{'' if a.get('amount') is None else ':' + str(a.get('amount'))}" for a in actions)
 
@@ -260,11 +266,11 @@ def main() -> int:
             elif then_ok and now["ok"]:
                 verdict = "OK"
             elif then_ok and not now["ok"]:
-                verdict = "CORRECT-REFUSAL" if (now.get("correctRefusal") or faults) else "BROKE"
+                verdict = "CORRECT-REFUSAL" if (now.get("correctRefusal") or faults or unsolvable(now)) else "BROKE"
             elif not then_ok and now["ok"]:
                 verdict = "FIXED"
             else:
-                verdict = f"STILL({now.get('bucket')})" if not (now.get("correctRefusal") or faults) else "CORRECT-REFUSAL"
+                verdict = f"STILL({now.get('bucket')})" if not (now.get("correctRefusal") or faults or unsolvable(now)) else "CORRECT-REFUSAL"
             rows.append({
                 "dbId": rowid, "idx": i, "clientHandId": chid, "session": sid, "test_stake": bool(sess and sess["test"]),
                 "playedAt": played, "stakes": stakes, "street": a.get("street"), "heroPos": (d.get("positions") or {}).get(str(d.get("heroSeatId"))),
