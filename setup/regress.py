@@ -1,23 +1,23 @@
-"""Regression gate for the Poker Wrapper: one line per check + a summary. Exit 0 = green.
+r"""Regression gate for the Poker Wrapper: one line per check + a summary. Exit 0 = green.
 
-    aof-model\\.venv\\Scripts\\python.exe setup\\regress.py            full: unit + typecheck + wrapper tiers + rig
-                                                                     state suite + live smoke (:2000 / :8777 / :7700)
-    ... setup\\regress.py --quick                                    skip the rig state suite
-    ... setup\\regress.py --publish                                  what build_package.py --publish requires:
-                                                                     unit + typecheck + wrapper tiers, no live checks
+    aof-model\.venv\Scripts\python.exe setup\regress.py            full: API tests + typecheck + wrapper tests,
+                                                                     typecheck, contract + the headless rig test +
+                                                                     live smoke (:2000 / :8777 / :7700)
+    ... setup\regress.py --quick                                    skip the rig test
+    ... setup\regress.py --publish                                  what build_package.py --publish requires:
+                                                                     no rig test, no live checks
 
-Baselines (2026-09-22): bun test 0 fail; tsc 0 errors outside src/scripts/_* (other sessions' scratch scripts,
-never shipped); rig state suite 15/16 fixtures, the one failure = multitable-ws-2026-09-21 (a WS recording with no
-spec). The rig must be on :7701 (gto-trainer\\study-tool.pyw) for the state suite; the live checks need the
-StudyAPI/ChartServer services and, for :7700, the Poker Wrapper open.
+Baselines (2026-09-24): API bun test 0 fail; tsc 0 errors outside src/scripts/_* (other sessions' scratch scripts,
+never shipped); wrapper bun test 0 fail (2 skips); contract 287/287 with the transcript identical. The wrapper is
+TypeScript only (the Python one was deleted 2026-09-24); every Bun here is the one config/env.ps1 resolves, the one
+the launchers run. The rig test runs on its own headless rig (:7792) — never :7700 / :7701. The live checks need
+the StudyAPI/ChartServer services and, for :7700, the Poker Wrapper open.
 """
 import json, os, re, shutil, subprocess, sys, time, urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 API = ROOT / "gto-trainer" / "apps" / "api"
-WR = ROOT / "ignition-study-wrapper"
-VPY = ROOT / "aof-model" / ".venv" / "Scripts" / "python.exe"
 PUBLISH = "--publish" in sys.argv
 QUICK = "--quick" in sys.argv or PUBLISH
 results = []
@@ -85,23 +85,11 @@ try:
 except Exception as e:
     rec("api typecheck (tsc)", False, str(e))
 
-# 3. wrapper fast tiers (the ones run_all runs, minus parity/spot/answers which are slow or API-side)
-FAST = [("line fuzz", ["tests/fuzz_reconcile.py", "600"]), ("tap isolation", ["tests/test_tap_isolation.py"]),
-        ("top-up windows", ["tests/test_topup_window.py"]), ("frame resolver", ["tests/test_frame_resolver.py"]),
-        ("table presence", ["tests/test_presence.py"]), ("table claims", ["tests/test_tables.py"]),
-        ("seating", ["tests/test_seating.py"]), ("session tables", ["tests/test_session_tables.py"])]
-for name, args in FAST:
-    try:
-        code, out = run([VPY, "-u", *args], WR, 300)
-        rec(f"wrapper {name}", code == 0, out.strip().splitlines()[-1][:90] if out.strip() else "")
-    except Exception as e:
-        rec(f"wrapper {name}", False, str(e))
-
-# 3b. the TypeScript wrapper (gto-trainer/apps/wrapper, what the shortcut runs since 2026-09-24): its unit ports +
-#     the goldens recorded from the Python wrapper (reader / pure / CDP trace / CoinPoker), its typecheck, and the
-#     HTTP contract replayed against a headless instance on its own ports (7791 / 9391) — never :7700 / :7701.
-#     Baselines: bun test 0 fail (2 skips: the opt-in rig test, a recording that is not on disk); contract
-#     287/287 and the transcript identical to the Python recording.
+# 3. the wrapper (gto-trainer/apps/wrapper — TypeScript only since 2026-09-24): its unit tests + the goldens
+#    (reader / pure / CDP trace / CoinPoker, first recorded from the Python wrapper), its typecheck, and the HTTP
+#    contract replayed against a headless instance on its own ports (7791 / 9391) — never :7700 / :7701.
+#    Baselines: bun test 0 fail (2 skips: the opt-in rig test, a recording that is not on disk); contract
+#    287/287 and the transcript identical to the recording.
 TSW = ROOT / "gto-trainer" / "apps" / "wrapper"
 try:
     code, out = run([BUN, "test"], TSW, 900)
@@ -127,40 +115,20 @@ except Exception as e:
     rec("wrapper TS contract (vs Python)", False, str(e))
 
 
-def rig_visible():
-    try:
-        import websocket
-        t = json.load(urllib.request.urlopen("http://127.0.0.1:9334/json", timeout=5))[0]
-        c = websocket.create_connection(t["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
-        c.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": "document.visibilityState", "returnByValue": True}}))
-        while True:
-            m = json.loads(c.recv())
-            if m.get("id") == 1:
-                return m["result"]["result"]["value"] == "visible"
-    except Exception:
-        return None
-
-
 if not QUICK:
-    # THE RIG'S TABLE MUST BE ON SCREEN: the relay refuses to press a page Chrome is not rendering, so a covered
-    # rig window looks like 40 regressions. Minimize the LIVE wrapper's windows (never the rig's) and re-front it.
-    if rig_visible() is False:
-        subprocess.run(["powershell", "-NoProfile", "-Command",
-            "Add-Type 'using System; using System.Runtime.InteropServices; public class WM { [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c); }';"
-            "Get-Process brave -EA 0 | ? { $_.MainWindowTitle -like 'Poker Wrapper*' -and $_.MainWindowTitle -notlike 'Poker Wrapper Tool*' } | % { [void][WM]::ShowWindow($_.MainWindowHandle, 6) }"],
-            capture_output=True, timeout=30)
-        try: get("http://127.0.0.1:7701/layout", data={}, timeout=30)
-        except Exception: pass
-        time.sleep(3)
-        print(f"      (rig table was covered — live wrapper windows minimized; now visible: {rig_visible()})")
+    # the end-to-end rig: pick -> relay -> the fake table's own click record, on a headless rig of its OWN
+    # (panel :7792, CDP :9392, its own profile) — it never touches :7700 or Brady's :7701 rig, and no window opens
     try:
-        code, out = run([VPY, "-u", "tests/run_state_suite.py"], WR, 900)
-        st = re.search(r"(\d+)/(\d+) fixtures passed \((\d+)/(\d+) assertions\)", out)
-        failing = re.search(r"failing fixtures: (.*)", out)
-        ok = bool(st) and (failing is None or failing.group(1).strip() == "multitable-ws-2026-09-21")
-        rec("wrapper state suite (rig :7701)", ok, f"{st.group(1)}/{st.group(2)} fixtures, {st.group(3)}/{st.group(4)} assertions; failing: {failing.group(1) if failing else 'none'}" if st else out[-200:])
+        os.environ["WRAPPER_RIG_TEST"] = "1"          # the rig test is opt-in (it launches a headless browser)
+        try:
+            code, out = run([BUN, "test", "test/unit/pick-relay-rig.test.ts"], TSW, 300)
+        finally:
+            os.environ.pop("WRAPPER_RIG_TEST", None)
+        m = re.search(r"(\d+) pass\s+(?:(\d+) skip\s+)?(\d+) fail", out)
+        rec("wrapper rig (pick -> relay)", code == 0 and bool(m) and m.group(3) == "0" and m.group(1) == "1",
+            f"{m.group(1)} pass / {m.group(3)} fail" if m else out[-200:])
     except Exception as e:
-        rec("wrapper state suite (rig :7701)", False, str(e))
+        rec("wrapper rig (pick -> relay)", False, str(e))
 
 # 4. live smoke
 if not PUBLISH:

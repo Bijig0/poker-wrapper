@@ -34,8 +34,8 @@ async function serverAlive(): Promise<boolean> {
   }
 }
 
-/** Live processes running THIS wrapper (or the Python one it replaces) on THIS panel port, excluding us and our
- *  ancestors (a launcher's parent is never a sibling). */
+/** Live processes running THIS wrapper on THIS panel port, excluding us and our ancestors (a launcher's parent is
+ *  never a sibling). Anything else holding the port — an old build of any kind — is caught by portOwner(). */
 function siblingPids(): number[] {
   const me = process.pid;
   let procs: W.Proc[];
@@ -46,13 +46,10 @@ function siblingPids(): number[] {
   }
   const anc = new Set(W.ancestors(me, procs));
   const mainTs = resolve(import.meta.dir, "main.ts").toLowerCase();
-  const pyScripts = [join(C.ROOT, "run-study.pyw"), join(C.ROOT, "launch.py")].map((p) => resolve(p).toLowerCase());
   const out: number[] = [];
   for (const p of procs) {
     if (p.pid === me || anc.has(p.pid)) continue;
-    const name = (p.name || "").toLowerCase();
-    const isPy = name.startsWith("python"), isBun = name.startsWith("bun");
-    if (!isPy && !isBun) continue;
+    if (!(p.name || "").toLowerCase().startsWith("bun")) continue;
     const cmd = W.processCmdline(p.pid) || [];
     const hit = cmd.some((a) => {
       let full: string;
@@ -61,7 +58,7 @@ function siblingPids(): number[] {
       } catch {
         return false;
       }
-      return isBun ? full === mainTs : pyScripts.includes(full);
+      return full === mainTs;
     });
     if (!hit || portOf(cmd) !== C.PANEL_PORT) continue;
     out.push(p.pid);

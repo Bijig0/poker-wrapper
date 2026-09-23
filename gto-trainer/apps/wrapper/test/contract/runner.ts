@@ -1,20 +1,24 @@
 /**
- * THE HTTP CONTRACT SUITE — one suite, either implementation (2026-09-24).
+ * THE HTTP CONTRACT SUITE (2026-09-24).
  *
- *   bun run test/contract/runner.ts --impl python [--record]     the Python wrapper (the specification)
- *   bun run test/contract/runner.ts --impl ts                    the TypeScript port, compared to the recording
+ *   bun run test/contract/runner.ts [--impl ts]           the wrapper, compared to the recorded transcript
+ *   bun run test/contract/runner.ts --record              re-record the transcript (a deliberate change; review the diff)
+ *
+ * golden-python.json was recorded from the Python wrapper — the specification the TypeScript port was held to —
+ * before it was deleted (2026-09-24, the wrapper is TypeScript only). It stays the baseline; `--record` now writes
+ * it from the TS wrapper.
  *
  * Starts a wrapper of its OWN — panel :7791, table CDP :9391, FAKE_TABLE=1, a headless browser on its own
  * profile (WRAPPER_HEADLESS=1, PROFILE_SUFFIX=-contract) — so nothing it does can reach :7700 (a live session)
  * or the :7701 test rig, and no window ever appears. Then it drives it exactly the way the panel pages, the
- * study API's poller and tests/run_state_suite.py do: authored spots loaded onto the fake table, /hand read
+ * study API's poller and the old Python state suite did: authored spots loaded onto the fake table, /hand read
  * back field by field, presses relayed and checked against the page's own click record, a study pick pushed
  * and executed (by a press and by auto-execute, on the fake table), and every read-only route called once.
  *
  * Two layers of checking:
- *  - ASSERTIONS (the run_state_suite expectations, per fixture) — must pass on both implementations;
- *  - a TRANSCRIPT of normalised responses: `--record` writes it from the Python run, a TS run is compared to it
- *    step by step (volatile fields — times, counters, versions — are dropped by `normalise`).
+ *  - ASSERTIONS (the old state suite's expectations, per fixture, from tests/fixtures);
+ *  - a TRANSCRIPT of normalised responses compared to golden-python.json step by step (volatile fields — times,
+ *    counters, versions — are dropped by `normalise`).
  */
 import { spawn, type Subprocess } from "bun";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -30,7 +34,11 @@ const CDP = Number(process.env.CONTRACT_CDP_PORT || 9391);
 const BASE = `http://127.0.0.1:${PANEL}`;
 
 const argv = process.argv.slice(2);
-const impl = (argv[argv.indexOf("--impl") + 1] || "python") as "python" | "ts";
+const impl = "ts";
+if (argv.includes("--impl") && argv[argv.indexOf("--impl") + 1] !== "ts") {
+  console.error("only --impl ts: the Python wrapper was deleted on 2026-09-24");
+  process.exit(2);
+}
 const RECORD = argv.includes("--record");
 const KEEP = argv.includes("--keep");
 const ONLY = argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null;
@@ -41,7 +49,8 @@ const failures: string[] = [];
 let assertions = 0;
 
 // every /state and /hand reply is also parsed by the zod reply schemas the study API validates with
-// (src/contract.ts) — on BOTH implementations, so the shared schema is proven against the Python wrapper too
+// (src/contract.ts) — the shared schema is proven against the wrapper on every run (it was checked against the
+// Python wrapper too, 43/43, before that was deleted)
 let schemaReplies = 0;
 function schemaCheck(path: string, json: any) {
   const route = path.split("?")[0];
@@ -149,16 +158,13 @@ function launch() {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     WRAPPER_HEADLESS: "1", PROFILE_SUFFIX: "-contract", FAKE_TABLE: "1",
-    PANEL_PORT: String(PANEL), CDP_PORT: String(CDP), PYTHONIOENCODING: "utf-8",
+    PANEL_PORT: String(PANEL), CDP_PORT: String(CDP),
   };
   delete env.TABLE_SLOT;
   delete env.TABLE_COUNT;
   delete env.PANEL_TAG;
-  const cmd = impl === "python"
-    ? [join(REPO, "aof-model", ".venv", "Scripts", "python.exe"), "-u", join(WRAPPER, "run-study.pyw"),
-       "--panel-port", String(PANEL), "--cdp-port", String(CDP), "--fake"]
-    : [process.execPath, "run", join(REPO, "gto-trainer", "apps", "wrapper", "src", "main.ts"),
-       "--panel-port", String(PANEL), "--cdp-port", String(CDP), "--fake"];
+  const cmd = [process.execPath, "run", join(REPO, "gto-trainer", "apps", "wrapper", "src", "main.ts"),
+               "--panel-port", String(PANEL), "--cdp-port", String(CDP), "--fake"];
   proc = spawn({ cmd, env, cwd: WRAPPER, stdout: "pipe", stderr: "pipe" });
   const log = join(import.meta.dir, `contract-${impl}.log`);
   writeFileSync(log, "");

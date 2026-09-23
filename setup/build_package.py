@@ -79,8 +79,7 @@ def solve_closure() -> list[str]:
 
 
 CODE_TREES = [
-    "ignition-study-wrapper",                     # the wrapper's pages + launchers (sites/, html, formats.json), and the
-                                                  # Python wrapper kept as the fallback
+    "ignition-study-wrapper",                     # what the wrapper serves + its launchers (html, formats.json, assets)
     "gto-trainer/apps/wrapper",                   # the wrapper itself (TypeScript; run-wrapper.vbs starts it)
     "gto-trainer/apps/api",                       # study API + dashboard
     "gto-trainer/package.json", "gto-trainer/bun.lock", "gto-trainer/tsconfig.base.json", "gto-trainer/turbo.json",

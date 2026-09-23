@@ -197,18 +197,28 @@ else {
 
 # ---------------------------------------------------------------- 8. shortcut
 Step 8 'Desktop shortcut'
-if ($SkipShortcut) { Todo 'skipped' }
-else {
+$lnkPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Wrapper.lnk'
+function Write-WrapperShortcut {
   $sh = New-Object -ComObject WScript.Shell
-  $lnk = $sh.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Wrapper.lnk'))
-  # the TypeScript wrapper, started hidden by run-wrapper.vbs (log -> ignition-study-wrapper\server.log). The Python
-  # wrapper stays as the fallback: ignition-study-wrapper\launch.cmd (or pythonw run-study.pyw).
+  $lnk = $sh.CreateShortcut($lnkPath)
+  # the wrapper (TypeScript, gto-trainer\apps\wrapper), started hidden by run-wrapper.vbs (log ->
+  # ignition-study-wrapper\server.log); ignition-study-wrapper\wrapper.cmd runs it with a console.
   $lnk.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
   $lnk.Arguments = "`"$(Join-Path $root 'ignition-study-wrapper\run-wrapper.vbs')`""
   $lnk.WorkingDirectory = Join-Path $root 'ignition-study-wrapper'
   $ico = Join-Path $root 'ignition-study-wrapper\ignition-study.ico'
   if (Test-Path $ico) { $lnk.IconLocation = "$ico,0" }
   $lnk.Save()
+}
+if ($SkipShortcut) {
+  # an update skips the shortcut — but one made before 2026-09-24 points at the Python wrapper (pythonw
+  # run-study.pyw), which is gone, and would open nothing: repoint that one, leave any other alone
+  $stale = $false
+  if (Test-Path $lnkPath) { $stale = ((New-Object -ComObject WScript.Shell).CreateShortcut($lnkPath).Arguments -match 'run-study\.pyw') }
+  if ($stale) { Write-WrapperShortcut; Ok '"Poker Wrapper" shortcut repointed at the new wrapper' } else { Todo 'skipped' }
+}
+else {
+  Write-WrapperShortcut
   Ok '"Poker Wrapper" is on the desktop'
 }
 

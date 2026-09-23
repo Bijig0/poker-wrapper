@@ -46,10 +46,19 @@ files (ignition-study-wrapper/data, debug, *.html pages are served from there �
       bun) -> bun run src/main.ts. setup.ps1 shortcut, update.ps1 Start-Wrapper + kill regex, study-tool.pyw
       (rig), run-tables.pyw, build_package CODE_TREES, regress.py (3 TS tiers). WRAPPER_IMPL=python makes the
       rig / run-tables start the Python one; launch.cmd / run-study.pyw start it directly. Either implementation
-      takes over from the other on the same panel port.
-- [ ] Live session on the TS wrapper (Brady) — then retire the Python wrapper's launch paths.
+      takes over from the other on the same panel port. (Python fallback removed with the Python wrapper.)
+- [x] Live session on the TS wrapper (Brady, 2026-09-24, CoinPoker HU) — found the Pot-button bug (both
+      implementations; fixed in TS only, 0a57a58b).
+- [x] Python wrapper DELETED 2026-09-24 (Brady: "we are going pure TS"): launch.py + modules + sites/*.py, the
+      launchers (launch.cmd, run-study.pyw, run-tables.pyw, drive.py), the 22 Python unit tests, the golden
+      recorders and the Python-only replay tools. Ported first, each verified against the Python before it went:
+      replayWsDecisions.ts (718/718 records identical), runTables.ts, and the hand fuzzer (test/fuzz: CPython's
+      Mersenne Twister in pyRandom.ts, so seed i deals the same hand — 1,200 hands identical field by field).
+      Kept (not the wrapper — HTTP clients of the rig / analysis over its data): tests/rig.py, spot_audit.py,
+      answer_suite.py, backtest/verdicts.py, backfill_results.py, parity_report.py. The goldens stay (corpus under
+      ignition-study-wrapper/tests/golden/corpus) and are TS-owned: re-baseline with GOLDEN_UPDATE=1.
 - Deliberate deviations: real-money auto-execute allowance NOT ported (practice/fake only). Fixed in both:
   table slots are spawned with --panel-port/--cdp-port in argv (a slot without them read as :7700 to the
   takeover scan, so relaunching table 1 would end table 2). TS only: unhandled rejections are logged, not fatal
   (a Python thread's exception never took the server down either).
-- Not ported: the "[slow] request" log line from Python's _send.
+- The "[slow] request" log line (Python's _send) is ported: a Hono middleware in server.ts.

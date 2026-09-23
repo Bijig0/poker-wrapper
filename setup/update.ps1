@@ -26,15 +26,10 @@ function Finish([int]$code) {
   exit $code
 }
 function Start-Wrapper {
-  # the TypeScript wrapper, hidden (what the desktop shortcut runs); a release without it reopens the Python one
+  # the wrapper, hidden — what the desktop shortcut runs
   $vbs = Join-Path $root 'ignition-study-wrapper\run-wrapper.vbs'
-  $pyw = Join-Path $root 'aof-model\.venv\Scripts\pythonw.exe'
-  $run = Join-Path $root 'ignition-study-wrapper\run-study.pyw'
   if (Test-Path $vbs) {
     Start-Process -FilePath (Join-Path $env:WINDIR 'System32\wscript.exe') -ArgumentList "`"$vbs`" $WrapperArgs" -WorkingDirectory (Split-Path $vbs)
-    Say 'reopened the Poker Wrapper' Green
-  } elseif ((Test-Path $pyw) -and (Test-Path $run)) {
-    Start-Process -FilePath $pyw -ArgumentList "`"$run`" $WrapperArgs" -WorkingDirectory (Split-Path $run)
     Say 'reopened the Poker Wrapper' Green
   }
 }

@@ -65,7 +65,7 @@ across tables is "acted on the wrong table's state".
 | | |
 |---|---|
 | slot | `TABLE_SLOT` 1-4 in the environment; unset = the single-table setup, which takes none of these paths |
-| panel | `PANEL_PORT` 7700 / 7710 / 7720 / 7730 (`run-tables.pyw`) |
+| panel | `PANEL_PORT` 7700 / 7710 / 7720 / 7730 (`apps/wrapper/src/tools/runTables.ts`) |
 | browser | ONE `--user-data-dir` ⇒ one Chrome process, one login, ONE `CDP_PORT` shared by every slot |
 | window | one app window per slot, CLAIMED by Chrome targetId (`tables.py`, `data/tables/<slot>.json`) |
 
@@ -167,7 +167,7 @@ as it always did — one table, no slot, none of the claim/lock/tiling code — 
 `tables.adopt(n)` makes it table 1 of N at Start, because `slot()` reads the
 environment on every call. Ending the session closes the extra tables and adopts
 1 again, so the next session chooses its own count instead of inheriting one.
-`run-tables.pyw N` still works and brings N up front, which is what the test rig
+`runTables.ts N` (gto-trainer/apps/wrapper/src/tools) still works and brings N up front, which is what the test rig
 wants; the setup page is the way you do it for real.
 
 `/layout/preview` tells the setup page what each count would give BEFORE you

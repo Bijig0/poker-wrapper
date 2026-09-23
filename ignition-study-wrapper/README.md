@@ -1,13 +1,14 @@
 # Poker Wrapper (was "Ignition Study")
 
-**Now TypeScript (2026-09-24).** The wrapper that runs is `gto-trainer/apps/wrapper` (Bun + Hono + zod) — a
-port of the Python in this folder, held to it by goldens recorded from the Python modules, the HTTP contract
-suite (identical transcript) and the unit tests ported one to one (`apps/wrapper/PORT-PLAN.md`). The desktop
-shortcut runs `run-wrapper.vbs` (hidden, log → `server.log`); `wrapper.cmd` is the same with a console. This
-folder still holds the pages, launchers and data, and the Python wrapper stays as the fallback until a live
-session has run on the TS one: `launch.cmd` / `run-study.pyw` start it, and `WRAPPER_IMPL=python` makes
-`study-tool.pyw` and `run-tables.pyw` start it. Either implementation takes over from the other on the same
-panel port. The Python below describes the behaviour both implement.
+**TypeScript only (2026-09-24).** The wrapper is `gto-trainer/apps/wrapper` (Bun + Hono + zod). It was ported
+from the Python that used to live here, held to it by goldens recorded from the Python modules, the HTTP contract
+suite (identical transcript) and the unit tests ported one to one (`apps/wrapper/PORT-PLAN.md`); the Python
+wrapper was then deleted. This folder holds what the wrapper serves and keeps — the pages, `formats.json`, the
+card assets, `data/` (hands.db, sessions), `debug/` (recordings), the launchers and the test fixtures/corpus.
+The desktop shortcut runs `run-wrapper.vbs` (hidden, log → `server.log`); `wrapper.cmd` is the same with a
+console. Where the notes below name a Python module (`launch.py`, `tables.py`, `sites/cp_feed.py` …), the code is
+now its TypeScript counterpart in `apps/wrapper/src` (`ignition/*.ts`, `relay.ts`, `topup.ts`, `session.ts`,
+`tables.ts`, `sites/cpFeed.ts` …) under the same names, camelCased.
 
 **One wrapper, two sites (2026-09-22).** The session setup page starts with a
 **Site** step: **Ignition** (everything below: the web client in our own browser,
@@ -34,13 +35,14 @@ Ignition web client and the study panel side by side:
 │   --remote-debugging-port)  │  mirror, DOM  │
 │                             │  probe        │
 └─────────────────────────────┴───────────────┘
-        └── CDP :9333 ──► launch.py panel server (:7700)
+        └── CDP :9333 ──► the wrapper's panel server (:7700)
 ```
 
 ## Run
 
 ```
-launch.cmd
+run-wrapper.vbs        (the desktop shortcut — hidden, log -> server.log)
+wrapper.cmd            (the same, with a console)
 ```
 
 Log into Ignition in the left window (the dedicated `.profile-table` Chrome
@@ -96,12 +98,10 @@ rolled study pick to the table through the SAME relay the action buttons use
 target instead of reading the mix and choosing among three or four buttons.
 
 `auto-execute` (the checkbox under the pick, `POST /study-auto`) fires the
-pick without a press. It arms freely on a practice-money table (`playMode=fun`)
-or the fake table. A REAL-MONEY table needs an explicit, expiring allowance
-(`allowRealMoney` + a minute AND hand budget, clamped to 120 min / 500 hands);
-it disarms itself the moment either budget runs out, and the panel row turns red
-and counts it down. Granted 2026-09-14 only because the practice tables never
-had enough players to deal a hand. Either can be **declared up front** on the
+pick without a press. It arms ONLY on a practice-money table (`playMode=fun`)
+or the fake table — never on real money. (The Python wrapper had an expiring
+real-money allowance, granted 2026-09-14; it was deliberately not ported, so
+`allowRealMoney` is refused and no allowance is ever granted.) Auto-execute can be **declared up front** on the
 setup page (Settings → Auto-execute picks) — the declaration decides the state
 the panel opens in, and the panel's toggle always wins. It is per session and
 never inherited. Both paths run the same guards (`/state.pickReady`): answers on, a
@@ -111,15 +111,15 @@ must not land on it. One execution per decision; a sized raise is typed into
 the client's bet field and read back, and a clamped value is refused rather
 than pressed. CONTRACT.md §2a has the shapes.
 
-Tests: `tests/test_pick_relay.py` (offline: label mapping, every guard, the
-executor, the auto gate) and `tests/test_pick_relay_rig.py` (on the test rig:
+Tests: `apps/wrapper/test/unit/pick-relay.test.ts` (offline: label mapping, every guard, the
+executor, the auto gate) and `pick-relay-rig.test.ts` (on a headless rig of its own:
 the right control fires on the fake table, the typed size reaches the bet
 field, clamps and stale/wrong-hand picks are refused, auto fires once).
 
 ## Game-state tester (`/faketable`)
 
 Author any Ignition state and run the study tools against it locally — no
-client, no network, no real table. `faketable.py` renders a spec as BOTH the
+client, no network, no real table. `faketable.ts` renders a spec as BOTH the
 client's structural DOM contract (the data-qa hooks the reader consumes) and a
 faithful visual replica (measured geometry from types.ts, the real card art
 and harvested client SVGs), in the same document — so what the reader parses
@@ -131,7 +131,7 @@ and what you eyeball are the same table by construction.
 - `POST /faketable/stop` — back to live reading.
 - `GET /faketable/lastclick` — what the relay actually pressed (the page
   records every button hit).
-- Fixture suite: `tests/run_state_suite.py` over `tests/fixtures/*.json` —
+- Fixture suite: the contract suite (`apps/wrapper/test/contract/runner.ts`) over `tests/fixtures/*.json` —
   each fixture asserts the /hand export field by field, that each expected
   action fires the right control, and that unoffered actions are refused.
 - Authoring UI: the dashboard's State Tester page (:2100/state-tester).
@@ -200,7 +200,7 @@ hero's):
   his stack behind is already final, so nothing has to settle; `hand-over` — the client's
   end marker plus a settled stack. The fold window is the one worth having: over 122
   recorded folds the median lead to the next deal is **40.8 s**, and only 5 are under 3 s.
-  `tests/replay_topup.py` scores the rule over every recording — short hands with a window
+  The (since deleted) Python `replay_topup.py` scored the rule over every recording — short hands with a window
   to press in go **51/63 (81%) → 63/63 (100%)**. The scheduler and the per-press gate call
   the same function, so a window that starts a run cannot be one the next press disputes.
 - **The panel is NOT pre-staged during the hand.** Opening it early would buy back only
@@ -248,8 +248,8 @@ table window is not rendering"*, wake the screen.
 
 ## Several tables (1-4)
 
-    aof-model/.venv/Scripts/pythonw.exe run-tables.pyw 4        # four tables
-    aof-model/.venv/Scripts/pythonw.exe run-tables.pyw --stop
+    bun run gto-trainer/apps/wrapper/src/tools/runTables.ts 4        # four tables
+    bun run gto-trainer/apps/wrapper/src/tools/runTables.ts --stop
 
 Four wrapper processes on panel ports 7700/7710/7720/7730, sharing ONE Chrome
 profile — one process, one login, one CDP port, four app windows. Each wrapper
@@ -258,60 +258,57 @@ shared profile if it cannot claim one, so starting N wrappers IS the setup: no
 orchestrator hands out windows, and a wrapper restarted on its own takes its
 window back. The API keeps one study poller per wrapper, each registering itself.
 
-`run-tables.pyw 1` is the single-table setup and takes none of the multi-table
+`runTables.ts 1` is the single-table setup and takes none of the multi-table
 paths: no slot, no claim, no lock, no file touched. Every table needs its own
 seat — open its panel and use the session setup as usual. CONTRACT §1a2 has the
-rules; `tests/test_tables.py` has them as assertions.
+rules; `apps/wrapper/test/unit/tables.test.ts` has them as assertions.
 
-Regression replays over every debug recording (run them after touching the
-reader): `tests/replay_status.py` (status rule + turn cross-checks; the
-buttons column must stay 0), `tests/replay_cutover.py` (which line `/hand`
-would carry; `BAD` must stay 0), `tests/replay_decisions.py` (every hero
-decision through the live gates: how many would be HELD from auto-execute, and
-why), `tests/replay_reconcile.py` (the reconciler against the archive). The
-fake-table fixtures `btn-rfi-villain-sitting-out` and
-`preflop-hero-3bet-field-reset` pin the hand-398 and hand-4919212912 cases in
-the state suite.
+Regression replays over every debug recording: the reader golden (`apps/wrapper/test/golden/reader.test.ts`)
+replays every recorded session — DOM ticks and WebSocket frames — through the reader and compares the export,
+the live status and the archive after every event with what the Python reader produced when the corpus was
+recorded. `src/tools/replayWsDecisions.ts` snapshots what the poller had at every hero decision (the hardening
+verdict table, `tests/backtest/verdicts.py`, reads its output). The fake-table fixtures
+`btn-rfi-villain-sitting-out` and `preflop-hero-3bet-field-reset` pin the hand-398 and hand-4919212912 cases in
+the contract suite.
 
 ## The hand fuzzer
 
-    aof-model/.venv/Scripts/python.exe tests/fuzz_reconcile.py 3000
+    bun run gto-trainer/apps/wrapper/test/fuzz/fuzzReconcile.ts 3000
 
 The fake TABLE renders one frozen spot — right for the DOM reader and the relay, no help
 at all for the reader's DERIVATION, which consumes a tick STREAM and is where every bug
-of 2026-09-19 lived. `tests/fake_hand.py` renders a scripted hand as ticks WITH the
+of 2026-09-19 lived. `test/fuzz/fakeHand.ts` renders a scripted hand as ticks WITH the
 client's real artefacts (a bet slot showing the chips added before the total; a FOLD
 badge a tick behind the cards; a fold on the last tick before the deal; the pot label
 lingering; chips swept after the board grows; cards blipping), and the fuzzer asserts the
-line the reader derives equals the line that was played. It is tier 0 of `run_all.py`
-because it needs nothing and a reader that cannot reconstruct a hand fails every tier
-after it.
+line the reader derives equals the line that was played. It runs in `bun test` (600 hands
+per artefact combination), seed for seed the hands the Python fuzzer dealt.
 
 Every artefact carries the hand that proved the client does it. **Do not add one without
 a recording** — an invented artefact tests fiction, and a generator that deals out of ring
 order or stops a betting round early blames the reader for its own mistakes (that was 45%
 of the first run).
 
-## Test tiers (`tests/run_all.py`)
+## Test tiers
 
-Four tiers, cheapest and most local first, so the FIRST failure is the cause.
-A tier whose dependency is absent skips rather than fails.
+Cheapest and most local first, so the FIRST failure is the cause.
 
 | tier | asks | needs |
 |---|---|---|
-| `run_state_suite.py` | does an authored state export the right ParsedHand, and does the relay fire the right control | fake table |
-| `reader_parity.py` | does the fake table lose anything the reader reads, replaying recorded REAL states | fake table + a recording |
-| `spot_audit.py` | did the study tool solve the RIGHT spot (feed-spot's divergence audit) | + API on :2000 |
-| `answer_suite.py` | did an answer actually arrive | + GTO Wizard signed in |
+| `apps/wrapper: bun test` | unit tests, the hand fuzzer, and the goldens (reader / pure / browser trace / CoinPoker) | nothing |
+| `apps/wrapper: test/contract/runner.ts` | does an authored state export the right ParsedHand, and does the relay fire the right control — every fixture in `tests/fixtures`, on a headless wrapper of its own (:7791) | a browser |
+| `WRAPPER_RIG_TEST=1 bun test test/unit/pick-relay-rig.test.ts` | pick → relay end to end on a headless rig of its own (:7792) | a browser |
+| `tests/spot_audit.py` | did the study tool solve the RIGHT spot (feed-spot's divergence audit) | the rig on :7701 + API on :2000 |
+| `tests/answer_suite.py` | did an answer actually arrive | + GTO Wizard signed in |
+
+`setup/regress.py` runs the first three (and the API's own). The last two are Python HTTP clients of the rig
+(`tests/rig.py`), not part of the wrapper.
 
 Two things the tiers deliberately do NOT assert. The answer's **pick**:
 `rollAction` samples the mixed strategy with `Math.random()` per decision, so
 pinning it builds a test that fails for the correct reason. And **money as a
 string**: the client renders some readings without the BB suffix, so amounts
 compare numerically.
-
-`reader_parity` samples 120 of the corpus's ~1000 projectable states by
-default (the full sweep is ~50 minutes); `--all` runs every one.
 
 Known chart-coverage limits are declared per fixture under `expect.spot.known`.
 They print on every run so they stay visible, never fail the suite, and DO fail
@@ -328,6 +325,5 @@ spot to stand on.
 3. Study Answers: gto-trainer (`localhost:2000`) verdicts in the panel —
    practice tables only, per the assistive-play bright line
 
-Reuses `aof-model/scout/cdp.py` (Windows-validated) for all CDP access.
 Env overrides: `IGNITION_URL`, `CDP_PORT`, `PANEL_PORT`, `CHROME_EXE`,
 `TABLE_FRAC`.

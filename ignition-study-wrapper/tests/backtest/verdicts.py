@@ -6,7 +6,7 @@ One row per hero decision in the archive, four columns of truth side by side:
 
   CAPTURE   what the export carried at the decision — the archived line (complete) beside the WS-only
             snapshot the raw frames give at the moment the client asked hero to act
-            (tests/replay_ws_decisions.py -> tests/backtest/ws_decisions.jsonl), and the capture faults
+            (gto-trainer/apps/wrapper/src/tools/replayWsDecisions.ts -> tests/backtest/ws_decisions.jsonl), and the capture faults
             the API's captureFaults names on the archived line.
   ANSWER    what the table got THEN (every answers.sqlite row for that decision) and what the CURRENT
             solve path returns NOW (gto-trainer/apps/api/src/scripts/hardeningBacktest.ts ->
