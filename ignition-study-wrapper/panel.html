@@ -272,6 +272,7 @@
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
       <button id="cp-sitout" class="mini" title="tick / untick Sit Out Next Hand on the table">Sit out next hand</button>
       <button id="cp-sitout-all" class="mini" title="tick / untick Sit Out All (every CoinPoker table)">Sit out all</button>
+      <button id="cp-snap" class="mini" title="move this panel beside the CoinPoker table (the table is never moved)">Panel beside table</button>
       <span id="cp-msg" class="sub"></span>
     </div>
   </div>
@@ -990,6 +991,14 @@
   }
   $("cp-sitout").onclick = (e) => { e.currentTarget.blur(); cpSitout(false); };
   $("cp-sitout-all").onclick = (e) => { e.currentTarget.blur(); cpSitout(true); };
+  // the panel follows the table (the table is never moved): after you move or resize the table, press again
+  $("cp-snap").onclick = async (e) => {
+    e.currentTarget.blur();
+    $("cp-msg").textContent = "moving…";
+    let r;
+    try { r = await (await fetch("/layout", { method: "POST" })).json(); } catch (err) { r = { ok: false, why: String(err) }; }
+    $("cp-msg").textContent = r.ok && r.side ? `beside the table (${r.side})${r.note ? " — " + r.note : ""}` : `not moved: ${r.why || "no table"}`;
+  };
 
   (async function pollSa() {
     if (!active("game")) { setTimeout(pollSa, 2000); return; }

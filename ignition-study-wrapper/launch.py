@@ -508,6 +508,79 @@ def place_client_window() -> dict | None:
     return got
 
 
+_cp_snap = {"room": None}      # the CoinPoker table the panel last went beside (auto-snap: once per table)
+
+
+def _snap_panel_to_cp_table() -> dict:
+    """COINPOKER: put the PANEL beside the table — the table itself is never moved (2026-09-23).
+
+    You place and size the table; the reader does not care where it is (the log is the reader), and a press
+    computes its buttons from wherever the table is at that moment. So the panel follows the table: same
+    monitor, the side with room (right first), the table's height, the strip width the Ignition layout uses
+    (or the panel's own width if you have set one that fits). A table on another virtual desktop cannot be
+    reached — Windows lets no program move another's window between desktops — so that is said, not done."""
+    from sites import cp_actions as CPA
+    u = ctypes.windll.user32
+    t = CP.table()
+    if not t:
+        return {"ok": False, "why": "no CoinPoker table open yet — sit down in the client"}
+    h = CPA.table_window(t["room"])
+    if not h:
+        return {"ok": False, "why": "the table's window was not found"}
+    if CPA.cloaked(h):
+        return {"ok": False, "why": CPA.OTHER_DESKTOP}
+    if u.IsIconic(h):
+        return {"ok": False, "why": "the table is minimised — restore it, then press again"}
+    panel = _wrapper_windows()[1]
+    if not panel:
+        return {"ok": False, "why": "the panel window was not found"}
+    r = ctypes.wintypes.RECT()
+    u.GetWindowRect(h, ctypes.byref(r))
+    cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+    mons = monitors()
+    area = next((m for m in mons if m["x"] <= cx < m["x"] + m["w"] and m["y"] <= cy < m["y"] + m["h"]),
+                mons[0] if mons else None)
+    if not area:
+        return {"ok": False, "why": "no monitor found"}
+    p = ctypes.wintypes.RECT()
+    u.GetWindowRect(panel, ctypes.byref(p))
+    cur_w = p.right - p.left
+    strip = area["w"] - int(area["w"] * TABLE_FRAC)
+    want = cur_w if int(area["w"] * 0.18) <= cur_w <= int(area["w"] * 0.45) else strip
+    right = area["x"] + area["w"] - r.right
+    left = r.left - area["x"]
+    floor = int(area["w"] * 0.15)                    # narrower than this the panel is unreadable
+    if right >= want:
+        side, x, w = "right", r.right, want
+    elif left >= want:
+        side, x, w = "left", r.left - want, want
+    elif max(right, left) >= floor:
+        side = "right" if right >= left else "left"
+        w = max(right, left)
+        x = r.right if side == "right" else area["x"]
+    else:
+        return {"ok": False, "why": f"no room beside the table on its screen — make the table narrower or move it "
+                                    f"to one side (the panel needs about {want}px)"}
+    y = max(r.top, area["y"])
+    ht = min(r.bottom, area["y"] + area["h"]) - y
+    if ht < int(area["h"] * 0.5):                    # a short table: the panel still gets the full height
+        y, ht = area["y"], area["h"]
+    if u.IsZoomed(panel) or u.IsIconic(panel):
+        u.ShowWindow(panel, 9)
+    u.MoveWindow(panel, x, y, w, ht, True)
+    _, _, cw, ch = CPA.client_rect(h)
+    ratio = (cw / ch) if ch else 0
+    ref = CPA.REF_W / CPA.REF_H
+    shape_ok = bool(ratio) and abs(ratio / ref - 1) <= 0.04
+    _cp_snap["room"] = t["room"]
+    return {"ok": True, "side": side, "panel": {"x": x, "y": y, "w": w, "h": ht},
+            "table": {"room": t["room"], "client": [cw, ch], "shapeOk": shape_ok},
+            "monitor": area, "monitors": len(mons),
+            **({} if shape_ok else {"note": f"the table is {cw}x{ch}, a different shape from the layout the buttons "
+                                             f"were measured on ({CPA.REF_W}x{CPA.REF_H}) — if a press is refused, "
+                                             f"resize the table closer to that shape"})}
+
+
 def apply_layout() -> dict:
     """Put this wrapper's two windows where they belong.
 
@@ -515,7 +588,24 @@ def apply_layout() -> dict:
     strip beside it — unchanged, and reached by the same code path it always
     was. SEVERAL: the tables tile the target monitor between them (by CDP, since
     they all carry the same window title) and the panels tile the other screen.
-    Geometry and the reasoning for it are in tables.py."""
+    Geometry and the reasoning for it are in tables.py.
+
+    COINPOKER: the panel goes beside the table (_snap_panel_to_cp_table); with no table yet it takes the usual
+    strip. Nothing but the panel is ever moved there."""
+    if _is_cp():
+        snap = _snap_panel_to_cp_table()
+        if snap.get("ok"):
+            return snap
+        area = target_area()
+        panel = _wrapper_windows()[1]
+        if panel and not CP.table():                 # no table yet: the usual strip, until one opens
+            if ctypes.windll.user32.IsZoomed(panel) or ctypes.windll.user32.IsIconic(panel):
+                ctypes.windll.user32.ShowWindow(panel, 9)
+            table_w = int(area["w"] * TABLE_FRAC)
+            ctypes.windll.user32.MoveWindow(panel, area["x"] + table_w, area["y"], area["w"] - table_w, area["h"], True)
+            return {"ok": True, "monitor": area, "monitors": len(monitors()), "moved": {"panel": True},
+                    "why": snap.get("why")}
+        return {**snap, "monitor": area, "monitors": len(monitors())}
     me = TABLES.slot()
     n = TABLES.count()
     area = target_area()
@@ -848,9 +938,15 @@ def state(light: bool = False) -> dict:
         # Ignition browser (and its CDP port) plays no part.
         t = CP.table()
         st = CP.hero_status()
+        # the first time you are seated at a table in a live session, the panel goes beside it (once per table;
+        # the panel's "Panel beside table" button does it again after you move the table)
+        if t and t.get("heroSeated") and _session["rec"] and t["room"] != _cp_snap["room"]:
+            _cp_snap["room"] = t["room"]
+            threading.Thread(target=lambda: _cp_snap.update(last=_snap_panel_to_cp_table(), at=time.time()),
+                             daemon=True).start()
         out.update({"connected": bool(t), "hand": _hand_state() if t else None, "table": t,
                     "practice": bool(t and t.get("practice")),
-                    "coinpoker": {"client": CP.client_state(), "error": CP.error},
+                    "coinpoker": {"client": CP.client_state(), "error": CP.error, "snap": _cp_snap.get("last")},
                     "snapshot": {"status": st, "seats": [{"hero": True, "sittingOut": st == "sitting-out"}]}})
         return out
     if not out["cdp"]:

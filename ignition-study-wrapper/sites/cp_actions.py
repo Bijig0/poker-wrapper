@@ -63,6 +63,44 @@ BUTTON_OF = {"fold": "fold", "check": "call", "call": "call",
 _press_lock = threading.Lock()
 _last_press: dict = {}
 
+# ---- can the table actually be clicked? (2026-09-23) -------------------------------------------------------
+# Reading never needs the window (the log is the reader); PRESSING does. Positions are computed from wherever
+# the table is at press time, so its place on screen does not matter — but two things make a press land on
+# something ELSE: the table on another virtual desktop (Windows cloaks it; bringing it forward may flip desktops
+# or be refused), and anything on top of the point. So before every click: not cloaked, and the table itself is
+# what is under the point. Otherwise the press is refused — never a click into another window.
+# A private user32 so these signatures cannot change how launch.py's calls marshal.
+_u32 = ctypes.WinDLL("user32")
+_u32.WindowFromPoint.argtypes = [W.POINT]
+_u32.WindowFromPoint.restype = ctypes.c_void_p
+_u32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+_u32.GetAncestor.restype = ctypes.c_void_p
+_u32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+_dwm = ctypes.WinDLL("dwmapi")
+
+
+class NotClickable(Exception):
+    """The table cannot take a click right now; nothing was pressed."""
+
+
+def cloaked(h: int) -> bool:
+    """True when DWM hides the window — on this machine that means another virtual desktop."""
+    v = W.DWORD(0)
+    try:
+        _dwm.DwmGetWindowAttribute(ctypes.c_void_p(h), 14, ctypes.byref(v), 4)   # DWMWA_CLOAKED
+    except Exception:
+        return False
+    return v.value != 0
+
+
+OTHER_DESKTOP = ("the table is on another virtual desktop — bring it to this one (Win+Tab, drag it across), "
+                 "or right-click it in Task View → Show this window on all desktops")
+
+
+def _owner_at(x: int, y: int) -> int | None:
+    hit = _u32.WindowFromPoint(W.POINT(x, y))
+    return _u32.GetAncestor(hit, 2) if hit else None       # GA_ROOT
+
 
 # ---- window + capture -------------------------------------------------------
 
@@ -192,7 +230,17 @@ class Focus:
         cx, cy, _, _ = client_rect(self.h)
         sx, sy = _scale(self.h)
         x, y = POS[key]
-        user32.SetCursorPos(cx + int(x * sx), cy + int(y * sy))
+        px, py = cx + int(x * sx), cy + int(y * sy)
+        if cloaked(self.h):
+            raise NotClickable(OTHER_DESKTOP)
+        top = _owner_at(px, py)
+        if top != self.h:
+            if not top:
+                raise NotClickable(f"the table's {key} button is off screen — move the table fully onto a monitor")
+            buf = ctypes.create_unicode_buffer(120)
+            _u32.GetWindowTextW(top, buf, 120)
+            raise NotClickable(f"another window ({buf.value or 'untitled'!r}) is on top of the table's {key} button")
+        user32.SetCursorPos(px, py)
         time.sleep(0.06)
         for f in (0x0002, 0x0004):                     # LEFTDOWN, LEFTUP
             i = _IN(type=0)
@@ -269,6 +317,8 @@ def act(room, get_hand, action: str, amount: float | None = None, *, auto: bool 
         hw = table_window(room.name)
         if not hw:
             return {"ok": False, "why": "table window not found"}
+        if cloaked(hw):
+            return {"ok": False, "why": f"{OTHER_DESKTOP} — not pressed"}
         button = BUTTON_OF[action]
         n0 = len(h["actions"])
         t0 = time.time()
@@ -313,6 +363,8 @@ def act(room, get_hand, action: str, amount: float | None = None, *, auto: bool 
             time.sleep(0.08)
         return {"ok": False, "why": f"pressed {label!r} but the log shows no hero action within {confirm_s}s",
                 "pressed": True}
+    except NotClickable as e:        # refused before the click that would have missed
+        return {"ok": False, "why": f"{e} — not pressed"}
     finally:
         _press_lock.release()
 
@@ -351,5 +403,7 @@ def set_sitout(room, want: bool, which: str = "sitOutNextHand", confirm_s: float
                 return {"ok": True, which: want, "confirmMs": round((time.time() - t) * 1000)}
             time.sleep(0.08)
         return {"ok": False, "why": "clicked, but the server never echoed the new sit-out state", "pressed": True}
+    except NotClickable as e:        # refused before the click that would have missed
+        return {"ok": False, "why": f"{e} — not pressed"}
     finally:
         _press_lock.release()
