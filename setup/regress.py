@@ -57,7 +57,9 @@ def run(cmd, cwd, timeout):
 try:
     code, out = run([BUN, "test"], API, 600)
     m = re.search(r"(\d+) pass\s+(\d+) fail", out)
-    rec("api unit tests (bun test)", bool(m) and m.group(2) == "0", f"{m.group(1)} pass / {m.group(2)} fail" if m else out[-200:])
+    fails = [l.strip()[7:120] for l in out.splitlines() if l.startswith("(fail)")]
+    rec("api unit tests (bun test)", bool(m) and m.group(2) == "0",
+        (f"{m.group(1)} pass / {m.group(2)} fail" + (f": {'; '.join(fails[:3])}" if fails else "")) if m else out[-200:])
 except Exception as e:
     rec("api unit tests (bun test)", False, str(e))
 
