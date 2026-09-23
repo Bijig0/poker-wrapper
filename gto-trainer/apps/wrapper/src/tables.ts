@@ -244,8 +244,11 @@ export const PRESENCE_PATH = "/table/presence";
 export const PRESENCE_TTL_S = 3.0;
 export const PROBE_TIMEOUT_S = 0.8;
 
+/** The port map, LATE-BOUND (a test moves it clear of the live map, as Python's did with TABLES.PANEL_BASE). */
+export const portMap = { base: PANEL_BASE, step: PANEL_STEP };
+
 export function panelPort(slotN: number, base?: number, step?: number): number {
-  return (base ?? PANEL_BASE) + (step ?? PANEL_STEP) * (slotN - 1);
+  return (base ?? portMap.base) + (step ?? portMap.step) * (slotN - 1);
 }
 
 export function leaderPort(base?: number, step?: number): number {
@@ -281,7 +284,12 @@ export async function probe(slotN: number, timeoutS = PROBE_TIMEOUT_S): Promise<
   return { slot: slotN, panelPort: port, pid: d.pid, count: d.count, sid: d.sid, at: time() };
 }
 
-const presence: { at: number; rows: PresenceRow[]; probing: boolean } = { at: 0.0, rows: [], probing: false };
+export const presence: { at: number; rows: PresenceRow[]; probing: boolean } = { at: 0.0, rows: [], probing: false };
+
+/** Forget what the peers last said (a test, or a count change). */
+export function forgetPresence(): void {
+  Object.assign(presence, { at: 0.0, rows: [], probing: false });
+}
 
 function selfRow(now: number): PresenceRow {
   const me = slot()!;

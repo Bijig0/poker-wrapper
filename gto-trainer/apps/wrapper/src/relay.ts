@@ -299,7 +299,7 @@ export function pickReady(): Record<string, any> {
   return out;
 }
 
-async function actuate(plan: Record<string, any>): Promise<Record<string, any>> {
+export async function actuate(plan: Record<string, any>): Promise<Record<string, any>> {
   if (isCp()) return CP.actuate(plan, { auto: S.study.execSource === "auto" });
   if (plan.kind === "raise-to") return raiseTo(plan.amount, true);
   if (plan.label === "all-in") return actuateAllIn();
@@ -307,7 +307,7 @@ async function actuate(plan: Record<string, any>): Promise<Record<string, any>> 
 }
 
 /** A shove, by whichever control the client offers it through (the action ALL-IN, else size + confirm). */
-async function actuateAllIn(): Promise<Record<string, any>> {
+export async function actuateAllIn(): Promise<Record<string, any>> {
   const res = await act("all-in", "action");
   if (res.ok) return res;
   for (const label of ["all-in", "max"]) {
@@ -346,7 +346,7 @@ export function didAsTold(plan: Record<string, any>, a: Record<string, any>, her
 }
 
 /** Is the table still showing the EXACT decision this press was sent for? (the whole safety case for a retry) */
-function spotUnchanged(p: Record<string, any>, h: Record<string, any>): [boolean, string | null] {
+export function spotUnchanged(p: Record<string, any>, h: Record<string, any>): [boolean, string | null] {
   if (!S.liveStatus.toAct) return [false, "hero is no longer on the clock"];
   if (S.liveStatus.modal) return [false, "a client notice is over the action strip"];
   if (h.handId !== p.handId) return [false, "the table moved to the next hand"];
@@ -359,7 +359,7 @@ function spotUnchanged(p: Record<string, any>, h: Record<string, any>): [boolean
   return [true, null];
 }
 
-function verifyDone(outcome: string, why: string | null, observed: Record<string, any> | null = null): void {
+export function verifyDone(outcome: string, why: string | null, observed: Record<string, any> | null = null): void {
   const p = S.study.pendingExec || {};
   S.study.pendingExec = null;
   const rec = S.study.lastExec;
@@ -474,6 +474,9 @@ export function executePick(source: string, waitedS: number | null = null): Prom
   return p;
 }
 
+/** The executor a test replaces (Python's tests stubbed launch._execute_pick). */
+export const relaySeams = { executePick: (source: string, waitedS: number | null = null) => executePick(source, waitedS) };
+
 // ---- auto-execute: practice / fake table only --------------------------------------------------------------
 /** The real-money allowance's state — never granted in this build (see the header); kept for the panel. */
 export function autoAllowance(): Record<string, any> {
@@ -549,7 +552,7 @@ export function maybeAutoArm(): void {
 }
 
 /** An answer on the panel that auto never fired leaves a record, once per decision. */
-function notePickNotFired(r: Record<string, any>): void {
+export function notePickNotFired(r: Record<string, any>): void {
   const st = S.study;
   if (!(st.text && st.pick) || time() - (st.at ?? 0) > PICK_TTL_S) {
     st.autoNotFired = null;
@@ -622,11 +625,11 @@ export async function maybeAutoAct(): Promise<void> {
     if (time() < due.at) return;
     st.autoDue = null;
     st.autoTried = r.key;
-    await executePick("auto", due.wait);
+    await relaySeams.executePick("auto", due.wait);
     return;
   }
   st.autoTried = r.key;
-  await executePick("auto");
+  await relaySeams.executePick("auto");
 }
 
 /** Press the client's +45s time bank whenever it is offered (answers on, the session allows it). */

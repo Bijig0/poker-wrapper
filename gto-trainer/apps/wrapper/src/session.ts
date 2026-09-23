@@ -31,6 +31,13 @@ import { setAuto } from "./relay";
 import { applyLayout, chromeWindow, closeBrowser, killProfileWindows, leaderHwnd, otherArea, panelHwnd, targetArea } from "./windows";
 
 const layout = () => applyLayout(seams.ignitionTarget);
+
+/** The lobby call a test replaces (Python's tests stubbed formats.leave). */
+export const sessionSeams = {
+  leave: (port: number) => F.leave(port),
+  hands: (sid: string) => sessionHands(sid),
+  join: (body: Record<string, any>) => sessionJoin(body),
+};
 const later = (s: number, f: () => unknown) => setTimeout(() => { Promise.resolve().then(f).catch((e) => log(`[bg] ${e?.message ?? e}`)); }, s * 1000);
 
 // ---- the answer chain, kept connected for the session ----------------------------------------------------
@@ -117,7 +124,7 @@ function nextUnclosedSlot(cfg: Record<string, any>): number {
 }
 
 /** A table that went away AFTER we had them all was closed on purpose: honour it. */
-function honourClosedTables(cfg: Record<string, any>, seatedNow: number): number {
+export function honourClosedTables(cfg: Record<string, any>, seatedNow: number): number {
   let want = tablesWanted(cfg);
   const reached = S.seating.reached || 0;
   if (!reached || seatedNow >= reached) return want;
@@ -570,7 +577,7 @@ export async function standDownTable(why: string): Promise<Record<string, any>> 
   S.study.on = false;
   let res: Record<string, any>;
   try {
-    res = (await cdp.available(C.CDP_PORT)) ? await F.leave(C.CDP_PORT) : { ok: true, note: "no table window" };
+    res = (await cdp.available(C.CDP_PORT)) ? await sessionSeams.leave(C.CDP_PORT) : { ok: true, note: "no table window" };
   } catch (e: any) {
     res = { ok: false, error: String(e?.message ?? e) };
   }
@@ -716,7 +723,7 @@ export function sessionLeave(body: Record<string, any> | null): [number, Record<
   if (!sid) return [200, { ok: true, left: null }];
   const want = (body || {}).sid;
   if (want && want !== sid) return [200, { ok: true, left: null, on: sid, note: `slot ${pyStr(TABLES.slot())} is on ${sid}, not ${want}` }];
-  const hands = sessionHands(sid);
+  const hands = sessionSeams.hands(sid);
   try {
     archiveHand();
   } catch {}
@@ -791,7 +798,7 @@ export async function maybeSessionAdopt(): Promise<void> {
       feedAdd(`Joined session ${rec.id} (the leader's invitation never arrived)`);
     }
     try {
-      const [code, res] = await sessionJoin({ sid: rec.id, config: cfg });
+      const [code, res] = await sessionSeams.join({ sid: rec.id, config: cfg });
       if (code !== 200) log(`[session] slot ${me}: could not join ${rec.id}: ${pyStr(res.error ?? null)}`);
     } catch (e: any) {
       log(`[session] slot ${me}: could not join ${rec.id}: ${e?.message ?? e}`);

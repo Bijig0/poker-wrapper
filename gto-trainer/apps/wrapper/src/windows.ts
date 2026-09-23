@@ -21,8 +21,11 @@ import { isPanelTitle } from "./ignition/dom";
 
 export type Area = { x: number; y: number; w: number; h: number; primary?: boolean; fw?: number; fh?: number };
 
+/** The Windows calls a test replaces (the decisions below are pure over them). */
+export const winSeams = { monitors: (): Area[] => W.monitors(), cursorPos: (): [number, number] => W.cursorPos() };
+
 export function monitors(): Area[] {
-  return W.monitors();
+  return winSeams.monitors();
 }
 
 /** The monitor the app occupies: the EXTERNAL screen whenever one is attached (STUDY_MONITOR overrides). */
@@ -34,7 +37,7 @@ export function targetArea(): Area {
   if (want === "primary") return primary();
   if (want === "cursor") {
     try {
-      const [x, y] = W.cursorPos();
+      const [x, y] = winSeams.cursorPos();
       for (const m of mons) if (m.x <= x && x < m.x + m.w && m.y <= y && y < m.y + m.h) return m;
     } catch {}
     return primary();

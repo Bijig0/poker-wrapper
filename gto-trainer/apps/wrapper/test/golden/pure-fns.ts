@@ -15,6 +15,11 @@ import { join } from "node:path";
 import * as CPF from "../../src/sites/cpFeed";
 import { Site as CPSite, FORMATS as CP_FORMATS } from "../../src/sites/coinpoker";
 import * as CPA from "../../src/sites/cpActions";
+import { S as ST } from "../../src/state";
+import * as DOM from "../../src/ignition/dom";
+import * as HAND from "../../src/ignition/hand";
+import { amt as wsAmt } from "../../src/ignition/ws";
+import * as RELAY from "../../src/relay";
 
 let CATALOGUE: any[] = [];
 const BAL_DIR = mkdtempSync(join(tmpdir(), "golden-pure-bal-"));
@@ -53,6 +58,60 @@ const withEnv = (env: Record<string, string>, fn: () => unknown) => {
 };
 
 export const FNS_EXTRA: Record<string, (args: any[], rec: any) => unknown> = {
+  // ---- launch.py (the Ignition reader and relay) — pure over their arguments and the WS state they name
+  "launch._card_name": ([qa]) => DOM.cardName(qa),
+  "launch._pot_val": ([s]) => DOM.potVal(s),
+  "launch._verb": ([badge, bet]) => DOM.verb(badge, bet),
+  "launch._amt": ([c], rec) => {
+    Object.assign(ST.ws, rec.state.ws);
+    return wsAmt(c);
+  },
+  "launch._stack_bb": ([t], rec) => {
+    Object.assign(ST.ws, rec.state.ws);
+    return HAND.stackBb(t);
+  },
+  "launch._pick_plan": ([p, pot]) => RELAY.pickPlan(p, pot),
+  "launch._did_as_told": ([plan, a, st]) => RELAY.didAsTold(plan, a, st),
+  "launch._pick_bet_input": ([inputs, anchor, fw]) => RELAY.pickBetInput(structuredClone(inputs), anchor, fw),
+  "launch._face_up_seats": ([d]) => DOM.faceUpSeats(d),
+  "launch._hero_claim": ([d]) => DOM.heroClaim(d),
+  "launch._positions_all": (_args, rec) => {
+    Object.assign(ST.ws, structuredClone(rec.state.ws));
+    return HAND.positionsAll();
+  },
+  "launch._hero_position": (_args, rec) => {
+    Object.assign(ST.ws, structuredClone(rec.state.ws));
+    return HAND.heroPosition();
+  },
+  "launch._line_order_fault": ([line, rc]) => HAND.lineOrderFault(line, { dealt: new Set(rc.dealt), sb: rc.sb, bbs: rc.bbs }),
+  "launch._award_name": ([win, row]) => DOM.awardName(win, row),
+  "launch._is_panel_title": ([title, base]) => DOM.isPanelTitle(title, base),
+  "launch._port_of": ([argv]) => DOM.portOf(argv),
+  "launch._table_js": ([slot]) => DOM.tableJs(slot),
+  "launch._watch_js": ([slot]) => DOM.watchJs(slot),
+  "launch._find_input_js": ([slot]) => DOM.findInputJs(slot),
+  "launch._topup_read_js": ([slot]) => DOM.topupReadJs(slot),
+  "launch._topup_fill_js": ([slot]) => DOM.topupFillJs(slot),
+  "launch._sitout_read_js": ([slot]) => DOM.sitoutReadJs(slot),
+  "launch._EXTRACT_DEEP_JS": () => DOM.EXTRACT_DEEP_JS(),
+  "launch._point_is_my_table.js": async ([x, y]) => {
+    const seen: string[] = [];
+    const ev0 = CDP.io.evaluate;
+    CDP.io.evaluate = async (_ws: string, js: string) => {
+      seen.push(js);
+      return "0";
+    };
+    const was = process.env.TABLE_SLOT;
+    process.env.TABLE_SLOT = "1";
+    try {
+      const got = await RELAY.pointIsMyTable("ws://x", x, y);
+      return { js: seen[seen.length - 1], result: got };
+    } finally {
+      CDP.io.evaluate = ev0;
+      if (was === undefined) delete process.env.TABLE_SLOT;
+      else process.env.TABLE_SLOT = was;
+    }
+  },
   "faketable.render_inner": ([spec]) => FAKE.renderInner(spec),
   "faketable.render_outer": ([url, n]) => FAKE.renderOuter(url, n),
   "faketable.display_card": ([c]) => FAKE.displayCard(c),

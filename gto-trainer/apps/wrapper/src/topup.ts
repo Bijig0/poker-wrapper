@@ -26,10 +26,19 @@ import { tableJs, topupFillJs, topupReadJs } from "./ignition/dom";
 import { handState } from "./ignition/hand";
 import { act, autoTableOk, maybeTakeTime, pickReady } from "./relay";
 
+/** What a test replaces: the table read, the time-bank press, and how a run is started (Python's tests stubbed
+ *  _top_up_read, _maybe_take_time and threading.Thread). */
+export const topupSeams = {
+  read: (): Promise<Record<string, any>> => topUpRead(),
+  takeTime: (): Promise<Record<string, any> | null> => maybeTakeTime(),
+  spawn: (_name: string, f: () => Promise<unknown>): void => { void f(); },
+};
+
 const TOP_UP_COOLDOWN_S = 20.0;
 const TOP_UP_SETTLE_TICKS = 2;
 const TOP_UP_MIN_SHORT_BB = 1.0;
-const TOP_UP_JITTER_S: [number, number] = [0.4, 2.0];
+/** The small wait before a run's first press, drawn once per window (a test sets it to zero). */
+export const topupTuning = { jitterS: [0.4, 2.0] as [number, number] };
 const TOP_UP_CLOSE_DEBOUNCE_S = 1.5;
 
 /** The client's 'successfully added $N in chips' toast, if it is on screen. */
@@ -67,7 +76,7 @@ export function handKey(): string {
 
 /** Has hero's stack stopped moving? Counted EVERY tick (a counter that advances only while someone looks never
  *  reaches two). */
-function topUpSettleTick(): void {
+export function topUpSettleTick(): void {
   const hero = S.ws.heroSeat ?? null;
   const seats = S.feedPrev.seats;
   const stack = (seats instanceof Map ? seats.get(hero) : undefined)?.stack ?? null;
@@ -106,7 +115,7 @@ export function topUpWindow(): [boolean, string | null, string | null] {
 }
 
 /** Is it safe to press a Buy-chips control RIGHT NOW? Re-read before EVERY press (the same rules). */
-function topUpGate(): [boolean, string | null] {
+export function topUpGate(): [boolean, string | null] {
   const [ok, , why] = topUpWindow();
   return [ok, why];
 }
@@ -190,7 +199,7 @@ export async function maybePrefoldTopUp(): Promise<void> {
   const hid = handKey();
   if (S.topupPrefold.hand === hid || st.topUpHand === hid) return;
   if (pendingPress(st.lastTopUp || {})) return;
-  const read = await topUpRead();
+  const read = await topupSeams.read();
   if (read.zone || !read.seated || read.stackCents === null || read.stackCents === undefined || !read.maxCents) return;
   const short = read.maxCents - read.stackCents;
   const floor = Math.max(1, pyRound((read.bbCents || 0) * TOP_UP_MIN_SHORT_BB));
@@ -202,7 +211,7 @@ export async function maybePrefoldTopUp(): Promise<void> {
   let bankLabel: string | null = null;
   if (S.liveStatus.timeBank) {
     try {
-      const res = await maybeTakeTime();
+      const res = await topupSeams.takeTime();
       banked = !!(res && res.ok);
       bankLabel = (res || {}).label ?? null;
     } catch (e: any) {
@@ -231,7 +240,7 @@ export async function maybePrefoldTopUp(): Promise<void> {
       pick: r.pick ?? null, terminalKind: verdict.kind, finalStackKnown: verdict.finalStackKnown, why: verdict.why,
     });
   }
-  void (async () => {
+  topupSeams.spawn("top-up-preaction", async () => {
     try {
       const rec = await topUpRun();
       if (rec && typeof rec === "object") rec.terminalKind = verdict.kind;
@@ -246,7 +255,7 @@ export async function maybePrefoldTopUp(): Promise<void> {
       } catch {}
       log(`[top-up] pre-action done in ${fmtFixed(time() - S.topupPrefold.startedAt, 1)}s - the ${verdict.kind} can go`);
     }
-  })();
+  });
 }
 
 /** THE NUMBER THAT MATTERS: hands hero STARTED below the table max, counted once per hand. */
@@ -256,12 +265,12 @@ export function topUpKpiTick(): void {
   if (!(S.study.topUp && S.session.id) || S.fakeMode) return;
   if (["sitting-out", "waiting-for-bb", "not-in-hand", "unknown", null, undefined].includes(S.liveStatus.hero)) return;
   S.topupKpi.hand = hid;
-  void topUpKpiRead(hid);
+  topupSeams.spawn("top-up-kpi", () => topUpKpiRead(hid));
 }
 
 async function topUpKpiRead(hid: string): Promise<void> {
   try {
-    const r = await topUpRead();
+    const r = await topupSeams.read();
     const bb = r.bbCents, stack = r.stackCents, mx = r.maxCents;
     if (r.zone || !bb || stack === null || stack === undefined || !mx) return;
     S.study.topUpMax = { maxCents: mx, bbCents: bb, assumed: !!r.maxAssumed };
@@ -314,7 +323,8 @@ export function maybeTopUp(): void {
   if (pendingPress(st.lastTopUp || {})) return;
   const due = st.topUpDue ?? null;
   if (due === null) {
-    st.topUpDue = time() + TOP_UP_JITTER_S[0] + Math.random() * (TOP_UP_JITTER_S[1] - TOP_UP_JITTER_S[0]);
+    const [lo, hi] = topupTuning.jitterS;
+    st.topUpDue = time() + lo + Math.random() * (hi - lo);
     return;
   }
   if (time() < due) return;
@@ -325,7 +335,7 @@ export function maybeTopUp(): void {
   st.topUpHand = hid;
   st.topUpTrigger = trigger;
   S.topupAbort = false;
-  void topUpRun().finally(() => { S.topupLocked = false; });
+  topupSeams.spawn("top-up", () => topUpRun().finally(() => { S.topupLocked = false; }));
 }
 
 /** The presses. Every press is gated on the table AS IT IS AT THAT MOMENT; once started it finishes across the

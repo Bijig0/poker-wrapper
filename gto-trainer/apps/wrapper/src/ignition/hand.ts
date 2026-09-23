@@ -208,8 +208,12 @@ export function reconciledLine(old: any[], hero: number | null, street: string):
   return [derived, ledger, null, note, "reconciled"];
 }
 
+/** A test's stand-in for the whole export (Python's tests replaced launch._hand_state). */
+export const handSeams: { override: null | (() => Record<string, any> | null) } = { override: null };
+
 /** The current hand as a ParsedHand, from whichever site this session plays. */
 export function handState(): Record<string, any> | null {
+  if (handSeams.override) return handSeams.override();
   if (isCp()) {
     const h = CP.hand();
     if (h !== null) h.panelPort = C.PANEL_PORT;

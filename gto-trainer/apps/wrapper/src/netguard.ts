@@ -70,8 +70,11 @@ export function netCompact(p: Record<string, any>): Record<string, any> {
   return Object.fromEntries(["ok", "at", "rttMs", "lostOf10", "warmMedMs", "warmMaxMs"].map((k) => [k, p[k] ?? null]));
 }
 
+/** The press a test replaces. */
+export const netSeams = { sitout: () => (isCp() ? CP.sitout(true, false) : ignitionSitoutNextHand()) };
+
 async function netSitout(probe: Record<string, any>): Promise<Record<string, any>> {
-  const res = isCp() ? await CP.sitout(true, false) : await ignitionSitoutNextHand();
+  const res = await netSeams.sitout();
   const first = S.net.sitout === null;
   S.net.sitout = { ...res, at: time(), clicked: res.clicked || !!(S.net.sitout && S.net.sitout.clicked) };
   if (first || res.clicked) {

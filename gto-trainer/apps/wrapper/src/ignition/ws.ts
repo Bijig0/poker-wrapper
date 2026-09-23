@@ -27,6 +27,9 @@ const STREET_RANK: Record<string, number> = { preflop: 0, flop: 1, turn: 2, rive
 
 const ws = () => S.ws;
 
+/** The archive call a test replaces (Python's tests stubbed launch._archive_hand). */
+export const wsSeams = { archiveHand: () => archiveHand() };
+
 /** The street, from how FAR the board reaches (a dropped flop message leaves [null, null, null, 'Ts']). */
 export function streetNow(): string {
   const b: (string | null)[] = ws().board || [];
@@ -342,7 +345,7 @@ export function boardContradicts(d: Record<string, any>): boolean {
 /** Close the hand in progress and open a new one. */
 export function beginHand(hid: string | null): void {
   hid = hid || "";
-  archiveHand();
+  wsSeams.archiveHand();
   S.handNo += 1;
   S.handIds.set(S.handNo, hid);
   const w = ws();
