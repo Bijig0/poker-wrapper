@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 
 /**
  * The response ENVELOPES of POST /api/fast-solver and POST /api/ingest — the two
@@ -11,27 +11,32 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
  * not-to-act-live row unattributed). normalizeHand kept every one of them; the
  * loss was purely in these two object literals.
  *
- * The solver and GTO Wizard layers are mocked out: these tests are about the
+ * The solver and GTO Wizard layers are stubbed out: these tests are about the
  * envelope, and nothing here may reach the network (GTOW daily request cap) or
  * open a data/*.sqlite file.
+ *
+ * SPIES, NOT mock.module (2026-09-23): Bun's mock.module replaces a module for the
+ * WHOLE `bun test` process and is never undone, so the partial stand-ins this file
+ * used to install broke every other file that imports these modules
+ * (navLock.test.ts tested the stub; imports of PreflopDb / preflopCaptureFaults
+ * found no such export). spyOn patches the real exports for this file only and
+ * mock.restore() in afterAll puts them back.
  */
 
-mock.module("../services/fastSolve", () => ({
-  fastSolve: async () => ({ ok: false, reason: "mocked", gametype: null, depth: null, line: null }),
-  warmPreflop6max: () => {},
-  warmPostflop6max: () => {},
-}));
-mock.module("../services/gtowCdp", () => ({
-  SOLUTION_SETS: [],
-  gtowCdp: { isConnected: async () => false },
-  isRecoverableBlocker: () => false,
-}));
-mock.module("../services/preflopDb", () => ({
-  preflopDb: { available: () => false, answer: () => ({ ok: false }) },
-}));
-mock.module("../services/navLock", () => ({
-  navLock: { run: async <T,>(fn: () => Promise<T>) => fn() },
-}));
+import * as fastSolveMod from "../services/fastSolve";
+import { gtowCdp } from "../services/gtowCdp";
+import { preflopDb } from "../services/preflopDb";
+import { navLock } from "../services/navLock";
+
+spyOn(fastSolveMod, "fastSolve").mockImplementation((async () =>
+  ({ ok: false, reason: "mocked", gametype: null, depth: null, line: null })) as unknown as typeof fastSolveMod.fastSolve);
+spyOn(fastSolveMod, "warmPreflop6max").mockImplementation(() => {});
+spyOn(fastSolveMod, "warmPostflop6max").mockImplementation(() => {});
+spyOn(gtowCdp, "isConnected").mockImplementation(async () => false);
+spyOn(preflopDb, "available").mockImplementation(() => false);
+spyOn(preflopDb, "answer").mockImplementation((() => ({ ok: false })) as unknown as typeof preflopDb.answer);
+spyOn(navLock, "run").mockImplementation((async (fn: () => Promise<unknown>) => fn()) as unknown as typeof navLock.run);
+afterAll(() => mock.restore());
 
 const { default: fastSolverApp } = await import("./fastSolver");
 const { default: ingestApp } = await import("./ingest");
