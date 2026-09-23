@@ -47,6 +47,11 @@ import { timed } from "./answerTrace";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
+// A sniff that found NO token is remembered this long: a session whose client is up but signed out (the Elite
+// window after GTO Wizard's outage, 2026-09-24) otherwise cost EVERY heads-up solve a full SNIFF_TIMEOUT_MS
+// (15 s) before the next account was tried — hand 754's flop answer took 21 s, 15 of them here. The keeper's
+// forced refresh still re-checks it in the background, so signing back in is picked up within its cadence.
+const SNIFF_FAIL_HOLD_MS = 60_000;
 const SNIFF_TIMEOUT_MS = 15_000;
 const SNIFF_PASSIVE_MS = 3_500;
 /** A session that is simply unreachable/logged out is retried soon — it is a
@@ -201,6 +206,8 @@ interface SessionState {
   token: string | null;
   tokenExpMs: number;
   lastAttemptMs: number;
+  /** when a sniff last found NO token (0 = none since the last success) — see SNIFF_FAIL_HOLD_MS */
+  sniffFailedMs?: number;
   refreshing: boolean;
   blockedUntilMs: number;
   blockedKind: BlockKind | null;
@@ -253,6 +260,13 @@ class GtowSessions {
   private ranked(need: GtowNeed): SessionState[] {
     const key = (s: SessionState) => (need.preflop ? s.cfg.preflopOrder : s.cfg.order);
     return [...this.sessions.values()].sort((a, b) => key(a) - key(b));
+  }
+
+  /** The same candidates, those with a LIVE token first (route order kept within each group): work never waits on
+   *  sniffing an account while another one is already signed in and ready. */
+  liveFirst(ids: GtowSessionId[]): GtowSessionId[] {
+    const isLive = (id: GtowSessionId) => { const s = this.sessions.get(id); return !!s && this.live(s); };
+    return [...ids.filter(isLive), ...ids.filter((id) => !isLive(id))];
   }
 
   private live(s: SessionState): boolean {
@@ -370,15 +384,18 @@ class GtowSessions {
     const s = this.sessions.get(id);
     if (!s || !s.cfg.enabled) return null;
     if (!force && this.live(s)) return s.token;
+    if (!force && s.sniffFailedMs && Date.now() - s.sniffFailedMs < SNIFF_FAIL_HOLD_MS) return null;   // known signed out
     const tok = await timed(`GTO Wizard token sniff ${id} (${s.cfg.cdpHost})`, () => this.sniff(s.cfg.cdpHost), (t: string | null) => (t ? "token" : "none"));
     s.lastAttemptMs = Date.now();
     if (!tok) {
+      s.sniffFailedMs = Date.now();
       s.lastError = `no token on ${s.cfg.cdpHost}`;
       // don't stamp a hard block: the keeper retries, and a live client that
       // is merely mid-navigation would otherwise sit out a whole minute
       return null;
     }
     s.token = tok;
+    s.sniffFailedMs = 0;
     s.tokenExpMs = decodeExpMs(tok);
     s.lastError = null;
     // a fresh token means the account is reachable and signed in again — an

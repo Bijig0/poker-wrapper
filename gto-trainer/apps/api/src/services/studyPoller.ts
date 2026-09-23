@@ -373,12 +373,15 @@ class StudyPoller {
     if (Date.now() < this.skipTicksUntil) return;   // backing off a wrapper whose probes keep failing (EIP-19)
     this.inFlight = true;
     this.status.lastTickAt = Date.now();
+    const tickT0 = Date.now();
+    const tickSteps: Record<string, number> = {};
     try {
       // Cheap first check (no navigate) — reads assistive-play's hand + its
       // Study Answers flag without touching GTO Wizard at all. Keeps this
       // poller idle (no navLock contention, no CDP traffic) whenever the
       // panel's own switch is off, so it's safe to just always be running.
       const probe = await this.fetchIngest(false);
+      tickSteps.ingest = Date.now() - tickT0;
       if (!probe) return; // error already recorded, null already pushed
 
       // A different DECLARED STRATEGY is a new question about the same spot — drop
@@ -450,7 +453,7 @@ class StudyPoller {
       // takes up to ~30s, so this is fire-and-forget (never blocks the tick
       // loop) with a cooldown so we don't relaunch every single tick while
       // one attempt is already in flight or just failed.
-      this.status.gtoWizardConnected = await gtowCdp.isConnected();
+      { const tc = Date.now(); this.status.gtoWizardConnected = await gtowCdp.isConnected(); tickSteps.cdpConnected = Date.now() - tc; }
       // THE CDP PORT IS NOT THE SOLVER (EIP-11, 2026-09-23). The 6-max ring strategy answers preflop from the local
       // bake and postflop over HTTP with a token that outlives the debug port, so a CDP hiccup used to blank every
       // decision until the port answered again — including chart preflop spots that never touch GTO Wizard. Solve
@@ -545,6 +548,9 @@ class StudyPoller {
       });
     } finally {
       this.inFlight = false;
+      // A TICK THAT RAN LONG is time no decision can be seen in: written with its steps (ingest read, CDP check)
+      const tickMs = Date.now() - tickT0;
+      if (tickMs > 1500) pollerEvent({ url: this.config.assistiveUrl, ev: "slow tick", ms: tickMs, steps: tickSteps });
     }
   }
 
@@ -848,6 +854,7 @@ class StudyPoller {
   /** POSTs to gto-trainer's own /api/ingest; returns null (and records the
    *  error + clears the panel) on any failure, so callers can bail cleanly. */
   private async fetchIngest(navigate: boolean, abort?: AbortSignal): Promise<IngestLikeResponse | null> {
+    const tIngest = Date.now();
     try {
       // The no-navigate probe is a local read — 5s is generous. A real
       // navigation loads GTO Wizard's page and waits for the solve to
@@ -868,6 +875,7 @@ class StudyPoller {
       const body = (await res.json().catch(() => null)) as IngestLikeResponse | null;
       if (!body) {
         this.status.lastError = `Ingest returned non-JSON (HTTP ${res.status}).`;
+        pollerEvent({ url: this.config.assistiveUrl, ev: "ingest non-JSON", http: res.status, ms: Date.now() - tIngest });
         await this.push(null);
         return null;
       }
@@ -878,6 +886,10 @@ class StudyPoller {
       // the new spot's own solve is already underway.
       if (abort?.aborted) return null;
       this.status.lastError = e instanceof Error ? e.message : String(e);
+      // a read that TIMES OUT or throws ends the tick silently — hand 754's turn and river were never seen
+      // while no event said why (2026-09-24)
+      pollerEvent({ url: this.config.assistiveUrl, ev: "ingest threw", navigate, ms: Date.now() - tIngest,
+                    error: `${e instanceof Error ? e.name + ": " + e.message : String(e)}`.slice(0, 300) });
       await this.push(null);
       return null;
     }

@@ -25,7 +25,9 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-API = os.environ.get("STUDY_API", "http://localhost:2000")
+# 127.0.0.1, NOT localhost: on Windows Python tries ::1 first and the API listens on IPv4 only, so every call paid
+# a 2 s refusal (measured 2026-09-24: 2.08 s vs 0.015 s) — /session 2.2 s, /session/checks 4 s, the health checks
+API = os.environ.get("STUDY_API", "http://127.0.0.1:2000")
 
 # --------------------------------------------------------------------- presets
 

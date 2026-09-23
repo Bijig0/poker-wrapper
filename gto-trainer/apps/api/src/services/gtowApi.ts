@@ -170,7 +170,7 @@ class GtowApi {
     const url = this.buildUrl(p);
     const need: GtowNeed = {}; // library solutions: any plan, so any session may serve it
     const ids = gtowSessions.route(need);
-    const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need);
+    const candidates = gtowSessions.liveFirst(ids.length ? ids : gtowSessions.routeIgnoringBlocks(need));
     if (!candidates.length) return noSession(need);
     let last: { status: number; error: string } | null = null;
     for (const id of candidates) {
@@ -317,7 +317,7 @@ class GtowApi {
     // when nothing is routable we still try the walled sessions rather than
     // failing the spot outright — the same last-ditch rule bestToken uses.
     const ids = gtowSessions.route(need);
-    const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need);
+    const candidates = gtowSessions.liveFirst(ids.length ? ids : gtowSessions.routeIgnoringBlocks(need));
     if (!candidates.length) return noSession(need);
     let last: { status: number; error: string } | null = null;
     for (const id of candidates) {

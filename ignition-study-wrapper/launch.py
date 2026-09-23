@@ -390,6 +390,8 @@ def other_area() -> dict | None:
 def _browser_ws(port: int) -> str | None:
     """The BROWSER-level debugger socket (not a page's). Window geometry lives
     there: Browser.getWindowForTarget / Browser.setWindowBounds."""
+    if not cdp._listening(port):        # a closed port costs 2 s to refuse on Windows
+        return None
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as r:
             return json.loads(r.read())["webSocketDebuggerUrl"]
@@ -9564,6 +9566,8 @@ def _end_other_open(keep: str | None, note: str) -> list[str]:
 def _close_browser(port: int) -> bool:
     """Close the whole app-mode browser behind a CDP port (Browser.close on its
     browser-level socket). Scoped by PORT, never by process name."""
+    if not cdp._listening(port):        # nothing to close — and a closed port costs 2 s to refuse
+        return False
     try:
         import websocket  # the scout's dependency, already on the path
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as r:
