@@ -392,7 +392,11 @@ for combo in combos:
             faults.append(len(rc.faults()))
         rc.finish(ticks[-1].seq if ticks else 0)
         played = [list(FZ.norm(x)) for x in want]
-        rec("reconcile.run", [[norm(t) for t in ticks]],
+        # seats as [num, facts] PAIRS: the order a tick lists its seats in is the order same-tick folds are
+        # journalled in, and a JSON object would lose it (JS orders integer keys numerically)
+        tick_args = [{**norm({k: v for k, v in t.__dict__.items() if k != "seats"}),
+                      "seats": [[n, norm(sd)] for n, sd in t.seats.items()]} for t in ticks]
+        rec("reconcile.run", [tick_args],
             {"journal": rc.journal, "violations": rc.violations, "line": rc.line(), "faultsPerTick": faults,
              "revivals": rc.revivals, "ended": rc.ended,
              "diff": rc.diff([{"street": (RC.STREETS[x[0]] if isinstance(x[0], int) else x[0]), "seat": x[1], "type": x[2],

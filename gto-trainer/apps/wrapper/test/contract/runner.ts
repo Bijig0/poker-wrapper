@@ -148,7 +148,7 @@ function launch() {
   for (const s of [proc.stdout, proc.stderr]) {
     (async () => {
       const dec = new TextDecoder();
-      for await (const chunk of s as ReadableStream<Uint8Array>) {
+      for await (const chunk of s as any as AsyncIterable<Uint8Array>) {
         try { require("node:fs").appendFileSync(log, dec.decode(chunk)); } catch {}
       }
     })();
