@@ -16,6 +16,17 @@ if (-not $env:PW_CHANNEL -and $root -and (Test-Path (Join-Path $root 'config\loc
 $Channel = if ($env:PW_CHANNEL) { $env:PW_CHANNEL } else { 'r2:poker-solve-db/wrapper' }
 $Downloads = Join-Path $env:LOCALAPPDATA 'PokerWrapper\downloads'
 
+# THE PACKAGE'S SCHEDULED TASKS (2026-09-23). Task names are MACHINE-wide, so they carry the Windows user: a second
+# account on the same laptop (a test account, a brother) gets its own three, and none of them can replace the
+# owner's dev tasks (StudyAPI / ChartServer / GtowWatchdog, registered from the source checkout).
+$TaskNames = [ordered]@{
+  api    = "PokerWrapper API - $env:USERNAME"
+  charts = "PokerWrapper Charts - $env:USERNAME"
+  gtow   = "PokerWrapper GTO Wizard - $env:USERNAME"
+}
+# names releases before 2026.09.23 used; install_tasks removes them ONLY when they point at this install's folder
+$LegacyTaskNames = @('StudyAPI', 'ChartServer', 'GtowWatchdog')
+
 function Find-Rclone {
   $c = (Get-Command rclone -ErrorAction SilentlyContinue | Select-Object -First 1).Source
   if (-not $c -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Links\rclone.exe")) { $c = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\rclone.exe" }

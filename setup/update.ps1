@@ -82,7 +82,8 @@ if ($LASTEXITCODE -ne 0 -or -not $new) { Say 'could not unpack the update — no
 # 3. stop what runs from this folder: the wrapper, then the three services (their supervisors, then the servers)
 Say 'closing the Poker Wrapper and stopping the services ...'
 try { $null = Invoke-RestMethod "http://127.0.0.1:$PanelPort/quit" -Method Post -TimeoutSec 5 } catch { }
-if (-not $SkipTasks) { foreach ($t in 'StudyAPI', 'ChartServer', 'GtowWatchdog') { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue } }
+# this user's tasks, plus the pre-2026.09.23 names (their scripts are this folder's; the kill below is folder-scoped too)
+if (-not $SkipTasks) { foreach ($t in @($TaskNames.Values) + $LegacyTaskNames) { $x = Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue; if ($x -and (($x.Actions | ForEach-Object { $_.Arguments }) -join ' ') -like "*$root\*") { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue } } }
 $mine = [regex]::Escape($root)
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
   $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -match $mine -and

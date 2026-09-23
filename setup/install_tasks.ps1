@@ -1,14 +1,16 @@
-﻿# Register the three services that keep the Poker Wrapper's back end up, as logon tasks for the current user —
-# the same way the owner's machine runs them. Each restarts itself if it dies and comes back after a reboot.
+﻿# Register the three services that keep the Poker Wrapper's back end up, as logon tasks for the current user.
+# Each restarts itself if it dies and comes back after a reboot. Names carry the Windows user (setup\channel.ps1
+# $TaskNames), so a second account on the same laptop gets its own and never replaces anyone else's:
 #
-#   StudyAPI      .claude\study-api.ps1     the study API + dashboard on :2000 (answers are computed here)
-#   ChartServer   .claude\chart-server.ps1  the HRC chart server on :8777
-#   GtowWatchdog  scripts\gtow_watchdog.ps1 keeps the GTO Wizard session (Chrome, CDP :9222) running
+#   PokerWrapper API - <user>          .claude\study-api.ps1     the study API + dashboard on :2000
+#   PokerWrapper Charts - <user>       .claude\chart-server.ps1  the HRC chart server on :8777
+#   PokerWrapper GTO Wizard - <user>   scripts\gtow_watchdog.ps1 keeps the GTO Wizard session (Chrome, CDP :9222) up
 #
 #   powershell -ExecutionPolicy Bypass -File setup\install_tasks.ps1 [-Start] [-Uninstall] [-BothGtowAccounts]
 param([switch]$Start, [switch]$Uninstall, [switch]$BothGtowAccounts)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'channel.ps1')
 
 function Register-Hidden([string]$name, [string]$script, [string]$extra = '') {
   $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\conhost.exe" `
@@ -22,10 +24,22 @@ function Register-Hidden([string]$name, [string]$script, [string]$extra = '') {
 }
 
 $tasks = @(
-  @{ name = 'StudyAPI';     script = Join-Path $root '.claude\study-api.ps1';     extra = '' },
-  @{ name = 'ChartServer';  script = Join-Path $root '.claude\chart-server.ps1';  extra = '' },
-  @{ name = 'GtowWatchdog'; script = Join-Path $root 'scripts\gtow_watchdog.ps1'; extra = $(if ($BothGtowAccounts) { '' } else { ' -Only primary' }) }
+  @{ name = $TaskNames.api;    script = Join-Path $root '.claude\study-api.ps1';     extra = '' },
+  @{ name = $TaskNames.charts; script = Join-Path $root '.claude\chart-server.ps1';  extra = '' },
+  @{ name = $TaskNames.gtow;   script = Join-Path $root 'scripts\gtow_watchdog.ps1'; extra = $(if ($BothGtowAccounts) { '' } else { ' -Only primary' }) }
 )
+
+# an install from before per-user names registered StudyAPI / ChartServer / GtowWatchdog: remove those, but ONLY
+# the ones whose action runs a script in THIS folder (the owner's dev tasks point at the source checkout)
+foreach ($old in $LegacyTaskNames) {
+  $t = Get-ScheduledTask -TaskName $old -ErrorAction SilentlyContinue
+  if ($t -and (($t.Actions | ForEach-Object { $_.Arguments }) -join ' ') -like "*$root\*") {
+    Stop-ScheduledTask -TaskName $old -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $old -Confirm:$false
+    Write-Host "  removed the old task $old (it ran this install)"
+  }
+}
+
 if ($Uninstall) {
   foreach ($t in $tasks) {
     if (Get-ScheduledTask -TaskName $t.name -ErrorAction SilentlyContinue) {

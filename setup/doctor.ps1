@@ -70,14 +70,14 @@ Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } els
 
 Write-Host ""
 Write-Host " Running" -ForegroundColor Cyan
-foreach ($t in 'StudyAPI', 'ChartServer', 'GtowWatchdog') {
+foreach ($t in $(if (Get-Installed $root) { $TaskNames.Values } else { 'StudyAPI', 'ChartServer', 'GtowWatchdog' })) {
   $st = (Get-ScheduledTask -TaskName $t).State
   Row ($st -eq 'Running') "service $t" $(if ($st) { "$st" } else { 'not registered' }) "run setup\setup.cmd (or: Start-ScheduledTask $t)"
 }
 $cfgApi = Get-Json "http://127.0.0.1:$ApiPort/api/dashboard/config"
-Row ([bool]$cfgApi) "study API on :$ApiPort" $(if ($cfgApi) { "up$(if ($cfgApi.playerMode) { ', player mode' })" } else { 'not answering' }) 'wait a minute after logon; if it stays down, restart the laptop or: Start-ScheduledTask StudyAPI'
+Row ([bool]$cfgApi) "study API on :$ApiPort" $(if ($cfgApi) { "up$(if ($cfgApi.playerMode) { ', player mode' })" } else { 'not answering' }) 'wait a minute after logon; if it stays down, restart the laptop (the services start at logon)'
 $sol = Get-Json "http://127.0.0.1:$ChartPort/api/solutions" 20
-Row ([bool]$sol) "chart server on :$ChartPort" $(if ($sol) { "up, $(@($sol).Count) charts" } else { 'not answering' }) 'Start-ScheduledTask ChartServer'
+Row ([bool]$sol) "chart server on :$ChartPort" $(if ($sol) { "up, $(@($sol).Count) charts" } else { 'not answering' }) 'restart the laptop (the services start at logon)'
 if ($cfgApi) {
   $reg = Get-Json "http://127.0.0.1:$ApiPort/api/dashboard/sources/registry" 20
   $g = $reg.armed.gtow

@@ -8,7 +8,7 @@
 #   4. python       aof-model\.venv from aof-model\requirements.txt
 #   5. api          bun install (the study API's packages)
 #   6. config       config\local.env: player mode, one GTO Wizard account, your CoinPoker name
-#   7. services     scheduled tasks StudyAPI (:2000), ChartServer (:8777), GtowWatchdog (GTO Wizard)
+#   7. services     scheduled tasks "PokerWrapper API / Charts / GTO Wizard - <user>" (:2000, :8777, GTO Wizard)
 #   8. shortcut     "Poker Wrapper" on the desktop
 #   9. check        setup\doctor.ps1
 # What it cannot do for you (INSTALL.md walks through them): sign in to GTO Wizard, create your Ignition profile,
@@ -171,15 +171,15 @@ Set-Cfg 'GTOW_SECONDARY' '0'       # one GTO Wizard account (the main one); head
 Ok "written: PLAYER_MODE=1, GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })"
 
 # ---------------------------------------------------------------- 7. services
-Step 7 'Services (StudyAPI, ChartServer, GtowWatchdog)'
+Step 7 'Services (study API, chart server, GTO Wizard watchdog)'
 if ($SkipTasks) { Todo 'skipped (-SkipTasks)' }
 else {
   # never re-point an existing install's services at this folder without asking
-  $existing = Get-ScheduledTask -TaskName 'StudyAPI' -ErrorAction SilentlyContinue
+  $existing = Get-ScheduledTask -TaskName $TaskNames.api -ErrorAction SilentlyContinue
   $elsewhere = $existing -and ($existing.Actions.Arguments -notmatch [regex]::Escape($root))
   $go = $true
   if ($elsewhere) {
-    Todo "a StudyAPI task already exists for ANOTHER folder: $($existing.Actions.Arguments)"
+    Todo "this Windows user already runs a Poker Wrapper from ANOTHER folder: $($existing.Actions.Arguments)"
     $go = (Ask 'Replace it with this install? (y/N)' 'N') -match '^[yY]'
   }
   if ($go) {
