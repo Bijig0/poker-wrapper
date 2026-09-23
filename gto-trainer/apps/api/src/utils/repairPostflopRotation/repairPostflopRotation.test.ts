@@ -356,3 +356,56 @@ describe("repairPreflopFoldOrder", () => {
     expect(captureFaults(r.hand).some((f) => /out of rotation/.test(f))).toBe(true);
   });
 });
+
+describe("captureFaults — the line must price hero's decision (CoinPoker hand 140706500001)", () => {
+  // heads-up table: seat 2 = hero, the dealer (SB, in position postflop); seat 1 = BB
+  const pre = [
+    { seatId: 2, hero: true, type: "post-sb", street: "preflop", amount: 0.4 },
+    act(1, "post-bb", "preflop", 1),
+    { seatId: 2, hero: true, type: "raise", street: "preflop", amount: 2.48 },
+    act(1, "raise", "preflop", 10.52),
+    { seatId: 2, hero: true, type: "call", street: "preflop", amount: 8.04 },
+  ] as ParsedAction[];
+  const hu = (actions: ParsedAction[], toCall: number, positions: Record<number, string> = { 2: "SB", 1: "BB" }, heroSeatId = 2): ParsedHand => ({
+    handId: 1, heroSeatId, heroCards: ["8c", "7c"], board: ["4c", "6d", "5s"], street: "flop", actions,
+    liveSeats: Object.keys(positions).map(Number), committed: {}, potByStreet: {}, positions,
+    currentNode: { street: "flop", toActSeatId: heroSeatId, toActIsHero: true, pot: 21.44, toCall, legalActions: [], complete: false },
+    ended: false,
+  }) as ParsedHand;
+
+  it("names the lost bet: the table says hero faces 21.44bb, the captured flop has no bet", () => {
+    const f = captureFaults(hu(pre, 21.44));
+    expect(f.some((x) => /hero facing 21.44bb on the flop, but no bet or raise on the flop was captured/.test(x))).toBe(true);
+    expect(f.some((x) => /BB acts first on the flop heads-up, but no flop action of theirs was captured/.test(x))).toBe(true);
+  });
+
+  it("is silent once the villain's bet is in the line (the reader fix)", () => {
+    expect(captureFaults(hu([...pre, act(1, "bet", "flop", 21.44)], 21.44))).toEqual([]);
+  });
+
+  it("names a lost CHECK — nothing to call, so only the seating can tell", () => {
+    const f = captureFaults(hu(pre, 0));
+    expect(f).toEqual(["BB acts first on the flop heads-up, but no flop action of theirs was captured before hero's decision"]);
+    expect(captureFaults(hu([...pre, act(1, "check", "flop")], 0))).toEqual([]);
+  });
+
+  it("is silent when hero is out of position and first to act", () => {
+    const pre2 = [
+      act(2, "post-sb", "preflop", 0.5), { seatId: 1, hero: true, type: "post-bb", street: "preflop", amount: 1 },
+      act(2, "raise", "preflop", 2.5), { seatId: 1, hero: true, type: "call", street: "preflop", amount: 1.5 },
+    ] as ParsedAction[];
+    expect(captureFaults(hu(pre2, 0, { 2: "SB", 1: "BB" }, 1))).toEqual([]);
+  });
+
+  it("blind versus blind at a full table: the SB acts first, so hero in the BB needs the SB's action", () => {
+    const pos = { 1: "SB", 2: "BB", 3: "UTG", 4: "HJ", 5: "CO", 6: "BTN" };
+    const bvb = [
+      act(1, "post-sb", "preflop", 0.5), { seatId: 2, hero: true, type: "post-bb", street: "preflop", amount: 1 },
+      act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "fold", "preflop"),
+      act(1, "call", "preflop", 0.5), { seatId: 2, hero: true, type: "check", street: "preflop" },
+    ] as ParsedAction[];
+    const h = (actions: ParsedAction[]) => ({ ...hu(actions, 0, pos, 2), liveSeats: [1, 2, 3, 4, 5, 6] }) as ParsedHand;
+    expect(captureFaults(h(bvb))[0]).toMatch(/SB acts first on the flop heads-up/);
+    expect(captureFaults(h([...bvb, act(1, "check", "flop")]))).toEqual([]);
+  });
+});

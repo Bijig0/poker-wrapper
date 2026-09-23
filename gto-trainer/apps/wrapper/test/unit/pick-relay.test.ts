@@ -161,21 +161,23 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
     check("practice arms with no allowance at all", r.ok && r.practice && !autoAllowance().granted);
     setAuto(false);
 
-    // DECLARED auto-execute (setup page config.autoExecute) — intent, not bypass
-    const declare = (cfg: Record<string, any>) => {
+    // DECLARED auto-execute (setup page config.autoExecute) — intent, not bypass. (Not named `declare`: Bun 1.3.14
+    // — what config/env.ps1 resolves — silently drops a statement that calls a function by that name.)
+    let lastDeclare: unknown = null;   // setAuto's reply, shown when the arm check fails
+    const declareAuto = (cfg: Record<string, any>) => {
       Object.assign(S.study, { auto: false, executed: null, autoTried: null, lastExec: null,
                                autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
                                autoDeclared: !!cfg.autoExecute, autoDeclaredReal: !!cfg.autoRealMoney,
                                autoDeclaredBudget: { ...(cfg.autoBudget || { minutes: 30, hands: 50 }) } });
-      if (S.study.autoDeclared) setAuto(true, { allowReal: S.study.autoDeclaredReal });
+      if (S.study.autoDeclared) lastDeclare = setAuto(true, { allowReal: S.study.autoDeclaredReal });
     };
     seed({ pick: "Call" });
     S.liveStatus.practice = true;
-    declare({ autoExecute: true });
-    check("declared + practice arms at start", S.study.auto && !autoAllowance().granted);
+    declareAuto({ autoExecute: true });
+    check("declared + practice arms at start", S.study.auto && !autoAllowance().granted, J(lastDeclare));
     seed({ pick: "Call" });
     S.liveStatus.practice = false;
-    declare({ autoExecute: true });
+    declareAuto({ autoExecute: true });
     check("declared + real money does not arm", S.study.auto === false);
     check("  ... but the declaration is still pending", S.study.autoDeclared === true);
     n = calls.length;
@@ -186,7 +188,7 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
     check("pending declaration arms when a practice table appears", S.study.auto === true);
     seed({ pick: "Call" });
     S.liveStatus.practice = false;
-    declare({ autoExecute: true, autoRealMoney: true, autoBudget: { minutes: 10, hands: 5 } });
+    declareAuto({ autoExecute: true, autoRealMoney: true, autoBudget: { minutes: 10, hands: 5 } });
     check("declared WITH the real-money box still does not arm on real money", S.study.auto === false && !autoAllowance().granted);
     maybeAutoArm();
     check("  ... and the pending declaration never arms there", S.study.auto === false);
@@ -200,7 +202,7 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
     check("live off is NOT re-armed by the declaration", S.study.auto === false);
     seed({ pick: "Call" });
     S.liveStatus.practice = true;
-    declare({});
+    declareAuto({});
     check("no declaration arms nothing", S.study.auto === false && S.study.autoDeclared === false);
     maybeAutoArm();
     check("  ... and stays off", S.study.auto === false);

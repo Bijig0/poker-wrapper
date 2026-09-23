@@ -2,6 +2,10 @@
  * GOLDEN: the CoinPoker reader over every CoinPoker log the Python recorder replayed
  * (tests/golden/record_cp.py -> corpus/cp-*.jsonl.gz): feed lines, the ParsedHand export, Site.table(), hero status,
  * the room's state and the finished hands the archiver drains — after every log line that changed anything.
+ *
+ * THE WRAPPER IS TYPESCRIPT ONLY NOW (2026-09-24): the Python recorder made the first baseline; a deliberate change
+ * to the reader re-baselines from THIS implementation, same input lines, same delta format:
+ *   GOLDEN_UPDATE=1 bun test test/golden/coinpoker.test.ts      (then review the corpus diff before committing)
  */
 import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -10,7 +14,9 @@ import { join } from "node:path";
 import { realTime, setFakeTime } from "../../src/clock";
 import { Site } from "../../src/sites/coinpoker";
 import * as feed from "../../src/sites/cpFeed";
-import { canon, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
+import { canon, CORPUS, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
+
+const UPDATE = process.env.GOLDEN_UPDATE === "1";
 
 function snapshot(f: feed.Feed, site: Site, out: [string, string][], touched: string | null) {
   const snap: Record<string, unknown> = {
@@ -55,12 +61,15 @@ for (const file of corpusFiles("cp-")) {
     const fails: string[] = [];
     if (feed.hero.name !== meta.heroAtStart) fails.push(`hero at start: ${feed.hero.name} vs ${meta.heroAtStart}`);
     const expected: Record<string, unknown> = {};
+    const rebased: string[] = [JSON.stringify(meta)];     // GOLDEN_UPDATE: the corpus rewritten from this implementation
+    const prev = new Map<string, string>();
     let k = 1;
     let n = 0;
-    while (k < recs.length && fails.length < 10) {
+    while (k < recs.length && (UPDATE || fails.length < 10)) {
       const inp = recs[k++];
       if (inp.type !== "in") continue;
       const outRec = recs[k] && recs[k].type === "out" && recs[k].i === inp.i ? recs[k++] : null;
+      if (UPDATE) rebased.push(JSON.stringify(inp));
       if (f.lineAt) setFakeTime(f.lineAt + 0.5);
       const beforeRooms = new Set(f.rooms.keys());
       const out: [string, string][] = [];
@@ -93,7 +102,22 @@ for (const file of corpusFiles("cp-")) {
       const changed = !(touched === null && f.rooms.size === beforeRooms.size && [...f.rooms.keys()].every((x) => beforeRooms.has(x))
                         && f.pending === null && !out.length);
       if (!changed) {
-        if (outRec) fails.push(`line ${inp.i}: Python snapshotted, the port saw no change`);
+        if (outRec && !UPDATE) fails.push(`line ${inp.i}: Python snapshotted, the port saw no change`);
+        continue;
+      }
+      if (UPDATE) {
+        if (f.lineAt) setFakeTime(f.lineAt + 0.5);
+        const snap = snapshot(f, site, out, touched);
+        const delta: Record<string, unknown> = { type: "out", i: inp.i };
+        for (const [key, v] of Object.entries(snap)) {
+          const enc = canon(v);
+          if (prev.get(key) !== enc) {
+            delta[key] = v;
+            prev.set(key, enc);
+          }
+        }
+        rebased.push(JSON.stringify(delta));
+        n++;
         continue;
       }
       if (!outRec) {
@@ -113,6 +137,12 @@ for (const file of corpusFiles("cp-")) {
       n++;
     }
     realTime();
+    if (UPDATE) {
+      const body = rebased.map((r) => r + String.fromCharCode(10)).join("");
+      writeFileSync(join(CORPUS, file), Bun.gzipSync(new TextEncoder().encode(body), { level: 9 }));
+      console.log(`${file}: re-baselined, ${n} snapshots`);
+      return;
+    }
     console.log(`${file}: ${n} snapshots compared`);
     expect(fails).toEqual([]);
   }, 600_000);

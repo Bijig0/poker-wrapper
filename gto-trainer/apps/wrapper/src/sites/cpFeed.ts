@@ -232,7 +232,7 @@ export class Room {
       const label = b.newCaption || cap;
       const added = cap === "Fold" ? 0.0 : pyRound(Math.max(to - prev, 0), 4);
       const a: Record<string, any> = {
-        street: h.street, seat: b.seatId ?? null, name, action: label, to, added, stack: b.userChips ?? null, t: b.initTimeStamp ?? null,
+        street: h.street, seat: b.seatId ?? null, name, action: label, caption: cap, to, added, stack: b.userChips ?? null, t: b.initTimeStamp ?? null,
       };
       if (cap !== "Fold" && cap !== "Ante") h.streetBet.set(name, to);
       const st = h.stacks ??= new Map();
@@ -340,6 +340,21 @@ const TYPE: Record<string, string> = {
   AllIn: "all-in",
 };
 
+/**
+ * The contract type of one logged action. newCaption names the BUTTON that was pressed, and a sizing preset is a
+ * button of its own: a bet made with the Pot button logs caption "Raise", newCaption "Pot" (2026-09-24, hand
+ * 140706500001 — the villain's flop and turn bets were dropped from the line, hero was answered as if first to act,
+ * and got "Check" facing a 21bb bet). An unknown label falls back to the caption; a preset raise with nothing to
+ * raise on this street is a bet (the log's own "Bet" label does the same).
+ */
+export function actionType(a: { action: string; caption?: string | null; street: string }, streetTop: number): string | null {
+  const t = TYPE[a.action];
+  if (t) return t;
+  const c = TYPE[a.caption ?? ""] ?? null;
+  if (c === "raise" && a.street !== "PREFLOP" && streetTop <= 0) return "bet";
+  return c;
+}
+
 /** 'Ts' -> 'T♠' — the contract's card form (ranks use T, never 10). */
 export function glyph(c: string | null | undefined): string | null {
   return c && c.length === 2 ? c[0]! + (SUIT_GLYPH[c[1]!] ?? c[1]!) : null;
@@ -382,6 +397,8 @@ export function exportHand(room: Room): Record<string, any> | null {
   const actions: any[] = [];
   const committed = new Map<number, number | null>();
   let pot = 0.0, ante = 0.0;
+  const top = new Map<string, number>();   // the highest street total so far, per street (bet vs raise for a preset)
+  const untyped: string[] = [];            // actions that moved chips but have no type: the line cannot be trusted
   for (const a of h.actions) {
     pot += a.added;
     const sid = a.seat !== null && a.seat !== undefined ? a.seat : nameSeat.get(a.name) ?? null;
@@ -389,8 +406,12 @@ export function exportHand(room: Room): Record<string, any> | null {
       ante += a.added;
       continue;
     }
-    const t = TYPE[a.action];
-    if (!t) continue;
+    const t = actionType(a, top.get(a.street) ?? 0.0);
+    if (a.action !== "Fold") top.set(a.street, Math.max(top.get(a.street) ?? 0.0, a.to || 0.0));
+    if (!t) {
+      if (a.added > 0) untyped.push(`${a.name} ${a.action} ${fmtG(a.to)} on the ${String(a.street).toLowerCase()}`);
+      continue;
+    }
     const rec: Record<string, any> = { seatId: sid, hero: sid === heroSeat && heroSeat !== null, type: t, street: String(a.street).toLowerCase() };
     if (t !== "check" && t !== "fold") rec.amount = r2(t === "call" ? a.added : a.to);
     actions.push(rec);
@@ -450,7 +471,7 @@ export function exportHand(room: Room): Record<string, any> | null {
     heroStatus: status,
     notToActWhy: why,
     lineSource: "log",
-    lineUncertain: null,
+    lineUncertain: untyped.length ? `the log has an action the reader cannot type, so the line is missing it: ${untyped.join("; ")}` : null,
     lineNote: null,
   };
 }

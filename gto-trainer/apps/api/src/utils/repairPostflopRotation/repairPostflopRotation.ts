@@ -266,6 +266,38 @@ export function captureFaults(hand: ParsedHand): string[] {
     if (a.type === "post-bb" && pos(a.seatId) !== "BB") faults.push(`${pos(a.seatId)} posted the big blind`);
   }
 
+  // THE LINE MUST PRICE HERO'S DECISION (2026-09-24, CoinPoker hand 140706500001). Postflop, hero can only owe
+  // chips if someone bet, raised or went all-in on this street — so a table that says hero faces a bet, over a
+  // captured street with no villain aggression on it, is a line missing that bet. That hand's reader dropped the
+  // villain's Pot-button bet: the chain walked a line where hero was first to act, and answered "Check" facing 21bb.
+  // Measured over every logged postflop decision (answers.sqlite, 155 matched): 11 fires, all captures already
+  // refused for other reasons or this hand — none on a decision that had been answered right.
+  const node = hand.currentNode;
+  const street = node?.street as Street | undefined;
+  if (node?.toActIsHero && street && STREETS.includes(street)) {
+    const onStreet = hand.actions.filter((a) => a.street === street);
+    const owed = Number(node.toCall) || 0;
+    const aggression = onStreet.some((a) => !a.hero && a.seatId !== hand.heroSeatId && ["bet", "raise", "all-in"].includes(a.type));
+    if (owed > 0.01 && !aggression) {
+      faults.push(`the table has hero facing ${owed}bb on the ${street}, but no bet or raise on the ${street} was captured — the line is missing it`);
+    }
+
+    // WHO ACTS FIRST IS A FACT OF THE SEATING, NOT OF THE CAPTURE. Heads-up postflop, the out-of-position seat
+    // acts first on every street (the BB on a two-handed table, where the dealer posts the small blind). When
+    // hero sits in position and is to act, the villain has acted on this street — if the capture has nothing
+    // from them, it lost the action, and every downstream builder then takes the first action it sees (none)
+    // as "hero is out of position" and solves hero's spot from the villain's seat. A missed CHECK is the case
+    // the price rule above cannot see (nothing to call). Same 193-decision sweep: 11 fires, the only one that
+    // had been answered is the hand above.
+    const order = rotationFor(hand, street);
+    if (order.length === 2 && order.includes(hand.heroSeatId) && order[1] === hand.heroSeatId) {
+      const villain = order[0]!;
+      if (!onStreet.some((a) => a.seatId === villain)) {
+        faults.push(`${pos(villain)} acts first on the ${street} heads-up, but no ${street} action of theirs was captured before hero's decision`);
+      }
+    }
+  }
+
   return [...new Set(faults)];
 }
 

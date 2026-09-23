@@ -24,6 +24,18 @@ results = []
 
 
 def find_bun() -> str:
+    # THE SAME BUN THE LAUNCHERS RUN (2026-09-24): config/env.ps1 resolves it (PATH's bun.exe, then the ZIP Node's
+    # bundled one). PATH's `bun` here was npm's bun.CMD shim — a different Bun (1.4.0 vs the launchers' 1.3.14) —
+    # and 1.3.14 drops a statement calling a function named `declare`, which only the launchers' Bun showed.
+    if not os.environ.get("BUN"):
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                  str(ROOT / "config" / "env.ps1"), "-EmitCmd"], capture_output=True, text=True, timeout=60).stdout
+            m = re.search(r'^set "BUN=(.+)"$', out, re.M)
+            if m and Path(m.group(1)).is_file():
+                return m.group(1)
+        except Exception:
+            pass
     for c in (os.environ.get("BUN"), shutil.which("bun"),
               *sorted((Path(os.environ.get("LOCALAPPDATA", "")) / "Programs").glob("node-v*/node_modules/bun/bin/bun.exe"), reverse=True),
               Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "bun.exe"):
