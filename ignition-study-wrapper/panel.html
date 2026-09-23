@@ -1330,7 +1330,13 @@
   };
   (async function pollSaHealth() {
     if (!active("game")) { setTimeout(pollSaHealth, 3000); return; }
-    try { saHealth = await (await fetch(GTOW_API + "/api/study-poller/status")).json(); }
+    // THIS panel's poller (one per panel since 2026-09-20): the top-level status is simply the first one listed,
+    // so with several panels up this card could show ANOTHER panel's error (2026-09-24)
+    try {
+      const j = await (await fetch(GTOW_API + "/api/study-poller/status")).json();
+      const mine = (j.pollers || []).find((p) => String(p.assistiveUrl || "").endsWith(":" + location.port));
+      saHealth = mine && mine.status ? mine.status : j;
+    }
     catch (e) { saHealth = { running: false, lastError: "solve API (:2000) unreachable" }; }
     setTimeout(pollSaHealth, 2500);
   })();

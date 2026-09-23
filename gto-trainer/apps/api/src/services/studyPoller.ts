@@ -422,6 +422,8 @@ class StudyPoller {
 
       this.ingestFailures = 0;   // a probe that answered at all (200/409/422) ends the back-off
       if (probe.studyAnswersOn !== true) {
+        this.notePollState(`not asking: Study Answers off per the panel (http ${probe.httpStatus ?? "?"}, ok=${probe.ok})`,
+                           { error: (probe.error ?? "").slice(0, 200) || undefined });
         this.studyWasOn = false; // switching it back on re-arms the readiness probe
         this.status.lastError = null;
         await this.push(null);
@@ -463,6 +465,7 @@ class StudyPoller {
       const canSolveAnyway = gtowApi.hasLiveToken() || localPreflop;
       if (!this.status.gtoWizardConnected && canSolveAnyway) this.ensureGtoWizardLaunching();
       if (!this.status.gtoWizardConnected && !canSolveAnyway) {
+        this.notePollState("not asking: GTO Wizard not connected and no live token");
         // Hero on the clock with no client to solve with: a decision is being
         // lost right now, and until 2026-09-14 only an in-memory flag said so.
         if (probe.ok === true && probe.hero?.toAct === true && probe.hand?.street != null) {
@@ -491,6 +494,9 @@ class StudyPoller {
 
       const eligible = probe.ok === true && probe.hero?.toAct === true && probe.hand?.street != null;
       this.status.lastError = null;
+      this.notePollState(eligible ? "asking: hero to act" : `waiting: ${probe.ok !== true ? `ingest ok=false (${(probe.error ?? "").slice(0, 120)})`
+        : probe.hand?.street == null ? "no hand" : `not hero's turn (${(probe.hero?.notToActWhy ?? "no reason given").slice(0, 120)})`}`,
+        { street: probe.hand?.street ?? null });
       if (!eligible) {
         this.lastSolvedKey = null; // stale — a future recurrence must re-navigate fresh
         // (the buttons-up-but-not-to-act case was recorded above, before the GTO Wizard gate)
@@ -939,6 +945,15 @@ class StudyPoller {
   /** decision keys already written as "seen" / "waiting" (poller-events.jsonl): once per key, not once per tick */
   private seenKeys = new Set<string>();
   private waitLogged = new Set<string>();
+  /** WHY THE POLLER IS OR IS NOT ASKING, written when it CHANGES (poller-events.jsonl "poller state"). A session
+   *  whose decisions were never asked (2026-09-24, session 015325: not even preflop) left no line at all: every
+   *  silent return path — answers off, an idle ingest, the GTO Wizard gate, not hero's turn — now names itself. */
+  private lastPollState = "";
+  private notePollState(state: string, extra: Record<string, unknown> = {}): void {
+    if (state === this.lastPollState) return;
+    this.lastPollState = state;
+    pollerEvent({ url: this.config.assistiveUrl, ev: "poller state", state, ...extra });
+  }
   /** decisionKey of the most recent probe — verdicts for any other key are
    *  stale and get dropped instead of pushed. */
   private lastProbeKey: string | null = null;
