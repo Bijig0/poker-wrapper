@@ -1,0 +1,33 @@
+{
+ "recordedAt": "2026-09-24 02:29:34",
+ "files": [
+  "reader-multitable-fixture-slot1.jsonl.gz",
+  "reader-multitable-fixture-slot2.jsonl.gz",
+  "reader-multitable-fixture.jsonl.gz",
+  "reader-session_20260807_115240.jsonl.gz",
+  "reader-session_20260920_131406.jsonl.gz",
+  "reader-session_20260920_193322.jsonl.gz",
+  "reader-session_20260921_125219.jsonl.gz",
+  "reader-session_20260921_131211.jsonl.gz",
+  "reader-session_20260921_142218.jsonl.gz",
+  "reader-session_20260921_142232.jsonl.gz",
+  "reader-session_20260921_142910.jsonl.gz",
+  "reader-session_20260921_143046.jsonl.gz",
+  "reader-session_20260921_143059.jsonl.gz",
+  "reader-session_20260921_150400-slot1.jsonl.gz",
+  "reader-session_20260921_150400.jsonl.gz",
+  "reader-session_20260921_150413-slot2.jsonl.gz",
+  "reader-session_20260921_150413.jsonl.gz",
+  "reader-session_20260921_153104.jsonl.gz",
+  "reader-session_20260921_153123.jsonl.gz",
+  "reader-session_20260921_154507-slot1.jsonl.gz",
+  "reader-session_20260921_154507.jsonl.gz",
+  "reader-session_20260921_154518-slot2.jsonl.gz",
+  "reader-session_20260921_154518.jsonl.gz",
+  "reader-session_20260922_194118-slot1.jsonl.gz",
+  "reader-session_20260922_194118.jsonl.gz",
+  "reader-session_20260922_194132-slot2.jsonl.gz",
+  "reader-session_20260922_194132.jsonl.gz",
+  "reader-session_20260923_020036.jsonl.gz"
+ ]
+}

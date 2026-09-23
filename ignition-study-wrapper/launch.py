@@ -199,7 +199,12 @@ _RIG = "-fake" if os.environ.get("FAKE_TABLE") == "1" else ""
 # per-slot, or four panels share one process and each panel's bring-to-front raises
 # whichever window Chrome feels like.
 _SLOT = os.environ.get("TABLE_SLOT") or ""
-PROFILE_TABLE = f".profile-table{_RIG}"
+# HEADLESS (2026-09-24): the HTTP contract suite (gto-trainer/apps/wrapper/test/contract) runs a wrapper of its own
+# on its own ports with WRAPPER_HEADLESS=1 — the browser is headless, no panel window opens, and PROFILE_SUFFIX
+# gives it its own browser profile, so a test run never puts a window on screen or touches the rig's profile.
+_HEADLESS = os.environ.get("WRAPPER_HEADLESS") == "1"
+_PROFILE_SUFFIX = os.environ.get("PROFILE_SUFFIX") or ""
+PROFILE_TABLE = f".profile-table{_RIG}{_PROFILE_SUFFIX}"
 # an extra CoinPoker panel opened from the admin page carries a tag ("#2") — in its title (below) and its profile
 _TAG = os.environ.get("PANEL_TAG") or ""
 PROFILE_PANEL = (f".profile-panel{_RIG}{('-' + _SLOT) if _SLOT else ''}"
@@ -807,6 +812,10 @@ def apply_layout() -> dict:
 
     COINPOKER: the panel goes beside the table (_snap_panel_to_cp_table); with no table yet it takes the usual
     strip. Nothing but the panel is ever moved there."""
+    if _HEADLESS:
+        # a headless test instance has no windows of its own — and the title match below would find the REAL
+        # table and panel windows on this desktop and move them
+        return {"ok": False, "why": "headless instance: no windows to place"}
     if _is_cp():
         snap = _snap_panel_to_cp_table()
         if snap.get("ok"):
@@ -7719,8 +7728,11 @@ def chrome_window(url: str, profile: str, x: int, y: int, w: int, h: int,
             "--no-first-run", "--no-default-browser-check"]
     if cdp_port:
         args.insert(2, f"--remote-debugging-port={cdp_port}")
+    if _HEADLESS:
+        args.insert(1, "--headless=new")
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    threading.Thread(target=_place_when_shown, args=(proc, x, y, w, h), daemon=True).start()
+    if not _HEADLESS:
+        threading.Thread(target=_place_when_shown, args=(proc, x, y, w, h), daemon=True).start()
     return proc
 
 
@@ -8196,7 +8208,9 @@ def main() -> None:
     if _fake_mode or cdp.available(CDP_PORT):
         _open_table_window()
 
-    if hwnd := _panel_hwnd():
+    if _HEADLESS:
+        print("[panel] headless: no panel window")
+    elif hwnd := _panel_hwnd():
         # A double-click must always DO something visible: surface the panel —
         # on the screen the mouse is on, restored if it was minimized.
         area = target_area()

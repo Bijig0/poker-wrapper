@@ -1,0 +1,6 @@
+# the older CoinPoker logs are replayed locally (big, and personal); main.log + main.1 are enough in git
+corpus/cp-main_2_*
+corpus/cp-main_3_*
+corpus/cp-main_4_*
+corpus/cp-main_5_*
+corpus/cp-main_6_*
