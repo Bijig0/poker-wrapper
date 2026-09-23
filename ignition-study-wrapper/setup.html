@@ -659,6 +659,8 @@ let setupVersion = null;
 setInterval(async () => {
   try {
     const s = await (await fetch("/state?light=1")).json();
+    // a CoinPoker panel opened from the admin page gets its session from there: go to the panel once it has one
+    if (s.sessionId && s.site === "coinpoker") { location.href = "/panel"; return; }
     if (!s.setupVersion) return;
     if (setupVersion === null) setupVersion = s.setupVersion;
     else if (s.setupVersion !== setupVersion) location.reload();

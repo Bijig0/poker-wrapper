@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinPoker Leader · Tables and panels</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #101418; color: #e8edf2; font: 15px/1.45 "Segoe UI", system-ui, sans-serif; padding: 18px 18px 40px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #8fa1b3; margin: 22px 0 10px; }
+  .sub { color: #8fa1b3; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+  .card { background: #171d24; border: 1px solid #26303a; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .card.real { border-color: #6b2a31; } .card.mine { box-shadow: 0 0 0 1px #1f6feb inset; }
+  .card b { font-size: 15px; }
+  .tag { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: #26303a; color: #cfe0ef; margin-right: 4px; }
+  .tag.real { background: #57222a; color: #ff9a9a; } .tag.practice { background: #1c3b2c; color: #61d095; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  button, select { background: #1f2a35; color: inherit; border: 1px solid #3a4a5a; border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: #5b7a99; } button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.danger { border-color: #8b3a42; color: #ffb3b3; }
+  #msg { min-height: 20px; margin-top: 8px; }
+  .empty { color: #8fa1b3; padding: 10px 0; }
+</style>
+</head>
+<body>
+<h1>CoinPoker leader <span class="sub" style="font-weight:400">· tables and panels</span></h1>
+<div class="sub">Every CoinPoker table open in the client, and every Poker Wrapper panel reading one. Open another panel on a table, move a panel to a different table, or end a panel's session — from here. Refreshes every 3 s.</div>
+<div id="msg" class="sub"></div>
+
+<h2>Open tables <span id="t-count" class="sub" style="text-transform:none;letter-spacing:0"></span></h2>
+<div id="tables" class="grid"></div>
+
+<h2>Panels <span id="p-count" class="sub" style="text-transform:none;letter-spacing:0"></span></h2>
+<div id="panels" class="grid"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let S = { tables: [], panels: [] }, busy = false;
+const panelName = (p) => p.tag === "main" ? "Main panel" : `Panel ${p.tag}`;
+const labelOf = (room) => (S.tables.find((t) => t.room === room) || {}).label || room;
+
+async function post(path, body, note) {
+  busy = true; $("msg").textContent = note; render();
+  let r; try { r = await (await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }
+  catch (e) { r = { ok: false, why: String(e) }; }
+  $("msg").textContent = r.ok ? "done" : `not done: ${r.why || r.error || "refused"}`;
+  busy = false; await load();
+}
+
+function render() {
+  const cp = S.panels.filter((p) => p.site === "coinpoker");
+  $("t-count").textContent = `— ${S.tables.length} open`;
+  $("tables").innerHTML = S.tables.length ? S.tables.map((t) => {
+    const money = t.practice ? '<span class="tag practice">practice chips</span>' : t.coinType === 1 ? '<span class="tag real">real money</span>' : "";
+    const on = S.panels.filter((p) => p.attached === t.room);
+    const movable = cp.filter((p) => p.attached !== t.room);
+    return `<div class="card ${t.coinType === 1 ? "real" : ""}" title="${esc(t.room)}">
+      <b>${esc(t.label || t.room)}</b>
+      <div class="row">${money}<span class="tag">${t.heroSeated ? "you are seated" : "observing"}</span><span class="tag">${t.players} seated</span></div>
+      <div class="sub">${on.length ? "Read by: " + on.map((p) => esc(panelName(p))).join(", ") : "No panel on this table"}</div>
+      <div class="row">
+        <button class="primary" data-open="${esc(t.room)}" ${busy ? "disabled" : ""}>Open a panel here</button>
+        ${movable.length ? `<select data-movesel="${esc(t.room)}">${movable.map((p) => `<option value="${p.port}">${esc(panelName(p))}${p.label ? " (now " + esc(p.label) + ")" : ""}</option>`).join("")}</select>
+        <button data-move="${esc(t.room)}" ${busy ? "disabled" : ""}>Move here</button>` : ""}
+      </div></div>`;
+  }).join("") : '<div class="empty">No table is open in the CoinPoker client — join one there (you do not have to sit).</div>';
+
+  $("p-count").textContent = `— ${S.panels.length} running`;
+  $("panels").innerHTML = S.panels.length ? S.panels.map((p) => `<div class="card ${p.me ? "mine" : ""}">
+      <b>${esc(panelName(p))} <span class="sub">:${p.port}${p.me ? " · this page" : ""}</span></b>
+      <div class="sub">${p.site === "coinpoker" ? (p.attached ? `Reading <b>${esc(labelOf(p.attached))}</b>${p.heroSeated ? " · you are seated" : ""}` : "Not attached to a table") : `Site: ${esc(p.site || "?")}`}</div>
+      <div class="sub">${p.sessionId ? "Session running" + (p.answers ? " · answers on" : " · answers off") : "No session"}</div>
+      <div class="row">
+        <button data-snap="${p.port}" ${busy || p.site !== "coinpoker" ? "disabled" : ""}>Panel beside its table</button>
+        <button class="danger" data-end="${p.port}" ${busy || !p.sessionId ? "disabled" : ""}>End session</button>
+      </div></div>`).join("") : '<div class="empty">No panel is running.</div>';
+
+  document.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => post("/admin/open", { room: b.dataset.open }, `opening a panel on ${labelOf(b.dataset.open)} (it starts a session with the main panel's strategy)…`));
+  document.querySelectorAll("[data-move]").forEach((b) => b.onclick = () => {
+    const sel = document.querySelector(`[data-movesel="${CSS.escape(b.dataset.move)}"]`);
+    post("/admin/attach", { port: Number(sel.value), room: b.dataset.move }, `moving the panel to ${labelOf(b.dataset.move)}…`);
+  });
+  document.querySelectorAll("[data-snap]").forEach((b) => b.onclick = () => post("/admin/panel", { port: Number(b.dataset.snap), action: "snap" }, "moving that panel beside its table…"));
+  document.querySelectorAll("[data-end]").forEach((b) => b.onclick = () => {
+    if (!confirm("End this panel's session? Its window closes; the table stays open in the client.")) return;
+    post("/admin/panel", { port: Number(b.dataset.end), action: "end" }, "ending that panel's session…");
+  });
+}
+
+async function load() {
+  try { S = await (await fetch("/admin/state")).json(); } catch (e) { $("msg").textContent = "this panel is not answering"; }
+  // an open dropdown would be closed by a redraw: wait until it is done
+  if (!busy && document.activeElement?.tagName !== "SELECT") render();
+}
+load();
+setInterval(() => { if (!busy) load(); }, 3000);
+</script>
+</body>
+</html>

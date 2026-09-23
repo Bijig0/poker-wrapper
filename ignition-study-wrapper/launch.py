@@ -200,13 +200,19 @@ _RIG = "-fake" if os.environ.get("FAKE_TABLE") == "1" else ""
 # whichever window Chrome feels like.
 _SLOT = os.environ.get("TABLE_SLOT") or ""
 PROFILE_TABLE = f".profile-table{_RIG}"
-PROFILE_PANEL = f".profile-panel{_RIG}{('-' + _SLOT) if _SLOT else ''}"
+# an extra CoinPoker panel opened from the admin page carries a tag ("#2") — in its title (below) and its profile
+_TAG = os.environ.get("PANEL_TAG") or ""
+PROFILE_PANEL = (f".profile-panel{_RIG}{('-' + _SLOT) if _SLOT else ''}"
+                 + (f"-t{''.join(ch for ch in _TAG if ch.isalnum())}" if _TAG else ""))
+# the CoinPoker LEADER window (the admin page), opened by the main panel for a CoinPoker session
+PROFILE_LEADER = f".profile-leader{_RIG}"
 # The panel window is found by its TITLE (_wrapper_windows), so with four
 # wrappers up the title has to say which slot it belongs to — otherwise slot 1
 # surfaces, moves or tiles slot 3's panel. The page files carry the base title;
 # _slot_title() stamps the slot on the way out (_send_page).
 # "Poker Wrapper" since it plays more than Ignition (2026-09-22; was "Ignition Study").
-PANEL_TITLE = ("Poker Wrapper Tool" if _RIG else "Poker Wrapper") + (f" {_SLOT}" if _SLOT else "")
+# an extra CoinPoker panel's tag ("#2", above) goes in its title too, for the same reason
+PANEL_TITLE = ("Poker Wrapper Tool" if _RIG else "Poker Wrapper") + (f" {_SLOT}" if _SLOT else "") + (f" {_TAG}" if _TAG else "")
 
 
 def work_area() -> tuple[int, int]:
@@ -327,7 +333,8 @@ def _wrapper_windows() -> tuple[int | None, int | None]:
     # slot set the table is simply not looked for here: it is addressed by its
     # claimed CDP target instead (place_client_window).
     table = None if TABLES.slot() is not None else next(
-        (h for h, t in found if not _is_panel_title(t, PANEL_TITLE) and not _is_panel_title(t, other_panel)), None)
+        (h for h, t in found if not _is_panel_title(t, PANEL_TITLE) and not _is_panel_title(t, other_panel)
+         and not t.startswith("Poker Wrapper")), None)      # never another wrapper's panel (tagged, slotted, the rig's)
     panel = next((h for h, t in found if _is_panel_title(t, PANEL_TITLE)), None)
     return table, panel
 
@@ -355,10 +362,11 @@ def _slot_title(html: bytes) -> bytes:
     """Stamp this slot on the page title, so the panel window can be told from
     the other slots' (see PANEL_TITLE). A no-op for the single-table setup —
     the bytes are returned exactly as they were read."""
-    if not _SLOT:
+    if not _SLOT and not _TAG:
         return html
     base = b"<title>Poker Wrapper Tool" if _RIG else b"<title>Poker Wrapper"
-    return html.replace(base, base + f" {_SLOT}".encode(), 1)
+    suffix = (f" {_SLOT}" if _SLOT else "") + (f" {_TAG}" if _TAG else "")
+    return html.replace(base, base + suffix.encode(), 1)
 
 
 def _panel_hwnd() -> int | None:
@@ -579,6 +587,194 @@ def _snap_panel_to_cp_table() -> dict:
             **({} if shape_ok else {"note": f"the table is {cw}x{ch}, a different shape from the layout the buttons "
                                              f"were measured on ({CPA.REF_W}x{CPA.REF_H}) — if a press is refused, "
                                              f"resize the table closer to that shape"})}
+
+
+# ---- CoinPoker: several panels, one admin page (2026-09-23) --------------------------------------------------
+# Each panel is its own wrapper process attached to one table. The main one is :7700; the admin page opens more on
+# 7720-7739 (tag "#2".., CDP 9340+ — unused by CoinPoker, but every instance needs its own), each running a session
+# that copies the main panel's strategy with its own cpTable. The admin page (served by any panel, /admin) finds
+# the panels by probing those ports, and moves / opens / ends them through ITS OWN server (no cross-port fetches).
+ADMIN_PORTS = [7700] + list(range(7720, 7740))
+
+
+def _listening(ports: list[int]) -> set[int]:
+    """Which of these ports something listens on. Asked of the OS, not by connecting: on Windows a connect to a
+    CLOSED localhost port takes 2 s to fail, so probing the 21 admin ports by connecting took ~40 s."""
+    try:
+        import psutil
+        return {c.laddr.port for c in psutil.net_connections("tcp")
+                if c.status == "LISTEN" and c.laddr and c.laddr.port in ports}
+    except Exception:
+        return set(ports)
+
+
+def _panel_probe(port: int) -> dict | None:
+    if port != PANEL_PORT and port not in _listening([port]):
+        return None
+    if port == PANEL_PORT:
+        s = state(light=True)
+    else:
+        try:
+            # 5 s: a panel's own /state can spend 2 s on a closed CDP port (no Ignition window up)
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/state?light=1", timeout=5) as r:
+                s = json.loads(r.read())
+        except Exception:
+            return None
+    t = s.get("table") or {}
+    return {"port": port, "tag": s.get("panelTag") or ("main" if port == 7700 else f":{port}"), "site": s.get("site"),
+            "sessionId": s.get("sessionId"), "attached": (s.get("coinpoker") or {}).get("attached"),
+            "table": t.get("room"), "label": t.get("label"), "heroSeated": t.get("heroSeated"),
+            "answers": s.get("studyAnswers"), "me": port == PANEL_PORT}
+
+
+def _admin_state() -> dict:
+    # this page's own panel always counts (a spare or test instance runs outside ADMIN_PORTS); probed in parallel
+    ports = sorted((_listening(ADMIN_PORTS) & set(ADMIN_PORTS)) | {PANEL_PORT})
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        panels = [x for x in ex.map(_panel_probe, ports) if x]
+    tables = CP.open_tables()
+    for t in tables:
+        t["panels"] = [x["port"] for x in panels if x.get("attached") == t["room"]]
+    return {"ok": True, "tables": tables, "panels": panels, "client": CP.client_state(), "me": PANEL_PORT}
+
+
+def _cp_reattach(room: str | None) -> tuple[int, dict]:
+    """This panel reads another table from now on (the admin page's Move, or the panel's own switch)."""
+    if room and room not in CP.open_rooms():
+        return 409, {"ok": False, "why": "that table is not open in the CoinPoker client"}
+    CP.attach(room)
+    _study.update(text=None, pick=None)                 # the old table's answer is not this table's
+    if _session["rec"]:
+        cfg = dict(_session["rec"].get("config") or {}, cpTable=room)
+        _session["rec"]["config"] = cfg
+        _sessions.set_config(_session["id"], cfg)       # a resume re-attaches to the table it is on NOW
+        _sessions.event(_session["id"], "coinpoker-attach", {"room": room})
+    _cp_snap["room"] = room
+    threading.Thread(target=lambda: _cp_snap.update(last=_snap_panel_to_cp_table(), at=time.time()), daemon=True).start()
+    print(f"[coinpoker] attached to {room!r}")
+    return 200, {"ok": True, "room": room, "label": CPS.Site.label(room, None)["label"] if room else None}
+
+
+def _leader_hwnd() -> int | None:
+    """The CoinPoker leader window (title "CoinPoker Leader · ..."), if one is up. Never a "Poker Wrapper" title,
+    so the panel finder (_wrapper_windows) cannot take it for a panel or a table."""
+    found = []
+    proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+
+    def cb(h, _):
+        if ctypes.windll.user32.IsWindowVisible(h):
+            n = ctypes.windll.user32.GetWindowTextLengthW(h)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                ctypes.windll.user32.GetWindowTextW(h, buf, n + 1)
+                if buf.value.startswith("CoinPoker Leader"):
+                    found.append(h)
+        return True
+    ctypes.windll.user32.EnumWindows(proto(cb), 0)
+    return found[0] if found else None
+
+
+def _open_leader() -> None:
+    """THE LEADER PANEL (Brady, 2026-09-23): while the Poker Wrapper plays CoinPoker, the main panel keeps a second
+    window up — the admin page: every open table, every panel, open / move / end. Only the main panel (no tag, not
+    the rig) owns it; it closes with the main panel's CoinPoker session (_session_end)."""
+    if _TAG or _fake_mode:
+        return
+    h = _leader_hwnd()
+    if h:
+        ctypes.windll.user32.ShowWindow(h, 9)
+        return
+    area = other_area() or target_area()
+    w, ht = min(area["w"], max(520, area["w"] // 3)), int(area["h"] * 0.7)
+    chrome_window(f"http://127.0.0.1:{PANEL_PORT}/admin", PROFILE_LEADER, area["x"], area["y"], w, ht)
+    print("[coinpoker] leader window opened")
+
+
+def _admin_post(port: int, path: str, body: dict, timeout: float = 30) -> tuple[int, dict]:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except ValueError:
+            return e.code, {"ok": False, "why": str(e)}
+    except Exception as e:
+        return 502, {"ok": False, "why": f"panel :{port} did not answer ({e})"}
+
+
+def _admin_open(room: str) -> tuple[int, dict]:
+    """A new panel for `room`: another wrapper on the next free admin port, then a session on it that copies this
+    panel's strategy (or the CoinPoker heads-up one) attached to that table."""
+    if room not in CP.open_rooms():
+        return 409, {"ok": False, "why": "that table is not open in the CoinPoker client"}
+    live = _listening(ADMIN_PORTS)
+    port = next((p for p in range(7720, 7740) if p not in live), None)
+    if port is None:
+        return 409, {"ok": False, "why": "no free panel port (7720-7739 are all in use)"}
+    tag = f"#{port - 7718}"
+    exe = Path(sys.executable)
+    exe = exe.with_name("pythonw.exe") if exe.with_name("pythonw.exe").exists() else exe
+    subprocess.Popen([str(exe), str(ROOT / "run-study.pyw"), "--panel-port", str(port), "--cdp-port", str(9340 + port - 7720)],
+                     env={**os.environ, "PANEL_TAG": tag}, cwd=str(ROOT),
+                     creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+    for _ in range(60):
+        if _panel_probe(port):
+            break
+        time.sleep(1)
+    else:
+        return 504, {"ok": False, "why": f"the new panel on :{port} did not come up"}
+    rec = _session["rec"] if (_session["rec"] and _is_cp()) else None
+    preset = rec["preset"] if rec else "strategy:cp200-hu-equilibrium"
+    t = next((x for x in CP.open_tables() if x["room"] == room), {})
+    cfg = dict((rec or {}).get("config") or {"answers": True}, site=CPS.SITE, cpTable=room)
+    if t.get("format"):
+        cfg["format"] = t["format"]
+    code, res = _admin_post(port, "/session/start", {"preset": preset, "config": cfg, "label": f"{t.get('label') or room} ({tag})"}, 60)
+    return (200 if res.get("ok") else code), {**res, "port": port, "tag": tag}
+
+
+_cp_follow: dict = {"room": None, "hwnd": None, "rect": None, "stable": 0, "snapped": None}
+
+
+def _cp_follow_loop() -> None:
+    """THE PANEL FOLLOWS THE TABLE (Brady, 2026-09-24: "Panel beside table" is the default, no button).
+
+    Every second, the attached table's window rectangle is read. When it has CHANGED and then held still for a
+    second (you let go of the drag), the panel goes beside it; a table that does not move is never acted on, so
+    the panel is never fought over. The first rectangle seen counts as a change, which is the first snap when a
+    session attaches or re-attaches. A snap that fails (no room beside the table, another desktop) is not
+    retried until the table moves again."""
+    from sites import cp_actions as CPA
+    u = ctypes.windll.user32
+    while True:
+        time.sleep(1.0)
+        try:
+            room = CP.pinned
+            if not (_is_cp() and _session["rec"] and room):
+                _cp_follow.update(room=None, hwnd=None, rect=None, stable=0, snapped=None)
+                continue
+            if _cp_follow["room"] != room or not _cp_follow["hwnd"] or not u.IsWindow(_cp_follow["hwnd"]):
+                _cp_follow.update(room=room, hwnd=CPA.table_window(room), rect=None, stable=0, snapped=None)
+            h = _cp_follow["hwnd"]
+            if not h or u.IsIconic(h) or CPA.cloaked(h):
+                continue
+            r = ctypes.wintypes.RECT()
+            u.GetWindowRect(h, ctypes.byref(r))
+            rect = (r.left, r.top, r.right, r.bottom)
+            if rect != _cp_follow["rect"]:
+                _cp_follow.update(rect=rect, stable=0)      # still moving (or just seen)
+                continue
+            _cp_follow["stable"] += 1
+            if rect != _cp_follow["snapped"]:
+                res = _snap_panel_to_cp_table()
+                _cp_follow["snapped"] = rect
+                _cp_snap.update(last=res, at=time.time())
+        except Exception as e:
+            print(f"[coinpoker] follow: {e}")
 
 
 def apply_layout() -> dict:
@@ -822,6 +1018,66 @@ def _current_note() -> str | None:
     return _study["note"]
 
 
+# ---- the big pieces, watched (2026-09-23) -------------------------------------------------------------------
+# "When a major piece is down there should be a massive warning in the panel" (Brady). Three pieces answer:
+# the study API (:2000, everything), the chart server (:8777, the HRC preflop charts), GTO Wizard (postflop and
+# multiway, through the API's GTO Wizard sessions). A background thread checks them every 15 s — the API's
+# GTO Wizard status alone takes ~4 s, far too slow for the panel's 1 Hz poll — and state() carries the result:
+# "down" (red: that layer answers nothing) or "partial" (amber: some of it works).
+_health: dict = {"at": 0.0, "issues": []}
+
+
+def _health_check() -> list[dict]:
+    issues: list[dict] = []
+    api = S.API.rstrip("/")
+
+    def get(url: str, timeout: float) -> bytes | None:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return r.read()
+        except Exception:
+            return None
+
+    if get(f"{api}/api/dashboard/config", 5) is None:
+        issues.append({"level": "down", "piece": "study-api",
+                       "text": "The study API (:2000) is DOWN — there are no answers at all",
+                       "fix": "it restarts itself within a minute; if it stays down, restart the laptop"})
+        return issues                                  # the other two are reached through it / are moot
+    charts = os.environ.get("HRC3MAX_URL", "http://127.0.0.1:8777").rstrip("/")
+    if get(f"{charts}/", 5) is None:
+        issues.append({"level": "down", "piece": "chart-server",
+                       "text": "The chart server (:8777) is DOWN — preflop chart answers (3-handed, heads-up) are OFF",
+                       "fix": "it restarts itself within a minute"})
+    raw = get(f"{api}/api/dashboard/sources/registry", 20)
+    try:
+        g = (json.loads(raw) if raw else {}).get("armed", {}).get("gtow") or {}
+    except ValueError:
+        g = {}
+    sess = [x for x in g.get("sessions") or [] if x.get("enabled", True)]
+    live = [x for x in sess if x.get("tokenLive")]
+    if raw is not None and sess and not live:
+        issues.append({"level": "down", "piece": "gtow",
+                       "text": "GTO Wizard is NOT CONNECTED — postflop and multiway answers are OFF",
+                       "detail": " · ".join(f"{x.get('id')}: {x.get('text')}" for x in sess),
+                       "fix": "is GTO Wizard up? Sign in again in its Chrome window if it shows the login page"})
+    elif live and len(live) < len(sess):
+        off = [x for x in sess if not x.get("tokenLive")]
+        issues.append({"level": "partial", "piece": "gtow",
+                       "text": "GTO Wizard is PARTLY connected — " + ", ".join(
+                           f"the {x.get('id')} account{' (heads-up)' if not x.get('multiway') else ''} is down" for x in off),
+                       "detail": " · ".join(f"{x.get('id')}: {x.get('text')}" for x in off)})
+    return issues
+
+
+def _health_loop() -> None:
+    while True:
+        try:
+            _health.update(issues=_health_check(), at=time.time())
+        except Exception as e:
+            print(f"[health] check failed: {e}")
+        time.sleep(15)
+
+
 def state(light: bool = False) -> dict:
     """Full state for the panel's connection card; `light` skips the DOM eval
     and target listing — enough for the 1 Hz study-answer poll and the
@@ -836,6 +1092,8 @@ def state(light: bool = False) -> dict:
         sv = 0
     out = {"cdp": cdp.available(CDP_PORT), "ignition": None, "targets": [],
            "panelVersion": pv, "setupVersion": sv,
+           # the big pieces (_health_loop): the panel's red / amber banner
+           "health": {"issues": _health["issues"], "checkedAgo": round(time.time() - _health["at"], 1) if _health["at"] else None},
            # Which rig this is. The panel shows its Table Setup card only on a
            # test rig, and points the answer poller at its OWN wrapper — one
            # poller exists, so whichever panel you switch answers on becomes
@@ -878,6 +1136,7 @@ def state(light: bool = False) -> dict:
            "connected": False, "hand": None, "studyAnswers": _study["on"],
 
            "sessionId": _session["id"],
+           "panelTag": _TAG or None,
            "session": _session_brief(),
            "panelAnswer": _current_answer(),
            # why there is no answer, when there is none (see _current_note)
@@ -938,15 +1197,11 @@ def state(light: bool = False) -> dict:
         # Ignition browser (and its CDP port) plays no part.
         t = CP.table()
         st = CP.hero_status()
-        # the first time you are seated at a table in a live session, the panel goes beside it (once per table;
-        # the panel's "Panel beside table" button does it again after you move the table)
-        if t and t.get("heroSeated") and _session["rec"] and t["room"] != _cp_snap["room"]:
-            _cp_snap["room"] = t["room"]
-            threading.Thread(target=lambda: _cp_snap.update(last=_snap_panel_to_cp_table(), at=time.time()),
-                             daemon=True).start()
+        # the panel beside the table: _cp_follow_loop, continuously (no longer once per table here)
         out.update({"connected": bool(t), "hand": _hand_state() if t else None, "table": t,
                     "practice": bool(t and t.get("practice")),
-                    "coinpoker": {"client": CP.client_state(), "error": CP.error, "snap": _cp_snap.get("last")},
+                    "coinpoker": {"client": CP.client_state(), "error": CP.error, "snap": _cp_snap.get("last"),
+                                  "attached": CP.pinned},
                     "snapshot": {"status": st, "seats": [{"hero": True, "sittingOut": st == "sitting-out"}]}})
         return out
     if not out["cdp"]:
@@ -4032,7 +4287,7 @@ def _note_award(hid: str, id_node: dict, nodes: list) -> None:
 
 def _cp_line(room: str, line: str) -> None:
     """A CoinPoker feed line (sites/coinpoker log thread) onto the panel feed."""
-    if _is_cp():
+    if _is_cp() and (not CP.pinned or room == CP.pinned):     # attached: that table's lines only
         _feed_add(f"[{room.split()[-1]}] {line.strip()}")
 
 
@@ -4042,6 +4297,8 @@ def _cp_finished(room, raw: dict) -> None:
     land in the session that played them."""
     if not _is_cp():
         return
+    if CP.pinned and room.name != CP.pinned:
+        return      # another panel's table: its own panel (and session) archives it
     try:
         _archive_cp(room, raw)
     except Exception as e:
@@ -6593,6 +6850,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", json.dumps({"snapshots": A.snapshots()}).encode())
             elif path == "/update":              # packaged installs: is a newer release waiting?
                 self._send(200, "application/json", json.dumps(_update_status("force=1" in (self.path.split("?", 1) + [""])[1])).encode())
+            elif path == "/admin":               # CoinPoker: every open table and every panel, from one page
+                self._send(200, "text/html; charset=utf-8", (ROOT / "admin.html").read_bytes())
+            elif path == "/admin/state":
+                self._send(200, "application/json", json.dumps(_admin_state()).encode())
             elif path == "/coinpoker/tables":    # the tables open in the client, for the setup page to attach one
                 self._send(200, "application/json", json.dumps({
                     "tables": CP.open_tables(), "attached": CP.pinned, "client": CP.client_state()}).encode())
@@ -7161,6 +7422,7 @@ class Handler(BaseHTTPRequestHandler):
                         # CoinPoker: no browser and no router — the client and its
                         # tables carry on by themselves; the log reader picks them up
                         CP.ensure_client()
+                        threading.Thread(target=_open_leader, daemon=True).start()
                         n_res = 1
                     elif n_res > 1:
                         TABLES.adopt(n_res)
@@ -7217,6 +7479,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", json.dumps({"ok": True}).encode())
             elif path == "/update":              # packaged installs: run setup\update.ps1, then stand down
                 code, res = _start_update()
+                self._send(code, "application/json", json.dumps(res).encode())
+            elif path in ("/coinpoker/attach", "/admin/attach", "/admin/open", "/admin/panel"):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                if path == "/coinpoker/attach":          # this panel reads another table
+                    code, res = _cp_reattach(body.get("room"))
+                elif path == "/admin/open":              # a new panel on that table
+                    code, res = _admin_open(str(body.get("room") or ""))
+                else:
+                    port = int(body.get("port") or 0)
+                    if port not in ADMIN_PORTS:
+                        code, res = 400, {"ok": False, "why": "not a panel port"}
+                    elif path == "/admin/attach":        # move that panel to another table
+                        code, res = (_cp_reattach(body.get("room")) if port == PANEL_PORT
+                                     else _admin_post(port, "/coinpoker/attach", {"room": body.get("room")}))
+                    else:                                # {port, action: snap | end}
+                        # NOT named `act`: an assignment anywhere in do_POST makes the name local to all of it,
+                        # and the /act route (the button press) calls the module's act() — that broke every press
+                        what = body.get("action")
+                        if what == "snap":
+                            code, res = _admin_post(port, "/layout", {})
+                        elif what == "end":
+                            code, res = _admin_post(port, "/session/end", {"note": "ended from the admin page"})
+                        else:
+                            code, res = 400, {"ok": False, "why": "action must be snap or end"}
                 self._send(code, "application/json", json.dumps(res).encode())
             elif path == "/publish":             # OWNER (source checkout): open setup/publish.cmd in a console
                 if _installed_version() is not None or not (_REPO / "setup" / "publish.cmd").exists():
@@ -7802,6 +8089,8 @@ def main() -> None:
         # CoinPoker session has the table's state from its first second; its lines
         # and hands only reach the panel/archive while the session's site is CoinPoker
         CP.start(on_line=_cp_line, on_finished=_cp_finished)
+        threading.Thread(target=_health_loop, daemon=True, name="health").start()
+        threading.Thread(target=_cp_follow_loop, daemon=True, name="cp-follow").start()
         threading.Thread(target=_chain_keeper, daemon=True).start()
         threading.Thread(target=_net_guard, daemon=True, name="net-guard").start()
         print(f"[panel] serving on http://127.0.0.1:{PANEL_PORT}/panel")
@@ -9086,6 +9375,7 @@ def _session_start(body: dict) -> tuple[int, dict]:
         # reader is already running (main) and follows whichever table you open.
         cl = CP.ensure_client()
         _sessions.event(sid, "coinpoker-client", cl)
+        threading.Thread(target=_open_leader, daemon=True).start()
         print(f"[session] {sid} started · {preset} · CoinPoker · client "
               f"{'started' if cl.get('started') else 'already running' if cl.get('ok') else cl.get('error')}")
         return 200, {"ok": True, "session": rec, "tables": [], "opened": [], "site": CPS.SITE, "client": cl}
@@ -9219,7 +9509,11 @@ def _close_out_after_end(sid: str) -> dict:
         # CoinPoker's tables belong to its client: the session ends, the panel goes,
         # and every table (and the chips on it) stays exactly where it is
         def _go_cp() -> None:
+            # every panel has its own Brave profile, so this closes OUR window only; the main panel takes its
+            # leader window with it (the extra panels keep running until they are ended themselves)
             _kill_profile_windows(PROFILE_PANEL)
+            if not _TAG:
+                _kill_profile_windows(PROFILE_LEADER)
             _stand_down("session ended")
         threading.Timer(0.8, _go_cp).start()
         return {"left": None, "windows": "closing", "process": "exiting",

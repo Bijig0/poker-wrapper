@@ -574,6 +574,16 @@ class SessionStore:
             c.close()
         return self.get(sid)  # type: ignore[return-value]
 
+    def set_config(self, sid: str, config: dict) -> None:
+        """A live session's config changed after start (a CoinPoker panel re-attached to another table): the
+        resume path reads the record back, so it must carry the table the panel is on now."""
+        c = self._db()
+        try:
+            c.execute("UPDATE sessions SET config=? WHERE id=?", (json.dumps(config), sid))
+            c.commit()
+        finally:
+            c.close()
+
     def event(self, sid: str, kind: str, data: dict | None = None) -> None:
         """Append one event. READ-MODIFY-WRITE, so it must be serialized: with
         four tables joining one session in parallel (launch._fan_out), three

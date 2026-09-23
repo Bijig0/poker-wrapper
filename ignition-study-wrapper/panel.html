@@ -194,6 +194,9 @@
 </style>
 </head>
 <body>
+  <!-- A MAJOR PIECE DOWN (2026-09-23): the study API, the chart server or GTO Wizard. Red = that layer answers
+       nothing; amber = partly. From the wrapper's health thread (state().health), refreshed every 15 s. -->
+  <div id="health-banner" style="display:none;margin:0 0 10px;padding:12px 14px;border-radius:10px;font-weight:700;font-size:16px;line-height:1.35"></div>
   <div class="top">
     <h1>Poker Wrapper <span id="site-badge" class="badge" style="display:none"></span> <span id="rig-badge" class="badge" style="display:none;background:#1d4e78;color:#cfe0ef">TEST RIG</span></h1>
     <nav class="modes" aria-label="panel mode">
@@ -272,7 +275,8 @@
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
       <button id="cp-sitout" class="mini" title="tick / untick Sit Out Next Hand on the table">Sit out next hand</button>
       <button id="cp-sitout-all" class="mini" title="tick / untick Sit Out All (every CoinPoker table)">Sit out all</button>
-      <button id="cp-snap" class="mini" title="move this panel beside the CoinPoker table (the table is never moved)">Panel beside table</button>
+      <button id="cp-snap" class="mini" title="the panel follows the table by itself (a second after you stop moving it); this does it right now">Panel beside table</button>
+      <button id="cp-admin" class="mini" title="every open CoinPoker table and every panel: open another panel, move one, end one">Tables &amp; panels…</button>
       <span id="cp-msg" class="sub"></span>
     </div>
   </div>
@@ -991,6 +995,7 @@
   }
   $("cp-sitout").onclick = (e) => { e.currentTarget.blur(); cpSitout(false); };
   $("cp-sitout-all").onclick = (e) => { e.currentTarget.blur(); cpSitout(true); };
+  $("cp-admin").onclick = (e) => { e.currentTarget.blur(); window.open("/admin", "pw-admin", "width=980,height=820"); };
   // the panel follows the table (the table is never moved): after you move or resize the table, press again
   $("cp-snap").onclick = async (e) => {
     e.currentTarget.blur();
@@ -1000,10 +1005,23 @@
     $("cp-msg").textContent = r.ok && r.side ? `beside the table (${r.side})${r.note ? " — " + r.note : ""}` : `not moved: ${r.why || "no table"}`;
   };
 
+  function renderHealth(h) {
+    const el = document.getElementById("health-banner");
+    const issues = (h && h.issues) || [];
+    if (!issues.length) { el.style.display = "none"; return; }
+    const down = issues.some((i) => i.level === "down");
+    el.style.display = "";
+    el.style.background = down ? "#8b1a1a" : "#6b4a0f";
+    el.style.border = `2px solid ${down ? "#ff5a5a" : "#ffce56"}`;
+    el.style.color = "#fff";
+    el.innerHTML = issues.map((i) => `<div>${i.level === "down" ? "⛔" : "⚠️"} ${esc(i.text)}</div>`
+      + (i.fix || i.detail ? `<div style="font-weight:400;font-size:12.5px;opacity:.9;margin:2px 0 6px">${esc([i.fix, i.detail].filter(Boolean).join(" — "))}</div>` : "")).join("");
+  }
   (async function pollSa() {
     if (!active("game")) { setTimeout(pollSa, 2000); return; }
     try {
       const s = await (await fetch("/state?light=1")).json();
+      renderHealth(s.health);
       // Self-heal version skew: a long-lived panel window running old page
       // code against a newer server is how "[object Object]" bugs happen.
       if (s.panelVersion) {
