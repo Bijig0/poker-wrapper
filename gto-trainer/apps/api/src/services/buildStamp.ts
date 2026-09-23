@@ -13,8 +13,16 @@ import { join } from "node:path";
  * in a process that could not know it had been fixed.
  *
  * So: stamp the newest source mtime at boot, re-scan on demand, and let the
- * dashboard say "restart to pick this up" with a button that does it. A clean
- * exit IS the restart — the supervisor relaunches 10s later with EXPLOIT_CHART
+ * dashboard say "restart to pick this up" with a button that does it.
+ *
+ * "At boot" means in the constructor, i.e. while index.ts is still importing,
+ * before the server answers anything. It used to be taken lazily on the first
+ * /api/build call, which is only "boot" if someone asks straight away. On
+ * 2026-09-24 nobody asked for 2½ hours: the worker booted at 02:00, a fix landed
+ * at 04:38, the first question came at ~04:50 and stamped the FIXED file as
+ * loaded, so the API said stale:false while it went on running the 02:00 code.
+ *
+ * A clean exit IS the restart — the supervisor relaunches 10s later with EXPLOIT_CHART
  * and POOL_MODEL armed, which is exactly why the button must never try to spawn
  * the API itself.
  *
@@ -51,7 +59,8 @@ export interface BuildStatus {
 
 interface Scan { stamp: number; files: number; newer: string[]; ms: number }
 
-function scan(since: number): Scan {
+/** Newest code mtime under `root`, and (when `since` is set) the files newer than it. */
+export function scan(root: string, since: number): Scan {
   const t0 = Date.now();
   let stamp = 0;
   let files = 0;
@@ -64,37 +73,42 @@ function scan(since: number): Scan {
       if (e.name.startsWith(".") && e.name !== ".") continue;
       if (SKIP.has(e.name)) continue;
       const full = join(dir, e.name);
-      if (e.isDirectory()) { walk(full, depth + 1); continue; }
+      if (e.isDirectory()) {
+        // src/ is its own WATCH entry; walking it again from "." listed its top-level files twice
+        if (dir === root && (WATCH as readonly string[]).includes(e.name)) continue;
+        walk(full, depth + 1);
+        continue;
+      }
       if (!CODE.test(e.name)) continue;
       let m = 0;
       try { m = statSync(full).mtimeMs; } catch { continue; }
       files++;
       if (m > stamp) stamp = m;
-      if (since && m > since && newer.length < 40) newer.push(full.slice(ROOT.length + 1).replace(/\\/g, "/"));
+      if (since && m > since && newer.length < 40) newer.push(full.slice(root.length + 1).replace(/\\/g, "/"));
     }
   };
-  for (const w of WATCH) walk(join(ROOT, w), w === "." ? 7 : 0);
+  for (const w of WATCH) walk(join(root, w), w === "." ? 7 : 0);
   return { stamp, files, newer, ms: Date.now() - t0 };
 }
 
-class BuildStamp {
+export class BuildStamp {
   readonly bootAt = Date.now();
-  private boot: Scan | null = null;
+  /** Taken once, here, and then fixed for this process's life. That is the whole
+   *  point: it must describe what was LOADED, not what is on disk now. Every
+   *  static import has been read before this module evaluates, so the only blind
+   *  spot left is an edit landing during boot itself — seconds, not hours. */
+  private readonly boot: Scan;
   private last: { at: number; scan: Scan } | null = null;
 
-  /** Taken once, lazily, on the first question — and then fixed for this
-   *  process's life. That is the whole point: it must describe what was LOADED,
-   *  not what is on disk now. */
-  private bootScan(): Scan {
-    if (!this.boot) this.boot = scan(0);
-    return this.boot;
+  constructor(private readonly root: string = ROOT) {
+    this.boot = scan(root, 0);
   }
 
   status(force = false): BuildStatus {
-    const boot = this.bootScan();
+    const boot = this.boot;
     const now = Date.now();
     if (force || !this.last || now - this.last.at > THROTTLE_MS) {
-      this.last = { at: now, scan: scan(boot.stamp) };
+      this.last = { at: now, scan: scan(this.root, boot.stamp) };
     }
     const cur = this.last.scan;
     return {
@@ -123,4 +137,5 @@ export function isSupervised(): boolean {
   return !!process.env.STUDY_API_SUPERVISOR;
 }
 
+/** Constructed when index.ts imports routes/build.ts: at boot, before the server listens. */
 export const buildStamp = new BuildStamp();
