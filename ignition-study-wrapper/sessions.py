@@ -188,6 +188,14 @@ def presets(refresh: bool = False) -> dict[str, dict]:
     if not refresh and _presets_cache["value"] is not None and now - _presets_cache["at"] < 30:
         return _presets_cache["value"]
     strategies = fetch_strategies()
+    # A FAILED REFRESH KEEPS THE LAST GOOD CATALOGUE (2026-09-24). The API busy for 6 s used to empty the
+    # strategies for 30 s: Start then passed "is it a preset" on the old cache and crashed on the new one
+    # (KeyError 'strategy:…', shown by the page as "is not valid JSON"). Up to 15 min stale is fine — a
+    # strategy's definition does not change mid-evening; past that the page says the catalogue is down.
+    if not strategies and _presets_cache.get("lastGood") and now - _presets_cache.get("lastGoodAt", 0) < 900:
+        strategies = _presets_cache["lastGood"]
+    elif strategies:
+        _presets_cache.update(lastGood=strategies, lastGoodAt=now)
     out: dict[str, dict] = {}
     if strategies:
         for s in strategies:
@@ -251,7 +259,11 @@ CHECK_LABELS = {
 
 
 def merged_config(preset: str, overrides: dict | None) -> dict:
-    base = json.loads(json.dumps(presets()[preset]["config"]))
+    p = presets().get(preset)
+    if p is None:
+        raise ValueError(f"the mode {preset!r} is not on offer right now — the strategy catalogue (the study API) "
+                         f"could not be read; wait a few seconds and press Start again")
+    base = json.loads(json.dumps(p["config"]))
     for k, v in (overrides or {}).items():
         if k == "sources" and isinstance(v, dict):
             base["sources"].update({kk: bool(vv) for kk, vv in v.items()})

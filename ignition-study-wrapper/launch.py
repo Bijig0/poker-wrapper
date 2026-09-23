@@ -1048,9 +1048,11 @@ def _health_check() -> list[dict]:
         issues.append({"level": "down", "piece": "chart-server",
                        "text": "The chart server (:8777) is DOWN — preflop chart answers (3-handed, heads-up) are OFF",
                        "fix": "it restarts itself within a minute"})
-    raw = get(f"{api}/api/dashboard/sources/registry", 20)
+    # /gtow-status (~0.2 s), not the sources registry (~4 s): this runs every 15 s in every panel, and the
+    # registry's cost was enough load to time out other requests to the API
+    raw = get(f"{api}/api/dashboard/gtow-status", 10)
     try:
-        g = (json.loads(raw) if raw else {}).get("armed", {}).get("gtow") or {}
+        g = json.loads(raw) if raw else {}
     except ValueError:
         g = {}
     sess = [x for x in g.get("sessions") or [] if x.get("enabled", True)]
@@ -7100,7 +7102,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, "text/plain", b"not found")
         except Exception as e:  # keep the skeleton unkillable by one bad request
             try:
-                self._send(500, "text/plain", str(e).encode())
+                # JSON, not text: every page reads the reply with .json(), and a bare str(KeyError) such as
+                # "'strategy:…'" surfaced as "Unexpected token … is not valid JSON" instead of the error
+                self._send(500, "application/json", json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}).encode())
             except Exception:
                 pass
 
@@ -7556,7 +7560,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, "text/plain", b"not found")
         except Exception as e:
             try:
-                self._send(500, "text/plain", str(e).encode())
+                # JSON, not text: every page reads the reply with .json(), and a bare str(KeyError) such as
+                # "'strategy:…'" surfaced as "Unexpected token … is not valid JSON" instead of the error
+                self._send(500, "application/json", json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}).encode())
             except Exception:
                 pass
 
