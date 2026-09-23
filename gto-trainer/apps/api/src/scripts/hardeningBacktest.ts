@@ -64,7 +64,7 @@ export function classifyReason(reason: string): string {
   if (/not hero'?s turn|not to act|action on seat/.test(r)) return "legit/not-to-act";
   if (/429|request limit|quota|daily.*limit|out of allowance|allowance/.test(r)) return "infra/gtow-quota";
   if (/unable to connect|not connected|no gto wizard|no access token|unreachable|timed out|timeout|econnrefused|chart server/.test(r)) return "infra/unreachable";
-  if (/skipped \(cloud budget\)/.test(r)) return "skipped/cloud-budget";
+  if (/skipped \(cloud budget\)|gtow_reserve|gtow_block|blocked by gtow/.test(r)) return "skipped/cloud-budget";
   if (/dead small blind|sb posted the big blind|posted the big blind/.test(r)) return "capture/dead-sb";
   if (/out of rotation|rotation|acts twice|acting twice|twice running/.test(r)) return "capture/rotation";
   if (/didn'?t close|did not close|missed action|ends on villain|ends on a terminal|past a terminal|line continues past/.test(r)) return "capture/line-desync";

@@ -257,7 +257,7 @@ def main() -> int:
             now = (bt or {}).get("now") if bt else None
             if bt is None:
                 verdict = "NOT-REPLAYED"
-            elif not now["ok"] and str(now.get("reason", "")).startswith("skipped"):
+            elif not now["ok"] and (str(now.get("reason", "")).startswith("skipped") or "GTOW_RESERVE" in str(now.get("reason", "")) or "GTOW_BLOCK" in str(now.get("reason", ""))):
                 verdict = "SKIPPED(cloud budget)"
             elif not now["ok"] and now.get("bucket", "").startswith("infra/"):
                 verdict = "UNVERIFIED(infra)"
