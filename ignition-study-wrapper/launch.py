@@ -6904,9 +6904,11 @@ class Handler(BaseHTTPRequestHandler):
                 }).encode())
             elif path == "/sessions":
                 self._send(200, "application/json", json.dumps({
-                    "ok": True, "sessions": _sessions.list(50), "open": _sessions.open_session() if not _session["id"] else None,
-                    # every never-ended session (the live one excluded): the setup card ends ALL of them at once
-                    "openAll": [r for r in _sessions.open_sessions() if r["id"] != _session["id"]],
+                    "ok": True, "sessions": _sessions.list(50),
+                    "open": (_leftovers() or [None])[0] if not _session["id"] else None,
+                    # every abandoned session (this panel's live one and other live panels' excluded): the setup
+                    # card ends ALL of them at once
+                    "openAll": _leftovers(),
                 }).encode())
             elif path == "/state":
                 light = "light=1" in (self.path.split("?", 1) + [""])[1]
@@ -9358,6 +9360,7 @@ def _session_start(body: dict) -> tuple[int, dict]:
     if not preset:
         return 400, {"ok": False, "error": "unknown preset"}
     cfg = S.merged_config(preset, body.get("config"))
+    cfg["panelPort"] = PANEL_PORT       # which panel plays it: another panel must not sweep it as a leftover
     registry = S.fetch_registry()
     pf = _preflight(preset, cfg, registry)
     if not pf["ok"]:
@@ -9421,11 +9424,31 @@ def _session_start(body: dict) -> tuple[int, dict]:
     return 200, {"ok": True, "session": rec, "tables": joined, "opened": opened}
 
 
+def _owned_elsewhere(rec: dict) -> bool:
+    """A never-ended session that ANOTHER running panel is playing right now — an extra CoinPoker panel (#2 on
+    7720, ...) or a second wrapper — is not a leftover. Recognised by the panel port the session was started on
+    (config.panelPort) still serving that very session. Before this, the main panel's setup page offered a live
+    panel's session as "left open", and End-all ended it under the panel still playing it (2026-09-24)."""
+    port = (rec.get("config") or {}).get("panelPort")
+    if not port or port == PANEL_PORT or port not in _listening([port]):
+        return False
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/state?light=1", timeout=5) as r:
+            return json.loads(r.read()).get("sessionId") == rec["id"]
+    except Exception:
+        return False
+
+
+def _leftovers() -> list[dict]:
+    """Never-ended sessions that are really abandoned: not this panel's live one, not another live panel's."""
+    return [r for r in _sessions.open_sessions() if r["id"] != _session["id"] and not _owned_elsewhere(r)]
+
+
 def _end_other_open(keep: str | None, note: str) -> list[str]:
     """End every never-ended session except `keep` (the one in use). Returns the ids ended."""
     ended = []
     for r in _sessions.open_sessions():
-        if r["id"] == keep:
+        if r["id"] == keep or _owned_elsewhere(r):      # another live panel's session is not a leftover
             continue
         _sessions.end(r["id"], {"hands": _session_hands(r["id"]),
                                 "durationMin": round(((time.time() * 1000) - r["started_at"]) / 60000, 1),
@@ -9620,7 +9643,7 @@ def _session_end(body: dict) -> dict:
 def _main_tail() -> None:
     """Called after the server is up: a session left open by a restart is NOT
     auto-resumed — the setup page offers resume/end so the choice is explicit."""
-    opened = _sessions.open_sessions()
+    opened = _leftovers()
     if opened:
         print(f"[session] {len(opened)} left open ({', '.join(r['id'] for r in opened)}) — resume the newest or end them all on /setup")
     print("Ctrl+C stops the panel server (browser windows stay open).")
