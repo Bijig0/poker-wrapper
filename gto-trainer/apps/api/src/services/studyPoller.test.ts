@@ -1,4 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// NEVER THE LIVE ANSWER LOG (EIP-07 / PF-11, 2026-09-23). The poller under test drives the real answerLog
+// singleton, which is created at import from ANSWERS_DB_PATH or data/answers.sqlite — every earlier run of this
+// file appended its fixtures ("PREFLOP — Raise 2.5 80%", the NODE_DOES_NOT_EXIST line, the AcQc "Unable to
+// connect" rows) to the production database: ~1,600 rows by 2026-09-23, most of the recorded solver-unreachable
+// and gtow-down failures. The env is set here, before the dynamic import below instantiates the log.
+process.env.ANSWERS_DB_PATH = join(mkdtempSync(join(tmpdir(), "answers-test-")), "answers.sqlite");
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

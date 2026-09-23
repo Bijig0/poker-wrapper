@@ -2,7 +2,7 @@ import { DEFAULT_LIVE_URL } from "../routes/ingest";
 import { buildAnswerText, type AnswerAction } from "../feed/buildAnswerText/buildAnswerText";
 import { gtowCdp } from "./gtowCdp";
 import { gtowApi } from "./gtowApi";
-import { answerLog, type FailKind } from "./answerLog";
+import { answerLog, isFailKind, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
 
@@ -70,8 +70,11 @@ interface IngestLikeResponse {
   hero?: { toAct?: boolean; cards?: string[];
            /** wrapper state provenance (2026-09-19): the client's turn buttons are on
             *  screen, and why the export nevertheless says it is not hero's turn */
-           buttonsUp?: boolean | null; notToActWhy?: string | null; status?: string | null };
-  hand?: { street?: string; board?: string[]; actions?: unknown[]; node?: { toCall?: number } };
+           buttonsUp?: boolean | null; notToActWhy?: string | null; status?: string | null;
+           /** the three turn signals (CONTRACT §1b), forwarded by /api/ingest since 2026-09-23 */
+           toActSources?: { buttons?: boolean; ws?: boolean; actionOn?: boolean } | null };
+  hand?: { street?: string; board?: string[]; actions?: unknown[]; node?: { toCall?: number };
+           handId?: number | null; clientHandId?: string | null };
   // assistive-play's own local "Study Answers" toggle, forwarded by /api/ingest
   // for the live source — the single gate: this poller runs continuously, but
   // only actually pushes an answer while the panel's own switch is on.
@@ -185,11 +188,13 @@ const decisionKey = (r: IngestLikeResponse): string =>
 export const rollAction = (
   actions: AnswerAction[] | undefined,
   fallback: string,
+  /** a roll drawn earlier for this same decision (see rollMemo) — supplied on a re-solve so the pick cannot flip */
+  seeded?: number,
 ): { pick: string; roll: number | null } => {
   const mix = (actions ?? []).filter((a) => a.frequency > 1);
   if (mix.length < 2) return { pick: fallback, roll: null };
   const total = mix.reduce((s, a) => s + a.frequency, 0);
-  const n = 1 + Math.floor(Math.random() * 100);
+  const n = seeded ?? (1 + Math.floor(Math.random() * 100));
   let acc = 0;
   for (const a of mix) {
     acc += (a.frequency / total) * 100;
@@ -349,6 +354,7 @@ class StudyPoller {
     // over. Stop answering immediately rather than keep a second poller alive on a stale claim.
     if (!isBackgroundOwner()) { void this.stop(); return; }
     if (this.inFlight) return;
+    if (Date.now() < this.skipTicksUntil) return;   // backing off a wrapper whose probes keep failing (EIP-19)
     this.inFlight = true;
     this.status.lastTickAt = Date.now();
     try {
@@ -375,6 +381,12 @@ class StudyPoller {
       // are the genuinely idle ok:false replies and still fall through.
       if (probe.httpStatus != null && ![200, 409, 422].includes(probe.httpStatus)) {
         this.lastSolvedKey = null;
+        // BACK OFF A DEAD WRAPPER (EIP-19, 2026-09-23). The boot poller hammered a wrapper that was not running at
+        // 1 Hz for days — 1.35 M ingest lines in api.log, two per second — and posted a null to the same dead port
+        // each time. Consecutive failures double the wait up to 10 s; the first healthy probe resets it.
+        this.ingestFailures = Math.min(this.ingestFailures + 1, 10);
+        this.skipTicksUntil = Date.now() + Math.min(10_000, 1000 * 2 ** (this.ingestFailures - 1));
+        if (this.ingestFailures > 1) { this.status.lastError = probe.error ?? `Ingest failed (HTTP ${probe.httpStatus}).`; return; }
         // push() BEFORE recording the reason, not after: clearing the panel posts to
         // that same wrapper, so when the wrapper is the thing that died the push
         // fails too and its catch overwrites lastError with the vaguer "Unable to
@@ -386,6 +398,7 @@ class StudyPoller {
         return;
       }
 
+      this.ingestFailures = 0;   // a probe that answered at all (200/409/422) ends the back-off
       if (probe.studyAnswersOn !== true) {
         this.studyWasOn = false; // switching it back on re-arms the readiness probe
         this.status.lastError = null;
@@ -399,7 +412,12 @@ class StudyPoller {
       // 19 s on the clock). The wrapper now says whether the buttons are up and why it still
       // says no; when that holds for 2 s it is written as a failure row and shown on the panel,
       // once per spot.
-      if (probe.ok === true && probe.hero?.buttonsUp === true && probe.hero?.toAct !== true && probe.hand?.street != null) {
+      // …EXCEPT the client's own end of hero's turn (EIP-24, 2026-09-23): after hero's real fold the action strip
+      // can stay rendered for 2 s while the export correctly says "hero folded" / "hand won". That is not a lost
+      // decision (answers 3396, 2378 were such rows), so it is not written — unless the client's request (ws)
+      // still says hero is to act, which would be a real contradiction.
+      const ownEnd = /^(hero folded|hand won)/.test(probe.hero?.notToActWhy ?? "") && probe.hero?.toActSources?.ws !== true;
+      if (probe.ok === true && probe.hero?.buttonsUp === true && probe.hero?.toAct !== true && probe.hand?.street != null && !ownEnd) {
         const k = `${probe.hand.street}|${(probe.hand.actions ?? []).length}|${(probe.hero.cards ?? []).join("")}`;
         if (this.buttonsUpSince?.key !== k) this.buttonsUpSince = { key: k, at: Date.now() };
         else if (Date.now() - this.buttonsUpSince.at >= 2000) {
@@ -415,7 +433,14 @@ class StudyPoller {
       // loop) with a cooldown so we don't relaunch every single tick while
       // one attempt is already in flight or just failed.
       this.status.gtoWizardConnected = await gtowCdp.isConnected();
-      if (!this.status.gtoWizardConnected) {
+      // THE CDP PORT IS NOT THE SOLVER (EIP-11, 2026-09-23). The 6-max ring strategy answers preflop from the local
+      // bake and postflop over HTTP with a token that outlives the debug port, so a CDP hiccup used to blank every
+      // decision until the port answered again — including chart preflop spots that never touch GTO Wizard. Solve
+      // when a token is in hand or the spot needs none; the relaunch below still runs, it just no longer gates.
+      const localPreflop = probe.strategyId === "ign200-ring-6max-equilibrium" && probe.hand?.street === "preflop";
+      const canSolveAnyway = gtowApi.hasLiveToken() || localPreflop;
+      if (!this.status.gtoWizardConnected && canSolveAnyway) this.ensureGtoWizardLaunching();
+      if (!this.status.gtoWizardConnected && !canSolveAnyway) {
         // Hero on the clock with no client to solve with: a decision is being
         // lost right now, and until 2026-09-14 only an in-memory flag said so.
         if (probe.ok === true && probe.hero?.toAct === true && probe.hand?.street != null) {
@@ -592,7 +617,11 @@ class StudyPoller {
       this.repeatFail = rf && rf.key === key && rf.reason === reason
         ? { ...rf, n: rf.n + 1 }
         : { key, reason, n: 1 };
-      answerLog.add({ ...logBase, text: null, pick: null, roll: null, tier: null, warning: null, failReason: reason });
+      // the fast-solver stamps a machine `kind` on its terminal refusals (capture-fault / no-hero-cards /
+      // board-incomplete, fastSolve.ts 2026-09-23); log it when it is one of ours, else classify the sentence
+      const kind = sol?.ok === false ? (sol as { kind?: unknown }).kind : undefined;
+      answerLog.add({ ...logBase, text: null, pick: null, roll: null, tier: null, warning: null, failReason: reason,
+        failKind: isFailKind(kind) ? kind : undefined });
       // Say it on the panel rather than leaving a blank card: this is the last ask for
       // this spot unless something about it changes.
       if (this.repeatFail.n >= this.REPEAT_FAIL_LIMIT) {
@@ -612,7 +641,7 @@ class StudyPoller {
     // action instead of the exploit's (caught live on the fake table).
     const rolled = (sol.decision.frequency ?? 0) >= 99
       ? { pick: sol.decision.action, roll: null }
-      : rollAction(sol.actions, sol.decision.action);
+      : rollAction(sol.actions, sol.decision.action, this.memoRoll(full, probe));
     const text = approx + buildAnswerText({
       street: full.hand!.street!,
       decision: sol.decision,
@@ -808,6 +837,31 @@ class StudyPoller {
     }
   }
 
+  /** consecutive failed (non-idle) ingest probes and the moment the next tick may run (EIP-19) */
+  private ingestFailures = 0;
+  private skipTicksUntil = 0;
+  /**
+   * ONE ROLL PER DECISION, ACROSS RE-SOLVES (EIP-03 / EIP-04, 2026-09-23). The keep-alive repeats the pick, but
+   * the poller RE-SOLVES the same decision whenever the key changes without an action — toCall flickers between
+   * the ws and reconciler ledgers (4919260243: 1.5 -> 2 with picks Call / Raise 9 / Call), and any one-tick
+   * transient (an ingest 5xx, a CDP blip, a buttons repaint) nulls lastSolvedKey. Each re-solve drew a fresh
+   * Math.random(), so a mixed spot could flip its headline pick under hero (13 decisions in 9 archived hands
+   * showed two different picks live). The roll is now remembered per (hand, street, action count, hero cards)
+   * for 90 s and handed back to rollAction on a re-solve.
+   */
+  private rollMemo = new Map<string, { roll: number; at: number }>();
+  private memoRoll(full: FastSolveLikeResponse | null | undefined, probe: IngestLikeResponse): number | undefined {
+    const h = (full?.hand ?? {}) as { handId?: number | null; clientHandId?: string | null; street?: string | null; actions?: unknown[] };
+    const key = JSON.stringify([h.clientHandId ?? h.handId ?? null, h.street ?? probe.hand?.street ?? null,
+      (h.actions ?? probe.hand?.actions ?? []).length, (full?.hero?.cards ?? probe.hero?.cards ?? []).join("")]);
+    const now = Date.now();
+    for (const [k, v] of this.rollMemo) if (now - v.at > 90_000) this.rollMemo.delete(k);
+    const hit = this.rollMemo.get(key);
+    if (hit) return hit.roll;
+    const roll = 1 + Math.floor(Math.random() * 100);
+    this.rollMemo.set(key, { roll, at: now });
+    return roll;
+  }
   /** The rolled pick for the current answer, repeated verbatim by the
    *  keep-alive so the sampled action never re-rolls mid-decision. */
   private lastExtra: { pick: string; roll: number | null; decisionKey?: string | null; handId?: number | null;

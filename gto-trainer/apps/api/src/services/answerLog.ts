@@ -149,13 +149,49 @@ export const FAIL_KINDS = [
   // turn" — the reason (notToActWhy) is in failReason. Written LIVE, the first
   // time it happens, so this class can never again pass in silence (2026-09-19,
   // hand 4919080696: a villain's SITTING OUT label read as hero's, 19 s silent).
-  "not-to-act-live", "unknown",
+  "not-to-act-live",
+  // THE 6-MAX / AI-PREFLOP REFUSALS (2026-09-23, EIP-15 + PF-10). The five kinds above
+  // were the library era's vocabulary; the strategies that answer today refuse in
+  // sentences none of them match, so 922 rows — 344 of them preflop, 45 "preflop
+  // betting didn't close", 27 "3 players reach the flop", 21 "not walkable", 12
+  // "nearest size … too far" — sat under "unknown" and Analytics could not tell a
+  // capture bug from a chart gap from a dead cloud. Three families:
+  //
+  //  capture-fault        the hand as captured cannot have happened (a seat posted the
+  //                       big blind out of place, acts twice in a row, hero's seat is
+  //                       unknown) — a READER bug, never a poker fact
+  //  no-hero-cards        hero's cards never reached the export
+  //  board-incomplete     fewer board cards than the street implies
+  //  tree-gap             the line is fine, the chart/tree simply has no node for it
+  //  ai-node-missing      GTO Wizard's own tree says NODE_DOES_NOT_EXIST and the walk
+  //                       could not repair the line
+  //  line-terminal        the line runs past a terminal, ends on a terminal or on a
+  //                       villain's turn, or never closed — the LINE is wrong, not
+  //                       the chart (usually a missed action)
+  //  table-shape          seat count the strategy's pieces do not cover
+  //  size-too-far         the nearest tree size is more than 2x from the one played
+  //  multiway-unsupported too many players reach the flop for a heads-up/3-way solve
+  //
+  // The fast-solver stamps a `kind` on its refusals too (fastSolve.ts); the poller
+  // logs that when present and this classifier covers the history.
+  "capture-fault", "no-hero-cards", "board-incomplete", "tree-gap", "ai-node-missing",
+  "line-terminal", "table-shape", "size-too-far", "multiway-unsupported",
+  "unknown",
 ] as const;
 export type FailKind = (typeof FAIL_KINDS)[number];
 
+/** A machine `kind` from the fast-solver is only trusted when it is one of ours. */
+export const isFailKind = (k: unknown): k is FailKind =>
+  typeof k === "string" && (FAIL_KINDS as readonly string[]).includes(k);
+
 /** Classify the solve chain's own free-text refusal. The poller passes an
  *  explicit kind for everything it knows first-hand; this covers what comes
- *  back from the chain, and re-classifies the history on read. */
+ *  back from the chain, and re-classifies the history on read.
+ *
+ *  Order matters where sentences compose: a 6-max refusal reads
+ *  "6-max chart X: nearest size R7.5 is too far from R9; fitting the line …", and
+ *  an AI-chain one "AI chain: … not walkable at FLOP#1; street-root AI: …", so the
+ *  most specific needle is tested first and the infrastructure needles last. */
 export function failKindOf(reason: string | null | undefined): FailKind {
   const r = (reason ?? "").toLowerCase();
   if (!r) return "unknown";
@@ -164,6 +200,29 @@ export function failKindOf(reason: string | null | undefined): FailKind {
   if (r.includes("isn't in the chart range") || r.includes("not in range")) return "not-in-range";
   if (r.includes("not offered (have")) return "off-tree";
   if (r.includes("no solution for this spot")) return "no-solution";
+  // capture faults (repairPostflopRotation faults, fastSolve "internally inconsistent")
+  if (r.includes("internally inconsistent") || r.includes("posted the big blind")
+      || r.includes("out of rotation") || r.includes("acts twice") || r.includes("hero position unknown")) return "capture-fault";
+  if (r.includes("hero's cards are not known")) return "no-hero-cards";
+  if (r.includes("board too short") || r.includes("board has fewer cards") || r.includes("no full flop on the board")) return "board-incomplete";
+  // sizes: hrc3max/hrc6max snap refusals ("nearest size R40 is too far from R75",
+  // "nearest size R40 is more than 2x away from R75")
+  if (r.includes("nearest size") && (r.includes("too far") || r.includes("more than 2x away"))) return "size-too-far";
+  // table shape and multiway, before the generic line/tree needles
+  if (r.includes("players reach the flop")) return "multiway-unsupported";
+  if (r.includes("table thinned") || r.includes("seats: the ai preflop piece covers")) return "table-shape";
+  // GTO Wizard's own tree (gtowAiPreflop): the node is not there and the walk could not mend it
+  if (r.includes("node_does_not_exist") || r.includes("does not exist and the line could not be walked")) return "ai-node-missing";
+  // the line itself is wrong: past/onto a terminal, on a villain's turn, or never closed
+  if (r.includes("past a terminal") || r.includes("ends on a terminal") || r.includes("didn't close")
+      || r.includes("ends on villain's turn") || r.includes("walked line puts")) return "line-terminal";
+  // the tree/chart has no node for a well-formed line ("node not in chart", reconstructFlopRanges
+  // "not in the charts", aiChain "… not walkable at FLOP#1 (offered: …)")
+  if (r.includes("node not in chart") || r.includes("not in the charts") || r.includes("not walkable")
+      || r.includes("no 6-max chart for this state")) return "tree-gap";
+  // infrastructure, last: the same sentences ride along inside composed refusals
+  if (r.includes("no gto wizard session") || r.includes("no gto wizard token") || r.includes("did not return the node in time")) return "gtow-down";
+  if (r.includes("unable to connect") || r.includes("unreachable")) return "solver-unreachable";
   return "unknown";
 }
 
@@ -212,8 +271,18 @@ class AnswerLog {
   private db: Database | null = null;
   private readonly path: string;
 
+  /**
+   * ANSWERS_DB_PATH (2026-09-23, EIP-07 + PF-11): the process-wide singleton below
+   * is created at import, so a test that drives the poller wrote into the LIVE
+   * data/answers.sqlite — every `bun test studyPoller.test.ts` appended its
+   * fixtures ("PREFLOP — Raise 2.5 80%", the NODE_DOES_NOT_EXIST line, the AcQc
+   * "Unable to connect" rows) and the failure statistics were mostly fixtures:
+   * 368/462/336/441 test-shaped rows per day 09-19..09-22 against ~40-170 real
+   * answers. Same convention as HANDS_DB_PATH (sessionsStore.ts): tests set the
+   * env to a temp file BEFORE importing the services.
+   */
   constructor(path?: string) {
-    this.path = path ?? join(import.meta.dir, "..", "..", "data", "answers.sqlite");
+    this.path = path ?? process.env.ANSWERS_DB_PATH ?? join(import.meta.dir, "..", "..", "data", "answers.sqlite");
   }
 
   get dbPath(): string {
@@ -235,12 +304,17 @@ class AnswerLog {
     }
     // Classify the failures written before the column existed, once. The read
     // paths fall back to failKindOf anyway; this makes plain SQL over the table
-    // agree with them.
+    // agree with them. Rows already filed under "unknown" are re-tried too: the
+    // classifier learns new sentences (2026-09-23 added nine kinds, see FAIL_KINDS)
+    // and the history should move with it — only rows whose kind actually changes
+    // are written.
     try {
-      for (const row of this.db.query<{ id: number; fail_reason: string | null }, []>(
-        "SELECT id, fail_reason FROM answers WHERE text IS NULL AND fail_kind IS NULL"
+      for (const row of this.db.query<{ id: number; fail_reason: string | null; fail_kind: string | null }, []>(
+        "SELECT id, fail_reason, fail_kind FROM answers WHERE text IS NULL AND (fail_kind IS NULL OR fail_kind = 'unknown')"
       ).all()) {
-        this.db.query("UPDATE answers SET fail_kind = ? WHERE id = ?").run(failKindOf(row.fail_reason), row.id);
+        const kind = failKindOf(row.fail_reason);
+        if (kind === row.fail_kind) continue;
+        this.db.query("UPDATE answers SET fail_kind = ? WHERE id = ?").run(kind, row.id);
       }
     } catch { /* classification is a convenience, never a boot blocker */ }
     return this.db;
