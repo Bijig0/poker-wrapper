@@ -249,11 +249,20 @@ class Site:
             if not r:
                 return None
             hero = next((s for s in r.seats.values() if s["name"] == feed.HERO), None)
+            hero_sid = next((k for k, s in r.seats.items() if s["name"] == feed.HERO), None)
+            # DEALT IN = NOT SITTING OUT (2026-09-24). "Sit Out Next Hand" / "Sit Out All" are about the NEXT hand;
+            # counting them as sitting out NOW made the study API read hero's live turns as "not hero's turn (no
+            # reason given)" for the rest of the hand the box was ticked in (hand 763: the flop bet never asked;
+            # hand 754 the same) — the API gates toAct on !heroSittingOut. While hero holds cards in a live hand he
+            # is playing it; between hands (or not dealt in) the boxes still mean sitting out.
+            live = r.hand if r.hand and not r.hand.get("done") else None
+            dealt_in = bool(live and hero_sid is not None and hero_sid in (live.get("dealt") or []))
+            flagged = bool(r.sitout.get("sitOutNextHand") or r.sitout.get("sitOutAll") or r.status.get(feed.HERO) == "Sitout")
             return {"room": r.name, **self.label(r.name, r.props), "lastEventAgo": round(time.time() - r.touched, 1),
                     "seats": {str(k): dict(v) for k, v in r.seats.items()},
                     "heroSeated": hero is not None,
-                    "heroSittingOut": bool(r.sitout.get("sitOutNextHand") or r.sitout.get("sitOutAll")
-                                           or r.status.get(feed.HERO) == "Sitout"),
+                    "heroSittingOut": flagged and not dealt_in,
+                    "heroSitOutPending": flagged and dealt_in,      # ticked, takes effect when this hand ends
                     "sitOut": dict(r.sitout), "practice": r.practice, "coinType": r.coin_type,
                     "rake": {k: r.props.get(k) for k in ("rake", "rakeHeadsUp", "rakeCap", "isPotRakePf")
                              if k in r.props} or None,
