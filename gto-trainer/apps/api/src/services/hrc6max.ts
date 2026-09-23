@@ -163,9 +163,9 @@ export function dealtBySeat(hand: ParsedHand): Record<number, number> {
 }
 
 /** dealtBySeat keyed by 6-max position name. */
-function dealtByPos(hand: ParsedHand, heroPos: string | null): Partial<Record<Seat6, number>> {
+function dealtByPos(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): Partial<Record<Seat6, number>> {
   const out: Partial<Record<Seat6, number>> = {};
-  const bySeat = dealtBySeat(hand);
+  const bySeat = dealt ?? dealtBySeat(hand);
   const put = (pos: string, seatId: number) => {
     const p = pos.toUpperCase() as Seat6;
     if (!SEATS6.includes(p) || bySeat[seatId] == null) return;
@@ -181,8 +181,8 @@ function dealtByPos(hand: ParsedHand, heroPos: string | null): Partial<Record<Se
  * hand. This is the `depth` preflopPotStack wants — it subtracts the preflop money itself, so handing it the stack
  * left behind at the flop (or later) subtracted that money twice. null when hero's stack is unreadable.
  */
-export function dealtEffective(hand: ParsedHand): number | null {
-  const bySeat = dealtBySeat(hand);
+export function dealtEffective(hand: ParsedHand, dealt?: Record<number, number>): number | null {
+  const bySeat = dealt ?? dealtBySeat(hand);
   const hero = bySeat[hand.heroSeatId];
   if (hero == null) return null;
   const folded = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => (a.hero ? hand.heroSeatId : a.seatId)));
@@ -267,8 +267,9 @@ export function replayTokens6(tokens: string[]): { folded: Set<Seat6>; aggressor
  *     freshly reloaded hero on the 150bb chart at a deep table - 13.5% of corpus decisions a rung too deep.
  *   - hero under 85bb (not reloaded yet) follows his own stack like anyone else's, and says so.
  */
-export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: string[] = []): Chart6Choice {
-  const byPos = dealtByPos(hand, heroPos);
+/** `dealt`: the stacks as dealt, read once per hand by the postflop pin (fastSolve.pinPostflop) — see chartForHu. */
+export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: string[] = [], dealt?: Record<number, number>): Chart6Choice {
+  const byPos = dealtByPos(hand, heroPos, dealt);
   const { open, observed } = openFromTokens(tokens);
   const notes: string[] = [];
   const approx: Approx6[] = [];

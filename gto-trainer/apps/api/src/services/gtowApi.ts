@@ -27,6 +27,7 @@ import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions"
 // EVERY request to api.gtowizard.com goes through the ledger (2026-09-23): GTO Wizard caps REQUESTS, not
 // solves, and a poll loop is many requests — see services/gtowRequestLog.ts.
 import { gtowRequests } from "./gtowRequestLog";
+import { tmark } from "./answerTrace";
 
 const API_BASE = "https://api.gtowizard.com";
 // Zone gives ~15s per decision and the study panel needs the verdict inside
@@ -208,6 +209,14 @@ class GtowApi {
   private treeSolCache = new Map<string, string>();
   /** (solId, node) → solved node JSON. */
   private nodeCache = new Map<string, any>();
+  /**
+   * The last tree created for each board + starting street + seat count, as a fingerprint (2026-09-24). The
+   * chain re-walks every earlier street on every decision and expects those trees to come from treeSolCache;
+   * when one is created again instead, the fingerprint diff says WHAT moved the key — a stack that drifted
+   * between probes, a size pinned after a wager, ranges from a different chart — and that reason travels in
+   * the answer's trace and the [chain] log line. Before this the only symptom was a slow turn.
+   */
+  private lastTreeByStreet = new Map<string, TreeFingerprint>();
 
   private treeKey(input: CustomTreeInput): string {
     return JSON.stringify([
@@ -379,7 +388,7 @@ class GtowApi {
   // (fastSolve.warmPostflop6max) and the panel's own feed-spot can all want the same street within a second;
   // each used to mint its own custom solution — two cloud solves for one spot, both slower (hand 4919059283's
   // turn: two 19-24 s answers for the same key). Later callers now join the first request.
-  private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId } | { ok: false; status: number; error: string }>>();
+  private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string } | { ok: false; status: number; error: string }>>();
   private nodePending = new Map<string, Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }>>();
 
   /**
@@ -390,20 +399,41 @@ class GtowApi {
     for (const [k, v] of this.treeSolCache) if (v === solId) this.treeSolCache.delete(k);
   }
 
+  /** The solution this process already holds for these tree params, or null — a cache lookup, never a request. */
+  peekSolution(input: CustomTreeInput): string | null {
+    return this.treeSolCache.get(this.treeKey(input)) ?? null;
+  }
+
+  /** A node already in the cache, or null — never a request. (Does not count as a hit for the LRU.) */
+  peekNode(solId: string, q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string }): any | null {
+    return this.nodeCache.get(JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board])) ?? null;
+  }
+
   async ensureCustomSolution(
     input: CustomTreeInput
-  ): Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId } | { ok: false; status: number; error: string }> {
+  ): Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string } | { ok: false; status: number; error: string }> {
     const key = this.treeKey(input);
     const hit = this.treeSolCache.get(key);
     if (hit) return { ok: true, solId: hit, created: false, session: this.solOwner.get(hit) ?? "primary" };
     const pending = this.treePending.get(key);
-    if (pending) return pending.then((r) => (r.ok ? { ...r, created: false } : r));
+    if (pending) return pending.then((r) => (r.ok ? { ...r, created: false, why: `joined a solve another request started (${r.why ?? "same tree"})` } : r));
+    // WHY is this tree not in the cache? Answered before the solve is even sent, against the last tree of the
+    // same board/street/seats, so a re-creation is explained by its own log line rather than inferred later.
+    const fp = treeFingerprint(input);
+    const fpKey = `${fp.board}|${fp.street}|${fp.seats}|${input.planTag ?? fp.posKey}`;
+    const why = describeTreeChange(this.lastTreeByStreet.get(fpKey) ?? null, fp);
+    this.lastTreeByStreet.set(fpKey, fp);
+    if (this.lastTreeByStreet.size > 200) {
+      const first = this.lastTreeByStreet.keys().next().value;
+      if (first !== undefined) this.lastTreeByStreet.delete(first);
+    }
+    tmark(`GTO Wizard tree ${fp.street} ${fp.board} not cached`, why);
     const p = (async () => {
       const made = await this.createCustomSolution(input);
       if (!made.ok) return made;
       this.treeSolCache.set(key, made.solId);
       this.solOwner.set(made.solId, made.session);
-      return { ok: true as const, solId: made.solId, created: true, session: made.session };
+      return { ok: true as const, solId: made.solId, created: true, session: made.session, why };
     })().finally(() => this.treePending.delete(key));
     this.treePending.set(key, p);
     return p;
@@ -418,12 +448,26 @@ class GtowApi {
     solId: string,
     q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string },
     timeoutMs = CUSTOM_SOLVE_TIMEOUT_MS
-  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }> {
+  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string }> {
     const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
     const hit = this.nodeCache.get(key);
-    if (hit) return { ok: true, data: hit, solveSecs: 0, cached: true };
+    if (hit) {
+      // a hit is re-inserted so the cache is a true LRU: a hand's earlier-street nodes, read again on every
+      // later decision, must outlive the burst of a multiway collapse's fresh nodes (insertion order alone
+      // evicted the oldest node first, which is exactly the flop root every turn and river re-walks)
+      this.nodeCache.delete(key);
+      this.nodeCache.set(key, hit);
+      return { ok: true, data: hit, solveSecs: 0, cached: true, src: "cache" };
+    }
     const pending = this.nodePending.get(key);
-    if (pending) return pending;   // the same node is already being polled — share it (see treePending)
+    if (pending) {
+      // the same node is already being polled by another request (a warm-up, another panel) — share it. The wait
+      // is recorded because the other request's polls are in ITS trace, not this one's: without this line a
+      // joined poll is a hole in the timeline.
+      const node = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
+      tmark(`GTO Wizard node [${node || "root"}] joined another request's poll`, `solution ${solId.slice(0, 8)}`);
+      return pending.then((r) => (r.ok ? { ...r, src: "joined" as const } : r));
+    }
     const p = this.customNodeFetch(solId, q, timeoutMs).finally(() => this.nodePending.delete(key));
     this.nodePending.set(key, p);
     return p;
@@ -433,7 +477,7 @@ class GtowApi {
     solId: string,
     q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string },
     timeoutMs: number
-  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }> {
+  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string }> {
     const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
 
     const params = new URLSearchParams({
@@ -474,7 +518,7 @@ class GtowApi {
           if (this.nodeCache.size > NODE_CACHE_MAX) {
             this.nodeCache.delete(this.nodeCache.keys().next().value as string);
           }
-          return { ok: true, data: j, solveSecs: (Date.now() - t0) / 1000, cached: false };
+          return { ok: true, data: j, solveSecs: (Date.now() - t0) / 1000, cached: false, src: "fetched" };
         }
       } else if (!r.ok) {
         const body = (await r.text().catch(() => "")).slice(0, 120);
@@ -516,6 +560,77 @@ class GtowApi {
   }
 }
 
+/** Where a node's JSON came from: the process cache, a poll another request already had in flight, or our own poll. */
+export type NodeSource = "cache" | "joined" | "fetched";
+
+/**
+ * What a tree is keyed on, reduced to numbers a log line can compare (2026-09-24). The key itself holds the
+ * full 1326-weight ranges; a fingerprint keeps each range's total weight and live-combo count, which is enough
+ * to say "the OOP range changed" without printing it.
+ */
+export interface TreeFingerprint {
+  board: string;
+  street: string;
+  seats: number;
+  /** the real table positions in acting order ("SB-BB-CO"), not just a count (2026-09-24). A 4+ way flop is
+   *  solved as SEVERAL concurrent trees for different collapse plans (multiwayCollapse.ts) — different real
+   *  seats merged or dropped, same board/street/seat-COUNT. Without the positions in the key, the second plan's
+   *  first-ever tree compared against the first plan's and reported a fictitious "range changed", when the two
+   *  are unrelated trees for different players (hand 4919957671: "OOP+1 range changed 8.97→465.66" was walk 2's
+   *  BB+CO merge compared against walk 1's BB alone — not a re-solve of the same tree with drifted ranges). */
+  posKey: string;
+  pot: number;
+  stack: number;
+  fixedLevels: string[] | null;
+  rake: string;
+  huGrid: string | null;
+  /** per seat in acting order: [sum of weights, combos with weight > 0] */
+  ranges: [number, number][];
+}
+
+export function treeFingerprint(input: CustomTreeInput): TreeFingerprint {
+  const street = input.startingStreet ?? "FLOP";
+  const fp = (r: number[]): [number, number] => {
+    let sum = 0, live = 0;
+    for (const w of r) { if (w > 0) { sum += w; live++; } }
+    return [Math.round(sum * 100) / 100, live];
+  };
+  const seats = [input.oopRange, ...(input.mid ? [input.mid.range] : []), input.ipRange];
+  const fixedBet = input.fixedBets?.[street];
+  return {
+    board: input.board, street, seats: seats.length,
+    posKey: [input.oopPos ?? "?", input.mid?.pos, input.ipPos ?? "?"].filter(Boolean).join("-"),
+    pot: input.pot, stack: input.stack,
+    fixedLevels: input.fixedLevels?.[street]?.length ? input.fixedLevels[street]!.slice() : fixedBet != null ? [`${fixedBet}%`] : null,
+    rake: JSON.stringify(input.rake ?? null), huGrid: input.huGrid ? JSON.stringify(input.huGrid) : null,
+    ranges: seats.map(fp),
+  };
+}
+
+/**
+ * Why a tree had to be created: the first for its board/street in this process, or what changed since the last
+ * one. "stack 69.28→67.88" is the dealt-stack drift that cost hand 140706500001 its flop tree on the turn; "fixed
+ * sizes null→[100%]" is the expected re-create after a wager on a street solved AUTOMATIC before it.
+ */
+export function describeTreeChange(prev: TreeFingerprint | null, next: TreeFingerprint): string {
+  if (!prev) return `first ${next.street} tree for ${next.board} in this process`;
+  const d: string[] = [];
+  if (prev.pot !== next.pot) d.push(`pot ${prev.pot}→${next.pot}`);
+  if (prev.stack !== next.stack) d.push(`stack ${prev.stack}→${next.stack}`);
+  const fl = (x: string[] | null) => (x ? `[${x.join(",")}]` : "null");
+  if (fl(prev.fixedLevels) !== fl(next.fixedLevels)) d.push(`fixed sizes ${fl(prev.fixedLevels)}→${fl(next.fixedLevels)}`);
+  if (prev.rake !== next.rake) d.push(`rake ${prev.rake}→${next.rake}`);
+  if (prev.huGrid !== next.huGrid) d.push(`grid ${prev.huGrid ?? "auto"}→${next.huGrid ?? "auto"}`);
+  const names = next.seats === 3 ? ["OOP", "OOP+1", "IP"] : ["OOP", "IP"];
+  next.ranges.forEach((r, i) => {
+    const p = prev.ranges[i];
+    if (!p) return;
+    if (p[0] !== r[0] || p[1] !== r[1]) d.push(`${names[i] ?? `seat${i}`} range changed (weight ${p[0]}→${r[0]}, live combos ${p[1]}→${r[1]})`);
+  });
+  if (!d.length) return "re-created with an IDENTICAL fingerprint — the exact key still differed (a range weight below the fingerprint's rounding, or the cache was cleared)";
+  return `re-created: ${d.join(", ")}`;
+}
+
 /** Everything that defines the custom TREE (and so the cloud solve). */
 /**
  * Bet grid for a 3-player tree's wager-free streets (see buildCustomTree). Two bets and one raise size keep
@@ -547,6 +662,9 @@ export interface CustomTreeInput {
   /** A multi-size FIXED grid for heads-up wager-free streets instead of AUTOMATIC
    *  (e.g. {bet:["33%","75%","150%"], raise:["55%","100%"]}). Part of the tree key. */
   huGrid?: { bet: readonly string[]; raise: readonly string[] };
+  /** Diagnostic only (2026-09-24, aiChain.AiChainSpec.planTag) — which concurrent collapse plan this tree belongs
+   *  to, so the tree-miss "why" doesn't compare two unrelated plans' trees to each other. NEVER part of treeKey(). */
+  planTag?: string | null;
 }
 
 /** Tree params plus the node to query within it. */

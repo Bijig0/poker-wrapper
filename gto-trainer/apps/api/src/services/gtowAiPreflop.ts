@@ -113,8 +113,12 @@ export function heroPosOf(hand: ParsedHand, heroPos: string | null): string | nu
   return (heroPos ?? hand.positions[hand.heroSeatId] ?? (post ? (post.type === "post-sb" ? "SB" : "BB") : null))?.toUpperCase() ?? null;
 }
 
-/** The table as the API must see it. */
-export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, rakeSeats?: number): AiPreflopShape | { error: string } {
+/** The table as the API must see it. `dealt`: the hand's pinned dealt stacks (fastSolve.pinPostflop), read once
+ *  per hand — without it this function reads `hand.stacks` fresh, which drifts between probes of the same hand
+ *  (see the header note in fastSolve.ts) and was the one postflop-range source the 2026-09-24 stack pin missed:
+ *  any Ignition hand that isn't exactly 6-handed, and any hand thin enough to need the AI preflop tree instead
+ *  of a chart, reads its flop-entering ranges through here on every street. */
+export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, rakeSeats?: number, dealt?: Record<number, number>): AiPreflopShape | { error: string } {
   const hp = heroPosOf(hand, heroPos);
   const seats: { seat: number; pos: string }[] = Object.entries(hand.positions).map(([s, p]) => ({ seat: Number(s), pos: p.toUpperCase() }));
   if (hp && !seats.some((x) => x.seat === hand.heroSeatId)) seats.push({ seat: hand.heroSeatId, pos: hp });
@@ -152,8 +156,10 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   const stacks: Record<string, number> = {};
   for (const p of ordered) {
     const seat = byPos.get(p)!;
-    const cur = hand.stacks?.[seat];
-    const committed = hand.committed?.[seat] ?? 0;
+    // `dealt` already carries the stack AS DEALT (behind + committed + earlier streets, hrc6max.dealtBySeat) —
+    // `committed` must not be added again on top of it, or a pinned postflop read double-counts this street's chips.
+    const cur = dealt ? dealt[seat] : hand.stacks?.[seat];
+    const committed = dealt ? 0 : (hand.committed?.[seat] ?? 0);
     stacks[apiOf[p]!] = Math.min(999, Math.max(1, round5((cur != null ? cur + committed : 100))));
   }
   if (deadSb) stacks.SB = DEAD_SB_GHOST;
@@ -817,8 +823,8 @@ const CLASS_COMBOS: Record<string, number> = (() => {
 const isRaiseCode = (a: any) => /^R/i.test(String(a?.action?.code ?? "")) && a?.action?.allin !== true;
 const codeNum = (c: string) => Number(String(c).replace(/^[A-Z]+/i, ""));
 
-export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | null, maxPlayers: SeatCap): Promise<ArrivalOutcome> {
-  const shape = shapeOf(hand, heroPos);
+export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | null, maxPlayers: SeatCap, dealt?: Record<number, number>): Promise<ArrivalOutcome> {
+  const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop ranges: ${shape.error}` };
   const { tokens, levels } = lineOf(hand, shape);
   const m = menus(levels, shape.n);

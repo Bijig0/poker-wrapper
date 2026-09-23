@@ -1,4 +1,5 @@
-import { gtowApi } from "./gtowApi";
+import { gtowApi, type NodeSource } from "./gtowApi";
+import { tmark, tspan } from "./answerTrace";
 import {
   actionKindOf,
   matchActionLoose,
@@ -74,6 +75,12 @@ export interface AiChainSpec {
    *  picks its own single size per node. Ignored when the spec has three seats (a 3-player tree is FIXED on
    *  every street already). */
   huGrid?: { bet: readonly string[]; raise: readonly string[] };
+  /** Which collapse plan this walk is (multiwayCollapse.ts's `kind`, e.g. "SB+BB merged", "3-way", "last-resort:hero
+   *  vs CO") — 2026-09-24. Several plans for one 4+ way decision run concurrently against the SAME board/street with
+   *  DIFFERENT composite ranges by design (a merged seat can reuse another seat's position label), so the tree-miss
+   *  diagnostic (gtowApi.describeTreeChange) needs this to tell "a different plan's first-ever tree" apart from "the
+   *  same tree re-created because something drifted" — purely diagnostic, never part of the cloud solve's cache key. */
+  planTag?: string | null;
   /** Which preflop layer the flop-entering ranges came from — e.g.
    *  "ign200_3maxasym2ci_D100_s100_eq + exploit hero range (btn_open)". Not
    *  used by the solve; kept so a stored trace says what it assumed. */
@@ -86,6 +93,11 @@ export interface AiChainSpec {
   /** Walk every street to its end and return the ranges leaving the last one (`rangesOut`) instead of stopping at
    *  hero's node — how a re-root conditions the ranges it starts from. The last street must close. */
   walkThrough?: boolean;
+  /** THE HAND THIS WALK BELONGS TO (2026-09-24). With it, every street the walk closes is checkpointed — the seats'
+   *  ranges leaving it, the pot and stack, the trace of the walk — and the hand's next decision starts from the
+   *  deepest checkpoint whose tokens still match the capture. A previous street's ranges are then never computed
+   *  twice for one hand, whatever happens to the tree cache. Without it the walk starts at the flop as before. */
+  handKey?: string;
 }
 
 /**
@@ -114,6 +126,12 @@ export interface ChainTraceNode {
   /** index into `actions` of the observed action, null at hero's pending node */
   taken: number | null;
   heroNode: boolean;
+  /** where the node's JSON came from (2026-09-24): the process cache, a poll another request already had in
+   *  flight, or this walk's own poll — and the wall-clock it took */
+  src?: NodeSource | "failed" | "checkpoint";
+  ms?: number;
+  /** this node was not read by this call: its record travels with the hand's checkpoint (2026-09-24) */
+  fromCheckpoint?: boolean;
 }
 export interface ChainTrace {
   spec: AiChainSpec;
@@ -122,6 +140,21 @@ export interface ChainTrace {
     labels: string[]; fixedLevels: string[] | null; solId: string | null; created: boolean;
     /** wall-clock ms: the cloud solve (ensureCustomSolution) and the node walk on it (since 2026-09-12) */
     solveMs?: number; walkMs?: number;
+    /** why the street's tree was CREATED instead of found in the cache (gtowApi.describeTreeChange); null when
+     *  it was cached (2026-09-24). A turn that re-creates its FLOP tree is a leak, and this names it. */
+    treeWhy?: string | null;
+    /** the street had wagers but was walked on its cached size-free (AUTOMATIC / grid) tree because the observed
+     *  sizes were on it — or why that was tried and not possible (2026-09-24). null when never applicable. */
+    reuse?: string | null;
+    /** this street was NOT walked by this call: its records come from the hand's checkpoint (2026-09-24) */
+    fromCheckpoint?: boolean;
+    /** this street was walked from hero's LAST node on, not from its root: the tokens before it came from the
+     *  hand's mid-street checkpoint (2026-09-24); the number is how many nodes were not read again */
+    resumedAt?: number;
+    /** why the mid-street checkpoint could not be resumed although one existed */
+    resumeMiss?: string;
+    /** the walk's node reads by source, and the wall-clock of the ones that waited on the network */
+    nodeSrc?: { cache: number; joined: number; fetched: number; fetchMs: number };
     /** The street's seats in acting order and their entering ranges, parallel arrays (since 2026-09-19): a
      *  three-way flop lists three, the street after a fold lists the two left. oopIn/ipIn are the first and
      *  last of them, kept for readers of older traces. */
@@ -130,7 +163,114 @@ export interface ChainTrace {
     oopIn: number[]; ipIn: number[];
   }[];
   nodes: ChainTraceNode[];
+  /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
+   *  reason no checkpoint fit; absent when the spec carried no handKey */
+  checkpoint?: { from: string | null; streetsReused: number; note: string };
   result: { ok: boolean; why?: string; potNode?: number; stackStreet?: number; line?: string; solves?: number };
+}
+
+// ── per-hand street checkpoints ────────────────────────────────────────────────────────────────────────────────
+/**
+ * THE RANGES LEAVING A STREET ARE COMPUTED ONCE PER HAND (2026-09-24, Brady: "just store these ranges in memory —
+ * NEVER a re-compute of a previous street's range"). Until now every decision re-walked the whole hand from the
+ * flop and relied on gtowApi's tree/node caches to make that cheap; any drift in a key input (a stack reading, a
+ * chart rung, a pinned size) silently turned the re-walk into fresh cloud solves. A checkpoint is written when a
+ * street closes: the surviving seats with their conditioned ranges, the pot and stack entering the next street,
+ * the line so far, and the trace records of everything walked. The next decision of the same hand starts from the
+ * deepest checkpoint whose tokens still equal the capture's (a street the capture later re-reads differently is
+ * named and walked afresh — the only thing that can be right then). Keyed by hand + starting street + the seats
+ * walked, so each collapse of a multiway spot keeps its own; bounded; a replay with a fresh handKey is unaffected.
+ */
+interface StreetCheckpoint {
+  /** the street this checkpoint leaves (0 flop, 1 turn) */
+  k: number;
+  /** tokens per street 0..k as they were when walked — must match exactly to be reused */
+  tokens: string[][];
+  seats: { pos: string; label: SeatLabel; range: number[] }[];
+  pot: number;
+  stack: number;
+  walked: string[];
+  streets: ChainTrace["streets"];
+  nodes: ChainTraceNode[];
+  at: number;
+}
+const CHECKPOINT_KEYS_MAX = 300;
+const checkpoints = new Map<string, StreetCheckpoint[]>();
+
+function saveCheckpoint(key: string, cp: StreetCheckpoint): void {
+  const list = (checkpoints.get(key) ?? []).filter((x) => x.k !== cp.k);
+  list.push(cp);
+  checkpoints.delete(key);           // re-insert: the map's order is its age order
+  checkpoints.set(key, list);
+  while (checkpoints.size > CHECKPOINT_KEYS_MAX) {
+    const first = checkpoints.keys().next().value;
+    if (first === undefined) break;
+    checkpoints.delete(first);
+  }
+}
+
+const sameTokens = (a: string[] | undefined, b: string[] | undefined): boolean =>
+  !!a && !!b && a.length === b.length && a.every((t, i) => t === b[i]);
+
+/** The streets checkpointed for a hand (any seat set), for tests and status pages. */
+export function checkpointsFor(handKey: string): { key: string; streets: number[] }[] {
+  const out: { key: string; streets: number[] }[] = [];
+  for (const [key, list] of checkpoints) if (key.startsWith(`${handKey}|`)) out.push({ key, streets: list.map((c) => c.k).sort() });
+  return out;
+}
+
+/**
+ * THE MID-STREET CHECKPOINT (2026-09-24). A closed-street checkpoint cannot exist for the street hero is deciding
+ * on — it has not closed. So the FIRST decision past a street used to walk that street again from its root (from
+ * cached nodes, but a walk all the same), because hero's own action was not known when his node was answered.
+ * Now hero's node IS the checkpoint: everything conditioned up to it, the betting state, the tree it was read on,
+ * and the node's own JSON. The next decision of the hand — the same street re-asked, or the next street — resumes
+ * from that node: hero's realised action is conditioned from the stored node, and only what happened AFTER it is
+ * read. One per hand/seats/plan (the latest); resumable only onto the SAME tree (a size pinned after hero's node
+ * means a new tree, and the street is walked on it, said so in the trace).
+ */
+interface PartialCheckpoint {
+  k: number;
+  /** tokens per street 0..k; the k-th entry is the PREFIX up to hero's node */
+  tokens: string[][];
+  /** the seats as they ENTERED the street (post-floor) — what the tree is keyed on */
+  entering: { pos: string; label: SeatLabel; range: number[] }[];
+  /** the seats conditioned up to hero's node */
+  seats: { pos: string; label: SeatLabel; range: number[] }[];
+  pot: number;
+  stack: number;
+  st: StreetSnapshot;
+  codes: string[];
+  solId: string;
+  /** this street's node records before hero's node */
+  nodes: ChainTraceNode[];
+  /** hero's node JSON — the next decision conditions his realised action from it without a read */
+  heroData: any;
+  at: number;
+}
+const partials = new Map<string, PartialCheckpoint>();
+
+function savePartial(key: string, pc: PartialCheckpoint): void {
+  partials.delete(key);
+  partials.set(key, pc);
+  while (partials.size > CHECKPOINT_KEYS_MAX) {
+    const first = partials.keys().next().value;
+    if (first === undefined) break;
+    partials.delete(first);
+  }
+}
+
+/** The mid-street checkpoints of a hand (any seat set), for tests. */
+export function partialsFor(handKey: string): { key: string; k: number; prefix: string[] }[] {
+  const out: { key: string; k: number; prefix: string[] }[] = [];
+  for (const [key, pc] of partials) if (key.startsWith(`${handKey}|`)) out.push({ key, k: pc.k, prefix: pc.tokens[pc.tokens.length - 1] ?? [] });
+  return out;
+}
+
+/** Forget a hand's checkpoints, closed and mid-street (tests; a replay that wants a cold walk). */
+export function forgetCheckpoints(handKey: string): void {
+  for (const key of [...checkpoints.keys()]) if (key.startsWith(`${handKey}|`)) checkpoints.delete(key);
+  for (const key of [...partials.keys()]) if (key.startsWith(`${handKey}|`)) partials.delete(key);
 }
 
 const r4 = (xs: number[] | undefined): number[] => (xs ?? []).map((x) => Math.round((x ?? 0) * 10000) / 10000);
@@ -188,6 +328,8 @@ export type ActionKind = "Fold" | "Check" | "Call" | "Bet" | "Raise" | "AllIn";
  * A street is closed once no seat still in owes an action since the last wager (everyone checked, or everyone
  * matched the last bet or left) — or when one seat is left.
  */
+export interface StreetSnapshot { live: number[]; inv: number[]; p: number; owed: number[] }
+
 export class StreetState {
   /** seat indices still in the hand, acting order */
   live: number[];
@@ -205,6 +347,16 @@ export class StreetState {
   get outstanding(): number { return Math.max(...this.inv); }
   get potIn(): number { return this.inv.reduce((s, x) => s + x, 0); }
   get closed(): boolean { return this.live.length < 2 || !this.live.some((s) => this.owed.has(s)); }
+
+  /** The state as plain data — a mid-street checkpoint stores it and a later decision resumes from it (2026-09-24). */
+  snapshot(): StreetSnapshot {
+    return { live: this.live.slice(), inv: this.inv.slice(), p: this.p, owed: [...this.owed] };
+  }
+  static fromSnapshot(n: number, snap: StreetSnapshot): StreetState {
+    const st = new StreetState(n);
+    st.live = snap.live.slice(); st.inv = snap.inv.slice(); st.p = snap.p; st.owed = new Set(snap.owed);
+    return st;
+  }
 
   /** Apply the acting seat's action; wagers give the raise-to size in bb. */
   apply(kind: ActionKind, raiseTo?: number): void {
@@ -243,6 +395,58 @@ export function actorsOf(labels: string[], n: number): number[] {
   return out;
 }
 
+/**
+ * Would this street's observed line walk on the tree `solId` (the size-free one already solved for it)? Every
+ * label up to the LAST wager is checked against the tree's own actions with the walk's matcher; a wager that is
+ * offered within tolerance is rewritten to the tree's exact size (so the walk then matches it exactly and rolls
+ * the pot forward with the tree's number). Nodes are read from the cache; at most ONE is fetched — the node
+ * where a wager is checked is a node the walk needs anyway if the fit holds. Pure over its two node getters.
+ */
+export async function fitsCachedTree(
+  solId: string,
+  labels: string[],
+  stack: number,
+  peek: (codes: string) => any | null,
+  fetchOne: (codes: string) => Promise<any | null>,
+): Promise<{ ok: true; labels: string[]; note: string } | { ok: false; why: string }> {
+  const isWager = (l: string) => /\(/.test(l);
+  let last = -1;
+  labels.forEach((l, i) => { if (isWager(l)) last = i; });
+  const out = labels.slice();
+  const codes: string[] = [];
+  const snaps: string[] = [];
+  let fetched = false;
+  for (let ti = 0; ti <= last; ti++) {
+    const label = labels[ti]!;
+    if (!isWager(label)) {
+      codes.push(label === "Check" ? "X" : label === "Call" ? "C" : "F");
+      continue;
+    }
+    let node = peek(codes.join("-"));
+    if (!node) {
+      if (fetched) return { ok: false, why: `node [${codes.join("-") || "root"}] not cached and one fetch already spent` };
+      fetched = true;
+      node = await fetchOne(codes.join("-"));
+      if (!node) return { ok: false, why: `node [${codes.join("-") || "root"}] could not be read` };
+    }
+    const sols: any[] = node.action_solutions ?? [];
+    const ai = matchActionLoose(label, sols, stack);
+    if (ai < 0) {
+      const offered = sols.filter((a) => a.action?.betsize != null && a.action.betsize !== "").map((a) => `${a.action.display_name} ${a.action.betsize}`).join(", ");
+      return { ok: false, why: `${label} is not on it (offers ${offered || "no wager"})` };
+    }
+    const a = sols[ai]!;
+    const kind = actionKindOf(a);
+    const size = Number(a.action?.betsize);
+    const chips = Math.round(size * 100);
+    const rewritten = `${kind}(${chips})`;
+    if (rewritten !== label) snaps.push(`${label} taken as the tree's ${rewritten}`);
+    out[ti] = rewritten;
+    codes.push(String(a.action?.code ?? ""));
+  }
+  return { ok: true, labels: out, note: snaps.length ? snaps.join(", ") : `every wager is on it (${labels.filter(isWager).join(", ")})` };
+}
+
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
   const fail = (why: string): AiChainResult => { trace.result = { ok: false, why }; return { ok: false, why, trace }; };
@@ -271,12 +475,72 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   let solves = 0;
   const walked: string[] = [];
 
-  for (let si = 0; si < spec.streets.length; si++) {
+  // START FROM THE HAND'S CHECKPOINT when one fits: the deepest closed street before the decision street whose
+  // tokens (and every street's before it) are exactly what the capture says now.
+  let startSi = 0;
+  // planTag disambiguates concurrent collapse plans that reduce to the SAME seat labels but different composite
+  // ranges (multiwayCollapse.ts can reuse a merged seat's original position name) — without it, plan A's
+  // checkpoint would be overwritten by plan B's under the same key, and a later decision walking plan A could
+  // read plan B's ranges. See gtowApi.ts's identical fix to the tree-miss diagnostic key.
+  const ckKey = spec.handKey ? `${spec.handKey}|${first}|${seats.map((s) => s.pos).join("/")}|${spec.planTag ?? ""}` : null;
+  if (ckKey) {
+    const cps = (checkpoints.get(ckKey) ?? []).slice().sort((a, b) => b.k - a.k);
+    const mismatches: string[] = [];
+    for (const cp of cps) {
+      const si = cp.k - first;
+      if (si < 0 || si >= spec.streets.length - 1) continue;   // only streets BEFORE the decision street
+      const bad = cp.tokens.findIndex((t, i) => !sameTokens(t, spec.streets[i]));
+      if (bad >= 0) {
+        mismatches.push(`the ${STREET[bad + first]!.toLowerCase()} was [${cp.tokens[bad]!.join(",")}] when walked, the capture now says [${(spec.streets[bad] ?? []).join(",")}]`);
+        continue;
+      }
+      seats = cp.seats.map((s) => ({ ...s, range: s.range.slice() }));
+      pot = cp.pot;
+      stack = cp.stack;
+      walked.push(...cp.walked);
+      trace.streets.push(...cp.streets.map((s) => ({ ...s, fromCheckpoint: true })));
+      trace.nodes.push(...cp.nodes.map((x) => ({ ...x, fromCheckpoint: true })));
+      startSi = si + 1;
+      const note = `ranges leaving the ${STREET[cp.k]!.toLowerCase()} taken from this hand's checkpoint (walked ${((Date.now() - cp.at) / 1000).toFixed(0)} s ago) — ${si + 1} earlier street${si ? "s" : ""} not re-computed`;
+      trace.checkpoint = { from: STREET[cp.k]!, streetsReused: si + 1, note };
+      tmark("chain checkpoint", note);
+      break;
+    }
+    if (!startSi && spec.streets.length > 1) {
+      const note = mismatches.length
+        ? `checkpoint NOT reusable — ${mismatches.join("; ")} — the earlier streets are walked again`
+        : "no checkpoint for this hand yet (first walk past its opening street in this process)";
+      trace.checkpoint = { from: null, streetsReused: 0, note };
+      tmark("chain checkpoint", note);
+    }
+  }
+  // …and the street after the last closed one may resume from hero's LAST node on it (PartialCheckpoint) when the
+  // capture still begins with the tokens walked then.
+  let resume: PartialCheckpoint | null = null;
+  if (ckKey) {
+    const pc = partials.get(ckKey);
+    if (pc && pc.k - first === startSi && startSi < spec.streets.length) {
+      const si = startSi;
+      const earlierOk = pc.tokens.slice(0, si).every((t, i) => sameTokens(t, spec.streets[i]));
+      const prefix = pc.tokens[si] ?? [];
+      const now = spec.streets[si] ?? [];
+      const prefixOk = prefix.length <= now.length && prefix.every((t, i) => t === now[i]);
+      if (earlierOk && prefixOk) resume = pc;
+      else {
+        tmark("chain checkpoint", `mid-${STREET[pc.k]!.toLowerCase()} checkpoint not reusable: the capture's ${STREET[pc.k]!.toLowerCase()} ` +
+          `${earlierOk ? `no longer starts with [${prefix.join(",")}] (now [${now.join(",")}])` : "follows an earlier street that changed"}`);
+      }
+    }
+  }
+
+  for (let si = startSi; si < spec.streets.length; si++) {
     const k = si + first;   // the street's real index (re-rooted chains start past the flop)
     const streetBoard = cards.slice(0, 3 + k).join("");
     const toks = spec.streets[si]!;
     const isLast = si === spec.streets.length - 1;
     const n = seats.length;
+    const resuming = resume && si === startSi ? resume : null;
+    if (resuming) seats = resuming.entering.map((s) => ({ ...s, range: s.range.slice() }));
     const heroIdx = seats.findIndex((s) => s.pos === heroPos);
     if (heroIdx < 0) return fail("hero is no longer in the hand — nothing to solve");
     if (n < 2) return fail("only one player left in the hand — no decision to solve");
@@ -301,6 +565,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
 
+    /** the seats as they enter the street, post-floor — what the tree is keyed on and what a mid-street checkpoint restores */
+    const entering = seats.map((s) => ({ ...s, range: s.range.slice() }));
+
     // Engine labels for this street's tokens (Bet vs Raise by outstanding
     // wager; RAI = all-in to the street-entering stack), and who acts on each.
     let labels: string[];
@@ -312,28 +579,24 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       return fail(`tokens: ${e instanceof Error ? e.message : e}`);
     }
 
-    // Any wager street is solved FIXED with the observed sizes pinned — live
-    // capture sizes are essentially never on the AUTOMATIC grid, and a tree
-    // that lacks the size played cannot be walked. (A 3-player tree is FIXED
-    // on every street regardless — gtowApi supplies the grid.)
-    let fixedLevels: string[] | null = null;
-    if (labels.some((l) => /\(/.test(l))) {
-      try {
-        fixedLevels = streetFixedPcts(labels, pot, actors).pcts;
-      } catch (e) {
-        return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
+    const nodeSrc = { cache: 0, joined: 0, fetched: 0, fetchMs: 0 };
+    // every node read is accounted for: the cache it came from, or how long its poll took
+    const readNode = async (solId: string, codesStr: string) => {
+      const t = Date.now();
+      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard });
+      const ms = Date.now() - t;
+      const src: NodeSource | "failed" = r.ok ? (r.src ?? (r.cached ? "cache" : "fetched")) : "failed";
+      if (src === "cache") nodeSrc.cache++;
+      else if (src === "joined") { nodeSrc.joined++; nodeSrc.fetchMs += ms; }
+      else if (src === "fetched") { nodeSrc.fetched++; nodeSrc.fetchMs += ms; }
+      if (src !== "cache") {
+        tspan(`chain ${STREET[k]} node [${codesStr || "root"}] ${src}`, t, r.ok ? `solution ${solId.slice(0, 8)}` : r.error.slice(0, 120));
       }
-    }
-    const streetRec = {
-      si, street: STREET[k]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
-      solId: null as string | null, created: false, solveMs: 0, walkMs: 0,
-      players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
-      oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
+      return { r, src, ms };
     };
-    trace.streets.push(streetRec);
 
-    const tSolve = Date.now();
-    const treeInput = {
+    // The size-free tree for this street: AUTOMATIC heads-up, the fixed grid three-way (gtowApi supplies it).
+    const baseInput = {
       board: streetBoard,
       pot,
       stack,
@@ -345,6 +608,58 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       ...(n === 2 && spec.huGrid ? { huGrid: spec.huGrid } : {}),
       startingStreet: STREET[k]!,
       ...(spec.rake ? { rake: spec.rake } : {}),
+      ...(spec.planTag ? { planTag: spec.planTag } : {}),
+    };
+
+    // Any wager street is solved FIXED with the observed sizes pinned — live
+    // capture sizes are essentially never on the AUTOMATIC grid, and a tree
+    // that lacks the size played cannot be walked. (A 3-player tree is FIXED
+    // on every street regardless — gtowApi supplies the grid.)
+    //
+    // UNLESS THE SIZES ARE ON THE TREE ALREADY SOLVED (2026-09-24). The street was solved size-free when it
+    // opened (the warm-up, or hero's own decision at its root); when the wagers played since are within the
+    // walk's own tolerance (matchActionLoose: 5% or 0.15bb) of what that tree offers, that tree is walked
+    // instead and no FIXED tree is created. Before this, hero betting exactly the size the tree recommended
+    // still re-solved the street on the next card (the key carries the pinned size) — one fresh cloud solve and
+    // a 3-node re-walk, 2.5-4 s, on every turn and river after a hero bet. The check reads cached nodes and
+    // fetches at most one; a miss costs that one fetch and is named in the trace.
+    let fixedLevels: string[] | null = null;
+    let reuse: string | null = null;
+    if (labels.some((l) => /\(/.test(l))) {
+      const autoSol = gtowApi.peekSolution(baseInput);
+      if (autoSol) {
+        const tTry = Date.now();
+        const fit = await fitsCachedTree(autoSol, labels, stack, (codesStr) => gtowApi.peekNode(autoSol, { [QKEY[k]!]: codesStr, board: streetBoard }),
+          async (codesStr) => { const x = await readNode(autoSol, codesStr); return x.r.ok ? x.r.data : null; });
+        if (fit.ok) {
+          labels = fit.labels;
+          reuse = `size-free tree reused: ${fit.note}`;
+        } else {
+          reuse = `size-free tree not reusable (${fit.why}) — solved FIXED`;
+        }
+        tspan(`chain ${STREET[k]} size-free tree ${fit.ok ? "reused" : "not reusable"}`, tTry, fit.ok ? fit.note : fit.why);
+      }
+      if (!reuse?.startsWith("size-free tree reused")) {
+        try {
+          fixedLevels = streetFixedPcts(labels, pot, actors).pcts;
+        } catch (e) {
+          return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }
+    const streetRec = {
+      si, street: STREET[k]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
+      solId: null as string | null, created: false, solveMs: 0, walkMs: 0,
+      treeWhy: null as string | null, reuse, nodeSrc,
+      resumedAt: undefined as number | undefined, resumeMiss: undefined as string | undefined,
+      players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
+      oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
+    };
+    trace.streets.push(streetRec);
+
+    const tSolve = Date.now();
+    const treeInput = {
+      ...baseInput,
       ...(fixedLevels ? { fixedLevels: { [STREET[k]!]: fixedLevels } } : {}),
     };
     let ens = await gtowApi.ensureCustomSolution(treeInput);
@@ -354,17 +669,55 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     streetRec.solId = String(ens.solId);
     streetRec.created = !!ens.created;
     streetRec.solveMs = Date.now() - tSolve;
+    // THE TREE SAYS WHETHER IT WAS REUSED, AND IF NOT, WHY (2026-09-24). The chain's whole economy is that an
+    // earlier street's tree comes back from the cache on every later decision; a street that reads CREATED here
+    // on a turn or river is the leak, and the reason (a stack that drifted, a size pinned, ranges from another
+    // chart) is recorded in the trace and the answer's timeline rather than left for someone to reconstruct.
+    streetRec.treeWhy = ens.created ? ens.why ?? "created (no reason recorded)" : null;
+    tspan(`chain ${STREET[k]} tree ${ens.created ? "CREATED" : "cached"}`, tSolve,
+      ens.created ? streetRec.treeWhy ?? undefined : `solution ${String(ens.solId).slice(0, 8)}`);
     const tWalk = Date.now();
 
-    const st = new StreetState(n);
-    const codes: string[] = [];
+    let st = new StreetState(n);
+    let codes: string[] = [];
     let closed = false;
+    let ti0 = 0;
+    let heroDataAtTi0: any = null;
+    if (resuming) {
+      const sameTree = String(ens.solId) === resuming.solId;
+      // ONTO A NEW TREE TOO (2026-09-24): a wager after hero's node that the size-free tree does not offer pins a
+      // FIXED tree for the street. The prefix's conditioning (every seat's range up to hero's node) was computed
+      // on the size-free tree and is kept — the same spot, an equilibrium with a slightly different size menu —
+      // and only the node where the wager is offered, and what follows, is read on the new tree. Hero's stored
+      // node JSON is from the old tree, so that one node is read again; nothing before it is. Only when the
+      // prefix itself holds a wager (its code could differ between trees) is the street walked from the root.
+      const prefixSizeFree = resuming.codes.every((c) => c === "X" || c === "C" || c === "F");
+      if (sameTree || prefixSizeFree) {
+        seats = resuming.seats.map((s) => ({ ...s, range: s.range.slice() }));
+        st = StreetState.fromSnapshot(n, resuming.st);
+        codes = resuming.codes.slice();
+        ti0 = codes.length;
+        heroDataAtTi0 = sameTree ? resuming.heroData : null;
+        trace.nodes.push(...resuming.nodes.map((x) => ({ ...x, fromCheckpoint: true })));
+        streetRec.resumedAt = ti0;
+        const note = sameTree
+          ? `${STREET[k]!.toLowerCase()} resumed at hero's node (after ${codes.join("-") || "the root"}) from this hand's mid-street checkpoint — ${ti0 + 1} node${ti0 ? "s" : ""} not read again`
+          : `${STREET[k]!.toLowerCase()} resumed at hero's node (after ${codes.join("-") || "the root"}) onto a NEW tree (${streetRec.treeWhy ?? "sizes pinned since hero's node"}): ` +
+            `the ${ti0} node${ti0 === 1 ? "" : "s"} before it keep the size-free tree's conditioning, hero's node is read on the new tree`;
+        if (!sameTree) streetRec.resumeMiss = undefined;
+        tmark("chain checkpoint", note);
+      } else {
+        streetRec.resumeMiss = `the ${STREET[k]!.toLowerCase()} now needs a different tree (${streetRec.treeWhy ?? "sizes pinned since hero's node"}) and a wager before hero's node could be coded differently on it — walked from the root`;
+        tmark("chain checkpoint", `mid-${STREET[k]!.toLowerCase()} checkpoint not resumable: ${streetRec.resumeMiss}`);
+      }
+    }
+    const streetNodesStart = trace.nodes.length - (streetRec.resumedAt != null ? resuming!.nodes.length : 0);
 
-    for (let ti = 0; ti <= labels.length; ti++) {
-      let nq = await gtowApi.customNode(ens.solId, {
-        [QKEY[k]!]: codes.join("-"),
-        board: streetBoard,
-      });
+    for (let ti = ti0; ti <= labels.length; ti++) {
+      // hero's node from the mid-street checkpoint needs no read: its JSON travelled with it
+      let { r: nq, src: nodeSrc, ms: nodeMs } = ti === ti0 && heroDataAtTi0
+        ? { r: { ok: true as const, data: heroDataAtTi0, solveSecs: 0, cached: true, src: "cache" as const }, src: "checkpoint" as const, ms: 0 }
+        : await readNode(ens.solId, codes.join("-"));
       // THE OWNING ACCOUNT HIT ITS DAILY WALL MID-WALK (a 429 on the poll). A solve lives on the account that
       // made it, so it cannot be polled anywhere else — re-create the same tree once; routing now skips the
       // walled account, and the node addresses are identical on the new solve.
@@ -376,7 +729,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           ens = again;
           if (again.created) solves++;
           streetRec.solId = String(again.solId);
-          nq = await gtowApi.customNode(ens.solId, { [QKEY[k]!]: codes.join("-"), board: streetBoard });
+          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}re-created on another account after a 429 mid-walk`;
+          ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(ens.solId, codes.join("-")));
         }
       }
       if (!nq.ok) return fail(`node: ${nq.error}`);
@@ -429,7 +783,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           totalFrequency: a.total_frequency ?? null, totalEv: a.total_ev ?? null,
           strategy: r4(a.strategy), evs: r4(a.evs),
         })),
-        taken: null, heroNode: false,
+        taken: null, heroNode: false, src: nodeSrc, ms: nodeMs,
       };
       trace.nodes.push(nodeRec);
 
@@ -444,6 +798,16 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           );
         }
         nodeRec.heroNode = true;
+        // HERO'S NODE IS THE HAND'S MID-STREET CHECKPOINT: the next decision resumes from here (see PartialCheckpoint)
+        if (ckKey) {
+          savePartial(ckKey, {
+            k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
+            entering, seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack,
+            st: st.snapshot(), codes: codes.slice(), solId: String(ens.solId),
+            nodes: trace.nodes.slice(streetNodesStart).filter((x) => !x.heroNode).map((x) => ({ ...x, fromCheckpoint: undefined })),
+            heroData: nq.data, at: Date.now(),
+          });
+        }
         // The decision street returns from INSIDE the walk, so the loop's own walkMs assignment below never runs
         // for it: every recorded trace had the answering street's walk at 0 ms and its real cost (~2.5 s p50 on
         // the river) showing up as unexplained time. Record it here. (2026-09-22)
@@ -487,6 +851,14 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         stack -= paid;
         seats = st.live.map((i) => seats[i]!);   // folded seats leave the hand
         walked.push(`${STREET[k]!.toLowerCase()} ${codes.join("-")}`);
+        // the street is closed: everything the next street needs is checkpointed for this hand's later decisions
+        if (ckKey) {
+          saveCheckpoint(ckKey, {
+            k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
+            seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack, walked: walked.slice(),
+            streets: trace.streets.slice(), nodes: trace.nodes.slice(), at: Date.now(),
+          });
+        }
         if (seats.length < 2) return fail("everyone else folded — no decision left to solve");
         if (stack <= 0.005) return fail("line is all-in — no pending decision to solve");
         closed = true;

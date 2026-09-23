@@ -118,9 +118,14 @@ export function sizesFromTokens(tokens: string[]): { open: number | null; threeB
  * same way (the middle size when nobody has 3-bet yet). Fallbacks: the other 3-bet trees, the other opens,
  * then the nearest depths — a limped line lives in every tree, so any chart that exists answers it.
  */
-export function chartForHu(hand: ParsedHand, tokens: string[] = []): ChartHuChoice {
+export function chartForHu(hand: ParsedHand, tokens: string[] = [], dealt?: Record<number, number>): ChartHuChoice {
   const notes: string[] = [];
-  const stacks = dealtStacks(hand);
+  // `dealt` = the stacks as dealt, read ONCE per hand by the postflop pin (fastSolve.pinPostflop), so the rung —
+  // and with it the ranges, and with them GTO Wizard's tree key — cannot drift between streets. Without it each
+  // probe reconstructs the stacks afresh from the wrapper's moving readings.
+  const stacks = dealt
+    ? Object.entries(dealt).filter(([k, v]) => hand.positions?.[Number(k)] != null && Number.isFinite(v) && v > 0).map(([, v]) => v)
+    : dealtStacks(hand);
   let effective: number | null = stacks.length >= 2 ? Math.min(...stacks) : stacks.length === 1 ? stacks[0]! : null;
   if (effective == null) notes.push("stacks unreadable — taken as 100bb");
   const eff = effective ?? 100;

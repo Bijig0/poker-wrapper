@@ -26,6 +26,7 @@ import replayRoutes from "./src/routes/replay";
 import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
 import { gtowApi } from "./src/services/gtowApi";
+import { startStallMonitor } from "./src/services/answerTrace";
 import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
 
 const app = new Hono();
@@ -191,6 +192,9 @@ if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token ke
 // `dev-api.cmd --watch` is for) but must not run a second poller / dispatcher / keeper: see
 // services/backgroundLock.ts for what two of each actually broke on 2026-09-13.
 // The services also self-guard, so a route that starts the poller on a demoted instance is refused.
+// Every API process watches its own event loop (services/answerTrace.ts): a stall lands in the timeline of
+// every answer it froze, and in the log as [stall] — ownership has nothing to do with it.
+startStallMonitor();
 startBackgroundLock();
 onBackgroundOwnership(() => {
   // Always running, self-gating on assistive-play's own "Study Answers" toggle

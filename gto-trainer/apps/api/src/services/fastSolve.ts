@@ -5,7 +5,7 @@ import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
-import { rerootCollapse } from "./multiwayReroot";
+import { rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopRotation, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
 import { missQueue } from "./missQueue";
@@ -23,7 +23,8 @@ import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
 import { reconstructFlopRanges, classWeightsToSpec } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
-import { solveAiChain } from "./aiChain";
+import { solveAiChain, type AiChainResult } from "./aiChain";
+import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
 import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
@@ -780,8 +781,12 @@ async function solvePostflopViaChain(
   /** notes from repairs the caller already applied to the capture (utils/repairPostflopRotation) */
   captureNotes: string[] = [],
   /** the CoinPoker HU strategy: ranges from OUR cp200a heads-up chart, the pot with its antes, CoinPoker's rake */
-  huCp = false
+  huCp = false,
+  /** the stacks as dealt, read ONCE per hand by the caller (pinPostflop) — every chart pick below uses these,
+   *  never a fresh reading, so the ranges and the tree key hold still from the flop to the river */
+  pinnedDealt?: Record<number, number>
 ): Promise<{ res: FastSolveResult | null; why: string | null; mesInput?: RiverMesInput }> {
+  const tEntry = Date.now();
   const fail = (why: string) => ({ res: null, why });
   let sixNote: string | null = captureNotes.length ? captureNotes.join(" · ") : null;
   const cur = hand.currentNode.street as "flop" | "turn" | "river";
@@ -880,7 +885,7 @@ async function solvePostflopViaChain(
   if (!recon && huCp) {
     const huTok = buildPreflopTokensHu(hand, heroPos);
     if (!preflopClosed(huTok, HU_SEATS)) return fail("preflop betting didn't close (missed action?)");
-    const choice = chartForHu(hand, huTok);
+    const choice = chartForHu(hand, huTok, pinnedDealt);
     const resolved = await resolveChartHu(choice);
     if (resolved === "unreachable") return fail("chart server :8777 unreachable — the CoinPoker HU charts cannot be read");
     if (resolved === null) return fail(`no CoinPoker HU chart on the server (wanted ${choice.id})`);
@@ -906,7 +911,7 @@ async function solvePostflopViaChain(
     const wantAi = piece === "gtow-ai-preflop" || piece === "chart3max" || !is6Handed(hand, heroPos);
     let six: Awaited<ReturnType<typeof recon6max>> | null = null;
     if (!wantAi) {
-      six = await recon6max(hand, heroPos, heroPosName);
+      six = await recon6max(hand, heroPos, heroPosName, pinnedDealt);
       if (six.ok) {
         recon = six.recon; preTokens = six.tokens; seatOrder = undefined; rangeSource = six.id; sixNote = six.note;
       } else if (piece === "chart6max") {
@@ -923,7 +928,7 @@ async function solvePostflopViaChain(
       // itself is count-agnostic (see SeatCap in gtowAiPreflop), so this was only ever the caller
       // under-declaring what it could consume. Found by the 2026-09-21 stress run; the chart half of the
       // same asymmetry had been fixed earlier the same day and this half was missed.
-      const ai = await arrivalRangesGtowAi(hand, heroPos, 6);
+      const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
       if (!ai.ok) return fail(six && !six.ok ? `${six.reason}; then ${ai.reason}` : ai.reason);
       recon = { ok: true, ranges: ai.ranges };
       preTokens = ai.tokens;
@@ -1033,6 +1038,7 @@ async function solvePostflopViaChain(
       const cSeats = ordered.map((p) => ({ pos: p, range: arr(p) }));
       const plans = planCollapses(cSeats, ordered[heroAt]!, toks);
       let picked = pickCollapses(plans);
+      let rerootWhy: string | null = null;
       if (!picked && cur !== "flop") {
         // NO COLLAPSE FROM THE FLOP (every villain put chips in on an earlier street, none adjacent) — RE-ROOT at
         // the current street: earlier streets' chips become plain pot, so a villain who only checked (or has not
@@ -1043,7 +1049,10 @@ async function solvePostflopViaChain(
           ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack,
           board: tk.board, heroComboIdx, rake: rake6, specOf,
         });
-        if (!rr.ok) return fail(`${collapseRefusal(cSeats, toks)} — and re-rooting at the ${cur} failed: ${rr.why}`);
+        if (!rr.ok) {
+          // the re-root could not collapse the current street either — fall through to the postflop last resort
+          rerootWhy = rr.why;
+        } else {
         const rp = rr.picked;
         picked = rp;
         reroot = { first: rr.first, pot: rr.pot, stack: rr.stack };
@@ -1060,20 +1069,39 @@ async function solvePostflopViaChain(
           `${cur} alone is collapsed: ${rp.plans.map((pl) => pl.kind).join(" | ")}. Entering ranges narrowed through ` +
           `the earlier streets by ${rr.walks} three-seat walk(s) (${rr.left} left out of some) — approximate. ${rp.why}.`;
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
+        }
       }
-      if (!picked) return fail(collapseRefusal(cSeats, toks));
-      if (!reroot) walkables = picked.plans.map((pl) => ({
+      if (!picked) {
+        // THE POSTFLOP LAST RESORT (2026-09-23, Brady: "100% coverage on all spots"). Every villain has chips in on
+        // this street and no pair is mergeable, so nothing reduces the field to three. What every such spot still
+        // has is HERO and the LAST AGGRESSOR: the street is re-rooted heads-up between them, the other villains'
+        // chips (and hero's own earlier chips this street) stay in the pot as dead money, and hero faces the
+        // aggressor's bet at the real price. Unmodelled, said in the answer: the other villains' ranges and hands,
+        // and the narrowing of the two entering ranges by the earlier streets. It beats a blank.
+        const lr = heroVsAggressor({ ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack });
+        if (!lr) return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — and no last resort fits (nobody to face, or everyone all-in)`);
+        walkables = [lr.walkable];
+        reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
+        blendWhy = null;
+        const note =
+          `POSTFLOP LAST RESORT — ${collapseRefusal(cSeats, toks)}${rerootWhy ? ` (re-rooting at the ${cur}: ${rerootWhy})` : ""}; played as hero (${ordered[heroAt]}) against the last ` +
+          `aggressor (${lr.villain}) alone at the ${cur}: ${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
+          `${lr.pot}bb in the middle before the ${lr.bet}bb ${lr.villainBet ? "bet" : "raise"} hero faces, ${lr.stack}bb behind; ` +
+          `the other villains' ranges and hands are not modelled and the two entering ranges are not narrowed by the earlier streets.`;
+        sixNote = sixNote ? `${sixNote} · ${note}` : note;
+      }
+      if (!reroot) walkables = picked!.plans.map((pl) => ({
         seatSpec: specOf(pl.seats, pl.heroIdx),
         streets: pl.streets.map((st) => st.map((t) => t.tok)),
         streetSeats: pl.streets.map((st) => st.map((t) => t.seat)),
         kind: pl.kind,
       }));
       if (!reroot) {
-      blendWhy = picked.why;
+      blendWhy = picked!.why;
       const note =
         `${flopSeats.length}-WAY APPROXIMATION — no solver models more than three postflop seats, so ` +
-        `${ordered.join("/")} is collapsed to three: ${picked.plans.map((pl) => pl.kind).join(" | ")}. ` +
-        `${picked.why}. Dropped seats keep their chips in the pot; a merged seat holds both ranges.`;
+        `${ordered.join("/")} is collapsed to three: ${picked!.plans.map((pl) => pl.kind).join(" | ")}. ` +
+        `${picked!.why}. Dropped seats keep their chips in the pot; a merged seat holds both ranges.`;
       sixNote = sixNote ? `${sixNote} · ${note}` : note;
       }
     }
@@ -1126,6 +1154,8 @@ async function solvePostflopViaChain(
     streetSeats: w.streetSeats,
     heroComboIdx,
     rangeSource: rangeSource ?? undefined,
+    handKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
+    planTag: w.kind,
   });
   const chains = process.env.CHAIN_SERIAL_COLLAPSES === "1"
     ? await (async () => { const out = []; for (const w of walkables) out.push(await solveOne(w)); return out; })()
@@ -1144,6 +1174,7 @@ async function solvePostflopViaChain(
       solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace),
     });
   }
+  logChain(hand, cur, origin, chains, tEntry, t0);
   // A collapse that will not walk is survivable while another one did; all of them failing is the miss.
   if (!walks.length) return fail(walkFails.join(" · ") || "no walkable tree");
   if (walkFails.length) {
@@ -1229,6 +1260,90 @@ async function solvePostflopViaChain(
     ? { trace: ref.trace, preTokens, heroCards } : undefined };
 }
 
+/**
+ * Hero versus the last aggressor at the current street (the postflop LAST RESORT). Reads the chips each seat put in on
+ * the street from its tokens (R<total> sets a seat's total, C matches the level), picks the last villain who bet or
+ * raised (else the villain with the most in), and returns a heads-up walkable re-rooted at that street:
+ *   pot before the bet = pot entering the street + the other villains' chips + hero's own chips this street
+ *                        + the aggressor's chips that hero has already matched;
+ *   the bet hero faces  = the aggressor's total this street − hero's total this street.
+ * Both entering ranges are the flop-arrival ranges (not narrowed by earlier streets — the approximation named in the note).
+ */
+function heroVsAggressor(a: {
+  ordered: string[]; heroPos: string; arr: (p: string) => number[]; streets: string[][]; streetSeats: string[][];
+  flopPot: number; flopStack: number;
+}): { walkable: { seatSpec: any; streets: string[][]; streetSeats: string[][]; kind: string }; first: number; pot: number; stack: number;
+      villain: string; others: string[]; dead: number; bet: number; villainBet: boolean } | null {
+  const first = a.streets.length - 1;
+  const m = first >= 1 ? moneyThrough(a.streets, a.streetSeats, a.flopPot, a.flopStack, first) : { pot: a.flopPot, stack: a.flopStack, folded: new Set<string>(), aggressors: new Set<string>() };
+  if (m.stack <= 0.5) return null;
+  const toks = a.streets[first]!, seats = a.streetSeats[first]!;
+  const put: Record<string, number> = {};
+  let level = 0, lastAgg: string | null = null;
+  toks.forEach((tok, j) => {
+    const seat = seats[j]!;
+    if (tok === "C") put[seat] = Math.min(level, m.stack);
+    else if (tok === "RAI") { put[seat] = m.stack; level = m.stack; if (seat !== a.heroPos) lastAgg = seat; }
+    else if (/^R[\d.]+$/.test(tok)) { const to = Math.min(parseFloat(tok.slice(1)), m.stack); put[seat] = to; level = to; if (seat !== a.heroPos) lastAgg = seat; }
+    else if (tok === "F") put[seat] = put[seat] ?? 0;
+  });
+  const live = a.ordered.filter((p) => !m.folded.has(p) && !toks.some((t, j) => t === "F" && seats[j] === p));
+  const villain = lastAgg ?? live.filter((p) => p !== a.heroPos).sort((x, y) => (put[y] ?? 0) - (put[x] ?? 0))[0];
+  if (!villain || villain === a.heroPos) return null;
+  const h = put[a.heroPos] ?? 0, v = put[villain] ?? 0;
+  const bet = Math.round((v - h) * 100) / 100;
+  if (bet <= 0) return null;
+  const others = live.filter((p) => p !== a.heroPos && p !== villain);
+  const dead = Math.round(others.reduce((s, p) => s + (put[p] ?? 0), 0) * 100) / 100;
+  const pot = Math.round((m.pot + dead + 2 * h) * 100) / 100;
+  const stack = Math.round((m.stack - h) * 100) / 100;
+  if (stack <= 0.5) return null;
+  const heroOop = POSTFLOP_ORDER.indexOf(a.heroPos.toUpperCase()) < POSTFLOP_ORDER.indexOf(villain.toUpperCase());
+  const oop = heroOop ? a.heroPos : villain, ip = heroOop ? villain : a.heroPos;
+  const street = heroOop ? ["X", `R${bet}`] : [`R${bet}`];
+  const streetSeats = heroOop ? [a.heroPos, villain] : [villain];
+  return {
+    walkable: {
+      seatSpec: { oopPos: oop, ipPos: ip, oopRange: a.arr(oop), ipRange: a.arr(ip), heroSeat: heroOop ? "oop" : "ip" },
+      streets: [street], streetSeats: [streetSeats], kind: `last-resort:hero vs ${villain}`,
+    },
+    first, pot, stack, villain, others, dead, bet, villainBet: true,
+  };
+}
+
+/**
+ * ONE LINE PER POSTFLOP DECISION IN THE API LOG (2026-09-24): every street's tree (cached, or CREATED and why),
+ * every node read (cache / joined / fetched, with the network time), the pre-chain cost (chart walks, range
+ * reconstruction), the fresh cloud solves, and the verdict. `[chain]` is greppable; the same text goes into the
+ * answer's timeline (X-Answer-Trace → data/jobs/poller-events.jsonl). This is the line to read when a turn or
+ * river is slow: a turn whose FLOP tree reads CREATED is re-solving a street it already had, and the reason after
+ * the dash says what moved the key.
+ */
+function logChain(hand: ParsedHand, cur: string, origin: string | undefined, chains: AiChainResult[], tEntry: number, tChain: number): void {
+  const now = Date.now();
+  const parts: string[] = [];
+  let fresh = 0;
+  for (const ch of chains) {
+    if (ch.ok) fresh += ch.solves;
+    for (const s of ch.trace?.streets ?? []) {
+      const ns = s.nodeSrc;
+      const nodes = ns
+        ? `${ns.cache + ns.joined + ns.fetched} nodes (${ns.cache} cache${ns.joined ? `, ${ns.joined} joined` : ""}, ${ns.fetched} fetched${ns.fetchMs ? ` in ${ns.fetchMs} ms` : ""})`
+        : "no nodes";
+      if (s.fromCheckpoint) { parts.push(`${s.street} from checkpoint (not re-computed)`); continue; }
+      const resumed = s.resumedAt != null ? ` · resumed at hero's node (${s.resumedAt + 1} node${s.resumedAt ? "s" : ""} from the mid-street checkpoint)` : s.resumeMiss ? ` · not resumed: ${s.resumeMiss}` : "";
+      parts.push(`${s.street} tree ${s.created ? `CREATED in ${s.solveMs} ms — ${s.treeWhy ?? "no reason recorded"}` : "cached"}${s.reuse ? ` (${s.reuse})` : ""}${resumed} · ${nodes} · walk ${s.walkMs} ms`);
+    }
+    if (ch.trace?.checkpoint && !ch.trace.checkpoint.from && ch.trace.streets.length > 1) parts.push(`(${ch.trace.checkpoint.note})`);
+    if (!ch.ok) parts.push(`FAILED: ${ch.why}`);
+  }
+  const key = hand.clientHandId ?? hand.handId ?? "?";
+  const line = `[chain] hand ${key} ${cur} (${origin ?? "adhoc"}): ${now - tEntry} ms = pre-chain ${tChain - tEntry} ms + chain ${now - tChain} ms · ` +
+    `${chains.length} walk${chains.length === 1 ? "" : "s"}, ${fresh} fresh cloud solve${fresh === 1 ? "" : "s"} · ${parts.join(" | ")}`;
+  console.log(line);
+  tmark("chain summary", line.slice("[chain] ".length), 1200);
+}
+
 /** The 6-max ring strategy's id (services/strategies.ts) - the one strategy whose every layer is our own solve. */
 const SIX_MAX_STRATEGY = "ign200-ring-6max-equilibrium";
 /** CoinPoker 200NL heads-up (services/strategies.ts): cp200a charts preflop, GTO Wizard AI postflop from their ranges */
@@ -1297,32 +1412,96 @@ async function solvePreflopHu(hand: ParsedHand, heroPos: string | null): Promise
   } as FastSolveResult;
 }
 
-/** Postflop under the CoinPoker HU strategy: the AI chain conditioned on the cp200a chart's ranges. */
-async function solvePostflopHuStrategy(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
+/**
+ * ONE POSTFLOP PATH FOR EVERY SITE (2026-09-24, Brady: "they should have the same functionality for GTO Wizard
+ * postflop AI, they should even be code sharing"). CoinPoker heads-up and Ignition 6-max differ only in what a
+ * PostflopSite says: which seats it plays, where the flop-entering ranges come from (its own charts), how the
+ * depth as dealt is read, and whether the river MES shadow runs. Everything else — the once-per-hand stack pin,
+ * the rotation repair, the capture-fault gate, the tokens, the chain with its per-hand checkpoints and the
+ * [chain] log line — is this function.
+ */
+interface PostflopSite {
+  /** the gametype label on misses and faults */
+  gametype: string;
+  /** the strategy's name in the miss text */
+  name: string;
+  /** a reason this site cannot take the hand, or null */
+  gate: (hand: ParsedHand) => string | null;
+  /** heads-up token order and the CoinPoker HU chart ranges/antes/rake (solvePostflopViaChain huCp) */
+  huCp: boolean;
+  /** the 6-max ring charts supply the flop-entering ranges (solvePostflopViaChain sixMax) */
+  sixMax: boolean;
+  /** the depth as dealt, from the hand's pinned dealt stacks */
+  depthOf: (hand: ParsedHand, heroPos: string | null, dealt: Record<number, number>) => number;
+  /** run the on-the-fly river MES shadow/serve on a heads-up river */
+  riverMes: boolean;
+}
+
+// THE DEPTH IS THE STACK AS DEALT (2026-09-22) for both sites. preflopPotStack takes the stack each seat STARTED
+// the hand with and subtracts the preflop money itself; handing it the stack left at the flop subtracted the
+// preflop money twice (a 100bb single-raised pot went to the solve as 94.3bb deep instead of 97.3). The ante is
+// excepted — the wrapper records it as dead money rather than an action — so the helper's subtraction lands
+// exactly on the flop stack. src/scripts/sixMaxDepthSmoke.ts checks the 6-max half.
+const HU_CP_SITE: PostflopSite = {
+  gametype: "hu-cp200a", name: "CoinPoker HU strategy", huCp: true, sixMax: false, riverMes: false,
+  gate: (hand) => (isHeadsUp(hand) ? null : "the CoinPoker 200NL heads-up strategy plays heads-up only"),
+  depthOf: (hand, heroPos, dealt) => chartForHu(hand, buildPreflopTokensHu(hand, heroPos), dealt).effective ?? 100,
+};
+const SIX_MAX_SITE: PostflopSite = {
+  gametype: "6max-ign200", name: "6-max strategy", huCp: false, sixMax: true, riverMes: true,
+  gate: () => null,
+  depthOf: (hand, _heroPos, dealt) => {
+    const vals = Object.values(dealt).filter((x) => Number.isFinite(x) && x > 0);
+    return dealtEffective(hand, dealt) ?? (vals.length ? Math.min(...vals) : 100);
+  },
+};
+
+async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts, site: PostflopSite): Promise<FastSolveResult> {
   heroPos = heroPos ?? hand.positions[hand.heroSeatId] ?? null;
   const street = hand.currentNode.street;
-  if (!isHeadsUp(hand)) return { ok: false, street, reason: "the CoinPoker 200NL heads-up strategy plays heads-up only" } as FastSolveResult;
+  const gated = site.gate(hand);
+  if (gated) return { ok: false, street, reason: gated } as FastSolveResult;
   const set = resolveSet(hand, heroPos, opts.setId);
   if (!set) return { ok: false, reason: `Unknown solution set: ${opts.setId}`, street };
-  // THE DEPTH IS THE STACK AS DEALT (2026-09-22). preflopPotStack takes the stack each seat STARTED the hand
-  // with and subtracts the preflop money itself; handing it the stack left at the flop subtracted the preflop
-  // money twice (a 100bb single-raised pot went to the solve as 94.3bb deep instead of 97.3). The picker's
-  // effective stack is behind + everything put in this hand — the ante excepted, which the wrapper records as
-  // dead money rather than an action — so the helper's subtraction lands exactly on the flop stack.
-  const choice = chartForHu(hand, buildPreflopTokensHu(hand, heroPos));
-  const depth = opts.depth ?? choice.effective ?? 100;
+  // ONE READ OF THE STACKS PER HAND (2026-09-23, hand 729; widened to the chart pick and to CoinPoker 2026-09-24,
+  // hand 140706500001). The dealt-stack reconstruction drifts a few blinds between probes as the wrapper's stack
+  // and committed readings move (101.1 / 100.4 / 106.1 across one hand's streets; 69.28 → 67.88 on the CoinPoker
+  // hand), and the depth and the chart pick's ranges are part of GTO Wizard's tree key — so every street
+  // re-created and re-walked the flop tree instead of reusing it. The first postflop read of a hand fixes the
+  // dealt stacks (pinPostflop); the depth and every chart pick come from those.
+  const pin = pinPostflop(hand, (d) => site.depthOf(hand, heroPos, d));
+  const depth = opts.depth ?? pin?.depth ?? site.depthOf(hand, heroPos, dealtBySeat(hand));
+  // A STREET CAPTURED OUT OF ROTATION POISONS EVERYTHING BELOW (2026-09-21). The tokens are built here, and
+  // deriveExploitSpot reads OOP/IP off whoever acted first — so a scrambled street silently reverses the
+  // seats and the chain walks a tree with the wrong player out of position. Repair what is provably safe to
+  // repair — misplaced CHECKS, which commit nothing — BEFORE the tokens are built. Anything involving chips
+  // is left alone for aiChain's rotation cross-check to refuse. See utils/repairPostflopRotation.
   const fixed = repairPostflopRotation(hand);
+  // A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21). Say so plainly instead of letting it
+  // surface as "preflop betting didn't close (missed action?)", which sends you looking for a missing action
+  // that was never the problem.
   const faults = captureFaults(fixed.hand);
   if (faults.length) {
-    return { ok: false, kind: "capture-fault", street, gametype: "hu-cp200a", depth,
+    return { ok: false, kind: "capture-fault", street, gametype: site.gametype, depth,
       reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${faults.join("; ")}` };
   }
-  const tk = buildSpotSolutionTokens(fixed.hand, heroPos, true);
-  const chain = await solvePostflopViaChain(fixed.hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, false,
-    fixed.notes.map((n) => `CAPTURE REPAIR (${n.street}): ${n.detail}`), true);
+  const tk = buildSpotSolutionTokens(fixed.hand, heroPos, site.huCp);
+  const chain = await solvePostflopViaChain(fixed.hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, site.sixMax,
+    fixed.notes.map((n) => `CAPTURE REPAIR (${n.street}): ${n.detail}`), site.huCp, pin?.dealt);
+  if (chain.res && chain.mesInput && site.riverMes) {
+    // On-the-fly river MES (services/riverMes.ts). shadow (default): logged only, the answer untouched.
+    // serve: MES becomes the pick when its gate passes. Never throws; any failure returns the chain's answer.
+    return applyRiverMes(chain.res, chain.mesInput, {
+      clientHandId: hand.clientHandId ?? null, sessionId: opts.sessionId ?? hand.sessionId ?? null,
+      origin: opts.origin ?? null, board: hand.board.join(""),
+    });
+  }
   if (chain.res) return chain.res;
-  return { ok: false, reason: `CoinPoker HU strategy postflop: ${chain.why} — no library fallback under this strategy`, street, gametype: "hu-cp200a", depth };
+  return { ok: false, reason: `${site.name} postflop: ${chain.why} — no library fallback under this strategy`, street, gametype: site.gametype, depth };
 }
+
+/** Postflop under the CoinPoker HU strategy: the shared AI path with the cp200a chart's ranges. */
+const solvePostflopHuStrategy = (hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts) => solvePostflopSite(hand, heroPos, opts, HU_CP_SITE);
 
 /** Which of the 6-max strategy's preflop pieces answered this hand, from the answer log (null when no
  *  preflop answer was logged — the poller's probe can miss a decision). */
@@ -1342,13 +1521,15 @@ function preflopPieceFor(hand: ParsedHand): "chart6max" | "chart3max" | "gtow-ai
  * chart, the same token walk (buildPreflopTokens pads a short table's early seats as folds), so what the postflop
  * solve starts from is exactly what the preflop answers said the seats arrive with.
  */
-async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: string | null): Promise<
+async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: string | null, dealt?: Record<number, number>): Promise<
   | { ok: true; recon: Awaited<ReturnType<typeof reconstructFlopRanges>>; id: string; tokens: string[]; note: string | null }
   | { ok: false; reason: string }
 > {
   const tokens = buildPreflopTokens(hand, heroPos);
   if (!preflopClosed(tokens)) return { ok: false, reason: "preflop betting didn't close (missed action?)" };
-  const choice = chartFor6max(hand, heroPos, tokens);
+  // `dealt` = the hand's pinned stacks (pinPostflop): the chart this picks decides the flop-entering ranges, and
+  // the ranges are in GTO Wizard's tree key — a pick that moved a rung between streets re-created every tree
+  const choice = chartFor6max(hand, heroPos, tokens, dealt);
   const resolved = await resolveChart6max(choice);
   if (resolved === "unreachable") return { ok: false, reason: "6-max chart server (:8777) unreachable" };
   if (!resolved) return { ok: false, reason: `no 6-max chart for this state (${choice.id})` };
@@ -1413,59 +1594,38 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
  * is a miss said out loud - the street-root and library tiers answer from a different game and are not offered.
  * Three-way flops solve since 2026-09-19 (GTO Wizard AI Ultra's 3-player trees, see services/aiChain.ts).
  */
-/** The postflop depth each hand was first solved at (see solvePostflop6maxStrategy) — keyed by client hand id. */
-const pinnedDepth = new Map<string, number>();
-
-async function solvePostflop6maxStrategy(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
-  const street = hand.currentNode.street;
-  const set = resolveSet(hand, heroPos, opts.setId);
-  if (!set) return { ok: false, reason: `Unknown solution set: ${opts.setId}`, street };
-  // THE DEPTH IS THE EFFECTIVE STACK AS DEALT (2026-09-22) — the AI solve takes any stack, so no snapping to a
-  // library rung, and no rounding. preflopPotStack subtracts the preflop money from it; until this date it was
-  // handed hero's stack BEHIND at the current street, rounded, so a 100bb single-raised flop went to GTO Wizard
-  // 95.5bb deep instead of 97.5, and its turn and river (the chain starts every walk at the flop) 91.5 after a
-  // 3.3bb flop bet. Same bug as solvePostflopHuStrategy's; src/scripts/sixMaxDepthSmoke.ts checks it.
-  const dealtStacks = Object.values(dealtBySeat(hand)).filter((x) => Number.isFinite(x) && x > 0);
-  // ONE DEPTH PER HAND (2026-09-23, hand 729). The dealt-stack reconstruction drifts a few blinds between
-  // probes as the wrapper's stack and committed readings move (101.1 at the flop, 100.4 at the turn, 106.1 at
-  // the river for the same hand), and the depth is part of GTO Wizard's tree key — so every street re-created
-  // and re-walked the flop tree instead of reusing the one already solved (the turn facing a bet cost two fresh
-  // solves and 20 s). The first postflop read of a hand fixes its depth; later streets reuse it.
-  const pinKey = String(hand.clientHandId ?? hand.handId ?? "");
-  const depth = opts.depth ?? (pinKey ? pinnedDepth.get(pinKey) : undefined)
-    ?? dealtEffective(hand) ?? (dealtStacks.length ? Math.min(...dealtStacks) : 100);
-  if (pinKey && opts.depth == null && !pinnedDepth.has(pinKey)) {
-    pinnedDepth.set(pinKey, depth);
-    if (pinnedDepth.size > 60) { const first = pinnedDepth.keys().next().value; if (first !== undefined) pinnedDepth.delete(first); }
-  }
-  // A STREET CAPTURED OUT OF ROTATION POISONS EVERYTHING BELOW (2026-09-21). The tokens are built here, and
-  // deriveExploitSpot reads OOP/IP off whoever acted first — so a scrambled street silently reverses the
-  // seats and the chain walks a tree with the wrong player out of position. Repair what is provably safe to
-  // repair — misplaced CHECKS, which commit nothing — BEFORE the tokens are built. Anything involving chips
-  // is left alone for aiChain's rotation cross-check to refuse. See utils/repairPostflopRotation.
-  const fixed = repairPostflopRotation(hand);
-  // A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21). Say so plainly instead of letting it
-  // surface as "preflop betting didn't close (missed action?)", which sends you looking for a missing action
-  // that was never the problem.
-  const faults = captureFaults(fixed.hand);
-  if (faults.length) {
-    return { ok: false, kind: "capture-fault", street, gametype: "6max-ign200", depth,
-      reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${faults.join("; ")}` };
-  }
-  const tk = buildSpotSolutionTokens(fixed.hand, heroPos, false);
-  const chain = await solvePostflopViaChain(fixed.hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, true,
-    fixed.notes.map((n) => `CAPTURE REPAIR (${n.street}): ${n.detail}`));
-  if (chain.res && chain.mesInput) {
-    // On-the-fly river MES (services/riverMes.ts). shadow (default): logged only, the answer untouched.
-    // serve: MES becomes the pick when its gate passes. Never throws; any failure returns the chain's answer.
-    return applyRiverMes(chain.res, chain.mesInput, {
-      clientHandId: hand.clientHandId ?? null, sessionId: opts.sessionId ?? hand.sessionId ?? null,
-      origin: opts.origin ?? null, board: hand.board.join(""),
-    });
-  }
-  if (chain.res) return chain.res;
-  return { ok: false, reason: `6-max strategy postflop: ${chain.why} — no library fallback under this strategy`, street, gametype: "6max-ign200", depth };
+/**
+ * THE STACKS AS DEALT, READ ONCE PER HAND (2026-09-24). Both postflop strategies reconstruct each seat's dealt
+ * stack from the wrapper's live readings (behind + committed + earlier streets, hrc6max.dealtBySeat) on every
+ * probe, and every probe reads a little differently. The chain's tree key carries that stack and the ranges the
+ * chart pick yields from it, so a reading that moves between streets makes the turn re-create the flop tree and
+ * the river re-create both — three cloud solves and three uncached walks where one of each was needed, which is
+ * the whole of "turn and river are slower and more fragile". The first postflop read of a hand is kept here and
+ * every later probe of that hand uses it (the warm-up, fired when the flop lands, is usually that first read).
+ * Keyed by client hand id and bounded. A replay passing an explicit depth still pins — harmless: an archived
+ * hand's stacks are all a replay has, and they do not move.
+ */
+interface PostflopPin { dealt: Record<number, number>; depth: number; street: string; at: number }
+const pinnedPostflop = new Map<string, PostflopPin>();
+function pinPostflop(hand: ParsedHand, depthOf: (dealt: Record<number, number>) => number): PostflopPin | null {
+  const key = String(hand.clientHandId ?? hand.handId ?? "");
+  if (!key) return null;
+  const hit = pinnedPostflop.get(key);
+  if (hit) return hit;
+  const dealt = dealtBySeat(hand);
+  const pin: PostflopPin = { dealt, depth: depthOf(dealt), street: hand.currentNode.street, at: Date.now() };
+  pinnedPostflop.set(key, pin);
+  if (pinnedPostflop.size > 60) { const first = pinnedPostflop.keys().next().value; if (first !== undefined) pinnedPostflop.delete(first); }
+  tmark("postflop stacks pinned", `hand ${key} at the ${pin.street}: depth ${pin.depth}bb, dealt ${Object.entries(dealt).map(([s, v]) => `${s}:${v}`).join(" ")}`);
+  return pin;
 }
+/** Forget a hand's pin (tests, and a replay that wants a fresh read). */
+export function forgetPostflopPin(handKey: string): void {
+  pinnedPostflop.delete(handKey);
+}
+
+/** Postflop under the 6-max ring strategy: the shared AI path with the 6-max charts' ranges (+ the river MES shadow). */
+const solvePostflop6maxStrategy = (hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts) => solvePostflopSite(hand, heroPos, opts, SIX_MAX_SITE);
 
 /**
  * Postflop: the per-street AI chain first (conditioned ranges — see
@@ -1897,11 +2057,18 @@ const warmedHands = new Map<string, number>();
  */
 const warmedStreets = new Map<string, number>();
 export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): void {
-  if (strategyId !== SIX_MAX_STRATEGY) return;
+  const hu = strategyId === CP_HU_STRATEGY;
+  if (strategyId !== SIX_MAX_STRATEGY && !hu) return;
   const street = hand.currentNode.street;
   if (street !== "flop" && street !== "turn" && street !== "river") return;
   if (hand.ended || hand.actions.some((a) => a.hero && a.type === "fold")) return;
   if (hand.actions.some((a) => a.street === street)) return;   // the street is under way: the real solve owns it
+  // THE COINPOKER HU STRATEGY WARMS TOO (2026-09-24), but only when hero acts FIRST on the street — heads-up that
+  // is the big blind, on every street. Then the warm IS hero's answer: his root node is read the moment the card
+  // lands and the poller's solve joins it (gtowApi's pending maps). In position the warm would open an AUTOMATIC
+  // tree that villain's bet throws away (the observed size has to be pinned into a new tree), spending a cloud
+  // solve and the account's daily requests on nothing.
+  if (hu && String(hand.positions[hand.heroSeatId] ?? heroPos ?? "").toUpperCase() !== "BB") return;
   // every table size warms (2026-09-19): 2-3 handed flops condition on the AI preflop tree's ranges
   const id = hand.clientHandId ?? hand.handId;
   if (id == null) return;
@@ -1910,8 +2077,10 @@ export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strat
   warmedStreets.set(key, Date.now());
   if (warmedStreets.size > 60) { const first = warmedStreets.keys().next().value; if (first !== undefined) warmedStreets.delete(first); }
   const t0 = Date.now();
-  void solvePostflop6maxStrategy(hand, heroPos, { origin: "warm", strategyId }).then((r) => {
-    console.log(`[warm6max] ${key}: ${r.ok ? "hero's root node answered" : "street tree opened"} in ${Date.now() - t0} ms${r.ok ? "" : ` (${r.reason.slice(0, 100)})`}`);
+  const solve = hu ? solvePostflopHuStrategy : solvePostflop6maxStrategy;
+  const tag = hu ? "[warmhu]" : "[warm6max]";
+  void solve(hand, heroPos, { origin: "warm", strategyId }).then((r) => {
+    console.log(`${tag} ${key}: ${r.ok ? "hero's root node answered" : "street tree opened"} in ${Date.now() - t0} ms${r.ok ? "" : ` (${r.reason.slice(0, 100)})`}`);
   }).catch(() => { /* a warm-up never fails anything */ });
 }
 

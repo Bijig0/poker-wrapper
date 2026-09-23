@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tspan } from "./answerTrace";
 
 /**
  * Every GTO Wizard AI-chain solve, inputs and outputs, kept.
@@ -94,8 +95,12 @@ class SolveStore {
 
   /** Persist a trace; returns its id, or null if storing failed (never throws). */
   save(meta: SolveMeta, trace: unknown): number | null {
+    // synchronous on purpose (bun:sqlite is), and therefore recorded: a river trace is ~40 KB gzipped from a
+    // few hundred KB of JSON, and this runs BEFORE the answer is returned (services/answerTrace.ts)
+    const t0 = Date.now();
     try {
       const blob = Bun.gzipSync(Buffer.from(JSON.stringify(trace)));
+      tspan("store trace (gzip)", t0, `${Math.round(blob.byteLength / 1024)} KB`);
       const r = this.open()
         .query(
           `INSERT INTO solves (ts, origin, client_hand_id, wrapper_hand_id, decision_key, street, board, hero_cards, hero_pos,

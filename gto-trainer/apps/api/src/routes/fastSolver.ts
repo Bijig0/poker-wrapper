@@ -34,7 +34,23 @@ interface FastSolverBody extends ResolveBody {
 // time went: the wrapper read, chart nodes, token sniffs, each GTO Wizard request.
 app.post("/", async (c) => {
   const { value: res, totalMs, trace } = await runTraced(() => handleFastSolve(c));
-  try { res.headers.set("X-Answer-Trace", JSON.stringify({ totalMs, trace }).slice(0, 7500)); } catch { /* immutable headers: no trace */ }
+  // The header has a budget; a JSON string cut mid-way is no trace at all (the poller's parse fails and the
+  // whole timeline is lost). Over budget, shorten each event's prose first, then drop trailing events, and say
+  // how many were dropped — the [chain] line in the API log carries the full text regardless.
+  try {
+    const LIMIT = 7500;
+    let evs = trace;
+    let body = JSON.stringify({ totalMs, trace: evs });
+    if (body.length > LIMIT) {
+      evs = evs.map((e) => (e.info && e.info.length > 80 ? { ...e, info: `${e.info.slice(0, 77)}...` } : e));
+      body = JSON.stringify({ totalMs, trace: evs });
+    }
+    while (body.length > LIMIT && evs.length) {
+      evs = evs.slice(0, -1);
+      body = JSON.stringify({ totalMs, trace: evs, dropped: trace.length - evs.length });
+    }
+    res.headers.set("X-Answer-Trace", body);
+  } catch { /* immutable headers: no trace */ }
   return res;
 });
 

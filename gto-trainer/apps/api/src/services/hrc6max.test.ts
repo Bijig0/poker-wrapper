@@ -41,6 +41,15 @@ describe("openFromTokens", () => {
   });
 });
 
+describe("chartFor6max with the hand's pinned dealt stacks (2026-09-24)", () => {
+  test("the pinned stacks decide the rung, not the hand's current readings", () => {
+    const pinned = { 1: 50, 2: 50, 3: 50, 4: 50, 5: 50, 6: 50 };
+    const c = chartFor6max(table(6) as any, "BB", ["F", "F", "F", "R3", "F"], pinned);
+    expect(c.id).toBe("ign200_6max_D50_o3");
+    expect(chartFor6max(table(6) as any, "BB", ["F", "F", "F", "R3", "F"]).id).toBe("ign200_6max_D100_o3");
+  });
+});
+
 describe("chartFor6max", () => {
   test("an even table at a solved rung wants that rung's chart for the open it faces", () => {
     const c = chartFor6max(table(6) as any, "BB", ["F", "F", "F", "R3", "F"]);
