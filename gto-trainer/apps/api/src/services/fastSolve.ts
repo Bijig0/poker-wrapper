@@ -981,7 +981,7 @@ async function solvePostflopViaChain(
         }
         recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
         sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
-      } else if (pin.piece === "chart6max" && !resumed.ok && resumed.prunedBranch) {
+      } else if (pin.piece === "chart6max" && !resumed.ok && (resumed.prunedBranch || resumed.chartCannotHold)) {
         // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
         // subtree under an action that was really taken and real action followed it — a manual deviation into a
         // ~0% line (the roll itself no longer picks one, see services/prunedPicks). The chart cannot continue the
@@ -992,8 +992,16 @@ async function solvePostflopViaChain(
         if (!ai.ok) return fail(`${resumed.why}; then ${ai.reason}`);
         recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
         sixNote = [sixNote,
-          `OFF THE CHART: hero's line runs into a branch the 6-max chart never solved (${resumed.why.replace(/^pinned chart [^:]+: /, "")}) — ` +
-          `the preflop pick came from the chart, the flop-entering ranges from the GTO Wizard AI preflop tree`, ai.note].filter(Boolean).join(" · ");
+          resumed.prunedBranch
+            ? `OFF THE CHART: hero's line runs into a branch the 6-max chart never solved (${resumed.why.replace(/^pinned chart [^:]+: /, "")}) — ` +
+              `the preflop pick came from the chart, the flop-entering ranges from the GTO Wizard AI preflop tree`
+            // THE PINNED CHART CANNOT HOLD WHAT FOLLOWED (round 2, harness seed 18287 [short-seat]): hero squeezed as picked, and
+            // the BB's call was a fifth entrant the chart's four-active cap has no node for; the unpinned walk then re-picked a
+            // chart where hero never squeezes that hand — zero weight. Hero's decisions were read on the pinned chart, so no
+            // other chart's ranges are his: the exact tree gives them.
+            : `OFF THE CHART: the chart hero's preflop decisions were read on (${pin.chartId}) cannot hold what followed them ` +
+              `(${resumed.why.replace(/^pinned chart [^:]+: /, "").slice(0, 240)}) — the flop-entering ranges come from the GTO Wizard AI preflop tree`,
+          ai.note].filter(Boolean).join(" · ");
       } else {
         tmark("preflop pin unusable", `${pin.piece}: ${resumed.why}`);
         console.log(`[preflop-pin] hand ${preflopPinKey(hand)} ${pin.piece} not resumed — ${resumed.why}`);

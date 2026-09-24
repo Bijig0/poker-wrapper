@@ -150,7 +150,15 @@ export interface ResumedRanges {
   /** node reads that were not already cached — the flop's real cost */
   reads: number;
 }
-export type ResumeOutcome = ResumedRanges | { ok: false; why: string; /** the pinned walk met a branch HRC never wrote (a terminal with real action after it) */ prunedBranch?: boolean };
+export type ResumeOutcome = ResumedRanges | {
+  ok: false; why: string;
+  /** the pinned walk met a branch HRC never wrote (a terminal with real action after it) */
+  prunedBranch?: boolean;
+  /** the capture still starts with the pinned line, but the pinned chart cannot hold what followed hero's decision
+   *  (round 2, harness seed 18287): the ranges are not this chart's to give — and no OTHER chart's either, since hero's
+   *  decisions were read on this one */
+  chartCannotHold?: boolean;
+};
 
 /**
  * Resume a CHART pin at the flop: the pinned chart, the pinned prefix, hero's action and everything after it
@@ -166,7 +174,15 @@ export async function resumeChartPreflopRanges(
 ): Promise<ResumeOutcome> {
   const tokensNow = buildPreflopTokens(hand, heroPos);
   const fit = pinRest(pin, tokensNow);
-  if (!fit.ok) return fit;
+  if (!fit.ok) return fit;   // the capture outgrew the pin: the unpinned walk may read it afresh
+  // PAST THIS POINT THE CAPTURE STILL STARTS WITH THE PINNED LINE: a failure is the pinned chart's inability to hold what
+  // followed hero's decision, never a reason to read the hand on another chart (hero's picks were read on this one)
+  const r = await resumeOnPin(pin, tokensNow, fit.rest, get);
+  return r.ok ? r : { ...r, chartCannotHold: true };
+}
+
+async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: string[], get: (line: string) => Promise<RawNode | null>): Promise<ResumeOutcome> {
+  const fit = { rest };
   let reads = 0;
   const counted = async (l: string) => { reads++; return get(l); };
   // THE SEATS MUST BE THE TABLE'S (2026-09-25, mutation harness `limps`). The walk below is positional: it hands

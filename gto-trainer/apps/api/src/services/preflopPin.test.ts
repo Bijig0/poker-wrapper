@@ -162,12 +162,16 @@ describe("resumeChartPreflopRanges", () => {
     const r = await resumeChartPreflopRanges(pinAtOpen, threeBet, "BTN", async (l) => far[l] ?? null);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.why).toContain("size past τ: SB's 20bb");
+    // round 2 (harness seed 18287): the capture still starts with the pin, so this is the pinned chart unable to hold what
+    // followed hero's decision — never a reason to re-pick another chart (hero's picks were read on this one)
+    if (!r.ok) expect(r.chartCannotHold).toBe(true);
   });
 
   it("a pin the capture has outgrown is unusable, not wrong", async () => {
     const r = await resumeChartPreflopRanges({ ...pinAtOpen, rawTokens: ["F", "R3", "F"], codes: ["F", "R3", "F"] }, flopHand, "BTN", get);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.why).toContain("no longer starts with the pinned one");
+    if (!r.ok) expect(r.chartCannotHold).toBeUndefined();   // outgrown: the unpinned walk may read the hand afresh
   });
 });
 
