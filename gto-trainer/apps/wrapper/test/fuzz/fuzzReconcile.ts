@@ -72,7 +72,8 @@ function playRound(street: number, ring: number[], live: number[], committed: Ma
 
 /**
  * A hand the way a table actually deals one. THE RING IS NOT OPTIONAL: the reader works the acting order out from
- * the blinds (preflop after the big blind, postflop from the small blind, clockwise by displayed seat number), so a
+ * the blinds (preflop after the big blind, postflop from the small blind — heads-up from the big blind — clockwise by
+ * displayed seat number), so a
  * generator dealing in another order is not a harder test, it is a wrong one (45% "failures" on the first run).
  */
 export function randomScript(rng: PyRandom): Script {
@@ -89,8 +90,11 @@ export function randomScript(rng: PyRandom): Script {
   const actions: Act[] = [];
   const live = [...seats];
   playRound(0, order, live, new Map([[sb, 0.5], [bb, 1.0]]), 1.0, rng, actions, stacks);
-  const iSb = seats.indexOf(sb);
-  const ring = [...seats.slice(iSb), ...seats.slice(0, iSb)];            // postflop starts at the small blind
+  // postflop starts at the small blind — heads-up at the BIG blind (the dealer posts the SB and acts last). This
+  // generator dealt heads-up SB-first until 2026-09-24, agreeing with the reader's identical bug (hand 4920374906)
+  const first = n === 2 ? bb : sb;
+  const iFirst = seats.indexOf(first);
+  const ring = [...seats.slice(iFirst), ...seats.slice(0, iFirst)];
   for (const street of [1, 2, 3]) {
     if (live.length < 2) break;
     playRound(street, ring.filter((s) => live.includes(s)), live, new Map(), 0.0, rng, actions, stacks);

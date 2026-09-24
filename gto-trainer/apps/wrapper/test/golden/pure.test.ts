@@ -39,11 +39,37 @@ export const FNS: Record<string, (args: any[], rec: any) => unknown | Promise<un
   ...FNS_EXTRA,
 };
 
+/**
+ * SUPERSEDED 2026-09-24: the Python reader ordered a HEADS-UP table's postflop streets from the small blind; the big
+ * blind acts first there (the dealer posts the SB). Its recorded reconcile.run inputs were simulated by a fuzzer with
+ * the same mistake — tick streams no table deals — and its _line_order_fault never judged heads-up at all, so these
+ * outputs record the bug (hand 4920374906). A heads-up table past the flop is covered instead by the fixed fuzzer
+ * (fuzz.test.ts) and reader-boundary.test.ts. Decided by the INPUT, never the output, so no other drift can hide here.
+ */
+function supersededHeadsUp(rec: any): boolean {
+  if (rec.fn === "reconcile.run") {
+    const dealt = new Set<number>();
+    for (const t of rec.args[0]) for (const [n, s] of t.seats) if ((s.cards || 0) > 0) dealt.add(n);
+    return dealt.size === 2 && rec.args[0].some((t: any) => t.board >= 3);
+  }
+  if (rec.fn === "launch._line_order_fault") {
+    const rc = rec.args[1];
+    const ring = new Set([...rc.dealt, rc.sb, rc.bbs].filter((x: any) => x !== null && x !== undefined));
+    return ring.size === 2 && rec.args[0].some((r: any) => r[0] !== "preflop");
+  }
+  return false;
+}
+
 test("golden: pure functions match the Python wrapper", async () => {
   const pending = new Map<string, number>();
   const fails: string[] = [];
   const passed = new Map<string, number>();
+  let superseded = 0;
   for (const rec of readCorpus("pure.jsonl.gz")) {
+    if (supersededHeadsUp(rec)) {
+      superseded++;
+      continue;
+    }
     const fn = FNS[rec.fn];
     if (!fn) {
       pending.set(rec.fn, (pending.get(rec.fn) || 0) + 1);
@@ -64,6 +90,6 @@ test("golden: pure functions match the Python wrapper", async () => {
   }
   const p = [...pending].map(([k, v]) => `${k}×${v}`).join(", ");
   console.log(`golden pure: ${[...passed.values()].reduce((a, b) => a + b, 0)} calls matched across ${passed.size} functions` +
-              (p ? `; PENDING (not ported yet): ${p}` : ""));
+              ` (${superseded} heads-up postflop calls superseded — see supersededHeadsUp)` + (p ? `; PENDING (not ported yet): ${p}` : ""));
   expect(fails).toEqual([]);
 });

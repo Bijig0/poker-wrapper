@@ -12,6 +12,7 @@ import { log } from "../feed";
 import { pyInt, pyJsonDumps } from "../py";
 import { HandReconciler, bb as rcBb, makeTick } from "../reconcile";
 import { S } from "../state";
+import { eventLine } from "./hand";
 
 export function shadowTick(state: Record<string, any>): void {
   try {
@@ -51,9 +52,13 @@ export function shadowArchive(h: Record<string, any>): void {
     const rc = sh.done.get(hid) || (sh.hand === hid ? sh.rc : null);
     if (rc === null || rc === undefined) return;
     if (!rc.ended) rc.finish(rc.prev ? rc.prev.seq : sh.seq);
-    const d = rc.diff(h.actions || []);
+    // Against the EVENT line: once the cut-over has put the reconciler's line in the archive, diffing against the
+    // archive compares the reconciler with itself and always "agrees" (hand 4920374906: SB-first heads-up checks,
+    // logged agree:true). `archive_only` / `archive` keep their names and now mean the event line in that case.
+    const against = h.lineSource === "reconciled" ? "event" : "archive";
+    const d = rc.diff(against === "event" ? eventLine() : h.actions || []);
     const rec = {
-      at: nowMs(), session: S.session.id, hand: hid, clientHandId: h.clientHandId ?? null,
+      at: nowMs(), session: S.session.id, hand: hid, clientHandId: h.clientHandId ?? null, lineSource: h.lineSource ?? null, against,
       agree: d.agree, archive_only: d.archive_only, reconciled_only: d.reconciled_only, changed: d.changed,
       violations: rc.violations, retractions: rc.journal.filter((a: any) => a.retracted),
       line: d.reconciled, archive: d.archive,

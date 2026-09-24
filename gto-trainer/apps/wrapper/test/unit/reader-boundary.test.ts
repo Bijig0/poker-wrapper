@@ -5,7 +5,10 @@
  * id from the end-of-hand repeat / CO_LAST_HAND_NUMBER, never from the next hand (714).
  */
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { HandReconciler, makeTick } from "../../src/reconcile";
+import { shadowArchive } from "../../src/ignition/shadow";
 import { S, resetState } from "../../src/state";
 import { lineOrderFault, reconciledLine } from "../../src/ignition/hand";
 import { beginHand, onGameMsg, wsSeams } from "../../src/ignition/ws";
@@ -119,12 +122,23 @@ test("the street- and hand-boundary reader rules", () => {
     eq("a well-ordered line passes", lineOrderFault(good, rc6), null);
     const bad425 = [...good.slice(0, 5), ["flop", 6, "check", null], ["flop", 5, "check", null], ["flop", 1, "check", null]] as any[];
     eq("hero opening the flop before the SB is refused", !!lineOrderFault(bad425, rc6), true);
+    // heads-up the BIG BLIND opens every postflop street (the dealer posts the SB) — judged since 2026-09-24;
+    // before, heads-up order was not judged at all and an SB-first derived line replaced a correct one (4920374906)
     const rc7 = RC([1, 6], 6, 1);
     const hu: any[] = [["preflop", 6, "post-sb", 0.5], ["preflop", 1, "post-bb", 1.0], ["preflop", 6, "raise", 2.5], ["preflop", 1, "call", 1.5],
-                       ["flop", 6, "bet", 1.3], ["flop", 1, "call", 1.3], ["river", 6, "check", null], ["river", 6, "bet", 11.8], ["river", 1, "fold", null]];
-    const huF = lineOrderFault(hu, rc7);
-    eq("heads-up order is not judged...", huF === null || huF.includes("twice"), true);
-    eq("  ...but a seat acting twice running is", (huF || "").includes("twice"), true);
+                       ["flop", 1, "check", null], ["flop", 6, "bet", 1.3], ["flop", 1, "call", 1.3], ["turn", 1, "check", null], ["turn", 6, "check", null]];
+    eq("heads-up: the BB opening each postflop street passes", lineOrderFault(hu, rc7), null);
+    const huSbFirst = [...hu.slice(0, 4), ["flop", 6, "bet", 1.3], ["flop", 1, "call", 1.3]] as any[];
+    eq("heads-up: the SB opening the flop is refused", lineOrderFault(huSbFirst, rc7), "flop opens with seat 6, seat 1 is first to act");
+    const huSbTurn = [...hu.slice(0, 7), ["turn", 6, "check", null], ["turn", 1, "check", null]] as any[];
+    eq("heads-up: the SB opening the turn is refused", lineOrderFault(huSbTurn, rc7), "turn opens with seat 6, seat 1 is first to act");
+    const huTwice = [...hu, ["river", 1, "check", null], ["river", 1, "bet", 3.0]] as any[];
+    eq("heads-up: a seat acting twice running is still refused", (lineOrderFault(huTwice, rc7) || "").includes("twice"), true);
+    const potHu: any[] = [["preflop", 5, "post-sb", 0.5], ["preflop", 6, "post-bb", 1.0], ["preflop", 1, "fold", null], ["preflop", 3, "fold", null],
+                          ["preflop", 5, "raise", 2.5], ["preflop", 6, "call", 1.5], ["flop", 5, "bet", 1.3], ["flop", 6, "call", 1.3]];
+    eq("a heads-up POT on a table dealt four is still SB-first (hand 621)", lineOrderFault(potHu, RC([1, 3, 5, 6], 5, 6)), null);
+    eq("  and a BB-first flop there is refused",
+       !!lineOrderFault([...potHu.slice(0, 6), ["flop", 6, "check", null], ["flop", 5, "bet", 1.3]] as any[], RC([1, 3, 5, 6], 5, 6)), true);
     const rc8 = RC([1, 2, 6], 6, 1);
     const foldThen: any[] = [["preflop", 6, "post-sb", 0.5], ["preflop", 1, "post-bb", 1.0], ["preflop", 2, "raise", 2.5],
                              ["preflop", 6, "call", 2.0], ["preflop", 1, "call", 1.5],
@@ -154,6 +168,51 @@ test("the street- and hand-boundary reader rules", () => {
     eq("the note says why", (note || "").includes("out of turn order"), true);
     eq("the event line is returned untouched", acts, old);
     eq("not flagged uncertain (could-not-see is not disagreement)", uncertain, null);
+
+    // hand 4920374906 (75o, hero SB vs the BB on a table dealt TWO): the BB checked the flop and the turn before hero,
+    // no chips moving. The reconciler put the SB first on every heads-up street, so at hero's turn decision its line
+    // ("hero X, BB X" on the flop, nothing on the turn) was not a prefix of the event line and replaced it — the BB's
+    // turn check was lost and the API refused the spot as a capture fault (no answer on the turn or the river).
+    const rcHu = new HandReconciler(9);
+    let q = 0;
+    const obHu = (bets: Record<number, string>, pot: number | null, board: number, buttons: string[] = [], badges: Record<number, string> = {}) =>
+      rcHu.observe(tick(++q, bets, pot, board, buttons, badges));
+    obHu({}, null, 0);
+    obHu({ 6: "0.4 BB", 1: "1 BB" }, 1.4, 0);
+    obHu({ 6: "0.4 BB", 1: "1 BB" }, 1.4, 0, ["FOLD", "CALL 0.6 BB", "RAISE TO 2 BB"]);
+    obHu({ 6: "0.4 BB", 1: "1 BB" }, 1.4, 0);
+    obHu({ 6: "3 BB", 1: "1 BB" }, 4.0, 0);
+    obHu({ 6: "3 BB", 1: "3 BB" }, 6.0, 0);
+    obHu({}, 6.0, 3); obHu({}, 6.0, 3);
+    obHu({}, 6.0, 3, ["CHECK", "BET 1 BB"]);
+    obHu({}, 6.0, 3, [], { 6: "CHECK" });
+    obHu({}, 6.0, 4); obHu({}, 6.0, 4);
+    obHu({}, 6.0, 4, ["CHECK", "BET 1 BB"]);
+    const huLine = rcHu.line().map((a) => [a.street, a.seat, a.type]);
+    eq("4920374906: heads-up flop checks are filed BB first", huLine.filter((x) => x[0] === "flop"), [["flop", 1, "check"], ["flop", 6, "check"]]);
+    S.handNo = 78;
+    Object.assign(S.shadow, { hand: 78, rc: rcHu });
+    S.ws.dealt = [1, 6];
+    const asRow = (a: any) => ({ seatId: a.seat, hero: a.seat === 6, type: a.type, street: a.street, ...(a.amount != null ? { amount: a.amount } : {}) });
+    const evLine = [...rcHu.line().filter((a) => a.street === "preflop").map(asRow),
+                    ...([["flop", 1], ["flop", 6], ["turn", 1]] as const).map(([st, sd]) => ({ seatId: sd, hero: sd === 6, type: "check", street: st }))];
+    const [huActs, , huUnc, , huSrc] = reconciledLine(evLine, 6, "turn");
+    eq("4920374906: at hero's turn decision the event line is kept", huSrc, "ws");
+    eq("  with the BB's turn check in it", huActs.filter((a: any) => a.street === "turn").map((a: any) => [a.seatId, a.type]), [[1, "check"]]);
+    eq("  and not flagged uncertain", huUnc, null);
+
+    // the shadow audit compares the reconciler with the EVENT line once the cut-over has archived the reconciler's
+    // own line — it used to diff the reconciler against itself and log agree:true (4920374906 was "agree")
+    const sbFirst = [...evLine.slice(0, 4), { seatId: 6, hero: true, type: "check", street: "flop" }, { seatId: 1, hero: false, type: "check", street: "flop" }];
+    Object.assign(S.ws, { heroSeat: 6, bb: 5, bbSeen: true,
+                          actions: evLine.map((r: any) => ({ seat: r.seatId, type: r.type, street: r.street, cents: r.amount != null ? Math.round(r.amount * 5) : null })) });
+    S.dbg.on = false;
+    shadowArchive({ handId: 78, clientHandId: "4920374906", lineSource: "reconciled", actions: sbFirst });
+    const shadowRecs = readFileSync(join(process.env.WRAPPER_DATA_DIR!, "shadow.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const sr = shadowRecs[shadowRecs.length - 1];
+    eq("shadow audit: a reconciled hand is diffed against the event line", sr.against, "event");
+    eq("  so the archived SB-first flop is not what it compared",
+       sr.archive.filter((x: any) => x[0] === "flop").map((x: any) => x[1]), [1, 6]);
 
     // hand ids
     const archived: [number, string | null][] = [];

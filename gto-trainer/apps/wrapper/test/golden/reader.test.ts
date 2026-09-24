@@ -32,6 +32,43 @@ import { state } from "../../src/view";
 import "../../src/session";
 import { canon, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
 
+/**
+ * SUPERSEDED 2026-09-24 (hand 4920374906, 75o: no answer on the turn or river) — compared narrower, not skipped:
+ *  - `rc` on a table DEALT TWO, past the flop: the Python reader put the small blind first on every heads-up street;
+ *    the big blind acts first postflop (the dealer posts the SB). Verified on this corpus's own 4919645501: its event
+ *    line has the BB first on the flop, turn and river, which is what the fixed reconciler now files. Still compared
+ *    there: the hand, the seats and blinds, the street, the PREFLOP journal.
+ *  - the shadow audit's VERDICT (agree / differ / last.agree / last.diffs): a hand whose archived line came from the
+ *    reconciler is now diffed against the event line, not against itself (a vacuous "agree"). Still compared: how
+ *    many hands were audited, which one was last, its violation count.
+ * Both are decided by the table's facts, never by the output, and both are idempotent (the re-sync below stores them).
+ */
+function supersededHu(key: string, x: any): any {
+  const verdictFree = (s: any) => (!s || "audited" in s ? s
+    : { audited: (s.agree ?? 0) + (s.differ ?? 0), last: s.last && { hand: s.last.hand, clientHandId: s.last.clientHandId, violations: s.last.violations } });
+  if (key === "shadow") return verdictFree(x);
+  if (key === "light" && x && x.shadow) return { ...x, shadow: verdictFree(x.shadow) };
+  if (key === "rc" && x && !("huPostflop" in x) && Array.isArray(x.dealt) && x.dealt.length === 2 && (x.street ?? 0) > 0) {
+    return { huPostflop: true, hand: x.hand, dealt: x.dealt, sb: x.sb, bbs: x.bbs, hero: x.hero, street: x.street,
+             preflop: (x.journal || []).filter((a: any) => a.street === "preflop") };
+  }
+  return x;
+}
+
+/** The only snapshots in the corpus the heads-up fix changes — three heads-up hands of one session, every one of the
+ *  186 differences inside them checked by hand 2026-09-24 (fail cap lifted, no re-sync) and each a correction:
+ *   3098-3100  4909420828, hero SB: the feed has "Seat 6 checks" before hero's flop turn; Python's cut-over DROPPED it
+ *              ("dropped: 6 check"), the fix keeps it first. (Both keep the "flop 2 check via buttons" of that frame's
+ *              request-without-buttons flicker — a separate artefact, unchanged.)
+ *   3384-3479  hero BB, who acts first postflop: Python INVENTED an SB check before hero ("added: 6 check") and later
+ *              read the SB's bet as a check (toCall 0 facing 2 BB); the fix keeps the event line, so lineNote clears.
+ *   3538-3574  hero SB: Python dropped the BB's flop check before hero's bet; the fix files it (archived 7 actions).
+ *  Keys: the line and everything read off it — hand, light, pick, terminal, archived, lastArchived. */
+const HU_LINE_FIXED = new Map([["reader-session_20260807_115240.jsonl.gz", [[3098, 3100], [3384, 3479], [3538, 3574]]]]);
+const HU_LINE_KEYS = new Set(["hand", "light", "pick", "terminal", "archived", "lastArchived"]);
+const huLineFixed = (file: string, i: number, key: string) =>
+  HU_LINE_KEYS.has(key) && (HU_LINE_FIXED.get(file) || []).some(([a, b]) => i >= a! && i <= b!);
+
 const PICKS = ["Fold", "Call", "Check", "Raise 2.5", "BET 3.35", "Bet 33%", "All-in", "RAISE 12", "Limp", "jam",
                "r4", "Bet 4.5bb", "X", "CHECK", "raise", "bet"];
 const PLANS = [{ kind: "action", label: "fold" }, { kind: "action", label: "check" },
@@ -228,9 +265,15 @@ for (const file of corpusFiles("reader-")) {
         }
         if (!outRec) continue;
         for (const [key, v] of Object.entries(outRec)) if (key !== "type" && key !== "i") expected[key] = v;
-        for (const [key, v] of Object.entries(snap)) {
+        for (const [key, raw] of Object.entries(snap)) {
           if (!(key in expected)) continue;
-          if (canon(v) !== canon(expected[key])) {
+          const v = supersededHu(key, raw);
+          // re-synced like any divergence: state that outlives the hand (lastArchived) keeps the corrected value
+          if (huLineFixed(file, inp.i, key)) {
+            expected[key] = normPy(v);
+            continue;
+          }
+          if (canon(v) !== canon(supersededHu(key, expected[key]))) {
             fails.push(`input ${inp.i} (${inp.kind}${inp.kind === "ws" ? " " + inp.d.pid : ""}) ${key}: ${firstDiff(v, expected[key])}`);
             // re-sync this key so one divergence is reported once, not on every later input
             expected[key] = normPy(v);

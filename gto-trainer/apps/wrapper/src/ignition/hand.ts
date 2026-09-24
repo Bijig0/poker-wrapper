@@ -120,6 +120,11 @@ export function lineOrderFault(line: LineRow[], rc: { dealt: Iterable<number>; s
     if (rc.sb !== null && rc.sb !== undefined && ring.includes(rc.sb) && ring.length >= 3) {
       const i = ring.indexOf(rc.sb);
       order = [...ring.slice(i), ...ring.slice(0, i)];
+    } else if (ring.length === 2 && rc.bbs !== null && rc.bbs !== undefined && ring.includes(rc.bbs)) {
+      // heads-up the BIG BLIND opens every postflop street (the dealer posts the small blind). Unjudged until
+      // 2026-09-24, which let a derived line with the SB checking first replace a correct event line (hand 4920374906)
+      const i = ring.indexOf(rc.bbs);
+      order = [...ring.slice(i), ...ring.slice(0, i)];
     }
   } catch {
     order = null;
@@ -224,6 +229,20 @@ export function handState(): Record<string, any> | null {
 
 const short = (c: string) => c.replaceAll("10", "T");
 
+/** The EVENT log's line for the current hand (WS frames + DOM edges) as /hand rows — the line BEFORE the cut-over
+ *  (reconciledLine) may swap in the level reconciler's. The shadow audit diffs the reconciler against this. */
+export function eventLine(): any[] {
+  const w = ws();
+  const hero = w.heroSeat ?? null;
+  const bb = w.bb || 0;
+  const scaled = bb && w.bbSeen;
+  return [...(w.actions || [])].map((a: any) => {
+    const rec: any = { seatId: a.seat, hero: a.seat === hero, type: a.type, street: a.street };
+    if (scaled && a.cents !== null && a.cents !== undefined) rec.amount = pyRound(a.cents / bb, 2);
+    return rec;
+  });
+}
+
 export function handStateIgnition(): Record<string, any> | null {
   const w = ws();
   const dealt: number[] = [...(w.dealt || [])];
@@ -246,13 +265,7 @@ export function handStateIgnition(): Record<string, any> | null {
     if (hasVoluntary && [3, 4, 5].includes(domBoard.length) && domBoard.length > board.length) board = domBoard;
   }
   const street = board.length >= 5 ? "river" : board.length === 4 ? "turn" : board.length === 3 ? "flop" : "preflop";
-  let actions: any[] = [];
-  for (const a of actsSrc) {
-    const rec: any = { seatId: a.seat, hero: a.seat === hero, type: a.type, street: a.street };
-    const am = toBb(a.cents);
-    if (am !== null) rec.amount = am;
-    actions.push(rec);
-  }
+  let actions: any[] = eventLine();
   let committed: Map<any, number> = new Map();
   for (const [s, c] of committedSrc) {
     const v = toBb(c);

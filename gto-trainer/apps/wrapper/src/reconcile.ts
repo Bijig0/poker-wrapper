@@ -197,11 +197,20 @@ export class HandReconciler {
     return [...s].sort((a, b) => a - b);
   }
 
-  /** Seats in action order for the current street. Preflop: after the big blind. Postflop: from the small blind. */
+  /** Seats in action order for the current street. Preflop: after the big blind. Postflop: from the small blind —
+   *  except HEADS-UP, where the dealer posts the small blind and the BIG BLIND acts first on every postflop street.
+   *  (Until 2026-09-24 heads-up took the preflop order on every street: the SB "checked first", so a turn where the
+   *  BB checked and hero was to act derived a line with the BB's check missing — hand 4920374906, 75o, no answer
+   *  on the turn or river. The API's capture gate, repairPostflopRotation, holds the same BB-first rule.) */
   order(): number[] {
     const ring = this.ring();
     if (!ring.length || this.bbs === null) return [];
-    if (this.street === 0 || this.sb === null || !ring.includes(this.sb) || ring.length === 2) {
+    if (this.street > 0 && ring.length === 2) {
+      if (!ring.includes(this.bbs)) return [];
+      const i = ring.indexOf(this.bbs);
+      return [...ring.slice(i), ...ring.slice(0, i)];
+    }
+    if (this.street === 0 || this.sb === null || !ring.includes(this.sb)) {
       const anchor = this.bbs;
       if (!ring.includes(anchor)) return [];
       const i = ring.indexOf(anchor);
