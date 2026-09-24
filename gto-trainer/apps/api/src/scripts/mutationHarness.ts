@@ -142,7 +142,11 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
   const play = async (street: 0 | 1 | 2 | 3, pot: number): Promise<number> => {
     if (street > 0) committed.clear();
     let level = street === 0 ? 1 : 0; let lastInc = street === 0 ? 1 : 0; let raises = 0;
-    const matched = new Set<number>(street === 0 ? [byPos("BB")?.id ?? -1] : []);
+    // Nobody starts matched, the big blind included: in a limped pot the BB still has his option and a real table
+    // records his check (or raise). Seeding the BB as matched ended every limped round at the last limp with the BB
+    // never acting — no check in the export, hero-in-the-BB never asked — and the flop read "hero (BB) is not among
+    // the seats reaching the flop" (2026-09-25, the `limps` findings: a generator bug, not the pipeline's).
+    const matched = new Set<number>();
     const ring = order(street).filter((id) => live.has(id));
     let limpsLeft = street === 0 ? (o.limps ?? 0) : 0;
     let guard = 0, i = 0; let acted = 0;
@@ -322,7 +326,10 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
     const label = String(r.decision.action);
     if (/^fold/i.test(label)) return { type: "fold" };
     if (/^check/i.test(label)) return { type: "check" };
-    if (/^call/i.test(label)) return { type: "call" };
+    // "Limp" is the pool-locked limp trees' name for the SB's complete / an open-limp: a call. It used to fall
+    // through to the raise branch with no size, and hero MIN-RAISED where the pick said complete (seed 138 [limps]:
+    // the flop then refused hero's QTo "not in range after F-C-F-F-R2.5-C-F" — a generator bug, not the pipeline's)
+    if (/^(call|limp|complete)/i.test(label)) return { type: "call" };
     if (/all-?in/i.test(label)) return { type: "all-in" };
     const m = /([\d.]+)/.exec(label);
     return { type: "raise", to: m ? parseFloat(m[1]!) : undefined };
@@ -340,7 +347,10 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
     const clean = exportAt(hand, k, key, drift);
     const raw = mutateExport(clean, ops, rng);
     // did the corrupting operator actually touch THIS export? (a dropped flop card changes nothing preflop)
-    const corrupted = ops.some((o) => EXPECT_REFUSAL.has(o)) && JSON.stringify(raw) !== JSON.stringify(clean);
+    // (compared against the export with only the BENIGN operators applied: a late-filed fold changes the export too,
+    // and board-short+late-fold at a preflop decision was counted as a corrupt capture answered — seeds 41, 101)
+    const benign = mutateExport(clean, ops.filter((o) => !EXPECT_REFUSAL.has(o)), rng);
+    const corrupted = ops.some((o) => EXPECT_REFUSAL.has(o)) && JSON.stringify(raw) !== JSON.stringify(benign);
     const street = raw.street as string;
     let hand2; try { hand2 = liveHand(raw); } catch (e: any) {
       const v: Verdict = { seed, ops, street, k, verdict: EXPECT_REFUSAL.has(ops.find((o) => EXPECT_REFUSAL.has(o)) ?? "") ? "expected-refusal" : "finding", kind: "normalize-threw", reason: String(e?.message ?? e), ms: 0 };
