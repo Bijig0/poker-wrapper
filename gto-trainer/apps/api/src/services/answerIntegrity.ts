@@ -22,7 +22,7 @@
  * grid lists every action at 0.01% — so "is the action present in the mix" passes
  * on an action the strategy never plays, and misses exactly the fault above. The
  * test is the action's FREQUENCY against MIX_FLOOR_PCT, which is the same floor
- * services/studyPoller.ts rollAction uses to decide an action is real, so the
+ * services/rollDecision.ts uses to decide an action is real, so the
  * check and the roller agree on what "an action the strategy plays" means.
  */
 
@@ -68,22 +68,51 @@ export const isCheckable = (a: AnswerToCheck): boolean =>
 export const playedActions = (actions: ActionFreq[]): ActionFreq[] =>
   actions.filter((x) => (x.frequency ?? 0) > MIX_FLOOR_PCT);
 
+/** One played action's slice of the 0-100 roll: a roll r lands on it when lo < r <= hi. */
+export interface RollBand extends ActionFreq {
+  lo: number;
+  hi: number;
+}
+
+/** A value on the roll's 0.1 grid, in tenths (the epsilon absorbs float fuzz like 63.39999999). */
+const tenths = (x: number): number => Math.floor(x * 10 + 1e-6);
+
 /**
- * Which action a roll of 1..100 selects from a mix. Mirrors studyPoller.rollAction:
- * the sub-floor actions are dropped and the rest are normalised to 100, walked in
- * the order the solve listed them. Null when the mix is not one a roll decides.
+ * The mix as roll bands — THE one walk both the roller (services/rollDecision.ts)
+ * and this check use: sub-floor actions dropped, the rest normalised to 100 in the
+ * order the solve listed them. Edges sit ON the roll's 0.1 grid, so a band is
+ * exactly the set of rolls that land on it (a 63.46% action owns 0.1 … 63.4), and
+ * the last band closes at exactly 100 so no roll is ever left unassigned.
+ */
+export function rollBands(actions: ActionFreq[]): RollBand[] {
+  const mix = playedActions(actions);
+  const total = mix.reduce((s, a) => s + a.frequency, 0);
+  if (!(total > 0)) return [];
+  let acc = 0;
+  let lo = 0;
+  return mix.map((a, i) => {
+    acc += (a.frequency / total) * 100;
+    const hi = i === mix.length - 1 ? 1000 : tenths(acc);
+    const band = { ...a, lo: lo / 10, hi: hi / 10 };
+    lo = hi;
+    return band;
+  });
+}
+
+/** The band a roll lands in (the last one for anything past the top). */
+export const bandForRoll = (bands: RollBand[], roll: number): RollBand | undefined => {
+  const r = Math.round(roll * 10);
+  return bands.find((b) => r <= Math.round(b.hi * 10)) ?? bands[bands.length - 1];
+};
+
+/**
+ * Which action a roll in (0, 100] selects from a mix — the roller's own walk
+ * (rollBands). Null when the mix is not one a roll decides.
  */
 export function actionForRoll(actions: ActionFreq[], roll: number): string | null {
-  const mix = playedActions(actions);
-  if (mix.length < 2) return null;
-  const total = mix.reduce((s, a) => s + a.frequency, 0);
-  if (!(total > 0)) return null;
-  let acc = 0;
-  for (const a of mix) {
-    acc += (a.frequency / total) * 100;
-    if (roll <= acc) return a.action;
-  }
-  return mix[mix.length - 1]!.action;
+  const bands = rollBands(actions);
+  if (bands.length < 2) return null;
+  return bandForRoll(bands, roll)!.action;
 }
 
 /** Every integrity fault in one answer. Empty for a clean answer AND for one that

@@ -42,7 +42,8 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { existsSync as fsExists } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
-import { rollAction, studyPoller } from "../services/studyPoller";
+import { studyPoller } from "../services/studyPoller";
+import { fmtRoll, rollDecision } from "../services/rollDecision";
 import { missQueue } from "../services/missQueue";
 import { boxKeeper } from "../services/boxKeeper";
 import { jobs as jobStore } from "../services/jobs";
@@ -2479,8 +2480,8 @@ export default app;
  *
  * Same mechanism as the table, deliberately: the playthrough state is turned
  * into the ParsedHand the wrapper would have produced, fastSolve answers it
- * (exploit overlay / 3-max chart preflop, MES overlay postflop), the poller's
- * rollAction rolls the mix ONCE and buildAnswerText writes the panel line.
+ * (exploit overlay / 3-max chart preflop, MES overlay postflop), rollDecision
+ * rolls the mix ONCE and buildAnswerText writes the panel line.
  * The reply is shaped like a row of answers.sqlite so the dashboard renders
  * it with the very same answer card as a hand's logged answers. Nothing is
  * logged: a playthrough is study, not a session.
@@ -2578,9 +2579,11 @@ app.post("/study-answer", async (c) => {
     const reason = sol.ok ? (sol.notInRange ? "hero's hand isn't in the chart range at this node" : "no decision in response") : sol.reason;
     return c.json({ ok: true, answer: { ...base, text: null, pick: null, roll: null, tier: sol.ok ? sol.tier ?? null : null, warning: null, fail_reason: reason }, hand });
   }
-  const rolled = (sol.decision.frequency ?? 0) >= 99 ? { pick: sol.decision.action, roll: null } : rollAction(sol.actions, sol.decision.action);
-  const text = (sol.approx ? "≈ " : "") + buildAnswerText({ street, decision: sol.decision, actions: sol.actions }) + (rolled.roll != null ? ` · roll ${rolled.roll} → ${rolled.pick.toUpperCase()}` : "");
-  return c.json({ ok: true, answer: { ...base, text, pick: rolled.pick, roll: rolled.roll, tier: sol.tier ?? (street === "preflop" ? "local-preflop" : null), warning: sol.warning ?? null, fail_reason: null }, hand });
+  // the table's own roller (services/rollDecision.ts): one roll decides pick, headline, band and both pieces' picks
+  const rolled = rollDecision({ ...sol, decision: sol.decision });
+  const text = (sol.approx ? "≈ " : "") + buildAnswerText({ street, decision: { action: rolled.pick, frequency: rolled.frequency ?? undefined }, actions: sol.actions }) + (rolled.roll != null ? ` · roll ${fmtRoll(rolled.roll)} → ${rolled.pick.toUpperCase()}` : "");
+  return c.json({ ok: true, answer: { ...base, band_lo: rolled.band[0], band_hi: rolled.band[1], exploit_pick: rolled.exploitPick, chart_pick: rolled.chartPick,
+    text, pick: rolled.pick, roll: rolled.roll, tier: sol.tier ?? (street === "preflop" ? "local-preflop" : null), warning: sol.warning ?? null, fail_reason: null }, hand });
 });
 
 /**

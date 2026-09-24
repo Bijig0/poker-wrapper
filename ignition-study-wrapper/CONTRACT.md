@@ -312,11 +312,14 @@ blinds) is *not* evidence against the event line: the event line is kept, a
 
 ## 2. `POST :7700/panel/answer` — answer push (poller → wrapper)
 
-Body `{ "text": "PREFLOP — Raise 2.5 63% · Fold 37% · roll 81 → FOLD",
-"pick": "Fold", "roll": 81, "note": null }` or `{ "text": null }` to clear.
-`pick` is the RNG-sampled action for mixed strategies (the panel headlines
-it); `roll` is the 1-100 sample, `null` when the spot is pure (pick = the
-~100% action). `note` is the solve's own caveat (snapped sizes, generic
+Body `{ "text": "PREFLOP — Fold 37% · Raise 2.5 63% · roll 81.3 → FOLD",
+"pick": "Fold", "roll": 81.3, "band": [63, 100], "note": null }` or `{ "text": null }` to clear.
+`pick` is the RNG-sampled action for mixed strategies, and the text always
+leads with it; `roll` is the sample in (0, 100] to one decimal place, `null`
+when the spot is pure (pick = the ≥99% action, or the only action above the
+1% noise floor); `band` is the pick's slice of the roll. ONE roll decides
+pick, headline, band and the logged chart/exploit picks
+(api/src/services/rollDecision.ts). `note` is the solve's own caveat (snapped sizes, generic
 ranges) — the panel shows it under the answer so the verdict's trust level
 is visible. All three are optional — assistive-play's original panel reads
 only `text`.

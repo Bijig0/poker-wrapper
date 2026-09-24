@@ -102,14 +102,17 @@ describe("studyPoller", () => {
 
     const pushed = pushCalls();
     expect(pushed.length).toBeGreaterThan(0);
-    // Mixed strategy ⇒ the push carries an RNG-rolled pick (CONTRACT.md §2).
-    const body = pushed[pushed.length - 1]!.body as { text: string; pick: string; roll: number };
+    // Mixed strategy ⇒ the push carries an RNG-rolled pick (CONTRACT.md §2), and the
+    // text LEADS with that pick — one roll decides both (rollDecision.ts).
+    const body = pushed[pushed.length - 1]!.body as { text: string; pick: string; roll: number; band: [number, number] };
     expect(body.text).toMatch(
-      /^FLOP — Check 76% · Bet 1\.8 \(33%\) 7% · roll \d+ → (CHECK|BET 1\.8 \(33%\))$/,
+      /^FLOP — (Check 76% · Bet 1\.8 \(33%\) 7% · roll \d+\.\d → CHECK|Bet 1\.8 \(33%\) 7% · Check 76% · roll \d+\.\d → BET 1\.8 \(33%\))$/,
     );
     expect(["Check", "Bet 1.8 (33%)"]).toContain(body.pick);
-    expect(body.roll).toBeGreaterThanOrEqual(1);
+    expect(body.roll).toBeGreaterThanOrEqual(0.1);
     expect(body.roll).toBeLessThanOrEqual(100);
+    expect(body.roll).toBeGreaterThan(body.band[0]);
+    expect(body.roll).toBeLessThanOrEqual(body.band[1]);
     expect(studyPoller.getStatus().lastAnswer).toBe(body.text);
   });
 
@@ -326,7 +329,7 @@ describe("studyPoller", () => {
 });
 
 // MULTI-TABLE: one poller per wrapper. The hazard being designed against is two pollers
-// on the SAME wrapper — they double-answer a decision and, because rollAction samples
+// on the SAME wrapper — they double-answer a decision and, because rollDecision samples
 // the mix, can roll two different actions for one spot. A map keyed by assistiveUrl
 // cannot express that; four different wrappers are four different tables.
 describe("one poller per table", () => {

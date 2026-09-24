@@ -5,6 +5,7 @@ import { gtowApi } from "./gtowApi";
 import { answerLog, isFailKind, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
+import { drawRoll, fmtRoll, rollDecision } from "./rollDecision";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -159,8 +160,11 @@ interface FastSolveLikeResponse {
         /** MES/GTO provenance (services/fastSolve.ts) — which strategy was
          *  primary and what the other one would have picked. */
         strategyMode?: "exploit" | "chart";
-        exploitDecision?: { action: string } | null;
-        chartDecision?: { action: string } | null;
+        exploitDecision?: { action: string; frequency?: number } | null;
+        chartDecision?: { action: string; frequency?: number } | null;
+        /** the unserved piece's own mix, so its would-have-picked rides the same roll */
+        chartActions?: AnswerAction[];
+        exploitActions?: AnswerAction[];
         exploitTag?: string | null;
         mesBoard?: string | null;
         mesEvGainBb?: number | null;
@@ -196,29 +200,6 @@ const mesFamilyOf = (tag: string | null | undefined, pos: string | null | undefi
  *  Mirrors the dashboard's own spotKey/lastNavKey fallback formula. */
 const decisionKey = (r: IngestLikeResponse): string =>
   JSON.stringify([r.hand?.street, r.hand?.board, r.hero?.cards, r.hand?.node?.toCall, (r.hand?.actions ?? []).length]);
-
-/** One roll per decision: sample the strategy mix (1-100 over cumulative
- *  frequencies) so a mixed spot ends in a single actionable pick, the way a
- *  human would RNG it at the table. Rolled ONCE when the spot is first solved
- *  — the keep-alive re-push repeats the same pick, so it never flickers
- *  while hero deliberates. Pure (≥99%) spots get the pick without a roll. */
-export const rollAction = (
-  actions: AnswerAction[] | undefined,
-  fallback: string,
-  /** a roll drawn earlier for this same decision (see rollMemo) — supplied on a re-solve so the pick cannot flip */
-  seeded?: number,
-): { pick: string; roll: number | null } => {
-  const mix = (actions ?? []).filter((a) => a.frequency > 1);
-  if (mix.length < 2) return { pick: fallback, roll: null };
-  const total = mix.reduce((s, a) => s + a.frequency, 0);
-  const n = seeded ?? (1 + Math.floor(Math.random() * 100));
-  let acc = 0;
-  for (const a of mix) {
-    acc += (a.frequency / total) * 100;
-    if (n <= acc) return { pick: a.action, roll: n };
-  }
-  return { pick: fallback, roll: n };
-};
 
 class StudyPoller {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -682,18 +663,15 @@ class StudyPoller {
     // fresh fast solve, not the exact sizes played. Honest, and short
     // enough for the large-print panel.
     const approx = sol.approx === true ? "≈ " : "";
-    // A pure decision (>=99%) IS the answer — never roll over the display
-    // mix. The pool-exploit overlay returns decision 100% with the chart mix
-    // in `actions` for context; rolling over that mix served the chart's
-    // action instead of the exploit's (caught live on the fake table).
-    const rolled = (sol.decision.frequency ?? 0) >= 99
-      ? { pick: sol.decision.action, roll: null }
-      : rollAction(sol.actions, sol.decision.action, this.memoRoll(full, probe));
+    // ONE ROLL PER DECISION (rollDecision.ts): the pick, the headline, the band and
+    // both pieces' picks all come from this decision's one roll. A pure decision
+    // (>=99%, e.g. the exploit overlay's pick) IS the answer, with no roll.
+    const rolled = rollDecision({ ...sol, decision: sol.decision }, this.memoRoll(full, probe));
     const text = approx + buildAnswerText({
       street: full.hand!.street!,
-      decision: sol.decision,
+      decision: { action: rolled.pick, frequency: rolled.frequency ?? undefined },
       actions: sol.actions,
-    }) + (rolled.roll != null ? ` · roll ${rolled.roll} → ${rolled.pick.toUpperCase()}` : "");
+    }) + (rolled.roll != null ? ` · roll ${fmtRoll(rolled.roll)} → ${rolled.pick.toUpperCase()}` : "");
     // INTEGRITY: does this answer agree with its OWN evidence? A fault is a bug in
     // the machine (pick and mix from different pieces, or the roll walked wrongly),
     // never a poker judgement — so it is shouted about and counted, but it does NOT
@@ -718,6 +696,10 @@ class StudyPoller {
     this.status.lastNavFailure = null;
     answerLog.add({
       ...logBase,
+      bandLo: rolled.band[0],
+      bandHi: rolled.band[1],
+      exploitPick: rolled.exploitPick,
+      chartPick: rolled.chartPick,
       text,
       pick: rolled.pick,
       roll: rolled.roll,
@@ -730,19 +712,20 @@ class StudyPoller {
     // Provenance rides along with the pick so a recording can say not just
     // WHAT we advised but from WHICH strategy/chart and WHERE the roll fell.
     await this.push(text, {
-      ...rolled,
+      pick: rolled.pick,
+      roll: rolled.roll,
       // the decision this pick was rolled for: the wrapper's pick-to-relay
       // path refuses to act unless the table still matches (launch.py
       // _pick_ready) — a Zone hand moves on, the pick must not
       decisionKey: key,
       handId: full.hand?.handId ?? null,
-      band: sol.decision?.band ?? null,
+      band: rolled.band,
       strategy: sol.strategyMode ?? null,
       source: sol.source ?? null,
       tier: sol.tier ?? null,
       chart: sol.setId ?? null,
-      exploitPick: sol.exploitDecision?.action ?? null,
-      chartPick: sol.chartDecision?.action ?? null,
+      exploitPick: rolled.exploitPick,
+      chartPick: rolled.chartPick,
       // the line's trust (wrapper _reconciled_line): an uncertain line holds auto-execute
       uncertain: full.hand?.lineUncertain ?? null,
     }, [(sol as { warning?: string | null }).warning ?? null, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
@@ -912,7 +895,7 @@ class StudyPoller {
    * transient (an ingest 5xx, a CDP blip, a buttons repaint) nulls lastSolvedKey. Each re-solve drew a fresh
    * Math.random(), so a mixed spot could flip its headline pick under hero (13 decisions in 9 archived hands
    * showed two different picks live). The roll is now remembered per (hand, street, action count, hero cards)
-   * for 90 s and handed back to rollAction on a re-solve.
+   * for 90 s and handed back to rollDecision on a re-solve.
    */
   private rollMemo = new Map<string, { roll: number; at: number }>();
   private memoRoll(full: FastSolveLikeResponse | null | undefined, probe: IngestLikeResponse): number | undefined {
@@ -923,7 +906,7 @@ class StudyPoller {
     for (const [k, v] of this.rollMemo) if (now - v.at > 90_000) this.rollMemo.delete(k);
     const hit = this.rollMemo.get(key);
     if (hit) return hit.roll;
-    const roll = 1 + Math.floor(Math.random() * 100);
+    const roll = drawRoll();
     this.rollMemo.set(key, { roll, at: now });
     return roll;
   }
