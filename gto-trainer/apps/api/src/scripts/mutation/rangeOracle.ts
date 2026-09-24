@@ -62,11 +62,15 @@ const onTree = (want: number, got: number) => Math.abs(want - got) <= Math.max(0
 export function truthLine(actions: { street: number; seat: number; type: string; amount?: number }[], posOf: (seat: number) => string): RefAction[] {
   const out: RefAction[] = [];
   let level = 1;
+  // a POSTED-IN player's option-check is read as a limp (utils/foldPostIns, Brady 2026-09-25: the documented
+  // approximation, said in the answer as "POSTED IN (approximation)") — the reference walks the line the same way
+  const posters = new Set(actions.filter((a) => a.street === 0 && a.type === "post").map((a) => a.seat));
   for (const a of actions) {
     if (a.street !== 0 || a.type === "post-sb" || a.type === "post-bb" || a.type === "post") continue;
     const pos = posOf(a.seat);
+    const poster = posters.delete(a.seat);
     if (a.type === "fold") out.push({ pos, kind: "F" });
-    else if (a.type === "check") out.push({ pos, kind: "X" });
+    else if (a.type === "check") out.push({ pos, kind: poster ? "C" : "X" });
     else if (a.type === "call") out.push({ pos, kind: "C" });
     else if (a.type === "all-in") {
       const to = a.amount ?? 0;

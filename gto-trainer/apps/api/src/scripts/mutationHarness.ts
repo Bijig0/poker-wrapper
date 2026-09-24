@@ -27,6 +27,9 @@
  *   hero-deviates    hero takes an unlikely action (cold-calls a 3-bet, limps, min-raises)
  *   late-fold        a villain's preflop fold is filed one action late (the reader's badge lag)
  *   missed-fold      a villain's preflop fold never reaches the export at all (the tap misses folds; nothing backfills it)
+ *   post-in          a player (hero in about a third) POSTS IN a live 1bb out of turn (0.4bb sometimes at 5c): the
+ *                    wrapper's {type:"post"}; his free option is a check, a call is the increment (utils/foldPostIns)
+ *   undealt-seat     a labelled seat that was not dealt (sitting out): absent from liveSeats, no action, no start stack
  *   dropped-call     a villain's preflop call never reaches the export         → a refusal is the RIGHT answer
  *   dup-card         a board card equals one of hero's                          → a refusal is the RIGHT answer
  *   board-short      the flop export carries two cards                          → a refusal is the RIGHT answer
@@ -63,6 +66,7 @@ import { withStartStacks } from "../utils/archivedHand/archivedHand";
 import { setRangeWalkRecorder, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { nodeGetter } from "../services/hrc6max";
 import { layer1, layer2Postflop, layer2Preflop, truthLine, type OracleFinding } from "./mutation/rangeOracle";
+import { rakeCapCents } from "../services/profiles";
 
 /**
  * The export as the API reads it LIVE (feed/resolveHand, live path): normalizeHand, then withStartStacks — every seat
@@ -89,14 +93,19 @@ export class Rng {
 
 // ---- the hand: seats, stacks, a legal betting sequence, a board ----------------------------------------------------
 export interface Seat { id: number; pos: string; stack: number }
-export interface Action { street: 0 | 1 | 2 | 3; seat: number; type: "post-sb" | "post-bb" | "fold" | "check" | "call" | "bet" | "raise" | "all-in"; amount?: number }
+export interface Action { street: 0 | 1 | 2 | 3; seat: number; type: "post-sb" | "post-bb" | "post" | "fold" | "check" | "call" | "bet" | "raise" | "all-in"; amount?: number }
 export interface Hand {
   seats: Seat[]; hero: number; bbCents: number; sbPost: number; heroCards: [string, string]; board: string[];
   actions: Action[]; ops: string[];
+  /** a player who POSTED IN out of turn this hand (the wrapper's {type:"post"}), and how much */
+  postIn?: { seat: number; amount: number } | null;
+  /** a seat that holds a position label but was not dealt (sitting out): no action, not in liveSeats */
+  undealt?: number | null;
 }
 export interface GenOpts {
   seatsN?: number; shortSeat?: { pos: string; bb: number } | null; deepSeat?: { pos: string; bb: number } | null; deadSb?: boolean;
   limps?: number; oddOpen?: number | null; odd3bet?: number | null; jam?: boolean; heroDeviates?: boolean; bbCents?: number;
+  postIn?: boolean; undealtSeat?: boolean;
 }
 
 const roundCents = (bb: number, bbCents: number): number => Math.round(Math.round(bb * bbCents) / bbCents * 100) / 100;
@@ -114,17 +123,20 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
   if (o.shortSeat) { const s = seats.find((x) => x.pos === o.shortSeat!.pos); if (s) s.stack = o.shortSeat.bb; }
   if (o.deepSeat) { const s = seats.find((x) => x.pos === o.deepSeat!.pos); if (s) s.stack = o.deepSeat.bb; }
   if (o.deadSb) { const i = seats.findIndex((x) => x.pos === "SB"); if (i >= 0) seats.splice(i, 1); }
-  const hero = rng.pick(seats).id;
+  // a labelled seat that was not dealt (sitting out): never a blind, never hero
+  const undealtCands = o.undealtSeat ? seats.filter((x) => x.pos !== "SB" && x.pos !== "BB") : [];
+  const undealt = undealtCands.length ? rng.pick(undealtCands).id : null;
+  const hero = rng.pick(seats.filter((x) => x.id !== undealt)).id;
   const sbPost = bbCents === 5 ? 0.4 : 0.5;
   // cards
   const deck: string[] = []; for (const r of RANKS) for (const s of SUITS) deck.push(r + s);
   for (let i = deck.length - 1; i > 0; i--) { const j = rng.int(i + 1); [deck[i], deck[j]] = [deck[j]!, deck[i]!]; }
   const heroCards: [string, string] = [deck[0]!, deck[1]!];
   const board = deck.slice(2, 7);
-  const hand: Hand = { seats, hero, bbCents, sbPost, heroCards, board, actions: [], ops: [] };
+  const hand: Hand = { seats, hero, bbCents, sbPost, heroCards, board, actions: [], ops: [], undealt };
   const byPos = (p: string) => seats.find((x) => x.pos === p);
   const committed = new Map<number, number>(); const behind = new Map(seats.map((s) => [s.id, s.stack]));
-  const live = new Set(seats.map((s) => s.id));
+  const live = new Set(seats.map((s) => s.id).filter((id) => id !== undealt));
   const put = (a: Action, amt: number) => { // amt = total this street for raises/bets/posts, added for calls
     const prev = committed.get(a.seat) ?? 0;
     const total = a.type === "call" ? prev + amt : amt;
@@ -134,6 +146,19 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
   };
   const post = (p: string, type: "post-sb" | "post-bb", amt: number) => { const s = byPos(p); if (!s) return; const a: Action = { street: 0, seat: s.id, type, amount: amt }; hand.actions.push(a); put(a, amt); };
   post("SB", "post-sb", sbPost); post("BB", "post-bb", 1);
+  // POSTED IN (Ignition btn 8): a new player's live blind, in WS order after the blinds — 1bb, or 0.4bb at the 5c stake;
+  // hero himself in about a third of the hands
+  if (o.postIn) {
+    const cands = seats.filter((x) => x.id !== undealt && x.pos !== "SB" && x.pos !== "BB");
+    const heroCand = cands.find((x) => x.id === hero);
+    const who = heroCand && rng.chance(0.35) ? heroCand : cands.length ? rng.pick(cands) : null;
+    if (who) {
+      const amount = bbCents === 5 && rng.chance(0.4) ? 0.4 : 1;
+      const a: Action = { street: 0, seat: who.id, type: "post", amount };
+      hand.actions.push(a); put(a, amount);
+      hand.postIn = { seat: who.id, amount };
+    }
+  }
   // preflop order: after the BB, clockwise by position list
   const order = (street: number): number[] => {
     const ps = POS[n]!.filter((p) => byPos(p));
@@ -165,6 +190,8 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
       const minTo = r2(level + Math.max(lastInc, street === 0 ? 1 : 1));
       const canRaise = stack > owe + 0.01 && raises < 4;
       const policyPick = isHero && street === 0 && heroPolicy && !(o.heroDeviates && rng.chance(0.3)) ? await heroPolicy(hand, street) : null;
+      // the poster with nothing to call has a free option: he checks or raises, never folds
+      const freeOption = street === 0 && hand.postIn?.seat === id && owe <= 0.01;
       if (policyPick) {
         type = policyPick.type;
         // an "All-in" pick is the client's all-in button: hero's whole stack. It used to take the min-raise here (no
@@ -179,6 +206,7 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
         const unopened = level <= 1;
         if (unopened && limpsLeft > 0 && !isHero && byPos("BB")?.id !== id) { type = "call"; limpsLeft--; }
         else if (unopened && byPos("BB")?.id === id && level <= 1) type = rng.chance(0.75) ? "check" : "raise";
+        else if (unopened && freeOption) type = rng.chance(0.75) ? "check" : "raise";
         else if (unopened) type = rng.weighted([["fold", 62], ["raise", 33], ["call", isHero && o.heroDeviates ? 30 : 4]]);
         else if (raises === 1) type = rng.weighted([["fold", 58], ["call", 30], ["raise", 12]]);
         else type = rng.weighted([["fold", 55], ["call", isHero && o.heroDeviates ? 40 : 28], ["raise", 12]]);
@@ -252,15 +280,15 @@ export function exportAt(hand: Hand, k: number, key: string, drift = 0, streetAt
     handId: 1, clientHandId: key, bbCents: hand.bbCents, heroSeatId: hand.hero, heroCards: hand.heroCards,
     board: hand.board.slice(0, cur.street === 0 ? 0 : cur.street + 2), street: streetName,
     actions: upto.map((a) => ({ seatId: a.seat, hero: a.seat === hand.hero, type: a.type, street: STREETS[a.street], ...(a.amount != null ? { amount: a.amount } : {}) })),
-    liveSeats: hand.seats.map((s) => s.id), committed, potByStreet, positions, stacks,
-    startStacks: Object.fromEntries(hand.seats.map((s) => [s.id, s.stack])),
+    liveSeats: hand.seats.filter((s) => s.id !== hand.undealt).map((s) => s.id), committed, potByStreet, positions, stacks,
+    startStacks: Object.fromEntries(hand.seats.filter((s) => s.id !== hand.undealt).map((s) => [s.id, s.stack])),
     currentNode: { street: streetName, toActSeatId: hand.hero, toActIsHero: true, pot, toCall, legalActions: [], complete: false },
     heroFolded: false, heroWon: false, ended: false, sessionId: "mutation-harness", folded: [...folded],
   };
 }
 
 // ---- operators -------------------------------------------------------------------------------------------------------
-export const OPERATORS = ["nl5-rounding", "nl25-rounding", "stack-drift", "short-seat", "deep-seat", "thin-table", "dead-sb", "limps", "odd-open", "odd-3bet", "jam", "hero-deviates", "late-fold", "missed-fold", "dropped-call", "dup-card", "board-short", "unlabelled-seat"] as const;
+export const OPERATORS = ["nl5-rounding", "nl25-rounding", "stack-drift", "short-seat", "deep-seat", "thin-table", "dead-sb", "limps", "odd-open", "odd-3bet", "jam", "hero-deviates", "late-fold", "missed-fold", "post-in", "undealt-seat", "dropped-call", "dup-card", "board-short", "unlabelled-seat"] as const;
 export type Op = (typeof OPERATORS)[number];
 export const EXPECT_REFUSAL: ReadonlySet<string> = new Set(["dropped-call", "dup-card", "board-short", "unlabelled-seat"]);
 
@@ -279,6 +307,8 @@ export function genOptsFor(ops: Op[], rng: Rng): GenOpts {
     if (op === "odd-3bet") o.odd3bet = rng.pick([2.5, 6]);
     if (op === "jam") { o.jam = true; o.shortSeat ??= { pos: rng.pick(["HJ", "CO", "BTN", "SB", "BB"]), bb: rng.pick([12, 18, 25, 32]) }; }
     if (op === "hero-deviates") o.heroDeviates = true;
+    if (op === "post-in") o.postIn = true;
+    if (op === "undealt-seat") o.undealtSeat = true;
   }
   return o;
 }
@@ -358,7 +388,8 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number; or
   hand.ops = ops;
   const verdicts: Verdict[] = [];
   const failingExports: any[] = [];
-  const heroIdx = hand.actions.map((a, i) => [a, i] as const).filter(([a]) => a.seat === hand.hero && a.type !== "post-sb" && a.type !== "post-bb").map(([, i]) => i);
+  // a post (a blind, or a posted-in live blind) is not a decision
+  const heroIdx = hand.actions.map((a, i) => [a, i] as const).filter(([a]) => a.seat === hand.hero && a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post").map(([, i]) => i);
   const drift = drift0;
   let cloudGatedPreflop = false;
   forgetPreflopPin(key); forgetPostflopPin(key);
@@ -388,10 +419,19 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number; or
     let v: Verdict;
     if (res.ok) {
       const zero = res.notInRange === true;
+      // A FREE OPTION NEVER FOLDS (post-in, 2026-09-25): hero posted in, nobody raised — the answer must not say Fold
+      const freeFold = street === "preflop" && hand.postIn?.seat === hand.hero && !(Number(raw.currentNode?.toCall) > 0.01) && /^fold/i.test(String(res.decision?.action ?? ""));
+      // THE RAKE FOLLOWS THE PLAYERS DEALT (Ignition: $1/$2/$3/$4 at 2/3/4-5/6+, profiles.rakeCapCents, in NL200 bb)
+      const dealtN = hand.seats.filter((s) => s.id !== hand.undealt).length;
+      const wantCap = rakeCapCents(Math.max(2, dealtN)) / 200;
+      const rakeOff = res.dryRun?.rake && Math.abs(Number(res.dryRun.rake.cap_in_chips) - wantCap) > 1e-9
+        ? `the tree is raked with a ${res.dryRun.rake.cap_in_chips}bb cap, the table dealt ${dealtN} (cap ${wantCap}bb)` : null;
       // A CORRUPT CAPTURE ANSWERED IS THE WORST OUTCOME: a dropped call reads as a fold, and the answer comes from a
       // spot that never happened. The chips are still in the export (committed / stacks), so it is detectable.
       if (expectRefusal) v = { seed, ops, street, k, verdict: "finding", kind: "answered-corrupt-capture", reason: `answered a capture mutated by ${ops.filter((o) => EXPECT_REFUSAL.has(o)).join("+")} (${res.source ?? "?"}: ${String(res.warning ?? "").slice(0, 160)})`, ms };
       else if (zero) v = { seed, ops, street, k, verdict: "finding", kind: "hero-zero-weight", reason: res.warning ?? "hero not in range", ms };
+      else if (freeFold) v = { seed, ops, street, k, verdict: "finding", kind: "fold-free-check", reason: `hero posted in and faces nothing, and the answer says ${res.decision?.action} (${String(res.warning ?? "").slice(0, 160)})`, ms };
+      else if (rakeOff) v = { seed, ops, street, k, verdict: "finding", kind: "rake-cap", reason: rakeOff, ms };
       else if (ms > (opts.slowMs ?? 2500)) v = { seed, ops, street, k, verdict: "finding", kind: "slow-local-answer", reason: `${ms} ms for a local answer`, ms };
       else if (res.dryRun && inputMismatch(hand, res.dryRun)) v = { seed, ops, street, k, verdict: "finding", kind: "solver-input-mismatch", reason: `${inputMismatch(hand, res.dryRun)} (${String(res.warning ?? "").slice(0, 200)})`, ms };
       else {
@@ -437,7 +477,7 @@ export async function rangeVerdict(hand: Hand, k: number, res: any, walks: Recor
   if (!on || !res?.ok) return none;
   const posOf = (seat: number) => hand.seats.find((s) => s.id === seat)?.pos ?? "?";
   const heroPos = posOf(hand.hero);
-  const dealt = hand.seats.map((s) => s.pos);
+  const dealt = hand.seats.filter((s) => s.id !== hand.undealt).map((s) => s.pos);
   const note = String(res.warning ?? "");
   if (res.street === "preflop") {
     if (res.source !== "hrc-6max-preflop" || !/_6max_/.test(String(res.gametype))) return none;
@@ -474,7 +514,7 @@ export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: str
   const folded = new Set(hand.actions.filter((a) => a.street === 0 && a.type === "fold").map((a) => a.seat));
   // a player all-in preflop never acts again: he is not a flop seat while two others can play (his chips are pot)
   const allIn = new Set(hand.actions.filter((a) => a.street === 0 && a.type === "all-in").map((a) => a.seat));
-  const inHand = hand.seats.filter((s) => !folded.has(s.id));
+  const inHand = hand.seats.filter((s) => !folded.has(s.id) && s.id !== hand.undealt);
   const canAct = inHand.filter((s) => !allIn.has(s.id));
   const want = (canAct.length >= 2 ? canAct : inHand).map((s) => s.pos).sort();
   const got = dry.flopSeats.map((p) => p.toUpperCase()).sort();
