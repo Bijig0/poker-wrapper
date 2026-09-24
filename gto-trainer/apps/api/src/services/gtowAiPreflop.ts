@@ -32,6 +32,7 @@
  * ranges — arrivalRangesGtowAi walks the same solved tree and exposes the chart piece's shape (position →
  * class → weight), so fastSolve.solvePostflop6maxStrategy reads one shape whichever piece answered.
  */
+import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowApi } from "./gtowApi";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
@@ -219,6 +220,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   const order = shape.positions.slice();                // API order
   const acted = hand.actions.filter((a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb");
   let cursor = 0;
+  const calls = allInCalls(hand.actions);
   const pendingHero = !hand.ended && hand.currentNode.street === "preflop" && hand.currentNode.toActIsHero;
   const heroApi = shape.heroApiPos;
   for (let round = 0; round < 4 && cursor < acted.length; round++) {
@@ -229,7 +231,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
       if (aApi === api || aApi == null) {
         if (a.type === "fold") tokens.push("F");
         else if (a.type === "check") tokens.push("X");
-        else if (a.type === "call") tokens.push("C");
+        else if (a.type === "call" || calls.has(a)) tokens.push("C");   // an all-in for no more than the price is a call
         else if (a.type === "raise" || a.type === "bet" || a.type === "all-in") { const t = a.amount ?? 0; levels.push(t); tokens.push(`R${num(t)}`); }
         else tokens.push("C");
         cursor++;

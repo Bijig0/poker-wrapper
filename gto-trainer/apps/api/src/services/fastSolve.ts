@@ -1,5 +1,5 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
-import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens, allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective } from "./hrc6max";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
@@ -1038,7 +1038,9 @@ async function solvePostflopViaChain(
   const byPos = (pos: string) =>
     findPos(pos) ?? (isHu ? findPos(pos.toUpperCase() === "SB" ? "BTN" : pos.toUpperCase() === "BTN" ? "SB" : pos) : undefined);
   // each preflop all-in's own size (a short stack's jam is not an all-in for the whole depth — aiStudyLine.preflopPotStack)
-  const allInTo = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in").map((a) => Number(a.amount));
+  // (an all-in CALL is tokenized C, not RAI — buildSolutionUrl.allInCalls — so only the raising all-ins size a RAI)
+  const allInCallsPre = allInCalls(hand.actions);
+  const allInTo = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in" && !allInCallsPre.has(a)).map((a) => Number(a.amount));
   const pps = preflopPotStack(preTokens, depth, seatOrder,
     allInTo.length === preTokens.filter((t) => t === "RAI").length && allInTo.every((x) => Number.isFinite(x) && x > 0) ? allInTo : undefined);
   // THE ANTES ARE IN THE POT (2026-09-22). preflopPotStack counts blinds and bets only; a CoinPoker HU hand also
@@ -2218,7 +2220,8 @@ async function solvePreflop6max(
   // all-in's size: one mapped onto a size more than 2x away from it (SNAP_MAX; a jam past the chart's depth counts as
   // the depth) has no node in this chart, so it is refused like any size past τ and the exact tree answers.
   {
-    const allIns = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in").map((a) => Number(a.amount));
+    const callsIn = allInCalls(hand.actions);
+    const allIns = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in" && !callsIn.has(a)).map((a) => Number(a.amount));
     const fitted = walk.fittedLine ?? walkTokens;
     for (const r of walk.repaired) {
       if (r.from !== "RAI" || r.borrowed) continue;

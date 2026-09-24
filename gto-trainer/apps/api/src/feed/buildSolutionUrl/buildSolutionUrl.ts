@@ -56,6 +56,30 @@ export const actionToken = (a: ParsedAction): string | null => {
   }
 };
 
+/**
+ * AN ALL-IN THAT DOES NOT RAISE THE PRICE IS A CALL (2026-09-25, round 2 of the input-mutation harness, seed 2328
+ * [jam]). The capture types every all-in "all-in" — a jam over the top and a short stack calling for everything he
+ * has alike — and `actionToken` reads both as "RAI", which every walk maps onto the node's jam: a 25bb small blind
+ * calling the button's raise to 25 became the 30bb chart's all-in to 30, and hero's JJ was answered facing a five-bet
+ * that never happened. The set of all-ins whose amount (the seat's street total, as for a raise) does not exceed the
+ * street's price so far: those tokenize "C". The seat is still all-in (it never acts again) — only the token changes.
+ */
+export function allInCalls(actions: readonly ParsedAction[]): Set<ParsedAction> {
+  const out = new Set<ParsedAction>();
+  const level = new Map<string, number>();
+  for (const a of actions) {
+    const lv = level.get(a.street) ?? 0;
+    const amt = Number(a.amount ?? 0);
+    if (a.type === "all-in") {
+      if (amt > 0 && amt <= lv + 0.005) out.add(a);
+      else level.set(a.street, Math.max(lv, amt));
+    } else if (a.type === "post-sb" || a.type === "post-bb" || a.type === "post" || a.type === "raise" || a.type === "bet") {
+      level.set(a.street, Math.max(lv, amt));
+    }
+  }
+  return out;
+}
+
 const STREETS: readonly Street[] = ["preflop", "flop", "turn", "river"];
 
 const ORDER_6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
@@ -150,6 +174,8 @@ const buildPreflopTokensWalk = (
   if (!preflop.length && !pendingPos) return [];
 
   const tokens: string[] = [];
+  const calls = allInCalls(hand.actions);
+  const tok = (a: ParsedAction) => (calls.has(a) ? "C" : actionToken(a));
   let ai = 0; // index into preflop actions (which are in action order)
   for (const pos of order) {
     const next = ai < preflop.length ? preflop[ai] : null;
@@ -161,7 +187,7 @@ const buildPreflopTokensWalk = (
     // fold matches no seat and desyncs the whole line into phantom folds +
     // duplicated later-orbit tokens (e.g. ten folds), which no chart contains.
     if (next && (nextPos === pos || nextPos == null)) {
-      tokens.push(actionToken(next) ?? "F");
+      tokens.push(tok(next) ?? "F");
       ai++;
     } else if (pendingPos && pos === pendingPos && !heroActedPreflop) {
       break; // hero's turn here — leave this node active
@@ -170,7 +196,7 @@ const buildPreflopTokensWalk = (
     }
   }
   // later orbits (3-bet/4-bet responses) — append in action order
-  for (; ai < preflop.length; ai++) tokens.push(actionToken(preflop[ai]) ?? "F");
+  for (; ai < preflop.length; ai++) tokens.push(tok(preflop[ai]!) ?? "F");
   return tokens;
 };
 
@@ -252,10 +278,11 @@ export const buildSpotSolutionTokens = (
   preflop: string[]; flop: string[]; turn: string[]; river: string[]; board: string;
   seats: { flop: number[]; turn: number[]; river: number[] };
 } => {
+  const calls = allInCalls(hand.actions);
   const streetPairs = (street: Street): { tok: string; seat: number }[] =>
     hand.actions
       .filter((a) => a.street === street)
-      .map((a) => ({ tok: actionToken(a), seat: a.seatId }))
+      .map((a) => ({ tok: calls.has(a) ? "C" : actionToken(a), seat: a.seatId }))
       .filter((p): p is { tok: string; seat: number } => p.tok !== null);
   const flop = streetPairs("flop");
   const turn = streetPairs("turn");
@@ -275,6 +302,7 @@ export const buildSpotSolutionTokens = (
 export const buildSolutionUrl = (spec: SolutionUrlSpec): SolutionUrlResult => {
   const { hand } = spec;
   const tokens: Partial<Record<Street, string[]>> = {};
+  const calls = allInCalls(hand.actions);
   for (const street of STREETS) {
     // preflop needs positional alignment; postflop is heads-up action order
     const toks =
@@ -282,7 +310,7 @@ export const buildSolutionUrl = (spec: SolutionUrlSpec): SolutionUrlResult => {
         ? buildPreflopTokens(hand, spec.heroPos)
         : hand.actions
             .filter((a) => a.street === street)
-            .map(actionToken)
+            .map((a) => (calls.has(a) ? "C" : actionToken(a)))
             .filter((t): t is string => t !== null);
     if (toks.length) tokens[street] = toks;
   }
