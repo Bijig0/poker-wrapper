@@ -221,6 +221,19 @@ else {
   Write-WrapperShortcut
   Ok '"Poker Wrapper" is on the desktop'
 }
+# the dashboard (http://localhost:2000) as a desktop icon too (2026-09-24). Made ONCE per install, updates included
+# (an update runs -SkipShortcut, and older installs never had it) — the marker means a deleted icon stays deleted.
+$dashMark = Join-Path $root 'config\dashboard-shortcut.done'
+if (-not (Test-Path $dashMark)) {
+  $url = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Dashboard.url'
+  $ico = Join-Path $root 'gto-trainer\study-tool.ico'
+  $body = @('[InternetShortcut]', 'URL=http://localhost:2000/')
+  if (Test-Path $ico) { $body += @("IconFile=$ico", 'IconIndex=0') }
+  Set-Content -Path $url -Value $body -Encoding ASCII
+  New-Item -ItemType Directory -Force (Split-Path $dashMark) | Out-Null
+  Set-Content -Path $dashMark -Value (Get-Date -Format 's') -Encoding ASCII
+  Ok '"Poker Dashboard" is on the desktop (opens http://localhost:2000)'
+}
 
 # ---------------------------------------------------------------- 9. check
 Step 9 'Check'

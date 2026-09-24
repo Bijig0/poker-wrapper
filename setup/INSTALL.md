@@ -98,7 +98,7 @@ from CoinPoker's own log file, so you sit down in CoinPoker yourself like always
 
 ## 6. Looking back at your hands
 
-Open **http://localhost:2000** in any browser: **Hands** and **Sessions** have everything you played, with the
+Double-click **Poker Dashboard** on your desktop (or open **http://localhost:2000** in any browser): **Hands** and **Sessions** have everything you played, with the
 answer shown for each decision.
 
 ---

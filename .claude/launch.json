@@ -8,6 +8,12 @@
       "port": 2000
     },
     {
+      "name": "gto-api-verify",
+      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-api-verify.cmd",
+      "runtimeArgs": [],
+      "port": 2001
+    },
+    {
       "name": "hrc-charts",
       "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-charts.cmd",
       "runtimeArgs": [],
