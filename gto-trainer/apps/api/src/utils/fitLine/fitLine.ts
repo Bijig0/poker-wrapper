@@ -100,6 +100,33 @@ export function foldEarliestCaller(
 }
 
 /**
+ * FOLD THE SAME PLAYERS AGAIN (2026-09-25, mutation harness seed 589 [limps]). When hero's decision was read on a
+ * line with a caller folded out (a fit, or the caller-cap borrow), every later decision of the same hand must be read
+ * on a line with that caller folded too — otherwise the later walk runs through the REAL node, where hero's own
+ * earlier action may be one the chart never takes with his hand (CO A4s iso-raised to 5 over two limps on the
+ * borrowed one-limp node's 78% — at the two-limp node the chart folds A4s, and the 3-bet decision came back with no
+ * strategy). Each named seat's first call is folded and its later actions dropped — fitLine's own rule.
+ */
+export function foldSeatsOut(tokens: string[], seats: string[], stack: number | Record<string, number>, all: readonly string[] = SEATS6): string[] {
+  if (!seats.length) return tokens;
+  const who = actorsWithAllins(tokens, stack, all);
+  const at = new Map<string, number>();
+  for (const s of seats) {
+    const i = tokens.findIndex((t, k) => t === "C" && who[k]?.toUpperCase() === s.toUpperCase());
+    if (i >= 0) at.set(s.toUpperCase(), i);
+  }
+  const out: string[] = [];
+  tokens.forEach((t, i) => {
+    const s = who[i]?.toUpperCase();
+    const f = s != null ? at.get(s) : undefined;
+    if (f === i) out.push("F");
+    else if (f != null && i > f) return;          // he folded: his later actions never happen
+    else out.push(t);
+  });
+  return out;
+}
+
+/**
  * Walk `intended` through the tree, folding callers until it fits. Returns the walk (as walk3max) plus every
  * fold made. A line that needs no fold comes back exactly as walk3max would return it.
  */

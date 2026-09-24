@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actorsWithAllins, foldEarliestCaller, walkFitted } from "./fitLine";
+import { actorsWithAllins, foldEarliestCaller, foldSeatsOut, walkFitted } from "./fitLine";
 
 const n = (pos: string, toks: string[], terminal = false) =>
   ({ pos, terminal, actions: toks.map((t) => ({ action: t, token: t })), cells: [] });
@@ -74,5 +74,24 @@ describe("foldEarliestCaller", () => {
   });
   test("the only caller is hero: nobody left to fold, null", () => {
     expect(foldEarliestCaller(["R2.5", "F", "C"], { keep: new Set(["CO"]), stack: 100, seats: SEATS })).toBeNull();
+  });
+});
+
+describe("foldSeatsOut — the players an earlier decision was read without stay folded (harness seed 589 [limps])", () => {
+  test("UTG's limp folded, his later fold dropped: hero's 3-bet decision reads the line his iso was read on", () => {
+    // UTG and HJ limp, CO (hero) isos to 5 — read with UTG's limp folded (caller cap) — BTN 3-bets, blinds and
+    // both limpers fold, back to hero: the walk must run F-C-R5-R15-F-F-F, not the real two-limp node
+    expect(foldSeatsOut(["C", "C", "R5", "R15", "F", "F", "F", "F"], ["UTG"], 100)).toEqual(["F", "C", "R5", "R15", "F", "F", "F"]);
+  });
+
+  test("a seat with no call in the line is left alone; nothing to fold is the line itself", () => {
+    const line = ["F", "C", "R5", "F"];
+    expect(foldSeatsOut(line, ["UTG"], 100)).toEqual(line);
+    expect(foldSeatsOut(line, [], 100)).toBe(line);
+  });
+
+  test("two seats, each its first call folded and its later actions dropped", () => {
+    // UTG, HJ, CO limp; BTN isos; UTG and HJ call the iso: UTG and HJ folded out → F-F-C-R5 + the rest without them
+    expect(foldSeatsOut(["C", "C", "C", "R5", "F", "F", "C", "C", "F"], ["UTG", "HJ"], 100)).toEqual(["F", "F", "C", "R5", "F", "F", "F"]);
   });
 });

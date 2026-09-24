@@ -49,6 +49,9 @@ interface PinBase {
    * played by it — see heroDeviation. The caller passes its own decision only.
    */
   picks?: HeroPick[];
+  /** seats whose call hero's decisions were read with FOLDED OUT (a fit, or the caller-cap borrow): later decisions
+   *  of the hand fold them the same way (fitLine.foldSeatsOut), and the flop reads each seat on a fitted line */
+  foldedSeats?: string[];
 }
 export interface HeroPick {
   /** the capture's tokens up to hero's node, and the tree's codes there */
@@ -168,8 +171,8 @@ export async function resumeChartPreflopRanges(
     };
   };
   const foldedOut = pin.rawTokens.map((t, i) => (t !== "F" && pin.codes[i] === "F" ? i : -1)).filter((i) => i >= 0);
-  if (foldedOut.length || pin.codes.length !== pin.rawTokens.length) {
-    return perSeat(`hero's decision was read on a line fitted to the tree (${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out)`);
+  if (pin.foldedSeats?.length || foldedOut.length || pin.codes.length !== pin.rawTokens.length) {
+    return perSeat(`hero's decision was read on a line fitted to the tree (${pin.foldedSeats?.length ? `${pin.foldedSeats.join(", ")}'s call folded out` : `${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out`})`);
   }
   // the tree's prefix + the rest as played: reconstructFlopRanges snaps each later size to the node's own
   const line = [...pin.codes, ...fit.rest];
