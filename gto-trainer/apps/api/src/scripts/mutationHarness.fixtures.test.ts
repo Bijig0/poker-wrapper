@@ -37,6 +37,11 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 3, ops: ["missed-fold"], cls: "a fold lost in a later orbit: written into its slot" },
   { seed: 12, ops: ["missed-fold"], cls: "a fold lost in the opening orbit: no capture fault on the flop" },
   { seed: 627, ops: ["missed-fold"], cls: "a padded opening-orbit fold is not written a second time" },
+  // round 2 (the range-level oracle, scripts/mutation/rangeOracle.ts)
+  { seed: 50, ops: ["jam"], cls: "range oracle: a 3-bet past τ conditioned the flop ranges on the chart's neighbour (size-past-tolerance)" },
+  { seed: 5, ops: ["nl5-rounding"], cls: "range oracle: a 2.6 open read as 2.5 with no word of it (size-snap-unreported)" },
+  { seed: 44, ops: [], cls: "range oracle: an 8.75 3-bet read as 9, unsaid (size-snap-unreported)" },
+  { seed: 3, ops: ["stack-drift"], cls: "range oracle: a 25bb 4-bet read as the chart's 23, unsaid (size-snap-unreported)" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

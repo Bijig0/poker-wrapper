@@ -135,6 +135,35 @@ describe("resumeChartPreflopRanges", () => {
     expect(r.reads).toBeGreaterThan(0);
   });
 
+  // round 2 (range-level oracle, seeds 5/6/27 [nl5-rounding]): the ranges were read at 2.5 for a 2.6 open, unsaid
+  it("names every size the ranges were read at instead of the one played", async () => {
+    const r = await resumeChartPreflopRanges(pinAtOpen, flopHand, "BTN", get);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.note).toContain("PREFLOP SIZES SNAPPED onto the chart: BTN's 2.6bb read as 2.5bb");
+  });
+  // …and the pin's own snaps (made when hero's decision was read) ride along
+  it("the sizes hero's pinned decision was read at are named too", async () => {
+    const r = await resumeChartPreflopRanges({ ...pinAtOpen, sizeSnaps: ["CO's 2.2bb read as 2.5bb"] }, flopHand, "BTN", get);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.note).toContain("CO's 2.2bb read as 2.5bb; BTN's 2.6bb read as 2.5bb");
+  });
+  // round 2, seed 50 [jam]: a 3-bet the chart has no node for (past τ) conditioned the flop's ranges on the neighbour
+  it("a later size past τ has no node in the pinned chart: the resume refuses, named", async () => {
+    const far: Record<string, RawNode> = {
+      ...chart,
+      "F-F-F-R2.5-R7.5": { pos: "BB", terminal: false, actions: [{ action: "Fold", token: "F" }], cells: [] },
+      "F-F-F-R2.5-R7.5-F": { pos: "BTN", terminal: false, actions: [{ action: "Fold", token: "F" }, { action: "Call", token: "C" }],
+        cells: [{ hand: "A9s", actions: { Call: 100 } }] },
+      "F-F-F-R2.5-R7.5-F-C": { pos: null, terminal: true, actions: [], cells: [] },
+    };
+    const threeBet: ParsedHand = { ...flopHand, actions: [...flopHand.actions.slice(0, 5),
+      { seatId: 3, hero: false, type: "raise", amount: 20, street: "preflop" }, { seatId: 4, hero: false, type: "fold", street: "preflop" },
+      { seatId: 2, hero: true, type: "call", amount: 17.4, street: "preflop" }] };
+    const r = await resumeChartPreflopRanges(pinAtOpen, threeBet, "BTN", async (l) => far[l] ?? null);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.why).toContain("size past τ: SB's 20bb");
+  });
+
   it("a pin the capture has outgrown is unusable, not wrong", async () => {
     const r = await resumeChartPreflopRanges({ ...pinAtOpen, rawTokens: ["F", "R3", "F"], codes: ["F", "R3", "F"] }, flopHand, "BTN", get);
     expect(r.ok).toBe(false);

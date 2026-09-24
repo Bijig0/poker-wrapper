@@ -6,6 +6,7 @@ import type { GetNode, HrcNode } from "./hrc3max";
 import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
 import type { AiPreflopShape } from "./gtowAiPreflop";
 import { tmark } from "./answerTrace";
+import { SNAP_TAU } from "../utils/snapToken/snapToken";
 
 /**
  * THE PREFLOP PIN (2026-09-25, Brady: "the final ranges used are the input — if GTO Wizard AI preflop is used
@@ -65,6 +66,9 @@ export interface ChartPreflopPin extends PinBase {
   piece: "chart6max";
   chartId: string;
   depth: number;
+  /** the sizes hero's decision was read at instead of the ones played ("CO's 2.2bb read as 2.5bb") — named again in
+   *  the flop's note, whose ranges are read on the same codes (round 2, 2026-09-25) */
+  sizeSnaps?: string[];
 }
 export interface AiPreflopPin extends PinBase {
   piece: "gtow-ai-preflop";
@@ -77,6 +81,26 @@ export interface AiPreflopPin extends PinBase {
   warm: Promise<void> | null;
 }
 export type PreflopPin = ChartPreflopPin | AiPreflopPin;
+
+/**
+ * SIZES READ AT THE CHART'S, SAID (2026-09-25, round 2 of the input-mutation harness, range-level oracle). A walk
+ * that moved a size onto the tree (a 2.6 open read as 2.5 at a 5c blind, an 8.75 3-bet read as 9) conditions every
+ * range after it on the tree's size; the answer has to say so. From a walk's repairs: the sized moves only (not a
+ * borrow, not our all-in token), and not the ones inside the on-tree tolerance (utils/snapToken).
+ */
+export function repairSnaps(repaired: { index: number; from: string; to: string; borrowed?: string }[], line: string[], depth: number): string[] {
+  const who = actorsWithAllins(line, depth);
+  const size = (t: string) => { const m = /^R([\d.]+)$/.exec(t); return m ? Number(m[1]) : null; };
+  const out: string[] = [];
+  for (const r of repaired) {
+    const a = size(r.from), b = size(r.to);
+    if (r.borrowed || a == null || b == null || Math.abs(a - b) <= Math.max(0.05, a * 0.025)) continue;
+    out.push(`${who[r.index] ?? "?"}'s ${a}bb read as ${b}bb`);
+  }
+  return out;
+}
+export const snapsNote = (snaps: string[]): string | null =>
+  snaps.length ? `PREFLOP SIZES SNAPPED onto the chart: ${[...new Set(snaps)].join("; ")}` : null;
 
 const pins = new Map<string, PreflopPin>();
 const MAX_PINS = 300;
@@ -165,9 +189,10 @@ export async function resumeChartPreflopRanges(
     if (!per.ok) return { ok: false, why: `pinned chart ${pin.chartId}: ${why}; ${per.reason}` };
     return {
       ok: true, ranges: per.ranges, tokens: tokensNow, codes: per.heroLine, seatOrder: undefined, id: pin.chartId, reads,
-      note: `PREFLOP RANGES FROM THE PIN: the 6-max chart that answered hero's last preflop decision (${pin.chartId}, hero's node at "${pin.codes.join("-") || "root"}") — ` +
+      note: [`PREFLOP RANGES FROM THE PIN: the 6-max chart that answered hero's last preflop decision (${pin.chartId}, hero's node at "${pin.codes.join("-") || "root"}") — ` +
         `${why}, so each flop seat's range is read from a fitted line that keeps that seat` +
         (per.borrowed.length ? ` (${per.borrowed.join(", ")})` : "") + `; no chart chosen again`,
+        snapsNote([...(pin.sizeSnaps ?? []), ...per.snaps])].filter(Boolean).join(" · "),
     };
   };
   const foldedOut = pin.rawTokens.map((t, i) => (t !== "F" && pin.codes[i] === "F" ? i : -1)).filter((i) => i >= 0);
@@ -183,7 +208,9 @@ export async function resumeChartPreflopRanges(
   const line = [...pin.codes, ...fit.rest];
   const stepped: string[] = [];   // the tree's own token at every decision read (a snapped size shows as the node's)
   const recon = await reconstructFlopRanges(line, counted,
-    { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, onStep: (s) => stepped.push(s.token) });
+    { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU, onStep: (s) => stepped.push(s.token) });
+  // a size past τ has no node in this chart, fitted or not (round 2, seed 50 [jam]): the pin cannot give the ranges
+  if (!recon.ok && /^size past τ/.test(recon.reason)) return { ok: false, why: `pinned chart ${pin.chartId}: ${recon.reason}` };
   if (!recon.ok) {
     // A LINE PAST THE TREE'S CAPS AFTER HERO'S DECISION (2026-09-25, seed 93 [hero-deviates]): a fifth entrant, a third
     // caller — "not in the charts". The pinned walk cannot go on, but the flop is still the table's: each seat is read
@@ -206,7 +233,8 @@ export async function resumeChartPreflopRanges(
     ok: true, ranges: recon.ranges, tokens: tokensNow, codes, seatOrder: undefined, id: pin.chartId, reads,
     note: `PREFLOP RANGES FROM THE PIN: the 6-max chart that answered hero's last preflop decision (${pin.chartId}, hero's node at "${pin.codes.join("-") || "root"}") — ` +
       `hero's action and ${fit.rest.length - 1} later action(s) read on the same tree; no chart chosen again` +
-      (recon.notes?.length ? ` · ${recon.notes.map((n) => `RANGE SHORTCUT: ${n}`).join(" · ")}` : ""),
+      (recon.notes?.length ? ` · ${recon.notes.map((n) => `RANGE SHORTCUT: ${n}`).join(" · ")}` : "") +
+      ((s) => (s ? ` · ${s}` : ""))(snapsNote([...(pin.sizeSnaps ?? []), ...(recon.snaps ?? [])])),
   };
 }
 
@@ -272,17 +300,19 @@ export async function fittedRangesBySeat(
      *  decision can change it, and a fit of the whole line could fold a limper his decision was read WITH */
     heroPrefix?: string[];
   },
-): Promise<{ ok: true; ranges: Record<string, Record<string, number>>; borrowed: string[]; heroLine: string[] } | { ok: false; reason: string }> {
+): Promise<{ ok: true; ranges: Record<string, Record<string, number>>; borrowed: string[]; heroLine: string[]; snaps: string[] } | { ok: false; reason: string }> {
   const getHrc: GetNode = async (l) => (await get(l)) as HrcNode | null;
   const ranges: Record<string, Record<string, number>> = {};
   const borrowed: string[] = [];
+  const snaps: string[] = [];
   let heroLine: string[] = tokens;
   for (const seat of flopSeatsOf(tokens, o.depth)) {
     if (o.heroPrefix && o.heroPos && seat === o.heroPos.toUpperCase()) {
-      const r = await reconstructFlopRanges(o.heroPrefix, get, { heroPos: o.heroPos, borrowCaller: true, maxPlayers: 6, partial: true });
+      const r = await reconstructFlopRanges(o.heroPrefix, get, { heroPos: o.heroPos, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU });
       const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
       if (!mine) return { ok: false, reason: `hero's range on the pinned line "${o.heroPrefix.join("-")}": ${r.ok ? "absent" : r.reason}` };
       ranges[seat] = mine;
+      if (r.ok && r.snaps) snaps.push(...r.snaps);
       heroLine = o.heroPrefix;
       continue;
     }
@@ -293,7 +323,7 @@ export async function fittedRangesBySeat(
     const lineFor = fit.fittedLine ?? tokens;
     // partial: only THIS seat's range is wanted, and the fitted line may leave it alone at the flop (hero squeezes,
     // and the limper who called it is the one the fit folded) — a player count says nothing about one seat's range
-    const r = await reconstructFlopRanges(lineFor, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true });
+    const r = await reconstructFlopRanges(lineFor, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU });
     const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
     if (!mine) {
       return { ok: false, reason: fit.fitted
@@ -303,7 +333,8 @@ export async function fittedRangesBySeat(
     ranges[seat] = mine;
     if (fit.folds.length) borrowed.push(`${seat} with ${fit.folds.map((f) => f.seat).join("+")} folded`);
     if (r.ok && r.notes?.length) borrowed.push(...r.notes.map((n) => `${seat}: ${n}`));
+    if (r.ok && r.snaps) snaps.push(...r.snaps);
     if (o.heroPos && seat === o.heroPos.toUpperCase()) heroLine = lineFor;
   }
-  return { ok: true, ranges, borrowed, heroLine };
+  return { ok: true, ranges, borrowed, heroLine, snaps: [...new Set(snaps)] };
 }

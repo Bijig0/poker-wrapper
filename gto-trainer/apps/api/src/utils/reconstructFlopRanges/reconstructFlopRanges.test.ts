@@ -243,3 +243,29 @@ describe("reconstructFlopRanges — borrowed caller", () => {
     if (!r.ok) expect(r.reason).toContain('action "C" not offered');
   });
 });
+
+/**
+ * SIZES THE TREE DOES NOT HAVE (2026-09-25, round 2 of the input-mutation harness, range-level oracle).
+ * seed 50 [jam]: the BB's 3-bet to 10 was read as the 30bb chart's 6.5 (0.43 log-distance, past τ) — the flop's ranges
+ * were conditioned on a node the preflop answer itself refuses to read ("size past τ … the exact tree answers").
+ * seeds 5/6/27 [nl5-rounding], 44 [baseline]: a 2.6 open read as 2.5, an 8.75 3-bet as 9, and the answer never said so.
+ */
+describe("reconstructFlopRanges — sizes moved onto the tree", () => {
+  it("reports every size it moved off the one played (seat, played, read as)", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.6-F-F-C".split("-"), getNode);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.snaps).toEqual(["CO's 2.6bb read as 2.5bb"]);
+  });
+  it("a size inside the on-tree tolerance is not a snap", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.52-F-F-C".split("-"), getNode);
+    expect(r.ok && r.snaps).toBeUndefined();
+  });
+  it("maxSnap: a size further than that from every offered size has no node — refused, named", async () => {
+    // 3.8 vs the only open 2.5: log 0.42 > τ 0.4
+    const r = await reconstructFlopRanges("F-F-R3.8-F-F-C".split("-"), getNode, { maxSnap: 0.4 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("size past τ: CO's 3.8bb is 0.42 log-distance from the chart's nearest R2.5");
+    // without the bound the old behaviour stands (other trees' callers)
+    expect((await reconstructFlopRanges("F-F-R3.8-F-F-C".split("-"), getNode)).ok).toBe(true);
+  });
+});

@@ -37,7 +37,7 @@ import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote } from "../utils/foldPostIns/foldPostIns";
-import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, heroDeviation, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
@@ -1757,9 +1757,13 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // the postflop step COLLAPSES the field to three (services/multiwayCollapse.ts) and needs every seat's
   // arrival range to choose what to drop or merge. The charts stop at the same caller cap GTO Wizard does,
   // so the extra seats arrive through the borrowed-caller shortcut, which is what borrowCaller is for.
-  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 6 });
+  // maxSnap: a size past τ has no node in this chart — the preflop answer refuses the same line (round 2, seed 50)
+  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU });
   if (Date.now() - tRecon > 1000) console.log(`[ranges] reconstructFlopRanges took ${Date.now() - tRecon} ms on ${resolved.id} (${recon.ok ? "ok" : recon.reason.slice(0, 80)})`);
   let fitNote: string | null = null;
+  let snaps: string[] = recon.ok ? recon.snaps ?? [] : [];
+  // a size past τ has no node in this chart, fitted or not: the ranges are not this chart's to give
+  if (!recon.ok && /^size past τ/.test(recon.reason)) return { ok: false, reason: `6-max chart ${resolved.id}: ${recon.reason}` };
   if (!recon.ok) {
     // THE LINE DOES NOT FIT THE TREE (2026-09-22): more limpers, callers or entrants than the capped tree holds
     // (utils/fitLine). For hero's DECISION the fix is to fold the earliest caller; for the flop's RANGES it is
@@ -1776,6 +1780,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
     if (Date.now() - tFit > 1000) console.log(`[ranges] fitted per-seat walk took ${Date.now() - tFit} ms (${per.ok ? "ok" : per.reason.slice(0, 80)})`);
     if (!per.ok) return { ok: false, reason: `6-max chart ${resolved.id}: ${firstFail}; ${per.reason}` };
     recon = { ok: true, ranges: per.ranges };
+    snaps = per.snaps;
     fitNote = `LINE FITTED FOR THE RANGES: the tree holds two limpers, two callers and four entrants, so ` +
       `${per.borrowed.join(", ")} ${per.borrowed.length === 1 ? "was" : "were"} read from a line with fewer players in — pot and stacks are the real ones`;
   }
@@ -1784,6 +1789,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
     resolved.fellBack ? `no ${choice.id} tree in the set — ranges from ${resolved.id}` : null,
     fitNote,
     ...(recon.ok ? (recon.notes ?? []) : []).map((n) => `RANGE SHORTCUT: ${n}`),
+    snapsNote(snaps),
   ].filter(Boolean).join(" · ");
   return { ok: true, recon, id: resolved.id, tokens, note: note || null };
 }
@@ -2310,9 +2316,11 @@ async function solvePreflop6max(
     const foldedSeats = [...new Set([...sticky, ...walk.folds.map((f) => f.seat), ...(borrowed ? [borrowed.dropped] : [])])];
     const picks = cell ? [{ rawTokens: tokens, codes: heroCodes, heroClass,
       mix: heroNode.actions.map((x) => ({ action: x.action, token: x.token, frequency: actions.find((a) => a.action === x.action)?.frequency ?? 0 })) }] : [];
+    // the sizes this decision was read at instead of the ones played: the flop's ranges sit on the same codes
+    const sizeSnaps = repairSnaps(walk.repaired, walk.fittedLine ?? walkTokens, choice.depth);
     setPreflopPin({ piece: "chart6max", handKey: pinKey, chartId: resolved.id, codes: heroCodes, rawTokens: tokens,
       heroPos: heroSeatPos || nodePos, depth: choice.depth, actionIndex: hand.actions.length, at: Date.now(), picks,
-      ...(foldedSeats.length ? { foldedSeats } : {}) });
+      ...(foldedSeats.length ? { foldedSeats } : {}), ...(sizeSnaps.length ? { sizeSnaps } : {}) });
   }
 
   const notes = [

@@ -17,7 +17,7 @@ export interface RawNode {
 }
 
 export type ReconstructResult =
-  | { ok: true; ranges: Record<string, Record<string, number>>; notes?: string[] } // position → (class → weight)
+  | { ok: true; ranges: Record<string, Record<string, number>>; notes?: string[]; /** sizes moved off the one played ("CO's 2.6bb read as 2.5bb") */ snaps?: string[] } // position → (class → weight)
   | { ok: false; reason: string };
 
 /**
@@ -78,6 +78,12 @@ export interface ReconstructOpts {
    * does a BB raise to 10 look like"). Forced folds have no node and no step.
    */
   onStep?: (step: WalkStep) => void;
+  /**
+   * The furthest (log distance) a size may be moved onto the tree (2026-09-25, round 2). Past it the chart has no
+   * node at the size played and the walk refuses, named ("size past τ"). The 6-max range walks pass SNAP_TAU — the
+   * bound the preflop answer itself refuses at. Unset: any distance, as before.
+   */
+  maxSnap?: number;
 }
 
 /** One decision of the walk: the node read, who acted, what they took, and their range either side of it. */
@@ -142,6 +148,7 @@ async function reconstructFlopRangesInner(
   let out: string[] = []; // snapped prefix so far (the TREE path; after a borrow it has one caller fewer than reality)
   const walkedPos: string[] = []; // acting position of each token in `out`
   const notes: string[] = [];
+  const snaps: string[] = [];
 
   for (let k = 0; k < tokens.length; k++) {
     let node = await getNode(out.join("-"));
@@ -179,6 +186,14 @@ async function reconstructFlopRangesInner(
     let offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
     if (tok !== "F" && !offered.includes(tok)) {
       const s = snapToken(tok, node.actions.map((a) => a.action));
+      // A SIZE WITH NO NODE (2026-09-25, round 2, harness seed 50 [jam]): past `maxSnap` the chart has no node at the
+      // size played — the preflop answer refuses the same line ("size past τ … the exact tree answers"), so a range
+      // walk conditioned on the neighbour's node was a silent wrong input. Refused, named; the caller moves on.
+      if (s.snapped && opts.maxSnap != null && (s.logDist ?? 0) > opts.maxSnap && offered.includes(s.token)) {
+        return { ok: false, reason: `size past τ: ${pos}'s ${s.from}bb is ${(s.logDist ?? 0).toFixed(2)} log-distance from the chart's nearest ${s.token} at "${out.join("-") || "root"}" — no node at that size` };
+      }
+      // …and every size moved off the one played is said (seed 5 [nl5-rounding]: a 2.6 open read as 2.5, silently)
+      if (s.snapped && offered.includes(s.token) && s.from != null && s.to != null) snaps.push(`${pos}'s ${s.from}bb read as ${s.to}bb`);
       // accept both a genuine snap and a same-size canonicalization (R2.52 → R2.5)
       if (offered.includes(s.token)) tok = s.token;
       else if (tok === "C" && opts.borrowCaller && !tokens.slice(k + 1).some((t) => /^R/i.test(t))) {
@@ -245,7 +260,7 @@ async function reconstructFlopRangesInner(
   if (opts.partial) {
     const partial: Record<string, Record<string, number>> = {};
     for (const p of flopPositions) partial[p] = Object.fromEntries(ranges.get(p) ?? new Map());
-    return { ok: true, ranges: partial, ...(notes.length ? { notes } : {}) };
+    return { ok: true, ranges: partial, ...(notes.length ? { notes } : {}), ...(snaps.length ? { snaps } : {}) };
   }
   const maxPlayers = opts.maxPlayers ?? 2;
   if (flopPositions.length < 2 || flopPositions.length > maxPlayers) {
@@ -258,7 +273,7 @@ async function reconstructFlopRangesInner(
     if (!m.size) return { ok: false, reason: `reconstructed range for ${p} is empty (uncrawled subtree?)` };
     outRanges[p] = Object.fromEntries(m);
   }
-  return { ok: true, ranges: outRanges, ...(notes.length ? { notes } : {}) };
+  return { ok: true, ranges: outRanges, ...(notes.length ? { notes } : {}), ...(snaps.length ? { snaps } : {}) };
 }
 
 /** class→weight map → solver range spec ("AA,AKs:0.8,…"); weight ≥0.9995 emitted bare. */
