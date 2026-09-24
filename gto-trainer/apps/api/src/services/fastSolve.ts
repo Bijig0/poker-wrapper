@@ -135,6 +135,8 @@ export type FastSolveResult =
         streets?: string[][];
         streetSeats?: (string | null)[][];
         trees?: { kind: string | null; heroSeat: string; seats: { pos: string; range: number[] }[]; streets: string[][] }[];
+        /** the rake the trees are solved with (the cap follows the players DEALT) */
+        rake?: { pct_of_pot: number; cap_in_chips: number } | null;
       };
     }
   | {
@@ -1041,8 +1043,16 @@ async function solvePostflopViaChain(
   // (an all-in CALL is tokenized C, not RAI — buildSolutionUrl.allInCalls — so only the raising all-ins size a RAI)
   const allInCallsPre = allInCalls(hand.actions);
   const allInTo = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in" && !allInCallsPre.has(a)).map((a) => Number(a.amount));
+  // …and each all-in CALL (tokenized C) at what the caller had, keyed by the tree's seat name (heads-up: BTN is SB)
+  const allInCallBySeat: Record<string, number> = {};
+  for (const a of hand.actions) {
+    if (a.street !== "preflop" || !allInCallsPre.has(a)) continue;
+    const p = String(hand.positions?.[a.hero ? hand.heroSeatId : a.seatId] ?? "").toUpperCase();
+    if (p) allInCallBySeat[isHu && p === "BTN" ? "SB" : p] = Number(a.amount);
+  }
   const pps = preflopPotStack(preTokens, depth, seatOrder,
-    allInTo.length === preTokens.filter((t) => t === "RAI").length && allInTo.every((x) => Number.isFinite(x) && x > 0) ? allInTo : undefined);
+    allInTo.length === preTokens.filter((t) => t === "RAI").length && allInTo.every((x) => Number.isFinite(x) && x > 0) ? allInTo : undefined,
+    Object.keys(allInCallBySeat).length ? allInCallBySeat : undefined);
   // THE ANTES ARE IN THE POT (2026-09-22). preflopPotStack counts blinds and bets only; a CoinPoker HU hand also
   // put 2 x ante of dead money in. Left out, the flop solve plays a 5.4bb pot as 5bb. The STACK needs nothing:
   // the depth handed in (solvePostflopHuStrategy) is already the stack after the ante.
@@ -1279,7 +1289,7 @@ async function solvePostflopViaChain(
         notInRange: heroW != null && !(heroW > 0) ? true : undefined,
         dryRun: {
           flopPot, flopStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats],
-          ranges: recon.ok ? recon.ranges : undefined, preTokens: [...preTokens], streets, streetSeats,
+          ranges: recon.ok ? recon.ranges : undefined, preTokens: [...preTokens], streets, streetSeats, rake: rake6,
           trees: walkables.map((w) => {
             const s = w.seatSpec;
             const seats = [{ pos: s.oopPos, range: s.oopRange }, ...(s.midPos && s.midRange ? [{ pos: s.midPos, range: s.midRange }] : []), { pos: s.ipPos, range: s.ipRange }];

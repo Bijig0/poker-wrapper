@@ -47,6 +47,7 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 1130, ops: ["thin-table"], cls: "range oracle: the same, a villain's range on the fitted line (range-mismatch)" },
   { seed: 2328, ops: ["jam"], cls: "range oracle: an all-in CALL for 25 read as the chart's jam to 30 (preflop-node-mismatch)" },
   { seed: 2807, ops: ["hero-deviates"], cls: "range oracle: hero's 92s at 1.6e-6 written as 0 in the tree's array (hero-combo-zero)" },
+  { seed: 86, ops: [], cls: "an all-in CALL for less (C since the all-in-call fix) counted at the full price in the flop pot" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

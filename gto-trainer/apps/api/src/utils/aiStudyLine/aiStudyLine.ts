@@ -44,6 +44,12 @@ export function preflopPotStack(
    * raises the level to what it is (and an all-in for less than the level is a call for less).
    */
   allInTo?: number[],
+  /**
+   * Seats that CALLED all-in, by the tree's seat name, with the round total they had (2026-09-25, round 2, harness
+   * seed 86): an all-in that does not raise the price is tokenized "C" (buildSolutionUrl.allInCalls), so the call
+   * that puts a seat all-in is capped at what he had and takes him out of the rotation, as a RAI does.
+   */
+  allInCallBySeat?: Record<string, number>,
 ): { pot: number; stack: number } {
   const committed: Record<string, number> = { SB: 0.5, BB: 1 };
   let active: string[] = [...seats];
@@ -58,7 +64,15 @@ export function preflopPotStack(
       active = active.filter((s) => s !== seat); // pointer now indexes the next seat
       continue;
     }
-    if (tok === "C") committed[seat] = level;
+    if (tok === "C") {
+      const cap = allInCallBySeat?.[seat];
+      if (cap != null && Number.isFinite(cap) && cap <= level + 0.005) {
+        committed[seat] = Math.min(cap, level);
+        active = active.filter((s) => s !== seat);   // all-in: never acts again (the pointer now indexes the next seat)
+        continue;
+      }
+      committed[seat] = level;
+    }
     else if (tok === "RAI") {
       const to = allInTo?.[rai++];
       if (to != null && Number.isFinite(to) && to < depth) { committed[seat] = to; level = Math.max(level, to); }

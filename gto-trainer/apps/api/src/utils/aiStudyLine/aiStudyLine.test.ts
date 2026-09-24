@@ -60,6 +60,16 @@ describe("preflopPotStack", () => {
     expect(stack).toBe(97);
     expect(pot).toBeCloseTo(3 + 2.5 + 3 + 0.5 + 1);
   });
+  // round 2 (harness seed 86, baseline): an all-in CALL is tokenized "C" since the all-in-call fix (buildSolutionUrl
+  // allInCalls) — UTG 4-bets to 97.5, the 95bb BTN calls all-in for 95, hero calls. Read as a plain C, the BTN put in
+  // 97.5 and the flop pot was 293 where the table's is 290.5; he also stayed in the rotation as if he could act again
+  it("an all-in CALL token (C) is capped at the caller's all-in amount and leaves the rotation", () => {
+    const line = ["R3.5", "F", "F", "R14.5", "F", "R39", "R97.5", "C", "C"];
+    expect(preflopPotStack(line, 100).pot).toBe(293);                     // without the caps: the old reading
+    const { pot, stack } = preflopPotStack(line, 100, undefined, undefined, { BTN: 95 });
+    expect(pot).toBe(290.5);
+    expect(stack).toBe(2.5);
+  });
   it("a deep all-in (at or past the depth) keeps the old reading", () => {
     expect(preflopPotStack(["F", "F", "F", "RAI", "F", "C"], 100, undefined, [175]).stack).toBe(0);
   });
