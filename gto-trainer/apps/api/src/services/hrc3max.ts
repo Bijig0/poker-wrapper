@@ -283,6 +283,11 @@ function chooseChart(hand: ParsedHand, heroPos: string | null): ChartChoice & { 
 export interface HrcNode {
   pos: string | null;
   terminal: boolean;
+  /** A terminal the CHART ends while a seat is still to act (2026-09-25, hand 4920396764) — never a real close.
+   *  "reach": HRC left the subtree out under its reach threshold; "cut": the solved tree's own caps stop a line
+   *  real play reaches. `terminal` stays true on these (a walk that meets one followed only by folds has reached
+   *  the flop). Set by analysis/pipeline/solve/preflop_closure.py via the converter and the bake. */
+  pruned?: "reach" | "cut";
   actions: { action: string; token: string | null }[];
   cells: { hand: string; actions: Record<string, number> }[];
 }
@@ -324,6 +329,7 @@ export const fetchNode: (source: string, line: string) => Promise<HrcNode | null
         ? {
             pos: body.pos ?? null,
             terminal: body.terminal === true,
+            ...(body.pruned === true ? { pruned: body.prunedKind === "reach" ? "reach" as const : "cut" as const } : {}),
             actions: (body.actions ?? []).map((a: any) => ({
               action: String(a.action ?? ""),
               token: a.token != null ? String(a.token) : null,
@@ -382,6 +388,13 @@ const tokSize = (t: string | null): number | null => {
   return Number.isFinite(v) && v > 0 ? v : null;
 };
 
+/** The suffix a terminal refusal carries when the chart, not the betting, ended the line — the reason text
+ *  before it is unchanged so answerLog's needles keep matching. */
+export const prunedNote = (node: HrcNode): string =>
+  node.pruned === "reach" ? " (pruned: HRC never exported this branch — the chart plays it ~0%, a seat is still to act)"
+  : node.pruned === "cut" ? " (cut: the solved tree stops here although a seat is still to act)"
+  : "";
+
 /**
  * Walk an intended token line through one chart. Mirrors walkPreflopLine's
  * semantics (phantom-X drop, off-tree size snap, terminal checks) but snaps
@@ -425,7 +438,7 @@ export async function walk3max(intended: string[], getNode: GetNode, opts: WalkO
       }
     }
     if (!node) return { ok: false, reason: "node not in chart", missingAt: line };
-    if (node.terminal) return { ok: false, reason: "line continues past a terminal", missingAt: line };
+    if (node.terminal) return { ok: false, reason: `line continues past a terminal${prunedNote(node)}`, missingAt: line };
 
     let tok = intended[i]!;
     const offered = node.actions.map((a) => a.token).filter((t): t is string => t != null);
@@ -502,7 +515,7 @@ export async function walk3max(intended: string[], getNode: GetNode, opts: WalkO
   }
   if (!node) return { ok: false, reason: "hero node not in chart", missingAt: line };
   if (node.terminal || !node.pos) {
-    return { ok: false, reason: "line ends on a terminal — no pending decision", missingAt: line };
+    return { ok: false, reason: `line ends on a terminal — no pending decision${prunedNote(node)}`, missingAt: line };
   }
   return { ok: true, tokens: out, repaired, node };
 }

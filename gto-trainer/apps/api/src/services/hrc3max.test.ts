@@ -211,6 +211,20 @@ describe("walk3max", () => {
     if (!w.ok) expect(w.reason).toContain("terminal");
   });
 
+  // 2026-09-25 (A9dd): a terminal the CHART ends says so, after the unchanged phrase answerLog's needles match on
+  test("a pruned terminal keeps the refusal phrase and names the gap", async () => {
+    const pruned = async (line: string) =>
+      line === "R2.5-C" ? { pos: "SB", terminal: true, pruned: "reach" as const, actions: [], cells: [] } : stub(line);
+    const past = await walk3max(["R2.5", "C", "F"], pruned);
+    expect(past.ok).toBe(false);
+    if (!past.ok) expect(past.reason).toStartWith("line continues past a terminal (pruned: HRC never exported");
+    const at = await walk3max(["R2.5", "C"], pruned);
+    expect(at.ok).toBe(false);
+    if (!at.ok) expect(at.reason).toStartWith("line ends on a terminal — no pending decision (pruned:");
+    const plain = await walk3max(["R2.5", "F", "F", "C"], stub);
+    if (!plain.ok) expect(plain.reason).toBe("line continues past a terminal");
+  });
+
   test("a dead server is unreachable, not a chart miss", async () => {
     const w = await walk3max(["R2.5"], async () => "unreachable");
     expect(w.ok).toBe(false);

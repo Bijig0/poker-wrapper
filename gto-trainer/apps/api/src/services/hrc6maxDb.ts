@@ -39,7 +39,7 @@ const dbPath = (): string =>
   process.env.HRC6MAX_DB ?? join(import.meta.dir, "..", "..", "data", "hrc6max-preflop.sqlite");
 const PREFIX = "ign200_6max_";
 
-type Row = { pos: string | null; terminal: number; actions: string; cells: Uint8Array };
+type Row = { pos: string | null; terminal: number; actions: string; cells: Uint8Array; pruned?: number };
 
 class Hrc6MaxDb {
   private db: Database | null = null;
@@ -60,7 +60,9 @@ class Hrc6MaxDb {
       for (const r of db.query("SELECT source FROM trees").all() as { source: string }[]) {
         this.baked.add(r.source);
       }
-      this.nodeStmt = db.query("SELECT pos, terminal, actions, cells FROM nodes WHERE source = ? AND line = ?");
+      // `pruned` (0 close / 1 reach / 2 cut) arrived 2026-09-25; a bake from before it has no such column.
+      const hasPruned = (db.query("PRAGMA table_info(nodes)").all() as { name: string }[]).some((c) => c.name === "pruned");
+      this.nodeStmt = db.query(`SELECT pos, terminal, actions, cells${hasPruned ? ", pruned" : ""} FROM nodes WHERE source = ? AND line = ?`);
       this.db = db;
     } catch {
       this.db = null;            // not baked on this machine — :8777 answers everything
@@ -108,6 +110,7 @@ class Hrc6MaxDb {
     return {
       pos: row.pos,
       terminal: row.terminal === 1,
+      ...(row.pruned === 1 ? { pruned: "reach" as const } : row.pruned === 2 ? { pruned: "cut" as const } : {}),
       actions: JSON.parse(row.actions) as HrcNode["actions"],
       cells: JSON.parse(inflateSync(row.cells).toString("utf8")) as HrcNode["cells"],
     };

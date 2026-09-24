@@ -25,7 +25,7 @@ import { gunzipSync } from "node:zlib";
 import { chartFor6max, openFromTokens, type Seat6 } from "../services/hrc6max";
 import { walk3max, type GetNode, type HrcNode } from "../services/hrc3max";
 
-const HH_DIR = "C:\\Users\\Brady\\Ignition Casino Poker\\Hand History";
+export const HH_DIR = "C:\\Users\\Brady\\Ignition Casino Poker\\Hand History";
 const SOLUTIONS = "C:\\Users\\Brady\\poker\\analysis\\pipeline\\solve\\exploit_ui\\solutions";
 const PLAN_DIR = "C:\\Users\\Brady\\poker-zenbook\\hrc-api\\solves\\sixmax_grid";
 const ORDER_6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"] as const;
@@ -34,16 +34,20 @@ const arg = (k: string, d?: string) => { const i = Bun.argv.indexOf(k); return i
 
 // ---------------------------------------------------------------- hand histories
 
-interface RawAction { label: string; kind: "fold" | "check" | "call" | "raise" | "allin"; toBB: number | null }
-interface RawSeat { seatNo: number; label: string; hero: boolean; stackBB: number; cards: string[] }
-interface RawHand { id: string; stake: string; file: string; seats: RawSeat[]; actions: RawAction[]; posted: boolean }
+export interface RawAction { label: string; kind: "fold" | "check" | "call" | "raise" | "allin"; toBB: number | null }
+export interface RawSeat { seatNo: number; label: string; hero: boolean; stackBB: number; cards: string[] }
+export interface RawHand {
+  id: string; stake: string; file: string; seats: RawSeat[]; actions: RawAction[]; posted: boolean;
+  /** a flop was dealt (the preflop action closed with two or more players) */
+  sawFlop: boolean;
+}
 
 function bbOf(name: string): { bb: number; label: string } | null {
   const m = name.match(/ - \$([\d.]+)-\$([\d.]+) - /);
   return m ? { bb: Number(m[2]), label: `$${m[1]}-$${m[2]}` } : null;
 }
 
-function parseFile(path: string, file: string): RawHand[] {
+export function parseFile(path: string, file: string): RawHand[] {
   const stake = bbOf(file);
   if (!stake) return [];
   const out: RawHand[] = [];
@@ -79,7 +83,7 @@ function parseFile(path: string, file: string): RawHand[] {
     // neither blind acts last - our trees hold exactly one big blind, so the hand cannot be expressed at all.
     // These surfaced as a preflop check where no seat can check, which reads like a parse failure and is not one.
     const posted = /: Posts (?:dead )?chip /.test(pre);
-    if (seats.length >= 2) out.push({ id, stake: stake.label, file, seats, actions, posted });
+    if (seats.length >= 2) out.push({ id, stake: stake.label, file, seats, actions, posted, sawFlop: /^\*\*\* FLOP \*\*\*/m.test(chunk) });
   }
   return out;
 }
@@ -90,7 +94,7 @@ function parseFile(path: string, file: string): RawHand[] {
  * then the hijack, then UTG. Same convention as the live path, where five-handed is the six-dealt tree with UTG
  * folded rather than a different game.
  */
-function seatMap(labels: string[]): { map: Record<string, Seat6>; outside: string[]; why?: string }
+export function seatMap(labels: string[]): { map: Record<string, Seat6>; outside: string[]; why?: string }
   | { map: null; outside: string[]; why: string } {
   if (!labels.includes("Dealer")) return { map: null, outside: [], why: "no button seat in the hand" };
   if (!labels.includes("Small Blind") || !labels.includes("Big Blind")) {
@@ -109,7 +113,7 @@ function seatMap(labels: string[]): { map: Record<string, Seat6>; outside: strin
 }
 
 const RANK = "23456789TJQKA";
-function handClass(cards: string[]): string | null {
+export function handClass(cards: string[]): string | null {
   if (cards.length !== 2) return null;
   const r1 = cards[0]![0]!.toUpperCase(), r2 = cards[1]![0]!.toUpperCase();
   if (RANK.indexOf(r1) < 0 || RANK.indexOf(r2) < 0) return null;
@@ -118,7 +122,7 @@ function handClass(cards: string[]): string | null {
   return hi + lo + (cards[0]![1]!.toLowerCase() === cards[1]![1]!.toLowerCase() ? "s" : "o");
 }
 
-const tokenOf = (a: RawAction): string => {
+export const tokenOf = (a: RawAction): string => {
   if (a.kind === "fold") return "F";
   if (a.kind === "check") return "X";
   if (a.kind === "call") return "C";
@@ -139,17 +143,24 @@ interface Decision {
   heroStack: number;
 }
 
-function decisionsFor(h: RawHand): { decisions: Decision[]; skipped: string | null } {
-  if (h.posted) return { decisions: [], skipped: "a player posted in mid-orbit - two big blinds, no tree for it" };
+/** A hand as the live path sees it: the six-seat token line, who owns each token, and the seats dealt in. */
+export interface HandLine {
+  map: Record<string, Seat6>; dealt: RawSeat[];
+  tokens: string[]; owner: (Seat6 | null)[]; real: boolean[];
+  stacks: Record<number, number>; positions: Record<number, string>;
+}
+
+export function lineOf(h: RawHand): { line: HandLine; skipped: null } | { line: null; skipped: string } {
+  if (h.posted) return { line: null, skipped: "a player posted in mid-orbit - two big blinds, no tree for it" };
   const sm = seatMap(h.seats.map((s) => s.label));
-  if (!sm.map) return { decisions: [], skipped: sm.why };
+  if (!sm.map) return { line: null, skipped: sm.why };
   const map = sm.map;
   const dealt = h.seats.filter((s) => map[s.label]);
-  if (dealt.length < 2) return { decisions: [], skipped: "fewer than two seats dealt" };
+  if (dealt.length < 2) return { line: null, skipped: "fewer than two seats dealt" };
   // a seat we are not modelling that only folded costs nothing; one that put money in cannot be expressed
   const played = sm.outside.filter((l) => h.actions.some((a) => a.label === l && a.kind !== "fold"));
   if (played.length) {
-    return { decisions: [], skipped: `${h.seats.length}-handed and a seat outside the six played` };
+    return { line: null, skipped: `${h.seats.length}-handed and a seat outside the six played` };
   }
 
   // the token walk the live path builds: one token per seat for the opening orbit (F where a seat never acted),
@@ -169,6 +180,13 @@ function decisionsFor(h: RawHand): { decisions: Decision[]; skipped: string | nu
 
   const stacks: Record<number, number> = {}, positions: Record<number, string> = {};
   for (const s of dealt) { stacks[s.seatNo] = s.stackBB; positions[s.seatNo] = map[s.label]!; }
+  return { line: { map, dealt, tokens, owner, real, stacks, positions }, skipped: null };
+}
+
+function decisionsFor(h: RawHand): { decisions: Decision[]; skipped: string | null } {
+  const got = lineOf(h);
+  if (!got.line) return { decisions: [], skipped: got.skipped };
+  const { map, dealt, tokens, owner, real, stacks, positions } = got.line;
 
   const stackOf: Partial<Record<Seat6, number>> = {};
   for (const d of dealt) stackOf[map[d.label]!] = d.stackBB;
@@ -471,4 +489,4 @@ async function main() {
   console.log(`\nwrote ${outPath}`);
 }
 
-await main();
+if (import.meta.main) await main();

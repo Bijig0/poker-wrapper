@@ -96,4 +96,26 @@ describe("hrc6maxDb", () => {
     httpReply = "unreachable";
     expect(await fetchNode6max("ign200_6max_D150_o3", "")).toBe("unreachable");
   });
+
+  // Runs last: it adds the column the 2026-09-25 bake carries. The fixture above is a bake from before it, and the
+  // first test proves such a bake still reads (no `pruned` key at all).
+  it("reads the pruned flag of a bake that carries it (A9dd: the SB's ~0% flat is not the flop)", async () => {
+    const { hrc6maxDb } = await load();
+    hrc6maxDb.reload();
+    const db = new Database(dbPath);
+    db.exec("ALTER TABLE nodes ADD COLUMN pruned INTEGER NOT NULL DEFAULT 0");
+    const empty = deflateSync(Buffer.from("[]"));
+    const ins = db.query("INSERT INTO nodes (source, line, pos, terminal, actions, cells, pruned) VALUES (?,?,?,?,?,?,?)");
+    ins.run("ign200_6max_D100_o2_5", "F-F-F-R2.5-C", "SB", 1, "[]", empty, 1);
+    ins.run("ign200_6max_D100_o2_5", "R2.5-C-C-C", "BTN", 1, "[]", empty, 2);
+    ins.run("ign200_6max_D100_o2_5", "F-F-F-R2.5-F-C", "BB", 1, "[]", empty, 0);
+    db.close();
+    hrc6maxDb.reload();
+    expect(hrc6maxDb.node("ign200_6max_D100_o2_5", "F-F-F-R2.5-C")).toMatchObject({ terminal: true, pruned: "reach" });
+    expect(hrc6maxDb.node("ign200_6max_D100_o2_5", "R2.5-C-C-C")).toMatchObject({ terminal: true, pruned: "cut" });
+    const close = hrc6maxDb.node("ign200_6max_D100_o2_5", "F-F-F-R2.5-F-C");
+    expect(close).toMatchObject({ terminal: true });
+    expect(close && "pruned" in close).toBe(false);
+    expect(hrc6maxDb.node("ign200_6max_D100_o2_5", "")).toEqual({ pos: "UTG", terminal: false, actions: ACTIONS, cells: CELLS });
+  });
 });
