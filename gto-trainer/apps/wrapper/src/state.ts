@@ -60,6 +60,7 @@ export function freshStudy(): Record<string, any> {
     autoHeld: null,
     pendingExec: null,
     autoDelay: "instant", autoDue: null,
+    foldNoAnswer: false, noAnswerTurn: null, lastNoAnswerFold: null,
     timeBank: true, timeBankAt: 0.0, lastTimeBank: null,
     topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     topUpDue: null, topUpTrigger: null,
