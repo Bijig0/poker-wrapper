@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { gtowApi } from "./gtowApi";
+import { gtowApi, DEFAULT_TREE_RAKE } from "./gtowApi";
 import { actorsOf, checkpointsFor, forgetCheckpoints, solveAiChain, StreetState, type AiChainSpec } from "./aiChain";
 
 describe("StreetState", () => {
@@ -582,5 +582,57 @@ describe("solveAiChain accounting (2026-09-24)", () => {
     expect(turn!.nodeSrc!.fetched).toBe(1);
     expect(r.trace.nodes.map((x) => x.src)).toEqual(["cache", "fetched", "fetched"]);
     expect(r.solves).toBe(1);
+  });
+});
+
+/**
+ * WHAT GTO WIZARD WAS SENT (2026-09-24, Brady: "what the inputs sent in was … e.g. what the rake cap you set was").
+ * Every street of the trace keeps the tree request as sent (gtowApi.treeRequestSummary: the body the account
+ * received, each range replaced by its size) and whose account solved it; the hand page reads both.
+ */
+describe("the trace records each street's tree request", () => {
+  const hu: Omit<AiChainSpec, "streets"> = {
+    oopPos: "BB", ipPos: "SB", oopRange: full(), ipRange: half(),
+    flopPot: 20, flopStack: 114.4, board: "3c4s7c", heroSeat: "ip", heroComboIdx: null,
+  };
+  const huNodes = { "sol-FLOP|": { toAct: "BB", acts: [X, B(8)] }, "sol-FLOP|X": { toAct: "SB", acts: [X, B(8)] } };
+
+  it("rake and cap, pot, stack, the size grid, ranges as their size — and the account", async () => {
+    const s = script(huNodes);
+    const api = gtowApi as any, ensure = api.ensureCustomSolution;
+    api.ensureCustomSolution = async (input: any) => ({ ...(await ensure(input)), session: "secondary" });
+    restore = () => { api.ensureCustomSolution = ensure; s.restore(); };
+    const rake = { pct_of_pot: 5, cap_in_chips: 0.9, preflop_rake_type: null };
+    const r = await solveAiChain({ ...hu, streets: [["X"]], rake });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const st = r.trace.streets[0]!;
+    expect(st.account).toBe("secondary");
+    const sent = st.sent as any;
+    expect(sent.starting_street).toBe("FLOP");
+    expect(sent.pot).toBe(20);
+    expect(sent.rake).toEqual(rake);
+    expect(sent.players.map((p: any) => [p.position, p.display_position, p.stack])).toEqual([["OOP", "BB", 114.4], ["IP", "SB", 114.4]]);
+    // a range travels as its size, never 1,326 numbers (those are in rangesIn already)
+    for (const p of sent.players) {
+      expect(Array.isArray(p.range)).toBe(false);
+      expect(p.range.combos).toBeGreaterThan(0);
+      expect(p.range.combos).toBeLessThanOrEqual(1326);
+      expect(p.range.weight).toBeGreaterThan(0);
+    }
+    expect(sent.players[1].range.weight).toBeLessThan(sent.players[0].range.weight);
+    expect(sent.bet_sizes.street_bet_sizes.map((x: any) => [x.street, x.position_bet_sizes[0].type]))
+      .toEqual([["FLOP", "AUTOMATIC"], ["TURN", "AUTOMATIC"], ["RIVER", "AUTOMATIC"]]);
+  });
+
+  it("a spec without a rake records the default the builder sent, not nothing", async () => {
+    const s = script(huNodes);
+    restore = s.restore;
+    const r = await solveAiChain({ ...hu, streets: [["X"]] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((r.trace.streets[0]!.sent as any).rake).toEqual(DEFAULT_TREE_RAKE);
+    // the stub returns no session: the trace says so rather than inventing one
+    expect(r.trace.streets[0]!.account ?? null).toBeNull();
   });
 });

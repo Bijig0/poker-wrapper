@@ -39,6 +39,11 @@ export interface CatalogEntry {
   /** What a human reads — generated from the dims. See describeChart. */
   name: string;
   format?: string;
+  /** What the sidecar states about the solve's money and menu (sidecarFacts): the rake and its cap, the ante per
+   *  player, the size menu — so a row says what the chart was solved WITH, not only its depth (2026-09-24). */
+  rake?: { pct: number; capBb: number; nfnd: boolean | null };
+  anteBb?: number;
+  sizes?: string[];
   /** Rake model site key (ign200, cp100, …) when the id carries one. */
   site?: string;
   players?: number;
@@ -84,7 +89,7 @@ export interface Catalog {
 }
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..", "..");
-const SOLUTIONS_DIR =
+export const SOLUTIONS_DIR =
   process.env.CHART_SOLUTIONS_DIR ??
   join(REPO_ROOT, "analysis", "pipeline", "solve", "exploit_ui", "solutions");
 const GTOW_DB = join(import.meta.dir, "..", "..", "data", "preflop-db.sqlite");
@@ -281,6 +286,52 @@ export function describeChart(e: Partial<CatalogEntry> & { id: string; label?: s
   return bits.length ? bits.join(" · ") : (e.label ?? e.id);
 }
 
+/** A sidecar's text minus its encoding damage: a quarter of them went through a double UTF-8 encode ("Â·"), a lossy
+ *  one ("A\uFFFD") or a doubled JSON escape (a literal backslash-u00B7), and all three are the " · " separator the
+ *  solver run wrote. */
+export const cleanSidecarText = (s: string): string =>
+  s.replace(/\u00C2\u00B7/g, "·").replace(/A\uFFFD/g, "·").replace(/\uFFFD/g, "·").replace(/\\u00[bB]7/g, "·").replace(/\s+/g, " ").trim();
+
+/** What a sidecar STATES about its solve, read in one place (the catalog and services/chartSetup.ts). Nothing is
+ *  defaulted here: a fact the sidecar does not carry comes back null / empty. */
+export interface SidecarFacts {
+  format: string | null;
+  label: string | null;
+  /** the run's own seat line ("UTG/HJ/CO/BTN/SB/BB 100/100/100/100/100/80bb"), in its seat order */
+  seatStacks: { pos: string; stackBb: number }[] | null;
+  rake: { pct: number; capBb: number; nfnd: boolean | null } | null;
+  /** per player, bb */
+  anteBb: number | null;
+  sbBb: number | null;
+  /** the size-menu parts of the format line: "2.5x open", "3-bets 7.5bb, 9bb, 10.5bb, 12.5bb", "limps on" */
+  sizes: string[];
+}
+export function sidecarFacts(meta: any): SidecarFacts {
+  const format = meta?.format != null ? cleanSidecarText(String(meta.format)) : null;
+  const label = meta?.label != null ? cleanSidecarText(String(meta.label)) : null;
+  let seatStacks: SidecarFacts["seatStacks"] = null;
+  const sm = format?.match(/\b((?:UTG|HJ|CO|BTN|SB|BB)(?:\/(?:UTG|HJ|CO|BTN|SB|BB))+) ((?:\d+(?:\.\d+)?\/)+\d+(?:\.\d+)?)bb\b/);
+  if (sm) {
+    const ps = sm[1]!.split("/"), vs = sm[2]!.split("/").map(Number);
+    if (ps.length === vs.length && vs.every((v) => Number.isFinite(v))) seatStacks = ps.map((pos, i) => ({ pos, stackBb: vs[i]! }));
+  }
+  const r = meta?.rake;
+  let rake: SidecarFacts["rake"] = r && Number.isFinite(Number(r.pct_of_pot)) && Number.isFinite(Number(r.cap_bb))
+    ? { pct: Number(r.pct_of_pot), capBb: Number(r.cap_bb), nfnd: typeof r.nfnd === "boolean" ? r.nfnd : null }
+    : null;
+  if (!rake && format) {
+    // "(5%, cap 2.0bb NFND)" · "(5%, $2 cap = 1.0bb)" · "5% cap 0.5bb NFND"
+    const m = format.match(/(\d+(?:\.\d+)?)%,? (?:\$\d+(?:\.\d+)? )?cap(?: =)? (\d+(?:\.\d+)?)bb/);
+    if (m) rake = { pct: Number(m[1]), capBb: Number(m[2]), nfnd: /\bNFND\b/i.test(format) ? true : null };
+  }
+  const anteM = format?.match(/\bante (\d+(?:\.\d+)?)bb/);
+  const anteBb = meta?.ante_bb != null && Number.isFinite(Number(meta.ante_bb)) ? Number(meta.ante_bb) : anteM ? Number(anteM[1]) : null;
+  const sbM = format?.match(/\bsb (\d+(?:\.\d+)?)bb\b/);
+  const sizes = (format ? format.split(" · ") : []).map((p) => p.trim())
+    .filter((p) => p && !/%/.test(p) && /\bopens?\b|\b\d-bets?\b|\b\dbet\b|\brich\b|\blimps?\b|\biso\b|\bsqueeze\b/i.test(p));
+  return { format, label, seatStacks, rake, anteBb, sbBb: sbM ? Number(sbM[1]) : null, sizes };
+}
+
 function hrcEntries(): CatalogEntry[] {
   if (!existsSync(SOLUTIONS_DIR)) return [];
   const out: CatalogEntry[] = [];
@@ -295,13 +346,17 @@ function hrcEntries(): CatalogEntry[] {
     }
     const id = String(meta.id ?? base);
     const dims = parseHrcId(id);
+    const facts = sidecarFacts(meta);
     out.push({
       id,
       source: "hrc",
       family: dims.family ?? "other",
-      label: String(meta.label ?? id),
-      name: describeChart({ ...dims, id, label: String(meta.label ?? id) }),
-      format: meta.format ? String(meta.format) : undefined,
+      label: facts.label ?? id,
+      name: describeChart({ ...dims, id, label: facts.label ?? id }),
+      format: facts.format ?? undefined,
+      ...(facts.rake ? { rake: facts.rake } : {}),
+      ...(facts.anteBb != null ? { anteBb: facts.anteBb } : {}),
+      ...(facts.sizes.length ? { sizes: facts.sizes } : {}),
       ...(dims.site ? { site: dims.site } : {}),
       players: dims.players ?? (Array.isArray(meta.seats) ? meta.seats.length : undefined),
       ...(Array.isArray(meta.seats) ? { seats: meta.seats as string[] } : {}),
@@ -364,6 +419,9 @@ function gtowEntries(): CatalogEntry[] {
       ...(stake ? { stake } : {}),
       shape: "even" as const,
       format: "GTOW crawl",
+      // the library's own structure (NL500: 5%, cap 0.6bb — GTO Wizard's, not the table's), no ante
+      rake: { pct: 5, capBb: 0.6, nfnd: null },
+      anteBb: 0,
       ...(players ? { players } : {}),
       ...(set ? { seats: set.seats } : {}),
       depth: r.depth,

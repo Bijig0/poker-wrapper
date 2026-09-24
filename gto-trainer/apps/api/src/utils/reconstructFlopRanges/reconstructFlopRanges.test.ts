@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { reconstructFlopRanges, classWeightsToSpec, type RawNode } from "./reconstructFlopRanges";
+import { reconstructFlopRanges, classWeightsToSpec, type RawNode, type WalkStep } from "./reconstructFlopRanges";
 
 // UTG/HJ fold, CO opens 2.5, BTN/SB fold, BB calls → flop CO (opener) vs BB (caller).
 const nodes: Record<string, RawNode> = {
@@ -40,6 +40,32 @@ describe("reconstructFlopRanges", () => {
   it("snaps an off-tree open (2.6 → 2.5)", async () => {
     const r = await reconstructFlopRanges("F-F-R2.6-F-F-C".split("-"), getNode);
     expect(r.ok).toBe(true);
+  });
+
+  it("partial: stops at a preflop decision and returns every seat that has acted and not folded", async () => {
+    // BB to act facing the CO open: only CO has a range so far (the folds are dropped, BB has not acted)
+    const r = await reconstructFlopRanges("F-F-R2.5-F-F".split("-"), getNode, { partial: true });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(Object.keys(r.ranges)).toEqual(["CO"]);
+    expect(r.ranges["CO"]!["AKs"]).toBeCloseTo(0.8);
+    // the full walk still refuses a one-player "flop"
+    expect((await reconstructFlopRanges("F-F-R2.5-F-F".split("-"), getNode)).ok).toBe(false);
+  });
+
+  it("onStep: reports every decision, folds included, with the seat's range either side of it", async () => {
+    const steps: WalkStep[] = [];
+    const r = await reconstructFlopRanges("F-F-R2.6-F-F-C".split("-"), getNode, { onStep: (s) => steps.push(s) });
+    expect(r.ok).toBe(true);
+    expect(steps.map((s) => `${s.pos}:${s.token}`)).toEqual(["UTG:F", "HJ:F", "CO:R2.5", "BTN:F", "SB:F", "BB:C"]);
+    const open = steps[2]!;
+    expect(open.rawToken).toBe("R2.6");                 // snapped to the tree's size, the raw size kept
+    expect(open.line).toBe("F-F");
+    expect(open.label).toBe("Raise 2.5");
+    expect(open.rangeIn).toBeNull();                    // CO's first decision: every hand
+    expect(open.rangeOut!["AKs"]).toBeCloseTo(0.8);
+    expect(steps[0]!.rangeOut).toBeNull();              // a fold leaves no range
+    expect(steps[5]!.rangeOut!["T9s"]).toBeCloseTo(0.6);
   });
 
   it("fails when not exactly two reach the flop", async () => {

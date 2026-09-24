@@ -791,6 +791,8 @@ tr.catnode > td { background: var(--surface2); padding: 14px 12px; }
 .combo-panel .cp-note { margin: 0 0 8px; line-height: 1.5; max-width: 76ch; }
 /* the collapsed no-board case: the combos listed inline under their single row */
 .combo-panel .cp-combos { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; padding-left: 10px; }
+/* your own combo among them (hero's class opens on its own) */
+.combo-panel .cp-combos .hero { outline: 2px solid var(--ev); border-radius: 4px; padding: 0 4px; color: var(--ink); }
 
 /* ---- strategy coverage map (Sources → a strategy's page): a reading page, so real type hierarchy ----
    section 22px head → spot 16px semibold → labelled facts 11px caps label + 14px value → prose 14.5/1.6 at ≤80ch
@@ -851,3 +853,67 @@ tr.catnode > td { background: var(--surface2); padding: 14px 12px; }
 .cov-sev.s1 { background: var(--surface3); color: var(--muted); } .cov-sev.s2 { background: var(--ev-soft); color: var(--ev); } .cov-sev.s3 { background: var(--loss-soft); color: var(--loss); }
 .cov-solve { display: flex; gap: 14px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--grid); font-size: 14px; }
 .cov-solve .prog { font-family: var(--font-mono); font-weight: 700; min-width: 64px; }
+
+/* ---- the range looker (Hand Detail → Timeline card → Ranges): one row per hero decision, top to bottom ---- */
+.tl-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.tl-head h2 { margin: 0; }
+.rl-row { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.rl-row.cur { border-color: var(--info); box-shadow: 0 0 0 1px var(--info) inset; }
+.rl-facts { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; cursor: pointer; min-width: 0; }
+.rl-facts .mix-bar { margin-top: 18px; }
+.rl-no { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rl-no .n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--info-soft); color: var(--info); font-weight: 700; font-size: 12px; }
+.rl-you b { text-transform: uppercase; }
+.rl-kv { display: flex; gap: 8px; align-items: baseline; }
+.rl-kv .k { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; min-width: 76px; }
+.rl-grids { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; min-width: 0; }
+.rl-card { background: var(--surface2); border-radius: 8px; padding: 8px 10px; width: min-content; max-width: 100%; overflow-x: auto; }
+.rl-card .legend { flex-wrap: wrap; }
+/* opponents: a size down from hero (20px cells), so hero and two or three ranges share a line */
+.rl-card.rl-v .grid169.sm { grid-template-columns: repeat(13, 20px); gap: 2px; }
+.rl-card.rl-v .grid169.sm div { width: 20px; height: 17px; font-size: 8.5px; }
+.rl-card .rl-h { font-weight: 600; font-size: 12.5px; color: var(--ink); }
+.rl-card .grid169 { margin-top: 6px; }
+.rl-card .rl-hero { margin-top: 8px; font-size: 12.5px; max-width: 360px; }
+.rl-card.rl-empty { width: auto; max-width: 460px; font-size: 12.5px; color: var(--ink); }
+.rl-card.rl-wait { width: auto; min-width: 130px; }
+.rl-note, .rl-pending { flex-basis: 100%; }
+.rl .grid169 div.hero { outline: 2px solid var(--ev); outline-offset: 1px; box-shadow: 0 0 0 4px var(--ev-soft), 0 0 12px 2px var(--ev); z-index: 2; position: relative; }
+/* every decision is a row: yours with a blue edge, theirs grey; a street opens with its board and pot */
+.rl-row { margin-bottom: 8px; }
+.rl-row.you { border-left: 3px solid var(--info); }
+.rl-row.villain { border-left: 3px solid var(--muted); }
+.rl-row.villain .rl-no .n { background: var(--surface3); color: var(--ink); }
+.rl-street { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 8px; font-size: 12px; color: var(--muted); }
+.rl-street:first-child { margin-top: 4px; }
+.rl-street b { color: var(--ink); letter-spacing: .06em; font-size: 12.5px; }
+/* a fold is one line; opening it draws the node */
+details.rl-row.fold { display: block; padding: 6px 12px; }
+details.rl-row.fold > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; list-style: none; }
+details.rl-row.fold > summary::-webkit-details-marker { display: none; }
+details.rl-row.fold .rl-open { margin-left: auto; }
+details.rl-row.fold .rl-open::before { content: "\25B8  "; }
+details.rl-row.fold[open] .rl-open::before { content: "\25BE  "; }
+details.rl-row.fold > .rl-grids { margin-top: 10px; }
+@media (max-width: 760px) { .rl-row { grid-template-columns: minmax(0, 1fr); } }
+/* under a Ranges row, on the node page and in an answer's inputs: what the chart was solved WITH and what GTO Wizard
+   was SENT (2026-09-24). A <details> whose one-line summary carries the rake cap, so it reads without opening. */
+.rl-io { grid-column: 1 / -1; margin: 2px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12.5px; min-width: 0; }
+.rl-io > summary { list-style: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--ink); }
+.rl-io > summary::-webkit-details-marker { display: none; }
+.rl-io > summary::before { content: "\25B8"; color: var(--muted); }
+.rl-io[open] > summary::before { content: "\25BE"; }
+.rl-io > summary .sub { font-size: 12px; }
+.rl-io-body { margin-top: 8px; }
+.cs-node { margin: 0 0 12px; }
+.sio-box .rl-io { margin: 10px 0 0; }
+.cs-box .nv-facts { margin: 0 0 8px; }
+table.cs-seats { width: auto; margin: 2px 0 8px; font-size: 12.5px; }
+table.cs-seats th, table.cs-seats td { padding: 3px 18px 3px 0; }
+table.cs-seats .num { text-align: right; font-variant-numeric: tabular-nums; }
+table.cs-seats tr.hero td { font-weight: 600; }
+table.sent-tbl { width: auto; font-size: 12.5px; }
+table.sent-tbl th { padding: 4px 16px 4px 0; }
+table.sent-tbl td { white-space: normal; vertical-align: top; min-width: 160px; padding: 4px 16px 4px 0; border-top: 1px solid var(--grid); }
+table.sent-tbl td.k { min-width: 110px; white-space: nowrap; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
+.sent-box details pre { max-height: 360px; }

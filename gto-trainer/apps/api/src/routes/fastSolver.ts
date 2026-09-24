@@ -34,6 +34,13 @@ interface FastSolverBody extends ResolveBody {
 // time went: the wrapper read, chart nodes, token sniffs, each GTO Wizard request.
 app.post("/", async (c) => {
   const { value: res, totalMs, trace } = await runTraced(() => handleFastSolve(c));
+  // A SLOW ANSWER WRITES ITS OWN TIMELINE TO THE LOG (2026-09-24): the header below has a size budget and the
+  // poller may never read it, so an answer over 10 s prints every event with a gap or span of 300 ms or more.
+  if (totalMs > 10_000) {
+    let prev = 0;
+    const slow = trace.filter((e) => { const at = e.at ?? 0, ms = e.ms ?? 0; const gap = at - prev; prev = Math.max(prev, at + ms); return ms >= 300 || gap >= 300; });
+    console.log(`[slow-answer] ${totalMs} ms — ${slow.map((e) => `@${e.at}${e.ms ? `+${e.ms}` : ""} ${e.ev}${e.info ? ` (${e.info.slice(0, 90)})` : ""}`).join(" | ")}`);
+  }
   // The header has a budget; a JSON string cut mid-way is no trace at all (the poller's parse fails and the
   // whole timeline is lost). Over budget, shorten each event's prose first, then drop trailing events, and say
   // how many were dropped — the [chain] line in the API log carries the full text regardless.

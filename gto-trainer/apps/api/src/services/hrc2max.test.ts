@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chartForHu } from "./hrc2max";
+import { chartForHu, defaultChartHu, neighbourRungsHu } from "./hrc2max";
 
 /** A heads-up hand at the flop: hero the SB/dealer, both stacks read as 100bb behind, nothing committed. */
 const hand = () => ({
@@ -23,5 +23,21 @@ describe("chartForHu with the hand's pinned dealt stacks (2026-09-24)", () => {
   test("a pinned seat that is not in the hand is ignored", () => {
     const c = chartForHu(hand() as any, ["R2.5", "C"], { 1: 100, 2: 100, 7: 20 });
     expect(c.depth).toBe(100);
+  });
+});
+
+describe("the charts the HU preflop warm opens (2026-09-24)", () => {
+  test("a rung's default chart is the one chartForHu picks before anyone raises", () => {
+    const h = { ...hand(), stacks: { 1: 110, 2: 130 }, currentNode: { street: "preflop" } };
+    expect(defaultChartHu(110)).toBe(chartForHu(h as any, []).id);
+    expect(defaultChartHu(110)).toBe("hrc_hu_cp200a_d110_o2_5_3b10_5");
+    expect(defaultChartHu(20)).toBe("hrc_hu_cp200a_d20_o2_5_3b7");
+  });
+  test("the neighbouring rungs are the ladder's, and the ends have one", () => {
+    expect(neighbourRungsHu(110)).toEqual([105, 115]);
+    expect(neighbourRungsHu(75)).toEqual([70, 80]);
+    expect(neighbourRungsHu(20)).toEqual([30]);
+    expect(neighbourRungsHu(150)).toEqual([125]);
+    expect(neighbourRungsHu(112)).toEqual([]);
   });
 });

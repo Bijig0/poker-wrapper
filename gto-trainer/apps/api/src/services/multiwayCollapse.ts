@@ -100,13 +100,29 @@ function merge(st: State, a: number): State | null {
     if (commits.length > 1) return null;                            // two commitments would collapse into one
     if (commits.length === 1) carrier = commits[0]!.seat;
     if (!mine.length) { streets.push(street.slice()); continue; }
-    // the pair acts ONCE, in the earlier of their two slots, carrying the committing action if there is one
-    const keep = commits.length ? commits[0]!.tok : mine.some((t) => t.tok === "X") ? "X" : mine[0]!.tok;
-    const at = street.findIndex((t) => pair.has(t.seat));
+    // THE PAIR ACTS ONCE PER ORBIT (2026-09-24, postflop sweep w4-turn/river-faces-checkraise). The two seats are
+    // adjacent, so the n-th action of one and the n-th action of the other happen in the same orbit; the composite
+    // takes one action per orbit, in the earlier slot, carrying the committing action when that orbit has one. The
+    // old rule kept ONE action per street at the pair's first slot, which moved a check-RAISE back in front of the
+    // bet it raises ("SB x, BB x, hero bets, SB raises" became "SB raises, hero bets") and the walk refused the line.
+    const nth = new Map<string, number>();
+    const orbits: { at: number; toks: string[] }[] = [];
+    street.forEach((t, i) => {
+      if (!pair.has(t.seat)) return;
+      const n = nth.get(t.seat) ?? 0;
+      nth.set(t.seat, n + 1);
+      (orbits[n] ??= { at: i, toks: [] }).toks.push(t.tok);
+    });
+    const emit = new Map<number, string>();
+    for (const o of orbits) {
+      const commit = o.toks.find(COMMITS);
+      emit.set(o.at, commit ?? (o.toks.includes("X") ? "X" : o.toks[0]!));
+    }
     const out: SeatTok[] = [];
     street.forEach((t, i) => {
       if (!pair.has(t.seat)) { out.push(t); return; }
-      if (i === at) out.push({ tok: keep, seat: x.pos });            // named for the earlier seat: its slot in the rotation
+      const tok = emit.get(i);
+      if (tok != null) out.push({ tok, seat: x.pos });              // named for the earlier seat: its slot in the rotation
     });
     streets.push(out);
   }

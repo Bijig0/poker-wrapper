@@ -17,6 +17,8 @@ import { join } from "node:path";
 
 export const TRUST_REGRET_MAX = 0.03;
 export const TRUST_REACH_MIN = 1e-4;
+/** For pool-locked trees only: past this the node is broken whatever its reach. */
+export const TRUST_REGRET_CATASTROPHIC = 0.3;
 const FILE = join(import.meta.dir, "..", "..", "data", "limp_node_trust.json");
 
 type TrustMap = Record<string, Record<string, [number | null, number]>>;
@@ -45,7 +47,14 @@ export function nodeTrust(chartId: string, line: string): NodeTrust {
   if (!t) return { known: false, reach: null, regret: null, starved: false, why: null };
   const [reach, regret] = t;
   const lowReach = reach != null && reach < TRUST_REACH_MIN;
-  const highRegret = regret > TRUST_REGRET_MAX;
+  // A POOL-LOCKED TREE IS JUDGED BY REACH (2026-09-24). Its locked nodes carry the pool's mix by construction, so
+  // their regret measures the pool's leak, not convergence (the SB's complete behind two limps reads 0.21); and its
+  // responder nodes sit in bigger pots where a converged mix still spreads over several +EV raise sizes (the BB
+  // behind two limps and a complete: 0.06, every option +EV, against 1.64 with a check at −7.8bb in the
+  // equilibrium tree). The locks are what train those nodes — reach 1 in 3,400 there against 1 in 147,000 —
+  // so reach is the test, with only a catastrophic regret still refusing.
+  const pooled = /_pool\d*$/.test(chartId);
+  const highRegret = regret > (pooled ? TRUST_REGRET_CATASTROPHIC : TRUST_REGRET_MAX);
   if (!lowReach && !highRegret) return { known: true, reach, regret, starved: false, why: null };
   const reachTxt = reach != null ? (reach > 0 ? `1 in ${Math.round(1 / reach).toLocaleString()} hands` : "never") : "unknown";
   return { known: true, reach, regret, starved: true,

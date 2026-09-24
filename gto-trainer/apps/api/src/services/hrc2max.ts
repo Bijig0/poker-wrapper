@@ -49,6 +49,19 @@ const nearestLog = (xs: number[], v: number) =>
 export const chartIdHu = (depth: number, open: number, threeBet: number): string =>
   `hrc_hu_${SITE_HU}_d${depth}_o${num(open)}_3b${num(threeBet)}`;
 
+/** The chart a rung answers an unraised pot from: hero's own open size and the middle 3-bet (chartForHu's pick
+ *  before anyone has raised). */
+export function defaultChartHu(depth: number): string {
+  const threes = threeBetsAt(depth, DEFAULT_OPEN_HU);
+  return chartIdHu(depth, DEFAULT_OPEN_HU, threes[Math.floor((threes.length - 1) / 2)]!);
+}
+
+/** The rungs either side of `depth` on the ladder (none for a depth that is not a rung). */
+export function neighbourRungsHu(depth: number): number[] {
+  const i = RUNGS_HU.indexOf(depth);
+  return i < 0 ? [] : [RUNGS_HU[i - 1], RUNGS_HU[i + 1]].filter((d): d is number => d != null);
+}
+
 export interface ChartHuChoice {
   /** charts to try, best first */
   candidates: string[];

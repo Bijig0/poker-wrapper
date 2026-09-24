@@ -226,7 +226,7 @@ class GtowApi {
     ]);
   }
 
-  private buildCustomTree(input: CustomTreeInput) {
+  buildCustomTree(input: CustomTreeInput) {
     // Seats in acting order. A third seat makes it GTO Wizard's 3-player tree ("OOP+1" between the two).
     const seats: string[] = input.mid ? ["OOP", "OOP+1", "IP"] : ["OOP", "IP"];
     const auto = (position: string) => ({ position, type: "AUTOMATIC" as const, allow_limp: false });
@@ -302,9 +302,25 @@ class GtowApi {
       ],
       tree_operations: [],
       resolving_policy: null,
-      rake: input.rake ?? { pct_of_pot: 5, cap_in_chips: 0.6, preflop_rake_type: null },
+      rake: input.rake ?? { ...DEFAULT_TREE_RAKE },
       tournament_data: null,
     };
+  }
+
+  /**
+   * THE TREE REQUEST AS SENT, for the record (2026-09-24, Brady: "what the inputs sent in was … e.g. what the rake cap
+   * you set was"): exactly buildCustomTree's body — the one createCustomSolution POSTs — with each player's 1,326-weight
+   * range replaced by its size (combos with weight, total weight). The chain stores it per street and the hand page
+   * shows it; the ranges themselves travel in the trace (rangesIn), so the summary loses nothing.
+   */
+  treeRequestSummary(input: CustomTreeInput) {
+    const body = this.buildCustomTree(input);
+    const size = (r: number[]) => {
+      let combos = 0, weight = 0;
+      for (const w of r) if (w > 0) { combos++; weight += w; }
+      return { combos, weight: Math.round(weight * 100) / 100 };
+    };
+    return { ...body, players: body.players.map((p) => ({ ...p, range: size(p.range) })) };
   }
 
   /**
@@ -638,6 +654,11 @@ export function describeTreeChange(prev: TreeFingerprint | null, next: TreeFinge
  * a street that DID see a wager is pinned to the observed sizes instead, exactly as heads-up.
  */
 export const THREE_WAY_SIZES = { bet: ["33%", "75%"], raise: ["60%"] } as const;
+
+/** The rake a custom tree gets when its input carries none: GTO Wizard's own NL500 structure, 5% capped at 0.6bb.
+ *  The chain passes the table's rake on the Ignition 6-max and CoinPoker heads-up strategies; a solve without one
+ *  is solved at this, and the hand page says so rather than "no rake" (2026-09-24). */
+export const DEFAULT_TREE_RAKE = { pct_of_pot: 5, cap_in_chips: 0.6, preflop_rake_type: null } as const;
 
 export interface CustomTreeInput {
   board: string; // concatenated, e.g. "Ts7h2d"

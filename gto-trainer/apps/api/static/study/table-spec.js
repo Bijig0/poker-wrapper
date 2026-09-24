@@ -3,7 +3,7 @@
  * components/table/types.ts when the study pages moved onto the API server.
  *
  * Geometry is not invented: every number here was read out of the live
- * Ignition web client's DOM (a React app at ignitioncasino.eu/static/
+ * Ignition web client's DOM (a React app at ignitioncasino.uno/static/
  * poker-game, rendered in plain DOM/CSS — no canvas). The client authors its
  * table in a fixed 800x400 "design unit" (du) space and scales it to the
  * window with CSS `zoom`. We mirror that exactly, so a coordinate written here

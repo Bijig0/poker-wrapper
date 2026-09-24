@@ -65,6 +65,8 @@ export interface AiPreflopShape {
   n: number;
   /** our position -> API position, in API order */
   apiOf: Record<string, string>;
+  /** API position -> the table seat it was built from (the dead-SB ghost has none) */
+  seatOf: Record<string, number>;
   positions: string[];            // API order
   stacks: Record<string, number>; // by API position, starting stack in bb
   sb: number; bb: number;
@@ -154,8 +156,10 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   // the table posted. The starting stacks need no pin — `cur + committed` is the stack before the post either way.
   const sb = deadSb ? DEAD_SB_GHOST : (testStake ? 0.5 : (sbPost?.amount ?? 0.5)), bb = bbPost?.amount ?? 1;
   const stacks: Record<string, number> = {};
+  const seatOf: Record<string, number> = {};
   for (const p of ordered) {
     const seat = byPos.get(p)!;
+    seatOf[apiOf[p]!] = seat;
     // `dealt` already carries the stack AS DEALT (behind + committed + earlier streets, hrc6max.dealtBySeat) —
     // `committed` must not be added again on top of it, or a pinned postflop read double-counts this street's chips.
     const cur = dealt ? dealt[seat] : hand.stacks?.[seat];
@@ -166,7 +170,34 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   // the cap is by players DEALT — the ghost was not dealt in
   // the LAST RESORT reduces the field to two seats but the table still dealt six: the cap follows the table
   const rakeCapBb = Math.round((rakeCapCents(rakeSeats ?? (n - (deadSb ? 1 : 0))) / bbCents) * 100) / 100;
-  return { n, apiOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null };
+  return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null };
+}
+
+/**
+ * THE STACKS A LOGGED AI TREE WAS BUILT WITH, back on this hand's seats (2026-09-24, hand 723). An AI-preflop answer
+ * logs its tree as `gtow-ai · 3-handed · BTN:100/SB:103.5/BB:102.5` (its `chart`; the postflop chain's rangeSource is
+ * the same string), and those are the stacks the live table read at the decision — the only record of them: the
+ * archived row keeps end-of-hand readings, and even rebuilt to the decision (utils/archivedHand) they are an
+ * estimate, where the live read could itself have been off (a blind not yet taken off the stack on screen, a top-up
+ * still landing). A page that rebuilds the tree an answer came from passes this to shapeOf as `dealt`, so the rebuild
+ * is built with that tree's stacks (and, walking the same line, lands on the same tree key). null when `id` is not an
+ * AI tree id or does not fit this hand's shape.
+ */
+export function dealtFromTreeId(hand: ParsedHand, heroPos: string | null, id: string | null | undefined): Record<number, number> | null {
+  const m = /^gtow-ai · (\d)-handed · (\S+)/.exec(String(id ?? "").trim());
+  if (!m) return null;
+  const logged: Record<string, number> = {};
+  for (const part of m[2]!.split("/")) {
+    const [p, v] = part.split(":");
+    const x = Number(v);
+    if (!p || v == null || !Number.isFinite(x)) return null;
+    logged[p] = x;
+  }
+  const shape = shapeOf(hand, heroPos);
+  if ("error" in shape || shape.n !== Number(m[1]) || shape.positions.some((p) => logged[p] == null)) return null;
+  const out: Record<number, number> = {};
+  for (const [api, seat] of Object.entries(shape.seatOf)) out[seat] = logged[api]!;
+  return out;
 }
 
 /** The line so far as the API walks it: seat order, F / C / X / R<total bb>; also the raise totals by level. */
@@ -863,12 +894,18 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   };
 }
 
+/** One decision of the AI walk: the node, its actor (API position), the action(s) the range was conditioned on and
+ *  the exact one taken, and the actor's per-combo weights before and after. */
+export interface AiWalkStep { line: string; token: string; actor: string; node: any; chosen: any[]; taken: any; before: number[]; after: number[] }
+
 /** The walk itself, pure over a node getter (tests feed synthetic nodes; live feeds the solved tree). */
 export async function walkArrivalRanges(
   shape: AiPreflopShape,
   tokens: string[],
   getNode: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }>,
-  maxPlayers: SeatCap
+  maxPlayers: SeatCap,
+  /** every decision read, with the actor's 1,326 weights either side of it (the range looker's preflop path) */
+  onStep?: (step: AiWalkStep) => void
 ): Promise<ArrivalOutcome> {
   const weights = new Map<string, number[]>(shape.positions.map((p) => [p, new Array(1326).fill(1)]));
   const folded = new Set<string>();
@@ -883,6 +920,7 @@ export async function walkArrivalRanges(
     const tok = tokens[k]!;
     const sols: any[] = j.action_solutions ?? [];
     let chosen: any[];
+    let taken: any = null;
     if (tok === "F") chosen = sols.filter((a) => /^F/i.test(String(a.action?.code ?? "")));
     else if (tok === "C") chosen = sols.filter((a) => /^C/i.test(String(a.action?.code ?? "")));
     else if (tok === "X") chosen = sols.filter((a) => /^X/i.test(String(a.action?.code ?? "")));
@@ -892,16 +930,19 @@ export async function walkArrivalRanges(
       // a villain's raise: the union of the node's raise sizes (the chart walk's rule); hero's: the exact size
       chosen = actor !== heroApi ? sols.filter(isRaiseCode) : exact;
       if (!chosen.length) chosen = sols.filter((a) => a.action?.allin === true);
+      taken = exact[0] ?? null;
     }
     if (!chosen.length) return { ok: false, reason: `GTO Wizard AI preflop ranges: token ${tok} is not an action at '${line || "root"}'` };
     const w = weights.get(actor);
     if (!w) return { ok: false, reason: `GTO Wizard AI preflop ranges: node actor ${actor} is not a seat of the tree` };
+    const before = onStep ? w.slice() : null;
     for (let i = 0; i < 1326; i++) {
       let f = 0;
       for (const a of chosen) f += Number(a.strategy?.[i] ?? 0);
       w[i] = w[i]! * Math.min(1, f);
     }
     if (tok === "F") folded.add(actor);
+    onStep?.({ line, token: tok, actor, node: j, chosen, taken: taken ?? chosen[0], before: before!, after: w.slice() });
   }
   const live = shape.positions.filter((p) => !folded.has(p));
   if (live.length < 2 || live.length > maxPlayers) {
@@ -929,4 +970,95 @@ export async function walkArrivalRanges(
       `${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")}, rake 5% cap ${shape.rakeCapBb}bb; line ${tokens.join("-") || "root"})` +
       (shape.deadSb ? " · dead SB approximated" : ""),
   };
+}
+
+/** One decision on the preflop path, in the shape the range looker draws (the chart path's shape too). */
+export interface PreflopPathStep {
+  /** the seat to act, in the table's position names */
+  pos: string;
+  /** the tree path before this decision */
+  line: string;
+  /** the node's actions, in its order */
+  actions: string[];
+  /** the seat's whole range at the node by class: w = combos in range, acts[i] = combos taking actions[i] */
+  strategy: Record<string, { w: number; acts: number[] }>;
+  /** the action the line took here */
+  taken: string;
+  /** the seat's range after it (w = combos); null after a fold */
+  rangeOut: Record<string, { w: number }> | null;
+  /** the table's action is not in the tree: the line fit read it as a fold */
+  fitted?: boolean;
+}
+export interface PreflopPathView { ok: true; id: string; line: string; steps: PreflopPathStep[]; note: string }
+
+/**
+ * THE RANGE LOOKER'S AI PREFLOP (2026-09-24, Brady: "we don't get the range of what a BB raise 10 looks like").
+ * An AI preflop answer stores no node, so the hand page rebuilds a tree from the archived hand — the same
+ * shapeOf / lineOf / menus the answer uses, over the WHOLE preflop line, so one tree holds every decision's node,
+ * the villains' included — and reads each node on the path: the actor's strategy by class and its range either
+ * side. The solution is cached per shape for the process's life, else created again (GTO Wizard quota: the page
+ * asks only on a click). It is not always the answer's own tree: that one was built from the line up to its
+ * decision, with the sizes known then; the note says what was rebuilt. The dead money the live answer keeps in the
+ * pot for a fitted-out limper is not repeated here.
+ *
+ * `dealt` (seat → stack as dealt, bb) is what the tree is built with: the caller passes the logged tree's own stacks
+ * (dealtFromTreeId) so the rebuild is the tree that answered — an archived row's money is the END of the hand's
+ * (utils/archivedHand, hand 723: without it the SB and BB came out 1bb short and 2bb long).
+ */
+export async function preflopPathView(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): Promise<PreflopPathView | { ok: false; reason: string }> {
+  const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
+  if ("error" in shape) return { ok: false, reason: shape.error };
+  const { tokens, levels } = lineOf(hand, shape);
+  const m = menus(levels, shape.n);
+  const sol = await ensureSolution(treeKeyOf(shape, m), treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
+  if ("error" in sol) return { ok: false, reason: sol.error };
+  // the line as the tree holds it: sizes snapped to its own, one limper fitted out when it holds fewer
+  const notes: string[] = [];
+  let fixed: { line: string; changed: string[]; folds?: string[] } | { error: string } = await repairLine(sol.solId, tokens);
+  if ("error" in fixed && /is not offered/.test(fixed.error)) fixed = (await fitAiLine(sol.solId, tokens, shape)) ?? fixed;
+  if ("error" in fixed) return { ok: false, reason: `the line '${tokens.join("-") || "root"}' could not be walked — ${fixed.error}` };
+  if (fixed.changed.length) notes.push(`sizes snapped to the tree's own: ${fixed.changed.join(", ")}`);
+  const fitted = new Set(fixed.folds ?? []);
+  if (fitted.size) notes.push(`the tree holds one limper, so ${[...fitted].join(" and ")} was read as a fold`);
+  const handPosOf: Record<string, string> = {};
+  for (const [hp, ap] of Object.entries(shape.apiOf)) handPosOf[ap] = hp;
+  const codes = fixed.line ? fixed.line.split("-") : [];
+  const steps: PreflopPathStep[] = [];
+  const walked = await walkArrivalRanges(shape, codes, (ln) => fetchNode(sol.solId, ln), 6, (s) => {
+    const sols = (s.node.action_solutions as any[]) ?? [];
+    steps.push({
+      pos: handPosOf[s.actor] ?? s.actor, line: s.line, actions: sols.map((a) => labelOf(a.action)),
+      strategy: classStrategyOf(s.before, sols), taken: labelOf(s.taken?.action),
+      rangeOut: s.token === "F" ? null : classRangeOf(s.after),
+      ...(s.token === "F" && fitted.has(s.actor) ? { fitted: true } : {}),
+    });
+  });
+  // everyone folding to one player still walks the whole line; only a node that could not be read is a failure
+  if (!walked.ok && steps.length < codes.length) return { ok: false, reason: walked.reason };
+  return {
+    ok: true, id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
+    line: codes.join("-"), steps,
+    note: [`rebuilt from the archived hand over the whole preflop line: ${shape.n}-handed, ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")}`, ...notes].join(" · "),
+  };
+}
+
+/** 1,326 weights + a node's per-combo strategies → classGrid's shape (w and acts in combos). */
+function classStrategyOf(w: number[], sols: any[]): Record<string, { w: number; acts: number[] }> {
+  const out: Record<string, { w: number; acts: number[] }> = {};
+  for (let i = 0; i < COMBOS.length; i++) {
+    const x = w[i] ?? 0;
+    if (x <= 0) continue;
+    const e = (out[COMBOS[i]!.cls] ??= { w: 0, acts: new Array(sols.length).fill(0) });
+    e.w += x;
+    sols.forEach((a, ai) => { e.acts[ai] += x * Number(a.strategy?.[i] ?? 0); });
+  }
+  for (const e of Object.values(out)) { e.w = Math.round(e.w * 1000) / 1000; e.acts = e.acts.map((x) => Math.round(x * 1000) / 1000); }
+  return out;
+}
+/** 1,326 weights → a class range in combos. */
+function classRangeOf(w: number[]): Record<string, { w: number }> {
+  const out: Record<string, { w: number }> = {};
+  for (let i = 0; i < COMBOS.length; i++) { const x = w[i] ?? 0; if (x > 0) (out[COMBOS[i]!.cls] ??= { w: 0 }).w += x; }
+  for (const e of Object.values(out)) e.w = Math.round(e.w * 1000) / 1000;
+  return out;
 }

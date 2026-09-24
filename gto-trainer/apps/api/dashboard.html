@@ -338,6 +338,7 @@ async function showDetail(dbId) {
   const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
   if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
   DETAIL = j; STEP = j.hand.actions.length; // start at the end (full hand)
+  csLoad(j); // what each chart of the hand was solved with: the answer cards and the Ranges tab fill in when it lands
   const s = j.summary;
   v.innerHTML = `
     <div class="dt-top">
@@ -362,7 +363,8 @@ async function showDetail(dbId) {
         ${j.feedLines.map((l, i) => `<div data-fl="${i}">${esc(l)}</div>`).join("")}
       </div></div>
     </div>
-    <div class="card"><h2>Timeline — click a node, solve it, open it</h2><div id="timeline"></div></div>
+    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button></span></div>
+      <div id="timeline"></div><div id="rangelook" class="rl" hidden></div></div>
     <div id="solution"></div>
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
     ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
@@ -370,6 +372,8 @@ async function showDetail(dbId) {
        <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
   DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
   renderTimeline();
+  $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => tlView(b.dataset.v));
+  tlView(TL_VIEW);
   setStep(STEP);
   $("rp-first").onclick = () => setStep(0);
   $("rp-prev").onclick = () => setStep(STEP - 1);
@@ -637,7 +641,21 @@ function chartName(id) {
   if (m) return `GTO Wizard ${m[1]}-max NL${m[2]} ${m[3]}`;
   m = id.match(/^CashHu(\d+)z(\w+)$/);
   if (m) return `GTO Wizard heads-up NL${m[1]} ${m[2]}`;
+  // any other chart the hand's /chart-setup has named (the 6-max grid, the heads-up grids, patches): its own name
+  const cs = DETAIL?.cs?.setups?.[id];
+  if (cs?.name) return cs.name;
   return id;
+}
+const pickedLabel = (label, pick) => !!pick && verbClass(label) === verbClass(pick) && (label.match(/\d+(?:\.\d+)?/)?.[0] ?? "") === (pick.match(/\d+(?:\.\d+)?/)?.[0] ?? "");
+/** The strategy mix as one bar, the picked action solid and the roll marked where it landed. */
+function mixBarHtml(mix, pick, roll, compact) {
+  if (!mix.length) return "";
+  const total = mix.reduce((s, x) => s + x.pct, 0) || 100;
+  return `<div class="mix">
+      <div class="mix-bar">${mix.map((x, i) => `<i class="${pickedLabel(x.label, pick) ? "picked" : ""}" style="width:${(100 * x.pct / total).toFixed(1)}%;background:${colorFor(x.label, i)}" title="${esc(x.label)} ${x.pct}%"></i>`).join("")}
+        ${roll != null ? `<span class="roll" data-roll="roll ${roll}" style="left:${Math.min(99, Math.max(0, roll))}%"></span>` : ""}</div>
+      <div class="mix-legend">${mix.map((x, i) => `<span><i class="sw" style="background:${colorFor(x.label, i)}"></i>${esc(x.label)} <b>${x.pct}%</b>${x.ev != null && !compact ? ` <span class="sub">ev ${x.ev}</span>` : ""}</span>`).join("")}</div>
+    </div>`;
 }
 function answerCard(a, opt = {}) {
   const compact = !!opt.compact;
@@ -660,13 +678,8 @@ function answerCard(a, opt = {}) {
   const approx = /^≈/.test(a.text);
   const pick = a.pick ?? (mix[0]?.label ?? "");
   const rolled = a.roll != null;
-  const picked = (label) => pick && verbClass(label) === verbClass(pick) && (label.match(/\d+(?:\.\d+)?/)?.[0] ?? "") === (pick.match(/\d+(?:\.\d+)?/)?.[0] ?? "");
-  const total = mix.reduce((s, x) => s + x.pct, 0) || 100;
-  const bar = mix.length ? `<div class="mix">
-      <div class="mix-bar">${mix.map((x, i) => `<i class="${picked(x.label) ? "picked" : ""}" style="width:${(100 * x.pct / total).toFixed(1)}%;background:${colorFor(x.label, i)}" title="${esc(x.label)} ${x.pct}%"></i>`).join("")}
-        ${rolled ? `<span class="roll" data-roll="roll ${a.roll}" style="left:${Math.min(99, Math.max(0, a.roll))}%"></span>` : ""}</div>
-      <div class="mix-legend">${mix.map((x, i) => `<span><i class="sw" style="background:${colorFor(x.label, i)}"></i>${esc(x.label)} <b>${x.pct}%</b>${x.ev != null && !compact ? ` <span class="sub">ev ${x.ev}</span>` : ""}</span>`).join("")}</div>
-    </div>` : "";
+  const picked = (label) => pickedLabel(label, pick);
+  const bar = mixBarHtml(mix, pick, a.roll, compact);
   // The caption describes the MIX, which is now always the answering piece's own
   // (services/fastSolve.ts). It used to be computed from the equilibrium chart's mix
   // and printed beside an exploit headline, so a card could read "RAISE 2.5 — pure —
@@ -684,7 +697,8 @@ function answerCard(a, opt = {}) {
   const prov = `<div class="prov">
       ${f("answered by", `${srcLink(a.source)}${a.actionIndex != null ? ` · <a href="/hands/${DETAIL?.dbId}/node/${a.actionIndex}" onclick="go('/hands/${DETAIL?.dbId}/node/${a.actionIndex}');return false"><b>open the exact node ↗</b></a>` : ""}`)}
       ${f("tier", a.tier ? `<span class="chip">${esc(a.tier)}</span>` : "")}
-      ${f(a.street && a.street !== "preflop" ? "ranges from" : "chart", a.chart ? `<span title="${esc(a.chart)}">${esc(chartName(a.chart))}</span>${compact ? "" : ` <span class="mono">${esc(a.chart)}</span>`}` : "")}
+      ${f(a.street && a.street !== "preflop" ? "ranges from" : "chart", a.chart ? `<span title="${esc(a.chart)}" data-chartname="${esc(a.chart)}">${esc(chartName(a.chart))}</span>${compact ? "" : ` <span class="mono">${esc(a.chart)}</span>`}` : "")}
+      ${f("chart setup", a.chart && (a.street ?? "preflop") === "preflop" && DETAIL && a.client_hand_id != null && String(a.client_hand_id) === String(DETAIL.clientHandId) ? csSlot(a.chart, "line") : "")}
       ${f("solved board", a.mes_board ? `<span class="mono">${esc(a.mes_board)}</span>${a.mes_exact === 0 ? ' <span class="chip warn">nearest texture</span>' : ""}${a.mes_ev_gain_bb != null ? ` · <b>${a.mes_ev_gain_bb > 0 ? "+" : ""}${a.mes_ev_gain_bb} bb</b> at stake` : ""}` : "")}
       ${f("confidence band", a.band_lo != null ? `${a.band_lo}–${a.band_hi}` : "")}
       ${f("stored solve", a.solve_id != null ? `chain #${a.solve_id} · <button class="mini" onclick="event.stopPropagation();toggleSolveIO(${a.solve_id}, '${sioId}', ${a.actionIndex ?? "null"}, this)">show inputs &amp; outputs ▾</button>` : (a.tier === "ai-chain" ? '<span class="sub">not stored (logged before solve capture)</span>' : ""))}
@@ -786,6 +800,641 @@ function renderTimeline() {
   for (const b of $("timeline").querySelectorAll("[data-gtow]")) b.onclick = () => openGtow(DETAIL.dbId, Number(b.dataset.gtow), b);
 }
 
+/* ================= the range looker: every decision in the hand, top to bottom =================
+   (2026-09-24, Brady: "a chronological range looker … per decision it should similarly show what the rolls are,
+   and in a highlighted cell where hero's hand lies on the chart"; then: "we don't get the range of what a BB raise
+   10 looks like … make the villains' ranges + actions a mainstay part of the ranges chronology".) The Timeline
+   card's second tab: one row per decision anyone made, in order, under a header per street.
+   - YOUR rows: the facts and the roll on the left, your whole-range strategy at the node with your class marked,
+     and what each opponent holds coming in.
+   - THEIR rows: the seat's whole-range strategy at its node, what it did and how much of its range does that, and
+     the range that action leaves — what a BB raise to 10 looks like. A fold is one line; open it for its node.
+   The grids are the node pages' own data. Postflop: the stored chain solves, which hold every node from the flop
+   to your decision, the villains' included. Preflop: your nodes from answer-node (&ranges=1), theirs from the
+   chart that answered walked along the whole line (/preflop-path). A decision with nothing stored says why and
+   offers what would fill it. */
+let TL_VIEW = (() => { try { return localStorage.getItem("tlView") === "ranges" ? "ranges" : "actions"; } catch { return "actions"; } })();
+function tlView(v) {
+  TL_VIEW = v === "ranges" ? "ranges" : "actions";
+  try { localStorage.setItem("tlView", TL_VIEW); } catch { /* storage blocked: the choice lasts this page only */ }
+  $("tl-seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === TL_VIEW));
+  $("timeline").hidden = TL_VIEW !== "actions";
+  $("rangelook").hidden = TL_VIEW !== "ranges";
+  $("tl-title").innerHTML = TL_VIEW === "ranges"
+    ? `Ranges <span class="sub">— every decision in the hand, in order: each player's strategy at the node, what they did, and the range it leaves</span>`
+    : "Timeline — click a node, solve it, open it";
+  if (TL_VIEW === "ranges" && !$("rangelook").dataset.drawn) renderRangeLooker();
+}
+const CHART_NODE_KINDS = new Set(["hrc", "hrc6max", "hrc-hu", "gtow"]);
+/** Every decision in the hand: all actions but the blinds' posts. */
+const rlIsDecision = (a) => !/^post/.test(a.type);
+const rlDecisionsWhere = (h, pred) => h.actions.map((a, i) => (rlIsDecision(a) && pred(a)) ? i : -1).filter((i) => i >= 0);
+/** The answer that stands for decision i: the last one with a verdict, else the last attempt. */
+function rlAnswer(i) {
+  const hits = (DETAIL.answers || []).filter((a) => a.actionIndex === i);
+  return { a: [...hits].reverse().find((x) => x.text) ?? hits[hits.length - 1] ?? null, n: hits.length };
+}
+const rlPos = (seat) => seat === DETAIL.hand.heroSeatId ? (DETAIL.summary.heroPos ?? "you") : (DETAIL.hand.positions[seat] ?? `seat ${seat}`);
+const rlVerb = (a) => `${a.type === "post-sb" || a.type === "post-bb" ? "posts" : a.type}${a.amount != null ? ` ${a.amount}` : ""}`;
+const rlKv = (k, v) => v ? `<div class="rl-kv"><span class="k">${k}</span><span class="v">${v}</span></div>` : "";
+/** A street's header: the board and the pot it starts with; preflop names the blinds. */
+function rlStreetHead(street, i) {
+  const h = DETAIL.hand;
+  if (street === "preflop") {
+    const posts = h.actions.filter((a) => a.street === "preflop" && !rlIsDecision(a)).map((a) => `${esc(a.hero ? "you" : rlPos(a.seatId))} ${a.amount ?? ""}`);
+    return `<div class="rl-street"><b>PREFLOP</b>${posts.length ? ` <span class="sub">blinds: ${posts.join(" · ")}</span>` : ""}</div>`;
+  }
+  return `<div class="rl-street"><b>${esc(street.toUpperCase())}</b> ${cardsHtml(h.board.slice(0, STREET_N[street] ?? 0))} <span class="sub">pot ${r2(replayState(h, i).pot)}bb</span></div>`;
+}
+/* ================= what a chart was solved WITH, and what GTO Wizard was SENT =================
+   (2026-09-24, Brady: "add in for the gto wizard ai postflop, what the inputs sent in was … so we can also see e.g
+   what the rake cap you set was"; "do the same thing in the charts sources … not the actual rake cap and config";
+   "for the uneven stacks … it doesn't show what specifically the uneven stacks look like".)
+     csLoad / csSlot / csFill  a preflop chart's SETUP: every seat with its stack — beside the table's own as dealt,
+                               where the row recorded them — blinds, ante, rake and cap, the size menu, solver and
+                               generation. One fetch per hand (/chart-setup, services/chartSetup.ts); a slot drawn
+                               before it lands fills in when it does.
+     sentBlock(w)              the tree request each street of a stored AI chain sent GTO Wizard: rake and cap, pot,
+                               stack, the seats and the size of their ranges, the size grid per street, the tree's own
+                               rules and the raw body. Recorded at solve time since 2026-09-24; rebuilt from the stored
+                               trace with the chain's own builder before that — the block says which. */
+// GTO Wizard's own structure, which the tree builder sends when a solve passes no rake (gtowApi.DEFAULT_TREE_RAKE).
+// The API reports what was sent (spec.rakeSent) since 2026-09-24; this covers an API started before that.
+const GTOW_DEFAULT_RAKE = { pct_of_pot: 5, cap_in_chips: 0.6, preflop_rake_type: null };
+const GTOW_ACCOUNT = { primary: "Ultra account (primary)", secondary: "Elite account (secondary)" };
+function csLoad(D = DETAIL, ids = []) {
+  if (!D) return null;
+  D.cs ??= { setups: {}, table: null, err: null, p: null, asked: false };
+  const want = [...new Set(ids.filter((id) => id && !(id in D.cs.setups)))];
+  // an API without the route (started before 2026-09-24) answers every id the same way: ask it once
+  if (D.cs.gone || (D.cs.asked && !want.length)) return D.cs.p;
+  D.cs.asked = true;
+  const q = [`dbId=${encodeURIComponent(D.dbId)}`, ...want.map((id) => `id=${encodeURIComponent(id)}`)].join("&");
+  D.cs.p = (async () => {
+    let j;
+    try {
+      const r = await fetch(`/api/dashboard/chart-setup?${q}`);
+      if (r.status === 404) D.cs.gone = true;
+      const txt = await r.text();
+      try { j = JSON.parse(txt); }
+      catch { j = { ok: false, error: r.status === 404 ? "this API predates chart setups — restart it (the banner's Restart by hand) to show what each chart was solved with" : txt.slice(0, 160) }; }
+    } catch (e) { j = { ok: false, error: String(e) }; }
+    if (j.ok) { Object.assign(D.cs.setups, j.setups || {}); if (j.table) D.cs.table = j.table; D.cs.err = null; }
+    else D.cs.err = j.error ?? "the chart setup could not be read";
+    for (const id of want) if (!(id in D.cs.setups)) D.cs.setups[id] = null;
+    if (DETAIL === D) csFill();
+  })();
+  return D.cs.p;
+}
+/** One more chart's setup, asked for once the hand's own have landed (the preflop path can walk a chart no answer logged). */
+function csWant(id, D = DETAIL) {
+  if (!D || !id) return;
+  const go = () => { if (!(id in (D.cs?.setups ?? {}))) csLoad(D, [id]); };
+  if (D.cs?.p) D.cs.p.then(go); else go();
+}
+/** A chart's setup where it is drawn: now if known, else when /chart-setup lands (csFill). `line` is one line, `full`
+ *  every fact and the seats; `depth` is the depth the answer logged, said when the table's stacks are not on record. */
+function csSlot(id, mode = "line", depth = null) {
+  if (!id) return "";
+  const tag = mode === "full" ? "div" : "span";
+  return `<${tag} class="cs-slot ${mode}" data-cs="${esc(id)}" data-mode="${mode}"${depth != null ? ` data-depth="${esc(depth)}"` : ""}>${csRender(id, mode, depth)}</${tag}>`;
+}
+function csFill(root = document) {
+  root.querySelectorAll(".cs-slot").forEach((el) => {
+    if (el.dataset.mode === "tablerake") { let r = null; try { r = JSON.parse(el.dataset.rake || "null"); } catch { /* malformed: leave it empty */ } el.innerHTML = r ? csTableRake(r) : ""; return; }
+    el.innerHTML = csRender(el.dataset.cs, el.dataset.mode, el.dataset.depth ?? null);
+  });
+  // a chart named before its setup landed: chartName now knows the readable name (the 6-max grid, heads-up, patches)
+  root.querySelectorAll("[data-chartname]").forEach((el) => { if (el.dataset.chartname) el.textContent = chartName(el.dataset.chartname); });
+}
+/** THE TABLE'S OWN RAKE beside a rake we solved with ({pct, capBb, nfnd}; nfnd null = not compared, as for a
+ *  postflop tree): a chip, green when they agree, amber when not. Only where the row recorded the table's rake. */
+function csTableRake(r) {
+  const t = DETAIL?.cs?.table?.rake;
+  if (!t) return "";
+  const capSame = t.capBb == null || r.capBb == null ? null : Math.abs(t.capBb - r.capBb) < 0.005;
+  const nfndSame = t.preflopRaked == null || r.nfnd == null ? null : !t.preflopRaked === !!r.nfnd;
+  const same = Number(t.pct) === Number(r.pct) && capSame !== false && nfndSame !== false;
+  const txt = `${t.pct}%${t.capBb != null ? ` cap ${t.capBb}bb` : ""}${r.nfnd != null && t.preflopRaked != null ? (t.preflopRaked ? ", preflop pots raked" : ", no flop no drop") : ""}`;
+  return ` <span class="chip ${same ? "good" : "warn"}" title="${esc(t.from)}${t.capMoney != null ? ` · cap ${t.capMoney} in table money` : ""}${t.preflopRaked != null ? ` · isPotRakePf ${t.preflopRaked}` : ""}">this table: ${esc(txt)}</span>`;
+}
+/** A slot for csTableRake: filled now if the table is known, else when /chart-setup lands. */
+function csTableRakeSlot(r) {
+  return `<span class="cs-slot" data-cs="" data-mode="tablerake" data-rake="${esc(JSON.stringify(r))}">${csTableRake(r)}</span>`;
+}
+function csRender(id, mode, depth) {
+  const cs = DETAIL?.cs, s = cs?.setups?.[id];
+  if (s) return mode === "full" ? csFull(s, cs.table, depth) : csLine(s);
+  if (cs?.err) return `<span class="sub">${esc(cs.err)}</span>`;
+  if (!cs || !(id in cs.setups)) return `<span class="sub">reading the chart's setup…</span>`;
+  return `<span class="sub">no setup on record for ${mode === "full" ? `<span class="mono">${esc(id)}</span> — not one of our charts, the GTO Wizard library or an AI preflop tree` : "this chart"}</span>`;
+}
+/** "SB/BB 125bb each", or every seat when they differ: "UTG 100 · HJ 60 · CO 100 · BTN 95 · SB 100 · BB 100bb". */
+function csSeatsText(s) {
+  if (!s.seats?.length) return "";
+  if (s.even) return `${s.seats.map((x) => x.pos).join("/")} ${s.seats[0].stackBb}bb each`;
+  return `${s.seats.map((x) => `${x.pos} ${x.stackBb ?? "?"}`).join(" · ")}bb`;
+}
+function csRakeText(r) {
+  if (!r) return "rake not stated";
+  if (!r.pct && !r.capBb) return "no rake";
+  return `rake ${r.pct}% cap ${r.capBb}bb${r.nfnd ? " NFND" : ""}`;
+}
+function csLine(s) {
+  const tAnte = DETAIL?.cs?.table?.anteBb;
+  const anteOff = tAnte != null && s.anteBb != null && Math.abs(tAnte - s.anteBb) > 1e-6;
+  return [`<b>${esc(csSeatsText(s))}</b>`,
+    (s.anteBb ? `ante ${s.anteBb}bb` : s.anteBb === 0 ? "no ante" : "") + (anteOff ? ` <span class="chip warn" title="the chart was solved with a different ante than this table posted">table ante ${tAnte ? `${tAnte}bb` : "none"}</span>` : ""),
+    `<b>${esc(csRakeText(s.rake))}</b>${s.rake ? csTableRake(s.rake) : ""}`, esc(s.solver)].filter(Boolean).join(" · ");
+}
+function csFull(s, table, depth) {
+  const usd = (bb) => s.bbUsd ? ` <span class="sub">= $${(bb * s.bbUsd).toFixed(2)} at ${esc(String(s.stake ?? "").match(/NL\d+/)?.[0] ?? s.stake)}</span>` : "";
+  // heads-up the dealer IS the small blind: a table that calls that seat BTN is the chart's SB
+  const same = (tp, cp) => tp === cp || (s.seats.length === 2 && ((tp === "BTN" && cp === "SB") || (tp === "SB" && cp === "BTN")));
+  const tSeats = table?.seats || [], exact = !!table?.exact;
+  const heroPos = tSeats.find((t) => t.hero)?.pos ?? DETAIL?.summary?.heroPos ?? null;
+  const rows = s.seats.map((x) => {
+    const t = tSeats.find((y) => same(y.pos, x.pos));
+    const hero = t ? t.hero : heroPos != null && same(heroPos, x.pos);
+    const d = exact && t?.dealtBb != null && x.stackBb != null ? Math.round((t.dealtBb - x.stackBb) * 10) / 10 : null;
+    return `<tr${hero ? ' class="hero"' : ""}><td>${esc(x.pos)}${hero ? ' <span class="chip">you</span>' : ""}${tSeats.length && !t ? ' <span class="sub">empty at this table</span>' : ""}</td><td class="num">${x.stackBb ?? "?"}</td>${exact ? `<td class="num">${t?.dealtBb ?? "—"}</td><td class="num">${d == null ? "" : d === 0 ? "=" : `${d > 0 ? "+" : ""}${d}`}</td>` : ""}</tr>`;
+  }).join("");
+  const extra = tSeats.filter((t) => !s.seats.some((x) => same(t.pos, x.pos)))
+    .map((t) => `<tr><td>${esc(t.pos)}${t.hero ? ' <span class="chip">you</span>' : ""}</td><td class="num sub">not in the chart</td>${exact ? `<td class="num">${t.dealtBb ?? "—"}</td><td></td>` : ""}</tr>`).join("");
+  const tAnte = table?.anteBb;
+  const anteOff = tAnte != null && s.anteBb != null && Math.abs(tAnte - s.anteBb) > 1e-6;
+  const ante = (s.anteBb == null ? '<span class="sub">not stated</span>' : s.anteBb ? `${s.anteBb}bb per player` : "none")
+    + (anteOff ? ` <span class="chip warn">this table: ${tAnte ? `${tAnte}bb` : "none"}</span>` : "");
+  const rake = !s.rake ? '<span class="sub">not stated</span>'
+    : !s.rake.pct && !s.rake.capBb ? "none"
+    : `${s.rake.pct}% of the pot · cap <b>${s.rake.capBb}bb</b>${usd(s.rake.capBb)}${s.rake.nfnd ? " · no flop, no drop" : ""}${csTableRake(s.rake)}`;
+  return `<div class="cs-box">
+    <div class="nv-facts">
+      ${fact("solved by", `${esc(s.solver)}${s.generation ? ` · ${esc(s.generation)}` : ""}`)}
+      ${fact("chart", `${esc(s.name)}<div class="mono sub">${esc(s.id)}</div>`)}
+      ${fact("game", [s.room, s.stake].filter(Boolean).map(esc).join(" · ") || '<span class="sub">not stated</span>')}
+      ${fact("blinds", s.blinds ? `${s.blinds.sb} / ${s.blinds.bb}` : '<span class="sub">as the table posted them</span>')}
+      ${fact("ante", ante)}
+      ${fact("rake", rake)}
+      ${fact("sizes", s.sizes?.length ? s.sizes.map(esc).join("<br>") : '<span class="sub">not stated</span>')}
+      ${fact("tree", s.nodes != null ? `${Number(s.nodes).toLocaleString()} nodes` : "")}
+    </div>
+    <table class="cs-seats"><thead><tr><th>seat</th><th class="num">chart stack</th>${exact ? '<th class="num">table, as dealt</th><th class="num">table − chart</th>' : ""}</tr></thead><tbody>${rows}${extra}</tbody></table>
+    ${table && !exact ? `<div class="sub">${s.even === false ? "Uneven stacks: each seat above is the stack the chart was solved with. " : ""}The table's own stacks as dealt are recorded for hands archived since 2026-09-24; this hand kept only end-of-hand money, which cannot give a winner's stack back, so they are not guessed.${depth != null ? ` The answer logged a depth of ${esc(depth)}bb.` : ""}</div>` : ""}
+    ${exact ? `<div class="sub">The table column is ${esc(table.dealtFrom ?? "the table's stacks as dealt")}.${depth != null ? ` The answer logged a depth of ${esc(depth)}bb.` : ""}</div>` : ""}
+    ${s.notes?.length ? `<div class="sub">${s.notes.map(esc).join(" · ")}</div>` : ""}
+    <div class="sub">read from ${esc(s.from)}${s.format ? ` · the run's own line: <span class="mono">${esc(s.format)}</span>` : ""}</div>
+  </div>`;
+}
+/** The node page's chart setup: open, above the chart's strategy. */
+function csNodeHtml(id, depth) {
+  if (!id) return "";
+  csWant(id);
+  return `<details class="rl-io cs-node" open><summary><b>Chart setup</b> ${csSlot(id, "line")}</summary><div class="rl-io-body">${csSlot(id, "full", depth)}</div></details>`;
+}
+/** One street's size grid in a tree request, in words: AUTOMATIC, or the FIXED sizes per raise level. */
+function sentSizes(b, street) {
+  const row = (b?.bet_sizes?.street_bet_sizes || []).find((x) => String(x.street).toUpperCase() === street);
+  const ps = row?.position_bet_sizes || [];
+  if (!ps.length) return null;
+  const one = (p) => p.type === "AUTOMATIC" ? "AUTOMATIC"
+    : [["bet", p.bet_sizes], ["raise", p.raise_sizes], ["re-raise", p.second_raise_sizes], ["4th raise+", p.third_plus_raise_sizes]]
+        .filter(([, v]) => v?.length).map(([k, v]) => `${k} ${v.join(", ")}`).join(" · ") || String(p.type);
+  const all = ps.map(one);
+  return all.every((x) => x === all[0]) ? all[0] : ps.map((p, i) => `${p.position}: ${all[i]}`).join(" | ");
+}
+/** One tree of a stored chain as the block shows it: the request as sent, or — an API from before the record — the
+ *  parts the trace itself carries. */
+function sentModel(w, st) {
+  const S = ["FLOP", "TURN", "RIVER"], b = st.sent ?? null;
+  // stored pots and stacks are unrounded sums (97.89999999999999): two decimals is what the tree was keyed to
+  const bb = (x) => x == null || !Number.isFinite(Number(x)) ? x : r2(Number(x));
+  const street = String(b?.starting_street ?? st.street ?? "FLOP").toUpperCase(), k = S.indexOf(street);
+  if (b) return {
+    b, street, pot: bb(b.pot), rake: b.rake,
+    seats: (b.players || []).map((p) => ({ label: p.position, pos: p.display_position, stack: bb(p.stack), combos: p.range?.combos ?? null, weight: p.range?.weight ?? null })),
+    sizes: S.map((x, i) => [x, i < k ? null : sentSizes(b, x)]),
+    rules: b.bet_sizes ? ["allin_threshold", "allin_if_less_than", "merge_sizes_threshold", "max_num_raises"].map((x) => `${x} ${b.bet_sizes[x]}`).join(" · ") : null,
+    other: ["ante", "ante_distribution_method", "tree_operations", "resolving_policy", "tournament_data"].map((x) => `${x} ${JSON.stringify(b[x] ?? null)}`).join(" · "),
+  };
+  const players = st.players ?? [w.spec.oopPos, w.spec.ipPos];
+  const labels = players.length === 3 ? ["OOP", "OOP+1", "IP"] : ["OOP", "IP"];
+  const wt = players.length === 3 ? [st.oopCombos, st.midCombos, st.ipCombos] : [st.oopCombos, st.ipCombos];
+  const pinned = st.fixedLevels?.length ? `FIXED ${st.fixedLevels.join(" / ")} by raise level` : null;
+  return {
+    b: null, street, pot: bb(st.potIn), rake: w.spec.rakeSent ?? w.spec.rake ?? GTOW_DEFAULT_RAKE,
+    seats: players.map((p, i) => ({ label: labels[i], pos: p, stack: bb(st.stackIn), combos: null, weight: wt[i] != null ? r2(wt[i]) : null })),
+    sizes: S.map((x, i) => [x, i < k ? null : i === k && pinned ? pinned : players.length === 3 ? "FIXED 3-way grid" : "AUTOMATIC"]),
+    rules: null, other: null,
+  };
+}
+const sentRakeOf = (w) => w.streets?.[0]?.sent?.rake ?? w.spec?.rakeSent ?? w.spec?.rake ?? GTOW_DEFAULT_RAKE;
+const sentRakeDefaulted = (w) => w.spec?.rakeDefaulted ?? !w.spec?.rake;
+/** The rake every tree of a chain was sent, in words — flagged when the builder's default filled it in. */
+function sentRakeHtml(w) {
+  const r = sentRakeOf(w), cents = DETAIL?.hand?.bbCents ?? null;
+  return `${r.pct_of_pot}% of the pot · cap <b>${r.cap_in_chips}bb</b>${cents ? ` <span class="sub">(= $${((r.cap_in_chips * cents) / 100).toFixed(2)} at this table's $${(cents / 100).toFixed(2)} big blind)</span>` : ""}${r.preflop_rake_type ? ` · preflop ${esc(r.preflop_rake_type)}` : ""}`
+    + csTableRakeSlot({ pct: r.pct_of_pot, capBb: r.cap_in_chips, nfnd: null })
+    + (sentRakeDefaulted(w) ? ` <span class="chip warn" title="no rake was passed for this solve, so the tree builder sent GTO Wizard's own NL500 structure">GTO Wizard's default — no rake was set</span>` : "");
+}
+function sentSummary(w) {
+  const r = sentRakeOf(w), sts = w.streets || [];
+  // the tree your decision was read on is the last one; its pot and stack are the ones that answered
+  const m0 = sts.length ? sentModel(w, sts[sts.length - 1]) : null;
+  const trees = sts.map((st) => { const m = sentModel(w, st); return `${m.street.toLowerCase()} ${m.sizes.find(([x]) => x === m.street)?.[1] ?? "?"}`; });
+  return `<span class="sub">rake <b>${r.pct_of_pot}% cap ${r.cap_in_chips}bb</b>${sentRakeDefaulted(w) ? " (GTO Wizard's default)" : ""}${csTableRakeSlot({ pct: r.pct_of_pot, capBb: r.cap_in_chips, nfnd: null })}${m0 ? ` · ${m0.street.toLowerCase()} tree: pot ${m0.pot}bb, stack ${m0.seats[0]?.stack ?? "?"}bb` : ""}${trees.length ? ` · ${trees.map(esc).join(" · ")}` : ""}</span>`;
+}
+function sentBody(w) {
+  const sts = w.streets || [];
+  if (!sts.length) return `<div class="sub">the stored chain has no trees</div>`;
+  const ms = sts.map((st) => sentModel(w, st));
+  const seats = (m) => m.seats.map((x) => `<div><b>${esc(x.pos)}</b> <span class="sub">${esc(x.label)}</span> · ${x.combos != null ? `${x.combos} combos · ` : ""}weight ${x.weight ?? "?"}</div>`).join("");
+  const stacks = (m) => { const v = m.seats.map((x) => x.stack); return v.length && v.every((x) => x === v[0]) ? `${v[0]}bb <span class="sub">every seat (the effective stack)</span>` : m.seats.map((x) => `${esc(x.pos)} ${x.stack}bb`).join(" · "); };
+  const rk = (m) => m.rake ? `${m.rake.pct_of_pot}% · cap <b>${m.rake.cap_in_chips}bb</b>${m.rake.preflop_rake_type ? ` · ${esc(m.rake.preflop_rake_type)}` : ""}` : "?";
+  const tree = (m, st) => `<span class="chip ${st.created ? "good" : "dim"}">${st.created ? "fresh cloud solve" : "cached tree"}</span> <span class="mono" title="${esc(st.solId ?? "")}">${esc(String(st.solId ?? "—").slice(0, 8))}</span>${st.account ? `<div class="sub">${esc(GTOW_ACCOUNT[st.account] ?? st.account)}</div>` : ""}`;
+  const rows = [
+    ["tree", tree],
+    ["board", (m, st) => `<span class="mono">${esc(st.board)}</span>`],
+    ["pot", (m) => `${m.pot}bb`],
+    ["stack", stacks],
+    ["seats · ranges in", seats],
+    ["rake", rk],
+    ...["FLOP", "TURN", "RIVER"].map((x, xi) => [`${x.toLowerCase()} sizes`, (m) => m.sizes[xi][1] == null ? '<span class="sub">—</span>' : esc(m.sizes[xi][1])]),
+    ...(ms.some((m) => m.rules) ? [["tree rules", (m) => m.rules ? `<span class="mono">${esc(m.rules)}</span>` : ""]] : []),
+    ...(ms.some((m) => m.other) ? [["also sent", (m) => m.other ? `<span class="mono">${esc(m.other)}</span>` : ""]] : []),
+  ];
+  const from = sts.every((st) => st.sentFrom === "recorded") ? "Recorded when the chain ran"
+    : sts.some((st) => st.sent) ? "Rebuilt from the stored trace with the tree builder the chain uses — this solve was stored before requests were recorded (2026-09-24)"
+    : "Read from the stored trace — this API predates the request record; restart it (the banner's Restart by hand) for the exact bodies";
+  return `<div class="sent-box">
+    <div class="scroll"><table class="sent-tbl"><thead><tr><th></th>${sts.map((st) => `<th>${esc(String(st.street ?? "?").toLowerCase())} tree</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(([k, f]) => `<tr><td class="k">${k}</td>${ms.map((m, i) => `<td>${f(m, sts[i])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="sub" style="margin-top:6px">${esc(from)}. Each tree is POSTed to GTO Wizard's custom-trees endpoint, then solved with custom-solutions { custom_tree_id, actions: "", board }; the walk reads one node per action along the line. A range is 1,326 combo weights: "combos" counts the ones above zero, "weight" is their sum.</div>
+    ${ms.map((m, i) => m.b ? `<details><summary>raw request body · ${esc(String(sts[i].street ?? "?").toLowerCase())} tree <span class="sub">(each range shown as its size)</span></summary><pre>${esc(JSON.stringify(m.b, null, 1))}</pre></details>` : "").join("")}
+  </div>`;
+}
+/** "Sent to GTO Wizard", collapsed to one line of what matters (rake, cap, pot, stack, sizing), open for the rest. */
+function sentBlock(w, open = false) {
+  if (!w?.streets?.length) return "";
+  return `<details class="rl-io sent"${open ? " open" : ""}><summary><b>Sent to GTO Wizard</b> ${sentSummary(w)}</summary><div class="rl-io-body">${sentBody(w)}</div></details>`;
+}
+/** Under a hero row of the Ranges tab: what GTO Wizard was sent (an AI-chain answer) or what the chart was solved
+ *  with (preflop). Null when the row has neither (yet). */
+function rlIo(i) {
+  const s = DETAIL.rl?.[i], act = DETAIL.hand.actions[i];
+  if (!act?.hero) return null;
+  if (s?.kind === "chain") return { sum: `<b>Sent to GTO Wizard</b> ${sentSummary(s.w)}`, body: sentBody(s.w) };
+  if (act.street !== "preflop") return null;
+  const { a } = rlAnswer(i);
+  const chart = a?.chart ?? (s?.kind === "chart" ? s.j?.chart : s?.kind === "aiview" ? s.v?.id : null) ?? null;
+  if (!chart) return null;
+  csWant(chart);
+  return { sum: `<b>Chart setup</b> ${csSlot(chart, "line")}`, body: csSlot(chart, "full", a?.depth ?? null) };
+}
+function rlIoInner(x) { return x ? `<summary>${x.sum}</summary><div class="rl-io-body">${x.body}</div>` : ""; }
+function renderRangeLooker() {
+  const host = $("rangelook"), h = DETAIL.hand;
+  const idx = rlDecisionsWhere(h, () => true);
+  host.dataset.drawn = "1";
+  if (!idx.length) { host.innerHTML = `<div class="sub">nobody made a decision in this hand</div>`; return; }
+  DETAIL.rl ??= {};
+  let html = "", street = null;
+  idx.forEach((i, k) => {
+    const a = h.actions[i];
+    if (a.street !== street) { street = a.street; html += rlStreetHead(street, i); }
+    html += a.hero ? rlRow(i, k) : rlVRow(i, k);
+  });
+  host.innerHTML = html;
+  host.querySelectorAll(".rl-facts").forEach((el) => el.onclick = (e) => { if (!e.target.closest("a,button")) setStep(Number(el.closest(".rl-row").dataset.step)); });
+  // a fold row draws its node only when opened
+  host.querySelectorAll("details.rl-row").forEach((el) => el.ontoggle = () => { if (el.open) { rlPaint(Number(el.dataset.step)); setStep(Number(el.dataset.step)); } });
+  host.querySelectorAll(".rl-row").forEach((el) => el.classList.toggle("cur", Number(el.dataset.step) === STEP));
+  rlLoadHand(idx);
+}
+/** Pot, price and stack for the seat to act at decision i. */
+function rlSpot(i, seat) {
+  const h = DETAIL.hand, rs = replayState(h, i), bets = rs.bets || {};
+  const toCall = r2(Math.max(0, Math.max(0, ...Object.values(bets).map(Number)) - (bets[seat] ?? 0)));
+  const stack0 = h.stacks?.[seat], stack = stack0 > 0 ? r2(Math.max(0, stack0 - (rs.invested[seat] ?? 0))) : null;
+  return { pot: r2(rs.pot), toCall, stack };
+}
+function rlRow(i, k) {
+  const h = DETAIL.hand, act = h.actions[i], sp = rlSpot(i, h.heroSeatId);
+  const { a, n } = rlAnswer(i);
+  let ans;
+  if (!a) ans = `<div class="sub">no study answer was logged at this decision</div>`;
+  else if (!a.text) ans = `<div class="ans-verdict"><span class="ans-fail">No answer</span></div><div class="sub">${esc(a.fail_reason ?? "the solve produced nothing")}</div>`;
+  else {
+    const mix = answerMix(a), pick = a.pick ?? (mix[0]?.label ?? "");
+    const off = pick && verbClass(pick) !== verbClass(act.type);
+    ans = `<div class="ans-verdict"><span class="ans-pick ${verbClass(pick)}">${esc(pick.toUpperCase())}</span>${a.roll != null ? `<span class="sub">roll ${a.roll}</span>` : '<span class="sub">no roll</span>'}${off ? ' <span class="chip warn" title="what you did is not the action the answer picked">not the pick</span>' : ""}</div>
+      ${mixBarHtml(mix, pick, a.roll, true)}`;
+  }
+  return `<div class="rl-row you" id="rl-${i}" data-step="${i}">
+    <div class="rl-facts" title="click to put the table replica at this decision">
+      <div class="rl-no"><span class="n">${k + 1}</span><b>YOU</b> <span class="sub">${esc(DETAIL.summary.heroPos ?? "")} · ${esc(act.street)}</span></div>
+      <div class="sub">pot ${sp.pot}bb · ${sp.toCall ? `${sp.toCall} to call` : "no bet to you"}${sp.stack != null ? ` · stack ${sp.stack}bb` : ""}</div>
+      <div class="rl-you">you <b>${esc(rlVerb(act))}</b></div>
+      ${ans}
+      ${a ? rlKv("answered by", srcLink(a.source)) + rlKv("tier", a.tier ? `<span class="chip">${esc(a.tier)}</span>` : "")
+        + rlKv(act.street === "preflop" ? "chart" : "ranges from", a.chart ? `<span title="${esc(a.chart)}" data-chartname="${esc(a.chart)}">${esc(chartName(a.chart))}</span>` : "")
+        + rlKv("time", `${a.latency_ms != null ? `${fmtLatency(a.latency_ms)} to answer` : ""}<span id="rl-t-${i}"></span>`) : ""}
+      ${n > 1 ? `<div class="sub">${n} answers logged here — showing the last</div>` : ""}
+      ${a && a.actionIndex != null ? `<a class="ev-link" href="/hands/${DETAIL.dbId}/node/${i}" onclick="go('/hands/${DETAIL.dbId}/node/${i}');return false">open the exact node ↗</a>` : ""}
+    </div>
+    <div class="rl-grids" id="rl-g-${i}">${rlGrids(i)}</div>
+    ${(() => { const x = rlIo(i); return `<details class="rl-io" id="rl-io-${i}"${x ? "" : " hidden"}>${rlIoInner(x)}</details>`; })()}
+  </div>`;
+}
+/** Their decision: the node's strategy, what they did, and the range it leaves. A fold is one line that opens. */
+function rlVRow(i, k) {
+  const h = DETAIL.hand, act = h.actions[i], pos = rlPos(act.seatId);
+  if (act.type === "fold") {
+    return `<details class="rl-row villain fold" id="rl-${i}" data-step="${i}">
+      <summary><span class="rl-no"><span class="n">${k + 1}</span><b>${esc(pos)}</b></span> folds <span class="sub" id="rl-vf-${i}">${rlVFacts(i, true)}</span><span class="sub rl-open">the node</span></summary>
+      <div class="rl-grids" id="rl-g-${i}"></div>
+    </details>`;
+  }
+  const sp = rlSpot(i, act.seatId);
+  return `<div class="rl-row villain" id="rl-${i}" data-step="${i}">
+    <div class="rl-facts" title="click to put the table replica at this decision">
+      <div class="rl-no"><span class="n">${k + 1}</span><b>${esc(pos)}</b> <span class="sub">${esc(act.street)}</span></div>
+      <div class="sub">pot ${sp.pot}bb · ${sp.toCall ? `${sp.toCall} to call` : "no bet to them"}${sp.stack != null ? ` · stack ${sp.stack}bb` : ""}</div>
+      <div class="rl-you">${esc(pos)} <b>${esc(rlVerb(act))}</b></div>
+      <div id="rl-vf-${i}">${rlVFacts(i, false)}</div>
+    </div>
+    <div class="rl-grids" id="rl-g-${i}">${rlGrids(i)}</div>
+  </div>`;
+}
+/** Load what the chronology draws. Your decisions first: their chain solves hold the villains' postflop nodes
+ *  too. The villains' preflop nodes come from the preflop path, in parallel. */
+async function rlLoadHand(idx) {
+  const D = DETAIL, h = D.hand;
+  const heroIdx = idx.filter((i) => h.actions[i].hero);
+  const theirs = idx.filter((i) => !h.actions[i].hero);
+  for (const i of theirs) if (!D.rl[i] && h.actions[i].street !== "preflop") D.rl[i] = { kind: "vwait" };
+  const pre = theirs.some((i) => h.actions[i].street === "preflop") ? rlLoadPath(false, null, D) : null;
+  await rlLoadAll(heroIdx);
+  if (DETAIL !== D) return;
+  rlDeriveVillains(D);
+  await pre;
+}
+async function rlLoadAll(idx) {
+  const D = DETAIL, queue = idx.filter((i) => !D.rl[i]);
+  const worker = async () => { while (queue.length && DETAIL === D) await rlLoad(queue.shift(), D); };
+  await Promise.all([worker(), worker(), worker()]);
+}
+async function rlLoad(i, D) {
+  const put = (s) => { D.rl[i] = s; if (DETAIL === D) rlPaint(i); };
+  const getJ = async (u) => (await fetch(u)).json();
+  const { a } = rlAnswer(i);
+  put({ loading: true });
+  try {
+    if (a?.solve_id != null) { const w = await getJ(`/api/dashboard/solve/${a.solve_id}`); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    const j = await getJ(`/api/dashboard/answer-node?dbId=${D.dbId}&upto=${i}&ranges=1`);
+    if (!j.ok) return put({ kind: "none", why: j.error ?? "no node" });
+    if (CHART_NODE_KINDS.has(j.kind)) return put(j.node ? { kind: "chart", j } : { kind: "none", why: j.note ?? "the chart has no node for this line" });
+    if (j.kind === "mes") return put({ kind: "mes", j });
+    if (j.logged?.solveId != null) { const w = await getJ(`/api/dashboard/solve/${j.logged.solveId}`); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    put({ kind: D.hand.actions[i].street === "preflop" ? "ai-preflop" : "unsolved", j });
+  } catch (e) { put({ kind: "none", why: String(e) }); }
+}
+/** A chain solve's nodes → the archived actions they stand for, street by street and seat by seat in turn (a seat
+ *  collapsed out of a multiway tree simply has no node). */
+function rlChainActions(w, D) {
+  const h = D.hand, out = [], used = new Set();
+  const hu = (w.nodes[0]?.players ?? [w.spec.oopPos, w.spec.ipPos]).length === 2;
+  const name = (p) => { const u = String(p ?? "").toUpperCase(); return hu && u === "BTN" ? "SB" : u; };
+  const posOfAct = (a) => name(a.hero ? (h.positions[h.heroSeatId] ?? D.summary.heroPos) : h.positions[a.seatId]);
+  w.nodes.forEach((n, k) => {
+    const street = String(n.street).toLowerCase(), want = name(n.actorPos);
+    const ai = h.actions.findIndex((a, j) => !used.has(j) && a.street === street && rlIsDecision(a) && posOfAct(a) === want);
+    if (ai >= 0) { used.add(ai); out.push([k, ai]); }
+  });
+  return out;
+}
+/** The villains' postflop rows, from the chain solves your rows hold: a solve walks every node from the flop to
+ *  your decision, so a villain's node is in the first solve after it. */
+function rlDeriveVillains(D) {
+  const h = D.hand, heroIdx = rlDecisionsWhere(h, (a) => a.hero);
+  for (const i of heroIdx) {
+    const s = D.rl[i];
+    if (s?.kind !== "chain") continue;
+    for (const [k, ai] of rlChainActions(s.w, D)) {
+      if (h.actions[ai].hero || D.rl[ai]?.kind === "vnode") continue;
+      D.rl[ai] = { kind: "vnode", w: s.w, n: s.w.nodes[k] };
+    }
+  }
+  const theirs = rlDecisionsWhere(h, (a) => !a.hero && a.street !== "preflop");
+  for (const ai of theirs) {
+    if (D.rl[ai]?.kind === "vnode") continue;
+    const next = heroIdx.find((i) => i > ai), nk = next != null ? D.rl[next]?.kind : null;
+    D.rl[ai] = { kind: "vnone", why: next == null ? "the stored solves end at your last decision — nothing after it was solved"
+      : nk === "mes" ? "your next decision was answered by the MES locked solve, which stores only the acting range"
+      : nk === "chain" ? "not in the solved tree (a seat collapsed out of a multiway flop has no node)"
+      : "your next decision has no stored solve — solve it and this node comes with it" };
+  }
+  if (DETAIL === D) for (const ai of theirs) rlPaint(ai);
+}
+/** The preflop path: every seat's node along the whole preflop line. A chart walks for free; a hand the GTO Wizard
+ *  AI answered preflop needs `ai` (a click), because rebuilding its tree costs quota. It fills every preflop row. */
+async function rlLoadPath(ai, btn, D = DETAIL) {
+  if (btn) { btn.disabled = true; btn.textContent = "loading from GTO Wizard…"; }
+  let p;
+  try {
+    const r = await fetch(`/api/dashboard/preflop-path?dbId=${D.dbId}${ai ? "&ai=1" : ""}`);
+    const txt = await r.text();
+    try { p = JSON.parse(txt); }
+    catch { p = { ok: false, error: r.status === 404 ? "this API predates the preflop path — restart it (the banner's Restart by hand) to draw these nodes" : txt.slice(0, 160) }; }
+  } catch (e) { p = { ok: false, error: String(e) }; }
+  rlApplyPath(p, D, ai);
+}
+function rlApplyPath(p, D, ai) {
+  const h = D.hand, pre = rlDecisionsWhere(h, (a) => a.street === "preflop");
+  if (!p.ok) {
+    for (const i of pre) {
+      if (h.actions[i].hero) { if (ai && D.rl[i]?.kind === "ai-preflop") D.rl[i] = { ...D.rl[i], err: p.error }; }
+      else D.rl[i] = ai || D.rl[i]?.kind === "vai" ? { kind: "vai", err: p.error } : { kind: "vnone", why: p.error ?? "the preflop path could not be read" };
+    }
+  } else if (p.kind === "ai-preflop") {
+    for (const i of pre) if (!h.actions[i].hero) D.rl[i] = { kind: "vai" };
+  } else {
+    const seen = new Map();          // each seat's range so far, for your rows' "range so far" on an AI tree
+    for (const st of p.steps) {
+      const at = st.actionIndex;
+      if (at != null && h.actions[at].hero) {
+        if (p.kind === "ai") D.rl[at] = { kind: "aiview", v: { id: p.chart, note: p.note, actions: st.actions, strategy: st.strategy, heroKey: st.pos, villains: [...seen].filter(([q]) => q !== st.pos) } };
+      } else if (at != null) D.rl[at] = { kind: "vstep", st, p };
+      if (st.rangeOut) seen.set(st.pos, st.rangeOut); else seen.delete(st.pos);
+    }
+    for (const i of pre) if (!h.actions[i].hero && D.rl[i]?.kind !== "vstep") D.rl[i] = { kind: "vnone", why: p.note ?? "the chart walk stopped before this action" };
+  }
+  if (p.ok && p.chart) csWant(p.chart, D);
+  if (DETAIL === D) for (const i of pre) rlPaint(i);
+}
+function rlPaint(i) {
+  const row = $(`rl-${i}`), fold = row?.tagName === "DETAILS";
+  const f = $(`rl-vf-${i}`); if (f) f.innerHTML = rlVFacts(i, fold);
+  const g = $(`rl-g-${i}`); if (g && !(fold && !row.open)) g.innerHTML = rlGrids(i);
+  const t = $(`rl-t-${i}`); if (t) t.innerHTML = rlTiming(i);
+  const io = $(`rl-io-${i}`); if (io) { const x = rlIo(i); io.hidden = !x; io.innerHTML = rlIoInner(x); }
+}
+/** What the stored chain took, beside the answer's own latency. */
+function rlTiming(i) {
+  const s = DETAIL.rl?.[i];
+  if (s?.kind !== "chain") return "";
+  const w = s.w, sts = w.streets || [], fresh = sts.filter((x) => x.created).length;
+  return ` <span class="sub">· chain ${w.row.solveMs != null ? fmtLatency(w.row.solveMs) : "?"}${sts.length ? ` · ${fresh} fresh, ${sts.length - fresh} cached tree${sts.length - fresh === 1 ? "" : "s"}` : ""}</span>`;
+}
+/** A chain action's label: the size only when there is one ("BET 8", "CHECK"). */
+const rlLabel = (x) => x.name + (Number(x.betsize) > 0 && !/\d/.test(x.name) ? ` ${x.betsize}` : "");
+const rlCard = (title, body, foot = "", cls = "") => `<div class="rl-card${cls ? ` ${cls}` : ""}"><div class="rl-h">${title}</div>${body}${foot ? `<div class="rl-hero">${foot}</div>` : ""}</div>`;
+/** A class→fraction range (a chart walk) as weightGrid's class→combos shape. */
+const rlAgg = (r) => { const out = {}; for (const [k, f] of Object.entries(r || {})) if (f > 0) out[k] = { w: f * COMBOS(k) }; return out; };
+/** How much of a range takes each action: [{label, pct}] from a class strategy. */
+function rlMixOf(cls, labels) {
+  const tot = labels.map(() => 0);
+  let all = 0;
+  for (const k in cls) { all += cls[k].w; cls[k].acts.forEach((x, ai) => { tot[ai] += x; }); }
+  return labels.map((label, ai) => ({ label, pct: all ? Math.round((1000 * tot[ai]) / all) / 10 : 0 })).filter((x) => x.pct > 0);
+}
+/** A villain row's node in one shape, whichever source holds it. */
+function rlVNode(i) {
+  const s = DETAIL.rl?.[i];
+  if (s?.kind === "vnode") {
+    const n = s.n, labels = n.actions.map((x) => rlLabel(x));
+    return { pos: n.actorPos, labels, cls: n.actorStrategy, combos: n.actorCombos, board: n.board, taken: n.taken != null ? labels[n.taken] : null,
+      after: n.rangesOut?.[n.actor] ?? null, what: "the solve's", src: `stored chain #${s.w.row.id} · ${String(n.street).toLowerCase()} tree`, notes: [] };
+  }
+  if (s?.kind === "vstep") {
+    const st = s.st, p = s.p;
+    return { pos: st.pos, labels: st.actions, cls: st.strategy, combos: null, board: null, taken: st.taken, after: st.rangeOut,
+      what: p.kind === "ai" ? "GTO Wizard AI's" : "the chart's", src: p.kind === "ai" ? "GTO Wizard AI (tree rebuilt from this hand)" : chartName(p.chart), chart: p.chart ?? null,
+      notes: [st.merged ? "the range after counts every raise size at this node — the rule the ranges downstream use" : "",
+        st.snapped ? `size snapped to the tree: ${st.snapped}` : "", st.fitted ? "not in the tree — the line fit read this seat as folding" : ""].filter(Boolean) };
+  }
+  return null;
+}
+/** A villain row's left column (or, for a fold, its one line): how much of the range does this, and the mix. */
+function rlVFacts(i, oneLine) {
+  const s = DETAIL.rl?.[i], v = rlVNode(i);
+  // no node: a full row's placeholder lives in its grids column; a fold's one line says there is none to open
+  const pending = !s || s.loading || s.kind === "vwait";
+  if (!v) return oneLine ? (pending ? "" : "· no stored node") : pending ? `<div class="sub">reading the node…</div>` : "";
+  const mix = rlMixOf(v.cls, v.labels), share = mix.find((x) => x.label === v.taken)?.pct ?? 0;
+  if (oneLine) return `· ${share}% of ${esc(v.pos)}'s range folds here`;
+  return rlKv("of the range", `<b>${share}%</b> of ${esc(v.pos)}'s range does this`) + mixBarHtml(mix, v.taken, null, true) + rlKv("from", esc(v.src)) + (v.chart ? rlKv("setup", csSlot(v.chart, "line")) : "");
+}
+/** Hero's line under the strategy grid: the exact hand, what the node plays with it, and the roll. */
+function rlHeroLine(i, parts) {
+  const { a } = rlAnswer(i);
+  const pick = a?.text ? (a.pick ?? answerMix(a)[0]?.label ?? "") : "";
+  return `<span class="big">${cardsHtml(DETAIL.hand.heroCards)}</span> ${parts || '<span class="sub">no row for your hand at this node</span>'}${a?.roll != null ? ` · <span class="chip">roll ${a.roll}</span> → <b>${esc(pick)}</b>` : ""}`;
+}
+/** Seats still to act preflop: every hand, so they get a line rather than a full grid. */
+function rlYetToAct(i) {
+  const h = DETAIL.hand;
+  if (h.actions[i].street !== "preflop") return "";
+  const before = h.actions.slice(0, i);
+  const seats = [...new Set([...Object.keys(h.positions).map(Number), ...before.map((a) => a.seatId)])].filter((s) => s !== h.heroSeatId);
+  const waiting = seats.filter((s) => !before.some((a) => a.seatId === s && rlIsDecision(a)));
+  return waiting.length ? `<div class="rl-card rl-wait"><div class="rl-h">${waiting.map((s) => esc(rlPos(s))).join(", ")}</div><div class="sub">yet to act — any hand</div></div>` : "";
+}
+function rlGrids(i) {
+  const s = DETAIL.rl?.[i], h = DETAIL.hand;
+  const heroKey = classOfCardsJs(h.heroCards), heroCombo = (h.heroCards || []).join("");
+  if (!s || s.loading) return `<div class="sub rl-pending">loading the node…</div>`;
+  if (s.kind === "vwait") return `<div class="sub rl-pending">waiting for the chain your next decision stored…</div>`;
+  const pct = (xs) => xs.filter((x) => x.p > 0.5).sort((x, y) => y.p - x.p).map((x) => `<b>${esc(x.label)}</b> ${x.p.toFixed(x.p < 10 ? 1 : 0)}%`).join(" · ");
+  const v = rlVNode(i);
+  if (v) {
+    const folds = /^fold/i.test(v.taken ?? "");
+    return rlCard(`${esc(v.pos)} <span class="sub">— ${v.what} strategy at this node</span>`,
+        classGrid(v.cls, v.labels, null, { ...(v.combos ? { combos: v.combos } : {}), board: v.board, small: true, openHero: false, foot: "their whole range · fill = share of the class in range · hover for the mix" }))
+      + (v.after && !folds ? rlCard(`${esc(v.pos)} after ${esc(v.taken ?? "")} <span class="sub">— the range from here on</span>`, weightGrid(v.after, null, "range", null, null, v.board), "", "rl-v") : "")
+      + (v.notes.length ? `<div class="sub rl-note">${v.notes.map(esc).join(" · ")}</div>` : "");
+  }
+  if (s.kind === "chain") {
+    const w = s.w, sp = w.spec, n = w.nodes.find((x) => x.heroNode) ?? w.nodes[w.nodes.length - 1];
+    if (!n) return rlPlaceholder("the stored chain has no nodes");
+    const labels = n.actions.map((x) => rlLabel(x));
+    const players = n.players ?? [sp.oopPos, sp.ipPos];
+    const seats = n.rangesIn.mid ? ["oop", "mid", "ip"] : ["oop", "ip"];
+    const heroLab = n.heroSeatLabel ?? sp.heroSeat;
+    const heroRow = n.heroRow ? pct(n.heroRow.map((x) => ({ label: rlLabel(x), p: Number(x.p) }))) : "";
+    return rlCard(`You · ${esc(players[seats.indexOf(heroLab)] ?? "")} <span class="sub">— your strategy at this node</span>`,
+        classGrid(n.actorStrategy, labels, heroKey, { combos: n.actorCombos, board: n.board, heroCombo: sp.heroCombo ?? heroCombo, small: true, openHero: false, foot: "your class outlined · fill = share of the class still in range" }),
+        rlHeroLine(i, heroRow))
+      + seats.filter((l) => l !== heroLab).map((l) => rlCard(`${esc(players[seats.indexOf(l)] ?? l)} <span class="sub">— range coming in</span>`,
+        weightGrid(n.rangesIn[l], null, "range", n.rangesInCombos?.[l], null, n.board), "", "rl-v")).join("")
+      + (s.replay ? `<div class="sub rl-note">re-solved just now through the live chain — stored as replay #${w.row.id}</div>` : "");
+  }
+  if (s.kind === "chart") {
+    const j = s.j, nd = j.node, labels = nd.actions.map((x) => x.action);
+    const heroW = j.ranges && j.heroKey ? j.ranges[j.heroKey] ?? null : null;
+    const cls = {};
+    for (const c of nd.cells) {
+      const f = heroW ? (heroW[c.hand] ?? 0) : 1;
+      if (f <= 0) continue;
+      const w = COMBOS(c.hand) * f;
+      cls[c.hand] = { w, acts: labels.map((l) => (w * (c.actions[l] ?? 0)) / 100) };
+    }
+    const cell = nd.cells.find((c) => c.hand === heroKey);
+    const outOfRange = heroW && !(heroW[heroKey] > 0);
+    const villains = Object.entries(j.ranges || {}).filter(([p]) => p !== j.heroKey);
+    return rlCard(`You · ${esc(j.heroKey ?? nd.pos ?? "")} <span class="sub">— the chart's strategy at this node</span>`,
+        classGrid(cls, labels, heroKey, { small: true, openHero: false, foot: heroW ? "your class outlined · fill = share of the class still in range" : "your class outlined · your first decision: every hand" }),
+        rlHeroLine(i, cell ? pct(Object.entries(cell.actions).map(([label, p]) => ({ label, p }))) : "")
+          + (outOfRange ? `<div class="warn">your hand is not in the chart's range here — the chart would not have played it this way earlier</div>` : ""))
+      + villains.map(([p, r]) => rlCard(`${esc(p)} <span class="sub">— range so far</span>`, weightGrid(rlAgg(r), null, "range"), "", "rl-v")).join("")
+      + rlYetToAct(i)
+      + (j.ranges == null && j.rangesNote ? `<div class="sub rl-note">${esc(j.rangesNote)}</div>` : "")
+      + (j.note ? `<div class="sub rl-note">⚠ ${esc(j.note)}</div>` : "");
+  }
+  if (s.kind === "aiview") {
+    const v = s.v, { a } = rlAnswer(i);
+    const cell = v.strategy[heroKey];
+    const parts = cell && cell.w > 0 ? pct(v.actions.map((label, ai) => ({ label, p: (100 * cell.acts[ai]) / cell.w }))) : "";
+    return rlCard(`You · ${esc(v.heroKey ?? "")} <span class="sub">— GTO Wizard AI's strategy at this node</span>`,
+        classGrid(v.strategy, v.actions, heroKey, { small: true, openHero: false, foot: "your class outlined · fill = share of the class still in range" }), rlHeroLine(i, parts))
+      + v.villains.map(([p, agg]) => rlCard(`${esc(p)} <span class="sub">— range so far</span>`, weightGrid(agg, null, "range"), "", "rl-v")).join("")
+      + rlYetToAct(i)
+      + `<div class="sub rl-note">${esc(v.note)}${a?.chart && a.chart !== v.id ? ` · ⚠ the answer's own tree was <span class="mono">${esc(a.chart)}</span>; this one is <span class="mono">${esc(v.id)}</span>` : ""}</div>`;
+  }
+  if (s.kind === "mes") {
+    const m = s.j.mes, { cls, combos, labels } = mesClasses(m, m.mes, m.mesEv);
+    const hi = m.heroIdx;
+    const parts = hi != null && hi >= 0 ? pct(m.acts.map((_, ai) => ({ label: labels[ai], p: 100 * (m.mes?.[ai]?.[hi] ?? 0) }))) : "";
+    return rlCard(`You · ${esc(m.heroPos)} <span class="sub">— the locked solve's strategy (vs the pool villain)</span>`,
+        classGrid(cls, labels, heroKey, { combos, board: m.board, heroCombo, small: true, openHero: false, foot: "your class outlined · fill = weight in range" }), rlHeroLine(i, parts))
+      + rlPlaceholder("the MES locked solve stores only the acting range — there is no villain grid for it");
+  }
+  const aiLoad = `<button class="mini" onclick="rlLoadPath(true, this)">load the preflop from GTO Wizard AI</button> <span class="sub">rebuilds the tree from this hand and fills every preflop row — costs GTO Wizard quota unless this API still has it cached</span>`;
+  if (s.kind === "ai-preflop") return rlPlaceholder("Answered by GTO Wizard AI preflop, which stores no node with the answer.", aiLoad, s.err);
+  if (s.kind === "vai") return rlPlaceholder("This hand's preflop was answered by GTO Wizard AI, which stores no nodes.", aiLoad, s.err);
+  if (s.kind === "unsolved") {
+    return rlPlaceholder(`No stored solve for this decision${rlAnswer(i).a ? " (answered before solves were stored, or the answer failed)" : ""}.`,
+      `<button class="mini" onclick="rlSolve(${i}, this)">▶ solve it (live chain)</button> <span class="sub">re-runs the live path on this hand · costs GTO Wizard quota when the trees are not cached</span>`, s.err);
+  }
+  return rlPlaceholder(`Nothing to draw: ${esc(s.why ?? "unknown reason")}`);
+}
+const rlPlaceholder = (why, action = "", err = null) => `<div class="rl-card rl-empty"><div>${why}</div>${action ? `<div style="margin-top:8px">${action}</div>` : ""}${err ? `<div class="warn" style="margin-top:6px">${esc(err)}</div>` : ""}</div>`;
+async function rlSolve(i, btn) {
+  const D = DETAIL;
+  btn.disabled = true; btn.textContent = "solving…";
+  let r;
+  try { r = await (await fetch("/api/dashboard/resolve-chain", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbId: D.dbId, upto: i }) })).json(); }
+  catch (e) { r = { ok: false, error: String(e) }; }
+  if (!r.ok) { D.rl[i] = { ...D.rl[i], err: `solve failed: ${r.error ?? "unknown"}` }; if (DETAIL === D) rlPaint(i); return; }
+  if (r.tier !== "ai-chain" || r.solveId == null) {
+    D.rl[i] = { kind: "none", why: `the live path answered from ${r.tier ?? r.source ?? "another tier"} this time, not the AI chain, so there is no chain to draw` };
+  } else {
+    const w = await (await fetch(`/api/dashboard/solve/${r.solveId}`)).json();
+    D.rl[i] = w.ok ? { kind: "chain", w, replay: true } : { kind: "none", why: w.error };
+  }
+  if (DETAIL === D) { rlPaint(i); rlDeriveVillains(D); }
+}
+
 function setStep(n) {
   STEP = Math.max(0, Math.min(n, DETAIL.hand.actions.length));
   const rs = replayState(DETAIL.hand, STEP);
@@ -794,6 +1443,7 @@ function setStep(n) {
   const rl = $("rec-link");
   if (rl && DETAIL.session?.recording) rl.href = recordingHref(DETAIL.session.recording, STEP);
   for (const row of $("timeline").querySelectorAll(".tl-row")) row.classList.toggle("cur", Number(row.dataset.step) === STEP);
+  for (const row of document.querySelectorAll("#rangelook .rl-row")) row.classList.toggle("cur", Number(row.dataset.step) === STEP);
   // feed sync: lines whose step <= STEP are past; the last of them is "now"
   const lines = $("feed-sync").querySelectorAll("[data-fl]");
   let last = null;
@@ -947,20 +1597,27 @@ function classGrid(cls, actions, heroKey, opt = {}) {
     html += `<div class="${key === heroKey ? "hero" : ""}${inRange ? "" : " off"}${clk ? " clk" : ""}" style="${style}" title="${esc(tip)}${clk ? " · click for the combos" : ""}"${clk}>${key.slice(0, 2)}${suit}</div>`;
   }
   html += `</div><div class="sub" style="margin-top:6px">${opt.foot ?? "hero's class outlined · hover any cell for its mix"} · click a class for its combos</div>`;
-  html += `<div class="combo-panel" id="cp-${cid}"></div>`;
+  // Hero's class opens by itself (2026-09-24, Brady): the outline says which class you hold,
+  // the panel says which of its combos is yours. A click on the cell still folds it.
+  const open = heroKey && opt.openHero !== false && cls[heroKey]?.w > 0.0005 ? heroKey : null;
+  html += `<div class="combo-panel" id="cp-${cid}"${open ? ` data-cls="${open}"` : ""}>${open ? comboPanelHtml(COMBO_DATA[cid], open) : ""}</div>`;
   return html;
 }
 const sameCombo = (a, b) => { if (!a || !b) return false; const A = a.match(/.{2}/g) || [], B = b.match(/.{2}/g) || []; return A.length === 2 && B.length === 2 && ((A[0] === B[0] && A[1] === B[1]) || (A[0] === B[1] && A[1] === B[0])); };
 function showCombos(cid, cls) {
   const d = COMBO_DATA[cid], host = $(`cp-${cid}`);
   if (!d || !host) return;
+  if (host.dataset.cls === cls) { host.innerHTML = ""; host.dataset.cls = ""; return; }   // click again to fold
+  host.dataset.cls = cls;
+  host.innerHTML = comboPanelHtml(d, cls);
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function comboPanelHtml(d, cls) {
   // A real per-combo solve when the node carried one; otherwise the class spread over its
   // legal combos, which is the whole truth preflop. `derived` decides what the head says.
   const e = d.cls?.[cls];
   const derived = !d.combos;
   const rows = derived ? (e ? comboRows(cls, e.w, d.single ? null : e.acts, d.board) : []) : (d.combos[cls] || []);
-  if (host.dataset.cls === cls) { host.innerHTML = ""; host.dataset.cls = ""; return; }   // click again to fold
-  host.dataset.cls = cls;
   const colors = d.single ? [GWPAL.range] : gtowColors(d.actions), order = d.single ? [0] : gtowOrder(d.actions);
   const inRange = rows.reduce((a, r) => a + r.w, 0), nCls = COMBOS(cls);
   const hand = (h) => (h.match(/.{2}/g) || []).map(cardHtml).join(" ");
@@ -970,22 +1627,25 @@ function showCombos(cid, cls) {
   let html = `<div class="cp-head"><b>${esc(cls)}</b> <span class="sub">${rows.length} legal combo${rows.length === 1 ? "" : "s"} · ${inRange.toFixed(2)} of ${nCls} in range · ${what}</span>` +
     `<span class="sub cp-legend">${order.map((ai) => `<span><span class="sw" style="background:${colors[ai]}"></span>${esc(d.actions[ai])}</span>`).join("")}</span></div>`;
   const collapse = derived && !d.board && rows.length > 1;
+  // your exact combo, when it is in this class — preflop it stands in for the collapsed row
+  const heroRow = rows.find((r) => sameCombo(r.hand, d.heroCombo)) ?? null;
   if (derived && rows.length > 1) html += `<div class="cp-note sub">${d.board
     ? `This grid carries no per-combo solve, so each combo shows the CLASS average — blockers are not reflected. Only nodes solved per combo (the AI chain, the MES locked solves) split them apart.`
-    : `Preflop a solver stores 169 classes, not 1,326 combos: with no board there are no blockers, so all ${rows.length} of these are the same hand and play identically — shown as one row.`}</div>`;
+    : `Preflop a solver stores 169 classes, not 1,326 combos: with no board there are no blockers, so all ${rows.length} of these are the same hand and play identically — shown as one row${heroRow ? ", yours" : ""}.`}</div>`;
   if (!rows.length) html += `<div class="sub">no legal combo of ${esc(cls)} is in range here (blocked by the board or folded out)</div>`;
-  const drawn = collapse ? rows.slice(0, 1) : rows;
+  else if (!heroRow && d.heroKey === cls && d.heroCombo) html += `<div class="sub warn">your ${hand(d.heroCombo)} has no weight in this range</div>`;
+  const drawn = collapse ? [heroRow ?? rows[0]] : rows;
   for (const r of drawn) {
-    const isHero = !collapse && sameCombo(r.hand, d.heroCombo);
+    const isHero = r === heroRow;
     const segs = d.single ? [{ color: GWPAL.range, frac: 1 }] : order.map((ai) => ({ color: colors[ai], frac: r.s?.[ai] ?? 0 }));
     const nums = d.single ? "" : order.map((ai) => { const p = (r.s?.[ai] ?? 0) * 100; if (p < 0.5) return ""; const ev = r.ev?.[ai]; return `<span style="color:${colors[ai]}">${esc(d.actions[ai])}</span> ${p.toFixed(1)}%${ev != null ? `<span class="sub"> ev ${Number(ev).toFixed(2)}</span>` : ""}`; }).filter(Boolean).join(" · ");
-    html += `<div class="cmb${isHero ? " hero" : ""}"><span class="cards mono">${collapse ? esc(cls) : hand(r.hand)}</span><span class="w sub" title="${collapse ? "weight of each combo in the range" : "weight of this combo in the range"}">${(r.w * 100).toFixed(0)}%</span>` +
+    const you = isHero ? `<span class="chip good">you</span>` : "";
+    html += `<div class="cmb${isHero ? " hero" : ""}"><span class="cards mono">${collapse && !isHero ? esc(cls) : hand(r.hand)}</span><span class="w sub" title="${collapse ? "weight of each combo in the range" : "weight of this combo in the range"}">${(r.w * 100).toFixed(0)}%</span>` +
       `<span class="bar" style="${gtowCellStyle(segs, 1)}"></span><span class="nums">${nums}</span>${
-        collapse ? `<span class="chip dim" title="every combo of ${esc(cls)}">×${rows.length}</span>` : isHero ? `<span class="chip good">you</span>` : ""}</div>`;
+        collapse ? `<span>${you}<span class="chip dim" title="every combo of ${esc(cls)}">×${rows.length}</span></span>` : you}</div>`;
   }
-  if (collapse) html += `<div class="cp-combos sub">${rows.map((r) => `<span class="mono">${hand(r.hand)}</span>`).join("")}</div>`;
-  host.innerHTML = html;
-  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (collapse) html += `<div class="cp-combos sub">${rows.map((r) => `<span class="mono${r === heroRow ? " hero" : ""}"${r === heroRow ? ` title="your combo"` : ""}>${hand(r.hand)}</span>`).join("")}</div>`;
+  return html;
 }
 const crumb = (line, snapped = []) => {
   const toks = (line ?? "").split("-").filter(Boolean);
@@ -994,6 +1654,23 @@ const crumb = (line, snapped = []) => {
 };
 const fact = (k, v) => v == null || v === "" ? "" : `<div class="f"><span class="k">${k}</span><span class="v">${v}</span></div>`;
 
+/** A locked solve's 1,326-wide range + strategy as classGrid's classes, and each class's combos with their own split. */
+function mesClasses(m, strat, evs) {
+  const cls = {}, combos = {};
+  m.holes.forEach((h, ci) => {
+    const i1 = RANKS.indexOf(h[0]), i2 = RANKS.indexOf(h[2]);
+    const key = i1 === i2 ? h[0] + h[2] : RANKS[Math.min(i1, i2)] + RANKS[Math.max(i1, i2)] + (h[1] === h[3] ? "s" : "o");
+    const w = m.weights[ci] ?? 0;
+    const e = (cls[key] ??= { w: 0, acts: new Array(m.acts.length).fill(0) });
+    e.w += w; m.acts.forEach((_, ai) => { e.acts[ai] += w * (strat?.[ai]?.[ci] ?? 0); });
+    if (w > 0) (combos[key] ??= []).push({ hand: h, w,
+      s: m.acts.map((_, ai) => strat?.[ai]?.[ci] ?? 0),
+      ev: m.acts.map((_, ai) => evs?.[ai]?.[ci] ?? null) });
+  });
+  for (const k in combos) combos[k].sort((a, b) => b.w - a.w || a.hand.localeCompare(b.hand));
+  const labels = m.acts.map((a) => a.replace(/\((\d+(?:\.\d+)?)\)/, (_, x) => ` ${(x / 100).toFixed(1)}bb`));
+  return { cls, combos, labels };
+}
 async function openAnswerNode(upto) {
   if (!DETAIL) return;
   setStep(upto);
@@ -1006,8 +1683,10 @@ async function openAnswerNode(upto) {
   const lg = j.logged;
   const loggedLine = lg ? `<div class="sub" style="margin-bottom:8px">This is the node behind answer <b>#${lg.id}</b> at action ${upto}${lg.tier ? ` · tier <span class="chip">${esc(lg.tier)}</span>` : ""}${lg.line ? " · line as logged live" : " · line rebuilt from the archive (this answer predates line logging)"}</div>` : `<div class="sub" style="margin-bottom:8px">No answer was logged at action ${upto}; this is the node the resolver would use today.</div>`;
   const heroKey = j.heroClass;
+  const heroCombo = (j.heroCards || []).filter((c) => /^[2-9TJQKA][shdc]$/.test(c)).join("");
+  const heroTag = heroCombo.length === 4 ? `${heroCombo.match(/.{2}/g).map(cardHtml).join("")} <span class="sub">${esc(heroKey)}</span>` : esc(heroKey);
 
-  if (j.kind === "hrc" || j.kind === "hrc6max" || j.kind === "gtow") {
+  if (CHART_NODE_KINDS.has(j.kind)) {
     const n = j.node;
     let body = "";
     if (n) {
@@ -1017,8 +1696,8 @@ async function openAnswerNode(upto) {
         cls[c.hand] = { w: COMBOS(c.hand), acts: acts.map((p) => (COMBOS(c.hand) * p) / 100) };
       }
       const heroCell = n.cells.find((c) => c.hand === heroKey);
-      body = classGrid(cls, n.actions.map((a) => a.action), heroKey, { flat: true, wmax: 1e9, foot: "every class in the chart at this node · hero's class outlined · hover for the mix" }) +
-        (heroKey ? `<div class="nv-hero">${heroCell ? `<span class="big">${esc(heroKey)}</span> <span class="sub">— the chart says</span> ${Object.entries(heroCell.actions).filter(([, p]) => p > 0.5).sort((a, b) => b[1] - a[1]).map(([a, p]) => `<b>${esc(a)}</b> ${p.toFixed(0)}%`).join(" · ")}` : `<span class="big">${esc(heroKey)}</span> <span class="warn">is not in the range at this node</span>`}</div>` : "");
+      body = classGrid(cls, n.actions.map((a) => a.action), heroKey, { flat: true, wmax: 1e9, heroCombo, foot: "every class in the chart at this node · hero's class outlined · hover for the mix" }) +
+        (heroKey ? `<div class="nv-hero">${heroCell ? `<span class="big">${heroTag}</span> <span class="sub">— the chart says</span> ${Object.entries(heroCell.actions).filter(([, p]) => p > 0.5).sort((a, b) => b[1] - a[1]).map(([a, p]) => `<b>${esc(a)}</b> ${p.toFixed(0)}%`).join(" · ")}` : `<span class="big">${heroTag}</span> <span class="warn">is not in the range at this node</span>`}</div>` : "");
     } else {
       body = `<div class="warn">No node to show: ${esc(j.note ?? "unknown reason")}.</div>`;
     }
@@ -1029,13 +1708,14 @@ async function openAnswerNode(upto) {
       for (const [k, a] of Object.entries(ex.choices)) cls[k] = { w: COMBOS(k), acts: acts.map((x) => (x === a ? COMBOS(k) : 0)) };
       return `<div class="card" style="margin:0"><h2>Pool-exploit overlay · node <span class="mono">${esc(ex.tag)}</span></h2>
         <div class="nv-facts">${fact("derived on chart", ex.chart)}${fact("file", `<span class="mono">${esc(ex.path)}</span>`)}${fact("the exploit says", ex.heroChoice ? `<b>${esc(ex.heroChoice)}</b> for ${esc(heroKey)}` : `${esc(heroKey ?? "hero")} is not in the exploit's range here`)}</div>
-        ${classGrid(cls, acts, heroKey, { flat: true, wmax: 1e9, foot: "one action per class — a best response, not a mix · hero outlined" })}</div>`;
+        ${classGrid(cls, acts, heroKey, { flat: true, wmax: 1e9, heroCombo, foot: "one action per class — a best response, not a mix · hero outlined" })}</div>`;
     })() : "";
-    const piece = j.kind === "hrc" ? "hrc-3max" : j.kind === "hrc6max" ? "hrc-6max" : "gtow-charts";
-    sol.innerHTML = `<div class="card"><h2>${j.kind === "gtow" ? "GTO Wizard chart node" : j.kind === "hrc6max" ? "HRC 6-max chart node" : "HRC chart node"} <span class="sub">— what answered at action ${upto}</span></h2>
+    const piece = j.kind === "hrc" ? "hrc-3max" : j.kind === "hrc6max" ? "hrc-6max" : j.kind === "hrc-hu" ? "hrc-hu" : "gtow-charts";
+    sol.innerHTML = `<div class="card"><h2>${j.kind === "gtow" ? "GTO Wizard chart node" : j.kind === "hrc6max" ? "HRC 6-max chart node" : j.kind === "hrc-hu" ? "HRC heads-up chart node" : "HRC chart node"} <span class="sub">— what answered at action ${upto}</span></h2>
       ${loggedLine}
-      <div class="nv-head"><span><span class="sub">chart</span> <b title="${esc(j.chart ?? "")}">${esc(chartName(j.chart))}</b> <span class="mono">${esc(j.chart ?? "")}</span></span>${j.depth ? `<span><span class="sub">depth</span> ${j.depth}bb</span>` : ""}<span><span class="sub">line</span> ${crumb(j.line ?? j.rawLine, j.snapped)}</span>${n?.pos ? `<span><span class="sub">to act</span> <b>${esc(n.pos)}</b></span>` : ""}</div>
+      <div class="nv-head"><span><span class="sub">chart</span> <b title="${esc(j.chart ?? "")}" data-chartname="${esc(j.chart ?? "")}">${esc(chartName(j.chart))}</b> <span class="mono">${esc(j.chart ?? "")}</span></span>${j.depth ? `<span><span class="sub">depth</span> ${j.depth}bb</span>` : ""}<span><span class="sub">line</span> ${crumb(j.line ?? j.rawLine, j.snapped)}</span>${n?.pos ? `<span><span class="sub">to act</span> <b>${esc(n.pos)}</b></span>` : ""}</div>
       ${j.note ? `<div class="ans-note" style="margin-bottom:8px">⚠ ${esc(j.note)}</div>` : ""}
+      ${csNodeHtml(j.chart ?? lg?.chart ?? null, lg?.depth ?? j.depth ?? null)}
       <div class="nv-two"><div class="card" style="margin:0"><h2>Chart strategy at this node</h2>${body}
         <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/pieces/${piece}" onclick="go('/sources/pieces/${piece}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
   } else if (j.kind === "mes") {
@@ -1046,21 +1726,9 @@ async function openAnswerNode(upto) {
       // A LOCKED SOLVE IS PER COMBO AND ALWAYS WAS: m.holes/weights/mes/mesEv are 1,326-wide
       // and this loop collapsed them to 169 classes and dropped the rest. On a flop that is
       // the interesting half — Ah5h and Ac5c are not the same hand on a two-heart board.
-      const cls = {}, combos = {};
-      m.holes.forEach((h, ci) => {
-        const i1 = RANKS.indexOf(h[0]), i2 = RANKS.indexOf(h[2]);
-        const key = i1 === i2 ? h[0] + h[2] : RANKS[Math.min(i1, i2)] + RANKS[Math.max(i1, i2)] + (h[1] === h[3] ? "s" : "o");
-        const w = m.weights[ci] ?? 0;
-        const e = (cls[key] ??= { w: 0, acts: new Array(m.acts.length).fill(0) });
-        e.w += w; m.acts.forEach((_, ai) => { e.acts[ai] += w * (strat?.[ai]?.[ci] ?? 0); });
-        if (w > 0) (combos[key] ??= []).push({ hand: h, w,
-          s: m.acts.map((_, ai) => strat?.[ai]?.[ci] ?? 0),
-          ev: m.acts.map((_, ai) => evs?.[ai]?.[ci] ?? null) });
-      });
-      for (const k in combos) combos[k].sort((a, b) => b.w - a.w || a.hand.localeCompare(b.hand));
+      const { cls, combos, labels } = mesClasses(m, strat, evs);
       const hi = m.heroIdx;
       const heroRow = hi != null && hi >= 0 ? m.acts.map((a, ai) => ({ a, p: (strat?.[ai]?.[hi] ?? 0) * 100, ev: evs?.[ai]?.[hi] })) : null;
-      const labels = m.acts.map((a) => a.replace(/\((\d+(?:\.\d+)?)\)/, (_, x) => ` ${(x / 100).toFixed(1)}bb`));
       $("nv-mes-body").innerHTML = classGrid(cls, labels, heroKey, { combos, board: m.board, heroCombo: (j.heroCards || []).join(""), foot: "hero's range at this node, by class · fill height = weight in range · hover for the mix" }) +
         (heroRow ? `<div class="nv-hero"><span class="big">${esc(j.heroCards.join(""))}</span> <span class="sub">${mode === "mes" ? "this solve plays" : "against an equilibrium villain, plays"}</span> ${heroRow.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x, i) => `<b>${esc(labels[m.acts.indexOf(x.a)])}</b> ${x.p.toFixed(0)}%${x.ev != null ? ` <span class="sub">ev ${(x.ev / 100).toFixed(2)}bb</span>` : ""}`).join(" · ")}</div>` : `<div class="nv-hero"><span class="warn">hero's combo never reaches this line under the exploit preflop scheme</span></div>`);
       $("nv-seg").querySelectorAll("button").forEach((b) => b.className = (b.dataset.m === mode ? "on " : "") + b.dataset.m);
@@ -1102,7 +1770,7 @@ async function openAnswerNode(upto) {
 const weightGrid = (agg, heroKey, hue, combos = null, heroCombo = null, board = null) => {
   const cls = {}; for (const k in agg) cls[k] = { w: agg[k].w, acts: [agg[k].w] };
   const mass = Object.values(agg).reduce((s, x) => s + x.w, 0);
-  return classGrid(cls, ["in range"], heroKey, { single: hue, small: true, board, foot: `${mass.toFixed(1)} combos · fill height = share of the class still in range`, ...(combos ? { combos, heroCombo } : {}) });
+  return classGrid(cls, ["in range"], heroKey, { single: hue, small: true, board, foot: `${mass.toFixed(1)} combos · fill height = share of the class still in range`, heroCombo, ...(combos ? { combos } : {}) });
 };
 /* ---- an AI-chain answer's inputs & outputs, inline on its card ----
    What went INTO the cloud solve that produced this answer (both ranges as
@@ -1144,15 +1812,17 @@ function solveIoHtml(w, hostId, upto) {
     </div>`;
   // --- inputs ---
   const tokens = (sp.streets || []).map((t, i) => `<span class="chip dim">${streetName[i]}</span> ${esc(t.join("-") || "root")}`).join(" ");
-  const rake = sp.rake ? `${sp.rake.pct_of_pot}% of pot · cap ${sp.rake.cap_in_chips} chips${sp.rake.preflop_rake_type ? ` · ${esc(sp.rake.preflop_rake_type)}` : ""}` : '<span class="sub">none in the solve</span>';
+  // the rake the trees were SENT — a solve that passed none got GTO Wizard's default, not "no rake" (2026-09-24)
+  const rake = sentRakeHtml(w);
   const inputs = `<div class="nv-facts" style="margin-top:8px">
       ${fact("inputs — seats", `<b>OOP</b> ${esc(sp.oopPos)} · <b>IP</b> ${esc(sp.ipPos)} · you are <b>${esc(String(sp.heroSeat).toUpperCase())}</b> (${esc(heroSeatPos)}) with <span class="mono">${esc(sp.heroCombo ?? "?")}</span>`)}
-      ${fact("flop-entry ranges", sp.rangeSource ? `<span title="${esc(sp.rangeSource)}">${esc(chartName(sp.rangeSource))}</span> <span class="mono">${esc(sp.rangeSource)}</span>` : '<span class="sub">equilibrium chart ranges for both seats (source not stamped on this solve)</span>')}
+      ${fact("flop-entry ranges", sp.rangeSource ? `<span title="${esc(sp.rangeSource)}" data-chartname="${esc(sp.rangeSource)}">${esc(chartName(sp.rangeSource))}</span> <span class="mono">${esc(sp.rangeSource)}</span>` : '<span class="sub">equilibrium chart ranges for both seats (source not stamped on this solve)</span>')}
       ${fact("entering the flop", `pot ${sp.flopPot}bb · effective stack ${sp.flopStack}bb · board <span class="mono">${esc(sp.board)}</span>`)}
       ${fact("line walked", tokens)}
-      ${fact("rake in the solve", rake)}
+      ${fact("rake sent to GTO Wizard", rake)}
       ${fact("at your node", `${esc(n.street.toLowerCase())} <span class="mono">${esc(n.board)}</span> · pot ${n.potNode}bb · <b>${esc(n.actorPos)}</b> to act${n.heroWeightIn != null ? ` · ${(100 * n.heroWeightIn).toFixed(0)}% of your class is still in range here` : ""}`)}
     </div>
+    ${sentBlock(w, false)}
     <div class="walk-grids" style="margin-top:8px">
       <div class="card"><h2>Input — OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])} · conditioned on every action taken</span></h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", n.rangesInCombos?.oop, sp.heroCombo, n.board)}</div>
       ${n.rangesIn.mid ? `<div class="card"><h2>Input — OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · the middle seat of a three-way flop</span></h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)", n.rangesInCombos?.mid, sp.heroCombo, n.board)}</div>` : ""}
@@ -1184,8 +1854,9 @@ async function renderWalkthrough(solveId, hostId, upto) {
       ${fact("seats", `<b>OOP</b> ${esc(sp.oopPos)}${sp.midPos ? ` · <b>OOP+1</b> ${esc(sp.midPos)}` : ""} · <b>IP</b> ${esc(sp.ipPos)} · you are <b>${esc(String(sp.heroSeat).toUpperCase())}</b> (${esc(heroSeatPos)})${sp.midPos ? ' · <span class="chip warn">three-way flop</span>' : ""}`)}
       ${fact("your combo", sp.heroCombo ? `<span class="mono">${esc(sp.heroCombo)}</span>` : "unknown")}
       ${fact("entering the flop", `pot ${sp.flopPot}bb · stack ${sp.flopStack}bb`)}
+      ${fact("rake sent to GTO Wizard", sentRakeHtml(w))}
       ${fact("board", `<span class="mono">${esc(sp.board)}</span>`)}
-      ${fact("ranges from", sp.rangeSource ? `<span title="${esc(sp.rangeSource)}">${esc(chartName(sp.rangeSource))}</span>` : '<span class="sub">not recorded on this solve (pre-2026-09-06) — equilibrium chart ranges for both seats</span>')}
+      ${fact("ranges from", sp.rangeSource ? `<span title="${esc(sp.rangeSource)}" data-chartname="${esc(sp.rangeSource)}">${esc(chartName(sp.rangeSource))}</span>` : '<span class="sub">not recorded on this solve (pre-2026-09-06) — equilibrium chart ranges for both seats</span>')}
       ${fact("tokens walked", sp.streets.map((t, i) => `<span class="chip dim">${["flop", "turn", "river"][i]}</span> ${esc(t.join("-") || "root")}`).join(" "))}
       ${fact("cloud solutions", w.streets.map((st) => `${st.street.toLowerCase()} <span class="mono" title="${esc(st.solId ?? "")}">${esc((st.solId ?? "—").slice(0, 8))}</span> <span class="chip ${st.created ? "good" : "dim"}">${st.created ? "fresh solve" : "cached"}</span>${st.fixedLevels ? ` <span class="chip warn" title="${esc(st.fixedLevels.join(", "))}">sizes pinned</span>` : ""}`).join(" · "))}
       ${fact("verdict", w.result?.ok ? `reached hero's node · ${w.result.solves} fresh solve${w.result.solves === 1 ? "" : "s"} · ${w.row.solveMs != null ? fmtLatency(w.row.solveMs) : ""}` : `<span class="warn">failed: ${esc(w.result?.why ?? "?")}</span>`)}
@@ -1220,10 +1891,10 @@ async function renderWalkthrough(solveId, hostId, upto) {
         ${hero ? `<div class="nv-hero"><span class="big">${esc(sp.heroCombo ?? "")}</span> <span class="sub">${n.heroNode ? "the answer:" : "the solve has you playing"}</span> ${hero.filter((x) => x.p > 0.5).sort((a, b) => b.p - a.p).map((x) => `<b>${esc(x.name)}${x.betsize != null && !/\d/.test(x.name) ? ` ${x.betsize}` : ""}</b> ${x.p}%${x.ev != null ? ` <span class="sub">ev ${x.ev}</span>` : ""}`).join(" · ")}${n.heroWeightIn != null ? ` <span class="sub">· weight in range ${n.heroWeightIn}</span>` : ""}</div>` : ""}
       </div>
       ${n.rangesOut ? `<div class="card" style="margin-top:12px"><h2>After conditioning on ${esc(n.takenName)} <span class="sub">— ${esc(n.actorPos)}'s range × the frequency of that action, combo by combo; this is what the next node sees</span></h2>
-        <div class="walk-grids"><div>${weightGrid(n.rangesOut.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", null, null, n.board)}</div><div>${weightGrid(n.rangesOut.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", null, null, n.board)}</div></div></div>` : ""}
+        <div class="walk-grids"><div>${weightGrid(n.rangesOut.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", null, sp.heroCombo, n.board)}</div><div>${weightGrid(n.rangesOut.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", null, sp.heroCombo, n.board)}</div></div></div>` : ""}
     </div>`;
   };
-  host.innerHTML = `${facts}<div class="walk"><div class="walk-list" id="walk-list">${list()}</div><div id="walk-view">${view()}</div></div>`;
+  host.innerHTML = `${facts}${sentBlock(w, hostId === "walk-host")}<div class="walk"><div class="walk-list" id="walk-list">${list()}</div><div id="walk-view">${view()}</div></div>`;
   const bind = () => host.querySelectorAll(".walk-node").forEach((el) => el.onclick = () => {
     sel = Number(el.dataset.i);
     $("walk-list").innerHTML = list(); $("walk-view").innerHTML = view(); bind();
@@ -2036,6 +2707,14 @@ const stacksStr = (e) => {
   return vals.every((v) => v === vals[0]) ? `${vals[0]}bb even`
     : seats.map((s) => `${s} ${e.stacksBB[s]}`).join(" · ");
 };
+/** What a chart row was solved WITH, from its sidecar (chartCatalog.sidecarFacts, 2026-09-24): the rake and cap, the
+ *  ante, and the size menu. An API from before that carries none of it, and the cell says so once. */
+function catSetupCell(e) {
+  if (!e.rake && e.anteBb == null && !e.sizes?.length) return '<span class="sub">—</span>';
+  const r = e.rake;
+  const rake = !r ? "rake not stated" : !r.pct && !r.capBb ? "no rake" : `${r.pct}% cap ${r.capBb}bb${r.nfnd ? " NFND" : ""}`;
+  return `<span style="white-space:nowrap">${esc(rake)}${e.anteBb ? ` · ante ${esc(e.anteBb)}bb` : ""}</span>${e.sizes?.length ? `<div class="sub" style="white-space:normal;max-width:320px">${e.sizes.map(esc).join(" · ")}</div>` : ""}`;
+}
 const fmtAgo = (ms) => {
   const m = Math.round((Date.now() - ms) / 60000);
   return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
@@ -2235,13 +2914,14 @@ function renderCatalog(keepFocus) {
       recent.map((r) => `<tr><td>${esc(nameOf(r.chart))}<div class="mono sub">${esc(r.chart)}</div></td><td class="num">${r.n}</td><td class="sub">${fmtAgo(r.lastTs)}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <div class="card">
       <h2>${rows.length} chart${rows.length === 1 ? "" : "s"}${shown.length < rows.length ? ` <span class="sub">— showing the first ${shown.length}</span>` : ""}</h2>
-      ${rows.length ? `<table><thead><tr><th>chart</th><th>stacks</th><th>nodes</th><th>stored</th><th>used by</th><th></th></tr></thead><tbody>
+      ${rows.length ? `<table><thead><tr><th>chart</th><th>stacks</th><th>solved with</th><th>nodes</th><th>stored</th><th>used by</th><th></th></tr></thead><tbody>
       ${shown.map((e) => {
         const canToggle = e.source === "hrc" && !(seat && catSeatLine(e, seat) == null);
         const toggle = canToggle ? `catNode(${catArg(e.id)}, ${seat ? catArg(seat) : "null"})` : "";
         return `<tr class="catrow">
         <td${canToggle ? ` class="cat-name-cell" onclick="${toggle}" title="click to expand/collapse"` : ""}><div>${esc(e.name)}</div><div class="mono sub" title="${esc(e.location)}">${esc(e.id)}</div></td>
         <td>${esc(stacksStr(e))}</td>
+        <td>${catSetupCell(e)}</td>
         <td class="num">${e.nodes ?? "—"}</td>
         <td>${e.source !== "hrc" ? '<span class="sub">bundled</span>' : e.cachedLocally ? "✓ disk" : '<span class="sub">R2</span>'}</td>
         <td>${e.routed ? `<span class="badge b-info">${esc(e.routed)}</span>` : '<span class="sub">browse-only</span>'}</td>
@@ -2249,7 +2929,7 @@ function renderCatalog(keepFocus) {
           ? `<span class="sub">no ${esc(seat)} at this table</span>`
           : `<button class="mini" onclick="event.stopPropagation();catNode(${catArg(e.id)}, ${seat ? catArg(seat) : "null"})">${seat ? `${esc(seat)} first in ↓` : "root ↓"}</button>`}</td>
       </tr>
-      <tr class="catnode" id="catnode-${esc(e.id)}" hidden><td colspan="6"></td></tr>`;
+      <tr class="catnode" id="catnode-${esc(e.id)}" hidden><td colspan="7"></td></tr>`;
       }).join("")}
       </tbody></table>` : `<div class="sub">Nothing matches all of those. Take a chip off — the counts on each chip say how many charts it would leave.</div>`}
     </div>`;

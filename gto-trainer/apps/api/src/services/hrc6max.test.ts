@@ -61,13 +61,30 @@ describe("chartFor6max", () => {
     // the second bug: the depth ladder swapped 2.5x in for "limp", offering raise trees that cannot hold a limp
     const c = chartFor6max(table(6) as any, "BB", ["C", "C", "F", "F", "F"]);
     expect(c.openSize).toBe("limp");
-    expect(c.candidates.every((id) => id.endsWith("_olimp"))).toBe(true);
+    expect(c.candidates.every((id) => /_olimp(_pool3?)?$/.test(id))).toBe(true);
+  });
+
+  test("a limped pot at 100bb: the BB behind limps reads the full pool-locked tree, the SB facing limps the pilot, an over-limper the equilibrium chart", () => {
+    const t = table(6) as any;
+    expect(chartFor6max(t, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool3");
+    expect(chartFor6max(t, "SB", ["F", "F", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool");
+    expect(chartFor6max(t, "SB", ["F", "F", "F", "C"]).id).toBe("ign200_6max_D100_olimp_pool");
+    expect(chartFor6max(t, "BTN", ["C", "C", "F"]).id).toBe("ign200_6max_D100_olimp");
+    expect(chartFor6max(t, "CO", ["C", "F"]).id).toBe("ign200_6max_D100_olimp");
+    // facing an iso after completing: the full pool tree (the BB's iso range is solved against the pool's completes)
+    expect(chartFor6max(t, "SB", ["F", "F", "F", "C", "C", "R5"]).id).toBe("ign200_6max_D100_olimp_pool3");
+    // the fallback ladder still holds only limp charts
+    expect(chartFor6max(t, "BB", ["F", "F", "C", "C", "C"]).candidates.every((id) => /_olimp(_pool3?)?$/.test(id))).toBe(true);
+    // shallower rungs keep the equilibrium chart until the pool re-solves exist
+    const short = table(6, { 1: 50, 2: 50, 3: 50, 4: 50, 5: 50, 6: 50 });
+    expect(chartFor6max(short as any, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D50_olimp");
   });
 
   test("125bb limp - a chart we deliberately do not have - reaches the 100bb limp chart", () => {
     const deep = table(6, { 1: 125, 2: 125, 3: 125, 4: 125, 5: 125, 6: 125 });
     const c = chartFor6max(deep as any, "BB", ["C", "F", "F", "F", "F"]);
-    expect(c.id).toBe("ign200_6max_D125_olimp");
+    expect(c.id).toBe("ign200_6max_D100_olimp_pool3");
+    expect(c.candidates).toContain("ign200_6max_D125_olimp");
     expect(c.candidates).toContain("ign200_6max_D100_olimp");
   });
 
@@ -81,7 +98,7 @@ describe("chartFor6max", () => {
   test("a limped pot at an uneven table uses the even limp chart, since the uneven set has no limp tree", () => {
     const uneven = table(6, { 1: 30 });
     const c = chartFor6max(uneven as any, "BB", ["C", "F", "F", "F", "F"]);
-    expect(c.candidates.every((id) => id.endsWith("_olimp"))).toBe(true);
+    expect(c.candidates.every((id) => /_olimp(_pool3?)?$/.test(id))).toBe(true);
   });
 });
 
@@ -135,7 +152,7 @@ describe("chartFor6max — effective stack, live seats", () => {
     const c = chartFor6max(t as any, "HJ", ["C"]);
     // UTG limped (in the pot already); the BTN is the short hero has to plan for
     expect(c.openSize).toBe("limp");
-    expect(c.candidates.every((id) => id.endsWith("_olimp"))).toBe(true);
+    expect(c.candidates.every((id) => /_olimp(_pool3?)?$/.test(id))).toBe(true);
     const raise = table(2, { 1: 30, 4: 50 });
     const r = chartFor6max(raise as any, "HJ", ["F"]);
     expect(r.id).toBe("ign200_6max_D100_s50_BTN_o2_5");

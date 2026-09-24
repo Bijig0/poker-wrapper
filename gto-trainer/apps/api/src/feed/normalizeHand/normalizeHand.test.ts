@@ -100,6 +100,14 @@ describe("normalizeHand", () => {
     expect(() => normalizeHand({ ...FULL_HAND, stacks: { 2: "deep" } })).toThrow(/stacks has an invalid entry/);
   });
 
+  it("passes the stacks as dealt through, and drops the legacy CoinPoker name → money map whole", () => {
+    expect(normalizeHand({ ...FULL_HAND, startStacks: { 2: 150, 4: 100.5 } }).hand.startStacks).toEqual({ 2: 150, 4: 100.5 });
+    // a CoinPoker row archived before 2026-09-24: player NAME → table money — never read as seats, even a numeric name
+    expect(normalizeHand({ ...FULL_HAND, startStacks: { megturism0: 20.5, "4": 18 } }).hand.startStacks).toBeUndefined();
+    // a malformed entry of a seat map is dropped alone, never failing a hand that is otherwise fine
+    expect(normalizeHand({ ...FULL_HAND, startStacks: { 2: "x", 4: 99 } }).hand.startStacks).toEqual({ 4: 99 });
+  });
+
   it("rejects garbage with precise messages", () => {
     expect(() => normalizeHand("nope")).toThrow(/JSON object/);
     expect(() => normalizeHand({ actions: [{ type: "yolo" }] })).toThrow(/actions\[0\]\.type/);

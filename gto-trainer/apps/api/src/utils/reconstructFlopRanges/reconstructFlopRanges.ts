@@ -67,6 +67,34 @@ export interface ReconstructOpts {
    * preflop tree, which solves the multiway preflop outright (services/gtowAiPreflop.ts).
    */
   maxPlayers?: 2 | 3 | 4 | 5 | 6;
+  /**
+   * THE LINE STOPS AT A PREFLOP DECISION, NOT AT THE FLOP (2026-09-24, the hand page's range looker): return the
+   * range of every seat that has acted and not folded, with no player-count check. Seats that have not acted yet
+   * hold every hand and are not listed.
+   */
+  partial?: boolean;
+  /**
+   * Called at every decision the walk reads, folds included (2026-09-24, the range looker's villain rows: "what
+   * does a BB raise to 10 look like"). Forced folds have no node and no step.
+   */
+  onStep?: (step: WalkStep) => void;
+}
+
+/** One decision of the walk: the node read, who acted, what they took, and their range either side of it. */
+export interface WalkStep {
+  /** the tree path before this decision (snapped; after a borrow, the borrowed path) */
+  line: string;
+  node: RawNode;
+  pos: string;
+  /** the token as the tree holds it, and as the line had it */
+  token: string;
+  rawToken: string;
+  /** the label the line took here, and the labels the range was conditioned on (a villain raise: every size) */
+  label: string;
+  labels: string[];
+  /** class → weight in [0,1]; null before = every hand (the seat's first decision), null after = a fold */
+  rangeIn: Record<string, number> | null;
+  rangeOut: Record<string, number> | null;
 }
 
 const isJamLabel = (l: string) => /all-?in/i.test(l);
@@ -135,7 +163,15 @@ export async function reconstructFlopRanges(
     }
     lastToken.set(pos, tok);
     out.push(tok); walkedPos.push(pos);
-    if (tok === "F") continue;
+    if (tok === "F") {
+      if (opts.onStep) {
+        const label = node.actions.find((a) => a.token === "F")?.action ?? "Fold";
+        const prev = ranges.get(pos);
+        opts.onStep({ line: out.slice(0, -1).join("-"), node, pos, token: tok, rawToken: tokens[k]!, label, labels: [label],
+          rangeIn: prev ? Object.fromEntries(prev) : null, rangeOut: null });
+      }
+      continue;
+    }
 
     const label = node.actions.find((a) => a.token === tok)?.action;
     if (!label) return { ok: false, reason: `token ${tok} isn't an action at "${out.slice(0, -1).join("-")}"` };
@@ -162,9 +198,16 @@ export async function reconstructFlopRanges(
       next.set(cell.hand, prior * contFreq);
     }
     ranges.set(pos, next);
+    opts.onStep?.({ line: out.slice(0, -1).join("-"), node, pos, token: tok, rawToken: tokens[k]!, label, labels,
+      rangeIn: prev ? Object.fromEntries(prev) : null, rangeOut: Object.fromEntries(next) });
   }
 
   const flopPositions = [...lastToken.entries()].filter(([, t]) => t !== "F").map(([p]) => p);
+  if (opts.partial) {
+    const partial: Record<string, Record<string, number>> = {};
+    for (const p of flopPositions) partial[p] = Object.fromEntries(ranges.get(p) ?? new Map());
+    return { ok: true, ranges: partial, ...(notes.length ? { notes } : {}) };
+  }
   const maxPlayers = opts.maxPlayers ?? 2;
   if (flopPositions.length < 2 || flopPositions.length > maxPlayers) {
     const need = maxPlayers > 2 ? `2 to ${maxPlayers}` : "exactly 2";

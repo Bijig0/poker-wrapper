@@ -79,8 +79,13 @@ export interface ParsedHand {
   committed: Record<number, number>;
   potByStreet: Partial<Record<Street, number>>;
   positions: Record<number, string>;
-  /** Last-read stack per seat (BB) — present on /state hands, not in rows. */
+  /** Last-read stack per seat (BB): the chips BEHIND at the moment of the export — live, at the decision; in an
+   *  archived hands.db row, at the END of the hand (utils/archivedHand rebuilds a decision's from it). */
   stacks?: Record<number, number>;
+  /** Each seat's stack AS DEALT (BB), when the source records it — the exact answer an archived row's end-of-hand
+   *  `stacks` can only estimate (utils/archivedHand.startStacksOf). Exported by the wrapper since 2026-09-24 for every
+   *  seat that has acted in the hand; live, the API reads those seats' money from it (utils/archivedHand.withStartStacks). */
+  startStacks?: Record<number, number>;
   result?: { text: string };
   currentNode: ParsedNode;
   ended: boolean;

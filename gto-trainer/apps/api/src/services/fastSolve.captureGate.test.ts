@@ -4,7 +4,7 @@
  * are in fastSolve.ts above `unsolvableCapture`.
  */
 import { describe, expect, test } from "bun:test";
-import { preflopCaptureFaults, unsolvableCapture } from "./fastSolve";
+import { preflopCaptureFaults, unsolvableCapture, zeroMixReason } from "./fastSolve";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 
 const act = (seatId: number, type: string, street: string, amount?: number): ParsedAction =>
@@ -45,6 +45,60 @@ describe("unsolvableCapture", () => {
     // and a full, agreeing board passes
     const turnNode = { ...flopNode, street: "turn" } as ParsedHand["currentNode"];
     expect(unsolvableCapture(hand({ board: ["3c", "7d", "Ts", "2h"], street: "turn", currentNode: turnNode }))).toBeNull();
+  });
+
+  // 2026-09-24, stress multi-07: hero AhTh on Th6d3sQc2h reached the AI chain and came back all zeros.
+  test("a hero card that is also on the board is refused as a capture fault", () => {
+    const riverNode = { street: "river", toActSeatId: 2, toActIsHero: true, pot: 30, toCall: 12, legalActions: [], complete: false } as ParsedHand["currentNode"];
+    const r = unsolvableCapture(hand({ heroCards: ["Ah", "Th"], board: ["Th", "6d", "3s", "Qc", "2h"], street: "river", currentNode: riverNode }));
+    expect(r && !r.ok && r.kind).toBe("capture-fault");
+    expect(r && !r.ok && r.reason).toContain("hero holds Th and Th is on the board");
+    expect(r && !r.ok && r.reason).toContain("internally inconsistent");
+    // the same hand with a card the board does not hold passes
+    expect(unsolvableCapture(hand({ heroCards: ["Ad", "Td"], board: ["Th", "6d", "3s", "Qc", "2h"], street: "river", currentNode: riverNode }))).toBeNull();
+  });
+
+  test("a board that repeats a card is refused as a capture fault; card case does not hide it", () => {
+    const flopNode = { street: "flop", toActSeatId: 2, toActIsHero: true, pot: 5, toCall: 0, legalActions: [], complete: false } as ParsedHand["currentNode"];
+    const r = unsolvableCapture(hand({ heroCards: ["Ah", "Kd"], board: ["7c", "7C", "2h"], street: "flop", currentNode: flopNode }));
+    expect(r && !r.ok && r.kind).toBe("capture-fault");
+    expect(r && !r.ok && r.reason).toContain("7c appears twice on the board");
+  });
+});
+
+describe("zeroMixReason", () => {
+  const base = { heroCards: ["Ah", "Th"], board: ["Th", "6d", "3s", "Qc", "2h"], heroPos: "BTN", nodePos: "BTN",
+    heroClass: "ATs", arrivalWeight: 0.6, plan: "last-resort:hero vs BB", actions: ["FOLD", "CALL 12", "RAISE 30.8", "ALLIN 92.5"] };
+
+  test("a hero card on the board is named first", () => {
+    const why = zeroMixReason(base);
+    expect(why).toContain("AhTh has every action at 0% over FOLD/CALL 12/RAISE 30.8/ALLIN 92.5 (last-resort:hero vs BB)");
+    expect(why).toContain("Th is on the board Th 6d 3s Qc 2h");
+    expect(why).toContain("internally inconsistent");
+  });
+
+  test("a node that belongs to another seat says so", () => {
+    const why = zeroMixReason({ ...base, heroCards: ["Ad", "Td"], nodePos: "BB" });
+    expect(why).toContain("the node read is BB's, not hero's (BTN)");
+  });
+
+  test("heads-up, the tree's SB is the table's BTN — not another seat", () => {
+    const why = zeroMixReason({ ...base, heroCards: ["Ad", "Td"], nodePos: "SB", hu: true });
+    expect(why).not.toContain("another seat");
+    // and six-handed the same pair IS a mismatch
+    expect(zeroMixReason({ ...base, heroCards: ["Ad", "Td"], nodePos: "SB" })).toContain("another seat");
+  });
+
+  test("a class with no arrival weight is a not-in-range refusal the answer log can classify", () => {
+    const why = zeroMixReason({ ...base, heroCards: ["Ad", "Td"], arrivalWeight: 0 });
+    expect(why).toContain("ATs carries no weight in BTN's arrival range");
+    expect(why.toLowerCase()).toContain("not in range");
+  });
+
+  test("nothing recognisable reports the facts and points at the trace", () => {
+    const why = zeroMixReason({ ...base, heroCards: ["Ad", "Td"], plan: null, actions: [] });
+    expect(why).toContain("AdTd has every action at 0% although the class is floored in BTN's entering range (arrival weight 0.6)");
+    expect(why).toContain("trace");
   });
 });
 

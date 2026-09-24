@@ -33,6 +33,14 @@ describe("planCollapses", () => {
     expect(m!.streets[0]!).toHaveLength(2);                      // the pair now acts once
   });
 
+  it("a merged pair keeps a check-RAISE after the bet it raises (one action per orbit)", () => {
+    // SB x, BB x, hero (CO) bets, BTN calls, SB check-raises, BB folds — hero to act
+    const plans = planCollapses(FOUR, "CO", [toks(["X", "SB"], ["X", "BB"], ["R6.6", "CO"], ["C", "BTN"], ["R19.9", "SB"], ["F", "BB"])]);
+    const m = plans.find((p) => p.kind.startsWith("merge:SB+BB"));
+    expect(m).toBeDefined();
+    expect(m!.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["SB:X", "CO:R6.6", "BTN:C", "SB:R19.9"]);
+  });
+
   it("never merges across hero", () => {
     // hero in the middle: BB and BTN sit either side of him, so they may not be merged
     const plans = planCollapses(FOUR, "CO", [toks(["X", "SB"], ["X", "BB"], ["X", "CO"])]);

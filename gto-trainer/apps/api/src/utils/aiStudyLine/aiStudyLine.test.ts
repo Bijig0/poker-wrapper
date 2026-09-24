@@ -4,6 +4,7 @@ import {
   actionLabelOf,
   labelBetBb,
   matchActionIndex,
+  matchActionLoose,
   normCard,
   preflopPotStack,
   splitPostflopTokens,
@@ -83,5 +84,19 @@ describe("action label mapping", () => {
   it("labelBetBb parses wager labels", () => {
     expect(labelBetBb("Bet(330)")).toBeCloseTo(3.3);
     expect(labelBetBb("Check")).toBeNull();
+  });
+});
+
+describe("matchActionLoose — a wager past the all-in threshold", () => {
+  const sols = [
+    { action: { code: "F", type: "FOLD", display_name: "FOLD" } },
+    { action: { code: "C", type: "CALL", display_name: "CALL", betsize: "24.39" } },
+    { action: { code: "RAI", type: "RAISE", display_name: "ALLIN", betsize: "83.91", allin: true } },
+  ];
+  it("a raise to 73.17 with 83.91 behind is the tree's all-in (the tree offers no raise size)", () => {
+    expect(matchActionLoose("Raise(7317)", sols as any, 83.91)).toBe(2);
+  });
+  it("a raise to 40 is NOT the all-in — a different bet stays a miss", () => {
+    expect(matchActionLoose("Raise(4000)", sols as any, 83.91)).toBe(-1);
   });
 });

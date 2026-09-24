@@ -2,7 +2,7 @@ import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective } from "./hrc6max";
-import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
+import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
 import { rerootCollapse, moneyThrough } from "./multiwayReroot";
@@ -998,6 +998,11 @@ async function solvePostflopViaChain(
   const ordered = [...flopSeats].sort(
     (a, b) => POSTFLOP_ORDER.indexOf(a.toUpperCase()) - POSTFLOP_ORDER.indexOf(b.toUpperCase())
   );
+  // seats with nothing behind: all-in. The re-root and the last resort leave the ones all-in since an EARLIER street
+  // out of the tree (they never act again; their chips stay in the pot).
+  const allInSeats = new Set(Object.entries(hand.positions ?? {})
+    .filter(([id]) => Number(hand.stacks?.[Number(id)] ?? 1) <= 0.01)
+    .map(([, pos]) => String(pos).toUpperCase()));
   const specOf = (three: { pos: string; range: number[] }[], heroIdx: number): SeatSpec => ({
     oopPos: three[0]!.pos, midPos: three[1]!.pos, ipPos: three[2]!.pos,
     oopRange: three[0]!.range, midRange: three[1]!.range, ipRange: three[2]!.range,
@@ -1047,7 +1052,7 @@ async function solvePostflopViaChain(
         // out of a walk are the approximation). Brady 2026-09-22: "let's try solve for it".
         const rr = await rerootCollapse({
           ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack,
-          board: tk.board, heroComboIdx, rake: rake6, specOf,
+          board: tk.board, heroComboIdx, rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))),
         });
         if (!rr.ok) {
           // the re-root could not collapse the current street either — fall through to the postflop last resort
@@ -1067,7 +1072,9 @@ async function solvePostflopViaChain(
           `${flopSeats.length}-WAY, RE-ROOTED AT THE ${cur.toUpperCase()}: no collapse fits from the flop (every villain ` +
           `put chips in earlier), so the earlier streets are pot (${rr.pot}bb, ${rr.stack}bb behind) and the ` +
           `${cur} alone is collapsed: ${rp.plans.map((pl) => pl.kind).join(" | ")}. Entering ranges narrowed through ` +
-          `the earlier streets by ${rr.walks} three-seat walk(s) (${rr.left} left out of some) — approximate. ${rp.why}.`;
+          `the earlier streets by ${rr.walks} three-seat walk(s) (${rr.left} left out of some) — approximate. ${rp.why}.` +
+          (rr.allIn.length ? ` ALL-IN LEFT OUT: ${rr.allIn.join(", ")} went all-in on an earlier street and cannot act again — ` +
+            `their chips are in the pot, but hero's showdown equity against their range (the main pot they contest) is not modelled.` : "");
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
         }
       }
@@ -1078,7 +1085,7 @@ async function solvePostflopViaChain(
         // chips (and hero's own earlier chips this street) stay in the pot as dead money, and hero faces the
         // aggressor's bet at the real price. Unmodelled, said in the answer: the other villains' ranges and hands,
         // and the narrowing of the two entering ranges by the earlier streets. It beats a blank.
-        const lr = heroVsAggressor({ ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack });
+        const lr = heroVsAggressor({ ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack, allIn: allInSeats });
         if (!lr) return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — and no last resort fits (nobody to face, or everyone all-in)`);
         walkables = [lr.walkable];
         reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
@@ -1086,7 +1093,7 @@ async function solvePostflopViaChain(
         const note =
           `POSTFLOP LAST RESORT — ${collapseRefusal(cSeats, toks)}${rerootWhy ? ` (re-rooting at the ${cur}: ${rerootWhy})` : ""}; played as hero (${ordered[heroAt]}) against the last ` +
           `aggressor (${lr.villain}) alone at the ${cur}: ${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
-          `${lr.pot}bb in the middle before the ${lr.bet}bb ${lr.villainBet ? "bet" : "raise"} hero faces, ${lr.stack}bb behind; ` +
+          `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.villainBet ? "bet" : "raise"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind; ` +
           `the other villains' ranges and hands are not modelled and the two entering ranges are not narrowed by the earlier streets.`;
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
       }
@@ -1175,8 +1182,45 @@ async function solvePostflopViaChain(
     });
   }
   logChain(hand, cur, origin, chains, tEntry, t0);
-  // A collapse that will not walk is survivable while another one did; all of them failing is the miss.
+  // A collapse that will not walk is survivable while another one did. ALL of them failing used to be the miss;
+  // since 2026-09-24 (postflop sweep: a merged SB+BB check-raise nobody could walk) a 3+ way field that faces a bet
+  // falls back to the POSTFLOP LAST RESORT here too — hero against the last aggressor, heads-up at this street, the
+  // other villains' chips as dead money — exactly as when no collapse is legal at all. A blank is never the answer.
+  if (!walks.length && flopSeats.length >= 3 && !walkables.some((w) => /^last-resort/.test(w.kind ?? ""))) {
+    const heroAtLr = ordered.findIndex((p) => p.toUpperCase() === heroPosName.toUpperCase());
+    const lr = heroAtLr >= 0
+      ? heroVsAggressor({ ordered, heroPos: ordered[heroAtLr]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack, allIn: allInSeats })
+      : null;
+    if (lr) {
+      reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
+      blendWhy = null;
+      const c = await solveOne(lr.walkable as any);
+      const meta = { ...solveMetaBase, solveMs: Date.now() - t0 };
+      if (c.ok) {
+        walks.push({
+          kind: lr.walkable.kind, data: c.data, line: `${preTokens.join("-")} / ${c.line}`, trace: c.trace,
+          solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${c.line}`, solves: c.solves, ok: true, why: null }, c.trace),
+        });
+        const note =
+          `POSTFLOP LAST RESORT — no collapse of the ${ordered.length}-way field could be walked (${walkFails.join("; ")}); ` +
+          `played as hero (${ordered[heroAtLr]}) against the last aggressor (${lr.villain}) alone at the ${cur}: ` +
+          `${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
+          `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb bet hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind; ` +
+          `the other villains' ranges and hands are not modelled and the two entering ranges are not narrowed by the earlier streets.`;
+        sixNote = sixNote ? `${sixNote} · ${note}` : note;
+        walkFails.length = 0;
+      } else {
+        walkFails.push(`last resort: ${c.why}`);
+      }
+    }
+  }
   if (!walks.length) return fail(walkFails.join(" · ") || "no walkable tree");
+  const sizeSnaps = [...new Set(chains.flatMap((c) => (c.ok ? c.snaps ?? [] : [])))];
+  if (sizeSnaps.length) {
+    sixNote = [sixNote, `WAGER SIZE SNAPPED onto the tree: ${sizeSnaps.join("; ")} — the tree offers no closer size there` +
+      (sizeSnaps.some((x) => /ALL-IN/.test(x)) ? " (GTO Wizard turns a raise that leaves little behind into its all-in)" : "")]
+      .filter(Boolean).join(" · ");
+  }
   if (walkFails.length) {
     sixNote = [sixNote, `${walkFails.length} of ${walkables.length} collapses could not be walked (${walkFails.join("; ")})`]
       .filter(Boolean).join(" · ");
@@ -1216,14 +1260,26 @@ async function solvePostflopViaChain(
   const solveId = ref.solveId;
   const chainLine = ref.line;
   let actions: ActionFreq[];
-  let notInRange = false;
   if (heroComboIdx != null) {
     actions = refSols.map((a: any, i: number) => ({
       action: labelOf(a),
       frequency: (blended ? blended[i]![heroComboIdx] ?? 0 : a.strategy?.[heroComboIdx] ?? 0) * 100,
       ev: a.evs?.[heroComboIdx], betsize: a.action.betsize,
     }));
-    notInRange = actions.every((a) => a.frequency <= 0);
+    // AN ALL-ZERO MIX IS A FAILURE, NOT AN ANSWER (2026-09-24, stress multi-07: FOLD 0 / CALL 0 / RAISE 0 / ALLIN 0,
+    // served ok:true with no decision — "notInRange" — after hero's Th was dealt on a board holding Th). The chain
+    // floors hero's class in his entering range on every street, so zero everywhere means the combo cannot exist at
+    // the node or the node is not hero's; either way the panel would roll nothing and the hand card would draw a
+    // blank. Refuse with the cause named (zeroMixReason) so the answer log counts it and the trace gets read.
+    if (actions.length && actions.every((a) => a.frequency <= 0)) {
+      const heroClass = heroClassOf(hand);
+      const heroW = byPos(heroPosName);
+      const arrivalWeight = heroW && heroClass ? Number(heroW[heroClass] ?? 0) : null;
+      return fail(zeroMixReason({
+        heroCards, board: hand.board ?? [], heroPos: heroPosName, nodePos: j.action_solutions?.[0]?.action?.position ?? null,
+        heroClass, arrivalWeight, plan: ref.kind, actions: actions.map((a) => a.action), hu: isHu,
+      }));
+    }
   } else {
     // no hero cards: aggregate frequency is all the node offers, so average it across the collapses
     actions = refSols.map((a: any, i: number) => {
@@ -1248,8 +1304,7 @@ async function solvePostflopViaChain(
     pos: j.action_solutions?.[0]?.action?.position ?? null,
     heroClass: heroClassOf(hand),
     actions,
-    decision: notInRange ? null : pickWeightedAction(actions),
-    notInRange: notInRange || undefined,
+    decision: pickWeightedAction(actions),
     approx: true,
     warning: sixNote,
   },
@@ -1271,7 +1326,7 @@ async function solvePostflopViaChain(
  */
 function heroVsAggressor(a: {
   ordered: string[]; heroPos: string; arr: (p: string) => number[]; streets: string[][]; streetSeats: string[][];
-  flopPot: number; flopStack: number;
+  flopPot: number; flopStack: number; allIn?: Set<string>;
 }): { walkable: { seatSpec: any; streets: string[][]; streetSeats: string[][]; kind: string }; first: number; pot: number; stack: number;
       villain: string; others: string[]; dead: number; bet: number; villainBet: boolean } | null {
   const first = a.streets.length - 1;
@@ -1288,7 +1343,34 @@ function heroVsAggressor(a: {
     else if (tok === "F") put[seat] = put[seat] ?? 0;
   });
   const live = a.ordered.filter((p) => !m.folded.has(p) && !toks.some((t, j) => t === "F" && seats[j] === p));
-  const villain = lastAgg ?? live.filter((p) => p !== a.heroPos).sort((x, y) => (put[y] ?? 0) - (put[x] ?? 0))[0];
+  // a seat all-in since an earlier street never acts again: never the villain hero plays against
+  const acting = live.filter((p) => !(a.allIn?.has(p.toUpperCase()) && !seats.includes(p)));
+  const wagered = toks.some((t) => t === "RAI" || /^R[\d.]+$/.test(t));
+  if (!wagered) {
+    // CHECKED TO HERO (2026-09-24, sweep sp-4w-river-allin-checked): nobody bet this street, so there is no aggressor
+    // to face. Play hero against the villain who bet most recently on an EARLIER street (else the last one to act),
+    // heads-up at this street, with the whole pot in the middle: hero's check-or-bet decision, never a blank.
+    let prev: string | null = null;
+    for (let i = first - 1; i >= 0 && !prev; i--) {
+      const ts = a.streets[i]!, ss = a.streetSeats[i]!;
+      for (let j = ts.length - 1; j >= 0; j--) {
+        const who = ss[j]!;
+        if ((ts[j] === "RAI" || /^R[\d.]+$/.test(ts[j]!)) && who !== a.heroPos && acting.includes(who)) { prev = who; break; }
+      }
+    }
+    const vil = prev ?? acting.filter((p) => p !== a.heroPos).slice(-1)[0];
+    if (!vil) return null;
+    const heroOop = POSTFLOP_ORDER.indexOf(a.heroPos.toUpperCase()) < POSTFLOP_ORDER.indexOf(vil.toUpperCase());
+    const oop = heroOop ? a.heroPos : vil, ip = heroOop ? vil : a.heroPos;
+    return {
+      walkable: {
+        seatSpec: { oopPos: oop, ipPos: ip, oopRange: a.arr(oop), ipRange: a.arr(ip), heroSeat: heroOop ? "oop" : "ip" },
+        streets: [heroOop ? [] : ["X"]], streetSeats: [heroOop ? [] : [vil]], kind: `last-resort:hero vs ${vil}`,
+      },
+      first, pot: m.pot, stack: m.stack, villain: vil, others: acting.filter((p) => p !== a.heroPos && p !== vil), dead: 0, bet: 0, villainBet: false,
+    };
+  }
+  const villain = (lastAgg && acting.includes(lastAgg) ? lastAgg : null) ?? lastAgg ?? acting.filter((p) => p !== a.heroPos).sort((x, y) => (put[y] ?? 0) - (put[x] ?? 0))[0];
   if (!villain || villain === a.heroPos) return null;
   const h = put[a.heroPos] ?? 0, v = put[villain] ?? 0;
   const bet = Math.round((v - h) * 100) / 100;
@@ -1530,7 +1612,9 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // `dealt` = the hand's pinned stacks (pinPostflop): the chart this picks decides the flop-entering ranges, and
   // the ranges are in GTO Wizard's tree key — a pick that moved a rung between streets re-created every tree
   const choice = chartFor6max(hand, heroPos, tokens, dealt);
+  const tRes = Date.now();
   const resolved = await resolveChart6max(choice);
+  if (Date.now() - tRes > 1000) console.log(`[ranges] chart resolve took ${Date.now() - tRes} ms (${choice.candidates.slice(0, 3).join(" → ")}${resolved && resolved !== "unreachable" ? ` → ${resolved.id}` : ""})`);
   if (resolved === "unreachable") return { ok: false, reason: "6-max chart server (:8777) unreachable" };
   if (!resolved) return { ok: false, reason: `no 6-max chart for this state (${choice.id})` };
   // THE RANGES COME FROM THE BAKE, NOT THE CHART SERVER (2026-09-23, hand 729). This walk read every node over
@@ -1540,6 +1624,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // solve started (42.7 s to the answer; the server log shows the root request timing out and retrying). The
   // baked getter falls back to :8777 on its own when a tree is missing from the bake.
   const get = nodeGetter(resolved.id);
+  const tRecon = Date.now();
   let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> = await reconstructFlopRanges(tokens, async (line) => {
     const n = await get(line);
     return n === "unreachable" ? null : n;
@@ -1548,6 +1633,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // arrival range to choose what to drop or merge. The charts stop at the same caller cap GTO Wizard does,
   // so the extra seats arrive through the borrowed-caller shortcut, which is what borrowCaller is for.
   }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 6 });
+  if (Date.now() - tRecon > 1000) console.log(`[ranges] reconstructFlopRanges took ${Date.now() - tRecon} ms on ${resolved.id} (${recon.ok ? "ok" : recon.reason.slice(0, 80)})`);
   let fitNote: string | null = null;
   if (!recon.ok) {
     // THE LINE DOES NOT FIT THE TREE (2026-09-22): more limpers, callers or entrants than the capped tree holds
@@ -1564,7 +1650,9 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
     const ranges: Record<string, Record<string, number>> = {};
     const borrowed: string[] = [];
     for (const seat of live) {
+      const tFit = Date.now();
       const fit = await walkFitted(tokens, getHrc, { heroSeat: heroPosName, protect: [seat], stack: choice.depth, acceptTerminal: true });
+      if (Date.now() - tFit > 1000) console.log(`[ranges] walkFitted for ${seat} took ${Date.now() - tFit} ms (${fit.fitted ? `fitted: ${fit.fittedLine?.join("-")}` : fit.ok ? "not fitted" : fit.reason?.slice(0, 80)})`);
       if (!fit.fitted || !fit.fittedLine) return { ok: false, reason: `6-max chart ${resolved.id}: ${firstFail}; fitting the line for ${seat}'s range: ${fit.ok ? "" : fit.reason}` };
       const r = await reconstructFlopRanges(fit.fittedLine, async (line) => {
         const n = await get(line);
@@ -2085,7 +2173,9 @@ export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strat
 }
 
 export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): void {
-  if (strategyId !== SIX_MAX_STRATEGY || hand.currentNode.street !== "preflop") return;
+  if (hand.currentNode.street !== "preflop") return;
+  if (strategyId === CP_HU_STRATEGY) { warmPreflopHu(hand, heroPos ?? hand.positions[hand.heroSeatId] ?? null); return; }
+  if (strategyId !== SIX_MAX_STRATEGY) return;
   // a dead small blind wearing live-blind labels (see fastSolve): warm the tree the answer will actually use
   const deadSb = repairDeadSmallBlind(hand);
   if (deadSb.note) { hand = deadSb.hand; heroPos = hand.positions[hand.heroSeatId] ?? heroPos; }
@@ -2102,6 +2192,34 @@ export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strate
       if (ms > 400) console.log(`[warm6max] hand ${key}: ${r && r !== "unreachable" ? r.id : "no tree"} opened in ${ms} ms`);
     }).catch(() => { /* a warm-up never fails anything */ });
   } catch { /* ditto */ }
+}
+
+/**
+ * THE HEADS-UP CHART IS OPENED WHEN THE HAND IS DEALT (2026-09-24). In CoinPoker session 20260924_135250, 7 of 33
+ * preflop answers took 1.7-5.7 s and the other 26 took 17-65 ms. All 7 were the FIRST hand at a new depth rung
+ * (the 66 facing a raise waited 5.65 s for hrc_hu_cp200a_d110). Heads-up the effective stack drifts a rung every
+ * few hands, and the chart server pulled each rung's body from R2 at hero's turn (exploit_ui/server.py
+ * SMALL_BODY_BYTES explains why those bodies kept leaving its disk). So every tick now opens this hand's chart
+ * plus the default chart of the rungs on either side, and the next drift lands on a warm tree. In the SB hero acts
+ * first, so this hand's own chart gets no head start. The neighbouring rungs are what cover that case.
+ */
+const warmedHuCharts = new Map<string, number>();
+const HU_WARM_TTL_MS = 5 * 60_000;
+function warmPreflopHu(hand: ParsedHand, heroPos: string | null): void {
+  if (!isHeadsUp(hand)) return;
+  const choice = chartForHu(hand, buildPreflopTokensHu(hand, heroPos));
+  const now = Date.now();
+  for (const id of [choice.id, ...neighbourRungsHu(choice.depth).map(defaultChartHu)]) {
+    if (now - (warmedHuCharts.get(id) ?? 0) < HU_WARM_TTL_MS) continue;
+    warmedHuCharts.delete(id);
+    warmedHuCharts.set(id, now);
+    if (warmedHuCharts.size > 100) { const first = warmedHuCharts.keys().next().value; if (first !== undefined) warmedHuCharts.delete(first); }
+    const t0 = Date.now();
+    void fetchNode(id, "").then((r) => {
+      const ms = Date.now() - t0;
+      if (ms > 400) console.log(`[warmhu] ${id}: ${r === "unreachable" ? "chart server unreachable" : r ? "opened" : "no such chart"} in ${ms} ms`);
+    }).catch(() => { /* a warm-up never fails anything */ });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -2167,7 +2285,70 @@ export function unsolvableCapture(hand: ParsedHand): FastSolveResult | null {
         reason: `the board ${shown} has ${n} card${n === 1 ? "" : "s"} but ${label} is ${s} (${want} expected) — a street frame was missed, so this decision has no node to solve` };
     }
   }
+  // A CARD DEALT TWICE (2026-09-24, stress multi-07). Hero's Th with Th on the board reached the AI chain and came
+  // back as a mix of ALL ZEROS — the solver's card removal puts every board-blocked combo at weight 0, so hero's
+  // node had no strategy to read, and the answer was ok:true with no decision. The same read error in a live
+  // capture (a card frame misread, a stale board) would look the same. Two of one card is not a spot: refuse it
+  // as the capture fault it is, before any piece spends a solve on it.
+  const heroShort = known.map(SHORT_C), boardShort = board.map(SHORT_C);
+  const dup = duplicateCard([...heroShort, ...boardShort]);
+  if (dup) {
+    const where = heroShort.includes(dup) && boardShort.includes(dup)
+      ? `hero holds ${dup} and ${dup} is on the board ${shown}`
+      : heroShort.includes(dup) ? `hero holds ${dup} twice` : `${dup} appears twice on the board ${shown}`;
+    return { ok: false, kind: "capture-fault", street,
+      reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${where}; a card was misread, and no node holds a hand that shares a card with the board` };
+  }
   return null;
+}
+
+/** The first card that appears twice in the list (cards already in Rs form), else null. */
+function duplicateCard(cards: string[]): string | null {
+  const seen = new Set<string>();
+  for (const c of cards) {
+    if (seen.has(c)) return c;
+    seen.add(c);
+  }
+  return null;
+}
+
+/**
+ * WHY A POSTFLOP MIX CAME BACK ALL ZEROS (2026-09-24). The AI chain floors hero's own hand class in his entering
+ * range on every street it walks (aiChain: "keep hero's actual combo alive"), so a zero strategy at hero's node is
+ * never "the equilibrium never gets here" — it is a hand that cannot exist at the node, or a node that is not
+ * hero's. Name the one that fits, most specific first:
+ *   - a hero card on the board (card removal zeroes the combo; the capture gate refuses this upstream, kept here
+ *     so a hand that reaches the chain another way still says why)
+ *   - the node GTO Wizard returned belongs to another seat (the strategy read is someone else's)
+ *   - hero's class has no weight in the arrival range the walk started from (the floor covers only the street's
+ *     entering range, so a class the collapse or the earlier streets drove to zero says so here)
+ *   - nothing recognisable: report the raw facts so the walk's trace can be read
+ * Exported for its tests; pure.
+ */
+export function zeroMixReason(a: {
+  heroCards: string[]; board: string[]; heroPos: string; nodePos: string | null;
+  heroClass: string | null; arrivalWeight: number | null; plan: string | null; actions: string[];
+  /** heads-up: the dealer is the table's BTN and the tree's SB — one seat under two names, not a mismatch */
+  hu?: boolean;
+}): string {
+  const cards = a.heroCards.map(SHORT_C), board = a.board.map(SHORT_C);
+  const onBoard = cards.filter((c) => board.includes(c));
+  const head = `hero's ${cards.join("")} has every action at 0%${a.actions.length ? ` over ${a.actions.join("/")}` : ""}${a.plan ? ` (${a.plan})` : ""}`;
+  if (onBoard.length) {
+    return `${head}: ${onBoard.join(" and ")} is on the board ${board.join(" ")}, so card removal gives the combo no ` +
+      `weight — a card was misread; the capture is internally inconsistent`;
+  }
+  const seat = (p: string) => { const u = p.toUpperCase(); return a.hu && (u === "BTN" || u === "SB") ? "BTN~SB" : u; };
+  if (a.nodePos && seat(a.nodePos) !== seat(a.heroPos)) {
+    return `${head}: the node read is ${a.nodePos}'s, not hero's (${a.heroPos}) — the strategy belongs to another seat`;
+  }
+  if (a.arrivalWeight != null && a.arrivalWeight <= 0) {
+    return `${head}: ${a.heroClass ?? "the class"} carries no weight in ${a.heroPos}'s arrival range, so the solve never ` +
+      `dealt it — not in range at this node`;
+  }
+  return `${head} although the class is floored in ${a.heroPos}'s entering range` +
+    `${a.arrivalWeight != null ? ` (arrival weight ${a.arrivalWeight})` : ""} — the node's strategy for the combo is ` +
+    `empty; read the walk's trace before trusting this tree`;
 }
 
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {

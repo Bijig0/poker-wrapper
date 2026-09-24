@@ -32,11 +32,15 @@ const LOG_DIR = join(DATA_DIR, "jobs");
  */
 if (process.platform === "win32") {
   try {
+    // NOT THE BOX QUEUE'S RELAYS (2026-09-24): hrc-api/scripts/boxQueue.ts starts its own linuxShardJob relays through Git
+    // Bash (parent bash.exe, never this server's child, so they hold no socket of ours). This sweep killed them on every
+    // API restart - bun --watch reloads on each edit - and hrc-l2/hrc-l4's relays died every few minutes (the boxes kept
+    // solving; the queue re-queued and re-shipped each time). The API's own steps have cmd.exe as parent; only those go.
     // fire-and-forget: WMI on this laptop sometimes takes minutes and spawnSync's timeout is not honoured on Windows —
     // a synchronous sweep then blocks the whole boot (the API never listened for 10+ min, 2026-09-12). The leftover
     // runners die a moment later either way; the keeper re-queues their jobs.
     Bun.spawn(["powershell", "-NoProfile", "-Command",
-      "Get-CimInstance Win32_Process -Filter \"Name='bun.exe'\" | Where-Object { $_.CommandLine -like '*scripts?boxJob.ts*' -or $_.CommandLine -like '*scripts?linuxShardJob.ts*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+      "Get-CimInstance Win32_Process -Filter \"Name='bun.exe'\" | Where-Object { ($_.CommandLine -like '*scripts?boxJob.ts*' -or $_.CommandLine -like '*scripts?linuxShardJob.ts*') -and (Get-CimInstance Win32_Process -Filter \"ProcessId=$($_.ParentProcessId)\").Name -ne 'bash.exe' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
       { stdout: "ignore", stderr: "ignore" });
   } catch { /* best effort */ }
 }

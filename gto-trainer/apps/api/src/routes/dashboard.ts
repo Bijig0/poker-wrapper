@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
+import { truncateAt, startStacksOf, roundContributions } from "../utils/archivedHand/archivedHand";
 import { summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
@@ -16,8 +17,9 @@ import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile a
 import { fxRate, toAudCents } from "../services/fx";
 import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
+import { chartSetup, type ChartSetup } from "../services/chartSetup";
 import { gtowCdp } from "../services/gtowCdp";
-import { gtowApi } from "../services/gtowApi";
+import { gtowApi, DEFAULT_TREE_RAKE, type CustomTreeInput } from "../services/gtowApi";
 import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
 import { REPO } from "../services/ledger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -30,7 +32,10 @@ import { fetchNode as hrcFetchNode, chartFor, walk3max, HRC3MAX_BASE } from "../
 import type { HrcNode } from "../services/hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter } from "../services/hrc6max";
 import { fetchNode6max } from "../services/hrc6maxDb";
+import { nodeGetterHu } from "../services/hrc2max";
 import { mesNodeDetail } from "../services/mesPostflop";
+import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { preflopPathView, dealtFromTreeId } from "../services/gtowAiPreflop";
 import { solveStore } from "../services/solveStore";
 import { sessionsStore } from "../services/sessionsStore";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
@@ -1006,20 +1011,9 @@ app.get("/hand/:dbId", async (c) => {
   });
 });
 
-/** Truncate an archived hand to the state BEFORE actions[upto]. */
-export function truncateAt(hand: ParsedHand, upto: number): ParsedHand {
-  const act = hand.actions[upto];
-  const street = (act?.street ?? hand.street) as ParsedHand["street"];
-  const boardLen = street === "flop" ? 3 : street === "turn" ? 4 : street === "river" ? 5 : 0;
-  return {
-    ...hand,
-    actions: hand.actions.slice(0, upto),
-    street,
-    board: hand.board.slice(0, boardLen),
-    ended: false,
-    currentNode: { ...hand.currentNode, street, toActIsHero: act?.hero ?? false, complete: false },
-  };
-}
+/** Truncate an archived hand to the state BEFORE actions[upto] — the actions, the board AND the money: an archived
+ *  row's `stacks` / `committed` are the END of the hand's, rebuilt here to the decision (utils/archivedHand, hand 723). */
+export { truncateAt };
 
 /** POST /open-gtow { dbId, upto } — navigate the GTO Wizard desktop client to
  *  this node's library /solutions URL (best effort; off-tree lines may snap). */
@@ -1263,10 +1257,30 @@ const classOfCards = (cards: string[]): string | null => {
  * covered; otherwise the answer came from the GTO Wizard AI chain, whose
  * solve is not stored — the caller re-solves with the same chain.
  */
+/**
+ * THE RANGE LOOKER (2026-09-24, Brady: "a chronological range looker … per decision"). `&ranges=1` adds every
+ * seat's preflop range at the node — walked down the SAME tree path the node was read from, each class the
+ * product of that seat's frequencies for the actions it took, a villain's raise counting every raise size at the
+ * node (the chain's rule for the ranges it takes to the flop). `heroKey` is the node's own name for the seat to
+ * act; seats that have not acted yet hold every hand and are not listed.
+ */
+async function rangesAlong(line: string | null, get: (ln: string) => unknown, actorPos: string | null) {
+  const tokens = (line ?? "").split("-").filter(Boolean);
+  if (!tokens.length) return { ranges: {}, heroKey: actorPos, rangesNote: null };
+  const r = await reconstructFlopRanges(tokens, async (ln) => {
+    const n = await get(ln);
+    return n && n !== "unreachable" ? (n as RawNode) : null;
+  }, { heroPos: actorPos ?? undefined, partial: true });
+  return r.ok
+    ? { ranges: r.ranges, heroKey: actorPos, rangesNote: r.notes?.join(" · ") ?? null }
+    : { ranges: null, heroKey: actorPos, rangesNote: `the ranges could not be walked: ${r.reason}` };
+}
+
 app.get("/answer-node", async (c) => {
   const dbId = Number(c.req.query("dbId"));
   const upto = Number(c.req.query("upto"));
   const answerId = c.req.query("answerId") ? Number(c.req.query("answerId")) : null;
+  const withRanges = c.req.query("ranges") === "1";
   const d = openDb();
   if (!d || !Number.isFinite(dbId) || !Number.isFinite(upto)) return c.json({ ok: false, error: "dbId and upto required" }, 400);
   const row = d
@@ -1340,9 +1354,39 @@ app.get("/answer-node", async (c) => {
       }
       return c.json({
         ...base, kind: "hrc", chart, line: usedLine, rawLine, loggedLine, node, exploit, snapped,
+        ...(withRanges && node ? await rangesAlong(usedLine, (ln) => hrcFetchNode(chart, ln), node.pos ?? null) : {}),
         note: node ? (snapped.length ? `sizes snapped to the tree, as the live answer did: ${snapped.map((x) => `${x.from}→${x.to}`).join(", ")}` : loggedLine && usedLine !== loggedLine ? "the logged line was not found; showing the raw line instead" : null)
           : "this line is not in the chart's tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes (answers logged since 2026-09-03 carry the snapped line)",
         browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(chart)}&line=${encodeURIComponent(usedLine ?? rawLine)}`,
+      });
+    }
+    // THE COINPOKER HEADS-UP CHARTS ARE NOT IN THE CRAWLED DB EITHER (2026-09-24, found building the range
+    // looker): `hrc_hu_cp200a_*` (services/hrc2max.ts) are HRC trees on the same chart server as the 3-max set,
+    // and looked up in the crawled GTO Wizard DB below every heads-up answer opened as "not stored".
+    const huChart = logged?.chart && /^hrc_hu_/.test(logged.chart) ? logged.chart : null;
+    if (huChart) {
+      const tokens = buildPreflopTokensHu(t, heroPos);
+      const rawLine = tokens.join("-");
+      const loggedLine = logged?.line && logged.line !== "(root)" ? logged.line : null;
+      const get = nodeGetterHu(huChart);
+      let node: HrcNode | null = null, usedLine: string | null = null;
+      for (const ln of [...new Set([loggedLine, rawLine].filter((x): x is string => x != null))]) {
+        const n = await get(ln);
+        if (n === "unreachable") return c.json({ ...base, ok: false, kind: "hrc-hu", chart: huChart, error: `${HRC3MAX_BASE} is not reachable — the chart server must be up to show this node` });
+        if (n) { node = n; usedLine = ln; break; }
+      }
+      let snapped: { from: string; to: string }[] = [];
+      if (!node && rawLine) {
+        const w = await walk3max(tokens, get);
+        if (w.ok) { node = w.node; usedLine = w.tokens.join("-"); snapped = w.repaired.map((r) => ({ from: r.from, to: r.to })); }
+      }
+      return c.json({
+        ...base, kind: "hrc-hu", chart: huChart, depth: logged?.depth ?? null, line: usedLine, rawLine, loggedLine, node, snapped,
+        ...(withRanges && node ? await rangesAlong(usedLine, get, node.pos ?? null) : {}),
+        note: node
+          ? (snapped.length ? `sizes snapped to the tree, as the live answer did: ${snapped.map((x) => `${x.from}→${x.to}`).join(", ")}` : loggedLine && usedLine !== loggedLine ? "the logged line was not found; showing the raw line instead" : null)
+          : `this line is not in ${huChart}'s tree as rebuilt from the archive`,
+        browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(huChart)}&line=${encodeURIComponent(usedLine ?? rawLine)}`,
       });
     }
     // THE 6-MAX RING CHARTS ARE NOT IN THE CRAWLED DB (2026-09-20, Brady: "I clicked
@@ -1385,6 +1429,7 @@ app.get("/answer-node", async (c) => {
       }
       return c.json({
         ...base, kind: "hrc6max", chart, depth: logged?.depth ?? choice.depth, line: usedLine, rawLine, loggedLine, node, snapped,
+        ...(withRanges && node ? await rangesAlong(usedLine, nodeGetter(chart), node.pos ?? null) : {}),
         note: [
           fellBack,
           node
@@ -1408,6 +1453,7 @@ app.get("/answer-node", async (c) => {
     }
     return c.json({
       ...base, kind: "gtow", chart: gametype, depth, line: usedLine, rawLine, loggedLine, node,
+      ...(withRanges && node && gametype ? await rangesAlong(usedLine, (ln) => preflopDb.rawNode(gametype, depth, ln), node.pos ?? null) : {}),
       note: node ? null : "this line is not stored in the crawled preflop DB",
     });
   }
@@ -1432,6 +1478,143 @@ app.get("/answer-node", async (c) => {
   });
 });
 
+
+/**
+ * Which preflop chart a hand's decisions came from, and how to walk it: answer-node's per-kind rules (the logged
+ * chart first, else the resolver's pick), for the whole line instead of one node. `heroKey` is the chart's name for
+ * hero's seat (a heads-up tree seats the dealer as SB) — the walk exempts it from the villain raise merge.
+ */
+async function preflopChartSource(
+  e: Enriched, t: ParsedHand, heroPos: string | null,
+  logged: { chart?: string | null; depth?: number | null; tier?: string | null } | null,
+): Promise<
+  | { kind: "ai-preflop"; chart: string | null }
+  | { kind: "hrc" | "hrc-hu" | "hrc6max" | "gtow"; chart: string; tokens: string[]; get: (ln: string) => unknown; heroKey: string | null; hu: boolean }
+  | { error: string }
+> {
+  const hand = e.hand;
+  const chart = logged?.chart ?? null;
+  if (logged?.tier === "ai-preflop" || /^gtow-ai/.test(chart ?? "")) return { kind: "ai-preflop", chart };
+  const heroName = (hand.positions[hand.heroSeatId] ?? heroPos ?? "").toUpperCase() || null;
+  const huName = heroName === "BTN" ? "SB" : heroName;
+  if (chart && /^hrc_hu_/.test(chart)) {
+    return { kind: "hrc-hu", chart, tokens: buildPreflopTokensHu(t, heroPos), get: nodeGetterHu(chart), heroKey: huName, hu: true };
+  }
+  const live = new Set(hand.liveSeats);
+  const posOf = (s: number) => (hand.positions[s] ?? (s === hand.heroSeatId ? heroPos : null) ?? "").toUpperCase();
+  const threeMax = chart ? /3maxasym/.test(chart) : live.size === 3 && ["BTN", "SB", "BB"].every((p) => [...live].some((s) => posOf(s) === p));
+  if (threeMax) {
+    const id = chart ?? chartFor(t, heroPos).id;
+    return { kind: "hrc", chart: id, tokens: buildPreflopTokens3max(t, heroPos), get: (ln: string) => hrcFetchNode(id, ln), heroKey: heroName, hu: false };
+  }
+  const sixMax = chart ? /_6max_/.test(chart) : live.size > 3 && bbUsdOf(e.stakes) === 2;
+  if (sixMax) {
+    const tokens = buildPreflopTokens(t, heroPos);
+    let id = chart;
+    if (!id) {
+      const choice = chartFor6max(t, heroPos, tokens);
+      const r = await resolveChart6max(choice);
+      if (r === "unreachable") return { error: `${HRC3MAX_BASE} is not reachable and this machine has no baked 6-max DB` };
+      id = r ? r.id : choice.id;
+    }
+    return { kind: "hrc6max", chart: id, tokens, get: nodeGetter(id), heroKey: heroName, hu: false };
+  }
+  const set = resolveSet(t, heroPos, undefined);
+  const gametype = chart ?? set?.gametype ?? null;
+  if (!gametype) return { error: "no preflop chart resolves for this hand" };
+  const depth: number = logged?.depth ?? resolveDepth(t, set?.depths?.length ? set.depths : [100]);
+  const hu = set?.seats.length === 2;
+  return {
+    kind: "gtow", chart: gametype, tokens: hu ? buildPreflopTokensHu(t, heroPos) : buildPreflopTokens(t, heroPos),
+    get: (ln: string) => preflopDb.rawNode(gametype, depth, ln), heroKey: hu ? huName : heroName, hu,
+  };
+}
+
+/** Each step of a preflop path → the archived action it stands for: the seat's next preflop decision, in turn.
+ *  A seat the chart folds that was never dealt has none (null). */
+function mapPathSteps<T extends { pos: string }>(hand: ParsedHand, heroPos: string | null, steps: T[], hu: boolean): (T & { actionIndex: number | null })[] {
+  const name = (p: string | null | undefined) => { const u = (p ?? "").toUpperCase(); return hu && u === "BTN" ? "SB" : u; };
+  const queue = new Map<string, number[]>();
+  hand.actions.forEach((a, i) => {
+    if (a.street !== "preflop" || /^post/.test(a.type)) return;
+    const seat = a.hero ? hand.heroSeatId : a.seatId;
+    const p = name(hand.positions[seat] ?? (seat === hand.heroSeatId ? heroPos : null));
+    if (!p) return;
+    if (!queue.has(p)) queue.set(p, []);
+    queue.get(p)!.push(i);
+  });
+  return steps.map((s) => ({ ...s, actionIndex: queue.get(name(s.pos))?.shift() ?? null }));
+}
+
+/**
+ * GET /preflop-path?dbId=[&ai=1] — THE RANGE LOOKER'S PREFLOP, EVERY SEAT (2026-09-24, Brady: "we don't get the
+ * range of what a BB raise 10 looks like … make the villains' ranges + actions a mainstay part of the chronology").
+ * The whole preflop line walked down the chart that answered the hand: at every decision, the seat to act, its
+ * strategy for every class, the action the line took and the range that action leaves, each mapped to the archived
+ * action it stands for. A villain's raise conditions on every raise size at its node (`merged`) — the rule the
+ * flop-entry ranges use — so a step's range is exactly what the next decision sees. A hand the GTO Wizard AI
+ * answered preflop has no chart: the reply says so, and `&ai=1` rebuilds that tree instead (GTO Wizard quota; the
+ * page only asks on a click).
+ */
+app.get("/preflop-path", async (c) => {
+  const dbId = Number(c.req.query("dbId"));
+  const d = openDb();
+  if (!d || !Number.isFinite(dbId)) return c.json({ ok: false, error: "dbId required" }, 400);
+  const row = d
+    .query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?")
+    .get(dbId);
+  const e = row ? enrichSync(row) : null;
+  if (!e) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
+  const hand = e.hand;
+  const heroPos = e.summary.heroPos ?? null;
+  // the whole preflop, still ON the preflop street: every preflop action in, the money as the live table had it after
+  // the last of them (chips behind + this round's = the stacks as dealt, what the live /hand means). Cut at the first
+  // flop action instead, the preflop chips would already be in the pot and every picker would read the seats short.
+  const firstPost = hand.actions.findIndex((a) => a.street !== "preflop");
+  const upto = firstPost >= 0 ? firstPost : hand.actions.length;
+  const cut = truncateAt(hand, upto);
+  const t: ParsedHand = { ...cut, street: "preflop", board: [], committed: Object.fromEntries(roundContributions(hand, upto).get("preflop") ?? []),
+    currentNode: { ...cut.currentNode, street: "preflop", pot: 0 } };
+  // the chart that answered: the hand's last preflop answer (a chart is pinned for the whole hand)
+  const logged = (e.clientHandId ? (answerLog.forHand(e.clientHandId) as any[]) : [])
+    .filter((a) => a.street === "preflop" && a.text && a.chart).pop() ?? null;
+  const src = await preflopChartSource(e, t, heroPos, logged);
+  if ("error" in src) return c.json({ ok: false, error: src.error });
+  if (src.kind === "ai-preflop") {
+    if (c.req.query("ai") !== "1") return c.json({ ok: true, kind: "ai-preflop", chart: src.chart, steps: [] });
+    // built with the stacks of the tree that answered (its logged id), else the archive's own dealt stacks
+    const v = await preflopPathView(t, heroPos, dealtFromTreeId(t, heroPos, logged?.chart) ?? startStacksOf(hand));
+    if (!v.ok) return c.json({ ok: false, kind: "ai-preflop", error: `GTO Wizard AI preflop: ${v.reason}` });
+    return c.json({ ok: true, kind: "ai", chart: v.id, line: v.line, note: v.note, steps: mapPathSteps(hand, heroPos, v.steps, false) });
+  }
+  if ((await src.get("")) === "unreachable") return c.json({ ok: false, kind: src.kind, chart: src.chart, error: `${HRC3MAX_BASE} is not reachable — the chart server must be up to walk this line` });
+  const walked: WalkStep[] = [];
+  const walk = await reconstructFlopRanges(src.tokens, async (ln) => {
+    const n = await src.get(ln);
+    return n && n !== "unreachable" ? (n as RawNode) : null;
+  }, { heroPos: src.heroKey ?? undefined, partial: true, borrowCaller: true, onStep: (s) => walked.push(s) });
+  const r3 = (x: number) => Math.round(x * 1000) / 1000;
+  const combos = (k: string) => (k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12);
+  const steps = walked.map((s) => {
+    const actions = s.node.actions.map((a) => a.action);
+    const strategy: Record<string, { w: number; acts: number[] }> = {};
+    for (const cell of s.node.cells) {
+      const w = combos(cell.hand) * (s.rangeIn ? s.rangeIn[cell.hand] ?? 0 : 1);
+      if (w <= 0) continue;
+      strategy[cell.hand] = { w: r3(w), acts: actions.map((l) => r3((w * (cell.actions[l] ?? 0)) / 100)) };
+    }
+    const rangeOut = s.rangeOut
+      ? Object.fromEntries(Object.entries(s.rangeOut).filter(([, f]) => f > 0).map(([k, f]) => [k, { w: r3(f * combos(k)) }]))
+      : null;
+    return { pos: s.pos, line: s.line, actions, strategy, taken: s.label, merged: s.labels.length > 1, rangeOut,
+      ...(s.rawToken !== s.token ? { snapped: `${s.rawToken}→${s.token}` } : {}) };
+  });
+  return c.json({
+    ok: true, kind: src.kind, chart: src.chart, line: walked.map((s) => s.token).join("-"),
+    note: (walk.ok ? walk.notes ?? [] : [`the walk stopped: ${walk.reason}`]).join(" · ") || null,
+    steps: mapPathSteps(hand, heroPos, steps, src.hu),
+  });
+});
 
 // ------------------------------------------------------------ stored AI-chain solves
 
@@ -1512,6 +1695,34 @@ const keyedRanges = (players: string[], ranges: number[][], board?: string | nul
   ...(players.length === 3 ? { mid: classAgg(ranges[1] ?? [], board) } : {}),
 });
 
+/**
+ * WHAT A STORED CHAIN SENT GTO WIZARD on one street (2026-09-24, Brady: "what the inputs sent in was … e.g. what the
+ * rake cap you set was"). Traces since 2026-09-24 record the tree request as sent (aiChain: `sent`, `account`); an
+ * older trace is rebuilt from what it stores — board, pot, stack, seats and their entering ranges, the pinned sizes,
+ * the spec's rake — with the builder the chain itself calls (gtowApi.treeRequestSummary), so a trace that carried no
+ * rake shows the default the builder filled in, not "none". `sentFrom` says which.
+ */
+function sentOf(spec: any, st: any): { sent: unknown; sentFrom: "recorded" | "rebuilt" | null; account: string | null } {
+  if (st?.sent) return { sent: st.sent, sentFrom: "recorded", account: st.account ?? null };
+  try {
+    const { players, ranges } = traceSeats(spec, st);
+    const n = players.length;
+    const street = String(st.street ?? "FLOP").toUpperCase() as "FLOP" | "TURN" | "RIVER";
+    const input: CustomTreeInput = {
+      board: st.board, pot: st.potIn, stack: st.stackIn,
+      oopRange: ranges[0] ?? [], ipRange: ranges[n - 1] ?? [], oopPos: players[0], ipPos: players[n - 1],
+      ...(n === 3 ? { mid: { pos: players[1]!, range: ranges[1] ?? [] } } : {}),
+      ...(n === 2 && spec.huGrid ? { huGrid: spec.huGrid } : {}),
+      startingStreet: street,
+      ...(spec.rake ? { rake: spec.rake } : {}),
+      ...(Array.isArray(st.fixedLevels) && st.fixedLevels.length ? { fixedLevels: { [street]: st.fixedLevels } } : {}),
+    };
+    return { sent: gtowApi.treeRequestSummary(input), sentFrom: "rebuilt", account: st.account ?? null };
+  } catch {
+    return { sent: null, sentFrom: null, account: st?.account ?? null };
+  }
+}
+
 /** Walk a stored trace and produce the per-node view the dashboard renders. */
 function expandTrace(trace: any) {
   const spec = trace.spec ?? {};
@@ -1524,6 +1735,8 @@ function expandTrace(trace: any) {
     return {
       si: st.si, street: st.street, board: st.board, potIn: st.potIn, stackIn: st.stackIn, labels: st.labels,
       fixedLevels: st.fixedLevels, solId: st.solId, created: st.created,
+      // the tree request this street sent GTO Wizard (recorded since 2026-09-24, rebuilt before) and whose account
+      ...sentOf(spec, st),
       // per-street timing (recorded since 2026-09-12): the cloud solve itself and the node walk
       solveMs: st.solveMs ?? null, walkMs: st.walkMs ?? null,
       players,
@@ -1577,6 +1790,8 @@ function expandTrace(trace: any) {
     spec: { oopPos: spec.oopPos, ipPos: spec.ipPos, midPos: spec.midPos ?? null, heroPos, flopPot: spec.flopPot, flopStack: spec.flopStack,
             board: spec.board, streets: spec.streets,
             heroSeat: spec.heroSeat, heroCombo, heroComboIdx: heroIdx, rake: spec.rake ?? null, rangeSource: spec.rangeSource ?? null,
+            // the rake the trees were actually sent: a spec without one got the builder's default (GTO Wizard's NL500)
+            rakeSent: spec.rake ?? DEFAULT_TREE_RAKE, rakeDefaulted: !spec.rake,
             oopRange: classAgg(spec.oopRange ?? []), ipRange: classAgg(spec.ipRange ?? []),
             ...(spec.midRange ? { midRange: classAgg(spec.midRange) } : {}) },
     streets, nodes, result: trace.result ?? null,
@@ -1589,6 +1804,72 @@ app.get("/solve/:id", (c) => {
   const got = solveStore.get(id);
   if (!got) return c.json({ ok: false, error: `no stored solve #${id}` }, 404);
   return c.json({ ok: true, row: got.row, ...expandTrace(got.trace) });
+});
+
+/**
+ * GET /chart-setup?dbId=&id=&id= — WHAT EACH PREFLOP CHART OF A HAND WAS SOLVED WITH (2026-09-24, Brady: "not the actual
+ * rake cap and config"; "for the uneven stacks … it doesn't show what specifically the uneven stacks look like"). Every
+ * chart the hand's logged answers name, plus each `id` (the chart the preflop path walked), through
+ * services/chartSetup.ts — seats and their stacks, blinds, ante, rake and cap, the size menu. Beside it, the TABLE,
+ * only as far as the row RECORDED it (an end-of-hand stack cannot give a winner's stack back, so nothing is guessed):
+ *   - each seat's stack as dealt: hand.startStacks (seat → bb, exported since 2026-09-24), or a CoinPoker row's own
+ *     name → table-money map read through its seat names and big blind (rows archived before that);
+ *   - the table's rake as the site reported it (a CoinPoker row's `rake`: percent, heads-up percent, cap in table
+ *     money, isPotRakePf = preflop pots raked too) — Ignition rows carry none;
+ *   - the ante and the big blind.
+ */
+app.get("/chart-setup", (c) => {
+  const dbId = Number(c.req.query("dbId"));
+  const extra = (c.req.queries("id") ?? []).map((s) => String(s).trim()).filter(Boolean).slice(0, 12);
+  const setups: Record<string, ChartSetup | null> = {};
+  let table: {
+    seats: { pos: string; hero: boolean; dealtBb: number | null }[]; anteBb: number | null; bbCents: number | null; exact: boolean;
+    dealtFrom: string | null;
+    rake: { pct: number; capBb: number | null; capMoney: number | null; preflopRaked: boolean | null; from: string } | null;
+  } | null = null;
+  const d = openDb();
+  const row = d && Number.isFinite(dbId)
+    ? d.query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?").get(dbId)
+    : null;
+  const e = row ? enrichSync(row) : null;
+  if (e) {
+    const h = e.hand;
+    const logged = (e.clientHandId ? answerLog.forHand(e.clientHandId) : []) as { chart?: string | null; depth?: number | null; warning?: string | null }[];
+    for (const a of logged) {
+      if (a.chart && !(a.chart in setups)) setups[a.chart] = chartSetup(a.chart, { depth: a.depth ?? null, note: a.warning ?? null });
+    }
+    const raw = (e.raw ?? {}) as { names?: Record<string, string>; startStacks?: Record<string, number>; bb?: number; rake?: Record<string, unknown> };
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    const dealt: Record<number, number> = { ...((h as { startStacks?: Record<number, number> }).startStacks ?? {}) };
+    let dealtFrom: string | null = Object.keys(dealt).length ? "the table's stacks as dealt, recorded with the hand" : null;
+    const bbMoney = Number(raw.bb);
+    if (!dealtFrom && raw.startStacks && raw.names && bbMoney > 0) {
+      for (const [sid, name] of Object.entries(raw.names)) {
+        const money = Number(raw.startStacks[name]);
+        if (raw.startStacks[name] != null && Number.isFinite(money)) dealt[Number(sid)] = r2(money / bbMoney);
+      }
+      if (Object.keys(dealt).length) dealtFrom = "the table's stacks before the blinds, recorded per player name with the hand";
+    }
+    const pos: Record<number, string> = { ...(h.positions ?? {}) };
+    if (pos[h.heroSeatId] == null && e.summary.heroPos) pos[h.heroSeatId] = e.summary.heroPos;
+    const rr = raw.rake;
+    const heads = Object.keys(pos).length === 2;
+    const pct = Number(heads && rr?.rakeHeadsUp != null ? rr.rakeHeadsUp : rr?.rake);
+    const capMoney = Number(rr?.rakeCap);
+    table = {
+      seats: Object.entries(pos).map(([sid, p]) => ({ pos: String(p), hero: Number(sid) === h.heroSeatId, dealtBb: dealt[Number(sid)] ?? null })),
+      anteBb: h.anteBb ?? null, bbCents: h.bbCents ?? null, exact: Object.keys(dealt).length > 0, dealtFrom,
+      rake: rr && Number.isFinite(pct) ? {
+        pct,
+        capMoney: Number.isFinite(capMoney) && capMoney > 0 ? capMoney : null,
+        capBb: Number.isFinite(capMoney) && capMoney > 0 && bbMoney > 0 ? r2(capMoney / bbMoney) : null,
+        preflopRaked: typeof rr.isPotRakePf === "boolean" ? rr.isPotRakePf : null,
+        from: "the table's own rake settings, recorded with the hand",
+      } : null,
+    };
+  }
+  for (const id of extra) if (!(id in setups)) setups[id] = chartSetup(id);
+  return c.json({ ok: true, setups, table });
 });
 
 /** GET /solves?hand=<clientHandId> — stored solves for a hand (no blobs); no hand → the most recent. */

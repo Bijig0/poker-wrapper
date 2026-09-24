@@ -61,6 +61,44 @@ export const evenChartId = (depth: number, open: number | "limp"): string =>
 export const unevenChartId = (short: number, seat: Seat6, open: number): string =>
   `${SITE_6MAX}_6max_D${num(DEEP6)}_s${num(short)}_${seat}_o${num(open)}`;
 
+/** The two pool-locked limp trees at 100bb (solves/sixmax_grid/limp-pool*, 2026-09-23/24). */
+export const POOL_LIMP_CHART = `${SITE_6MAX}_6max_D100_olimp_pool3`;   // limps AND the SB's complete locked to the pool
+export const POOL_LIMP_CHART_SB = `${SITE_6MAX}_6max_D100_olimp_pool`; // limps locked, the SB's own decision solved
+
+/** Every first-round line over {F,C} up to three tokens that contains a limp: the limpers' locked nodes. */
+const POOL_LIMP_LOCKED = new Set<string>();
+/** The SB's complete-decision lines: four tokens over {F,C} with one or two limps in front. */
+const POOL_SB_LOCKED = new Set<string>();
+for (const n of [1, 2, 3, 4]) {
+  for (let m = 0; m < 1 << n; m++) {
+    const toks = Array.from({ length: n }, (_, i) => ((m >> i) & 1 ? "C" : "F"));
+    const c = toks.filter((t) => t === "C").length;
+    if (n <= 3 && c >= 1) POOL_LIMP_LOCKED.add(toks.join("-"));
+    if (n === 4 && (c === 1 || c === 2)) POOL_SB_LOCKED.add(toks.join("-"));
+  }
+}
+
+/**
+ * Which pool-locked limp tree answers this node — or none, when the node is one the pool trees LOCK for the seat
+ * hero is in. A locked node's mix is the pool's play, not a solution (HRC fixes the locked action and solves the
+ * rest of the tree against it), so hero never reads his own decision from one:
+ *   - hero is the SB facing limps and no raise → the pilot tree, whose SB was left free and best-responds to the
+ *     same pool limpers (reach 1 in 1,200 at two limps, regret 0.019 — trained);
+ *   - hero is a non-blind seat facing limps (the over-limp decision, locked in both pool trees) → no pool tree;
+ *     the equilibrium limp chart answers as before (its one-limp nodes agree with the exact tree; its two-limp
+ *     nodes are refused by the trust guard and the exact tree answers);
+ *   - anything else (the BB behind limps and a complete, anyone facing an iso, every later node, and the
+ *     flop-arrival ranges of a closed line) → the full pool tree, SB complete locked too.
+ */
+export function poolLimpChart(tokens: string[], hero: Seat6 | ""): { id: string; note: string } | null {
+  const line = tokens.map((t) => String(t ?? "").trim().toUpperCase()).join("-");
+  if (POOL_SB_LOCKED.has(line) && hero === "SB") {
+    return { id: POOL_LIMP_CHART_SB, note: "pool-locked limpers; the SB's own decision from the tree that solved it" };
+  }
+  if (POOL_LIMP_LOCKED.has(line)) return null;
+  return { id: POOL_LIMP_CHART, note: "pool-locked limp tree (limps and the SB's complete at the pool's measured ranges)" };
+}
+
 /**
  * A chart-selection APPROXIMATION: the picker answered, but from a tree that is
  * not the one this state actually wanted.
@@ -325,7 +363,17 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
     }
     return cands;
   };
-  const even = (depth: number) => finish(evenChartId(depth, open), evenLadder(depth, open), depth, depth, "EQ", open);
+  const even = (depth: number) => {
+    // THE POOL-LOCKED LIMP CHARTS (2026-09-24, hand 729). A limped pot at the 100bb rung (and the 125/150bb states
+    // that ride to it) is answered from the trees whose limpers hold the pool's MEASURED limp range, not the
+    // equilibrium 3.6% that starved every two-limp node. Which of the two pool trees depends on whose node hero is
+    // reading — see poolLimpChart. Shallower rungs keep their equilibrium limp chart until the D50/D75 pool
+    // re-solves exist.
+    const pool = open === "limp" && depth >= DEEP6 ? poolLimpChart(tokens, me) : null;
+    if (pool) notes.push(pool.note);
+    const cands = pool ? [pool.id, ...evenLadder(depth, open)] : evenLadder(depth, open);
+    return finish(pool ? pool.id : evenChartId(depth, open), cands, depth, depth, "EQ", open);
+  };
 
   // hero has not reloaded: his own stack sets the rung like anyone else's
   if (hero < HERO_RELOAD_FLOOR) {

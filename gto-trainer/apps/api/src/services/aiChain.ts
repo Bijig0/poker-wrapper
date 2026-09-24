@@ -2,9 +2,11 @@ import { gtowApi, type NodeSource } from "./gtowApi";
 import { tmark, tspan } from "./answerTrace";
 import {
   actionKindOf,
+  matchActionIndex,
   matchActionLoose,
   wagerLabelForWalk,
 } from "../utils/aiChainTokens/aiChainTokens";
+import { labelBetBb } from "../utils/aiStudyLine/aiStudyLine";
 import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
 
 /**
@@ -155,6 +157,12 @@ export interface ChainTrace {
     resumeMiss?: string;
     /** the walk's node reads by source, and the wall-clock of the ones that waited on the network */
     nodeSrc?: { cache: number; joined: number; fetched: number; fetchMs: number };
+    /** WHAT GTO WIZARD WAS ASKED TO SOLVE on this street (2026-09-24): the tree request as sent — rake and cap, pot,
+     *  stack, the size grid, the tree's own rules — with the ranges summarised (gtowApi.treeRequestSummary). A cached
+     *  tree was created from this same body (the cache key covers every field of it). */
+    sent?: unknown;
+    /** the GTO Wizard session whose solve this is (gtowSessions: primary = Ultra, secondary = Elite) */
+    account?: string | null;
     /** The street's seats in acting order and their entering ranges, parallel arrays (since 2026-09-19): a
      *  three-way flop lists three, the street after a fold lists the two left. oopIn/ipIn are the first and
      *  last of them, kept for readers of older traces. */
@@ -291,6 +299,8 @@ export type AiChainResult =
       solves: number;
       /** walkThrough only: each surviving seat's range leaving the last street, by position */
       rangesOut?: Record<string, number[]>;
+      /** Wagers the walk matched only loosely — a size nudged onto the tree's, or a big raise taken as its all-in. */
+      snaps?: string[];
       trace: ChainTrace;
     }
   | { ok: false; why: string; trace?: ChainTrace };
@@ -449,6 +459,7 @@ export async function fitsCachedTree(
 
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
+  const sizeSnaps: string[] = [];
   const fail = (why: string): AiChainResult => { trace.result = { ok: false, why }; return { ok: false, why, trace }; };
   const cards = spec.board.match(/.{2}/g) ?? [];
   if (cards.length < 3) return fail(`board too short ("${spec.board}")`);
@@ -654,6 +665,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       resumedAt: undefined as number | undefined, resumeMiss: undefined as string | undefined,
       players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
       oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
+      sent: null as unknown, account: null as string | null,
     };
     trace.streets.push(streetRec);
 
@@ -668,6 +680,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     if (ens.created) solves++;
     streetRec.solId = String(ens.solId);
     streetRec.created = !!ens.created;
+    streetRec.account = ens.session;
+    streetRec.sent = gtowApi.treeRequestSummary(treeInput);
     streetRec.solveMs = Date.now() - tSolve;
     // THE TREE SAYS WHETHER IT WAS REUSED, AND IF NOT, WHY (2026-09-24). The chain's whole economy is that an
     // earlier street's tree comes back from the cache on every later decision; a street that reads CREATED here
@@ -713,6 +727,53 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     }
     const streetNodesStart = trace.nodes.length - (streetRec.resumedAt != null ? resuming!.nodes.length : 0);
 
+    // SPECULATIVE PREFETCH OF THE REST OF THE LINE (2026-09-24 latency pass). Every villain action on this street
+    // is known before hero acts, and a node's address is just the codes walked to it: X / C / F, or R<size> with
+    // the size as the tree stores it (a pinned bet to one decimal, an all-in to two — codes seen: R19.9, R97.35).
+    // The walk reads nodes one after another, 1-1.5 s each; asking for all of them now lets the cloud solve them
+    // side by side, and the walk's own read of each one JOINS the request already in flight (gtowApi.nodePending).
+    // A mispredicted address costs a short poll and nothing else: the walk still reads the real node itself.
+    if (process.env.GTOW_PREFETCH !== "0" && process.env.NODE_ENV !== "test" && labels.length > ti0) {
+      // The tree stores a wager as GTO Wizard re-derives it from the pinned pot percentage, not as observed:
+      // bet% is kept to a tenth, a RAISE% is rounded to a whole percent, the size to one decimal; a wager that
+      // is (or is turned into) the all-in is coded as the exact stack to two decimals. Checked against 245
+      // walked wagers in data/solves.sqlite: 0 misses with both candidates. Each wager therefore gets up to two
+      // addresses (the re-derived size, and the all-in when it commits most of the stack).
+      const actors = actorsOf(labels, seats.length);
+      const inv = st.inv.slice();
+      let paths: string[][] = [codes.slice()];
+      const addrs: string[] = [];
+      for (let j = ti0; j < labels.length && addrs.length < 8; j++) {
+        const l = labels[j]!;
+        const m = l.match(/^(Bet|Raise|AllIn)\((\d+(?:\.\d+)?)\)$/);
+        const actor = actors[j]!;
+        let next: string[] = [];
+        if (l === "Check") next = ["X"];
+        else if (l === "Call") { next = ["C"]; inv[actor] = Math.max(...inv); }
+        else if (l === "Fold") next = ["F"];
+        else if (m) {
+          const x = Number(m[2]) / 100;
+          const outstanding = Math.max(...inv), own = inv[actor] ?? 0, toCall = outstanding - own;
+          const potNow = pot + inv.reduce((s0, v) => s0 + v, 0), denom = potNow + toCall;
+          const pctRaw = denom > 0 ? (100 * (x - outstanding)) / denom : 0;
+          const pct = outstanding > 0 ? Math.round(pctRaw) : Math.round(pctRaw * 10) / 10;
+          const size = Math.round((outstanding + (pct / 100) * denom) * 10) / 10;
+          const behind = Math.round((stack - own) * 100) / 100;
+          const allIn = `R${behind}`;
+          next = m[1] === "AllIn" || x >= behind - 0.01 ? [allIn] : x >= 0.6 * behind ? [`R${size}`, allIn] : [`R${size}`];
+          inv[actor] = x;
+        } else break;
+        const grown: string[][] = [];
+        for (const p of paths) for (const c of next) grown.push([...p, c]);
+        paths = grown.slice(0, 4);
+        for (const p of paths) addrs.push(p.join("-"));
+      }
+      for (const cs of [...new Set(addrs)].slice(0, 8)) {
+        void gtowApi.customNode(ens.solId, { [QKEY[k]!]: cs, board: streetBoard }, 6_000).catch(() => { /* speculative */ });
+      }
+      if (addrs.length) tmark(`chain ${STREET[k]} prefetch`, `${addrs.length} node(s) asked for ahead of the walk: ${addrs.join(" | ")}`);
+    }
+
     for (let ti = ti0; ti <= labels.length; ti++) {
       // hero's node from the mid-street checkpoint needs no read: its JSON travelled with it
       let { r: nq, src: nodeSrc, ms: nodeMs } = ti === ti0 && heroDataAtTi0
@@ -729,6 +790,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           ens = again;
           if (again.created) solves++;
           streetRec.solId = String(again.solId);
+          streetRec.account = again.session;
           streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}re-created on another account after a 429 mid-walk`;
           ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(ens.solId, codes.join("-")));
         }
@@ -815,7 +877,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
-        return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace };
+        return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}) };
       }
 
       const label = labels[ti]!;
@@ -826,6 +888,17 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
       const a = sols[ai]!;
       nodeRec.taken = ai;
+      // SAY WHEN A WAGER WAS ONLY MATCHED LOOSELY (2026-09-24): a size nudged onto the tree's, or a big raise taken as
+      // the all-in because the tree offers no raise size there. The answer carries it as an approximation.
+      const want = labelBetBb(label);
+      const to = Number(a.action?.betsize);
+      const moved = want != null && Number.isFinite(to) && Math.abs(to - want) > Math.max(0.02 * want, 0.1);
+      const toAllIn = actionKindOf(a) === "AllIn" && !/^AllIn/.test(label);
+      // rounding (8.09 read as the tree's 8.1) is not worth a word; a real size change or a raise taken as all-in is
+      if (matchActionIndex(label, sols, stack) !== ai && (moved || toAllIn)) {
+        const taken = `${actionKindOf(a) === "AllIn" ? "ALL-IN" : actionKindOf(a).toUpperCase()}${Number.isFinite(to) ? ` ${Math.round(to * 100) / 100}bb` : ""}`;
+        sizeSnaps.push(`${STREET[k]!.toLowerCase()}: ${seats[actor]!.pos} ${want != null ? `${want}bb` : label} taken as the tree's ${taken}`);
+      }
       const kind = actionKindOf(a);
       if (kind === "Fold" && actor === heroIdx) return fail("hero folds inside the line before his node (capture corruption?)");
 

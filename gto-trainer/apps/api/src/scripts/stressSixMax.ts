@@ -90,6 +90,13 @@ interface SpotSpec {
  * buildPreflopTokens and lineOf both expect.
  */
 function buildHand(s: SpotSpec): { hand: ParsedHand; heroPos: Pos } {
+  // A FIXTURE THAT DEALS ONE CARD TWICE IS A BUG IN THIS FILE, NOT A SPOT (2026-09-24, multi-07): the API now
+  // refuses it as a capture fault, but that reads like a strategy hole in the report. Fail loudly here first.
+  {
+    const dealt = [s.cards[0], s.cards[1], ...(s.board ?? [])];
+    const twice = dealt.find((c, i) => dealt.indexOf(c) !== i);
+    if (twice) throw new Error(`${s.id}: fixture deals ${twice} twice (hero ${s.cards.join("")}, board ${(s.board ?? []).join(" ") || "none"})`);
+  }
   const seats = ORDER.filter((p) => s.stacks[p] != null);
   const seatId: Record<string, number> = {};
   seats.forEach((p, i) => { seatId[p] = i + 1; });
@@ -439,6 +446,36 @@ const S: SpotSpec[] = [
   { id: "limp-17", family: "limp", note: "two limpers, iso, SB calls, BB folds — the limper now acts on a re-keyed node",
     stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "UTG", cards: ["Jc", "Jd"],
     pre: [["UTG", "c"], ["HJ", "c"], ["CO", "r", 5], ["BTN", "f"], ["SB", "c"], ["BB", "f"]] },
+  { id: "hu-01", family: "preflop", note: "table thinned to TWO seats: hero SB/BTN first in",
+    stacks: { SB: 100, BB: 100 }, hero: "SB", cards: ["Kd", "9s"], pre: [] },
+  { id: "hu-02", family: "preflop", note: "table thinned to TWO seats: hero BB facing the SB's 2.5bb open (the 2026-09-21 table-shape miss)",
+    stacks: { SB: 100, BB: 100 }, hero: "BB", cards: ["Qh", "8h"], pre: [["SB", "r", 2.5]] },
+  { id: "three-01", family: "preflop", note: "THREE seats in the 6-max ring: hero BTN first in",
+    stacks: { BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["As", "7d"], pre: [] },
+  { id: "three-02", family: "preflop", note: "THREE seats: hero SB facing a BTN open",
+    stacks: { BTN: 100, SB: 100, BB: 100 }, hero: "SB", cards: ["Jc", "Tc"], pre: [["BTN", "r", 2.5]] },
+  { id: "three-03", family: "preflop", note: "THREE seats: hero BB vs an SB complete after the BTN folds",
+    stacks: { BTN: 100, SB: 100, BB: 100 }, hero: "BB", cards: ["9h", "6h"], pre: [["BTN", "f"], ["SB", "c"]] },
+  { id: "three-04", family: "preflop", note: "THREE seats, uneven: BTN 40bb opens, SB 3-bets, hero BB",
+    stacks: { BTN: 40, SB: 100, BB: 100 }, hero: "BB", cards: ["Ah", "Qd"], pre: [["BTN", "r", 2.5], ["SB", "r", 11]] },
+  { id: "lrr-21", family: "esoteric", note: "the 2026-09-21 size-too-far miss: two limps, hero isos to 4, first limper calls, second limper limp-reraises to 21",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "CO", cards: ["Ks", "Qs"],
+    pre: [["UTG", "c"], ["HJ", "c"], ["CO", "r", 4], ["BTN", "f"], ["SB", "f"], ["BB", "f"], ["UTG", "c"], ["HJ", "r", 21]] },
+  { id: "h443-a", family: "preflop", note: "hand 443: CO opens, SB flats, BB min-3-bets to 4 — hero CO facing it (4-handed, BTN folded)",
+    stacks: { CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "CO", cards: ["Ac", "Qc"],
+    pre: [["CO", "r", 2.5], ["BTN", "f"], ["SB", "c"], ["BB", "r", 4]] },
+  { id: "h443-b", family: "preflop", note: "hand 443: ... hero 4-bets 9.2, SB folds, BB 5-bets to 14.4 — the line GTO Wizard called NODE_DOES_NOT_EXIST 276 times",
+    stacks: { CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "CO", cards: ["Ac", "Qc"],
+    pre: [["CO", "r", 2.5], ["BTN", "f"], ["SB", "c"], ["BB", "r", 4], ["CO", "r", 9.2], ["SB", "f"], ["BB", "r", 14.4]] },
+  { id: "limp-18", family: "limp", note: "hero SB facing two limps, no raise — the SB's complete decision, LOCKED in the full pool tree: must read the pilot",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "SB", cards: ["Kd", "Kc"],
+    pre: [["UTG", "f"], ["HJ", "f"], ["CO", "c"], ["BTN", "c"]] },
+  { id: "limp-19", family: "limp", note: "hero BTN facing two limps — the over-limp decision, locked in BOTH pool trees: equilibrium chart, then the trust guard",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["7d", "6d"],
+    pre: [["UTG", "f"], ["HJ", "c"], ["CO", "c"]] },
+  { id: "limp-20", family: "limp", note: "hero SB completed behind a limp, BB isos — the SB's node facing the iso is NOT locked: full pool tree",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "SB", cards: ["Qh", "Jh"],
+    pre: [["UTG", "f"], ["HJ", "f"], ["CO", "f"], ["BTN", "c"], ["SB", "c"], ["BB", "r", 5], ["BTN", "f"]] },
 
   // ================== ESOTERIC LIMP / ISO SPOTS (2026-09-22, Brady: "create the weirdest most complex limp
   // iso spots ... ensure that with the system we've built it is strong enough to answer it"). Built past every
@@ -550,8 +587,10 @@ const S: SpotSpec[] = [
     pre: [["UTG", "c"], ["HJ", "f"], ["CO", "r", 4], ["BTN", "c"], ["SB", "f"], ["BB", "c"], ["UTG", "c"]],
     board: ["8h", "5c", "2d", "Js"], flop: [["BB", "x"], ["UTG", "x"], ["CO", "x"], ["BTN", "x"]], turn: [["BB", "x"], ["UTG", "r", 6]] },
 
+  // 2026-09-24: this fixture dealt hero Th on a board holding Th, and the answer was an all-zero mix graded
+  // "degenerate" for three runs before anyone read the cards. buildHand now refuses a card dealt twice.
   { id: "multi-07", family: "multiway", note: "4-way RIVER where all four paid on the flop — nothing ghostable, nothing mergeable",
-    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["Ah", "Th"],
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BTN", cards: ["Ad", "Td"],
     pre: [["UTG", "r", 2.5], ["HJ", "c"], ["CO", "f"], ["BTN", "c"], ["SB", "f"], ["BB", "c"]],
     board: ["Th", "6d", "3s", "Qc", "2h"],
     flop: [["BB", "x"], ["UTG", "r", 5], ["HJ", "c"], ["BTN", "c"], ["BB", "c"]],
@@ -636,6 +675,18 @@ const S: SpotSpec[] = [
     pre: [["UTG", "r", 2.7], ["HJ", "c"], ["CO", "c"], ["BTN", "c"], ["SB", "f"], ["BB", "c"]],
     board: ["Jd", "7c", "5s"], flop: [] },
 
+  // THE REFUSED POSTFLOP SHAPE (2026-09-23): every villain committed this street, hero wedged between them, no collapse
+  // legal. Answered by the postflop last resort (hero vs the last aggressor, the rest as dead money).
+  { id: "multi-17", family: "multiway", note: "4-way limped flop, everyone commits, hero BB between: the shape that used to be refused",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BB", cards: ["Jh", "Th"],
+    pre: [["UTG", "f"], ["HJ", "f"], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "x"]],
+    board: ["Jd", "8c", "3s"], flop: [["SB", "r", 2], ["BB", "c"], ["CO", "r", 7], ["BTN", "c"], ["SB", "c"]] },
+
+  { id: "multi-18", family: "multiway", note: "4-way limped pot, flop checks through, TURN everyone commits, hero BB between: the re-root fails too, the last resort answers",
+    stacks: { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 100 }, hero: "BB", cards: ["Kd", "Qd"],
+    pre: [["UTG", "f"], ["HJ", "f"], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "x"]],
+    board: ["Kc", "7h", "2s", "2d"], flop: [["SB", "x"], ["BB", "x"], ["CO", "x"], ["BTN", "x"]], turn: [["SB", "r", 3], ["BB", "c"], ["CO", "r", 10], ["BTN", "c"], ["SB", "c"]] },
+
   // THE 2026-09-21 SEAT-CAP REGRESSION. These are the only spots that exercise the path that was broken:
   // the CHART must fail preflop (so the cascade falls to the GTO Wizard AI preflop tree) AND four or more
   // must reach the flop (so the arrival ranges have to carry more seats than a solver tree holds). An
@@ -666,6 +717,7 @@ const APPROX_MARKERS: [RegExp, string][] = [
   [/answered from/i, "chart fallback"],
   [/dead SB approximated/i, "dead SB modelled"],
   [/past the .*rung|beyond/i, "past the ladder"],
+  [/POSTFLOP LAST RESORT/i, "postflop last resort (hero vs aggressor)"],
   [/LAST RESORT/i, "last resort (hero vs aggressor)"],
   [/GTO Wizard AI preflop/i, "answered by AI preflop"],
 ];
@@ -683,8 +735,11 @@ function grade(r: FastSolveResult, heroPos: string): { grade: Grade; why: string
     return { grade: "degenerate", why: `answered from ${r.pos}'s node, but hero is ${heroPos} — WRONG SEAT`, flags };
   }
   if (!r.actions.length) return { grade: "degenerate", why: "the node offered no actions", flags };
-  if (!r.decision) return { grade: "degenerate", why: "actions but no decision rolled", flags };
+  // notInRange before "no decision": a not-in-range answer has no decision by construction, and the old order
+  // reported multi-07's all-zero mix as "actions but no decision rolled" — true, but not the cause.
   if (r.notInRange) return { grade: "degenerate", why: `equilibrium never reaches this node with ${r.heroClass}`, flags };
+  if (!r.decision) return { grade: "degenerate", why: "actions but no decision rolled", flags };
+  if (r.actions.every((a) => a.frequency <= 0)) return { grade: "degenerate", why: "every action at 0% — an all-zero mix", flags };
   if (sum < 95 || sum > 105) return { grade: "degenerate", why: `frequencies sum to ${sum.toFixed(1)}, not 100`, flags };
   // "answered by AI preflop" is not an approximation — it is the fallback piece doing its job.
   const real = flags.filter((f) => f !== "answered by AI preflop");
@@ -774,7 +829,7 @@ async function main() {
     const mark = g.grade === "clean" ? "OK  " : g.grade === "approx" ? "APX " : g.grade === "degenerate" ? "DEG " : "FAIL";
     console.log(
       `${mark} ${s.id.padEnd(9)} cx ${String(cx.score).padStart(2)} ${cx.band.padEnd(8)} ${String(ms).padStart(6)}ms  ` +
-      `${(row.pick ?? "—").padEnd(12)} ${(row.tier ?? "").padEnd(12)} ${g.grade === "clean" ? "" : g.why.slice(0, 130)}`
+      `${(row.pick ?? "—").padEnd(12)} ${(row.tier ?? "").padEnd(12)} ${(row.gametype ?? "").padEnd(32)} ${g.grade === "clean" ? "" : g.why.slice(0, 130)}`
     );
     if (g.flags.length) console.log(`     ${g.flags.join(" · ")}`);
   }

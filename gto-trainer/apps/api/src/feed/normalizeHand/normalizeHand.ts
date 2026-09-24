@@ -126,6 +126,20 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     }
   }
 
+  // THE STACKS AS DEALT, when the source records them (optional; see ParsedHand.startStacks). An archived row's
+  // `stacks` are end-of-hand readings, so this is the only exact way back to the decision — never required, and a
+  // malformed entry is dropped rather than failing a hand that is otherwise fine.
+  // A CoinPoker row archived before 2026-09-24 carries a DIFFERENT startStacks: player NAME → table money (the
+  // feed's own map). Any key that is not a seat number means that shape — drop it whole, so a name that happens to
+  // be a number can never be read as a seat's stack in BB.
+  let startStacks: Record<number, number> | undefined;
+  if (isRecord(input.startStacks) && Object.keys(input.startStacks).every((k) => /^\d+$/.test(k))) {
+    for (const [k, v] of Object.entries(input.startStacks)) {
+      const id = Number(k), x = Number(v);
+      if (Number.isInteger(id) && v != null && Number.isFinite(x) && x >= 0) (startStacks ??= {})[id] = x;
+    }
+  }
+
   let result: { text: string } | undefined;
   if (input.result != null) {
     if (!isRecord(input.result) || typeof input.result.text !== "string") {
@@ -178,6 +192,7 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     potByStreet,
     positions,
     ...(stacks ? { stacks } : {}),
+    ...(startStacks ? { startStacks } : {}),
     ...(result ? { result } : {}),
     currentNode: {
       street: nodeStreet,

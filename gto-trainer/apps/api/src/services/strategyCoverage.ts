@@ -225,7 +225,7 @@ const RING_6MAX: StrategyCoverage = {
         },
         {
           id: "pre-untrained-node", state: "approx",
-          spot: "A limped-pot node the chart never trained (rare lines: two limps to the SB, limps plus a complete to the BB, a limp-3-bet), or a size past the snap tolerance",
+          spot: "A limped-pot node the chart never trained — since 2026-09-24 only below the 100bb rung (D30-D75 equilibrium limp charts) or a non-blind over-limp behind two limps; at 100bb the pool-locked trees answer — or a size past the snap tolerance",
           source: "GTO Wizard AI preflop (Ultra), exact sizes; a second limper folded out with his chips kept as dead money",
           how: "The chart node is refused by the trust map (reach and regret precomputed per node) and the spot is solved as its own tree from the table.",
           example: "BB with KJs behind CO + BTN limps and an SB complete: the chart's untrained node said raise 98%; the exact tree (CO folded out, 1bb dead) raises 3bb 100%.",
@@ -380,12 +380,13 @@ const RING_6MAX: StrategyCoverage = {
           approx: ["no-legal-collapse"],
         },
         {
-          id: "post-no-collapse", state: "none",
+          id: "post-last-resort", state: "approx",
           spot: "4+ way where every villain has put chips in on the CURRENT street, none sit next to each other, and hero is between",
-          source: "none — refused",
-          how: "Re-rooting cannot help when the chips are on the street being solved: nobody can be dropped and no pair can be merged.",
-          cost: { value: "no answer", measured: true, note: "a subset of a shape seen 0 times in 425 real 4+ way decisions." },
-          approx: ["no-legal-collapse"],
+          source: "GTO Wizard AI heads-up, re-rooted at the current street against the last aggressor",
+          how: "The other villains' chips stay in the pot as dead money; hero faces the aggressor's bet at the real price from the flop-arrival ranges.",
+          example: "4-way limped flop Jd8c3s: SB bets 2, hero (BB) calls, CO raises 7, BTN and SB call; hero vs CO with 14bb dead — JTs raises.",
+          cost: { value: "unmeasured (the other villains' ranges and hands are gone)", measured: false, note: "a subset of a shape seen 0 times in 425 real 4+ way decisions; it used to be refused." },
+          approx: ["postflop-last-resort"],
         },
         {
           id: "post-after-refusal", state: "none",

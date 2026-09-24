@@ -6,6 +6,7 @@ import {
   type ParsedHand,
 } from "../parsePanelFeed/parsePanelFeed";
 import { normalizeHand } from "../normalizeHand/normalizeHand";
+import { withStartStacks } from "../../utils/archivedHand/archivedHand";
 import { StateReply } from "../../../../wrapper/src/contract";
 
 /**
@@ -209,7 +210,8 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     if (state.hand != null) {
       try {
         const normalized = normalizeHand(state.hand);
-        return { ok: true, hand: normalized.hand, source: "live", warnings: [...normalized.warnings, ...contractWarnings], tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId,
+        // the seats the table's own account covers read their money from it, not the screen (utils/archivedHand)
+        return { ok: true, hand: withStartStacks(normalized.hand), source: "live", warnings: [...normalized.warnings, ...contractWarnings], tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId,
                  liveExtras: liveExtrasOf(state.hand) };
       } catch (e) {
         return { ok: false, status: 502, error: `Live hand not understood: ${e instanceof Error ? e.message : String(e)}` };
