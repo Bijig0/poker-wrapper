@@ -1067,7 +1067,7 @@ async function solvePostflopViaChain(
   // the depth handed in (solvePostflopHuStrategy) is already the stack after the ante.
   const anteHu = huCp ? (hand.anteBb ?? HU_ANTE_BB) : 0;
   // …and a posted-in player who folded left his post in the pot, which no token carries (utils/foldPostIns)
-  const flopPot = Math.round((pps.pot + 2 * anteHu + deadPostsBb(hand.postIns)) * 100) / 100;
+  const flopPot = Math.round((pps.pot + 2 * anteHu + deadPostsBb(hand.postIns, cur)) * 100) / 100;
   const flopStack = Math.round(pps.stack * 100) / 100;
   if (flopStack <= 0.5) return fail("preflop line is (near) all-in");
 
@@ -2634,7 +2634,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
 /** The approximation note on a post-in hand's answer, and HERO'S OWN post: facing nothing but his own blind, the
  *  chart's node (a normal player facing 1bb) may say fold — a free check never folds. */
 function postInAnswer(hand: ParsedHand, r: Extract<FastSolveResult, { ok: true }>): FastSolveResult {
-  const note = postInNote(hand.postIns, hand.positions);
+  const note = postInNote(hand.postIns, hand.positions, hand.currentNode.street);
   const heroPosted = hand.postIns!.some((p) => p.seatId === hand.heroSeatId && p.readAs === "pending");
   const free = hand.currentNode.street === "preflop" && hand.currentNode.toActIsHero && !(hand.currentNode.toCall > 0);
   let out: FastSolveResult = { ...r, approx: true, warning: `${note}${r.warning ? ` ${r.warning}` : ""}` };

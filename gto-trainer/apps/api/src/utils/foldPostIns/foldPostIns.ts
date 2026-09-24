@@ -46,17 +46,21 @@ export function foldPostIns(actions: ParsedAction[]): { actions: ParsedAction[];
  * the pot and no action carries it, so the flop pot rolled from the token line was short by it (1bb in a 6.5bb pot).
  * The bb of dead posts the pot must add; a post carried by a limp, call or raise is already in the line.
  */
-export function deadPostsBb(postIns: PostIn[] | undefined): number {
-  return Math.round((postIns ?? []).filter((p) => p.readAs === "fold").reduce((s, p) => s + (Number(p.amount) || 0), 0) * 100) / 100;
+export function deadPostsBb(postIns: PostIn[] | undefined, street = "flop"): number {
+  return Math.round((postIns ?? []).filter((p) => lostOrFolded(p, street)).reduce((s, p) => s + (Number(p.amount) || 0), 0) * 100) / 100;
 }
+/** A poster who folded — or who is still "pending" once the preflop is over: every live player acts preflop, so his
+ *  fold is one the capture lost (round 2, harness post-in + missed-fold, seed 412). */
+const lostOrFolded = (p: PostIn, street: string) => p.readAs === "fold" || (p.readAs === "pending" && street !== "preflop");
 
 /** The line an answer carries when the hand had posted-in players. */
-export function postInNote(postIns: PostIn[] | undefined, positions: Record<number, string>): string | null {
+export function postInNote(postIns: PostIn[] | undefined, positions: Record<number, string>, street = "preflop"): string | null {
   if (!postIns?.length) return null;
   const who = postIns.map((p) => {
     const pos = positions[p.seatId] ?? `seat ${p.seatId}`;
     const how = p.readAs === "limp" ? "checked his option — read as a LIMP"
       : p.readAs === "fold" ? `folded, ${p.amount}bb left in the pot as dead money`
+      : lostOrFolded(p, street) ? `folded (the fold was not captured), ${p.amount}bb left in the pot as dead money`
       : p.readAs === "pending" ? "is yet to act" : `${p.readAs}s (post included)`;
     return `${p.hero ? "you" : pos} posted ${p.amount}bb and ${how}`;
   });

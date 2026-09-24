@@ -74,6 +74,19 @@ describe("foldPostIns", () => {
     expect(postInNote(folded.postIns, { 1: "HJ" })).toContain("HJ posted 1bb and folded, 1bb left in the pot as dead money");
   });
 
+  // round 2 (harness post-in + missed-fold, seed 412): the CO posts in and folds to UTG's open, and the tap loses the
+  // fold. At the flop the poster still reads "pending": his post was left out of the pot, and the note said he "is yet
+  // to act" on a street he never reached
+  it("a poster still pending after the preflop folded without a captured fold: his post is dead, the note says so", () => {
+    const lost = foldPostIns([act(4, "post-sb", 0.5), act(5, "post-bb", 1), act(1, "post", 1), act(6, "raise", 2.5), act(5, "call", 1.5),
+      act(5, "check", undefined, "flop")]);
+    expect(lost.postIns[0]!.readAs).toBe("pending");
+    expect(deadPostsBb(lost.postIns, "preflop")).toBe(0);
+    expect(deadPostsBb(lost.postIns, "flop")).toBe(1);
+    expect(postInNote(lost.postIns, { 1: "HJ" }, "flop")).toContain("HJ posted 1bb and folded (the fold was not captured), 1bb left in the pot as dead money");
+    expect(postInNote(lost.postIns, { 1: "HJ" }, "preflop")).toContain("HJ posted 1bb and is yet to act");
+  });
+
   it("says it is an approximation", () => {
     const note = postInNote(foldPostIns(HAND_937).postIns, { 1: "HJ", 2: "CO" })!;
     expect(note).toContain("POSTED IN (approximation)");

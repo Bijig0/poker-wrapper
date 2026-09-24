@@ -145,7 +145,8 @@ export async function layer1(o: {
         if (jam(s.label)) { /* a raise read as the all-in: the nearest size was the jam — a size question, below */ }
         const d = Math.abs(Math.log(t.to! / got));
         if (d > SNAP_TAU) say("size-past-tolerance", `${P}'s raise to ${t.to} was conditioned on ${s.token} (${s.label}) at "${s.line || "root"}", ${d.toFixed(2)} log-distance (τ ${SNAP_TAU})`);
-        else if (!onTree(t.to!, got) && !SNAP_NOTE.test(o.note)) say("size-snap-unreported", `${P}'s raise to ${t.to} was read as ${s.token} at "${s.line || "root"}" and the answer does not say a size was snapped`);
+        // the note must name THIS size ("HJ's 2.6bb read as 2.5bb" — preflopPin.snapsNote), not just some snap
+        else if (!onTree(t.to!, got) && !o.note.includes(`${P}'s ${t.to}bb read as ${got}bb`)) say("size-snap-unreported", `${P}'s raise to ${t.to} was read as ${s.token} at "${s.line || "root"}" and the answer does not say so (no "${P}'s ${t.to}bb read as ${got}bb")`);
         level = Math.max(level, t.to!);
       }
       void level;
