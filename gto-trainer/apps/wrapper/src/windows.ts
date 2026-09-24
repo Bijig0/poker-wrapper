@@ -260,7 +260,8 @@ async function placeWhenShown(pid: number, x: number, y: number, w: number, h: n
 }
 
 /** One app-mode Chrome/Brave window on its own user-data-dir; x/y/w/h are PHYSICAL px. Detached: the browser
- *  outlives the wrapper, as it did under Python. */
+ *  outlives the wrapper, as it did under Python — so it must not inherit our handles (W.spawnDetached): a browser
+ *  holding the panel port's listening socket kept a dead wrapper's port answering nothing. */
 export function chromeWindow(url: string, profile: string, x: number, y: number, w: number, h: number, cdpPort: number | null = null): number | null {
   const scale = dpiAt(x, y) / 96.0;
   const [lx, ly, lw, lh] = [x, y, w, h].map((v) => pyRound(v / scale));
@@ -269,10 +270,11 @@ export function chromeWindow(url: string, profile: string, x: number, y: number,
   if (cdpPort) args.splice(1, 0, `--remote-debugging-port=${cdpPort}`);
   if (C.HEADLESS) args.unshift("--headless=new");
   try {
-    const child = spawn(C.CHROME, args, { detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
-    if (!C.HEADLESS && child.pid) void placeWhenShown(child.pid, x, y, w, h);
-    return child.pid ?? null;
+    // a real site (Ignition) must ride the VPN, which our own children skip — see W.startOutsideTree
+    const local = /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/i.test(url);
+    const pid = local ? W.startDetached(C.CHROME, args, {}, log) : W.startOutsideTree(C.CHROME, args, log);
+    if (!C.HEADLESS && pid) void placeWhenShown(pid, x, y, w, h);
+    return pid;
   } catch (e: any) {
     log(`[layout] could not start the browser: ${e?.message ?? e}`);
     return null;

@@ -9,6 +9,7 @@
  * Structs are laid out by hand for x64 (the only target): offsets are noted where they are not obvious.
  */
 import { dlopen, FFIType, JSCallback, ptr, read, toArrayBuffer, type Pointer } from "bun:ffi";
+import { spawn as nodeSpawn } from "node:child_process";
 
 const { i32, u32, i64, u64, ptr: P, u16, void: V } = FFIType;
 
@@ -63,6 +64,12 @@ const kernel32 = lazy(() => dlopen("kernel32.dll", {
   WaitForSingleObject: { args: [P, u32], returns: u32 },
   GetCurrentProcessId: { args: [], returns: u32 },
   LocalFree: { args: [P], returns: P },
+  CreateFileW: { args: [P, u32, u32, P, u32, u32, P], returns: i64 },
+  CreateProcessW: { args: [P, P, P, P, i32, u32, P, P, P, P], returns: i32 },
+  InitializeProcThreadAttributeList: { args: [P, u32, u32, P], returns: i32 },
+  UpdateProcThreadAttribute: { args: [P, u32, u64, P, u64, P, P], returns: i32 },
+  DeleteProcThreadAttributeList: { args: [P], returns: V },
+  GetLastError: { args: [], returns: u32 },
 }));
 
 const gdi32 = lazy(() => dlopen("gdi32.dll", {
@@ -453,6 +460,118 @@ export function terminateProcess(pid: number): boolean {
   } finally {
     kernel32().CloseHandle(hp);
   }
+}
+
+/** One argument quoted so CommandLineToArgvW (and the MSVC runtime) parse it back unchanged. */
+export function quoteArg(a: string): string {
+  if (a && !/[ \t\n\v"]/.test(a)) return a;
+  let out = '"';
+  let bs = 0;
+  for (const ch of a) {
+    if (ch === "\\") { bs++; continue; }
+    out += ch === '"' ? "\\".repeat(bs * 2 + 1) + '"' : "\\".repeat(bs) + ch;
+    bs = 0;
+  }
+  return out + "\\".repeat(bs * 2) + '"';
+}
+
+/**
+ * Start a detached process that inherits NOTHING of ours except a NUL stdin/stdout/stderr, and return its pid.
+ *
+ * node:child_process spawns with bInheritHandles=TRUE, so every inheritable handle the wrapper holds goes to the
+ * child — the panel port's listening socket included. The app-mode browser outlives the wrapper by design, so when
+ * the wrapper died the browser kept :7700 LISTENING with nobody behind it: connections were accepted and never
+ * answered (the setup page sat on "Checking…"), and a relaunch could not take the port. Reproduced with Bun 1.3.14
+ * and Brave: the port stays listening after the parent is killed and frees the moment the browser closes.
+ * PROC_THREAD_ATTRIBUTE_HANDLE_LIST restricts inheritance to the one NUL handle. Throws when it cannot start.
+ */
+export function spawnDetached(exe: string, args: string[], opts: { cwd?: string; env?: Record<string, string | undefined>; hide?: boolean } = {}): number {
+  const k = kernel32();
+  const sa = new Uint8Array(24);                            // SECURITY_ATTRIBUTES { nLength, lpSD, bInheritHandle }
+  const sav = new DataView(sa.buffer);
+  sav.setUint32(0, 24, true);
+  sav.setInt32(16, 1, true);
+  // GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ|FILE_SHARE_WRITE, OPEN_EXISTING
+  const nul = BigInt(k.CreateFileW(ptr(wstr("NUL")), 0xC0000000, 3, ptr(sa), 3, 0, null));
+  if (nul === -1n || nul === 0n) throw new Error(`could not open NUL (error ${k.GetLastError()})`);
+  try {
+    const size = new BigUint64Array(1);
+    k.InitializeProcThreadAttributeList(null, 1, 0, ptr(size));   // sizing call: fails by design, fills `size`
+    const attr = new Uint8Array(Number(size[0]) || 64);
+    if (!k.InitializeProcThreadAttributeList(ptr(attr), 1, 0, ptr(size))) throw new Error(`InitializeProcThreadAttributeList failed (error ${k.GetLastError()})`);
+    try {
+      const handles = new BigUint64Array([nul]);
+      // PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+      if (!k.UpdateProcThreadAttribute(ptr(attr), 0, 0x20002, ptr(handles), 8, null, null)) throw new Error(`UpdateProcThreadAttribute failed (error ${k.GetLastError()})`);
+      const si = new Uint8Array(112);                       // STARTUPINFOEXW = STARTUPINFOW (104) + lpAttributeList
+      const dv = new DataView(si.buffer);
+      dv.setUint32(0, 112, true);
+      dv.setUint32(60, 0x100 | (opts.hide ? 0x1 : 0), true);   // STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
+      dv.setUint16(64, 0, true);                              // wShowWindow = SW_HIDE (read only with USESHOWWINDOW)
+      for (const off of [80, 88, 96]) dv.setBigUint64(off, nul, true);
+      dv.setBigUint64(104, BigInt(ptr(attr)), true);
+      let envBlock: Uint16Array | null = null;
+      if (opts.env) {
+        const entries = Object.entries(opts.env).filter(([kk, v]) => kk && !kk.includes("=") && v !== undefined)
+          .sort(([a], [b]) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0));
+        envBlock = wstr(entries.map(([kk, v]) => `${kk}=${v}\0`).join("") + "\0");
+      }
+      const cmd = wstr([exe, ...args].map(quoteArg).join(" "));   // writable buffer, as CreateProcessW requires
+      const pi = new Uint8Array(24);                          // PROCESS_INFORMATION { hProcess, hThread, pid, tid }
+      // EXTENDED_STARTUPINFO_PRESENT | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS (| CREATE_UNICODE_ENVIRONMENT)
+      const flags = 0x00080000 | 0x200 | 0x8 | (envBlock ? 0x400 : 0);
+      const ok = k.CreateProcessW(null, ptr(cmd), null, null, 1, flags, envBlock ? ptr(envBlock) : null,
+                                  opts.cwd ? ptr(wstr(opts.cwd)) : null, ptr(si), ptr(pi));
+      if (!ok) throw new Error(`CreateProcessW failed for ${exe} (error ${k.GetLastError()})`);
+      const pv = new DataView(pi.buffer);
+      k.CloseHandle(Number(pv.getBigUint64(0, true)) as unknown as Pointer);
+      k.CloseHandle(Number(pv.getBigUint64(8, true)) as unknown as Pointer);
+      return pv.getUint32(16, true);
+    } finally {
+      k.DeleteProcThreadAttributeList(ptr(attr));
+    }
+  } finally {
+    k.CloseHandle(Number(nul) as unknown as Pointer);
+  }
+}
+
+/** spawnDetached, falling back to node:child_process (which leaks our handles) if the native path fails —
+ *  a window that opens beats one that does not. `warn` hears about the fallback. */
+export function startDetached(exe: string, args: string[], opts: { cwd?: string; env?: Record<string, string | undefined>; hide?: boolean } = {},
+                              warn?: (msg: string) => void): number | null {
+  try {
+    return spawnDetached(exe, args, opts);
+  } catch (e: any) {
+    warn?.(`[spawn] ${e?.message ?? e} — falling back to node:child_process (the child inherits the wrapper's handles)`);
+    const child = nodeSpawn(exe, args, { cwd: opts.cwd, env: opts.env, detached: true, stdio: "ignore", windowsHide: !!opts.hide });
+    child.unref();
+    return child.pid ?? null;
+  }
+}
+
+/**
+ * Start a process OUTSIDE our process tree (WMI Win32_Process.Create: its parent is WmiPrvSE.exe), return its pid.
+ *
+ * Mullvad split tunneling excludes every DESCENDANT of an excluded app, and bun.exe is excluded so GTO Wizard goes
+ * direct (see connection-guard). A browser we spawn ourselves therefore left from the Jakarta IP and Ignition refused
+ * it ("not available from your state") while the same site in Brady's own Chrome — on the tunnel — signed in fine.
+ * Measured 2026-09-24: bun child → Indonesia, WMI-created from bun → Mullvad Melbourne. Inherits none of our handles
+ * either (the startDetached concern). Falls back to startDetached when WMI fails: a window that opens beats none.
+ */
+export function startOutsideTree(exe: string, args: string[], warn?: (msg: string) => void): number | null {
+  const cmd = [exe, ...args].map(quoteArg).join(" ");
+  const ps = "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$env:WRAPPER_WMI_CMD}; "
+    + "\"$($r.ReturnValue) $($r.ProcessId)\"";
+  try {
+    const p = Bun.spawnSync(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                            { env: { ...process.env, WRAPPER_WMI_CMD: cmd }, timeout: 20000, windowsHide: true } as any);
+    const [rc, pid] = p.stdout.toString().trim().split(/\s+/).map(Number);
+    if (rc === 0 && pid > 0) return pid;
+    warn?.(`[spawn] WMI Create returned ${rc} (${p.stderr.toString().trim().slice(0, 200)}) — starting inside our tree (off the VPN)`);
+  } catch (e: any) {
+    warn?.(`[spawn] WMI Create failed: ${e?.message ?? e} — starting inside our tree (off the VPN)`);
+  }
+  return startDetached(exe, args, {}, warn);
 }
 
 /** Is the process still running? (WaitForSingleObject(h, 0) == WAIT_TIMEOUT) */
