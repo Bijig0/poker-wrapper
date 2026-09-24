@@ -60,6 +60,9 @@ export function harnessEnv(): () => void {
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { fastSolve, forgetPreflopPin, forgetPostflopPin } from "../services/fastSolve";
 import { withStartStacks } from "../utils/archivedHand/archivedHand";
+import { setRangeWalkRecorder, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { nodeGetter } from "../services/hrc6max";
+import { layer1, layer2Postflop, layer2Preflop, truthLine, type OracleFinding } from "./mutation/rangeOracle";
 
 /**
  * The export as the API reads it LIVE (feed/resolveHand, live path): normalizeHand, then withStartStacks — every seat
@@ -314,12 +317,12 @@ export function mutateExport(exp: any, ops: Op[], rng: Rng): any {
 }
 
 // ---- one case: every hero decision of one (seed, ops) hand -------------------------------------------------------------
-export interface Verdict { seed: number; ops: string[]; street: string; k: number; verdict: "ok" | "cloud-gated" | "expected-refusal" | "finding"; kind?: string; reason?: string; ms: number; note?: string }
+export interface Verdict { seed: number; ops: string[]; street: string; k: number; verdict: "ok" | "cloud-gated" | "expected-refusal" | "finding"; kind?: string; reason?: string; ms: number; note?: string; explained?: boolean; refUnwalkable?: boolean; explainedWhy?: string }
 export interface CaseResult { seed: number; ops: string[]; verdicts: Verdict[]; hand?: Hand; exportsFailing?: any[] }
 
 const CLOUD_GATED = /GTOW_BLOCK|no GTO Wizard|blocked|thinned to|the 6-max charts cover 4-6|dealt with no small blind|GTO Wizard AI preflop|last resort/i;
 
-export async function runCase(seed: number, ops: Op[], opts: { slowMs?: number } = {}): Promise<CaseResult> {
+export async function runCase(seed: number, ops: Op[], opts: { slowMs?: number; oracle?: boolean } = {}): Promise<CaseResult> {
   // A CASE IS A FIXTURE ONLY IF IT REPLAYS (2026-09-25, overnight fixer). The study tool's pick rolls its mix with
   // Math.random (utils/pickWeightedAction) and hero plays that pick here, so the same seed dealt a different hand
   // on every run and a finding's seed/ops did not reproduce it. The roll is seeded from the case for its duration.
@@ -328,7 +331,7 @@ export async function runCase(seed: number, ops: Op[], opts: { slowMs?: number }
   Math.random = () => rollRng.next();
   try { return await runCaseInner(seed, ops, opts); } finally { Math.random = realRandom; }
 }
-async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }): Promise<CaseResult> {
+async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number; oracle?: boolean }): Promise<CaseResult> {
   const rng = new Rng(seed * 1000003 + ops.length * 7919 + ops.reduce((s, o) => s + o.length, 0));
   const key = `mh-${seed}-${ops.join("+") || "base"}`;
   const drift0 = ops.includes("stack-drift") ? 0.3 : 0;
@@ -375,8 +378,11 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
     const heroPos = hand2.positions[hand2.heroSeatId] ?? null;
     const t0 = Date.now();
     let res: any;
+    const walks: RecordedRangeWalk[] = [];
+    const unrecord = setRangeWalkRecorder((w) => walks.push(w));
     try { res = await fastSolve(hand2, heroPos, { strategyId: STRATEGY, origin: "harness" }); }
     catch (e: any) { res = { ok: false, reason: `THREW: ${e?.stack ?? e}`, threw: true }; }
+    finally { unrecord(); }
     const ms = Date.now() - t0;
     const expectRefusal = corrupted;
     let v: Verdict;
@@ -388,7 +394,12 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
       else if (zero) v = { seed, ops, street, k, verdict: "finding", kind: "hero-zero-weight", reason: res.warning ?? "hero not in range", ms };
       else if (ms > (opts.slowMs ?? 2500)) v = { seed, ops, street, k, verdict: "finding", kind: "slow-local-answer", reason: `${ms} ms for a local answer`, ms };
       else if (res.dryRun && inputMismatch(hand, res.dryRun)) v = { seed, ops, street, k, verdict: "finding", kind: "solver-input-mismatch", reason: `${inputMismatch(hand, res.dryRun)} (${String(res.warning ?? "").slice(0, 200)})`, ms };
-      else v = { seed, ops, street, k, verdict: "ok", ms, note: res.warning ?? undefined };
+      else {
+        // ROUND 2: the range-level oracle (scripts/mutation/rangeOracle.ts) — what the input SAYS, not only that it exists
+        const o = await rangeVerdict(hand, k, res, walks, opts.oracle !== false);
+        if (o.finding) v = { seed, ops, street, k, verdict: "finding", kind: o.finding.kind, reason: `${o.finding.reason} (${String(res.warning ?? "").slice(0, 200)})`, ms };
+        else v = { seed, ops, street, k, verdict: "ok", ms, note: res.warning ?? undefined, ...(o.explained ? { explained: true } : {}), ...(o.unwalkable ? { refUnwalkable: true } : {}), ...(o.why ? { explainedWhy: o.why } : {}) };
+      }
     } else if (res.threw) {
       v = { seed, ops, street, k, verdict: "finding", kind: "threw", reason: String(res.reason).slice(0, 600), ms };
     } else if (res.kind === "capture-fault" || res.kind === "no-hero-cards" || res.kind === "board-incomplete") {
@@ -412,6 +423,37 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
     if (v.verdict === "finding") failingExports.push(raw);
   }
   return { seed, ops, verdicts, hand, exportsFailing: failingExports };
+}
+
+/**
+ * THE RANGE-LEVEL VERDICT (2026-09-25, round 2). A chart-read preflop answer: hero's node against the reference walk
+ * of the dealt line on the same chart. A postflop dry run: layer 1 (invariants over the walks the pipeline recorded)
+ * and layer 2 (every flop seat's range against the reference walk). See scripts/mutation/rangeOracle.ts.
+ */
+const chartGet = (id: string) => { const g = nodeGetter(id); return async (line: string) => { const n = await g(line); return n === "unreachable" ? null : (n as any); }; };
+export async function rangeVerdict(hand: Hand, k: number, res: any, walks: RecordedRangeWalk[], on = true):
+  Promise<{ finding: OracleFinding | null; explained: boolean; unwalkable: boolean; why?: string }> {
+  const none = { finding: null, explained: false, unwalkable: false };
+  if (!on || !res?.ok) return none;
+  const posOf = (seat: number) => hand.seats.find((s) => s.id === seat)?.pos ?? "?";
+  const heroPos = posOf(hand.hero);
+  const dealt = hand.seats.map((s) => s.pos);
+  const note = String(res.warning ?? "");
+  if (res.street === "preflop") {
+    if (res.source !== "hrc-6max-preflop" || !/_6max_/.test(String(res.gametype))) return none;
+    const truth = truthLine(hand.actions.slice(0, k), posOf);
+    const r = await layer2Preflop({ truth, dealt, heroPos, note, line: String(res.line ?? ""), get: chartGet(res.gametype) });
+    return { finding: r.findings[0] ?? null, explained: r.explained, unwalkable: false };
+  }
+  if (!res.dryRun) return none;
+  const truth = truthLine(hand.actions, posOf);
+  const src = String(res.rangeSource ?? "");
+  const get = /_6max_/.test(src) ? chartGet(src) : null;
+  const l1 = await layer1({ truth, heroPos, heroCards: hand.heroCards, note, dry: res.dryRun, walks, get });
+  if (l1.length) return { finding: l1[0]!, explained: false, unwalkable: false };
+  if (!get) return none;
+  const l2 = await layer2Postflop({ truth, dealt, heroPos, note, dry: res.dryRun, get });
+  return { finding: l2.findings[0] ?? null, explained: l2.explained, unwalkable: l2.unwalkable, why: l2.why };
 }
 
 /**
@@ -443,19 +485,20 @@ export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: str
 // ---- the sweep: baseline, every single operator, sampled pairs; minimal sets for findings ---------------------------
 export interface Finding { seed: number; ops: string[]; minimal: boolean; street: string; kind: string; reason: string; ms: number; fixture: any }
 
-export async function sweep(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number }> {
+export async function sweep(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number; oracle: { explained: number; refUnwalkable: number; cases: { seed: number; ops: string[]; street: string; why: string }[] } }> {
   const restore = harnessEnv();
   try { return await sweepInner(o); } finally { restore(); }
 }
-async function sweepInner(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number }> {
+async function sweepInner(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number; oracle: { explained: number; refUnwalkable: number; cases: { seed: number; ops: string[]; street: string; why: string }[] } }> {
   const findings: Finding[] = [];
   const matrix: Record<string, Record<string, number>> = {};
   const bump = (op: string, verdict: string) => { (matrix[op] ??= {})[verdict] = (matrix[op]![verdict] ?? 0) + 1; };
   let cases = 0, decisions = 0;
+  const oracle = { explained: 0, refUnwalkable: 0, cases: [] as { seed: number; ops: string[]; street: string; why: string }[] };
   const record = (r: CaseResult, minimal: boolean) => {
     cases++;
     const label = r.ops.join("+") || "baseline";
-    for (const v of r.verdicts) { decisions++; bump(label, v.verdict); }
+    for (const v of r.verdicts) { decisions++; bump(label, v.verdict); if (v.explained) oracle.explained++; if (v.refUnwalkable) oracle.refUnwalkable++; if (v.explainedWhy) oracle.cases.push({ seed: r.seed, ops: r.ops, street: v.street, why: v.explainedWhy }); }
     const bad = r.verdicts.filter((v) => v.verdict === "finding");
     for (let i = 0; i < bad.length; i++) {
       const v = bad[i]!;
@@ -483,13 +526,14 @@ async function sweepInner(o: { seeds: number; seed0: number; ops: Op[]; pairs: n
     const minimal = !singleBad.has(`${s}|${a}`) && !singleBad.has(`${s}|${b}`) && !singleBad.has(`${s}|`);
     record(r, minimal);
   }
-  return { findings, matrix, cases, decisions };
+  return { findings, matrix, cases, decisions, oracle };
 }
 
 export function summarize(res: Awaited<ReturnType<typeof sweep>>): string {
   const rows = Object.entries(res.matrix).sort();
   const cols = ["ok", "cloud-gated", "expected-refusal", "finding"];
   const lines = [`# Input-mutation harness — ${res.cases} cases, ${res.decisions} hero decisions, ${res.findings.length} findings`, "",
+    `range oracle: ${res.oracle.explained} answer(s) whose ranges differ from the reference walk as a named approximation explains; ${res.oracle.refUnwalkable} the reference could not walk (approximation named)`, "",
     `| operator | ${cols.join(" | ")} |`, `|---|${cols.map(() => "---:").join("|")}|`];
   for (const [op, m] of rows) lines.push(`| ${op} | ${cols.map((c) => m[c] ?? 0).join(" | ")} |`);
   lines.push("", "## Findings by class", "");
@@ -515,6 +559,8 @@ if (import.meta.main) {
   const t0 = Date.now();
   const res = await sweep({ seeds, seed0, ops, pairs, onProgress: (s) => { if (/0 done/.test(s)) console.error(s); } });
   writeFileSync(join(out, "findings.jsonl"), res.findings.map((f) => JSON.stringify(f)).join("\n") + "\n");
+  // the differences the range oracle let through because the answer named an approximation — the audit trail
+  writeFileSync(join(out, "explained.jsonl"), res.oracle.cases.map((f) => JSON.stringify(f)).join("\n") + "\n");
   const md = summarize(res) + `\n\n${Date.now() - t0} ms · seeds ${seed0}..${seed0 + seeds - 1} · ops ${ops.join(",")} · pairs ${pairs}\n`;
   writeFileSync(join(out, "summary.md"), md);
   // one fixture per distinct class, for the fixer

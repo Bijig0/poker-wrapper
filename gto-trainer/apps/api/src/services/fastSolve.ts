@@ -125,7 +125,17 @@ export type FastSolveResult =
       approx?: boolean;
       warning?: string | null;
       /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
-      dryRun?: { flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[] };
+      dryRun?: {
+        flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[];
+        /** round 2 (the range-level oracle): the solver input itself — every seat's class → weight range as walked
+         *  (all-in seats included), the preflop tokens the pot was rolled from, the postflop street tokens and who
+         *  took them, where the ranges came from, and each tree's seats with the 1326-combo arrays sent */
+        ranges?: Record<string, Record<string, number>>;
+        preTokens?: string[];
+        streets?: string[][];
+        streetSeats?: (string | null)[][];
+        trees?: { kind: string | null; heroSeat: string; seats: { pos: string; range: number[] }[]; streets: string[][] }[];
+      };
     }
   | {
       ok: false; reason: string; street?: string;
@@ -1265,7 +1275,15 @@ async function solvePostflopViaChain(
         actions: [], decision: null, rangeSource: rangeSource ?? undefined,
         warning: [sixNote, `DRY RUN: solver input built — ${walkables.length} walkable(s), hero ${heroCls ?? "?"} weight ${heroW == null ? "n/a" : heroW.toFixed(3)}, pot ${reroot ? reroot.pot : flopPot}bb, stack ${reroot ? reroot.stack : flopStack}bb`].filter(Boolean).join(" · "),
         notInRange: heroW != null && !(heroW > 0) ? true : undefined,
-        dryRun: { flopPot, flopStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats] },
+        dryRun: {
+          flopPot, flopStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats],
+          ranges: recon.ok ? recon.ranges : undefined, preTokens: [...preTokens], streets, streetSeats,
+          trees: walkables.map((w) => {
+            const s = w.seatSpec;
+            const seats = [{ pos: s.oopPos, range: s.oopRange }, ...(s.midPos && s.midRange ? [{ pos: s.midPos, range: s.midRange }] : []), { pos: s.ipPos, range: s.ipRange }];
+            return { kind: w.kind, heroSeat: s.heroSeat, seats, streets: w.streets };
+          }),
+        },
       } as FastSolveResult,
       why: null,
     };

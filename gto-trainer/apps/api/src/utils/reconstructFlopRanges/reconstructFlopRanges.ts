@@ -104,7 +104,35 @@ const isJamLabel = (l: string) => /all-?in/i.test(l);
 // the regex — so the simpler pattern is also the safer one.)
 const isRaiseLabel = (l: string) => /^(raise|bet)/i.test(l) && !isJamLabel(l);
 
+/**
+ * THE WALK RECORDER (2026-09-25, round 2 of the input-mutation harness: the range-level oracle). With a recorder
+ * set, every walk reports its line, every step it read (node, seat, token as played and as the tree holds it, the
+ * labels the range was conditioned on, the range either side) and its result. The harness checks the solver input
+ * against these: a seat's range only narrows, an all-in is conditioned on an all-in, every size is near the one
+ * played, and the product of the chart's own frequencies along the walk reproduces each seat's weight. Off (null)
+ * everywhere but the harness; the only cost when off is one null check per walk.
+ */
+export interface RecordedRangeWalk { tokens: string[]; heroPos: string | null; steps: WalkStep[]; result: ReconstructResult }
+let recorder: ((w: RecordedRangeWalk) => void) | null = null;
+/** Install a recorder; returns the function that restores the previous one. */
+export function setRangeWalkRecorder(fn: ((w: RecordedRangeWalk) => void) | null): () => void {
+  const prev = recorder; recorder = fn; return () => { recorder = prev; };
+}
+
 export async function reconstructFlopRanges(
+  tokens: string[],
+  getNode: (line: string) => RawNode | null | Promise<RawNode | null>,
+  opts: ReconstructOpts = {}
+): Promise<ReconstructResult> {
+  const rec = recorder;
+  if (!rec) return reconstructFlopRangesInner(tokens, getNode, opts);
+  const steps: WalkStep[] = [];
+  const result = await reconstructFlopRangesInner(tokens, getNode, { ...opts, onStep: (s) => { steps.push(s); opts.onStep?.(s); } });
+  rec({ tokens: [...tokens], heroPos: opts.heroPos ?? null, steps, result });
+  return result;
+}
+
+async function reconstructFlopRangesInner(
   tokens: string[],
   getNode: (line: string) => RawNode | null | Promise<RawNode | null>,
   opts: ReconstructOpts = {}
