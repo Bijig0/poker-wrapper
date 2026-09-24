@@ -32,6 +32,7 @@ export const actionToken = (a: ParsedAction): string | null => {
   switch (a.type) {
     case "post-sb":
     case "post-bb":
+    case "post":
       return null;
     case "fold":
       return "F";

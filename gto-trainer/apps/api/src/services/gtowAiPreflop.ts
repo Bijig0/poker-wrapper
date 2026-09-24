@@ -123,7 +123,16 @@ export function heroPosOf(hand: ParsedHand, heroPos: string | null): string | nu
  *  of a chart, reads its flop-entering ranges through here on every street. */
 export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, rakeSeats?: number, dealt?: Record<number, number>): AiPreflopShape | { error: string } {
   const hp = heroPosOf(hand, heroPos);
-  const seats: { seat: number; pos: string }[] = Object.entries(hand.positions).map(([s, p]) => ({ seat: Number(s), pos: p.toUpperCase() }));
+  // A SEAT THAT WAS NOT DEALT IS NOT AT THE TABLE (2026-09-25, hand 4920414446). The wrapper labels every occupied
+  // seat, sitting-out ones included (hand 937's BTN, seat 3: no start stack, never acted), and this built the tree
+  // 6-handed with a phantom 100bb BTN. Drop a labelled seat only when BOTH say it was not dealt: it is missing from
+  // `liveSeats` (the wrapper's dealt list; other sources send only the unfolded seats) AND it has no action.
+  const dealtSeats = new Set(hand.liveSeats ?? []);
+  const actedSeats = new Set(hand.actions.map((a) => (a.hero ? hand.heroSeatId : a.seatId)));
+  const undealt = (s: number) => dealtSeats.size > 0 && !dealtSeats.has(s) && !actedSeats.has(s) && s !== hand.heroSeatId;
+  const seats: { seat: number; pos: string }[] = Object.entries(hand.positions)
+    .filter(([s]) => !undealt(Number(s)))
+    .map(([s, p]) => ({ seat: Number(s), pos: p.toUpperCase() }));
   if (hp && !seats.some((x) => x.seat === hand.heroSeatId)) seats.push({ seat: hand.heroSeatId, pos: hp });
   const byPos = new Map(seats.map((x) => [x.pos, x.seat]));
   let present = [...new Set(seats.map((x) => x.pos))].filter((p) => ORDER.includes(p));

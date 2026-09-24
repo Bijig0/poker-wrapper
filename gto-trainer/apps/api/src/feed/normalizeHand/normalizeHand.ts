@@ -16,10 +16,11 @@ import {
   type ParsedHand,
   type Street,
 } from "../parsePanelFeed/parsePanelFeed";
+import { foldPostIns } from "../../utils/foldPostIns/foldPostIns";
 
 const STREETS: readonly Street[] = ["preflop", "flop", "turn", "river", "showdown"];
 const ACTION_TYPES: readonly ActionType[] = [
-  "post-sb", "post-bb", "fold", "check", "call", "bet", "raise", "all-in",
+  "post-sb", "post-bb", "post", "fold", "check", "call", "bet", "raise", "all-in",
 ];
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -64,7 +65,7 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
   if (input.actions != null && !Array.isArray(input.actions)) {
     throw new Error("actions must be an array.");
   }
-  const actions: ParsedAction[] = ((input.actions as unknown[]) ?? []).map((raw, i) => {
+  const rawActions: ParsedAction[] = ((input.actions as unknown[]) ?? []).map((raw, i) => {
     if (!isRecord(raw)) throw new Error(`actions[${i}] must be an object.`);
     const type = raw.type;
     if (typeof type !== "string" || !ACTION_TYPES.includes(type as ActionType)) {
@@ -89,6 +90,9 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
       street: asStreet(raw.street, `actions[${i}].street`, "preflop"),
     };
   });
+  // POSTED-IN players (Ignition btn 8): the post leaves the line and rides on the poster's own action — his
+  // option-check reads as a limp (Brady, 2026-09-25; utils/foldPostIns). Every consumer sees an ordinary hand.
+  const { actions, postIns } = foldPostIns(rawActions);
 
   const positions: Record<number, string> = {};
   if (input.positions != null) {
@@ -187,6 +191,7 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     board,
     street,
     actions,
+    ...(postIns.length ? { postIns } : {}),
     liveSeats: Array.isArray(input.liveSeats) ? (input.liveSeats as number[]) : [],
     committed: isRecord(input.committed) ? (input.committed as Record<number, number>) : {},
     potByStreet,
