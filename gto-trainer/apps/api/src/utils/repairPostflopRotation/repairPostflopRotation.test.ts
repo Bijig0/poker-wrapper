@@ -68,6 +68,18 @@ describe("rotationFor — a missed preflop fold", () => {
       act(5, "fold", "preflop"), act(1, "call", "preflop", 0.5)];
     expect(rotationFor(hand(P, limped), "flop").map((s) => P[s as keyof typeof P])).toEqual(["SB", "BB", "CO"]);
   });
+  // fresh sweep 21301..24300, seed 21901 [jam]: the 12bb BB calls all-in preflop; on the flop HJ checks, hero bets, HJ
+  // check-raises — and the rotation still counted the all-in BB as the flop's first actor, so HJ's check was "before BB
+  // was to act, and acts again later" and was dropped. A player all-in on an earlier street never acts again.
+  it("a player all-in on an earlier street is not in the rotation", () => {
+    const Q = { 1: "BTN", 2: "SB", 3: "BB", 4: "UTG", 5: "HJ", 6: "CO" };
+    const jam = [act(2, "post-sb", "preflop", 0.5), act(3, "post-bb", "preflop", 1), act(4, "fold", "preflop"), act(5, "raise", "preflop", 2.5),
+      act(6, "fold", "preflop"), act(1, "raise", "preflop", 12.5), act(2, "fold", "preflop"), act(3, "all-in", "preflop", 12), act(5, "call", "preflop", 10),
+      act(5, "check", "flop"), act(1, "bet", "flop", 12.38), act(5, "raise", "flop", 37.14)];
+    expect(rotationFor(hand(Q, jam), "flop").map((s) => Q[s as keyof typeof Q])).toEqual(["HJ", "BTN"]);
+    const r = repairPostflopRotation(hand(Q, jam));
+    expect(r.notes).toEqual([]);
+  });
   it("hero's turn check is kept", () => {
     const r = repairPostflopRotation(hand(P, line));
     expect(r.notes).toEqual([]);

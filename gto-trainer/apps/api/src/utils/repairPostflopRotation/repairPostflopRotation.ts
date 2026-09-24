@@ -49,8 +49,11 @@ export function rotationFor(hand: ParsedHand, street: Street): number[] {
   // (captureFaults' own rule for missed folds). Counted as live it made the SEAT BEFORE IT look out of turn, and the
   // phantom-check rule below dropped hero's own check.
   // (utils/dealtSeats.lostPreflopFold: a blind's post is not a decision; the BB of an unraised pot keeps his free check)
+  // …and a player ALL-IN on an earlier street never acts again (round 2, seed 21901 [jam]: the 12bb BB's all-in call
+  // preflop made the HJ's flop check look out of turn, and it was dropped)
+  const allIn = new Set(hand.actions.filter((a) => a.type === "all-in" && earlier.includes(a.street)).map((a) => a.seatId));
   const seats = (hand.liveSeats?.length ? hand.liveSeats : Object.keys(hand.positions ?? {}).map(Number))
-    .filter((s) => !folded.has(s) && hand.positions?.[s] && !lostPreflopFold(hand, s, String(hand.positions[s])));
+    .filter((s) => !folded.has(s) && !allIn.has(s) && hand.positions?.[s] && !lostPreflopFold(hand, s, String(hand.positions[s])));
   // HEADS-UP MEANS THE TABLE IS TWO-HANDED, NOT THAT TWO PLAYERS ARE LEFT (2026-09-21). At a full table the
   // small blind acts FIRST postflop, blind-versus-blind included; only when the table itself is heads-up does
   // the dealer post the small blind and act last. Keying this off the number of players still in the hand
