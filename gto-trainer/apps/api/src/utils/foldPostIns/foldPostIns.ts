@@ -48,7 +48,7 @@ export function postInNote(postIns: PostIn[] | undefined, positions: Record<numb
     const pos = positions[p.seatId] ?? `seat ${p.seatId}`;
     const how = p.readAs === "limp" ? "checked his option — read as a LIMP"
       : p.readAs === "fold" ? `folded, ${p.amount}bb left in the pot (not in the line)`
-      : p.readAs === "pending" ? "yet to act" : `${p.readAs}s (post included)`;
+      : p.readAs === "pending" ? "is yet to act" : `${p.readAs}s (post included)`;
     return `${p.hero ? "you" : pos} posted ${p.amount}bb and ${how}`;
   });
   const limped = postIns.some((p) => p.readAs === "limp");
