@@ -375,6 +375,7 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
       if (expectRefusal) v = { seed, ops, street, k, verdict: "finding", kind: "answered-corrupt-capture", reason: `answered a capture mutated by ${ops.filter((o) => EXPECT_REFUSAL.has(o)).join("+")} (${res.source ?? "?"}: ${String(res.warning ?? "").slice(0, 160)})`, ms };
       else if (zero) v = { seed, ops, street, k, verdict: "finding", kind: "hero-zero-weight", reason: res.warning ?? "hero not in range", ms };
       else if (ms > (opts.slowMs ?? 2500)) v = { seed, ops, street, k, verdict: "finding", kind: "slow-local-answer", reason: `${ms} ms for a local answer`, ms };
+      else if (res.dryRun && inputMismatch(hand, res.dryRun)) v = { seed, ops, street, k, verdict: "finding", kind: "solver-input-mismatch", reason: `${inputMismatch(hand, res.dryRun)} (${String(res.warning ?? "").slice(0, 200)})`, ms };
       else v = { seed, ops, street, k, verdict: "ok", ms, note: res.warning ?? undefined };
     } else if (res.threw) {
       v = { seed, ops, street, k, verdict: "finding", kind: "threw", reason: String(res.reason).slice(0, 600), ms };
@@ -399,6 +400,32 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
     if (v.verdict === "finding") failingExports.push(raw);
   }
   return { seed, ops, verdicts, hand, exportsFailing: failingExports };
+}
+
+/**
+ * THE INPUT MUST BE THE TABLE'S (2026-09-25, overnight fixer). "A solver input exists" is not enough: a 25bb jam
+ * read as a 2.5bb open, or a caller handed another seat's token, builds an input for a spot that never happened, and
+ * the verdict was "ok". A postflop dry run's input is checked against the generator's own hand — the dealt truth, not
+ * the (possibly mutated) export: the flop pot must be every preflop chip (0.25bb of slack: the tree seats the SB at
+ * 0.5 where NL5 posts 0.4), and the flop seats must be exactly the players who did not fold preflop.
+ */
+export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: string[] }): string | null {
+  const per = new Map<number, number>();
+  for (const a of hand.actions) {
+    if (a.street !== 0 || a.amount == null) continue;
+    per.set(a.seat, a.type === "call" ? (per.get(a.seat) ?? 0) + a.amount : Math.max(per.get(a.seat) ?? 0, a.amount));
+  }
+  const truePot = Math.round([...per.values()].reduce((s, x) => s + x, 0) * 100) / 100;
+  if (Math.abs(dry.flopPot - truePot) > 0.25) return `the solver's flop pot is ${dry.flopPot}bb, the table's ${truePot}bb`;
+  const folded = new Set(hand.actions.filter((a) => a.street === 0 && a.type === "fold").map((a) => a.seat));
+  // a player all-in preflop never acts again: he is not a flop seat while two others can play (his chips are pot)
+  const allIn = new Set(hand.actions.filter((a) => a.street === 0 && a.type === "all-in").map((a) => a.seat));
+  const inHand = hand.seats.filter((s) => !folded.has(s.id));
+  const canAct = inHand.filter((s) => !allIn.has(s.id));
+  const want = (canAct.length >= 2 ? canAct : inHand).map((s) => s.pos).sort();
+  const got = dry.flopSeats.map((p) => p.toUpperCase()).sort();
+  if (want.join("/") !== got.join("/")) return `the solver's flop seats are ${got.join("/")}, the table's ${want.join("/")}`;
+  return null;
 }
 
 // ---- the sweep: baseline, every single operator, sampled pairs; minimal sets for findings ---------------------------

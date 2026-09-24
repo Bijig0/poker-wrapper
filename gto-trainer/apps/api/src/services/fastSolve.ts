@@ -119,6 +119,8 @@ export type FastSolveResult =
       notInRange?: boolean;
       approx?: boolean;
       warning?: string | null;
+      /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
+      dryRun?: { flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[] };
     }
   | {
       ok: false; reason: string; street?: string;
@@ -804,7 +806,11 @@ async function solvePostflopViaChain(
     const vol = hand.actions.filter(
       (a) => !a.hero && a.type !== "post-sb" && a.type !== "post-bb" && !folded.has(a.seatId)
     );
-    villainSeat = vol.length ? vol[vol.length - 1]!.seatId : null;
+    // a seat all-in preflop never acts again: the villain is a player who can (see ALL-IN PREFLOP below)
+    const allInPre = new Set(hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in").map((a) => a.seatId));
+    const canAct = vol.filter((a) => !allInPre.has(a.seatId));
+    const from = canAct.length ? canAct : vol;
+    villainSeat = from.length ? from[from.length - 1]!.seatId : null;
   }
   if (villainSeat == null || !hand.positions[villainSeat]) {
     const live = hand.liveSeats.filter((s) => s !== hand.heroSeatId && !folded.has(s) && hand.positions[s]);
@@ -1055,7 +1061,21 @@ async function solvePostflopViaChain(
   type SeatSpec = Pick<AiChainSpec, "oopPos" | "ipPos" | "oopRange" | "ipRange" | "midPos" | "midRange" | "heroSeat">;
   /** One tree to walk: the seats, and the line as those seats played it. */
   interface Walkable { seatSpec: SeatSpec; streets: string[][]; streetSeats: (string | null)[][]; kind: string | null }
-  const flopSeats = Object.keys(recon.ranges);
+  // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
+  // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
+  // with the jammer "modelled at the effective stack" (82bb he does not have), betting and folding on every street.
+  // A seat that went all-in PREFLOP (its own all-in action) leaves the tree while two or more players can still
+  // act; its chips stay in the pot. What that loses is the main pot's showdown against his range — said in the note.
+  const preAllIn = new Set(hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in")
+    .map((a) => String(hand.positions?.[a.seatId] ?? "").toUpperCase()).filter(Boolean));
+  const liveAtFlop = Object.keys(recon.ranges).filter((p) => !preAllIn.has(p.toUpperCase()));
+  const droppedAllIn = liveAtFlop.length >= 2 ? Object.keys(recon.ranges).filter((p) => preAllIn.has(p.toUpperCase())) : [];
+  if (droppedAllIn.length) {
+    const note = `ALL-IN PREFLOP: ${droppedAllIn.join(", ")} ${droppedAllIn.length === 1 ? "is" : "are"} all-in and never act again, so the tree holds ` +
+      `${liveAtFlop.join("/")} with ${droppedAllIn.length === 1 ? "his" : "their"} chips in the pot (the main pot's showdown against ${droppedAllIn.length === 1 ? "that range" : "those ranges"} is not modelled)`;
+    sixNote = sixNote ? `${sixNote} · ${note}` : note;
+  }
+  const flopSeats = droppedAllIn.length ? liveAtFlop : Object.keys(recon.ranges);
   const arr = (p: string) => buildRangeArray(classWeightsToSpec(recon.ranges[p]!));
   const ordered = [...flopSeats].sort(
     (a, b) => POSTFLOP_ORDER.indexOf(a.toUpperCase()) - POSTFLOP_ORDER.indexOf(b.toUpperCase())
@@ -1240,6 +1260,7 @@ async function solvePostflopViaChain(
         actions: [], decision: null, rangeSource: rangeSource ?? undefined,
         warning: [sixNote, `DRY RUN: solver input built — ${walkables.length} walkable(s), hero ${heroCls ?? "?"} weight ${heroW == null ? "n/a" : heroW.toFixed(3)}, pot ${reroot ? reroot.pot : flopPot}bb, stack ${reroot ? reroot.stack : flopStack}bb`].filter(Boolean).join(" · "),
         notInRange: heroW != null && !(heroW > 0) ? true : undefined,
+        dryRun: { flopPot, flopStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats] },
       } as FastSolveResult,
       why: null,
     };
