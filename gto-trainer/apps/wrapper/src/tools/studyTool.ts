@@ -8,7 +8,7 @@
  * SEPARATE RIG on its own ports, so a real session can run at the same time and neither can disturb the other:
  *
  *   rig            panel   table CDP   table window
- *   Poker Wrapper   7700     9333      ignitioncasino.eu
+ *   Poker Wrapper   7700     9333      ignitioncasino.uno
  *   Study Tool      7701     9334      the local fake table
  *
  * Also started, because the study tools need them — each ONLY if its port is dead (the StudyAPI / ChartServer

@@ -6,7 +6,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as cdp from "./cdp";
-import { sleep } from "./clock";
+import { sleep, strftime } from "./clock";
 import { C, DEBUG_DIR } from "./config";
 import { log } from "./feed";
 import { fetchJson } from "./http";
@@ -109,7 +109,8 @@ export async function main(argv: string[]): Promise<void> {
   W.setDpiAware();
   try {
     mkdirSync(DEBUG_DIR(), { recursive: true });
-    writeFileSync(join(DEBUG_DIR(), "last-start.txt"), `start (ts) argv=${pyRepr(argv)}\n`, "utf8");
+    // run-study.pyw wrote "start (purged N caches)"; there are no caches to purge here, so say WHEN and WHO
+    writeFileSync(join(DEBUG_DIR(), "last-start.txt"), `start ${strftime("%Y-%m-%d %H:%M:%S", Date.now() / 1000)} pid=${process.pid} argv=${pyRepr(argv)}\n`, "utf8");
   } catch {}
   await takeover();
   // The mutex guards the sub-second double-click; port-scoped, so the test rig and a real session coexist.

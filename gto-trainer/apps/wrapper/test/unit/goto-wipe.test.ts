@@ -76,7 +76,7 @@ class Client {
 
 function install(c: Client) {
   cdp.io.available = async () => true;
-  cdp.io.pageTargets = async () => [{ id: "fake", webSocketDebuggerUrl: "ws://fake", url: "https://ignitioncasino.eu/casino" }];
+  cdp.io.pageTargets = async () => [{ id: "fake", webSocketDebuggerUrl: "ws://fake", url: "https://ignitioncasino.uno/casino" }];
   cdp.io.evaluateStrict = async (_ws: string, js: string) => c.ev(js);
   cdp.io.evaluate = async (_ws: string, js: string) => c.ev(js);
 }

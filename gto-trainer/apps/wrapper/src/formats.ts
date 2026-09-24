@@ -265,7 +265,7 @@ async function gotoInner(fid: string, buyinBb: number, port: number, waitForBb: 
   }
   if (!(await wait(ws, LOBBY() + "!!L", 8))) {
     if (adding) return fail("no lobby frame in the page — not navigating with tables already seated");
-    const entry = data().lobby.entry || "https://www.ignitioncasino.eu/poker-lobby";
+    const entry = data().lobby.entry || "https://www.ignitioncasino.uno/poker-lobby";
     await ev(ws, "location.href = " + pyJsonDumps(entry) + "; true");
     step(`no lobby in the window — navigated to the poker lobby entry (${entry})`);
     let got = await waitLobby(ws, 25);

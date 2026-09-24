@@ -67,6 +67,8 @@ export const Hand = obj({
   street: z.string(), actions: z.array(ActionRec), liveSeats: z.array(z.number()),
   committed: z.record(z.string(), z.number().nullable()), positions: z.record(z.string(), z.string()),
   stacks: z.record(z.string(), z.number().nullable()).nullable(), currentNode: CurrentNode,
+  /** each dealt seat's stack as dealt (bb), from the table's own account — present once the seat has acted */
+  startStacks: z.record(z.string(), z.number()).optional(),
   heroFolded: z.boolean(), heroWon: z.boolean(), ended: z.boolean(),
 });
 

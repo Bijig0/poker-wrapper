@@ -3,7 +3,7 @@
  * to one table: the main one on :7700, more on 7720-7739 (tag "#2".., CDP 9340+). The admin page (/admin, served
  * by any panel) finds the panels by probing those ports and moves / opens / ends them through ITS OWN server.
  */
-import { spawn } from "node:child_process";
+import * as W from "./win32";
 import { join } from "node:path";
 import * as cdp from "./cdp";
 import { sleep, time } from "./clock";
@@ -91,9 +91,9 @@ export async function adminOpen(room: string, preset: string | null, stateLight:
   for (let p = 7720; p < 7740; p++) if (!live.has(p)) { port = p; break; }
   if (port === null) return [409, { ok: false, why: "no free panel port (7720-7739 are all in use)" }];
   const tag = `#${port - 7718}`;
-  const child = spawn(process.execPath, ["run", join(import.meta.dir, "main.ts"), "--panel-port", String(port), "--cdp-port", String(9340 + port - 7720)],
-                      { env: { ...process.env, PANEL_TAG: tag, PANEL_DEFER_WINDOW: "1" }, cwd: C.ROOT, detached: true, stdio: "ignore", windowsHide: true });
-  child.unref();
+  // W.spawnDetached: the new panel instance must not inherit this one's listening socket
+  W.startDetached(process.execPath, ["run", join(import.meta.dir, "main.ts"), "--panel-port", String(port), "--cdp-port", String(9340 + port - 7720)],
+                  { env: { ...process.env, PANEL_TAG: tag, PANEL_DEFER_WINDOW: "1" }, cwd: C.ROOT, hide: true }, log);
   let up = false;
   for (let i = 0; i < 60; i++) {
     if (await panelProbe(port, stateLight)) {

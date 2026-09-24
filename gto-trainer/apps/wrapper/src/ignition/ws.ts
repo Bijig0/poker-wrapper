@@ -122,10 +122,31 @@ export function dumpEvent(pid: string, extra: Record<string, any> = {}): void {
   dumpCommit(dumpBegin({ pid, ...extra }));
 }
 
+// ---- the stacks as dealt ----------------------------------------------------------------------------------
+/**
+ * THE STACKS AS DEALT (2026-09-24, hand 723). Every blind and action frame carries the seat's `account` — its chips
+ * behind right after that frame (the SB's fold frame repeats its blind frame's account) — so the first one a seat
+ * sends in a hand, plus every chip it has put in by then, is the stack it was dealt. Exact, where the seat readings
+ * on screen can lag a blind or a top-up (hands 406 / 693 / 702), and where an archived row only has the END of the
+ * hand's money (the API rebuilt a decision's from that: 83% exact). Exported as the hand's `startStacks`
+ * (ignition/hand.ts); the API reads every covered seat's money from it (utils/archivedHand.withStartStacks).
+ */
+function moneyIn(seat: number | null, cents: number): void {
+  if (seat === null || !(cents > 0)) return;
+  const m: Map<number, number> = (ws().moneyIn ??= new Map());
+  m.set(seat, (m.get(seat) ?? 0) + cents);
+}
+function noteAccount(seat: number | null, account: unknown): void {
+  if (seat === null || typeof account !== "number" || !Number.isFinite(account) || account < 0) return;
+  const w = ws();
+  const start: Map<number, number> = (w.startCents ??= new Map());
+  if (!start.has(seat)) start.set(seat, account + ((w.moneyIn as Map<number, number> | undefined)?.get(seat) ?? 0));
+}
+
 // ---- one player action ----------------------------------------------------------------------------------
 /** One player action, from a live CO_SELECT_INFO or one slot of a batched CO_SELECT_SPEED_INFO. `raise` is
- *  chips ADDED; unmapped btn codes are inferred from the amounts. */
-export function applySelect(seat: number | null, btn: number | null, bet: number, rz: number): void {
+ *  chips ADDED; unmapped btn codes are inferred from the amounts. `account` is the seat's chips behind after it. */
+export function applySelect(seat: number | null, btn: number | null, bet: number, rz: number, account: unknown = null): void {
   const w = ws();
   const dealtNow: number[] = w.dealt || [];
   const foldedNow: Set<number> = w.foldedSeats ?? new Set<number>();
@@ -190,6 +211,8 @@ export function applySelect(seat: number | null, btn: number | null, bet: number
       feedAdd(`Seat ${pyStr(seat)} ${verb}`);
     } else dumpMark(`dup: ${kind} already recorded`);
   }
+  moneyIn(seat, (com.get(seat) ?? 0) - prior);
+  noteAccount(seat, account);
 }
 
 // ---- which socket is ours ---------------------------------------------------------------------------------
@@ -354,6 +377,8 @@ export function beginHand(hid: string | null): void {
   w.heroFolded = false;
   w.actionOn = null;
   w.committed = new Map();
+  w.moneyIn = new Map();           // every chip each seat has put in this hand, all streets (noteAccount)
+  w.startCents = new Map();        // each seat's stack as dealt, from its first account this hand
   w.actions = [];
   w.actSeen = new TupleSet();
   w.foldedSeats = new Set<number>();
@@ -425,7 +450,9 @@ export function onGameMsg(d: Record<string, any>): void {
       const com: Map<number | null, number> = (w.committed ??= new Map());
       const seat = d.seat ?? null;
       com.set(seat, (com.get(seat) ?? 0) + bet);
+      moneyIn(seat, bet + (Number(d.dead) || 0));     // a dead blind leaves the stack too, just not as a bet
     }
+    noteAccount(d.seat ?? null, d.account);
     const label = btn !== null ? BLIND_BTN[btn] : undefined;
     if (btn === 2 || btn === 4) actAdd(d.seat ?? null, btn === 2 ? "post-sb" : "post-bb", bet);
     feedAdd(`Seat ${pyStr(d.seat ?? null)} posts ` + (label ? `${label} (${amt(bet)})` : `(${amt(bet)})`));
@@ -434,11 +461,12 @@ export function onGameMsg(d: Record<string, any>): void {
     w.heroTurn = { at: time(), hand: S.handNo, timeBank: d.timeBank ?? null, bet: d.bet ?? null, raise: d.raise ?? null, btns: d.btns ?? null };
   } else if (pid === "CO_SELECT_INFO") {
     if (d.seat !== null && d.seat !== undefined && d.seat === w.heroSeat) w.heroTurn = null;
-    applySelect(d.seat ?? null, d.btn ?? null, d.bet || 0, d.raise || 0);
+    applySelect(d.seat ?? null, d.btn ?? null, d.bet || 0, d.raise || 0, d.account ?? null);
   } else if (pid === "CO_SELECT_SPEED_INFO") {
     const btns: number[] = d.btn || [];
     const bets: number[] = d.bet || [];
     const rzs: number[] = d.raise || [];
+    const accts: unknown[] = d.account || [];
     const n = Math.max(btns.length, bets.length, rzs.length);
     const first = d.firstSeat || 1;
     for (let k = 0; k < n; k++) {
@@ -448,7 +476,7 @@ export function onGameMsg(d: Record<string, any>): void {
       const be = i < bets.length ? bets[i]! : 0;
       const rz = i < rzs.length ? rzs[i]! : 0;
       if (!(b || be || rz)) continue;
-      applySelect(seat, b, be, rz);
+      applySelect(seat, b, be, rz, i < accts.length ? accts[i] : null);
     }
   } else if (pid === "CO_BCARD3_INFO") {
     const names = (d.bcard || []).map(wireCard).filter((n: string | null): n is string => !!n);

@@ -62,7 +62,7 @@ function Measure-Combo($r, $mode) {
     $row.pass = [bool]$j.ok; $row.rttMs = $j.rttMs; $row.lostOf10 = $j.lostOf10
     $row.warmMedMs = $j.warmMedMs; $row.warmMaxMs = $j.warmMaxMs; $row.why = ($j.why -join '; ')
   } catch { $row.why = "netcheck failed: $_" }
-  $ig = & curl.exe -s -o NUL -m 25 -A 'Mozilla/5.0' -w '%{http_code} %{time_total}' https://www.ignitioncasino.eu/poker-lobby
+  $ig = & curl.exe -s -o NUL -m 25 -A 'Mozilla/5.0' -w '%{http_code} %{time_total}' https://www.ignitioncasino.uno/poker-lobby
   $parts = "$ig".Split(' ')
   $row.ignitionHttp = $parts[0]; if ($parts.Count -gt 1) { $row.ignitionS = [math]::Round([double]$parts[1], 1) }
   return [pscustomobject]$row

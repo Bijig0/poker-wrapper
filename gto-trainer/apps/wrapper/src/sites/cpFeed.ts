@@ -436,6 +436,13 @@ export function exportHand(room: Room): Record<string, any> | null {
     : heroWon || truthy(h.winners) ? "hand won" : toActSeat !== null ? `action on seat ${toActSeat}` : "action-on unknown";
   const stacks = new Map<number, number | null>();
   for (const [n, v] of h.stacks || new Map()) if (nameSeat.has(n)) stacks.set(nameSeat.get(n)!, r2(v));
+  // each dealt seat's stack AS DEALT (bb): the server's chips at game.pre_hand_start_info, before the blinds and antes
+  // — the same field the Ignition export carries (seat → bb), what the API rebuilds an archived decision's money from
+  const startStacks = new Map<number, number>();
+  for (const [n, v] of h.startStacks || new Map()) {
+    const sid = nameSeat.get(n), x = r2(v);
+    if (sid !== undefined && x !== null && dealt.includes(sid)) startStacks.set(sid, x);
+  }
   return {
     handId: /^\d+$/.test(String(h.id)) ? pyInt(String(h.id)) : h.id,
     clientHandId: h.id,
@@ -459,6 +466,7 @@ export function exportHand(room: Room): Record<string, any> | null {
     positions: pos,
     names: new Map([...h.seats].map(([sid, s]) => [sid, s.name])),
     stacks: stacks.size ? stacks : null,
+    ...(startStacks.size ? { startStacks } : {}),
     currentNode: {
       street, toActSeatId: toActSeat, toActIsHero: toActHero, pot: r2(pot) || 0, toCall: r2(heroOwed) || 0,
       legalActions: [], complete: false,

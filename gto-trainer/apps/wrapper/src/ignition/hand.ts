@@ -276,6 +276,13 @@ export function handStateIgnition(): Record<string, any> | null {
     const v = stackBb((s || {}).stack ?? null);
     if (v !== null) stacks.set(num, v);
   }
+  // each dealt seat's stack AS DEALT, off the table's own account on its first frame this hand (ws.ts noteAccount) —
+  // `stacks` above stay the screen's readings; the API prefers these for every seat they cover
+  const startStacks = new Map<number, number>();
+  for (const [s, c] of (w.startCents as Map<number, number> | undefined) ?? []) {
+    const v = toBb(c);
+    if (v !== null && dealt.includes(s)) startStacks.set(s, v);
+  }
   let heroCards: string[] = w.heroCards || [];
   if (!heroCards.length && S.feedPrev.heroCards) heroCards = splitWs(String(S.feedPrev.heroCards));
   heroCards = heroCards.map(short);
@@ -323,6 +330,7 @@ export function handStateIgnition(): Record<string, any> | null {
     potByStreet: {},
     positions,
     stacks: stacks.size ? stacks : null,
+    ...(startStacks.size ? { startStacks } : {}),
     currentNode: {
       street,
       toActSeatId: actionOn,

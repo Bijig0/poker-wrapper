@@ -51,8 +51,8 @@
     }
   },
   "lobby": {
-    "client": "https://www.ignitioncasino.eu/static/poker-game/?lobby=",
-    "entry": "https://www.ignitioncasino.eu/poker-lobby",
+    "client": "https://www.ignitioncasino.uno/static/poker-game/?lobby=",
+    "entry": "https://www.ignitioncasino.uno/poker-lobby",
     "_entryDoc": "the site's own poker-lobby entry: redirects into the client shell and settles on /poker-lobby/home. Used as the FIRST hop when the window has no lobby (a fresh sign-in lands on /headless/poker/casino-crossplay, from which the ?lobby= deep links never boot).",
     "sections": {
       "ring": "/poker-lobby/cash-game",

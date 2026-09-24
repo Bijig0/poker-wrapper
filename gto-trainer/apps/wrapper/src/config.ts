@@ -29,7 +29,7 @@ function load() {
     ROOT: paths().root,
     PANEL_PORT: Number(env.PANEL_PORT || "7700"),
     CDP_PORT: Number(env.CDP_PORT || "9333"),
-    IGNITION_URL: env.IGNITION_URL || "https://www.ignitioncasino.eu/poker-lobby",
+    IGNITION_URL: env.IGNITION_URL || "https://www.ignitioncasino.uno/poker-lobby",
     CHROME: env.CHROME_EXE || defaultBrowser(),
     TABLE_FRAC: Number(env.TABLE_FRAC || (fake ? "0.55" : "0.70")),
     TABLE_FULLSCREEN: (env.TABLE_FULLSCREEN || "multi").trim().toLowerCase(),

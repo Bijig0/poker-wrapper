@@ -3,6 +3,7 @@
 // @namespace    poker-gto
 // @version      1.0
 // @description  Read-only capture of Ignition table state. Survives reloads.
+// @match        https://www.ignitioncasino.uno/static/poker-game*
 // @match        https://www.ignitioncasino.eu/static/poker-game*
 // @grant        none
 // @run-at       document-idle

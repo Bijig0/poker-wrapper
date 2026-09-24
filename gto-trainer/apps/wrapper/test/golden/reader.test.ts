@@ -32,6 +32,18 @@ import { state } from "../../src/view";
 import "../../src/session";
 import { canon, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
 
+/** Fields added after the Python recording, verified on their own (test/golden/start-stacks.test.ts, 636 of 636
+ *  seat-hands against the table's own accounts): the hand's stacks as dealt (/hand `startStacks`, archived with the
+ *  row) and the per-hand money behind them (S.ws.startCents / moneyIn). Everything else still compares key by key. */
+const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn"]);
+function dropPostRecording(x: unknown): unknown {
+  if (Array.isArray(x)) return x.map(dropPostRecording);
+  if (x && typeof x === "object") {
+    return Object.fromEntries(Object.entries(x).filter(([k]) => !POST_RECORDING.has(k)).map(([k, v]) => [k, dropPostRecording(v)]));
+  }
+  return x;
+}
+
 /**
  * SUPERSEDED 2026-09-24 (hand 4920374906, 75o: no answer on the turn or river) — compared narrower, not skipped:
  *  - `rc` on a table DEALT TWO, past the flop: the Python reader put the small blind first on every heads-up street;
@@ -76,7 +88,7 @@ const PLANS = [{ kind: "action", label: "fold" }, { kind: "action", label: "chec
                { kind: "action", label: "raise" }, { kind: "action", label: "bet" },
                { kind: "raise-to", amount: "2.5", verb: "raise" }, { kind: "raise-to", amount: "100", verb: "raise" },
                { kind: "raise-to", amount: "7.25", verb: "bet" }];
-const TARGET = { id: "replay", webSocketDebuggerUrl: "ws://replay", url: "https://www.ignitioncasino.eu/static/poker-game/replay",
+const TARGET = { id: "replay", webSocketDebuggerUrl: "ws://replay", url: "https://www.ignitioncasino.uno/static/poker-game/replay",
                  title: "replay", type: "page" };
 
 const verdict = (v: TERMINAL.TerminalVerdict) => ({ terminal: v.terminal, kind: v.kind, why: v.why, final_stack_known: v.finalStackKnown, details: v.details });
@@ -267,7 +279,7 @@ for (const file of corpusFiles("reader-")) {
         for (const [key, v] of Object.entries(outRec)) if (key !== "type" && key !== "i") expected[key] = v;
         for (const [key, raw] of Object.entries(snap)) {
           if (!(key in expected)) continue;
-          const v = supersededHu(key, raw);
+          const v = supersededHu(key, dropPostRecording(raw));
           // re-synced like any divergence: state that outlives the hand (lastArchived) keeps the corrected value
           if (huLineFixed(file, inp.i, key)) {
             expected[key] = normPy(v);

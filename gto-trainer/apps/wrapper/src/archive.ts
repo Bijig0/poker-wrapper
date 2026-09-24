@@ -206,7 +206,6 @@ export function archiveCp(room: feed.Room, raw: feed.Hand): void {
   h.shown = raw.shown ?? null;
   h.result = { text: winners || null, winners: raw.winners ?? null, heroNet: net,
                heroNetBb: net !== null && bb ? pyRound(net / bb, 2) : null, heroWon: !!(net && net > 0) };
-  h.startStacks = raw.startStacks ?? null;
   h.rake = (CP.table() || {}).rake ?? null;
   const c = db();
   try {
