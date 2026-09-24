@@ -58,6 +58,15 @@ export function harnessEnv(): () => void {
 
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { fastSolve, forgetPreflopPin, forgetPostflopPin } from "../services/fastSolve";
+import { withStartStacks } from "../utils/archivedHand/archivedHand";
+
+/**
+ * The export as the API reads it LIVE (feed/resolveHand, live path): normalizeHand, then withStartStacks — every seat
+ * the table's own account covers reads its money as dealt minus what its captured actions put in. The harness used
+ * to stop at normalizeHand (2026-09-25, overnight fixer), so its `stacks` carried a lost call's chips, evidence the
+ * live API never sees; an oracle fed by that would pass a capture gate that is blind at the table.
+ */
+export const liveHand = (raw: any) => withStartStacks(normalizeHand(raw).hand!);
 
 const STRATEGY = "ign200-ring-6max-equilibrium";
 const POS: Record<number, string[]> = { 3: ["BTN", "SB", "BB"], 4: ["CO", "BTN", "SB", "BB"], 5: ["HJ", "CO", "BTN", "SB", "BB"], 6: ["UTG", "HJ", "CO", "BTN", "SB", "BB"] };
@@ -291,6 +300,15 @@ export interface CaseResult { seed: number; ops: string[]; verdicts: Verdict[]; 
 const CLOUD_GATED = /GTOW_BLOCK|no GTO Wizard|blocked|thinned to|the 6-max charts cover 4-6|dealt with no small blind|GTO Wizard AI preflop|last resort/i;
 
 export async function runCase(seed: number, ops: Op[], opts: { slowMs?: number } = {}): Promise<CaseResult> {
+  // A CASE IS A FIXTURE ONLY IF IT REPLAYS (2026-09-25, overnight fixer). The study tool's pick rolls its mix with
+  // Math.random (utils/pickWeightedAction) and hero plays that pick here, so the same seed dealt a different hand
+  // on every run and a finding's seed/ops did not reproduce it. The roll is seeded from the case for its duration.
+  const realRandom = Math.random;
+  const rollRng = new Rng(seed * 7717 + ops.join("+").length * 131 + 99991);
+  Math.random = () => rollRng.next();
+  try { return await runCaseInner(seed, ops, opts); } finally { Math.random = realRandom; }
+}
+async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }): Promise<CaseResult> {
   const rng = new Rng(seed * 1000003 + ops.length * 7919 + ops.reduce((s, o) => s + o.length, 0));
   const key = `mh-${seed}-${ops.join("+") || "base"}`;
   const drift0 = ops.includes("stack-drift") ? 0.3 : 0;
@@ -298,7 +316,7 @@ export async function runCase(seed: number, ops: Op[], opts: { slowMs?: number }
   // the harness tests the system as it runs at the table, not a hero who raises 72o into the chart's 0%
   const policy: HeroPolicy = async (partial, street) => {
     const raw = mutateExport(exportAt(partial, partial.actions.length, key, drift0, street), ops, rng);
-    let h; try { h = normalizeHand(raw).hand; } catch { return null; }
+    let h; try { h = liveHand(raw); } catch { return null; }
     let r: any; try { r = await fastSolve(h, h.positions[h.heroSeatId] ?? null, { strategyId: STRATEGY, origin: "harness" }); } catch { return null; }
     if (!r?.ok || !r.decision) return null;
     const label = String(r.decision.action);
@@ -324,7 +342,7 @@ export async function runCase(seed: number, ops: Op[], opts: { slowMs?: number }
     // did the corrupting operator actually touch THIS export? (a dropped flop card changes nothing preflop)
     const corrupted = ops.some((o) => EXPECT_REFUSAL.has(o)) && JSON.stringify(raw) !== JSON.stringify(clean);
     const street = raw.street as string;
-    let hand2; try { hand2 = normalizeHand(raw).hand; } catch (e: any) {
+    let hand2; try { hand2 = liveHand(raw); } catch (e: any) {
       const v: Verdict = { seed, ops, street, k, verdict: EXPECT_REFUSAL.has(ops.find((o) => EXPECT_REFUSAL.has(o)) ?? "") ? "expected-refusal" : "finding", kind: "normalize-threw", reason: String(e?.message ?? e), ms: 0 };
       verdicts.push(v); if (v.verdict === "finding") failingExports.push(raw); continue;
     }
