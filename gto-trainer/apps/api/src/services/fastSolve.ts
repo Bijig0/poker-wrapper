@@ -1704,8 +1704,12 @@ async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts:
   // hand), and the depth and the chart pick's ranges are part of GTO Wizard's tree key — so every street
   // re-created and re-walked the flop tree instead of reusing it. The first postflop read of a hand fixes the
   // dealt stacks (pinPostflop); the depth and every chart pick come from those.
-  const pin = pinPostflop(hand, (d) => site.depthOf(hand, heroPos, d));
-  const depth = opts.depth ?? pin?.depth ?? site.depthOf(hand, heroPos, dealtBySeat(hand));
+  // (the capture is repaired FIRST — below — and the depth read from the repaired hand: round 2, harness seed 27266
+  // [missed-fold], a later-orbit fold the tap lost left the BTN "in", and his 100bb set the depth where the table's
+  // effective stack was the CO's 98.2 — the repair that writes his fold into the line ran after the depth was pinned)
+  const fixedEarly = repairPostflopCapture(hand);
+  const pin = pinPostflop(fixedEarly.hand, (d) => site.depthOf(fixedEarly.hand, heroPos, d));
+  const depth = opts.depth ?? pin?.depth ?? site.depthOf(fixedEarly.hand, heroPos, dealtBySeat(fixedEarly.hand));
   // A STREET CAPTURED OUT OF ROTATION POISONS EVERYTHING BELOW (2026-09-21). The tokens are built here, and
   // deriveExploitSpot reads OOP/IP off whoever acted first — so a scrambled street silently reverses the
   // seats and the chain walks a tree with the wrong player out of position. Repair what is provably safe to
@@ -1716,7 +1720,7 @@ async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts:
   // .repairPostflopCapture. A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21). Say so plainly
   // instead of letting it surface as "preflop betting didn't close (missed action?)", which sends you looking for
   // a missing action that was never the problem.
-  const fixed = repairPostflopCapture(hand);
+  const fixed = fixedEarly;
   if (fixed.faults.length) {
     return { ok: false, kind: "capture-fault", street, gametype: site.gametype, depth,
       reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${fixed.faults.join("; ")}` };
