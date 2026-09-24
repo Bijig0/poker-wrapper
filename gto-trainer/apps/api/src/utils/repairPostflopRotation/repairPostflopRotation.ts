@@ -149,6 +149,13 @@ export function captureFaults(hand: ParsedHand): string[] {
     if (hand.positions?.[a.seatId]) continue;
     faults.push(`seat ${a.seatId} acted on the ${a.street} but has no position label`);
   }
+  // …and a POSTED-IN player (round 2, harness seed 199 [unlabelled-seat + post-in]): normalizeHand folds his post out
+  // of the line (utils/foldPostIns), so until he acts the rule above never sees him — a live player's chips on no seat
+  for (const p of hand.postIns ?? []) {
+    const s = p.hero ? hand.heroSeatId : p.seatId;
+    if (hand.positions?.[s] || hand.actions.some((a) => a.seatId === s && a.type !== "post-sb" && a.type !== "post-bb")) continue;
+    faults.push(`seat ${s} posted in on the preflop but has no position label`);
+  }
 
   // PREFLOP OUT OF ROTATION (dbId 557 / 583). Voluntary preflop action starts with the seat after the big blind and
   // goes clockwise around the seats dealt in, coming back around after a raise; a seat that has folded or is all-in

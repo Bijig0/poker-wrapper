@@ -197,6 +197,18 @@ describe("lostActionFaults — posted-in players", () => {
       currentNode: { street: "preflop", toActSeatId: 4, toActIsHero: true, pot: 0, toCall: 1, legalActions: [], complete: false } };
     expect(lostActionFaults(normalizeHand(raw).hand!)).toEqual([]);
   });
+  // round 2 (harness unlabelled-seat + post-in, seed 199): the poster's label is missing and he has not acted yet —
+  // his post was folded out of the line, so the UNLABELLED ACTOR rule never saw him and the hand was answered with a
+  // live player's chips on no seat
+  it("a poster with no position label is an unlabelled actor, refused like any other", async () => {
+    const { normalizeHand } = await import("../../feed/normalizeHand/normalizeHand");
+    const { 5: _co, ...noCo } = SIX;
+    const raw = { handId: 1, clientHandId: "t", heroSeatId: 4, heroCards: ["Kd", "Qh"], board: [], street: "preflop",
+      actions: [P(1, "post-sb", 0.5), P(2, "post-bb", 1), P(5, "post", 1), P(3, "fold")],
+      liveSeats: [1, 2, 3, 4, 5, 6], committed: { 1: 0.5, 2: 1, 5: 1 }, potByStreet: {}, positions: noCo,
+      currentNode: { street: "preflop", toActSeatId: 4, toActIsHero: true, pot: 0, toCall: 1, legalActions: [], complete: false } };
+    expect(captureFaults(normalizeHand(raw).hand!)).toContain("seat 5 posted in on the preflop but has no position label");
+  });
   it("a poster who folded: his post is dead money in the pot, not a lost call", async () => {
     const { normalizeHand } = await import("../../feed/normalizeHand/normalizeHand");
     const raw = { handId: 1, clientHandId: "t", heroSeatId: 6, heroCards: ["Kd", "Qh"], board: ["2c", "7d", "9s"], street: "flop",
