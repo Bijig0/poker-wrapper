@@ -674,7 +674,7 @@ export async function maybeAutoAct(): Promise<void> {
   await relaySeams.executePick("auto");
 }
 
-// ---- fold on no-answer: auto-execute's companion, practice / fake table only ---------------------------------
+// ---- fold on no-answer: auto-execute's companion -------------------------------------------------------------
 /** How long hero's turn waits on an answer before fold-on-no-answer gives up on it: long enough to sit through a
  *  cold postflop chain solve (the poller allows one 45 s) once the +45s time bank has been taken. */
 export const NO_ANSWER_DEADLINE_S = 30;
@@ -683,11 +683,6 @@ export const NO_ANSWER_DEADLINE_S = 30;
 const NO_ANSWER_NOTE_MIN_S = 1.5;
 const NO_ANSWER_RETRY_S = 2.5;
 const NO_ANSWER_TRIES = 2;
-
-/** Is the table in front of us play money (the only place fold-on-no-answer acts)? */
-function practiceTable(): boolean {
-  return !!(S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice));
-}
 
 /** Why hero's turn should be given up as a no-answer right now, or null. `age` = seconds hero has been on this
  *  decision. Three ways a decision is known to have no answer coming in time:
@@ -705,8 +700,8 @@ export function noAnswerFoldWhy(age: number): string | null {
 /** FOLD ON NO-ANSWER (session setup `autoFoldNoAnswer`): with auto-execute armed, a decision that gets no answer
  *  is checked if checking is free, else folded — instead of running the clock out, which sits the seat out after
  *  a few timeouts. Every one is a `no-answer-fold` session event with its reason, so the no-answers of an
- *  unattended practice run can be collected afterwards. PRACTICE / FAKE TABLE ONLY: on a real-money table it
- *  never acts, even under the real-money auto allowance — the client's own timeout applies there. */
+ *  unattended run can be collected afterwards. TEMPORARILY enabled on ALL tables, including real-money, for
+ *  product development — the practice/fake-table-only guard has been removed; see relay.ts history to restore it. */
 export async function maybeFoldNoAnswer(): Promise<void> {
   const st = S.study;
   if (!(st.on && st.auto && st.foldNoAnswer)) {
@@ -724,7 +719,6 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   if ((st.noAnswerTurn || {}).key !== key) st.noAnswerTurn = { key, since: time(), tries: 0, lastTry: 0.0 };
   const turn = st.noAnswerTurn;
   if (turn.tries >= NO_ANSWER_TRIES || time() - turn.lastTry < NO_ANSWER_RETRY_S) return;
-  if (!practiceTable()) return;
   // an answer for THIS decision is auto-execute's to play (or to hold) — not a no-answer
   if (currentAnswer() && pickReady().ok) return;
   // nothing may be pressed through these; the next tick looks again

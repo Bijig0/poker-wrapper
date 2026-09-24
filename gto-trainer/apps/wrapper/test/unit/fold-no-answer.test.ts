@@ -1,7 +1,8 @@
 /**
- * Fold on no-answer (session setup `autoFoldNoAnswer`): with auto-execute armed on a practice table, a decision
- * with no answer is checked if free, else folded — on the poller's refusal note, at the time-bank mark when the
- * bank is left, or at the deadline. Never on a real-money table, allowance or not; never over an answer.
+ * Fold on no-answer (session setup `autoFoldNoAnswer`): with auto-execute armed, a decision with no answer is
+ * checked if free, else folded — on the poller's refusal note, at the time-bank mark when the bank is left, or
+ * at the deadline. TEMPORARILY acts on real-money tables too (practice-only guard removed for dev); never over
+ * an answer.
  */
 import { expect, test } from "bun:test";
 import { realTime, setFakeTime, time } from "../../src/clock";
@@ -102,15 +103,14 @@ test("fold on no-answer: when it acts, what it presses, where it never acts", as
     check("time bank on offer and set to leave it → acts at the mark", J(calls) === J(["check", "fold"]), J(calls));
 
     calls.length = 0;
+    offer = ["fold", "call", "raise"];
     seed({ practice: false });
     const armed = setAuto(true, { allowReal: true, minutes: 60, hands: 100, reason: "test" });
     S.study.foldNoAnswer = true;
-    await tickAt(0); await tickAt(NO_ANSWER_DEADLINE_S + 1);
-    S.liveStatus.timeBank = { text: "+45s" };
-    S.study.timeBank = false;
+    await tickAt(0);
     S.study.note = "no answer for this spot after 3 tries — x";
-    await tickAt(NO_ANSWER_DEADLINE_S + 5);
-    check("real-money table, even under the allowance → never acts", armed.ok && calls.length === 0, J({ armed, calls }));
+    await tickAt(2);
+    check("real-money table, guard removed → acts same as practice", armed.ok && J(calls) === J(["check", "fold"]), J({ armed, calls }));
 
     calls.length = 0;
     seed();
