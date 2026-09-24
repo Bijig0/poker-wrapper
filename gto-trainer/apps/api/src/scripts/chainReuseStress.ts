@@ -33,7 +33,8 @@ const drift = Number(args.find((a) => a.startsWith("--drift="))?.slice(8) ?? 0);
 const dealtStack = Number(args.find((a) => a.startsWith("--stack="))?.slice(8) ?? 100);
 const twice = args.includes("--twice");
 
-const dbPath = join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "data", "hands.db");
+// HANDS_DB: the archive to read (a worktree has no ignition-study-wrapper/data of its own — point it at the main one)
+const dbPath = process.env.HANDS_DB ?? join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "data", "hands.db");
 const db = new Database(dbPath, { readonly: true });
 /** `site` lives on the RAW archived row ("coinpoker" | "ignition"), not on ParsedHand — normalizeHand drops it,
  *  which is why an earlier version of this script read `(hand as {site}).site` and got undefined every time,
