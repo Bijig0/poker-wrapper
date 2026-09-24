@@ -25,6 +25,26 @@ export function dealtSeats(hand: ParsedHand, heroPos?: string | null): Map<numbe
   return out;
 }
 
+/**
+ * THE SEATS STILL IN THE HAND (round 2, harness stack-behind check): dealt, not folded — and, once the preflop round
+ * was played, not a non-blind seat with no action at all: that is a fold the tap lost (captureFaults' own rule for
+ * missed folds; a blind is in by his post, captured or not). Used for the effective stack (hrc6max.dealtEffective)
+ * and the postflop rotation (repairPostflopRotation.rotationFor).
+ */
+export function seatsInHand(hand: ParsedHand, heroPos?: string | null): Set<number> {
+  const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map(seatOf));
+  const acted = new Set(hand.actions.map(seatOf));
+  const preflopPlayed = hand.actions.some((a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb");
+  const out = new Set<number>();
+  for (const [s, pos] of dealtSeats(hand, heroPos)) {
+    if (folded.has(s)) continue;
+    if (preflopPlayed && !acted.has(s) && !/^(SB|BB)$/.test(pos) && s !== hand.heroSeatId) continue;
+    out.add(s);
+  }
+  return out;
+}
+
 /** How many players were dealt in: the labelled seats minus the ones that were not dealt, hero included. */
 export const dealtCount = (hand: ParsedHand, heroPos?: string | null): number =>
   dealtSeats(hand, heroPos).size + (dealtSeats(hand, heroPos).has(hand.heroSeatId) ? 0 : 1);

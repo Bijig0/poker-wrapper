@@ -1,3 +1,4 @@
+import { seatsInHand } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { type GetNode, type HrcNode } from "./hrc3max";
 // Nodes come from the baked SQLite when this machine has it, and from :8777
@@ -223,9 +224,11 @@ export function dealtEffective(hand: ParsedHand, dealt?: Record<number, number>)
   const bySeat = dealt ?? dealtBySeat(hand);
   const hero = bySeat[hand.heroSeatId];
   if (hero == null) return null;
-  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => (a.hero ? hand.heroSeatId : a.seatId)));
+  // the opponents STILL IN (utils/dealtSeats.seatsInHand, round 2): not folded, dealt, and not a seat whose preflop
+  // fold the tap lost — the deepest of THOSE sets the depth (a sitting-out label or a lost fold used to)
+  const inHand = seatsInHand(hand);
   const opps = Object.entries(bySeat)
-    .filter(([k]) => Number(k) !== hand.heroSeatId && !folded.has(Number(k)) && hand.positions?.[Number(k)] != null)
+    .filter(([k]) => Number(k) !== hand.heroSeatId && inHand.has(Number(k)) && hand.positions?.[Number(k)] != null)
     .map(([, v]) => v);
   return Math.round((opps.length ? Math.min(hero, Math.max(...opps)) : hero) * 100) / 100;
 }

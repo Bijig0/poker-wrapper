@@ -514,7 +514,7 @@ export async function rangeVerdict(hand: Hand, k: number, res: any, walks: Recor
  * the (possibly mutated) export: the flop pot must be every preflop chip (0.25bb of slack: the tree seats the SB at
  * 0.5 where NL5 posts 0.4), and the flop seats must be exactly the players who did not fold preflop.
  */
-export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: string[] }): string | null {
+export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: string[]; flopStack?: number }): string | null {
   const per = new Map<number, number>();
   for (const a of hand.actions) {
     if (a.street !== 0 || a.amount == null) continue;
@@ -530,6 +530,17 @@ export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: str
   const want = (canAct.length >= 2 ? canAct : inHand).map((s) => s.pos).sort();
   const got = dry.flopSeats.map((p) => p.toUpperCase()).sort();
   if (want.join("/") !== got.join("/")) return `the solver's flop seats are ${got.join("/")}, the table's ${want.join("/")}`;
+  // THE STACK BEHIND (round 2): every tree seat plays at the effective stack — hero's dealt stack against the deepest
+  // opponent still in (hrc6max.dealtEffective) — less the preflop price. Skipped when anyone is all-in preflop (the
+  // side-pot geometry is its own approximation, said in the note) and for re-rooted/collapsed spots.
+  if (dry.flopStack != null && !allIn.size && canAct.length === 2) {
+    const heroSeat = hand.seats.find((s) => s.id === hand.hero)!;
+    const opp = canAct.filter((s) => s.id !== hand.hero).map((s) => s.stack);
+    const eff = Math.min(heroSeat.stack, Math.max(...opp));
+    const level = Math.max(0, ...[...per.entries()].filter(([id]) => canAct.some((s) => s.id === id)).map(([, v]) => v));
+    const wantStack = Math.round((eff - level) * 100) / 100;
+    if (Math.abs(dry.flopStack - wantStack) > 0.6) return `the solver's stack behind is ${dry.flopStack}bb, the table's effective ${wantStack}bb (${eff}bb dealt less the ${level}bb preflop price)`;
+  }
   return null;
 }
 
