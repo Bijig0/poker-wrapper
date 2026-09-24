@@ -10,7 +10,7 @@
  *              (POSTFLOP_DRY_RUN=1: ranges for every flop seat, hero's weight, pot, stacks, the collapse plan)
  * Offline: GTOW_BLOCK=1, the baked charts only, no quota. Every finding is a reproducible fixture.
  *
- *   bun src/scripts/mutationHarness.ts [--seeds=400] [--ops=all|a,b,c] [--pairs=200] [--out=src/scripts/mutation/out] [--seed0=1]
+ *   bun src/scripts/mutationHarness.ts [--seeds=400] [--ops=all|a,b,c] [--pairs=200] [--triples=0] [--out=src/scripts/mutation/out] [--seed0=1]
  *
  * Operators (each is a behaviour a real table or a real capture produces):
  *   nl5-rounding     the 5c test stake: every amount is what the client executes in cents (2.5x → 2.6bb, SB 0.4)
@@ -547,11 +547,11 @@ export function inputMismatch(hand: Hand, dry: { flopPot: number; flopSeats: str
 // ---- the sweep: baseline, every single operator, sampled pairs; minimal sets for findings ---------------------------
 export interface Finding { seed: number; ops: string[]; minimal: boolean; street: string; kind: string; reason: string; ms: number; fixture: any }
 
-export async function sweep(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number; oracle: { explained: number; refUnwalkable: number; cases: { seed: number; ops: string[]; street: string; why: string }[] } }> {
+export async function sweep(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; triples?: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number; oracle: { explained: number; refUnwalkable: number; cases: { seed: number; ops: string[]; street: string; why: string }[] } }> {
   const restore = harnessEnv();
   try { return await sweepInner(o); } finally { restore(); }
 }
-async function sweepInner(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number; oracle: { explained: number; refUnwalkable: number; cases: { seed: number; ops: string[]; street: string; why: string }[] } }> {
+async function sweepInner(o: { seeds: number; seed0: number; ops: Op[]; pairs: number; triples?: number; onProgress?: (s: string) => void }): Promise<{ findings: Finding[]; matrix: Record<string, Record<string, number>>; cases: number; decisions: number; oracle: { explained: number; refUnwalkable: number; cases: { seed: number; ops: string[]; street: string; why: string }[] } }> {
   const findings: Finding[] = [];
   const matrix: Record<string, Record<string, number>> = {};
   const bump = (op: string, verdict: string) => { (matrix[op] ??= {})[verdict] = (matrix[op]![verdict] ?? 0) + 1; };
@@ -588,6 +588,17 @@ async function sweepInner(o: { seeds: number; seed0: number; ops: Op[]; pairs: n
     const minimal = !singleBad.has(`${s}|${a}`) && !singleBad.has(`${s}|${b}`) && !singleBad.has(`${s}|`);
     record(r, minimal);
   }
+  // triples, sampled (round 2): three operators at once — the capture defects and table states that only meet in a
+  // real session (a post-in whose fold the tap lost at a 5c table). Reported minimal only when no single of it failed
+  for (let t = 0; t < (o.triples ?? 0); t++) {
+    const s = o.seed0 + rng.int(o.seeds);
+    const pool = [...o.ops];
+    const pick3: Op[] = [];
+    while (pick3.length < 3 && pool.length) pick3.push(pool.splice(rng.int(pool.length), 1)[0]!);
+    if (pick3.length < 3) continue;
+    const r = await runCase(s, pick3);
+    record(r, !pick3.some((x) => singleBad.has(`${s}|${x}`)) && !singleBad.has(`${s}|`));
+  }
   return { findings, matrix, cases, decisions, oracle };
 }
 
@@ -614,16 +625,16 @@ export function summarize(res: Awaited<ReturnType<typeof sweep>>): string {
 
 if (import.meta.main) {
   const arg = (k: string, d: string) => (process.argv.find((a) => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).split("=")[1]!;
-  const seeds = Number(arg("seeds", "400")); const seed0 = Number(arg("seed0", "1")); const pairs = Number(arg("pairs", "200"));
+  const seeds = Number(arg("seeds", "400")); const seed0 = Number(arg("seed0", "1")); const pairs = Number(arg("pairs", "200")); const triples = Number(arg("triples", "0"));
   const opsArg = arg("ops", "all"); const ops = (opsArg === "all" ? [...OPERATORS] : opsArg.split(",")) as Op[];
   const out = arg("out", join(import.meta.dir, "mutation", "out"));
   mkdirSync(out, { recursive: true });
   const t0 = Date.now();
-  const res = await sweep({ seeds, seed0, ops, pairs, onProgress: (s) => { if (/0 done/.test(s)) console.error(s); } });
+  const res = await sweep({ seeds, seed0, ops, pairs, triples, onProgress: (s) => { if (/0 done/.test(s)) console.error(s); } });
   writeFileSync(join(out, "findings.jsonl"), res.findings.map((f) => JSON.stringify(f)).join("\n") + "\n");
   // the differences the range oracle let through because the answer named an approximation — the audit trail
   writeFileSync(join(out, "explained.jsonl"), res.oracle.cases.map((f) => JSON.stringify(f)).join("\n") + "\n");
-  const md = summarize(res) + `\n\n${Date.now() - t0} ms · seeds ${seed0}..${seed0 + seeds - 1} · ops ${ops.join(",")} · pairs ${pairs}\n`;
+  const md = summarize(res) + `\n\n${Date.now() - t0} ms · seeds ${seed0}..${seed0 + seeds - 1} · ops ${ops.join(",")} · pairs ${pairs} · triples ${triples}\n`;
   writeFileSync(join(out, "summary.md"), md);
   // one fixture per distinct class, for the fixer
   const seen = new Set<string>();
