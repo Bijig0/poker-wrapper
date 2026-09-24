@@ -78,9 +78,14 @@ function snapshot(hand: ParsedHand, upto: number): ParsedHand {
     if (villains[0] != null) stacks[villains[0]] = Math.round((stacks[villains[0]]! + drift) * 100) / 100;
   }
   const top = Math.max(0, ...Object.values(committed));
+  // THE POT AS IT STOOD (2026-09-25, round 2): the archive's currentNode.pot is the END of the hand's, and the capture
+  // gate's pot ledger (round 1) refused every later-street snapshot as \"chips with no action\". Ignition reports the
+  // closed rounds' chips, so that is what the snapshot carries.
+  let pot = 0;
+  for (const [st, m] of per) if (st !== street) for (const v of m.values()) pot += v;
   return {
     ...hand, actions, street, board: hand.board.slice(0, boardLen), ended: false, stacks, committed,
-    currentNode: { ...hand.currentNode, street, toActIsHero: true, toCall: Math.max(0, top - (committed[hand.heroSeatId] ?? 0)), complete: false },
+    currentNode: { ...hand.currentNode, street, toActIsHero: true, toCall: Math.max(0, top - (committed[hand.heroSeatId] ?? 0)), complete: false, pot: Math.round(pot * 100) / 100 },
   };
 }
 
