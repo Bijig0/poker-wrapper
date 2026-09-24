@@ -455,6 +455,10 @@ export function onGameMsg(d: Record<string, any>): void {
     noteAccount(d.seat ?? null, d.account);
     const label = btn !== null ? BLIND_BTN[btn] : undefined;
     if (btn === 2 || btn === 4) actAdd(d.seat ?? null, btn === 2 ? "post-sb" : "post-bb", bet);
+    // A POST-IN (btn 8): a new/returning player's live blind out of turn — "Seat 1 posts post (1 BB)". Recorded
+    // since 2026-09-25 (hands 4920414446 / 4920414607): without it the poster's option-CHECK read as an illegal
+    // check and the level reconciler invented a call for the chips. The API folds it into his own action.
+    else if (btn === 8 && truthy(bet)) actAdd(d.seat ?? null, "post", bet);
     feedAdd(`Seat ${pyStr(d.seat ?? null)} posts ` + (label ? `${label} (${amt(bet)})` : `(${amt(bet)})`));
     if (w.bbGuessed) S.feed[S.feed.length - 1]!.guessCents = bet;
   } else if (pid === "CO_SELECT_REQ") {

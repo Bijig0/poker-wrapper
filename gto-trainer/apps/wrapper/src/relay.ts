@@ -292,8 +292,11 @@ export function pickReady(): Record<string, any> {
   } catch {
     return no("decision key unreadable");
   }
-  if (kStreet !== h.street || kN !== h.actions.length) {
-    return no(`pick was for ${pyStr(kStreet)} after ${kN} actions; table is ${h.street} after ${h.actions.length}`);
+  // A POST-IN is not an action to the API (utils/foldPostIns folds it into the poster's own action), so its key counts
+  // one action fewer per post than this line holds (2026-09-25) — count the way the key was made.
+  const nActs = h.actions.filter((a: any) => a.type !== "post").length;
+  if (kStreet !== h.street || kN !== nActs) {
+    return no(`pick was for ${pyStr(kStreet)} after ${kN} actions; table is ${h.street} after ${nActs}`);
   }
   out.kN = kN;
   const plan = pickPlan(st.pick, (h.currentNode || {}).pot ?? null);

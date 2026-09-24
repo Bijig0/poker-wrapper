@@ -19,7 +19,7 @@ import {
   awardName, boardCards, domHeroSeat, heroCards, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, mkey, tapVerify } from "./ws";
+import { actAdd, actSeen, dumpMark, mkey, tapVerify } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -322,6 +322,15 @@ export async function feedTick(): Promise<void> {
         continue;
       }
       if (badge === "CHECK" && obBadge !== "CHECK" && !actSeen(["check", num])) {
+        // PREFLOP, A SEAT WITH LESS THAN A BIG BLIND IN CANNOT CHECK (2026-09-25, hand 4920414607: "Seat 2 checks"
+        // facing UTG's limp, then its real raise — the WS only ever sent the raise). Only the big blind and a poster
+        // (a full blind in) ever check preflop, whenever the badge is seen. NOT generalised to "owes chips": postflop
+        // the DOM files a check the WS missed AFTER a later seat's bet has landed (golden corpus), and it was legal then.
+        const inFront = (w.committed as Map<number | null, number> | undefined)?.get(num) ?? 0;
+        if (streetDom === "preflop" && !(w.board || []).length && bbKnown && inFront < bbc) {
+          dumpMark(`dropped: DOM CHECK badge on seat ${num} preflop with ${inFront} cents in (under the big blind)`);
+          continue;
+        }
         actAdd(num, "check", null, streetDom);
         feedAdd(`Seat ${num} checks`);
         continue;

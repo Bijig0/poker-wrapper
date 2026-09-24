@@ -159,6 +159,11 @@ const amtStr = (a: number | null) => (a === null ? "" : ` ${pyFloatStr(a)}`);
 export function reconciledLine(old: any[], hero: number | null, street: string): [any[], any, string | null, string | null, string] {
   const rc = S.shadow.hand === S.handNo ? S.shadow.rc : null;
   if (rc === null || rc === undefined || !rc.armed || rc.bbs === null || hero === null) return [old, null, null, null, "ws"];
+  // A POST-IN IS INVISIBLE TO THE LEVELS (2026-09-25, hand 4920414607): chips in front of a seat that has not acted
+  // read as a call ("added: 3 call 0.4", out of turn). The event log has the post itself — keep it.
+  if (old.some((a) => a.type === "post")) {
+    return [old, null, null, "a player posted in — the level reconciler cannot tell a post from a call; event line kept", "ws"];
+  }
   let journal: any[], viol: any[], rcC: Map<number, number>, rcMax: number;
   try {
     journal = [...rc.line()];
@@ -259,7 +264,7 @@ export function handStateIgnition(): Record<string, any> | null {
   const toBb = (cents: number | null | undefined) => (scaled && cents !== null && cents !== undefined ? pyRound(cents / bb, 2) : null);
   let board = (w.board || []).filter((c: any) => c).map(short);
   const pastGrace = time() >= (w.domGraceUntil ?? 0);
-  const hasVoluntary = actsSrc.some((a) => a.type !== "post-sb" && a.type !== "post-bb");
+  const hasVoluntary = actsSrc.some((a) => a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post");
   if (pastGrace) {
     const domBoard = (S.liveStatus.board || []).filter((c: any) => c).map(short);
     if (hasVoluntary && [3, 4, 5].includes(domBoard.length) && domBoard.length > board.length) board = domBoard;

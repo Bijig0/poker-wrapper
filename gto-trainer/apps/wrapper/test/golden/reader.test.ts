@@ -36,8 +36,13 @@ import { canon, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
  *  seat-hands against the table's own accounts): the hand's stacks as dealt (/hand `startStacks`, archived with the
  *  row) and the per-hand money behind them (S.ws.startCents / moneyIn). Everything else still compares key by key. */
 const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn"]);
+/** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
+ *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
+ *  nothing else here (the pick key never counts one: relay.ts), verified on its own in test/unit/post-in.test.ts
+ *  against hand 4920414446's frames. Every other action still compares entry by entry. */
+const isPostIn = (a: any) => a && typeof a === "object" && a.type === "post" && ("seat" in a || "seatId" in a);
 function dropPostRecording(x: unknown): unknown {
-  if (Array.isArray(x)) return x.map(dropPostRecording);
+  if (Array.isArray(x)) return x.filter((a) => !isPostIn(a)).map(dropPostRecording);
   if (x && typeof x === "object") {
     return Object.fromEntries(Object.entries(x).filter(([k]) => !POST_RECORDING.has(k)).map(([k, v]) => [k, dropPostRecording(v)]));
   }
@@ -78,8 +83,20 @@ function supersededHu(key: string, x: any): any {
  *  Keys: the line and everything read off it — hand, light, pick, terminal, archived, lastArchived. */
 const HU_LINE_FIXED = new Map([["reader-session_20260807_115240.jsonl.gz", [[3098, 3100], [3384, 3479], [3538, 3574]]]]);
 const HU_LINE_KEYS = new Set(["hand", "light", "pick", "terminal", "archived", "lastArchived"]);
+/** POST-IN HANDS the 2026-09-25 fix changes beyond the action lists, each checked by hand:
+ *    20260923_020036 2774-3005  hand 734 (6♠7♦ — one of the four post-in no-answers): Python's cut-over swapped in the
+ *                               level reconciler's line, which read seat 1's 1bb POST as "seat 1 call 1"; the event line
+ *                               (with the post) is now kept, its lineNote says why, and the pick key counts one action
+ *                               fewer — the API's count, which never includes a post.
+ *    20260923_020036 498, 20260920_131406 2544  the archived rows of post-in hands: they now carry their posts
+ *                               (action_count +1 per post, the row's body lists them).
+ *  Keys: the line and everything read off it. */
+const POST_IN_FIXED = new Map([
+  ["reader-session_20260923_020036.jsonl.gz", [[498, 498], [2774, 3005]]],
+  ["reader-session_20260920_131406.jsonl.gz", [[2544, 2544]]],
+]);
 const huLineFixed = (file: string, i: number, key: string) =>
-  HU_LINE_KEYS.has(key) && (HU_LINE_FIXED.get(file) || []).some(([a, b]) => i >= a! && i <= b!);
+  HU_LINE_KEYS.has(key) && [...(HU_LINE_FIXED.get(file) || []), ...(POST_IN_FIXED.get(file) || [])].some(([a, b]) => i >= a! && i <= b!);
 
 const PICKS = ["Fold", "Call", "Check", "Raise 2.5", "BET 3.35", "Bet 33%", "All-in", "RAISE 12", "Limp", "jam",
                "r4", "Bet 4.5bb", "X", "CHECK", "raise", "bet"];
@@ -188,7 +205,8 @@ for (const file of corpusFiles("reader-")) {
         if (h) {
           const saved = structuredClone(S.study);
           try {
-            const n = (h.actions || []).length;
+            // the key stands in for the API's, which never counts a post-in (utils/foldPostIns; relay.ts, 2026-09-25)
+            const n = (h.actions || []).filter((a: any) => a.type !== "post").length;
             Object.assign(S.study, { on: true, text: "golden", pick: PICKS[k % PICKS.length],
                                      decisionKey: syntheticKey(h, n + (k % 7 === 0 ? 1 : 0)),
                                      handId: k % 11 ? h.handId ?? null : (h.handId || 0) + 1, at: time(), executed: null });
