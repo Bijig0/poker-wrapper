@@ -2315,6 +2315,14 @@ async function solvePreflop6max(
           `decision at the pool's locked range), so this decision is read on ${prev.chartId}, where his earlier decision was read`;
         return { ...again, approx: true, warning: [why, again.warning].filter(Boolean).join(" · ") };
       }
+      // …AND THE KEPT CHART CANNOT CONTINUE THE LINE EITHER (round 2, harness seed 14999 [short-seat]): UTG opened K6s
+      // as picked on the chart that modelled a 45bb BTN; the BTN folded, so this decision is read on the even chart,
+      // where UTG never opens K6s; and on the kept chart the BB's 3-bet to 7.5 is a branch HRC never wrote (pruned).
+      // Neither chart has hero's hand here — the answer used to come back ok with no decision at all. The exact tree
+      // (the AI preflop piece) answers instead, as for any other line the charts cannot hold.
+      return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)",
+        reason: `CHART CHANGED UNDER HERO: hero's ${heroClass} is not in ${resolved.id}'s range at "${line || "root"}", and ${prev.chartId}, ` +
+          `where his earlier decision was read, cannot hold this line (${again && !again.ok ? again.reason : "no strategy for his hand there"}) — the AI preflop tree answers` };
     }
   }
   const rawActions = cell ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency })) : [];

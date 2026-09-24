@@ -59,6 +59,7 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 199, ops: ["unlabelled-seat", "post-in"], cls: "unlabelled-seat + post-in: a poster with no label answered (answered-corrupt-capture)", refusals: true },
   { seed: 232, ops: ["missed-fold"], cls: "missed-fold: hero's turn check dropped as a phantom — the lost-fold seat counted live (postflop-line-mismatch)" },
   { seed: 213, ops: ["missed-fold", "nl5-rounding"], cls: "the same on the flop (postflop-line-mismatch)" },
+  { seed: 14999, ops: ["short-seat"], cls: "the chart changed under hero (the short BTN folded) and the kept chart pruned the 3-bet: no decision (hero-zero-weight)" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {
