@@ -450,6 +450,12 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number; or
     } else if (CLOUD_GATED.test(String(res.reason))) {
       v = { seed, ops, street, k, verdict: "cloud-gated", kind: "needs-cloud", reason: String(res.reason).slice(0, 300), ms };
       if (street === "preflop") cloudGatedPreflop = true;
+      // …but a table of 4-6 DEALT players with its blinds is the charts', not "thinned" (the golden dead-button hands
+      // 4919260843/4919958663: five dealt, the BTN label sitting out, sent to the AI piece by the first dealt-seats cut)
+      const dealtHere = hand.seats.filter((s) => s.id !== hand.undealt).length;
+      if (street === "preflop" && /table thinned to/.test(String(res.reason)) && dealtHere >= 4 && hand.seats.some((s) => s.pos === "SB") && hand.seats.some((s) => s.pos === "BB")) {
+        v = { seed, ops, street, k, verdict: "finding", kind: "piece-routing", reason: `${dealtHere} players were dealt with both blinds, and the answer was sent to the AI piece as a thinned table (${String(res.reason).slice(0, 160)})`, ms };
+      }
     } else {
       v = { seed, ops, street, k, verdict: expectRefusal ? "expected-refusal" : "finding", kind: res.kind ?? "refused", reason: String(res.reason).slice(0, 600), ms };
     }

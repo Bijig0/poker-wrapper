@@ -54,6 +54,7 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 8, ops: ["post-in"], cls: "post-in: a folded poster's dead post missing from the flop pot (solver-input-mismatch)" },
   { seed: 1, ops: ["undealt-seat"], cls: "undealt-seat: three dealt + a sitting-out label answered from the 6-max charts (piece-routing)" },
   { seed: 5, ops: ["undealt-seat"], cls: "undealt-seat: the rake cap counted the sitting-out label (rake-cap)" },
+  { seed: 2, ops: ["undealt-seat"], cls: "undealt-seat: a dead button (five dealt) sent to the AI piece as thinned (piece-routing, golden 4919260843)" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

@@ -221,12 +221,17 @@ export const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => 
  *  route to the same charts. */
 export const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
   const six = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
-  // the DEALT seats: a three-handed table with a sitting-out label is three-handed (utils/dealtSeats, round 2)
-  const present = new Set(dealtSeats(hand, heroPos).values());
+  const present = new Set(
+    [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
+  );
+  // HOW MANY WERE DEALT decides the piece, the LABELS the tree's shape (round 2, `undealt-seat` + golden hands
+  // 4919260843/4919958663): a three-handed table with a sitting-out label is three-handed (the AI piece's), and a
+  // dead button — the BTN label on a sitting-out seat, five dealt — is still the six-seat tree with the BTN folded
+  const dealt = dealtSeats(hand, heroPos).size;
   // FOUR-HANDED IS THE SAME GAME (2026-09-17, Brady): a short table is the six-seat tree with its early seats
   // folded - the token walk already pads UTG/HJ as folds - so 4-6 seats all route to the 6-max charts; only the
   // rake cap differs, which he accepts. Three-handed stays the Zone 3-max set.
-  return present.size >= 4 && present.size <= 6
+  return dealt >= 4 && present.size <= 6
     && [...present].every((p) => six.includes(p))
     && ["BTN", "SB", "BB"].every((p) => present.has(p));
 };
