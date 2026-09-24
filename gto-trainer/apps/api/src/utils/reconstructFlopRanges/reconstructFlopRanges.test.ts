@@ -133,6 +133,11 @@ describe("classWeightsToSpec", () => {
   it("bare for full weight, class:weight otherwise", async () => {
     expect(classWeightsToSpec({ AA: 1, AKs: 0.8, T9s: 0 })).toBe("AA,AKs:0.8");
   });
+  // round 2 (range-level oracle: hero-combo-zero, seed 2807 [hero-deviates]): hero's 92s reached the flop at weight
+  // 1.6e-6 in his class range, and the spec wrote "92s:0" — the tree was built with hero's combo out of his own range
+  it("a positive weight never serialises as zero: below the spec's 4 decimals it is the smallest it can write", () => {
+    expect(classWeightsToSpec({ "92s": 0.0000016, AKs: 0.00004, QQ: 0.00005394 })).toBe("92s:0.0001,AKs:0.0001,QQ:0.0001");
+  });
 });
 
 describe("villain size-merging (ReconstructOpts.heroPos)", () => {

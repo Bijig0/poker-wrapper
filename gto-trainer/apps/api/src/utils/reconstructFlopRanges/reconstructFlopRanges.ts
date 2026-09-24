@@ -276,9 +276,15 @@ async function reconstructFlopRangesInner(
   return { ok: true, ranges: outRanges, ...(notes.length ? { notes } : {}), ...(snaps.length ? { snaps } : {}) };
 }
 
-/** class→weight map → solver range spec ("AA,AKs:0.8,…"); weight ≥0.9995 emitted bare. */
+/**
+ * class→weight map → solver range spec ("AA,AKs:0.8,…"); weight ≥0.9995 emitted bare. A POSITIVE WEIGHT NEVER
+ * WRITES AS ZERO (2026-09-25, round 2 of the input-mutation harness: hero-combo-zero, seed 2807): a class under the
+ * spec's four decimals (hero's deviating 92s limp-call at 1.6e-6) wrote "92s:0", and the tree was built with hero's
+ * own combo out of his range — the chain then answers him with an all-zero mix. It writes 0.0001, the smallest weight
+ * the spec carries: a class in the range stays in it.
+ */
 export const classWeightsToSpec = (w: Record<string, number>): string =>
   Object.entries(w)
     .filter(([, x]) => x > 0)
-    .map(([cls, x]) => (x >= 0.9995 ? cls : `${cls}:${x.toFixed(4).replace(/\.?0+$/, "")}`))
+    .map(([cls, x]) => (x >= 0.9995 ? cls : `${cls}:${Math.max(x, 0.0001).toFixed(4).replace(/\.?0+$/, "")}`))
     .join(",");
