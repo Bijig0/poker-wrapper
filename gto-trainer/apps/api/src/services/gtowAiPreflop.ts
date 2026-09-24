@@ -41,6 +41,7 @@ import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedActi
 import { rakeCapCents } from "./profiles";
 import { isTestStakeOf } from "./strategies";
 import { actorsWithAllins, foldEarliestCaller } from "../utils/fitLine/fitLine";
+import { setPreflopPin, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
 
 export const GTOW_AI_PREFLOP_SOURCE = "gtow-ai-preflop" as const;
 export const GTOW_AI_PREFLOP_TIER = "ai-preflop" as const;
@@ -516,7 +517,8 @@ function labelOf(action: any): string {
  * `why` is the reason the charts could not answer — it rides along in the note so the
  * answer trail says both what answered and why the primary piece did not.
  */
-export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | null, why: string, opts: { deadBb?: number; rakeSeats?: number } = {}): Promise<AiPreflopOutcome> {
+export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | null, why: string,
+    opts: { deadBb?: number; rakeSeats?: number; /** a last-resort call: the seats folded out of the reduced hand */ reduced?: { droppedPos: string[] } | null } = {}): Promise<AiPreflopOutcome> {
   const t0 = Date.now();
   const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
@@ -526,6 +528,10 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const key = treeKeyOf(shape, m);
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop: ${sol.error}`, line };
+  // the solution and the line hero's node was finally read on (a fit re-builds the tree with dead money and
+  // walks a repaired line) — what the preflop pin records for the flop to resume from
+  let usedSol = sol.solId;
+  let usedLine = line;
   let node = await fetchNode(sol.solId, line);
   let snapped: string[] = [];
   let fittedFolds: string[] = [];
@@ -574,6 +580,8 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
         }
       }
     }
+    usedSol = solId;
+    usedLine = fixed.line;
     node = await fetchNode(solId, fixed.line);
     if ("error" in node) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${fixed.line || "root"}' (walked from '${line}') — ${node.error}`, line };
@@ -595,6 +603,18 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
   const decision = actions.length ? pickWeightedAction(actions) : null;
   const secs = (Date.now() - t0) / 1000;
+  // THE PIN (services/preflopPin): this tree, this line, hero to act — the flop resumes here. Every prefix node is
+  // pre-fetched in the background so the resume finds them cached; the answer never waits for it.
+  const codes = usedLine ? usedLine.split("-") : [];
+  const handKey = preflopPinKey(hand);
+  if (handKey) {
+    const warm = (async () => { for (let k = 0; k < codes.length; k++) await fetchNode(usedSol, codes.slice(0, k).join("-")); })().catch(() => undefined);
+    setPreflopPin({
+      piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm,
+      id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
+      heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: hand.actions.length, at: Date.now(),
+    } satisfies AiPreflopPin);
+  }
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
@@ -725,7 +745,7 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
   const red = reduceToHeadsUp(hand, heroPos);
   if (!red) return { ok: false, reason: "last resort: hero's seat or the opponent's could not be read" };
   const dealt = Object.keys(hand.positions).length + (hand.positions[hand.heroSeatId] ? 0 : 1);
-  const r = await solvePreflopGtowAi(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: red.deadBb, rakeSeats: dealt });
+  const r = await solvePreflopGtowAi(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: red.deadBb, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos } });
   if (!r.ok) return { ok: false, kind: r.kind, reason: `last resort (hero vs ${red.aggressorPos}, ${red.droppedPos.join("/") || "nobody"} folded out): ${r.reason}` };
   const note = `LAST RESORT — no tree holds this line, so it is played as hero (${red.heroPos}) against the last aggressor (${red.aggressorPos}) alone: ` +
     `${red.droppedPos.length ? `${red.droppedPos.join(", ")} folded out with their ${red.deadBb}bb left in the pot as dead money` : "nobody else in the pot"}; ` +
@@ -863,7 +883,14 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop ranges: ${sol.error}` };
   const get = (line: string) => fetchNode(sol.solId, line);
-  const first = await walkArrivalRanges(shape, tokens, get, maxPlayers);
+  // THE LINE IS WALKED ONTO THE TREE'S OWN SIZES FIRST (2026-09-25, hand 4920397538): the tokens are our reading of
+  // the table (hero's 2.5x pick executes as 2.6bb at a 5c big blind), the tree holds its grid (2.5). The answer
+  // path and the range looker both repair the line before reading it; this walk trusted the raw tokens and refused
+  // hero's own open as "not an action at root" on every postflop street. A line the repair cannot walk keeps the
+  // raw tokens so the per-seat fit below still sees the real refusal.
+  const repaired = await repairLine(sol.solId, tokens);
+  const codes = "error" in repaired ? tokens : repaired.line.split("-").filter(Boolean);
+  const first = await walkArrivalRanges(shape, codes, get, maxPlayers);
   if (first.ok || !/is not an action/.test(first.reason)) return first;
   // THE LINE FIT, PER SEAT (as recon6max does on the charts): each live seat's range is read from a fitted line
   // that keeps THAT seat's own actions, so nobody's range is conditioned on a fold he never made
@@ -910,8 +937,11 @@ export async function walkArrivalRanges(
   const weights = new Map<string, number[]>(shape.positions.map((p) => [p, new Array(1326).fill(1)]));
   const folded = new Set<string>();
   const heroApi = shape.heroApiPos;
+  // the path is the tree's OWN codes for the tokens read so far — a snapped size (hero's 2.6 read as the node's
+  // 2.5) must advance onto the node the tree has, not the one the raw token names
+  const path: string[] = [];
   for (let k = 0; k < tokens.length; k++) {
-    const line = tokens.slice(0, k).join("-");
+    const line = path.join("-");
     const node = await getNode(line);
     if ("error" in node) return { ok: false, reason: `GTO Wizard AI preflop ranges: node '${line || "root"}' — ${node.error}` };
     const j = node.data;
@@ -928,9 +958,14 @@ export async function walkArrivalRanges(
       const want = codeNum(tok);
       const exact = sols.filter((a) => isRaiseCode(a) && Math.abs(codeNum(a.action.code) - want) <= 0.06);
       // a villain's raise: the union of the node's raise sizes (the chart walk's rule); hero's: the exact size
-      chosen = actor !== heroApi ? sols.filter(isRaiseCode) : exact;
+      // HERO'S OWN SIZE SNAPS LIKE EVERY OTHER (2026-09-25): a 0.06bb window is narrower than the client's rounding
+      // (2.5x at a 5c big blind lands on 2.6). The nearest raise the node offers is the action hero took, and the
+      // node the walk advances onto — for a villain too, whose range is the union of sizes but whose path is one.
+      const near = matchToken(tok, sols);
+      const nearest = near ? sols.filter((a) => String(a.action?.code ?? "") === near.code) : [];
+      chosen = actor !== heroApi ? sols.filter(isRaiseCode) : (exact.length ? exact : nearest);
       if (!chosen.length) chosen = sols.filter((a) => a.action?.allin === true);
-      taken = exact[0] ?? null;
+      taken = exact[0] ?? nearest[0] ?? null;
     }
     if (!chosen.length) return { ok: false, reason: `GTO Wizard AI preflop ranges: token ${tok} is not an action at '${line || "root"}'` };
     const w = weights.get(actor);
@@ -943,6 +978,7 @@ export async function walkArrivalRanges(
     }
     if (tok === "F") folded.add(actor);
     onStep?.({ line, token: tok, actor, node: j, chosen, taken: taken ?? chosen[0], before: before!, after: w.slice() });
+    path.push(String((taken ?? chosen[0])?.action?.code ?? tok));
   }
   const live = shape.positions.filter((p) => !folded.has(p));
   if (live.length < 2 || live.length > maxPlayers) {
@@ -1061,4 +1097,70 @@ function classRangeOf(w: number[]): Record<string, { w: number }> {
   for (let i = 0; i < COMBOS.length; i++) { const x = w[i] ?? 0; if (x > 0) (out[COMBOS[i]!.cls] ??= { w: 0 }).w += x; }
   for (const e of Object.values(out)) e.w = Math.round(e.w * 1000) / 1000;
   return out;
+}
+
+/**
+ * RESUME AN AI-PREFLOP PIN AT THE FLOP (services/preflopPin, 2026-09-25). The pinned solution is the one that
+ * answered hero's last preflop decision; its line is walked onto the tree's sizes (hero's own included) and every
+ * seat's arrival range is read on it. Nothing is built: the prefix nodes were pre-fetched when the pin was written,
+ * hero's node is the answer's, and only what happened after hero's decision is read fresh. A last-resort pin holds
+ * hero and the last aggressor only, so it resumes only when every other seat has folded — otherwise the caller
+ * falls through to the full walk. `get` is injectable for tests.
+ */
+export async function resumeAiPreflopRanges(
+  pin: AiPreflopPin,
+  hand: ParsedHand,
+  heroPos: string | null,
+  maxPlayers: SeatCap,
+  get: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }> = (line) => fetchNode(pin.solId, line),
+): Promise<ResumeOutcome> {
+  let walked = hand;
+  if (pin.reduced) {
+    const foldedPos = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => hand.positions[a.seatId]?.toUpperCase()).filter(Boolean));
+    const stillIn = pin.reduced.droppedPos.filter((p) => !foldedPos.has(p));
+    if (stillIn.length) return { ok: false, why: `the pinned last-resort tree holds hero and the aggressor only, but ${stillIn.join("/")} reached the flop` };
+    const red = reduceToHeadsUp(hand, heroPos);
+    if (!red) return { ok: false, why: "the pinned last-resort reduction could not be rebuilt from the hand" };
+    walked = red.hand;
+    heroPos = red.hand.positions[red.hand.heroSeatId] ?? null;
+  }
+  const { tokens: tokensNow } = lineOf(walked, pin.shape);
+  const fit = pinRest(pin, tokensNow);
+  if (!fit.ok) return fit;
+  await pin.warm;   // the prefix pre-fetch, normally long done
+  let reads = 0;
+  const counted = async (line: string) => { const n = await get(line); if (!("error" in n) && !n.cached) reads++; return n; };
+  const repaired = await repairLineWith(tokensNow, counted);
+  if ("error" in repaired) return { ok: false, why: `pinned AI tree ${pin.id}: ${repaired.error}` };
+  const codes = repaired.line ? repaired.line.split("-") : [];
+  const r = await walkArrivalRanges(pin.shape, codes, counted, maxPlayers);
+  if (!r.ok) return { ok: false, why: `pinned AI tree ${pin.id}: ${r.reason}` };
+  return {
+    ok: true, ranges: r.ranges, tokens: tokensNow, codes, seatOrder: pin.shape.positions, id: pin.id, reads,
+    note: `PREFLOP RANGES FROM THE PIN: the GTO Wizard AI preflop tree that answered hero's last preflop decision ` +
+      `(${pin.shape.n}-handed, ${pin.shape.positions.map((p) => `${p} ${pin.shape.stacks[p]}bb`).join(", ")}; hero's node at "${pin.codes.join("-") || "root"}") — ` +
+      `hero's action and ${fit.rest.length - 1} later action(s) read on the same solution, no tree rebuilt` +
+      (repaired.changed.length ? ` · sizes snapped to the tree's own: ${repaired.changed.join(", ")}` : "") +
+      (pin.reduced ? ` · LAST RESORT tree: ${pin.reduced.droppedPos.join(", ")} folded out with their chips as dead money` : ""),
+  };
+}
+
+/** repairLine over an injected node getter (the pin's resume counts its reads and tests feed synthetic nodes). */
+async function repairLineWith(tokens: string[], get: (line: string) => Promise<{ data: any } | { error: string }>): Promise<{ line: string; changed: string[] } | { error: string }> {
+  const out: string[] = [];
+  const changed: string[] = [];
+  for (const tok of tokens) {
+    const at = out.join("-");
+    const node = await get(at);
+    if ("error" in node) return { error: `walking '${at || "root"}': ${node.error}` };
+    const sols = (node.data?.action_solutions as any[]) ?? [];
+    const pick = matchToken(tok, sols);
+    if (!pick) {
+      const offered = sols.map((a) => String(a?.action?.code ?? "?")).join(", ");
+      return { error: `'${tok}' is not offered at '${at || "root"}' (offered: ${offered})` };
+    }
+    if (pick.code !== tok) changed.push(`${tok}→${pick.code}`);
+    out.push(pick.code);
+  }
+  return { line: out.join("-"), changed };
 }

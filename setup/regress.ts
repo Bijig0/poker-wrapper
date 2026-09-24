@@ -73,6 +73,17 @@ try {
 }
 
 // 2. API typecheck — errors in src/scripts/_* are scratch scripts (not shipped, not ours to fix here)
+// the input-mutation gate (2026-09-25): 30 seeds x every table/capture operator through the real answer pipeline,
+// offline (GTOW_BLOCK=1, dry postflop). Its own process on purpose: a sweep changes the GTO Wizard session state
+// that the poller test reads when both share one `bun test` run. Red = a table state with no solver input.
+try {
+  const [, out] = run([BUN, "test", "src/scripts/mutationHarness.test.ts"], API, 900, { ...process.env, MUTATION_GATE: "1", ANSWERS_DB_PATH: ":memory:" });
+  const m = /(\d+) pass\s*
+\s*(\d+) fail/.exec(out);
+  rec("api input-mutation gate", !!m && m[2] === "0", m ? `${m[1]} pass / ${m[2]} fail` : lastLines(out, 200));
+} catch (e: any) {
+  rec("api input-mutation gate", false, String(e?.message ?? e));
+}
 try {
   const [, out] = run([BUN, TSC, "--noEmit", "-p", "."], API, 600);
   const errs = tscErrors(out);

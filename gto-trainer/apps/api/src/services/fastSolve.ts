@@ -36,6 +36,9 @@ import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
+import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { resumeAiPreflopRanges } from "./gtowAiPreflop";
+import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
 /**
  * Fast-solver: answer a hand node the clean way — the local crawled preflop
@@ -908,9 +911,49 @@ async function solvePostflopViaChain(
     // 4-6 seats condition on the 6-max charts; anything thinner on the AI tree that answered preflop.
     // A hand whose log says the 3-max charts answered it is an ARCHIVED one from before the cut — it
     // replays on the strategy as it stands now, which is the AI tree.
+    // THE PIN FIRST (services/preflopPin, 2026-09-25, Brady): the piece that answered hero's LAST preflop decision
+    // supplies the flop-entering ranges, from the very tree it read — not chosen again from the shape, not rebuilt
+    // from a fresh reading of the line. A pin the capture has outgrown (the line no longer starts with it) falls
+    // through to the walk below and says so in the trace. Hero's own class at zero weight in the pinned range is a
+    // refusal said out loud: the pieces disagree about hero's hand, which is a bug to see, not a reason to swap sources.
+    const pin = getPreflopPin(preflopPinKey(hand));
+    if (pin) {
+      const tPin = Date.now();
+      const resumed: ResumeOutcome = pin.piece === "chart6max"
+        ? await resumeChartPreflopRanges(pin, hand, heroPos)
+        : await resumeAiPreflopRanges(pin, hand, heroPos, 6);
+      if (resumed.ok) {
+        const cls = heroClassOf(hand);
+        const mine = Object.entries(resumed.ranges).find(([p]) => p.toUpperCase() === (heroPosName ?? "").toUpperCase())?.[1];
+        const w = cls && mine ? mine[cls] ?? 0 : null;
+        tmark("preflop ranges resumed", `${pin.piece} ${resumed.id} · ${resumed.reads} node read(s) · ${Date.now() - tPin} ms · hero ${cls ?? "?"} weight ${w == null ? "n/a" : w.toFixed(3)}`);
+        if (cls && mine && !(w! > 0)) {
+          return fail(`PREFLOP PIN (${pin.piece} ${resumed.id}): hero's ${cls} is not in range after the line "${resumed.codes.join("-")}" — ` +
+            `the piece that answered preflop never plays this line with this hand (a chart/AI mismatch to investigate, not a fallback)`);
+        }
+        recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
+        sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
+      } else if (pin.piece === "chart6max" && /terminal before the line ends/.test(resumed.why)) {
+        // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
+        // subtree under an action that was really taken and real action followed it — a manual deviation into a
+        // ~0% line (the roll itself no longer picks one, see services/prunedPicks). The chart cannot continue the
+        // hand, so the flop-entering ranges come from a GTO Wizard AI preflop tree built from the table: one cloud
+        // solve, and the answer says the pick and the ranges came from different pieces.
+        tmark("preflop pin: pruned branch", `${resumed.why} — ranges from the AI preflop tree`);
+        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+        if (!ai.ok) return fail(`${resumed.why}; then ${ai.reason}`);
+        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+        sixNote = [sixNote,
+          `OFF THE CHART: hero's line runs into a branch the 6-max chart never solved (${resumed.why.replace(/^pinned chart [^:]+: /, "")}) — ` +
+          `the preflop pick came from the chart, the flop-entering ranges from the GTO Wizard AI preflop tree`, ai.note].filter(Boolean).join(" · ");
+      } else {
+        tmark("preflop pin unusable", `${pin.piece}: ${resumed.why}`);
+        console.log(`[preflop-pin] hand ${preflopPinKey(hand)} ${pin.piece} not resumed — ${resumed.why}`);
+      }
+    }
     const wantAi = piece === "gtow-ai-preflop" || piece === "chart3max" || !is6Handed(hand, heroPos);
     let six: Awaited<ReturnType<typeof recon6max>> | null = null;
-    if (!wantAi) {
+    if (!recon && !wantAi) {
       six = await recon6max(hand, heroPos, heroPosName, pinnedDealt);
       if (six.ok) {
         recon = six.recon; preTokens = six.tokens; seatOrder = undefined; rangeSource = six.id; sixNote = six.note;
@@ -1164,6 +1207,24 @@ async function solvePostflopViaChain(
     handKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
     planTag: w.kind,
   });
+  // THE DRY RUN (2026-09-25, the input-mutation harness): everything up to here is the SOLVER INPUT — ranges for
+  // every flop seat, the collapse plan, pot and stacks, the street tokens. The harness asks "does a solver input
+  // exist for this capture?" over thousands of mutated hands, offline; the cloud call itself is not the question.
+  // POSTFLOP_DRY_RUN=1 stops here and reports the input instead of solving. Never set in production.
+  if (process.env.POSTFLOP_DRY_RUN === "1") {
+    const heroCls = heroClassOf(hand);
+    const heroW = (() => { const r = rangeSource && recon.ok ? byPos(heroPosName) : undefined; return r && heroCls ? r[heroCls] ?? 0 : null; })();
+    return {
+      res: {
+        ok: true, source: "gtow-api-postflop", tier: "ai-chain", street: cur, setId: set.id ?? "6max-ign200", gametype: `dry-run · ${walkables.length} walkable(s)`,
+        depth, line: `${preTokens.join("-")} / ${streets.map((s) => s.join("-")).join(" | ")}`, pos: heroPosName, heroClass: heroCls,
+        actions: [], decision: null, rangeSource: rangeSource ?? undefined,
+        warning: [sixNote, `DRY RUN: solver input built — ${walkables.length} walkable(s), hero ${heroCls ?? "?"} weight ${heroW == null ? "n/a" : heroW.toFixed(3)}, pot ${reroot ? reroot.pot : flopPot}bb, stack ${reroot ? reroot.stack : flopStack}bb`].filter(Boolean).join(" · "),
+        notInRange: heroW != null && !(heroW > 0) ? true : undefined,
+      } as FastSolveResult,
+      why: null,
+    };
+  }
   const chains = process.env.CHAIN_SERIAL_COLLAPSES === "1"
     ? await (async () => { const out = []; for (const w of walkables) out.push(await solveOne(w)); return out; })()
     : await Promise.all(walkables.map(solveOne));
@@ -1711,6 +1772,10 @@ function pinPostflop(hand: ParsedHand, depthOf: (dealt: Record<number, number>) 
 export function forgetPostflopPin(handKey: string): void {
   pinnedPostflop.delete(handKey);
 }
+/** Forget a hand's preflop pin (services/preflopPin) — a replay that wants the flop to walk from scratch. */
+export function forgetPreflopPin(handKey: string): void {
+  forgetPreflopPinInner(handKey);
+}
 
 /** Postflop under the 6-max ring strategy: the shared AI path with the 6-max charts' ranges (+ the river MES shadow). */
 const solvePostflop6maxStrategy = (hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts) => solvePostflopSite(hand, heroPos, opts, SIX_MAX_SITE);
@@ -2078,11 +2143,24 @@ async function solvePreflop6max(
 
   const heroClass = heroClassOf(hand);
   const cell = heroClass ? heroNode.cells.find((c) => c.hand === heroClass) : undefined;
-  const actions = cell ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency })) : [];
+  const rawActions = cell ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency })) : [];
+  // NEVER ROLL INTO A BRANCH HRC NEVER WROTE (services/prunedPicks, 2026-09-25): an action whose child node is
+  // pruned is dropped before the roll and the mix re-spread, so hero's own pick can always be continued at the flop
+  const prunedPick = await dropPrunedPicks(rawActions, heroNode, borrowed?.line ?? line, get);
+  const actions = prunedPick.actions;
   const decision = actions.length ? pickWeightedAction(actions) : null;
+
+  // THE PIN (services/preflopPin, 2026-09-25): this chart and this line are what the flop resumes from — the
+  // last preflop answer of the hand names the ranges the postflop chain starts with.
+  const pinKey = preflopPinKey(hand);
+  if (pinKey) {
+    setPreflopPin({ piece: "chart6max", handKey: pinKey, chartId: resolved.id, codes: walk.tokens, rawTokens: tokens,
+      heroPos: heroSeatPos || nodePos, depth: choice.depth, actionIndex: hand.actions.length, at: Date.now() });
+  }
 
   const notes = [
     choice.note,
+    prunedPicksNote(prunedPick.dropped),
     resolved.fellBack ? `no ${choice.id} tree in the set — answered from ${resolved.id}` : null,
     // A snap past τ is an APPROXIMATION we chose to make rather than leave the
     // spot unanswered (2026-09-21) — it must never read like an exact answer.

@@ -132,7 +132,18 @@ export async function reconstructFlopRanges(
       }
     }
     if (!node) return { ok: false, reason: `preflop node "${out.join("-")}" not in the charts` };
-    if (node.terminal) return { ok: false, reason: `preflop node "${out.join("-")}" is terminal before the line ends` };
+    if (node.terminal) {
+      // A TERMINAL FOLLOWED ONLY BY FOLDS IS THE FLOP (2026-09-25, hand 4920396764). The converter marks a subtree
+      // HRC never exported (an action it plays at ~0%, e.g. a 30bb small blind flat-calling a button open) as
+      // "closes the preflop action", so the walk met a terminal at the SB's call with the BB's fold still to read.
+      // Seats that fold after the tree's close never put money in and hold no range to drop — the players who
+      // reached the flop are already known. Anything other than folds past a terminal is still a broken line.
+      if (tokens.slice(k).every((t) => t === "F")) {
+        notes.push(`the chart holds no node after "${out.join("-")}" (a branch it plays at ~0%); the ${tokens.length - k} remaining fold(s) were taken as read`);
+        break;
+      }
+      return { ok: false, reason: `preflop node "${out.join("-")}" is terminal before the line ends` };
+    }
     let pos = node.pos;
     if (!pos) return { ok: false, reason: `preflop node "${out.join("-")}" has no acting position` };
 

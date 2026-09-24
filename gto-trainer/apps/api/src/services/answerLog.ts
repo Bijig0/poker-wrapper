@@ -208,6 +208,11 @@ export function failKindOf(reason: string | null | undefined): FailKind {
   // sizes: hrc3max/hrc6max snap refusals ("nearest size R40 is too far from R75",
   // "nearest size R40 is more than 2x away from R75")
   if (r.includes("nearest size") && (r.includes("too far") || r.includes("more than 2x away"))) return "size-too-far";
+  // a chart node the walk met as terminal while the line went on: the CHART is missing the branch (the converter
+  // labels a subtree HRC never exported as "closes the preflop action") — a tree gap, and it must be tested BEFORE
+  // the multiway needle because the 6-max refusal appends "…; BTN's range on the fitted line: 1 players reach the
+  // flop" to it (2026-09-25, hand 4920396764 sat under multiway-unsupported)
+  if (r.includes("terminal before the line ends")) return "tree-gap";
   // table shape and multiway, before the generic line/tree needles
   if (r.includes("players reach the flop")) return "multiway-unsupported";
   if (r.includes("table thinned") || r.includes("seats: the ai preflop piece covers")) return "table-shape";

@@ -127,3 +127,79 @@ describe("walkArrivalRanges", () => {
     }
   });
 });
+
+/**
+ * HERO'S OWN SIZE SNAPS (2026-09-25, hand 4920397538): the 2.5x pick executes as 2.6bb at a 5c big blind, the
+ * tree holds 2.5 — the walk used to refuse hero's own open as "not an action at root" on every postflop street.
+ * And the PIN: the tree that answered hero's last preflop decision resumes at the flop on the same solution.
+ */
+import { resumeAiPreflopRanges } from "./gtowAiPreflop";
+import type { AiPreflopPin } from "./preflopPin";
+
+describe("hero's off-grid size and the preflop pin", () => {
+  // 3-handed: BTN (hero) opens 2.6, SB folds, BB calls
+  const openHand: ParsedHand = {
+    ...hand3, heroSeatId: 5, heroCards: ["Ah", "9h"], positions: { 1: "SB", 5: "BTN", 6: "BB" },
+    actions: [
+      { seatId: 1, hero: false, type: "post-sb", amount: 0.5, street: "preflop" },
+      { seatId: 6, hero: false, type: "post-bb", amount: 1, street: "preflop" },
+      { seatId: 5, hero: true, type: "raise", amount: 2.6, street: "preflop" },
+      { seatId: 1, hero: false, type: "fold", street: "preflop" },
+      { seatId: 6, hero: false, type: "call", amount: 1.6, street: "preflop" },
+    ],
+  };
+  const a9 = comboIndex("Ah", "9h"), t2 = comboIndex("Th", "2d");
+  const nodes: Record<string, any> = {
+    "": node("BTN", [
+      { code: "F", strategy: arr((i) => (i === a9 ? 0 : i === t2 ? 1 : 0.5)) },
+      { code: "R2.5", strategy: arr((i) => (i === a9 ? 1 : i === t2 ? 0 : 0.3)) },
+      { code: "R3", strategy: arr((i) => (i === a9 ? 0 : i === t2 ? 0 : 0.2)) },
+    ]),
+    "R2.5": node("SB", [{ code: "F", strategy: arr(1) }, { code: "C", strategy: arr(0) }]),
+    "R2.5-F": node("BB", [{ code: "F", strategy: arr(0.5) }, { code: "C", strategy: arr(0.5) }]),
+  };
+  const fetched: string[] = [];
+  const get = async (line: string) => { fetched.push(line); return nodes[line] ? { ...nodes[line], cached: false } : { error: `no node ${line}` }; };
+
+  it("walkArrivalRanges reads hero's 2.6 as the node's 2.5 and advances onto the 2.5 branch", async () => {
+    const shape = shapeOf(openHand, null);
+    if ("error" in shape) throw new Error(shape.error);
+    const { tokens } = lineOf(openHand, shape);
+    expect(tokens).toEqual(["R2.6", "F", "C"]);
+    const r = await walkArrivalRanges(shape, tokens, async (line) => nodes[line] ?? { error: `no node ${line}` }, 6);
+    if (!r.ok) throw new Error(r.reason);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BB", "BTN"]);
+    expect(r.ranges.BTN!.A9s).toBeCloseTo((1 + 3 * 0.3) / 4, 5);   // the exact R2.5 branch, not the union
+    expect(r.ranges.BB!.AA).toBeCloseTo(0.5, 5);
+  });
+
+  it("resumeAiPreflopRanges: the pinned solution, hero's snapped action and the later actions, no tree rebuilt", async () => {
+    const shape = shapeOf(openHand, null);
+    if ("error" in shape) throw new Error(shape.error);
+    const pin: AiPreflopPin = {
+      piece: "gtow-ai-preflop", handKey: "t", solId: "sol-1", shape, codes: [], rawTokens: [], id: "gtow-ai · 3-handed",
+      heroPos: "BTN", reduced: null, warm: null, actionIndex: 2, at: 0,
+    };
+    fetched.length = 0;
+    const r = await resumeAiPreflopRanges(pin, openHand, null, 6, get);
+    if (!r.ok) throw new Error(r.why);
+    expect(r.codes).toEqual(["R2.5", "F", "C"]);
+    expect(r.tokens).toEqual(["R2.6", "F", "C"]);
+    expect(r.ranges.BTN!.A9s).toBeCloseTo((1 + 3 * 0.3) / 4, 5);
+    expect(r.note).toContain("R2.6→R2.5");
+    expect(r.seatOrder).toEqual(shape.positions);
+    expect(fetched.every((l) => l in nodes)).toBe(true);           // never asked the tree for an "R2.6" node
+  });
+
+  it("resumeAiPreflopRanges refuses a pin the capture has outgrown", async () => {
+    const shape = shapeOf(openHand, null);
+    if ("error" in shape) throw new Error(shape.error);
+    const pin: AiPreflopPin = {
+      piece: "gtow-ai-preflop", handKey: "t", solId: "sol-1", shape, codes: ["R3"], rawTokens: ["R3"], id: "gtow-ai · 3-handed",
+      heroPos: "BTN", reduced: null, warm: null, actionIndex: 2, at: 0,
+    };
+    const r = await resumeAiPreflopRanges(pin, openHand, null, 6, get);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.why).toContain("no longer starts with the pinned one");
+  });
+});

@@ -102,6 +102,33 @@ describe("reconstructFlopRanges", () => {
   });
 });
 
+describe("a terminal the chart wrote over a branch it never held (2026-09-25, hand 4920396764)", () => {
+  // CO opens, BTN calls, SB folds, BB folds — but the chart marks the node after BTN's call terminal (the
+  // converter's label for a subtree HRC never exported). The folds past it hold no range: the flop is CO vs BTN.
+  const pruned: Record<string, RawNode> = {
+    ...nodes,
+    "F-F-R2.5": {
+      pos: "BTN", terminal: false, actions: [{ action: "Fold", token: "F" }, { action: "Call", token: "C" }],
+      cells: [{ hand: "JTs", actions: { Call: 70, Fold: 30 } }],
+    },
+    "F-F-R2.5-C": { pos: "BTN", terminal: true, actions: [], cells: [] },
+  };
+  const get = (l: string): RawNode | null => pruned[l] ?? null;
+  it("takes the remaining folds as read and reaches the flop with the players already known", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.5-C-F-F".split("-"), get);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(Object.keys(r.ranges).sort()).toEqual(["BTN", "CO"]);
+    expect(r.ranges["BTN"]!["JTs"]).toBeCloseTo(0.7);
+    expect(r.notes?.[0]).toContain("remaining fold(s) were taken as read");
+  });
+  it("anything but folds past the terminal is still a broken line", async () => {
+    const r = await reconstructFlopRanges("F-F-R2.5-C-F-C".split("-"), get);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("terminal before the line ends");
+  });
+});
+
 describe("classWeightsToSpec", () => {
   it("bare for full weight, class:weight otherwise", async () => {
     expect(classWeightsToSpec({ AA: 1, AKs: 0.8, T9s: 0 })).toBe("AA,AKs:0.8");
