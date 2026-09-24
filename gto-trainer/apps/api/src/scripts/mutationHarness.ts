@@ -163,7 +163,11 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
       const policyPick = isHero && street === 0 && heroPolicy && !(o.heroDeviates && rng.chance(0.3)) ? await heroPolicy(hand, street) : null;
       if (policyPick) {
         type = policyPick.type;
-        if (type === "raise" || type === "all-in") { to = policyPick.to ?? minTo; if (to < minTo && type === "raise") to = minTo; if (to >= prev + stack - 0.01) { to = r2(prev + stack); type = "all-in"; } }
+        // an "All-in" pick is the client's all-in button: hero's whole stack. It used to take the min-raise here (no
+        // size in the label) and stay typed all-in, so a 175bb hero "went all-in for 30" and then acted again — the
+        // flop refused the capture as "CO acted preflop after going all-in" (seed 1065 [deep-seat], a generator bug)
+        if (type === "all-in") to = r2(prev + stack);
+        if (type === "raise") { to = policyPick.to ?? minTo; if (to < minTo) to = minTo; if (to >= prev + stack - 0.01) { to = r2(prev + stack); type = "all-in"; } }
         if (type === "call" && owe <= 0.01) type = "check";
         if (type === "check" && owe > 0.01) type = "call";
         if ((type === "raise") && !canRaise) type = owe > 0.01 ? "call" : "check";
