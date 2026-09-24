@@ -19,7 +19,7 @@ import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedActi
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
 import type { Walk3Repair } from "./hrc3max";
-import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
+import { walkFitted } from "../utils/fitLine/fitLine";
 import { reconstructFlopRanges, classWeightsToSpec } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
@@ -36,7 +36,7 @@ import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
-import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
@@ -1705,29 +1705,16 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
     // others instead — the same shortcut, pointed at a different player each time. The pot and stacks stay
     // those of the REAL line (the caller's `tokens`), since every one of those chips is really in the middle.
     const firstFail = recon.reason;
-    const getHrc = (line: string) => get(line);
-    const who = actorsWithAllins(tokens, choice.depth);
-    const foldedSeats = new Set(tokens.map((t, i) => (t === "F" ? who[i] : null)).filter((x): x is string => !!x));
-    const live = ["UTG", "HJ", "CO", "BTN", "SB", "BB"].filter((x) => !foldedSeats.has(x));
-    const ranges: Record<string, Record<string, number>> = {};
-    const borrowed: string[] = [];
-    for (const seat of live) {
-      const tFit = Date.now();
-      const fit = await walkFitted(tokens, getHrc, { heroSeat: heroPosName, protect: [seat], stack: choice.depth, acceptTerminal: true });
-      if (Date.now() - tFit > 1000) console.log(`[ranges] walkFitted for ${seat} took ${Date.now() - tFit} ms (${fit.fitted ? `fitted: ${fit.fittedLine?.join("-")}` : fit.ok ? "not fitted" : fit.reason?.slice(0, 80)})`);
-      if (!fit.fitted || !fit.fittedLine) return { ok: false, reason: `6-max chart ${resolved.id}: ${firstFail}; fitting the line for ${seat}'s range: ${fit.ok ? "" : fit.reason}` };
-      const r = await reconstructFlopRanges(fit.fittedLine, async (line) => {
-        const n = await get(line);
-        return n === "unreachable" ? null : n;
-      }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 6 });
-      const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
-      if (!mine) return { ok: false, reason: `6-max chart ${resolved.id}: ${firstFail}; ${seat}'s range on the fitted line: ${r.ok ? "absent" : r.reason}` };
-      ranges[seat] = mine;
-      if (fit.folds.length) borrowed.push(`${seat} (with ${fit.folds.map((f) => f.seat).join("+")} folded)`);
-    }
-    recon = { ok: true, ranges };
+    const tFit = Date.now();
+    const per = await fittedRangesBySeat(tokens, async (line) => {
+      const n = await get(line);
+      return n === "unreachable" ? null : n;
+    }, { heroPos: mergeHeroPos(heroPosName, false) ?? null, depth: choice.depth });
+    if (Date.now() - tFit > 1000) console.log(`[ranges] fitted per-seat walk took ${Date.now() - tFit} ms (${per.ok ? "ok" : per.reason.slice(0, 80)})`);
+    if (!per.ok) return { ok: false, reason: `6-max chart ${resolved.id}: ${firstFail}; ${per.reason}` };
+    recon = { ok: true, ranges: per.ranges };
     fitNote = `LINE FITTED FOR THE RANGES: the tree holds two limpers, two callers and four entrants, so ` +
-      `${borrowed.join(", ")} ${borrowed.length === 1 ? "was" : "were"} read from a line with fewer players in — pot and stacks are the real ones`;
+      `${per.borrowed.join(", ")} ${per.borrowed.length === 1 ? "was" : "were"} read from a line with fewer players in — pot and stacks are the real ones`;
   }
   const note = [
     choice.note,

@@ -2,6 +2,8 @@ import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { reconstructFlopRanges, type RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { nodeGetter } from "./hrc6max";
+import type { GetNode, HrcNode } from "./hrc3max";
+import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
 import type { AiPreflopShape } from "./gtowAiPreflop";
 import { tmark } from "./answerTrace";
 
@@ -116,13 +118,42 @@ export async function resumeChartPreflopRanges(
   const tokensNow = buildPreflopTokens(hand, heroPos);
   const fit = pinRest(pin, tokensNow);
   if (!fit.ok) return fit;
+  let reads = 0;
+  const counted = async (l: string) => { reads++; return get(l); };
+  // THE SEATS MUST BE THE TABLE'S (2026-09-25, mutation harness `limps`). The walk below is positional: it hands
+  // each token to whoever the tree says acts next. That only works while the tree's path and the capture keep the
+  // same players in — and a FITTED pin does not: hero's decision was read with a limper folded out of the line
+  // (utils/fitLine), and when that limper then calls hero's squeeze (seed 111: flop BB vs UTG) the resume handed
+  // UTG's call to the HJ and the flop had no UTG range at all ("reconstructed ranges don't cover both seats").
+  // So a fitted pin reads every flop seat's range from a fitted line that KEEPS that seat, on the pinned chart —
+  // the rule recon6max applies to an unpinned hand; for hero it is the same fold his pinned decision was read with.
+  // And every other resume is checked against the capture: the seats that reach the flop by the capture's own line
+  // must be the seats the walk returned ranges for, or the same per-seat read replaces it.
+  const want = flopSeatsOf(tokensNow, pin.depth);
+  const perSeat = async (why: string): Promise<ResumeOutcome> => {
+    const per = await fittedRangesBySeat(tokensNow, counted, { heroPos: pin.heroPos, depth: pin.depth });
+    if (!per.ok) return { ok: false, why: `pinned chart ${pin.chartId}: ${why}; ${per.reason}` };
+    return {
+      ok: true, ranges: per.ranges, tokens: tokensNow, codes: per.heroLine, seatOrder: undefined, id: pin.chartId, reads,
+      note: `PREFLOP RANGES FROM THE PIN: the 6-max chart that answered hero's last preflop decision (${pin.chartId}, hero's node at "${pin.codes.join("-") || "root"}") — ` +
+        `${why}, so each flop seat's range is read from a fitted line that keeps that seat` +
+        (per.borrowed.length ? ` (${per.borrowed.join(", ")})` : "") + `; no chart chosen again`,
+    };
+  };
+  const foldedOut = pin.rawTokens.map((t, i) => (t !== "F" && pin.codes[i] === "F" ? i : -1)).filter((i) => i >= 0);
+  if (foldedOut.length || pin.codes.length !== pin.rawTokens.length) {
+    return perSeat(`hero's decision was read on a line fitted to the tree (${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out)`);
+  }
   // the tree's prefix + the rest as played: reconstructFlopRanges snaps each later size to the node's own
   const line = [...pin.codes, ...fit.rest];
-  let reads = 0;
   const stepped: string[] = [];   // the tree's own token at every decision read (a snapped size shows as the node's)
-  const recon = await reconstructFlopRanges(line, async (l) => { reads++; return get(l); },
+  const recon = await reconstructFlopRanges(line, counted,
     { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, onStep: (s) => stepped.push(s.token) });
   if (!recon.ok) return { ok: false, why: `pinned chart ${pin.chartId}: ${recon.reason}` };
+  const got = Object.keys(recon.ranges).map((p) => p.toUpperCase());
+  if (!sameSeats(want, got)) {
+    return perSeat(`the tree's path reached the flop with ${got.join("/") || "nobody"} where the table has ${want.join("/")}`);
+  }
   const codes = [...stepped, ...line.slice(stepped.length)];
   return {
     ok: true, ranges: recon.ranges, tokens: tokensNow, codes, seatOrder: undefined, id: pin.chartId, reads,
@@ -130,4 +161,50 @@ export async function resumeChartPreflopRanges(
       `hero's action and ${fit.rest.length - 1} later action(s) read on the same tree; no chart chosen again` +
       (recon.notes?.length ? ` · ${recon.notes.map((n) => `RANGE SHORTCUT: ${n}`).join(" · ")}` : ""),
   };
+}
+
+const SEATS6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"] as const;
+
+/** The seats that reach the flop by a 6-max token line (positional, all-in aware): every seat whose last token is not a fold. */
+export function flopSeatsOf(tokens: string[], depth: number): string[] {
+  const who = actorsWithAllins(tokens, depth);
+  const last = new Map<string, string>();
+  tokens.forEach((t, i) => { const s = who[i]; if (s) last.set(s, t); });
+  return SEATS6.filter((s) => last.has(s) && last.get(s) !== "F");
+}
+
+const sameSeats = (a: string[], b: string[]): boolean => {
+  const x = new Set(a.map((s) => s.toUpperCase())), y = new Set(b.map((s) => s.toUpperCase()));
+  return x.size === y.size && [...x].every((s) => y.has(s));
+};
+
+/**
+ * EVERY FLOP SEAT'S RANGE FROM A LINE THAT KEEPS IT (utils/fitLine). A line the capped tree cannot hold (three
+ * limpers, an iso with three callers) is fitted by folding the earliest plain caller; the player a fit folds may
+ * well be at the flop, so each seat's range is read from a fitted line that PROTECTS that seat (hero is never
+ * folded). The pot and stacks stay the real line's — the caller's business. Shared by the pin resume and the
+ * unpinned walk (fastSolve.recon6max). `heroLine` is the fitted line hero's own range was read on.
+ */
+export async function fittedRangesBySeat(
+  tokens: string[],
+  get: (line: string) => Promise<RawNode | null>,
+  o: { heroPos: string | null; depth: number },
+): Promise<{ ok: true; ranges: Record<string, Record<string, number>>; borrowed: string[]; heroLine: string[] } | { ok: false; reason: string }> {
+  const getHrc: GetNode = async (l) => (await get(l)) as HrcNode | null;
+  const ranges: Record<string, Record<string, number>> = {};
+  const borrowed: string[] = [];
+  let heroLine: string[] = tokens;
+  for (const seat of flopSeatsOf(tokens, o.depth)) {
+    const fit = await walkFitted(tokens, getHrc, { heroSeat: o.heroPos, protect: [seat], stack: o.depth, acceptTerminal: true });
+    if (!fit.fitted || !fit.fittedLine) return { ok: false, reason: `fitting the line for ${seat}'s range: ${fit.ok ? "no fit" : fit.reason}` };
+    // partial: only THIS seat's range is wanted, and the fitted line may leave it alone at the flop (hero squeezes,
+    // and the limper who called it is the one the fit folded) — a player count says nothing about one seat's range
+    const r = await reconstructFlopRanges(fit.fittedLine, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true });
+    const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
+    if (!mine) return { ok: false, reason: `${seat}'s range on the fitted line "${fit.fittedLine.join("-")}": ${r.ok ? "absent" : r.reason}` };
+    ranges[seat] = mine;
+    if (fit.folds.length) borrowed.push(`${seat} with ${fit.folds.map((f) => f.seat).join("+")} folded`);
+    if (o.heroPos && seat === o.heroPos.toUpperCase()) heroLine = fit.fittedLine;
+  }
+  return { ok: true, ranges, borrowed, heroLine };
 }

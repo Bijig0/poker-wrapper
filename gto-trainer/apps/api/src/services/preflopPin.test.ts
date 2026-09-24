@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { setPreflopPin, getPreflopPin, forgetPreflopPin, pinRest, resumeChartPreflopRanges, type ChartPreflopPin } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, forgetPreflopPin, pinRest, resumeChartPreflopRanges, flopSeatsOf, type ChartPreflopPin } from "./preflopPin";
 import type { RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -94,5 +94,67 @@ describe("resumeChartPreflopRanges", () => {
     const r = await resumeChartPreflopRanges({ ...pinAtOpen, rawTokens: ["F", "R3", "F"], codes: ["F", "R3", "F"] }, flopHand, "BTN", get);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.why).toContain("no longer starts with the pinned one");
+  });
+});
+
+/**
+ * A FITTED PIN (2026-09-25, mutation harness seed 111 [limps]). Two limpers, hero in the BB squeezes, the FIRST
+ * limper calls. The tree (like the real limp charts) holds one limper only, so hero's decision was read with UTG's
+ * limp folded out — and UTG is the player hero meets on the flop. The old resume walked the pinned codes + the
+ * rest positionally and handed UTG's call to the HJ: the flop had no UTG range ("reconstructed ranges don't cover
+ * both seats"). Each flop seat is now read from a fitted line that keeps it, on the pinned chart.
+ */
+describe("resumeChartPreflopRanges — a pin read on a fitted line", () => {
+  const node = (pos: string, acts: [string, string][], cells: RawNode["cells"] = []): RawNode =>
+    ({ pos, terminal: false, actions: acts.map(([action, token]) => ({ action, token })), cells });
+  const T: RawNode = { pos: null, terminal: true, actions: [], cells: [] };
+  const FC: [string, string][] = [["Fold", "F"], ["Call", "C"]];
+  const limpChart: Record<string, RawNode> = {
+    "": node("UTG", FC, [{ hand: "87s", actions: { Call: 50, Fold: 50 } }]),
+    "C": node("HJ", [["Fold", "F"]]),                       // the cap: no second limper
+    "F": node("HJ", FC, [{ hand: "87s", actions: { Call: 100 } }]),
+    // hero's decision, read with UTG folded out
+    "F-C": node("CO", FC), "F-C-F": node("BTN", FC), "F-C-F-F": node("SB", FC),
+    "F-C-F-F-F": node("BB", [["Check", "X"], ["Raise 4", "R4"]], [{ hand: "AKo", actions: { "Raise 4": 100 } }, { hand: "72o", actions: { Check: 100 } }]),
+    "F-C-F-F-F-R4": node("HJ", FC, [{ hand: "87s", actions: { Call: 30, Fold: 70 } }]),
+    "F-C-F-F-F-R4-F": T,
+    // UTG's range, read with the HJ folded out instead
+    "C-F": node("CO", FC), "C-F-F": node("BTN", FC), "C-F-F-F": node("SB", FC),
+    "C-F-F-F-F": node("BB", [["Check", "X"], ["Raise 4", "R4"]], [{ hand: "AKo", actions: { "Raise 4": 100 } }]),
+    "C-F-F-F-F-R4": node("UTG", FC, [{ hand: "87s", actions: { Call: 40, Fold: 60 } }]),
+    "C-F-F-F-F-R4-C": T,
+  };
+  const getLimp = async (line: string): Promise<RawNode | null> => limpChart[line] ?? null;
+  const a = (seatId: number, type: string, amount?: number, hero = false, street = "preflop") =>
+    ({ seatId, hero, type, street, ...(amount != null ? { amount } : {}) }) as ParsedHand["actions"][number];
+  // seats: 1 UTG, 2 HJ, 3 CO, 4 BTN, 5 SB, 6 BB (hero)
+  const squeezeFlop: ParsedHand = {
+    handId: 111, clientHandId: "mh-111-limps", bbCents: 200, heroSeatId: 6, heroCards: ["Ah", "Kd"], board: ["2c", "2s", "Ks"], street: "flop",
+    actions: [a(5, "post-sb", 0.5), a(6, "post-bb", 1, true), a(1, "call", 1), a(2, "call", 1), a(3, "fold"), a(4, "fold"), a(5, "fold"),
+      a(6, "raise", 4, true), a(1, "call", 3), a(2, "fold")],
+    liveSeats: [1, 2, 3, 4, 5, 6], committed: {}, potByStreet: {}, positions: { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" },
+    currentNode: { street: "flop", toActSeatId: 6, toActIsHero: true, pot: 10.5, toCall: 0, legalActions: [], complete: false }, ended: false,
+  };
+  const fittedPin: ChartPreflopPin = {
+    piece: "chart6max", handKey: "mh-111-limps", chartId: "ign200_6max_D100_olimp_pool3",
+    rawTokens: ["C", "C", "F", "F", "F"], codes: ["F", "C", "F", "F", "F"], heroPos: "BB", depth: 100, actionIndex: 7, at: 0,
+  };
+
+  it("the flop seats are the table's (BB and UTG), each read on a line that keeps it", async () => {
+    const r = await resumeChartPreflopRanges(fittedPin, squeezeFlop, "BB", getLimp);
+    if (!r.ok) throw new Error(r.why);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BB", "UTG"]);
+    expect(r.ranges.BB!.AKo).toBeCloseTo(1, 5);                 // hero's squeeze, on the fold his decision was read with
+    expect(r.ranges.BB!["72o"]).toBeUndefined();
+    expect(r.ranges.UTG!["87s"]).toBeCloseTo(0.5 * 0.4, 5);     // limp, then call the squeeze — with the HJ folded out
+    expect(r.codes).toEqual(["F", "C", "F", "F", "F", "R4", "F"]);
+    expect(r.tokens).toEqual(["C", "C", "F", "F", "F", "R4", "C", "F"]);   // the capture's own line, for the pot
+    expect(r.note).toContain("fitted line that keeps that seat");
+    expect(r.note).toContain("UTG with HJ folded");
+  });
+
+  it("flopSeatsOf reads the seats from the capture's line, not the tree's", () => {
+    expect(flopSeatsOf(["C", "C", "F", "F", "F", "R4", "C", "F"], 100)).toEqual(["UTG", "BB"]);
+    expect(flopSeatsOf(["F", "F", "F", "R2.6", "C", "F"], 100)).toEqual(["BTN", "SB"]);
   });
 });
