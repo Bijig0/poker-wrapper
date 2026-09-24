@@ -17,9 +17,9 @@ import { comboIndex } from "../utils/comboIndex/comboIndex";
 import { solveStore } from "./solveStore";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
-import { SNAP_TAU } from "../utils/snapToken/snapToken";
+import { SNAP_TAU, SNAP_MAX } from "../utils/snapToken/snapToken";
 import type { Walk3Repair } from "./hrc3max";
-import { walkFitted, foldSeatsOut } from "../utils/fitLine/fitLine";
+import { walkFitted, foldSeatsOut, actorsWithAllins } from "../utils/fitLine/fitLine";
 import { reconstructFlopRanges, classWeightsToSpec } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
@@ -922,34 +922,34 @@ async function solvePostflopViaChain(
       const resumed: ResumeOutcome = pin.piece === "chart6max"
         ? await resumeChartPreflopRanges(pin, hand, heroPos)
         : await resumeAiPreflopRanges(pin, hand, heroPos, 6);
-      if (resumed.ok) {
-        const cls = heroClassOf(hand);
-        const mine = Object.entries(resumed.ranges).find(([p]) => p.toUpperCase() === (heroPosName ?? "").toUpperCase())?.[1];
-        const w = cls && mine ? mine[cls] ?? 0 : null;
+      const cls = heroClassOf(hand);
+      const mine = resumed.ok ? Object.entries(resumed.ranges).find(([p]) => p.toUpperCase() === (heroPosName ?? "").toUpperCase())?.[1] : undefined;
+      const w = cls && mine ? mine[cls] ?? 0 : null;
+      const zeroHero = resumed.ok && !!cls && !!mine && !(w! > 0);
+      // HERO LEFT THE PICK (2026-09-25, Brady's rule 3 — veto-able): hero took an action his own pick gave 0%
+      // (preflopPin.heroDeviation, from what each answer told him), and the pinned chart either cannot continue the
+      // hand (it has no such action — a completed small blind in a raise-only tree, seed 1865) or holds his class at
+      // zero weight after it. That is not a bug in the pieces — the chart has no range for "hands that did this" —
+      // so the flop-entering ranges come from the GTO Wizard AI preflop tree built from the table, as for a pruned
+      // branch (OFF THE CHART, below). A zero weight after following every pick stays the loud refusal.
+      const dev = pin.piece === "chart6max" && (!resumed.ok || zeroHero) ? heroDeviation(pin.picks, buildPreflopTokens(hand, heroPos)) : null;
+      if (dev) {
+        const devNote = `OFF THE CHART (hero's own line): at "${dev.codes.join("-") || "root"}" hero took ${dev.action ?? dev.took}, which the pick gave ${dev.heroClass ?? cls ?? "his hand"} 0%, ` +
+          `so the chart has no flop range for his hand — the flop-entering ranges come from the GTO Wizard AI preflop tree`;
+        tmark("preflop pin: hero deviated", devNote);
+        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+        if (!ai.ok) return fail(`${devNote}; then ${ai.reason}`);
+        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+        sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
+      } else if (resumed.ok) {
         tmark("preflop ranges resumed", `${pin.piece} ${resumed.id} · ${resumed.reads} node read(s) · ${Date.now() - tPin} ms · hero ${cls ?? "?"} weight ${w == null ? "n/a" : w.toFixed(3)}`);
-        // HERO LEFT THE PICK (2026-09-25, Brady's rule 3 — veto-able): hero's class at zero weight because hero himself
-        // took an action his pick gave 0% (preflopPin.heroDeviation, from what each answer told him) is not a bug in
-        // the pieces — the chart has no range for "hands that did this". The flop-entering ranges then come from the
-        // GTO Wizard AI preflop tree built from the table, as for a pruned branch (OFF THE CHART, below). A zero weight
-        // after following every pick stays the loud refusal: that one IS a mismatch to investigate.
-        const dev = cls && mine && !(w! > 0) && pin.piece === "chart6max" ? heroDeviation(pin.picks, resumed.tokens) : null;
-        if (cls && mine && !(w! > 0) && !dev) {
+        if (zeroHero) {
           return fail(`PREFLOP PIN (${pin.piece} ${resumed.id}): hero's ${cls} is not in range after the line "${resumed.codes.join("-")}" — ` +
             `the piece that answered preflop never plays this line with this hand (a chart/AI mismatch to investigate, not a fallback)`);
         }
-        if (dev) {
-          const devNote = `OFF THE CHART (hero's own line): at "${dev.codes.join("-") || "root"}" hero took ${dev.action ?? dev.took}, which the pick gave ${dev.heroClass ?? cls} 0%, ` +
-            `so the chart has no flop range for his hand — the flop-entering ranges come from the GTO Wizard AI preflop tree`;
-          tmark("preflop pin: hero deviated", devNote);
-          const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
-          if (!ai.ok) return fail(`${devNote}; then ${ai.reason}`);
-          recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
-          sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
-        } else {
-          recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
-          sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
-        }
-      } else if (pin.piece === "chart6max" && /terminal before the line ends/.test(resumed.why)) {
+        recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
+        sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
+      } else if (pin.piece === "chart6max" && !resumed.ok && resumed.prunedBranch) {
         // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
         // subtree under an action that was really taken and real action followed it — a manual deviation into a
         // ~0% line (the roll itself no longer picks one, see services/prunedPicks). The chart cannot continue the
@@ -1016,7 +1016,10 @@ async function solvePostflopViaChain(
   // heads-up the dealer is the tree's SB and the table's BTN: either name finds the seat
   const byPos = (pos: string) =>
     findPos(pos) ?? (isHu ? findPos(pos.toUpperCase() === "SB" ? "BTN" : pos.toUpperCase() === "BTN" ? "SB" : pos) : undefined);
-  const pps = preflopPotStack(preTokens, depth, seatOrder);
+  // each preflop all-in's own size (a short stack's jam is not an all-in for the whole depth — aiStudyLine.preflopPotStack)
+  const allInTo = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in").map((a) => Number(a.amount));
+  const pps = preflopPotStack(preTokens, depth, seatOrder,
+    allInTo.length === preTokens.filter((t) => t === "RAI").length && allInTo.every((x) => Number.isFinite(x) && x > 0) ? allInTo : undefined);
   // THE ANTES ARE IN THE POT (2026-09-22). preflopPotStack counts blinds and bets only; a CoinPoker HU hand also
   // put 2 x ante of dead money in. Left out, the flop solve plays a 5.4bb pot as 5bb. The STACK needs nothing:
   // the depth handed in (solvePostflopHuStrategy) is already the stack after the ante.
@@ -2053,8 +2056,9 @@ async function solvePreflop6max(
   heroPos: string | null,
   origin?: string,
   strategyId?: string | null,
-  /** read the decision on THIS chart (the one hero's earlier decision was read from) instead of the picker's */
-  keepChart?: string,
+  /** a second read after hero's class had no cell: `keepChart` — on the chart hero's earlier decision was read from
+   *  instead of the picker's; `keepCallers` — never folding a caller that earlier decision was read with */
+  retry: { keepChart?: string; keepCallers?: boolean } = {},
 ): Promise<FastSolveResult | null> {
   void origin; void strategyId;
   // A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21), preflop as much as postflop. Without
@@ -2074,11 +2078,11 @@ async function solvePreflop6max(
   const mqRef = { origin: origin === "replay" ? "replay" as const : "live" as const,
     clientHandId: hand.clientHandId ?? null, handId: hand.handId ?? null,
     actionIndex: hand.actions.length, ts: Date.now() };
-  const resolved = await resolveChart6max(keepChart ? { ...choice, candidates: [keepChart] } : choice);
+  const resolved = await resolveChart6max(retry.keepChart ? { ...choice, candidates: [retry.keepChart] } : choice);
   if (resolved === "unreachable" || resolved === null) {
     // No chart at all is still worth writing down — the picker's gaps say which
     // tree would have answered. Only a reachable server can tell them apart.
-    if (resolved === null && !keepChart) missQueue.observe6max({ choice, hand, heroPos, tokens, walk: null, ref: mqRef });
+    if (resolved === null && !retry.keepChart) missQueue.observe6max({ choice, hand, heroPos, tokens, walk: null, ref: mqRef });
     return null;
   }
 
@@ -2095,7 +2099,18 @@ async function solvePreflop6max(
   const sticky = prevPin?.piece === "chart6max" && prevPin.foldedSeats?.length && prevPin.rawTokens.every((t, i) => tokens[i] === t)
     ? prevPin.foldedSeats.filter((s) => s.toUpperCase() !== (heroSeatName ?? "").toUpperCase()) : [];
   const walkTokens = sticky.length ? foldSeatsOut(tokens, sticky, choice.depth) : tokens;
-  const walk = await walkFitted(walkTokens, get, { heroSeat: heroSeatName, stack: choice.depth });
+  // …and, on a second read, the callers it was read WITH stay in (harness seed 2593 [thin-table]: SB AKs flatted an
+  // iso over HJ's limp as picked; facing the squeeze the fit folded HJ's limp — the earliest caller — and read hero's
+  // flat at the no-limper node, where the chart never flats AKs: no cell, no decision). Folding one moves the node
+  // hero's own earlier action was chosen at; the retry makes the fit and the caller-cap borrow fold someone else, or
+  // leaves the line to the AI piece when nobody else can go.
+  const earlierCallers = prevPin?.piece === "chart6max" && prevPin.rawTokens.every((t, i) => tokens[i] === t)
+    ? actorsWithAllins(prevPin.rawTokens, choice.depth)
+        .filter((s, i): s is string => !!s && prevPin.rawTokens[i] === "C" && s.toUpperCase() !== (heroSeatName ?? "").toUpperCase()
+          && !(prevPin.foldedSeats ?? []).some((f) => f.toUpperCase() === s.toUpperCase()))
+    : [];
+  const keepSeats = retry.keepCallers ? earlierCallers : [];
+  const walk = await walkFitted(walkTokens, get, { heroSeat: heroSeatName, stack: choice.depth, protect: keepSeats });
   // The 6-max path fed the miss queue nothing until 2026-09-20, so the ring
   // strategy — the one actually played — produced no todo list at all while the
   // 3-max corpus filled 1,105 rows. Chart-selection gaps AND walk misses.
@@ -2104,7 +2119,7 @@ async function solvePreflop6max(
   // equilibrium (BTN vs an open and two calls: 77 folds 99%, 22 folds 100%) and the miss queue never saw it.
   // Read his decision one caller fewer instead, say so in the answer, and file it. See utils/borrowHeroCall.
   const borrowed = walk.ok
-    ? await borrowHeroCall(walk.tokens, walk.node, get, { heroPos: hand.positions[hand.heroSeatId] ?? heroPos })
+    ? await borrowHeroCall(walk.tokens, walk.node, get, { heroPos: hand.positions[hand.heroSeatId] ?? heroPos, keep: keepSeats })
     : null;
   missQueue.observe6max({
     choice, hand, heroPos, tokens, walk, ref: mqRef,
@@ -2145,6 +2160,32 @@ async function solvePreflop6max(
   //   2. a node the solver never trained — reach or regret past the calibrated bounds (the SB behind two limps
   //      limped AA 84% from a node reached once in 10,000 hands).
   // Both used to answer anyway, flagged. A flagged wrong answer is still a wrong answer; the AI piece is the fix.
+  // AN ALL-IN IS ITS OWN SIZE (2026-09-25, harness seed 2053 [jam]). The walk maps our "RAI" token onto the node's
+  // LARGEST aggressive size and calls that distance 0 — a CO first-in jam of 25bb landed on the s30 chart's 2.5bb
+  // open (the node has no jam), and hero's BTN decision was answered as facing a min-open. The capture knows every
+  // all-in's size: one mapped onto a size more than 2x away from it (SNAP_MAX; a jam past the chart's depth counts as
+  // the depth) has no node in this chart, so it is refused like any size past τ and the exact tree answers.
+  {
+    const allIns = hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in").map((a) => Number(a.amount));
+    const fitted = walk.fittedLine ?? walkTokens;
+    for (const r of walk.repaired) {
+      if (r.from !== "RAI" || r.borrowed) continue;
+      const nth = fitted.slice(0, r.index).filter((t) => t === "RAI").length;
+      const amount = allIns[nth], size = Number(/^R([\d.]+)$/.exec(r.to)?.[1] ?? NaN);
+      if (!(amount > 0) || !(size > 0)) continue;
+      const d = Math.abs(Math.log(Math.min(amount, choice.depth) / size));
+      if (d > SNAP_MAX) {
+        // the node's own ALL-IN is the jam whatever its size: a 12bb stack's jam on the 30bb short chart's "All-in"
+        // is the picker's stack approximation (said in its note), not a different action
+        const at = await get(fitted.slice(0, r.index).join("-"));
+        const label = at && at !== "unreachable" ? at.actions.find((x) => x.token === r.to)?.action ?? "" : "";
+        if (/all-?in/i.test(label)) continue;
+        return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)",
+          reason: `all-in not in the chart: the ${Math.round(amount * 10) / 10}bb all-in at "${fitted.slice(0, r.index).join("-") || "root"}" has no jam there — ` +
+            `the node's largest action is ${r.to} (${d.toFixed(2)} log-distance) — so the exact tree answers` };
+      }
+    }
+  }
   const farSnap = walk.repaired.find((r) => r.far && !r.borrowed);
   if (farSnap) {
     return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)",
@@ -2179,8 +2220,22 @@ async function solvePreflop6max(
     // BTN who iso-raised QJo exactly as the pick said (67%) faced the limp-reraise in a tree whose BTN never isos QJo:
     // no cell, no decision. The pool tree stays the answer whenever hero's hand is in its range there; when it is
     // not, the decision is read on the chart hero's earlier decision came from, and the answer says so.
-    if (!dev && !keepChart && prev?.piece === "chart6max" && prev.chartId !== resolved.id) {
-      const again = await solvePreflop6max(hand, heroPos, origin, strategyId, prev.chartId);
+    // (the fit or the borrow folded a caller hero's earlier decision was read WITH — see earlierCallers above)
+    const moved = dev || retry.keepCallers ? [] : earlierCallers.filter((s) =>
+      walk.folds.some((f) => f.seat.toUpperCase() === s.toUpperCase()) || borrowed?.dropped?.toUpperCase() === s.toUpperCase());
+    if (moved.length) {
+      const again = await solvePreflop6max(hand, heroPos, origin, strategyId, { ...retry, keepCallers: true });
+      const kept = `LINE KEPT AS THE HAND WAS READ: fitting this line to the tree folded ${moved.join("/")}, whose call hero's earlier ` +
+        `decision was read with — hero's ${heroClass} has no strategy at the node that leaves`;
+      if (again?.ok && !again.notInRange && again.decision) {
+        return { ...again, approx: true, warning: [`${kept}; read with it kept`, again.warning].filter(Boolean).join(" · ") };
+      }
+      if (again && !again.ok) {
+        return { ...again, reason: `${kept}, and the tree cannot hold the line with it kept (${again.reason}) — the AI preflop tree answers` };
+      }
+    }
+    if (!dev && !retry.keepChart && prev?.piece === "chart6max" && prev.chartId !== resolved.id) {
+      const again = await solvePreflop6max(hand, heroPos, origin, strategyId, { ...retry, keepChart: prev.chartId });
       if (again?.ok && !again.notInRange && again.decision) {
         const why = `CHART KEPT: hero's ${heroClass} is not in ${resolved.id}'s range at "${line || "root"}" (that tree plays hero's earlier ` +
           `decision at the pool's locked range), so this decision is read on ${prev.chartId}, where his earlier decision was read`;
@@ -2216,7 +2271,7 @@ async function solvePreflop6max(
 
   const notes = [
     // a kept chart is not the picker's pick: its note about the tree it chose (the pool-locked one) does not apply
-    keepChart ? (choice.note ?? "").split(" · ").filter((n) => n && !/pool-locked/.test(n)).join(" · ") || null : choice.note,
+    retry.keepChart ? (choice.note ?? "").split(" · ").filter((n) => n && !/pool-locked/.test(n)).join(" · ") || null : choice.note,
     prunedPicksNote(prunedPick.dropped),
     resolved.fellBack ? `no ${choice.id} tree in the set — answered from ${resolved.id}` : null,
     sticky.length

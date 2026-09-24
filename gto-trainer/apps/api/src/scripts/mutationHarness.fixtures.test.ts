@@ -28,6 +28,12 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 1231, ops: ["odd-open"], cls: "the chart changed under hero (equilibrium iso, pool-tree 3-bet)" },
   { seed: 1065, ops: ["deep-seat"], cls: "generator: an All-in pick is the whole stack" },
   { seed: 178, ops: ["short-seat"], cls: "harness: no pick after a cloud-gated decision" },
+  { seed: 1865, ops: ["hero-deviates"], cls: "hero off the pick into an action the pinned chart lacks (SB complete in a raise tree)" },
+  { seed: 2775, ops: ["nl5-rounding"], cls: "a second caller of a 4-bet: the seat read on the line as it stands, with the caller borrow" },
+  { seed: 2593, ops: ["thin-table"], cls: "a fit folded the limper hero's earlier decision was read with" },
+  { seed: 3992, ops: ["limps"], cls: "the same, where the tree holds the line with the limper kept" },
+  { seed: 1333, ops: ["jam"], cls: "a short stack's jam called twice: a side pot, not an all-in flop" },
+  { seed: 2053, ops: ["jam"], cls: "a 25bb jam snapped onto the chart's 2.5bb open — refused, the exact tree answers" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

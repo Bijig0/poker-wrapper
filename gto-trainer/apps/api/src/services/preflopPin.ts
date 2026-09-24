@@ -126,7 +126,7 @@ export interface ResumedRanges {
   /** node reads that were not already cached — the flop's real cost */
   reads: number;
 }
-export type ResumeOutcome = ResumedRanges | { ok: false; why: string };
+export type ResumeOutcome = ResumedRanges | { ok: false; why: string; /** the pinned walk met a branch HRC never wrote (a terminal with real action after it) */ prunedBranch?: boolean };
 
 /**
  * Resume a CHART pin at the flop: the pinned chart, the pinned prefix, hero's action and everything after it
@@ -171,8 +171,13 @@ export async function resumeChartPreflopRanges(
     };
   };
   const foldedOut = pin.rawTokens.map((t, i) => (t !== "F" && pin.codes[i] === "F" ? i : -1)).filter((i) => i >= 0);
+  let fittedWhy: string | null = null;
   if (pin.foldedSeats?.length || foldedOut.length || pin.codes.length !== pin.rawTokens.length) {
-    return perSeat(`hero's decision was read on a line fitted to the tree (${pin.foldedSeats?.length ? `${pin.foldedSeats.join(", ")}'s call folded out` : `${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out`})`);
+    const r = await perSeat(`hero's decision was read on a line fitted to the tree (${pin.foldedSeats?.length ? `${pin.foldedSeats.join(", ")}'s call folded out` : `${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out`})`);
+    if (r.ok) return r;
+    // a seat no fit can keep (a tree with no cold call of a 3-bet at all): the pinned walk below, whose caller
+    // borrow reads such a call one caller fewer, is still worth a try — its seats are checked against the table
+    fittedWhy = r.why;
   }
   // the tree's prefix + the rest as played: reconstructFlopRanges snaps each later size to the node's own
   const line = [...pin.codes, ...fit.rest];
@@ -186,12 +191,14 @@ export async function resumeChartPreflopRanges(
     // was read WITH, and read hero's ATo call at a node his decision never saw — weight 0). A terminal before the line
     // ends is left to the caller: that is a branch HRC never wrote (OFF THE CHART, fastSolve).
     const first = `pinned chart ${pin.chartId}: ${recon.reason}`;
-    if (/terminal before the line ends/.test(recon.reason)) return { ok: false, why: first };
+    if (fittedWhy) return { ok: false, why: `${fittedWhy}; the pinned walk: ${recon.reason}` };
+    if (/terminal before the line ends/.test(recon.reason)) return { ok: false, why: first, prunedBranch: true };
     const r = await perSeat(`the pinned walk stopped (${recon.reason})`);
     return r.ok ? r : { ok: false, why: `${first}; ${r.why}` };
   }
   const got = Object.keys(recon.ranges).map((p) => p.toUpperCase());
   if (!sameSeats(want, got)) {
+    if (fittedWhy) return { ok: false, why: `${fittedWhy}; the pinned walk reached the flop with ${got.join("/") || "nobody"} where the table has ${want.join("/")}` };
     return perSeat(`the tree's path reached the flop with ${got.join("/") || "nobody"} where the table has ${want.join("/")}`);
   }
   const codes = [...stepped, ...line.slice(stepped.length)];
@@ -280,15 +287,23 @@ export async function fittedRangesBySeat(
       continue;
     }
     const fit = await walkFitted(tokens, getHrc, { heroSeat: o.heroPos, protect: [seat], stack: o.depth, acceptTerminal: true });
-    if (!fit.fitted || !fit.fittedLine) return { ok: false, reason: `fitting the line for ${seat}'s range: ${fit.ok ? "no fit" : fit.reason}` };
+    // No fit keeps the seat when the call the tree refuses is the protected seat's OWN (a second caller of a 4-bet —
+    // harness seed 2775: the SB calls hero's 4-bet behind the opener). The line the fit got to is still read, and the
+    // walk's caller borrow reads that call one caller fewer (reconstructFlopRanges borrowCaller: no raise follows it).
+    const lineFor = fit.fittedLine ?? tokens;
     // partial: only THIS seat's range is wanted, and the fitted line may leave it alone at the flop (hero squeezes,
     // and the limper who called it is the one the fit folded) — a player count says nothing about one seat's range
-    const r = await reconstructFlopRanges(fit.fittedLine, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true });
+    const r = await reconstructFlopRanges(lineFor, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true });
     const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
-    if (!mine) return { ok: false, reason: `${seat}'s range on the fitted line "${fit.fittedLine.join("-")}": ${r.ok ? "absent" : r.reason}` };
+    if (!mine) {
+      return { ok: false, reason: fit.fitted
+        ? `${seat}'s range on the fitted line "${lineFor.join("-")}": ${r.ok ? "absent" : r.reason}`
+        : `fitting the line for ${seat}'s range: ${fit.ok ? "no fit" : fit.reason}; read as it stands: ${r.ok ? "absent" : r.reason}` };
+    }
     ranges[seat] = mine;
     if (fit.folds.length) borrowed.push(`${seat} with ${fit.folds.map((f) => f.seat).join("+")} folded`);
-    if (o.heroPos && seat === o.heroPos.toUpperCase()) heroLine = fit.fittedLine;
+    if (r.ok && r.notes?.length) borrowed.push(...r.notes.map((n) => `${seat}: ${n}`));
+    if (o.heroPos && seat === o.heroPos.toUpperCase()) heroLine = lineFor;
   }
   return { ok: true, ranges, borrowed, heroLine };
 }

@@ -52,6 +52,15 @@ describe("borrowHeroCall", () => {
     expect(r!.index).toBe(1);
   });
 
+  it("keeps a caller hero's earlier decision was read with (harness seed 2593): the next caller is folded instead", async () => {
+    const r = await borrowHeroCall(["R2.5", "C", "C"], heroNode,
+      table({ "R2.5-F-C": donorNode, "R2.5-C-F": node("BTN", ["F", "C", "R7.5"]) }), { heroPos: "BTN", keep: ["HJ"] });
+    expect(r?.dropped).toBe("CO");
+    expect(r?.line).toBe("R2.5-C-F");
+    // and nobody else to fold: no borrow at all (the chart does not answer; the AI piece does)
+    expect(await borrowHeroCall(["R2.5", "C", "C"], heroNode, table({ "R2.5-F-C": donorNode }), { heroPos: "BTN", keep: ["HJ", "CO"] })).toBeNull();
+  });
+
   it("refuses a donor whose acting seat differs — the fold shifted the rotation", async () => {
     const r = await borrowHeroCall(["R2.5", "C", "C"], heroNode, table({ "R2.5-F-C": node("SB", ["F", "C"]) }), { heroPos: "BTN" });
     expect(r).toBeNull();

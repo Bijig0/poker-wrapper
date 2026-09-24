@@ -76,19 +76,26 @@ export async function borrowHeroCall<N extends BorrowNode>(
   tokens: string[],
   node: N,
   getNode: (line: string) => Promise<N | null | "unreachable">,
-  opts: { heroPos?: string | null; seats?: readonly string[] } = {}
+  opts: {
+    heroPos?: string | null; seats?: readonly string[];
+    /** seats whose call must stay in the line: the callers hero's EARLIER decision of the hand was read with —
+     *  folding one moves the node that decision was read at (2026-09-25, harness seed 2593 [thin-table]) */
+    keep?: readonly string[];
+  } = {}
 ): Promise<BorrowResult<N> | null> {
   const offers = (n: BorrowNode) => n.actions.some((a) => a.token === "C");
   if (offers(node)) return null;                       // hero's call is in the tree — nothing to fix
 
   const actors = actorsOfLine(tokens, opts.seats ?? SEATS);
   const hero = opts.heroPos?.toUpperCase() ?? node.pos?.toUpperCase() ?? null;
+  const keep = new Set((opts.keep ?? []).map((s) => s.toUpperCase()));
 
   for (let j = 0; j < tokens.length; j++) {
     if (tokens[j] !== "C") continue;
     const who = actors[j];
     // never fold hero's own earlier call out of the line — that is a different hand, not a neighbouring node
     if (!who || (hero && who.toUpperCase() === hero)) continue;
+    if (keep.has(who.toUpperCase())) continue;
     const alt = tokens.slice();
     alt[j] = "F";
     const line = alt.join("-");

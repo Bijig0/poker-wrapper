@@ -45,6 +45,24 @@ describe("preflopPotStack", () => {
     expect(pot).toBe(2);
     expect(stack).toBe(99);
   });
+  // harness seed 1333 [jam]: UTG F, HJ opens 2.5, CO F, BTN calls, the 18bb SB jams, BB F, HJ and BTN call —
+  // two 100bb players with 82bb behind and a side pot to play. "RAI" alone read as all-in for the whole depth.
+  it("a short stack's jam is its own size when the capture knows it", () => {
+    const line = ["F", "R2.5", "F", "C", "RAI", "F", "C", "C"];
+    expect(preflopPotStack(line, 100).stack).toBe(0);                     // the old reading: nobody behind
+    const { pot, stack } = preflopPotStack(line, 100, undefined, [18]);
+    expect(stack).toBe(82);
+    expect(pot).toBe(18 * 3 + 1);                                         // SB, HJ, BTN at 18 + the BB's dead blind
+  });
+  it("an all-in for less than the level is a call for less, and the jammer never acts again", () => {
+    // UTG opens 3, HJ (2.5bb left) calls all-in for 2.5, CO calls 3, the rest fold — the level stays 3
+    const { pot, stack } = preflopPotStack(["R3", "RAI", "C", "F", "F", "F"], 100, undefined, [2.5]);
+    expect(stack).toBe(97);
+    expect(pot).toBeCloseTo(3 + 2.5 + 3 + 0.5 + 1);
+  });
+  it("a deep all-in (at or past the depth) keeps the old reading", () => {
+    expect(preflopPotStack(["F", "F", "F", "RAI", "F", "C"], 100, undefined, [175]).stack).toBe(0);
+  });
 });
 
 describe("splitPostflopTokens", () => {

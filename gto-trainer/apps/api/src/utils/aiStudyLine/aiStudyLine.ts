@@ -35,12 +35,21 @@ export const HU_SEATS: readonly string[] = ["SB", "BB"];
 export function preflopPotStack(
   tokens: string[],
   depth: number,
-  seats: readonly string[] = SEATS
+  seats: readonly string[] = SEATS,
+  /**
+   * The round total of each "RAI" token, in order, when the capture knows it (2026-09-25, harness seeds 1333/2053
+   * [jam]). "RAI" is GTO Wizard's all-in token and carries no size, so it was read as an all-in for the whole DEPTH:
+   * an 18bb small blind's jam called by two 100bb players left them "0bb behind" and every flop was refused as
+   * "preflop line is (near) all-in", though both had 82bb and a side pot to play for. With the amounts, a short jam
+   * raises the level to what it is (and an all-in for less than the level is a call for less).
+   */
+  allInTo?: number[],
 ): { pot: number; stack: number } {
   const committed: Record<string, number> = { SB: 0.5, BB: 1 };
   let active: string[] = [...seats];
   let p = 0;
   let level = 1;
+  let rai = 0;
   for (const tok of tokens) {
     if (active.length < 2) break;
     p = p % active.length;
@@ -50,7 +59,14 @@ export function preflopPotStack(
       continue;
     }
     if (tok === "C") committed[seat] = level;
-    else if (tok === "RAI") { level = depth; committed[seat] = depth; }
+    else if (tok === "RAI") {
+      const to = allInTo?.[rai++];
+      if (to != null && Number.isFinite(to) && to < depth) { committed[seat] = to; level = Math.max(level, to); }
+      else { level = depth; committed[seat] = depth; }
+      // an all-in seat never acts again: out of the rotation, like a fold (its chips stay in the pot)
+      active = active.filter((s) => s !== seat);
+      continue;
+    }
     else if (/^R[\d.]+$/.test(tok)) { level = parseFloat(tok.slice(1)); committed[seat] = level; }
     // "X" (BB checking a limped pot) commits nothing
     p += 1;
