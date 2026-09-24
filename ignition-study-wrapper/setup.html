@@ -162,6 +162,11 @@
             <div class="seg" id="autoDelay"><button data-v="instant" class="plain">Instant</button><button data-v="random" class="plain">Randomized 1.5–2 s</button></div></div>
           <span class="help">Instant fires the moment the answer lands. Randomized waits a fresh 1.5–2 second draw before each pick — nothing is typed early, and a pick whose spot moves on during the wait is dropped, never played late.</span>
         </div>
+        <div id="auto-fold-row" style="display:none;margin-top:8px">
+          <div class="row"><span class="sub">no answer</span>
+            <div class="seg" id="autoFoldNoAnswer"><button data-v="1" class="plain">Fold (check if free)</button><button data-v="0" class="plain">Wait it out</button></div></div>
+          <span class="help">For unattended runs. When a decision gets no answer — the solver gave up on it, the clock reaches the time-bank mark with Time bank set to Leave it, or 30 s pass — the wrapper checks if checking is free and otherwise folds, instead of letting the clock run out (a few timeouts sit you out). Each one is logged as a <b>no-answer-fold</b> session event with its reason, for the no-answer audit. <b>Practice and fake tables only</b>: on a real-money table it never acts, even with the real-money box ticked.</span>
+        </div>
         <div class="cp-only help" style="margin-top:6px;color:#ffce56">CoinPoker: auto-execute arms <b>only on a Practice Games table</b> (the server marks those as play chips) unless the real-money box below is ticked too.</div>
         <div id="auto-real-row" style="display:none;margin-top:8px">
           <label class="row" style="color:#ff8a80"><input type="checkbox" id="autoRealMoney"> allow it on a REAL-MONEY table</label>
@@ -463,6 +468,8 @@ function fillSettings() {
   seg("autoDelay", cfg.autoDelay === "random" ? "random" : "instant");
   seg("autoTimeBank", cfg.autoTimeBank === false ? 0 : 1);
   seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
+  seg("autoFoldNoAnswer", cfg.autoFoldNoAnswer ? 1 : 0);
+  $("auto-fold-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-delay-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-real-row").style.display = cfg.autoExecute ? "" : "none";
   $("autoRealMoney").checked = !!cfg.autoRealMoney;
@@ -484,7 +491,7 @@ function fillSettings() {
       (s ? ` <b>${esc(s.name)}</b> <span class="sub">— ${esc(p.tagline)}</span><div class="sub" style="margin-top:4px">${s.layers.map((l) => `<b>${esc(l.role)}</b> ${esc(l.label ?? "")}`).join(" · ")}</div>` : "") +
       `<div class="sub" style="margin-top:4px">sources this mode answers from: ${srcs.map(esc).join(", ") || "none"} — each is a required check below</div>` +
       (cfg.autoExecute
-        ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoRealMoney
+        ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoFoldNoAnswer ? " · folds (checks if free) on no answer — practice tables only" : ""}${cfg.autoRealMoney
             ? ` for REAL MONEY — bounded to ${cfg.autoBudget.minutes} min / ${cfg.autoBudget.hands} hands, then it disarms itself`
             : " — arms on a practice table; on a real-money table it waits until you allow it on the panel"}</div>`
         : "");
@@ -497,6 +504,7 @@ function readSettings() {
   cfg.autoDelay = $("autoDelay").querySelector("button.on")?.dataset.v === "random" ? "random" : "instant";
   cfg.autoTimeBank = $("autoTimeBank").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";
+  cfg.autoFoldNoAnswer = cfg.autoExecute && $("autoFoldNoAnswer").querySelector("button.on")?.dataset.v === "1";
   cfg.autoRealMoney = cfg.autoExecute && $("autoRealMoney").checked;
   cfg.clearCache = $("clearCache").checked;
   cfg.autoBudget = { minutes: Number($("auto-min").value) || 30, hands: Number($("auto-hands").value) || 50 };
@@ -536,7 +544,7 @@ $("tables").querySelectorAll("button").forEach((b) => b.onclick = () => {
   schedulePreflight();
 });
 
-["recording", "autoExecute", "autoDelay", "autoTimeBank", "autoTopUp"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
+["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
   if (!cfg) return;
   $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
   readSettings(); fillSettings(); schedulePreflight();

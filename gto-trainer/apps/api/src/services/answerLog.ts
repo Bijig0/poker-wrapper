@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { mkdirSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname, isAbsolute, relative, resolve } from "node:path";
 
 /**
  * Persistent log of every study answer the poller pushed (and every solve
@@ -272,6 +273,28 @@ export interface LoggedAnswer {
   session_id: string | null;
 }
 
+/**
+ * NO TEST EVER OPENS A REAL ANSWER LOG (2026-09-25). Setting ANSWERS_DB_PATH inside a test file was not enough:
+ * `bun test` runs every file in ONE process, the singleton below is built by whichever file imports answerLog
+ * first, and the env assignment in studyPoller.test.ts ran after it — so every full run (setup/regress.ts) still
+ * wrote the poller fixtures ("FLOP — Check 76% · Bet 1.8 (33%) 7% · roll N → CHECK", NODE_DOES_NOT_EXIST, …) into
+ * data/answers.sqlite: 213 happy-path rows alone by 2026-09-24. bunfig.toml now preloads
+ * src/test/isolateLiveState.ts (ANSWERS_DB_PATH=:memory:) before any test file loads, and under `bun test`
+ * (NODE_ENV=test) the log refuses any path that is neither in memory nor in the OS temp dir — so a test run from
+ * another directory, or pointed at any checkout's live file, fails at import instead of writing to it.
+ */
+function assertTestSafePath(path: string): void {
+  if (process.env.NODE_ENV !== "test") return;
+  if (path === ":memory:" || path.startsWith("file::memory:")) return;
+  const norm = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  const rel = relative(norm(realpathSync(tmpdir())), norm(path));
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return;
+  throw new Error(
+    `answerLog: refusing to open ${path} under bun test — tests must use ANSWERS_DB_PATH=:memory: or a temp file ` +
+    `(bunfig.toml preloads src/test/isolateLiveState.ts; run bun test from apps/api)`
+  );
+}
+
 class AnswerLog {
   private db: Database | null = null;
   private readonly path: string;
@@ -288,6 +311,7 @@ class AnswerLog {
    */
   constructor(path?: string) {
     this.path = path ?? process.env.ANSWERS_DB_PATH ?? join(import.meta.dir, "..", "..", "data", "answers.sqlite");
+    assertTestSafePath(this.path);
   }
 
   get dbPath(): string {

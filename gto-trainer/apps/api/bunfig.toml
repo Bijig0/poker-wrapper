@@ -1,0 +1,3 @@
+[test]
+# Keeps tests off the live data/*.sqlite stores (answers.sqlite first) — see src/test/isolateLiveState.ts.
+preload = ["./src/test/isolateLiveState.ts"]

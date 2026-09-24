@@ -125,7 +125,7 @@ export function stillToActAfterHero(hand: Hand, view: TableView): Set<number> | 
         aggressor = seat(a.seatId);
         top = amt;
       }
-    } else if ((t === "post-sb" || t === "post-bb") && amt !== null) {
+    } else if ((t === "post-sb" || t === "post-bb" || t === "post") && amt !== null) {
       top = Math.max(top, amt);
     }
   }
@@ -161,7 +161,7 @@ export function seatsToAct(hand: Hand): Set<number> | null {
         aggressor = seat(a.seatId);
         top = amt;
       }
-    } else if ((t === "post-sb" || t === "post-bb") && amt !== null) {
+    } else if ((t === "post-sb" || t === "post-bb" || t === "post") && amt !== null) {
       top = Math.max(top, amt);
     }
   }

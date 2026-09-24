@@ -292,8 +292,11 @@ export function pickReady(): Record<string, any> {
   } catch {
     return no("decision key unreadable");
   }
-  if (kStreet !== h.street || kN !== h.actions.length) {
-    return no(`pick was for ${pyStr(kStreet)} after ${kN} actions; table is ${h.street} after ${h.actions.length}`);
+  // A POST-IN is not an action to the API (utils/foldPostIns folds it into the poster's own action), so its key counts
+  // one action fewer per post than this line holds (2026-09-25) — count the way the key was made.
+  const nActs = h.actions.filter((a: any) => a.type !== "post").length;
+  if (kStreet !== h.street || kN !== nActs) {
+    return no(`pick was for ${pyStr(kStreet)} after ${kN} actions; table is ${h.street} after ${nActs}`);
   }
   out.kN = kN;
   const plan = pickPlan(st.pick, (h.currentNode || {}).pot ?? null);
@@ -669,6 +672,80 @@ export async function maybeAutoAct(): Promise<void> {
   }
   st.autoTried = r.key;
   await relaySeams.executePick("auto");
+}
+
+// ---- fold on no-answer: auto-execute's companion -------------------------------------------------------------
+/** How long hero's turn waits on an answer before fold-on-no-answer gives up on it: long enough to sit through a
+ *  cold postflop chain solve (the poller allows one 45 s) once the +45s time bank has been taken. */
+export const NO_ANSWER_DEADLINE_S = 30;
+/** A refusal note must be this far into the turn to count: a note left over from the previous decision is
+ *  replaced by the poller's next push, well inside this. */
+const NO_ANSWER_NOTE_MIN_S = 1.5;
+const NO_ANSWER_RETRY_S = 2.5;
+const NO_ANSWER_TRIES = 2;
+
+/** Why hero's turn should be given up as a no-answer right now, or null. `age` = seconds hero has been on this
+ *  decision. Three ways a decision is known to have no answer coming in time:
+ *    - the poller has stopped asking (it pushes a note and no answer after its repeat-fail limit);
+ *    - the +45s time bank is on offer (clock at ~9 s) and the session is set to leave it;
+ *    - NO_ANSWER_DEADLINE_S has passed. */
+export function noAnswerFoldWhy(age: number): string | null {
+  const note = currentNote();
+  if (note && age >= NO_ANSWER_NOTE_MIN_S) return `refused — ${note}`;
+  if (!isCp() && S.liveStatus.timeBank && !S.study.timeBank) return "clock nearly out (time bank on offer, set to leave it)";
+  if (age >= NO_ANSWER_DEADLINE_S) return `no answer after ${fmtFixed(age, 0)} s`;
+  return null;
+}
+
+/** FOLD ON NO-ANSWER (session setup `autoFoldNoAnswer`): with auto-execute armed, a decision that gets no answer
+ *  is checked if checking is free, else folded — instead of running the clock out, which sits the seat out after
+ *  a few timeouts. Every one is a `no-answer-fold` session event with its reason, so the no-answers of an
+ *  unattended run can be collected afterwards. TEMPORARILY enabled on ALL tables, including real-money, for
+ *  product development — the practice/fake-table-only guard has been removed; see relay.ts history to restore it. */
+export async function maybeFoldNoAnswer(): Promise<void> {
+  const st = S.study;
+  if (!(st.on && st.auto && st.foldNoAnswer)) {
+    st.noAnswerTurn = null;
+    return;
+  }
+  const h = handState();
+  const onClock = isCp() ? !!(h && (h.currentNode || {}).toActIsHero) : !!S.liveStatus.toAct;
+  if (!onClock || !h || h.heroFolded || h.ended) {
+    st.noAnswerTurn = null;
+    return;
+  }
+  const nActs = (h.actions || []).filter((a: any) => a.type !== "post").length;
+  const key = `${pyStr(h.handId)}|${pyStr(h.street)}|${nActs}`;
+  if ((st.noAnswerTurn || {}).key !== key) st.noAnswerTurn = { key, since: time(), tries: 0, lastTry: 0.0 };
+  const turn = st.noAnswerTurn;
+  if (turn.tries >= NO_ANSWER_TRIES || time() - turn.lastTry < NO_ANSWER_RETRY_S) return;
+  // an answer for THIS decision is auto-execute's to play (or to hold) — not a no-answer
+  if (currentAnswer() && pickReady().ok) return;
+  // nothing may be pressed through these; the next tick looks again
+  if (!isCp() && (S.liveStatus.modal || S.liveStatus.buyPanel)) return;
+  if (S.topupPrefold.active && time() < S.topupPrefold.deadline) return;
+  const age = time() - turn.since;
+  const why = noAnswerFoldWhy(age);
+  if (!why) return;
+  turn.tries += 1;
+  turn.lastTry = time();
+  // actuate() on CoinPoker keeps its own practice check only for an auto press — so this goes as one
+  st.execSource = "auto";
+  let did = "check";
+  let res = await actuate({ kind: "action", label: "check" });
+  if (!res.ok) {
+    did = "fold";
+    res = await actuate({ kind: "action", label: "fold" });
+  }
+  const ok = !!res.ok;
+  const rec = { at: nowMs(), hand: S.handNo, clientHandId: S.handIds.get(S.handNo) ?? null, street: h.street ?? null,
+                decision: key, did, ok, why, ageS: pyRound(age, 1), attempt: turn.tries, note: currentNote(),
+                reason: ok ? null : res.reason ?? null };
+  st.lastNoAnswerFold = rec;
+  feedAdd(ok ? `No answer — ${did.toUpperCase()} (fold on no-answer): ${why}`
+             : `No answer — fold on no-answer could not act (${pyStr(res.reason ?? null)}): ${why}`);
+  if (S.session.id) S.sessions.event(S.session.id, "no-answer-fold", rec);
+  log(`[pick] no-answer ${did}: ${why} -> ${pyRepr(res)}`);
 }
 
 /** Press the client's +45s time bank whenever it is offered (answers on, the session allows it). */

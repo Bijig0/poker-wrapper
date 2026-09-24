@@ -529,7 +529,9 @@ export function buildApp(): Hono {
     st.text = live ? text : null;
     st.pick = live && typeof b.pick === "string" ? b.pick : null;
     st.roll = live ? b.roll ?? null : null;
-    st.note = live && typeof b.note === "string" ? b.note : null;
+    // a note WITHOUT an answer is kept too: it is the poller saying it has stopped asking (currentNote → the panel,
+    // and fold-on-no-answer's refusal signal) — dropping it left both blind to a spot that will never be answered
+    st.note = typeof b.note === "string" && b.note ? b.note : null;
     st.uncertain = live && typeof b.uncertain === "string" && b.uncertain ? b.uncertain : null;
     st.prov = live ? Object.fromEntries(["band", "strategy", "source", "tier", "chart", "exploitPick", "chartPick"].map((k) => [k, b[k] ?? null])) : null;
     st.decisionKey = live && typeof b.decisionKey === "string" ? b.decisionKey : null;
