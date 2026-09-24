@@ -37,6 +37,7 @@ import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb } from "../utils/foldPostIns/foldPostIns";
+import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
@@ -197,6 +198,11 @@ export const resolveSet = (hand: ParsedHand, heroPos: string | null, setId?: str
   return SOLUTION_SETS.find((s) => s.id === id) ?? null;
 };
 
+/** The 6-max strategy's rake cap in bb (Ignition: 5%, capped by players DEALT — profiles.rakeCapCents — in NL200 bb). */
+export const sixMaxRakeCapBb = (hand: ParsedHand, heroPos: string | null): number =>
+  // the players DEALT, not the labels: a sitting-out seat is labelled but not dealt (utils/dealtSeats, round 2)
+  rakeCapCents(Math.max(2, dealtCount(hand, heroPos))) / 200;
+
 /** Preflop acting order 3-handed: the button is first in, the blinds behind. */
 const THREE_MAX_SEATS: readonly string[] = ["BTN", "SB", "BB"];
 
@@ -204,21 +210,19 @@ const THREE_MAX_SEATS: readonly string[] = ["BTN", "SB", "BB"];
  *  this shape with the real 3-max rake and per-seat stack asymmetry — the
  *  6-max phantom-fold walk is the wrong tree on every axis (rake model, no
  *  limps, symmetric 100bb only). */
-const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
-  const present = new Set(
-    [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
-  );
+export const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
+  // the DEALT seats: a sitting-out seat keeps its label (utils/dealtSeats, round 2 `undealt-seat`)
+  const present = new Set(dealtSeats(hand, heroPos).values());
   return present.size === 3 && ["BTN", "SB", "BB"].every((p) => present.has(p));
 };
 
 /** A 5- or 6-handed ring table. Five-handed is the 6-dealt tree with UTG folded — which is how the set was
  *  solved and how the plan counts it (the rake cap differs by half a blind, second order) — so both shapes
  *  route to the same charts. */
-const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
+export const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
   const six = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
-  const present = new Set(
-    [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
-  );
+  // the DEALT seats: a three-handed table with a sitting-out label is three-handed (utils/dealtSeats, round 2)
+  const present = new Set(dealtSeats(hand, heroPos).values());
   // FOUR-HANDED IS THE SAME GAME (2026-09-17, Brady): a short table is the six-seat tree with its early seats
   // folded - the token walk already pads UTG/HJ as folds - so 4-6 seats all route to the 6-max charts; only the
   // rake cap differs, which he accepts. Three-handed stays the Zone 3-max set.
@@ -1123,8 +1127,7 @@ async function solvePostflopViaChain(
   // 5% / 0.6bb cap (their NL500). Ignition NL200 ring is 5% with a cap by players DEALT ($1/$2/$3/$4 at 2/3/4-5/6+,
   // profiles.rakeCapCents) - 2bb six-handed, more than three times the default. Chart preflop, AI postflop: both
   // now at the table's own rake under the 6-max strategy.
-  const dealt = Object.keys(hand.positions ?? {}).length + (hand.positions?.[hand.heroSeatId] ? 0 : 1);
-  const rake6 = sixMax ? { pct_of_pot: 5, cap_in_chips: rakeCapCents(Math.max(2, dealt)) / 200, preflop_rake_type: null }
+  const rake6 = sixMax ? { pct_of_pot: 5, cap_in_chips: sixMaxRakeCapBb(hand, heroPosName), preflop_rake_type: null }
     // CoinPoker HU NL200: 5%, cap 0.9bb — the rake the cp200a charts were solved at (bb units, like the 6-max cap)
     : huCp ? { pct_of_pot: HU_RAKE.pct_of_pot, cap_in_chips: HU_RAKE.cap_bb, preflop_rake_type: null }
     : null;
@@ -2717,7 +2720,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       // on which rung a hand snaps to, a thinned table now gets a tree built from the table itself.
       // REVERSIBLE: restore this branch and the matching one in solvePostflopViaChain.
       // Other strategies (the Zone 3-handed ones) still use the 3-max charts — only this branch changed.
-      const seats = Object.keys(hand.positions).length + (hand.positions[hand.heroSeatId] ? 0 : 1);
+      const seats = dealtCount(hand, heroPos);
       const labels = new Set(Object.values(hand.positions).map((p) => p.toUpperCase()));
       why = !labels.has("SB") && labels.has("BB") && seats >= 3
         // a dead small blind (2026-09-23): the seat count may be chart-sized, but no chart has a hand without an SB

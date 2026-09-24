@@ -432,6 +432,9 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number; or
       else if (zero) v = { seed, ops, street, k, verdict: "finding", kind: "hero-zero-weight", reason: res.warning ?? "hero not in range", ms };
       else if (freeFold) v = { seed, ops, street, k, verdict: "finding", kind: "fold-free-check", reason: `hero posted in and faces nothing, and the answer says ${res.decision?.action} (${String(res.warning ?? "").slice(0, 160)})`, ms };
       else if (rakeOff) v = { seed, ops, street, k, verdict: "finding", kind: "rake-cap", reason: rakeOff, ms };
+      // THREE-HANDED IS THE AI PIECE'S (the 6-max strategy's routing: the charts cover 4-6 dealt, fastSolve.is6Handed)
+      else if (dealtN <= 3 && (res.source === "hrc-6max-preflop" || /_6max_/.test(String(res.rangeSource ?? ""))))
+        v = { seed, ops, street, k, verdict: "finding", kind: "piece-routing", reason: `${dealtN} players were dealt, and the answer came from the 6-max charts (${res.source === "hrc-6max-preflop" ? res.gametype : res.rangeSource})`, ms };
       else if (ms > (opts.slowMs ?? 2500)) v = { seed, ops, street, k, verdict: "finding", kind: "slow-local-answer", reason: `${ms} ms for a local answer`, ms };
       else if (res.dryRun && inputMismatch(hand, res.dryRun)) v = { seed, ops, street, k, verdict: "finding", kind: "solver-input-mismatch", reason: `${inputMismatch(hand, res.dryRun)} (${String(res.warning ?? "").slice(0, 200)})`, ms };
       else {

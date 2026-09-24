@@ -33,6 +33,7 @@
  * class → weight), so fastSolve.solvePostflop6maxStrategy reads one shape whichever piece answered.
  */
 import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowApi } from "./gtowApi";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
@@ -128,12 +129,10 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   // seat, sitting-out ones included (hand 937's BTN, seat 3: no start stack, never acted), and this built the tree
   // 6-handed with a phantom 100bb BTN. Drop a labelled seat only when BOTH say it was not dealt: it is missing from
   // `liveSeats` (the wrapper's dealt list; other sources send only the unfolded seats) AND it has no action.
-  const dealtSeats = new Set(hand.liveSeats ?? []);
-  const actedSeats = new Set(hand.actions.map((a) => (a.hero ? hand.heroSeatId : a.seatId)));
-  const undealt = (s: number) => dealtSeats.size > 0 && !dealtSeats.has(s) && !actedSeats.has(s) && s !== hand.heroSeatId;
-  const seats: { seat: number; pos: string }[] = Object.entries(hand.positions)
-    .filter(([s]) => !undealt(Number(s)))
-    .map(([s, p]) => ({ seat: Number(s), pos: p.toUpperCase() }));
+  // (the rule lives in utils/dealtSeats since round 2, shared with the routing and the rake cap)
+  const seats: { seat: number; pos: string }[] = [...dealtSeats(hand).entries()]
+    .filter(([s]) => hand.positions[s] != null)
+    .map(([seat, pos]) => ({ seat, pos }));
   if (hp && !seats.some((x) => x.seat === hand.heroSeatId)) seats.push({ seat: hand.heroSeatId, pos: hp });
   const byPos = new Map(seats.map((x) => [x.pos, x.seat]));
   let present = [...new Set(seats.map((x) => x.pos))].filter((p) => ORDER.includes(p));
@@ -755,7 +754,7 @@ export function reduceToHeadsUp(hand: ParsedHand, heroPos: string | null): Heads
 export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string | null, why: string): Promise<AiPreflopOutcome> {
   const red = reduceToHeadsUp(hand, heroPos);
   if (!red) return { ok: false, reason: "last resort: hero's seat or the opponent's could not be read" };
-  const dealt = Object.keys(hand.positions).length + (hand.positions[hand.heroSeatId] ? 0 : 1);
+  const dealt = dealtCount(hand, heroPos);   // the players DEALT (a sitting-out label is not one — utils/dealtSeats)
   const r = await solvePreflopGtowAi(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: red.deadBb, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos } });
   if (!r.ok) return { ok: false, kind: r.kind, reason: `last resort (hero vs ${red.aggressorPos}, ${red.droppedPos.join("/") || "nobody"} folded out): ${r.reason}` };
   const note = `LAST RESORT — no tree holds this line, so it is played as hero (${red.heroPos}) against the last aggressor (${red.aggressorPos}) alone: ` +
