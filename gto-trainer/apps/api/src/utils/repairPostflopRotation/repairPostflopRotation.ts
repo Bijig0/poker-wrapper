@@ -345,6 +345,16 @@ export function lostActionFaults(hand: ParsedHand): string[] {
     if (a.type === "call") m.set(s, (m.get(s) ?? 0) + amt);
     else if (["post-sb", "post-bb", "raise", "bet", "all-in"].includes(a.type)) m.set(s, Math.max(m.get(s) ?? 0, amt));
   }
+  // A POSTED-IN PLAYER'S POST IS CAPTURED (2026-09-25, round 2, harness `post-in`): normalizeHand carries a post on the
+  // poster's own next action (utils/foldPostIns), so a poster who has not acted yet — or who folded — holds chips no
+  // action carries. They are the post, captured by the wrapper: counted here, not refused as a lost action.
+  for (const p of hand.postIns ?? []) {
+    if (p.readAs !== "pending" && p.readAs !== "fold") continue;
+    const m = per.get("preflop") ?? new Map<number, number>();
+    per.set("preflop", m);
+    const s = p.hero ? hand.heroSeatId : p.seatId;
+    m.set(s, Math.max(m.get(s) ?? 0, Number(p.amount) || 0));
+  }
   const folded = new Set(hand.actions.filter((a) => a.type === "fold").map(seatOf));
   const allIn = new Set(hand.actions.filter((a) => a.type === "all-in").map(seatOf));
   const r2 = (x: number) => Math.round(x * 100) / 100;

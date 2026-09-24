@@ -178,3 +178,32 @@ describe("repairPostflopCapture — a preflop fold filed late is repaired at the
     expect(r).toEqual({ hand: clean, notes: [], faults: [] });
   });
 });
+
+/**
+ * POSTED-IN PLAYERS IN THE CHIP LEDGER (2026-09-25, round 2 of the input-mutation harness, `post-in` operator:
+ * 178 preflop and 36 postflop capture faults in 300 seeds). normalizeHand takes the post out of the line and carries
+ * it on the poster's own next action (utils/foldPostIns) — so a poster who has NOT acted yet has 1bb in front of him
+ * and no action, and a poster who FOLDED left 1bb in the pot with no action carrying it. The gate read both as a lost
+ * action and refused a real table's state (seed 1: CO posts in, hero HJ opens — "CO has 1bb in front of them …").
+ */
+describe("lostActionFaults — posted-in players", () => {
+  const P = (seatId: number, type: string, amount?: number, street = "preflop", hero = false) =>
+    ({ seatId, hero, type, street, ...(amount != null ? { amount } : {}) });
+  it("a poster yet to act: his post is in front of him, not a lost action", async () => {
+    const { normalizeHand } = await import("../../feed/normalizeHand/normalizeHand");
+    const raw = { handId: 1, clientHandId: "t", heroSeatId: 4, heroCards: ["Kd", "Qh"], board: [], street: "preflop",
+      actions: [P(1, "post-sb", 0.5), P(2, "post-bb", 1), P(5, "post", 1), P(3, "fold")],
+      liveSeats: [1, 2, 3, 4, 5, 6], committed: { 1: 0.5, 2: 1, 5: 1 }, potByStreet: {}, positions: SIX,
+      currentNode: { street: "preflop", toActSeatId: 4, toActIsHero: true, pot: 0, toCall: 1, legalActions: [], complete: false } };
+    expect(lostActionFaults(normalizeHand(raw).hand!)).toEqual([]);
+  });
+  it("a poster who folded: his post is dead money in the pot, not a lost call", async () => {
+    const { normalizeHand } = await import("../../feed/normalizeHand/normalizeHand");
+    const raw = { handId: 1, clientHandId: "t", heroSeatId: 6, heroCards: ["Kd", "Qh"], board: ["2c", "7d", "9s"], street: "flop",
+      actions: [P(1, "post-sb", 0.5), P(2, "post-bb", 1), P(5, "post", 1), P(3, "fold"), P(4, "fold"), P(5, "fold"),
+        P(6, "raise", 2.5, "preflop", true), P(1, "fold"), P(2, "call", 1.5), P(2, "check", undefined, "flop")],
+      liveSeats: [1, 2, 3, 4, 5, 6], committed: {}, potByStreet: {}, positions: SIX,
+      currentNode: { street: "flop", toActSeatId: 6, toActIsHero: true, pot: 6.5, toCall: 0, legalActions: [], complete: false } };
+    expect(lostActionFaults(normalizeHand(raw).hand!)).toEqual([]);
+  });
+});
