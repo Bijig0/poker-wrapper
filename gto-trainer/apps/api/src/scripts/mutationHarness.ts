@@ -384,6 +384,13 @@ async function runCaseInner(seed: number, ops: Op[], opts: { slowMs?: number }):
     }
     // a postflop street after a cloud-gated preflop cannot have a pin: its miss is the cloud's, not a finding
     if (v.verdict === "finding" && street !== "preflop" && cloudGatedPreflop && /no charts|AI preflop|cloud|GTO Wizard/i.test(v.reason ?? "")) v.verdict = "cloud-gated";
+    // …and after a cloud-gated preflop decision hero played WITHOUT a pick (the policy had none, so the generator
+    // chose), which live the AI piece would have answered and pinned. A later decision where hero's class carries no
+    // weight is then hero's unpicked action, not a piece's mismatch — the harness cannot say what the AI would have
+    // told him (2026-09-25: seeds 178 and 245 [short-seat], a 4-bet with J2s the chart never makes, flagged as a bug).
+    if (v.verdict === "finding" && cloudGatedPreflop && (v.kind === "hero-zero-weight" || /PREFLOP PIN .* not in range/.test(v.reason ?? ""))) {
+      v.verdict = "cloud-gated"; v.note = `after a cloud-gated preflop decision hero played without a pick: ${v.reason ?? ""}`.slice(0, 300);
+    }
     verdicts.push(v);
     if (v.verdict === "finding") failingExports.push(raw);
   }
