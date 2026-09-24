@@ -4,9 +4,12 @@
  * acts on anything the client is not currently offering. launch.py: act, raise_to, the pick → relay path, the
  * told-vs-did postcondition, the time bank.
  *
- * AUTO-EXECUTE IS PRACTICE-ONLY. The Python wrapper had a temporary real-money testing allowance
- * (/study-auto allowRealMoney); it is deliberately NOT ported (2026-09-24): auto arms on a practice table
- * (the client's playMode=fun) or the fake table, and nowhere else.
+ * AUTO-EXECUTE IS PRACTICE-ONLY BY DEFAULT: it arms on a practice table (the client's playMode=fun / CoinPoker's
+ * coinType 2) or the fake table with no further ask. A REAL-MONEY table — Ignition or CoinPoker — needs an
+ * explicit, BOUNDED, TEMPORARY test allowance (`/study-auto {allowRealMoney: true, minutes, hands, reason}`) —
+ * re-added 2026-09-24 at Brady's request to exercise the auto-execute path where practice tables have no
+ * players/aren't available; same shape as the old Python allowance (clamped minutes/hands, cleared on disarm
+ * or expiry, never inherited into a new session, never silently re-granted). Not a production mode.
  */
 import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
@@ -300,7 +303,12 @@ export function pickReady(): Record<string, any> {
 }
 
 export async function actuate(plan: Record<string, any>): Promise<Record<string, any>> {
-  if (isCp()) return CP.actuate(plan, { auto: S.study.execSource === "auto" });
+  if (isCp()) {
+    const auto = S.study.execSource === "auto";
+    // the actuator keeps its own practice-only check; it lets an auto press through on real money only when we
+    // vouch for a LIVE bounded allowance (checked here, at press time — not when it was armed)
+    return CP.actuate(plan, { auto, allowReal: auto && autoAllowance().live });
+  }
   if (plan.kind === "raise-to") return raiseTo(plan.amount, true);
   if (plan.label === "all-in") return actuateAllIn();
   return act(plan.label, "action");
@@ -492,17 +500,31 @@ export function autoAllowance(): Record<string, any> {
 
 const PRACTICE_ONLY = "auto-execute arms only on a practice table or the fake table (real-money auto-execute is not available)";
 
-/** May auto-execute run against the table in front of us right now? Practice and the fake table only. */
+/** May auto-execute run against the table in front of us right now? Practice, the fake table, or a live real-money test allowance
+ *  (Ignition and CoinPoker both — a site's own practice check decides `practice` above). */
 export function autoTableOk(): [boolean, string | null] {
-  if (isCp()) {
-    return CP.practice() ? [true, null] : [false, "CoinPoker auto-execute arms only on a practice table (the server's coinType 2)"];
+  const practice = S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice);
+  if (practice) return [true, null];
+  const allow = autoAllowance();
+  if (allow.granted) {
+    if (allow.live) return [true, null];
+    // the grant just ran out — disarm here so the caller isn't left re-testing an expired allowance forever
+    if (S.study.auto) {
+      S.study.auto = false;
+      Object.assign(S.study, { autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
+      feedAdd("Auto-execute disarmed — real-money TEST allowance expired");
+      if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo, reason: "allowance-expired" });
+      log("[pick] auto off (real-money test allowance expired)");
+    }
+    return [false, "real-money auto-execute test allowance has expired"];
   }
-  if (S.fakeMode || S.liveStatus.practice) return [true, null];
   return [false, PRACTICE_ONLY];
 }
 
-/** Arm/disarm the auto mode. Arms on a practice / fake table only; `allowReal` is refused. */
-export function setAuto(on: boolean, opts: { allowReal?: boolean; delay?: string | null; timeBank?: boolean | null; topUp?: boolean | null } = {}): Record<string, any> {
+/** Arm/disarm the auto mode. Arms on a practice / fake table with no ask; a real-money table needs `allowReal`
+ *  plus a bounded `minutes`/`hands` (clamped 1-2880 / 1-10000 — raised 2026-09-24 to match the research team's
+ *  ~2-day check-in cadence; either running out still disarms it — see autoTableOk). */
+export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: number | null; hands?: number | null; reason?: string | null; delay?: string | null; timeBank?: boolean | null; topUp?: boolean | null } = {}): Record<string, any> {
   const st = S.study;
   if (opts.delay === "instant" || opts.delay === "random") {
     st.autoDelay = opts.delay;
@@ -521,16 +543,33 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; delay?: string
     return { ok: true, auto: false, allowance: autoAllowance() };
   }
   const practice = !!(S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice));
-  if (isCp() && !practice) {
-    st.auto = false;
-    return { ok: false, auto: false, error: "CoinPoker auto-execute is practice-only — this table is real money (or its type is unknown)",
-             allowance: autoAllowance() };
-  }
   if (!practice) {
-    st.auto = false;
-    return { ok: false, auto: false,
-             error: "this is a REAL-MONEY table: auto-execute is practice-only (it arms on a practice table or the fake table)",
-             allowance: autoAllowance() };
+    if (!opts.allowReal) {
+      st.auto = false;
+      const site = isCp() ? "CoinPoker" : "this";
+      return { ok: false, auto: false,
+               error: `${site} is a REAL-MONEY table: auto-execute is practice-only (it arms on a practice table or the fake table) ` +
+                      "unless a bounded test allowance is granted (allowRealMoney: true)",
+               allowance: autoAllowance() };
+    }
+    // TEMPORARY, BOUNDED real-money TEST allowance (Brady, 2026-09-24: exercising auto-execute where practice
+    // tables have no players/are otherwise unavailable — not a production mode; same shape on Ignition and
+    // CoinPoker). Clamped like the old Python allowance; whichever of minutes/hands runs out first disarms
+    // (autoTableOk); off/disarm/session-end always clears it, never inherited.
+    const minutes = Math.min(2880, Math.max(1, pyInt(opts.minutes ?? 10)));
+    const hands = opts.hands === null || opts.hands === undefined ? null : Math.min(10000, Math.max(1, pyInt(opts.hands)));
+    const reason = opts.reason ?? "manual test allowance";
+    Object.assign(st, { autoRealUntil: time() + minutes * 60, autoRealHands: hands ?? 0, autoRealFrom: S.handNo, autoRealReason: reason });
+    st.auto = true;
+    if (S.session.id) {
+      S.sessions.event(S.session.id, "study-auto", {
+        on: true, hand: S.handNo, practice: false, delay: st.autoDelay ?? null,
+        realMoneyAllowance: { minutes, hands, reason, site: isCp() ? "coinpoker" : "ignition" },
+      });
+    }
+    feedAdd(`Auto-execute armed on REAL MONEY — TEMPORARY TEST allowance (${minutes} min / ${hands ?? "no"} hand cap): ${reason}`);
+    log(`[pick] auto ON (REAL-MONEY test allowance, ${minutes}min / ${hands ?? "no cap"} hands: ${reason})`);
+    return { ok: true, auto: true, practice: false, delay: st.autoDelay ?? null, allowance: autoAllowance() };
   }
   st.auto = true;
   if (S.session.id) {

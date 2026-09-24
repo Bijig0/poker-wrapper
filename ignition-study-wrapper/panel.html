@@ -1164,8 +1164,8 @@
       row.title = "declared at session setup; a real-money table still needs you to allow it here";
       autoText.textContent = "auto-execute — declared at setup, waiting: this is a REAL MONEY table, tick to allow it";
     } else {
-      row.title = "real-money table: ticking this grants a bounded testing allowance (30 min / 50 hands)";
-      autoText.textContent = "auto-execute picks — REAL MONEY table: ticking grants a bounded 30 min / 50 hand test allowance";
+      row.title = "real-money table: ticking this grants a bounded testing allowance (240 min / 2000 hands)";
+      autoText.textContent = "auto-execute picks — REAL MONEY table: ticking grants a bounded 240 min / 2000 hand test allowance";
     }
     if (!autoPending) $("sa-auto").checked = !!s.studyAuto;
     // the time bank: offered right now, and the last press this session
@@ -1314,11 +1314,11 @@
     // and asks the wrapper for a bounded allowance by name. Practice arms plain.
     let body = { auto: want };
     if (want && !lastPractice) {
-      if (!confirm("This is a REAL-MONEY table.\n\nArm auto-execute for 30 minutes or 50 hands (whichever comes first)?\n\nEvery study pick will be played WITHOUT a keypress until that budget runs out, then it disarms itself.")) {
+      if (!confirm("This is a REAL-MONEY table.\n\nArm auto-execute for 240 minutes or 2000 hands (whichever comes first)?\n\nEvery study pick will be played WITHOUT a keypress until that budget runs out, then it disarms itself.")) {
         $("sa-auto").checked = false;
         return;
       }
-      body = { auto: true, allowRealMoney: true, minutes: 30, hands: 50, reason: "unattended-path test (practice tables empty)" };
+      body = { auto: true, allowRealMoney: true, minutes: 240, hands: 2000, reason: "unattended-path test (practice tables empty)" };
     }
     autoPending = true;
     let r;

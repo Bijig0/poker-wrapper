@@ -18,6 +18,7 @@ import { C, wsDumpPath } from "./config";
 import { Body } from "./contract";
 import * as faketable from "./faketable";
 import { log } from "./feed";
+import * as W from "./win32";
 import * as F from "./formats";
 import { fmtFixed, pyFloat, pyInt, pyJsonDumps, pyRepr, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
@@ -574,8 +575,7 @@ export function buildApp(): Hono {
   app.post("/publish", () => {
     const pub = join(C.ROOT, "..", "setup", "publish.cmd");
     if (SESSION.installedVersion() !== null || !existsSync(pub)) return json(409, { ok: false, why: "not the source checkout" });
-    const { spawn } = require("node:child_process");
-    spawn("cmd", ["/c", "start", "Publish Poker Wrapper update", pub], { cwd: join(C.ROOT, ".."), detached: true, stdio: "ignore", windowsHide: true }).unref();
+    W.startDetached("cmd", ["/c", "start", "Publish Poker Wrapper update", pub], { cwd: join(C.ROOT, ".."), hide: true }, log);
     S.ownerRelease.at = 0.0;
     return json(200, { ok: true });
   });
@@ -592,6 +592,8 @@ export function buildApp(): Hono {
     const b = await body(c, Body.studyAuto);
     const res = setAuto(truthy(b.auto), {
       allowReal: truthy(b.allowRealMoney), delay: (b.delay as string) ?? null,
+      minutes: "minutes" in b ? Number(b.minutes) : null, hands: "hands" in b ? Number(b.hands) : null,
+      reason: "reason" in b ? String(b.reason) : null,
       timeBank: "timeBank" in b ? truthy(b.timeBank) : null, topUp: "topUp" in b ? truthy(b.topUp) : null,
     });
     return json(res.ok ? 200 : 409, res);

@@ -162,12 +162,13 @@
             <div class="seg" id="autoDelay"><button data-v="instant" class="plain">Instant</button><button data-v="random" class="plain">Randomized 1.5–2 s</button></div></div>
           <span class="help">Instant fires the moment the answer lands. Randomized waits a fresh 1.5–2 second draw before each pick — nothing is typed early, and a pick whose spot moves on during the wait is dropped, never played late.</span>
         </div>
-        <div class="cp-only help" style="margin-top:6px;color:#ffce56">CoinPoker: auto-execute arms <b>only on a Practice Games table</b> (the server marks those as play chips). There is no real-money allowance for CoinPoker.</div>
-        <div id="auto-real-row" class="ign-only" style="display:none;margin-top:8px">
+        <div class="cp-only help" style="margin-top:6px;color:#ffce56">CoinPoker: auto-execute arms <b>only on a Practice Games table</b> (the server marks those as play chips) unless the real-money box below is ticked too.</div>
+        <div id="auto-real-row" style="display:none;margin-top:8px">
           <label class="row" style="color:#ff8a80"><input type="checkbox" id="autoRealMoney"> allow it on a REAL-MONEY table</label>
           <div class="row" style="margin-top:6px"><span class="sub">budget</span>
-            <input type="number" id="auto-min" min="1" max="120" value="30" style="width:70px"> <span class="sub">minutes</span>
-            <input type="number" id="auto-hands" min="1" max="500" value="50" style="width:70px"> <span class="sub">hands</span></div>
+            <input type="number" id="auto-min" min="1" max="2880" value="30" style="width:70px"> <span class="sub">minutes</span>
+            <input type="number" id="auto-hands" min="1" max="10000" value="50" style="width:70px"> <span class="sub">hands</span>
+            <button type="button" id="auto-budget-max" class="plain" style="margin-left:4px">Max</button></div>
           <span class="help" style="color:#ff8a80">Whichever budget runs out first disarms it. Without this box a real-money table refuses to arm and the declaration waits for a practice table.</span>
         </div>
         <span class="help">Plays each study pick on the table for you, with no keypress — the same relay the panel's action buttons use. This only sets how the panel OPENS; the toggle there turns it on and off during the session. Off arms nothing: you press Enter per decision, which is the assistive path and needs no declaration.</span></div>
@@ -274,7 +275,7 @@ function choose(id) {
   preset = id;
   cfg = JSON.parse(JSON.stringify(PRESETS[id].config));
   cfg.site = SITE;
-  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; cfg.cpTable = CP_CHOSEN; }
+  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.cpTable = CP_CHOSEN; }
   if (cfg.buyinBb == null) cfg.buyinBb = 100;
   const allowed = allowedFormats();
   const onSite = (fid) => { const f = FORMATS.find((x) => x.id === fid); return !!f && (f.site || "ignition") === SITE; };
@@ -504,7 +505,7 @@ function readSettings() {
   cfg.tables = Number($("tables").querySelector("button.on")?.dataset.v) || 1;
   cfg.profile = $("profile").value || null;
   cfg.site = SITE;
-  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.autoRealMoney = false; cfg.cpTable = CP_CHOSEN; }
+  if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.cpTable = CP_CHOSEN; }
 }
 
 /* WHAT EACH TABLE WILL ACTUALLY GET. A window narrower than the Ignition layout
@@ -541,6 +542,11 @@ $("tables").querySelectorAll("button").forEach((b) => b.onclick = () => {
   readSettings(); fillSettings(); schedulePreflight();
 }));
 ["budget-hands", "budget-min", "auto-min", "auto-hands"].forEach((id) => $(id).onchange = () => { if (cfg) { readSettings(); schedulePreflight(); } });
+$("auto-budget-max").onclick = () => {
+  $("auto-min").value = $("auto-min").max;   // the wrapper's own ceiling (relay.ts setAuto) — kept in one place, here
+  $("auto-hands").value = $("auto-hands").max;
+  if (cfg) { readSettings(); fillSettings(); schedulePreflight(); }
+};
 $("autoRealMoney").onchange = () => { if (cfg) { readSettings(); fillSettings(); } };
 $("clearCache").onchange = () => { if (cfg) { readSettings(); fillSettings(); } };
 $("recheck").onclick = () => runPreflight();
@@ -585,14 +591,28 @@ async function gtowConnect(source) {
   runPreflight();
 }
 
+// A preflight that never returns used to leave "Checking…" up forever (2026-09-24: the wrapper had died and its
+// port was still held open, so the request was accepted and never answered). Give up after PF_TIMEOUT_S and say so.
+const PF_TIMEOUT_S = 30;
+let pfSeq = 0;
 async function runPreflight() {
   if (!cfg) return;
   readSettings();
+  const seq = ++pfSeq;
   $("checks").innerHTML = `<div class="check pending"><span class="dot"></span><span class="l"><b>Checking…</b><span>probing the API, the chart server, GTO Wizard and the recorder</span></span><span></span></div>`;
   $("start").disabled = true; $("pf-msg").textContent = "";
   let j;
-  try { j = await (await fetch("/session/preflight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preset, config: cfg }) })).json(); }
-  catch (e) { j = { ok: false, checks: [], blockers: ["the wrapper did not answer"], error: String(e) }; }
+  try {
+    j = await (await fetch("/session/preflight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preset, config: cfg }),
+                                                   signal: AbortSignal.timeout(PF_TIMEOUT_S * 1000) })).json();
+  } catch (e) {
+    const timedOut = e && (e.name === "TimeoutError" || e.name === "AbortError");
+    const why = timedOut ? `the wrapper did not answer within ${PF_TIMEOUT_S} s — it may have stopped; relaunch Poker Wrapper from its shortcut`
+                         : "the wrapper did not answer — it may have stopped; relaunch Poker Wrapper from its shortcut";
+    j = { ok: false, checks: [{ id: "wrapper", label: "Wrapper answering", required: true, ok: false, detail: `${why} (${e && e.message || e})` }],
+          blockers: ["the wrapper did not answer"], error: String(e) };
+  }
+  if (seq !== pfSeq) return;   // a newer check started while this one was in flight: its result wins
   lastPf = j;
   $("pf-when").textContent = `— checked ${new Date().toLocaleTimeString()}`;
   $("checks").innerHTML = (j.checks || []).map((c) => `<div class="check ${c.ok ? "ok" : "bad"}${c.required ? " required" : ""}"><span class="dot"></span><span class="l"><b>${esc(c.label)}</b><span>${esc(c.detail)}</span>${gtowRows(c)}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`).join("");

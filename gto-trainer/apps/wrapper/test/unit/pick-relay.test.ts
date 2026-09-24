@@ -2,19 +2,19 @@
  * Port of tests/test_pick_relay.py — pick → relay, offline: the label mapping, every guard in pickReady, the
  * executor, auto-execute, told-vs-did (the postcondition), the shove fallback and the top-up gate.
  *
- * ONE DELIBERATE DIFFERENCE from the Python test. Python's "real-money allowance" (/study-auto allowRealMoney, a
- * bounded auto-execute on a real-money table) is NOT ported: auto-execute is practice / fake-table only. Where the
- * Python test asserted that the allowance arms, is bounded and expires, this asserts it is refused outright —
- * whether asked for live or declared at setup — and never becomes "granted".
+ * The real-money allowance (/study-auto allowRealMoney, a bounded, expiring TEST allowance for exercising
+ * auto-execute on a real-money table) was re-added 2026-09-24 — see relay.ts's header. This asserts it arms,
+ * is bounded by minutes/hands, and expires on its own, matching the old Python test's intent.
  */
 import { expect, test } from "bun:test";
 import { setFakeTime, time } from "../../src/clock";
 import { pyJsonDumps } from "../../src/py";
-import { S, resetState, seams } from "../../src/state";
+import { CP, S, resetState, seams } from "../../src/state";
 import {
-  actuateAllIn, autoAllowance, didAsTold, executePick, maybeAutoAct, maybeAutoArm, maybeVerifyExec, pickPlan, pickReady, setAuto,
+  actuate, actuateAllIn, autoAllowance, autoTableOk, didAsTold, executePick, maybeAutoAct, maybeAutoArm, maybeVerifyExec, pickPlan, pickReady, setAuto,
 } from "../../src/relay";
 import { topUpGate } from "../../src/topup";
+import * as CPA from "../../src/sites/cpActions";
 import { checker, J, scratchDirs } from "./helpers";
 
 const P = pickPlan;
@@ -144,22 +144,98 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
     await maybeAutoAct();
     check("auto stands down when the table stops being practice", calls.length === n + 1);
 
-    // REAL MONEY: no allowance in this build — refused live, refused when declared, never granted
+    // REAL MONEY: refused plain; a bounded, expiring TEST allowance (allowRealMoney) arms and disarms itself
     seed({ pick: "Call" });
     S.liveStatus.practice = false;
     Object.assign(S.study, { auto: false, autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
     let r = setAuto(true);
     check("plain arm on real money refused", !r.ok && String(r.error).includes("practice-only"), J(r));
-    r = setAuto(true, { allowReal: true });
-    check("allowRealMoney does NOT arm on real money", !r.ok && S.study.auto === false, J(r));
-    check("  ... and no allowance is ever granted", autoAllowance().granted === false, J(autoAllowance()));
+    r = setAuto(true, { allowReal: true, minutes: 10, hands: 5, reason: "test" });
+    check("allowRealMoney arms on real money", r.ok && S.study.auto === true, J(r));
+    let allow = autoAllowance();
+    check("  ... a bounded allowance is granted", allow.granted && allow.live && allow.handsLeft === 5, J(allow));
     n = calls.length;
     await maybeAutoAct();
-    check("  ... so nothing fires", calls.length === n);
+    check("  ... and it fires", calls.length === n + 1 && calls[calls.length - 1][1] === "call");
+    setAuto(false);
+    check("  ... off clears the allowance", autoAllowance().granted === false, J(autoAllowance()));
+    // the budget is clamped, not open-ended — even an out-of-range ask (research cadence: ~2 days / 10000 hands)
+    // is capped, not passed straight through
+    seed({ pick: "Call" });
+    S.liveStatus.practice = false;
+    r = setAuto(true, { allowReal: true, minutes: 999999, hands: 999999, reason: "test" });
+    allow = autoAllowance();
+    check("  ... minutes clamps at 2880 (2 days)", allow.minutesLeft === 2880, J(allow));
+    check("  ... hands clamps at 10000", allow.handsLeft === 10000, J(allow));
+    setAuto(false);
+    // the allowance disarms itself once its time runs out, even without an explicit off
+    seed({ pick: "Call" });
+    S.liveStatus.practice = false;
+    setAuto(true, { allowReal: true, minutes: 10, reason: "test" });
+    setFakeTime(time() + 601); // 10 minutes + 1s
+    n = calls.length;
+    await maybeAutoAct();
+    check("expired allowance disarms and does not fire", S.study.auto === false && calls.length === n);
+    setFakeTime(1_790_000_000);
+    setAuto(false);
     S.liveStatus.practice = true;
     r = setAuto(true);
     check("practice arms with no allowance at all", r.ok && r.practice && !autoAllowance().granted);
     setAuto(false);
+
+    // COINPOKER gets the same bounded real-money test allowance (added 2026-09-24, same shape as Ignition's).
+    const cpPractice0 = CP.practice;
+    try {
+      (CP as any).practice = () => false;
+      seed({ pick: "Call" });
+      S.site.id = "coinpoker";
+      S.liveStatus.practice = false; // irrelevant on CoinPoker — practice comes from CP.practice()
+      r = setAuto(true);
+      check("CoinPoker: plain arm on real money refused", !r.ok && String(r.error).includes("CoinPoker"), J(r));
+      r = setAuto(true, { allowReal: true, minutes: 10, hands: 5, reason: "test" });
+      check("CoinPoker: allowRealMoney arms, bounded", r.ok && S.study.auto === true && autoAllowance().handsLeft === 5, J(autoAllowance()));
+      check("CoinPoker: autoTableOk is now true off the allowance", autoTableOk()[0] === true);
+      // THE PRESS reaches the Unity actuator with allowReal vouched for (the 2026-09-24 session: the allowance armed
+      // but cpActions' own practice-only check refused every pick, because relay never told it about the allowance)
+      const cpActuate0 = CP.actuate;
+      const seen: any[] = [];
+      try {
+        (CP as any).actuate = async (_plan: any, o: any) => { seen.push(o); return { ok: true, clicked: "CALL", kind: "coinpoker" }; };
+        S.study.execSource = "auto";
+        await actuate({ kind: "action", label: "call" });
+        check("CoinPoker: an auto press vouches allowReal while the allowance is live",
+              J(seen[seen.length - 1]) === J({ auto: true, allowReal: true }), J(seen));
+        S.study.execSource = "press";
+        await actuate({ kind: "action", label: "call" });
+        check("CoinPoker: a manual press never carries allowReal", J(seen[seen.length - 1]) === J({ auto: false, allowReal: false }), J(seen));
+        S.study.execSource = "auto";
+        setFakeTime(time() + 601);
+        await actuate({ kind: "action", label: "call" });
+        check("CoinPoker: an EXPIRED allowance is not vouched for at press time",
+              J(seen[seen.length - 1]) === J({ auto: true, allowReal: false }), J(seen));
+        setFakeTime(1_790_000_000);
+      } finally {
+        (CP as any).actuate = cpActuate0;
+        S.study.execSource = null;
+      }
+      // ... and the actuator's own gate: refuses unvouched auto on real money, passes a vouched one (a null hand
+      // stops it straight after the gate, so no real input is sent)
+      const room: any = { name: "t", practice: false, coinType: 1 };
+      let a = await CPA.act(room, () => null, "call", null, { auto: true });
+      check("cpActions: unvouched auto on real money refused", !a.ok && String(a.why).includes("REAL MONEY"), J(a));
+      a = await CPA.act(room, () => null, "call", null, { auto: true, allowReal: true });
+      check("cpActions: vouched auto passes the practice gate", !a.ok && a.why === "no live hand", J(a));
+      a = await CPA.act(room, () => null, "call", null, {});
+      check("cpActions: a manual press was never gated", !a.ok && a.why === "no live hand", J(a));
+      setAuto(false);
+      (CP as any).practice = () => true;
+      r = setAuto(true);
+      check("CoinPoker: practice table arms with no allowance", r.ok && !autoAllowance().granted);
+      setAuto(false);
+    } finally {
+      (CP as any).practice = cpPractice0;
+      S.site.id = "ignition";
+    }
 
     // DECLARED auto-execute (setup page config.autoExecute) — intent, not bypass. (Not named `declare`: Bun 1.3.14
     // — what config/env.ps1 resolves — silently drops a statement that calls a function by that name.)
@@ -169,7 +245,12 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
                                autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
                                autoDeclared: !!cfg.autoExecute, autoDeclaredReal: !!cfg.autoRealMoney,
                                autoDeclaredBudget: { ...(cfg.autoBudget || { minutes: 30, hands: 50 }) } });
-      if (S.study.autoDeclared) lastDeclare = setAuto(true, { allowReal: S.study.autoDeclaredReal });
+      if (S.study.autoDeclared) {
+        lastDeclare = setAuto(true, {
+          allowReal: S.study.autoDeclaredReal, minutes: S.study.autoDeclaredBudget?.minutes ?? null,
+          hands: S.study.autoDeclaredBudget?.hands ?? null, reason: "declared at session setup",
+        });
+      }
     };
     seed({ pick: "Call" });
     S.liveStatus.practice = true;
@@ -189,12 +270,8 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
     seed({ pick: "Call" });
     S.liveStatus.practice = false;
     declareAuto({ autoExecute: true, autoRealMoney: true, autoBudget: { minutes: 10, hands: 5 } });
-    check("declared WITH the real-money box still does not arm on real money", S.study.auto === false && !autoAllowance().granted);
-    maybeAutoArm();
-    check("  ... and the pending declaration never arms there", S.study.auto === false);
-    S.liveStatus.practice = true;
-    maybeAutoArm();
-    check("  ... only a practice table arms it", S.study.auto === true);
+    check("declared WITH the real-money box arms on real money, bounded", S.study.auto === true && autoAllowance().handsLeft === 5,
+          J(autoAllowance()));
     setAuto(false);
     check("live off disarms", S.study.auto === false);
     check("live off clears the declaration", S.study.autoDeclared === false);

@@ -7,6 +7,7 @@
  * writes a session record, never takes a balance reading and never ends anything.
  */
 import { spawn } from "node:child_process";
+import * as W from "./win32";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as A from "./auth";
@@ -469,7 +470,10 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
   st.autoDeclaredReal = !!cfg.autoRealMoney;
   st.autoDeclaredBudget = { ...(cfg.autoBudget || { minutes: 30, hands: 50 }) };
   if (st.autoDeclared) {
-    const res = setAuto(true, { allowReal: st.autoDeclaredReal });
+    const res = setAuto(true, {
+      allowReal: st.autoDeclaredReal, minutes: st.autoDeclaredBudget?.minutes ?? null, hands: st.autoDeclaredBudget?.hands ?? null,
+      reason: "declared at session setup",
+    });
     if (!res.ok) log(`[pick] declared auto not armed yet: ${pyStr(res.error ?? null)}`);
   }
   if (isCp()) {
@@ -551,8 +555,8 @@ async function spawnSlot(slotN: number, n: number): Promise<Record<string, any>>
     // command line, and a slot started without them reads as :7700 — a relaunch of table 1 would then end it
     const args = ["run", join(import.meta.dir, "main.ts"), "--panel-port", String(port), "--cdp-port", String(C.CDP_PORT)];
     if (S.fakeMode) args.push("--fake");
-    const child = spawn(process.execPath, args, { env, cwd: C.ROOT, detached: true, stdio: "ignore", windowsHide: true });
-    child.unref();
+    // W.spawnDetached: a slot must not inherit this leader's listening socket (it would hold :7700 open after us)
+    W.startDetached(process.execPath, args, { env, cwd: C.ROOT, hide: true }, log);
   } catch (e: any) {
     return { slot: slotN, panelPort: port, ok: false, error: `could not start: ${e?.message ?? e}` };
   }
@@ -897,9 +901,10 @@ export function startUpdate(): [number, Record<string, any>] {
   if (C.PANEL_PORT !== 7700) args.push("-WrapperArgs", `--panel-port ${C.PANEL_PORT} --cdp-port ${C.CDP_PORT}` + (S.fakeMode ? " --fake" : ""));
   for (const [env, flag] of [["PW_API_PORT", "-ApiPort"], ["PW_CHART_PORT", "-ChartPort"]] as const) if (process.env[env]) args.push(flag, process.env[env]!);
   if (process.env.PW_SKIP_TASKS === "1") args.push("-SkipTasks");
-  const c = spawn("cmd", ["/c", "start", "Poker Wrapper update", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, ...args],
-                  { cwd: REPO, detached: true, stdio: "ignore", windowsHide: true });
-  c.unref();
+  // W.spawnDetached: update.ps1 relaunches the wrapper while it is still running — holding our listening socket
+  // it would keep this port open and the relaunch could not take it
+  W.startDetached("cmd", ["/c", "start", "Poker Wrapper update", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, ...args],
+                  { cwd: REPO, hide: true }, log);
   standDown("updating");
   return [200, { ok: true, updating: true }];
 }

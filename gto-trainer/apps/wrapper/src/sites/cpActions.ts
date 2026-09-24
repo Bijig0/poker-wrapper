@@ -9,9 +9,10 @@
  *    and a bet box must read back the intended amount, or nothing is pressed.
  *  - The press is CONFIRMED from CoinPoker's own log: hero's action must appear in the hand within a few seconds.
  *
- * AUTO-EXECUTE IS PRACTICE-ONLY. `act(..., {auto: true})` refuses unless the server said the table is practice
- * chips (roomProperties.coinType == 2). A table whose type is unknown is treated as real money. A real-money press
- * needs a person to ask for it — the tool never plays a real-money table by itself.
+ * AUTO-EXECUTE IS PRACTICE-ONLY BY DEFAULT. `act(..., {auto: true})` refuses unless the server said the table is
+ * practice chips (roomProperties.coinType == 2) — a table whose type is unknown is treated as real money — OR the
+ * caller vouches for a live, bounded real-money test allowance (`allowReal: true`, set by relay.actuate only while
+ * autoAllowance().live; 2026-09-24). Without that, a real-money press needs a person to ask for it.
  */
 import { sleep, time } from "../clock";
 import * as OCR from "../ocr";
@@ -163,12 +164,12 @@ export function fmtAmount(v: number): string {
 /** Press one action for hero at `room`. `getHand()` = the current ParsedHand for that room (read fresh);
  *  amount = the bet/raise TOTAL in table chips. {ok, ...} — ok only when the log shows hero's action. */
 export async function act(room: Room, getHand: () => Record<string, any> | null, action: string, amount: number | null = null,
-                          opts: { auto?: boolean; confirmS?: number } = {}): Promise<Record<string, any>> {
+                          opts: { auto?: boolean; allowReal?: boolean; confirmS?: number } = {}): Promise<Record<string, any>> {
   const auto = !!opts.auto;
   const confirmS = opts.confirmS ?? 4.0;
   action = action.toLowerCase();
   if (!(action in LABEL)) return { ok: false, why: `unknown action ${pyReprStr(action)}` };
-  if (auto && !room.practice) {
+  if (auto && !room.practice && !opts.allowReal) {
     return { ok: false, why: "auto-execute is practice-only — this table is "
       + (room.coinType === 1 ? "REAL MONEY (coinType 1)" : `of unknown type (coinType ${room.coinType === null ? "None" : pyStr(room.coinType)})`) };
   }

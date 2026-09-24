@@ -6,10 +6,9 @@
  * receives to %APPDATA%/CoinPoker/logs/main.log — so the reader is cpFeed (a tail of that file) and the presses
  * are cpActions (real input on the Unity window, read back by OCR before and confirmed from the log after).
  *
- * AUTO-EXECUTE HERE IS PRACTICE-ONLY, with no real-money allowance: cpActions refuses `auto` unless the server said
- * the table is practice chips (coinType 2).
+ * AUTO-EXECUTE HERE IS PRACTICE-ONLY BY DEFAULT: cpActions refuses `auto` unless the server said the table is
+ * practice chips (coinType 2), or relay passes `allowReal` because a bounded real-money test allowance is live.
  */
-import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { time } from "../clock";
@@ -244,8 +243,9 @@ export class Site {
 
   // ---- presses ----
   /** A study pick's plan as a press on the Unity table: {ok, reason?, clicked?, kind?}. */
-  async actuate(plan: Record<string, any>, opts: { auto?: boolean } = {}): Promise<Record<string, any>> {
+  async actuate(plan: Record<string, any>, opts: { auto?: boolean; allowReal?: boolean } = {}): Promise<Record<string, any>> {
     const auto = !!opts.auto;
+    const allowReal = !!opts.allowReal;
     const r = this.roomNow();
     if (!r) return { ok: false, reason: "no CoinPoker table in the log" };
     const get = this.handOf(r);
@@ -267,11 +267,11 @@ export class Site {
         return { ok: false, reason: `unreadable size ${pyRepr(plan.amount ?? null)}` };
       }
       const amount = bb >= 0.05 ? pyRound(amtBb * bb, 2) : pyRound(amtBb * bb);
-      if (total && amount >= total * 0.999) res = await actions.act(r, get, "allin", total, { auto });
-      else res = await actions.act(r, get, plan.verb || "raise", amount, { auto });
+      if (total && amount >= total * 0.999) res = await actions.act(r, get, "allin", total, { auto, allowReal });
+      else res = await actions.act(r, get, plan.verb || "raise", amount, { auto, allowReal });
     } else {
       const label = plan.label === "all-in" ? "allin" : plan.label;
-      res = await actions.act(r, get, label, label === "allin" ? total : null, { auto });
+      res = await actions.act(r, get, label, label === "allin" ? total : null, { auto, allowReal });
     }
     const out: Record<string, any> = { ok: !!res.ok, clicked: res.label ?? null, kind: "coinpoker", result: res };
     if (!res.ok) out.reason = res.why ?? null;
@@ -311,9 +311,10 @@ export class Site {
     const st = this.clientState();
     if (st.running) return { ok: true, started: false, ...st };
     if (!existsSync(EXE)) return { ok: false, started: false, error: `CoinPoker not installed at ${EXE}`, ...st };
-    const child = spawn(EXE, [`--remote-debugging-port=${CDP_PORT}`, "--remote-allow-origins=*"],
-                        { cwd: dirname(EXE), detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
+    // W.spawnDetached: the client outlives us, so it must not inherit the panel port's listening socket
+    // (the logger is imported lazily: feed -> state -> this module is an import cycle at load time)
+    W.startDetached(EXE, [`--remote-debugging-port=${CDP_PORT}`, "--remote-allow-origins=*"], { cwd: dirname(EXE) },
+                    (m) => void import("../feed").then((f) => f.log(m)));
     return { ok: true, started: true, ...st };
   }
 
