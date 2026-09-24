@@ -388,14 +388,22 @@ export function lostActionFaults(hand: ParsedHand): string[] {
   }
 
   // 2. a seat that acts on a later street with an earlier round it never matched
+  // A SEAT THAT FOLDS LATER STILL MATCHED EVERY ROUND IT PLAYED PAST (round 2, harness triples seeds 27947/30764: the
+  // SB's lost complete, then flop and turn actions, then a turn fold — answered from the river on, because this rule
+  // skipped every seat that ever folded). For a seat that folded, only its NON-fold actions count: a fold filed on a
+  // later street may be the preflop fold itself, filed late (archive hand 4919261748's BB).
   const lastStreetOf = new Map<number, number>();
   for (const a of hand.actions) {
     const i = order.indexOf(a.street);
     if (i < 0 || a.type === "post-sb" || a.type === "post-bb") continue;
+    if (a.type === "fold") continue;
     lastStreetOf.set(seatOf(a), Math.max(lastStreetOf.get(seatOf(a)) ?? -1, i));
   }
-  for (const [s, last] of lastStreetOf) {
-    if (folded.has(s) || allIn.has(s)) continue;
+  for (const [s, lastPlayed] of lastStreetOf) {
+    if (allIn.has(s)) continue;
+    // a seat still in has matched every round before the street it acts on now; one that folded, every round before
+    // the last street it played (its fold street is not a round it played past)
+    const last = folded.has(s) ? lastPlayed : Math.max(lastPlayed, ...hand.actions.filter((a) => seatOf(a) === s && a.type !== "post-sb" && a.type !== "post-bb").map((a) => order.indexOf(a.street)));
     for (let i = 0; i < last; i++) {
       const m = per.get(order[i]!);
       if (!m) continue;

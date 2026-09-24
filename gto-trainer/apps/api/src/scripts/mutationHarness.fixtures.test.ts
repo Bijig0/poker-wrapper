@@ -65,6 +65,8 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 17644, ops: ["missed-fold"], cls: "the same, the SB's lost fold and the BB's flop check (postflop-line-mismatch)" },
   { seed: 21901, ops: ["jam"], cls: "a preflop all-in player counted in the flop rotation; the HJ's check dropped (postflop-line-mismatch)" },
   { seed: 27266, ops: ["missed-fold"], cls: "the depth read before the capture repair wrote a lost later-orbit fold (stack behind 91 vs 89.2)" },
+  { seed: 27947, ops: ["post-in", "dropped-call"], cls: "the SB's lost complete answered once he folded the turn (answered-corrupt-capture)", refusals: true },
+  { seed: 30764, ops: ["dropped-call", "post-in", "nl5-rounding"], cls: "the same at 5c (answered-corrupt-capture)", refusals: true },
   { seed: 22, ops: ["undealt-seat"], cls: "stack behind: a sitting-out label's stack set the effective depth (solver-input-mismatch)" },
   { seed: 18287, ops: ["short-seat"], cls: "the pinned chart cannot hold a fifth entrant after hero's squeeze; the flop re-picked a chart where hero never squeezes (hero-zero-weight)" },
 ];

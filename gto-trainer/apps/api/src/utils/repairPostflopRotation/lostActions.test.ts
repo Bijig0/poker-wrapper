@@ -186,6 +186,24 @@ describe("repairPostflopCapture — a preflop fold filed late is repaired at the
  * and no action, and a poster who FOLDED left 1bb in the pot with no action carrying it. The gate read both as a lost
  * action and refused a real table's state (seed 1: CO posts in, hero HJ opens — "CO has 1bb in front of them …").
  */
+/**
+ * A LOST CALL BY A SEAT THAT FOLDS ON A LATER STREET (round 2, harness triples: seeds 27947 [post-in + dropped-call] and
+ * 30764 [dropped-call + post-in + nl5]). The SB's complete never reached the capture; he bet the flop and checked the
+ * turn — refused as "SB acts on the flop but put 0.5bb into a preflop round that went to 1bb" — then folded the turn,
+ * and from the river on the hand was ANSWERED: rule 2 skipped every seat that ever folded, and 0.5bb sits inside the pot
+ * ledger's 0.6bb slack. A seat that played a later street had matched every round before it, fold or no fold.
+ */
+describe("lostActionFaults — 2. a lost call by a seat that folds later", () => {
+  // UTG, HJ, CO fold, the BTN limps, the SB completes (LOST), hero BB checks
+  const line = [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "call", "preflop", 1),
+    act(2, "check", "preflop"), act(1, "bet", "flop", 1), act(2, "call", "flop", 1, true), act(6, "call", "flop", 1),
+    act(1, "check", "turn"), act(2, "bet", "turn", 2, true), act(6, "call", "turn", 2), act(1, "fold", "turn")];
+  it("is still a lost call after he folds", () => {
+    const f = lostActionFaults(hand({ actions: line, hero: 2, street: "river", board: ["2c", "7d", "9s", "Kh", "3c"], pot: 9.5 }));
+    expect(f.some((x) => x.includes("SB acts on the turn but put 0.5bb into a preflop round that went to 1bb"))).toBe(true);
+  });
+});
+
 describe("lostActionFaults — posted-in players", () => {
   const P = (seatId: number, type: string, amount?: number, street = "preflop", hero = false) =>
     ({ seatId, hero, type, street, ...(amount != null ? { amount } : {}) });
