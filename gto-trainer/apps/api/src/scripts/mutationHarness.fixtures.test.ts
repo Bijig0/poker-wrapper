@@ -34,6 +34,9 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 3992, ops: ["limps"], cls: "the same, where the tree holds the line with the limper kept" },
   { seed: 1333, ops: ["jam"], cls: "a short stack's jam called twice: a side pot, not an all-in flop" },
   { seed: 2053, ops: ["jam"], cls: "a 25bb jam snapped onto the chart's 2.5bb open — refused, the exact tree answers" },
+  { seed: 3, ops: ["missed-fold"], cls: "a fold lost in a later orbit: written into its slot" },
+  { seed: 12, ops: ["missed-fold"], cls: "a fold lost in the opening orbit: no capture fault on the flop" },
+  { seed: 627, ops: ["missed-fold"], cls: "a padded opening-orbit fold is not written a second time" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

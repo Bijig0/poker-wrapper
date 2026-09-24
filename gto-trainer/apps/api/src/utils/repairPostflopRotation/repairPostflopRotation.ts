@@ -244,9 +244,14 @@ export function captureFaults(hand: ParsedHand): string[] {
 
   // a seat cannot reach a postflop street without having acted preflop. hand 4919432609 is on the flop with
   // nothing preflop but the two blind posts, so whatever the BTN did to get there was never captured.
+  // …but only a seat that PLAYS ON proves it (2026-09-25, harness `missed-fold`: 76 of 807 decisions refused). A dealt
+  // seat with no preflop action that never appears again is a fold the tap missed — the comment on the rotation rule
+  // above says so, and the token builders pad it — yet this rule refused every flop, turn and river of such a hand.
+  // A silent seat whose chips ARE in the pot is lostActionFaults' business (the pot ledger), not this rule's.
   if (hand.currentNode?.street && hand.currentNode.street !== "preflop") {
     const acted = new Set(hand.actions.filter((a) => a.street === "preflop").map((a) => a.seatId));
-    const missing = (hand.liveSeats ?? []).filter((s) => hand.positions?.[s] && !acted.has(s));
+    const playsOn = new Set(hand.actions.filter((a) => a.street !== "preflop").map((a) => a.seatId));
+    const missing = (hand.liveSeats ?? []).filter((s) => hand.positions?.[s] && !acted.has(s) && playsOn.has(s));
     if (missing.length) {
       faults.push(`${missing.map(pos).join(", ")} reached the ${hand.currentNode.street} with no preflop action captured`);
     }
@@ -437,16 +442,20 @@ export function repairPreflopFoldOrder(hand: ParsedHand): { hand: ParsedHand; no
   const ordered: ParsedAction[] = [];
   const out = new Set<number>();
   const moved: string[] = [];
-  let cursor = (anchor + 1) % ring.length;
+  const missed: string[] = [];
+  const start = (anchor + 1) % ring.length;
+  let cursor = start;
+  let lap = 0;                                   // completed trips round the ring: 0 = the opening orbit
+  const step = () => { cursor = (cursor + 1) % ring.length; if (cursor === start) lap++; };
   let guard = 0;
   while (pending.length && guard++ < 200) {
     const expect = ring[cursor]!;
     const next = pending[0]!;
-    if (out.has(expect)) { cursor = (cursor + 1) % ring.length; continue; }
+    if (out.has(expect)) { step(); continue; }
     if (next.seatId === expect) {
       ordered.push(pending.shift()!);
       if (next.type === "fold" || next.type === "all-in") out.add(next.seatId);
-      cursor = (cursor + 1) % ring.length;
+      step();
       continue;
     }
     const later = pending.findIndex((a) => a.seatId === expect);
@@ -455,21 +464,40 @@ export function repairPreflopFoldOrder(hand: ParsedHand): { hand: ParsedHand; no
       ordered.push(pending.splice(later, 1)[0]!);
       out.add(expect);
       moved.push(pos(expect));
-      cursor = (cursor + 1) % ring.length;
+      step();
       continue;
     }
-    if (later < 0) { cursor = (cursor + 1) % ring.length; continue; }   // never acts: a missed fold, left to the padding
+    if (later < 0) {
+      // NEVER ACTS AGAIN though the rotation passed him: a fold the tap missed. In the opening orbit the token
+      // builders pad it positionally; in a LATER orbit they append the actions in capture order, so the next seat's
+      // fold was handed to him and a seat that folded "reached the flop" (2026-09-25, harness `missed-fold` seed 3:
+      // BTN's fold to the 4-bet lost, the SB's fold read as the BTN's, the SB solved as a flop seat). There the fold
+      // is written into its slot. Never hero's: his own missing action is not ours to invent.
+      if (expect !== hand.heroSeatId) {
+        if (lap > 0) {
+          ordered.push({ seatId: expect, hero: false, type: "fold", street: "preflop" } as ParsedAction);
+          missed.push(pos(expect));
+        }
+        out.add(expect);   // folded either way: the opening orbit's padding, or the fold written here
+      }
+      step();
+      continue;
+    }
     break;   // the expected seat puts chips in later — a genuine contradiction, not ours to repair
   }
   ordered.push(...pending);
-  if (!moved.length) return { hand, note: null };
+  if (!moved.length && !missed.length) return { hand, note: null };
   const rest = hand.actions.filter((a) => !isVol(a));
   // keep the blind posts first, then the repaired preflop line, then everything postflop in its captured order
   const posts = rest.filter((a) => a.street === "preflop");
   const post = rest.filter((a) => a.street !== "preflop");
+  const notes = [
+    moved.length ? `FOLDS FILED LATE: ${moved.join(", ")}'s fold${moved.length > 1 ? "s were" : " was"} captured after later seats acted and moved back into rotation (a fold commits nothing, so the spot is unchanged).` : null,
+    missed.length ? `FOLDS NOT CAPTURED: ${missed.join(", ")} never acted again though the action passed ${missed.length > 1 ? "them" : "him"}, so ${missed.length > 1 ? "their folds were" : "his fold was"} written into the line (a fold commits nothing; chips with no action are refused by the ledger).` : null,
+  ].filter(Boolean);
   return {
     hand: { ...hand, actions: [...posts, ...ordered, ...post] },
-    note: `FOLDS FILED LATE: ${moved.join(", ")}'s fold${moved.length > 1 ? "s were" : " was"} captured after later seats acted and moved back into rotation (a fold commits nothing, so the spot is unchanged).`,
+    note: notes.join(" "),
   };
 }
 

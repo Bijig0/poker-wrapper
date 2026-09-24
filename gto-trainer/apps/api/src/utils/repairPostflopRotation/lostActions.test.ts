@@ -122,6 +122,35 @@ describe("lostActionFaults — 3. the table's pot against the captured chips", (
   });
 });
 
+describe("a fold the capture never got (harness `missed-fold`)", () => {
+  // seed 3: CO (hero) opens, BTN calls, SB 3-bets, BB 4-bets, CO calls, BTN folds (LOST), SB folds; flop CO vs BB
+  const four = { 1: "BTN", 2: "SB", 4: "BB", 6: "CO" };
+  const line = [act(2, "post-sb", "preflop", 0.5), act(4, "post-bb", "preflop", 1), act(6, "raise", "preflop", 2.5, true),
+    act(1, "call", "preflop", 2.5), act(2, "raise", "preflop", 10), act(4, "raise", "preflop", 25), act(6, "call", "preflop", 22.5, true),
+    act(2, "fold", "preflop"), act(4, "bet", "flop", 46.88)];
+  const h = hand({ actions: line, hero: 6, street: "flop", board: ["2d", "Qc", "Ad"], positions: four, committed: { 4: 46.88 }, pot: 99.38, toCall: 46.88 });
+
+  it("in a later orbit the fold is written into its slot, so the next seat's fold is not handed to him", () => {
+    const r = repairPostflopCapture(h);
+    expect(r.faults).toEqual([]);
+    expect(r.notes.join(" ")).toContain("FOLDS NOT CAPTURED: BTN");
+    const pre = r.hand.actions.filter((a) => a.street === "preflop" && !a.type.startsWith("post"));
+    expect(pre.map((a) => `${four[a.seatId as 1]}:${a.type}`)).toEqual(["CO:raise", "BTN:call", "SB:raise", "BB:raise", "CO:call", "BTN:fold", "SB:fold"]);
+  });
+
+  it("in the opening orbit it is left to the token builders' padding — and a seat that never plays on is no fault", () => {
+    // seed 12-style: UTG's fold lost before anyone else acted; the flop is HJ vs BB
+    const six = hand({ actions: [...blinds, act(4, "raise", "preflop", 2.5), act(5, "fold", "preflop"), act(6, "fold", "preflop"), act(1, "fold", "preflop"),
+      act(2, "call", "preflop", 1.5, true), act(2, "check", "flop", undefined, true)], hero: 2, street: "flop", board: ["2c", "7d", "Ts"], pot: 5.5 });
+    const r = repairPostflopCapture(six);
+    expect(r.faults).toEqual([]);
+    expect(r.notes).toEqual([]);
+    // the seat that acts on the flop with no preflop action is still refused (hand 4919432609)
+    const ghost = hand({ ...six, actions: [...six.actions, act(3, "bet", "flop", 2)], hero: 2, street: "flop", board: ["2c", "7d", "Ts"], pot: 5.5, committed: { 3: 2 } } as any);
+    expect(captureFaults(ghost).some((f) => /UTG reached the flop with no preflop action captured/.test(f))).toBe(true);
+  });
+});
+
 describe("repairPostflopCapture — a preflop fold filed late is repaired at the flop too", () => {
   // harness seed 2 [late-fold]: UTG's fold was filed after HJ's; every preflop decision was answered (the preflop
   // gate moves it), and the flop refused the same line as "UTG acted before CO, SB, BB were to act"

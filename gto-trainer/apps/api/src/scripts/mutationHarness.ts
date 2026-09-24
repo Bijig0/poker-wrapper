@@ -26,6 +26,7 @@
  *   jam              a short stack jams preflop
  *   hero-deviates    hero takes an unlikely action (cold-calls a 3-bet, limps, min-raises)
  *   late-fold        a villain's preflop fold is filed one action late (the reader's badge lag)
+ *   missed-fold      a villain's preflop fold never reaches the export at all (the tap misses folds; nothing backfills it)
  *   dropped-call     a villain's preflop call never reaches the export         → a refusal is the RIGHT answer
  *   dup-card         a board card equals one of hero's                          → a refusal is the RIGHT answer
  *   board-short      the flop export carries two cards                          → a refusal is the RIGHT answer
@@ -256,7 +257,7 @@ export function exportAt(hand: Hand, k: number, key: string, drift = 0, streetAt
 }
 
 // ---- operators -------------------------------------------------------------------------------------------------------
-export const OPERATORS = ["nl5-rounding", "nl25-rounding", "stack-drift", "short-seat", "deep-seat", "thin-table", "dead-sb", "limps", "odd-open", "odd-3bet", "jam", "hero-deviates", "late-fold", "dropped-call", "dup-card", "board-short", "unlabelled-seat"] as const;
+export const OPERATORS = ["nl5-rounding", "nl25-rounding", "stack-drift", "short-seat", "deep-seat", "thin-table", "dead-sb", "limps", "odd-open", "odd-3bet", "jam", "hero-deviates", "late-fold", "missed-fold", "dropped-call", "dup-card", "board-short", "unlabelled-seat"] as const;
 export type Op = (typeof OPERATORS)[number];
 export const EXPECT_REFUSAL: ReadonlySet<string> = new Set(["dropped-call", "dup-card", "board-short", "unlabelled-seat"]);
 
@@ -280,11 +281,22 @@ export function genOptsFor(ops: Op[], rng: Rng): GenOpts {
 }
 export function mutateExport(exp: any, ops: Op[], rng: Rng): any {
   const e = JSON.parse(JSON.stringify(exp));
+  // the line's own defects first, then the labels and cards read off it: `unlabelled-seat` means "a villain who
+  // ACTED has no label" — applied before `missed-fold` it could pick the seat whose only action the fold op then
+  // removed, leaving a silent unlabelled seat that corrupts nothing (seeds 4329/4696/5265, a harness artefact)
+  const ORDER: Op[] = ["late-fold", "missed-fold", "dropped-call", "unlabelled-seat", "dup-card", "board-short"];
+  ops = [...ops].sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
   for (const op of ops) {
     if (op === "late-fold") {
       const pre = e.actions.filter((a: any) => a.street === "preflop" && !a.hero);
       const idx = e.actions.findIndex((a: any) => a.type === "fold" && !a.hero && a.street === "preflop");
       if (idx >= 0 && idx + 1 < e.actions.length && pre.length && e.actions[idx + 1].street === "preflop") { const [f] = e.actions.splice(idx, 1); e.actions.splice(idx + 1, 0, f); }
+    }
+    if (op === "missed-fold") {
+      // the first villain fold that came BEFORE a later preflop action (a fold with nothing after it on the street is
+      // indistinguishable from a seat still to act — that is the table's state, not a capture defect)
+      const idx = e.actions.findIndex((a: any, i: number) => a.type === "fold" && !a.hero && a.street === "preflop" && e.actions[i + 1]?.street === "preflop");
+      if (idx >= 0) e.actions.splice(idx, 1);
     }
     if (op === "dropped-call") {
       const idx = e.actions.findIndex((a: any) => a.type === "call" && !a.hero && a.street === "preflop");
