@@ -2,7 +2,7 @@
  * The range-level oracle's own checks, on toy walks and a toy chart — pure, no charts, no network (plain `bun test`).
  */
 import { describe, expect, test } from "bun:test";
-import { explainsSeat, layer1, layer2Postflop, layer2Preflop, truthLine } from "./rangeOracle";
+import { explainsSeat, layer1, layer2Postflop, layer2Preflop, truthLine, postflopTokenMismatch } from "./rangeOracle";
 import type { RawNode, RecordedRangeWalk, WalkStep } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../../utils/buildRangeArray/buildRangeArray";
 import { classWeightsToSpec } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
@@ -125,5 +125,19 @@ describe("explainsSeat", () => {
     expect(explainsSeat("CHART KEPT: …", "BB", false)).toBe(false);
     expect(explainsSeat("no ign200_6max_D100_o3 tree in the set — ranges from ign200_6max_D100_o2_5", "CO", false)).toBe(true);
     expect(explainsSeat("hero's decision was read on a line fitted to the tree (CO's call folded out), and these ranges are read on that line", "HJ", false)).toBe(true);
+  });
+});
+
+describe("postflopTokenMismatch — the postflop line as sent", () => {
+  const acts = [{ street: 0, seat: 1, type: "raise", amount: 2.5 }, { street: 0, seat: 2, type: "call", amount: 2.5 },
+    { street: 1, seat: 2, type: "bet", amount: 3.3 }, { street: 1, seat: 1, type: "all-in", amount: 2 }, { street: 1, seat: 3, type: "raise", amount: 10 }];
+  const posOf = (s: number) => ["", "HJ", "CO", "BTN"][s]!;
+  test("the dealt line, sizes exact, an all-in for less as C", () => {
+    expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3.3", "C", "R10"]], streetSeats: [["CO", "HJ", "BTN"]] })).toBeNull();
+  });
+  test("a size, a token or a seat off the dealt line is named", () => {
+    expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3.3", "RAI", "R10"]] })).toContain("dealt R3.3-C-R10, sent R3.3-RAI-R10");
+    expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3", "C", "R10"]] })).toContain("sent R3-C-R10");
+    expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3.3", "C", "R10"]], streetSeats: [["HJ", "CO", "BTN"]] })).toContain("token 1 is CO's, sent as HJ's");
   });
 });

@@ -43,8 +43,16 @@ export function rotationFor(hand: ParsedHand, street: Street): number[] {
   const folded = new Set(
     hand.actions.filter((a) => a.type === "fold" && earlier.includes(a.street)).map((a) => a.seatId)
   );
+  // A FOLD THE TAP LOST (round 2, harness missed-fold seeds 213/232): once the preflop round was played, a seat with no
+  // action at all — no blind, nothing preflop, nothing since — folded preflop and the capture never saw it
+  // (captureFaults' own rule for missed folds). Counted as live it made the SEAT BEFORE IT look out of turn, and the
+  // phantom-check rule below dropped hero's own check.
+  const acted = new Set(hand.actions.map((a) => (a.hero ? hand.heroSeatId : a.seatId)));
+  const preflopPlayed = hand.actions.some((a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb");
+  // (a blind is in the pot by his post, captured or not — only the seats with nothing in are judged)
+  const blind = (s: number) => /^(SB|BB)$/i.test(String(hand.positions?.[s] ?? ""));
   const seats = (hand.liveSeats?.length ? hand.liveSeats : Object.keys(hand.positions ?? {}).map(Number))
-    .filter((s) => !folded.has(s) && hand.positions?.[s]);
+    .filter((s) => !folded.has(s) && hand.positions?.[s] && (!preflopPlayed || acted.has(s) || blind(s)));
   // HEADS-UP MEANS THE TABLE IS TWO-HANDED, NOT THAT TWO PLAYERS ARE LEFT (2026-09-21). At a full table the
   // small blind acts FIRST postflop, blind-versus-blind included; only when the table itself is heads-up does
   // the dealer post the small blind and act last. Keying this off the number of players still in the hand

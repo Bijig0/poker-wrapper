@@ -32,8 +32,33 @@ describe("rotationFor", () => {
   });
 
   it("drops seats that folded on an earlier street", () => {
-    const h = hand({ 1: "SB", 2: "BB", 3: "UTG" }, [act(1, "fold", "preflop")]);
+    // (UTG's own preflop action is in the line: since round 2 a non-blind seat with NO action while the preflop was
+    // played is a fold the tap lost — see "a missed preflop fold" below — and this fixture used to leave it out)
+    const h = hand({ 1: "SB", 2: "BB", 3: "UTG" }, [act(3, "call", "preflop", 1), act(1, "fold", "preflop")]);
     expect(rotationFor(h, "flop").map((s) => h.positions[s])).toEqual(["BB", "UTG"]);
+  });
+});
+
+/**
+ * A PREFLOP FOLD THE TAP LOST IS NOT A LIVE SEAT POSTFLOP (2026-09-25, round 2, harness `missed-fold` seeds 213/232:
+ * postflop-line-mismatch). HJ folds preflop and the fold never reaches the capture; CO opens, BTN 3-bets, CO calls.
+ * On the turn CO checks, BTN bets, CO calls — and at the river decision the rotation still counted HJ as live,
+ * read CO's check as "before HJ was to act, and acts again later", and DROPPED hero's own check: the chain was sent
+ * a turn of BTN-bet, CO-call. A seat with no preflop action while the preflop round was played is a fold the tap
+ * lost (captureFaults' own rule for missed folds) — not a player still in the hand.
+ */
+describe("rotationFor — a missed preflop fold", () => {
+  const P = { 1: "SB", 2: "BB", 3: "HJ", 4: "CO", 5: "BTN" };
+  const line = [act(1, "post-sb", "preflop", 0.5), act(2, "post-bb", "preflop", 1), act(4, "raise", "preflop", 2.5),
+    act(5, "raise", "preflop", 8.75), act(1, "fold", "preflop"), act(2, "fold", "preflop"), act(4, "call", "preflop", 6.25),
+    act(4, "check", "flop"), act(5, "check", "flop"), act(4, "check", "turn"), act(5, "bet", "turn", 9.5), act(4, "call", "turn", 9.5)];
+  it("the seat whose fold was lost is not in the postflop rotation", () => {
+    expect(rotationFor(hand(P, line), "turn").map((s) => P[s as keyof typeof P])).toEqual(["CO", "BTN"]);
+  });
+  it("hero's turn check is kept", () => {
+    const r = repairPostflopRotation(hand(P, line));
+    expect(r.notes).toEqual([]);
+    expect(r.hand.actions.filter((a) => a.street === "turn").map((a) => a.type)).toEqual(["check", "bet", "call"]);
   });
 });
 

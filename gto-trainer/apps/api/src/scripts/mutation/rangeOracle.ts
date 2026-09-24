@@ -233,3 +233,38 @@ export async function layer2Preflop(o: {
   if (approx) return { findings: [], explained: true };
   return { findings: [{ kind: "preflop-node-mismatch", reason: `hero's decision was read at "${mine || "root"}", the reference walk of the dealt line reaches "${theirs || "root"}"` }], explained: false };
 }
+
+/**
+ * THE POSTFLOP LINE AS SENT (round 2): every street's tokens in the solver input against the dealt actions before
+ * hero's decision — a bet or raise at its exact size (the chain pins observed sizes, FIXED trees), an all-in that
+ * raises as RAI, one that does not as C, and each token's seat. Returns the first difference, or null.
+ */
+export function postflopTokenMismatch(
+  actions: { street: number; seat: number; type: string; amount?: number }[], k: number, posOf: (seat: number) => string,
+  dry: { streets?: string[][]; streetSeats?: (string | null)[][] },
+): string | null {
+  if (!dry.streets) return null;
+  const before = actions.slice(0, k);
+  for (let st = 1; st <= 3; st++) {
+    const acts = before.filter((a) => a.street === st);
+    const sent = dry.streets[st - 1];
+    if (!acts.length && !sent?.length) continue;
+    if (!sent) return `street ${st}: ${acts.length} dealt action(s), none sent`;
+    let level = 0;
+    const want = acts.map((a) => {
+      if (a.type === "fold") return "F";
+      if (a.type === "check") return "X";
+      if (a.type === "call") return "C";
+      const to = a.amount ?? 0;
+      if (a.type === "all-in") { if (to > level + 0.005) { level = to; return "RAI"; } return "C"; }
+      level = Math.max(level, to);
+      return `R${Math.round(to * 100) / 100}`;
+    });
+    if (want.join("-") !== sent.join("-")) return `street ${st}: dealt ${want.join("-")}, sent ${sent.join("-")}`;
+    const seats = dry.streetSeats?.[st - 1];
+    if (seats) for (let i = 0; i < acts.length; i++) {
+      if (seats[i] != null && String(seats[i]).toUpperCase() !== posOf(acts[i]!.seat).toUpperCase()) return `street ${st}: token ${i + 1} is ${posOf(acts[i]!.seat)}'s, sent as ${seats[i]}'s`;
+    }
+  }
+  return null;
+}

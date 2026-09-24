@@ -65,7 +65,7 @@ import { fastSolve, forgetPreflopPin, forgetPostflopPin } from "../services/fast
 import { withStartStacks } from "../utils/archivedHand/archivedHand";
 import { setRangeWalkRecorder, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { nodeGetter } from "../services/hrc6max";
-import { layer1, layer2Postflop, layer2Preflop, truthLine, type OracleFinding } from "./mutation/rangeOracle";
+import { layer1, layer2Postflop, layer2Preflop, truthLine, postflopTokenMismatch, type OracleFinding } from "./mutation/rangeOracle";
 import { rakeCapCents } from "../services/profiles";
 
 /**
@@ -498,6 +498,8 @@ export async function rangeVerdict(hand: Hand, k: number, res: any, walks: Recor
   const truth = truthLine(hand.actions, posOf);
   const src = String(res.rangeSource ?? "");
   const get = /_6max_/.test(src) ? chartGet(src) : null;
+  const tokOff = postflopTokenMismatch(hand.actions, k, posOf, res.dryRun);
+  if (tokOff) return { finding: { kind: "postflop-line-mismatch", reason: tokOff }, explained: false, unwalkable: false };
   const l1 = await layer1({ truth, heroPos, heroCards: hand.heroCards, note, dry: res.dryRun, walks, get });
   if (l1.length) return { finding: l1[0]!, explained: false, unwalkable: false };
   if (!get) return none;
