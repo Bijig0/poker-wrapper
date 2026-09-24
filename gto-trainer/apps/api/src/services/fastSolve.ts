@@ -112,10 +112,14 @@ export type FastSolveResult =
       /** The mix of the piece that ANSWERED — what the panel rolls and the hand
        *  card draws. Never another piece's distribution. */
       actions: ActionFreq[];
-      /** Preflop only: the equilibrium chart's own mix, kept for the Sources
-       *  comparison (MES-vs-GTO is a question about the pieces, not about the
-       *  action) — the table surfaces never read it. */
+      /** The equilibrium chart's own mix when another piece answered (preflop
+       *  exploit, postflop MES), kept for the Sources comparison (MES-vs-GTO is a
+       *  question about the pieces, not about the action) and so the poller walks
+       *  the chart's would-have-picked on the SAME roll (rollDecision.ts). */
       chartActions?: ActionFreq[];
+      /** The MES exploit mix when the chart answered (postflop chart mode) — the
+       *  same, for the other piece. */
+      exploitActions?: ActionFreq[];
       decision: WeightedPick | null;
       notInRange?: boolean;
       approx?: boolean;
@@ -2028,6 +2032,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
       decision: mes.exploitDecision,
       exploitDecision: mes.exploitDecision ?? undefined,
       chartDecision: mes.chartDecision ?? undefined,
+      chartActions: mes.gtoActions?.length ? mes.gtoActions : undefined,
       exploitTag: mes.tag,
       strategyMode: "exploit",
       rangeSource: `MES ${mes.family} @ ${mes.board} (hero: exploit range, villain: pool calling range, villain locked to pool frequencies)`,
@@ -2042,6 +2047,7 @@ async function solvePostflopWithMes(hand: ParsedHand, heroPos: string | null, op
     // chart mode (or hero off the exploit range): GTOW answer stays primary,
     // the MES answer rides along so the tabs can flip without a re-solve
     res.exploitDecision = mes.exploitDecision ?? undefined;
+    res.exploitActions = mes.actions?.length ? mes.actions : undefined;
     res.chartDecision = res.decision ?? mes.chartDecision ?? undefined;
     res.exploitTag = mes.tag;
     res.strategyMode = mode;

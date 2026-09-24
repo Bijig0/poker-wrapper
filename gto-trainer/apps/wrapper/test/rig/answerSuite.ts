@@ -6,7 +6,7 @@
  * Loads each fixture onto the fake table, turns the panel's Study Answers switch on, and drives the REAL poller —
  * the loop that answers while you play — then asserts an answer arrived and the pipeline reported no failure.
  *
- * Deliberately NOT asserted: the pick. rollAction samples the mixed strategy per decision, so the same spot
+ * Deliberately NOT asserted: the pick. rollDecision (API) samples the mixed strategy per decision, so the same spot
  * legitimately returns Raise on one run and Fold on the next. A fixture may pin the durable parts instead:
  *   "answer": { "contains": ["Raise"], "maxLatencyMs": 25000, "requireChart": true }
  *
