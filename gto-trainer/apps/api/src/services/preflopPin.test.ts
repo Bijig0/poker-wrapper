@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { setPreflopPin, getPreflopPin, forgetPreflopPin, pinRest, resumeChartPreflopRanges, flopSeatsOf, type ChartPreflopPin } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, forgetPreflopPin, pinRest, resumeChartPreflopRanges, flopSeatsOf, heroDeviation, type ChartPreflopPin } from "./preflopPin";
 import type { RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -69,6 +69,51 @@ describe("preflop pin registry", () => {
     const pending = pinRest(pinAtOpen, ["F", "F", "F"]);
     expect(pending.ok).toBe(false);
     if (!pending.ok) expect(pending.why).toContain("hero's own action is not in the line yet");
+  });
+});
+
+/**
+ * WHAT HERO WAS TOLD (2026-09-25, Brady's rule 3). Seed 144 [hero-deviates]: BTN A2o facing a 2.2bb open was told
+ * Fold 99.33% / Raise 10 0.67% at a node whose menu also holds Raise 7 — and 3-bet to 7.7 anyway. The flop then
+ * refused "hero's A2o is not in range", which is hero's doing, not a bug in the pieces.
+ */
+describe("heroDeviation — the picks each answer gave hero, carried from pin to pin", () => {
+  const pick = (rawTokens: string[], mix: [string, string | null, number][], heroClass = "A2o") =>
+    ({ rawTokens, codes: rawTokens, heroClass, mix: mix.map(([action, token, frequency]) => ({ action, token, frequency })) });
+  const bb3bet = pick(["F", "F", "R2.2"], [["Fold", "F", 99.33], ["Call", "C", 0], ["Raise 7", "R7", 0], ["Raise 10", "R10", 0.67], ["All-in", "R100", 0]]);
+
+  it("a size the pick gave 0% is a deviation — snapped to the NODE's menu (7.7 → Raise 7), not to the cell's", () => {
+    const d = heroDeviation([bb3bet], ["F", "F", "R2.2", "R7.7", "C", "F", "R19.25", "C"]);
+    expect(d).toEqual({ codes: ["F", "F", "R2.2"], took: "R7.7", action: "Raise 7", heroClass: "A2o" });
+  });
+
+  it("an action the pick gave any weight is hero following it (a 0.67% 3-bet is still the pick)", () => {
+    expect(heroDeviation([bb3bet], ["F", "F", "R2.2", "R10", "F"])).toBeNull();
+    expect(heroDeviation([bb3bet], ["F", "F", "R2.2", "R9.5", "F"])).toBeNull();     // 9.5 snaps to 10
+  });
+
+  it("our all-in token matches the node's largest raise", () => {
+    expect(heroDeviation([bb3bet], ["F", "F", "R2.2", "RAI"])?.action).toBe("All-in");
+  });
+
+  it("no recorded pick, a capture that left the recorded line, or hero not acted yet: nothing to accuse hero of", () => {
+    expect(heroDeviation(undefined, ["F", "F", "R2.2", "R7.7"])).toBeNull();
+    expect(heroDeviation([bb3bet], ["F", "R3", "R2.2", "R7.7"])).toBeNull();
+    expect(heroDeviation([bb3bet], ["F", "F", "R2.2"])).toBeNull();
+  });
+
+  it("setPreflopPin carries the earlier decisions' picks and drops a re-asked one", () => {
+    const key = "picks-carry";
+    const base = { piece: "chart6max" as const, handKey: key, chartId: "c", heroPos: "BTN", depth: 100, actionIndex: 0, at: 0 };
+    setPreflopPin({ ...base, rawTokens: ["F", "F", "R2.2"], codes: ["F", "F", "R2"], picks: [bb3bet] });
+    const later = pick(["F", "F", "R2.2", "R7.7", "C", "F", "R19.25"], [["Fold", "F", 100]]);
+    setPreflopPin({ ...base, rawTokens: later.rawTokens, codes: later.rawTokens, picks: [later] });
+    expect(getPreflopPin(key)?.picks?.map((p) => p.rawTokens.length)).toEqual([3, 7]);
+    setPreflopPin({ ...base, rawTokens: later.rawTokens, codes: later.rawTokens, picks: [later] });   // the poller re-asks
+    expect(getPreflopPin(key)?.picks?.map((p) => p.rawTokens.length)).toEqual([3, 7]);
+    setPreflopPin({ ...base, rawTokens: ["F", "F", "R2.2"], codes: ["F", "F", "R2"], picks: [bb3bet] });  // a replay of the first
+    expect(getPreflopPin(key)?.picks?.map((p) => p.rawTokens.length)).toEqual([3]);
+    forgetPreflopPin(key);
   });
 });
 
@@ -147,10 +192,39 @@ describe("resumeChartPreflopRanges — a pin read on a fitted line", () => {
     expect(r.ranges.BB!.AKo).toBeCloseTo(1, 5);                 // hero's squeeze, on the fold his decision was read with
     expect(r.ranges.BB!["72o"]).toBeUndefined();
     expect(r.ranges.UTG!["87s"]).toBeCloseTo(0.5 * 0.4, 5);     // limp, then call the squeeze — with the HJ folded out
-    expect(r.codes).toEqual(["F", "C", "F", "F", "F", "R4", "F"]);
+    expect(r.codes).toEqual(["F", "C", "F", "F", "F", "R4"]);          // hero's range: his pinned node + his squeeze
     expect(r.tokens).toEqual(["C", "C", "F", "F", "F", "R4", "C", "F"]);   // the capture's own line, for the pot
     expect(r.note).toContain("fitted line that keeps that seat");
     expect(r.note).toContain("UTG with HJ folded");
+  });
+
+  it("a line past the tree's caps AFTER hero's decision: each seat fitted, hero on his pinned node (seed 93)", async () => {
+    // HJ and CO limp, hero (BB) squeezes — asked at "F-C-C-F-F", a node the tree holds — and BOTH limpers call: the
+    // tree holds one caller of a squeeze (CO's node offers only a fold). The pinned walk stops there; each villain is
+    // read on a line that folds the other, hero on the node his decision was read at (with both limps in)
+    const capChart: Record<string, RawNode> = {
+      ...limpChart,
+      "F-C-C": node("BTN", FC), "F-C-C-F": node("SB", FC),
+      "F-C-C-F-F": node("BB", [["Check", "X"], ["Raise 4", "R4"]], [{ hand: "AKo", actions: { "Raise 4": 70, Check: 30 } }]),
+      "F-C-C-F-F-R4": node("HJ", FC, [{ hand: "87s", actions: { Call: 30 } }]),
+      "F-C-C-F-F-R4-C": node("CO", [["Fold", "F"]]),
+      "F-C-F-F-F-R4-C": T,
+      "F-F": node("CO", FC, [{ hand: "T9s", actions: { Call: 100 } }]), "F-F-C": node("BTN", FC), "F-F-C-F": node("SB", FC),
+      "F-F-C-F-F": node("BB", [["Check", "X"], ["Raise 4", "R4"]]),
+      "F-F-C-F-F-R4": node("CO", FC, [{ hand: "T9s", actions: { Call: 50 } }]),
+      "F-F-C-F-F-R4-C": T,
+    };
+    const pin2: ChartPreflopPin = { ...fittedPin, rawTokens: ["F", "C", "C", "F", "F"], codes: ["F", "C", "C", "F", "F"] };
+    const h: ParsedHand = { ...squeezeFlop, actions: [a(5, "post-sb", 0.5), a(6, "post-bb", 1, true), a(1, "fold"), a(2, "call", 1), a(3, "call", 1), a(4, "fold"), a(5, "fold"),
+      a(6, "raise", 4, true), a(2, "call", 3), a(3, "call", 3)] };
+    const r = await resumeChartPreflopRanges(pin2, h, "BB", async (l) => capChart[l] ?? null);
+    if (!r.ok) throw new Error(r.why);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BB", "CO", "HJ"]);
+    expect(r.ranges.BB!.AKo).toBeCloseTo(0.7, 5);              // the squeeze hero was told, at the node he was asked
+    expect(r.ranges.HJ!["87s"]).toBeCloseTo(0.3, 5);            // HJ read with CO's limp folded out
+    expect(r.ranges.CO!.T9s).toBeCloseTo(0.5, 5);               // CO read with HJ's limp folded out
+    expect(r.codes).toEqual(["F", "C", "C", "F", "F", "R4"]);
+    expect(r.note).toContain("the pinned walk stopped");
   });
 
   it("flopSeatsOf reads the seats from the capture's line, not the tree's", () => {

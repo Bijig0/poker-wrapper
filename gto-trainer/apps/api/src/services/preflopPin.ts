@@ -42,6 +42,21 @@ interface PinBase {
   /** hand.actions.length when the answer was written — for the trace */
   actionIndex: number;
   at: number;
+  /**
+   * WHAT HERO WAS TOLD, decision by decision (2026-09-25): every chart answer of the hand so far — hero's node and
+   * the mix his class was given there. Carried from pin to pin by setPreflopPin (a later decision's pin holds the
+   * earlier ones), so the flop can tell a hand hero played OFF the pick (an action his mix gave 0%) from a hand he
+   * played by it — see heroDeviation. The caller passes its own decision only.
+   */
+  picks?: HeroPick[];
+}
+export interface HeroPick {
+  /** the capture's tokens up to hero's node, and the tree's codes there */
+  rawTokens: string[];
+  codes: string[];
+  /** hero's class and the mix it was given at that node (after pruned branches were dropped), with each action's token */
+  heroClass: string | null;
+  mix: { action: string; token: string | null; frequency: number }[];
 }
 export interface ChartPreflopPin extends PinBase {
   piece: "chart6max";
@@ -65,8 +80,15 @@ const MAX_PINS = 300;
 
 export const preflopPinKey = (hand: ParsedHand): string => String(hand.clientHandId ?? hand.handId ?? "");
 
+const isStrictPrefix = (a: string[], b: string[]) => a.length < b.length && a.every((t, i) => b[i] === t);
+
 export function setPreflopPin(pin: PreflopPin): void {
   if (!pin.handKey) return;
+  // the earlier decisions' picks ride along; a re-ask of the same decision (the poller probes it every second) or of
+  // an earlier one (a replay) replaces what it supersedes — only picks strictly before this node are kept
+  const prev = pins.get(pin.handKey);
+  const carried = (prev?.picks ?? []).filter((p) => isStrictPrefix(p.rawTokens, pin.rawTokens));
+  pin = { ...pin, picks: [...carried, ...(pin.picks ?? [])] } as PreflopPin;
   pins.delete(pin.handKey);            // re-insert so the newest hand is last in eviction order
   pins.set(pin.handKey, pin);
   while (pins.size > MAX_PINS) { const first = pins.keys().next().value; if (first === undefined) break; pins.delete(first); }
@@ -130,8 +152,13 @@ export async function resumeChartPreflopRanges(
   // And every other resume is checked against the capture: the seats that reach the flop by the capture's own line
   // must be the seats the walk returned ranges for, or the same per-seat read replaces it.
   const want = flopSeatsOf(tokensNow, pin.depth);
+  // hero's own range needs only the pinned node and his action there — unless he acted again after it (a later
+  // decision no chart answered), when his seat is fitted like the others
+  const who = actorsWithAllins(tokensNow, pin.depth);
+  const heroAgain = who.some((s, i) => i > pin.rawTokens.length && s === pin.heroPos.toUpperCase());
+  const heroPrefix = heroAgain ? undefined : [...pin.codes, tokensNow[pin.rawTokens.length]!];
   const perSeat = async (why: string): Promise<ResumeOutcome> => {
-    const per = await fittedRangesBySeat(tokensNow, counted, { heroPos: pin.heroPos, depth: pin.depth });
+    const per = await fittedRangesBySeat(tokensNow, counted, { heroPos: pin.heroPos, depth: pin.depth, heroPrefix });
     if (!per.ok) return { ok: false, why: `pinned chart ${pin.chartId}: ${why}; ${per.reason}` };
     return {
       ok: true, ranges: per.ranges, tokens: tokensNow, codes: per.heroLine, seatOrder: undefined, id: pin.chartId, reads,
@@ -149,7 +176,17 @@ export async function resumeChartPreflopRanges(
   const stepped: string[] = [];   // the tree's own token at every decision read (a snapped size shows as the node's)
   const recon = await reconstructFlopRanges(line, counted,
     { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, onStep: (s) => stepped.push(s.token) });
-  if (!recon.ok) return { ok: false, why: `pinned chart ${pin.chartId}: ${recon.reason}` };
+  if (!recon.ok) {
+    // A LINE PAST THE TREE'S CAPS AFTER HERO'S DECISION (2026-09-25, seed 93 [hero-deviates]): a fifth entrant, a third
+    // caller — "not in the charts". The pinned walk cannot go on, but the flop is still the table's: each seat is read
+    // on a line fitted to keep it, hero on his pinned node (the unpinned walk used to fold the limper hero's decision
+    // was read WITH, and read hero's ATo call at a node his decision never saw — weight 0). A terminal before the line
+    // ends is left to the caller: that is a branch HRC never wrote (OFF THE CHART, fastSolve).
+    const first = `pinned chart ${pin.chartId}: ${recon.reason}`;
+    if (/terminal before the line ends/.test(recon.reason)) return { ok: false, why: first };
+    const r = await perSeat(`the pinned walk stopped (${recon.reason})`);
+    return r.ok ? r : { ok: false, why: `${first}; ${r.why}` };
+  }
   const got = Object.keys(recon.ranges).map((p) => p.toUpperCase());
   if (!sameSeats(want, got)) {
     return perSeat(`the tree's path reached the flop with ${got.join("/") || "nobody"} where the table has ${want.join("/")}`);
@@ -161,6 +198,36 @@ export async function resumeChartPreflopRanges(
       `hero's action and ${fit.rest.length - 1} later action(s) read on the same tree; no chart chosen again` +
       (recon.notes?.length ? ` · ${recon.notes.map((n) => `RANGE SHORTCUT: ${n}`).join(" · ")}` : ""),
   };
+}
+
+/**
+ * DID HERO PLAY OFF THE PICK? (2026-09-25, Brady's rule: a manual deviation — an action the chart never takes with
+ * hero's hand — may fall back to the GTO Wizard AI preflop tree, the way a pruned branch already does; hero's class
+ * at zero weight after following the pick stays a loud refusal, a bug in the pieces). For every recorded chart
+ * decision whose node the capture still runs through, hero's actual next action is read and matched to the node's
+ * tokens (a size snaps to the nearest offered raise, as every walk does; our all-in token to the largest), and its
+ * frequency looked up in the mix hero was given. An action the mix gave 0% is a deviation. Returns the first one,
+ * or null — null for a hand played by the pick, and for a hand with no recorded picks (nothing to accuse hero of).
+ */
+export function heroDeviation(picks: HeroPick[] | undefined, tokensNow: string[]):
+  { codes: string[]; took: string; action: string | null; heroClass: string | null } | null {
+  for (const p of picks ?? []) {
+    if (!p.rawTokens.every((t, i) => tokensNow[i] === t)) continue;
+    const raw = tokensNow[p.rawTokens.length];
+    if (raw == null) continue;
+    type Offer = { action: string; token: string; frequency: number };
+    const offered = p.mix.filter((m) => m.token != null) as Offer[];
+    let hit: Offer | null = offered.find((m) => m.token === raw) ?? null;
+    if (!hit && raw !== "F" && raw !== "C" && raw !== "X") {
+      const size = (t: string) => { const m = /^R([\d.]+)$/.exec(t); return m ? Number(m[1]) : null; };
+      const raises = offered.filter((m) => size(m.token) != null);
+      const want = raw === "RAI" ? Infinity : size(raw);
+      const dist = (o: Offer) => (want === Infinity ? -size(o.token)! : Math.abs(Math.log(want! / size(o.token)!)));
+      if (want != null) for (const o of raises) if (!hit || dist(o) < dist(hit)) hit = o;
+    }
+    if (!hit || !(hit.frequency > 0)) return { codes: p.codes, took: raw, action: hit?.action ?? null, heroClass: p.heroClass };
+  }
+  return null;
 }
 
 const SEATS6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"] as const;
@@ -188,13 +255,27 @@ const sameSeats = (a: string[], b: string[]): boolean => {
 export async function fittedRangesBySeat(
   tokens: string[],
   get: (line: string) => Promise<RawNode | null>,
-  o: { heroPos: string | null; depth: number },
+  o: {
+    heroPos: string | null; depth: number;
+    /** hero's own range is read on exactly this line (a pin: the node his last decision was read at + the action he
+     *  took there) instead of a fitted one — his range is the product of HIS actions only, so nothing after his last
+     *  decision can change it, and a fit of the whole line could fold a limper his decision was read WITH */
+    heroPrefix?: string[];
+  },
 ): Promise<{ ok: true; ranges: Record<string, Record<string, number>>; borrowed: string[]; heroLine: string[] } | { ok: false; reason: string }> {
   const getHrc: GetNode = async (l) => (await get(l)) as HrcNode | null;
   const ranges: Record<string, Record<string, number>> = {};
   const borrowed: string[] = [];
   let heroLine: string[] = tokens;
   for (const seat of flopSeatsOf(tokens, o.depth)) {
+    if (o.heroPrefix && o.heroPos && seat === o.heroPos.toUpperCase()) {
+      const r = await reconstructFlopRanges(o.heroPrefix, get, { heroPos: o.heroPos, borrowCaller: true, maxPlayers: 6, partial: true });
+      const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
+      if (!mine) return { ok: false, reason: `hero's range on the pinned line "${o.heroPrefix.join("-")}": ${r.ok ? "absent" : r.reason}` };
+      ranges[seat] = mine;
+      heroLine = o.heroPrefix;
+      continue;
+    }
     const fit = await walkFitted(tokens, getHrc, { heroSeat: o.heroPos, protect: [seat], stack: o.depth, acceptTerminal: true });
     if (!fit.fitted || !fit.fittedLine) return { ok: false, reason: `fitting the line for ${seat}'s range: ${fit.ok ? "no fit" : fit.reason}` };
     // partial: only THIS seat's range is wanted, and the fitted line may leave it alone at the flop (hero squeezes,

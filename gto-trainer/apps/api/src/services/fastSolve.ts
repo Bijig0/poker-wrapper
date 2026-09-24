@@ -36,7 +36,7 @@ import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
-import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, heroDeviation, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
@@ -927,12 +927,28 @@ async function solvePostflopViaChain(
         const mine = Object.entries(resumed.ranges).find(([p]) => p.toUpperCase() === (heroPosName ?? "").toUpperCase())?.[1];
         const w = cls && mine ? mine[cls] ?? 0 : null;
         tmark("preflop ranges resumed", `${pin.piece} ${resumed.id} · ${resumed.reads} node read(s) · ${Date.now() - tPin} ms · hero ${cls ?? "?"} weight ${w == null ? "n/a" : w.toFixed(3)}`);
-        if (cls && mine && !(w! > 0)) {
+        // HERO LEFT THE PICK (2026-09-25, Brady's rule 3 — veto-able): hero's class at zero weight because hero himself
+        // took an action his pick gave 0% (preflopPin.heroDeviation, from what each answer told him) is not a bug in
+        // the pieces — the chart has no range for "hands that did this". The flop-entering ranges then come from the
+        // GTO Wizard AI preflop tree built from the table, as for a pruned branch (OFF THE CHART, below). A zero weight
+        // after following every pick stays the loud refusal: that one IS a mismatch to investigate.
+        const dev = cls && mine && !(w! > 0) && pin.piece === "chart6max" ? heroDeviation(pin.picks, resumed.tokens) : null;
+        if (cls && mine && !(w! > 0) && !dev) {
           return fail(`PREFLOP PIN (${pin.piece} ${resumed.id}): hero's ${cls} is not in range after the line "${resumed.codes.join("-")}" — ` +
             `the piece that answered preflop never plays this line with this hand (a chart/AI mismatch to investigate, not a fallback)`);
         }
-        recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
-        sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
+        if (dev) {
+          const devNote = `OFF THE CHART (hero's own line): at "${dev.codes.join("-") || "root"}" hero took ${dev.action ?? dev.took}, which the pick gave ${dev.heroClass ?? cls} 0%, ` +
+            `so the chart has no flop range for his hand — the flop-entering ranges come from the GTO Wizard AI preflop tree`;
+          tmark("preflop pin: hero deviated", devNote);
+          const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+          if (!ai.ok) return fail(`${devNote}; then ${ai.reason}`);
+          recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+          sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
+        } else {
+          recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
+          sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
+        }
       } else if (pin.piece === "chart6max" && /terminal before the line ends/.test(resumed.why)) {
         // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
         // subtree under an action that was really taken and real action followed it — a manual deviation into a
@@ -2131,6 +2147,24 @@ async function solvePreflop6max(
 
   const heroClass = heroClassOf(hand);
   const cell = heroClass ? heroNode.cells.find((c) => c.hand === heroClass) : undefined;
+  const pinKey = preflopPinKey(hand);
+  // HERO'S CLASS HAS NO STRATEGY AT THIS NODE (2026-09-25, mutation harness `hero-deviates`). The chart holds no cell
+  // for a class its equilibrium never brings here, so the answer used to come back ok with NO decision — nothing to
+  // play. When that is hero's own doing — an earlier action his pick gave 0% (services/preflopPin.heroDeviation), or
+  // an earlier decision the GTO Wizard AI tree answered on a line the chart does not play with this hand — the
+  // AI preflop tree, built from the table, answers instead (Brady's rule for a manual deviation, the pruned-branch
+  // precedent). A hand played BY the pick that lands here is left as it was: a loud notInRange, a bug to see.
+  if (heroClass && !cell) {
+    const prev = pinKey ? getPreflopPin(pinKey) : undefined;
+    const dev = prev?.piece === "chart6max" ? heroDeviation(prev.picks, tokens) : null;
+    if (dev || prev?.piece === "gtow-ai-preflop") {
+      return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)",
+        reason: `OFF THE CHART: hero's ${heroClass} has no strategy at "${line || "root"}" in ${resolved.id} — ` +
+          (dev ? `hero left the pick at "${dev.codes.join("-") || "root"}" (took ${dev.action ?? dev.took}, which the pick gave ${dev.heroClass ?? "his hand"} 0%)`
+            : `hero's last decision was answered by the GTO Wizard AI preflop tree, on a line the chart never plays with this hand`) +
+          `, so the AI preflop tree answers from here` };
+    }
+  }
   const rawActions = cell ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency })) : [];
   // NEVER ROLL INTO A BRANCH HRC NEVER WROTE (services/prunedPicks, 2026-09-25): an action whose child node is
   // pruned is dropped before the roll and the mix re-spread, so hero's own pick can always be continued at the flop
@@ -2140,10 +2174,15 @@ async function solvePreflop6max(
 
   // THE PIN (services/preflopPin, 2026-09-25): this chart and this line are what the flop resumes from — the
   // last preflop answer of the hand names the ranges the postflop chain starts with.
-  const pinKey = preflopPinKey(hand);
   if (pinKey) {
+    // what hero was told here rides along with the pin (preflopPin.heroDeviation reads it at later decisions)
+    // every action the NODE offers, at the frequency hero's class was given (0 for one the cell leaves out): hero's
+    // actual size snaps against the node's menu, as the walks do — against the cell's actions alone a 7.7bb 3-bet
+    // snapped to the 0.7% "Raise 10" instead of the node's "Raise 7" at 0% (seed 144 [hero-deviates])
+    const picks = cell ? [{ rawTokens: tokens, codes: borrowed ? borrowed.line.split("-").filter(Boolean) : walk.tokens, heroClass,
+      mix: heroNode.actions.map((x) => ({ action: x.action, token: x.token, frequency: actions.find((a) => a.action === x.action)?.frequency ?? 0 })) }] : [];
     setPreflopPin({ piece: "chart6max", handKey: pinKey, chartId: resolved.id, codes: walk.tokens, rawTokens: tokens,
-      heroPos: heroSeatPos || nodePos, depth: choice.depth, actionIndex: hand.actions.length, at: Date.now() });
+      heroPos: heroSeatPos || nodePos, depth: choice.depth, actionIndex: hand.actions.length, at: Date.now(), picks });
   }
 
   const notes = [
