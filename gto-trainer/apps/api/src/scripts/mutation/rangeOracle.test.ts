@@ -124,5 +124,6 @@ describe("explainsSeat", () => {
     expect(explainsSeat("CHART KEPT: …", "BB", true)).toBe(true);
     expect(explainsSeat("CHART KEPT: …", "BB", false)).toBe(false);
     expect(explainsSeat("no ign200_6max_D100_o3 tree in the set — ranges from ign200_6max_D100_o2_5", "CO", false)).toBe(true);
+    expect(explainsSeat("hero's decision was read on a line fitted to the tree (CO's call folded out), and these ranges are read on that line", "HJ", false)).toBe(true);
   });
 });

@@ -42,6 +42,9 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 5, ops: ["nl5-rounding"], cls: "range oracle: a 2.6 open read as 2.5 with no word of it (size-snap-unreported)" },
   { seed: 44, ops: [], cls: "range oracle: an 8.75 3-bet read as 9, unsaid (size-snap-unreported)" },
   { seed: 3, ops: ["stack-drift"], cls: "range oracle: a 25bb 4-bet read as the chart's 23, unsaid (size-snap-unreported)" },
+  { seed: 1669, ops: ["short-seat"], cls: "range oracle: a fitted pin read by the pinned walk, the fit unsaid (range-mismatch)" },
+  { seed: 1559, ops: ["odd-open"], cls: "range oracle: the same, hero UTG after the caller-cap borrow (range-mismatch)" },
+  { seed: 1130, ops: ["thin-table"], cls: "range oracle: the same, a villain's range on the fitted line (range-mismatch)" },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

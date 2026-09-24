@@ -256,6 +256,37 @@ describe("resumeChartPreflopRanges — a pin read on a fitted line", () => {
     expect(r.note).toContain("the pinned walk stopped");
   });
 
+  // round 2 (range-level oracle, seeds 1130 [thin-table], 1559 [odd-open], 1669 [short-seat]): hero's decision was read
+  // with a cold-caller folded out (the caller-cap borrow), the per-seat fits then failed on a later size, and the
+  // pinned walk — on the FITTED codes — gave the ranges; the note said "read on the same tree" and nothing about the
+  // caller folded out, so a range read without that caller looked like a plain walk of the line
+  it("a fitted pin whose per-seat fits fail: the pinned walk's ranges still say the line was fitted", async () => {
+    const FC2: [string, string][] = [["Fold", "F"], ["Call", "C"]];
+    const OPEN: [string, string][] = [["Fold", "F"], ["Raise 2.5", "R2.5"]];
+    const cap: Record<string, RawNode> = {
+      "": node("UTG", OPEN), "F": node("HJ", OPEN, [{ hand: "QQ", actions: { "Raise 2.5": 100 } }]),
+      // CO calls; the BTN's node after that call has no call (the cap) — hero's decision was read with CO folded
+      "F-R2.5": node("CO", FC2), "F-R2.5-C": node("BTN", [["Fold", "F"], ["Raise 10", "R10"]]),
+      "F-R2.5-F": node("BTN", [["Fold", "F"], ["Call", "C"], ["Raise 10", "R10"]], [{ hand: "AKs", actions: { "Raise 10": 100 } }]),
+      "F-R2.5-F-R10": node("SB", FC2), "F-R2.5-F-R10-F": node("BB", FC2),
+      // HJ's 4-bet: the chart's only raise is its all-in, a label with no amount (the token carries it)
+      "F-R2.5-F-R10-F-F": node("HJ", [["Fold", "F"], ["Call", "C"], ["All-in", "R30"]], [{ hand: "QQ", actions: { "All-in": 60, Call: 40 } }]),
+      "F-R2.5-F-R10-F-F-R30": node("BTN", FC2, [{ hand: "AKs", actions: { Call: 100 } }]),
+      "F-R2.5-F-R10-F-F-R30-C": T,
+    };
+    // seats: 1 UTG (not dealt), 2 HJ, 3 CO, 4 BTN (hero), 5 SB, 6 BB
+    const h: ParsedHand = { ...squeezeFlop, heroSeatId: 4, heroCards: ["As", "Ks"], clientHandId: "mh-1669", positions: { 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" },
+      actions: [a(5, "post-sb", 0.5), a(6, "post-bb", 1), a(2, "raise", 2.5), a(3, "call", 2.5), a(4, "raise", 10, true), a(5, "fold"), a(6, "fold"),
+        a(2, "raise", 25), a(3, "fold"), a(4, "call", 15, true)] };
+    const pin: ChartPreflopPin = { piece: "chart6max", handKey: "mh-1669", chartId: "ign200_6max_D100_o2_5", heroPos: "BTN", depth: 100, actionIndex: 9, at: 0,
+      rawTokens: ["F", "R2.5", "C", "R10", "F", "F", "R25", "F"], codes: ["F", "R2.5", "F", "R10", "F", "F", "R30"], foldedSeats: ["CO"] };
+    const r = await resumeChartPreflopRanges(pin, h, "BTN", async (l) => cap[l] ?? null);
+    if (!r.ok) throw new Error(r.why);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BTN", "HJ"]);
+    expect(r.ranges.HJ!.QQ).toBeCloseTo(0.6, 5);
+    expect(r.note).toContain("read on a line fitted to the tree (CO's call folded out)");
+  });
+
   it("flopSeatsOf reads the seats from the capture's line, not the tree's", () => {
     expect(flopSeatsOf(["C", "C", "F", "F", "F", "R4", "C", "F"], 100)).toEqual(["UTG", "BB"]);
     expect(flopSeatsOf(["F", "F", "F", "R2.6", "C", "F"], 100)).toEqual(["BTN", "SB"]);

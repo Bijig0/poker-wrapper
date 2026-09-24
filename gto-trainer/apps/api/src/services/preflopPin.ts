@@ -197,8 +197,10 @@ export async function resumeChartPreflopRanges(
   };
   const foldedOut = pin.rawTokens.map((t, i) => (t !== "F" && pin.codes[i] === "F" ? i : -1)).filter((i) => i >= 0);
   let fittedWhy: string | null = null;
-  if (pin.foldedSeats?.length || foldedOut.length || pin.codes.length !== pin.rawTokens.length) {
-    const r = await perSeat(`hero's decision was read on a line fitted to the tree (${pin.foldedSeats?.length ? `${pin.foldedSeats.join(", ")}'s call folded out` : `${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out`})`);
+  const fitted = !!(pin.foldedSeats?.length || foldedOut.length || pin.codes.length !== pin.rawTokens.length);
+  const fittedDesc = `hero's decision was read on a line fitted to the tree (${pin.foldedSeats?.length ? `${pin.foldedSeats.join(", ")}'s call folded out` : `${foldedOut.length || pin.rawTokens.length - pin.codes.length} call(s) folded out`})`;
+  if (fitted) {
+    const r = await perSeat(fittedDesc);
     if (r.ok) return r;
     // a seat no fit can keep (a tree with no cold call of a 3-bet at all): the pinned walk below, whose caller
     // borrow reads such a call one caller fewer, is still worth a try — its seats are checked against the table
@@ -233,6 +235,9 @@ export async function resumeChartPreflopRanges(
     ok: true, ranges: recon.ranges, tokens: tokensNow, codes, seatOrder: undefined, id: pin.chartId, reads,
     note: `PREFLOP RANGES FROM THE PIN: the 6-max chart that answered hero's last preflop decision (${pin.chartId}, hero's node at "${pin.codes.join("-") || "root"}") — ` +
       `hero's action and ${fit.rest.length - 1} later action(s) read on the same tree; no chart chosen again` +
+      // A FITTED PIN READ BY THE PINNED WALK (round 2, seeds 1130/1559/1669): the per-seat fits failed and every range
+      // here sits on the pin's FITTED codes — the caller folded out at hero's decision is folded out of these too
+      (fitted ? ` · ${fittedDesc}, and these ranges are read on that line (the per-seat fits could not: ${(fittedWhy ?? "").replace(/^pinned chart [^:]+: /, "").slice(0, 200)})` : "") +
       (recon.notes?.length ? ` · ${recon.notes.map((n) => `RANGE SHORTCUT: ${n}`).join(" · ")}` : "") +
       ((s) => (s ? ` · ${s}` : ""))(snapsNote([...(pin.sizeSnaps ?? []), ...(recon.snaps ?? [])])),
   };

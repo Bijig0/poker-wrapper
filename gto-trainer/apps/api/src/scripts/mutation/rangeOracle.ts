@@ -44,7 +44,8 @@ export const APPROX_NOTE = /LINE FITTED|fitted line|RANGE SHORTCUT|borrow|CALLER
  */
 export function explainsSeat(note: string, seat: string, isHero: boolean): boolean {
   const P = seat.toUpperCase();
-  if (/tree in the set/i.test(note)) return true;
+  // a different chart, or every range read on the pin's fitted line ("these ranges are read on that line"): all seats
+  if (/tree in the set|these ranges are read on that line/i.test(note)) return true;
   if (new RegExp(`${P} with [A-Z+]+ folded|${P}: |${P}'s call at "[^"]*" is not in the tree`).test(note)) return true;
   if (isHero && /hero's decision was read on a line fitted|CALLER CAP|LINE KEPT|CHART KEPT|OFF THE CHART/.test(note)) return true;
   return false;
