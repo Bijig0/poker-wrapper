@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { foldPostIns, postInNote } from "./foldPostIns";
+import { foldPostIns, postInNote, deadPostsBb } from "./foldPostIns";
 import { normalizeHand } from "../../feed/normalizeHand/normalizeHand";
 import { shapeOf } from "../../services/gtowAiPreflop";
 import type { ParsedAction } from "../../feed/parsePanelFeed/parsePanelFeed";
@@ -62,6 +62,16 @@ describe("foldPostIns", () => {
     expect(foldPostIns(plain).actions).toBe(plain);
     const later = foldPostIns([...HAND_937, act(5, "check"), act(5, "check", undefined, "flop"), act(1, "check", undefined, "flop")]);
     expect(later.actions.filter((a) => a.street === "flop").map((a) => a.type)).toEqual(["check", "check"]);
+  });
+
+  // round 2 (harness post-in, seed 8): the HJ posts 1bb and folds to hero's open; the flop pot was 1bb short of the
+  // table's — the dead post is in the middle, and no token carries it
+  it("deadPostsBb: a folded poster's post is dead money in the pot; a carried post is not counted twice", () => {
+    const folded = foldPostIns([act(4, "post-sb", 0.5), act(5, "post-bb", 1), act(1, "post", 1), act(6, "raise", 2.5), act(1, "fold")]);
+    expect(deadPostsBb(folded.postIns)).toBe(1);
+    expect(deadPostsBb(foldPostIns(HAND_937).postIns)).toBe(0);            // two limps: the posts ride on the calls
+    expect(deadPostsBb(undefined)).toBe(0);
+    expect(postInNote(folded.postIns, { 1: "HJ" })).toContain("HJ posted 1bb and folded, 1bb left in the pot as dead money");
   });
 
   it("says it is an approximation", () => {

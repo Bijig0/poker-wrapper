@@ -36,7 +36,7 @@ import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
-import { postInNote } from "../utils/foldPostIns/foldPostIns";
+import { postInNote, deadPostsBb } from "../utils/foldPostIns/foldPostIns";
 import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
@@ -1057,7 +1057,8 @@ async function solvePostflopViaChain(
   // put 2 x ante of dead money in. Left out, the flop solve plays a 5.4bb pot as 5bb. The STACK needs nothing:
   // the depth handed in (solvePostflopHuStrategy) is already the stack after the ante.
   const anteHu = huCp ? (hand.anteBb ?? HU_ANTE_BB) : 0;
-  const flopPot = Math.round((pps.pot + 2 * anteHu) * 100) / 100;
+  // …and a posted-in player who folded left his post in the pot, which no token carries (utils/foldPostIns)
+  const flopPot = Math.round((pps.pot + 2 * anteHu + deadPostsBb(hand.postIns)) * 100) / 100;
   const flopStack = Math.round(pps.stack * 100) / 100;
   if (flopStack <= 0.5) return fail("preflop line is (near) all-in");
 

@@ -41,13 +41,22 @@ export function foldPostIns(actions: ParsedAction[]): { actions: ParsedAction[];
   return { actions: out, postIns };
 }
 
+/**
+ * DEAD POSTS (2026-09-25, round 2 of the input-mutation harness, `post-in` seed 8). A poster who FOLDS leaves his post in
+ * the pot and no action carries it, so the flop pot rolled from the token line was short by it (1bb in a 6.5bb pot).
+ * The bb of dead posts the pot must add; a post carried by a limp, call or raise is already in the line.
+ */
+export function deadPostsBb(postIns: PostIn[] | undefined): number {
+  return Math.round((postIns ?? []).filter((p) => p.readAs === "fold").reduce((s, p) => s + (Number(p.amount) || 0), 0) * 100) / 100;
+}
+
 /** The line an answer carries when the hand had posted-in players. */
 export function postInNote(postIns: PostIn[] | undefined, positions: Record<number, string>): string | null {
   if (!postIns?.length) return null;
   const who = postIns.map((p) => {
     const pos = positions[p.seatId] ?? `seat ${p.seatId}`;
     const how = p.readAs === "limp" ? "checked his option — read as a LIMP"
-      : p.readAs === "fold" ? `folded, ${p.amount}bb left in the pot (not in the line)`
+      : p.readAs === "fold" ? `folded, ${p.amount}bb left in the pot as dead money`
       : p.readAs === "pending" ? "yet to act" : `${p.readAs}s (post included)`;
     return `${p.hero ? "you" : pos} posted ${p.amount}bb and ${how}`;
   });
