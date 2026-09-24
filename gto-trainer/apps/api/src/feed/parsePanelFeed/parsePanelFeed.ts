@@ -18,6 +18,9 @@ export type Street = "preflop" | "flop" | "turn" | "river" | "showdown";
 export type ActionType =
   | "post-sb"
   | "post-bb"
+  /** a live blind POSTED IN out of turn by a new/returning player (Ignition btn 8). Accepted on input only:
+   *  normalizeHand folds it into the poster's own action (utils/foldPostIns) — a ParsedHand never carries one. */
+  | "post"
   | "fold"
   | "check"
   | "call"
@@ -36,6 +39,14 @@ export interface ParsedAction {
   type: ActionType;
   amount?: number; // BB
   street: Street;
+}
+
+/** A live blind posted in out of turn, and how the line reads the poster (utils/foldPostIns). */
+export interface PostIn {
+  seatId: number;
+  hero: boolean;
+  amount: number;       // BB, live
+  readAs: "limp" | "call" | "raise" | "fold" | "pending";
 }
 
 export interface ParsedNode {
@@ -75,6 +86,8 @@ export interface ParsedHand {
   board: string[]; // short form
   street: Street;
   actions: ParsedAction[];
+  /** Players who POSTED IN this hand; their posts are already folded into `actions` (utils/foldPostIns). */
+  postIns?: PostIn[];
   liveSeats: number[];
   committed: Record<number, number>;
   potByStreet: Partial<Record<Street, number>>;
@@ -354,6 +367,7 @@ const verbText = (a: ParsedAction): string => {
   switch (a.type) {
     case "post-sb": return a.hero ? `post the small blind${amt}` : `posts the small blind${amt}`;
     case "post-bb": return a.hero ? `post the big blind${amt}` : `posts the big blind${amt}`;
+    case "post": return a.hero ? `post in${amt}` : `posts in${amt}`;
     case "fold": return a.hero ? "fold" : "folds";
     case "check": return a.hero ? "check" : "checks";
     case "call": return a.hero ? `call${amt}` : `calls${amt}`;

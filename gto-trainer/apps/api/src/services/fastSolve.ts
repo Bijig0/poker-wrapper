@@ -36,6 +36,7 @@ import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
+import { postInNote } from "../utils/foldPostIns/foldPostIns";
 import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
@@ -2430,6 +2431,32 @@ export function zeroMixReason(a: {
 }
 
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
+  // POSTED-IN PLAYERS (2026-09-25, Brady: "treat them as a normal player"). normalizeHand already folded each post
+  // into the poster's own action (utils/foldPostIns — an option-check reads as a limp), so every piece below sees an
+  // ordinary hand; the answer only has to SAY it is an approximation, and hero must never fold a free check.
+  if (hand.postIns?.length) {
+    const r = await fastSolveOuter(hand, heroPos, opts);
+    return r.ok ? postInAnswer(hand, r) : r;
+  }
+  return fastSolveOuter(hand, heroPos, opts);
+}
+
+/** The approximation note on a post-in hand's answer, and HERO'S OWN post: facing nothing but his own blind, the
+ *  chart's node (a normal player facing 1bb) may say fold — a free check never folds. */
+function postInAnswer(hand: ParsedHand, r: Extract<FastSolveResult, { ok: true }>): FastSolveResult {
+  const note = postInNote(hand.postIns, hand.positions);
+  const heroPosted = hand.postIns!.some((p) => p.seatId === hand.heroSeatId && p.readAs === "pending");
+  const free = hand.currentNode.street === "preflop" && hand.currentNode.toActIsHero && !(hand.currentNode.toCall > 0);
+  let out: FastSolveResult = { ...r, approx: true, warning: `${note}${r.warning ? ` ${r.warning}` : ""}` };
+  const pick = (r as any).decision?.action as string | undefined;
+  if (heroPosted && free && pick && /^fold$/i.test(pick)) {
+    out = { ...out, decision: { ...(r as any).decision, action: "Check" },
+      warning: `${out.warning} · you posted in and nobody raised: the chart's Fold is a free CHECK here` } as FastSolveResult;
+  }
+  return out;
+}
+
+async function fastSolveOuter(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // A DEAD SMALL BLIND CAPTURED WITH LIVE-BLIND LABELS (2026-09-23, hand 732). The wrapper used to name seats
   // from the button alone, so when the SB seat emptied between hands the BB poster was labelled SB and both
   // preflop pieces refused ("SB posted the big blind" / "the walked line puts SB on the clock"). The names shift
