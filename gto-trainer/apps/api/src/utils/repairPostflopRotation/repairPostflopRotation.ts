@@ -252,6 +252,8 @@ export function captureFaults(hand: ParsedHand): string[] {
     }
   }
 
+  faults.push(...lostActionFaults(hand));
+
   // only the BIG BLIND can check preflop, and only while nobody has raised — everyone else owes the blind and
   // must fold, call or raise. hand 4919432731 has the BTN checking preflop, which is the same session-start
   // corruption seen from another angle.
@@ -299,6 +301,112 @@ export function captureFaults(hand: ParsedHand): string[] {
   }
 
   return [...new Set(faults)];
+}
+
+/**
+ * A VILLAIN'S CALL THE CAPTURE LOST (2026-09-25, mutation harness `dropped-call`: 95 answers in a 300-seed sweep came
+ * from a line with a caller missing). A lost call reads as a fold — every token builder pads a silent seat with "F" —
+ * so the answer comes from a spot that never happened: a heads-up pot that was three-way, a caller's range gone from
+ * the flop. The chips do not lie, so two ledger checks, each on evidence a live export really carries:
+ *
+ *   1. THIS ROUND'S CHIPS. `committed` is the table's own chip count for the round being played (Ignition: the WS
+ *      ledger, updated in the same handler that records the action — a WS money message the dedupe drops, or the
+ *      ghost guard, moves the chips and loses the action; CoinPoker: the log's street bets, where an untyped action
+ *      moves chips with no row). A seat with more chips in front of it than its captured actions put there lost an
+ *      action — folded seats included: a call lost before a fold turns "open, call, 3-bet" into "open, fold, 3-bet",
+ *      and the 3-bettor's node is another one (harness seed 152). A new player's posted blind
+ *      (Ignition btn 8, which the reader records in the feed but not as an action) looks the same — 1bb in and no
+ *      action — and is refused too: the line would read a live seat as folded (archive: 2 of 888 hands, rows 292/690).
+ *   2. A ROUND THAT NEVER CLOSED FOR A SEAT THAT PLAYS ON. A seat that acts on a later street was in the pot when the
+ *      earlier round closed, so it had matched that round's top bet or was all-in. A seat that acts later with less in
+ *      than the top of an earlier round lost its call (archive: rows 451 / 489 / 538, the BB's call of a raise missing
+ *      and the BB betting the flop). A seat that is short and has NOT acted since may have folded without the fold
+ *      being captured — the tap misses folds, the token builders pad them — so that is not flagged.
+ * Tolerance 0.05bb: every amount is the same cents on both sides, rounded to 0.01bb.
+ */
+export function lostActionFaults(hand: ParsedHand): string[] {
+  const faults: string[] = [];
+  const pos = (s: number) => (hand.positions?.[s] ?? `seat${s}`).toUpperCase();
+  const order = ["preflop", ...STREETS] as string[];
+  const street = String(hand.currentNode?.street ?? hand.street ?? "preflop");
+  const seatOf = (a: ParsedAction) => (a.hero ? hand.heroSeatId : a.seatId);
+  const per = new Map<string, Map<number, number>>();
+  for (const a of hand.actions) {
+    const m = per.get(a.street) ?? new Map<number, number>();
+    per.set(a.street, m);
+    const amt = Number(a.amount ?? 0);
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    const s = seatOf(a);
+    if (a.type === "call") m.set(s, (m.get(s) ?? 0) + amt);
+    else if (["post-sb", "post-bb", "raise", "bet", "all-in"].includes(a.type)) m.set(s, Math.max(m.get(s) ?? 0, amt));
+  }
+  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map(seatOf));
+  const allIn = new Set(hand.actions.filter((a) => a.type === "all-in").map(seatOf));
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+
+  // 1. this round's chips against this round's captured actions
+  const cur = per.get(street) ?? new Map<number, number>();
+  for (const [k, v] of Object.entries(hand.committed ?? {})) {
+    const s = Number(k), chips = Number(v);
+    if (!Number.isFinite(chips)) continue;
+    const captured = cur.get(s) ?? 0;
+    if (chips - captured > 0.05) {
+      const reads = folded.has(s) ? `folding ${captured > 0 ? "after putting in less" : "without ever putting chips in"}` : captured > 0 ? "short" : "folded";
+      faults.push(`${pos(s)} has ${r2(chips)}bb in front of them on the ${street} but the captured ${street} actions put in ${r2(captured)}bb — an action of theirs (a call, a limp, or a posted blind) was lost, and the line reads them as ${reads}`);
+    }
+  }
+
+  // 2. a seat that acts on a later street with an earlier round it never matched
+  const lastStreetOf = new Map<number, number>();
+  for (const a of hand.actions) {
+    const i = order.indexOf(a.street);
+    if (i < 0 || a.type === "post-sb" || a.type === "post-bb") continue;
+    lastStreetOf.set(seatOf(a), Math.max(lastStreetOf.get(seatOf(a)) ?? -1, i));
+  }
+  for (const [s, last] of lastStreetOf) {
+    if (folded.has(s) || allIn.has(s)) continue;
+    for (let i = 0; i < last; i++) {
+      const m = per.get(order[i]!);
+      if (!m) continue;
+      const level = Math.max(0, ...m.values());
+      const mine = m.get(s) ?? 0;
+      if (level - mine > 0.05) {
+        faults.push(`${pos(s)} acts on the ${order[last]} but put ${r2(mine)}bb into a ${order[i]} round that went to ${r2(level)}bb — their call was lost, so the line reads them as out of the pot`);
+        break;
+      }
+    }
+  }
+
+  // 3. the table's pot against every chip the capture accounts for. Ignition's pot is the WS CO_CHIPTABLE_INFO sum
+  //    (the closed rounds' chips, dead money included); CoinPoker's adds every action's chips and the antes. Either
+  //    way it can only be SMALLER than the closed rounds' captured chips + this round's committed chips + the antes
+  //    (an uncalled excess returned, the rake, a pot not yet updated) — never larger unless chips moved with no
+  //    action. This is the only evidence left for a lost call by a seat that folded later in the round, or that has
+  //    not acted on the new street yet. 0.6bb of slack covers a dead small blind posted by a returning player.
+  //    Archive (hands.db, end-of-hand pots): 38 of 631 hands exceed it, and every one read is a capture already
+  //    known to be broken — the 2026-09-20 socket-mixing session, CoinPoker 140706500001 (the dropped Pot-button
+  //    bet), 140553400095 (a river bet missing before the BB's fold).
+  const pot = Number(hand.currentNode?.pot ?? 0);
+  if (Number.isFinite(pot) && pot > 0) {
+    let closed = 0;
+    for (const [st, m] of per) if (order.indexOf(st) >= 0 && order.indexOf(st) < order.indexOf(street)) for (const v of m.values()) closed += v;
+    // this round: what is known to be in front of each seat — the table's count or the captured actions, whichever is
+    // more (an export with no `committed` map is "unknown", not "nothing in")
+    const nowBySeat = new Map<number, number>(cur);
+    for (const [k, v] of Object.entries(hand.committed ?? {})) {
+      const x = Number(v);
+      if (Number.isFinite(x)) nowBySeat.set(Number(k), Math.max(nowBySeat.get(Number(k)) ?? 0, x));
+    }
+    let now = 0;
+    for (const v of nowBySeat.values()) now += v;
+    const dealtN = (hand.liveSeats?.length ? hand.liveSeats.length : Object.keys(hand.positions ?? {}).length);
+    const antes = Math.max(0, Number(hand.anteBb ?? 0) || 0) * dealtN;
+    const missing = pot - closed - now - antes;
+    if (missing > 0.6) {
+      faults.push(`the table's pot is ${r2(pot)}bb but the captured actions account for ${r2(closed + now + antes)}bb — ${r2(missing)}bb went in with no action captured (a lost call or bet)`);
+    }
+  }
+  return faults;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -363,6 +471,24 @@ export function repairPreflopFoldOrder(hand: ParsedHand): { hand: ParsedHand; no
     hand: { ...hand, actions: [...posts, ...ordered, ...post] },
     note: `FOLDS FILED LATE: ${moved.join(", ")}'s fold${moved.length > 1 ? "s were" : " was"} captured after later seats acted and moved back into rotation (a fold commits nothing, so the spot is unchanged).`,
   };
+}
+
+/**
+ * THE POSTFLOP CAPTURE GATE (2026-09-25, mutation harness `late-fold`: 70 flop/turn/river refusals in a 300-seed
+ * sweep). The preflop gate moves a late-filed preflop fold back into its slot before the faults are read, but the
+ * postflop path read the raw capture: the same "HJ folds, UTG folds, CO raises" line that every preflop decision of
+ * the hand had answered was refused at the flop as "UTG acted before CO, SB, BB were to act". The preflop line is
+ * the same capture at both points, so it is repaired the same way (a fold commits nothing — and the preflop pin,
+ * written from the repaired line, still matches it), then the postflop checks, then the faults are read.
+ */
+export function repairPostflopCapture(hand: ParsedHand): { hand: ParsedHand; notes: string[]; faults: string[] } {
+  const folds = repairPreflopFoldOrder(hand);
+  const fixed = repairPostflopRotation(folds.hand);
+  const notes = [
+    ...(folds.note ? [`CAPTURE REPAIR (preflop): ${folds.note}`] : []),
+    ...fixed.notes.map((n) => `CAPTURE REPAIR (${n.street}): ${n.detail}`),
+  ];
+  return { hand: fixed.hand, notes, faults: captureFaults(fixed.hand) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

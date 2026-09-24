@@ -366,10 +366,12 @@ describe("captureFaults — the line must price hero's decision (CoinPoker hand 
     act(1, "raise", "preflop", 10.52),
     { seatId: 2, hero: true, type: "call", street: "preflop", amount: 8.04 },
   ] as ParsedAction[];
-  const hu = (actions: ParsedAction[], toCall: number, positions: Record<number, string> = { 2: "SB", 1: "BB" }, heroSeatId = 2): ParsedHand => ({
+  // pot = the table's closed-round pot: 21.44 = 2 x 10.52 + the CoinPoker antes. A fixture with another preflop line
+  // passes its own (the pot ledger in lostActionFaults reads it).
+  const hu = (actions: ParsedAction[], toCall: number, positions: Record<number, string> = { 2: "SB", 1: "BB" }, heroSeatId = 2, pot = 21.44): ParsedHand => ({
     handId: 1, heroSeatId, heroCards: ["8c", "7c"], board: ["4c", "6d", "5s"], street: "flop", actions,
     liveSeats: Object.keys(positions).map(Number), committed: {}, potByStreet: {}, positions,
-    currentNode: { street: "flop", toActSeatId: heroSeatId, toActIsHero: true, pot: 21.44, toCall, legalActions: [], complete: false },
+    currentNode: { street: "flop", toActSeatId: heroSeatId, toActIsHero: true, pot, toCall, legalActions: [], complete: false },
     ended: false,
   }) as ParsedHand;
 
@@ -394,7 +396,7 @@ describe("captureFaults — the line must price hero's decision (CoinPoker hand 
       act(2, "post-sb", "preflop", 0.5), { seatId: 1, hero: true, type: "post-bb", street: "preflop", amount: 1 },
       act(2, "raise", "preflop", 2.5), { seatId: 1, hero: true, type: "call", street: "preflop", amount: 1.5 },
     ] as ParsedAction[];
-    expect(captureFaults(hu(pre2, 0, { 2: "SB", 1: "BB" }, 1))).toEqual([]);
+    expect(captureFaults(hu(pre2, 0, { 2: "SB", 1: "BB" }, 1, 5))).toEqual([]);
   });
 
   it("blind versus blind at a full table: the SB acts first, so hero in the BB needs the SB's action", () => {
@@ -404,7 +406,7 @@ describe("captureFaults — the line must price hero's decision (CoinPoker hand 
       act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "fold", "preflop"),
       act(1, "call", "preflop", 0.5), { seatId: 2, hero: true, type: "check", street: "preflop" },
     ] as ParsedAction[];
-    const h = (actions: ParsedAction[]) => ({ ...hu(actions, 0, pos, 2), liveSeats: [1, 2, 3, 4, 5, 6] }) as ParsedHand;
+    const h = (actions: ParsedAction[]) => ({ ...hu(actions, 0, pos, 2, 2), liveSeats: [1, 2, 3, 4, 5, 6] }) as ParsedHand;
     expect(captureFaults(h(bvb))[0]).toMatch(/SB acts first on the flop heads-up/);
     expect(captureFaults(h([...bvb, act(1, "check", "flop")]))).toEqual([]);
   });

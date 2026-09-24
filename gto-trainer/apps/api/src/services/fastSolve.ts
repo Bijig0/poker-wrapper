@@ -7,7 +7,7 @@ import { preflopArrivalFor } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
 import { rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
-import { captureFaults, repairPostflopRotation, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
+import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
 import { missQueue } from "./missQueue";
 import { preflopDb } from "./preflopDb";
 import { gtowApi } from "./gtowApi";
@@ -1619,18 +1619,19 @@ async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts:
   // seats and the chain walks a tree with the wrong player out of position. Repair what is provably safe to
   // repair — misplaced CHECKS, which commit nothing — BEFORE the tokens are built. Anything involving chips
   // is left alone for aiChain's rotation cross-check to refuse. See utils/repairPostflopRotation.
-  const fixed = repairPostflopRotation(hand);
-  // A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21). Say so plainly instead of letting it
-  // surface as "preflop betting didn't close (missed action?)", which sends you looking for a missing action
-  // that was never the problem.
-  const faults = captureFaults(fixed.hand);
-  if (faults.length) {
+  // Late-filed PREFLOP folds are moved back into rotation here too, as the preflop gate does (2026-09-25: the flop
+  // used to refuse a line every preflop decision of the hand had answered) — utils/repairPostflopRotation
+  // .repairPostflopCapture. A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21). Say so plainly
+  // instead of letting it surface as "preflop betting didn't close (missed action?)", which sends you looking for
+  // a missing action that was never the problem.
+  const fixed = repairPostflopCapture(hand);
+  if (fixed.faults.length) {
     return { ok: false, kind: "capture-fault", street, gametype: site.gametype, depth,
-      reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${faults.join("; ")}` };
+      reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${fixed.faults.join("; ")}` };
   }
   const tk = buildSpotSolutionTokens(fixed.hand, heroPos, site.huCp);
   const chain = await solvePostflopViaChain(fixed.hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, site.sixMax,
-    fixed.notes.map((n) => `CAPTURE REPAIR (${n.street}): ${n.detail}`), site.huCp, pin?.dealt);
+    fixed.notes, site.huCp, pin?.dealt);
   if (chain.res && chain.mesInput && site.riverMes) {
     // On-the-fly river MES (services/riverMes.ts). shadow (default): logged only, the answer untouched.
     // serve: MES becomes the pick when its gate passes. Never throws; any failure returns the chain's answer.
