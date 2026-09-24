@@ -26,8 +26,10 @@ describe("rotationFor", () => {
 
   it("blind-versus-blind at a FULL table still has the SB first (hand 4919480043)", () => {
     // four seats dealt, CO and BTN fold preflop: SB is out of position, not the dealer
+    // (the SB's own complete is in the line: since round 2 a blind with no voluntary preflop action in a played
+    // preflop is a fold the tap lost, unless he is the BB of an unraised pot — this fixture used to leave it out)
     const h = hand({ 1: "BB", 3: "CO", 4: "BTN", 6: "SB" },
-      [act(3, "fold", "preflop"), act(4, "fold", "preflop")], [1, 3, 4, 6]);
+      [act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(6, "call", "preflop", 0.5)], [1, 3, 4, 6]);
     expect(rotationFor(h, "flop").map((s) => h.positions[s])).toEqual(["SB", "BB"]);
   });
 
@@ -54,6 +56,17 @@ describe("rotationFor — a missed preflop fold", () => {
     act(4, "check", "flop"), act(5, "check", "flop"), act(4, "check", "turn"), act(5, "bet", "turn", 9.5), act(4, "call", "turn", 9.5)];
   it("the seat whose fold was lost is not in the postflop rotation", () => {
     expect(rotationFor(hand(P, line), "turn").map((s) => P[s as keyof typeof P])).toEqual(["CO", "BTN"]);
+  });
+  // …and a BLIND whose fold was lost (fresh sweep 15301..18300: seeds 15564, 17644 [missed-fold]): his post is an
+  // action, so "no action at all" never caught him, and the BB's flop check read as "before SB was to act". A blind
+  // must act preflop once the pot is raised (and the SB always); the BB of an unraised pot keeps his free check
+  it("a blind with no voluntary preflop action in a raised pot folded (lost); the BB of a limped pot is still in", () => {
+    const raised = [act(1, "post-sb", "preflop", 0.5), act(2, "post-bb", "preflop", 1), act(3, "fold", "preflop"), act(4, "raise", "preflop", 2.5),
+      act(5, "fold", "preflop"), act(2, "call", "preflop", 1.5), act(2, "check", "flop")];
+    expect(rotationFor(hand(P, raised), "flop").map((s) => P[s as keyof typeof P])).toEqual(["BB", "CO"]);
+    const limped = [act(1, "post-sb", "preflop", 0.5), act(2, "post-bb", "preflop", 1), act(3, "fold", "preflop"), act(4, "call", "preflop", 1),
+      act(5, "fold", "preflop"), act(1, "call", "preflop", 0.5)];
+    expect(rotationFor(hand(P, limped), "flop").map((s) => P[s as keyof typeof P])).toEqual(["SB", "BB", "CO"]);
   });
   it("hero's turn check is kept", () => {
     const r = repairPostflopRotation(hand(P, line));

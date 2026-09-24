@@ -34,15 +34,29 @@ export function dealtSeats(hand: ParsedHand, heroPos?: string | null): Map<numbe
 export function seatsInHand(hand: ParsedHand, heroPos?: string | null): Set<number> {
   const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
   const folded = new Set(hand.actions.filter((a) => a.type === "fold").map(seatOf));
-  const acted = new Set(hand.actions.map(seatOf));
-  const preflopPlayed = hand.actions.some((a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb");
   const out = new Set<number>();
   for (const [s, pos] of dealtSeats(hand, heroPos)) {
     if (folded.has(s)) continue;
-    if (preflopPlayed && !acted.has(s) && !/^(SB|BB)$/.test(pos) && s !== hand.heroSeatId) continue;
+    if (s !== hand.heroSeatId && lostPreflopFold(hand, s, pos)) continue;
     out.add(s);
   }
   return out;
+}
+
+/**
+ * A PREFLOP FOLD THE TAP LOST (round 2): the preflop round was played, and this seat took no voluntary preflop action
+ * and has done nothing since — every seat must act preflop, so it folded and the capture never saw it. A blind's post
+ * is not a decision (fresh sweep seeds 15564/17644: the SB's lost fold, his post counted as "acted"); only the BB of an
+ * UNRAISED pot is exempt — his free check may be the action that was lost, and he is still in.
+ */
+export function lostPreflopFold(hand: ParsedHand, seat: number, pos: string): boolean {
+  const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const voluntary = (a: ParsedHand["actions"][number]) => a.type !== "post-sb" && a.type !== "post-bb";
+  const pre = hand.actions.filter((a) => a.street === "preflop" && voluntary(a));
+  if (!pre.length) return false;
+  if (hand.actions.some((a) => seatOf(a) === seat && voluntary(a))) return false;
+  const raised = pre.some((a) => a.type === "raise" || a.type === "bet" || (a.type === "all-in" && Number(a.amount ?? 0) > 1));
+  return !(/^BB$/i.test(pos) && !raised);
 }
 
 /** How many players were dealt in: the labelled seats minus the ones that were not dealt, hero included. */

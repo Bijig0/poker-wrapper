@@ -61,6 +61,8 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 213, ops: ["missed-fold", "nl5-rounding"], cls: "the same on the flop (postflop-line-mismatch)" },
   { seed: 14999, ops: ["short-seat"], cls: "the chart changed under hero (the short BTN folded) and the kept chart pruned the 3-bet: no decision (hero-zero-weight)" },
   { seed: 85, ops: ["missed-fold"], cls: "stack behind: a lost-fold seat's stack set the effective depth (solver-input-mismatch)" },
+  { seed: 15564, ops: ["missed-fold"], cls: "a BLIND's lost fold: his post counted as acting, hero's check dropped as a phantom (postflop-line-mismatch)" },
+  { seed: 17644, ops: ["missed-fold"], cls: "the same, the SB's lost fold and the BB's flop check (postflop-line-mismatch)" },
   { seed: 22, ops: ["undealt-seat"], cls: "stack behind: a sitting-out label's stack set the effective depth (solver-input-mismatch)" },
 ];
 
