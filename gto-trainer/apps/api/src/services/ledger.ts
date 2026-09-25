@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { getCatalog } from "./chartCatalog";
@@ -143,25 +143,86 @@ export interface Ledger {
 
 // LEDGER_PATH: the packaged install ships a trimmed ledger (setup/buildPackage.ts) — formats, configs with their
 // chart ids baked in, sources; no boxes, machines, proposals or plans
-const PATH = process.env.LEDGER_PATH ?? join(DATA_DIR, "ledger.json");
-let cache: { mtimeMs: number; value: Ledger } | null = null;
+// (read per call, so a test can point it at a temp file)
+const ledgerPath = (): string => process.env.LEDGER_PATH ?? join(DATA_DIR, "ledger.json");
+let cache: { path: string; mtimeMs: number; size: number; value: Ledger } | null = null;
+let tornWarnedAt = -1;
 /** What a missing ledger reads as: nothing to solve, nothing landed — never a crash of every page that reads it. */
 const EMPTY_LEDGER = { formats: [], trees: [], configs: [], sources: {}, plans: [], proposals: [], machines: [], boxes: {} } as unknown as Ledger;
+
+/** The ledger as it is on disk now. Throws when it does not parse after a few quick re-reads. */
+function readLedgerFile(path: string): Ledger {
+  for (let i = 0; ; i++) {
+    try { return JSON.parse(readFileSync(path, "utf-8")) as Ledger; } catch (e) { if (i >= 3) throw e; Bun.sleepSync(15); }
+  }
+}
+
+/**
+ * TORN READS (2026-09-25 19:46Z: GET /api/ledger 500, "JSON Parse error: Unexpected EOF" at this read). Other processes
+ * write ledger.json in place — hrc-api/scripts/linuxShardJob.ts (poker-zenbook) points a box's plan at its shard, a hand
+ * edit saves it — and a read that lands mid-write sees half a file. With a good read already in memory that is served
+ * until the file parses again (a torn read is never cached, so the next call re-reads); only a first read that cannot
+ * parse after a few quick re-reads throws.
+ */
 export function loadLedger(): Ledger {
+  const path = ledgerPath();
   let st: ReturnType<typeof statSync>;
-  try { st = statSync(PATH); } catch { return EMPTY_LEDGER; }
-  if (cache && cache.mtimeMs === st.mtimeMs) return cache.value;
-  const value = JSON.parse(readFileSync(PATH, "utf-8")) as Ledger;
-  cache = { mtimeMs: st.mtimeMs, value };
+  try { st = statSync(path); } catch { return EMPTY_LEDGER; }
+  const good = cache?.path === path ? cache : null;
+  if (good && good.mtimeMs === st.mtimeMs && good.size === st.size) return good.value;
+  let value: Ledger;
+  try {
+    value = good ? (JSON.parse(readFileSync(path, "utf-8")) as Ledger) : readLedgerFile(path);
+  } catch (e) {
+    if (!good) throw e;
+    if (tornWarnedAt !== st.mtimeMs) { tornWarnedAt = st.mtimeMs; console.warn(`[ledger] ${path} did not parse (${(e as Error).message}) — another process is mid-write; serving the last good read`); }
+    return good.value;
+  }
+  cache = { path, mtimeMs: st.mtimeMs, size: st.size, value };
   return value;
 }
 
+/**
+ * Change the ledger and save it the way no reader can catch half of: read fresh (never the cache — a read-modify-write
+ * must not drop another writer's update), mutate, write a temp file beside it, rename over. Windows refuses the rename
+ * while another process holds the file open without delete sharing (a Python reader, git) — retried briefly.
+ */
+export function updateLedger<T>(mutate: (L: Ledger) => T): T {
+  const path = ledgerPath();
+  const L = readLedgerFile(path);
+  const out = mutate(L);
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(L, null, 2) + "\n");
+  for (let i = 0; ; i++) {
+    try { renameSync(tmp, path); break; } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? "";
+      if (i >= 10 || !["EPERM", "EBUSY", "EACCES"].includes(code)) { try { unlinkSync(tmp); } catch { /* already gone */ } throw e; }
+      Bun.sleepSync(25);
+    }
+  }
+  loadLedger();
+  return out;
+}
+
 export interface Fingerprint { key: string; path: string; exists: boolean; sha256: string | null; mtimeMs: number | null; bytes: number | null; meta?: Record<string, unknown> }
-function fp(key: string, path: string, meta?: Record<string, unknown>): Fingerprint {
+/**
+ * An artifact's sha256, re-hashed only when the file moves (mtime or size). Every GET /api/ledger used to hash every
+ * artifact once per proposal detail — the 23 MB mes_postflop.json ~36 times a request, 3-13 s of blocked event loop
+ * per 7 s poll (2026-09-25 19:05-19:46Z, 351 [stall] lines). A hash is kept only when the file did not move while it
+ * was read.
+ */
+const shaCache = new Map<string, { mtimeMs: number; size: number; sha: string | null }>();
+export function fp(key: string, path: string, meta?: Record<string, unknown>): Fingerprint {
   try {
     const st = statSync(path);
-    const sha = st.size < 64 * 1024 * 1024 ? createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16) : null;
-    return { key, path, exists: true, sha256: sha, mtimeMs: st.mtimeMs, bytes: st.size, meta };
+    let hit = shaCache.get(path);
+    if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
+      const sha = st.size < 64 * 1024 * 1024 ? createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16) : null;
+      hit = { mtimeMs: st.mtimeMs, size: st.size, sha };
+      const after = statSync(path);
+      if (after.mtimeMs === st.mtimeMs && after.size === st.size) shaCache.set(path, hit); else shaCache.delete(path);
+    }
+    return { key, path, exists: true, sha256: hit.sha, mtimeMs: st.mtimeMs, bytes: st.size, meta };
   } catch {
     return { key, path, exists: false, sha256: null, mtimeMs: null, bytes: null, meta };
   }
@@ -196,15 +257,17 @@ export interface EvaluatedConfig extends LedgerConfig {
   dependents: string[];
 }
 
-function estimateOf(c: LedgerConfig): EvaluatedConfig["estimate"] {
+function estimateOf(c: LedgerConfig, L: Ledger): EvaluatedConfig["estimate"] {
   const minutes = c.cost.jobs * c.cost.minPerJob;
-  const lanes = Math.max(1, Number(c.lanes ?? (loadLedger() as any).machines?.[c.runner] ?? (c.runner === "fleet" ? 4 : 1)));
+  const lanes = Math.max(1, Number(c.lanes ?? (L as any).machines?.[c.runner] ?? (c.runner === "fleet" ? 4 : 1)));
   // jobs run one per machine, side by side: wall-clock = rounds × minutes per job
   const wall = Math.ceil(c.cost.jobs / lanes) * c.cost.minPerJob;
   const eur = c.cost.eurPerJob ? Math.round(c.cost.jobs * c.cost.eurPerJob * 100) / 100 : 0;
   return { minutes, wallMinutes: wall, eur, runner: c.runner };
 }
 
+/** Every config against the artifacts on disk, now. One call per request: pass the result on (runbookFor, proposals). */
+export type Evaluation = ReturnType<typeof evaluate>;
 export function evaluate() {
   const L = loadLedger();
   const A = artifacts();
@@ -264,7 +327,7 @@ export function evaluate() {
     // (locked-root charts run on the boxes since 2026-09-09: hrcLock.ts sets the opener's root through the bridge)
     // a planned config whose every artifact is already on disk is done (e.g. a run finished outside the queue)
     if (c.status === "planned" && producesFound.length && producesFound.every((x) => x.found) && c.kind !== "cutover") effective = "done";
-    return { ...c, formatLabel: f?.label ?? c.format, effective, staleWhy, artifactFp, producesFound, estimate: estimateOf(c), dependents: L.configs.filter((o) => o.inputs.includes(c.id)).map((o) => o.id) };
+    return { ...c, formatLabel: f?.label ?? c.format, effective, staleWhy, artifactFp, producesFound, estimate: estimateOf(c, L), dependents: L.configs.filter((o) => o.inputs.includes(c.id)).map((o) => o.id) };
   });
   const cById = new Map(configs.map((c) => [c.id, c]));
   const plans = L.plans.map((p) => {

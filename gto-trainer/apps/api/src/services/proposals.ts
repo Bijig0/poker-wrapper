@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { evaluate, loadLedger, expectedChartIds, isBoxGrid, BOX_GRID_KINDS, DATA_DIR, MES_HANDOFF, LIMP, type EvaluatedConfig } from "./ledger";
+import { evaluate, loadLedger, updateLedger, expectedChartIds, isBoxGrid, BOX_GRID_KINDS, MES_HANDOFF, LIMP, type EvaluatedConfig, type Evaluation } from "./ledger";
 import { runbookFor, hrcJobsFor, type Runbook } from "./runbook";
 import { getCatalog } from "./chartCatalog";
 import { jobs } from "./jobs";
-import { chartStates, runEstimate, type ChartState } from "./chartProgress";
+import { chartStates, runEstimate, type ChartState, type DirListing } from "./chartProgress";
 
 /**
  * PROPOSALS — the run at the level Brady reads: WHAT is being worked on,
@@ -39,13 +39,14 @@ const MES_SPOTS = [
 
 const minsStr = (m: number) => (m >= 48 * 60 ? `${(m / 1440).toFixed(m >= 14400 ? 0 : 1)} days` : m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)} h` : `${Math.round(m)} min`);
 
-export function proposals(): Proposal[] {
+/** `ev`: the caller's evaluate(), when it has one (GET /api/ledger) — every proposal and runbook below reads that one. */
+export function proposals(ev: Evaluation = evaluate()): Proposal[] {
   const L = loadLedger();
-  const ev = evaluate();
   const byId = new Map(ev.configs.map((c) => [c.id, c]));
   let catalogIds = new Set<string>();
   try { catalogIds = new Set((getCatalog().entries as any[]).map((e) => String(e.id))); } catch { /* none */ }
   const jobList = jobs.list(200);
+  const dirs: DirListing = new Map();   // the chart dirs, listed once for every config below
   const liveJob = (cfg: string) => jobList.find((x) => x.config === cfg && (x.status === "queued" || x.status === "running")) ?? null;
   /** the most recent job for a config (any status) + its last meaningful log line = the phase shown live */
   const liveOf = (cfg: string) => {
@@ -81,7 +82,7 @@ export function proposals(): Proposal[] {
           // hand-written lines (uneven-stack batches, the 4-handed pieces): status from the config
           let from = 0;
           const allIds = expectedChartIds(c, fmt);
-          const allStates: ChartState[] = allIds.length ? chartStates(c, allIds) : [];
+          const allStates: ChartState[] = allIds.length ? chartStates(c, allIds, dirs) : [];
           const stateOf = new Map(allStates.map((x) => [x.id, x]));
           for (const w of c.work) {
             // a batch of solves (uneven-stack states, 6-max trees): its own chart ids — done in the catalog, solving on a box, queued
@@ -103,7 +104,7 @@ export function proposals(): Proposal[] {
           const H = hrcJobsFor(c, fmt, t);
           const rungs = (c.depths && c.depths.length) ? c.depths : fmt.depths;
           // per chart: done in the catalog, solved on a box (pulling), solving now (which box, how long), queued
-          const hStates = chartStates(c, H.jobs.map((j) => j.id)); const hState = new Map(hStates.map((x) => [x.id, x]));
+          const hStates = chartStates(c, H.jobs.map((j) => j.id), dirs); const hState = new Map(hStates.map((x) => [x.id, x]));
           const shortId = (id: string) => id.replace(/^ign\d+_(6max|3max\w*|4max\w*)_/, "");
           const liveFor = (ids: string[]) => { const r = ids.map((id) => hState.get(id)!).filter((x) => x && x.state === "running"); return r.length ? { job: liveJob(c.id)?.id ?? 0, lane: `hrc-box:${[...new Set(r.map((x) => x.box))].join("+")}`, status: "running", started: null, ended: null, phase: r.map((x) => `${x.box}: ${shortId(x.id)}${x.phase ? ` · ${x.phase}` : ""}${x.sinceMin != null ? ` · ${x.sinceMin} min` : ""}`).join(" · ").slice(0, 240) } : undefined; };
           if (c.kind === "locked-root" || c.kind === "preflop-grid") measured.push({ label: c.label, est: runEstimate(c, hStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1)) });
@@ -193,29 +194,28 @@ export function proposals(): Proposal[] {
       totals: { solves, done, wallMinutes: wall, eur, text: `${done} of ${solves} solves done · about ${minsStr(wall)} left · ${eur ? `about €${eur}` : "€0"}` },
       activity,
       canRunAll: !!P.approved && allCfgs.some((c) => c.effective !== "done" && c.effective !== "blocked" && c.runner !== "manual" && !liveJob(c.id)),
-      details: allCfgs.map((c) => runbookFor(c.id)!).filter(Boolean),
+      details: allCfgs.map((c) => runbookFor(c.id, ev)!).filter(Boolean),
     };
   });
 }
 
 export function approve(id: string, on: boolean): { ok: boolean; error?: string } {
-  const p = join(DATA_DIR, "ledger.json");
-  const L = JSON.parse(readFileSync(p, "utf-8"));
-  const P = (L.proposals ?? []).find((x: any) => x.id === id);
-  if (!P) return { ok: false, error: `no proposal ${id}` };
-  P.approved = on ? { at: new Date().toISOString() } : null;
-  writeFileSync(p, JSON.stringify(L, null, 2) + "\n");
-  loadLedger();
+  const found = updateLedger((L) => {
+    const P = (L.proposals ?? []).find((x) => x.id === id);
+    if (P) P.approved = on ? { at: new Date().toISOString() } : null;
+    return !!P;
+  });
+  if (!found) return { ok: false, error: `no proposal ${id}` };
   if (on) { const r = runAll(id); return { ok: true, ...(r as any) }; }
   return { ok: true };
 }
 
 /** Queue every step that can run, in order, as a chain: each waits for its inputs (the previous step's output) before it starts. */
 export function runAll(id: string): { ok: boolean; error?: string; queued: { config: string; job?: number; skipped?: string }[] } {
-  const P = proposals().find((x) => x.id === id);
+  const ev = evaluate();
+  const P = proposals(ev).find((x) => x.id === id);
   if (!P) return { ok: false, error: `no proposal ${id}`, queued: [] };
   if (!P.approved) return { ok: false, error: "the proposal is not approved — press Approve first", queued: [] };
-  const ev = evaluate();
   const queued: { config: string; job?: number; skipped?: string }[] = [];
   for (const id of P.parts.flatMap((p) => p.steps)) {
     const c = ev.configs.find((x) => x.id === id);

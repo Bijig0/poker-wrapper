@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { evaluate, loadLedger, DATA_DIR, REPO } from "../services/ledger";
+import { evaluate, updateLedger, DATA_DIR, REPO, type LedgerConfig } from "../services/ledger";
 import { jobs, PY } from "../services/jobs";
 import { runbookFor, planRunbook } from "../services/runbook";
 import { proposals, approve, runAll } from "../services/proposals";
@@ -28,21 +28,23 @@ import { workData } from "../services/workData";
  */
 const app = new Hono();
 
-app.get("/", (c) => c.json({ ok: true, ...evaluate(), proposals: proposals(), jobs: jobs.list(20) }));
+// ONE evaluate() per request (2026-09-26): proposals() and every runbook in it re-evaluated the whole ledger — ~37
+// evaluations, each hashing the artifacts: 3-13 s of blocked event loop per 7 s poll of this page (2026-09-25 19:05-19:46Z)
+app.get("/", (c) => { const ev = evaluate(); return c.json({ ok: true, ...ev, proposals: proposals(ev), jobs: jobs.list(20) }); });
 
 app.post("/configs/:id/status", async (c) => {
   const id = c.req.param("id");
   const b = (await c.req.json().catch(() => ({}))) as { status?: string; note?: string };
   if (!["done", "planned", "blocked"].includes(b.status ?? "")) return c.json({ ok: false, error: "status must be done, planned or blocked" }, 400);
-  const p = join(DATA_DIR, "ledger.json");
-  const L = JSON.parse(readFileSync(p, "utf-8"));
-  const cfg = (L.configs as any[]).find((x) => x.id === id);
-  if (!cfg) return c.json({ ok: false, error: `no config ${id}` }, 404);
-  cfg.status = b.status;
-  if (b.note) cfg.note = b.note;
-  cfg.statusChangedAt = new Date().toISOString();
-  writeFileSync(p, JSON.stringify(L, null, 2) + "\n");
-  loadLedger();
+  const found = updateLedger((L) => {
+    const cfg = L.configs.find((x) => x.id === id) as (LedgerConfig & { statusChangedAt?: string }) | undefined;
+    if (!cfg) return false;
+    cfg.status = b.status as LedgerConfig["status"];
+    if (b.note) cfg.note = b.note;
+    cfg.statusChangedAt = new Date().toISOString();
+    return true;
+  });
+  if (!found) return c.json({ ok: false, error: `no config ${id}` }, 404);
   return c.json({ ok: true, config: evaluate().configs.find((x) => x.id === id) });
 });
 

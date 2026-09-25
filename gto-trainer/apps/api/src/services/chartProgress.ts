@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { HRC_API, REPO, isBoxGrid, type LedgerConfig } from "./ledger";
 import { jobs, HRC_API_ZENBOOK } from "./jobs";
@@ -31,12 +31,25 @@ export function chartDirs(c: LedgerConfig): string[] {
   return dirs;
 }
 const SOLUTIONS = join(REPO, "analysis", "pipeline", "solve", "exploit_ui", "solutions");
-export function chartFile(c: LedgerConfig, id: string): { path: string; mtimeMs: number } | null {
-  for (const ext of [".json.gz", ".json"]) { const p = join(SOLUTIONS, `${id}${ext}`); if (existsSync(p)) { try { return { path: p, mtimeMs: statSync(p).mtimeMs }; } catch { return { path: p, mtimeMs: 0 }; } } }
-  for (const d of chartDirs(c)) for (const ext of [".charts.json.gz", ".charts.json"]) {
-    const p = join(d, `${id}${ext}`);
-    if (existsSync(p)) { try { return { path: p, mtimeMs: statSync(p).mtimeMs }; } catch { return { path: p, mtimeMs: 0 }; } }
-  }
+
+/**
+ * The file names of each chart dir, listed once per request (one `DirListing` handed to every chartStates call of a
+ * page) instead of an existsSync per id × extension × dir: 1,562 ids × up to 12 probes was 0.7 s of blocked event loop
+ * on every poll of the proposals page (2026-09-26). Not cached across requests: a dir's mtime does not track the chart
+ * files landing in it. Names compare the way the file system does (case-blind on Windows), as existsSync did.
+ */
+export type DirListing = Map<string, Set<string>>;
+const nameKey = process.platform === "win32" ? (s: string) => s.toLowerCase() : (s: string) => s;
+function has(dir: string, name: string, memo: DirListing | undefined): boolean {
+  if (!memo) return existsSync(join(dir, name));
+  let s = memo.get(dir);
+  if (!s) { try { s = new Set(readdirSync(dir).map(nameKey)); } catch { s = new Set(); } memo.set(dir, s); }
+  return s.has(nameKey(name));
+}
+export function chartFile(c: LedgerConfig, id: string, memo?: DirListing): { path: string; mtimeMs: number } | null {
+  const at = (d: string, name: string) => { const p = join(d, name); try { return { path: p, mtimeMs: statSync(p).mtimeMs }; } catch { return { path: p, mtimeMs: 0 }; } };
+  for (const ext of [".json.gz", ".json"]) if (has(SOLUTIONS, `${id}${ext}`, memo)) return at(SOLUTIONS, `${id}${ext}`);
+  for (const d of chartDirs(c)) for (const ext of [".charts.json.gz", ".charts.json"]) if (has(d, `${id}${ext}`, memo)) return at(d, `${id}${ext}`);
   return null;
 }
 
@@ -54,8 +67,8 @@ export function boxActivity(configId: string): { lane: string; box: string; stat
   return out;
 }
 
-/** The state of each chart id of a config, now. */
-export function chartStates(c: LedgerConfig, ids: string[]): ChartState[] {
+/** The state of each chart id of a config, now. `dirs`: the request's chart-dir listing, shared by all its configs. */
+export function chartStates(c: LedgerConfig, ids: string[], dirs: DirListing = new Map()): ChartState[] {
   const cat = catalogIds();
   const K = boxKeeper.status() as any;
   const probes: [string, any][] = [...Object.entries(K.boxes ?? {}), ...Object.entries(K.linux ?? {})];
@@ -83,7 +96,7 @@ export function chartStates(c: LedgerConfig, ids: string[]): ChartState[] {
       const r = running.get(id); if (r && passLanes.has(r.box)) return { id, state: "running", box: r.box, sinceMin: r.sinceMin, phase: r.phase };
       return { id, state: "queued" };
     }
-    const f = chartFile(c, id);
+    const f = chartFile(c, id, dirs);
     if (cat.has(id) || f) { const z = zips.get(id); const pr = prog[id]; return { id, state: "done", box: pr?.box ?? z?.box, at: pr?.solvedAt ?? (z ? z.at * 1000 : f?.mtimeMs ?? null) }; }
     const z = zips.get(id); if (z) return { id, state: "solved", box: z.box, at: z.at * 1000 };
     const r = running.get(id); if (r) return { id, state: "running", box: r.box, sinceMin: r.sinceMin, phase: r.phase };

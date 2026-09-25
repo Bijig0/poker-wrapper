@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { evaluate, loadLedger, sixMaxChartIds, sixMaxAsym, DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, type EvaluatedConfig, type LedgerFormat } from "./ledger";
+import { evaluate, loadLedger, sixMaxChartIds, sixMaxAsym, DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, type EvaluatedConfig, type Evaluation, type LedgerFormat } from "./ledger";
 import { recipeFor, sixMaxPlan, PY, BUN, BASH, type Step } from "./jobs";
 
 /**
@@ -61,8 +61,8 @@ export function hrcJobsFor(c: EvaluatedConfig, fmt: LedgerFormat, tree: any) {
 
 function readSpec(name: string): any | null { try { return JSON.parse(readFileSync(join(MES_HANDOFF, name), "utf-8")); } catch { return null; } }
 
-export function runbookFor(id: string): Runbook | null {
-  const ev = evaluate();
+/** `ev`: the caller's evaluate() — a page listing many runbooks evaluates once, not once per runbook. */
+export function runbookFor(id: string, ev: Evaluation = evaluate()): Runbook | null {
   const c = ev.configs.find((x) => x.id === id);
   if (!c) return null;
   const L = loadLedger();
@@ -285,7 +285,7 @@ export function planRunbook(planId: string) {
   const inPar = new Set(par.flat());
   const order: string[][] = [];
   for (const s of p.steps) { if (inPar.has(s.id)) { const g = par.find((x) => x.includes(s.id))!; if (!order.some((o) => o === g)) order.push(g); } else order.push([s.id]); }
-  const steps = p.steps.map((s) => runbookFor(s.id)!).filter(Boolean);
+  const steps = p.steps.map((s) => runbookFor(s.id, ev)!).filter(Boolean);
   const needsHrc = steps.some((s) => s.runner === "hrc-zenbook" && s.effective !== "done");
   const needsFleet = steps.some((s) => s.runner === "fleet" && s.effective !== "done");
   const coin = processRunning("CoinPoker.exe"), hrc = processRunning("hrc.exe");
