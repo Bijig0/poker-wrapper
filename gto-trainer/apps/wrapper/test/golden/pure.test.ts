@@ -60,6 +60,25 @@ function supersededHeadsUp(rec: any): boolean {
   return false;
 }
 
+/**
+ * SUPERSEDED 2026-09-25 (session "GTO wizard connections list"): the preflight's gtow check lists EVERY GTO Wizard
+ * account the API knows — disabled ones included — with `enabled`, `tokenLive`, `trees`, `account` and `accountId`,
+ * for the panel's Connection list (the Python recording listed the enabled ones only, without those fields). The
+ * output is projected back to the recorded shape — enabled accounts, the recorded keys — so everything else the
+ * preflight returns is still compared exactly.
+ */
+const NEW_GTOW_SESSION_KEYS = ["enabled", "tokenLive", "trees", "account", "accountId"];
+function asRecordedPreflight(fn: string, got: any): any {
+  if (fn !== "sessions.run_preflight" || !got || !Array.isArray(got.checks)) return got;
+  return {
+    ...got,
+    checks: got.checks.map((c: any) => (c && c.id === "gtow" && Array.isArray(c.sessions)
+      ? { ...c, sessions: c.sessions.filter((x: any) => x.enabled !== false).map((x: any) =>
+          Object.fromEntries(Object.entries(x).filter(([k]) => !NEW_GTOW_SESSION_KEYS.includes(k)))) }
+      : c)),
+  };
+}
+
 test("golden: pure functions match the Python wrapper", async () => {
   const pending = new Map<string, number>();
   const fails: string[] = [];
@@ -80,6 +99,7 @@ test("golden: pure functions match the Python wrapper", async () => {
       got = normPy(await fn(rec.args, rec));
       // a page snippet is compared with the frame resolver as the recording had it (lib.ts asRecordedFrame)
       if (typeof got === "string") got = asRecordedFrame(got);
+      got = asRecordedPreflight(rec.fn, got);
     } catch (e: any) {
       got = { __error__: `${e?.name || "Error"}: ${e?.message || e}` };
     }
