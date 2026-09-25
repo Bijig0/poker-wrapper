@@ -12,7 +12,7 @@
  *     hero's buttons vanish while owing,
  *       chips unchanged ................... hero folded (hero's cards stay on screen)
  *     a later seat acts while an earlier live seat has no action this street and owes nothing .. it checked
- *     the street changes / hand ends with live seats unacted and nothing owed ... checks
+ *     the street changes / hand ends with live seats unacted and nothing owed ... checks (never the last seat standing)
  *
  * Everything derived carries a confidence and can be RETRACTED by later evidence. Invariants are checked every
  * tick and recorded, never silently fixed. This module is pure: it sees ticks and returns a line, violations and
@@ -298,6 +298,9 @@ export class HandReconciler {
     if (this.maxBet - (any ? maxLiveC : 0.0) <= TOL) {
       for (const s of this.order()) {
         if (this.allin.has(s)) continue;
+        // nobody is left to check to: a walk's big blind never gets the option, and the winner of a pot everyone else
+        // folded never acts again (golden 20260920_131406 hand 51, 4919432644: 'preflop 3 check/street-end')
+        if (this.lastStanding(s)) continue;
         if (this.live.has(s) && !this.acted.has(s) && this.maxBet - (this.C.get(s) ?? 0.0) <= TOL) {
           this.add(s, "check", null, seq, 0.7, "street-end");
         }
