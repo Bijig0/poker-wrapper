@@ -1,7 +1,7 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { reconstructFlopRanges, type RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
-import { nodeGetter } from "./hrc6max";
+import { nodeGetter, chartFor6max, resolveChart6max, openFromTokens, type Chart6Choice } from "./hrc6max";
 import type { GetNode, HrcNode } from "./hrc3max";
 import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
 import type { AiPreflopShape } from "./gtowAiPreflop";
@@ -259,6 +259,131 @@ async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: stri
   };
 }
 
+/** A 6-max chart id's state (hrc6max.evenChartId / unevenChartId / the pool limp trees), or null for another id. */
+export function chart6State(id: string): { depth: number; short: { bb: number; seat: string } | null; open: number | "limp" } | null {
+  const m = /_6max_D(\d+(?:_\d+)?)(?:_s(\d+(?:_\d+)?)_([A-Z]+))?_o(limp|\d+(?:_\d+)?)(?:_pool\d*)?$/.exec(id);
+  if (!m) return null;
+  const n = (x: string) => Number(x.replace("_", "."));
+  return { depth: n(m[1]!), short: m[2] ? { bb: n(m[2]), seat: m[3]! } : null, open: m[4] === "limp" ? "limp" : n(m[4]!) };
+}
+
+export interface RangesRepick {
+  /** the resumed ranges with the re-picked villains replaced (hero's untouched) */
+  ranges: Record<string, Record<string, number>>;
+  /** the chart the re-picked villains were read on */
+  id: string;
+  /** the villains whose flop-entering range is the re-picked chart's */
+  seats: string[];
+  /** the villains the re-picked chart could not read: kept on the pinned chart's read */
+  kept: { seat: string; why: string }[];
+  why: string;
+  note: string;
+}
+export interface RepickDeps {
+  /** tests inject both; live: resolveChart6max on the baked set, and the baked node getter */
+  resolve?: (choice: Chart6Choice) => Promise<{ id: string; fellBack: boolean } | "unreachable" | null>;
+  getFor?: (chartId: string) => (line: string) => Promise<RawNode | null>;
+}
+const bakedGet = (id: string) => async (line: string): Promise<RawNode | null> => { const n = await nodeGetter(id)(line); return n === "unreachable" ? null : (n as RawNode | null); };
+
+/**
+ * THE VILLAINS' RANGES RE-PICKED (round 2.1, Brady 2026-09-25). The pin rule stands — the flop reads the chart that
+ * answered hero's last preflop decision, never chosen again — with ONE exception, for the villains' ranges only: what
+ * happened after hero's decision contradicts the pinned chart's own modelling assumption AND an exact chart exists
+ * for what did happen. Exactly two triggers:
+ *   (a) the pinned chart is an uneven chart modelling seat X as the short stack, and X folded before the flop
+ *       (hand 4920395179: two shorts, the 78bb BTN modelled, folded; the 30bb BB called — on the BB-short chart the
+ *       BB calls AJs 96%, on the pinned one 10%);
+ *   (b) the open size played (after the snap onto the set's sizes, hrc6max.openFromTokens) differs from the pinned
+ *       chart's, and the picker's chart for the full line has exactly that open for its depth / short-seat state
+ *       (hands 4919312009, 4919213506: hero's 2.5 pick executed as 2bb; the 2x chart exists). A 2x open on a table
+ *       whose uneven set has only 2.5x and 3x has no exact chart (the picker snaps it to 2.5x), so nothing moves.
+ * The exact chart is the one chartFor6max picks for the full line with the hand's pinned dealt stacks, and only when
+ * the set has it (no fallback id). Hero's range stays on the pinned chart — his decisions were read there. A villain
+ * the re-picked chart cannot read (a node missing, a pruned branch, a size past τ) keeps the pinned chart's read, said
+ * in the note: the re-pick never produces a refusal the pinned chart would not have. Null when nothing fires.
+ */
+export async function repickVillainRanges(
+  pin: PreflopPin, hand: ParsedHand, heroPos: string | null, resumed: ResumedRanges,
+  dealt?: Record<number, number>, deps: RepickDeps = {},
+): Promise<RangesRepick | null> {
+  if (pin.piece !== "chart6max") return null;          // an AI-tree pin: the tree was built from the table, no assumption to break
+  const pinned = chart6State(pin.chartId);
+  if (!pinned) return null;
+  const tokens = resumed.tokens;
+  const atFlop = flopSeatsOf(tokens, pin.depth);
+  const hero = pin.heroPos.toUpperCase();
+  const X = pinned.short?.seat ?? null;
+  const trigA = !!X && !atFlop.includes(X) && actorsWithAllins(tokens, pin.depth).includes(X);
+  const choice = chartFor6max(hand, heroPos, tokens, dealt);
+  const played = openFromTokens(tokens).open;
+  // (b): the picker's chart for the full line carries the played open itself — not snapped onto another size, as the
+  // uneven set does for a 2x open (it has 2.5x and 3x only): that chart's state (depth, short seat) HAS a tree at
+  // this open. Its state is the full line's, like (a)'s: the rung the hand's pinned dealt stacks give now
+  const openMoved = typeof played === "number" && typeof pinned.open === "number" && played !== pinned.open && choice.openSize === played;
+  const trigB = openMoved;
+  if (!trigA && !trigB) return null;
+  if (choice.id === pin.chartId) return null;
+  const why = [
+    trigA ? `the pinned chart modelled the ${X} as the ${pinned.short!.bb}bb short stack and the ${X} folded after hero's decision` : null,
+    openMoved ? `the open was played at ${played}bb where the pinned chart opens ${pinned.open}bb, and the ${played}x chart exists` : null,
+  ].filter(Boolean).join("; ");
+  const resolve = deps.resolve ?? ((c: Chart6Choice) => resolveChart6max(c));
+  const r = await resolve(choice);
+  if (r === "unreachable" || r === null || r.fellBack || r.id === pin.chartId) {
+    tmark("preflop ranges not re-picked", `${why}: the exact chart ${choice.id} ` +
+      `${r === "unreachable" ? "is unreachable" : r === null ? "is not in the set" : r.fellBack ? `is not in the set (it would fall back to ${r.id})` : "is the pinned one"} — every range stays on ${pin.chartId}`);
+    return null;
+  }
+  const get = (deps.getFor ?? bakedGet)(r.id);
+  const find = (rs: Record<string, Record<string, number>>, seat: string) => Object.entries(rs).find(([k]) => k.toUpperCase() === seat)?.[1];
+  const live = (w: Record<string, number> | undefined) => !!w && Object.values(w).some((x) => x > 0);
+  const villains = atFlop.filter((s) => s !== hero);
+  const got: Record<string, Record<string, number>> = {};
+  const extra: string[] = [];
+  const snaps: string[] = [];
+  // the full line on the exact chart, the walk recon6max makes; its seats must be the table's, as the resume checks
+  const full = await reconstructFlopRanges(tokens, get, { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU });
+  const fullOk = full.ok && sameSeats(atFlop, Object.keys(full.ranges));
+  if (full.ok && fullOk) {
+    for (const v of villains) { const w = find(full.ranges, v); if (live(w)) got[v] = w!; }
+    if (full.notes?.length) extra.push(...full.notes.map((n) => `RANGE SHORTCUT (re-picked chart): ${n}`));
+    if (full.snaps?.length) snaps.push(...full.snaps);
+  }
+  // a villain the full walk could not give: a fitted line that keeps him, on the exact chart — else the pinned read
+  const kept: { seat: string; why: string }[] = [];
+  const firstWhy = !full.ok ? full.reason : !fullOk ? `the walk reached the flop with ${Object.keys(full.ranges).join("/")} where the table has ${atFlop.join("/")}` : null;
+  for (const v of villains) {
+    if (got[v]) continue;
+    const per = await fittedRangesBySeat(tokens, get, { heroPos: pin.heroPos, depth: choice.depth, only: [v] });
+    const w = per.ok ? find(per.ranges, v) : undefined;
+    if (per.ok && live(w)) {
+      got[v] = w!;
+      if (per.borrowed.length) extra.push(`LINE FITTED FOR THE RE-PICKED RANGES: ${per.borrowed.join(", ")}`);
+      snaps.push(...per.snaps);
+    } else {
+      kept.push({ seat: v, why: [firstWhy, per.ok ? "no weight in the re-picked range" : per.reason].filter(Boolean).join("; ").split(" · ").join("; ").slice(0, 240) });
+    }
+  }
+  const seats = villains.filter((v) => got[v]);
+  const ranges = { ...resumed.ranges };
+  for (const v of seats) {
+    const key = Object.keys(ranges).find((k) => k.toUpperCase() === v) ?? v;
+    ranges[key] = got[v]!;
+  }
+  const newSnaps = [...new Set(snaps)].filter((s) => !resumed.note.includes(s));
+  const note = [
+    seats.length ? `RANGES RE-PICKED FOR ${seats.join(", ")}: ${why}, so read on ${r.id}, the chart for the line as played` +
+      // (the picker's own note inside, its " · " separators made "; " so the answer's segments stay this re-pick's)
+      `${choice.note ? ` [${choice.note.split(" · ").join("; ")}]` : ""} — hero's range stays on ${pin.chartId}` : null,
+    ...kept.map((k) => `RANGES RE-PICK FELL BACK for ${k.seat}: ${r.id} cannot read it (${k.why}) — ${k.seat}'s range stays on ${pin.chartId}`),
+    ...(seats.length ? extra : []),
+    seats.length ? snapsNote(newSnaps) : null,
+  ].filter(Boolean).join(" · ");
+  tmark("preflop ranges re-picked", note);
+  return { ranges, id: r.id, seats, kept, why, note };
+}
+
 /**
  * DID HERO PLAY OFF THE PICK? (2026-09-25, Brady's rule: a manual deviation — an action the chart never takes with
  * hero's hand — may fall back to the GTO Wizard AI preflop tree, the way a pruned branch already does; hero's class
@@ -320,6 +445,8 @@ export async function fittedRangesBySeat(
      *  took there) instead of a fitted one — his range is the product of HIS actions only, so nothing after his last
      *  decision can change it, and a fit of the whole line could fold a limper his decision was read WITH */
     heroPrefix?: string[];
+    /** read these flop seats only (the ranges re-pick reads one villain at a time: one seat's miss costs that seat only) */
+    only?: string[];
   },
 ): Promise<{ ok: true; ranges: Record<string, Record<string, number>>; borrowed: string[]; heroLine: string[]; snaps: string[] } | { ok: false; reason: string }> {
   const getHrc: GetNode = async (l) => (await get(l)) as HrcNode | null;
@@ -328,6 +455,7 @@ export async function fittedRangesBySeat(
   const snaps: string[] = [];
   let heroLine: string[] = tokens;
   for (const seat of flopSeatsOf(tokens, o.depth)) {
+    if (o.only && !o.only.some((x) => x.toUpperCase() === seat)) continue;
     if (o.heroPrefix && o.heroPos && seat === o.heroPos.toUpperCase()) {
       const r = await reconstructFlopRanges(o.heroPrefix, get, { heroPos: o.heroPos, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU });
       const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;

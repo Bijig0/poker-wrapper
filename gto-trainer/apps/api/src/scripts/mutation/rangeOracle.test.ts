@@ -2,7 +2,7 @@
  * The range-level oracle's own checks, on toy walks and a toy chart — pure, no charts, no network (plain `bun test`).
  */
 import { describe, expect, test } from "bun:test";
-import { explainsSeat, layer1, layer2Postflop, layer2Preflop, truthLine, postflopTokenMismatch } from "./rangeOracle";
+import { explainsSeat, layer1, layer2Postflop, layer2Preflop, truthLine, postflopTokenMismatch, repickOf } from "./rangeOracle";
 import type { RawNode, RecordedRangeWalk, WalkStep } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../../utils/buildRangeArray/buildRangeArray";
 import { classWeightsToSpec } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
@@ -139,5 +139,55 @@ describe("postflopTokenMismatch — the postflop line as sent", () => {
     expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3.3", "RAI", "R10"]] })).toContain("dealt R3.3-C-R10, sent R3.3-RAI-R10");
     expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3", "C", "R10"]] })).toContain("sent R3-C-R10");
     expect(postflopTokenMismatch(acts, 5, posOf, { streets: [["R3.3", "C", "R10"]], streetSeats: [["HJ", "CO", "BTN"]] })).toContain("token 1 is CO's, sent as HJ's");
+  });
+});
+
+/**
+ * THE VILLAINS' RANGES RE-PICKED (round 2.1, services/preflopPin.repickVillainRanges): a villain's range read on the
+ * exact chart for the line as played is an EXPLAINED difference from the pinned chart's reference only when the note
+ * names the re-pick FOR THAT SEAT — and it must then equal the reference walk of the dealt line on the re-picked chart.
+ */
+describe("the ranges re-pick", () => {
+  // the re-picked chart: the same toy line, the CO calls AKo 10% there instead of 40%
+  const REPICK: Record<string, RawNode> = { ...TREE, "F-R2.5": N("CO", [["Fold", "F"], ["Call", "C"], ["Raise 8", "R8"]], { QQ: { Call: 100 }, AKo: { Call: 10, "Raise 8": 90 } }) };
+  const getFor = (id: string) => async (l: string) => (id === "toy_repick" ? REPICK[l] ?? null : TREE[l] ?? null);
+  const CO2 = { QQ: 1, AKo: 0.1 };
+  const noteFor = (seats: string) => `PREFLOP RANGES FROM THE PIN: … · RANGES RE-PICKED FOR ${seats}: the pinned chart modelled the BTN as the 70bb short stack and the BTN folded after hero's decision, ` +
+    `so read on toy_repick, the chart for the line as played — hero's range stays on toy_pin`;
+  const heroHJ = (co: Record<string, number>) => ({ ...dry({ HJ, CO: co }), trees: [{ kind: null, heroSeat: "oop", seats: [{ pos: "HJ", range: buildRangeArray(classWeightsToSpec(HJ)) }, { pos: "CO", range: buildRangeArray(classWeightsToSpec(co)) }] }] });
+
+  test("repickOf reads the seats and the chart; explainsSeat never takes the re-pick's own \"BB: …\" for a borrow", () => {
+    expect(repickOf(noteFor("CO, BB"))).toEqual({ seats: ["CO", "BB"], chart: "toy_repick" });
+    expect(repickOf("PREFLOP RANGES FROM THE PIN: …")).toBeNull();
+    expect(explainsSeat(noteFor("BB"), "BB", false)).toBe(false);
+    expect(explainsSeat(`RANGES RE-PICK FELL BACK for BB: toy_repick cannot read it (…) — BB's range stays on toy_pin`, "BB", false)).toBe(false);
+  });
+
+  test("a villain on the re-picked chart, named: explained — and only when it is that chart's range", async () => {
+    const ok = await layer2Postflop({ truth: TRUTH, dealt: DEALT, heroPos: "HJ", note: noteFor("CO"), dry: dry({ HJ, CO: CO2 }), get, getFor });
+    expect(ok.findings).toEqual([]);
+    expect(ok.explained).toBe(true);
+    // named, but the range is neither chart's
+    const off = await layer2Postflop({ truth: TRUTH, dealt: DEALT, heroPos: "HJ", note: noteFor("CO"), dry: dry({ HJ, CO: { QQ: 1, AKo: 0.25 } }), get, getFor });
+    expect(off.findings[0]?.kind).toBe("range-mismatch");
+    expect(off.findings[0]?.reason).toContain("re-picked onto toy_repick");
+  });
+
+  test("the re-picked chart's range with the re-pick not named for that seat is a finding", async () => {
+    const silent = await layer2Postflop({ truth: TRUTH, dealt: DEALT, heroPos: "HJ", note: "PREFLOP RANGES FROM THE PIN: …", dry: dry({ HJ, CO: CO2 }), get, getFor });
+    expect(silent.findings[0]?.kind).toBe("range-mismatch");
+    const other = await layer2Postflop({ truth: TRUTH, dealt: DEALT, heroPos: "HJ", note: noteFor("BB"), dry: dry({ HJ, CO: CO2 }), get, getFor });
+    expect(other.findings[0]?.kind).toBe("range-mismatch");
+    // hero is never re-picked: a note naming hero's seat does not excuse his range
+    const heroNamed = await layer2Postflop({ truth: TRUTH, dealt: DEALT, heroPos: "CO", note: noteFor("CO"), dry: dry({ HJ, CO: CO2 }), get, getFor });
+    expect(heroNamed.findings[0]?.kind).toBe("range-mismatch");
+  });
+
+  test("layer 1 replays a re-picked seat's walk on the re-picked chart", async () => {
+    const w = goodWalk(); w.heroPos = "HJ";
+    w.steps[2] = step("F-R2.5", "CO", "C", "Call", null, CO2); w.result = { ok: true, ranges: { HJ, CO: CO2 } };
+    const o = { ...base, heroPos: "HJ", heroCards: ["Ah", "Ad"] as [string, string], note: noteFor("CO"), dry: heroHJ(CO2), walks: [w], get };
+    expect((await layer1(o)).map((x) => x.kind)).toContain("range-product");        // on the pinned chart: not its product
+    expect(await layer1({ ...o, getFor: (seat) => (seat === "CO" ? getFor("toy_repick") : null) })).toEqual([]);
   });
 });

@@ -38,7 +38,7 @@ import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalR
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb } from "../utils/foldPostIns/foldPostIns";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
-import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
@@ -979,8 +979,12 @@ async function solvePostflopViaChain(
           return fail(`PREFLOP PIN (${pin.piece} ${resumed.id}): hero's ${cls} is not in range after the line "${resumed.codes.join("-")}" — ` +
             `the piece that answered preflop never plays this line with this hand (a chart/AI mismatch to investigate, not a fallback)`);
         }
-        recon = { ok: true, ranges: resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
-        sixNote = [sixNote, resumed.note].filter(Boolean).join(" · ") || null;
+        // THE ONE EXCEPTION (round 2.1, Brady): what followed hero's decision broke the pinned chart's own assumption
+        // (its modelled short folded, or the open was played at a size the set has its own chart for) — the VILLAINS'
+        // ranges are read on the exact chart for the line as played; hero's stays on the pin (preflopPin.repickVillainRanges)
+        const repick = pin.piece === "chart6max" ? await repickVillainRanges(pin, hand, heroPos, resumed, pinnedDealt) : null;
+        recon = { ok: true, ranges: repick?.ranges ?? resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
+        sixNote = [sixNote, resumed.note, repick?.note].filter(Boolean).join(" · ") || null;
       } else if (pin.piece === "chart6max" && !resumed.ok && (resumed.prunedBranch || resumed.chartCannotHold)) {
         // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
         // subtree under an action that was really taken and real action followed it — a manual deviation into a

@@ -13,7 +13,7 @@ let restore: (() => void) | null = null;
 beforeAll(() => { if (!gated) restore = harnessEnv(); });
 afterAll(() => { restore?.(); });
 
-const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
+const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean; note?: RegExp }[] = [
   { seed: 2, ops: ["late-fold"], cls: "a preflop fold filed late, refused on the flop as out of rotation" },
   { seed: 17, ops: ["late-fold"], cls: "a preflop fold filed late, refused on every street" },
   { seed: 26, ops: ["dropped-call"], cls: "a lost call before a fold — only the pot shows it at the flop", refusals: true },
@@ -69,6 +69,12 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 30764, ops: ["dropped-call", "post-in", "nl5-rounding"], cls: "the same at 5c (answered-corrupt-capture)", refusals: true },
   { seed: 22, ops: ["undealt-seat"], cls: "stack behind: a sitting-out label's stack set the effective depth (solver-input-mismatch)" },
   { seed: 18287, ops: ["short-seat"], cls: "the pinned chart cannot hold a fifth entrant after hero's squeeze; the flop re-picked a chart where hero never squeezes (hero-zero-weight)" },
+  // round 2.1 (Brady: the villains' ranges re-picked, services/preflopPin.repickVillainRanges) — the oracle checks each
+  // re-picked villain against the reference walk on the re-picked chart
+  { seed: 51048, ops: ["jam"], cls: "ranges re-pick (a): the modelled 32bb BTN folded, the BB read on the even chart, hero on the pin",
+    note: /RANGES RE-PICKED FOR BB: the pinned chart modelled the BTN .* read on ign200_6max_D100_o2_5, .* hero's range stays on ign200_6max_D100_s30_BTN_o2_5/ },
+  { seed: 51047, ops: ["short-seat"], cls: "ranges re-pick (a)+(b): the modelled SB folded and the HJ opened 3.5 — the HJ read on the exact 3.5x chart",
+    note: /RANGES RE-PICKED FOR HJ: .*the open was played at 3.5bb where the pinned chart opens 3bb, and the 3.5x chart exists, so read on ign200_6max_D100_o3_5/ },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {
@@ -78,6 +84,7 @@ describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {
       const bad = r.verdicts.filter((v) => v.verdict === "finding").map((v) => `${v.street} ${v.kind}: ${String(v.reason).slice(0, 160)}`);
       expect(bad).toEqual([]);
       if (c.refusals) expect(r.verdicts.some((v) => v.verdict === "expected-refusal")).toBe(true);
+      if (c.note) expect(r.verdicts.some((v) => v.verdict === "ok" && c.note!.test(String(v.note ?? "")))).toBe(true);
     }, 120_000);
   }
 });
