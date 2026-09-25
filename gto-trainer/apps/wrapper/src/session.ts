@@ -15,7 +15,7 @@ import * as A from "./auth";
 import * as BAL from "./balances";
 import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
-import { C } from "./config";
+import { C, profileDir } from "./config";
 import { REPO } from "./env";
 import * as F from "./formats";
 import { feedAdd, log } from "./feed";
@@ -570,7 +570,7 @@ export async function clearTableCache(): Promise<void> {
     log(`[table] browser cache cleared via CDP on ${n} page(s)`);
     return;
   }
-  const prof = join(C.ROOT, C.PROFILE_TABLE, "Default");
+  const prof = join(profileDir(C.PROFILE_TABLE), "Default");
   const removed: string[] = [];
   for (const rel of ["Cache", "Code Cache", "GPUCache", "Service Worker/CacheStorage", "Service Worker/ScriptCache", "DawnCache"]) {
     const d = join(prof, rel);

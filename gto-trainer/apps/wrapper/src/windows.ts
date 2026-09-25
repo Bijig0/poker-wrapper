@@ -6,11 +6,10 @@
  * Browser.setWindowBounds speak DIP, converted with tables.toDip / the target monitor's DPI.
  */
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { CdpSocket } from "./cdp";
 import * as cdp from "./cdp";
 import { sleep, time } from "./clock";
-import { C } from "./config";
+import { C, profileDir } from "./config";
 import { log } from "./feed";
 import { pyRound } from "./py";
 import { CP, S, isCp } from "./state";
@@ -265,7 +264,7 @@ async function placeWhenShown(pid: number, x: number, y: number, w: number, h: n
 export function chromeWindow(url: string, profile: string, x: number, y: number, w: number, h: number, cdpPort: number | null = null): number | null {
   const scale = dpiAt(x, y) / 96.0;
   const [lx, ly, lw, lh] = [x, y, w, h].map((v) => pyRound(v / scale));
-  const args = [`--app=${url}`, `--user-data-dir=${join(C.ROOT, profile)}`,
+  const args = [`--app=${url}`, `--user-data-dir=${profileDir(profile)}`,
                 `--window-position=${lx},${ly}`, `--window-size=${lw},${lh}`, "--no-first-run", "--no-default-browser-check"];
   if (cdpPort) args.splice(1, 0, `--remote-debugging-port=${cdpPort}`);
   if (C.HEADLESS) args.unshift("--headless=new");
@@ -283,7 +282,7 @@ export function chromeWindow(url: string, profile: string, x: number, y: number,
 
 /** Stop the app-mode browser running on OUR user-data-dir `profile` (matched on that path only). */
 export async function killProfileWindows(profile: string): Promise<number> {
-  const path = join(C.ROOT, profile);
+  const path = profileDir(profile);
   const ps = "$p = '" + path.replaceAll("'", "''") + "'; "
     + "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('--user-data-dir=' + $p) } "
     + "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }";

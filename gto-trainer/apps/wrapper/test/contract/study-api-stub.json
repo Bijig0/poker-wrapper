@@ -1,0 +1,266 @@
+{
+ "_about": "The study API (:2000) as the contract suite sees it — served by runner.ts on a port of its own (STUDY_API / HRC3MAX_URL), so a run never depends on the live API. strategies: the live catalogue of 2026-09-25 trimmed to the fields sessions.ts strategyPreset() reads; registry / gtowStatus: hand-written (no accounts), every piece up.",
+ "strategies": [
+  {
+   "id": "ign25-zone-3max-exploit",
+   "name": "Ignition 25NL Zone 3-max Exploit",
+   "tagline": "Pool exploit at every street — MES preflop and MES postflop, best-responses to the measured NL25 Zone pool",
+   "preflop": "exploit",
+   "postflop": "mes",
+   "matrixRow": "combined_refit",
+   "recommended": true,
+   "formats": [
+    "ign-zone-NL25",
+    "ign-practice-ring",
+    "ign-practice-zone"
+   ],
+   "defaultFormat": "ign-zone-NL25",
+   "formatCoverage": null,
+   "sites": null,
+   "preflopLayer": {
+    "id": "exploit",
+    "label": "MES preflop (pool best-response)",
+    "short": "MES pre",
+    "source": "exploit-preflop"
+   },
+   "postflopLayer": {
+    "id": "mes",
+    "label": "MES postflop (locked solves, refit)",
+    "short": "MES post",
+    "source": "mes-postflop"
+   },
+   "opponentLayer": {
+    "id": "pool",
+    "label": "Measured pool (pool_model + villain_freqs)",
+    "short": "pool",
+    "source": "pool-model"
+   },
+   "status": "drift",
+   "reasons": [
+    "the live pool model is newer than the MES solve it was locked against — values may have drifted (re-run the batch)."
+   ]
+  },
+  {
+   "id": "ign200-zone-3max-equilibrium",
+   "name": "Ignition 200NL Zone 3-handed Equilibrium",
+   "tagline": "Equilibrium only — the NL200 3-max HRC charts preflop, GTO Wizard AI postflop; no pool model",
+   "preflop": "chartNl200",
+   "postflop": "gto",
+   "matrixRow": "eq_eq",
+   "recommended": false,
+   "formats": [
+    "ign-zone-NL200",
+    "ign-practice-ring",
+    "ign-practice-zone"
+   ],
+   "defaultFormat": "ign-zone-NL200",
+   "formatCoverage": null,
+   "sites": null,
+   "preflopLayer": {
+    "id": "chart-nl200",
+    "label": "GTO preflop (HRC NL200 3-max equilibrium charts, 5% / cap 1bb)",
+    "short": "GTO pre NL200",
+    "source": "hrc-3max"
+   },
+   "postflopLayer": {
+    "id": "gto",
+    "label": "GTO postflop (equilibrium / GTOW AI)",
+    "short": "GTO post",
+    "source": "gtow-ai"
+   },
+   "opponentLayer": {
+    "id": "gto",
+    "label": "Equilibrium villains (chart ranges)",
+    "short": "GTO villains",
+    "source": "hrc-3max"
+   },
+   "status": "ok",
+   "reasons": []
+  },
+  {
+   "id": "ign200-ring-6max-equilibrium",
+   "name": "Ignition 200NL Ring 6-max Equilibrium",
+   "tagline": "Equilibrium only — our own NL200 6-max HRC charts preflop (5% / cap 2bb) at 4-6 seats, GTO Wizard AI preflop for everything they cannot answer (a table thinned to 2-3 seats, off-tree sizes, past the ladder, limps, straddles), GTO Wizard AI postflop conditioned on whichever of the two answered; no pool model, and no 3-max corpus pending a re-solve of its shallow rungs",
+   "preflop": "chart6maxNl200",
+   "postflop": "gto",
+   "matrixRow": "eq_eq_6max",
+   "recommended": false,
+   "formats": [
+    "ign-ring-NL200-6",
+    "ign-ring-NL5-6",
+    "ign-practice-ring",
+    "ign-practice-zone"
+   ],
+   "defaultFormat": "ign-ring-NL200-6",
+   "formatCoverage": null,
+   "sites": null,
+   "preflopLayer": {
+    "id": "chart-6max-nl200",
+    "label": "GTO preflop (HRC NL200 6-max ring equilibrium charts, 5% / cap 2bb)",
+    "short": "GTO pre 6-max",
+    "source": "hrc-6max"
+   },
+   "postflopLayer": {
+    "id": "gto",
+    "label": "GTO postflop (equilibrium / GTOW AI)",
+    "short": "GTO post",
+    "source": "gtow-ai"
+   },
+   "opponentLayer": {
+    "id": "gto",
+    "label": "Equilibrium villains (6-max chart ranges)",
+    "short": "GTO villains",
+    "source": "hrc-6max"
+   },
+   "status": "ok",
+   "reasons": []
+  },
+  {
+   "id": "cp200-hu-equilibrium",
+   "name": "CoinPoker 200NL Heads-Up Equilibrium",
+   "tagline": "Equilibrium only — our own CoinPoker NL200 heads-up HRC charts preflop (ante 0.2bb, 5% / cap 0.9bb, 20-150bb), GTO Wizard AI heads-up postflop conditioned on their ranges at the same ante and rake; heads-up tables only, no pool model",
+   "preflop": "chartHuCp200",
+   "postflop": "gto",
+   "matrixRow": "eq_eq_hu_cp200",
+   "recommended": false,
+   "formats": [
+    "cp-hu-NL200"
+   ],
+   "defaultFormat": "cp-hu-NL200",
+   "formatCoverage": null,
+   "sites": null,
+   "preflopLayer": {
+    "id": "chart-hu-cp200",
+    "label": "GTO preflop (HRC CoinPoker NL200 heads-up charts, ante 0.2bb, 5% / cap 0.9bb)",
+    "short": "GTO pre HU",
+    "source": "hrc-hu"
+   },
+   "postflopLayer": {
+    "id": "gto",
+    "label": "GTO postflop (equilibrium / GTOW AI)",
+    "short": "GTO post",
+    "source": "gtow-ai"
+   },
+   "opponentLayer": {
+    "id": "gto",
+    "label": "Equilibrium villain (heads-up chart ranges)",
+    "short": "GTO villain",
+    "source": "hrc-hu"
+   },
+   "status": "ok",
+   "reasons": []
+  }
+ ],
+ "registry": {
+  "ok": true,
+  "armed": {
+   "strategyId": null,
+   "strategyName": null,
+   "exploitPreflop": true,
+   "mesPostflop": true,
+   "mesBoards": 56,
+   "hrc": {
+    "up": true,
+    "ms": 3
+   },
+   "hrc6max": {
+    "db": true,
+    "trees": 69
+   },
+   "gtow": {
+    "tokenLive": true,
+    "expiresInMs": 1800000,
+    "clientUp": true,
+    "multiwayLive": true,
+    "sessions": [
+     {
+      "id": "secondary",
+      "label": "secondary GTO Wizard (contract stub)",
+      "state": "up",
+      "text": "token live, 30 min left",
+      "tokenLive": true,
+      "expiresInMs": 1800000,
+      "multiway": false,
+      "enabled": true,
+      "blockedKind": null,
+      "blockedReason": null,
+      "trees": 0
+     },
+     {
+      "id": "primary",
+      "label": "primary GTO Wizard (contract stub)",
+      "state": "up",
+      "text": "token live, 30 min left",
+      "tokenLive": true,
+      "expiresInMs": 1800000,
+      "multiway": true,
+      "enabled": true,
+      "blockedKind": null,
+      "blockedReason": null,
+      "trees": 0
+     }
+    ]
+   },
+   "poller": {
+    "running": true
+   }
+  },
+  "cards": [
+   {
+    "id": "exploit-preflop",
+    "stateText": "Armed",
+    "facts": [
+     [
+      "freshness",
+      "2026-09-08T22:43:28.352Z"
+     ]
+    ]
+   },
+   {
+    "id": "mes-postflop",
+    "stateText": "Loaded — preflop inputs drifted",
+    "facts": [
+     [
+      "generation",
+      "refit2 ×36 · refit ×8 · unknown ×12"
+     ]
+    ]
+   }
+  ]
+ },
+ "gtowStatus": {
+  "ok": true,
+  "tokenLive": true,
+  "multiwayUsable": true,
+  "state": "up",
+  "text": "2 of 2 sessions live",
+  "sessions": [
+   {
+    "id": "secondary",
+    "label": "secondary GTO Wizard (contract stub)",
+    "state": "up",
+    "text": "token live, 30 min left",
+    "tokenLive": true,
+    "expiresInMs": 1800000,
+    "multiway": false,
+    "enabled": true,
+    "blockedKind": null,
+    "blockedReason": null,
+    "trees": 0
+   },
+   {
+    "id": "primary",
+    "label": "primary GTO Wizard (contract stub)",
+    "state": "up",
+    "text": "token live, 30 min left",
+    "tokenLive": true,
+    "expiresInMs": 1800000,
+    "multiway": true,
+    "enabled": true,
+    "blockedKind": null,
+    "blockedReason": null,
+    "trees": 0
+   }
+  ]
+ }
+}
