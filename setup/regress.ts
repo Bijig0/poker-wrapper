@@ -72,6 +72,17 @@ try {
   rec("api unit tests (bun test)", false, String(e?.message ?? e));
 }
 
+// the one data root (gto-trainer/packages/data-root, 2026-09-25): where every record lives, legacy adoption (rowids,
+// watermark, retirement, the mixed-version catch-up), the event tables — both apps' stores depend on it
+try {
+  const [, out] = run([BUN, "test"], join(ROOT, "gto-trainer", "packages", "data-root"), 120);
+  const m = /(\d+) pass\s+(?:\d+ skip\s+)?(\d+) fail/.exec(out);
+  const f = fails(out);
+  rec("data-root tests (bun test)", !!m && m[2] === "0", m ? `${m[1]} pass / ${m[2]} fail` + (f.length ? `: ${f.slice(0, 3).join("; ")}` : "") : lastLines(out, 200));
+} catch (e: any) {
+  rec("data-root tests (bun test)", false, String(e?.message ?? e));
+}
+
 // the input-mutation gate (2026-09-25): 30 seeds x every table/capture operator through the real answer pipeline,
 // offline (GTOW_BLOCK=1, dry postflop). Its own process on purpose: a sweep changes the GTO Wizard session state
 // that the poller test reads when both share one `bun test` run. Red = a table state with no solver input.

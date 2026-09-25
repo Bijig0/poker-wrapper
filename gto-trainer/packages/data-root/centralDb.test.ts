@@ -176,3 +176,25 @@ describe("adoptJsonl (the two JSONL logs → tables)", () => {
     expect(JSON.parse(row.doc).trace).toBeNull();
   });
 });
+
+describe("startAdoptionCatchUp (the mixed-version window)", () => {
+  test("rows an old-code process keeps writing to a still-open legacy file reach the central DB without a restart", async () => {
+    const { startAdoptionCatchUp, _setStillOpenForTests } = await import("./centralDb");
+    const f = join(tmp(), "answers.sqlite");
+    const l = new Database(f);
+    l.run(`CREATE TABLE answers (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, client_hand_id TEXT)`);
+    l.run(`INSERT INTO answers (ts, client_hand_id) VALUES (1, 'old-code-row')`);
+    l.close();
+    _setStillOpenForTests([f]);
+    const lines: string[] = [];
+    const stop = startAdoptionCatchUp((x) => lines.push(x), 50, () => ({ db: [{ file: f, tables: ["answers"] }], jsonl: [] }));
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    const db = new Database(centralDbPath(), { readonly: true });
+    const got = db.query("SELECT client_hand_id FROM answers WHERE client_hand_id = 'old-code-row'").get();
+    db.close();
+    expect(got).toEqual({ client_hand_id: "old-code-row" });
+    expect(lines.join(" ")).toContain("catch-up: +1");
+    expect(existsSync(f)).toBe(false);                       // nothing held it any more: retired
+  });
+});

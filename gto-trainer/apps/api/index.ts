@@ -1,7 +1,7 @@
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { Hono } from "hono";
-import { adoptAtStartup } from "../../packages/data-root/centralDb";
+import { adoptAtStartup, startAdoptionCatchUp } from "../../packages/data-root/centralDb";
 import { describeLayout, exitLogPath, resolveAllStores, splitStores } from "./src/services/storePaths";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
@@ -197,6 +197,8 @@ if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token ke
   try {
     const line = adoptAtStartup((l) => console.log(l));
     if (line) say(line);
+    // an old-code wrapper still writing a legacy file: fold its new rows in every minute until it lets go
+    startAdoptionCatchUp((l) => console.log(l));
   } catch (e) {
     console.error(`[data-root] adoption failed: ${e instanceof Error ? e.message : e}`);
   }

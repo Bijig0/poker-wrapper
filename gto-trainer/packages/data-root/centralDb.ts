@@ -229,3 +229,43 @@ export function resetAdoptionForTests(): void {
   adoptedThisProcess = false;
   lastAdoption = null;
 }
+
+/**
+ * THE MIXED-VERSION WINDOW: an old-code wrapper (or API) still writing a legacy file after this process adopted it.
+ * Its new rows would stay invisible until the next restart, so while any legacy file is still held open elsewhere the
+ * API re-runs the (watermarked, cheap) adoption every `everyMs` and stops once every file has been retired. Returns a
+ * stop function. Not the wrapper's job: a copy must never run inside a hand.
+ */
+export function startAdoptionCatchUp(
+  log: (line: string) => void = console.log, everyMs = 60_000,
+  sources: () => { db: LegacySource[]; jsonl: JsonlSource[] } = () => ({ db: legacySources(), jsonl: legacyJsonlSources() }),
+): () => void {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const pending = () => new Set([...(lastAdoption?.stillOpen ?? [])]);
+  if (!pending().size) return () => {};
+  timer = setInterval(() => {
+    const open = pending();
+    if (!open.size) { if (timer) clearInterval(timer); timer = null; return; }
+    let db: Database | null = null;
+    try {
+      db = openStore(centralDbPath(), { busyMs: 10_000 });
+      const src = sources();
+      const r = adoptLegacy(db, src.db.filter((s) => open.has(s.file)), { retire: true });
+      const j = adoptJsonl(db, src.jsonl.filter((s) => open.has(s.file)), { retire: true });
+      const copied = [...r.notes, ...j.notes].reduce((s, n) => s + n.copied, 0);
+      const retired = [...r.retired, ...j.retired];
+      if (lastAdoption) lastAdoption.stillOpen = [...r.stillOpen, ...j.stillOpen];
+      if (copied || retired.length) log(`[data-root] catch-up: +${copied} row(s) an old-code process wrote${retired.length ? ` · retired ${retired.join(", ")}` : ""}`);
+    } catch (e) {
+      log(`[data-root] catch-up failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      try { db?.close(); } catch { /* closed */ }
+    }
+  }, everyMs);
+  return () => { if (timer) clearInterval(timer); timer = null; };
+}
+
+/** Test hook: pretend start-up adoption found these legacy files still held open (the catch-up's input). */
+export function _setStillOpenForTests(files: string[]): void {
+  lastAdoption = { notes: [], retired: [], stillOpen: files, errors: [] };
+}
