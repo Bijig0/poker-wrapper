@@ -43,6 +43,9 @@ export const fxCachePath = (): string => storePath("fx", api("fx.json")).path;
 export const balanceAcksPath = (): string => storePath("balance-acks", api("balance-acks.json")).path;
 export const backgroundLockPath = (): string => storePath("background-lock", api("background.lock"), "API_BACKGROUND_LOCK").path;
 
+/** services/hhCheck: each archived hand's verdict against Ignition's own hand history. */
+export const hhChecksDbPath = (): string => storePath("hh-checks", central(), "HH_CHECKS_DB_PATH").path;
+
 /** The wrapper's archive, read-only from here. */
 export const handsDbPath = (): string => storePath("hands", central(), "HANDS_DB_PATH").path;
 /** sessions + balances: the central DB, or — when a test points HANDS_DB_PATH at its own file — beside that file */
@@ -73,6 +76,6 @@ export function storeWriteFailed(store: string, e: unknown): void {
 export function resolveAllStores(): StoreEntry[] {
   for (const f of [centralDbPath, answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,
     riverMesDbPath, riverMesConfigPath, mesRiverCacheDir, tasksPath, fxCachePath, balanceAcksPath, backgroundLockPath,
-    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir]) f();
+    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath]) f();
   return storeReport();
 }

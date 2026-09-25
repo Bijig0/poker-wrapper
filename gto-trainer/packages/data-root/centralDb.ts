@@ -51,6 +51,8 @@ export function legacySources(L: DataLayout = dataLayout()): LegacySource[] {
     { file: join(api, "miss-queue.sqlite"), tables: ["misses"] },
     { file: join(api, "river_mes.sqlite"), tables: ["river_mes"] },
     { file: join(api, "hand_facts.sqlite"), tables: ["hand_facts"] },
+    // services/hhCheck: its own `meta` is not carried over (renamed hh_checks_meta; the cutoff is set on first start)
+    { file: join(api, "hh_checks.sqlite"), tables: ["hh_checks"] },
   ];
 }
 

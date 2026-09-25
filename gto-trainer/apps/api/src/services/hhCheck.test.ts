@@ -37,7 +37,7 @@ describe("tick", () => {
     store: new HhCheckStore(":memory:"),
     fetchRecord: async () => record,
     findArchived: (id) => hands.findLast((h) => h.clientHandId === id) ?? null,
-    archivedAfter: (rowid) => hands.filter((h) => h.dbId > rowid),
+    doneAfter: (rowid: number) => hands.filter((h) => h.dbId > rowid),
     lastRowid: () => lastRowid,
     now: () => T0,
   });
@@ -46,7 +46,7 @@ describe("tick", () => {
   test("the first pass only marks where 'from here on' starts", async () => {
     const deps = depsFor([enriched(3, faithful4920544353)], found);
     await tick(deps);
-    expect(deps.store.meta("afterRowid")).toBe("5");
+    expect(deps.store.meta("cutoffRowid")).toBe("5");
     expect(deps.store.get("4920544353")).toBeNull();
   });
 
@@ -58,7 +58,22 @@ describe("tick", () => {
       dbId: 6, status: "mismatch", throughOk: true, tries: 1,
       diffs: [{ kind: "board-extra" }, { kind: "action-extra", oursAt: 18 }],
     });
-    expect(deps.store.meta("afterRowid")).toBe("6");
+    expect(deps.store.meta("cutoffRowid")).toBe("5");   // the cutoff never moves: "from here on"
+    await tick(deps);                                        // a verdict is never reset by a later pass
+    expect(deps.store.get("4920544353")).toMatchObject({ status: "mismatch", tries: 1 });
+  });
+
+  test("a hand that finishes AFTER a later-started one (multi-table: rowids are handed out at hand start) is still checked", async () => {
+    const early = enriched(6, faithful4920544353);                 // started first, still in play at the first pass
+    const late = { ...enriched(7, faithful4920544353), clientHandId: "4920544354" };
+    const hands: Enriched[] = [late];
+    const deps = depsFor(hands, found);
+    await tick(deps);                                              // sets the cutoff at 5
+    await tick(deps);                                              // row 7 finished: checked
+    expect(deps.store.get("4920544354")).toMatchObject({ status: "match" });
+    hands.push(early);                                             // row 6 finishes now — below the highest row already seen
+    await tick(deps);
+    expect(deps.store.get("4920544353")).toMatchObject({ status: "match", dbId: 6 });
   });
 
   test("a record Ignition does not have yet stays pending for the next try", async () => {

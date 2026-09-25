@@ -6,10 +6,16 @@
  *
  * Only hands archived after the first start are checked ("from here on"): the older archive is the audit script's job
  * (scripts/hhAudit.ts). The state machine (nextCheck) is pure; the store and the loop are the only I/O.
+ *
+ * WHICH HANDS (2026-09-25, the central DB): a hand's row is written LIVE when it starts and finished in place when it
+ * ends, so rowids are handed out at hand START and hands finish out of order across tables. A rowid watermark would skip
+ * a hand still in play (or, held at the lowest live row, let one long hand stall the other tables). So: a one-time
+ * cutoff ("from here on", set on the first start and never moved), and every FINISHED hand after it that has no check
+ * row yet. A finished row is never reopened, so "no check yet" is the whole rule.
  */
-import { Database } from "bun:sqlite";
-import { join } from "node:path";
-import { archivedByClientHandId, doneIgnitionHandsAfter as archivedIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
+import type { Database } from "bun:sqlite";
+import { archivedByClientHandId, doneIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
+import { hhChecksDbPath, openStore } from "./storePaths";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
 
@@ -78,13 +84,13 @@ const fromRow = (r: Row): HhCheck => ({
 export class HhCheckStore {
   private db: Database;
   constructor(path: string) {
-    this.db = new Database(path);
-    this.db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;
+    this.db = openStore(path);   // the central DB (WAL + busy timeout), or a test's own file
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS hh_checks (
         client_hand_id TEXT PRIMARY KEY, db_id INTEGER NOT NULL, played_at INTEGER, status TEXT NOT NULL, through_ok INTEGER,
         diffs TEXT NOT NULL, through TEXT NOT NULL, tries INTEGER NOT NULL, next_at INTEGER, checked_at INTEGER, error TEXT);
       CREATE INDEX IF NOT EXISTS hh_checks_due ON hh_checks (status, next_at);
-      CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS hh_checks_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`);
   }
   get(clientHandId: string): HhCheck | null {
     const r = this.db.query<Row, [string]>("SELECT * FROM hh_checks WHERE client_hand_id = ?").get(clientHandId);
@@ -100,10 +106,10 @@ export class HhCheckStore {
       .all(now, limit).map(fromRow);
   }
   meta(k: string): string | null {
-    return this.db.query<{ v: string }, [string]>("SELECT v FROM meta WHERE k = ?").get(k)?.v ?? null;
+    return this.db.query<{ v: string }, [string]>("SELECT v FROM hh_checks_meta WHERE k = ?").get(k)?.v ?? null;
   }
   setMeta(k: string, v: string): void {
-    this.db.query("INSERT OR REPLACE INTO meta VALUES (?, ?)").run(k, v);
+    this.db.query("INSERT OR REPLACE INTO hh_checks_meta VALUES (?, ?)").run(k, v);
   }
 }
 
@@ -113,7 +119,8 @@ export interface CheckerDeps {
   store: HhCheckStore;
   fetchRecord: (clientHandId: string) => Promise<RecordResult>;
   findArchived: (clientHandId: string) => Enriched | null;
-  archivedAfter: (rowid: number) => Enriched[];
+  /** FINISHED hands after the cutoff row (routes/dashboard.doneIgnitionHandsAfter) */
+  doneAfter: (rowid: number) => Enriched[];
   lastRowid: () => number;
   now: () => number;
 }
@@ -128,23 +135,20 @@ export async function attempt(prev: HhCheck, deps: Pick<CheckerDeps, "fetchRecor
   return nextCheck({ ...prev, dbId: archived.dbId }, { kind: "compared", diffs, through }, deps.now());
 }
 
-/** Queue every hand archived since the last pass (a re-archived hand starts over), then work through what is due. */
+/** Queue every finished hand after the cutoff that has no check yet, then work through what is due. */
 export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
   const { store } = deps;
-  const since = Number(store.meta("afterRowid") ?? NaN);
-  if (!Number.isFinite(since)) {
-    store.setMeta("afterRowid", String(deps.lastRowid())); // first start: from here on
+  const cutoff = Number(store.meta("cutoffRowid") ?? NaN);
+  if (!Number.isFinite(cutoff)) {
+    store.setMeta("cutoffRowid", String(deps.lastRowid())); // first start: from here on (never moved again)
     return;
   }
-  const fresh = deps.archivedAfter(since);
-  for (const e of fresh) store.save(freshCheck(e, deps.now()));
-  if (fresh.length) store.setMeta("afterRowid", String(Math.max(...fresh.map((e) => e.dbId))));
+  for (const e of deps.doneAfter(cutoff)) if (!store.get(e.clientHandId!)) store.save(freshCheck(e, deps.now()));
   for (const c of store.due(deps.now(), maxAttempts)) store.save(await attempt(c, deps));
 }
 
-const DB_PATH = process.env.HH_CHECKS_DB_PATH ?? join(import.meta.dir, "..", "..", "data", "hh_checks.sqlite");
 let store: HhCheckStore | null = null;
-export const hhCheckStore = (): HhCheckStore => (store ??= new HhCheckStore(DB_PATH));
+export const hhCheckStore = (): HhCheckStore => (store ??= new HhCheckStore(hhChecksDbPath()));
 
 class HhChecker {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -153,7 +157,7 @@ class HhChecker {
     if (this.timer) return;
     const deps: CheckerDeps = {
       store: hhCheckStore(), fetchRecord: (id) => fetchIgnitionRecord(id), findArchived: archivedByClientHandId,
-      archivedAfter: archivedIgnitionHandsAfter, lastRowid: lastArchivedRowid, now: Date.now,
+      doneAfter: doneIgnitionHandsAfter, lastRowid: lastArchivedRowid, now: Date.now,
     };
     this.timer = setInterval(() => {
       if (this.busy) return;
