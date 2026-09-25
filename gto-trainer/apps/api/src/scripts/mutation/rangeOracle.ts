@@ -44,12 +44,27 @@ export const APPROX_NOTE = /LINE FITTED|fitted line|RANGE SHORTCUT|borrow|CALLER
  */
 export function explainsSeat(note: string, seat: string, isHero: boolean): boolean {
   const P = seat.toUpperCase();
+  // the ranges re-pick's own segments excuse nothing here ("RANGES RE-PICKED FOR BB: …" is not "BB: … borrowed"):
+  // a re-picked seat is judged against the re-picked chart instead (layer2Postflop, repickOf)
+  note = withoutRepick(note);
   // a different chart, or every range read on the pin's fitted line ("these ranges are read on that line"): all seats
   if (/tree in the set|these ranges are read on that line/i.test(note)) return true;
   if (new RegExp(`${P} with [A-Z+]+ folded|${P}: |${P}'s call at "[^"]*" is not in the tree`).test(note)) return true;
   if (isHero && /hero's decision was read on a line fitted|CALLER CAP|LINE KEPT|CHART KEPT|OFF THE CHART/.test(note)) return true;
   return false;
 }
+
+/**
+ * THE VILLAINS' RANGES RE-PICKED (round 2.1, services/preflopPin.repickVillainRanges): the seats the answer's note says
+ * were read on another chart than the pinned one, and that chart. A seat's range read there is an EXPLAINED difference
+ * from the pinned chart's reference only when the note names the re-pick FOR THAT SEAT — and then it must equal the
+ * reference walk of the dealt line on the re-picked chart (layer2Postflop), and its walk replays on that chart (layer1).
+ */
+export function repickOf(note: string): { seats: string[]; chart: string } | null {
+  const m = /RANGES RE-PICKED FOR ([A-Z]+(?:, [A-Z]+)*): .*? read on (\S+), the chart for the line as played/.exec(note);
+  return m ? { seats: m[1]!.split(", "), chart: m[2]! } : null;
+}
+const withoutRepick = (note: string) => note.split(" · ").filter((s) => !/^RANGES RE-PICK/.test(s.trim())).join(" · ");
 
 /** An answer that says a size was moved onto the tree. */
 export const SNAP_NOTE = /snapped|SNAPPED/;
@@ -90,6 +105,8 @@ export async function layer1(o: {
   truth: RefAction[]; heroPos: string; heroCards: [string, string]; note: string;
   dry: { ranges?: Record<string, Record<string, number>>; trees?: { kind: string | null; heroSeat: string; seats: { pos: string; range: number[] }[] }[]; flopSeats: string[] };
   walks: RecordedRangeWalk[]; get: ((line: string) => Promise<RawNode | null>) | null;
+  /** the chart to replay one seat's walk on when it is not `get`'s (a seat the note names as re-picked), else null */
+  getFor?: (seat: string) => ((line: string) => Promise<RawNode | null>) | null;
 }): Promise<OracleFinding[]> {
   const out: OracleFinding[] = [];
   const say = (kind: string, reason: string) => { if (!out.some((f) => f.kind === kind)) out.push({ kind, reason }); };
@@ -154,11 +171,13 @@ export async function layer1(o: {
       if (P === hero && s.labels.length !== 1) say("step-action-mismatch", `hero's range at "${s.line}" was conditioned on ${s.labels.length} labels (${s.labels.join(", ")}), not his own`);
     }
     // the product of the chart's own frequencies along this walk, nodes read afresh
-    if (o.get) {
+    // (a seat the note says was re-picked is replayed on the re-picked chart — its walk was made there)
+    const g = o.getFor?.(P) ?? o.get;
+    if (g) {
       let w: Record<string, number> | null = null;
       for (const s of steps) {
         if (s.token === "F") { w = {}; break; }
-        const node = await o.get(s.line);
+        const node = await g(s.line);
         if (!node) { say("range-product", `${P}'s walk read "${s.line || "root"}", which the chart does not hold`); w = null; break; }
         if (String(node.pos ?? "").toUpperCase() !== P) { say("range-product", `${P}'s range was conditioned at "${s.line || "root"}", which is ${node.pos}'s node in the chart`); w = null; break; }
         const next: Record<string, number> = {};
@@ -186,6 +205,8 @@ export async function layer2Postflop(o: {
   truth: RefAction[]; dealt: string[]; heroPos: string; note: string;
   dry: { ranges?: Record<string, Record<string, number>>; flopSeats: string[] };
   get: (line: string) => Promise<RawNode | null>;
+  /** a chart by id: the re-picked chart the note names (round 2.1) */
+  getFor?: (chartId: string) => (line: string) => Promise<RawNode | null>;
 }): Promise<{ findings: OracleFinding[]; explained: boolean; unwalkable: boolean; why?: string }> {
   const findings: OracleFinding[] = [];
   const approx = APPROX_NOTE.test(o.note);
@@ -196,10 +217,29 @@ export async function layer2Postflop(o: {
   }
   let explained = false;
   let why: string | undefined;
+  const rp = repickOf(o.note);
+  let refRp: Awaited<ReturnType<typeof referenceRanges>> | null = null;
+  const hero = o.heroPos.toUpperCase();
   for (const pos of o.dry.flopSeats) {
     const P = pos.toUpperCase();
     const mine = Object.entries(o.dry.ranges ?? {}).find(([p]) => p.toUpperCase() === P)?.[1];
     const theirs = ref.ranges[P];
+    // A VILLAIN THE NOTE SAYS WAS RE-PICKED (round 2.1): judged on the re-picked chart — the reference walk of the dealt
+    // line there must give his range (or a fit on that chart must name him); the pinned chart's reference excuses nothing
+    if (rp && P !== hero && rp.seats.includes(P) && o.getFor && mine) {
+      refRp ??= await referenceRanges(o.truth, o.getFor(rp.chart), { dealt: o.dealt, heroPos: o.heroPos });
+      const there = refRp.ok ? refRp.ranges[P] : undefined;
+      const d2 = there ? rangeDiff(mine, there) : null;
+      if (d2 && d2.max <= RANGE_TOL) {
+        if (!theirs || rangeDiff(mine, theirs).max > RANGE_TOL) { explained = true; why ??= `${P} re-picked onto ${rp.chart} | RANGES RE-PICKED`; }
+        continue;
+      }
+      if (explainsSeat(o.note, P, false)) { explained = true; why ??= `${P} re-picked onto ${rp.chart}, read on a fitted line | ${(withoutRepick(o.note).match(APPROX_NOTE) ?? [""])[0]}`; continue; }
+      findings.push({ kind: "range-mismatch", reason: d2
+        ? `${P} was re-picked onto ${rp.chart}: its ${d2.cls} is ${d2.a.toFixed(3)} in the solver input, ${d2.b.toFixed(3)} on the reference walk there`
+        : `${P} was re-picked onto ${rp.chart}, where the reference ${refRp.ok ? `does not bring ${P} to the flop` : `cannot walk the dealt line (${refRp.why})`} and no fit is named` });
+      continue;
+    }
     if (!mine || !theirs) { findings.push({ kind: "range-mismatch", reason: `${P} is a flop seat of the ${mine ? "pipeline" : "reference"} only (reference at the flop: ${ref.atFlop.join("/")})` }); continue; }
     const d = rangeDiff(mine, theirs);
     if (d.max <= RANGE_TOL) continue;

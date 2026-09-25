@@ -288,3 +288,52 @@ the reference could not walk (caller caps, approximation named).
    final sweeps.
 9. Round 1's deferred items stand; item 4 there (posted blind refused) is superseded by zenbook-main's post-in work and
    fixes 7, 8, 11, 12 here; item 6 is closed by fix 20.
+
+## Round 2.1 (2026-09-25): the villains' ranges re-picked (Brady's decision on deferred items 1 and 2)
+
+Branch `worktree-agent-a1de9613a21d99521`, based on zenbook-main e789427c. The pin stays the rule. There is one
+exception, and it covers the villains' ranges only (`services/preflopPin.repickVillainRanges`, called after a
+successful chart-pin resume in fastSolve). It applies when what happened after hero's decision contradicts the pinned
+chart's own assumption and the set holds an exact chart for what did happen. That exact chart is the one
+`chartFor6max` picks for the full line with the pinned dealt stacks, and it counts only when it resolves with no
+fallback. The villains are then read on it. Hero's range stays on the pinned chart. There are two triggers:
+(a) the pinned uneven chart's short seat folded before the flop;
+(b) the open played (snapped onto the set's sizes) differs from the pinned chart's open, and the full-line chart has
+exactly that open.
+The re-pick never fires for an AI-tree pin, when the exact chart is the pinned one, or when the resolver falls back.
+A villain the exact chart cannot read (a missing node, a pruned branch, a size past τ, or no weight) keeps the pinned
+read, and the note says so. The re-pick never causes a refusal. The trace mark is "preflop ranges re-picked". The
+note reads "RANGES RE-PICKED FOR <seats>: <why>, so read on <exact>, the chart for the line as played — hero's range
+stays on <pinned>".
+
+Oracle: a villain range read on the re-picked chart counts as explained only when the note names the re-pick for that
+seat. It must then equal the reference walk of the dealt line on that chart (layer 2), and its walk replays on that
+chart (layer 1). The re-pick's own "BB: …" segment no longer counts as a borrow in `explainsSeat`.
+
+**Golden ranges (41 hands in solves.sqlite today; round 2 counted 37).** Before: 14 identical. After: 13 identical.
+In every re-picked hand below, hero's range is unchanged.
+
+| hand | trigger | villain max diff vs the first stored solve, before → after |
+|---|---|---|
+| 4920395179 | (a) BTN modelled, folded → s30_BB | BB 0.864 (AJs 0.96 vs 0.10) → **0**; CO 0.297 → **0** |
+| 4919312009 | (b) 2x played → D100_o2 | BB 1.000 (65o) → **0** |
+| 4919213506 | (b) 2x played → D100_o2 (full-line rung 100; the pin was D125) | BB 1.000 (63s) → **0** |
+| 4919261748 | **(a), not "unchanged"**: the modelled 70bb BB folded (his fold was captured late, on the flop), so the full line has no short and the even D100_o2 exists | BTN 0.988 (A3o) → **0** |
+| 4920397441 | (a) BTN 30 folded → D100_o2_5 | BB 0.678 → **0** |
+| 4920395352 | (a) CO 70 folded → D100_o2_5 | HJ 0.307 → **0** |
+| 4919311782 | (a) BTN 70 folded → D100_o2_5 | SB 0.220 → 0.232 (AJs 0.925 then, 0.693 now). Now equal to the reference walk on D100_o2_5; the Sep-19 solve belongs to the "old solves wrong" class (hero's UTG differs from it as much) |
+| 4920544213 | (a) SB 30 modelled, folded; BB 49 called → s50_BB | BB 0 → 0.982 (JTs: 0.018 on s30_SB, 1.0 on s50_BB). This is the one classification that moved (identical → differs), because its stored solve was a live one made with the pin (2026-09-25 07:04). It is the same two-shorts case as 4920395179 |
+
+No other hand moved.
+
+**Tests and runs.**
+- Unit tests: `services/preflopPin.repick.test.ts` (11) and `rangeOracle.test.ts` "the ranges re-pick" (4). The
+  switch tests fail with a stubbed re-pick.
+- Gate fixtures: 51048 [jam] (a) and 51047 [short-seat] (a)+(b) assert the note and a clean oracle.
+- `tsc`: only the two `_replay…729` errors.
+- `bun test`: 821 pass / 56 skip / 2 fail (the known hrc3max NL25 and mesPostflop turn failures).
+- Gate: 87 / 87.
+- Sweep, seeds 51001..51300 with 300 pairs: 6,600 cases, 9,179 decisions, **0 findings**. 38 re-picked answers were
+  verified on the re-picked chart.
+- Sweep, seeds 52001..53500 with 3,000 pairs and 3,000 triples: 37,500 cases, 53,354 decisions, **0 findings**. 195
+  re-picked answers were verified.
