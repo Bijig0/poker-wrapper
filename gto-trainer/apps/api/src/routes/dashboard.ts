@@ -57,7 +57,7 @@ function chainFactsOf(doc: HandDoc | undefined) {
 }
 import { sessionsStore } from "../services/sessionsStore";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
-import { existsSync as fsExists } from "node:fs";
+import { existsSync as fsExists, statSync as fsStat } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
 import { studyPoller } from "../services/studyPoller";
@@ -173,7 +173,7 @@ export function enrichSync(row: HandRow): Enriched | null {
     summary,
     hand,
     raw,
-    discrepancies: null,
+    discrepancies: row.status === "live" ? null : storedAudit(row.rowid, row.updated_at ?? null),
     live: row.status === "live",
     updatedAt: row.updated_at ?? null,
   };
@@ -206,9 +206,82 @@ async function audit(e: Enriched): Promise<void> {
     const j: any = await res.json().catch(() => null);
     if (j == null) return; // no usable reply — retry on a later request
     e.discrepancies = j.ok ? j.discrepancies ?? [] : [];
+    storeAudit(e);
   } catch {
     /* audit unavailable — leave null, retried by the next scheduleAudit */
   }
+}
+
+/**
+ * AUDITS ARE KEPT (2026-09-26): the audit used to live only in this process's `cache`, so every API start re-audited
+ * every finished hand on the first /hands — ~1,200 self-requests to /api/feed-spot per restart (four restarts in the
+ * 17Z hour: 2,348/h), each one synchronous chart work. Now each result is stored in the central DB's hand_audits,
+ * keyed by the hand's row, its last write (updated_at: the award box patches finished rows) and AUDIT_BASIS — what the
+ * audit read (the preflop DB and resolved charts, by size and mtime, plus AUDIT_VERSION for a change to the audit's
+ * own rules). A hand whose row or basis moved is audited again.
+ */
+const AUDIT_VERSION = 1;
+let auditBasisMemo: string | null = null;
+function auditBasis(): string {
+  if (auditBasisMemo) return auditBasisMemo;
+  const sig = (rel: string) => {
+    try {
+      const st = fsStat(join(import.meta.dir, "..", "..", "data", rel));
+      return `${st.size}:${Math.trunc(st.mtimeMs)}`;
+    } catch {
+      return "-";
+    }
+  };
+  return (auditBasisMemo = `v${AUDIT_VERSION}|${sig("preflop-db.sqlite")}|${sig("resolved-charts.json")}`);
+}
+
+type StoredAudit = { updatedAt: number | null; disc: NonNullable<Enriched["discrepancies"]> };
+let storedAudits: Map<number, StoredAudit> | null = null;
+function auditsLoaded(): Map<number, StoredAudit> {
+  if (storedAudits) return storedAudits;
+  storedAudits = new Map();
+  const d = openDb();
+  if (!d) return storedAudits;
+  try {
+    d.run(`CREATE TABLE IF NOT EXISTS hand_audits (hand_rowid INTEGER PRIMARY KEY, updated_at INTEGER, basis TEXT NOT NULL,
+             discrepancies TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // one read of the lot on first use (the first /hands enriches every row): a map lookup per row after that
+    for (const r of d.query<{ hand_rowid: number; updated_at: number | null; discrepancies: string }, [string]>(
+      "SELECT hand_rowid, updated_at, discrepancies FROM hand_audits WHERE basis = ?").all(auditBasis())) {
+      try {
+        storedAudits.set(r.hand_rowid, { updatedAt: r.updated_at, disc: JSON.parse(r.discrepancies) });
+      } catch { /* a torn row: audited again */ }
+    }
+  } catch (err) {
+    console.log(`[audit] hand_audits unreadable — audits run in memory only: ${err instanceof Error ? err.message : err}`);
+  }
+  return storedAudits;
+}
+
+/** The stored audit for this row as it is now, or null (never audited, or the row / the charts moved since). */
+function storedAudit(rowid: number, updatedAt: number | null): Enriched["discrepancies"] {
+  const hit = auditsLoaded().get(rowid);
+  return hit && hit.updatedAt === updatedAt ? hit.disc : null;
+}
+
+function storeAudit(e: Enriched): void {
+  if (e.live || e.discrepancies == null) return;
+  auditsLoaded().set(e.dbId, { updatedAt: e.updatedAt, disc: e.discrepancies });
+  try {
+    openDb()?.run(`INSERT INTO hand_audits (hand_rowid, updated_at, basis, discrepancies, at) VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(hand_rowid) DO UPDATE SET updated_at = excluded.updated_at, basis = excluded.basis,
+                   discrepancies = excluded.discrepancies, at = excluded.at`,
+                  [e.dbId, e.updatedAt, auditBasis(), JSON.stringify(e.discrepancies), Date.now()]);
+  } catch (err) {
+    console.log(`[audit] could not store the audit of row ${e.dbId}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Test hook: what a restart forgets — the enriched rows and the audits read from hand_audits. */
+export function _restartForTests(): void {
+  cache.clear();
+  storedAudits = null;
+  auditBasisMemo = null;
 }
 
 const auditQueue: Enriched[] = [];
