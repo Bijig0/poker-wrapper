@@ -14,7 +14,8 @@
  * No two share a table name. On open, for each legacy file that still exists:
  *   - a table the central DB does not have yet is created from the legacy file's own DDL (and indexes) and copied
  *     WITH its rowids — so /hands/<dbId> links and answers.solve_id keep pointing at the same rows;
- *   - a watermark (`_poker_adopted`: table → highest rowid copied) is written INTO the legacy file, so rows an
+ *   - a watermark (`_poker_adopted_into`: table + DESTINATION → highest rowid copied) is written INTO the legacy file,
+ *     keyed by the central DB it was copied to (a copy into some other database never counts for this one), so rows an
  *     old-code process appends there during the restart window are picked up on the next open (as new rows);
  *   - once nothing holds the file open (Windows refuses to rename an open file), it is renamed to
  *     `<name>.adopted-<yyyymmdd>` — no stale second copy is left to be read by mistake.
@@ -93,13 +94,15 @@ function columnsOf(db: Database, schema: string, t: string): string[] {
 export function adoptLegacy(db: Database, sources: LegacySource[], opts: { retire?: boolean; now?: number } = {}): AdoptionResult {
   const out: AdoptionResult = { notes: [], retired: [], stillOpen: [], errors: [] };
   const now = opts.now ?? Date.now();
+  // the watermark is per DESTINATION: which central DB these rows went to
+  const dest = process.platform === "win32" ? resolve(db.filename).toLowerCase() : resolve(db.filename);
   for (const src of sources) {
     if (!existsSync(src.file) || resolve(src.file) === resolve(db.filename)) continue;
     let attached = false;
     try {
       db.run(`ATTACH DATABASE ? AS legacy`, [src.file]);
       attached = true;
-      db.run(`CREATE TABLE IF NOT EXISTS legacy._poker_adopted (tbl TEXT PRIMARY KEY, max_rowid INTEGER NOT NULL, at INTEGER NOT NULL)`);
+      db.run(`CREATE TABLE IF NOT EXISTS legacy._poker_adopted_into (tbl TEXT NOT NULL, dest TEXT NOT NULL, max_rowid INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (tbl, dest))`);
       // IMMEDIATE: two processes starting together serialize here, and the second one sees the first one's watermark
       db.transaction(() => {
         for (const t of src.tables) {
@@ -113,7 +116,7 @@ export function adoptLegacy(db: Database, sources: LegacySource[], opts: { retir
             if (copied) out.notes.push({ file: src.file, table: t, copied, preservedIds: false });
             continue;
           }
-          const mark = db.query<{ max_rowid: number }, [string]>(`SELECT max_rowid FROM legacy._poker_adopted WHERE tbl = ?`).get(t)?.max_rowid ?? null;
+          const mark = db.query<{ max_rowid: number }, [string, string]>(`SELECT max_rowid FROM legacy._poker_adopted_into WHERE tbl = ? AND dest = ?`).get(t, dest)?.max_rowid ?? null;
           const top = db.query<{ m: number | null }, []>(`SELECT MAX(rowid) m FROM legacy.${q(t)}`).get()?.m ?? 0;
           if (mark != null && top <= mark) continue;
           let preservedIds = false;
@@ -143,7 +146,7 @@ export function adoptLegacy(db: Database, sources: LegacySource[], opts: { retir
             const list = insertCols.map(q).join(", ");
             copied = db.run(`INSERT OR IGNORE INTO main.${q(t)} (${list}) SELECT ${list} FROM legacy.${q(t)} ${where}`).changes;
           }
-          db.run(`INSERT INTO legacy._poker_adopted (tbl, max_rowid, at) VALUES (?, ?, ?) ON CONFLICT(tbl) DO UPDATE SET max_rowid = excluded.max_rowid, at = excluded.at`, [t, top, now]);
+          db.run(`INSERT INTO legacy._poker_adopted_into (tbl, dest, max_rowid, at) VALUES (?, ?, ?, ?) ON CONFLICT(tbl, dest) DO UPDATE SET max_rowid = excluded.max_rowid, at = excluded.at`, [t, dest, top, now]);
           out.notes.push({ file: src.file, table: t, copied, preservedIds });
         }
       }).immediate();

@@ -83,7 +83,7 @@ describe("adoptLegacy", () => {
     expect(readdirSync(d).some((f) => f === "hands.db.adopted-20260925")).toBe(true);
     // the retired copy still carries its watermark
     const old = new Database(join(d, "hands.db.adopted-20260925"), { readonly: true });
-    expect(old.query("SELECT max_rowid FROM _poker_adopted WHERE tbl='hands'").get()).toEqual({ max_rowid: 2 });
+    expect(old.query("SELECT max_rowid FROM _poker_adopted_into WHERE tbl='hands'").get()).toEqual({ max_rowid: 2 });
   });
 
   test("a legacy file re-created by old code later (no watermark) is copied again as new rows", () => {
@@ -196,5 +196,18 @@ describe("startAdoptionCatchUp (the mixed-version window)", () => {
     expect(got).toEqual({ client_hand_id: "old-code-row" });
     expect(lines.join(" ")).toContain("catch-up: +1");
     expect(existsSync(f)).toBe(false);                       // nothing held it any more: retired
+  });
+});
+
+describe("the watermark belongs to its destination", () => {
+  test("a copy into ANOTHER database (a scratch verify root) never makes the real adoption skip rows", () => {
+    const d = tmp();
+    const f = legacyAnswers(d, 3);
+    const scratch = new Database(join(d, "scratch.sqlite"));
+    adoptLegacy(scratch, [{ file: f, tables: ["answers"] }]);
+    const real = new Database(join(d, "poker.sqlite"));
+    const r = adoptLegacy(real, [{ file: f, tables: ["answers"] }]);
+    expect(r.notes[0]!.copied).toBe(3);
+    expect(real.query("SELECT COUNT(*) n FROM answers").get()).toEqual({ n: 3 });
   });
 });
