@@ -28,6 +28,22 @@ interface FastSolverBody extends ResolveBody {
   /** Low-level override of the preflop piece, for callers with no declared
    *  strategy (the playthrough tester, offline sweeps). */
   strategy?: "exploit" | "chart";
+  /** THE DECISION THE CALLER PROBED (2026-09-25): the study poller's decision key, read from /state a moment before
+   *  this request re-reads it. When the table has moved on in between (another street, another action, another
+   *  hand), the solve would answer a different decision than the one the poller will label it with — so it is
+   *  deferred instead, and the next tick probes the table as it now is. The call amount is not compared: it flickers
+   *  within one decision (rollMemo) and a re-probe on every flicker would starve the answer. */
+  expectKey?: string;
+}
+
+/** The probe key's identity without the call amount: [street, board, hero cards, number of actions]. */
+export function probeIdentity(key: string): string | null {
+  try {
+    const k = JSON.parse(key) as unknown[];
+    return Array.isArray(k) ? JSON.stringify([k[0] ?? null, k[1] ?? null, k[2] ?? null, k[4] ?? null]) : null;
+  } catch {
+    return null;
+  }
 }
 
 // Every request carries its own timeline (services/answerTrace.ts) back in X-Answer-Trace — where an answer's
@@ -147,6 +163,14 @@ async function handleFastSolve(c: any): Promise<Response> {
 
   if (!heroTurn) {
     return c.json({ ...base, solution: null, deferred: hand.ended ? "Hand is over." : "Not hero's turn." });
+  }
+  if (typeof body.expectKey === "string") {
+    const probed = probeIdentity(body.expectKey);
+    const now = JSON.stringify([hand.street, hand.board, hand.heroCards, hand.actions.length]);
+    if (probed && probed !== now) {
+      tmark("table moved since the probe", `probed ${probed} · now ${now}`);
+      return c.json({ ...base, solution: null, deferred: `The table moved between the probe and the solve (probed ${probed}, now ${now}) — re-probing.` });
+    }
   }
 
   const solution = await timed("fastSolve", () => fastSolve(hand, heroPos, {

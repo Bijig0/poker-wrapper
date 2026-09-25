@@ -580,6 +580,15 @@ export function buildApp(): Hono {
     st.prov = live ? Object.fromEntries(["band", "strategy", "source", "tier", "chart", "exploitPick", "chartPick"].map((k) => [k, b[k] ?? null])) : null;
     st.decisionKey = live && typeof b.decisionKey === "string" ? b.decisionKey : null;
     st.handId = live && (Number.isInteger(b.handId) || typeof b.handId === "boolean") ? b.handId : null;
+    // THE CHAIN LINE (2026-09-25): the answer's verdict lives and dies with the answer; the session's clean count is
+    // kept until the poller sends the next one (every answer carries it)
+    const ch = b.chain && typeof b.chain === "object" ? b.chain : null;
+    const str = (x: unknown) => (typeof x === "string" && x ? x : null);
+    st.chain = live && ch ? { verdict: str(ch.verdict), label: str(ch.label), reason: str(ch.reason) } : null;
+    if (ch?.session && typeof ch.session === "object") {
+      st.chainSession = { hands: Number(ch.session.hands) || 0, clean: Number(ch.session.clean) || 0,
+        rate: typeof ch.session.rate === "number" ? ch.session.rate : null };
+    }
     st.at = time();
     return json(200, { ok: true });
   });

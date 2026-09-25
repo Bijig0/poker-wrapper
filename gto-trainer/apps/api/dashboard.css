@@ -917,3 +917,7 @@ table.sent-tbl th { padding: 4px 16px 4px 0; }
 table.sent-tbl td { white-space: normal; vertical-align: top; min-width: 160px; padding: 4px 16px 4px 0; border-top: 1px solid var(--grid); }
 table.sent-tbl td.k { min-width: 110px; white-space: nowrap; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
 .sent-box details pre { max-height: 360px; }
+
+/* the chain path (2026-09-25): a rebuilt street or an extra request stands out; a by-design one is quiet */
+.chain-bad { color: var(--loss); font-weight: 600; }
+.chain-dz { color: var(--muted); }

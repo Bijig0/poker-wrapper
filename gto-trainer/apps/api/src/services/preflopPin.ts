@@ -6,6 +6,7 @@ import type { GetNode, HrcNode } from "./hrc3max";
 import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
 import type { AiPreflopShape } from "./gtowAiPreflop";
 import { tmark } from "./answerTrace";
+import { handFacts } from "./handFacts";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
 
 /**
@@ -102,28 +103,39 @@ export function repairSnaps(repaired: { index: number; from: string; to: string;
 export const snapsNote = (snaps: string[]): string | null =>
   snaps.length ? `PREFLOP SIZES SNAPPED onto the chart: ${[...new Set(snaps)].join("; ")}` : null;
 
-const pins = new Map<string, PreflopPin>();
-const MAX_PINS = 300;
+// THE PIN IS A FACT OF THE HAND (2026-09-25, the chain ledger): it lives in services/handFacts — in memory for the
+// hot path, written through to data/hand_facts.sqlite — so an API restart (or a second API process on the port)
+// between hero's preflop decision and the flop still resumes from the tree that answered him, instead of falling
+// back to choosing a chart again from the table's shape.
 
 export const preflopPinKey = (hand: ParsedHand): string => String(hand.clientHandId ?? hand.handId ?? "");
 
 const isStrictPrefix = (a: string[], b: string[]) => a.length < b.length && a.every((t, i) => b[i] === t);
 
-export function setPreflopPin(pin: PreflopPin): void {
+export function setPreflopPin(pin: PreflopPin, heroCards?: string | null): void {
   if (!pin.handKey) return;
   // the earlier decisions' picks ride along; a re-ask of the same decision (the poller probes it every second) or of
   // an earlier one (a replay) replaces what it supersedes — only picks strictly before this node are kept
-  const prev = pins.get(pin.handKey);
+  const prev = handFacts.preflop(pin.handKey);
   const carried = (prev?.picks ?? []).filter((p) => isStrictPrefix(p.rawTokens, pin.rawTokens));
   pin = { ...pin, picks: [...carried, ...(pin.picks ?? [])] } as PreflopPin;
-  pins.delete(pin.handKey);            // re-insert so the newest hand is last in eviction order
-  pins.set(pin.handKey, pin);
-  while (pins.size > MAX_PINS) { const first = pins.keys().next().value; if (first === undefined) break; pins.delete(first); }
+  handFacts.setPreflop(pin.handKey, pin, heroCards);
   tmark("preflop ranges pinned", `hand ${pin.handKey}: ${pin.piece} ${pin.piece === "chart6max" ? pin.chartId : pin.id} at "${pin.codes.join("-") || "root"}" (${pin.heroPos} to act)`);
 }
-export const getPreflopPin = (handKey: string): PreflopPin | undefined => pins.get(handKey);
-export function forgetPreflopPin(handKey: string): void { pins.delete(handKey); }
-export const preflopPinStats = () => ({ pins: pins.size });
+export const getPreflopPin = (handKey: string): PreflopPin | undefined => handFacts.preflop(handKey);
+/**
+ * The hand's pin, found by its site id — or, when the preflop answer was read before the site id reached the capture
+ * (the wrapper's counter was the key then), by that counter, provided the hand's hero cards match: the counter
+ * collides across tables, the cards make a false match practically impossible.
+ */
+export function preflopPinFor(hand: ParsedHand): PreflopPin | undefined {
+  const byId = handFacts.preflop(preflopPinKey(hand));
+  if (byId || !hand.clientHandId || hand.handId == null) return byId;
+  const doc = handFacts.get(String(hand.handId));
+  const cards = (hand.heroCards ?? []).join("");
+  return doc?.preflop && cards && doc.heroCards === cards ? doc.preflop : undefined;
+}
+export function forgetPreflopPin(handKey: string): void { handFacts.forgetPreflop(handKey); }
 
 /** The pin's prefix against the capture as it stands now: the tokens that come after it, or why it no longer fits. */
 export function pinRest(pin: PreflopPin, tokensNow: string[]): { ok: true; rest: string[] } | { ok: false; why: string } {

@@ -4,3 +4,5 @@
 //
 // answerLog: see assertTestSafePath in services/answerLog.ts — it refuses any non-temp path under bun test.
 process.env.ANSWERS_DB_PATH ??= ":memory:";
+// handFacts: the chain ledger's per-hand facts (services/handFacts.ts) — same refusal of non-temp paths under bun test.
+process.env.HAND_FACTS_DB_PATH ??= ":memory:";

@@ -55,6 +55,9 @@ export function freshStudy(): Record<string, any> {
   return {
     on: false, text: null, pick: null, roll: null, note: null,
     at: 0.0,
+    // THE CHAIN LINE (2026-09-25, the API's services/chainPath): this answer's verdict — clean / rebuilt / extra
+    // requests / no answer — and the session's clean count, which outlives any one answer
+    chain: null, chainSession: null,
     decisionKey: null, handId: null,
     auto: false, executed: null, autoTried: null, lastExec: null,
     autoHeld: null,

@@ -353,6 +353,122 @@ function feedStepMap(feedLines, actions) {
 /* ================= detail page ================= */
 let DETAIL = null, STEP = 0, PLAY = null;
 
+/* THE CHAIN PATH (2026-09-25, services/chainPath): how each answer of the hand was produced. The happy path is: the
+   flop ranges computed once from the tree hero's preflop answers were read on (the preflop pin), and every later
+   decision takes each earlier street from the hand's memo (a hit) or resumes it at hero's last node. BY DESIGN is a
+   rule you set (hero left the pick, a collapse plan, a size pinned into a new tree); REBUILT is the recovery path
+   (the ranges derived again from the capture); EXTRA REQUESTS is a tree or node GTO Wizard had already served. */
+const CHAIN_VERDICT = {
+  clean: ["good", "clean"], "by-design": ["good", "clean · by design"], rebuilt: ["warn", "rebuilt"],
+  leaked: ["crit", "extra requests"], fault: ["crit", "no answer"],
+};
+function chainChip(v) {
+  const [cls, label] = CHAIN_VERDICT[v] || ["dim", v || "—"];
+  return `<span class="chip ${cls}">${esc(label)}</span>`;
+}
+const CHAIN_HOW = {
+  hit: "memo hit", resumed: "resumed", first: "first walk", pin: "from the preflop pin", designed: "the strategy's source",
+  "by-design": "by design", rebuilt: "REBUILT", leaked: "extra requests",
+};
+function chainHow(how, why) {
+  const bad = how === "rebuilt" || how === "leaked";
+  const t = CHAIN_HOW[how] || how || "—";
+  return `<span${bad ? ' class="chain-bad"' : how === "by-design" ? ' class="chain-dz"' : ""}${why ? ` title="${esc(why)}"` : ""}>${esc(t)}</span>`;
+}
+function chainReq(r) {
+  if (!r) return '<span class="sub">—</span>';
+  const n = (r.tree || 0) + (r.solution || 0) + (r.poll || 0) + (r.library || 0) + (r.other || 0);
+  return n ? `${n} <span class="sub">(${r.tree || 0} tree · ${r.poll || 0} poll)</span>` : '<span class="sub">0</span>';
+}
+function chainPathCard(j) {
+  const rows = (j.answers || []).map((a) => {
+    let p = null;
+    try { p = a.path ? JSON.parse(a.path) : null; } catch { p = null; }
+    return p ? { a, p } : null;
+  }).filter(Boolean);
+  const facts = j.chain?.facts;
+  if (!rows.length && !facts) return "";
+  const hv = j.chain?.verdict;
+  const body = rows.map(({ a, p }) => {
+    const streets = (p.streets || []).map((s) => `${esc(s.street)}${s.plan ? `<span class="sub"> (${esc(s.plan)})</span>` : ""}: ${chainHow(s.how, s.why)}` +
+      `${s.tree === "created" ? ' <span class="sub">· tree created</span>' : ""}${s.leak ? ` <span class="chain-bad" title="${esc(s.leak.why)}">· ${esc(s.leak.code)}</span>` : ""}`).join("<br>");
+    const arr = p.arrival ? chainHow(p.arrival.how, p.arrival.why) + ` <span class="sub">${esc(p.arrival.producer || "")}${p.arrival.first ? ` · first: ${esc(CHAIN_HOW[p.arrival.first.how] || p.arrival.first.how)}` : ""}</span>` : (p.preflop ? chainHow(p.preflop.how, p.preflop.why) + ` <span class="sub">${esc(p.preflop.piece)}</span>` : '<span class="sub">—</span>');
+    const why = (p.reasons || []).map((r) => `<div class="sub">${esc(r.text)}</div>`).join("");
+    return `<tr class="src-static"><td>${fmtT(a.ts)}</td><td>${esc(a.street || p.street || "")}</td><td>${chainChip(p.verdict)}</td><td>${arr}</td><td>${streets || '<span class="sub">—</span>'}</td><td class="num">${chainReq(p.requests)}</td></tr>` +
+      (why ? `<tr class="src-static"><td></td><td colspan="5">${why}</td></tr>` : "");
+  }).join("");
+  const req = facts?.requests || {};
+  const origins = Object.entries(req).map(([o, r]) => `${esc(o)} ${chainReq(r)}`).join(" · ");
+  const pin = facts?.preflop ? `preflop pin: <b>${esc(facts.preflop.piece)}</b> <span class="mono">${esc(facts.preflop.id || "")}</span> at "${esc((facts.preflop.codes || []).join("-") || "root")}"` : "no preflop pin recorded";
+  const walked = (facts?.streets || []).map((s) => `${["flop", "turn", "river"][s.k] || s.k}${s.plan ? ` (${esc(s.plan)})` : ""} ${s.kind === "closed" ? "closed" : "hero's node"} [${esc((s.tokens || []).join(","))}]`).join(" · ");
+  return `<div class="card"><h2>Chain path ${hv ? chainChip(hv.verdict) : ""} <span class="sub">— how each answer's ranges were produced: computed once, reused after (technical)</span></h2>
+    <div class="sub" style="margin-bottom:6px">${pin}${origins ? ` · GTO Wizard requests for this hand: ${origins}` : ""}${walked ? `<br>streets walked: ${walked}` : ""}</div>
+    ${rows.length ? `<div class="scroll"><table><thead><tr><th>when</th><th>street</th><th>verdict</th><th>flop ranges</th><th>streets</th><th class="num">requests</th></tr></thead><tbody>${body}</tbody></table></div>`
+      : '<div class="sub">no answer of this hand carries a chain path (logged before 2026-09-25)</div>'}</div>`;
+}
+
+/* A SESSION'S TECHNICAL VIEW (2026-09-25): the clean rate first, then everything that was not clean. Behind the
+   Overview / Technical toggle on a declared session — debugging, not the review a normal session needs. */
+function sessTechSeg() {
+  return `<div style="margin:0 0 10px"><span class="seg" id="sess-seg"><button data-v="overview">Overview</button><button data-v="technical">Technical</button></span></div>`;
+}
+function wireSessTech(id) {
+  const seg = $("sess-seg");
+  if (!seg) return;
+  let view = "overview";
+  try { view = localStorage.getItem("sessView") === "technical" ? "technical" : "overview"; } catch { /* storage blocked */ }
+  const show = (v) => {
+    seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+    $("sess-overview").hidden = v !== "overview";
+    $("sess-tech").hidden = v !== "technical";
+    if (v === "technical") loadSessTech(id);
+    try { localStorage.setItem("sessView", v); } catch { /* the choice lasts this page only */ }
+  };
+  seg.querySelectorAll("button").forEach((b) => { b.onclick = () => show(b.dataset.v); });
+  show(view);
+}
+async function loadSessTech(id) {
+  const box = $("sess-tech");
+  if (!box || box.dataset.loaded === id) return;
+  box.dataset.loaded = id;
+  box.innerHTML = '<div class="card sub">loading the technical view…</div>';
+  let t;
+  try { t = await (await fetch(`/api/dashboard/sessions/${encodeURIComponent(id)}/technical`)).json(); }
+  catch { box.innerHTML = '<div class="card warn">technical view unavailable</div>'; box.dataset.loaded = ""; return; }
+  if (!t.ok) { box.innerHTML = `<div class="card warn">${esc(t.error || "technical view unavailable")}</div>`; box.dataset.loaded = ""; return; }
+  box.innerHTML = sessTechHtml(t);
+}
+function sessTechHtml(t) {
+  const c = t.cleanRate || { hands: 0, clean: 0, rate: null, byVerdict: {} };
+  const bv = c.byVerdict || {};
+  const pct = c.rate == null ? "—" : `${Math.round(c.rate * 100)}%`;
+  const handLink = (h) => {
+    const row = t.rowids ? t.rowids[h] : null;
+    return row != null ? `<a href="/hands/${row}" onclick="go('/hands/${row}');return false" class="mono">${esc(h)}</a>` : `<span class="mono">${esc(h)}</span>`;
+  };
+  const counts = (o) => Object.entries(o || {}).map(([k, n]) => `${esc(CHAIN_HOW[k] || k)} <b>${n}</b>`).join(" · ") || '<span class="sub">—</span>';
+  const reasons = (t.reasons || []).map((r) => `<tr class="src-static"><td class="mono">${esc(r.code)}</td><td>${chainChip(r.v)}</td><td class="num">${r.n}</td><td>${r.hands.slice(0, 8).map(handLink).join(" ")}${r.hands.length > 8 ? ` <span class="sub">+${r.hands.length - 8}</span>` : ""}</td><td class="sub">${esc(r.example)}</td></tr>`).join("");
+  const bad = (t.hands || []).filter((h) => h.postflop && h.verdict !== "clean" && h.verdict !== "by-design");
+  const origin = Object.entries(t.requestsByOrigin || {}).map(([o, r]) => `<tr class="src-static"><td>${esc(o)}</td><td class="num">${r.hands}</td><td class="num">${r.tree}</td><td class="num">${r.poll}</td><td class="num">${r.total}</td><td class="num">${r.hands ? (r.total / r.hands).toFixed(1) : "—"}</td></tr>`).join("");
+  const rq = t.requests || {};
+  return `
+    <div class="card"><h2>Clean rate ${c.hands ? `<span class="chip ${c.rate >= 0.95 ? "good" : c.rate >= 0.8 ? "warn" : "crit"}">${pct}</span>` : ""}</h2>
+      <div style="font-size:30px;font-weight:700;margin:4px 0">${pct}</div>
+      <div class="sub">${c.hands ? `${c.clean} of ${c.hands} hands that reached a postflop decision took the happy path — every street's ranges computed once and reused after (by design counts as clean)` : "no hand of this session reached a postflop decision with a chain path yet (paths are logged from 2026-09-25)"}</div>
+      <div style="margin-top:8px">${chainChip("clean")} ${bv.clean || 0} &nbsp; ${chainChip("by-design")} ${bv["by-design"] || 0} &nbsp; ${chainChip("rebuilt")} ${bv.rebuilt || 0} &nbsp; ${chainChip("leaked")} ${bv.leaked || 0} &nbsp; ${chainChip("fault")} ${bv.fault || 0}</div></div>
+    <div class="card"><h2>Why a hand was not clean <span class="sub">— grouped by cause, most severe first</span></h2>
+      ${reasons ? `<div class="scroll"><table><thead><tr><th>cause</th><th>verdict</th><th class="num">decisions</th><th>hands</th><th>example</th></tr></thead><tbody>${reasons}</tbody></table></div>` : '<div class="sub">nothing — every decision took the happy path</div>'}</div>
+    <div class="sess-grid">
+      <div class="card"><h2>How the ranges were produced <span class="sub">— over ${t.decisions?.total ?? 0} decisions</span></h2>
+        <div class="kv"><span class="k">flop ranges</span><span class="v">${counts(t.decisions?.arrival)}</span>
+        <span class="k">streets</span><span class="v">${counts(t.decisions?.streets)}</span></div></div>
+      <div class="card"><h2>GTO Wizard requests</h2>
+        ${origin ? `<div class="scroll"><table><thead><tr><th>origin</th><th class="num">hands</th><th class="num">trees</th><th class="num">polls</th><th class="num">total</th><th class="num">per hand</th></tr></thead><tbody>${origin}</tbody></table></div>` : '<div class="sub">no requests recorded for this session\'s hands</div>'}
+        <div class="sub" style="margin-top:6px">live postflop decisions: ${rq.total ?? 0} requests over ${rq.hands ?? 0} hands · median ${rq.perHandMedian ?? "—"} · max ${rq.perHandMax ?? "—"}${rq.maxHand ? ` (${handLink(rq.maxHand)})` : ""}</div></div>
+    </div>
+    ${bad.length ? `<div class="card"><h2>Hands off the happy path <span class="sub">— ${bad.length}</span></h2>${bad.map((h) => `<div class="tl-row">${chainChip(h.verdict)} ${handLink(h.hand)} <span class="sub">${esc((h.reasons || []).map((r) => r.text).join(" · ").slice(0, 240))}</span></div>`).join("")}</div>` : ""}`;
+}
+
 async function showDetail(dbId) {
   const v = $("view-detail"); v.innerHTML = '<div class="card sub">loading…</div>';
   const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
@@ -386,6 +502,7 @@ async function showDetail(dbId) {
     <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button></span></div>
       <div id="timeline"></div><div id="rangelook" class="rl" hidden></div></div>
     <div id="solution"></div>
+    ${chainPathCard(j)}
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
     ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
       `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
@@ -3503,7 +3620,7 @@ async function loadSession(id) {
   const pf = s.preflight || {};
   const events = (s.eventsList || []).map((e) => `<div class="ev-line"><span class="t">${fmtT(e.at)}</span><span>${esc(e.kind)}${e.kind === "study-toggle" ? ` → answers ${e.on ? "on" : "off"}` : ""}${e.hand != null ? ` <span class="sub">· at hand ${e.hand}</span>` : ""}</span></div>`).join("");
   const ansRows = (j.answers || []).slice(0, 60).map((a) => `<tr class="src-static"><td>${fmtT(a.ts)}</td><td>${esc(a.street ?? "")}${a.board ? ` <span class="mono">${esc(a.board)}</span>` : ""}</td><td>${a.tier ? `<span class="chip">${esc(a.tier)}</span>` : '<span class="chip crit">failed</span>'}</td><td>${a.text ? esc(a.text) : `<span class="sub">${esc(a.failReason ?? "")}</span>`}</td><td>${a.exploitPick || a.chartPick ? `<span class="picks"><span class="pk mes"><small>MES</small>${esc(a.exploitPick ?? "—")}</span><span class="pk gto"><small>GTO</small>${esc(a.chartPick ?? "—")}</span></span>` : ""}</td><td class="num">${fmtMs(a.latencyMs)}</td></tr>`).join("");
-  v.innerHTML = head + sessionOutcomeCard(j) + (PATH.show ? handsCard : "") + `
+  v.innerHTML = head + sessTechSeg() + '<div id="sess-overview">' + sessionOutcomeCard(j) + (PATH.show ? handsCard : "") + `
     <div class="sess-grid">
       <div class="card"><h2>Declared config</h2><div class="kv">
         ${kv(isStrategyPreset(s.preset) ? "strategy" : "mode", presetChip(s.preset, s))}
@@ -3520,9 +3637,11 @@ async function loadSession(id) {
     </div>
     <div class="card"><h2>Timeline <span class="sub">— every declared change, in order</span></h2>${events || '<div class="sub">no events</div>'}</div>
     ${PATH.show ? "" : handsCard}
-    <div class="card"><h2>Answers <span class="sub">— ${(j.answers || []).length}${(j.answers || []).length > 60 ? ", showing 60" : ""}</span></h2><div class="scroll"><table><thead><tr><th>when</th><th>node</th><th>tier</th><th>answer</th><th>both strategies</th><th class="num">latency</th></tr></thead><tbody>${ansRows || '<tr class="src-static"><td colspan="6" class="sub">no answers logged under this session</td></tr>'}</tbody></table></div></div>`;
+    <div class="card"><h2>Answers <span class="sub">— ${(j.answers || []).length}${(j.answers || []).length > 60 ? ", showing 60" : ""}</span></h2><div class="scroll"><table><thead><tr><th>when</th><th>node</th><th>tier</th><th>answer</th><th>both strategies</th><th class="num">latency</th></tr></thead><tbody>${ansRows || '<tr class="src-static"><td colspan="6" class="sub">no answers logged under this session</td></tr>'}</tbody></table></div></div>` +
+    '</div><div id="sess-tech" hidden></div>';
   wireSessionHands(v, id);
   drawSessionChart(j);
+  wireSessTech(id);
 }
 
 /* The Outcome card: what the session actually DID — the net in big blinds and in

@@ -15,7 +15,7 @@ import { EXTRACT_DEEP_JS } from "./ignition/dom";
 import { handState } from "./ignition/hand";
 import { stateHealthSummary } from "./ignition/checks";
 import { TAP_STALL_S } from "./ignition/ws";
-import { autoAllowance, currentAnswer, currentNote, pickReady } from "./relay";
+import { autoAllowance, currentAnswer, currentChain, currentNote, pickReady } from "./relay";
 import { topUpWindow } from "./topup";
 import { sessionBrief } from "./session";
 import { layoutNote } from "./windows";
@@ -56,6 +56,9 @@ export async function state(light = false): Promise<Record<string, any>> {
     session: await sessionBrief(),
     panelAnswer: currentAnswer(),
     panelNote: currentNote(),
+    // the chain line (2026-09-25): a top-level key, so the contract's recorded panelAnswer shape is untouched — and
+    // only when there is one (answers on, a push received), so a /state with nothing to say is byte-identical to before
+    ...((ch) => (ch ? { panelChain: ch } : {}))(currentChain()),
     practice: !!(S.fakeMode || L.practice),
     studyAuto: !!st.auto,
     studyAutoDelay: st.autoDelay || "instant",

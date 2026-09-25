@@ -125,6 +125,25 @@ export function setRangeWalkRecorder(fn: ((w: RecordedRangeWalk) => void) | null
   const prev = recorder; recorder = fn; return () => { recorder = prev; };
 }
 
+/**
+ * A MEMOISED RESULT KEEPS ITS PROVENANCE (2026-09-25, the chain ledger). fastSolve computes a hand's flop-entering
+ * ranges once and serves every later decision from its memo — so those decisions make no walk, and a recorder would
+ * see ranges that came from nowhere. `withRangeWalkCapture` collects the walks a computation makes (and still reports
+ * them to the recorder); the memo keeps them and `replayRangeWalks` reports them again on a hit. With no recorder
+ * installed (everywhere but the harness) nothing is collected.
+ */
+export async function withRangeWalkCapture<T>(fn: () => Promise<T>): Promise<{ value: T; walks: RecordedRangeWalk[] }> {
+  const outer = recorder;
+  if (!outer) return { value: await fn(), walks: [] };
+  const walks: RecordedRangeWalk[] = [];
+  recorder = (w) => { walks.push(w); outer(w); };
+  try { return { value: await fn(), walks }; } finally { recorder = outer; }
+}
+export function replayRangeWalks(walks: RecordedRangeWalk[]): void {
+  const rec = recorder;
+  if (rec) for (const w of walks) rec(w);
+}
+
 export async function reconstructFlopRanges(
   tokens: string[],
   getNode: (line: string) => RawNode | null | Promise<RawNode | null>,
