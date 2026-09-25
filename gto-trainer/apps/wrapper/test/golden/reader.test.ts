@@ -34,8 +34,12 @@ import { canon, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
 
 /** Fields added after the Python recording, verified on their own (test/golden/start-stacks.test.ts, 636 of 636
  *  seat-hands against the table's own accounts): the hand's stacks as dealt (/hand `startStacks`, archived with the
- *  row) and the per-hand money behind them (S.ws.startCents / moneyIn). Everything else still compares key by key. */
-const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn"]);
+ *  row) and the per-hand money behind them (S.ws.startCents / moneyIn). Everything else still compares key by key.
+ *  ROUND 3 (2026-09-25): every dealt seat's chips as the WebSocket reports them — /hand `wsStack` / `wsInFront` /
+ *  `wsDead` (live only, never archived) and the ledger behind them (S.ws.wsAccount / wsFront / wsDead / wsStale) —
+ *  verified on their own in test/golden/ws-chips.test.ts (590 seat-hands against the table's CO_RESULT_INFO, and
+ *  dealt − behind = the line's chips on 4,247 seat-frames of every clean hand) and test/unit/ws-chips.test.ts. */
+const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale"]);
 /** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
  *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
  *  nothing else here (the pick key never counts one: relay.ts), verified on its own in test/unit/post-in.test.ts
@@ -97,6 +101,54 @@ const POST_IN_FIXED = new Map([
 ]);
 const huLineFixed = (file: string, i: number, key: string) =>
   HU_LINE_KEYS.has(key) && [...(HU_LINE_FIXED.get(file) || []), ...(POST_IN_FIXED.get(file) || [])].some(([a, b]) => i >= a! && i <= b!);
+
+/**
+ * THE API GATE'S EXACT-CHIPS INVARIANT ON THE FULL PIPELINE (round 3). ws-chips.test.ts checks it on the WebSocket's
+ * own line; here the export is the one the poller reads — DOM backfill, dedupe, the level reconciler's cut-over — so a
+ * disagreement on a clean hand is a refusal the API would make at the table on a good capture. For every seat the
+ * export covers: stack as dealt − chips behind (wsStack) − dead blinds = the chips the exported line put in. A hand
+ * whose money frames came from two sockets or twice running is the 2026-09-20/21 socket-mixing capture (ws-chips.test.ts
+ * says why): counted apart. Checked at hero's decisions (what the poller would answer), with the API's tolerance: half a
+ * hundredth per amount on the WebSocket's own line, half a tenth on the reconciler's (it reads the chips on screen, which
+ * Ignition shows to 0.1bb — hand 4919957671: 3.5 for 3.53). Required to be zero on clean hands but for the lines below,
+ * each checked by hand against the frames and each WRONG — the refusal is the gate doing its job:
+ */
+const KNOWN_WRONG_LINES: Record<string, string> = {
+  // the SB's CO_SELECT_INFO raised to 3 (raise +500 over his 100 blind, account 19700 → 19200) and the event line said
+  // so; the level reconciler's cut-over swapped in "raise 2.5" off the chips on screen, and hero's toCall with it
+  "4919480412": "the reconciler read the SB's raise to 3bb as 2.5bb",
+  // the BTN limped 1bb and raised +40 → 21.005bb (account 21559 → 17559); the reconciled line says raise to 20
+  "4919670726": "the reconciler read the BTN's raise to 21bb as 20bb",
+  // one BB call of 2bb on the WS (account 19800 → 19400); the event line filed the BB calling three times (2, 1.5, 2.5)
+  // off the chips on screen of a table recorded as two (recording 20260922_194132, multi-table)
+  "4919910081": "the event line holds two phantom BB calls from the screen",
+  // hero on the river clock (CO_SELECT_REQ asks 2605 to call) right after the BB's CO_SELECT_INFO bet of 13.025bb; the
+  // reconciled line still ends at hero's check and says toCall 0 — the old gate had nothing to catch it with
+  "4919957671": "at hero's river decision the reconciled line lacks the BB's 13bb bet the WS had filed",
+};
+function ledgerDisagreements(h: any): string[] {
+  if (!h?.wsStack || !h.startStacks) return [];
+  const get = (m: any, k: number) => (m instanceof Map ? m.get(k) : m?.[k]);
+  const per = new Map<string, Map<number, number>>();
+  for (const a of h.actions || []) {
+    if (a.amount == null) continue;
+    const m = per.get(a.street) ?? new Map<number, number>();
+    per.set(a.street, m);
+    m.set(a.seatId, a.type === "call" ? (m.get(a.seatId) ?? 0) + a.amount : Math.max(m.get(a.seatId) ?? 0, a.amount));
+  }
+  const out: string[] = [];
+  for (const [seat, behind] of h.wsStack as Map<number, number>) {
+    const start = get(h.startStacks, seat);
+    if (start === undefined) continue;
+    let line = 0;
+    for (const m of per.values()) line += m.get(seat) ?? 0;
+    const n = (h.actions || []).filter((a: any) => a.seatId === seat && a.amount != null).length;
+    const diff = start - behind - (get(h.wsDead, seat) ?? 0) - line;
+    const unit = h.lineSource === "reconciled" ? 0.05 : 0.005;
+    if (Math.abs(diff) > unit * n + 0.005 + 1e-9) out.push(`seat ${seat} off by ${Math.round(diff * 1000) / 1000} (line ${pyFloatStr(Math.round(line * 100) / 100)}, ${h.lineSource})`);
+  }
+  return out;
+}
 
 const PICKS = ["Fold", "Call", "Check", "Raise 2.5", "BET 3.35", "Bet 33%", "All-in", "RAISE 12", "Limp", "jam",
                "r4", "Bet 4.5bb", "X", "CHECK", "raise", "bet"];
@@ -177,6 +229,9 @@ for (const file of corpusFiles("reader-")) {
     const fails: string[] = [];
     const expected: Record<string, unknown> = {};
     let compared = 0;
+    const ledger = { seats: 0, bad: new Map<string, string>(), corrupt: new Set<string>() };
+    const handRids = new Map<string, Set<string>>();
+    let lastMoney = "";
     try {
       let k = 0;
       for (let r = 1; r < recs.length && fails.length < 6; r++) {
@@ -198,6 +253,23 @@ for (const file of corpusFiles("reader-")) {
           }
         }
         const h = handState();
+        if (inp.kind === "ws" && ["CO_SELECT_INFO", "CO_SELECT_SPEED_INFO", "CO_BLIND_INFO"].includes(inp.d?.pid)) {
+          const hk = String(S.handIds.get(S.handNo) ?? S.handNo);
+          const rs = handRids.get(hk) ?? new Set<string>();
+          handRids.set(hk, rs);
+          rs.add(String(inp.rid ?? ""));
+          const money = JSON.stringify(inp.d);
+          if (money === lastMoney) ledger.corrupt.add(hk);
+          lastMoney = money;
+          if (rs.size > 1) ledger.corrupt.add(hk);
+        }
+        if (h?.wsStack && h.currentNode?.toActIsHero && !h.ended) {
+          ledger.seats += h.wsStack.size;
+          const hk = String(S.handIds.get(S.handNo) ?? S.handNo);
+          const why = ledgerDisagreements(h);
+          if (process.env.WS_LEDGER_ALL && why.length) log0(`LEDGER ${file} ${hk} input ${inp.i} ${h.street} toCall ${h.currentNode.toCall}: ${why.join("; ")} :: ${JSON.stringify(h.actions.map((a: any) => [a.street[0], a.seatId, a.type, a.amount ?? null]))} ws=${JSON.stringify(Object.fromEntries(h.wsStack))} start=${JSON.stringify(Object.fromEntries(h.startStacks))}`);
+          if (why.length && !ledger.bad.has(hk)) ledger.bad.set(hk, `input ${inp.i}: ${why.join("; ")}`);
+        }
         const light = await state(true);
         for (const x of ["panelVersion", "setupVersion", "tables"]) delete light[x];
         const rc = S.shadow.rc;
@@ -318,6 +390,13 @@ for (const file of corpusFiles("reader-")) {
       realTime();
     }
     console.log(`${file}: ${compared} snapshots compared, ${fails.length} difference(s)`);
+    const cleanBad = [...ledger.bad].filter(([hk]) => !ledger.corrupt.has(hk) && !KNOWN_WRONG_LINES[hk]);
+    const knownWrong = [...ledger.bad].filter(([hk]) => !ledger.corrupt.has(hk) && KNOWN_WRONG_LINES[hk]);
+    console.log(`${file}: exact chips vs the exported line at hero's decisions — ${ledger.seats} seat-snapshots, ${cleanBad.length} clean hand(s) disagree` +
+      `${knownWrong.length ? `, ${knownWrong.length} known-wrong line(s) refused (${knownWrong.map(([hk]) => `${hk}: ${KNOWN_WRONG_LINES[hk]}`).join("; ")})` : ""}` +
+      `${ledger.bad.size - cleanBad.length - knownWrong.length ? `, ${ledger.bad.size - cleanBad.length - knownWrong.length} mixed/duplicated-stream hand(s) refused` : ""}` +
+      `${cleanBad.length ? `: ${cleanBad.map(([hk, w]) => `${hk} ${w}`).join(" | ")}` : ""}`);
     expect(fails).toEqual([]);
+    expect(cleanBad).toEqual([]);
   }, 900_000);
 }

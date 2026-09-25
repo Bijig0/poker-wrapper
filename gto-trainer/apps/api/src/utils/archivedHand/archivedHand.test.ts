@@ -217,3 +217,18 @@ describe("withStartStacks (a live hand carrying the WS stacks as dealt)", () => 
     expect(withStartStacks(h)).toBe(h);
   });
 });
+
+describe("the table's own chip counts (round 3) never survive a cut", () => {
+  it("truncateAt drops wsStack / wsInFront / wsDead: the export's moment, not the cut decision's", async () => {
+    const { lostActionFaults } = await import("../repairPostflopRotation/repairPostflopRotation");
+    // ROW_723 as a live export at its END would carry every seat's final chips: the SB's river check-fold left 102.705
+    const withWs = normalizeHand({ ...ROW_723, startStacks: { 1: 103.705, 4: 102.725, 6: 100 }, wsStack: { 1: 102.705, 4: 99.725, 6: 100 },
+      wsInFront: { 1: 0, 4: 2, 6: 0 } }).hand;
+    expect(withWs.wsStack).toBeDefined();
+    const cut = truncateAt(withWs, 4);
+    expect("wsStack" in cut || "wsInFront" in cut || "wsDead" in cut).toBe(false);
+    // …which would otherwise read as hero's river bet "missing" from the preflop line
+    expect(lostActionFaults({ ...cut, wsStack: withWs.wsStack, wsInFront: withWs.wsInFront })).not.toEqual([]);
+    expect(lostActionFaults(cut)).toEqual([]);
+  });
+});

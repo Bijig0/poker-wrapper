@@ -130,8 +130,12 @@ export function truncateAt(hand: ParsedHand, upto: number): ParsedHand {
   const street = (act?.street ?? hand.street) as ParsedHand["street"];
   const boardLen = street === "flop" ? 3 : street === "turn" ? 4 : street === "river" ? 5 : 0;
   const money = moneyAt(hand, upto);
+  // THE TABLE'S CHIP COUNTS ARE THE EXPORT'S MOMENT, NOT THIS ONE (round 3): a row carrying wsStack / wsInFront (the
+  // wrapper never archives them; a live hand re-cut for a replay might) holds them for its LAST moment, and against
+  // the shorter line every seat would read as having lost an action. Dropped: the cut decision is read as archived.
+  const { wsStack: _ws, wsInFront: _wf, wsDead: _wd, ...rest } = hand;
   return {
-    ...hand,
+    ...rest,
     actions: hand.actions.slice(0, upto),
     street,
     board: hand.board.slice(0, boardLen),

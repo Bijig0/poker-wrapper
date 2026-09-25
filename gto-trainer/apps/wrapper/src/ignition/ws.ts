@@ -143,11 +143,61 @@ function noteAccount(seat: number | null, account: unknown): void {
   if (!start.has(seat)) start.set(seat, account + ((w.moneyIn as Map<number, number> | undefined)?.get(seat) ?? 0));
 }
 
+// ---- the chips as the table reports them -------------------------------------------------------------------
+/**
+ * EVERY SEAT'S CHIPS, AS THE WEBSOCKET REPORTS THEM (2026-09-25, round 3 of the input-mutation harness; Brady: "we
+ * should fix this"). The API's capture gate caught a lost villain action by comparing the table's POT with the line,
+ * with 0.6bb of slack — so a lost small-blind complete (0.5bb; 0.6 at the 5c stake) by a seat that then folded, or a
+ * lost call by a seat yet to act on the new street, could still be answered as if that seat had folded. The money is
+ * exact per seat: every blind and action frame carries the seat's `account` (its chips behind right after the frame)
+ * and the chips the frame put in (`bet` / `raise`, the same arithmetic applySelect uses for `committed`). Recorded
+ * here for the FRAME ITSELF — before the ghost guard and the dedupe decide whether it becomes an action — so a frame
+ * whose action the line lost still moves the chips. Exported per dealt seat as `wsStack` (chips behind now),
+ * `wsInFront` (this street's chips) and `wsDead` (a dead blind: chips that left the stack but are no bet), in BB
+ * (ignition/hand.ts); the API checks `startStacks − wsStack` against the chips each seat's captured actions put in,
+ * to the cent (utils/repairPostflopRotation lostActionFaults, "exact per-seat chips").
+ *
+ * A seat whose last money action the DOM backfill filed BEFORE any WebSocket frame said so is STALE (`wsStale`,
+ * reader.ts): its reported chips predate an action the line already holds, so it is left out of the export until
+ * its next frame — unknown is not a discrepancy. A returned uncalled bet (CO_CHIPTABLE_INFO returnBet) is not added
+ * back: it ends the betting, so no decision reads it, and the ledger stays "chips the seat's actions moved".
+ */
+function wsChips(seat: number | null, account: unknown, added: number, dead = 0): void {
+  if (seat === null || seat === undefined) return;
+  const w = ws();
+  const hasAccount = typeof account === "number" && Number.isFinite(account) && account >= 0;
+  // A REPEATED FRAME IS NOT MORE MONEY: chips cannot go in without the account dropping, so a money frame that reports
+  // the account this seat already has is the same frame again (recording 20260921_125219 carries every frame twice) —
+  // counted once. The account itself is idempotent; the chips in front would double.
+  if (added > 0 && hasAccount && (w.wsAccount as Map<number, number> | undefined)?.get(seat) === account) return;
+  if (added > 0) {
+    const f: Map<number, number> = (w.wsFront ??= new Map());
+    f.set(seat, (f.get(seat) ?? 0) + added);
+  }
+  if (dead > 0) {
+    const d: Map<number, number> = (w.wsDead ??= new Map());
+    d.set(seat, (d.get(seat) ?? 0) + dead);
+  }
+  if (hasAccount) {
+    (w.wsAccount ??= new Map<number, number>()).set(seat, account as number);
+    (w.wsStale as Set<number> | undefined)?.delete(seat);
+  }
+}
+
+/** The chips a CO_SELECT_INFO (or one batched slot) puts in front of the seat — applySelect's own arithmetic:
+ *  a raise ADDS `raise`, a call/bet adds `bet`, an all-in the larger of the two, a check or fold nothing. */
+export function chipsAdded(btn: number | null, bet: number, rz: number): number {
+  let verb = btn !== null && btn !== undefined ? BTN[btn] : undefined;
+  if (verb === undefined) verb = rz ? "raises to" : bet ? "calls" : "checks";
+  return verb === "raises to" ? rz : verb === "calls" ? bet : verb === "is ALL-IN" ? Math.max(bet, rz) : 0;
+}
+
 // ---- one player action ----------------------------------------------------------------------------------
 /** One player action, from a live CO_SELECT_INFO or one slot of a batched CO_SELECT_SPEED_INFO. `raise` is
  *  chips ADDED; unmapped btn codes are inferred from the amounts. `account` is the seat's chips behind after it. */
 export function applySelect(seat: number | null, btn: number | null, bet: number, rz: number, account: unknown = null): void {
   const w = ws();
+  wsChips(seat, account, chipsAdded(btn, bet, rz));   // the table's money, whatever becomes of the action below
   const dealtNow: number[] = w.dealt || [];
   const foldedNow: Set<number> = w.foldedSeats ?? new Set<number>();
   if (seat !== null && foldedNow.has(seat) && (w.domFolds ?? new Set()).has(seat) && (rz || bet)) {
@@ -379,6 +429,10 @@ export function beginHand(hid: string | null): void {
   w.committed = new Map();
   w.moneyIn = new Map();           // every chip each seat has put in this hand, all streets (noteAccount)
   w.startCents = new Map();        // each seat's stack as dealt, from its first account this hand
+  w.wsAccount = new Map();         // each seat's chips behind per its latest frame this hand (wsChips)
+  w.wsFront = new Map();           // each seat's chips in front this street, per its frames
+  w.wsDead = new Map();            // dead blinds: chips out of the stack that are no bet
+  w.wsStale = new Set<number>();   // seats whose last money action the DOM filed ahead of any frame
   w.actions = [];
   w.actSeen = new TupleSet();
   w.foldedSeats = new Set<number>();
@@ -451,7 +505,8 @@ export function onGameMsg(d: Record<string, any>): void {
       const seat = d.seat ?? null;
       com.set(seat, (com.get(seat) ?? 0) + bet);
       moneyIn(seat, bet + (Number(d.dead) || 0));     // a dead blind leaves the stack too, just not as a bet
-    }
+      wsChips(seat, d.account, bet, Number(d.dead) || 0);
+    } else wsChips(d.seat ?? null, d.account, 0);
     noteAccount(d.seat ?? null, d.account);
     const label = btn !== null ? BLIND_BTN[btn] : undefined;
     if (btn === 2 || btn === 4) actAdd(d.seat ?? null, btn === 2 ? "post-sb" : "post-bb", bet);
@@ -488,6 +543,7 @@ export function onGameMsg(d: Record<string, any>): void {
       w.board = names;
       w.maxBet = 0;
       w.committed = new Map();
+      w.wsFront = new Map();
       w.actSeen = new TupleSet();
       w.domGraceUntil = time() + 1.2;
       feedAdd(`— FLOP — ${names.join(" ")} — pot ${w.pot || "?"}`);
@@ -503,6 +559,7 @@ export function onGameMsg(d: Record<string, any>): void {
     const shown = b.filter((c) => c);
     w.maxBet = 0;
     w.committed = new Map();
+    w.wsFront = new Map();
     w.actSeen = new TupleSet();
     w.domGraceUntil = time() + 1.2;
     const street = pos === 4 ? "TURN" : "RIVER";

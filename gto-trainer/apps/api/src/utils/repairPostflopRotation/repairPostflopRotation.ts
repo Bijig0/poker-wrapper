@@ -344,6 +344,19 @@ export function captureFaults(hand: ParsedHand): string[] {
  *      and the BB betting the flop). A seat that is short and has NOT acted since may have folded without the fold
  *      being captured — the tap misses folds, the token builders pad them — so that is not flagged.
  * Tolerance 0.05bb: every amount is the same cents on both sides, rounded to 0.01bb.
+ *
+ *   0. EXACT PER-SEAT CHIPS (round 3, 2026-09-25; Brady: "we should fix this"). Rule 3's pot ledger needs 0.6bb of slack
+ *      (a returning player's dead small blind looks exactly like chips with no action), and a lost SB complete is 0.5bb —
+ *      0.6 at the 5c stake — so a lost complete by an SB who then folds, or a lost call by a seat that has not acted on
+ *      the new street, was answered as if that seat had folded (rounds 1-2 deferred items 5-7). The Ignition wrapper now
+ *      exports every dealt seat's money as its WebSocket reports it: `wsStack` (chips behind now), `wsInFront` (this
+ *      street), `wsDead` (a dead blind). For each seat: stack as dealt − chips behind − dead = the chips its RECORDED
+ *      actions put in (posts, blinds, raises / bets / all-ins as the street's total, calls as the top-up), and this
+ *      street's the same against `wsInFront` — to the cent, up to the export's rounding (0.01bb per amount on the WS's
+ *      own line; 0.1bb per amount on the level reconciler's, which reads the chips on screen). Any discrepancy is a
+ *      named fault, whether the seat folded later or not; MORE chips in the line than the table saw (an action filed
+ *      twice, a size misread) too. When the fields are there the pot ledger (3) is not consulted; without them (archived
+ *      rows, CoinPoker, a fake table) it stays the fallback.
  */
 export function lostActionFaults(hand: ParsedHand): string[] {
   const faults: string[] = [];
@@ -374,6 +387,10 @@ export function lostActionFaults(hand: ParsedHand): string[] {
   const folded = new Set(hand.actions.filter((a) => a.type === "fold").map(seatOf));
   const allIn = new Set(hand.actions.filter((a) => a.type === "all-in").map(seatOf));
   const r2 = (x: number) => Math.round(x * 100) / 100;
+
+  // 0. exact per-seat chips, when the table's own counts are in the export
+  const exact = !!((hand.wsStack && Object.keys(hand.wsStack).length) || (hand.wsInFront && Object.keys(hand.wsInFront).length));
+  if (exact) faults.push(...exactChipFaults(hand, per, street, folded, seatOf, pos));
 
   // 1. this round's chips against this round's captured actions
   const cur = per.get(street) ?? new Map<number, number>();
@@ -426,7 +443,7 @@ export function lostActionFaults(hand: ParsedHand): string[] {
   //    known to be broken — the 2026-09-20 socket-mixing session, CoinPoker 140706500001 (the dropped Pot-button
   //    bet), 140553400095 (a river bet missing before the BB's fold).
   const pot = Number(hand.currentNode?.pot ?? 0);
-  if (Number.isFinite(pot) && pot > 0) {
+  if (!exact && Number.isFinite(pot) && pot > 0) {
     let closed = 0;
     for (const [st, m] of per) if (order.indexOf(st) >= 0 && order.indexOf(st) < order.indexOf(street)) for (const v of m.values()) closed += v;
     // this round: what is known to be in front of each seat — the table's count or the captured actions, whichever is
@@ -446,6 +463,63 @@ export function lostActionFaults(hand: ParsedHand): string[] {
     }
   }
   return faults;
+}
+
+/** Rule 0 of lostActionFaults: each seat's money as the table reports it against the chips its captured actions put in. */
+function exactChipFaults(
+  hand: ParsedHand,
+  per: Map<string, Map<number, number>>,
+  street: string,
+  folded: Set<number>,
+  seatOf: (a: ParsedAction) => number,
+  pos: (s: number) => string,
+): string[] {
+  const out: string[] = [];
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  // the export's rounding, per amount: the WS's own line is the table's cents rounded to 0.01bb; the reconciler's line
+  // is the chips on screen, which Ignition shows to 0.1bb (hand 4919957671: a 5.745bb bet read as 5.7)
+  const unit = hand.lineSource === "reconciled" ? 0.05 : 0.005;
+  const amounts = (s: number, st?: string) =>
+    hand.actions.filter((a) => seatOf(a) === s && (st == null || a.street === st) && Number(a.amount ?? 0) > 0).length
+    + (hand.postIns ?? []).filter((p) => (p.hero ? hand.heroSeatId : p.seatId) === s && (st == null || st === "preflop") && (p.readAs === "pending" || p.readAs === "fold")).length;
+  const sbPost = Number(hand.actions.find((a) => a.type === "post-sb")?.amount ?? 0.5) || 0.5;
+  const seats = new Set<number>([
+    ...Object.keys(hand.wsStack ?? {}).map(Number),
+    ...Object.keys(hand.wsInFront ?? {}).map(Number),
+  ]);
+  for (const s of [...seats].sort((a, b) => a - b)) {
+    // this street: the table's chips in front against this street's captured actions
+    let off: number | null = null;
+    let where = "";
+    const front = hand.wsInFront?.[s];
+    if (front != null && Number.isFinite(front)) {
+      const d = front - (per.get(street)?.get(s) ?? 0);
+      if (Math.abs(d) > unit * amounts(s, street) + 1e-4) { off = d; where = `on the ${street}`; }
+    }
+    // the whole hand: dealt − behind − dead against every captured chip
+    const start = hand.startStacks?.[s];
+    const behind = hand.wsStack?.[s];
+    if (off === null && start != null && behind != null && Number.isFinite(start) && Number.isFinite(behind)) {
+      let recorded = 0;
+      for (const m of per.values()) recorded += m.get(s) ?? 0;
+      const d = start - behind - (Number(hand.wsDead?.[s]) || 0) - recorded;
+      if (Math.abs(d) > unit * amounts(s) + 0.005 + 1e-6) { off = d; where = street === "preflop" ? "on the preflop" : "before this street"; }
+    }
+    if (off === null) continue;
+    const x = r2(Math.abs(off));
+    if (off > 0) {
+      // WHAT was lost, where it can be said: the SB's complete (the gap is exactly the rest of the big blind over his post)
+      const pre = per.get("preflop")?.get(s) ?? 0;
+      const complete = pos(s) === "SB" && (where === "on the preflop" || where === "before this street")
+        && Math.abs(pre - sbPost) < 1e-6 && Math.abs(off - (1 - sbPost)) <= unit * 2 + 0.005;
+      const what = complete ? "a complete was lost on the preflop" : `an action that put chips in (a call, a bet or a raise) was lost ${where}`;
+      out.push(`${pos(s)} has ${x}bb fewer chips than the captured actions account for — ${what}` +
+        `${folded.has(s) ? ", and the line reads the seat as having folded out of it" : ""} (the table's own chip count, exact per seat)`);
+    } else {
+      out.push(`${pos(s)} has ${x}bb MORE chips than the captured actions account for — the line holds chips the table never saw ${where} (an action filed twice or a size misread; the table's own chip count, exact per seat)`);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

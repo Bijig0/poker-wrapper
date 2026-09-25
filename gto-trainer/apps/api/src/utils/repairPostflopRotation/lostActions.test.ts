@@ -237,3 +237,127 @@ describe("lostActionFaults — posted-in players", () => {
     expect(lostActionFaults(normalizeHand(raw).hand!)).toEqual([]);
   });
 });
+
+/**
+ * EXACT PER-SEAT CHIPS (round 3, 2026-09-25; rounds 1-2 deferred items 5-7). The Ignition wrapper exports each dealt
+ * seat's money as its WebSocket reports it — `wsStack` (behind now), `wsInFront` (this street), `wsDead` — and the gate
+ * checks stack as dealt − behind − dead against the chips each seat's captured actions put in, to the cent. The cases the
+ * pot ledger's 0.6bb slack could not see: a lost SB complete by a seat that then folds, a lost call by a seat yet to act
+ * on the new street when the pot reading is unreliable, and the 5c stake's 0.4bb blind.
+ */
+describe("lostActionFaults — 0. exact per-seat chips (the table's own counts)", () => {
+  /** the table's side of an export: every seat's dealt stack, what it has really put in (all streets / this street) */
+  const table = (start: Record<number, number>, spent: Record<number, number>, front: Record<number, number> = {}, dead: Record<number, number> = {}) => ({
+    startStacks: start,
+    wsStack: Object.fromEntries(Object.entries(start).map(([s, v]) => [s, Math.round((v - (spent[+s] ?? 0) - (dead[+s] ?? 0)) * 10000) / 10000])),
+    wsInFront: Object.fromEntries(Object.keys(start).map((s) => [s, front[+s] ?? 0])),
+    ...(Object.keys(dead).length ? { wsDead: dead } : {}),
+  });
+  const withTable = (h: ParsedHand, t: ReturnType<typeof table>, lineSource: "ws" | "reconciled" = "ws"): ParsedHand => ({ ...h, ...t, lineSource }) as ParsedHand;
+  const START = { 1: 100, 2: 100, 3: 100, 4: 100, 5: 100, 6: 100 };
+
+  // UTG, HJ, CO fold; hero BTN limps; the SB COMPLETES (lost); the BB raises to 4; hero calls; the SB folds. Flop: BB vs hero.
+  const lostComplete = [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "call", "preflop", 1, true),
+    act(2, "raise", "preflop", 4), act(6, "call", "preflop", 3, true), act(1, "fold", "preflop"), act(2, "check", "flop")];
+  const flopAfterComplete = hand({ actions: lostComplete, hero: 6, street: "flop", board: ["2c", "7d", "Ts"], pot: 9 });
+
+  it("a lost SB complete, then his fold: the pot ledger cannot see it (0.5bb is inside its slack) — the exact rule names it", () => {
+    expect(lostActionFaults(flopAfterComplete)).toEqual([]);   // the fallback, as before: silent
+    const f = lostActionFaults(withTable(flopAfterComplete, table(START, { 1: 1, 2: 4, 6: 4 })));
+    expect(f).toEqual(["SB has 0.5bb fewer chips than the captured actions account for — a complete was lost on the preflop, and the line reads the seat as having folded out of it (the table's own chip count, exact per seat)"]);
+    // …and it reaches the shared gate
+    expect(captureFaults(withTable(flopAfterComplete, table(START, { 1: 1, 2: 4, 6: 4 }))).some((x) => /SB has 0.5bb fewer chips .* a complete was lost/.test(x))).toBe(true);
+  });
+
+  it("the same hand with the complete captured is clean", () => {
+    const line = [...lostComplete.slice(0, 6), act(1, "call", "preflop", 0.5), ...lostComplete.slice(6)];
+    expect(lostActionFaults(withTable(hand({ actions: line, hero: 6, street: "flop", board: ["2c", "7d", "Ts"], pot: 9 }), table(START, { 1: 1, 2: 4, 6: 4 })))).toEqual([]);
+  });
+
+  it("on the SB's own street it is named there: the complete lost before hero's preflop decision", () => {
+    // hero BB, facing the BTN's limp and the SB's complete — the capture has only the limp
+    const pre = [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "call", "preflop", 1)];
+    const f = lostActionFaults(withTable(hand({ actions: pre, hero: 2 }), table(START, { 1: 1, 2: 1, 6: 1 }, { 1: 1, 2: 1, 6: 1 })));
+    expect(f).toEqual([expect.stringContaining("SB has 0.5bb fewer chips than the captured actions account for — a complete was lost on the preflop (")]);
+  });
+
+  // hero HJ opens 2.5, the CO calls (LOST), BTN and SB fold, the BB calls; the flop: BB checks, hero to act, CO yet to act
+  const lostCall = [...blinds, act(3, "fold", "preflop"), act(4, "raise", "preflop", 2.5, true), act(6, "fold", "preflop"),
+    act(1, "fold", "preflop"), act(2, "call", "preflop", 1.5), act(2, "check", "flop")];
+
+  it("a lost call by a seat yet to act on the flop, with no reliable pot reading: named, before this street", () => {
+    const h = hand({ actions: lostCall, hero: 4, street: "flop", board: ["Qd", "9h", "4c"], pot: 0 });
+    expect(lostActionFaults(h)).toEqual([]);   // no pot to read, the CO has not acted since: the old rules had nothing
+    const f = lostActionFaults(withTable(h, table(START, { 1: 0.5, 2: 2.5, 4: 2.5, 5: 2.5 })));
+    expect(f).toEqual(["CO has 2.5bb fewer chips than the captured actions account for — an action that put chips in (a call, a bet or a raise) was lost before this street (the table's own chip count, exact per seat)"]);
+  });
+
+  it("a villain's FLOP call dropped before hero's turn decision is named too", () => {
+    // preflop complete (the CO's call present); flop: BB checks, hero bets 3, the CO calls (LOST), the BB folds
+    const full = [...blinds, act(3, "fold", "preflop"), act(4, "raise", "preflop", 2.5, true), act(5, "call", "preflop", 2.5), act(6, "fold", "preflop"),
+      act(1, "fold", "preflop"), act(2, "call", "preflop", 1.5), act(2, "check", "flop"), act(4, "bet", "flop", 3, true), act(2, "fold", "flop")];
+    const h = hand({ actions: full, hero: 4, street: "turn", board: ["Qd", "9h", "4c", "2s"], pot: 0 });
+    const f = lostActionFaults(withTable(h, table(START, { 1: 0.5, 2: 2.5, 4: 5.5, 5: 5.5 })));
+    expect(f).toEqual([expect.stringContaining("CO has 3bb fewer chips than the captured actions account for — an action that put chips in (a call, a bet or a raise) was lost before this street")]);
+  });
+
+  it("a legitimate fold with exact chips is no fault — every seat, hero included", () => {
+    const line = [...lostCall.slice(0, 4), act(5, "fold", "preflop"), ...lostCall.slice(4)];
+    const h = hand({ actions: line, hero: 4, street: "flop", board: ["Qd", "9h", "4c"], pot: 5.5 });
+    expect(lostActionFaults(withTable(h, table(START, { 1: 0.5, 2: 2.5, 4: 2.5 })))).toEqual([]);
+  });
+
+  it("an all-in for less is its total: no fault", () => {
+    const short = { ...START, 4: 6 };
+    const line = [...blinds, act(3, "raise", "preflop", 2.5, true), act(4, "all-in", "preflop", 6), act(5, "fold", "preflop"), act(6, "fold", "preflop"),
+      act(1, "fold", "preflop"), act(2, "fold", "preflop"), act(3, "call", "preflop", 3.5, true)];
+    const h = hand({ actions: line, hero: 3, street: "flop", board: ["2c", "7d", "Ts"] });
+    expect(lostActionFaults(withTable(h, table(short, { 1: 0.5, 2: 1, 3: 6, 4: 6 })))).toEqual([]);
+  });
+
+  it("the 5c stake: the 0.4bb blind, and the 0.6bb complete that sat exactly on the pot ledger's slack", () => {
+    const five = [act(1, "post-sb", "preflop", 0.4), act(2, "post-bb", "preflop", 1), act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"),
+      act(6, "call", "preflop", 1, true), act(2, "raise", "preflop", 4), act(6, "call", "preflop", 3, true), act(1, "fold", "preflop"), act(2, "check", "flop")];
+    const h = hand({ actions: five, hero: 6, street: "flop", board: ["2c", "7d", "Ts"], pot: 9 });
+    expect(lostActionFaults(h)).toEqual([]);   // 0.6 missing, 0.6 of slack
+    expect(lostActionFaults(withTable(h, table(START, { 1: 1, 2: 4, 6: 4 })))).toEqual([
+      "SB has 0.6bb fewer chips than the captured actions account for — a complete was lost on the preflop, and the line reads the seat as having folded out of it (the table's own chip count, exact per seat)",
+    ]);
+    // the blind alone, folded: exact at 0.4
+    expect(lostActionFaults(withTable(h, table(START, { 1: 0.4, 2: 4, 6: 4 })))).toEqual([]);
+  });
+
+  it("MORE chips in the line than the table saw — a raise filed twice (recording 20260921_125219) — is a fault too", () => {
+    const line = [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "raise", "preflop", 2.5), act(6, "raise", "preflop", 5)];
+    const f = lostActionFaults(withTable(hand({ actions: line, hero: 2 }), table(START, { 1: 0.5, 2: 1, 6: 2.5 }, { 1: 0.5, 2: 1, 6: 2.5 })));
+    expect(f).toEqual(["BTN has 2.5bb MORE chips than the captured actions account for — the line holds chips the table never saw on the preflop (an action filed twice or a size misread; the table's own chip count, exact per seat)"]);
+  });
+
+  it("the reconciler's line is read to the 0.1bb the screen shows; the WS's own line to the cent", () => {
+    // a turn bet of 5.745bb (1149 cents at $1/$2) read off the screen as 5.7, called
+    const line = [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "fold", "preflop"),
+      act(1, "call", "preflop", 0.5), act(2, "check", "preflop"), act(1, "check", "flop"), act(2, "check", "flop"), act(1, "bet", "turn", 5.7), act(2, "call", "turn", 5.7, true), act(1, "check", "river")];
+    const h = hand({ actions: line, hero: 2, street: "river", board: ["2c", "7d", "Ts", "Kh", "3s"], pot: 13.49 });
+    const t = table(START, { 1: 6.745, 2: 6.745 });
+    expect(lostActionFaults(withTable(h, t, "reconciled"))).toEqual([]);
+    expect(lostActionFaults(withTable(h, t, "ws"))).toHaveLength(2);   // 0.045 off on a WS line is not rounding
+  });
+
+  it("a dead blind is chips out of the stack in no bet; a posted-in player yet to act holds his post", async () => {
+    const dead = hand({ actions: [...blinds, act(3, "fold", "preflop")], hero: 4 });
+    expect(lostActionFaults(withTable(dead, table(START, { 1: 0.5, 2: 1 }, { 1: 0.5, 2: 1 }, { 2: 0.5 })))).toEqual([]);
+    // without the dead money exported the same chips read as a lost half blind
+    expect(lostActionFaults(withTable(dead, table(START, { 1: 0.5, 2: 1.5 }, { 1: 0.5, 2: 1 })))).toEqual([expect.stringContaining("BB has 0.5bb fewer chips")]);
+    const { normalizeHand } = await import("../../feed/normalizeHand/normalizeHand");
+    const P = (seatId: number, type: string, amount?: number) => ({ seatId, hero: false, type, street: "preflop", ...(amount != null ? { amount } : {}) });
+    const raw = { handId: 1, clientHandId: "t", heroSeatId: 4, heroCards: ["Kd", "Qh"], board: [], street: "preflop",
+      actions: [P(1, "post-sb", 0.5), P(2, "post-bb", 1), P(5, "post", 1), P(3, "fold")],
+      liveSeats: [1, 2, 3, 4, 5, 6], committed: { 1: 0.5, 2: 1, 5: 1 }, potByStreet: {}, positions: SIX, lineSource: "ws",
+      ...table(START, { 1: 0.5, 2: 1, 5: 1 }, { 1: 0.5, 2: 1, 5: 1 }),
+      currentNode: { street: "preflop", toActSeatId: 4, toActIsHero: true, pot: 0, toCall: 1, legalActions: [], complete: false } };
+    const h = normalizeHand(raw).hand!;
+    expect(h.wsStack).toEqual({ 1: 99.5, 2: 99, 3: 100, 4: 100, 5: 99, 6: 100 });
+    expect(h.lineSource).toBe("ws");
+    expect(lostActionFaults(h)).toEqual([]);
+  });
+});

@@ -31,9 +31,18 @@
  *                    wrapper's {type:"post"}; his free option is a check, a call is the increment (utils/foldPostIns)
  *   undealt-seat     a labelled seat that was not dealt (sitting out): absent from liveSeats, no action, no start stack
  *   dropped-call     a villain's preflop call never reaches the export         → a refusal is the RIGHT answer
+ *   lost-sb-complete the small blind COMPLETES (a limped pot) and the complete never reaches the export; he folds
+ *                    later or plays on — the case the pot ledger's 0.6bb slack could not see (round 3)
+ *                                                                              → a refusal is the RIGHT answer
+ *   lost-flop-call   a villain's flop call never reaches the export (before a later hero decision)
+ *                                                                              → a refusal is the RIGHT answer
  *   dup-card         a board card equals one of hero's                          → a refusal is the RIGHT answer
  *   board-short      the flop export carries two cards                          → a refusal is the RIGHT answer
  *   unlabelled-seat  a villain who acted has no position label                  → a refusal is the RIGHT answer
+ *
+ * The lost-action operators drop the ACTION only: the chips stay truthful in the export (`committed`, `stacks`, and since
+ * round 3 the wrapper's exact per-seat WebSocket counts `wsStack` / `wsInFront`), because at a table the money moved —
+ * so the capture gate's exact per-seat rule (utils/repairPostflopRotation lostActionFaults) is what must catch them.
  *
  * Verdicts per decision: ok · cloud-gated (the AI piece, blocked here) · expected-refusal · FINDING (a refusal, a
  * throw, a zero-weight hero, or a slow local answer where an answer was due). A finding is reported with the SMALLEST
@@ -106,6 +115,10 @@ export interface GenOpts {
   seatsN?: number; shortSeat?: { pos: string; bb: number } | null; deepSeat?: { pos: string; bb: number } | null; deadSb?: boolean;
   limps?: number; oddOpen?: number | null; odd3bet?: number | null; jam?: boolean; heroDeviates?: boolean; bbCents?: number;
   postIn?: boolean; undealtSeat?: boolean;
+  /** the small blind (not hero) completes whenever the pot is unopened when he acts — so `lost-sb-complete` has one to drop */
+  sbCompletes?: boolean;
+  /** every seat facing a FLOP bet calls it (hero included) — so `lost-flop-call` has a villain call before a later hero decision */
+  flopCaller?: boolean;
 }
 
 const roundCents = (bb: number, bbCents: number): number => Math.round(Math.round(bb * bbCents) / bbCents * 100) / 100;
@@ -204,7 +217,8 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
         if ((type === "raise") && !canRaise) type = owe > 0.01 ? "call" : "check";
       } else if (street === 0) {
         const unopened = level <= 1;
-        if (unopened && limpsLeft > 0 && !isHero && byPos("BB")?.id !== id) { type = "call"; limpsLeft--; }
+        if (unopened && o.sbCompletes && !isHero && byPos("SB")?.id === id) type = "call";
+        else if (unopened && limpsLeft > 0 && !isHero && byPos("BB")?.id !== id) { type = "call"; limpsLeft--; }
         else if (unopened && byPos("BB")?.id === id && level <= 1) type = rng.chance(0.75) ? "check" : "raise";
         else if (unopened && freeOption) type = rng.chance(0.75) ? "check" : "raise";
         else if (unopened) type = rng.weighted([["fold", 62], ["raise", 33], ["call", isHero && o.heroDeviates ? 30 : 4]]);
@@ -225,6 +239,7 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
         const facing = owe > 0.01;
         if (!facing) type = rng.weighted([["check", 55], ["bet", 45]]);
         else type = rng.weighted([["fold", 40], ["call", 45], ["raise", 15]]);
+        if (o.flopCaller && street === 1 && facing) type = "call";
         if ((type === "bet" || type === "raise") && !canRaise) type = facing ? "call" : "check";
         if (type === "bet") { to = r2(potNow * rng.weighted([[0.33, 35], [0.5, 30], [0.75, 25], [1, 10]])); if (to < 1) to = 1; }
         if (type === "raise") { to = r2(Math.max(minTo, level * rng.weighted([[2.5, 40], [3, 40], [4, 20]]))); }
@@ -276,21 +291,35 @@ export function exportAt(hand: Hand, k: number, key: string, drift = 0, streetAt
   const stacks: Record<number, number> = {};
   for (const s of hand.seats) stacks[s.id] = Math.round((s.stack - (spent[s.id] ?? 0) + (drift ? (((s.id * 7 + cur.street * 3) % 5) - 2) * drift / 2 : 0)) * 100) / 100;
   const positions: Record<number, string> = {}; for (const s of hand.seats) positions[s.id] = s.pos;
+  // THE TABLE'S OWN CHIP COUNTS, AS THE WRAPPER EXPORTS THEM (round 3, wrapper ignition/ws.ts wsChips): chips behind for
+  // every dealt seat that has sent a frame this hand (a blind, a post, any action — a fold's frame too), chips in front
+  // this street for every dealt seat. Computed from the DEALT line, so an export operator that loses an action leaves
+  // the money truthful — exactly what the WebSocket does at a table. Exact: never drifted.
+  const dealtIds = hand.seats.filter((s) => s.id !== hand.undealt).map((s) => s.id);
+  const framed = new Set(upto.map((a) => a.seat));
+  const wsStack: Record<number, number> = {}, wsInFront: Record<number, number> = {};
+  for (const s of hand.seats) {
+    if (!dealtIds.includes(s.id)) continue;
+    if (framed.has(s.id)) wsStack[s.id] = Math.round((s.stack - (spent[s.id] ?? 0)) * 10000) / 10000;
+    wsInFront[s.id] = committed[s.id] ?? 0;
+  }
   return {
     handId: 1, clientHandId: key, bbCents: hand.bbCents, heroSeatId: hand.hero, heroCards: hand.heroCards,
     board: hand.board.slice(0, cur.street === 0 ? 0 : cur.street + 2), street: streetName,
     actions: upto.map((a) => ({ seatId: a.seat, hero: a.seat === hand.hero, type: a.type, street: STREETS[a.street], ...(a.amount != null ? { amount: a.amount } : {}) })),
     liveSeats: hand.seats.filter((s) => s.id !== hand.undealt).map((s) => s.id), committed, potByStreet, positions, stacks,
     startStacks: Object.fromEntries(hand.seats.filter((s) => s.id !== hand.undealt).map((s) => [s.id, s.stack])),
+    // MUTATION_WS_CHIPS=0: the export as it was before round 3 (no per-seat WS counts) — to measure what the old gate let through
+    ...(process.env.MUTATION_WS_CHIPS === "0" ? {} : { wsStack, wsInFront, lineSource: "ws" }),
     currentNode: { street: streetName, toActSeatId: hand.hero, toActIsHero: true, pot, toCall, legalActions: [], complete: false },
     heroFolded: false, heroWon: false, ended: false, sessionId: "mutation-harness", folded: [...folded],
   };
 }
 
 // ---- operators -------------------------------------------------------------------------------------------------------
-export const OPERATORS = ["nl5-rounding", "nl25-rounding", "stack-drift", "short-seat", "deep-seat", "thin-table", "dead-sb", "limps", "odd-open", "odd-3bet", "jam", "hero-deviates", "late-fold", "missed-fold", "post-in", "undealt-seat", "dropped-call", "dup-card", "board-short", "unlabelled-seat"] as const;
+export const OPERATORS = ["nl5-rounding", "nl25-rounding", "stack-drift", "short-seat", "deep-seat", "thin-table", "dead-sb", "limps", "odd-open", "odd-3bet", "jam", "hero-deviates", "late-fold", "missed-fold", "post-in", "undealt-seat", "dropped-call", "lost-sb-complete", "lost-flop-call", "dup-card", "board-short", "unlabelled-seat"] as const;
 export type Op = (typeof OPERATORS)[number];
-export const EXPECT_REFUSAL: ReadonlySet<string> = new Set(["dropped-call", "dup-card", "board-short", "unlabelled-seat"]);
+export const EXPECT_REFUSAL: ReadonlySet<string> = new Set(["dropped-call", "lost-sb-complete", "lost-flop-call", "dup-card", "board-short", "unlabelled-seat"]);
 
 /** Generator-level operators shape the deal; export-level ones corrupt the capture afterwards. */
 export function genOptsFor(ops: Op[], rng: Rng): GenOpts {
@@ -309,6 +338,8 @@ export function genOptsFor(ops: Op[], rng: Rng): GenOpts {
     if (op === "hero-deviates") o.heroDeviates = true;
     if (op === "post-in") o.postIn = true;
     if (op === "undealt-seat") o.undealtSeat = true;
+    if (op === "lost-sb-complete") o.sbCompletes = true;
+    if (op === "lost-flop-call") o.flopCaller = true;
   }
   return o;
 }
@@ -317,7 +348,7 @@ export function mutateExport(exp: any, ops: Op[], rng: Rng): any {
   // the line's own defects first, then the labels and cards read off it: `unlabelled-seat` means "a villain who
   // ACTED has no label" — applied before `missed-fold` it could pick the seat whose only action the fold op then
   // removed, leaving a silent unlabelled seat that corrupts nothing (seeds 4329/4696/5265, a harness artefact)
-  const ORDER: Op[] = ["late-fold", "missed-fold", "dropped-call", "unlabelled-seat", "dup-card", "board-short"];
+  const ORDER: Op[] = ["late-fold", "missed-fold", "dropped-call", "lost-sb-complete", "lost-flop-call", "unlabelled-seat", "dup-card", "board-short"];
   ops = [...ops].sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
   for (const op of ops) {
     if (op === "late-fold") {
@@ -333,6 +364,17 @@ export function mutateExport(exp: any, ops: Op[], rng: Rng): any {
     }
     if (op === "dropped-call") {
       const idx = e.actions.findIndex((a: any) => a.type === "call" && !a.hero && a.street === "preflop");
+      if (idx >= 0) e.actions.splice(idx, 1);
+    }
+    if (op === "lost-sb-complete") {
+      // the SB's COMPLETE: his preflop call while the pot was unopened (his round total to 1bb) — the chips stay truthful
+      const sb = Number(Object.entries(e.positions).find(([, p]) => p === "SB")?.[0]);
+      const idx = e.actions.findIndex((a: any) => a.seatId === sb && !a.hero && a.street === "preflop" && a.type === "call"
+        && !e.actions.slice(0, e.actions.indexOf(a)).some((b: any) => b.street === "preflop" && (b.type === "raise" || b.type === "all-in")));
+      if (idx >= 0) e.actions.splice(idx, 1);
+    }
+    if (op === "lost-flop-call") {
+      const idx = e.actions.findIndex((a: any) => a.type === "call" && !a.hero && a.street === "flop");
       if (idx >= 0) e.actions.splice(idx, 1);
     }
     if (op === "dup-card" && e.board.length) e.board[0] = e.heroCards[0];

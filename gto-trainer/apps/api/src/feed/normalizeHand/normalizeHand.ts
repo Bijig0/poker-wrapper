@@ -144,6 +144,22 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     }
   }
 
+  // THE TABLE'S OWN CHIP COUNTS PER SEAT (optional; see ParsedHand.wsStack): same forgiving rule as startStacks — a
+  // malformed entry is dropped, a map with a non-seat key is dropped whole, and absent stays absent (never zero).
+  const seatMoney = (v: unknown): Record<number, number> | undefined => {
+    if (!isRecord(v) || !Object.keys(v).every((k) => /^\d+$/.test(k))) return undefined;
+    let out: Record<number, number> | undefined;
+    for (const [k, x] of Object.entries(v)) {
+      const n = Number(x);
+      if (x != null && Number.isFinite(n) && n >= 0) (out ??= {})[Number(k)] = n;
+    }
+    return out;
+  };
+  const wsStack = seatMoney(input.wsStack);
+  const wsInFront = seatMoney(input.wsInFront);
+  const wsDead = seatMoney(input.wsDead);
+  const lineSource = input.lineSource === "ws" || input.lineSource === "reconciled" ? input.lineSource : undefined;
+
   let result: { text: string } | undefined;
   if (input.result != null) {
     if (!isRecord(input.result) || typeof input.result.text !== "string") {
@@ -198,6 +214,10 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     positions,
     ...(stacks ? { stacks } : {}),
     ...(startStacks ? { startStacks } : {}),
+    ...(wsStack ? { wsStack } : {}),
+    ...(wsInFront ? { wsInFront } : {}),
+    ...(wsDead ? { wsDead } : {}),
+    ...(lineSource ? { lineSource } : {}),
     ...(result ? { result } : {}),
     currentNode: {
       street: nodeStreet,

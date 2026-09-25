@@ -69,6 +69,12 @@ function archiveHandLocked(): void {
     const h = handState();
     if (!h || !h.actions.length) return;
     if (h.handId === S.lastArchived.no) return;
+    // THE WEBSOCKET CHIP COUNTS ARE A DECISION'S, NOT A ROW'S (round 3): at the end of the hand they say what every
+    // seat had left, and a replay that cut the row back to one of its decisions would read them against a shorter
+    // line — every seat "short" (the end-of-hand-money trap, API utils/archivedHand). The row keeps startStacks.
+    delete h.wsStack;
+    delete h.wsInFront;
+    delete h.wsDead;
     // YOUR HANDS ONLY: a hand hero was not dealt into is not hand history
     const live: number[] = h.liveSeats && h.liveSeats.length ? h.liveSeats : [h.heroSeatId];
     if (S.ws.heroDealt === false || !live.includes(h.heroSeatId)) {

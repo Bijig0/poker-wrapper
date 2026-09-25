@@ -1232,6 +1232,8 @@ export async function faketableLoad(spec: Record<string, any>): Promise<Record<s
     potCents: cents(spec.potBB ?? null),
     heroFolded: false, handOver: false, endedSince: null,
     actSeen: new TupleSet(), foldedSeats: new Set(), domFolds: new Set(), foldTicks: new Map(),
+    // an authored state has no WebSocket money: nothing of the last real hand's may be exported with it
+    wsAccount: new Map(), wsFront: new Map(), wsDead: new Map(), wsStale: new Set(),
     domGraceUntil: time() + 1e9,
   });
   S.actionGraceUntil = time() + 1e9;

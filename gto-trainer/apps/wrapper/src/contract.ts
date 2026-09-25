@@ -71,6 +71,13 @@ export const Hand = obj({
   stacks: z.record(z.string(), z.number().nullable()).nullable(), currentNode: CurrentNode,
   /** each dealt seat's stack as dealt (bb), from the table's own account — present once the seat has acted */
   startStacks: z.record(z.string(), z.number()).optional(),
+  /** each dealt seat's chips behind NOW (bb, 4 dp), from the WebSocket's own account — once the WS has reported the
+   *  hand; a seat whose money the DOM filed ahead of any frame is left out until its next frame (round 3) */
+  wsStack: z.record(z.string(), z.number()).optional(),
+  /** each dealt seat's chips in front THIS STREET (bb, 4 dp), from the WebSocket frames — same coverage as wsStack */
+  wsInFront: z.record(z.string(), z.number()).optional(),
+  /** a dead blind a seat posted (bb): out of its stack, in no bet */
+  wsDead: z.record(z.string(), z.number()).optional(),
   heroFolded: z.boolean(), heroWon: z.boolean(), ended: z.boolean(),
 });
 

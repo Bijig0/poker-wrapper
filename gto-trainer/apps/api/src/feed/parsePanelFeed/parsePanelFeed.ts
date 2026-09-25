@@ -99,6 +99,16 @@ export interface ParsedHand {
    *  `stacks` can only estimate (utils/archivedHand.startStacksOf). Exported by the wrapper since 2026-09-24 for every
    *  seat that has acted in the hand; live, the API reads those seats' money from it (utils/archivedHand.withStartStacks). */
   startStacks?: Record<number, number>;
+  /** EVERY SEAT'S CHIPS AS THE TABLE'S OWN FEED REPORTS THEM (Ignition WebSocket, round 3 2026-09-25; live exports only,
+   *  never archived rows): chips behind NOW, chips in front THIS STREET, and a dead blind posted (bb). With startStacks
+   *  they let the capture gate check each seat's captured line against its money to the cent
+   *  (utils/repairPostflopRotation.lostActionFaults, exact per-seat chips). Absent = unknown, never zero. */
+  wsStack?: Record<number, number>;
+  wsInFront?: Record<number, number>;
+  wsDead?: Record<number, number>;
+  /** Whose betting line `actions` is (wrapper CONTRACT §1c): the WebSocket's own ("ws", amounts exact to the cent) or the
+   *  level reconciler's off the chips on screen ("reconciled", amounts to the 0.1bb the screen shows). */
+  lineSource?: "ws" | "reconciled";
   result?: { text: string };
   currentNode: ParsedNode;
   ended: boolean;

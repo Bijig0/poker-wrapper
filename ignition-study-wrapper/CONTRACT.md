@@ -40,11 +40,15 @@ defaults). Invariants the wrapper guarantees at the export boundary:
 | `board` | string[] | same card rules; 0/3/4/5 entries |
 | `street` | `"preflop"\|"flop"\|"turn"\|"river"` | derived from board length |
 | `actions` | ParsedAction[] | in true action order, blinds included |
-| `actions[].type` | `post-sb\|post-bb\|fold\|check\|call\|bet\|raise\|all-in` | |
+| `actions[].type` | `post-sb\|post-bb\|post\|fold\|check\|call\|bet\|raise\|all-in` | `post` = a live blind POSTED IN out of turn by a new/returning player (Ignition btn 8); the API folds it into the poster's own next action (`utils/foldPostIns`) |
 | `actions[].amount` | number (BB) | **raise/bet = the seat's round total** ("raises to"), call = the top-up; omitted until the BB scale is known |
 | `positions` | `{seatId: pos}` | gto-trainer vocabulary only: `UTG/UTG1/UTG2/LJ/HJ/CO/BTN/SB/BB` — short tables fill **button-backwards** (5-handed = HJ CO BTN SB BB) |
 | `stacks` | `{seatId: bb}` \| absent | from DOM labels; trusted only with an explicit "BB" suffix or a known blind size |
-| `committed` | `{seatId: bb}` | this betting round |
+| `committed` | `{seatId: bb}` | this betting round (the reconciler's ledger when `lineSource` is `reconciled`) |
+| `startStacks` | `{seatId: bb}` \| absent | each dealt seat's stack AS DEALT, off the table's own WebSocket `account` on its first frame this hand plus what it had put in by then; present once the seat has sent a frame. Archived with the row |
+| `wsStack` | `{seatId: bb}` \| absent | each dealt seat's chips behind NOW as the WebSocket reports them (its latest frame's `account`), to 4 decimals of a BB — exact at every Ignition stake. Present once the WS has reported this hand (a blind frame at least); a seat whose money the DOM backfill filed ahead of any frame is left out until its next frame. A returned uncalled bet is not added back. **Live only, never archived** |
+| `wsInFront` | `{seatId: bb}` \| absent | each dealt seat's chips in front THIS STREET per its WebSocket frames (0 for a seat that has put nothing in), same coverage as `wsStack`; counted from the frames themselves, before the dedupe / ghost guard decide whether a frame becomes an action, so a lost action still moves the chips |
+| `wsDead` | `{seatId: bb}` \| absent | a dead blind the seat posted (CO_BLIND_INFO `dead`): out of its stack, in no bet |
 | `currentNode` | node | `toActSeatId`: hero when ANY of the three turn signals says so (§1b); `pot`/`toCall` in BB |
 | `ended` | boolean | hero folded ⇒ true |
 | `buttonsUp` | boolean | the client's turn buttons (with an amount) are on screen right now |
@@ -54,6 +58,14 @@ defaults). Invariants the wrapper guarantees at the export boundary:
 | `lineSource` | `ws\|reconciled` | whose betting line `actions` is (§1c) |
 | `lineUncertain` | string \| null | set while a reconciler fault is LIVE on this street (§1c); the poller passes it to the panel as `uncertain` and auto-execute holds — a pause, re-tested every tick, that lifts itself |
 | `lineNote` | string \| null | informational: what the reconciler changed when its line was taken |
+
+**Exact per-seat chips (round 3, 2026-09-25).** For every seat `wsStack` covers, `startStacks − wsStack − wsDead`
+must equal the chips the seat's exported actions put in (posts, raises, bets and all-ins as the street's total, calls
+as the top-up), and `wsInFront` the same for the current street. The API's capture gate
+(`utils/repairPostflopRotation.lostActionFaults`) refuses a decision where a seat's money disagrees with its line —
+to the cent on the WebSocket's own line (±0.005bb per amount, the export's rounding), to 0.05bb per amount on the
+reconciler's (the screen shows chips to 0.1bb) — and names the seat and the missing (or phantom) chips. Exports
+without `wsStack` (archived rows, CoinPoker, fake tables) fall back to the table-pot ledger with its 0.6bb slack.
 
 ### 1a2. Several tables (2026-09-19)
 

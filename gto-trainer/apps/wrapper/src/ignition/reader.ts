@@ -349,6 +349,9 @@ export async function feedTick(): Promise<void> {
       const com: Map<any, number> = w.committed || new Map();
       const topC = w.maxBet ?? 0;
       if (totalC <= (com.get(num) || 0)) continue;
+      // money no WebSocket frame has reported yet: the seat's WS chips (ws.ts wsChips) predate this action until its
+      // next frame, so the export leaves them out rather than contradict the line (round 3, exact per-seat chips)
+      (w.wsStale ??= new Set<number>()).add(num);
       if ((potVal(cs.stack ?? null) || 0) === 0) {
         actAdd(num, "all-in", totalC, streetDom);
         feedAdd(`Seat ${num} is ALL-IN (${cs.bet})`);

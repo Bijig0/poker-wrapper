@@ -69,6 +69,11 @@ const CASES: { seed: number; ops: Op[]; cls: string; refusals?: boolean }[] = [
   { seed: 30764, ops: ["dropped-call", "post-in", "nl5-rounding"], cls: "the same at 5c (answered-corrupt-capture)", refusals: true },
   { seed: 22, ops: ["undealt-seat"], cls: "stack behind: a sitting-out label's stack set the effective depth (solver-input-mismatch)" },
   { seed: 18287, ops: ["short-seat"], cls: "the pinned chart cannot hold a fifth entrant after hero's squeeze; the flop re-picked a chart where hero never squeezes (hero-zero-weight)" },
+  // round 3: the exact per-seat chip rule (utils/repairPostflopRotation lostActionFaults rule 0, the wrapper's wsStack /
+  // wsInFront). Without the counts (MUTATION_WS_CHIPS=0) seed 1067's flop, turn and river were ANSWERED: the SB's lost
+  // complete, then his preflop fold to the BB's raise — 0.5bb, inside the pot ledger's 0.6bb slack
+  { seed: 1067, ops: ["lost-sb-complete"], cls: "the SB's lost complete, then his preflop fold: answered on every later street by the pot ledger (answered-corrupt-capture)", refusals: true },
+  { seed: 30, ops: ["lost-flop-call"], cls: "a villain's flop call lost before hero's turn and river decisions", refusals: true },
 ];
 
 describe("input-mutation fixtures (one per class fixed 2026-09-25)", () => {

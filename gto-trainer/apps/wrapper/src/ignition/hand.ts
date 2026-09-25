@@ -288,6 +288,23 @@ export function handStateIgnition(): Record<string, any> | null {
     const v = toBb(c);
     if (v !== null && dealt.includes(s)) startStacks.set(s, v);
   }
+  // EVERY DEALT SEAT'S CHIPS AS THE WEBSOCKET REPORTS THEM (round 3, ws.ts wsChips): chips behind now, chips in front
+  // this street, dead blinds — to 4 decimals of a BB, exact at every Ignition stake. Only once the WS has reported
+  // this hand (a blind frame at least): a DOM-only reading has no table money to offer, and zeros would be a claim.
+  // A seat the DOM filed money for ahead of any frame is left out (`wsStale`). Never in fake-table mode (no frames).
+  const wsStack = new Map<number, number>(), wsInFront = new Map<number, number>(), wsDead = new Map<number, number>();
+  const acct: Map<number, number> | undefined = w.wsAccount;
+  if (!S.fakeMode && scaled && acct && acct.size) {
+    const stale: Set<number> = w.wsStale ?? new Set<number>();
+    const bb4 = (c: number) => pyRound(c / bb, 4);
+    for (const s of sortedNums(dealt)) {
+      if (stale.has(s)) continue;
+      if (acct.has(s)) wsStack.set(s, bb4(acct.get(s)!));
+      wsInFront.set(s, bb4((w.wsFront as Map<number, number> | undefined)?.get(s) ?? 0));
+      const dead = (w.wsDead as Map<number, number> | undefined)?.get(s) ?? 0;
+      if (dead > 0) wsDead.set(s, bb4(dead));
+    }
+  }
   let heroCards: string[] = w.heroCards || [];
   if (!heroCards.length && S.feedPrev.heroCards) heroCards = splitWs(String(S.feedPrev.heroCards));
   heroCards = heroCards.map(short);
@@ -336,6 +353,9 @@ export function handStateIgnition(): Record<string, any> | null {
     positions,
     stacks: stacks.size ? stacks : null,
     ...(startStacks.size ? { startStacks } : {}),
+    ...(wsStack.size ? { wsStack } : {}),
+    ...(wsInFront.size ? { wsInFront } : {}),
+    ...(wsDead.size ? { wsDead } : {}),
     currentNode: {
       street,
       toActSeatId: actionOn,
