@@ -1,7 +1,8 @@
 import { existsSync, appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { expectedChartIds, isBoxGrid, REPO as REPO_ROOT } from "./ledger";
 import { join } from "node:path";
-import { DATA_DIR, loadLedger, evaluate } from "./ledger";
+import { loadLedger, evaluate } from "./ledger";
+import { jobsDir } from "./storePaths";
 import { jobs, HRC_API_ZENBOOK, BASH, type JobRow } from "./jobs";
 import { isBackgroundOwner, backgroundLockStatus } from "./backgroundLock";
 
@@ -50,7 +51,7 @@ const RDP_IDLE_MIN = 10;              // move an RDP session to the console only
 const RESTART_COOLDOWN_MS = 30 * 60_000;
 const MAX_AUTO_REQUEUE = 8;
 const REQUEUE_WINDOW_MS = 48 * 3600_000;
-const LOG_PATH = join(DATA_DIR, "jobs", "box_keeper.log");
+const LOG_PATH = join(jobsDir(), "box_keeper.log");
 
 interface Box { label: string; host: string }
 /** A Linux HRC box (hetzner kit, bridge driver): HRC as a systemd unit, one template hand open, a shard runner on `plan`. */
@@ -231,7 +232,7 @@ class BoxKeeper {
     // written, and sibling runs died on "unzip failed" / "suspiciously small tree (0 nodes)").
     // record() is read-modify-write on progress.json too, so the loser's completions are erased.
     if (!isBackgroundOwner()) { this.log("keeper", "NOT started: another API process owns the background work (see data/background.lock)"); return; }
-    mkdirSync(join(DATA_DIR, "jobs"), { recursive: true });
+    mkdirSync(jobsDir(), { recursive: true });
     this.log("keeper", `started: tick ${TICK_MS / 60000} min, stall ${STALL_MIN} min (linux ${LINUX_STALL_MIN} min or ${LINUX_QUIET_TICKS} quiet ticks), rdp idle ${RDP_IDLE_MIN} min, max ${MAX_AUTO_REQUEUE} auto re-queues`);
     setTimeout(() => void this.tick(), 20_000);
     // a rejected tick must not become an unhandled rejection: see services/jobs.ts start()
@@ -566,7 +567,7 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
     // tick reported the same cumulative list again and again - "120 chart(s) pulled + parsed: ign25_3maxasym2ci_..."
     // every 10 min for a day, none of it new, which is exactly the line you scan for when you want to know whether a
     // pull is still moving. Remember how far we have read (on disk, because this worker restarts) and report the tail.
-    const markPath = join(DATA_DIR, "jobs", "linux_pull.offset");
+    const markPath = join(jobsDir(), "linux_pull.offset");
     try {
       const size = statSync(logPath).size;
       let from = 0;
@@ -584,7 +585,7 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
       // children, no log) — give it a console through cmd.exe exactly like jobs.ts launches its steps. pull_linux.sh is
       // single-flight (lock dir), so a pull that is still parsing is not doubled.
       const win = (p: string) => p.replace(/\//g, "\\");
-      const cmdFile = join(DATA_DIR, "jobs", "linux_pull.cmd");
+      const cmdFile = join(jobsDir(), "linux_pull.cmd");
       writeFileSync(cmdFile, `@echo off\r\ncd /d "${win(HRC_API_ZENBOOK)}"\r\n"${win(BASH)}" hetzner/pull_linux.sh >> "${win(logPath)}" 2>&1\r\n`);
       Bun.spawn(["powershell", "-NoProfile", "-Command",
         `Start-Process -WindowStyle Hidden -FilePath "$env:SystemRoot\\System32\\cmd.exe" -ArgumentList '/c','"${win(cmdFile)}"'`],

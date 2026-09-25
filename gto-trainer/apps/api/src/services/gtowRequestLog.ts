@@ -18,6 +18,7 @@
  */
 import { timed } from "./answerTrace";
 import { countRequest, currentRequestScope } from "./requestScope";
+import { gtowRequestsPath } from "./storePaths";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -61,7 +62,7 @@ class GtowRequestLog {
   private cache: { mtimeMs: number; size: number; rows: GtowRequestRow[] } | null = null;
 
   constructor(path?: string) {
-    this.path = path ?? join(import.meta.dir, "..", "..", "data", "gtow_requests.jsonl");
+    this.path = path ?? gtowRequestsPath();
     const argv1 = (process.argv[1] ?? "").replace(/\\/g, "/");
     this.origin = process.env.GTOW_REQUEST_ORIGIN
       ?? (/(^|\/)index\.ts$/.test(argv1) ? "api" : argv1.split("/").pop()?.replace(/\.ts$/, "") || "unknown");

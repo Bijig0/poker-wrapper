@@ -13,8 +13,8 @@
  * truth; the API is the only writer). Served on /tasks in the dashboard.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { DATA_DIR } from "./ledger";
+import { dirname } from "node:path";
+import { tasksPath } from "./storePaths";
 
 export type TaskStatus = "idea" | "ready" | "active" | "waiting" | "done";
 export const STATUSES: TaskStatus[] = ["idea", "ready", "active", "waiting", "done"];
@@ -40,7 +40,7 @@ export interface Task {
   updatedAt: number;
 }
 
-const PATH = join(DATA_DIR, "tasks.json");
+const PATH = tasksPath();
 
 export function loadTasks(): Task[] {
   if (!existsSync(PATH)) return [];
@@ -53,7 +53,7 @@ export function loadTasks(): Task[] {
 }
 
 function save(tasks: Task[]): void {
-  mkdirSync(DATA_DIR, { recursive: true });
+  mkdirSync(dirname(PATH), { recursive: true });
   writeFileSync(PATH, JSON.stringify({ tasks: tasks.sort((a, b) => a.order - b.order) }, null, 2));
 }
 

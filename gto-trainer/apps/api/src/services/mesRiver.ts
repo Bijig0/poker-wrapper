@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { pickWeightedAction } from "../utils/pickWeightedAction/pickWeightedAction";
 import type { MesActionFreq, MesPostflopHit } from "./mesPostflop";
+import { mesRiverCacheDir } from "./storePaths";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..", "..");
 const TREE_DIRS = [
@@ -26,7 +27,7 @@ const TREE_DIRS = [
 ].filter((x): x is string => !!x);
 const EXTRACT = process.env.MES_EXTRACT_BIN ??
   join(REPO, "analysis", "pipeline", "solve", "compare", "target", "release", process.platform === "win32" ? "extract.exe" : "extract");
-const CACHE_DIR = join(import.meta.dir, "..", "..", "data", "mes_river_cache");
+const CACHE_DIR = mesRiverCacheDir();
 
 export interface RiverArgs {
   family: string; board: string; heroPlayer: number; holesHint?: string[];

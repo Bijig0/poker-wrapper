@@ -1,13 +1,9 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { sessionsDbPath } from "./storePaths";
 
-// Same location rule as routes/dashboard.ts HANDS_DB, computed here rather than
-// imported: dashboard.ts imports this module, and the circular import left
-// HANDS_DB undefined at init (the API died on `dirname(undefined)`).
-const HANDS_DB =
-  process.env.HANDS_DB_PATH ??
-  join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "data", "hands.db");
+// the wrapper's sessions.sqlite beside its hands.db, through the one data root (storePaths.ts); a leaf import,
+// so the dashboard.ts <-> sessionsStore.ts cycle that once left HANDS_DB undefined at init cannot recur
 
 /**
  * Read side of the wrapper's DECLARED sessions (ignition-study-wrapper/
@@ -31,7 +27,7 @@ export interface DeclaredSession {
   summary: any;
 }
 
-const PATH = process.env.SESSIONS_DB_PATH ?? join(dirname(HANDS_DB), "sessions.sqlite");
+const PATH = sessionsDbPath();
 
 const parse = (x: string | null) => { try { return x ? JSON.parse(x) : null; } catch { return null; } };
 const rowOf = (r: any): DeclaredSession => ({

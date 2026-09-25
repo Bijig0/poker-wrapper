@@ -1,6 +1,7 @@
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { Hono } from "hono";
+import { exitLogPath } from "./src/services/storePaths";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import solverRoutes from "./src/routes/solver";
@@ -157,7 +158,8 @@ console.log(`🃏 Poker GTO Bot API starting on port ${port}...`);
 // next statement runs - and it records the one fact that splits the two possible stories: if `exit` fires we
 // died from inside (with the stack of whoever called it), and if the log simply stops at a heartbeat then
 // something outside killed the process, which is a different hunt entirely.
-const deathLog = nodePath.join(import.meta.dir, "data", "jobs", "exit_reason.log");
+const deathLog = exitLogPath();
+try { nodeFs.mkdirSync(nodePath.dirname(deathLog), { recursive: true }); } catch { /* the recorder never blocks boot */ }
 const say = (m: string) => {
   try {
     // a heartbeat every 20 s is 15 KB an hour: keep the last few days, never let a diagnostic fill the disk

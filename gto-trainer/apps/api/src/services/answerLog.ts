@@ -2,7 +2,8 @@ import { Database } from "bun:sqlite";
 import type { PathRow } from "./chainPath";
 import { mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { answersDbPath } from "./storePaths";
 
 /**
  * Persistent log of every study answer the poller pushed (and every solve
@@ -322,7 +323,7 @@ class AnswerLog {
    * env to a temp file BEFORE importing the services.
    */
   constructor(path?: string) {
-    this.path = path ?? process.env.ANSWERS_DB_PATH ?? join(import.meta.dir, "..", "..", "data", "answers.sqlite");
+    this.path = path ?? answersDbPath();
     assertTestSafePath(this.path);
   }
 

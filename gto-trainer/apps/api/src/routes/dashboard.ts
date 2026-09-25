@@ -22,6 +22,7 @@ import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi, DEFAULT_TREE_RAKE, type CustomTreeInput } from "../services/gtowApi";
 import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
 import { REPO } from "../services/ledger";
+import { handsDbPath, wrapperDebugDir } from "../services/storePaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -80,9 +81,7 @@ import { buildAnswerText } from "../feed/buildAnswerText/buildAnswerText";
  * cached by rowid for the life of the process.
  */
 
-export const HANDS_DB =
-  process.env.HANDS_DB_PATH ??
-  join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "data", "hands.db");
+export const HANDS_DB = handsDbPath();
 const SELF = () => `http://localhost:${process.env.PORT || 2000}`;
 /** Gap that splits two hands into different sessions. */
 export const SESSION_GAP_MS = 45 * 60_000;
@@ -2006,7 +2005,7 @@ app.get("/solve-compare", (c) => {
 
 // ------------------------------------------------------------ declared sessions
 
-const DEBUG_DIR_FOR_SESSIONS = process.env.IGNITION_DEBUG_DIR ?? join(HANDS_DB, "..", "..", "debug");
+const DEBUG_DIR_FOR_SESSIONS = wrapperDebugDir();
 
 /** Hands stamped with a declared session id → their enriched rows. */
 function handsOfSession(all: Enriched[], id: string): Enriched[] {

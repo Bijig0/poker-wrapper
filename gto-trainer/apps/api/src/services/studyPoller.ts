@@ -7,7 +7,8 @@ import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
 import { drawRoll, fmtRoll, rollDecision } from "./rollDecision";
 import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
+import { pollerEventsPath } from "./storePaths";
 import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
@@ -25,11 +26,11 @@ export interface ChainBanner {
  * read afterwards — the ledger showed GTO Wizard itself answering in 2 s. data/jobs/poller-events.jsonl: time,
  * panel, how long the /fast-solver call took, and the exact outcome or error text.
  */
-const POLLER_EVENTS = join(import.meta.dir, "..", "..", "data", "jobs", "poller-events.jsonl");
+const POLLER_EVENTS = pollerEventsPath();
 function pollerEvent(row: Record<string, unknown>): void {
   if (process.env.NODE_ENV === "test") return;   // unit tests' fake pollers must not fill the real log
   try {
-    mkdirSync(join(import.meta.dir, "..", "..", "data", "jobs"), { recursive: true });
+    mkdirSync(dirname(POLLER_EVENTS), { recursive: true });
     appendFileSync(POLLER_EVENTS, JSON.stringify({ ts: Date.now(), ...row }) + "\n");
   } catch { /* the log must never cost an answer */ }
 }

@@ -21,10 +21,11 @@
  * whose parse cleanup (`rm -f <solutions>/<id>.json.gz ...`) landed inside the other's run.
  */
 import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { DATA_DIR } from "./ledger";
+import { dirname } from "node:path";
+import { backgroundLockPath } from "./storePaths";
 
-const LOCK_PATH = process.env.API_BACKGROUND_LOCK ?? join(DATA_DIR, "background.lock");
+// in the data root, so every API process on this machine (main checkout or a worktree) contends for ONE lock
+const LOCK_PATH = backgroundLockPath();
 /** How often a demoted instance re-checks whether the owner is gone. */
 const RETRY_MS = 60_000;
 /** How often the owner restamps the file, so `status` can show the lock is live and not abandoned. */
@@ -100,7 +101,7 @@ function writeOurs(): boolean {
 
 /** One acquisition attempt. Returns true if this process now owns the background work. */
 function tryAcquire(): boolean {
-  mkdirSync(DATA_DIR, { recursive: true });
+  mkdirSync(dirname(LOCK_PATH), { recursive: true });
   const cur = readLock();
   if (cur && cur.pid !== process.pid) {
     if (aliveBun(cur.pid)) { heldBy = cur; lastNote = `background work is owned by pid ${cur.pid} (since ${new Date(cur.since).toISOString().slice(0, 19)})`; return false; }

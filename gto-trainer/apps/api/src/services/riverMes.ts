@@ -53,12 +53,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
+import { riverMesConfigPath, riverMesDbPath } from "./storePaths";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..", "..");
 const DATA = join(import.meta.dir, "..", "..", "data");
 const LOCK_PATH = join(DATA, "river_lock.json");
-const CONFIG_PATH = join(DATA, "river_mes_config.json");
-const LOG_PATH = join(DATA, "river_mes.sqlite");
+// runtime records (the shadow log + its hand-edited config) live in the data root; the lock (tracked) stays with the code
+const CONFIG_PATH = riverMesConfigPath();
+const LOG_PATH = riverMesDbPath();
 const EXE = process.platform === "win32" ? ".exe" : "";
 
 export type RiverMesMode = "off" | "shadow" | "serve";

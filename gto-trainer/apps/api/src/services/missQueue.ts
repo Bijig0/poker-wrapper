@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { missQueueDbPath } from "./storePaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import type { ChartChoice, Walk3Result } from "./hrc3max";
 import { RUNGS, type Site } from "./hrc3max";
@@ -354,7 +355,7 @@ class MissQueue {
   readonly path: string;
 
   constructor(path?: string) {
-    this.path = path ?? join(import.meta.dir, "..", "..", "data", "miss-queue.sqlite");
+    this.path = path ?? missQueueDbPath();
   }
 
   private open(): Database {

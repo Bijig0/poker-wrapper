@@ -36,17 +36,14 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join as joinPath } from "node:path";
-import { DATA_DIR } from "./ledger";
+import { balanceAcksPath, handsDbPath, profilesJsonPath, sessionsDbPath } from "./storePaths";
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";   // readFileSync is already imported above
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
-const HANDS_DB =
-  process.env.HANDS_DB_PATH ??
-  join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "data", "hands.db");
-const SESSIONS_DB = process.env.SESSIONS_DB_PATH ?? join(dirname(HANDS_DB), "sessions.sqlite");
-const PROFILES_JSON = process.env.PROFILES_JSON_PATH ?? join(dirname(HANDS_DB), "profiles.json");
+const HANDS_DB = handsDbPath();
+const SESSIONS_DB = sessionsDbPath();
+const PROFILES_JSON = profilesJsonPath();
 
 export interface ProfileRow {
   name: string;
@@ -196,11 +193,11 @@ export type IntervalTier = "clean" | "noise" | "unverifiable" | "movement" | "ac
  * store: it is a review judgement about a reading, not a reading.
  */
 export interface Ack { profile: string; at: number; note: string | null; unexplainedCents: number; flaggedTier: string }
-const ACKS = joinPath(DATA_DIR, "balance-acks.json");
+const ACKS = balanceAcksPath();
 export function acks(): Record<string, Ack> {
   try { return JSON.parse(readFileSync(ACKS, "utf8")) as Record<string, Ack>; } catch { return {}; }
 }
-function writeAcks(a: Record<string, Ack>): void { mkdirSync(DATA_DIR, { recursive: true }); writeFileSync(ACKS, JSON.stringify(a, null, 2)); }
+function writeAcks(a: Record<string, Ack>): void { mkdirSync(dirname(ACKS), { recursive: true }); writeFileSync(ACKS, JSON.stringify(a, null, 2)); }
 export function acceptReading(profile: string, snapId: number, note: string | null, unexplainedCents: number, flaggedTier: string): Ack {
   const a = acks();
   const ack: Ack = { profile, at: Date.now(), note, unexplainedCents, flaggedTier };

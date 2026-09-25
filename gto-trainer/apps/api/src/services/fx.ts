@@ -14,7 +14,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DATA_DIR } from "./ledger";
+import { fxCachePath } from "./storePaths";
 
 export interface FxRate {
   base: "USD";
@@ -27,7 +27,7 @@ export interface FxRate {
   source: string;
 }
 
-const CACHE = join(DATA_DIR, "fx.json");
+const CACHE = fxCachePath();
 const SOURCE = process.env.FX_URL ?? "https://api.frankfurter.app/latest?from=USD&to=AUD";
 const REFRESH_MS = 24 * 3600_000;
 const STALE_MS = 5 * 24 * 3600_000;

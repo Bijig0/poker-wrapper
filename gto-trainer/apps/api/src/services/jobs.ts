@@ -3,6 +3,7 @@ import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, loadLedger, evaluate, type LedgerConfig } from "./ledger";
 import { isBackgroundOwner } from "./backgroundLock";
+import { jobsDbPath, jobsDir } from "./storePaths";
 /** The checkout of hrc-api whose Windows driver carries the Run-Nash refinement (8 commits ahead of this repo's hrc-api). */
 export const HRC_API_ZENBOOK = process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api";
 
@@ -22,7 +23,7 @@ export const HRC_API_ZENBOOK = process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/po
 export const PY = process.env.PY ?? "C:\\Users\\Brady\\AppData\\Local\\Programs\\Python\\Python312\\python.exe";
 export const BASH = process.env.BASH ?? "C:/Program Files/Git/bin/bash.exe"; // forward slashes: Bun.spawn accepts them and nothing can eat a backslash
 export const BUN = process.env.BUN ?? "C:\\Users\\Brady\\AppData\\Local\\Programs\\node-v24.18.0-win-x64\\node_modules\\bun\\bin\\bun.exe";
-const LOG_DIR = join(DATA_DIR, "jobs");
+const LOG_DIR = jobsDir();
 
 /**
  * Windows: a child process inherits this server's LISTENING socket handle. When the API worker restarts (bun --watch)
@@ -240,7 +241,7 @@ class Jobs {
   private open(): Database {
     if (this.db) return this.db;
     mkdirSync(LOG_DIR, { recursive: true });
-    this.db = new Database(join(DATA_DIR, "jobs.sqlite"));
+    this.db = new Database(jobsDbPath());
     // Wait for a writer to finish instead of throwing SQLITE_BUSY the instant the lock is held.
     // Without it a momentary lock on one statement threw `database is locked` out of a 3-second
     // setInterval and killed the whole process — dashboard, poller, keeper and job dispatcher with

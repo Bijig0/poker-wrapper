@@ -1,0 +1,8 @@
+{
+  "name": "@poker/data-root",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dataRoot.ts",
+  "description": "The one place that decides where runtime records (answers, chains, hands.db …) live — see gto-trainer/DATA-ROOT-PLAN.md"
+}
