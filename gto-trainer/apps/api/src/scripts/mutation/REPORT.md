@@ -337,3 +337,135 @@ No other hand moved.
   verified on the re-picked chart.
 - Sweep, seeds 52001..53500 with 3,000 pairs and 3,000 triples: 37,500 cases, 53,354 decisions, **0 findings**. 195
   re-picked answers were verified.
+
+## Round 3 (2026-09-25): exact per-seat chips, and hero's own size on the tree he was asked on
+
+Branch `worktree-agent-a4ce65942e926524a`, reset to zenbook-main e789427c; zenbook-main (4ce8a65b, the wrapper's shove
+confirm) and the round-2.1 branch (ae099aa7, the villains' ranges re-picked) merged in. Nothing pushed.
+
+### Change A: the capture gate reads every seat's chips from the table, to the cent (closes round 1 deferred 5-6, round 2 deferred 7)
+
+The pot ledger (lostActionFaults rule 3) needed 0.6bb of slack, because a returning player's dead small blind looks
+like chips with no action. A lost SB complete is 0.5bb, or 0.6 at 5c. So two cases were answered as if the seat had
+folded: a lost complete by an SB who then folds, and a lost call by a seat yet to act on the new street when the pot
+reading is unreliable.
+
+**Wrapper** (`ignition/ws.ts` wsChips, `ignition/hand.ts`): every blind and action frame carries the seat's `account`
+(its chips behind right after the frame) and the chips the frame put in. Both are now recorded for the frame itself,
+before the ghost guard and the dedupe decide whether it becomes an action, so a frame whose action the line lost still
+moves the chips. A repeated frame with the same account is counted once. `/hand`, `/state` and the live ingest export
+carry these for every dealt seat, once the WebSocket has reported the hand:
+
+| field | shape | meaning |
+|---|---|---|
+| `wsStack` | `{seatId: bb}`, 4 dp | chips behind now: the seat's latest frame's `account` |
+| `wsInFront` | `{seatId: bb}`, 4 dp | chips in front this street, from its frames; 0 for a seat that has put nothing in |
+| `wsDead` | `{seatId: bb}` | a dead blind (CO_BLIND_INFO `dead`): out of the stack, in no bet |
+
+Existing fields are untouched. Three exclusions keep the numbers honest:
+- A seat whose money the DOM backfill filed before any frame reported it (`wsStale`, reader.ts) is left out until its
+  next frame. Unknown is not a discrepancy.
+- The fields are never archived. End-of-hand counts would read as lost actions against any earlier cut, and
+  `truncateAt` drops them too.
+- Nothing is exported in fake-table mode or before the WebSocket has reported the hand.
+
+A returned uncalled bet is not added back. It ends the betting, so no decision reads it.
+
+**API** (`lostActionFaults` rule 0): `normalizeHand` carries the three fields and `lineSource`. For each seat, the rule
+checks `startStacks − wsStack − wsDead` against the chips its recorded actions put in: posts and blinds, raises, bets
+and all-ins as the street total, calls as the top-up. It checks this street's share against `wsInFront` too. The
+tolerance is the export's own rounding: 0.005bb per amount on the WebSocket's own line, and 0.05bb per amount on the
+level reconciler's line, which reads the chips on screen at 0.1bb (hand 4919957671: 5.745 read as 5.7). A discrepancy
+in either direction is a named fault, whether the seat folded later or not:
+- "SB has 0.5bb fewer chips than the captured actions account for — a complete was lost on the preflop, and the line
+  reads the seat as having folded out of it"
+- "BTN has 2.5bb MORE chips than the captured actions account for — the line holds chips the table never saw …"
+
+When the fields are present, the pot ledger is not consulted. It remains the fallback for archived rows, CoinPoker and
+fake tables.
+
+**Harness**: `exportAt` emits `wsStack`, `wsInFront` and `lineSource: "ws"` as the wrapper does, computed from the dealt
+line. `dropped-call`, `missed-fold` and the new operators therefore drop the action but keep the chips truthful. The new
+operators are `lost-sb-complete` (generator: the SB completes an unopened pot; export: the complete is dropped) and
+`lost-flop-call` (generator: every seat facing a flop bet calls; export: a villain's flop call is dropped). Both are in
+`EXPECT_REFUSAL`. `MUTATION_WS_CHIPS=0` reproduces the old export. On 1,500 `lost-sb-complete` seeds (301..1800) the
+old export let **seed 1067** through: its flop, turn and river were answered with the SB's lost complete followed by his
+preflop fold. That is now a gated fixture. `lost-flop-call` was already refused by the old gate on every harness case,
+because the harness pot is always reliable. Its value is live, where the pot reading is not (unit-tested).
+
+**Verification against the table itself** (wrapper `test/golden/ws-chips.test.ts`, the 18 single-table recordings):
+- `wsStack` equals the table's own CO_RESULT_INFO account, in cents, for every seat that folded. Seats still in at the
+  end are never below it. That is 590 seat-hands over 135 hands, with 0 disagreements. The reader never reads the
+  result frame, so this check is independent.
+- `dealt − behind − dead = the line's chips` holds on all 4,247 seat-frames of every clean hand.
+- The 7 hands that disagree all come from the 2026-09-20/21 socket-mixing recordings: two sockets' frames, or every
+  frame twice, where the event line filed one raise to 2.5 as a second raise "to 5". The rule refuses them, correctly.
+
+**The full pipeline** (reader golden, DOM backfill, dedupe and the reconciler cut-over, checked at hero's decisions):
+0 clean hands disagree. Four hands carry an exported line that is wrong, and the rule now refuses each. Each was
+checked by hand against the frames:
+- 4919480412: the reconciler read the SB's raise to 3 as 2.5, while the WS event line had 3.
+- 4919670726: the reconciler read a raise to 21.005 as 20.
+- 4919910081: the event line holds two phantom BB calls from the screen of a two-table recording.
+- 4919957671: at hero's river decision, the reconciled line lacked the BB's 13bb bet that the WS had already filed, and
+  showed hero toCall 0.
+
+The reader golden follows its own procedure: the new keys are in `POST_RECORDING` and verified on their own, and every
+Python-recorded snapshot still compares at 0 differences.
+
+### Change B: hero's own postflop size snaps to the tree he was asked on (`aiChain.fitsHeroAskedTree`)
+
+On the chainReuseStress hand 4920429872, hero check-raised to 4.8 where his tree offered 4.7. The turn then re-created
+the flop tree with fixed sizes [31.6%]→[31.6%,32.3%] and re-walked it from the root.
+
+The fix applies when all three of these hold:
+- the street's last wager is hero's;
+- the tree keyed on the levels pinned before that wager is cached (it was created when hero was asked);
+- his size is within the walk's tolerance of what that tree offers at his node (5% or 0.15bb, the all-in fallback
+  excluded).
+
+The street then stays on that tree, and hero's action is read as the tree's size. The trace records "hero's 4.8 read as
+the tree's 4.7 — the tree he was asked on (fixed […]) is kept, not re-created". A real size change, past the walk's
+rounding threshold, is also added to the answer's size snaps.
+
+Three cases keep the old behaviour and pin the size as played: a villain's size, a hero wager followed by a villain's,
+and a hero size far from any offered one.
+
+**Live, GTO Wizard** (`GTOW_SECONDARY=0 GTOW_RESERVE=450 GTOW_REQUEST_ORIGIN=harness`, `--hands=4920429872 --twice`):
+- 12 decisions, all answered.
+- Earlier-street reuse 12/12 (100%; round 2 had 29/30 with this hand's turn as the miss).
+- 12 node reads, none read twice.
+- The turn line reads "FLOP tree cached … hero's 4.8 read as the tree's 4.7 … kept, not re-created" and "resumed at
+  hero's node", with no "re-created" line for hero's raise.
+- **Spent: 35 GTO Wizard requests, 5 fresh solves, all on the Ultra account, no 429.**
+
+### Tests and runs
+
+- Unit tests:
+  - `lostActions.test.ts` rule 0 (11): a lost SB complete then fold, a lost call by a seat yet to act on the flop with no
+    pot reading, a lost flop call, a legitimate fold, an all-in for less, the 5c 0.4bb blind with its 0.6bb complete, a
+    raise filed twice, reconciled-line rounding, a dead blind, and a post-in.
+  - `archivedHand.test.ts`: the cut drops the counts.
+  - `aiChain.test.ts` (3): hero 4.8 against an offered 4.7 creates no tree; a villain's 4.8 is re-created; hero's 7 is
+    re-created. They fail with the rule stubbed.
+  - Wrapper `test/unit/ws-chips.test.ts` (7): scripted frames give the exported numbers; a ghost-dropped frame still moves
+    the chips; a stale seat is left out; a dead blind; the 5c stake; no-WS and fake mode; the archive strips the fields.
+- Gate fixtures: 1067 [lost-sb-complete] and 30 [lost-flop-call] (refusals).
+- `tsc`: only the two `_replay…729` errors, in the API and the wrapper.
+- `bun test` (API, `GTOW_BLOCK=1`): 834 pass / 58 skip / 4 fail — the known hrc3max NL25 and mesPostflop turn, plus two gtowRequestLog tests that assert the real fetch path and fail only because GTOW_BLOCK=1 short-circuits it (7/7 without it; untouched by this round).
+- Wrapper `bun test`: 83 pass / 2 skip / 0 fail (the reader golden: every recording 0 differences).
+- Gate: 89 / 89.
+- Sweep, fresh seeds 61001..61300 with 300 pairs, all 22 operators: 7,200 cases, 10,263 hero decisions, **0 findings** (lost-sb-complete 376 ok / 5 cloud-gated / 74 expected-refusal; lost-flop-call 375 / 3 / 49; dropped-call 257 / 0 / 200).
+
+### Deferred to Brady
+
+1. **The reconciler cut-over can replace a correct WS line with a wrong one** (4919480412, 4919670726, 4919957671
+   above). The exact rule now refuses those decisions instead of answering from the wrong line. A guard in
+   `reconciledLine` could keep the event line whenever the derived line contradicts the WebSocket's own chip counts
+   while the event line agrees. That would turn the refusal into a correct answer. It is not done here because it
+   changes the golden's cut-over behaviour and needs its own supersession review.
+2. **The rule refuses a moment, not a hand.** At 4919957671 the reconciled line lagged the WS by one frame at hero's
+   decision. The poller re-asks each second, so a transient refusal costs at most a tick. A lag that lasts a whole
+   decision costs that decision.
+3. **CoinPoker carries no per-seat counts.** Its log has street bets per seat, which could feed the same rule. Until
+   then CoinPoker keeps the pot ledger.
