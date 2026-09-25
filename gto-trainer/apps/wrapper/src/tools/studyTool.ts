@@ -17,7 +17,7 @@
  *   :8777  chart server      the asymmetric 3-max HRC corpus — every 3-handed preflop answer is served from it
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { paths } from "../env";
@@ -29,7 +29,7 @@ const LOG = join(WRAPPER, "debug", "study-tool.log");
 const VENV_PY = join(REPO, "aof-model", ".venv", "Scripts", "python.exe");
 const CHART_SERVER = join(REPO, "analysis", "pipeline", "solve", "exploit_ui", "server.py");
 // the rig's own ports; STUDY_TOOL_PANEL / STUDY_TOOL_CDP move it (a test of this launcher runs on spare ports, headless)
-const PANEL = Number(process.env.STUDY_TOOL_PANEL || 7701), CDP = Number(process.env.STUDY_TOOL_CDP || 9334), API = 2000, UI = 2100;
+const PANEL = Number(process.env.STUDY_TOOL_PANEL || 7701), CDP = Number(process.env.STUDY_TOOL_CDP || 9334), API = 2000;
 // EVERY 3-handed preflop answer is served from here: without it the panel sits on "solving your spot…" forever
 const CHARTS = 8777;
 const BUN = process.execPath;
@@ -107,26 +107,19 @@ async function main(): Promise<void> {
     spawnServer(VENV_PY, ["-m", "exploit_ui.server"], dirname(dirname(CHART_SERVER)),
                 { ...process.env, HRC_UI_DOC_CACHE_MAX: process.env.HRC_UI_DOC_CACHE_MAX || "6" });
   } else say(`chart server not found at ${CHART_SERVER} — 3-max answers will not solve`);
-  // 3. the old :2100 dashboard — the study pages live on the API (:2000) since 2026-09; only if its folder exists
-  const dash = join(HERE, "apps", "dashboard");
-  const dashDir = existsSync(dash) && statSync(dash).isDirectory();
-  if (await up(UI)) say(`:${UI} dashboard already up`);
-  else if (dashDir) {
-    say(`:${UI} dashboard starting`);
-    spawnServer(BUN, ["run", "dev"], dash);
-  } else say(`:${UI} no separate dashboard app (study pages are on :${API}) — skipped`);
-  // 4. the rig itself — it replaces whatever serves :7701. The ports travel in ARGV: the takeover scan reads other
+  // (the study pages are on the API's :2000 — the separate :2100 dashboard app is gone)
+  // 3. the rig itself — it replaces whatever serves :7701. The ports travel in ARGV: the takeover scan reads other
   //    processes' command lines to tell one rig from another.
   say(`:${PANEL} ${(await up(PANEL)) ? "test rig already up — relaunching to pick up any changes" : `test rig starting (fake table, CDP :${CDP})`}`);
   spawnHidden(BUN, ["run", join(HERE, "apps", "wrapper", "src", "main.ts"), "--panel-port", String(PANEL), "--cdp-port", String(CDP), "--fake"],
-              WRAPPER, { ...process.env, WRAPPER_LOG_FILE: join(WRAPPER, "server.log") });
+              // its own log: the live wrapper writes server.log, and two processes interleaving one file read as one
+              WRAPPER, { ...process.env, WRAPPER_LOG_FILE: join(WRAPPER, "server-rig.log") });
   if (!(await waitFor(PANEL, 60))) {
     say(`test rig never came up on :${PANEL} — see debug/last-start.txt`);
     return;
   }
   say(`:${PANEL} ready — it opens the table and panel windows itself`);
   if (!(await waitFor(API, 15))) say(`note: api still down on :${API}; Study Answers will report it`);
-  if (dashDir && !(await waitFor(UI, 30))) say(`note: dashboard still down on :${UI}; the panel works without it`);
   if (!(await waitFor(CHARTS, 20))) say(`note: chart server still down on :${CHARTS} — 3-handed preflop answers have nothing to solve from and the panel will wait`);
 }
 

@@ -55,7 +55,7 @@ async function startSlot(slotN: number, total: number, fake: boolean): Promise<v
   // so a slot that dies and restarts finds its own cell again. EVERY SLOT SHARES ONE CDP PORT (one browser).
   const env: Record<string, string> = { ...(process.env as Record<string, string>),
     TABLE_SLOT: String(slotN), PANEL_PORT: String(port), TABLE_COUNT: String(total), CDP_PORT: String(CDP_PORT) };
-  env.WRAPPER_LOG_FILE ??= join(ROOT, "server.log");
+  env.WRAPPER_LOG_FILE ??= join(ROOT, "server-rig.log");   // never the live wrapper's server.log
   if (fake) env.FAKE_TABLE = "1";
   // the ports in ARGV too: the takeover scan tells instances apart by command line
   const args = ["run", MAIN, "--panel-port", String(port), "--cdp-port", String(CDP_PORT), ...(fake ? ["--fake"] : [])];

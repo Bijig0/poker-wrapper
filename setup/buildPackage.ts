@@ -82,6 +82,7 @@ const CODE_TREES = [
   "ignition-study-wrapper",                     // what the wrapper serves + its launchers (html, formats.json, assets)
   "gto-trainer/apps/wrapper",                   // the wrapper itself (TypeScript; run-wrapper.vbs starts it)
   "gto-trainer/apps/api",                       // study API + dashboard
+  "gto-trainer/packages",                       // shared code both apps import (data-root: where every record lives)
   "gto-trainer/package.json", "gto-trainer/bun.lock", "gto-trainer/tsconfig.base.json", "gto-trainer/turbo.json",
   "gto-trainer/study-tool.vbs", "gto-trainer/study-tool.cmd", "gto-trainer/study-tool.ico",
   "config/env.ps1", "config/local.env.example",
@@ -89,7 +90,7 @@ const CODE_TREES = [
   ".claude/study-api.ps1", ".claude/chart-server.ps1", ".claude/dev-api.cmd", ".claude/dev-charts.cmd",
   "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1", "scripts/install_gtow_watchdog.ps1",
   "scripts/install_chart_server_task.ps1",
-  "aof-model/requirements.txt", "aof-model/requirements-lock.txt", "aof-model/scout/cdp.py",
+  "aof-model/requirements.txt", "aof-model/requirements-lock.txt",
   "analysis/pipeline/solve/exploit_ui",         // minus solutions/ (ignored; the *.meta.json index comes in via CODE_GLOBS)
   "analysis/pipeline/solve/river",              // the on-the-fly river MES gate the API may call
   "analysis/pipeline/limp_study/exploit_ranges_nl25.json", "analysis/pipeline/limp_study/pool_model_nl25.json",

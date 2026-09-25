@@ -63,20 +63,11 @@ try { $null = Invoke-WebRequest -UseBasicParsing 'http://localhost:2000/' -Timeo
 if ($apiUp) {
     Write-Host 'gto-trainer API already up on 2000'
 } else {
-    $env:Path = "$env:APPDATA\npm;$env:LOCALAPPDATA\Programs\node-v24.18.0-win-x64;$env:Path"
-    # Pool-exploit overlay: the constrained preflop best-response vs the
-    # measured pool (MES +5.2 bb/100 @ NL25 rake, +8.9 @ NL200 vs -7.2/-4.8
-    # for the equilibrium mix). The five modeled first-decision shapes answer
-    # with the exploit, labeled "pool-exploit-preflop"; everything deeper
-    # falls back to the equilibrium chart. Comment out to run pure GTO.
-    # NL25 cutover 2026-09-14 (ledger cutover-nl25): the _nl25 exports are fit to
-    # ign25_3maxasym2ci (5% / cap 4bb, the rake we actually play). The old
-    # exploit_ranges.json / pool_model_v4.json are the NL200-rake generation —
-    # 12-28% of hand classes per node differ.
-    $exploit = "$PSScriptRoot\..\analysis\pipeline\limp_study\exploit_ranges_nl25.json"
-    if (Test-Path $exploit) { $env:EXPLOIT_CHART = (Resolve-Path $exploit).Path }
-    $pool = "$PSScriptRoot\..\analysis\pipeline\limp_study\pool_model_nl25.json"
-    if (Test-Path $pool) { $env:POOL_MODEL = (Resolve-Path $pool).Path }
-    Start-Process -WorkingDirectory "$PSScriptRoot\..\gto-trainer\apps\api" -FilePath 'bun.cmd' -ArgumentList 'run', 'index.ts' -WindowStyle Minimized
+    # THE SAME ENVIRONMENT AS EVERY OTHER API START (2026-09-25 audit): config\env.ps1 resolves bun, the NL25 pool-exploit
+    # overlay (EXPLOIT_CHART / POOL_MODEL), POKER_DATA_DIR and everything in config\local.env (TRUST_GUARD_ALL,
+    # GTOW_POLL_MS …). This script used to hard-code node-v24.18.0, set the overlay itself and skip local.env, so an
+    # API started here answered differently from the one the StudyAPI task starts.
+    . "$PSScriptRoot\..\config\env.ps1"
+    Start-Process -WorkingDirectory "$PSScriptRoot\..\gto-trainer\apps\api" -FilePath $env:BUN -ArgumentList 'run', 'index.ts' -WindowStyle Minimized
     Write-Host "started gto-trainer API on 2000 (exploit overlay: $(if ($env:EXPLOIT_CHART) {'ARMED'} else {'off'}))"
 }

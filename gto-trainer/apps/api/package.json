@@ -8,7 +8,6 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun --watch index.ts",
-    "setup": "./setup.sh",
     "demo": "bun run src/demo/liveSolveWasm.ts",
     "demo:derive": "bun run src/demo/deriveRanges.ts",
     "build:wasm": "./solver-wasm/build.sh",

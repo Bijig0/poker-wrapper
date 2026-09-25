@@ -47,7 +47,7 @@ $fastFails = 0
 # update" button knows a clean exit actually comes back here (services/buildStamp.ts).
 # A hand-started worker has no such parent and the dashboard offers the command instead.
 $env:STUDY_API_SUPERVISOR = $PID
-Log "supervisor started (pid $PID) - exploit overlay $(if ($env:EXPLOIT_CHART) { 'ARMED' } else { 'OFF (exploit_ranges.json missing)' })"
+Log "supervisor started (pid $PID) - exploit overlay $(if ($env:EXPLOIT_CHART) { 'ARMED' } else { 'OFF (exploit_ranges_nl25.json missing)' })"
 while ($true) {
   # STRAGGLER SWEEP BEFORE EVERY START (2026-09-14). This used to run only in the hang path below,
   # so anything already on :2000 - a worker started by hand, or one this supervisor lost track of -
