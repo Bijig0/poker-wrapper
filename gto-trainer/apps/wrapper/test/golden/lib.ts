@@ -4,7 +4,6 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { js } from "../../src/js";
 import { pyJsonDumps } from "../../src/py";
 
 export const CORPUS = resolve(import.meta.dir, "../../../../../ignition-study-wrapper/tests/golden/corpus");
@@ -53,21 +52,20 @@ export function normPy(x: unknown): unknown {
 }
 
 /**
- * THE FRAME RESOLVER CHANGED 2026-09-25 (session 20260925_180244: closing one table moved the others' readers onto
- * their neighbours' tables). Every recorded page question embeds the resolver (js/launch.FRAME_JS.js, identical to
- * formats.FRAME_FN.js); a question is compared with it swapped back to the one the recording was made with
- * (frame-js-2026-09-21.js, verbatim from git), a table the formats flows now name by the client's own tag
- * ({"tag":"N"}) back to the number the recording named it by, and the table read's new `frameTag` field left out —
- * so the goldens still pin every other character of every question. The new resolver's behaviour is tested on its
- * own (test/unit/cross-table.test.ts), against a DOM shim, closing tables under it.
+ * DELIBERATE CHANGES TO THE PAGE CODE since the recording (page-js-revisions.json: each recorded text, its text now,
+ * when and why — 2026-09-25: the frame resolver finds a table by the client's own tag, pinned on the first read, since
+ * closing one table moved the others' readers onto their neighbours; TABLE_JS reports that tag, the page's tags and
+ * whether our frame is being drawn). Every page question embeds them; it is compared with each one swapped back to
+ * the recorded text, and a table the formats flows now name by the client's own tag ({"tag":"N"}) back to the number
+ * the recording named it by — so the goldens still pin every other character of every question, and an edit not
+ * listed there fails. What the new code does is tested on its own (cross-table.test.ts, table-binding-replay.test.ts,
+ * table-frame.test.ts).
  */
-const FRAME_NOW = () => js("launch.FRAME_JS");
-const FRAME_RECORDED = readFileSync(join(import.meta.dir, "frame-js-2026-09-21.js"), "utf8").replace(/\r\n/g, "\n");
-const FRAME_TAG_LINE = "\n          frameTag: tf.getAttribute('data-multitableslot'),";
+const PAGE_JS_REVISIONS: { old: string; new: string }[] = JSON.parse(readFileSync(join(import.meta.dir, "page-js-revisions.json"), "utf8"));
 export function asRecordedFrame(q: string): string {
   if (typeof q !== "string" || !q.includes("__frame")) return q;
-  return q.split(FRAME_NOW()).join(FRAME_RECORDED).split(FRAME_TAG_LINE).join("")
-    .replace(/__frame\(\{"tag":"(\d+)"\}\)/g, "__frame($1)").replace(/const SLOT = \{"tag":"(\d+)"\};/g, "const SLOT = $1;");
+  for (const r of [...PAGE_JS_REVISIONS].reverse()) q = q.split(r.new).join(r.old);
+  return q.replace(/__frame\(\{"tag":"(\d+)"\}\)/g, "__frame($1)").replace(/const SLOT = \{"tag":"(\d+)"\};/g, "const SLOT = $1;");
 }
 
 /** Canonical JSON (keys sorted at every level) — equal iff the two values are equal as JSON. */

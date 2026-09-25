@@ -882,6 +882,18 @@
         : `<span class="gs-bad">capture has not identified our table${tap.unboundForS ? ` (${tap.unboundForS}s)` : ""}</span>`);
       if (tap.foreignDropped) prov.push(`${tap.foreignDropped} other-table frames dropped`);
     }
+    // our table's own frame in the client: the tag it pinned gone (it reads nothing rather than a neighbour's
+    // table), not being drawn (read from its socket only), or doubled
+    const tf = s.tableFrame || {};
+    if (tf.missing) {
+      prov.push(`<span class="gs-bad">our table (the client's tag ${esc(tf.tag ?? "?")}) is not open in the client`
+        + ` (it has tag${(tf.tags || []).length === 1 ? "" : "s"} ${esc((tf.tags || []).join(", ") || "none")})</span>`);
+    } else if (tf.drawn === false) {
+      prov.push(`<span class="gs-bad">our table's frame is not being drawn${tf.forS ? ` (${tf.forS}s)` : ""}`
+        + ` — reading it from its socket only${tf.why ? ": " + esc(tf.why) : ""}</span>`);
+    } else if (tf.dup > 1) {
+      prov.push(`<span class="gs-bad">${tf.dup} frames carry our table's tag — reading the one on screen</span>`);
+    }
     if (!h) {
       el.style.display = "";
       $("gs-hand").textContent = "";

@@ -115,3 +115,26 @@ test("which iframe is MY table, whatever numbers the client tags them with", () 
   eq('no literal [data-multitableslot="N"] lookup is left anywhere', literal, []);
   expect(fails).toEqual([]);
 });
+
+test("two frames carrying our pinned tag (the client re-creating the table's frame): the one on screen, else the newest", () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const run = (frames: [string, string, [number, number, number, number]][], sel: unknown) => {
+    const els = frames.map(([id, tag, [x, y, w, h]]) => ({
+      id,
+      getAttribute: (n: string) => (n === "data-multitableslot" ? tag : n === "src" ? `x?playMode=real#${id}` : null),
+      getBoundingClientRect: () => ({ left: x, top: y, right: x + w, bottom: y + h, width: w, height: h }),
+    }));
+    const document = { querySelectorAll: (s: string) => (s === "iframe" ? els : []) };
+    const frame = new Function("document", "window", "Date", "innerWidth", "innerHeight", js("launch.FRAME_JS") + "\nreturn __frame;")(
+      document, {}, { now: () => 1_000_000 }, 2560, 1600);
+    return frame(sel)?.id ?? null;
+  };
+  const TL: [number, number, number, number] = [2, 70, 1276, 762], TR: [number, number, number, number] = [1282, 70, 1276, 762];
+  const OFF: [number, number, number, number] = [2560, 68, 1276, 762];
+  eq("the re-created frame on screen, the old one parked off it", run([["t1", "0", TL], ["t2-old", "1", OFF], ["t2-new", "1", TR]], { tag: "1", ord: 1, me: 2 }), "t2-new");
+  eq("  ... whichever order the DOM has them in", run([["t2-new", "1", TR], ["t2-old", "1", OFF]], { tag: "1", ord: 1, me: 2 }), "t2-new");
+  eq("neither on screen (the lobby in front): the newest", run([["t2-old", "1", OFF], ["t2-new", "1", OFF]], { tag: "1", ord: 1, me: 2 }), "t2-new");
+  eq("one frame with our tag: that one, on screen or not", run([["t1", "0", TL], ["t2", "1", OFF]], { tag: "1", ord: 1, me: 2 }), "t2");
+  expect(fails).toEqual([]);
+});

@@ -45,8 +45,11 @@ const UPDATE = process.env.GOLDEN_UPDATE === "1";
  *  ROUND 3 (2026-09-25): every dealt seat's chips as the WebSocket reports them — /hand `wsStack` / `wsInFront` /
  *  `wsDead` (live only, never archived) and the ledger behind them (S.ws.wsAccount / wsFront / wsDead / wsStale) —
  *  verified on their own in test/golden/ws-chips.test.ts (590 seat-hands against the table's CO_RESULT_INFO, and
- *  dealt − behind = the line's chips on 4,247 seat-frames of every clean hand) and test/unit/ws-chips.test.ts. */
-const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale"]);
+ *  dealt − behind = the line's chips on 4,247 seat-frames of every clean hand) and test/unit/ws-chips.test.ts.
+ *  2026-09-25: /state `tableFrame` — our table's frame in the client (the pinned tag, the tags open, drawn or not), read
+ *  off capture fields no recording has; verified on its own in test/unit/table-frame.test.ts. */
+const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale",
+                                "tableFrame"]);
 /** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
  *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
  *  nothing else here (the pick key never counts one: relay.ts), verified on its own in test/unit/post-in.test.ts

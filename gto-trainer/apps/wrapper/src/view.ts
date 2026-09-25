@@ -44,6 +44,13 @@ export async function state(light = false): Promise<Record<string, any>> {
       stalled: !!(S.tapStall.since && S.tapBound === null && time() - S.tapStall.since > TAP_STALL_S),
       unboundForS: S.tapStall.since && S.tapBound === null ? pyRound(time() - S.tapStall.since, 1) : null,
     },
+    // our table's frame in the client: the tag pinned (dom.ts pinFrame; `missing` = it is gone), every table tag open,
+    // how many frames carry ours, and whether the browser is still drawing it (reader.ts noteFrame)
+    tableFrame: {
+      tag: S.frame.tag, missing: S.frame.lost !== null, tags: S.frameHealth.tags, dup: S.frameHealth.dup,
+      drawn: S.frameHealth.drawn, why: S.frameHealth.why, idleMs: S.frameHealth.idleMs,
+      forS: S.frameHealth.since ? pyRound(time() - S.frameHealth.since, 1) : null,
+    },
     net: {
       last: S.net.last, bad: S.net.bad, good: S.net.good,
       sitout: S.net.sitout ? Object.fromEntries(Object.entries(S.net.sitout).filter(([k]) => k !== "html")) : null,

@@ -1,7 +1,12 @@
 (() => {__FRAME__
   const SLOT = __SLOT__;
   const tf = __frame(SLOT);          // never the lobby frame: it carries no playMode
-  if (!tf) return {seated: false, slot: SLOT};
+  // Every table the client has open, by its own tag (duplicates kept): what
+  // /state says when ours is gone or doubled (reader.ts noteFrame).
+  const tags = [...document.querySelectorAll('iframe[data-multitableslot]')]
+    .filter(f => /playMode=/.test(f.getAttribute('src') || ''))
+    .map(f => Number(f.getAttribute('data-multitableslot'))).sort((a, b) => a - b);
+  if (!tf) return {seated: false, slot: SLOT, tags};
   let doc = null;
   try { doc = tf.contentDocument; } catch (e) {}
   if (!doc || !doc.body) return {seated: false};
@@ -198,8 +203,29 @@
   // reference element" so a consumer normalising coordinates can refuse rather
   // than quietly divide by the wrong factor.
   const zoomRef = doc.querySelector('svg[data-qa], [data-qa]');
+  // IS OUR FRAME BEING DRAWN? (2026-09-25) A frame the browser has stopped
+  // drawing keeps its DOM -- hero's hole cards still changed -- but its
+  // animations stop, so a board it was clearing stayed on screen for hands
+  // (slot 4, sessions 20260925_044829 / _134058). A requestAnimationFrame
+  // heartbeat installed in OUR frame measures that directly: idleMs is how long
+  // since the frame last drew. Also: the client moves every table off screen
+  // while its lobby is in front, and a hidden page draws nothing at all.
+  let draw = null;
+  try {
+    const fw = tf.contentWindow;
+    if (!fw.__wrapperDraw) {
+      const hb = fw.__wrapperDraw = {n: 0, t0: fw.performance.now(), t: fw.performance.now()};
+      const beat = () => { hb.n++; hb.t = fw.performance.now(); fw.requestAnimationFrame(beat); };
+      fw.requestAnimationFrame(beat);
+    }
+    const hb = fw.__wrapperDraw, now = fw.performance.now();
+    draw = {beats: hb.n, idleMs: Math.round(now - hb.t), ageMs: Math.round(now - hb.t0),
+            pageHidden: document.visibilityState !== 'visible',
+            offscreen: !(fb.width > 0 && fb.height > 0 && fb.right > 0 && fb.bottom > 0
+                         && fb.left < innerWidth && fb.top < innerHeight)};
+  } catch (e) {}
   return {seated: true, practice: (tf.src || '').includes('playMode=fun'),
-          frameTag: tf.getAttribute('data-multitableslot'),
+          frameTag: tf.getAttribute('data-multitableslot'), tags, draw,
           frame: {x: Math.round(fb.x), y: Math.round(fb.y),
                   w: Math.round(fb.width), h: Math.round(fb.height)},
           zoom: zoomRef ? zoomOf(zoomRef) : null,

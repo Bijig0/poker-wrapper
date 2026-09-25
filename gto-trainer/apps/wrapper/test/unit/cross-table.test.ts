@@ -7,7 +7,8 @@
  *   2. a table by the client's own TAG, not its position — closing the top-right table by hand moved table 2 onto
  *      the bottom-left table and table 3 (reading A8o there) onto the bottom-right;
  *   3. a socket by its hole cards — table 1 bound the A8o table's socket on a sit-in naming "seat 4" (hero sat in
- *      seat 4 at both), then 16 times more on a deal from the hand before, while its own frame showed 9♠9♣ / 5♣7♣;
+ *      seat 4 at both), then 16 times more on a deal from the hand before, while its own frame showed 9♠9♣ / 5♣7♣.
+ *      A seat number is not a table: nothing binds until our own frame shows the cards a socket dealt our seat;
  *   4. the verify — our frame still showing the hand before's 6♦5♦ 3.7 s after the deal let the RIGHT socket go,
  *      and the hand in progress was carried on onto the next socket (A8o's "internally inconsistent" capture).
  * Each is pinned here against the thing that went wrong; test/unit/cross-table-replay.test.ts replays the session.
@@ -227,11 +228,12 @@ test("4. the verify rides out our frame catching up on a new deal — and still 
   try {
     freshTap();
     tapFrame({ pid: "CO_SIT_PLAY", play: 1, seat: 4 }, "T");
-    eq("our own sit-in, no cards on our frame: bound", S.tapBound, "T");
+    eq("our own sit-in, no cards on our frame: nothing binds yet (a seat number is not a table)", S.tapBound, null);
     tapFrame(stage("4920571310"), "T");
     for (const b of blinds) tapFrame(b, "T");
     tapFrame(deal(4, C["6d"], C["5d"]), "T");
     tick(names(C["6d"], C["5d"]), 4);
+    eq("  ... our frame showing the 6♦5♦ it dealt binds it", S.tapBound, "T");
     // 18:12:11.6: the next hand's deal; our frame goes on showing the hand before's 6♦5♦ for 3.7 s
     tapFrame(stage("4920571374"), "T");
     tapFrame(deal(4, C["9s"], C["9c"]), "T");
@@ -298,7 +300,9 @@ test("3. a socket binds by the cards our own frame shows — never a stale deal,
     tapFrame(stage("b"), "X");
     eq("  ... and a socket's new hand forgets its old deal", S.tapDeals.has("X"), false);
     tapFrame(deal(4, C["8h"], C["Ac"]), "X");
-    eq("a fresh deal with nothing on our frame to contradict it binds (the frame lags its own deal)", S.tapBound, "X");
+    eq("a fresh deal into our seat binds nothing on its own — even with nothing on our frame to contradict it", S.tapBound, null);
+    tick(names(C["8h"], C["Ac"]));
+    eq("  ... our frame drawing its 8♥A♣ a tick later binds it, its hand replayed at once", [S.tapBound, S.ws.heroCards], ["X", names(C["8h"], C["Ac"])]);
   } finally {
     console.log = log0;
     restore();

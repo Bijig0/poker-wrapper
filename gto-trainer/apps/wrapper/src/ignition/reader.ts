@@ -125,6 +125,52 @@ function frameShowsCaptureHand(hc: string[]): boolean {
   return S.tapDealDrawn;
 }
 
+/** A frame that has not drawn for this long is not being drawn (a live one draws every ~16 ms). */
+export const FRAME_IDLE_MS = 1500;
+
+/**
+ * IS OUR FRAME BEING DRAWN? (2026-09-25) TABLE_JS reports a requestAnimationFrame heartbeat of our own frame (`draw`)
+ * and every table tag the page has open (`tags`). A frame the browser is not drawing keeps its DOM — hero's hole cards
+ * still changed on slot 4's stuck frame (sessions 20260925_044829 / _134058) — but its animations are frozen where they
+ * were, so a board being cleared stays on screen for hands and cards being dealt stay hidden. Returns false when this
+ * capture is no evidence of the table's board or of a seat's action: not being drawn, or only just drawn again (the jump
+ * from the frozen picture to the live one is not a round of actions). The socket is the table's only word then. Each
+ * change is said once (log + feed); /state `tableFrame` carries it with the pinned tag (S.frame). A capture from before
+ * these fields (every recording up to 2026-09-25) is unknown, never "not drawn".
+ */
+export function noteFrame(d: Record<string, any>): boolean {
+  const F = S.frameHealth;
+  const tags: number[] | null = Array.isArray(d.tags) ? d.tags : null;
+  F.tags = tags;
+  F.dup = S.frame.tag !== null && tags ? tags.filter((t) => String(t) === S.frame.tag).length : 0;
+  const dr = d.seated ? d.draw : null;
+  const known = !!dr && typeof dr.idleMs === "number" && typeof dr.ageMs === "number";
+  const drawn: boolean | null = known ? !(dr.idleMs > FRAME_IDLE_MS && dr.ageMs > FRAME_IDLE_MS) : null;
+  const resumed = F.drawn === false && drawn === true;
+  F.drawn = drawn;
+  F.idleMs = known ? dr.idleMs : null;
+  F.why = drawn !== false ? null
+    : dr.pageHidden ? "the client window is not being drawn (minimized, covered, or its screen is off)"
+    : dr.offscreen ? "the client has moved this table off screen (its lobby is in front)"
+    : "the browser has stopped drawing this table's frame";
+  const said = drawn === false ? `undrawn:${F.why}` : F.dup > 1 ? `dup:${F.dup}` : "";
+  if (said !== F.said) {
+    const was = F.said;
+    F.said = said;
+    F.since = time();                                  // /state tableFrame.forS: how long the frame has been as it is
+    const table = `table ${pyStr(TABLES.slot() ?? 1)}`;
+    const line = drawn === false ? `${table}'s frame is not being drawn: ${F.why} — its board and badges are frozen, reading the table from its socket only`
+      : F.dup > 1 ? `${F.dup} frames carry ${table}'s tag in the client — reading the one on screen`
+      : was.startsWith("undrawn") ? `${table}'s frame is being drawn again`
+      : null;
+    if (line) {
+      log(`[frame] ${line}`);
+      feedAdd(line);
+    }
+  }
+  return drawn !== false && !resumed;
+}
+
 const STABLE_TICKS = 12;
 const WINS_POT = /\bwins?\b.*pot/i;
 const RESULT_FOR = /result for hand\s*(\d+)/i;
@@ -160,12 +206,16 @@ export async function feedTick(): Promise<void> {
     } catch {}
     return;
   }
+  let drawn = true;
+  try {
+    drawn = noteFrame(d);
+  } catch {}
   try {
     L.hero = heroStatus(d, d.nodes || []);
   } catch {}
   try {
     L.heroSeatDom = domHeroSeat(d);
-    tapVerify(heroCards(d));
+    tapVerify(heroCards(d), drawn);
   } catch {}
   try {
     L.buyPanel = (d.buttons || []).some((b: any) => String(b.qa || "") === "buyInButton");
@@ -348,7 +398,7 @@ export async function feedTick(): Promise<void> {
       const potAtPrompt = w.heroToActPot ?? null;
       const potBeforeWipe = potVal(p.pot ?? null);
       const potGrew = potAtPrompt !== null && potBeforeWipe !== null && potBeforeWipe > potAtPrompt + 0.05;
-      if (ours && heroSeat !== null && !w.heroFolded && time() - toActAt <= 3.0 && actedAt < toActAt
+      if (ours && drawn && heroSeat !== null && !w.heroFolded && time() - toActAt <= 3.0 && actedAt < toActAt
           && !showdown && !potGrew && !actSeen(["fold", heroSeat])) {
         const nb = Math.min(p.board || 0, boardCap());    // a rabbit-hunt card on screen is no street (ws.ts)
         const streetPrev = nb >= 5 ? "river" : nb === 4 ? "turn" : nb === 3 ? "flop" : "preflop";
@@ -362,7 +412,7 @@ export async function feedTick(): Promise<void> {
     const domCents = (v: number | null) => (bbKnown && v !== null ? pyRound(v * bbc) : null);
     const nd = withoutRabbit(bc).length;               // the backfill's street stamp: never the rabbit card's street
     const streetDom = nd >= 5 ? "river" : nd === 4 ? "turn" : nd === 3 ? "flop" : "preflop";
-    L.board = [...bc];
+    L.board = drawn ? [...bc] : [];                    // a frame not being drawn shows no board of THIS hand (noteFrame)
     noteDomBoard(bc, hc);                              // what /hand's DOM-board override may make of it (ws.ts)
     const foldedSeats: Set<number> = (w.foldedSeats ??= new Set<number>());
     let prevMax = 0.0;
@@ -377,7 +427,7 @@ export async function feedTick(): Promise<void> {
       const ticks: Map<number, number> = (w.foldTicks ??= new Map());
       ticks.set(num, badge === "FOLD" ? (ticks.get(num) || 0) + 1 : 0);
       if (!(w.heldCards ?? new Set()).has(num)) continue;
-      if (!ours) continue;
+      if (!ours || !drawn) continue;                   // nor any seat's action from a frame not being drawn
       // THE POT WINNER NEVER FOLDS (2026-09-25): once every other seat has folded, this seat's cards going and the
       // pot landing in its slot are the award, not a fold or a bet. Checked BEFORE actSeen, which would record the
       // fold key and swallow a real WS fold as a duplicate should our fold set ever be wrong.

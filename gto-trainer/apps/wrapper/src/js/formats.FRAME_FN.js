@@ -20,7 +20,13 @@
       const held = (t, ms) => pins[t] && now - pins[t].at < ms;
       const claim = f => { if (f && SLOT.me !== undefined && tagOf(f) !== null) pins[tagOf(f)] = {slot: SLOT.me, at: now}; return f; };
       if (SLOT.tag !== undefined && SLOT.tag !== null) {
-        return claim(tagged.find(x => tagOf(x) === String(SLOT.tag)));
+        // two frames carrying our tag (the client re-creating the table's
+        // frame): the one on screen, else the newest
+        const ours = tagged.filter(x => tagOf(x) === String(SLOT.tag));
+        const shown = f => { const r = f.getBoundingClientRect();
+                             return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0
+                                 && r.left < innerWidth && r.top < innerHeight; };
+        return claim(ours.length < 2 ? ours[0] : ours.find(shown) || ours[ours.length - 1]);
       }
       const mine = tagged.find(x => held(tagOf(x), 60000) && pins[tagOf(x)].slot === SLOT.me);
       if (mine) return claim(mine);

@@ -35,7 +35,8 @@ const FIXTURE = join(import.meta.dir, "..", "fixtures", "multitable-2026-09-25.j
 const A8O = "2864.10681", TL = "2864.10523";
 const clock = (ts: number) => new Date((ts + 7 * 3600) * 1000).toISOString().slice(11, 23);
 
-type Snap = { ts: number; kind: string; bound: string | null; hand: string | null; cards: string; seats: number[]; abandoned: boolean };
+type Snap = { ts: number; kind: string; bound: string | null; hand: string | null; cards: string; seats: number[]; abandoned: boolean;
+              dropped: number | null };
 
 async function replay(fx: any, slot: number): Promise<{ snaps: Snap[]; events: any[]; presses: any[] }> {
   const s0 = process.env.TABLE_SLOT, c0 = process.env.TABLE_COUNT;
@@ -88,7 +89,7 @@ async function replay(fx: any, slot: number): Promise<{ snaps: Snap[]; events: a
         ts: inp.ts, kind: inp.kind === "ws" ? `ws ${inp.f.rid} ${inp.f.d.pid}` : "dom", bound: S.tapBound,
         hand: S.handIds.get(S.handNo) ?? null, cards: [...(h?.heroCards ?? [])].sort().join(" "),
         seats: [...new Set<number>((h?.actions ?? []).map((a: any) => a.seatId))].sort((a, b) => a - b),
-        abandoned: S.handAbandoned === S.handNo,
+        abandoned: S.handAbandoned === S.handNo, dropped: S.handAbandoned,
       });
     }
     return { snaps, events: S.wsDump.filter((e) => String(e.pid).startsWith("<tap-")).map((e) => ({ t: clock(e.ts), ...e.data })), presses };
@@ -133,18 +134,25 @@ test.skipIf(!existsSync(FIXTURE))("2026-09-25 replayed: table 1 never reads the 
   const gone = t1.events.find((e) => e.pid === "<tap-unbound>" && e.rid === A8O);
   check("a sit-in claim that bound the A8o table's socket while table 1's hero sat out is let go within 10 s (live: 56 s)",
         !wrong || (gone && at(gone.t) - at(wrong.t) < 10), J([wrong?.t, gone?.t]));
-  eq("  ... and the hand it read there is that table's alone: none of table 1's own seats merged in (live: seats 2, 3, 4, 5)",
-     seatsOf(t1.snaps, "4920571200"), [2, 4]);
+  // a seat number is not a table: that sit-in binds nothing now, so the A8o table's 4920571200 is never read at all
+  eq("  ... table 1 never reads the A8o table's 6♠K♥ hand (live: read for 56 s, table 1's own seats 2, 3, 4, 5 merged in)",
+     t1.snaps.filter((s) => s.hand === "4920571200").length, 0);
   check("no press was made (auto is off in the replay)", t1.presses.length === 0, J(t1.presses));
 
   // ---- TABLE 3 (bottom-left): the A8o table's own reader, socket 2864.10681 ------------------------------------
   const t3 = await replay(fx, 3);
   console.log(`table 3: ${trace(3, t3.events)}`);
-  eq("table 3 reads A8o on its socket from the deal to the turn", [...new Set(between(t3.snaps, "18:12:45.4", "18:13:19.5").map((s) => s.bound))], [A8O]);
+  // the recorded frame moves (the old ordinal lookup) on the DOM tick at 18:13:16.72
+  eq("table 3 reads A8o on its socket from the deal until its frame moves", [...new Set(between(t3.snaps, "18:12:45.4", "18:13:16.7").map((s) => s.bound))], [A8O]);
   eq("A8o is only ever seats 2 and 4 — no other table's seat merged in (live: seats 6, 3, 5, 1: 'internally inconsistent')",
      seatsOf(t3.snaps, "4920571422"), [2, 4]);
+  // the frame shows the K♠5♥ table 4's socket dealt: the capture moves there at once (tapSwitch) and the A8o hand
+  // goes with the old socket (tapUnbind drops it: never archived) before table 4's hand is replayed from its start
+  const moved = between(t3.snaps, "18:13:16.7", "18:13:21");
+  const before = t3.snaps.filter((s) => s.ts < at("18:13:16.7")).at(-1);
   check("when table 3's frame shows another table's hand the A8o hand is DROPPED, not carried on",
-        between(t3.snaps, "18:13:19.9", "18:13:21").some((s) => s.abandoned), J(between(t3.snaps, "18:13:19.9", "18:13:21").map((s) => [s.bound, s.hand, s.abandoned])));
+        moved.some((s) => s.dropped !== null && s.dropped !== (before?.dropped ?? null)) && moved.every((s) => s.hand !== "4920571422"),
+        J(moved.map((s) => [s.bound, s.hand, s.dropped])));
   eq("  ... and never read again on another socket", between(t3.snaps, "18:13:20.5", "18:14:10").filter((s) => s.hand === "4920571422").length, 0);
   check("no press was made", t3.presses.length === 0, J(t3.presses));
   expect(fails).toEqual([]);
