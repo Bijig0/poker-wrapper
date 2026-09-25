@@ -80,17 +80,37 @@ const netCls = (n) => n == null ? "" : n >= 0 ? "pos" : "neg";
 const netStr = (n) => n == null ? "?" : (n > 0 ? "+" : "") + n.toFixed(2);
 const r2 = (x) => Math.round(x * 100) / 100;
 
+/* ================= polls only while the tab is on screen ================= */
+/* The study API that serves this page also answers live poker decisions on the same event loop, and a tab in the
+   background kept re-reading it: the hands list every 3 s for as long as a table was being played (GET
+   /api/dashboard/hands, the biggest recurring [stall] source), and on 2026-09-25 a background Proposals tab re-read
+   the ~900 KB /api/ledger every ~7 s and blocked the loop for 3-13 s a time. Every repeating poll goes through
+   whenVisible: one that comes due while the tab is hidden is parked under its name (a later one with the same name
+   replaces it) and runs once when the tab is shown again. route() drops the parked polls of the view being left. */
+const PARKED = new Map();
+function whenVisible(name, fn) { if (document.hidden) PARKED.set(name, fn); else fn(); }
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !PARKED.size) return;
+  const due = [...PARKED.values()]; PARKED.clear();
+  for (const fn of due) try { fn(); } catch (e) { console.error(e); }
+});
+
 /* ================= hands list ================= */
 let HANDS = [], SESSIONS = [], AUDIT_NOTE = "", sortK = "playedAt", sortDir = -1;
 
 // The discrepancy audits are computed by the server in the background after a
 // restart; while any are still pending the disc column shows "?" — re-poll
-// until they are all in (one timer, whichever loader asked last).
-let auditTimer = null;
-function pollWhilePending(j, reload) {
-  clearTimeout(auditTimer);
+// until they are all in (one timer, whichever loader asked last). `view` is the
+// list the loader draws (hands · home · analytics): the poll runs while that list
+// is on screen, is parked while the tab is hidden, and route() stops it when the
+// user leaves the list.
+let auditTimer = null, auditView = null;
+const onListView = (view) => PATH.view === view && !PATH.id;
+function pollWhilePending(j, view, reload) {
+  if (!onListView(view)) return; // left the list while the read was in flight: re-arm nothing, and leave the new view's poll alone
+  clearTimeout(auditTimer); auditView = view;
   // hands in play (the wrapper's live rows) keep the list moving as well as pending audits
-  if (j.auditPending > 0 || j.live > 0) auditTimer = setTimeout(reload, j.live > 0 ? 3000 : 2500);
+  if (j.auditPending > 0 || j.live > 0) auditTimer = setTimeout(() => whenVisible(view, () => { if (onListView(view)) reload(); }), j.live > 0 ? 3000 : 2500);
 }
 
 async function loadHands() {
@@ -101,7 +121,7 @@ async function loadHands() {
     AUDIT_NOTE = j.auditPending ? ` · auditing ${j.auditPending}…` : "";
     buildSessionFilter();
     renderHands();
-    pollWhilePending(j, () => { if (PATH.view === "hands" && !PATH.id) loadHands(); });
+    pollWhilePending(j, "hands", loadHands);
   } catch (e) { /* server restarting */ }
 }
 const sortVal = (h, k) => k === "pos" ? (h.summary.heroPos ?? "") : k === "cards" ? h.heroCards.join("")
@@ -724,7 +744,7 @@ const isGtowDownReason = (r) => /No access token|CDP on 92\d\d|Client unreachabl
   document.body.appendChild(pill);
   const panel = document.createElement("div"); panel.id = "gtow-panel";
   document.body.appendChild(panel);
-  gtowPoll(); GTOW.timer = setInterval(gtowPoll, 20000);
+  gtowPoll(); GTOW.timer = setInterval(() => whenVisible("gtow", gtowPoll), 20000);
 })();
 async function gtowPoll() {
   try { GTOW.st = await (await fetch("/api/dashboard/gtow-status")).json(); } catch { GTOW.st = null; }
@@ -2250,7 +2270,7 @@ async function loadHome(opt = {}) {
   try { const r = await (await fetch("/api/dashboard/balance-live")).json(); HOME.liveBal = r && r.ok ? r : null; } catch { HOME.liveBal = null; }
   if (PATH.view !== "home") return; // navigated away while the fetches were in flight
   HOME.data = j; HOME.health = h;
-  pollWhilePending(j, () => { if (PATH.view === "home") loadHome({ quiet: true }); });
+  pollWhilePending(j, "home", () => loadHome({ quiet: true }));
   v.innerHTML = hmRender(j, h);
   hmWire(v);
   // the series is the scope's, but on Home the scope is always "all" — label the
@@ -2494,7 +2514,7 @@ async function loadAnalytics() {
   if (PATH.view !== "analytics") return; // navigated away while the fetch was in flight
   AN.options = j.options;
   // disc counts fill in as the background audits land — refresh quietly
-  pollWhilePending(j, () => { if (PATH.view === "analytics") loadAnalytics(); });
+  pollWhilePending(j, "analytics", loadAnalytics);
   v.innerHTML = anRender(j, scope, vs) + `<div class="ig-global"><div class="an-h">Solver &amp; model <span class="sub">— the corpus and the solvers, not hero's hands: this block does not change with the scope</span></div>${await anGlobal(j.global)}</div>`;
   anWire(v, scope, vs);
   anDrawChart(j.primary, j.compare);
@@ -2800,7 +2820,8 @@ async function loadMissQueue() {
   MQ = j;
   renderMissQueue();
   clearTimeout(mqTimer);
-  if (j.sweep.running) mqTimer = setTimeout(loadMissQueue, 2000);
+  // the sweep's progress bar lives on Analytics: poll while it is on screen (route() stops it on the way out)
+  if (j.sweep.running && PATH.view === "analytics") mqTimer = setTimeout(() => whenVisible("missq", () => { if (PATH.view === "analytics") loadMissQueue(); }), 2000);
 }
 
 function renderMissQueue() {
@@ -3239,15 +3260,8 @@ async function catNode(id, seat, line) {
 let LG = null, lgJobTimer = null, lgOpenLog = null;
 const minsStr = (m) => m >= 48 * 60 ? `${(m / 1440).toFixed(m >= 14400 ? 0 : 1)} days` : m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)} h` : `${Math.round(m)} min`;
 /* The ledger's live polls (the proposals page every 4 s, the progress page every 5 s) run only while the tab is
-   on screen. On 2026-09-25 a background Proposals tab re-read the ~900 KB /api/ledger every ~7 s and blocked the
-   study API's event loop — the one answering live decisions — for 3-13 s a time. A poll that comes due while the
-   tab is hidden is parked here and runs once when the tab is shown again; route() drops it on any navigation. */
-let lgParked = null;
-function lgWhenVisible(fn) { if (document.hidden) lgParked = fn; else fn(); }
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden || !lgParked) return;
-  const fn = lgParked; lgParked = null; fn();
-});
+   on screen: one that comes due while it is hidden is parked (whenVisible, one "ledger" slot for both) and runs
+   once when the tab is shown again; route() drops it on any navigation. */
 async function loadLedger() {
   const v = $("view-ledger");
   if (!LG) v.innerHTML = '<div class="card sub">loading the ledger…</div>';
@@ -3260,7 +3274,7 @@ async function loadLedger() {
   if (PATH.pane === "progress" && PATH.id) { await renderProgress(PATH.id); return; }
   renderProposalPage();
   clearTimeout(lgJobTimer);
-  if ((LG.jobs || []).some((j) => j.status === "running" || j.status === "queued")) lgJobTimer = setTimeout(() => lgWhenVisible(loadLedger), 4000);
+  if ((LG.jobs || []).some((j) => j.status === "running" || j.status === "queued")) lgJobTimer = setTimeout(() => whenVisible("ledger", loadLedger), 4000);
 }
 function renderLedger() {
   const v = $("view-ledger"), L = LG;
@@ -3458,7 +3472,7 @@ async function renderProgress(id) {
       <span class="pbar wide"><i class="${R.live ? "live" : ""}" style="width:${pct}%"></i></span></div>
     ${R.parts.map((p, k) => `<h2 class="sub" style="text-transform:uppercase;letter-spacing:.6px;margin:12px 0 4px">Part ${k + 1} · ${esc(p.title)}</h2>${p.configs.map(pgConfig).join("")}`).join("")}`;
   document.title = `Progress · ${R.run} · Study Dashboard`;
-  pgTimer = setTimeout(() => { if (PATH.view === "ledger" && PATH.pane === "progress" && PATH.id === id) lgWhenVisible(() => renderProgress(id)); }, R.live ? 5000 : 30000);
+  pgTimer = setTimeout(() => { if (PATH.view === "ledger" && PATH.pane === "progress" && PATH.id === id) whenVisible("ledger", () => renderProgress(id)); }, R.live ? 5000 : 30000);
 }
 function renderOperatorDetail() {
   const v = $("view-ledger"), L = LG;
@@ -5360,10 +5374,16 @@ function go(path) {
 }
 function route() {
   if (PLAY) { clearInterval(PLAY); PLAY = null; }
-  // the ledger's polls belong to the page that armed them: every navigation stops them (the ledger view re-arms
-  // its own below). Before, leaving for Hands or Home kept the 4 s /api/ledger re-read going behind a hidden view.
-  clearTimeout(lgJobTimer); clearTimeout(pgTimer); lgParked = null;
+  // a view's polls belong to the view that armed them: every navigation stops the ledger's (the ledger view re-arms
+  // its own below) and drops whatever was parked while the tab was hidden (the GTO Wizard pill is on every view and
+  // keeps its place). Before, leaving for Hands or Home kept the 4 s /api/ledger re-read going behind a hidden view.
+  clearTimeout(lgJobTimer); clearTimeout(pgTimer);
+  for (const name of PARKED.keys()) if (name !== "gtow") PARKED.delete(name);
   PATH = parsePath();
+  // the list poll (hands · home · analytics) and the miss-queue sweep poll stop once their view is off screen;
+  // a same-view route() (a theme change) leaves them running
+  if (auditView && !onListView(auditView)) { clearTimeout(auditTimer); auditView = null; }
+  if (PATH.view !== "analytics") clearTimeout(mqTimer);
   const want = canonical(PATH);
   if (location.pathname + location.search + location.hash !== want) history.replaceState({}, "", want);
   // any list view we land on becomes the one a hand page comes back to
@@ -5448,9 +5468,12 @@ route();
 // (and with it the chart), so it wants to be rare enough not to yank a tooltip
 // out from under the cursor — and pointless while the tab is in the background.
 setInterval(() => { if (PATH.view === "home" && !document.hidden) loadHome({ quiet: true }); }, 30000);
+// The hands list and the sources registry re-read on their own 15 s clock while on screen. A tick that comes due
+// with the tab hidden is parked; the hands list shares its name with the live-hand poll, so showing the tab re-reads
+// it once, not twice.
 setInterval(() => {
-  if (PATH.view === "hands" && !PATH.id) loadHands();
-  if (PATH.view === "sources" && PATH.pane === "pieces" && !PATH.id) loadSources();
+  if (onListView("hands")) whenVisible("hands", loadHands);
+  if (PATH.view === "sources" && PATH.pane === "pieces" && !PATH.id) whenVisible("sources", loadSources);
 }, 15000);
 
 /* ================= "there's been an update" ================= */
