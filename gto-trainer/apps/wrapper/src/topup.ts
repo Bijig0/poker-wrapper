@@ -21,7 +21,7 @@ import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyRepr, pyRound, pyStr } from "./py";
 import { S, seams } from "./state";
 import * as TERMINAL from "./terminal";
-import { mySel, tableJs, topupFillJs, topupReadJs } from "./ignition/dom";
+import { mySel, topupFillJs, topupReadJs } from "./ignition/dom";
 import { handState } from "./ignition/hand";
 import { act, autoTableOk, heroTimeLeft, maybeTakeTime, pickReady } from "./relay";
 
@@ -39,23 +39,6 @@ const TOP_UP_MIN_SHORT_BB = 1.0;
 /** The small wait before a run's first press, drawn once per window (a test sets it to zero). */
 export const topupTuning = { jitterS: [0.4, 2.0] as [number, number] };
 const TOP_UP_CLOSE_DEBOUNCE_S = 1.5;
-
-/** The client's 'successfully added $N in chips' toast, if it is on screen. */
-export async function topUpToast(): Promise<string | null> {
-  const t = await seams.ignitionTarget();
-  if (!t) return null;
-  let d: any;
-  try {
-    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(mySel()), 6)) || {};
-  } catch {
-    return null;
-  }
-  for (const n of d.nodes ?? []) {
-    const m = /successfully added \$?([\d,]+(?:\.\d+)?) in chips/i.exec(n.text || "");
-    if (m) return m[1]!;
-  }
-  return null;
-}
 
 /** The table's own numbers: hero's stack, the ring max, and the Buy-chips panel when it is open. */
 export async function topUpRead(): Promise<Record<string, any>> {

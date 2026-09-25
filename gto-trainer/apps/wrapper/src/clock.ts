@@ -20,10 +20,6 @@ export function nowMs(): number {
   return Math.trunc(time() * 1000);
 }
 
-export function isReplay(): boolean {
-  return fake !== null;
-}
-
 /** Enter replay mode at `t` (seconds). */
 export function setFakeTime(t: number): void {
   fake = t;

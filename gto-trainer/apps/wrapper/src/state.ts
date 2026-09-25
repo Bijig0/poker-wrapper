@@ -68,9 +68,8 @@ export function freshStudy(): Record<string, any> {
     timeBank: true, timeBankAt: 0.0, lastTimeBank: null, timeBankDecision: null,
     topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     topUpDue: null, topUpTrigger: null,
-    // The Python wrapper had a REAL-MONEY auto-execute allowance here. It is NOT ported: auto-execute arms on a
-    // practice table or the fake table only (2026-09-24). The fields stay, permanently "not granted", so the
-    // panel's view of them is unchanged.
+    // THE REAL-MONEY AUTO-EXECUTE ALLOWANCE (relay.ts, restored 2026-09-24 after the TS port first left it out): a
+    // time/hand budget granted per session; these fields hold it. Practice and the fake table need no grant.
     autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
     autoDeclared: false, autoDeclaredReal: false, autoDeclaredBudget: null,
   };
@@ -171,7 +170,6 @@ function fresh() {
     topupPrefold: { active: false, key: null, hand: null, deadline: 0.0, startedAt: 0.0, banked: false } as Record<string, any>,
     orphanCheck: { at: 0.0, said: null as string | null },
     adoptCheck: { at: 0.0, said: null as string | null },
-    execBusy: false,
     chain: { attempting: false, lastAt: 0.0, lastResult: null as any, lastCheck: null as number | null },
     router: { state: "idle", text: "", steps: [] as string[], at: 0.0, format: null as string | null, cancel: false,
               loginAt: 0.0, seats: null as any, generation: 0 } as Record<string, any>,

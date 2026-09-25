@@ -1,6 +1,6 @@
 /**
  * The JS the wrapper evaluates in the poker client's page. Each snippet lives in src/js/<module>.<NAME>.js,
- * extracted byte for byte from the Python wrapper (ignition-study-wrapper/tests/golden/extract_js.py) — several
+ * first extracted byte for byte from the Python wrapper (its extractor went with it in 2026-09-24) — several
  * contain backticks in their comments, which a TS template literal cannot hold verbatim. Line endings are
  * normalised to LF on load (Python normalises its source the same way), so a checkout's CRLF cannot change them.
  */

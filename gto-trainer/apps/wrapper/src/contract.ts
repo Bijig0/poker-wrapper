@@ -94,8 +94,3 @@ export const StateReply = obj({
   snapshot: obj({ status: z.string().nullable(), seats: z.array(obj({ hero: z.boolean(), sittingOut: z.boolean() })) }),
 });
 
-/** POST /panel/answer — what the poller pushes. */
-export const PanelAnswer = Body.panelAnswer;
-
-export type HandT = z.infer<typeof Hand>;
-export type StateReplyT = z.infer<typeof StateReply>;

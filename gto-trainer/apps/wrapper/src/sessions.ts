@@ -13,7 +13,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as balances from "./balances";
 import { nowMs, strftime, time } from "./clock";
-import { paths, REPO } from "./env";
+import { paths } from "./env";
 import { openStore } from "../../../packages/data-root/centralDb";
 import * as netcheck from "./netcheck";
 import { pyFloat, pyInt, pyJsonDumps, pyReprStr, pyRound, pyStr, truthy, ValueError } from "./py";
@@ -184,8 +184,6 @@ export async function presets(refresh = false): Promise<Record<string, any>> {
   return out;
 }
 
-/** The last catalogue read, without a fetch (null before the first). */
-export const presetsSync = () => presetsCache.value;
 export const presetsFromApi = () => !!presetsCache.fromApi;
 export const presetsError = () => presetsCache.error;
 
@@ -545,4 +543,3 @@ export function newSessionId(): string {
   return strftime("session_%Y%m%d_%H%M%S");
 }
 
-export const _REPO = REPO;

@@ -377,11 +377,6 @@ export function splitWs(s: string): string[] {
 /** Python's `x in s` for a str haystack. */
 export const contains = (hay: string, needle: string) => hay.includes(needle);
 
-/** The last `n` items (Python's xs[-n:]). */
-export function lastN<T>(xs: T[], n: number): T[] {
-  return n <= 0 ? [] : xs.slice(Math.max(0, xs.length - n));
-}
-
 /** del xs[:-n] — keep only the last n, in place. */
 export function keepLast<T>(xs: T[], n: number): void {
   if (xs.length > n) xs.splice(0, xs.length - n);

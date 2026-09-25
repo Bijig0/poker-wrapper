@@ -11,7 +11,7 @@
 import { dlopen, FFIType, JSCallback, ptr, read, toArrayBuffer, type Pointer } from "bun:ffi";
 import { spawn as nodeSpawn } from "node:child_process";
 
-const { i32, u32, i64, u64, ptr: P, u16, void: V } = FFIType;
+const { i32, u32, i64, u64, ptr: P, void: V } = FFIType;
 
 type Lib<T> = { symbols: T; close(): void };
 function lazy<T>(fn: () => Lib<T>): () => T {
@@ -43,9 +43,7 @@ const user32 = lazy(() => dlopen("user32.dll", {
   MonitorFromPoint: { args: [i64, u32], returns: P },
   EnumDisplayMonitors: { args: [P, P, P, i64], returns: i32 },
   GetMonitorInfoW: { args: [P, P], returns: i32 },
-  SystemParametersInfoW: { args: [u32, u32, P, u32], returns: i32 },
   SetProcessDpiAwarenessContext: { args: [i64], returns: i32 },
-  SetThreadDpiAwarenessContext: { args: [i64], returns: i64 },
   GetDC: { args: [P], returns: P },
   ReleaseDC: { args: [P, P], returns: i32 },
   PrintWindow: { args: [P, P, u32], returns: i32 },
@@ -149,13 +147,6 @@ export function setDpiAware(): void {
   } catch {}
   try {
     shcore().SetProcessDpiAwareness(2);
-  } catch {}
-}
-
-/** Per-thread awareness (cp_actions sets it for its own calls). */
-export function setThreadDpiAware(): void {
-  try {
-    user32().SetThreadDpiAwarenessContext(-4n);
   } catch {}
 }
 
@@ -286,13 +277,6 @@ export function monitors(): Monitor[] {
     cb.close();
   }
   return out;
-}
-
-/** Usable desktop size of the primary monitor (SPI_GETWORKAREA). */
-export function workArea(): [number, number] {
-  const r = new Int32Array(4);
-  user32().SystemParametersInfoW(0x30, 0, ptr(r), 0);
-  return [r[2]! - r[0]!, r[3]! - r[1]!];
 }
 
 /** DPI of the monitor nearest a physical point; 96 when unknown. */
@@ -585,10 +569,6 @@ export function processAlive(pid: number): boolean {
   }
 }
 
-export function currentPid(): number {
-  return process.pid;
-}
-
 /** Every ancestor of `pid` (psutil.Process(pid).parents()). */
 export function ancestors(pid: number, procs: Proc[] = listProcesses()): number[] {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
@@ -698,5 +678,3 @@ export function decodeBlob(b: Uint8Array): string {
   return new TextDecoder("utf-8").decode(b);
 }
 
-export const _u64 = u64;
-export const _u16 = u16;

@@ -25,7 +25,7 @@ import { paths } from "../env";
 const REPO = paths().repo;
 const WRAPPER = join(REPO, "ignition-study-wrapper");
 const HERE = join(REPO, "gto-trainer");
-const LOG = join(WRAPPER, "debug", "study-tool.log");
+const LOG = join(paths().debug, "study-tool.log");
 const VENV_PY = join(REPO, "aof-model", ".venv", "Scripts", "python.exe");
 const CHART_SERVER = join(REPO, "analysis", "pipeline", "solve", "exploit_ui", "server.py");
 // the rig's own ports; STUDY_TOOL_PANEL / STUDY_TOOL_CDP move it (a test of this launcher runs on spare ports, headless)

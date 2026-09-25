@@ -28,6 +28,7 @@ process.env.WRAPPER_DEBUG_DIR = join(sandbox, "debug");
 mkdirSync(process.env.WRAPPER_DATA_DIR, { recursive: true });
 
 const { paths } = await import("../env");
+const { dataLayout } = await import("../../../../packages/data-root/dataRoot");
 const { S, resetState } = await import("../state");
 const { onGameMsg } = await import("../ignition/ws");
 const { handState, positionsAll } = await import("../ignition/hand");
@@ -110,7 +111,8 @@ function main(argv: string[]): number {
     outPath = resolve(args[i + 1]!);
     args.splice(i, 2);
   }
-  const debug = join(ROOT, "debug");
+  // the REAL recordings (the data root's wrapper-debug), not this run's sandbox — WRAPPER_DEBUG_DIR points there above
+  const debug = dataLayout().wrapperDebug;
   const dumps = args.length ? args.map((a) => resolve(a))
     : readdirSync(debug).filter((f) => /^ws_dump.*\.jsonl$/.test(f)).sort().map((f) => join(debug, f));
   outPath ??= join(ROOT, "tests", "backtest", "ws_decisions.jsonl");
