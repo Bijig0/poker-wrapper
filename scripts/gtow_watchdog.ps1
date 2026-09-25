@@ -31,6 +31,11 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
+# child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
+# 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
+# Normal before it starts anything; its children inherit that.
+try { (Get-Process -Id $PID).PriorityClass = 'Normal' } catch { }
 
 # The scheduled task runs this HEADLESS (conhost --headless), so Write-Output
 # goes nowhere. Everything it says is therefore also appended to a log, next to

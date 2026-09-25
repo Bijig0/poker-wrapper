@@ -8,6 +8,11 @@
 #   - restarts 10 s after an exit; a server that is alive but stops answering for 3 probes is killed and restarted
 #   - backs off when boots keep failing, and writes WHY (the server log's tail) into its own log
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
+# NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
+# child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
+# 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
+# Normal before it starts anything; its children inherit that.
+try { (Get-Process -Id $PID).PriorityClass = 'Normal' } catch { }
 $solve = Join-Path $env:POKER_ROOT 'analysis\pipeline\solve'
 $logDir = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\data\jobs'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }

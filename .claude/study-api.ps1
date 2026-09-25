@@ -11,6 +11,11 @@
 # relays: `bun run threeMaxGrid.ts --parse-only`, the converter's `python`, `unzip`, `ssh`) resolve their
 # tools from the worker's PATH, so it gets the same PATH an interactive shell has.
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
+# NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
+# child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
+# 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
+# Normal before it starts anything; its children inherit that.
+try { (Get-Process -Id $PID).PriorityClass = 'Normal' } catch { }
 $root = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api'
 $sup = Join-Path $root 'data\jobs\supervisor.log'
 $api = Join-Path $root 'data\jobs\api.log'   # the worker's stdout+stderr: where a failed boot says why

@@ -701,9 +701,10 @@ app.get("/registry", async (c) => {
 
 // ------------------------------------------------------------- strategies
 // The wrapper's panel and setup page re-read this every few seconds per open table; recomputing it scans every hand and
-// answer (0.2 s on an idle machine, seconds — once 91 s — under load, all on the answering thread). Served from a
-// 30 s cache that refreshes behind the live answers (services/livePriority).
-const STRATEGIES_TTL_MS = 30_000;
+// answer and re-reads the chart and miss-queue manifests (0.2 s on an idle machine, ~1 s on a busy one, seconds — once
+// 91 s — when the API ran at BelowNormal priority), all on the answering thread. Served from a 5-minute cache that
+// refreshes behind the live answers (services/livePriority); the realized bb/100 it carries can lag by that much.
+const STRATEGIES_TTL_MS = 5 * 60_000;
 app.get("/strategies", async (c) => c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody)));
 
 /** The whole-hand strategy catalogue: what we can play, whether each is
