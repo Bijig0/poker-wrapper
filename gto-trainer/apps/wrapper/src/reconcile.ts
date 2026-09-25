@@ -237,6 +237,15 @@ export class HandReconciler {
     }
   }
 
+  /** THE LAST SEAT STANDING NEVER FOLDS (2026-09-25, hand 4920544156): every other seat that was in has folded, so
+   *  the hand is over and this one won it — its cards leave the table at the pot award (mucked, not shown), and a bet
+   *  the ledger still says it owes was misread (the pot goes to someone). Judged only once the big blind is read, like
+   *  the award itself: before that `live` can be the previous hand's leftovers (4920431121 filed hero's preflop fold
+   *  on the river when this was judged from them). */
+  private lastStanding(num: number): boolean {
+    return this.bbs !== null && this.maxLive >= 2 && this.live.size === 1 && this.live.has(num);
+  }
+
   private jammed(_tk: Tick, num: number): boolean {
     return (this.jamHold.get(num) || 0) >= HOLD_TICKS;
   }
@@ -521,6 +530,7 @@ export class HandReconciler {
       if (num === this.hero) continue;
       if (this.allin.has(num)) continue;
       if (this.live.has(num)) {
+        if (this.lastStanding(num)) continue;
         const began = this.holdStreet.has(num) ? this.holdStreet.get(num)! : this.street;
         const late = began !== this.street;
         if ((this.cardHold.get(num) || 0) >= HOLD_TICKS) {
@@ -621,6 +631,7 @@ export class HandReconciler {
     const seats1 = ord.length ? ord : [...this.live].sort((a, b) => a - b);
     for (const s of seats1) {
       if (this.allin.has(s)) continue;
+      if (this.lastStanding(s)) continue;
       if (this.live.has(s) && s !== this.aggressor && this.maxBet - (this.C.get(s) ?? 0.0) > TOL) {
         this.add(s, "fold", null, seq, 0.7, "end", "owed at the pot award");
         this.live.delete(s);

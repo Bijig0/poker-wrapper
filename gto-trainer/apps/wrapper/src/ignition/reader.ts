@@ -10,7 +10,7 @@
 import * as cdp from "../cdp";
 import { time } from "../clock";
 import { C } from "../config";
-import { feedAdd } from "../feed";
+import { feedAdd, log } from "../feed";
 import { keepLast, pyRound, sortedNums, truthy } from "../py";
 import { S, seams } from "../state";
 import * as TABLES from "../tables";
@@ -19,7 +19,7 @@ import {
   awardName, bankStep, boardCards, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, dumpMark, mkey, tapVerify } from "./ws";
+import { actAdd, actSeen, dumpMark, lastStanding, mkey, tapVerify } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -320,6 +320,13 @@ export async function feedTick(): Promise<void> {
       const ticks: Map<number, number> = (w.foldTicks ??= new Map());
       ticks.set(num, badge === "FOLD" ? (ticks.get(num) || 0) + 1 : 0);
       if (!(w.heldCards ?? new Set()).has(num)) continue;
+      // THE POT WINNER NEVER FOLDS (2026-09-25): once every other seat has folded, this seat's cards going and the
+      // pot landing in its slot are the award, not a fold or a bet. Checked BEFORE actSeen, which would record the
+      // fold key and swallow a real WS fold as a duplicate should our fold set ever be wrong.
+      if (lastStanding(num)) {
+        if (oc >= 1 && cc === 0) log(`[reader] seat ${num}'s cards left at the pot award — the last seat standing, not a fold`);
+        continue;
+      }
       if (((badge === "FOLD" && ticks.get(num) === 2) || (oc >= 1 && cc === 0)) && !actSeen(["fold", num])) {
         foldedSeats.add(num);
         (w.domFolds ??= new Set<number>()).add(num);

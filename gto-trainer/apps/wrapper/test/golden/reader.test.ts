@@ -9,10 +9,15 @@
  *
  * Nothing touches the real data/ or debug/: both are pointed at a temp directory, the CDP layer answers from the
  * recording, and a press is recorded instead of made.
+ *
+ * THE WRAPPER IS TYPESCRIPT ONLY NOW: the Python recorder made the first baseline; a deliberate change to the reader
+ * re-baselines from THIS implementation — same inputs, same delta format, each key stored exactly as the comparison
+ * below reads it (post-recording fields dropped, the heads-up supersession applied):
+ *   GOLDEN_UPDATE=1 bun test test/golden/reader.test.ts      (then review the corpus diff before committing)
  */
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as cdp from "../../src/cdp";
@@ -30,7 +35,9 @@ import { pickReady } from "../../src/relay";
 import { feedLoopOnce } from "../../src/loops";
 import { state } from "../../src/view";
 import "../../src/session";
-import { canon, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
+import { canon, CORPUS, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
+
+const UPDATE = process.env.GOLDEN_UPDATE === "1";
 
 /** Fields added after the Python recording, verified on their own (test/golden/start-stacks.test.ts, 636 of 636
  *  seat-hands against the table's own accounts): the hand's stacks as dealt (/hand `startStacks`, archived with the
@@ -232,9 +239,11 @@ for (const file of corpusFiles("reader-")) {
     const ledger = { seats: 0, bad: new Map<string, string>(), corrupt: new Set<string>() };
     const handRids = new Map<string, Set<string>>();
     let lastMoney = "";
+    const rebased: string[] = [JSON.stringify(meta)];     // GOLDEN_UPDATE: the corpus rewritten from this implementation
+    const prev = new Map<string, string>();
     try {
       let k = 0;
-      for (let r = 1; r < recs.length && fails.length < 6; r++) {
+      for (let r = 1; r < recs.length && (UPDATE || fails.length < 6); r++) {
         const inp = recs[r];
         if (inp.type !== "in") continue;
         const outRec = recs[r + 1] && recs[r + 1].type === "out" && recs[r + 1].i === inp.i ? recs[++r] : null;
@@ -365,6 +374,21 @@ for (const file of corpusFiles("reader-")) {
             table: await tableState(),
           });
         }
+        if (UPDATE) {
+          rebased.push(JSON.stringify(inp));
+          const delta: Record<string, unknown> = { type: "out", i: inp.i };
+          for (const [key, raw] of Object.entries(snap)) {
+            const v = normPy(supersededHu(key, dropPostRecording(raw)));
+            const enc = canon(v);
+            if (prev.get(key) !== enc) {
+              delta[key] = v;
+              prev.set(key, enc);
+            }
+          }
+          rebased.push(JSON.stringify(delta));
+          compared++;
+          continue;
+        }
         if (!outRec) continue;
         for (const [key, v] of Object.entries(outRec)) if (key !== "type" && key !== "i") expected[key] = v;
         for (const [key, raw] of Object.entries(snap)) {
@@ -388,6 +412,12 @@ for (const file of corpusFiles("reader-")) {
       Object.assign(cdp.io, io0);
       Object.assign(seams, seams0);
       realTime();
+    }
+    if (UPDATE) {
+      const body = rebased.map((x) => x + String.fromCharCode(10)).join("");
+      writeFileSync(join(CORPUS, file), Bun.gzipSync(new TextEncoder().encode(body), { level: 9 }));
+      console.log(`${file}: re-baselined, ${compared} snapshots`);
+      return;
     }
     console.log(`${file}: ${compared} snapshots compared, ${fails.length} difference(s)`);
     const cleanBad = [...ledger.bad].filter(([hk]) => !ledger.corrupt.has(hk) && !KNOWN_WRONG_LINES[hk]);
