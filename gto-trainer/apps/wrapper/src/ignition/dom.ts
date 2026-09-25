@@ -419,6 +419,12 @@ const HARMLESS_MODALS: [RegExp, string][] = [
 ];
 
 /** The client's modal, if one is up: its OK/close button (data-qa modal.action.*) and the notice text. */
+/** The Buy-chips panel is open over the action strip (its BUY button is on the table read). One definition: the
+ *  reader's liveStatus.buyPanel and actReal's own-read refusal both use it. */
+export function buyPanelUp(d: Record<string, any>): boolean {
+  return (d.buttons || []).some((b: any) => String(b.qa || "") === "buyInButton");
+}
+
 export function modalOf(d: Record<string, any>): Record<string, any> | null {
   const btns = (d.buttons ?? []).filter((b: any) => String(b.qa || "").startsWith("modal.action."));
   if (!btns.length) return null;

@@ -66,7 +66,9 @@ export function formatIdFor(gameType: string, stake: string | null, seats: numbe
 
 // ----------------------------------------------------------------- page JS
 export const LOBBY = () => js("formats.LOBBY");
-const FRAME_FN = () => js("formats.FRAME_FN");
+// the ONE frame resolver (the same file ignition/dom.ts binds): formats.ts may not import dom.ts (sessions → balances →
+// formats → state cycle), so it loads the snippet by name — a hand-kept copy used to live in formats.FRAME_FN.js
+const FRAME_FN = () => js("launch.FRAME_JS");
 
 /** `code` with __FRAME__ defined and __SLOT__ bound to one table (tables.ts FrameSel). */
 export function slotted(code: string, sel: tables.FrameSel | undefined): string {

@@ -16,7 +16,7 @@ import { S, seams } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand, noteAward } from "../archive";
 import {
-  awardName, bankStep, boardCards, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
+  awardName, bankStep, boardCards, buyPanelUp, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
 import { actAdd, actSeen, boardCap, dumpMark, lastStanding, mkey, noteDomBoard, tapVerify, withoutRabbit } from "./ws";
@@ -218,7 +218,7 @@ export async function feedTick(): Promise<void> {
     tapVerify(heroCards(d), drawn);
   } catch {}
   try {
-    L.buyPanel = (d.buttons || []).some((b: any) => String(b.qa || "") === "buyInButton");
+    L.buyPanel = buyPanelUp(d);
   } catch {}
   const p = S.feedPrev;
   if (!d.seated) {

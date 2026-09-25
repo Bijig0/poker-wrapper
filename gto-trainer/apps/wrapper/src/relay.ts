@@ -17,7 +17,7 @@ import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyFloatStr, pyInt, pyRepr, pyReprStr, pyRound, pyStr } from "./py";
 import { CP, S, isCp, pressBlocked, seams, type ActOpts } from "./state";
 import * as TABLES from "./tables";
-import { ACTION_RE, cardKey, findInputJs, framePin, heroCards, modalOf, mySel, pointProbeJs, sameHole, splitStrip, tableJs } from "./ignition/dom";
+import { ACTION_RE, buyPanelUp, cardKey, findInputJs, framePin, heroCards, modalOf, mySel, pointProbeJs, sameHole, splitStrip, tableJs } from "./ignition/dom";
 import { handState, toActSources } from "./ignition/hand";
 import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
@@ -215,6 +215,12 @@ async function actReal(label: string, kind = "action", opts: ActOpts = {}): Prom
   if (!d.seated) return { ok: false, reason: "no table tab open" };
   if ((kind === "action" || kind === "preset") && modalOf(d)) {
     return { ok: false, reason: "a client notice is over the action strip (seen on the press's own read)" };
+  }
+  // THE BUY-CHIPS PANEL, on this press's own read (2026-09-25 audit): only our own flag was checked, and a close that
+  // was refused (not rendering, another table's point, the press lock) left the panel over the strip — the strip's
+  // coordinates then landed on the panel
+  if ((kind === "action" || kind === "preset") && buyPanelUp(d)) {
+    return { ok: false, reason: "the Buy-chips panel is over the action strip (seen on the press's own read)" };
   }
   if (opts.cards !== undefined) {
     const wrongHand = holeCardsRefusal(opts.cards, heroCards(d), opts.strict);
@@ -437,9 +443,8 @@ export function pickReady(): Record<string, any> {
   } catch {
     return no("decision key unreadable");
   }
-  // A POST-IN is not an action to the API (utils/foldPostIns folds it into the poster's own action), so its key counts
-  // one action fewer per post than this line holds (2026-09-25) — count the way the key was made.
-  const nActs = h.actions.filter((a: any) => a.type !== "post").length;
+  // count the way the key was made (decisionActions: a post-in is not an action to the API)
+  const nActs = decisionActions(h).length;
   if (kStreet !== h.street || kN !== nActs) {
     return no(`pick was for ${pyStr(kStreet)} after ${kN} actions; table is ${h.street} after ${nActs}`);
   }
@@ -556,13 +561,25 @@ export function didAsTold(plan: Record<string, any>, a: Record<string, any>, her
   return null;
 }
 
+/**
+ * THE ACTIONS A DECISION IS COUNTED IN — the hand's line without its post-ins. A POST-IN is not an action to the API
+ * (utils/foldPostIns folds it into the poster's own action), so the decision key's action count (element 4) leaves
+ * them out. EVERY count here must be this one: pickReady and the no-answer fold used it, but spotUnchanged and the
+ * press verifier counted the raw line (2026-09-25 audit) — in any hand with a post-in a press that did not register
+ * read as "another action landed first" and was never retried, and acts[kN] could be hero's OWN earlier action,
+ * judging the new press "confirmed" or "MIS-EXECUTED" against the wrong one.
+ */
+export function decisionActions(h: Record<string, any>): any[] {
+  return (h.actions || []).filter((a: any) => a.type !== "post");
+}
+
 /** Is the table still showing the EXACT decision this press was sent for? (the whole safety case for a retry) */
 export function spotUnchanged(p: Record<string, any>, h: Record<string, any>): [boolean, string | null] {
   if (!S.liveStatus.toAct) return [false, "hero is no longer on the clock"];
   if (S.liveStatus.modal) return [false, "a client notice is over the action strip"];
   if (h.handId !== p.handId) return [false, "the table moved to the next hand"];
   if (h.heroFolded || h.ended) return [false, "the hand is over for hero"];
-  if ((h.actions || []).length !== p.kN) return [false, "another action landed first — the spot moved on"];
+  if (decisionActions(h).length !== p.kN) return [false, "another action landed first — the spot moved on"];
   try {
     const i = p.key.indexOf("|");
     if (i >= 0 && JSON.parse(p.key.slice(i + 1))[0] !== h.street) return [false, "the street moved on"];
@@ -598,7 +615,7 @@ export async function maybeVerifyExec(): Promise<void> {
     verifyDone("unknown", "the table moved to the next hand before the press showed");
     return;
   }
-  const acts: any[] = h.actions || [];
+  const acts: any[] = decisionActions(h);   // kN counts THIS list (the key's own count)
   const k = p.kN;
   let mine = acts.length > k && acts[k].hero ? acts[k] : null;
   if (mine === null && acts.length > k) mine = acts.slice(k).find((a) => a.hero) ?? null;
@@ -1030,8 +1047,7 @@ export async function maybeFoldNoAnswer(): Promise<void> {
     st.noAnswerTurn = null;
     return;
   }
-  const nActs = (h.actions || []).filter((a: any) => a.type !== "post").length;
-  const key = `${pyStr(h.handId)}|${pyStr(h.street)}|${nActs}`;
+  const key = `${pyStr(h.handId)}|${pyStr(h.street)}|${decisionActions(h).length}`;
   if ((st.noAnswerTurn || {}).key !== key) st.noAnswerTurn = { key, since: time(), tries: 0, lastTry: 0.0 };
   const turn = st.noAnswerTurn;
   if (turn.tries >= NO_ANSWER_TRIES || time() - turn.lastTry < NO_ANSWER_RETRY_S) return;
@@ -1082,7 +1098,7 @@ export async function maybeTakeTime(): Promise<Record<string, any> | null> {
   if (!b || time() - (st.timeBankAt ?? 0.0) < TIME_BANK_COOLDOWN_S) return null;
   if (S.liveStatus.modal) return null;
   const h = handState();
-  const decision = h ? `${pyStr(h.handId)}|${pyStr(h.street)}|${(h.actions || []).length}` : `#${S.handNo}`;
+  const decision = h ? `${pyStr(h.handId)}|${pyStr(h.street)}|${decisionActions(h).length}` : `#${S.handNo}`;
   if (st.timeBankDecision === decision) return null;
   st.timeBankAt = time();
   const label = String(b.text || "+45s").trim();

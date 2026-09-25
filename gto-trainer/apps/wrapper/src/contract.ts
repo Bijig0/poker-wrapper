@@ -26,7 +26,6 @@ export const Body = {
                  rememberMe: anyVal.optional(), trustDevice: anyVal.optional() }),
   login: obj({ profile: anyVal.optional() }),
   code: obj({ profile: anyVal.optional(), code: anyVal.optional(), trustDevice: anyVal.optional() }),
-  formatGoto: obj({ format: anyVal.optional(), buyinBb: anyVal.optional(), waitForBb: anyVal.optional() }),
   preflight: obj({ preset: anyVal.optional(), config: anyVal.optional() }),
   sessionStart: obj({ preset: anyVal.optional(), config: anyVal.optional(), label: anyVal.optional(), note: anyVal.optional(),
                       joining: anyVal.optional() }),

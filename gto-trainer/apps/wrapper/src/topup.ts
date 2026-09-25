@@ -105,9 +105,12 @@ export function topUpGate(): [boolean, string | null] {
 /** Fold the Buy-chips panel back off the action strip (safe to call twice: "Buy chips" is a TOGGLE). */
 export async function closeBuyPanel(): Promise<void> {
   if (!S.topupPanel.open) return;
-  S.topupPanel.open = false;
+  // closed only when the close press WENT THROUGH (2026-09-25 audit): the flag used to drop first and the result was
+  // ignored, so a refused close left the panel up while every later check believed it gone
   try {
-    await seams.act("Buy chips", "button");
+    const r = await seams.act("Buy chips", "button");
+    if (r?.ok) S.topupPanel.open = false;
+    else log(`[top-up] could not close the Buy-chips panel: ${r?.reason ?? "refused"}`);
   } catch (e: any) {
     log(`[top-up] could not close the Buy-chips panel: ${e?.message ?? e}`);
   }

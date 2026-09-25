@@ -1,7 +1,8 @@
 /**
  * THE PANEL SERVER — every route launch.py's Handler served, on Hono. Same paths, same status codes, same JSON
- * (json.dumps' text: ", " / ": " separators, \uXXXX escapes), same headers (no-store, CORS *), same pages read
- * from ignition-study-wrapper/. POST bodies are parsed through the zod contract (src/contract.ts).
+ * (json.dumps' text: ", " / ": " separators, \uXXXX escapes), the no-store header, same pages read
+ * from ignition-study-wrapper/. POST bodies are parsed through the zod contract (src/contract.ts). CORS is NOT "*" any
+ * more: a foreign page is refused (ALLOWED_ORIGIN below).
  *
  * A handler that throws answers 500 with {"ok": false, "error": "<Type>: <message>"} — JSON, because every page
  * reads replies with .json().
@@ -20,7 +21,7 @@ import * as faketable from "./faketable";
 import { log } from "./feed";
 import * as W from "./win32";
 import * as F from "./formats";
-import { fmtFixed, pyFloat, pyInt, pyJsonDumps, pyRepr, pyStr, truthy } from "./py";
+import { fmtFixed, pyInt, pyJsonDumps, pyRepr, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
 import { CP, S, isCp, seams } from "./state";
 import * as TABLES from "./tables";
@@ -38,7 +39,19 @@ import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
 import { domDump, shot, state, toolShell } from "./view";
 import { applyLayout, dpiAt, monitors, panelHwnd, slotTitle, targetArea, wantFullscreen } from "./windows";
 
-const HEADERS = { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
+const HEADERS = { "Cache-Control": "no-store" };
+
+/**
+ * WHO MAY DRIVE THIS WRAPPER FROM A BROWSER (2026-09-25 audit). Every reply used to carry
+ * `Access-Control-Allow-Origin: *` and every POST body was parsed whatever its content type, so ANY web page open in
+ * any browser on this machine could read /state (hero's cards) and POST /act, /study-auto {allowRealMoney}, /topup/now.
+ * CORS alone would not stop that — a browser still SENDS a cross-origin form POST, it only hides the reply — but a
+ * browser always stamps such a request with its Origin, and server-side callers (the study API, curl) send none. So:
+ * a request whose Origin is not a local panel or the study API is refused before any handler runs, and the CORS header
+ * names only those origins. (A DNS-rebinding page arrives with its own hostname as Origin and is refused the same way.)
+ */
+export const ALLOWED_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:(2000|2001|2002|77\d\d))?$/;
+const originAllowed = (o: string | undefined): boolean => !o || ALLOWED_ORIGIN.test(o);
 
 function send(code: number, ctype: string, body: string | Uint8Array): Response {
   return new Response(body as BodyInit, { status: code, headers: { "Content-Type": ctype, ...HEADERS } });
@@ -86,10 +99,28 @@ export function buildApp(): Hono {
       log(`[slow] ${c.req.method} ${u.pathname}${u.search} ${fmtFixed(dt, 0)} ms -> ${c.res.status}`);
     }
   });
+  // refuse a foreign page before any handler can act; name only allowed origins in the CORS header
+  app.use(async (c, next) => {
+    const origin = c.req.header("origin");
+    if (!originAllowed(origin)) {
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+        log(`[security] refused ${c.req.method} ${new URL(c.req.url).pathname} from origin ${origin}`);
+        return json(403, { ok: false, error: `cross-origin request from ${origin} refused` });
+      }
+      await next();   // a GET still answers (same-origin tools, curl) — without a CORS header the page cannot read it
+      return;
+    }
+    await next();
+    if (origin) c.res.headers.set("Access-Control-Allow-Origin", origin);
+  });
   app.onError((e: any) => json(500, { ok: false, error: `${e?.name && e.name !== "Error" ? e.name : "Exception"}: ${e?.message ?? e}` }));
   app.notFound(() => text404());
-  app.options("*", () => new Response(null, { status: 204, headers: {
-    "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }));
+  app.options("*", (c) => {
+    const origin = c.req.header("origin");
+    if (!origin || !ALLOWED_ORIGIN.test(origin)) return new Response(null, { status: 403 });
+    return new Response(null, { status: 204, headers: {
+      "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } });
+  });
 
   // ------------------------------------------------------------------------------------------ GET
   const panel = () => (!S.session.id && !S.fakeMode ? redirect("/setup") : html(slotTitle(page("panel.html"))));
@@ -291,11 +322,7 @@ export function buildApp(): Hono {
     S.faketableSpecs.set(sl, truthy(b.spec) ? (b.spec as any) : faketable.EXAMPLE_SPEC);
     return json(200, { ok: true, slot: sl, slots: [...S.faketableSpecs.keys()].sort((a, b2) => a - b2) });
   });
-  app.post("/faketable/spec", async (c) => {
-    const raw = await c.req.text();
-    S.faketableSpec = JSON.parse(raw || "{}");
-    return send(200, "application/json", '{"ok": true}');
-  });
+
   app.post("/faketable/load", async (c) => {
     const raw = await c.req.text();
     return json(200, await SESSION.faketableLoad(JSON.parse(raw || "{}")));
@@ -401,18 +428,7 @@ export function buildApp(): Hono {
     void SESSION.openTableWindow().catch((e) => log(`[table] ${e?.message ?? e}`));
     return json(200, { ok: true });
   });
-  app.post("/format/goto", async (c) => {
-    const b = await body(c, Body.formatGoto);
-    let buyin = 100.0;
-    try {
-      buyin = pyFloat(b.buyinBb || 100);
-    } catch {
-      buyin = 100.0;
-    }
-    const res = !(await cdp.available(C.CDP_PORT)) ? { ok: false, error: `table window not up (CDP :${C.CDP_PORT})` }
-      : await F.goto(b.format as string, buyin, C.CDP_PORT, b.waitForBb !== false);
-    return json(res.ok ? 200 : 409, res);
-  });
+
   app.post("/format/reseat", async () => {
     const cfg = S.session.id ? ((S.session.rec || {}).config || {}) : {};
     let res: Record<string, any>;
@@ -450,7 +466,6 @@ export function buildApp(): Hono {
     }
     return json(res.ok ? 200 : 409, res);
   });
-  app.post("/format/leave", async () => json(200, (await cdp.available(C.CDP_PORT)) ? await F.leave(C.CDP_PORT) : { ok: false, error: "table window not up" }));
   app.post("/session/preflight", async (c) => {
     const b = await body(c, Body.preflight);
     const presets = await SES.presets();

@@ -31,6 +31,7 @@ import {
 } from "../../src/relay";
 import { BET_SPOT, FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
 import { checker, J, scratchDirs } from "./helpers";
+import * as F from "../../src/formats";
 
 const T0 = 1_790_334_700;
 
@@ -124,7 +125,7 @@ test("2. a table is the client's TAG: closing one never moves another wrapper on
   const one = new Page([["only", null]]);
   eq("the single-table client (no tags): null and the leader's first read are its table", [one.frame()(null), one.frame()({ ord: 0, me: 1 })], ["only", "only"]);
   eq("  ... and there is no second table", one.frame()({ ord: 1, me: 2 }), null);
-  eq("formats' resolver is the identical snippet", js("formats.FRAME_FN"), js("launch.FRAME_JS"));
+  eq("formats binds the same resolver file as dom.ts", F.slotted("__FRAME__", null).includes(js("launch.FRAME_JS")), true);
   expect(fails).toEqual([]);
 });
 

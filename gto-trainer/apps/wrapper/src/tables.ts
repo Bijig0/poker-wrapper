@@ -106,7 +106,17 @@ export function pin<T extends { url?: string; id?: string }>(targets: T[], rank:
 }
 
 // ---- one wrapper presses at a time (four tables are one page; a click is three CDP events) ----
-export const PRESS_TTL_S = 5.0;
+/**
+ * THE PRESS LOCK IS OWNED, NOT ADVISORY (2026-09-25 audit). Before: any error other than EEXIST counted as "took the
+ * lock" (Windows returns EPERM while another process deletes the file); a lock older than 5 s was deleted as stale
+ * although one press chain (visibility check 3 s + point probe 4 s + click 5 s) can outlast that; and release()
+ * unlinked whatever lock was there. So table A's slow press could lose its lock to B, then delete B's, and C would
+ * press while B was mid-click — two tables' mouse events interleaved on the one page.
+ * Now each acquisition writes a random token and release() removes the file only while it still holds that token;
+ * a holder is stale when its process is gone (at once) or it has held for longer than a whole press chain; a lock
+ * that cannot be created is waited on like any other; and a press that goes ahead without the lock says so.
+ */
+export const PRESS_TTL_S = 15.0;
 export const PRESS_WAIT_S = 2.0;
 const pressLockPath = () => join(claimDir(), "press.lock");
 
@@ -114,38 +124,44 @@ export type Lock = { waited: number; forced: boolean; release(): void };
 
 const NULL_LOCK: Lock = { waited: 0, forced: false, release() {} };
 
+const pidAlive = (pid: unknown): boolean => {
+  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
+};
+
+const readLock = (): { pid?: number; at?: number; token?: string } | null => {
+  try { return JSON.parse(readFileSync(pressLockPath(), "utf8")); } catch { return null; }
+};
+
 async function takePressLock(timeoutS: number): Promise<Lock> {
   const start = time();
+  const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   let held = false;
   let forced = false;
   for (;;) {
-    let took = false;
     try {
       mkdirSync(claimDir(), { recursive: true });
       const fd = openSync(pressLockPath(), "wx");
       try {
-        writeSync(fd, JSON.stringify({ pid: process.pid, at: time() }));
+        writeSync(fd, JSON.stringify({ pid: process.pid, at: time(), token }));
       } finally {
         closeSync(fd);
       }
-      took = true;
-    } catch (e: any) {
-      if (e?.code !== "EEXIST") took = true;       // a lock we cannot create must not block a press
-    }
-    if (took) {
       held = true;
       break;
-    }
-    let holder: number | null = null;
-    try {
-      holder = JSON.parse(readFileSync(pressLockPath(), "utf8")).at ?? null;
-    } catch {}
-    if (holder !== null && time() - holder > PRESS_TTL_S) {
-      try { unlinkSync(pressLockPath()); } catch {}
-      continue;
+    } catch (e: any) {
+      // EEXIST: someone holds it. Anything else (EPERM while another process deletes it): not ours either — wait.
+      if (e?.code === "EEXIST") {
+        const cur = readLock();
+        if (cur && (!pidAlive(cur.pid) || (typeof cur.at === "number" && time() - cur.at > PRESS_TTL_S))) {
+          if (readLock()?.token === cur.token) { try { unlinkSync(pressLockPath()); } catch {} }
+          continue;
+        }
+      }
     }
     if (time() - start >= timeoutS) {
-      forced = true;                               // press anyway: a missed press costs a hand
+      forced = true;   // press anyway (a missed press costs a hand) — but never silently; console.log = feed.log without its import cycle
+      console.log(`[press-lock] pressing WITHOUT the lock after ${pyRound(time() - start, 2)} s (held by pid ${readLock()?.pid ?? "?"})`);
       break;
     }
     await sleep(0.02);
@@ -154,10 +170,10 @@ async function takePressLock(timeoutS: number): Promise<Lock> {
     waited: pyRound(time() - start, 3),
     forced,
     release() {
-      if (held) {
-        try { unlinkSync(pressLockPath()); } catch {}
-        held = false;
-      }
+      if (!held) return;
+      held = false;
+      // only OUR lock: a holder that outlived the TTL may have been replaced by another table's
+      if (readLock()?.token === token) { try { unlinkSync(pressLockPath()); } catch {} }
     },
   };
   return lock;
@@ -237,7 +253,8 @@ export function domSlot(me?: number | null): number | null {
 /**
  * WHICH IFRAME A PAGE SNIPPET READS — `__frame(SEL)` (js/launch.FRAME_JS.js). SEL is:
  *   null            the single-table client (the first table frame);
- *   a number        the Nth table in the client's own tag order (a legacy caller naming another table by ordinal);
+ *   a number        the Nth table in the client's own tag order — NO production caller builds one any more (it is the
+ *                   lookup that moved wrappers onto their neighbours' tables); only the resolver's own tests do;
  *   {tag}           the table the client tags `tag` — a TAG is the client's identity for a table, a position is not;
  *   {ord, me, tag?} THIS wrapper's table: by its pinned tag once it has one, else the ord-th table — unless another
  *                   wrapper already holds that one (the page-side registry the snippet keeps, window.__pwFramePins).
@@ -253,8 +270,12 @@ export function frameSelJs(sel: FrameSel | undefined): string {
   return JSON.stringify(sel);
 }
 
-/** THIS wrapper's table selector — ignition/dom.ts installs the pinned-tag one (mySel) when it loads. */
-export const frameHooks: { mine: () => FrameSel } = { mine: () => domSlot() };
+/** THIS wrapper's table selector — ignition/dom.ts installs the pinned-tag one (mySel) when it loads. The default (a
+ *  path that reaches formats before dom.ts is loaded) is the page-registry form {ord, me}, never a bare ordinal: the
+ *  audit found the old default `domSlot()` would silently bring back the ordinal lookup (2026-09-25). */
+export const frameHooks: { mine: () => FrameSel } = {
+  mine: () => { const n = domSlot(); return n === null ? null : { ord: n, me: slot() ?? 1 }; },
+};
 
 export function isLeader(): boolean {
   const me = slot();

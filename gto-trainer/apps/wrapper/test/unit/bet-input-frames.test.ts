@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { js } from "../../src/js";
 import { pickBetInput } from "../../src/relay";
 import { checker, J } from "./helpers";
+import * as F from "../../src/formats";
 
 test("which field a relayed raise types into", () => {
   const { fails, check } = checker();
@@ -102,7 +103,7 @@ test("which iframe is MY table, whatever numbers the client tags them with", () 
   eq("gaps in the numbering change nothing", resolve(CASES["tags with gaps in them"]!, [0, 1, 2]), ["t1", "t2", null]);
   eq("a page with only the lobby resolves to nothing", resolve(CASES["the lobby alone"]!, [0, 1, null]), [null, null, null]);
   eq("  ... and it is skipped even when it sorts first", resolve(CASES["4 tables, DOM order != tag order"]!, [0]), ["t1"]);
-  eq("formats' resolver is the identical snippet", js("formats.FRAME_FN"), js("launch.FRAME_JS"));
+  eq("formats binds the same resolver file as dom.ts", F.slotted("__FRAME__", null).includes(js("launch.FRAME_JS")), true);
   // no literal [data-multitableslot="N"] lookup anywhere in the port's page code or sources
   const src = join(import.meta.dir, "..", "..", "src");
   // the reader, the relay and the lobby driver (launch.py + formats.py in the Python test); the fake table's own

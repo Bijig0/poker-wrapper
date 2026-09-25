@@ -624,14 +624,15 @@ app.get("/registry", async (c) => {
       id: "log", label: "Answer log & ground truth", mode: null,
       state: log.provenanceRows > 0 ? "good" : "warn",
       stateText: log.provenanceRows > 0 ? `${log.provenanceRows} answers with full provenance` : "No provenance rows yet",
-      tiers: ["answers.sqlite", "hands.db"],
+      tiers: ["poker.sqlite: answers", "poker.sqlite: hands"],
       routes: "the join that makes live grading possible: answers by client hand id ↔ archived hands",
       facts: [
         ["60 days", `${stats60.answered} answered · ${stats60.failed} failed`],
         ["records", "tier, latency, chart, pick, roll + since 2026-09-03: strategy mode, source, MES/GTO picks, EV at stake, band, stake, seats, position, depth, action mix"],
         ["hands", `${handRows ?? "?"} archived · ${HANDS_DB}`],
         ["wrapper", wrapper.ok ? `live at ${DEFAULT_LIVE_URL} · ${wrapper.ms} ms` : `not reachable at ${DEFAULT_LIVE_URL}`],
-        ["answers.sqlite", answersFile.exists ? `${((answersFile.sizeBytes ?? 0) / 1e3).toFixed(0)} KB` : "missing"],
+        // one central database holds both sides of the join (packages/data-root, GET /api/dashboard/storage)
+        ["database", answersFile.exists ? `${answerLog.dbPath} · ${((answersFile.sizeBytes ?? 0) / 1e6).toFixed(1)} MB` : `missing: ${answerLog.dbPath}`],
       ],
       caveats: log.provenanceRows > 0 ? [] : ["nothing can be graded MES-vs-GTO until answers with provenance accumulate"],
       answers30d: Object.values(log.sources).reduce((s, x) => s + x.n, 0), p50Ms: null, lastTs: null,
