@@ -20,10 +20,13 @@ import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { SNAP_TAU, SNAP_MAX } from "../utils/snapToken/snapToken";
 import type { Walk3Repair } from "./hrc3max";
 import { walkFitted, foldSeatsOut, actorsWithAllins } from "../utils/fitLine/fitLine";
-import { reconstructFlopRanges, classWeightsToSpec } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { reconstructFlopRanges, classWeightsToSpec, withRangeWalkCapture, replayRangeWalks, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
-import { solveAiChain, type AiChainResult } from "./aiChain";
+import { solveAiChain, type AiChainResult, type ChainTrace } from "./aiChain";
+import { handFacts, type DealtFact } from "./handFacts";
+import { withRequestScope } from "./requestScope";
+import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
 import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
@@ -38,7 +41,7 @@ import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalR
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb } from "../utils/foldPostIns/foldPostIns";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
-import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, preflopPinFor, preflopPinKey, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
@@ -125,6 +128,9 @@ export type FastSolveResult =
       notInRange?: boolean;
       approx?: boolean;
       warning?: string | null;
+      /** HOW THIS ANSWER WAS PRODUCED (2026-09-25, services/chainPath): the flop ranges' provenance, every street's,
+       *  the requests the call made, and the verdict (clean / by design / rebuilt / extra requests) */
+      path?: DecisionPath;
       /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
       dryRun?: {
         flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[];
@@ -150,6 +156,7 @@ export type FastSolveResult =
        *  "capture-fault" (the hand contradicts itself, PF-01), "no-hero-cards" (EH-9), "board-incomplete"
        *  (EIP-01). Absent on an ordinary miss, which the next piece in the cascade is welcome to attempt. */
       kind?: string;
+      path?: DecisionPath;
     };
 
 /** The terminal refusal classes fastSolve itself emits — see FastSolveResult.kind. */
@@ -790,6 +797,307 @@ async function solvePostflopAi(
 
 
 /**
+ * THE FLOP-ENTERING RANGES, COMPUTED ONCE PER HAND (2026-09-25, the chain ledger — Brady: "the happy path should be:
+ * in a normal spot, we just cache and reuse the ranges"). Every piece that can supply them, in the order the strategy
+ * prefers — the preflop pin (the tree hero's preflop decisions were read on), the rules Brady set for a hand that
+ * left it (hero off the pick, a pruned branch, re-picked villains), and the recovery path (the picker's chart, the AI
+ * preflop tree) — lives here and ONLY runs on a memo miss: the first postflop decision of a hand computes them,
+ * every later one (the turn, the river, a re-ask) takes them from flopArrival's memo. Each result says how it was
+ * produced (ArrivalPath), which the chain path reports.
+ */
+interface FlopArrival {
+  recon: Extract<Awaited<ReturnType<typeof reconstructFlopRanges>>, { ok: true }>;
+  preTokens: string[];
+  seatOrder: readonly string[] | undefined;
+  rangeSource: string | null;
+  /** the notes the source adds to the answer (appended after the capture's own) */
+  note: string | null;
+  prov: ArrivalPath;
+}
+async function flopArrivalCompute(
+  hand: ParsedHand, heroPos: string | null, heroPosName: string, set: (typeof SOLUTION_SETS)[number], depth: number,
+  sixMax: boolean, huCp: boolean, pinnedDealt: Record<number, number> | undefined,
+): Promise<{ ok: true; a: FlopArrival } | { ok: false; why: string }> {
+  const failA = (why: string) => ({ ok: false as const, why });
+  const isHu = set.seats.length === 2;
+  let sixNote: string | null = null;
+  let prov: ArrivalPath | null = null;
+  // A 3-handed flop is entered from a 3-handed preflop, so its ranges come from
+  // the asymmetric 3-max corpus. Tried FIRST and fallen back from rather than
+  // replacing the 6-max walk: if the chart server is down, conditioned 6-max
+  // ranges still beat losing the chain (and the street-root solve flags it).
+  let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> | null = null;
+  let preTokens: string[] = [];
+  let rangeSource: string | null = null;
+  // The rotation must match whichever token set won: preflopPotStack replays
+  // the line below to size the flop pot, and walking 3-max tokens through the
+  // 6-max rotation misassigns every action and double-counts the blinds.
+  let seatOrder: readonly string[] | undefined;
+  // Under the 6-max strategy the piece that ANSWERED preflop supplies the ranges (answer log; the shape
+  // when no answer was logged). The 3-max corpus is cut from that strategy (see the preflop dispatch), so
+  // this branch is for the OTHER strategies only — a 3-handed hand under the 6-max strategy conditions on
+  // the AI preflop tree that answered it, in the sixMax block below.
+  const piece = sixMax ? preflopPieceFor(hand) : null;
+  if (is3Handed(hand, heroPos) && !sixMax) {
+    const chart = chartFor(hand, heroPos);
+    const tri3 = buildPreflopTokens3max(hand, heroPos);
+    // reconstructFlopRanges snaps tokens against the nodes it is given, so the
+    // 3-max line needs no separate pre-snap pass.
+    if (preflopClosed(tri3, THREE_MAX_SEATS)) {
+      const tri = await reconstructFlopRanges(tri3, async (line) => {
+        const n = await fetchNode(chart.id, line);
+        return n === "unreachable" ? null : n;
+      }, { heroPos: mergeHeroPos(heroPosName, false) });
+      if (tri.ok) {
+        recon = tri;
+        preTokens = tri3;
+        seatOrder = THREE_MAX_SEATS;
+        rangeSource = chart.id;
+        prov = { how: "designed", producer: "3max-chart" };
+        // hero's OWN flop-entering range is the strategy he actually plays:
+        // when the exploit overlay covers his preflop line, the chain must
+        // start from that (wider) range, not the equilibrium chart's — the
+        // same swap the single-solve path makes. Villain keeps the chart.
+        // the pool-exploit overlay is a piece of the NL25 exploit strategy, armed process-wide by
+        // EXPLOIT_CHART; under the 6-max EQUILIBRIUM strategy hero arrives with the chart's range
+        const exRange = sixMax ? null : exploitFlopRange(tri3, heroPosName);
+        if (exRange) {
+          for (const p of Object.keys(recon.ranges)) {
+            if (p.toUpperCase() === heroPosName.toUpperCase()) {
+              (recon.ranges as Record<string, unknown>)[p] = exRange.weights;
+              rangeSource = `${chart.id} + exploit hero range (${exRange.key})`;
+            }
+          }
+        }
+      } else {
+        rangeSource = `6max (3-max chart ${chart.id}: ${tri.reason})`;
+      }
+    }
+  }
+
+  // THE 6-MAX STRATEGY CONDITIONS ON ITS OWN CHARTS (2026-09-17). The flop is entered from the preflop the
+  // charts prescribe, so both seats' arrival ranges are walked from the very 6-max chart the preflop picker
+  // chooses for this hand (effective stack, live shorts, open size). There is no library behind this branch:
+  // conditioning a NL200 6-max solve on NL500 library ranges is the wrong answer dressed as one.
+  // THE COINPOKER HU STRATEGY CONDITIONS ON ITS OWN CHART (2026-09-22). Both seats' flop-entering ranges are
+  // walked from the very cp200a tree the preflop picker chooses (effective stack, open, 3-bet) — never the GTO
+  // Wizard library, which is NL500 with no ante and a third of the rake.
+  if (!recon && huCp) {
+    const huTok = buildPreflopTokensHu(hand, heroPos);
+    if (!preflopClosed(huTok, HU_SEATS)) return failA("preflop betting didn't close (missed action?)");
+    const choice = chartForHu(hand, huTok, pinnedDealt);
+    const resolved = await resolveChartHu(choice);
+    if (resolved === "unreachable") return failA("chart server :8777 unreachable — the CoinPoker HU charts cannot be read");
+    if (resolved === null) return failA(`no CoinPoker HU chart on the server (wanted ${choice.id})`);
+    const get = nodeGetterHu(resolved.id);
+    const r = await reconstructFlopRanges(huTok, async (line) => {
+      const n = await get(line);
+      return n === "unreachable" ? null : n;
+    }, { heroPos: mergeHeroPos(heroPosName, true) });
+    if (!r.ok) return failA(`CoinPoker HU chart ${resolved.id}: ${r.reason}`);
+    recon = r; preTokens = huTok; seatOrder = HU_SEATS; rangeSource = resolved.id;
+    prov = { how: "designed", producer: "hu-chart" };
+    sixNote = [sixNote, choice.note, resolved.fellBack ? `no ${choice.id} tree — ranges from ${resolved.id}` : null].filter(Boolean).join(" · ") || null;
+  }
+
+  if (!recon && sixMax) {
+    // ONE SHAPE, TWO PIECES (2026-09-19, Brady): the flop-entering ranges come from the preflop piece that
+    // ANSWERED this hand — the 6-max charts (recon6max) or the GTO Wizard AI preflop tree (arrivalRangesGtowAi),
+    // both producing position → class → weight. The answer log says which piece answered; when it cannot (the
+    // probe never ran), the shape decides the way the preflop dispatch does: 4-6 seats → charts, else the AI —
+    // and a chart walk that fails on an unknown-piece hand is retried on the AI tree rather than lost.
+    // 4-6 seats condition on the 6-max charts; anything thinner on the AI tree that answered preflop.
+    // A hand whose log says the 3-max charts answered it is an ARCHIVED one from before the cut — it
+    // replays on the strategy as it stands now, which is the AI tree.
+    // THE PIN FIRST (services/preflopPin, 2026-09-25, Brady): the piece that answered hero's LAST preflop decision
+    // supplies the flop-entering ranges, from the very tree it read — not chosen again from the shape, not rebuilt
+    // from a fresh reading of the line. A pin the capture has outgrown (the line no longer starts with it) falls
+    // through to the walk below and says so in the trace. Hero's own class at zero weight in the pinned range is a
+    // refusal said out loud: the pieces disagree about hero's hand, which is a bug to see, not a reason to swap sources.
+    const pin = preflopPinFor(hand);
+    /** why the pin could not give the ranges (the recovery below says so in the path) */
+    let pinMiss: string | null = null;
+    const rebuiltProv = (producer: string, extra?: string | null): ArrivalPath => {
+      const via = producer === "recon6max" ? "read again from the 6-max chart the picker chooses" : "read from a GTO Wizard AI preflop tree built from the table";
+      return pin
+        ? { how: "rebuilt", producer, code: "arrival:pin-unusable", why: `the preflop pin (${pin.piece}) could not give the flop ranges — ${(pinMiss ?? "not resumable").slice(0, 160)} — ${via}` }
+        : { how: "rebuilt", producer, code: "arrival:no-pin", why: `no preflop answer is recorded for this hand, so the flop ranges were ${via}${extra ? ` (${extra.slice(0, 120)})` : ""}` };
+    };
+    if (pin) {
+      const tPin = Date.now();
+      const resumed: ResumeOutcome = pin.piece === "chart6max"
+        ? await resumeChartPreflopRanges(pin, hand, heroPos)
+        : await resumeAiPreflopRanges(pin, hand, heroPos, 6);
+      const cls = heroClassOf(hand);
+      const mine = resumed.ok ? Object.entries(resumed.ranges).find(([p]) => p.toUpperCase() === (heroPosName ?? "").toUpperCase())?.[1] : undefined;
+      const w = cls && mine ? mine[cls] ?? 0 : null;
+      const zeroHero = resumed.ok && !!cls && !!mine && !(w! > 0);
+      // HERO LEFT THE PICK (2026-09-25, Brady's rule 3 — veto-able): hero took an action his own pick gave 0%
+      // (preflopPin.heroDeviation, from what each answer told him), and the pinned chart either cannot continue the
+      // hand (it has no such action — a completed small blind in a raise-only tree, seed 1865) or holds his class at
+      // zero weight after it. That is not a bug in the pieces — the chart has no range for "hands that did this" —
+      // so the flop-entering ranges come from the GTO Wizard AI preflop tree built from the table, as for a pruned
+      // branch (OFF THE CHART, below). A zero weight after following every pick stays the loud refusal.
+      const dev = pin.piece === "chart6max" && (!resumed.ok || zeroHero) ? heroDeviation(pin.picks, buildPreflopTokens(hand, heroPos)) : null;
+      if (dev) {
+        const devNote = `OFF THE CHART (hero's own line): at "${dev.codes.join("-") || "root"}" hero took ${dev.action ?? dev.took}, which the pick gave ${dev.heroClass ?? cls ?? "his hand"} 0%, ` +
+          `so the chart has no flop range for his hand — the flop-entering ranges come from the GTO Wizard AI preflop tree`;
+        tmark("preflop pin: hero deviated", devNote);
+        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+        if (!ai.ok) return failA(`${devNote}; then ${ai.reason}`);
+        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+        sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
+        prov = { how: "by-design", producer: "ai-arrival", code: "arrival:hero-left-pick", why: `hero took ${dev.action ?? dev.took} at "${dev.codes.join("-") || "root"}", which his pick gave 0% — the flop ranges come from the GTO Wizard AI preflop tree` };
+      } else if (resumed.ok) {
+        tmark("preflop ranges resumed", `${pin.piece} ${resumed.id} · ${resumed.reads} node read(s) · ${Date.now() - tPin} ms · hero ${cls ?? "?"} weight ${w == null ? "n/a" : w.toFixed(3)}`);
+        if (zeroHero) {
+          return failA(`PREFLOP PIN (${pin.piece} ${resumed.id}): hero's ${cls} is not in range after the line "${resumed.codes.join("-")}" — ` +
+            `the piece that answered preflop never plays this line with this hand (a chart/AI mismatch to investigate, not a fallback)`);
+        }
+        // THE ONE EXCEPTION (round 2.1, Brady): what followed hero's decision broke the pinned chart's own assumption
+        // (its modelled short folded, or the open was played at a size the set has its own chart for) — the VILLAINS'
+        // ranges are read on the exact chart for the line as played; hero's stays on the pin (preflopPin.repickVillainRanges)
+        const repick = pin.piece === "chart6max" ? await repickVillainRanges(pin, hand, heroPos, resumed, pinnedDealt) : null;
+        recon = { ok: true, ranges: repick?.ranges ?? resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
+        sixNote = [sixNote, resumed.note, repick?.note].filter(Boolean).join(" · ") || null;
+        prov = repick
+          ? { how: "by-design", producer: `pin-${pin.piece}`, code: "arrival:villains-repicked", why: "villain ranges re-picked on the chart for the line as played (the pinned chart's assumption broke after hero's decision)" }
+          : { how: "pin", producer: `pin-${pin.piece}` };
+      } else if (pin.piece === "chart6max" && !resumed.ok && (resumed.prunedBranch || resumed.chartCannotHold)) {
+        // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
+        // subtree under an action that was really taken and real action followed it — a manual deviation into a
+        // ~0% line (the roll itself no longer picks one, see services/prunedPicks). The chart cannot continue the
+        // hand, so the flop-entering ranges come from a GTO Wizard AI preflop tree built from the table: one cloud
+        // solve, and the answer says the pick and the ranges came from different pieces.
+        tmark("preflop pin: pruned branch", `${resumed.why} — ranges from the AI preflop tree`);
+        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+        if (!ai.ok) return failA(`${resumed.why}; then ${ai.reason}`);
+        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+        sixNote = [sixNote,
+          resumed.prunedBranch
+            ? `OFF THE CHART: hero's line runs into a branch the 6-max chart never solved (${resumed.why.replace(/^pinned chart [^:]+: /, "")}) — ` +
+              `the preflop pick came from the chart, the flop-entering ranges from the GTO Wizard AI preflop tree`
+            // THE PINNED CHART CANNOT HOLD WHAT FOLLOWED (round 2, harness seed 18287 [short-seat]): hero squeezed as picked, and
+            // the BB's call was a fifth entrant the chart's four-active cap has no node for; the unpinned walk then re-picked a
+            // chart where hero never squeezes that hand — zero weight. Hero's decisions were read on the pinned chart, so no
+            // other chart's ranges are his: the exact tree gives them.
+            : `OFF THE CHART: the chart hero's preflop decisions were read on (${pin.chartId}) cannot hold what followed them ` +
+              `(${resumed.why.replace(/^pinned chart [^:]+: /, "").slice(0, 240)}) — the flop-entering ranges come from the GTO Wizard AI preflop tree`,
+          ai.note].filter(Boolean).join(" · ");
+        prov = { how: "by-design", producer: "ai-arrival", code: resumed.prunedBranch ? "arrival:pruned-branch" : "arrival:chart-cannot-hold",
+          why: resumed.prunedBranch ? "hero's line runs into a branch the 6-max chart never solved — ranges from the GTO Wizard AI preflop tree"
+            : "the chart hero's preflop decisions were read on cannot hold what followed them — ranges from the GTO Wizard AI preflop tree" };
+      } else {
+        tmark("preflop pin unusable", `${pin.piece}: ${resumed.why}`);
+        console.log(`[preflop-pin] hand ${preflopPinKey(hand)} ${pin.piece} not resumed — ${resumed.why}`);
+        pinMiss = resumed.why;
+      }
+    }
+    const wantAi = piece === "gtow-ai-preflop" || piece === "chart3max" || !is6Handed(hand, heroPos);
+    let six: Awaited<ReturnType<typeof recon6max>> | null = null;
+    if (!recon && !wantAi) {
+      six = await recon6max(hand, heroPos, heroPosName, pinnedDealt);
+      if (six.ok) {
+        recon = six.recon; preTokens = six.tokens; seatOrder = undefined; rangeSource = six.id; sixNote = six.note;
+        prov = rebuiltProv("recon6max");
+      } else if (piece === "chart6max") {
+        return failA(six.reason);
+      }
+    }
+    if (!recon) {
+      // SIX, NOT THREE — the same cap the chart path carries (recon6max), and for the same reason: the
+      // postflop step COLLAPSES the field to three itself (services/multiwayCollapse.ts) and needs every
+      // live seat's arrival range to decide what to ghost or merge. Capping HERE truncated the field before
+      // the collapse ever saw it, so every 4+ way flop whose preflop the AI piece answered — a thinned
+      // table, an off-menu size, a limped pot, anything the charts could not take — died with "4 players
+      // reach the flop — need 2 to 3" while the machinery to answer it sat one line downstream. The walk
+      // itself is count-agnostic (see SeatCap in gtowAiPreflop), so this was only ever the caller
+      // under-declaring what it could consume. Found by the 2026-09-21 stress run; the chart half of the
+      // same asymmetry had been fixed earlier the same day and this half was missed.
+      const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+      if (!ai.ok) return failA(six && !six.ok ? `${six.reason}; then ${ai.reason}` : ai.reason);
+      recon = { ok: true, ranges: ai.ranges };
+      preTokens = ai.tokens;
+      seatOrder = ai.seatOrder;
+      rangeSource = ai.id;
+      sixNote = [six && !six.ok ? `6-max chart could not walk this line (${six.reason})` : null, ai.note].filter(Boolean).join(" · ");
+      prov = rebuiltProv("ai-arrival", six && !six.ok ? six.reason : null);
+    }
+  }
+  if (!recon) {
+    if (!rangeSource) rangeSource = `6max ${set.gametype}@${depth}`;
+    if (!preflopDb.available(set.gametype, depth)) return failA(`no charts for ${set.gametype}@${depth}`);
+    preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
+    const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
+    if (!snapped.ok) return failA(`preflop line: ${snapped.reason}`);
+    preTokens = snapped.tokens;
+    // HU lines walk the [SB, BB] rotation — the 6-max default misassigns every
+    // action (the line never "closes") and double-counts the blinds as dead.
+    seatOrder = isHu ? HU_SEATS : undefined;
+    if (!preflopClosed(preTokens, seatOrder)) return failA("preflop betting didn't close (missed action?)");
+    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line),
+      { heroPos: mergeHeroPos(heroPosName, isHu) });
+  }
+  if (!recon.ok) return failA(`range reconstruction: ${recon.reason}`);
+  prov ??= { how: "designed", producer: "preflop-db" };
+  return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };
+}
+
+/** hand → its flop arrival, by the preflop inputs it was computed from (derived: dropping it costs a recompute). */
+const arrivalMemo = new Map<string, FlopArrival & { at: number; walks: RecordedRangeWalk[] }>();
+const ARRIVAL_MEMO_MAX = 400;
+
+/** Everything the arrival pieces read: the preflop capture, hero, the pinned stacks, the preflop pin. */
+function arrivalKeyOf(hand: ParsedHand, heroPos: string | null, heroPosName: string, set: (typeof SOLUTION_SETS)[number], depth: number,
+  sixMax: boolean, huCp: boolean, pinnedDealt: Record<number, number> | undefined): string | null {
+  const handKey = preflopPinKey(hand);
+  if (!handKey) return null;
+  const pin = sixMax ? preflopPinFor(hand) : undefined;
+  const pinId = pin ? [pin.piece, pin.piece === "chart6max" ? pin.chartId : pin.solId, pin.codes, pin.rawTokens, pin.foldedSeats ?? null, pin.picks?.length ?? 0] : null;
+  const pre = hand.actions.filter((a) => a.street === "preflop").map((a) => [a.seatId, a.type, a.amount ?? null, !!a.hero]);
+  const h = Bun.hash(JSON.stringify([heroPos, heroPosName, hand.heroSeatId, hand.heroCards, hand.positions, pre, hand.postIns ?? null,
+    set.id, depth, sixMax, huCp, pinnedDealt ?? null, pinId, dealtCount(hand, heroPos)])).toString(36);
+  return `${handKey}|${h}`;
+}
+
+/** The hand's flop-entering ranges: the memo when this hand already computed them, else computed now and kept. */
+async function flopArrival(
+  hand: ParsedHand, heroPos: string | null, heroPosName: string, set: (typeof SOLUTION_SETS)[number], depth: number,
+  sixMax: boolean, huCp: boolean, pinnedDealt: Record<number, number> | undefined,
+): Promise<{ ok: true; a: FlopArrival } | { ok: false; why: string }> {
+  const key = arrivalKeyOf(hand, heroPos, heroPosName, set, depth, sixMax, huCp, pinnedDealt);
+  const hit = key ? arrivalMemo.get(key) : undefined;
+  if (hit) {
+    replayRangeWalks(hit.walks);   // the walks that produced these ranges, for a recorder (the harness's range oracle)
+    tmark("flop ranges from the hand's memo", `${hit.prov.producer} · computed ${((Date.now() - hit.at) / 1000).toFixed(0)} s ago — no preflop piece re-run`);
+    const { how: _h, first: _f, ...first } = hit.prov;
+    return { ok: true, a: { ...hit, prov: { how: "hit", producer: hit.prov.producer, first: { how: hit.prov.first?.how ?? hit.prov.how, ...first } } } };
+  }
+  const { value: r, walks } = await withRangeWalkCapture(() => flopArrivalCompute(hand, heroPos, heroPosName, set, depth, sixMax, huCp, pinnedDealt));
+  if (r.ok && key) {
+    arrivalMemo.delete(key);
+    arrivalMemo.set(key, { ...r.a, at: Date.now(), walks });
+    while (arrivalMemo.size > ARRIVAL_MEMO_MAX) { const f = arrivalMemo.keys().next().value; if (f === undefined) break; arrivalMemo.delete(f); }
+  }
+  return r;
+}
+/** Forget a hand's arrival memo (tests, a replay that wants a cold hand). */
+function forgetArrival(handKey: string): void {
+  for (const k of [...arrivalMemo.keys()]) if (k.startsWith(`${handKey}|`)) arrivalMemo.delete(k);
+}
+/** Drop every hand's arrival memo, keeping the facts (tests: a restart must read as one). */
+export function dropArrivalMemo(): void { arrivalMemo.clear(); }
+
+/** One street of one walk, as the chain path reports it. */
+const streetPathOf = (s: ChainTrace["streets"][number], plan: string | null): StreetPath => ({
+  street: s.street.toLowerCase() as StreetPath["street"], plan,
+  how: s.fromCheckpoint ? "hit" : s.prov?.how ?? "first", ...(s.prov?.code ? { code: s.prov.code } : {}), why: s.prov?.why ?? null,
+  tree: s.fromCheckpoint ? "none" : s.created ? "created" : "cached", treeWhy: s.treeWhy ?? null,
+  leak: s.fromCheckpoint ? null : s.leak ?? null,
+  reads: s.nodeSrc ? { cache: s.nodeSrc.cache, joined: s.nodeSrc.joined, fetched: s.nodeSrc.fetched } : null,
+});
+
+/**
  * Postflop via the PER-STREET AI CHAIN (services/aiChain.ts) — the primary
  * path. Flop tree from chart-reconstructed preflop ranges; each observed
  * action multiplies the actor's range by its equilibrium frequency; each
@@ -858,203 +1166,11 @@ async function solvePostflopViaChain(
   // the flagged street-root fallback.
   const isHu = set.seats.length === 2;
 
-  // A 3-handed flop is entered from a 3-handed preflop, so its ranges come from
-  // the asymmetric 3-max corpus. Tried FIRST and fallen back from rather than
-  // replacing the 6-max walk: if the chart server is down, conditioned 6-max
-  // ranges still beat losing the chain (and the street-root solve flags it).
-  let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> | null = null;
-  let preTokens: string[] = [];
-  let rangeSource: string | null = null;
-  // The rotation must match whichever token set won: preflopPotStack replays
-  // the line below to size the flop pot, and walking 3-max tokens through the
-  // 6-max rotation misassigns every action and double-counts the blinds.
-  let seatOrder: readonly string[] | undefined;
-  // Under the 6-max strategy the piece that ANSWERED preflop supplies the ranges (answer log; the shape
-  // when no answer was logged). The 3-max corpus is cut from that strategy (see the preflop dispatch), so
-  // this branch is for the OTHER strategies only — a 3-handed hand under the 6-max strategy conditions on
-  // the AI preflop tree that answered it, in the sixMax block below.
-  const piece = sixMax ? preflopPieceFor(hand) : null;
-  if (is3Handed(hand, heroPos) && !sixMax) {
-    const chart = chartFor(hand, heroPos);
-    const tri3 = buildPreflopTokens3max(hand, heroPos);
-    // reconstructFlopRanges snaps tokens against the nodes it is given, so the
-    // 3-max line needs no separate pre-snap pass.
-    if (preflopClosed(tri3, THREE_MAX_SEATS)) {
-      const tri = await reconstructFlopRanges(tri3, async (line) => {
-        const n = await fetchNode(chart.id, line);
-        return n === "unreachable" ? null : n;
-      }, { heroPos: mergeHeroPos(heroPosName, false) });
-      if (tri.ok) {
-        recon = tri;
-        preTokens = tri3;
-        seatOrder = THREE_MAX_SEATS;
-        rangeSource = chart.id;
-        // hero's OWN flop-entering range is the strategy he actually plays:
-        // when the exploit overlay covers his preflop line, the chain must
-        // start from that (wider) range, not the equilibrium chart's — the
-        // same swap the single-solve path makes. Villain keeps the chart.
-        // the pool-exploit overlay is a piece of the NL25 exploit strategy, armed process-wide by
-        // EXPLOIT_CHART; under the 6-max EQUILIBRIUM strategy hero arrives with the chart's range
-        const exRange = sixMax ? null : exploitFlopRange(tri3, heroPosName);
-        if (exRange) {
-          for (const p of Object.keys(recon.ranges)) {
-            if (p.toUpperCase() === heroPosName.toUpperCase()) {
-              (recon.ranges as Record<string, unknown>)[p] = exRange.weights;
-              rangeSource = `${chart.id} + exploit hero range (${exRange.key})`;
-            }
-          }
-        }
-      } else {
-        rangeSource = `6max (3-max chart ${chart.id}: ${tri.reason})`;
-      }
-    }
-  }
-
-  // THE 6-MAX STRATEGY CONDITIONS ON ITS OWN CHARTS (2026-09-17). The flop is entered from the preflop the
-  // charts prescribe, so both seats' arrival ranges are walked from the very 6-max chart the preflop picker
-  // chooses for this hand (effective stack, live shorts, open size). There is no library behind this branch:
-  // conditioning a NL200 6-max solve on NL500 library ranges is the wrong answer dressed as one.
-  // THE COINPOKER HU STRATEGY CONDITIONS ON ITS OWN CHART (2026-09-22). Both seats' flop-entering ranges are
-  // walked from the very cp200a tree the preflop picker chooses (effective stack, open, 3-bet) — never the GTO
-  // Wizard library, which is NL500 with no ante and a third of the rake.
-  if (!recon && huCp) {
-    const huTok = buildPreflopTokensHu(hand, heroPos);
-    if (!preflopClosed(huTok, HU_SEATS)) return fail("preflop betting didn't close (missed action?)");
-    const choice = chartForHu(hand, huTok, pinnedDealt);
-    const resolved = await resolveChartHu(choice);
-    if (resolved === "unreachable") return fail("chart server :8777 unreachable — the CoinPoker HU charts cannot be read");
-    if (resolved === null) return fail(`no CoinPoker HU chart on the server (wanted ${choice.id})`);
-    const get = nodeGetterHu(resolved.id);
-    const r = await reconstructFlopRanges(huTok, async (line) => {
-      const n = await get(line);
-      return n === "unreachable" ? null : n;
-    }, { heroPos: mergeHeroPos(heroPosName, true) });
-    if (!r.ok) return fail(`CoinPoker HU chart ${resolved.id}: ${r.reason}`);
-    recon = r; preTokens = huTok; seatOrder = HU_SEATS; rangeSource = resolved.id;
-    sixNote = [sixNote, choice.note, resolved.fellBack ? `no ${choice.id} tree — ranges from ${resolved.id}` : null].filter(Boolean).join(" · ") || null;
-  }
-
-  if (!recon && sixMax) {
-    // ONE SHAPE, TWO PIECES (2026-09-19, Brady): the flop-entering ranges come from the preflop piece that
-    // ANSWERED this hand — the 6-max charts (recon6max) or the GTO Wizard AI preflop tree (arrivalRangesGtowAi),
-    // both producing position → class → weight. The answer log says which piece answered; when it cannot (the
-    // probe never ran), the shape decides the way the preflop dispatch does: 4-6 seats → charts, else the AI —
-    // and a chart walk that fails on an unknown-piece hand is retried on the AI tree rather than lost.
-    // 4-6 seats condition on the 6-max charts; anything thinner on the AI tree that answered preflop.
-    // A hand whose log says the 3-max charts answered it is an ARCHIVED one from before the cut — it
-    // replays on the strategy as it stands now, which is the AI tree.
-    // THE PIN FIRST (services/preflopPin, 2026-09-25, Brady): the piece that answered hero's LAST preflop decision
-    // supplies the flop-entering ranges, from the very tree it read — not chosen again from the shape, not rebuilt
-    // from a fresh reading of the line. A pin the capture has outgrown (the line no longer starts with it) falls
-    // through to the walk below and says so in the trace. Hero's own class at zero weight in the pinned range is a
-    // refusal said out loud: the pieces disagree about hero's hand, which is a bug to see, not a reason to swap sources.
-    const pin = getPreflopPin(preflopPinKey(hand));
-    if (pin) {
-      const tPin = Date.now();
-      const resumed: ResumeOutcome = pin.piece === "chart6max"
-        ? await resumeChartPreflopRanges(pin, hand, heroPos)
-        : await resumeAiPreflopRanges(pin, hand, heroPos, 6);
-      const cls = heroClassOf(hand);
-      const mine = resumed.ok ? Object.entries(resumed.ranges).find(([p]) => p.toUpperCase() === (heroPosName ?? "").toUpperCase())?.[1] : undefined;
-      const w = cls && mine ? mine[cls] ?? 0 : null;
-      const zeroHero = resumed.ok && !!cls && !!mine && !(w! > 0);
-      // HERO LEFT THE PICK (2026-09-25, Brady's rule 3 — veto-able): hero took an action his own pick gave 0%
-      // (preflopPin.heroDeviation, from what each answer told him), and the pinned chart either cannot continue the
-      // hand (it has no such action — a completed small blind in a raise-only tree, seed 1865) or holds his class at
-      // zero weight after it. That is not a bug in the pieces — the chart has no range for "hands that did this" —
-      // so the flop-entering ranges come from the GTO Wizard AI preflop tree built from the table, as for a pruned
-      // branch (OFF THE CHART, below). A zero weight after following every pick stays the loud refusal.
-      const dev = pin.piece === "chart6max" && (!resumed.ok || zeroHero) ? heroDeviation(pin.picks, buildPreflopTokens(hand, heroPos)) : null;
-      if (dev) {
-        const devNote = `OFF THE CHART (hero's own line): at "${dev.codes.join("-") || "root"}" hero took ${dev.action ?? dev.took}, which the pick gave ${dev.heroClass ?? cls ?? "his hand"} 0%, ` +
-          `so the chart has no flop range for his hand — the flop-entering ranges come from the GTO Wizard AI preflop tree`;
-        tmark("preflop pin: hero deviated", devNote);
-        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
-        if (!ai.ok) return fail(`${devNote}; then ${ai.reason}`);
-        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
-        sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
-      } else if (resumed.ok) {
-        tmark("preflop ranges resumed", `${pin.piece} ${resumed.id} · ${resumed.reads} node read(s) · ${Date.now() - tPin} ms · hero ${cls ?? "?"} weight ${w == null ? "n/a" : w.toFixed(3)}`);
-        if (zeroHero) {
-          return fail(`PREFLOP PIN (${pin.piece} ${resumed.id}): hero's ${cls} is not in range after the line "${resumed.codes.join("-")}" — ` +
-            `the piece that answered preflop never plays this line with this hand (a chart/AI mismatch to investigate, not a fallback)`);
-        }
-        // THE ONE EXCEPTION (round 2.1, Brady): what followed hero's decision broke the pinned chart's own assumption
-        // (its modelled short folded, or the open was played at a size the set has its own chart for) — the VILLAINS'
-        // ranges are read on the exact chart for the line as played; hero's stays on the pin (preflopPin.repickVillainRanges)
-        const repick = pin.piece === "chart6max" ? await repickVillainRanges(pin, hand, heroPos, resumed, pinnedDealt) : null;
-        recon = { ok: true, ranges: repick?.ranges ?? resumed.ranges }; preTokens = resumed.tokens; seatOrder = resumed.seatOrder; rangeSource = resumed.id;
-        sixNote = [sixNote, resumed.note, repick?.note].filter(Boolean).join(" · ") || null;
-      } else if (pin.piece === "chart6max" && !resumed.ok && (resumed.prunedBranch || resumed.chartCannotHold)) {
-        // HERO WENT DOWN A BRANCH THE CHART NEVER SOLVED (fix 2, 2026-09-25, Brady): the pinned chart has no
-        // subtree under an action that was really taken and real action followed it — a manual deviation into a
-        // ~0% line (the roll itself no longer picks one, see services/prunedPicks). The chart cannot continue the
-        // hand, so the flop-entering ranges come from a GTO Wizard AI preflop tree built from the table: one cloud
-        // solve, and the answer says the pick and the ranges came from different pieces.
-        tmark("preflop pin: pruned branch", `${resumed.why} — ranges from the AI preflop tree`);
-        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
-        if (!ai.ok) return fail(`${resumed.why}; then ${ai.reason}`);
-        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
-        sixNote = [sixNote,
-          resumed.prunedBranch
-            ? `OFF THE CHART: hero's line runs into a branch the 6-max chart never solved (${resumed.why.replace(/^pinned chart [^:]+: /, "")}) — ` +
-              `the preflop pick came from the chart, the flop-entering ranges from the GTO Wizard AI preflop tree`
-            // THE PINNED CHART CANNOT HOLD WHAT FOLLOWED (round 2, harness seed 18287 [short-seat]): hero squeezed as picked, and
-            // the BB's call was a fifth entrant the chart's four-active cap has no node for; the unpinned walk then re-picked a
-            // chart where hero never squeezes that hand — zero weight. Hero's decisions were read on the pinned chart, so no
-            // other chart's ranges are his: the exact tree gives them.
-            : `OFF THE CHART: the chart hero's preflop decisions were read on (${pin.chartId}) cannot hold what followed them ` +
-              `(${resumed.why.replace(/^pinned chart [^:]+: /, "").slice(0, 240)}) — the flop-entering ranges come from the GTO Wizard AI preflop tree`,
-          ai.note].filter(Boolean).join(" · ");
-      } else {
-        tmark("preflop pin unusable", `${pin.piece}: ${resumed.why}`);
-        console.log(`[preflop-pin] hand ${preflopPinKey(hand)} ${pin.piece} not resumed — ${resumed.why}`);
-      }
-    }
-    const wantAi = piece === "gtow-ai-preflop" || piece === "chart3max" || !is6Handed(hand, heroPos);
-    let six: Awaited<ReturnType<typeof recon6max>> | null = null;
-    if (!recon && !wantAi) {
-      six = await recon6max(hand, heroPos, heroPosName, pinnedDealt);
-      if (six.ok) {
-        recon = six.recon; preTokens = six.tokens; seatOrder = undefined; rangeSource = six.id; sixNote = six.note;
-      } else if (piece === "chart6max") {
-        return fail(six.reason);
-      }
-    }
-    if (!recon) {
-      // SIX, NOT THREE — the same cap the chart path carries (recon6max), and for the same reason: the
-      // postflop step COLLAPSES the field to three itself (services/multiwayCollapse.ts) and needs every
-      // live seat's arrival range to decide what to ghost or merge. Capping HERE truncated the field before
-      // the collapse ever saw it, so every 4+ way flop whose preflop the AI piece answered — a thinned
-      // table, an off-menu size, a limped pot, anything the charts could not take — died with "4 players
-      // reach the flop — need 2 to 3" while the machinery to answer it sat one line downstream. The walk
-      // itself is count-agnostic (see SeatCap in gtowAiPreflop), so this was only ever the caller
-      // under-declaring what it could consume. Found by the 2026-09-21 stress run; the chart half of the
-      // same asymmetry had been fixed earlier the same day and this half was missed.
-      const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
-      if (!ai.ok) return fail(six && !six.ok ? `${six.reason}; then ${ai.reason}` : ai.reason);
-      recon = { ok: true, ranges: ai.ranges };
-      preTokens = ai.tokens;
-      seatOrder = ai.seatOrder;
-      rangeSource = ai.id;
-      sixNote = [six && !six.ok ? `6-max chart could not walk this line (${six.reason})` : null, ai.note].filter(Boolean).join(" · ");
-    }
-  }
-  if (!recon) {
-    if (!rangeSource) rangeSource = `6max ${set.gametype}@${depth}`;
-    if (!preflopDb.available(set.gametype, depth)) return fail(`no charts for ${set.gametype}@${depth}`);
-    preTokens = isHu ? buildPreflopTokensHu(hand, heroPos) : buildPreflopTokens(hand, heroPos);
-    const snapped = snapPreflopLine(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line));
-    if (!snapped.ok) return fail(`preflop line: ${snapped.reason}`);
-    preTokens = snapped.tokens;
-    // HU lines walk the [SB, BB] rotation — the 6-max default misassigns every
-    // action (the line never "closes") and double-counts the blinds as dead.
-    seatOrder = isHu ? HU_SEATS : undefined;
-    if (!preflopClosed(preTokens, seatOrder)) return fail("preflop betting didn't close (missed action?)");
-    recon = await reconstructFlopRanges(preTokens, (line) => preflopDb.rawNode(set.gametype, depth, line),
-      { heroPos: mergeHeroPos(heroPosName, isHu) });
-  }
-  if (!recon.ok) return fail(`range reconstruction: ${recon.reason}`);
+  const arrival = await flopArrival(hand, heroPos, heroPosName, set, depth, sixMax, huCp, pinnedDealt);
+  if (!arrival.ok) return fail(arrival.why);
+  const { recon, preTokens, seatOrder, rangeSource } = arrival.a;
+  const arrivalPath = arrival.a.prov;
+  if (arrival.a.note) sixNote = sixNote ? `${sixNote} · ${arrival.a.note}` : arrival.a.note;
   const rangesOk = recon.ranges;
   const findPos = (pos: string) => Object.entries(rangesOk).find(([p]) => p.toUpperCase() === pos.toUpperCase())?.[1];
   // heads-up the dealer is the tree's SB and the table's BTN: either name finds the seat
@@ -1464,6 +1580,7 @@ async function solvePostflopViaChain(
     decision: pickWeightedAction(actions),
     approx: true,
     warning: sixNote,
+    path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind))) }),
   },
   // THE RIVER MES INPUT (2026-09-22): a heads-up river walked as ONE tree carries every seat's exact river-entry
   // range in its trace — all services/riverMes.ts needs to solve the river locally against the pool. Blended
@@ -1848,27 +1965,28 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
  * Keyed by client hand id and bounded. A replay passing an explicit depth still pins — harmless: an archived
  * hand's stacks are all a replay has, and they do not move.
  */
-interface PostflopPin { dealt: Record<number, number>; depth: number; street: string; at: number }
-const pinnedPostflop = new Map<string, PostflopPin>();
+// THE PIN IS A FACT OF THE HAND (2026-09-25, the chain ledger): services/handFacts keeps it — memory for the hot path,
+// written through to disk — so a restart between the flop and the river still reads the stacks the flop was solved at.
+type PostflopPin = DealtFact;
 function pinPostflop(hand: ParsedHand, depthOf: (dealt: Record<number, number>) => number): PostflopPin | null {
   const key = String(hand.clientHandId ?? hand.handId ?? "");
   if (!key) return null;
-  const hit = pinnedPostflop.get(key);
-  if (hit) return hit;
-  const dealt = dealtBySeat(hand);
-  const pin: PostflopPin = { dealt, depth: depthOf(dealt), street: hand.currentNode.street, at: Date.now() };
-  pinnedPostflop.set(key, pin);
-  if (pinnedPostflop.size > 60) { const first = pinnedPostflop.keys().next().value; if (first !== undefined) pinnedPostflop.delete(first); }
-  tmark("postflop stacks pinned", `hand ${key} at the ${pin.street}: depth ${pin.depth}bb, dealt ${Object.entries(dealt).map(([s, v]) => `${s}:${v}`).join(" ")}`);
-  return pin;
+  return handFacts.dealtOnce(key, () => {
+    const dealt = dealtBySeat(hand);
+    const pin: PostflopPin = { dealt, depth: depthOf(dealt), street: hand.currentNode.street, at: Date.now() };
+    tmark("postflop stacks pinned", `hand ${key} at the ${pin.street}: depth ${pin.depth}bb, dealt ${Object.entries(dealt).map(([s, v]) => `${s}:${v}`).join(" ")}`);
+    return pin;
+  });
 }
-/** Forget a hand's pin (tests, and a replay that wants a fresh read). */
+/** Forget a hand's pin and the flop ranges computed from it (tests, and a replay that wants a fresh read). */
 export function forgetPostflopPin(handKey: string): void {
-  pinnedPostflop.delete(handKey);
+  handFacts.forgetDealt(handKey);
+  forgetArrival(handKey);
 }
 /** Forget a hand's preflop pin (services/preflopPin) — a replay that wants the flop to walk from scratch. */
 export function forgetPreflopPin(handKey: string): void {
   forgetPreflopPinInner(handKey);
+  forgetArrival(handKey);
 }
 
 /** Postflop under the 6-max ring strategy: the shared AI path with the 6-max charts' ranges (+ the river MES shadow). */
@@ -2184,7 +2302,7 @@ async function solvePreflop6max(
   // hand was read without (a fit, the caller-cap borrow) is folded out of this one too (utils/fitLine.foldSeatsOut)
   // — hero's earlier action was chosen on that line, and on the real one the chart may never take it with his hand
   const pinKey = preflopPinKey(hand);
-  const prevPin = pinKey ? getPreflopPin(pinKey) : undefined;
+  const prevPin = pinKey ? preflopPinFor(hand) : undefined;
   const sticky = prevPin?.piece === "chart6max" && prevPin.foldedSeats?.length && prevPin.rawTokens.every((t, i) => tokens[i] === t)
     ? prevPin.foldedSeats.filter((s) => s.toUpperCase() !== (heroSeatName ?? "").toUpperCase()) : [];
   const walkTokens = sticky.length ? foldSeatsOut(tokens, sticky, choice.depth) : tokens;
@@ -2366,7 +2484,7 @@ async function solvePreflop6max(
     const sizeSnaps = repairSnaps(walk.repaired, walk.fittedLine ?? walkTokens, choice.depth);
     setPreflopPin({ piece: "chart6max", handKey: pinKey, chartId: resolved.id, codes: heroCodes, rawTokens: tokens,
       heroPos: heroSeatPos || nodePos, depth: choice.depth, actionIndex: hand.actions.length, at: Date.now(), picks,
-      ...(foldedSeats.length ? { foldedSeats } : {}), ...(sizeSnaps.length ? { sizeSnaps } : {}) });
+      ...(foldedSeats.length ? { foldedSeats } : {}), ...(sizeSnaps.length ? { sizeSnaps } : {}) }, hand.heroCards.join(""));
   }
 
   const notes = [
@@ -2458,9 +2576,12 @@ export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strat
   warmedStreets.set(key, Date.now());
   if (warmedStreets.size > 60) { const first = warmedStreets.keys().next().value; if (first !== undefined) warmedStreets.delete(first); }
   const t0 = Date.now();
-  const solve = hu ? solvePostflopHuStrategy : solvePostflop6maxStrategy;
   const tag = hu ? "[warmhu]" : "[warm6max]";
-  void solve(hand, heroPos, { origin: "warm", strategyId }).then((r) => {
+  // THROUGH fastSolve (2026-09-25, the chain ledger): the warm used to call the postflop piece directly, past the
+  // entry gates (the dead-small-blind relabel, the unsolvable-capture refusal, the posted-in rewrite) — and, being the
+  // first postflop read of the hand, it is what pinned the stacks. It is the same computation as hero's decision now,
+  // with its requests counted on the hand under origin "warm".
+  void fastSolve(hand, heroPos, { origin: "warm", strategyId }).then((r) => {
     console.log(`${tag} ${key}: ${r.ok ? "hero's root node answered" : "street tree opened"} in ${Date.now() - t0} ms${r.ok ? "" : ` (${r.reason.slice(0, 100)})`}`);
   }).catch(() => { /* a warm-up never fails anything */ });
 }
@@ -2645,6 +2766,20 @@ export function zeroMixReason(a: {
 }
 
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
+  // EVERY CALL IS ONE SCOPE (2026-09-25, services/requestScope): the GTO Wizard requests it makes are counted on it,
+  // added to the hand's facts (by origin: live / warm / replay), and reported on the answer's chain path.
+  const handKey = String(hand.clientHandId ?? hand.handId ?? "");
+  const { value, scope } = await withRequestScope(
+    { handKey, origin: opts.origin ?? "adhoc", street: hand.currentNode?.street ?? null },
+    () => fastSolveEntry(hand, heroPos, opts));
+  if (handKey) handFacts.addRequests(handKey, scope.origin, scope.counts);
+  const street = hand.currentNode?.street ?? "?";
+  const path: DecisionPath = value.path
+    ?? (value.ok ? classifyPath({ street, streets: [] }) : faultPath(street, (value as { kind?: string }).kind ?? null, value.reason));
+  return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin } } as FastSolveResult;
+}
+
+async function fastSolveEntry(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // POSTED-IN PLAYERS (2026-09-25, Brady: "treat them as a normal player"). normalizeHand already folded each post
   // into the poster's own action (utils/foldPostIns — an option-check reads as a limp), so every piece below sees an
   // ordinary hand; the answer only has to SAY it is an approximation, and hero must never fold a free check.
@@ -2736,10 +2871,15 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // preflop (Ultra), built from the actual table (services/gtowAiPreflop.ts). Never the GTO Wizard LIBRARY:
     // that is a different game (NL500, a third of the rake, no limps).
     let why: string;
+    /** how the AI piece came to answer: the charts' own limits (by design), a thinned table (its designed piece), or a
+     *  chart server that did not answer (the recovery — a rebuild) */
+    let pf: NonNullable<DecisionPath["preflop"]>;
     if (is6Handed(hand, heroPos)) {
       const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
       if (six && six.ok) return six;
       why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
+      pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: "preflop:charts-cannot-hold", why: why.slice(0, 200) }
+        : { piece: "gtow-ai-preflop", how: "rebuilt", code: "preflop:charts-unreachable", why: "the 6-max charts did not answer (chart server :8777 down or the tree missing) — a GTO Wizard AI preflop tree answered" };
     } else {
       // THE 3-MAX CORPUS IS CUT FROM THIS STRATEGY (Brady, 2026-09-19). It was wired in earlier the same day
       // and is wired out again after the convergence audit: the re-solved deep rungs are sound (the 100bb
@@ -2755,14 +2895,16 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
         // a dead small blind (2026-09-23): the seat count may be chart-sized, but no chart has a hand without an SB
         ? `dealt with no small blind (the SB seat emptied between hands) — every 6-max chart has a live SB, so the tree is built from the table`
         : `table thinned to ${seats} seats — the 6-max charts cover 4-6, and the 3-max corpus is cut from this strategy pending a re-solve of its shallow rungs`;
+      pf = { piece: "gtow-ai-preflop", how: "designed" };
     }
     const ai = await solvePreflopGtowAi(hand, heroPos, why);
-    const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean): FastSolveResult => ({
+    const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean, pfPath = pf): FastSolveResult => ({
       ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
       setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
       depth: Math.round(Math.min(...r.shape.positions.map((p) => r.shape.stacks[p] ?? 100))),
       line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
       warning: r.note, approx: approx || undefined,
+      path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
     });
     if (ai.ok) return asResult(ai, ai.shape.deadSb);
     // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR from GTO Wizard on the built
@@ -2776,7 +2918,8 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // with everyone else's chips as dead money (services/gtowAiPreflop.solvePreflopLastResort). Always an answer
     // while GTO Wizard is up; always flagged.
     const last = await solvePreflopLastResort(hand, heroPos, `${why}; ${ai.reason}`);
-    if (last.ok) return asResult(last, true);
+    if (last.ok) return asResult(last, true, { piece: "gtow-ai-preflop:last-resort", how: pf.how === "rebuilt" ? "rebuilt" : "by-design",
+      code: pf.how === "rebuilt" ? pf.code : "preflop:last-resort", why: `neither preflop piece could walk the line — hero vs the last aggressor, the rest dead money (${why.slice(0, 120)})` });
     return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
       reason: `${why}; ${ai.reason}; ${last.reason}` };
   }

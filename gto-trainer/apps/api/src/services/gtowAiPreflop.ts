@@ -623,7 +623,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm,
       id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
       heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: hand.actions.length, at: Date.now(),
-    } satisfies AiPreflopPin);
+    } satisfies AiPreflopPin, hand.heroCards.join(""));
   }
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
   return {

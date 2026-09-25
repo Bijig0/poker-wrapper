@@ -17,6 +17,7 @@
  * not by guessing: the count at the moment of the 429 is their unit.
  */
 import { timed } from "./answerTrace";
+import { countRequest, currentRequestScope } from "./requestScope";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -32,6 +33,11 @@ export interface GtowRequestRow {
   st: number;
   /** who sent it: "api" for the worker, else the script name (GTOW_REQUEST_ORIGIN or process.argv[1]) */
   o: string;
+  /** THE HAND IT WAS FOR (2026-09-25, services/requestScope): the hand key, the street and the call's origin
+   *  ("live" / "warm" / "replay"), when the request was made inside a fastSolve call. Absent for scripts and probes. */
+  h?: string;
+  sr?: string;
+  go?: string;
 }
 
 export interface GtowRequestStats {
@@ -64,7 +70,10 @@ class GtowRequestLog {
   /** Record one request. Never throws — the ledger must not be able to fail a solve. */
   note(row: { session?: string | null; kind: GtowRequestKind; status: number }): void {
     try {
-      const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin };
+      const scope = currentRequestScope();
+      countRequest(row.kind, row.status);
+      const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin,
+        ...(scope ? { h: scope.handKey, ...(scope.street ? { sr: scope.street } : {}), go: scope.origin } : {}) };
       mkdirSync(join(this.path, ".."), { recursive: true });
       appendFileSync(this.path, JSON.stringify(rec) + "\n");
       this.cache = null;

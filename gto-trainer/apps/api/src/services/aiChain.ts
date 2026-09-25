@@ -8,6 +8,8 @@ import {
 } from "../utils/aiChainTokens/aiChainTokens";
 import { labelBetBb } from "../utils/aiStudyLine/aiStudyLine";
 import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
+import { handFacts, type StreetRecord } from "./handFacts";
+import type { StreetPath } from "./chainPath";
 
 /**
  * Per-street AI chain — the live-play version of routes/aiStudy.ts's walk:
@@ -163,6 +165,12 @@ export interface ChainTrace {
     sent?: unknown;
     /** the GTO Wizard session whose solve this is (gtowSessions: primary = Ultra, secondary = Elite) */
     account?: string | null;
+    /** HOW THIS STREET'S RANGES WERE PRODUCED on this call (2026-09-25, the chain ledger — services/chainPath):
+     *  hit = the hand's closed-street memo, resumed = from hero's last node, first = walked for the first time in
+     *  this hand, by-design / rebuilt = walked again (the code and why say which rule or which miss) */
+    prov?: { how: StreetPath["how"]; code?: string; why?: string | null };
+    /** extra requests on this street that are not about the ranges: a tree created again, a node fetched twice */
+    leak?: { code: string; why: string } | null;
     /** The street's seats in acting order and their entering ranges, parallel arrays (since 2026-09-19): a
      *  three-way flop lists three, the street after a fold lists the two left. oopIn/ipIn are the first and
      *  last of them, kept for readers of older traces. */
@@ -180,20 +188,31 @@ export interface ChainTrace {
 // ── per-hand street checkpoints ────────────────────────────────────────────────────────────────────────────────
 /**
  * THE RANGES LEAVING A STREET ARE COMPUTED ONCE PER HAND (2026-09-24, Brady: "just store these ranges in memory —
- * NEVER a re-compute of a previous street's range"). Until now every decision re-walked the whole hand from the
- * flop and relied on gtowApi's tree/node caches to make that cheap; any drift in a key input (a stack reading, a
- * chart rung, a pinned size) silently turned the re-walk into fresh cloud solves. A checkpoint is written when a
- * street closes: the surviving seats with their conditioned ranges, the pot and stack entering the next street,
- * the line so far, and the trace records of everything walked. The next decision of the same hand starts from the
- * deepest checkpoint whose tokens still equal the capture's (a street the capture later re-reads differently is
- * named and walked afresh — the only thing that can be right then). Keyed by hand + starting street + the seats
- * walked, so each collapse of a multiway spot keeps its own; bounded; a replay with a fresh handKey is unaffected.
+ * NEVER a re-compute of a previous street's range"). A checkpoint is written when a street closes: the surviving
+ * seats with their conditioned ranges, the pot and stack entering the next street, the line so far, and the trace
+ * records of everything walked. The next decision of the same hand starts from the deepest checkpoint that still
+ * fits the capture.
+ *
+ * CONTENT-ADDRESSED (2026-09-25, the chain ledger). A checkpoint used to be found by `hand|street|seat labels|plan`
+ * and then checked token by token; nothing in that key said which RANGES, pot or stack the street had been walked
+ * from, so a flop walked from one set of arrival ranges could be reused under another. Now every street has a key
+ * made of what determines it — a Merkle chain:
+ *
+ *   root      = H(hand, first street, every seat's position + label + entering range, pot, stack, board so far,
+ *                 rake, hero's combo (his range floor), the heads-up grid)
+ *   exit(k)   = H(entry(k), the street's tokens, the board through street k)      entry(0) = root, entry(k+1) = exit(k)
+ *
+ * A lookup computes the keys the capture implies and takes the deepest one in the memo; a capture that re-reads a
+ * street, or ranges that arrive differently, simply produce other keys and the walk starts from the deepest ancestor
+ * that still matches. The memo is DERIVED state — dropping it costs time, never an answer. What happened is written
+ * to the hand's facts (services/handFacts, StreetRecord), which is how a re-walk is told apart from a first walk and
+ * named: the capture changed, the inputs changed, the memo was lost (a restart), a new collapse plan.
  */
 interface StreetCheckpoint {
   /** the street this checkpoint leaves (0 flop, 1 turn) */
   k: number;
-  /** tokens per street 0..k as they were when walked — must match exactly to be reused */
-  tokens: string[][];
+  /** the chain's root key — checkpoints of one walk group under it */
+  root: string;
   seats: { pos: string; label: SeatLabel; range: number[] }[];
   pot: number;
   stack: number;
@@ -202,29 +221,53 @@ interface StreetCheckpoint {
   nodes: ChainTraceNode[];
   at: number;
 }
-const CHECKPOINT_KEYS_MAX = 300;
-const checkpoints = new Map<string, StreetCheckpoint[]>();
+const CHECKPOINTS_MAX = 900;
+const checkpoints = new Map<string, StreetCheckpoint>();
+/** hand → every memo key it wrote (closed and partial), for checkpointsFor / forgetCheckpoints */
+const handIndex = new Map<string, Set<string>>();
+const HAND_INDEX_MAX = 400;
+/** hand → nodes it FETCHED (solution|street|codes): a second fetch of one is a request the cache should have saved */
+const fetchedByHand = new Map<string, Set<string>>();
 
-function saveCheckpoint(key: string, cp: StreetCheckpoint): void {
-  const list = (checkpoints.get(key) ?? []).filter((x) => x.k !== cp.k);
-  list.push(cp);
-  checkpoints.delete(key);           // re-insert: the map's order is its age order
-  checkpoints.set(key, list);
-  while (checkpoints.size > CHECKPOINT_KEYS_MAX) {
-    const first = checkpoints.keys().next().value;
+const hashOf = (x: unknown): string => Bun.hash(JSON.stringify(x)).toString(36);
+
+/** The chain's root key: everything the first street's walk depends on (see above). */
+function rootKeyOf(spec: AiChainSpec, seats: { pos: string; label: SeatLabel; range: number[] }[], first: number, cards: string[]): string {
+  return hashOf([spec.handKey, first, seats.map((s) => [s.pos, s.label, hashOf(s.range)]), spec.flopPot, spec.flopStack,
+    cards.slice(0, 3 + first).join(""), spec.rake ?? null, spec.heroComboIdx, spec.huGrid ?? null]);
+}
+const exitKeyOf = (entry: string, toks: string[], board: string): string => hashOf([entry, toks, board]);
+
+function bounded<K, V>(m: Map<K, V>, max: number): void {
+  while (m.size > max) {
+    const first = m.keys().next().value;
     if (first === undefined) break;
-    checkpoints.delete(first);
+    m.delete(first);
   }
 }
+function indexKey(handKey: string, key: string): void {
+  const set = handIndex.get(handKey) ?? new Set<string>();
+  set.add(key);
+  handIndex.delete(handKey);
+  handIndex.set(handKey, set);
+  bounded(handIndex, HAND_INDEX_MAX);
+}
+function saveCheckpoint(handKey: string, key: string, cp: StreetCheckpoint): void {
+  checkpoints.delete(key);           // re-insert: the map's order is its age order
+  checkpoints.set(key, cp);
+  bounded(checkpoints, CHECKPOINTS_MAX);
+  indexKey(handKey, key);
+}
 
-const sameTokens = (a: string[] | undefined, b: string[] | undefined): boolean =>
-  !!a && !!b && a.length === b.length && a.every((t, i) => t === b[i]);
-
-/** The streets checkpointed for a hand (any seat set), for tests and status pages. */
+/** The streets checkpointed for a hand, grouped by the walk (root) they belong to — tests and status pages. */
 export function checkpointsFor(handKey: string): { key: string; streets: number[] }[] {
-  const out: { key: string; streets: number[] }[] = [];
-  for (const [key, list] of checkpoints) if (key.startsWith(`${handKey}|`)) out.push({ key, streets: list.map((c) => c.k).sort() });
-  return out;
+  const byRoot = new Map<string, number[]>();
+  for (const key of handIndex.get(handKey) ?? []) {
+    const cp = checkpoints.get(key);
+    if (!cp) continue;
+    byRoot.set(cp.root, [...(byRoot.get(cp.root) ?? []), cp.k].sort());
+  }
+  return [...byRoot.entries()].map(([key, streets]) => ({ key, streets }));
 }
 
 /**
@@ -234,8 +277,8 @@ export function checkpointsFor(handKey: string): { key: string; streets: number[
  * Now hero's node IS the checkpoint: everything conditioned up to it, the betting state, the tree it was read on,
  * and the node's own JSON. The next decision of the hand — the same street re-asked, or the next street — resumes
  * from that node: hero's realised action is conditioned from the stored node, and only what happened AFTER it is
- * read. One per hand/seats/plan (the latest); resumable only onto the SAME tree (a size pinned after hero's node
- * means a new tree, and the street is walked on it, said so in the trace).
+ * read. One per street ENTRY key (the latest), so it is only ever resumed from the very ranges, pot and stack it
+ * was walked from.
  */
 interface PartialCheckpoint {
   k: number;
@@ -258,27 +301,85 @@ interface PartialCheckpoint {
 }
 const partials = new Map<string, PartialCheckpoint>();
 
-function savePartial(key: string, pc: PartialCheckpoint): void {
+function savePartial(handKey: string, key: string, pc: PartialCheckpoint): void {
   partials.delete(key);
   partials.set(key, pc);
-  while (partials.size > CHECKPOINT_KEYS_MAX) {
-    const first = partials.keys().next().value;
-    if (first === undefined) break;
-    partials.delete(first);
-  }
+  bounded(partials, CHECKPOINTS_MAX);
+  indexKey(handKey, `p:${key}`);
 }
 
-/** The mid-street checkpoints of a hand (any seat set), for tests. */
+/** The mid-street checkpoints of a hand, for tests. */
 export function partialsFor(handKey: string): { key: string; k: number; prefix: string[] }[] {
   const out: { key: string; k: number; prefix: string[] }[] = [];
-  for (const [key, pc] of partials) if (key.startsWith(`${handKey}|`)) out.push({ key, k: pc.k, prefix: pc.tokens[pc.tokens.length - 1] ?? [] });
+  for (const key of handIndex.get(handKey) ?? []) {
+    if (!key.startsWith("p:")) continue;
+    const pc = partials.get(key.slice(2));
+    if (pc) out.push({ key: key.slice(2), k: pc.k, prefix: pc.tokens[pc.tokens.length - 1] ?? [] });
+  }
   return out;
 }
 
-/** Forget a hand's checkpoints, closed and mid-street (tests; a replay that wants a cold walk). */
+/** Forget a hand's checkpoints, closed and mid-street, and its street ledger (tests; a replay that wants a cold walk). */
 export function forgetCheckpoints(handKey: string): void {
-  for (const key of [...checkpoints.keys()]) if (key.startsWith(`${handKey}|`)) checkpoints.delete(key);
-  for (const key of [...partials.keys()]) if (key.startsWith(`${handKey}|`)) partials.delete(key);
+  for (const key of handIndex.get(handKey) ?? []) {
+    if (key.startsWith("p:")) partials.delete(key.slice(2)); else checkpoints.delete(key);
+  }
+  handIndex.delete(handKey);
+  fetchedByHand.delete(handKey);
+  handFacts.forgetStreets(handKey);
+}
+
+/** Drop the derived memo ONLY — every hand's checkpoints — and keep the facts (tests: a restart must read as one). */
+export function dropChainMemo(): void {
+  checkpoints.clear();
+  partials.clear();
+  handIndex.clear();
+  fetchedByHand.clear();
+}
+
+const sameToks = (a: string[], b: string[]): boolean => a.length === b.length && a.every((t, i) => t === b[i]);
+
+/**
+ * How a street WALKED on this call relates to what the hand's ledger says was walked before — its provenance
+ * (services/chainPath). Pure over the hand's StreetRecords.
+ */
+export function streetProvenance(a: {
+  records: StreetRecord[]; k: number; first: number; plan: string | null; entry: string; toks: string[];
+  isLast: boolean; resumed: boolean; resumeMiss?: string | null; partialRejected?: string | null;
+}): { how: StreetPath["how"]; code?: string; why?: string | null } {
+  if (a.resumed) return { how: "resumed" };
+  const name = STREET[a.k]!.toLowerCase();
+  const mine = a.records.filter((r) => r.k === a.k && r.first === a.first);
+  const samePlan = mine.filter((r) => (r.plan ?? null) === a.plan);
+  const sameEntry = samePlan.filter((r) => r.entry === a.entry);
+  const newPlan = { how: "by-design" as const, code: "street:new-plan", why: `a collapse plan new to this hand (${a.plan ?? "no collapse"}) walks the ${name} for the first time` };
+  if (!a.isLast) {
+    // an EARLIER street walked on this call: it was either never walked before (first) or its memo missed
+    if (sameEntry.some((r) => r.kind === "closed" && sameToks(r.tokens, a.toks))) {
+      return { how: "rebuilt", code: "street:memo-lost", why: `the ${name} was walked before under the same inputs and its checkpoint is gone (API restart or memo eviction)` };
+    }
+    const partialSame = sameEntry.find((r) => r.kind === "partial" && a.toks.length >= r.tokens.length && r.tokens.every((t, i) => a.toks[i] === t));
+    if (partialSame) {
+      if (a.resumeMiss) return { how: "by-design", code: "street:tree-changed", why: a.resumeMiss };
+      return { how: "rebuilt", code: "street:memo-lost", why: `hero's ${name} node was answered and its resume point is gone (API restart or memo eviction)` };
+    }
+    const other = sameEntry.find((r) => r.kind === "closed") ?? sameEntry.find((r) => r.kind === "partial");
+    if (other) return { how: "rebuilt", code: "street:capture-changed", why: `the capture re-read the ${name}: [${other.tokens.join(",")}] when walked, [${a.toks.join(",")}] now` };
+    if (samePlan.length) return { how: "rebuilt", code: "street:inputs-changed", why: `the ranges, pot or stack entering the ${name} changed since it was walked` };
+    if (mine.length) return newPlan;
+    return { how: "first" };
+  }
+  // the DECISION street, walked from its root: normal on its first ask; on a re-ask its resume point should have held
+  if (sameEntry.some((r) => r.kind === "partial")) {
+    if (a.resumeMiss) return { how: "by-design", code: "street:tree-changed", why: a.resumeMiss };
+    if (a.partialRejected) return { how: "rebuilt", code: "street:capture-changed", why: a.partialRejected };
+    return { how: "rebuilt", code: "street:memo-lost", why: `hero's earlier ${name} node was answered and its resume point is gone (API restart or memo eviction)` };
+  }
+  if (samePlan.some((r) => r.kind === "partial")) {
+    return { how: "rebuilt", code: "street:inputs-changed", why: `the ranges, pot or stack entering the ${name} changed since hero's last ${name} decision` };
+  }
+  if (mine.some((r) => r.kind === "partial")) return newPlan;
+  return { how: "first" };
 }
 
 const r4 = (xs: number[] | undefined): number[] => (xs ?? []).map((x) => Math.round((x ?? 0) * 10000) / 10000);
@@ -540,29 +641,33 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const walked: string[] = [];
 
   // START FROM THE HAND'S CHECKPOINT when one fits: the deepest closed street before the decision street whose
-  // tokens (and every street's before it) are exactly what the capture says now.
+  // content key — the chain's root plus every street's tokens up to it (see rootKeyOf / exitKeyOf) — is in the memo.
   let startSi = 0;
-  // planTag disambiguates concurrent collapse plans that reduce to the SAME seat labels but different composite
-  // ranges (multiwayCollapse.ts can reuse a merged seat's original position name) — without it, plan A's
-  // checkpoint would be overwritten by plan B's under the same key, and a later decision walking plan A could
-  // read plan B's ranges. See gtowApi.ts's identical fix to the tree-miss diagnostic key.
-  const ckKey = spec.handKey ? `${spec.handKey}|${first}|${seats.map((s) => s.pos).join("/")}|${spec.planTag ?? ""}` : null;
-  if (ckKey) {
-    const cps = (checkpoints.get(ckKey) ?? []).slice().sort((a, b) => b.k - a.k);
-    const mismatches: string[] = [];
-    for (const cp of cps) {
-      const si = cp.k - first;
-      if (si < 0 || si >= spec.streets.length - 1) continue;   // only streets BEFORE the decision street
-      const bad = cp.tokens.findIndex((t, i) => !sameTokens(t, spec.streets[i]));
-      if (bad >= 0) {
-        mismatches.push(`the ${STREET[bad + first]!.toLowerCase()} was [${cp.tokens[bad]!.join(",")}] when walked, the capture now says [${(spec.streets[bad] ?? []).join(",")}]`);
-        continue;
-      }
+  const handKey = spec.handKey || null;
+  const plan = spec.planTag ?? null;
+  const rootKey = handKey ? rootKeyOf(spec, seats, first, cards) : null;
+  /** exitKeys[si] = the key of what leaves street si as the capture reads it now (streets before the decision street) */
+  const exitKeys: string[] = [];
+  if (rootKey) {
+    let prev = rootKey;
+    for (let si = 0; si < spec.streets.length - 1; si++) {
+      prev = exitKeyOf(prev, spec.streets[si]!, cards.slice(0, 3 + si + first).join(""));
+      exitKeys.push(prev);
+    }
+  }
+  const entryKeyAt = (si: number): string => (si === 0 ? rootKey! : exitKeys[si - 1]!);
+  /** what this hand's ledger says was walked before (services/handFacts) — how a re-walk is told from a first walk */
+  const records = handKey ? handFacts.streets(handKey) : [];
+  if (rootKey) {
+    for (let si = exitKeys.length - 1; si >= 0; si--) {
+      const cp = checkpoints.get(exitKeys[si]!);
+      if (!cp) continue;
       seats = cp.seats.map((s) => ({ ...s, range: s.range.slice() }));
       pot = cp.pot;
       stack = cp.stack;
       walked.push(...cp.walked);
-      trace.streets.push(...cp.streets.map((s) => ({ ...s, fromCheckpoint: true })));
+      // the streets' records say how they were walked when they closed (history); on THIS call they are memo hits
+      trace.streets.push(...cp.streets.map((s) => ({ ...s, fromCheckpoint: true, prov: { how: "hit" as const }, leak: null })));
       trace.nodes.push(...cp.nodes.map((x) => ({ ...x, fromCheckpoint: true })));
       startSi = si + 1;
       const note = `ranges leaving the ${STREET[cp.k]!.toLowerCase()} taken from this hand's checkpoint (walked ${((Date.now() - cp.at) / 1000).toFixed(0)} s ago) — ${si + 1} earlier street${si ? "s" : ""} not re-computed`;
@@ -571,6 +676,17 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       break;
     }
     if (!startSi && spec.streets.length > 1) {
+      // say WHY nothing fit, from the ledger: the capture re-read an earlier street, or the ranges arrived differently
+      const mismatches: string[] = [];
+      for (let si = 0; si < exitKeys.length && !mismatches.length; si++) {
+        const k = si + first;
+        const mine = records.filter((r) => r.kind === "closed" && r.k === k && r.first === first && (r.plan ?? null) === plan);
+        const sameEntry = mine.filter((r) => r.entry === entryKeyAt(si));
+        const differs = sameEntry.find((r) => !sameToks(r.tokens, spec.streets[si]!));
+        if (differs) mismatches.push(`the ${STREET[k]!.toLowerCase()} was [${differs.tokens.join(",")}] when walked, the capture now says [${spec.streets[si]!.join(",")}]`);
+        else if (sameEntry.length) mismatches.push(`the ${STREET[k]!.toLowerCase()} was walked under these very inputs and its checkpoint is gone (API restart or memo eviction)`);
+        else if (mine.length) mismatches.push(`the ranges, pot or stack entering the ${STREET[k]!.toLowerCase()} changed since it was walked`);
+      }
       const note = mismatches.length
         ? `checkpoint NOT reusable — ${mismatches.join("; ")} — the earlier streets are walked again`
         : "no checkpoint for this hand yet (first walk past its opening street in this process)";
@@ -578,24 +694,25 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       tmark("chain checkpoint", note);
     }
   }
-  // …and the street after the last closed one may resume from hero's LAST node on it (PartialCheckpoint) when the
-  // capture still begins with the tokens walked then.
+  // …and the street after the last closed one may resume from hero's LAST node on it (PartialCheckpoint), keyed by
+  // that street's ENTRY key, when the capture still begins with the tokens walked then.
   let resume: PartialCheckpoint | null = null;
-  if (ckKey) {
-    const pc = partials.get(ckKey);
-    if (pc && pc.k - first === startSi && startSi < spec.streets.length) {
-      const si = startSi;
-      const earlierOk = pc.tokens.slice(0, si).every((t, i) => sameTokens(t, spec.streets[i]));
-      const prefix = pc.tokens[si] ?? [];
-      const now = spec.streets[si] ?? [];
-      const prefixOk = prefix.length <= now.length && prefix.every((t, i) => t === now[i]);
-      if (earlierOk && prefixOk) resume = pc;
+  /** a resume point existed for this street's entry but the capture no longer starts with its prefix */
+  let partialRejected: string | null = null;
+  if (rootKey && startSi < spec.streets.length) {
+    const pc = partials.get(entryKeyAt(startSi));
+    if (pc && pc.k - first === startSi) {
+      const prefix = pc.tokens[startSi] ?? [];
+      const now = spec.streets[startSi] ?? [];
+      if (prefix.length <= now.length && prefix.every((t, i) => t === now[i])) resume = pc;
       else {
-        tmark("chain checkpoint", `mid-${STREET[pc.k]!.toLowerCase()} checkpoint not reusable: the capture's ${STREET[pc.k]!.toLowerCase()} ` +
-          `${earlierOk ? `no longer starts with [${prefix.join(",")}] (now [${now.join(",")}])` : "follows an earlier street that changed"}`);
+        partialRejected = `the capture's ${STREET[pc.k]!.toLowerCase()} no longer starts with [${prefix.join(",")}] (now [${now.join(",")}])`;
+        tmark("chain checkpoint", `mid-${STREET[pc.k]!.toLowerCase()} checkpoint not reusable: ${partialRejected}`);
       }
     }
   }
+  const fetched = handKey ? (fetchedByHand.get(handKey) ?? new Set<string>()) : null;
+  if (handKey && fetched) { fetchedByHand.delete(handKey); fetchedByHand.set(handKey, fetched); bounded(fetchedByHand, HAND_INDEX_MAX); }
 
   for (let si = startSi; si < spec.streets.length; si++) {
     const k = si + first;   // the street's real index (re-rooted chains start past the flop)
@@ -644,12 +761,18 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     }
 
     const nodeSrc = { cache: 0, joined: 0, fetched: 0, fetchMs: 0 };
+    const nodeLeaks: string[] = [];
     // every node read is accounted for: the cache it came from, or how long its poll took
     const readNode = async (solId: string, codesStr: string) => {
       const t = Date.now();
       const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard });
       const ms = Date.now() - t;
       const src: NodeSource | "failed" = r.ok ? (r.src ?? (r.cached ? "cache" : "fetched")) : "failed";
+      if (src === "fetched" && fetched) {
+        const id = `${solId}|${k}|${codesStr}`;
+        if (fetched.has(id)) nodeLeaks.push(`node [${codesStr || "root"}] fetched again from GTO Wizard — this hand had already read it`);
+        fetched.add(id);
+      }
       if (src === "cache") nodeSrc.cache++;
       else if (src === "joined") { nodeSrc.joined++; nodeSrc.fetchMs += ms; }
       else if (src === "fetched") { nodeSrc.fetched++; nodeSrc.fetchMs += ms; }
@@ -738,6 +861,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       solId: null as string | null, created: false, solveMs: 0, walkMs: 0,
       treeWhy: null as string | null, reuse, nodeSrc,
       resumedAt: undefined as number | undefined, resumeMiss: undefined as string | undefined,
+      prov: undefined as ChainTrace["streets"][number]["prov"], leak: null as ChainTrace["streets"][number]["leak"],
       players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
       oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
       sent: null as unknown, account: null as string | null,
@@ -801,6 +925,23 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
     const streetNodesStart = trace.nodes.length - (streetRec.resumedAt != null ? resuming!.nodes.length : 0);
+    // THIS STREET'S PROVENANCE (2026-09-25, services/chainPath): resumed, walked for the first time, or walked again —
+    // and then which rule (by design) or which miss (rebuilt) made it so, from the hand's own ledger
+    if (rootKey) {
+      streetRec.prov = streetProvenance({
+        records, k, first, plan, entry: entryKeyAt(si), toks, isLast,
+        resumed: streetRec.resumedAt != null, resumeMiss: streetRec.resumeMiss ?? null,
+        partialRejected: si === startSi ? partialRejected : null,
+      });
+      // a tree created again for a street whose ranges were NOT rebuilt is a request the cache should have saved;
+      // a size pinned into a new tree is the design, a first walk needs its tree, a rebuild's tree is part of it
+      const treeWhy = streetRec.treeWhy ?? "";
+      if (ens.created && streetRec.prov.how === "resumed" && !/fixed sizes/.test(treeWhy)) {
+        streetRec.leak = { code: "tree:recreated", why: `the ${STREET[k]!.toLowerCase()} tree was created again (${treeWhy || "no reason recorded"})` };
+      }
+    } else {
+      streetRec.prov = { how: streetRec.resumedAt != null ? "resumed" : "first" };
+    }
 
     // SPECULATIVE PREFETCH OF THE REST OF THE LINE (2026-09-24 latency pass). Every villain action on this street
     // is known before hero acts, and a node's address is just the codes walked to it: X / C / F, or R<size> with
@@ -867,6 +1008,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           streetRec.solId = String(again.solId);
           streetRec.account = again.session;
           streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}re-created on another account after a 429 mid-walk`;
+          streetRec.leak = { code: "tree:429-reroute", why: `the ${STREET[k]!.toLowerCase()} tree was re-created on another GTO Wizard account after a 429 mid-walk` };
           ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(ens.solId, codes.join("-")));
         }
       }
@@ -936,8 +1078,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         }
         nodeRec.heroNode = true;
         // HERO'S NODE IS THE HAND'S MID-STREET CHECKPOINT: the next decision resumes from here (see PartialCheckpoint)
-        if (ckKey) {
-          savePartial(ckKey, {
+        if (rootKey && handKey) {
+          const entry = entryKeyAt(si);
+          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry, key: entry, tokens: toks.slice(), kind: "partial", solId: String(ens.solId), at: Date.now() });
+          savePartial(handKey, entry, {
             k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
             entering, seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack,
             st: st.snapshot(), codes: codes.slice(), solId: String(ens.solId),
@@ -949,6 +1093,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         // for it: every recorded trace had the answering street's walk at 0 ms and its real cost (~2.5 s p50 on
         // the river) showing up as unexplained time. Record it here. (2026-09-22)
         streetRec.walkMs = Date.now() - tWalk;
+        if (!streetRec.leak && nodeLeaks.length) streetRec.leak = { code: "node:read-twice", why: nodeLeaks[0]! };
         const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
@@ -1000,9 +1145,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         seats = st.live.map((i) => seats[i]!);   // folded seats leave the hand
         walked.push(`${STREET[k]!.toLowerCase()} ${codes.join("-")}`);
         // the street is closed: everything the next street needs is checkpointed for this hand's later decisions
-        if (ckKey) {
-          saveCheckpoint(ckKey, {
-            k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
+        if (rootKey && handKey) {
+          const key = exitKeys[si] ?? exitKeyOf(entryKeyAt(si), toks, streetBoard);
+          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry: entryKeyAt(si), key, tokens: toks.slice(), kind: "closed", solId: String(ens.solId), at: Date.now() });
+          saveCheckpoint(handKey, key, {
+            k, root: rootKey,
             seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack, walked: walked.slice(),
             streets: trace.streets.slice(), nodes: trace.nodes.slice(), at: Date.now(),
           });
@@ -1014,6 +1161,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
     streetRec.walkMs = Date.now() - tWalk;
+        if (!streetRec.leak && nodeLeaks.length) streetRec.leak = { code: "node:read-twice", why: nodeLeaks[0]! };
     if (spec.walkThrough && isLast && closed) {
       const rangesOut: Record<string, number[]> = {};
       for (const x of seats) rangesOut[x.pos] = x.range;

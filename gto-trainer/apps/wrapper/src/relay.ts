@@ -56,6 +56,19 @@ export function currentNote(): string | null {
   return st.note;
 }
 
+/**
+ * THE CHAIN LINE (2026-09-25): how the current answer was produced — its verdict (only while the answer is fresh) —
+ * and the session's clean count (the share of hands that reached a postflop decision along the happy path).
+ */
+export function currentChain(): Record<string, any> | null {
+  const st = S.study;
+  if (!st.on) return null;
+  const fresh = !!st.text && (time() - st.at) * 1000 < STUDY_ANSWER_TTL_MS;
+  const answer = fresh && st.chain ? st.chain : null;
+  if (!answer && !st.chainSession) return null;
+  return { verdict: answer?.verdict ?? null, label: answer?.label ?? null, reason: answer?.reason ?? null, session: st.chainSession ?? null };
+}
+
 // ---- the press -------------------------------------------------------------------------------------------
 /** None if that page point is inside THIS table, else why it is not (the client's own hit-testing decides). */
 export async function pointIsMyTable(ws: string, x: number, y: number): Promise<string | null> {

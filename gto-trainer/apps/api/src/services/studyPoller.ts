@@ -2,12 +2,22 @@ import { DEFAULT_LIVE_URL } from "../routes/ingest";
 import { buildAnswerText, type AnswerAction } from "../feed/buildAnswerText/buildAnswerText";
 import { gtowCdp } from "./gtowCdp";
 import { gtowApi } from "./gtowApi";
-import { answerLog, isFailKind, type FailKind } from "./answerLog";
+import { answerLog, failKindOf, isFailKind, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
 import { drawRoll, fmtRoll, rollDecision } from "./rollDecision";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
+
+/** What the panel shows about the chain: this answer's verdict and the session's clean count. */
+export interface ChainBanner {
+  verdict: DecisionPath["verdict"] | null;
+  label: string | null;
+  reason: string | null;
+  session: { hands: number; clean: number; rate: number | null } | null;
+}
+
 
 /**
  * EVERY ANSWER ATTEMPT, ONE LINE (2026-09-24). The poller kept only its LAST error in memory, so a hand whose
@@ -175,8 +185,10 @@ interface FastSolveLikeResponse {
         solveId?: number | null;
       rangeSource?: string;
         warning?: string | null;
+        /** how the answer was produced (services/chainPath) */
+        path?: DecisionPath;
       }
-    | { ok: false; reason: string; street?: string; gametype?: string; depth?: number; line?: string }
+    | { ok: false; reason: string; street?: string; gametype?: string; depth?: number; line?: string; path?: DecisionPath }
     /* ok:true also carries rangeSource?: string (see fastSolve.ts) */
     | null;
   deferred?: string;
@@ -560,7 +572,7 @@ class StudyPoller {
       return;
     }
     const t0 = Date.now();
-    const full = await this.fetchFastSolve();
+    const full = await this.fetchFastSolve(key);
     if (!full) {
       // The request itself failed — timeout, refused, or not JSON. This used to
       // return in silence, so a decision lost this way left no trace at all:
@@ -569,6 +581,9 @@ class StudyPoller {
         this.status.lastError ?? "the fast-solver did not answer", Date.now() - t0);
       return;
     }
+    // THE TABLE MOVED BETWEEN THE PROBE AND THE SOLVE'S OWN READ (routes/fastSolver expectKey): nothing was solved for
+    // this key, and nothing failed — the next tick probes the table as it is now
+    if (full.solution == null && /^The table moved between the probe and the solve/.test(full.deferred ?? "")) return;
     if (key !== this.lastProbeKey) {
       // Hero acted while this solve was still running. Logged WITH the latency:
       // "the chain is too slow for Zone" is only a measurable claim if the
@@ -618,6 +633,10 @@ class StudyPoller {
       solveId: (sol?.ok === true ? sol.solveId : null) ?? null,
       sessionId: full.sessionId ?? null,
     };
+    // THE CHAIN PATH (services/chainPath): an answer carries the one fastSolve made; a decision with no answer is a
+    // fault (its requests still counted) — unless the chain was never the question (hero acted first, hand over)
+    const answered = sol?.ok === true && sol.decision != null;
+    const chainPath: DecisionPath | null = answered ? (sol.path ?? null) : this.faultPathOf(full, key);
     this.status.lastError = null;
     if (!(sol?.ok === true && sol.decision != null)) {
       // Breadcrumb for "no answer" reports: WHY did this spot yield nothing.
@@ -648,8 +667,12 @@ class StudyPoller {
       // the fast-solver stamps a machine `kind` on its terminal refusals (capture-fault / no-hero-cards /
       // board-incomplete, fastSolve.ts 2026-09-23); log it when it is one of ours, else classify the sentence
       const kind = sol?.ok === false ? (sol as { kind?: unknown }).kind : undefined;
+      const fk = isFailKind(kind) ? kind : failKindOf(reason);
+      const fp = faultPath(full.hand?.street ?? "?", fk, reason);
+      const failPath: DecisionPath | null = NEUTRAL_FAIL_KINDS.has(fk) ? null
+        : { ...fp, requests: sol?.path?.requests, arrival: sol?.path?.arrival, streets: sol?.path?.streets ?? [] };
       answerLog.add({ ...logBase, text: null, pick: null, roll: null, tier: null, warning: null, failReason: reason,
-        failKind: isFailKind(kind) ? kind : undefined });
+        failKind: isFailKind(kind) ? kind : undefined, pathVerdict: failPath?.verdict ?? null, path: failPath ? JSON.stringify(failPath) : null });
       // Say it on the panel rather than leaving a blank card: this is the last ask for
       // this spot unless something about it changes.
       if (this.repeatFail.n >= this.REPEAT_FAIL_LIMIT) {
@@ -706,6 +729,8 @@ class StudyPoller {
       tier: sol.tier ?? (full.hand?.street === "preflop" ? "local-preflop" : null),
       warning: sol.warning ?? null,
       failReason: null,
+      pathVerdict: chainPath?.verdict ?? null,
+      path: chainPath ? JSON.stringify(chainPath) : null,
     });
     // The solve's own caveat (snapped sizes, generic ranges, …) rides along
     // so the panel can show HOW MUCH to trust this verdict.
@@ -728,12 +753,14 @@ class StudyPoller {
       chartPick: rolled.chartPick,
       // the line's trust (wrapper _reconciled_line): an uncertain line holds auto-execute
       uncertain: full.hand?.lineUncertain ?? null,
+      // the panel's banner: this answer's verdict, and the session's clean count so far
+      chain: this.chainBanner(chainPath, full.sessionId ?? null),
     }, [(sol as { warning?: string | null }).warning ?? null, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
       .filter((s): s is string => !!s).join(" · ") || null);
   }
 
   /** POST /api/fast-solver — same body as ingest, no navigation, no navLock. */
-  private async fetchFastSolve(): Promise<FastSolveLikeResponse | null> {
+  private async fetchFastSolve(expectKey?: string): Promise<FastSolveLikeResponse | null> {
     const t0 = Date.now();
     try {
       const res = await fetch(`${this.config.selfBaseUrl}/fast-solver`, {
@@ -746,6 +773,8 @@ class StudyPoller {
           // the declared strategy decides the preflop piece (no mode flag any more)
           strategyId: this.lastStrategyId ?? undefined,
           origin: "live",
+          // the decision this solve is for: the route defers when its own read of the table disagrees
+          ...(expectKey ? { expectKey } : {}),
         }),
         // Library lookups return in ~1-2s; the far-snap AI escape can take
         // a cloud solve (~5-30s). Generous, but nothing blocks behind it.
@@ -916,7 +945,7 @@ class StudyPoller {
                        band?: [number, number] | null;
                        strategy?: string | null; source?: string | null; tier?: string | null;
                        chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
-                       uncertain?: string | null } | null = null;
+                       uncertain?: string | null; chain?: ChainBanner | null } | null = null;
   /** The solve's caveat (snapped sizes, generic ranges) for the current
    *  answer — repeated by the keep-alive alongside it. */
   private lastNote: string | null = null;
@@ -974,7 +1003,41 @@ class StudyPoller {
       text: null, pick: null, roll: null, tier: null, warning: null,
       latencyMs, failReason: reason, failKind: kind,
       sessionId: full?.sessionId ?? null,
+      // a verdict that arrived after hero acted still says how the chain did; a fetch that failed is a fault
+      ...((): { pathVerdict: string | null; path: string | null } => {
+        const done = full?.solution?.path;
+        if (done && NEUTRAL_FAIL_KINDS.has(kind)) return { pathVerdict: done.verdict, path: JSON.stringify(done) };
+        if (NEUTRAL_FAIL_KINDS.has(kind)) return { pathVerdict: null, path: null };
+        const fp = faultPath(full?.hand?.street ?? probe.hand?.street ?? "?", kind, reason);
+        return { pathVerdict: fp.verdict, path: JSON.stringify(fp) };
+      })(),
     });
+  }
+
+  /** The path of a decision that got no answer: a fault, or nothing to say (hero acted first, the hand ended). */
+  private faultPathOf(full: FastSolveLikeResponse, key: string): DecisionPath | null {
+    void key;
+    const sol = full.solution;
+    const reason = sol?.ok === false ? sol.reason : sol?.ok === true && sol.notInRange ? "hero's hand isn't in the chart range at this node" : (full.deferred ?? "no decision in response");
+    const kind = failKindOf(reason);
+    if (NEUTRAL_FAIL_KINDS.has(kind)) return null;
+    return faultPath(full.hand?.street ?? "?", kind, reason);
+  }
+
+  /**
+   * THE PANEL'S CHAIN LINE (2026-09-25, Brady: "a banner in the wrapper panel"): this answer's verdict with its one
+   * reason when it was not clean, and the session's clean count — hands that reached a postflop decision, each at its
+   * worst decision (services/chainPath.cleanRate). Read from the answer log, which this answer was just written to.
+   */
+  private chainBanner(p: DecisionPath | null, sessionId: string | null): ChainBanner | null {
+    const session = sessionId ? cleanRate(answerLog.pathRows(sessionId, false)) : null;
+    if (!p && !session) return null;
+    return {
+      verdict: p?.verdict ?? null,
+      label: p ? VERDICT_LABEL[p.verdict] : null,
+      reason: p ? headline(p) : null,
+      session: session ? { hands: session.hands, clean: session.clean, rate: session.rate } : null,
+    };
   }
 
   /**
@@ -1019,7 +1082,7 @@ class StudyPoller {
               band?: [number, number] | null;
               strategy?: string | null; source?: string | null; tier?: string | null;
               chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
-              uncertain?: string | null } | null,
+              uncertain?: string | null; chain?: ChainBanner | null } | null,
     note?: string | null,
   ): Promise<void> {
     this.status.lastAnswer = text;
@@ -1051,6 +1114,7 @@ class StudyPoller {
           exploitPick: this.lastExtra?.exploitPick ?? null,
           chartPick: this.lastExtra?.chartPick ?? null,
           uncertain: this.lastExtra?.uncertain ?? null,
+          chain: this.lastExtra?.chain ?? null,
           note: this.lastNote,
         }),
         signal: AbortSignal.timeout(3000),

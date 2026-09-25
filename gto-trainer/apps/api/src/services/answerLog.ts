@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import type { PathRow } from "./chainPath";
 import { mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -68,6 +69,11 @@ export interface AnswerRow {
   solveId?: number | null;
   /** The wrapper's declared session (sessions.py). */
   sessionId?: string | null;
+  /** HOW THE ANSWER WAS PRODUCED (2026-09-25, services/chainPath): the verdict — clean / by-design / rebuilt / leaked /
+   *  fault — and the whole path as JSON (arrival, streets, reasons, requests). Null when there is nothing to say
+   *  about the chain (hero acted first, the hand ended). */
+  pathVerdict?: string | null;
+  path?: string | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS answers (
@@ -122,6 +128,10 @@ const EXTRA_COLUMNS: [string, string][] = [
   // 180 of the first 203 failures were the single string "no solution for this
   // spot", which cannot be aggregated or acted on. See FAIL_KINDS.
   ["fail_kind", "TEXT"],
+  // THE CHAIN PATH (2026-09-25, services/chainPath): the answer's verdict and how it was produced — the clean rate,
+  // the panel's banner and the session's Technical tab all read these two columns
+  ["path_verdict", "TEXT"],
+  ["path", "TEXT"],
 ];
 
 /**
@@ -271,6 +281,8 @@ export interface LoggedAnswer {
   line: string | null;
   solve_id: number | null;
   session_id: string | null;
+  path_verdict: string | null;
+  path: string | null;
 }
 
 /**
@@ -358,8 +370,8 @@ class AnswerLog {
              hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
              strategy_mode, source, band_lo, band_hi, exploit_pick, chart_pick, exploit_tag,
              mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, table_slot, hero_pos,
-             depth, set_id, decision_json, line, solve_id, session_id, fail_kind)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
@@ -371,7 +383,8 @@ class AnswerLog {
           row.mesExact == null ? null : row.mesExact ? 1 : 0,
           row.bbCents ?? null, row.tableSeats ?? null, row.tableSlot ?? null, row.heroPos ?? null,
           row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null,
-          row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null
+          row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null,
+          row.pathVerdict ?? null, row.path ?? null
         );
     } catch {
       /* never propagate */
@@ -424,6 +437,20 @@ class AnswerLog {
     try {
       return this.open()
         .query<LoggedAnswer, [string]>("SELECT * FROM answers WHERE session_id = ? ORDER BY ts")
+        .all(sessionId);
+    } catch {
+      return [];
+    }
+  }
+
+  /** A session's decisions that carry a chain path (services/chainPath folds them into the clean rate). `withPath` =
+   *  false leaves the path JSON out — the panel's clean count needs only the verdicts. */
+  pathRows(sessionId: string, withPath = true): PathRow[] {
+    try {
+      return this.open()
+        .query<PathRow, [string]>(
+          `SELECT ts, client_hand_id, wrapper_hand_id, table_slot, street, text, fail_kind, path_verdict${withPath ? ", path" : ""}
+             FROM answers WHERE session_id = ? AND path_verdict IS NOT NULL ORDER BY ts`)
         .all(sessionId);
     } catch {
       return [];

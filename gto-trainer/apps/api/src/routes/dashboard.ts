@@ -37,6 +37,24 @@ import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { preflopPathView, dealtFromTreeId } from "../services/gtowAiPreflop";
 import { solveStore } from "../services/solveStore";
+import { handFacts, type HandDoc } from "../services/handFacts";
+import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
+
+/**
+ * THE HAND'S CHAIN FACTS, for the hand page (2026-09-25, services/handFacts): the requests GTO Wizard served for it
+ * by origin (live decisions, the street warm-up), the tree its preflop answers were read on, the stacks as dealt, and
+ * every street the chain walked — enough to see, without a trace, whether the hand took the happy path.
+ */
+function chainFactsOf(doc: HandDoc | undefined) {
+  if (!doc) return null;
+  const pf = doc.preflop;
+  return {
+    requests: doc.requests ?? {},
+    preflop: pf ? { piece: pf.piece, id: pf.piece === "chart6max" ? pf.chartId : pf.id, codes: pf.codes, decisions: pf.picks?.length ?? 0 } : null,
+    dealt: doc.dealt ?? null,
+    streets: (doc.streets ?? []).map((s) => ({ k: s.k, first: s.first, plan: s.plan, kind: s.kind, tokens: s.tokens, at: s.at })),
+  };
+}
 import { sessionsStore } from "../services/sessionsStore";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { existsSync as fsExists } from "node:fs";
@@ -1009,6 +1027,10 @@ app.get("/hand/:dbId", async (c) => {
     answers,
     session,
     nav,
+    // THE CHAIN PATH (2026-09-25): the hand's verdict (its worst decision) and its facts
+    chain: e.clientHandId
+      ? { verdict: handVerdicts(answers as PathRow[])[0] ?? null, facts: chainFactsOf(handFacts.get(String(e.clientHandId))) }
+      : null,
   });
 });
 
@@ -2425,6 +2447,38 @@ function bbUsdOf(stakes: string | null | undefined): number | null {
 }
 
 /** GET /sessions/:id — one declared session (or an undeclared cluster) in full. */
+/**
+ * A SESSION'S TECHNICAL VIEW (2026-09-25, Brady: "a technical tab … for debugging, not for a normal end user"): the
+ * clean rate first — the share of hands that reached a postflop decision along the chain's happy path — then every
+ * reason a hand was not clean, grouped, with the hands it hit; how the flop ranges and the streets were produced;
+ * and what GTO Wizard requests cost per hand (live decisions and the street warm-up, from the hand facts).
+ */
+app.get("/sessions/:id/technical", (c) => {
+  const id = c.req.param("id");
+  const rows = answerLog.pathRows(id);
+  const report = technicalReport(rows);
+  const keys = [...new Set(rows.map((r) => r.client_hand_id).filter((x): x is string => !!x))];
+  const facts = handFacts.many(keys);
+  const byOrigin: Record<string, { hands: number; tree: number; solution: number; poll: number; total: number }> = {};
+  for (const doc of Object.values(facts)) {
+    for (const [origin, cnt] of Object.entries(doc.requests ?? {})) {
+      const o = (byOrigin[origin] ??= { hands: 0, tree: 0, solution: 0, poll: 0, total: 0 });
+      o.hands++; o.tree += cnt.tree; o.solution += cnt.solution; o.poll += cnt.poll;
+      o.total += cnt.tree + cnt.solution + cnt.poll + cnt.library + cnt.other;
+    }
+  }
+  // the hand page is addressed by hands.db rowid: map each chain hand's site id to it where the hand is archived
+  const rowids: Record<string, number> = {};
+  try {
+    const want = new Set(keys);
+    for (const r of allRows()) {
+      const m = r.data.match(/"clientHandId":\s*"(\d+)"/);
+      if (m && want.has(m[1]!)) rowids[m[1]!] = r.rowid;
+    }
+  } catch { /* the links are a convenience */ }
+  return c.json({ ok: true, id, ...report, requestsByOrigin: byOrigin, rowids });
+});
+
 app.get("/sessions/:id", (c) => {
   const id = c.req.param("id");
   const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
