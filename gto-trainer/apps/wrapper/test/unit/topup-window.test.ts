@@ -92,7 +92,9 @@ test("the auto top-up's windows and guards", async () => {
     seed({ hero: "folded", folded: true });
     S.topupPanel.open = true;
     await act("fold", "action");
-    check("an action folds the panel away first", S.topupPanel.open === false);
+    // (2026-09-25 audit) the close is TRIED first, but with no table to press it cannot go through — so the flag keeps
+    // saying the panel may be up (it used to drop before the press and read "shut" whatever happened)
+    check("an action tries to fold the panel away first — and a close that could not be pressed leaves it flagged", S.topupPanel.open === true);
     check("and calls the top-up off", S.topupAbort === true);
     Object.assign(seams, saved.seams);
 

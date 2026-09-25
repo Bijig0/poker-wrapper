@@ -3,14 +3,17 @@
  * deleted B's lock and C pressed while B was mid-click. A release now removes only its own token's lock, and a live
  * holder is never broken inside a whole press chain.
  */
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { time } from "../../src/clock";
 import { scratchDirs } from "./helpers";
 
 scratchDirs("wrapper-lock-");
+// bun test runs every file in ONE process: a slot left set here makes every later file a multi-table run
+const slot0 = process.env.TABLE_SLOT;
 process.env.TABLE_SLOT = "2";
+afterAll(() => { if (slot0 === undefined) delete process.env.TABLE_SLOT; else process.env.TABLE_SLOT = slot0; });
 const tables = await import("../../src/tables");
 const lockFile = () => join(process.env.WRAPPER_DATA_DIR!, "tables", "press.lock");
 
