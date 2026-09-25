@@ -66,6 +66,23 @@ export function actSeen(key: unknown[]): boolean {
 /** Money-action dedupe key: committed total rounded to the nearest 5 wire cents. */
 export const mkey = (seat: number | null, cents: number): unknown[] => [seat, pyRound(cents / 5)];
 
+/**
+ * THE LAST SEAT STANDING (2026-09-25, hands 4920545590 / 4920544353): every other seat dealt into the hand has
+ * folded, so the hand is over and this seat won it. It has no action left — its cards leave the table at the pot
+ * award (mucked, "does not show") and the pot slides into its slot, which the DOM backfill read as "Seat N folds"
+ * (74 of 448 archived hands ended with the winner folding) or, a tick later, as chips put in.
+ * Judged only off the table's own deal (CO_CARDTABLE_INFO): with no deal frame the fold set can still hold a fold
+ * from a hand whose end the DOM never saw (a tap not yet bound: golden 20260922_194132-slot2 input 91, where a real
+ * flop check read as the "last seat" acting), so a DOM-only hand is left as it was.
+ */
+export function lastStanding(seat: number): boolean {
+  const w = ws();
+  const inHand: number[] = w.dealt || [];
+  const folded: Set<number> = w.foldedSeats ?? new Set<number>();
+  const others = inHand.filter((s) => s !== seat);
+  return inHand.includes(seat) && others.length > 0 && others.every((s) => folded.has(s));
+}
+
 /** Re-render the feed lines printed while the big blind was only a guess (the SB post). */
 export function refeedBlindGuess(): void {
   for (const line of S.feed) {

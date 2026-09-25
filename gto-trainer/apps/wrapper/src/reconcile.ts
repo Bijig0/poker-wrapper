@@ -12,7 +12,7 @@
  *     hero's buttons vanish while owing,
  *       chips unchanged ................... hero folded (hero's cards stay on screen)
  *     a later seat acts while an earlier live seat has no action this street and owes nothing .. it checked
- *     the street changes / hand ends with live seats unacted and nothing owed ... checks
+ *     the street changes / hand ends with live seats unacted and nothing owed ... checks (never the last seat standing)
  *
  * Everything derived carries a confidence and can be RETRACTED by later evidence. Invariants are checked every
  * tick and recorded, never silently fixed. This module is pure: it sees ticks and returns a line, violations and
@@ -237,6 +237,15 @@ export class HandReconciler {
     }
   }
 
+  /** THE LAST SEAT STANDING NEVER FOLDS (2026-09-25, hand 4920544156): every other seat that was in has folded, so
+   *  the hand is over and this one won it — its cards leave the table at the pot award (mucked, not shown), and a bet
+   *  the ledger still says it owes was misread (the pot goes to someone). Judged only once the big blind is read, like
+   *  the award itself: before that `live` can be the previous hand's leftovers (4920431121 filed hero's preflop fold
+   *  on the river when this was judged from them). */
+  private lastStanding(num: number): boolean {
+    return this.bbs !== null && this.maxLive >= 2 && this.live.size === 1 && this.live.has(num);
+  }
+
   private jammed(_tk: Tick, num: number): boolean {
     return (this.jamHold.get(num) || 0) >= HOLD_TICKS;
   }
@@ -289,6 +298,9 @@ export class HandReconciler {
     if (this.maxBet - (any ? maxLiveC : 0.0) <= TOL) {
       for (const s of this.order()) {
         if (this.allin.has(s)) continue;
+        // nobody is left to check to: a walk's big blind never gets the option, and the winner of a pot everyone else
+        // folded never acts again (golden 20260920_131406 hand 51, 4919432644: 'preflop 3 check/street-end')
+        if (this.lastStanding(s)) continue;
         if (this.live.has(s) && !this.acted.has(s) && this.maxBet - (this.C.get(s) ?? 0.0) <= TOL) {
           this.add(s, "check", null, seq, 0.7, "street-end");
         }
@@ -521,6 +533,7 @@ export class HandReconciler {
       if (num === this.hero) continue;
       if (this.allin.has(num)) continue;
       if (this.live.has(num)) {
+        if (this.lastStanding(num)) continue;
         const began = this.holdStreet.has(num) ? this.holdStreet.get(num)! : this.street;
         const late = began !== this.street;
         if ((this.cardHold.get(num) || 0) >= HOLD_TICKS) {
@@ -621,6 +634,7 @@ export class HandReconciler {
     const seats1 = ord.length ? ord : [...this.live].sort((a, b) => a - b);
     for (const s of seats1) {
       if (this.allin.has(s)) continue;
+      if (this.lastStanding(s)) continue;
       if (this.live.has(s) && s !== this.aggressor && this.maxBet - (this.C.get(s) ?? 0.0) > TOL) {
         this.add(s, "fold", null, seq, 0.7, "end", "owed at the pot award");
         this.live.delete(s);
