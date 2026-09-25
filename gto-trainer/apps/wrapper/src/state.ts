@@ -91,6 +91,10 @@ function fresh() {
     heroClock: null as number | null,
     /** Hero's time bank over the current turn (dom.bankStep → relay.heroTimeLeft). Not in liveStatus (the golden). */
     bankSeen: null as { secs: number; at: number; started: boolean } | null,
+    /** What the screen's board is worth to /hand's DOM-board override (ws.ts domBoardRefusal), per hand number: the hole
+     *  cards the SAME capture showed at hero's seat, the flops it showed before anyone had acted this hand, and the
+     *  refusals already logged. Kept out of S.ws / liveStatus, which the reader golden compares key by key. */
+    domBoard: { hand: 0, hole: [] as string[], stale: new Set<string>(), said: new Set<string>() },
     health: { at: 0.0, issues: [] as any[] },
     panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,
     feed: [] as Record<string, any>[],

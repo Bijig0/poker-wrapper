@@ -19,7 +19,7 @@ import {
   awardName, bankStep, boardCards, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, boardCap, dumpMark, lastStanding, mkey, tapVerify, withoutRabbit } from "./ws";
+import { actAdd, actSeen, boardCap, dumpMark, lastStanding, mkey, noteDomBoard, tapVerify, withoutRabbit } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -363,6 +363,7 @@ export async function feedTick(): Promise<void> {
     const nd = withoutRabbit(bc).length;               // the backfill's street stamp: never the rabbit card's street
     const streetDom = nd >= 5 ? "river" : nd === 4 ? "turn" : nd === 3 ? "flop" : "preflop";
     L.board = [...bc];
+    noteDomBoard(bc, hc);                              // what /hand's DOM-board override may make of it (ws.ts)
     const foldedSeats: Set<number> = (w.foldedSeats ??= new Set<number>());
     let prevMax = 0.0;
     for (const s of prevSeats.values()) prevMax = Math.max(prevMax, potVal(s.bet ?? null) || 0);

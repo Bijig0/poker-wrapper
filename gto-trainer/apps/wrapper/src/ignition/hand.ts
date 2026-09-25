@@ -12,7 +12,7 @@ import { CP, S, isCp } from "../state";
 import { C } from "../config";
 import * as TABLES from "../tables";
 import { potVal } from "./dom";
-import { withoutRabbit } from "./ws";
+import { domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
 
 const ws = () => S.ws;
 
@@ -265,11 +265,14 @@ export function handStateIgnition(): Record<string, any> | null {
   const toBb = (cents: number | null | undefined) => (scaled && cents !== null && cents !== undefined ? pyRound(cents / bb, 2) : null);
   let board = (w.board || []).filter((c: any) => c).map(short);
   const pastGrace = time() >= (w.domGraceUntil ?? 0);
-  const hasVoluntary = actsSrc.some((a) => a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post");
+  const hasVoluntary = voluntaryActed();
   if (pastGrace) {
-    // the screen's board fills a board frame the tap lost — never with the rabbit hunt's card (ws.ts withoutRabbit)
-    const domBoard = withoutRabbit((S.liveStatus.board || []).filter((c: any) => c).map(short));
-    if (hasVoluntary && [3, 4, 5].includes(domBoard.length) && domBoard.length > board.length) board = domBoard;
+    // the screen's board fills a board frame the tap lost — never with the rabbit hunt's card (ws.ts withoutRabbit), and
+    // never when it is not this hand's: another table's, or an earlier hand's a stuck frame still shows (domBoardRefused)
+    const domRaw: string[] = withoutRabbit((S.liveStatus.board || []).filter((c: any) => c));
+    if (hasVoluntary && [3, 4, 5].includes(domRaw.length) && domRaw.length > board.length && !domBoardRefused(domRaw)) {
+      board = domRaw.map(short);
+    }
   }
   const street = board.length >= 5 ? "river" : board.length === 4 ? "turn" : board.length === 3 ? "flop" : "preflop";
   let actions: any[] = eventLine();

@@ -70,6 +70,79 @@ export function boardCap(): number {
   return r && r.size ? Math.min(...r.keys()) - 1 : 5;
 }
 
+/** Anyone has acted this hand beyond posting a blind (a post-in is a blind too). */
+export function voluntaryActed(): boolean {
+  return (ws().actions || []).some((a: any) => a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post");
+}
+
+/** One DOM read of the board (reader.ts feedTick), with the hole cards the SAME capture showed at hero's seat. A board
+ *  on screen while nobody has acted yet cannot be this hand's — no flop comes before an action, which is why the
+ *  override already waits for one — and its flop is remembered for the rest of the hand. From the deal on, not only
+ *  past the deal grace: a stuck frame's board is up from the start, and the first action can come before the grace
+ *  has ended plus one tick (4920545175: seat 1 folded 0.27 s after it). */
+export function noteDomBoard(board: string[], hole: string[]): void {
+  const m = S.domBoard;
+  if (m.hand !== S.handNo) Object.assign(m, { hand: S.handNo, stale: new Set<string>(), said: new Set<string>() });
+  m.hole = [...hole];
+  if (board.length >= 3 && !voluntaryActed()) m.stale.add(board.slice(0, 3).join(" "));
+}
+
+const holeKey = (cards: string[]) => [...cards].sort().join(" ");
+
+/**
+ * THE SCREEN'S BOARD IS THIS HAND'S ONLY WHEN NOTHING SAYS OTHERWISE (2026-09-25). /hand takes the DOM's board when it
+ * is ahead of the WebSocket's — a board frame the tap lost (ignition/hand.ts). On the multi-table page a slot's frame
+ * can show a board that is not this hand's: a frame STUCK on an earlier hand (slot 4 on 2026-09-24 and 09-25: one
+ * hand's board on screen for the next four to six hands while the hole cards moved on) or ANOTHER TABLE's frame (slot
+ * 2's read landed on table 4 as its hand ended). Archived: preflop fold-outs with a river board (4920545175,
+ * 4920432813, 4920434476), a flop replaced by an older hand's five cards (4920431916, 4920544902). Refused when:
+ *  - it contradicts a card the table's own feed dealt: it fills a lost frame, it never replaces one;
+ *  - the hand never left preflop: over (one dealt seat standing) with no board frame and every action preflop;
+ *  - it was on screen before anyone had acted this hand (noteDomBoard): older than the hand;
+ *  - the capture it came from does not show hero's hole cards as the table dealt them. On a healthy table they stay on
+ *    screen with the hand's board until the hand-end wipe, folded or not (checked across the 2026-09-24/25 debug
+ *    sessions); without them, or with others, the frame is another table's or an earlier hand's (4909421009: the last
+ *    hand's board still up at hero's preflop decision, hero's new cards not yet drawn).
+ * `board` is the screen's, cards named as the WS names them. Returns why, or null when the board may be taken.
+ */
+export function domBoardRefusal(board: string[]): string | null {
+  const w = ws();
+  const shown = board.join(" ");
+  const own: (string | null)[] = w.board || [];
+  if (own.some((c, i) => c && board[i] !== c)) {
+    return `the screen's board ${shown} contradicts the table's own (${own.map((c) => c ?? "?").join(" ")})`;
+  }
+  const dealt: number[] = w.dealt || [];
+  const folded: Set<number> = w.foldedSeats ?? new Set<number>();
+  if (boardReach() === 0 && dealt.length && dealt.filter((s) => !folded.has(s)).length <= 1
+      && (w.actions || []).every((a: any) => (a.street || "preflop") === "preflop")) {
+    return `the hand ended preflop — the screen's board ${shown} was never dealt to it`;
+  }
+  const m = S.domBoard;
+  const now = m.hand === S.handNo;
+  if (now && m.stale.has(board.slice(0, 3).join(" "))) {
+    return `the screen's board ${shown} was up before anyone had acted — an earlier hand's`;
+  }
+  const hole: string[] = w.heroCards || [];
+  if (hole.length && (!now || holeKey(m.hole) !== holeKey(hole))) {
+    return `the screen's board ${shown} came with ${now && m.hole.length ? m.hole.join(" ") : "no hole cards"} at hero's seat, `
+      + `not ${hole.join(" ")} — another table's or an earlier hand's`;
+  }
+  return null;
+}
+
+/** domBoardRefusal, logged once per hand and reason (/hand is read many times a second). */
+export function domBoardRefused(board: string[]): boolean {
+  const why = domBoardRefusal(board);
+  if (why === null) return false;
+  const m = S.domBoard;
+  if (m.hand === S.handNo && !m.said.has(why)) {
+    m.said.add(why);
+    log(`[board] hand ${S.handIds.get(S.handNo) || `#${S.handNo}`}: ${why} — /hand keeps the table's own board`);
+  }
+  return true;
+}
+
 /** A board frame reached `reach`: a rabbit card at or before it was not this hand's. */
 function rabbitDealt(reach: number): void {
   const w = ws();
