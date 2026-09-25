@@ -18,7 +18,7 @@
  * Refused only when the current street itself leaves nothing collapsible, or the earlier streets had more
  * aggressors than a three-seat walk can hold.
  */
-import { solveAiChain, type AiChainSpec } from "./aiChain";
+import { effectiveBehind, solveAiChain, type AiChainSpec } from "./aiChain";
 import { planCollapses, pickCollapses, type Picked, type SeatTok } from "./multiwayCollapse";
 
 type SeatSpec = Pick<AiChainSpec, "oopPos" | "ipPos" | "oopRange" | "ipRange" | "midPos" | "midRange" | "heroSeat">;
@@ -40,32 +40,49 @@ export interface RerootArgs {
   specOf: (three: { pos: string; range: number[] }[], heroIdx: number) => SeatSpec;
   /** seats with nothing behind (all-in). Those that went all-in on an EARLIER street never act again. */
   allIn?: Set<string>;
+  /** each seat's own stack behind entering the flop (fastSolve's seat stacks); absent = the one flopStack for all */
+  behind?: Record<string, number>;
 }
 
 export type RerootResult =
-  | { ok: true; picked: Picked; first: 1 | 2; pot: number; stack: number; walks: number; left: string; allIn: string[] }
+  | { ok: true; picked: Picked; first: 1 | 2; pot: number; stack: number; walks: number; left: string; allIn: string[];
+      /** each live seat's own stack behind entering the re-rooted street (from RerootArgs.behind) */
+      behind?: Record<string, number> }
   | { ok: false; why: string };
 
-/** Pot and stack entering street `first`, and who folded before it — every seat counted, nothing collapsed. */
-export function moneyThrough(streets: string[][], seats: string[][], flopPot: number, flopStack: number, first: number) {
+/**
+ * Pot and stack entering street `first`, and who folded before it — every seat counted, nothing collapsed.
+ * With `behind0` (each seat's own stack entering the flop) every seat also pays out of its OWN stack — a call is
+ * capped at what the caller has, an all-in ("RAI") puts in the seat's real stack rather than the tree's — and
+ * `behind` says what each has left entering `first` (2026-09-25, hand 4920544353).
+ */
+export function moneyThrough(streets: string[][], seats: string[][], flopPot: number, flopStack: number, first: number,
+  behind0?: Record<string, number>) {
   let pot = flopPot;
   let stack = flopStack;
   const folded = new Set<string>();
   const aggressors = new Set<string>();
+  const behind: Record<string, number> | undefined = behind0 ? { ...behind0 } : undefined;
   for (let i = 0; i < first; i++) {
     let level = 0;
     const put: Record<string, number> = {};
+    const cap = (seat: string) => Math.min(stack, behind?.[seat] ?? Infinity);
     streets[i]!.forEach((tok, j) => {
       const seat = seats[i]![j]!;
       if (tok === "F") folded.add(seat);
-      else if (tok === "C") put[seat] = Math.min(level, stack);
-      else if (tok === "RAI") { put[seat] = stack; level = stack; aggressors.add(seat); }
-      else if (/^R[\d.]+$/.test(tok)) { const to = Math.min(parseFloat(tok.slice(1)), stack); put[seat] = to; level = to; aggressors.add(seat); }
+      else if (tok === "C") put[seat] = Math.min(level, cap(seat));
+      else if (tok === "RAI") { put[seat] = cap(seat); level = Math.max(level, put[seat]!); aggressors.add(seat); }
+      else if (/^R[\d.]+$/.test(tok)) { const to = Math.min(parseFloat(tok.slice(1)), cap(seat)); put[seat] = to; level = Math.max(level, to); aggressors.add(seat); }
     });
     pot += Object.values(put).reduce((a, b) => a + b, 0);
     stack -= level;
+    if (behind) for (const [seat, x] of Object.entries(put)) if (behind[seat] != null) behind[seat] = Math.max(0, behind[seat]! - x);
   }
-  return { pot: Math.round(pot * 100) / 100, stack: Math.round(stack * 100) / 100, folded, aggressors };
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  return {
+    pot: r2(pot), stack: r2(stack), folded, aggressors,
+    behind: behind ? Object.fromEntries(Object.entries(behind).map(([p, x]) => [p, r2(x)])) : undefined,
+  };
 }
 
 /** The fewest 3-seat groups — each: hero + every earlier aggressor + villains — that together contain every villain. */
@@ -116,7 +133,7 @@ export function replayWithout(toks: string[], seats: string[]): { toks: string[]
 export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   const first = a.streets.length - 1;
   if (first < 1 || first > 2) return { ok: false, why: "nothing to re-root on the flop" };
-  const m = moneyThrough(a.streets, a.streetSeats, a.flopPot, a.flopStack, first);
+  const m = moneyThrough(a.streets, a.streetSeats, a.flopPot, a.flopStack, first, a.behind);
   if (m.stack <= 0.5) return { ok: false, why: "the earlier streets put everyone (near) all-in" };
   const order = (xs: string[]) => a.ordered.filter((p) => xs.includes(p));
   // A SEAT ALL-IN FROM AN EARLIER STREET NEVER ACTS AGAIN (2026-09-24, sweep side-pot spots). It needs no seat in a
@@ -160,13 +177,16 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
     }
     const three = keep.map((p) => ({ pos: p, range: a.arr(p) }));
     const heroIdx = keep.indexOf(a.heroPos);
+    // the walk's own seats' stacks: its flop at their effective stack, and each later street at the stack of those left
+    const seatStacks = a.behind ? Object.fromEntries(keep.filter((p) => a.behind![p] != null).map((p) => [p, a.behind![p]!])) : undefined;
     const spec: AiChainSpec = {
       ...(a.rake ? { rake: a.rake } : {}),
       ...(three.length === 3 ? a.specOf(three, heroIdx) : {
         oopPos: three[0]!.pos, ipPos: three[1]!.pos, oopRange: three[0]!.range, ipRange: three[1]!.range,
         heroSeat: heroIdx === 0 ? "oop" as const : "ip" as const,
       }),
-      flopPot: a.flopPot, flopStack: a.flopStack, board: a.board, streets, streetSeats: seats,
+      flopPot: a.flopPot, flopStack: Math.min(a.flopStack, effectiveBehind(keep, a.heroPos, seatStacks)), board: a.board, streets, streetSeats: seats,
+      ...(seatStacks ? { seatStacks } : {}),
       heroComboIdx: a.heroComboIdx, walkThrough: true,
     };
     const r = await solveAiChain(spec);
@@ -192,10 +212,10 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
       mode: "single", why: `${[...allIn].join(", ")} all-in since an earlier street — ${cSeats.length} seats still act`,
     };
     return { ok: true, picked, first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
-      left: covered.length ? covered.join(", ") : "none", allIn: [...allIn] };
+      left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(m.behind ? { behind: m.behind } : {}) };
   }
   const picked = pickCollapses(planCollapses(cSeats, a.heroPos, cur));
   if (!picked) return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses` };
   return { ok: true, picked, first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
-    left: covered.length ? covered.join(", ") : "none", allIn: [...allIn] };
+    left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(m.behind ? { behind: m.behind } : {}) };
 }

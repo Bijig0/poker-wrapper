@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { gtowApi, DEFAULT_TREE_RAKE } from "./gtowApi";
-import { actorsOf, checkpointsFor, forgetCheckpoints, solveAiChain, StreetState, type AiChainSpec } from "./aiChain";
+import { actorsOf, checkpointsFor, effectiveBehind, forgetCheckpoints, solveAiChain, StreetState, type AiChainSpec } from "./aiChain";
 
 describe("StreetState", () => {
   it("heads-up: check-check closes, bet-call closes, a bet re-opens", () => {
@@ -634,5 +634,83 @@ describe("the trace records each street's tree request", () => {
     expect((r.trace.streets[0]!.sent as any).rake).toEqual(DEFAULT_TREE_RAKE);
     // the stub returns no session: the trace says so rather than inventing one
     expect(r.trace.streets[0]!.account ?? null).toBeNull();
+  });
+});
+
+/**
+ * HAND 4920544353 (2026-09-25, Ignition NL5): hero CO 100bb opens, BTN (34.2) and both blinds call — four-way flop,
+ * collapsed by merging SB+BB into one seat (the merge plan the answer used). The tree is solved at the field's 49.8
+ * (the SB's depth). On the flop the merged blinds fold to the BTN's raise; on the turn the BTN jams his last 21.6.
+ * Live, the turn tree was solved at 39.8 behind — the field's number rolled forward — so the jam was a bet with
+ * 18.2bb behind it and hero's answer was "ALLIN 39.8 100%" where the table offered only fold or call.
+ */
+describe("the stack of the players still in (seatStacks, hand 4920544353)", () => {
+  const AI = (b: number) => ({ code: `R${b}`, name: "Allin", betsize: b });
+  const nodes: Record<string, Node> = {
+    "sol-FLOP|": { toAct: "SB", acts: [X, B(1)] },
+    "sol-FLOP|R1": { toAct: "CO", acts: [F, C(1), R(10)] },
+    "sol-FLOP|R1-C": { toAct: "BTN", acts: [F, C(1), R(10)] },
+    "sol-FLOP|R1-C-R10": { toAct: "SB", acts: [F, C(10)] },
+    "sol-FLOP|R1-C-R10-F": { toAct: "CO", acts: [F, C(10)] },
+    "sol-TURN|": { toAct: "CO", acts: [X, B(10), AI(21.6)] },
+    "sol-TURN|X": { toAct: "BTN", acts: [X, B(10), AI(21.6)] },
+    "sol-TURN|X-R21.6": { toAct: "CO", acts: [F, C(21.6)] },
+  };
+  const FLOP = ["R1", "C", "R10", "F", "C"];
+  const spec = (turn: string[], extra: Partial<AiChainSpec> = {}): AiChainSpec => ({
+    oopPos: "SB", midPos: "CO", ipPos: "BTN", oopRange: full(), midRange: full(), ipRange: full(),
+    flopPot: 10.4, flopStack: 49.8, board: "6s8hKsQh", heroSeat: "mid", heroComboIdx: null,
+    streets: [FLOP, turn], streetSeats: [["SB", "CO", "BTN", "SB", "CO"], turn.map((_, i) => (i % 2 ? "BTN" : "CO"))],
+    seatStacks: { SB: 49.8, CO: 97.4, BTN: 31.6 },
+    ...extra,
+  });
+
+  it("effectiveBehind: hero against the deepest villain; an unknown stack never shrinks it", () => {
+    expect(effectiveBehind(["SB", "CO", "BTN"], "CO", { SB: 49.8, CO: 97.4, BTN: 31.6 })).toBe(49.8);
+    expect(effectiveBehind(["CO", "BTN"], "CO", { CO: 87.4, BTN: 21.6 })).toBe(21.6);
+    expect(effectiveBehind(["CO", "BTN"], "CO", { CO: 15, BTN: 21.6 })).toBe(15);
+    expect(effectiveBehind(["CO", "BTN"], "CO", { CO: 87.4 })).toBe(87.4);
+    expect(effectiveBehind(["CO", "BTN"], "CO", undefined)).toBe(Infinity);
+  });
+
+  it("after the blinds fold the turn is solved at the BTN's 21.6, and his jam is the tree's all-in", async () => {
+    const s = script(nodes);
+    restore = s.restore;
+    const r = await solveAiChain(spec(["X", "R21.6"]));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(s.trees.map((t) => [t.startingStreet, t.stack])).toEqual([["FLOP", 49.8], ["TURN", 21.6]]);
+    expect(r.stackStreet).toBe(21.6);
+    expect(r.potNode).toBe(53);
+    // the BTN's 21.6 was walked as the ALL-IN (everything he had), and hero faces fold or call — nothing else
+    const btn = r.trace.nodes.find((n) => n.street === "TURN" && n.codes.join("-") === "X")!;
+    expect(btn.actions[btn.taken!]!.name).toBe("Allin");
+    expect(r.data.action_solutions.map((a: any) => a.action.display_name)).toEqual(["Fold", "Call"]);
+    expect(r.stackNotes?.[0]).toContain("CO 87.4 / BTN 21.6 behind after SB left — solved at 21.6bb, not the 39.8bb");
+  });
+
+  it("without seat stacks the old rolled number stands (a missing reading never shrinks a tree)", async () => {
+    const s = script(nodes);
+    restore = s.restore;
+    const r = await solveAiChain(spec(["X", "R21.6"], { seatStacks: undefined }));
+    expect(r.ok).toBe(true);
+    expect(s.trees.map((t) => t.stack)).toEqual([49.8, 39.8]);
+    if (r.ok) expect(r.stackNotes).toBeUndefined();
+  });
+
+  it("the flop checkpoint carries each seat's stack: the next decision starts from it at 21.6, flop not re-walked", async () => {
+    forgetCheckpoints("hand-4920544353");
+    const s = script(nodes);
+    restore = s.restore;
+    const r1 = await solveAiChain(spec([], { handKey: "hand-4920544353" }));   // hero's turn decision at the root
+    expect(r1.ok).toBe(true);
+    const r2 = await solveAiChain(spec(["X", "R21.6"], { handKey: "hand-4920544353" }));
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.trace.checkpoint?.from).toBe("FLOP");
+    expect(s.trees.map((t) => [t.startingStreet, t.stack])).toEqual([["FLOP", 49.8], ["TURN", 21.6], ["TURN", 21.6]]);
+    expect(r2.stackStreet).toBe(21.6);
+    expect(r2.stackNotes?.[0]).toContain("solved at 21.6bb");
+    forgetCheckpoints("hand-4920544353");
   });
 });

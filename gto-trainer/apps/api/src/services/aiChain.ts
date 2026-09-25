@@ -54,6 +54,15 @@ export interface AiChainSpec {
   midRange?: number[];
   flopPot: number;
   flopStack: number;
+  /** EACH SEAT'S OWN STACK BEHIND entering the walk's first street, by the seat's position as named in this spec
+   *  (2026-09-25, hand 4920544353). A tree has ONE stack — `flopStack`, the effective stack of the seats it holds —
+   *  and the walk used to roll that one number forward street by street. When a fold shrinks the field, the stack of
+   *  the players left can be far smaller: a four-way flop at 49.8 (the SB's depth) that ends with hero against a
+   *  21.6bb button was solved on the turn at 39.8 behind, so the button's jam was a bet with chips behind and hero
+   *  was offered a raise that does not exist. With these, every street after a close is solved at the effective stack
+   *  of the seats still in (hero against the deepest villain left). Seats missing here, or the whole map absent, keep
+   *  the old rolled number. */
+  seatStacks?: Record<string, number>;
   /** Concatenated short cards for the full observed board ("7cKdAh8c3s"). */
   board: string;
   /** GTOW tokens per street (X/C/F/R<bb>/RAI), up to and including the
@@ -197,6 +206,10 @@ interface StreetCheckpoint {
   seats: { pos: string; label: SeatLabel; range: number[] }[];
   pot: number;
   stack: number;
+  /** each surviving seat's own stack behind entering the next street (null when the spec carried no seatStacks) */
+  behind: Record<string, number> | null;
+  /** the stack re-derivations made while walking up to here (the answer repeats them) */
+  stackNotes: string[];
   walked: string[];
   streets: ChainTrace["streets"];
   nodes: ChainTraceNode[];
@@ -284,6 +297,20 @@ export function forgetCheckpoints(handKey: string): void {
 const r4 = (xs: number[] | undefined): number[] => (xs ?? []).map((x) => Math.round((x ?? 0) * 10000) / 10000);
 const r2 = (x: number): number => Math.round(x * 100) / 100;
 
+/**
+ * THE EFFECTIVE STACK OF THE SEATS IN A TREE (2026-09-25): hero's stack behind against the DEEPEST villain's, the
+ * rule the dealt depth already follows (hrc6max.dealtEffective) applied to the seats this tree actually holds. A
+ * seat whose stack is unknown counts as unbounded, so a missing reading can never shrink a tree — the caller caps
+ * the result with the stack it would have used anyway. Infinity when nothing is known.
+ */
+export function effectiveBehind(seats: string[], heroPos: string, behind: Record<string, number> | null | undefined): number {
+  if (!behind) return Infinity;
+  const of = (p: string) => { const v = behind[p]; return v != null && Number.isFinite(v) ? v : Infinity; };
+  const villains = seats.filter((p) => p !== heroPos);
+  const deepest = villains.length ? Math.max(...villains.map(of)) : Infinity;
+  return Math.min(of(heroPos), deepest);
+}
+
 export type AiChainResult =
   | {
       ok: true;
@@ -301,6 +328,8 @@ export type AiChainResult =
       rangesOut?: Record<string, number[]>;
       /** Wagers the walk matched only loosely — a size nudged onto the tree's, or a big raise taken as its all-in. */
       snaps?: string[];
+      /** Streets solved at a smaller stack than the field rolled forward, because seats left (spec.seatStacks). */
+      stackNotes?: string[];
       trace: ChainTrace;
     }
   | { ok: false; why: string; trace?: ChainTrace };
@@ -483,6 +512,12 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const heroPos = seats.find((s) => s.label === spec.heroSeat)!.pos;
   let pot = spec.flopPot;
   let stack = spec.flopStack;
+  // each seat's own stack behind (spec.seatStacks), rolled with its own chips — see the street close below
+  let behind: Record<string, number> | null = spec.seatStacks
+    ? Object.fromEntries(seats.filter((s) => spec.seatStacks![s.pos] != null).map((s) => [s.pos, spec.seatStacks![s.pos]!]))
+    : null;
+  /** where a street's stack was re-derived from the seats still in (the answer says so) */
+  const stackNotes: string[] = [];
   let solves = 0;
   const walked: string[] = [];
 
@@ -508,6 +543,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       seats = cp.seats.map((s) => ({ ...s, range: s.range.slice() }));
       pot = cp.pot;
       stack = cp.stack;
+      behind = cp.behind ? { ...cp.behind } : null;
+      stackNotes.push(...(cp.stackNotes ?? []));
       walked.push(...cp.walked);
       trace.streets.push(...cp.streets.map((s) => ({ ...s, fromCheckpoint: true })));
       trace.nodes.push(...cp.nodes.map((x) => ({ ...x, fromCheckpoint: true })));
@@ -877,7 +914,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
-        return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}) };
+        return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}),
+          ...(stackNotes.length ? { stackNotes } : {}) };
       }
 
       const label = labels[ti]!;
@@ -922,13 +960,32 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const paid = st.outstanding;
         pot += st.potIn;
         stack -= paid;
+        const before = seats.map((s) => s.pos);
+        // each seat pays its own chips out of its own stack; a folded seat's stack leaves with it
+        if (behind) {
+          const next: Record<string, number> = {};
+          for (const i of st.live) {
+            const p = seats[i]!.pos;
+            if (behind[p] != null) next[p] = r2(Math.max(0, behind[p]! - (st.inv[i] ?? 0)));
+          }
+          behind = next;
+        }
         seats = st.live.map((i) => seats[i]!);   // folded seats leave the hand
+        // THE STACK OF THE PLAYERS STILL IN (2026-09-25, hand 4920544353). The tree's stack was the effective stack
+        // of the field it started with; once a seat folds, the next street's tree is solved at the effective stack of
+        // the seats left — hero against the deepest villain still in — never more than the rolled number.
+        const eff = r2(effectiveBehind(seats.map((s) => s.pos), heroPos, behind));
+        if (eff < stack - 0.005) {
+          stackNotes.push(`${STREET[k + 1]?.toLowerCase() ?? "next street"}: ${seats.map((s) => `${s.pos} ${behind?.[s.pos] ?? "?"}`).join(" / ")} behind ` +
+            `after ${before.filter((p) => !seats.some((s) => s.pos === p)).join(", ") || "the street"} left — solved at ${eff}bb, not the ${r2(stack)}bb the ${before.length}-seat field rolled forward`);
+          stack = eff;
+        }
         walked.push(`${STREET[k]!.toLowerCase()} ${codes.join("-")}`);
         // the street is closed: everything the next street needs is checkpointed for this hand's later decisions
         if (ckKey) {
           saveCheckpoint(ckKey, {
             k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
-            seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack, walked: walked.slice(),
+            seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack, behind: behind ? { ...behind } : null, stackNotes: stackNotes.slice(), walked: walked.slice(),
             streets: trace.streets.slice(), nodes: trace.nodes.slice(), at: Date.now(),
           });
         }
@@ -944,7 +1001,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       for (const x of seats) rangesOut[x.pos] = x.range;
       const line = walked.join(" / ");
       trace.result = { ok: true, potNode: r2(pot), stackStreet: stack, line, solves };
-      return { ok: true, data: null, potNode: r2(pot), stackStreet: stack, line, solves, trace, rangesOut };
+      return { ok: true, data: null, potNode: r2(pot), stackStreet: stack, line, solves, trace, rangesOut, ...(stackNotes.length ? { stackNotes } : {}) };
     }
     if (!closed && !isLast) {
       return fail(`street ${STREET[k]} didn't close before the next card (missed action?)`);

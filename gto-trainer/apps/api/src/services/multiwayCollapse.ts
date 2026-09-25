@@ -40,6 +40,8 @@ export interface CollapseSeat {
   pos: string;
   /** 1326-combo weights entering the flop */
   range: number[];
+  /** a MERGED seat: the table seats it stands for (its `pos` is the first of them). Absent = just `pos`. */
+  members?: string[];
 }
 
 export interface CollapsePlan {
@@ -127,7 +129,10 @@ function merge(st: State, a: number): State | null {
     streets.push(out);
   }
   // the composite's range is the sum of the two — one opponent who could hold either
-  const composite: CollapseSeat = { pos: x.pos, range: x.range.map((w, i) => w + (y.range[i] ?? 0)) };
+  const composite: CollapseSeat = {
+    pos: x.pos, range: x.range.map((w, i) => w + (y.range[i] ?? 0)),
+    members: [...(x.members ?? [x.pos]), ...(y.members ?? [y.pos])],
+  };
   const seats = st.seats.slice();
   seats.splice(a, 2, composite);
   return {
