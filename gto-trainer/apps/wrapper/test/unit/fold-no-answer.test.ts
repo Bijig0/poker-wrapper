@@ -131,14 +131,30 @@ test("fold on no-answer: when it acts, what it presses, where it never acts", as
     check("the clock is the reason", String(S.study.lastNoAnswerFold?.why).includes("clock nearly out"), J(S.study.lastNoAnswerFold));
     S.heroClock = null;
 
-    // an answer whose press was refused is never retried by auto-execute — it is a no-answer now
+    // an answer whose press was refused (hand 4920431586: 99's open read back 2.0) is auto-execute's to RETRY —
+    // folding it on the first refusal (2fdcb0ba) would have folded the 99; it is given up only at the clock mark
     calls.length = 0;
     seed({ answer: true });
     S.study.autoTried = `7|${KEY}`;
     S.study.lastExec = { key: `7|${KEY}`, outcome: "refused", ok: false, result: { ok: false, reason: "client changed 2.5 to 2.0 (min/max clamp) — not pressed" } };
-    await tickAt(0);
-    check("answer refused by the client → folds instead of running the clock out", J(calls) === J(["check", "fold"]), J(calls));
+    S.heroClock = 11;
+    await tickAt(0); await tickAt(3);
+    check("answer refused, clock not at the mark → never folds it", calls.length === 0, J(calls));
+    S.heroClock = NO_ANSWER_CLOCK_S;
+    await tickAt(8);
+    check("answer still refused at the clock mark → folds instead of timing out", J(calls) === J(["check", "fold"]), J(calls));
     check("the refusal is the reason", String(S.study.lastNoAnswerFold?.why).includes("min/max clamp"), J(S.study.lastNoAnswerFold));
+    S.heroClock = null;
+
+    // the answer was pressed and the strip has not gone yet: never press over it, even at the clock mark
+    calls.length = 0;
+    seed({ answer: true });
+    S.study.executed = `7|${KEY}`;
+    S.heroClock = 2;
+    await tickAt(0); await tickAt(NO_ANSWER_DEADLINE_S + 1);
+    check("answer already pressed → no check/fold on top of it", calls.length === 0, J(calls));
+    S.study.executed = null;
+    S.heroClock = null;
 
     // a held answer (line uncertain) with the clock nearly out
     calls.length = 0;

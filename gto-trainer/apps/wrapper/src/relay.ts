@@ -167,6 +167,15 @@ export function pickBetInput(inputs: any[], anchor: any, frameW: number | null =
   return [near, null];
 }
 
+/** Did the bet field take the size? THE CLIENT ROUNDS TO WHOLE CENTS: at NL5 one cent is 0.2 bb, so a typed 2.5
+ *  reads back 2.6 once the field reformats ($0.125 → $0.13) — the same raise the client makes when the field has
+ *  not reformatted yet (session 20260925_044829, 04:58: refused on "client changed 2.5 to 2.6"). A read-back within
+ *  one cent is the size asked for; the field still on its default (2.0 for a 2.5, hand 4920431586) is not. */
+export function raiseReadBackOk(typedBb: number, gotBb: number, bbCents: number | null): boolean {
+  const centBb = bbCents && bbCents > 0 ? 1 / bbCents : 0;
+  return Math.abs(gotBb - typedBb) <= Math.max(0.011, centBb + 1e-6);
+}
+
 /** Custom raise: type an exact BB amount into the client's own bet field, then press its RAISE TO (or BET). */
 async function raiseToReal(amount: string, strict = false): Promise<Record<string, any>> {
   amount = amount.trim().replaceAll(",", ".");
@@ -215,7 +224,7 @@ async function raiseToReal(amount: string, strict = false): Promise<Record<strin
     } catch (e: any) {
       return { ok: false, reason: `could not read the bet field back: ${e?.message ?? e}`, typed: amount };
     }
-    if (!(Math.abs(gv - pyFloat(amount)) <= 0.011)) {
+    if (!raiseReadBackOk(pyFloat(amount), gv, S.ws.bb ?? null)) {
       return { ok: false, reason: `client changed ${amount} to ${got} (min/max clamp) — not pressed`, typed: amount, field: got };
     }
   }
@@ -618,7 +627,24 @@ export function notePickNotFired(r: Record<string, any>): void {
   }
 }
 
-/** The auto mode, from the feed loop. A refused attempt is not retried for the same decision. */
+/** A REFUSED PRESS IS RETRIED (2026-09-25, hand 4920431586, a 99 open from the CO): the chart's Raise 2.5 was typed the
+ *  instant the strip appeared, the client's bet field still read its default 2.0 a quarter-second later, the press
+ *  was refused — and auto-execute never tried again, so the clock ran (Brady raised by hand at 16.5 s). A refusal
+ *  like that is transient; the decision is pressed again up to AUTO_RETRIES times, AUTO_RETRY_S apart. */
+export const AUTO_RETRIES = 2;
+const AUTO_RETRY_S = 1.0;
+
+function autoRetryDue(key: string): boolean {
+  const st = S.study;
+  const ex = st.lastExec;
+  if (!(ex && ex.key === key && ex.outcome === "refused")) return false;
+  const prev = st.autoRetry && st.autoRetry.key === key ? st.autoRetry : null;
+  if (prev && prev.n >= AUTO_RETRIES) return false;
+  const last = Math.max((ex.at ?? 0) / 1000, prev ? prev.at : 0);
+  return time() - last >= AUTO_RETRY_S;
+}
+
+/** The auto mode, from the feed loop. A refused attempt is retried (autoRetryDue), then left alone. */
 export async function maybeAutoAct(): Promise<void> {
   const st = S.study;
   if (!(st.on && st.auto)) return;
@@ -631,7 +657,11 @@ export async function maybeAutoAct(): Promise<void> {
     return;
   }
   st.autoNotFired = null;
-  if (r.key === st.autoTried) return;
+  let retry = false;
+  if (r.key === st.autoTried) {
+    if (!autoRetryDue(r.key)) return;
+    retry = true;
+  }
   // THE STRIP IS COVERED, the line is disputed, or a pre-action top-up is buying: hold (re-tested every tick)
   let holdWhy: string | null = st.uncertain || null;
   if (!holdWhy && S.liveStatus.buyPanel) holdWhy = "Buy-chips panel is over the action strip";
@@ -655,6 +685,13 @@ export async function maybeAutoAct(): Promise<void> {
     if (S.session.id) {
       S.sessions.event(S.session.id, "study-auto-resumed", { why: was.why, heldS: pyRound(time() - was.at, 1), hand: S.handNo, pick: r.pick });
     }
+  }
+  if (retry) {
+    const n = (st.autoRetry && st.autoRetry.key === r.key ? st.autoRetry.n : 0) + 1;
+    st.autoRetry = { key: r.key, n, at: time() };
+    feedAdd(`Auto-execute: ${pyStr(r.pick)} again (retry ${n} of ${AUTO_RETRIES}) — the last press was refused`);
+    await relaySeams.executePick("auto");
+    return;
   }
   if (st.autoDelay === "random") {
     const due = st.autoDue;
@@ -713,20 +750,22 @@ function heroClockLeft(): number | null {
 }
 
 /** When hero HAS an answer for this decision but it is not going to be played in time, the reason — else null.
- *  Auto-execute presses once per decision: a refused press (the client clamped a raise size, the press would
- *  land on another table, ...) is never retried, and a held pick (line uncertain) waits for its hold to clear.
- *  Either one used to run the clock out, because fold-on-no-answer stood aside for any answer. */
-export function unplayedAnswerWhy(key: string | null): string | null {
+ *  A refused press (the client's field did not take the size, the press would land on another table, ...) is
+ *  retried by auto-execute (autoRetryDue), and a held pick (line uncertain) waits for its hold to clear; either
+ *  one used to run the clock out, because fold-on-no-answer stood aside for any answer. They are given up only
+ *  when the clock is nearly out (or at the deadline when it cannot be read) — NOT on the first refusal, which is
+ *  what 2fdcb0ba did: that folded hand 4920431586's 99 the moment the open's field read 2.0. */
+export function unplayedAnswerWhy(key: string | null, age: number): string | null {
   const st = S.study;
   const ex = st.lastExec;
-  if (key && st.autoTried === key && ex && ex.key === key && ex.outcome === "refused") {
-    return `the answer's press was refused (${pyStr((ex.result || {}).reason ?? null)})`;
-  }
+  const state = st.autoHeld && st.autoHeld.key === key ? `held — ${st.autoHeld.why}`
+    : key && ex && ex.key === key && ex.outcome === "refused" ? `refused — ${pyStr((ex.result || {}).reason ?? null)}`
+    : "not played yet";
   const clock = heroClockLeft();
-  if (clock !== null && clock <= NO_ANSWER_CLOCK_S) {
-    const held = st.autoHeld && st.autoHeld.key === key ? `held — ${st.autoHeld.why}` : "not played yet";
-    return `clock nearly out (${clock} s left) with the answer ${held}`;
-  }
+  if (clock !== null && clock <= NO_ANSWER_CLOCK_S) return `clock nearly out (${clock} s left) with the answer ${state}`;
+  // no readable clock: the deadline backstop, for an answer that is stuck (refused / held) — one merely not yet
+  // pressed is auto-execute's
+  if (clock === null && state !== "not played yet" && age >= NO_ANSWER_DEADLINE_S) return `answer ${state} after ${fmtFixed(age, 0)} s`;
   return null;
 }
 
@@ -760,7 +799,9 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   const age = time() - turn.since;
   // an answer for THIS decision is auto-execute's to play (or to hold) — unless it is not going to be played in time
   const ready = currentAnswer() ? pickReady() : null;
-  const why = ready && ready.ok ? unplayedAnswerWhy(ready.key ?? null) : noAnswerFoldWhy(age);
+  // the answer for this decision was pressed: the strip just has not gone yet — never press over it
+  if (ready && !ready.ok && ready.key && st.executed === ready.key) return;
+  const why = ready && ready.ok ? unplayedAnswerWhy(ready.key ?? null, age) : noAnswerFoldWhy(age);
   if (!why) return;
   turn.tries += 1;
   turn.lastTry = time();
