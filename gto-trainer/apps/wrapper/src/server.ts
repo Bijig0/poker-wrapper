@@ -14,7 +14,7 @@ import * as A from "./auth";
 import * as BAL from "./balances";
 import * as cdp from "./cdp";
 import { time } from "./clock";
-import { C, wsDumpPath } from "./config";
+import { C, DEBUG_DIR, wsDumpPath } from "./config";
 import { Body } from "./contract";
 import * as faketable from "./faketable";
 import { log } from "./feed";
@@ -205,7 +205,7 @@ export function buildApp(): Hono {
     return json(200, { ok: true, fixtures: out });
   });
   app.get("/sweep-report", () => {
-    const rp = join(C.ROOT, "debug", "postflop_sweep_report.html");
+    const rp = join(DEBUG_DIR(), "postflop_sweep_report.html");
     return existsSync(rp) ? html(readFileSync(rp))
       : html("<body style='background:#0d141c;color:#cfe0ef;font:14px system-ui;padding:2em'>no sweep report yet - run: bun src/scripts/makeSolveAuditReport.ts (in gto-trainer/apps/api)</body>");
   });

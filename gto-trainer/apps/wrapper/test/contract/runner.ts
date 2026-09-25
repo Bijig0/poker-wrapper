@@ -8,20 +8,38 @@
  * before it was deleted (2026-09-24, the wrapper is TypeScript only). It stays the baseline; `--record` now writes
  * it from the TS wrapper.
  *
- * Starts a wrapper of its OWN — panel :7791, table CDP :9391, FAKE_TABLE=1, a headless browser on its own
- * profile (WRAPPER_HEADLESS=1, PROFILE_SUFFIX=-contract) — so nothing it does can reach :7700 (a live session)
- * or the :7701 test rig, and no window ever appears. Then it drives it exactly the way the panel pages, the
- * study API's poller and the old Python state suite did: authored spots loaded onto the fake table, /hand read
- * back field by field, presses relayed and checked against the page's own click record, a study pick pushed
- * and executed (by a press and by auto-execute, on the fake table), and every read-only route called once.
+ * Starts a wrapper of its OWN — FAKE_TABLE=1, a headless browser (WRAPPER_HEADLESS=1), on two ports the OS
+ * hands out free for this run (CONTRACT_PANEL_PORT / CONTRACT_CDP_PORT pin them; a pinned port somebody is already
+ * on is refused, never taken over) — so nothing it does can reach :7700 (a live session) or the :7701 test rig,
+ * and no window ever appears. Then it drives it exactly the way the panel pages, the study API's poller and the old
+ * Python state suite did: authored spots loaded onto the fake table, /hand read back field by field, presses
+ * relayed and checked against the page's own click record, a study pick pushed and executed (by a press and by
+ * auto-execute, on the fake table), and every read-only route called once.
+ *
+ * SELF-CONTAINED (2026-09-25). It used to run on fixed ports (:7791 / :9391) with the checkout's own
+ * ignition-study-wrapper/{data,debug} and browser profile. Two runs at once — two sessions' gates, from any two
+ * checkouts — then killed each other: a wrapper launching on a port REPLACES whatever serves it (app.ts takeover:
+ * POST /quit, then terminate), while the new runner's first /state poll had already been answered by the old,
+ * dying wrapper, so its first /faketable/load died with ECONNRESET (runner.ts runFixture). And the transcript
+ * depended on which checkout ran it: the main checkout's sweep report, debug recordings and Brady's login profile
+ * names, and the pages' on-disk line endings. Now each run has its own ports, its own temp state (data, debug and
+ * browser profile — WRAPPER_DATA_DIR / WRAPPER_DEBUG_DIR / WRAPPER_PROFILE_DIR, deleted afterwards), and waits for
+ * ITS wrapper (the pid on /table/presence), so a worktree, the main checkout and any number of concurrent runs
+ * all compare equal. The live data dir (hands.db, sessions.sqlite, the table claims in data/tables) is never touched.
+ * The study API (:2000) and chart server (:8777) it reads are a stub too (study-api-stub.json, STUDY_API /
+ * HRC3MAX_URL): the live catalogue's content and its 6-to-15 s replies were moving /session, the preflight and the
+ * auto pick's outcome from run to run.
  *
  * Two layers of checking:
  *  - ASSERTIONS (the old state suite's expectations, per fixture, from tests/fixtures);
  *  - a TRANSCRIPT of normalised responses compared to golden-python.json step by step (volatile fields — times,
- *    counters, versions — are dropped by `normalise`).
+ *    counters, versions — are dropped by `normalise`; this run's ports read as the recording's :7791 / :9391, and
+ *    CRLF as LF).
  */
 import { spawn, type Subprocess } from "bun";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { HandReply, StateReply } from "../../src/contract";
 import { CONFIRM_RELABEL_JS } from "../../src/faketable";
@@ -30,9 +48,12 @@ const REPO = resolve(import.meta.dir, "../../../../..");
 const WRAPPER = join(REPO, "ignition-study-wrapper");
 const FIXTURES = join(WRAPPER, "tests", "fixtures");
 const GOLDEN = join(import.meta.dir, "golden-python.json");
-const PANEL = Number(process.env.CONTRACT_PANEL_PORT || 7791);
-const CDP = Number(process.env.CONTRACT_CDP_PORT || 9391);
-const BASE = `http://127.0.0.1:${PANEL}`;
+/** the ports the transcript was recorded on; a run on others is read as if on these (`normalise`) */
+const REC_PANEL = 7791, REC_CDP = 9391;
+let PANEL = 0, CDP = 0, BASE = "";
+/** this run's own state: data/, debug/, profiles/ (the headless browser's --user-data-dir); made by launch() */
+let STATE = "";
+const LOG = join(import.meta.dir, "contract-ts.log");
 
 const argv = process.argv.slice(2);
 const impl = "ts";
@@ -106,18 +127,54 @@ const VOLATILE = new Set([
   "setupVersion", "ageS", "lastEventAgo", "unboundForS", "since", "pid", "wsAt", "startedAt", "elapsedMin",
   "secondsLeft", "wait", "waitedS", "pressWaitedS", "timeBankAt", "topUpAt", "logAgeS",
 ]);
-function normalise(x: any): any {
-  if (Array.isArray(x)) return x.map(normalise);
+function normalise(x: any, key = ""): any {
+  if (Array.isArray(x)) return x.map((v) => normalise(v, key));
   if (x && typeof x === "object") {
     const out: any = {};
     for (const k of Object.keys(x).sort()) {
       if (VOLATILE.has(k)) continue;
-      out[k] = normalise(x[k]);
+      out[k] = normalise(x[k], k);
     }
     return out;
   }
-  if (typeof x === "number") return Math.round(x * 1000) / 1000;
+  if (typeof x === "number") return Math.round(canonPort(x, key) * 1000) / 1000;
+  if (typeof x === "string") return canonPorts(x).replace(/\r\n/g, "\n");
   return x;
+}
+/** This run's ports as the recording's: panel -> 7791, CDP -> 9391, the study API stub -> 2000 (the live API's).
+ *  Numbers only under a port-ish key (a stack of 51234 cents stays itself); strings only after a colon. */
+function portMap(): Map<number, number> {
+  const m = new Map<number, number>([[PANEL, REC_PANEL], [CDP, REC_CDP]]);
+  if (apiStub?.port) m.set(apiStub.port, 2000);
+  for (const [a, b] of m) if (!a || a === b) m.delete(a);
+  return m;
+}
+function canonPort(n: number, key: string): number {
+  if (!/port$/i.test(key) && key !== "me") return n;
+  return portMap().get(n) ?? n;
+}
+function canonPorts(s: string): string {
+  const m = portMap();
+  if (!m.size) return s;
+  return s.replace(new RegExp(`:(${[...m.keys()].join("|")})(?!\\d)`, "g"), (_m, p) => `:${m.get(Number(p))}`);
+}
+/** Where two normalised values first part: `hand.node.toCall: 1 -> 2` (a 600-character dump rarely reaches it). */
+function firstDiff(want: any, got: any, path = ""): string {
+  const here = path || "(root)";
+  if (JSON.stringify(want) === JSON.stringify(got)) return "";
+  const obj = (v: any) => v && typeof v === "object";
+  if (obj(want) && obj(got) && Array.isArray(want) === Array.isArray(got)) {
+    for (const k of [...new Set([...Object.keys(want), ...Object.keys(got)])]) {
+      const d = firstDiff(want[k], got[k], path ? `${path}.${k}` : k);
+      if (d) return d;
+    }
+  }
+  if (typeof want === "string" && typeof got === "string") {
+    let i = 0;
+    while (i < want.length && want[i] === got[i]) i++;
+    return `${here} at char ${i}: ${JSON.stringify(want.slice(i, i + 60))} -> ${JSON.stringify(got.slice(i, i + 60))}`;
+  }
+  return `${here}: ${JSON.stringify(want)?.slice(0, 120)} -> ${JSON.stringify(got)?.slice(0, 120)}`;
 }
 function record(step: string, value: unknown) {
   transcript.push({ step, value: normalise(value) });
@@ -155,27 +212,125 @@ function stateView(s: any) {
 // ---------------------------------------------------------------------------------- the process under test
 let proc: Subprocess | null = null;
 
+/** The suite's own refusals: printed as a message, without a stack. */
+class SuiteError extends Error {}
+
+/** Is anything accepting connections on this port? */
+async function listening(port: number): Promise<boolean> {
+  try {
+    const s = await Bun.connect({ hostname: "127.0.0.1", port, socket: { data() {} } });
+    s.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** What answers on a port, for the refusal message. */
+async function whoIsOn(port: number): Promise<string> {
+  const get = async (path: string) => (await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(2000) })).json() as any;
+  try {
+    const p = await get("/table/presence");
+    if (p?.pid) return `a Poker Wrapper (pid ${p.pid}, ${p.rig} rig)`;
+  } catch {}
+  try {
+    const v = await get("/json/version");
+    if (v?.Browser) return `a browser's DevTools (${v.Browser})`;
+  } catch {}
+  return "another process";
+}
+
+/** Two ports for this run: pinned by CONTRACT_PANEL_PORT / CONTRACT_CDP_PORT (refused if taken), else the OS's. */
+async function pickPorts(): Promise<void> {
+  const pinned = [process.env.CONTRACT_PANEL_PORT, process.env.CONTRACT_CDP_PORT];
+  if (pinned[0] || pinned[1]) {
+    PANEL = Number(pinned[0] || REC_PANEL);
+    CDP = Number(pinned[1] || REC_CDP);
+    for (const [what, port] of [["panel", PANEL], ["CDP", CDP]] as const) {
+      if (await listening(port)) {
+        throw new SuiteError(`the ${what} port :${port} (CONTRACT_${what === "panel" ? "PANEL" : "CDP"}_PORT) is taken by ${await whoIsOn(port)} — `
+          + `another contract run or a leftover. The suite never takes over a port it did not open (a wrapper launching on a `
+          + `busy port replaces what is there, and that run dies with ECONNRESET). Wait for it, stop it, or unset the variable `
+          + `to run on ports of its own.`);
+      }
+    }
+  } else {
+    // hold both listeners open while reading them so the two can never be the same port
+    const servers: Server[] = [];
+    const ports: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      const s = createServer();
+      await new Promise<void>((res, rej) => { s.once("error", rej); s.listen(0, "127.0.0.1", () => res()); });
+      servers.push(s);
+      ports.push((s.address() as any).port);
+    }
+    await Promise.all(servers.map((s) => new Promise((res) => s.close(res))));
+    [PANEL, CDP] = ports as [number, number];
+  }
+  BASE = `http://127.0.0.1:${PANEL}`;
+}
+
+/** The study API (:2000) and the chart server (:8777) as the wrapper under test sees them: study-api-stub.json, on a
+ *  port of this run's own. The live API made the transcript depend on its catalogue and on its speed — its
+ *  /api/dashboard/sources/strategies took 15 s one afternoon (the wrapper gives up at 6 s), /session lost every
+ *  strategy preset, and the slow routes pushed the read-only /state past the auto pick's verify deadline. */
+const API_STUB = JSON.parse(readFileSync(join(import.meta.dir, "study-api-stub.json"), "utf8"));
+const apiUnstubbed = new Set<string>();
+let apiStub: ReturnType<typeof Bun.serve> | null = null;
+function startApiStub(): string {
+  apiStub = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(r) {
+      const path = new URL(r.url).pathname;
+      switch (path) {
+        case "/": return new Response("chart server (contract stub)");  // HRC3MAX_URL, healthCheck's probe
+        case "/api/dashboard/config": return Response.json({ ok: true });
+        case "/api/dashboard/sources/strategies": return Response.json({ ok: true, strategies: API_STUB.strategies });
+        case "/api/dashboard/sources/registry": return Response.json(API_STUB.registry);
+        case "/api/dashboard/gtow-status": return Response.json(API_STUB.gtowStatus);
+      }
+      apiUnstubbed.add(`${r.method} ${path}`);
+      return Response.json({ ok: false, error: "not in the contract suite's study API stub" }, { status: 404 });
+    },
+  });
+  return `http://127.0.0.1:${apiStub.port}`;
+}
+
 function launch() {
+  const api = startApiStub();
+  STATE = mkdtempSync(join(tmpdir(), "wrapper-contract-"));
+  for (const d of ["data", "debug", "profiles"]) mkdirSync(join(STATE, d), { recursive: true });
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     WRAPPER_HEADLESS: "1", PROFILE_SUFFIX: "-contract", FAKE_TABLE: "1",
     PANEL_PORT: String(PANEL), CDP_PORT: String(CDP),
+    WRAPPER_DATA_DIR: join(STATE, "data"), WRAPPER_DEBUG_DIR: join(STATE, "debug"), WRAPPER_PROFILE_DIR: join(STATE, "profiles"),
+    STUDY_API: api, HRC3MAX_URL: api,
   };
   delete env.TABLE_SLOT;
   delete env.TABLE_COUNT;
   delete env.PANEL_TAG;
+  delete env.WRAPPER_ROOT;      // the pages, formats.json and fixtures are this checkout's
+  delete env.WRAPPER_LOG_FILE;  // the log comes back on the pipe, into contract-ts.log
   const cmd = [process.execPath, "run", join(REPO, "gto-trainer", "apps", "wrapper", "src", "main.ts"),
                "--panel-port", String(PANEL), "--cdp-port", String(CDP), "--fake"];
   proc = spawn({ cmd, env, cwd: WRAPPER, stdout: "pipe", stderr: "pipe" });
-  const log = join(import.meta.dir, `contract-${impl}.log`);
-  writeFileSync(log, "");
+  writeFileSync(LOG, "");
   for (const s of [proc.stdout, proc.stderr]) {
     (async () => {
       const dec = new TextDecoder();
       for await (const chunk of s as any as AsyncIterable<Uint8Array>) {
-        try { require("node:fs").appendFileSync(log, dec.decode(chunk)); } catch {}
+        try { require("node:fs").appendFileSync(LOG, dec.decode(chunk)); } catch {}
       }
     })();
+  }
+}
+
+function logTail(n = 15): string {
+  try {
+    return readFileSync(LOG, "utf8").trimEnd().split(/\r?\n/).slice(-n).map((l) => "    | " + l).join("\n");
+  } catch {
+    return "";
   }
 }
 
@@ -191,21 +346,57 @@ async function closeBrowser() {
 }
 
 async function stop() {
+  if (!BASE) return;
   try { await req("/quit", {}, 3000); } catch {}
   await sleep(800);
   await closeBrowser();
   try { proc?.kill(); } catch {}
+  apiStub?.stop(true);
 }
 
-async function waitUp() {
-  for (let i = 0; i < 120; i++) {
+/** Delete this run's state; the browser may hold its profile for a moment after Browser.close. */
+async function cleanUp() {
+  if (!STATE) return;
+  for (let i = 0; i < 10; i++) {
     try {
-      const r = await req("/state?light=1", undefined, 3000);
-      if (r.status === 200 && r.json?.connected) return r.json;
+      rmSync(STATE, { recursive: true, force: true });
+      return;
+    } catch {
+      await sleep(500);
+    }
+  }
+  console.log(`(could not delete ${STATE} — a browser still holds it; safe to delete by hand)`);
+}
+
+/** app.ts main()'s last line: past it, the startup is over. main() seeds the fake table (a browser reload) AFTER it
+ *  starts serving, so a spot loaded before then was reloaded under the first fixture — its click record wiped
+ *  ("relay FOLD fires — got undefined", 2 runs in 3 on a cold browser profile). */
+const STARTED = "Ctrl+C stops the panel server";
+
+/** Up = OUR wrapper (its pid on /table/presence) serving with the fake table connected, its startup finished. Never
+ *  a reply from anything else on the port: that is how two runs used to kill each other. */
+async function waitUp() {
+  let other: number | null = null, connected = false;
+  for (let i = 0; i < 120; i++) {
+    if (proc?.exitCode != null) {
+      throw new SuiteError(`the ${impl} wrapper exited (code ${proc.exitCode}) before it came up on :${PANEL} — contract-${impl}.log:\n${logTail()}`);
+    }
+    try {
+      const pid = (await req("/table/presence", undefined, 3000)).json?.pid;
+      if (pid === proc?.pid) {
+        const r = await req("/state?light=1", undefined, 3000);
+        connected = r.status === 200 && !!r.json?.connected;
+        if (connected && readFileSync(LOG, "utf8").includes(STARTED)) return r.json;
+      } else if (pid) {
+        other = pid;
+      }
     } catch {}
     await sleep(500);
   }
-  throw new Error(`the ${impl} wrapper did not come up on :${PANEL} with the fake table connected (see contract-${impl}.log)`);
+  throw new SuiteError(`the ${impl} wrapper (pid ${proc?.pid}) did not come up on :${PANEL} `
+    + (connected ? `— connected, but its log never said "${STARTED}" (app.ts main() changed its last line?)`
+                 : "with the fake table connected")
+    + (other ? ` — pid ${other} was answering there instead` : "") + ` — contract-${impl}.log:\n${logTail()}`);
 }
 
 async function lastClick(want: string | null): Promise<any> {
@@ -327,6 +518,10 @@ async function pickFlow() {
   eq("auto: fired the pick by itself", c2.qa, "foldButton");
   st = (await req("/state")).json;
   record("auto: /state after", stateView(st));
+  // let that press's verification finish before anything else reads /state: the fake table never shows hero's fold,
+  // so it re-presses once 2.5 s on and settles "unknown" 2.5 s after that (relay.ts maybeVerifyExec). The read-only
+  // pass used to catch it pending or settled depending on how long the routes in between took.
+  for (let i = 0; i < 60 && (await req("/state?light=1")).json?.lastExec?.outcome === "pending"; i++) await sleep(250);
   const off = (await req("/study-auto", { auto: false })).json;
   record("auto: disarm", { ok: off?.ok, auto: off?.auto });
   record("pick: answers off", (await req("/study-answers", { on: false })).json);
@@ -402,6 +597,7 @@ async function readOnly() {
 
 async function main() {
   const t0 = Date.now();
+  await pickPorts();
   launch();
   try {
     await waitUp();
@@ -416,6 +612,10 @@ async function main() {
   } finally {
     if (!KEEP) await stop();
   }
+  // the wrapper is this process's child and goes with it; what --keep leaves is its browser and state
+  if (KEEP) console.log(`kept: the headless browser (CDP :${CDP}) and the state in ${STATE}`);
+  else await cleanUp();
+  if (apiUnstubbed.size) console.log(`study API calls the stub does not answer (404): ${[...apiUnstubbed].sort().join(", ")}`);
   const schemaFails = failures.filter((f) => f.startsWith("reply schema ")).length;
   console.log(`${impl}: ${assertions - (failures.length - schemaFails)}/${assertions} assertions passed, ${transcript.length} transcript steps, ${((Date.now() - t0) / 1000).toFixed(0)} s`);
   console.log(`${impl}: ${schemaReplies - schemaFails}/${schemaReplies} /state + /hand replies match the reply schemas (src/contract.ts)`);
@@ -426,13 +626,14 @@ async function main() {
     console.log(`recorded ${GOLDEN}`);
   } else if (existsSync(GOLDEN)) {
     const want: Step[] = JSON.parse(readFileSync(GOLDEN, "utf8"));
-    const byStep = new Map(want.map((s) => [s.step, s.value]));
+    // normalised again: a recording made before a normalisation rule (CRLF pages, say) still compares
+    const byStep = new Map(want.map((s) => [s.step, normalise(s.value)]));
     for (const s of transcript) {
       if (!byStep.has(s.step)) { console.log(`  NEW  ${s.step}`); continue; }
       const a = JSON.stringify(s.value), b = JSON.stringify(byStep.get(s.step));
       if (a !== b) {
         diffs++;
-        console.log(`  DIFF ${s.step}\n       want ${b.slice(0, 600)}\n       got  ${a.slice(0, 600)}`);
+        console.log(`  DIFF ${s.step}  (first at ${firstDiff(byStep.get(s.step), s.value)})\n       want ${b.slice(0, 600)}\n       got  ${a.slice(0, 600)}`);
       }
     }
     for (const s of want) if (!transcript.some((t) => t.step === s.step) && (!ONLY)) { diffs++; console.log(`  MISSING ${s.step}`); }
@@ -442,7 +643,8 @@ async function main() {
 }
 
 main().catch(async (e) => {
-  console.error(e);
+  console.error(e instanceof SuiteError ? `error: ${e.message}` : e);
   await stop();
+  await cleanUp();
   process.exit(2);
 });

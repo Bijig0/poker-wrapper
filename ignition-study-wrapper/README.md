@@ -296,7 +296,7 @@ Cheapest and most local first, so the FIRST failure is the cause.
 | tier | asks | needs |
 |---|---|---|
 | `apps/wrapper: bun test` | unit tests, the hand fuzzer, and the goldens (reader / pure / browser trace / CoinPoker) | nothing |
-| `apps/wrapper: test/contract/runner.ts` | does an authored state export the right ParsedHand, and does the relay fire the right control — every fixture in `tests/fixtures`, on a headless wrapper of its own (:7791) | a browser |
+| `apps/wrapper: test/contract/runner.ts` | does an authored state export the right ParsedHand, and does the relay fire the right control — every fixture in `tests/fixtures`, on a headless wrapper of its own (free ports the OS picks, temp data/debug/profile — concurrent runs from any checkouts are safe) | a browser |
 | `WRAPPER_RIG_TEST=1 bun test test/unit/pick-relay-rig.test.ts` | pick → relay end to end on a headless rig of its own (:7792) | a browser |
 | `apps/wrapper: test/rig/spotAudit.ts` | did the study tool solve the RIGHT spot (feed-spot's divergence audit) | a rig (WRAPPER_URL, default :7701) + API on :2000 |
 | `apps/wrapper: test/rig/answerSuite.ts` | did an answer actually arrive | + GTO Wizard signed in |

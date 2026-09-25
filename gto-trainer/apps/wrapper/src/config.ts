@@ -63,4 +63,6 @@ export function reloadConfig(): void {
 
 export const DATA_DIR = () => paths().data;
 export const DEBUG_DIR = () => paths().debug;
+/** A browser profile (--user-data-dir) by name: C.PROFILE_TABLE, C.PROFILE_PANEL, C.PROFILE_LEADER. */
+export const profileDir = (name: string) => join(paths().profiles, name);
 export const wsDumpPath = () => join(paths().debug, C.WS_DUMP_NAME);

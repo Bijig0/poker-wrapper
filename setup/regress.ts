@@ -94,7 +94,8 @@ try {
 }
 
 // 3. the wrapper (gto-trainer/apps/wrapper): unit tests + the fuzzer + the goldens, its typecheck, and the HTTP
-//    contract replayed against a headless instance on its own ports (7791 / 9391) — never :7700 / :7701
+//    contract replayed against a headless instance on free ports of its own with temp state (runner.ts: runs from
+//    several checkouts at once used to kill each other on the old fixed :7791) — never :7700 / :7701
 try {
   const [, out] = run([BUN, "test"], TSW, 900);
   const m = /(\d+) pass\s+(?:(\d+) skip\s+)?(\d+) fail/.exec(out);
@@ -114,7 +115,10 @@ try {
   const [code, out] = run([BUN, "run", "test/contract/runner.ts"], TSW, 600);
   const m = /ts: (\d+)\/(\d+) assertions passed/.exec(out);
   const ident = out.includes("transcript identical");
-  rec("wrapper contract", code === 0 && !!m && ident, m ? `${m[1]}/${m[2]} assertions, transcript ${ident ? "identical" : "DIFFERS"}` : lastLines(out, 200));
+  // which assertion / step: the runner's own FAIL and DIFF lines (a bare "286/287" sends you to re-run it)
+  const why = out.split(/\r?\n/).filter((l) => /^ {2}(FAIL|DIFF) /.test(l)).slice(0, 3).map((l) => l.trim().slice(0, 160));
+  rec("wrapper contract", code === 0 && !!m && ident, m ? `${m[1]}/${m[2]} assertions, transcript ${ident ? "identical" : "DIFFERS"}`
+      + (why.length ? `: ${why.join("; ")}` : "") : lastLines(out, 200));
 } catch (e: any) {
   rec("wrapper contract", false, String(e?.message ?? e));
 }

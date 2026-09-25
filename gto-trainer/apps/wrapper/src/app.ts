@@ -189,5 +189,6 @@ export async function main(argv: string[]): Promise<void> {
   if (!srv) process.exit(0);
   const opened = await leftovers();
   if (opened.length) log(`[session] ${opened.length} left open (${opened.map((r) => r.id).join(", ")}) — resume the newest or end them all on /setup`);
+  // the contract suite (test/contract/runner.ts STARTED) waits for this line: the startup, seed included, is over
   log("Ctrl+C stops the panel server (browser windows stay open).");
 }
