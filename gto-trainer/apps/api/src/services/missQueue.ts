@@ -1,6 +1,4 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { missQueueDbPath, openStore } from "./storePaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import type { ChartChoice, Walk3Result } from "./hrc3max";

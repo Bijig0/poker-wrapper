@@ -5,17 +5,13 @@ import { adoptAtStartup } from "../../packages/data-root/centralDb";
 import { describeLayout, exitLogPath, resolveAllStores, splitStores } from "./src/services/storePaths";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
-import solverRoutes from "./src/routes/solver";
-import gtowRoutes from "./src/routes/gtow";
 import ingestRoutes from "./src/routes/ingest";
-import analysisRoutes from "./src/routes/analysis";
 import studyPollerRoutes from "./src/routes/studyPoller";
 import buildRoutes from "./src/routes/build";
 import preflopDbRoutes from "./src/routes/preflopDb";
 import gtowApiRoutes from "./src/routes/gtowApi";
 import feedSpotRoutes from "./src/routes/feedSpot";
 import fastSolverRoutes from "./src/routes/fastSolver";
-import aiSolveRoutes from "./src/routes/aiSolve";
 import aiStudyRoutes from "./src/routes/aiStudy";
 import dashboardRoutes from "./src/routes/dashboard";
 import sourcesRoutes from "./src/routes/sources";
@@ -55,17 +51,15 @@ app.use("*", logger());
 app.use("*", cors());
 
 // Routes
-app.route("/api", solverRoutes);
-app.route("/api/gtow", gtowRoutes);
+// the launchers' "is an API up?" probe (.claude/dev-api.cmd)
+app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 app.route("/api/ingest", ingestRoutes);
-app.route("/api/analysis", analysisRoutes);
 app.route("/api/study-poller", studyPollerRoutes);
 app.route("/api/build", buildRoutes);
 app.route("/api/preflop-db", preflopDbRoutes);
 app.route("/api/gtow-api", gtowApiRoutes);
 app.route("/api/feed-spot", feedSpotRoutes);
 app.route("/api/fast-solver", fastSolverRoutes);
-app.route("/api/ai-solve", aiSolveRoutes);
 app.route("/api/ai-study", aiStudyRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/dashboard/sources", sourcesRoutes);
@@ -118,23 +112,13 @@ app.get("/api", (c) => {
     name: "Poker GTO Bot API",
     version: "1.0.0",
     description:
-      "Heads-up postflop GTO solver — postflop-solver (Rust→WASM, in-process). " +
-      "Solves novel bet sizes live; caches repeated spots. Preflop/multiway not supported.",
+      "The study API: the dashboard (/), the study poller that answers the Poker Wrapper's live decisions, and the " +
+      "answer path behind it (6-max/3-max/heads-up preflop charts, GTO Wizard AI preflop and postflop chains, MES).",
     endpoints: {
       health: "GET /api/health",
-      solve: "POST /api/solve",
-      gtowStatus: "GET /api/gtow/status",
-      gtowSolutionSet: "POST /api/gtow/solution-set",
-      gtowFacingBet: "GET /api/gtow/facing-bet?hand=AhKs&size=55",
-      gtowRespond: "GET /api/gtow/respond?hand=AhKs&size=55",
-      gtowAiSolve: "POST /api/gtow/ai-solve",
-      gtowCombo: "GET /api/gtow/combo?hand=AhKs",
-      gtowDecide: "GET /api/gtow/decide?hand=AhKs",
-      gtowBoard: "POST /api/gtow/board",
-      gtowAction: "POST /api/gtow/action",
       ingest: "POST /api/ingest — { rows | text | live } from the panel live feed",
       fastSolver: "POST /api/fast-solver — { hand | live | rows | text } → local preflop charts + GTOW spot-solution API (no live nav)",
-      aiSolve: "POST /api/ai-solve — { board, pot, stack, oopRange, ipRange, heroSeat, heroCards? } → exploit solve vs CUSTOM ranges (GTOW cloud, ~2s)",
+
       aiStudy: "POST /api/ai-study — SolverStudy (analysis app) ONLY: { preflop, board, tokens } → HU node solution via GTOW cloud, 6-max crawl ranges. NOT the live answer path and not used by the dashboard — live answers and dashboard re-solves go through services/aiChain.ts (POST /api/dashboard/resolve-chain)",
       studyPollerStart: "POST /api/study-poller/start — push live GTO answers into assistive-play's panel (study/practice only)",
       studyPollerStop: "POST /api/study-poller/stop",

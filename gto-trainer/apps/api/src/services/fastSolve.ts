@@ -3,7 +3,7 @@ import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, build
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective } from "./hrc6max";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
-import { preflopArrivalFor } from "./strategies";
+import { preflopArrivalFor, SIX_MAX_STRATEGY_ID } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
 import { rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
@@ -258,16 +258,36 @@ export const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => 
  * EXPLOIT_CHART to that file's path; covers the five modeled first-decision
  * shapes and lets everything deeper fall through to the equilibrium chart.
  */
-let exploitChoices: Record<string, Record<string, string>> | null | undefined;
+/**
+ * The overlay file, read ONCE per version of it (keyed by mtime). Both lookups below used to cache their own read
+ * for the life of the process — and cached a FAILED read too, so one read that met the file mid-rewrite switched the
+ * overlay off silently until a restart while the Sources page (which re-reads it) still showed it armed (2026-09-25
+ * audit). A failure is now logged and retried a few seconds later; an edited file is picked up without a restart.
+ */
+let exploitFileCache: { path: string; mtimeMs: number; doc: any } | null = null;
+let exploitFileFailedAt = 0;
+function exploitFile(): any | null {
+  const path = process.env.EXPLOIT_CHART;
+  if (!path) return null;
+  const fs = require("node:fs") as typeof import("node:fs");
+  try {
+    const mtimeMs = fs.statSync(path).mtimeMs;
+    if (exploitFileCache && exploitFileCache.path === path && exploitFileCache.mtimeMs === mtimeMs) return exploitFileCache.doc;
+    if (Date.now() - exploitFileFailedAt < 5_000) return exploitFileCache?.path === path ? exploitFileCache.doc : null;
+    const doc = JSON.parse(fs.readFileSync(path, "utf-8"));
+    exploitFileCache = { path, mtimeMs, doc };
+    return doc;
+  } catch (e) {
+    if (Date.now() - exploitFileFailedAt >= 5_000) console.error(`[exploit] EXPLOIT_CHART ${path} unreadable (${e instanceof Error ? e.message : e}) — retrying; the last good read stays in force`);
+    exploitFileFailedAt = Date.now();
+    return exploitFileCache?.path === path ? exploitFileCache.doc : null;
+  }
+}
+
 function exploitLookup(line: string, heroPos: string, heroClass: string | null):
     { action: string; tag: string } | null {
   if (!process.env.EXPLOIT_CHART || !heroClass) return null;
-  if (exploitChoices === undefined) {
-    try {
-      exploitChoices = JSON.parse(
-        require("node:fs").readFileSync(process.env.EXPLOIT_CHART, "utf-8")).choices;
-    } catch { exploitChoices = null; }
-  }
+  const exploitChoices = exploitFile()?.choices as Record<string, Record<string, string>> | undefined;
   if (!exploitChoices) return null;
   // line SHAPE -> modeled node (sizes snap: any single raise reads as "open")
   const toks = line ? line.split("-") : [];
@@ -315,16 +335,10 @@ const EXPLOIT_LINE_RANGE: Record<string, Record<string, string>> = {
   "C-F-C": { BTN: "btn_limp" },
 };
 
-let exploitRanges: Record<string, Record<string, number>> | null | undefined;
 function exploitFlopRange(tokens: string[], heroPos: string):
     { weights: Record<string, number>; key: string } | null {
   if (!process.env.EXPLOIT_CHART) return null;
-  if (exploitRanges === undefined) {
-    try {
-      exploitRanges = JSON.parse(
-        require("node:fs").readFileSync(process.env.EXPLOIT_CHART, "utf-8")).ranges;
-    } catch { exploitRanges = null; }
-  }
+  const exploitRanges = exploitFile()?.ranges as Record<string, Record<string, number>> | undefined;
   if (!exploitRanges) return null;
   const shape = tokens
     .map((t) => (/^R[\d.]+$/.test(t) ? "R" : t === "X" ? "C" : t))
@@ -1824,7 +1838,7 @@ function logChain(hand: ParsedHand, cur: string, origin: string | undefined, cha
 }
 
 /** The 6-max ring strategy's id (services/strategies.ts) - the one strategy whose every layer is our own solve. */
-const SIX_MAX_STRATEGY = "ign200-ring-6max-equilibrium";
+const SIX_MAX_STRATEGY = SIX_MAX_STRATEGY_ID;
 /** CoinPoker 200NL heads-up (services/strategies.ts): cp200a charts preflop, GTO Wizard AI postflop from their ranges */
 export const CP_HU_STRATEGY = "cp200-hu-equilibrium";
 

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { LIMP, MES_HANDOFF, HRC_API, loadLedger, expectedChartIds } from "./ledger";
 import { fetchNode, type HrcNode } from "./hrc3max";
 import { getCatalog } from "./chartCatalog";
-import { jobs } from "./jobs";
 
 import { boxActivity, chartStates, runEstimate } from "./chartProgress";
 export { boxActivity };

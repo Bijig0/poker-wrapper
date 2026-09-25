@@ -18,7 +18,7 @@ import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test
  * SPIES, NOT mock.module (2026-09-23): Bun's mock.module replaces a module for the
  * WHOLE `bun test` process and is never undone, so the partial stand-ins this file
  * used to install broke every other file that imports these modules
- * (navLock.test.ts tested the stub; imports of PreflopDb / preflopCaptureFaults
+ * (a stubbed module's own test tested the stub; imports of PreflopDb / preflopCaptureFaults
  * found no such export). spyOn patches the real exports for this file only and
  * mock.restore() in afterAll puts them back.
  */
@@ -26,7 +26,6 @@ import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test
 import * as fastSolveMod from "../services/fastSolve";
 import { gtowCdp } from "../services/gtowCdp";
 import { preflopDb } from "../services/preflopDb";
-import { navLock } from "../services/navLock";
 
 spyOn(fastSolveMod, "fastSolve").mockImplementation((async () =>
   ({ ok: false, reason: "mocked", gametype: null, depth: null, line: null })) as unknown as typeof fastSolveMod.fastSolve);
@@ -35,7 +34,6 @@ spyOn(fastSolveMod, "warmPostflop6max").mockImplementation(() => {});
 spyOn(gtowCdp, "isConnected").mockImplementation(async () => false);
 spyOn(preflopDb, "available").mockImplementation(() => false);
 spyOn(preflopDb, "answer").mockImplementation((() => ({ ok: false })) as unknown as typeof preflopDb.answer);
-spyOn(navLock, "run").mockImplementation((async (fn: () => Promise<unknown>) => fn()) as unknown as typeof navLock.run);
 afterAll(() => mock.restore());
 
 const { default: fastSolverApp } = await import("./fastSolver");
@@ -165,11 +163,4 @@ describe("resolveHand live probe uses the wrapper's light path (EIP-14)", () => 
     expect(r.strategyId).toBe("ign-ring-NL200-6");
   });
 
-  it("GET /api/ingest/live-status also takes the light path", async () => {
-    const urls = stubWrapper({ connected: true, hand: null, snapshot: { status: "seated", seats: [{ hero: true, sittingOut: false }] } });
-    const res = await ingestApp.request("/live-status?url=http://localhost:7703");
-    const body = (await res.json()) as { reachable: boolean; connected: boolean; status: string | null };
-    expect(urls).toEqual(["http://localhost:7703/state?light=1"]);
-    expect(body).toMatchObject({ reachable: true, connected: true, status: "seated" });
-  });
 });

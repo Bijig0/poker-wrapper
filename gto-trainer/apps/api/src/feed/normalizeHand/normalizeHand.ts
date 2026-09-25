@@ -161,7 +161,9 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
   const lineSource = input.lineSource === "ws" || input.lineSource === "reconciled" ? input.lineSource : undefined;
 
   let result: { text: string } | undefined;
-  if (input.result != null) {
+  // a CoinPoker hand with no winners is archived with result.text null (archive.ts archiveCp): that is "no result
+  // text", not a malformed row — throwing here dropped the hand from every dashboard view (2026-09-25 contract audit)
+  if (input.result != null && !(isRecord(input.result) && input.result.text == null)) {
     if (!isRecord(input.result) || typeof input.result.text !== "string") {
       throw new Error("result must be { text: string }.");
     }

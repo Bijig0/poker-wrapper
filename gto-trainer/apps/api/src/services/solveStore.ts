@@ -1,7 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { openStore, solvesDbPath } from "./storePaths";
+import { openStore, solvesDbPath, storeWriteFailed } from "./storePaths";
 import { tspan } from "./answerTrace";
 
 /**
@@ -111,7 +109,8 @@ class SolveStore {
           blob.byteLength, blob, meta.sessionId ?? null
         );
       return Number(r.lastInsertRowid);
-    } catch {
+    } catch (e) {
+      storeWriteFailed("solves", e);   // the answer still goes out; its chain is the part lost, and now it says so
       return null;
     }
   }

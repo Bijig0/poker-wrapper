@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import type { PathRow } from "./chainPath";
-import { mkdirSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { answersDbPath, openStore } from "./storePaths";
+import { isAbsolute, relative, resolve } from "node:path";
+import { answersDbPath, openStore, storeWriteFailed } from "./storePaths";
 
 /**
  * Persistent log of every study answer the poller pushed (and every solve
@@ -390,8 +390,8 @@ class AnswerLog {
           row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null,
           row.pathVerdict ?? null, row.path ?? null, row.chain ?? null
         );
-    } catch {
-      /* never propagate */
+    } catch (e) {
+      storeWriteFailed("answers", e);   // never propagate — but never silent
     }
   }
 
@@ -405,8 +405,8 @@ class AnswerLog {
       this.open()
         .query("UPDATE answers SET client_hand_id = ?, session_id = COALESCE(session_id, ?), wrapper_hand_id = COALESCE(wrapper_hand_id, ?) WHERE id = ? AND client_hand_id IS NULL")
         .run(clientHandId, sessionId, wrapperHandId, id);
-    } catch {
-      /* never propagate */
+    } catch (e) {
+      storeWriteFailed("answers.attach", e);
     }
   }
 

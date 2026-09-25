@@ -1,4 +1,5 @@
 import { seatsInHand } from "../utils/dealtSeats/dealtSeats";
+import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { type GetNode, type HrcNode } from "./hrc3max";
 // Nodes come from the baked SQLite when this machine has it, and from :8777
@@ -194,38 +195,8 @@ export interface Chart6Choice {
  * answered from the 100bb one (36% of the walkthrough hands drifted rungs this way). The earlier rounds are rebuilt
  * from the actions under the feed contract: raise/bet/all-in amounts are the seat's round TOTAL, a call is the top-up.
  */
-export function dealtBySeat(hand: ParsedHand): Record<number, number> {
-  const out: Record<number, number> = {};
-  const stacks = hand.stacks ?? {};
-  const committed = hand.committed ?? {};
-  const earlier: Record<number, number> = {};
-  const ORDER = ["preflop", "flop", "turn", "river"];
-  const upto = ORDER.indexOf(String(hand.currentNode?.street ?? "preflop"));
-  if (upto > 0) {
-    const rounds = new Map<string, Map<number, number>>();
-    for (const a of (hand.actions ?? []) as any[]) {
-      const si = ORDER.indexOf(String(a.street));
-      if (si < 0 || si >= upto) continue;
-      const m = rounds.get(a.street) ?? new Map<number, number>();
-      rounds.set(a.street, m);
-      const seat = a.hero ? hand.heroSeatId : Number(a.seatId);
-      const amt = Number(a.amount ?? 0);
-      if (!Number.isFinite(amt) || amt <= 0) continue;
-      if (a.type === "call") m.set(seat, (m.get(seat) ?? 0) + amt);
-      else if (a.type === "post-sb" || a.type === "post-bb" || a.type === "raise" || a.type === "bet" || a.type === "all-in") m.set(seat, Math.max(m.get(seat) ?? 0, amt));
-    }
-    for (const m of rounds.values()) for (const [seat, v] of m) earlier[seat] = (earlier[seat] ?? 0) + v;
-  }
-  for (const [k, v] of Object.entries(stacks)) {
-    const seatId = Number(k);
-    const behind = Number(v);
-    if (!Number.isFinite(behind) || behind < 0) continue;
-    const inPot = Number(committed[seatId] ?? 0);
-    const total = behind + (Number.isFinite(inPot) ? inPot : 0) + (earlier[seatId] ?? 0);
-    if (total > 0) out[seatId] = total;
-  }
-  return out;
-}
+/** Each seat's stack as dealt — the one implementation lives in utils/archivedHand (hrc3max/hrc2max read it too). */
+export { dealtBySeat };
 
 /** dealtBySeat keyed by 6-max position name. */
 function dealtByPos(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): Partial<Record<Seat6, number>> {

@@ -1,6 +1,7 @@
 import { timed } from "./answerTrace";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { SNAP_MAX, SNAP_TAU } from "../utils/snapToken/snapToken";
+import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 
 /**
  * Client for the asymmetric 3-max HRC chart corpus, served by the solve-DB
@@ -70,7 +71,6 @@ export interface ChartChoice {
 }
 
 /** Past this depth the deepest chart is a guess, not a snap. */
-export const LADDER_TOP = RUNGS[RUNGS.length - 1]! + 10;
 const ladderTop = (site: Site): number => rungsFor(site)[rungsFor(site).length - 1]! + 10;
 
 /**
@@ -167,23 +167,6 @@ const pinKey = (hand: ParsedHand): string | null =>
 /** Test hook: forget every pinned chart. */
 export function resetChartPins(): void { PINNED.clear(); }
 
-/** Each seat's stack as DEALT: what is behind plus what is already in the
- *  pot this hand. A seat that has gone all in reads 0 behind — still a real,
- *  known stack, never "unreadable". */
-function dealtStacks(hand: ParsedHand): Record<number, number> {
-  const out: Record<number, number> = {};
-  const stacks = hand.stacks ?? {};
-  const committed = hand.committed ?? {};
-  for (const [seat, v] of Object.entries(stacks)) {
-    const behind = Number(v);
-    if (!Number.isFinite(behind) || behind < 0) continue;
-    const inPot = Number(committed[Number(seat)] ?? 0);
-    const total = behind + (Number.isFinite(inPot) ? inPot : 0);
-    if (total > 0) out[Number(seat)] = total;
-  }
-  return out;
-}
-
 export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice {
   const key = pinKey(hand);
   const pinned = key ? PINNED.get(key) : undefined;
@@ -199,7 +182,7 @@ export function chartFor(hand: ParsedHand, heroPos: string | null): ChartChoice 
 function chooseChart(hand: ParsedHand, heroPos: string | null): ChartChoice & { pinnable?: boolean } {
   const site = siteFor(hand.bbCents);
   const posOf: Record<number, string> = hand.positions;
-  const stacks = dealtStacks(hand);
+  const stacks = dealtBySeat(hand);   // behind + this round + EARLIER STREETS (its own copy left those out)
 
   const byPos: Partial<Record<"BTN" | "SB" | "BB", number>> = {};
   for (const [seat, pos] of Object.entries(posOf)) {
@@ -297,10 +280,6 @@ export type GetNode = (line: string) => Promise<HrcNode | null | "unreachable">;
 /** line-not-in-solution is a fact about the chart; a dead server is not. */
 const nodeCache = new Map<string, HrcNode | null>();
 const NODE_CACHE_MAX = 4000;
-
-export function clearNodeCache(): void {
-  nodeCache.clear();
-}
 
 export const fetchNode: (source: string, line: string) => Promise<HrcNode | null | "unreachable"> =
   async (source, line) => {

@@ -56,6 +56,19 @@ export const profilesJsonPath = (): string => storePath("profiles.json", join(da
 /** The wrapper's debug recordings (one folder per session). */
 export const wrapperDebugDir = (): string => storePath("wrapper-debug", dataLayout().wrapperDebug, "IGNITION_DEBUG_DIR").path;
 
+/**
+ * A store write that failed — never thrown (a record must not cost an answer), never silent either (2026-09-25 audit:
+ * the answer log, the chain store and attach() swallowed every failure, so a SQLITE_BUSY past the timeout, a full disk
+ * or a column list another session broke lost rows without a trace). One line per store per minute.
+ */
+const lastWarn = new Map<string, number>();
+export function storeWriteFailed(store: string, e: unknown): void {
+  const now = Date.now();
+  if (now - (lastWarn.get(store) ?? 0) < 60_000) return;
+  lastWarn.set(store, now);
+  console.error(`[store] ${store} write failed: ${e instanceof Error ? e.message : String(e)}`);
+}
+
 /** Every store above, resolved now — for the start-up line, GET /api/dashboard/storage and the live split guard. */
 export function resolveAllStores(): StoreEntry[] {
   for (const f of [centralDbPath, answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,

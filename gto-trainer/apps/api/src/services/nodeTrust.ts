@@ -63,4 +63,3 @@ export function nodeTrust(chartId: string, line: string): NodeTrust {
       `the solver never sampled it, so its mix is noise; the exact tree answers instead` };
 }
 
-export const nodeTrustStats = () => { const m = map(); return { charts: Object.keys(m).length, nodes: Object.values(m).reduce((s, c) => s + Object.keys(c).length, 0) }; };

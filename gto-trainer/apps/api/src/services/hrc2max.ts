@@ -1,4 +1,5 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
+import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 import { fetchNode, type GetNode, type HrcNode } from "./hrc3max";
 
 /**
@@ -76,39 +77,6 @@ export interface ChartHuChoice {
   beyondLadder: number | null;
 }
 
-/** Each seat's stack as DEALT this hand: behind + this round + what earlier streets took (see hrc6max.dealtByPos). */
-function dealtStacks(hand: ParsedHand): number[] {
-  const stacks = hand.stacks ?? {};
-  const committed = hand.committed ?? {};
-  const ORDER = ["preflop", "flop", "turn", "river"];
-  const upto = ORDER.indexOf(String(hand.currentNode?.street ?? "preflop"));
-  const earlier: Record<number, number> = {};
-  if (upto > 0) {
-    const rounds = new Map<string, Map<number, number>>();
-    for (const a of (hand.actions ?? []) as any[]) {
-      const si = ORDER.indexOf(String(a.street));
-      if (si < 0 || si >= upto) continue;
-      const m = rounds.get(a.street) ?? new Map<number, number>();
-      rounds.set(a.street, m);
-      const seat = a.hero ? hand.heroSeatId : Number(a.seatId);
-      const amt = Number(a.amount ?? 0);
-      if (!Number.isFinite(amt) || amt <= 0) continue;
-      if (a.type === "call") m.set(seat, (m.get(seat) ?? 0) + amt);
-      else if (["post-sb", "post-bb", "raise", "bet", "all-in"].includes(a.type)) m.set(seat, Math.max(m.get(seat) ?? 0, amt));
-    }
-    for (const m of rounds.values()) for (const [seat, v] of m) earlier[seat] = (earlier[seat] ?? 0) + v;
-  }
-  const out: number[] = [];
-  for (const seat of Object.keys(hand.positions ?? {}).map(Number)) {
-    const behind = Number(stacks[seat]);
-    if (!Number.isFinite(behind) || behind < 0) continue;
-    const inPot = Number(committed[seat] ?? 0);
-    const total = behind + (Number.isFinite(inPot) ? inPot : 0) + (earlier[seat] ?? 0);
-    if (total > 0) out.push(total);
-  }
-  return out;
-}
-
 /** The open and 3-bet this line is playing under: the first and second raise of the [SB, BB] token line. A
  *  limped pot has no open; its iso-raise is not a 3-bet (every tree carries the limp branch with one iso size). */
 export function sizesFromTokens(tokens: string[]): { open: number | null; threeBet: number | null; limped: boolean } {
@@ -136,9 +104,8 @@ export function chartForHu(hand: ParsedHand, tokens: string[] = [], dealt?: Reco
   // `dealt` = the stacks as dealt, read ONCE per hand by the postflop pin (fastSolve.pinPostflop), so the rung —
   // and with it the ranges, and with them GTO Wizard's tree key — cannot drift between streets. Without it each
   // probe reconstructs the stacks afresh from the wrapper's moving readings.
-  const stacks = dealt
-    ? Object.entries(dealt).filter(([k, v]) => hand.positions?.[Number(k)] != null && Number.isFinite(v) && v > 0).map(([, v]) => v)
-    : dealtStacks(hand);
+  const stacks = Object.entries(dealt ?? dealtBySeat(hand))
+    .filter(([k, v]) => hand.positions?.[Number(k)] != null && Number.isFinite(v) && v > 0).map(([, v]) => v);
   let effective: number | null = stacks.length >= 2 ? Math.min(...stacks) : stacks.length === 1 ? stacks[0]! : null;
   if (effective == null) notes.push("stacks unreadable — taken as 100bb");
   const eff = effective ?? 100;

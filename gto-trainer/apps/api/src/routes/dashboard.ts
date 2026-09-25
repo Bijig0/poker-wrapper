@@ -1,12 +1,10 @@
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, startStacksOf, roundContributions } from "../utils/archivedHand/archivedHand";
 import { summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
-import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { preflopDb } from "../services/preflopDb";
 import { resolveSet, resolveDepth } from "../services/fastSolve";
 import { answerLog, failKindOf, type LoggedAnswer } from "../services/answerLog";
@@ -384,6 +382,17 @@ function strategyByHand(): Map<string, { id: string; name: string }> {
   return out;
 }
 
+/** The strategy a finished hand was played under: its session's declared one, else the one its answers name. */
+function strategyOfHand(e: Enriched): string | null {
+  const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
+  if (sid) {
+    const sess = sessionsStore.list(500).find((x) => x.id === sid);
+    const declared = canonicalStrategyId(typeof sess?.config?.strategy === "string" ? sess.config.strategy : null);
+    if (declared) return declared;
+  }
+  return e.clientHandId ? strategyByHand().get(e.clientHandId)?.id ?? null : null;
+}
+
 app.get("/hands", async (c) => {
   const rows = allRows();
   const enriched = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
@@ -484,10 +493,9 @@ function sessionsIndex(all: Enriched[]) {
   const list: Card[] = [];
   const declared = new Map(sessionsStore.list(500).map((s) => [s.id, s]));
   const stamped = new Map<string, Enriched[]>();
-  const unstamped: Enriched[] = [];
   for (const e of all) {
     const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
-    if (!sid) { unstamped.push(e); continue; }
+    if (!sid) continue;
     byHand.set(e.dbId, sid);
     const hs = stamped.get(sid);
     if (hs) hs.push(e); else stamped.set(sid, [e]);
@@ -505,7 +513,7 @@ function sessionsIndex(all: Enriched[]) {
       test: isTestFormat(cfg.format),
     });
   }
-  for (const hs of sessionsOf(unstamped)) {
+  for (const hs of gapClusters(all)) {
     const id = `cluster-${hs[0]!.playedAt}`;
     for (const e of hs) byHand.set(e.dbId, id);
     list.push({ id, declared: false, label: null, preset: null, strategyName: null, startedAt: hs[0]!.playedAt ?? null, endedAt: hs[hs.length - 1]!.playedAt ?? null, stakes: hs[0]!.stakes ?? null, hands: hs.length, profile: null, tables: tablesOf(hs), declaredTables: null, test: false });
@@ -1023,9 +1031,6 @@ app.get("/hand/:dbId", async (c) => {
   // Session: the gap cluster this hand sits in (same rule as Analytics), and
   // the debug recording that holds it when one exists.
   const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
-  const clusters = sessionsOf(all);
-  const ci = clusters.findIndex((hs) => hs.some((h) => h.dbId === dbId));
-  const cluster = ci >= 0 ? clusters[ci]! : null;
   const recording = e.clientHandId ? recordingForHand(e.clientHandId) : null;
   const declaredId: string | null = typeof e.raw.sessionId === "string" ? e.raw.sessionId : null;
   const declared = declaredId ? sessionsStore.get(declaredId) : null;
@@ -1035,15 +1040,17 @@ app.get("/hand/:dbId", async (c) => {
   const mates = sid ? all.filter((h) => idx.byHand.get(h.dbId) === sid) : [];
   const mi = mates.findIndex((h) => h.dbId === dbId);
   const nav = { sessionId: sid, position: mi + 1, hands: mates.length, prev: mi > 0 ? mates[mi - 1]!.dbId : null, next: mi >= 0 && mi < mates.length - 1 ? mates[mi + 1]!.dbId : null };
-  const session = cluster
+  // "Session N": the hand's own session (the same partition as prev/next above), numbered oldest first
+  const chrono = [...idx.list].reverse();
+  const ci = sid ? chrono.findIndex((x) => x.id === sid) : -1;
+  const session = mates.length
     ? {
         index: ci + 1,
-        start: cluster[0]!.playedAt,
-        end: cluster[cluster.length - 1]!.playedAt,
-        // counted under the declared session when there is one, else the gap cluster
-        hands: nav.hands || cluster.length,
-        position: nav.hands ? nav.position : cluster.findIndex((h) => h.dbId === dbId) + 1,
-        stakes: cluster[0]!.stakes,
+        start: mates[0]!.playedAt,
+        end: mates[mates.length - 1]!.playedAt,
+        hands: mates.length,
+        position: nav.position,
+        stakes: mates[0]!.stakes,
         recorded: !!recording,
         recording,
         // the DECLARED session (sessions.py), when this hand was played inside one
@@ -1153,6 +1160,16 @@ app.get("/chart-node", async (c) => {
 });
 
 /** Sessions: consecutive hands with < 45 min gaps (shared with routes/sources). */
+/**
+ * THE UNDECLARED SESSIONS: hands with no declared session, grouped by time gap — the ONE partition the Sessions list,
+ * a cluster's own page, the Hands filter and the hand page all use (2026-09-25 audit: the list clustered only
+ * unstamped hands while a cluster page and the hand page clustered ALL hands, so 24 real cluster links 404'd or pulled
+ * a declared session's hands in). Ids are `cluster-<first hand's playedAt>`.
+ */
+export function gapClusters(all: Enriched[]): Enriched[][] {
+  return sessionsOf(all.filter((e) => typeof e.raw?.sessionId !== "string"));
+}
+
 export function sessionsOf(enriched: Enriched[]): Enriched[][] {
   const sessions: Enriched[][] = [];
   for (const e of enriched) {
@@ -1164,68 +1181,6 @@ export function sessionsOf(enriched: Enriched[]): Enriched[][] {
   return sessions;
 }
 
-app.get("/stats", async (c) => {
-  const rows = allRows();
-  const enriched = (await Promise.all(rows.map(enrich))).filter((x): x is Enriched => x != null);
-  const nets = computeNets(enriched);
-
-  const sessions = sessionsOf(enriched);
-
-  const agg = (hs: Enriched[]) => {
-    const n = hs.length;
-    const pct = (k: (s: HandSummary) => boolean, base?: (s: HandSummary) => boolean) => {
-      const denom = base ? hs.filter((h) => base(h.summary)).length : n;
-      const num = hs.filter((h) => k(h.summary) && (!base || base(h.summary))).length;
-      return denom ? Math.round((1000 * num) / denom) / 10 : null;
-    };
-    const known = hs.map((h) => nets.get(h.dbId)).filter((x): x is number => x != null);
-    const netBb = Math.round(known.reduce((s, x) => s + x, 0) * 100) / 100;
-    const disc = { major: 0, minor: 0, info: 0 };
-    for (const h of hs) {
-      for (const dd of h.discrepancies ?? []) {
-        if (dd.severity === "major") disc.major++;
-        else if (dd.severity === "minor") disc.minor++;
-        else disc.info++;
-      }
-    }
-    return {
-      hands: n,
-      vpip: pct((s) => s.vpip),
-      pfr: pct((s) => s.pfr),
-      threeBet: pct((s) => s.threeBet, (s) => s.threeBetOpp),
-      wtsd: pct((s) => s.wentToShowdown, (s) => s.sawFlop),
-      limpedPots: pct((s) => s.limpedPot),
-      netBb,
-      netKnownHands: known.length,
-      bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
-      discrepancies: disc,
-    };
-  };
-
-  const byStakes: Record<string, Enriched[]> = {};
-  const byPos: Record<string, Enriched[]> = {};
-  for (const e of enriched) {
-    (byStakes[e.stakes ?? "?"] ??= []).push(e);
-    (byPos[e.summary.heroPos ?? "?"] ??= []).push(e);
-  }
-
-  return c.json({
-    auditPending: auditPending(),
-    ok: true,
-    overall: agg(enriched),
-    byStakes: Object.fromEntries(Object.entries(byStakes).map(([k, v]) => [k, agg(v)])),
-    byPosition: Object.fromEntries(Object.entries(byPos).map(([k, v]) => [k, agg(v)])),
-    sessions: sessions
-      .map((hs) => ({
-        start: hs[0]!.playedAt,
-        end: hs[hs.length - 1]!.playedAt,
-        stakes: hs[0]!.stakes,
-        ...agg(hs),
-      }))
-      .reverse(),
-    answers: answerLog.stats(60),
-  });
-});
 
 /**
  * GET /mes-value — the formalized winrate picture, in one place.
@@ -1482,7 +1437,7 @@ app.get("/answer-node", async (c) => {
     // comes from the baked SQLite when this machine has it, :8777 otherwise.
     const sixMax = logged?.chart
       ? /_6max_/.test(logged.chart)
-      : !threeMax && live.size > 3 && bbUsdOf(e.stakes) === 2;
+      : !threeMax && live.size > 3 && bbUsdOf(e.stakes, e.hand.bbCents) === 2;
     if (sixMax) {
       const tokens = buildPreflopTokens(t, heroPos);
       const choice = chartFor6max(t, heroPos, tokens);
@@ -1590,7 +1545,7 @@ async function preflopChartSource(
     const id = chart ?? chartFor(t, heroPos).id;
     return { kind: "hrc", chart: id, tokens: buildPreflopTokens3max(t, heroPos), get: (ln: string) => hrcFetchNode(id, ln), heroKey: heroName, hu: false };
   }
-  const sixMax = chart ? /_6max_/.test(chart) : live.size > 3 && bbUsdOf(e.stakes) === 2;
+  const sixMax = chart ? /_6max_/.test(chart) : live.size > 3 && bbUsdOf(e.stakes, e.hand.bbCents) === 2;
   if (sixMax) {
     const tokens = buildPreflopTokens(t, heroPos);
     let id = chart;
@@ -1962,11 +1917,6 @@ app.get("/chart-setup", (c) => {
   return c.json({ ok: true, setups, table });
 });
 
-/** GET /solves?hand=<clientHandId> — stored solves for a hand (no blobs); no hand → the most recent. */
-app.get("/solves", (c) => {
-  const cid = c.req.query("hand");
-  return c.json({ ok: true, stats: solveStore.stats(), solves: cid ? solveStore.forHand(cid) : solveStore.recent(50) });
-});
 
 /**
  * POST /resolve-chain { dbId, upto } — re-run the live path on the archived
@@ -1985,8 +1935,12 @@ app.post("/resolve-chain", async (c) => {
   if (!e) return c.json({ ok: false, error: `no hand #${b.dbId}` }, 404);
   const t = truncateAt(e.hand, Number(b.upto));
   const heroPos = e.summary.heroPos ?? null;
-  // chart mode so the MES overlay does not short-circuit: the point is the chain
-  const sol = await fastSolve({ ...t, currentNode: { ...t.currentNode, toActIsHero: true } }, heroPos, { heroPos, strategy: "chart", origin: "replay" });
+  // THE STRATEGY THAT ANSWERED AT THE TABLE (2026-09-25 audit): without it fastSolve takes the old non-6-max path
+  // (library preflop, GTO Wizard's default rake cap, the street-root fallbacks), so "re-run the live path" compared two
+  // different pipelines. Only a hand with no known strategy falls back to chart mode (no MES short-circuit).
+  const strategyId = strategyOfHand(e);
+  const sol = await fastSolve({ ...t, currentNode: { ...t.currentNode, toActIsHero: true } }, heroPos,
+    strategyId ? { heroPos, strategyId, origin: "replay" } : { heroPos, strategy: "chart", origin: "replay" });
   if (!sol.ok) return c.json({ ok: false, error: sol.reason });
   return c.json({ ok: true, solveId: sol.solveId ?? null, tier: sol.tier ?? null, source: sol.source, line: sol.line, actions: sol.actions, decision: sol.decision, warning: sol.warning ?? null });
 });
@@ -2134,7 +2088,7 @@ function pricedHandsByProfile() {
     const sid = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
     const prof = sid ? profileOfSession.get(sid) ?? null : null;
     if (!prof) { unattributedHands++; continue; }
-    const bb = bbUsdOf(e.stakes);
+    const bb = bbUsdOf(e.stakes, e.hand.bbCents);
     const net = nets.get(e.dbId) ?? null;
     // a hand is priced only when we know BOTH its net in bb and what a bb is worth
     const netCents = bb != null && net != null ? Math.round(net * bb * 100) : null;
@@ -2441,8 +2395,7 @@ app.get("/sessions", (c) => {
   const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
   const nets = computeNets(all);
   const declared = sessionsStore.list(200).map((s) => sessionCard(s, all, nets));
-  const stamped = new Set(all.filter((e) => typeof e.raw?.sessionId === "string").map((e) => e.dbId));
-  const clusters = sessionsOf(all.filter((e) => !stamped.has(e.dbId))).map((hs) => {
+  const clusters = gapClusters(all).map((hs) => {
     const known = hs.map((h) => nets.get(h.dbId)).filter((x): x is number => x != null);
     const netBb = Math.round(known.reduce((a, b) => a + b, 0) * 100) / 100;
     return {
@@ -2507,8 +2460,11 @@ app.post("/reconcile-answers", async (c) => {
 /** Big blind in dollars, read off a stakes label like "$1.00/$2.00" (the last
  *  number is the big blind). Null when the label is missing or unparseable —
  *  the session page then shows the bb figures and omits the money ones. */
-function bbUsdOf(stakes: string | null | undefined): number | null {
-  const ns = String(stakes ?? "").match(/[\d.]+/g);
+/** The big blind in dollars: the row's own bbCents when the caller has it, else the stakes string's LAST number
+ *  before any " ante …" — CoinPoker's string ends in its ante, which this used to read as the big blind. */
+function bbUsdOf(stakes: string | null | undefined, bbCents?: number | null): number | null {
+  if (bbCents != null && Number.isFinite(bbCents) && bbCents > 0) return bbCents / 100;
+  const ns = String(stakes ?? "").replace(/\s+ante\b.*$/i, "").match(/[\d.]+/g);
   const bb = ns?.length ? Number(ns[ns.length - 1]) : NaN;
   return Number.isFinite(bb) && bb > 0 ? bb : null;
 }
@@ -2565,7 +2521,7 @@ app.get("/sessions/:id", (c) => {
   };
   if (id.startsWith("cluster-")) {
     const start = Number(id.slice(8));
-    const hs = sessionsOf(all).find((h) => h[0]!.playedAt === start);
+    const hs = gapClusters(all).find((h) => h[0]!.playedAt === start);
     if (!hs) return c.json({ ok: false, error: "no such cluster" }, 404);
     return c.json({
       ok: true,

@@ -127,16 +127,11 @@ class GtowApi {
     };
   }
 
-  /** A valid access token from the best session for this work.
-   *  Kept for callers that only need a bearer (services/gtowAiPreflop.ts). */
+  /** A valid access token from the best session for this work (the node poll's fallback when a solution has no
+   *  recorded owner, and its refresh after a 401). */
   async accessToken(force = false, need: GtowNeed = {}): Promise<string | null> {
     if (force) await gtowSessions.forceRefresh();
     return (await gtowSessions.bestToken(need))?.token ?? null;
-  }
-
-  /** The session a custom solution belongs to, for callers that must poll it. */
-  ownerOf(solId: string): GtowSessionId | null {
-    return this.solOwner.get(solId) ?? null;
   }
 
   /** Requests sent to api.gtowizard.com (all processes, per account), against the stated daily cap. */

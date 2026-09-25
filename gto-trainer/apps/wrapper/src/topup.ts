@@ -20,7 +20,6 @@ import { C } from "./config";
 import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyRepr, pyRound, pyStr } from "./py";
 import { S, seams } from "./state";
-import * as TABLES from "./tables";
 import * as TERMINAL from "./terminal";
 import { mySel, tableJs, topupFillJs, topupReadJs } from "./ignition/dom";
 import { handState } from "./ignition/hand";

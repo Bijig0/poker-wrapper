@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { PreflopPin } from "./preflopPin";
 import { emptyCounts, type RequestCounts } from "./requestScope";

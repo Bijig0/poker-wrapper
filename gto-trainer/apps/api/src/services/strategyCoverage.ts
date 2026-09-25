@@ -1,3 +1,4 @@
+import { SIX_MAX_STRATEGY_ID } from "./strategies";
 /**
  * HOW A STRATEGY ANSWERS EVERY SPOT (2026-09-22, Brady: "in the sources section for our strategy ... make it clear"
  * which piece answers which spot, what the borrow means, what it costs against equilibrium, and where the holes are;
@@ -438,5 +439,5 @@ const RING_6MAX: StrategyCoverage = {
 };
 
 export const STRATEGY_COVERAGE: Record<string, StrategyCoverage> = {
-  "ign200-ring-6max-equilibrium": RING_6MAX,
+  [SIX_MAX_STRATEGY_ID]: RING_6MAX,
 };

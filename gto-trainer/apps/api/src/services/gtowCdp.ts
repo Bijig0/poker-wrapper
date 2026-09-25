@@ -14,10 +14,7 @@ import { parseHandClass } from "../utils/parseHandClass/parseHandClass";
 import { parseBetLabel } from "../utils/parseBetLabel/parseBetLabel";
 import { parseExactCombo } from "../utils/parseExactCombo/parseExactCombo";
 import { parseComboLegend } from "../utils/parseComboLegend/parseComboLegend";
-import {
-  canonicalizeActions,
-  canonicalActionKey,
-} from "../utils/canonicalizeActions/canonicalizeActions";
+import { canonicalizeActions } from "../utils/canonicalizeActions/canonicalizeActions";
 import {
   buildLinePlan,
   type LinePlan,

@@ -1,10 +1,8 @@
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
 import { answerLog, type FailKind } from "./answerLog";
 import { sessionsStore } from "./sessionsStore";
-import { HAND_COLS, openDb as openHandsDb } from "../routes/dashboard";
+import { HAND_COLS, openDb as openHandsDb, enrichSync, coverageOf, answersByHand, decisionIndexOf } from "../routes/dashboard";
 import { FINISHED } from "../../../../packages/data-root/handsSchema";
-import { HANDS_DB, enrichSync, coverageOf, answersByHand, decisionIndexOf } from "../routes/dashboard";
 
 /**
  * Why a decision got no answer, settled AFTER the hand is over.

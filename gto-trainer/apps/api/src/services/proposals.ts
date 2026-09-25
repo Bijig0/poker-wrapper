@@ -77,7 +77,6 @@ export function proposals(): Proposal[] {
         const lj = liveJob(c.id);
         const lastJob = jobList.find((x) => x.config === c.id) ?? null;
         const live = lj ? (lj.status as "running" | "queued") : (lastJob && lastJob.status === "failed" && c.effective !== "done" ? ("failed" as const) : null);
-        const lv = liveOf(c.id);
         if (c.work && c.work.length) {
           // hand-written lines (uneven-stack batches, the 4-handed pieces): status from the config
           let from = 0;

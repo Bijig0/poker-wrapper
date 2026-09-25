@@ -20,7 +20,7 @@
  * each ran a job dispatcher whose "one job per lane" Map is per-process, and each ran a keeper
  * whose parse cleanup (`rm -f <solutions>/<id>.json.gz ...`) landed inside the other's run.
  */
-import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { backgroundLockPath } from "./storePaths";
 

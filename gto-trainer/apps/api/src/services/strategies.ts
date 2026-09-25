@@ -25,6 +25,10 @@ import { join } from "node:path";
 import { mesPostflopInfo } from "./mesPostflop";
 import { chartsLanded } from "./ledger";
 
+/** THE 6-MAX RING STRATEGY'S ID — one constant: fastSolve's routing, the poller's local-preflop check and the coverage
+ *  table all key on it, and a rename typed into one of five copies would silently switch the 6-max path off. */
+export const SIX_MAX_STRATEGY_ID = "ign200-ring-6max-equilibrium";
+
 const DATA = join(import.meta.dir, "..", "..", "data");
 const LIMP = join(DATA, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
 const readJson = (p: string): any | null => { try { return JSON.parse(readFileSync(p, "utf-8")); } catch { return null; } };
@@ -175,7 +179,7 @@ export const STRATEGIES: StrategyDef[] = [
   // 2bb cap, GTO Wizard AI for every postflop spot from those arrival ranges.
   // No pool model — the 6-handed pool measurement (pool-model-6max-nl200) is a
   // later part of the same proposal and gets its own, exploit strategy.
-  { id: "ign200-ring-6max-equilibrium", name: "Ignition 200NL Ring 6-max Equilibrium",
+  { id: SIX_MAX_STRATEGY_ID, name: "Ignition 200NL Ring 6-max Equilibrium",
     tagline: "Equilibrium only — our own NL200 6-max HRC charts preflop (5% / cap 2bb) at 4-6 seats, GTO Wizard AI preflop for everything they cannot answer (a table thinned to 2-3 seats, off-tree sizes, past the ladder, limps, straddles), GTO Wizard AI postflop conditioned on whichever of the two answered; no pool model, and no 3-max corpus pending a re-solve of its shallow rungs",
     preflop: "chart6maxNl200", postflop: "gto", opponent: "gto6max", matrixRow: "eq_eq_6max",
     format: "ign-6max-nl200", stake: "nl200", formats: ["ign-ring-NL200-6", "ign-ring-NL5-6", ...PRACTICE], defaultFormat: "ign-ring-NL200-6",
@@ -242,7 +246,6 @@ export function evaluate(): StrategyView[] {
   // it at pool_model_nl25.json) — the same env services/ledger.ts and the Sources
   // cards read, so all three report the model actually in force.
   const poolPath = process.env.POOL_MODEL ?? join(LIMP, "pool_model_v4.json");
-  const pool = readJson(poolPath) ?? readJson(join(LIMP, "pool_model_v3.json"));
   const poolMtime = (() => { try { return statSync(poolPath).mtimeMs; } catch { return null; } })();
   const mesBuilt = mes.meta?.built_at ? Date.parse(String(mes.meta.built_at)) : null;
   const poolDrift = poolMtime != null && mesBuilt != null && poolMtime > mesBuilt;
@@ -395,7 +398,7 @@ export function strategyIdForAnswer(a: { strategy_mode?: string | null; source?:
     if (a.bb_cents !== 200) return null;
     // two seats at a $2 big blind is the CoinPoker heads-up table (Ignition deals no NL200 heads-up cash)
     if (a.table_seats === 2) return "cp200-hu-equilibrium";
-    return (a.table_seats ?? 3) > 3 ? "ign200-ring-6max-equilibrium" : "ign200-zone-3max-equilibrium";
+    return (a.table_seats ?? 3) > 3 ? SIX_MAX_STRATEGY_ID : "ign200-zone-3max-equilibrium";
   }
   return null;
 }

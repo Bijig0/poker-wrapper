@@ -36,12 +36,11 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { balanceAcksPath, handsDbPath, profilesJsonPath, sessionsDbPath } from "./storePaths";
+import { balanceAcksPath, profilesJsonPath, sessionsDbPath } from "./storePaths";
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";   // readFileSync is already imported above
 import { dirname } from "node:path";
 
-const HANDS_DB = handsDbPath();
 const SESSIONS_DB = sessionsDbPath();
 const PROFILES_JSON = profilesJsonPath();
 
@@ -115,9 +114,6 @@ export function snapshots(profile?: string | null, limit = 1000): BalanceSnap[] 
     return []; // the table appears the first time the wrapper records a balance
   }
 }
-
-export const latestSnapshot = (profile: string): BalanceSnap | null =>
-  snapshots(profile).slice(-1)[0] ?? null;
 
 /** One hand, as reconciliation needs it. */
 export interface PricedHand {

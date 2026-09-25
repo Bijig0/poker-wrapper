@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { evaluate, loadLedger, expectedChartIds, isBoxGrid, BOX_GRID_KINDS, MES_HANDOFF, HRC_API, type EvaluatedConfig } from "./ledger";
 import { chartStates, runEstimate } from "./chartProgress";
-import { jobs, HRC_API_ZENBOOK, type JobRow } from "./jobs";
+import { jobs, type JobRow } from "./jobs";
 import { hrcJobsFor } from "./runbook";
 import { getCatalog } from "./chartCatalog";
 

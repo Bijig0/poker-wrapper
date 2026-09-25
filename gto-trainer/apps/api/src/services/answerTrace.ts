@@ -103,11 +103,6 @@ export function stallsBetween(fromMs: number, toMs: number): { at: number; ms: n
   return stalls.filter((s) => s.at + s.ms >= fromMs && s.at <= toMs);
 }
 
-/** The last stalls seen, for status pages and tests. */
-export function recentStalls(n = 20): { at: number; ms: number }[] {
-  return stalls.slice(-n);
-}
-
 /** Test hook: record a stall as the monitor would. */
 export function _recordStall(at: number, ms: number): void {
   stalls.push({ at, ms });

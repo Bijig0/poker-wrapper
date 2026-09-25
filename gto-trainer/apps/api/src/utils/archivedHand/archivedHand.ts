@@ -51,6 +51,35 @@ export function roundContributions(hand: ParsedHand, upto = hand.actions.length)
 }
 
 /**
+ * EACH SEAT'S STACK AS DEALT, from the wrapper's LIVE readings: behind + this round's chips + what every earlier street
+ * took (roundContributions). The one implementation — hrc6max, hrc3max and hrc2max each had their own copy, and the
+ * 3-max one left out the earlier streets, so a 3-max chart first chosen on the turn (API restart mid-hand, a missed
+ * preflop probe) read every stack short by the flop money and picked a lower rung than preflop had (2026-09-25 audit).
+ * A seat all in reads 0 behind — still a real, known stack.
+ */
+export function dealtBySeat(hand: ParsedHand): Record<number, number> {
+  const upto = (ROUNDS as readonly string[]).indexOf(String(hand.currentNode?.street ?? "preflop"));
+  const earlier: Record<number, number> = {};
+  if (upto > 0) {
+    for (const [street, m] of roundContributions(hand)) {
+      if ((ROUNDS as readonly string[]).indexOf(street) >= upto) continue;
+      for (const [seat, v] of m) earlier[seat] = (earlier[seat] ?? 0) + v;
+    }
+  }
+  const out: Record<number, number> = {};
+  const committed = hand.committed ?? {};
+  for (const [k, v] of Object.entries(hand.stacks ?? {})) {
+    const seat = Number(k);
+    const behind = Number(v);
+    if (!Number.isFinite(behind) || behind < 0) continue;
+    const inPot = Number(committed[seat] ?? 0);
+    const total = behind + (Number.isFinite(inPot) ? inPot : 0) + (earlier[seat] ?? 0);
+    if (total > 0) out[seat] = total;
+  }
+  return out;
+}
+
+/**
  * Each seat's stack AS DEALT (bb), for a hand whose `stacks` are end-of-hand readings.
  *
  * `hand.startStacks` where the row carries them (exact). Every other seat is rebuilt from the end state:

@@ -142,7 +142,6 @@ async function ssh(host: string, ps: string, timeoutMs = 45_000): Promise<{ code
   return { code, out: out + (code !== 0 && errLines.length ? `\n${errLines.join("\n")}` : "") };
 }
 
-const SCP = existsSync("C:/Program Files/Git/usr/bin/scp.exe") ? "C:/Program Files/Git/usr/bin/scp.exe" : "scp";
 // rclone on this machine (WinGet install; the StudyAPI task's PATH does not have it): the newest rclone.exe under WinGet's packages
 function findRclone(): string {
   if (process.env.RCLONE) return process.env.RCLONE;
@@ -167,27 +166,6 @@ async function rcloneTo(remote: string, dest: string, timeoutMs = 1800_000): Pro
   const code = await proc.exited; clearTimeout(killer);
   return code === 0 && existsSync(dest);
 }
-/** scp one remote file into a local dir; Windows boxes use the deploy key as Administrator, Linux boxes root with the default key. */
-async function scpFrom(remote: string, dir: string, win: boolean, timeoutMs = 3600_000): Promise<boolean> {
-  const args = win ? ["-i", KEY] : [];
-  const proc = Bun.spawn([SCP, "-q", ...args, "-o", "BatchMode=yes", "-o", "ConnectTimeout=40", "-o", "StrictHostKeyChecking=accept-new", remote, dir + "/"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME } });
-  const killer = setTimeout(() => { try { proc.kill(); } catch { /* ignore */ } }, timeoutMs);
-  const code = await proc.exited; clearTimeout(killer);
-  return code === 0;
-}
-/** threeMaxGrid --parse-only on one pulled 6-max job: unzip → charts.json.gz → study-UI solution (the converter needs unzip: Git's usr/bin). */
-async function parseSixMax(dir: string, job: any): Promise<boolean> {
-  const one = join(dir, `keeper.parse.${job.id}.json`); writeFileSync(one, JSON.stringify([job]));
-  const gitBin = "C:\\Program Files\\Git\\usr\\bin";
-  const PATH = (process.env.PATH ?? "").includes(gitBin) ? process.env.PATH : `${gitBin};${process.env.PATH ?? ""}`;
-  const BUN = process.env.BUN ?? "C:\\Users\\Brady\\AppData\\Local\\Programs\\node-v24.18.0-win-x64\\node_modules\\bun\\bin\\bun.exe";
-  const proc = Bun.spawn([BUN, "run", join(HRC_API_ZENBOOK, "scripts", "threeMaxGrid.ts"), one, "--parse-only", "--out", dir], { cwd: HRC_API_ZENBOOK, stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, PATH, HRC_CONVERTER: process.env.HRC_CONVERTER ?? "C:/Users/Brady/poker/analysis/pipeline/solve/hrc_to_preflop.py" } });
-  const killer = setTimeout(() => { try { proc.kill(); } catch { /* ignore */ } }, 45 * 60_000);
-  const [o, e, code] = await Promise.all([new Response(proc.stdout as any).text(), new Response(proc.stderr as any).text(), proc.exited]); clearTimeout(killer);
-  return code === 0 && existsSync(join(dir, `${job.id}.charts.json.gz`)) && !/FAIL/.test(o + e);
-}
-
 async function sshLinux(host: string, cmd: string, timeoutMs = 90_000): Promise<{ code: number; out: string }> {
   const proc = Bun.spawn([SSH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=40", "-o", "StrictHostKeyChecking=accept-new", `root@${host}`, cmd], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME } });
   const killer = setTimeout(() => { try { proc.kill(); } catch { /* ignore */ } }, timeoutMs);

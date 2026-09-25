@@ -322,17 +322,6 @@ function savePartial(handKey: string, key: string, pc: PartialCheckpoint): void 
   indexKey(handKey, `p:${key}`);
 }
 
-/** The mid-street checkpoints of a hand, for tests. */
-export function partialsFor(handKey: string): { key: string; k: number; prefix: string[] }[] {
-  const out: { key: string; k: number; prefix: string[] }[] = [];
-  for (const key of handIndex.get(handKey) ?? []) {
-    if (!key.startsWith("p:")) continue;
-    const pc = partials.get(key.slice(2));
-    if (pc) out.push({ key: key.slice(2), k: pc.k, prefix: pc.tokens[pc.tokens.length - 1] ?? [] });
-  }
-  return out;
-}
-
 /** Forget a hand's checkpoints, closed and mid-street, and its street ledger (tests; a replay that wants a cold walk). */
 export function forgetCheckpoints(handKey: string): void {
   for (const key of handIndex.get(handKey) ?? []) {

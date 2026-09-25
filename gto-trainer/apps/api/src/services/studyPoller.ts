@@ -1,4 +1,4 @@
-import { DEFAULT_LIVE_URL } from "../routes/ingest";
+import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { buildAnswerText, type AnswerAction } from "../feed/buildAnswerText/buildAnswerText";
 import { gtowCdp } from "./gtowCdp";
 import { gtowApi } from "./gtowApi";
@@ -10,6 +10,7 @@ import type { Database } from "bun:sqlite";
 import { openStore, pollerEventsPath } from "./storePaths";
 import { ensureEventTables, pollerEventRow } from "../../../../packages/data-root/eventTables";
 import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
+import { SIX_MAX_STRATEGY_ID } from "./strategies";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
 export interface ChainBanner {
@@ -107,7 +108,9 @@ interface IngestLikeResponse {
            /** the three turn signals (CONTRACT §1b), forwarded by /api/ingest since 2026-09-23 */
            toActSources?: { buttons?: boolean; ws?: boolean; actionOn?: boolean } | null };
   hand?: { street?: string; board?: string[]; actions?: unknown[]; node?: { toCall?: number };
-           handId?: number | null; clientHandId?: string | null };
+           handId?: number | null; clientHandId?: string | null;
+           /** routes/ingest.ts sends these on every probe since EIP-16 (2026-09-23) — the no-answer rows' identity */
+           tableSlot?: number | null; sessionId?: string | null };
   // assistive-play's own local "Study Answers" toggle, forwarded by /api/ingest
   // for the live source — the single gate: this poller runs continuously, but
   // only actually pushes an answer while the panel's own switch is on.
@@ -278,7 +281,6 @@ class StudyPoller {
   // for a while — only several DIFFERENT decisions failing in a row is a
   // real wedge signal.
   private lastFailedKey: string | null = null;
-  private readonly WEDGE_THRESHOLD = 3;
   /**
    * A DECISION THAT KEEPS FAILING THE SAME WAY (2026-09-19, Brady). Hand 4919236052 asked
    * the same unanswerable question 13 times at ~1 s apart and got the same sentence back
@@ -459,7 +461,7 @@ class StudyPoller {
       // bake and postflop over HTTP with a token that outlives the debug port, so a CDP hiccup used to blank every
       // decision until the port answered again — including chart preflop spots that never touch GTO Wizard. Solve
       // when a token is in hand or the spot needs none; the relaunch below still runs, it just no longer gates.
-      const localPreflop = probe.strategyId === "ign200-ring-6max-equilibrium" && probe.hand?.street === "preflop";
+      const localPreflop = probe.strategyId === SIX_MAX_STRATEGY_ID && probe.hand?.street === "preflop";
       const canSolveAnyway = gtowApi.hasLiveToken() || localPreflop;
       if (!this.status.gtoWizardConnected && canSolveAnyway) this.ensureGtoWizardLaunching();
       if (!this.status.gtoWizardConnected && !canSolveAnyway) {
@@ -1007,15 +1009,19 @@ class StudyPoller {
     this.noteWedgeSignal(key, kind);
     answerLog.add({
       ts: Date.now(),
-      wrapperHandId: full?.hand?.handId ?? null,
-      clientHandId: full?.hand?.clientHandId ?? null,
+      // WHO THE HAND IS, from the probe when there was no full solve (gtow-down, not-to-act-live, unreachable): the
+      // ingest envelope has carried the ids since EIP-16, but these rows still read them from `full` only and were
+      // written with a NULL hand, left to the reconciler's hero-cards ±60 s guess (2026-09-25 contract audit)
+      wrapperHandId: full?.hand?.handId ?? probe.hand?.handId ?? null,
+      clientHandId: full?.hand?.clientHandId ?? probe.hand?.clientHandId ?? null,
+      tableSlot: (full?.hand as { tableSlot?: number | null } | undefined)?.tableSlot ?? probe.hand?.tableSlot ?? null,
       street: full?.hand?.street ?? probe.hand?.street ?? null,
       board: (full?.hand?.board ?? probe.hand?.board ?? []).join("") || null,
       heroCards: (full?.hero?.cards ?? probe.hero?.cards ?? []).join("") || null,
       decisionKey: key,
       text: null, pick: null, roll: null, tier: null, warning: null,
       latencyMs, failReason: reason, failKind: kind,
-      sessionId: full?.sessionId ?? null,
+      sessionId: full?.sessionId ?? probe.hand?.sessionId ?? null,
       // a verdict that arrived after hero acted still says how the chain did; a fetch that failed is a fault
       ...((): { pathVerdict: string | null; path: string | null } => {
         const done = full?.solution?.path;

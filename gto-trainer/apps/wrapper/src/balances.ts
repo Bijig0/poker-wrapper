@@ -9,8 +9,6 @@
  * Storage: data/sessions.sqlite, table `balances` (the wrapper writes, the API reads it read-only).
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { nowMs, time } from "./clock";
 import { paths } from "./env";
 import { openStore } from "../../../packages/data-root/centralDb";

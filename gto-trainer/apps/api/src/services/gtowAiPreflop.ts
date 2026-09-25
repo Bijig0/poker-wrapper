@@ -35,7 +35,6 @@
 import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
-import { gtowApi } from "./gtowApi";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
 import { gtowRequests } from "./gtowRequestLog";
 import { comboIndex, toClassWeights, COMBOS } from "../utils/comboIndex/comboIndex";
@@ -379,6 +378,7 @@ async function fetchNode(solId: string, line: string): Promise<{ data: any; cach
   const t0 = Date.now();
   let last = "the cloud did not return the node in time";
   let emptyPolls = 0;
+  let refreshed = false;
   const owner = owners.get(solId) ?? null;
   while (Date.now() - t0 < NODE_TIMEOUT_MS) {
     const token = owner ? await gtowSessions.tokenFor(owner) : (await gtowSessions.bestToken({ preflop: true }))?.token ?? null;
@@ -387,6 +387,13 @@ async function fetchNode(solId: string, line: string): Promise<{ data: any; cach
     let r: Response;
     try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
     catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
+    // THE SAME THREE RULES AS gtowApi's node poll (2026-09-25 audit): this copy re-polled an expired token for the whole
+    // NODE_TIMEOUT_MS (a lost preflop answer), never told the pool about a wall it hit, and sat out a 429 quota wall
+    if (r.status === 401 && !refreshed) {
+      refreshed = true;
+      if (owner) await gtowSessions.tokenFor(owner, true); else await gtowSessions.forceRefresh();
+      continue;
+    }
     if (r.ok && r.status !== 204) {
       const j = await r.json().catch(() => null);
       if (j?.action_solutions?.length) { nodes.set(k, j); if (nodes.size > 2000) nodes.delete(nodes.keys().next().value as string); return { data: j, cached: false }; }
@@ -400,6 +407,8 @@ async function fetchNode(solId: string, line: string): Promise<{ data: any; cach
       const t = await r.text().catch(() => "");
       if (r.status === 400 || r.status === 422) return { error: `${r.status}: ${t.slice(0, 160)}` };
       last = `spot-solution ${r.status}: ${t.slice(0, 120)}`;
+      if (owner) gtowSessions.noteFailure(owner, r.status, t.slice(0, 200), { preflop: true });   // the NEXT tree goes elsewhere
+      if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: last };   // a quota wall will not lift while we wait
     }
     await new Promise((res) => setTimeout(res, POLL_MS));
   }
@@ -762,8 +771,6 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
     `the folded players' ranges and anyone still to act behind hero are not modelled. ` + r.note;
   return { ...r, pos: red.heroPos, note };
 }
-
-export const gtowAiPreflopStats = () => ({ trees: solutions.size, nodes: nodes.size });
 
 /** The exact request a hand would produce (for tests and the state tester — nothing is sent). */
 export function debugTree(hand: ParsedHand, heroPos: string | null): { shape: AiPreflopShape; line: string; body: any } | { error: string } {
