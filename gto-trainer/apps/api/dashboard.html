@@ -2946,7 +2946,7 @@ function renderMissQueue() {
         <button class="mini" onclick="mqJobStatus('${esc(g.job.id)}','dismissed')">dismiss</button></div></td></tr>`;
   }).join("");
   host.innerHTML = `<div class="card">
-    <h2>Preflop miss queue <span class="sub">— ${bs.open || 0} open · ${bs.queued || 0} queued · ${bs.solved || 0} solved · ${bs.dismissed || 0} dismissed</span></h2>
+    <h2>Preflop miss queue <span class="sub">— ${bs.open || 0} open · ${bs.queued || 0} queued · ${bs.solved || 0} solved · ${bs.dismissed || 0} dismissed${st.synthetic ? ` · <span title="rows only our own scripts' hands hit (stress runs, the mutation harness, the post-in matrix) — never real work">${st.synthetic} synthetic hidden</span>` : ""}</span></h2>
     <div class="banner">🧭 <b>Preflop is completed offline.</b> Postflop has the AI chain to solve any board on demand; a 3-handed preflop state takes HRC 12–90 min, so it can't be solved live. Instead every spot the chart corpus couldn't answer <i>exactly</i> is written down here with its state — stacks, line, the size or action the tree lacked — and a suggested HRC job. Queue the ones worth solving, write the plan, run it in HRC Runner; when the chart lands, <b>re-check</b> marks the item solved.</div>
     <div class="tiles">
       ${tile("open", bs.open || 0)} ${tile("queued", bs.queued || 0)} ${tile("solved", bs.solved || 0)}
