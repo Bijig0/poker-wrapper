@@ -34,7 +34,11 @@ reader/study answer writes to … so we can get hands in live as well."
   timeout). `adoptAtStartup()` folds the legacy files in once, at process start. It copies each legacy table with
   its rowids, so `/hands/<dbId>` and `solve_id` links survive. It writes a watermark into the legacy file, so rows an
   old-code process appends during the restart window are picked up next start. It renames a fully adopted file to
-  `.adopted-<date>` once nothing holds it open.
+  `.adopted-<date>` once nothing holds it open. The copy goes in committed 100-row chunks (the watermark with each),
+  so a killed process resumes where it stopped. The API runs it (`adoptAtStartupAsync`) after its port is open,
+  yielding between chunks, and starts its background work when it is done: run synchronously before the port opened,
+  the first 123 MB adoption kept the supervisor's health probe unanswered and the worker was killed twice
+  (2026-09-26). The per-minute catch-up skips a legacy file whose size and mtime have not moved.
 * `handsSchema.ts` is the hands table, defined once for the writer (wrapper) and the readers (API). It adds
   `client_hand_id` (indexed; replaces the `LIKE` matching), `status` (`live`/`done`) and `updated_at`.
 * `eventTables.ts` holds `gtow_requests` and `poller_events`, which replace the two JSONL logs and are imported from

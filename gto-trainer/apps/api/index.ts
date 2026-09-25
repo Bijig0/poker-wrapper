@@ -1,7 +1,7 @@
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { Hono } from "hono";
-import { adoptAtStartup, startAdoptionCatchUp } from "../../packages/data-root/centralDb";
+import { adoptAtStartupAsync, startAdoptionCatchUp } from "../../packages/data-root/centralDb";
 import { describeLayout, exitLogPath, resolveAllStores, splitStores } from "./src/services/storePaths";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
@@ -179,8 +179,9 @@ const dashboardOnly = process.env.DASHBOARD_ONLY === "1";
 if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token keeper are off");
 
 // ONE DATA ROOT (gto-trainer/DATA-ROOT-PLAN.md): say where every record goes, fold the legacy per-store files into the
-// central poker.sqlite before anything writes, and refuse to run as the LIVE API with its records split — an env
+// central poker.sqlite before the background work writes, and refuse to run as the LIVE API with its records split — an env
 // override that points one store outside the root is exactly how hand 973's chains and answers came apart.
+let adoption: Promise<void> = Promise.resolve();
 {
   const stores = resolveAllStores();
   console.log(describeLayout());
@@ -196,15 +197,20 @@ if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token ke
   }
   // ONLY THE LIVE API adopts (and retires) the legacy files: a verify server (:2001), a dashboard-only box or a
   // POKER_DATA_DIR sandbox must never move the live system's data — it reads what the live processes adopted
+  // AFTER THE PORT IS OPEN, a committed chunk at a time (2026-09-26: run synchronously before `export default` let the
+  // server listen, a 123 MB first adoption kept the supervisor's health probe unanswered and it killed the worker
+  // twice, rolling the copy back each time). The background work below starts when it is done.
   if (liveApi) {
-    try {
-      const line = adoptAtStartup((l) => console.log(l));
-      if (line) say(line);
-      // an old-code wrapper still writing a legacy file: fold its new rows in every minute until it lets go
-      startAdoptionCatchUp((l) => console.log(l));
-    } catch (e) {
-      console.error(`[data-root] adoption failed: ${e instanceof Error ? e.message : e}`);
-    }
+    adoption = new Promise<void>((done) => setTimeout(done, 0)).then(async () => {
+      try {
+        const line = await adoptAtStartupAsync((l) => console.log(l));
+        if (line) say(line);
+        // an old-code wrapper still writing a legacy file: fold its new rows in every minute until it lets go
+        startAdoptionCatchUp((l) => console.log(l));
+      } catch (e) {
+        console.error(`[data-root] adoption failed: ${e instanceof Error ? e.message : e}`);
+      }
+    });
   }
 }
 
@@ -216,7 +222,9 @@ if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token ke
 // every answer it froze, and in the log as [stall] — ownership has nothing to do with it.
 startStallMonitor();
 startBackgroundLock();
-onBackgroundOwnership(() => {
+// the poller, dispatcher and keepers write the central DB: they start once the legacy rows are in (at once when there
+// is nothing to adopt, or this is not the live API). Registered after, since an owner runs the callback immediately.
+void adoption.then(() => onBackgroundOwnership(() => {
   // Always running, self-gating on assistive-play's own "Study Answers" toggle
   // (see services/studyPoller.ts) — that toggle is the single control; no
   // separate start step needed for normal use.
@@ -237,11 +245,11 @@ onBackgroundOwnership(() => {
 
   // Checks every hand archived from here on against Ignition's own hand history (services/hhCheck.ts).
   if (!dashboardOnly) hhChecker.start();
-});
+}));
 
 // The ledger's job runner: one job per lane at a time, logs under data/jobs/. The timer always runs
 // (the routes read job rows through it); its dispatch tick is what the lock gates.
-if (!playerMode) jobs.start();
+if (!playerMode) void adoption.then(() => jobs.start());
 
 export default {
   port,

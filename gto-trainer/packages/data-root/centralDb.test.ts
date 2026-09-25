@@ -211,3 +211,82 @@ describe("the watermark belongs to its destination", () => {
     expect(real.query("SELECT COUNT(*) n FROM answers").get()).toEqual({ n: 3 });
   });
 });
+
+describe("chunked adoption (2026-09-26: a 123 MB copy in one transaction, before the port was open, got the API killed twice)", () => {
+  test("a process killed half way keeps its committed chunks; the next start resumes from the watermark, rowids kept", async () => {
+    const { adoptSteps } = await import("./centralDb");
+    const d = tmp();
+    const answers = legacyAnswers(d, 10);
+    const central = new Database(join(d, "poker.sqlite"));
+    const out = { notes: [], retired: [], stillOpen: [], errors: [] };
+    const steps = adoptSteps(central, [{ file: answers, tables: ["answers"] }], out, { chunkRows: 3 });
+    steps.next();
+    steps.next();                                            // two chunks committed ...
+    steps.return(undefined);                                 // ... then the process dies
+    expect(central.query("SELECT COUNT(*) n FROM answers").get()).toEqual({ n: 6 });
+    const r = adoptLegacy(central, [{ file: answers, tables: ["answers"] }], { chunkRows: 3 });
+    expect(r.notes).toEqual([{ file: answers, table: "answers", copied: 4, preservedIds: true }]);
+    expect(central.query("SELECT id, solve_id FROM answers ORDER BY id").all().map((x: any) => [x.id, x.solve_id]))
+      .toEqual(Array.from({ length: 10 }, (_, i) => [i + 1, 101 + i]));
+  });
+
+  test("a row written by the serving API mid-adoption: no collision, the rest go over with new rowids", async () => {
+    const { adoptSteps } = await import("./centralDb");
+    const d = tmp();
+    const answers = legacyAnswers(d, 6);
+    const central = new Database(join(d, "poker.sqlite"));
+    const out = { notes: [] as any[], retired: [], stillOpen: [], errors: [] as string[] };
+    const steps = adoptSteps(central, [{ file: answers, tables: ["answers"] }], out, { chunkRows: 2 });
+    steps.next();                                            // rows 1-2, rowids kept
+    central.run(`INSERT INTO answers (ts, client_hand_id) VALUES (99, 'live-write')`);   // gets id 3
+    for (const _ of steps) { /* drain */ }
+    expect(out.errors).toEqual([]);
+    expect(out.notes).toEqual([{ file: answers, table: "answers", copied: 6, preservedIds: false }]);
+    const rows = central.query("SELECT id, client_hand_id FROM answers ORDER BY id").all().map((x: any) => [x.id, x.client_hand_id]);
+    expect(rows.slice(0, 3)).toEqual([[1, "h1"], [2, "h2"], [3, "live-write"]]);
+    expect(rows.map((r) => r[1]).sort()).toEqual(["h1", "h2", "h3", "h4", "h5", "h6", "live-write"]);
+  });
+
+  test("the async adoption gives the event loop a turn between chunks", async () => {
+    const { adoptLegacyAsync } = await import("./centralDb");
+    const d = tmp();
+    const answers = legacyAnswers(d, 40);
+    const central = new Database(join(d, "poker.sqlite"));
+    let turns = 0;
+    const iv = setInterval(() => turns++, 0);
+    const probe = new Promise<number>((r) => setImmediate(() => r(Date.now())));
+    const r = await adoptLegacyAsync(central, [{ file: answers, tables: ["answers"] }], { chunkRows: 4 });
+    clearInterval(iv);
+    expect(await probe).toBeGreaterThan(0);                  // a callback queued at the start ran before the end
+    expect(turns).toBeGreaterThan(0);
+    expect(r.notes[0]!.copied).toBe(40);
+  });
+});
+
+describe("startAdoptionCatchUp is cheap when nothing moved", () => {
+  test("a held-open legacy file nobody writes is not re-opened every pass; a new row is still picked up", async () => {
+    const { startAdoptionCatchUp, _setStillOpenForTests } = await import("./centralDb");
+    const f = join(tmp(), "answers.sqlite");
+    const held = new Database(f);                            // an old-code process holding it (Windows: no rename)
+    held.run(`CREATE TABLE answers (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, client_hand_id TEXT)`);
+    held.run(`INSERT INTO answers (ts, client_hand_id) VALUES (1, 'catchup-a')`);
+    _setStillOpenForTests([f]);
+    let looked = 0;
+    const lines: string[] = [];
+    const stop = startAdoptionCatchUp((x) => lines.push(x), 40, () => { looked++; return { db: [{ file: f, tables: ["answers"] }], jsonl: [] }; });
+    await new Promise((r) => setTimeout(r, 400));
+    const idle = looked;
+    held.run(`INSERT INTO answers (ts, client_hand_id) VALUES (2, 'catchup-b')`);
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    held.close();
+    const db = new Database(centralDbPath(), { readonly: true });
+    const got = db.query("SELECT client_hand_id FROM answers WHERE client_hand_id LIKE 'catchup-%' ORDER BY client_hand_id").all();
+    db.close();
+    if (process.platform === "win32") {
+      expect(idle).toBe(1);                                  // ~10 passes, one look
+      expect(looked).toBe(2);                                // the write moved the file: looked once more
+    }
+    expect(got).toEqual([{ client_hand_id: "catchup-a" }, { client_hand_id: "catchup-b" }]);
+  });
+});
