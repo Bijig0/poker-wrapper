@@ -3238,10 +3238,21 @@ async function catNode(id, seat, line) {
 /* ================= Ledger: formats · configs · plans · jobs ================= */
 let LG = null, lgJobTimer = null, lgOpenLog = null;
 const minsStr = (m) => m >= 48 * 60 ? `${(m / 1440).toFixed(m >= 14400 ? 0 : 1)} days` : m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)} h` : `${Math.round(m)} min`;
+/* The ledger's live polls (the proposals page every 4 s, the progress page every 5 s) run only while the tab is
+   on screen. On 2026-09-25 a background Proposals tab re-read the ~900 KB /api/ledger every ~7 s and blocked the
+   study API's event loop — the one answering live decisions — for 3-13 s a time. A poll that comes due while the
+   tab is hidden is parked here and runs once when the tab is shown again; route() drops it on any navigation. */
+let lgParked = null;
+function lgWhenVisible(fn) { if (document.hidden) lgParked = fn; else fn(); }
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !lgParked) return;
+  const fn = lgParked; lgParked = null; fn();
+});
 async function loadLedger() {
   const v = $("view-ledger");
   if (!LG) v.innerHTML = '<div class="card sub">loading the ledger…</div>';
   try { LG = await (await fetch("/api/ledger")).json(); } catch (e) { v.innerHTML = '<div class="card warn">ledger unavailable</div>'; return; }
+  if (PATH.view !== "ledger") return; // left the ledger while the read was in flight: nothing to draw, nothing to re-arm
   if (!LG.ok) { v.innerHTML = '<div class="card warn">ledger unavailable</div>'; return; }
   if ((PATH.pane === "runbook" || PATH.pane === "plan") && PATH.id) { await renderRunbook(PATH.id); return; }
   if (PATH.pane === "ledger") { renderLedger(); return; }
@@ -3249,7 +3260,7 @@ async function loadLedger() {
   if (PATH.pane === "progress" && PATH.id) { await renderProgress(PATH.id); return; }
   renderProposalPage();
   clearTimeout(lgJobTimer);
-  if ((LG.jobs || []).some((j) => j.status === "running" || j.status === "queued")) lgJobTimer = setTimeout(loadLedger, 4000);
+  if ((LG.jobs || []).some((j) => j.status === "running" || j.status === "queued")) lgJobTimer = setTimeout(() => lgWhenVisible(loadLedger), 4000);
 }
 function renderLedger() {
   const v = $("view-ledger"), L = LG;
@@ -3447,7 +3458,7 @@ async function renderProgress(id) {
       <span class="pbar wide"><i class="${R.live ? "live" : ""}" style="width:${pct}%"></i></span></div>
     ${R.parts.map((p, k) => `<h2 class="sub" style="text-transform:uppercase;letter-spacing:.6px;margin:12px 0 4px">Part ${k + 1} · ${esc(p.title)}</h2>${p.configs.map(pgConfig).join("")}`).join("")}`;
   document.title = `Progress · ${R.run} · Study Dashboard`;
-  pgTimer = setTimeout(() => { if (PATH.view === "ledger" && PATH.pane === "progress" && PATH.id === id) renderProgress(id); }, R.live ? 5000 : 30000);
+  pgTimer = setTimeout(() => { if (PATH.view === "ledger" && PATH.pane === "progress" && PATH.id === id) lgWhenVisible(() => renderProgress(id)); }, R.live ? 5000 : 30000);
 }
 function renderOperatorDetail() {
   const v = $("view-ledger"), L = LG;
@@ -5349,6 +5360,9 @@ function go(path) {
 }
 function route() {
   if (PLAY) { clearInterval(PLAY); PLAY = null; }
+  // the ledger's polls belong to the page that armed them: every navigation stops them (the ledger view re-arms
+  // its own below). Before, leaving for Hands or Home kept the 4 s /api/ledger re-read going behind a hidden view.
+  clearTimeout(lgJobTimer); clearTimeout(pgTimer); lgParked = null;
   PATH = parsePath();
   const want = canonical(PATH);
   if (location.pathname + location.search + location.hash !== want) history.replaceState({}, "", want);
