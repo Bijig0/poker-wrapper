@@ -4,7 +4,7 @@ import { evaluate, loadLedger, updateLedger, expectedChartIds, isBoxGrid, BOX_GR
 import { runbookFor, hrcJobsFor, type Runbook } from "./runbook";
 import { getCatalog } from "./chartCatalog";
 import { jobs } from "./jobs";
-import { chartStates, runEstimate, type ChartState, type DirListing } from "./chartProgress";
+import { chartStates, runEstimate, progressScope, type ChartState } from "./chartProgress";
 
 /**
  * PROPOSALS — the run at the level Brady reads: WHAT is being worked on,
@@ -45,8 +45,8 @@ export function proposals(ev: Evaluation = evaluate()): Proposal[] {
   const byId = new Map(ev.configs.map((c) => [c.id, c]));
   let catalogIds = new Set<string>();
   try { catalogIds = new Set((getCatalog().entries as any[]).map((e) => String(e.id))); } catch { /* none */ }
+  const scope = progressScope();   // the chart dirs, the job table and the catalog ids, read once for every config below
   const jobList = jobs.list(200);
-  const dirs: DirListing = new Map();   // the chart dirs, listed once for every config below
   const liveJob = (cfg: string) => jobList.find((x) => x.config === cfg && (x.status === "queued" || x.status === "running")) ?? null;
   /** the most recent job for a config (any status) + its last meaningful log line = the phase shown live */
   const liveOf = (cfg: string) => {
@@ -82,7 +82,7 @@ export function proposals(ev: Evaluation = evaluate()): Proposal[] {
           // hand-written lines (uneven-stack batches, the 4-handed pieces): status from the config
           let from = 0;
           const allIds = expectedChartIds(c, fmt);
-          const allStates: ChartState[] = allIds.length ? chartStates(c, allIds, dirs) : [];
+          const allStates: ChartState[] = allIds.length ? chartStates(c, allIds, scope) : [];
           const stateOf = new Map(allStates.map((x) => [x.id, x]));
           for (const w of c.work) {
             // a batch of solves (uneven-stack states, 6-max trees): its own chart ids — done in the catalog, solving on a box, queued
@@ -96,7 +96,7 @@ export function proposals(ev: Evaluation = evaluate()): Proposal[] {
             work.push({ n: n++, what: `${w.what}${progress}`, how: w.how, minutes: w.minutes, ref: ids.length ? ids.join(" ") : (w.solves && w.solves > 1 ? Array(w.solves).fill("·").join(" ") : undefined), status: batchStatus, doneCharts: ids.length ? done : undefined,
             data: c.kind === "preflop-grid-asym" ? { kind: "asym", config: c.id, from, to: from + (w.solves ?? 0) } : c.kind === "opponent-model" ? { kind: "pool", config: c.id, file: c.produces[0] ? join(LIMP, c.produces[0]) : undefined } : c.kind === "exploit-export" ? { kind: "exploit", config: c.id, file: c.produces[0] ? join(LIMP, c.produces[0]) : undefined } : ids.length ? { kind: "charts", config: c.id, ids } : { kind: "none", config: c.id },
             ...(running.length ? { live: { job: liveJob(c.id)?.id ?? 0, lane: `hrc-box:${[...new Set(running.map((r) => r.box))].join("+")}`, status: "running", started: null, ended: null, phase: running.map((r) => `${r.box}: ${short(r.id)}${r.phase ? ` · ${r.phase}` : ""}${r.sinceMin != null ? ` · ${r.sinceMin} min` : ""}`).join(" · ").slice(0, 240) } } : {}) }); from += w.solves ?? 0; }
-          if (allIds.length && (isBoxGrid(c) || c.kind === "locked-root" || c.kind === "preflop-grid-asym")) measured.push({ label: c.label, est: runEstimate(c, allStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1)) });
+          if (allIds.length && (isBoxGrid(c) || c.kind === "locked-root" || c.kind === "preflop-grid-asym")) measured.push({ label: c.label, est: runEstimate(c, allStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1), scope) });
           if (c.effective === "blocked" && c.blockedWhy) blocked.push(c.blockedWhy);
         } else if (c.kind === "preflop-grid" || c.kind === "locked-root") {
           const t = c.tree ? L.trees[c.tree] : null;
@@ -104,10 +104,10 @@ export function proposals(ev: Evaluation = evaluate()): Proposal[] {
           const H = hrcJobsFor(c, fmt, t);
           const rungs = (c.depths && c.depths.length) ? c.depths : fmt.depths;
           // per chart: done in the catalog, solved on a box (pulling), solving now (which box, how long), queued
-          const hStates = chartStates(c, H.jobs.map((j) => j.id), dirs); const hState = new Map(hStates.map((x) => [x.id, x]));
+          const hStates = chartStates(c, H.jobs.map((j) => j.id), scope); const hState = new Map(hStates.map((x) => [x.id, x]));
           const shortId = (id: string) => id.replace(/^ign\d+_(6max|3max\w*|4max\w*)_/, "");
           const liveFor = (ids: string[]) => { const r = ids.map((id) => hState.get(id)!).filter((x) => x && x.state === "running"); return r.length ? { job: liveJob(c.id)?.id ?? 0, lane: `hrc-box:${[...new Set(r.map((x) => x.box))].join("+")}`, status: "running", started: null, ended: null, phase: r.map((x) => `${x.box}: ${shortId(x.id)}${x.phase ? ` · ${x.phase}` : ""}${x.sinceMin != null ? ` · ${x.sinceMin} min` : ""}`).join(" · ").slice(0, 240) } : undefined; };
-          if (c.kind === "locked-root" || c.kind === "preflop-grid") measured.push({ label: c.label, est: runEstimate(c, hStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1)) });
+          if (c.kind === "locked-root" || c.kind === "preflop-grid") measured.push({ label: c.label, est: runEstimate(c, hStates, Number((c as any).lanes ?? (L as any).machines?.[c.runner] ?? 1), scope) });
           if (c.kind === "locked-root" && rungs.length > 1) {
             // many rungs: one line per rung, not one per lock
             const locksTxt = (c.locks ?? []).map((l) => (l.size === "limp" ? `${l.pos} limp` : `${l.pos} ${l.size}bb`)).join(", ");

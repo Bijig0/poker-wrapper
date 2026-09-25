@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { HRC_API, REPO, isBoxGrid, type LedgerConfig } from "./ledger";
-import { jobs, HRC_API_ZENBOOK } from "./jobs";
+import { jobs, HRC_API_ZENBOOK, type JobRow } from "./jobs";
 import { boxKeeper } from "./boxKeeper";
 import { getCatalog } from "./chartCatalog";
 
@@ -33,12 +33,23 @@ export function chartDirs(c: LedgerConfig): string[] {
 const SOLUTIONS = join(REPO, "analysis", "pipeline", "solve", "exploit_ui", "solutions");
 
 /**
- * The file names of each chart dir, listed once per request (one `DirListing` handed to every chartStates call of a
- * page) instead of an existsSync per id × extension × dir: 1,562 ids × up to 12 probes was 0.7 s of blocked event loop
- * on every poll of the proposals page (2026-09-26). Not cached across requests: a dir's mtime does not track the chart
- * files landing in it. Names compare the way the file system does (case-blind on Windows), as existsSync did.
+ * What one request reads ONCE and every chartStates / runEstimate / boxActivity call of it shares (2026-09-26: the
+ * proposals page, polled every few seconds, spent most of its blocked event loop re-reading these per config):
+ *   dirs  the file names of each chart dir, instead of an existsSync per id × extension × dir (1,562 ids × up to 12
+ *         probes was 0.7 s a poll). Names compare the way the file system does (case-blind on Windows), as existsSync did.
+ *   jobs  the newest 300 job rows, instead of 2-3 jobs.list() calls per config, each parsing every row's steps.
+ *   cat   the catalog's chart ids.
+ * Nothing is cached ACROSS requests: a dir's mtime does not track the chart files landing in it.
  */
 export type DirListing = Map<string, Set<string>>;
+export interface ProgressScope { dirs: DirListing; jobs?: JobRow[]; cat?: Set<string> }
+export const progressScope = (): ProgressScope => ({ dirs: new Map() });
+/** jobs.list(n), from the scope's one read when there is one (the list is newest first, so the first n of 300 ARE list(n)) */
+function jobRows(n: number, scope?: ProgressScope): JobRow[] {
+  if (!scope || n > 300) return jobs.list(n);
+  scope.jobs ??= jobs.list(300);
+  return scope.jobs.slice(0, n);
+}
 const nameKey = process.platform === "win32" ? (s: string) => s.toLowerCase() : (s: string) => s;
 function has(dir: string, name: string, memo: DirListing | undefined): boolean {
   if (!memo) return existsSync(join(dir, name));
@@ -46,19 +57,30 @@ function has(dir: string, name: string, memo: DirListing | undefined): boolean {
   if (!s) { try { s = new Set(readdirSync(dir).map(nameKey)); } catch { s = new Set(); } memo.set(dir, s); }
   return s.has(nameKey(name));
 }
-export function chartFile(c: LedgerConfig, id: string, memo?: DirListing): { path: string; mtimeMs: number } | null {
-  const at = (d: string, name: string) => { const p = join(d, name); try { return { path: p, mtimeMs: statSync(p).mtimeMs }; } catch { return { path: p, mtimeMs: 0 }; } };
-  for (const ext of [".json.gz", ".json"]) if (has(SOLUTIONS, `${id}${ext}`, memo)) return at(SOLUTIONS, `${id}${ext}`);
-  for (const d of chartDirs(c)) for (const ext of [".charts.json.gz", ".charts.json"]) if (has(d, `${id}${ext}`, memo)) return at(d, `${id}${ext}`);
+/** Where a chart's file is on this machine, or null. */
+export function chartPath(c: LedgerConfig, id: string, memo?: DirListing): string | null {
+  for (const ext of [".json.gz", ".json"]) if (has(SOLUTIONS, `${id}${ext}`, memo)) return join(SOLUTIONS, `${id}${ext}`);
+  for (const d of chartDirs(c)) for (const ext of [".charts.json.gz", ".charts.json"]) if (has(d, `${id}${ext}`, memo)) return join(d, `${id}${ext}`);
   return null;
 }
+const mtimeOf = (p: string): number => { try { return statSync(p).mtimeMs; } catch { return 0; } };
+export function chartFile(c: LedgerConfig, id: string, memo?: DirListing): { path: string; mtimeMs: number } | null {
+  const p = chartPath(c, id, memo);
+  return p ? { path: p, mtimeMs: mtimeOf(p) } : null;
+}
 
-function catalogIds(): Set<string> { try { return new Set((getCatalog().entries as any[]).map((e) => String(e.id))); } catch { return new Set(); } }
+function catalogIds(scope?: ProgressScope): Set<string> {
+  if (scope?.cat) return scope.cat;
+  let ids: Set<string>;
+  try { ids = new Set((getCatalog().entries as any[]).map((e) => String(e.id))); } catch { ids = new Set(); }
+  if (scope) scope.cat = ids;
+  return ids;
+}
 
 /** What every live box job of a config is doing right now, read from its log: the chart it is refining, the last one parsed. */
-export function boxActivity(configId: string): { lane: string; box: string; status: string; solving: string | null; lastDone: string | null; progress: string | null }[] {
+export function boxActivity(configId: string, scope?: ProgressScope): { lane: string; box: string; status: string; solving: string | null; lastDone: string | null; progress: string | null }[] {
   const out: ReturnType<typeof boxActivity> = [];
-  for (const j of jobs.list(200)) {
+  for (const j of jobRows(200, scope)) {
     if (j.config !== configId || (j.status !== "running" && j.status !== "queued")) continue;
     const tail = jobs.logTail(j.id, 600).split("\n");
     const last = (re: RegExp) => { for (let i = tail.length - 1; i >= 0; i--) { const m = tail[i]!.match(re); if (m) return m[1] ?? m[0]; } return null; };
@@ -67,9 +89,9 @@ export function boxActivity(configId: string): { lane: string; box: string; stat
   return out;
 }
 
-/** The state of each chart id of a config, now. `dirs`: the request's chart-dir listing, shared by all its configs. */
-export function chartStates(c: LedgerConfig, ids: string[], dirs: DirListing = new Map()): ChartState[] {
-  const cat = catalogIds();
+/** The state of each chart id of a config, now. `scope`: what the request has already read, shared by all its configs. */
+export function chartStates(c: LedgerConfig, ids: string[], scope: ProgressScope = progressScope()): ChartState[] {
+  const cat = catalogIds(scope);
   const K = boxKeeper.status() as any;
   const probes: [string, any][] = [...Object.entries(K.boxes ?? {}), ...Object.entries(K.linux ?? {})];
   const running = new Map<string, { box: string; sinceMin: number | null; phase: string }>();
@@ -78,13 +100,13 @@ export function chartStates(c: LedgerConfig, ids: string[], dirs: DirListing = n
     for (const z of (p.zips ?? []) as { id: string; at: number }[]) if (!zips.has(z.id) || zips.get(z.id)!.at < z.at) zips.set(z.id, { box: label, at: z.at });
     if (p.current && !zips.has(p.current)) running.set(p.current, { box: label, sinceMin: p.currentSinceMin ?? null, phase: p.currentPhase ?? "refining" });
   }
-  for (const a of boxActivity(c.id)) if (a.solving && !running.has(a.solving) && !zips.has(a.solving)) running.set(a.solving, { box: a.box, sinceMin: null, phase: a.progress ?? "refining" });
+  for (const a of boxActivity(c.id, scope)) if (a.solving && !running.has(a.solving) && !zips.has(a.solving)) running.set(a.solving, { box: a.box, sinceMin: null, phase: a.progress ?? "refining" });
   const prog = isBoxGrid(c) ? (readJson(join(sixMaxDir(c), "progress.json")) ?? {}) : {};
   // a second refinement pass: the catalog already holds every id (first pass), so done = this pass's own pull / parse,
   // and a zip or a running tree counts only if it is newer than the pass's first job
   const pass2 = c.env?.PASS2 === "1";
   const week = Date.now() - 7 * 86_400_000;
-  const passJobs = pass2 ? jobs.list(300).filter((j) => j.config === c.id && j.created > week) : [];
+  const passJobs = pass2 ? jobRows(300, scope).filter((j) => j.config === c.id && j.created > week) : [];
   const passStart = pass2 ? Math.min(...passJobs.map((j) => j.started ?? j.created), Infinity) : 0;
   // a second-pass tree is "running" only on a box whose second-pass job is actually running (not waiting for its inputs)
   const passLanes = new Set(passJobs.filter((j) => j.status === "running" && !j.waitInputs).map((j) => j.lane.split(":").pop()));
@@ -96,9 +118,13 @@ export function chartStates(c: LedgerConfig, ids: string[], dirs: DirListing = n
       const r = running.get(id); if (r && passLanes.has(r.box)) return { id, state: "running", box: r.box, sinceMin: r.sinceMin, phase: r.phase };
       return { id, state: "queued" };
     }
-    const f = chartFile(c, id, dirs);
-    if (cat.has(id) || f) { const z = zips.get(id); const pr = prog[id]; return { id, state: "done", box: pr?.box ?? z?.box, at: pr?.solvedAt ?? (z ? z.at * 1000 : f?.mtimeMs ?? null) }; }
-    const z = zips.get(id); if (z) return { id, state: "solved", box: z.box, at: z.at * 1000 };
+    // when it landed: the pull record, else the box's zip, else the file's mtime — stat only when the first two are silent
+    // (a stat per catalogued chart was most of what was left of the proposals page, 2026-09-26)
+    const z = zips.get(id), pr = prog[id];
+    const known: number | undefined = pr?.solvedAt ?? (z ? z.at * 1000 : undefined);
+    const path = cat.has(id) && known !== undefined ? null : chartPath(c, id, scope.dirs);
+    if (cat.has(id) || path) return { id, state: "done", box: pr?.box ?? z?.box, at: known !== undefined ? known : path ? mtimeOf(path) : null };
+    if (z) return { id, state: "solved", box: z.box, at: z.at * 1000 };
     const r = running.get(id); if (r) return { id, state: "running", box: r.box, sinceMin: r.sinceMin, phase: r.phase };
     return { id, state: "queued" };
   });
@@ -111,12 +137,12 @@ export interface RunEstimate { done: number; solved: number; running: number; to
 /** Measured pace of a config's run. Per machine, a chart's time is the gap between that box's consecutive finished charts
  *  (the first one counted from the run's start); when the boxes are not known (3-max pulls), throughput over the window
  *  from the first to the last finished chart, needing 3+ charts. */
-export function runEstimate(c: LedgerConfig, states: ChartState[], lanes: number): RunEstimate {
+export function runEstimate(c: LedgerConfig, states: ChartState[], lanes: number, scope?: ProgressScope): RunEstimate {
   const total = states.length;
   const done = states.filter((s) => s.state === "done").length, solved = states.filter((s) => s.state === "solved").length, running = states.filter((s) => s.state === "running").length;
   const left = total - done - solved;
   const week = Date.now() - 7 * 86_400_000;
-  const js = jobs.list(300).filter((j) => j.config === c.id && j.created > week);
+  const js = jobRows(300, scope).filter((j) => j.config === c.id && j.created > week);
   const live = js.some((j) => j.status === "running" || j.status === "queued");
   const runStart = js.length ? Math.min(...js.map((j) => j.started ?? j.created)) : null;
   const finished = states.filter((s) => (s.state === "done" || s.state === "solved") && s.at && runStart && s.at > runStart).sort((a, b) => a.at! - b.at!);
