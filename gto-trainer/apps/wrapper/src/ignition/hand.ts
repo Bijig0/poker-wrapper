@@ -12,6 +12,7 @@ import { CP, S, isCp } from "../state";
 import { C } from "../config";
 import * as TABLES from "../tables";
 import { potVal } from "./dom";
+import { withoutRabbit } from "./ws";
 
 const ws = () => S.ws;
 
@@ -266,7 +267,8 @@ export function handStateIgnition(): Record<string, any> | null {
   const pastGrace = time() >= (w.domGraceUntil ?? 0);
   const hasVoluntary = actsSrc.some((a) => a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post");
   if (pastGrace) {
-    const domBoard = (S.liveStatus.board || []).filter((c: any) => c).map(short);
+    // the screen's board fills a board frame the tap lost — never with the rabbit hunt's card (ws.ts withoutRabbit)
+    const domBoard = withoutRabbit((S.liveStatus.board || []).filter((c: any) => c).map(short));
     if (hasVoluntary && [3, 4, 5].includes(domBoard.length) && domBoard.length > board.length) board = domBoard;
   }
   const street = board.length >= 5 ? "river" : board.length === 4 ? "turn" : board.length === 3 ? "flop" : "preflop";

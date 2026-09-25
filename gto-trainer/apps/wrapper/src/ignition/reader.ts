@@ -19,7 +19,7 @@ import {
   awardName, bankStep, boardCards, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, dumpMark, lastStanding, mkey, tapVerify } from "./ws";
+import { actAdd, actSeen, boardCap, dumpMark, lastStanding, mkey, tapVerify, withoutRabbit } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -350,7 +350,7 @@ export async function feedTick(): Promise<void> {
       const potGrew = potAtPrompt !== null && potBeforeWipe !== null && potBeforeWipe > potAtPrompt + 0.05;
       if (ours && heroSeat !== null && !w.heroFolded && time() - toActAt <= 3.0 && actedAt < toActAt
           && !showdown && !potGrew && !actSeen(["fold", heroSeat])) {
-        const nb = p.board || 0;
+        const nb = Math.min(p.board || 0, boardCap());    // a rabbit-hunt card on screen is no street (ws.ts)
         const streetPrev = nb >= 5 ? "river" : nb === 4 ? "turn" : nb === 3 ? "flop" : "preflop";
         w.heroFolded = true;
         (w.foldedSeats ??= new Set<number>()).add(heroSeat);
@@ -360,7 +360,8 @@ export async function feedTick(): Promise<void> {
       prevSeats = new Map();
     }
     const domCents = (v: number | null) => (bbKnown && v !== null ? pyRound(v * bbc) : null);
-    const streetDom = bc.length >= 5 ? "river" : bc.length === 4 ? "turn" : bc.length === 3 ? "flop" : "preflop";
+    const nd = withoutRabbit(bc).length;               // the backfill's street stamp: never the rabbit card's street
+    const streetDom = nd >= 5 ? "river" : nd === 4 ? "turn" : nd === 3 ? "flop" : "preflop";
     L.board = [...bc];
     const foldedSeats: Set<number> = (w.foldedSeats ??= new Set<number>());
     let prevMax = 0.0;

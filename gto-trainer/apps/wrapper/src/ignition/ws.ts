@@ -30,12 +30,53 @@ const ws = () => S.ws;
 /** The archive call a test replaces (Python's tests stubbed launch._archive_hand). */
 export const wsSeams = { archiveHand: () => archiveHand() };
 
-/** The street, from how FAR the board reaches (a dropped flop message leaves [null, null, null, 'Ts']). */
-export function streetNow(): string {
+/** How FAR the WebSocket's board reaches: the last position a board frame filled (a dropped flop message leaves
+ *  [null, null, null, 'Ts'], which reaches 4). */
+function boardReach(): number {
   const b: (string | null)[] = ws().board || [];
   let n = 0;
   b.forEach((c, i) => { if (c) n = Math.max(n, i + 1); });
+  return n;
+}
+
+/** The street, from how far the board reaches. */
+export function streetNow(): string {
+  const n = boardReach();
   return n >= 5 ? "river" : n === 4 ? "turn" : n === 3 ? "flop" : "preflop";
+}
+
+/**
+ * THE RABBIT HUNT IS NOT A STREET (2026-09-25, hand 4920544353). When a hand ends before the river, Ignition turns over
+ * the card that would have come next — CO_RABBITCARD_INFO {pos, card}, after the pot award (CO_RESULT_INFO /
+ * CO_POT_INFO), one card, pos 4 or 5 — and the client draws it in the board's own slot, where a DOM read cannot tell it
+ * from a card dealt (same qa, same place). It never was: nobody acted on it. `board` is a board as the DOM shows it; the
+ * hand's own cards are the ones before the first rabbit position — cut by POSITION, not by card, so a board frame the tap
+ * lost still counts (a dropped turn frame with a river rabbit keeps the DOM's turn). The whole board when the table named
+ * no rabbit card this hand. Until this, the export's DOM-board override archived the rabbit card as the hand's turn or
+ * river (24 archived hands confirmed against their frames) and the level reconciler revived the ended hand on it.
+ *
+ * A rabbit card must lie PAST every card the hand dealt, and a board frame at or past its position takes it back: on a
+ * stream mixing two tables (recording 20260920_131406) another table's rabbit at pos 4 arrived just before our own turn
+ * frame — our DOM showed that turn, and a rabbit taken on trust would have cut it.
+ */
+export function withoutRabbit<T>(board: T[]): T[] {
+  const cap = boardCap();
+  return board.length > cap ? board.slice(0, cap) : board;
+}
+
+/** How many board cards this hand can have been dealt: 5, or the cards before the first rabbit position. */
+export function boardCap(): number {
+  const r: Map<number, string> | undefined = ws().rabbit;
+  return r && r.size ? Math.min(...r.keys()) - 1 : 5;
+}
+
+/** A board frame reached `reach`: a rabbit card at or before it was not this hand's. */
+function rabbitDealt(reach: number): void {
+  const w = ws();
+  const r: Map<number, string> | undefined = w.rabbit;
+  if (!r) return;
+  for (const p of [...r.keys()]) if (p <= reach) r.delete(p);
+  if (!r.size) delete w.rabbit;
 }
 
 /** A hand's streets only ever go FORWARD: a defaulted stamp is clamped to the furthest street reached. */
@@ -551,6 +592,7 @@ export function beginHand(hid: string | null): void {
   w.heroDealt = null;
   w.domGraceUntil = time() + 2.5;
   w.bbSeen = false;
+  delete w.rabbit;                 // the rabbit hunt's card by board position (withoutRabbit) — only set by its frame
   feedAdd("───── new hand ─────");
   if (hid) feedAdd(`(hand id ${hid})`);
 }
@@ -662,6 +704,7 @@ export function onGameMsg(d: Record<string, any>): void {
       w.wsFront = new Map();
       w.actSeen = new TupleSet();
       w.domGraceUntil = time() + 1.2;
+      rabbitDealt(3);
       feedAdd(`— FLOP — ${names.join(" ")} — pot ${w.pot || "?"}`);
     }
   } else if (pid === "CO_BCARD1_INFO") {
@@ -678,8 +721,19 @@ export function onGameMsg(d: Record<string, any>): void {
     w.wsFront = new Map();
     w.actSeen = new TupleSet();
     w.domGraceUntil = time() + 1.2;
+    rabbitDealt(pos);
     const street = pos === 4 ? "TURN" : "RIVER";
     feedAdd(`— ${street} — ${shown.join(" ")} — pot ${w.pot || "?"}`);
+  } else if (pid === "CO_RABBITCARD_INFO") {
+    // the card the next street would have been, shown after the award — kept apart from the board (withoutRabbit)
+    const pos = Number(d.pos) || 0;
+    const name = wireCard(d.card === undefined || d.card === null ? "None" : pyStr(d.card));
+    if (!name || !(pos >= 1 && pos <= 5)) return;
+    if (pos <= boardReach()) {
+      dumpMark(`dropped: rabbit card at board position ${pos}, which this hand dealt (another table's frame?)`);
+      return;
+    }
+    (w.rabbit ??= new Map<number, string>()).set(pos, name);
   } else if (pid === "CO_CURRENT_PLAYER") {
     w.actionOn = d.seat ?? null;
     if (d.seat !== null && d.seat !== undefined && d.seat !== w.heroSeat) w.heroTurn = null;
