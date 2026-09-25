@@ -457,6 +457,59 @@ export async function fitsCachedTree(
   return { ok: true, labels: out, note: snaps.length ? snaps.join(", ") : `every wager is on it (${labels.filter(isWager).join(", ")})` };
 }
 
+/**
+ * HERO'S OWN SIZE SNAPS TO THE TREE HE WAS ASKED ON (round 3, 2026-09-25; chainReuseStress hand 4920429872). Hero
+ * check-raised the flop to 4.8 — the client's rounding of the tree's own 4.7 (32.3% of the pot where the tree's raise was
+ * its pinned 31.6%) — and at the turn the chain re-created the whole flop tree with both sizes pinned ("fixed sizes
+ * [31.6%]→[31.6%,32.3%]") and walked it from the root: one more cloud solve, and a flop re-walk, for a rounding
+ * difference in hero's OWN executed pick. A size hero chose off the tree he was shown is that tree's size, played.
+ *
+ * So when the street's LAST wager is hero's, and it is within the walk's tolerance (matchActionLoose: 5% or 0.15bb, the
+ * all-in fallback excluded) of a size the tree he was asked on offers at his node, the street stays on THAT tree — the
+ * one keyed on the levels pinned before his wager, already in the cache — and hero's action is read as the tree's size
+ * (the pot rolls forward with it, as the size-free reuse does). Only when that tree is cached: it was created when hero
+ * was asked, so a miss means another process or an evicted cache, and the size is pinned as played. VILLAIN sizes keep
+ * their behaviour (a villain's off-tree size is the table's fact and pins a new tree), and a hero wager followed by a
+ * villain's is not touched (the new level needs a tree of its own anyway). A heads-up street whose first wager is hero's
+ * was asked on the size-free tree, which the reuse above already covers. Pure over its getters.
+ */
+export async function fitsHeroAskedTree(
+  labels: string[],
+  actors: number[],
+  heroIdx: number,
+  pot: number,
+  stack: number,
+  peekSolution: (levels: string[]) => string | null,
+  peek: (solId: string, codes: string) => any | null,
+  fetchOne: (solId: string, codes: string) => Promise<any | null>,
+): Promise<{ ok: true; labels: string[]; levels: string[]; want: number; got: number; note: string } | { ok: false; why: string | null }> {
+  const isWager = (l: string) => /\(/.test(l);
+  let last = -1;
+  labels.forEach((l, i) => { if (isWager(l)) last = i; });
+  if (last < 0 || actors[last] !== heroIdx) return { ok: false, why: null };        // no wager, or a villain's: as before
+  const prefix = labels.slice(0, last);
+  if (!prefix.some(isWager)) return { ok: false, why: null };                        // asked on the size-free tree
+  const want = wagerBb(labels[last]!)!;
+  let levels: string[];
+  try {
+    levels = streetFixedPcts(prefix, pot, actors.slice(0, last)).pcts;
+  } catch {
+    return { ok: false, why: null };
+  }
+  const solId = peekSolution(levels);
+  if (!solId) return { ok: false, why: `the tree hero was asked on (fixed [${levels.join(",")}]) is not cached — his ${want} is pinned as played` };
+  const fit = await fitsCachedTree(solId, labels, stack, (c) => peek(solId, c), (c) => fetchOne(solId, c));
+  if (!fit.ok) return { ok: false, why: `hero's ${want} is not on the tree he was asked on (${fit.why}) — pinned as played` };
+  const got = wagerBb(fit.labels[last]!)!;
+  // the loose match's ALL-IN fallback (a raise at 60%+ of the stack taken as the shove) is a different action for hero
+  if (!(Math.abs(got - want) <= Math.max(0.05 * want, 0.15))) {
+    return { ok: false, why: `hero's ${want} is ${got} on the tree he was asked on — too far to be his size played — pinned as played` };
+  }
+  const r = (x: number) => String(Math.round(x * 100) / 100);
+  return { ok: true, labels: fit.labels, levels, want, got,
+    note: `hero's ${r(want)} read as the tree's ${r(got)} — the tree he was asked on (fixed [${levels.join(",")}]) is kept, not re-created` };
+}
+
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
   const sizeSnaps: string[] = [];
@@ -651,10 +704,32 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         tspan(`chain ${STREET[k]} size-free tree ${fit.ok ? "reused" : "not reusable"}`, tTry, fit.ok ? fit.note : fit.why);
       }
       if (!reuse?.startsWith("size-free tree reused")) {
-        try {
-          fixedLevels = streetFixedPcts(labels, pot, actors).pcts;
-        } catch (e) {
-          return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
+        // hero's own last wager within tolerance of the tree he was asked on: that tree, not a new one (fitsHeroAskedTree)
+        const heroIdxHere = seats.findIndex((s) => s.pos === heroPos);
+        const tHero = Date.now();
+        const hs = await fitsHeroAskedTree(labels, actors, heroIdxHere, pot, stack,
+          (levels) => gtowApi.peekSolution({ ...baseInput, fixedLevels: { [STREET[k]!]: levels } }),
+          (solId, codesStr) => gtowApi.peekNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }),
+          async (solId, codesStr) => { const x = await readNode(solId, codesStr); return x.r.ok ? x.r.data : null; });
+        if (hs.ok) {
+          labels = hs.labels;
+          fixedLevels = hs.levels;
+          reuse = `${reuse ? `${reuse}; ` : ""}${hs.note}`;
+          // a real size change is worth a word in the answer (rounding is not — the walk's own threshold)
+          if (Math.abs(hs.got - hs.want) > Math.max(0.02 * hs.want, 0.1)) {
+            sizeSnaps.push(`${STREET[k]!.toLowerCase()}: ${heroPos} ${hs.want}bb taken as the tree's ${hs.got}bb (hero's own size, on the tree he was asked on)`);
+          }
+          tspan(`chain ${STREET[k]} hero's size on the asked tree`, tHero, hs.note);
+        } else {
+          if (hs.why) {
+            reuse = `${reuse ? `${reuse}; ` : ""}${hs.why}`;
+            tspan(`chain ${STREET[k]} hero's size not on the asked tree`, tHero, hs.why);
+          }
+          try {
+            fixedLevels = streetFixedPcts(labels, pot, actors).pcts;
+          } catch (e) {
+            return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
+          }
         }
       }
     }

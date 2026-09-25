@@ -636,3 +636,124 @@ describe("the trace records each street's tree request", () => {
     expect(r.trace.streets[0]!.account ?? null).toBeNull();
   });
 });
+
+/**
+ * HERO'S OWN SIZE SNAPS TO THE TREE HE WAS ASKED ON (round 3, 2026-09-25; chainReuseStress hand 4920429872: hero
+ * check-raised the flop to 4.8 where the tree he was asked on offered 4.7, and the turn re-created the flop tree with
+ * both sizes pinned — one more cloud solve and a flop re-walk for a rounding difference in hero's own pick). A scripted
+ * GTO Wizard with a real in-mock tree cache: a tree is "cached" once ensureCustomSolution has created it.
+ */
+describe("hero's own postflop size snaps to the tree he was asked on (no rebuild)", () => {
+  const ASKED = ["30%"];   // the flop's levels once the CO's 1.8 bet into 6 is pinned: the tree hero was asked on
+  const nodes: Record<string, Node> = {
+    "sol-FLOP-asked|": { toAct: "BB", acts: [X, B(1.8)] },
+    "sol-FLOP-asked|X": { toAct: "CO", acts: [X, B(1.8)] },
+    // hero's node on the tree he was asked on: its raise level falls back to the pinned 30% — a raise to 4.7
+    "sol-FLOP-asked|X-R1.8": { toAct: "BB", acts: [F, C(1.8), R(4.7)] },
+    "sol-FLOP-asked|X-R1.8-R4.7": { toAct: "CO", acts: [F, C(4.7)] },
+    // a flop tree re-created with a second level pinned (whatever size): scripted for the re-create cases
+    "sol-FLOP-fixed2|": { toAct: "BB", acts: [X, B(1.8)] },
+    "sol-FLOP-fixed2|X": { toAct: "CO", acts: [X, B(1.8)] },
+    "sol-FLOP-fixed2|X-R1.8": { toAct: "BB", acts: [F, C(1.8), R(4.8), R(7)] },
+    "sol-FLOP-fixed2|X-R1.8-R4.8": { toAct: "CO", acts: [F, C(4.8)] },
+    "sol-FLOP-fixed2|X-R1.8-R7": { toAct: "CO", acts: [F, C(7)] },
+    "sol-TURN|": { toAct: "BB", acts: [X, B(5)] },
+  };
+  /** the tree ids by what they pin; the cache is what ensureCustomSolution has created so far */
+  const cachedTrees = () => {
+    const api = gtowApi as any;
+    const saved = { peekSolution: api.peekSolution, peekNode: api.peekNode, ensure: api.ensureCustomSolution, node: api.customNode };
+    const created = new Set<string>();
+    const readNodes = new Set<string>();
+    const trees: { input: any; solId: string; created: boolean }[] = [];
+    const idOf = (input: any) => {
+      const fl = input.fixedLevels?.[input.startingStreet];
+      return !fl ? `sol-${input.startingStreet}` : fl.length === 1 && fl[0] === ASKED[0] ? `sol-${input.startingStreet}-asked` : `sol-${input.startingStreet}-fixed2`;
+    };
+    api.peekSolution = (input: any) => (created.has(idOf(input)) ? idOf(input) : null);
+    api.ensureCustomSolution = async (input: any) => {
+      const solId = idOf(input);
+      const fresh = !created.has(solId);
+      created.add(solId);
+      trees.push({ input, solId, created: fresh });
+      return { ok: true, solId, created: fresh, session: "primary", ...(fresh ? { why: "scripted" } : {}) };
+    };
+    api.customNode = async (solId: string, q: any) => {
+      const acts = q.flopActions ?? q.turnActions ?? q.riverActions ?? "";
+      const nd = nodes[`${solId}|${acts}`];
+      if (!nd) return { ok: false, status: 404, error: `unscripted node ${solId}|${acts}` };
+      readNodes.add(`${solId}|${acts}`);
+      return { ok: true, data: nodeJson(nd), solveSecs: 0, cached: false, src: "fetched" };
+    };
+    api.peekNode = (solId: string, q: any) => {
+      const acts = q.flopActions ?? q.turnActions ?? q.riverActions ?? "";
+      const nd = nodes[`${solId}|${acts}`];
+      return readNodes.has(`${solId}|${acts}`) && nd ? nodeJson(nd) : null;
+    };
+    return { trees, restore: () => Object.assign(api, { peekSolution: saved.peekSolution, peekNode: saved.peekNode, ensureCustomSolution: saved.ensure, customNode: saved.node }) };
+  };
+  // hero is the BB, out of position: he checks, the CO bets 1.8 into 6, hero is asked — then raises, the CO calls
+  const handSpec = (streets: string[][], board: string, handKey?: string): AiChainSpec => ({
+    oopPos: "BB", ipPos: "CO", oopRange: full(), ipRange: full(), flopPot: 6, flopStack: 97.5,
+    board, heroSeat: "oop", heroComboIdx: null, streets, ...(handKey ? { handKey } : {}),
+  });
+
+  it("hero's raise to 4.8 against an offered 4.7: no tree re-created, the node read on the tree he was asked on", async () => {
+    forgetCheckpoints("hand-hero-snap");
+    const c = cachedTrees();
+    restore = c.restore;
+    // hero's flop decision facing the 1.8 bet: the tree is created pinned to the CO's size (hero's node offers 4.7)
+    const r1 = await solveAiChain(handSpec([["X", "R1.8"]], "Ts7h2d", "hand-hero-snap"));
+    expect(r1.ok).toBe(true);
+    expect(c.trees.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-asked", true]]);
+    // the turn: hero raised to 4.8 (the client's rounding), the CO called
+    const r2 = await solveAiChain(handSpec([["X", "R1.8", "R4.8", "C"], []], "Ts7h2d8c", "hand-hero-snap"));
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    const flop = c.trees.slice(1).filter((t) => t.input.startingStreet === "FLOP");
+    expect(flop.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-asked", false]]);   // the same tree, from the cache
+    expect(flop[0]!.input.fixedLevels).toEqual({ FLOP: ASKED });                            // never [30%, 31.3%]
+    const st = r2.trace.streets[0]!;
+    expect(st.created).toBe(false);
+    expect(st.treeWhy).toBeNull();
+    expect(st.reuse).toContain("hero's 4.8 read as the tree's 4.7");
+    expect(st.labels).toEqual(["Check", "Bet(180)", "Raise(470)", "Call"]);
+    // resumed at hero's node from the mid-street checkpoint: his raise conditioned from the stored node, only the CO's
+    // call node read — nothing before hero's node read again
+    expect(st.resumedAt).toBe(2);
+    expect(r2.trace.nodes.filter((n) => n.street === "FLOP" && !n.fromCheckpoint).map((n) => [n.codes.join("-"), n.src])).toEqual([["X-R1.8", "checkpoint"], ["X-R1.8-R4.7", "fetched"]]);
+    expect(r2.solves).toBe(1);                // the turn only
+    expect(r2.potNode).toBe(15.4);            // 6 + 4.7 × 2, rolled on with the tree's size
+    expect(r2.snaps ?? []).toEqual([]);       // 4.8 → 4.7 is rounding, not worth a word
+  });
+
+  it("a VILLAIN's 4.8 against the same offered 4.7 pins a new tree, as today", async () => {
+    const c = cachedTrees();
+    restore = c.restore;
+    // hero is the CO (in position): BB checks, hero bets 1.8, the BB check-raises to 4.8 — hero decides
+    await (gtowApi as any).ensureCustomSolution({ board: "Ts7h2d", startingStreet: "FLOP", fixedLevels: { FLOP: ASKED } });   // the 4.7 tree, cached
+    const r = await solveAiChain({ ...handSpec([["X", "R1.8", "R4.8"]], "Ts7h2d"), heroSeat: "ip" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const flop = c.trees.slice(1).filter((t) => t.input.startingStreet === "FLOP");
+    expect(flop.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-fixed2", true]]);
+    expect(flop[0]!.input.fixedLevels.FLOP).toHaveLength(2);
+    expect(r.trace.streets[0]!.labels).toEqual(["Check", "Bet(180)", "Raise(480)"]);
+    expect(r.trace.streets[0]!.reuse ?? "").not.toContain("hero's");
+  });
+
+  it("hero's size far from anything the tree offered (7 against 4.7) is pinned as played: re-created, as today", async () => {
+    forgetCheckpoints("hand-hero-far");
+    const c = cachedTrees();
+    restore = c.restore;
+    await solveAiChain(handSpec([["X", "R1.8"]], "Ts7h2d", "hand-hero-far"));
+    const r = await solveAiChain(handSpec([["X", "R1.8", "R7", "C"], []], "Ts7h2d8c", "hand-hero-far"));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const flop = c.trees.slice(1).filter((t) => t.input.startingStreet === "FLOP");
+    expect(flop.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-fixed2", true]]);
+    expect(flop[0]!.input.fixedLevels).toEqual({ FLOP: ["30%", "54.2%"] });
+    expect(r.trace.streets[0]!.reuse).toContain("hero's 7 is not on the tree he was asked on");
+    expect(r.trace.streets[0]!.labels).toEqual(["Check", "Bet(180)", "Raise(700)", "Call"]);
+  });
+});
