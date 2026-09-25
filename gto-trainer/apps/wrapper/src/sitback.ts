@@ -17,7 +17,7 @@ import { pyRepr, pyStr } from "./py";
 import { S, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import { js } from "./js";
-import { slotted } from "./ignition/dom";
+import { mySel, slotted, type FrameSel } from "./ignition/dom";
 import { ensureVisible, pointIsMyTable } from "./relay";
 
 /** Hero must read as sitting out this long before the press (one tick of a redraw is not a sit-out). */
@@ -28,14 +28,14 @@ export const SIT_BACK_RETRY_S = 10.0;
 export const SIT_BACK_TRIES = 3;
 
 /** Finds I AM BACK on one table: {ok, back, seated, x, y}. */
-export const sitBackReadJs = (slot: number | null = null) => slotted(js("sitback.BACK_READ_JS_TMPL"), slot);
+export const sitBackReadJs = (sel: FrameSel = null) => slotted(js("sitback.BACK_READ_JS_TMPL"), sel);
 
 /** Press I AM BACK on OUR table. */
 export async function ignitionSitBackIn(): Promise<Record<string, any>> {
   const t = await seams.ignitionTarget();
   if (!t) return { ok: false, why: "poker client not open" };
   const ws = t.webSocketDebuggerUrl;
-  const read = sitBackReadJs(TABLES.domSlot());
+  const read = sitBackReadJs(mySel());
   let d: Record<string, any>;
   try {
     d = (await cdp.evaluate(ws, read, 6)) || {};

@@ -112,15 +112,37 @@ function fresh() {
     tapForeign: 0,
     tapHeld: 0,
     tapSeen: new Map<string, number[]>(),
-    tapDealt: new Map<string, Map<number, string[]>>(),
+    /** Every socket's face-up deal in ITS current hand, whether or not it is the one we are reading (2026-09-25):
+     *  cleared when that socket starts a hand, so an old hand's deal can never bind us. */
+    tapDeals: new Map<string, { up: Map<number, string[]>; at: number }>(),
     tapClaims: new Map<string, number>(),
     tapRejected: new Set<string>(),
     tapHold: new Map<string, Record<string, any>[]>(),
+    /** Every socket's frames since ITS last PLAY_STAGE_INFO, always (tapHold only fills while unbound): what a
+     *  re-bind replays, so the hand is rebuilt from its start after a hand in progress was dropped. */
+    tapHist: new Map<string, Record<string, any>[]>(),
     tapReplay: [] as Record<string, any>[],
     tapDomCards: [] as string[],
     tapAmbiguousSaid: new TupleSet(),
     tapMismatch: 0,
     tapStall: { since: null as number | null, said: false },
+    /** Hero's cards in the hand before this one, and when the bound socket dealt the current one: our frame still
+     *  showing those a few seconds after a new deal is the DOM catching up, not another table (tapVerify). */
+    tapPrevHero: [] as string[],
+    tapDealtAt: 0.0,
+    /** Our frame has shown the cards the bound socket dealt hero in THIS hand (tapVerify): until it has, a DOM reading
+     *  is not known to be this hand's — nothing is backfilled from it, and a deal it never draws is another table's. */
+    tapDealDrawn: false,
+    /** The handNo of a hand dropped because its socket turned out to be another table's — never archived. */
+    handAbandoned: null as number | null,
+    /** A table showed the client's "disconnected from our poker server" overlay (dom.ts disconnectOf) during this
+     *  session: nothing is pressed from then on, the client is closed so it cannot reconnect, and the session ends
+     *  (session.ts maybeEndForDisconnect). Cleared only by a new session. */
+    disconnect: null as null | { at: number; slot: number | null; text: string; attempt: number | null; of: number | null;
+                                 reconnected: boolean; sid: string | null; handled: boolean; via: string },
+    /** OUR TABLE'S OWN TAG (data-multitableslot), pinned on the first read (dom.ts mySel): a closed table never
+     *  moves the others. `lost` = when the pinned frame went away (we stand down; we never take a neighbour's). */
+    frame: { tag: null as string | null, at: 0.0, lost: null as number | null, for: null as string | null },
     stateHealth: { ticks: 0, events: [] as any[], byKind: new Map<string, number>(), streak: new Map<string, number>(), seen: new TupleSet() },
     modalState: { lastClickAt: 0.0, reported: new Set<string>() },
     toastsSeen: [] as [string, number][],
@@ -159,11 +181,23 @@ export function resetState(): void {
   Object.assign(S, f);
 }
 
+/** Why no press may be made at all right now, or null: a table lost the poker server this session (S.disconnect). */
+export function pressBlocked(): string | null {
+  const x = S.disconnect;
+  if (!x) return null;
+  return `table ${x.slot ?? 1} lost the poker server (${x.reconnected ? "the client reconnected on its own" : x.text}) — `
+    + "the session is ended there and nothing is pressed";
+}
+
+/** What a relayed press may be told beyond its label. `cards` = the hole cards the decision was made for: the press
+ *  is refused unless OUR table shows them (relay.ts holeCardsRefusal); `strict` = refuse when they cannot be seen. */
+export type ActOpts = { expect?: (hit: any) => string | null; cards?: readonly unknown[] | null; strict?: boolean };
+
 /** The functions a test may replace (see the header). Filled in by the modules that own them. */
 export const seams: {
   ignitionTarget: () => Promise<Record<string, any> | null>;
-  act: (label: string, kind?: string, opts?: { expect?: (hit: any) => string | null }) => Promise<Record<string, any>>;
-  raiseTo: (amount: string, strict?: boolean) => Promise<Record<string, any>>;
+  act: (label: string, kind?: string, opts?: ActOpts) => Promise<Record<string, any>>;
+  raiseTo: (amount: string, strict?: boolean, opts?: ActOpts) => Promise<Record<string, any>>;
   cdpSeq: (ws: string, cmds: [string, Record<string, unknown>][]) => Promise<void>;
   registry: (now?: number) => any[];
   livePeers: (timeoutS?: number) => Promise<any[]>;

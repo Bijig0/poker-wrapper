@@ -20,9 +20,9 @@ const STAGE = { pid: "PLAY_STAGE_INFO", stageNo: "123" };
 
 function reset(slot: number | null = null, heroSeat: number | null = null) {
   Object.assign(S, {
-    tapBound: null, tapForeign: 0, tapHeld: 0, tapMismatch: 0, tapSeen: new Map(), tapDealt: new Map(), tapClaims: new Map(),
-    tapRejected: new Set(), tapHold: new Map(), tapReplay: [], tapDomCards: [], tapAmbiguousSaid: new TupleSet(),
-    tapStall: { since: null, said: false },
+    tapBound: null, tapForeign: 0, tapHeld: 0, tapMismatch: 0, tapSeen: new Map(), tapDeals: new Map(), tapClaims: new Map(),
+    tapRejected: new Set(), tapHold: new Map(), tapHist: new Map(), tapReplay: [], tapDomCards: [], tapAmbiguousSaid: new TupleSet(),
+    tapStall: { since: null, said: false }, tapPrevHero: [], tapDealtAt: 0.0, handAbandoned: null,
   });
   S.ws.heroCards = [];
   S.liveStatus.heroSeatDom = heroSeat;
@@ -154,7 +154,10 @@ test("tap socket isolation", () => {
     tapVerify(["7c", "2d"]);
     eq("  ... sustained disagreement lets the socket go", S.tapBound, null);
     tapAccepts(OURS_3, "rid-A");
-    eq("  ... and it can bind again", S.tapBound, "rid-A");
+    eq("  ... and it does NOT bind again on a deal our frame contradicts (2026-09-25: the stale-deal rebind loop)", S.tapBound, null);
+    tapVerify([cardName("card33")!, cardName("card51")!]);
+    tapAccepts(OURS_3, "rid-A");
+    eq("  ... it binds again once it deals the cards our own frame shows", S.tapBound, "rid-A");
     tapVerify(["Ah", "Ad"]);
     S.ws.heroCards = ["Ah", "Ad"];
     tapVerify(["Ad", "Ah"]);

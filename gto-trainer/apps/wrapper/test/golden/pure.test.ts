@@ -7,7 +7,7 @@
  * as PENDING and reported; the final gate (PORT-PLAN.md, phase D) requires none.
  */
 import { expect, test } from "bun:test";
-import { canon, firstDiff, normPy, readCorpus } from "./lib";
+import { asRecordedFrame, canon, firstDiff, normPy, readCorpus } from "./lib";
 import * as TERMINAL from "../../src/terminal";
 import { HandReconciler, bb as rcBb, buttonsUp, makeTick, STREETS } from "../../src/reconcile";
 import { FNS_EXTRA } from "./pure-fns";
@@ -78,6 +78,8 @@ test("golden: pure functions match the Python wrapper", async () => {
     let got: unknown;
     try {
       got = normPy(await fn(rec.args, rec));
+      // a page snippet is compared with the frame resolver as the recording had it (lib.ts asRecordedFrame)
+      if (typeof got === "string") got = asRecordedFrame(got);
     } catch (e: any) {
       got = { __error__: `${e?.name || "Error"}: ${e?.message || e}` };
     }

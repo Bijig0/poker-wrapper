@@ -22,11 +22,11 @@ import { pyFloatStr, pyJsonDumps } from "../../src/py";
 import { S, resetState, seams } from "../../src/state";
 import * as TABLES from "../../src/tables";
 import * as TERMINAL from "../../src/terminal";
-import { boardCards, domHeroSeat, heroCards, modalOf, parseSeats, splitStrip, tableJs, toAct, watchJs } from "../../src/ignition/dom";
+import { boardCards, domHeroSeat, heroCards, modalOf, mySel, parseSeats, splitStrip, tableJs, toAct, watchJs } from "../../src/ignition/dom";
 import { handState } from "../../src/ignition/hand";
 import { tableState } from "../../src/ignition/reader";
-import { tapFrame } from "../../src/ignition/ws";
-import { pickReady } from "../../src/relay";
+import { TAP_DEAL_LAG_S, tapFrame } from "../../src/ignition/ws";
+import { holeCardsRefusal, keyCards, pickReady } from "../../src/relay";
 import { feedLoopOnce } from "../../src/loops";
 import { state } from "../../src/view";
 import "../../src/session";
@@ -54,6 +54,46 @@ function dropPostRecording(x: unknown): unknown {
 }
 
 /**
+ * THE CROSS-TABLE FIXES (2026-09-25, session 20260925_180244 — hand 4920571422's "internally inconsistent" capture),
+ * compared narrower where they apply, decided by the INPUT (the frame's own hole cards, the capture's), never the
+ * output — everywhere else every snapshot still compares exactly:
+ *  - `pick`: the HOLE-CARD GUARD (relay.ts holeCardsRefusal). A decision whose hole cards the frame contradicts is
+ *    refused, and at several tables one whose cards the frame does not show yet. Every one in the corpus checked by
+ *    hand (GOLDEN_GUARD_LOG=1 lists them): 156 snapshots over 11 hands. The 9 contradictions are all a capture on
+ *    ANOTHER table's hand — 7 hands the ledger below flags as a mixed/duplicated stream (20260920_131406 x5, 20260921_
+ *    131211 x2: J♠J♣ captured with J♥K♦ on screen, Q♣T♥ with K♦9♥, ...), 4919910081 (already a known-wrong line: 4♠T♠
+ *    with 9♣T♠) and 4919910493 in the UNTAGGED replay of 20260922_194132 (the tap accepting both tables' sockets: 8♥2♠,
+ *    table 1's, with 5♥5♦ on screen; its slot-2 replay isolates and is not refused). The 2 "not shown" (20260922_
+ *    194118-slot1: 2♥6♣, 8♥2♠) are each ONE tick of the deal animation — card backs with the buttons up, the cards
+ *    drawn 0.25 s later — a press a tick later, not a lost one. A recorded "ok" there becomes the guard's refusal; a
+ *    recorded refusal (an earlier check) still compares as recorded.
+ *  - `tap.mismatch`: the verify rides out our frame showing the HAND BEFORE's cards for TAP_DEAL_LAG_S after a new
+ *    deal (18:12:15, 6♦5♦ on screen 3.7 s after 9♠9♣ was dealt, let the right socket go). The recorded counter counted
+ *    that lag (1-4 ticks, never the 8 of an unbind — every case checked: frame = the hand before, 0.1-1.8 s after the
+ *    deal); inside that window the counter is not compared.
+ */
+const guarded = { picks: 0, lagTicks: 0, byHand: new Map<string, string>() };
+function supersededCrossTable(key: string, got: any, want: any): [any, any] {
+  if (key === "pick" && want && want.ok === true && got && got.key) {
+    const why = holeCardsRefusal(keyCards(got.key), S.tapDomCards);
+    if (why) {
+      guarded.picks++;
+      const hk = String(S.handIds.get(S.handNo) ?? S.handNo);
+      guarded.byHand.set(hk, `${keyCards(got.key)?.join(" ")} captured, frame ${S.tapDomCards.join(" ") || "(no cards)"}`);
+      return [got, { ...want, ok: false, reason: why, plan: null }];
+    }
+  }
+  if (key === "tap" && got && want && S.tapDomCards.length >= 2 && S.tapPrevHero.length >= 2
+      && canon([...S.tapDomCards].sort()) === canon([...S.tapPrevHero].sort()) && time() - S.tapDealtAt < TAP_DEAL_LAG_S) {
+    const { mismatch: _g, ...g } = got;
+    const { mismatch: _w, ...w } = want;
+    if (canon(g) === canon(w) && _g !== _w) guarded.lagTicks++;
+    return [g, w];
+  }
+  return [got, want];
+}
+
+/**
  * SUPERSEDED 2026-09-24 (hand 4920374906, 75o: no answer on the turn or river) — compared narrower, not skipped:
  *  - `rc` on a table DEALT TWO, past the flop: the Python reader put the small blind first on every heads-up street;
  *    the big blind acts first postflop (the dealer posts the SB). Verified on this corpus's own 4919645501: its event
@@ -67,6 +107,14 @@ function dropPostRecording(x: unknown): unknown {
 function supersededHu(key: string, x: any): any {
   const verdictFree = (s: any) => (!s || "audited" in s ? s
     : { audited: (s.agree ?? 0) + (s.differ ?? 0), last: s.last && { hand: s.last.hand, clientHandId: s.last.clientHandId, violations: s.last.violations } });
+  // THE TAP'S DEAL BOOKKEEPING (2026-09-25): S.tapDealt — the deals seen while unbound, never cleared — was replaced
+  // by S.tapDeals (every socket's CURRENT-hand deal, stamped, kept while bound too) so a stale deal can never bind a
+  // socket again (session 20260925_180244). What the binder DID is still compared: bound, rejected, claims, held,
+  // hold, the dump's tap events and every frame's status.
+  if (key === "tap" && x && typeof x === "object" && "dealt" in x) {
+    const { dealt: _dealt, ...rest } = x;
+    return rest;
+  }
   if (key === "shadow") return verdictFree(x);
   if (key === "light" && x && x.shadow) return { ...x, shadow: verdictFree(x.shadow) };
   if (key === "rc" && x && !("huPostflop" in x) && Array.isArray(x.dealt) && x.dealt.length === 2 && (x.street ?? 0) > 0) {
@@ -196,8 +244,8 @@ for (const file of corpusFiles("reader-")) {
     cdp.io.available = async () => true;
     cdp.io.pageTargets = async () => [{ ...TARGET }];
     cdp.io.evaluate = async (_ws: string, expr: string) => {
-      if (expr === tableJs(TABLES.domSlot())) return structuredClone(cur.d);
-      if (expr === watchJs(TABLES.domSlot())) {
+      if (expr === tableJs(mySel())) return structuredClone(cur.d);
+      if (expr === watchJs(mySel())) {
         const ev = cur.events;
         cur.events = [];
         return ev;
@@ -229,6 +277,7 @@ for (const file of corpusFiles("reader-")) {
     const fails: string[] = [];
     const expected: Record<string, unknown> = {};
     let compared = 0;
+    Object.assign(guarded, { picks: 0, lagTicks: 0, byHand: new Map() });
     const ledger = { seats: 0, bad: new Map<string, string>(), corrupt: new Set<string>() };
     const handRids = new Map<string, Set<string>>();
     let lastMoney = "";
@@ -322,7 +371,7 @@ for (const file of corpusFiles("reader-")) {
           feedPrev: normPy(S.feedPrev),
           feedTail: normPy(S.feed.slice(-40)),
           tap: {
-            bound: S.tapBound, foreign: S.tapForeign, held: S.tapHeld, seen: normPy(S.tapSeen), dealt: normPy(S.tapDealt),
+            bound: S.tapBound, foreign: S.tapForeign, held: S.tapHeld, seen: normPy(S.tapSeen),
             claims: normPy(S.tapClaims), rejected: normPy(S.tapRejected),
             hold: Object.fromEntries([...S.tapHold].map(([rid, v]) => [String(rid), v.length])),
             mismatch: S.tapMismatch, domCards: normPy(S.tapDomCards), stall: normPy(S.tapStall),
@@ -375,8 +424,13 @@ for (const file of corpusFiles("reader-")) {
             expected[key] = normPy(v);
             continue;
           }
-          if (canon(v) !== canon(supersededHu(key, expected[key]))) {
-            fails.push(`input ${inp.i} (${inp.kind}${inp.kind === "ws" ? " " + inp.d.pid : ""}) ${key}: ${firstDiff(v, expected[key])}`);
+          const [vv, ww] = supersededCrossTable(key, v, supersededHu(key, expected[key]));
+          if (canon(vv) !== canon(ww)) {
+            const hk = String(S.handIds.get(S.handNo) ?? S.handNo);
+            const why = key === "pick" && v && typeof v === "object"
+              ? ` (hand ${hk}${ledger.corrupt.has(hk) ? ", a mixed/duplicated stream" : ""}; reason: ${JSON.stringify((v as any).reason ?? null)})`
+              : key === "tap" ? ` (frame ${JSON.stringify(S.tapDomCards)}, socket ${JSON.stringify(S.ws.heroCards)}, hand before ${JSON.stringify(S.tapPrevHero)}, dealt ${(time() - S.tapDealtAt).toFixed(1)} s ago)` : "";
+            fails.push(`input ${inp.i} (${inp.kind}${inp.kind === "ws" ? " " + inp.d.pid : ""}) ${key}: ${firstDiff(v, expected[key])}${why}`);
             // re-sync this key so one divergence is reported once, not on every later input
             expected[key] = normPy(v);
           }
@@ -389,7 +443,11 @@ for (const file of corpusFiles("reader-")) {
       Object.assign(seams, seams0);
       realTime();
     }
-    console.log(`${file}: ${compared} snapshots compared, ${fails.length} difference(s)`);
+    console.log(`${file}: ${compared} snapshots compared, ${fails.length} difference(s)`
+      + (guarded.picks || guarded.lagTicks ? ` (cross-table fixes: ${guarded.picks} pick(s) refused by the hole-card guard, ${guarded.lagTicks} deal-lag tick(s) not counted)` : ""));
+    if (process.env.GOLDEN_GUARD_LOG) {
+      for (const [hk, what] of guarded.byHand) console.log(`  guard ${file} ${hk}${ledger.corrupt.has(hk) ? " [mixed/duplicated stream]" : KNOWN_WRONG_LINES[hk] ? " [known-wrong line]" : ""}: ${what}`);
+    }
     const cleanBad = [...ledger.bad].filter(([hk]) => !ledger.corrupt.has(hk) && !KNOWN_WRONG_LINES[hk]);
     const knownWrong = [...ledger.bad].filter(([hk]) => !ledger.corrupt.has(hk) && KNOWN_WRONG_LINES[hk]);
     console.log(`${file}: exact chips vs the exported line at hero's decisions — ${ledger.seats} seat-snapshots, ${cleanBad.length} clean hand(s) disagree` +

@@ -269,58 +269,116 @@ export function applySelect(seat: number | null, btn: number | null, bet: number
 const TAP_HOLD_MAX = 1500;
 export const TAP_STALL_S = 90.0;
 const TAP_MISMATCH_TICKS = 8;
+/** How long our frame may go on showing the PREVIOUS hand's cards after the bound socket dealt a new one before that
+ *  counts as a disagreement: measured 3.7 s live (2026-09-25 18:12:11.6 → 18:12:15.3, a verify that let the right
+ *  socket go), the tick grace (TAP_MISMATCH_TICKS × 0.25 s) is 2 s. */
+export const TAP_DEAL_LAG_S = 10.0;
+/** A deal into our seat binds, with no cards on our frame to check it against, only while it is this fresh — the
+ *  frame shows a deal of its own within a second or two; an older deal it never shows was another table's. */
+export const TAP_DEAL_FRESH_S = 4.0;
+/** How long after the bound socket deals hero in our frame has to show those cards once before the socket counts as
+ *  another table's (tapVerify) — the deal animation takes a tick or two (0.25-0.5 s in every recording). */
+export const TAP_DEAL_SHOW_S = 5.0;
 
-/** Let go of the socket and look again; the socket let go of is no longer bound on a CLAIM, only on a deal. */
+const sameCards = (a: readonly string[], b: readonly string[]) => a.length > 0 && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+
+/** Let go of the socket and look again. THE HAND IN PROGRESS GOES WITH IT (2026-09-25): it was read off that socket,
+ *  so carrying on meant the next socket's frames — and our own frame's DOM backfill — were added to another table's
+ *  hand (A8o 4920571422: "seat 6 acted on the preflop but has no position label; preflop actions appear after turn
+ *  actions"). A socket let go of binds again only by dealing the cards our own frame shows (tapTryBind). */
 export function tapUnbind(why: string): void {
   if (S.tapBound !== null) {
     dumpEvent("<tap-unbound>", { rid: S.tapBound, why });
     S.tapRejected.add(S.tapBound);
+    const w = ws();
+    if (truthy(w.actions) || truthy(w.dealt) || truthy(w.heroCards)) abandonHand("its socket was another table's");
   }
   S.tapBound = null;
   S.tapMismatch = 0;
   S.tapHold.clear();
 }
 
+/** Bind `rid`: its current hand (every frame since its PLAY_STAGE_INFO, whether or not we were reading it) is
+ *  replayed through the reader, so a socket bound mid-hand — first time, or back after a drop — rebuilds the hand
+ *  from its start. */
 export function tapBind(rid: string, why: Record<string, any>): void {
   S.tapStall = { since: null, said: false };
   S.tapBound = rid;
-  S.tapReplay = [...(S.tapHold.get(rid) || [])];
+  S.tapReplay = [...(S.tapHist.get(rid) || S.tapHold.get(rid) || [])];
   S.tapHold.clear();
+  S.tapMismatch = 0;
   dumpEvent("<tap-bound>", { rid, replayed: S.tapReplay.length, ...why });
 }
 
-/** Multi-table: bind the ONE socket that says it is ours, if there is one. */
+/** Every socket's current hand — its frames and its face-up deal — kept whether or not it is the one we read, so
+ *  the right one can be found (and rebuilt) later. A new hand on a socket clears its old deal: a deal from a hand
+ *  that is over never binds anything. */
+function tapNote(d: Record<string, any>, rid: string): void {
+  let h = S.tapHist.get(rid);
+  if (!h) S.tapHist.set(rid, (h = []));
+  if (d.pid === "PLAY_STAGE_INFO") {
+    h.length = 0;
+    S.tapDeals.delete(rid);
+  }
+  if (h.length < TAP_HOLD_MAX) h.push(d);
+  if (d.pid === "CO_CARDTABLE_INFO") {
+    const up = faceUpSeats(d);
+    if (up.size) S.tapDeals.set(rid, { up, at: time() });
+  }
+}
+
+/** Multi-table: bind the ONE socket that is ours, if one can be told apart.
+ *  WHEN OUR FRAME SHOWS HOLE CARDS only the socket that dealt exactly those into our seat is ours — whatever claimed
+ *  our seat or was let go before. The cards are the one fact another table cannot share: two tables can seat hero in
+ *  the same seat number (seat 4 at two of the 2026-09-25 tables), and table 1 bound the other one's socket on its
+ *  sit-in, then again and again on a deal into "our seat 4" that was the previous hand's, from another table, while
+ *  its own frame showed 9♠9♣ and then 5♣7♣.
+ *  WITH NO CARDS ON OUR FRAME (before the first deal, between hands) a buy-in / sit-in naming our seat, or a deal into
+ *  it fresh enough for our frame not to have drawn yet, from a socket not let go of — and only if it is the one. */
 export function tapTryBind(): void {
   const mine = S.liveStatus.heroSeatDom ?? null;
   if (mine === null) return;
+  const dom = (S.tapDomCards || []).length >= 2 ? [...S.tapDomCards] : null;
+  if (dom) {
+    const match = [...S.tapDeals].filter(([, dl]) => sameCards(dl.up.get(mine) || [], dom)).map(([r]) => r);
+    if (match.length === 1) {
+      const rid = match[0]!;
+      tapBind(rid, { seat: mine, cards: dom, why: S.tapRejected.has(rid)
+        ? `this socket, let go of before, dealt the cards our own frame shows into our seat ${mine}`
+        : `this socket dealt the cards our own frame shows into our seat ${mine}` });
+    } else if (match.length > 1) {
+      tapAmbiguous(match, mine, "more than one socket dealt the cards our frame shows - waiting");
+    }
+    return;
+  }
   const cands = new Set<string>();
   const dealt = new Set<string>();
+  const now = time();
   for (const [r, s] of S.tapClaims) if (s === mine && !S.tapRejected.has(r)) cands.add(r);
-  for (const [r, up] of S.tapDealt) if (up.has(mine)) { dealt.add(r); cands.add(r); }
+  for (const [r, dl] of S.tapDeals) {
+    if (dl.up.has(mine) && !S.tapRejected.has(r) && now - dl.at <= TAP_DEAL_FRESH_S) {
+      dealt.add(r);
+      cands.add(r);
+    }
+  }
   if (cands.size === 1) {
     const rid = [...cands][0]!;
     if (dealt.has(rid)) {
-      tapBind(rid, { seat: mine, cards: S.tapDealt.get(rid)!.get(mine),
+      tapBind(rid, { seat: mine, cards: S.tapDeals.get(rid)!.up.get(mine),
                      why: `this socket deals face-up cards into our own seat ${mine}` });
     } else {
       tapBind(rid, { seat: mine, why: `this socket's own buy-in / sit-in frames name our seat ${mine} - bound before the first deal` });
     }
     return;
   }
-  if (cands.size < 2) return;
-  const dom = [...(S.tapDomCards || [])].sort();
-  const byCards = [...cands].filter((r) => dom.length && JSON.stringify([...(S.tapDealt.get(r)?.get(mine) || [])].sort()) === JSON.stringify(dom));
-  if (byCards.length === 1) {
-    tapBind(byCards[0]!, { seat: mine, cards: dom,
-                           why: `several sockets name our seat ${mine}; this one dealt the cards our own frame shows` });
-  } else {
-    const key = [...cands].sort();
-    if (!S.tapAmbiguousSaid.has(key)) {
-      S.tapAmbiguousSaid.add(key);
-      dumpEvent("<tap-bind-ambiguous>", { rids: key, seat: mine,
-                                          why: "more than one socket names our seat - waiting for hole cards to tell them apart" });
-    }
-  }
+  if (cands.size >= 2) tapAmbiguous([...cands], mine, "more than one socket names our seat - waiting for hole cards to tell them apart");
+}
+
+function tapAmbiguous(rids: string[], seat: number, why: string): void {
+  const key = [...rids].sort();
+  if (S.tapAmbiguousSaid.has(key)) return;
+  S.tapAmbiguousSaid.add(key);
+  dumpEvent("<tap-bind-ambiguous>", { rids: key, seat, why });
 }
 
 /** The bound socket's held frames, once, right after it binds. */
@@ -334,6 +392,7 @@ export function tapTakeReplay(): Record<string, any>[] {
 export function tapAccepts(d: Record<string, any>, rid: string | null | undefined): boolean {
   if (rid === null || rid === undefined) return true;
   const multi = TABLES.slot() !== null;
+  if (multi) tapNote(d, rid);
   if (S.tapBound === null) {
     const up = d.pid === "CO_CARDTABLE_INFO" ? faceUpSeats(d) : new Map<number, string[]>();
     if (!multi) {
@@ -346,7 +405,6 @@ export function tapAccepts(d: Record<string, any>, rid: string | null | undefine
     }
     if (up.size) {
       S.tapSeen.set(rid, sortedNums(up.keys()));
-      S.tapDealt.set(rid, up);
       const mine = S.liveStatus.heroSeatDom ?? null;
       if (mine === null) {
         dumpEvent("<tap-bind-waiting>", { rid, seats: sortedNums(up.keys()), why: "the DOM has not said which seat is hero's yet" });
@@ -387,16 +445,37 @@ export function tapAccepts(d: Record<string, any>, rid: string | null | undefine
 }
 
 /** Hero's cards as OUR OWN frame renders them must be the cards the bound socket dealt; sustained disagreement
- *  means the socket is another table's. */
+ *  means the socket is another table's. The bound socket's cards are the hand in progress: a socket let go of takes
+ *  its hand with it (tapUnbind), so what is compared here was only ever dealt by the socket we are on.
+ *  THE DOM LAGS A NEW DEAL: our frame still showing the hand before's cards within TAP_DEAL_LAG_S of the socket's deal
+ *  is our table catching up, not a disagreement (2026-09-25 18:12:15: 6♦5♦ on screen 3.7 s after this table's socket
+ *  dealt 9♠9♣ let the RIGHT socket go — and table 1 never found its way back). */
 export function tapVerify(domCards: string[]): void {
   S.tapDomCards = [...(domCards || [])];
   if (S.tapBound === null || TABLES.slot() === null) return;
   const tapCards: string[] = ws().heroCards || [];
   if (!domCards.length || !tapCards.length || domCards.length < 2) {
+    // A DEAL OUR FRAME NEVER DRAWS is another table's: the socket dealt hero in and our frame has not once shown
+    // those cards (2026-09-25 18:10:22 — table 1, hero sitting out at its own table after the reconnect, bound the A8o
+    // table's socket on a sit-in naming its seat, and read that table's 6♠K♥ hand, with its own frame's seats merged
+    // in, for 56 s — until its own table dealt it A♠2♥ and the cards could disagree)
+    if (tapCards.length && !S.tapDealDrawn && S.tapDealtAt > 0 && time() - S.tapDealtAt > TAP_DEAL_SHOW_S) {
+      S.tapMismatch += 1;
+      if (S.tapMismatch >= TAP_MISMATCH_TICKS) {
+        tapUnbind(`this socket dealt ${tapCards.join(" ")} into our seat ${fmtFixed(time() - S.tapDealtAt, 1)} s ago and our frame has not shown them once — it is another table's`);
+        feedAdd("Capture was following the wrong table — re-identifying it from your own seat");
+      }
+      return;
+    }
     S.tapMismatch = 0;
     return;
   }
   if (JSON.stringify([...domCards].sort()) === JSON.stringify([...tapCards].sort())) {
+    S.tapMismatch = 0;
+    S.tapDealDrawn = true;
+    return;
+  }
+  if (sameCards(domCards, S.tapPrevHero) && time() - S.tapDealtAt < TAP_DEAL_LAG_S) {
     S.tapMismatch = 0;
     return;
   }
@@ -422,6 +501,9 @@ export function beginHand(hid: string | null): void {
   S.handNo += 1;
   S.handIds.set(S.handNo, hid);
   const w = ws();
+  S.tapPrevHero = [...(w.heroCards || [])];
+  S.tapDealtAt = 0.0;
+  S.tapDealDrawn = false;
   w.board = [];
   w.maxBet = 0;
   w.heroFolded = false;
@@ -454,6 +536,23 @@ export function beginHand(hid: string | null): void {
   w.bbSeen = false;
   feedAdd("───── new hand ─────");
   if (hid) feedAdd(`(hand id ${hid})`);
+}
+
+/** Drop the hand in progress WITHOUT archiving it: it was read (wholly or in part) off a socket that turned out to
+ *  be another table's, so it is neither this table's history nor a spot to answer. An id-less hand opens in its
+ *  place (never archived either, S.handAbandoned); the socket bound next replays its own hand from its start. */
+export function abandonHand(why: string): void {
+  const keep = wsSeams.archiveHand;
+  wsSeams.archiveHand = () => {};
+  try {
+    beginHand(null);
+  } finally {
+    wsSeams.archiveHand = keep;
+  }
+  S.handAbandoned = S.handNo;
+  S.tapPrevHero = [];
+  feedAdd(`(the hand in progress was dropped — ${why})`);
+  log(`[ws] hand in progress dropped — ${why}`);
 }
 
 const idOf = (v: unknown) => (truthy(v) ? pyStr(v) : "");
@@ -592,6 +691,8 @@ export function onGameMsg(d: Record<string, any>): void {
         faceUp = Number(m[1]);
         w.heroSeat = faceUp;
         w.heroCards = names;
+        S.tapDealtAt = time();
+        S.tapDealDrawn = false;
       }
     }
     w.dealt = sortedNums(dealt);

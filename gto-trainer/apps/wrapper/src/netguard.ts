@@ -13,7 +13,7 @@ import * as NC from "./netcheck";
 import { pyRepr, pyStr } from "./py";
 import { CP, S, isCp, seams } from "./state";
 import * as TABLES from "./tables";
-import { sitoutReadJs } from "./ignition/dom";
+import { mySel, sitoutReadJs } from "./ignition/dom";
 import { ensureVisible, pointIsMyTable } from "./relay";
 
 export const NET_BAD_TO_SITOUT = 2;
@@ -24,7 +24,7 @@ export async function ignitionSitoutNextHand(): Promise<Record<string, any>> {
   const t = await seams.ignitionTarget();
   if (!t) return { ok: false, why: "poker client not open" };
   const ws = t.webSocketDebuggerUrl;
-  const js = sitoutReadJs(TABLES.domSlot());
+  const js = sitoutReadJs(mySel());
   let d: Record<string, any>;
   try {
     d = (await cdp.evaluate(ws, js, 6)) || {};

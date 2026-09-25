@@ -11,7 +11,7 @@ import { dumpEvent, tapFrame } from "./ignition/ws";
 import { feedTick, maybeFlushEnded } from "./ignition/reader";
 import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVerifyExec } from "./relay";
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
-import { maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
+import { maybeEndForDisconnect, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
 import { maybeSitBackIn } from "./sitback";
 
 export const FEED_STALL_TICKS = 8;
@@ -43,6 +43,12 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
       }
     }
     onError?.("tick", e);
+  }
+  // a table that lost the poker server ends the session before anything else in this pass could press
+  try {
+    await maybeEndForDisconnect();
+  } catch (e: any) {
+    log(`[disconnect] ${errRepr(e)}`);
   }
   try {
     maybeFlushEnded();

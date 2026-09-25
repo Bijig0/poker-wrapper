@@ -16,7 +16,7 @@
 import * as cdp from "../../src/cdp";
 import { S, seams } from "../../src/state";
 import * as TABLES from "../../src/tables";
-import { findInputJs, tableJs } from "../../src/ignition/dom";
+import { findInputJs, mySel, tableJs } from "../../src/ignition/dom";
 import { findControl } from "../../src/relay";
 
 export type Btn = { text: string; x: number; y: number; w: number; h: number; qa?: string };
@@ -77,6 +77,8 @@ export class FakeIgnition {
   /** the turn control that ENDED the turn, if any */
   pressed: Btn | null = null;
   reads = 0;
+  /** hero's hole cards on this table, as the client tags them ("card47" = 9♠); null = none drawn (the old default) */
+  heroQa: string[] | null = null;
   private relabelAt: number | null = null;
   constructor(private spec: typeof RIVER_FACING_BET, private o: {
     stack: number; field?: string; relabelAfterReads?: number; presetTakes?: boolean; clampTyped?: boolean; fieldIgnoresTyping?: boolean;
@@ -129,13 +131,16 @@ export class FakeIgnition {
   install(): () => void {
     const io0 = { ...cdp.io };
     const seams0 = { ignitionTarget: seams.ignitionTarget, cdpSeq: seams.cdpSeq };
-    const TABLE = tableJs(TABLES.domSlot());
-    const INPUT = findInputJs(TABLES.domSlot());
     cdp.io.evaluate = async (_ws: string, expr: string) => {
+      // built per question: OUR table's snippets carry the pinned tag once the reader has one (dom.ts mySel)
+      const TABLE = tableJs(mySel());
+      const INPUT = findInputJs(mySel());
       if (expr === "document.visibilityState") return "visible";
       if (expr === TABLE) {
+        const hero = this.heroQa ?? [];
         return { seated: true, practice: false, frame: this.spec.frame, zoom: null, nodes: [], buttons: this.strip(),
-                 cards: [], allCards: [], heroMini: [], seatQa: [], canvases: 0 };
+                 cards: [], allCards: hero.map((qa, i) => ({ qa, x: 600 + 40 * i, y: 600, w: 36, seat: 0, tbl: false })),
+                 heroMini: [], seatQa: hero.length ? [{ seat: 0, num: 1, me: true }] : [], canvases: 0 };
       }
       if (expr === INPUT) {
         const c = this.confirm();

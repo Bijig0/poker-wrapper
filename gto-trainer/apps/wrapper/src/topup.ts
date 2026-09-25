@@ -22,7 +22,7 @@ import { fmtFixed, pyFloat, pyRepr, pyRound, pyStr } from "./py";
 import { S, seams } from "./state";
 import * as TABLES from "./tables";
 import * as TERMINAL from "./terminal";
-import { tableJs, topupFillJs, topupReadJs } from "./ignition/dom";
+import { mySel, tableJs, topupFillJs, topupReadJs } from "./ignition/dom";
 import { handState } from "./ignition/hand";
 import { act, autoTableOk, heroTimeLeft, maybeTakeTime, pickReady } from "./relay";
 
@@ -47,7 +47,7 @@ export async function topUpToast(): Promise<string | null> {
   if (!t) return null;
   let d: any;
   try {
-    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(TABLES.domSlot()), 6)) || {};
+    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(mySel()), 6)) || {};
   } catch {
     return null;
   }
@@ -63,7 +63,7 @@ export async function topUpRead(): Promise<Record<string, any>> {
   const t = await seams.ignitionTarget();
   if (!t) return { seated: false, reason: "poker client not open" };
   try {
-    return (await cdp.evaluate(t.webSocketDebuggerUrl, topupReadJs(TABLES.domSlot()), 6)) || { seated: false, reason: "empty read" };
+    return (await cdp.evaluate(t.webSocketDebuggerUrl, topupReadJs(mySel()), 6)) || { seated: false, reason: "empty read" };
   } catch (e: any) {
     return { seated: false, reason: `table read failed: ${e?.message ?? e}` };
   }
@@ -420,7 +420,7 @@ export async function topUpRun(force = false, amountCents: number | null = null)
     }
     const want = amountCents ? Math.trunc(amountCents) : r.offerCents ? r.offerCents : short;
     const t = await seams.ignitionTarget();
-    const fill = t ? (await cdp.evaluate(t.webSocketDebuggerUrl, topupFillJs(TABLES.domSlot()) + `(${Math.trunc(want)})`, 6)) || {} : {};
+    const fill = t ? (await cdp.evaluate(t.webSocketDebuggerUrl, topupFillJs(mySel()) + `(${Math.trunc(want)})`, 6)) || {} : {};
     if (!fill.ok) {
       await closeBuyPanel();
       return topUpDone(false, want, r, `could not set the amount — ${"reason" in fill ? pyStr(fill.reason) : "no reply"}`);

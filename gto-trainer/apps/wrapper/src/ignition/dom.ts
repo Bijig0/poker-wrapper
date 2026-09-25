@@ -7,6 +7,7 @@
  * buttons, cards, allCards, heroMini, seatQa, ...}. Seats are Maps keyed by the DISPLAYED seat number, in the
  * order the capture lists them (the Python dicts' insertion order).
  */
+import { time } from "../clock";
 import { js } from "../js";
 import { fmtFixed, KeyError, maxBy, minBy, pyFloat, pyInt, pyRound, splitWs } from "../py";
 import { S } from "../state";
@@ -28,18 +29,92 @@ export const FIND_INPUT_JS_TMPL = () => js("launch.FIND_INPUT_JS_TMPL");
 export const TOPUP_READ_JS_TMPL = () => js("launch.TOPUP_READ_JS_TMPL");
 export const TOPUP_FILL_JS_TMPL = () => js("launch.TOPUP_FILL_JS_TMPL");
 
-/** A table-reading snippet aimed at one slot: `__frame(__SLOT__)` resolves to that table's iframe, or to the
- *  single-table one when slot is null. */
-export function slotted(code: string, slot: number | null): string {
-  return code.split("__FRAME__").join(FRAME_JS()).split("__SLOT__").join(slot === null || slot === undefined ? "null" : String(Math.trunc(slot)));
+/**
+ * WHICH IFRAME IS OUR TABLE (the selector itself: tables.ts FrameSel). THE ORDINAL MOVED TABLES (2026-09-25, session
+ * 20260925_180244): closing the top-right table by hand shifted every later wrapper onto its neighbour — slot 2 onto
+ * the bottom-left table, slot 3 (reading the A8o hand there) onto the bottom-right — and both went on answering hands
+ * that were not theirs. A wrapper now pins the tag its first read resolved (reader.ts pinFrame) and follows only
+ * that; when it disappears the wrapper reads nothing.
+ */
+export type FrameSel = TABLES.FrameSel;
+export const frameSelJs = TABLES.frameSelJs;
+
+/** A table-reading snippet aimed at one table: `__frame(__SLOT__)` resolves to that table's iframe. */
+export function slotted(code: string, sel: FrameSel | undefined): string {
+  return code.split("__FRAME__").join(FRAME_JS()).split("__SLOT__").join(frameSelJs(sel));
 }
 
-export const tableJs = (slot: number | null = null) => slotted(TABLE_JS_TMPL(), slot);
-export const watchJs = (slot: number | null = null) => slotted(WATCH_JS_TMPL(), slot);
-export const findInputJs = (slot: number | null = null) => slotted(FIND_INPUT_JS_TMPL(), slot);
-export const topupReadJs = (slot: number | null = null) => slotted(TOPUP_READ_JS_TMPL(), slot);
-export const topupFillJs = (slot: number | null = null) => slotted(TOPUP_FILL_JS_TMPL(), slot);
-export const sitoutReadJs = (slot: number | null = null) => slotted(SITOUT_READ_JS_TMPL(), slot);
+/** The pin, for the table set this process is in now: a new slot or table count (TABLES.adopt) lets it go. */
+export function framePin(): typeof S.frame {
+  const key = `${TABLES.slot()}/${TABLES.count()}`;
+  if (S.frame.for !== key) Object.assign(S.frame, { tag: null, at: 0.0, lost: null, for: key });
+  return S.frame;
+}
+
+/** THIS wrapper's table, for every snippet that reads or presses it: null on the single-table path. */
+export function mySel(): FrameSel {
+  const ord = TABLES.domSlot();
+  if (ord === null) return null;
+  const me = TABLES.slot()!;
+  const tag = framePin().tag;
+  return tag !== null ? { tag, ord, me } : { ord, me };
+}
+TABLES.frameHooks.mine = mySel;
+
+/** The tag of the table the reader just read (TABLE_JS reports it): pin it, the first time. Returns what changed. */
+export function pinFrame(tag: unknown, seated: boolean): "pinned" | "lost" | "back" | null {
+  if (TABLES.slot() === null) return null;
+  const f = framePin();
+  if (f.tag === null) {
+    if (!seated || tag === null || tag === undefined || tag === "") return null;
+    Object.assign(f, { tag: String(tag), at: time(), lost: null });
+    return "pinned";
+  }
+  if (!seated) {
+    if (f.lost !== null) return null;
+    f.lost = time();
+    return "lost";
+  }
+  if (f.lost !== null) {
+    f.lost = null;
+    return "back";
+  }
+  return null;
+}
+
+/** Let go of the pinned tag (a new session, a new table count): the next read pins afresh. */
+export function forgetFrame(): void {
+  Object.assign(S.frame, { tag: null, at: 0.0, lost: null });
+}
+
+export const tableJs = (sel: FrameSel = null) => slotted(TABLE_JS_TMPL(), sel);
+export const watchJs = (sel: FrameSel = null) => slotted(WATCH_JS_TMPL(), sel);
+export const findInputJs = (sel: FrameSel = null) => slotted(FIND_INPUT_JS_TMPL(), sel);
+export const topupReadJs = (sel: FrameSel = null) => slotted(TOPUP_READ_JS_TMPL(), sel);
+export const topupFillJs = (sel: FrameSel = null) => slotted(TOPUP_FILL_JS_TMPL(), sel);
+export const sitoutReadJs = (sel: FrameSel = null) => slotted(SITOUT_READ_JS_TMPL(), sel);
+
+/**
+ * THE CLIENT LOST THE POKER SERVER (measured 2026-09-25 18:09:19, session_20260925_180244 — a wifi drop, every table
+ * at once): an overlay inside each table frame reads "You are currently disconnected from our poker server." /
+ * "Reconnecting..." / "Attempt N of 32" over a CANCEL button, a new attempt about every 3 s; the client then
+ * reconnects BY ITSELF ("Connected" over the same CANCEL, 22-25 s later, on new sockets) and seats come back as
+ * "Sit here". The connection tooltip "You're connected to our server. Enjoy your game." stays in the DOM throughout
+ * and means nothing. Returns what the frame shows — `reconnected` when only the "Connected" dialog is left, which is
+ * a disconnect that already happened — or null.
+ */
+export function disconnectOf(d: Record<string, any>): { text: string; attempt: number | null; of: number | null; reconnected: boolean } | null {
+  const texts: string[] = (d.nodes || []).map((n: any) => String(n.text ?? "").trim());
+  const lost = texts.find((t) => /currently disconnected from our poker server/i.test(t));
+  const retrying = texts.some((t) => /^reconnecting\b/i.test(t));
+  const m = texts.map((t) => /^attempt\s+(\d+)\s+of\s+(\d+)$/i.exec(t)).find((x) => x);
+  if (lost || (retrying && m)) {
+    return { text: lost || "Reconnecting...", attempt: m ? Number(m[1]) : null, of: m ? Number(m[2]) : null, reconnected: false };
+  }
+  const cancel = (d.buttons || []).some((b: any) => /^cancel$/i.test(String(b.text ?? "").trim()));
+  if (cancel && texts.some((t) => /^connected$/i.test(t))) return { text: "Connected", attempt: null, of: null, reconnected: true };
+  return null;
+}
 
 /** The elementFromPoint probe _point_is_my_table sends ("%f" = six decimals). */
 export function pointProbeJs(x: number, y: number): string {
@@ -66,6 +141,23 @@ export function cardName(qa: unknown): string | null {
 
 /** f"card{c}" for a WS card code (ints on the wire). */
 export const wireCard = (c: unknown) => cardName(`card${c}`);
+
+const SUIT_KEY: Record<string, string> = { "♣": "c", "♦": "d", "♥": "h", "♠": "s", c: "c", d: "d", h: "h", s: "s" };
+
+/** One card as "Ah" / "Td" however it was written — the DOM's "A♥" / "10♦", the export's "Ah" / "Td" — or null. */
+export function cardKey(c: unknown): string | null {
+  const m = /^\s*(10|[2-9TJQKA])\s*([♣♦♥♠cdhs])\s*$/i.exec(String(c ?? ""));
+  if (!m) return null;
+  const r = m[1]!.toUpperCase();
+  return (r === "10" ? "T" : r) + SUIT_KEY[m[2]!.toLowerCase()]!;
+}
+
+/** Two hands of hole cards are the same two cards (any order, any notation). False when either is not two cards. */
+export function sameHole(a: readonly unknown[] | null | undefined, b: readonly unknown[] | null | undefined): boolean {
+  const ka = (a || []).map(cardKey), kb = (b || []).map(cardKey);
+  if (ka.length !== 2 || kb.length !== 2 || ka.includes(null) || kb.includes(null)) return false;
+  return JSON.stringify([...ka].sort()) === JSON.stringify([...kb].sort());
+}
 
 /** Identified community cards, left to right (STRUCTURAL when the capture has seat ownership, else the
  *  geometric band — kept only for captures without the structural fields). */

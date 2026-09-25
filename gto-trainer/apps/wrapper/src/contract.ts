@@ -32,6 +32,8 @@ export const Body = {
                       joining: anyVal.optional() }),
   sessionJoin: obj({ sid: anyVal.optional(), config: anyVal.optional() }),
   sessionLeave: obj({ sid: anyVal.optional() }),
+  sessionDisconnected: obj({ sid: anyVal.optional(), slot: anyVal.optional(), text: anyVal.optional(), attempt: anyVal.optional(),
+                             of: anyVal.optional(), reconnected: anyVal.optional(), client: anyVal.optional() }),
   sessionEnd: obj({ id: anyVal.optional(), note: anyVal.optional(), all: anyVal.optional(), closeOut: anyVal.optional() }),
   balance: obj({ profile: anyVal.optional() }),
   topupSecond: obj({ cents: anyVal.optional() }),

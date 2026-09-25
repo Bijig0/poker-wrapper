@@ -26,8 +26,9 @@ import { CP, S, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import { FORMATS as CP_FORMATS } from "./sites/coinpoker";
 import { history } from "./archive";
-import { slotted } from "./ignition/dom";
+import { mySel, slotted } from "./ignition/dom";
 import { handState } from "./ignition/hand";
+import { fetchHandHistory, listHandHistory } from "./ignition/handHistory";
 import { tableState } from "./ignition/reader";
 import { recFrame, recLog, recordings, saveNote, setDebug } from "./ignition/recorder";
 import { act, executePick, raiseTo, setAuto } from "./relay";
@@ -219,7 +220,7 @@ export function buildApp(): Hono {
                             const f = __frame(__SLOT__) || document.querySelector('iframe');
                             let w = null; try { w = f && f.contentWindow; } catch (e) {}
                             return (w && w.__lastClick) || window.__lastClick || null;
-                        })()`, TABLES.domSlot()), 4);
+                        })()`, mySel()), 4);
       } catch {
         res = null;
       }
@@ -232,6 +233,14 @@ export function buildApp(): Hono {
     return json(200, { ok: h !== null, hand: h });
   });
   app.get("/history", () => json(200, history()));
+  app.get("/hh/list", async (c) => {
+    const q = queryOf(c);
+    return json(200, await listHandHistory(qparam(q, "date") ?? "", { format: qparam(q, "format") }));
+  });
+  app.get("/hh/:id", async (c) => {
+    const q = queryOf(c);
+    return json(200, await fetchHandHistory(c.req.param("id"), { format: qparam(q, "format"), refresh: q.includes("refresh=1") }));
+  });
   app.get("/debug", () => json(200, { on: S.dbg.on, dir: S.dbg.dir, frames: S.dbg.seq }));
   app.get("/ws-dump", (c) => {
     const m = /n=(\d+)/.exec(queryOf(c));
@@ -258,12 +267,17 @@ export function buildApp(): Hono {
   // ------------------------------------------------------------------------------------------ POST
   app.post("/act", async (c) => {
     const b = await body(c, Body.act);
+    const kind = [...pyStr(b.kind ?? "action")].slice(0, 12).join("");
+    // a turn action pressed from the panel goes only to a table showing the hand the panel shows (relay.ts
+    // holeCardsRefusal) — refused on a definite mismatch; a human's press is not refused for cards it cannot see
+    const hh = handState();
+    const guard = b.kind === "raise-to" || kind === "action" ? { cards: hh ? hh.heroCards ?? null : null, strict: false } : {};
     const res = b.kind === "raise-to"
-      ? await raiseTo([...pyStr(b.amount ?? "")].slice(0, 12).join(""))
-      : await act([...pyStr(b.label ?? "")].slice(0, 32).join(""), [...pyStr(b.kind ?? "action")].slice(0, 12).join(""));
+      ? await raiseTo([...pyStr(b.amount ?? "")].slice(0, 12).join(""), false, guard)
+      : await act([...pyStr(b.label ?? "")].slice(0, 32).join(""), kind, guard);
     log(`[act] ${pyRepr(b.label || b.amount || null)} -> ${pyRepr(res)}`);
-    // offerQa / missing are the relay's own (actuateAllIn reads the strip off a refusal) — not part of the reply
-    const { offerQa: _qa, missing: _missing, ...reply } = res;
+    // offerQa / missing / wrongHand are the relay's own (actuateAllIn reads the strip off a refusal) — not the reply's
+    const { offerQa: _qa, missing: _missing, wrongHand: _wrong, ...reply } = res;
     return json(200, reply);
   });
   app.post("/quit", () => {
@@ -310,7 +324,8 @@ export function buildApp(): Hono {
     try {
       const raw = await c.req.text();
       const b: any = raw ? JSON.parse(raw) : {};
-      const payload = b.source === "primary" || b.source === "secondary" ? { source: b.source } : {};
+      // any account id the API reports (not just primary/secondary) — the API decides what it can launch
+      const payload = typeof b.source === "string" && /^[\w-]{1,40}$/.test(b.source) ? { source: b.source } : {};
       const r = await fetch(`${SES.API()}/api/dashboard/gtow-connect`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(90_000),
       });
@@ -451,6 +466,11 @@ export function buildApp(): Hono {
   });
   app.post("/session/leave", async (c) => {
     const [code, res] = SESSION.sessionLeave(await body(c, Body.sessionLeave));
+    return json(code, res);
+  });
+  // another table lost the poker server: the leader ends the session (session.ts maybeEndForDisconnect)
+  app.post("/session/disconnected", async (c) => {
+    const [code, res] = await SESSION.sessionDisconnected(await body(c, Body.sessionDisconnected));
     return json(code, res);
   });
   app.post("/session/end", async (c) => {

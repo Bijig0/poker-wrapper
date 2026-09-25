@@ -15,9 +15,9 @@ import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
 import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyFloatStr, pyInt, pyRepr, pyReprStr, pyRound, pyStr } from "./py";
-import { CP, S, isCp, seams } from "./state";
+import { CP, S, isCp, pressBlocked, seams, type ActOpts } from "./state";
 import * as TABLES from "./tables";
-import { ACTION_RE, findInputJs, modalOf, pointProbeJs, splitStrip, tableJs } from "./ignition/dom";
+import { ACTION_RE, cardKey, findInputJs, framePin, heroCards, modalOf, mySel, pointProbeJs, sameHole, splitStrip, tableJs } from "./ignition/dom";
 import { handState, toActSources } from "./ignition/hand";
 import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
@@ -57,22 +57,68 @@ export function currentNote(): string | null {
 }
 
 // ---- the press -------------------------------------------------------------------------------------------
-/** None if that page point is inside THIS table, else why it is not (the client's own hit-testing decides). */
+/** None if that page point is inside THIS table, else why it is not (the client's own hit-testing decides). OUR
+ *  table is the client's tag the reader pinned (dom.ts mySel) — the same identity every read used — never a
+ *  position in the client's order: that is what let a press compute into a neighbour after a table closed. */
 export async function pointIsMyTable(ws: string, x: number, y: number): Promise<string | null> {
-  const me = TABLES.domSlot();
-  if (me === null) return null;
+  // every click site asks this last (the relay, sit back in, the connection guard's sit-out): a table that lost the
+  // poker server this session blocks them all, one table or several
+  const blocked = pressBlocked();
+  if (blocked) return blocked;
+  if (TABLES.domSlot() === null) return null;
+  const pin = framePin();
+  const mine = pin.tag;
+  if (mine === null) return `table ${pyStr(TABLES.slot())} has not identified its own table in the client yet — refusing`;
+  if (pin.lost !== null) return `table ${pyStr(TABLES.slot())}'s own table (the client's tag ${mine}) is gone — refusing`;
   let got: any;
   try {
     got = await cdp.evaluate(ws, pointProbeJs(x, y), 4);
   } catch (e: any) {
     return `could not check which table that point is on: ${e?.message ?? e}`;
   }
-  if (got === String(me)) return null;
-  if (got === "unknown") return null;
+  if (got === mine) return null;
+  // NOT INSIDE ANY TABLE (2026-09-25, found in a real browser: a re-tiled frame shorter than its table put the CALL
+  // button below the frame, on the page's own grid): at several tables the client tags every table, so a point in
+  // none of them is not ours — it used to be let through, as the single-table client's untagged frame is
+  if (got === "unknown") return `that press would land outside every table (table ${pyStr(TABLES.slot())} is the client's ${mine}) — refusing`;
   const g = pyStr(got);
   return /^-*\d+$/.test(g) && /\d/.test(g)
-    ? `that press would land on table ${pyInt(g) + 1}, not table ${pyStr(TABLES.slot())} — refusing`
+    ? `that press would land on the client's table ${g}, not table ${pyStr(TABLES.slot())}'s (the client's ${mine}) — refusing`
     : `that press would not land on table ${pyStr(TABLES.slot())} (${g})`;
+}
+
+/**
+ * THE HOLE-CARD GUARD (2026-09-25, session 20260925_180244). After a disconnect replaced the tables, table 1's capture
+ * followed another table's socket while its own frame showed a different hand, and the relay pressed that hand's
+ * answers on it — 4hQd's "Raise 3.5" became a 5bb 3-bet with 9♠9♣ (then a no-answer FOLD of the 99), A8o's "Call" an
+ * open-limp with 5♣7♣. Every check before this compared the pick with the CAPTURE, which was the wrong hand
+ * throughout, so every one passed. The cards are the one fact another table cannot share: a press made for hole
+ * cards `cards` goes only to a table whose own frame shows those two cards. `strict` also refuses when the frame
+ * shows none (or the decision carries none) — every automatic press at several tables; a lone table, or a human's
+ * own press, is refused only on a definite mismatch. null = go ahead.
+ */
+export function holeCardsRefusal(cards: readonly unknown[] | null | undefined, frameCards: readonly unknown[] | null | undefined,
+                                 strict = TABLES.slot() !== null): string | null {
+  const want = (cards || []).map(cardKey).filter((c): c is string => !!c);
+  const have = (frameCards || []).map(cardKey).filter((c): c is string => !!c);
+  if (want.length < 2) return strict ? "the decision carries no hole cards to check this table against — not pressing" : null;
+  if (have.length < 2) return strict ? `this table shows no hole cards for hero (the answer is for ${want.join(" ")}) — not pressing` : null;
+  if (!sameHole(want, have)) {
+    return `the answer is for ${want.join(" ")} but this table shows ${have.join(" ")} — the capture is on another hand; not pressing`;
+  }
+  return null;
+}
+
+/** The hole cards a decision key was made for (`[street, board, heroCards, toCall, n]`), or null. */
+export function keyCards(key: string | null | undefined): string[] | null {
+  if (!key) return null;
+  try {
+    const i = key.indexOf("|");
+    const k = JSON.parse(i >= 0 && !key.trimStart().startsWith("[") ? key.slice(i + 1) : key);
+    return Array.isArray(k) && Array.isArray(k[2]) ? k[2].map(String) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Make the page render, or say why it cannot (a sleeping monitor cannot be woken by bringToFront). */
@@ -132,8 +178,12 @@ export function findControl(pool: any[], label: string, kind: string): any | nul
 /** Relay ONE human-chosen press: re-read the strip, match the label within its OWN row, click its centre.
  *  `expect` sees the matched control on the SAME read as the click and may refuse it (return a reason) — a press
  *  that must only land on a control saying one thing (the shove's confirm must read ALL-IN) checks it here, with
- *  no second read for the strip to change in between. */
-async function actReal(label: string, kind = "action", opts: { expect?: (hit: any) => string | null } = {}): Promise<Record<string, any>> {
+ *  no second read for the strip to change in between. `cards` = the hole cards the decision was made for: checked
+ *  against hero's cards on that SAME read (holeCardsRefusal), so nothing can land on a table showing another hand. */
+async function actReal(label: string, kind = "action", opts: ActOpts = {}): Promise<Record<string, any>> {
+  // a table lost the poker server this session: nothing is pressed — not a turn, not Buy chips, not Sit here
+  const blocked = pressBlocked();
+  if (blocked) return { ok: false, reason: blocked, blocked: true };
   if ((kind === "action" || kind === "preset") && S.topupPanel.open) {
     // OUR OWN MODAL FIRST: the Buy-chips panel renders over the action strip
     S.topupAbort = true;
@@ -145,13 +195,17 @@ async function actReal(label: string, kind = "action", opts: { expect?: (hit: an
   const ws = t.webSocketDebuggerUrl;
   let d: Record<string, any>;
   try {
-    d = (await cdp.evaluate(ws, tableJs(TABLES.domSlot()), 6)) || {};
+    d = (await cdp.evaluate(ws, tableJs(mySel()), 6)) || {};
   } catch (e: any) {
     return { ok: false, reason: `table read failed: ${e?.message ?? e}` };
   }
   if (!d.seated) return { ok: false, reason: "no table tab open" };
   if ((kind === "action" || kind === "preset") && modalOf(d)) {
     return { ok: false, reason: "a client notice is over the action strip (seen on the press's own read)" };
+  }
+  if (opts.cards !== undefined) {
+    const wrongHand = holeCardsRefusal(opts.cards, heroCards(d), opts.strict);
+    if (wrongHand) return { ok: false, reason: wrongHand, wrongHand: true };
   }
   const [actions, presets] = splitStrip(d);
   const pool: any[] = kind === "preset" ? presets : kind === "action" ? actions : d.buttons ?? [];
@@ -185,7 +239,19 @@ async function actReal(label: string, kind = "action", opts: { expect?: (hit: an
   return out;
 }
 seams.act = actReal;
-export const act = (label: string, kind = "action", opts: { expect?: (hit: any) => string | null } = {}) => seams.act(label, kind, opts);
+export const act = (label: string, kind = "action", opts: ActOpts = {}) => seams.act(label, kind, opts);
+
+/** The hole-card guard on a read of its own, for a press that types before it clicks (raiseTo). */
+async function holeCardsOnTable(ws: string, opts: ActOpts): Promise<string | null> {
+  if (opts.cards === undefined) return null;
+  let d: Record<string, any>;
+  try {
+    d = (await cdp.evaluate(ws, tableJs(mySel()), 6)) || {};
+  } catch (e: any) {
+    return `table read failed: ${e?.message ?? e}`;
+  }
+  return holeCardsRefusal(opts.cards, heroCards(d), opts.strict);
+}
 
 /** The client's BET field among everything else on screen: [input, refusal]. */
 export function pickBetInput(inputs: any[], anchor: any, frameW: number | null = null): [any, string | null] {
@@ -217,15 +283,21 @@ export function raiseReadBackOk(typedBb: number, gotBb: number, bbCents: number 
 }
 
 /** Custom raise: type an exact BB amount into the client's own bet field, then press its RAISE TO (or BET). */
-async function raiseToReal(amount: string, strict = false): Promise<Record<string, any>> {
+async function raiseToReal(amount: string, strict = false, opts: ActOpts = {}): Promise<Record<string, any>> {
   amount = amount.trim().replaceAll(",", ".");
   if (!/^\d{1,6}(\.\d{1,2})?$/.test(amount)) return { ok: false, reason: `bad amount ${pyReprStr(amount)} — digits only, in BB` };
+  const blocked = pressBlocked();
+  if (blocked) return { ok: false, reason: blocked, blocked: true };
   const t = await seams.ignitionTarget();
   if (!t) return { ok: false, reason: "poker client not open" };
   const ws = t.webSocketDebuggerUrl;
+  // not even a size typed into a table showing another hand (the confirm checks again, on its own read)
+  const wrongHand = await holeCardsOnTable(ws, opts);
+  if (wrongHand) return { ok: false, reason: wrongHand, wrongHand: true };
+  const guard: ActOpts = opts.cards !== undefined ? { cards: opts.cards, strict: opts.strict } : {};
   let d: Record<string, any>;
   try {
-    d = (await cdp.evaluate(ws, findInputJs(TABLES.domSlot()), 6)) || {};
+    d = (await cdp.evaluate(ws, findInputJs(mySel()), 6)) || {};
   } catch (e: any) {
     return { ok: false, reason: `input lookup failed: ${e?.message ?? e}` };
   }
@@ -256,7 +328,7 @@ async function raiseToReal(amount: string, strict = false): Promise<Record<strin
   if (strict) {
     let got: string, gv: number;
     try {
-      const d2 = (await cdp.evaluate(ws, findInputJs(TABLES.domSlot()), 6)) || {};
+      const d2 = (await cdp.evaluate(ws, findInputJs(mySel()), 6)) || {};
       const [back, why2] = pickBetInput(d2.inputs || [], d2.anchor ?? null, d2.frameW ?? null);
       if (back === null) return { ok: false, reason: `could not read the bet field back — ${why2}`, typed: amount };
       got = pyStr(back.value ?? "").replaceAll(",", ".");
@@ -269,7 +341,7 @@ async function raiseToReal(amount: string, strict = false): Promise<Record<strin
       // CAPPED AT HERO'S STACK: a size above everything hero has comes back lower with the confirm reading ALL-IN —
       // the client's own word that this raise IS the shove (it knows hero's stack; the answer's tree may not)
       if (gv < pyFloat(amount)) {
-        const c = await act("confirm", "action", { expect: (hit) => (isAllInLabel(hit.text) ? null : clamp) });
+        const c = await act("confirm", "action", { ...guard, expect: (hit) => (isAllInLabel(hit.text) ? null : clamp) });
         if (c.ok) return { ok: true, typed: amount, field: got, confirm: c, as: "all-in" };
         if (c.seen === undefined) return { ok: false, reason: `${clamp}; ${pyStr(c.reason ?? null)}`, typed: amount, field: got };
       }
@@ -277,11 +349,12 @@ async function raiseToReal(amount: string, strict = false): Promise<Record<strin
     }
   }
   // the RAISE/BET control by identity: a size that is hero's whole stack relabels it "ALL-IN N BB"
-  const res = await act("confirm", "action");
+  const res = await act("confirm", "action", guard);
+  if (res.wrongHand) return { ok: false, reason: res.reason, wrongHand: true, typed: amount, confirm: res };
   return { ok: res.ok ?? false, typed: amount, confirm: res };
 }
 seams.raiseTo = raiseToReal;
-export const raiseTo = (amount: string, strict = false) => seams.raiseTo(amount, strict);
+export const raiseTo = (amount: string, strict = false, opts: ActOpts = {}) => seams.raiseTo(amount, strict, opts);
 
 // ---- the study pick → the relay ----------------------------------------------------------------------------
 /** What relay call a pick label means (HRC "Raise 2.5", GTO Wizard "RAISE 12", MES "Bet 4.5bb", "Bet 33%"). */
@@ -316,6 +389,8 @@ export function pickReady(): Record<string, any> {
     return out;
   };
   if (!st.on) return no("answers are off");
+  const blocked = isCp() ? null : pressBlocked();
+  if (blocked) return no(blocked);
   if (!st.text || !st.pick) return no("no pick yet");
   if (time() - st.at > PICK_TTL_S) return no("pick is stale (poller not refreshing it)");
   const key = st.decisionKey ?? null;
@@ -332,6 +407,9 @@ export function pickReady(): Record<string, any> {
     return no(`a client notice is on screen — ${S.liveStatus.modal.harmless ? "dismissing it" : "close it first"}`);
   }
   if (!isCp() && S.liveStatus.buyPanel) return no("Buy-chips panel is over the action strip");
+  if (S.handAbandoned !== null && S.handAbandoned === S.handNo) {
+    return no("the hand in progress was dropped (it was being read off another table's socket) — nothing is pressed until the next hand");
+  }
   const h = handState();
   if (!h) return no("no hand exported");
   if (h.heroFolded || h.ended) return no("hand is over for you");
@@ -355,20 +433,29 @@ export function pickReady(): Record<string, any> {
   out.kN = kN;
   const plan = pickPlan(st.pick, (h.currentNode || {}).pot ?? null);
   if (!plan) return no(`cannot map pick ${pyReprStr(String(st.pick))} to a table action`);
+  // the hand the pick was made for must be the hand OUR table shows (holeCardsRefusal) — checked here against the
+  // last read, so auto waits (and says why) instead of firing, and again on the press's own read
+  if (!isCp()) {
+    const wrongHand = holeCardsRefusal(keyCards(key), S.tapDomCards);
+    if (wrongHand) return no(wrongHand);
+  }
   Object.assign(out, { ok: true, plan });
   return out;
 }
 
-export async function actuate(plan: Record<string, any>): Promise<Record<string, any>> {
+/** Press `plan` on our table. `guard.cards` = the hole cards the decision was made for: every click the plan takes
+ *  is refused on a table whose own frame shows another hand (holeCardsRefusal). */
+export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): Promise<Record<string, any>> {
   if (isCp()) {
     const auto = S.study.execSource === "auto";
     // the actuator keeps its own practice-only check; it lets an auto press through on real money only when we
     // vouch for a LIVE bounded allowance (checked here, at press time — not when it was armed)
     return CP.actuate(plan, { auto, allowReal: auto && autoAllowance().live });
   }
-  if (plan.kind === "raise-to") return raiseTo(plan.amount, true);
-  if (plan.label === "all-in") return actuateAllIn();
-  return act(plan.label, "action");
+  const g: ActOpts = guard.cards !== undefined ? { cards: guard.cards, strict: guard.strict } : {};
+  if (plan.kind === "raise-to") return raiseTo(plan.amount, true, g);
+  if (plan.label === "all-in") return actuateAllIn(g);
+  return act(plan.label, "action", g);
 }
 
 /** How long the confirm may take to show the preset's size (the client re-renders the strip on the next frame). */
@@ -386,9 +473,9 @@ const SHOVE_CONFIRM_POLL_S = 0.15;
  *   3. no RAISE/BET control at all, only CALL: the call is the most hero can put in when it takes hero's last chip
  *      or every opponent still in is all-in (hand 4920544353: FOLD / CALL 21.6 BB against a jam, refused twice, then
  *      folded) — pressed only when the hand agrees (terminal.callIsMaxCommit). The result carries `as: "call"`. */
-export async function actuateAllIn(): Promise<Record<string, any>> {
-  const res = await act("all-in", "action");
-  if (res.ok) return res;
+export async function actuateAllIn(guard: ActOpts = {}): Promise<Record<string, any>> {
+  const res = await act("all-in", "action", guard);
+  if (res.ok || res.wrongHand) return res;
   // the control WAS there and the press itself was refused (another table's point, a window not rendering): that
   // reason is the answer — the fallbacks below are for a strip that does not show the shove as one control
   if (res.offer && !res.missing) return res;
@@ -399,7 +486,7 @@ export async function actuateAllIn(): Promise<Record<string, any>> {
   const hasCall = tagged ? qa.some((q) => QA_OF.call!.test(q)) : labels.some((t) => /^call\b/i.test(t));
   if (hasConfirm || !res.offer) {
     for (const label of ["all-in", "max"]) {
-      const preset = await act(label, "preset");
+      const preset = await act(label, "preset", guard);
       if (!preset.ok) {
         if (preset.offer && !preset.missing) return { ok: false, reason: `could not press the ${label.toUpperCase()} preset — ${pyStr(preset.reason ?? null)}` };
         continue;
@@ -409,6 +496,7 @@ export async function actuateAllIn(): Promise<Record<string, any>> {
       for (;;) {
         await sleep(SHOVE_CONFIRM_POLL_S);
         confirm = await act("confirm", "action", {
+          ...guard,
           expect: (hit) => (isAllInLabel(hit.text) ? null
             : `the RAISE/BET button still reads '${pyStr(hit.text)}' after ${pyStr(preset.clicked ?? null)} — the shove size has not taken`),
         });
@@ -424,7 +512,7 @@ export async function actuateAllIn(): Promise<Record<string, any>> {
     if (!why.yes) {
       return { ok: false, reason: `only FOLD / CALL on offer and the call is not hero's whole stack (${why.why}) — not calling it a shove`, offer: res.offer };
     }
-    const c = await act("call", "action");
+    const c = await act("call", "action", guard);
     return c.ok ? { ...c, kind: "call-as-all-in", as: "call", why: why.why } : c;
   }
   return res;
@@ -524,7 +612,7 @@ export async function maybeVerifyExec(): Promise<void> {
     if (same) {
       p.attempts += 1;
       p.deadline = time() + VERIFY_DEADLINE_S;
-      const res = await actuate(p.plan);
+      const res = await actuate(p.plan, { cards: keyCards(p.key) });
       feedAdd(`Study pick ${pyStr(p.pick)} did not register — retried (${p.attempts}/${VERIFY_ATTEMPTS})`
               + (res.ok ? "" : `, refused: ${pyStr(res.reason ?? null)}`));
       if (S.session.id) {
@@ -551,7 +639,7 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const plan = r.plan, key = r.key, pick = r.pick;
     const kN = r.kN ?? null;
     S.study.execSource = source;
-    const res = await actuate(plan);
+    const res = await actuate(plan, { cards: keyCards(key) });
     const ok = !!res.ok;
     const rec: Record<string, any> = { at: nowMs(), source, pick, plan, ok, result: res, hand: S.handNo, waitedS, key,
                                        outcome: ok ? "pending" : "refused" };
@@ -950,11 +1038,14 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   turn.lastTry = time();
   // actuate() on CoinPoker keeps its own practice check only for an auto press — so this goes as one
   st.execSource = "auto";
+  // THE CAPTURE'S HAND MUST BE THE ONE ON OUR TABLE (holeCardsRefusal): a no-answer fold that followed another
+  // table's hand folded 9♠9♣ on this one (2026-09-25)
+  const guard: ActOpts = { cards: h.heroCards ?? null };
   let did = "check";
-  let res = await actuate({ kind: "action", label: "check" });
-  if (!res.ok) {
+  let res = await actuate({ kind: "action", label: "check" }, guard);
+  if (!res.ok && !res.wrongHand) {
     did = "fold";
-    res = await actuate({ kind: "action", label: "fold" });
+    res = await actuate({ kind: "action", label: "fold" }, guard);
   }
   const ok = !!res.ok;
   const rec = { at: nowMs(), hand: S.handNo, clientHandId: S.handIds.get(S.handNo) ?? null, street: h.street ?? null,
@@ -982,7 +1073,8 @@ export async function maybeTakeTime(): Promise<Record<string, any> | null> {
   if (st.timeBankDecision === decision) return null;
   st.timeBankAt = time();
   const label = String(b.text || "+45s").trim();
-  const res = await act(label, "button");
+  // our frame's own clock, but not spent on a decision the capture is not reading (another table's hand)
+  const res = await act(label, "button", { cards: h ? h.heroCards ?? null : null, strict: false });
   const ok = !!res.ok;
   if (ok) st.timeBankDecision = decision;
   st.lastTimeBank = { at: nowMs(), label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null };

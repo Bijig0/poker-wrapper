@@ -27,7 +27,7 @@ import * as faketable from "./faketable";
 import { SITE as CP_SITE, FORMATS as CP_FORMATS } from "./sites/coinpoker";
 import { archiveHand, sessionHands } from "./archive";
 import { setDebug } from "./ignition/recorder";
-import { slotted } from "./ignition/dom";
+import { forgetFrame, mySel, slotted } from "./ignition/dom";
 import { setAuto } from "./relay";
 import { applyLayout, chromeWindow, closeBrowser, killProfileWindows, leaderHwnd, otherArea, panelHwnd, targetArea } from "./windows";
 
@@ -36,6 +36,13 @@ const layout = () => applyLayout(seams.ignitionTarget);
 /** The lobby call a test replaces (Python's tests stubbed formats.leave). */
 export const sessionSeams = {
   leave: (port: number) => F.leave(port),
+  // a table lost the poker server: close the client so it cannot reconnect (maybeEndForDisconnect)
+  closeClient: async (): Promise<string> => {
+    if (await closeBrowser(C.CDP_PORT)) return "closed (Browser.close)";
+    return (await killProfileWindows(C.PROFILE_TABLE)) ? "closed (its processes stopped)" : "no client was open";
+  },
+  // a table that is not the leader tells the leader, which owns the session
+  tellLeader: (body: Record<string, any>) => postJson(`http://127.0.0.1:${TABLES.leaderPort()}/session/disconnected`, body, 20),
   hands: (sid: string) => sessionHands(sid),
   join: (body: Record<string, any>) => sessionJoin(body),
   // this wrapper's panel window: found / opened. Inert under bun test — a unit test must never pop a window.
@@ -623,6 +630,69 @@ export async function standDownTable(why: string): Promise<Record<string, any>> 
   return res;
 }
 
+/**
+ * A TABLE LOST THE POKER SERVER: END THE SESSION THERE, NEVER RECONNECT (Brady, 2026-09-25 — "if a table gets
+ * disconnected, keep it disconnected, do not allow a reconnect, just end the session then and there"). The reader
+ * latched it (ignition/reader.ts noteDisconnect: nothing pressed, auto off, router stopped); this, from the feed loop,
+ * does the rest ONCE:
+ *   1. closes the Ignition client — the one page every table lives in — so its own reconnect (on its own, 22-25 s
+ *      later in session_20260925_180244, on new sockets, seats back as "Sit here") cannot happen;
+ *   2. the leader ends the session (the other tables stand down; the closing balance cannot be read with the client
+ *      closed and is recorded as missed); any other table tells the leader, and ends it itself if the leader does
+ *      not answer. The wrapper stays up with the reason in its feed and in the session record.
+ */
+export async function maybeEndForDisconnect(): Promise<void> {
+  const x = S.disconnect;
+  if (!x || x.handled) return;
+  x.handled = true;
+  const sid = x.sid;
+  let closed = "";
+  try {
+    closed = await sessionSeams.closeClient();
+  } catch (e: any) {
+    closed = `could not close it: ${e?.message ?? e}`;
+  }
+  log(`[disconnect] Ignition client: ${closed}`);
+  const detail = { slot: x.slot, text: x.text, attempt: x.attempt, of: x.of, reconnected: x.reconnected, client: closed };
+  if (sid && S.session.id === sid) S.sessions.event(sid, "table-disconnected", detail);
+  const note = `ended automatically: table ${x.slot ?? 1} lost the poker server (${x.reconnected ? "the client had reconnected by itself" : x.text}${x.attempt !== null ? `, attempt ${x.attempt} of ${x.of}` : ""}) — the client was closed so it could not reconnect`;
+  if (!sid || S.session.id !== sid) return;
+  if (!TABLES.isLeader()) {
+    let told: Record<string, any> | null = null;
+    try {
+      told = await sessionSeams.tellLeader({ sid, ...detail });
+    } catch (e: any) {
+      told = { ok: false, error: String(e?.message ?? e) };
+    }
+    if (told && told.ok) {
+      log(`[disconnect] told table ${TABLES.LEADER}, which ends the session`);
+      return;
+    }
+    log(`[disconnect] table ${TABLES.LEADER} did not answer (${pyStr((told || {}).error ?? null)}) — ending the session from table ${pyStr(TABLES.slot())}`);
+  }
+  const res = await sessionEnd({ id: sid, note });
+  feedAdd(res.ok ? "Session ended — the table disconnected from the poker server and was not allowed to reconnect"
+                 : `Session could NOT be ended automatically: ${pyStr(res.error ?? null)} — end it yourself`);
+}
+
+/** POST /session/disconnected — another table saw its table lose the poker server: the leader ends the session. */
+export async function sessionDisconnected(body: Record<string, any>): Promise<[number, Record<string, any>]> {
+  const sid = String(body.sid || "");
+  if (!S.session.id || (sid && sid !== S.session.id)) return [200, { ok: true, ended: null, note: "not this session (already ended?)" }];
+  if (!S.disconnect) {
+    const slot = body.slot === undefined || body.slot === null ? null : pyInt(body.slot);
+    S.disconnect = { at: time(), slot, text: String(body.text || "disconnected"), attempt: body.attempt ?? null, of: body.of ?? null,
+                     reconnected: !!body.reconnected, sid: S.session.id, handled: false, via: `table ${pyStr(slot)} told us` };
+    Object.assign(S.study, { auto: false, autoDue: null, autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+                             standDownPending: null });
+    S.router.cancel = true;
+    feedAdd(`DISCONNECTED FROM THE POKER SERVER — table ${pyStr(slot)} lost it. Ending the session; the client is closed so it cannot reconnect`);
+  }
+  const was = S.session.id;
+  await maybeEndForDisconnect();
+  return [200, { ok: true, ended: S.session.id === null ? was : null }];
+}
+
 /** The deferred half of a close: leave the table the moment the hand ends. */
 export async function maybeStandDown(): Promise<void> {
   if (!S.study.standDownPending || inAHand()) return;
@@ -758,7 +828,9 @@ export async function sessionJoin(body: Record<string, any>): Promise<[number, R
   const rec = S.sessions.get(sid);
   if (!rec) return [404, { ok: false, error: `no session ${sid}` }];
   if (rec.ended_at) return [409, { ok: false, error: `session ${sid} has already ended` }];
+  S.disconnect = null;                 // a table that lost the server ended the LAST session; this one starts clean
   Object.assign(S.session, { id: sid, rec, started: time() });
+  forgetFrame();                       // a new session's tables: pin our table's tag afresh on the first read
   await applySessionConfig(cfg);
   if (cfg.answers) void ensureAnswerChain(`slot ${pyStr(TABLES.slot())} joined`).catch(() => {});
   S.sessions.event(sid, "table-joined", { slot: TABLES.slot(), panelPort: C.PANEL_PORT });
@@ -979,6 +1051,7 @@ export async function sessionStart(body: Record<string, any>): Promise<[number, 
   if (!pf.ok) return [409, { ok: false, error: "blocked by preflight: " + pf.blockers.join(" · "), preflight: pf }];
   const sid = SES.newSessionId();
   const rec = S.sessions.start(sid, preset, body.label ?? null, body.note ?? null, cfg, pf, SES.versionsSnapshot(registry));
+  S.disconnect = null;                 // a table that lost the server ended the LAST session; this one starts clean
   Object.assign(S.session, { id: sid, rec, started: time() });
   await applySessionConfig(cfg);
   if (cfg.answers) void ensureAnswerChain("session start").catch(() => {});
@@ -998,6 +1071,7 @@ export async function sessionStart(body: Record<string, any>): Promise<[number, 
   log(`[session] ${sid} started · ${preset} · answers=${cfg.answers ? "on" : "off"} recording=${cfg.recording ? "on" : "off"}`);
   const nTables = pyInt(cfg.tables || 1);
   if (nTables > 1) TABLES.adopt(nTables);
+  forgetFrame();                       // a new session's tables: pin our table's tag afresh on the first read
   try {
     await openTableWindow();
   } catch (e: any) {
@@ -1245,7 +1319,7 @@ export async function faketableLoad(spec: Record<string, any>): Promise<Record<s
     try {
       const me = TABLES.slot();
       const js = me === null ? "location.reload(); true"
-        : slotted("(() => {__FRAME__ const f = __frame(__SLOT__); if (!f) return false; f.src = f.src; return true; })()", TABLES.domSlot());
+        : slotted("(() => {__FRAME__ const f = __frame(__SLOT__); if (!f) return false; f.src = f.src; return true; })()", mySel());
       await cdp.evaluate(existing.webSocketDebuggerUrl, js, 4);
       await sleep(1.2);
       opened = "reloaded";

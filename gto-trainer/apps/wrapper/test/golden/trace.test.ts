@@ -12,7 +12,7 @@ import * as BAL from "../../src/balances";
 import * as cdp from "../../src/cdp";
 import { realTime, setFakeTime, time } from "../../src/clock";
 import * as F from "../../src/formats";
-import { canon, firstDiff, normPy, readCorpus } from "./lib";
+import { asRecordedFrame, canon, firstDiff, normPy, readCorpus } from "./lib";
 
 const TMP = mkdtempSync(join(tmpdir(), "golden-trace-ts-"));
 const PASSWORDS: Record<string, string | null> = { brady: "correct horse", nopw: null };
@@ -41,7 +41,8 @@ function replay(calls: any[]) {
   let k = 0;
   const next = (kind: string, payload: unknown) => {
     const want = calls[k];
-    const got = normPy(payload);
+    // a page question is compared with the frame resolver as the recording had it (lib.ts asRecordedFrame)
+    const got = normPy(Array.isArray(payload) ? payload.map((x) => asRecordedFrame(x as any)) : payload);
     if (!want) throw new Divergence(`call #${k}: extra ${kind} ${JSON.stringify(got).slice(0, 300)}`);
     if (want.k !== kind || canon(got) !== canon(want.p)) {
       throw new Divergence(`call #${k}: got ${kind} ${JSON.stringify(got).slice(0, 400)}\n      want ${want.k} ${JSON.stringify(want.p).slice(0, 400)}` +

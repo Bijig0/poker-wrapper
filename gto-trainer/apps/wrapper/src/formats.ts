@@ -68,13 +68,13 @@ export function formatIdFor(gameType: string, stake: string | null, seats: numbe
 export const LOBBY = () => js("formats.LOBBY");
 const FRAME_FN = () => js("formats.FRAME_FN");
 
-/** `code` with __FRAME__ defined and __SLOT__ bound to this table's slot. */
-export function slotted(code: string, slot: number | null): string {
-  return code.split("__FRAME__").join(FRAME_FN()).split("__SLOT__").join(slot === null ? "null" : String(Math.trunc(slot)));
+/** `code` with __FRAME__ defined and __SLOT__ bound to one table (tables.ts FrameSel). */
+export function slotted(code: string, sel: tables.FrameSel | undefined): string {
+  return code.split("__FRAME__").join(FRAME_FN()).split("__SLOT__").join(tables.frameSelJs(sel));
 }
 
-export function tableJs(slot: number | null = null): string {
-  return slotted(js("formats.TABLE_JS_TMPL"), slot);
+export function tableJs(sel: tables.FrameSel = null): string {
+  return slotted(js("formats.TABLE_JS_TMPL"), sel);
 }
 
 /** The Ignition page THIS wrapper drives: ONE page for every table (never claimed away). */
@@ -141,12 +141,20 @@ export function describe(p: Record<string, any>) {
 
 export const MINE = Symbol("this wrapper's own slot");
 
+/** The table `slot` names: this wrapper's own (by its pinned tag), or another by the CLIENT's own number — the
+ *  data-multitableslot seatedSlots() reports, looked up as that tag (never as a position in the client's order,
+ *  which a closed table shifts). */
+export function selOf(slot: number | null | typeof MINE): tables.FrameSel {
+  if (slot === MINE) return tables.frameHooks.mine();
+  return slot === null ? null : { tag: String(Math.trunc(slot)) };
+}
+
 /** Format of the table currently open in the client window, or null. `settle` keeps re-reading while the blinds
  *  are unknown; `slot` names another table than this wrapper's own. */
 export async function detect(port: number, settle = 0.0, slot: number | null | typeof MINE = MINE): Promise<Record<string, any> | null> {
   const t = await target(port);
   if (!t) return null;
-  const dom = slot === MINE ? tables.domSlot() : slot;
+  const dom = selOf(slot);
   const end = time() + settle;
   for (;;) {
     let p: any;
@@ -438,8 +446,8 @@ export async function leave(port: number, log: Log = console.log, slot: number |
   const t = await target(port);
   if (!t) return { ok: false, error: "no table window" };
   const ws = t.webSocketDebuggerUrl!;
-  const dom = slot === MINE ? tables.domSlot() : slot;
-  if (!(await detect(port, 0, dom))) return { ok: true, note: "no table open" };
+  const dom = selOf(slot);
+  if (!(await detect(port, 0, slot))) return { ok: true, note: "no table open" };
   const findX = slotted(String.raw`(() => {__FRAME__
       const f = __frame(__SLOT__);
       if (!f || !f.contentDocument) return null;
@@ -467,8 +475,8 @@ export async function leave(port: number, log: Log = console.log, slot: number |
   if (!truthy(spot)) return { ok: false, error: "could not find the table close control" };
   if (!truthy(yes)) return { ok: false, error: "leave confirmation did not appear" };
   const end = time() + 10;
-  while (time() < end && (await detect(port, 0, dom))) await sleep(0.4);
-  const ok = (await detect(port, 0, dom)) === null;
+  while (time() < end && (await detect(port, 0, slot))) await sleep(0.4);
+  const ok = (await detect(port, 0, slot)) === null;
   log(`[goto] left table: ${ok ? "True" : "False"}`);
   return { ok };
 }

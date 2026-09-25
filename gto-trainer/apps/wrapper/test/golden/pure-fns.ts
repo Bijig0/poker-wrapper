@@ -104,9 +104,13 @@ export const FNS_EXTRA: Record<string, (args: any[], rec: any) => unknown> = {
     const was = process.env.TABLE_SLOT;
     process.env.TABLE_SLOT = "1";
     try {
+      // since 2026-09-25 OUR table is the client tag the reader pinned on its first read (dom.ts pinFrame) — table 1
+      // reading the client's table "0", as the recording's answer says it is
+      DOM.pinFrame("0", true);
       const got = await RELAY.pointIsMyTable("ws://x", x, y);
       return { js: seen[seen.length - 1], result: got };
     } finally {
+      DOM.forgetFrame();
       CDP.io.evaluate = ev0;
       if (was === undefined) delete process.env.TABLE_SLOT;
       else process.env.TABLE_SLOT = was;

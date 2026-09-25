@@ -38,9 +38,11 @@ class Client {
              gameTableUrl: "/poker-game/ring", tableName: `Table ${slot}`, _title: "NL Hold'em $1/$2" };
   }
   ev(js: string): any {
-    const m = /const SLOT = (null|\d+);/.exec(js);
+    // a table named by the client's own tag ({"tag":"1"}, formats.selOf) or, before 2026-09-25, by its ordinal
+    const m = /const SLOT = (null|\d+|\{[^;]*\});/.exec(js);
     if (m) {
-      const want = m[1] === "null" ? null : Number(m[1]);
+      const raw = m[1]!;
+      const want = raw === "null" ? null : raw.startsWith("{") ? Number(JSON.parse(raw).tag) : Number(raw);
       this.detectSlots.push(want);
       if (want === null) return this.slots.length ? this.params(this.slots[0]!) : null;
       return this.slots.includes(want) ? this.params(want) : null;

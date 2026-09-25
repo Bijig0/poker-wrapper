@@ -234,6 +234,28 @@ export function domSlot(me?: number | null): number | null {
   return m === null ? null : m - 1;
 }
 
+/**
+ * WHICH IFRAME A PAGE SNIPPET READS — `__frame(SEL)` (js/launch.FRAME_JS.js). SEL is:
+ *   null            the single-table client (the first table frame);
+ *   a number        the Nth table in the client's own tag order (a legacy caller naming another table by ordinal);
+ *   {tag}           the table the client tags `tag` — a TAG is the client's identity for a table, a position is not;
+ *   {ord, me, tag?} THIS wrapper's table: by its pinned tag once it has one, else the ord-th table — unless another
+ *                   wrapper already holds that one (the page-side registry the snippet keeps, window.__pwFramePins).
+ * Here, not in ignition/dom.ts, so formats.ts can build one without importing the state (sessions → balances →
+ * formats → state is a cycle that leaves SessionStore undefined when sessions.ts is the entry).
+ */
+export type FrameSel = null | number | { tag?: string | null; ord?: number; me?: number };
+
+/** `sel` as the literal the page snippet is built with. */
+export function frameSelJs(sel: FrameSel | undefined): string {
+  if (sel === null || sel === undefined) return "null";
+  if (typeof sel === "number") return String(Math.trunc(sel));
+  return JSON.stringify(sel);
+}
+
+/** THIS wrapper's table selector — ignition/dom.ts installs the pinned-tag one (mySel) when it loads. */
+export const frameHooks: { mine: () => FrameSel } = { mine: () => domSlot() };
+
 export function isLeader(): boolean {
   const me = slot();
   return me === null || me === LEADER;

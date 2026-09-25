@@ -10,14 +10,14 @@
 import * as cdp from "../cdp";
 import { time } from "../clock";
 import { C } from "../config";
-import { feedAdd } from "../feed";
-import { keepLast, pyRound, sortedNums, truthy } from "../py";
+import { feedAdd, log } from "../feed";
+import { keepLast, pyRound, pyStr, sortedNums, truthy } from "../py";
 import { S, seams } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand, noteAward } from "../archive";
 import {
-  awardName, bankStep, boardCards, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
-  splitStrip, tableJs, toAct, watchJs, type Node,
+  awardName, bankStep, boardCards, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
+  mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
 import { actAdd, actSeen, dumpMark, mkey, tapVerify } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
@@ -46,7 +46,7 @@ async function drainActions(): Promise<any[]> {
   const t = await seams.ignitionTarget();
   if (!t) return [];
   try {
-    return (await cdp.evaluate(t.webSocketDebuggerUrl, watchJs(TABLES.domSlot()), 6)) || [];
+    return (await cdp.evaluate(t.webSocketDebuggerUrl, watchJs(mySel()), 6)) || [];
   } catch {
     return [];
   }
@@ -58,7 +58,7 @@ export async function tableState(): Promise<Record<string, any>> {
   if (!t) return { seated: false, reason: "poker client not open" };
   let d: Record<string, any>;
   try {
-    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(TABLES.domSlot()), 6)) || {};
+    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(mySel()), 6)) || {};
   } catch (e: any) {
     return { seated: false, reason: `read failed: ${e?.message ?? e}` };
   }
@@ -80,6 +80,51 @@ export async function tableState(): Promise<Record<string, any>> {
   };
 }
 
+/** Say what pinning our table's tag just did (dom.ts pinFrame). A LOST table is not replaced: the wrapper reads
+ *  nothing until the client shows that tag again — reading the wrong table is worse than reading none. */
+function notePin(what: ReturnType<typeof pinFrame>): void {
+  const tag = S.frame.tag;
+  if (what === "pinned") {
+    log(`[tables] table ${TABLES.slot()} is the client's table tagged ${tag} — reading that one only`);
+  } else if (what === "lost") {
+    feedAdd(`This table (the client's tag ${tag}) is gone — reading nothing rather than another table`);
+    log(`[tables] table ${TABLES.slot()}: the client's table tagged ${tag} is gone — standing down, not reading a neighbour's`);
+  } else if (what === "back") {
+    feedAdd(`This table (the client's tag ${tag}) is back`);
+    log(`[tables] table ${TABLES.slot()}: the client's table tagged ${tag} is back`);
+  }
+}
+
+/**
+ * A TABLE LOST THE POKER SERVER — Brady, 2026-09-25: "if a table gets disconnected, keep it disconnected, do not allow
+ * a reconnect, just end the session then and there". The client reconnects by itself 20-odd seconds later on new
+ * sockets, and that recovery is what went wrong (session_20260925_180244). Latched ONCE per session, on the first
+ * sighting: nothing is pressed from here on (state.ts pressBlocked), auto-execute is disarmed and the router stops
+ * (it would sign back in); session.ts maybeEndForDisconnect, next in this loop, closes the client and ends the session.
+ */
+export function noteDisconnect(what: NonNullable<ReturnType<typeof disconnectOf>>, via: string): void {
+  if (S.disconnect || !S.session.id) return;
+  S.disconnect = { at: time(), slot: TABLES.slot(), ...what, sid: S.session.id, handled: false, via };
+  Object.assign(S.study, { auto: false, autoDue: null, autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+                           standDownPending: null });
+  S.router.cancel = true;
+  const said = what.reconnected ? "the client has reconnected by itself" : `${what.text}${what.attempt !== null ? ` (attempt ${what.attempt} of ${what.of})` : ""}`;
+  feedAdd(`DISCONNECTED FROM THE POKER SERVER — ${said}. Ending the session; the client is closed so it cannot reconnect`);
+  log(`[disconnect] table ${pyStr(TABLES.slot() ?? 1)}: ${said} (${via}) — nothing more is pressed; ending the session`);
+}
+
+/** At several tables: is our frame showing the hand the capture is reading? Its hole cards against the capture's —
+ *  another hand's (a frame that moved to another table, the hand before still drawn) is not; no cards on the frame
+ *  now (hero folded) counts as it did last time the frame showed them — a socket bound on a claim whose deal the
+ *  frame has never drawn is not proven ours. Hero not dealt in: nothing to tell hands apart by. One table: always. */
+function frameShowsCaptureHand(hc: string[]): boolean {
+  if (TABLES.slot() === null) return true;
+  const cap: string[] = S.ws.heroCards || [];
+  if (!cap.length) return true;
+  if (hc.length >= 2) return sameHole(hc, cap);
+  return S.tapDealDrawn;
+}
+
 const STABLE_TICKS = 12;
 const WINS_POT = /\bwins?\b.*pot/i;
 const RESULT_FOR = /result for hand\s*(\d+)/i;
@@ -89,10 +134,13 @@ export async function feedTick(): Promise<void> {
   if (!t) return;
   let d: Record<string, any>;
   try {
-    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(TABLES.domSlot()), 6)) || {};
+    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(mySel()), 6)) || {};
   } catch {
     return;
   }
+  notePin(pinFrame(d.frameTag ?? null, !!d.seated));
+  const lost = disconnectOf(d);
+  if (lost) noteDisconnect(lost, "our own table showed it");
   const L = S.liveStatus;
   const w = S.ws;
   if (S.fakeMode) {
@@ -101,6 +149,8 @@ export async function feedTick(): Promise<void> {
       const bc = boardCards(d);
       L.hero = heroStatus(d, d.nodes || []);
       L.heroSeatDom = domHeroSeat(d);
+      // hero's cards as the frame shows them: the hole-card guard's reference (relay.ts), fake tables included
+      S.tapDomCards = heroCards(d);
       L.board = [...bc];
       L.practice = true;
       L.toAct = toAct(d);
@@ -273,6 +323,11 @@ export async function feedTick(): Promise<void> {
     }
     let prevSeats: Map<any, any> = p.seats instanceof Map ? p.seats : new Map();
     if (time() < (w.domGraceUntil ?? 0)) prevSeats = new Map();   // deal animation — the previous hand's pixels lie
+    // ANOTHER HAND ON OUR FRAME (2026-09-25, A8o 4920571422: "seat 6 acted on the preflop but has no position label"):
+    // table 3's frame moved to another table and, in the ticks before the verify let the socket go, that table's
+    // seats were backfilled into A8o. Nothing is filed from a frame not showing the capture's own hand — no action,
+    // no fold, not hero's hand-end fold (the per-seat tick bookkeeping below still runs).
+    const ours = frameShowsCaptureHand(hc);
     const bbc = w.bb || 0;
     const bbKnown = !!(bbc && w.bbSeen);
     const heroSeat = w.heroSeat ?? null;
@@ -293,7 +348,7 @@ export async function feedTick(): Promise<void> {
       const potAtPrompt = w.heroToActPot ?? null;
       const potBeforeWipe = potVal(p.pot ?? null);
       const potGrew = potAtPrompt !== null && potBeforeWipe !== null && potBeforeWipe > potAtPrompt + 0.05;
-      if (heroSeat !== null && !w.heroFolded && time() - toActAt <= 3.0 && actedAt < toActAt
+      if (ours && heroSeat !== null && !w.heroFolded && time() - toActAt <= 3.0 && actedAt < toActAt
           && !showdown && !potGrew && !actSeen(["fold", heroSeat])) {
         const nb = p.board || 0;
         const streetPrev = nb >= 5 ? "river" : nb === 4 ? "turn" : nb === 3 ? "flop" : "preflop";
@@ -320,6 +375,7 @@ export async function feedTick(): Promise<void> {
       const ticks: Map<number, number> = (w.foldTicks ??= new Map());
       ticks.set(num, badge === "FOLD" ? (ticks.get(num) || 0) + 1 : 0);
       if (!(w.heldCards ?? new Set()).has(num)) continue;
+      if (!ours) continue;
       if (((badge === "FOLD" && ticks.get(num) === 2) || (oc >= 1 && cc === 0)) && !actSeen(["fold", num])) {
         foldedSeats.add(num);
         (w.domFolds ??= new Set<number>()).add(num);

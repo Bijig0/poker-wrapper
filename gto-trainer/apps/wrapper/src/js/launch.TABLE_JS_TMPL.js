@@ -199,6 +199,7 @@
   // than quietly divide by the wrong factor.
   const zoomRef = doc.querySelector('svg[data-qa], [data-qa]');
   return {seated: true, practice: (tf.src || '').includes('playMode=fun'),
+          frameTag: tf.getAttribute('data-multitableslot'),
           frame: {x: Math.round(fb.x), y: Math.round(fb.y),
                   w: Math.round(fb.width), h: Math.round(fb.height)},
           zoom: zoomRef ? zoomOf(zoomRef) : null,

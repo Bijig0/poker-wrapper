@@ -66,6 +66,8 @@ export function archiveHand(): void {
 
 function archiveHandLocked(): void {
   try {
+    // a hand dropped because its socket was another table's (ws.ts abandonHand) is nobody's history here
+    if (S.handAbandoned !== null && S.handAbandoned === S.handNo) return;
     const h = handState();
     if (!h || !h.actions.length) return;
     if (h.handId === S.lastArchived.no) return;
