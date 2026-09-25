@@ -5,6 +5,7 @@ import { DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, loadLedger, evaluate, type 
 import { isBackgroundOwner } from "./backgroundLock";
 import { jobsDbPath, jobsDir, openStore } from "./storePaths";
 import { asActivity } from "./answerTrace";
+import { LogFollower, tailLines } from "./fileTail";
 /** The checkout of hrc-api whose Windows driver carries the Run-Nash refinement (8 commits ahead of this repo's hrc-api). */
 export const HRC_API_ZENBOOK = process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api";
 
@@ -387,7 +388,8 @@ class Jobs {
   }
   logTail(id: number, lines = 200): string {
     const j = this.get(id); if (!j) return "";
-    try { const t = readFileSyncSafe(j.logPath); const arr = t.split("\n"); return arr.slice(-lines).join("\n"); } catch { return ""; }
+    // from the end of the log, not the whole of it: the ledger and proposal pages ask for this per running job
+    try { return tailLines(j.logPath, lines).join("\n"); } catch { return ""; }
   }
 
   private tick(): void {
@@ -428,9 +430,11 @@ class Jobs {
     if (adoptPid) {
       state.pid = adoptPid;
       const from = (() => { try { return require("node:fs").statSync(j.logPath).size; } catch { return 0; } })();
+      // only what the step appended since the last poll, not the whole log every 2 s for hours
+      const follow = new LogFollower(j.logPath, from);
       for (;;) {
         await new Promise((r) => setTimeout(r, 2000));
-        const m = readFileSyncSafe(j.logPath).slice(from).match(/^--- step exited (-?\d+)/m);
+        const m = follow.read().match(/^--- step exited (-?\d+)/m);
         if (m) return Number(m[1]);
         if (state.cancel) { try { Bun.spawnSync(["taskkill", "/PID", String(adoptPid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" }); } catch { /* ignore */ } log("\n--- step cancelled\n"); return -1; }
         if (!this.aliveStep(adoptPid)) { log(`\n!!! the adopted driver (pid ${adoptPid}) is gone and never wrote an exit marker\n`); return -2; }
@@ -451,10 +455,10 @@ class Jobs {
     state.pid = pid;
     // persist it: a restart adopts this driver instead of starting a rival one against the same box
     this.open().query("UPDATE jobs SET pid=?, step=? WHERE id=?").run(pid, i, j.id);
+    const follow = new LogFollower(j.logPath, startLen);
     for (;;) {
       await new Promise((r) => setTimeout(r, 2000));
-      const tail = readFileSyncSafe(j.logPath).slice(startLen);
-      const m = tail.match(/^--- step exited (-?\d+)/m);
+      const m = follow.read().match(/^--- step exited (-?\d+)/m);
       if (m) return Number(m[1]);
       if (state.cancel) { try { Bun.spawnSync(["taskkill", "/PID", String(pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" }); } catch { /* ignore */ } log("\n--- step cancelled\n"); return -1; }
     }
@@ -501,8 +505,6 @@ class Jobs {
     this.running.delete(j.lane);
   }
 }
-
-function readFileSyncSafe(p: string): string { try { return require("node:fs").readFileSync(p, "utf-8"); } catch { return ""; } }
 
 export const jobs = new Jobs();
 export { REPO };

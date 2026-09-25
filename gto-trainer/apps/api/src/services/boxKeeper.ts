@@ -6,6 +6,7 @@ import { jobsDir } from "./storePaths";
 import { jobs, HRC_API_ZENBOOK, BASH, type JobRow } from "./jobs";
 import { isBackgroundOwner, backgroundLockStatus } from "./backgroundLock";
 import { asActivity } from "./answerTrace";
+import { lastMatch, readRange } from "./fileTail";
 
 /**
  * BOX KEEPER — keeps the HRC boxes solving without a human in the loop (Brady, 2026-09-11:
@@ -553,7 +554,9 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
       try { const m = Number(readFileSync(markPath, "utf-8").trim()); if (Number.isFinite(m) && m >= 0) from = m; } catch { /* first run */ }
       if (from > size) from = 0;  // the log was rotated or truncated under us
       if (size > from) {
-        const fresh = readFileSync(logPath, "utf-8").slice(from);
+        // only the bytes [from, size): the mark below says we read exactly that far (reading the whole file to slice
+        // it also re-reported anything appended between the stat and the read)
+        const fresh = readRange(logPath, from, size).text;
         const pulled = fresh.split(/\r?\n/).filter((l) => l.startsWith("pulled ")).map((l) => l.split(" ")[1]);
         if (pulled.length) this.log("linux-pull", `${pulled.length} new chart(s) pulled + parsed: ${pulled.join(", ")}`);
         writeFileSync(markPath, String(size));
@@ -579,7 +582,11 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
     // the 3-max box relays AND the 6-max shard jobs (Windows boxJob + Linux linuxShardJob lanes) — 2026-09-13: the 6-max
     // jobs were never auto re-queued because only recipe "hrc-box" was considered
     const all = jobs.list(300).filter((j) => j.recipe === "hrc-box" || j.recipe === "hrc-box-6max");
-    const ev = evaluate();
+    // ONLY WHEN A FAILED JOB GETS THAT FAR (2026-09-26). evaluate() rebuilds the chart catalog once its 60 s TTL has
+    // run out — ~2,100 sidecars parsed, 0.4 s offline and 1.1-1.3 s on the loaded box — and this tick comes every
+    // 3 min, so it always found the catalog stale: the keeper's "1088 ms open: timer boxKeeper (43.4 s)" stall at the
+    // end of every tick. Almost every tick has no failed job to look at and never needs it.
+    let ev: ReturnType<typeof evaluate> | null = null;
     // a job waiting for its inputs (a chained second pass) does not make the lane busy — 2026-09-13: the 14 waiting
     // second-pass jobs made every lane look busy and no failed first-pass job was ever re-queued
     const busyLanes = new Set(all.filter((j) => j.status === "running" || (j.status === "queued" && !j.waitInputs)).map((j) => j.lane));
@@ -601,7 +608,7 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
       // failures are history, not work to revive — re-queueing them just fails again until the retry cap
       if (!knownLanes.has(j.lane)) continue;
       if (j.exitCode === 3) continue;             // parity refused: deterministic, a human must look
-      if (ev.configs.find((c) => c.id === j.config)?.effective === "done") continue;
+      if ((ev ??= evaluate()).configs.find((c) => c.id === j.config)?.effective === "done") continue;
       const st = this.attempts.get(key) ?? { n: 0, lastFailedJob: 0 };
       if (st.lastFailedJob === j.id) continue;    // we already re-queued after this failure; wait for the new job's verdict
       if (progressOf(j) > 0) st.n = 0;            // the last try solved something: it is not a loop, start the count over
@@ -616,9 +623,10 @@ export PATH=/root/.bun/bin:$PATH; bun run scripts/threeMaxGrid.ts ${D}/parse.${z
   }
 }
 
-/** charts the failed relay did pull+parse ("done: 2/76 pulled+parsed") — progress means the failure is not a loop */
+/** charts the failed relay did pull+parse ("done: 2/76 pulled+parsed") — progress means the failure is not a loop.
+ *  The LAST such line, read from the end of the log rather than the whole of it. */
 function progressOf(j: JobRow): number {
-  try { const m = readFileSync(j.logPath, "utf-8").match(/done: (\d+)\/\d+ pulled\+parsed/g); return m ? Number(m[m.length - 1]!.match(/(\d+)\//)![1]) : 0; } catch { return 0; }
+  try { const m = lastMatch(j.logPath, /done: (\d+)\/\d+ pulled\+parsed/g); return m ? Number(m[1]) : 0; } catch { return 0; }
 }
 /** the runner args the failed job was started with (after `--name <config>`), e.g. ["--order","reverse"] */
 function extraArgsOf(j: JobRow): string[] {

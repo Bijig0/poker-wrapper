@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { tailLines } from "./fileTail";
 import { evaluate, loadLedger, expectedChartIds, isBoxGrid, BOX_GRID_KINDS, MES_HANDOFF, HRC_API, type EvaluatedConfig } from "./ledger";
 import { chartStates, runEstimate } from "./chartProgress";
 import { jobs, type JobRow } from "./jobs";
@@ -142,7 +143,7 @@ export function hrcSnapshot(queuePath: string, root: string, keep?: (id: string)
   snap.total = snap.rows.length; snap.done = snap.rows.filter((r) => r.status === "done").length;
   snap.current = snap.rows.find((r) => r.status === "running") ?? null;
   const logPath = join(dirname(queuePath), "runner.log");
-  try { const t = readFileSync(logPath, "utf-8"); snap.runnerLog = t.split(/\r?\n/).filter(Boolean).slice(-8); snap.runnerLogAt = require("node:fs").statSync(logPath).mtimeMs; } catch { /* no log yet */ }
+  try { snap.runnerLog = tailLines(logPath, 8, { split: /\r?\n/, keep: Boolean }); snap.runnerLogAt = require("node:fs").statSync(logPath).mtimeMs; } catch { /* no log yet */ }
   return snap;
 }
 
