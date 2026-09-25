@@ -126,7 +126,7 @@ for (const c of cases) {
       }
       const potDry = dry.dryRun.flopPot, potLive = spec.firstStreet ? null : spec.flopPot;
       if (potLive != null && Math.abs(potDry - potLive) > 1e-6) diffs.push(`pot dry ${potDry} live ${potLive}`);
-      if (!spec.firstStreet && Math.abs(dry.dryRun.flopStack - spec.flopStack) > 1e-6) diffs.push(`stack dry ${dry.dryRun.flopStack} live ${spec.flopStack}`);
+      { const dryStack = tree?.stack ?? dry.dryRun.flopStack; if (!spec.firstStreet && Math.abs(dryStack - spec.flopStack) > 1e-6) diffs.push(`stack dry ${dryStack} live ${spec.flopStack}`); }
       if (JSON.stringify(tree?.streets) !== JSON.stringify(spec.streets)) diffs.push(`streets dry ${JSON.stringify(tree?.streets)} live ${JSON.stringify(spec.streets)}`);
       if (diffs.length) diffs.push(`range source dry ${dry.rangeSource} live ${spec.rangeSource}`);
       // a collapsed 4+ way spot: the stored trace is the first plan's; only that one is compared (said, not a mismatch)

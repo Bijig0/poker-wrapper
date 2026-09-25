@@ -107,7 +107,7 @@ for (const [hid, list] of byHand) {
   if (!res.ok || !res.dryRun?.trees?.length) { out.now = { refused: String(res.reason ?? res.warning ?? "?").slice(0, 300) }; results.push(out); continue; }
   const tree = res.dryRun.trees[0];
   const nowSeats: Record<string, number[]> = Object.fromEntries(tree.seats.map((s: any) => [String(s.pos).toUpperCase(), s.range]));
-  out.now = { src: res.rangeSource, pot: res.dryRun.flopPot, stack: res.dryRun.flopStack, kind: tree.kind, trees: res.dryRun.trees.length, note: String(res.warning ?? "").slice(0, 400) };
+  out.now = { src: res.rangeSource, pot: res.dryRun.flopPot, stack: tree.stack ?? res.dryRun.flopStack, kind: tree.kind, trees: res.dryRun.trees.length, note: String(res.warning ?? "").slice(0, 400) };
   // the LATEST stored solve of the hand too: a difference from the first one that today shares with the latest is an
   // old solve the pipeline has since corrected; a difference from the latest is the candidate regression
   const last = list[list.length - 1]!;

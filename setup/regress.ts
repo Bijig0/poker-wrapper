@@ -78,7 +78,7 @@ try {
 // Also the chain ledger end to end (2026-09-25, fastSolve.chainLedger.test.ts): each street's ranges computed once
 // and reused after, the path "clean"; a restart says "rebuilt" and why — it needs the same chart bake.
 try {
-  const [, out] = run([BUN, "test", "src/scripts/mutationHarness.test.ts", "src/scripts/mutationHarness.fixtures.test.ts", "src/scripts/mutation/rangeOracle.test.ts", "src/scripts/mutation/referenceRanges.test.ts", "src/services/fastSolve.chainLedger.test.ts"], API, 900, { ...process.env, MUTATION_GATE: "1", ANSWERS_DB_PATH: ":memory:" });
+  const [, out] = run([BUN, "test", "src/scripts/mutationHarness.test.ts", "src/scripts/mutationHarness.fixtures.test.ts", "src/scripts/mutation/rangeOracle.test.ts", "src/scripts/mutation/referenceRanges.test.ts", "src/services/fastSolve.chainLedger.test.ts", "src/services/fastSolve.hand4920544353.test.ts"], API, 900, { ...process.env, MUTATION_GATE: "1", ANSWERS_DB_PATH: ":memory:" });
   const m = /(\d+) pass\s+(?:\d+ skip\s+)?(\d+) fail/.exec(out);
   rec("api input-mutation gate", !!m && m[2] === "0", m ? `${m[1]} pass / ${m[2]} fail` : lastLines(out, 200));
 } catch (e: any) {
