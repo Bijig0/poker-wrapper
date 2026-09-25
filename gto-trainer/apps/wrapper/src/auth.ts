@@ -16,6 +16,7 @@ import { nowMs, sleep, strftime, time } from "./clock";
 import { paths } from "./env";
 import { js } from "./js";
 import { pyJsonDumps, pyReprStr, truthy } from "./py";
+import * as tables from "./tables";
 import * as W from "./win32";
 
 const profilesPath = () => join(paths().data, "profiles.json");
@@ -209,6 +210,12 @@ export async function login(name: string, port: number, log: (m: string) => void
     steps.push(s);
     log(`[auth] ${s}`);
   };
+  // ONE client, ONE login: the leader signs in (session_20260925_134058: four tables typed into one e-mail field)
+  if (!tables.isLeader()) {
+    const error = `table ${tables.slot()} does not sign in — table ${tables.LEADER} does, for every table`;
+    log(`[auth] REFUSED: ${error}`);
+    return { ok: false, error, follower: true, steps };
+  }
   const prof = get(name);
   if (!prof) return { ok: false, error: `no profile ${pyReprStr(String(name))}`, steps };
   let pw: string | null = null;

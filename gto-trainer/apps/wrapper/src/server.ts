@@ -416,7 +416,9 @@ export function buildApp(): Hono {
   app.post("/format/reseat", async () => {
     const cfg = S.session.id ? ((S.session.rec || {}).config || {}) : {};
     let res: Record<string, any>;
-    if (!S.session.id) res = { ok: false, error: "no session" };
+    const follower = F.followerRefusal("reseat", log);
+    if (follower) res = follower;
+    else if (!S.session.id) res = { ok: false, error: "no session" };
     else if (!cfg.format) res = { ok: false, error: "the session declared no format" };
     else if (!(await cdp.available(C.CDP_PORT))) res = { ok: false, error: `table window not up (CDP :${C.CDP_PORT})` };
     else {
@@ -525,6 +527,10 @@ export function buildApp(): Hono {
     return json(res.ok ? 200 : 409, res);
   });
   app.post("/session/resume", async () => {
+    // a follower joins the leader's session; resuming would TABLES.adopt() it as table 1 — a second lobby driver
+    if (!TABLES.isLeader()) {
+      return json(409, { ok: false, error: `table ${pyStr(TABLES.slot())} does not resume sessions — it joins table ${TABLES.LEADER}'s (http://127.0.0.1:${TABLES.leaderPort()}/setup)` });
+    }
     const rec = S.sessions.openSession();
     if (rec) {
       Object.assign(S.session, { id: rec.id, rec, started: rec.started_at / 1000 });

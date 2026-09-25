@@ -4,7 +4,8 @@
  * stand-down, and packaged-install updates.
  *
  * A session is declared ONCE, on the leader's setup page; every other live table joins it. A follower never
- * writes a session record, never takes a balance reading and never ends anything.
+ * writes a session record, never takes a balance reading and never ends anything — and never signs in or drives
+ * the lobby: its router only watches (followSession).
  */
 import { spawn } from "node:child_process";
 import * as W from "./win32";
@@ -347,9 +348,60 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
   if (S.router.generation === gen) routerSet(S.router.cancel ? "cancelled" : "idle", "session ended");
 }
 
+/** A FOLLOWER'S ROUTER WATCHES — IT NEVER DRIVES (session_20260925_134058: all four tables set off for the lobby at
+ *  once, then all four signed in, two of them typing into the one e-mail field). The client is ONE page with one
+ *  login and one lobby: signing in and every seat are the leader's (routeSession, seatNextTable), and a follower
+ *  driving the lobby pulls it out from under the tables its siblings are reading. This loop only reads: it says
+ *  what its table is waiting for, and reports the table once the leader has seated it. */
+async function followSession(cfg: Record<string, any>, sid: string): Promise<void> {
+  const gen = ++S.router.generation;
+  const fid: string | null = cfg.format ?? null;
+  const me = TABLES.slot();
+  const leader = `table ${TABLES.LEADER}`;
+  if (S.fakeMode) {
+    routerSet("idle", "test rig — no routing");
+    return;
+  }
+  Object.assign(S.router, { format: fid, cancel: false, reseat: false, loginAt: 0.0, loginTries: 0 });
+  let seated = false;
+  const alive = () => !S.router.cancel && S.router.generation === gen && S.session.id === sid;
+  while (alive()) {
+    if (S.router.reseat) {
+      S.router.reseat = false;
+      log(`[router] slot ${pyStr(me)}: re-seating is ${leader}'s job — not driving the lobby from here`);
+    }
+    const st = await F.windowState(C.CDP_PORT);
+    routerSeats(st.state === "seated" ? 1 : 0, tablesWanted(cfg), false);
+    if (st.state === "closed") {
+      routerSet("waiting-window", `waiting for ${leader} to open the client`);
+    } else if (st.state === "signed-out") {
+      routerSet("waiting-signin", `the client is on the sign-in page — ${leader} signs in (the Authy code goes on its panel)`);
+    } else if (st.state === "seated") {
+      resumeRecordingIfPending();
+      if (!["done", "off-format"].includes(S.router.state)) {
+        const v = fid ? F.compare(fid, st.detected) : { state: "undeclared", text: st.detected.name };
+        routerSet(v.state === "ok" || v.state === "undeclared" ? "done" : "off-format", `seated: ${st.detected.name} — ${v.text}`);
+        if (!seated) S.sessions.event(sid, "routed", { format: fid, seated: st.detected, verdict: v, byRouter: false, slot: me });
+      }
+      seated = true;
+      await sleep(5);
+      continue;
+    } else {
+      resumeRecordingIfPending();
+      routerSet("waiting-leader", seated ? `table ${pyStr(me)} is not seated any more — seating is ${leader}'s`
+                                         : `waiting for ${leader} to seat table ${pyStr(me)}`);
+      seated = false;
+    }
+    await sleep(2);
+  }
+  if (S.router.generation === gen) routerSet(S.router.cancel ? "cancelled" : "idle", "session ended");
+}
+
+/** Start this table's router: the leader's routes (sign-in, lobby, seats), a follower's only watches. */
 export function startRouter(cfg: Record<string, any>, sid: string): void {
   S.router.cancel = true;
-  later(0.1, () => routeSession(cfg, sid));
+  const route = TABLES.isLeader() ? routeSession : followSession;
+  later(0.1, () => route(cfg, sid));
 }
 
 export function resumeRecordingIfPending(): void {

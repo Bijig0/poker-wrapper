@@ -1546,7 +1546,7 @@
       const declared = b.formatName || b.format;
       const atTable = !!b.observed, onFormat = atTable && v && v.state === "ok";
       const settling = atTable && v && v.state === "unknown";
-      const busy = ["routing", "logging-in", "waiting-window"].includes(r.state) || authWait;
+      const busy = ["routing", "logging-in", "waiting-window", "waiting-leader"].includes(r.state) || authWait;
       let fmtLine;
       if (!b.format) fmtLine = `<div style="margin-top:6px;padding:8px 10px;border-radius:8px;background:#0c1013;border:1px solid #26303a">no format declared${atTable ? ` · at ${esc(b.observed.name)}` : ""}</div>`;
       else {
