@@ -245,7 +245,8 @@
   <!-- MULTI-TABLE: which table this panel is, and how the others are doing. Hidden
        whenever there is only one — there is nothing to give an overview of. -->
   <div id="tbl-strip" class="card" style="display:none">
-    <h2>Tables <span id="tbl-me" class="badge"></span><span id="tbl-waiting" class="badge" style="display:none"></span></h2>
+    <h2>Tables <span id="tbl-me" class="badge"></span><span id="tbl-waiting" class="badge" style="display:none"></span>
+      <button id="tbl-reopen-all" class="mini" style="display:none;margin-left:8px" title="open every table's panel window that is not on screen">reopen closed panels</button></h2>
     <div id="tbl-grid"></div>
     <div id="tbl-list" class="sub"></div>
   </div>
@@ -1057,6 +1058,10 @@
     const cls = (t.closed || !t.reachable) ? "dead" : t.toActIsHero ? "turn" : "";
     const who = t.me ? "this table" : `:${t.panelPort}`;
     const link = t.me ? "" : `<a href="http://127.0.0.1:${t.panelPort}/panel" target="_blank" title="open this table's own panel">open ↗</a>`;
+    // THAT TABLE'S OWN PANEL WINDOW is not on screen (closed, or never reopened when a running table wrapper was
+    // reused by a new session): one press asks that table to open it again, in its own tile
+    const reopen = !t.closed && t.reachable && t.panelOpen === false
+      ? `<button class="mini tpanel" data-slot="${t.slot}" title="this table's panel window is closed — open it again">reopen panel</button>` : "";
     // CLOSE stops the session asking for this table back. Idempotent, and the
     // table itself is left at the end of the current hand — never mid-hand.
     const shut = t.closed
@@ -1078,7 +1083,7 @@
     // actually go wrong — a press landing on the table next door — is refused
     // at the point of pressing (launch._point_is_my_table), not guessed at here.
     const warn = "";
-    return `<div class="tcard ${cls}"><div class="th"><b>Table ${t.slot}</b><span>${who}</span>${link}${shut}</div>`
+    return `<div class="tcard ${cls}"><div class="th"><b>Table ${t.slot}</b><span>${who}</span>${link}${reopen}${shut}</div>`
       + answer
       + `<div class="ts">${esc([cardsTxt, t.street, line].filter(Boolean).join(" · "))}</div>${warn}</div>`;
   };
@@ -1106,6 +1111,21 @@
             if (!r || !r.ok) { b.disabled = false; b.textContent = "close"; alert((r && r.error) || "could not close the table"); }
           };
         });
+        const reopenPanels = async (b, slot) => {
+          b.disabled = true; const was = b.textContent; b.textContent = "opening...";
+          let r = null;
+          try {
+            r = await (await fetch("/tables/panel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(slot ? { slot } : {}) })).json();
+          } catch (e) { r = { ok: false, error: String(e) }; }
+          b.disabled = false; b.textContent = was;
+          if (!r || !r.ok) alert((r && (r.error || (r.results || []).filter((x) => !x.ok).map((x) => `table ${x.slot}: ${x.error || "failed"}`).join("\n"))) || "could not open the panel");
+        };
+        grid.querySelectorAll("button.tpanel").forEach((b) => { b.onclick = () => reopenPanels(b, Number(b.dataset.slot)); });
+        const all = $("tbl-reopen-all");
+        const shut = (j.tables || []).filter((t) => !t.closed && t.reachable && t.panelOpen === false).length;
+        all.style.display = shut ? "" : "none";
+        all.textContent = shut > 1 ? `reopen ${shut} closed panels` : "reopen closed panel";
+        all.onclick = () => reopenPanels(all, null);
         const w = $("tbl-waiting");
         // how many tables are on the clock at once — the number that says
         // whether you are about to be asked for two decisions in one breath

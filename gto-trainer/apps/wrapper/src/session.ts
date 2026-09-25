@@ -38,6 +38,10 @@ export const sessionSeams = {
   leave: (port: number) => F.leave(port),
   hands: (sid: string) => sessionHands(sid),
   join: (body: Record<string, any>) => sessionJoin(body),
+  // this wrapper's panel window: found / opened. Inert under bun test — a unit test must never pop a window.
+  panelWindow: (): number | null => (process.env.NODE_ENV === "test" ? null : panelHwnd()),
+  openWindow: (url: string, profile: string, x: number, y: number, w: number, h: number): number | null =>
+    (process.env.NODE_ENV === "test" ? null : chromeWindow(url, profile, x, y, w, h)),
 };
 const later = (s: number, f: () => unknown) => setTimeout(() => { Promise.resolve().then(f).catch((e) => log(`[bg] ${e?.message ?? e}`)); }, s * 1000);
 
@@ -569,6 +573,30 @@ async function spawnSlot(slotN: number, n: number): Promise<Record<string, any>>
   return { slot: slotN, panelPort: port, ok: false, error: "did not come up within 60 s" };
 }
 
+/** THIS WRAPPER'S PANEL WINDOW, OPENED IF IT IS NOT THERE (2026-09-25). Found by its own title ("Poker Wrapper 2"
+ *  for table 2), so a table never mistakes the leader's window for its own. Placed where the launch would have put
+ *  it: its tile of the panel grid when several tables run, else beside the table. Called when a table joins a
+ *  session — a table wrapper left running from an earlier session is REUSED by the next one ("already running"),
+ *  and its panel, closed in between, was never reopened: 4 tables playing, only the leader's panel on screen — and
+ *  from the leader's Tables grid (POST /tables/panel). */
+export function ensurePanelWindow(why: string): Record<string, any> {
+  if (C.HEADLESS) return { ok: false, error: "headless: no panel window" };
+  if (sessionSeams.panelWindow()) return { ok: true, already: true };
+  const me = TABLES.slot(), n = TABLES.count();
+  const area = targetArea();
+  const url = `http://127.0.0.1:${C.PANEL_PORT}/panel`;
+  let r: { x: number; y: number; w: number; h: number };
+  if (me !== null && n > 1) r = TABLES.panelRect(me, n, area as TABLES.Area, otherArea() as TABLES.Area | null);
+  else {
+    const tw = Math.trunc(area.w * C.TABLE_FRAC);
+    r = { x: area.x + tw, y: area.y, w: area.w - tw, h: area.h };
+  }
+  const pid = sessionSeams.openWindow(url, C.PROFILE_PANEL, r.x, r.y, r.w, r.h);
+  log(`[panel] ${me !== null ? `slot ${me}/${n}: ` : ""}panel window was not open — opened at (${r.x},${r.y}) ${r.w}x${r.h} (${why})`);
+  if (S.session.id) S.sessions.event(S.session.id, "panel-reopened", { slot: me, panelPort: C.PANEL_PORT, why, ok: pid !== null });
+  return { ok: pid !== null, opened: true };
+}
+
 /** Hero has cards in front of him right now — money a Leave would forfeit. */
 export function inAHand(): boolean {
   if (S.ws.handOver || S.ws.heroFolded) return false;
@@ -674,12 +702,12 @@ function tableCard(st: Record<string, any>, slotN: number, port: number, me: boo
 /** Every table's answer in one payload — what the leader's panel renders (collected over loopback). */
 export async function tablesOverview(stateLight: () => Promise<Record<string, any>>): Promise<Record<string, any>> {
   const me = TABLES.slot();
-  const cards = [tableCard(await stateLight(), me || 1, C.PANEL_PORT, true)];
+  const cards: Record<string, any>[] = [{ ...tableCard(await stateLight(), me || 1, C.PANEL_PORT, true), panelOpen: C.HEADLESS ? null : !!sessionSeams.panelWindow() }];
   const rows = seams.registry().filter((r: any) => r.slot !== me);
   if (rows.length) {
     const got = await Promise.all(rows.map(async (r: any) => {
       const st = r.live ? await getJson(`http://127.0.0.1:${r.panelPort}/state?light=1`, 4) : { ok: false, error: `table ${r.slot} is not running` };
-      return tableCard(st, r.slot, r.panelPort, false);
+      return { ...tableCard(st, r.slot, r.panelPort, false), panelOpen: r.live ? r.panelOpen ?? null : null };
     }));
     cards.push(...got);
   }
@@ -689,6 +717,23 @@ export async function tablesOverview(stateLight: () => Promise<Record<string, an
   for (const c of cards) c.closed = closed.includes(c.slot);
   return { ok: true, at: time(), leader: TABLES.LEADER, slot: me, tables: cards, declared: TABLES.count(),
            closed, wanted: tablesWanted(cfg), waiting: cards.filter((c) => c.toActIsHero).length };
+}
+
+/** THE LEADER REOPENS TABLE PANELS: `slot` = one table, null = every table this session runs. This table's own
+ *  window directly; every other through that table's POST /panel/open-window (its window, its title, its tile). */
+export async function reopenPanels(slot: number | null): Promise<Record<string, any>> {
+  const me = TABLES.slot() ?? TABLES.LEADER;
+  // the registry lists every declared table, this one included (me: true); the single-table path has none
+  const rows: any[] = TABLES.slot() === null ? [{ slot: me, panelPort: C.PANEL_PORT, live: true }] : seams.registry();
+  const targets = rows.filter((r) => slot === null || r.slot === slot);
+  if (!targets.length) return { ok: false, error: `table ${slot} is not part of this session` };
+  const results = await Promise.all(targets.map(async (r: any) => {
+    if (r.slot === me) return { slot: r.slot, ...ensurePanelWindow("reopened from the Tables grid") };
+    if (r.live === false) return { slot: r.slot, ok: false, error: `table ${r.slot} is not running` };
+    return { slot: r.slot, ...(await postJson(`http://127.0.0.1:${r.panelPort}/panel/open-window`, { why: "reopened from the Tables grid" }, 10)) };
+  }));
+  results.sort((a, b) => a.slot - b.slot);
+  return { ok: results.every((x) => x.ok), results };
 }
 
 /** One instruction to every live peer, in parallel — PROBED, not remembered. */
@@ -722,6 +767,13 @@ export async function sessionJoin(body: Record<string, any>): Promise<[number, R
     await openTableWindow();
   } catch (e: any) {
     log(`[session] slot ${pyStr(TABLES.slot())} table window: ${e?.message ?? e}`);
+  }
+  if (TABLES.slot() !== null && !S.fakeMode && !C.PANEL_DEFER_WINDOW) {
+    try {
+      ensurePanelWindow(`joined ${sid}`);
+    } catch (e: any) {
+      log(`[session] slot ${pyStr(TABLES.slot())} panel window: ${e?.message ?? e}`);
+    }
   }
   startRouter(cfg, sid);
   return [200, { ok: true, session: rec, slot: TABLES.slot() }];

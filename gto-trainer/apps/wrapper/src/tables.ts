@@ -264,7 +264,8 @@ export function presenceRecord(port: number, sid: string | null = null) {
   return { ok: true, slot: slot(), panelPort: port, rig: rig(), pid: process.pid, count: count(), sid, at: time() };
 }
 
-export type PresenceRow = { slot: number; panelPort: number; pid?: number; count?: number; sid?: string | null; at: number; me?: boolean };
+export type PresenceRow = { slot: number; panelPort: number; pid?: number; count?: number; sid?: string | null; at: number; me?: boolean;
+                            /** that table's own panel window is on screen (null: headless / not reported) */ panelOpen?: boolean | null };
 
 /** Ask slot `slotN` whether it is up. null = not up, or not who it claims. */
 export async function probe(slotN: number, timeoutS = PROBE_TIMEOUT_S): Promise<PresenceRow | null> {
@@ -281,7 +282,9 @@ export async function probe(slotN: number, timeoutS = PROBE_TIMEOUT_S): Promise<
     clearTimeout(t);
   }
   if (!d || typeof d !== "object" || d.slot !== slotN || d.rig !== rig()) return null;
-  return { slot: slotN, panelPort: port, pid: d.pid, count: d.count, sid: d.sid, at: time() };
+  const row: PresenceRow = { slot: slotN, panelPort: port, pid: d.pid, count: d.count, sid: d.sid, at: time() };
+  if (d.panelOpen !== undefined) row.panelOpen = d.panelOpen;
+  return row;
 }
 
 export const presence: { at: number; rows: PresenceRow[]; probing: boolean } = { at: 0.0, rows: [], probing: false };

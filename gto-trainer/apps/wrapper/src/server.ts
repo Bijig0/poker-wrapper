@@ -35,7 +35,7 @@ import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
 import * as SESSION from "./session";
 import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
 import { domDump, shot, state, toolShell } from "./view";
-import { applyLayout, chromeWindow, dpiAt, monitors, panelHwnd, slotTitle, targetArea, wantFullscreen } from "./windows";
+import { applyLayout, dpiAt, monitors, panelHwnd, slotTitle, targetArea, wantFullscreen } from "./windows";
 
 const HEADERS = { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
 
@@ -162,7 +162,8 @@ export function buildApp(): Hono {
     return json(200, { ok: true, counts, window: { w: win.w, h: win.h },
                        monitor: `${area.w}x${area.h}` + (area.primary ? "" : " (the external screen)") });
   });
-  app.get("/table/presence", () => json(200, TABLES.presenceRecord(C.PANEL_PORT, S.session.id)));
+  // panelOpen: whether this table's own panel window is on screen — the leader's Tables grid offers a reopen when not
+  app.get("/table/presence", () => json(200, { ...TABLES.presenceRecord(C.PANEL_PORT, S.session.id), panelOpen: C.HEADLESS ? null : !!panelHwnd() }));
   app.get("/tables", async () => json(200, await SESSION.tablesOverview(stateLight)));
   app.get("/table", async () => json(200, await tableState()));
   app.get("/faketable", (c) => {
@@ -330,6 +331,21 @@ export function buildApp(): Hono {
     else if (!(want >= 1 && want <= TABLES.MAX_TABLES)) res = { ok: false, error: "slot must be 1-4" };
     else res = await SESSION.closeTable(want, pyStr(b.why || "closed from the panel"));
     return json(res.ok ? 200 : 409, res);
+  });
+  app.post("/tables/panel", async (c) => {
+    const b = await body(c, Body.tablesPanel);
+    let want: number | null = null;
+    if (b.slot !== undefined && b.slot !== null && b.slot !== "all") {
+      try {
+        want = pyInt(b.slot);
+      } catch {
+        want = 0;
+      }
+      if (!(want >= 1 && want <= TABLES.MAX_TABLES)) return json(400, { ok: false, error: "slot must be 1-4, or omitted for every table" });
+    }
+    if (!TABLES.isLeader()) return json(409, { ok: false, error: `table ${pyStr(TABLES.slot())} does not run the session — reopen panels from table ${TABLES.LEADER}` });
+    const res = await SESSION.reopenPanels(want);
+    return json(200, res);
   });
   app.post("/table/stand-down", async (c) => {
     const b = await body(c, Body.standDown);
@@ -543,13 +559,12 @@ export function buildApp(): Hono {
     const [code, res] = SESSION.startUpdate();
     return json(code, res);
   });
-  app.post("/panel/open-window", () => {
-    if (panelHwnd()) return send(200, "application/json", '{"ok": true, "already": true}');
-    const area = targetArea();
-    const tw = Math.trunc(area.w * C.TABLE_FRAC);
-    chromeWindow(`http://127.0.0.1:${C.PANEL_PORT}/panel`, C.PROFILE_PANEL, area.x + tw, area.y, area.w - tw, area.h);
+  app.post("/panel/open-window", async (c) => {
+    const b = await body(c, Body.panelOpen);
+    const res = SESSION.ensurePanelWindow(pyStr(b.why || "asked over /panel/open-window"));
+    if (res.already) return send(200, "application/json", '{"ok": true, "already": true}');
     Object.assign(S.cpFollow, { snapped: null, rect: null });
-    return send(200, "application/json", '{"ok": true}');
+    return json(res.ok ? 200 : 409, res);
   });
   const cpRoute = (path: string) => app.post(path, async (c) => {
     const raw = await c.req.text();

@@ -19,6 +19,8 @@ export const Body = {
   faketableFixture: obj({ name: anyVal.optional(), fixture: anyVal.optional() }),
   gtowConnect: obj({ source: anyVal.optional() }),
   tablesClose: obj({ slot: anyVal.optional(), why: anyVal.optional() }),
+  tablesPanel: obj({ slot: anyVal.optional() }),
+  panelOpen: obj({ why: anyVal.optional() }),
   standDown: obj({ why: anyVal.optional(), sid: anyVal.optional() }),
   profile: obj({ name: anyVal.optional(), site: anyVal.optional(), email: anyVal.optional(), password: anyVal.optional(),
                  rememberMe: anyVal.optional(), trustDevice: anyVal.optional() }),
