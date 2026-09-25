@@ -42,7 +42,8 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { existsSync as fsExists } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
-import { studyPoller } from "../services/studyPoller";
+import { studyPoller, studyPollers } from "../services/studyPoller";
+import { compareHand, parseIgnitionHh } from "../utils/ignitionHh/ignitionHh";
 import { fmtRoll, rollDecision } from "../services/rollDecision";
 import { missQueue } from "../services/missQueue";
 import { boxKeeper } from "../services/boxKeeper";
@@ -1010,6 +1011,37 @@ app.get("/hand/:dbId", async (c) => {
     session,
     nav,
   });
+});
+
+/** GET /ignition-hh/:id — Ignition's own record of a hand (wrapper GET /hh/:id, which asks the logged-in poker page),
+ *  read into our terms and compared with the archived copy of the same hand when there is one.
+ *  Any running wrapper can answer: they all drive the same client page. localhost costs 2 s on Windows, so 127.0.0.1. */
+app.get("/ignition-hh/:id", async (c) => {
+  const id = c.req.param("id");
+  if (!/^\d+$/.test(id)) return c.json({ ok: false, error: `not an Ignition hand number: ${id}` }, 400);
+  const q = c.req.query("refresh") === "1" ? "?refresh=1" : "";
+  const urls = [...new Set([...studyPollers.list().map((p) => p.assistiveUrl), DEFAULT_LIVE_URL]
+    .map((u) => u.replace("//localhost:", "//127.0.0.1:").replace(/\/+$/, "")))];
+  const errors: string[] = [];
+  let rec: any = null;
+  for (const u of urls) {
+    try {
+      const r = await fetch(`${u}/hh/${id}${q}`, { signal: AbortSignal.timeout(60_000) });
+      if (r.ok) { rec = await r.json(); break; }
+      errors.push(`${u}: HTTP ${r.status}`);
+    } catch (e: any) {
+      errors.push(`${u}: ${e?.message ?? e}`);
+    }
+  }
+  if (!rec) return c.json({ ok: false, error: `no wrapper answered (${errors.join("; ")}) — start the Poker Wrapper with the Ignition client signed in` });
+  if (!rec.ok) return c.json(rec);
+  const ign = parseIgnitionHh(rec.body);
+  const row = openDb()?.query<HandRow, [string]>(
+    "SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE data LIKE ? ORDER BY rowid DESC LIMIT 1",
+  ).get(`%"clientHandId": "${id}"%`);
+  const e = row ? enrichSync(row) : null;
+  return c.json({ ok: true, handId: id, fetchedAt: rec.fetchedAt, cached: !!rec.cached, ignition: ign, dbId: e?.dbId ?? null,
+    diffs: e ? compareHand(e.hand, ign) : null });
 });
 
 /** Truncate an archived hand to the state BEFORE actions[upto] — the actions, the board AND the money: an archived
