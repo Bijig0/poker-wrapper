@@ -385,6 +385,22 @@ export function heroClockOf(d: Record<string, any>, nodes: Node[]): number | nul
   return pyInt(String(byY[0]!.text).trim());
 }
 
+/** Hero's time bank over ONE turn: the "+Ns" offer while it is up, and whether the client has STARTED it. */
+export type BankSeen = { secs: number; at: number; started: boolean };
+
+/** One tick of the time bank's story (relay.heroTimeLeft). The client starts the bank ITSELF when hero's clock reaches
+ *  0 with "+Ns" on offer: the button goes, and a frame later the clock jumps 0 → N (session_20260925_135420 frames
+ *  697/698; villains' banks start the same way). So: an offer seen → remembered; the clock jumping back UP → started
+ *  (from then on the clock IS the bank); hero off the clock → forgotten. */
+export function bankStep(prev: BankSeen | null, onClock: boolean, offerText: string | null, prevClock: number | null,
+                         clock: number | null, now: number): BankSeen | null {
+  if (!onClock) return null;
+  const m = offerText ? /(\d+)/.exec(offerText) : null;
+  if (m) return { secs: Number(m[1]), at: now, started: false };
+  if (prev && !prev.started && clock !== null && prevClock !== null && clock > prevClock + 1) return { ...prev, started: true };
+  return prev;
+}
+
 // ---- the award row under "Result for hand N" ------------------------------------------------------------
 /** The winner's label on the award row ('Player N' preferred, else the nearest left neighbour). */
 export function awardName(win: Node, row: Node[]): string {

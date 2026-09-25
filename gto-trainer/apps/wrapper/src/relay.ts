@@ -19,6 +19,7 @@ import { CP, S, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import { ACTION_RE, findInputJs, modalOf, pointProbeJs, splitStrip, tableJs } from "./ignition/dom";
 import { handState, toActSources } from "./ignition/hand";
+import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
 
 export const STUDY_ANSWER_TTL_MS = 3000;
@@ -91,8 +92,48 @@ async function cdpSeqReal(ws: string, cmds: [string, Record<string, unknown>][])
 }
 seams.cdpSeq = cdpSeqReal;
 
-/** Relay ONE human-chosen press: re-read the strip, match the label within its OWN row, click its centre. */
-async function actReal(label: string, kind = "action"): Promise<Record<string, any>> {
+/** A turn control's IDENTITY is the client's data-qa, not its label — the label is what the control will do at the
+ *  size now in the field, and the client rewrites it: once that size is hero's whole stack the RAISE/BET button
+ *  reads "ALL-IN 89.2 BB" (hand 4920545590, QJdd river, 2026-09-25: the ALL-IN preset was clicked, the confirm
+ *  looked for a label starting "raise"/"bet", found "ALL-IN 89.2 BB", refused — and fold-on-no-answer folded).
+ *  Every label ever recorded on the strip, by data-qa (112 MB of DOM frames, 2026-09-25): foldButton FOLD ·
+ *  checkButton CHECK · callButton "CALL N BB" · betButton "BET N BB" · raiseButton "RAISE TO N BB" | "ALL-IN N BB";
+ *  no allInButton ever — ALL-IN is a sizing preset (allInSelector). */
+const QA_OF: Record<string, RegExp> = {
+  fold: /^foldButton$/i, check: /^checkButton$/i, call: /^callButton$/i, raise: /^raiseButton$/i, bet: /^betButton$/i,
+  "all-in": /^allInButton$/i,
+  // the control a sized raise/bet (or a shove sized on a preset) is CONFIRMED on, whatever it reads
+  confirm: /^(raise|bet)Button$/i,
+};
+/** The confirm control on a strip without data-qa: the action-row button that raises, bets, or (sized) shoves. */
+const CONFIRM_LABEL = /^(raise|bet|all[ -]?in)\b/i;
+export const isAllInLabel = (text: unknown) => /^all[ -]?in\b/i.test(String(text ?? "").trim());
+
+/** The button `label` names within `pool`: exact label, then first word, then (turn actions) the client's data-qa
+ *  identity — a CALL relabelled by the client is still the call. "confirm" = the RAISE/BET control, any label. */
+export function findControl(pool: any[], label: string, kind: string): any | null {
+  if (label === "confirm") {
+    return pool.find((b) => QA_OF.confirm!.test(String(b.qa || "")))
+      ?? pool.find((b) => !b.qa && CONFIRM_LABEL.test(String(b.text))) ?? null;
+  }
+  const want = label.trim().toLowerCase();
+  let hit = pool.find((b) => String(b.text).toLowerCase() === want);
+  if (!hit) {
+    const m = ACTION_RE.exec(label);
+    const parts = label.split(/\s+/).filter(Boolean);
+    const word = (m ? m[0] : parts.length ? parts[0]! : label).toLowerCase();
+    hit = pool.find((b) => String(b.text).toLowerCase().startsWith(word));
+    const qa = kind === "action" ? QA_OF[word.replace(/^all[ ]?in$/, "all-in")] : undefined;
+    if (!hit && qa) hit = pool.find((b) => qa.test(String(b.qa || "")));
+  }
+  return hit ?? null;
+}
+
+/** Relay ONE human-chosen press: re-read the strip, match the label within its OWN row, click its centre.
+ *  `expect` sees the matched control on the SAME read as the click and may refuse it (return a reason) — a press
+ *  that must only land on a control saying one thing (the shove's confirm must read ALL-IN) checks it here, with
+ *  no second read for the strip to change in between. */
+async function actReal(label: string, kind = "action", opts: { expect?: (hit: any) => string | null } = {}): Promise<Record<string, any>> {
   if ((kind === "action" || kind === "preset") && S.topupPanel.open) {
     // OUR OWN MODAL FIRST: the Buy-chips panel renders over the action strip
     S.topupAbort = true;
@@ -114,16 +155,15 @@ async function actReal(label: string, kind = "action"): Promise<Record<string, a
   }
   const [actions, presets] = splitStrip(d);
   const pool: any[] = kind === "preset" ? presets : kind === "action" ? actions : d.buttons ?? [];
-  const want = label.trim().toLowerCase();
-  let hit = pool.find((b) => String(b.text).toLowerCase() === want);
-  if (!hit) {
-    const m = ACTION_RE.exec(label);
-    const parts = label.split(/\s+/).filter(Boolean);
-    const word = (m ? m[0] : parts.length ? parts[0]! : label).toLowerCase();
-    hit = pool.find((b) => String(b.text).toLowerCase().startsWith(word));
-  }
+  const hit = findControl(pool, label, kind);
   const offer = pool.map((b) => b.text);
-  if (!hit) return { ok: false, reason: `'${label}' not on offer (${kind})`, offer };
+  const offerQa = pool.map((b) => b.qa ?? null);
+  if (!hit) {
+    const what = label === "confirm" ? "a RAISE/BET control" : `'${label}'`;
+    return { ok: false, reason: `${what} not on offer (${kind})`, offer, offerQa, missing: true };
+  }
+  const refusal = opts.expect ? opts.expect(hit) : null;
+  if (refusal) return { ok: false, reason: refusal, offer, offerQa, seen: hit.text };
   const lk = await TABLES.pressLock();
   try {
     const blind = await ensureVisible(ws);
@@ -145,7 +185,7 @@ async function actReal(label: string, kind = "action"): Promise<Record<string, a
   return out;
 }
 seams.act = actReal;
-export const act = (label: string, kind = "action") => seams.act(label, kind);
+export const act = (label: string, kind = "action", opts: { expect?: (hit: any) => string | null } = {}) => seams.act(label, kind, opts);
 
 /** The client's BET field among everything else on screen: [input, refusal]. */
 export function pickBetInput(inputs: any[], anchor: any, frameW: number | null = null): [any, string | null] {
@@ -225,14 +265,19 @@ async function raiseToReal(amount: string, strict = false): Promise<Record<strin
       return { ok: false, reason: `could not read the bet field back: ${e?.message ?? e}`, typed: amount };
     }
     if (!raiseReadBackOk(pyFloat(amount), gv, S.ws.bb ?? null)) {
-      return { ok: false, reason: `client changed ${amount} to ${got} (min/max clamp) — not pressed`, typed: amount, field: got };
+      const clamp = `client changed ${amount} to ${got} (min/max clamp) — not pressed`;
+      // CAPPED AT HERO'S STACK: a size above everything hero has comes back lower with the confirm reading ALL-IN —
+      // the client's own word that this raise IS the shove (it knows hero's stack; the answer's tree may not)
+      if (gv < pyFloat(amount)) {
+        const c = await act("confirm", "action", { expect: (hit) => (isAllInLabel(hit.text) ? null : clamp) });
+        if (c.ok) return { ok: true, typed: amount, field: got, confirm: c, as: "all-in" };
+        if (c.seen === undefined) return { ok: false, reason: `${clamp}; ${pyStr(c.reason ?? null)}`, typed: amount, field: got };
+      }
+      return { ok: false, reason: clamp, typed: amount, field: got };
     }
   }
-  let res = await act("raise", "action");
-  if (!res.ok) {
-    const alt = await act("bet", "action");
-    if (alt.ok) res = alt;
-  }
+  // the RAISE/BET control by identity: a size that is hero's whole stack relabels it "ALL-IN N BB"
+  const res = await act("confirm", "action");
   return { ok: res.ok ?? false, typed: amount, confirm: res };
 }
 seams.raiseTo = raiseToReal;
@@ -326,18 +371,61 @@ export async function actuate(plan: Record<string, any>): Promise<Record<string,
   return act(plan.label, "action");
 }
 
-/** A shove, by whichever control the client offers it through (the action ALL-IN, else size + confirm). */
+/** How long the confirm may take to show the preset's size (the client re-renders the strip on the next frame). */
+const SHOVE_CONFIRM_WAIT_S = 1.2;
+const SHOVE_CONFIRM_POLL_S = 0.15;
+
+/** A SHOVE, by whichever control the client offers it through — in this order, every step on the client's own
+ *  word (never a size of ours):
+ *   1. a turn control that already reads ALL-IN (the raise button when the smallest raise is hero's stack);
+ *   2. a RAISE/BET control on the strip: size it on the ALL-IN (else MAX) preset, then press that control ONLY once
+ *      it reads ALL-IN. The client relabels it — "RAISE TO 2 BB" → "ALL-IN 89.2 BB" (hand 4920545590); this used to
+ *      look for a "raise"/"bet" label, so EVERY Ignition shove sized on the preset was refused (ALLIN 18, 94.2,
+ *      89.2 in the 2026-09-25 sessions — none went through). A confirm still reading RAISE TO 2 BB is a min-raise,
+ *      never pressed as a shove;
+ *   3. no RAISE/BET control at all, only CALL: the call is the most hero can put in when it takes hero's last chip
+ *      or every opponent still in is all-in (hand 4920544353: FOLD / CALL 21.6 BB against a jam, refused twice, then
+ *      folded) — pressed only when the hand agrees (terminal.callIsMaxCommit). The result carries `as: "call"`. */
 export async function actuateAllIn(): Promise<Record<string, any>> {
   const res = await act("all-in", "action");
   if (res.ok) return res;
-  for (const label of ["all-in", "max"]) {
-    const preset = await act(label, "preset");
-    if (!preset.ok) continue;
-    await sleep(0.25);
-    let confirm = await act("raise", "action");
-    if (!confirm.ok) confirm = await act("bet", "action");
-    if (confirm.ok) return { ok: true, clicked: `${pyStr(preset.clicked ?? null)} + ${pyStr(confirm.clicked ?? null)}`, kind: "preset+confirm" };
-    return { ok: false, reason: `sized the shove on ${pyStr(preset.clicked ?? null)} but no RAISE/BET to confirm it — ${pyStr(confirm.reason ?? null)}` };
+  // the control WAS there and the press itself was refused (another table's point, a window not rendering): that
+  // reason is the answer — the fallbacks below are for a strip that does not show the shove as one control
+  if (res.offer && !res.missing) return res;
+  const qa: string[] = (res.offerQa ?? []).map((q: any) => String(q ?? ""));
+  const labels: string[] = (res.offer ?? []).map((t: any) => String(t));
+  const tagged = qa.some((q) => q);
+  const hasConfirm = tagged ? qa.some((q) => QA_OF.confirm!.test(q)) : labels.some((t) => CONFIRM_LABEL.test(t));
+  const hasCall = tagged ? qa.some((q) => QA_OF.call!.test(q)) : labels.some((t) => /^call\b/i.test(t));
+  if (hasConfirm || !res.offer) {
+    for (const label of ["all-in", "max"]) {
+      const preset = await act(label, "preset");
+      if (!preset.ok) {
+        if (preset.offer && !preset.missing) return { ok: false, reason: `could not press the ${label.toUpperCase()} preset — ${pyStr(preset.reason ?? null)}` };
+        continue;
+      }
+      const deadline = time() + SHOVE_CONFIRM_WAIT_S;
+      let confirm: Record<string, any>;
+      for (;;) {
+        await sleep(SHOVE_CONFIRM_POLL_S);
+        confirm = await act("confirm", "action", {
+          expect: (hit) => (isAllInLabel(hit.text) ? null
+            : `the RAISE/BET button still reads '${pyStr(hit.text)}' after ${pyStr(preset.clicked ?? null)} — the shove size has not taken`),
+        });
+        if (confirm.ok || confirm.seen === undefined || time() >= deadline) break;
+      }
+      if (confirm.ok) return { ok: true, clicked: `${pyStr(preset.clicked ?? null)} + ${pyStr(confirm.clicked ?? null)}`, kind: "preset+confirm" };
+      return { ok: false, reason: `sized the shove on ${pyStr(preset.clicked ?? null)} but did not confirm it — ${pyStr(confirm.reason ?? null)}` };
+    }
+    if (hasConfirm) return { ok: false, reason: `no ALL-IN or MAX sizing preset to size the shove on (strip: ${pyRepr(labels)})`, offer: res.offer };
+  }
+  if (hasCall) {
+    const why = callIsMaxCommit(handState());
+    if (!why.yes) {
+      return { ok: false, reason: `only FOLD / CALL on offer and the call is not hero's whole stack (${why.why}) — not calling it a shove`, offer: res.offer };
+    }
+    const c = await act("call", "action");
+    return c.ok ? { ...c, kind: "call-as-all-in", as: "call", why: why.why } : c;
   }
   return res;
 }
@@ -359,6 +447,8 @@ export function didAsTold(plan: Record<string, any>, a: Record<string, any>, her
   if (label === "raise" || label === "bet") return t === label || t === "all-in";
   if (label === "all-in") {
     if (t === "all-in") return true;
+    // the shove the table only offered as a CALL (actuateAllIn step 3)
+    if (plan.realized === "call") return t === "call";
     if ((t === "raise" || t === "bet") && amt !== null && heroStack) return amt >= 0.9 * heroStack;
     return t === "raise" || t === "bet" ? null : false;
   }
@@ -469,13 +559,19 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     if (ok) {
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
-      feedAdd(`Study pick executed — ${pyStr(pick)} (${source}${waited})`);
+      const how = res.as === "call" ? ` — as a CALL: ${pyStr(res.why ?? "the call is hero's whole stack")}`
+        : res.as === "all-in" && plan.kind === "raise-to" ? ` — the client capped ${pyStr(res.typed ?? plan.amount)} at hero's stack: ALL-IN ${pyStr(res.field ?? "")}` : "";
+      feedAdd(`Study pick executed — ${pyStr(pick)} (${source}${waited})${how}`);
       if (kN !== null) {
         const h0 = handState() || {};
         const hero0 = h0.heroSeatId ?? null;
         const behind0 = dget(h0.stacks, hero0) ?? null;
         const committed0 = dget(h0.committed, hero0) || 0;
-        S.study.pendingExec = { key, pick, plan, kN, handId: S.study.handId ?? null, sentAt: time(),
+        // judge the press by what the client was actually asked to do (a shove it only offered as a call, a raise
+        // it capped into a shove) — the retry re-sends this plan, which re-derives the same control
+        const vplan = res.as === "call" ? { kind: "action", label: "all-in", realized: "call", ...(plan.kind === "raise-to" ? { from: plan } : {}) }
+          : res.as === "all-in" && plan.kind === "raise-to" ? { kind: "action", label: "all-in", from: plan } : plan;
+        S.study.pendingExec = { key, pick, plan: vplan, kN, handId: S.study.handId ?? null, sentAt: time(),
                                 deadline: time() + VERIFY_DEADLINE_S, attempts: 1,
                                 stackAtSend: behind0 !== null ? behind0 + committed0 : null };
       }
@@ -678,9 +774,11 @@ export async function maybeAutoAct(): Promise<void> {
     st.autoDue = null;
     return;
   }
+  let heldS = 0;
   if ((st.autoHeld || {}).key === r.key) {
     const was = st.autoHeld;
     st.autoHeld = null;
+    heldS = time() - was.at;
     feedAdd(`Auto-execute resumed — ${String(was.why).replaceAll("line uncertain — ", "")} cleared after ${fmtFixed(time() - was.at, 1)} s`);
     if (S.session.id) {
       S.sessions.event(S.session.id, "study-auto-resumed", { why: was.why, heldS: pyRound(time() - was.at, 1), hand: S.handNo, pick: r.pick });
@@ -697,8 +795,15 @@ export async function maybeAutoAct(): Promise<void> {
     const due = st.autoDue;
     if (!due || due.key !== r.key) {
       const wait = AUTO_DELAY_S[0] + Math.random() * (AUTO_DELAY_S[1] - AUTO_DELAY_S[0]);
-      st.autoDue = { key: r.key, at: time() + wait, wait };
-      feedAdd(`Auto-execute: ${pyStr(r.pick)} in ${fmtFixed(wait, 1)} s (randomized)`);
+      // A HOLD IS PART OF THE WAIT (hand 4920545590: a 6.3 s top-up hold, THEN 1.9 s more, and the shove went at
+      // clock 4): the delay keeps a press from landing the instant the answer shows; a decision held longer has waited
+      if (heldS >= wait) {
+        st.autoTried = r.key;
+        await relaySeams.executePick("auto", pyRound(heldS, 1));
+        return;
+      }
+      st.autoDue = { key: r.key, at: time() + wait - heldS, wait };
+      feedAdd(`Auto-execute: ${pyStr(r.pick)} in ${fmtFixed(wait - heldS, 1)} s (randomized)`);
       return;
     }
     if (time() < due.at) return;
@@ -735,10 +840,11 @@ export const NO_ANSWER_CLOCK_S = 4;
 export function noAnswerFoldWhy(age: number): string | null {
   const note = currentNote();
   if (note && age >= NO_ANSWER_NOTE_MIN_S) return `refused — ${note}`;
-  const clock = heroClockLeft();
-  if (clock !== null && clock <= NO_ANSWER_CLOCK_S) return `clock nearly out (${clock} s left)`;
+  const left = heroTimeLeft();
+  if (left !== null && left.total <= NO_ANSWER_CLOCK_S) return `clock nearly out (${left.total} s left)`;
   if (!isCp() && S.liveStatus.timeBank && !S.study.timeBank) return "clock nearly out (time bank on offer, set to leave it)";
-  if (age >= NO_ANSWER_DEADLINE_S) return `no answer after ${fmtFixed(age, 0)} s`;
+  // the backstop is for a clock that cannot be read — a readable one (the bank running) is the better judge
+  if (left === null && age >= NO_ANSWER_DEADLINE_S) return `no answer after ${fmtFixed(age, 0)} s`;
   return null;
 }
 
@@ -749,6 +855,36 @@ function heroClockLeft(): number | null {
   return typeof c === "number" && Number.isFinite(c) ? c : null;
 }
 
+/** The seconds on the "+Ns" time-bank button, while the client offers it. */
+export function bankOfferS(): number | null {
+  if (isCp()) return null;
+  const b = S.liveStatus.timeBank;
+  const m = b ? /(\d+)/.exec(String(b.text ?? "")) : null;
+  return m ? Number(m[1]) : null;
+}
+
+/** HERO'S REAL TIME LEFT = the clock PLUS the time bank still to come. THE CLIENT STARTS THE BANK ITSELF when the
+ *  base clock reaches 0 with the "+Ns" button on offer — measured 2026-09-25 over every recorded session: hero's
+ *  clock jumped 0 → 45 (or to what was left of the bank) at clock 0 in 8 of 8 activations, 3-9 s AFTER the +45s
+ *  press, which itself never changed anything on screen (the button stayed up, the clock kept counting); villains'
+ *  banks start the same way, at 0 ("Player N has activated their time bank"). Hand 4920545590 was folded "with 4 s
+ *  left" while 45 s of bank was still to come. The handover frame — button gone, clock still 0 — counts the bank
+ *  too (dom.bankStep remembers the offer for the turn until the clock jumps). null = the clock cannot be read
+ *  (CoinPoker, or no number in the box). */
+export function heroTimeLeft(): { total: number; clock: number; bank: number } | null {
+  const clock = heroClockLeft();
+  const bank = bankOfferS();
+  if (bank !== null && !(S.bankSeen && S.bankSeen.secs === bank && !S.bankSeen.started)) S.bankSeen = { secs: bank, at: time(), started: false };
+  if (clock === null) return null;
+  if (bank !== null) return { total: clock + bank, clock, bank };
+  const seen = S.bankSeen;
+  if (seen && !seen.started && clock <= 1) return { total: clock + seen.secs, clock, bank: seen.secs };
+  return { total: clock, clock, bank: 0 };
+}
+
+const fmtLeft = (l: { total: number; clock: number; bank: number }) =>
+  l.bank ? `${l.clock} s + ${l.bank} s time bank left` : `${l.clock} s left`;
+
 /** When hero HAS an answer for this decision but it is not going to be played in time, the reason — else null.
  *  A refused press (the client's field did not take the size, the press would land on another table, ...) is
  *  retried by auto-execute (autoRetryDue), and a held pick (line uncertain) waits for its hold to clear; either
@@ -758,14 +894,21 @@ function heroClockLeft(): number | null {
 export function unplayedAnswerWhy(key: string | null, age: number): string | null {
   const st = S.study;
   const ex = st.lastExec;
+  const refused = !!(key && ex && ex.key === key && ex.outcome === "refused");
   const state = st.autoHeld && st.autoHeld.key === key ? `held — ${st.autoHeld.why}`
-    : key && ex && ex.key === key && ex.outcome === "refused" ? `refused — ${pyStr((ex.result || {}).reason ?? null)}`
+    : refused ? `refused — ${pyStr((ex.result || {}).reason ?? null)}`
     : "not played yet";
-  const clock = heroClockLeft();
-  if (clock !== null && clock <= NO_ANSWER_CLOCK_S) return `clock nearly out (${clock} s left) with the answer ${state}`;
+  const left = heroTimeLeft();
+  if (left !== null && left.total <= NO_ANSWER_CLOCK_S) return `clock nearly out (${fmtLeft(left)}) with the answer ${state}`;
+  // A REFUSAL WITH NO RETRY LEFT will not play itself: it gets the base clock, not the bank — the bank is a
+  // per-seat budget the next hands need, and nothing is coming that it could wait for
+  const spent = refused && (st.autoRetry && st.autoRetry.key === key ? st.autoRetry.n : 0) >= AUTO_RETRIES;
+  if (left !== null && spent && left.clock <= NO_ANSWER_CLOCK_S) {
+    return `clock nearly out (${left.clock} s left) with the answer ${state} — no retry left, so the time bank is not spent on it`;
+  }
   // no readable clock: the deadline backstop, for an answer that is stuck (refused / held) — one merely not yet
   // pressed is auto-execute's
-  if (clock === null && state !== "not played yet" && age >= NO_ANSWER_DEADLINE_S) return `answer ${state} after ${fmtFixed(age, 0)} s`;
+  if (left === null && state !== "not played yet" && age >= NO_ANSWER_DEADLINE_S) return `answer ${state} after ${fmtFixed(age, 0)} s`;
   return null;
 }
 
@@ -824,19 +967,27 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   log(`[pick] no-answer ${did}: ${why} -> ${pyRepr(res)}`);
 }
 
-/** Press the client's +45s time bank whenever it is offered (answers on, the session allows it). */
+/** Press the client's +45s time bank when it is offered (answers on, the session allows it) — ONCE per decision.
+ *  The press has never been seen to do anything on screen: the button stays up and the clock keeps counting, and
+ *  the client starts the bank itself when the clock reaches 0 (heroTimeLeft). It used to be pressed every 5 s and
+ *  reported "taken" each time; it is pressed once, as a harmless belt-and-braces, and reported as a press. */
 export async function maybeTakeTime(): Promise<Record<string, any> | null> {
   const st = S.study;
   if (!(st.on && st.timeBank)) return null;
   const b = S.liveStatus.timeBank;
   if (!b || time() - (st.timeBankAt ?? 0.0) < TIME_BANK_COOLDOWN_S) return null;
   if (S.liveStatus.modal) return null;
+  const h = handState();
+  const decision = h ? `${pyStr(h.handId)}|${pyStr(h.street)}|${(h.actions || []).length}` : `#${S.handNo}`;
+  if (st.timeBankDecision === decision) return null;
   st.timeBankAt = time();
   const label = String(b.text || "+45s").trim();
   const res = await act(label, "button");
   const ok = !!res.ok;
+  if (ok) st.timeBankDecision = decision;
   st.lastTimeBank = { at: nowMs(), label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null };
-  feedAdd(ok ? `Time bank ${label} taken` : `Time bank ${label} NOT taken — ${"reason" in res ? pyStr(res.reason) : "refused"}`);
+  feedAdd(ok ? `Time bank ${label} pressed (the client starts it when the clock reaches 0)`
+             : `Time bank ${label} NOT pressed — ${"reason" in res ? pyStr(res.reason) : "refused"}`);
   if (S.session.id) S.sessions.event(S.session.id, "time-bank", { label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null });
   log(`[time-bank] ${label}: ${pyRepr(res)}`);
   return st.lastTimeBank;

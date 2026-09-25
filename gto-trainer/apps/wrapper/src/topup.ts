@@ -24,7 +24,7 @@ import * as TABLES from "./tables";
 import * as TERMINAL from "./terminal";
 import { tableJs, topupFillJs, topupReadJs } from "./ignition/dom";
 import { handState } from "./ignition/hand";
-import { act, autoTableOk, maybeTakeTime, pickReady } from "./relay";
+import { act, autoTableOk, heroTimeLeft, maybeTakeTime, pickReady } from "./relay";
 
 /** What a test replaces: the table read, the time-bank press, and how a run is started (Python's tests stubbed
  *  _top_up_read, _maybe_take_time and threading.Thread). */
@@ -181,6 +181,11 @@ export function noteTopUpRefusal(m: Record<string, any> | null): void {
 const pendingPress = (last: Record<string, any>) =>
   last.pressed && !last.receiptCents && !last.refused && time() * 1000 - (last.at || 0) < 180_000;
 
+/** Seconds of hero's clock the pre-action buy leaves for the action itself (auto delay ≤ 2 s, the press, a retry). */
+const PREFOLD_ACT_RESERVE_S = 6.0;
+/** A buy with less time than this is not started at all. */
+const PREFOLD_MIN_BUDGET_S = 2.0;
+
 /** Buy the chips BEFORE a TERMINAL action, while we still hold the clock (auto armed, practice table). */
 export async function maybePrefoldTopUp(): Promise<void> {
   const st = S.study;
@@ -224,6 +229,24 @@ export async function maybePrefoldTopUp(): Promise<void> {
     const granted = m ? Number(m[1]) : 45;
     budget = granted >= 45 ? C.TOP_UP_PREFOLD_BANKED_S : Math.min(C.TOP_UP_PREFOLD_BANKED_S, C.TOP_UP_PREFOLD_BUDGET_S + granted * 0.75);
   }
+  // THE BUY NEVER EATS THE ACTION'S TIME: capped by what is really left on hero's clock (the bank included — the
+  // client starts it at 0), keeping PREFOLD_ACT_RESERVE_S for the press, its settle and one retry. Hand 4920545590:
+  // a 6 s buy that never pressed, then the shove went out at clock 4 and was folded there.
+  const left = heroTimeLeft();
+  if (left !== null) {
+    const room = left.total - PREFOLD_ACT_RESERVE_S;
+    if (room < PREFOLD_MIN_BUDGET_S) {
+      S.topupLocked = false;
+      log(`[top-up] pre-action (${verdict.kind}) skipped: ${left.total} s left on hero's clock — the ${verdict.kind} goes first`);
+      if (S.session.id) {
+        S.sessions.event(S.session.id, "top-up-prefold-skipped", { hand: S.handNo, handKey: hid, shortCents: short, clockS: left.clock,
+                                                                  bankS: left.bank, pick: r.pick ?? null, terminalKind: verdict.kind });
+      }
+      S.topupPrefold.hand = hid;
+      return;
+    }
+    budget = Math.min(budget, room);
+  }
   Object.assign(S.topupPrefold, { active: true, key: r.key ?? null, hand: hid, startedAt: time(), deadline: time() + budget,
                                   banked, kind: verdict.kind, finalStackKnown: verdict.finalStackKnown });
   st.topUpHand = hid;
@@ -231,7 +254,7 @@ export async function maybePrefoldTopUp(): Promise<void> {
   st.topUpAt = time();
   st.topUpMayExceed = !verdict.finalStackKnown;
   feedAdd(`Pre-action top-up (${verdict.kind}): buying $${fmtFixed(short / 100, 2)} before the ${pyStr(r.pick ?? null)}`
-          + (banked ? " (time bank taken)" : "")
+          + (banked ? " (time bank pressed)" : "")
           + (verdict.finalStackKnown ? "" : " — hero can still win, so the client may refuse it at the next hand"));
   log(`[top-up] pre-action (${verdict.kind}): ${short}c short, ${fmtFixed(budget, 0)}s budget` + (banked ? ` after taking the time bank (${bankLabel})` : ""));
   if (S.session.id) {

@@ -15,6 +15,7 @@ import {
 } from "../../src/relay";
 import { topUpGate } from "../../src/topup";
 import * as CPA from "../../src/sites/cpActions";
+import { scriptedStrip } from "./fakeIgnition";
 import { checker, J, scratchDirs } from "./helpers";
 
 const P = pickPlan;
@@ -368,23 +369,23 @@ test("_execute_pick, auto-execute (practice only), told vs did, the shove fallba
     await maybeVerifyExec();
     check("no retry once the hand moved on", calls.length === 1 && (S.study.lastExec || {}).outcome === "unknown", J(S.study.lastExec));
 
-    // the shove fallback
-    let offered = new Set<string>();
-    seams.act = async (label, kind = "action") => {
-      calls.push(["act", label, kind]);
-      return offered.has(`${kind}:${label}`) ? { ok: true, clicked: label.toUpperCase() } : { ok: false, reason: `'${label}' not on offer (${kind})` };
-    };
-    calls.length = 0; offered = new Set(["action:all-in"]);
+    // the shove fallback (the strip as the client shows it: the ALL-IN preset relabels the confirm)
+    let strip = scriptedStrip([["foldButton", "FOLD"], ["raiseButton", "ALL-IN 100 BB"]], ["ALL-IN"]);
+    seams.act = strip.act;
     check("shoves on the action button when there is one", (await actuateAllIn()).ok === true);
-    calls.length = 0; offered = new Set(["preset:all-in", "action:raise"]);
+    strip = scriptedStrip([["foldButton", "FOLD"], ["callButton", "CALL 5 BB"], ["raiseButton", "RAISE TO 10 BB"]], ["ALL-IN"], { stack: 100 });
+    seams.act = strip.act;
     r = await actuateAllIn();
-    check("falls back to the sizing row + RAISE", r.ok === true && calls.some((c) => J(c) === J(["act", "raise", "action"])), J(calls));
-    calls.length = 0; offered = new Set(["preset:all-in", "action:bet"]);
+    check("falls back to the sizing row + the RAISE control", r.ok === true && J(strip.pressed) === J(["ALL-IN 100 BB"]), J(strip.calls));
+    strip = scriptedStrip([["checkButton", "CHECK"], ["betButton", "BET 1 BB"]], ["ALL-IN"], { stack: 100 });
+    seams.act = strip.act;
     check("  ... or BET when the client offers that instead", (await actuateAllIn()).ok === true);
-    calls.length = 0; offered = new Set();
+    strip = scriptedStrip([], []);
+    seams.act = strip.act;
     r = await actuateAllIn();
-    check("refuses when neither row offers a shove", r.ok === false && String(r.reason || "").includes("not on offer"));
-    calls.length = 0; offered = new Set(["preset:all-in"]);
+    check("refuses when neither row offers a shove", r.ok === false && String(r.reason || "").includes("not on offer"), J(r));
+    strip = scriptedStrip([["foldButton", "FOLD"], ["raiseButton", "RAISE TO 10 BB"]], ["ALL-IN"], { presetTakes: false });
+    seams.act = strip.act;
     r = await actuateAllIn();
     check("refuses rather than leaving a size set with nothing confirming it", r.ok === false && String(r.reason || "").includes("confirm"), J(r));
 
