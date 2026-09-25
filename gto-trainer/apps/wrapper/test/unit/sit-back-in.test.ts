@@ -80,6 +80,12 @@ test("sit back in: when it presses I AM BACK, and when it leaves hero out", asyn
     check("a bad probe in this stretch → leaves hero out", presses === 0, J(presses));
 
     seed();
+    S.net.drop = { sid: "session_test", at: T0, why: "5 of 10 lost", via: "table 1's connection check", handled: false };
+    await tickAt(0); await tickAt(30);
+    check("a connection drop (the session is ending) → never sat back in, even on a good link", presses === 0, J(presses));
+    S.net.drop = null;
+
+    seed();
     S.liveStatus.modal = { text: "notice" };
     await tickAt(0); await tickAt(30);
     check("a client notice on the table → holds", presses === 0, J(presses));

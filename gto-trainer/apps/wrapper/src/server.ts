@@ -490,6 +490,11 @@ export function buildApp(): Hono {
     const [code, res] = await SESSION.sessionDisconnected(await body(c, Body.sessionDisconnected));
     return json(code, res);
   });
+  // another table's connection check failed: the leader ends the session (session.ts maybeEndForNetDrop)
+  app.post("/session/net-drop", async (c) => {
+    const [code, res] = await SESSION.sessionNetDrop(await body(c, Body.sessionNetDrop));
+    return json(code, res);
+  });
   app.post("/session/end", async (c) => {
     const b = await body(c, Body.sessionEnd);
     const wasLive = !!S.session.id && (!b.id || b.id === S.session.id);

@@ -44,6 +44,8 @@ export const sessionSeams = {
   },
   // a table that is not the leader tells the leader, which owns the session
   tellLeader: (body: Record<string, any>) => postJson(`http://127.0.0.1:${TABLES.leaderPort()}/session/disconnected`, body, 20),
+  // a table whose connection check failed tells the leader, which ends the session (maybeEndForNetDrop)
+  tellLeaderNetDrop: (body: Record<string, any>) => postJson(`http://127.0.0.1:${TABLES.leaderPort()}/session/net-drop`, body, 20),
   hands: (sid: string) => sessionHands(sid),
   join: (body: Record<string, any>) => sessionJoin(body),
   // this wrapper's panel window: found / opened. Inert under bun test — a unit test must never pop a window.
@@ -745,6 +747,63 @@ export async function sessionDisconnected(body: Record<string, any>): Promise<[n
   return [200, { ok: true, ended: S.session.id === null ? was : null }];
 }
 
+/** A connection drop waits this long for hero's hand to end before the session ends anyway. */
+export const NET_DROP_HAND_WAIT_S = 120.0;
+
+/**
+ * THE CONNECTION DROPPED: END THE SESSION, NEVER SIT BACK IN (Brady, 2026-09-25 — "do not sit back after a connection
+ * drop, just end the session"). netguard.ts noted the drop (S.net.drop) and ticked "Sit out next hand"; this, from
+ * the feed loop, ends the session once hero's hand is over — the hand in play keeps its answers, and past
+ * NET_DROP_HAND_WAIT_S it ends regardless. The client stays open (the table is still connected; hero sits out). A
+ * table that is not the leader hands the drop to the leader, and ends it itself if the leader does not answer.
+ */
+export async function maybeEndForNetDrop(): Promise<void> {
+  const d = S.net.drop;
+  if (!d || d.handled) return;
+  const sid = d.sid;
+  if (S.session.id !== sid) {
+    S.net.drop = null;   // that session is over already; a drop never carries into the next one
+    return;
+  }
+  const waited = time() - d.at;
+  const busy = inAHand();
+  if (busy && waited < NET_DROP_HAND_WAIT_S) return;
+  d.handled = true;
+  const note = `ended automatically: the connection dropped (${d.why}; ${d.via}) — not sat back in` +
+    (busy ? `; hero was still in a hand after ${Math.round(waited)} s` : "");
+  if (!TABLES.isLeader()) {
+    let told: Record<string, any> | null = null;
+    try {
+      told = await sessionSeams.tellLeaderNetDrop({ sid, slot: TABLES.slot(), why: d.why });
+    } catch (e: any) {
+      told = { ok: false, error: String(e?.message ?? e) };
+    }
+    if (told && told.ok) {
+      log(`[net] told table ${TABLES.LEADER}, which ends the session`);
+      return;
+    }
+    log(`[net] table ${TABLES.LEADER} did not answer (${pyStr((told || {}).error ?? null)}) — ending the session from table ${pyStr(TABLES.slot())}`);
+  }
+  const res = await sessionEnd({ id: sid, note });
+  feedAdd(res.ok ? "Session ended — the connection dropped; hero was not sat back in"
+                 : `Session could NOT be ended automatically: ${pyStr(res.error ?? null)} — end it yourself`);
+}
+
+/** POST /session/net-drop — another table's connection check failed: the leader ends the session at its hand's end. */
+export async function sessionNetDrop(body: Record<string, any>): Promise<[number, Record<string, any>]> {
+  const sid = String(body.sid || "");
+  if (!S.session.id || (sid && sid !== S.session.id)) return [200, { ok: true, ended: null, note: "not this session (already ended?)" }];
+  if (!S.net.drop || S.net.drop.sid !== S.session.id) {
+    const slot = body.slot === undefined || body.slot === null ? null : pyInt(body.slot);
+    S.net.drop = { sid: S.session.id, at: time(), why: String(body.why || "connection too slow"), via: `table ${pyStr(slot)} told us`, handled: false };
+    feedAdd(`CONNECTION DROPPED at table ${pyStr(slot)} - the session ends when this hand is over`);
+    S.sessions.event(S.session.id, "net-drop", { hand: S.handNo, slot, why: S.net.drop.why, via: S.net.drop.via });
+  }
+  const was = S.session.id;
+  await maybeEndForNetDrop();
+  return [200, { ok: true, ended: S.session.id === null ? was : null, pending: S.session.id !== null }];
+}
+
 /** The deferred half of a close: leave the table the moment the hand ends. */
 export async function maybeStandDown(): Promise<void> {
   if (!S.study.standDownPending || inAHand()) return;
@@ -1269,6 +1328,7 @@ export async function sessionEnd(body: Record<string, any>): Promise<Record<stri
     S.router.cancel = true;
     S.sessions.event(sid, "ended", { hand: S.handNo });
     Object.assign(S.session, { id: null, rec: null, started: 0.0 });
+    Object.assign(S.net, { bad: 0, good: 0, sitout: null, drop: null });   // the guard's stretch belonged to this session
     log(`[session] ${sid} ended · ${pyRepr(summary)}`);
   }
   const out = S.sessions.end(sid, summary, body.note ?? null);

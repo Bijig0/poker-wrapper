@@ -148,7 +148,8 @@ test("the connection guard: a link too slow for GTO Wizard answers sits us out",
     await netStep(GOOD);
     eq("one good probe does not clear it", S.net.sitout !== null, true);
     await netStep(GOOD);
-    eq("two good probes clear it and tell you to press I'm back", [S.net.sitout, feed().some((f) => f.includes("I'm back"))], [null, true]);
+    eq("two good probes: said once, and nothing is undone (a drop ends the session - net-drop.test.ts)",
+       [S.net.sitout !== null, feed().filter((f) => f.includes("Connection is good again")).length, feed().some((f) => f.includes("I'm back"))], [true, 1, false]);
     eq("  ... never sitting back in by itself", calls.length, 2);
     Object.assign(S.net, { bad: 0, good: 0, sitout: null });
     await netStep(BAD);

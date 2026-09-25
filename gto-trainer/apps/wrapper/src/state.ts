@@ -161,7 +161,10 @@ function fresh() {
     toastsSeen: [] as [string, number][],
     lastArchived: { no: 0, fp: null } as Record<string, any>,
     awards: new Map<string, Record<string, any>>(),
-    net: { last: null as any, bad: 0, good: 0, sitout: null as any, history: [] as any[] },
+    /** The connection guard (netguard.ts). `drop` = the link went bad during session `sid`: the session ends at the hand's
+     *  end (session.ts maybeEndForNetDrop) and hero is never sat back in; `handled` once it has been ended (or passed on). */
+    net: { last: null as any, bad: 0, good: 0, sitout: null as any, history: [] as any[],
+           drop: null as null | { sid: string; at: number; why: string; via: string; handled: boolean } },
     shadow: { hand: null as number | null, rc: null as any, seq: 0, done: new Map<number, any>(), agree: 0, differ: 0, last: null as any },
     topupLocked: false,
     topupPanel: { open: false, lastCloseAt: 0.0, domTicks: 0 } as Record<string, any>,

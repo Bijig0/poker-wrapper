@@ -3,8 +3,9 @@
  * sit back in when made to sit out"). A few timed-out decisions and the client sits hero out; on an unattended run
  * the seat then sits there until someone presses I AM BACK. With the option on, the wrapper presses it.
  *
- * It stands aside while the connection guard (netguard.ts) has hero out — that sit-out is deliberate and the guard
- * only ever SAYS when the link is good again — and while any probe in the current stretch was bad. Outside a
+ * It NEVER presses after a connection drop (Brady, 2026-09-25: "do not sit back after a connection drop, just end
+ * the session"): the connection guard's sit-out ends the session (netguard.ts, session.ts maybeEndForNetDrop), and
+ * it stands aside while a drop is noted, while the guard has hero out and while any probe in the stretch was bad. Outside a
  * session it does nothing. Ignition only: CoinPoker's sit-out is a server flag set from the menu (CP.sitout),
  * wired separately.
  *
@@ -71,7 +72,7 @@ export async function maybeSitBackIn(): Promise<void> {
     st.sitBackTurn = null;
     return;
   }
-  if (S.net.sitout || S.net.bad > 0) return;   // the connection guard's sit-out is deliberate
+  if (S.net.drop || S.net.sitout || S.net.bad > 0) return;   // a connection drop ends the session; never sat back in
   if (L.modal || L.buyPanel) return;           // nothing is pressed through a notice; the next tick looks again
   const now = time();
   const cur = (st.sitBackTurn ??= { since: now, tries: 0, lastTry: 0.0, gaveUp: false });
