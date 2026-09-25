@@ -24,6 +24,7 @@ import { spawn, type Subprocess } from "bun";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { HandReply, StateReply } from "../../src/contract";
+import { CONFIRM_RELABEL_JS } from "../../src/faketable";
 
 const REPO = resolve(import.meta.dir, "../../../../..");
 const WRAPPER = join(REPO, "ignition-study-wrapper");
@@ -336,7 +337,10 @@ async function readOnly() {
                 "/faketable/frame?playMode=fun", "/faketable/frame?slot=1", "/sweep-report"];
   for (const p of html) {
     const r = await req(p);
-    record(`GET ${p}`, { status: r.status, type: r.type, body: r.text });
+    // SUPERSEDED IN PART 2026-09-25: the fake table relabels its confirm ALL-IN at the stack, as the client does
+    // (faketable.CONFIRM_RELABEL_JS); the recording predates it, so its pages are compared with that block removed
+    const body = p.startsWith("/faketable/frame") && typeof r.text === "string" ? r.text.replace(CONFIRM_RELABEL_JS, "") : r.text;
+    record(`GET ${p}`, { status: r.status, type: r.type, body });
   }
   const r404 = await req("/no-such-route");
   record("GET /no-such-route", { status: r404.status, body: r404.text });

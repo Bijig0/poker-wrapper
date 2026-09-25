@@ -62,7 +62,7 @@ export function freshStudy(): Record<string, any> {
     autoDelay: "instant", autoDue: null, autoRetry: null,
     foldNoAnswer: false, noAnswerTurn: null, lastNoAnswerFold: null,
     sitBackIn: false, sitBackTurn: null, lastSitBackIn: null,
-    timeBank: true, timeBankAt: 0.0, lastTimeBank: null,
+    timeBank: true, timeBankAt: 0.0, lastTimeBank: null, timeBankDecision: null,
     topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     topUpDue: null, topUpTrigger: null,
     // The Python wrapper had a REAL-MONEY auto-execute allowance here. It is NOT ported: auto-execute arms on a
@@ -89,6 +89,8 @@ function fresh() {
     /** Seconds on hero's action clock as the table shows it (Ignition), null when not on the clock / unreadable. Kept
      *  out of liveStatus, which the reader golden compares key by key against the Python recordings. */
     heroClock: null as number | null,
+    /** Hero's time bank over the current turn (dom.bankStep → relay.heroTimeLeft). Not in liveStatus (the golden). */
+    bankSeen: null as { secs: number; at: number; started: boolean } | null,
     health: { at: 0.0, issues: [] as any[] },
     panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,
     feed: [] as Record<string, any>[],
@@ -160,7 +162,7 @@ export function resetState(): void {
 /** The functions a test may replace (see the header). Filled in by the modules that own them. */
 export const seams: {
   ignitionTarget: () => Promise<Record<string, any> | null>;
-  act: (label: string, kind?: string) => Promise<Record<string, any>>;
+  act: (label: string, kind?: string, opts?: { expect?: (hit: any) => string | null }) => Promise<Record<string, any>>;
   raiseTo: (amount: string, strict?: boolean) => Promise<Record<string, any>>;
   cdpSeq: (ws: string, cmds: [string, Record<string, unknown>][]) => Promise<void>;
   registry: (now?: number) => any[];

@@ -462,7 +462,7 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
   Object.assign(st, {
     auto: false, executed: null, autoTried: null, lastExec: null, autoDue: null,
     autoDelay: cfg.autoDelay === "instant" || cfg.autoDelay === "random" ? cfg.autoDelay : "instant",
-    timeBank: "autoTimeBank" in cfg ? !!cfg.autoTimeBank : true, timeBankAt: 0.0, lastTimeBank: null,
+    timeBank: "autoTimeBank" in cfg ? !!cfg.autoTimeBank : true, timeBankAt: 0.0, lastTimeBank: null, timeBankDecision: null,
     topUp: "autoTopUp" in cfg ? !!cfg.autoTopUp : true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     foldNoAnswer: !!cfg.autoFoldNoAnswer, noAnswerTurn: null, lastNoAnswerFold: null,
     sitBackIn: !!cfg.autoSitBackIn, sitBackTurn: null, lastSitBackIn: null,

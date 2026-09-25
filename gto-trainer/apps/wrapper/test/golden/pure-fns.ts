@@ -112,7 +112,9 @@ export const FNS_EXTRA: Record<string, (args: any[], rec: any) => unknown> = {
       else process.env.TABLE_SLOT = was;
     }
   },
-  "faketable.render_inner": ([spec]) => FAKE.renderInner(spec),
+  // SUPERSEDED IN PART 2026-09-25: the fake table now relabels its confirm the way the client does
+  // (FAKE.CONFIRM_RELABEL_JS); the recorded pages predate it, so they are compared with exactly that block removed
+  "faketable.render_inner": ([spec]) => FAKE.renderInner(spec).replace(FAKE.CONFIRM_RELABEL_JS, ""),
   "faketable.render_outer": ([url, n]) => FAKE.renderOuter(url, n),
   "faketable.display_card": ([c]) => FAKE.displayCard(c),
   "faketable.encode_card": ([c]) => {

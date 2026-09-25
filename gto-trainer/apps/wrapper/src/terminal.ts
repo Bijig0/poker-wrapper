@@ -194,6 +194,31 @@ export function heroDone(hand: Hand | null | undefined): TerminalVerdict {
   return V(true, "showdown-pending", "the river action is closed; the hands are being shown", false);
 }
 
+/** Is a CALL the most hero can put in right now — so a shove can only be made BY CALLING? True when the call
+ *  takes hero's last chip (hero is covered), or when every opponent still in is already all-in (a raise would be
+ *  called by nobody, and the client offers FOLD / CALL only). Hand 4920544353 (2026-09-25, KJo on K-high): the
+ *  BTN jammed 21.6 into hero's 87.4 with the blinds folded, the strip read FOLD / CALL 21.6 BB, the answer was
+ *  ALLIN — and there was nothing labelled ALL-IN or RAISE to press, so it was refused twice and then folded.
+ *  CONSERVATIVE: anything unknown is `false` (the caller then refuses instead of calling). */
+export function callIsMaxCommit(hand: Hand | null | undefined): { yes: boolean; why: string } {
+  if (!hand || !Object.keys(hand).length) return { yes: false, why: "no hand state" };
+  const view = tableView(hand);
+  const hero = view.hero;
+  if (hero === null || !view.inHand.has(hero)) return { yes: false, why: "hero is not in the hand" };
+  if (!view.contestants.size) return { yes: false, why: "no opponent left in the hand" };
+  const toCall = num((hand.currentNode || {}).toCall) || 0.0;
+  if (toCall <= 0) return { yes: false, why: "nothing to call" };
+  const behind = view.stacks.has(hero) ? view.stacks.get(hero)! : null;
+  if (behind !== null && toCall >= behind - EPS_BB) {
+    return { yes: true, why: `calling ${pyFloatStr(toCall)} puts hero's last ${pyFloatStr(behind)} in` };
+  }
+  if (!view.withChips.size) {
+    return { yes: true, why: `every opponent still in is all-in (${pyRepr(sortedNums(view.contestants))}) — a call is the most that can go in` };
+  }
+  return { yes: false, why: behind === null ? "hero's stack is unknown"
+    : `hero has ${pyFloatStr(behind)} behind against a ${pyFloatStr(toCall)} call and ${pyRepr(sortedNums(view.withChips))} still have chips` };
+}
+
 /** Does this relay plan end hero's decisions in this hand? */
 export function isTerminal(plan: Record<string, any> | null | undefined, hand: Hand | null | undefined): TerminalVerdict {
   if (!plan || !Object.keys(plan).length) return V(false, "unknown", "no plan");

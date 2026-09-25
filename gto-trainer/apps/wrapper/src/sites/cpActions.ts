@@ -35,7 +35,8 @@ export const BOX: Record<string, [number, number, number, number]> = {
   menu_items: [104, 870, 420, 1045],
 };
 export const LABEL: Record<string, string[]> = {
-  fold: ["fold"], check: ["check"], call: ["call"],
+  // a call that takes hero's last chip may be captioned All-in on the call button — it is still the call
+  fold: ["fold"], check: ["check"], call: ["call", "all"],
   bet: ["bet", "raise", "all"], raise: ["bet", "raise", "all"],
   allin: ["all", "raise", "bet"],
 };

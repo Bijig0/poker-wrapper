@@ -262,7 +262,9 @@ export function buildApp(): Hono {
       ? await raiseTo([...pyStr(b.amount ?? "")].slice(0, 12).join(""))
       : await act([...pyStr(b.label ?? "")].slice(0, 32).join(""), [...pyStr(b.kind ?? "action")].slice(0, 12).join(""));
     log(`[act] ${pyRepr(b.label || b.amount || null)} -> ${pyRepr(res)}`);
-    return json(200, res);
+    // offerQa / missing are the relay's own (actuateAllIn reads the strip off a refusal) — not part of the reply
+    const { offerQa: _qa, missing: _missing, ...reply } = res;
+    return json(200, reply);
   });
   app.post("/quit", () => {
     SESSION.standDown();

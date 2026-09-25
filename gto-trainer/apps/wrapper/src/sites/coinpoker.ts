@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { time } from "../clock";
 import { fmtFixed, fmtG, pyFloatStr, pyRepr, pyRound, truthy } from "../py";
 import * as W from "../win32";
+import { callIsMaxCommit } from "../terminal";
 import * as actions from "./cpActions";
 import * as feed from "./cpFeed";
 
@@ -257,6 +258,10 @@ export class Site {
     const committed = h.committed instanceof Map ? h.committed : new Map(Object.entries(h.committed || {}).map(([k, v]) => [Number(k), v]));
     const totalBb = (Number(stacks.get(heroSeat)) || 0) + (Number(committed.get(heroSeat)) || 0);
     const total = bb ? pyRound(totalBb * bb, 4) : null;
+    // A SHOVE THE TABLE ONLY TAKES AS A CALL (hero covered, or every opponent already all-in): there is no Max /
+    // raise to size it on then, and the Max press refuses — Ignition hand 4920544353 folded top pair that way
+    const shoveAsCall = callIsMaxCommit(h);
+    let asCall = false;
     let res: Record<string, any>;
     if (plan.kind === "raise-to") {
       let amtBb: number;
@@ -267,13 +272,20 @@ export class Site {
         return { ok: false, reason: `unreadable size ${pyRepr(plan.amount ?? null)}` };
       }
       const amount = bb >= 0.05 ? pyRound(amtBb * bb, 2) : pyRound(amtBb * bb);
-      if (total && amount >= total * 0.999) res = await actions.act(r, get, "allin", total, { auto, allowReal });
-      else res = await actions.act(r, get, plan.verb || "raise", amount, { auto, allowReal });
+      if (total && amount >= total * 0.999) {
+        asCall = shoveAsCall.yes;
+        res = await actions.act(r, get, asCall ? "call" : "allin", asCall ? null : total, { auto, allowReal });
+      } else res = await actions.act(r, get, plan.verb || "raise", amount, { auto, allowReal });
     } else {
-      const label = plan.label === "all-in" ? "allin" : plan.label;
+      let label = plan.label === "all-in" ? "allin" : plan.label;
+      if (label === "allin" && shoveAsCall.yes) {
+        asCall = true;
+        label = "call";
+      }
       res = await actions.act(r, get, label, label === "allin" ? total : null, { auto, allowReal });
     }
     const out: Record<string, any> = { ok: !!res.ok, clicked: res.label ?? null, kind: "coinpoker", result: res };
+    if (asCall) Object.assign(out, { as: "call", why: shoveAsCall.why });
     if (!res.ok) out.reason = res.why ?? null;
     return out;
   }

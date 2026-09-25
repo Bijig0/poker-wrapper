@@ -3,14 +3,16 @@
  *
  * An all-in is its own action, and an all-in seat is finished acting (hand 4919482454): THE STACK DECIDES, AND IT
  * HAS TO HOLD — not the badge, and not one frame of it. And pressing a shove is an ordered fallback that never
- * crosses rows: the action ALL-IN if the client offers one, else size it on the sizing row and confirm on RAISE
- * (or BET) — a sized-but-unconfirmed shove refuses loudly, naming the control it already touched.
+ * crosses rows: the action ALL-IN if the client offers one, else size it on the sizing row and confirm on the RAISE/BET
+ * control once the client has relabelled it ALL-IN — a sized-but-unconfirmed shove refuses loudly, naming the control
+ * it already touched (the strips as recorded: allin-strip.test.ts).
  */
 import { expect, test } from "bun:test";
 import { setFakeTime } from "../../src/clock";
 import { HandReconciler, makeTick } from "../../src/reconcile";
 import { seams } from "../../src/state";
 import { actuate, actuateAllIn, pickPlan } from "../../src/relay";
+import { scriptedStrip } from "./fakeIgnition";
 import { checker, J } from "./helpers";
 
 type Spec = Record<number, [number | null, string | number | null, number, string | null]>;
@@ -78,70 +80,64 @@ test("an all-in is its own action, and an all-in seat is finished acting", () =>
 
 test("pressing a shove: the ordered fallback, and the rows it must not cross", async () => {
   const { fails, check } = checker();
-  setFakeTime(1_790_000_000);                        // the 0.25 s settle between the two presses is instant
-  const calls: [string, string][] = [];
+  setFakeTime(1_790_000_000);                        // the settle between the two presses is instant
   const act0 = seams.act;
-  const fake = (offers: Record<string, any>) => async (label: string, kind = "action") => {
-    calls.push([label, kind]);
-    const r = offers[`${label}|${kind}`];
-    return r ? { ...r } : { ok: false, reason: `no '${label}' on the ${kind} row` };
-  };
-  const HIT = (what: string) => ({ ok: true, clicked: what });
+  // the strip as the client shows it; the ALL-IN / MAX preset relabels the confirm "ALL-IN <stack> BB" (hand 4920545590)
+  const FACING = (): [string, string][] => [["foldButton", "FOLD"], ["callButton", "CALL 10 BB"], ["raiseButton", "RAISE TO 20 BB"]];
+  const BETTING = (): [string, string][] => [["checkButton", "CHECK"], ["betButton", "BET 1 BB"]];
   try {
-    calls.length = 0;
-    seams.act = fake({ "all-in|action": HIT("ALL-IN") });
+    let s = scriptedStrip([["foldButton", "FOLD"], ["raiseButton", "ALL-IN 100 BB"]], ["ALL-IN"]);
+    seams.act = s.act;
     let r = await actuateAllIn();
-    check("pressed once, on the action row", r.ok && J(calls) === J([["all-in", "action"]]), J(calls));
-    check("  ... and the sizing row was never touched", !calls.some((c) => c[1] === "preset"));
+    check("pressed once, on the action row, when a control already reads ALL-IN", r.ok && J(s.calls) === J([["all-in", "action"]]), J(s.calls));
+    check("  ... and the sizing row was never touched", !s.calls.some((c) => c[1] === "preset"));
 
-    calls.length = 0;
-    seams.act = fake({ "all-in|preset": HIT("ALL-IN"), "raise|action": HIT("RAISE TO 100 BB") });
+    s = scriptedStrip(FACING(), ["Pot", "ALL-IN"], { stack: 100 });
+    seams.act = s.act;
     r = await actuateAllIn();
     check("shove goes through", r.ok === true, J(r));
     check("  ... as size-then-confirm, not a single press", r.kind === "preset+confirm", J(r));
     check("  ... action row tried FIRST, then the preset, then the confirm",
-          J(calls) === J([["all-in", "action"], ["all-in", "preset"], ["raise", "action"]]), J(calls));
-    check("  ... and it says what it clicked", String(r.clicked).includes("ALL-IN") && String(r.clicked).includes("RAISE"), String(r.clicked));
+          J(s.calls) === J([["all-in", "action"], ["all-in", "preset"], ["confirm", "action"]]), J(s.calls));
+    check("  ... confirmed on the control the client relabelled ALL-IN", J(s.pressed) === J(["ALL-IN 100 BB"]), J(s.pressed));
 
-    calls.length = 0;
-    seams.act = fake({ "all-in|preset": HIT("ALL-IN"), "bet|action": HIT("BET 100 BB") });
+    s = scriptedStrip(BETTING(), ["ALL-IN"], { stack: 100 });
+    seams.act = s.act;
     r = await actuateAllIn();
-    check("confirms on BET instead", r.ok === true && String(r.clicked).includes("BET"), J(r));
-    const iR = calls.findIndex((c) => J(c) === J(["raise", "action"])), iB = calls.findIndex((c) => J(c) === J(["bet", "action"]));
-    check("  ... only after RAISE was tried", iR >= 0 && iR < iB, J(calls));
+    check("confirms on BET too (it relabels the same way)", r.ok === true && J(s.pressed) === J(["ALL-IN 100 BB"]), J(r));
 
-    calls.length = 0;
-    seams.act = fake({ "max|preset": HIT("MAX"), "raise|action": HIT("RAISE TO 100 BB") });
+    s = scriptedStrip(FACING(), ["MAX"], { stack: 100 });
+    seams.act = s.act;
     r = await actuateAllIn();
     check("falls through to MAX", r.ok === true && String(r.clicked).includes("MAX"), J(r));
-    check("  ... having tried ALL-IN first", J(calls.slice(0, 2)) === J([["all-in", "action"], ["all-in", "preset"]]), J(calls));
+    check("  ... having tried ALL-IN first", J(s.calls.slice(0, 2)) === J([["all-in", "action"], ["all-in", "preset"]]), J(s.calls));
 
-    calls.length = 0;
-    seams.act = fake({ "all-in|preset": HIT("ALL-IN") });
+    s = scriptedStrip(FACING(), ["ALL-IN"], { presetTakes: false });
+    seams.act = s.act;
     r = await actuateAllIn();
-    check("refuses rather than claiming success", r.ok === false, J(r));
+    check("refuses rather than claiming success when the confirm never reads ALL-IN", r.ok === false, J(r));
     check("  ... and names the control it already pressed", String(r.reason).includes("ALL-IN"), String(r.reason));
+    check("  ... never pressing the min-raise instead", !s.pressed.length, J(s.pressed));
 
-    calls.length = 0;
-    seams.act = fake({});
+    s = scriptedStrip(FACING(), []);
+    seams.act = s.act;
     r = await actuateAllIn();
-    check("refuses", r.ok === false, J(r));
-    check("  ... never presses anything else instead",
-          calls.every((c) => [J(["all-in", "action"]), J(["all-in", "preset"]), J(["max", "preset"])].includes(J(c))), J(calls));
+    check("refuses with no preset to size it on", r.ok === false && String(r.reason).includes("preset"), J(r));
+    check("  ... never presses anything else instead", !s.pressed.length, J(s.calls));
 
     for (const pick of ["All-in", "ALL-IN", "all in", "jam", "shove", "RAI"]) {
       const plan = pickPlan(pick);
       check(`  '${pick}' -> the all-in plan`, J(plan) === J({ kind: "action", label: "all-in" }), J(plan));
     }
-    calls.length = 0;
-    seams.act = fake({ "all-in|preset": HIT("ALL-IN"), "raise|action": HIT("RAISE") });
+    s = scriptedStrip(FACING(), ["ALL-IN"], { stack: 100 });
+    seams.act = s.act;
     r = await actuate({ kind: "action", label: "all-in" });
     check("_actuate sends it to _actuate_all_in, not act('all-in')", r.kind === "preset+confirm", J(r));
 
-    calls.length = 0;
-    seams.act = fake({ "call|action": HIT("CALL 69.4 BB") });
+    s = scriptedStrip(FACING(), ["ALL-IN"]);
+    seams.act = s.act;
     r = await actuate(pickPlan("Call")!);
-    check("one press, on the action row", r.ok && J(calls) === J([["call", "action"]]), J(calls));
+    check("one press, on the action row", r.ok && J(s.calls) === J([["call", "action"]]), J(s.calls));
   } finally {
     seams.act = act0;
   }

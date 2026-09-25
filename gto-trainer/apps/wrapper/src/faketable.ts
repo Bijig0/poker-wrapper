@@ -23,6 +23,25 @@ const GLYPH_TO_SUIT: Record<string, string> = Object.fromEntries(Object.entries(
 const pf = (v: number) => pyFloatStr(v);
 
 // ---- geometry, measured off the live client (types.ts) ----
+/** THE CLIENT RELABELS ITS CONFIRM once the size in the bet field is hero's whole stack: "RAISE TO 2 BB" → "ALL-IN 89.2
+ *  BB" (the ALL-IN preset puts it there: session 20260925_135420 frames 2038 → 2039, hand 4920545590; a BET reads the
+ *  same). The relay's shove presses the confirm only once it reads ALL-IN, so the fake table does this too. (The
+ *  client also shows a typed size — "RAISE TO 2.6 BB" — which the relay does not depend on, so it is not modelled:
+ *  the contract transcript's sized-raise replies stay as recorded.) One block, appended to the table's script — the
+ *  pure golden and the contract transcript (recorded before it) compare the page with exactly this block taken out. */
+export const CONFIRM_RELABEL_JS = `
+  const conf = document.querySelector("button[data-qa='raiseButton'], button[data-qa='betButton']");
+  if (bi && conf) {
+    const shown = conf.innerText;
+    const relabel = () => {
+      const v = parseFloat(bi.value), hi = parseFloat(bi.dataset.max);
+      conf.innerText = !isNaN(v) && !isNaN(hi) && v >= hi ? 'ALL-IN ' + (Math.round(hi * 100) / 100) + ' BB' : shown;
+    };
+    bi.addEventListener('input', relabel);
+    const allIn = document.querySelector("button[data-qa='allInSelector']");
+    if (allIn) allIn.addEventListener('click', () => { bi.value = bi.dataset.max; relabel(); });
+  }`;
+
 export const DESIGN = [800, 400] as const;
 export const FELT = [955, 512] as const;
 export const SEAT_INSET = [77.5, 16.7] as const;
@@ -480,7 +499,7 @@ export function renderInner(spec: Record<string, any>): string {
     const v = parseFloat(bi.value), lo = parseFloat(bi.dataset.min), hi = parseFloat(bi.dataset.max);
     if (!isNaN(v) && v < lo) bi.value = String(lo);
     else if (!isNaN(v) && v > hi) bi.value = String(hi);
-  });
+  });${CONFIRM_RELABEL_JS}
 </script>
 </body></html>`;
 }
