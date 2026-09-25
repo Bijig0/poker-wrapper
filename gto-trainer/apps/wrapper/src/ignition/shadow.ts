@@ -13,6 +13,7 @@ import { pyInt, pyJsonDumps } from "../py";
 import { HandReconciler, bb as rcBb, makeTick } from "../reconcile";
 import { S } from "../state";
 import { eventLine } from "./hand";
+import { withoutRabbit } from "./ws";
 
 export function shadowTick(state: Record<string, any>): void {
   try {
@@ -37,8 +38,10 @@ export function shadowTick(state: Record<string, any>): void {
       seats.set(n, { stack: sd.stack ?? null, bet: sd.bet ?? null, cards: sd.cards || 0,
                      hero: n === hero || !!sd.hero, badge: sd.badge ?? null });
     }
+    // the hand's board: a rabbit-hunt card drawn after the award is no street — the reconciler revived an ended hand on
+    // it ("the board grew to 5 cards", hand 4920544353: hero's fold retracted, turn and river checks filed)
     sh.rc.observe(makeTick({ seq: sh.seq, t: strftime("%H:%M:%S"), seats, pot: rcBb(state.pot ?? null),
-                             board: (state.board || []).length, buttons: [...(state.actions || [])], hero }));
+                             board: withoutRabbit(state.board || []).length, buttons: [...(state.actions || [])], hero }));
   } catch (e: any) {
     log(`[shadow] tick error: ${e?.message ?? e}`);
   }
