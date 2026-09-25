@@ -216,11 +216,25 @@ async function closeModal(ws: string): Promise<void> {
 
 export type Log = (m: string) => void;
 
+/** THE LOBBY IS THE LEADER'S. Four tables are one page: a follower driving the lobby pulls it out from under the
+ *  tables its siblings are reading (session_20260925_134058) — the leader takes every seat (session.seatNextTable).
+ *  null = this process may drive it. */
+export function followerRefusal(what: string, log: Log = console.log): Record<string, any> | null {
+  if (tables.isLeader()) return null;
+  const error = `table ${tables.slot()} does not drive the lobby — table ${tables.LEADER} signs in and takes every seat`;
+  try {
+    log(`[${what}] REFUSED: ${error}`);
+  } catch {}
+  return { ok: false, error, follower: true };
+}
+
 /** Drive the lobby to `fid` and sit with `buyinBb` big blinds. {ok, steps, detected, slot, error?}. Refuses when
  *  a table is already open — UNLESS `adding` (a multi-table session's second, third and fourth seats). */
 export async function goto(fid: string, buyinBb: number, port: number, waitForBb = true, log: Log = console.log,
                            adding = false): Promise<Record<string, any>> {
   const steps: string[] = [];
+  const refused = followerRefusal("goto", log);
+  if (refused) return { ...refused, steps };
   try {
     return await gotoInner(fid, buyinBb, port, waitForBb, log, steps, adding);
   } catch (e: any) {
@@ -509,6 +523,8 @@ export async function seatedSlots(port: number): Promise<number[]> {
 
 /** Bring the lobby forward from a seated table (a REAL mouse event on the top strip's Lobby control). */
 export async function toLobby(port: number, log: Log = console.log): Promise<Record<string, any>> {
+  const refused = followerRefusal("seat", log);
+  if (refused) return refused;
   const t = await target(port);
   if (!t) return { ok: false, error: "no table window" };
   const ws = t.webSocketDebuggerUrl!;
