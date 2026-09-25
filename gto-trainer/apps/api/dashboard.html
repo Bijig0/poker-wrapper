@@ -27,7 +27,7 @@
   </div>
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
-  <input id="filter" type="text" placeholder="filter: pos, cards, stakes…">
+  <input id="filter" type="text" placeholder="filter: T4o, AKs, 44, pos, stakes…">
   <select id="table-filter" style="display:none" title="which of the session's tables the hand was played on — a session opens 1, 2 or 4 and each table's hands are stamped with its slot"><option value="">all tables</option></select>
   <select id="sess-filter" title="show only the hands of one session — declared sessions first, then the undeclared gap clusters from before sessions were declared (same partition as the Sessions tab)"><option value="">all sessions</option></select>
   <label class="sub"><input id="only-flop" type="checkbox"> saw flop</label>
@@ -155,8 +155,27 @@ function buildTableFilter() {
   sel.value = [...slots.map(String), "none"].includes(keep) ? keep : "";
 }
 
+/* Filter terms are space-separated and ALL must match. A term shaped like a hand
+   class (T4o, T4s, T4, 44 — either rank order) matches hero's two cards as a class;
+   anything else is a substring of the row's stakes / position / cards / street /
+   strategy text, as before. */
+const HAND_CLASS_RE = /^([2-9tjqka])([2-9tjqka])([so])?$/;
+function handClassMatch(term, cards) {
+  const m = HAND_CLASS_RE.exec(term);
+  if (!m || !cards || cards.length !== 2) return null;
+  const [r1, r2] = cards.map((c) => c[0].toLowerCase());
+  if (!(r1 === m[1] && r2 === m[2]) && !(r1 === m[2] && r2 === m[1])) return false;
+  if (!m[3]) return true;
+  const suited = cards[0][1].toLowerCase() === cards[1][1].toLowerCase();
+  return m[3] === "s" ? suited : !suited;
+}
+function handMatchesTerm(h, term, text) {
+  return HAND_CLASS_RE.test(term) ? handClassMatch(term, h.heroCards) === true : text.includes(term);
+}
+
 function renderHands() {
   const q = $("filter").value.trim().toLowerCase();
+  const terms = q ? q.split(/\s+/) : [];
   const sid = $("sess-filter").value;
   let rows = HANDS.filter((h) => {
     if (sid && h.session !== sid) return false;
@@ -165,8 +184,9 @@ function renderHands() {
     if ($("only-flop").checked && !h.summary.sawFlop) return false;
     if ($("only-disc").checked && !(h.discrepancies && (h.discrepancies.major || h.discrepancies.minor))) return false;
     if ($("only-unanswered").checked && h.answerStatus?.status === "answered") return false;
-    if (!q) return true;
-    return `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet} ${h.strategy?.name ?? ""}`.toLowerCase().includes(q);
+    if (!terms.length) return true;
+    const text = `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet} ${h.strategy?.name ?? ""}`.toLowerCase();
+    return terms.every((t) => handMatchesTerm(h, t, text));
   });
   rows = rows.slice().sort((a, b) => {
     const va = sortVal(a, sortK), vb = sortVal(b, sortK);
@@ -369,7 +389,8 @@ async function showDetail(dbId) {
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
     ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
       `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
-       <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
+       <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}
+    ${ignitionCard(j)}`;
   DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
   renderTimeline();
   $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => tlView(b.dataset.v));
@@ -388,6 +409,51 @@ async function showDetail(dbId) {
       setStep(STEP + 1);
     }, 900);
   };
+}
+
+/* ---- Ignition's own record of the hand (client hand-history lookup via the wrapper), checked against our capture ---- */
+function ignitionCard(j) {
+  if (!j.clientHandId || !/^\d+$/.test(j.clientHandId)) return "";
+  return `<div class="card" id="ign-hh"><div class="tl-head"><h2>Ignition's record <span class="sub">— the client's own hand history for #${esc(j.clientHandId)}, checked against what the reader archived</span></h2>
+    <button class="mini" onclick="loadIgnition('${esc(j.clientHandId)}', false)">fetch from Ignition</button></div><div id="ign-hh-body" class="sub">needs the Poker Wrapper running with the Ignition client signed in · villains' cards show only if they were shown down</div></div>`;
+}
+
+async function loadIgnition(id, refresh) {
+  const box = $("ign-hh-body");
+  if (!box) return;
+  box.innerHTML = '<span class="sub">asking Ignition…</span>';
+  let r;
+  try { r = await (await fetch(`/api/dashboard/ignition-hh/${encodeURIComponent(id)}${refresh ? "?refresh=1" : ""}`)).json(); }
+  catch (e) { box.innerHTML = `<span class="warn">${esc(e.message || e)}</span>`; return; }
+  if (!r.ok) { box.innerHTML = `<span class="warn">${esc(r.error)}</span>${r.tries ? `<div class="sub mono">${r.tries.map((t) => esc(`${t.status ?? t.error} ${t.url}`)).join("<br>")}</div>` : ""}`; return; }
+  const g = r.ignition;
+  const diffs = r.diffs == null ? '<div class="sub">this hand is not in the archive, so there is nothing to check it against</div>'
+    : !r.diffs.length ? '<div><span class="badge b-info">matches</span> the archived hand agrees with Ignition on seats, stacks as dealt, cards, board and every action</div>'
+    : `<div><span class="badge b-major">${r.diffs.length} difference${r.diffs.length > 1 ? "s" : ""}</span> between the archived hand and Ignition's record</div>
+       <table class="cs-seats"><thead><tr><th>what</th><th>archived</th><th>Ignition</th><th></th></tr></thead><tbody>${r.diffs.map((d) =>
+         `<tr><td>${esc(d.field)}</td><td class="mono">${esc(d.ours)}</td><td class="mono">${esc(d.ignition)}</td><td class="sub">${esc(d.note ?? "")}</td></tr>`).join("")}</tbody></table>`;
+  const seats = `<table class="cs-seats"><thead><tr><th>seat</th><th>position</th><th>cards</th><th class="num">start</th><th class="num">end</th><th class="num">net</th></tr></thead><tbody>${g.seats.map((s) =>
+    `<tr class="${s.hero ? "hero" : ""}"><td>${s.seat}</td><td>${esc(s.position)}</td><td>${s.cards.length ? cardsHtml(s.cards) : '<span class="sub">—</span>'}</td><td class="num">${s.startBb}bb</td><td class="num">${s.endBb}bb</td><td class="num">${s.netBb > 0 ? "+" : ""}${s.netBb}bb</td></tr>`).join("")}</tbody></table>`;
+  const streets = ["preflop", "flop", "turn", "river"].map((st) => {
+    const acts = g.actions.filter((a) => a.street === st).map((a) => `seat ${a.seat ?? "?"} ${esc(a.type)}${a.amountBb != null ? ` ${a.amountBb}bb` : ""}`);
+    const notes = g.other.filter((o) => o.street === st && !/^(Set dealer|Card dealt to a spot)$/.test(o.label))
+      .map((o) => `<span class="sub">${esc(o.position)} ${esc(o.label)}${o.data.filter(Boolean).length ? " " + esc(o.data.filter(Boolean).join(" ")) : ""}</span>`);
+    return acts.length || notes.length ? `<div class="tl-row"><span class="who">${st}</span><span class="what">${[...acts, ...notes].join(" · ")}</span></div>` : "";
+  }).join("");
+  const nav = (label, hid) => hid ? `<button class="mini" onclick="loadIgnitionOther('${esc(hid)}')">${label} #${esc(hid)}</button>` : "";
+  box.innerHTML = `${diffs}
+    <div style="margin-top:8px"><b>${esc(g.table)}</b> · board ${g.board.length ? cardsHtml(g.board) : '<span class="sub">none</span>'}
+      <span class="sub"> · ${r.cached ? "saved copy" : "fetched now"}${r.fetchedAt ? " " + fmtT(Date.parse(r.fetchedAt)) : ""}</span>
+      <button class="mini" onclick="loadIgnition('${esc(id)}', true)">re-fetch</button></div>
+    ${seats}${streets}
+    <div style="margin-top:6px">${nav("← previous hand", g.previousHandId)} ${nav("next hand →", g.nextHandId)}</div>`;
+}
+
+/** Ignition's previous/next hand on that table: open it in the archive when we have it, else show its record here. */
+async function loadIgnitionOther(hid) {
+  const r = await (await fetch(`/api/dashboard/ignition-hh/${encodeURIComponent(hid)}`)).json().catch(() => null);
+  if (r?.dbId != null) { go(`/hands/${r.dbId}`); return; }
+  await loadIgnition(hid, false);
 }
 
 /* ---- provenance: which source answered each decision, stated outright ---- */
