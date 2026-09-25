@@ -24,8 +24,10 @@ const errRepr = (e: any) => `${e?.name && e.name !== "Error" ? e.name : "Excepti
 export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: string, e: any) => void): Promise<void> {
   try {
     await feedTick();
+    // "recovered" answers the warning — a blip too short to have raised one is only in the log
     if (loop.fails) {
-      feedAdd("Table reader recovered");
+      if (loop.fails >= FEED_STALL_TICKS) feedAdd("Table reader recovered");
+      else log(`[feed] table reader back after ${loop.fails} failed tick(s)`);
       S.liveStatus.feedStalled = null;
     }
     loop.fails = 0;

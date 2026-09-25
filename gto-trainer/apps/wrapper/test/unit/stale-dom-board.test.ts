@@ -22,9 +22,8 @@ import * as cdp from "../../src/cdp";
 import { realTime, setFakeTime, time } from "../../src/clock";
 import { DATA_DIR, reloadConfig } from "../../src/config";
 import { S, resetState, seams } from "../../src/state";
-import * as TABLES from "../../src/tables";
 import { archiveHand } from "../../src/archive";
-import { tableJs, watchJs } from "../../src/ignition/dom";
+import { mySel, tableJs, watchJs } from "../../src/ignition/dom";
 import { handState } from "../../src/ignition/hand";
 import { feedTick, maybeFlushEnded } from "../../src/ignition/reader";
 import { beginHand, domBoardRefusal, noteDomBoard, onGameMsg, tapFrame } from "../../src/ignition/ws";
@@ -57,8 +56,11 @@ async function replay(recs: any[], capture: (r: any) => any, env: Record<string,
     cdp.io.available = async () => true;
     cdp.io.pageTargets = async () => [{ ...TARGET }];
     cdp.io.evaluate = async (_ws: string, expr: string) => {
-      if (expr === tableJs(TABLES.domSlot())) return structuredClone(capture(cur));
-      if (expr === watchJs(TABLES.domSlot())) return [];
+      // the reader asks for its PINNED frame (mySel) once the first read has pinned it — a stub keyed on the slot
+      // number answered none of slot 2's 31 reads: each came back null, which the reader took as "not seated" before
+      // 2026-09-26, so the replay below never showed it the other table's flop it is here to refuse
+      if (expr === tableJs(mySel())) return structuredClone(capture(cur));
+      if (expr === watchJs(mySel())) return [];
       return null;
     };
     seams.ignitionTarget = async () => ({ ...TARGET });

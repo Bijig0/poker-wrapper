@@ -175,14 +175,33 @@ const STABLE_TICKS = 12;
 const WINS_POT = /\bwins?\b.*pot/i;
 const RESULT_FOR = /result for hand\s*(\d+)/i;
 
+/**
+ * A TABLE READ THAT DID NOT HAPPEN IS A FAILED TICK, NEVER AN IDLE ONE (audit 2026-09-25). It is thrown so the feed
+ * loop counts it (loops.ts: FEED_STALL_TICKS in a row → "table reader failing", a feed-stalled session event, toAct
+ * off) instead of the panel freezing on the last good read with nothing said. And a read that came back with
+ * nothing — cdp.evaluate gives null when the page's reply never came or the page threw — is not "not seated": that
+ * used to call "table closed", archive the hand in play and wipe the seat memory on one lost reply.
+ */
+export class TableReadError extends Error {
+  override name = "TableReadError";
+}
+
 export async function feedTick(): Promise<void> {
   const t = await seams.ignitionTarget();
-  if (!t) return;
+  if (!t) {
+    // no client page: a failure only while a session expects a table (a disconnect closes the client on purpose)
+    if (S.session.id && !S.disconnect) throw new TableReadError("the poker client is not open");
+    return;
+  }
   let d: Record<string, any>;
   try {
-    d = (await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(mySel()), 6)) || {};
-  } catch {
-    return;
+    d = await cdp.evaluate(t.webSocketDebuggerUrl, tableJs(mySel()), 6);
+  } catch (e: any) {
+    throw new TableReadError(`table read failed: ${e?.message ?? e}`);
+  }
+  if (!d || typeof d !== "object" || !("seated" in d)) {
+    throw new TableReadError(d === null || d === undefined ? "table read came back empty (no reply in time, or the page threw)"
+                                                           : `table read came back without a table: ${pyStr(JSON.stringify(d).slice(0, 80))}`);
   }
   notePin(pinFrame(d.frameTag ?? null, !!d.seated));
   const lost = disconnectOf(d);
