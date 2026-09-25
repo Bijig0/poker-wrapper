@@ -51,7 +51,9 @@ function solutionsToday(): { main: number; own: number } {
   };
   return { main: count(MAIN_LEDGER), own: gtowRequests.path.replace(/\\/g, "/") === MAIN_LEDGER ? 0 : count(gtowRequests.path) };
 }
-const own429 = () => gtowRequests.rows().filter((r) => r.st === 429).length;
+const t0Run = Date.now();
+/** 429s THIS run received (an earlier run's stay in the ledger) */
+const own429 = () => gtowRequests.rows().filter((r) => r.st === 429 && r.ts >= t0Run).length;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
@@ -92,13 +94,14 @@ for (const c of cases) {
       continue;
     }
     // 2. the first postflop decision: the dry-run input, then the live solve
-    process.env.GTOW_BLOCK = "1"; process.env.POSTFLOP_DRY_RUN = "1";
+    // the dry run may read the AI preflop tree (a hand whose preflop the AI piece answered takes its flop ranges from
+    // it): GTO Wizard is allowed, and the dry run stops before any postflop solve
+    const b = solutionsToday();
+    if (CAP - (b.main + b.own) < reserve || b.own - start.own >= maxOwn) { line += "STOPPED (budget) before the postflop decision"; done = true; break; }
+    delete process.env.GTOW_BLOCK; process.env.POSTFLOP_DRY_RUN = "1";
     const dry: any = await fastSolve(h, pos, { strategyId: STRATEGY, origin: "harness" });
     process.env.POSTFLOP_DRY_RUN = "0";
     if (!dry.ok || !dry.dryRun) { line += `${raw.street}: dry run refused (${String(dry.reason ?? "").slice(0, 160)}) — nothing to verify live`; done = true; break; }
-    const b = solutionsToday();
-    if (CAP - (b.main + b.own) < reserve || b.own - start.own >= maxOwn) { line += "STOPPED (budget) before the live postflop solve"; done = true; break; }
-    delete process.env.GTOW_BLOCK;
     const t0 = Date.now();
     const live: any = await fastSolve(h, pos, { strategyId: STRATEGY, origin: "harness" });
     const ms = Date.now() - t0;
@@ -110,6 +113,7 @@ for (const c of cases) {
     const stored = live.solveId != null ? solveStore.get(live.solveId) : null;
     const spec = stored?.trace?.spec;
     const diffs: string[] = [];
+    let note2 = "";
     if (!spec) diffs.push("no stored trace");
     else {
       const tree = dry.dryRun.trees?.[0];
@@ -124,11 +128,13 @@ for (const c of cases) {
       if (potLive != null && Math.abs(potDry - potLive) > 1e-6) diffs.push(`pot dry ${potDry} live ${potLive}`);
       if (!spec.firstStreet && Math.abs(dry.dryRun.flopStack - spec.flopStack) > 1e-6) diffs.push(`stack dry ${dry.dryRun.flopStack} live ${spec.flopStack}`);
       if (JSON.stringify(tree?.streets) !== JSON.stringify(spec.streets)) diffs.push(`streets dry ${JSON.stringify(tree?.streets)} live ${JSON.stringify(spec.streets)}`);
-      if ((dry.dryRun.trees?.length ?? 0) !== 1) diffs.push(`${dry.dryRun.trees.length} walkables (only the first compared)`);
+      if (diffs.length) diffs.push(`range source dry ${dry.rangeSource} live ${spec.rangeSource}`);
+      // a collapsed 4+ way spot: the stored trace is the first plan's; only that one is compared (said, not a mismatch)
+      if ((dry.dryRun.trees?.length ?? 0) !== 1) note2 = ` (${dry.dryRun.trees.length} collapse plans; the first compared)`;
     }
     const top = mix.slice().sort((x, y) => y.frequency - x.frequency).slice(0, 3).map((x) => `${x.action} ${x.frequency.toFixed(1)}%`).join(", ");
     line += `${raw.street} k=${k}: answered in ${ms} ms (${live.tier}, solve #${live.solveId}) · mix ${top}${degenerate ? " · DEGENERATE (all-zero / not in range)" : ""} · ` +
-      (diffs.length ? `INPUT MISMATCH: ${diffs.join("; ")}` : "sent == dry run (ranges, pot, stack, tokens)");
+      (diffs.length ? `INPUT MISMATCH: ${diffs.join("; ")}` : `sent == dry run (ranges, pot, stack, tokens)${note2}`) + ` · ${String(live.warning ?? "").slice(0, 160)}`;
     done = true;
     await sleep(paceMs);
     break;
