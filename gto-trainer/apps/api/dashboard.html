@@ -499,15 +499,14 @@ async function showDetail(dbId) {
         ${j.feedLines.map((l, i) => `<div data-fl="${i}">${esc(l)}</div>`).join("")}
       </div></div>
     </div>
-    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button></span></div>
-      <div id="timeline"></div><div id="rangelook" class="rl" hidden></div></div>
+    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button></span></div>
+      <div id="timeline"></div><div id="rangelook" class="rl" hidden></div><div id="actual" hidden></div></div>
     <div id="solution"></div>
     ${chainPathCard(j)}
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
     ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
       `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
-       <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}
-    ${ignitionCard(j)}`;
+       <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
   DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
   renderTimeline();
   $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => tlView(b.dataset.v));
@@ -528,49 +527,84 @@ async function showDetail(dbId) {
   };
 }
 
-/* ---- Ignition's own record of the hand (client hand-history lookup via the wrapper), checked against our capture ---- */
-function ignitionCard(j) {
-  if (!j.clientHandId || !/^\d+$/.test(j.clientHandId)) return "";
-  return `<div class="card" id="ign-hh"><div class="tl-head"><h2>Ignition's record <span class="sub">— the client's own hand history for #${esc(j.clientHandId)}, checked against what the reader archived</span></h2>
-    <button class="mini" onclick="loadIgnition('${esc(j.clientHandId)}', false)">fetch from Ignition</button></div><div id="ign-hh-body" class="sub">needs the Poker Wrapper running with the Ignition client signed in · villains' cards show only if they were shown down</div></div>`;
+/* ---- Actual: Ignition's own hand history of the hand (via the wrapper), checked against what the reader recorded.
+   The verdict and the diffs come from /api/ignition-hh (services/hhCheck); every renderer below is data → HTML. ---- */
+const HH_STREETS = ["preflop", "flop", "turn", "river"];
+const HH_NOISE = /^(Set dealer|Card dealt to a spot)$/;
+const HH_CARD = /^[2-9TJQKA][cdhs]$/;
+const HH_ACTION_KINDS = new Set(["action-missing", "action-extra", "action-amount"]);
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const hhBoardOn = (board, street) => ({ flop: board.slice(0, 3), turn: board.slice(3, 4), river: board.slice(4, 5) })[street] ?? [];
+const hhDataHtml = (data) => {
+  const d = data.filter(Boolean);
+  return d.length && d.every((x) => HH_CARD.test(x)) ? cardsHtml(d) : esc(d.join(" "));
+};
+
+/** Does the recording match Ignition's — and if not, did it at least match up to hero's last action (what the answers saw)? */
+function hhVerdictHtml(check) {
+  if (!check) return '<div class="hh-verdict sub">this hand is not in the archive, so there is nothing to check it against</div>';
+  const when = check.checkedAt ? `<span class="sub">· checked ${fmtT(check.checkedAt)}</span>` : "";
+  const badge = check.status === "match"
+    ? `<span class="badge b-info">✓ matches Ignition's hand history</span><span class="sub">seats, stacks as dealt, cards, board and every action</span>`
+    : check.throughOk
+      ? `<span class="badge b-minor">matches up to your last action</span><span class="sub">${plural(check.diffs.length, "difference")} after it — what the answers saw was right</span>`
+      : `<span class="badge b-major">does not match</span><span class="sub">${plural(check.diffs.length, "difference")}, ${check.through.length} before your last action</span>`;
+  return `<div class="hh-verdict">${badge}${when}</div>`;
 }
 
-async function loadIgnition(id, refresh) {
-  const box = $("ign-hh-body");
-  if (!box) return;
-  box.innerHTML = '<span class="sub">asking Ignition…</span>';
-  let r;
-  try { r = await (await fetch(`/api/dashboard/ignition-hh/${encodeURIComponent(id)}${refresh ? "?refresh=1" : ""}`)).json(); }
-  catch (e) { box.innerHTML = `<span class="warn">${esc(e.message || e)}</span>`; return; }
-  if (!r.ok) { box.innerHTML = `<span class="warn">${esc(r.error)}</span>${r.tries ? `<div class="sub mono">${r.tries.map((t) => esc(`${t.status ?? t.error} ${t.url}`)).join("<br>")}</div>` : ""}`; return; }
-  const g = r.ignition;
-  const diffs = r.diffs == null ? '<div class="sub">this hand is not in the archive, so there is nothing to check it against</div>'
-    : !r.diffs.length ? '<div><span class="badge b-info">matches</span> the archived hand agrees with Ignition on seats, stacks as dealt, cards, board and every action</div>'
-    : `<div><span class="badge b-major">${r.diffs.length} difference${r.diffs.length > 1 ? "s" : ""}</span> between the archived hand and Ignition's record</div>
-       <table class="cs-seats"><thead><tr><th>what</th><th>archived</th><th>Ignition</th><th></th></tr></thead><tbody>${r.diffs.map((d) =>
-         `<tr><td>${esc(d.field)}</td><td class="mono">${esc(d.ours)}</td><td class="mono">${esc(d.ignition)}</td><td class="sub">${esc(d.note ?? "")}</td></tr>`).join("")}</tbody></table>`;
-  const seats = `<table class="cs-seats"><thead><tr><th>seat</th><th>position</th><th>cards</th><th class="num">start</th><th class="num">end</th><th class="num">net</th></tr></thead><tbody>${g.seats.map((s) =>
-    `<tr class="${s.hero ? "hero" : ""}"><td>${s.seat}</td><td>${esc(s.position)}</td><td>${s.cards.length ? cardsHtml(s.cards) : '<span class="sub">—</span>'}</td><td class="num">${s.startBb}bb</td><td class="num">${s.endBb}bb</td><td class="num">${s.netBb > 0 ? "+" : ""}${s.netBb}bb</td></tr>`).join("")}</tbody></table>`;
-  const streets = ["preflop", "flop", "turn", "river"].map((st) => {
-    const acts = g.actions.filter((a) => a.street === st).map((a) => `seat ${a.seat ?? "?"} ${esc(a.type)}${a.amountBb != null ? ` ${a.amountBb}bb` : ""}`);
-    const notes = g.other.filter((o) => o.street === st && !/^(Set dealer|Card dealt to a spot)$/.test(o.label))
-      .map((o) => `<span class="sub">${esc(o.position)} ${esc(o.label)}${o.data.filter(Boolean).length ? " " + esc(o.data.filter(Boolean).join(" ")) : ""}</span>`);
-    return acts.length || notes.length ? `<div class="tl-row"><span class="who">${st}</span><span class="what">${[...acts, ...notes].join(" · ")}</span></div>` : "";
+/** The differences that are not about one action (board, stacks, seats, hero): actions are marked in the log instead. */
+function hhOtherDiffsHtml(diffs) {
+  const rows = diffs.filter((d) => !HH_ACTION_KINDS.has(d.kind));
+  return rows.length ? `<table class="cs-seats"><thead><tr><th>what</th><th>recorded</th><th>Ignition</th><th></th></tr></thead><tbody>${rows.map((d) =>
+    `<tr><td>${esc(d.field)}</td><td class="mono">${esc(d.ours)}</td><td class="mono">${esc(d.ignition)}</td><td class="sub">${esc(d.note ?? "")}</td></tr>`).join("")}</tbody></table>` : "";
+}
+
+const hhSeatsHtml = (g) => `<table class="cs-seats"><thead><tr><th>seat</th><th>position</th><th>cards</th><th class="num">start</th><th class="num">end</th><th class="num">net</th></tr></thead><tbody>${g.seats.map((s) =>
+  `<tr class="${s.hero ? "hero" : ""}"><td>${s.seat}</td><td>${esc(s.position)}</td><td>${s.cards.length ? cardsHtml(s.cards) : '<span class="sub">—</span>'}</td><td class="num">${s.startBb}bb</td><td class="num">${s.endBb}bb</td><td class="num">${s.netBb > 0 ? "+" : ""}${s.netBb}bb</td></tr>`).join("")}</tbody></table>`;
+
+/** Ignition's log street by street. A line the recording lacks, or has at another size, is marked; an action only the
+ *  recording has closes its street. */
+function hhLogHtml(g, diffs, ours) {
+  const byIgn = (kind) => new Map(diffs.filter((d) => d.kind === kind).map((d) => [d.ignitionAt, d]));
+  const missing = byIgn("action-missing"), resized = byIgn("action-amount");
+  const extras = diffs.filter((d) => d.kind === "action-extra").map((d) => ours.actions[d.oursAt]).filter(Boolean);
+  const heroSeat = g.seats.find((s) => s.hero)?.seat;
+  const lineHtml = (l) => {
+    const a = l.action != null ? g.actions[l.action] : null;
+    const miss = a != null && missing.has(l.action), size = a != null ? resized.get(l.action) : null;
+    const cls = [!a && "info", miss && "miss", size && "amount", l.seat != null && l.seat === heroSeat && "hero"].filter(Boolean).join(" ");
+    const flag = miss ? '<span class="hh-flag">not in our recording</span>'
+      : size ? `<span class="hh-flag">we recorded ${ours.actions[size.oursAt]?.amount ?? "?"}bb</span>` : "";
+    const who = l.position ? `${esc(l.position)}${l.seat != null ? ` <span class="sub">s${l.seat}</span>` : ""}` : "";
+    return `<div class="tl-row hh-line ${cls}"><span class="who">${who}</span><span class="what">${esc(l.label)} ${hhDataHtml(l.data)}${a?.amountBb != null ? ` <span class="sub">${a.amountBb}bb</span>` : ""}</span>${flag}</div>`;
+  };
+  const extraHtml = (a) => `<div class="tl-row hh-line extra"><span class="who">seat ${a.seatId}</span><span class="what">${esc(a.type)}${a.amount != null ? ` ${a.amount}bb` : ""}</span><span class="hh-flag">only in our recording</span></div>`;
+  return HH_STREETS.map((st) => {
+    const lines = g.log.filter((l) => l.street === st && !HH_NOISE.test(l.label));
+    const extra = extras.filter((a) => a.street === st);
+    const board = hhBoardOn(g.board, st);
+    return lines.length || extra.length
+      ? `<div class="hh-street">${st}${board.length ? " " + cardsHtml(board) : ""}</div>${lines.map(lineHtml).join("")}${extra.map(extraHtml).join("")}` : "";
   }).join("");
-  const nav = (label, hid) => hid ? `<button class="mini" onclick="loadIgnitionOther('${esc(hid)}')">${label} #${esc(hid)}</button>` : "";
-  box.innerHTML = `${diffs}
-    <div style="margin-top:8px"><b>${esc(g.table)}</b> · board ${g.board.length ? cardsHtml(g.board) : '<span class="sub">none</span>'}
-      <span class="sub"> · ${r.cached ? "saved copy" : "fetched now"}${r.fetchedAt ? " " + fmtT(Date.parse(r.fetchedAt)) : ""}</span>
-      <button class="mini" onclick="loadIgnition('${esc(id)}', true)">re-fetch</button></div>
-    ${seats}${streets}
-    <div style="margin-top:6px">${nav("← previous hand", g.previousHandId)} ${nav("next hand →", g.nextHandId)}</div>`;
 }
 
-/** Ignition's previous/next hand on that table: open it in the archive when we have it, else show its record here. */
-async function loadIgnitionOther(hid) {
-  const r = await (await fetch(`/api/dashboard/ignition-hh/${encodeURIComponent(hid)}`)).json().catch(() => null);
-  if (r?.dbId != null) { go(`/hands/${r.dbId}`); return; }
-  await loadIgnition(hid, false);
+function actualHtml(r, ours) {
+  if (!r.ok) return `<div class="warn">${esc(r.error)}</div>${r.check?.checkedAt ? hhVerdictHtml(r.check) : ""}`;
+  const g = r.ignition, diffs = r.check?.diffs ?? [];
+  return `${hhVerdictHtml(r.check)}${hhOtherDiffsHtml(diffs)}
+    <div class="sub" style="margin:6px 0">${esc(g.table)} · Ignition hand #${esc(r.handId)} · ${r.cached ? "saved copy" : "fetched now"}${r.fetchedAt ? " " + fmtT(Date.parse(r.fetchedAt)) : ""} · villains' cards show only when shown down
+      <button class="mini" onclick="loadActual(true)">re-fetch</button></div>
+    ${hhSeatsHtml(g)}${hhLogHtml(g, diffs, ours)}`;
+}
+
+async function loadActual(refresh = false) {
+  const host = $("actual"), id = DETAIL?.clientHandId;
+  if (!host) return;
+  host.dataset.drawn = "1";
+  if (!/^\d{10}$/.test(id ?? "")) { host.innerHTML = '<div class="sub">this hand has no Ignition hand number, so there is no hand history to check it against</div>'; return; }
+  host.innerHTML = '<div class="sub">asking Ignition…</div>';
+  const r = await fetch(`/api/ignition-hh/${id}${refresh ? "?refresh=1" : ""}`).then((x) => x.json()).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  if (DETAIL?.clientHandId === id && $("actual") === host) host.innerHTML = actualHtml(r, DETAIL.hand);
 }
 
 /* ---- provenance: which source answered each decision, stated outright ---- */
@@ -996,17 +1030,24 @@ function renderTimeline() {
    to your decision, the villains' included. Preflop: your nodes from answer-node (&ranges=1), theirs from the
    chart that answered walked along the whole line (/preflop-path). A decision with nothing stored says why and
    offers what would fill it. */
-let TL_VIEW = (() => { try { return localStorage.getItem("tlView") === "ranges" ? "ranges" : "actions"; } catch { return "actions"; } })();
+/** The hand card's views: the element each one shows, its title, and how to draw it the first time it opens. */
+const TL_VIEWS = {
+  actions: { el: "timeline", title: "Timeline — click a node, solve it, open it" },
+  ranges: { el: "rangelook", draw: () => renderRangeLooker(),
+    title: `Ranges <span class="sub">— every decision in the hand, in order: each player's strategy at the node, what they did, and the range it leaves</span>` },
+  actual: { el: "actual", draw: () => loadActual(),
+    title: `Actual <span class="sub">— Ignition's own hand history of this hand, checked against what the reader recorded</span>` },
+};
+const tlViewOf = (v) => (Object.hasOwn(TL_VIEWS, v) ? v : "actions");
+let TL_VIEW = (() => { try { return tlViewOf(localStorage.getItem("tlView")); } catch { return "actions"; } })();
 function tlView(v) {
-  TL_VIEW = v === "ranges" ? "ranges" : "actions";
+  TL_VIEW = tlViewOf(v);
   try { localStorage.setItem("tlView", TL_VIEW); } catch { /* storage blocked: the choice lasts this page only */ }
   $("tl-seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === TL_VIEW));
-  $("timeline").hidden = TL_VIEW !== "actions";
-  $("rangelook").hidden = TL_VIEW !== "ranges";
-  $("tl-title").innerHTML = TL_VIEW === "ranges"
-    ? `Ranges <span class="sub">— every decision in the hand, in order: each player's strategy at the node, what they did, and the range it leaves</span>`
-    : "Timeline — click a node, solve it, open it";
-  if (TL_VIEW === "ranges" && !$("rangelook").dataset.drawn) renderRangeLooker();
+  for (const [k, view] of Object.entries(TL_VIEWS)) $(view.el).hidden = k !== TL_VIEW;
+  const cur = TL_VIEWS[TL_VIEW];
+  $("tl-title").innerHTML = cur.title;
+  if (cur.draw && !$(cur.el).dataset.drawn) cur.draw();
 }
 const CHART_NODE_KINDS = new Set(["hrc", "hrc6max", "hrc-hu", "gtow"]);
 /** Every decision in the hand: all actions but the blinds' posts. */

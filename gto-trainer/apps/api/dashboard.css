@@ -921,3 +921,14 @@ table.sent-tbl td.k { min-width: 110px; white-space: nowrap; color: var(--muted)
 /* the chain path (2026-09-25): a rebuilt street or an extra request stands out; a by-design one is quiet */
 .chain-bad { color: var(--loss); font-weight: 600; }
 .chain-dz { color: var(--muted); }
+
+/* the Actual tab: Ignition's own hand history, the lines the reader's capture disagrees with marked */
+.hh-verdict { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 2px 0 10px; }
+.hh-street { display: flex; gap: 8px; align-items: center; margin: 12px 0 4px; font-weight: 600; text-transform: capitalize; }
+.tl-row.hh-line { cursor: default; }
+.tl-row.hh-line.info .what { color: var(--muted); }
+.tl-row.hh-line.miss, .tl-row.hh-line.extra { background: var(--loss-soft); }
+.tl-row.hh-line.amount { background: var(--ev-soft); }
+.tl-row.hh-line.extra .what { font-style: italic; }
+.hh-flag { margin-left: auto; font-size: 11.5px; color: var(--loss); white-space: nowrap; }
+.tl-row.hh-line.amount .hh-flag { color: var(--ev); }

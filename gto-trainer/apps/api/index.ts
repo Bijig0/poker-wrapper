@@ -28,6 +28,8 @@ import { studyPoller } from "./src/services/studyPoller";
 import { gtowApi } from "./src/services/gtowApi";
 import { startStallMonitor } from "./src/services/answerTrace";
 import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
+import ignitionHhRoutes from "./src/routes/ignitionHh";
+import { hhChecker } from "./src/services/hhCheck";
 
 const app = new Hono();
 
@@ -68,6 +70,7 @@ app.route("/api/dashboard/sources", sourcesRoutes);
 app.route("/api/dashboard/miss-queue", missQueueRoutes);
 if (!playerMode) app.route("/api/ledger", ledgerRoutes);
 app.route("/api/replay", replayRoutes);
+app.route("/api/ignition-hh", ignitionHhRoutes);
 
 // The study tool UI — Reader Verify, Replay Review, State Tester, plus the
 // replica's card art. Mounted at the root so the page paths match the ones
@@ -214,6 +217,9 @@ onBackgroundOwnership(() => {
   // failures the poller could not pin to a hand, and writes a no-probe row for a
   // decision nobody ever asked about (services/answerReconciler.ts).
   if (!dashboardOnly) answerReconciler.start();
+
+  // Checks every hand archived from here on against Ignition's own hand history (services/hhCheck.ts).
+  if (!dashboardOnly) hhChecker.start();
 });
 
 // The ledger's job runner: one job per lane at a time, logs under data/jobs/. The timer always runs

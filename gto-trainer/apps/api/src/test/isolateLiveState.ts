@@ -6,3 +6,5 @@
 process.env.ANSWERS_DB_PATH ??= ":memory:";
 // handFacts: the chain ledger's per-hand facts (services/handFacts.ts) — same refusal of non-temp paths under bun test.
 process.env.HAND_FACTS_DB_PATH ??= ":memory:";
+// hhCheck: the per-hand verdicts against Ignition's hand history (services/hhCheck.ts).
+process.env.HH_CHECKS_DB_PATH ??= ":memory:";

@@ -60,8 +60,7 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { existsSync as fsExists } from "node:fs";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import { fastSolve } from "../services/fastSolve";
-import { studyPoller, studyPollers } from "../services/studyPoller";
-import { compareHand, parseIgnitionHh } from "../utils/ignitionHh/ignitionHh";
+import { studyPoller } from "../services/studyPoller";
 import { fmtRoll, rollDecision } from "../services/rollDecision";
 import { missQueue } from "../services/missQueue";
 import { boxKeeper } from "../services/boxKeeper";
@@ -1035,36 +1034,26 @@ app.get("/hand/:dbId", async (c) => {
   });
 });
 
-/** GET /ignition-hh/:id — Ignition's own record of a hand (wrapper GET /hh/:id, which asks the logged-in poker page),
- *  read into our terms and compared with the archived copy of the same hand when there is one.
- *  Any running wrapper can answer: they all drive the same client page. localhost costs 2 s on Windows, so 127.0.0.1. */
-app.get("/ignition-hh/:id", async (c) => {
-  const id = c.req.param("id");
-  if (!/^\d+$/.test(id)) return c.json({ ok: false, error: `not an Ignition hand number: ${id}` }, 400);
-  const q = c.req.query("refresh") === "1" ? "?refresh=1" : "";
-  const urls = [...new Set([...studyPollers.list().map((p) => p.assistiveUrl), DEFAULT_LIVE_URL]
-    .map((u) => u.replace("//localhost:", "//127.0.0.1:").replace(/\/+$/, "")))];
-  const errors: string[] = [];
-  let rec: any = null;
-  for (const u of urls) {
-    try {
-      const r = await fetch(`${u}/hh/${id}${q}`, { signal: AbortSignal.timeout(60_000) });
-      if (r.ok) { rec = await r.json(); break; }
-      errors.push(`${u}: HTTP ${r.status}`);
-    } catch (e: any) {
-      errors.push(`${u}: ${e?.message ?? e}`);
-    }
-  }
-  if (!rec) return c.json({ ok: false, error: `no wrapper answered (${errors.join("; ")}) — start the Poker Wrapper with the Ignition client signed in` });
-  if (!rec.ok) return c.json(rec);
-  const ign = parseIgnitionHh(rec.body);
-  const row = openDb()?.query<HandRow, [string]>(
-    "SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE data LIKE ? ORDER BY rowid DESC LIMIT 1",
-  ).get(`%"clientHandId": "${id}"%`);
-  const e = row ? enrichSync(row) : null;
-  return c.json({ ok: true, handId: id, fetchedAt: rec.fetchedAt, cached: !!rec.cached, ignition: ign, dbId: e?.dbId ?? null,
-    diffs: e ? compareHand(e.hand, ign) : null });
-});
+const HAND_COLUMNS = "rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data";
+/** Ignition hand numbers are 10 digits; CoinPoker's are longer, the State Tester's synthetic ones are 9000xxx. */
+export const isIgnitionHandId = (id: string | null | undefined): id is string => !!id && /^\d{10}$/.test(id);
+
+/** The archived copy of a hand, by the site's own hand number — the LAST row when a hand was archived twice. */
+export function archivedByClientHandId(clientHandId: string): Enriched | null {
+  const row = openDb()?.query<HandRow, [string]>(`SELECT ${HAND_COLUMNS} FROM hands WHERE data LIKE ? ORDER BY rowid DESC LIMIT 1`)
+    .get(`%"clientHandId": "${clientHandId}"%`);
+  return row ? enrichSync(row) : null;
+}
+
+/** Ignition hands archived after row `afterRowid`, oldest first. */
+export const archivedIgnitionHandsAfter = (afterRowid: number): Enriched[] =>
+  (openDb()?.query<HandRow, [number]>(`SELECT ${HAND_COLUMNS} FROM hands WHERE rowid > ? ORDER BY rowid`).all(afterRowid) ?? [])
+    .map(enrichSync)
+    .filter((e): e is Enriched => !!e && isIgnitionHandId(e.clientHandId));
+
+/** The newest archived row id (0 for an empty or missing archive). */
+export const lastArchivedRowid = (): number =>
+  openDb()?.query<{ m: number | null }, []>("SELECT MAX(rowid) AS m FROM hands").get()?.m ?? 0;
 
 /** Truncate an archived hand to the state BEFORE actions[upto] — the actions, the board AND the money: an archived
  *  row's `stacks` / `committed` are the END of the hand's, rebuilt here to the decision (utils/archivedHand, hand 723). */
