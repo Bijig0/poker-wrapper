@@ -82,6 +82,16 @@ try {
 } catch (e: any) {
   rec("api input-mutation gate", false, String(e?.message ?? e));
 }
+// the post-in gate (2026-09-25): every poster seat x every hero seat, the preflop tree to the 3-bet from the charts —
+// a post-in table must answer as the ordinary table (check = limp, call, raise, unacted = ignored) and every pick the
+// poller can roll must be a press the strip offers (hero's free option: never FOLD, never CALL). Own process, offline.
+try {
+  const [, out] = run([BUN, "test", "src/scripts/postInMatrix.test.ts"], API, 900, { ...process.env, MUTATION_GATE: "1", ANSWERS_DB_PATH: ":memory:" });
+  const m = /(\d+) pass\s+(?:\d+ skip\s+)?(\d+) fail/.exec(out);
+  rec("api post-in gate", !!m && m[2] === "0", m ? `${m[1]} pass / ${m[2]} fail` : lastLines(out, 200));
+} catch (e: any) {
+  rec("api post-in gate", false, String(e?.message ?? e));
+}
 // 2. API typecheck — errors in src/scripts/_* are scratch scripts (not shipped, not ours to fix here)
 try {
   const [, out] = run([BUN, TSC, "--noEmit", "-p", "."], API, 600);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { foldPostIns, postInNote, deadPostsBb } from "./foldPostIns";
+import { foldPostIns, postInNote, deadPostsBb, freeOptionMix } from "./foldPostIns";
 import { normalizeHand } from "../../feed/normalizeHand/normalizeHand";
 import { shapeOf } from "../../services/gtowAiPreflop";
 import type { ParsedAction } from "../../feed/parsePanelFeed/parsePanelFeed";
@@ -85,6 +85,30 @@ describe("foldPostIns", () => {
     expect(deadPostsBb(lost.postIns, "flop")).toBe(1);
     expect(postInNote(lost.postIns, { 1: "HJ" }, "flop")).toContain("HJ posted 1bb and folded (the fold was not captured), 1bb left in the pot as dead money");
     expect(postInNote(lost.postIns, { 1: "HJ" }, "preflop")).toContain("HJ posted 1bb and is yet to act");
+  });
+
+  // the post-in matrix (scripts/postInMatrix.ts): hero posted in on the BTN, the HJ limped — the chart's node for 98s is
+  // Fold 75 / Raise 25, and the poller ROLLS over the mix: 3 rolls in 4 pressed FOLD over a free check; AKo's Limp band
+  // pressed CALL, which the strip does not offer (it offers CHECK)
+  it("freeOptionMix: hero's free option has no Fold and no Call/Limp — they are one Check, raises untouched", () => {
+    expect(freeOptionMix([{ action: "Fold", frequency: 74.97 }, { action: "Raise 4", frequency: 0.36 }, { action: "Raise 5", frequency: 24.67 }]))
+      .toEqual([{ action: "Check", frequency: 74.97 }, { action: "Raise 4", frequency: 0.36 }, { action: "Raise 5", frequency: 24.67 }]);
+    expect(freeOptionMix([{ action: "Limp", frequency: 8.64 }, { action: "Raise 2.5", frequency: 2.04 }, { action: "Raise 5", frequency: 89.32 }]))
+      .toEqual([{ action: "Check", frequency: 8.64 }, { action: "Raise 2.5", frequency: 2.04 }, { action: "Raise 5", frequency: 89.32 }]);
+    expect(freeOptionMix([{ action: "Fold", frequency: 60 }, { action: "Call", frequency: 30 }, { action: "All-in", frequency: 10 }]))
+      .toEqual([{ action: "Check", frequency: 90 }, { action: "All-in", frequency: 10 }]);
+    expect(freeOptionMix([{ action: "Fold", frequency: 100 }])).toEqual([{ action: "Check", frequency: 100 }]);
+    // nothing passive to merge, or already a plain Check: left alone
+    expect(freeOptionMix([{ action: "Raise 2.5", frequency: 100 }])).toBeNull();
+    expect(freeOptionMix([{ action: "Check", frequency: 70 }, { action: "Raise 4", frequency: 30 }])).toBeNull();
+    expect(freeOptionMix(undefined)).toBeNull();
+  });
+
+  it("hero's own post reads in the second person", () => {
+    const hero = foldPostIns([act(4, "post-sb", 0.5), act(5, "post-bb", 1), act(1, "post", 1, "preflop", true), act(6, "fold")]);
+    expect(postInNote(hero.postIns, { 1: "HJ" })).toContain("you posted 1bb and are yet to act");
+    const limped = foldPostIns([act(4, "post-sb", 0.5), act(5, "post-bb", 1), act(1, "post", 1, "preflop", true), act(6, "fold"), act(1, "check", undefined, "preflop", true)]);
+    expect(postInNote(limped.postIns, { 1: "HJ" })).toContain("you posted 1bb and checked your option — read as a LIMP");
   });
 
   it("says it is an approximation", () => {

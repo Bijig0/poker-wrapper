@@ -36,7 +36,8 @@ import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
-import { postInNote, deadPostsBb } from "../utils/foldPostIns/foldPostIns";
+import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
+import { rollBands } from "./answerIntegrity";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import { setPreflopPin, getPreflopPin, preflopPinKey, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
@@ -2656,16 +2657,30 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
 }
 
 /** The approximation note on a post-in hand's answer, and HERO'S OWN post: facing nothing but his own blind, the
- *  chart's node (a normal player facing 1bb) may say fold — a free check never folds. */
+ *  chart's node (a normal player facing 1bb) may say fold or limp — a free check never folds, and nothing more goes
+ *  in. The MIX says so, not only the served decision: the poller rolls over the mix (utils/foldPostIns.freeOptionMix). */
 function postInAnswer(hand: ParsedHand, r: Extract<FastSolveResult, { ok: true }>): FastSolveResult {
   const note = postInNote(hand.postIns, hand.positions, hand.currentNode.street);
   const heroPosted = hand.postIns!.some((p) => p.seatId === hand.heroSeatId && p.readAs === "pending");
   const free = hand.currentNode.street === "preflop" && hand.currentNode.toActIsHero && !(hand.currentNode.toCall > 0);
   let out: FastSolveResult = { ...r, approx: true, warning: `${note}${r.warning ? ` ${r.warning}` : ""}` };
-  const pick = (r as any).decision?.action as string | undefined;
-  if (heroPosted && free && pick && /^fold$/i.test(pick)) {
-    out = { ...out, decision: { ...(r as any).decision, action: "Check" },
-      warning: `${out.warning} · you posted in and nobody raised: the chart's Fold is a free CHECK here` } as FastSolveResult;
+  const mix = heroPosted && free ? freeOptionMix((r as any).actions) : null;
+  if (mix) {
+    const x = r as any;
+    // a decision the rewrite touched reads as the merged Check, with its frequency and its slice of the new mix
+    const bands = rollBands(mix);
+    const asCheck = (d: any) => {
+      if (!d || !/^(fold|check|call|limp|complete)\b/i.test(String(d.action ?? "").trim())) return d;
+      const b = bands.find((y) => y.action === "Check");
+      return { ...d, action: "Check", frequency: mix.find((y) => y.action === "Check")!.frequency, ...(d.band && b ? { band: [b.lo, b.hi] } : {}) };
+    };
+    const same = (d: any) => d && x.decision && JSON.stringify(d) === JSON.stringify(x.decision);
+    out = { ...out, actions: mix, decision: asCheck(x.decision),
+      ...(x.chartActions ? { chartActions: freeOptionMix(x.chartActions) ?? x.chartActions } : {}),
+      ...(x.chartDecision ? { chartDecision: same(x.chartDecision) ? asCheck(x.decision) : asCheck(x.chartDecision) } : {}),
+      ...(x.exploitActions ? { exploitActions: freeOptionMix(x.exploitActions) ?? x.exploitActions } : {}),
+      ...(x.exploitDecision ? { exploitDecision: same(x.exploitDecision) ? asCheck(x.decision) : asCheck(x.exploitDecision) } : {}),
+      warning: `${out.warning} · you posted in and nobody raised: the chart's Fold/Limp are a free CHECK here` } as FastSolveResult;
   }
   return out;
 }

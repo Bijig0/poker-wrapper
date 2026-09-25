@@ -53,15 +53,39 @@ export function deadPostsBb(postIns: PostIn[] | undefined, street = "flop"): num
  *  fold is one the capture lost (round 2, harness post-in + missed-fold, seed 412). */
 const lostOrFolded = (p: PostIn, street: string) => p.readAs === "fold" || (p.readAs === "pending" && street !== "preflop");
 
+/**
+ * HERO'S OWN FREE OPTION (2026-09-25, the post-in matrix, scripts/postInMatrix.ts). Hero posted in and nobody has
+ * raised: the chart node is an ordinary player's facing 1bb (or limps), so its mix may hold FOLD and CALL/LIMP — and
+ * both mean "put nothing more in", which Ignition's strip offers as CHECK (FOLD · CHECK · RAISE TO). Rewriting only
+ * the served decision was not enough: the poller ROLLS over the mix (rollDecision), so a roll landed on the chart's
+ * Fold (98s on the BTN over an HJ limp, Fold 75% → the relay pressed FOLD over a free check) or its Limp (pressed CALL,
+ * which is not on the strip — refused until the no-answer clock checked). Here the mix itself says Check: every
+ * passive action merged into one Check, where the first of them stood; raises and all-ins unchanged.
+ * Returns null when the mix has no passive action to merge.
+ */
+export function freeOptionMix<T extends { action: string; frequency: number }>(actions: T[] | null | undefined): { action: string; frequency: number }[] | null {
+  if (!actions?.length) return null;
+  const passive = (a: { action: string }) => /^(fold|check|call|limp|complete)\b/i.test(a.action.trim());
+  if (!actions.some(passive) || (actions.filter(passive).length === 1 && /^check\b/i.test(actions.find(passive)!.action))) return null;
+  const sum = Math.round(actions.filter(passive).reduce((s, a) => s + (Number(a.frequency) || 0), 0) * 100) / 100;
+  const out: { action: string; frequency: number }[] = [];
+  for (const a of actions) {
+    if (!passive(a)) out.push({ ...a });
+    else if (!out.some((x) => x.action === "Check")) out.push({ action: "Check", frequency: sum });
+  }
+  return out;
+}
+
 /** The line an answer carries when the hand had posted-in players. */
 export function postInNote(postIns: PostIn[] | undefined, positions: Record<number, string>, street = "preflop"): string | null {
   if (!postIns?.length) return null;
   const who = postIns.map((p) => {
     const pos = positions[p.seatId] ?? `seat ${p.seatId}`;
-    const how = p.readAs === "limp" ? "checked his option — read as a LIMP"
+    const how = p.readAs === "limp" ? `checked ${p.hero ? "your" : "his"} option — read as a LIMP`
       : p.readAs === "fold" ? `folded, ${p.amount}bb left in the pot as dead money`
       : lostOrFolded(p, street) ? `folded (the fold was not captured), ${p.amount}bb left in the pot as dead money`
-      : p.readAs === "pending" ? "is yet to act" : `${p.readAs}s (post included)`;
+      : p.readAs === "pending" ? (p.hero ? "are yet to act" : "is yet to act")
+      : p.hero ? `${p.readAs === "call" ? "called" : "raised"} (post included)` : `${p.readAs}s (post included)`;
     return `${p.hero ? "you" : pos} posted ${p.amount}bb and ${how}`;
   });
   const limped = postIns.some((p) => p.readAs === "limp");
