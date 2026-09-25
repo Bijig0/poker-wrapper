@@ -12,6 +12,7 @@ import { feedTick, maybeFlushEnded } from "./ignition/reader";
 import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVerifyExec } from "./relay";
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
 import { maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
+import { maybeSitBackIn } from "./sitback";
 
 export const FEED_STALL_TICKS = 8;
 
@@ -53,6 +54,7 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
     await maybeFoldNoAnswer();
     await maybeVerifyExec();
     await maybeTakeTime();
+    await maybeSitBackIn();
     await maybeGuardBuyPanel();
     await maybeSessionOrphaned();
     await maybeSessionAdopt();

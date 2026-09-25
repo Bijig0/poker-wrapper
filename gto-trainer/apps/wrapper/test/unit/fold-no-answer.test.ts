@@ -7,7 +7,7 @@
 import { expect, test } from "bun:test";
 import { realTime, setFakeTime, time } from "../../src/clock";
 import { S, resetState, seams } from "../../src/state";
-import { NO_ANSWER_DEADLINE_S, maybeFoldNoAnswer, setAuto } from "../../src/relay";
+import { NO_ANSWER_CLOCK_S, NO_ANSWER_DEADLINE_S, maybeFoldNoAnswer, setAuto } from "../../src/relay";
 import { pyJsonDumps } from "../../src/py";
 import { checker, J, scratchDirs } from "./helpers";
 
@@ -117,6 +117,53 @@ test("fold on no-answer: when it acts, what it presses, where it never acts", as
     S.liveStatus.modal = { text: "notice" };
     await tickAt(0); await tickAt(NO_ANSWER_DEADLINE_S + 1);
     check("a client notice over the strip → holds", calls.length === 0, J(calls));
+
+    // THE CLOCK (hand 4920431665: the client timed hero out at 31 s, the 30 s deadline pressed into an empty strip)
+    calls.length = 0;
+    offer = ["fold", "call", "raise"];
+    seed();
+    S.heroClock = 9;
+    await tickAt(0); await tickAt(6);
+    check("clock at 9 s, no answer → waits", calls.length === 0, J(calls));
+    S.heroClock = NO_ANSWER_CLOCK_S;
+    await tickAt(11);
+    check("clock down to the mark → folds long before the 30 s deadline", J(calls) === J(["check", "fold"]), J(calls));
+    check("the clock is the reason", String(S.study.lastNoAnswerFold?.why).includes("clock nearly out"), J(S.study.lastNoAnswerFold));
+    S.heroClock = null;
+
+    // an answer whose press was refused is never retried by auto-execute — it is a no-answer now
+    calls.length = 0;
+    seed({ answer: true });
+    S.study.autoTried = `7|${KEY}`;
+    S.study.lastExec = { key: `7|${KEY}`, outcome: "refused", ok: false, result: { ok: false, reason: "client changed 2.5 to 2.0 (min/max clamp) — not pressed" } };
+    await tickAt(0);
+    check("answer refused by the client → folds instead of running the clock out", J(calls) === J(["check", "fold"]), J(calls));
+    check("the refusal is the reason", String(S.study.lastNoAnswerFold?.why).includes("min/max clamp"), J(S.study.lastNoAnswerFold));
+
+    // a held answer (line uncertain) with the clock nearly out
+    calls.length = 0;
+    seed({ answer: true });
+    S.study.autoTried = null;
+    S.study.lastExec = null;
+    S.study.autoHeld = { key: `7|${KEY}`, why: "line uncertain — chips from an undealt seat", at: time() };
+    S.heroClock = 8;
+    await tickAt(0); await tickAt(5);
+    check("held answer, clock not yet at the mark → stays auto-execute's", calls.length === 0, J(calls));
+    S.heroClock = 3;
+    await tickAt(9);
+    check("held answer, clock at 3 s → folds", J(calls) === J(["check", "fold"]), J(calls));
+    check("says it was held", String(S.study.lastNoAnswerFold?.why).includes("held"), J(S.study.lastNoAnswerFold));
+    S.heroClock = null;
+    S.study.autoHeld = null;
+
+    calls.length = 0;
+    seed();
+    S.study.pendingExec = { key: "x", pick: "Fold", sentAt: time(), attempts: 1 };
+    S.heroClock = 2;
+    await tickAt(0); await tickAt(NO_ANSWER_DEADLINE_S + 1);
+    check("a press being verified belongs to the verify loop → never acts", calls.length === 0, J(calls));
+    S.study.pendingExec = null;
+    S.heroClock = null;
   } finally {
     seams.act = act0;
     console.log = log0;

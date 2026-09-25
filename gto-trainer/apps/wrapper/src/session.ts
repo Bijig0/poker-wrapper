@@ -461,6 +461,7 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
     timeBank: "autoTimeBank" in cfg ? !!cfg.autoTimeBank : true, timeBankAt: 0.0, lastTimeBank: null,
     topUp: "autoTopUp" in cfg ? !!cfg.autoTopUp : true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     foldNoAnswer: !!cfg.autoFoldNoAnswer, noAnswerTurn: null, lastNoAnswerFold: null,
+    sitBackIn: !!cfg.autoSitBackIn, sitBackTurn: null, lastSitBackIn: null,
     topUpDue: null, topUpTrigger: null, stackStable: { text: null, ticks: 0 },
     autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
   });
