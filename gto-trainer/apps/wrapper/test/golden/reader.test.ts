@@ -355,7 +355,7 @@ for (const file of corpusFiles("reader-")) {
           const c = new Database(dbp);
           try {
             for (const row of c.query("SELECT rowid, hand_id, played_at, stakes, street, result_text, result_amount, hero_cards,"
-                                      + " action_count, data FROM hands WHERE rowid > ? ORDER BY rowid").all(lastRow) as any[]) {
+                                      + " action_count, data FROM hands WHERE rowid > ? AND status = 'done' ORDER BY rowid").all(lastRow) as any[]) {
               lastRow = Math.max(lastRow, row.rowid);
               archived.push({ ...row, data: JSON.parse(row.data) });
             }
