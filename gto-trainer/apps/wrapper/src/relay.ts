@@ -683,17 +683,50 @@ export const NO_ANSWER_DEADLINE_S = 30;
 const NO_ANSWER_NOTE_MIN_S = 1.5;
 const NO_ANSWER_RETRY_S = 2.5;
 const NO_ANSWER_TRIES = 2;
+/** Seconds left on hero's own clock (Ignition's countdown in the seat box) at which the decision is given up.
+ *  THE CLOCK, NOT A FIXED DEADLINE (2026-09-25, hand 4920431665): the turn's real length depends on how much of the
+ *  time bank is left and whether the +45s press landed, so the 30 s deadline fired at 30.5 s — half a second after
+ *  the client had already timed hero out (the check went to a strip with no buttons). The base clock is 15 s. */
+export const NO_ANSWER_CLOCK_S = 4;
 
 /** Why hero's turn should be given up as a no-answer right now, or null. `age` = seconds hero has been on this
- *  decision. Three ways a decision is known to have no answer coming in time:
+ *  decision. The ways a decision is known to have no answer coming in time:
  *    - the poller has stopped asking (it pushes a note and no answer after its repeat-fail limit);
+ *    - hero's clock is down to NO_ANSWER_CLOCK_S (whatever the time bank did or did not add);
  *    - the +45s time bank is on offer (clock at ~9 s) and the session is set to leave it;
- *    - NO_ANSWER_DEADLINE_S has passed. */
+ *    - NO_ANSWER_DEADLINE_S has passed (the backstop when the clock cannot be read). */
 export function noAnswerFoldWhy(age: number): string | null {
   const note = currentNote();
   if (note && age >= NO_ANSWER_NOTE_MIN_S) return `refused — ${note}`;
+  const clock = heroClockLeft();
+  if (clock !== null && clock <= NO_ANSWER_CLOCK_S) return `clock nearly out (${clock} s left)`;
   if (!isCp() && S.liveStatus.timeBank && !S.study.timeBank) return "clock nearly out (time bank on offer, set to leave it)";
   if (age >= NO_ANSWER_DEADLINE_S) return `no answer after ${fmtFixed(age, 0)} s`;
+  return null;
+}
+
+/** Hero's countdown as the table shows it (Ignition only), or null. */
+function heroClockLeft(): number | null {
+  if (isCp()) return null;
+  const c = S.heroClock;
+  return typeof c === "number" && Number.isFinite(c) ? c : null;
+}
+
+/** When hero HAS an answer for this decision but it is not going to be played in time, the reason — else null.
+ *  Auto-execute presses once per decision: a refused press (the client clamped a raise size, the press would
+ *  land on another table, ...) is never retried, and a held pick (line uncertain) waits for its hold to clear.
+ *  Either one used to run the clock out, because fold-on-no-answer stood aside for any answer. */
+export function unplayedAnswerWhy(key: string | null): string | null {
+  const st = S.study;
+  const ex = st.lastExec;
+  if (key && st.autoTried === key && ex && ex.key === key && ex.outcome === "refused") {
+    return `the answer's press was refused (${pyStr((ex.result || {}).reason ?? null)})`;
+  }
+  const clock = heroClockLeft();
+  if (clock !== null && clock <= NO_ANSWER_CLOCK_S) {
+    const held = st.autoHeld && st.autoHeld.key === key ? `held — ${st.autoHeld.why}` : "not played yet";
+    return `clock nearly out (${clock} s left) with the answer ${held}`;
+  }
   return null;
 }
 
@@ -719,13 +752,15 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   if ((st.noAnswerTurn || {}).key !== key) st.noAnswerTurn = { key, since: time(), tries: 0, lastTry: 0.0 };
   const turn = st.noAnswerTurn;
   if (turn.tries >= NO_ANSWER_TRIES || time() - turn.lastTry < NO_ANSWER_RETRY_S) return;
-  // an answer for THIS decision is auto-execute's to play (or to hold) — not a no-answer
-  if (currentAnswer() && pickReady().ok) return;
+  // a pressed pick being verified is the verify loop's (a press that did not land is re-sent there)
+  if (st.pendingExec) return;
   // nothing may be pressed through these; the next tick looks again
   if (!isCp() && (S.liveStatus.modal || S.liveStatus.buyPanel)) return;
   if (S.topupPrefold.active && time() < S.topupPrefold.deadline) return;
   const age = time() - turn.since;
-  const why = noAnswerFoldWhy(age);
+  // an answer for THIS decision is auto-execute's to play (or to hold) — unless it is not going to be played in time
+  const ready = currentAnswer() ? pickReady() : null;
+  const why = ready && ready.ok ? unplayedAnswerWhy(ready.key ?? null) : noAnswerFoldWhy(age);
   if (!why) return;
   turn.tries += 1;
   turn.lastTry = time();

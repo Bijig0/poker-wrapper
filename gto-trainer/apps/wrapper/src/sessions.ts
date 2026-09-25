@@ -229,7 +229,7 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
       for (const [kk, vv] of Object.entries(v)) base.sources[kk] = truthy(vv);
     } else if (k === "budget" && v && typeof v === "object" && !Array.isArray(v)) {
       for (const [kk, vv] of Object.entries(v)) base.budget[kk] = emptyish(vv) ? null : pyInt(vv);
-    } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "clearCache"].includes(k)) {
+    } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "autoSitBackIn", "clearCache"].includes(k)) {
       base[k] = truthy(v);
     } else if (k === "autoDelay" && (v === "instant" || v === "random")) {
       base[k] = v;

@@ -16,7 +16,7 @@ import { S, seams } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand, noteAward } from "../archive";
 import {
-  awardName, boardCards, domHeroSeat, heroCards, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
+  awardName, boardCards, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
 import { actAdd, actSeen, dumpMark, mkey, tapVerify } from "./ws";
@@ -172,6 +172,11 @@ export async function feedTick(): Promise<void> {
   stateCheck(toActNow, seats);
   await handleModal(d);
   L.timeBank = (d.buttons ?? []).find((b: any) => /^\+\d+s$/.test(String(b.text || "").trim())) ?? null;
+  try {
+    S.heroClock = toActNow ? heroClockOf(d, nodes) : null;
+  } catch {
+    S.heroClock = null;
+  }
   L.practice = !!d.practice;
   const cur: Record<string, any> = { seated: true, seats, board, pot, heroHand, toAct: toActNow, heroCards: hc.join(" ") };
 

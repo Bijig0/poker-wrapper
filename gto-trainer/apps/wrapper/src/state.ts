@@ -61,6 +61,7 @@ export function freshStudy(): Record<string, any> {
     pendingExec: null,
     autoDelay: "instant", autoDue: null,
     foldNoAnswer: false, noAnswerTurn: null, lastNoAnswerFold: null,
+    sitBackIn: false, sitBackTurn: null, lastSitBackIn: null,
     timeBank: true, timeBankAt: 0.0, lastTimeBank: null,
     topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     topUpDue: null, topUpTrigger: null,
@@ -85,6 +86,9 @@ function fresh() {
     cpFollow: { room: null, hwnd: null, rect: null, stable: 0, snapped: null } as Record<string, any>,
     study: freshStudy(),
     liveStatus: { hero: "unknown" } as Record<string, any>,
+    /** Seconds on hero's action clock as the table shows it (Ignition), null when not on the clock / unreadable. Kept
+     *  out of liveStatus, which the reader golden compares key by key against the Python recordings. */
+    heroClock: null as number | null,
     health: { at: 0.0, issues: [] as any[] },
     panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,
     feed: [] as Record<string, any>[],

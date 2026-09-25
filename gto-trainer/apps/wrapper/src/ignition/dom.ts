@@ -363,6 +363,28 @@ export function heroStatus(d: Record<string, any>, nodes: Node[]): string {
   return "in-hand";
 }
 
+/** Seconds left on hero's action clock, or null when it is not showing / not readable. The client draws the
+ *  countdown as a bare number inside hero's seat box, UNDER the seat label (recording session_20260925_044840:
+ *  seat label "3" at y 1378, clock "15" at y 1400 → "0" at y 1416, box y 1287-1427). The seat label is the same
+ *  kind of node, so when the two could be confused (only one number in the box and it equals the seat label)
+ *  the answer is null rather than a guess. */
+export function heroClockOf(d: Record<string, any>, nodes: Node[]): number | null {
+  const me = (d.seatQa || []).find((s: any) => s && s.me) ?? null;
+  const box = me && me.box;
+  if (!box) return null;
+  const PAD = 12;
+  const inBox = nodes.filter((n) => /^\d{1,2}$/.test(String(n.text).trim())
+    && n.x + n.w / 2 >= box.x - PAD && n.x + n.w / 2 <= box.x + box.w + PAD
+    && n.y + n.h / 2 >= box.y - PAD && n.y + n.h / 2 <= box.y + box.h + PAD);
+  const label = me.num !== null && me.num !== undefined ? String(me.num) : null;
+  const byY = [...inBox].sort((a, b) => a.y - b.y);
+  const labelAt = label === null ? -1 : byY.findIndex((n) => String(n.text).trim() === label);
+  if (labelAt >= 0) byY.splice(labelAt, 1);
+  else if (label !== null) return null;   // no seat label found: cannot tell which number is the clock
+  if (byY.length !== 1) return null;
+  return pyInt(String(byY[0]!.text).trim());
+}
+
 // ---- the award row under "Result for hand N" ------------------------------------------------------------
 /** The winner's label on the award row ('Player N' preferred, else the nearest left neighbour). */
 export function awardName(win: Node, row: Node[]): string {

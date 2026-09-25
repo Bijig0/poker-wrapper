@@ -165,7 +165,7 @@
         <div id="auto-fold-row" style="display:none;margin-top:8px">
           <div class="row"><span class="sub">no answer</span>
             <div class="seg" id="autoFoldNoAnswer"><button data-v="1" class="plain">Fold (check if free)</button><button data-v="0" class="plain">Wait it out</button></div></div>
-          <span class="help">For unattended runs. When a decision gets no answer — the solver gave up on it, the clock reaches the time-bank mark with Time bank set to Leave it, or 30 s pass — the wrapper checks if checking is free and otherwise folds, instead of letting the clock run out (a few timeouts sit you out). Each one is logged as a <b>no-answer-fold</b> session event with its reason, for the no-answer audit. <b>Practice and fake tables only</b>: on a real-money table it never acts, even with the real-money box ticked.</span>
+          <span class="help">For unattended runs. When a decision gets no answer — the solver gave up on it, your clock is down to 4 s, the clock reaches the time-bank mark with Time bank set to Leave it, or 30 s pass — the wrapper checks if checking is free and otherwise folds, instead of letting the clock run out (a few timeouts sit you out). The same happens when there IS an answer but its press was refused (e.g. the client clamped a raise size) or it is still held with 4 s left. Each one is logged as a <b>no-answer-fold</b> session event with its reason, for the no-answer audit. Currently acts on real-money tables too.</span>
         </div>
         <div class="cp-only help" style="margin-top:6px;color:#ffce56">CoinPoker: auto-execute arms <b>only on a Practice Games table</b> (the server marks those as play chips) unless the real-money box below is ticked too.</div>
         <div id="auto-real-row" style="display:none;margin-top:8px">
@@ -183,6 +183,9 @@
       <div class="field ign-only"><span class="k">Top-up</span>
         <div class="seg" id="autoTopUp"><button data-v="1" class="plain">Always to the max</button><button data-v="0" class="plain">Off</button></div>
         <span class="help">Ring tables have no auto-rebuy of their own. With this on, whenever your stack is below the table's <b>max buy-in</b> the wrapper opens <b>Buy chips</b> between hands, takes the Max the client offers and presses BUY — the amount is always the client's own number. Off = you buy chips yourself.</span></div>
+      <div class="field ign-only"><span class="k">Sat out</span>
+        <div class="seg" id="autoSitBackIn"><button data-v="1" class="plain">Sit back in</button><button data-v="0" class="plain">Stay out</button></div>
+        <span class="help">A few timed-out decisions and the table sits you out. With this on, the wrapper presses <b>I AM BACK</b> for you (after 2 s, up to 3 tries per sit-out), logged as a <b>sit-back-in</b> session event. It leaves you out while the connection guard has sat you out for a slow link. If you sit out on purpose, choose Stay out — it cannot tell your sit-out from the table's.</span></div>
       <div class="field"><span class="k">Budget</span>
         <div class="row"><input type="number" id="budget-hands" min="0" placeholder="hands"> <span class="sub">hands</span> <input type="number" id="budget-min" min="0" placeholder="min"> <span class="sub">minutes</span></div>
         <span class="help">Optional. The panel counts down and says when it's reached; it never ends the session for you.</span></div>
@@ -469,6 +472,7 @@ function fillSettings() {
   seg("autoTimeBank", cfg.autoTimeBank === false ? 0 : 1);
   seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
   seg("autoFoldNoAnswer", cfg.autoFoldNoAnswer ? 1 : 0);
+  seg("autoSitBackIn", cfg.autoSitBackIn ? 1 : 0);
   $("auto-fold-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-delay-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-real-row").style.display = cfg.autoExecute ? "" : "none";
@@ -491,7 +495,7 @@ function fillSettings() {
       (s ? ` <b>${esc(s.name)}</b> <span class="sub">— ${esc(p.tagline)}</span><div class="sub" style="margin-top:4px">${s.layers.map((l) => `<b>${esc(l.role)}</b> ${esc(l.label ?? "")}`).join(" · ")}</div>` : "") +
       `<div class="sub" style="margin-top:4px">sources this mode answers from: ${srcs.map(esc).join(", ") || "none"} — each is a required check below</div>` +
       (cfg.autoExecute
-        ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoFoldNoAnswer ? " · folds (checks if free) on no answer — practice tables only" : ""}${cfg.autoRealMoney
+        ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoFoldNoAnswer ? " · folds (checks if free) on no answer" : ""}${cfg.autoRealMoney
             ? ` for REAL MONEY — bounded to ${cfg.autoBudget.minutes} min / ${cfg.autoBudget.hands} hands, then it disarms itself`
             : " — arms on a practice table; on a real-money table it waits until you allow it on the panel"}</div>`
         : "");
@@ -505,6 +509,7 @@ function readSettings() {
   cfg.autoTimeBank = $("autoTimeBank").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoFoldNoAnswer = cfg.autoExecute && $("autoFoldNoAnswer").querySelector("button.on")?.dataset.v === "1";
+  cfg.autoSitBackIn = $("autoSitBackIn").querySelector("button.on")?.dataset.v === "1";
   cfg.autoRealMoney = cfg.autoExecute && $("autoRealMoney").checked;
   cfg.clearCache = $("clearCache").checked;
   cfg.autoBudget = { minutes: Number($("auto-min").value) || 30, hands: Number($("auto-hands").value) || 50 };
@@ -544,7 +549,7 @@ $("tables").querySelectorAll("button").forEach((b) => b.onclick = () => {
   schedulePreflight();
 });
 
-["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
+["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp", "autoSitBackIn"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
   if (!cfg) return;
   $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
   readSettings(); fillSettings(); schedulePreflight();
