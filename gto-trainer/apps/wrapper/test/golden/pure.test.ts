@@ -114,4 +114,6 @@ test("golden: pure functions match the Python wrapper", async () => {
   console.log(`golden pure: ${[...passed.values()].reduce((a, b) => a + b, 0)} calls matched across ${passed.size} functions` +
               ` (${superseded} heads-up postflop calls superseded — see supersededHeadsUp)` + (p ? `; PENDING (not ported yet): ${p}` : ""));
   expect(fails).toEqual([]);
-});
+// 29k recorded calls: 2-5 s alone, past Bun's 5 s default when other test runs share the CPU (2026-09-26: every call
+// matched and the test still failed on the timer) — the same allowance the other replay goldens carry
+}, 300_000);
