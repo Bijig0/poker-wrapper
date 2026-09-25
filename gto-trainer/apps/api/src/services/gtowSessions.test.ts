@@ -165,3 +165,28 @@ describe("status", () => {
     expect(p.status().find((r) => r.id === "primary")!.multiwayRefused).toBe(true);
   });
 });
+
+describe("account identity", () => {
+  // two sessions on the same plan (say two Elite logins) are told apart by WHO is signed in — the token's claims
+  const jwt = (claims: object) => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+
+  it("reads the signed-in email and public id from the session's token", async () => {
+    const p = pool();
+    (p as any).sniff = async () => jwt({ exp, email: "elite-two@example.com", public_id: "abc123def456" });
+    await p.tokenFor("secondary", true);
+    const s = p.status().find((x) => x.id === "secondary")!;
+    expect(s.account).toBe("elite-two@example.com");
+    expect(s.accountId).toBe("abc123def456");
+    expect(p.status().find((x) => x.id === "primary")!.account).toBeNull();
+  });
+
+  it("keeps the last known account when a later token carries no identity", async () => {
+    const p = pool();
+    (p as any).sniff = async () => jwt({ exp, email: "elite-two@example.com", public_id: "abc" });
+    await p.tokenFor("secondary", true);
+    (p as any).sniff = async () => jwt({ exp });
+    await p.tokenFor("secondary", true);
+    expect(p.status().find((x) => x.id === "secondary")!.account).toBe("elite-two@example.com");
+  });
+});

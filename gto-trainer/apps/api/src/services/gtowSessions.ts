@@ -111,6 +111,11 @@ export interface GtowSessionStatus {
   /** cloud solves minted on this account since the API started */
   trees: number;
   lastUsedMs: number | null;
+  /** WHO is signed in on this client — the email + public id carried in its token (null until a token is seen).
+   *  Two sessions with the same plan label (say two Elite accounts) are told apart by this, and two sessions
+   *  showing the SAME account means both clients are signed into one login. */
+  account: string | null;
+  accountId: string | null;
   /** Rolled up for the UI: what this session is doing for us right now.
    *  "unknown" = nobody probed, so down and signed-out cannot be told apart. */
   state: "up" | "no-token" | "blocked" | "down" | "off" | "unknown";
@@ -161,6 +166,18 @@ const decodeExpMs = (jwt: string): number => {
     return JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64").toString()).exp * 1000;
   } catch {
     return 0;
+  }
+};
+
+/** The signed-in account a GTO Wizard token belongs to (its `email` / `public_id` claims), or null. */
+const decodeAccount = (jwt: string): { email: string | null; publicId: string | null } | null => {
+  try {
+    const c = JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64url").toString());
+    const email = typeof c.email === "string" && c.email ? c.email : null;
+    const publicId = typeof c.public_id === "string" && c.public_id ? c.public_id : null;
+    return email || publicId ? { email, publicId } : null;
+  } catch {
+    return null;
   }
 };
 
@@ -216,6 +233,8 @@ interface SessionState {
   lastError: string | null;
   trees: number;
   lastUsedMs: number;
+  /** the account the last token belonged to — kept after the token expires so the UI still says whose window it is */
+  account: { email: string | null; publicId: string | null } | null;
 }
 
 class GtowSessions {
@@ -247,6 +266,7 @@ class GtowSessions {
         lastError: null,
         trees: 0,
         lastUsedMs: 0,
+        account: null,
       });
     }
   }
@@ -397,6 +417,7 @@ class GtowSessions {
     s.token = tok;
     s.sniffFailedMs = 0;
     s.tokenExpMs = decodeExpMs(tok);
+    s.account = decodeAccount(tok) ?? s.account;
     s.lastError = null;
     // a fresh token means the account is reachable and signed in again — an
     // auth/unreachable wall is stale the moment one lands
@@ -583,6 +604,8 @@ class GtowSessions {
       lastError: s.lastError,
       trees: s.trees,
       lastUsedMs: s.lastUsedMs || null,
+      account: s.account?.email ?? null,
+      accountId: s.account?.publicId ?? null,
       state,
       text,
     };

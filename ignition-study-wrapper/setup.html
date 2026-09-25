@@ -579,12 +579,12 @@ function schedulePreflight() { clearTimeout(pfTimer); pfTimer = setTimeout(runPr
  */
 function gtowRows(c) {
   if (c.id !== "gtow") return "";
-  const ss = c.sessions || [];
+  const ss = (c.sessions || []).filter((x) => x.enabled !== false);
   if (!ss.length) {
     return c.ok ? "" : `<span style="margin-top:6px"><button class="mini" id="gtow-connect" onclick="gtowConnect()">🔌 Connect GTO Wizard</button> <span class="sub" id="gtow-connect-msg">starts each session with its debug port and waits for a token (up to a minute)</span></span>`;
   }
   const cls = (x) => x.state === "up" ? "up" : (x.state === "blocked" || x.state === "no-token" || x.state === "unknown") ? "warn" : "down";
-  const rows = ss.map((x) => `<div class="g ${cls(x)}"><span class="d"></span><span class="nm">${esc(x.id)}</span><span class="cap${x.multiway ? " mw" : ""}">${x.multiway ? "multiway" : "heads-up"}</span><span>${esc(x.blockedReason || x.text || "")}</span><button class="mini" id="gtow-connect-${esc(x.id)}" onclick="gtowConnect('${esc(x.id)}')">${x.state === "up" ? "Reconnect" : "🔌 Connect"}</button></div>`).join("");
+  const rows = ss.map((x) => `<div class="g ${cls(x)}"><span class="d"></span><span class="nm">${esc(x.id)}${x.account ? ` <span class="sub">${esc(x.account)}</span>` : ""}</span><span class="cap${x.multiway ? " mw" : ""}">${x.multiway ? "multiway" : "heads-up"}</span><span>${esc(x.blockedReason || x.text || "")}</span><button class="mini" id="gtow-connect-${esc(x.id)}" onclick="gtowConnect('${esc(x.id)}')">${x.state === "up" ? "Reconnect" : "🔌 Connect"}</button></div>`).join("");
   return `<span class="gsess">${rows}<span class="sub" id="gtow-connect-msg">a session parked on its activation or sign-in screen needs the code typed in its own window — Connect will not restart it</span></span>`;
 }
 

@@ -333,9 +333,13 @@ export async function runPreflight(preset: string, config: any, fakeMode: boolea
     : truthy(g.clientUp) ? (summary || "a client is up but no session has a token — sign in (or enter the activation code) in its window")
     : (summary || "no session reachable — start one: scripts/start_gtow_chrome.ps1 or scripts/start_gtow_secondary.ps1"));
   if (checks.length && checks[checks.length - 1].id === "gtow") {
-    checks[checks.length - 1].sessions = gsess.filter((x) => truthy(x.enabled)).map((x) => ({
+    // EVERY account the API knows, disabled ones included (enabled: false) — the panel's Connection list shows the
+    // whole pool; the setup page's rows keep to the enabled ones
+    checks[checks.length - 1].sessions = gsess.map((x) => ({
       id: x.id ?? null, label: x.label ?? null, state: x.state ?? null, text: x.text ?? null, multiway: truthy(x.multiway),
       expiresInMs: x.expiresInMs ?? null, cdpHost: x.cdpHost ?? null, blockedReason: x.blockedReason ?? null,
+      enabled: truthy(x.enabled), tokenLive: truthy(x.tokenLive), trees: x.trees ?? null,
+      account: x.account ?? null, accountId: x.accountId ?? null,
     }));
   }
   if (req.includes("gtow")) {

@@ -680,6 +680,7 @@ app.get("/registry", async (c) => {
           tokenLive: x.tokenLive, expiresInMs: x.expiresInMs, multiway: x.multiway,
           cdpHost: x.cdpHost, enabled: x.enabled, launchHint: x.launchHint,
           blockedKind: x.blockedKind, blockedReason: x.blockedReason, trees: x.trees,
+          account: x.account, accountId: x.accountId,
         })),
       },
       wrapper: { up: wrapper.ok, url: DEFAULT_LIVE_URL, studyAnswersOn: wrapper.body?.studyAnswersOn ?? null },

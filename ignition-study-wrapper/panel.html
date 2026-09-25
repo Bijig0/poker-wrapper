@@ -54,6 +54,22 @@
   .checks .chk b { display: block; } .checks .chk .d { color: #8fa1b3; font-size: 12.5px; }
   .checks .chk .req { font-size: 11px; color: #8fa1b3; text-transform: uppercase; letter-spacing: .04em; padding-top: 4px; }
   .checks .chk.bad .req { color: #ff8a80; }
+  /* GTO Wizard accounts: the pool behind the one GTO Wizard row, opened with its button */
+  .checks .gacc-btn { margin-top: 4px; background: none; border: 1px solid #2a3540; color: #8fa1b3; border-radius: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+  .checks .gacc-btn:hover { color: #d7e1ea; border-color: #3a4855; }
+  .checks .gacc { margin: 6px 0 2px; display: grid; gap: 4px; }
+  .checks .gacc .ga { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: start; padding: 5px 8px; background: #121a21; border: 1px solid #1c242c; border-radius: 6px; font-size: 13px; }
+  .checks .gacc .ga .dot { width: 8px; height: 8px; margin-top: 5px; }
+  .checks .gacc .ga.up .dot { background: #5ee39a; } .checks .gacc .ga.warn .dot { background: #ffce56; } .checks .gacc .ga.down .dot { background: #ff8a80; }
+  .checks .gacc .ga.off { opacity: .55; }
+  .checks .gacc .ga .nm { font-weight: 700; } .checks .gacc .ga .cap { font-size: 11px; color: #8fa1b3; margin-left: 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .checks .gacc .ga .cap.mw { color: #9fc6ff; }
+  .checks .gacc .ga .d { display: block; }
+  .checks .gacc .ga .who { display: block; color: #d7e1ea; font-size: 12.5px; }
+  .checks .gacc .ga .who .pid { color: #8fa1b3; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; margin-left: 6px; }
+  .checks .gacc .ga .dup { display: block; color: #ffce56; font-size: 12px; }
+  .checks .gacc .ga button { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid #2a3540; background: #17212a; color: #d7e1ea; cursor: pointer; }
+  .checks .gacc .ga button:disabled { opacity: .6; cursor: default; }
   details.conn summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #8fa1b3; font-weight: 700; margin: 10px 0 4px; }
   details.conn summary::-webkit-details-marker { display: none; }
   details.conn summary .st { text-transform: none; letter-spacing: 0; font-weight: 600; }
@@ -468,18 +484,15 @@
   // Wizard token, the recorder. The wrapper reconnects GTO Wizard on its own;
   // the row says so while it does. The header pill mirrors the verdict.
   let connWasBad = false;
+  let checksTimer = null, lastChecks = null;
   async function loadChecks() {
+    clearTimeout(checksTimer);
     let j;
     try { j = await (await fetch("/session/checks")).json(); }
-    catch (e) { $("sa-checks").innerHTML = '<div class="sub">wrapper not answering</div>'; setPill("bad", "wrapper not answering"); setTimeout(loadChecks, 5000); return; }
+    catch (e) { $("sa-checks").innerHTML = '<div class="sub">wrapper not answering</div>'; setPill("bad", "wrapper not answering"); clearTimeout(checksTimer); checksTimer = setTimeout(loadChecks, 5000); return; }
+    lastChecks = j;
+    renderChecks(j);
     const busy = j.chain && j.chain.attempting;
-    const rows = (j.checks || []).map((c) => {
-      const isG = c.id === "gtow";
-      const cls = c.ok ? "ok" : !c.required ? "off" : (isG && busy ? "busy" : "bad");
-      const extra = isG && !c.ok ? (busy ? ' · <span class="spin">⟳</span> reconnecting on its own…' : j.chain?.lastResult && !j.chain.lastResult.connected ? ` · last attempt: ${esc(j.chain.lastResult.text || "failed")} — retries every 2 min` : "") : "";
-      return `<div class="chk ${cls}"><span class="dot"></span><span><b>${esc(c.label)}</b><span class="d">${esc(c.detail)}${extra}</span></span><span class="req">${c.required ? "required" : "optional"}</span></div>`;
-    });
-    $("sa-checks").innerHTML = rows.join("") || '<div class="sub">no checks</div>';
     const down = (j.blockers || []).length;
     const st = j.ok ? "ok" : busy ? "busy" : "bad";
     const txt = j.ok ? "all up" : busy ? `reconnecting… (${down} down)` : `${down} required down: ${(j.blockers || []).join(", ")}`;
@@ -491,8 +504,64 @@
     connWasBad = !j.ok;
     // Capture QA is the instrumentation mode: open on Analysis unless the URL said otherwise
     if (!modeExplicit && j.preset === "capture-qa" && MODE !== "analysis") setMode("analysis", false);
-    setTimeout(loadChecks, 10000);
+    clearTimeout(checksTimer);
+    checksTimer = setTimeout(loadChecks, 10000);
   }
+  function renderChecks(j) {
+    const busy = j.chain && j.chain.attempting;
+    const rows = (j.checks || []).map((c) => {
+      const isG = c.id === "gtow";
+      const cls = c.ok ? "ok" : !c.required ? "off" : (isG && busy ? "busy" : "bad");
+      const extra = isG && !c.ok ? (busy ? ' · <span class="spin">⟳</span> reconnecting on its own…' : j.chain?.lastResult && !j.chain.lastResult.connected ? ` · last attempt: ${esc(j.chain.lastResult.text || "failed")} — retries every 2 min` : "") : "";
+      return `<div class="chk ${cls}"><span class="dot"></span><span><b>${esc(c.label)}</b><span class="d">${esc(c.detail)}${extra}</span>${isG ? gtowAccounts(c.sessions) : ""}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`;
+    });
+    $("sa-checks").innerHTML = rows.join("") || '<div class="sub">no checks</div>';
+  }
+  // GTO Wizard is a POOL of accounts behind the one row above: its button lists every one the API knows (disabled
+  // ones greyed), each with its state, plan capability, token time and its own Connect. Open state and an in-flight
+  // Connect survive the 10 s re-render.
+  let gaccOpen = false;
+  const gaccMsg = {};
+  function gtowAccounts(ss) {
+    ss = ss || [];
+    if (!ss.length) return "";
+    const live = ss.filter((x) => x.state === "up").length, on = ss.filter((x) => x.enabled !== false).length;
+    const btn = `<div><button class="gacc-btn" data-gacc-toggle>${gaccOpen ? "▾" : "▸"} ${ss.length} account${ss.length === 1 ? "" : "s"} · ${live} of ${on} live</button></div>`;
+    if (!gaccOpen) return btn;
+    // the same login in two windows is worth a warning; two DIFFERENT logins on the same plan is fine and the
+    // account line is what tells them apart
+    const byAcct = {};
+    for (const x of ss) { const k = x.accountId || x.account; if (k) (byAcct[k] = byAcct[k] || []).push(x.id); }
+    const cls = (x) => x.enabled === false ? "off" : x.state === "up" ? "up" : ["blocked", "no-token", "unknown"].includes(x.state) ? "warn" : "down";
+    const rows = ss.map((x) => {
+      const bits = [x.enabled === false ? "disabled" : (x.blockedReason || x.text || x.state || ""),
+                    x.trees ? `${x.trees} solve${x.trees === 1 ? "" : "s"} this run` : "", x.cdpHost ? `CDP ${x.cdpHost}` : ""].filter(Boolean);
+      const busy = gaccMsg[x.id];
+      const connect = x.enabled === false ? "" : `<button data-gacc-connect="${esc(x.id)}"${busy === "…" ? " disabled" : ""}>${busy === "…" ? "connecting…" : x.state === "up" ? "Reconnect" : "🔌 Connect"}</button>`;
+      const name = x.label && x.label !== x.id ? `${esc(x.id)} <span class="sub">(${esc(x.label)})</span>` : esc(x.id);
+      const who = x.account || x.accountId
+        ? `<span class="who">signed in as ${esc(x.account || "unknown email")}${x.accountId ? `<span class="pid" title="GTO Wizard public id">#${esc(String(x.accountId).slice(0, 8))}</span>` : ""}</span>`
+        : `<span class="d">signed-in account not known yet (read from its first token)</span>`;
+      const twins = (byAcct[x.accountId || x.account] || []).filter((id) => id !== x.id);
+      const dup = twins.length ? `<span class="dup">⚠ same login as ${esc(twins.join(", "))} — both windows are signed into one account</span>` : "";
+      return `<div class="ga ${cls(x)}"><span class="dot"></span><span><span class="nm">${name}</span><span class="cap${x.multiway ? " mw" : ""}">${x.multiway ? "multiway" : "heads-up"}</span>`
+        + who + dup + `<span class="d">${esc(bits.join(" · "))}</span>${busy && busy !== "…" ? `<span class="d">${esc(busy)}</span>` : ""}</span>${connect}</div>`;
+    }).join("");
+    return btn + `<div class="gacc">${rows}</div>`;
+  }
+  $("sa-checks").addEventListener("click", async (e) => {
+    if (e.target.closest("[data-gacc-toggle]")) { gaccOpen = !gaccOpen; if (lastChecks) renderChecks(lastChecks); return; }
+    const b = e.target.closest("[data-gacc-connect]");
+    if (!b) return;
+    const id = b.dataset.gaccConnect;
+    gaccMsg[id] = "…"; if (lastChecks) renderChecks(lastChecks);
+    let r;
+    try {
+      r = await (await fetch("/session/gtow-connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: id }) })).json();
+    } catch (err) { r = { ok: false, hint: String(err) }; }
+    gaccMsg[id] = r?.connected ? `connected — ${r.text || "token live"}` : (r?.hint || r?.error || "could not connect");
+    loadChecks();
+  });
   function setPill(st, txt) { const p = $("conn-pill"); p.className = st; $("conn-pill-t").textContent = "connection · " + txt; }
   $("conn-pill").onclick = () => { if (MODE !== "game") setMode("game"); $("conn-details").open = true; $("conn-details").scrollIntoView({ behavior: "smooth", block: "center" }); };
   loadChecks();
