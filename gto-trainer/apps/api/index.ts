@@ -194,13 +194,17 @@ if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token ke
     say(why);
     process.exit(1);
   }
-  try {
-    const line = adoptAtStartup((l) => console.log(l));
-    if (line) say(line);
-    // an old-code wrapper still writing a legacy file: fold its new rows in every minute until it lets go
-    startAdoptionCatchUp((l) => console.log(l));
-  } catch (e) {
-    console.error(`[data-root] adoption failed: ${e instanceof Error ? e.message : e}`);
+  // ONLY THE LIVE API adopts (and retires) the legacy files: a verify server (:2001), a dashboard-only box or a
+  // POKER_DATA_DIR sandbox must never move the live system's data — it reads what the live processes adopted
+  if (liveApi) {
+    try {
+      const line = adoptAtStartup((l) => console.log(l));
+      if (line) say(line);
+      // an old-code wrapper still writing a legacy file: fold its new rows in every minute until it lets go
+      startAdoptionCatchUp((l) => console.log(l));
+    } catch (e) {
+      console.error(`[data-root] adoption failed: ${e instanceof Error ? e.message : e}`);
+    }
   }
 }
 

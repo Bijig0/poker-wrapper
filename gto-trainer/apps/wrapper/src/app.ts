@@ -115,12 +115,15 @@ export async function main(argv: string[]): Promise<void> {
     writeFileSync(join(DEBUG_DIR(), "last-start.txt"), `start ${strftime("%Y-%m-%d %H:%M:%S", Date.now() / 1000)} pid=${process.pid} argv=${pyRepr(argv)}\n`, "utf8");
   } catch {}
   await takeover();
-  // the central database: fold any legacy per-store files in BEFORE a loop can write (seconds, once — never mid-hand)
-  try {
-    log(describeLayout());
-    adoptAtStartup(log);
-  } catch (e: any) {
-    log(`[data-root] adoption failed: ${e?.message ?? e}`);
+  // the central database: fold any legacy per-store files in BEFORE a loop can write (seconds, once — never mid-hand).
+  // The fake-table rig never adopts: it must not move the live system's files.
+  log(describeLayout());
+  if (!C.FAKE_RIG) {
+    try {
+      adoptAtStartup(log);
+    } catch (e: any) {
+      log(`[data-root] adoption failed: ${e?.message ?? e}`);
+    }
   }
   // The mutex guards the sub-second double-click; port-scoped, so the test rig and a real session coexist.
   const mutex = `IgnitionStudyPanelServer:${C.PANEL_PORT}`;
