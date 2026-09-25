@@ -65,6 +65,17 @@ export const unevenChartId = (short: number, seat: Seat6, open: number): string 
 /** The two pool-locked limp trees at 100bb (solves/sixmax_grid/limp-pool*, 2026-09-23/24). */
 export const POOL_LIMP_CHART = `${SITE_6MAX}_6max_D100_olimp_pool3`;   // limps AND the SB's complete locked to the pool
 export const POOL_LIMP_CHART_SB = `${SITE_6MAX}_6max_D100_olimp_pool`; // limps locked, the SB's own decision solved
+/** The wide limp tree (2026-09-25): room for a THIRD limper and four callers of an iso, isos to 8bb, pool limp locks
+ *  scaled to full weight so the three-limper nodes are actually trained (BB facing three limps: regret 1.06 → 0.009). */
+export const POOL_WIDE_CHART = `${SITE_6MAX}_6max_D100_olimp_widex`;
+
+/** Limps before the first raise, counting the four non-blind seats' opening-orbit calls (the SB's call is a complete). */
+export function limpsBeforeRaise(tokens: string[]): { limps: number; raised: boolean } {
+  const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
+  const firstRaise = toks.findIndex((t) => t === "RAI" || /^R[\d.]+$/.test(t));
+  const pre = toks.slice(0, Math.min(4, firstRaise < 0 ? toks.length : firstRaise));
+  return { limps: pre.filter((t) => t === "C").length, raised: firstRaise >= 0 };
+}
 
 /** Every first-round line over {F,C} up to three tokens that contains a limp: the limpers' locked nodes. */
 const POOL_LIMP_LOCKED = new Set<string>();
@@ -93,6 +104,21 @@ for (const n of [1, 2, 3, 4]) {
  */
 export function poolLimpChart(tokens: string[], hero: Seat6 | ""): { id: string; note: string } | null {
   const line = tokens.map((t) => String(t ?? "").trim().toUpperCase()).join("-");
+  // THREE (OR MORE) LIMPERS → THE WIDE TREE, where its node offers hero every real option: the BB's check-or-iso
+  // after three limps, and every response once someone has isolated. NOT the BTN or SB facing three limps: HRC's tree
+  // has no over-limp or complete there (a node facing exactly three limps offers fold or raise only), so those two
+  // decisions keep the line fit onto a two-limp node that does offer the limp. Four limpers fit onto three.
+  const { limps, raised } = limpsBeforeRaise(tokens);
+  if (limps >= 3 && (raised || hero === "BB")) {
+    return { id: POOL_WIDE_CHART, note: "wide pool-locked limp tree (three limpers, isos to 8bb)" };
+  }
+  // THE SB FACING ANY NUMBER OF LIMPS, NO RAISE (2026-09-25 fix): three or four limps are fitted down to two, and
+  // pool3's SB node at two limps is LOCKED (the pool's complete range) — reading it gave hero the fish's play. Every
+  // such decision goes to the pilot, whose SB is solved.
+  const opening = line.split("-");
+  if (hero === "SB" && opening.length === 4 && opening.every((t) => t === "F" || t === "C") && opening.includes("C")) {
+    return { id: POOL_LIMP_CHART_SB, note: "pool-locked limpers; the SB's own decision from the tree that solved it" };
+  }
   if (POOL_SB_LOCKED.has(line) && hero === "SB") {
     return { id: POOL_LIMP_CHART_SB, note: "pool-locked limpers; the SB's own decision from the tree that solved it" };
   }

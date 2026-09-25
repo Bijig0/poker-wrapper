@@ -53,7 +53,7 @@ export function nodeTrust(chartId: string, line: string): NodeTrust {
   // behind two limps and a complete: 0.06, every option +EV, against 1.64 with a check at −7.8bb in the
   // equilibrium tree). The locks are what train those nodes — reach 1 in 3,400 there against 1 in 147,000 —
   // so reach is the test, with only a catastrophic regret still refusing.
-  const pooled = /_pool\d*$/.test(chartId);
+  const pooled = /_pool\d*$|_widex$/.test(chartId);
   const highRegret = regret > (pooled ? TRUST_REGRET_CATASTROPHIC : TRUST_REGRET_MAX);
   if (!lowReach && !highRegret) return { known: true, reach, regret, starved: false, why: null };
   const reachTxt = reach != null ? (reach > 0 ? `1 in ${Math.round(1 / reach).toLocaleString()} hands` : "never") : "unknown";
