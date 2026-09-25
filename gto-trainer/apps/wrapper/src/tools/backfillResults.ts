@@ -17,7 +17,7 @@ import { paths } from "../env";
 import { fmtFixed, pyJsonDumps, pyRound } from "../py";
 
 const DEBUG = paths().debug;
-const DB = join(paths().data, "hands.db");
+const DB = paths().handsDb;
 const WIN = /^wins\b.*?\(\$([\d,]+(?:\.\d+)?)\)/i;
 const ID = /result for hand\s*(\d+)/i;
 

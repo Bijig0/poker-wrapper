@@ -14,6 +14,7 @@ import { join } from "node:path";
 import * as balances from "./balances";
 import { nowMs, strftime, time } from "./clock";
 import { paths, REPO } from "./env";
+import { openStore } from "../../../packages/data-root/centralDb";
 import * as netcheck from "./netcheck";
 import { pyFloat, pyInt, pyJsonDumps, pyReprStr, pyRound, pyStr, truthy, ValueError } from "./py";
 
@@ -447,14 +448,11 @@ export class SessionStore {
   path: string;
 
   constructor(path?: string) {
-    this.path = path || join(paths().data, "sessions.sqlite");
+    this.path = path || paths().sessionsDb;
   }
 
   private db(): Database {
-    mkdirSync(join(this.path, ".."), { recursive: true });
-    const c = new Database(this.path);
-    c.run("PRAGMA busy_timeout = 15000");
-    c.run("PRAGMA journal_mode=WAL");
+    const c = openStore(this.path, { busyMs: 15000 });
     c.run(DDL);
     return c;
   }

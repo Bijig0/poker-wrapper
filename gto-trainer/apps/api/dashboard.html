@@ -89,7 +89,8 @@ let HANDS = [], SESSIONS = [], AUDIT_NOTE = "", sortK = "playedAt", sortDir = -1
 let auditTimer = null;
 function pollWhilePending(j, reload) {
   clearTimeout(auditTimer);
-  if (j.auditPending > 0) auditTimer = setTimeout(reload, 2500);
+  // hands in play (the wrapper's live rows) keep the list moving as well as pending audits
+  if (j.auditPending > 0 || j.live > 0) auditTimer = setTimeout(reload, j.live > 0 ? 3000 : 2500);
 }
 
 async function loadHands() {
@@ -200,7 +201,7 @@ function renderHands() {
     const disc = (h.integrityFaults ? `<span class="badge b-severe" title="an answer in this hand disagreed with its own mix — see the hand page">${h.integrityFaults}!</span>` : "")
       + (d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?");
     return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
-      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "ign25-zone-3max-exploit" ? "good" : ""}">${esc(h.strategy.name)}</span>${h.strategy.test ? ' <span class="chip warn" title="declared at a test stake: this strategy answering on a cheaper table">test</span>' : ""}` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
+      <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}${h.live ? ` <span class="chip ${h.live === "live" ? "good" : "warn"}" title="${h.live === "live" ? "being played now: the wrapper writes this row as the hand goes and finishes it in place" : "the wrapper stopped writing this hand before it ended (closed or crashed mid-hand)"}">${h.live}</span>` : ""}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "ign25-zone-3max-exploit" ? "good" : ""}">${esc(h.strategy.name)}</span>${h.strategy.test ? ' <span class="chip warn" title="declared at a test stake: this strategy answering on a cheaper table">test</span>' : ""}` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
       <td>${h.table == null ? '<span class="sub">—</span>' : `<span class="chip">T${h.table}</span>`}</td>
       <td class="${netCls(h.netBb)}">${netStr(h.netBb)}</td><td>${ansChip(h.answerStatus)}</td><td class="sub">${esc(flags)}</td><td>${disc}</td></tr>`;
   }).join("");
@@ -918,7 +919,8 @@ function answerCard(a, opt = {}) {
       ${f("chart setup", a.chart && (a.street ?? "preflop") === "preflop" && DETAIL && a.client_hand_id != null && String(a.client_hand_id) === String(DETAIL.clientHandId) ? csSlot(a.chart, "line") : "")}
       ${f("solved board", a.mes_board ? `<span class="mono">${esc(a.mes_board)}</span>${a.mes_exact === 0 ? ' <span class="chip warn">nearest texture</span>' : ""}${a.mes_ev_gain_bb != null ? ` · <b>${a.mes_ev_gain_bb > 0 ? "+" : ""}${a.mes_ev_gain_bb} bb</b> at stake` : ""}` : "")}
       ${f("confidence band", a.band_lo != null ? `${a.band_lo}–${a.band_hi}` : "")}
-      ${f("stored solve", a.solve_id != null ? `chain #${a.solve_id} · <button class="mini" onclick="event.stopPropagation();toggleSolveIO(${a.solve_id}, '${sioId}', ${a.actionIndex ?? "null"}, this)">show inputs &amp; outputs ▾</button>` : (a.tier === "ai-chain" ? '<span class="sub">not stored (logged before solve capture)</span>' : ""))}
+      ${f("chain", a.chain ? `<span class="mono" style="white-space:normal;font-size:11px" title="each street: tree cached, or CREATED and why; each node: cache / joined / fetched">${esc(a.chain)}</span>` : "")}
+      ${f("stored solve", a.solve_id != null ? `chain #${a.solve_id} · <button class="mini" data-hand="${esc(a.client_hand_id ?? "")}" data-key="${esc(a.decision_key ?? "")}" onclick="event.stopPropagation();toggleSolveIO(${a.solve_id}, '${sioId}', ${a.actionIndex ?? "null"}, this)">show inputs &amp; outputs ▾</button>` : (a.tier === "ai-chain" ? '<span class="sub">not stored (logged before solve capture)</span>' : ""))}
     </div>
     ${a.solve_id != null ? `<div id="${sioId}" class="sio" hidden></div>` : ""}`;
   const notes = [
@@ -1414,12 +1416,12 @@ async function rlLoad(i, D) {
   const { a } = rlAnswer(i);
   put({ loading: true });
   try {
-    if (a?.solve_id != null) { const w = await getJ(`/api/dashboard/solve/${a.solve_id}`); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    if (a?.solve_id != null) { const w = await getJ(solveUrl(a.solve_id, a.client_hand_id, a.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
     const j = await getJ(`/api/dashboard/answer-node?dbId=${D.dbId}&upto=${i}&ranges=1`);
     if (!j.ok) return put({ kind: "none", why: j.error ?? "no node" });
     if (CHART_NODE_KINDS.has(j.kind)) return put(j.node ? { kind: "chart", j } : { kind: "none", why: j.note ?? "the chart has no node for this line" });
     if (j.kind === "mes") return put({ kind: "mes", j });
-    if (j.logged?.solveId != null) { const w = await getJ(`/api/dashboard/solve/${j.logged.solveId}`); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    if (j.logged?.solveId != null) { const w = await getJ(solveUrl(j.logged.solveId, D.clientHandId, j.logged.decisionKey ?? j.logged.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
     put({ kind: D.hand.actions[i].street === "preflop" ? "ai-preflop" : "unsolved", j });
   } catch (e) { put({ kind: "none", why: String(e) }); }
 }
@@ -2002,6 +2004,12 @@ const weightGrid = (agg, heroKey, hue, combos = null, heroCombo = null, board = 
    pinned sizes, where the flop-entry ranges came from, rake), how long each
    piece took, and what came OUT (the actor's whole-range strategy at that
    node plus hero's own row). "walk every node" opens the full chain below. */
+/* A stored chain by the answer's row number AND its stable key (hand + decision key): the server refuses to show
+   another hand's chain under this answer — a row number only means something in the file it was written to (hand 973). */
+const solveUrl = (id, hand, key) => {
+  const qs = new URLSearchParams({ ...(hand ? { hand: String(hand) } : {}), ...(key ? { key: String(key) } : {}) });
+  return `/api/dashboard/solve/${id}${qs.size ? "?" + qs : ""}`;
+};
 async function toggleSolveIO(solveId, hostId, upto, btn) {
   const host = $(hostId);
   if (!host) return;
@@ -2011,7 +2019,7 @@ async function toggleSolveIO(solveId, hostId, upto, btn) {
   if (host.dataset.loaded) return;
   host.innerHTML = `<div class="sub">loading the stored chain…</div>`;
   let w;
-  try { w = await (await fetch(`/api/dashboard/solve/${solveId}`)).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
+  try { w = await (await fetch(solveUrl(solveId, btn?.dataset.hand, btn?.dataset.key))).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
   if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return; }
   host.dataset.loaded = "1";
   host.innerHTML = solveIoHtml(w, hostId, upto);

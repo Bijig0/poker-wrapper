@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { answerLog, type FailKind } from "./answerLog";
 import { sessionsStore } from "./sessionsStore";
+import { HAND_COLS, openDb as openHandsDb } from "../routes/dashboard";
+import { FINISHED } from "../../../../packages/data-root/handsSchema";
 import { HANDS_DB, enrichSync, coverageOf, answersByHand, decisionIndexOf } from "../routes/dashboard";
 
 /**
@@ -30,17 +32,11 @@ import { HANDS_DB, enrichSync, coverageOf, answersByHand, decisionIndexOf } from
  * to answer and "unanswered" means nothing.
  */
 
-/** Hands are archived complete, so anything in hands.db is safe to judge. */
-interface HandRowLite { rowid: number; hand_id: number | null; played_at: number | null; stakes: string | null; street: string | null; result_text: string | null; hero_cards: string | null; action_count: number | null; data: string }
+/** Only FINISHED hands are safe to judge — a live row (the hand still in play) is skipped until the wrapper archives it. */
+interface HandRowLite { rowid: number; hand_id: number | null; played_at: number | null; stakes: string | null; street: string | null; result_text: string | null; hero_cards: string | null; action_count: number | null; data: string; status?: string | null; updated_at?: number | null }
 
-let db: Database | null = null;
-function open(): Database | null {
-  if (db) return db;
-  if (!existsSync(HANDS_DB)) return null;
-  db = new Database(HANDS_DB, { readonly: true });
-  db.exec("PRAGMA busy_timeout = 5000");
-  return db;
-}
+/** the dashboard's connection to the hands table (one opener, one schema) */
+const open = (): Database | null => openHandsDb();
 
 export interface ReconcileResult { hands: number; attached: number; noProbe: number; skippedNoSession: number; sinceMs: number }
 
@@ -54,7 +50,7 @@ export function reconcileAnswers(sinceMs: number): ReconcileResult {
   let rows: HandRowLite[];
   try {
     rows = d.query<HandRowLite, [number]>(
-      "SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE COALESCE(played_at, 0) >= ? ORDER BY played_at"
+      `SELECT ${HAND_COLS} FROM hands WHERE ${FINISHED} AND COALESCE(played_at, 0) >= ? ORDER BY played_at`
     ).all(sinceMs);
   } catch { return out; }
   if (!rows.length) return out;

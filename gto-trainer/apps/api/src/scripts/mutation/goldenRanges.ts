@@ -23,6 +23,7 @@ import { normalizeHand } from "../../feed/normalizeHand/normalizeHand";
 import { truncateAt } from "../../utils/archivedHand/archivedHand";
 import { COMBOS } from "../../utils/comboIndex/comboIndex";
 import type { ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
+import { handsDbPath, solvesDbPath } from "../../services/storePaths";
 
 const arg = (k: string, d: string) => (process.argv.find((a) => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).split("=").slice(1).join("=");
 const limit = Number(arg("limit", "400"));
@@ -30,8 +31,9 @@ const origins = arg("origins", "live,replay,stress,adhoc,backtest").split(",");
 const outFile = arg("out", "");
 const STRATEGY = "ign200-ring-6max-equilibrium";
 
-const solves = new Database("C:/Users/Brady/poker/gto-trainer/apps/api/data/solves.sqlite", { readonly: true });
-const hands = new Database("C:/Users/Brady/poker/ignition-study-wrapper/data/hands.db", { readonly: true });
+// the central DB, wherever this checkout runs from (it used to hard-code the main checkout's two files)
+const solves = new Database(solvesDbPath(), { readonly: true });
+const hands = new Database(handsDbPath(), { readonly: true });
 const unzip = (b: Uint8Array) => JSON.parse(Buffer.from(Bun.gunzipSync(b as Uint8Array<ArrayBuffer>)).toString());
 
 interface Row { id: number; ts: number; origin: string; client_hand_id: string; decision_key: string | null; street: string; line: string | null; trace: Uint8Array }

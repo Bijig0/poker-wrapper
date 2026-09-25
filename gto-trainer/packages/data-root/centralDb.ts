@@ -4,9 +4,10 @@
  * request ledger, poller events, jobs, the miss queue, river MES, hand facts. Brady: "a local SQLite db that we read
  * off of … the dashboard reads off the same row that the reader/study answer writes to".
  *
- * Every store opens it through `openStore(path)`: when the path is the central one (the default), the connection is
- * WAL with a busy timeout, and the FIRST open in a process adopts the legacy per-store files (below). A store whose
- * env override points somewhere else (tests: `:memory:`, a temp file) opens that file plainly, exactly as before.
+ * Every store opens it through `openStore(path)` (WAL + a busy timeout). A store whose env override points somewhere
+ * else (tests: `:memory:`, a temp file) opens that file the same way. Legacy adoption (below) is NOT lazy: each
+ * process calls `adoptAtStartup()` before it starts its loops — copying a 100 MB table takes seconds, and the
+ * wrapper must never spend them mid-hand inside a live-row write.
  *
  * LEGACY ADOPTION. Before this, each store had its own file (api/data/answers.sqlite, solves.sqlite, jobs.sqlite,
  * miss-queue.sqlite, river_mes.sqlite, hand_facts.sqlite; ignition-study-wrapper/data/hands.db, sessions.sqlite).
@@ -22,6 +23,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { dataLayout, storePath, type DataLayout } from "./dataRoot";
+import { adoptJsonl, type JsonlSource } from "./eventTables";
 
 export const CENTRAL_DB_NAME = "poker.sqlite";
 
@@ -48,6 +50,15 @@ export function legacySources(L: DataLayout = dataLayout()): LegacySource[] {
     { file: join(api, "miss-queue.sqlite"), tables: ["misses"] },
     { file: join(api, "river_mes.sqlite"), tables: ["river_mes"] },
     { file: join(api, "hand_facts.sqlite"), tables: ["hand_facts"] },
+  ];
+}
+
+/** The append-only JSONL logs the event tables replace (eventTables.ts). */
+export function legacyJsonlSources(L: DataLayout = dataLayout()): JsonlSource[] {
+  const api = join(L.mainCheckout, "gto-trainer", "apps", "api", "data");
+  return [
+    { file: join(api, "gtow_requests.jsonl"), table: "gtow_requests" },
+    { file: join(api, "jobs", "poller-events.jsonl"), table: "poller_events" },
   ];
 }
 
@@ -89,9 +100,19 @@ export function adoptLegacy(db: Database, sources: LegacySource[], opts: { retir
       db.run(`ATTACH DATABASE ? AS legacy`, [src.file]);
       attached = true;
       db.run(`CREATE TABLE IF NOT EXISTS legacy._poker_adopted (tbl TEXT PRIMARY KEY, max_rowid INTEGER NOT NULL, at INTEGER NOT NULL)`);
+      // IMMEDIATE: two processes starting together serialize here, and the second one sees the first one's watermark
       db.transaction(() => {
         for (const t of src.tables) {
           if (!tableExists(db, "legacy", t)) continue;
+          const legacyDdl = db.query<{ sql: string }, [string]>(`SELECT sql FROM legacy.sqlite_master WHERE type='table' AND name=?`).get(t)!.sql;
+          if (/WITHOUT\s+ROWID/i.test(legacyDdl)) {
+            // no rowid to watermark (hand_facts): copy by primary key every pass — idempotent, and these tables are small
+            if (!tableExists(db, "main", t)) db.run(legacyDdl);
+            const cols = columnsOf(db, "legacy", t).filter((c) => new Set(columnsOf(db, "main", t)).has(c)).map(q).join(", ");
+            const copied = db.run(`INSERT OR IGNORE INTO main.${q(t)} (${cols}) SELECT ${cols} FROM legacy.${q(t)}`).changes;
+            if (copied) out.notes.push({ file: src.file, table: t, copied, preservedIds: false });
+            continue;
+          }
           const mark = db.query<{ max_rowid: number }, [string]>(`SELECT max_rowid FROM legacy._poker_adopted WHERE tbl = ?`).get(t)?.max_rowid ?? null;
           const top = db.query<{ m: number | null }, []>(`SELECT MAX(rowid) m FROM legacy.${q(t)}`).get()?.m ?? 0;
           if (mark != null && top <= mark) continue;
@@ -99,8 +120,7 @@ export function adoptLegacy(db: Database, sources: LegacySource[], opts: { retir
           let copied = 0;
           if (!tableExists(db, "main", t)) {
             // the legacy DDL itself (constraints, AUTOINCREMENT, defaults), then its indexes
-            const ddl = db.query<{ sql: string }, [string]>(`SELECT sql FROM legacy.sqlite_master WHERE type='table' AND name=?`).get(t)!.sql;
-            db.run(ddl);
+            db.run(legacyDdl);
             for (const ix of db.query<{ sql: string | null }, [string]>(`SELECT sql FROM legacy.sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL`).all(t)) {
               db.run(ix.sql!.replace(/^CREATE (UNIQUE )?INDEX (IF NOT EXISTS )?/i, (_m, u) => `CREATE ${u ?? ""}INDEX IF NOT EXISTS `));
             }
@@ -126,7 +146,7 @@ export function adoptLegacy(db: Database, sources: LegacySource[], opts: { retir
           db.run(`INSERT INTO legacy._poker_adopted (tbl, max_rowid, at) VALUES (?, ?, ?) ON CONFLICT(tbl) DO UPDATE SET max_rowid = excluded.max_rowid, at = excluded.at`, [t, top, now]);
           out.notes.push({ file: src.file, table: t, copied, preservedIds });
         }
-      })();
+      }).immediate();
     } catch (e) {
       out.errors.push(`${src.file}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -162,31 +182,46 @@ export interface OpenOpts {
   busyMs?: number;
 }
 
-/**
- * Open a store's database. The central path → WAL + busy timeout (+ legacy adoption on the first writable open in
- * this process, main-checkout and POKER_DATA_DIR modes only). Any other path (an override) → opened as asked.
- */
+/** Open a store's database: WAL + busy timeout (read-only opens just get the timeout). */
 export function openStore(path: string, opts: OpenOpts = {}): Database {
-  const central = path === centralDbPath();
   if (path !== ":memory:" && !path.startsWith("file::memory:") && !opts.readonly) mkdirSync(dirname(path), { recursive: true });
   const db = opts.readonly ? new Database(path, { readonly: true }) : new Database(path);
   db.run(`PRAGMA busy_timeout = ${Math.max(0, Math.round(opts.busyMs ?? 5000))}`);
-  if (!opts.readonly) {
-    db.run("PRAGMA journal_mode=WAL");
-    if (central && !adoptedThisProcess && dataLayout().mode !== "test") {
-      adoptedThisProcess = true;
-      lastAdoption = adoptLegacy(db, legacySources(), { retire: true });
-      const n = lastAdoption.notes.reduce((s, x) => s + x.copied, 0);
-      if (n || lastAdoption.errors.length || lastAdoption.stillOpen.length) {
-        console.log(`[data-root] adopted ${n} legacy row(s) into ${path}: ` +
-          lastAdoption.notes.map((x) => `${x.table} +${x.copied}`).join(", ") +
-          (lastAdoption.retired.length ? ` · retired ${lastAdoption.retired.length} file(s)` : "") +
-          (lastAdoption.stillOpen.length ? ` · still open elsewhere (old code running?): ${lastAdoption.stillOpen.join(", ")}` : "") +
-          (lastAdoption.errors.length ? ` · ERRORS: ${lastAdoption.errors.join(" | ")}` : ""));
-      }
-    }
-  }
+  if (!opts.readonly) db.run("PRAGMA journal_mode=WAL");
   return db;
+}
+
+/**
+ * Copy the legacy per-store files into the central DB — once per process, at start, before any loop runs (the API's
+ * index.ts, the wrapper's main.ts). Not in test mode (the test root has no legacy files) and not when the central DB
+ * is overridden away from the root. Returns the one-line summary it logged, or null when there was nothing to do.
+ */
+export function adoptAtStartup(log: (line: string) => void = console.log): string | null {
+  if (adoptedThisProcess) return null;
+  adoptedThisProcess = true;
+  if (dataLayout().mode === "test") return null;
+  const path = centralDbPath();
+  if (path.startsWith(":memory:")) return null;
+  const db = openStore(path, { busyMs: 30_000 });
+  try {
+    lastAdoption = adoptLegacy(db, legacySources(), { retire: true });
+    const j = adoptJsonl(db, legacyJsonlSources(), { retire: true });
+    lastAdoption.notes.push(...j.notes.map((n) => ({ ...n, preservedIds: false })));
+    lastAdoption.retired.push(...j.retired);
+    lastAdoption.stillOpen.push(...j.stillOpen);
+    lastAdoption.errors.push(...j.errors);
+  } finally {
+    db.close();
+  }
+  const n = lastAdoption.notes.reduce((s, x) => s + x.copied, 0);
+  if (!n && !lastAdoption.errors.length && !lastAdoption.stillOpen.length && !lastAdoption.retired.length) return null;
+  const line = `[data-root] adopted ${n} legacy row(s) into ${path}: ` +
+    (lastAdoption.notes.map((x) => `${x.table} +${x.copied}`).join(", ") || "nothing new") +
+    (lastAdoption.retired.length ? ` · retired ${lastAdoption.retired.join(", ")}` : "") +
+    (lastAdoption.stillOpen.length ? ` · still open elsewhere (old code running? restart it): ${lastAdoption.stillOpen.join(", ")}` : "") +
+    (lastAdoption.errors.length ? ` · ERRORS: ${lastAdoption.errors.join(" | ")}` : "");
+  log(line);
+  return line;
 }
 
 /** Test hook: let the next central open adopt again. */

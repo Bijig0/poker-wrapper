@@ -6,9 +6,9 @@ import { answerLog, failKindOf, isFailKind, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
 import { drawRoll, fmtRoll, rollDecision } from "./rollDecision";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { pollerEventsPath } from "./storePaths";
+import type { Database } from "bun:sqlite";
+import { openStore, pollerEventsPath } from "./storePaths";
+import { ensureEventTables, pollerEventRow } from "../../../../packages/data-root/eventTables";
 import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
@@ -23,15 +23,19 @@ export interface ChainBanner {
 /**
  * EVERY ANSWER ATTEMPT, ONE LINE (2026-09-24). The poller kept only its LAST error in memory, so a hand whose
  * postflop never answered ("socket disconnected", hand 750: flop 17.9 s, turn/river never asked) left nothing to
- * read afterwards — the ledger showed GTO Wizard itself answering in 2 s. data/jobs/poller-events.jsonl: time,
+ * read afterwards — the ledger showed GTO Wizard itself answering in 2 s. The poller_events table (central DB): time,
  * panel, how long the /fast-solver call took, and the exact outcome or error text.
  */
 const POLLER_EVENTS = pollerEventsPath();
+let pollerDb: Database | null = null;
 function pollerEvent(row: Record<string, unknown>): void {
   if (process.env.NODE_ENV === "test") return;   // unit tests' fake pollers must not fill the real log
   try {
-    mkdirSync(dirname(POLLER_EVENTS), { recursive: true });
-    appendFileSync(POLLER_EVENTS, JSON.stringify({ ts: Date.now(), ...row }) + "\n");
+    // the poller_events table of the central DB — beside the answer and the hand it is about
+    if (!pollerDb) { pollerDb = openStore(POLLER_EVENTS); ensureEventTables(pollerDb); }
+    const r = pollerEventRow({ ts: Date.now(), ...row });
+    pollerDb.query("INSERT INTO poller_events (ts, ev, outcome, hand, street, ms, doc) VALUES (?,?,?,?,?,?,?)")
+      .run(r.ts, r.ev, r.outcome, r.hand, r.street, r.ms, r.doc);
   } catch { /* the log must never cost an answer */ }
 }
 
@@ -633,6 +637,7 @@ class StudyPoller {
       line: (sol?.ok === true ? sol.line : sol?.ok === false ? sol.line : null) ?? null,
       solveId: (sol?.ok === true ? sol.solveId : null) ?? null,
       sessionId: full.sessionId ?? null,
+      chain: this.lastChainLine,
     };
     // THE CHAIN PATH (services/chainPath): an answer carries the one fastSolve made; a decision with no answer is a
     // fault (its requests still counted) — unless the chain was never the question (hero acted first, hand over)
@@ -763,6 +768,7 @@ class StudyPoller {
   /** POST /api/fast-solver — same body as ingest, no navigation, no navLock. */
   private async fetchFastSolve(expectKey?: string): Promise<FastSolveLikeResponse | null> {
     const t0 = Date.now();
+    this.lastChainLine = null;
     try {
       const res = await fetch(`${this.config.selfBaseUrl}/fast-solver`, {
         method: "POST",
@@ -784,6 +790,10 @@ class StudyPoller {
       const body = (await res.json().catch(() => null)) as FastSolveLikeResponse | null;
       let trace: unknown = null;
       try { const h = res.headers.get("x-answer-trace"); trace = h ? JSON.parse(h) : null; } catch { trace = null; }
+      // the full [chain] summary (routes/fastSolver.ts): stored on the answer row by the caller
+      let chain: string | null = null;
+      try { const h = res.headers.get("x-answer-chain"); chain = h ? JSON.parse(h) : null; } catch { chain = null; }
+      this.lastChainLine = chain;
       if (!body) {
         this.status.lastError = `Fast-solver returned non-JSON (HTTP ${res.status}).`;
         this.lastFetchFailKind = "solver-bad-response";
@@ -975,6 +985,8 @@ class StudyPoller {
   /** the first tick hero's buttons were up while the export said not-to-act — see tick() */
   private buttonsUpSince: { key: string; at: number } | null = null;
   private lastFetchFailKind: FailKind | null = null;
+  /** the last /fast-solver reply's [chain] summary (X-Answer-Chain); null when that call carried none */
+  private lastChainLine: string | null = null;
   /** `${decisionKey}|${kind}` already written — the tick loop revisits the same
    *  dead spot every few seconds and must not write a row each time. */
   private noAnswerLogged = new Set<string>();

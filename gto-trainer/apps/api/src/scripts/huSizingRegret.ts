@@ -30,6 +30,7 @@ import { Database } from "bun:sqlite";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gtowSessions } from "../services/gtowSessions";
+import { solvesDbPath } from "../services/storePaths";
 
 const API = "https://api.gtowizard.com";
 const arg = (k: string, d?: string) => { const i = Bun.argv.indexOf(k); return i >= 0 ? Bun.argv[i + 1] : d; };
@@ -129,7 +130,7 @@ async function evs(solId: string, board: string, s: any) {
 async function main() {
   const ids = (arg("--ids") ?? DEFAULT_IDS.join(",")).split(",").map(Number);
   const out = arg("--out");
-  const db = new Database(join(import.meta.dir, "..", "..", "data", "solves.sqlite"), { readonly: true });
+  const db = new Database(solvesDbPath(), { readonly: true });
   await gtowSessions.forceRefresh();
   const results: any[] = [];
   for (const id of ids) {

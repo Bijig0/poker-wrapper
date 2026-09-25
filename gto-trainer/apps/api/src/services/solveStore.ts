@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { solvesDbPath } from "./storePaths";
+import { openStore, solvesDbPath } from "./storePaths";
 import { tspan } from "./answerTrace";
 
 /**
@@ -84,10 +84,7 @@ class SolveStore {
 
   private open(): Database {
     if (this.db) return this.db;
-    mkdirSync(dirname(this.path), { recursive: true });
-    this.db = new Database(this.path);
-    this.db.exec("PRAGMA busy_timeout = 5000"); // see services/jobs.ts — a held lock must wait, not throw
-    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db = openStore(this.path); // the central DB (WAL, busy timeout — a held lock must wait, not throw)
     this.db.exec(DDL);
     const cols = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(solves)").all().map((c) => c.name));
     if (!cols.has("session_id")) this.db.exec("ALTER TABLE solves ADD COLUMN session_id TEXT");
@@ -130,6 +127,35 @@ class SolveStore {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * THE STORED CHAIN FOR AN ANSWER, BY ITS STABLE KEY (2026-09-25). `answers.solve_id` is a row number, and a row number
+   * only means something inside the file it was written to — hand 973's answers pointed at #62/#65/#72, which in this
+   * store are Sep 16 ad-hoc solves of other hands. So row #id is returned only when it IS that hand's decision; otherwise
+   * the chain is looked up by (client hand id, decision key); otherwise the answer says why there is none.
+   */
+  forAnswer(id: number | null, clientHandId: string | null, decisionKey: string | null):
+    { ok: true; row: SolveRow; trace: any; via: "id" | "key" } | { ok: false; error: string } {
+    const byId = id != null ? this.get(id) : null;
+    if (byId && (!clientHandId || byId.row.clientHandId === clientHandId) && (!decisionKey || byId.row.decisionKey === decisionKey)) {
+      return { ok: true, ...byId, via: "id" };
+    }
+    if (clientHandId) {
+      try {
+        const r = this.open()
+          .query<any, [string, string | null, string | null]>(
+            "SELECT * FROM solves WHERE client_hand_id = ? AND (? IS NULL OR decision_key = ?) ORDER BY ts DESC LIMIT 1"
+          )
+          .get(clientHandId, decisionKey, decisionKey);
+        if (r) return { ok: true, row: this.rowOf(r), trace: JSON.parse(Buffer.from(Bun.gunzipSync(r.trace)).toString("utf-8")), via: "key" };
+      } catch { /* fall through to the explanation */ }
+    }
+    if (byId) {
+      return { ok: false, error: `this answer's stored chain is not in this data root: row #${id} here belongs to hand ${byId.row.clientHandId ?? "?"}` +
+        ` (${byId.row.street ?? "?"}, ${new Date(byId.row.ts).toISOString().slice(0, 16).replace("T", " ")}), not hand ${clientHandId} — the chain was stored by an API writing somewhere else` };
+    }
+    return { ok: false, error: id != null ? `no stored solve #${id}` : `no stored chain for hand ${clientHandId ?? "?"}` };
   }
 
   /** Rows (no blobs) for a hand, oldest first. */

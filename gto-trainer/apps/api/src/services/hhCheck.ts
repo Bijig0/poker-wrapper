@@ -9,7 +9,7 @@
  */
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { archivedByClientHandId, archivedIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
+import { archivedByClientHandId, doneIgnitionHandsAfter as archivedIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
 

@@ -13,11 +13,12 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { nowMs, time } from "./clock";
 import { paths } from "./env";
+import { openStore } from "../../../packages/data-root/centralDb";
 import * as F from "./formats";
 import { js } from "./js";
 import { fmtFixed, fmtFixedComma, pyFloat, pyRepr, pyRound } from "./py";
 
-const dbPath = () => join(paths().data, "sessions.sqlite");
+const dbPath = () => paths().sessionsDb;
 
 const DDL = `CREATE TABLE IF NOT EXISTS balances (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,10 +35,7 @@ const DDL = `CREATE TABLE IF NOT EXISTS balances (
 )`;
 
 function open(): Database {
-  mkdirSync(paths().data, { recursive: true });
-  const c = new Database(dbPath());
-  c.run("PRAGMA busy_timeout = 5000");
-  c.run("PRAGMA journal_mode=WAL");
+  const c = openStore(dbPath());
   c.run(DDL);
   try {
     c.run("ALTER TABLE balances ADD COLUMN in_play_cents INTEGER");

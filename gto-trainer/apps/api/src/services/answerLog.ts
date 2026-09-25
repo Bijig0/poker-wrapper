@@ -3,7 +3,7 @@ import type { PathRow } from "./chainPath";
 import { mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { answersDbPath } from "./storePaths";
+import { answersDbPath, openStore } from "./storePaths";
 
 /**
  * Persistent log of every study answer the poller pushed (and every solve
@@ -75,6 +75,10 @@ export interface AnswerRow {
    *  about the chain (hero acted first, the hand ended). */
   pathVerdict?: string | null;
   path?: string | null;
+  /** THE [chain] SUMMARY (2026-09-25): every street's tree (cached / CREATED and why), every node read (cache /
+   *  joined / fetched), the fresh cloud solves — the line that answers "was an earlier street re-solved?". Kept ON
+   *  the answer so the question never depends on which log file survived (hand 973: none did). */
+  chain?: string | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS answers (
@@ -133,6 +137,7 @@ const EXTRA_COLUMNS: [string, string][] = [
   // the panel's banner and the session's Technical tab all read these two columns
   ["path_verdict", "TEXT"],
   ["path", "TEXT"],
+  ["chain", "TEXT"],
 ];
 
 /**
@@ -284,6 +289,7 @@ export interface LoggedAnswer {
   session_id: string | null;
   path_verdict: string | null;
   path: string | null;
+  chain: string | null;
 }
 
 /**
@@ -333,10 +339,7 @@ class AnswerLog {
 
   private open(): Database {
     if (this.db) return this.db;
-    mkdirSync(dirname(this.path), { recursive: true });
-    this.db = new Database(this.path);
-    this.db.exec("PRAGMA busy_timeout = 5000"); // see services/jobs.ts — a held lock must wait, not throw
-    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db = openStore(this.path); // the central DB (WAL, busy timeout — a held lock must wait, not throw)
     this.db.exec(DDL);
     const cols = new Set(
       this.db.query<{ name: string }, []>("PRAGMA table_info(answers)").all().map((c) => c.name)
@@ -371,8 +374,8 @@ class AnswerLog {
              hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
              strategy_mode, source, band_lo, band_hi, exploit_pick, chart_pick, exploit_tag,
              mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, table_slot, hero_pos,
-             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path, chain)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
@@ -385,7 +388,7 @@ class AnswerLog {
           row.bbCents ?? null, row.tableSeats ?? null, row.tableSlot ?? null, row.heroPos ?? null,
           row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null,
           row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null,
-          row.pathVerdict ?? null, row.path ?? null
+          row.pathVerdict ?? null, row.path ?? null, row.chain ?? null
         );
     } catch {
       /* never propagate */

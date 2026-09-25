@@ -22,7 +22,8 @@ import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi, DEFAULT_TREE_RAKE, type CustomTreeInput } from "../services/gtowApi";
 import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
 import { REPO } from "../services/ledger";
-import { handsDbPath, wrapperDebugDir } from "../services/storePaths";
+import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, resolveAllStores, splitStores, wrapperDebugDir } from "../services/storePaths";
+import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -98,14 +99,25 @@ interface HandRow {
   hero_cards: string | null;
   action_count: number | null;
   data: string;
+  /** 'live' while the wrapper is still playing the hand, 'done' once archived (packages/data-root/handsSchema.ts) */
+  status?: string | null;
+  updated_at?: number | null;
 }
 
+/** the columns every hands query here reads */
+export const HAND_COLS = "rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data, status, updated_at";
+
 let db: Database | null = null;
-const openDb = (): Database | null => {
+/** The hands table (the central DB): one connection, schema brought up to date once — the wrapper writes the rows
+ *  while we read them (WAL). Shared with services/answerReconciler.ts. */
+export const openDb = (): Database | null => {
   if (db) return db;
-  if (!existsSync(HANDS_DB)) return null;
-  db = new Database(HANDS_DB, { readonly: true });
-  db.exec("PRAGMA busy_timeout = 5000"); // the wrapper writes hands.db while we read it
+  try {
+    db = openStore(HANDS_DB);
+    ensureHandsSchema(db);
+  } catch {
+    db = null;
+  }
   return db;
 };
 
@@ -120,6 +132,10 @@ export interface Enriched {
   hand: ParsedHand;
   raw: any;
   discrepancies: { field: string; actual: unknown; shown: unknown; severity: string; note?: string }[] | null;
+  /** the wrapper is still playing this hand (its row is live) */
+  live: boolean;
+  /** the row's last write — a live row (or a finished one the award box patched later) is re-read when it moves */
+  updatedAt: number | null;
 }
 
 const cache = new Map<number, Enriched>();
@@ -135,7 +151,7 @@ const cache = new Map<number, Enriched>();
  */
 export function enrichSync(row: HandRow): Enriched | null {
   const hit = cache.get(row.rowid);
-  if (hit) return hit;
+  if (hit && hit.updatedAt === (row.updated_at ?? null) && hit.live === (row.status === "live")) return hit;
   let raw: any;
   try {
     raw = JSON.parse(row.data);
@@ -160,6 +176,8 @@ export function enrichSync(row: HandRow): Enriched | null {
     hand,
     raw,
     discrepancies: null,
+    live: row.status === "live",
+    updatedAt: row.updated_at ?? null,
   };
   cache.set(row.rowid, e);
   return e;
@@ -168,7 +186,7 @@ export function enrichSync(row: HandRow): Enriched | null {
 /** Enrich and make sure an audit is on its way (non-blocking). */
 async function enrich(row: HandRow): Promise<Enriched | null> {
   const e = enrichSync(row);
-  if (e && e.discrepancies == null) scheduleAudit(e);
+  if (e && !e.live && e.discrepancies == null) scheduleAudit(e);   // a hand still in play is audited once it is finished
   return e;
 }
 
@@ -220,13 +238,12 @@ async function pumpAudits(): Promise<void> {
 /** Audits still queued/running — the page polls while this is > 0. */
 const auditPending = (): number => auditQueued.size;
 
+/** FINISHED hands only — every analytic, net and reconciliation reads these. `liveRows` is the hands in play. */
 export const allRows = (): HandRow[] => {
   const d = openDb();
   if (!d) return [];
   const rows = d
-    .query<HandRow, []>(
-      "SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands ORDER BY rowid"
-    )
+    .query<HandRow, []>(`SELECT ${HAND_COLS} FROM hands WHERE ${FINISHED} ORDER BY rowid`)
     .all();
   // Wrapper restarts / table-close flushes archive the same hand more than
   // once — keep only the LAST row per site hand id (most complete capture).
@@ -258,6 +275,17 @@ export const allRows = (): HandRow[] => {
     lastKey = key;
   }
   return out;
+};
+
+/** A "live" row the wrapper has not touched for this long was abandoned (the wrapper stopped mid-hand). */
+export const LIVE_STALE_MS = 10 * 60_000;
+
+/** Hands the wrapper is playing right now (its live rows), oldest first; `stale` = no write for LIVE_STALE_MS. */
+export const liveRows = (now = Date.now()): (HandRow & { stale: boolean })[] => {
+  const d = openDb();
+  if (!d) return [];
+  return d.query<HandRow, []>(`SELECT ${HAND_COLS} FROM hands WHERE status = 'live' ORDER BY rowid`).all()
+    .map((r) => ({ ...r, stale: now - (r.updated_at ?? 0) > LIVE_STALE_MS }));
 };
 
 /** Content identity of an archived row — stakes, hero cards, action list. */
@@ -383,6 +411,17 @@ app.get("/hands", async (c) => {
   };
   const sess = sessionsIndex(enriched);
   const byCid = answersByHand(answerLog.rows(3650));
+  // THE HANDS BEING PLAYED (2026-09-25): the wrapper's live rows, the same rows it finishes when the hand ends
+  const live = liveRows().map((r) => ({ r, e: enrichSync(r) })).filter((x): x is { r: ReturnType<typeof liveRows>[number]; e: Enriched } => x.e != null);
+  const liveHands = live.map(({ r, e }) => ({
+    dbId: e.dbId, handId: e.handId, clientHandId: e.clientHandId, playedAt: e.playedAt, stakes: e.stakes, heroCards: e.heroCards,
+    netBb: null, strategy: strategyOf(e), session: typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null,
+    table: typeof e.raw?.tableSlot === "number" ? e.raw.tableSlot : null,
+    answerStatus: answerStatusOf(e, byCid),
+    integrityFaults: integrityTotals(e.clientHandId ? byCid.get(e.clientHandId) ?? [] : []).faults,
+    summary: e.summary, discrepancies: null,
+    live: r.stale ? "unfinished" : "live", updatedAt: e.updatedAt,
+  })).reverse();
   const hands = enriched
     .map((e) => ({
       dbId: e.dbId,
@@ -413,7 +452,7 @@ app.get("/hands", async (c) => {
         : null,
     }))
     .reverse(); // newest first
-  return c.json({ ok: true, total: hands.length, auditPending: auditPending(), sessions: sess.list, hands });
+  return c.json({ ok: true, total: hands.length, live: liveHands.filter((h) => h.live === "live").length, auditPending: auditPending(), sessions: sess.list, hands: [...liveHands, ...hands] });
 });
 
 /** Session per hand, for the Hands tab filter: the declared session the hand
@@ -962,7 +1001,7 @@ app.get("/hand/:dbId", async (c) => {
   if (!d) return c.json({ ok: false, error: `hands.db not found at ${HANDS_DB}` }, 503);
   const row = d
     .query<HandRow, [number]>(
-      "SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?"
+      `SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`
     )
     .get(dbId);
   if (!row) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
@@ -1033,24 +1072,25 @@ app.get("/hand/:dbId", async (c) => {
   });
 });
 
-const HAND_COLUMNS = "rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data";
 /** Ignition hand numbers are 10 digits; CoinPoker's are longer, the State Tester's synthetic ones are 9000xxx. */
-export const isIgnitionHandId = (id: string | null | undefined): id is string => !!id && /^\d{10}$/.test(id);
+export const isIgnitionHandId = (id: string | null | undefined): id is string => !!id && /^d{10}$/.test(id);
 
-/** The archived copy of a hand, by the site's own hand number — the LAST row when a hand was archived twice. */
+/** The archived copy of a hand, by the site's own hand number (the indexed client_hand_id column) — its FINISHED row. */
 export function archivedByClientHandId(clientHandId: string): Enriched | null {
-  const row = openDb()?.query<HandRow, [string]>(`SELECT ${HAND_COLUMNS} FROM hands WHERE data LIKE ? ORDER BY rowid DESC LIMIT 1`)
-    .get(`%"clientHandId": "${clientHandId}"%`);
+  const row = openDb()?.query<HandRow, [string]>(`SELECT ${HAND_COLS} FROM hands WHERE client_hand_id = ? AND ${FINISHED} ORDER BY rowid DESC LIMIT 1`)
+    .get(clientHandId);
   return row ? enrichSync(row) : null;
 }
 
-/** Ignition hands archived after row `afterRowid`, oldest first. */
-export const archivedIgnitionHandsAfter = (afterRowid: number): Enriched[] =>
-  (openDb()?.query<HandRow, [number]>(`SELECT ${HAND_COLUMNS} FROM hands WHERE rowid > ? ORDER BY rowid`).all(afterRowid) ?? [])
+/** FINISHED Ignition hands after row `afterRowid`, oldest first. A live row (the hand still in play) is never here:
+ *  rowids are handed out when a hand STARTS and hands finish out of order across tables, so callers must not treat
+ *  the highest rowid seen as a watermark — the checker keys on "finished and not checked yet" (services/hhCheck.ts). */
+export const doneIgnitionHandsAfter = (afterRowid: number): Enriched[] =>
+  (openDb()?.query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid > ? AND ${FINISHED} ORDER BY rowid`).all(afterRowid) ?? [])
     .map(enrichSync)
     .filter((e): e is Enriched => !!e && isIgnitionHandId(e.clientHandId));
 
-/** The newest archived row id (0 for an empty or missing archive). */
+/** The newest row id (0 for an empty or missing archive) — the checker's one-time "from here on" cutoff. */
 export const lastArchivedRowid = (): number =>
   openDb()?.query<{ m: number | null }, []>("SELECT MAX(rowid) AS m FROM hands").get()?.m ?? 0;
 
@@ -1064,7 +1104,7 @@ app.post("/open-gtow", async (c) => {
   const b = (await c.req.json().catch(() => ({}))) as { dbId?: number; upto?: number };
   const d = openDb();
   if (!d) return c.json({ ok: false, error: "hands.db not found" }, 503);
-  const row = d.query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?").get(Number(b.dbId));
+  const row = d.query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`).get(Number(b.dbId));
   if (!row) return c.json({ ok: false, error: `no hand #${b.dbId}` }, 404);
   const e = await enrich(row);
   if (!e) return c.json({ ok: false, error: "hand blob unreadable" }, 500);
@@ -1327,7 +1367,7 @@ app.get("/answer-node", async (c) => {
   const d = openDb();
   if (!d || !Number.isFinite(dbId) || !Number.isFinite(upto)) return c.json({ ok: false, error: "dbId and upto required" }, 400);
   const row = d
-    .query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?")
+    .query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`)
     .get(dbId);
   const e = row ? enrichSync(row) : null;
   if (!e) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
@@ -1604,7 +1644,7 @@ app.get("/preflop-path", async (c) => {
   const d = openDb();
   if (!d || !Number.isFinite(dbId)) return c.json({ ok: false, error: "dbId required" }, 400);
   const row = d
-    .query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?")
+    .query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`)
     .get(dbId);
   const e = row ? enrichSync(row) : null;
   if (!e) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
@@ -1844,9 +1884,16 @@ function expandTrace(trace: any) {
 /** GET /solve/:id — a stored AI-chain solve, expanded for the walkthrough. */
 app.get("/solve/:id", (c) => {
   const id = Number(c.req.param("id"));
-  const got = solveStore.get(id);
-  if (!got) return c.json({ ok: false, error: `no stored solve #${id}` }, 404);
-  return c.json({ ok: true, row: got.row, ...expandTrace(got.trace) });
+  // ?hand=&key= (the answer's client hand id + decision key): never show another hand's chain under this one (hand 973)
+  const got = solveStore.forAnswer(Number.isFinite(id) ? id : null, c.req.query("hand") || null, c.req.query("key") || null);
+  if (!got.ok) return c.json({ ok: false, error: got.error }, 404);
+  return c.json({ ok: true, row: got.row, via: got.via, ...expandTrace(got.trace) });
+});
+
+/** GET /storage — where every record lives (the one data root), what was adopted from the legacy files, any split. */
+app.get("/storage", (c) => {
+  const stores = resolveAllStores();
+  return c.json({ ok: true, layout: dataLayout(), line: describeLayout(), stores, split: splitStores(stores), adoption: adoptionReport() });
 });
 
 /**
@@ -1872,7 +1919,7 @@ app.get("/chart-setup", (c) => {
   } | null = null;
   const d = openDb();
   const row = d && Number.isFinite(dbId)
-    ? d.query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?").get(dbId)
+    ? d.query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`).get(dbId)
     : null;
   const e = row ? enrichSync(row) : null;
   if (e) {
@@ -1932,7 +1979,7 @@ app.post("/resolve-chain", async (c) => {
   const d = openDb();
   if (!d || b.dbId == null || b.upto == null) return c.json({ ok: false, error: "dbId and upto required" }, 400);
   const row = d
-    .query<HandRow, [number]>("SELECT rowid, hand_id, played_at, stakes, street, result_text, hero_cards, action_count, data FROM hands WHERE rowid = ?")
+    .query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`)
     .get(Number(b.dbId));
   const e = row ? enrichSync(row) : null;
   if (!e) return c.json({ ok: false, error: `no hand #${b.dbId}` }, 404);

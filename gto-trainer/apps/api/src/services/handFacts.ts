@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { PreflopPin } from "./preflopPin";
 import { emptyCounts, type RequestCounts } from "./requestScope";
+import { handFactsDbPath, openStore } from "./storePaths";
 
 /**
  * THE HAND'S FACTS (2026-09-25, Brady: "the happy path should be: in a normal spot, we just cache and reuse the
@@ -92,10 +93,8 @@ function assertTestSafePath(path: string): void {
 }
 
 function defaultPath(): string {
-  if (process.env.HAND_FACTS_DB_PATH) return process.env.HAND_FACTS_DB_PATH;
   const argv1 = (process.argv[1] ?? "").replace(/\\/g, "/");
-  const apiWorker = /(^|\/)index\.ts$/.test(argv1);
-  return apiWorker ? join(import.meta.dir, "..", "..", "data", "hand_facts.sqlite") : ":memory:";
+  return handFactsDbPath(/(^|\/)index\.ts$/.test(argv1));
 }
 
 /** the hand as stored: an AI pin's background pre-fetch (`preflop.warm`) is a Promise, which is not a fact — only that
@@ -123,9 +122,7 @@ class HandFacts {
   private open(): Database | null {
     if (this.db || this.dbFailed) return this.db;
     try {
-      if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true });
-      const db = new Database(this.path);
-      db.exec("PRAGMA journal_mode=WAL");
+      const db = openStore(this.path);
       db.exec("PRAGMA synchronous=NORMAL");
       db.exec("CREATE TABLE IF NOT EXISTS hand_facts (hand_key TEXT PRIMARY KEY, ts INTEGER NOT NULL, doc TEXT NOT NULL) WITHOUT ROWID");
       db.exec("CREATE INDEX IF NOT EXISTS idx_hand_facts_ts ON hand_facts(ts)");

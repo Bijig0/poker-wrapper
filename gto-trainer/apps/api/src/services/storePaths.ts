@@ -11,9 +11,15 @@
  */
 import { dirname, join } from "node:path";
 import { dataLayout, describeLayout, splitStores, storePath, storeReport, type DataLayout, type StoreEntry } from "../../../../packages/data-root/dataRoot";
+import { adoptionReport, centralDbPath, openStore } from "../../../../packages/data-root/centralDb";
 
-export { describeLayout, splitStores, storeReport, dataLayout };
+export { adoptionReport, centralDbPath, describeLayout, openStore, splitStores, storeReport, dataLayout };
 export type { DataLayout, StoreEntry };
+
+/* EVERY SQLITE STORE DEFAULTS TO THE ONE CENTRAL DATABASE (<root>/poker.sqlite, packages/data-root/centralDb.ts): the
+   hands the wrapper writes, the answers the poller writes and the chains the solver stores are rows of one file, so the
+   dashboard reads the same row the reader wrote. A store-specific env var still points one store elsewhere (tests). */
+const central = () => centralDbPath();
 
 const api = (...p: string[]) => join(dataLayout().api, ...p);
 
@@ -22,14 +28,14 @@ export const apiDataDir = (): string => dataLayout().api;
 /** data/jobs: job logs, poller events, the exit log. */
 export const jobsDir = (): string => api("jobs");
 
-export const answersDbPath = (): string => storePath("answers", api("answers.sqlite"), "ANSWERS_DB_PATH").path;
-export const solvesDbPath = (): string => storePath("solves", api("solves.sqlite"), "SOLVES_DB_PATH").path;
-export const gtowRequestsPath = (): string => storePath("gtow-requests", api("gtow_requests.jsonl"), "GTOW_REQUESTS_PATH").path;
-export const pollerEventsPath = (): string => storePath("poller-events", api("jobs", "poller-events.jsonl")).path;
+export const answersDbPath = (): string => storePath("answers", central(), "ANSWERS_DB_PATH").path;
+export const solvesDbPath = (): string => storePath("solves", central(), "SOLVES_DB_PATH").path;
+export const gtowRequestsPath = (): string => storePath("gtow-requests", central(), "GTOW_REQUESTS_PATH").path;
+export const pollerEventsPath = (): string => storePath("poller-events", central(), "POLLER_EVENTS_PATH").path;
 export const exitLogPath = (): string => storePath("exit-log", api("jobs", "exit_reason.log")).path;
-export const jobsDbPath = (): string => storePath("jobs", api("jobs.sqlite")).path;
-export const missQueueDbPath = (): string => storePath("miss-queue", api("miss-queue.sqlite")).path;
-export const riverMesDbPath = (): string => storePath("river-mes", api("river_mes.sqlite")).path;
+export const jobsDbPath = (): string => storePath("jobs", central(), "JOBS_DB_PATH").path;
+export const missQueueDbPath = (): string => storePath("miss-queue", central(), "MISS_QUEUE_DB_PATH").path;
+export const riverMesDbPath = (): string => storePath("river-mes", central(), "RIVER_MES_DB_PATH").path;
 export const riverMesConfigPath = (): string => storePath("river-mes-config", api("river_mes_config.json")).path;
 export const mesRiverCacheDir = (): string => storePath("mes-river-cache", api("mes_river_cache")).path;
 export const tasksPath = (): string => storePath("tasks", api("tasks.json")).path;
@@ -38,15 +44,21 @@ export const balanceAcksPath = (): string => storePath("balance-acks", api("bala
 export const backgroundLockPath = (): string => storePath("background-lock", api("background.lock"), "API_BACKGROUND_LOCK").path;
 
 /** The wrapper's archive, read-only from here. */
-export const handsDbPath = (): string => storePath("hands.db", join(dataLayout().wrapper, "hands.db"), "HANDS_DB_PATH").path;
-export const sessionsDbPath = (): string => storePath("sessions.sqlite", join(dirname(handsDbPath()), "sessions.sqlite"), "SESSIONS_DB_PATH").path;
-export const profilesJsonPath = (): string => storePath("profiles.json", join(dirname(handsDbPath()), "profiles.json"), "PROFILES_JSON_PATH").path;
+export const handsDbPath = (): string => storePath("hands", central(), "HANDS_DB_PATH").path;
+/** sessions + balances: the central DB, or — when a test points HANDS_DB_PATH at its own file — beside that file */
+export const sessionsDbPath = (): string =>
+  storePath("sessions", process.env.HANDS_DB_PATH ? join(dirname(handsDbPath()), "sessions.sqlite") : central(), "SESSIONS_DB_PATH").path;
+/** chain-ledger hand facts: the central DB for the API worker; scripts and harnesses keep theirs in memory (they replay
+ *  the same hand ids hundreds of times and must never read or leave behind the live worker's facts) */
+export const handFactsDbPath = (apiWorker: boolean): string =>
+  storePath("hand-facts", apiWorker ? central() : ":memory:", "HAND_FACTS_DB_PATH").path;
+export const profilesJsonPath = (): string => storePath("profiles.json", join(dataLayout().wrapper, "profiles.json"), "PROFILES_JSON_PATH").path;
 /** The wrapper's debug recordings (one folder per session). */
 export const wrapperDebugDir = (): string => storePath("wrapper-debug", dataLayout().wrapperDebug, "IGNITION_DEBUG_DIR").path;
 
 /** Every store above, resolved now — for the start-up line, GET /api/dashboard/storage and the live split guard. */
 export function resolveAllStores(): StoreEntry[] {
-  for (const f of [answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,
+  for (const f of [centralDbPath, answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,
     riverMesDbPath, riverMesConfigPath, mesRiverCacheDir, tasksPath, fxCachePath, balanceAcksPath, backgroundLockPath,
     handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir]) f();
   return storeReport();

@@ -8,10 +8,10 @@
  * archives runs on the one event loop and archiving never awaits, so two triggers cannot interleave.
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { nowMs, time } from "./clock";
-import { DATA_DIR } from "./config";
+import { paths } from "./env";
+import { openStore } from "../../../packages/data-root/centralDb";
+import { ensureHandsSchema, FINISHED, HANDS_DDL } from "../../../packages/data-root/handsSchema";
 import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyJsonDumps, pyRound, pyStr, truthy } from "./py";
 import { CP, S, isCp } from "./state";
@@ -21,25 +21,17 @@ import { shadowArchive } from "./ignition/shadow";
 import { SITE as CP_SITE } from "./sites/coinpoker";
 import * as feed from "./sites/cpFeed";
 
-const DDL = `CREATE TABLE IF NOT EXISTS hands (
-  rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-  hand_id INTEGER,
-  played_at INTEGER,
-  stakes TEXT,
-  street TEXT,
-  result_text TEXT,
-  result_amount REAL,
-  hero_cards TEXT,
-  action_count INTEGER,
-  data TEXT NOT NULL
-)`;
+export { HANDS_DDL };
 
-export function db(): Database {
-  mkdirSync(DATA_DIR(), { recursive: true });
-  const c = new Database(join(DATA_DIR(), "hands.db"));
-  c.run("PRAGMA busy_timeout = 5000");
-  c.run("PRAGMA journal_mode=WAL");
-  c.run(DDL);
+/**
+ * The hands table (the central poker.sqlite the API reads the same rows from, or a sandbox's hands.db). The API
+ * writes the same file, so a write can meet its lock: `busyMs` is how long this call may wait — the live row's
+ * write passes a few ms and skips a busy tick; the archive waits longer and, if it still loses, is retried from
+ * `flushPendingArchives` instead of being dropped.
+ */
+export function db(busyMs = 2000): Database {
+  const c = openStore(paths().handsDb, { busyMs });
+  ensureHandsSchema(c);
   return c;
 }
 
@@ -102,30 +94,104 @@ function archiveHandLocked(): void {
       log(`[history] skipped hand #${h.handId}: same hand as the last archive (table reopen replayed the previous hand's state)`);
       return;
     }
-    const c = db();
-    try {
-      // ONE ROW PER CLIENT HAND, ACROSS PROCESSES
-      const cid = h.clientHandId;
-      if (cid && c.query("SELECT 1 FROM hands WHERE data LIKE ? LIMIT 1").get(`%"clientHandId": "${cid}"%`)) {
-        S.lastArchived.no = h.handId;
-        S.lastArchived.fp = fp;
-        log(`[history] skipped hand #${h.handId}: client hand ${cid} is already archived (another wrapper on this table?)`);
-        return;
-      }
-      const cur = c.query("INSERT INTO hands (hand_id, played_at, stakes, street, result_text,"
-                          + " result_amount, hero_cards, action_count, data) VALUES (?,?,?,?,?,?,?,?,?)")
-        .run(h.handId, h.playedAt, h.stakes, h.street, result, null, h.heroCards.join(","), h.actions.length, pyJsonDumps(h));
-      h.dbId = Number(cur.lastInsertRowid);
-      c.query("UPDATE hands SET data = ? WHERE rowid = ?").run(pyJsonDumps(h), h.dbId);
-    } finally {
-      c.close();
-    }
     S.lastArchived.no = h.handId;
     S.lastArchived.fp = fp;
     S.lastArchived.body = body;
-    log(`[history] archived hand #${h.handId} (${h.actions.length} actions)`);
+    const w = { h, result };
+    if (!writeArchive(w)) {
+      pendingArchives.push(w);
+      log(`[history] hand #${h.handId} archive deferred: the database is busy — retried next pass`);
+    }
   } catch (e: any) {
     log(`[history] archive failed: ${e?.message ?? e}`);
+  }
+}
+
+type PendingArchive = { h: Record<string, any>; result: string | null };
+/** finished hands whose write met a busy database: the loop retries them, oldest first (never dropped) */
+const pendingArchives: PendingArchive[] = [];
+
+/** ONE ROW PER CLIENT HAND, ACROSS PROCESSES: finish the hand's live row in place, else insert it. False = busy. */
+function writeArchive({ h, result }: PendingArchive): boolean {
+  let c: Database;
+  try { c = db(); } catch { return false; }
+  try {
+    const cid: string | null = h.clientHandId ?? null;
+    const row = cid ? c.query("SELECT rowid, status FROM hands WHERE client_hand_id = ? ORDER BY rowid DESC LIMIT 1").get(cid) as { rowid: number; status: string } | null : null;
+    if (row?.status === "done") {
+      log(`[history] skipped hand #${h.handId}: client hand ${cid} is already archived (another wrapper on this table?)`);
+      return true;
+    }
+    const now = nowMs();
+    if (row) {
+      h.dbId = row.rowid;
+      c.query("UPDATE hands SET hand_id = ?, played_at = ?, stakes = ?, street = ?, result_text = ?, hero_cards = ?, action_count = ?,"
+              + " data = ?, status = 'done', updated_at = ? WHERE rowid = ?")
+        .run(h.handId, h.playedAt, h.stakes, h.street, result, h.heroCards.join(","), h.actions.length, pyJsonDumps(h), now, row.rowid);
+    } else {
+      const cur = c.query("INSERT INTO hands (hand_id, played_at, stakes, street, result_text,"
+                          + " result_amount, hero_cards, action_count, data, client_hand_id, status, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'done',?)")
+        .run(h.handId, h.playedAt, h.stakes, h.street, result, null, h.heroCards.join(","), h.actions.length, pyJsonDumps(h), cid, now);
+      h.dbId = Number(cur.lastInsertRowid);
+      c.query("UPDATE hands SET data = ? WHERE rowid = ?").run(pyJsonDumps(h), h.dbId);
+    }
+    log(`[history] archived hand #${h.handId} (${h.actions.length} actions)`);
+    return true;
+  } catch (e: any) {
+    if (/busy|locked/i.test(String(e?.message ?? e))) return false;
+    log(`[history] archive failed: ${e?.message ?? e}`);
+    return true;
+  } finally {
+    c.close();
+  }
+}
+
+/** Retry archives a busy database deferred (the loop calls this every pass; a no-op when nothing waits). */
+export function flushPendingArchives(): void {
+  while (pendingArchives.length && writeArchive(pendingArchives[0]!)) pendingArchives.shift();
+}
+
+/**
+ * THE LIVE ROW (2026-09-25): while hero is in a hand, its row in the hands table carries the hand as it stands now
+ * (status 'live'), and the archive finishes that same row. Written only when the hand changes (street, board, an
+ * action, hero's cards), AFTER the loop's press chain, with a few-ms lock wait: a busy database skips one write,
+ * never a press. Ignition only (CoinPoker archives from its log at the hand's end); never in fake mode.
+ */
+let liveFp = "";
+export function liveHandTick(): void {
+  flushPendingArchives();
+  if (S.fakeMode || isCp() || S.ws.heroDealt === false) return;
+  const cid = S.handIds.get(S.handNo) ?? null;
+  if (!cid || S.handNo === S.lastArchived.no) return;
+  const h = handState();
+  if (!h || !h.actions.length) return;
+  const fp = JSON.stringify([cid, h.street, h.board ?? [], h.actions.length, h.heroCards]);
+  if (fp === liveFp) return;
+  let c: Database;
+  try { c = db(25); } catch { return; }
+  try {
+    delete h.wsStack;
+    delete h.wsInFront;
+    delete h.wsDead;
+    h.clientHandId = cid;
+    h.stakes = stakesStr();
+    h.sessionId = S.session.id;
+    const now = nowMs();
+    const row = c.query("SELECT rowid, status FROM hands WHERE client_hand_id = ? ORDER BY rowid DESC LIMIT 1").get(cid) as { rowid: number; status: string } | null;
+    if (row?.status === "done") { liveFp = fp; return; }
+    if (row) {
+      c.query("UPDATE hands SET stakes = ?, street = ?, hero_cards = ?, action_count = ?, data = ?, updated_at = ? WHERE rowid = ?")
+        .run(h.stakes, h.street, h.heroCards.join(","), h.actions.length, pyJsonDumps({ ...h, dbId: row.rowid }), now, row.rowid);
+    } else {
+      c.query("INSERT INTO hands (hand_id, played_at, stakes, street, result_text, result_amount, hero_cards, action_count, data,"
+              + " client_hand_id, status, updated_at) VALUES (?,?,?,?,NULL,NULL,?,?,?,?,'live',?)")
+        .run(h.handId, now, h.stakes, h.street, h.heroCards.join(","), h.actions.length, pyJsonDumps(h), cid, now);
+    }
+    liveFp = fp;
+  } catch {
+    /* busy: the next change (or pass) writes it */
+  } finally {
+    c.close();
   }
 }
 
@@ -151,12 +217,13 @@ export function noteAward(hid: string, idNode: Node, nodes: Node[]): void {
     try {
       const c = db();
       try {
-        const r: any = c.query("SELECT rowid, data FROM hands WHERE data LIKE ? ORDER BY rowid DESC LIMIT 1").get(`%"${hid}"%`);
+        const r: any = c.query("SELECT rowid, data FROM hands WHERE client_hand_id = ? ORDER BY rowid DESC LIMIT 1").get(hid);
         if (r) {
           const h = JSON.parse(r.data);
           if (h.clientHandId === hid && (h.result || {}).wonCents !== cents) {
             h.result = { ...(h.result || {}), ...rec, heroWon: seat === (h.heroSeatId ?? null) };
-            c.query("UPDATE hands SET data = ?, result_text = ? WHERE rowid = ?").run(pyJsonDumps(h), rec.text, r.rowid);
+            // updated_at moves: the dashboard re-reads a row it cached once the award lands (it used to keep the award-less one)
+            c.query("UPDATE hands SET data = ?, result_text = ?, updated_at = ? WHERE rowid = ?").run(pyJsonDumps(h), rec.text, nowMs(), r.rowid);
             log(`[history] award attached to hand ${hid}: seat ${pyStr(seat)} $${fmtFixed(cents / 100, 2)}`);
           }
         }
@@ -217,11 +284,11 @@ export function archiveCp(room: feed.Room, raw: feed.Hand): void {
   h.rake = (CP.table() || {}).rake ?? null;
   const c = db();
   try {
-    if (c.query("SELECT 1 FROM hands WHERE data LIKE ? LIMIT 1").get(`%"clientHandId": "${hid}"%`)) return;
+    if (c.query("SELECT 1 FROM hands WHERE client_hand_id = ? LIMIT 1").get(hid)) return;
     c.query("INSERT INTO hands (hand_id, played_at, stakes, street, result_text,"
-            + " result_amount, hero_cards, action_count, data) VALUES (?,?,?,?,?,?,?,?,?)")
+            + " result_amount, hero_cards, action_count, data, client_hand_id, status, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'done',?)")
       .run(/^\d+$/.test(hid) ? Number(hid) : null, h.playedAt, h.stakes, h.street, winners || null, null,
-           (h.heroCards || []).join(" ") || null, h.actions.length, pyJsonDumps(h));
+           (h.heroCards || []).join(" ") || null, h.actions.length, pyJsonDumps(h), hid, nowMs());
   } finally {
     c.close();
   }
@@ -232,9 +299,9 @@ export function history(limit = 20): Record<string, any> {
   try {
     const c = db();
     try {
-      const n = (c.query("SELECT COUNT(*) AS n FROM hands").get() as any).n;
+      const n = (c.query(`SELECT COUNT(*) AS n FROM hands WHERE ${FINISHED}`).get() as any).n;
       const rows: any[] = c.query("SELECT rowid, hand_id, played_at, stakes, street, result_text,"
-                                  + " hero_cards, action_count FROM hands ORDER BY rowid DESC LIMIT ?").all(limit);
+                                  + ` hero_cards, action_count FROM hands WHERE ${FINISHED} ORDER BY rowid DESC LIMIT ?`).all(limit);
       return { count: n, hands: rows.map((r) => ({ dbId: r.rowid, handId: r.hand_id, playedAt: r.played_at, stakes: r.stakes,
                                                     street: r.street, result: r.result_text, heroCards: r.hero_cards, actions: r.action_count })) };
     } finally {
@@ -253,7 +320,7 @@ export function sessionHands(sid: string): number {
   try {
     const c = db();
     try {
-      n = (c.query("SELECT COUNT(*) AS n FROM hands WHERE json_extract(data, '$.sessionId') = ?").get(sid) as any).n;
+      n = (c.query(`SELECT COUNT(*) AS n FROM hands WHERE ${FINISHED} AND json_extract(data, '$.sessionId') = ?`).get(sid) as any).n;
     } finally {
       c.close();
     }

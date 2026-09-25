@@ -31,25 +31,16 @@ const reserve = Number(arg("reserve", "450"));
 const paceMs = Number(arg("pace-ms", "3000"));
 const maxOwn = Number(arg("max-solutions", "60"));
 const CAP = 1275;
-const MAIN_LEDGER = "C:/Users/Brady/poker/gto-trainer/apps/api/data/gtow_requests.jsonl";
 const STRATEGY = "ign200-ring-6max-equilibrium";
 
 if (process.env.GTOW_SECONDARY !== "0") { console.error("refusing to run: set GTOW_SECONDARY=0 (the Elite account is never used)"); process.exit(2); }
 if (!cases.length) { console.error("usage: liveVerify.ts --cases=<seed:op+op,...>"); process.exit(2); }
 
-/** Ultra solutions since 00:00 UTC: the main ledger (the live API and every script) + this process's own ledger. */
+/** Ultra solutions since 00:00 UTC. ONE ledger since 2026-09-25 (the central gtow_requests table): the live API and
+ *  every script, this one included, count into it — there is no separate "own" ledger to add any more. */
 function solutionsToday(): { main: number; own: number } {
   const mid = new Date(); mid.setUTCHours(0, 0, 0, 0);
-  const count = (file: string) => {
-    if (!existsSync(file)) return 0;
-    let n = 0;
-    for (const l of readFileSync(file, "utf8").split("\n")) {
-      if (!l) continue;
-      try { const r = JSON.parse(l); if (r.ts >= mid.getTime() && r.s === "primary" && r.k === "solution") n++; } catch { /* torn line */ }
-    }
-    return n;
-  };
-  return { main: count(MAIN_LEDGER), own: gtowRequests.path.replace(/\\/g, "/") === MAIN_LEDGER ? 0 : count(gtowRequests.path) };
+  return { main: gtowRequests.rows(mid.getTime()).filter((r) => r.s === "primary" && r.k === "solution").length, own: 0 };
 }
 const t0Run = Date.now();
 /** 429s THIS run received (an earlier run's stay in the ledger) */

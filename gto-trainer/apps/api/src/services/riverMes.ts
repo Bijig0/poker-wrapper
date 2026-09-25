@@ -53,7 +53,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
-import { riverMesConfigPath, riverMesDbPath } from "./storePaths";
+import { openStore, riverMesConfigPath, riverMesDbPath } from "./storePaths";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..", "..");
 const DATA = join(import.meta.dir, "..", "..", "data");
@@ -419,9 +419,7 @@ let db: Database | null = null;
 
 function logDb(): Database {
   if (db) return db;
-  mkdirSync(dirname(LOG_PATH), { recursive: true });
-  db = new Database(LOG_PATH);
-  db.exec("PRAGMA journal_mode=WAL");
+  db = openStore(LOG_PATH);
   db.exec(`CREATE TABLE IF NOT EXISTS river_mes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,
     solve_id INTEGER, client_hand_id TEXT, session_id TEXT, origin TEXT,

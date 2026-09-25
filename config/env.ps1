@@ -18,12 +18,16 @@ $env:POKER_ROOT = $root
 # 1. config\local.env: KEY=VALUE lines; blank values and #-comments are ignored; a value already in the
 #    environment wins (so a caller can still override one launch).
 $local = Join-Path $PSScriptRoot 'local.env'
+# every key local.env sets: -EmitCmd hands ALL of them on, not a fixed list (2026-09-25 audit: TRUST_GUARD_ALL and
+# GTOW_POLL_MS reached the API only when study-api.ps1 started it, never from dev-api.cmd)
+$localKeys = @()
 if (Test-Path $local) {
   foreach ($line in Get-Content $local) {
     $l = ($line -replace '\s+#.*$', '').Trim()
     if (-not $l -or $l.StartsWith('#') -or $l -notmatch '^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') { continue }
     $k = $Matches[1]; $v = $Matches[2].Trim().Trim('"')
     if ($v -and -not [Environment]::GetEnvironmentVariable($k, 'Process')) { Set-Item "env:$k" $v }
+    if ($v) { $localKeys += $k }
   }
 }
 
@@ -70,7 +74,7 @@ $have = $env:Path -split ';'
 $env:Path = ((@($extra | Where-Object { $have -notcontains $_ }) + $have) | Where-Object { $_ }) -join ';'
 
 if ($EmitCmd) {
-  foreach ($k in 'POKER_ROOT', 'BUN', 'PYTHON', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'Path') {
+  foreach ($k in (@('POKER_ROOT', 'BUN', 'PYTHON', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'POKER_DATA_DIR', 'Path') + $localKeys | Select-Object -Unique)) {
     $v = [Environment]::GetEnvironmentVariable($k, 'Process')
     if ($v) { "set `"$k=$v`"" }
   }

@@ -3,7 +3,7 @@ import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, loadLedger, evaluate, type LedgerConfig } from "./ledger";
 import { isBackgroundOwner } from "./backgroundLock";
-import { jobsDbPath, jobsDir } from "./storePaths";
+import { jobsDbPath, jobsDir, openStore } from "./storePaths";
 /** The checkout of hrc-api whose Windows driver carries the Run-Nash refinement (8 commits ahead of this repo's hrc-api). */
 export const HRC_API_ZENBOOK = process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api";
 
@@ -241,7 +241,7 @@ class Jobs {
   private open(): Database {
     if (this.db) return this.db;
     mkdirSync(LOG_DIR, { recursive: true });
-    this.db = new Database(jobsDbPath());
+    this.db = openStore(jobsDbPath());
     // Wait for a writer to finish instead of throwing SQLITE_BUSY the instant the lock is held.
     // Without it a momentary lock on one statement threw `database is locked` out of a 3-second
     // setInterval and killed the whole process — dashboard, poller, keeper and job dispatcher with

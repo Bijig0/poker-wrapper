@@ -23,13 +23,14 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pyJsonDumps, pyRepr, pyStr, PyTuple } from "../../../wrapper/src/py";
+import { answersDbPath, handsDbPath, sessionsDbPath } from "../services/storePaths";
 
 const REPO = resolve(import.meta.dir, "../../../../..");
 const WR = join(REPO, "ignition-study-wrapper");
 const API = join(REPO, "gto-trainer", "apps", "api");
-const HANDS_DB = join(WR, "data", "hands.db");
-const SESSIONS_DB = join(WR, "data", "sessions.sqlite");
-const ANSWERS_DB = join(API, "data", "answers.sqlite");
+const HANDS_DB = handsDbPath();
+const SESSIONS_DB = sessionsDbPath();
+const ANSWERS_DB = answersDbPath();
 const BACKTEST = join(API, "src", "scripts", "hardening_backtest.jsonl");
 const WS_DECISIONS = join(WR, "tests", "backtest", "ws_decisions.jsonl");
 const OUT = join(WR, "tests", "backtest", "out");
@@ -174,7 +175,7 @@ function main(argv: string[]): number {
   const sessions = loadSessions(), answers = loadAnswers(), backtest = loadBacktest(), ws = loadWsDecisions();
 
   const rows: Row[] = [];
-  for (const h of ro(HANDS_DB).query("SELECT rowid, played_at, stakes, data FROM hands ORDER BY rowid").all() as any[]) {
+  for (const h of ro(HANDS_DB).query("SELECT rowid, played_at, stakes, data FROM hands WHERE status = 'done' ORDER BY rowid").all() as any[]) {
     const rowid: number = h.rowid, played: number | null = h.played_at, stakes: string | null = h.stakes;
     const d = JSON.parse(h.data);
     const sid = d.sessionId ?? null;

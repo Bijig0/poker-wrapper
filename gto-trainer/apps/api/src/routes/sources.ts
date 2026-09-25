@@ -294,7 +294,7 @@ app.get("/registry", async (c) => {
   const hrcCount = catalog.entries.filter((e) => e.source === "hrc" && e.family === "3max-asym").length;
   const gtowPairs = catalog.entries.filter((e) => e.source === "gtow").length;
   const hands = fileInfo(HANDS_DB);
-  const handRows = hands.exists ? sqliteCount(HANDS_DB, "SELECT COUNT(*) n FROM hands") : null;
+  const handRows = hands.exists ? sqliteCount(HANDS_DB, "SELECT COUNT(*) n FROM hands WHERE status = 'done'") : null;
   const answersFile = fileInfo(answerLog.dbPath);
   const token = gtowApi.tokenStatus();
   // PROBE each session rather than trusting the cached view: without a CDP

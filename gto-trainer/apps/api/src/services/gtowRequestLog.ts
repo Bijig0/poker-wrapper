@@ -19,8 +19,9 @@
 import { timed } from "./answerTrace";
 import { countRequest, currentRequestScope } from "./requestScope";
 import { gtowRequestsPath } from "./storePaths";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import type { Database } from "bun:sqlite";
+import { openStore } from "./storePaths";
+import { ensureEventTables } from "../../../../packages/data-root/eventTables";
 
 export type GtowRequestKind = "tree" | "solution" | "poll" | "library" | "other";
 
@@ -51,7 +52,8 @@ export interface GtowRequestStats {
   cap: number;
 }
 
-const COMPACT_LINES = 60_000;
+/** rows kept: a month of requests (~1,300 a day at the cap) — the per-hand columns feed the session Technical tab */
+const KEEP_MS = 30 * 86_400_000;
 const CAP = 1275;
 const LOG_EVERY = 100;
 
@@ -59,13 +61,29 @@ class GtowRequestLog {
   readonly path: string;
   private origin: string;
   private written = 0;
-  private cache: { mtimeMs: number; size: number; rows: GtowRequestRow[] } | null = null;
+  private db: Database | null = null;
 
   constructor(path?: string) {
     this.path = path ?? gtowRequestsPath();
     const argv1 = (process.argv[1] ?? "").replace(/\\/g, "/");
     this.origin = process.env.GTOW_REQUEST_ORIGIN
       ?? (/(^|\/)index\.ts$/.test(argv1) ? "api" : argv1.split("/").pop()?.replace(/\.ts$/, "") || "unknown");
+  }
+
+  /** The gtow_requests table (the central poker.sqlite; a test passes its own file). Every process appends to the
+   *  same table — a backtest beside the live worker is the normal case, and SQLite serializes the writers. */
+  private open(): Database {
+    if (this.db) return this.db;
+    const db = openStore(this.path);
+    ensureEventTables(db);
+    this.db = db;
+    return db;
+  }
+
+  /** Release the database (tests; a process that is done with the ledger). */
+  close(): void {
+    try { this.db?.close(); } catch { /* already closed */ }
+    this.db = null;
   }
 
   /** Record one request. Never throws — the ledger must not be able to fail a solve. */
@@ -75,9 +93,8 @@ class GtowRequestLog {
       countRequest(row.kind, row.status);
       const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin,
         ...(scope ? { h: scope.handKey, ...(scope.street ? { sr: scope.street } : {}), go: scope.origin } : {}) };
-      mkdirSync(join(this.path, ".."), { recursive: true });
-      appendFileSync(this.path, JSON.stringify(rec) + "\n");
-      this.cache = null;
+      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go) VALUES (?,?,?,?,?,?,?,?)")
+        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null);
       if (++this.written % LOG_EVERY === 0) {
         const s = this.stats();
         console.log(`[gtow-requests] ${s.last24h.total} in the last 24 h (${Object.entries(s.last24h.bySession).map(([k, v]) => `${k} ${v}`).join(", ")}; ${s.last24h.status429} x 429) · cap ${CAP}`);
@@ -131,68 +148,64 @@ class GtowRequestLog {
     }
   }
 
-  rows(): GtowRequestRow[] {
+  /** Requests since `sinceMs` (default: all kept), oldest first. */
+  rows(sinceMs = 0): GtowRequestRow[] {
     try {
-      if (!existsSync(this.path)) return [];
-      const st = statSync(this.path);
-      if (this.cache && this.cache.mtimeMs === st.mtimeMs && this.cache.size === st.size) return this.cache.rows;
-      const rows: GtowRequestRow[] = [];
-      for (const l of readFileSync(this.path, "utf8").split("\n")) {
-        if (!l) continue;
-        try { rows.push(JSON.parse(l)); } catch { /* a torn line from a concurrent writer */ }
-      }
-      this.cache = { mtimeMs: st.mtimeMs, size: st.size, rows };
-      return rows;
+      return this.open()
+        .query<GtowRequestRow & { h: string | null; sr: string | null; go: string | null }, [number]>(
+          "SELECT ts, s, k, st, o, h, sr, go FROM gtow_requests WHERE ts >= ? ORDER BY id")
+        .all(sinceMs)
+        .map((r) => {
+          const { h, sr, go, ...rest } = r;
+          return { ...rest, ...(h != null ? { h } : {}), ...(sr != null ? { sr } : {}), ...(go != null ? { go } : {}) } as GtowRequestRow;
+        });
     } catch {
       return [];
     }
   }
 
   stats(now = Date.now()): GtowRequestStats {
-    const rows = this.rows();
     const dayAgo = now - 86_400_000;
     const hourAgo = now - 3_600_000;
     const midnight = new Date(now); midnight.setUTCHours(0, 0, 0, 0);
     const since = midnight.getTime();
-    const tally = (rs: GtowRequestRow[]) => {
-      const bySession: Record<string, number> = {}, byKind: Record<string, number> = {}, byOrigin: Record<string, number> = {};
-      let status429 = 0;
-      for (const r of rs) {
-        bySession[r.s] = (bySession[r.s] ?? 0) + 1;
-        byKind[r.k] = (byKind[r.k] ?? 0) + 1;
-        byOrigin[r.o] = (byOrigin[r.o] ?? 0) + 1;
-        if (r.st === 429) status429++;
-      }
-      return { total: rs.length, bySession, byKind, byOrigin, status429 };
-    };
-    const d = tally(rows.filter((r) => r.ts >= dayAgo));
-    const m = tally(rows.filter((r) => r.ts >= since));
-    return {
-      file: this.path,
-      lastAt: rows.length ? rows[rows.length - 1]!.ts : null,
-      last24h: d,
-      sinceUtcMidnight: { total: m.total, bySession: m.bySession, status429: m.status429 },
-      lastHour: { total: rows.filter((r) => r.ts >= hourAgo).length },
-      cap: CAP,
-    };
+    try {
+      const db = this.open();
+      const by = (col: "s" | "k" | "o", from: number): Record<string, number> => Object.fromEntries(
+        db.query<{ v: string; n: number }, [number, number]>(`SELECT ${col} v, COUNT(*) n FROM gtow_requests WHERE ts >= ? AND ts <= ? GROUP BY ${col}`)
+          .all(from, now).map((r) => [r.v, r.n]));
+      const tally = (from: number) => {
+        const t = db.query<{ n: number; x: number }, [number, number]>(
+          "SELECT COUNT(*) n, COALESCE(SUM(st = 429), 0) x FROM gtow_requests WHERE ts >= ? AND ts <= ?").get(from, now)!;
+        return { total: t.n, bySession: by("s", from), byKind: by("k", from), byOrigin: by("o", from), status429: t.x };
+      };
+      const d = tally(dayAgo);
+      const m = tally(since);
+      const last = db.query<{ ts: number | null }, []>("SELECT MAX(ts) ts FROM gtow_requests").get()?.ts ?? null;
+      const hour = db.query<{ n: number }, [number, number]>("SELECT COUNT(*) n FROM gtow_requests WHERE ts >= ? AND ts <= ?").get(hourAgo, now)!.n;
+      return { file: this.path, lastAt: last, last24h: d, sinceUtcMidnight: { total: m.total, bySession: m.bySession, status429: m.status429 },
+        lastHour: { total: hour }, cap: CAP };
+    } catch {
+      return { file: this.path, lastAt: null, last24h: { total: 0, bySession: {}, byKind: {}, byOrigin: {}, status429: 0 },
+        sinceUtcMidnight: { total: 0, bySession: {}, status429: 0 }, lastHour: { total: 0 }, cap: CAP };
+    }
   }
 
   /** How many requests one account may still send before the stated cap, over the trailing 24 h. */
   headroom(session: string, now = Date.now()): number {
-    const s = this.stats(now);
-    return Math.max(0, CAP - (s.last24h.bySession[session] ?? 0));
+    try {
+      const n = this.open().query<{ n: number }, [string, number, number]>(
+        "SELECT COUNT(*) n FROM gtow_requests WHERE s = ? AND ts >= ? AND ts <= ?").get(session, now - 86_400_000, now)!.n;
+      return Math.max(0, CAP - n);
+    } catch {
+      return CAP;
+    }
   }
 
-  /** Keep the file bounded: rewrite it with the last 48 h once it passes COMPACT_LINES lines. */
+  /** Keep the table bounded: drop rows older than KEEP_MS. */
   compact(now = Date.now()): void {
     try {
-      const rows = this.rows();
-      if (rows.length < COMPACT_LINES) return;
-      const keep = rows.filter((r) => r.ts >= now - 2 * 86_400_000);
-      const tmp = this.path + ".tmp";
-      writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""));
-      renameSync(tmp, this.path);
-      this.cache = null;
+      this.open().query("DELETE FROM gtow_requests WHERE ts < ?").run(now - KEEP_MS);
     } catch {
       /* best effort */
     }

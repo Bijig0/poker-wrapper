@@ -59,23 +59,39 @@ app.post("/", async (c) => {
   }
   // The header has a budget; a JSON string cut mid-way is no trace at all (the poller's parse fails and the
   // whole timeline is lost). Over budget, shorten each event's prose first, then drop trailing events, and say
-  // how many were dropped — the [chain] line in the API log carries the full text regardless.
+  // how many were dropped. The FULL [chain] summary rides separately in X-Answer-Chain (the poller stores it on the
+  // answer row), so the one line that says "cached or re-solved" is never the part a budget cuts.
   try {
     const LIMIT = 7500;
     let evs = trace;
-    let body = JSON.stringify({ totalMs, trace: evs });
+    let body = headerJson({ totalMs, trace: evs });
     if (body.length > LIMIT) {
       evs = evs.map((e) => (e.info && e.info.length > 80 ? { ...e, info: `${e.info.slice(0, 77)}...` } : e));
-      body = JSON.stringify({ totalMs, trace: evs });
+      body = headerJson({ totalMs, trace: evs });
     }
     while (body.length > LIMIT && evs.length) {
       evs = evs.slice(0, -1);
-      body = JSON.stringify({ totalMs, trace: evs, dropped: trace.length - evs.length });
+      body = headerJson({ totalMs, trace: evs, dropped: trace.length - evs.length });
     }
     res.headers.set("X-Answer-Trace", body);
-  } catch { /* immutable headers: no trace */ }
+    const chain = trace.filter((e) => e.ev === "chain summary" && e.info).map((e) => e.info!).join(" || ");
+    if (chain) res.headers.set("X-Answer-Chain", headerJson(chain.slice(0, 16_000)));
+  } catch (e) {
+    // never silent again: this catch used to swallow the Latin-1 error that dropped every turn/river timeline
+    console.error(`[answer-trace] trace header not set: ${e instanceof Error ? e.message : e}`);
+  }
   return res;
 });
+
+/**
+ * JSON for an HTTP header. Header values must be Latin-1 — `Headers.set` THROWS on "—", "≈" or a card suit, and until
+ * 2026-09-25 that throw was swallowed, so every timeline whose [chain] text said "CREATED … — why" (the turns and rivers
+ * worth diagnosing: hand 973) reached the poller as `trace: null`. Everything outside printable ASCII is escaped as
+ * \uXXXX, which JSON.parse turns back into the same text on the other side.
+ */
+export function headerJson(v: unknown): string {
+  return JSON.stringify(v).replace(/[^\x20-\x7e]/g, (ch) => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
+}
 
 async function handleFastSolve(c: any): Promise<Response> {
   const body = (await c.req.json().catch(() => ({}))) as FastSolverBody;

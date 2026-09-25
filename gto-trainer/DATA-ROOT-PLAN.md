@@ -1,85 +1,92 @@
-# One data root — plan (2026-09-25)
+# One data root, one database — plan and what was built (2026-09-25)
 
 ## Why
 
 Hand 973 (#4920419883, river 14.2 s) could not be diagnosed. Its answers reached
-`gto-trainer/apps/api/data/answers.sqlite` in the main checkout. Its stored chains, GTO Wizard
-request ledger and `[chain]` lines went to the `data/` folder of the worktree the API was
-running from that night, and that folder has since been deleted. The hand page then followed
-`answers.solve_id` (a per-file row number) into the main `solves.sqlite` and showed another
-hand's chain. The turn and river timelines were missing even from `poller-events.jsonl`:
-`trace: null`.
+`gto-trainer/apps/api/data/answers.sqlite` in the main checkout. Its stored chains, GTO Wizard request ledger and
+`[chain]` log lines went to the `data/` folder of a worktree the API was running from that night, and that folder was
+deleted with the worktree. The hand page then followed `answers.solve_id` (a per-file row number) into the main
+`solves.sqlite` and showed another hand's chain. The turn and river timelines were missing even from the poller's
+event log (`trace: null`).
 
-Three root causes:
+Root causes:
 
-1. **No data root.** Each store works out its own path, mostly relative to the source file
-   that opens it (`join(import.meta.dir, "..", "..", "data", …)`), so the data follows the
-   checkout. Only some stores have an env override (`ANSWERS_DB_PATH`, `HANDS_DB_PATH`, …),
-   so overriding one splits a single process's records across two folders.
-2. **Row numbers used as links.** `answers.solve_id` only means something inside the one
-   `solves.sqlite` it was written to.
-3. **The trace header throws on non-Latin-1 text.** `X-Answer-Trace` carries JSON. Any
-   timeline containing `—`, `≈` or a card suit makes `Headers.set` throw, the `catch {}`
-   swallows it, and the timeline is lost. That hits every turn/river whose `[chain]` text
-   says "CREATED … — why" or carries a fallback note, i.e. the slow decisions.
+1. **No data root.** Every store worked out its own path from the source file that opened it
+   (`join(import.meta.dir, "..", "..", "data", …)`), so the data followed the checkout. Only some stores had an env
+   override, so overriding one split a process's records across two folders.
+2. **Eight SQLite files and two JSONL logs**, joined by different keys in different places: the wrapper's
+   `hands.db` found rows with `data LIKE '%"clientHandId": "X"%'`, and answers pointed at solves by row number.
+3. **Row numbers used as links.** `answers.solve_id` only means something inside the file it was written to.
+4. **The trace header threw on non-Latin-1 text.** `X-Answer-Trace` carried raw JSON, and any timeline containing
+   `—`, `≈` or a card suit made `Headers.set` throw. An empty `catch {}` swallowed that, so every turn and river
+   worth diagnosing lost its timeline.
 
-## What changes
+Brady's direction: "a local SQLite db that we read off of … the dashboard reads off the same row that the
+reader/study answer writes to … so we can get hands in live as well."
 
-### 1. `@poker/data-root` — the only place a runtime path is decided
-`gto-trainer/packages/data-root/dataRoot.ts`, imported by both apps:
+## What was built
 
-| Store (runtime records) | Legacy location (default) | Under `POKER_DATA_DIR=X` |
-|---|---|---|
-| API: answers, solves, gtow_requests, jobs/ (poller-events, logs), jobs.sqlite, miss-queue, river_mes, hand_facts, fx, tasks, balance-acks, background.lock, mes_river_cache, hh_audit | `<main>/gto-trainer/apps/api/data` | `X/api` |
-| Wrapper: hands.db, sessions.sqlite, profiles.json, auth_pages, hand_history, tables/, shadow.jsonl | `<main>/ignition-study-wrapper/data` | `X/wrapper` |
-| Wrapper debug recordings + ws_dump | `<main>/ignition-study-wrapper/debug` | `X/wrapper-debug` |
+### 1. `packages/data-root` — the only place a runtime path is decided
+* `dataRoot.ts` resolves the root. `POKER_DATA_DIR` if set; under `bun test`, a per-run temp dir that child processes
+  inherit, so no test can reach a live store; otherwise `<main checkout>/data`. The main checkout is resolved from
+  git's common dir, so **a worktree writes where the main checkout does**.
+* `centralDb.ts` holds **`<root>/poker.sqlite`**, the one database. `openStore(path)` opens every store (WAL + busy
+  timeout). `adoptAtStartup()` folds the legacy files in once, at process start. It copies each legacy table with
+  its rowids, so `/hands/<dbId>` and `solve_id` links survive. It writes a watermark into the legacy file, so rows an
+  old-code process appends during the restart window are picked up next start. It renames a fully adopted file to
+  `.adopted-<date>` once nothing holds it open.
+* `handsSchema.ts` is the hands table, defined once for the writer (wrapper) and the readers (API). It adds
+  `client_hand_id` (indexed; replaces the `LIKE` matching), `status` (`live`/`done`) and `updated_at`.
+* `eventTables.ts` holds `gtow_requests` and `poller_events`, which replace the two JSONL logs and are imported from
+  them at start-up.
 
-* `<main>` is the **main checkout**, resolved from git's common dir, not from the running file.
-  A worktree API or wrapper therefore writes to the same place as the main one, so the
-  hand-973 split cannot happen. (Before: a worktree wrote into its own `data/`, which vanished
-  with the worktree.)
-* Under `bun test` (NODE_ENV=test) the root is a per-process temp directory, so no test can
-  reach a live store, whichever store it opens. This generalises the answerLog/handFacts guards.
-* Per-store overrides (`ANSWERS_DB_PATH`, `HANDS_DB_PATH`, `SESSIONS_DB_PATH`,
-  `PROFILES_JSON_PATH`, `HAND_FACTS_DB_PATH`, `WRAPPER_DATA_DIR`, `WRAPPER_DEBUG_DIR`,
-  `IGNITION_DEBUG_DIR`, `API_BACKGROUND_LOCK`) keep working, since tests and verify servers
-  use them. They are reported, and the **live** API (serving the poller) refuses to start when
-  one points outside the data root. That is the partial-override split that lost hand 973.
-* Tracked reference artifacts (preflop-db.sqlite, resolved-charts.json, mes_postflop.json,
-  strategy_matrix.json, ledger.json …) stay beside the code: they are versioned with it.
-* Visibility: the API and wrapper print one `[data-root]` line at start (root, where each store
-  resolves, overrides); `GET /api/dashboard/storage` returns the same report.
+| Record | Where it lives now |
+|---|---|
+| hands (live + finished), sessions, balances | `poker.sqlite` (the wrapper writes; the API reads the same rows) |
+| answers (+ the `[chain]` line), stored chains, hand facts | `poker.sqlite` (API) |
+| GTO Wizard requests, poller events | `poker.sqlite` tables (were JSONL) |
+| jobs, miss queue, river MES | `poker.sqlite` (API) |
+| job logs, exit log, caches, fx, tasks, locks, profiles.json, hand-history cache, table claims | the root's `api/` and `wrapper/` folders (legacy folders in the main checkout by default) |
+| debug recordings, ws dumps | the root's `wrapper-debug/` (legacy `ignition-study-wrapper/debug` by default) |
+| **tracked reference artifacts** (preflop-db.sqlite, resolved-charts.json, mes_postflop.json, ledger.json …) | unchanged — versioned with the code |
 
-### 2. Stable keys between stores
-* `GET /api/dashboard/solve/:id?hand=<clientHandId>&key=<decisionKey>`: a row whose hand or
-  decision disagrees is **never** shown. The server looks the chain up by (hand, decision
-  key) instead, or answers "this hand's stored chain is not in this data root (row #72 belongs
-  to hand 9000057)". The hand page passes both.
+Per-store env overrides (`ANSWERS_DB_PATH`, `HANDS_DB_PATH`, `WRAPPER_DATA_DIR`, …) still work for tests and
+sandboxes. The **live API (:2000) refuses to start** when one points outside the root, because that is the split
+that lost hand 973. Every process prints one `[data-root]` line at start, and `GET /api/dashboard/storage` shows
+where every store resolves, what was adopted, and any split.
 
-### 3. The whole decision in one record
-* `X-Answer-Trace` is written ASCII-safe (`\uXXXX` escapes inside the JSON), so `—`, `≈` and
-  suits no longer drop the timeline.
-* The API also returns the full, uncut `[chain]` summary in `X-Answer-Chain`. The poller stores
-  it on the answer row (`answers.chain`, additive column), and the hand page shows it under
-  each answer. "Cached or re-solved?" is then answered by the row itself, whatever happened to
-  the logs.
+### 2. One row per hand, live
+The wrapper writes the hand's row as it is played (`status='live'`, only when the hand changes, at the END of the
+loop pass after every press, with a 25 ms lock wait: a busy database skips one write, never a press). The archive
+finishes **that same row** (`status='done'`). A busy database defers the archive to the next pass; it never drops the
+hand. The Hands tab lists live rows on top with a `live` chip and refreshes while any are in play. A row that stopped
+updating (the wrapper died mid-hand) shows as `unfinished`. Analytics, nets, reconciliation and history read
+finished rows only. The dashboard's row cache is keyed on `updated_at`, so the award box patching a row after the
+archive is seen too (it used to be cached without the award until a restart).
 
-### 4. Moving the data out of the repo (optional, needs everything stopped)
-`bun setup/moveData.ts --to C:\Users\Brady\poker-data` copies the runtime stores into the new
-layout (SQLite through `VACUUM INTO`, so WAL contents come along), verifies row counts, and
-prints the `POKER_DATA_DIR` line to put in the launch env. It refuses while :2000 or :7700
-answers. It is not run automatically: the API and wrapper have to be stopped, and restarts are
-Brady's call.
+### 3. Stable keys
+`GET /api/dashboard/solve/:id?hand=&key=` never shows a chain whose hand or decision disagrees with the answer's. It
+looks the chain up by (client hand id, decision key), or says whose row the number is. Every place the dashboard
+opens a stored chain passes the answer's hand and key.
 
-## Order
-1. data-root module + tests
-2. API stores → module (answers, solves, gtow ledger, poller events, jobs, miss-queue, river MES,
-   tasks, fx, acks, lock, exit log, hands/sessions/profiles readers)
-3. wrapper `env.ts paths()` → module
-4. live split guard + `[data-root]` report + `/storage`
-5. solve lookup by (hand, key) + hand page
-6. trace header escape + `X-Answer-Chain` + `answers.chain` + hand page
-7. moveData.ts
-8. Gates: api `bun test`, wrapper `bun test`, `tsc`, `bun setup/regress.ts`
-9. Rebase onto the integration SHA from the "Answer chain architecture review" session. chain-ledger's
-   `handFacts.ts` resolves through the module too. Re-run the gates on the combined code.
+### 4. The whole decision on its row
+`X-Answer-Trace` is ASCII-escaped (`headerJson`), and a failure to set it is logged, never swallowed again. The full
+`[chain]` summary also travels in `X-Answer-Chain`. The poller stores it in `answers.chain`, and the hand page shows it
+under each answer, so "cached or re-solved?" is answered by the row itself.
+
+### 5. Launchers
+`config/env.ps1 -EmitCmd` hands on every key `config/local.env` sets, not a fixed list. `POKER_DATA_DIR` works from
+every launcher, and `TRUST_GUARD_ALL` / `GTOW_POLL_MS` now reach an API started by `dev-api.cmd` too.
+
+## Rolling it out
+Restart the API and the wrapper together (Brady's call; see the no-rig-relaunch rule). On first start they adopt the
+legacy files into `<repo>/data/poker.sqlite` and rename them `.adopted-<date>`. To move the data out of the repo, set
+`POKER_DATA_DIR` in `config/local.env` with both stopped.
+
+## Tests
+`packages/data-root/*.test.ts` covers resolution, adoption (rowids, watermark, re-created files, WITHOUT ROWID,
+JSONL, torn lines), retirement and busy behaviour. `apps/api/src/services/centralStore.test.ts` covers the stores →
+central DB, a chain shown only for its own hand, the header escaping and the hands schema upgrade.
+`apps/api/src/services/gtowRequestLog.test.ts` covers the ledger on SQLite.
+`apps/wrapper/test/unit/live-hand-row.test.ts` covers the live row finished in place, and a busy database deferring
+but never dropping the archive.

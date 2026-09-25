@@ -1,7 +1,8 @@
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { Hono } from "hono";
-import { exitLogPath } from "./src/services/storePaths";
+import { adoptAtStartup } from "../../packages/data-root/centralDb";
+import { describeLayout, exitLogPath, resolveAllStores, splitStores } from "./src/services/storePaths";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import solverRoutes from "./src/routes/solver";
@@ -192,6 +193,30 @@ setInterval(() => {
 
 const dashboardOnly = process.env.DASHBOARD_ONLY === "1";
 if (dashboardOnly) console.log("DASHBOARD_ONLY=1: study poller and GTOW token keeper are off");
+
+// ONE DATA ROOT (gto-trainer/DATA-ROOT-PLAN.md): say where every record goes, fold the legacy per-store files into the
+// central poker.sqlite before anything writes, and refuse to run as the LIVE API with its records split — an env
+// override that points one store outside the root is exactly how hand 973's chains and answers came apart.
+{
+  const stores = resolveAllStores();
+  console.log(describeLayout());
+  for (const s of stores.filter((x) => x.override)) console.log(`[data-root]   ${s.store} → ${s.path} (${s.override})`);
+  const liveApi = String(port) === "2000" && !dashboardOnly;
+  const split = splitStores(stores);
+  if (liveApi && split.length) {
+    const why = `[data-root] REFUSING TO START the live API: ${split.map((s) => `${s.store} → ${s.path} (${s.override})`).join("; ")} ` +
+      `lands outside the data root — unset the override(s) or set POKER_DATA_DIR so every store moves together`;
+    console.error(why);
+    say(why);
+    process.exit(1);
+  }
+  try {
+    const line = adoptAtStartup((l) => console.log(l));
+    if (line) say(line);
+  } catch (e) {
+    console.error(`[data-root] adoption failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
 
 // One owner for the background work. A second API process is allowed to serve HTTP (that is what
 // `dev-api.cmd --watch` is for) but must not run a second poller / dispatcher / keeper: see

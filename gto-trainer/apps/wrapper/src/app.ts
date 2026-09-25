@@ -3,6 +3,8 @@
  * _main_tail). Order matters and is launch.py's: take over the port, guard the double-click with a mutex, serve,
  * start the loops, then the windows, then (on the test rig) seed the fake table's opening spot.
  */
+import { adoptAtStartup } from "../../../packages/data-root/centralDb";
+import { describeLayout } from "../../../packages/data-root/dataRoot";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as cdp from "./cdp";
@@ -113,6 +115,13 @@ export async function main(argv: string[]): Promise<void> {
     writeFileSync(join(DEBUG_DIR(), "last-start.txt"), `start ${strftime("%Y-%m-%d %H:%M:%S", Date.now() / 1000)} pid=${process.pid} argv=${pyRepr(argv)}\n`, "utf8");
   } catch {}
   await takeover();
+  // the central database: fold any legacy per-store files in BEFORE a loop can write (seconds, once — never mid-hand)
+  try {
+    log(describeLayout());
+    adoptAtStartup(log);
+  } catch (e: any) {
+    log(`[data-root] adoption failed: ${e?.message ?? e}`);
+  }
   // The mutex guards the sub-second double-click; port-scoped, so the test rig and a real session coexist.
   const mutex = `IgnitionStudyPanelServer:${C.PANEL_PORT}`;
   const already = W.mutexExists(mutex);

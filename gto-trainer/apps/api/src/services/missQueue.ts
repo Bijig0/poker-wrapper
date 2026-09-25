@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { missQueueDbPath } from "./storePaths";
+import { missQueueDbPath, openStore } from "./storePaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import type { ChartChoice, Walk3Result } from "./hrc3max";
 import { RUNGS, type Site } from "./hrc3max";
@@ -360,10 +360,7 @@ class MissQueue {
 
   private open(): Database {
     if (this.db) return this.db;
-    mkdirSync(dirname(this.path), { recursive: true });
-    this.db = new Database(this.path);
-    this.db.exec("PRAGMA busy_timeout = 5000"); // see services/jobs.ts — a held lock must wait, not throw
-    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db = openStore(this.path); // the central DB (WAL, busy timeout — a held lock must wait, not throw)
     this.db.exec(DDL);
     return this.db;
   }

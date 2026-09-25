@@ -126,3 +126,53 @@ describe("openStore", () => {
     a.run("COMMIT");
   });
 });
+
+describe("adoptLegacy: WITHOUT ROWID tables", () => {
+  test("hand_facts (keyed, no rowid) is copied by key, idempotently", () => {
+    const d = tmp();
+    const f = join(d, "hand_facts.sqlite");
+    const l = new Database(f);
+    l.run("CREATE TABLE hand_facts (hand_key TEXT PRIMARY KEY, ts INTEGER NOT NULL, doc TEXT NOT NULL) WITHOUT ROWID");
+    l.run("INSERT INTO hand_facts VALUES ('4920419883', 1, '{}'), ('4920419884', 2, '{}')");
+    l.close();
+    const central = new Database(join(d, "poker.sqlite"));
+    const r = adoptLegacy(central, [{ file: f, tables: ["hand_facts"] }]);
+    expect(r.errors).toEqual([]);
+    expect(central.query("SELECT COUNT(*) n FROM hand_facts").get()).toEqual({ n: 2 });
+    expect(adoptLegacy(central, [{ file: f, tables: ["hand_facts"] }]).notes).toEqual([]);
+  });
+});
+
+describe("adoptJsonl (the two JSONL logs → tables)", () => {
+  test("imports complete lines once, skips torn ones, resumes from the byte offset, retires the file", async () => {
+    const { adoptJsonl } = await import("./eventTables");
+    const { appendFileSync, writeFileSync } = await import("node:fs");
+    const d = tmp();
+    const f = join(d, "gtow_requests.jsonl");
+    writeFileSync(f, '{"ts":1,"s":"primary","k":"poll","st":200,"o":"api","h":"4920419883","sr":"river","go":"live"}\n{"ts":2,"s":"prim\n{"ts":3,"s":"secondary","k":"tree","st":201,"o":"api"}\n{"ts":4,"s":"pri');
+    const central = new Database(join(d, "poker.sqlite"));
+    const r1 = adoptJsonl(central, [{ file: f, table: "gtow_requests" }]);
+    expect(r1.notes).toEqual([{ file: f, table: "gtow_requests", copied: 2 }]);   // torn line 2 skipped, partial line 4 left
+    expect(central.query("SELECT ts, h, sr FROM gtow_requests ORDER BY ts").all()).toEqual([
+      { ts: 1, h: "4920419883", sr: "river" }, { ts: 3, h: null, sr: null },
+    ]);
+    appendFileSync(f, 'mary","k":"poll","st":429,"o":"api"}\n');                 // the old writer finishes line 4
+    const r2 = adoptJsonl(central, [{ file: f, table: "gtow_requests" }], { retire: true });
+    expect(r2.notes[0]!.copied).toBe(1);
+    expect(r2.retired).toEqual([f]);
+    expect(central.query("SELECT COUNT(*) n FROM gtow_requests").get()).toEqual({ n: 3 });
+  });
+
+  test("poller events keep the whole event as doc, with ts/outcome/street queryable", async () => {
+    const { adoptJsonl } = await import("./eventTables");
+    const { writeFileSync } = await import("node:fs");
+    const d = tmp();
+    const f = join(d, "poller-events.jsonl");
+    writeFileSync(f, JSON.stringify({ ts: 1790282896909, ms: 14154, outcome: "ok", hand: 24, street: "river", trace: null }) + "\n");
+    const central = new Database(join(d, "poker.sqlite"));
+    adoptJsonl(central, [{ file: f, table: "poller_events" }]);
+    const row: any = central.query("SELECT ts, outcome, hand, street, ms, doc FROM poller_events").get();
+    expect(row).toMatchObject({ ts: 1790282896909, outcome: "ok", hand: "24", street: "river", ms: 14154 });
+    expect(JSON.parse(row.doc).trace).toBeNull();
+  });
+});

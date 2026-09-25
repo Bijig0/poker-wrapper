@@ -33,6 +33,7 @@ import { answerLog, failKindOf } from "../services/answerLog";
 import { fastSolve } from "../services/fastSolve";
 import { gtowRequests } from "../services/gtowRequestLog";
 import { captureFaults, repairDeadSmallBlind } from "../utils/repairPostflopRotation/repairPostflopRotation";
+import { sessionsDbPath } from "../services/storePaths";
 
 const OUT = process.env.OUT ?? join(import.meta.dir, "hardening_backtest.jsonl");
 const SCOPE = process.env.SCOPE ?? "6max";                       // 6max | all
@@ -43,7 +44,7 @@ const ONLY = new Set((process.env.ONLY ?? "").split(",").map((s) => s.trim()).fi
 const PACE_MS = Number(process.env.PACE_MS ?? 3000);             // between CLOUD decisions
 const GTOW_RESERVE = Number(process.env.GTOW_RESERVE ?? 350);    // requests to leave for a live session
 const STRATEGY = "ign200-ring-6max-equilibrium";
-const SESSIONS_DB = join(HANDS_DB, "..", "sessions.sqlite");
+const SESSIONS_DB = sessionsDbPath();
 
 /** Blinds are not decisions. */
 const isDecision = (a: { hero: boolean; type: string }) => a.hero && a.type !== "post-sb" && a.type !== "post-bb";

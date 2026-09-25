@@ -26,6 +26,7 @@ import { fastSolve, forgetPostflopPin, CP_HU_STRATEGY } from "../services/fastSo
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowApi } from "../services/gtowApi";
+import { handsDbPath } from "../services/storePaths";
 
 const SIX_MAX_STRATEGY = "ign200-ring-6max-equilibrium";
 const args = process.argv.slice(2);
@@ -38,7 +39,7 @@ const snapped = new Map<number, number>();
 const drift = Number(args.find((a) => a.startsWith("--drift="))?.slice(8) ?? 0);
 const dealt = Number(args.find((a) => a.startsWith("--stack="))?.slice(8) ?? 100);
 
-const dbPath = join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "data", "hands.db");
+const dbPath = handsDbPath();
 const db = new Database(dbPath, { readonly: true });
 const row = db.query<{ data: string }, [string]>("SELECT data FROM hands WHERE hand_id = ? ORDER BY rowid DESC LIMIT 1").get(handId);
 if (!row) { console.error(`no hand ${handId} in ${dbPath}`); process.exit(1); }

@@ -13,6 +13,7 @@ import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVeri
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
 import { maybeEndForDisconnect, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
 import { maybeSitBackIn } from "./sitback";
+import { liveHandTick } from "./archive";
 
 export const FEED_STALL_TICKS = 8;
 
@@ -71,6 +72,10 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
     log(`[pick] auto: ${errRepr(e)}`);
     onError?.("chain", e);
   }
+  // LAST in the pass, after every press: the hand's live row in the central DB (and any archive a busy DB deferred)
+  try {
+    liveHandTick();
+  } catch {}
 }
 
 export async function feedLoop(): Promise<void> {
