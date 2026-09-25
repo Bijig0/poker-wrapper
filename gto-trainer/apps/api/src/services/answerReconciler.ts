@@ -3,6 +3,7 @@ import { answerLog, type FailKind } from "./answerLog";
 import { sessionsStore } from "./sessionsStore";
 import { HAND_COLS, openDb as openHandsDb, enrichSync, coverageOf, answersByHand, decisionIndexOf } from "../routes/dashboard";
 import { FINISHED } from "../../../../packages/data-root/handsSchema";
+import { asActivity } from "./answerTrace";
 
 /**
  * Why a decision got no answer, settled AFTER the hand is over.
@@ -124,7 +125,7 @@ class AnswerReconciler {
   start(everyMs = 120_000): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      try { reconcileAnswers(Date.now() - 86_400_000); } catch { /* a reconcile pass never takes the process down */ }
+      try { asActivity("timer answerReconciler", () => reconcileAnswers(Date.now() - 86_400_000)); } catch { /* a reconcile pass never takes the process down */ }
     }, everyMs);
     this.timer.unref?.();
   }

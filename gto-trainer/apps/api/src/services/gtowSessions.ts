@@ -43,7 +43,7 @@
  * refusal corrects it.
  */
 
-import { timed } from "./answerTrace";
+import { asActivity, timed } from "./answerTrace";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
@@ -512,7 +512,7 @@ class GtowSessions {
    *  waits on a 4-8s CDP sniff. */
   startKeeper(intervalMs = 30_000): void {
     if (this.keeper) return;
-    this.keeper = setInterval(() => void this.refreshAll(), intervalMs);
+    this.keeper = setInterval(() => void asActivity("timer gtowSessions.refresh", () => this.refreshAll()), intervalMs);
     void this.refreshAll();
   }
 

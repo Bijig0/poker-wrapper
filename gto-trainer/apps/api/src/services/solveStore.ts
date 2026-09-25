@@ -86,6 +86,8 @@ class SolveStore {
     this.db.exec(DDL);
     const cols = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(solves)").all().map((c) => c.name));
     if (!cols.has("session_id")) this.db.exec("ALTER TABLE solves ADD COLUMN session_id TEXT");
+    // the Sessions pages read by session (forSession): without this each one scanned every solve (4-10 s per list)
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_solves_session ON solves(session_id)");
     return this.db;
   }
 

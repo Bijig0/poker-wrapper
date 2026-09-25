@@ -1,3 +1,4 @@
+import { yieldFirst, yieldToLive } from "../services/livePriority";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
@@ -86,6 +87,11 @@ const SELF = () => `http://localhost:${process.env.PORT || 2000}`;
 export const SESSION_GAP_MS = 45 * 60_000;
 
 const app = new Hono();
+
+// LIVE ANSWERS GO FIRST (services/livePriority): these pages recompute over every hand and answer on the thread that
+// answers hero's decisions, so each one waits for a live answer to finish before it starts. Only the browser pages'
+// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /sources/strategies|registry) never wait.
+for (const p of ["/hands", "/analytics", "/hand/*", "/sessions/*", "/profiles/*"]) app.use(p, yieldFirst);  // "/x/*" covers "/x" too
 
 interface HandRow {
   rowid: number;
@@ -298,6 +304,8 @@ async function pumpAudits(): Promise<void> {
   auditPumping = true;
   try {
     while (auditQueue.length) {
+      // after a restart every finished hand is re-audited (~1.2k self-requests back to back): never ahead of a live answer
+      await yieldToLive();
       const e = auditQueue.shift()!;
       await audit(e);
       auditQueued.delete(e.dbId);

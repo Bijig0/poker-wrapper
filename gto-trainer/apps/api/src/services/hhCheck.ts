@@ -18,6 +18,7 @@ import { archivedByClientHandId, doneIgnitionHandsAfter, lastArchivedRowid, type
 import { hhChecksDbPath, openStore } from "./storePaths";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
+import { asActivity } from "./answerTrace";
 
 export type CheckStatus = "pending" | "match" | "mismatch" | "unavailable";
 export interface HhCheck {
@@ -162,7 +163,7 @@ class HhChecker {
     this.timer = setInterval(() => {
       if (this.busy) return;
       this.busy = true;
-      tick(deps).catch((e) => console.error(`[hh-check] ${e?.message ?? e}`)).finally(() => { this.busy = false; });
+      asActivity("timer hhCheck", () => tick(deps)).catch((e) => console.error(`[hh-check] ${e?.message ?? e}`)).finally(() => { this.busy = false; });
     }, everyMs);
     this.timer.unref?.();
   }

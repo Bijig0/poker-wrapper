@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DATA_DIR, LIMP, MES_HANDOFF, HRC_API, REPO, loadLedger, evaluate, type LedgerConfig } from "./ledger";
 import { isBackgroundOwner } from "./backgroundLock";
 import { jobsDbPath, jobsDir, openStore } from "./storePaths";
+import { asActivity } from "./answerTrace";
 /** The checkout of hrc-api whose Windows driver carries the Run-Nash refinement (8 commits ahead of this repo's hrc-api). */
 export const HRC_API_ZENBOOK = process.env.HRC_API_ZENBOOK ?? "C:/Users/Brady/poker-zenbook/hrc-api";
 
@@ -266,7 +267,7 @@ class Jobs {
       try { this.reconcile(); } catch (e) { console.error(`[jobs] reconcile failed: ${(e as Error)?.stack ?? String(e)}`); }
     }
     if (!this.timer) this.timer = setInterval(() => {
-      try { this.tick(); } catch (e) { console.error(`[jobs] dispatch tick failed (retrying in 3 s): ${(e as Error)?.stack ?? String(e)}`); }
+      try { asActivity("timer jobs.dispatch", () => this.tick()); } catch (e) { console.error(`[jobs] dispatch tick failed (retrying in 3 s): ${(e as Error)?.stack ?? String(e)}`); }
     }, 3000);
   }
 

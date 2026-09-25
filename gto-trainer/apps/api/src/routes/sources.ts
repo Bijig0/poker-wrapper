@@ -1,3 +1,4 @@
+import { cachedBehindLive, yieldFirst } from "../services/livePriority";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -52,6 +53,11 @@ import {
 const DATA_DIR = join(import.meta.dir, "..", "..", "data");
 const LIMP_DIR = join(DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
 const app = new Hono();
+
+// LIVE ANSWERS GO FIRST (services/livePriority): these pages recompute over every hand and answer on the thread that
+// answers hero's decisions, so each one waits for a live answer to finish before it starts. Only the browser pages'
+// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /sources/strategies|registry) never wait.
+for (const p of ["/matrix", "/grading", "/answers", "/patch-jobs", "/approximations"]) app.use(p, yieldFirst);
 
 // ------------------------------------------------------------------ helpers
 
@@ -694,10 +700,16 @@ app.get("/registry", async (c) => {
 });
 
 // ------------------------------------------------------------- strategies
+// The wrapper's panel and setup page re-read this every few seconds per open table; recomputing it scans every hand and
+// answer (0.2 s on an idle machine, seconds — once 91 s — under load, all on the answering thread). Served from a
+// 30 s cache that refreshes behind the live answers (services/livePriority).
+const STRATEGIES_TTL_MS = 30_000;
+app.get("/strategies", async (c) => c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody)));
+
 /** The whole-hand strategy catalogue: what we can play, whether each is
  *  coherent (safeguards in services/strategies.ts), its winrate row from the
  *  matrix, and hero's realized bb/100 while it was the active mode. */
-app.get("/strategies", (c) => {
+function strategiesBody() {
   const views = evaluateStrategies();
   const matrix = readJson(join(DATA_DIR, "strategy_matrix.json"));
   const rowById: Record<string, any> = {};
@@ -745,7 +757,7 @@ app.get("/strategies", (c) => {
       days: 30,
     };
   };
-  return c.json({
+  return {
     ok: true,
     strategies: views.map((v) => ({
       ...v,
@@ -756,8 +768,8 @@ app.get("/strategies", (c) => {
     haircut: matrix?.haircut ?? null,
     evidenceChain: matrix?.evidenceChain ?? null,
     matrixBuilt: matrix?.generatedAt ?? null,
-  });
-});
+  };
+}
 
 // -------------------------------------------------------------- playthrough
 // The Playthrough tab: OUR solver browser. Config first (only what is solved is

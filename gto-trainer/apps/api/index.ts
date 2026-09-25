@@ -24,7 +24,7 @@ import replayRoutes from "./src/routes/replay";
 import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
 import { gtowApi } from "./src/services/gtowApi";
-import { startStallMonitor } from "./src/services/answerTrace";
+import { startStallMonitor, trackActivity } from "./src/services/answerTrace";
 import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
 import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
@@ -47,6 +47,11 @@ if (playerMode) {
 }
 
 // Middleware
+// every request is registered while it runs, so an event-loop stall line can name what was open (services/answerTrace)
+app.use("*", async (c, next) => {
+  const done = trackActivity(`${c.req.method} ${c.req.path}`);
+  try { await next(); } finally { done(); }
+});
 app.use("*", logger());
 app.use("*", cors());
 

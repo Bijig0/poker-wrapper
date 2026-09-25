@@ -1,3 +1,4 @@
+import { yieldFirst } from "../services/livePriority";
 import { Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -21,6 +22,10 @@ import { allRows, enrichSync, truncateAt } from "./dashboard";
  *                          per job + a runner queue (hrc_runner_gui.py format)
  */
 const app = new Hono();
+
+// LIVE ANSWERS GO FIRST (services/livePriority): the queue list re-reads every hand and answer on the thread that
+// answers hero's decisions, so it waits for a live answer to finish before it starts.
+app.use("/", yieldFirst);
 
 const REPO = resolve(import.meta.dir, "..", "..", "..", "..", "..");
 const CORPUS = join(REPO, "analysis", "pipeline", "limp_study", "corpus_nodes.jsonl");

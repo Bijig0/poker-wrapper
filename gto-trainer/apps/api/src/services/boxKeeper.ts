@@ -5,6 +5,7 @@ import { loadLedger, evaluate } from "./ledger";
 import { jobsDir } from "./storePaths";
 import { jobs, HRC_API_ZENBOOK, BASH, type JobRow } from "./jobs";
 import { isBackgroundOwner, backgroundLockStatus } from "./backgroundLock";
+import { asActivity } from "./answerTrace";
 
 /**
  * BOX KEEPER — keeps the HRC boxes solving without a human in the loop (Brady, 2026-09-11:
@@ -212,9 +213,9 @@ class BoxKeeper {
     if (!isBackgroundOwner()) { this.log("keeper", "NOT started: another API process owns the background work (see data/background.lock)"); return; }
     mkdirSync(jobsDir(), { recursive: true });
     this.log("keeper", `started: tick ${TICK_MS / 60000} min, stall ${STALL_MIN} min (linux ${LINUX_STALL_MIN} min or ${LINUX_QUIET_TICKS} quiet ticks), rdp idle ${RDP_IDLE_MIN} min, max ${MAX_AUTO_REQUEUE} auto re-queues`);
-    setTimeout(() => void this.tick(), 20_000);
+    setTimeout(() => void asActivity("timer boxKeeper", () => this.tick()), 20_000);
     // a rejected tick must not become an unhandled rejection: see services/jobs.ts start()
-    this.timer = setInterval(() => { this.tick().catch((e) => this.log("keeper", `tick failed (retrying next tick): ${(e as Error)?.stack ?? String(e)}`)); }, TICK_MS);
+    this.timer = setInterval(() => { asActivity("timer boxKeeper", () => this.tick()).catch((e) => this.log("keeper", `tick failed (retrying next tick): ${(e as Error)?.stack ?? String(e)}`)); }, TICK_MS);
   }
   /** `lock` is here so a keeper that is NOT running is visible rather than silent: an instance that
    *  lost the background lock serves HTTP normally and would otherwise look like a healthy keeper

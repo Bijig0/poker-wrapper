@@ -167,9 +167,11 @@ export function buildApp(): Hono {
     return json(200, { detected: up ? await F.detect(C.CDP_PORT) : null, cdp: await cdp.available(C.CDP_PORT) });
   });
   app.get("/session/checks", async () => json(200, await SESSION.sessionChecks()));
+  // The panel and /setup poll this every 5 s. A healthy catalogue comes from the 30 s cache (a forced refresh here made
+  // the API rebuild its strategy catalogue 12 times a minute per open panel); only an unreachable one is re-asked each time.
   app.get("/session", async () => json(200, {
     ok: true, current: S.session.rec, brief: await SESSION.sessionBrief(),
-    presets: await SES.presets(true), presetsFromApi: SES.presetsFromApi(), catalogueError: SES.presetsError(),
+    presets: await SES.presets(!SES.presetsFromApi()), presetsFromApi: SES.presetsFromApi(), catalogueError: SES.presetsError(),
     fakeTable: S.fakeMode,
     lastPreset: (S.sessions.list(1)[0] || {}).preset ?? null,
   }));

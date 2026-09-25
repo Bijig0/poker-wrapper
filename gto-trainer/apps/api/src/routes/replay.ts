@@ -499,33 +499,48 @@ export interface HandRecording {
   decisions: { nodeIndex: number; street: string; seq: number; answerSeq: number; label: string; heroDid?: string }[];
 }
 
-const cidIndex = new Map<string, HandRecording>();
+/**
+ * Every recorded hand by its site hand id, newest recording first. Until 2026-09-26 a MISS re-scanned every session
+ * (a stat of each log per call), and the Sessions list asks once per hand — most hands have no recording, so one page
+ * load cost thousands of stats on the answering thread. Now one pass builds the whole index; it is rebuilt when a
+ * session log appears or changes (checked at most every REC_INDEX_CHECK_MS), and each session's parse stays cached by
+ * mtime, so a rebuild re-reads only the log that grew.
+ */
+const REC_INDEX_CHECK_MS = 5_000;
+let recIndex: { checkedAt: number; key: string; byCid: Map<string, HandRecording> } | null = null;
+
+function recordingIndex(): Map<string, HandRecording> {
+  const now = Date.now();
+  if (recIndex && now - recIndex.checkedAt < REC_INDEX_CHECK_MS) return recIndex.byCid;
+  const names = listSessionNames();
+  const key = names.map((name) => {
+    const dir = sessionDir(name);
+    try { return `${name}:${dir ? statSync(join(dir, "log.jsonl")).mtimeMs : "-"}`; } catch { return `${name}:-`; }
+  }).join("|");
+  if (recIndex?.key === key) { recIndex.checkedAt = now; return recIndex.byCid; }
+  const byCid = new Map<string, HandRecording>();
+  for (const name of names) {   // newest first: a hand recorded twice resolves to its newest recording
+    for (const h of parseSessionHands(name) ?? []) {
+      if (!h.clientHandId || byCid.has(h.clientHandId)) continue;
+      byCid.set(h.clientHandId, {
+        session: name, hand: h.hand, firstSeq: h.firstSeq ?? 0, lastSeq: h.lastSeq ?? 0, nodeCount: h.nodes.length,
+        decisions: h.nodes.filter((n) => n.kind === "decision").map((n) => ({
+          nodeIndex: n.i, street: n.street, seq: n.seq, answerSeq: n.answerSeq ?? n.seq, label: n.label, heroDid: n.heroDid,
+        })),
+      });
+    }
+  }
+  recIndex = { checkedAt: now, key, byCid };
+  return byCid;
+}
 
 /**
  * Which recording holds this hand (by the site's hand id), and where its
  * hero decisions sit in that recording — the hand detail's "open in Replay
- * Review at this node" link. A hit is cached forever (recordings are
- * immutable once the session ends); a miss re-scans, which is cheap because
- * every session's parse is cached by mtime.
+ * Review at this node" link.
  */
 export function recordingForHand(clientHandId: string): HandRecording | null {
-  const hit = cidIndex.get(clientHandId);
-  if (hit) return hit;
-  for (const name of listSessionNames()) {
-    const hands = parseSessionHands(name);
-    if (!hands) continue;
-    const h = hands.find((x) => x.clientHandId === clientHandId);
-    if (!h) continue;
-    const rec: HandRecording = {
-      session: name, hand: h.hand, firstSeq: h.firstSeq ?? 0, lastSeq: h.lastSeq ?? 0, nodeCount: h.nodes.length,
-      decisions: h.nodes.filter((n) => n.kind === "decision").map((n) => ({
-        nodeIndex: n.i, street: n.street, seq: n.seq, answerSeq: n.answerSeq ?? n.seq, label: n.label, heroDid: n.heroDid,
-      })),
-    };
-    cidIndex.set(clientHandId, rec);
-    return rec;
-  }
-  return null;
+  return recordingIndex().get(clientHandId) ?? null;
 }
 
 /** Hero's seat from the raw capture, for ticks recorded before log.jsonl had it. */

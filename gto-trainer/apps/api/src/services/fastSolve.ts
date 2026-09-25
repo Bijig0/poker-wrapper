@@ -26,6 +26,7 @@ import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot"
 import { effectiveBehind, solveAiChain, type AiChainResult, type ChainTrace } from "./aiChain";
 import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
+import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
 import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
@@ -2906,9 +2907,13 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   // EVERY CALL IS ONE SCOPE (2026-09-25, services/requestScope): the GTO Wizard requests it makes are counted on it,
   // added to the hand's facts (by origin: live / warm / replay), and reported on the answer's chain path.
   const handKey = String(hand.clientHandId ?? hand.handId ?? "");
-  const { value, scope } = await withRequestScope(
+  // LIVE ANSWERS GO FIRST (2026-09-26, services/livePriority): a decision at the table (and the street warm-up that
+  // pre-solves it) marks itself, and heavy dashboard reads wait until it is done instead of stalling it
+  const live = opts.origin === "live" || opts.origin === "warm";
+  const run = () => withRequestScope(
     { handKey, origin: opts.origin ?? "adhoc", street: hand.currentNode?.street ?? null },
     () => fastSolveEntry(hand, heroPos, opts));
+  const { value, scope } = live ? await asLive(run) : await run();
   if (handKey) handFacts.addRequests(handKey, scope.origin, scope.counts);
   const street = hand.currentNode?.street ?? "?";
   const path: DecisionPath = value.path

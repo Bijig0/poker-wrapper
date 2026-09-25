@@ -79,6 +79,49 @@ const STALL_KEEP = 400;
 const stalls: { at: number; ms: number }[] = [];
 let stallTimer: ReturnType<typeof setInterval> | null = null;
 
+// What was running. Until 2026-09-26 a stall line named no culprit, and the access log only showed a request after it
+// finished — so the API's requests register here (index.ts middleware) and a stall line lists the ones that were open
+// across the blocked interval. None open means a timer or background job held the loop.
+type Activity = { label: string; start: number; end?: number };
+const open = new Map<number, Activity>();
+const ended: Activity[] = [];
+let activitySeq = 0;
+
+/** Mark `label` (e.g. "GET /api/dashboard/hands") as running; call the returned function when it ends. */
+export function trackActivity(label: string): () => void {
+  const id = ++activitySeq;
+  const a: Activity = { label, start: Date.now() };
+  open.set(id, a);
+  return () => {
+    if (!open.delete(id)) return;
+    a.end = Date.now();
+    ended.push(a);
+    if (ended.length > 64) ended.splice(0, ended.length - 64);
+  };
+}
+
+/** Run `fn` (a timer's tick, sync or async) as a named activity, so a stall while it runs names it. */
+export function asActivity<T>(label: string, fn: () => T): T {
+  const done = trackActivity(label);
+  try {
+    const r = fn();
+    if (r instanceof Promise) return r.finally(done) as T;
+    done();
+    return r;
+  } catch (e) {
+    done();
+    throw e;
+  }
+}
+
+/** The activities open at any point of [from, to], longest first, as "GET /x (2.1 s)". */
+export function activityDuring(from: number, to: number, max = 4): string[] {
+  const hit = [...open.values(), ...ended].filter((a) => a.start <= to && (a.end === undefined || a.end >= from));
+  const dur = (a: Activity) => (a.end ?? to) - a.start;
+  return hit.sort((a, b) => dur(b) - dur(a)).slice(0, max)
+    .map((a) => `${a.label} (${(dur(a) / 1000).toFixed(1)} s${a.end === undefined ? ", still open" : ""})`);
+}
+
 /** Start sampling the event loop (idempotent; the timer never keeps the process alive). */
 export function startStallMonitor(): void {
   if (stallTimer) return;
@@ -91,8 +134,10 @@ export function startStallMonitor(): void {
     stalls.push({ at: now - late, ms: late });
     if (stalls.length > STALL_KEEP) stalls.splice(0, stalls.length - STALL_KEEP);
     if (late >= STALL_LOG_MS) {
+      const during = activityDuring(now - late, now);
       console.log(`[stall] the event loop was blocked for ${late} ms at ${new Date(now - late).toISOString()} — ` +
-        `synchronous work in this process; every answer in flight waited that long`);
+        `synchronous work in this process; every answer in flight waited that long — ` +
+        (during.length ? `open: ${during.join(", ")}` : "no request open (a timer or background job)"));
     }
   }, STALL_TICK_MS);
   (stallTimer as { unref?: () => void }).unref?.();

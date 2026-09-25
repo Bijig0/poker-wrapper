@@ -317,6 +317,14 @@ function assertTestSafePath(path: string): void {
 class AnswerLog {
   private db: Database | null = null;
   private readonly path: string;
+  /**
+   * rows(days) is read by every dashboard page and the reconciler, and re-read the whole table each time — on the
+   * thread that answers live decisions. It is cached per window until something writes: this connection's writes bump
+   * writeSeq, another connection's inserts move max(id), and the minute in the key bounds the rest (another process's
+   * update, the window's moving edge).
+   */
+  private writeSeq = 0;
+  private readonly rowsCache = new Map<number, { key: string; rows: LoggedAnswer[] }>();
 
   /**
    * ANSWERS_DB_PATH (2026-09-23, EIP-07 + PF-11): the process-wide singleton below
@@ -347,6 +355,8 @@ class AnswerLog {
     for (const [name, type] of EXTRA_COLUMNS) {
       if (!cols.has(name)) this.db.exec(`ALTER TABLE answers ADD COLUMN ${name} ${type}`);
     }
+    // the Sessions pages read by session (forSession): without this each one scanned the whole table
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_answers_session ON answers(session_id)");
     // Classify the failures written before the column existed, once. The read
     // paths fall back to failKindOf anyway; this makes plain SQL over the table
     // agree with them. Rows already filed under "unknown" are re-tried too: the
@@ -390,6 +400,7 @@ class AnswerLog {
           row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null,
           row.pathVerdict ?? null, row.path ?? null, row.chain ?? null
         );
+      this.writeSeq++;
     } catch (e) {
       storeWriteFailed("answers", e);   // never propagate — but never silent
     }
@@ -405,6 +416,7 @@ class AnswerLog {
       this.open()
         .query("UPDATE answers SET client_hand_id = ?, session_id = COALESCE(session_id, ?), wrapper_hand_id = COALESCE(wrapper_hand_id, ?) WHERE id = ? AND client_hand_id IS NULL")
         .run(clientHandId, sessionId, wrapperHandId, id);
+      this.writeSeq++;
     } catch (e) {
       storeWriteFailed("answers.attach", e);
     }
@@ -461,13 +473,21 @@ class AnswerLog {
     }
   }
 
-  /** Every logged row in the window, oldest first. */
+  /** Every logged row in the window, oldest first (a fresh array; the rows are shared with the cache — read-only). */
   rows(days = 60): LoggedAnswer[] {
     try {
-      const since = Date.now() - days * 86_400_000;
-      return this.open()
+      const db = this.open();
+      const now = Date.now();
+      const maxId = db.query<{ m: number | null }, []>("SELECT max(id) m FROM answers").get()?.m ?? 0;
+      const key = `${this.writeSeq}|${maxId}|${Math.floor(now / 60_000)}`;
+      const hit = this.rowsCache.get(days);
+      if (hit?.key === key) return hit.rows.slice();
+      const rows = db
         .query<LoggedAnswer, [number]>("SELECT * FROM answers WHERE ts >= ? ORDER BY ts")
-        .all(since);
+        .all(now - days * 86_400_000);
+      if (this.rowsCache.size >= 8) this.rowsCache.clear();
+      this.rowsCache.set(days, { key, rows });
+      return rows.slice();
     } catch {
       return [];
     }
