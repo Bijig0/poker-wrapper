@@ -19,6 +19,7 @@
     <button id="tab-sessions">Sessions</button>
     <button id="tab-profiles" title="the accounts hands are played on: the money in them, and whether it adds up to what poker did">Profiles</button>
     <button id="tab-analytics">Analytics</button>
+    <button id="tab-coverage" title="the postflop chain's seventeen invariants: the rule each one enforces, whether it is built, and what it found on the last days' answers">Coverage</button>
     <button id="tab-sources">Sources</button>
     <button id="tab-replay">Replay Review</button>
     <button id="tab-play">Playthrough</button>
@@ -54,6 +55,7 @@
   <div id="view-ledger" style="display:none"></div>
   <div id="view-tasks" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
+  <div id="view-coverage" style="display:none"></div>
   <div id="view-sources" style="display:none"></div>
   <div id="view-play" style="display:none"></div>
   <!-- Side-by-side replay review lives in the React dashboard (it renders the
@@ -422,32 +424,66 @@ function chainSolver(s) {
   const acct = s.account ? ` · ${esc({ primary: "Ultra", secondary: "Elite" }[s.account] || s.account)}` : "";
   return `<br><span class="sub">solved with GTO Wizard AI postflop${acct} · ${s.tree === "created" ? "new tree" : "cached tree"}</span>`;
 }
-function chainPathCard(j) {
+/* THE CHECKS TAB (2026-09-27, services/chainChecks) — it took over the Chain path card. At the top, the hand's verdict
+   and what it cost (the preflop pin, GTO Wizard requests, the streets walked); then per decision: its verdict, requests
+   and reasons, how each street's ranges were produced (folded away), and the chain's seventeen invariants as a table of
+   checks × streets: ✓ held · ✗ failed (red, with the reason) · ⚑ a villain mistake line (flagged, never a verdict) ·
+   — not checked (hover says why). Hover a check's name for the rule it enforces. */
+const CK_STREETS = ["preflop", "flop", "turn", "river"];
+const CK_GROUP = { inputs: "Inputs", process: "Process", output: "Output" };
+function ckCellHtml(c) {
+  if (!c) return '<td class="ck-cell"><span class="sub" title="not checked on this street">—</span></td>';
+  if (c.status === "pass") return `<td class="ck-cell"><span class="chain-ok" title="${esc(c.text)}">✓</span></td>`;
+  if (c.status === "fail") return `<td class="ck-cell"><span class="chain-bad">✗</span> <span class="ck-why">${esc(c.text)}</span>${c.covered ? ` <span class="sub" title="another reason on this answer already reports it">(reported as ${esc(c.covered)})</span>` : ""}</td>`;
+  if (c.status === "flag") return `<td class="ck-cell"><span class="ck-flag" title="flagged, never a verdict">⚑</span> <span class="sub">${esc(c.text)}</span></td>`;
+  return `<td class="ck-cell"><span class="sub" title="${esc(c.text)}">—</span></td>`;
+}
+function ckTableHtml(p, defs) {
+  const checks = p.checks || {};
+  const streets = CK_STREETS.filter((s) => (checks[s] || []).length);
+  if (!streets.length) return '<div class="sub">no checks recorded for this answer (logged before 2026-09-27)</div>';
+  let group = null;
+  const rows = defs.map((d) => {
+    const head = d.group !== group ? `<tr class="ck-group"><td colspan="${streets.length + 1}">${esc(CK_GROUP[d.group] || d.group)}</td></tr>` : "";
+    group = d.group;
+    const cells = streets.map((s) => ckCellHtml((checks[s] || []).find((c) => c.id === d.id))).join("");
+    return `${head}<tr class="src-static"><td class="ck-name" title="${esc(d.spec)}"><span class="mono sub">${d.id}</span> ${esc(d.name)}</td>${cells}</tr>`;
+  }).join("");
+  return `<div class="scroll"><table class="ck-tbl"><thead><tr><th>check</th>${streets.map((s) => `<th>${esc(s)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function checksViewHtml(j) {
+  const defs = j.checkDefs || [];
   const rows = (j.answers || []).map((a) => {
     let p = null;
     try { p = a.path ? JSON.parse(a.path) : null; } catch { p = null; }
     return p ? { a, p } : null;
   }).filter(Boolean);
   const facts = j.chain?.facts;
-  if (!rows.length && !facts) return "";
+  if (!rows.length && !facts) return '<div class="sub">no answer of this hand carries a chain path or checks (logged before 2026-09-25)</div>';
   const hv = j.chain?.verdict;
+  const req = facts?.requests || {};
+  const origins = Object.entries(req).map(([o, r]) => `${esc(o)} ${chainReq(r)}`).join(" · ");
+  const pin = facts?.preflop ? `preflop pin: <b>${esc(facts.preflop.piece)}</b> <span class="mono">${esc(facts.preflop.id || "")}</span> at "${esc((facts.preflop.codes || []).join("-") || "root")}"` : "no preflop pin recorded";
+  const walked = (facts?.streets || []).map((s) => `${["flop", "turn", "river"][s.k] || s.k}${s.plan ? ` (${esc(s.plan)})` : ""} ${s.kind === "closed" ? "closed" : "hero's node"} [${esc((s.tokens || []).join(","))}]`).join(" · ");
+  const top = `<div class="ck-top">hand verdict ${hv ? chainChip(hv.verdict) : '<span class="sub">—</span>'} <span class="sub">${pin}${origins ? ` · GTO Wizard requests for this hand: ${origins}` : ""}${walked ? `<br>streets walked: ${walked}` : ""}</span></div>
+    <div class="sub" style="margin:0 0 6px"><span class="chain-ok">✓</span> held · <span class="chain-bad">✗</span> failed (a reason on the answer: verdict "check failed") · <span class="ck-flag">⚑</span> a villain mistake line — flagged, never a verdict · — not checked (hover for why) · hover a check for its rule; <a href="/coverage" onclick="go('/coverage');return false">all checks across hands ↗</a></div>`;
   const body = rows.map(({ a, p }) => {
     const streets = (p.streets || []).map((s) => `<div style="margin-bottom:4px"><b>${esc(s.street)}</b>${s.plan ? `<span class="sub"> (${esc(s.plan)})</span>` : ""}: ${chainHow(s.how, s.why)}` +
       `${s.leak ? ` <span class="chain-bad" title="${esc(s.leak.why)}">· ${esc(s.leak.code)}</span>` : ""}${chainCheck(s)}${chainOffTree(s)}${chainSolver(s)}</div>`).join("")
       || (p.preflop ? `<span class="sub">answered from ${esc(p.preflop.piece)} — no solve</span>` : "");
     const arr = p.arrival ? chainHow(p.arrival.how, p.arrival.why) + ` <span class="sub">${esc(p.arrival.producer || "")}${p.arrival.first ? ` · first: ${esc(CHAIN_HOW[p.arrival.first.how] || p.arrival.first.how)}` : ""}</span>` : (p.preflop ? chainHow(p.preflop.how, p.preflop.why) + ` <span class="sub">${esc(p.preflop.piece)}</span>` : '<span class="sub">—</span>');
-    const why = (p.reasons || []).map((r) => `<div class="sub">${esc(r.text)}</div>`).join("");
-    return `<tr class="src-static"><td>${fmtT(a.ts)}</td><td>${esc(a.street || p.street || "")}</td><td>${chainChip(p.verdict)}</td><td>${arr}</td><td>${streets || '<span class="sub">—</span>'}</td><td class="num">${chainReq(p.requests)}</td></tr>` +
-      (why ? `<tr class="src-static"><td></td><td colspan="5">${why}</td></tr>` : "");
+    const why = (p.reasons || []).map((r) => `<div class="${r.v === "failed" ? "chain-bad" : "sub"}">${esc(r.text)}</div>`).join("");
+    return `<div class="ck-dec"><div class="ck-dec-h">${fmtT(a.ts)} · <b>${esc(a.street || p.street || "")}</b> ${chainChip(p.verdict)} · requests ${chainReq(p.requests)} · flop ranges ${arr}</div>${why}` +
+      (streets ? `<details class="ck-path"><summary>chain path — how each street's ranges were produced</summary>${streets}</details>` : "") +
+      ckTableHtml(p, defs) + `</div>`;
   }).join("");
-  const req = facts?.requests || {};
-  const origins = Object.entries(req).map(([o, r]) => `${esc(o)} ${chainReq(r)}`).join(" · ");
-  const pin = facts?.preflop ? `preflop pin: <b>${esc(facts.preflop.piece)}</b> <span class="mono">${esc(facts.preflop.id || "")}</span> at "${esc((facts.preflop.codes || []).join("-") || "root")}"` : "no preflop pin recorded";
-  const walked = (facts?.streets || []).map((s) => `${["flop", "turn", "river"][s.k] || s.k}${s.plan ? ` (${esc(s.plan)})` : ""} ${s.kind === "closed" ? "closed" : "hero's node"} [${esc((s.tokens || []).join(","))}]`).join(" · ");
-  return `<div class="card"><h2>Chain path ${hv ? chainChip(hv.verdict) : ""} <span class="sub">— how each answer's ranges were produced: computed once, reused after (technical)</span></h2>
-    <div class="sub" style="margin-bottom:6px">${pin}${origins ? ` · GTO Wizard requests for this hand: ${origins}` : ""}${walked ? `<br>streets walked: ${walked}` : ""}</div>
-    ${rows.length ? `<div class="scroll"><table><thead><tr><th>when</th><th>street</th><th>verdict</th><th>flop ranges</th><th>streets</th><th class="num">requests</th></tr></thead><tbody>${body}</tbody></table></div>`
-      : '<div class="sub">no answer of this hand carries a chain path (logged before 2026-09-25)</div>'}</div>`;
+  return top + (rows.length ? body : '<div class="sub">no answer of this hand carries a chain path (logged before 2026-09-25)</div>');
+}
+function drawChecksView() {
+  const host = $("checks");
+  if (!host || !DETAIL) return;
+  host.innerHTML = checksViewHtml(DETAIL);
+  host.dataset.drawn = "1";
 }
 
 /* A SESSION'S TECHNICAL VIEW (2026-09-25): the clean rate first, then everything that was not clean. Behind the
@@ -551,10 +587,9 @@ async function showDetail(dbId) {
         ${j.feedLines.map((l, i) => `<div data-fl="${i}">${esc(l)}</div>`).join("")}
       </div></div>
     </div>
-    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button></span></div>
-      <div id="timeline"></div><div id="rangelook" class="rl" hidden></div><div id="actual" hidden></div></div>
+    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button><button data-v="checks" title="how each answer was produced, and the chain's seventeen invariants on it — per decision, per street">Checks${j.chain?.verdict && j.chain.verdict.verdict === "failed" ? ' <span class="chain-bad">✗</span>' : ""}</button></span></div>
+      <div id="timeline"></div><div id="rangelook" class="rl" hidden></div><div id="actual" hidden></div><div id="checks" hidden></div></div>
     <div id="solution"></div>
-    ${chainPathCard(j)}
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
     ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
       `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
@@ -1090,6 +1125,8 @@ const TL_VIEWS = {
     title: `Ranges <span class="sub">— every decision in the hand, in order: each player's strategy at the node, what they did, and the range it leaves</span>` },
   actual: { el: "actual", draw: () => loadActual(),
     title: `Actual <span class="sub">— Ignition's own hand history of this hand, checked against what the reader recorded</span>` },
+  checks: { el: "checks", draw: () => drawChecksView(),
+    title: `Checks <span class="sub">— how each answer was produced, and the chain's seventeen invariants on it (technical)</span>` },
 };
 const tlViewOf = (v) => (Object.hasOwn(TL_VIEWS, v) ? v : "actions");
 let TL_VIEW = (() => { try { return tlViewOf(localStorage.getItem("tlView")); } catch { return "actions"; } })();
@@ -5333,19 +5370,71 @@ async function loadRoadmap() {
     <div class="card"><h2>Preflop &amp; coverage</h2><div class="scroll"><table><thead><tr><th>item</th><th>reach</th><th>status</th><th>why it matters</th><th>what it takes</th></tr></thead><tbody>${pre}</tbody></table></div></div>`;
 }
 
+/* ================= Coverage: the chain's seventeen invariants =================
+   (2026-09-27, services/chainChecks — the owner's "checker coverage list".) One row per check: the correct behaviour
+   in his words (so this page IS the spec), how it is checked and what is not, its build status, and what it found over
+   the window — per decision, the worst result across the decision's streets: pass / fail / flag / not checked — with
+   the hands that failed, linked. Filter by session and window; the URL carries both (/coverage?session=&days=). */
+const CKC_BUILD = { built: ["good", "built"], partial: ["warn", "partial"], "to build": ["dim", "to build"] };
+async function loadCheckCoverage() {
+  const v = $("view-coverage");
+  const q = new URLSearchParams({ days: String(PATH.days || 7) });
+  if (PATH.session) q.set("session", PATH.session);
+  if (!v.innerHTML) v.innerHTML = '<div class="card sub">loading the checker coverage…</div>';
+  let j;
+  try { j = await (await fetch(`/api/dashboard/coverage?${q}`)).json(); }
+  catch { v.innerHTML = '<div class="card warn">coverage unavailable (the study API did not answer)</div>'; return; }
+  if (PATH.view !== "coverage") return;
+  if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error || "coverage unavailable")}</div>`; return; }
+  v.innerHTML = checkCoverageHtml(j);
+  const to = (session, days) => go(canonical({ view: "coverage", session: session || null, days: String(days || 7) }));
+  $("ckc-session").onchange = (e) => to(e.target.value, PATH.days);
+  $("ckc-days").onchange = (e) => to(PATH.session, e.target.value);
+}
+function checkCoverageHtml(j) {
+  const handLink = (e) => {
+    const row = j.rowids ? j.rowids[e.hand] : null;
+    const t = `${e.street}: ${e.text}`;
+    return row != null ? `<a href="/hands/${row}" onclick="go('/hands/${row}');return false" class="mono${e.status === "flag" ? " sub" : ""}" title="${esc(t)}">${esc(e.hand)}</a>`
+      : `<span class="mono sub" title="${esc(t)} (not in the archive yet)">${esc(e.hand)}</span>`;
+  };
+  const sessOpts = [`<option value="">all sessions</option>`, ...(j.sessions || []).map((s) =>
+    `<option value="${esc(s.id)}"${s.id === j.session ? " selected" : ""}>${esc(s.label || s.id)}${s.startedAt ? ` · ${fmtT(s.startedAt)}` : ""} (${s.decisions})</option>`)].join("");
+  const dayOpts = [1, 7, 30, 90].map((d) => `<option value="${d}"${Number(j.days) === d ? " selected" : ""}>last ${d} day${d === 1 ? "" : "s"}</option>`).join("");
+  const num = (n, cls) => n ? `<b class="${cls}">${n}</b>` : '<span class="sub">0</span>';
+  let group = null;
+  const rows = (j.checks || []).map((c) => {
+    const head = c.group !== group ? `<tr class="ck-group"><td colspan="9">${esc(CK_GROUP[c.group] || c.group)}</td></tr>` : "";
+    group = c.group;
+    const [cls, label] = CKC_BUILD[c.build] || ["dim", c.build];
+    const seen = c.build === "to build" ? "" : c.seen ? "" : `<div class="sub" title="no answer in the window produced a result for this check">no result in the window</div>`;
+    const ex = c.examples || [];
+    const hands = ex.slice(0, 8).map(handLink).join("") + (ex.length > 8 ? ` <span class="sub">+${ex.length - 8}</span>` : "");
+    return `${head}<tr class="src-static"><td class="mono">${c.id}</td><td><b>${esc(c.name)}</b></td><td class="ckc-spec">${esc(c.spec)}</td><td class="ckc-how">${esc(c.how)}</td>` +
+      `<td><span class="chip ${cls}">${esc(label)}</span>${seen}</td><td class="num">${num(c.pass, "")}</td><td class="num">${num(c.fail, "bad")}</td><td class="num">${num(c.flag, "flag")}</td>` +
+      `<td class="ckc-hands">${hands || '<span class="sub">—</span>'}${c.na ? `<div class="sub">${c.na} not checked</div>` : ""}</td></tr>`;
+  }).join("");
+  const failing = (j.checks || []).filter((c) => c.fail).length;
+  return `<div class="card"><h2>Checker coverage <span class="sub">— the postflop chain's seventeen invariants: the rule, whether it is built, and what it found</span></h2>
+      <div class="sub">${j.withChecks} of ${j.decisions} logged decisions carry checks (answers since 2026-09-27) · ${j.hands} hands · ${failing ? `<span class="chain-bad">${failing} check${failing === 1 ? "" : "s"} failing</span>` : "nothing failing"} · counts are per decision, its worst street · a failed check is a reason on the answer (verdict "check failed"); ⚑ is a flag, never a verdict</div>
+      <div class="ckc-filters"><select id="ckc-session" title="only the answers of one declared session">${sessOpts}</select><select id="ckc-days" title="the window of answers read">${dayOpts}</select></div></div>
+    <div class="card"><div class="scroll"><table class="ckc-tbl"><thead><tr><th>#</th><th>check</th><th>correct behaviour</th><th>how it is checked</th><th>status</th><th class="num">pass</th><th class="num">fail</th><th class="num">flag</th><th>failing hands</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
 /* ================= routing =================
    Real paths, served by the API for every one of them (index.ts):
      /                 Home (?profile=&window=) — and the landing page for any
                        path that does not parse; /home is an alias for it
      /hands            the table            /hands/:dbId              one hand
      /analytics        (?scope=&vs=&profile=&window=)
+     /coverage         (?session=&days=) — the chain's seventeen invariants (services/chainChecks)
                                             /review                   Replay Review (embeds /replay)
      /sources          → /sources/strategies  /sources/:pane          strategies | pieces | matrix | grading | approx | roadmap
      /sources/pieces/:id                    one source's page   (/sources/registry/… still accepted)
      /sources/strategies/:id                one whole-hand strategy's page
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play", ledger: "tab-ledger", tasks: "tab-tasks" };
+const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play", ledger: "tab-ledger", tasks: "tab-tasks" };
 $("tab-ledger").onclick = () => go("/proposals");
 const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "approx", "roadmap"];
 $("tab-play").onclick = () => go("/playthrough");
@@ -5367,6 +5456,7 @@ function parsePath() {
   if (window.PLAYER_MODE && ["ledger", "runbook", "proposals", "tasks"].includes(view)) return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
   if (view === "ledger" || view === "runbook" || view === "proposals") return { view: "ledger", pane: seg[1] || null, id: seg[2] ? decodeURIComponent(seg[2]) : null };
   if (view === "analytics") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, scope: q.get("scope") || "all", vs: q.get("vs") || null, profile: q.get("profile") || "all", window: q.get("window") || "all" }; }
+  if (view === "coverage") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, session: q.get("session") || null, days: q.get("days") || "7" }; }
   if (view === "review") return { view, pane: null, id: null };
   if (view === "profiles") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   if (view === "tasks") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
@@ -5381,6 +5471,7 @@ function canonical(p) {
   if (p.view === "playthrough") return p.id ? `/playthrough/${p.id}` : "/playthrough";
   if (p.view === "ledger") return p.pane ? `/proposals/${p.pane}${p.id ? `/${encodeURIComponent(p.id)}` : ""}` : "/proposals";
   if (p.view === "analytics") return "/analytics" + anQuery(p.scope, p.vs, p.profile, p.window);
+  if (p.view === "coverage") { const q = new URLSearchParams(); if (p.session) q.set("session", p.session); if (p.days && String(p.days) !== "7") q.set("days", String(p.days)); const s = q.toString(); return `/coverage${s ? `?${s}` : ""}`; }
   return `/${p.view}`;
 }
 /* Where a hand page's "back" goes: the last LIST view the user was actually on —
@@ -5392,6 +5483,7 @@ const backLabel = (p) => !p ? "all hands"
   : p.startsWith("/sessions/") ? "this session"
   : p === "/sessions" ? "sessions"
   : p.startsWith("/analytics") ? "analytics"
+  : p.startsWith("/coverage") ? "coverage"
   : "all hands";
 function rememberList(path) {
   BACK_TO = path;
@@ -5418,7 +5510,7 @@ function route() {
   const want = canonical(PATH);
   if (location.pathname + location.search + location.hash !== want) history.replaceState({}, "", want);
   // any list view we land on becomes the one a hand page comes back to
-  if (!(PATH.view === "hands" && PATH.id) && ["hands", "sessions", "analytics"].includes(PATH.view)) rememberList(want);
+  if (!(PATH.view === "hands" && PATH.id) && ["hands", "sessions", "analytics", "coverage"].includes(PATH.view)) rememberList(want);
   for (const [v, tab] of Object.entries(TABS)) $(tab).classList.toggle("on", v === PATH.view);
   $("view-home").style.display = PATH.view === "home" ? "" : "none";
   $("view-hands").style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
@@ -5428,6 +5520,7 @@ function route() {
   $("table-filter").style.display = onHands && $("table-filter").dataset.avail === "1" ? "" : "none";
   $("view-detail").style.display = PATH.view === "hands" && PATH.id ? "" : "none";
   $("view-analytics").style.display = PATH.view === "analytics" ? "" : "none";
+  $("view-coverage").style.display = PATH.view === "coverage" ? "" : "none";
   $("view-sessions").style.display = PATH.view === "sessions" ? "" : "none";
   $("view-profiles").style.display = PATH.view === "profiles" ? "" : "none";
   $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
@@ -5455,6 +5548,7 @@ function route() {
   }
   if (PATH.view === "home") loadHome();
   if (PATH.view === "analytics") loadAnalytics();
+  if (PATH.view === "coverage") loadCheckCoverage();
   if (PATH.view === "sessions") { if (PATH.id) loadSession(PATH.id); else loadSessions(); }
   if (PATH.view === "profiles") loadProfiles();
   if (PATH.view === "sources") { srcPane = PATH.pane; if (SRC) showSrcPane(PATH.pane, PATH.id); else loadSources(); }

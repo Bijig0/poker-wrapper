@@ -923,6 +923,30 @@ table.sent-tbl td.k { min-width: 110px; white-space: nowrap; color: var(--muted)
 .chain-dz { color: var(--muted); }
 .chain-ok { color: var(--win); }
 
+/* the Checks tab (2026-09-27, services/chainChecks): the chain's seventeen invariants, per decision × street */
+.ck-top { margin: 0 0 6px; }
+.ck-dec { padding: 12px 0 6px; border-top: 1px solid var(--line); }
+.ck-dec-h { margin: 0 0 4px; }
+table.ck-tbl { width: auto; font-size: 12.5px; }
+table.ck-tbl th, table.ck-tbl td { padding: 3px 14px 3px 0; vertical-align: top; }
+table.ck-tbl td.ck-name { white-space: nowrap; }
+table.ck-tbl td.ck-cell { min-width: 44px; max-width: 380px; white-space: normal; }
+tr.ck-group td { padding-top: 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ck-why { color: var(--loss); font-size: 12px; }
+.ck-flag { color: var(--ev); font-weight: 600; }
+details.ck-path { margin: 4px 0 8px; font-size: 12.5px; }
+details.ck-path summary { cursor: pointer; color: var(--muted); }
+
+/* the Coverage tab (2026-09-27): one row per check — the rule, how it is checked, whether it is built, what it found */
+.ckc-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0 0; }
+table.ckc-tbl { font-size: 12.5px; }
+table.ckc-tbl td { vertical-align: top; white-space: normal; }
+table.ckc-tbl td.ckc-spec { min-width: 240px; max-width: 420px; }
+table.ckc-tbl td.ckc-how { min-width: 220px; max-width: 380px; color: var(--muted); font-size: 12px; }
+table.ckc-tbl td.num b.bad { color: var(--loss); }
+table.ckc-tbl td.num b.flag { color: var(--ev); }
+.ckc-hands a { margin-right: 6px; }
+
 /* the Actual tab: Ignition's own hand history, the lines the reader's capture disagrees with marked */
 .hh-verdict { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 2px 0 10px; }
 .hh-street { display: flex; gap: 8px; align-items: center; margin: 12px 0 4px; font-weight: 600; text-transform: capitalize; }

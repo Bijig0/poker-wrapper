@@ -104,7 +104,7 @@ app.get("/dashboard.css", () =>
     headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" },
   }));
 const OWNER_PAGES = ["/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*", "/tasks", "/tasks/*"];
-for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*", ...OWNER_PAGES]) {
+for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*", ...OWNER_PAGES]) {
   if (playerMode && OWNER_PAGES.includes(p)) app.get(p, (c) => c.redirect("/", 302));
   else app.get(p, dashboardPage);
 }

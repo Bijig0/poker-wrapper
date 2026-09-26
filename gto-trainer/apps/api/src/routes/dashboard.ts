@@ -41,6 +41,7 @@ import { preflopPathView, dealtFromTreeId } from "../services/gtowAiPreflop";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
 import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
+import { CHECKS, coverageReport } from "../services/chainChecks";
 
 /**
  * THE HAND'S CHAIN FACTS, for the hand page (2026-09-25, services/handFacts): the requests GTO Wizard served for it
@@ -1158,6 +1159,8 @@ app.get("/hand/:dbId", async (c) => {
     chain: e.clientHandId
       ? { verdict: handVerdicts(answers as PathRow[])[0] ?? null, facts: chainFactsOf(handFacts.get(String(e.clientHandId))) }
       : null,
+    // THE CHECKS TAB (2026-09-27): the seventeen invariants, so the page can name each row and say what it means
+    checkDefs: CHECKS,
   });
 });
 
@@ -2583,6 +2586,50 @@ app.get("/sessions/:id/technical", (c) => {
   } catch { /* the links are a convenience */ }
   const offTree = offTreeLog.forSession(id);
   return c.json({ ok: true, id, ...report, requestsByOrigin: byOrigin, rowids, offTree, offTreeFamilies: offTreeLog.families(offTree) });
+});
+
+/** hands.db rowids of FINISHED hands by the site's hand id (the hand page is addressed by rowid) — one indexed query */
+function rowidsByClientHandId(keys: Iterable<string>): Record<string, number> {
+  const want = [...new Set(keys)].filter((k) => k && k !== "?");
+  const out: Record<string, number> = {};
+  const d = openDb();
+  if (!d || !want.length) return out;
+  try {
+    for (let i = 0; i < want.length; i += 400) {
+      const chunk = want.slice(i, i + 400);
+      const rows = d.query<{ rowid: number; client_hand_id: string }, string[]>(
+        `SELECT rowid, client_hand_id FROM hands WHERE client_hand_id IN (${chunk.map(() => "?").join(",")}) AND ${FINISHED} ORDER BY rowid`).all(...chunk);
+      for (const r of rows) out[r.client_hand_id] = r.rowid;     // the last archived row of a hand wins, as allRows keeps it
+    }
+  } catch { /* the links are a convenience */ }
+  return out;
+}
+
+/**
+ * THE CHECKER COVERAGE (2026-09-27, services/chainChecks): one row per invariant of the postflop chain — the correct
+ * behaviour in the owner's words (the page IS the spec), how it is checked, whether it is built, and what it found
+ * over the window: pass / fail / flag / not-checked counts per decision, with the hands that failed. Read from the
+ * answers' stored paths (answers.path), so it covers every decision logged since the checks were deployed.
+ *   GET /coverage?days=7&session=<declared session id>
+ */
+app.get("/coverage", (c) => {
+  const days = Math.min(365, Math.max(1, Number(c.req.query("days") ?? 7) || 7));
+  const session = c.req.query("session") || null;
+  const all = answerLog.rows(days).filter((r) => r.path);
+  const bySession = new Map<string, { id: string; decisions: number; lastTs: number }>();
+  for (const r of all) {
+    if (!r.session_id) continue;
+    const s = bySession.get(r.session_id) ?? { id: r.session_id, decisions: 0, lastTs: 0 };
+    s.decisions++; s.lastTs = Math.max(s.lastTs, r.ts);
+    bySession.set(r.session_id, s);
+  }
+  const declared = new Map(sessionsStore.list(500).map((s) => [s.id, s]));
+  const sessions = [...bySession.values()].sort((a, b) => b.lastTs - a.lastTs)
+    .map((s) => ({ ...s, label: declared.get(s.id)?.label ?? null, startedAt: declared.get(s.id)?.startedAt ?? null }));
+  const rows = session ? all.filter((r) => r.session_id === session) : all;
+  const report = coverageReport(rows);
+  const rowids = rowidsByClientHandId(report.checks.flatMap((k) => k.examples.map((e) => e.hand)));
+  return c.json({ ok: true, days, session, sessions, ...report, rowids });
 });
 
 // EVERY OFF-TREE VILLAIN LINE of real play (services/offTreeLog, 2026-09-27), grouped into spot families with the hands
