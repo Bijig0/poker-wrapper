@@ -1,11 +1,17 @@
 /**
- * OFF-TREE VILLAIN LINES (2026-09-27, Brady: "mark when an action is off-tree by some threshold … later on we figure out
- * what the range actually looks like and nodelock"). A villain action the solver itself almost never takes: hand
- * 4920638634's HJ flop bet was 0.16% of the node, no hand above 0.41%, and worse than checking for every hand (median
- * 0.14bb). The chain still narrows his range by those frequencies — which there are convergence noise — so the next
- * streets are solved against an arbitrary slice of his range. DETECTION ONLY: nothing about the answer changes. The
- * lines are logged (services/offTreeLog) with villain's hand when Ignition's history shows it, the data a pool
- * range for node-locking these spots would be built from.
+ * VILLAIN MISTAKE LINES — "off-tree" villain lines (2026-09-27, Brady: "mark when an action is off-tree by some
+ * threshold … later on we figure out what the range actually looks like and nodelock"). A villain action the
+ * equilibrium almost never takes: hand 4920638634's HJ flop bet was 0.16% of the node, no hand above 0.41%, and worse
+ * than checking for every hand (median 0.14bb).
+ *
+ * THESE FREQUENCIES ARE NOT SOLVER NOISE (correction, 2026-09-27). GTO Wizard's custom solves are QRE — a quantal
+ * response equilibrium — since 2025-04-16: every action carries a small, deliberately modelled probability, larger
+ * for the hands it costs least. A 0.16% bet is the solver's model of a MISTAKE: which hands make it, and how often.
+ * The chain narrows villain's range by exactly that mistake distribution, so the next streets are solved against the
+ * hands QRE says would make this mistake — a model, but not the population's. That is why the line is worth
+ * flagging: the pool's mistakes are not QRE's. DETECTION ONLY: nothing about the answer changes, and a flag is never
+ * a verdict (chainChecks check #3). The lines are logged (services/offTreeLog) with villain's hand when Ignition's
+ * history shows it, the data a pool range for node-locking these spots would be built from.
  *
  * Pure: the chain computes the numbers on the node it already read.
  */

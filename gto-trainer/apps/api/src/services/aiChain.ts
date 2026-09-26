@@ -1198,8 +1198,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
       const kind = actionKindOf(a);
       if (kind === "Fold" && actor === heroIdx) return fail("hero folds inside the line before his node (capture corruption?)");
-      // AN OFF-TREE VILLAIN LINE (services/offTree): the solver takes this action almost never, from every hand — the
-      // range narrowed below rests on convergence noise. Flagged and logged; the walk goes on exactly as before.
+      // A VILLAIN MISTAKE LINE (services/offTree): the equilibrium takes this action almost never, from every hand. GTO
+      // Wizard's custom solves are QRE (since 2025-04-16), so these small frequencies are not noise: they are the
+      // solver's modelled mistake distribution, and the range narrowed below is "the hands QRE says would make this
+      // mistake". Flagged and logged (a flag, never a verdict — chainChecks #3); the walk goes on exactly as before.
       if (actor !== heroIdx) {
         const ot = offTreeStats(seats[actor]!.range, sols, ai);
         if (isOffTree(ot)) {

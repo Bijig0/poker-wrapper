@@ -411,10 +411,11 @@ function chainCheck(s) {
   if (!c.from) return `<br><span class="sub">starts from the preflop ranges (flop ranges column)</span>`;
   return `<br><span class="sub" title="${esc(c.why)}">not verified — ${esc(c.why)}</span>`;
 }
-/* OFF-TREE VILLAIN LINES (2026-09-27, services/offTree): an action the solver almost never takes — flagged, not acted on */
+/* VILLAIN MISTAKE LINES (2026-09-27, services/offTree): an action the equilibrium almost never takes — flagged, not acted
+   on. GTO Wizard's custom solves are QRE (since 2025-04-16): the small frequency is the solver's modelled mistake, not noise. */
 function chainOffTree(s) {
   const pc = (x) => `${(x * 100).toFixed(x < 0.001 ? 3 : 2)}%`;
-  return (s.offTree || []).map((l) => `<br><span class="chain-dz" title="the range narrowed by this action rests on solver noise — logged for a pool range later">⚑ off-tree: ${esc(l.seat)} ${esc(l.action)}${l.betsize != null ? ` ${esc(String(l.betsize))}` : ""} — solver ${pc(l.nodeFreq)}, no hand above ${pc(l.maxHand)}${l.evGapBb != null ? `, costs him ${Number(l.evGapBb).toFixed(2)}bb avg` : ""}</span>`).join("");
+  return (s.offTree || []).map((l) => `<br><span class="chain-dz" title="a villain mistake line: GTO Wizard's QRE solve models this action as a mistake at this frequency, so the range narrowed by it is QRE's model of who makes the mistake, not the pool's — flagged, not a verdict; logged for a pool range later">⚑ villain mistake line: ${esc(l.seat)} ${esc(l.action)}${l.betsize != null ? ` ${esc(String(l.betsize))}` : ""} — solver ${pc(l.nodeFreq)}, no hand above ${pc(l.maxHand)}${l.evGapBb != null ? `, costs him ${Number(l.evGapBb).toFixed(2)}bb avg` : ""}</span>`).join("");
 }
 function chainSolver(s) {
   if (s.how === "hit") return `<br><span class="sub">reused — not solved again</span>`;

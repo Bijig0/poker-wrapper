@@ -11,7 +11,7 @@ const node = (bet: (i: number) => number, evCheck: (i: number) => number, evBet:
 ];
 
 describe("off-tree villain lines (2026-09-27)", () => {
-  it("noise — every hand bets a sliver and every hand loses by it: flagged (hand 4920638634's HJ flop bet)", () => {
+  it("a villain mistake line — every hand bets a sliver and every hand loses by it: flagged (hand 4920638634's HJ flop bet)", () => {
     const s = offTreeStats(range(), node((i) => 0.001 + (i % 4) * 0.001, () => 1.0, () => 0.86), 1);
     expect(s.nodeFreq).toBeLessThan(0.01);
     expect(s.maxHand).toBeCloseTo(0.004, 6);
