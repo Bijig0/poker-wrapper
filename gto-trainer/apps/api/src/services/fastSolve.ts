@@ -23,12 +23,17 @@ import { walkFitted, foldSeatsOut, actorsWithAllins } from "../utils/fitLine/fit
 import { reconstructFlopRanges, classWeightsToSpec, withRangeWalkCapture, replayRangeWalks, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
-import { effectiveBehind, solveAiChain, type AiChainResult, type ChainTrace, type ChainTraceNode } from "./aiChain";
+import { effectiveBehind, rangesFp, solveAiChain, type AiChainResult, type ChainTrace, type ChainTraceNode } from "./aiChain";
 import { offTreeLog } from "./offTreeLog";
 import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
+import {
+  addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkMix,
+  checkPotStack, checkPreflopInRange, checkRake, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
+} from "./chainChecks";
+import { roundContributions } from "../utils/archivedHand/archivedHand";
 import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
@@ -1116,6 +1121,144 @@ const streetPathOf = (s: ChainTrace["streets"][number], plan: string | null, nod
   ...(((ot) => (ot.length ? { offTree: ot } : {}))(nodes.filter((n) => n.street === s.street && n.offTree).map((n) => n.offTree!))),
 });
 
+const CHAIN_STREETS = ["flop", "turn", "river"] as const;
+const ROUND_ORDER = ["preflop", "flop", "turn", "river"] as const;
+
+/**
+ * THE CHECKS AGAINST THE CAPTURE, per street of every walk (services/chainChecks, 2026-09-27). The walk recorded what it
+ * could see itself on each street (aiChain: ranges, seats, the line, trees, reads, time, hero's node); what needs the
+ * TABLE is checked here, on every street of every walk of this answer — the memo hits included, since the answer rests
+ * on them too:
+ *   #1  turn/river: the hand-off check the walk recorded; the flop: where its ranges came from (the arrival) and that
+ *       the flop's recorded input fingerprint is the ranges this tree request was built from
+ *   #5  the tree's pot entering the street (and at hero's node) against the capture's money — every seat's chips per
+ *       street from the betting line, plus antes and dead posts — and the tree's stack against hero vs the deepest
+ *       villain still in, from the stacks as dealt less the earlier streets' chips
+ *   #7  the rake the tree request carried, against the table's and against every other tree of the hand
+ *   #8  the street's board against the capture's
+ * A collapse plan's results carry the plan's name; the walk's own process checks on a memo-hit street describe the
+ * decision that walked it (asWalkedEarlier). Pure over its inputs.
+ */
+export function chainPathChecks(a: {
+  hand: ParsedHand;
+  walks: { kind: string | null; trace?: ChainTrace }[];
+  arrival: ArrivalPath | undefined;
+  /** chips in the pot no betting action carries: antes, a folded poster's post */
+  potExtra: number;
+  /** each seat's stack as dealt (bb), by seat id */
+  dealt: Record<number, number> | null;
+  /** the table's seat → the tree's position name (heads-up the dealer is the tree's SB) */
+  treePos: (seatId: number) => string | null;
+  rake: RakeSpec | null;
+  site: string | null;
+  /** every tree of the hand (services/handFacts tree ledger): its street and rake */
+  handTrees: { k: number; rake?: RakeSpec | null }[];
+}): PathChecks {
+  const { hand } = a;
+  const contrib = roundContributions(hand);
+  const chipsOn = (st: string) => [...(contrib.get(st)?.values() ?? [])].reduce((s, x) => s + x, 0);
+  const potBefore = (k: number) => ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + chipsOn(st), 0) + a.potExtra;
+  const cur = hand.currentNode.street;
+  const heroTree = a.treePos(hand.heroSeatId);
+  /** each tree position's stack behind entering street k (flop = 0), from the dealt stacks and the earlier streets */
+  const behindAt = (k: number): Record<string, number> | null => {
+    if (!a.dealt) return null;
+    const out: Record<string, number> = {};
+    for (const [sid, d] of Object.entries(a.dealt)) {
+      const pos = a.treePos(Number(sid));
+      if (!pos || !Number.isFinite(d)) continue;
+      const spent = ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + (contrib.get(st)?.get(Number(sid)) ?? 0), 0);
+      out[pos.toUpperCase()] = Math.max(0, d - spent);
+    }
+    return out;
+  };
+  const checks: PathChecks = {};
+  for (const w of a.walks) {
+    const tr = w.trace;
+    if (!tr) continue;
+    const sp = tr.spec;
+    const specFp = rangesFp([{ pos: sp.oopPos, range: sp.oopRange }, ...(sp.midPos && sp.midRange ? [{ pos: sp.midPos, range: sp.midRange }] : []), { pos: sp.ipPos, range: sp.ipRange }]);
+    const lastResort = /^last-resort/.test(w.kind ?? "");
+    for (const s of tr.streets) {
+      const k = s.si + (sp.firstStreet ?? 0);
+      const st = CHAIN_STREETS[k] ?? "flop";
+      const own = (s.checks ?? []).map((c) => (s.fromCheckpoint ? asWalkedEarlier(c) : c));
+      const out: CheckResult[] = [...own];
+      // #1
+      if (s.si === 0 && k === 0) out.push(checkFlopArrival({ arrival: a.arrival, started: s.rangeCheck?.inFp ?? null, expected: specFp }));
+      else out.push(checkHandoff(s.rangeCheck));
+      // #5
+      const beh = behindAt(k);
+      const eff = beh && heroTree ? effectiveBehind((s.players ?? [sp.oopPos, sp.ipPos]).map((p) => p.toUpperCase()), heroTree.toUpperCase(), beh) : Infinity;
+      const isCur = st === cur;
+      const heroNode = isCur ? tr.nodes.find((x) => x.si === s.si && x.heroNode) : undefined;
+      out.push(checkPotStack({
+        street: st, potIn: s.potIn, capturePot: potBefore(k), stackIn: s.stackIn, captureStack: Number.isFinite(eff) ? eff : null,
+        ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + chipsOn(st) } : {}),
+        plan: w.kind, skipPotIn: lastResort && s.si === 0,
+      }));
+      // #7
+      const rakeOf = (x: unknown) => (x as { rake?: RakeSpec } | null | undefined)?.rake ?? null;
+      out.push(checkRake({
+        rake: rakeOf(s.sent), expected: a.rake, site: a.site,
+        others: [
+          ...tr.streets.filter((o) => o !== s).map((o) => ({ street: o.street.toLowerCase(), rake: rakeOf(o.sent) })),
+          ...a.handTrees.map((t) => ({ street: CHAIN_STREETS[t.k] ?? `street ${t.k}`, rake: t.rake ?? null })),
+        ],
+      }));
+      // #8
+      out.push(checkBoard({ board: s.board, capture: hand.board ?? [], k, heroCards: (hand.heroCards ?? []).filter((c) => /^[2-9TJQKA][shdc]$/i.test(c)) }));
+      addChecks(checks, st, out, w.kind);
+    }
+  }
+  return checks;
+}
+
+/**
+ * THE DECISION'S OWN CHECKS (services/chainChecks, 2026-09-27) — on the answer, whichever piece produced it: the whole
+ * answer inside the table's clock (#12), its actions consistent with what hero can press (#14), a valid mix (#15), for
+ * the decision it was asked for (#16), and preflop the chart's range holding hero's class (#17; postflop the walk
+ * checked his combo at the node). A refusal surfaces the guard that made it: a card dealt twice or a board that is
+ * not a street (#8), an all-zero mix (#15) — as fails the refusal's own reason already reports.
+ */
+export function decisionChecks(hand: ParsedHand, value: FastSolveResult, origin: string | null, ms: number, heroPos: string | null): CheckResult[] {
+  const street = hand.currentNode?.street ?? "?";
+  if (!value.ok) {
+    const out: CheckResult[] = [];
+    const code = `fault:${value.kind || "no-answer"}`;
+    // unsolvableCapture's words: "hero holds Th and Th is on the board", "hero holds Th twice", "Th appears twice on the board"
+    if (value.kind === "board-incomplete" || (value.kind === "capture-fault" && /is on the board|holds \S+ twice|appears twice on the board/.test(value.reason))) {
+      out.push({ id: 8, status: "fail", text: `the capture gate refused the decision: ${value.reason.slice(0, 220)}`, covered: code });
+    }
+    if (/has every action at 0%/.test(value.reason)) {
+      out.push({ id: 15, status: "fail", text: `the zero-mix guard refused the answer: ${value.reason.slice(0, 220)}`, covered: code });
+    }
+    return out;
+  }
+  const hu = Object.keys(hand.positions ?? {}).length === 2;
+  const heroName = hand.positions?.[hand.heroSeatId] ?? heroPos;
+  const key = `${street} · ${(hand.board ?? []).join("") || "no board"} · ${(hand.heroCards ?? []).join("")} · to call ${Math.round((hand.currentNode?.toCall ?? 0) * 100) / 100} · after ${hand.actions.length} actions`;
+  return [
+    checkAnswerClock({ ms, origin }),
+    checkButtons({
+      actions: value.actions ?? [], toCall: hand.currentNode?.toCall ?? null, heroBehind: hand.stacks?.[hand.heroSeatId] ?? null,
+      legal: hand.currentNode?.legalActions ?? [], nodePos: street === "preflop" ? value.pos : null, heroPos: heroName, hu,
+    }),
+    checkMix(value.actions ?? []),
+    checkFresh({ answerStreet: value.street, handStreet: street, key }),
+    ...(street === "preflop" ? [checkPreflopInRange({ notInRange: value.notInRange, heroClass: value.heroClass })] : []),
+  ];
+}
+
+/** A path with more checks on one street, classified again (its fault, if any, kept). */
+function withChecks(p: DecisionPath, street: string, xs: CheckResult[]): DecisionPath {
+  if (!xs.length) return p;
+  const st = (["preflop", "flop", "turn", "river"].includes(street) ? street : "preflop") as CheckStreet;
+  const checks = addChecks({ ...(p.checks ?? {}) }, st, xs);
+  const { v: _v, verdict: _vd, reasons, ...rest } = p;
+  return classifyPath({ ...rest, checks, fault: reasons.find((r) => r.v === "fault") ?? null });
+}
+
 /**
  * Postflop via the PER-STREET AI CHAIN (services/aiChain.ts) — the primary
  * path. Flop tree from chart-reconstructed preflop ranges; each observed
@@ -1667,7 +1810,15 @@ async function solvePostflopViaChain(
     decision: pickWeightedAction(actions),
     approx: true,
     warning: sixNote,
-    path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))) }),
+    path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
+      // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
+      checks: chainPathChecks({
+        hand, walks, arrival: arrivalPath,
+        potExtra: 2 * anteHu + deadPostsBb(hand.postIns, cur) + (!huCp && hand.anteBb ? hand.anteBb * Object.keys(hand.positions ?? {}).length : 0),
+        dealt: pinnedDealt ?? dealtBySeat(hand), treePos: chainPos, rake: rake6,
+        site: sixMax ? `the table's: 5%, capped by the players dealt` : huCp ? "CoinPoker HU NL200" : null,
+        handTrees: handFacts.trees(String(hand.clientHandId ?? hand.handId ?? "")),
+      }) }),
   },
   // THE RIVER MES INPUT (2026-09-22): a heads-up river walked as ONE tree carries every seat's exact river-entry
   // range in its trace — all services/riverMes.ts needs to solve the river locally against the pool. Blended
@@ -2923,11 +3074,14 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   const run = () => withRequestScope(
     { handKey, origin: opts.origin ?? "adhoc", street: hand.currentNode?.street ?? null },
     () => fastSolveEntry(hand, heroPos, opts));
+  const t0 = Date.now();
   const { value, scope } = live ? await asLive(run) : await run();
   if (handKey) handFacts.addRequests(handKey, scope.origin, scope.counts);
   const street = hand.currentNode?.street ?? "?";
-  const path: DecisionPath = value.path
+  const path0: DecisionPath = value.path
     ?? (value.ok ? classifyPath({ street, streets: [] }) : faultPath(street, (value as { kind?: string }).kind ?? null, value.reason));
+  // the decision's own checks (services/chainChecks): the clock, the buttons, the mix, the key, hero's class preflop
+  const path = withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos));
   return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin } } as FastSolveResult;
 }
 

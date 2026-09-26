@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { gtowApi, DEFAULT_TREE_RAKE } from "./gtowApi";
 import { actorsOf, checkpointsFor, effectiveBehind, forgetCheckpoints, solveAiChain, StreetState, type AiChainSpec } from "./aiChain";
+import { withRequestScope } from "./requestScope";
+import { solveTimes, type CheckResult } from "./chainChecks";
+import { comboIndex } from "../utils/comboIndex/comboIndex";
 
 describe("StreetState", () => {
   it("heads-up: check-check closes, bet-call closes, a bet re-opens", () => {
@@ -833,5 +836,72 @@ describe("the stack of the players still in (seatStacks, hand 4920544353)", () =
     expect(r2.stackStreet).toBe(21.6);
     expect(r2.stackNotes?.[0]).toContain("solved at 21.6bb");
     forgetCheckpoints("hand-4920544353");
+  });
+});
+
+describe("the street's checks, as the walk sees them (services/chainChecks, 2026-09-27)", () => {
+  const nodes: Record<string, Node> = {
+    "sol-FLOP|": { toAct: "BB", acts: [X, B(3)] },
+    "sol-FLOP|X": { toAct: "CO", acts: [X, B(3)] },
+    "sol-FLOP|X-R3": { toAct: "BB", acts: [F, C(3)] },
+    "sol-TURN|": { toAct: "BB", acts: [X, B(6)] },
+    "sol-TURN|X": { toAct: "CO", acts: [X, B(6)] },
+  };
+  const AdKc = comboIndex("Ad", "Kc");
+  const spec = (streets: string[][], board: string, handKey: string): AiChainSpec => ({
+    oopPos: "BB", ipPos: "CO", oopRange: full(), ipRange: full(), flopPot: 6, flopStack: 97.5,
+    board, heroSeat: "ip", heroComboIdx: AdKc, streets, handKey,
+  });
+  const byId = (xs: CheckResult[] | undefined) => Object.fromEntries((xs ?? []).map((c) => [c.id, c.status]));
+  /** the scripted API, answering every tree under the solution id `sol()` gives */
+  const withSolId = (sol: () => string) => {
+    const api = gtowApi as any;
+    const inner = api.ensureCustomSolution;
+    api.ensureCustomSolution = async (input: any) => ({ ...(await inner(input)), solId: sol() });
+    return () => { api.ensureCustomSolution = inner; };
+  };
+
+  it("every street carries #2 #3 #4 #6 #9 #10 #11 #12; hero's street adds #14 and #17", async () => {
+    forgetCheckpoints("hand-checks-1");
+    solveTimes.reset();   // #12 is "na" until the street has a baseline
+    const s = script(nodes);
+    restore = s.restore;
+    const r = await solveAiChain(spec([["X", "R3", "C"], ["X"]], "Ts7h2d8c", "hand-checks-1"));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const [flop, turn] = r.trace.streets;
+    expect(byId(flop!.checks)).toEqual({ 2: "pass", 3: "pass", 4: "pass", 6: "pass", 9: "pass", 10: "pass", 11: "na", 12: "na" });
+    expect(byId(turn!.checks)).toEqual({ 2: "pass", 3: "pass", 4: "pass", 6: "pass", 9: "pass", 10: "pass", 11: "na", 12: "na", 14: "pass", 17: "pass" });
+    expect(flop!.checks!.find((c) => c.id === 6)!.text).toContain("3 actions walked as captured");
+    expect(turn!.checks!.find((c) => c.id === 17)!.text).toContain("hero's AdKc carries weight");
+    expect(turn!.checks!.find((c) => c.id === 4)!.text).toContain("GTO Wizard named the same seat to act");
+    forgetCheckpoints("hand-checks-1");
+  });
+
+  it("#11: the live walk on the warm-up's tree passes; on another size-free tree it fails, and #9 sees two default trees", async () => {
+    forgetCheckpoints("hand-checks-2");
+    const s = script({ ...nodes, "sol-OTHER|": nodes["sol-FLOP|"]!, "sol-OTHER|X": nodes["sol-FLOP|X"]! });
+    let sol = "sol-FLOP";
+    const undo = withSolId(() => sol);
+    restore = () => { undo(); s.restore(); };
+    // the warm-up opens the flop when it lands (BB to act: its walk ends on villain's turn — its tree is recorded anyway)
+    await withRequestScope({ handKey: "hand-checks-2", origin: "warm", street: "flop" }, () => solveAiChain(spec([[]], "Ts7h2d", "hand-checks-2")));
+    const live = await withRequestScope({ handKey: "hand-checks-2", origin: "live", street: "flop" }, () => solveAiChain(spec([["X"]], "Ts7h2d", "hand-checks-2")));
+    expect(live.value.ok).toBe(true);
+    if (!live.value.ok) return;
+    expect(live.value.trace.streets[0]!.checks!.find((c) => c.id === 11)!.status).toBe("pass");
+    // the same street asked again, live, on ANOTHER size-free tree (its key drifted) — no size pinned to explain it
+    forgetCheckpoints("hand-checks-3");
+    sol = "sol-FLOP";
+    await withRequestScope({ handKey: "hand-checks-3", origin: "warm", street: "flop" }, () => solveAiChain(spec([[]], "Ts7h2d", "hand-checks-3")));
+    sol = "sol-OTHER";
+    const drift = await withRequestScope({ handKey: "hand-checks-3", origin: "live", street: "flop" }, () => solveAiChain(spec([["X"]], "Ts7h2d", "hand-checks-3")));
+    expect(drift.value.ok).toBe(true);
+    if (!drift.value.ok) return;
+    const cks = drift.value.trace.streets[0]!.checks!;
+    expect(cks.find((c) => c.id === 11)!.status).toBe("fail");
+    expect(cks.find((c) => c.id === 9)!.status).toBe("fail");
+    forgetCheckpoints("hand-checks-2");
+    forgetCheckpoints("hand-checks-3");
   });
 });

@@ -11,6 +11,11 @@ import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPc
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
+import { currentRequestScope } from "./requestScope";
+import {
+  checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime,
+  checkTrees, checkWarmTree, solveTimes, type CheckResult,
+} from "./chainChecks";
 
 /**
  * Per-street AI chain — the live-play version of routes/aiStudy.ts's walk:
@@ -191,6 +196,11 @@ export interface ChainTrace {
     oopIn: number[]; ipIn: number[];
     /** did the street start from the previous street's solved output (chainPath.RangeCheck, 2026-09-26) */
     rangeCheck?: RangeCheck;
+    /** THE CHAIN'S INVARIANTS the walk itself can see, as of the end of this street's walk (services/chainChecks,
+     *  2026-09-27): ranges sane, villain mistake lines, seats, the line as walked, trees, node reads, the warm-up's
+     *  tree, the street's time, and on the decision street hero's node and combo. They travel with the street's
+     *  checkpoint, so a memo hit on a later decision still shows how the street was walked. */
+    checks?: CheckResult[];
   }[];
   nodes: ChainTraceNode[];
   /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
@@ -807,6 +817,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // on Ad9s6d. It surfaced with the 6-max charts, whose 2-4% mixes put hero's class under the floor often
     // (3 of the first 30 postflop spots). Lifting every unblocked combo of the class is suit-symmetric by
     // construction and changes villain's picture of hero by a rounding error.
+    /** hero's combo weight BEFORE the floor (#2 says when the floor lifted it); unknown on a resumed street */
+    const heroBefore = !resuming && spec.heroComboIdx != null ? (seats[heroIdx]!.range[spec.heroComboIdx] ?? 0) : null;
     if (spec.heroComboIdx != null) {
       const heroArr = seats[heroIdx]!.range;
       const boardIdx = new Set(cards.slice(0, 3 + k).map(cardIdx));
@@ -819,6 +831,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
 
     /** the seats as they enter the street, post-floor — what the tree is keyed on and what a mid-street checkpoint restores */
     const entering = seats.map((s) => ({ ...s, range: s.range.slice() }));
+    // #2 RANGES SANE (services/chainChecks), on exactly what the tree is asked to solve
+    const saneCheck = checkRangesSane({ seats: entering, heroIdx, heroCombo: spec.heroComboIdx, heroBefore, board: cards.slice(0, 3 + k) });
 
     // Engine labels for this street's tokens (Bet vs Raise by outstanding
     // wager; RAI = all-in to the street-entering stack), and who acts on each.
@@ -830,6 +844,12 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     } catch (e) {
       return fail(`tokens: ${e instanceof Error ? e.message : e}`);
     }
+    /** the street's actions AS CAPTURED — `labels` may be rewritten onto a cached tree's sizes below (#6 compares) */
+    const captured = labels.slice();
+    /** #4: nodes whose GTO Wizard seat-to-act was compared with the rotation (a disagreement stops the walk) */
+    let seatAgreed = 0, seatUnnamed = 0;
+    let heroNodeSaid: string | null = null;
+    const origin = currentRequestScope()?.origin ?? null;
 
     const nodeSrc = { cache: 0, joined: 0, fetched: 0, fetchMs: 0 };
     const nodeLeaks: string[] = [];
@@ -937,6 +957,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
       sent: null as unknown, account: null as string | null,
       rangeCheck: undefined as RangeCheck | undefined,
+      checks: undefined as CheckResult[] | undefined,
     };
     trace.streets.push(streetRec);
     streetRec.rangeCheck = rangeCheckOf({
@@ -965,6 +986,17 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     streetRec.treeWhy = ens.created ? ens.why ?? "created (no reason recorded)" : null;
     tspan(`chain ${STREET[k]} tree ${ens.created ? "CREATED" : "cached"}`, tSolve,
       ens.created ? streetRec.treeWhy ?? undefined : `solution ${String(ens.solId).slice(0, 8)}`);
+    // THE HAND'S TREE LEDGER (services/handFacts TreeRecord, 2026-09-27): every tree asked for, by street, plan and
+    // origin — the warm-up's included, whether or not its walk reached hero — for checks #4, #7, #9 and #11
+    const recordTree = (reroute: boolean) => {
+      if (!handKey) return;
+      handFacts.recordTree(handKey, {
+        k, first, plan, origin, solId: String(ens.ok ? ens.solId : ""), sizeFree: !fixedLevels, fixed: fixedLevels,
+        seats: seats.map((s) => s.pos), rake: ((streetRec.sent as { rake?: { pct_of_pot: number; cap_in_chips: number } } | null)?.rake) ?? null,
+        created: !!(ens.ok && ens.created), ...(reroute ? { reroute: true } : {}), at: Date.now(),
+      });
+    };
+    recordTree(false);
     const tWalk = Date.now();
 
     let st = new StreetState(n);
@@ -1001,6 +1033,45 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
     const streetNodesStart = trace.nodes.length - (streetRec.resumedAt != null ? resuming!.nodes.length : 0);
+    /**
+     * THE STREET'S CHECKS (services/chainChecks, 2026-09-27), once its walk is done — at the close, or at hero's node.
+     * Everything here is already in hand: the entering ranges (#2, computed above), the street's node records (#3, #6),
+     * the seat agreement counted at every node read (#4), the tree and its leak (#9, #10), the hand's tree ledger (#9,
+     * #11, the warm-up's seating for #4), the street's wall-clock against its rolling median (#12), and at hero's node
+     * the seat GTO Wizard named (#14) and hero's combo weight in his conditioned range (#17).
+     */
+    const street = STREET[k]!.toLowerCase();
+    const finishChecks = (atHero: boolean): void => {
+      const nodes = trace.nodes.filter((x) => x.si === si);
+      const walkedActs = captured.map((_, ti) => {
+        const nd = nodes.find((x) => x.ti === ti && x.taken != null);
+        const a = nd ? nd.actions[nd.taken!] : undefined;
+        return a ? { name: a.name, betsize: a.betsize } : null;
+      });
+      const villainActs = nodes.filter((x) => x.taken != null && x.actor !== heroIdx).length;
+      const offs = nodes.filter((x) => x.offTree).map((x) => x.offTree!);
+      const trees = handKey ? handFacts.trees(handKey).filter((t) => t.k === k && t.first === first && (t.plan ?? null) === plan) : [];
+      const warm = trees.filter((t) => t.origin === "warm");
+      const ms = streetRec.solveMs + streetRec.walkMs;
+      const timeKey = `${STREET[k]}:${streetRec.created ? "new" : "cached"}`;
+      const base = solveTimes.median(timeKey);
+      const out: CheckResult[] = [
+        saneCheck,
+        checkMistakeLines(offs, villainActs),
+        checkSeats({ players: streetRec.players, agreed: seatAgreed, unnamed: seatUnnamed, warmSeats: warm[0]?.seats ?? null, origin }),
+        checkLine({ captured, walked: walkedActs }),
+        checkTrees({ street, tree: streetRec.created ? "created" : "cached", leak: streetRec.leak, trees }),
+        checkNodeReads({ leak: streetRec.leak, reads: streetRec.nodeSrc }),
+        checkWarmTree({ street, origin, solId: streetRec.solId, fixed: fixedLevels, warm: [...new Set(warm.map((t) => t.solId))] }),
+        checkSolveTime({ street, ms, median: base.median, samples: base.samples, created: streetRec.created }),
+      ];
+      solveTimes.record(timeKey, ms);
+      if (atHero) {
+        out.push(checkHeroNode({ heroPos, nodeSaid: heroNodeSaid }));
+        out.push(checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null }));
+      }
+      streetRec.checks = out;
+    };
     // THIS STREET'S PROVENANCE (2026-09-25, services/chainPath): resumed, walked for the first time, or walked again —
     // and then which rule (by design) or which miss (rebuilt) made it so, from the hand's own ledger
     if (rootKey) {
@@ -1085,6 +1156,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           streetRec.account = again.session;
           streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}re-created on another account after a 429 mid-walk`;
           streetRec.leak = { code: "tree:429-reroute", why: `the ${STREET[k]!.toLowerCase()} tree was re-created on another GTO Wizard account after a 429 mid-walk` };
+          recordTree(true);
           ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(ens.solId, codes.join("-")));
         }
       }
@@ -1127,6 +1199,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         if (said && norm(String(said)) !== norm(seats[actor]!.pos)) {
           return fail(`seat rotation disagrees with GTO Wizard at ${STREET[k]}#${ti}: we have ${seats[actor]!.pos} to act, the node says ${said}`);
         }
+        // #4 / #14: the agreement is a passed check, counted (services/chainChecks)
+        if (said) seatAgreed++; else seatUnnamed++;
+        if (ti === labels.length) heroNodeSaid = said ? String(said) : null;
       }
       const nodeRec: ChainTraceNode = {
         si, ti, street: STREET[k]!, board: streetBoard, codes: codes.slice(), actor,
@@ -1170,6 +1245,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         // the river) showing up as unexplained time. Record it here. (2026-09-22)
         streetRec.walkMs = Date.now() - tWalk;
         if (!streetRec.leak && nodeLeaks.length) streetRec.leak = { code: "node:read-twice", why: nodeLeaks[0]! };
+        finishChecks(true);
         const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.potIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
@@ -1275,7 +1351,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
     }
     streetRec.walkMs = Date.now() - tWalk;
-        if (!streetRec.leak && nodeLeaks.length) streetRec.leak = { code: "node:read-twice", why: nodeLeaks[0]! };
+    if (!streetRec.leak && nodeLeaks.length) streetRec.leak = { code: "node:read-twice", why: nodeLeaks[0]! };
+    // the street's checks (the checkpoint saved at the close holds this very record, so it carries them too)
+    if (closed) finishChecks(false);
     if (spec.walkThrough && isLast && closed) {
       const rangesOut: Record<string, number[]> = {};
       for (const x of seats) rangesOut[x.pos] = x.range;

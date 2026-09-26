@@ -69,12 +69,40 @@ export interface StreetRecord {
   at: number;
 }
 
+/**
+ * ONE TREE THE CHAIN ASKED GTO WIZARD FOR (2026-09-27, the coverage checks). A StreetRecord says which ranges a street
+ * was walked from; it is keyed by those, so a later walk of the same street under the same inputs replaces it — the
+ * street warm-up's record is gone by the time hero's decision could compare with it, and a warm that ended on
+ * villain's turn never wrote one. The tree ledger keeps every tree asked for, by street, plan and origin: what the
+ * "no unnecessary trees" (#9), "warm-up tree = live tree" (#11), "warm-up seating = live seating" (#4) and "rake
+ * identical on every street" (#7) checks read.
+ */
+export interface TreeRecord {
+  k: number;
+  first: number;
+  plan: string | null;
+  /** who asked: "live", "warm", "replay", … (services/requestScope); null outside a scope */
+  origin: string | null;
+  solId: string;
+  /** the street's size-free tree (AUTOMATIC heads-up, the fixed grid three-way) — or one with sizes pinned */
+  sizeFree: boolean;
+  fixed?: string[] | null;
+  /** the seats in acting order, as the tree holds them */
+  seats: string[];
+  rake?: { pct_of_pot: number; cap_in_chips: number } | null;
+  created: boolean;
+  /** re-created on another account after a 429 mid-walk (allowed by #9) */
+  reroute?: boolean;
+  at: number;
+}
+
 export interface HandDoc {
   key: string;
   heroCards?: string | null;
   preflop?: PreflopPin;
   dealt?: DealtFact;
   streets?: StreetRecord[];
+  trees?: TreeRecord[];
   /** GTO Wizard requests spent on this hand, by the origin of the call that made them ("live", "warm", …) */
   requests?: Record<string, RequestCounts>;
   at: number;
@@ -83,6 +111,7 @@ export interface HandDoc {
 const RETAIN_DAYS = 30;
 const MEMORY_MAX = 600;
 const STREETS_MAX = 60;
+const TREES_MAX = 40;
 
 /** A key worth persisting: a real site hand id, not the wrapper's small per-process counter (see above). */
 export const isDurableKey = (key: string): boolean => !!key && !/^\d{1,6}$/.test(key);
@@ -222,7 +251,18 @@ class HandFacts {
     });
   }
   forgetStreets(key: string): void {
-    if (this.get(key)?.streets) this.update(key, (d) => { delete d.streets; });
+    const d0 = this.get(key);
+    if (d0?.streets || d0?.trees) this.update(key, (d) => { delete d.streets; delete d.trees; });
+  }
+
+  // ── the trees the chain asked for (TreeRecord) ───────────────────────────────────────────────────────────────
+  trees(key: string): TreeRecord[] { return this.get(key)?.trees ?? []; }
+  /** One per tree, street, plan and origin — a cached tree asked for again changes nothing. */
+  recordTree(key: string, rec: TreeRecord): void {
+    const same = (x: TreeRecord) => x.solId === rec.solId && x.k === rec.k && x.first === rec.first && (x.plan ?? null) === (rec.plan ?? null)
+      && (x.origin ?? null) === (rec.origin ?? null) && !!x.reroute === !!rec.reroute;
+    if (this.trees(key).some(same)) return;
+    this.update(key, (d) => { d.trees = [...(d.trees ?? []), rec].slice(-TREES_MAX); });
   }
 
   // ── the requests the hand cost ──────────────────────────────────────────────────────────────────────────────

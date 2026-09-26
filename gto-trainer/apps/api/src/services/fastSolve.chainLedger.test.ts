@@ -86,9 +86,12 @@ function nodeOf(solId: string, q: any): any {
     for (const x of grid(0.1)) acts.push({ code: `R${x}`, name: "Bet", betsize: x });
     acts.push({ code: `R${stack}`, name: "Allin", betsize: stack });
   }
+  // every hand mixes the node's actions evenly: a strategy that sums to 1 per hand, as GTO Wizard's does (the
+  // "mix valid" check, chainChecks #15, reads hero's mix off it)
+  const even = new Array(1326).fill(1 / acts.length);
   return {
     game: { players: seats.map((p, i) => ({ position: p, is_hero: i === st.actor })) },
-    action_solutions: acts.map((a) => ({ action: { code: a.code, display_name: a.name, betsize: a.betsize ?? "", position: seats[st.actor] }, total_frequency: 1 / acts.length, total_ev: 0, strategy: U, evs: U })),
+    action_solutions: acts.map((a) => ({ action: { code: a.code, display_name: a.name, betsize: a.betsize ?? "", position: seats[st.actor] }, total_frequency: 1 / acts.length, total_ev: 0, strategy: even, evs: U })),
   };
 }
 const nodeKey = (solId: string, q: any) => JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
@@ -129,6 +132,8 @@ const ask = (i: number) => {
   return fastSolve(withStartStacks(truncateAt(h, i)), h.positions[h.heroSeatId] ?? null, { strategyId: STRATEGY, origin: "live" }) as Promise<any>;
 };
 const hows = (r: any) => (r.path?.streets ?? []).map((s: any) => `${s.street}:${s.how}`);
+/** a street's checks (services/chainChecks) as id → status */
+const checkMap = (r: any, street: string) => Object.fromEntries((r.path?.checks?.[street] ?? []).map((c: any) => [c.id, c.status]));
 /** each street's hand-off check: from which street, and whether it held */
 const checks = (r: any) => (r.path?.streets ?? []).map((s: any) => `${s.street}<${s.check?.from ?? "preflop"}:${s.check?.ok}`);
 
@@ -196,6 +201,24 @@ describe.skipIf(gated)("the chain ledger: each street's ranges computed once, re
     expect((facts.streets ?? []).filter((s) => s.kind === "closed").map((s) => s.k).sort()).toEqual([0, 1]);
   });
 
+  test("the chain's invariants (services/chainChecks): every check on every street holds, nothing fails", async () => {
+    const r = await ask(RIVER);
+    expect(r.ok).toBe(true);
+    for (const st of ["flop", "turn", "river"]) {
+      const m = checkMap(r, st);
+      expect(Object.values(m).filter((s) => s === "fail")).toEqual([]);
+      // the inputs and the process, checked on every street against the capture and the hand's ledgers
+      for (const id of [1, 2, 4, 5, 6, 7, 8, 9, 10]) expect([st, id, m[id]]).toEqual([st, id, "pass"]);
+    }
+    // the decision's own: hero's node, the mix, the key, hero's combo — on the river
+    const river = checkMap(r, "river");
+    for (const id of [14, 15, 16, 17]) expect([id, river[id]]).toEqual([id, "pass"]);
+    expect(river[12]).toBeDefined();                      // the clock (the street's baseline may still be collecting)
+    expect(r.path.checks.flop.find((c: any) => c.id === 1).text).toContain("preflop pin");
+    expect(r.path.checks.river.find((c: any) => c.id === 5).text).toContain("16.9bb at hero's node");
+    expect(r.path.checks.river.find((c: any) => c.id === 7).text).toContain("5% cap");
+  });
+
   test("the hand-off check: the turn started from the flop solve's output, the river from the turn's", async () => {
     const turn = await ask(TURN);
     expect(checks(turn)).toEqual(["flop<preflop:null", "turn<flop:true"]);
@@ -238,6 +261,11 @@ describe.skipIf(gated)("the chain ledger: each street's ranges computed once, re
     expect(r.ok).toBe(true);
     expect(r.path.verdict).toBe("clean");
     expect(r.path.streets[0].tree).toBe("cached");    // the warm-up's tree, not a second one
+    // …and the checks say so: the live flop walked the warm-up's tree (#11), seated as the warm-up did (#4)
+    const flop = checkMap(r, "flop");
+    expect([flop[11], flop[4], flop[9]]).toEqual(["pass", "pass", "pass"]);
+    expect(r.path.checks.flop.find((c: any) => c.id === 11).text).toContain("the warm-up's tree");
+    expect(r.path.checks.flop.find((c: any) => c.id === 4).text).toContain("the warm-up seated the same");
   });
 
   test("a restart: the derived memo is gone, the facts come back from SQLite — the path says REBUILT and why", async () => {
