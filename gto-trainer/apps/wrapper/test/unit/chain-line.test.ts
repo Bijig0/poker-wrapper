@@ -67,6 +67,13 @@ describe("the panel's renderChain", () => {
     expect(box.className).toBe("bad");
     expect(box.innerHTML).toContain("EXTRA REQUESTS");
   });
+  test("check failed (an invariant of the chain did not hold, 2026-09-27): red, with the check as the reason", () => {
+    const { box, renderChain } = make();
+    renderChain({ verdict: "failed", label: "check failed", reason: "turn: Pot and stack add up — pot 12 vs 14", session: null }, true);
+    expect(box.className).toBe("bad");
+    expect(box.innerHTML).toContain("<b>CHECK FAILED</b>");
+    expect(box.innerHTML).toContain("Pot and stack add up");
+  });
   test("no answer on screen: no banner, whatever the last verdict was", () => {
     const { box, rate, renderChain } = make();
     renderChain({ verdict: "rebuilt", label: "rebuilt", reason: "x", session: { hands: 0, clean: 0, rate: null } }, false);

@@ -53,7 +53,7 @@ describe("the clean rate — over hands that reached a postflop decision", () =>
     const c = cleanRate(rows);
     expect(c.hands).toBe(3);
     expect(c.clean).toBe(1);
-    expect(c.byVerdict).toEqual({ clean: 0, "by-design": 1, rebuilt: 2, leaked: 0, fault: 0 });
+    expect(c.byVerdict).toEqual({ clean: 0, "by-design": 1, rebuilt: 2, leaked: 0, failed: 0, fault: 0 });
     expect(c.rate).toBeCloseTo(1 / 3, 5);
   });
   it("the technical report groups the reasons by code, with the hands they hit", () => {

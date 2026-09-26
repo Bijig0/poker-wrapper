@@ -1,5 +1,6 @@
 import type { RequestCounts } from "./requestScope";
 import type { OffTreeLine } from "./offTree";
+import { checkReasons, type PathChecks } from "./chainChecks";
 
 /**
  * HOW AN ANSWER WAS PRODUCED — THE CHAIN PATH (2026-09-25, Brady: "an indicator of whether a hand went through the
@@ -17,15 +18,18 @@ import type { OffTreeLine } from "./offTree";
  * the panel's banner, the hand page, the session's Technical tab, the clean rate — is a fold over the same records.
  */
 
-export type Verdict = "clean" | "by-design" | "rebuilt" | "leaked" | "fault";
-export const VERDICT_RANK: Record<Verdict, number> = { clean: 0, "by-design": 1, rebuilt: 2, leaked: 3, fault: 4 };
+/** failed = the answer exists but one of the chain's invariants did not hold on it (services/chainChecks, 2026-09-27):
+ *  worse than a rebuild or an extra request (the answer may be to another spot), better than no answer at all */
+export type Verdict = "clean" | "by-design" | "rebuilt" | "leaked" | "failed" | "fault";
+export const VERDICT_RANK: Record<Verdict, number> = { clean: 0, "by-design": 1, rebuilt: 2, leaked: 3, failed: 4, fault: 5 };
+export const emptyByVerdict = (): Record<Verdict, number> => ({ clean: 0, "by-design": 0, rebuilt: 0, leaked: 0, failed: 0, fault: 0 });
 /** by-design costs requests but is the design: it counts as clean (Brady, 2026-09-25) */
 export const isClean = (v: Verdict | null | undefined): boolean => v === "clean" || v === "by-design";
 export const worst = (vs: (Verdict | null | undefined)[]): Verdict =>
   vs.reduce<Verdict>((w, v) => (v && VERDICT_RANK[v] > VERDICT_RANK[w] ? v : w), "clean");
 /** The words a person reads (the panel, the hand page): "leaked" is the ledger's term, "extra requests" the effect. */
 export const VERDICT_LABEL: Record<Verdict, string> = {
-  clean: "clean", "by-design": "clean (by design)", rebuilt: "rebuilt", leaked: "extra requests", fault: "no answer",
+  clean: "clean", "by-design": "clean (by design)", rebuilt: "rebuilt", leaked: "extra requests", failed: "check failed", fault: "no answer",
 };
 
 /** One thing that was not the happy path, with a stable code to group by (the Technical tab's reasons table). */
@@ -100,10 +104,14 @@ export interface DecisionPath {
   /** GTO Wizard requests this call made (services/requestScope) */
   requests?: RequestCounts;
   origin?: string;
+  /** THE CHAIN'S INVARIANTS on this answer (services/chainChecks, 2026-09-27): per street, each of the seventeen checks
+   *  that was evaluated — pass / fail / flag / na with a one-line reason. A fail no other reason covers is a reason
+   *  with the verdict "failed"; #3 (a villain mistake line) is a flag and never a verdict. */
+  checks?: PathChecks;
 }
 
-/** The reasons a path carries, in the order they happened (arrival, preflop, then street by street). */
-export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets">): PathReason[] {
+/** The reasons a path carries, in the order they happened (arrival, preflop, then street by street, then the checks). */
+export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets" | "checks">): PathReason[] {
   const out: PathReason[] = [];
   const a = p.arrival;
   if (a && (a.how === "by-design" || a.how === "rebuilt")) {
@@ -123,6 +131,8 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
       out.push({ v: "rebuilt", code: "check:range-handoff", text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.check.why}` });
     }
   }
+  // a failed invariant that no reason above already reports (services/chainChecks)
+  out.push(...checkReasons(p.checks));
   return out;
 }
 
@@ -202,7 +212,7 @@ export function handVerdicts(rows: PathRow[], withReasons = true): HandVerdict[]
  */
 export function cleanRate(rows: PathRow[]): { hands: number; clean: number; rate: number | null; byVerdict: Record<Verdict, number> } {
   const hv = handVerdicts(rows, false).filter((h) => h.postflop);
-  const byVerdict: Record<Verdict, number> = { clean: 0, "by-design": 0, rebuilt: 0, leaked: 0, fault: 0 };
+  const byVerdict = emptyByVerdict();
   for (const h of hv) byVerdict[h.verdict]++;
   const clean = byVerdict.clean + byVerdict["by-design"];
   return { hands: hv.length, clean, rate: hv.length ? clean / hv.length : null, byVerdict };
@@ -220,7 +230,7 @@ export interface TechnicalReport {
 }
 
 export function technicalReport(rows: PathRow[]): TechnicalReport {
-  const byVerdict: Record<Verdict, number> = { clean: 0, "by-design": 0, rebuilt: 0, leaked: 0, fault: 0 };
+  const byVerdict = emptyByVerdict();
   const arrival: Record<string, number> = {};
   const streets: Record<string, number> = {};
   const reasons = new Map<string, TechnicalReport["reasons"][number]>();

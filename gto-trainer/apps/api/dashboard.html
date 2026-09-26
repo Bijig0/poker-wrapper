@@ -381,7 +381,7 @@ let DETAIL = null, STEP = 0, PLAY = null;
    (the ranges derived again from the capture); EXTRA REQUESTS is a tree or node GTO Wizard had already served. */
 const CHAIN_VERDICT = {
   clean: ["good", "clean"], "by-design": ["good", "clean · by design"], rebuilt: ["warn", "rebuilt"],
-  leaked: ["crit", "extra requests"], fault: ["crit", "no answer"],
+  leaked: ["crit", "extra requests"], failed: ["crit", "check failed"], fault: ["crit", "no answer"],
 };
 function chainChip(v) {
   const [cls, label] = CHAIN_VERDICT[v] || ["dim", v || "—"];
@@ -506,7 +506,7 @@ function sessTechHtml(t) {
     <div class="card"><h2>Clean rate ${c.hands ? `<span class="chip ${c.rate >= 0.95 ? "good" : c.rate >= 0.8 ? "warn" : "crit"}">${pct}</span>` : ""}</h2>
       <div style="font-size:30px;font-weight:700;margin:4px 0">${pct}</div>
       <div class="sub">${c.hands ? `${c.clean} of ${c.hands} hands that reached a postflop decision took the happy path — every street's ranges computed once and reused after (by design counts as clean)` : "no hand of this session reached a postflop decision with a chain path yet (paths are logged from 2026-09-25)"}</div>
-      <div style="margin-top:8px">${chainChip("clean")} ${bv.clean || 0} &nbsp; ${chainChip("by-design")} ${bv["by-design"] || 0} &nbsp; ${chainChip("rebuilt")} ${bv.rebuilt || 0} &nbsp; ${chainChip("leaked")} ${bv.leaked || 0} &nbsp; ${chainChip("fault")} ${bv.fault || 0}</div></div>
+      <div style="margin-top:8px">${chainChip("clean")} ${bv.clean || 0} &nbsp; ${chainChip("by-design")} ${bv["by-design"] || 0} &nbsp; ${chainChip("rebuilt")} ${bv.rebuilt || 0} &nbsp; ${chainChip("leaked")} ${bv.leaked || 0} &nbsp; ${chainChip("failed")} ${bv.failed || 0} &nbsp; ${chainChip("fault")} ${bv.fault || 0}</div></div>
     <div class="card"><h2>Why a hand was not clean <span class="sub">— grouped by cause, most severe first</span></h2>
       ${reasons ? `<div class="scroll"><table><thead><tr><th>cause</th><th>verdict</th><th class="num">decisions</th><th>hands</th><th>example</th></tr></thead><tbody>${reasons}</tbody></table></div>` : '<div class="sub">nothing — every decision took the happy path</div>'}</div>
     <div class="sess-grid">

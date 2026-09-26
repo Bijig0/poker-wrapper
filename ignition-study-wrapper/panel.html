@@ -1017,7 +1017,9 @@
   function renderChain(ch, hasAnswer) {
     const box = $("sa-chain"), rate = $("sa-chainrate");
     const v = hasAnswer ? ch?.verdict : null;
-    if (v === "rebuilt" || v === "leaked" || v === "fault") {
+    // "failed" (2026-09-27, the API's services/chainChecks): the answer exists but one of the chain's invariants did
+    // not hold on it — red, with the check that failed as the reason
+    if (v === "rebuilt" || v === "leaked" || v === "failed" || v === "fault") {
       box.className = v === "rebuilt" ? "warn" : "bad";
       box.innerHTML = `<b>${esc((ch.label || v).toUpperCase())}</b>${ch.reason ? " — " + esc(ch.reason) : ""}`;
     } else { box.className = ""; box.textContent = ""; }
