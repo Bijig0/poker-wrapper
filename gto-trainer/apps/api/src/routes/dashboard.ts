@@ -1,3 +1,4 @@
+import { offTreeLog } from "../services/offTreeLog";
 import { yieldFirst, yieldToLive } from "../services/livePriority";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
@@ -2580,7 +2581,15 @@ app.get("/sessions/:id/technical", (c) => {
       if (m && want.has(m[1]!)) rowids[m[1]!] = r.rowid;
     }
   } catch { /* the links are a convenience */ }
-  return c.json({ ok: true, id, ...report, requestsByOrigin: byOrigin, rowids });
+  const offTree = offTreeLog.forSession(id);
+  return c.json({ ok: true, id, ...report, requestsByOrigin: byOrigin, rowids, offTree, offTreeFamilies: offTreeLog.families(offTree) });
+});
+
+// EVERY OFF-TREE VILLAIN LINE of real play (services/offTreeLog, 2026-09-27), grouped into spot families with the hands
+// villains showed — the data a pool range for node-locking those spots would be built from.
+app.get("/off-tree", (c) => {
+  const rows = offTreeLog.recent(Number(c.req.query("days") ?? 365) || 365);
+  return c.json({ ok: true, lines: rows.length, shown: rows.filter((r) => r.villainCards).length, families: offTreeLog.families(rows), rows });
 });
 
 app.get("/sessions/:id", (c) => {

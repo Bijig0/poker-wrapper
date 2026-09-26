@@ -23,7 +23,8 @@ import { walkFitted, foldSeatsOut, actorsWithAllins } from "../utils/fitLine/fit
 import { reconstructFlopRanges, classWeightsToSpec, withRangeWalkCapture, replayRangeWalks, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
-import { effectiveBehind, solveAiChain, type AiChainResult, type ChainTrace } from "./aiChain";
+import { effectiveBehind, solveAiChain, type AiChainResult, type ChainTrace, type ChainTraceNode } from "./aiChain";
+import { offTreeLog } from "./offTreeLog";
 import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
@@ -1105,13 +1106,14 @@ function forgetArrival(handKey: string): void {
 export function dropArrivalMemo(): void { arrivalMemo.clear(); }
 
 /** One street of one walk, as the chain path reports it. */
-const streetPathOf = (s: ChainTrace["streets"][number], plan: string | null): StreetPath => ({
+const streetPathOf = (s: ChainTrace["streets"][number], plan: string | null, nodes: ChainTraceNode[] = []): StreetPath => ({
   street: s.street.toLowerCase() as StreetPath["street"], plan,
   how: s.fromCheckpoint ? "hit" : s.prov?.how ?? "first", ...(s.prov?.code ? { code: s.prov.code } : {}), why: s.prov?.why ?? null,
   tree: s.fromCheckpoint ? "none" : s.created ? "created" : "cached", treeWhy: s.treeWhy ?? null,
   leak: s.fromCheckpoint ? null : s.leak ?? null,
   reads: s.nodeSrc ? { cache: s.nodeSrc.cache, joined: s.nodeSrc.joined, fetched: s.nodeSrc.fetched } : null,
   check: s.rangeCheck ?? null, account: s.account ?? null,
+  ...(((ot) => (ot.length ? { offTree: ot } : {}))(nodes.filter((n) => n.street === s.street && n.offTree).map((n) => n.offTree!))),
 });
 
 /**
@@ -1641,6 +1643,13 @@ async function solvePostflopViaChain(
       };
     });
   }
+  // OFF-TREE VILLAIN LINES of real play are logged once per hand and spot (services/offTreeLog) — for a pool range later
+  if (origin === "live" || origin === "warm") {
+    for (const w of walks) for (const n of (w.trace?.nodes ?? []) as ChainTraceNode[]) {
+      if (n.offTree) offTreeLog.record({ clientHandId: hand.clientHandId ?? null, wrapperHandId: hand.handId ?? null, sessionId: solveMetaBase.sessionId,
+        origin, board: tk.board, heroPos: heroPosName, plan: w.kind }, n.offTree);
+    }
+  }
   return { why: null, res: {
     ok: true,
     source: "gtow-api-postflop",
@@ -1658,7 +1667,7 @@ async function solvePostflopViaChain(
     decision: pickWeightedAction(actions),
     approx: true,
     warning: sixNote,
-    path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind))) }),
+    path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))) }),
   },
   // THE RIVER MES INPUT (2026-09-22): a heads-up river walked as ONE tree carries every seat's exact river-entry
   // range in its trace — all services/riverMes.ts needs to solve the river locally against the pool. Blended

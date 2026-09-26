@@ -13,6 +13,7 @@
  * cutoff ("from here on", set on the first start and never moved), and every FINISHED hand after it that has no check
  * row yet. A finished row is never reopened, so "no check yet" is the whole rule.
  */
+import { offTreeLog } from "./offTreeLog";
 import type { Database } from "bun:sqlite";
 import { archivedByClientHandId, doneIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
 import { hhChecksDbPath, openStore } from "./storePaths";
@@ -132,6 +133,8 @@ export async function attempt(prev: HhCheck, deps: Pick<CheckerDeps, "fetchRecor
   if (!archived) return { ...prev, status: "unavailable", nextAt: null, error: "no longer in the archive" };
   const rec = await deps.fetchRecord(prev.clientHandId);
   if (!rec.ok) return nextCheck(prev, rec, deps.now());
+  // villains' hole cards, when the history shows them, onto the hand's off-tree lines (services/offTreeLog)
+  try { offTreeLog.fillShown(prev.clientHandId, parseIgnitionHh(rec.body).seats); } catch { /* a convenience, never the check */ }
   const { diffs, through } = compareRecord(rec.body, archived);
   return nextCheck({ ...prev, dbId: archived.dbId }, { kind: "compared", diffs, through }, deps.now());
 }

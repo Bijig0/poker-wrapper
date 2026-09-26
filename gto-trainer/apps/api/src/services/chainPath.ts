@@ -1,4 +1,5 @@
 import type { RequestCounts } from "./requestScope";
+import type { OffTreeLine } from "./offTree";
 
 /**
  * HOW AN ANSWER WAS PRODUCED — THE CHAIN PATH (2026-09-25, Brady: "an indicator of whether a hand went through the
@@ -83,6 +84,8 @@ export interface StreetPath {
   check?: RangeCheck | null;
   /** the GTO Wizard session that solved this street's tree (primary = Ultra, secondary = Elite) */
   account?: string | null;
+  /** villain actions on this street the solver almost never takes (services/offTree): flagged, never a verdict */
+  offTree?: OffTreeLine[];
 }
 
 export interface DecisionPath {

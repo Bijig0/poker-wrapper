@@ -10,6 +10,7 @@ import { labelBetBb } from "../utils/aiStudyLine/aiStudyLine";
 import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
+import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
 
 /**
  * Per-street AI chain — the live-play version of routes/aiStudy.ts's walk:
@@ -145,6 +146,8 @@ export interface ChainTraceNode {
   ms?: number;
   /** this node was not read by this call: its record travels with the hand's checkpoint (2026-09-24) */
   fromCheckpoint?: boolean;
+  /** villain took an action the solver almost never takes here (services/offTree, 2026-09-27) — flagged, not acted on */
+  offTree?: OffTreeLine;
 }
 export interface ChainTrace {
   spec: AiChainSpec;
@@ -1195,6 +1198,18 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
       const kind = actionKindOf(a);
       if (kind === "Fold" && actor === heroIdx) return fail("hero folds inside the line before his node (capture corruption?)");
+      // AN OFF-TREE VILLAIN LINE (services/offTree): the solver takes this action almost never, from every hand — the
+      // range narrowed below rests on convergence noise. Flagged and logged; the walk goes on exactly as before.
+      if (actor !== heroIdx) {
+        const ot = offTreeStats(seats[actor]!.range, sols, ai);
+        if (isOffTree(ot)) {
+          nodeRec.offTree = {
+            ...ot, street: STREET[k]!.toLowerCase() as OffTreeLine["street"], seat: seats[actor]!.pos, inPosition: actor === seats.length - 1,
+            action: String(a.action?.display_name ?? kind).toUpperCase(), code: String(a.action?.code ?? ""),
+            betsize: Number.isFinite(to) && to > 0 ? to : null, codes: codes.slice(), potNode: nodeRec.potNode,
+          };
+        }
+      }
 
       // Condition the actor's range on the observed action — the step that
       // makes the NEXT street's tree see post-action ranges.
