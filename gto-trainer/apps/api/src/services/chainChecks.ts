@@ -537,8 +537,14 @@ export function checkButtons(a: {
   /** the node's seat against hero's, when both are seat names (heads-up BTN and SB are one seat) */
   nodePos?: string | null; heroPos?: string | null; hu?: boolean;
 }): CheckResult {
-  const seat = (p: string) => { const u = p.toUpperCase(); return a.hu && (u === "BTN" || u === "SB") ? "BTN~SB" : u; };
-  const named = (p: string | null | undefined): p is string => !!p && !/^(OOP|IP|OOP\+\d)$/i.test(p);
+  // seat names from different vocabularies (a chart's BU is the table's BTN): only the six the table itself uses are
+  // compared — a name outside them (OOP/IP, LJ, MP, UTG+1) is not evidence either way
+  const seat = (p: string) => {
+    const u0 = p.toUpperCase();
+    const u = u0 === "BU" || u0 === "D" || u0 === "DEALER" ? "BTN" : u0;
+    return a.hu && (u === "BTN" || u === "SB") ? "BTN~SB" : u;
+  };
+  const named = (p: string | null | undefined): p is string => !!p && ["SB", "BB", "UTG", "HJ", "CO", "BTN", "BU"].includes(p.toUpperCase());
   if (named(a.nodePos) && named(a.heroPos) && seat(a.nodePos) !== seat(a.heroPos)) {
     return fail(14, `the answer is ${a.nodePos}'s node, not hero's (${a.heroPos})`);
   }

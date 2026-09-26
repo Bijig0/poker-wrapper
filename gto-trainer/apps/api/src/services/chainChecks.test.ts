@@ -278,6 +278,8 @@ describe("#14 buttons, #15 mix, #16 fresh, #17 hero's combo", () => {
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "BTN", heroPos: "CO" }).status).toBe("fail");
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "SB", heroPos: "BTN", hu: true }).status).toBe("pass");
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "OOP", heroPos: "CO" }).status).toBe("pass");
+    expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "BU", heroPos: "BTN" }).status).toBe("pass");   // a chart's name for the button
+    expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "LJ", heroPos: "UTG" }).status).toBe("pass");   // another vocabulary: not evidence
     expect(checkButtons({ actions: mix(["Check", 100]), toCall: 0, legal: ["fold", "call"] }).status).toBe("fail");
   });
   it("#15: ~100%, not all zero", () => {
