@@ -44,6 +44,26 @@ export interface ArrivalPath {
   first?: Omit<ArrivalPath, "first">;
 }
 
+/**
+ * THE HAND-OFF CHECK (2026-09-26, Brady: "verify that the output of the previous street's range … is indeed the input
+ * for the next street's ranges"). When a street closes, the chain fingerprints the exact ranges it hands on (every seat
+ * still in, its range as conditioned on the street's actions) and records that on the street's ledger record. When
+ * the next street starts, the ranges it actually starts from are fingerprinted the same way and compared: equal means
+ * the turn really was solved from the flop solve's output (and the river from the turn's), not re-derived or mixed up.
+ * The flop's input is the preflop source (the chart pin / AI preflop tree): `from` is null there and the arrival says
+ * where it came from.
+ */
+export interface RangeCheck {
+  /** the street whose output this street should start from; null for the chain's first street */
+  from: "flop" | "turn" | null;
+  /** true = verified equal, false = MISMATCH, null = nothing recorded to compare against */
+  ok: boolean | null;
+  /** fingerprint of the ranges this street started from, and of what the previous street handed on */
+  inFp: string | null;
+  expected: string | null;
+  why: string;
+}
+
 /** One street of one walk (a collapse plan walks its own chain). */
 export interface StreetPath {
   street: "flop" | "turn" | "river";
@@ -59,6 +79,10 @@ export interface StreetPath {
   /** extra requests on this street that are not about the ranges: a tree created again, a node fetched twice */
   leak?: { code: string; why: string } | null;
   reads?: { cache: number; joined: number; fetched: number } | null;
+  /** did this street start from the previous street's solved output ranges (see RangeCheck) */
+  check?: RangeCheck | null;
+  /** the GTO Wizard session that solved this street's tree (primary = Ultra, secondary = Elite) */
+  account?: string | null;
 }
 
 export interface DecisionPath {
@@ -91,6 +115,10 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
       out.push({ v: s.how, code: s.code ?? `street:${s.how}`, text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.why ?? s.how}` });
     }
     if (s.leak) out.push({ v: "leaked", code: s.leak.code, text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.leak.why}` });
+    // a street that did not start from the previous street's solved output broke the chain itself
+    if (s.check?.ok === false && s.how !== "hit") {
+      out.push({ v: "rebuilt", code: "check:range-handoff", text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.check.why}` });
+    }
   }
   return out;
 }

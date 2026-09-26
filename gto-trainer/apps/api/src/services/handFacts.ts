@@ -62,6 +62,10 @@ export interface StreetRecord {
   kind: "closed" | "partial";
   /** the tree it was walked on */
   solId?: string;
+  /** fingerprint of the ranges the street STARTED from (before hero's floor), and — closed records — of the ranges it
+   *  HANDED ON to the next street (chainPath.RangeCheck, 2026-09-26) */
+  inFp?: string;
+  out?: string;
   at: number;
 }
 

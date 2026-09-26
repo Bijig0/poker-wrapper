@@ -921,6 +921,7 @@ table.sent-tbl td.k { min-width: 110px; white-space: nowrap; color: var(--muted)
 /* the chain path (2026-09-25): a rebuilt street or an extra request stands out; a by-design one is quiet */
 .chain-bad { color: var(--loss); font-weight: 600; }
 .chain-dz { color: var(--muted); }
+.chain-ok { color: var(--win); }
 
 /* the Actual tab: Ignition's own hand history, the lines the reader's capture disagrees with marked */
 .hh-verdict { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 2px 0 10px; }

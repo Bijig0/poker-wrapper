@@ -401,6 +401,21 @@ function chainReq(r) {
   const n = (r.tree || 0) + (r.solution || 0) + (r.poll || 0) + (r.library || 0) + (r.other || 0);
   return n ? `${n} <span class="sub">(${r.tree || 0} tree · ${r.poll || 0} poll)</span>` : '<span class="sub">0</span>';
 }
+/* PER STREET (2026-09-26): did it start from the previous street's solved output ranges (the hand-off check), and who
+   solved it. A memo hit was not solved again on this decision — it reuses the street's earlier solve. */
+function chainCheck(s) {
+  const c = s.check;
+  if (!c) return "";
+  if (c.ok === true) return `<br><span class="chain-ok" title="${esc(c.why)}">✓ verified: uses the ${esc(c.from)} solve's ranges</span>`;
+  if (c.ok === false) return `<br><span class="chain-bad" title="${esc(c.why)}">✗ did NOT start from the ${esc(c.from)} solve's ranges</span>`;
+  if (!c.from) return `<br><span class="sub">starts from the preflop ranges (flop ranges column)</span>`;
+  return `<br><span class="sub" title="${esc(c.why)}">not verified — ${esc(c.why)}</span>`;
+}
+function chainSolver(s) {
+  if (s.how === "hit") return `<br><span class="sub">reused — not solved again</span>`;
+  const acct = s.account ? ` · ${esc({ primary: "Ultra", secondary: "Elite" }[s.account] || s.account)}` : "";
+  return `<br><span class="sub">solved with GTO Wizard AI postflop${acct} · ${s.tree === "created" ? "new tree" : "cached tree"}</span>`;
+}
 function chainPathCard(j) {
   const rows = (j.answers || []).map((a) => {
     let p = null;
@@ -411,8 +426,9 @@ function chainPathCard(j) {
   if (!rows.length && !facts) return "";
   const hv = j.chain?.verdict;
   const body = rows.map(({ a, p }) => {
-    const streets = (p.streets || []).map((s) => `${esc(s.street)}${s.plan ? `<span class="sub"> (${esc(s.plan)})</span>` : ""}: ${chainHow(s.how, s.why)}` +
-      `${s.tree === "created" ? ' <span class="sub">· tree created</span>' : ""}${s.leak ? ` <span class="chain-bad" title="${esc(s.leak.why)}">· ${esc(s.leak.code)}</span>` : ""}`).join("<br>");
+    const streets = (p.streets || []).map((s) => `<div style="margin-bottom:4px"><b>${esc(s.street)}</b>${s.plan ? `<span class="sub"> (${esc(s.plan)})</span>` : ""}: ${chainHow(s.how, s.why)}` +
+      `${s.leak ? ` <span class="chain-bad" title="${esc(s.leak.why)}">· ${esc(s.leak.code)}</span>` : ""}${chainCheck(s)}${chainSolver(s)}</div>`).join("")
+      || (p.preflop ? `<span class="sub">answered from ${esc(p.preflop.piece)} — no solve</span>` : "");
     const arr = p.arrival ? chainHow(p.arrival.how, p.arrival.why) + ` <span class="sub">${esc(p.arrival.producer || "")}${p.arrival.first ? ` · first: ${esc(CHAIN_HOW[p.arrival.first.how] || p.arrival.first.how)}` : ""}</span>` : (p.preflop ? chainHow(p.preflop.how, p.preflop.why) + ` <span class="sub">${esc(p.preflop.piece)}</span>` : '<span class="sub">—</span>');
     const why = (p.reasons || []).map((r) => `<div class="sub">${esc(r.text)}</div>`).join("");
     return `<tr class="src-static"><td>${fmtT(a.ts)}</td><td>${esc(a.street || p.street || "")}</td><td>${chainChip(p.verdict)}</td><td>${arr}</td><td>${streets || '<span class="sub">—</span>'}</td><td class="num">${chainReq(p.requests)}</td></tr>` +

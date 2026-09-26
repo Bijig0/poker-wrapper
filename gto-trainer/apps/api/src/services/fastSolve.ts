@@ -1111,6 +1111,7 @@ const streetPathOf = (s: ChainTrace["streets"][number], plan: string | null): St
   tree: s.fromCheckpoint ? "none" : s.created ? "created" : "cached", treeWhy: s.treeWhy ?? null,
   leak: s.fromCheckpoint ? null : s.leak ?? null,
   reads: s.nodeSrc ? { cache: s.nodeSrc.cache, joined: s.nodeSrc.joined, fetched: s.nodeSrc.fetched } : null,
+  check: s.rangeCheck ?? null, account: s.account ?? null,
 });
 
 /**

@@ -124,6 +124,8 @@ const ask = (i: number) => {
   return fastSolve(withStartStacks(truncateAt(h, i)), h.positions[h.heroSeatId] ?? null, { strategyId: STRATEGY, origin: "live" }) as Promise<any>;
 };
 const hows = (r: any) => (r.path?.streets ?? []).map((s: any) => `${s.street}:${s.how}`);
+/** each street's hand-off check: from which street, and whether it held */
+const checks = (r: any) => (r.path?.streets ?? []).map((s: any) => `${s.street}<${s.check?.from ?? "preflop"}:${s.check?.ok}`);
 
 let restoreEnv: (() => void) | null = null;
 beforeAll(() => {
@@ -186,6 +188,33 @@ describe.skipIf(gated)("the chain ledger: each street's ranges computed once, re
     const facts = handFacts.get(HID)!;
     expect(facts.requests?.live?.tree).toBe(3);         // one tree per street, the whole hand
     expect((facts.streets ?? []).filter((s) => s.kind === "closed").map((s) => s.k).sort()).toEqual([0, 1]);
+  });
+
+  test("the hand-off check: the turn started from the flop solve's output, the river from the turn's", async () => {
+    const turn = await ask(TURN);
+    expect(checks(turn)).toEqual(["flop<preflop:null", "turn<flop:true"]);
+    expect(turn.path.streets[1].check.why).toContain("verified: uses the flop solve's output ranges");
+    const river = await ask(RIVER);
+    expect(checks(river).at(-1)).toBe("river<turn:true");
+    // every closed street recorded what it handed on
+    const closed = (handFacts.get(HID)!.streets ?? []).filter((s) => s.kind === "closed");
+    expect(closed.every((s) => typeof s.out === "string" && s.out.length > 0)).toBe(true);
+  });
+
+  test("the hand-off check catches a street that did not start from the previous solve's output", async () => {
+    const facts = handFacts.get(HID)!;
+    const turnRec = (facts.streets ?? []).find((s) => s.kind === "closed" && s.k === 1)!;
+    handFacts.recordStreet(HID, { ...turnRec, out: "tampered" });   // the ledger now says the turn handed on something else
+    try {
+      const r = await ask(RIVER);                                     // the river resumes from its own checkpoint
+      const river = r.path.streets.at(-1);
+      expect(river.check.ok).toBe(false);
+      expect(river.check.why).toContain("did NOT start from the turn solve's output ranges");
+      expect(r.path.reasons.map((x: any) => x.code)).toContain("check:range-handoff");
+      expect(r.path.verdict).toBe("rebuilt");
+    } finally {
+      handFacts.recordStreet(HID, turnRec);
+    }
   });
 
   test("a restart: the derived memo is gone, the facts come back from SQLite — the path says REBUILT and why", async () => {

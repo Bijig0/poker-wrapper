@@ -9,7 +9,7 @@ import {
 import { labelBetBb } from "../utils/aiStudyLine/aiStudyLine";
 import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
 import { handFacts, type StreetRecord } from "./handFacts";
-import type { StreetPath } from "./chainPath";
+import type { RangeCheck, StreetPath } from "./chainPath";
 
 /**
  * Per-street AI chain — the live-play version of routes/aiStudy.ts's walk:
@@ -186,6 +186,8 @@ export interface ChainTrace {
     players?: string[];
     rangesIn?: number[][];
     oopIn: number[]; ipIn: number[];
+    /** did the street start from the previous street's solved output (chainPath.RangeCheck, 2026-09-26) */
+    rangeCheck?: RangeCheck;
   }[];
   nodes: ChainTraceNode[];
   /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
@@ -230,6 +232,8 @@ interface StreetCheckpoint {
   /** the stack re-derivations made while walking up to here (the answer repeats them) */
   stackNotes: string[];
   walked: string[];
+  /** fingerprint of `seats` — the ranges this street hands on (chainPath.RangeCheck) */
+  out?: string;
   streets: ChainTrace["streets"];
   nodes: ChainTraceNode[];
   at: number;
@@ -251,6 +255,35 @@ function rootKeyOf(spec: AiChainSpec, seats: { pos: string; label: SeatLabel; ra
     spec.seatStacks ?? null, cards.slice(0, 3 + first).join(""), spec.rake ?? null, spec.heroComboIdx, spec.huGrid ?? null]);
 }
 const exitKeyOf = (entry: string, toks: string[], board: string): string => hashOf([entry, toks, board]);
+/** The fingerprint of a set of ranges: every seat, with its exact range (chainPath.RangeCheck). */
+export const rangesFp = (seats: { pos: string; range: number[] }[]): string => hashOf(seats.map((s) => [s.pos, hashOf(s.range)]));
+const fpShort = (fp: string | null): string => (fp ? `#${fp.slice(0, 6)}` : "—");
+
+/**
+ * Did the street start from the previous street's solved output? The expected fingerprint is the hand's LEDGER record
+ * of the previous street (written when it closed, possibly by an earlier decision), else what this call saw it hand
+ * on. A hand whose previous street was solved more than once with different results says so.
+ */
+function rangeCheckOf(a: {
+  k: number; first: number; si: number; plan: string | null; started: string | null; prevOut: string | null;
+  prevKey: string | null; records: StreetRecord[];
+}): RangeCheck {
+  if (a.si === 0) {
+    return { from: null, ok: null, inFp: a.started, expected: null,
+      why: a.k === 0 ? "the flop starts from the preflop ranges (see the flop ranges column)" : `the chain starts on the ${STREET[a.k]!.toLowerCase()} (re-rooted): its ranges come from the capture` };
+  }
+  const from = STREET[a.k - 1]!.toLowerCase() as "flop" | "turn";
+  const closed = a.records.filter((r) => r.kind === "closed" && r.k === a.k - 1 && r.first === a.first && (r.plan ?? null) === a.plan && r.out);
+  const rec = a.prevKey ? closed.find((r) => r.key === a.prevKey) : undefined;
+  const expected = rec?.out ?? a.prevOut;
+  const outs = new Set(closed.map((r) => r.out));
+  const twice = outs.size > 1 ? ` — note: the ${from} was solved ${outs.size} times in this hand with different results; this street used the latest` : "";
+  if (!a.started) return { from, ok: null, inFp: null, expected, why: `resumed from a checkpoint saved before this check existed — not verified${twice}` };
+  if (!expected) return { from, ok: null, inFp: a.started, expected: null, why: `no recorded output of the ${from} solve to check against${twice}` };
+  if (a.started === expected) return { from, ok: true, inFp: a.started, expected, why: `verified: uses the ${from} solve's output ranges (${fpShort(expected)})${twice}` };
+  return { from, ok: false, inFp: a.started, expected,
+    why: `did NOT start from the ${from} solve's output ranges: started from ${fpShort(a.started)}, the ${from} solve handed on ${fpShort(expected)}${twice}` };
+}
 
 function bounded<K, V>(m: Map<K, V>, max: number): void {
   while (m.size > max) {
@@ -311,6 +344,8 @@ interface PartialCheckpoint {
   nodes: ChainTraceNode[];
   /** hero's node JSON — the next decision conditions his realised action from it without a read */
   heroData: any;
+  /** fingerprint of the ranges the street started from, before hero's floor (chainPath.RangeCheck) */
+  inFp?: string | null;
   at: number;
 }
 const partials = new Map<string, PartialCheckpoint>();
@@ -664,6 +699,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const stackNotes: string[] = [];
   let solves = 0;
   const walked: string[] = [];
+  /** fingerprint of the ranges the last closed street handed on, as this call saw it (a checkpoint's, or a close here) */
+  let prevOut: string | null = null;
 
   // START FROM THE HAND'S CHECKPOINT when one fits: the deepest closed street before the decision street whose
   // content key — the chain's root plus every street's tokens up to it (see rootKeyOf / exitKeyOf) — is in the memo.
@@ -691,6 +728,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       pot = cp.pot;
       stack = cp.stack;
       behind = cp.behind ? { ...cp.behind } : null;
+      prevOut = cp.out ?? null;
       stackNotes.push(...(cp.stackNotes ?? []));
       walked.push(...cp.walked);
       // the streets' records say how they were walked when they closed (history); on THIS call they are memo hits
@@ -748,6 +786,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const isLast = si === spec.streets.length - 1;
     const n = seats.length;
     const resuming = resume && si === startSi ? resume : null;
+    // what this street starts from, fingerprinted BEFORE hero's floor (the previous street handed on exactly this); a
+    // resumed street started on an earlier decision, and its checkpoint carries the fingerprint taken then
+    const startedFp: string | null = resuming ? (resuming.inFp ?? null) : rangesFp(seats);
     if (resuming) seats = resuming.entering.map((s) => ({ ...s, range: s.range.slice() }));
     const heroIdx = seats.findIndex((s) => s.pos === heroPos);
     if (heroIdx < 0) return fail("hero is no longer in the hand — nothing to solve");
@@ -892,8 +933,13 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
       oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
       sent: null as unknown, account: null as string | null,
+      rangeCheck: undefined as RangeCheck | undefined,
     };
     trace.streets.push(streetRec);
+    streetRec.rangeCheck = rangeCheckOf({
+      k, first, si, plan, started: startedFp, prevOut,
+      prevKey: si > 0 && rootKey ? entryKeyAt(si) : null, records: handKey ? handFacts.streets(handKey) : [],
+    });
 
     const tSolve = Date.now();
     const treeInput = {
@@ -1107,13 +1153,13 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         // HERO'S NODE IS THE HAND'S MID-STREET CHECKPOINT: the next decision resumes from here (see PartialCheckpoint)
         if (rootKey && handKey) {
           const entry = entryKeyAt(si);
-          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry, key: entry, tokens: toks.slice(), kind: "partial", solId: String(ens.solId), at: Date.now() });
+          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry, key: entry, tokens: toks.slice(), kind: "partial", solId: String(ens.solId), ...(startedFp ? { inFp: startedFp } : {}), at: Date.now() });
           savePartial(handKey, entry, {
             k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
             entering, seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack,
             st: st.snapshot(), codes: codes.slice(), solId: String(ens.solId),
             nodes: trace.nodes.slice(streetNodesStart).filter((x) => !x.heroNode).map((x) => ({ ...x, fromCheckpoint: undefined })),
-            heroData: nq.data, at: Date.now(),
+            heroData: nq.data, inFp: startedFp, at: Date.now(),
           });
         }
         // The decision street returns from INSIDE the walk, so the loop's own walkMs assignment below never runs
@@ -1191,12 +1237,16 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           stack = eff;
         }
         walked.push(`${STREET[k]!.toLowerCase()} ${codes.join("-")}`);
+        // the ranges this street hands on, fingerprinted: the next street must start from exactly these
+        const outFp = rangesFp(seats);
+        prevOut = outFp;
         // the street is closed: everything the next street needs is checkpointed for this hand's later decisions
         if (rootKey && handKey) {
           const key = exitKeys[si] ?? exitKeyOf(entryKeyAt(si), toks, streetBoard);
-          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry: entryKeyAt(si), key, tokens: toks.slice(), kind: "closed", solId: String(ens.solId), at: Date.now() });
+          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry: entryKeyAt(si), key, tokens: toks.slice(), kind: "closed", solId: String(ens.solId),
+            ...(startedFp ? { inFp: startedFp } : {}), out: outFp, at: Date.now() });
           saveCheckpoint(handKey, key, {
-            k, root: rootKey,
+            k, root: rootKey, out: outFp,
             seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack, behind: behind ? { ...behind } : null, stackNotes: stackNotes.slice(), walked: walked.slice(),
             streets: trace.streets.slice(), nodes: trace.nodes.slice(), at: Date.now(),
           });
