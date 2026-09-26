@@ -119,6 +119,11 @@ function uninstall() {
 }
 
 const hand = () => normalizeHand(RAW).hand!;
+/** the same hand under another id, for the warm-up test (a cold ledger) */
+const HID2 = "4999000002";
+const hand2 = () => normalizeHand({ ...RAW, clientHandId: HID2 }).hand!;
+/** the flop as it lands: every preflop action, no flop action yet (BB, out of position, is to act) */
+const FLOP_LANDS = 8;
 const ask = (i: number) => {
   const h = hand();
   return fastSolve(withStartStacks(truncateAt(h, i)), h.positions[h.heroSeatId] ?? null, { strategyId: STRATEGY, origin: "live" }) as Promise<any>;
@@ -138,6 +143,7 @@ beforeAll(() => {
 });
 afterAll(() => {
   if (gated) return;
+  forgetPreflopPin(HID2); forgetPostflopPin(HID2); forgetCheckpoints(HID2); handFacts.forget(HID2);
   uninstall();
   restoreEnv?.();
   delete process.env.GTOW_PREFETCH;
@@ -215,6 +221,23 @@ describe.skipIf(gated)("the chain ledger: each street's ranges computed once, re
     } finally {
       handFacts.recordStreet(HID, turnRec);
     }
+  });
+
+  test("the flop warm-up with hero IN position seats BB out of position; the live flop reuses its tree and reads clean", async () => {
+    forgetPreflopPin(HID2); forgetPostflopPin(HID2); forgetCheckpoints(HID2); handFacts.forget(HID2);
+    const h = hand2();
+    await fastSolve(withStartStacks(truncateAt(h, OPEN)), "CO", { strategyId: STRATEGY, origin: "live" });   // the preflop pin
+    const asked: any[] = [];
+    const ensure = api.ensureCustomSolution;
+    api.ensureCustomSolution = async (input: any) => { asked.push(input); return ensure(input); };
+    try { await fastSolve(withStartStacks(truncateAt(h, FLOP_LANDS)), "CO", { strategyId: STRATEGY, origin: "warm" }); }
+    finally { api.ensureCustomSolution = ensure; }
+    expect(asked.length).toBe(1);
+    expect([asked[0].oopPos, asked[0].ipPos]).toEqual(["BB", "CO"]);   // hero (CO) is in position
+    const r = await fastSolve(withStartStacks(truncateAt(h, FLOP)), "CO", { strategyId: STRATEGY, origin: "live" }) as any;
+    expect(r.ok).toBe(true);
+    expect(r.path.verdict).toBe("clean");
+    expect(r.path.streets[0].tree).toBe("cached");    // the warm-up's tree, not a second one
   });
 
   test("a restart: the derived memo is gone, the facts come back from SQLite — the path says REBUILT and why", async () => {
