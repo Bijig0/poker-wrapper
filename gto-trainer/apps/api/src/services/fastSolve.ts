@@ -31,7 +31,7 @@ import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkMix,
-  checkPotStack, checkPreflopInRange, checkRake, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
+  checkPotStack, checkPreflopInRange, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
 import { tmark } from "./answerTrace";
@@ -1812,13 +1812,13 @@ async function solvePostflopViaChain(
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
-      checks: chainPathChecks({
+      checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,
         potExtra: 2 * anteHu + deadPostsBb(hand.postIns, cur) + (!huCp && hand.anteBb ? hand.anteBb * Object.keys(hand.positions ?? {}).length : 0),
         dealt: pinnedDealt ?? dealtBySeat(hand), treePos: chainPos, rake: rake6,
         site: sixMax ? `the table's: 5%, capped by the players dealt` : huCp ? "CoinPoker HU NL200" : null,
         handTrees: handFacts.trees(String(hand.clientHandId ?? hand.handId ?? "")),
-      }) }),
+      }), {}) }),
   },
   // THE RIVER MES INPUT (2026-09-22): a heads-up river walked as ONE tree carries every seat's exact river-entry
   // range in its trace — all services/riverMes.ts needs to solve the river locally against the pool. Blended
@@ -3081,7 +3081,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   const path0: DecisionPath = value.path
     ?? (value.ok ? classifyPath({ street, streets: [] }) : faultPath(street, (value as { kind?: string }).kind ?? null, value.reason));
   // the decision's own checks (services/chainChecks): the clock, the buttons, the mix, the key, hero's class preflop
-  const path = withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos));
+  const path = guardChecks(0, () => withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos)), path0);
   return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin } } as FastSolveResult;
 }
 

@@ -40,6 +40,22 @@ export interface CheckResult {
 }
 export type PathChecks = Partial<Record<CheckStreet, CheckResult[]>>;
 
+/**
+ * A CHECK NEVER COSTS AN ANSWER (2026-09-27). The checks run inline on the live answer path — the walk and fastSolve's
+ * assembly — so a check that throws (a node shape nobody expected, a field missing on an old capture) must not take the
+ * answer with it. It reads as "not checked", with the error, and everything else goes on.
+ */
+export function guardCheck(id: number, fn: () => CheckResult): CheckResult {
+  try { return fn(); } catch (e) { return { id, status: "na", text: `the check errored: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) }; }
+}
+/** guardCheck for a function that returns several results (or a whole block): an error is one "na" line */
+export function guardChecks<T>(id: number, fn: () => T, fallback: T): T {
+  try { return fn(); } catch (e) {
+    console.warn(`[checks] check #${id} errored — the answer goes on without it: ${e instanceof Error ? e.message : String(e)}`);
+    return fallback;
+  }
+}
+
 export interface CheckDef {
   id: number;
   group: "inputs" | "process" | "output";

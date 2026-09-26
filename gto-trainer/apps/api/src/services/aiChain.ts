@@ -14,7 +14,7 @@ import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
 import { currentRequestScope } from "./requestScope";
 import {
   checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime,
-  checkTrees, checkWarmTree, solveTimes, type CheckResult,
+  checkTrees, checkWarmTree, guardCheck, guardChecks, solveTimes, type CheckResult,
 } from "./chainChecks";
 
 /**
@@ -832,7 +832,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     /** the seats as they enter the street, post-floor — what the tree is keyed on and what a mid-street checkpoint restores */
     const entering = seats.map((s) => ({ ...s, range: s.range.slice() }));
     // #2 RANGES SANE (services/chainChecks), on exactly what the tree is asked to solve
-    const saneCheck = checkRangesSane({ seats: entering, heroIdx, heroCombo: spec.heroComboIdx, heroBefore, board: cards.slice(0, 3 + k) });
+    const saneCheck = guardCheck(2, () => checkRangesSane({ seats: entering, heroIdx, heroCombo: spec.heroComboIdx, heroBefore, board: cards.slice(0, 3 + k) }));
 
     // Engine labels for this street's tokens (Bet vs Raise by outstanding
     // wager; RAI = all-in to the street-entering stack), and who acts on each.
@@ -1041,7 +1041,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
      * the seat GTO Wizard named (#14) and hero's combo weight in his conditioned range (#17).
      */
     const street = STREET[k]!.toLowerCase();
-    const finishChecks = (atHero: boolean): void => {
+    const finishChecks = (atHero: boolean): void => guardChecks(0, () => finishChecksOf(atHero), undefined);
+    const finishChecksOf = (atHero: boolean): void => {
       const nodes = trace.nodes.filter((x) => x.si === si);
       const walkedActs = captured.map((_, ti) => {
         const nd = nodes.find((x) => x.ti === ti && x.taken != null);
@@ -1057,18 +1058,18 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const base = solveTimes.median(timeKey);
       const out: CheckResult[] = [
         saneCheck,
-        checkMistakeLines(offs, villainActs),
-        checkSeats({ players: streetRec.players, agreed: seatAgreed, unnamed: seatUnnamed, warmSeats: warm[0]?.seats ?? null, origin }),
-        checkLine({ captured, walked: walkedActs }),
-        checkTrees({ street, tree: streetRec.created ? "created" : "cached", leak: streetRec.leak, trees }),
-        checkNodeReads({ leak: streetRec.leak, reads: streetRec.nodeSrc }),
-        checkWarmTree({ street, origin, solId: streetRec.solId, fixed: fixedLevels, warm: [...new Set(warm.map((t) => t.solId))] }),
-        checkSolveTime({ street, ms, median: base.median, samples: base.samples, created: streetRec.created }),
+        guardCheck(3, () => checkMistakeLines(offs, villainActs)),
+        guardCheck(4, () => checkSeats({ players: streetRec.players, agreed: seatAgreed, unnamed: seatUnnamed, warmSeats: warm[0]?.seats ?? null, origin })),
+        guardCheck(6, () => checkLine({ captured, walked: walkedActs })),
+        guardCheck(9, () => checkTrees({ street, tree: streetRec.created ? "created" : "cached", leak: streetRec.leak, trees })),
+        guardCheck(10, () => checkNodeReads({ leak: streetRec.leak, reads: streetRec.nodeSrc })),
+        guardCheck(11, () => checkWarmTree({ street, origin, solId: streetRec.solId, fixed: fixedLevels, warm: [...new Set(warm.map((t) => t.solId))] })),
+        guardCheck(12, () => checkSolveTime({ street, ms, median: base.median, samples: base.samples, created: streetRec.created })),
       ];
       solveTimes.record(timeKey, ms);
       if (atHero) {
-        out.push(checkHeroNode({ heroPos, nodeSaid: heroNodeSaid }));
-        out.push(checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null }));
+        out.push(guardCheck(14, () => checkHeroNode({ heroPos, nodeSaid: heroNodeSaid })));
+        out.push(guardCheck(17, () => checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null })));
       }
       streetRec.checks = out;
     };

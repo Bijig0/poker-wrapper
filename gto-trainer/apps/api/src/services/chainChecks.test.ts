@@ -320,3 +320,13 @@ describe("the Coverage page: counts per check over the window's decisions", () =
     expect([thirteen.seen, thirteen.build]).toEqual([false, "to build"]);
   });
 });
+
+describe("a check never costs an answer (2026-09-27)", () => {
+  it("a check that throws reads as not checked, with the error", async () => {
+    const { guardCheck, guardChecks } = await import("./chainChecks");
+    const r = guardCheck(5, () => { throw new Error("pot missing on an old capture"); });
+    expect(r).toEqual({ id: 5, status: "na", text: "the check errored: pot missing on an old capture" });
+    expect(guardChecks(0, () => { throw new Error("boom"); }, { kept: true })).toEqual({ kept: true });
+    expect(guardChecks(0, () => 7, 0)).toBe(7);
+  });
+});
