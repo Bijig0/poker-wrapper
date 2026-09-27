@@ -1113,7 +1113,8 @@ export async function updateStatus(force = false): Promise<Record<string, any>> 
   }
   if (force || time() - S.updateCache.at > 1800) {
     S.updateCache.at = time();
-    const cands = [process.env.RCLONE, join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "rclone.exe")];
+    // an installed copy's own rclone first (bin, the installer's); its key comes as RCLONE_CONFIG from configenv.ps1
+    const cands = [process.env.RCLONE, join(REPO, "bin", "rclone.exe"), join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "rclone.exe")];
     const rc = cands.find((c) => c && existsSync(c)) || "rclone";
     const ch = process.env.PW_CHANNEL || "r2:poker-solve-db/wrapper";
     const r = await run(rc, ["cat", `${ch}/latest.json`], 30);

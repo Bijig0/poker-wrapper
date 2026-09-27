@@ -37,10 +37,13 @@ function Newest-Match([string]$pattern) {
   if ($hit) { return $hit.FullName } else { return $null }
 }
 
-# 2. Bun: config / PATH / the ZIP-installed Node's bundled bun / npm global / bun's own installer
+# 2. Bun: config / the installer's own copy (bin\, 2026-09-27) / PATH / the ZIP-installed Node's bundled bun / npm
+#    global / bun's own installer
+$binDir = Join-Path $root 'bin'
 if (-not $env:BUN) {
   $onPath = (Get-Command bun.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
   $env:BUN = First-Existing @(
+    "$binDir\bun.exe",
     $onPath,
     (Newest-Match "$env:LOCALAPPDATA\Programs\node-v*\node_modules\bun\bin\bun.exe"),
     "$env:LOCALAPPDATA\Microsoft\WinGet\Links\bun.exe",
@@ -53,6 +56,9 @@ if (-not $env:PYTHON) { $env:PYTHON = First-Existing @("$root\aof-model\.venv\Sc
 if (-not $env:EXPLOIT_CHART) { $env:EXPLOIT_CHART = First-Existing @("$root\analysis\pipeline\limp_study\exploit_ranges_nl25.json") }
 if (-not $env:POOL_MODEL)    { $env:POOL_MODEL    = First-Existing @("$root\analysis\pipeline\limp_study\pool_model_nl25.json") }
 if (-not $env:HRC_UI_DOC_CACHE_MAX) { $env:HRC_UI_DOC_CACHE_MAX = '6' }
+# the download key of an INSTALLED copy lives with it (config\rclone.conf, written by the installer), never in the
+# Windows user's own rclone config — so it goes when the app is uninstalled and never touches anyone else's "r2"
+if (-not $env:RCLONE_CONFIG -and (Test-Path (Join-Path $PSScriptRoot 'rclone.conf'))) { $env:RCLONE_CONFIG = Join-Path $PSScriptRoot 'rclone.conf' }
 
 # 5. PATH: a scheduled task starts with almost nothing on it, and the API's children (box relays, the
 #    converter's python, unzip, ssh, rclone) resolve their tools from the worker's PATH
@@ -64,6 +70,7 @@ if ($env:PYTHON) {
 }
 $gitDir = if ($env:GIT_DIR_WIN) { $env:GIT_DIR_WIN } else { First-Existing @("$env:ProgramFiles\Git", "$env:LOCALAPPDATA\Programs\Git") }
 $extra = @(
+  $binDir,   # the installer's bun.exe + rclone.exe (the chart server calls bare rclone)
   $(if ($env:BUN) { Split-Path $env:BUN }), "$env:APPDATA\npm", $nodeDir,
   $pyHome, $(if ($pyHome) { Join-Path $pyHome 'Scripts' }),
   $(if ($gitDir) { "$gitDir\cmd" }), $(if ($gitDir) { "$gitDir\usr\bin" }), $(if ($gitDir) { "$gitDir\bin" }),
@@ -74,7 +81,7 @@ $have = $env:Path -split ';'
 $env:Path = ((@($extra | Where-Object { $have -notcontains $_ }) + $have) | Where-Object { $_ }) -join ';'
 
 if ($EmitCmd) {
-  foreach ($k in (@('POKER_ROOT', 'BUN', 'PYTHON', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'POKER_DATA_DIR', 'Path') + $localKeys | Select-Object -Unique)) {
+  foreach ($k in (@('POKER_ROOT', 'BUN', 'PYTHON', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'POKER_DATA_DIR', 'RCLONE_CONFIG', 'Path') + $localKeys | Select-Object -Unique)) {
     $v = [Environment]::GetEnvironmentVariable($k, 'Process')
     if ($v) { "set `"$k=$v`"" }
   }

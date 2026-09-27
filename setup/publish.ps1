@@ -3,7 +3,8 @@
 #
 # 1. shows what is published and what changed since (setup\buildPackage.ts --status)
 # 2. asks for a line of notes (friends see it on their "Update available" bar)
-# 3. buildPackage.ts --publish: the regression gate first (refuses on red), then upload + move latest.json
+# 3. buildPackage.ts --publish: the regression gate first (refuses on red), then the release + the Windows installer
+#    (PokerWrapperSetup-<version>.exe, Inno Setup), upload, move latest.json
 # Their Poker Wrapper sees it within 30 minutes (or at once on its setup page); they press "Update now".
 param([string]$Notes = '', [switch]$SkipGate)
 $ErrorActionPreference = 'Continue'

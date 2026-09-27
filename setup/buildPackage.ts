@@ -4,21 +4,27 @@
  *
  *   bun setup/buildPackage.ts                                  build into ~/poker-package
  *   bun setup/buildPackage.ts --publish --notes "what changed"  gate + upload = an UPDATE
- *   bun setup/buildPackage.ts --no-data                        code zip only
+ *   bun setup/buildPackage.ts --no-data                        code zip only (+ the small runtime part)
+ *   bun setup/buildPackage.ts --installer                      + PokerWrapperSetup-<version>.exe (needs Inno Setup)
  *   bun setup/buildPackage.ts --status [--json]                what is published vs what this tree would publish
  *
  * Builds:
- *   PokerWrapper-code-<version>.zip       ~10 MB  wrapper, study API + dashboard, chart server + the chart index, launchers,
- *                                                 setup/update scripts, requirements, a TRIMMED ledger, and VERSION.json
- *                                                 (version + a sha256 per file = what the updater diffs against)
+ *   PokerWrapper-code-<version>.zip       ~10 MB  the wrapper, the study API + dashboard (+ its TypeScript chart server)
+ *                                                 and their npm packages, the chart index, launchers, setup/update
+ *                                                 scripts, a TRIMMED ledger, and VERSION.json (version + a sha256 per
+ *                                                 file = what the updater diffs against). No Python, no owner tools.
  *   PokerWrapper-data-<part>-<hash>.zip   ~1 GB   each big read-only data set, versioned by a hash of its contents:
- *                                                 preflop6 (the baked 6-max SQLite), mesturn (MES turn), nodetrust
+ *                                                 preflop6 (the baked 6-max SQLite), mesturn (MES turn), nodetrust,
+ *                                                 runtime (bin/bun.exe + bin/rclone.exe, ~70 MB)
+ *   PokerWrapperSetup-<version>.exe       ~60 MB  the Windows installer (--installer / --publish): code + runtime; it
+ *                                                 asks for the download key and fetches the rest (setup/installer/)
  *   release-<version>.json                        what latest.json on the channel says
  *
  * THE UPDATE CHANNEL is R2 (PW_CHANNEL, default r2:poker-solve-db/wrapper — the friend's read-only key reads it):
  *   wrapper/latest.json                  the current release (moved LAST, so a reader never sees a half upload)
  *   wrapper/releases/<version>/          that version's code zip + release.json (kept: -Version <v> rolls back)
  *   wrapper/data/PokerWrapper-data-*.zip data parts, uploaded only when their hash is new
+ *   wrapper/PokerWrapperSetup.exe        the latest installer — what a NEW player is handed
  * The friend's side is setup\update.ps1 (and the setup page's "Update available" banner, via the wrapper's /update).
  * --publish refuses unless `bun setup/regress.ts --publish` is green.
  *
@@ -28,7 +34,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { inflateRawSync } from "node:zlib";
@@ -47,74 +53,56 @@ function gitFiles(...paths: string[]): string[] {
 }
 const isFile = (p: string) => { try { return statSync(p).isFile(); } catch { return false; } };
 
-/**
- * The chart server (analysis/pipeline/solve/exploit_ui/server.py) + every analysis/pipeline/solve module it imports,
- * transitively — local modules only. (The chart server is still Python; this reads its import statements, anywhere in
- * a file, the way ast.walk did.)
- */
-function solveClosure(): string[] {
-  const solve = join(ROOT, "analysis", "pipeline", "solve");
-  const local = new Set(readdirSync(solve).filter((f) => f.endsWith(".py")).map((f) => f.slice(0, -3)));
-  const todo = [join(solve, "exploit_ui", "server.py")];
-  const seen = new Set<string>();
-  while (todo.length) {
-    const f = todo.pop()!;
-    if (seen.has(f) || !existsSync(f)) continue;
-    seen.add(f);
-    const src = readFileSync(f, "utf8");
-    const names: string[] = [];
-    for (const m of src.matchAll(/^[ \t]*import[ \t]+([^\n#]+)/gm)) {
-      for (const part of m[1]!.replace(/[()\\]/g, " ").split(",")) {
-        const mod = part.trim().split(/\s+/)[0];
-        if (mod) names.push(mod);
-      }
-    }
-    for (const m of src.matchAll(/^[ \t]*from[ \t]+\.*([\w.]+)[ \t]+import\b/gm)) names.push(m[1]!);
-    for (const n of names) {
-      const top = n.split(".")[0]!;
-      if (local.has(top)) todo.push(join(solve, `${top}.py`));
-    }
-  }
-  return [...seen].map((p) => p.slice(ROOT.length + 1).replace(/\\/g, "/")).sort();
-}
-
+// THE PACKAGE IS THE POKER WRAPPER + ITS DASHBOARD, NOTHING ELSE (2026-09-27, Brady). No Python: the chart server the
+// API reads is TypeScript too (apps/api/src/charts, run when CHART_SERVER=ts); no solve pipeline, owner tools, tests.
 const CODE_TREES = [
   "ignition-study-wrapper",                     // what the wrapper serves + its launchers (html, formats.json, assets)
   "gto-trainer/apps/wrapper",                   // the wrapper itself (TypeScript; run-wrapper.vbs starts it)
-  "gto-trainer/apps/api",                       // study API + dashboard
+  "gto-trainer/apps/api",                       // study API + dashboard + the chart server (src/charts)
   "gto-trainer/packages",                       // shared code both apps import (data-root: where every record lives)
-  "gto-trainer/package.json", "gto-trainer/bun.lock", "gto-trainer/tsconfig.base.json", "gto-trainer/turbo.json",
-  "gto-trainer/study-tool.vbs", "gto-trainer/study-tool.cmd", "gto-trainer/study-tool.ico",
+  "gto-trainer/package.json", "gto-trainer/bun.lock", "gto-trainer/tsconfig.base.json",
+  "gto-trainer/study-tool.ico",                 // the dashboard's icon
   "config/env.ps1", "config/local.env.example",
-  "setup",
-  ".claude/study-api.ps1", ".claude/chart-server.ps1", ".claude/dev-api.cmd", ".claude/dev-charts.cmd",
-  "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1", "scripts/install_gtow_watchdog.ps1",
-  "scripts/install_chart_server_task.ps1",
-  "aof-model/requirements.txt", "aof-model/requirements-lock.txt",
-  "analysis/pipeline/solve/exploit_ui",         // minus solutions/ (ignored; the *.meta.json index comes in via CODE_GLOBS)
-  "analysis/pipeline/solve/river",              // the on-the-fly river MES gate the API may call
+  "setup",                                      // install / update / repair / uninstall (minus the owner's tools below)
+  ".claude/study-api.ps1", ".claude/chart-server.ps1",          // the API and chart-server supervisors
+  "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1", // the GTO Wizard window and its watchdog
+  // what the API arms at start (config/env.ps1: EXPLOIT_CHART, POOL_MODEL) and reads for the pool
   "analysis/pipeline/limp_study/exploit_ranges_nl25.json", "analysis/pipeline/limp_study/pool_model_nl25.json",
   "analysis/pipeline/limp_study/pool_model_v4.json", "analysis/pipeline/limp_study/villain_freqs.json",
   "analysis/pipeline/limp_study/corpus_nodes.jsonl",
 ];
-// owner-only state that git tracks (or leaves untracked) but a friend's install must not carry
+// owner-only state and tooling that git tracks (or leaves untracked) but a player's install must not carry
 const CODE_EXCLUDE = [
   /^gto-trainer\/apps\/api\/data\/ledger\.json$/,          // replaced by the trimmed ledger
   /^gto-trainer\/apps\/api\/data\/.*\.bak/,
   /^gto-trainer\/apps\/api\/data\/jobs\//,
   /^gto-trainer\/apps\/api\/data\/gtow_requests\.jsonl$/,  // the owner's GTO Wizard request log
   /^gto-trainer\/apps\/api\/data\/limp_node_trust\.json$/, // a data part (DATA_PARTS), not code
-  /^gto-trainer\/apps\/api\/src\/scripts\/_/,                // other sessions' scratch scripts
+  /^gto-trainer\/apps\/api\/src\/scripts\//,                 // the owner's CLI tools (solve plans, audits, backtests)
+  /^gto-trainer\/apps\/api\/src\/test\//,                    // test preloads
+  /^gto-trainer\/apps\/wrapper\/test\//, /^ignition-study-wrapper\/tests\//, /\.test\.ts$/,
+  /^gto-trainer\/apps\/wrapper\/PORT-PLAN\.md$/,
+  /^setup\/(buildPackage|build_player_ledger|regress)\.ts$/, /^setup\/(publish|zip)\.(ps1|cmd)$/,  // the owner's side
+  /^setup\/installer\//, /^setup\/INSTALL\.md$/,
   /(^|\/)__pycache__\//,
   /^ignition-study-wrapper\/\.profile-/,
 ];
-// the chart index (~1 MB, changes whenever a chart lands) ships with the CODE; gitignored, so globbed here
+// the chart index (~1 MB, changes whenever a chart lands) ships with the CODE; gitignored, so globbed here. The
+// folder is where the API's chart catalog and the chart server both look (CHART_SOLUTIONS_DIR's default).
 const CODE_GLOBS: [string, string][] = [["analysis/pipeline/solve/exploit_ui/solutions", "*.meta.json"]];
-// the big read-only data, in PARTS, each versioned by a hash of its contents (an update re-downloads only what moved)
-const DATA_PARTS: Record<string, [string, string][]> = {
+// the npm packages the API and the wrapper import at run time, SHIPPED (hoisted to gto-trainer/node_modules): an install
+// downloads nothing from npm and can never land a half-written package (the zod@4.4.3 cache of 2026-09-22)
+const VENDORED = ["hono", "zod"];
+// the big read-only data, in PARTS, each versioned by a hash of its contents (an update re-downloads only what moved).
+// A [dir, pattern] pair is repo files; a function is files from elsewhere as [source, package path].
+type PartSpec = ([string, string] | (() => [string, string][]))[];
+const DATA_PARTS: Record<string, PartSpec> = {
   preflop6: [["gto-trainer/apps/api/data", "hrc6max-preflop.sqlite"]],    // 6-max preflop, baked (2.7 GB)
   mesturn: [["gto-trainer/apps/api/data/mes_turn", "*"]],                 // MES turn extracts (2.3 GB)
   nodetrust: [["gto-trainer/apps/api/data", "limp_node_trust.json"]],     // limp-node trust table (30 MB)
+  // the runtime: THIS machine's Bun (the one config/env.ps1 runs everything with, and the gate tested) + rclone. The
+  // installer carries it inside itself; a zip install gets it as an update and config/env.ps1 prefers bin/ from then on.
+  runtime: [() => [[findBun(), "bin/bun.exe"], [findRclone(), "bin/rclone.exe"]]],
 };
 const CHANNEL = process.env.PW_CHANNEL || "r2:poker-solve-db/wrapper";
 const SECRET_PATTERNS = [
@@ -166,8 +154,12 @@ function sha256File(p: string, cache?: HashCache): string {
 const loadCache = (p: string): HashCache => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
 
 const gitHead = () => spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim();
-const dataPartFiles = (part: string) => DATA_PARTS[part]!.flatMap(([d, pat]) => winSorted(glob(join(ROOT, d), pat)).filter(isFile));
 const rel = (p: string) => p.slice(ROOT.length + 1).replace(/\\/g, "/");
+/** A data part's files as [source, package path]. Repo files keep their repo path, so a part's version is the same
+ *  hash it was before parts could hold files from elsewhere (the runtime). */
+const dataPartItems = (part: string): [string, string][] => DATA_PARTS[part]!.flatMap((spec) =>
+  typeof spec === "function" ? spec().filter(([src]) => isFile(src))
+    : winSorted(glob(join(ROOT, spec[0]), spec[1])).filter(isFile).map((p) => [p, rel(p)] as [string, string]));
 
 function rc(args: string[], check = true): { code: number | null; stdout: string; stderr: string } {
   const r = spawnSync(findRclone(), args, { encoding: "utf8", maxBuffer: 1 << 28 });
@@ -179,16 +171,36 @@ function rc(args: string[], check = true): { code: number | null; stdout: string
   return out;
 }
 
-/** Every file the code zip ships (repo-relative, posix), minus the trimmed ledger it adds itself. */
-function codeFiles(): string[] {
-  const files = [...gitFiles(...CODE_TREES), ...solveClosure()];
-  for (const [d, pat] of CODE_GLOBS) files.push(...glob(join(ROOT, d), pat).filter(isFile).map(rel));
-  return [...new Set(files)].filter((f) => !CODE_EXCLUDE.some((x) => x.test(f))).sort();
+/** Every file under `dir`, recursively (symlinks followed: bun links a workspace's packages into its own store). */
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory() || (e.isSymbolicLink() && statSync(p).isDirectory())) out.push(...walk(p));
+    else if (isFile(p)) out.push(p);
+  }
+  return out;
 }
 
-function partVersion(files: string[], cache: HashCache): string {
+/** The run-time npm packages as they are installed for the API, re-homed to gto-trainer/node_modules/<pkg>/. */
+function vendoredItems(): [string, string][] {
+  return VENDORED.flatMap((pkg) => {
+    const dir = realpathSync(join(ROOT, "gto-trainer", "apps", "api", "node_modules", pkg));
+    return walk(dir).map((p) => [p, `gto-trainer/node_modules/${pkg}/${p.slice(dir.length + 1).replace(/\\/g, "/")}`] as [string, string]);
+  });
+}
+
+/** Every file the code zip ships, as [source, package path (posix)], minus the trimmed ledger it adds itself. */
+function codeItems(): [string, string][] {
+  const files = gitFiles(...CODE_TREES);
+  for (const [d, pat] of CODE_GLOBS) files.push(...glob(join(ROOT, d), pat).filter(isFile).map(rel));
+  const repo = [...new Set(files)].filter((f) => !CODE_EXCLUDE.some((x) => x.test(f))).map((f) => [join(ROOT, f), f] as [string, string]);
+  return [...repo, ...vendoredItems()].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+}
+
+function partVersion(items: [string, string][], cache: HashCache): string {
   const h = createHash("sha256");
-  for (const p of files) h.update(`${rel(p)}|${sha256File(p, cache)}\n`);
+  for (const [p, name] of items) h.update(`${name}|${sha256File(p, cache)}\n`);
   return h.digest("hex").slice(0, 12);
 }
 
@@ -246,14 +258,14 @@ function releaseStatus(out: string): Record<string, any> {
   delete old["gto-trainer/apps/api/data/ledger.json"];     // rebuilt from the live ledger on every build
   const cachePath = join(out, "hash-cache.json");
   const cache = loadCache(cachePath);
-  const cur = Object.fromEntries(codeFiles().map((f) => [f, sha256File(join(ROOT, f), cache)]));   // cached: cheap to ask often
+  const cur = Object.fromEntries(codeItems().map(([src, f]) => [f, sha256File(src, cache)]));   // cached: cheap to ask often
   const changed = Object.keys(cur).filter((f) => f in old && old[f] !== cur[f]).sort();
   const added = Object.keys(cur).filter((f) => !(f in old)).sort();
   const removed = Object.keys(old).filter((f) => !(f in cur)).sort();
   const dataMoved: string[] = [];
   for (const part of Object.keys(DATA_PARTS)) {
-    const fs = dataPartFiles(part);
-    if (fs.length && ((relj.data || {})[part] || {}).version !== partVersion(fs, cache)) dataMoved.push(part);
+    const items = dataPartItems(part);
+    if (items.length && ((relj.data || {})[part] || {}).version !== partVersion(items, cache)) dataMoved.push(part);
   }
   writeFileSync(cachePath, JSON.stringify(cache));
   const touched = [...changed, ...added];
@@ -292,6 +304,51 @@ function isoLocal(d = new Date()): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/** Inno Setup's compiler (winget install JRSoftware.InnoSetup: per-user or machine-wide), or null. */
+function findIscc(): string | null {
+  const c = [process.env.ISCC, join(process.env.LOCALAPPDATA || "", "Programs", "Inno Setup 6", "ISCC.exe"),
+             join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Inno Setup 6", "ISCC.exe"),
+             join(process.env.ProgramFiles || "C:\\Program Files", "Inno Setup 6", "ISCC.exe")];
+  return c.find((p) => p && isFile(p)) ?? null;
+}
+
+/**
+ * PokerWrapperSetup-<version>.exe (setup/installer/PokerWrapper.iss): the code zip and the runtime part, unpacked side
+ * by side into one staging folder = exactly what an installed copy holds before its first run. The installer copies
+ * it, asks for the download key, and runs setup\setup.ps1 -Installer (data, services, checklist). Null on a failure.
+ */
+function buildInstaller(out: string, version: string, codeZip: string, runtimeZip: string | null): string | null {
+  const iscc = findIscc();
+  if (!iscc) {
+    console.log("NO INSTALLER: Inno Setup is not installed (winget install JRSoftware.InnoSetup --scope user)");
+    return null;
+  }
+  if (!runtimeZip || !existsSync(runtimeZip)) {
+    console.log("NO INSTALLER: the runtime part (bun.exe + rclone.exe) was not built");
+    return null;
+  }
+  const stage = join(out, "installer-stage");
+  rmSync(stage, { recursive: true, force: true });
+  mkdirSync(stage, { recursive: true });
+  for (const z of [codeZip, runtimeZip]) {
+    // Windows' own tar (bsdtar): Git's GNU tar, often first on PATH, cannot read a zip
+    const t = spawnSync(join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", z, "-C", stage], { encoding: "utf8" });
+    if (t.status) {
+      console.log(`NO INSTALLER: could not unpack ${z}: ${(t.stderr || "").trim().slice(-300)}`);
+      return null;
+    }
+  }
+  const r = spawnSync(iscc, ["/Q", `/DAppVersion=${version}`, `/DStageDir=${join(stage, "PokerWrapper")}`, `/DOutputDir=${out}`,
+                             join(ROOT, "setup", "installer", "PokerWrapper.iss")], { encoding: "utf8", maxBuffer: 1 << 26 });
+  const exe = join(out, `PokerWrapperSetup-${version}.exe`);
+  if (r.status || !existsSync(exe)) {
+    console.log(`NO INSTALLER: Inno Setup failed: ${(r.stdout + r.stderr).trim().slice(-800)}`);
+    return null;
+  }
+  rmSync(stage, { recursive: true, force: true });
+  return exe;
+}
+
 function arg(name: string): string | null {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] ?? "" : null;
@@ -300,6 +357,7 @@ function arg(name: string): string | null {
 function main(): number {
   const a = { status: process.argv.includes("--status"), json: process.argv.includes("--json"), noData: process.argv.includes("--no-data"),
               publish: process.argv.includes("--publish"), skipGate: process.argv.includes("--skip-gate"),
+              installer: process.argv.includes("--installer"),
               out: arg("--out") ?? join(homedir(), "poker-package"), notes: arg("--notes") ?? "" };
   const out = resolve(a.out);
   mkdirSync(out, { recursive: true });
@@ -339,34 +397,38 @@ function main(): number {
   const cache = loadCache(cachePath);
   const parts: Record<string, Record<string, any>> = {};
   for (const part of Object.keys(DATA_PARTS)) {
-    const files = dataPartFiles(part);
-    if (!files.length) {
+    const items = dataPartItems(part);
+    if (!items.length) {
       console.log(`  data part ${part}: no files, skipped`);
       continue;
     }
-    const ver = partVersion(files, cache);
+    const ver = partVersion(items, cache);
     const zp = join(out, `PokerWrapper-data-${part}-${ver}.zip`);
-    if (!a.noData && !existsSync(zp)) {
+    // the runtime (~70 MB) is built even with --no-data: the installer carries it
+    if ((!a.noData || part === "runtime") && !existsSync(zp)) {
       const tmp = zp.replace(/\.zip$/, ".tmp");
-      writeZip(tmp, files.map((p) => [p, `PokerWrapper/${rel(p)}`]), "Fastest");
+      // + config/parts/<part> = its version: an install knows what it has however the part arrived (channel.ps1)
+      const partStamp = join(out, `part-${part}-${ver}.txt`);
+      writeFileSync(partStamp, ver, "utf8");
+      writeZip(tmp, [...items.map(([p, name]) => [p, `PokerWrapper/${name}`] as [string, string]),
+                     [partStamp, `PokerWrapper/config/parts/${part}`]], "Fastest");
       renameSync(tmp, zp);
     }
-    parts[part] = { version: ver, file: basename(zp), files: files.length };
+    parts[part] = { version: ver, file: basename(zp), files: items.length };
     if (existsSync(zp)) Object.assign(parts[part]!, { bytes: statSync(zp).size, sha256: sha256File(zp, cache) });
-    console.log(`  data part ${part}: ${ver} (${files.length} files)${existsSync(zp) ? "" : " (zip not built: --no-data)"}`);
+    console.log(`  data part ${part}: ${ver} (${items.length} files)${existsSync(zp) ? "" : " (zip not built: --no-data)"}`);
   }
   writeFileSync(cachePath, JSON.stringify(cache));
 
   // 3. code, with VERSION.json = version + the manifest the updater diffs against
-  const files = codeFiles();
-  const manifest: Record<string, string> = Object.fromEntries(files.map((f) => [f, sha256File(join(ROOT, f))]));
+  const items = codeItems();
+  const manifest: Record<string, string> = Object.fromEntries(items.map(([src, f]) => [f, sha256File(src)]));
   const ledgerRel = "gto-trainer/apps/api/data/ledger.json";
   manifest[ledgerRel] = sha256File(trimmed);
   const stamp = { version, built: isoLocal(), commit, notes: a.notes, data: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v.version])), files: manifest };
   const codeZip = join(out, `PokerWrapper-code-${version}.zip`);
   const leaks: string[] = [];
-  for (const f of files) {
-    const p = join(ROOT, f);
+  for (const [p, f] of items) {
     const dot = f.lastIndexOf(".");
     if (dot > f.lastIndexOf("/") && TEXT_SUFFIXES.has(f.slice(dot).toLowerCase()) && statSync(p).size < 5_000_000) {
       const txt = readFileSync(p, "utf8");
@@ -375,7 +437,7 @@ function main(): number {
   }
   const versionJson = join(dirname(trimmed), `VERSION-${version}.json`);
   writeFileSync(versionJson, pyJsonDumps(stamp, { indent: 1 }), "utf8");
-  writeZip(codeZip, [...files.map((f) => [join(ROOT, f), `PokerWrapper/${f}`] as [string, string]),
+  writeZip(codeZip, [...items.map(([src, f]) => [src, `PokerWrapper/${f}`] as [string, string]),
                      [trimmed, `PokerWrapper/${ledgerRel}`], [versionJson, "PokerWrapper/VERSION.json"]], "Optimal");
   console.log(`code ${version}: ${Object.keys(manifest).length} files -> ${codeZip} (${(statSync(codeZip).size / 1e6).toFixed(1)} MB)`);
   if (leaks.length) {
@@ -383,8 +445,18 @@ function main(): number {
     for (const l of leaks) console.log("    " + l);
     return 3;
   }
+
+  // 4. the Windows installer (--installer, or any publish): PokerWrapperSetup-<version>.exe = this code + the runtime
+  let installer: Record<string, any> | null = null;
+  if (a.installer || a.publish) {
+    const exe = buildInstaller(out, version, codeZip, parts.runtime ? join(out, parts.runtime.file) : null);
+    if (!exe) return 5;
+    installer = { file: basename(exe), bytes: statSync(exe).size, sha256: sha256File(exe) };
+    console.log(`installer ${version}: ${exe} (${(installer.bytes / 1e6).toFixed(1)} MB)`);
+  }
   const release = { version, published: isoLocal(), commit, notes: a.notes,
-                    code: { file: basename(codeZip), bytes: statSync(codeZip).size, sha256: sha256File(codeZip) }, data: parts };
+                    code: { file: basename(codeZip), bytes: statSync(codeZip).size, sha256: sha256File(codeZip) }, data: parts,
+                    ...(installer ? { installer } : {}) };
   const releasePath = join(out, `release-${version}.json`);
   writeFileSync(releasePath, pyJsonDumps(release, { indent: 1 }), "utf8");
 
@@ -412,6 +484,11 @@ function main(): number {
       rc(["copyto", join(out, info.file), dst]);
     }
     rc(["copyto", codeZip, `${CHANNEL}/releases/${version}/${basename(codeZip)}`]);
+    if (installer) {
+      // this version's installer, and the one to hand a NEW player: <channel>/PokerWrapperSetup.exe is always the latest
+      rc(["copyto", join(out, installer.file), `${CHANNEL}/releases/${version}/${installer.file}`]);
+      rc(["copyto", join(out, installer.file), `${CHANNEL}/PokerWrapperSetup.exe`]);
+    }
     rc(["copyto", releasePath, `${CHANNEL}/releases/${version}/release.json`]);
     rc(["copyto", releasePath, `${CHANNEL}/latest.json`]);
     console.log(`published ${version} to ${CHANNEL} (latest.json moved)`);

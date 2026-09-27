@@ -75,7 +75,7 @@ if (-not $zip) { Say 'the download failed or did not match its checksum — noth
 $stage = Join-Path $env:TEMP "pokerwrapper-update-$($rel.version)"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
-& tar.exe -xf $zip -C $stage
+& "$env:SystemRoot\System32\tar.exe" -xf $zip -C $stage   # Windows' bsdtar: Git's GNU tar cannot read a zip
 $new = Get-Installed (Join-Path $stage 'PokerWrapper')
 if ($LASTEXITCODE -ne 0 -or -not $new) { Say 'could not unpack the update — nothing was changed.' Red; Finish 1 }
 
@@ -87,7 +87,7 @@ if (-not $SkipTasks) { foreach ($t in @($TaskNames.Values) + $LegacyTaskNames) {
 $mine = [regex]::Escape($root)
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
   $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -match $mine -and
-  ($_.CommandLine -match 'study-api\.ps1|chart-server\.ps1|gtow_watchdog\.ps1|run-study\.pyw|run-tables\.pyw|apps\\wrapper\\src\\main\.ts|wrapper\.cmd')
+  ($_.CommandLine -match 'study-api\.ps1|chart-server\.ps1|gtow_watchdog\.ps1|run-study\.pyw|run-tables\.pyw|apps\\wrapper\\src\\main\.ts|charts\\chartServer\.ts|wrapper\.cmd')
 } | ForEach-Object { & taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }
 foreach ($port in $ApiPort, $ChartPort) {
   Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |

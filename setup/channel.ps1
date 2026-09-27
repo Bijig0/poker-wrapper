@@ -14,6 +14,10 @@ if (-not $env:PW_CHANNEL -and $root -and (Test-Path (Join-Path $root 'config\loc
   if ($m) { $env:PW_CHANNEL = ($m -replace '^\s*PW_CHANNEL\s*=\s*', '').Trim().Trim('"') }
 }
 $Channel = if ($env:PW_CHANNEL) { $env:PW_CHANNEL } else { 'r2:poker-solve-db/wrapper' }
+# an INSTALLED copy (PokerWrapperSetup.exe, 2026-09-27) keeps its download key in config\rclone.conf and its own
+# rclone in bin\ (config\env.ps1 says the same to every launcher); a zip install / the source checkout uses the Windows
+# user's rclone config and whatever rclone is on PATH
+if ($root -and -not $env:RCLONE_CONFIG -and (Test-Path (Join-Path $root 'config\rclone.conf'))) { $env:RCLONE_CONFIG = Join-Path $root 'config\rclone.conf' }
 $Downloads = Join-Path $env:LOCALAPPDATA 'PokerWrapper\downloads'
 
 # THE PACKAGE'S SCHEDULED TASKS (2026-09-23). Task names are MACHINE-wide, so they carry the Windows user: a second
@@ -28,6 +32,7 @@ $TaskNames = [ordered]@{
 $LegacyTaskNames = @('StudyAPI', 'ChartServer', 'GtowWatchdog')
 
 function Find-Rclone {
+  if ($root -and (Test-Path (Join-Path $root 'bin\rclone.exe'))) { return (Join-Path $root 'bin\rclone.exe') }
   $c = (Get-Command rclone -ErrorAction SilentlyContinue | Select-Object -First 1).Source
   if (-not $c -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Links\rclone.exe")) { $c = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\rclone.exe" }
   return $c
@@ -55,6 +60,13 @@ function Get-InstalledData([string]$Root) {
   if (Test-Path $f) {
     try { (Get-Content $f -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $h[$_.Name] = $_.Value } } catch { }
   }
+  # a data part carries its own stamp (config\parts\<part> = its version, buildPackage.ts, 2026-09-27), so a part that
+  # arrived some other way — the installer ships the runtime part (bin\bun.exe, bin\rclone.exe) inside itself — counts
+  # as installed without being downloaded again. The stamp wins: it is written by the very unpack that put the files there.
+  $stamps = Join-Path $Root 'config\parts'
+  if (Test-Path $stamps) {
+    Get-ChildItem $stamps -File | ForEach-Object { $v = (Get-Content $_.FullName -Raw).Trim(); if ($v) { $h[$_.Name] = $v } }
+  }
   return $h
 }
 
@@ -77,7 +89,9 @@ function Get-ChannelFile([string]$Remote, [string]$Name, [string]$Sha256, [long]
   if (-not $rc) { return $null }
   $mb = if ($Bytes) { " ($([math]::Round($Bytes / 1MB)) MB)" } else { '' }
   Write-Host "    downloading $Name$mb ..." -ForegroundColor DarkGray
-  & $rc copyto $Remote $dst --stats 0 2>&1 | Out-Null
+  # the installer's window shows the transfer (a 2 GB first download with no movement looks hung); updates stay quiet
+  if ($ShowDownloadProgress) { & $rc copyto $Remote $dst --progress --stats-one-line --stats 2s }
+  else { & $rc copyto $Remote $dst --stats 0 2>&1 | Out-Null }
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dst)) { return $null }
   if ($Sha256 -and (Get-Sha256 $dst) -ne $Sha256) { Remove-Item $dst -Force; return $null }
   return $dst
@@ -104,8 +118,14 @@ function Sync-DataParts([string]$Root) {
     if (-not $zip -and $info) { $zip = Get-ChannelFile "$Channel/data/$name" $name $info.sha256 $info.bytes }
     if (-not $zip) { $res.ok = $false; $res.missing += $part; continue }
     Write-Host "    unpacking $part ..." -ForegroundColor DarkGray
-    & tar.exe -xf $zip -C (Split-Path $Root)
-    if ($LASTEXITCODE -eq 0) { Set-InstalledData $Root $part $ver; $res.did += $part }
+    # entries are PokerWrapper/<path>: strip that top folder and unpack INTO the install, whatever it is called
+    # (the installer's folder is ...\Programs\PokerWrapper, a zip install's is wherever it was extracted)
+    & "$env:SystemRoot\System32\tar.exe" -xf $zip -C $Root --strip-components 1   # Windows' bsdtar: Git's GNU tar cannot read a zip
+    if ($LASTEXITCODE -eq 0) {
+      Set-InstalledData $Root $part $ver; $res.did += $part
+      # a downloaded part is unpacked now: its zip (up to 3 GB) is dead weight in the download cache
+      if ($zip.StartsWith($Downloads)) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+    }
     else { $res.ok = $false; $res.missing += $part }
   }
   return $res

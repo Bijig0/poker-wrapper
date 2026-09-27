@@ -15,34 +15,33 @@ function Row([bool]$ok, [string]$what, [string]$detail, [string]$fix = '') {
   }
 }
 function Get-Json($url, $timeout = 8) { try { Invoke-RestMethod -Uri $url -TimeoutSec $timeout } catch { $null } }
-$env:Path += ";$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+$env:Path = "$(Join-Path $root 'bin');$env:Path;$env:LOCALAPPDATA\Microsoft\WinGet\Links"   # bin\ = the installer's bun + rclone
+. (Join-Path $PSScriptRoot 'channel.ps1')   # also: this install's own download key (config\rclone.conf), when it has one
 
 Write-Host "Poker Wrapper — checklist ($root)" -ForegroundColor White
 Write-Host ""
 Write-Host " Installed" -ForegroundColor Cyan
-$venv = Join-Path $root 'aof-model\.venv\Scripts\python.exe'
-Row (Test-Path $venv) 'Python environment' $(if (Test-Path $venv) { & $venv --version } else { 'missing' }) 'run setup\setup.cmd'
-$bun = Get-Command bun; Row ([bool]$bun) 'Bun' $(if ($bun) { "v$(& $bun.Source --version)" } else { 'missing' }) 'run setup\setup.cmd'
-$rc = Get-Command rclone; Row ([bool]$rc) 'rclone' $(if ($rc) { 'installed' } else { 'missing' }) 'run setup\setup.cmd'
+$bun = Get-Command bun; Row ([bool]$bun) 'Bun' $(if ($bun) { "v$(& $bun.Source --version)" } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
+$rc = Get-Command rclone; Row ([bool]$rc) 'rclone' $(if ($rc) { 'installed' } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
 $chrome = (Test-Path "$env:ProgramFiles\Google\Chrome\Application\chrome.exe") -or (Test-Path "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")
-Row $chrome 'Google Chrome' $(if ($chrome) { 'installed' } else { 'missing' }) 'run setup\setup.cmd'
+Row $chrome 'Google Chrome' $(if ($chrome) { 'installed' } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
 $brave = (Test-Path "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe") -or (Test-Path "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe")
-Row $brave 'Brave' $(if ($brave) { 'installed' } else { 'missing' }) 'run setup\setup.cmd'
-$api_mods = Test-Path (Join-Path $root 'gto-trainer\apps\api\node_modules\hono')
-Row $api_mods 'Study API packages' $(if ($api_mods) { 'installed' } else { 'missing' }) 'run setup\setup.cmd'
+Row $brave 'Brave' $(if ($brave) { 'installed' } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
+# shipped in gto-trainer\node_modules (vendored, 2026-09-27) or bun-installed per app (a zip install before that)
+$api_mods = (Test-Path (Join-Path $root 'gto-trainer\node_modules\hono')) -or (Test-Path (Join-Path $root 'gto-trainer\apps\api\node_modules\hono'))
+Row $api_mods 'Study API packages' $(if ($api_mods) { 'installed' } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
 
 Write-Host ""
 Write-Host " Version" -ForegroundColor Cyan
-. (Join-Path $PSScriptRoot 'channel.ps1')
 $inst = Get-Installed $root
 if (-not $inst) { Write-Host ("  [..] {0,-34} {1}" -f 'Installed version', '(source checkout — updates come from git)') }
 else {
   $rel = Get-Release
-  $upd = if (-not $rel) { 'update channel unreadable (check the download key)' } elseif ($rel.version -gt $inst.version) { "update waiting: $($rel.version) - double-click setup\update.cmd" } else { 'up to date' }
+  $upd = if (-not $rel) { 'update channel unreadable (check the download key)' } elseif ($rel.version -gt $inst.version) { "update waiting: $($rel.version) - press Update now on the Poker Wrapper's setup page" } else { 'up to date' }
   Write-Host ("  [..] {0,-34} {1}  ({2})" -f 'Installed version', $inst.version, $upd) -ForegroundColor $(if ($rel -and $rel.version -gt $inst.version) { 'Yellow' } else { 'Gray' })
   $haveData = Get-InstalledData $root
   $dataOk = -not @($inst.data.PSObject.Properties | Where-Object { $haveData[$_.Name] -ne $_.Value }).Count
-  Row $dataOk 'Data matches this version' $(if ($dataOk) { ($inst.data.PSObject.Properties | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ', ' } else { 'a data part is missing or old' }) 'run setup\setup.cmd (it fetches the missing part)'
+  Row $dataOk 'Data matches this version' $(if ($dataOk) { ($inst.data.PSObject.Properties | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ', ' } else { 'a data part is missing or old' }) 'run PokerWrapperSetup.exe again (repair) (it fetches the missing part)'
 }
 
 Write-Host ""
@@ -57,14 +56,14 @@ $r2 = $false
 # one known chart, stat only (~1 s; a listing of this folder takes 30 s+)
 # must come back a FILE: on R2 a key that cannot see the object (or a missing one) can answer a phantom directory, exit 0
 if ($rc) { $st = & $rc.Source lsjson --stat 'r2:poker-solve-db/hrc-ui/hrc_hu_cp200a_d100_o2_5_3b9.json.gz' 2>$null; $r2 = ($LASTEXITCODE -eq 0) -and (($st -join '') -match '"IsDir":\s*false') }
-Row $r2 'Chart downloads (R2)' $(if ($r2) { 'the chart bucket is readable' } else { 'not configured or key rejected' }) 'put PokerWrapper-key.txt next to the PokerWrapper folder and run setup\setup.cmd'
+Row $r2 'Chart downloads (R2)' $(if ($r2) { 'the chart bucket is readable' } else { 'not configured or key rejected' }) 'run PokerWrapperSetup.exe again and enter the download key'
 
 Write-Host ""
 Write-Host " Settings" -ForegroundColor Cyan
 $local = Join-Path $root 'config\local.env'
 $cfg = if (Test-Path $local) { Get-Content $local } else { @() }
 $pm = [bool]($cfg -match '^\s*PLAYER_MODE\s*=\s*1')
-Row $pm 'Player mode' $(if ($pm) { 'on' } else { 'off' }) 'run setup\setup.cmd'
+Row $pm 'Player mode' $(if ($pm) { 'on' } else { 'off' }) 'run PokerWrapperSetup.exe again (repair)'
 $hero = ($cfg | Where-Object { $_ -match '^\s*CP_HERO\s*=\s*\S' }) -replace '^\s*CP_HERO\s*=\s*', ''
 Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } else { '(learned from CoinPoker when you sit down)' }))
 
@@ -72,7 +71,7 @@ Write-Host ""
 Write-Host " Running" -ForegroundColor Cyan
 foreach ($t in $(if (Get-Installed $root) { $TaskNames.Values } else { 'StudyAPI', 'ChartServer', 'GtowWatchdog' })) {
   $st = (Get-ScheduledTask -TaskName $t).State
-  Row ($st -eq 'Running') "service $t" $(if ($st) { "$st" } else { 'not registered' }) "run setup\setup.cmd (or: Start-ScheduledTask $t)"
+  Row ($st -eq 'Running') "service $t" $(if ($st) { "$st" } else { 'not registered' }) "run PokerWrapperSetup.exe again (repair) (or: Start-ScheduledTask $t)"
 }
 $cfgApi = Get-Json "http://127.0.0.1:$ApiPort/api/dashboard/config"
 Row ([bool]$cfgApi) "study API on :$ApiPort" $(if ($cfgApi) { "up$(if ($cfgApi.playerMode) { ', player mode' })" } else { 'not answering' }) 'wait a minute after logon; if it stays down, restart the laptop (the services start at logon)'
