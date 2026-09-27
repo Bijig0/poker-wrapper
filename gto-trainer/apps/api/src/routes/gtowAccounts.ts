@@ -20,7 +20,7 @@ import { gtowApi } from "../services/gtowApi";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowRequests, type GtowWindow } from "../services/gtowRequestLog";
 import { gtowSessions, type GtowSessionStatus } from "../services/gtowSessions";
-import { REPO } from "../services/ledger";
+import { REPO } from "../services/repoPaths";
 import {
   accountInfo, loadAccounts, noteAccountFact, probeTreeBody, removeAccount, REQUEST_CAP, upsertAccount, WALL_MS,
   type GtowAccountEntry, type GtowAccountInfo,
