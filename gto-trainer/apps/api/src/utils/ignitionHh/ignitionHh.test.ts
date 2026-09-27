@@ -65,6 +65,38 @@ describe("Ignition's labels", () => {
     expect(compareHand(ours("call"), hh)).toEqual([]);
     expect(compareHand(ours("check"), hh)).toEqual([]);
   });
+  // hand 4920636325 (2026-09-26): UTG posted in and RAISED — the post lives inside the raise-to level (normalizeHand's
+  // foldPostIns lists it in postIns), so Ignition's "Posts chip" has no row of ours to pair with. It was flagged
+  // "action missing" on four hands whose archived rows carried every post.
+  test("a post-in folded into the poster's raise is not a missing action", () => {
+    const raised = parseIgnitionHh({
+      blinds: "$0.02 / $0.05",
+      communityCards: ["", "", "", "", ""],
+      players: [
+        { seat: "1", position: "Small Blind", cards: [], startEndAmount: "$5/$5", totalBet: "$0", winLoseAmount: "$0", isMe: false },
+        { seat: "2", position: "Big Blind  [ME]", cards: ["As", "Ks"], startEndAmount: "$5/$5", totalBet: "$0", winLoseAmount: "$0", isMe: true },
+        { seat: "3", position: "UTG", cards: [], startEndAmount: "$5/$5", totalBet: "$0", winLoseAmount: "$0", isMe: false },
+      ],
+      action: [
+        act("Small Blind", "Small Blind", "$0.02"), act("Big Blind  [ME]", "Big blind", "$0.05"), act("UTG", "Posts chip", "$0.05"),
+        act("UTG", "Raises", "$0.10"), act("Small Blind", "Folds"), act("Big Blind  [ME]", "Folds"),
+      ],
+    });
+    const ours = {
+      ...archived, heroSeatId: 2, heroCards: ["As", "Ks"], board: [], liveSeats: [1, 2, 3], startStacks: undefined, stacks: undefined,
+      postIns: [{ seatId: 3, hero: false, amount: 1, readAs: "raise" as const }],
+      actions: [
+        { seatId: 1, hero: false, type: "post-sb" as const, amount: 0.4, street: "preflop" as const },
+        { seatId: 2, hero: true, type: "post-bb" as const, amount: 1, street: "preflop" as const },
+        { seatId: 3, hero: false, type: "raise" as const, amount: 2, street: "preflop" as const },
+        { seatId: 1, hero: false, type: "fold" as const, street: "preflop" as const },
+        { seatId: 2, hero: true, type: "fold" as const, street: "preflop" as const },
+      ],
+    };
+    expect(compareHand(ours, raised).filter((d) => d.kind.startsWith("action"))).toEqual([]);
+    // without the post-in on record it IS a missing action
+    expect(compareHand({ ...ours, postIns: [] }, raised).filter((d) => d.kind.startsWith("action")).map((d) => d.kind)).toEqual(["action-missing"]);
+  });
 });
 
 describe("compareHand", () => {

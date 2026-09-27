@@ -515,7 +515,39 @@ async function loadSessTech(id) {
   try { t = await (await fetch(`/api/dashboard/sessions/${encodeURIComponent(id)}/technical`)).json(); }
   catch { box.innerHTML = '<div class="card warn">technical view unavailable</div>'; box.dataset.loaded = ""; return; }
   if (!t.ok) { box.innerHTML = `<div class="card warn">${esc(t.error || "technical view unavailable")}</div>`; box.dataset.loaded = ""; return; }
-  box.innerHTML = sessTechHtml(t);
+  box.innerHTML = '<div id="sess-hh"></div>' + sessTechHtml(t);
+  loadSessHh(id);
+}
+/* RECORDED vs IGNITION, THE WHOLE SESSION (2026-09-26): every finished hand is diffed against Ignition's own hand
+   history by the API's checker (services/hhCheck); this is its verdict per hand, worst first (/api/ignition-hh/session). */
+const HH_STATE = { "before-hero": ["crit", "wrong before your last action"], "after-hero": ["warn", "wrong after your last action"],
+  match: ["good", "matches"], pending: ["dim", "pending"], unavailable: ["dim", "not on Ignition"], unchecked: ["dim", "not checked yet"] };
+function sessHhHtml(r) {
+  const c = r.counts || {};
+  const chips = Object.keys(HH_STATE).filter((k) => c[k]).map((k) => `<span class="chip ${HH_STATE[k][0]}">${esc(HH_STATE[k][1])} ${c[k]}</span>`).join(" ");
+  const kinds = Object.entries(r.kinds || {}).sort((a, b) => b[1].beforeHero - a[1].beforeHero || b[1].afterHero - a[1].afterHero)
+    .map(([k, n]) => `<span class="mono">${esc(k)}</span> <b>${n.beforeHero}</b>/<span class="sub">${n.afterHero}</span>`).join(" · ");
+  const diffTxt = (d) => `${d.kind}: ${d.field} — ours ${d.ours} · Ignition ${d.ignition}`;
+  const rows = (r.rows || []).filter((h) => h.state !== "match").map((h) => {
+    const [cls, word] = HH_STATE[h.state] || ["dim", h.state];
+    const ds = h.state === "before-hero" && h.through.length ? h.through : h.firstDiffs;
+    const ax = h.autoExec ? `<span class="chip ${h.autoExec.verdict === "worked" ? "good" : h.autoExec.verdict === "partly" ? "warn" : "crit"}" title="${esc(h.autoExec.label)}">auto ${esc(h.autoExec.verdict)}</span>` : "";
+    return `<tr class="src-static"><td><a href="/hands/${h.dbId}" onclick="go('/hands/${h.dbId}');return false" class="mono">${esc(h.clientHandId || "#" + h.dbId)}</a></td>
+      <td>${cardsHtml(h.heroCards || [])}${h.tableSlot ? ` <span class="sub">t${h.tableSlot}</span>` : ""}</td><td><span class="chip ${cls}">${esc(word)}</span></td>
+      <td class="num">${h.diffs || ""}</td><td class="sub">${ds.map((d) => esc(diffTxt(d))).join("<br>") || esc(h.error || "")}</td><td>${ax}</td></tr>`;
+  }).join("");
+  return `<div class="card"><h2>Recorded vs Ignition's hand history <span class="sub">— ${r.hands} hands, each diffed automatically once it finished</span></h2>
+    <div style="margin-bottom:6px">${chips || '<span class="sub">no hands</span>'}</div>
+    ${kinds ? `<div class="sub" style="margin-bottom:6px">kinds of difference (hands before your last action / after): ${kinds}</div>` : ""}
+    ${rows ? `<div class="scroll"><table><thead><tr><th>hand</th><th>cards</th><th>verdict</th><th class="num">diffs</th><th>first differences</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}</div>`;
+}
+async function loadSessHh(id) {
+  const box = $("sess-hh");
+  if (!box) return;
+  try {
+    const r = await (await fetch(`/api/ignition-hh/session/${encodeURIComponent(id)}`)).json();
+    box.innerHTML = r.ok ? sessHhHtml(r) : `<div class="card warn">${esc(r.error || "hand-history check unavailable")}</div>`;
+  } catch { box.innerHTML = '<div class="card warn">hand-history check unavailable</div>'; }
 }
 /* Villain lines the solver almost never takes, this session: by spot family, with the hands villains showed. */
 function offTreeCard(t, handLink) {
@@ -572,6 +604,7 @@ async function showDetail(dbId) {
       <span class="sub">${esc(j.clientHandId ?? "no site id")}${j.resultText ? " · " + esc(j.resultText) : ""}</span>
     </div>
     ${sessionLine(j)}
+    ${autoExecCard(j)}
     ${provenanceCard(j)}
     <div class="dt-grid">
       <div class="card" style="margin:0">
@@ -1052,6 +1085,23 @@ function provenanceCard(j) {
   return `<div class="card"><h2>Where the answers came from <span class="sub">— ${answered.length} answered · ${failed.length} failed · ${heroDecisions} hero decision${heroDecisions === 1 ? "" : "s"} in the archived hand</span></h2>
     <div class="scroll"><table><thead><tr><th>street</th><th>source</th><th class="num">answers</th><th>tier</th></tr></thead>
     <tbody>${row("preflop", (a) => a.street === "preflop")}${row("postflop", (a) => a.street !== "preflop")}</tbody></table></div></div>`;
+}
+/* AUTO-EXECUTE ON THIS HAND (2026-09-26): did the relay play each decision, and in how many presses (utils/autoExec). */
+const AX_OUTCOME = { confirmed: ["good", "worked"], pending: ["good", "sent"], held: ["crit", "held"], "no-answer": ["crit", "no answer played"],
+  "not-fired": ["crit", "not fired"], refused: ["crit", "refused"], diverged: ["crit", "mis-executed"], abandoned: ["warn", "unverified"], unknown: ["warn", "unconfirmed"] };
+function autoExecCard(j) {
+  const ax = j.autoExec;
+  if (!ax) return "";
+  const chip = ax.verdict === "worked" ? "good" : ax.verdict === "partly" ? "warn" : "crit";
+  const rows = ax.decisions.map((d) => {
+    const [c, word] = AX_OUTCOME[d.outcome] || ["warn", d.outcome];
+    const why = [d.outcome === "held" || d.outcome === "no-answer" ? d.held : null, d.why, d.heldS ? `held ${d.heldS} s first` : null,
+                 d.outcome === "no-answer" && d.did ? `fold-on-no-answer ${d.did}` : null].filter(Boolean);
+    return `<tr class="src-static"><td>${esc(d.street || "")}</td><td>${esc(d.pick || "—")}</td><td><span class="chip ${c}">${esc(word)}</span></td>
+      <td class="num">${d.tries}</td><td class="sub">${esc([...new Set(why)].join(" · "))}${d.did && d.outcome !== "no-answer" ? ` <span class="sub">(table: ${esc(d.did)})</span>` : ""}</td></tr>`;
+  }).join("");
+  return `<div class="card" id="autoexec-card"><h2>Auto-execute <span class="chip ${chip}">${esc(ax.verdict)}</span> <span class="sub">— ${esc(ax.label)}${ax.from === "feed" ? " · read from the hand's feed" : ""}</span></h2>
+    <div class="scroll"><table><thead><tr><th>street</th><th>pick</th><th>result</th><th class="num">tries</th><th>why</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 /** Session line: gap cluster + recording, with the Replay Review link that follows the current node. */
 function sessionLine(j) {

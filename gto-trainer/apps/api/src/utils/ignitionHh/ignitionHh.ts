@@ -160,12 +160,18 @@ const ignSteps = (g: IgnHand): Step[] =>
   g.actions.map((a, at) => ({ at, seat: a.seat, type: a.type, amount: a.amountBb, street: a.street, postIn: isPostIn(a.label) }));
 
 /** Ignition logs a post-in right after the blinds; the reader files it at the poster's turn, as a limp (call) or, when
- *  the post covered it, a check. Each post-in is paired with that seat's first preflop call/check and both drop out. */
-const pairPostIns = (ours: Step[], ign: Step[]): { ours: Step[]; ign: Step[] } => {
-  const pairs = ign.filter((g) => g.postIn)
-    .map((g) => [g, ours.find((o) => o.seat === g.seat && o.street === "preflop" && (o.type === "call" || o.type === "check"))] as const)
-    .filter((p): p is readonly [Step, Step] => p[1] != null);
-  const gone = new Set<Step>(pairs.flat());
+ *  the post covered it, a check. Each post-in is paired with that seat's first preflop call/check and both drop out.
+ *  A post-in the hand's `postIns` already folded into the poster's own action — a raise (the post is inside its level)
+ *  or a fold (the post stays in the pot as dead money) — has no row of its own on our side: Ignition's drops alone.
+ *  (2026-09-26: hands 4920636325 / 4920636586 / 4920638121 / 4920638634 were flagged "post-in missing" while the
+ *  archived rows carried every post.) */
+const pairPostIns = (ours: Step[], ign: Step[], folded: ReadonlySet<number>): { ours: Step[]; ign: Step[] } => {
+  const gone = new Set<Step>();
+  for (const g of ign.filter((x) => x.postIn)) {
+    const o = ours.find((x) => !gone.has(x) && x.seat === g.seat && x.street === "preflop" && (x.type === "call" || x.type === "check"));
+    if (o) { gone.add(g); gone.add(o); }
+    else if (g.seat !== null && folded.has(g.seat)) gone.add(g);
+  }
   return { ours: ours.filter((o) => !gone.has(o)), ign: ign.filter((g) => !gone.has(g)) };
 };
 
@@ -203,7 +209,7 @@ const pairDiff = ([o, g]: Pair): HhDiff[] =>
     : [diff("action-missing", `Ignition action ${g!.at + 1} missing from ours`, "—", stepText(g), { ignitionAt: g!.at })];
 
 const checkActions: Check = (o, g) => {
-  const { ours, ign } = pairPostIns(oursSteps(o), ignSteps(g));
+  const { ours, ign } = pairPostIns(oursSteps(o), ignSteps(g), new Set((o.postIns ?? []).map((p) => p.seatId)));
   return alignSteps(ours, ign).flatMap(pairDiff);
 };
 

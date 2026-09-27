@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, startStacksOf, roundContributions } from "../utils/archivedHand/archivedHand";
 import { summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
+import { autoExecOf } from "../utils/autoExec/autoExec";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { preflopDb } from "../services/preflopDb";
 import { resolveSet, resolveDepth } from "../services/fastSolve";
@@ -1153,6 +1154,8 @@ app.get("/hand/:dbId", async (c) => {
     summary: e.summary,
     hand: e.hand,
     feedLines: Array.isArray(e.raw.feedLines) ? e.raw.feedLines : [],
+    // did auto-execute play the hand, and how many presses it took (utils/autoExec)
+    autoExec: autoExecOf(e.raw),
     discrepancies: e.discrepancies ?? [],
     answers,
     session,
@@ -1167,7 +1170,7 @@ app.get("/hand/:dbId", async (c) => {
 });
 
 /** Ignition hand numbers are 10 digits; CoinPoker's are longer, the State Tester's synthetic ones are 9000xxx. */
-export const isIgnitionHandId = (id: string | null | undefined): id is string => !!id && /^d{10}$/.test(id);
+export const isIgnitionHandId = (id: string | null | undefined): id is string => !!id && /^\d{10}$/.test(id);
 
 /** The archived copy of a hand, by the site's own hand number (the indexed client_hand_id column) — its FINISHED row. */
 export function archivedByClientHandId(clientHandId: string): Enriched | null {
