@@ -2,38 +2,22 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "gto-api",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-api.cmd",
+      "name": "api",
+      "runtimeExecutable": "C:\Users\Brady\poker-wrapper\.claude\dev-api.cmd",
       "runtimeArgs": [],
       "port": 2000
     },
     {
-      "name": "gto-api-verify",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-api-verify.cmd",
+      "name": "api-verify",
+      "runtimeExecutable": "C:\Users\Brady\poker-wrapper\.claude\dev-api-verify.cmd",
       "runtimeArgs": [],
       "port": 2001
     },
     {
-      "name": "hrc-charts",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-charts.cmd",
+      "name": "charts",
+      "runtimeExecutable": "C:\Users\Brady\poker-wrapper\.claude\dev-charts.cmd",
       "runtimeArgs": [],
       "port": 8777
-    },
-    {
-      "name": "poker-analysis",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
-      "runtimeArgs": [
-        "5199"
-      ],
-      "port": 5199
-    },
-    {
-      "name": "poker-analysis-alt",
-      "runtimeExecutable": "C:\\Users\\Brady\\poker\\.claude\\dev-analysis.cmd",
-      "runtimeArgs": [
-        "5198"
-      ],
-      "port": 5198
     }
   ]
 }

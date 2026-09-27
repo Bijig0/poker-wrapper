@@ -1,15 +1,13 @@
-# StudyAPI supervisor (scheduled task "StudyAPI", at logon): keeps the study dashboard API on :2000 alive.
+# Study API supervisor (scheduled task "PokerWrapper API - <user>", at logon): keeps the study API + dashboard on :2000 alive.
 #   - runs `bun index.ts` (NO --watch: a --watch worker crash leaves the watcher alive and hides the failure)
 #   - restarts it 10 s after it exits
 #   - HANG WATCHDOG (2026-09-12): a worker that is alive and LISTENING but never answers (event loop wedged - seen
 #     for 30+ min while every request timed out; the plain restart loop cannot see that) is killed after three
-#     failed GET / probes 30 s apart, then relaunched. Detached relays/steps the worker started are not in its
-#     process tree (ShellExecute launches), so they survive the kill and re-attach to the boxes' runs.
-# WHERE EVERYTHING IS comes from config\env.ps1 (2026-09-22): the repo root from this script's own location,
-# bun / Python / Node / Git auto-detected (or pinned in config\local.env), and a PATH with all of them on it.
-# The scheduled task's PATH has no bun (the npm shim lives in Roaming\npm), and the worker's CHILDREN (box
-# relays: `bun run threeMaxGrid.ts --parse-only`, the converter's `python`, `unzip`, `ssh`) resolve their
-# tools from the worker's PATH, so it gets the same PATH an interactive shell has.
+#     failed GET / probes 30 s apart, then relaunched.
+# WHERE EVERYTHING IS comes from config\env.ps1 (2026-09-22): the root from this script's own location, Bun / Node /
+# Git auto-detected (or pinned in config\local.env), and a PATH with all of them on it. The scheduled task's PATH has
+# no bun (the npm shim lives in Roaming\npm), and the worker's children (rclone, git) resolve their tools from the
+# worker's PATH, so it gets the same PATH an interactive shell has.
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
 # NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
 # child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
@@ -27,11 +25,11 @@ $env:Path = "$env:Path;" + [Environment]::GetEnvironmentVariable('Path', 'Machin
 # `unavailable`, and the wrapper's setup page refuses to start a session in it
 # ("Blocked: 3-handed Zone 25NL preflop exploit charts armed"). Nothing errors - the
 # exploit layer is just silently gone. Set on every start since 2026-09-14; config\env.ps1
-# now supplies it (default analysis\pipeline\limp_study\exploit_ranges_nl25.json).
-# NL25 cutover 2026-09-14 (ledger cutover-nl25): the _nl25 exports are fit to ign25_3maxasym2ci (5% / cap 4bb,
-# the rake we actually play). The old exploit_ranges.json / pool_model_v4.json are the NL200-rake generation.
+# now supplies it (default gto-trainer\apps\api\data\pool\exploit_ranges_nl25.json).
+# NL25 cutover 2026-09-14: the _nl25 exports are fit to ign25_3maxasym2ci (5% / cap 4bb, the rake we actually
+# play). The old exploit_ranges.json / pool_model_v4.json are the NL200-rake generation.
 # POOL_MODEL names the opponent model the API reports and checks drift against
-# (services/ledger.ts, services/strategies.ts, routes/sources.ts) - also from config\env.ps1.
+# (services/strategies.ts, routes/sources.ts) - also from config\env.ps1.
 function Log($m) { Add-Content -Path $sup -Value "[$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')] $m" }
 
 # ONE SUPERVISOR (2026-09-14). Found three of these running at once: the logon task's, plus two more

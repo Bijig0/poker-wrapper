@@ -1,6 +1,6 @@
 /**
  * Build — and publish — the Poker Wrapper package for another Windows laptop (player mode). Runs on the OWNER's
- * machine, from the working tree. (Port of build_package.py, 2026-09-24 — the wrapper's tooling has no Python.)
+ * machine, from the working tree of this repo (poker-wrapper). (Port of build_package.py, 2026-09-24.)
  *
  *   bun setup/buildPackage.ts                                  build into ~/poker-package
  *   bun setup/buildPackage.ts --publish --notes "what changed"  gate + upload = an UPDATE
@@ -9,10 +9,10 @@
  *   bun setup/buildPackage.ts --status [--json]                what is published vs what this tree would publish
  *
  * Builds:
- *   PokerWrapper-code-<version>.zip       ~10 MB  the wrapper, the study API + dashboard (+ its TypeScript chart server)
- *                                                 and their npm packages, the chart index, launchers, setup/update
- *                                                 scripts, a TRIMMED ledger, and VERSION.json (version + a sha256 per
- *                                                 file = what the updater diffs against). No Python, no owner tools.
+ *   PokerWrapper-code-<version>.zip       ~12 MB  the wrapper, the study API + dashboard (+ its TypeScript chart server)
+ *                                                 and their npm packages, the chart index, the chart sets, launchers,
+ *                                                 setup/update scripts, and VERSION.json (version + a sha256 per file =
+ *                                                 what the updater diffs against). No tests, no developer tools.
  *   PokerWrapper-data-<part>-<hash>.zip   ~1 GB   each big read-only data set, versioned by a hash of its contents:
  *                                                 preflop6 (the baked 6-max SQLite), mesturn (MES turn), nodetrust,
  *                                                 runtime (bin/bun.exe + bin/rclone.exe, ~70 MB)
@@ -28,15 +28,14 @@
  * The friend's side is setup\update.ps1 (and the setup page's "Update available" banner, via the wrapper's /update).
  * --publish refuses unless `bun setup/regress.ts --publish` is green.
  *
- * Deliberately NOT in it: hands / sessions / answers history, the solve ledger's boxes, machines, proposals, plans,
- * the task board, credentials (R2 keys, Hetzner/Vultr tokens, ssh keys, GitHub), browser profiles, debug recordings,
- * HRC and the solve pipeline, the MES solve trees. The code zip is checked for credential-looking strings.
+ * Deliberately NOT in it: hands / sessions / answers history, credentials (R2 keys, ssh keys, GitHub), browser
+ * profiles, debug recordings, tests and developer tools. The code zip is checked for credential-looking strings.
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { pyJsonDumps } from "../gto-trainer/apps/wrapper/src/py";
 
@@ -53,8 +52,8 @@ function gitFiles(...paths: string[]): string[] {
 }
 const isFile = (p: string) => { try { return statSync(p).isFile(); } catch { return false; } };
 
-// THE PACKAGE IS THE POKER WRAPPER + ITS DASHBOARD, NOTHING ELSE (2026-09-27, Brady). No Python: the chart server the
-// API reads is TypeScript too (apps/api/src/charts, run when CHART_SERVER=ts); no solve pipeline, owner tools, tests.
+// THE PACKAGE IS THE POKER WRAPPER + ITS DASHBOARD, NOTHING ELSE (2026-09-27, Brady) — which is what this repo is. The
+// chart server the API reads is TypeScript (apps/api/src/charts); tests and developer tools stay out.
 const CODE_TREES = [
   "ignition-study-wrapper",                     // what the wrapper serves + its launchers (html, formats.json, assets)
   "gto-trainer/apps/wrapper",                   // the wrapper itself (TypeScript; run-wrapper.vbs starts it)
@@ -65,16 +64,13 @@ const CODE_TREES = [
   "config/env.ps1", "config/local.env.example",
   "setup",                                      // install / update / repair / uninstall (minus the owner's tools below)
   ".claude/study-api.ps1", ".claude/chart-server.ps1",          // the API and chart-server supervisors
-  "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1", // the GTO Wizard window and its watchdog
-  // what the API arms at start (config/env.ps1: EXPLOIT_CHART, POOL_MODEL) and reads for the pool
-  "analysis/pipeline/limp_study/exploit_ranges_nl25.json", "analysis/pipeline/limp_study/pool_model_nl25.json",
-  "analysis/pipeline/limp_study/pool_model_v4.json", "analysis/pipeline/limp_study/villain_freqs.json",
-  "analysis/pipeline/limp_study/corpus_nodes.jsonl",
+  // the GTO Wizard window, its watchdog, and the second account's window (the API's GTO Wizard page can start it)
+  "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1", "scripts/start_gtow_secondary.ps1",
 ];
-// owner-only state and tooling that git tracks (or leaves untracked) but a player's install must not carry
+// state and tooling that git tracks (or leaves untracked) but a player's install must not carry
 const CODE_EXCLUDE = [
-  /^gto-trainer\/apps\/api\/data\/ledger\.json$/,          // replaced by the trimmed ledger
   /^gto-trainer\/apps\/api\/data\/.*\.bak/,
+  /^gto-trainer\/apps\/api\/data\/charts\//,                // the chart index comes in through CODE_GLOBS; bodies never
   /^gto-trainer\/apps\/api\/data\/jobs\//,
   /^gto-trainer\/apps\/api\/data\/gtow_requests\.jsonl$/,  // the owner's GTO Wizard request log
   /^gto-trainer\/apps\/api\/data\/limp_node_trust\.json$/, // a data part (DATA_PARTS), not code
@@ -82,14 +78,15 @@ const CODE_EXCLUDE = [
   /^gto-trainer\/apps\/api\/src\/test\//,                    // test preloads
   /^gto-trainer\/apps\/wrapper\/test\//, /^ignition-study-wrapper\/tests\//, /\.test\.ts$/,
   /^gto-trainer\/apps\/wrapper\/PORT-PLAN\.md$/,
-  /^setup\/(buildPackage|build_player_ledger|regress)\.ts$/, /^setup\/(publish|zip)\.(ps1|cmd)$/,  // the owner's side
-  /^setup\/installer\//, /^setup\/INSTALL\.md$/,
+  /^setup\/(buildPackage|regress)\.ts$/, /^setup\/(publish|zip)\.(ps1|cmd)$/,  // the publisher's side
+  /^setup\/installer\//, /^setup\/INSTALL\.md$/, /\.md$/,
+  /^gto-trainer\/tools\//, /^gto-trainer\/study-tool\.(cmd|vbs)$/, /^gto-trainer\/apps\/wrapper\/src\/tools\//,  // developer tools
   /(^|\/)__pycache__\//,
   /^ignition-study-wrapper\/\.profile-/,
 ];
-// the chart index (~1 MB, changes whenever a chart lands) ships with the CODE; gitignored, so globbed here. The
-// folder is where the API's chart catalog and the chart server both look (CHART_SOLUTIONS_DIR's default).
-const CODE_GLOBS: [string, string][] = [["analysis/pipeline/solve/exploit_ui/solutions", "*.meta.json"]];
+// the chart index (~1 MB, changes whenever a chart lands) ships with the CODE; gitignored (the chart server keeps it in
+// sync from R2), so globbed here. The folder both the API's chart catalog and the chart server read (repoPaths CHARTS_DIR).
+const CODE_GLOBS: [string, string][] = [["gto-trainer/apps/api/data/charts", "*.meta.json"]];
 // the npm packages the API and the wrapper import at run time, SHIPPED (hoisted to gto-trainer/node_modules): an install
 // downloads nothing from npm and can never land a half-written package (the zod@4.4.3 cache of 2026-09-22)
 const VENDORED = ["hono", "zod"];
@@ -190,7 +187,7 @@ function vendoredItems(): [string, string][] {
   });
 }
 
-/** Every file the code zip ships, as [source, package path (posix)], minus the trimmed ledger it adds itself. */
+/** Every file the code zip ships, as [source, package path (posix)]. */
 function codeItems(): [string, string][] {
   const files = gitFiles(...CODE_TREES);
   for (const [d, pat] of CODE_GLOBS) files.push(...glob(join(ROOT, d), pat).filter(isFile).map(rel));
@@ -255,7 +252,6 @@ function releaseStatus(out: string): Record<string, any> {
   } catch (e: any) {
     return { ...st, ok: false, error: `cannot read the published manifest: ${e?.message ?? e}` };
   }
-  delete old["gto-trainer/apps/api/data/ledger.json"];     // rebuilt from the live ledger on every build
   const cachePath = join(out, "hash-cache.json");
   const cache = loadCache(cachePath);
   const cur = Object.fromEntries(codeItems().map(([src, f]) => [f, sha256File(src, cache)]));   // cached: cheap to ask often
@@ -382,17 +378,7 @@ function main(): number {
     }
   }
 
-  // 1. the trimmed ledger
-  const trimmed = join(out, "ledger.player.json");
-  const r = spawnSync(bun, ["setup/build_player_ledger.ts", trimmed], { cwd: ROOT, encoding: "utf8" });
-  if (r.status || !existsSync(trimmed)) {
-    console.log(r.stdout, r.stderr);
-    console.log("could not build the trimmed ledger");
-    return 1;
-  }
-  console.log((r.stdout || "").split(/\r?\n/)[0]);
-
-  // 2. data parts: hash (cached), build the zip for any part whose version has no zip yet
+  // 1. data parts: hash (cached), build the zip for any part whose version has no zip yet
   const cachePath = join(out, "hash-cache.json");
   const cache = loadCache(cachePath);
   const parts: Record<string, Record<string, any>> = {};
@@ -420,11 +406,9 @@ function main(): number {
   }
   writeFileSync(cachePath, JSON.stringify(cache));
 
-  // 3. code, with VERSION.json = version + the manifest the updater diffs against
+  // 2. code, with VERSION.json = version + the manifest the updater diffs against
   const items = codeItems();
   const manifest: Record<string, string> = Object.fromEntries(items.map(([src, f]) => [f, sha256File(src)]));
-  const ledgerRel = "gto-trainer/apps/api/data/ledger.json";
-  manifest[ledgerRel] = sha256File(trimmed);
   const stamp = { version, built: isoLocal(), commit, notes: a.notes, data: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v.version])), files: manifest };
   const codeZip = join(out, `PokerWrapper-code-${version}.zip`);
   const leaks: string[] = [];
@@ -435,10 +419,10 @@ function main(): number {
       for (const pat of SECRET_PATTERNS) if (pat.test(txt)) leaks.push(`${f}: ${pat.source}`);
     }
   }
-  const versionJson = join(dirname(trimmed), `VERSION-${version}.json`);
+  const versionJson = join(out, `VERSION-${version}.json`);
   writeFileSync(versionJson, pyJsonDumps(stamp, { indent: 1 }), "utf8");
   writeZip(codeZip, [...items.map(([src, f]) => [src, `PokerWrapper/${f}`] as [string, string]),
-                     [trimmed, `PokerWrapper/${ledgerRel}`], [versionJson, "PokerWrapper/VERSION.json"]], "Optimal");
+                     [versionJson, "PokerWrapper/VERSION.json"]], "Optimal");
   console.log(`code ${version}: ${Object.keys(manifest).length} files -> ${codeZip} (${(statSync(codeZip).size / 1e6).toFixed(1)} MB)`);
   if (leaks.length) {
     console.log("CREDENTIAL-LOOKING STRINGS FOUND — the code zip was written but must not be shared until these are checked:");
@@ -446,7 +430,7 @@ function main(): number {
     return 3;
   }
 
-  // 4. the Windows installer (--installer, or any publish): PokerWrapperSetup-<version>.exe = this code + the runtime
+  // 3. the Windows installer (--installer, or any publish): PokerWrapperSetup-<version>.exe = this code + the runtime
   let installer: Record<string, any> | null = null;
   if (a.installer || a.publish) {
     const exe = buildInstaller(out, version, codeZip, parts.runtime ? join(out, parts.runtime.file) : null);

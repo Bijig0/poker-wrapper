@@ -11,8 +11,8 @@
  * never shipped); wrapper bun test 0 fail (2 skips); contract 287/287 with the transcript identical. Every Bun here is
  * the one config/env.ps1 resolves — the one the launchers run (PATH's `bun` can be npm's bun.CMD, a different Bun:
  * 1.3.14 drops a statement calling a function named `declare`, which only the launchers' Bun showed). The rig test
- * runs on its own headless rig (:7792), never :7700 / :7701. The live checks need the StudyAPI / ChartServer
- * services and, for :7700, the Poker Wrapper open.
+ * runs on its own headless rig (:7792), never :7700 / :7701. The live checks need the API and chart-server
+ * services ("PokerWrapper API / Charts - <user>") and, for :7700, the Poker Wrapper open.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";

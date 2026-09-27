@@ -8,7 +8,7 @@
 #                   zip install: PokerWrapper-key.txt next to the folder, else pasted -> the Windows user's rclone config
 #   3. data         the data parts this version expects (setup\channel.ps1): a zip next to the folder, else downloaded
 #   4. packages     the study API's and wrapper's packages: shipped in gto-trainer\node_modules (else bun install)
-#   5. config       config\local.env: player mode, one GTO Wizard account, the TypeScript chart server
+#   5. config       config\local.env: one GTO Wizard account
 #   6. services     scheduled tasks "PokerWrapper API / Charts / GTO Wizard - <user>" (:2000, :8777, GTO Wizard)
 #   7. shortcuts    "Poker Wrapper" + "Poker Dashboard" on the desktop (the installer makes its own)
 #   8. check        setup\doctor.ps1
@@ -138,6 +138,21 @@ else {
     if ($LASTEXITCODE -eq 0 -and (Test-Path $sqlite)) { Ok 'data unpacked' } else { Bad "could not unpack $DataZip" }
   } else { Bad 'data not found — run setup again after step 2 is green, or put the data zip next to the PokerWrapper folder' }
 }
+# THE CHART INDEX MOVED (2026-09-27, the poker-wrapper repo): analysis\pipeline\solve\exploit_ui\solutions ->
+# gto-trainer\apps\api\data\charts. An update brings the index files (they are code); the chart bodies cached beside
+# the old index are downloads, so they are moved here rather than fetched again, and the emptied old folders go.
+$oldCharts = Join-Path $root 'analysis\pipeline\solve\exploit_ui\solutions'
+if (Test-Path $oldCharts) {
+  $newCharts = Join-Path $root 'gto-trainer\apps\api\data\charts'
+  New-Item -ItemType Directory -Force -Path $newCharts | Out-Null
+  $moved = 0
+  Get-ChildItem $oldCharts -File -Filter '*.json.gz' | ForEach-Object {
+    $dst = Join-Path $newCharts $_.Name
+    if (-not (Test-Path $dst)) { Move-Item -LiteralPath $_.FullName -Destination $dst; $moved++ }
+  }
+  Remove-Item -Recurse -Force (Join-Path $root 'analysis') -ErrorAction SilentlyContinue
+  Ok "chart cache moved to gto-trainer\apps\api\data\charts ($moved bodies)"
+}
 
 # ---------------------------------------------------------------- 4. packages
 # (no Python since 2026-09-27: the chart server is TypeScript too — an older install's aof-model\.venv is left alone)
@@ -185,13 +200,13 @@ function Set-Cfg($key, $value) {
   $script:cfg = @($script:cfg | Where-Object { $_ -notmatch "^\s*$key\s*=" }) + "$key=$value"
 }
 $has = { param($k) [bool]($cfg | Where-Object { $_ -match "^\s*$k\s*=\s*\S" }) }
-Set-Cfg 'PLAYER_MODE' '1'          # this install: answers + your own sessions and hands; no solve fleet
 Set-Cfg 'GTOW_SECONDARY' '0'       # one GTO Wizard account (the main one); heads-up solves use it too
-Set-Cfg 'CHART_SERVER' 'ts'        # the TypeScript chart server (.claude\chart-server.ps1); no Python on this machine
+# retired settings (PLAYER_MODE, CHART_SERVER: that is simply how this app is now)
+$cfg = @($cfg | Where-Object { $_ -notmatch '^\s*(PLAYER_MODE|CHART_SERVER)\s*=' })
 # no CoinPoker name to ask for: the reader learns it from the client's own log (sites/cpFeed.ts);
 # CP_HERO in local.env still pins it if that ever guesses wrong
 [IO.File]::WriteAllLines($local, [string[]]$cfg)   # no BOM: the wrapper and env.ps1 read it too
-Ok "written: PLAYER_MODE=1, GTOW_SECONDARY=0, CHART_SERVER=ts$(if (& $has 'CP_HERO') { ', CP_HERO set' })"
+Ok "written: GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })"
 
 # ---------------------------------------------------------------- 6. services
 Step 6 'Services (study API, chart server, GTO Wizard watchdog)'

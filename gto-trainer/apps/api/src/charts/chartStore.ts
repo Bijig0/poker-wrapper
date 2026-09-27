@@ -10,7 +10,7 @@ import { join } from "node:path";
  * Why it exists (2026-09-27): the packaged Poker Wrapper is the wrapper + the API/dashboard and nothing else. The
  * Python server dragged a venv, numpy/pandas and ~2,500 analysis files onto a player's laptop for these two
  * endpoints. The owner's machine keeps the Python server (its study-UI / exploit / MES endpoints serve the analysis
- * app); the package runs this one (CHART_SERVER=ts, .claude/chart-server.ps1). SAME CONTRACT, same env knobs, same
+ * app); the Poker Wrapper runs this one (.claude/chart-server.ps1). SAME CONTRACT, same env knobs, same
  * cache rules — keep the two in step when either changes:
  *
  *   - the index is the tiny .meta.json SIDECARS in one folder; a chart is listed as soon as its sidecar is there and
@@ -41,6 +41,8 @@ export interface ChartStoreOpts {
   fetchBody?: (sid: string, dest: string) => Promise<boolean>;
   /** the body names the remote holds (default: rclone lsf); null when it cannot be listed */
   listRemote?: () => Promise<Set<string> | null>;
+  /** copy the remote's sidecars into `dir`, adding and refreshing only (default: rclone copy --include *.meta.json) */
+  syncSidecars?: (dir: string) => Promise<boolean>;
   log?: (msg: string) => void;
 }
 
@@ -243,6 +245,25 @@ export class ChartStore {
       if (this.o.pinnedPrefixes.some((p) => b.name.startsWith(p)) || !inR2.has(b.name)) continue;
       try { unlinkSync(b.path); total -= b.size; } catch { /* in use: next one */ }
     }
+  }
+
+  /**
+   * Bring the index up to date with R2: every sidecar (<id>.meta.json) the remote has and this folder lacks or holds an
+   * older copy of. The chart factory uploads a chart's sidecar with its body, so a chart solved after this install
+   * was built is listed here without a release. Only ever ADDS: a sidecar known only here (the factory's local
+   * charts on the owner's machine) is left alone. Resolves how many sidecars arrived, or null when R2 answered no.
+   */
+  async syncIndex(): Promise<number | null> {
+    if (!this.o.remote) return null;
+    const count = () => { try { return readdirSync(this.o.dir).filter((n) => n.endsWith(".meta.json")).length; } catch { return 0; } };
+    const before = count();
+    const r = await (this.o.syncSidecars ?? ((dir) => rclone(["copy", this.o.remote, dir, "--include", "*.meta.json", "--update"], 600_000)
+      .then((x) => x.code === 0)))(this.o.dir);
+    if (!r) { this.log(`[index sync] ${this.o.remote} could not be read - the index stays as it is`); return null; }
+    this.refreshIndex();
+    const got = count() - before;
+    if (got > 0) this.log(`[index sync] ${got} new chart(s) from ${this.o.remote}`);
+    return got;
   }
 
   /** GET /api/preflop/node — a FILE solution's node by line, or the GTOW crawl's (source=gtow). */

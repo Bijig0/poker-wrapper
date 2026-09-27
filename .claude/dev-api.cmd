@@ -24,14 +24,14 @@ for /f %%s in ('powershell -NoProfile -Command "try { $null = Invoke-WebRequest 
 if /i "%API_STATE%"=="UP" (
   echo.
   echo   An API is ALREADY serving http://127.0.0.1:2000 -- almost certainly the
-  echo   StudyAPI scheduled task's worker.
+  echo   "PokerWrapper API - %USERNAME%" scheduled task's worker.
   echo.
   echo   Starting this one anyway gives you a second process that serves HTTP but
-  echo   owns none of the background work: no study poller, no job dispatcher, no
-  echo   box keeper ^(see data\background.lock and /api/ledger/keeper^).
+  echo   owns none of the background work: no study poller, no reconciler, no
+  echo   hand-history checker ^(see data\background.lock^).
   echo.
   echo   To make THIS instance the one in charge, stop the other first:
-  echo       Stop-ScheduledTask -TaskName StudyAPI
+  echo       Stop-ScheduledTask -TaskName "PokerWrapper API - %USERNAME%"
   echo       Get-CimInstance Win32_Process ^| ? { $_.CommandLine -match 'index\.ts' } ^| % { Stop-Process -Id $_.ProcessId -Force }
   echo.
   choice /c YN /n /m "   Start a demoted HTTP-only dev instance anyway? [Y/N] "

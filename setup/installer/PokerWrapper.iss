@@ -290,7 +290,7 @@ begin
       DeleteFile(App + '\gto-trainer\apps\api\data\hrc6max-preflop.sqlite');
       DelTree(App + '\gto-trainer\apps\api\data\mes_turn', True, True, True);
       DeleteFile(App + '\gto-trainer\apps\api\data\limp_node_trust.json');
-      DeleteChartBodies(App + '\analysis\pipeline\solve\exploit_ui\solutions');
+      DeleteChartBodies(App + '\gto-trainer\apps\api\data\charts');
       DelTree(App + '\bin', True, True, True);
       DelTree(App + '\gto-trainer\node_modules', True, True, True);
       DelTree(App + '\config\parts', True, True, True);

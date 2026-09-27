@@ -26,8 +26,8 @@ const REPO = paths().repo;
 const WRAPPER = join(REPO, "ignition-study-wrapper");
 const HERE = join(REPO, "gto-trainer");
 const LOG = join(paths().debug, "study-tool.log");
-const VENV_PY = join(REPO, "aof-model", ".venv", "Scripts", "python.exe");
-const CHART_SERVER = join(REPO, "analysis", "pipeline", "solve", "exploit_ui", "server.py");
+// the chart server is TypeScript (the API's src/charts), run with this same Bun
+const CHART_SERVER = join(REPO, "gto-trainer", "apps", "api", "src", "charts", "chartServer.ts");
 // the rig's own ports; STUDY_TOOL_PANEL / STUDY_TOOL_CDP move it (a test of this launcher runs on spare ports, headless)
 const PANEL = Number(process.env.STUDY_TOOL_PANEL || 7701), CDP = Number(process.env.STUDY_TOOL_CDP || 9334), API = 2000;
 // EVERY 3-handed preflop answer is served from here: without it the panel sits on "solving your spot…" forever
@@ -77,12 +77,12 @@ function spawnServer(cmd: string, args: string[], cwd: string, env: NodeJS.Proce
 /**
  * The API's environment. EXPLOIT_CHART arms the pool-exploit preflop overlay (fastSolve reads it ONCE per process);
  * an API started without it evaluates the 25NL Zone exploit strategy as `unavailable` and nothing says why (seen
- * 2026-09-13). The NL25 exports since the 2026-09-14 cutover, the same pair config/env.ps1 arms for the StudyAPI task.
+ * 2026-09-13). The NL25 exports since the 2026-09-14 cutover, the same pair config/env.ps1 arms for the API's task.
  */
 function apiEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  const limp = join(REPO, "analysis", "pipeline", "limp_study");
-  const chart = join(limp, "exploit_ranges_nl25.json"), pool = join(limp, "pool_model_nl25.json");
+  const poolDir = join(HERE, "apps", "api", "data", "pool");   // the chart factory's pool exports (config/env.ps1 arms the same pair)
+  const chart = join(poolDir, "exploit_ranges_nl25.json"), pool = join(poolDir, "pool_model_nl25.json");
   if (existsSync(chart)) {
     env.EXPLOIT_CHART ??= chart;
     say(`exploit overlay ARMED: ${env.EXPLOIT_CHART}`);
@@ -99,12 +99,12 @@ async function main(): Promise<void> {
     say(`:${API} api starting`);
     spawnServer(BUN, ["run", "index.ts"], join(HERE, "apps", "api"), apiEnv());
   }
-  // 2. the chart corpus, before the rig, so the first spot loaded has somewhere to be solved from. Module mode from
-  //    the solve dir, the way .claude/dev-charts.cmd runs it, with six parsed trees resident
+  // 2. the chart server, before the rig, so the first spot loaded has somewhere to be solved from — the way
+  //    .claude/dev-charts.cmd runs it, with six parsed trees resident
   if (await up(CHARTS)) say(`:${CHARTS} chart server already up`);
   else if (existsSync(CHART_SERVER)) {
     say(`:${CHARTS} chart server starting`);
-    spawnServer(VENV_PY, ["-m", "exploit_ui.server"], dirname(dirname(CHART_SERVER)),
+    spawnServer(BUN, [CHART_SERVER], dirname(CHART_SERVER),
                 { ...process.env, HRC_UI_DOC_CACHE_MAX: process.env.HRC_UI_DOC_CACHE_MAX || "6" });
   } else say(`chart server not found at ${CHART_SERVER} — 3-max answers will not solve`);
   // (the study pages are on the API's :2000 — the separate :2100 dashboard app is gone)

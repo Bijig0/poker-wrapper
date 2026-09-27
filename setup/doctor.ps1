@@ -48,7 +48,7 @@ Write-Host ""
 Write-Host " Data" -ForegroundColor Cyan
 $sqlite = Join-Path $root 'gto-trainer\apps\api\data\hrc6max-preflop.sqlite'
 Row (Test-Path $sqlite) '6-max preflop charts' $(if (Test-Path $sqlite) { "$([math]::Round((Get-Item $sqlite).Length / 1GB, 1)) GB" } else { 'missing' }) 'put PokerWrapper-data-*.zip next to the folder and run setup'
-$metas = @(Get-ChildItem (Join-Path $root 'analysis\pipeline\solve\exploit_ui\solutions') -Filter *.meta.json).Count
+$metas = @(Get-ChildItem (Join-Path $root 'gto-trainer\apps\api\data\charts') -Filter *.meta.json).Count
 Row ($metas -gt 1000) 'Chart index' "$metas charts" 'put PokerWrapper-data-*.zip next to the folder and run setup'
 $turn = @(Get-ChildItem (Join-Path $root 'gto-trainer\apps\api\data\mes_turn')).Count
 Row ($turn -gt 0) 'MES turn data' "$turn files" 'put PokerWrapper-data-*.zip next to the folder and run setup'
@@ -62,8 +62,6 @@ Write-Host ""
 Write-Host " Settings" -ForegroundColor Cyan
 $local = Join-Path $root 'config\local.env'
 $cfg = if (Test-Path $local) { Get-Content $local } else { @() }
-$pm = [bool]($cfg -match '^\s*PLAYER_MODE\s*=\s*1')
-Row $pm 'Player mode' $(if ($pm) { 'on' } else { 'off' }) 'run PokerWrapperSetup.exe again (repair)'
 $hero = ($cfg | Where-Object { $_ -match '^\s*CP_HERO\s*=\s*\S' }) -replace '^\s*CP_HERO\s*=\s*', ''
 Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } else { '(learned from CoinPoker when you sit down)' }))
 

@@ -86,6 +86,22 @@ describe("ChartStore", () => {
       .toEqual(["pin_x", "local_only", "keep", "tiny"]);
   });
 
+  test("index sync: a chart landed in R2 is listed without a release; a local-only chart stays; R2 down changes nothing", async () => {
+    const d = mkdtempSync(join(tmpdir(), "charts-"));
+    chart(d, "local_only", {});
+    const s = store(d, {
+      remote: "r2:test",
+      syncSidecars: async (dir) => { writeFileSync(join(dir, "new_chart.meta.json"), JSON.stringify({ id: "new_chart", label: "new" })); return true; },
+    });
+    s.refreshIndex();
+    expect(await s.syncIndex()).toBe(1);
+    expect(s.solutions().map((m) => m.id).sort()).toEqual(["gtow", "local_only", "new_chart"]);
+    const down = store(d, { remote: "r2:test", syncSidecars: async () => false });
+    expect(await down.syncIndex()).toBeNull();
+    expect(down.solutions().length).toBe(3);
+    expect(await store(d).syncIndex()).toBeNull();   // no remote configured: nothing to sync from
+  });
+
   test("HTTP: liveness, index, node, 404", async () => {
     const d = mkdtempSync(join(tmpdir(), "charts-"));
     chart(d, "hu", { "": { ok: true } });
