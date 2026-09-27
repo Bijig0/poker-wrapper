@@ -6,4 +6,6 @@ for /f "usebackq delims=" %%L in (`powershell -NoProfile -ExecutionPolicy Bypass
 cd /d "%POKER_ROOT%\gto-trainer\apps\api"
 set "PORT=2001"
 set "PLAYER_MODE=1"
+rem never the background owner, even when the live :2000 worker is being restarted (services/backgroundLock.ts)
+set "API_HTTP_ONLY=1"
 "%BUN%" --watch index.ts

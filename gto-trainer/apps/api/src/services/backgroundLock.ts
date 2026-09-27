@@ -151,9 +151,26 @@ function release(): void {
  * Claim the background work for this process, retrying every RETRY_MS while another live instance
  * holds it. Call once, at boot, before starting the services.
  */
+/**
+ * A SECOND API NEVER TAKES OVER (2026-09-27). The verify server (.claude/dev-api-verify.cmd: :2001, `bun --watch`) was
+ * "HTTP only" only while the live worker held the lock: when the watchdog killed a hung :2000 worker at 10:26 local,
+ * the :2001 dev instance acquired the lock within a minute — the study poller, the dispatcher and the keepers moved
+ * into a --watch process that restarts on any file edit, and the relaunched :2000 worker came up HTTP only. An API on
+ * any port but the live 2000, or with API_HTTP_ONLY=1, now never asks for the lock at all.
+ */
+export const httpOnlyByConfig = (): string | null =>
+  process.env.API_HTTP_ONLY === "1" ? "API_HTTP_ONLY=1"
+    : process.env.PORT && process.env.PORT !== "2000" ? `it listens on :${process.env.PORT}, not the live :2000` : null;
+
 export function startBackgroundLock(): void {
   if (managed) return;
   managed = true;
+  const httpOnly = httpOnlyByConfig();
+  if (httpOnly) {
+    lastNote = `HTTP only by configuration (${httpOnly}) — never takes the background work`;
+    console.log(`background lock: ${lastNote}`);
+    return;
+  }
   if (tryAcquire()) {
     console.log(`background lock: this process (pid ${process.pid}) owns the poller, job dispatcher and box keeper`);
     becomeOwner();
