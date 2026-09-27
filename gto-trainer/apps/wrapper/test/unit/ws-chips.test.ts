@@ -99,15 +99,19 @@ test("a money frame whose ACTION the reader drops still moves the seat's chips �
   });
 });
 
-test("a seat whose money the DOM filed ahead of any frame is left out until its next frame (unknown, not a discrepancy)", () => {
+// Until 2026-09-26 a seat whose money the DOM backfill had filed ahead of its frame was left out of the export
+// (`wsStale`): the line held an action the chips did not. The line is the protocol's now (ignition/wsLine.ts) — the
+// screen files nothing — so line and chips are the same frames and nothing is hidden.
+test("a DOM guess never hides a seat's protocol money: the line and the chips are the same frames", () => {
   withHands(() => {
     fourWayPreflop();
     onGameMsg({ pid: "CO_BCARD3_INFO", bcard: [6, 25, 26] });
     // reader.ts's backfill filed "Seat 1 bets" off the chips on screen; the WS frame has not arrived yet
     S.ws.wsStale.add(1);
     let h = handStateIgnition()!;
-    expect(h.wsStack.has(1)).toBe(false);
-    expect(h.wsInFront.has(1)).toBe(false);
+    expect(h.actions.filter((a: any) => a.street === "flop")).toEqual([]);   // no bet the protocol has not sent
+    expect(h.wsStack.has(1)).toBe(true);
+    expect(h.wsInFront.get(1)).toBe(0);
     expect(h.wsStack.get(2)).toBe(97.5);
     // …the frame lands (the dedupe keeps the DOM's action; the chips are the table's): back in the export
     onGameMsg({ pid: "CO_SELECT_INFO", seat: 1, btn: 128, bet: 300, raise: 0, account: 19200 });

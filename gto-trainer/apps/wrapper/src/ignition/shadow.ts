@@ -6,14 +6,15 @@
  */
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { nowMs, strftime } from "../clock";
+import { nowMs, strftime, time } from "../clock";
 import { DATA_DIR } from "../config";
 import { log } from "../feed";
 import { pyInt, pyJsonDumps } from "../py";
 import { HandReconciler, bb as rcBb, makeTick } from "../reconcile";
 import { S } from "../state";
-import { eventLine } from "./hand";
+import { eventLine, potFaultAnswered, protocolHand } from "./hand";
 import { withoutRabbit } from "./ws";
+import { cardKey, sameHole } from "./dom";
 
 export function shadowTick(state: Record<string, any>): void {
   try {
@@ -42,8 +43,42 @@ export function shadowTick(state: Record<string, any>): void {
     // it ("the board grew to 5 cards", hand 4920544353: hero's fold retracted, turn and river checks filed)
     sh.rc.observe(makeTick({ seq: sh.seq, t: strftime("%H:%M:%S"), seats, pot: rcBb(state.pot ?? null),
                              board: withoutRabbit(state.board || []).length, buttons: [...(state.actions || [])], hero }));
+    screenPotCheck(hand, rcBb(state.pot ?? null), withoutRabbit(state.board || []));
   } catch (e: any) {
     log(`[shadow] tick error: ${e?.message ?? e}`);
+  }
+}
+
+/** How long the screen's pot may disagree with the protocol's line before the decision is held — ticks AND seconds.
+ *  The screen redraws after the socket delivers: over the golden recordings every disagreement on a line Ignition
+ *  confirms cleared within 1.4 s (4 ticks alone came in under 0.5 s and held 31 of hero's decisions in recording
+ *  20260922_194132); a line that is really wrong, or a socket that is another table's, disagrees for good. */
+export const SCREEN_POT_HOLD = 4;
+export const SCREEN_POT_HOLD_S = 3.0;
+
+/** THE SCREEN CHECKS THE PROTOCOL'S LINE (2026-09-26): the pot the table draws must be the chips the line put in, less
+ *  rake (the same rule as reconcile.ts's own pot check — hand.potFaultAnswered). Only while the screen shows THIS hand
+ *  on THIS street — hero's hole cards and every board card the protocol dealt — so a screen still drawing the last
+ *  hand's pot (it lags a new deal by seconds: recording 20260922_194132, "Total pot 2.5 BB" over a hand of blinds) or
+ *  another street is never read as a disagreement. A tick it cannot compare leaves the count where it was. */
+export function screenPotCheck(hand: number | null, pot: number | null, board: string[]): void {
+  const sc = S.screenCheck;
+  if (sc.hand !== hand) Object.assign(sc, { hand, bad: 0, since: null, why: null });
+  const p = protocolHand();
+  if (!p || pot === null || !(pot > 0)) return;
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((c, i) => cardKey(c) === cardKey(b[i]));
+  if (!same(board, p.board) || !sameHole(S.tapDomCards || [], p.heroCards)) return;
+  const boardLen = board.length;
+  const street = boardLen >= 5 ? "river" : boardLen === 4 ? "turn" : boardLen === 3 ? "flop" : "preflop";
+  const bb = S.ws.bb || 0;
+  const dead = bb && S.ws.bbSeen ? p.deadCents / bb : 0;   // a dead blind is in the pot and in no seat's line
+  if (potFaultAnswered(p.actions, pot - dead, street)) {
+    Object.assign(sc, { bad: 0, since: null, why: null });
+    return;
+  }
+  sc.since ??= time();
+  if (++sc.bad >= SCREEN_POT_HOLD && time() - sc.since >= SCREEN_POT_HOLD_S) {
+    sc.why = `the pot on screen (${pot} BB) disagrees with the protocol's line`;
   }
 }
 

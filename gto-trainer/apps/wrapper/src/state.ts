@@ -166,6 +166,8 @@ function fresh() {
     net: { last: null as any, bad: 0, good: 0, sitout: null as any, history: [] as any[],
            drop: null as null | { sid: string; at: number; why: string; via: string; handled: boolean } },
     shadow: { hand: null as number | null, rc: null as any, seq: 0, done: new Map<number, any>(), agree: 0, differ: 0, last: null as any },
+    // the screen checking the protocol's line (ignition/shadow.ts screenPotCheck): consecutive disagreeing ticks, and why
+    screenCheck: { hand: null as number | null, bad: 0, since: null as number | null, why: null as string | null },
     topupLocked: false,
     topupPanel: { open: false, lastCloseAt: 0.0, domTicks: 0 } as Record<string, any>,
     topupAbort: false,

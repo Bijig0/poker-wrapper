@@ -20,6 +20,7 @@ import { S, TupleSet } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand } from "../archive";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
+import { TwinFilter } from "./wsLine";
 
 const BTN: Record<number, string> = { 64: "checks", 1024: "folds", 256: "calls", 4096: "raises to", 2048: "is ALL-IN" };
 const BLIND_BTN: Record<number, string> = { 2: "small blind", 4: "big blind", 8: "post" };
@@ -678,6 +679,8 @@ export function beginHand(hid: string | null): void {
   w.wsDead = new Map();            // dead blinds: chips out of the stack that are no bet
   w.wsStale = new Set<number>();   // seats whose last money action the DOM filed ahead of any frame
   w.actions = [];
+  w.frames = [];                   // every frame the tap took for this hand, in order — the protocol line (wsLine.ts)
+  w.frameFilter = new TwinFilter(); // a frame delivered twice is one frame (keepFrame)
   w.actSeen = new TupleSet();
   w.foldedSeats = new Set<number>();
   w.domFolds = new Set<number>();
@@ -720,6 +723,12 @@ export function abandonHand(why: string): void {
 
 const idOf = (v: unknown) => (truthy(v) ? pyStr(v) : "");
 
+/** The hand's frames for the protocol line (wsLine.ts), less a frame delivered twice (wsLine.TwinFilter). */
+function keepFrame(w: Record<string, any>, d: Record<string, any>): void {
+  const f: TwinFilter = (w.frameFilter ??= new TwinFilter());
+  if (f.keep(d, time())) (w.frames ??= []).push(d);
+}
+
 export function onGameMsg(d: Record<string, any>): void {
   if (S.fakeMode) {
     dumpMark("dropped: fake-table test mode");
@@ -727,6 +736,9 @@ export function onGameMsg(d: Record<string, any>): void {
   }
   const w = ws();
   const pid = d.pid;
+  // THE HAND'S FRAMES (wsLine.ts builds /hand's line from them): every frame this handler takes, in order; a new
+  // hand's PLAY_STAGE_INFO opens the list below, after beginHand has emptied it
+  if (pid !== "PLAY_STAGE_INFO") keepFrame(w, d);
   if (pid === "PLAY_STAGE_INFO") {
     const hid = idOf(d.stageNo);
     if (hid && hid === S.handIds.get(S.handNo)) {
@@ -741,6 +753,7 @@ export function onGameMsg(d: Record<string, any>): void {
       return;
     }
     beginHand(hid);
+    keepFrame(w, d);
   } else if (pid === "CO_BCARD3_INFO" && boardContradicts(d)) {
     dumpMark("forced new hand: flop contradicts the board held in this hand");
     beginHand(null);

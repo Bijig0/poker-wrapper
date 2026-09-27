@@ -7,8 +7,9 @@
  * cards"), retracting hero's fold and filing hero checking the turn and the river.
  *
  * Replayed from the hand's own frames (test/fixtures/ign-pot-winner-folds.jsonl.gz, session 20260925_135420) through
- * the live reader — and once more with the TURN's board frame dropped, the case the override exists for: the DOM's
- * turn must still be taken, the rabbit card after it still not.
+ * the live reader — and once more with the TURN's board frame dropped. Until 2026-09-26 the screen's turn was taken into
+ * the line there; since the line is the protocol's (ignition/wsLine.ts), a card only the screen shows HOLDS the
+ * decision as uncertain instead, and the rabbit card after it still counts for nothing.
  */
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
@@ -36,7 +37,7 @@ function handFrames(): any[] {
   return text.split("\n").filter((l) => l).map((l) => JSON.parse(l)).filter((r) => r.grp === HAND);
 }
 
-type Export = { ts: number; kind: string; pid: string | null; board: string[]; street: string };
+type Export = { ts: number; kind: string; pid: string | null; board: string[]; street: string; uncertain: string | null };
 
 /** The hand through the live loop's reader, in time order: every /hand export of this hand along the way, the
  *  archived rows, the shadow audit, and the rabbit card the WS reader kept. */
@@ -73,7 +74,7 @@ async function replay(recs: any[]) {
       }
       if (S.ws.rabbit) rabbitSeen = Object.fromEntries(S.ws.rabbit);
       const h = handState();
-      if (h && h.clientHandId === HAND) exports.push({ ts: r.ts, kind: r.kind, pid: r.kind === "ws" ? r.d.pid : null, board: h.board, street: h.street });
+      if (h && h.clientHandId === HAND) exports.push({ ts: r.ts, kind: r.kind, pid: r.kind === "ws" ? r.d.pid : null, board: h.board, street: h.street, uncertain: h.lineUncertain ?? null });
     }
     archiveHand();
   } finally {
@@ -139,23 +140,21 @@ test("the rabbit hunt's card neither extends the board nor opens a street (49205
   expect(fails).toEqual([]);
 });
 
-test("a board frame the tap lost is still taken from the DOM — up to the rabbit card, never past it", async () => {
+test("a board frame the tap lost: the screen's turn holds the decision, it is never written into the line", async () => {
   const { fails, check } = checker();
   const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
   // the turn's CO_BCARD1_INFO dropped: the WS board stops at the flop, the DOM shows Q♥ (then the rabbit's Q♣)
   const recs = handFrames().filter((r) => !(r.kind === "ws" && r.d.pid === "CO_BCARD1_INFO" && r.d.pos === 4));
   check("the variant really lacks the turn frame", !recs.some((r) => r.kind === "ws" && r.d.pid === "CO_BCARD1_INFO"));
+  const endAt = recs.find((r) => r.kind === "ws" && r.d.pid === "CO_RESULT_INFO")?.ts ?? 0;
   await withReplay(recs, ({ exports, rows }) => {
-    check("/hand took the DOM's turn while the hand was live", exports.some((e) => J(e.board) === J(TURN_BOARD) && e.street === "turn"
-                                                                                && e.ts < (recs.find((r) => r.kind === "ws" && r.d.pid === "CO_RESULT_INFO")?.ts ?? 0)),
-          J(exports.map((e) => [e.ts, e.board.length])));
-    eq("/hand never showed a river", exports.filter((e) => e.street === "river" || e.board.length > 4).map((e) => e.ts), []);
+    eq("/hand never took a board card no frame dealt", exports.filter((e) => e.board.length > 3).map((e) => e.ts), []);
+    check("/hand said why while the screen showed the turn", exports.some((e) => e.ts < endAt
+      && e.uncertain === "line uncertain — the screen shows 4 board cards, the protocol has dealt 3"),
+      J(exports.map((e) => [e.ts, e.uncertain])));
     const row = rows.find((r) => r.clientHandId === HAND);
     check("archived", !!row);
-    if (row) {
-      eq("the archived board is the turn's — the DOM's turn kept, its rabbit card cut", row.board, TURN_BOARD);
-      eq("the archived street is the turn", row.street, "turn");
-    }
+    if (row) eq("the archived board is what the protocol dealt", row.board, TURN_BOARD.slice(0, 3));
   });
   expect(fails).toEqual([]);
 });

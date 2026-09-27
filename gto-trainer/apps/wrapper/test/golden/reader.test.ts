@@ -47,9 +47,11 @@ const UPDATE = process.env.GOLDEN_UPDATE === "1";
  *  verified on their own in test/golden/ws-chips.test.ts (590 seat-hands against the table's CO_RESULT_INFO, and
  *  dealt − behind = the line's chips on 4,247 seat-frames of every clean hand) and test/unit/ws-chips.test.ts.
  *  2026-09-25: /state `tableFrame` — our table's frame in the client (the pinned tag, the tags open, drawn or not), read
- *  off capture fields no recording has; verified on its own in test/unit/table-frame.test.ts. */
+ *  off capture fields no recording has; verified on its own in test/unit/table-frame.test.ts.
+ *  2026-09-26: S.ws.frames — the hand's frames kept for the protocol line (ignition/wsLine.ts); what /hand builds from
+ *  them is compared here like any other line, the list itself is bookkeeping (test/unit/ws-line-backtest.test.ts). */
 const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale",
-                                "tableFrame"]);
+                                "tableFrame", "frames", "frameFilter"]);
 /** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
  *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
  *  nothing else here (the pick key never counts one: relay.ts), verified on its own in test/unit/post-in.test.ts

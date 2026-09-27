@@ -11,8 +11,10 @@ import { pyFloatStr, pyRound, pyStr, sortedNums, splitWs } from "../py";
 import { CP, S, isCp } from "../state";
 import { C } from "../config";
 import * as TABLES from "../tables";
+import { TOL } from "../reconcile";
 import { potVal } from "./dom";
 import { domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
+import { potAgrees, wsHand, type WsHand } from "./wsLine";
 
 const ws = () => S.ws;
 
@@ -152,6 +154,53 @@ export function lineOrderFault(line: LineRow[], rc: { dealt: Iterable<number>; s
 }
 
 const rowKey = (x: LineRow) => JSON.stringify(x);
+
+/** Every chip a /hand line has put in, in BB: each seat's last level on each street, summed — a bet / raise / all-in
+ *  carries the level it went to, a call the chips it added, a blind its post. null = a money row without an amount
+ *  (the blind not seen yet): the line cannot be summed. */
+export function lineChips(line: any[]): number | null {
+  let done = 0, street: string | null = null;
+  let level = new Map<number, number>();
+  for (const a of line) {
+    if (a.street !== street) {
+      for (const v of level.values()) done += v;
+      level = new Map();
+      street = a.street;
+    }
+    const t = String(a.type);
+    if (t === "fold" || t === "check") continue;
+    const amt = a.amount;
+    if (typeof amt !== "number" || !Number.isFinite(amt)) return null;
+    if (t === "call" || t.startsWith("post")) level.set(a.seatId, (level.get(a.seatId) ?? 0) + amt);
+    else level.set(a.seatId, amt);
+  }
+  for (const v of level.values()) done += v;
+  return pyRound(done, 2);
+}
+
+export const POT_FAULT = "pot disagrees with the ledger";
+
+/**
+ * A POT FAULT THE EVENT LINE ANSWERS (2026-09-26, NL5 session_20260926_030543; Brady: "preflop the auto execute
+ * worked, postflop it failed", hand 4920637334 K9 on 7-9-7). The level reconciler reads the chips IN FRONT of each
+ * seat once a feed tick; with four tables a tick is 1-3 s, and a call that closes a street is swept into the pot
+ * between two ticks (frame 388: BB 1 in front, pot 4 → frame 389: flop, pot 5.4, BB's stack 1.6 lower) — the
+ * reconciler never sees it, its ledger stays short by that call, and "pot disagrees with the ledger" fires on every
+ * later street. That fault was sent to the poller as `lineUncertain` and HELD auto-execute on every postflop decision
+ * of the hand, although the line /hand actually carried — the event log's, which had "5 call 1.6" — was right.
+ * All six pot faults of that session were this: the event line summed to the table's pot (less rake) every time.
+ *
+ * The check is the reconciler's own (reconcile.ts: pot within [ledger × 0.94 after the flop, ledger] ± TOL), asked of
+ * the line being answered instead of the reconciler's ledger. True = that line accounts for the table's pot, so the
+ * fault is the reconciler's miss, not the line's. A line with a phantom or lost action still fails it and still holds.
+ */
+export function potFaultAnswered(line: any[], pot: number | null | undefined, street: string): boolean {
+  if (typeof pot !== "number" || !(pot > 0)) return false;
+  const total = lineChips(line);
+  if (total === null) return false;
+  const low = total * (street === "preflop" ? 1.0 : 0.94) - TOL;
+  return pot <= total + TOL && pot >= low;
+}
 const amtStr = (a: number | null) => (a === null ? "" : ` ${pyFloatStr(a)}`);
 
 /** CUT-OVER: which betting line /hand carries — the event log's, or the level reconciler's when the two differ
@@ -169,6 +218,9 @@ export function reconciledLine(old: any[], hero: number | null, street: string):
   try {
     journal = [...rc.line()];
     viol = [...rc.faults(street)];
+    if (viol.some((v) => v.what === POT_FAULT) && potFaultAnswered(old, rc.lastPot, street)) {
+      viol = viol.filter((v) => v.what !== POT_FAULT);
+    }
     rcC = new Map(rc.C);
     rcMax = rc.maxBet;
   } catch {
@@ -249,6 +301,33 @@ export function eventLine(): any[] {
   });
 }
 
+/** THE HAND FROM THE PROTOCOL (wsLine.ts): this hand's frames, reduced. null = no frames to build it from — the fake
+ *  table (it has no socket) or a hand the tap has not bound yet — and /hand keeps the old event-log line. */
+export function protocolHand(): WsHand | null {
+  const w = ws();
+  if (S.fakeMode || !(w.frames && w.frames.length)) return null;
+  const bb = w.bb || 0;
+  return wsHand(w.frames, bb && w.bbSeen ? bb : null);
+}
+
+/**
+ * THE SCREEN AS A CHECKER (2026-09-26): with the line built from the protocol, nothing the screen shows is written
+ * into it — a disagreement marks the decision uncertain instead (auto-execute holds, the panel says why). Checked:
+ * the protocol's own pot against the chips the line put in (exact, at each pot frame); a frame the reducer could not
+ * place; a board card the screen shows that no frame dealt; the screen's pot against the line (screenCheck, kept by
+ * the shadow tick over several ticks so a frame drawn a tick late is not a disagreement).
+ */
+export function protocolUncertain(p: WsHand, screenBoard: string | null): string | null {
+  if (p.faults.length) return `line uncertain — ${p.faults[p.faults.length - 1]}`;
+  if (potAgrees(p) === false) {
+    return `line uncertain — the table's pot (${p.potCheck!.potCents}c) disagrees with the chips the line put in (${p.potCheck!.lineCents}c)`;
+  }
+  if (screenBoard) return `line uncertain — ${screenBoard}`;
+  const sc = S.screenCheck;
+  if (sc && sc.hand === S.handNo && sc.why) return `line uncertain — ${sc.why}`;
+  return null;
+}
+
 export function handStateIgnition(): Record<string, any> | null {
   const w = ws();
   const dealt: number[] = [...(w.dealt || [])];
@@ -263,19 +342,23 @@ export function handStateIgnition(): Record<string, any> | null {
   const bb = w.bb || 0;
   const scaled = bb && w.bbSeen;
   const toBb = (cents: number | null | undefined) => (scaled && cents !== null && cents !== undefined ? pyRound(cents / bb, 2) : null);
-  let board = (w.board || []).filter((c: any) => c).map(short);
+  const proto = protocolHand();
+  let board = (proto ? proto.board : (w.board || []).filter((c: any) => c)).map(short);
   const pastGrace = time() >= (w.domGraceUntil ?? 0);
   const hasVoluntary = voluntaryActed();
+  let screenBoard: string | null = null;
   if (pastGrace) {
     // the screen's board fills a board frame the tap lost — never with the rabbit hunt's card (ws.ts withoutRabbit), and
-    // never when it is not this hand's: another table's, or an earlier hand's a stuck frame still shows (domBoardRefused)
+    // never when it is not this hand's: another table's, or an earlier hand's a stuck frame still shows (domBoardRefused).
+    // With the protocol's line the screen only CHECKS: a card it shows that no frame dealt holds the decision.
     const domRaw: string[] = withoutRabbit((S.liveStatus.board || []).filter((c: any) => c));
     if (hasVoluntary && [3, 4, 5].includes(domRaw.length) && domRaw.length > board.length && !domBoardRefused(domRaw)) {
-      board = domRaw.map(short);
+      if (proto) screenBoard = `the screen shows ${domRaw.length} board cards, the protocol has dealt ${board.length}`;
+      else board = domRaw.map(short);
     }
   }
   const street = board.length >= 5 ? "river" : board.length === 4 ? "turn" : board.length === 3 ? "flop" : "preflop";
-  let actions: any[] = eventLine();
+  let actions: any[] = proto ? proto.actions : eventLine();
   let committed: Map<any, number> = new Map();
   for (const [s, c] of committedSrc) {
     const v = toBb(c);
@@ -300,7 +383,8 @@ export function handStateIgnition(): Record<string, any> | null {
   const wsStack = new Map<number, number>(), wsInFront = new Map<number, number>(), wsDead = new Map<number, number>();
   const acct: Map<number, number> | undefined = w.wsAccount;
   if (!S.fakeMode && scaled && acct && acct.size) {
-    const stale: Set<number> = w.wsStale ?? new Set<number>();
+    // stale = the DOM backfill filed a seat's money ahead of its frame; the protocol line has no such seat
+    const stale: Set<number> = proto ? new Set<number>() : w.wsStale ?? new Set<number>();
     const bb4 = (c: number) => pyRound(c / bb, 4);
     for (const s of sortedNums(dealt)) {
       if (stale.has(s)) continue;
@@ -315,7 +399,7 @@ export function handStateIgnition(): Record<string, any> | null {
   heroCards = heroCards.map(short);
   let actionOn = w.actionOn ?? null;
   const heroOwed = (w.maxBet ?? 0) - (committedSrc.get(hero) || 0);
-  const heroFolded = !!w.heroFolded;
+  const heroFolded = proto ? proto.folded.has(hero) : !!w.heroFolded;
   const actionOnRaw = actionOn;
   const src = toActSources(!!S.liveStatus.toAct);
   const since = S.liveStatus.toActSince || 0.0;
@@ -323,10 +407,12 @@ export function handStateIgnition(): Record<string, any> | null {
   if (actionOn !== hero && !heroFolded && (src.ws || (src.buttons && pastGrace && hasVoluntary) || buttonsHeld)) actionOn = hero;
   const actionOnOnly = actionOn === hero && !src.ws && !src.buttons;
   const toActHero = actionOn === hero && !actionOnOnly;
-  const foldedSeats = new Set(actsSrc.filter((a) => a.type === "fold").map((a) => a.seat));
+  const foldedSeats = proto ? proto.folded : new Set(actsSrc.filter((a) => a.type === "fold").map((a) => a.seat));
   const villains = dealt.filter((s) => s !== hero);
   const heroWon = !heroFolded && villains.length > 0 && villains.every((s) => foldedSeats.has(s));
-  const [lineActions, rcLedger, lineUncertain, lineNote, lineSource] = reconciledLine(actions, hero, street);
+  const [lineActions, rcLedger, lineUncertain, lineNote, lineSource] = proto
+    ? [actions, null, protocolUncertain(proto, screenBoard), null, "ws"] as [any[], any, string | null, string | null, string]
+    : reconciledLine(actions, hero, street);
   actions = lineActions;
   let heroOwedBb: number | null = null;
   if (rcLedger !== null) {
