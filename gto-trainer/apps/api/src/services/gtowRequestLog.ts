@@ -44,7 +44,14 @@ export interface GtowRequestRow {
   q?: string;
   /** the response's rate-limit / retry / cache headers, JSON, when it carried any */
   hd?: string;
+  /** what a poll was for (2026-09-27): probe | node | retry | legacy — see gtowApi.pollNode */
+  pm?: string;
+  /** who asked: walk | prefetch | study (the chain's callers tag themselves; scripts leave it empty) */
+  cl?: string;
 }
+
+/** Per-request context a caller may attach: it rides the ledger row, nothing else. */
+export interface GtowRequestExtra { pm?: string | null; cl?: string | null }
 
 /** A stored response: every 402/403/429 whole, plus hourly header samples of normal replies. */
 export interface GtowResponseRow {
@@ -122,14 +129,14 @@ class GtowRequestLog {
   }
 
   /** Record one request. Never throws — the ledger must not be able to fail a solve. */
-  note(row: { session?: string | null; kind: GtowRequestKind; status: number; q?: string | null; hd?: string | null }): void {
+  note(row: { session?: string | null; kind: GtowRequestKind; status: number; q?: string | null; hd?: string | null } & GtowRequestExtra): void {
     try {
       const scope = currentRequestScope();
       countRequest(row.kind, row.status);
       const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin,
         ...(scope ? { h: scope.handKey, ...(scope.street ? { sr: scope.street } : {}), go: scope.origin } : {}) };
-      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd) VALUES (?,?,?,?,?,?,?,?,?,?)")
-        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null);
+      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd, pm, cl) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null, row.pm ?? null, row.cl ?? null);
       if (++this.written % LOG_EVERY === 0) {
         const s = this.stats();
         console.log(`[gtow-requests] ${s.last24h.total} in the last 24 h (${Object.entries(s.last24h.bySession).map(([k, v]) => `${k} ${v}`).join(", ")}; ${s.last24h.status429} x 429) · cap ${CAP}`);
@@ -170,16 +177,16 @@ class GtowRequestLog {
    * fetch() with the ledger attached. Counts the request whatever happens to it: a timeout or a connection
    * error is a request GTO Wizard may well have received, so it is counted as status 0 rather than dropped.
    */
-  async fetch(session: string | null | undefined, kind: GtowRequestKind, url: string, init?: RequestInit): Promise<Response> {
+  async fetch(session: string | null | undefined, kind: GtowRequestKind, url: string, init?: RequestInit, extra?: GtowRequestExtra): Promise<Response> {
     const blocked = this.gate(session);
     if (blocked) return blocked;
     try {
       const r = await timed(`GTO Wizard ${kind} (${session ?? "?"})`, () => fetch(url, init), (x) => `HTTP ${x.status}`);
-      this.note({ session, kind, status: r.status, q: requestTarget(url), hd: limitHeaders(r.headers) });
+      this.note({ session, kind, status: r.status, q: requestTarget(url), hd: limitHeaders(r.headers), ...extra });
       await this.keepResponse(session, kind, url, r);
       return r;
     } catch (e) {
-      this.note({ session, kind, status: 0, q: requestTarget(url) });
+      this.note({ session, kind, status: 0, q: requestTarget(url), ...extra });
       throw e;
     }
   }
@@ -226,12 +233,13 @@ class GtowRequestLog {
   rows(sinceMs = 0): GtowRequestRow[] {
     try {
       return this.open()
-        .query<GtowRequestRow & { h: string | null; sr: string | null; go: string | null }, [number]>(
-          "SELECT ts, s, k, st, o, h, sr, go FROM gtow_requests WHERE ts >= ? ORDER BY id")
+        .query<Record<string, unknown> & { ts: number; s: string; k: GtowRequestKind; st: number; o: string }, [number]>(
+          "SELECT ts, s, k, st, o, h, sr, go, q, hd, pm, cl FROM gtow_requests WHERE ts >= ? ORDER BY id")
         .all(sinceMs)
         .map((r) => {
-          const { h, sr, go, ...rest } = r;
-          return { ...rest, ...(h != null ? { h } : {}), ...(sr != null ? { sr } : {}), ...(go != null ? { go } : {}) } as GtowRequestRow;
+          const out: Record<string, unknown> = { ts: r.ts, s: r.s, k: r.k, st: r.st, o: r.o };
+          for (const c of ["h", "sr", "go", "q", "hd", "pm", "cl"]) if (r[c] != null) out[c] = r[c];
+          return out as unknown as GtowRequestRow;
         });
     } catch {
       return [];

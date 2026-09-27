@@ -168,6 +168,23 @@ describe("gtowRequestLog", () => {
     } finally { db.close(); }
   });
 
+  test("a poll's purpose and caller ride the row (pm / cl), and are absent when the caller gave none", async () => {
+    const log = fresh();
+    const orig = globalThis.fetch;
+    // @ts-expect-error test stub
+    globalThis.fetch = async () => new Response(null, { status: 204 });
+    try {
+      await log.fetch("secondary", "poll", "https://api.gtowizard.com/v4/solutions/spot-solution/?custom_solution_id=s1", undefined, { pm: "probe", cl: "prefetch" });
+      await log.fetch("secondary", "poll", "https://api.gtowizard.com/v4/solutions/spot-solution/?custom_solution_id=s1");
+    } finally {
+      globalThis.fetch = orig;
+    }
+    const rows = log.rows();
+    expect(rows[0]).toMatchObject({ st: 204, pm: "probe", cl: "prefetch" });
+    expect(rows[1]).not.toHaveProperty("pm");
+    expect(rows[1]).not.toHaveProperty("cl");
+  });
+
   test("normal replies: one header sample per account x kind x status per hour, no body; hd null without limit headers", async () => {
     const log = fresh();
     const orig = globalThis.fetch;

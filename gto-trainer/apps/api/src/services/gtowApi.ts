@@ -494,7 +494,9 @@ class GtowApi {
   async customNode(
     solId: string,
     q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string },
-    timeoutMs = CUSTOM_SOLVE_TIMEOUT_MS
+    timeoutMs = CUSTOM_SOLVE_TIMEOUT_MS,
+    /** who is asking — rides every request this read sends into the ledger (`cl`): walk | prefetch | study */
+    caller?: string
   ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string }> {
     const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
     const hit = this.nodeCache.get(key);
@@ -515,21 +517,21 @@ class GtowApi {
       tmark(`GTO Wizard node [${node || "root"}] joined another request's poll`, `solution ${solId.slice(0, 8)}`);
       return pending.then((r) => (r.ok ? { ...r, src: "joined" as const } : r));
     }
-    const p = this.customNodeFetch(solId, q, timeoutMs).finally(() => this.nodePending.delete(key));
+    const p = this.customNodeFetch(solId, q, timeoutMs, caller).finally(() => this.nodePending.delete(key));
     this.nodePending.set(key, p);
     return p;
   }
 
-  private async customNodeFetch(solId: string, q: NodeQuery, timeoutMs: number): Promise<NodeFetchResult> {
+  private async customNodeFetch(solId: string, q: NodeQuery, timeoutMs: number, caller?: string): Promise<NodeFetchResult> {
     const t0 = Date.now();
     const deadline = t0 + timeoutMs;
     // anything but the chain's single-street shape keeps the old behaviour: poll until a strategy or the timeout
-    if (!streetRooted(q)) return this.pollNode(solId, q, t0, deadline, "legacy");
+    if (!streetRooted(q)) return this.pollNode(solId, q, t0, deadline, "legacy", caller);
     while (!this.solReady.has(solId)) {
       let probe = this.solProbe.get(solId);
       const mine = !probe;
       if (!probe) {
-        probe = this.probeSolution(solId, q.board, deadline).finally(() => this.solProbe.delete(solId));
+        probe = this.probeSolution(solId, q.board, deadline, caller).finally(() => this.solProbe.delete(solId));
         this.solProbe.set(solId, probe);
       } else {
         tmark(`GTO Wizard node [${q.riverActions ?? q.turnActions ?? q.flopActions ?? "root"}] waits for the solve's readiness probe`, `solution ${solId.slice(0, 8)}`);
@@ -544,16 +546,16 @@ class GtowApi {
       // that caller starts a fresh probe. A wall, a lost token or anything else ends every waiter alike.
       if (pr.ok || pr.status !== 504 || Date.now() >= deadline) return pr;
     }
-    return this.pollNode(solId, q, t0, deadline, "ready");
+    return this.pollNode(solId, q, t0, deadline, "ready", caller);
   }
 
   /** Poll a solve's street root until it answers (not before FIRST_POLL_MS after the solve was created). A 200 of any
    *  kind means the solve is served; it is marked ready and the root node cached like any other. */
-  private async probeSolution(solId: string, board: string, deadline: number): Promise<NodeFetchResult> {
+  private async probeSolution(solId: string, board: string, deadline: number, caller?: string): Promise<NodeFetchResult> {
     const created = this.solCreatedAt.get(solId);
     const wait = created != null ? created + FIRST_POLL_MS - Date.now() : 0;
     if (wait > 0) await new Promise((res) => setTimeout(res, wait));
-    return this.pollNode(solId, { board }, Date.now(), deadline, "until-ready");
+    return this.pollNode(solId, { board }, Date.now(), deadline, "until-ready", caller);
   }
 
   /**
@@ -561,7 +563,7 @@ class GtowApi {
    * marks the solve ready on the first 200. `ready` knows the solve is served, so an empty answer (204, or a 200
    * without action_solutions) gets NO_NODE_GRACE retries and is then reported as a missing node (status 204).
    */
-  private async pollNode(solId: string, q: NodeQuery, t0: number, deadline: number, mode: "legacy" | "until-ready" | "ready"): Promise<NodeFetchResult> {
+  private async pollNode(solId: string, q: NodeQuery, t0: number, deadline: number, mode: "legacy" | "until-ready" | "ready", caller?: string): Promise<NodeFetchResult> {
     const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
     const line = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
     let empties = 0;
@@ -592,11 +594,14 @@ class GtowApi {
       // per-request bound: the loop's wall-clock ceiling can't fire while a
       // single fetch hangs inside it — a timed-out poll just retries
       let r: Response;
+      // the ledger learns what this poll was for: the readiness probe, a read of a served solve, the grace retry of an
+      // empty answer, or the old loop — with that, a hand's 204s can be told apart later (solving vs no such node)
+      const pm = mode === "legacy" ? "legacy" : mode === "until-ready" ? "probe" : empties ? "retry" : "node";
       try {
         r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(8_000),
-        });
+        }, { pm, cl: caller ?? null });
       } catch (e) {
         lastErr = `poll request failed: ${e instanceof Error ? e.message : e}`;
         await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));

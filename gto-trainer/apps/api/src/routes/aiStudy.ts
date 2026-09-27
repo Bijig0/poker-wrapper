@@ -205,7 +205,7 @@ app.post("/", async (c) => {
     const codes: string[] = [];
 
     for (let ti = 0; ti <= toks.length; ti++) {
-      const nq = await gtowApi.customNode(ens.solId, { [QKEY[si]!]: codes.join("-"), board: streetBoard });
+      const nq = await gtowApi.customNode(ens.solId, { [QKEY[si]!]: codes.join("-"), board: streetBoard }, undefined, "study");
       if (!nq.ok) return c.json({ ok: false, error: nq.error }, nq.status === 0 ? 503 : 502);
       solveSecs += nq.solveSecs;
       if (!nq.cached) solves++;

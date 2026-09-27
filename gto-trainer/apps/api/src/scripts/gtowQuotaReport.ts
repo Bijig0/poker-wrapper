@@ -109,6 +109,42 @@ for (const s of [...new Set(all.map((r) => r.s))].sort()) {
   console.log("");
 }
 
+// ---------------------------------------------------------------- what the requests of a HAND were
+// The hand-tagged rows (h / sr / go since 2026-09-25; pm / cl since 2026-09-27) answer "where does a hand's budget
+// go": per street and origin, the trees and solves, and each poll by purpose x outcome. A 204 under `probe` is the
+// solve still running; under `node` / `retry` it is a line with no decision node. Per-hand percentiles follow.
+if (cols.has("pm")) {
+  type R = { h: string; sr: string | null; go: string | null; k: string; st: number; pm: string | null; cl: string | null };
+  const tagged = db.query<R, [number]>("SELECT h, sr, go, k, st, pm, cl FROM gtow_requests WHERE ts >= ? AND h IS NOT NULL ORDER BY id").all(since);
+  if (tagged.length) {
+    console.log(`\n=== REQUEST ANATOMY — ${tagged.length} hand-tagged requests over ${new Set(tagged.map((r) => r.h)).size} hands (last ${days} day(s))`);
+    const groups = new Map<string, R[]>();
+    for (const r of tagged) { const k = `${r.sr ?? "?"} ${r.go ?? "?"}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
+    const order = ["preflop", "flop", "turn", "river"];
+    const outcome = (st: number) => (st === 200 ? "200" : st === 204 ? "204" : st === 429 ? "429" : "other");
+    for (const [k, rs] of [...groups].sort((a, b) => order.indexOf(a[0].split(" ")[0]!) - order.indexOf(b[0].split(" ")[0]!) || a[0].localeCompare(b[0]))) {
+      const hands = new Set(rs.map((r) => r.h)).size;
+      const trees = rs.filter((r) => r.k === "tree").length, sols = rs.filter((r) => r.k === "solution").length;
+      const polls = rs.filter((r) => r.k === "poll");
+      const by: Record<string, Record<string, number>> = {};
+      for (const p of polls) { const pm = p.pm ?? "untagged"; (by[pm] ??= {})[outcome(p.st)] = ((by[pm] ??= {})[outcome(p.st)] ?? 0) + 1; }
+      const pollTxt = Object.entries(by).sort().map(([pm, o]) => `${pm} ${Object.entries(o).sort().map(([s, n]) => `${s}×${n}`).join(" ")}`).join(" | ");
+      const callers = Object.entries(polls.reduce<Record<string, number>>((a, p) => { const c = p.cl ?? "-"; a[c] = (a[c] ?? 0) + 1; return a; }, {})).sort().map(([c, n]) => `${c} ${n}`).join(", ");
+      console.log(`  ${k.padEnd(14)} hands ${String(hands).padStart(3)} | ${(rs.length / hands).toFixed(1).padStart(5)} req/hand | trees ${trees} solves ${sols} | polls: ${pollTxt || "none"} | asked by: ${callers}`);
+    }
+    // per-hand totals
+    const perHand = new Map<string, number>(); for (const r of tagged) perHand.set(r.h, (perHand.get(r.h) ?? 0) + 1);
+    const v = [...perHand.values()].sort((a, b) => a - b);
+    const pct = (p: number) => v[Math.floor(p * (v.length - 1))];
+    console.log(`  per hand (all streets): median ${pct(0.5)}, p75 ${pct(0.75)}, p90 ${pct(0.9)}, max ${v.at(-1)} requests`);
+    const wasted = tagged.filter((r) => r.k === "poll" && r.st === 204);
+    const solving = wasted.filter((r) => r.pm === "probe" || r.pm === "legacy").length;
+    const noNode = wasted.filter((r) => r.pm === "node" || r.pm === "retry").length;
+    const untagged = wasted.length - solving - noNode;
+    console.log(`  204s: ${wasted.length} of ${tagged.length} requests (${(100 * wasted.length / tagged.length).toFixed(0)}%) — ${solving} while a solve ran, ${noNode} on lines with no node${untagged ? `, ${untagged} untagged (rows from before 2026-09-27: either)` : ""}`);
+  }
+}
+
 if (hasResponses) {
   const samples = db.query<{ s: string; k: string; st: number; headers: string }, [number]>(
     "SELECT s, k, st, headers FROM gtow_responses WHERE why = 'sample' AND ts >= ? GROUP BY s, k, st ORDER BY s, k, st").all(since);

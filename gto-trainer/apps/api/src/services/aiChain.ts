@@ -856,7 +856,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // every node read is accounted for: the cache it came from, or how long its poll took
     const readNode = async (solId: string, codesStr: string) => {
       const t = Date.now();
-      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard });
+      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, undefined, "walk");
       const ms = Date.now() - t;
       const src: NodeSource | "failed" = r.ok ? (r.src ?? (r.cached ? "cache" : "fetched")) : "failed";
       if (src === "fetched" && fetched) {
@@ -1133,7 +1133,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         for (const p of paths) addrs.push(p.join("-"));
       }
       for (const cs of [...new Set(addrs)].slice(0, 8)) {
-        void gtowApi.customNode(ens.solId, { [QKEY[k]!]: cs, board: streetBoard }, 6_000).catch(() => { /* speculative */ });
+        void gtowApi.customNode(ens.solId, { [QKEY[k]!]: cs, board: streetBoard }, 6_000, "prefetch").catch(() => { /* speculative */ });
       }
       if (addrs.length) tmark(`chain ${STREET[k]} prefetch`, `${addrs.length} node(s) asked for ahead of the walk: ${addrs.join(" | ")}`);
     }

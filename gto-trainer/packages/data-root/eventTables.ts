@@ -58,7 +58,12 @@ export const GTOW_RESPONSES_DDL = `CREATE TABLE IF NOT EXISTS gtow_responses (
 )`;
 
 /** Columns added to gtow_requests after it shipped. Another process may add one at the same moment — "duplicate column" is fine. */
-const GTOW_REQUESTS_ADDED = [["q", "TEXT"], ["hd", "TEXT"]] as const;
+const GTOW_REQUESTS_ADDED = [["q", "TEXT"], ["hd", "TEXT"],
+  // 2026-09-27: what a poll was FOR (probe = the solve's readiness check, node = a read of a served solve,
+  // retry = the grace retry of an empty answer, legacy = the old poll-until-strategy loop) and WHO asked
+  // (walk = the chain's read, prefetch = its speculative lookahead, study = the study page) — so the 204s of a
+  // hand can be told apart after the fact: solve still running, or a node that does not exist
+  ["pm", "TEXT"], ["cl", "TEXT"]] as const;
 
 export function ensureEventTables(db: Database): void {
   db.run(GTOW_REQUESTS_DDL);
