@@ -2,18 +2,16 @@
   "name": "@poker/api",
   "version": "1.0.0",
   "private": true,
-  "description": "No-limit Hold'em heads-up postflop GTO solver API (Hono + postflop-solver WASM)",
+  "description": "The study API behind the Poker Wrapper: live study answers (charts, GTO Wizard AI, MES), the dashboard, and the chart server (Hono)",
   "module": "index.ts",
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun --watch index.ts",
-    "demo": "bun run src/demo/liveSolveWasm.ts",
-    "demo:derive": "bun run src/demo/deriveRanges.ts",
-    "build:wasm": "./solver-wasm/build.sh",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "compare:ranges": "bun run src/scripts/compareRanges.ts"
+    "compare:ranges": "bun run src/scripts/compareRanges.ts",
+    "charts": "bun run src/charts/chartServer.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

@@ -70,7 +70,6 @@ const CODE_TREES = [
 // state and tooling that git tracks (or leaves untracked) but a player's install must not carry
 const CODE_EXCLUDE = [
   /^gto-trainer\/apps\/api\/data\/.*\.bak/,
-  /^gto-trainer\/apps\/api\/data\/charts\//,                // the chart index comes in through CODE_GLOBS; bodies never
   /^gto-trainer\/apps\/api\/data\/jobs\//,
   /^gto-trainer\/apps\/api\/data\/gtow_requests\.jsonl$/,  // the owner's GTO Wizard request log
   /^gto-trainer\/apps\/api\/data\/limp_node_trust\.json$/, // a data part (DATA_PARTS), not code

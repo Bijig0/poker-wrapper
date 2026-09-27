@@ -7,9 +7,10 @@ poller that answers live decisions for the Poker Wrapper (`../wrapper`).
 
 | How | What starts |
 |---|---|
-| the `StudyAPI` / `PokerWrapper API - <user>` scheduled task → `.claude/study-api.ps1` | the live API on :2000 (restarted if it dies) |
-| `.claude/dev-api.cmd` (launch.json `gto-api`) | a `--watch` dev API on :2000 |
-| `.claude/dev-api-verify.cmd` (launch.json `gto-api-verify`) | a second, HTTP-only API on :2001 for checking dashboard edits |
+| the `PokerWrapper API - <user>` scheduled task → `.claude/study-api.ps1` | the live API on :2000 (restarted if it dies) |
+| `.claude/dev-api.cmd` (launch.json `api`) | a `--watch` dev API on :2000 |
+| `.claude/dev-api-verify.cmd` (launch.json `api-verify`) | a second, HTTP-only API on :2001 for checking dashboard edits |
+| `.claude/chart-server.ps1` / `.claude/dev-charts.cmd` (launch.json `charts`) | the chart server on :8777 (`src/charts`) |
 
 All of them take their environment from `config/env.ps1` (+ `config/local.env`). Never start a bare `bun index.ts`
 for the live table: it misses that environment (see the memory note on the exploit overlay).
@@ -20,7 +21,7 @@ for the live table: it misses that environment (see the memory note on the explo
 - `dashboard.html` / `dashboard.css`: the dashboard, served from disk (an edit is live on reload).
 - `src/routes`: HTTP routes. `src/services`: the answer path (`fastSolve`, `aiChain`, `gtowApi`, charts) and the
   stores. `src/feed`, `src/utils`: parsing and helpers. `src/scripts`: harnesses and backtests (`_*.ts` are scratch).
-- `data/`: **tracked reference artifacts** (preflop-db.sqlite, resolved-charts.json, mes_postflop.json, ledger.json …).
+- `data/`: **tracked reference artifacts** (preflop-db.sqlite, resolved-charts.json, mes_postflop.json, chart-sets.json, `pool/` …) — most are the chart factory's exports (README.md at the root); `charts/` is the chart index + body cache (gitignored).
 - **Runtime records** (answers, stored chains, GTO Wizard requests, poller events, hands, sessions …) are NOT here:
   they live in the one central database, `<data root>/poker.sqlite`. See `gto-trainer/DATA-ROOT-PLAN.md`.
   `GET /api/dashboard/storage` shows where every store resolves.

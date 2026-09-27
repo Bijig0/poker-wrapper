@@ -80,8 +80,10 @@ too (the default is No).
 
 ## For the owner: making and handing out the installer
 
-- `setup\publish.cmd` (or the owner's "Friend release" bar) runs the gate, builds the release **and the installer**,
-  and uploads both. The newest installer is always at `r2:poker-solve-db/wrapper/PokerWrapperSetup.exe`, and a
+- New charts / pool / MES data from the chart factory first: in the `poker` repo,
+  `bun scripts/export_to_wrapper.ts --r2-index`, then commit here what it moved (the README's "The chart factory").
+- `setup\publish.cmd` (or the owner's "Friend release" bar) in this repo runs the gate, builds the release **and the
+  installer**, and uploads both. The newest installer is always at `r2:poker-solve-db/wrapper/PokerWrapperSetup.exe`, and a
   local copy is in `~\poker-package\PokerWrapperSetup-<version>.exe`.
 - Build one without publishing: `bun setup\buildPackage.ts --installer` (needs Inno Setup:
   `winget install JRSoftware.InnoSetup --scope user`).
