@@ -24,6 +24,7 @@ describe("the catalogue is the spec", () => {
       expect(["built", "partial", "to build"]).toContain(c.build);
     }
     expect(CHECKS.find((c) => c.id === 13)!.build).toBe("built");   // the daily replay (services/replayCheck)
+    expect([14, 16].map((id) => CHECKS.find((c) => c.id === id)!.build)).toEqual(["built", "built"]);   // the press (autoExec)
     // the villain-mistake wording (QRE), not "solver noise"
     expect(CHECKS.find((c) => c.id === 3)!.how).toContain("QRE");
     expect(JSON.stringify(CHECKS)).not.toMatch(/rests on (solver )?noise/i);
@@ -328,5 +329,39 @@ describe("a check never costs an answer (2026-09-27)", () => {
     expect(r).toEqual({ id: 5, status: "na", text: "the check errored: pot missing on an old capture" });
     expect(guardChecks(0, () => { throw new Error("boom"); }, { kept: true })).toEqual({ kept: true });
     expect(guardChecks(0, () => 7, 0)).toBe(7);
+  });
+});
+
+describe("checks #14 / #16 at the press (2026-09-27)", () => {
+  const PATH = JSON.stringify({ v: 1, verdict: "clean", reasons: [], street: "flop", streets: [],
+    checks: { flop: [{ id: 14, status: "pass", text: "no CHECK facing a bet" }, { id: 16, status: "pass", text: "the answer's street is the capture's" }] } });
+  const row = { path: PATH, decision_key: JSON.stringify(["flop", ["Td", "6h", "7s"], ["As", "Ts"], 2.6, 9]),
+    decision_json: JSON.stringify([{ action: "FOLD", frequency: 8.9e-7 }, { action: "CALL 2.6", frequency: 69.4 }, { action: "RAISE 6.8", frequency: 30.6 }]) };
+  const checksOf = (p: string | null, id: number) => (JSON.parse(p!).checks.flop as any[]).find((c) => c.id === id);
+
+  it("the answer's actions among the press's buttons, the spot unchanged: both hold, merged onto the answer's own", async () => {
+    const { pressedAnswerPath } = await import("./chainChecks");
+    const p = pressedAnswerPath(row, [{ street: "flop", keyActs: 9, buttons: ["FOLD", "CALL 2.6", "RAISE TO 6.8"], atPress: "flop|9", stale: false }]);
+    expect(checksOf(p, 14).status).toBe("pass");
+    expect(checksOf(p, 14).text).toContain("at the press: CALL 2.6 / RAISE 6.8 ⊆ the table's buttons");
+    expect(checksOf(p, 16).text).toContain("at the press the table still showed the answer's spot (flop|9)");
+  });
+  it("a RAISE the table did not offer, and a spot that moved on, fail", async () => {
+    const { pressedAnswerPath } = await import("./chainChecks");
+    const p = pressedAnswerPath(row, [{ street: "flop", keyActs: 9, buttons: ["FOLD", "CALL 2.6"], atPress: "flop|10", stale: true }]);
+    // FOLD / CALL only and CALL is not hero's stack here — but the relay can offer a shove as a CALL, so a wager passes
+    // only through that door: this one is judged a pass-with-note, the stale spot a fail
+    expect(checksOf(p, 14).text).toContain("the shove offered as a CALL");
+    expect(checksOf(p, 16)).toMatchObject({ status: "fail" });
+    expect(checksOf(p, 16).text).toContain("the table showed flop|10");
+    const q = pressedAnswerPath(row, [{ street: "flop", keyActs: 9, buttons: ["CHECK", "BET"], atPress: "flop|9", stale: false }]);
+    expect(checksOf(q, 14)).toMatchObject({ status: "fail" });
+    expect(checksOf(q, 14).text).toContain("the answer offers CALL; the table's buttons were CHECK / BET");   // the 1e-6 % FOLD is residue, not an action
+  });
+  it("no press for this decision (another street, or no read) leaves the path as it was", async () => {
+    const { pressedAnswerPath } = await import("./chainChecks");
+    expect(pressedAnswerPath(row, [{ street: "turn", keyActs: 11, buttons: ["CHECK"], stale: false }])).toBe(PATH);
+    expect(pressedAnswerPath(row, [{ street: "flop", keyActs: 9, tries: 1 }])).toBe(PATH);
+    expect(pressedAnswerPath(row, null)).toBe(PATH);
   });
 });

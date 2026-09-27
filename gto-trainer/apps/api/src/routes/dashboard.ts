@@ -1,3 +1,4 @@
+import { pressedAnswerPath } from "../services/chainChecks";
 import { replayChecks, replayText } from "../services/replayCheck";
 import { launchReplay } from "../services/replayScheduler";
 import { offTreeLog } from "../services/offTreeLog";
@@ -1112,7 +1113,8 @@ app.get("/hand/:dbId", async (c) => {
       const k = JSON.parse(a.decision_key ?? "null");
       if (Array.isArray(k) && Number.isFinite(Number(k[4]))) actionIndex = Number(k[4]);
     } catch { /* legacy row */ }
-    return { ...a, actionIndex, source: a.source ?? sourceForTier(a.tier), integrity: integrityOf(a) };
+    // checks #14 / #16 at the press: what auto-execute's relay saw when it pressed this answer (services/chainChecks)
+    return { ...a, path: pressedAnswerPath(a, e.raw?.autoExec), actionIndex, source: a.source ?? sourceForTier(a.tier), integrity: integrityOf(a) };
   });
   // Session: the gap cluster this hand sits in (same rule as Analytics), and
   // the debug recording that holds it when one exists.
@@ -2631,7 +2633,17 @@ app.get("/coverage", (c) => {
   const declared = new Map(sessionsStore.list(500).map((s) => [s.id, s]));
   const sessions = [...bySession.values()].sort((a, b) => b.lastTs - a.lastTs)
     .map((s) => ({ ...s, label: declared.get(s.id)?.label ?? null, startedAt: declared.get(s.id)?.startedAt ?? null }));
-  const rows = session ? all.filter((r) => r.session_id === session) : all;
+  const rows0 = session ? all.filter((r) => r.session_id === session) : all;
+  // checks #14 / #16 at the press, from each hand's archived autoExec (services/chainChecks pressedAnswerPath)
+  const want = new Set(rows0.map((r) => r.client_hand_id).filter((x): x is string => !!x));
+  const autoExecByHand = new Map<string, unknown>();
+  for (const r of allRows()) {
+    const m = r.data.match(/"clientHandId":\s*"(\d+)"/);
+    if (!m || !want.has(m[1]!) || !r.data.includes('"autoExec"')) continue;
+    try { autoExecByHand.set(m[1]!, (JSON.parse(r.data) as { autoExec?: unknown }).autoExec); } catch { /* skip */ }
+  }
+  const rows = rows0.map((r) => (r.client_hand_id && autoExecByHand.has(r.client_hand_id)
+    ? { ...r, path: pressedAnswerPath(r as any, autoExecByHand.get(r.client_hand_id)) } : r));
   const report = coverageReport(rows);
   // CHECK #13 is not on the answers' paths: the daily replay files it per decision (services/replayCheck)
   const rp = replayChecks.rows(days, session);

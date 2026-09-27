@@ -124,16 +124,16 @@ export const CHECKS: readonly CheckDef[] = [
     how: "Once a day, when no answer has been computed for 10 minutes, every live postflop decision of the last 2 days is replayed in a process of its own (scripts/replayDeterminism.ts) against a GTO Wizard that answers only from that decision's recorded trace — its trees, its nodes, and the cache state the live walk saw (a size-free tree it reused). The replay must ask for the same trees (pot, stack, board, sizes, rake; range weights within the trace's 4-decimal rounding), walk the same line on every street and reach the same hero node. No GTO Wizard quota. POST /api/dashboard/coverage/replay starts one now." },
   { id: 14, group: "output", name: "Answer at hero's node, legal actions",
     spec: "Answer is at hero's node and its actions ⊆ the table's offered buttons.",
-    build: "partial",
-    how: "Hero's node: the walk's rotation and GTO Wizard's node both name hero. The buttons: the Ignition wrapper exports none (legalActions is empty), so the answer is checked against the amount to call instead — no CHECK facing a bet, no FOLD/CALL with nothing to call, no raise when calling puts hero all in. The buttons themselves are to build." },
+    build: "built",
+    how: "Hero's node: the walk's rotation and GTO Wizard's node both name hero. When the answer is solved, it is checked against the amount to call (no CHECK facing a bet, no FOLD/CALL with nothing to call, no raise when calling puts hero all in). When auto-execute presses it, the wrapper's relay records the action strip's labels on the very read it pressed from (the hand's autoExec), and every action the answer offers must be one of those buttons (a shove the table offers only as a CALL counts). Answers never pressed keep the first half only." },
   { id: 15, group: "output", name: "Mix valid",
     spec: "Sums ~100%, not all zero.",
     build: "built",
     how: "The served mix sums to 100% ± 1 over its actions and is not all zero. The zero-mix guard refuses an all-zero mix before it is served — surfaced here on the refusal." },
   { id: 16, group: "output", name: "Not stale",
     spec: "The answer's decision key = the live decision.",
-    build: "partial",
-    how: "The answer carries the decision key it was solved for (street, board, cards, amount to call, actions so far) and its street must be the capture's. The comparison with the table at the moment of the press lives in the wrapper's relay (it drops an answer whose key no longer matches) and is not visible to the API." },
+    build: "built",
+    how: "The answer carries the decision key it was solved for (street, board, cards, amount to call, actions so far) and its street must be the capture's. When auto-execute presses it, the relay records the spot the table showed just before the click (street and actions so far, counted like the key) in the hand's autoExec: a press on a spot that had moved on is stale. The relay's pickReady already refuses a moved spot, so this catches the gap between that check and the click (the random delay, a shove's multi-press)." },
   { id: 17, group: "output", name: "Strategy is for hero's combo",
     spec: "Hero's combo has weight at the node.",
     build: "built",
@@ -188,6 +188,62 @@ export function mergeChecks(xs: CheckResult[]): CheckResult[] {
     out.push({ id, status: worst[0]!.status, text: texts.join(" · "), ...(covered ? { covered } : {}) });
   }
   return out.sort((a, b) => a.id - b.id);
+}
+
+/**
+ * CHECKS #14 / #16 AT THE PRESS (2026-09-27): what the wrapper's relay saw on the read it pressed from (the hand's
+ * autoExec — apps/wrapper/src/autoLog.ts). Evaluated when a hand is read (the press comes after the answer was logged),
+ * and merged into the answer's own #14 / #16 on its street, worst status winning.
+ */
+export function pressChecks(a: {
+  buttons: string[] | null | undefined; atPress: string | null | undefined; stale: boolean | null | undefined;
+  answerKey: string; actions: { action: string; frequency: number }[];
+}): CheckResult[] {
+  const out: CheckResult[] = [];
+  if (a.buttons?.length) {
+    const offered = new Set(a.buttons.map(answerKind));
+    const live = a.actions.filter((x) => x.frequency > 0.001);   // percent: a 1e-6 residue is not an action the answer offers
+    const need = [...new Set(live.map((x) => answerKind(x.action)))];
+    const asCall = !offered.has("wager") && offered.has("call");  // the client offers a shove as a CALL when it is hero's stack
+    const missing = need.filter((k) => !offered.has(k) && !(k === "wager" && asCall));
+    out.push(missing.length
+      ? fail(14, `at the press: the answer offers ${missing.map((k) => k.toUpperCase()).join(", ")}; the table's buttons were ${a.buttons.join(" / ")}`)
+      : pass(14, `at the press: ${live.map((x) => x.action).join(" / ") || "the pick"} ⊆ the table's buttons (${a.buttons.join(" / ")})${need.includes("wager") && asCall ? " — the shove offered as a CALL" : ""}`));
+  }
+  if (a.stale === true) out.push(fail(16, `at the press the table showed ${a.atPress}, not the spot the answer was solved for (${a.answerKey})`));
+  else if (a.stale === false) out.push(pass(16, `at the press the table still showed the answer's spot (${a.atPress})`));
+  return out;
+}
+
+/** A logged answer's path with its press-time results merged onto its street (the path JSON as stored, or null). */
+export function withPressChecks(path: string | null, street: string, xs: CheckResult[]): string | null {
+  if (!path || !xs.length || !(CHECK_STREETS as readonly string[]).includes(street)) return path;
+  try {
+    const p = JSON.parse(path) as { checks?: PathChecks };
+    p.checks = addChecks(p.checks ?? {}, street as CheckStreet, xs);
+    return JSON.stringify(p);
+  } catch { return path; }
+}
+
+/** An archived hand's autoExec decision that pressed this answer: same street, same action count (decisionKey[4]). */
+export function pressedAnswerPath(row: { path: string | null; decision_key: string | null; decision_json?: string | null },
+  autoExec: unknown): string | null {
+  if (!row.path || !row.decision_key || !Array.isArray(autoExec)) return row.path;
+  let street: string | null = null, acts: number | null = null;
+  try {
+    const k = JSON.parse(row.decision_key);
+    if (Array.isArray(k)) { street = typeof k[0] === "string" ? k[0] : null; acts = Number.isFinite(Number(k[4])) ? Number(k[4]) : null; }
+  } catch { return row.path; }
+  if (street == null || acts == null) return row.path;
+  const d = (autoExec as Record<string, unknown>[]).find((x) => x && x.street === street && x.keyActs === acts && (Array.isArray(x.buttons) || typeof x.stale === "boolean"));
+  if (!d) return row.path;
+  let actions: { action: string; frequency: number }[] = [];
+  try { const j = JSON.parse(row.decision_json ?? "[]"); if (Array.isArray(j)) actions = j.map((x: any) => ({ action: String(x.action ?? ""), frequency: Number(x.frequency) || 0 })); } catch { /* none */ }
+  const results = guardChecks(14, () => pressChecks({
+    buttons: Array.isArray(d.buttons) ? (d.buttons as unknown[]).map(String) : null, atPress: typeof d.atPress === "string" ? d.atPress : null,
+    stale: typeof d.stale === "boolean" ? d.stale : null, answerKey: `${street}|${acts}`, actions,
+  }), [] as CheckResult[]);
+  return withPressChecks(row.path, street, results);
 }
 
 /** Add a street's results to a path's checks (a collapse plan's are prefixed with the plan). */

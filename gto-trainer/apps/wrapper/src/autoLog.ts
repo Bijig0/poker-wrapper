@@ -23,6 +23,14 @@ export type AutoDecision = {
   held: string | null;
   heldS: number | null;
   at: number;
+  /** THE PRESS'S OWN READ (2026-09-27, the API's checks #14 / #16): the action strip's labels on the read the relay
+   *  pressed from, and the spot the table showed just before the click (`street|actions`, counted like the pick key);
+   *  stale = that spot is not the one the answer was solved for. null = no press read yet. */
+  buttons?: string[] | null;
+  atPress?: string | null;
+  stale?: boolean | null;
+  /** the decision's action count, from its key (k[4]) — what the API joins the answer on, with the street */
+  keyActs?: number | null;
 };
 
 const KEEP_HANDS = 30;
@@ -31,6 +39,16 @@ const LOG = new Map<number, Map<string, AutoDecision>>();
 function handOf(key: string): number | null {
   const n = Number(key.slice(0, key.indexOf("|")));
   return key.includes("|") && Number.isInteger(n) ? n : null;
+}
+
+/** The pick key's action count (decisionKey[4]), or null. */
+function keyActsOf(key: string): number | null {
+  try {
+    const k = JSON.parse(key.slice(key.indexOf("|") + 1));
+    return Array.isArray(k) && typeof k[4] === "number" ? k[4] : null;
+  } catch {
+    return null;
+  }
 }
 
 function streetOf(key: string): string | null {
@@ -56,17 +74,27 @@ export function autoDecision(key: string | null | undefined): AutoDecision | nul
   }
   let d = rows.get(key);
   if (!d) {
-    d = { street: streetOf(key), pick: null, source: null, tries: 0, outcome: "none", why: null, did: null, held: null, heldS: null, at: Date.now() };
+    d = { street: streetOf(key), pick: null, source: null, tries: 0, outcome: "none", why: null, did: null, held: null, heldS: null, at: Date.now(),
+          keyActs: keyActsOf(key) };
     rows.set(key, d);
   }
   return d;
 }
 
 /** A press was sent (or refused before it reached the table). */
-export function notePress(key: string | null | undefined, p: { pick?: string | null; source?: string | null; ok: boolean; reason?: string | null }): void {
+export function notePress(key: string | null | undefined, p: {
+  pick?: string | null; source?: string | null; ok: boolean; reason?: string | null;
+  /** the press's own read (relay.lastPressRead): the strip's labels and the spot just before the click */
+  buttons?: string[] | null; atPress?: string | null;
+}): void {
   const d = autoDecision(key);
   if (!d) return;
   d.tries += 1;
+  if (p.buttons !== undefined || p.atPress !== undefined) {
+    d.buttons = p.buttons ?? null;
+    d.atPress = p.atPress ?? null;
+    d.stale = d.atPress != null && d.street != null && d.keyActs != null ? d.atPress !== `${d.street}|${d.keyActs}` : null;
+  }
   if (p.pick) d.pick = p.pick;
   if (p.source) d.source = p.source;
   d.outcome = p.ok ? "pending" : "refused";

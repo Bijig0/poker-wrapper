@@ -20,6 +20,11 @@ export type AutoExecDecision = {
   did: string | null;
   held: string | null;
   heldS: number | null;
+  /** the press's own read (2026-09-27): the action strip's labels, the spot at the click, stale, the key's action count */
+  buttons?: string[] | null;
+  atPress?: string | null;
+  stale?: boolean | null;
+  keyActs?: number | null;
 };
 
 export type AutoExecSummary = {
@@ -41,6 +46,10 @@ function fromWrapper(rows: unknown[]): AutoExecDecision[] {
   return rows.filter((r): r is Record<string, unknown> => !!r && typeof r === "object").map((r) => ({
     street: str(r.street), pick: str(r.pick), source: str(r.source), tries: num(r.tries) ?? 0,
     outcome: str(r.outcome) ?? "unknown", why: str(r.why), did: str(r.did), held: str(r.held), heldS: num(r.heldS),
+    ...(Array.isArray(r.buttons) ? { buttons: (r.buttons as unknown[]).map(String) } : {}),
+    ...(str(r.atPress) ? { atPress: str(r.atPress) } : {}),
+    ...(typeof r.stale === "boolean" ? { stale: r.stale } : {}),
+    ...(num(r.keyActs) != null ? { keyActs: num(r.keyActs) } : {}),
   }));
 }
 

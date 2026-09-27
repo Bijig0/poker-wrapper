@@ -194,6 +194,15 @@ export function findControl(pool: any[], label: string, kind: string): any | nul
  *  that must only land on a control saying one thing (the shove's confirm must read ALL-IN) checks it here, with
  *  no second read for the strip to change in between. `cards` = the hole cards the decision was made for: checked
  *  against hero's cards on that SAME read (holeCardsRefusal), so nothing can land on a table showing another hand. */
+/**
+ * THE PRESS'S OWN READ (2026-09-27, the API's checks #14 / #16): the action strip's labels on the read a press is made
+ * from, and the spot the table showed at that moment (`street|actions`, counted like the pick key — decisionActions,
+ * post-ins excluded). executePick hands it to autoLog; kept off the press's result so the /act reply is unchanged.
+ */
+let lastPressRead: { offer: string[]; atPress: string | null } | null = null;
+/** read through a function: TypeScript would narrow the variable to null across the awaited press that sets it */
+const pressRead = (): { offer: string[]; atPress: string | null } | null => lastPressRead;
+
 async function actReal(label: string, kind = "action", opts: ActOpts = {}): Promise<Record<string, any>> {
   // a table lost the poker server this session: nothing is pressed — not a turn, not Buy chips, not Sit here
   const blocked = pressBlocked();
@@ -232,6 +241,15 @@ async function actReal(label: string, kind = "action", opts: ActOpts = {}): Prom
   const hit = findControl(pool, label, kind);
   const offer = pool.map((b) => b.text);
   const offerQa = pool.map((b) => b.qa ?? null);
+  if (kind === "action") {
+    // a record for the checks, never a reason for a press not to go out
+    try {
+      const hNow = handState();
+      lastPressRead = { offer: offer.map(String), atPress: hNow ? `${pyStr(hNow.street)}|${decisionActions(hNow).length}` : null };
+    } catch {
+      lastPressRead = { offer: offer.map(String), atPress: null };
+    }
+  }
   if (!hit) {
     const what = label === "confirm" ? "a RAISE/BET control" : `'${label}'`;
     return { ok: false, reason: `${what} not on offer (${kind})`, offer, offerQa, missing: true };
@@ -644,8 +662,9 @@ export async function maybeVerifyExec(): Promise<void> {
     if (same) {
       p.attempts += 1;
       p.deadline = time() + VERIFY_DEADLINE_S;
+      lastPressRead = null;
       const res = await actuate(p.plan, { cards: keyCards(p.key) });
-      AUTO.notePress(p.key, { ok: !!res.ok, reason: res.reason ?? null });
+      AUTO.notePress(p.key, { ok: !!res.ok, reason: res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null });
       feedAdd(`Study pick ${pyStr(p.pick)} did not register — retried (${p.attempts}/${VERIFY_ATTEMPTS})`
               + (res.ok ? "" : `, refused: ${pyStr(res.reason ?? null)}`));
       if (S.session.id) {
@@ -672,12 +691,13 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const plan = r.plan, key = r.key, pick = r.pick;
     const kN = r.kN ?? null;
     S.study.execSource = source;
+    lastPressRead = null;
     const res = await actuate(plan, { cards: keyCards(key) });
     const ok = !!res.ok;
     const rec: Record<string, any> = { at: nowMs(), source, pick, plan, ok, result: res, hand: S.handNo, waitedS, key,
                                        outcome: ok ? "pending" : "refused" };
     S.study.lastExec = rec;
-    AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null });
+    AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null });
     if (ok) {
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
