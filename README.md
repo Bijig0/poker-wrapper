@@ -42,6 +42,14 @@ API), `charts` (`:8777`).
 cd gto-trainer && bun install --frozen-lockfile
 ```
 
+```bash
+powershell -ExecutionPolicy Bypass -File setup\fetch-data.ps1
+```
+
+The second pulls the data parts (6-max preflop DB, MES turn files, node trust; ~3 GB, needs the `r2` download key)
+into a fresh checkout. The answer path and the gate's mutation tests need the 6-max DB. On the chart factory's
+machine, the factory's export (below) brings them instead.
+
 - Tests: `bun test` in `gto-trainer/apps/api`, `gto-trainer/apps/wrapper`, `gto-trainer/packages/data-root`.
 - **The gate:** `bun setup/regress.ts` (full: + the headless rig test + live smoke) · `--quick` · `--publish`
   (what a release requires). Run every Bun through `config/env.ps1`'s (the launchers' Bun, 1.3.14) — PATH's `bun`

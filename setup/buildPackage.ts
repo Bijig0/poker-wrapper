@@ -77,7 +77,7 @@ const CODE_EXCLUDE = [
   /^gto-trainer\/apps\/api\/src\/test\//,                    // test preloads
   /^gto-trainer\/apps\/wrapper\/test\//, /^ignition-study-wrapper\/tests\//, /\.test\.ts$/,
   /^gto-trainer\/apps\/wrapper\/PORT-PLAN\.md$/,
-  /^setup\/(buildPackage|regress)\.ts$/, /^setup\/(publish|zip)\.(ps1|cmd)$/,  // the publisher's side
+  /^setup\/(buildPackage|regress)\.ts$/, /^setup\/(publish|zip|fetch-data)\.(ps1|cmd)$/,  // the publisher's / a checkout's side
   /^setup\/installer\//, /^setup\/INSTALL\.md$/, /\.md$/,
   /^gto-trainer\/tools\//, /^gto-trainer\/study-tool\.(cmd|vbs)$/, /^gto-trainer\/apps\/wrapper\/src\/tools\//,  // developer tools
   /(^|\/)__pycache__\//,

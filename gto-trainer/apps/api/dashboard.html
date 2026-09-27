@@ -4732,7 +4732,7 @@ async function loadMatrix() {
   const realized = j.realized || {};
   const rl = (mode) => { const r = realized[mode]; return r && r.bb100 != null ? `<td class="ev ${r.bb100 > 0 ? "p" : "n"}">${r.bb100 > 0 ? "+" : ""}${r.bb100} <span class="se">${r.knownHands} h</span></td>` : '<td class="ev z">no sessions yet</td>'; };
   const missing = (j.missing || []).length ? `<div class="card warn">${j.missing.map(esc).join("<br>")}</div>` : "";
-  if (!m) { el.innerHTML = missing + '<div class="card sub">The matrix artifact has not been built. Run <code>analysis/pipeline/limp_study/strategy_matrix.py</code>.</div>'; return; }
+  if (!m) { el.innerHTML = missing + '<div class="card sub">The matrix artifact is not here: it is the chart factory's export (poker repo: <code>bun scripts/export_to_wrapper.ts</code>).</div>'; return; }
   const modeTag = (k) => k === "exploit" ? '<span class="mode mes">MES</span> exploit' : k === "mes" ? '<span class="mode mes">MES</span>' : k === "chart" ? '<span class="mode gto">GTO</span> charts' : k === "gto" ? '<span class="mode gto">GTO</span> AI chain' : esc(k);
   const cell = (c, key) => {
     if (!c) return evCell(null, { why: "—" });

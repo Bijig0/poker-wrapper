@@ -50,7 +50,8 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 // ---- environment: offline, dry, and pointed at the baked charts even from a worktree -----------------------------
 // The answer log opens its file when the module loads, so that one is fixed here; everything else is applied
@@ -62,9 +63,13 @@ export function harnessEnv(): () => void {
   process.env.GTOW_BLOCK = "1";
   process.env.POSTFLOP_DRY_RUN = "1";
   if (!process.env.HRC6MAX_DB) {
+    // a git worktree has no bake of its own (a data part, not in git): read the main checkout's
     const local = join(import.meta.dir, "..", "..", "data", "hrc6max-preflop.sqlite");
-    const main = "C:/Users/Brady/poker/gto-trainer/apps/api/data/hrc6max-preflop.sqlite";
-    if (!existsSync(local) && existsSync(main)) process.env.HRC6MAX_DB = main;
+    if (!existsSync(local)) {
+      const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: import.meta.dir, encoding: "utf8" }).stdout?.trim();
+      const main = common ? join(dirname(common), "gto-trainer", "apps", "api", "data", "hrc6max-preflop.sqlite") : "";
+      if (main && existsSync(main)) process.env.HRC6MAX_DB = main;
+    }
   }
   return () => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
 }
