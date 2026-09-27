@@ -52,6 +52,18 @@
   #conn-pill.busy { background: #3a2f16; color: #ffce56; border-color: #8a6a22; } #conn-pill.busy .dot { background: #ffce56; }
   @keyframes pulse { 0%, 100% { box-shadow: none; } 50% { box-shadow: 0 0 0 6px rgba(255,115,115,.22); } }
   @media (prefers-reduced-motion: reduce) { #conn-pill.bad { animation: none; } .spin { animation: none; } }
+  /* GTO Wizard meter (2026-09-27): each registered account's light and its trailing hour against the 2,250 limit,
+     plus all of them combined, from /session/gtow-accounts every 10 s. Click = the account list under Connection. */
+  #gtow-meter { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: #8fa1b3; }
+  #gtow-meter .gm { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #2c3a4a; border-radius: 20px; padding: 3px 9px; background: #171d24; cursor: pointer; }
+  #gtow-meter .gm .dot { width: 8px; height: 8px; border-radius: 50%; background: #4a5561; flex: none; }
+  #gtow-meter .gm.up .dot { background: #5ee39a; } #gtow-meter .gm.walled .dot, #gtow-meter .gm.down .dot { background: #ff8a80; }
+  #gtow-meter .gm.no-token .dot, #gtow-meter .gm.signed-out .dot { background: #ffcf70; } #gtow-meter .gm.off { opacity: .55; }
+  #gtow-meter .gm b { color: #d6e2ee; font-variant-numeric: tabular-nums; } #gtow-meter .gm.walled b { color: #ff9a9a; }
+  #gtow-meter .gm .d { color: #6f8195; }
+  #gtow-meter .gm .trk { width: 56px; height: 6px; border-radius: 999px; background: #2c3a4a; overflow: hidden; }
+  #gtow-meter .gm .fill { display: block; height: 100%; background: #5ee39a; } #gtow-meter .gm .fill.warn { background: #ffcf70; } #gtow-meter .gm .fill.crit { background: #ff8a80; }
+  #gtow-meter .gm.all { border-color: #3a4453; }
   section[data-mode] { display: none; } section[data-mode].on { display: block; }
   /* the checklist */
   .checks .chk { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: start; padding: 5px 0; border-top: 1px solid #1c242c; font-size: 14px; }
@@ -226,6 +238,7 @@
       <button data-mode="game" class="on" title="what you need at the table: session, answer, controls, the hand">Game</button>
       <button data-mode="analysis" title="the instruments: table link, mirror, feed audit, protocol dump, recordings">Analysis</button>
     </nav>
+    <div id="gtow-meter" title="GTO Wizard: each account's requests in the trailing hour against the 2,250 limit (a trip walls the account for about a day) — click for the account list"></div>
     <button id="conn-pill" title="every link the answers depend on — click for the list"><span class="dot"></span><span id="conn-pill-t">checking…</span></button>
   </div>
 
@@ -541,13 +554,16 @@
     // account line is what tells them apart
     const byAcct = {};
     for (const x of ss) { const k = x.accountId || x.account; if (k) (byAcct[k] = byAcct[k] || []).push(x.id); }
-    const cls = (x) => x.enabled === false ? "off" : x.state === "up" ? "up" : ["blocked", "no-token", "unknown"].includes(x.state) ? "warn" : "down";
+    // the registry's light when the wrapper could read /api/gtow/accounts (walled = red), else the pool's state
+    const cls = (x) => x.enabled === false ? "off" : x.light ? (x.light === "up" ? "up" : x.light === "no-token" || x.light === "signed-out" ? "warn" : "down")
+      : x.state === "up" ? "up" : ["blocked", "no-token", "unknown"].includes(x.state) ? "warn" : "down";
     const rows = ss.map((x) => {
-      const bits = [x.enabled === false ? "disabled" : (x.blockedReason || x.text || x.state || ""),
+      const meter = x.h1 == null ? "" : x.light === "walled" ? "WALLED" : `${Number(x.h1).toLocaleString()}/${Number(x.cap || 2250).toLocaleString()} this hour`;
+      const bits = [meter, x.enabled === false ? "disabled" : (x.lightText || x.blockedReason || x.text || x.state || ""),
                     x.trees ? `${x.trees} solve${x.trees === 1 ? "" : "s"} this run` : "", x.cdpHost ? `CDP ${x.cdpHost}` : ""].filter(Boolean);
       const busy = gaccMsg[x.id];
       const connect = x.enabled === false ? "" : `<button data-gacc-connect="${esc(x.id)}"${busy === "…" ? " disabled" : ""}>${busy === "…" ? "connecting…" : x.state === "up" ? "Reconnect" : "🔌 Connect"}</button>`;
-      const name = x.label && x.label !== x.id ? `${esc(x.id)} <span class="sub">(${esc(x.label)})</span>` : esc(x.id);
+      const name = x.name ? `${esc(x.name)} <span class="sub">(${esc(x.id)})</span>` : x.label && x.label !== x.id ? `${esc(x.id)} <span class="sub">(${esc(x.label)})</span>` : esc(x.id);
       const who = x.account || x.accountId
         ? `<span class="who">signed in as ${esc(x.account || "unknown email")}${x.accountId ? `<span class="pid" title="GTO Wizard public id">#${esc(String(x.accountId).slice(0, 8))}</span>` : ""}</span>`
         : `<span class="d">signed-in account not known yet (read from its first token)</span>`;
@@ -574,6 +590,27 @@
   function setPill(st, txt) { const p = $("conn-pill"); p.className = st; $("conn-pill-t").textContent = "connection · " + txt; }
   $("conn-pill").onclick = () => { if (MODE !== "game") setMode("game"); $("conn-details").open = true; $("conn-details").scrollIntoView({ behavior: "smooth", block: "center" }); };
   loadChecks();
+
+  // ---- GTO Wizard meter: per account and combined, the trailing hour against 2,250 (2026-09-27) ----------------
+  async function pollGtowMeter() {
+    const el = $("gtow-meter");
+    try {
+      const j = await (await fetch("/session/gtow-accounts")).json();
+      if (!j || !j.ok || !el) return;
+      const bar = (n, cap) => { const f = cap ? Math.min(1, n / cap) : 0; const c = f >= .85 ? "crit" : f >= .6 ? "warn" : ""; return `<span class="trk"><span class="fill ${c}" style="width:${(f * 100).toFixed(0)}%"></span></span>`; };
+      const accts = j.accounts.map((a) => {
+        const h1 = (a.windows && a.windows.h1) || { n: 0 }, h24 = (a.windows && a.windows.h24) || { n: 0 };
+        const tip = `${a.name} — ${a.lightText || a.light} · ${h1.n} requests in the last hour, ${h24.n} in the last 24 h`;
+        return `<span class="gm ${esc(a.light)}" title="${esc(tip)}"><i class="dot"></i>${esc(a.name)} <b>${a.light === "walled" ? "walled" : h1.n.toLocaleString()}</b>${a.light === "walled" ? "" : `<span class="d">/${j.cap.toLocaleString()}</span>${bar(h1.n, j.cap)}`}</span>`;
+      });
+      const c = j.combined.h1;
+      const allTip = `all enabled accounts, trailing hour${c.sinceMs ? ` (since ${new Date(c.sinceMs).toLocaleTimeString()})` : ""}${j.allow ? ` · this session may use: ${j.allow.join(", ")}` : ""}`;
+      el.innerHTML = accts.join("") + `<span class="gm all" title="${esc(allTip)}">all <b>${c.n.toLocaleString()}</b><span class="d">/${c.cap.toLocaleString()}</span>${bar(c.n, c.cap)}</span>`;
+    } catch { /* the wrapper's proxy or the API is down — the connection pill already says so */ }
+    finally { setTimeout(pollGtowMeter, 10000); }
+  }
+  $("gtow-meter").onclick = () => { if (MODE !== "game") setMode("game"); $("conn-details").open = true; $("conn-details").scrollIntoView({ behavior: "smooth", block: "center" }); };
+  pollGtowMeter();
 
   // ================= analysis: table link, mirror =================
   async function poll() {

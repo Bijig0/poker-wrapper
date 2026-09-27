@@ -349,6 +349,17 @@ export function buildApp(): Hono {
     log(`[layout] -> ${pyRepr(res)}`);
     return json(200, res);
   });
+  /** The GTO Wizard accounts page's payload, passed through for the panel's meter and the setup page's account picker
+   *  (2026-09-27): registry, lights, last-hour / last-day meters, walls. Same origin, so the pages need no API URL. */
+  app.get("/session/gtow-accounts", async () => {
+    try {
+      const r = await fetch(`${SES.API()}/api/gtow/accounts`, { signal: AbortSignal.timeout(12_000) });
+      if (r.status >= 400) throw new Error(`HTTP Error ${r.status}: ${r.statusText}`);
+      return send(200, "application/json", new Uint8Array(await r.arrayBuffer()));
+    } catch (e: any) {
+      return json(200, { ok: false, error: `the study API on ${SES.API()} did not answer: ${e?.message ?? e}` });
+    }
+  });
   app.post("/session/gtow-connect", async (c) => {
     try {
       const raw = await c.req.text();

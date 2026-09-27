@@ -66,6 +66,7 @@
   .gsess .g .cap { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 999px; border: 1px solid #1f2731; }
   .gsess .g .cap.mw { color: #5ee39a; border-color: #2c5a41; }
   .gsess .g button { margin-left: auto; }
+  .gsess .g .m { font-variant-numeric: tabular-nums; color: #d6e2ee; } .gsess .g .m.bad { color: #ff8a80; font-weight: 600; }
   .verdict { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
   .verdict .msg { font-size: 14px; }
   .verdict .msg.bad { color: #ff8a80; } .verdict .msg.ok { color: #5ee39a; }
@@ -186,6 +187,9 @@
       <div class="field ign-only"><span class="k">Sat out</span>
         <div class="seg" id="autoSitBackIn"><button data-v="1" class="plain">Sit back in</button><button data-v="0" class="plain">Stay out</button></div>
         <span class="help">A few timed-out decisions and the table sits you out. With this on, the wrapper presses <b>I AM BACK</b> for you (after 2 s, up to 3 tries per sit-out), logged as a <b>sit-back-in</b> session event. It leaves you out while the connection guard has sat you out for a slow link. If you sit out on purpose, choose Stay out — it cannot tell your sit-out from the table's.</span></div>
+      <div class="field" style="grid-column: 1 / -1"><span class="k">GTO Wizard accounts</span>
+        <div id="gtow-allow" class="row" style="flex-wrap:wrap;gap:8px 18px"><span class="sub">reading the account registry…</span></div>
+        <span class="help">Which registered accounts this session may spend. All ticked = no restriction (the default). Untick the Ultra to keep its budget for another table, or an account that is walled. Each shows its light and what it has used in the last hour against the 2,250 limit — a trip walls the account for about a day. Register and name accounts on the dashboard's GTO Wizard tab.</span></div>
       <div class="field"><span class="k">Budget</span>
         <div class="row"><input type="number" id="budget-hands" min="0" placeholder="hands"> <span class="sub">hands</span> <input type="number" id="budget-min" min="0" placeholder="min"> <span class="sub">minutes</span></div>
         <span class="help">Optional. The panel counts down and says when it's reached; it never ends the session for you.</span></div>
@@ -512,6 +516,9 @@ function readSettings() {
   cfg.autoSitBackIn = $("autoSitBackIn").querySelector("button.on")?.dataset.v === "1";
   cfg.autoRealMoney = cfg.autoExecute && $("autoRealMoney").checked;
   cfg.clearCache = $("clearCache").checked;
+  // the GTO Wizard allowlist: null (every account) unless at least one registered account is unticked
+  const gaBoxes = [...document.querySelectorAll("#gtow-allow input[type=checkbox]")];
+  cfg.gtowAccounts = gaBoxes.length && gaBoxes.some((x) => !x.checked) ? gaBoxes.filter((x) => x.checked).map((x) => x.value) : null;
   cfg.autoBudget = { minutes: Number($("auto-min").value) || 30, hands: Number($("auto-hands").value) || 50 };
   cfg.budget = { hands: Number($("budget-hands").value) || null, minutes: Number($("budget-min").value) || null };
   cfg.buyinBb = Number($("buyin").value) || 100;
@@ -583,10 +590,42 @@ function gtowRows(c) {
   if (!ss.length) {
     return c.ok ? "" : `<span style="margin-top:6px"><button class="mini" id="gtow-connect" onclick="gtowConnect()">🔌 Connect GTO Wizard</button> <span class="sub" id="gtow-connect-msg">starts each session with its debug port and waits for a token (up to a minute)</span></span>`;
   }
-  const cls = (x) => x.state === "up" ? "up" : (x.state === "blocked" || x.state === "no-token" || x.state === "unknown") ? "warn" : "down";
-  const rows = ss.map((x) => `<div class="g ${cls(x)}"><span class="d"></span><span class="nm">${esc(x.id)}${x.account ? ` <span class="sub">${esc(x.account)}</span>` : ""}</span><span class="cap${x.multiway ? " mw" : ""}">${x.multiway ? "multiway" : "heads-up"}</span><span>${esc(x.blockedReason || x.text || "")}</span><button class="mini" id="gtow-connect-${esc(x.id)}" onclick="gtowConnect('${esc(x.id)}')">${x.state === "up" ? "Reconnect" : "🔌 Connect"}</button></div>`).join("");
+  // the light and the meter come from the account registry (/session/gtow-accounts) when the wrapper could read it;
+  // the pool's own state is the fallback
+  const cls = (x) => x.light ? (x.light === "up" ? "up" : x.light === "no-token" || x.light === "signed-out" ? "warn" : "down")
+    : x.state === "up" ? "up" : (x.state === "blocked" || x.state === "no-token" || x.state === "unknown") ? "warn" : "down";
+  const meter = (x) => x.h1 == null ? "" : x.light === "walled" ? `<span class="m bad">walled</span>` : `<span class="m">${Number(x.h1).toLocaleString()}<span class="sub">/${Number(x.cap || 2250).toLocaleString()} this hour</span></span>`;
+  const rows = ss.map((x) => `<div class="g ${cls(x)}"><span class="d"></span><span class="nm">${esc(x.name || x.id)}${x.account ? ` <span class="sub">${esc(x.account)}</span>` : ""}</span><span class="cap${x.multiway ? " mw" : ""}">${x.multiway ? "multiway" : "heads-up"}</span>${meter(x)}<span>${esc(x.lightText || x.blockedReason || x.text || "")}</span><button class="mini" id="gtow-connect-${esc(x.id)}" onclick="gtowConnect('${esc(x.id)}')">${x.state === "up" ? "Reconnect" : "🔌 Connect"}</button></div>`).join("");
   return `<span class="gsess">${rows}<span class="sub" id="gtow-connect-msg">a session parked on its activation or sign-in screen needs the code typed in its own window — Connect will not restart it</span></span>`;
 }
+
+/* The GTO Wizard allowlist picker in Settings (2026-09-27): one tick per registered account, with its light and its
+   last-hour meter. Re-read every 15 s so the lights move; ticks the user made survive the refresh. */
+let gaAllowSeen = null;
+async function loadGtowAllow() {
+  const el = $("gtow-allow");
+  if (!el) return;
+  let j = null;
+  try { j = await (await fetch("/session/gtow-accounts")).json(); } catch { /* wrapper or API down: the preflight row says so */ }
+  if (j && j.ok) {
+    const ticked = new Set([...el.querySelectorAll("input[type=checkbox]")].filter((x) => x.checked).map((x) => x.value));
+    const first = gaAllowSeen === null;
+    const fromCfg = cfg && Array.isArray(cfg.gtowAccounts) ? new Set(cfg.gtowAccounts) : null;
+    gaAllowSeen = j.accounts.map((a) => a.id);
+    const dot = (a) => a.light === "up" ? "#5ee39a" : a.light === "walled" || a.light === "down" ? "#ff8a80" : a.light === "off" ? "#3a4a5a" : "#ffcf70";
+    el.innerHTML = j.accounts.map((a) => {
+      const h1 = (a.windows && a.windows.h1 && a.windows.h1.n) || 0;
+      const on = first ? (fromCfg ? fromCfg.has(a.id) : true) : ticked.has(a.id);
+      const used = a.light === "walled" ? `<b style="color:#ff8a80">walled</b>` : `${h1.toLocaleString()}<span class="sub">/${j.cap.toLocaleString()} this hour</span>`;
+      return `<label class="row" style="gap:6px" title="${esc(a.lightText || "")}"><input type="checkbox" value="${esc(a.id)}" ${on ? "checked" : ""} ${a.enabled === false ? "disabled" : ""}><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dot(a)}"></span><b>${esc(a.name)}</b><span class="sub">${a.multiway ? "multiway" : "heads-up"}</span> ${used}</label>`;
+    }).join("") || `<span class="sub">no accounts registered — add them on the dashboard's GTO Wizard tab</span>`;
+    el.querySelectorAll("input[type=checkbox]").forEach((x) => x.onchange = () => { if (cfg) { readSettings(); schedulePreflight(); } });
+  } else if (gaAllowSeen === null) {
+    el.innerHTML = `<span class="sub">account registry unreadable (is the study API up?) — every account is allowed</span>`;
+  }
+  setTimeout(loadGtowAllow, 15000);
+}
+loadGtowAllow();
 
 /** Connect one GTO Wizard session by id, or every session that is not up. */
 async function gtowConnect(source) {

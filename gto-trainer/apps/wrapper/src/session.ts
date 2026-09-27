@@ -69,7 +69,9 @@ export async function apiPost(path: string, body: unknown = null, timeoutS = 5.0
 /** Point the poller here and get GTO Wizard connected — never twice at once, one launch attempt per 2 min. */
 export async function ensureAnswerChain(reason: string): Promise<void> {
   const pub = C.PANEL_PUBLIC_URL || `http://127.0.0.1:${C.PANEL_PORT}`;
-  const r = await apiPost("/api/study-poller/start", { assistiveUrl: pub });
+  // the session's GTO Wizard allowlist rides every start (the keeper re-posts it), so the API's pool mirrors the session
+  const gtowAccounts = (S.session.rec?.config as any)?.gtowAccounts ?? null;
+  const r = await apiPost("/api/study-poller/start", { assistiveUrl: pub, gtowAccounts });
   if (!("ok" in (r || {}) ? r.ok : true)) log(`[chain] poller start: ${pyRepr(r)}`);
   const reg = await SES.fetchRegistry();
   const g = ((reg || {}).armed || {}).gtow || {};
@@ -415,8 +417,27 @@ export function resumeRecordingIfPending(): void {
 }
 
 // ---- preflight, the checklist, the brief ------------------------------------------------------------------
+/** The GTO Wizard row's per-account list gains the registry's name, light and last-hour meter (2026-09-27) — best
+ *  effort, 4 s: the row still renders from the pool's own state when the accounts endpoint is down. */
+export async function enrichGtowRow(pf: any): Promise<void> {
+  const row = (pf?.checks || []).find((c: any) => c.id === "gtow");
+  if (!row || !Array.isArray(row.sessions)) return;
+  try {
+    const raw = await fetchBytes(`${SES.API()}/api/gtow/accounts`, 4);
+    const j = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
+    if (!j?.ok) return;
+    const byId = new Map<string, any>((j.accounts || []).map((a: any) => [a.id, a]));
+    row.sessions = row.sessions.map((s: any) => {
+      const a = byId.get(s.id);
+      return a ? { ...s, name: a.name, light: a.light, lightText: a.lightText, h1: a.windows?.h1?.n ?? 0, h24: a.windows?.h24?.n ?? 0, cap: j.cap, walled: !!a.wall?.walled } : s;
+    });
+    row.gtowAllow = j.allow ?? null;
+  } catch { /* informational */ }
+}
+
 export async function preflight(preset: string, cfg: Record<string, any>, registry: any = undefined): Promise<Record<string, any>> {
   const pf: any = await SES.runPreflight(preset, cfg, S.fakeMode, registry !== undefined ? registry : await SES.fetchRegistry(), C.CDP_PORT);
+  await enrichGtowRow(pf);
   if (cfg.site === CP_SITE) {
     pf.checks = [...pf.checks, ...CP.preflight(cfg.cpTable ?? null)];
     const blockers = pf.checks.filter((c: any) => c.required && !c.ok);
@@ -446,6 +467,7 @@ export async function sessionChecks(): Promise<Record<string, any>> {
              session: await sessionBrief(), chain: { attempting: S.chain.attempting, lastResult: S.chain.lastResult } };
   }
   const pf: any = await SES.runPreflight(preset, cfg, S.fakeMode, registry, C.CDP_PORT);
+  await enrichGtowRow(pf);
   const cdpUp = await cdp.available(C.CDP_PORT);
   const tgt = cdpUp ? await seams.ignitionTarget() : null;
   const table = {

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { studyPoller, studyPollers, type StudyPollerConfig } from "../services/studyPoller";
+import { gtowSessions } from "../services/gtowSessions";
 
 /**
  * Controls the backend study pollers (see services/studyPoller.ts) — start one
@@ -16,12 +17,16 @@ import { studyPoller, studyPollers, type StudyPollerConfig } from "../services/s
 const app = new Hono();
 
 app.post("/start", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as StudyPollerConfig;
-  return c.json({ ok: true, ...studyPollers.start(body) });
+  const body = (await c.req.json().catch(() => ({}))) as StudyPollerConfig & { gtowAccounts?: unknown };
+  // The session's GTO Wizard allowlist (Brady, 2026-09-27: per session, default everything). The wrapper sends it with
+  // every start (its keeper re-posts every 20 s), so the pool's restriction always mirrors the running session.
+  gtowSessions.setAllow(Array.isArray(body.gtowAccounts) && body.gtowAccounts.length ? body.gtowAccounts.map(String) : null);
+  return c.json({ ok: true, ...studyPollers.start(body), gtowAllow: gtowSessions.allowList() });
 });
 
 app.post("/stop", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { assistiveUrl?: string };
+  if (!body?.assistiveUrl) gtowSessions.setAllow(null);   // every table stopped: no session, no restriction
   return c.json({ ok: true, ...(await studyPollers.stop(body?.assistiveUrl)) });
 });
 

@@ -230,6 +230,9 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
       for (const [kk, vv] of Object.entries(v)) base.budget[kk] = emptyish(vv) ? null : pyInt(vv);
     } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "autoSitBackIn", "clearCache"].includes(k)) {
       base[k] = truthy(v);
+    } else if (k === "gtowAccounts") {
+      // the session's GTO Wizard allowlist (2026-09-27): registry slot ids this session may spend; null = every account
+      base.gtowAccounts = Array.isArray(v) && v.length ? v.map((x) => String(x)) : null;
     } else if (k === "autoDelay" && (v === "instant" || v === "random")) {
       base[k] = v;
     } else if (k === "autoBudget" && v && typeof v === "object" && !Array.isArray(v)) {
