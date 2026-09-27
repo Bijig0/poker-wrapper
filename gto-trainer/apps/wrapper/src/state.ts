@@ -115,6 +115,8 @@ function fresh() {
     wsDump: [] as Record<string, any>[],
     wsDumpCur: null as Record<string, any> | null,
     tapBound: null as string | null,
+    // when we last left a table on purpose (session.ts markLeaving): its socket closing then is not a failure
+    tapLeavingAt: 0,
     tapForeign: 0,
     tapHeld: 0,
     tapSeen: new Map<string, number[]>(),

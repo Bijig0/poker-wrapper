@@ -259,6 +259,7 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
       S.router.reseat = false;
       if (st.state === "seated") {
         routerSet("routing", "re-seat: leaving the current table", []);
+        markLeaving();
         const res = await F.leave(C.CDP_PORT, stepLog("[leave] "));
         S.sessions.event(sid, "reseat", { left: res.ok ?? null, was: st.detected ?? null });
         if (!res.ok) {
@@ -675,6 +676,7 @@ export async function standDownTable(why: string): Promise<Record<string, any>> 
   S.study.on = false;
   let res: Record<string, any>;
   try {
+    markLeaving();
     res = (await cdp.available(C.CDP_PORT)) ? await sessionSeams.leave(C.CDP_PORT) : { ok: true, note: "no table window" };
   } catch (e: any) {
     res = { ok: false, error: String(e?.message ?? e) };
@@ -695,6 +697,12 @@ export async function standDownTable(why: string): Promise<Record<string, any>> 
  *      closed and is recorded as missed); any other table tells the leader, and ends it itself if the leader does
  *      not answer. The wrapper stays up with the reason in its feed and in the session record.
  */
+/** We are leaving a table on purpose: its game socket closing in the next seconds is not a failure
+ *  (ignition/reader.ts noteSocketClosed). Called right before every leave. */
+export function markLeaving(): void {
+  S.tapLeavingAt = time();
+}
+
 export async function maybeEndForDisconnect(): Promise<void> {
   const x = S.disconnect;
   if (!x || x.handled) return;
@@ -1260,6 +1268,7 @@ export async function closeOutAfterEnd(sid: string): Promise<Record<string, any>
   }
   let res: Record<string, any>;
   try {
+    markLeaving();
     res = await F.leave(C.CDP_PORT, (m) => log(m));
   } catch (e: any) {
     res = { ok: false, error: String(e?.message ?? e) };

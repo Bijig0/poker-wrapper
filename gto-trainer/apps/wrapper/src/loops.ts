@@ -8,7 +8,7 @@ import { feedAdd, log } from "./feed";
 import { pyRepr } from "./py";
 import { S, seams } from "./state";
 import { dumpEvent, tapFrame } from "./ignition/ws";
-import { feedTick, maybeFlushEnded } from "./ignition/reader";
+import { feedTick, maybeFlushEnded, noteDisconnect, noteSocketClosed } from "./ignition/reader";
 import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVerifyExec } from "./relay";
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
 import { maybeEndForDisconnect, maybeEndForNetDrop, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
@@ -140,6 +140,14 @@ export async function wsTap(): Promise<void> {
           } catch {
             return;
           }
+          if (m.method === "Network.webSocketClosed") {
+            try {
+              noteSocketClosed(String((m.params || {}).requestId ?? ""));
+            } catch (e: any) {
+              log(`[ws] socket closed: ${e?.message ?? e}`);
+            }
+            return;
+          }
           if (m.method !== "Network.webSocketFrameReceived") return;
           const raw: string = ((m.params || {}).response || {}).payloadData || "";
           let o: any;
@@ -170,6 +178,11 @@ export async function wsTap(): Promise<void> {
     } catch (ex: any) {
       if (wasUp) {
         dumpEvent("<tap-lost>", { err: String(ex?.message ?? ex).slice(0, 200) });
+        // the capture itself lost the page mid-session: frames of the hand in play are gone — a failure, like the socket
+        if (S.session.id && S.tapBound !== null) {
+          noteDisconnect({ text: "the capture lost the table's feed (the browser debug connection closed)", attempt: null, of: null, reconnected: false },
+                         "the tap closed");
+        }
         wasUp = false;
         feedAdd("(capture connection lost — reconnecting)");
       }

@@ -19,7 +19,7 @@ import {
   awardName, bankStep, boardCards, buyPanelUp, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, boardCap, dumpMark, lastStanding, mkey, noteDomBoard, tapVerify, withoutRabbit } from "./ws";
+import { actAdd, actSeen, boardCap, dumpEvent, dumpMark, lastStanding, mkey, noteDomBoard, tapVerify, withoutRabbit } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -111,6 +111,32 @@ export function noteDisconnect(what: NonNullable<ReturnType<typeof disconnectOf>
   const said = what.reconnected ? "the client has reconnected by itself" : `${what.text}${what.attempt !== null ? ` (attempt ${what.attempt} of ${what.of})` : ""}`;
   feedAdd(`DISCONNECTED FROM THE POKER SERVER — ${said}. Ending the session; the client is closed so it cannot reconnect`);
   log(`[disconnect] table ${pyStr(TABLES.slot() ?? 1)}: ${said} (${via}) — nothing more is pressed; ending the session`);
+}
+
+/** How long after we leave a table on purpose its socket closing is ours, not a failure. */
+export const LEAVE_GRACE_S = 30;
+
+/**
+ * THE TABLE'S GAME SOCKET CLOSED (2026-09-26, Brady: "table open -> connect socket. If it disconnects for any reason,
+ * end the session … a socket end is a failure state"). Chrome reports every WebSocket of the page closing
+ * (Network.webSocketClosed); only the one this table is bound to matters. Closed because WE left the table (a
+ * stand-down, a closed table, the router's re-seat — session.ts markLeaving) it releases the bind, so the next table
+ * binds fresh. Closed any other way — the server dropped us, the network, the client reconnecting (2026-09-25 18:10: every
+ * table's socket replaced over 4 minutes, and the capture hunted for the new ones by the cards on screen for 2 minutes,
+ * mid-hand) — the session ends exactly as for the disconnect overlay: nothing more is pressed, the client is closed.
+ */
+export function noteSocketClosed(rid: string): void {
+  const ours = rid === S.tapBound;
+  dumpEvent("<socket-closed>", { rid, ours });
+  if (!ours) return;
+  S.tapBound = null;
+  S.tapMismatch = 0;
+  if (time() - (S.tapLeavingAt || 0) <= LEAVE_GRACE_S) {
+    log(`[ws] table socket ${rid} closed — we left the table; the next table binds fresh`);
+    return;
+  }
+  feedAdd("The table's connection to the poker server closed");
+  noteDisconnect({ text: "the table's game socket closed", attempt: null, of: null, reconnected: false }, "the capture saw its table's socket close");
 }
 
 /** At several tables: is our frame showing the hand the capture is reading? Its hole cards against the capture's —
