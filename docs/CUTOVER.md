@@ -107,7 +107,8 @@ within a minute (patch charts auto-live), and a refit pool is armed at the next 
    - the rig: a practice-table session on :7701 answers preflop (6-max, 3-max, HU) and postflop;
    - `bun setup/regress.ts` (full, with the live smoke) in poker-wrapper.
 10. **Rollback** (any check red): stop the new tasks, re-enable `StudyAPI`/`ChartServer`/`GtowWatchdog`, remove
-    `POKER_DATA_DIR` + `WRAPPER_PROFILE_DIR` from poker's local.env and move the records back from the backup — the
+    `POKER_DATA_DIR` + `WRAPPER_PROFILE_DIR` from poker's local.env and move poker-data's contents back to their old
+    folders (not the backup: it lacks whatever was played since the switch) — the
     old stack comes back exactly as it was.
 
 ## After it holds (a week of sessions)
