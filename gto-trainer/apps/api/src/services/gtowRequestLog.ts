@@ -53,6 +53,22 @@ export interface GtowRequestRow {
 /** Per-request context a caller may attach: it rides the ledger row, nothing else. */
 export interface GtowRequestExtra { pm?: string | null; cl?: string | null }
 
+/** One account's requests inside a trailing window (see `windows`). */
+export interface GtowWindow { n: number; sinceMs: number; x429: number; ok: number; byOrigin: Record<string, number> }
+
+/** One account's wall as the ledger records it (see `wallState`). */
+export interface GtowWallState {
+  walled: boolean;
+  sinceMs: number | null;
+  expectedLiftMs: number | null;
+  last429Ms: number | null;
+  lastOkMs: number | null;
+  /** when the last wall lifted — the first of the two successes that ended it — null while walled or if none was seen */
+  clearedAtMs: number | null;
+  /** lone successes inside the wall (a single 2xx between 429s) — one means "maybe lifting: probe again" */
+  leaks: number;
+}
+
 /** A stored response: every 402/403/429 whole, plus hourly header samples of normal replies. */
 export interface GtowResponseRow {
   ts: number;
@@ -270,6 +286,71 @@ class GtowRequestLog {
     } catch {
       return { file: this.path, lastAt: null, last24h: { total: 0, bySession: {}, byKind: {}, byOrigin: {}, status429: 0 },
         sinceUtcMidnight: { total: 0, bySession: {}, status429: 0 }, lastHour: { total: 0 }, cap: CAP };
+    }
+  }
+
+  /**
+   * THE ACCOUNT PAGE'S METERS (2026-09-27). Per account (the ledger's `s`), the requests in a trailing window, when
+   * that window's oldest request was sent ("used N since <time>"), how many were refused, and who sent them. Every
+   * origin counts — the live worker, a backtest, a probe — because GTO Wizard counts them all against the account.
+   */
+  windows(now = Date.now(), spans: Record<string, number> = { h1: 3_600_000, h24: 86_400_000 }): Record<string, Record<string, GtowWindow>> {
+    const out: Record<string, Record<string, GtowWindow>> = {};
+    try {
+      const db = this.open();
+      for (const [name, ms] of Object.entries(spans)) {
+        const rows = db.query<{ s: string; n: number; oldest: number; x: number; ok: number }, [number, number]>(
+          "SELECT s, COUNT(*) n, MIN(ts) oldest, COALESCE(SUM(st = 429), 0) x, COALESCE(SUM(st BETWEEN 200 AND 299), 0) ok FROM gtow_requests WHERE ts >= ? AND ts <= ? GROUP BY s").all(now - ms, now);
+        const origins = db.query<{ s: string; o: string; n: number }, [number, number]>(
+          "SELECT s, o, COUNT(*) n FROM gtow_requests WHERE ts >= ? AND ts <= ? GROUP BY s, o").all(now - ms, now);
+        for (const r of rows) {
+          (out[r.s] ??= {})[name] = { n: r.n, sinceMs: r.oldest, x429: r.x, ok: r.ok,
+            byOrigin: Object.fromEntries(origins.filter((o) => o.s === r.s).map((o) => [o.o, o.n])) };
+        }
+      }
+    } catch { /* an empty ledger reads as no usage */ }
+    return out;
+  }
+
+  /**
+   * The wall as the ledger saw it — independent of any one process's memory, so it survives an API restart and sees
+   * the probe script's requests too. Walled = the account's most recent 429 is more recent than its most recent 2xx;
+   * `sinceMs` is the first 429 of that run; `expectedLiftMs` is our ~24 h measurement, not GTO Wizard's word.
+   */
+  wallState(session: string, now = Date.now(), wallMs = 24 * 3_600_000): GtowWallState {
+    const none: GtowWallState = { walled: false, sinceMs: null, expectedLiftMs: null, last429Ms: null, lastOkMs: null, clearedAtMs: null, leaks: 0 };
+    try {
+      // newest first; only the statuses that say anything about the wall (a 204 or a 400 says nothing)
+      const rows = this.open().query<{ ts: number; st: number }, [string, number]>(
+        "SELECT ts, st FROM gtow_requests WHERE s = ? AND ts >= ? AND (st = 429 OR st BETWEEN 200 AND 299) ORDER BY ts DESC, id DESC LIMIT 5000")
+        .all(session, now - 3 * 86_400_000);
+      if (!rows.length) return none;
+      const last429 = rows.find((r) => r.st === 429)?.ts ?? null;
+      const lastOk = rows.find((r) => r.st !== 429)?.ts ?? null;
+      if (!last429) return { ...none, lastOkMs: lastOk };
+      // A wall is a RUN of 429s. One success inside it is a leak, not a lift (Elite, 2026-09-27 09:40 local: a single
+      // 200 fourteen hours in, then 429s for hours more) — the run ends only at two successes in a row.
+      let i = 0, okRun = 0, leaks = 0, since = last429, clearedAt: number | null = null;
+      for (; i < rows.length; i++) {
+        const r = rows[i]!;
+        if (r.st === 429) { since = r.ts; okRun = 0; continue; }
+        okRun++;
+        if (okRun >= 2) break;
+      }
+      const lifted = rows[0]!.st !== 429 && rows.length > 1 && rows[1]!.st !== 429;
+      if (lifted) {
+        // cleared at the first of the two successes that ended the run; leaks = lone successes inside it
+        let j = 0; while (j < rows.length && rows[j]!.st !== 429) j++;
+        clearedAt = rows[Math.max(0, j - 1)]!.ts;
+        for (let k = j; k < rows.length; k++) { const r = rows[k]!; if (r.st === 429) continue; if (rows[k + 1]?.st === 429 && rows[k - 1]?.st === 429) leaks++; else break; }
+        return { walled: false, sinceMs: null, expectedLiftMs: null, last429Ms: last429, lastOkMs: lastOk, clearedAtMs: clearedAt, leaks };
+      }
+      // a leak is a success with a 429 on both sides (or the newest request) — not the pair that ended the run
+      for (let k = 0; k < i; k++) if (rows[k]!.st !== 429 && rows[k + 1]?.st === 429 && (k === 0 || rows[k - 1]!.st === 429)) leaks++;
+      // the newest request itself was a lone success: the wall may be lifting — say so, and still count it walled
+      return { walled: true, sinceMs: since, expectedLiftMs: since + wallMs, last429Ms: last429, lastOkMs: lastOk, clearedAtMs: null, leaks };
+    } catch {
+      return none;
     }
   }
 

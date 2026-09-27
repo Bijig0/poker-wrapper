@@ -39,6 +39,8 @@ export const riverMesDbPath = (): string => storePath("river-mes", central(), "R
 export const riverMesConfigPath = (): string => storePath("river-mes-config", api("river_mes_config.json")).path;
 export const mesRiverCacheDir = (): string => storePath("mes-river-cache", api("mes_river_cache")).path;
 export const tasksPath = (): string => storePath("tasks", api("tasks.json")).path;
+/** The GTO Wizard account registry (services/gtowAccounts.ts) — beside the central database, so every checkout's API builds the same pool. */
+export const gtowAccountsPath = (): string => storePath("gtow-accounts", join(dirname(central()), "gtow-accounts.json"), "GTOW_ACCOUNTS_PATH").path;
 export const fxCachePath = (): string => storePath("fx", api("fx.json")).path;
 export const balanceAcksPath = (): string => storePath("balance-acks", api("balance-acks.json")).path;
 export const backgroundLockPath = (): string => storePath("background-lock", api("background.lock"), "API_BACKGROUND_LOCK").path;

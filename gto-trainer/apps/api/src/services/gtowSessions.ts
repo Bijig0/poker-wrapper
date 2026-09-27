@@ -44,6 +44,7 @@
  */
 
 import { asActivity, timed } from "./answerTrace";
+import { loadAccounts, WALL_MS, type GtowTier } from "./gtowAccounts";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
@@ -58,7 +59,10 @@ const SNIFF_PASSIVE_MS = 3_500;
  *  transient, not a wall. */
 const SOFT_BLOCK_MS = 60_000;
 
-export type GtowSessionId = "primary" | "secondary";
+/** A slot id from the account registry (services/gtowAccounts.ts): "primary" (Ultra) and "secondary" (Elite 1) for
+ *  the two accounts that predate it, a slug of the name for any added later. A string, so a third account is a
+ *  registry row and not a code change. */
+export type GtowSessionId = string;
 
 /** What a piece of work needs from an account. `multiway` is a hard capability
  *  (Elite's AI refuses 3+ player trees); `preflop` only changes the ORDER — see
@@ -70,7 +74,9 @@ export interface GtowNeed {
 
 export interface GtowSessionCfg {
   id: GtowSessionId;
+  /** the registry's name for the account ("Ultra", "Elite 1") */
   label: string;
+  tier: GtowTier;
   /** host:port of this session's Chrome DevTools endpoint */
   cdpHost: string;
   /** does this account's plan include 3+ player AI trees (Ultra yes, Elite no) */
@@ -90,6 +96,7 @@ export type BlockKind = "quota" | "plan" | "auth" | "unreachable";
 export interface GtowSessionStatus {
   id: GtowSessionId;
   label: string;
+  tier: GtowTier;
   cdpHost: string;
   multiway: boolean;
   order: number;
@@ -103,6 +110,8 @@ export interface GtowSessionStatus {
   lastAttemptMs: number | null;
   /** blocked until this instant (quota wall, logged out, …) */
   blockedUntilMs: number | null;
+  /** when the current request wall began (the first 429), null when not walled */
+  wallSinceMs: number | null;
   blockedKind: BlockKind | null;
   blockedReason: string | null;
   /** the API refused a multiway tree on this account — routing believes the API */
@@ -122,37 +131,13 @@ export interface GtowSessionStatus {
   text: string;
 }
 
-const envBool = (v: string | undefined, dflt: boolean): boolean =>
-  v == null || v.trim() === "" ? dflt : !/^(0|no|false|off)$/i.test(v.trim());
-
+/** The pool's sessions ARE the account registry (services/gtowAccounts.ts, <root>/gtow-accounts.json). The env vars
+ *  that used to build this list seed the file once; edits come from the dashboard's accounts tab. */
 function configs(): GtowSessionCfg[] {
-  const preferPrimary = /^primary$/i.test(process.env.GTOW_PREFER ?? "");
-  return [
-    {
-      id: "secondary",
-      label: "Secondary GTO Wizard (Elite · heads-up AI)",
-      cdpHost: process.env.GTOW_CDP_HOST_SECONDARY ?? "127.0.0.1:9223",
-      // Elite's AI is heads-up only. Override if the plan changes.
-      multiway: envBool(process.env.GTOW_SECONDARY_MULTIWAY, false),
-      // spend this one first on POSTFLOP heads-up — its quota is the one we
-      // are trying to burn; preflop goes to Ultra, and reaches this account
-      // only when the primary cannot take the work at all
-      order: preferPrimary ? 2 : 1,
-      preflopOrder: 2,
-      launchHint: "scripts/start_gtow_secondary.ps1",
-      enabled: envBool(process.env.GTOW_SECONDARY, true),
-    },
-    {
-      id: "primary",
-      label: "Primary GTO Wizard (Ultra · Chrome profile)",
-      cdpHost: process.env.GTOW_CDP_HOST ?? "127.0.0.1:9222",
-      multiway: envBool(process.env.GTOW_PRIMARY_MULTIWAY, true),
-      order: preferPrimary ? 1 : 2,
-      preflopOrder: 1,
-      launchHint: "scripts/start_gtow_chrome.ps1",
-      enabled: envBool(process.env.GTOW_PRIMARY, true),
-    },
-  ];
+  return loadAccounts().accounts.map((a) => ({
+    id: a.id, label: a.name, tier: a.tier, cdpHost: a.cdpHost, multiway: a.multiway,
+    order: a.order, preflopOrder: a.preflopOrder, launchHint: a.launchHint, enabled: a.enabled,
+  }));
 }
 
 interface CdpTarget {
@@ -181,7 +166,8 @@ const decodeAccount = (jwt: string): { email: string | null; publicId: string | 
   }
 };
 
-/** Next 00:00 UTC — when GTO Wizard's daily allowance rolls over. */
+/** Next 00:00 UTC. NOT when a request wall lifts — measured 2026-09-26/27: both accounts stayed walled straight through
+ *  it, for 18-20 h and counting. Kept for callers that want the calendar boundary; walls use WALL_MS from the trip. */
 export const nextDailyResetMs = (now = Date.now()): number => {
   const d = new Date(now);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 0, 0, 0);
@@ -227,6 +213,8 @@ interface SessionState {
   sniffFailedMs?: number;
   refreshing: boolean;
   blockedUntilMs: number;
+  /** the first 429 of the current wall (0 = not walled) — what "expected lift" counts from */
+  wallSinceMs: number;
   blockedKind: BlockKind | null;
   blockedReason: string | null;
   multiwayRefused: boolean;
@@ -240,14 +228,18 @@ interface SessionState {
 class GtowSessions {
   private sessions = new Map<GtowSessionId, SessionState>();
   private keeper: ReturnType<typeof setInterval> | null = null;
+  /** the running session's allowlist (Brady, 2026-09-27: per-session, default everything) — null = no restriction */
+  private allow: Set<GtowSessionId> | null = null;
 
   constructor() {
     this.reload();
   }
 
-  /** (Re)read the env-driven config, keeping any tokens already in hand. */
+  /** (Re)read the registry, keeping any tokens already in hand; a slot that left the registry is dropped. */
   reload(): void {
+    const seen = new Set<GtowSessionId>();
     for (const cfg of configs()) {
+      seen.add(cfg.id);
       const prev = this.sessions.get(cfg.id);
       if (prev) {
         prev.cfg = cfg;
@@ -260,6 +252,7 @@ class GtowSessions {
         lastAttemptMs: 0,
         refreshing: false,
         blockedUntilMs: 0,
+        wallSinceMs: 0,
         blockedKind: null,
         blockedReason: null,
         multiwayRefused: false,
@@ -269,6 +262,44 @@ class GtowSessions {
         account: null,
       });
     }
+    for (const id of [...this.sessions.keys()]) if (!seen.has(id)) this.sessions.delete(id);
+    void this.adoptLedgerWalls();
+  }
+
+  /**
+   * A wall outlives this process (2026-09-27: the API restarted twice during a 20 h wall and each time offered the
+   * walled account live work at once). The request ledger remembers the last 429 and the last success per account,
+   * so a fresh pool starts out knowing who is walled. Dynamic import: the ledger module must not be loaded just to
+   * construct a pool in a test.
+   */
+  private async adoptLedgerWalls(): Promise<void> {
+    try {
+      const { gtowRequests } = await import("./gtowRequestLog");
+      for (const s of this.sessions.values()) {
+        if (s.blockedKind) continue;
+        const w = gtowRequests.wallState(s.cfg.id, Date.now(), WALL_MS);
+        if (!w.walled || !w.expectedLiftMs || w.expectedLiftMs <= Date.now()) continue;
+        s.blockedKind = "quota";
+        s.blockedUntilMs = w.expectedLiftMs;
+        s.wallSinceMs = w.sinceMs ?? Date.now();
+        s.blockedReason = `request wall (429) seen in the ledger at ${new Date(s.wallSinceMs).toISOString().slice(11, 16)}Z — held ~24 h from the first refusal; a probe confirms`;
+      }
+    } catch { /* no ledger (tests) — nothing to adopt */ }
+  }
+
+  /** Restrict routing to these slots for the running session (null lifts it). Unknown ids are ignored, and an
+   *  allowlist that names no known slot lifts itself rather than silence every answer. */
+  setAllow(ids: GtowSessionId[] | null): void {
+    const known = ids?.filter((id) => this.sessions.has(id)) ?? [];
+    this.allow = ids && known.length ? new Set(known) : null;
+  }
+
+  allowList(): GtowSessionId[] | null {
+    return this.allow ? [...this.allow] : null;
+  }
+
+  private allowed(s: SessionState): boolean {
+    return !this.allow || this.allow.has(s.cfg.id);
   }
 
   private all(): SessionState[] {
@@ -315,7 +346,7 @@ class GtowSessions {
    */
   route(need: GtowNeed = {}): GtowSessionId[] {
     return this.ranked(need)
-      .filter((s) => s.cfg.enabled && this.capable(s, need) && !this.blocked(s))
+      .filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need) && !this.blocked(s))
       .map((s) => s.cfg.id);
   }
 
@@ -323,7 +354,7 @@ class GtowSessions {
    *  the last-ditch list when `route` came back empty. */
   routeIgnoringBlocks(need: GtowNeed = {}): GtowSessionId[] {
     return this.ranked(need)
-      .filter((s) => s.cfg.enabled && this.capable(s, need))
+      .filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need))
       .map((s) => s.cfg.id);
   }
 
@@ -466,13 +497,16 @@ class GtowSessions {
       s.blockedReason = `plan does not cover 3+ player AI trees (${status})`;
       return kind;
     }
+    // A request wall holds about a day from the FIRST refusal (measured 2026-09-26/27 — not until midnight UTC,
+    // not for Retry-After, not until a fresh login); a second 429 inside the wall must not push the lift out.
+    if (kind === "quota" && !s.wallSinceMs) s.wallSinceMs = Date.now();
     const until =
-      kind === "quota" ? nextDailyResetMs()
+      kind === "quota" ? s.wallSinceMs + WALL_MS
       : Date.now() + SOFT_BLOCK_MS;
     s.blockedUntilMs = until;
     s.blockedKind = kind;
     s.blockedReason =
-      kind === "quota" ? `daily allowance spent (${status}) — retries after the 00:00 UTC reset`
+      kind === "quota" ? `request wall (${status}) — GTO Wizard's 2,250/hour throttle; measured to hold ~24 h from the first refusal (a probe confirms)`
       : kind === "plan" ? `plan refused this request (${status})`
       : kind === "auth" ? "signed out — token rejected"
       : `unreachable (${status})`;
@@ -493,6 +527,7 @@ class GtowSessions {
     const s = this.sessions.get(id);
     if (!s) return;
     s.blockedUntilMs = 0;
+    s.wallSinceMs = 0;
     s.blockedKind = null;
     s.blockedReason = null;
   }
@@ -561,7 +596,7 @@ class GtowSessions {
 
   /** Any session at all with a live token — "can we answer anything". */
   hasLiveToken(need: GtowNeed = {}): boolean {
-    return this.ranked(need).some((s) => s.cfg.enabled && this.capable(s, need) && this.live(s));
+    return this.ranked(need).some((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need) && this.live(s));
   }
 
   // ── status, for the dashboard and the wrapper's preflight ─────────────────
@@ -588,6 +623,7 @@ class GtowSessions {
     return {
       id: s.cfg.id,
       label: s.cfg.label,
+      tier: s.cfg.tier,
       cdpHost: s.cfg.cdpHost,
       multiway: s.cfg.multiway && !s.multiwayRefused,
       order: s.cfg.order,
@@ -598,6 +634,7 @@ class GtowSessions {
       expiresInMs: s.token ? s.tokenExpMs - Date.now() : null,
       lastAttemptMs: s.lastAttemptMs || null,
       blockedUntilMs: blocked ? s.blockedUntilMs : null,
+      wallSinceMs: blocked && s.blockedKind === "quota" ? s.wallSinceMs || null : null,
       blockedKind: blocked ? s.blockedKind : null,
       blockedReason: blocked ? s.blockedReason : s.multiwayRefused ? s.blockedReason : null,
       multiwayRefused: s.multiwayRefused,

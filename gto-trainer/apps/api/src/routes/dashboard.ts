@@ -2881,21 +2881,20 @@ app.get("/gtow-status", async (c) => c.json(await gtowStatus()));
 app.post("/gtow-connect", async (c) => {
   const t0 = Date.now();
   const body = await c.req.json().catch(() => ({}) as any);
+  // any registered account (services/gtowAccounts.ts) may be targeted; omitted, every enabled one that is not up
   const want: GtowSessionId[] =
-    body?.source === "primary" || body?.source === "secondary"
+    typeof body?.source === "string" && gtowSessions.cfg(body.source)
       ? [body.source as GtowSessionId]
-      : (["secondary", "primary"] as GtowSessionId[]).filter((id) => {
-          const s = gtowSessions.status().find((x) => x.id === id);
-          return s?.enabled && s.state !== "up";
-        });
+      : gtowSessions.status().filter((s) => s.enabled && s.state !== "up").map((s) => s.id);
 
   const launches: Record<string, unknown> = {};
   for (const id of want) {
-    if (id === "primary") {
+    const hint = gtowSessions.cfg(id)?.launchHint ?? "";
+    if (id === "primary" || !/\.ps1$/i.test(hint)) {
       launches[id] = await gtowCdp.launchApp();
     } else {
       const proc = Bun.spawn(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(REPO, "scripts", "start_gtow_secondary.ps1")],
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(REPO, hint)],
         { stdout: "pipe", stderr: "pipe" }
       );
       const code = await proc.exited;
@@ -2928,8 +2927,8 @@ app.post("/gtow-connect", async (c) => {
  *  plan refusal) so the router offers it work again immediately. */
 app.post("/gtow-reset", async (c) => {
   const body = await c.req.json().catch(() => ({}) as any);
-  const id: GtowSessionId | null = body?.source === "primary" || body?.source === "secondary" ? body.source : null;
-  if (!id) return c.json({ ok: false, error: "source must be 'primary' or 'secondary'" }, 400);
+  const id: GtowSessionId | null = typeof body?.source === "string" && gtowSessions.cfg(body.source) ? body.source : null;
+  if (!id) return c.json({ ok: false, error: `source must be a registered account (${gtowSessions.status().map((s) => s.id).join(", ")})` }, 400);
   gtowSessions.reset(id);
   await gtowApi.forceRefresh(id);
   return c.json({ ...(await gtowStatus()), reset: id });

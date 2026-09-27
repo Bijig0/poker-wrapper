@@ -106,12 +106,30 @@ describe("quota walls", () => {
     expect(p.route({ multiway: false })).toEqual(["primary"]);
   });
 
-  it("hold until the daily reset, not for a fixed nap", () => {
+  it("hold ~24 h from the FIRST refusal (measured 2026-09-26/27), and a second 429 does not push the lift out", () => {
     const p = pool();
-    p.noteFailure("secondary", 429, "daily limit reached");
+    const t0 = Date.now();
+    p.noteFailure("secondary", 429, "Request limit exceeded");
     const st = p.status().find((s) => s.id === "secondary")!;
     expect(st.blockedKind).toBe("quota");
-    expect(st.blockedUntilMs).toBe(nextDailyResetMs());
+    expect(st.wallSinceMs).toBeGreaterThanOrEqual(t0);
+    expect(st.blockedUntilMs! - st.wallSinceMs!).toBe(24 * 3_600_000);
+    // not the calendar boundary the old code used
+    expect(st.blockedUntilMs).not.toBe(nextDailyResetMs());
+    const until = st.blockedUntilMs;
+    p.noteFailure("secondary", 429, "Request limit exceeded");
+    expect(p.status().find((s) => s.id === "secondary")!.blockedUntilMs).toBe(until);
+  });
+
+  it("an allowlist narrows routing to the named slots and lifts itself when it names none", () => {
+    const p = pool();
+    p.setAllow(["primary"]);
+    expect(p.route({ multiway: false })).toEqual(["primary"]);
+    expect(p.allowList()).toEqual(["primary"]);
+    p.setAllow(["nobody"]);
+    expect(p.route({ multiway: false })).toEqual(["secondary", "primary"]);
+    p.setAllow(null);
+    expect(p.allowList()).toBeNull();
   });
 
   it("leave a last-ditch candidate when every session is walled", () => {
