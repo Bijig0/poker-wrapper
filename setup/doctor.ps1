@@ -68,7 +68,7 @@ Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } els
 Write-Host ""
 Write-Host " Running" -ForegroundColor Cyan
 foreach ($t in $(if (Get-Installed $root) { $TaskNames.Values } else { 'StudyAPI', 'ChartServer', 'GtowWatchdog' })) {
-  $st = (Get-ScheduledTask -TaskName $t).State
+  $st = (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue).State
   Row ($st -eq 'Running') "service $t" $(if ($st) { "$st" } else { 'not registered' }) "run PokerWrapperSetup.exe again (repair) (or: Start-ScheduledTask $t)"
 }
 $cfgApi = Get-Json "http://127.0.0.1:$ApiPort/api/dashboard/config"
