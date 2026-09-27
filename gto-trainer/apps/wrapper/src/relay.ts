@@ -21,6 +21,7 @@ import { ACTION_RE, buyPanelUp, cardKey, findInputJs, framePin, heroCards, modal
 import { handState, toActSources } from "./ignition/hand";
 import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
+import * as AUTO from "./autoLog";
 
 export const STUDY_ANSWER_TTL_MS = 3000;
 const PICK_TTL_S = STUDY_ANSWER_TTL_MS / 1000;
@@ -592,6 +593,7 @@ export function verifyDone(outcome: string, why: string | null, observed: Record
   S.study.pendingExec = null;
   const rec = S.study.lastExec;
   if (rec && typeof rec === "object" && rec.key === p.key) Object.assign(rec, { outcome, outcomeWhy: why, observed, attempts: p.attempts ?? null });
+  AUTO.noteOutcome(p.key, outcome, why, observed?.did ?? null);
   if (outcome === "diverged") feedAdd(`Study pick MIS-EXECUTED — told ${pyStr(p.pick ?? null)}, the table took ${pyStr(why)}`);
   else if (outcome === "unknown") feedAdd(`Study pick UNCONFIRMED — ${pyStr(p.pick ?? null)} was sent, the table never showed it (${pyStr(why)})`);
   else if (outcome === "abandoned") feedAdd(`Study pick unverified — ${pyStr(p.pick ?? null)}: ${pyStr(why)}`);
@@ -643,6 +645,7 @@ export async function maybeVerifyExec(): Promise<void> {
       p.attempts += 1;
       p.deadline = time() + VERIFY_DEADLINE_S;
       const res = await actuate(p.plan, { cards: keyCards(p.key) });
+      AUTO.notePress(p.key, { ok: !!res.ok, reason: res.reason ?? null });
       feedAdd(`Study pick ${pyStr(p.pick)} did not register — retried (${p.attempts}/${VERIFY_ATTEMPTS})`
               + (res.ok ? "" : `, refused: ${pyStr(res.reason ?? null)}`));
       if (S.session.id) {
@@ -674,6 +677,7 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const rec: Record<string, any> = { at: nowMs(), source, pick, plan, ok, result: res, hand: S.handNo, waitedS, key,
                                        outcome: ok ? "pending" : "refused" };
     S.study.lastExec = rec;
+    AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null });
     if (ok) {
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
@@ -831,6 +835,7 @@ export function notePickNotFired(r: Record<string, any>): void {
   }
   if (cur.said || time() - cur.since < PICK_NOT_FIRED_S) return;
   cur.said = true;
+  if (r.reason !== "already executed for this decision") AUTO.noteNotFired(key, r.reason ?? null, st.pick ?? null);
   feedAdd(`Auto-execute has an answer (${pyStr(st.pick ?? null)}) it cannot fire — ${pyStr(r.reason ?? null)}`);
   log(`[pick] auto not fired for ${pyFloatStr(pyRound(time() - cur.since, 1))}s: ${pyStr(r.reason ?? null)}`);
   if (S.session.id) {
@@ -887,6 +892,7 @@ export async function maybeAutoAct(): Promise<void> {
     if (held.key !== r.key || held.why !== holdWhy) {
       st.autoHeld = { key: r.key, why: holdWhy, at: time() };
       feedAdd(`Auto-execute held — ${holdWhy}`);
+      AUTO.noteHeld(r.key, holdWhy, r.pick ?? null);
       if (S.session.id) S.sessions.event(S.session.id, "study-auto-held", { why: holdWhy, hand: S.handNo, pick: r.pick });
     }
     st.autoDue = null;
@@ -897,6 +903,7 @@ export async function maybeAutoAct(): Promise<void> {
     const was = st.autoHeld;
     st.autoHeld = null;
     heldS = time() - was.at;
+    AUTO.noteResumed(r.key, heldS);
     feedAdd(`Auto-execute resumed — ${String(was.why).replaceAll("line uncertain — ", "")} cleared after ${fmtFixed(time() - was.at, 1)} s`);
     if (S.session.id) {
       S.sessions.event(S.session.id, "study-auto-resumed", { why: was.why, heldS: pyRound(time() - was.at, 1), hand: S.handNo, pick: r.pick });
@@ -1081,6 +1088,7 @@ export async function maybeFoldNoAnswer(): Promise<void> {
                 decision: key, did, ok, why, ageS: pyRound(age, 1), attempt: turn.tries, note: currentNote(),
                 reason: ok ? null : res.reason ?? null };
   st.lastNoAnswerFold = rec;
+  AUTO.noteNoAnswer(ready && ready.ok && ready.key ? ready.key : key, did, ok, why);
   feedAdd(ok ? `No answer — ${did.toUpperCase()} (fold on no-answer): ${why}`
              : `No answer — fold on no-answer could not act (${pyStr(res.reason ?? null)}): ${why}`);
   if (S.session.id) S.sessions.event(S.session.id, "no-answer-fold", rec);

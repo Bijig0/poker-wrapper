@@ -18,6 +18,7 @@ import { CP, S, isCp } from "./state";
 import { handState } from "./ignition/hand";
 import { awardName, type Node } from "./ignition/dom";
 import { shadowArchive } from "./ignition/shadow";
+import { autoLogFor } from "./autoLog";
 import { SITE as CP_SITE } from "./sites/coinpoker";
 import * as feed from "./sites/cpFeed";
 
@@ -84,6 +85,9 @@ function archiveHandLocked(): void {
     shadowArchive(h);
     h.sessionId = S.session.id;
     h.feedLines = lines;
+    // what the relay did with each decision (autoLog.ts) — the hand page's "Auto-execute: worked, 1 try"
+    const autoExec = autoLogFor(S.handNo);
+    if (autoExec) h.autoExec = autoExec;
     if (result) h.result = { text: result };
     const aw = S.awards.get(h.clientHandId || "");
     if (aw) h.result = { ...(h.result || { text: aw.text }), ...aw, heroWon: aw.winnerSeat === h.heroSeatId };
@@ -176,6 +180,8 @@ export function liveHandTick(): void {
     h.clientHandId = cid;
     h.stakes = stakesStr();
     h.sessionId = S.session.id;
+    const autoExec = autoLogFor(S.handNo);
+    if (autoExec) h.autoExec = autoExec;
     const now = nowMs();
     const row = c.query("SELECT rowid, status FROM hands WHERE client_hand_id = ? ORDER BY rowid DESC LIMIT 1").get(cid) as { rowid: number; status: string } | null;
     if (row?.status === "done") { liveFp = fp; return; }
