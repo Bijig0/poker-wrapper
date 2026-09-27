@@ -93,7 +93,7 @@ within a minute (patch charts auto-live), and a refit pool is armed at the next 
    are only on this machine, and a chart the fleet converts is listed at once.
 6. **Services**: unregister `StudyAPI`, `ChartServer`, `GtowWatchdog` (poker's); in poker-wrapper run
    `setup\install_tasks.ps1 -Start -BothGtowAccounts` (registers "PokerWrapper API / Charts / GTO Wizard - Brady");
-   register the factory's task ("PokerFactory API": poker's `study-api.ps1` with `FACTORY_MODE=1`, port 2100).
+   register the factory's task ("PokerFactory API": the factory supervisor from prerequisite 1, `FACTORY_MODE=1`, :2100).
 7. **Shortcuts**: desktop "Poker Wrapper" → `poker-wrapper\ignition-study-wrapper\run-wrapper.vbs`; add "Poker
    Dashboard" (:2000) and "Chart Factory" (:2100); "Ignition Study Tool" → `poker-wrapper\gto-trainer\study-tool.vbs`;
    "Publish Poker Wrapper update" → `poker-wrapper\setup\publish.cmd`; the Start menu "Poker Wrapper" (it still
