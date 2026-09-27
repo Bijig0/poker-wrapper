@@ -40,6 +40,34 @@ const CUSTOM_SOLVE_POLL_MS = Number(process.env.GTOW_POLL_MS ?? 400);
 /** Solved-node JSON is ~500KB each; bound the cache so a long live session
  *  can't grow it without limit. LRU — a hand's prior-street nodes stay hot. */
 const NODE_CACHE_MAX = 64;
+/**
+ * WASTED "NOT READY" POLLS (2026-09-27). GTO Wizard answers 204 both while a custom solve is running AND, forever,
+ * for a line that has no decision node in the solved tree (it closes the street / ends the hand). The ledger showed
+ * the turn and river spending 104 of 178 / 55 of 99 requests on 204s, from two habits: the chain's speculative
+ * prefetch asks up to 8 nodes of an UNFINISHED solve in parallel, each polling every 400 ms; and the addresses that
+ * do not exist kept polling until their 6-12 s timeout. With GTO Wizard's limit measured at 2,250 requests per
+ * rolling hour per account — and a trip costing the account ~a day — those polls are budget, not noise. So, for
+ * the single-street shape the chain uses: ONE readiness probe per solve (its street root), first sent no sooner than
+ * FIRST_POLL_MS after the solve was created (measured: ready at >= 0.66 s, median 1.1-1.7 s); every other node
+ * waits for it; and once the solve is ready, a 204 is a missing node — one grace retry, then it is reported as such.
+ */
+const FIRST_POLL_MS = Number(process.env.GTOW_FIRST_POLL_MS ?? 600);
+const NO_NODE_GRACE = 1;
+const READY_SET_MAX = 2_000;
+
+type NodeFetchResult = { ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string };
+type NodeQuery = { flopActions?: string; turnActions?: string; riverActions?: string; board: string };
+
+/** The chain's query shape: at most one street's actions, asked against exactly that street's board. Only this shape
+ *  is known to be a single-street solve, where "the root is ready" means "every node is". */
+function streetRooted(q: NodeQuery): boolean {
+  const cards = (q.board ?? "").length / 2;
+  const set = [q.flopActions, q.turnActions, q.riverActions].map((a) => !!a);
+  if (set.filter(Boolean).length > 1) return false;
+  const street = set.indexOf(true);
+  return cards >= 3 && cards <= 5 && (street < 0 || street === cards - 3);
+}
+const isRootQuery = (q: NodeQuery) => !q.flopActions && !q.turnActions && !q.riverActions;
 
 export interface SpotSolutionParams {
   gametype: string;
@@ -401,6 +429,12 @@ class GtowApi {
   // turn: two 19-24 s answers for the same key). Later callers now join the first request.
   private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string } | { ok: false; status: number; error: string }>>();
   private nodePending = new Map<string, Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }>>();
+  /** when this process created each solve — the readiness probe waits FIRST_POLL_MS from here */
+  private solCreatedAt = new Map<string, number>();
+  /** solves whose street root has answered: every node of them is served now, so a 204 means "no such node" */
+  private solReady = new Set<string>();
+  /** the one in-flight readiness probe per unfinished solve; other node asks wait on it instead of polling */
+  private solProbe = new Map<string, Promise<NodeFetchResult>>();
 
   /**
    * Drop a solution from the tree cache — used when the account that owns it hits its daily wall mid-walk, so
@@ -444,6 +478,8 @@ class GtowApi {
       if (!made.ok) return made;
       this.treeSolCache.set(key, made.solId);
       this.solOwner.set(made.solId, made.session);
+      this.solCreatedAt.set(made.solId, Date.now());
+      if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
       return { ok: true as const, solId: made.solId, created: true, session: made.session, why };
     })().finally(() => this.treePending.delete(key));
     this.treePending.set(key, p);
@@ -484,12 +520,58 @@ class GtowApi {
     return p;
   }
 
-  private async customNodeFetch(
-    solId: string,
-    q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string },
-    timeoutMs: number
-  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string }> {
+  private async customNodeFetch(solId: string, q: NodeQuery, timeoutMs: number): Promise<NodeFetchResult> {
+    const t0 = Date.now();
+    const deadline = t0 + timeoutMs;
+    // anything but the chain's single-street shape keeps the old behaviour: poll until a strategy or the timeout
+    if (!streetRooted(q)) return this.pollNode(solId, q, t0, deadline, "legacy");
+    while (!this.solReady.has(solId)) {
+      let probe = this.solProbe.get(solId);
+      const mine = !probe;
+      if (!probe) {
+        probe = this.probeSolution(solId, q.board, deadline).finally(() => this.solProbe.delete(solId));
+        this.solProbe.set(solId, probe);
+      } else {
+        tmark(`GTO Wizard node [${q.riverActions ?? q.turnActions ?? q.flopActions ?? "root"}] waits for the solve's readiness probe`, `solution ${solId.slice(0, 8)}`);
+      }
+      const pr = await probe;
+      if (this.solReady.has(solId)) {
+        if (isRootQuery(q)) return pr.ok ? { ...pr, solveSecs: (Date.now() - t0) / 1000, src: mine ? "fetched" : "joined" } : pr;
+        break;
+      }
+      // The probe ran on ITS creator's deadline. The chain's speculative prefetch fires first, with 6 s, and the
+      // live walk (12 s) joins it — so a probe that merely timed out must not fail a caller who still has time:
+      // that caller starts a fresh probe. A wall, a lost token or anything else ends every waiter alike.
+      if (pr.ok || pr.status !== 504 || Date.now() >= deadline) return pr;
+    }
+    return this.pollNode(solId, q, t0, deadline, "ready");
+  }
+
+  /** Poll a solve's street root until it answers (not before FIRST_POLL_MS after the solve was created). A 200 of any
+   *  kind means the solve is served; it is marked ready and the root node cached like any other. */
+  private async probeSolution(solId: string, board: string, deadline: number): Promise<NodeFetchResult> {
+    const created = this.solCreatedAt.get(solId);
+    const wait = created != null ? created + FIRST_POLL_MS - Date.now() : 0;
+    if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+    return this.pollNode(solId, { board }, Date.now(), deadline, "until-ready");
+  }
+
+  /**
+   * The poll loop. `legacy` and `until-ready` keep polling through 204s (the solve is running); `until-ready` also
+   * marks the solve ready on the first 200. `ready` knows the solve is served, so an empty answer (204, or a 200
+   * without action_solutions) gets NO_NODE_GRACE retries and is then reported as a missing node (status 204).
+   */
+  private async pollNode(solId: string, q: NodeQuery, t0: number, deadline: number, mode: "legacy" | "until-ready" | "ready"): Promise<NodeFetchResult> {
     const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
+    const line = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
+    let empties = 0;
+    const markReady = () => {
+      if (mode === "legacy") return;
+      this.solReady.add(solId);
+      if (this.solReady.size > READY_SET_MAX) this.solReady.delete(this.solReady.values().next().value as string);
+    };
+    const noNode = (): NodeFetchResult => ({ ok: false, status: 204,
+      error: `no decision node at [${line || "root"}] — the solve is ready and this line has none (it closes the street or ends the hand)` });
 
     const params = new URLSearchParams({
       custom_solution_id: solId,
@@ -499,13 +581,12 @@ class GtowApi {
       river_actions: q.riverActions ?? "",
       board: q.board,
     });
-    const t0 = Date.now();
     let lastErr = "the cloud didn't return a strategy in time";
     let refreshed = false;
     // The solve lives on the account that minted it: poll it with THAT
     // session's token, never whichever token happens to be freshest.
     const owner = this.solOwner.get(solId) ?? null;
-    while (Date.now() - t0 < timeoutMs) {
+    while (Date.now() < deadline) {
       const token = owner ? await gtowSessions.tokenFor(owner) : await this.accessToken();
       if (!token) return { ok: false, status: 0, error: `No access token for the session that owns this solve${owner ? ` (${owner})` : ""} — is it still running with its debug port?` };
       // per-request bound: the loop's wall-clock ceiling can't fire while a
@@ -524,6 +605,7 @@ class GtowApi {
       if (r.status === 401 && !refreshed) { refreshed = true; if (owner) await gtowSessions.tokenFor(owner, true); else await this.accessToken(true); continue; }
       if (r.ok && r.status !== 204) {
         const j = await r.json().catch(() => null);
+        markReady();                                   // any 200 means the solve is being served
         if (j?.action_solutions?.length) {
           this.nodeCache.set(key, j);
           if (this.nodeCache.size > NODE_CACHE_MAX) {
@@ -531,6 +613,10 @@ class GtowApi {
           }
           return { ok: true, data: j, solveSecs: (Date.now() - t0) / 1000, cached: false, src: "fetched" };
         }
+        // a 200 with no decision: nothing to wait for once the solve is served
+        if (mode !== "legacy" && ++empties > NO_NODE_GRACE) return noNode();
+      } else if (r.status === 204) {
+        if (mode === "ready" && ++empties > NO_NODE_GRACE) return noNode();
       } else if (!r.ok) {
         const body = (await r.text().catch(() => "")).slice(0, 120);
         lastErr = `spot-solution ${r.status}: ${body}`;
