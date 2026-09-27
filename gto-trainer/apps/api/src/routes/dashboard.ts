@@ -1,3 +1,5 @@
+import { replayChecks, replayText } from "../services/replayCheck";
+import { launchReplay } from "../services/replayScheduler";
 import { offTreeLog } from "../services/offTreeLog";
 import { yieldFirst, yieldToLive } from "../services/livePriority";
 import { Hono } from "hono";
@@ -2628,8 +2630,27 @@ app.get("/coverage", (c) => {
     .map((s) => ({ ...s, label: declared.get(s.id)?.label ?? null, startedAt: declared.get(s.id)?.startedAt ?? null }));
   const rows = session ? all.filter((r) => r.session_id === session) : all;
   const report = coverageReport(rows);
+  // CHECK #13 is not on the answers' paths: the daily replay files it per decision (services/replayCheck)
+  const rp = replayChecks.rows(days, session);
+  const c13 = report.checks.find((k) => k.id === 13);
+  if (c13 && rp.length) {
+    const failing = rp.filter((r) => r.ok === false);
+    Object.assign(c13, {
+      pass: rp.filter((r) => r.ok === true).length, fail: failing.length, na: rp.filter((r) => r.ok == null).length, flag: 0, seen: true,
+      failHands: new Set(failing.map((r) => r.clientHandId ?? "?")).size,
+      examples: failing.slice(-25).reverse().map((r) => ({ hand: r.clientHandId ?? "?", street: r.street ?? "?", status: "fail", text: replayText(r), ts: r.ts })),
+      lastRun: replayChecks.lastRunAt(),
+    });
+  }
   const rowids = rowidsByClientHandId(report.checks.flatMap((k) => k.examples.map((e) => e.hand)));
   return c.json({ ok: true, days, session, sessions, ...report, rowids });
+});
+
+// Check #13 now: start the determinism replay (its own process; results land in the Coverage tab)
+app.post("/coverage/replay", (c) => {
+  const days = Math.min(90, Math.max(1, Number(c.req.query("days") ?? 2) || 2));
+  const r = launchReplay(days);
+  return c.json({ ok: r.ok, message: r.why }, r.ok ? 200 : 409);
 });
 
 // EVERY OFF-TREE VILLAIN LINE of real play (services/offTreeLog, 2026-09-27), grouped into spot families with the hands

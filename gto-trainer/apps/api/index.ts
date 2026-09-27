@@ -28,6 +28,7 @@ import { startStallMonitor, trackActivity } from "./src/services/answerTrace";
 import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
 import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
+import { replayScheduler } from "./src/services/replayScheduler";
 
 const app = new Hono();
 
@@ -250,6 +251,9 @@ void adoption.then(() => onBackgroundOwnership(() => {
 
   // Checks every hand archived from here on against Ignition's own hand history (services/hhCheck.ts).
   if (!dashboardOnly) hhChecker.start();
+
+  // Check #13: once a day, when the table is quiet, replay the live decisions against their recordings (services/replayScheduler.ts).
+  if (!dashboardOnly) replayScheduler.start();
 }));
 
 // The ledger's job runner: one job per lane at a time, logs under data/jobs/. The timer always runs

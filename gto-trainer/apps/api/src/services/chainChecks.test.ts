@@ -23,7 +23,7 @@ describe("the catalogue is the spec", () => {
       expect(c.spec.length).toBeGreaterThan(10);
       expect(["built", "partial", "to build"]).toContain(c.build);
     }
-    expect(CHECKS.find((c) => c.id === 13)!.build).toBe("to build");
+    expect(CHECKS.find((c) => c.id === 13)!.build).toBe("built");   // the daily replay (services/replayCheck)
     // the villain-mistake wording (QRE), not "solver noise"
     expect(CHECKS.find((c) => c.id === 3)!.how).toContain("QRE");
     expect(JSON.stringify(CHECKS)).not.toMatch(/rests on (solver )?noise/i);
@@ -317,7 +317,7 @@ describe("the Coverage page: counts per check over the window's decisions", () =
     const three = rep.checks.find((x) => x.id === 3)!;
     expect([three.pass, three.flag]).toEqual([1, 1]);
     const thirteen = rep.checks.find((x) => x.id === 13)!;
-    expect([thirteen.seen, thirteen.build]).toEqual([false, "to build"]);
+    expect([thirteen.seen, thirteen.build]).toEqual([false, "built"]);   // not on the paths: the replay table fills it (routes/dashboard)
   });
 });
 
