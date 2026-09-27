@@ -83,7 +83,7 @@ app.get("/dashboard.css", () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.css`), {
     headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" },
   }));
-for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*"]) {
+for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/gtow", "/review", "/playthrough", "/playthrough/*"]) {
   app.get(p, dashboardPage);
 }
 // the chart factory's pages (ledger, runbook, proposals, tasks) are the poker repo's: an old bookmark lands home

@@ -43,8 +43,10 @@ export interface AccountView extends GtowAccountEntry {
 function lightOf(a: GtowAccountEntry, s: AccountView["live"], wall: AccountView["wall"], info: GtowAccountInfo | null): { light: AccountLight; text: string } {
   if (!a.enabled) return { light: "off", text: "disabled — takes no work, token kept warm" };
   if (wall.walled || s?.blockedKind === "quota") {
+    // relative times: this text is shown by the dashboard AND the wrapper, neither of which wants a UTC stamp
+    const since = wall.sinceMs ?? s?.wallSinceMs ?? null;
     const lift = wall.expectedLiftMs ?? s?.blockedUntilMs ?? null;
-    return { light: "walled", text: `walled since ${fmt(wall.sinceMs ?? s?.wallSinceMs ?? null)}${lift ? ` — expected to lift ~${fmt(lift)}` : ""}` };
+    return { light: "walled", text: `walled${since ? ` for ${ago(since)}` : ""}${lift ? ` — expected to lift ${until(lift)}` : ""}${wall.leaks ? ` · ${wall.leaks} lone success inside it: probe again` : ""}` };
   }
   if (s?.tokenLive) return { light: "up", text: `connected${s.account ? ` as ${s.account}` : ""}` };
   if (s?.clientUp === false) return { light: "down", text: `nothing listening on ${a.cdpHost}` };
@@ -52,7 +54,8 @@ function lightOf(a: GtowAccountEntry, s: AccountView["live"], wall: AccountView[
   return { light: "no-token", text: s?.text ?? "no token yet" };
 }
 
-const fmt = (ms: number | null) => (ms ? new Date(ms).toISOString().replace("T", " ").slice(5, 16) + "Z" : "?");
+const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60_000); return m < 60 ? `${m} min` : `${(m / 60).toFixed(1)} h`; };
+const until = (ms: number) => { const m = Math.round((ms - Date.now()) / 60_000); return m <= 0 ? "about now" : m < 60 ? `in ${m} min` : `in ${(m / 60).toFixed(1)} h`; };
 
 export async function accountsPayload() {
   const now = Date.now();

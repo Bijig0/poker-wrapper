@@ -18,6 +18,7 @@
     <button id="tab-hands">Hands</button>
     <button id="tab-sessions">Sessions</button>
     <button id="tab-profiles" title="the accounts hands are played on: the money in them, and whether it adds up to what poker did">Profiles</button>
+    <button id="tab-gtow" title="the GTO Wizard accounts answering spots: which are connected, what each has spent in the last hour and day against the 2,250 limit, walls, when each plan renews">GTO Wizard</button>
     <button id="tab-analytics">Analytics</button>
     <button id="tab-coverage" title="the postflop chain's seventeen invariants: the rule each one enforces, whether it is built, and what it found on the last days' answers">Coverage</button>
     <button id="tab-sources">Sources</button>
@@ -50,6 +51,7 @@
   <div id="view-detail" style="display:none"></div>
   <div id="view-sessions" style="display:none"></div>
   <div id="view-profiles" style="display:none"></div>
+  <div id="view-gtow" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
   <div id="view-coverage" style="display:none"></div>
   <div id="view-sources" style="display:none"></div>
@@ -4949,8 +4951,127 @@ function checkCoverageHtml(j) {
      /sources/pieces/:id                    one source's page   (/sources/registry/… still accepted)
      /sources/strategies/:id                one whole-hand strategy's page
    Old #hand/N links still resolve. */
+/* ---- GTO Wizard ACCOUNTS tab (2026-09-27) ---------------------------------
+   One row per registered account (services/gtowAccounts.ts): the light, what it has spent in the last hour and the
+   last day against the 2,250 limit (the ledger counts every process), the wall as the ledger saw it, the plan as the
+   client's own page reports it. Polls /api/gtow/accounts every 5 s while on screen; every action re-renders from the
+   reply. The hour is the measured wall; the day is Brady's conservative accounting. */
+let gaTimer = null, GA = null, gaEdit = null, gaBusy = {};
+const GA_LIGHT = { up: ["good", "connected"], walled: ["crit", "walled"], "no-token": ["warn", "no token"], "signed-out": ["warn", "signed out"], down: ["crit", "down"], off: ["off", "disabled"] };
+const gaAgo = (ms) => { if (!ms) return "—"; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 2880 ? `${(m / 60).toFixed(1)} h ago` : `${Math.round(m / 1440)} d ago`; };
+const gaIn = (ms) => { if (!ms) return "—"; const m = Math.round((ms - Date.now()) / 60000); return m <= 0 ? "now" : m < 60 ? `in ${m} min` : `in ${(m / 60).toFixed(1)} h`; };
+const gaClock = (ms) => ms ? new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+const gaDay = (iso) => iso ? new Date(iso).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "—";
+function gaBar(n, cap, label) {
+  const f = cap > 0 ? Math.min(1, n / cap) : 0;
+  const cls = f >= 0.85 ? "crit" : f >= 0.6 ? "warn" : "good";
+  return `<div class="ga-bar" title="${esc(label || "")}"><div class="trk"><div class="fill ${cls}" style="width:${(f * 100).toFixed(1)}%"></div></div><span class="n">${n.toLocaleString()} <span class="of">/ ${cap.toLocaleString()}</span></span></div>`;
+}
+async function loadGtowAccounts() {
+  clearTimeout(gaTimer);
+  let j = null;
+  try { j = await (await fetch("/api/gtow/accounts")).json(); } catch (e) { if (PATH.view === "gtow") $("view-gtow").innerHTML = `<div class="note">/api/gtow/accounts unreachable — ${esc(String(e))}</div>`; }
+  if (PATH.view !== "gtow") return;
+  if (j && j.ok) { GA = j; renderGtowAccounts(); }
+  gaTimer = setTimeout(() => whenVisible("gtow-accounts", loadGtowAccounts), 5000);
+}
+function renderGtowAccounts() {
+  const j = GA; if (!j) return;
+  const enabledN = j.accounts.filter((a) => a.enabled).length;
+  const sum = (w) => `${gaBar(w.n, w.cap || j.cap * Math.max(1, enabledN), "")}<div class="sub">${w.sinceMs ? `since ${gaClock(w.sinceMs)} (${gaAgo(w.sinceMs)})` : "no requests in this window"}${w.x429 ? ` · <b class="bad">${w.x429} refused</b>` : ""}</div>`;
+  const rows = j.accounts.map((a) => {
+    const [dot, word] = GA_LIGHT[a.light] || ["off", a.light];
+    const w1 = a.windows.h1 || { n: 0, x429: 0, sinceMs: null }, w24 = a.windows.h24 || { n: 0, x429: 0, sinceMs: null };
+    const busy = !!gaBusy[a.id];
+    const plan = a.info && a.info.plan;
+    const ident = a.accountEmail || a.accountId ? `${esc(a.accountEmail || "")}${a.accountId ? ` <span class="sub">#${esc(a.accountId)}</span>` : ""}` : `<span class="sub">identity unknown until a token is seen</span>`;
+    const wall = a.wall.walled
+      ? `<div class="bad"><b>walled</b> since ${gaClock(a.wall.sinceMs)} (${gaAgo(a.wall.sinceMs)})</div><div class="sub">expected lift ~${gaClock(a.wall.expectedLiftMs)} (${gaIn(a.wall.expectedLiftMs)}) — our 24 h measurement${a.wall.leaks ? ` · ${a.wall.leaks} lone success${a.wall.leaks > 1 ? "es" : ""} inside it: probe again` : ""}</div>`
+      : a.wall.clearedAtMs ? `<div>clear</div><div class="sub">last wall lifted ${gaClock(a.wall.clearedAtMs)}${a.wall.leaks ? ` (${a.wall.leaks} leak${a.wall.leaks > 1 ? "s" : ""})` : ""}</div>`
+      : `<div>clear</div><div class="sub">no wall seen in 3 days</div>`;
+    const planTxt = !a.info ? `<span class="sub">client unreadable</span>`
+      : !a.info.signedIn ? `<span class="warn">signed out — page at ${esc((a.info.pageUrl || "").replace(/^https?:\/\/[^/]+/, "") || "?")}</span>`
+      : !plan ? `<span class="sub">no plan in the page</span>`
+      : `<div><b>${esc(plan.tier)}</b>${plan.interval ? ` · ${esc(plan.interval.toLowerCase())}` : ""}${plan.canceled ? ` · <b class="bad">canceled</b>` : ""}</div>
+         <div class="sub">${plan.expirationDate ? `${plan.canceled ? "ends" : "renews"} ${gaDay(plan.expirationDate)}` : plan.handsResetDate ? `cycle resets ${gaDay(plan.handsResetDate)}` : "no date"}${plan.priceNext != null ? ` · ${plan.currency === "USD" || !plan.currency ? "$" : esc(plan.currency) + " "}${plan.priceNext}` : a.priceMonthly != null ? ` · $${a.priceMonthly} (yours)` : ""}</div>
+         <div class="sub">${plan.handsUsed != null && plan.handsLimit != null ? `hands ${plan.handsUsed.toLocaleString()} / ${plan.handsLimit.toLocaleString()}` : ""}${a.info.creditBalance != null ? ` · credit ${a.info.creditBalance.toLocaleString()}` : ""}</div>`;
+    const conn = a.live ? (a.live.tokenLive ? `token ${Math.max(0, Math.round((a.live.expiresInMs || 0) / 60000))} min` : esc(a.live.text || "")) : "";
+    return `<tr class="${a.enabled ? "" : "off"}">
+      <td><div class="ga-name"><span class="dot ${dot}"></span><b>${esc(a.name)}</b><span class="cap ${a.multiway ? "mw" : ""}">${a.multiway ? "multiway" : "heads-up"}</span></div>
+          <div class="sub">${esc(word)} · ${esc(a.tier)} · ${esc(a.cdpHost)}</div><div class="sub">${esc(a.lightText || "")}</div></td>
+      <td>${ident}<div class="sub">${conn}</div>${a.live && a.live.trees ? `<div class="sub">${a.live.trees} solves this run</div>` : ""}</td>
+      <td>${gaBar(w1.n, j.cap, "requests in the trailing hour — the measured wall")}<div class="sub">${w1.sinceMs ? `since ${gaClock(w1.sinceMs)}` : "none"}${w1.x429 ? ` · <b class="bad">${w1.x429} refused</b>` : ""}</div></td>
+      <td>${gaBar(w24.n, j.cap, "requests in the trailing day — the conservative budget")}<div class="sub">${w24.sinceMs ? `since ${gaClock(w24.sinceMs)}` : "none"}${w24.x429 ? ` · <b class="bad">${w24.x429} refused</b>` : ""}</div></td>
+      <td>${wall}</td>
+      <td>${planTxt}</td>
+      <td class="acts">
+        <button ${busy ? "disabled" : ""} onclick="gaAct('${esc(a.id)}','connect')">${a.light === "up" ? "Reconnect" : "Connect"}</button>
+        <button class="ghost" ${busy ? "disabled" : ""} onclick="gaAct('${esc(a.id)}','probe')" title="ONE request on this account: is the wall really there?">Probe (1 req)</button>
+        ${a.wall.walled || (a.live && (a.live.blockedKind || a.live.multiwayRefused)) ? `<button class="ghost" ${busy ? "disabled" : ""} onclick="gaAct('${esc(a.id)}','clear-wall')" title="forget the wall / plan refusal and route to it again">Clear wall</button>` : ""}
+        <button class="ghost" ${busy ? "disabled" : ""} onclick="gaToggle('${esc(a.id)}',${a.enabled ? "false" : "true"})">${a.enabled ? "Disable" : "Enable"}</button>
+        <button class="ghost" onclick="gaEditRow('${esc(a.id)}')">Edit</button>
+        ${busy ? `<span class="sub">${esc(gaBusy[a.id])}…</span>` : ""}
+      </td></tr>`;
+  }).join("");
+  const e = gaEdit ? (j.accounts.find((a) => a.id === gaEdit) || { id: "", name: "", tier: "elite", multiway: false, cdpHost: "127.0.0.1:9224", launchHint: "", priceMonthly: null, notes: "", order: 9, preflopOrder: 9 }) : null;
+  const form = !e ? "" : `<div class="ga-form">
+    <h3>${e.id ? `Edit ${esc(e.name)}` : "Add an account"}</h3>
+    <div class="grid">
+      <label>Name <input id="ga-name" value="${esc(e.name)}" placeholder="Elite 2"></label>
+      <label>Tier <select id="ga-tier">${["ultra", "elite", "other"].map((t) => `<option ${t === e.tier ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>CDP host <input id="ga-cdp" value="${esc(e.cdpHost)}" placeholder="127.0.0.1:9224"></label>
+      <label>Launcher <input id="ga-launch" value="${esc(e.launchHint)}" placeholder="scripts/start_gtow_elite2.ps1"></label>
+      <label>Order <input id="ga-order" type="number" value="${e.order}"></label>
+      <label>Preflop order <input id="ga-porder" type="number" value="${e.preflopOrder}"></label>
+      <label>Price / month <input id="ga-price" type="number" step="0.01" value="${e.priceMonthly ?? ""}" placeholder="169"></label>
+      <label><input id="ga-mw" type="checkbox" ${e.multiway ? "checked" : ""}> solves 3+ player trees (Ultra)</label>
+      <label class="wide">Notes <input id="ga-notes" value="${esc(e.notes || "")}"></label>
+    </div>
+    <div class="row"><button onclick="gaSave('${esc(e.id)}')">Save</button><button class="ghost" onclick="gaEdit=null;renderGtowAccounts()">Cancel</button>${e.id && e.id !== "primary" && e.id !== "secondary" ? `<button class="ghost bad" onclick="gaDelete('${esc(e.id)}')">Remove</button>` : ""}</div>
+    <div class="sub">The slot id stays "${esc(e.id || "(from the name)")}" — the ledger and stored solves are keyed by it. A disabled account takes no work but keeps its token warm.</div>
+  </div>`;
+  $("view-gtow").innerHTML = `<div class="ga-wrap">
+    <div class="ga-sum">
+      <div><div class="ttl">All enabled accounts · last hour</div>${sum(j.combined.h1)}</div>
+      <div><div class="ttl">All enabled accounts · last 24 h</div>${sum(j.combined.h24)}</div>
+      <div class="sub note-ish">Limit: <b>${j.cap.toLocaleString()} requests per rolling hour per account</b> (measured 2026-09-26; a trip held ~24 h). The 24 h column is the conservative budget, not a measured limit. Counts are a lower bound — browsing GTO Wizard yourself on an account counts for them, not for us.${j.allow ? ` · <b>This session may only use: ${j.allow.map(esc).join(", ")}</b>` : ""}</div>
+    </div>
+    <table class="ga-table"><thead><tr><th>account</th><th>signed in as</th><th>last hour</th><th>last 24 h</th><th>wall</th><th>plan</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="row" style="margin-top:10px"><button class="ghost" onclick="gaEdit='__new__';renderGtowAccounts()">+ Add account</button><span class="sub">updated ${new Date(j.now).toLocaleTimeString()}</span></div>
+    ${form}
+  </div>`;
+}
+async function gaPost(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  return r.json();
+}
+async function gaAct(id, action) {
+  gaBusy[id] = action === "connect" ? "connecting" : action === "probe" ? "probing" : "clearing"; renderGtowAccounts();
+  try { const j = await gaPost(`/api/gtow/accounts/${encodeURIComponent(id)}/${action}`); if (j && j.ok) GA = j; if (j && j.probe) alert(`Probe on ${id}: HTTP ${j.probe.status}${j.probe.walled ? " — still walled" : j.probe.ok ? " — answering" : ""}${j.probe.retryAfter != null ? ` (Retry-After ${j.probe.retryAfter})` : ""}\n${j.probe.body || ""}`); }
+  catch (e) { alert(`${action} failed: ${e}`); }
+  delete gaBusy[id]; renderGtowAccounts();
+}
+async function gaToggle(id, enabled) {
+  gaBusy[id] = enabled ? "enabling" : "disabling"; renderGtowAccounts();
+  try { const j = await gaPost("/api/gtow/accounts", { id, enabled }); if (j && j.ok) GA = j; } catch (e) { alert(`failed: ${e}`); }
+  delete gaBusy[id]; renderGtowAccounts();
+}
+function gaEditRow(id) { gaEdit = id; renderGtowAccounts(); }
+async function gaSave(id) {
+  const body = { id: id || undefined, name: $("ga-name").value.trim(), tier: $("ga-tier").value, cdpHost: $("ga-cdp").value.trim(), launchHint: $("ga-launch").value.trim(),
+    order: Number($("ga-order").value), preflopOrder: Number($("ga-porder").value), priceMonthly: $("ga-price").value === "" ? "" : Number($("ga-price").value), multiway: $("ga-mw").checked, notes: $("ga-notes").value };
+  if (!body.name) return alert("a name is required");
+  try { const j = await gaPost("/api/gtow/accounts", body); if (j && j.ok) { GA = j; gaEdit = null; } else alert(j && j.error || "save failed"); } catch (e) { alert(`save failed: ${e}`); }
+  renderGtowAccounts();
+}
+async function gaDelete(id) {
+  if (!confirm(`Remove account "${id}" from the registry? Its ledger history stays; the pool stops routing to it.`)) return;
+  try { const r = await fetch(`/api/gtow/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }); const j = await r.json(); if (j && j.ok) { GA = j; gaEdit = null; } else alert(j && j.error || "remove failed"); } catch (e) { alert(`remove failed: ${e}`); }
+  renderGtowAccounts();
+}
+
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
+const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", gtow: "tab-gtow", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
 const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "approx"];
 $("tab-play").onclick = () => go("/playthrough");
 
@@ -4974,6 +5095,7 @@ function parsePath() {
   if (view === "coverage") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, session: q.get("session") || null, days: q.get("days") || "7" }; }
   if (view === "review") return { view, pane: null, id: null };
   if (view === "profiles") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
+  if (view === "gtow") return { view, pane: null, id: null };
   return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
 }
 function canonical(p) {
@@ -5012,6 +5134,7 @@ function route() {
   // a view's polls belong to the view that armed them: every navigation stops the ledger's (the ledger view re-arms
   // its own below) and drops whatever was parked while the tab was hidden (the GTO Wizard pill is on every view and
   // keeps its place). Before, leaving for Hands or Home kept the 4 s /api/ledger re-read going behind a hidden view.
+  clearTimeout(gaTimer);
   for (const name of PARKED.keys()) if (name !== "gtow") PARKED.delete(name);
   PATH = parsePath();
   // the list poll (hands · home · analytics) and the miss-queue sweep poll stop once their view is off screen;
@@ -5037,10 +5160,13 @@ function route() {
   $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
   $("view-replay").style.display = PATH.view === "review" ? "" : "none";
   $("view-play").style.display = PATH.view === "playthrough" ? "" : "none";
+  $("view-gtow").style.display = PATH.view === "gtow" ? "" : "none";
+  if (PATH.view === "gtow") loadGtowAccounts();
   if (PATH.view === "playthrough") loadPlay();
   document.title = PATH.view === "home" ? "Study Dashboard"
     : PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
     : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
+    : PATH.view === "gtow" ? "GTO Wizard accounts · Study Dashboard"
     : PATH.view === "sessions" ? `${PATH.id ? `Session ${PATH.id}` : "Sessions"} · Study Dashboard`
     : `${PATH.view[0].toUpperCase()}${PATH.view.slice(1)} · Study Dashboard`;
   if (PATH.view === "hands") {

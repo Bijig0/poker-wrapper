@@ -957,3 +957,44 @@ table.ckc-tbl td.num b.flag { color: var(--ev); }
 .tl-row.hh-line.extra .what { font-style: italic; }
 .hh-flag { margin-left: auto; font-size: 11.5px; color: var(--loss); white-space: nowrap; }
 .tl-row.hh-line.amount .hh-flag { color: var(--ev); }
+
+/* ---- GTO Wizard ACCOUNTS tab (2026-09-27) ------------------------------
+   One row per registered account: light, identity, the last hour and the last
+   day against the 2,250 limit, the wall, the plan. See dashboard.html's
+   renderGtowAccounts and services/gtowAccounts.ts. */
+.ga-wrap { padding: 4px 0 24px; }
+.ga-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 22px; margin: 6px 0 14px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.ga-sum .ttl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+.ga-sum .note-ish { grid-column: 1 / -1; line-height: 1.45; }
+.ga-bar { display: flex; align-items: center; gap: 10px; }
+.ga-bar .trk { flex: 1; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.ga-bar .fill { height: 100%; border-radius: 999px; background: var(--win); }
+.ga-bar .fill.warn { background: var(--ev); }
+.ga-bar .fill.crit { background: var(--loss); }
+.ga-bar .n { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; font-size: 12.5px; }
+.ga-bar .n .of { color: var(--muted); font-weight: 400; }
+.ga-table { width: 100%; border-collapse: collapse; }
+.ga-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.ga-table td { vertical-align: top; padding: 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; }
+.ga-table tr.off td { opacity: .55; }
+.ga-table td.acts { min-width: 150px; }
+.ga-wrap { overflow-x: auto; }
+.ga-table td.acts button { margin: 0 4px 4px 0; }
+.ga-name { display: flex; align-items: center; gap: 7px; }
+.ga-name .dot { width: 9px; height: 9px; }
+.ga-name .cap { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.ga-name .cap.mw { color: var(--win); border-color: var(--win); background: var(--win-soft); }
+.ga-table .bad, .ga-sum .bad { color: var(--loss); }
+.ga-table .warn { color: var(--ev); }
+.ga-table button, .ga-form button { background: var(--chip-on); color: var(--chip-on-ink); border: 0; border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.ga-table button.ghost, .ga-form button.ghost, .ga-wrap > .row button.ghost { background: none; border: 1px solid var(--line); color: var(--muted); }
+.ga-form button.ghost.bad { color: var(--loss); border-color: var(--loss); }
+.ga-table button:disabled { opacity: .5; cursor: default; }
+.ga-form { margin-top: 14px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.ga-form h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.ga-form .grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px 12px; }
+.ga-form .grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); }
+.ga-form .grid label.wide { grid-column: 1 / -1; }
+.ga-form .grid input:not([type=checkbox]), .ga-form .grid select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg, transparent); color: var(--ink); font-size: 12.5px; }
+.ga-form .row, .ga-wrap > .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+@media (max-width: 900px) { .ga-sum { grid-template-columns: 1fr; } .ga-form .grid { grid-template-columns: 1fr 1fr; } }
