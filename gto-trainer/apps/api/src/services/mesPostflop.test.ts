@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { mesPostflopLookup, mesPostflopAvailable } from "./mesPostflop";
 
 /** The M1 spot: BTN folds, SB raises, BB calls — hero SB, first to act on the
@@ -74,6 +75,11 @@ describe("mesPostflopLookup", () => {
 });
 
 describe("turn street (per-board turn file)", () => {
+  // the real turn files are a data part (data/mes_turn, ~30 MB each, not in git): this board's, trimmed to the one
+  // line and turn card these tests walk, is a fixture
+  const saved = process.env.MES_TURN_DIR;
+  beforeAll(() => { process.env.MES_TURN_DIR = join(import.meta.dir, "__fixtures__", "mes_turn"); });
+  afterAll(() => { if (saved === undefined) delete process.env.MES_TURN_DIR; else process.env.MES_TURN_DIR = saved; });
   // M2: BTN opens, SB folds, BB calls; flop Kc7d2h checks through; turn 2c; BB checks -> hero (BTN) to act
   const m2turn = (over: Partial<Parameters<typeof mesPostflopLookup>[0]> = {}) => ({
     positions: ["BTN", "SB", "BB"],
@@ -88,7 +94,7 @@ describe("turn street (per-board turn file)", () => {
 
   test("answers hero's turn decision from the locked tree", () => {
     const hit = mesPostflopLookup(m2turn());
-    expect(hit).not.toBeNull(); // data/mes_turn/M2_heroBTN_srp_vs_BB_Kc7d2h.turn.json must be installed
+    expect(hit).not.toBeNull(); // __fixtures__/mes_turn/M2_heroBTN_srp_vs_BB_Kc7d2h.turn.json
     expect(hit!.board).toBe("Kc7d2h");
     expect(hit!.notInRange).toBe(false);
     const total = hit!.actions.reduce((s, a) => s + a.frequency, 0);

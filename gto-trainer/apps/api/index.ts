@@ -16,9 +16,6 @@ import aiStudyRoutes from "./src/routes/aiStudy";
 import dashboardRoutes from "./src/routes/dashboard";
 import sourcesRoutes from "./src/routes/sources";
 import missQueueRoutes from "./src/routes/missQueue";
-import ledgerRoutes from "./src/routes/ledger";
-import { jobs } from "./src/services/jobs";
-import { boxKeeper } from "./src/services/boxKeeper";
 import { answerReconciler } from "./src/services/answerReconciler";
 import replayRoutes from "./src/routes/replay";
 import studyUiRoutes from "./src/routes/studyUi";
@@ -32,20 +29,11 @@ import { replayScheduler } from "./src/services/replayScheduler";
 
 const app = new Hono();
 
-// PLAYER MODE (2026-09-22): the packaged install on someone else's laptop. They get the study answers (poller,
-// fastSolve, GTO Wizard token keeper) and the dashboard pages for their own sessions and hands. Everything that
-// runs the owner's solve fleet is off: no job dispatcher, no box keeper, no ledger / proposals / runbook pages,
-// no task board, no miss-queue sweeps or HRC plans. Set by the setup script in config\local.env.
-const playerMode = process.env.PLAYER_MODE === "1";
-if (playerMode) console.log("PLAYER_MODE=1: solve fleet off (no job dispatcher, box keeper, ledger/proposals/runbook/tasks)");
-app.get("/api/dashboard/config", (c) => c.json({ playerMode }));
-if (playerMode) {
-  // owner-only writes and pages answer 404 rather than half-working without the fleet behind them
-  const gone = (c: any) => c.json({ ok: false, error: "not part of this install (player mode)" }, 404);
-  app.use("/api/dashboard/miss-queue/*", async (c, next) => (c.req.method === "GET" ? next() : gone(c)));
-  app.use("/api/dashboard/tasks", gone);
-  app.use("/api/dashboard/tasks/*", gone);
-}
+// THE PLAYER'S API (2026-09-27, the poker-wrapper repo): study answers (poller, fastSolve, GTO Wizard token keeper) and
+// the dashboard for the player's own sessions and hands. The chart factory — the HRC solve fleet, its ledger,
+// proposals, runbook and task board — is the poker repo's, not this one's (README.md, "The chart factory").
+// playerMode stays in the config reply: setup\doctor.ps1 and older launchers read it.
+app.get("/api/dashboard/config", (c) => c.json({ playerMode: true }));
 
 // Middleware
 // every request is registered while it runs, so an event-loop stall line can name what was open (services/answerTrace)
@@ -70,7 +58,6 @@ app.route("/api/ai-study", aiStudyRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/dashboard/sources", sourcesRoutes);
 app.route("/api/dashboard/miss-queue", missQueueRoutes);
-if (!playerMode) app.route("/api/ledger", ledgerRoutes);
 app.route("/api/replay", replayRoutes);
 app.route("/api/ignition-hh", ignitionHhRoutes);
 
@@ -86,29 +73,19 @@ app.route("/", studyUiRoutes);
 // one of those serves the same HTML and the page picks the view — so a URL
 // can be bookmarked, reloaded, or pasted. (/replay stays the Replay Review
 // page itself, which the /review tab embeds.)
-const PLAYER_HEAD = `<script>window.PLAYER_MODE = true;</script>
-<style>#tab-ledger, #tab-tasks, .fleet-only { display: none !important; }</style>`;
-const dashboardPage = async () => {
-  if (!playerMode) {
-    return new Response(Bun.file(`${import.meta.dir}/dashboard.html`), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
-  }
-  // player mode: the same page, told so before any of its script runs (no second copy of the page to drift)
-  const html = (await Bun.file(`${import.meta.dir}/dashboard.html`).text()).replace("</head>", `${PLAYER_HEAD}\n</head>`);
-  return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
-};
+const dashboardPage = () =>
+  new Response(Bun.file(`${import.meta.dir}/dashboard.html`), { headers: { "Content-Type": "text/html; charset=utf-8" } });
 // The dashboard's stylesheet lives beside the page (dashboard.css) so it can be
 // read and edited as one file; served uncached, like the page, so an edit is live.
 app.get("/dashboard.css", () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.css`), {
     headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" },
   }));
-const OWNER_PAGES = ["/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*", "/tasks", "/tasks/*"];
-for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*", ...OWNER_PAGES]) {
-  if (playerMode && OWNER_PAGES.includes(p)) app.get(p, (c) => c.redirect("/", 302));
-  else app.get(p, dashboardPage);
+for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/review", "/playthrough", "/playthrough/*"]) {
+  app.get(p, dashboardPage);
 }
+// the chart factory's pages (ledger, runbook, proposals, tasks) are the poker repo's: an old bookmark lands home
+for (const p of ["/ledger", "/ledger/*", "/runbook", "/runbook/*", "/proposals", "/proposals/*", "/tasks", "/tasks/*"]) app.get(p, (c) => c.redirect("/", 302));
 // Old bookmarks and links still land on the dashboard.
 app.get("/dashboard", (c) => c.redirect("/", 301));
 
@@ -241,9 +218,6 @@ void adoption.then(() => onBackgroundOwnership(() => {
   // the decision window entirely.
   if (!dashboardOnly) gtowApi.startTokenKeeper();
 
-  // The box keeper: keeps the HRC boxes solving on their own (relaunch HRC, restart a hung one, re-queue a failed shard).
-  if (!dashboardOnly && !playerMode) boxKeeper.start();
-
   // Settles WHY a decision got no answer once its hand is archived: attaches the
   // failures the poller could not pin to a hand, and writes a no-probe row for a
   // decision nobody ever asked about (services/answerReconciler.ts).
@@ -255,10 +229,6 @@ void adoption.then(() => onBackgroundOwnership(() => {
   // Check #13: once a day, when the table is quiet, replay the live decisions against their recordings (services/replayScheduler.ts).
   if (!dashboardOnly) replayScheduler.start();
 }));
-
-// The ledger's job runner: one job per lane at a time, logs under data/jobs/. The timer always runs
-// (the routes read job rows through it); its dispatch tick is what the lock gates.
-if (!playerMode) void adoption.then(() => jobs.start());
 
 export default {
   port,

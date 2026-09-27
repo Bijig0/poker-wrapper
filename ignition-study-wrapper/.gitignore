@@ -1,6 +1,0 @@
-# every browser profile the wrapper creates (.profile-table, .profile-panel, -fake, -2..-4 slots, …)
-.profile-*/
-__pycache__/
-debug/
-server.log
-data/

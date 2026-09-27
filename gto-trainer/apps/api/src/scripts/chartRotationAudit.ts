@@ -24,6 +24,7 @@
  *   bun src/scripts/chartRotationAudit.ts --only olimp     # id substring filter
  *   bun src/scripts/chartRotationAudit.ts --examples 5     # mismatches to print per chart
  */
+import { CHARTS_DIR } from "../services/repoPaths";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -33,7 +34,7 @@ import { gunzipSync } from "node:zlib";
  * the FILE was right and the audit was wrong. A rotation used to judge a solved tree has to model the one
  * thing that removes a player without folding, so this one does. */
 
-const SOLUTIONS = "C:\\Users\\Brady\\poker\\analysis\\pipeline\\solve\\exploit_ui\\solutions";
+const SOLUTIONS = CHARTS_DIR;   // the chart index + cached bodies (services/repoPaths.ts)
 const SEATS6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"] as const;
 const SEATS3 = ["BTN", "SB", "BB"] as const;
 /** Heads-up preflop: the dealer posts the small blind and acts first. These charts name him SB. */

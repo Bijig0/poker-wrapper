@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chartFor, resetChartPins, siteFor, snapRung, walk3max, type HrcNode } from "./hrc3max";
+import { chartFor, resetChartPins, setIgn25Ids, siteFor, snapRung, walk3max, type HrcNode } from "./hrc3max";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -332,6 +332,9 @@ describe("siteFor / snapRung at NL25", () => {
 });
 
 describe("chartFor at NL25", () => {
+  // the solved uneven NL25 states, as the chart index lists them (D100: s30 solved, s25 never)
+  beforeAll(() => setIgn25Ids(["ign25_3maxasym2ci_D100_s30_btn", "ign25_3maxasym2ci_D100_s30_sb", "ign25_3maxasym2ci_D100_s100_eq"]));
+  afterAll(() => setIgn25Ids(null));
   test("names an ign25 chart, in the one generation that set has", () => {
     const c = chartFor(hand3({ bbCents: 25 }), "BTN");
     expect(c.site).toBe("ign25");

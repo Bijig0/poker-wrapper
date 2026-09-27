@@ -16,7 +16,6 @@ import { resolveSet, resolveDepth } from "../services/fastSolve";
 import { answerLog, failKindOf, type LoggedAnswer } from "../services/answerLog";
 import { sameAction, heroActionAt } from "../services/adherence";
 import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
-import { loadTasks, createTask, updateTask, reorderTasks } from "../services/tasks";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
 import { fxRate, toAudCents } from "../services/fx";
 import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat } from "../services/strategies";
@@ -25,7 +24,7 @@ import { chartSetup, type ChartSetup } from "../services/chartSetup";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi, DEFAULT_TREE_RAKE, type CustomTreeInput } from "../services/gtowApi";
 import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
-import { REPO } from "../services/ledger";
+import { REPO } from "../services/repoPaths";
 import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, resolveAllStores, splitStores, wrapperDebugDir } from "../services/storePaths";
 import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -70,8 +69,6 @@ import { fastSolve } from "../services/fastSolve";
 import { studyPoller } from "../services/studyPoller";
 import { fmtRoll, rollDecision } from "../services/rollDecision";
 import { missQueue } from "../services/missQueue";
-import { boxKeeper } from "../services/boxKeeper";
-import { jobs as jobStore } from "../services/jobs";
 import { buildAnswerText } from "../feed/buildAnswerText/buildAnswerText";
 
 /**
@@ -2460,28 +2457,6 @@ app.post("/profiles/:name/unaccept", async (c) => {
   return c.json({ ok: unacceptReading(body.id) });
 });
 
-/**
- * The hand-off board (services/tasks.ts): GET /tasks; POST /tasks {title,...} creates;
- * POST /tasks/reorder {ids}; POST /tasks/:id {status?, brief?, next?, doneWhen?, needsYou?,
- * goal?, title?, links?, note?} updates (a note appends a dated log line).
- */
-app.get("/tasks", (c) => c.json({ ok: true, tasks: loadTasks() }));
-app.post("/tasks", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as any;
-  if (!body?.title) return c.json({ ok: false, error: "title required" }, 400);
-  return c.json({ ok: true, task: createTask(body) });
-});
-app.post("/tasks/reorder", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { ids?: string[] };
-  if (!Array.isArray(body.ids)) return c.json({ ok: false, error: "ids required" }, 400);
-  return c.json({ ok: true, tasks: reorderTasks(body.ids) });
-});
-app.post("/tasks/:id", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as any;
-  const t = updateTask(c.req.param("id"), body);
-  return t ? c.json({ ok: true, task: t }) : c.json({ ok: false, error: "no such task" }, 404);
-});
-
 /** GET /sessions — declared sessions (newest first) plus the undeclared gap clusters of older hands. */
 app.get("/sessions", (c) => {
   const all = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
@@ -2975,20 +2950,6 @@ app.get("/health", async (c) => {
   const gtow = await gtowStatus();
   const poller: any = (() => { try { return studyPoller.getStatus(); } catch { return null; } })();
   const mq = (() => { try { return missQueue.stats(); } catch { return null; } })();
-  const keeper = (() => {
-    try {
-      const st: any = boxKeeper.status();
-      const boxes = Object.entries(st.boxes ?? {}) as [string, any][];
-      return {
-        running: !!st.running,
-        total: boxes.length,
-        up: boxes.filter(([, b]) => b?.ok).length,
-        working: boxes.filter(([, b]) => b?.job === "Running").length,
-        boxes: boxes.map(([name, b]) => ({ name, ok: !!b?.ok, hrc: !!b?.hrc, job: b?.job ?? null, phase: b?.currentPhase ?? null, lastErr: b?.lastErr || null })),
-      };
-    } catch { return null; }
-  })();
-  const runningJobs = (() => { try { return jobStore.list(30).filter((j) => j.status === "running").map((j) => ({ id: j.id, config: j.config, recipe: j.recipe, lane: j.lane, startedAt: j.started })); } catch { return []; } })();
   const answers = answerLog.stats(7) as { answered?: number; failed?: number; tiers?: Record<string, { n: number; p50: number; p90: number; max: number }> };
   return c.json({
     ok: true, at: Date.now(),
@@ -3000,6 +2961,5 @@ app.get("/health", async (c) => {
     } : null,
     answers: { answered: answers.answered ?? 0, failed: answers.failed ?? 0, tiers: answers.tiers ?? {} },
     missQueue: mq ? { total: mq.total, open: (mq.byStatus?.open ?? 0) + (mq.byStatus?.queued ?? 0), byKind: mq.byKind } : null,
-    keeper, jobs: runningJobs,
   });
 });

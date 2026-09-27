@@ -90,7 +90,8 @@ const DEFAULTS: RiverMesConfig = {
   accuracyPct: 0.5,
   timeoutMs: 1500,
   serveWhen: "first",
-  binDir: join(REPO, "analysis", "pipeline", "solve", "compare", "target", "release"),
+  // the river MES solver binaries are the chart factory's build (poker: analysis/pipeline/solve/compare): RIVER_MES_BIN
+  binDir: join(REPO, "bin"),
 };
 
 let cfgCache: { mtime: number; cfg: RiverMesConfig } | null = null;

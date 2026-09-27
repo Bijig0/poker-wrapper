@@ -16,11 +16,13 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
+import { join } from "node:path";
 import { fastSolve } from "../services/fastSolve";
+import { POOL_DIR } from "../services/repoPaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
-const IN = "C:/Users/Brady/poker/analysis/pipeline/limp_study/corpus_nodes.jsonl";
-const OUT = "C:/Users/Brady/poker/analysis/pipeline/limp_study/corpus_answers.jsonl";
+const IN = join(POOL_DIR, "corpus_nodes.jsonl");
+const OUT = process.argv[2] ?? join(POOL_DIR, "corpus_answers.jsonl");
 const MAX = Number(process.argv[2] ?? 0);
 
 const done = new Set<string>();

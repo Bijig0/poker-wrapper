@@ -19,6 +19,7 @@
  *
  *   bun run src/scripts/sixmaxBacktest.ts --hands 400 --out backtest.json
  */
+import { CHARTS_DIR } from "../services/repoPaths";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -26,8 +27,9 @@ import { chartFor6max, openFromTokens, type Seat6 } from "../services/hrc6max";
 import { walk3max, type GetNode, type HrcNode } from "../services/hrc3max";
 
 export const HH_DIR = "C:\\Users\\Brady\\Ignition Casino Poker\\Hand History";
-const SOLUTIONS = "C:\\Users\\Brady\\poker\\analysis\\pipeline\\solve\\exploit_ui\\solutions";
-const PLAN_DIR = "C:\\Users\\Brady\\poker-zenbook\\hrc-api\\solves\\sixmax_grid";
+const SOLUTIONS = CHARTS_DIR;   // the chart index + cached bodies (services/repoPaths.ts)
+// the 6-max grid's plan files are the chart factory's (poker-zenbook/hrc-api/solves/sixmax_grid)
+const PLAN_DIR = process.env.SIXMAX_PLAN_DIR ?? "C:\\Users\\Brady\\poker-zenbook\\hrc-api\\solves\\sixmax_grid";
 const ORDER_6 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"] as const;
 
 const arg = (k: string, d?: string) => { const i = Bun.argv.indexOf(k); return i >= 0 ? Bun.argv[i + 1] : d; };

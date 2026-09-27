@@ -1,0 +1,60 @@
+# ---- packages, builds, editors
+node_modules/
+*.tsbuildinfo
+.turbo/
+*.log
+.DS_Store
+Thumbs.db
+
+# ---- machine-local config (config/local.env.example is the tracked template)
+config/local.env
+# an installed copy's download key, installed data versions, install markers (the installer writes them)
+config/rclone.conf
+config/installed-data.json
+config/parts/
+config/dashboard-shortcut.done
+config/setup-install.log
+# the runtime the installer ships (bin/bun.exe, bin/rclone.exe)
+/bin/
+VERSION.json
+
+# ---- THE DATA ROOT (gto-trainer/DATA-ROOT-PLAN.md): the central poker.sqlite and friends — records, never code
+/data/
+*.adopted-*
+*.sqlite-wal
+*.sqlite-shm
+
+# ---- the API's runtime state and logs
+gto-trainer/apps/api/data/.profile-dashboard/
+gto-trainer/apps/api/data/jobs/
+gto-trainer/apps/api/data/hands.db
+gto-trainer/apps/api/data/answers.sqlite
+gto-trainer/apps/api/data/sessions.sqlite
+gto-trainer/apps/api/data/river_mes.sqlite
+gto-trainer/apps/api/data/river_mes_config.json
+gto-trainer/apps/api/data/miss-queue.sqlite
+gto-trainer/apps/api/data/solves.sqlite
+gto-trainer/apps/api/data/hand_facts.sqlite
+gto-trainer/apps/api/data/hh_checks.sqlite
+gto-trainer/apps/api/data/hh_audit/
+gto-trainer/apps/api/data/mes_river_cache/
+gto-trainer/apps/api/data/gtow_requests.jsonl
+gto-trainer/apps/api/data/background.lock
+gto-trainer/apps/api/data/balance-acks.json
+gto-trainer/apps/api/data/fx.json
+gto-trainer/apps/api/data/stress-*.json
+gto-trainer/apps/api/NUL
+gto-trainer/apps/api/src/scripts/*.jsonl
+
+# ---- FACTORY OUTPUTS that are too big for git: downloaded (R2 data parts) or exported by the chart factory
+# the chart index + cached chart bodies (services/repoPaths.ts CHARTS_DIR)
+gto-trainer/apps/api/data/charts/
+gto-trainer/apps/api/data/hrc6max-preflop.sqlite
+gto-trainer/apps/api/data/mes_turn/
+gto-trainer/apps/api/data/limp_node_trust.json
+
+# ---- the wrapper's runtime state (browser profiles, records, recordings, its log)
+ignition-study-wrapper/.profile-*/
+ignition-study-wrapper/data/
+ignition-study-wrapper/debug/
+ignition-study-wrapper/server.log

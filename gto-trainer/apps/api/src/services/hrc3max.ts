@@ -139,6 +139,9 @@ function ign25Ids(): Set<string> {
   }
   return IGN25_IDS;
 }
+/** Test hook: which ign25 uneven charts count as solved (null = read the catalog again). The catalog is the chart
+ *  index on this machine — a data download, not in git — so a test names the charts it needs. */
+export function setIgn25Ids(ids: Iterable<string> | null): void { IGN25_IDS = ids ? new Set(ids) : null; }
 
 /** The chart id for a canonical state (deep rung d, short rung s, short seat). */
 function chartIdFor(site: Site, d: number, s: number, seat: "BTN" | "SB" | "BB" | null): string {

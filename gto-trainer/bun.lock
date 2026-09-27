@@ -33,11 +33,17 @@
         "@types/bun": "latest",
       },
     },
+    "packages/data-root": {
+      "name": "@poker/data-root",
+      "version": "1.0.0",
+    },
   },
   "packages": {
     "@hono/zod-validator": ["@hono/zod-validator@0.7.6", "", { "peerDependencies": { "hono": ">=3.9.0", "zod": "^3.25.0 || ^4.0.0" } }, "sha512-Io1B6d011Gj1KknV4rXYz4le5+5EubcWEU/speUjuw9XMMIaP3n78yXLhjd2A3PXaXaUwEAluOiAyLqhBEJgsw=="],
 
     "@poker/api": ["@poker/api@workspace:apps/api"],
+
+    "@poker/data-root": ["@poker/data-root@workspace:packages/data-root"],
 
     "@poker/wrapper": ["@poker/wrapper@workspace:apps/wrapper"],
 

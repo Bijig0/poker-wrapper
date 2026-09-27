@@ -23,14 +23,15 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { mesPostflopInfo } from "./mesPostflop";
-import { chartsLanded } from "./ledger";
+import { chartsLanded } from "./chartSets";
+import { POOL_DIR } from "./repoPaths";
 
 /** THE 6-MAX RING STRATEGY'S ID — one constant: fastSolve's routing, the poller's local-preflop check and the coverage
  *  table all key on it, and a rename typed into one of five copies would silently switch the 6-max path off. */
 export const SIX_MAX_STRATEGY_ID = "ign200-ring-6max-equilibrium";
 
 const DATA = join(import.meta.dir, "..", "..", "data");
-const LIMP = join(DATA, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
+const LIMP = POOL_DIR;   // the pool files (services/repoPaths.ts)
 const readJson = (p: string): any | null => { try { return JSON.parse(readFileSync(p, "utf-8")); } catch { return null; } };
 
 // ---- layers ---------------------------------------------------------------
@@ -48,7 +49,7 @@ export interface PreflopLayer {
   chartSet?: string;
   /** ledger config ids whose charts this layer plays from — for a set that is still
    *  being solved, evaluate() counts how many of its charts are in the catalog and
-   *  refuses the strategy until they are all there (services/ledger.ts chartsLanded) */
+   *  refuses the strategy until they are all there (services/chartSets.ts chartsLanded) */
   chartConfigs?: string[];
   /** the piece that answers what this one cannot (registry source id) — stated on the strategy, never implied */
   fallbackSource?: string; fallbackLabel?: string;

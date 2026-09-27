@@ -18,9 +18,8 @@ import { HRC3MAX_BASE } from "../services/hrc3max";
 import { missQueue } from "../services/missQueue";
 import { APPROXIMATIONS, type Approximation } from "../services/approximations";
 import { STRATEGY_COVERAGE } from "../services/strategyCoverage";
-import { workQueue } from "../services/strategyQueue";
-import { patchJobs } from "../services/patchJobs";
-import { formatsForSource, chartsLanded } from "../services/ledger";
+import { formatsForSource, chartsLanded } from "../services/chartSets";
+import { POOL_DIR } from "../services/repoPaths";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import {
@@ -51,13 +50,13 @@ import {
  */
 
 const DATA_DIR = join(import.meta.dir, "..", "..", "data");
-const LIMP_DIR = join(DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
+const LIMP_DIR = POOL_DIR;   // the pool files (services/repoPaths.ts)
 const app = new Hono();
 
 // LIVE ANSWERS GO FIRST (services/livePriority): these pages recompute over every hand and answer on the thread that
 // answers hero's decisions, so each one waits for a live answer to finish before it starts. Only the browser pages'
 // heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /sources/strategies|registry) never wait.
-for (const p of ["/matrix", "/grading", "/answers", "/patch-jobs", "/approximations"]) app.use(p, yieldFirst);
+for (const p of ["/matrix", "/grading", "/answers", "/approximations"]) app.use(p, yieldFirst);
 
 // ------------------------------------------------------------------ helpers
 
@@ -754,7 +753,6 @@ function strategiesBody() {
         ...row, approxLive: (row.approx ?? []).map((a) => byId.get(a)).filter(Boolean).map((r) => brief(r!)),
       })) })),
       holes: approx.filter((r) => cov.holeSources.includes(r.source)).map(brief),
-      queue: workQueue(cov),
       days: 30,
     };
   };
@@ -776,7 +774,7 @@ function strategiesBody() {
 // The Playthrough tab: OUR solver browser. Config first (only what is solved is
 // offered), then a 3-max table you walk preflop -> flop -> turn -> river with a
 // strategy chosen per seat: hero MES (exploit) or GTO chart; villains pool or GTO.
-const LIMP = join(DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "limp_study");
+const LIMP = POOL_DIR;
 app.get("/play/config", (c) => {
   const pool = readJson(poolModelPath());
   const exploit = process.env.EXPLOIT_CHART ? readJson(process.env.EXPLOIT_CHART) : null;
@@ -909,7 +907,7 @@ app.get("/matrix", (c) => {
     combined,
     realized,
     missing: [
-      ...(matrix ? [] : ["data/strategy_matrix.json — run analysis/pipeline/limp_study/strategy_matrix.py"]),
+      ...(matrix ? [] : ["data/strategy_matrix.json — exported by the chart factory (poker: analysis/pipeline/limp_study/strategy_matrix.py)"]),
       ...(ladder ? [] : ["data/winrate_ladder.json — run backtest_study_answers.py --json"]),
       ...(combined ? [] : ["data/backtest_combined.json — run backtest_combined.py"]),
     ],
@@ -1093,14 +1091,6 @@ function approximationRows(days: number) {
   return rows;
 }
 
-/** Patch charts the strategy's LIVE approximations call for (services/patchJobs.ts). The box queue dispatcher
- *  (poker-zenbook/hrc-api/scripts/boxQueue.ts) polls this every minute and queues the unsolved ones at tier 1. */
-app.get("/patch-jobs", (c) => {
-  const prefix = c.req.query("prefix") ?? "ign200_6max_";
-  const jobs = patchJobs(prefix);
-  return c.json({ ok: true, prefix, jobs: jobs.filter((j) => !j.solved), solved: jobs.filter((j) => j.solved).length });
-});
-
 app.get("/approximations", (c) => {
   const days = Math.max(1, Math.min(365, Number(c.req.query("days") ?? 30) || 30));
   const rows = approximationRows(days);
@@ -1122,27 +1112,6 @@ app.get("/approximations", (c) => {
       liveHits: rows.reduce((s, r) => s + (r.miss?.live ?? 0) + (r.warn?.n ?? 0), 0),
     },
   });
-});
-
-app.get("/roadmap", (c) => {
-  const road = readJson(join(DATA_DIR, "roadmap.json")) ?? { families: [], preflop: [] };
-  const mes = mesPostflopInfo();
-  const reach = readJson(join(DATA_DIR, "mes_reach_value.json"));
-  const famById = new Map(mes.families.map((f) => [f.id, f]));
-  const families = (road.families as any[]).map((f) => {
-    const built = famById.get(f.id);
-    const r = reach?.families?.[f.id] ?? null;
-    return {
-      ...f,
-      built: !!built,
-      boards: built?.boards.length ?? 0,
-      generations: built?.generations ?? {},
-      meanEvGainPerArrival: r?.mean_ev_gain_per_arrival ?? (built ? Math.round((100 * built.boards.reduce((s, b) => s + b.evGainBb, 0)) / Math.max(1, built.boards.length)) / 100 : null),
-      arrivalPctOfHands: r?.arrival_pct_of_hands ?? null,
-      upliftBb100: r?.uplift_bb100 ?? null,
-    };
-  });
-  return c.json({ ok: true, families, preflop: road.preflop, generatedAt: road.generatedAt ?? null });
 });
 
 /**

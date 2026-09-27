@@ -1,7 +1,8 @@
 import { yieldFirst } from "../services/livePriority";
 import { Hono } from "hono";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { POOL_DIR } from "../services/repoPaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max, HRC3MAX_BASE } from "../services/hrc3max";
@@ -18,8 +19,7 @@ import { allRows, enrichSync, truncateAt } from "./dashboard";
  *   GET  /sweep            the sweep's progress
  *   POST /:id/status       { status, note? }
  *   POST /:id/recheck      re-walk the stored state; a clean walk marks it solved
- *   POST /plan             write the queued items as HRC jobs: one plan file
- *                          per job + a runner queue (hrc_runner_gui.py format)
+ * (Turning queued misses into solves is the chart factory's job — the poker repo reads this queue.)
  */
 const app = new Hono();
 
@@ -27,9 +27,7 @@ const app = new Hono();
 // answers hero's decisions, so it waits for a live answer to finish before it starts.
 app.use("/", yieldFirst);
 
-const REPO = resolve(import.meta.dir, "..", "..", "..", "..", "..");
-const CORPUS = join(REPO, "analysis", "pipeline", "limp_study", "corpus_nodes.jsonl");
-const PLAN_DIR = join(REPO, "hrc-api", "solves", "threemax_asym", "miss_queue");
+const CORPUS = join(POOL_DIR, "corpus_nodes.jsonl");
 
 const is3Handed = (hand: ParsedHand, heroPos: string | null): boolean => {
   const present = new Set([...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase()));
@@ -159,7 +157,7 @@ async function runSweep(source: "archive" | "corpus"): Promise<void> {
 
 app.get("/", (c) => {
   const status = (c.req.query("status") ?? "all") as MissStatus | "all";
-  return c.json({ ok: true, items: missQueue.list(status), stats: missQueue.stats(), sweep, snapNote: SNAP_NOTE, store: missQueue.path, corpus: existsSync(CORPUS) ? CORPUS : null, planDir: PLAN_DIR });
+  return c.json({ ok: true, items: missQueue.list(status), stats: missQueue.stats(), sweep, snapNote: SNAP_NOTE, store: missQueue.path, corpus: existsSync(CORPUS) ? CORPUS : null });
 });
 
 app.get("/sweep", (c) => c.json({ ok: true, sweep }));
@@ -218,40 +216,6 @@ app.post("/:id/recheck", async (c) => {
   const exact = walk.ok && far.length === 0 && chart.beyondLadder == null;
   if (exact) missQueue.setStatus(id, "solved", `re-checked ${new Date().toISOString().slice(0, 16)}: exact on ${chart.id}`);
   return c.json({ ok: true, exact, chart: chart.id, walk: walk.ok ? { tokens: walk.tokens, repaired: walk.repaired } : { reason: walk.reason }, item: missQueue.get(id) });
-});
-
-/** Write the queued (or the given) items as HRC jobs the runner can pick up. */
-app.post("/plan", async (c) => {
-  const b = (await c.req.json().catch(() => ({}))) as { ids?: number[] };
-  const items = (b.ids?.length ? b.ids.map((i) => missQueue.get(i)).filter((x): x is NonNullable<typeof x> => x != null) : missQueue.list("queued")).filter((x) => x.job);
-  if (!items.length) return c.json({ ok: false, error: "nothing queued with a suggested job" }, 400);
-  mkdirSync(PLAN_DIR, { recursive: true });
-  const seen = new Set<string>();
-  const jobs: any[] = [];
-  for (const it of items) {
-    const j = it.job!;
-    if (seen.has(j.id)) continue;
-    seen.add(j.id);
-    const { change, ...job } = j;
-    jobs.push({ ...job, missQueue: { change, items: items.filter((x) => x.job?.id === j.id).map((x) => x.id) } });
-  }
-  const planAll = join(PLAN_DIR, "plan_miss_queue.json");
-  writeFileSync(planAll, JSON.stringify(jobs, null, 1));
-  const queue = {
-    name: `miss queue · ${jobs.length} job(s) · ${new Date().toISOString().slice(0, 10)}`,
-    jobs: jobs.map((j) => {
-      const one = join(PLAN_DIR, `${j.id}.plan.json`);
-      writeFileSync(one, JSON.stringify([j], null, 1));
-      return {
-        id: j.id,
-        cmd: ["bun", "run", "scripts/threeMaxGrid.ts", `solves/threemax_asym/miss_queue/${j.id}.plan.json`],
-        done_if: `solves/threemax_grid/${j.id}.charts.json`,
-      };
-    }),
-  };
-  const queuePath = join(PLAN_DIR, "queue_miss_queue.json");
-  writeFileSync(queuePath, JSON.stringify(queue, null, 1));
-  return c.json({ ok: true, jobs: jobs.length, plan: planAll, queue: queuePath, ids: jobs.map((j) => j.id) });
 });
 
 export default app;

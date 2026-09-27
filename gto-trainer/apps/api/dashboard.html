@@ -23,8 +23,6 @@
     <button id="tab-sources">Sources</button>
     <button id="tab-replay">Replay Review</button>
     <button id="tab-play">Playthrough</button>
-    <button id="tab-ledger" title="solve proposals: what is being solved, from what, into what, at what cost — approve one, run it, watch it">Solve Proposals</button>
-    <button id="tab-tasks" title="the hand-off board: every piece of work with the brief needed to pick it up cold, its next action, and what is waiting on you">Tasks</button>
   </div>
   <span id="count" class="sub"></span>
   <span style="flex:1"></span>
@@ -52,8 +50,6 @@
   <div id="view-detail" style="display:none"></div>
   <div id="view-sessions" style="display:none"></div>
   <div id="view-profiles" style="display:none"></div>
-  <div id="view-ledger" style="display:none"></div>
-  <div id="view-tasks" style="display:none"></div>
   <div id="view-analytics" style="display:none"></div>
   <div id="view-coverage" style="display:none"></div>
   <div id="view-sources" style="display:none"></div>
@@ -2534,37 +2530,6 @@ function hmSystem(h) {
     null,
     "answered and failed study answers over the last seven days, with the slowest tier's p90 latency"));
 
-  // player mode (the packaged install): no solve fleet, so no miss queue / boxes / jobs cards
-  if (window.PLAYER_MODE) return `<section class="hm-sys">${cards.join("")}</section>`;
-
-  // 4 — preflop has no live solver: every miss is written down instead
-  const mq = h.missQueue;
-  const topKind = mq ? Object.entries(mq.byKind || {}).sort((x, y) => y[1] - x[1])[0] : null;
-  cards.push(hmCard(!mq ? "dim" : mq.open > 0 ? "warn" : "good",
-    "Preflop miss queue",
-    mq ? `${mq.open} open` : "unknown",
-    mq ? `${mq.total} recorded${topKind ? ` · mostly ${esc(topKind[0])} (${topKind[1]})` : ""}` : "not reachable",
-    "/analytics",
-    "preflop has no on-demand solver, so every chart miss is written down with the state to solve it — the HRC runner works the queue between sessions"));
-
-  // 5 — the boxes that work that queue off
-  const k = h.keeper;
-  cards.push(hmCard(!k || !k.total ? "dim" : k.up < k.total ? "warn" : "good",
-    "Solve boxes",
-    !k ? "unknown" : !k.total ? (k.running ? "probing…" : "none") : `${k.up}/${k.total} up`,
-    !k ? "keeper not reachable" : !k.total ? (k.running ? "the keeper has not finished its first pass" : "no boxes in the ledger") : `${k.working} running a job · keeper ${k.running ? "on" : "off"}`,
-    "/proposals",
-    k ? (k.boxes || []).map((b) => `${b.name}: ${b.ok ? (b.job === "Running" ? (b.phase || "running") : "idle") : "unreachable"}`).join("\n") : ""));
-
-  // 6 — anything the dispatcher is running right now
-  const jobs = h.jobs || [];
-  cards.push(hmCard(jobs.length ? "good" : "dim",
-    "Jobs",
-    jobs.length ? `${jobs.length} running` : "idle",
-    jobs.length ? jobs.map((x) => esc(x.config || x.recipe || `#${x.id}`)).join(", ") : "nothing in flight",
-    "/proposals",
-    "the solve dispatcher's own jobs"));
-
   return `<section class="hm-sys">${cards.join("")}</section>`;
 }
 
@@ -2990,9 +2955,8 @@ function renderMissQueue() {
       <select id="mq-filter" onchange="mqFilter=this.value;renderMissQueue()">
         ${[["active", "open + queued"], ["all", "everything"], ["open", "open"], ["queued", "queued"], ["solved", "solved"], ["dismissed", "dismissed"]].map(([v, l]) => `<option value="${v}" ${mqFilter === v ? "selected" : ""}>${l}</option>`).join("")}
       </select>
-      <button class="mini fleet-only" onclick="mqSweep('archive')" ${sw.running ? "disabled" : ""} title="walk every hero preflop decision in hands.db through the charts">sweep archive</button>
-      <button class="mini fleet-only" onclick="mqSweep('corpus')" ${sw.running || !MQ.corpus ? "disabled" : ""} title="walk every preflop node of the 4k-hand Zone corpus through the charts (all actors) — minutes">sweep 4k corpus</button>
-      <button class="mini fleet-only" onclick="mqPlan()" ${(bs.queued || 0) ? "" : "disabled"} title="write one HRC plan per queued job + a runner queue">write HRC plan (${bs.queued || 0} queued)</button>
+      <button class="mini" onclick="mqSweep('archive')" ${sw.running ? "disabled" : ""} title="walk every hero preflop decision in hands.db through the charts">sweep archive</button>
+      <button class="mini" onclick="mqSweep('corpus')" ${sw.running || !MQ.corpus ? "disabled" : ""} title="walk every preflop node of the 4k-hand Zone corpus through the charts (all actors) — minutes">sweep 4k corpus</button>
       ${sweepHtml}
     </div>
     <h2 style="margin-top:14px">Suggested HRC jobs <span class="sub">— ${jobs.length} distinct, by decisions covered${jobs.length > 25 && !mqShowAllJobs ? ` · showing 25 <a href="#" onclick="mqShowAllJobs=true;renderMissQueue();return false">show all</a>` : ""}</span></h2>
@@ -3048,11 +3012,6 @@ async function mqRecheck(id, btn) {
   if (!r.ok) alert(r.error || "re-check failed");
   else if (!r.exact) alert(`still inexact on ${r.chart}: ${r.walk.reason || ("snapped " + JSON.stringify(r.walk.repaired))}`);
   loadMissQueue();
-}
-async function mqPlan() {
-  const r = await (await fetch("/api/dashboard/miss-queue/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
-  if (!r.ok) { alert(r.error || "plan failed"); return; }
-  alert(`wrote ${r.jobs} job(s)\n\nplan: ${r.plan}\nrunner queue: ${r.queue}\n\nOpen HRC Runner and load the queue file.`);
 }
 
 /* ================= chart catalog: the Charts picker =================
@@ -3372,328 +3331,6 @@ async function catNode(id, seat, line) {
     ${classGrid(cls, n.actions.map((a) => a.action), null, { flat: true, wmax: 1e9, foot: "every class in the chart at this node · hover for the mix" })}
     <div class="nv-walk">${step}</div>
     <div class="sub" style="margin-top:8px"><a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON ↗</a></div>`;
-}
-
-/* ================= Ledger: formats · configs · plans · jobs ================= */
-let LG = null, lgJobTimer = null, lgOpenLog = null;
-const minsStr = (m) => m >= 48 * 60 ? `${(m / 1440).toFixed(m >= 14400 ? 0 : 1)} days` : m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)} h` : `${Math.round(m)} min`;
-/* The ledger's live polls (the proposals page every 4 s, the progress page every 5 s) run only while the tab is
-   on screen: one that comes due while it is hidden is parked (whenVisible, one "ledger" slot for both) and runs
-   once when the tab is shown again; route() drops it on any navigation. */
-async function loadLedger() {
-  const v = $("view-ledger");
-  if (!LG) v.innerHTML = '<div class="card sub">loading the ledger…</div>';
-  try { LG = await (await fetch("/api/ledger")).json(); } catch (e) { v.innerHTML = '<div class="card warn">ledger unavailable</div>'; return; }
-  if (PATH.view !== "ledger") return; // left the ledger while the read was in flight: nothing to draw, nothing to re-arm
-  if (!LG.ok) { v.innerHTML = '<div class="card warn">ledger unavailable</div>'; return; }
-  if ((PATH.pane === "runbook" || PATH.pane === "plan") && PATH.id) { await renderRunbook(PATH.id); return; }
-  if (PATH.pane === "ledger") { renderLedger(); return; }
-  if (PATH.pane === "detail") { renderOperatorDetail(); return; }
-  if (PATH.pane === "progress" && PATH.id) { await renderProgress(PATH.id); return; }
-  renderProposalPage();
-  clearTimeout(lgJobTimer);
-  if ((LG.jobs || []).some((j) => j.status === "running" || j.status === "queued")) lgJobTimer = setTimeout(() => whenVisible("ledger", loadLedger), 4000);
-}
-function renderLedger() {
-  const v = $("view-ledger"), L = LG;
-  const cById = new Map(L.configs.map((c) => [c.id, c]));
-  const stPill = (s) => `<span class="st-pill ${esc(s)}">${esc(s)}</span>`;
-  const estStr = (c) => `${minsStr(c.estimate.wallMinutes)}${c.runner === "fleet" ? " on 4 boxes" : c.runner === "hrc-zenbook" ? " on the Zenbook" : ""}${c.estimate.eur ? ` · €${c.estimate.eur}` : ""}`;
-  const inputsReady = (c) => c.inputs.every((x) => cById.get(x)?.effective === "done");
-  const runBtn = (c) => c.effective === "done" ? "" : !inputsReady(c) ? `<span class="sub" title="${esc(c.inputs.filter((x) => cById.get(x)?.effective !== "done").map((x) => cById.get(x)?.label ?? x).join(", "))}">waiting on inputs</span>` : c.recipe && c.kind !== "locked-root" && c.runner !== "fleet"
-    ? `<button class="mini" onclick="lgRun('${esc(c.id)}')">▶ run</button>`
-    : c.runner === "fleet" ? `<button class="mini" onclick="lgRun('${esc(c.id)}')" title="the fleet solve is started by hand from the runbook; this builds/installs the result">build</button> <button class="mini" onclick="lgMark('${esc(c.id)}','done')">mark done</button>`
-    : c.kind === "locked-root" ? `<span class="sub">needs the lock step in the grid runner</span>` : `<button class="mini" onclick="lgMark('${esc(c.id)}','done')">mark done</button>`;
-  const plans = L.plans.map((p) => `<div class="card lg-plan"><h2>${esc(p.label)} <span class="sub">— ${p.remaining} of ${p.steps.length} steps left · ${minsStr(p.totalWallMinutes)} wall-clock${p.totalEur ? ` · €${p.totalEur}` : ""}</span> <button class="mini" style="margin-left:10px" onclick="go('/ledger/runbook/${esc(p.id)}')">📋 open the runbook — every step spelled out</button></h2>
-      <div class="sub">${esc(p.why)}</div>
-      <div class="lg-steps">${p.steps.map((s, i) => `<div class="lg-step ${esc(s.effective)}"><span class="n">${i + 1}</span><span><b>${esc(s.label)}</b> <span class="sub">${esc(s.kind)} · ${esc(s.formatLabel)}${s.inputs.length ? ` · needs ${s.inputs.map((x) => esc(cById.get(x)?.label ?? x)).join(", ")}` : ""}</span>${s.staleWhy.length ? `<div class="lg-why">⚠ ${esc(s.staleWhy[0])}</div>` : ""}${s.note ? `<div class="sub">${esc(s.note)}</div>` : ""}</span><span class="est">${estStr(s)}</span><span>${stPill(s.effective)} ${runBtn(s)}</span></div>`).join("")}</div>
-      ${(p.parallel || []).length ? `<div class="sub" style="margin-top:6px">runs side by side: ${p.parallel.map((g) => g.map((x) => esc(cById.get(x)?.label ?? x)).join(" + ")).join("; ")}</div>` : ""}
-    </div>`).join("");
-  const cfgRows = L.configs.map((c) => `<tr class="src-static"><td><b>${esc(c.label)}</b><div class="mono sub">${esc(c.id)}</div>${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}</td><td>${esc(c.kind)}</td><td>${esc(c.formatLabel)}${c.tree ? `<div class="sub">${esc(c.tree)}</div>` : ""}</td>
-      <td>${c.inputs.map((x) => `<div>${esc(cById.get(x)?.label ?? x)}</div>`).join("") || '<span class="sub">—</span>'}</td>
-      <td>${c.producesFound.map((p) => `<div class="${p.found ? "" : "sub"}">${p.found ? "✓" : "–"} <span class="mono">${esc(p.key)}</span> <span class="sub">${esc(p.detail.replace(/^C:\\Users\\Brady\\poker\\/, ""))}</span></div>`).join("")}</td>
-      <td>${stPill(c.effective)}${c.staleWhy.map((w) => `<div class="lg-why">${esc(w)}</div>`).join("")}</td><td class="num">${estStr(c)}</td><td>${runBtn(c)}${c.effective === "done" ? ` <button class="mini" onclick="lgMark('${esc(c.id)}','planned')" title="mark as needing a re-run">re-plan</button>` : ""}</td></tr>`).join("");
-  const fmtRows = L.formats.map((f) => `<tr class="src-static lg-fmt"><td><b>${esc(f.label)}</b><div class="mono sub">${esc(f.id)}</div></td><td>${esc(f.site)}</td><td>${f.seats === 2 ? "heads-up" : `${f.seats}-handed`}</td><td>${esc(f.stake)}${f.blinds ? ` <span class="sub">${esc(f.blinds)}</span>` : ""}</td><td>${f.rake ? `${Math.round(f.rake.pct * 100)}% · cap ${f.rake.capBb}bb` : '<span class="sub">as solved</span>'}</td><td class="mono">${f.depths.length ? (f.depths.length > 6 ? `${f.depths[0]}–${f.depths[f.depths.length - 1]}bb (${f.depths.length} rungs)` : f.depths.map((d) => d + "bb").join(", ")) : "any"}</td><td class="sub">${esc(f.note ?? "")}</td>
-      <td>${Object.entries(L.sources).filter(([, ids]) => ids.includes(f.id)).map(([src]) => `<a href="/sources/pieces/${esc(src)}" onclick="go('/sources/pieces/${esc(src)}');return false" class="chip">${esc(src)}</a>`).join(" ")}</td></tr>`).join("");
-  const jobRows = (L.jobs || []).map((j) => `<tr class="src-static"><td class="num">#${j.id}</td><td><b>${esc(cById.get(j.config)?.label ?? j.config)}</b><div class="sub">${esc(j.note ?? "")}</div></td><td>${esc(j.lane)}</td><td>${stPill(j.status)}</td><td class="sub">${j.started ? fmtT(j.started) : fmtT(j.created)}${j.ended ? ` → ${fmtT(j.ended)}` : ""}${j.exitCode != null && j.exitCode !== 0 ? ` · exit ${j.exitCode}` : ""}</td><td><button class="mini" onclick="lgLog(${j.id})">log</button>${j.status === "queued" || j.status === "running" ? ` <button class="mini" onclick="lgCancel(${j.id})">cancel</button>` : ""}</td></tr>`).join("");
-  v.innerHTML = `
-    <div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button> the tables underneath the proposal — the source of truth it is built from (data/ledger.json)</div>
-    <div class="card"><h2>Jobs <span class="sub">— one at a time per lane · logs under data/jobs/</span></h2>
-      <div class="scroll"><table><thead><tr><th>#</th><th>config</th><th>lane</th><th>status</th><th>when</th><th></th></tr></thead><tbody>${jobRows || '<tr class="src-static"><td colspan="6" class="sub">nothing queued</td></tr>'}</tbody></table></div>
-      <div id="lg-log" style="margin-top:8px"></div></div>
-    <div class="banner">📒 <b>The ledger is the source of truth.</b> A <b>format</b> is one combination of site, seats, stake with its rake model, and depth. A <b>config</b> is a solve under one format and one tree, built from named inputs. Every chart, lock, export and model on this rig traces to a config here; a config whose input moved after it was built shows as <span class="st-pill stale">stale</span> and says why. Jobs run a config's recipe from this definition — never from a shell with the wrong env. Edit <span class="mono">data/ledger.json</span> to add a format or config.</div>
-    <h2 class="sub" style="text-transform:uppercase;letter-spacing:.6px;margin:12px 0 4px">Plans</h2>${plans}
-    <div class="card"><h2>Configs <span class="sub">— ${L.configs.length} · ${L.configs.filter((c) => c.effective === "done").length} done · ${L.configs.filter((c) => c.effective === "stale").length} stale · ${L.configs.filter((c) => c.effective === "planned" || c.effective === "blocked").length} to do</span></h2>
-      <div class="scroll"><table><thead><tr><th>config</th><th>kind</th><th>format · tree</th><th>built from</th><th>produces</th><th>status</th><th class="num">estimate</th><th></th></tr></thead><tbody>${cfgRows}</tbody></table></div></div>
-    <div class="card"><h2>Formats <span class="sub">— ${L.formats.length} · one row is one full combination</span></h2>
-      <div class="scroll"><table><thead><tr><th>format</th><th>site</th><th>seats</th><th>stake</th><th>rake</th><th>depths</th><th>note</th><th>served by</th></tr></thead><tbody>${fmtRows}</tbody></table></div></div>
-    `;
-  if (lgOpenLog) lgLog(lgOpenLog, true);
-}
-const rbPill = (s) => `<span class="st-pill ${esc(s)}">${esc(s)}</span>`;
-const __ORDER__ = (R, byId, idx) => R.order.map((g) => `<span class="g ${g.length > 1 ? "par" : ""}">${g.map((id) => `<a href="#rb-${esc(id)}" style="color:inherit">${idx.get(id)}. ${esc(byId.get(id)?.label ?? id)}</a> ${rbPill(byId.get(id)?.effective ?? "")}`).join(' <span class="sub">∥</span> ')}</span>`).join(' <span class="sub">→</span> ');
-const __PRE__ = (R) => R.preflight.map((c) => `<div>${c.ok ? "✅" : "❌"} <b>${esc(c.label)}</b> <span class="sub">${esc(c.detail)}</span></div>`).join("");
-const rbRunBtn = (s) => s.runnable ? `<button class="mini" onclick="lgRun('${esc(s.id)}', ${s.estimate.eur || 0})">▶ run this step</button>` : `<span class="sub">${esc(s.whyNotRunnable ?? "")}</span>`;
-const rbCmd = (st) => st.cmd ? `<div class="rb-cmd">$ ${esc(st.cmd)}${st.cwd ? `\n<span class="dim">cwd ${esc(st.cwd)}</span>` : ""}${st.env ? `\n<span class="dim">env ${esc(Object.entries(st.env).map(([k, x]) => `${k}=${x}`).join("  "))}</span>` : ""}</div>` : "";
-const rbCard = (s, i) => `<div class="card rb-cfg ${esc(s.effective)}" id="rb-${esc(s.id)}">
-      <h2><span class="rb-num">${i + 1}</span>${esc(s.label)} ${rbPill(s.effective)} <span class="sub">${esc(s.kind)} · ${esc(s.runner)}</span> <span class="sub" style="float:right">${esc(s.estimate.text)} &nbsp; ${rbRunBtn(s)}</span></h2>
-      ${s.note ? `<div class="sub">${esc(s.note)}</div>` : ""}
-      <div class="rb-grid">
-        <div><b>Where it runs</b>${esc(s.where)}</div>
-        ${s.format ? `<div><b>Format</b>${esc(s.format.label)}${s.format.blinds ? ` (${esc(s.format.blinds)})` : ""} · rake ${esc(s.format.rake)} · ${esc(s.format.depths)}<div class="mono sub">${esc(s.format.id)}</div></div>` : ""}
-        ${s.tree ? `<div><b>Tree</b>${esc(s.tree.label)}<div class="sub">${s.tree.lines.map(esc).join(" · ")}</div></div>` : ""}
-        <div><b>Built from</b>${s.inputs.length ? s.inputs.map((x) => `<div>${rbPill(x.effective)} ${esc(x.label)}${x.artifact ? `<div class="mono sub">${esc(x.artifact.path)} ${x.artifact.exists ? `· ${esc(x.artifact.sha256 ?? "")} · ${esc(x.artifact.mtime ?? "")}` : "· not on disk"}</div>` : ""}</div>`).join("") : '<span class="sub">nothing — a root solve</span>'}</div>
-        <div><b>Produces</b>${s.produces.length ? s.produces.map((p) => `<div>${p.exists ? "✓" : "–"} <span class="mono">${esc(p.key)}</span> <span class="sub">${esc(p.detail)}</span></div>`).join("") : '<span class="sub">no artifact — a cutover</span>'}</div>
-      </div>
-      ${s.blockers.length ? `<div class="rb-block"><b>⛔ Blocked:</b><ul class="rb-list">${s.blockers.map((b) => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
-      <div style="margin-top:6px"><b>Exactly what runs</b></div>
-      <ol class="rb-steps">${s.steps.map((st) => `<li><b>${st.n}. ${esc(st.title)}</b><span class="how ${esc(st.how)}">${esc(st.how)}</span>${rbCmd(st)}${st.detail.length ? `<ul class="rb-list">${st.detail.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ol>
-      <div class="rb-grid">
-        <div><b>Done when</b><ul class="rb-list">${s.doneWhen.map((d) => `<li>${esc(d)}</li>`).join("") || "<li class='sub'>marked by hand</li>"}</ul></div>
-        <div><b>Check afterwards</b><ul class="rb-list">${s.verify.map((d) => `<li>${esc(d)}</li>`).join("") || "<li class='sub'>—</li>"}</ul></div>
-      </div>
-    </div>`;
-
-/* The runbook: a plan spelled out — order, preflight, and for every config the exact work (commands, cwd, env,
-   inputs with fingerprints, outputs, done-when, checks, blockers). All of it comes from /api/ledger/runbook/<plan>,
-   which derives it from data/ledger.json + the recipes the job runner executes — the page and the runner cannot disagree. */
-async function renderRunbook(planId) {
-  const v = $("view-ledger");
-  let R;
-  try { R = await (await fetch(`/api/ledger/runbook/${encodeURIComponent(planId)}`)).json(); } catch (e) { R = null; }
-  if (!R || !R.ok) { v.innerHTML = `<div class="card warn">no runbook for "${esc(planId)}" <button class="mini" onclick="go('/ledger')">back to the ledger</button></div>`; return; }
-  const byId = new Map(R.steps.map((s) => [s.id, s]));
-  const idx = new Map(R.steps.map((s, i) => [s.id, i + 1]));
-  const order = __ORDER__(R, byId, idx);
-  const pre = __PRE__(R);
-  v.innerHTML = `
-    <div class="banner">📋 <b>Runbook · ${esc(R.plan.label)}</b> <button class="mini" onclick="go('/ledger')">← ledger</button><div class="sub" style="margin-top:4px">${esc(R.plan.why)}</div></div>
-    <div class="card"><h2>${R.plan.remaining} of ${R.plan.total} steps left <span class="sub">· ${minsStr(R.plan.totalWallMinutes)} wall-clock · €${R.plan.totalEur}${R.money.length ? ` (money is spent only in: ${R.money.map((m) => `${esc(m.label)} €${m.eur}`).join(", ")})` : ""}${R.plan.next ? ` · next: <b>${esc(byId.get(R.plan.next)?.label ?? R.plan.next)}</b>` : ""}</span></h2>
-      <div class="rb-order">${order}</div>
-      <div class="sub">a dashed box = runs side by side. Every step is gated: it refuses to start until each thing it is built from is done — the order above is enforced, not advisory.</div></div>
-    <div class="card"><h2>Preflight <span class="sub">— what this machine needs for the steps that are left</span></h2><div class="rb-pre">${pre}</div></div>
-    ${R.steps.map(rbCard).join("")}`;
-  document.title = `Runbook · ${R.plan.label} · Study Dashboard`;
-  if (location.hash) { const el = document.querySelector(location.hash); if (el) el.scrollIntoView({ block: "start" }); }
-}
-/* The runbook page: ONE proposal, at the level of WHAT is being worked on. Parts (preflop, postflop) each
-   say INPUT → WORK → OUTPUT → CHECK. No machines, scripts or paths here — those live under "operator detail". */
-const propPill = (x) => `<span class="st-pill ${esc(x)}">${esc(x)}</span>`;
-function partBlock(pt, k) {
-  const lines = (xs) => xs.map((x) => `<span class="ln">${esc(x)}</span>`).join("");
-  const liveLine = (w) => {
-    if (!w.live || (w.status !== "running" && w.status !== "queued" && w.status !== "failed")) return "";
-    const box = w.live.lane.startsWith("hrc-box:") ? w.live.lane.slice(8) : w.live.lane;
-    const since = w.live.started ? ` · ${durStr((Date.now() - w.live.started) / 60000)}${w.live.ended ? "" : " so far"}` : "";
-    return `<div class="live ${esc(w.live.status)}">${w.live.status === "running" ? "▶" : w.live.status === "queued" ? "…" : "✗"} ${esc(box)}${since}${w.live.phase ? ` · <span class="mono">${esc(w.live.phase)}</span>` : ""} <a href="#" onclick="go('/runbook/ledger');lgOpenLog=${w.live.job};return false">log</a></div>`;
-  };
-  const work = pt.work.map((w) => {
-    const hasData = w.data && w.data.kind !== "none";
-    const label = w.status === "done" ? "charts" : w.status === "running" ? "live" : "data";
-    const btn = hasData ? ` · <button class="mini wd-btn" data-enc="${esc(encodeURIComponent(JSON.stringify(w.data)))}" onclick="workData(this, this.dataset.enc)">${label}</button>` : "";
-    // the whole line is the click target when there is something to open (a solved/running chart, a table, a range) —
-    // click anywhere on it to expand the panel; a link/button inside still does its own thing
-    return `<span class="solve${hasData ? " has-data" : ""}"${hasData ? ` onclick="wdLineClick(event, this)" title="click to see what was solved"` : ""}><span class="k">${hasData ? '<span class="wd-caret">▸</span>' : ""}${w.n}</span><span>${esc(w.what)}<div class="sub">${esc(w.how)} · <b>${minsStr(w.minutes)}</b>${btn}</div>${liveLine(w)}<div class="wd-panel" hidden></div></span>${propPill(w.status)}</span>`;
-  }).join("");
-  return `<tr class="part"><th>PART ${k + 1}</th><td><b>${esc(pt.title)}</b> <span class="sub">· ${pt.numbers.done} of ${pt.numbers.solves} solves done · about ${minsStr(pt.numbers.wallMinutes)}${pt.numbers.eur ? ` · about €${pt.numbers.eur}` : ""}</span></td></tr>
-      <tr><th>INPUT</th><td>${lines(pt.input)}</td></tr>
-      <tr><th>HOW</th><td>${lines(pt.how || [])}</td></tr>
-      <tr><th>WORK</th><td>${work}</td></tr>
-      <tr><th>TIME</th><td>${esc(pt.numbers.text)}</td></tr>
-      <tr><th>OUTPUT</th><td><b>${esc(pt.output.name)}</b>${lines(pt.output.items)}</td></tr>
-      <tr><th>CHECK</th><td>${lines(pt.check)}</td></tr>
-      ${pt.blocked.length ? `<tr><th style="color:var(--loss)">BLOCKED</th><td class="rb-block">${lines(pt.blocked)}</td></tr>` : ""}`;
-}
-function propCard(P) {
-  const actions = P.state === "done" && !P.approved
-    ? `<span class="big go" style="opacity:.75;cursor:default">✓ Everything is done — nothing to run</span>`
-    : P.approved
-    ? (P.canRunAll
-        ? `<button class="big go" onclick="propRunAll('${esc(P.id)}', ${P.totals.eur})" title="queue the whole run; each part waits for the one before it">▶ Run everything</button>`
-        : `<span class="big go" style="opacity:.75;cursor:default" title="approving already queued every step that can run">${P.state === "running" ? "▶ Running — every step that can run is queued; blocked steps wait" : P.state === "done" ? "✓ Everything is done" : "nothing to start — everything is queued, blocked, or by hand"}</span>`) + `
-       <button class="mini" onclick="propApprove('${esc(P.id)}', false)">revoke approval</button>`
-    : `<button class="big" onclick="propApprove('${esc(P.id)}', true)">Approve this proposal</button> <span class="sub">approving starts the run: every step that can run is queued in order; blocked steps wait</span>`;
-  const activity = P.activity.length ? `<div class="sub" style="margin-top:6px">in the queue now: ${P.activity.map((a) => `<span class="chip">${esc(a.label)} ${propPill(a.status)} <a href="#" onclick="go('/proposals/ledger');lgOpenLog=${a.job};return false">log</a></span>`).join(" ")}</div>` : "";
-  const pgHref = `/proposals/progress/${encodeURIComponent(P.id)}`;
-  const pct = P.totals.solves ? Math.round(100 * P.totals.done / P.totals.solves) : 0;
-  return `<div class="card prop ${P.approved ? "approved" : ""}" id="prop-${esc(P.id)}">
-    <h2><a class="pg" href="${pgHref}" onclick="go('${pgHref}');return false" title="open the progress of this run — every box, every solve">${esc(P.run)}</a> ${P.state === "running" ? '<span class="st-pill running">RUNNING</span>' : P.state === "done" ? '<span class="st-pill done">DONE</span>' : P.state === "attention" ? '<span class="st-pill failed">NEEDS ATTENTION</span>' : P.approved ? `<span class="st-pill approved" title="approved ${esc(P.approved.at)}">approved ${esc(P.approved.at.slice(0, 10))}</span>` : '<span class="st-pill draft">proposal — not approved</span>'}
-      <span class="sub" style="margin-left:auto">${esc(P.totals.text)} <a href="${pgHref}" onclick="go('${pgHref}');return false" title="${pct}% of the solves done"><span class="pbar"><i class="${P.activity.length ? "live" : ""}" style="width:${pct}%"></i></span> progress ›</a></span></h2>
-    <table class="prop-t">
-      <tr><th>WHY</th><td>${esc(P.why)}</td></tr>
-      <tr><th>FORMAT</th><td>${esc(P.format)}</td></tr>
-      ${P.parts.map(partBlock).join("")}
-      <tr><th>RUN</th><td><div class="steps">${actions}</div>${activity}</td></tr>
-    </table>
-  </div>`;
-}
-function renderProposalPage() {
-  const v = $("view-ledger"), L = LG;
-  setTimeout(wdReopen, 0);
-  v.innerHTML = `${(L.proposals || []).map(propCard).join("") || '<div class="card sub">no proposal in the ledger</div>'}
-    <div class="sub" style="margin:10px 2px">the how, if you ever need it: <a href="/proposals/detail" onclick="go('/proposals/detail');return false">operator detail</a> (every command, input hash and output path, per step) · <a href="/proposals/ledger" onclick="go('/proposals/ledger');return false">the tables underneath</a> (formats, configs, jobs)</div>`;
-}
-/* The progress page: ONE proposal while it runs — per part, per solve config: how many units are done, what the
-   job is on, and underneath the live detail: every Hetzner box with its boards (done / locking / solving), the
-   HRC Runner's queue rows, the tail of a script's log. Polls every 5 s while anything is live. */
-let pgTimer = null;
-const ago = (ms) => { if (!ms) return ""; const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; };
-const durS = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
-function pgBox(b) {
-  const pct = b.total ? Math.round(100 * b.done / b.total) : 0;
-  const st = !b.reachable ? `<span class="st-pill failed">unreachable</span>` : b.noRuns ? `<span class="st-pill queued">provisioning</span>` : b.allDone ? `<span class="st-pill done">all done</span>` : b.current ? `<span class="st-pill running">solving</span>` : `<span class="st-pill queued">idle</span>`;
-  const cur = b.current ? `<div class="cur">on <b>${esc(b.current.board)}</b> <span class="sub">${esc(b.current.family.replace(/_/g, " "))}</span> — ${esc(b.current.phase)}${b.current.elapsedS ? ` for ${durS(b.current.elapsedS)}` : ""}</div>` : b.allDone ? `<div class="cur sub">finished its shard — waiting for the archive to R2 and the delete</div>` : "";
-  const dots = b.boards.length ? `<div class="pg-dots">${b.boards.map((x) => `<span class="${esc(x.state)}" title="${esc(x.family)} ${esc(x.board)} — ${esc(x.state)}"></span>`).join("")}</div>` : "";
-  return `<div class="pg-box"><h3>${esc(b.name)} ${st}<span class="sub">${esc(b.ip)}</span></h3>
-    <div><b>${b.done}</b> of <b>${b.total}</b> flops locked <span class="pbar" style="width:120px;margin-left:8px"><i class="${b.current ? "live" : ""}" style="width:${pct}%"></i></span></div>
-    ${cur}${dots}
-    ${b.error ? `<div class="sub" style="color:var(--loss);margin-top:4px">${esc(b.error)}</div>` : ""}
-    ${b.load ? `<div class="sub" style="margin-top:4px">load ${esc(b.load)}${b.mem ? ` · mem ${esc(b.mem)}` : ""}</div>` : ""}
-    ${b.lastLines.length ? `<div class="pg-log">${esc(b.lastLines.join("\n"))}</div>` : ""}</div>`;
-}
-function pgFleet(f) {
-  if (!f.hasIps) return `<div class="sub" style="margin-top:6px">no boxes yet — they appear here once the fleet step has created them</div>`;
-  const when = f.at ? `boxes read ${ago(f.at)} ago${f.polling ? " · reading again…" : ""}` : "reading the boxes over ssh…";
-  return `<div class="sub" style="margin-top:6px">${f.boxes.length} box${f.boxes.length === 1 ? "" : "es"} · ${f.done} of ${f.total} flops locked on them · ${esc(when)}</div>
-    <div class="pg-boxes">${f.boxes.map(pgBox).join("") || '<div class="sub">waiting for the first read…</div>'}</div>`;
-}
-function pgHrc(h) {
-  if (!h.exists) return `<div class="sub" style="margin-top:6px">no HRC Runner queue written yet — it appears here once the plan step has run</div>`;
-  const rows = h.rows.map((r) => `<tr><td>${propPill(r.status)}</td><td>${esc(r.id)}</td><td class="sub">${esc(r.note || "")}${r.at ? ` · ${esc(r.at)}` : ""}</td></tr>`).join("");
-  return `<div class="sub" style="margin-top:6px">HRC Runner: ${h.done} of ${h.total} queue rows done${h.current ? ` · running <b>${esc(h.current.id)}</b>` : ""}${h.runnerLogAt ? ` · runner log written ${ago(h.runnerLogAt)} ago` : ""}</div>
-    <table class="pg-rows">${rows}</table>
-    ${h.runnerLog.length ? `<div class="pg-log">${esc(h.runnerLog.join("\n"))}</div>` : ""}`;
-}
-function pgConfig(c) {
-  const pct = c.units.total ? Math.round(100 * c.units.done / c.units.total) : 0;
-  const j = c.job;
-  const jobLine = j ? `<div class="sub" style="margin-top:4px">job #${j.id} ${propPill(j.status)}${j.status === "running" && j.stepLabel != null ? ` · step ${j.step + 1} of ${j.steps}: <b>${esc(j.stepLabel)}</b> for ${ago(j.stepStarted)}` : ""}${j.status === "running" && j.started ? ` · running ${ago(j.started)}` : j.status === "queued" && j.note ? ` · ${esc(j.note)}` : j.ended ? ` · ended ${fmtT(j.ended)}${j.exitCode ? ` (exit ${j.exitCode})` : ""}` : ""} <a href="#" onclick="go('/proposals/ledger');lgOpenLog=${j.id};return false">log</a></div>` : "";
-  const unitTxt = c.units.total === 1 && c.units.unit === "step" ? (c.units.done ? "done" : c.effective) : `${c.units.done} of ${c.units.total} ${c.units.unit}${c.units.note ? ` · ${c.units.note}` : ""}`;
-  return `<div class="card pg-card ${c.live ? "live" : c.effective === "done" ? "done" : c.job?.status === "failed" ? "failed" : ""}">
-    <div class="pg-row"><div><b>${esc(c.label)}</b> ${propPill(c.live ? "running" : c.effective)} <span class="sub">· ${esc(c.runner === "fleet" ? "Hetzner boxes" : c.runner === "hrc-zenbook" ? "HRC on this machine" : c.runner === "scripts" ? "calculation on this machine" : "by hand")}</span></div>
-      <div><span class="sub">${esc(unitTxt)}</span> <span class="pbar"><i class="${c.live ? "live" : ""}" style="width:${pct}%"></i></span></div></div>
-    ${jobLine}
-    ${c.fleet ? pgFleet(c.fleet) : ""}
-    ${c.hrc ? pgHrc(c.hrc) : ""}
-    ${j && j.logTail && j.logTail.length ? `<div class="pg-log">${esc(j.logTail.join("\n"))}</div>` : ""}
-  </div>`;
-}
-async function renderProgress(id) {
-  clearTimeout(pgTimer); clearTimeout(lgJobTimer);
-  const v = $("view-ledger");
-  let R = null;
-  try { R = await (await fetch(`/api/ledger/proposals/${encodeURIComponent(id)}/progress`)).json(); } catch (e) { R = null; }
-  if (!R || !R.ok) { v.innerHTML = `<div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button></div><div class="card warn">no progress for "${esc(id)}"</div>`; return; }
-  const pct = R.totals.total ? Math.round(100 * R.totals.done / R.totals.total) : 0;
-  v.innerHTML = `<div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button> progress — what this run is doing right now · ${R.live ? "live, refreshes every 5 s" : "nothing running — refreshes every 30 s"}</div>
-    <div class="card prop ${R.live ? "approved" : ""}"><h2>${esc(R.run)} ${R.live ? propPill("running") : ""}<span class="sub" style="margin-left:auto">${R.totals.done} of ${R.totals.total} solves done · ${pct}%</span></h2>
-      <span class="pbar wide"><i class="${R.live ? "live" : ""}" style="width:${pct}%"></i></span></div>
-    ${R.parts.map((p, k) => `<h2 class="sub" style="text-transform:uppercase;letter-spacing:.6px;margin:12px 0 4px">Part ${k + 1} · ${esc(p.title)}</h2>${p.configs.map(pgConfig).join("")}`).join("")}`;
-  document.title = `Progress · ${R.run} · Study Dashboard`;
-  pgTimer = setTimeout(() => { if (PATH.view === "ledger" && PATH.pane === "progress" && PATH.id === id) whenVisible("ledger", () => renderProgress(id)); }, R.live ? 5000 : 30000);
-}
-function renderOperatorDetail() {
-  const v = $("view-ledger"), L = LG;
-  const cards = (L.proposals || []).flatMap((P) => P.details).map((d, i) => rbCard(d, i)).join("");
-  v.innerHTML = `<div class="sub" style="margin-bottom:8px"><button class="mini" onclick="go('/proposals')">← the proposals</button> operator detail — the how, per step, derived from the same ledger the proposal is</div>${cards}`;
-}
-/* the data behind a WORK line: chart nodes, ranges, tables — fetched on demand, shown inline under the line */
-/* data panels stay open across the 4-second re-render while a run is live: opened panels are remembered by their
-   encoded descriptor and re-fetched after each render; the same for chart views opened inside a table */
-const wdOpen = new Set(), wcOpen = new Set(), wdCache = new Map();
-function wdReopen() {
-  document.querySelectorAll(".wd-btn").forEach((b) => { if (wdOpen.has(b.dataset.enc)) workData(b, b.dataset.enc, true); });
-}
-/* click anywhere on a WORK line to open its data panel — unless the click landed on a link/button inside it */
-function wdLineClick(ev, span) {
-  if (ev.target.closest("a, button")) return;
-  const btn = span.querySelector(".wd-btn"); if (btn) workData(btn, btn.dataset.enc);
-}
-async function viewChart(btn, id, keep) {
-  const tr = btn.closest("tr"); let row = tr.nextElementSibling;
-  if (!(row && row.classList.contains("wc-row"))) { row = document.createElement("tr"); row.className = "wc-row"; row.innerHTML = `<td colspan="${tr.children.length}"></td>`; tr.after(row); }
-  if (!keep && !row.hidden && row.firstChild.innerHTML) { row.hidden = true; row.firstChild.innerHTML = ""; btn.textContent = "view chart"; wcOpen.delete(id); return; }
-  wcOpen.add(id); row.hidden = false; row.firstChild.innerHTML = '<div class="sub">fetching the chart…</div>'; btn.textContent = "…";
-  let j; try { j = await (await fetch(`/api/ledger/work-data?d=${encodeURIComponent(JSON.stringify({ kind: "chart", id, seats: 3 }))}`)).json(); } catch (e) { j = { ok: false, error: String(e) }; }
-  btn.textContent = "hide chart";
-  row.firstChild.innerHTML = j.ok ? `<div class="wd-title">${esc(j.title)}</div><div class="wd-grid">${wdSections(j.sections)}</div>` : `<div class="warn">${esc(j.error ?? "no data")}</div>`;
-}
-async function workData(btn, enc, keep) {
-  const panel = btn.closest("span").querySelector(".wd-panel");
-  if (!keep && !panel.hidden) { panel.hidden = true; btn.textContent = btn.dataset.label || "data"; wdOpen.delete(enc); return; }
-  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
-  wdOpen.add(enc);
-  // after a live re-render show the last content at once and refresh it in the background — no flashing "fetching…"
-  if (panel.hidden) { panel.hidden = false; panel.innerHTML = wdCache.get(enc) || '<div class="sub">fetching…</div>'; }
-  btn.textContent = keep && wdCache.has(enc) ? "hide" : "…";
-  let j; try { j = await (await fetch(`/api/ledger/work-data?d=${enc}`)).json(); } catch (e) { j = { ok: false, error: String(e) }; }
-  btn.textContent = "hide";
-  if (!j.ok) { if (!wdCache.has(enc)) panel.innerHTML = `<div class="warn">${esc(j.error ?? "no data")}</div>`; return; }
-  const html = `<div class="wd-title">${esc(j.title)}</div><div class="wd-grid">${wdSections(j.sections)}</div>`;
-  wdCache.set(enc, html);
-  if (!wdOpen.has(enc)) return;   // closed while fetching
-  panel.innerHTML = html;
-  // chart views that were open inside this panel before the re-render
-  panel.querySelectorAll("button.wc-btn").forEach((b) => { if (wcOpen.has(b.dataset.id)) viewChart(b, b.dataset.id, true); });
-}
-function wdSections(sections) {
-  const secs = sections.map((sec) => {
-    let body = "";
-    if (sec.node) {
-      const cls = {};
-      for (const [hand, acts] of Object.entries(sec.node.cells)) cls[hand] = { w: COMBOS(hand), acts: sec.node.actions.map((a) => (COMBOS(hand) * (acts[a] ?? 0)) / 100) };
-      body = classGrid(cls, sec.node.actions, null, { flat: true, wmax: 1e9, small: true, foot: "hover a cell for its mix" });
-    } else if (sec.range) {
-      const cls = {}; let mass = 0;
-      for (const [hand, w] of Object.entries(sec.range)) { cls[hand] = { w: COMBOS(hand) * w, acts: [COMBOS(hand) * w] }; mass += COMBOS(hand) * w; }
-      body = classGrid(cls, ["in range"], null, { single: "var(--info)", small: true, foot: `${(100 * mass / 1326).toFixed(1)}% of hands · fill height = weight` });
-    } else if (sec.table) {
-      const T = sec.table, hasView = T.chart != null;
-      const stCls = (s) => s === "done" ? "done" : String(s).startsWith("solving") ? "running" : "queued";
-      body = `<div class="scroll"><table><thead><tr>${T.cols.map((c) => `<th>${esc(String(c))}</th>`).join("")}${hasView ? "<th></th>" : ""}</tr></thead><tbody>${T.rows.map((r) => `<tr class="src-static">${r.map((v, i) => `<td>${i === T.status ? `<span class="st-pill ${stCls(v)}">${esc(String(v))}</span>` : esc(String(v))}</td>`).join("")}${hasView ? `<td>${r[T.status] === "done" ? `<button class="mini wc-btn" data-id="${esc(String(r[T.chart]))}" onclick="viewChart(this, this.dataset.id)">view chart</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
-    } else if (sec.list) {
-      body = `<ul class="rb-list">${sec.list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
-    }
-    return `<div class="wd-sec${sec.table ? " wide" : ""}"><b>${esc(sec.title)}</b>${sec.note ? `<div class="sub">${esc(sec.note)}</div>` : ""}${body}</div>`;
-  }).join("");
-  return secs;
-}
-async function propApprove(id, on) {
-  if (!on && !confirm("Revoke the approval? Nothing new can start until it is approved again.")) return;
-  const r = await (await fetch(`/api/ledger/proposals/${encodeURIComponent(id)}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved: on }) })).json();
-  if (!r.ok) alert(r.error); loadLedger();
-}
-async function propRunAll(id, eur) {
-  if (!confirm(`Queue every step of this run, in order? Each step waits for the one before it.${eur ? ` About €${eur} will be spent on Hetzner boxes when the fleet step starts.` : ""}`)) return;
-  const r = await (await fetch(`/api/ledger/proposals/${encodeURIComponent(id)}/run`, { method: "POST" })).json();
-  if (!r.ok) alert(r.error);
-  else {
-    const q = r.queued.filter((x) => x.job); if (q.length) lgOpenLog = q[0].job;
-    const sk = r.queued.filter((x) => !x.job);
-    const NL = String.fromCharCode(10);
-    alert(`${q.length ? `queued ${q.length} step(s): ${q.map((x) => x.config).join(", ")}` : "nothing new to queue"}${sk.length ? NL + NL + "not started:" + NL + sk.map((x) => `  ${x.config} — ${x.skipped}`).join(NL) : ""}`);
-  }
-  loadLedger();
-}
-async function lgRun(id, eur) {
-  if (eur && !confirm(`This step spends money: about €${eur} on Hetzner boxes (deleted automatically when it finishes). Start it?`)) return;
-  const r = await (await fetch("/api/ledger/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: id }) })).json();
-  if (!r.ok) alert(r.error); else lgOpenLog = r.job.id;
-  loadLedger();
-}
-async function lgMark(id, status) {
-  if (!confirm(`Mark "${id}" as ${status}?`)) return;
-  await fetch(`/api/ledger/configs/${encodeURIComponent(id)}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
-  loadLedger();
-}
-async function lgCancel(id) { await fetch(`/api/ledger/jobs/${id}/cancel`, { method: "POST" }); loadLedger(); }
-async function lgLog(id, quiet) {
-  lgOpenLog = id;
-  const r = await (await fetch(`/api/ledger/jobs/${id}/log?lines=300`)).json();
-  const host = $("lg-log"); if (!host) return;
-  host.innerHTML = `<div class="sub">job #${id} · ${esc(r.job?.config ?? "")} · ${esc(r.job?.status ?? "")} <button class="mini" onclick="lgOpenLog=null;$('lg-log').innerHTML=''">close</button></div><div class="lg-log">${esc(r.log || "(empty)")}</div>`;
-  if (!quiet) host.scrollIntoView({ behavior: "smooth", block: "center" });
-  const el = host.querySelector(".lg-log"); if (el) el.scrollTop = el.scrollHeight;
 }
 
 /* ================= Sessions (declared by the wrapper's setup page) ================= */
@@ -4074,83 +3711,6 @@ async function loadProfiles() {
   });
 }
 
-/* ================= Tasks (the hand-off board) =================
-   Every piece of work carries the brief needed to pick it up cold — goal, where it is
-   now, the exact next action, done-when, what is waiting on Brady — rewritten every
-   time work on it stops; plus a dated log and links to the evidence. */
-const TASK_ST = { active: ["running", "in progress"], ready: ["planned", "ready"], waiting: ["stale", "waiting on you"], idea: ["queued", "idea"], done: ["done", "done"] };
-let TASK_FILTER = "open";
-async function loadTasks() {
-  const v = $("view-tasks");
-  if (!v.dataset.loaded) v.innerHTML = '<div class="card sub">loading tasks…</div>';
-  let j;
-  try { j = await (await fetch("/api/dashboard/tasks")).json(); } catch { v.innerHTML = '<div class="card warn">tasks unavailable</div>'; return; }
-  if (!j.ok) { v.innerHTML = '<div class="card warn">tasks unavailable</div>'; return; }
-  v.dataset.loaded = "1";
-  const all = j.tasks || [];
-  const open = all.filter((t) => t.status !== "done");
-  const needs = open.filter((t) => t.needsYou);
-  const shown = TASK_FILTER === "open" ? open : TASK_FILTER === "all" ? all : all.filter((t) => t.status === TASK_FILTER);
-  const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
-  const pill = (st) => `<span class="st-pill ${(TASK_ST[st] || ["queued"])[0]}">${(TASK_ST[st] || [st, st])[1]}</span>`;
-  const row = (k, val, cls = "") => val ? `<div class="k">${k}</div><div class="v ${cls}">${esc(val)}</div>` : "";
-  const card = (t, i) => `<div class="card task ${t.needsYou && t.status !== "done" ? "task-needs" : ""}" data-task="${esc(t.id)}">
-      <div class="task-head"><span class="n">#${i + 1}</span><h2>${esc(t.title)}</h2>${pill(t.status)}<span class="sub">updated ${ago(t.updatedAt)}</span></div>
-      <div class="task-grid">
-        ${row("goal", t.goal)}
-        ${row("now", t.brief)}
-        ${row("next", t.next, "next")}
-        ${row("done when", t.doneWhen)}
-        ${t.needsYou && t.status !== "done" ? `<div class="k" style="color:var(--ev)">needs you</div><div class="v" style="color:var(--ev)">${esc(t.needsYou)}</div>` : ""}
-        ${t.links?.length ? `<div class="k">links</div><div class="v task-links">${t.links.map((l) => `<a href="${esc(l.href)}" ${/^https?:/.test(l.href) ? 'target="_blank" rel="noopener"' : `onclick="if(!/^\\/(replay|table|state-tester)/.test('${esc(l.href)}')){go('${esc(l.href)}');return false}"`}>${esc(l.label)}</a>`).join("")}</div>` : ""}
-      </div>
-      <div class="task-ctl">
-        <select data-st="${esc(t.id)}">${Object.keys(TASK_ST).map((k) => `<option value="${k}" ${t.status === k ? "selected" : ""}>${TASK_ST[k][1]}</option>`).join("")}</select>
-        <button class="mini" data-move="${esc(t.id)}" data-dir="-1" title="higher priority">↑</button><button class="mini" data-move="${esc(t.id)}" data-dir="1" title="lower priority">↓</button>
-        <button class="mini" data-edit="${esc(t.id)}">edit brief</button>
-        <input type="text" data-note="${esc(t.id)}" placeholder="add a dated note…" style="flex:1;min-width:220px">
-        <button class="mini" data-addnote="${esc(t.id)}">note</button>
-      </div>
-      <div data-editor="${esc(t.id)}" hidden style="margin-top:10px;display:grid;gap:8px">
-        <label class="sub">now (the resume brief)<textarea data-f="brief">${esc(t.brief)}</textarea></label>
-        <label class="sub">next action<textarea data-f="next" style="min-height:44px">${esc(t.next)}</textarea></label>
-        <label class="sub">done when<textarea data-f="doneWhen" style="min-height:44px">${esc(t.doneWhen)}</textarea></label>
-        <label class="sub">needs you (blank = nothing)<textarea data-f="needsYou" style="min-height:36px">${esc(t.needsYou || "")}</textarea></label>
-        <div><button class="mini on" data-save="${esc(t.id)}">save brief</button> <button class="mini" data-cancel="${esc(t.id)}">cancel</button></div>
-      </div>
-      <details style="margin-top:8px"><summary>log · ${t.log.length}</summary><ul class="task-log" style="margin-top:6px">${t.log.slice().reverse().map((l) => `<li><span class="t">${fmtT(l.at)}</span><span>${esc(l.note)}</span></li>`).join("")}</ul></details>
-    </div>`;
-  v.innerHTML = `
-    <div class="banner">📋 <b>The hand-off board.</b> Each task carries the brief needed to pick it up cold: where it is <b>now</b>, the exact <b>next</b> action, and what only you can do. Say "pick up <i>task</i>" and the brief is read back before anything is touched. Order is priority — yours to set.</div>
-    ${needs.length ? `<div class="card task-needs"><h2>Waiting on you</h2>${needs.map((t) => `<div class="pf-row"><span class="dot warn"></span><span><b>${esc(t.title)}</b> — ${esc(t.needsYou)}</span><span class="sub">#${all.indexOf(t) + 1}</span></div>`).join("")}</div>` : ""}
-    <div class="ig-chips"><span class="lab">show</span>${[["open", "open"], ["active", "in progress"], ["waiting", "waiting on you"], ["ready", "ready"], ["idea", "ideas"], ["done", "done"], ["all", "all"]].map(([k, l]) => `<button class="ig-chip" data-tf="${k}" aria-pressed="${TASK_FILTER === k}">${l}</button>`).join("")}
-      <span style="flex:1"></span><button class="mini" id="task-new">+ new task</button></div>
-    ${shown.length ? shown.map((t) => card(t, all.indexOf(t))).join("") : '<div class="card sub">nothing here</div>'}`;
-  const post = async (path, body) => { try { return await (await fetch(`/api/dashboard/tasks${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); } catch { return { ok: false, error: "the API did not answer" }; } };
-  const refresh = () => { v.dataset.loaded = ""; loadTasks(); };
-  v.querySelectorAll("[data-tf]").forEach((b) => b.onclick = () => { TASK_FILTER = b.dataset.tf; refresh(); });
-  v.querySelectorAll("select[data-st]").forEach((sl) => sl.onchange = async () => { const r = await post(`/${encodeURIComponent(sl.dataset.st)}`, { status: sl.value, note: `status → ${TASK_ST[sl.value][1]}` }); if (!r.ok) alert(r.error); refresh(); });
-  v.querySelectorAll("button[data-move]").forEach((b) => b.onclick = async () => {
-    const ids = all.map((t) => t.id), i = ids.indexOf(b.dataset.move), k = i + Number(b.dataset.dir);
-    if (k < 0 || k >= ids.length) return;
-    [ids[i], ids[k]] = [ids[k], ids[i]];
-    await post("/reorder", { ids }); refresh();
-  });
-  v.querySelectorAll("button[data-edit]").forEach((b) => b.onclick = () => { const ed = v.querySelector(`[data-editor="${CSS.escape(b.dataset.edit)}"]`); ed.hidden = !ed.hidden; });
-  v.querySelectorAll("button[data-cancel]").forEach((b) => b.onclick = () => { v.querySelector(`[data-editor="${CSS.escape(b.dataset.cancel)}"]`).hidden = true; });
-  v.querySelectorAll("button[data-save]").forEach((b) => b.onclick = async () => {
-    const ed = v.querySelector(`[data-editor="${CSS.escape(b.dataset.save)}"]`);
-    const body = {}; ed.querySelectorAll("textarea[data-f]").forEach((ta) => body[ta.dataset.f] = ta.value.trim()); if (!body.needsYou) body.needsYou = null;
-    const r = await post(`/${encodeURIComponent(b.dataset.save)}`, body); if (!r.ok) alert(r.error); refresh();
-  });
-  v.querySelectorAll("button[data-addnote]").forEach((b) => b.onclick = async () => {
-    const inp = v.querySelector(`input[data-note="${CSS.escape(b.dataset.addnote)}"]`); const note = inp.value.trim(); if (!note) return;
-    const r = await post(`/${encodeURIComponent(b.dataset.addnote)}`, { note }); if (!r.ok) alert(r.error); refresh();
-  });
-  v.querySelectorAll("input[data-note]").forEach((inp) => inp.onkeydown = (e) => { if (e.key === "Enter") v.querySelector(`button[data-addnote="${CSS.escape(inp.dataset.note)}"]`).click(); });
-  $("task-new").onclick = async () => { const title = prompt("Task title"); if (!title) return; const r = await post("", { title, status: "idea" }); if (!r.ok) alert(r.error); refresh(); };
-}
-
 /* ================= Sources (mission control) ================= */
 let SRC = null, srcPane = "strategies", srcLoaded = {};
 const fmtIso = (iso) => { const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
@@ -4207,14 +3767,12 @@ function renderSources() {
       <button data-pane="matrix" role="tab">Strategy matrix</button>
       <button data-pane="grading" role="tab">Live grading <span class="n">${tierCount} answers</span></button>
       <button data-pane="approx" role="tab">Approximations</button>
-      <button data-pane="roadmap" role="tab">Roadmap</button>
     </div>
     <section class="pane" id="src-strategies"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-pieces"></section>
     <section class="pane" id="src-matrix"><div class="card sub">loading…</div></section>
     <section class="pane" id="src-grading"><div class="card sub">loading…</div></section>
-    <section class="pane" id="src-approx"><div class="card sub">loading…</div></section>
-    <section class="pane" id="src-roadmap"><div class="card sub">loading…</div></section>`;
+    <section class="pane" id="src-approx"><div class="card sub">loading…</div></section>`;
   renderRegistry();
   v.querySelectorAll(".sub-tabs button").forEach((b) => b.onclick = () => go(`/sources/${b.dataset.pane}`));
   showSrcPane(srcPane, PATH.id);
@@ -4231,7 +3789,6 @@ function showSrcPane(id, cardId) {
   if (id === "matrix" && !srcLoaded.matrix) loadMatrix();
   if (id === "grading" && !srcLoaded.grading) loadGrading();
   if (id === "approx" && !srcLoaded.approx) loadApprox();
-  if (id === "roadmap" && !srcLoaded.roadmap) loadRoadmap();
 }
 
 /* ================================= Sources → Strategies ================================= */
@@ -4348,79 +3905,8 @@ function coverageCards(s) {
         <td>${badge(r.state)}</td><td><a href="#cov-${esc(r.id)}" onclick="${jump(esc(r.id))}">${esc(r.spot)}</a></td><td class="by">${esc(r.source)}</td></tr>`).join("")).join("")}
       </tbody></table>
     </div>`;
-  // THE WORK QUEUE: the strategy's open miss-queue rows, one line per chart that would fix them (services/strategyQueue.ts)
-  const q = cov.queue || { groups: [], solves: [], excludedSynthetic: 0 };
-  const ago = (t) => { const h = (Date.now() - t) / 3.6e6; return h < 24 ? `${Math.max(1, Math.round(h))}h ago` : `${Math.round(h / 24)}d ago`; };
-  const rollup = {};
-  for (const g of q.groups) { const r = (rollup[g.change] ??= { charts: 0, hits: 0, pri: 0, flight: 0 }); r.charts++; r.hits += g.hits; r.pri += g.priority; if (g.inFlight) r.flight++; }
-  const QSHOW = 20;
-  const qrow = (g) => `<tr class="${g.inFlight ? "flight" : ""}">
-      <td class="pri">${g.priority}</td>
-      <td><div class="chart">${esc(g.chart)}</div><div class="muted">${esc(g.change)}${g.inFlight ? " · <b>being solved</b>" : ""}</div></td>
-      <td class="num"><b>${g.hits}</b><div class="muted">${ago(g.lastSeen)}</div></td>
-      <td><span class="cov-sev s${g.severity}">S${g.severity}</span> ${esc(g.distance)}
-        <div class="muted">${g.evCost ? `EV: ${esc(g.evCost)}` : "EV cost: not measured"}</div></td>
-      <td class="muted">${g.details.slice(0, 3).map(esc).join("<br>")}${g.details.length > 3 ? `<br>+${g.details.length - 3} more` : ""}</td></tr>`;
-  const queueCard = `
-    <div class="card cov" id="cov-queue">
-      <div class="cov-head"><h3>Work queue</h3><span class="cov-kicker">every approximation real hands hit, grouped by the chart that would remove it · from the miss queue, ${q.excludedSynthetic} stress-test hits left out</span></div>
-      <span class="cov-label" style="margin-top:10px">on the boxes now — live, with estimated finish</span>
-      <div class="muted" style="font-size:12.5px;margin-bottom:6px">Ignition NL200 6-max charts always run first on every box (the box queue enforces it). Estimates come from measured wall times; a tree shape we have not timed yet says so.</div>
-      ${(q.boxes || []).map((b) => `<div class="cov-box" style="background:var(--surface2);border-left:3px solid ${b.nowSolving ? "var(--info)" : "var(--line)"};max-width:none">
-        <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
-          <b style="font-family:var(--font-head);font-size:15px">${esc(b.box)}</b>
-          ${b.nowSolving
-            ? `<span class="cov-state" style="background:var(--info-soft);color:var(--info)">solving now</span>
-               <span class="chart" style="font-family:var(--font-mono);font-size:12.5px">${esc(b.nowSolving.chart)}</span>
-               <span class="muted">${esc(b.nowSolving.phase || "")} · running ${fmtDur(b.nowSolving.sinceMin / 60)} · done ≈ <b>${fmtAt(b.nowSolving.finishAt)}</b></span>`
-            : `<span class="cov-state" style="background:var(--surface3);color:var(--muted)">${b.queue.length ? "starting / between charts" : "idle"}</span>`}
-          <span class="muted" style="margin-left:auto">box free ≈ <b>${b.queue.length ? fmtAt(b.freeAt) : "now"}</b></span>
-        </div>
-        ${b.queue.length ? `<table class="cov-q" style="margin-top:6px"><tbody>${b.queue.map((it, i) => `<tr>
-          <td style="width:28px" class="muted">${i + 1}.</td>
-          <td><b>${esc(it.planDir === "patch-live" ? (it.id || "patch") : it.planDir)}${it.shard ? ` · shard ${esc(it.shard)}` : ""}</b>
-            <span class="cov-sev s${it.tier === 0 ? 3 : it.tier === 1 ? 2 : 1}" title="${esc(it.tierLabel || "")}">T${it.tier ?? 2}</span>
-            <div class="muted">${esc(it.serves || it.note || "")}</div></td>
-          <td style="width:110px"><span class="cov-state ${it.status === "running" ? "approx" : "exact"}" style="${it.status === "running" ? "" : "background:var(--surface3);color:var(--muted)"}">${esc(it.status)}</span></td>
-          <td class="num" style="width:80px"><b>${it.done}/${it.charts}</b><div class="muted">charts</div></td>
-          <td class="num" style="width:150px">${fmtDur(it.hoursLeft)} left<div class="muted">done ≈ ${fmtAt(it.finishAt)}</div></td></tr>`).join("")}</tbody></table>` : ""}
-      </div>`).join("")}
-      ${(q.waiting || []).length ? `<span class="cov-label" style="margin-top:14px">waiting for the next free box</span>
-        ${(q.waiting || []).map((w) => `<div class="cov-box" style="background:var(--surface2);max-width:none">
-          <span class="cov-sev s${w.tier === 0 ? 3 : w.tier === 1 ? 2 : 1}">T${w.tier}</span> <b>${esc(w.label)}</b> — ${w.charts} chart${w.charts === 1 ? "" : "s"}${w.limp ? ` (${w.limp} limp trees: Windows boxes only)` : ""} · ≈${fmtDur(w.hours)} of box time
-          <div class="muted" style="font-size:12.5px;margin-top:4px">next: ${w.next.map(esc).join(" · ")}${w.charts > w.next.length ? " …" : ""}</div></div>`).join("")}
-        <div class="muted" style="font-size:12.5px;margin:4px 0 0">Tiers: T0 fixes a spot that gets no answer · T1 removes an approximation a live session hit (queued automatically within a minute, two charts per state: capped at 100bb and exact to 5bb) · T2 other 6-max work. A free box always takes the lowest tier, most-hit chart first.</div>` : ""}
-      <span class="cov-label" style="margin-top:18px">by kind of work</span>
-      <table class="cov-q"><thead><tr><th>work</th><th class="num">charts</th><th class="num">real hits</th><th class="num">priority</th></tr></thead><tbody>
-      ${Object.entries(rollup).sort((a, b) => b[1].pri - a[1].pri).map(([k, r]) => `<tr><td>${esc(k)}${r.flight ? ` <span class="muted">(${r.flight} being solved)</span>` : ""}</td><td class="num">${r.charts}</td><td class="num">${r.hits}</td><td class="num pri" style="font-size:14px">${r.pri}</td></tr>`).join("")}
-      </tbody></table>
-      <span class="cov-label" style="margin-top:18px">by chart — highest priority first</span>
-      <div class="muted" style="font-size:12.5px;margin-bottom:4px">Priority = real hits × severity. Severity: S3 a big input gap (a ≤50bb short stack ignored), S2 a real gap (a size 1.5x+ off, a ≥15bb stack gap, a player folded by the line fit, a stack past 150bb), S1 a small one. EV is shown only where it was measured — today that is the size snap alone.</div>
-      <table class="cov-q"><thead><tr><th style="width:60px">priority</th><th style="width:30%">chart needed</th><th class="num" style="width:80px">hits</th><th>how far off</th><th style="width:22%">states seen</th></tr></thead>
-        <tbody id="cov-q-body">${q.groups.slice(0, QSHOW).map(qrow).join("")}</tbody></table>
-      ${q.groups.length > QSHOW ? `<button class="mini" style="margin-top:10px" onclick="document.getElementById('cov-q-body').innerHTML=window.__covQ.map(window.__covQRow).join('');this.remove()">show all ${q.groups.length}</button>` : ""}
-    </div>`;
-  window.__covQ = q.groups; window.__covQRow = qrow;
-  // RECENTLY SOLVED: every chart of the strategy solved in the last month, from the solve records (never the catalog
-  // file dates — the 2026-09-22 re-export rewrote them all)
-  const recent = q.recent || [];
-  const RSHOW = 25;
-  const rrow = (x) => `<tr><td class="muted" style="white-space:nowrap">${fmtAt(x.at)}<div>${new Date(x.at).toLocaleDateString([], { month: "short", day: "numeric" })}</div></td>
-      <td><div class="chart">${esc(x.id)}</div><div class="muted">${esc(x.pass)}${x.when === "landed" ? " · landed (no solve record)" : ""}</div></td>
-      <td class="muted">${esc(x.box || "—")}</td>
-      <td>${x.live ? '<span class="cov-state exact">used live</span>' : x.inCatalog ? '<span class="cov-state approx" title="in the chart catalog, but the live picker does not reach this chart family yet">not wired yet</span>' : '<span class="cov-state" style="background:var(--surface3);color:var(--muted)">landed, not in catalog</span>'}</td></tr>`;
-  const recentCard = `
-    <div class="card cov" id="cov-recent">
-      <div class="cov-head"><h3>Recently solved</h3><span class="cov-kicker">${recent.length} chart solve${recent.length === 1 ? "" : "s"} in the last month · newest first · "used live" = the chart picker reaches it today</span></div>
-      <table class="cov-q"><thead><tr><th style="width:110px">solved</th><th>chart</th><th style="width:80px">box</th><th style="width:150px">status</th></tr></thead>
-        <tbody id="cov-r-body">${recent.slice(0, RSHOW).map(rrow).join("")}</tbody></table>
-      ${recent.length > RSHOW ? `<button class="mini" style="margin-top:10px" onclick="document.getElementById('cov-r-body').innerHTML=window.__covR.map(window.__covRRow).join('');this.remove()">show all ${recent.length}</button>` : ""}
-    </div>`;
-  window.__covR = recent; window.__covRRow = rrow;
   return `
     ${index}
-    ${queueCard}
-    ${recentCard}
     ${cov.sections.map(section).join("")}
     <div class="card cov">
       <div class="cov-head"><h3>Holes <span class="sub" style="font-size:15px">${holes.length}</span></h3>
@@ -5400,26 +4886,6 @@ async function loadApprox() {
     ${drift}`;
 }
 
-/* ---- roadmap ---- */
-async function loadRoadmap() {
-  const el = $("src-roadmap");
-  let j;
-  try { j = await (await fetch("/api/dashboard/sources/roadmap")).json(); } catch (e) { el.innerHTML = '<div class="card warn">roadmap unavailable</div>'; return; }
-  srcLoaded.roadmap = true;
-  const st = (s) => s === "built" ? '<span class="st"><span class="dot good"></span>built</span>' : s === "partial" ? '<span class="st"><span class="dot warn"></span>flop only</span>' : '<span class="st"><span class="dot off"></span>not built</span>';
-  const gen = (g) => Object.entries(g || {}).map(([k, n]) => `<span class="chip ${k === "refit" ? "good" : k === "v2" ? "warn" : k === "unknown" ? "dim" : ""}">${esc(k)} ×${n}</span>`).join("") || "—";
-  const fam = (j.families || []).map((f) => `<tr class="src-static"><td><b>${esc(f.label)}</b><div class="sub">${esc(f.shape)}</div></td>
-      <td><span class="reach"><i class="${f.built ? "built" : ""}" style="width:${Math.round(4 * f.reachPct)}px"></i><span class="num">${f.reachPct}%</span></span></td>
-      <td>${st(f.status)}</td><td>${f.built ? `${f.boards} boards · ${gen(f.generations)}` : "—"}</td>
-      ${f.meanEvGainPerArrival != null ? evCell(f.meanEvGainPerArrival, { tag: f.upliftBb100 != null ? `${f.upliftBb100 > 0 ? "+" : ""}${f.upliftBb100} bb/100` : null }) : evCell(null, { why: f.status === "partial" ? "inside the flop number" : "no solve yet" })}
-      <td>${esc(f.whatItTakes)}${f.note ? `<div class="sub">${esc(f.note)}</div>` : ""}</td><td class="sub">${esc(f.cost)}</td></tr>`).join("");
-  const pre = (j.preflop || []).map((p) => `<tr class="src-static"><td><b>${esc(p.label)}</b></td><td>${esc(p.reach)}</td><td><span class="st"><span class="dot ${p.status}"></span>${esc(p.statusText)}</span></td><td>${esc(p.why)}</td><td>${esc(p.whatItTakes)}</td></tr>`).join("");
-  el.innerHTML = `
-    <div class="banner">🗺 Where the next bb/100 is. Reach is the share of hero's flops (or hands) each item covers, from the same corpus the matrix uses, so an unbuilt row already says what it would be worth to build.</div>
-    <div class="card"><h2>Postflop families</h2><div class="scroll"><table><thead><tr><th>family</th><th>reach</th><th>status</th><th>served</th><th class="num">edge / arrival</th><th>what it takes</th><th>cost</th></tr></thead><tbody>${fam}</tbody></table></div></div>
-    <div class="card"><h2>Preflop &amp; coverage</h2><div class="scroll"><table><thead><tr><th>item</th><th>reach</th><th>status</th><th>why it matters</th><th>what it takes</th></tr></thead><tbody>${pre}</tbody></table></div></div>`;
-}
-
 /* ================= Coverage: the chain's seventeen invariants =================
    (2026-09-27, services/chainChecks — the owner's "checker coverage list".) One row per check: the correct behaviour
    in his words (so this page IS the spec), how it is checked and what is not, its build status, and what it found over
@@ -5479,14 +4945,13 @@ function checkCoverageHtml(j) {
      /analytics        (?scope=&vs=&profile=&window=)
      /coverage         (?session=&days=) — the chain's seventeen invariants (services/chainChecks)
                                             /review                   Replay Review (embeds /replay)
-     /sources          → /sources/strategies  /sources/:pane          strategies | pieces | matrix | grading | approx | roadmap
+     /sources          → /sources/strategies  /sources/:pane          strategies | pieces | matrix | grading | approx
      /sources/pieces/:id                    one source's page   (/sources/registry/… still accepted)
      /sources/strategies/:id                one whole-hand strategy's page
    Old #hand/N links still resolve. */
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play", ledger: "tab-ledger", tasks: "tab-tasks" };
-$("tab-ledger").onclick = () => go("/proposals");
-const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "approx", "roadmap"];
+const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
+const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "approx"];
 $("tab-play").onclick = () => go("/playthrough");
 
 function parsePath() {
@@ -5503,13 +4968,12 @@ function parsePath() {
   }
   if (view === "sessions") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null, show: new URLSearchParams(location.search).get("show") || null };
   if (view === "playthrough") return { view, pane: null, id: seg[1] === "spot" && seg[2] && seg[3] ? `spot/${decodeURIComponent(seg[2])}/${seg[3]}` : seg[1] === "strategy" && seg[2] ? `strategy/${decodeURIComponent(seg[2])}` : null };
-  if (window.PLAYER_MODE && ["ledger", "runbook", "proposals", "tasks"].includes(view)) return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
-  if (view === "ledger" || view === "runbook" || view === "proposals") return { view: "ledger", pane: seg[1] || null, id: seg[2] ? decodeURIComponent(seg[2]) : null };
+  // the chart factory's pages (ledger, runbook, proposals, tasks) are the poker repo's
+  if (["ledger", "runbook", "proposals", "tasks"].includes(view)) return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
   if (view === "analytics") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, scope: q.get("scope") || "all", vs: q.get("vs") || null, profile: q.get("profile") || "all", window: q.get("window") || "all" }; }
   if (view === "coverage") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, session: q.get("session") || null, days: q.get("days") || "7" }; }
   if (view === "review") return { view, pane: null, id: null };
   if (view === "profiles") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
-  if (view === "tasks") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
 }
 function canonical(p) {
@@ -5517,9 +4981,7 @@ function canonical(p) {
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
   if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
   if (p.view === "sessions") return p.id ? `/sessions/${encodeURIComponent(p.id)}${p.show ? `?show=${encodeURIComponent(p.show)}` : ""}` : "/sessions";
-  if (p.view === "tasks") return p.id ? `/tasks/${encodeURIComponent(p.id)}` : "/tasks";
   if (p.view === "playthrough") return p.id ? `/playthrough/${p.id}` : "/playthrough";
-  if (p.view === "ledger") return p.pane ? `/proposals/${p.pane}${p.id ? `/${encodeURIComponent(p.id)}` : ""}` : "/proposals";
   if (p.view === "analytics") return "/analytics" + anQuery(p.scope, p.vs, p.profile, p.window);
   if (p.view === "coverage") { const q = new URLSearchParams(); if (p.session) q.set("session", p.session); if (p.days && String(p.days) !== "7") q.set("days", String(p.days)); const s = q.toString(); return `/coverage${s ? `?${s}` : ""}`; }
   return `/${p.view}`;
@@ -5550,7 +5012,6 @@ function route() {
   // a view's polls belong to the view that armed them: every navigation stops the ledger's (the ledger view re-arms
   // its own below) and drops whatever was parked while the tab was hidden (the GTO Wizard pill is on every view and
   // keeps its place). Before, leaving for Hands or Home kept the 4 s /api/ledger re-read going behind a hidden view.
-  clearTimeout(lgJobTimer); clearTimeout(pgTimer);
   for (const name of PARKED.keys()) if (name !== "gtow") PARKED.delete(name);
   PATH = parsePath();
   // the list poll (hands · home · analytics) and the miss-queue sweep poll stop once their view is off screen;
@@ -5576,16 +5037,10 @@ function route() {
   $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
   $("view-replay").style.display = PATH.view === "review" ? "" : "none";
   $("view-play").style.display = PATH.view === "playthrough" ? "" : "none";
-  $("view-ledger").style.display = PATH.view === "ledger" ? "" : "none";
-  $("view-tasks").style.display = PATH.view === "tasks" ? "" : "none";
-  if (PATH.view === "ledger") loadLedger();
-  if (PATH.view === "tasks") loadTasks();
   if (PATH.view === "playthrough") loadPlay();
   document.title = PATH.view === "home" ? "Study Dashboard"
     : PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
     : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
-    : PATH.view === "ledger" ? "Solve Proposals · Study Dashboard"
-    : PATH.view === "tasks" ? "Tasks · Study Dashboard"
     : PATH.view === "sessions" ? `${PATH.id ? `Session ${PATH.id}` : "Sessions"} · Study Dashboard`
     : `${PATH.view[0].toUpperCase()}${PATH.view.slice(1)} · Study Dashboard`;
   if (PATH.view === "hands") {

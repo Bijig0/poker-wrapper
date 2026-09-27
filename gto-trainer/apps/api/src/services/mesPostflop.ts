@@ -55,15 +55,17 @@ interface TurnFile {
   family: string; board: string; hero_player: number; holes: string[];
   lines: Record<string, { labels: string[]; cards: Record<string, TurnCard> }>;
 }
-const TURN_DIR = process.env.MES_TURN_DIR ?? join(import.meta.dir, "..", "..", "data", "mes_turn");
+// read per call, so a test can point it at a fixture (the files are a data part, not in git)
+const turnDir = () => process.env.MES_TURN_DIR ?? join(import.meta.dir, "..", "..", "data", "mes_turn");
 const turnCache = new Map<string, TurnFile | null>();
 function loadTurn(family: string, board: string): TurnFile | null {
   const key = `${family}_${board}`;
-  if (turnCache.has(key)) return turnCache.get(key)!;
+  const path = join(turnDir(), `${key}.turn.json`);
+  if (turnCache.has(path)) return turnCache.get(path)!;
   let tf: TurnFile | null = null;
-  try { tf = JSON.parse(readFileSync(join(TURN_DIR, `${key}.turn.json`), "utf-8")) as TurnFile; } catch { tf = null; }
+  try { tf = JSON.parse(readFileSync(path, "utf-8")) as TurnFile; } catch { tf = null; }
   if (turnCache.size >= 6) turnCache.delete(turnCache.keys().next().value!);
-  turnCache.set(key, tf);
+  turnCache.set(path, tf);
   return tf;
 }
 
@@ -645,7 +647,7 @@ export function mesSpots() {
   for (const [fid, f] of Object.entries(d.families)) {
     for (const [b, rb] of Object.entries(f.boards)) {
       let hasTurn = false;
-      try { hasTurn = statSync(join(TURN_DIR, `${fid}_${b}.turn.json`)).size > 0; } catch {}
+      try { hasTurn = statSync(join(turnDir(), `${fid}_${b}.turn.json`)).size > 0; } catch {}
       out.push({ family: fid, heroPos: f.hero_pos, pf3: f.pf3, line: f.line ?? [], board: b,
                  evGainBb: rb.ev_gain_bb, gen: (rb as any).gen, pot: f.pot, effStack: f.eff_stack, hasTurn });
     }

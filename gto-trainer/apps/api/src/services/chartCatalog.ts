@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SOLUTION_SETS } from "./gtowCdp";
+import { CHARTS_DIR } from "./repoPaths";
 
 /**
  * The chart catalog: one structured inventory of every preflop chart this
@@ -88,10 +89,8 @@ export interface Catalog {
   };
 }
 
-const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..", "..");
-export const SOLUTIONS_DIR =
-  process.env.CHART_SOLUTIONS_DIR ??
-  join(REPO_ROOT, "analysis", "pipeline", "solve", "exploit_ui", "solutions");
+/** the chart index (one sidecar per chart) — services/repoPaths.ts */
+export const SOLUTIONS_DIR = CHARTS_DIR;
 const GTOW_DB = join(import.meta.dir, "..", "..", "data", "preflop-db.sqlite");
 const R2_UI = "r2://poker-solve-db/hrc-ui";
 

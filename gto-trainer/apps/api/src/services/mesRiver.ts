@@ -18,15 +18,13 @@ import { createHash } from "node:crypto";
 import { pickWeightedAction } from "../utils/pickWeightedAction/pickWeightedAction";
 import type { MesActionFreq, MesPostflopHit } from "./mesPostflop";
 import { mesRiverCacheDir } from "./storePaths";
+import { REPO } from "./repoPaths";
 
-const REPO = join(import.meta.dir, "..", "..", "..", "..", "..");
-const TREE_DIRS = [
-  process.env.MES_TREE_DIR,
-  join(REPO, "analysis", "pipeline", "limp_study", "mes_handoff", "trees_refit"),
-  join(REPO, "analysis", "pipeline", "limp_study", "mes_handoff", "runs"),
-].filter((x): x is string => !!x);
-const EXTRACT = process.env.MES_EXTRACT_BIN ??
-  join(REPO, "analysis", "pipeline", "solve", "compare", "target", "release", process.platform === "win32" ? "extract.exe" : "extract");
+// The locked trees and extract.exe are the chart factory's (poker: analysis/pipeline/limp_study/mes_handoff, the
+// Rust compare/ build) and are not shipped: MES_TREE_DIR (';'-separated folders) and MES_EXTRACT_BIN point at them on a
+// machine that has them. Without them this lookup answers nothing and the river falls back like any other miss.
+const TREE_DIRS = (process.env.MES_TREE_DIR ?? "").split(";").map((d) => d.trim()).filter(Boolean);
+const EXTRACT = process.env.MES_EXTRACT_BIN ?? join(REPO, "bin", process.platform === "win32" ? "extract.exe" : "extract");
 const CACHE_DIR = mesRiverCacheDir();
 
 export interface RiverArgs {

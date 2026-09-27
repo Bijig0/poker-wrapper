@@ -256,7 +256,7 @@ export const APPROXIMATIONS: Approximation[] = [
     fix: "re-solve those 26 (D100_o2, D100_o3, D125_o3_5, D150_o2_5, D30_o3, D75_o2, D75_o3_5 and 19 uneven D100 charts)",
     status: "solvable",
     cost: "a missing node is a refused walk (the fallback answers) — never a wrong seat; count unmeasured",
-    code: "gto-trainer/apps/api/src/scripts/rekeyCharts.ts · analysis/pipeline/solve/hrc_to_preflop.py",
+    code: "the chart factory (poker): rekeyCharts.ts · analysis/pipeline/solve/hrc_to_preflop.py",
   },
 
   // ---- preflop, GTO Wizard AI side ---------------------------------------

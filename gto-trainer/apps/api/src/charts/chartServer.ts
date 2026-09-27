@@ -10,16 +10,16 @@
  *   GET /api/solutions       the chart index: the GTOW crawl + every sidecar
  *   GET /api/preflop/node    ?source=<chart id>&line=<tokens>   (source=gtow: &gametype=&depth= from the crawl SQLite)
  *
- * Env: HRC_UI_PORT (8777), CHART_SOLUTIONS_DIR (default: the repo's exploit_ui/solutions, the folder the API's
+ * Env: HRC_UI_PORT (8777), CHART_SOLUTIONS_DIR (default data/charts: services/repoPaths.ts, the folder the API's
  * chart catalog reads too), HRC_UI_REMOTE, HRC_UI_DOC_CACHE_MAX, HRC_UI_SMALL_BODY_BYTES, HRC_UI_SMALL_DOC_MAX,
  * HRC_UI_DISK_CACHE_GB, HRC_UI_PINNED_PREFIXES — the same names and defaults as server.py.
  */
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { CHARTS_DIR, DATA_DIR } from "../services/repoPaths";
 import { ChartStore, optsFromEnv } from "./chartStore";
 
-const REPO = resolve(import.meta.dir, "..", "..", "..", "..", "..");
-const DIR = process.env.CHART_SOLUTIONS_DIR ?? join(REPO, "analysis", "pipeline", "solve", "exploit_ui", "solutions");
-const PREFLOP_DB = join(REPO, "gto-trainer", "apps", "api", "data", "preflop-db.sqlite");
+const DIR = CHARTS_DIR;
+const PREFLOP_DB = join(DATA_DIR, "preflop-db.sqlite");
 const PORT = Number(process.env.HRC_UI_PORT ?? 8777);
 
 const HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type" };
