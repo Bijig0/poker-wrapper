@@ -40,6 +40,41 @@ export interface GtowRequestRow {
   h?: string;
   sr?: string;
   go?: string;
+  /** the request target, path + query (2026-09-26) — a poll's solution id and node */
+  q?: string;
+  /** the response's rate-limit / retry / cache headers, JSON, when it carried any */
+  hd?: string;
+}
+
+/** A stored response: every 402/403/429 whole, plus hourly header samples of normal replies. */
+export interface GtowResponseRow {
+  ts: number;
+  s: string;
+  k: GtowRequestKind;
+  st: number;
+  o: string;
+  why: "limit" | "sample";
+  url: string | null;
+  headers: Record<string, string>;
+  body: string | null;
+}
+
+/** Headers worth keeping on EVERY ledger row: anything that could carry a count, a reset time, or say the reply
+ *  came from a cache (a cached reply may be why some requests are not counted). */
+const LIMIT_HEADER = /rate|limit|quota|usage|remain|retry|reset|throttl|cache|^age$/i;
+/** statuses kept whole — the ones a plan or a throttle answers with */
+const LIMIT_STATUS = new Set([402, 403, 429]);
+const SAMPLE_EVERY_MS = 3_600_000;
+const BODY_CAP = 16_000;
+
+export function requestTarget(url: string): string {
+  try { const u = new URL(url); return u.pathname + u.search; } catch { return url; }
+}
+
+export function limitHeaders(h: Headers): string | null {
+  const keep: Record<string, string> = {};
+  h.forEach((v, k) => { if (LIMIT_HEADER.test(k)) keep[k] = v; });
+  return Object.keys(keep).length ? JSON.stringify(keep) : null;
 }
 
 export interface GtowRequestStats {
@@ -87,14 +122,14 @@ class GtowRequestLog {
   }
 
   /** Record one request. Never throws — the ledger must not be able to fail a solve. */
-  note(row: { session?: string | null; kind: GtowRequestKind; status: number }): void {
+  note(row: { session?: string | null; kind: GtowRequestKind; status: number; q?: string | null; hd?: string | null }): void {
     try {
       const scope = currentRequestScope();
       countRequest(row.kind, row.status);
       const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin,
         ...(scope ? { h: scope.handKey, ...(scope.street ? { sr: scope.street } : {}), go: scope.origin } : {}) };
-      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go) VALUES (?,?,?,?,?,?,?,?)")
-        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null);
+      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null);
       if (++this.written % LOG_EVERY === 0) {
         const s = this.stats();
         console.log(`[gtow-requests] ${s.last24h.total} in the last 24 h (${Object.entries(s.last24h.bySession).map(([k, v]) => `${k} ${v}`).join(", ")}; ${s.last24h.status429} x 429) · cap ${CAP}`);
@@ -140,11 +175,50 @@ class GtowRequestLog {
     if (blocked) return blocked;
     try {
       const r = await timed(`GTO Wizard ${kind} (${session ?? "?"})`, () => fetch(url, init), (x) => `HTTP ${x.status}`);
-      this.note({ session, kind, status: r.status });
+      this.note({ session, kind, status: r.status, q: requestTarget(url), hd: limitHeaders(r.headers) });
+      await this.keepResponse(session, kind, url, r);
       return r;
     } catch (e) {
-      this.note({ session, kind, status: 0 });
+      this.note({ session, kind, status: 0, q: requestTarget(url) });
       throw e;
+    }
+  }
+
+  private sampledAt = new Map<string, number>();
+
+  /**
+   * Keep a response whole when it is a plan/throttle answer (402/403/429: every header + the full body — the logs
+   * cut the 429 body off mid-sentence), and one header sample per account × kind × status per hour otherwise.
+   * The body is read from a clone, so the caller still reads its own. Never throws.
+   */
+  async keepResponse(session: string | null | undefined, kind: GtowRequestKind, url: string, r: Response): Promise<void> {
+    try {
+      const limit = LIMIT_STATUS.has(r.status);
+      const key = `${session ?? "unknown"}|${kind}|${r.status}`;
+      const now = Date.now();
+      if (!limit && now - (this.sampledAt.get(key) ?? 0) < SAMPLE_EVERY_MS) return;
+      this.sampledAt.set(key, now);
+      const headers: Record<string, string> = {};
+      r.headers.forEach((v, k) => { headers[k] = v; });
+      const body = limit ? (await r.clone().text().catch(() => "")).slice(0, BODY_CAP) : null;
+      this.open().query("INSERT INTO gtow_responses (ts, s, k, st, o, why, url, headers, body) VALUES (?,?,?,?,?,?,?,?,?)")
+        .run(now, session ?? "unknown", kind, r.status, this.origin, limit ? "limit" : "sample", requestTarget(url), JSON.stringify(headers), body);
+      if (r.status === 429) console.log(`[gtow-requests] 429 on ${session ?? "?"} ${kind} — kept whole in gtow_responses: ${(body ?? "").slice(0, 400)} | headers ${JSON.stringify(headers)}`);
+    } catch {
+      /* the ledger is an observer */
+    }
+  }
+
+  /** Stored responses since `sinceMs`, oldest first (`why` narrows to limit answers or samples). */
+  responses(sinceMs = 0, why?: "limit" | "sample"): GtowResponseRow[] {
+    try {
+      return this.open()
+        .query<Omit<GtowResponseRow, "headers"> & { headers: string }, [number, string, string]>(
+          "SELECT ts, s, k, st, o, why, url, headers, body FROM gtow_responses WHERE ts >= ? AND (? = '' OR why = ?) ORDER BY id")
+        .all(sinceMs, why ?? "", why ?? "")
+        .map((x) => ({ ...x, headers: JSON.parse(x.headers) as Record<string, string> }));
+    } catch {
+      return [];
     }
   }
 
@@ -206,6 +280,7 @@ class GtowRequestLog {
   compact(now = Date.now()): void {
     try {
       this.open().query("DELETE FROM gtow_requests WHERE ts < ?").run(now - KEEP_MS);
+      this.open().query("DELETE FROM gtow_responses WHERE ts < ?").run(now - KEEP_MS);
     } catch {
       /* best effort */
     }

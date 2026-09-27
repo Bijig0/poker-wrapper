@@ -142,4 +142,71 @@ describe("gtowRequestLog", () => {
     log.compact(now);
     expect(count(log)).toBe(1);
   });
+  test("a 429 is kept whole (every header, the full body) and the caller still reads the body", async () => {
+    const log = fresh();
+    const body = JSON.stringify({ detail: "Request limit exceeded", request_limit: 1275, time_period_in_seconds: 86400,
+      simplified_time_period: "x".repeat(300), code: "SOMETHING_AFTER_THE_OLD_CUT" });
+    const orig = globalThis.fetch;
+    // @ts-expect-error test stub
+    globalThis.fetch = async () => new Response(body, { status: 429, headers: { "retry-after": "321", "x-request-id": "abc", "cf-cache-status": "DYNAMIC" } });
+    try {
+      const r = await log.fetch("primary", "poll", "https://api.gtowizard.com/v4/solutions/spot-solution/?custom_solution_id=s1&preflop_actions=R2.5");
+      expect(await r.text()).toBe(body);
+    } finally {
+      globalThis.fetch = orig;
+    }
+    const kept = log.responses(0, "limit");
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ s: "primary", k: "poll", st: 429, why: "limit", body,
+      url: "/v4/solutions/spot-solution/?custom_solution_id=s1&preflop_actions=R2.5" });
+    expect(kept[0].headers).toMatchObject({ "retry-after": "321", "x-request-id": "abc" });
+    const db = new Database(log.path, { readonly: true });
+    try {
+      const row = db.query("SELECT q, hd FROM gtow_requests").get() as { q: string; hd: string };
+      expect(row.q).toBe("/v4/solutions/spot-solution/?custom_solution_id=s1&preflop_actions=R2.5");
+      expect(JSON.parse(row.hd)).toEqual({ "retry-after": "321", "cf-cache-status": "DYNAMIC" });   // the request id is not a limit header
+    } finally { db.close(); }
+  });
+
+  test("normal replies: one header sample per account x kind x status per hour, no body; hd null without limit headers", async () => {
+    const log = fresh();
+    const orig = globalThis.fetch;
+    // @ts-expect-error test stub
+    globalThis.fetch = async () => new Response("{}", { status: 200, headers: { server: "x" } });
+    try {
+      for (let i = 0; i < 3; i++) await log.fetch("primary", "poll", `https://api.gtowizard.com/${i}`);
+      await log.fetch("secondary", "poll", "https://api.gtowizard.com/9");
+    } finally {
+      globalThis.fetch = orig;
+    }
+    const s = log.responses(0, "sample");
+    expect(s.map((x) => x.s)).toEqual(["primary", "secondary"]);
+    expect(s[0].body).toBeNull();
+    expect(log.responses(0, "limit")).toHaveLength(0);
+    const db = new Database(log.path, { readonly: true });
+    try {
+      expect(db.query("SELECT COUNT(*) n FROM gtow_requests WHERE hd IS NULL").get()).toEqual({ n: 4 });
+    } finally { db.close(); }
+  });
+
+  test("a ledger created before the q/hd columns is migrated in place and keeps its rows", () => {
+    const d = mkdtempSync(join(tmpdir(), "gtow-req-"));
+    dirs.push(d);
+    const path = join(d, "poker.sqlite");
+    const old = new Database(path);
+    old.run(`CREATE TABLE gtow_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, s TEXT NOT NULL, k TEXT NOT NULL,
+      st INTEGER NOT NULL, o TEXT NOT NULL, h TEXT, sr TEXT, go TEXT)`);
+    old.run("INSERT INTO gtow_requests (ts, s, k, st, o) VALUES (1, 'primary', 'poll', 200, 'api')");
+    old.close();
+    const log = new GtowRequestLog(path);
+    logs.push(log);
+    log.note({ session: "primary", kind: "poll", status: 200, q: "/v4/x?y=1" });
+    expect(count(log)).toBe(2);
+    const db = new Database(path, { readonly: true });
+    try {
+      expect(db.query("SELECT q FROM gtow_requests ORDER BY id").all()).toEqual([{ q: null }, { q: "/v4/x?y=1" }]);
+    } finally { db.close(); }
+    const again = new Database(path);
+    try { ensureEventTables(again); } finally { again.close(); }   // running the migration again is a no-op
+  });
 });

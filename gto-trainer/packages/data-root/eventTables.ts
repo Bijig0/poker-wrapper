@@ -35,10 +35,44 @@ export const POLLER_EVENTS_DDL = `CREATE TABLE IF NOT EXISTS poller_events (
   doc TEXT NOT NULL
 )`;
 
+/**
+ * QUOTA EVIDENCE (2026-09-26). The ledger's counts do not match the cap GTO Wizard's 429 states (1275 / 86400 s):
+ * the Ultra account sent 6,149 requests in a trailing 24 h without one, and a wall cleared after 5 minutes. So
+ * the ledger also keeps what the next wall needs to be read against:
+ *   gtow_requests.q    the request target (path + query: solution id and node for a poll) — "distinct nodes" is testable
+ *   gtow_requests.hd   the response's rate-limit / retry / cache headers, when it carried any (JSON)
+ *   gtow_responses     every 402/403/429 whole (all headers + the full body), plus a sample of each account ×
+ *                      kind × status's headers once an hour per process — what a normal reply carries
+ */
+export const GTOW_RESPONSES_DDL = `CREATE TABLE IF NOT EXISTS gtow_responses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  s TEXT NOT NULL,
+  k TEXT NOT NULL,
+  st INTEGER NOT NULL,
+  o TEXT NOT NULL,
+  why TEXT NOT NULL,
+  url TEXT,
+  headers TEXT NOT NULL,
+  body TEXT
+)`;
+
+/** Columns added to gtow_requests after it shipped. Another process may add one at the same moment — "duplicate column" is fine. */
+const GTOW_REQUESTS_ADDED = [["q", "TEXT"], ["hd", "TEXT"]] as const;
+
 export function ensureEventTables(db: Database): void {
   db.run(GTOW_REQUESTS_DDL);
+  const have = new Set(db.query<{ name: string }, []>("PRAGMA table_info(gtow_requests)").all().map((c) => c.name));
+  for (const [col, type] of GTOW_REQUESTS_ADDED) {
+    if (have.has(col)) continue;
+    try { db.run(`ALTER TABLE gtow_requests ADD COLUMN ${col} ${type}`); } catch (e) {
+      if (!/duplicate column/i.test(String(e))) throw e;
+    }
+  }
   db.run("CREATE INDEX IF NOT EXISTS idx_gtow_requests_ts ON gtow_requests(ts)");
   db.run("CREATE INDEX IF NOT EXISTS idx_gtow_requests_hand ON gtow_requests(h)");
+  db.run(GTOW_RESPONSES_DDL);
+  db.run("CREATE INDEX IF NOT EXISTS idx_gtow_responses_ts ON gtow_responses(ts)");
   db.run(POLLER_EVENTS_DDL);
   db.run("CREATE INDEX IF NOT EXISTS idx_poller_events_ts ON poller_events(ts)");
 }
