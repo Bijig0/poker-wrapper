@@ -15,13 +15,16 @@ function Row([bool]$ok, [string]$what, [string]$detail, [string]$fix = '') {
   }
 }
 function Get-Json($url, $timeout = 8) { try { Invoke-RestMethod -Uri $url -TimeoutSec $timeout } catch { $null } }
-$env:Path = "$(Join-Path $root 'bin');$env:Path;$env:LOCALAPPDATA\Microsoft\WinGet\Links"   # bin\ = the installer's bun + rclone
+# where everything is, the way every launcher sees it: the Bun the services run, POKER_DATA_DIR, bin\ (the installer's
+# bun + rclone) and the install's own key on PATH
+. (Join-Path $root 'config\env.ps1')
+$env:Path = "$env:Path;$env:LOCALAPPDATA\Microsoft\WinGet\Links"
 . (Join-Path $PSScriptRoot 'channel.ps1')   # also: this install's own download key (config\rclone.conf), when it has one
 
 Write-Host "Poker Wrapper — checklist ($root)" -ForegroundColor White
 Write-Host ""
 Write-Host " Installed" -ForegroundColor Cyan
-$bun = Get-Command bun; Row ([bool]$bun) 'Bun' $(if ($bun) { "v$(& $bun.Source --version)" } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
+$bun = $env:BUN; Row ([bool]$bun) 'Bun' $(if ($bun) { "v$(& $bun --version)" } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
 $rc = Get-Command rclone; Row ([bool]$rc) 'rclone' $(if ($rc) { 'installed' } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
 $chrome = (Test-Path "$env:ProgramFiles\Google\Chrome\Application\chrome.exe") -or (Test-Path "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")
 Row $chrome 'Google Chrome' $(if ($chrome) { 'installed' } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'
@@ -67,7 +70,9 @@ Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker name', $(if ($hero) { $hero } els
 
 Write-Host ""
 Write-Host " Running" -ForegroundColor Cyan
-foreach ($t in $(if (Get-Installed $root) { $TaskNames.Values } else { 'StudyAPI', 'ChartServer', 'GtowWatchdog' })) {
+# this user's per-user tasks whenever they are registered (an install, or a checkout that runs the live stack)
+$mine = @($TaskNames.Values | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue })
+foreach ($t in $(if ((Get-Installed $root) -or $mine.Count) { $TaskNames.Values } else { 'StudyAPI', 'ChartServer', 'GtowWatchdog' })) {
   $st = (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue).State
   Row ($st -eq 'Running') "service $t" $(if ($st) { "$st" } else { 'not registered' }) "run PokerWrapperSetup.exe again (repair) (or: Start-ScheduledTask $t)"
 }
@@ -90,7 +95,7 @@ Write-Host ""
 Write-Host " Poker clients" -ForegroundColor Cyan
 $cp = Test-Path "$env:ProgramFiles\CoinPoker\CoinPoker.exe"
 Write-Host ("  [..] {0,-34} {1}" -f 'CoinPoker client', $(if ($cp) { 'installed' } else { 'not installed (only needed for CoinPoker)' }))
-$prof = Join-Path $root 'ignition-study-wrapper\data\profiles.json'
+$prof = if ($env:POKER_DATA_DIR) { Join-Path $env:POKER_DATA_DIR 'wrapper\profiles.json' } else { Join-Path $root 'ignition-study-wrapper\data\profiles.json' }
 $hasProf = (Test-Path $prof) -and ((Get-Content $prof -Raw) -match '"email"')
 Write-Host ("  [..] {0,-34} {1}" -f 'Ignition sign-in profile', $(if ($hasProf) { 'saved' } else { '(none yet — add one on the setup page: Profiles…)' }))
 
