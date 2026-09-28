@@ -17,6 +17,7 @@
 import { C } from "./config";
 import { SessionStore } from "./sessions";
 import { Site } from "./sites/coinpoker";
+import { Site as CggSite } from "./sites/clubgg";
 
 export class TupleSet extends Set<unknown[]> {
   private index = new Map<string, unknown[]>();
@@ -226,4 +227,9 @@ export const seams: {
 export const CP = new Site();
 
 export const isCp = () => S.site.id === "coinpoker";
+/** The ClubGG site (the screen reader): its loop reads only while a ClubGG session is live. */
+export const CGG = new CggSite();
+export const isCgg = () => S.site.id === "clubgg";
+/** A desktop-client site the wrapper does not drive through a browser (CoinPoker, ClubGG): no CDP table, no router. */
+export const isClientSite = () => isCp() || isCgg();
 export const site = () => S.site.id;

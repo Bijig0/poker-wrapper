@@ -9,7 +9,7 @@ import * as cdp from "./cdp";
 import { time } from "./clock";
 import { C } from "./config";
 import { pyRound } from "./py";
-import { CP, S, isCp, seams, site } from "./state";
+import { CGG, CP, S, isCgg, isCp, seams, site } from "./state";
 import * as TABLES from "./tables";
 import { EXTRACT_DEEP_JS } from "./ignition/dom";
 import { handState } from "./ignition/hand";
@@ -100,6 +100,16 @@ export async function state(light = false): Promise<Record<string, any>> {
       practice: !!(t && t.practice),
       coinpoker: { client: CP.clientState(), error: CP.error, snap: S.cpSnap.last ?? null, attached: CP.pinned },
       snapshot: { status: hs, seats: [{ hero: true, sittingOut: hs === "sitting-out" }] },
+    });
+    return out;
+  }
+  if (isCgg()) {
+    const t = CGG.table();
+    const hs = CGG.heroStatus();
+    Object.assign(out, {
+      connected: !!(t && t.open), hand: t ? handState() : null, table: t, practice: false,
+      clubgg: { client: CGG.clientState(), error: CGG.error, status: CGG.status, attached: CGG.pinned },
+      snapshot: { status: hs, seats: [{ hero: true, sittingOut: false }] },
     });
     return out;
   }

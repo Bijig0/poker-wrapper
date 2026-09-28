@@ -24,6 +24,22 @@ CoinPoker Sit Out Next Hand / Sit Out All. gto-trainer refuses to answer a
 CoinPoker hand until a CoinPoker strategy exists (resolveHand). The folder keeps
 its old name because gto-trainer reads its data paths.
 
+**Third site: ClubGG, READER ONLY (2026-09-28).** ClubGG is one Unity program
+(IL2CPP, obfuscated, with an anti-tamper module) that draws each table as its own
+window, logs no hand events and talks to its server over one encrypted connection
+— so `sites/clubgg.ts` only LOOKS: it checks the attached table window is the one
+on screen (a 6x5 grid of points), copies its pixels off the screen (PrintWindow
+answers black), OCRs them (Windows OCR with line boxes, `win32/screenocr.ps1`),
+reads the board by card templates and bets by digit templates (`sites/cggCards.ts`),
+parses a Snapshot (`sites/cggFrame.ts`) and folds snapshots into the hand
+(`sites/cggFeed.ts` — chip facts, labels, the timer; every inference marked). No
+answers (resolveHand refuses `site: "clubgg"`), no presses, no auto-execute. Your
+hands archive like CoinPoker's; every hand it sees goes to
+`<data>/clubgg/hands-YYYYMMDD.jsonl`. The session's recording box saves read frames
+(PNG, 1/s) under `<debug>/clubgg/<session>`; `bun src/tools/cggReplay.ts <dir>`
+replays a recording. Hero's hole cards are not read yet (templates need a seated
+recording). Recon notes: poker memory `clubgg-client-facts`.
+
 
 **STUDY / PRACTICE-MONEY ONLY.** A one-click Windows wrapper that opens the
 Ignition web client and the study panel side by side:

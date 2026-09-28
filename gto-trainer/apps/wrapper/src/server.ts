@@ -23,9 +23,10 @@ import * as W from "./win32";
 import * as F from "./formats";
 import { fmtFixed, pyInt, pyJsonDumps, pyRepr, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
-import { CP, S, isCp, seams } from "./state";
+import { CGG, CP, S, isCgg, isClientSite, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import { FORMATS as CP_FORMATS } from "./sites/coinpoker";
+import { FORMATS as CGG_FORMATS } from "./sites/clubgg";
 import { history } from "./archive";
 import { mySel, slotted } from "./ignition/dom";
 import { handState } from "./ignition/hand";
@@ -133,8 +134,9 @@ export function buildApp(): Hono {
   app.get("/admin", () => html(page("admin.html")));
   app.get("/admin/state", async () => json(200, await adminState(stateLight)));
   app.get("/coinpoker/tables", () => json(200, { tables: CP.openTables(), attached: CP.pinned, client: CP.clientState() }));
+  app.get("/clubgg/tables", () => json(200, { tables: CGG.openTables(), attached: CGG.pinned, client: CGG.clientState(), status: CGG.status }));
   app.get("/formats", async () => json(200, {
-    formats: [...F.allFormats(), ...CP_FORMATS], stakes: F.data().stakes,
+    formats: [...F.allFormats(), ...CP_FORMATS, ...CGG_FORMATS], stakes: F.data().stakes,
     detected: (await cdp.available(C.CDP_PORT)) ? await F.detect(C.CDP_PORT) : null,
   }));
   app.get("/auth/profiles", () => {
@@ -580,8 +582,9 @@ export function buildApp(): Hono {
         CP.ensureClient();
         void SESSION.openLeader();
         nRes = 1;
-      } else if (nRes > 1) TABLES.adopt(nRes);
-      if (!isCp()) {
+      } else if (isCgg()) nRes = 1;
+      else if (nRes > 1) TABLES.adopt(nRes);
+      if (!isClientSite()) {
         await SESSION.openTableWindow();
         SESSION.startRouter(rec.config || {}, rec.id);
       }
@@ -665,6 +668,11 @@ export function buildApp(): Hono {
     W.startDetached("cmd", ["/c", "start", "Publish Poker Wrapper update", pub], { cwd: join(C.ROOT, ".."), hide: true }, log);
     S.ownerRelease.at = 0.0;
     return json(200, { ok: true });
+  });
+  app.post("/clubgg/attach", async (c) => {
+    const b = await body(c, Body.cggAttach);
+    const [code, res] = SESSION.cggReattach(b.key ? pyStr(b.key) : null, b.title ? pyStr(b.title) : null);
+    return json(code, res);
   });
   app.post("/sitout", async (c) => {
     const b = await body(c, Body.sitout);

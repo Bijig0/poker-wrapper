@@ -8,7 +8,7 @@
  */
 import { time } from "../clock";
 import { pyFloatStr, pyRound, pyStr, sortedNums, splitWs } from "../py";
-import { CP, S, isCp } from "../state";
+import { CGG, CP, S, isCgg, isCp } from "../state";
 import { C } from "../config";
 import * as TABLES from "../tables";
 import { TOL } from "../reconcile";
@@ -279,6 +279,11 @@ export function handState(): Record<string, any> | null {
   if (handSeams.override) return handSeams.override();
   if (isCp()) {
     const h = CP.hand();
+    if (h !== null) h.panelPort = C.PANEL_PORT;
+    return h;
+  }
+  if (isCgg()) {
+    const h = CGG.hand();
     if (h !== null) h.panelPort = C.PANEL_PORT;
     return h;
   }

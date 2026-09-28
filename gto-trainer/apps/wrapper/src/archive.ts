@@ -14,13 +14,14 @@ import { openStore } from "../../../packages/data-root/centralDb";
 import { ensureHandsSchema, FINISHED, HANDS_DDL } from "../../../packages/data-root/handsSchema";
 import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyJsonDumps, pyRound, pyStr, truthy } from "./py";
-import { CP, S, isCp } from "./state";
+import { CGG, CP, S, isCgg, isCp } from "./state";
 import { handState } from "./ignition/hand";
 import { awardName, type Node } from "./ignition/dom";
 import { shadowArchive } from "./ignition/shadow";
 import { autoLogFor } from "./autoLog";
 import { SITE as CP_SITE } from "./sites/coinpoker";
 import * as feed from "./sites/cpFeed";
+import * as cgg from "./sites/cggFeed";
 
 export { HANDS_DDL };
 
@@ -53,7 +54,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 /** Persist the finishing hand (next hand's PLAY_STAGE_INFO, table close, ended-hand grace, stand-down — the
  *  dedupe guards make the triggers safe together). */
 export function archiveHand(): void {
-  if (S.fakeMode || isCp()) return;       // authored test states are not hand history; CoinPoker archives via archiveCp
+  if (S.fakeMode || isCp() || isCgg()) return;   // authored test states are not hand history; CoinPoker / ClubGG archive their own
   archiveHandLocked();
 }
 
@@ -164,7 +165,7 @@ export function flushPendingArchives(): void {
 let liveFp = "";
 export function liveHandTick(): void {
   flushPendingArchives();
-  if (S.fakeMode || isCp() || S.ws.heroDealt === false) return;
+  if (S.fakeMode || isCp() || isCgg() || S.ws.heroDealt === false) return;
   const cid = S.handIds.get(S.handNo) ?? null;
   if (!cid || S.handNo === S.lastArchived.no) return;
   const h = handState();
@@ -299,6 +300,53 @@ export function archiveCp(room: feed.Room, raw: feed.Hand): void {
     c.close();
   }
   log(`[history] coinpoker hand ${hid} archived (${h.stakes}, hero net ${pyStr(net)})`);
+}
+
+// ---- ClubGG: the screen reader says when a hand is over ------------------------------------------------------
+
+/** A ClubGG reader line onto the panel feed (attached: that table's lines only). */
+export function cggLine(room: string, line: string): void {
+  if (isCgg() && (!CGG.pinned || room === CGG.pinned)) feedAdd(`[ClubGG] ${line.trim()}`);
+}
+
+export function cggFinished(room: cgg.Room, raw: cgg.Hand): void {
+  if (!isCgg()) return;
+  if (CGG.pinned && room.key !== CGG.pinned) return;
+  try {
+    archiveCgg(room, raw);
+  } catch (e: any) {
+    log(`[history] clubgg archive failed: ${e?.message ?? e}`);
+  }
+}
+
+/** A finished ClubGG hand into the hands table — YOUR hands only (observed hands go to <data>/clubgg/hands-*.jsonl).
+ *  Hero's net is the stack the reader last saw (after the award) less the stack as dealt. */
+export function archiveCgg(room: cgg.Room, raw: cgg.Hand): void {
+  if (!raw.bb || !raw.actions.length) return;
+  if (raw.hero === null || !raw.dealt.includes(raw.hero)) return;
+  const h = CGG.exportFinished(room, raw);
+  if (!h) return;
+  const hid = `cgg-${raw.id}`;
+  const start = raw.startStacks.get(raw.hero), end = raw.seen.get(raw.hero);
+  const net = start !== undefined && end !== undefined ? pyRound(end - start, 2) : null;
+  const winners = raw.winners.map((w) => `${w.name}${w.won !== null ? " +" + w.won : ""}`).join(", ");
+  h.playedAt = Math.round(raw.t0 * 1000);
+  h.stakes = `${raw.sb ?? "None"}/${raw.bb}` + (raw.bomb ? " bomb pot" : "");
+  h.sessionId = S.session.id;
+  h.site = cgg.SITE;
+  h.feedLines = [];
+  h.result = { text: winners || null, winners: raw.winners, heroNet: net, heroNetBb: net !== null ? pyRound(net / raw.bb, 2) : null, heroWon: !!(net && net > 0) };
+  const c = db();
+  try {
+    if (c.query("SELECT 1 FROM hands WHERE client_hand_id = ? LIMIT 1").get(hid)) return;
+    c.query("INSERT INTO hands (hand_id, played_at, stakes, street, result_text,"
+            + " result_amount, hero_cards, action_count, data, client_hand_id, status, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'done',?)")
+      .run(null, h.playedAt, h.stakes, h.street, winners || null, null,
+           (h.heroCards || []).filter(Boolean).join(" ") || null, h.actions.length, pyJsonDumps(h), hid, nowMs());
+  } finally {
+    c.close();
+  }
+  log(`[history] clubgg hand ${hid} archived (${h.stakes}, hero net ${pyStr(net)})`);
 }
 
 export function history(limit = 20): Record<string, any> {

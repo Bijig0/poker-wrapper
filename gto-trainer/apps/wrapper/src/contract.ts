@@ -47,6 +47,7 @@ export const Body = {
   room: obj({ room: anyVal.optional(), preset: anyVal.optional() }),
   adminPanel: obj({ port: anyVal.optional(), action: anyVal.optional(), room: anyVal.optional() }),
   sitout: obj({ on: anyVal.optional(), all: anyVal.optional() }),
+  cggAttach: obj({ key: anyVal.optional(), title: anyVal.optional() }),
   studyAuto: obj({ auto: anyVal.optional(), allowRealMoney: anyVal.optional(), minutes: anyVal.optional(), hands: anyVal.optional(),
                    reason: anyVal.optional(), delay: anyVal.optional(), timeBank: anyVal.optional(), topUp: anyVal.optional() }),
   debug: obj({ on: anyVal.optional() }),

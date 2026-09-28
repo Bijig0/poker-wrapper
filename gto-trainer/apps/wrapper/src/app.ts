@@ -13,11 +13,11 @@ import { C, DEBUG_DIR } from "./config";
 import { log } from "./feed";
 import { fetchJson } from "./http";
 import { pyRepr } from "./py";
-import { CP, S } from "./state";
+import { CGG, CP, S, isCgg } from "./state";
 import * as TABLES from "./tables";
 import * as W from "./win32";
 import * as faketable from "./faketable";
-import { cpFinished, cpLine } from "./archive";
+import { cggFinished, cggLine, cpFinished, cpLine } from "./archive";
 import { portOf } from "./ignition/dom";
 import "./ignition/reader";                    // installs the real ignitionTarget seam
 import "./relay";                              // installs act / raiseTo / cdpSeq
@@ -141,6 +141,7 @@ export async function main(argv: string[]): Promise<void> {
     bg("feed", feedLoop);
     bg("ws", wsTap);
     CP.start(cpLine, cpFinished);
+    CGG.start(cggLine, cggFinished, () => isCgg() && !!S.session.id);
     bg("health", healthLoop);
     bg("panel-watch", panelWatchLoop);
     bg("cp-follow", cpFollowLoop);

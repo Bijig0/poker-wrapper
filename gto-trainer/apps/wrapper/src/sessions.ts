@@ -44,7 +44,7 @@ export const BASE_PRESETS: Record<string, any> = {
     label: "Silent play",
     tagline: "No answers. Every hand is still archived and graded afterwards — the control group.",
     config: baseConfig("ign-practice-ring", false, noSources),
-    formats: null, defaultFormat: "ign-practice-ring", requires: [], sites: ["ignition", "coinpoker"],
+    formats: null, defaultFormat: "ign-practice-ring", requires: [], sites: ["ignition", "coinpoker", "clubgg"],
   },
   "capture-qa": {
     label: "Capture QA",
@@ -152,7 +152,7 @@ export function strategyPreset(s: any): any {
     formatCoverage: s.formatCoverage ?? null,
     requires,
     sites: truthy(s.sites) ? s.sites
-      : [...new Set(((truthy(s.formats) ? s.formats : ["ign-"]) as unknown[]).map((f) => (String(f).startsWith("cp-") ? "coinpoker" : "ignition")))].sort(),
+      : [...new Set(((truthy(s.formats) ? s.formats : ["ign-"]) as unknown[]).map((f) => (String(f).startsWith("cp-") ? "coinpoker" : String(f).startsWith("cgg-") ? "clubgg" : "ignition")))].sort(),
   };
 }
 
@@ -247,7 +247,9 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
     } else if (k === "format") {
       base[k] = truthy(v) ? strOf(v) : null;
     } else if (k === "site") {
-      base[k] = v === "ignition" || v === "coinpoker" ? v : "ignition";
+      base[k] = v === "ignition" || v === "coinpoker" || v === "clubgg" ? v : "ignition";
+    } else if (k === "cggTable" || k === "cggTitle") {
+      base[k] = truthy(v) ? strOf(v).slice(0, 200) : null;
     } else if (k === "cpTable") {
       base[k] = truthy(v) ? strOf(v).slice(0, 200) : null;
     } else if (k === "buyinBb") {
@@ -293,8 +295,9 @@ export async function requirementsFor(preset: string, config: any): Promise<stri
 /** Every check the mode needs, each with ok + a one-line reason. Blocks when any REQUIRED check fails. */
 export async function runPreflight(preset: string, config: any, fakeMode: boolean, registry: any | null, cdpPort: number | null = null) {
   const req = await requirementsFor(preset, config);
-  const coinpoker = config.site === "coinpoker";
-  if (!fakeMode && !coinpoker) for (const k of ["profile"]) if (!req.includes(k)) req.push(k);
+  // a desktop-client site (CoinPoker, ClubGG): no Ignition profile to sign in, no Ignition lobby balance
+  const clientSite = config.site === "coinpoker" || config.site === "clubgg";
+  if (!fakeMode && !clientSite) for (const k of ["profile"]) if (!req.includes(k)) req.push(k);
   const armed = (registry || {}).armed || {};
   const cards = new Map<string, any>(((registry || {}).cards || []).map((c: any) => [c.id, c]));
   const card = (cid: string) => cards.get(cid) || {};
@@ -366,7 +369,7 @@ export async function runPreflight(preset: string, config: any, fakeMode: boolea
   const profile = config.profile;
   add("profile", truthy(profile), truthy(profile) ? `playing as ${profile}`
     : "pick the account on the setup page — hands are attributed to it and its balance is reconciled against them");
-  if (!fakeMode && !coinpoker) {
+  if (!fakeMode && !clientSite) {
     const bal = cdpPort ? await deps.scrapeCached(cdpPort) : { ok: false, reason: "no CDP port" };
     const last = truthy(profile) ? deps.latestBalance(profile) : null;
     const reason = String(bal.reason || "");

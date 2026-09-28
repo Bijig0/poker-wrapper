@@ -22,10 +22,11 @@ import { feedAdd, log } from "./feed";
 import { fetchBytes, fetchJson, getJson, postJson } from "./http";
 import { pyFloat, pyInt, pyRepr, pyRound, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
-import { CP, S, TupleSet, isCp, seams } from "./state";
+import { CGG, CP, S, TupleSet, isCgg, isClientSite, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import * as faketable from "./faketable";
 import { SITE as CP_SITE, FORMATS as CP_FORMATS } from "./sites/coinpoker";
+import { SITE as CGG_SITE, FORMATS as CGG_FORMATS, Site as CggSite, dirBytes, label as cggLabel, recordingDir as cggRecordingDir } from "./sites/clubgg";
 import { archiveHand, sessionHands } from "./archive";
 import { setDebug } from "./ignition/recorder";
 import { forgetFrame, mySel, slotted } from "./ignition/dom";
@@ -438,8 +439,8 @@ export async function enrichGtowRow(pf: any): Promise<void> {
 export async function preflight(preset: string, cfg: Record<string, any>, registry: any = undefined): Promise<Record<string, any>> {
   const pf: any = await SES.runPreflight(preset, cfg, S.fakeMode, registry !== undefined ? registry : await SES.fetchRegistry(), C.CDP_PORT);
   await enrichGtowRow(pf);
-  if (cfg.site === CP_SITE) {
-    pf.checks = [...pf.checks, ...CP.preflight(cfg.cpTable ?? null)];
+  if (cfg.site === CP_SITE || cfg.site === CGG_SITE) {
+    pf.checks = [...pf.checks, ...(cfg.site === CP_SITE ? CP.preflight(cfg.cpTable ?? null) : CGG.preflight(cfg.cggTable ?? null))];
     const blockers = pf.checks.filter((c: any) => c.required && !c.ok);
     Object.assign(pf, { ok: !blockers.length, blockers: blockers.map((c: any) => c.label) });
   }
@@ -458,9 +459,9 @@ export async function sessionChecks(): Promise<Record<string, any>> {
     preset = Object.keys(presets)[0]!;
     cfg = { answers: false, sources: {}, recording: false, budget: {} };
   }
-  if (cfg.site === CP_SITE) {
+  if (cfg.site === CP_SITE || cfg.site === CGG_SITE) {
     const pf = await preflight(preset, cfg, registry);
-    const t = CP.table();
+    const t = cfg.site === CP_SITE ? CP.table() : null;
     if (t && rec) for (const c of pf.checks) if (c.id === "cp-table") c.required = !!cfg.answers;
     S.chain.lastCheck = time();
     return { ok: pf.ok, checks: pf.checks, blockers: pf.blockers, checkedAt: nowMs(), preset: rec ? rec.preset ?? null : null,
@@ -511,6 +512,12 @@ export async function sessionBrief(): Promise<Record<string, any> | null> {
     observed = t ? { name: t.room, practice: t.practice, coinType: t.coinType } : null;
     verdict = t ? { state: "ok", text: `at ${t.room} (${t.practice ? "practice chips" : "real money"})` }
       : { state: "unknown", text: "no CoinPoker table open yet — sit down in the client" };
+  } else if (cfg.site === CGG_SITE) {
+    const t = CGG.table();
+    cpf = CGG_FORMATS.find((f: any) => f.id === fid) ?? null;
+    observed = t ? { name: t.title, practice: false } : null;
+    verdict = t ? { state: t.status ? "unknown" : "ok", text: `reading ${t.label}${t.status ? ` — ${t.status}` : ""}` }
+      : { state: "unknown", text: "no ClubGG table open — open one in the client" };
   } else {
     observed = !S.fakeMode && (await cdp.available(C.CDP_PORT)) ? await F.detect(C.CDP_PORT) : null;
     verdict = fid ? F.compare(fid, observed) : null;
@@ -538,8 +545,9 @@ export async function sessionBrief(): Promise<Record<string, any> | null> {
 
 /** The session's config applied to this process: the site, the answers toggle, the auto / top-up settings. */
 export async function applySessionConfig(cfg: Record<string, any>): Promise<void> {
-  S.site.id = cfg.site === CP_SITE ? CP_SITE : "ignition";
+  S.site.id = cfg.site === CP_SITE ? CP_SITE : cfg.site === CGG_SITE ? CGG_SITE : "ignition";
   CP.attach(cfg.site === CP_SITE ? cfg.cpTable ?? null : null);
+  CGG.attach(cfg.site === CGG_SITE ? cfg.cggTable ?? null : null, cfg.site === CGG_SITE ? cfg.cggTitle ?? null : null);
   const st = S.study;
   st.on = !!cfg.answers;
   st.text = null;
@@ -569,6 +577,13 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
   if (isCp()) {
     S.recPending.on = false;
     setDebug(false);
+  } else if (isCgg()) {
+    // ClubGG records its own frames (PNG + index.jsonl, tools/cggReplay.ts) — never the Ignition debug recorder
+    S.recPending.on = false;
+    setDebug(false);
+    CGG.recordDir = cfg.recording && S.session.id ? cggRecordingDir(S.session.id) : null;
+    CGG.stats.recorded = 0;
+    CGG.stats.recordBytes = CGG.recordDir ? dirBytes(CGG.recordDir) : 0;
   } else if (cfg.recording && !S.fakeMode && ["closed", "signed-out"].includes((await F.windowState(C.CDP_PORT)).state)) {
     S.recPending.on = true;
     setDebug(false);
@@ -1205,6 +1220,13 @@ export async function sessionStart(body: Record<string, any>): Promise<[number, 
     log(`[session] ${sid} started · ${preset} · CoinPoker · client ${cl.started ? "started" : cl.ok ? "already running" : pyStr(cl.error ?? null)}`);
     return [200, { ok: true, session: rec, tables: [], opened: [], site: CP_SITE, client: cl }];
   }
+  if (isCgg()) {
+    const cl = CGG.clientState();
+    S.sessions.event(sid, "clubgg-client", cl);
+    log(`[session] ${sid} started · ${preset} · ClubGG (reader only) · ${cl.running ? `${cl.tables} table window(s)` : "client not running"}`
+        + ` · recording=${cfg.recording ? "on" : "off"}`);
+    return [200, { ok: true, session: rec, tables: [], opened: [], site: CGG_SITE, client: cl }];
+  }
   if (cfg.clearCache) {
     await clearTableCache();
     S.sessions.event(sid, "cache-cleared", {});
@@ -1274,13 +1296,14 @@ export async function endOtherOpen(keep: string | null, note: string): Promise<s
  *  the icon is always the code on disk). The leave runs first; if it fails nothing is closed. */
 export async function closeOutAfterEnd(sid: string): Promise<Record<string, any>> {
   if (S.fakeMode) return { left: null, windows: "kept", why: "test rig" };
-  if (isCp()) {
+  if (isClientSite()) {
+    const cp = isCp();
     later(0.8, async () => {
       await killProfileWindows(C.PROFILE_PANEL);
-      if (!C.TAG) await killProfileWindows(C.PROFILE_LEADER);
+      if (cp && !C.TAG) await killProfileWindows(C.PROFILE_LEADER);
       standDown("session ended");
     });
-    return { left: null, windows: "closing", process: "exiting", why: "CoinPoker tables are left open in the client" };
+    return { left: null, windows: "closing", process: "exiting", why: `${cp ? "CoinPoker" : "ClubGG"} tables are left open in the client` };
   }
   if (!(await cdp.available(C.CDP_PORT))) {
     later(0.8, async () => {
@@ -1591,11 +1614,30 @@ export async function panelWatchLoop(): Promise<void> {
       S.sessions.event(sid, "panel-closed", { goneS: pyRound(time() - pw.missingSince, 1) });
       Object.assign(pw, { seen: false, missingSince: null });
       const res = await sessionEnd({ note: "ended: the panel window was closed" });
-      if (res.ok && isCp()) await closeOutAfterEnd(sid);
+      if (res.ok && isClientSite()) await closeOutAfterEnd(sid);
     } catch (e: any) {
       log(`[session] panel watch: ${e?.message ?? e}`);
     }
   }
+}
+
+// ---- ClubGG: which table the reader reads ------------------------------------------------------------------
+
+/** Attach the reader to one open ClubGG table (by window handle; the title re-finds it if the window is reopened). */
+export function cggReattach(key: string | null, title: string | null = null): [number, Record<string, any>] {
+  const t = key ? CggSite.tables().find((x) => String(x.hwnd) === key) ?? null : null;
+  if (key && !t) return [409, { ok: false, why: "that table is not open in ClubGG" }];
+  CGG.attach(key, t?.title ?? title);
+  S.study.text = null;
+  S.study.pick = null;
+  if (S.session.rec) {
+    const cfg = { ...(S.session.rec.config || {}), cggTable: key, cggTitle: t?.title ?? null };
+    S.session.rec.config = cfg;
+    S.sessions.setConfig(S.session.id!, cfg);
+    S.sessions.event(S.session.id!, "clubgg-attach", { key, title: t?.title ?? null });
+  }
+  log(`[clubgg] attached to ${t ? cggLabel(t.title) : "no table"}`);
+  return [200, { ok: true, key, title: t?.title ?? null, label: t ? cggLabel(t.title) : null }];
 }
 
 // ---- CoinPoker: the leader window and the admin page ------------------------------------------------------

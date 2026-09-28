@@ -13,7 +13,7 @@ import { C } from "./config";
 import { feedAdd, log } from "./feed";
 import * as NC from "./netcheck";
 import { pyRepr, pyStr } from "./py";
-import { CP, S, isCp, seams } from "./state";
+import { CGG, CP, S, isCgg, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import { mySel, sitoutReadJs } from "./ignition/dom";
 import { ensureVisible, pointIsMyTable } from "./relay";
@@ -73,7 +73,7 @@ export function netCompact(p: Record<string, any>): Record<string, any> {
 }
 
 /** The press a test replaces. */
-export const netSeams = { sitout: () => (isCp() ? CP.sitout(true, false) : ignitionSitoutNextHand()) };
+export const netSeams = { sitout: () => (isCp() ? CP.sitout(true, false) : isCgg() ? CGG.sitout(true, false) : ignitionSitoutNextHand()) };
 
 async function netSitout(probe: Record<string, any>): Promise<Record<string, any>> {
   const res = await netSeams.sitout();

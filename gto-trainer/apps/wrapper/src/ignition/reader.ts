@@ -213,6 +213,7 @@ export class TableReadError extends Error {
 }
 
 export async function feedTick(): Promise<void> {
+  if (S.site.id === "clubgg") return;              // ClubGG is read off the screen (sites/clubgg.ts), not through CDP
   const t = await seams.ignitionTarget();
   if (!t) {
     // no client page: a failure only while a session expects a table (a disconnect closes the client on purpose)
@@ -548,7 +549,7 @@ export async function feedTick(): Promise<void> {
 
 /** Archive a FINISHED hand after a short grace even when no next hand ever arrives. */
 export function maybeFlushEnded(): void {
-  if (S.site.id === "coinpoker") return;
+  if (S.site.id === "coinpoker" || S.site.id === "clubgg") return;
   const h = handState();
   const over = !!S.ws.handOver || !!(h && h.ended);
   if (!h || !over || !h.actions.length || h.handId === S.lastArchived.no) {

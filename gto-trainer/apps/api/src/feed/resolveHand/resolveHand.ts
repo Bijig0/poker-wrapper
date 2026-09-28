@@ -202,6 +202,11 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     if ((state as { site?: string }).site === "coinpoker" && state.session?.strategy !== "cp200-hu-equilibrium") {
       return { ok: false, status: 409, error: "CoinPoker table: only the CoinPoker 200NL Heads-Up strategy answers CoinPoker (the Ignition charts are a different rake and structure)." };
     }
+    // 2026-09-28: the ClubGG site is a screen READER only (7-max, bomb pots, run-it-multiple, club rake — no strategy
+    // is built for it, and its line is rebuilt from the screen). Nothing answers a ClubGG hand yet.
+    if ((state as { site?: string }).site === "clubgg") {
+      return { ok: false, status: 409, error: "ClubGG table: the ClubGG site is the reader only — no strategy answers ClubGG yet." };
+    }
     tableStatus = state.snapshot?.status ?? null;
     studyAnswersOn = state.studyAnswers ?? false;
     sessionId = state.sessionId ?? null;

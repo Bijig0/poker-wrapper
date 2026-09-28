@@ -15,7 +15,7 @@ import * as cdp from "./cdp";
 import { nowMs, time } from "./clock";
 import { feedAdd, log } from "./feed";
 import { pyRepr, pyStr } from "./py";
-import { S, isCp, seams } from "./state";
+import { S, isClientSite, seams } from "./state";
 import * as TABLES from "./tables";
 import { js } from "./js";
 import { mySel, slotted, type FrameSel } from "./ignition/dom";
@@ -68,7 +68,7 @@ export const sitBackSeams = { press: () => ignitionSitBackIn() };
 export async function maybeSitBackIn(): Promise<void> {
   const st = S.study;
   const L = S.liveStatus;
-  if (!st.sitBackIn || !S.session.id || S.fakeMode || isCp() || L.hero !== "sitting-out") {
+  if (!st.sitBackIn || !S.session.id || S.fakeMode || isClientSite() || L.hero !== "sitting-out") {
     st.sitBackTurn = null;
     return;
   }

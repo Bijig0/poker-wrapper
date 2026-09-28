@@ -23,6 +23,7 @@ const user32 = lazy(() => dlopen("user32.dll", {
   EnumWindows: { args: [P, i64], returns: i32 },
   GetWindowTextLengthW: { args: [P], returns: i32 },
   GetWindowTextW: { args: [P, P, i32], returns: i32 },
+  GetClassNameW: { args: [P, P, i32], returns: i32 },
   IsWindowVisible: { args: [P], returns: i32 },
   IsWindow: { args: [P], returns: i32 },
   IsIconic: { args: [P], returns: i32 },
@@ -185,6 +186,13 @@ export function windowTextN(h: number, n: number): string {
   return String.fromCharCode(...buf.subarray(0, Math.max(0, got)));
 }
 
+/** The window's class name (GetClassNameW) — a Unity player's windows are "UnityWndClass". */
+export function className(h: number): string {
+  const buf = new Uint16Array(256);
+  const got = user32().GetClassNameW(hwnd(h), ptr(buf), 256);
+  return String.fromCharCode(...buf.subarray(0, Math.max(0, got)));
+}
+
 export const isWindowVisible = (h: number) => !!user32().IsWindowVisible(hwnd(h));
 export const isWindow = (h: number) => !!h && !!user32().IsWindow(hwnd(h));
 export const isIconic = (h: number) => !!user32().IsIconic(hwnd(h));
@@ -342,6 +350,53 @@ export function capture(h: number): Capture {
     rgb[j + 2] = buf[i]!;
   }
   return { width: w, height: hh, rgb };
+}
+
+/** ok = BitBlt copied it (false while the workstation is locked: there is no screen to copy — the frame is black). */
+export type ScreenCapture = { width: number; height: number; bgra: Uint8Array; x: number; y: number; ok: boolean };
+
+// GDI handles as 64-bit INTEGERS: the screen DC is a sign-extended handle (0xFFFFFFFF8A…), which a JS number
+// cannot hold — through FFIType.ptr it came back rounded and every call after it failed (a black capture).
+const gdiH = lazy(() => dlopen("gdi32.dll", {
+  CreateCompatibleDC: { args: [u64], returns: u64 },
+  CreateCompatibleBitmap: { args: [u64, i32, i32], returns: u64 },
+  SelectObject: { args: [u64, u64], returns: u64 },
+  BitBlt: { args: [u64, i32, i32, i32, i32, u64, i32, i32, u32], returns: i32 },
+  GetDIBits: { args: [u64, u64, u32, u32, P, P, u32], returns: i32 },
+  DeleteObject: { args: [u64], returns: i32 },
+  DeleteDC: { args: [u64], returns: i32 },
+}));
+const userH = lazy(() => dlopen("user32.dll", {
+  GetDC: { args: [u64], returns: u64 },
+  ReleaseDC: { args: [u64, u64], returns: i32 },
+}));
+
+/** The window's client area COPIED OFF THE SCREEN (BitBlt from the desktop DC), BGRA top-down. For a window that
+ *  answers PrintWindow with black (ClubGG's Unity player does): what is on screen there is what you get, so the
+ *  caller must know the window is uncovered first (ownerAt over its area). */
+export function captureScreen(h: number): ScreenCapture {
+  setDpiAware();
+  const [x, y, w, hh] = clientRect(h);
+  const G = gdiH(), U = userH();
+  const sdc = U.GetDC(0n);
+  const mdc = G.CreateCompatibleDC(sdc);
+  const bmp = G.CreateCompatibleBitmap(sdc, w, hh);
+  const old = G.SelectObject(mdc, bmp);
+  const ok = !!G.BitBlt(mdc, 0, 0, w, hh, sdc, x, y, 0x00CC0020);     // SRCCOPY
+  G.SelectObject(mdc, old);                                           // GetDIBits wants the bitmap out of the DC
+  const bmi = new Int32Array(10);
+  const dv = new DataView(bmi.buffer);
+  dv.setUint32(0, 40, true);
+  dv.setInt32(4, w, true);
+  dv.setInt32(8, -hh, true);
+  dv.setUint16(12, 1, true);
+  dv.setUint16(14, 32, true);
+  const bgra = new Uint8Array(Math.max(4, w * hh * 4));
+  G.GetDIBits(mdc, bmp, 0, hh, ptr(bgra), ptr(bmi), 0);
+  G.DeleteObject(bmp);
+  G.DeleteDC(mdc);
+  U.ReleaseDC(0n, sdc);
+  return { width: w, height: hh, bgra, x, y, ok };
 }
 
 // ---------------------------------------------------------------------------------- mutex

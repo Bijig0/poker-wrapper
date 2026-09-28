@@ -15,7 +15,7 @@ import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
 import { feedAdd, log } from "./feed";
 import { fmtFixed, pyFloat, pyFloatStr, pyInt, pyRepr, pyReprStr, pyRound, pyStr } from "./py";
-import { CP, S, isCp, pressBlocked, seams, type ActOpts } from "./state";
+import { CGG, CP, S, isCgg, isClientSite, isCp, pressBlocked, seams, type ActOpts } from "./state";
 import * as TABLES from "./tables";
 import { ACTION_RE, buyPanelUp, cardKey, findInputJs, framePin, heroCards, modalOf, mySel, pointProbeJs, sameHole, splitStrip, tableJs } from "./ignition/dom";
 import { handState, toActSources } from "./ignition/hand";
@@ -427,6 +427,7 @@ export function pickReady(): Record<string, any> {
     return out;
   };
   if (!st.on) return no("answers are off");
+  if (isCgg()) return no("ClubGG is the reader only — nothing is pressed there");
   const blocked = isCp() ? null : pressBlocked();
   if (blocked) return no(blocked);
   if (!st.text || !st.pick) return no("no pick yet");
@@ -483,6 +484,7 @@ export function pickReady(): Record<string, any> {
 /** Press `plan` on our table. `guard.cards` = the hole cards the decision was made for: every click the plan takes
  *  is refused on a table whose own frame shows another hand (holeCardsRefusal). */
 export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): Promise<Record<string, any>> {
+  if (isCgg()) return CGG.actuate(plan);
   if (isCp()) {
     const auto = S.study.execSource === "auto";
     // the actuator keeps its own practice-only check; it lets an auto press through on real money only when we
@@ -753,6 +755,7 @@ const PRACTICE_ONLY = "auto-execute arms only on a practice table or the fake ta
 /** May auto-execute run against the table in front of us right now? Practice, the fake table, or a live real-money test allowance
  *  (Ignition and CoinPoker both — a site's own practice check decides `practice` above). */
 export function autoTableOk(): [boolean, string | null] {
+  if (isCgg()) return [false, "auto-execute is not available on ClubGG (the reader only)"];
   const practice = S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice);
   if (practice) return [true, null];
   const allow = autoAllowance();
@@ -793,6 +796,10 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
     return { ok: true, auto: false, allowance: autoAllowance() };
   }
   const practice = !!(S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice));
+  if (isCgg()) {
+    st.auto = false;
+    return { ok: false, auto: false, error: "ClubGG is the reader only: auto-execute cannot arm there", allowance: autoAllowance() };
+  }
   if (!practice) {
     if (!opts.allowReal) {
       st.auto = false;
@@ -987,7 +994,7 @@ export function noAnswerFoldWhy(age: number): string | null {
   if (note && age >= NO_ANSWER_NOTE_MIN_S) return `refused — ${note}`;
   const left = heroTimeLeft();
   if (left !== null && left.total <= NO_ANSWER_CLOCK_S) return `clock nearly out (${left.total} s left)`;
-  if (!isCp() && S.liveStatus.timeBank && !S.study.timeBank) return "clock nearly out (time bank on offer, set to leave it)";
+  if (!isClientSite() && S.liveStatus.timeBank && !S.study.timeBank) return "clock nearly out (time bank on offer, set to leave it)";
   // the backstop is for a clock that cannot be read — a readable one (the bank running) is the better judge
   if (left === null && age >= NO_ANSWER_DEADLINE_S) return `no answer after ${fmtFixed(age, 0)} s`;
   return null;
@@ -995,14 +1002,14 @@ export function noAnswerFoldWhy(age: number): string | null {
 
 /** Hero's countdown as the table shows it (Ignition only), or null. */
 function heroClockLeft(): number | null {
-  if (isCp()) return null;
+  if (isClientSite()) return null;
   const c = S.heroClock;
   return typeof c === "number" && Number.isFinite(c) ? c : null;
 }
 
 /** The seconds on the "+Ns" time-bank button, while the client offers it. */
 export function bankOfferS(): number | null {
-  if (isCp()) return null;
+  if (isClientSite()) return null;
   const b = S.liveStatus.timeBank;
   const m = b ? /(\d+)/.exec(String(b.text ?? "")) : null;
   return m ? Number(m[1]) : null;
@@ -1064,7 +1071,7 @@ export function unplayedAnswerWhy(key: string | null, age: number): string | nul
  *  product development — the practice/fake-table-only guard has been removed; see relay.ts history to restore it. */
 export async function maybeFoldNoAnswer(): Promise<void> {
   const st = S.study;
-  if (!(st.on && st.auto && st.foldNoAnswer)) {
+  if (!(st.on && st.auto && st.foldNoAnswer) || isCgg()) {
     st.noAnswerTurn = null;
     return;
   }

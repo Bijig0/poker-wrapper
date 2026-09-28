@@ -12,7 +12,7 @@ import { sleep, time } from "./clock";
 import { C, profileDir } from "./config";
 import { log } from "./feed";
 import { pyRound } from "./py";
-import { CP, S, isCp } from "./state";
+import { CP, S, isCgg, isCp } from "./state";
 import * as TABLES from "./tables";
 import * as W from "./win32";
 import * as CPA from "./sites/cpActions";
@@ -197,6 +197,7 @@ export function snapPanelToCpTable(): Record<string, any> {
 /** Put this wrapper's two windows where they belong (see tables.ts for the geometry). */
 export async function applyLayout(ignitionTarget: () => Promise<Record<string, any> | null>): Promise<Record<string, any>> {
   if (C.HEADLESS) return { ok: false, why: "headless instance: no windows to place" };
+  if (isCgg()) return { ok: false, why: "ClubGG: put the panel beside the table yourself — the reader copies the table off the screen, so nothing may cover it" };
   if (isCp()) {
     const snap = snapPanelToCpTable();
     if (snap.ok) return snap;

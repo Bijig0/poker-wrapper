@@ -1,6 +1,6 @@
 # Poker Wrapper
 
-The study panel that sits beside the poker table (Ignition, CoinPoker) and shows a study answer for each decision,
+The study panel that sits beside the poker table (Ignition, CoinPoker; ClubGG read-only) and shows a study answer for each decision,
 plus its dashboard for looking back at sessions and hands. Windows, TypeScript (Bun), no Python.
 
 Players install it with `PokerWrapperSetup.exe` ([setup/INSTALL.md](setup/INSTALL.md)). This repo is where it is
@@ -10,7 +10,7 @@ built from.
 
 | Folder | What it is |
 |---|---|
-| `gto-trainer/apps/wrapper` | **The wrapper**: reads the table (Ignition over CDP + WebSocket, CoinPoker from its log), runs sessions, the panel, the relay that presses. `:7700` |
+| `gto-trainer/apps/wrapper` | **The wrapper**: reads the table (Ignition over CDP + WebSocket, CoinPoker from its log, ClubGG off the screen — reader only), runs sessions, the panel, the relay that presses. `:7700` |
 | `ignition-study-wrapper/` | What the wrapper serves and keeps: its pages (`setup.html`, `panel.html` …), `formats.json`, card assets, launchers (`run-wrapper.vbs`, `wrapper.cmd`), its records (`data/`, `debug/`) |
 | `gto-trainer/apps/api` | **The study API + dashboard**: the answer path (charts, GTO Wizard AI chains, MES), the study poller that answers the wrapper's decisions, the dashboard (`dashboard.html`). `:2000` |
 | `gto-trainer/apps/api/src/charts` | **The chart server**: the chart index and node lookups every 3-handed / heads-up preflop answer reads. `:8777` |

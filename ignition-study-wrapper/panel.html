@@ -221,9 +221,14 @@
   .links { display: flex; gap: 8px; flex-wrap: wrap; }
   .mono { font-family: Consolas, ui-monospace, monospace; }
   /* Poker Wrapper: cards that only mean something on one site */
-  body[data-site="coinpoker"] .ign-only { display: none !important; }
+  body[data-site="coinpoker"] .ign-only, body[data-site="clubgg"] .ign-only { display: none !important; }
   body:not([data-site="coinpoker"]) .cp-only { display: none !important; }
+  body:not([data-site="clubgg"]) .cgg-only { display: none !important; }
   #site-badge.coinpoker { background: #3b2a12; color: #ffce56; }
+  #site-badge.clubgg { background: #3a1420; color: #ff9fb3; }
+  #cgg-seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 10px; margin-top: 8px; font-size: 12.5px; }
+  #cgg-seats .act { color: #5ee39a; font-weight: 700; }
+  #cgg-seats .out { color: #6f8196; }
   #site-badge.ignition { background: #1d2d44; color: #9ecbff; }
   #cp-card .mini.on { background: #4d3d1e; border-color: #ffce56; color: #ffce56; }
 </style>
@@ -316,6 +321,16 @@
       <button id="cp-admin" class="mini" title="every open CoinPoker table and every panel: open another panel, move one, end one">Tables &amp; panels…</button>
       <span id="cp-msg" class="sub"></span>
     </div>
+  </div>
+
+  <!-- ClubGG: the READER ONLY. The table is copied off the screen (ClubGG keeps no log a program can read), so it
+       must stay uncovered; this card says what the reader sees and why it is not reading when it is not. -->
+  <div class="card cgg-only" id="cgg-card" style="border-color:#6b2133">
+    <h2>ClubGG table <span id="cgg-state" class="badge"></span></h2>
+    <div id="cgg-room" class="sub" style="margin:0">no ClubGG table yet — open one in the client</div>
+    <div id="cgg-hand" class="sub" style="margin-top:6px"></div>
+    <div id="cgg-seats"></div>
+    <div id="cgg-meta" class="sub" style="margin-top:6px"></div>
   </div>
 
   <div class="card" id="sa-card">
@@ -1118,7 +1133,8 @@
     const b = $("site-badge");
     b.style.display = "";
     b.className = "badge " + site;
-    b.textContent = site === "coinpoker" ? "CoinPoker" : "Ignition";
+    b.textContent = site === "coinpoker" ? "CoinPoker" : site === "clubgg" ? "ClubGG · reader" : "Ignition";
+    if (site === "clubgg") return renderCgg(s);
     if (site !== "coinpoker") return;
     const t = s.table;
     cpSitOut = (t && t.sitOut) || {};
@@ -1133,6 +1149,33 @@
     $("cp-sitout-all").classList.toggle("on", !!cpSitOut.sitOutAll);
     $("cp-sitout-all").textContent = cpSitOut.sitOutAll ? "✓ Sitting out all" : "Sit out all";
     $("cp-sitout").disabled = $("cp-sitout-all").disabled = !(t && t.heroSeated);
+  }
+  function renderCgg(s) {
+    const t = s.table, c = s.clubgg || {};
+    const reading = !!(t && t.open && !t.status && t.lastReadAgo !== null && t.lastReadAgo < 3);
+    const st = $("cgg-state");
+    st.textContent = !t ? "no table" : reading ? "reading" : t.status ? "not reading" : "waiting";
+    st.style.background = !t ? "" : reading ? "#1c3b2c" : "#57222a";
+    $("cgg-room").innerHTML = !t
+      ? (c.client && !c.client.running ? "the ClubGG client is not running" : esc(c.status || "no ClubGG table window open — open one in the client"))
+      : `<b title="${esc(t.title)}">${esc(t.label || t.title)}</b>`
+        + (t.status ? ` · <span style="color:#ffce56">${esc(t.status)}</span>` : "")
+        + (t.error || c.error ? ` · <span style="color:#ff8a80">${esc(t.error || c.error)}</span>` : "");
+    const h = t && t.hand;
+    $("cgg-hand").innerHTML = h
+      ? `hand ${esc(String(h.id))} · ${esc(h.street.toLowerCase())}${h.board && h.board.length ? " · " + h.board.map(esc).join(" ") : ""}${h.bomb ? " · BOMB POT" : ""} · ${h.actions} actions read`
+      : t && t.lastHand ? `between hands (last: ${esc(String(t.lastHand))})` : "";
+    $("cgg-seats").innerHTML = t && t.seats ? t.seats.map((x) => {
+      const out = x.cards === "none" || x.cards === "dark";
+      return `<div class="${x.active ? "act" : out ? "out" : ""}">${x.active ? "▶ " : ""}${esc(x.name)} <span class="sub">${x.stack ?? "?"}${x.bet ? ` · bet ${x.bet}` : ""}</span></div>`;
+    }).join("") : "";
+    $("cgg-meta").innerHTML = t ? [
+      t.lastReadAgo !== null ? `last read ${t.lastReadAgo}s ago` : "not read yet",
+      `${t.reads} reads, ${t.covered} skipped (covered)`,
+      t.ocrMs ? `OCR ${t.ocrMs} ms` : null,
+      t.recording ? `recording ${t.recording.frames} frames (${t.recording.mb} MB)` : null,
+      "no answers, no presses on ClubGG yet",
+    ].filter(Boolean).map(esc).join(" · ") : "";
   }
   async function cpSitout(all) {
     const want = !(all ? cpSitOut.sitOutAll : cpSitOut.sitOutNextHand);

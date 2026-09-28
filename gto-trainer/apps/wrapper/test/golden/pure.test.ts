@@ -79,6 +79,17 @@ function asRecordedPreflight(fn: string, got: any): any {
   };
 }
 
+/**
+ * SUPERSEDED 2026-09-28 (the ClubGG site, reader only): "Silent play" is offered on ClubGG too, so its `sites` gains
+ * "clubgg" (the Python wrapper knew two sites). Projected back by dropping that one site; the rest of every preset is
+ * still compared exactly.
+ */
+function asRecordedPresets(fn: string, got: any): any {
+  if (fn !== "sessions.presets" || !got || typeof got !== "object") return got;
+  return Object.fromEntries(Object.entries(got).map(([k, p]: [string, any]) =>
+    [k, p && Array.isArray(p.sites) ? { ...p, sites: p.sites.filter((x: string) => x !== "clubgg") } : p]));
+}
+
 test("golden: pure functions match the Python wrapper", async () => {
   const pending = new Map<string, number>();
   const fails: string[] = [];
@@ -100,6 +111,7 @@ test("golden: pure functions match the Python wrapper", async () => {
       // a page snippet is compared with the frame resolver as the recording had it (lib.ts asRecordedFrame)
       if (typeof got === "string") got = asRecordedFrame(got);
       got = asRecordedPreflight(rec.fn, got);
+      got = asRecordedPresets(rec.fn, got);
     } catch (e: any) {
       got = { __error__: `${e?.name || "Error"}: ${e?.message || e}` };
     }

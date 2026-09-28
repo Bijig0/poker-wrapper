@@ -79,8 +79,10 @@
   .recent td { padding: 5px 8px; border-bottom: 1px solid #1f2731; }
   .resume { border-color: #ffce56; }
   .site-ico { font-size: 22px; line-height: 1; }
-  body[data-site="coinpoker"] .ign-only { display: none !important; }
+  body[data-site="coinpoker"] .ign-only, body[data-site="clubgg"] .ign-only { display: none !important; }
   body:not([data-site="coinpoker"]) .cp-only { display: none !important; }
+  body:not([data-site="clubgg"]) .cgg-only { display: none !important; }
+  body[data-site="clubgg"] .no-cgg, body[data-site="coinpoker"] .no-cp { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .preset, .check { transition: all .12s; } }
 </style>
 </head>
@@ -108,9 +110,13 @@
       <div class="field cp-only" style="grid-column: 1 / -1"><span class="k">Attach to table <span id="cpt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
         <div class="presets" id="cp-tables" style="grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))"></div>
         <span class="help">The tables open in the CoinPoker client right now — joined, you do not have to be seated. The wrapper reads the one you pick and no other, so a busier table can never take over the panel. Join a table in the client and it appears here within a few seconds.</span></div>
+      <div class="field cgg-only" style="grid-column: 1 / -1"><span class="k">Attach to table <span id="cggt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
+        <div class="presets" id="cgg-tables" style="grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))"></div>
+        <span class="help">The table windows open in the ClubGG client right now — you do not have to be seated. The reader copies the table you pick <b>off the screen</b> (ClubGG keeps no log a program can read), so keep that table uncovered: put this panel beside it, not over it. A covered table is not read, and the panel says what covers it.</span></div>
       <div class="field" style="grid-column: 1 / -1"><span class="k">Format <span id="fmt-note" class="sub" style="text-transform:none;letter-spacing:0"></span></span>
         <div class="presets" id="formats" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))"></div>
         <span class="help ign-only">The strategy names the formats its layers were built for; the others are greyed out. Start opens the table window and the wrapper drives the lobby to this table. The badge on the panel warns when the open table is not this one.</span>
+        <span class="help cgg-only">The format labels the session; the blinds come from the table window's title. <b>ClubGG is the reader only for now</b>: every seat, bet, action, the board and the pot are read and logged — no answers, nothing pressed.</span>
         <span class="help cp-only">The format labels the session. <b>You take the seat yourself in the CoinPoker client</b> — the wrapper reads the table you attach above from the client's own log (every card, action and stack, exactly), and only that table. Presses go to the table window; auto-execute arms only on a Practice Games table.</span></div>
       <div class="field ign-only"><span class="k">Tables</span>
         <div class="seg" id="tables"><button data-v="1" class="plain">1</button><button data-v="2" class="plain">2</button><button data-v="4" class="plain">4</button></div>
@@ -153,10 +159,11 @@
       <div class="field ign-only"><span class="k">Table browser</span>
         <label class="row"><input type="checkbox" id="clearCache"> clear its cache before opening it</label>
         <span class="help">Wipes the table window's HTTP, script and service-worker caches (not cookies, not the sign-in) when the session starts, so the lobby loads fresh. Use it after a sluggish or half-loaded lobby.</span></div>
-      <div class="field ign-only"><span class="k">Debug recording</span>
+      <div class="field no-cp"><span class="k"><span class="ign-only">Debug recording</span><span class="cgg-only">Frame recording</span></span>
         <div class="seg" id="recording"><button data-v="1" class="plain">On</button><button data-v="0" class="plain">Off</button></div>
-        <span class="help">Every tick's screenshot and parsed state, under this session's id. Needed for Replay Review.</span></div>
-      <div class="field" style="grid-column: 1 / -1"><span class="k">Auto-execute picks</span>
+        <span class="help ign-only">Every tick's screenshot and parsed state, under this session's id. Needed for Replay Review.</span>
+        <span class="help cgg-only">Every frame the reader reads, as PNG, under this session's id (wrapper debug folder\clubgg) — about 1.5 MB a second, capped at 4 GB. Turn it on to hand over a stretch of play (hero's hole cards) for the reader; tools/cggReplay.ts replays it.</span></div>
+      <div class="field no-cgg" style="grid-column: 1 / -1"><span class="k">Auto-execute picks</span>
         <div class="seg" id="autoExecute"><button data-v="1" class="plain">On</button><button data-v="0" class="plain">Off</button></div>
         <div id="auto-delay-row" style="display:none;margin-top:8px">
           <div class="row"><span class="sub">timing</span>
@@ -187,7 +194,7 @@
       <div class="field ign-only"><span class="k">Sat out</span>
         <div class="seg" id="autoSitBackIn"><button data-v="1" class="plain">Sit back in</button><button data-v="0" class="plain">Stay out</button></div>
         <span class="help">A few timed-out decisions and the table sits you out. With this on, the wrapper presses <b>I AM BACK</b> for you (after 2 s, up to 3 tries per sit-out), logged as a <b>sit-back-in</b> session event. It leaves you out while the connection guard has sat you out for a slow link. If you sit out on purpose, choose Stay out — it cannot tell your sit-out from the table's.</span></div>
-      <div class="field" style="grid-column: 1 / -1"><span class="k">GTO Wizard accounts</span>
+      <div class="field no-cgg" style="grid-column: 1 / -1"><span class="k">GTO Wizard accounts</span>
         <div id="gtow-allow" class="row" style="flex-wrap:wrap;gap:8px 18px"><span class="sub">reading the account registry…</span></div>
         <span class="help">Which registered accounts this session may spend. All ticked = no restriction (the default). Untick the Ultra to keep its budget for another table, or an account that is walled. Each shows its light and what it has used in the last hour against the 2,250 limit — a trip walls the account for about a day. Register and name accounts on the dashboard's GTO Wizard tab.</span></div>
       <div class="field"><span class="k">Budget</span>
@@ -226,6 +233,8 @@ const SITES = [
     tag: "Web client in the wrapper's own browser window. Strategies with answers, sign-in from a profile, the lobby router, top-ups, up to 4 tables." },
   { id: "coinpoker", name: "CoinPoker", ico: "♦",
     tag: "The CoinPoker desktop client. The table is read from the client's own log; you take the seat yourself. Answers: CoinPoker 200NL Heads-Up Equilibrium (our HRC heads-up charts + GTO Wizard AI postflop)." },
+  { id: "clubgg", name: "ClubGG", ico: "♣",
+    tag: "The ClubGG desktop client. The table is read off the screen (keep it uncovered); you take the seat yourself. Reader only for now: every hand is read and logged — no answers, no presses." },
 ];
 let SITE = (() => { try { return localStorage.getItem("pw.site") || "ignition"; } catch (e) { return "ignition"; } })();
 const siteOf = (p) => (p && p.sites) || ["ignition"];
@@ -247,6 +256,7 @@ function chooseSite(id) {
   if (first) choose(first);
   if (SITE === "ignition") pollTable();
   if (SITE === "coinpoker") pollCpTables();
+  if (SITE === "clubgg") pollCggTables();
 }
 
 const presetChips = (p) => {
@@ -254,7 +264,7 @@ const presetChips = (p) => {
   return [
     c.answers ? `<span class="chip on">answers on</span>` : `<span class="chip">answers off</span>`,
     c.answers ? '<span class="chip">answers on</span>' : "",
-    c.recording && SITE !== "coinpoker" ? `<span class="chip rec">● recording</span>` : "",
+    c.recording && SITE === "ignition" ? `<span class="chip rec">● recording</span>` : "",
   ].join("");
 };
 
@@ -276,6 +286,7 @@ function renderPresets() {
   const down = !strategies.length && !fake && SITE === "ignition";
   $("presets").innerHTML =
     (SITE === "coinpoker" && !strategies.length ? `<div class="presets-h">No CoinPoker strategy is on offer right now (is the study API up?) — play without answers; every hand is still archived and graded</div>` : "") +
+    (SITE === "clubgg" ? `<div class="presets-h">ClubGG is the reader only for now — play without answers; the reader follows every hand off the screen</div>` : "") +
     (strategies.length ? `<div class="presets-h">Play with answers — a whole-hand strategy, the same definitions as the dashboard's Sources → Strategies and the Playthrough picker</div>` + strategies.map(card).join("") : "") +
     (down ? `<div class="card" style="grid-column:1/-1;border-color:#ff8a80;background:#1c1214"><b style="color:#ff8a80">No strategy can be declared: the strategy catalogue is unreachable.</b>
         <div class="sub" style="margin-top:4px">${esc(CATALOGUE_ERROR || "the study API did not answer")}. The strategies live in the study API; there is no stand-in. Start it (dev-api.cmd / the gto-api launch config) — this page re-checks every 5 s and offers the strategies the moment it is back.</div></div>` : "") +
@@ -288,6 +299,7 @@ function choose(id) {
   cfg = JSON.parse(JSON.stringify(PRESETS[id].config));
   cfg.site = SITE;
   if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.cpTable = CP_CHOSEN; }
+  if (SITE === "clubgg") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.answers = false; cfg.autoExecute = false; cfg.cggTable = CGG_CHOSEN; cfg.cggTitle = cggTitle(CGG_CHOSEN); }
   if (cfg.buyinBb == null) cfg.buyinBb = 100;
   const allowed = allowedFormats();
   const onSite = (fid) => { const f = FORMATS.find((x) => x.id === fid); return !!f && (f.site || "ignition") === SITE; };
@@ -342,6 +354,36 @@ function renderCpTables() {
   el.querySelectorAll("[data-room]").forEach((b) => b.onclick = () => pickCpTable(b.dataset.room));
 }
 
+// ---- ClubGG: which table window the reader reads ------------------------
+let CGG_TABLES = [], CGG_CHOSEN = null, cggTimer = null;
+const cggTitle = (key) => (CGG_TABLES.find((t) => t.key === key) || {}).title || null;
+async function pollCggTables() {
+  clearTimeout(cggTimer);
+  if (SITE !== "clubgg") return;
+  try { CGG_TABLES = (await (await fetch("/clubgg/tables")).json()).tables || []; } catch (e) { CGG_TABLES = []; }
+  // a chosen table that has closed is un-chosen; with exactly one open, that one is the choice
+  if (CGG_CHOSEN && !CGG_TABLES.some((t) => t.key === CGG_CHOSEN)) { CGG_CHOSEN = null; if (cfg) { cfg.cggTable = null; cfg.cggTitle = null; schedulePreflight(); } }
+  if (!CGG_CHOSEN && CGG_TABLES.length === 1 && cfg) pickCggTable(CGG_TABLES[0].key);
+  else renderCggTables();
+  cggTimer = setTimeout(pollCggTables, 3000);
+}
+function pickCggTable(key) {
+  CGG_CHOSEN = key;
+  if (cfg) { cfg.cggTable = key; cfg.cggTitle = cggTitle(key); schedulePreflight(); }
+  renderCggTables();
+}
+function renderCggTables() {
+  const el = $("cgg-tables");
+  if (!el) return;
+  $("cggt-note").textContent = CGG_TABLES.length ? `— ${CGG_TABLES.length} open` : "";
+  if (!CGG_TABLES.length) { el.innerHTML = `<div class="sub">No table window is open in ClubGG — open one there (you do not have to sit) and it appears here.</div>`; return; }
+  el.innerHTML = CGG_TABLES.map((t) => `<button class="preset${CGG_CHOSEN === t.key ? " on" : ""}" data-key="${esc(t.key)}" title="${esc(t.title)}">
+      <b>${esc(t.label || t.title)}</b>
+      <span class="tag">${t.width}x${t.height}${t.players ? ` · ${t.players} seats read` : ""}</span>
+      <span class="why" style="color:${t.covered ? "#ffce56" : "#8fa1b3"}">${t.covered ? esc(t.covered) : "on screen, uncovered"}</span></button>`).join("");
+  el.querySelectorAll("[data-key]").forEach((b) => b.onclick = () => pickCggTable(b.dataset.key));
+}
+
 // ---- step 2: the table — format, buy-in, profile, window state ----------
 let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null, CATALOGUE_ERROR = null;
 // the catalogue is the only source of answering modes: keep asking until it is back
@@ -382,6 +424,7 @@ function renderFormats() {
   const s = preset && PRESETS[preset] && PRESETS[preset].strategy;
   const nSite = FORMATS.filter((f) => (f.site || "ignition") === SITE).length;
   if (SITE === "coinpoker") { $("fmt-note").textContent = `— ${nSite} CoinPoker formats`; return; }
+  if (SITE === "clubgg") { $("fmt-note").textContent = `— ${nSite} ClubGG formats`; return; }
   $("fmt-note").textContent = allowed ? `— only the ${allowed.length} format${allowed.length === 1 ? "" : "s"} ${s ? s.name : PRESETS[preset].label} was built for; ${FORMATS.length - allowed.length} other${FORMATS.length - allowed.length === 1 ? "" : "s"} hidden` : "— any format (no restriction declared)";
 }
 
@@ -526,6 +569,7 @@ function readSettings() {
   cfg.profile = $("profile").value || null;
   cfg.site = SITE;
   if (SITE === "coinpoker") { cfg.tables = 1; cfg.profile = null; cfg.recording = false; cfg.cpTable = CP_CHOSEN; }
+  if (SITE === "clubgg") { cfg.tables = 1; cfg.profile = null; cfg.answers = false; cfg.autoExecute = false; cfg.cggTable = CGG_CHOSEN; cfg.cggTitle = cggTitle(CGG_CHOSEN); }
 }
 
 /* WHAT EACH TABLE WILL ACTUALLY GET. A window narrower than the Ignition layout
@@ -683,7 +727,7 @@ $("start").onclick = async () => {
   if (!j.ok) { $("start").disabled = false; $("start").textContent = "Start session"; $("pf-msg").className = "msg bad"; $("pf-msg").textContent = j.error ?? "start refused"; if (j.preflight) { lastPf = j.preflight; runPreflight(); } return; }
   // the session is declared; sign-in (and the Authy code, only if asked) and the
   // trip to the table happen on the bridge page, after this — never before Start
-  location.href = (fake || SITE === "coinpoker") ? "/panel" : "/bridge";
+  location.href = (fake || SITE === "coinpoker" || SITE === "clubgg") ? "/panel" : "/bridge";
 };
 
 async function loadRecent() {
@@ -802,6 +846,14 @@ setInterval(() => checkUpdate(false), 30 * 60 * 1000);
   setTimeout(watchCatalogue, 5000);
   try { const fj = await (await fetch("/formats")).json(); FORMATS = fj.formats || []; STAKES = fj.stakes || {}; } catch (e) { FORMATS = []; }
   await loadProfiles();
+  // ClubGG only where the server reads it: this page is read from disk, so a wrapper still running older code would
+  // serve it too — and that code takes an unknown site for Ignition (it would open the Ignition table instead)
+  let cgg = false;
+  try { cgg = (await fetch("/clubgg/tables")).ok; } catch (e) { cgg = false; }
+  if (!cgg) {
+    SITES.splice(SITES.findIndex((x) => x.id === "clubgg"), 1);
+    if (SITE === "clubgg") SITE = "ignition";
+  }
   if (fake) SITE = "ignition";
   renderSites();
   pollTable();
