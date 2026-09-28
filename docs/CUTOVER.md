@@ -1,6 +1,20 @@
 # Cut-over: the owner's live stack from `poker` to `poker-wrapper`
 
-Status: **prerequisites built (2026-09-28); the day not scheduled.** Until it is done the live stack (the Poker Wrapper, the study API on
+Status: **DONE 2026-09-28 15:35-15:46 local.** The live stack runs from poker-wrapper; the log is
+`C:\Users\Brady\poker-data\cutover.log`, the old tasks' definitions and replaced shortcuts are in
+`C:\Users\Brady\poker-data\cutover-rollback\`. What differed from the plan below:
+- Records were COPIED, not moved: `poker\data`, the API's runtime files (tasks, fx, balance-acks, jobs\, hh_audit\,
+  mes_river_cache\), the wrapper's data\ and debug\, every `.profile-*` → `poker-data\{.,api,wrapper,wrapper-debug,
+  profiles}`. The originals are untouched in the poker checkout (1,295 hands / 6,091 answers in both at the switch).
+- Old tasks `StudyAPI`, `ChartServer`, `GtowWatchdog` are DISABLED (not deleted). New: "PokerWrapper API / Charts /
+  GTO Wizard - Brady" (poker-wrapper, both GTO Wizard accounts) and "PokerFactory API" (poker `study-api.ps1 -Factory`, :2100).
+- Carried over from poker's uncommitted work only what the live API ran (the 6-max patch overlay: hrc6max, hrc6maxDb,
+  sources, patchKey); the rest stays uncommitted in poker, not live (poker's CLAUDE.md says so).
+- The other session's verify API on :2001 (from poker) was stopped to release the database.
+- Checks: doctor all green; gate `--quick` green incl. the live smoke (strategies, :8777 node, :7700 state, Ignition
+  preflight, CoinPoker HU smoke 4/4) — CoinPoker preflight red only because the client was closed.
+- Rollback, if ever: stop + disable the four new tasks, re-enable the three old ones, remove `POKER_DATA_DIR` from
+  poker's local.env, copy poker-data's newer records back, restore the shortcuts from cutover-rollback\. Until it is done the live stack (the Poker Wrapper, the study API on
 :2000, the chart server on :8777, the GTO Wizard watchdog) keeps running from `C:\Users\Brady\poker`, and
 `poker-wrapper` is the repo releases are built from.
 
