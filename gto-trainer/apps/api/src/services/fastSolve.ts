@@ -1990,11 +1990,12 @@ function logChain(hand: ParsedHand, cur: string, origin: string | undefined, cha
     for (const s of ch.trace?.streets ?? []) {
       const ns = s.nodeSrc;
       const nodes = ns
-        ? `${ns.cache + ns.joined + ns.fetched} nodes (${ns.cache} cache${ns.joined ? `, ${ns.joined} joined` : ""}, ${ns.fetched} fetched${ns.fetchMs ? ` in ${ns.fetchMs} ms` : ""})`
+        ? `${ns.cache + ns.joined + ns.fetched} nodes (${ns.cache} cache${ns.store ? ` [${ns.store} from the solve cache]` : ""}${ns.joined ? `, ${ns.joined} joined` : ""}, ${ns.fetched} fetched${ns.fetchMs ? ` in ${ns.fetchMs} ms` : ""})`
         : "no nodes";
       if (s.fromCheckpoint) { parts.push(`${s.street} from checkpoint (not re-computed)`); continue; }
       const resumed = s.resumedAt != null ? ` · resumed at hero's node (${s.resumedAt + 1} node${s.resumedAt ? "s" : ""} from the mid-street checkpoint)` : s.resumeMiss ? ` · not resumed: ${s.resumeMiss}` : "";
-      parts.push(`${s.street} tree ${s.created ? `CREATED in ${s.solveMs} ms — ${s.treeWhy ?? "no reason recorded"}` : "cached"}${s.reuse ? ` (${s.reuse})` : ""}${resumed} · ${nodes} · walk ${s.walkMs} ms`);
+      // "from the solve cache": the tree came from the persistent store (services/gtowSolveCache) — no account asked
+      parts.push(`${s.street} tree ${s.created ? `CREATED in ${s.solveMs} ms — ${s.treeWhy ?? "no reason recorded"}` : s.account === "cache" ? "from the solve cache" : "cached"}${s.reuse ? ` (${s.reuse})` : ""}${resumed} · ${nodes} · walk ${s.walkMs} ms`);
     }
     if (ch.trace?.checkpoint && !ch.trace.checkpoint.from && ch.trace.streets.length > 1) parts.push(`(${ch.trace.checkpoint.note})`);
     if (!ch.ok) parts.push(`FAILED: ${ch.why}`);

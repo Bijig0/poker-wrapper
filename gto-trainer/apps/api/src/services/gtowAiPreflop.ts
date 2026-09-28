@@ -43,6 +43,10 @@ import { rakeCapCents } from "./profiles";
 import { isTestStakeOf } from "./strategies";
 import { actorsWithAllins, foldEarliestCaller } from "../utils/fitLine/fitLine";
 import { setPreflopPin, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
+// THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): the preflop half, at ensureSolution / fetchNode.
+import {
+  NODE_OK, NO_NODE, cacheKeyOf, gtowSolveCache, isStoredSolId, keyOfStoredSolId, nodeAddr, storedSolId, type GtowSolveCache,
+} from "./gtowSolveCache";
 
 export const GTOW_AI_PREFLOP_SOURCE = "gtow-ai-preflop" as const;
 export const GTOW_AI_PREFLOP_TIER = "ai-preflop" as const;
@@ -90,6 +94,8 @@ export interface AiPreflopResult {
   treeKey: string;
   solveSecs: number;
   cached: boolean;
+  /** hero's node came from the persistent solve cache (services/gtowSolveCache) — no request was sent for it */
+  stored?: boolean;
   shape: AiPreflopShape;
   note: string;
 }
@@ -312,49 +318,126 @@ const owners = new Map<string, GtowSessionId>();
 async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Promise<{ solId: string } | { error: string }> {
   const hit = solutions.get(key);
   if (hit) return hit;
+  // A TREE THE STORE HOLDS IS NOT CREATED AGAIN (services/gtowSolveCache): it is handed out as `gc:<key>` without a
+  // request and its nodes are served from the store; a node the store lacks mints the solve once (materialisePre).
+  const ck = solveCache.enabled ? cacheKeyOf("pre", body, { actions: "", board: "" }) : null;
+  if (ck && solveCache.hasTree(ck.key)) {
+    const p = Promise.resolve({ solId: storedSolId(ck.key) });
+    solutions.set(key, p);
+    if (solutions.size > 200) solutions.delete(solutions.keys().next().value as string);
+    return p;
+  }
   const p = (async () => {
-    // A recorded wall is a guess; when it leaves nothing routable, try the
-    // walled sessions anyway rather than refusing the spot (see gtowApi).
-    const ids = gtowSessions.route(need);
-    const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need);
-    if (!candidates.length) {
-      return { error: need.multiway
-        ? "no GTO Wizard session can solve a multiway preflop tree (the Ultra account is down or out of allowance)"
-        : "no GTO Wizard token (no session attached)" };
+    const made = await postPreflopSolution(body, need, { actions: "", board: "" });
+    // a fresh solve: every node reply it gives is stored under the tree's key (the row goes in with the first)
+    if ("solId" in made && ck) {
+      solveCache.noteTree(ck.key, "pre", ck.body);
+      notePreKey(made.solId, ck.key);
     }
-    let last = "no GTO Wizard token";
-    for (const id of candidates) {
-      const token = await gtowSessions.tokenFor(id);
-      if (!token) { last = `${id}: no token`; continue; }
-      const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-      const tr = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
-      if (!tr.ok) {
-        const b = (await tr.text().catch(() => "")).slice(0, 200);
-        gtowSessions.noteFailure(id, tr.status, b, need);
-        last = `custom-trees ${tr.status}: ${b}`;
-        continue; // a refusal here is this ACCOUNT's, not the tree's — try the next
-      }
-      const tree = await tr.json();
-      const so = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H, body: JSON.stringify({ custom_tree_id: tree.id, actions: "", board: "" }), signal: AbortSignal.timeout(20_000) });
-      if (!so.ok) {
-        const b = (await so.text().catch(() => "")).slice(0, 200);
-        gtowSessions.noteFailure(id, so.status, b, need);
-        last = `custom-solutions ${so.status}: ${b}`;
-        continue;
-      }
-      const sol = await so.json();
-      const solId = String(sol.id);
-      owners.set(solId, id);
-      if (owners.size > 400) owners.delete(owners.keys().next().value as string);
-      gtowSessions.noteSuccess(id, { tree: true });
-      return { solId };
-    }
-    return { error: last };
+    return made;
   })();
   solutions.set(key, p);
   p.then((r) => { if ("error" in r) solutions.delete(key); }).catch(() => solutions.delete(key));
   if (solutions.size > 200) solutions.delete(solutions.keys().next().value as string);
   return p;
+}
+
+/** POST a preflop tree and its solution on the first account routing allows (the network half of ensureSolution, and
+ *  what materialising a stored tree sends — the body exactly as stored). Records the owner. */
+async function postPreflopSolution(body: any, need: GtowNeed, solution: { actions: string; board: string }): Promise<{ solId: string } | { error: string }> {
+  // A recorded wall is a guess; when it leaves nothing routable, try the
+  // walled sessions anyway rather than refusing the spot (see gtowApi).
+  const ids = gtowSessions.route(need);
+  const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need);
+  if (!candidates.length) {
+    return { error: need.multiway
+      ? "no GTO Wizard session can solve a multiway preflop tree (the Ultra account is down or out of allowance)"
+      : "no GTO Wizard token (no session attached)" };
+  }
+  let last = "no GTO Wizard token";
+  for (const id of candidates) {
+    const token = await gtowSessions.tokenFor(id);
+    if (!token) { last = `${id}: no token`; continue; }
+    const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const tr = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+    if (!tr.ok) {
+      const b = (await tr.text().catch(() => "")).slice(0, 200);
+      gtowSessions.noteFailure(id, tr.status, b, need);
+      last = `custom-trees ${tr.status}: ${b}`;
+      continue; // a refusal here is this ACCOUNT's, not the tree's — try the next
+    }
+    const tree = await tr.json();
+    const so = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H, body: JSON.stringify({ custom_tree_id: tree.id, actions: solution.actions, board: solution.board }), signal: AbortSignal.timeout(20_000) });
+    if (!so.ok) {
+      const b = (await so.text().catch(() => "")).slice(0, 200);
+      gtowSessions.noteFailure(id, so.status, b, need);
+      last = `custom-solutions ${so.status}: ${b}`;
+      continue;
+    }
+    const sol = await so.json();
+    const solId = String(sol.id);
+    owners.set(solId, id);
+    if (owners.size > 400) owners.delete(owners.keys().next().value as string);
+    gtowSessions.noteSuccess(id, { tree: true });
+    return { solId };
+  }
+  return { error: last };
+}
+
+// ── the persistent solve cache's preflop half (services/gtowSolveCache) ───────────────────────────────────────────
+/** the cache this piece reads and writes — the process's own; tests hand it theirs (setPreflopSolveCache) */
+let solveCache: GtowSolveCache = gtowSolveCache;
+/** real solution id → its cache key: every reply polled from it is stored under that key */
+const preKeys = new Map<string, string>();
+/** stored trees minted in this process: synthetic id → the real solve every read of it polls */
+const preRealOf = new Map<string, string>();
+/** the one in-flight materialisation per synthetic id (concurrent misses join it) */
+const preMat = new Map<string, Promise<{ solId: string } | { error: string }>>();
+
+function notePreKey(solId: string, key: string): void {
+  preKeys.set(solId, key);
+  if (preKeys.size > 400) preKeys.delete(preKeys.keys().next().value as string);
+}
+/** The cache key a solution id answers for: a synthetic id carries it, a real one this process created maps to it. */
+const preKeyOfSol = (solId: string): string | null => (isStoredSolId(solId) ? keyOfStoredSolId(solId) : preKeys.get(solId) ?? null);
+
+/**
+ * MATERIALISE A STORED PREFLOP TREE: a node the store does not hold needs a real solve, so the tree and its solution are
+ * POSTed from the stored body — exactly what was POSTed the first time — through the normal preflop routing (Ultra
+ * first; more than two seats is multiway), once however many reads miss together. The account that mints it owns it.
+ */
+function materialisePre(gcId: string): Promise<{ solId: string } | { error: string }> {
+  const have = preRealOf.get(gcId);
+  if (have) return Promise.resolve({ solId: have });
+  const pending = preMat.get(gcId);
+  if (pending) return pending;
+  const key = keyOfStoredSolId(gcId);
+  const p = (async (): Promise<{ solId: string } | { error: string }> => {
+    const stored = solveCache.treeBody(key);
+    if (!stored || stored.kind !== "pre") return { error: `the solve cache no longer holds preflop tree ${key.slice(0, 8)} — ask again to solve it afresh` };
+    const seats = Array.isArray(stored.tree?.players) ? stored.tree.players.length : 2;
+    const made = await postPreflopSolution(stored.tree, { multiway: seats > 2, preflop: true }, stored.solution);
+    if ("error" in made) return made;
+    preRealOf.set(gcId, made.solId);
+    if (preRealOf.size > 400) preRealOf.delete(preRealOf.keys().next().value as string);
+    notePreKey(made.solId, key);
+    const owner = owners.get(made.solId);
+    if (owner) owners.set(gcId, owner);
+    solveCache.noteMaterialised(key);
+    return made;
+  })().finally(() => preMat.delete(gcId));
+  preMat.set(gcId, p);
+  return p;
+}
+
+/** Tests: point this piece at their own solve cache (null = the process's). */
+export function setPreflopSolveCache(c: GtowSolveCache | null): void {
+  solveCache = c ?? gtowSolveCache;
+}
+/** Tests: forget every in-process solution, node and verdict — what an API restart does. */
+export function resetAiPreflopMemory(): void {
+  solutions.clear(); nodes.clear(); owners.clear(); terminals.clear();
+  preKeys.clear(); preRealOf.clear(); preMat.clear();
 }
 
 /**
@@ -369,21 +452,48 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
 const terminals = new Set<string>();
 const TERMINAL_POLLS = 2;
 
-async function fetchNode(solId: string, line: string): Promise<{ data: any; cached: boolean } | { error: string }> {
+const rememberTerminal = (k: string) => {
+  terminals.add(k);
+  if (terminals.size > 2000) terminals.delete(terminals.values().next().value as string);
+};
+
+async function fetchNode(solId: string, line: string): Promise<{ data: any; cached: boolean; stored?: boolean } | { error: string }> {
   const k = `${solId}|${line}`;
   const hit = nodes.get(k);
   if (hit) return { data: hit, cached: true };
   const terminalError = `line ends the hand at '${line || "root"}' — no decision node`;
   if (terminals.has(k)) return { error: terminalError };
+  // THE PERSISTENT STORE, before any request (services/gtowSolveCache): the node as GTO Wizard sent it, or its verdict
+  // on the line — no decision node (a terminal), or its refusal (NODE_DOES_NOT_EXIST / VALIDATION_ERROR), which the
+  // callers read exactly as they read a live one
+  const ck = solveCache.enabled ? preKeyOfSol(solId) : null;
+  const addr = nodeAddr({ preflop: line });
+  if (ck) {
+    const s = solveCache.getNode(ck, addr);
+    if (s?.status === NODE_OK) {
+      nodes.set(k, s.data);
+      if (nodes.size > 2000) nodes.delete(nodes.keys().next().value as string);
+      return { data: s.data, cached: true, stored: true };
+    }
+    if (s?.status === NO_NODE) { rememberTerminal(k); return { error: terminalError }; }
+    if (s) return { error: `${-s.status}: ${(s.text ?? "").slice(0, 160)}` };
+  }
+  // a stored tree with a node the store lacks: its solve is created now (once, however many ask), then polled
+  let real = solId;
+  if (isStoredSolId(solId)) {
+    const m = await materialisePre(solId);
+    if ("error" in m) return m;
+    real = m.solId;
+  }
   const t0 = Date.now();
   let last = "the cloud did not return the node in time";
   let emptyPolls = 0;
   let refreshed = false;
-  const owner = owners.get(solId) ?? null;
+  const owner = owners.get(real) ?? null;
   while (Date.now() - t0 < NODE_TIMEOUT_MS) {
     const token = owner ? await gtowSessions.tokenFor(owner) : (await gtowSessions.bestToken({ preflop: true }))?.token ?? null;
     if (!token) return { error: `no GTO Wizard token for the session that owns this solve${owner ? ` (${owner})` : ""}` };
-    const params = new URLSearchParams({ custom_solution_id: solId, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
+    const params = new URLSearchParams({ custom_solution_id: real, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
     try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
     catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
@@ -395,17 +505,29 @@ async function fetchNode(solId: string, line: string): Promise<{ data: any; cach
       continue;
     }
     if (r.ok && r.status !== 204) {
-      const j = await r.json().catch(() => null);
-      if (j?.action_solutions?.length) { nodes.set(k, j); if (nodes.size > 2000) nodes.delete(nodes.keys().next().value as string); return { data: j, cached: false }; }
+      // read as text, then parsed: the store keeps the reply exactly as GTO Wizard sent it
+      const text = await r.text().catch(() => "");
+      let j: any = null;
+      try { j = text ? JSON.parse(text) : null; } catch { j = null; }
+      if (j?.action_solutions?.length) {
+        nodes.set(k, j);
+        if (nodes.size > 2000) nodes.delete(nodes.keys().next().value as string);
+        if (ck) solveCache.putNode(ck, addr, NODE_OK, text);
+        return { data: j, cached: false };
+      }
       // a 200 with an object body and no action to offer: the spot is solved and nobody is on the clock
       if (j != null && typeof j === "object" && ++emptyPolls >= TERMINAL_POLLS) {
-        terminals.add(k);
-        if (terminals.size > 2000) terminals.delete(terminals.values().next().value as string);
+        rememberTerminal(k);
+        if (ck) solveCache.putNode(ck, addr, NO_NODE, null);
         return { error: terminalError };
       }
     } else if (!r.ok && r.status !== 404) {
       const t = await r.text().catch(() => "");
-      if (r.status === 400 || r.status === 422) return { error: `${r.status}: ${t.slice(0, 160)}` };
+      if (r.status === 400 || r.status === 422) {
+        // GTO Wizard's refusal of the LINE is a fact about this tree: kept (putNode keeps only the verdict bodies)
+        if (ck) solveCache.putNode(ck, addr, -r.status, t);
+        return { error: `${r.status}: ${t.slice(0, 160)}` };
+      }
       last = `spot-solution ${r.status}: ${t.slice(0, 120)}`;
       if (owner) gtowSessions.noteFailure(owner, r.status, t.slice(0, 200), { preflop: true });   // the NEXT tree goes elsewhere
       if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: last };   // a quota wall will not lift while we wait
@@ -635,10 +757,12 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     } satisfies AiPreflopPin, hand.heroCards.join(""));
   }
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
+  // a node from the persistent solve cache says so: the hand page must tell a stored answer from a fresh solve
+  const stored = !!node.stored;
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
-    solveSecs: secs, cached: node.cached, shape,
-    note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${node.cached ? " (cached)" : ""}.`
+    solveSecs: secs, cached: node.cached, ...(stored ? { stored: true } : {}), shape,
+    note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : node.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
       + (fittedFolds.length ? ` LINE FITTED TO THE TREE: GTO Wizard's tree holds one limper, so ${fittedFolds.join(" and ")}'s limp/call was read as a FOLD (the earliest one who does not raise later) — hero faces one player fewer than at the table${deadNote ? `, with ${deadNote}` : ""}.` : ""),
   };

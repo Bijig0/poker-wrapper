@@ -41,6 +41,15 @@ export const mesRiverCacheDir = (): string => storePath("mes-river-cache", api("
 export const tasksPath = (): string => storePath("tasks", api("tasks.json")).path;
 /** The GTO Wizard account registry (services/gtowAccounts.ts) — beside the central database, so every checkout's API builds the same pool. */
 export const gtowAccountsPath = (): string => storePath("gtow-accounts", join(dirname(central()), "gtow-accounts.json"), "GTOW_ACCOUNTS_PATH").path;
+/**
+ * The GTO Wizard solve cache (services/gtowSolveCache.ts): every AI tree and node reply GTO Wizard sent, kept across
+ * restarts. Its OWN file beside the central database, not a table of it — node replies are ~500 KB of JSON each and
+ * a cache that size has no business in the file every page and backup reads. GTOW_CACHE_DB_PATH moves it; the value
+ * `off` means no cache at all (null).
+ */
+export const gtowCachePath = (): string | null =>
+  /^off$/i.test(process.env.GTOW_CACHE_DB_PATH?.trim() ?? "") ? null
+    : storePath("gtow-cache", join(dirname(central()), "gtow-cache.sqlite"), "GTOW_CACHE_DB_PATH").path;
 export const fxCachePath = (): string => storePath("fx", api("fx.json")).path;
 export const balanceAcksPath = (): string => storePath("balance-acks", api("balance-acks.json")).path;
 export const backgroundLockPath = (): string => storePath("background-lock", api("background.lock"), "API_BACKGROUND_LOCK").path;
@@ -78,6 +87,6 @@ export function storeWriteFailed(store: string, e: unknown): void {
 export function resolveAllStores(): StoreEntry[] {
   for (const f of [centralDbPath, answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,
     riverMesDbPath, riverMesConfigPath, mesRiverCacheDir, tasksPath, fxCachePath, balanceAcksPath, backgroundLockPath,
-    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath]) f();
+    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath, gtowCachePath]) f();
   return storeReport();
 }
