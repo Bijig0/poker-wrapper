@@ -73,13 +73,17 @@ describe("hrc6maxDb", () => {
     expect(httpCalls).toHaveLength(0);
   });
 
-  it("falls back to the server for a tree that was never baked", async () => {
+  // THE BAKE IS THE RECORD (2026-09-27). With a bake on this machine, a 6-max id it lacks is a chart that does not
+  // exist here — the picker moves to its next candidate — and the chart server is never asked. `node()` still says
+  // undefined (the module's own "not covered" signal); the routing decision is fetchNode6max's.
+  it("with a bake present, a 6-max tree the bake lacks is 'no such chart' and the server is not asked", async () => {
     const { fetchNode6max, hrc6maxDb } = await load();
     httpCalls = [];
     httpReply = { pos: "BTN", terminal: false, actions: [], cells: [] };
+    expect(hrc6maxDb.present()).toBe(true);
     expect(hrc6maxDb.node("ign200_6max_D150_o3", "")).toBeUndefined();
-    expect(await fetchNode6max("ign200_6max_D150_o3", "")).toEqual(httpReply as never);
-    expect(httpCalls).toEqual([{ source: "ign200_6max_D150_o3", line: "" }]);
+    expect(await fetchNode6max("ign200_6max_D150_o3", "")).toBeNull();
+    expect(httpCalls).toHaveLength(0);
   });
 
   it("never claims a non-6max chart — the 3-max corpus stays on :8777", async () => {
@@ -91,10 +95,43 @@ describe("hrc6maxDb", () => {
     expect(httpCalls).toHaveLength(1);
   });
 
-  it("passes 'unreachable' through unchanged", async () => {
+  it("passes 'unreachable' through unchanged for the families the server still holds", async () => {
     const { fetchNode6max } = await load();
     httpReply = "unreachable";
-    expect(await fetchNode6max("ign200_6max_D150_o3", "")).toBe("unreachable");
+    expect(await fetchNode6max("ign200_3maxasym_D100_s50_BB", "")).toBe("unreachable");
+  });
+
+  it("with NO bake on this machine, the 6-max family still comes from the server", async () => {
+    const { fetchNode6max, hrc6maxDb } = await load();
+    const was = process.env.HRC6MAX_DB;
+    process.env.HRC6MAX_DB = join(dir, "absent.sqlite");
+    hrc6maxDb.reload();
+    try {
+      httpCalls = [];
+      httpReply = { pos: "BTN", terminal: false, actions: [], cells: [] };
+      expect(hrc6maxDb.present()).toBe(false);
+      expect(hrc6maxDb.size).toBe(0);
+      expect(await fetchNode6max("ign200_6max_D150_o3", "")).toEqual(httpReply as never);
+      expect(httpCalls).toEqual([{ source: "ign200_6max_D150_o3", line: "" }]);
+    } finally {
+      process.env.HRC6MAX_DB = was;
+      hrc6maxDb.reload();
+    }
+  });
+
+  it("reports the coverage count from the file, not from first open (a tree baked later counts)", async () => {
+    const { hrc6maxDb } = await load();
+    hrc6maxDb.reload();
+    expect(hrc6maxDb.size).toBe(1);
+    const db = new Database(dbPath);
+    const blob = deflateSync(Buffer.from(JSON.stringify(CELLS)));
+    db.query("INSERT INTO nodes VALUES (?,?,?,?,?,?)").run("ign200_6max_D75_o3", "", "UTG", 0, JSON.stringify(ACTIONS), blob);
+    db.query("INSERT INTO trees VALUES (?,?,?,?,?)").run("ign200_6max_D75_o3", 1, 0, 0, 0);
+    db.close();
+    // the coverage set is re-read at most once a minute; a reload stands in for the clock here
+    hrc6maxDb.reload();
+    expect(hrc6maxDb.size).toBe(2);
+    expect(hrc6maxDb.covers("ign200_6max_D75_o3")).toBe(true);
   });
 
   // Runs last: it adds the column the 2026-09-25 bake carries. The fixture above is a bake from before it, and the

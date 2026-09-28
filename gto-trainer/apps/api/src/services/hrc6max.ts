@@ -8,7 +8,8 @@ import { type GetNode, type HrcNode } from "./hrc3max";
 // ROOT of each candidate, so resolution itself paid a 2-8s tree open on the
 // server and reading only the walk through SQLite would have left most of the
 // latency exactly where it was.
-import { fetchNode6max } from "./hrc6maxDb";
+import { fetchNode6max, hrc6maxDb } from "./hrc6maxDb";
+import { patchBase, patchKeys } from "./patchKey";
 
 /**
  * Chart picker for the 6-max NL200 ring set (ledger proposal `sixmax-nl200`).
@@ -34,6 +35,9 @@ export const SITE_6MAX = "ign200";
 
 /** Solved depth rungs (bb) — the six the grid covers. */
 export const RUNGS6 = [30, 50, 75, 100, 125, 150];
+/** The rungs that HAVE a limp tree. 125 and 150bb were left out by decision (HRC will not build them), so a deeper
+ *  limped pot reads the 100bb limp chart — and the picker names only trees that exist (see evenLadder). */
+export const LIMP_RUNGS6 = [30, 50, 75, 100];
 /** Open sizes with their own tree, biggest share of the pool's opens first. */
 export const OPENS6 = [2.5, 3, 2, 3.5];
 /** Short-stack rungs of the uneven set, all at a 100bb table. */
@@ -184,6 +188,8 @@ export interface Chart6Choice {
   relevant?: Seat6 | null;
   /** chart gaps this selection had to paper over — see Approx6 */
   approx?: Approx6[];
+  /** set when a solved PATCH chart answers — see chartFor6max. "snapped" = the two-short grid at its nearest rungs */
+  patch?: { id: string; variant: "exact" | "capped" | "snapped" };
 }
 
 /**
@@ -307,6 +313,101 @@ export function replayTokens6(tokens: string[]): { folded: Set<Seat6>; aggressor
  */
 /** `dealt`: the stacks as dealt, read once per hand by the postflop pin (fastSolve.pinPostflop) — see chartForHu. */
 export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: string[] = [], dealt?: Record<number, number>): Chart6Choice {
+  return withPatch(chartFor6maxGrid(hand, heroPos, tokens, dealt), hand, heroPos, tokens, dealt);
+}
+
+/**
+ * Where solved patch charts are found: the baked DB (hrc6maxDb), which pullChart.sh adds every landed chart to and the
+ * reader re-reads each minute — so a patch the box queue solves answers live with nobody wiring it. HRC6MAX_PATCHES=off
+ * turns the lookup off (the test preload does: tests must not depend on what this machine happens to have baked).
+ */
+const defaultPatchSource = (): readonly string[] => (process.env.HRC6MAX_PATCHES === "off" ? [] : hrc6maxDb.patchSources());
+let patchSource: () => readonly string[] = defaultPatchSource;
+/** Tests: supply the solved patch ids (null restores the baked DB). */
+export const setPatchSource = (fn: (() => readonly string[]) | null): void => { patchSource = fn ?? defaultPatchSource; };
+
+/** The two-short grid's short rungs (solves/sixmax_grid/two-short, proposal sixmax-nl200-two-shorts): patch ids, all
+ *  other seats at 100. A table with exactly two short seats and no patch of its own reads the nearest-rung tree. */
+export const TWO_SHORT_RUNGS6 = [20, 40, 60, 80];
+/** the stack gaps a patch chart closes: it IS this table's stacks and this open */
+const PATCH_CLOSES = new Set<Approx6Kind>(["short-rung-snapped", "no-limp-uneven", "open-not-in-set", "beyond-ladder"]);
+const openOfPatch = (id: string): number | null => {
+  const m = /_o(\d+(?:_5)?)$/.exec(patchBase(id));
+  return m ? Number(m[1]!.replace("_", ".")) : null;
+};
+
+/**
+ * PATCH CHARTS ANSWER FIRST (2026-09-27, Brady: "bind all the new patch charts so they're live" — and without anyone
+ * wiring each one). A patch chart is a tree solved at one table's own per-seat stacks, queued from a live approximation
+ * (services/patchJobs.ts). For every decision the table's patch ids are computed with the SAME rule the queue uses
+ * (services/patchKey.ts) from the stacks AS DEALT, and the first one that is solved goes ahead of the grid's choice:
+ *   - the open actually played (rounded to 0.5bb) before the grid's snapped tree open — a patch can carry any open;
+ *   - the exact key (stacks to 150bb) before the capped one (stacks to 100bb);
+ *   - a size patch of that table (a menu level widened) before the plain one: its menu is a superset.
+ * The grid's own candidates stay behind it as the fallback. The stack gaps the grid pick recorded are dropped (the
+ * patch is exactly that table), so they are not filed again; an open snap stays when the patch's open is not the one
+ * played. Limped pots keep the pool-locked limp trees (by design, and limp patches are parked).
+ */
+function withPatch(base: Chart6Choice, hand: ParsedHand, heroPos: string | null, tokens: string[],
+                   dealt?: Record<number, number>): Chart6Choice {
+  if (base.openSize === "limp") return base;
+  const solved = patchSource();
+  if (!solved.length) return base;
+  const byPos = dealtByPos(hand, heroPos, dealt);
+  const { observed } = openFromTokens(tokens);
+  const opens = [...new Set([...(observed != null ? [Math.round(observed * 2) / 2] : []), base.openSize as number])];
+  const found: { id: string; variant: "exact" | "capped" | "snapped" }[] = [];
+  for (const o of opens) {
+    // patchKeys lists capped then exact and drops the exact one when it is the same id — then that id IS exact
+    const keys = patchKeys(SITE_6MAX, byPos, o);
+    for (const k of keys.slice().reverse()) {                              // exact first, then capped
+      const variant = k === keys[keys.length - 1] ? "exact" as const : "capped" as const;
+      const variants = solved.filter((id) => patchBase(id) === k.id).sort((a, b) => Number(b !== k.id) - Number(a !== k.id));
+      for (const id of variants) if (!found.some((f) => f.id === id)) found.push({ id, variant });
+    }
+  }
+  // THE TWO-SHORT GRID (a grid, not per-table patches): two seats under the reload line and no patch of this exact
+  // table → both shorts snapped to TWO_SHORT_RUNGS6, everyone else 100. The stack gaps STAY filed (the snap is an
+  // approximation), so the table's own patch is still queued; this only answers better than the one-short grid meanwhile.
+  let snapped: string | null = null;
+  if (!found.length) {
+    const shorts = (Object.entries(byPos) as [Seat6, number][]).filter(([, bb]) => bb < DEEP6 - SHORT_GAP);
+    if (shorts.length === 2) {
+      const st: Partial<Record<Seat6, number>> = {};
+      for (const [p, bb] of shorts) st[p] = nearest(TWO_SHORT_RUNGS6, bb);
+      for (const o of opens) {
+        const id = patchKeys(SITE_6MAX, st, o)[0]?.id;
+        const hit = id ? solved.filter((x) => patchBase(x) === id).sort((a, b) => Number(b !== id) - Number(a !== id))[0] : undefined;
+        if (hit) {
+          found.push({ id: hit, variant: "snapped" });
+          snapped = shorts.map(([p, bb]) => `${p} ${Math.round(bb)}→${st[p]}`).join(", ");
+          break;
+        }
+      }
+    }
+  }
+  if (!found.length) return base;
+  const pick = found[0]!;
+  if (snapped) {
+    return {
+      ...base, id: pick.id, candidates: [pick.id, ...base.candidates].filter((x, i, a) => a.indexOf(x) === i),
+      note: [`two-short grid chart ${pick.id.replace(`${SITE_6MAX}_6max_`, "")} (${snapped})`, ...(base.approx ?? []).map((a) => a.note)].join(" · "),
+      patch: pick,
+    };
+  }
+  const pOpen = openOfPatch(pick.id);
+  const approx = (base.approx ?? []).filter((a) => !PATCH_CLOSES.has(a.kind)
+    && !(a.kind === "open-snapped" && observed != null && pOpen != null && Math.abs(observed - pOpen) <= 0.2));
+  const note = [`patch chart ${pick.id.replace(`${SITE_6MAX}_6max_`, "")} — this table's own stacks (${pick.variant})`,
+    ...approx.map((a) => a.note)].join(" · ");
+  return {
+    ...base, id: pick.id, candidates: [...found.map((f) => f.id), ...base.candidates].filter((x, i, a) => a.indexOf(x) === i),
+    note, approx, patch: pick,
+  };
+}
+
+/** The grid pick (even / one-short / pool-limp charts) — chartFor6max lays a solved patch over it. */
+function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: string[] = [], dealt?: Record<number, number>): Chart6Choice {
   const byPos = dealtByPos(hand, heroPos, dealt);
   const { open, observed } = openFromTokens(tokens);
   const notes: string[] = [];
@@ -351,16 +452,15 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
     approx: approx.slice(),
   });
   const evenLadder = (depth: number, o: number | "limp"): string[] => {
-    // A LIMPED POT ONLY EVER FALLS BACK TO ANOTHER LIMP CHART (2026-09-16): no raise tree contains a limp. The 125
-    // and 150bb limp trees are absent by decision (HRC will not build them), so those states ride this ladder to
-    // the 100bb limp chart.
+    // A LIMPED POT ONLY EVER FALLS BACK TO ANOTHER LIMP CHART (2026-09-16): no raise tree contains a limp. AND ONLY
+    // LIMP TREES THAT EXIST ARE NAMED (2026-09-27): the 125 and 150bb limp trees are absent by decision (HRC will not
+    // build them), and naming them first sent a lookup for a chart nothing holds to the chart server on every deep
+    // limped pot. The ladder is the solved limp rungs, nearest first, so a 125bb state reads the 100bb chart directly.
+    if (o === "limp") return LIMP_RUNGS6.slice().sort((a, b) => Math.abs(a - depth) - Math.abs(b - depth)).map((d) => evenChartId(d, "limp"));
     const cands = [evenChartId(depth, o)];
     const byDist = RUNGS6.slice().sort((a, b) => Math.abs(a - depth) - Math.abs(b - depth));
-    if (o === "limp") { for (const d of byDist) cands.push(evenChartId(d, "limp")); }
-    else {
-      for (const x of [2.5, 3, 2, 3.5]) cands.push(evenChartId(depth, x));
-      for (const d of byDist) cands.push(evenChartId(d, o));
-    }
+    for (const x of [2.5, 3, 2, 3.5]) cands.push(evenChartId(depth, x));
+    for (const d of byDist) cands.push(evenChartId(d, o));
     return cands;
   };
   const even = (depth: number) => {
@@ -371,8 +471,13 @@ export function chartFor6max(hand: ParsedHand, heroPos: string | null, tokens: s
     // re-solves exist.
     const pool = open === "limp" && depth >= DEEP6 ? poolLimpChart(tokens, me) : null;
     if (pool) notes.push(pool.note);
-    const cands = pool ? [pool.id, ...evenLadder(depth, open)] : evenLadder(depth, open);
-    return finish(pool ? pool.id : evenChartId(depth, open), cands, depth, depth, "EQ", open);
+    const ladder = evenLadder(depth, open);
+    // a limped pot past the deepest limp tree: the 100bb limp chart IS its chart (evenLadder) — said once, as prose
+    if (open === "limp" && !LIMP_RUNGS6.includes(depth)) {
+      notes.push(`${depth}bb limped pot — no limp tree past ${LIMP_RUNGS6[LIMP_RUNGS6.length - 1]}bb (by decision); the ${nearest(LIMP_RUNGS6, depth)}bb limp chart answers`);
+    }
+    const cands = pool ? [pool.id, ...ladder] : ladder;
+    return finish(pool ? pool.id : ladder[0]!, cands, depth, depth, "EQ", open);
   };
 
   // hero has not reloaded: his own stack sets the rung like anyone else's

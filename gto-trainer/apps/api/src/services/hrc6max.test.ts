@@ -1,5 +1,7 @@
 import { describe, expect, it, test } from "bun:test";
-import { chartFor6max, openFromTokens, replayTokens6 } from "./hrc6max";
+import { afterEach } from "bun:test";
+import { chartFor6max, openFromTokens, replayTokens6, setPatchSource } from "./hrc6max";
+import { patchKeys } from "./patchKey";
 
 /**
  * The two ways a limped pot used to lose its answer, both found by replaying 1,653 real preflop decisions through
@@ -95,12 +97,21 @@ describe("chartFor6max", () => {
     expect(chartFor6max(t, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool3");
   });
 
-  test("125bb limp - a chart we deliberately do not have - reaches the 100bb limp chart", () => {
+  test("125bb limp - a chart we deliberately do not have - reaches the 100bb limp chart without naming a phantom", () => {
     const deep = table(6, { 1: 125, 2: 125, 3: 125, 4: 125, 5: 125, 6: 125 });
     const c = chartFor6max(deep as any, "BB", ["C", "F", "F", "F", "F"]);
     expect(c.id).toBe("ign200_6max_D100_olimp_pool3");
-    expect(c.candidates).toContain("ign200_6max_D125_olimp");
+    // 2026-09-27: the 125/150bb limp ids exist nowhere; naming them sent every deep limped pot to the chart server
+    expect(c.candidates).not.toContain("ign200_6max_D125_olimp");
+    expect(c.candidates).not.toContain("ign200_6max_D150_olimp");
     expect(c.candidates).toContain("ign200_6max_D100_olimp");
+    expect(c.depth).toBe(125);
+    expect(c.note).toContain("125bb limped pot");
+    // hero in a non-blind seat facing a limp (a pool-locked node): the equilibrium 100bb limp chart is first, not a phantom
+    const co = chartFor6max(deep as any, "CO", ["C", "F"]);
+    expect(co.id).toBe("ign200_6max_D100_olimp");
+    expect(co.candidates[0]).toBe("ign200_6max_D100_olimp");
+    expect(co.candidates.every((id) => /^ign200_6max_D(30|50|75|100)_olimp$/.test(id))).toBe(true);
   });
 
   test("one short seat at a 100bb table takes the uneven chart for that seat", () => {
@@ -271,5 +282,83 @@ describe("chart-selection gaps (Approx6)", () => {
     const c = chartFor6max(blind, "BTN", []);
     expect(c.note).toContain("unreadable");
     expect(c.approx ?? []).toHaveLength(0);
+  });
+});
+
+describe("patch charts answer first (2026-09-27)", () => {
+  afterEach(() => setPatchSource(() => []));
+  // hero the SB facing a BTN open, the BB behind him short at 80bb, everyone else 100: capped and exact keys coincide
+  const bb80 = () => table(6, { 6: 80 }) as any;
+
+  test("no solved patch: the grid pick is unchanged", () => {
+    setPatchSource(() => []);
+    const c = chartFor6max(bb80(), "SB", ["F", "F", "F", "R2.5"]);
+    expect(c.patch).toBeUndefined();
+    expect(c.id).toBe("ign200_6max_D100_s70_BB_o2_5");
+  });
+
+  test("a solved patch for this table goes first, the grid chart stays behind it, and the stack gap is not filed", () => {
+    setPatchSource(() => ["ign200_6max_P_BB80_o2_5", "ign200_6max_P_SB80_o2_5"]);
+    const c = chartFor6max(bb80(), "SB", ["F", "F", "F", "R2.5"]);
+    expect(c.id).toBe("ign200_6max_P_BB80_o2_5");
+    expect(c.patch).toEqual({ id: "ign200_6max_P_BB80_o2_5", variant: "exact" });
+    expect(c.candidates[0]).toBe("ign200_6max_P_BB80_o2_5");
+    expect(c.candidates).toContain("ign200_6max_D100_s70_BB_o2_5");
+    expect(c.candidates).not.toContain("ign200_6max_P_SB80_o2_5");
+    expect((c.approx ?? []).some((a) => a.kind === "short-rung-snapped")).toBe(false);
+  });
+
+  test("the patch id is the queue's own key for the same table (one rule, services/patchKey.ts)", () => {
+    const want = patchKeys("ign200", { UTG: 100, HJ: 100, CO: 100, BTN: 100, SB: 100, BB: 80 }, 2.5).map((k) => k.id);
+    setPatchSource(() => want);
+    expect(chartFor6max(bb80(), "SB", ["F", "F", "F", "R2.5"]).id).toBe(want[0]!);
+  });
+
+  test("exact before capped: a 130bb BTN makes the exact key differ, and the exact chart wins when both are solved", () => {
+    const t = table(6, { 4: 130, 6: 80 }) as any;
+    setPatchSource(() => ["ign200_6max_P_BB80_o2_5", "ign200_6max_P_BTN130_BB80_o2_5"]);
+    const c = chartFor6max(t, "SB", ["F", "F", "F", "R2.5"]);
+    expect(c.id).toBe("ign200_6max_P_BTN130_BB80_o2_5");
+    expect(c.patch?.variant).toBe("exact");
+    expect(c.candidates.slice(0, 2)).toEqual(["ign200_6max_P_BTN130_BB80_o2_5", "ign200_6max_P_BB80_o2_5"]);
+    setPatchSource(() => ["ign200_6max_P_BB80_o2_5"]);
+    expect(chartFor6max(t, "SB", ["F", "F", "F", "R2.5"]).patch).toEqual({ id: "ign200_6max_P_BB80_o2_5", variant: "capped" });
+  });
+
+  test("the open actually played picks the patch tree: a 2x open reads the o2 patch, not the grid's snapped size", () => {
+    setPatchSource(() => ["ign200_6max_P_BB80_o2", "ign200_6max_P_BB80_o2_5"]);
+    const c = chartFor6max(bb80(), "SB", ["F", "F", "F", "R2"]);
+    expect(c.id).toBe("ign200_6max_P_BB80_o2");
+    expect((c.approx ?? []).some((a) => a.kind === "open-not-in-set" || a.kind === "open-snapped")).toBe(false);
+  });
+
+  test("a size patch of the table (wider menu) is preferred to the plain one", () => {
+    setPatchSource(() => ["ign200_6max_P_BB80_o2_5", "ign200_6max_P_BB80_o2_5_3b11"]);
+    expect(chartFor6max(bb80(), "SB", ["F", "F", "F", "R2.5"]).id).toBe("ign200_6max_P_BB80_o2_5_3b11");
+  });
+
+  test("an even table can use an EVEN size patch; a limped pot never reads a patch", () => {
+    setPatchSource(() => ["ign200_6max_P_EVEN_o2_5_3b11", "ign200_6max_P_BB80_olimp"]);
+    expect(chartFor6max(table(6) as any, "SB", ["F", "F", "F", "R2.5"]).id).toBe("ign200_6max_D100_o2_5");
+    expect(chartFor6max(bb80(), "SB", ["F", "F", "C", "C"]).patch).toBeUndefined();
+  });
+});
+
+describe("the two-short grid (2026-09-27)", () => {
+  afterEach(() => setPatchSource(() => []));
+  test("two shorts and no patch of this table: the nearest-rung two-short chart answers, and the gaps stay filed", () => {
+    const t = table(4, { 3: 63, 6: 38 }) as any;               // CO 63, BB 38, hero BTN 100
+    setPatchSource(() => ["ign200_6max_P_CO60_BB40_o2_5"]);
+    const c = chartFor6max(t, "BTN", ["F", "F", "R2.5"]);
+    expect(c.id).toBe("ign200_6max_P_CO60_BB40_o2_5");
+    expect(c.patch?.variant).toBe("snapped");
+    expect(c.note).toContain("CO 63→60");
+    setPatchSource(() => []);
+    expect(c.approx).toEqual(chartFor6max(t, "BTN", ["F", "F", "R2.5"]).approx);   // the grid pick's gaps, kept as they were
+  });
+  test("the table's own patch beats the snapped grid tree", () => {
+    const t = table(4, { 3: 63, 6: 38 }) as any;
+    setPatchSource(() => ["ign200_6max_P_CO60_BB40_o2_5", "ign200_6max_P_CO65_BB40_o2_5"]);
+    expect(chartFor6max(t, "BTN", ["F", "F", "R2.5"]).patch).toEqual({ id: "ign200_6max_P_CO65_BB40_o2_5", variant: "exact" });
   });
 });

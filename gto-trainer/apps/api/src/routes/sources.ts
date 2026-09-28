@@ -385,10 +385,10 @@ app.get("/registry", async (c) => {
         : "nothing yet — 6-handed preflop still answers from the GTO Wizard NL500 library (0.6bb cap) until a 6-seat chart picker lands",
       facts: [
         // NOT :8777. The whole family is baked into SQLite and read in ~0.1ms per node
-        // (services/hrc6maxDb.ts); the server is only the fallback for a chart the bake
-        // does not cover, which for the picker's id space is none of them.
+        // (services/hrc6maxDb.ts), and since 2026-09-27 the bake is the record: a chart it
+        // lacks does not exist on this machine. The server answers only where there is no bake.
         ["served by", hrc6maxDb.size > 0
-          ? `data/hrc6max-preflop.sqlite · ${hrc6maxDb.size} trees baked · :8777 only for what it misses`
+          ? `data/hrc6max-preflop.sqlite · ${hrc6maxDb.size} trees baked · the chart server is not used for this family`
           : `no local bake on this machine — every node goes to ${HRC3MAX_BASE} (build_6max_preflop_db.py)`],
         ["progress", cl.perConfig.map((p) => `${p.id}: ${p.have}/${p.want}`).join(" · ") || "no configs"],
         ["rake", "5% of the pot, cap $4 = 2bb with six dealt (Ignition's table, checked 2026-09-13)"],
