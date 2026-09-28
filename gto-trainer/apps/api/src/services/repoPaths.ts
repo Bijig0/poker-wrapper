@@ -16,3 +16,11 @@ export const REPO = resolve(API_DIR, "..", "..", "..");
 export const CHARTS_DIR = process.env.CHART_SOLUTIONS_DIR ?? join(DATA_DIR, "charts");
 /** the pool: opponent model, exploit ranges, villain frequencies, the Zone node corpus */
 export const POOL_DIR = process.env.POOL_DIR ?? join(DATA_DIR, "pool");
+/**
+ * Where the chart factory's DATA outputs are read from: the 6-max preflop bake, node trust, the re-solved rungs, the MES
+ * studies (flop file, turn files, reach values, the river lock), the strategy matrix and the backtests. Default data/
+ * (committed exports + downloaded data parts). FACTORY_DATA_DIR points it at the factory's own folder instead (the
+ * owner's machine: poker/gto-trainer/apps/api/data), so what the factory writes is read at once, with no export —
+ * docs/CUTOVER.md. A file's own override (HRC6MAX_DB, MES_POSTFLOP, MES_TURN_DIR) still wins. Read per call.
+ */
+export const factoryFile = (name: string): string => join(process.env.FACTORY_DATA_DIR || DATA_DIR, name);

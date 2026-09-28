@@ -24,7 +24,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { mesPostflopInfo } from "./mesPostflop";
 import { chartsLanded } from "./chartSets";
-import { POOL_DIR } from "./repoPaths";
+import { POOL_DIR, factoryFile } from "./repoPaths";
 
 /** THE 6-MAX RING STRATEGY'S ID — one constant: fastSolve's routing, the poller's local-preflop check and the coverage
  *  table all key on it, and a rename typed into one of five copies would silently switch the 6-max path off. */
@@ -290,7 +290,7 @@ export function evaluate(): StrategyView[] {
     }
     if (pre.chartSet) {
       // the pinned equilibrium: its re-solved (correct-tree) rungs must be installed on the chart server
-      const resolved = readJson(join(DATA, "resolved-charts.json")) as Record<string, number[]> | null;
+      const resolved = readJson(factoryFile("resolved-charts.json")) as Record<string, number[]> | null;
       const rungs = (resolved?.[pre.chartSet] ?? []).slice().sort((a, b) => a - b);
       const ok = rungs.length > 0;
       pc.push({ check: `${pre.chartSet} re-solved equilibrium charts installed`, pass: ok,

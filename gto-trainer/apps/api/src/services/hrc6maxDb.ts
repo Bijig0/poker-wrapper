@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { factoryFile } from "./repoPaths";
 import { join } from "node:path";
 // Python's zlib.compress() is zlib-wrapped deflate, NOT gzip — inflateSync, never gunzipSync.
 import { inflateSync } from "node:zlib";
@@ -36,7 +37,7 @@ import { fetchNode, type HrcNode } from "./hrc3max";
  *  other file imports hrc6max.ts ahead of it — and it stops reload() from being
  *  able to follow a changed path. */
 const dbPath = (): string =>
-  process.env.HRC6MAX_DB ?? join(import.meta.dir, "..", "..", "data", "hrc6max-preflop.sqlite");
+  process.env.HRC6MAX_DB ?? factoryFile("hrc6max-preflop.sqlite");
 const PREFIX = "ign200_6max_";
 
 type Row = { pos: string | null; terminal: number; actions: string; cells: Uint8Array; pruned?: number };

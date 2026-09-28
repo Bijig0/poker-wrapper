@@ -38,7 +38,8 @@ function Log($m) { Add-Content -Path $sup -Value "[$(Get-Date -Format 'yyyy-MM-d
 # each supervisor would kill whatever was on :2000 before starting its own worker, so they would
 # take turns killing each other's and the API would never stay up. Exit rather than join the fight.
 $others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'study-api\.ps1' })
+  # this script's own file only: the chart factory's API (the poker repo's study-api.ps1 -Factory) is another service
+  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$PSCommandPath*" })
 if ($others.Count) {
   Log "another supervisor is already running (pid $($others.ProcessId -join ', ')) - this one (pid $PID) exits"
   exit 0

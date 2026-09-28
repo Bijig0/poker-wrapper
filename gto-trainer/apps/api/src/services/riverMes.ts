@@ -49,6 +49,7 @@
  * gate; riverMes.test.ts pins the pure pieces to it.
  */
 import { Database } from "bun:sqlite";
+import { factoryFile } from "./repoPaths";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,7 +58,7 @@ import { openStore, riverMesConfigPath, riverMesDbPath } from "./storePaths";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..", "..");
 const DATA = join(import.meta.dir, "..", "..", "data");
-const LOCK_PATH = join(DATA, "river_lock.json");
+const LOCK_PATH = factoryFile("river_lock.json");
 // runtime records (the shadow log + its hand-edited config) live in the data root; the lock (tracked) stays with the code
 const CONFIG_PATH = riverMesConfigPath();
 const LOG_PATH = riverMesDbPath();

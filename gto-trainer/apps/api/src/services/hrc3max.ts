@@ -1,4 +1,5 @@
 import { timed } from "./answerTrace";
+import { factoryFile } from "./repoPaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { SNAP_MAX, SNAP_TAU } from "../utils/snapToken/snapToken";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
@@ -101,9 +102,7 @@ const ladderTop = (site: Site): number => rungsFor(site)[rungsFor(site).length -
 function loadV2ciRungs(): Record<string, Set<number>> {
   const fallback = { ign200: new Set([100]), ign500: new Set<number>() };
   try {
-    const raw = JSON.parse(require("node:fs").readFileSync(
-      require("node:path").resolve(import.meta.dir, "../../data/resolved-charts.json"),
-      "utf-8")) as Record<string, number[]>;
+    const raw = JSON.parse(require("node:fs").readFileSync(factoryFile("resolved-charts.json"), "utf-8")) as Record<string, number[]>;
     const out: Record<string, Set<number>> = {};
     for (const [site, rungs] of Object.entries(raw)) out[site] = new Set(rungs);
     return Object.keys(out).length ? out : fallback;

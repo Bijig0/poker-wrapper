@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SOLUTION_SETS } from "./gtowCdp";
-import { CHARTS_DIR } from "./repoPaths";
+import { CHARTS_DIR, factoryFile } from "./repoPaths";
 
 /**
  * The chart catalog: one structured inventory of every preflop chart this
@@ -232,7 +232,7 @@ export function parseHrcId(id: string): Partial<CatalogEntry> {
  *  generation answers is a fact about the manifest, not about the id. */
 const v2ciRungs = (): Record<string, Set<number>> => {
   try {
-    const raw = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "data", "resolved-charts.json"), "utf-8")) as Record<string, number[]>;
+    const raw = JSON.parse(readFileSync(factoryFile("resolved-charts.json"), "utf-8")) as Record<string, number[]>;
     return Object.fromEntries(Object.entries(raw).map(([site, rungs]) => [site, new Set(rungs)]));
   } catch { return {}; }
 };

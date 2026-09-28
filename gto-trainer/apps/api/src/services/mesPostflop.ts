@@ -20,6 +20,7 @@
  * compare like with like instead of our solve vs GTO Wizard's tree.
  */
 import { readFileSync, statSync } from "node:fs";
+import { factoryFile } from "./repoPaths";
 import { join } from "node:path";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 
@@ -56,7 +57,7 @@ interface TurnFile {
   lines: Record<string, { labels: string[]; cards: Record<string, TurnCard> }>;
 }
 // read per call, so a test can point it at a fixture (the files are a data part, not in git)
-const turnDir = () => process.env.MES_TURN_DIR ?? join(import.meta.dir, "..", "..", "data", "mes_turn");
+const turnDir = () => process.env.MES_TURN_DIR ?? factoryFile("mes_turn");
 const turnCache = new Map<string, TurnFile | null>();
 function loadTurn(family: string, board: string): TurnFile | null {
   const key = `${family}_${board}`;
@@ -98,7 +99,7 @@ export interface MesInputs {
 }
 interface RawData { families: Record<string, RawFamily> }
 
-const DATA_PATH = process.env.MES_POSTFLOP ?? join(import.meta.dir, "..", "..", "data", "mes_postflop.json");
+const DATA_PATH = process.env.MES_POSTFLOP ?? factoryFile("mes_postflop.json");
 
 let cache: { data: RawData | null; mtimeMs: number } | undefined;
 function load(): RawData | null {

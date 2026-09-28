@@ -19,7 +19,7 @@ import { missQueue } from "../services/missQueue";
 import { APPROXIMATIONS, type Approximation } from "../services/approximations";
 import { STRATEGY_COVERAGE } from "../services/strategyCoverage";
 import { formatsForSource, chartsLanded } from "../services/chartSets";
-import { POOL_DIR } from "../services/repoPaths";
+import { POOL_DIR, factoryFile } from "../services/repoPaths";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import {
@@ -143,7 +143,7 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
     ledgerId: f.id,
   }));
   const st60 = answerLog.stats(60) as { answered: number; failed: number };
-  const matrix = readJson(join(DATA_DIR, "strategy_matrix.json"));
+  const matrix = readJson(factoryFile("strategy_matrix.json"));
   const rows: Record<string, any> = {};
   for (const g of matrix?.groups ?? []) for (const r of g.rows ?? []) rows[r.id] = r;
   const cell = (id: string, k: string): number | null => { const v = rows[id]?.cells?.[k]?.v; return typeof v === "number" ? v : null; };
@@ -152,7 +152,7 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
   const mesRow = rows["combined_refit"] ? "combined_refit" : "combined_served";
   const mx = { nl25: cell(mesRow, "nl25"), nl200: cell(mesRow, "nl200"), norake: cell(mesRow, "norake") };
   const f1 = (x: number | null) => x == null ? "—" : `${x > 0 ? "+" : ""}${x.toFixed(1)}`;
-  const reach = readJson(join(DATA_DIR, "mes_reach_value.json"));
+  const reach = readJson(factoryFile("mes_reach_value.json"));
   const fams = ctx.mes.families;
   const arrival = Object.values((reach?.families ?? {}) as Record<string, any>).reduce((s, f: any) => s + (Number(f?.arrival_pct_of_hands) || 0), 0);
   const mq = missQueue.stats();
@@ -161,7 +161,7 @@ function attributeCards(cards: SourceCard[], ctx: { mes: ReturnType<typeof mesPo
   const sizeGaps = (mq.byKind?.["size-snapped"] ?? 0) + (mq.byKind?.["size-off-tree"] ?? 0);
   const catalog = getCatalog();
   const asym = catalog.entries.filter((e: any) => e.family === "3max-asym").length;
-  const manifest = readJson(join(DATA_DIR, "resolved-charts.json")) ?? {};
+  const manifest = readJson(factoryFile("resolved-charts.json")) ?? {};
   const resolvedRungs = Object.values(manifest as Record<string, number[]>).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
   const choices = ctx.exploit?.choices ? Object.keys(ctx.exploit.choices).length : 0;
   const poolN = (() => { try { const pm = readJson(poolModelPath()); const n = pm?.n ?? {}; return Object.values(n as Record<string, number>).reduce((s, x) => s + (Number(x) || 0), 0); } catch { return 0; } })();
@@ -294,7 +294,7 @@ app.get("/registry", async (c) => {
   const mes = mesPostflopInfo();
   const preflopDbPath = join(DATA_DIR, "preflop-db.sqlite");
   const preflopDb = fileInfo(preflopDbPath);
-  const manifest = readJson(join(DATA_DIR, "resolved-charts.json"));
+  const manifest = readJson(factoryFile("resolved-charts.json"));
   const catalog = getCatalog();
   const hrcCount = catalog.entries.filter((e) => e.source === "hrc" && e.family === "3max-asym").length;
   const gtowPairs = catalog.entries.filter((e) => e.source === "gtow").length;
@@ -711,7 +711,7 @@ app.get("/strategies", async (c) => c.json(await cachedBehindLive("sources/strat
  *  matrix, and hero's realized bb/100 while it was the active mode. */
 function strategiesBody() {
   const views = evaluateStrategies();
-  const matrix = readJson(join(DATA_DIR, "strategy_matrix.json"));
+  const matrix = readJson(factoryFile("strategy_matrix.json"));
   const rowById: Record<string, any> = {};
   for (const g of matrix?.groups ?? []) for (const row of g.rows ?? []) rowById[row.id] = { ...row, group: g.title };
   // realized: answers tagged with the mode that was live, joined to hand nets
@@ -888,10 +888,10 @@ function sessionModes(days: number) {
 }
 
 app.get("/matrix", (c) => {
-  const matrix = readJson(join(DATA_DIR, "strategy_matrix.json"));
-  const ladder = readJson(join(DATA_DIR, "winrate_ladder.json"));
-  const reach = readJson(join(DATA_DIR, "mes_reach_value.json"));
-  const combined = readJson(join(DATA_DIR, "backtest_combined.json"));
+  const matrix = readJson(factoryFile("strategy_matrix.json"));
+  const ladder = readJson(factoryFile("winrate_ladder.json"));
+  const reach = readJson(factoryFile("mes_reach_value.json"));
+  const combined = readJson(factoryFile("backtest_combined.json"));
   const sm = sessionModes(365);
   // realized bb/100 by preflop strategy mode: exploit sessions vs chart sessions
   const realized = {

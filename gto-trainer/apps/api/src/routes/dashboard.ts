@@ -24,7 +24,7 @@ import { chartSetup, type ChartSetup } from "../services/chartSetup";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi, DEFAULT_TREE_RAKE, type CustomTreeInput } from "../services/gtowApi";
 import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
-import { REPO } from "../services/repoPaths";
+import { REPO, factoryFile } from "../services/repoPaths";
 import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, resolveAllStores, splitStores, wrapperDebugDir } from "../services/storePaths";
 import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -235,7 +235,7 @@ function auditBasis(): string {
   if (auditBasisMemo) return auditBasisMemo;
   const sig = (rel: string) => {
     try {
-      const st = fsStat(join(import.meta.dir, "..", "..", "data", rel));
+      const st = fsStat(rel === "resolved-charts.json" ? factoryFile(rel) : join(import.meta.dir, "..", "..", "data", rel));
       return `${st.size}:${Math.trunc(st.mtimeMs)}`;
     } catch {
       return "-";
@@ -1298,7 +1298,7 @@ const LADDER = [
  *  missing, and the response says which one it served. */
 function ladderRows(): { rows: typeof LADDER; source: string; generatedAt: string | null; chart: string | null } {
   try {
-    const j = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "data", "winrate_ladder.json"), "utf-8"));
+    const j = JSON.parse(readFileSync(factoryFile("winrate_ladder.json"), "utf-8"));
     const rows = (j.rows as any[])
       .filter((r) => r.id === "eq_charts" || r.id === "exploit_preflop")
       .map((r) => ({
@@ -1316,7 +1316,7 @@ function ladderRows(): { rows: typeof LADDER; source: string; generatedAt: strin
 
 app.get("/mes-value", async (c) => {
   let corpus: any = null;
-  try { corpus = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "data", "mes_reach_value.json"), "utf-8")); } catch {}
+  try { corpus = JSON.parse(readFileSync(factoryFile("mes_reach_value.json"), "utf-8")); } catch {}
   const ladder = ladderRows();
 
   // live: classify hero's own hands the same way the corpus crunch does

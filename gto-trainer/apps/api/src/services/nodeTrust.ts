@@ -13,13 +13,14 @@
  * broken: AA limp 84%); BB behind two limps + complete 1.64 (6.8e-6, broken). STARVED = regret > 0.03 or reach < 1e-4.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { factoryFile } from "./repoPaths";
 import { join } from "node:path";
 
 export const TRUST_REGRET_MAX = 0.03;
 export const TRUST_REACH_MIN = 1e-4;
 /** For pool-locked trees only: past this the node is broken whatever its reach. */
 export const TRUST_REGRET_CATASTROPHIC = 0.3;
-const FILE = join(import.meta.dir, "..", "..", "data", "limp_node_trust.json");
+const FILE = factoryFile("limp_node_trust.json");
 
 type TrustMap = Record<string, Record<string, [number | null, number]>>;
 let cache: { at: number; map: TrustMap } | null = null;
