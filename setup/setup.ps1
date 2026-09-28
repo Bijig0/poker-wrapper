@@ -221,6 +221,21 @@ else {
     # the installer is the user saying "this one": it replaces the old folder's services (the old folder stays)
     $go = $Installer -or ((Ask 'Replace it with this install? (y/N)' 'N') -match '^[yY]')
   }
+  # ANOTHER POKER WRAPPER ALREADY SERVES THIS COMPUTER (the owner's own stack, a source checkout, a zip install): the
+  # study API, chart server and panel ports are machine-wide, and a second API binds beside the first (reusePort) and
+  # answers the same tables twice. The installer stopped this copy's own services before copying (PrepareToInstall),
+  # so whatever still listens is someone else's: leave this copy's services off and say so.
+  $held = @()
+  if ($go -and $Installer) {
+    $held = @(foreach ($port in 2000, 8777, 7700) {
+      $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($c) {
+        $cl = (Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue).CommandLine
+        if (-not ($cl -and $cl -like "*$root*")) { ":$port" }
+      }
+    })
+    if ($held.Count) { $go = $false }
+  }
   if ($go) {
     # (re)start: a service already running from this folder keeps the OLD code/config until it restarts
     foreach ($t in $TaskNames.Values) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
@@ -230,6 +245,8 @@ else {
     Todo 'a Chrome window opened on GTO Wizard: sign in there and leave it open'
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install_tasks.ps1') -Start
     Ok 'registered and started (they start by themselves at every logon)'
+  } elseif ($held.Count) {
+    Bad "another Poker Wrapper is already running on this computer (it holds $($held -join ', ')): this copy's services were NOT started, so the two never answer the same table. To use this copy, stop the other one (or use another Windows account) and run PokerWrapperSetup again."
   } else { Bad 'services not registered (kept the existing install)' }
 }
 

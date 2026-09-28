@@ -6,6 +6,8 @@
  *   bun setup/buildPackage.ts --publish --notes "what changed"  gate + upload = an UPDATE
  *   bun setup/buildPackage.ts --no-data                        code zip only (+ the small runtime part)
  *   bun setup/buildPackage.ts --installer                      + PokerWrapperSetup-<version>.exe (needs Inno Setup)
+ *   bun setup/buildPackage.ts --stage                          gate + upload the release WITHOUT moving latest.json:
+ *                                                              its installer works anywhere, no install sees an update
  *   bun setup/buildPackage.ts --status [--json]                what is published vs what this tree would publish
  *
  * Builds:
@@ -352,7 +354,7 @@ function arg(name: string): string | null {
 function main(): number {
   const a = { status: process.argv.includes("--status"), json: process.argv.includes("--json"), noData: process.argv.includes("--no-data"),
               publish: process.argv.includes("--publish"), skipGate: process.argv.includes("--skip-gate"),
-              installer: process.argv.includes("--installer"),
+              installer: process.argv.includes("--installer"), stage: process.argv.includes("--stage"),
               out: arg("--out") ?? join(homedir(), "poker-package"), notes: arg("--notes") ?? "" };
   const out = resolve(a.out);
   mkdirSync(out, { recursive: true });
@@ -368,7 +370,7 @@ function main(): number {
   const commit = gitHead();       // the package is built from the WORKING TREE; the commit is provenance, not a promise
   const bun = findBun();
 
-  if (a.publish && !a.skipGate) {
+  if ((a.publish || a.stage) && !a.skipGate) {
     console.log("gate: setup\\regress.ts --publish ...");
     const g = spawnSync(bun, [join(ROOT, "setup", "regress.ts"), "--publish"], { cwd: ROOT, stdio: "inherit" });
     if (g.status) {
@@ -431,7 +433,7 @@ function main(): number {
 
   // 3. the Windows installer (--installer, or any publish): PokerWrapperSetup-<version>.exe = this code + the runtime
   let installer: Record<string, any> | null = null;
-  if (a.installer || a.publish) {
+  if (a.installer || a.publish || a.stage) {
     const exe = buildInstaller(out, version, codeZip, parts.runtime ? join(out, parts.runtime.file) : null);
     if (!exe) return 5;
     installer = { file: basename(exe), bytes: statSync(exe).size, sha256: sha256File(exe) };
@@ -444,8 +446,10 @@ function main(): number {
   writeFileSync(releasePath, pyJsonDumps(release, { indent: 1 }), "utf8");
 
   // 4. publish: parts first (only the ones the channel lacks), then the release, then latest.json LAST — a friend
-  //    who checks mid-upload still sees the previous, complete release
-  if (a.publish) {
+  //    who checks mid-upload still sees the previous, complete release.
+  //    --stage stops before latest.json: the release is on the channel (its installer finds its data parts, and
+  //    `update.ps1 -Version <v>` can install it) but no install is offered it as an update — a build to try first.
+  if (a.publish || a.stage) {
     for (const [part, info] of Object.entries(parts)) {
       const dst = `${CHANNEL}/data/${info.file}`;
       // NOT just the exit code: on R2 a stat of a MISSING key answers a phantom directory with exit 0
@@ -470,11 +474,13 @@ function main(): number {
     if (installer) {
       // this version's installer, and the one to hand a NEW player: <channel>/PokerWrapperSetup.exe is always the latest
       rc(["copyto", join(out, installer.file), `${CHANNEL}/releases/${version}/${installer.file}`]);
-      rc(["copyto", join(out, installer.file), `${CHANNEL}/PokerWrapperSetup.exe`]);
+      if (a.publish) rc(["copyto", join(out, installer.file), `${CHANNEL}/PokerWrapperSetup.exe`]);
     }
     rc(["copyto", releasePath, `${CHANNEL}/releases/${version}/release.json`]);
-    rc(["copyto", releasePath, `${CHANNEL}/latest.json`]);
-    console.log(`published ${version} to ${CHANNEL} (latest.json moved)`);
+    if (a.publish) {
+      rc(["copyto", releasePath, `${CHANNEL}/latest.json`]);
+      console.log(`published ${version} to ${CHANNEL} (latest.json moved)`);
+    } else console.log(`staged ${version} on ${CHANNEL} (latest.json NOT moved: no install is offered it; publish to release it)`);
   }
   console.log("done");
   return 0;
