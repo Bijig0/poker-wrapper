@@ -1,6 +1,6 @@
 # Cut-over: the owner's live stack from `poker` to `poker-wrapper`
 
-Status: **planned, not started** (2026-09-28). Until it is done the live stack (the Poker Wrapper, the study API on
+Status: **prerequisites built (2026-09-28); the day not scheduled.** Until it is done the live stack (the Poker Wrapper, the study API on
 :2000, the chart server on :8777, the GTO Wizard watchdog) keeps running from `C:\Users\Brady\poker`, and
 `poker-wrapper` is the repo releases are built from.
 
@@ -27,32 +27,35 @@ within a minute (patch charts auto-live), and a refit pool is armed at the next 
 
 ## Prerequisites (code, done and gated before the day)
 
-1. **poker — a factory mode for its API** (`FACTORY_MODE=1`, :2100). Today an API on any port but 2000 is HTTP-only
-   by configuration (`backgroundLock.httpOnlyByConfig`), so a :2100 API would never start the box keeper or the
-   job dispatcher. Factory mode:
-   - its own lock (`API_BACKGROUND_LOCK=<data>\api\factory.lock`) and exempt from the port rule;
-   - starts `boxKeeper` + `jobs` only — no study poller, token keeper, reconciler, hand-history checker or replay
-     scheduler (those are the product's);
-   - the dashboard on :2100 keeps every page (Solve Proposals, Tasks, Sources work queue, hands for context);
-   - the "live API" split-store refusal applies to it too (it writes the shared root);
-   - **its own supervisor** (`.claude\factory-api.ps1`, or `study-api.ps1` taking a port): today's `study-api.ps1`
-     kills any bun listening on **2000** before every start (the straggler sweep) — run for the factory as it is, it
-     would kill the product's live API.
-2. **poker / poker-zenbook — repoint what calls :2000 for factory endpoints** to :2100 (the table at the end: the box
-   queue's patch-jobs poll, boxJob's keeper/jobs reads, the "Study Dashboard" shortcut).
-3. **poker-wrapper — `FACTORY_DATA_DIR`**: one env knob in `repoPaths.ts` — when set, the factory-output data files
-   (`hrc6max-preflop.sqlite`, `limp_node_trust.json`, `resolved-charts.json`, `mes_postflop.json`, `mes_turn\`,
-   `strategy_matrix.json`, `winrate_ladder.json`, `backtest_combined.json`, `mes_reach_value.json`, `river_lock.json`,
-   `limp_tree_shape.json`) are read from there instead of `data\`. Today only some have their own override
-   (`HRC6MAX_DB`, `MES_POSTFLOP`, `MES_TURN_DIR`); node trust, resolved charts and the study JSONs have none.
-4. **poker-wrapper — bring over what lands in poker until the day** (the first three, the GTO Wizard accounts
-   registry, came across on 2026-09-28): every commit on poker's main touching
-   the product paths since `713f6553` — the last one ported (`git format-patch 713f6553..main -- gto-trainer/apps ignition-study-wrapper
-   setup config .claude/study-api.ps1 .claude/chart-server.ps1 scripts/start_gtow_chrome.ps1 scripts/gtow_watchdog.ps1
-   scripts/start_gtow_secondary.ps1` → `git am -3` here; the pool moved to `data/pool`, the ledger pieces to
-   `chartSets.ts`). Other sessions' UNCOMMITTED product work in poker must be committed first, or it is lost to the
-   product. From the cut-over on, product work happens in poker-wrapper only.
-5. Both gates green: `poker-wrapper: bun setup/regress.ts --publish`, poker's own.
+1. **DONE — poker: factory mode for its API** (poker `7dbb6fd2`, 2026-09-28). `FACTORY_MODE=1` on :2100:
+   - its own background lock (`<data>\api\factory.lock`) and exempt from the "any port but 2000 is HTTP-only" rule;
+   - starts the job dispatcher + box keeper only — no study poller, token keeper, reconciler, hand-history check or
+     replay scheduler (those are the product's); `POST /api/study-poller/*` answers 409;
+   - the dashboard keeps every page; the live API's split-store refusal applies to it (it writes the shared root);
+   - the supervisor is `.claude\study-api.ps1 -Factory` (port 2100 by default, `-Port` overrides): its own logs
+     (`factory-supervisor.log`, `factory-api.log`), its straggler sweep and probes on ITS port (the plain one kills any
+     bun on :2000), and it counts only supervisors started from the same script file in the same mode — poker's
+     `-Factory` supervisor, poker's plain one and poker-wrapper's never evict each other. Without the switches: unchanged.
+   Smoke (HTTP-only on :2101, so the live box keeper was not doubled): ledger 44 configs, /proposals 200, poller POST 409.
+2. **DONE (code) — the factory's callers can be pointed at :2100.** `boxQueue.ts` already reads `STUDY_API`; `boxJob.ts`
+   now reads it for `/api/ledger/keeper` and `/api/ledger/jobs` (default :2000, unchanged). Those two calls belong to
+   another session's UNCOMMITTED `boxJob.ts` work in poker-zenbook, so the two-line change is uncommitted with it. On the
+   day: restart the box queue (hand-started: `bun run scripts/boxQueue.ts` in `poker-zenbook\hrc-api`) with
+   `STUDY_API=http://127.0.0.1:2100`; the boxJob relays it starts inherit it. The "Study Dashboard" desktop .cmd → :2100.
+3. **DONE — poker-wrapper: `FACTORY_DATA_DIR`** (poker-wrapper `4b4e6b2`). `repoPaths.factoryFile(name)`: the 6-max bake,
+   node trust, resolved charts, the MES studies (flop file, turn files, reach values, river lock), the strategy matrix and
+   the backtests come from `FACTORY_DATA_DIR` when set, else `data\`; a file's own override (`HRC6MAX_DB`,
+   `MES_POSTFLOP`, `MES_TURN_DIR`) still wins.
+4. **ONGOING — bring over what lands in poker until the day.** Ported so far: the GTO Wizard accounts registry (poker
+   `1fcbe086`, `4043f254`, `713f6553`) and the miss queue's real-hands-only fix (poker `1fb39d5a`, ported by its own
+   session as branch `claude/miss-queue-real-hands`, merged). Next: every poker commit touching the product paths after
+   `1fb39d5a` — `git format-patch 1fb39d5a..main -- gto-trainer/apps gto-trainer/packages ignition-study-wrapper setup
+   config .claude/study-api.ps1 .claude/chart-server.ps1 scripts/start_gtow_chrome.ps1 scripts/gtow_watchdog.ps1
+   scripts/start_gtow_secondary.ps1` → `git am -3` here (the pool is `data/pool`, the ledger pieces `chartSets.ts`;
+   factory-only hunks — ledger, jobs, box keeper, patch jobs, work queue — are dropped). Skip poker `7dbb6fd2` (factory
+   mode is the factory's). Other sessions' UNCOMMITTED product work in poker must be committed and ported first, or it
+   is lost to the product. From the day on, product work happens in poker-wrapper only.
+5. **Both gates green on the day**: poker-wrapper `bun setup/regress.ts --publish`; poker's own.
 
 ## The day (with no session running; about 30 minutes; each step checkable)
 
@@ -93,7 +96,8 @@ within a minute (patch charts auto-live), and a refit pool is armed at the next 
    are only on this machine, and a chart the fleet converts is listed at once.
 6. **Services**: unregister `StudyAPI`, `ChartServer`, `GtowWatchdog` (poker's); in poker-wrapper run
    `setup\install_tasks.ps1 -Start -BothGtowAccounts` (registers "PokerWrapper API / Charts / GTO Wizard - Brady");
-   register the factory's task ("PokerFactory API": the factory supervisor from prerequisite 1, `FACTORY_MODE=1`, :2100).
+   register the factory's task ("PokerFactory API": `powershell -File C:\Users\Brady\poker\.claude\study-api.ps1 -Factory`,
+   :2100 — the task shape install_tasks.ps1 uses: conhost --headless, at logon, restart on failure).
 7. **Shortcuts**: desktop "Poker Wrapper" → `poker-wrapper\ignition-study-wrapper\run-wrapper.vbs`; add "Poker
    Dashboard" (:2000) and "Chart Factory" (:2100); "Ignition Study Tool" → `poker-wrapper\gto-trainer\study-tool.vbs`;
    "Publish Poker Wrapper update" → `poker-wrapper\setup\publish.cmd`; the Start menu "Poker Wrapper" (it still
