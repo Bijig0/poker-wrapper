@@ -157,7 +157,9 @@ async function runSweep(source: "archive" | "corpus"): Promise<void> {
 
 app.get("/", (c) => {
   const status = (c.req.query("status") ?? "all") as MissStatus | "all";
-  return c.json({ ok: true, items: missQueue.list(status), stats: missQueue.stats(), sweep, snapNote: SNAP_NOTE, store: missQueue.path, corpus: existsSync(CORPUS) ? CORPUS : null });
+  // rows only our own scripts' hands hit are hidden (services/missQueue.ts isSyntheticMiss); ?synthetic=1 shows them
+  const synthetic = c.req.query("synthetic") === "1";
+  return c.json({ ok: true, items: missQueue.list(status, { synthetic }), stats: missQueue.stats(), sweep, snapNote: SNAP_NOTE, store: missQueue.path, corpus: existsSync(CORPUS) ? CORPUS : null });
 });
 
 app.get("/sweep", (c) => c.json({ ok: true, sweep }));

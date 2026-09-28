@@ -8,7 +8,7 @@ import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCol
 import { rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
-import { missQueue } from "./missQueue";
+import { missQueue, missOriginOf, type MissRef } from "./missQueue";
 import { preflopDb } from "./preflopDb";
 import { gtowApi } from "./gtowApi";
 import { SOLUTION_SETS } from "./gtowCdp";
@@ -75,7 +75,9 @@ export interface FastSolveOpts {
    *  strategy. Ignored when `strategyId` is given. */
   strategy?: "exploit" | "chart";
   /** Who is asking — recorded on every stored AI-chain solve ("live" from the
-   *  study poller, "replay" from the dashboard's re-solve, else "adhoc"). */
+   *  study poller, "replay" from the dashboard's re-solve, else "adhoc"). Only
+   *  "live", "warm" and "replay" file chart misses (missQueue.missOriginOf): a
+   *  script answering hands it made up must not claim one of those. */
   origin?: string;
   /** The wrapper's declared session, stamped on the stored trace. */
   sessionId?: string | null;
@@ -355,6 +357,13 @@ function exploitFlopRange(tokens: string[], heroPos: string):
   return weights && Object.keys(weights).length ? { weights, key } : null;
 }
 
+/** This decision's miss-queue ref — null when the caller is not answering a real hand (the mutation harness, the
+ *  post-in matrix, a stress run, the playthrough …): those file nothing (missQueue.missOriginOf). */
+function missRefFor(hand: ParsedHand, origin: string | undefined): MissRef | null {
+  const o = missOriginOf(origin);
+  return o && { origin: o, clientHandId: hand.clientHandId ?? null, handId: hand.handId ?? null, actionIndex: hand.actions.length, ts: Date.now() };
+}
+
 async function solvePreflop3max(
   hand: ParsedHand,
   heroPos: string | null,
@@ -367,10 +376,8 @@ async function solvePreflop3max(
   const walk = await walk3max(tokens, (line) => fetchNode(chart.id, line));
   // The miss queue (services/missQueue.ts) writes down every inexact walk —
   // a miss, a far snap, a beyond-ladder state — with the state to solve it.
-  missQueue.observe({
-    chart, hand, heroPos, tokens, walk,
-    ref: { origin: origin === "replay" ? "replay" : "live", clientHandId: hand.clientHandId ?? null, handId: hand.handId ?? null, actionIndex: hand.actions.length, ts: Date.now() },
-  });
+  const mqRef = missRefFor(hand, origin);
+  if (mqRef) missQueue.observe({ chart, hand, heroPos, tokens, walk, ref: mqRef });
   if (!walk.ok) {
     if (walk.unreachable) return null; // solve-DB server down — 6-max net below
     return { ok: false, reason: `3-max chart ${chart.id}: ${walk.reason}`, street: "preflop", gametype: chart.id, depth: chart.depth, line: walk.missingAt ?? "" };
@@ -2581,14 +2588,12 @@ async function solvePreflop6max(
   }
   const tokens = buildPreflopTokens(hand, heroPos);
   const choice = chartFor6max(hand, heroPos, tokens);
-  const mqRef = { origin: origin === "replay" ? "replay" as const : "live" as const,
-    clientHandId: hand.clientHandId ?? null, handId: hand.handId ?? null,
-    actionIndex: hand.actions.length, ts: Date.now() };
+  const mqRef = missRefFor(hand, origin);
   const resolved = await resolveChart6max(retry.keepChart ? { ...choice, candidates: [retry.keepChart] } : choice);
   if (resolved === "unreachable" || resolved === null) {
     // No chart at all is still worth writing down — the picker's gaps say which
     // tree would have answered. Only a reachable server can tell them apart.
-    if (resolved === null && !retry.keepChart) missQueue.observe6max({ choice, hand, heroPos, tokens, walk: null, ref: mqRef });
+    if (resolved === null && !retry.keepChart && mqRef) missQueue.observe6max({ choice, hand, heroPos, tokens, walk: null, ref: mqRef });
     return null;
   }
 
@@ -2627,7 +2632,7 @@ async function solvePreflop6max(
   const borrowed = walk.ok
     ? await borrowHeroCall(walk.tokens, walk.node, get, { heroPos: hand.positions[hand.heroSeatId] ?? heroPos, keep: keepSeats })
     : null;
-  missQueue.observe6max({
+  if (mqRef) missQueue.observe6max({
     choice, hand, heroPos, tokens, walk, ref: mqRef,
     callerCap: borrowed && walk.ok
       ? { pos: String(walk.node.pos), callers: countCallsBefore(walk.tokens), donor: borrowed.line,

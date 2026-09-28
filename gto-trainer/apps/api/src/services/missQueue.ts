@@ -30,7 +30,8 @@ import { isTestStakeOf } from "./strategies";
  *
  * Items are keyed by (chart, line, want, kind) and counted per origin: live
  * (the study poller at the table), archive (sweep of hands.db), corpus (sweep
- * of the 4k-hand Zone corpus), replay (dashboard re-solves).
+ * of the 4k-hand Zone corpus), replay (dashboard re-solves). Real hands only —
+ * see missOriginOf / isRealMissRef below.
  */
 
 export type MissKind =
@@ -48,6 +49,50 @@ export type MissKind =
   | "caller-cap";
 export type MissStatus = "open" | "queued" | "solved" | "dismissed";
 export type MissOrigin = "live" | "archive" | "corpus" | "replay";
+
+// ---- REAL HANDS ONLY (2026-09-26) ----------------------------------------------------------------------------------
+// This queue is the todo list of HRC solves (the chart factory's patch jobs → the box queue, its strategy work queue), so a
+// hand we made up must never reach it. Since the central data root every process writes the one poker.sqlite, and
+// fastSolve filed every caller but "replay" as "live": the input-mutation harness (scripts/mutationHarness.ts,
+// mutation/liveVerify.ts — hands mh-…) and the post-in matrix (scripts/postInMatrix.ts — postin-…) left ~4,100 rows,
+// 1,299 of them turned into 606 queued HRC solves (~44 box-days) before they were dismissed by hand.
+//
+// Two tests, both here:
+//   missOriginOf       WHO ASKED — a whitelist of fastSolve origins that answer a real hand. Everything else (harness,
+//                      golden, stress, bench, playthrough, probe, adhoc, a caller that names none) files nothing, so a
+//                      new script cannot leak in by inventing a new hand id.
+//   isSyntheticHandId  WHICH HAND — the ids our own scripts mint: for rows filed before the whitelist, and for a caller
+//                      that claims a real origin for a made-up hand. A script that builds its own hands must not claim
+//                      "live" or "replay".
+
+/** fastSolve origin → miss-queue origin, for the callers answering a REAL hand: the study poller at the table ("live"),
+ *  its street warm-up of the same hand ("warm"), a re-solve of an archived hand ("replay"). */
+const REAL_SOLVE_ORIGINS = new Map<string, MissOrigin>([["live", "live"], ["warm", "live"], ["replay", "replay"]]);
+const REF_ORIGINS = new Set<string>(["live", "archive", "corpus", "replay"]);
+
+/** The miss-queue origin a fastSolve caller files under, or null: that caller is not answering a real hand and files nothing. */
+export function missOriginOf(solveOrigin: string | null | undefined): MissOrigin | null {
+  return (solveOrigin && REAL_SOLVE_ORIGINS.get(solveOrigin)) || null;
+}
+
+/** Client hand ids our own scripts and tests mint: stress-… (stressSixMax / stressPostflopSweep), mh-… (the mutation
+ *  harness and liveVerify), postin-… (postInMatrix), depth-smoke-… / smoke (the smoke scripts), test… / fake…, and the
+ *  one-off probes that filed before the whitelist (proof, gaps, refusal, pfgap, pfx). */
+const SYNTHETIC_HAND_ID = /^(stress-|mh-|postin-|depth-smoke-|smoke|test|fake|proof|gaps|refusal|pfgap|pfx)/i;
+
+export function isSyntheticHandId(id: unknown): boolean {
+  return id != null && SYNTHETIC_HAND_ID.test(String(id));
+}
+
+/** THE "is this a real hand" test for one miss ref: a real origin and an id none of our scripts made up. */
+export function isRealMissRef(ref: Pick<MissRef, "origin" | "clientHandId"> | null | undefined): boolean {
+  return !!ref && REF_ORIGINS.has(ref.origin) && !isSyntheticHandId(ref.clientHandId);
+}
+
+/** A row that only synthetic hands ever hit. A row with no refs left (a sweep's reset emptied them) is not one. */
+export function isSyntheticMiss(m: Pick<MissItem, "refs">): boolean {
+  return m.refs.length > 0 && !m.refs.some(isRealMissRef);
+}
 
 /** A snap this far (log-space) or further is worth writing down. 3.9x→3.5x is 0.108. */
 export const SNAP_NOTE = 0.1;
@@ -196,6 +241,7 @@ CREATE INDEX IF NOT EXISTS idx_misses_status ON misses(status);
 CREATE INDEX IF NOT EXISTS idx_misses_chart ON misses(chart)`;
 
 const REFS_MAX = 40;
+const refsOf = (json: string | null): MissRef[] => { try { const v = JSON.parse(json ?? "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
 
 // ---- the size menus, ported from hrc-api/scripts/genThreeMaxAsymPlan.ts ------
 const SITES: Record<string, { rakeCapBB: number; stakeLabel: string }> = {
@@ -387,6 +433,7 @@ class MissQueue {
    */
   observe(a: ObserveArgs): MissKind[] {
     const out: MissKind[] = [];
+    if (!isRealMissRef(a.ref)) return out;
     try {
       const state = MissQueue.stateOf(a.hand, a.heroPos, a.chart, a.tokens);
       if (a.chart.beyondLadder != null) {
@@ -437,6 +484,7 @@ class MissQueue {
     // A TEST-STAKE table (NL5 ring, 2026-09-23) plays the NL200 answers but not NL200 sizes — every bet
     // rounds to the cent, so a 2.5x open arrives as 2.4x/2.6x. Its "misses" would queue solves nobody needs.
     if (isTestStakeOf("ign-ring-NL200-6", a.hand.bbCents)) return out;
+    if (!isRealMissRef(a.ref)) return out;
     try {
       const chart: ChartLike = {
         id: a.choice.id, site: a.choice.site, depth: a.choice.depth,
@@ -553,13 +601,16 @@ class MissQueue {
     };
   }
 
-  list(status?: MissStatus | "all"): MissItem[] {
+  /** Rows only synthetic hands ever hit (isSyntheticMiss) are left out unless `synthetic` — so the dashboard, the patch
+   *  jobs and the plan writer only ever see work real hands asked for. */
+  list(status?: MissStatus | "all", opts: { synthetic?: boolean } = {}): MissItem[] {
     try {
       const db = this.open();
       const rows = status && status !== "all"
         ? db.query<any, [string]>("SELECT * FROM misses WHERE status = ? ORDER BY n DESC, last_seen DESC").all(status)
         : db.query<any, []>("SELECT * FROM misses ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'queued' THEN 1 WHEN 'solved' THEN 2 ELSE 3 END, n DESC, last_seen DESC").all();
-      return rows.map((r) => this.rowOf(r));
+      const items = rows.map((r) => this.rowOf(r));
+      return opts.synthetic ? items : items.filter((m) => !isSyntheticMiss(m));
     } catch {
       return [];
     }
@@ -602,14 +653,20 @@ class MissQueue {
     }
   }
 
-  stats(): { total: number; byStatus: Record<string, number>; byKind: Record<string, number>; hands: { live: number; archive: number; corpus: number } } {
-    const out = { total: 0, byStatus: {} as Record<string, number>, byKind: {} as Record<string, number>, hands: { live: 0, archive: 0, corpus: 0 } };
+  /** Real rows only (see list); `synthetic` counts the rows left out. In JS, not SQL, because the test reads the refs. */
+  stats(): { total: number; byStatus: Record<string, number>; byKind: Record<string, number>; hands: { live: number; archive: number; corpus: number }; synthetic: number } {
+    const out = { total: 0, byStatus: {} as Record<string, number>, byKind: {} as Record<string, number>, hands: { live: 0, archive: 0, corpus: 0 }, synthetic: 0 };
     try {
-      const db = this.open();
-      for (const r of db.query<{ status: string; c: number }, []>("SELECT status, COUNT(*) c FROM misses GROUP BY status").all()) { out.byStatus[r.status] = r.c; out.total += r.c; }
-      for (const r of db.query<{ kind: string; c: number }, []>("SELECT kind, COUNT(*) c FROM misses WHERE status IN ('open','queued') GROUP BY kind").all()) out.byKind[r.kind] = r.c;
-      const s = db.query<{ l: number; a: number; c: number }, []>("SELECT COALESCE(SUM(n_live),0) l, COALESCE(SUM(n_archive),0) a, COALESCE(SUM(n_corpus),0) c FROM misses WHERE status IN ('open','queued')").get();
-      out.hands = { live: s?.l ?? 0, archive: s?.a ?? 0, corpus: s?.c ?? 0 };
+      const rows = this.open().query<{ status: string; kind: string; n_live: number; n_archive: number; n_corpus: number; refs_json: string | null }, []>(
+        "SELECT status, kind, n_live, n_archive, n_corpus, refs_json FROM misses").all();
+      for (const r of rows) {
+        if (isSyntheticMiss({ refs: refsOf(r.refs_json) })) { out.synthetic++; continue; }
+        out.byStatus[r.status] = (out.byStatus[r.status] ?? 0) + 1;
+        out.total++;
+        if (r.status !== "open" && r.status !== "queued") continue;
+        out.byKind[r.kind] = (out.byKind[r.kind] ?? 0) + 1;
+        out.hands.live += r.n_live; out.hands.archive += r.n_archive; out.hands.corpus += r.n_corpus;
+      }
     } catch {
       /* ignore */
     }
@@ -625,15 +682,26 @@ class MissQueue {
    * beyond-ladder rows with 4 live hits is a big backlog that rarely bites,
    * while 17 no-limp-uneven rows with 33 live hits is a small one that bites
    * constantly — and it is the second kind that is worth solving first.
+   *
+   * Real hands only: a row only synthetic hands hit is left out, and a row both hit loses our hits from its live count
+   * (each ref added one to n_live when it was filed; a ref past REFS_MAX is gone, so that side can over-count a little).
    */
   volumeByKind(): Record<string, { rows: number; live: number; corpus: number; lastSeen: number | null }> {
     const out: Record<string, { rows: number; live: number; corpus: number; lastSeen: number | null }> = {};
     try {
-      const rows = this.open().query<{ kind: string; rows: number; live: number; corpus: number; last_seen: number | null }, []>(
-        "SELECT kind, COUNT(*) rows, COALESCE(SUM(n_live),0) live, COALESCE(SUM(n_corpus),0) corpus, MAX(last_seen) last_seen" +
-        " FROM misses WHERE status IN ('open','queued') GROUP BY kind"
+      const rows = this.open().query<{ kind: string; n_live: number; n_corpus: number; last_seen: number | null; refs_json: string | null }, []>(
+        "SELECT kind, n_live, n_corpus, last_seen, refs_json FROM misses WHERE status IN ('open','queued')"
       ).all();
-      for (const r of rows) out[r.kind] = { rows: r.rows, live: r.live, corpus: r.corpus, lastSeen: r.last_seen ?? null };
+      for (const r of rows) {
+        const refs = refsOf(r.refs_json);
+        if (isSyntheticMiss({ refs })) continue;
+        const ours = refs.filter((x) => (x.origin === "live" || x.origin === "replay") && !isRealMissRef(x)).length;
+        const v = (out[r.kind] ??= { rows: 0, live: 0, corpus: 0, lastSeen: null });
+        v.rows++;
+        v.live += Math.max(0, r.n_live - ours);
+        v.corpus += r.n_corpus;
+        if (r.last_seen != null && (v.lastSeen == null || r.last_seen > v.lastSeen)) v.lastSeen = r.last_seen;
+      }
     } catch {
       /* the register degrades to "unmeasured", it never throws */
     }
