@@ -112,7 +112,8 @@ app.post("/:id/connect", async (c) => {
   const t0 = Date.now();
   let launch: Record<string, unknown>;
   const entry = loadAccounts().accounts.find((a) => a.id === id);
-  if (id === "primary" && entry?.client !== "chrome") {
+  if (id === "primary" && entry?.client !== "chrome" && !entry?.exe) {
+    // the primary's built-in launcher (its own client detection) — only while the row names no build of its own
     launch = await gtowCdp.launchApp();
   } else if (entry) {
     // the same rule the watchdog follows (services/gtowAccounts.ts launchPlan): a launcher script, else the desktop build,

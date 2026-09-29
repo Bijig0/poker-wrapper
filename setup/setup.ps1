@@ -56,18 +56,37 @@ Step 1 'Tools (Bun, rclone, Chrome, Brave)'
 $tools = @(
   @{ id = 'Oven-sh.Bun';        test = { [bool](Get-Command bun -ErrorAction SilentlyContinue) }; name = 'Bun' },
   @{ id = 'Rclone.Rclone';      test = { [bool](Get-Command rclone -ErrorAction SilentlyContinue) }; name = 'rclone' },
-  @{ id = 'Google.Chrome';      test = { (Test-Path "$env:ProgramFiles\Google\Chrome\Application\chrome.exe") -or (Test-Path "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe") }; name = 'Google Chrome (GTO Wizard runs in it)' },
-  @{ id = 'Brave.Brave';        test = { (Test-Path "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe") -or (Test-Path "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe") }; name = 'Brave (the Ignition table + the panel)' }
+  # the browsers: winget when the machine has it (Windows 11, most Windows 10), else their makers' own installers,
+  # downloaded and run silently (`dl`) — a laptop without winget still ends up with both
+  @{ id = 'Google.Chrome';      test = { (Test-Path "$env:ProgramFiles\Google\Chrome\Application\chrome.exe") -or (Test-Path "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe") }; name = 'Google Chrome (GTO Wizard runs in it)';
+     dl = 'https://dl.google.com/chrome/install/latest/chrome_installer.exe'; dlArgs = '/silent /install' },
+  @{ id = 'Brave.Brave';        test = { (Test-Path "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe") -or (Test-Path "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe") }; name = 'Brave (the Ignition table + the panel)';
+     dl = 'https://laptop-updates.brave.com/latest/winx64'; dlArgs = '/silent /install' }
 )
 Refresh-Path
+$winget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
 foreach ($t in $tools) {
   if (& $t.test) { Ok $t.name; continue }
   if ($SkipTools) { Bad "$($t.name) is not installed (skipped: -SkipTools)"; continue }
   Todo "installing $($t.name) (a window may flash by) ..."
-  & winget install --id $t.id --exact --silent --accept-source-agreements --accept-package-agreements --scope user 2>&1 | Out-Null
-  if ($LASTEXITCODE -ne 0) { & winget install --id $t.id --exact --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null }
-  Refresh-Path
-  if (& $t.test) { Ok "$($t.name) installed" } else { Bad "$($t.name) did not install — install it by hand (winget install $($t.id)) and run setup again" }
+  if ($winget) {
+    & winget install --id $t.id --exact --silent --accept-source-agreements --accept-package-agreements --scope user 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { & winget install --id $t.id --exact --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null }
+    Refresh-Path
+  }
+  if (-not (& $t.test) -and $t.dl) {
+    Todo "$(if ($winget) { 'winget could not install it; ' })downloading $($t.name)'s own installer ..."
+    $dst = Join-Path $env:TEMP "pokerwrapper-$($t.id).exe"
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+      Invoke-WebRequest -Uri $t.dl -OutFile $dst -UseBasicParsing -TimeoutSec 600
+      $p = Start-Process -FilePath $dst -ArgumentList $t.dlArgs -Wait -PassThru
+      if ($p.ExitCode -ne 0) { Todo "installer exit $($p.ExitCode)" }
+    } catch { Todo "download failed: $($_.Exception.Message)" }
+    Remove-Item $dst -Force -ErrorAction SilentlyContinue
+    Refresh-Path
+  }
+  if (& $t.test) { Ok "$($t.name) installed" } else { Bad "$($t.name) did not install — install it by hand ($(if ($winget) { "winget install $($t.id)" } else { $t.dl })) and run setup again" }
 }
 
 # ---------------------------------------------------------------- 2. chart + update downloads (R2)
@@ -240,9 +259,23 @@ else {
     # (re)start: a service already running from this folder keeps the OLD code/config until it restarts
     foreach ($t in $TaskNames.Values) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
     # open the GTO Wizard window VISIBLE first (a no-op when it is already up), so the sign-in page is in
-    # front of them; the watchdog would otherwise start it minimised
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\start_gtow_chrome.ps1') -Foreground
-    Todo 'a Chrome window opened on GTO Wizard: sign in there and leave it open'
+    # front of them; the watchdog would otherwise start it minimised. The DESKTOP APP when it is installed (the
+    # same places the account registry looks: services/gtowAccounts.ts desktopAppCandidates), else the Chrome window.
+    $app = $env:GTOW_CLIENT_PATH
+    if (-not $app -and $env:GTOW_CLIENT -ne 'chrome') {
+      foreach ($c in @("$env:USERPROFILE\GTO Wizard\GTO Wizard.exe", "$env:LOCALAPPDATA\Programs\GTO Wizard\GTO Wizard.exe",
+                       'C:\Program Files\GTO Wizard\GTO Wizard.exe', 'C:\Program Files\Chinese GTO Wizard\Chinese GTO Wizard.exe')) {
+        if (Test-Path -LiteralPath $c) { $app = $c; break }
+      }
+    }
+    if ($app) {
+      $up = $false; try { $null = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:9222/json/version' -TimeoutSec 3; $up = $true } catch { }
+      if (-not $up) { Start-Process -FilePath $app -ArgumentList '--remote-debugging-port=9222' }
+      Todo "the GTO Wizard app opened ($app): sign in there and leave it open"
+    } else {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\start_gtow_chrome.ps1') -Foreground
+      Todo 'a Chrome window opened on GTO Wizard: sign in there and leave it open'
+    }
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install_tasks.ps1') -Start
     Ok 'registered and started (they start by themselves at every logon)'
   } elseif ($held.Count) {

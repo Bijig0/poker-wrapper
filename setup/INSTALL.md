@@ -14,6 +14,8 @@ The install takes about **10 minutes**, most of it a 3 GB download that setup ha
 - From the person who gave you this: **`PokerWrapperSetup-<version>.exe`** and **`PokerWrapper-key.txt`**, your
   download key (charts, data and updates come through it). Keep the key to yourself.
 - Your own **GTO Wizard** account on a plan with GTO Wizard AI (**Ultra**). The answers after the flop come from it.
+  The GTO Wizard desktop app is optional: install it **before** the Poker Wrapper if you want it, and the Poker
+  Wrapper uses it; otherwise it runs GTO Wizard in a Chrome window of its own.
 - Your own **Ignition** and/or **CoinPoker** account.
 
 > ⚠️ **Read this first.** Using any tool like this while playing for real money is against Ignition's and
@@ -31,8 +33,10 @@ The install takes about **10 minutes**, most of it a 3 GB download that setup ha
 4. Press **Install**. When the files are copied, a window opens and finishes the setup: it downloads the
    chart data (you'll see the progress), installs Chrome and Brave if you don't have them, and starts the Poker
    Wrapper's background services. Leave it running. It closes by itself when everything is green.
-5. A **Chrome window on GTO Wizard** opens during that step. **Sign in** there and leave it open (you can
-   minimise it). This Chrome is separate from your normal one on purpose. Always leave it running while you play.
+5. A **GTO Wizard window** opens during that step: the GTO Wizard app if you installed it beforehand, otherwise a
+   Chrome window on app.gtowizard.com (Chrome is installed for you if the laptop has none; this Chrome window is
+   separate from your normal one on purpose). **Sign in** there and leave it open (you can minimise it). It is kept
+   running for you from then on, and restarted if it ever drops. Always leave it open while you play.
 
 You now have **Poker Wrapper** and **Poker Dashboard** in the Start menu and on the desktop. That's everything.
 

@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cdpHostTakenBy, cdpPort, defaultAccounts, launchPlan, loadAccounts, removeAccount, slugOf, upsertAccount } from "./gtowAccounts";
+import { cdpHostTakenBy, cdpPort, defaultAccounts, desktopAppCandidates, desktopAppPath, launchPlan, loadAccounts, removeAccount, slugOf, upsertAccount } from "./gtowAccounts";
 import { GtowRequestLog } from "./gtowRequestLog";
 import { ensureEventTables } from "../../../../packages/data-root/eventTables";
 
@@ -139,5 +139,20 @@ describe("how each account's client is run (2026-09-29, a dynamic number of acco
     const b = upsertAccount({ id: a.id, client: "electron", exe: " C:\\e\\GTO Wizard.exe ", profileDir: "" });
     expect([b.client, b.exe, b.profileDir]).toEqual(["electron", "C:\\e\\GTO Wizard.exe", null]);
     expect(upsertAccount({ id: a.id, name: "Elite two" }).client).toBe("electron");   // a partial edit keeps them
+  });
+});
+
+describe("the desktop app, when installed, is the primary's client at seed time (2026-09-29)", () => {
+  const env = { USERPROFILE: "C:/Users/p", LOCALAPPDATA: "C:/Users/p/AppData/Local" } as NodeJS.ProcessEnv;
+  test("the official per-user install is found; nothing installed = the Chrome window; GTOW_CLIENT=chrome keeps Chrome; GTOW_CLIENT_PATH pins", () => {
+    const has = (p: string) => p === join("C:/Users/p", "GTO Wizard", "GTO Wizard.exe");
+    expect(desktopAppPath(env, has)).toBe(join("C:/Users/p", "GTO Wizard", "GTO Wizard.exe"));
+    expect(defaultAccounts(env, has)[1]!.client).toBe("electron");
+    expect(defaultAccounts(env, has)[1]!.exe).toBe(join("C:/Users/p", "GTO Wizard", "GTO Wizard.exe"));
+    expect(defaultAccounts(env, () => false)[1]!.client).toBe("chrome");
+    expect(desktopAppPath({ ...env, GTOW_CLIENT: "chrome" }, has)).toBeNull();
+    expect(desktopAppPath({ ...env, GTOW_CLIENT_PATH: "D:/b/GTO Wizard.exe" }, () => false)).toBe("D:/b/GTO Wizard.exe");
+    // an empty USERPROFILE never turns "GTO Wizard\GTO Wizard.exe" into a relative hit
+    expect(desktopAppPath({} as NodeJS.ProcessEnv, () => true)).toBe(desktopAppCandidates({} as NodeJS.ProcessEnv)[2]);
   });
 });

@@ -23,7 +23,7 @@
  * time (two more requests, once).
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { underTest } from "../../../../packages/data-root/dataRoot";
 import { gtowAccountsPath } from "./storePaths";
 
@@ -74,9 +74,30 @@ export interface GtowAccountsFile { version: 1; accounts: GtowAccountEntry[] }
 const envBool = (v: string | undefined, dflt: boolean): boolean =>
   v == null || v.trim() === "" ? dflt : !/^(0|no|false|off)$/i.test(v.trim());
 
+/**
+ * Where GTO Wizard's desktop app installs (the official "GTO Wizard Setup x.y.z.exe": per user, under the profile —
+ * measured 1.0.9 on 2026-09-29 — older builds under Program Files). The first that exists is the primary's client
+ * when the registry is seeded, so an install that put the app on first uses it; GTOW_CLIENT_PATH pins a build,
+ * GTOW_CLIENT=chrome says "the Chrome window even though the app is installed".
+ */
+export const desktopAppCandidates = (env: NodeJS.ProcessEnv = process.env): string[] => [
+  join(env.USERPROFILE ?? "", "GTO Wizard", "GTO Wizard.exe"),
+  join(env.LOCALAPPDATA ?? "", "Programs", "GTO Wizard", "GTO Wizard.exe"),
+  "C:\\Program Files\\GTO Wizard\\GTO Wizard.exe",
+  "C:\\Program Files\\Chinese GTO Wizard\\Chinese GTO Wizard.exe",
+];
+export function desktopAppPath(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): string | null {
+  if (/^chrome$/i.test(env.GTOW_CLIENT ?? "")) return null;
+  const pinned = env.GTOW_CLIENT_PATH?.trim();
+  if (pinned) return pinned;
+  // absolute only: with USERPROFILE unset the first candidate is the relative "GTO Wizard\GTO Wizard.exe"
+  return desktopAppCandidates(env).find((p) => isAbsolute(p) && exists(p)) ?? null;
+}
+
 /** The two accounts the pool had before the registry, named as Brady named them (2026-09-27). */
-export function defaultAccounts(env: NodeJS.ProcessEnv = process.env): GtowAccountEntry[] {
+export function defaultAccounts(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): GtowAccountEntry[] {
   const preferPrimary = /^primary$/i.test(env.GTOW_PREFER ?? "");
+  const app = desktopAppPath(env, exists);
   return [
     {
       id: "secondary", name: "Elite 1", tier: "elite",
@@ -93,7 +114,7 @@ export function defaultAccounts(env: NodeJS.ProcessEnv = process.env): GtowAccou
       multiway: envBool(env.GTOW_PRIMARY_MULTIWAY, true),
       cdpHost: env.GTOW_CDP_HOST ?? "127.0.0.1:9222",
       launchHint: "scripts/start_gtow_chrome.ps1",
-      client: env.GTOW_CLIENT_PATH?.trim() ? "electron" : "chrome", exe: env.GTOW_CLIENT_PATH?.trim() || null,
+      client: app ? "electron" : "chrome", exe: app,
       profileDir: env.GTOW_CHROME_PROFILE?.trim() || null,
       enabled: envBool(env.GTOW_PRIMARY, true),
       order: preferPrimary ? 1 : 2, preflopOrder: 1,

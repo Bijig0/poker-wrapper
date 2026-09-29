@@ -44,7 +44,11 @@ const TARGET_MATCH = "app.gtowizard.com";
  * GTOW_CLIENT_PATH pins a build; otherwise the international one wins when
  * installed and we fall back to the Chinese build.
  */
+// the official desktop app installs PER USER (%USERPROFILE%\GTO Wizard, measured 1.0.9 on 2026-09-29); the Program Files
+// builds are older ones — the same list the account registry seeds from (services/gtowAccounts.ts desktopAppCandidates)
 const CLIENT_CANDIDATES = [
+  `${process.env.USERPROFILE ?? ""}\\GTO Wizard\\GTO Wizard.exe`,
+  `${process.env.LOCALAPPDATA ?? ""}\\Programs\\GTO Wizard\\GTO Wizard.exe`,
   "C:\\Program Files\\GTO Wizard\\GTO Wizard.exe",
   "C:\\Program Files\\Chinese GTO Wizard\\Chinese GTO Wizard.exe",
 ];
