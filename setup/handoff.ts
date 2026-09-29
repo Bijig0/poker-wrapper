@@ -7,7 +7,8 @@
  *   bun setup/handoff.ts --days 3             link lifetime (default 7, the most R2 allows)
  *   bun setup/handoff.ts --public             ALSO copy the files to C:\Users\Public\PokerWrapper — for a second Windows
  *                                             account on this computer (sign out of this one first: the ports are
- *                                             machine-wide)
+ *                                             machine-wide) — with the release's data zips, so that install downloads
+ *                                             nothing (the same folder on a USB stick is an offline install anywhere)
  *   bun setup/handoff.ts --gtow <Setup.exe>   the GTO Wizard desktop app's installer to hand over too (default: the newest
  *                                             "GTO Wizard Setup*.exe" in Downloads; none = the message leaves it out)
  *
@@ -92,6 +93,18 @@ if (toPublic) {
   copyFileSync(local, join(dir, rel.installer.file));
   copyFileSync(KEY, join(dir, "PokerWrapper-key.txt"));
   if (gtowLink) copyFileSync(gtowLocal!, join(dir, gtowName));
-  writeFileSync(join(dir, "README.txt"), `Poker Wrapper ${version}: sign OUT of the owner's account (not switch user — the ports are machine-wide), sign in to the test account, run ${rel.installer.file} from this folder. The key next to it is picked up by itself.${gtowName ? ` ${gtowName} is the GTO Wizard desktop app (optional; install it first if you want it).` : ""}\n`);
-  console.log(`\ncopied to ${dir} for another Windows account on this computer`);
+  // the release's data zips too: the installer unpacks what lies beside it instead of downloading 3 GB (setup.ps1 -DataDir).
+  // Every part of the release (a USB-stick kit serves any strategy); from ~/poker-package when the build left them there
+  const zips: string[] = [];
+  for (const [part, d] of Object.entries((rel.data ?? {}) as Record<string, { file: string; bytes: number }>)) {
+    const dst = join(dir, d.file);
+    if (!existsSync(dst) || statSync(dst).size !== d.bytes) {
+      const local = join(PKG, d.file);
+      if (existsSync(local) && statSync(local).size === d.bytes) copyFileSync(local, dst);
+      else { console.log(`fetching ${d.file} (${(d.bytes / 1e6).toFixed(0)} MB) from the channel ...`); rc(["copyto", `${CHANNEL}/data/${d.file}`, dst]); }
+    }
+    zips.push(`${part} (${(d.bytes / 1e6).toFixed(0)} MB)`);
+  }
+  writeFileSync(join(dir, "README.txt"), `Poker Wrapper ${version}: sign OUT of the owner's account (not switch user — the ports are machine-wide), sign in to the test account, run ${rel.installer.file} from this folder. The key next to it is picked up by itself; the data zips next to it are unpacked instead of downloaded (${zips.join(", ")}).${gtowName ? ` ${gtowName} is the GTO Wizard desktop app (optional; install it first if you want it).` : ""}\n`);
+  console.log(`\ncopied to ${dir} for another Windows account on this computer (installer, key, data zips${gtowName ? ", GTO Wizard app" : ""})`);
 }

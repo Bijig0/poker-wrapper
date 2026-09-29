@@ -15,6 +15,7 @@
 # What it cannot do for you: sign in to GTO Wizard, create your Ignition profile, install and sign in to CoinPoker.
 param(
   [string]$DataZip = '',         # path to PokerWrapper-data-*.zip (default: look next to this folder)
+  [string]$DataDir = '',         # a folder holding PokerWrapper-data-*.zip files (the installer passes its own folder): used before downloading
   [string]$KeyFile = '',         # rclone "key = value" lines for remote r2 (the installer's key page); deleted after use
   [string]$Strategy = '',        # what the player plays (the installer's page, e.g. ign200-6max): only its data parts are fetched
   [switch]$Installer,            # run by PokerWrapperSetup.exe: shortcuts are its job, show download progress
@@ -37,6 +38,8 @@ if ($Installer) {
 $bin = Join-Path $root 'bin'
 # the strategy decides which data parts step 3 fetches (channel.ps1 Get-WantedParts); step 5 writes it to local.env
 if ($Strategy) { $env:INSTALL_STRATEGY = $Strategy }
+# data zips next to the installer (a USB stick, C:\Users\Public\PokerWrapper) spare the 3 GB download (channel.ps1 Sync-DataParts)
+if ($DataDir -and (Test-Path -LiteralPath $DataDir)) { $env:INSTALL_DATA_DIR = (Resolve-Path -LiteralPath $DataDir).Path }
 
 function Step($n, $what) { Write-Host ""; Write-Host "[$n] $what" -ForegroundColor Cyan }
 function Ok($m) { Write-Host "    OK  $m" -ForegroundColor Green }
@@ -151,7 +154,7 @@ if (Get-Installed $root) {
 else {
   # a package from before versioned releases: one combined data zip next to the folder
   if (-not $DataZip) {
-    $DataZip = @(Get-ChildItem (Split-Path $root) -Filter 'PokerWrapper-data-*.zip' -ErrorAction SilentlyContinue) |
+    $DataZip = @(Get-ChildItem @($env:INSTALL_DATA_DIR, (Split-Path $root) | Where-Object { $_ }) -Filter 'PokerWrapper-data-*.zip' -ErrorAction SilentlyContinue) |
                Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
   }
   if ($DataZip -and (Test-Path $DataZip)) {
@@ -244,20 +247,42 @@ else {
     # the installer is the user saying "this one": it replaces the old folder's services (the old folder stays)
     $go = $Installer -or ((Ask 'Replace it with this install? (y/N)' 'N') -match '^[yY]')
   }
-  # ANOTHER POKER WRAPPER ALREADY SERVES THIS COMPUTER (the owner's own stack, a source checkout, a zip install): the
-  # study API, chart server and panel ports are machine-wide, and a second API binds beside the first (reusePort) and
-  # answers the same tables twice. The installer stopped this copy's own services before copying (PrepareToInstall),
-  # so whatever still listens is someone else's: leave this copy's services off and say so.
-  $held = @()
+  # ANOTHER POKER WRAPPER ALREADY SERVES THIS COMPUTER: the study API, chart server and panel ports are machine-wide, and
+  # a second API binds beside the first (reusePort) and answers the same tables twice. The installer stopped this copy's
+  # own services before copying (PrepareToInstall), so whatever still listens is another copy's:
+  #   - THIS Windows user's (an older zip install, an earlier folder): the installer is them saying "this one now" -
+  #     the old copy is stopped and its services replaced (its files stay). Never in the middle of a session, though.
+  #   - another account's (the owner's stack, invisible to this user - no owner, no command line): leave this copy's
+  #     services off and say so.
+  $held = @(); $ours = @()
   if ($go -and $Installer) {
-    $held = @(foreach ($port in 2000, 8777, 7700) {
+    foreach ($port in 2000, 8777, 7700) {
       $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-      if ($c) {
-        $cl = (Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue).CommandLine
-        if (-not ($cl -and $cl -like "*$root*")) { ":$port" }
-      }
-    })
+      if (-not $c) { continue }
+      $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue
+      if ($p -and $p.CommandLine -like "*$root*") { continue }
+      $owner = $null
+      if ($p) { try { $owner = (Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop).User } catch { } }
+      if ($p -and $owner -and $owner -eq $env:USERNAME) { $ours += [pscustomobject]@{ port = $port; pid = $p.ProcessId; cmd = $p.CommandLine } }
+      else { $held += ":$port" }
+    }
     if ($held.Count) { $go = $false }
+    elseif ($ours.Count) {
+      $sess = $null; try { $sess = Invoke-RestMethod 'http://127.0.0.1:7700/session' -TimeoutSec 5 } catch { }
+      if ($sess -and $sess.current) { $go = $false; Bad 'a session is running on your old Poker Wrapper - end it on its panel, then run PokerWrapperSetup again.' }
+      else {
+        $where = @($ours | ForEach-Object { if ($_.cmd -match '(?i)"?([A-Z]:\\[^"]*?)\\(gto-trainer|\.claude|scripts|ignition-study-wrapper)\\') { $Matches[1] } } | Select-Object -Unique) -join ', '
+        Todo "stopping your old Poker Wrapper ($(if ($where) { $where } else { 'another folder' })): this install takes over its services; its files stay (delete that folder when you like)"
+        foreach ($t in @($TaskNames.Values) + $LegacyTaskNames) {
+          $x = Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
+          if ($x -and ((($x.Actions | ForEach-Object { $_.Arguments }) -join ' ') -notmatch [regex]::Escape($root))) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
+        }
+        foreach ($o in $ours) { & taskkill /PID $o.pid /T /F 2>&1 | Out-Null }
+        Start-Sleep -Seconds 2
+        $held = @(foreach ($port in 2000, 8777, 7700) { if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { ":$port" } })
+        if ($held.Count) { $go = $false }
+      }
+    }
   }
   if ($go) {
     # (re)start: a service already running from this folder keeps the OLD code/config until it restarts

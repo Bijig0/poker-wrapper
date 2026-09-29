@@ -240,6 +240,9 @@ begin
   Result := '';
   if FileExists(ExpandConstant('{tmp}\key.txt')) then Result := '-KeyFile "' + ExpandConstant('{tmp}\key.txt') + '"';
   if HasSwitch('/NOSERVICES') then Result := Result + ' -SkipTasks';
+  // the folder this setup runs from: PokerWrapper-data-*.zip files beside it (a USB stick, C:\Users\Public\PokerWrapper)
+  // are unpacked instead of downloaded
+  Result := Result + ' -DataDir "' + ExpandConstant('{src}') + '"';
   // /STRATEGY=<id> (a silent install) wins; else the page's pick — the only row today is ign200-6max
   Strat := ExpandConstant('{param:STRATEGY|}');
   if (Strat = '') and (StratPage <> nil) and StratPage.Values[0] then Strat := 'ign200-6max';

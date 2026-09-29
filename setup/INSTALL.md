@@ -24,7 +24,9 @@ The install takes about **10 minutes**, most of it a 3 GB download that setup ha
 
 ## 1. Install
 
-1. Put `PokerWrapperSetup-<version>.exe` and `PokerWrapper-key.txt` in the same folder (Downloads is fine).
+1. Put `PokerWrapperSetup-<version>.exe` and `PokerWrapper-key.txt` in the same folder (Downloads is fine). If you were
+   also given `PokerWrapper-data-*.zip` files (a USB stick), put them in that folder too: they are unpacked instead of
+   downloaded, and the install needs no internet until the GTO Wizard sign-in.
 2. Double-click **PokerWrapperSetup**.
    - If Windows says *"Windows protected your PC"*: **More info → Run anyway**. (The installer isn't signed by
      a publisher Microsoft knows. That's expected.)
@@ -33,8 +35,10 @@ The install takes about **10 minutes**, most of it a 3 GB download that setup ha
 4. **What will you play?** page: pick your tables (today the one choice is **Ignition 6-max NL200**). Only the data
    for that is downloaded.
 5. Press **Install**. When the files are copied, a window opens and finishes the setup: it downloads the
-   chart data (about 3 GB; you'll see the progress), installs Chrome and Brave if you don't have them, and starts the
-   Poker Wrapper's background services. Leave it running. It closes by itself when everything is green.
+   chart data (about 3 GB; you'll see the progress) unless the zips lie next to the installer, installs Chrome and Brave
+   if you don't have them, and starts the Poker Wrapper's background services. Leave it running. It closes by itself
+   when everything is green. An older Poker Wrapper you ran from another folder (a zip install) is stopped and replaced;
+   its folder is left for you to delete.
 6. A **GTO Wizard window** opens during that step: the GTO Wizard app if you installed it beforehand, otherwise a
    Chrome window on app.gtowizard.com (Chrome is installed for you if the laptop has none; this Chrome window is
    separate from your normal one on purpose). **Sign in** there and leave it open (you can minimise it). It is kept
@@ -94,11 +98,17 @@ too (the default is No).
 - Build one without publishing: `bun setup\buildPackage.ts --installer` (needs Inno Setup:
   `winget install JRSoftware.InnoSetup --scope user`).
 - Hand it over with `setup\handoff.cmd`: it prints a message with download links (the installer, the key, and the GTO
-  Wizard desktop app's installer if one is in your Downloads — valid 7 days) to paste to the person, and puts the files
-  in `C:\Users\Public\PokerWrapper` for another Windows account on this computer. Existing installs keep updating through the in-app bar. They don't need the installer.
+  Wizard desktop app's installer if one is in your Downloads — valid 7 days) to paste to the person. `--public` also
+  puts the installer, the key, the GTO Wizard app AND the release's data zips in `C:\Users\Public\PokerWrapper`: for
+  another Windows account on this computer, or copied to a USB stick, that is an install that downloads nothing (the
+  installer unpacks the zips lying beside it — `setup.ps1 -DataDir`, passed by the installer as its own folder).
+  Existing installs keep updating through the in-app bar. They don't need the installer.
 - Silent / test install: `PokerWrapperSetup.exe /VERYSILENT /KEYFILE=<key.txt> [/STRATEGY=ign200-6max] [/DIR=<folder>]
   [/NOSERVICES]`. `/NOSERVICES` skips the three background services, for a test copy on a machine that already runs
   one. Without `/STRATEGY` a silent install fetches every data part.
+- Another copy holding :2000/:8777/:7700 at install time: the SAME Windows user's older copy is stopped and its services
+  replaced by the new install (never mid-session); another account's (the owner's stack under a second account) leaves
+  the new install's services off — sign that account out first (sign out, not switch user).
 - What an install downloads (2026-09-29): the 6-max preflop bake `preflop6` (3,070 MB — every tree in it is
   `ign200_6max`), `nodetrust` (12 MB), the runtime (72 MB, inside the installer), the code (12 MB); the MES turn
   files `mesturn` (216 MB, the 3-max NL25 exploit) only when the strategy needs them. The map is `STRATEGIES` in

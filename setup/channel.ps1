@@ -165,7 +165,8 @@ function Get-ChannelFile([string]$Remote, [string]$Name, [string]$Sha256, [long]
   $mb = if ($Bytes) { " ($([math]::Round($Bytes / 1MB)) MB)" } else { '' }
   Write-Host "    downloading $Name$mb ..." -ForegroundColor DarkGray
   # the installer's window shows the transfer (a 3 GB first download with no movement looks hung); updates stay quiet
-  if ($ShowDownloadProgress) { & $rc copyto $Remote $dst --progress --stats-one-line --stats 2s }
+  # Out-Host: shown, never RETURNED (rclone prints progress on stdout; without it the caller got the lines + the path)
+  if ($ShowDownloadProgress) { & $rc copyto $Remote $dst --progress --stats-one-line --stats 2s | Out-Host }
   else { & $rc copyto $Remote $dst --stats 0 2>&1 | Out-Null }
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dst)) { return $null }
   if ($Sha256 -and (Get-Sha256 $dst) -ne $Sha256) { Remove-Item $dst -Force; return $null }
@@ -174,7 +175,7 @@ function Get-ChannelFile([string]$Remote, [string]$Name, [string]$Sha256, [long]
 
 # make every data part this install needs present (Get-WantedParts: the strategy's, else all). The expected versions
 # come from VERSION.json's "data" map; the file names and hashes from that version's release.json. A zip lying next to
-# the install folder (handed over on a USB stick) is used before anything is downloaded.
+# the installer or the install folder (handed over on a USB stick) is used before anything is downloaded.
 # Returns @{ ok = $bool; did = @(parts installed); missing = @(parts that could not be); skipped = @(parts the strategy does not need) }
 function Sync-DataParts([string]$Root) {
   $res = @{ ok = $true; did = @(); missing = @(); skipped = @() }
@@ -190,7 +191,10 @@ function Sync-DataParts([string]$Root) {
     $part = $p.Name; $ver = $p.Value
     $name = "PokerWrapper-data-$part-$ver.zip"
     $info = if ($rel -and $rel.data) { $rel.data.$part } else { $null }
-    $zip = @((Join-Path (Split-Path $Root) $name), (Join-Path $Root $name)) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    # next to the installer (INSTALL_DATA_DIR: setup.ps1 -DataDir, the folder PokerWrapperSetup.exe ran from - a USB stick,
+    # C:\Users\Public\PokerWrapper), next to the install folder, inside it; only then the channel
+    $dirs = @($env:INSTALL_DATA_DIR, (Split-Path $Root), $Root) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $zip = @($dirs | ForEach-Object { Join-Path $_ $name }) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if ($zip -and $info -and $info.sha256 -and (Get-Sha256 $zip) -ne $info.sha256) { $zip = $null }
     if (-not $zip -and $info) { $zip = Get-ChannelFile "$Channel/data/$name" $name $info.sha256 $info.bytes }
     if (-not $zip) { $res.ok = $false; $res.missing += $part; continue }
