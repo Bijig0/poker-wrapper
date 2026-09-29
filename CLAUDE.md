@@ -15,6 +15,11 @@ Read README.md first: what each folder is, the three services and their ports, t
 - **Never test against the live ports** (:2000 API, :7700 wrapper, :8777 charts, :9222 GTO Wizard). Beside a live
   stack: `.claude/dev-api-verify.cmd` (:2001, HTTP only), `HRC_UI_PORT` for a second chart server, the contract
   suite and rig test pick their own ports. Never relaunch the owner's `:7701` test rig without asking.
+- **Ports come from one rule**: `gto-trainer/apps/api/src/services/ports.ts` (TypeScript) and the same table in
+  `config/env.ps1` (PowerShell) — `PORT_OFFSET` in `config/local.env` shifts all of them (a second Windows account's
+  install beside the owner's). Never write a literal 2000/8777/7700/9222 in code or a script: use `port()` /
+  `livePort()` / `apiUrl()`, or `$env:PORT` etc. after dot-sourcing env.ps1. Browser files may keep the defaults —
+  they are rewritten on the way out (`rewritePorts`, only the `:2000` form).
 - **Tests are hermetic**: they must not read untracked data (the chart index, the data parts). Use a fixture
   (`src/services/__fixtures__`) or a test hook (`setIgn25Ids`, `CHART_SETS_PATH`, `MES_TURN_DIR`).
 - Installer: `bun setup/buildPackage.ts --installer` (needs Inno Setup, `winget install JRSoftware.InnoSetup
