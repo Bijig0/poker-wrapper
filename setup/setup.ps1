@@ -233,8 +233,8 @@ if ($Strategy) { Set-Cfg 'INSTALL_STRATEGY' $Strategy }   # what this install pl
 # local.env has; step 6 may pick one when another Windows account's Poker Wrapper holds the default ports
 $PortDefaults = [ordered]@{ api = 2000; charts = 8777; panel = 7700; gtow = 9222; gtowSecondary = 9223; tableCdp = 9333 }
 $offsetLine = @($cfg | Where-Object { $_ -match '^\s*PORT_OFFSET\s*=\s*(\d+)' } | ForEach-Object { [int]$Matches[1] }) | Select-Object -First 1
-$portOffset = if ($offsetLine) { $offsetLine } else { 0 }
-function Port($name) { $PortDefaults[$name] + $portOffset }
+$curOffset = if ($offsetLine) { $offsetLine } else { 0 }
+function Port($name) { $PortDefaults[$name] + $curOffset }
 function Write-Cfg { [IO.File]::WriteAllLines($local, [string[]]$script:cfg) }   # no BOM: the wrapper and env.ps1 read it too
 function Set-PortOffset([int]$n) {
   # the GTO Wizard account registry (gtow-accounts.json, the dashboard's GTO Wizard tab) pins each account's DevTools port:
@@ -242,20 +242,20 @@ function Set-PortOffset([int]$n) {
   $dataDir = ($script:cfg | Where-Object { $_ -match '^\s*POKER_DATA_DIR\s*=\s*(\S.*)$' } | ForEach-Object { $Matches[1].Trim().Trim('"') } | Select-Object -First 1)
   if (-not $dataDir) { $dataDir = Join-Path $root 'data' }
   $reg = if ($env:GTOW_ACCOUNTS_PATH) { $env:GTOW_ACCOUNTS_PATH } else { Join-Path $dataDir 'gtow-accounts.json' }
-  if ((Test-Path -LiteralPath $reg) -and $n -ne $script:portOffset) {
+  if ((Test-Path -LiteralPath $reg) -and $n -ne $script:curOffset) {
     $txt = Get-Content -LiteralPath $reg -Raw
-    foreach ($base in 9222, 9223) { $txt = $txt -replace "127\.0\.0\.1:$($base + $script:portOffset)(?!\d)", "127.0.0.1:$($base + $n)" }
+    foreach ($base in 9222, 9223) { $txt = $txt -replace "127\.0\.0\.1:$($base + $script:curOffset)(?!\d)", "127.0.0.1:$($base + $n)" }
     [IO.File]::WriteAllText($reg, $txt)
   }
-  $script:portOffset = $n; Set-Cfg 'PORT_OFFSET' $n; Write-Cfg
+  $script:curOffset = $n; Set-Cfg 'PORT_OFFSET' $n; Write-Cfg
 }
-if ($PortOffset -ge 0 -and $PortOffset -ne $portOffset) { Set-PortOffset $PortOffset; $offsetLine = $PortOffset }
+if ($PortOffset -ge 0 -and $PortOffset -ne $curOffset) { Set-PortOffset $PortOffset; $offsetLine = $PortOffset }
 # retired settings (PLAYER_MODE, CHART_SERVER: that is simply how this app is now)
 $cfg = @($cfg | Where-Object { $_ -notmatch '^\s*(PLAYER_MODE|CHART_SERVER)\s*=' })
 # no CoinPoker name to ask for: the reader learns it from the client's own log (sites/cpFeed.ts);
 # CP_HERO in local.env still pins it if that ever guesses wrong
 Write-Cfg
-Ok "written: GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })$(if ($portOffset) { ", PORT_OFFSET=$portOffset (API :$(Port 'api'), charts :$(Port 'charts'), panel :$(Port 'panel'), GTO Wizard :$(Port 'gtow'))" })"
+Ok "written: GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })$(if ($curOffset) { ", PORT_OFFSET=$curOffset (API :$(Port 'api'), charts :$(Port 'charts'), panel :$(Port 'panel'), GTO Wizard :$(Port 'gtow'))" })"
 
 # ---------------------------------------------------------------- 6. services
 Step 6 'Services (study API, chart server, GTO Wizard watchdog)'
@@ -372,13 +372,13 @@ $dashMark = Join-Path $root 'config\dashboard-shortcut.done'
 if ($Installer) {
   Set-Content -Path $dashMark -Value (Get-Date -Format 's') -Encoding ASCII
   # the installer's "Poker Dashboard" icons say http://localhost:2000 (PokerWrapper.iss cannot know the offset): repoint them
-  if ($portOffset) {
+  if ($curOffset) {
     foreach ($u in @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Dashboard.url'),
                      (Join-Path ([Environment]::GetFolderPath('Programs')) 'Poker Wrapper\Poker Dashboard.url'))) {
       if (Test-Path $u) { (Get-Content $u) -replace 'URL=http://localhost:\d+/', "URL=http://localhost:$(Port 'api')/" | Set-Content -Path $u -Encoding ASCII }
     }
   }
-  Ok "made by the installer (Start menu + desktop)$(if ($portOffset) { " - the dashboard opens http://localhost:$(Port 'api')" })"
+  Ok "made by the installer (Start menu + desktop)$(if ($curOffset) { " - the dashboard opens http://localhost:$(Port 'api')" })"
 } elseif ($SkipShortcut) {
   # an update skips the shortcut — but one made before 2026-09-24 points at the Python wrapper (pythonw
   # run-study.pyw), which is gone, and would open nothing: repoint that one, leave any other alone
@@ -414,7 +414,7 @@ if ($fail.Count) {
   exit 1
 }
 if ($Installer) {
-  Write-Host "All set. Sign in to GTO Wizard in the Chrome window (once), then open `"Poker Wrapper`".$(if ($portOffset) { " The dashboard is http://localhost:$(Port 'api')." })" -ForegroundColor Green
+  Write-Host "All set. Sign in to GTO Wizard in the Chrome window (once), then open `"Poker Wrapper`".$(if ($curOffset) { " The dashboard is http://localhost:$(Port 'api')." })" -ForegroundColor Green
   Start-Sleep -Seconds 4
 } else {
   Write-Host 'Setup finished. Next: sign in to GTO Wizard, add your poker accounts, then open "Poker Wrapper".' -ForegroundColor Green
