@@ -87,7 +87,8 @@ too (the default is No).
   local copy is in `~\poker-package\PokerWrapperSetup-<version>.exe`.
 - Build one without publishing: `bun setup\buildPackage.ts --installer` (needs Inno Setup:
   `winget install JRSoftware.InnoSetup --scope user`).
-- Hand over the `.exe` + `~\poker-package\PokerWrapper-key.txt`. Existing installs keep updating through the
-  in-app bar. They don't need the installer.
+- Hand it over with `setup\handoff.cmd`: it prints a message with two download links (the installer and the key,
+  valid 7 days) to paste to the person, and puts both files in `C:\Users\Public\PokerWrapper` for another Windows
+  account on this computer. Existing installs keep updating through the in-app bar. They don't need the installer.
 - Silent / test install: `PokerWrapperSetup.exe /VERYSILENT /KEYFILE=<key.txt> [/DIR=<folder>] [/NOSERVICES]`.
   `/NOSERVICES` skips the three background services, for a test copy on a machine that already runs one.

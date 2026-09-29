@@ -62,7 +62,12 @@ machine, the factory's export (below) brings them instead.
 `setup/publish.cmd` (or the owner's "Friend release" bar on the wrapper's setup page): the gate, then
 `setup/buildPackage.ts --publish` builds the code zip, any changed data part and `PokerWrapperSetup-<version>.exe`,
 and uploads them to the update channel (`r2:poker-solve-db/wrapper`, `PW_CHANNEL` overrides). Installed copies see
-the blue **Update available** bar; a new player gets `wrapper/PokerWrapperSetup.exe` + the key file.
+the blue **Update available** bar. `--stage` instead of `--publish` uploads the release without moving `latest.json`:
+its installer works on any machine, but no install is offered it — a build to try first.
+
+**Handing the installer to a machine:** `setup\handoff.cmd` (or `bun setup/handoff.ts [--version <v>] [--days N]
+[--public]`) prints a ready-to-paste message with two 7-day download links — the installer on the channel and the key —
+and `--public` also copies both to `C:\Users\Public\PokerWrapper` for a second Windows account on this computer.
 
 ## The chart factory
 
