@@ -43,7 +43,8 @@ else {
   $upd = if (-not $rel) { 'update channel unreadable (check the download key)' } elseif ($rel.version -gt $inst.version) { "update waiting: $($rel.version) - press Update now on the Poker Wrapper's setup page" } else { 'up to date' }
   Write-Host ("  [..] {0,-34} {1}  ({2})" -f 'Installed version', $inst.version, $upd) -ForegroundColor $(if ($rel -and $rel.version -gt $inst.version) { 'Yellow' } else { 'Gray' })
   $haveData = Get-InstalledData $root
-  $dataOk = -not @($inst.data.PSObject.Properties | Where-Object { $haveData[$_.Name] -ne $_.Value }).Count
+  $wanted = Get-WantedParts $root $inst   # the strategy's parts only
+  $dataOk = -not @($inst.data.PSObject.Properties | Where-Object { ($wanted -contains $_.Name) -and ($haveData[$_.Name] -ne $_.Value) }).Count
   Row $dataOk 'Data matches this version' $(if ($dataOk) { ($inst.data.PSObject.Properties | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ', ' } else { 'a data part is missing or old' }) 'run PokerWrapperSetup.exe again (repair) (it fetches the missing part)'
 }
 
@@ -54,7 +55,10 @@ Row (Test-Path $sqlite) '6-max preflop charts' $(if (Test-Path $sqlite) { "$([ma
 $metas = @(Get-ChildItem (Join-Path $root 'gto-trainer\apps\api\data\charts') -Filter *.meta.json).Count
 Row ($metas -gt 1000) 'Chart index' "$metas charts" 'put PokerWrapper-data-*.zip next to the folder and run setup'
 $turn = @(Get-ChildItem (Join-Path $root 'gto-trainer\apps\api\data\mes_turn')).Count
-Row ($turn -gt 0) 'MES turn data' "$turn files" 'put PokerWrapper-data-*.zip next to the folder and run setup'
+$installedNow = Get-Installed $root
+$wantedParts = Get-WantedParts $root $installedNow
+if ($installedNow -and ($wantedParts -notcontains 'mesturn')) { Write-Host ("  [..] {0,-34} {1}" -f 'MES turn data', "not part of this install (strategy $(Get-InstallStrategy $root))") }
+else { Row ($turn -gt 0) 'MES turn data' "$turn files" 'put PokerWrapper-data-*.zip next to the folder and run setup' }
 $r2 = $false
 # one known chart, stat only (~1 s; a listing of this folder takes 30 s+)
 # must come back a FILE: on R2 a key that cannot see the object (or a missing one) can answer a phantom directory, exit 0

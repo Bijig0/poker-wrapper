@@ -16,6 +16,7 @@
 param(
   [string]$DataZip = '',         # path to PokerWrapper-data-*.zip (default: look next to this folder)
   [string]$KeyFile = '',         # rclone "key = value" lines for remote r2 (the installer's key page); deleted after use
+  [string]$Strategy = '',        # what the player plays (the installer's page, e.g. ign200-6max): only its data parts are fetched
   [switch]$Installer,            # run by PokerWrapperSetup.exe: shortcuts are its job, show download progress
   [switch]$SkipTools,            # tools already installed
   [switch]$SkipTasks,            # do not register scheduled tasks (testing)
@@ -34,6 +35,8 @@ if ($Installer) {
   try { Start-Transcript -Path (Join-Path $root 'config\setup-install.log') -Force | Out-Null } catch { }
 }
 $bin = Join-Path $root 'bin'
+# the strategy decides which data parts step 3 fetches (channel.ps1 Get-WantedParts); step 5 writes it to local.env
+if ($Strategy) { $env:INSTALL_STRATEGY = $Strategy }
 
 function Step($n, $what) { Write-Host ""; Write-Host "[$n] $what" -ForegroundColor Cyan }
 function Ok($m) { Write-Host "    OK  $m" -ForegroundColor Green }
@@ -137,12 +140,12 @@ else {
 }
 
 # ---------------------------------------------------------------- 3. data
-Step 3 'Data (6-max preflop DB, MES turn data, node trust) — about 3 GB to download the first time'
+Step 3 "Data$(if (Get-InstallStrategy $root) { " for $(Get-InstallStrategy $root)" }) — about 3 GB to download the first time"
 $sqlite = Join-Path $root 'gto-trainer\apps\api\data\hrc6max-preflop.sqlite'
 if (Get-Installed $root) {
   # the parts THIS code version expects (VERSION.json), from a zip next to the folder or the update channel
   $sync = Sync-DataParts $root
-  if ($sync.ok) { Ok $(if ($sync.did.Count) { "installed: $($sync.did -join ', ')" } else { 'up to date' }) }
+  if ($sync.ok) { Ok "$(if ($sync.did.Count) { "installed: $($sync.did -join ', ')" } else { 'up to date' })$(if ($sync.skipped.Count) { " (not needed for this strategy: $($sync.skipped -join ', '))" })" }
   else { Bad "could not get data part(s) $($sync.missing -join ', ') — is the key in step 2 right? Or put the PokerWrapper-data-*.zip files next to the PokerWrapper folder and run setup again" }
 } elseif (Test-Path $sqlite) { Ok 'already in place' }
 else {
@@ -153,8 +156,8 @@ else {
   }
   if ($DataZip -and (Test-Path $DataZip)) {
     Todo "unpacking $DataZip (a few minutes) ..."
-    & "$env:SystemRoot\System32\tar.exe" -xf $DataZip -C $root --strip-components 1
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $sqlite)) { Ok 'data unpacked' } else { Bad "could not unpack $DataZip" }
+    $unpacked = Expand-PackageZip $DataZip $root -Strip
+    if ($unpacked -and (Test-Path $sqlite)) { Ok 'data unpacked' } else { Bad "could not unpack $DataZip" }
   } else { Bad 'data not found — run setup again after step 2 is green, or put the data zip next to the PokerWrapper folder' }
 }
 # THE CHART INDEX MOVED (2026-09-27, the poker-wrapper repo): analysis\pipeline\solve\exploit_ui\solutions ->
@@ -220,6 +223,7 @@ function Set-Cfg($key, $value) {
 }
 $has = { param($k) [bool]($cfg | Where-Object { $_ -match "^\s*$k\s*=\s*\S" }) }
 Set-Cfg 'GTOW_SECONDARY' '0'       # one GTO Wizard account (the main one); heads-up solves use it too
+if ($Strategy) { Set-Cfg 'INSTALL_STRATEGY' $Strategy }   # what this install plays: only its data parts are kept up to date
 # retired settings (PLAYER_MODE, CHART_SERVER: that is simply how this app is now)
 $cfg = @($cfg | Where-Object { $_ -notmatch '^\s*(PLAYER_MODE|CHART_SERVER)\s*=' })
 # no CoinPoker name to ask for: the reader learns it from the client's own log (sites/cpFeed.ts);

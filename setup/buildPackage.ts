@@ -102,6 +102,13 @@ const DATA_PARTS: Record<string, PartSpec> = {
   // installer carries it inside itself; a zip install gets it as an update and config/env.ps1 prefers bin/ from then on.
   runtime: [() => [[findBun(), "bin/bun.exe"], [findRclone(), "bin/rclone.exe"]]],
 };
+// WHAT AN INSTALL DOWNLOADS (2026-09-29, Brady): the installer asks what the player plays and fetches only that
+// strategy's data parts (setup/channel.ps1 Get-WantedParts reads this map from VERSION.json; INSTALL_STRATEGY in
+// config/local.env). The runtime always comes. Measured: preflop6 is 100% ign200_6max trees; mesturn is the 3-max NL25
+// MES only. One choice for now; a new strategy is a row here + a release.
+const STRATEGIES: Record<string, { label: string; parts: string[] }> = {
+  "ign200-6max": { label: "Ignition 6-max NL200 (ring)", parts: ["preflop6", "nodetrust", "runtime"] },
+};
 const CHANNEL = process.env.PW_CHANNEL || "r2:poker-solve-db/wrapper";
 const SECRET_PATTERNS = [
   /aws_secret_access_key\s*=\s*\S{20,}/i, /secret_access_key\s*[=:]\s*['"]?[A-Za-z0-9/+]{30,}/i,
@@ -410,7 +417,8 @@ function main(): number {
   // 2. code, with VERSION.json = version + the manifest the updater diffs against
   const items = codeItems();
   const manifest: Record<string, string> = Object.fromEntries(items.map(([src, f]) => [f, sha256File(src)]));
-  const stamp = { version, built: isoLocal(), commit, notes: a.notes, data: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v.version])), files: manifest };
+  const stamp = { version, built: isoLocal(), commit, notes: a.notes, data: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v.version])),
+                  strategies: STRATEGIES, files: manifest };
   const codeZip = join(out, `PokerWrapper-code-${version}.zip`);
   const leaks: string[] = [];
   for (const [p, f] of items) {
@@ -441,7 +449,7 @@ function main(): number {
   }
   const release = { version, published: isoLocal(), commit, notes: a.notes,
                     code: { file: basename(codeZip), bytes: statSync(codeZip).size, sha256: sha256File(codeZip) }, data: parts,
-                    ...(installer ? { installer } : {}) };
+                    strategies: STRATEGIES, ...(installer ? { installer } : {}) };
   const releasePath = join(out, `release-${version}.json`);
   writeFileSync(releasePath, pyJsonDumps(release, { indent: 1 }), "utf8");
 

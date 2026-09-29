@@ -75,9 +75,9 @@ if (-not $zip) { Say 'the download failed or did not match its checksum — noth
 $stage = Join-Path $env:TEMP "pokerwrapper-update-$($rel.version)"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
-& "$env:SystemRoot\System32\tar.exe" -xf $zip -C $stage   # Windows' bsdtar: Git's GNU tar cannot read a zip
+$unpacked = Expand-PackageZip $zip $stage   # tar.exe when the machine has it, else .NET (channel.ps1)
 $new = Get-Installed (Join-Path $stage 'PokerWrapper')
-if ($LASTEXITCODE -ne 0 -or -not $new) { Say 'could not unpack the update — nothing was changed.' Red; Finish 1 }
+if (-not $unpacked -or -not $new) { Say 'could not unpack the update — nothing was changed.' Red; Finish 1 }
 
 # 3. stop what runs from this folder: the wrapper, then the three services (their supervisors, then the servers)
 Say 'closing the Poker Wrapper and stopping the services ...'

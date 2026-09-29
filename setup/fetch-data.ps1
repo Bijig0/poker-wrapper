@@ -26,8 +26,7 @@ foreach ($p in $rel.data.PSObject.Properties) {
   if (-not $Force -and (Test-Path (Join-Path $data $marker[$part]))) { Write-Host "  $part : already here (-Force to replace)"; continue }
   $zip = Get-ChannelFile "$Channel/data/$($info.file)" $info.file $info.sha256 $info.bytes
   if (-not $zip) { Write-Host "  $part : download failed" -ForegroundColor Red; $bad++; continue }
-  & "$env:SystemRoot\System32\tar.exe" -xf $zip -C $root --strip-components 1
-  if ($LASTEXITCODE -eq 0) { Write-Host "  $part : $($info.version) unpacked" -ForegroundColor Green; Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+  if (Expand-PackageZip $zip $root -Strip) { Write-Host "  $part : $($info.version) unpacked" -ForegroundColor Green; Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
   else { Write-Host "  $part : could not unpack $zip" -ForegroundColor Red; $bad++ }
 }
 exit $bad

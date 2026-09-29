@@ -75,6 +75,7 @@ Filename: "{sys}\wscript.exe"; Parameters: """{app}\ignition-study-wrapper\run-w
 [Code]
 var
   KeyPage: TInputQueryWizardPage;
+  StratPage: TInputOptionWizardPage;   // what the player plays: only that strategy's data is downloaded
   KeyNote: TNewStaticText;
   KeyExtra: TStringList;     // the other lines of a loaded key file (provider, acl, region...), passed on as they are
 
@@ -130,6 +131,13 @@ begin
   KeyPage.Add('Access key ID:', False);
   KeyPage.Add('Secret access key:', True);
   KeyPage.Add('Endpoint (https://<account>.r2.cloudflarestorage.com, or just the account ID):', False);
+
+  // the strategy page: one choice today (setup\buildPackage.ts STRATEGIES is the list; a new one is a release)
+  StratPage := CreateInputOptionPage(KeyPage.ID, 'What will you play?',
+    'Only the charts and data for it are downloaded.',
+    'Pick the tables you play. Setup fetches the data that strategy needs (about 3 GB) and nothing else.', True, False);
+  StratPage.Add('Ignition 6-max NL200 (ring games) - the 6-max preflop charts, about 3 GB');
+  StratPage.Values[0] := True;
 
   B := TNewButton.Create(KeyPage);
   B.Parent := KeyPage.Surface;
@@ -226,10 +234,16 @@ end;
 // setup.ps1's arguments after -Installer: the key, and /NOSERVICES = do not register or start the three services (a
 // test install on a machine whose own Poker Wrapper already holds :2000 / :8777 / :7700)
 function KeyArg(Param: String): String;
+var
+  Strat: String;
 begin
   Result := '';
   if FileExists(ExpandConstant('{tmp}\key.txt')) then Result := '-KeyFile "' + ExpandConstant('{tmp}\key.txt') + '"';
   if HasSwitch('/NOSERVICES') then Result := Result + ' -SkipTasks';
+  // /STRATEGY=<id> (a silent install) wins; else the page's pick — the only row today is ign200-6max
+  Strat := ExpandConstant('{param:STRATEGY|}');
+  if (Strat = '') and (StratPage <> nil) and StratPage.Values[0] then Strat := 'ign200-6max';
+  if Strat <> '' then Result := Result + ' -Strategy ' + Strat;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
