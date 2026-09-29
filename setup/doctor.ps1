@@ -45,7 +45,7 @@ else {
   $haveData = Get-InstalledData $root
   $wanted = Get-WantedParts $root $inst   # the strategy's parts only
   $dataOk = -not @($inst.data.PSObject.Properties | Where-Object { ($wanted -contains $_.Name) -and ($haveData[$_.Name] -ne $_.Value) }).Count
-  Row $dataOk 'Data matches this version' $(if ($dataOk) { ($inst.data.PSObject.Properties | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ', ' } else { 'a data part is missing or old' }) 'run PokerWrapperSetup.exe again (repair) (it fetches the missing part)'
+  Row $dataOk 'Data matches this version' $(if ($dataOk) { ($inst.data.PSObject.Properties | Where-Object { $wanted -contains $_.Name } | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ', ' } else { 'a data part is missing or old' }) 'run PokerWrapperSetup.exe again (repair) (it fetches the missing part)'
 }
 
 Write-Host ""
