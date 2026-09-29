@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, isAbsolute, join } from "node:path";
 import { underTest } from "../../../../packages/data-root/dataRoot";
 import { gtowAccountsPath } from "./storePaths";
+import { livePort, port } from "./ports";
 
 export type GtowTier = "ultra" | "elite" | "other";
 
@@ -102,7 +103,7 @@ export function defaultAccounts(env: NodeJS.ProcessEnv = process.env, exists: (p
     {
       id: "secondary", name: "Elite 1", tier: "elite",
       multiway: envBool(env.GTOW_SECONDARY_MULTIWAY, false),
-      cdpHost: env.GTOW_CDP_HOST_SECONDARY ?? "127.0.0.1:9223",
+      cdpHost: env.GTOW_CDP_HOST_SECONDARY ?? `127.0.0.1:${port("gtowSecondary", env)}`,
       launchHint: "scripts/start_gtow_secondary.ps1",
       client: "electron", exe: env.GTOW_SECONDARY_PATH?.trim() || null, profileDir: null,
       enabled: envBool(env.GTOW_SECONDARY, true),
@@ -112,7 +113,7 @@ export function defaultAccounts(env: NodeJS.ProcessEnv = process.env, exists: (p
     {
       id: "primary", name: "Ultra", tier: "ultra",
       multiway: envBool(env.GTOW_PRIMARY_MULTIWAY, true),
-      cdpHost: env.GTOW_CDP_HOST ?? "127.0.0.1:9222",
+      cdpHost: env.GTOW_CDP_HOST ?? `127.0.0.1:${port("gtow", env)}`,
       launchHint: "scripts/start_gtow_chrome.ps1",
       client: app ? "electron" : "chrome", exe: app,
       profileDir: env.GTOW_CHROME_PROFILE?.trim() || null,
@@ -149,7 +150,7 @@ export interface LaunchPlan {
 
 /** How to bring one account's client up — the one rule the Connect button and the watchdog both follow. */
 export function launchPlan(a: GtowAccountEntry, repo: string, localAppData = process.env.LOCALAPPDATA ?? ""): LaunchPlan {
-  const port = cdpPort(a.cdpHost) ?? 9222;
+  const port = cdpPort(a.cdpHost) ?? livePort("gtow");
   const profileDir = a.profileDir?.trim() || join(localAppData, a.id === "primary" ? "gtow-cdp-profile" : `gtow-cdp-profile-${a.id}`);
   const script = /\.ps1$/i.test(a.launchHint) && existsSync(join(repo, a.launchHint)) ? a.launchHint : null;
   const kind: LaunchPlan["kind"] = script ? "script" : a.client === "electron" && a.exe ? "electron" : "chrome";

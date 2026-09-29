@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { join, normalize, sep } from "node:path";
+import { rewritePorts } from "../services/ports";
 
 /**
  * The study tool's UI pages, served straight off this API.
@@ -44,7 +45,10 @@ async function sendStatic(rel: string): Promise<Response> {
   if (!(await file.exists())) return new Response("not found", { status: 404 });
 
   const dot = full.lastIndexOf(".");
-  const type = TYPES[full.slice(dot).toLowerCase()] ?? "application/octet-stream";
+  const ext = full.slice(dot).toLowerCase();
+  const type = TYPES[ext] ?? "application/octet-stream";
+  // pages and scripts: their ":2000"-style addresses become this install's ports (services/ports.ts; a no-op by default)
+  if (ext === ".html" || ext === ".js") return new Response(rewritePorts(await file.text()), { headers: { "Content-Type": type } });
   return new Response(file, { headers: { "Content-Type": type } });
 }
 

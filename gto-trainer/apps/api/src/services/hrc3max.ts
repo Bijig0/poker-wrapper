@@ -3,6 +3,7 @@ import { factoryFile } from "./repoPaths";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { SNAP_MAX, SNAP_TAU } from "../utils/snapToken/snapToken";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
+import { chartsUrl } from "./ports";
 
 /**
  * Client for the asymmetric 3-max HRC chart corpus, served by the solve-DB
@@ -24,7 +25,7 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
  *      of reusing walkPreflopLine's label-based snap.
  */
 
-export const HRC3MAX_BASE = process.env.HRC3MAX_URL ?? "http://127.0.0.1:8777";
+export const HRC3MAX_BASE = process.env.HRC3MAX_URL ?? chartsUrl();
 
 /** The solved depth ladder (bb). 20..110 by 5, then the deep 125/150 band. */
 export const RUNGS = [

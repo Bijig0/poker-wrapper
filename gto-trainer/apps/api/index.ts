@@ -27,6 +27,7 @@ import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backg
 import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
 import { replayScheduler } from "./src/services/replayScheduler";
+import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
 
 const app = new Hono();
 
@@ -76,7 +77,8 @@ app.route("/", studyUiRoutes);
 // can be bookmarked, reloaded, or pasted. (/replay stays the Replay Review
 // page itself, which the /review tab embeds.)
 const dashboardPage = () =>
-  new Response(Bun.file(`${import.meta.dir}/dashboard.html`), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  // read as text: its ":2000"-style addresses become this install's ports (services/ports.ts rewritePorts; a no-op by default)
+  new Response(rewritePorts(nodeFs.readFileSync(`${import.meta.dir}/dashboard.html`, "utf-8")), { headers: { "Content-Type": "text/html; charset=utf-8" } });
 // The dashboard's stylesheet lives beside the page (dashboard.css) so it can be
 // read and edited as one file; served uncached, like the page, so an edit is live.
 app.get("/dashboard.css", () =>
@@ -113,7 +115,7 @@ app.get("/api", (c) => {
 });
 
 // Start server
-const port = process.env.PORT || 2000;
+const port = apiPort("api");   // PORT, else 2000 + PORT_OFFSET (services/ports.ts)
 
 console.log(`🃏 Poker GTO Bot API starting on port ${port}...`);
 
@@ -171,7 +173,7 @@ let adoption: Promise<void> = Promise.resolve();
   const stores = resolveAllStores();
   console.log(describeLayout());
   for (const s of stores.filter((x) => x.override)) console.log(`[data-root]   ${s.store} → ${s.path} (${s.override})`);
-  const liveApi = String(port) === "2000" && !dashboardOnly;
+  const liveApi = port === livePort("api") && !dashboardOnly;   // the install's API port; a verify API (:2001) is not it
   const split = splitStores(stores);
   if (liveApi && split.length) {
     const why = `[data-root] REFUSING TO START the live API: ${split.map((s) => `${s.store} → ${s.path} (${s.override})`).join("; ")} ` +

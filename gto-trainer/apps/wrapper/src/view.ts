@@ -19,6 +19,7 @@ import { autoAllowance, currentAnswer, currentChain, currentNote, pickReady } fr
 import { topUpWindow } from "./topup";
 import { sessionBrief } from "./session";
 import { layoutNote } from "./windows";
+import { apiUrl, port } from "../../api/src/services/ports";
 
 function mtime(p: string): number {
   try {
@@ -172,7 +173,7 @@ export async function shot(): Promise<Uint8Array | null> {
 
 /** One window for the whole Study Tool: the panel plus the API's study surfaces as tabs. */
 export function toolShell(): string {
-  const dash = "http://127.0.0.1:2000";
+  const dash = apiUrl();
   const tabs: [string, string, string][] = [
     ["study", "Study Answers", `http://127.0.0.1:${C.PANEL_PORT}/panel`],
     ["review", "Review Queue", `${dash}/replay`],
@@ -200,7 +201,7 @@ export function toolShell(): string {
     display:none; background:#0d141c; }
   iframe.on { display:block; }
 </style></head><body>
-<nav>${buttons}<span class="hint" id="hint">the API on :2000 is not running —
+<nav>${buttons}<span class="hint" id="hint">the API on :${port("api")} is not running —
   these tabs need it (the launcher starts it; see study-tool.log)</span></nav>
 <main>${frames}</main>
 <script>
@@ -229,7 +230,7 @@ export function toolShell(): string {
   });
   show("study");
   // These tabs are dead without :2000 — say so instead of a blank pane.
-  fetch("http://127.0.0.1:2000/", { mode: "no-cors" })
+  fetch("${dash}/", { mode: "no-cors" })
     .catch(() => document.getElementById("hint").style.display = "inline");
 </script>
 </body></html>`;

@@ -11,6 +11,7 @@ import { openStore, pollerEventsPath } from "./storePaths";
 import { ensureEventTables, pollerEventRow } from "../../../../packages/data-root/eventTables";
 import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
 import { SIX_MAX_STRATEGY_ID } from "./strategies";
+import { apiUrl } from "./ports";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
 export interface ChainBanner {
@@ -202,7 +203,7 @@ interface FastSolveLikeResponse {
   deferred?: string;
 }
 
-const DEFAULT_SELF_BASE_URL = "http://localhost:2000/api";
+const DEFAULT_SELF_BASE_URL = `${apiUrl()}/api`;
 const DEFAULT_INTERVAL_MS = 1000;
 
 /** MES family of a postflop overlay answer: the tag names it when the

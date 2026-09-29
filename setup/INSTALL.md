@@ -67,8 +67,8 @@ CoinPoker's own log, so you sit down in CoinPoker yourself like always.
      (the "CoinPoker 200NL Heads-Up" strategy). Other CoinPoker tables are recorded but get no answers yet.
 4. When it's your turn, the panel shows the answer. **End session** when you're done.
 
-**Poker Dashboard** (or http://localhost:2000 in any browser) has every session and hand you played, with the
-answer for each decision.
+**Poker Dashboard** (or http://localhost:2000 in any browser — the setup checklist says if yours is on another port)
+has every session and hand you played, with the answer for each decision.
 
 ---
 
@@ -107,8 +107,12 @@ too (the default is No).
   [/NOSERVICES]`. `/NOSERVICES` skips the three background services, for a test copy on a machine that already runs
   one. Without `/STRATEGY` a silent install fetches every data part.
 - Another copy holding :2000/:8777/:7700 at install time: the SAME Windows user's older copy is stopped and its services
-  replaced by the new install (never mid-session); another account's (the owner's stack under a second account) leaves
-  the new install's services off — sign that account out first (sign out, not switch user).
+  replaced by the new install (never mid-session). Another ACCOUNT's (the owner's stack, still signed in in the
+  background) makes the new install take its own ports: `PORT_OFFSET` in `config\local.env` (the first free of 50,
+  100, …) shifts the API, chart server, panel, GTO Wizard CDP and table-browser ports together (`config\env.ps1` and
+  `gto-trainer\apps\api\src\services\ports.ts` are the two copies of the rule; the browser pages get their addresses
+  rewritten on the way out). Both accounts can then run at once. `/PORTOFFSET=N` sets it on a silent install; the
+  checklist header and the "Poker Dashboard" icon say which port the dashboard is on.
 - What an install downloads (2026-09-29): the 6-max preflop bake `preflop6` (3,070 MB — every tree in it is
   `ign200_6max`), `nodetrust` (12 MB), the runtime (72 MB, inside the installer), the code (12 MB); the MES turn
   files `mesturn` (216 MB, the 3-max NL25 exploit) only when the strategy needs them. The map is `STRATEGIES` in

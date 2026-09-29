@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pyRepr } from "../gto-trainer/apps/wrapper/src/py";
+import { apiUrl, chartsUrl, panelUrl } from "../gto-trainer/apps/api/src/services/ports";
 
 const ROOT = resolve(import.meta.dir, "..");
 const API = join(ROOT, "gto-trainer", "apps", "api");
@@ -163,7 +164,7 @@ if (!QUICK) {
 // 4. live smoke
 if (!PUBLISH) {
   try {
-    const j = await get("http://127.0.0.1:2000/api/dashboard/sources/strategies");
+    const j = await get(`${apiUrl()}/api/dashboard/sources/strategies`);
     const st = new Map<string, string>(j.strategies.map((s: any) => [s.id, s.status]));
     const ok = ["ign25-zone-3max-exploit", "ign200-zone-3max-equilibrium", "ign200-ring-6max-equilibrium", "cp200-hu-equilibrium"]
       .every((k) => ["ok", "drift"].includes(st.get(k) ?? ""));
@@ -172,17 +173,17 @@ if (!PUBLISH) {
     rec("api :2000 strategies", false, String(e?.message ?? e));
   }
   try {
-    const n = await get("http://127.0.0.1:8777/api/preflop/node?source=hrc_hu_cp200a_d100_o2_5_3b9&line=", 90);
+    const n = await get(`${chartsUrl()}/api/preflop/node?source=hrc_hu_cp200a_d100_o2_5_3b9&line=`, 90);
     rec("chart server :8777 node", !!n.ok, `root ${n.pos ?? "None"} ${pyRepr((n.actions || []).map((a: any) => a.token))}`);
   } catch (e: any) {
     rec("chart server :8777 node", false, String(e?.message ?? e));
   }
   try {
-    const s = await get("http://127.0.0.1:7700/state?light=1");
+    const s = await get(`${panelUrl()}/state?light=1`);
     rec("wrapper :7700 /state", "site" in s && "panelVersion" in s, `site ${s.site ?? "None"} session ${s.sessionId ?? "None"}`);
     for (const [site, preset, cfg] of [["ignition", "strategy:ign200-ring-6max-equilibrium", { format: "ign-ring-NL200-6" }],
                                        ["coinpoker", "strategy:cp200-hu-equilibrium", { format: "cp-hu-NL200", recording: false }]] as const) {
-      const pf = await get("http://127.0.0.1:7700/session/preflight", 60, { preset, config: { site, ...cfg } });
+      const pf = await get(`${panelUrl()}/session/preflight`, 60, { preset, config: { site, ...cfg } });
       // environment, not regressions: the Ignition profile, the live connection speed (netcheck), and the CoinPoker
       // attached table (none is picked by this call; the setup page picks one)
       const hard = pf.checks.filter((c: any) => c.required && !c.ok && !["profile", "net", "cp-table"].includes(c.id)).map((c: any) => c.label);

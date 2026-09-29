@@ -30,9 +30,10 @@ import {
   agrees,
   type ActionFreq,
 } from "../utils/bracketDisagreement/bracketDisagreement";
+import { port } from "./ports";
 
 const DEBUG_HOST = "127.0.0.1";
-const DEBUG_PORT = 9222;
+const DEBUG_PORT = port("gtow");   // GTOW_CDP_PORT, else 9222 + PORT_OFFSET (services/ports.ts)
 const TARGET_MATCH = "app.gtowizard.com";
 
 /**

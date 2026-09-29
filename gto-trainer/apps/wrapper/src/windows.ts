@@ -80,10 +80,13 @@ export function wrapperWindows(): [number | null, number | null] {
 export const panelHwnd = () => wrapperWindows()[1];
 
 /** Stamp this slot / tag on the page title (a no-op for the single-table setup). */
-export function slotTitle(html: Uint8Array): Uint8Array {
+export function slotTitle(html: string): string;
+export function slotTitle(html: Uint8Array): Uint8Array;
+export function slotTitle(html: string | Uint8Array): string | Uint8Array {
   if (!C.SLOT && !C.TAG) return html;
   const base = C.RIG ? "<title>Poker Wrapper Tool" : "<title>Poker Wrapper";
   const suffix = (C.SLOT ? ` ${C.SLOT}` : "") + (C.TAG ? ` ${C.TAG}` : "");
+  if (typeof html === "string") return html.replace(base, base + suffix);   // a page already read as text (server.ts page())
   const text = Buffer.from(html).toString("latin1");
   const i = text.indexOf(base);
   if (i < 0) return html;

@@ -12,12 +12,17 @@
 # What it never touches: config\local.env, your hands and sessions (the data folders), sign-ins, the venv.
 param([string]$Version = '', [switch]$Check, [switch]$Yes, [switch]$Relaunch, [switch]$Force,
       # testing a second install on a machine that runs a live one: other ports, and leave the scheduled tasks alone
-      [int]$ApiPort = 2000, [int]$ChartPort = 8777, [int]$PanelPort = 7700, [switch]$SkipTasks,
+      # (0 = this install's ports: config\env.ps1, 2000 / 8777 / 7700 + PORT_OFFSET)
+      [int]$ApiPort = 0, [int]$ChartPort = 0, [int]$PanelPort = 0, [switch]$SkipTasks,
       [string]$WrapperArgs = '')   # extra wrapper arguments for -Relaunch (a non-default instance: --panel-port N --cdp-port N)
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $root 'config\env.ps1')
 . (Join-Path $PSScriptRoot 'channel.ps1')
+if (-not $ApiPort) { $ApiPort = [int]$env:PORT }
+if (-not $ChartPort) { $ChartPort = [int]$env:HRC_UI_PORT }
+if (-not $PanelPort) { $PanelPort = [int]$env:PANEL_PORT }
 function Say($m, $c = 'Gray') { Write-Host "  $m" -ForegroundColor $c }
 function Finish([int]$code) {
   if ($Relaunch) { Start-Wrapper }

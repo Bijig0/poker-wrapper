@@ -12,6 +12,7 @@ import { js } from "../js";
 import { fmtFixed, KeyError, maxBy, minBy, pyFloat, pyInt, pyRound, splitWs } from "../py";
 import { S } from "../state";
 import * as TABLES from "../tables";
+import { livePort } from "../../../api/src/services/ports";
 
 export type Node = { text: string; x: number; y: number; w: number; h: number; [k: string]: any };
 export type Seat = Record<string, any>;
@@ -537,16 +538,16 @@ export function isPanelTitle(title: string, base: string): boolean {
   return title === base || title.startsWith(base + " · ") || title.startsWith(base + " - ");
 }
 
-/** The panel port another instance was launched on, from its own argv (7700 when absent or unreadable). */
+/** The panel port another instance was launched on, from its own argv (this install's main panel port when absent or unreadable). */
 export function portOf(cmdline: string[]): number {
   for (let i = 0; i < cmdline.length; i++) {
     const a = cmdline[i]!;
     if (a === "--panel-port" && i + 1 < cmdline.length) {
-      try { return pyInt(cmdline[i + 1]); } catch { return 7700; }
+      try { return pyInt(cmdline[i + 1]); } catch { return livePort("panel"); }
     }
     if (a.startsWith("--panel-port=")) {
-      try { return pyInt(a.split("=").slice(1).join("=")); } catch { return 7700; }
+      try { return pyInt(a.split("=").slice(1).join("=")); } catch { return livePort("panel"); }
     }
   }
-  return 7700;
+  return livePort("panel");
 }

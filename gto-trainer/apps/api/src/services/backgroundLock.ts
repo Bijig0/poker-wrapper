@@ -23,6 +23,7 @@
 import { mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { backgroundLockPath } from "./storePaths";
+import { livePort, port } from "./ports";
 
 // in the data root, so every API process on this machine (main checkout or a worktree) contends for ONE lock
 const LOCK_PATH = backgroundLockPath();
@@ -160,7 +161,7 @@ function release(): void {
  */
 export const httpOnlyByConfig = (): string | null =>
   process.env.API_HTTP_ONLY === "1" ? "API_HTTP_ONLY=1"
-    : process.env.PORT && process.env.PORT !== "2000" ? `it listens on :${process.env.PORT}, not the live :2000` : null;
+    : port("api") !== livePort("api") ? `it listens on :${port("api")}, not the live :${livePort("api")}` : null;
 
 export function startBackgroundLock(): void {
   if (managed) return;

@@ -39,6 +39,7 @@ import * as SESSION from "./session";
 import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
 import { domDump, shot, state, toolShell } from "./view";
 import { applyLayout, dpiAt, monitors, panelHwnd, slotTitle, targetArea, wantFullscreen } from "./windows";
+import { livePort, rewritePorts } from "../../api/src/services/ports";
 
 const HEADERS = { "Cache-Control": "no-store" };
 
@@ -51,7 +52,9 @@ const HEADERS = { "Cache-Control": "no-store" };
  * a request whose Origin is not a local panel or the study API is refused before any handler runs, and the CORS header
  * names only those origins. (A DNS-rebinding page arrives with its own hostname as Origin and is refused the same way.)
  */
-export const ALLOWED_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:(2000|2001|2002|77\d\d))?$/;
+// the install's API port (+1, +2 for a verify API beside it) and its hundred panel ports (main + extra tables + a test rig)
+const ORIGIN_PORTS = [livePort("api"), livePort("api") + 1, livePort("api") + 2, ...Array.from({ length: 100 }, (_, i) => livePort("panel") + i)];
+export const ALLOWED_ORIGIN = new RegExp(`^http:\\/\\/(127\\.0\\.0\\.1|localhost)(:(${ORIGIN_PORTS.join("|")}))?$`);
 const originAllowed = (o: string | undefined): boolean => !o || ALLOWED_ORIGIN.test(o);
 
 function send(code: number, ctype: string, body: string | Uint8Array): Response {
@@ -61,7 +64,8 @@ const json = (code: number, v: unknown) => send(code, "application/json", pyJson
 const html = (b: string | Uint8Array) => send(200, "text/html; charset=utf-8", b);
 const text404 = (msg = "not found") => send(404, "text/plain", msg);
 const redirect = (to: string) => new Response(null, { status: 302, headers: { Location: to } });
-const page = (name: string) => readFileSync(join(C.ROOT, name));
+// pages: their ":2000"-style addresses become this install's ports (api services/ports.ts rewritePorts; a no-op by default)
+const page = (name: string) => rewritePorts(readFileSync(join(C.ROOT, name), "utf8"));
 
 /** The query string exactly as Python split it: everything after the first '?'. */
 const queryOf = (c: Context) => {

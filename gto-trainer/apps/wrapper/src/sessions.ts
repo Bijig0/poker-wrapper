@@ -17,12 +17,13 @@ import { paths } from "./env";
 import { openStore } from "../../../packages/data-root/centralDb";
 import * as netcheck from "./netcheck";
 import { pyFloat, pyInt, pyJsonDumps, pyReprStr, pyRound, pyStr, truthy, ValueError } from "./py";
+import { apiUrl, port } from "../../api/src/services/ports";
 
 /** dict.get(k, default): the default only when the key is ABSENT (a present None stays None). */
 const getd = (o: any, k: string, d: unknown) => (o && typeof o === "object" && k in o ? o[k] : d);
 
 /** 127.0.0.1, NOT localhost: on Windows localhost tries ::1 first and the API listens on IPv4 only. */
-export const API = () => process.env.STUDY_API || "http://127.0.0.1:2000";
+export const API = () => process.env.STUDY_API || apiUrl();
 
 export const STRATEGY_PREFIX = "strategy:";
 const PRACTICE = ["ign-practice-ring", "ign-practice-zone"];
@@ -188,8 +189,8 @@ export const presetsFromApi = () => !!presetsCache.fromApi;
 export const presetsError = () => presetsCache.error;
 
 export const CHECK_LABELS: Record<string, string> = {
-  api: "Study API on :2000",
-  hrc: "3-max chart server on :8777",
+  api: `Study API on :${port("api")}`,
+  hrc: `3-max chart server on :${port("charts")}`,
   hrc6max: "6-max ring preflop charts readable",
   exploit: "3-handed Zone 25NL preflop exploit charts armed",
   mes: "MES flop solves loaded",

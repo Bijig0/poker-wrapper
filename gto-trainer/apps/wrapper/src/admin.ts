@@ -16,6 +16,7 @@ import { CP, S, isCp } from "./state";
 import { SITE as CP_SITE, Site as CPSite } from "./sites/coinpoker";
 import { ADMIN_PORTS } from "./session";
 import { snapPanelToCpTable } from "./windows";
+import { livePort } from "../../api/src/services/ports";
 
 /** Which of these ports something listens on (asked of the OS: a connect to a closed port costs 2 s). */
 export function listeningPorts(ports: number[]): Set<number> {
@@ -36,7 +37,7 @@ export async function panelProbe(port: number, stateLight: () => Promise<Record<
     s = r;
   }
   const t = s.table || {};
-  return { port, tag: s.panelTag || (port === 7700 ? "main" : `:${port}`), site: s.site ?? null,
+  return { port, tag: s.panelTag || (port === livePort("panel") ? "main" : `:${port}`), site: s.site ?? null,
            sessionId: s.sessionId ?? null, attached: (s.coinpoker || {}).attached ?? null,
            table: t.room ?? null, label: t.label ?? null, heroSeated: t.heroSeated ?? null,
            answers: s.studyAnswers ?? null, me: port === C.PANEL_PORT };

@@ -18,6 +18,8 @@ param(
   [string]$DataDir = '',         # a folder holding PokerWrapper-data-*.zip files (the installer passes its own folder): used before downloading
   [string]$KeyFile = '',         # rclone "key = value" lines for remote r2 (the installer's key page); deleted after use
   [string]$Strategy = '',        # what the player plays (the installer's page, e.g. ign200-6max): only its data parts are fetched
+  [int]$PortOffset = -1,         # PORT_OFFSET for this install (config\local.env); -1 = keep what is there, or pick one when the
+                                 # default ports are held by another Windows account's Poker Wrapper (step 6)
   [switch]$Installer,            # run by PokerWrapperSetup.exe: shortcuts are its job, show download progress
   [switch]$SkipTools,            # tools already installed
   [switch]$SkipTasks,            # do not register scheduled tasks (testing)
@@ -227,12 +229,33 @@ function Set-Cfg($key, $value) {
 $has = { param($k) [bool]($cfg | Where-Object { $_ -match "^\s*$k\s*=\s*\S" }) }
 Set-Cfg 'GTOW_SECONDARY' '0'       # one GTO Wizard account (the main one); heads-up solves use it too
 if ($Strategy) { Set-Cfg 'INSTALL_STRATEGY' $Strategy }   # what this install plays: only its data parts are kept up to date
+# PORTS (2026-09-30): PORT_OFFSET moves every port (config\env.ps1 + services/ports.ts). -PortOffset sets it; else what
+# local.env has; step 6 may pick one when another Windows account's Poker Wrapper holds the default ports
+$PortDefaults = [ordered]@{ api = 2000; charts = 8777; panel = 7700; gtow = 9222; gtowSecondary = 9223; tableCdp = 9333 }
+$offsetLine = @($cfg | Where-Object { $_ -match '^\s*PORT_OFFSET\s*=\s*(\d+)' } | ForEach-Object { [int]$Matches[1] }) | Select-Object -First 1
+$portOffset = if ($offsetLine) { $offsetLine } else { 0 }
+function Port($name) { $PortDefaults[$name] + $portOffset }
+function Write-Cfg { [IO.File]::WriteAllLines($local, [string[]]$script:cfg) }   # no BOM: the wrapper and env.ps1 read it too
+function Set-PortOffset([int]$n) {
+  # the GTO Wizard account registry (gtow-accounts.json, the dashboard's GTO Wizard tab) pins each account's DevTools port:
+  # rows still on the OLD offset's ports move with the install, or its API would drive another install's GTO Wizard
+  $dataDir = ($script:cfg | Where-Object { $_ -match '^\s*POKER_DATA_DIR\s*=\s*(\S.*)$' } | ForEach-Object { $Matches[1].Trim().Trim('"') } | Select-Object -First 1)
+  if (-not $dataDir) { $dataDir = Join-Path $root 'data' }
+  $reg = if ($env:GTOW_ACCOUNTS_PATH) { $env:GTOW_ACCOUNTS_PATH } else { Join-Path $dataDir 'gtow-accounts.json' }
+  if ((Test-Path -LiteralPath $reg) -and $n -ne $script:portOffset) {
+    $txt = Get-Content -LiteralPath $reg -Raw
+    foreach ($base in 9222, 9223) { $txt = $txt -replace "127\.0\.0\.1:$($base + $script:portOffset)(?!\d)", "127.0.0.1:$($base + $n)" }
+    [IO.File]::WriteAllText($reg, $txt)
+  }
+  $script:portOffset = $n; Set-Cfg 'PORT_OFFSET' $n; Write-Cfg
+}
+if ($PortOffset -ge 0 -and $PortOffset -ne $portOffset) { Set-PortOffset $PortOffset; $offsetLine = $PortOffset }
 # retired settings (PLAYER_MODE, CHART_SERVER: that is simply how this app is now)
 $cfg = @($cfg | Where-Object { $_ -notmatch '^\s*(PLAYER_MODE|CHART_SERVER)\s*=' })
 # no CoinPoker name to ask for: the reader learns it from the client's own log (sites/cpFeed.ts);
 # CP_HERO in local.env still pins it if that ever guesses wrong
-[IO.File]::WriteAllLines($local, [string[]]$cfg)   # no BOM: the wrapper and env.ps1 read it too
-Ok "written: GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })"
+Write-Cfg
+Ok "written: GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })$(if ($portOffset) { ", PORT_OFFSET=$portOffset (API :$(Port 'api'), charts :$(Port 'charts'), panel :$(Port 'panel'), GTO Wizard :$(Port 'gtow'))" })"
 
 # ---------------------------------------------------------------- 6. services
 Step 6 'Services (study API, chart server, GTO Wizard watchdog)'
@@ -252,11 +275,15 @@ else {
   # own services before copying (PrepareToInstall), so whatever still listens is another copy's:
   #   - THIS Windows user's (an older zip install, an earlier folder): the installer is them saying "this one now" -
   #     the old copy is stopped and its services replaced (its files stay). Never in the middle of a session, though.
-  #   - another account's (the owner's stack, invisible to this user - no owner, no command line): leave this copy's
-  #     services off and say so.
+  #   - another account's (the owner's stack, invisible to this user - no owner, no command line): MOVE this install to
+  #     its own ports (PORT_OFFSET, the first free offset; config\env.ps1 + services/ports.ts) - unless an offset was
+  #     asked for or already set, in which case those ports are simply taken as they are.
   $held = @(); $ours = @()
+  # every port this install would listen on: the main three, the GTO Wizard clients, the table browser, extra tables
+  function Install-Ports([int]$off) { @(2000, 8777, 7700, 9222, 9223, 9333 | ForEach-Object { $_ + $off }) + @(1..3 | ForEach-Object { 7700 + $off + 10 * $_ }) }
+  function Port-Free([int]$p) { -not (Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) }
   if ($go -and $Installer) {
-    foreach ($port in 2000, 8777, 7700) {
+    foreach ($port in (Port 'api'), (Port 'charts'), (Port 'panel')) {
       $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
       if (-not $c) { continue }
       $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue
@@ -266,9 +293,19 @@ else {
       if ($p -and $owner -and $owner -eq $env:USERNAME) { $ours += [pscustomobject]@{ port = $port; pid = $p.ProcessId; cmd = $p.CommandLine } }
       else { $held += ":$port" }
     }
+    if ($held.Count -and $PortOffset -lt 0 -and -not $offsetLine) {
+      # another account's Poker Wrapper on the default ports: this install gets the first offset whose every port is free
+      $pick = $null
+      foreach ($off in 50, 100, 150, 200, 250, 300, 350, 400, 450) { if (@(Install-Ports $off | Where-Object { -not (Port-Free $_) }).Count -eq 0) { $pick = $off; break } }
+      if ($pick) {
+        Set-PortOffset $pick
+        Todo "another Windows account's Poker Wrapper holds $($held -join ', '): this install runs on its own ports - PORT_OFFSET=$pick (API :$(Port 'api'), charts :$(Port 'charts'), panel :$(Port 'panel'), GTO Wizard :$(Port 'gtow')); both can run at once"
+        $held = @()
+      }
+    }
     if ($held.Count) { $go = $false }
     elseif ($ours.Count) {
-      $sess = $null; try { $sess = Invoke-RestMethod 'http://127.0.0.1:7700/session' -TimeoutSec 5 } catch { }
+      $sess = $null; try { $sess = Invoke-RestMethod "http://127.0.0.1:$(Port 'panel')/session" -TimeoutSec 5 } catch { }
       if ($sess -and $sess.current) { $go = $false; Bad 'a session is running on your old Poker Wrapper - end it on its panel, then run PokerWrapperSetup again.' }
       else {
         $where = @($ours | ForEach-Object { if ($_.cmd -match '(?i)"?([A-Z]:\\[^"]*?)\\(gto-trainer|\.claude|scripts|ignition-study-wrapper)\\') { $Matches[1] } } | Select-Object -Unique) -join ', '
@@ -279,7 +316,7 @@ else {
         }
         foreach ($o in $ours) { & taskkill /PID $o.pid /T /F 2>&1 | Out-Null }
         Start-Sleep -Seconds 2
-        $held = @(foreach ($port in 2000, 8777, 7700) { if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { ":$port" } })
+        $held = @(foreach ($port in (Port 'api'), (Port 'charts'), (Port 'panel')) { if (-not (Port-Free $port)) { ":$port" } })
         if ($held.Count) { $go = $false }
       }
     }
@@ -298,10 +335,11 @@ else {
       }
     }
     if ($app) {
-      $up = $false; try { $null = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:9222/json/version' -TimeoutSec 3; $up = $true } catch { }
-      if (-not $up) { Start-Process -FilePath $app -ArgumentList '--remote-debugging-port=9222' }
+      $up = $false; try { $null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$(Port 'gtow')/json/version" -TimeoutSec 3; $up = $true } catch { }
+      if (-not $up) { Start-Process -FilePath $app -ArgumentList "--remote-debugging-port=$(Port 'gtow')" }
       Todo "the GTO Wizard app opened ($app): sign in there and leave it open"
     } else {
+      $env:GTOW_CDP_PORT = "$(Port 'gtow')"   # the launcher reads the port from the environment
       & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\start_gtow_chrome.ps1') -Foreground
       Todo 'a Chrome window opened on GTO Wizard: sign in there and leave it open'
     }
@@ -333,7 +371,14 @@ function Write-WrapperShortcut {
 $dashMark = Join-Path $root 'config\dashboard-shortcut.done'
 if ($Installer) {
   Set-Content -Path $dashMark -Value (Get-Date -Format 's') -Encoding ASCII
-  Ok 'made by the installer (Start menu + desktop)'
+  # the installer's "Poker Dashboard" icons say http://localhost:2000 (PokerWrapper.iss cannot know the offset): repoint them
+  if ($portOffset) {
+    foreach ($u in @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Dashboard.url'),
+                     (Join-Path ([Environment]::GetFolderPath('Programs')) 'Poker Wrapper\Poker Dashboard.url'))) {
+      if (Test-Path $u) { (Get-Content $u) -replace 'URL=http://localhost:\d+/', "URL=http://localhost:$(Port 'api')/" | Set-Content -Path $u -Encoding ASCII }
+    }
+  }
+  Ok "made by the installer (Start menu + desktop)$(if ($portOffset) { " - the dashboard opens http://localhost:$(Port 'api')" })"
 } elseif ($SkipShortcut) {
   # an update skips the shortcut — but one made before 2026-09-24 points at the Python wrapper (pythonw
   # run-study.pyw), which is gone, and would open nothing: repoint that one, leave any other alone
@@ -348,12 +393,12 @@ else {
 if (-not (Test-Path $dashMark)) {
   $url = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Poker Dashboard.url'
   $ico = Join-Path $root 'gto-trainer\study-tool.ico'
-  $body = @('[InternetShortcut]', 'URL=http://localhost:2000/')
+  $body = @('[InternetShortcut]', "URL=http://localhost:$(Port 'api')/")
   if (Test-Path $ico) { $body += @("IconFile=$ico", 'IconIndex=0') }
   Set-Content -Path $url -Value $body -Encoding ASCII
   New-Item -ItemType Directory -Force (Split-Path $dashMark) | Out-Null
   Set-Content -Path $dashMark -Value (Get-Date -Format 's') -Encoding ASCII
-  Ok '"Poker Dashboard" is on the desktop (opens http://localhost:2000)'
+  Ok "`"Poker Dashboard`" is on the desktop (opens http://localhost:$(Port 'api'))"
 }
 
 # ---------------------------------------------------------------- 8. check
@@ -369,7 +414,7 @@ if ($fail.Count) {
   exit 1
 }
 if ($Installer) {
-  Write-Host 'All set. Sign in to GTO Wizard in the Chrome window (once), then open "Poker Wrapper".' -ForegroundColor Green
+  Write-Host "All set. Sign in to GTO Wizard in the Chrome window (once), then open `"Poker Wrapper`".$(if ($portOffset) { " The dashboard is http://localhost:$(Port 'api')." })" -ForegroundColor Green
   Start-Sleep -Seconds 4
 } else {
   Write-Host 'Setup finished. Next: sign in to GTO Wizard, add your poker accounts, then open "Poker Wrapper".' -ForegroundColor Green

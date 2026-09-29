@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { time, sleep } from "./clock";
 import { pyRound } from "./py";
 import { paths } from "./env";
+import { livePort } from "../../api/src/services/ports";
 
 export const CLAIM_TTL_S = 20.0;
 export const MAX_TABLES = 4;
@@ -282,7 +283,7 @@ export function isLeader(): boolean {
   return me === null || me === LEADER;
 }
 
-export const PANEL_BASE = 7700, PANEL_STEP = 10;
+export const PANEL_BASE = livePort("panel"), PANEL_STEP = 10;   // 7700 + PORT_OFFSET (api services/ports.ts)
 export const PRESENCE_PATH = "/table/presence";
 export const PRESENCE_TTL_S = 3.0;
 export const PROBE_TIMEOUT_S = 0.8;

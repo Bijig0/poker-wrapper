@@ -21,6 +21,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { paths } from "../env";
+import { port } from "../../../api/src/services/ports";
 
 const REPO = paths().repo;
 const WRAPPER = join(REPO, "ignition-study-wrapper");
@@ -29,9 +30,9 @@ const LOG = join(paths().debug, "study-tool.log");
 // the chart server is TypeScript (the API's src/charts), run with this same Bun
 const CHART_SERVER = join(REPO, "gto-trainer", "apps", "api", "src", "charts", "chartServer.ts");
 // the rig's own ports; STUDY_TOOL_PANEL / STUDY_TOOL_CDP move it (a test of this launcher runs on spare ports, headless)
-const PANEL = Number(process.env.STUDY_TOOL_PANEL || 7701), CDP = Number(process.env.STUDY_TOOL_CDP || 9334), API = 2000;
+const PANEL = Number(process.env.STUDY_TOOL_PANEL || 7701), CDP = Number(process.env.STUDY_TOOL_CDP || 9334), API = port("api");
 // EVERY 3-handed preflop answer is served from here: without it the panel sits on "solving your spot…" forever
-const CHARTS = 8777;
+const CHARTS = port("charts");
 const BUN = process.execPath;
 
 function say(msg: string): void {

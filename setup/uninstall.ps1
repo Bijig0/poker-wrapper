@@ -4,10 +4,12 @@
 #   (no switch) from the uninstaller: the same, then the three scheduled tasks and the GTO Wizard window go too.
 # Only ever touches processes and tasks that belong to THIS folder: on a machine that also runs a source checkout (the
 # owner's dev tasks StudyAPI / ChartServer, a live wrapper on :7700) none of those are this install's, so none are stopped.
-param([switch]$StopOnly, [int]$PanelPort = 7700)
+param([switch]$StopOnly, [int]$PanelPort = 0)   # 0 = this install's panel port (config\env.ps1: 7700 + PORT_OFFSET)
 $ErrorActionPreference = 'SilentlyContinue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $root 'config\env.ps1')
 . (Join-Path $PSScriptRoot 'channel.ps1')
+if (-not $PanelPort) { $PanelPort = [int]$env:PANEL_PORT }
 $mine = [regex]::Escape($root)
 function Mine($procId) { $c = (Get-CimInstance Win32_Process -Filter "ProcessId=$procId").CommandLine; return ($c -and $c -match $mine) }
 

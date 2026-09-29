@@ -70,6 +70,7 @@ import { studyPoller } from "../services/studyPoller";
 import { fmtRoll, rollDecision } from "../services/rollDecision";
 import { missQueue } from "../services/missQueue";
 import { buildAnswerText } from "../feed/buildAnswerText/buildAnswerText";
+import { port } from "../services/ports";
 
 /**
  * Study dashboard backend: reads the wrapper's hand archive (hands.db),
@@ -85,7 +86,7 @@ import { buildAnswerText } from "../feed/buildAnswerText/buildAnswerText";
  */
 
 export const HANDS_DB = handsDbPath();
-const SELF = () => `http://localhost:${process.env.PORT || 2000}`;
+const SELF = () => `http://localhost:${port("api")}`;
 /** Gap that splits two hands into different sessions. */
 export const SESSION_GAP_MS = 45 * 60_000;
 

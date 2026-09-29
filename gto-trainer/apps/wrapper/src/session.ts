@@ -32,6 +32,7 @@ import { setDebug } from "./ignition/recorder";
 import { forgetFrame, mySel, slotted } from "./ignition/dom";
 import { setAuto } from "./relay";
 import { applyLayout, chromeWindow, closeBrowser, killProfileWindows, leaderHwnd, otherArea, panelHwnd, targetArea } from "./windows";
+import { chartsUrl, livePort, port } from "../../api/src/services/ports";
 
 const layout = () => applyLayout(seams.ignitionTarget);
 
@@ -1181,7 +1182,7 @@ export function startUpdate(): [number, Record<string, any>] {
   if (installedVersion() === null) return [409, { ok: false, why: "this is the source checkout — it updates from git" }];
   const ps1 = join(REPO, "setup", "update.ps1");
   const args = ["-Yes", "-Relaunch", "-PanelPort", String(C.PANEL_PORT)];
-  if (C.PANEL_PORT !== 7700) args.push("-WrapperArgs", `--panel-port ${C.PANEL_PORT} --cdp-port ${C.CDP_PORT}` + (S.fakeMode ? " --fake" : ""));
+  if (C.PANEL_PORT !== livePort("panel")) args.push("-WrapperArgs", `--panel-port ${C.PANEL_PORT} --cdp-port ${C.CDP_PORT}` + (S.fakeMode ? " --fake" : ""));
   for (const [env, flag] of [["PW_API_PORT", "-ApiPort"], ["PW_CHART_PORT", "-ChartPort"]] as const) if (process.env[env]) args.push(flag, process.env[env]!);
   if (process.env.PW_SKIP_TASKS === "1") args.push("-SkipTasks");
   // W.spawnDetached: update.ps1 relaunches the wrapper while it is still running — holding our listening socket
@@ -1543,13 +1544,13 @@ export async function healthCheck(): Promise<any[]> {
   const issues: any[] = [];
   const api = SES.API().replace(/\/+$/, "");
   if ((await fetchBytes(`${api}/api/dashboard/config`, 5)) === null) {
-    issues.push({ level: "down", piece: "study-api", text: "The study API (:2000) is DOWN — there are no answers at all",
+    issues.push({ level: "down", piece: "study-api", text: `The study API (:${port("api")}) is DOWN — there are no answers at all`,
                   fix: "it restarts itself within a minute; if it stays down, restart the laptop" });
     return issues;
   }
-  const charts = (process.env.HRC3MAX_URL || "http://127.0.0.1:8777").replace(/\/+$/, "");
+  const charts = (process.env.HRC3MAX_URL || chartsUrl()).replace(/\/+$/, "");
   if ((await fetchBytes(`${charts}/`, 5)) === null) {
-    issues.push({ level: "down", piece: "chart-server", text: "The chart server (:8777) is DOWN — preflop chart answers (3-handed, heads-up) are OFF",
+    issues.push({ level: "down", piece: "chart-server", text: `The chart server (:${port("charts")}) is DOWN — preflop chart answers (3-handed, heads-up) are OFF`,
                   fix: "it restarts itself within a minute" });
   }
   const raw = await fetchBytes(`${api}/api/dashboard/gtow-status`, 10);
@@ -1641,7 +1642,7 @@ export function cggReattach(key: string | null, title: string | null = null): [n
 }
 
 // ---- CoinPoker: the leader window and the admin page ------------------------------------------------------
-export const ADMIN_PORTS = [7700, ...Array.from({ length: 20 }, (_, i) => 7720 + i)];
+export const ADMIN_PORTS = [livePort("panel"), ...Array.from({ length: 20 }, (_, i) => livePort("panel") + 20 + i)];
 
 /** THE LEADER PANEL: while playing CoinPoker the main panel keeps the admin page up in a second window. */
 export async function openLeader(): Promise<void> {

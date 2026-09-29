@@ -243,6 +243,9 @@ begin
   // the folder this setup runs from: PokerWrapper-data-*.zip files beside it (a USB stick, C:\Users\Public\PokerWrapper)
   // are unpacked instead of downloaded
   Result := Result + ' -DataDir "' + ExpandConstant('{src}') + '"';
+  // /PORTOFFSET=N: this install's ports = the defaults + N (config\local.env PORT_OFFSET). Without it setup keeps the
+  // install's setting, or picks the first free offset when another Windows account's Poker Wrapper holds the defaults
+  if ExpandConstant('{param:PORTOFFSET|}') <> '' then Result := Result + ' -PortOffset ' + ExpandConstant('{param:PORTOFFSET|}');
   // /STRATEGY=<id> (a silent install) wins; else the page's pick — the only row today is ign200-6max
   Strat := ExpandConstant('{param:STRATEGY|}');
   if (Strat = '') and (StratPage <> nil) and StratPage.Values[0] then Strat := 'ign200-6max';

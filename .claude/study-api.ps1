@@ -9,6 +9,7 @@
 # no bun (the npm shim lives in Roaming\npm), and the worker's children (rclone, git) resolve their tools from the
 # worker's PATH, so it gets the same PATH an interactive shell has.
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
+$apiPort = if ($env:PORT) { [int]$env:PORT } else { 2000 }   # this install's API port: 2000 + PORT_OFFSET (config\env.ps1)
 # NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
 # child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
 # 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
@@ -62,10 +63,10 @@ while ($true) {
   # cleanups deleted each other's half-written solves. The API's own data\background.lock now stops
   # the second process doing background work, but two workers is still not a state worth keeping:
   # this supervisor owns :2000, so clear it first and start from one process.
-  Get-NetTCPConnection -LocalPort 2000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
+  Get-NetTCPConnection -LocalPort $apiPort -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
     $o = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
     if ($o -and $o.Name -eq 'bun') {
-      Log "straggler on :2000 before start - killing bun pid $($o.Id) (started $($o.StartTime))"
+      Log "straggler on :$apiPort before start - killing bun pid $($o.Id) (started $($o.StartTime))"
       # /T so the cmd.exe wrapper and any bun worker child go too, not just the one holding the socket
       & taskkill /PID $o.Id /T /F 2>&1 | Out-Null
     }
@@ -80,7 +81,7 @@ while ($true) {
   $fails = 0
   while (-not $p.HasExited) {
     try {
-      $null = Invoke-WebRequest -Uri 'http://127.0.0.1:2000/' -UseBasicParsing -TimeoutSec 20
+      $null = Invoke-WebRequest -Uri "http://127.0.0.1:$apiPort/" -UseBasicParsing -TimeoutSec 20
       if ($fails -gt 0) { Log "probe ok again after $fails failure(s)" }
       $fails = 0
     } catch {
@@ -92,9 +93,9 @@ while ($true) {
       & taskkill /PID $p.Id /T /F | Out-Null
       # anything else still holding :2000 (an inherited listener in a straggler) would make the new worker unreachable
       Start-Sleep -Seconds 3
-      Get-NetTCPConnection -LocalPort 2000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
+      Get-NetTCPConnection -LocalPort $apiPort -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
         $o = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
-        if ($o -and $o.Name -eq 'bun') { Log "killing straggler bun pid $($o.Id) still listening on :2000"; Stop-Process -Id $o.Id -Force -ErrorAction SilentlyContinue }
+        if ($o -and $o.Name -eq 'bun') { Log "killing straggler bun pid $($o.Id) still listening on :$apiPort"; Stop-Process -Id $o.Id -Force -ErrorAction SilentlyContinue }
       }
       break
     }
@@ -108,14 +109,14 @@ while ($true) {
   # second supervisor clears :2000 before starting its own worker, and the two then take turns
   # killing each other's. Record the port holder and any rival supervisor at the moment of death.
   $holder = ''
-  Get-NetTCPConnection -LocalPort 2000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
+  Get-NetTCPConnection -LocalPort $apiPort -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
     $o = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
     if ($o) { $holder += " $($o.Name)#$($o.Id)" }
   }
   if (-not $holder) { $holder = ' nothing' }
   $rivals = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'study-api' -and $_.CommandLine -match '-File' })
-  Log "worker gone (exit $code) after $lived s - :2000 held by$holder - rival supervisors: $($rivals.Count)"
+  Log "worker gone (exit $code) after $lived s - :$apiPort held by$holder - rival supervisors: $($rivals.Count)"
 
   # BOOT-FAILURE BACKOFF (2026-09-14). A worker that never lives 15 s is not failing under load, it
   # is failing to START, and retrying every 10 s can never fix that: one syntax error in a service

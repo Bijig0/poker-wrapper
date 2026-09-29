@@ -18,10 +18,11 @@
 import { join } from "node:path";
 import { CHARTS_DIR, DATA_DIR } from "../services/repoPaths";
 import { ChartStore, optsFromEnv } from "./chartStore";
+import { port } from "../services/ports";
 
 const DIR = CHARTS_DIR;
 const PREFLOP_DB = join(DATA_DIR, "preflop-db.sqlite");
-const PORT = Number(process.env.HRC_UI_PORT ?? 8777);
+const PORT = port("charts");   // HRC_UI_PORT, else 8777 + PORT_OFFSET (services/ports.ts)
 
 const HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type" };
 const json = (body: unknown, status = 200) =>

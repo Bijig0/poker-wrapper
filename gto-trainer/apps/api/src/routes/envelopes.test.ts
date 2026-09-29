@@ -139,7 +139,7 @@ describe("resolveHand live probe uses the wrapper's light path (EIP-14)", () => 
   it("fetches /state?light=1 from the default wrapper", async () => {
     const urls = stubWrapper();
     const r = await resolveHand({ live: true });
-    expect(urls).toEqual(["http://localhost:7700/state?light=1"]);
+    expect(urls).toEqual(["http://127.0.0.1:7700/state?light=1"]);   // services/ports.ts panelUrl(): 127.0.0.1, 7700 + PORT_OFFSET
     expect(r.ok).toBe(true);
     if (r.ok) { expect(r.hand).toBeNull(); expect(r.sessionId).toBe("s"); expect(r.studyAnswersOn).toBe(true); }
   });

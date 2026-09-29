@@ -1,7 +1,7 @@
 ﻿# Poker Wrapper — "is everything set up?" Run any time: setup\doctor.cmd (or powershell -File setup\doctor.ps1).
 # Read-only: it checks and says what to do; it changes nothing. A screenshot of its output is the best thing to
 # send whoever is helping you.
-param([int]$ApiPort = 2000, [int]$ChartPort = 8777)
+param([int]$ApiPort = 0, [int]$ChartPort = 0)   # 0 = this install's (config\env.ps1: PORT / HRC_UI_PORT, i.e. 2000 / 8777 + PORT_OFFSET)
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -20,8 +20,10 @@ function Get-Json($url, $timeout = 8) { try { Invoke-RestMethod -Uri $url -Timeo
 . (Join-Path $root 'config\env.ps1')
 $env:Path = "$env:Path;$env:LOCALAPPDATA\Microsoft\WinGet\Links"
 . (Join-Path $PSScriptRoot 'channel.ps1')   # also: this install's own download key (config\rclone.conf), when it has one
+if (-not $ApiPort) { $ApiPort = [int]$env:PORT }
+if (-not $ChartPort) { $ChartPort = [int]$env:HRC_UI_PORT }
 
-Write-Host "Poker Wrapper — checklist ($root)" -ForegroundColor White
+Write-Host "Poker Wrapper — checklist ($root)$(if ($env:PORT_OFFSET -match '^[1-9]') { "  [ports +$env:PORT_OFFSET: API :$ApiPort, charts :$ChartPort, panel :$env:PANEL_PORT, GTO Wizard :$env:GTOW_CDP_PORT]" })" -ForegroundColor White
 Write-Host ""
 Write-Host " Installed" -ForegroundColor Cyan
 $bun = $env:BUN; Row ([bool]$bun) 'Bun' $(if ($bun) { "v$(& $bun --version)" } else { 'missing' }) 'run PokerWrapperSetup.exe again (repair)'

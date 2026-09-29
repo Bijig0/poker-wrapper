@@ -8,6 +8,7 @@ import {
 import { normalizeHand } from "../normalizeHand/normalizeHand";
 import { withStartStacks } from "../../utils/archivedHand/archivedHand";
 import { StateReply } from "../../../../wrapper/src/contract";
+import { panelUrl } from "../../services/ports";
 
 /**
  * Resolve a hand from one of the four accepted sources — a Hand-shaped JSON
@@ -16,7 +17,7 @@ import { StateReply } from "../../../../wrapper/src/contract";
  * routes so both accept an identical body.
  */
 
-export const DEFAULT_LIVE_URL = "http://localhost:7700";
+export const DEFAULT_LIVE_URL = panelUrl();   // the wrapper's panel (services/ports.ts)
 
 export interface ResolveBody {
   rows?: PanelRow[] | { ok?: boolean; rows: PanelRow[] };

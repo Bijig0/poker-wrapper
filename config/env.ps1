@@ -31,6 +31,17 @@ if (Test-Path $local) {
   }
 }
 
+# 1b. PORTS: one setting moves them all. PORT_OFFSET (local.env, default 0) is added to every default; the six explicit
+#     names still win for one launch (PORT=2001 for a verify API). The TypeScript twin is gto-trainer\apps\api\src\
+#     services\ports.ts — keep the two tables identical. Why: ports are machine-wide, so a second Windows account's
+#     install beside this one needs its own set (setup\setup.ps1 picks the offset; 2026-09-30).
+$portOffset = 0
+if ($env:PORT_OFFSET -match '^\d+$') { $portOffset = [int]$env:PORT_OFFSET }
+$portDefaults = [ordered]@{ PORT = 2000; HRC_UI_PORT = 8777; PANEL_PORT = 7700; GTOW_CDP_PORT = 9222; GTOW_SECONDARY_CDP_PORT = 9223; CDP_PORT = 9333 }
+foreach ($k in $portDefaults.Keys) {
+  if (-not [Environment]::GetEnvironmentVariable($k, 'Process')) { Set-Item "env:$k" ([string]($portDefaults[$k] + $portOffset)) }
+}
+
 function First-Existing([string[]]$paths) { foreach ($p in $paths) { if ($p -and (Test-Path $p)) { return (Resolve-Path $p).Path } }; return $null }
 function Newest-Match([string]$pattern) {
   $hit = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
@@ -75,7 +86,7 @@ $have = $env:Path -split ';'
 $env:Path = ((@($extra | Where-Object { $have -notcontains $_ }) + $have) | Where-Object { $_ }) -join ';'
 
 if ($EmitCmd) {
-  foreach ($k in (@('POKER_ROOT', 'BUN', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'POKER_DATA_DIR', 'RCLONE_CONFIG', 'Path') + $localKeys | Select-Object -Unique)) {
+  foreach ($k in (@('POKER_ROOT', 'BUN', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'POKER_DATA_DIR', 'RCLONE_CONFIG', 'Path') + @($portDefaults.Keys) + $localKeys | Select-Object -Unique)) {
     $v = [Environment]::GetEnvironmentVariable($k, 'Process')
     if ($v) { "set `"$k=$v`"" }
   }

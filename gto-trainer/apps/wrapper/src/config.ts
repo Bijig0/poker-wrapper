@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { paths } from "./env";
+import { port } from "../../api/src/services/ports";
 
 function defaultBrowser(): string {
   const local = process.env.LOCALAPPDATA || "";
@@ -27,8 +28,9 @@ function load() {
   const profileSuffix = env.PROFILE_SUFFIX || "";
   return {
     ROOT: paths().root,
-    PANEL_PORT: Number(env.PANEL_PORT || "7700"),
-    CDP_PORT: Number(env.CDP_PORT || "9333"),
+    // PANEL_PORT / CDP_PORT (the launcher's --panel-port / --cdp-port), else 7700 / 9333 + PORT_OFFSET (api services/ports.ts)
+    PANEL_PORT: port("panel", env),
+    CDP_PORT: port("tableCdp", env),
     IGNITION_URL: env.IGNITION_URL || "https://www.ignitioncasino.uno/poker-lobby",
     CHROME: env.CHROME_EXE || defaultBrowser(),
     TABLE_FRAC: Number(env.TABLE_FRAC || (fake ? "0.55" : "0.70")),

@@ -61,7 +61,9 @@ function Say([string]$m) {
 # as a rival and exited, silently, with code 0 (caught 2026-09-21: the task reported success and nothing ran).
 # (-Once and -DryRun are a person checking: they never claim the mutex.)
 if (-not $Once -and -not $DryRun) {
-    $mutex = New-Object System.Threading.Mutex($false, 'Global\PokerGtowWatchdog')
+    # one watchdog PER INSTALL: the name carries the primary's CDP port (config\env.ps1: GTOW_CDP_PORT = 9222 + PORT_OFFSET),
+    # so a second Windows account's install (its own ports) runs its own watchdog beside this one
+    $mutex = New-Object System.Threading.Mutex($false, "Global\PokerGtowWatchdog-$(if ($env:GTOW_CDP_PORT) { $env:GTOW_CDP_PORT } else { 9222 })")
     try { $held = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
     if (-not $held) {
         Say 'gtow watchdog already running - exiting'
@@ -109,8 +111,8 @@ function Read-Accounts {
         try { $rows = @((Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json).accounts) } catch { Say "registry unreadable ($registryPath): $($_.Exception.Message)"; return $null }
     }
     if ($null -eq $rows) {
-        # no registry yet: the first install's shape — the primary alone, a Chrome profile on 9222
-        $rows = @([pscustomobject]@{ id = 'primary'; name = 'Ultra'; cdpHost = '127.0.0.1:9222'; launchHint = 'scripts/start_gtow_chrome.ps1'; client = 'chrome'; exe = $null; profileDir = $null; enabled = $true })
+        # no registry yet: the first install's shape — the primary alone, a Chrome profile on this install's port (9222 + PORT_OFFSET)
+        $rows = @([pscustomobject]@{ id = 'primary'; name = 'Ultra'; cdpHost = "127.0.0.1:$(if ($env:GTOW_CDP_PORT) { $env:GTOW_CDP_PORT } else { 9222 })"; launchHint = 'scripts/start_gtow_chrome.ps1'; client = 'chrome'; exe = $null; profileDir = $null; enabled = $true })
     }
     $out = @()
     foreach ($a in $rows) {

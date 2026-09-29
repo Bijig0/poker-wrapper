@@ -25,6 +25,7 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import {
   HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, type Enriched,
 } from "./dashboard";
+import { port } from "../services/ports";
 
 /**
  * Sources — the study dashboard's mission control.
@@ -272,7 +273,7 @@ app.get("/registry", async (c) => {
   const tally = (src: string) => log.sources[src] ?? { n: 0, p50: null, lastTs: null, byDay: new Array(30).fill(0) };
 
   // --- live probes, in parallel, short timeouts ---
-  const cdpHost = process.env.GTOW_CDP_HOST ?? "127.0.0.1:9222";
+  const cdpHost = process.env.GTOW_CDP_HOST ?? `127.0.0.1:${port("gtow")}`;
   const [hrc, cdp, wrapper] = await Promise.all([
     // /api/progress is a 2-byte reply; /api/solutions lists 1,300 charts and
     // stalls behind a running batch on the single-threaded server.
