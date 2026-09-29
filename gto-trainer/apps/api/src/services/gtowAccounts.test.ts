@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultAccounts, loadAccounts, removeAccount, slugOf, upsertAccount } from "./gtowAccounts";
+import { cdpHostTakenBy, cdpPort, defaultAccounts, launchPlan, loadAccounts, removeAccount, slugOf, upsertAccount } from "./gtowAccounts";
 import { GtowRequestLog } from "./gtowRequestLog";
 import { ensureEventTables } from "../../../../packages/data-root/eventTables";
 
@@ -101,5 +101,43 @@ describe("ledger meters", () => {
     expect(c).toMatchObject({ walled: false, sinceMs: null, clearedAtMs: now - 6 * M, last429Ms: now - 7 * M });
     expect(log.wallState("secondary", now)).toMatchObject({ walled: false, sinceMs: null, last429Ms: null });
     log.close();
+  });
+});
+
+describe("how each account's client is run (2026-09-29, a dynamic number of accounts)", () => {
+  test("the seeded rows: the primary a Chrome profile (a desktop build only when GTOW_CLIENT_PATH pins one), the secondary a desktop build", () => {
+    const [sec, pri] = defaultAccounts({} as NodeJS.ProcessEnv);
+    expect([pri!.client, pri!.exe, pri!.profileDir]).toEqual(["chrome", null, null]);
+    expect([sec!.client, sec!.exe]).toEqual(["electron", null]);
+    expect(defaultAccounts({ GTOW_CLIENT_PATH: "C:\\x\\GTO Wizard.exe" } as NodeJS.ProcessEnv)[1]!.client).toBe("electron");
+  });
+  test("launchPlan: a launcher script wins; else the desktop build; else a Chrome profile of the account's own, on the account's port", () => {
+    const repo = mkdtempSync(join(tmpdir(), "gtow-plan-"));
+    const base = defaultAccounts({} as NodeJS.ProcessEnv)[1]!;
+    const chrome = launchPlan({ ...base, id: "elite-2", cdpHost: "127.0.0.1:9224", launchHint: "" }, repo, "C:\\lad");
+    expect([chrome.kind, chrome.port, chrome.profileDir, chrome.env.GTOW_CDP_PORT]).toEqual(["chrome", 9224, join("C:\\lad", "gtow-cdp-profile-elite-2"), "9224"]);
+    expect(launchPlan({ ...base, launchHint: "" }, repo, "C:\\lad").profileDir).toBe(join("C:\\lad", "gtow-cdp-profile"));   // the primary keeps its folder
+    const exe = launchPlan({ ...base, id: "d", cdpHost: "127.0.0.1:9230", launchHint: "", client: "electron", exe: "C:\\d\\GTO Wizard.exe" }, repo);
+    expect([exe.kind, exe.exe, exe.env.GTOW_CLIENT_PATH]).toEqual(["electron", "C:\\d\\GTO Wizard.exe", "C:\\d\\GTO Wizard.exe"]);
+    // a script named but missing from the repo does not count; present, it wins even over a desktop build
+    expect(launchPlan({ ...base, id: "s", launchHint: "scripts/nope.ps1", client: "electron", exe: "C:\\d\\x.exe" }, repo).kind).toBe("electron");
+    const { mkdirSync, writeFileSync } = require("node:fs");
+    mkdirSync(join(repo, "scripts"), { recursive: true }); writeFileSync(join(repo, "scripts", "mine.ps1"), "");
+    expect(launchPlan({ ...base, id: "s", launchHint: "scripts/mine.ps1", client: "electron", exe: "C:\\d\\x.exe" }, repo).kind).toBe("script");
+    rmSync(repo, { recursive: true, force: true });
+  });
+  test("cdpHostTakenBy: one DevTools port per account", () => {
+    const rows = defaultAccounts({} as NodeJS.ProcessEnv);
+    expect(cdpHostTakenBy("127.0.0.1:9223", "new", rows)?.id).toBe("secondary");
+    expect(cdpHostTakenBy("localhost:9223", "secondary", rows)).toBeNull();     // its own port
+    expect(cdpHostTakenBy("127.0.0.1:9224", "new", rows)).toBeNull();
+    expect(cdpPort("nonsense")).toBeNull();
+  });
+  test("normalize keeps the client fields, and a new row is a Chrome profile", () => {
+    const a = upsertAccount({ name: "Elite 2", cdpHost: "127.0.0.1:9224" });
+    expect([a.client, a.exe, a.profileDir]).toEqual(["chrome", null, null]);
+    const b = upsertAccount({ id: a.id, client: "electron", exe: " C:\\e\\GTO Wizard.exe ", profileDir: "" });
+    expect([b.client, b.exe, b.profileDir]).toEqual(["electron", "C:\\e\\GTO Wizard.exe", null]);
+    expect(upsertAccount({ id: a.id, name: "Elite two" }).client).toBe("electron");   // a partial edit keeps them
   });
 });

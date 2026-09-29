@@ -22,7 +22,8 @@ import { gtowRequests, type GtowWindow } from "../services/gtowRequestLog";
 import { gtowSessions, type GtowSessionStatus } from "../services/gtowSessions";
 import { REPO } from "../services/repoPaths";
 import {
-  accountInfo, loadAccounts, noteAccountFact, probeTreeBody, removeAccount, REQUEST_CAP, upsertAccount, WALL_MS,
+  accountInfo, cdpHostTakenBy, cdpPort, launchPlan, loadAccounts, noteAccountFact, probeTreeBody, removeAccount, REQUEST_CAP,
+  slugOf, upsertAccount, WALL_MS,
   type GtowAccountEntry, type GtowAccountInfo,
 } from "../services/gtowAccounts";
 
@@ -85,6 +86,12 @@ app.post("/", async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== "object") return c.json({ ok: false, error: "a JSON body with the account's fields" }, 400);
   if (!String(body.id ?? "").trim() && !String(body.name ?? "").trim()) return c.json({ ok: false, error: "name (or id) is required" }, 400);
+  // one DevTools port per client: two accounts on one port would be one window answering as two
+  const id = String(body.id ?? "").trim() || slugOf(String(body.name ?? ""));
+  if (body.cdpHost) {
+    const clash = cdpHostTakenBy(String(body.cdpHost), id);
+    if (clash) return c.json({ ok: false, error: `port ${cdpPort(String(body.cdpHost))} is already ${clash.name}'s (${clash.cdpHost}) — every account needs its own` }, 409);
+  }
   const saved = upsertAccount(body);
   gtowSessions.reload();
   return c.json({ ...(await accountsPayload()), saved });
@@ -104,14 +111,23 @@ app.post("/:id/connect", async (c) => {
   if (!cfg) return c.json({ ok: false, error: `no account '${id}'` }, 404);
   const t0 = Date.now();
   let launch: Record<string, unknown>;
-  if (id === "primary") {
+  const entry = loadAccounts().accounts.find((a) => a.id === id);
+  if (id === "primary" && entry?.client !== "chrome") {
     launch = await gtowCdp.launchApp();
-  } else if (/\.ps1$/i.test(cfg.launchHint) && existsSync(join(REPO, cfg.launchHint))) {
-    const proc = Bun.spawn(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(REPO, cfg.launchHint)], { stdout: "pipe", stderr: "pipe" });
+  } else if (entry) {
+    // the same rule the watchdog follows (services/gtowAccounts.ts launchPlan): a launcher script, else the desktop build,
+    // else a Chrome profile of the account's own
+    const plan = launchPlan(entry, REPO);
+    const env = { ...process.env, ...plan.env };
+    const script = plan.kind === "script" ? join(REPO, plan.script!) : plan.kind === "chrome" ? join(REPO, "scripts", "start_gtow_chrome.ps1") : null;
+    const cmd = script
+      ? ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Force"]
+      : ["powershell", "-NoProfile", "-Command", `Start-Process -FilePath '${plan.exe!.replace(/'/g, "''")}' -ArgumentList '--remote-debugging-port=${plan.port}' -WindowStyle Minimized`];
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", env });
     const code = await proc.exited;
-    launch = { ok: code === 0, code, needsHuman: code === 3, out: (await new Response(proc.stdout).text()).trim().slice(-400) };
+    launch = { ok: code === 0, code, needsHuman: code === 3, kind: plan.kind, port: plan.port, out: (await new Response(proc.stdout).text()).trim().slice(-400) };
   } else {
-    launch = { ok: false, error: cfg.launchHint ? `launcher not found: ${cfg.launchHint}` : "no launcher registered — start the client by hand" };
+    launch = { ok: false, error: `no account '${id}'` };
   }
   let live = false;
   for (let i = 0; i < 30 && !live; i++) {

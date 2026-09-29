@@ -5013,14 +5013,19 @@ function renderGtowAccounts() {
         ${busy ? `<span class="sub">${esc(gaBusy[a.id])}…</span>` : ""}
       </td></tr>`;
   }).join("");
-  const e = gaEdit ? (j.accounts.find((a) => a.id === gaEdit) || { id: "", name: "", tier: "elite", multiway: false, cdpHost: "127.0.0.1:9224", launchHint: "", priceMonthly: null, notes: "", order: 9, preflopOrder: 9 }) : null;
+  // a new account's port: the first free one after the registry's (every client needs its own DevTools port)
+  const nextPort = Math.max(9223, ...j.accounts.map((a) => Number((/:(\d+)$/.exec(a.cdpHost || "") || [])[1] || 0))) + 1;
+  const e = gaEdit ? (j.accounts.find((a) => a.id === gaEdit) || { id: "", name: "", tier: "elite", multiway: false, cdpHost: `127.0.0.1:${nextPort}`, launchHint: "", client: "chrome", exe: "", profileDir: "", priceMonthly: null, notes: "", order: 9, preflopOrder: 9 }) : null;
   const form = !e ? "" : `<div class="ga-form">
     <h3>${e.id ? `Edit ${esc(e.name)}` : "Add an account"}</h3>
     <div class="grid">
       <label>Name <input id="ga-name" value="${esc(e.name)}" placeholder="Elite 2"></label>
       <label>Tier <select id="ga-tier">${["ultra", "elite", "other"].map((t) => `<option ${t === e.tier ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>CDP host <input id="ga-cdp" value="${esc(e.cdpHost)}" placeholder="127.0.0.1:9224"></label>
-      <label>Launcher <input id="ga-launch" value="${esc(e.launchHint)}" placeholder="scripts/start_gtow_elite2.ps1"></label>
+      <label>Client <select id="ga-client"><option value="chrome" ${e.client !== "electron" ? "selected" : ""}>Chrome window (its own profile)</option><option value="electron" ${e.client === "electron" ? "selected" : ""}>desktop app (an .exe)</option></select></label>
+      <label>Desktop app .exe <input id="ga-exe" value="${esc(e.exe || "")}" placeholder="C:\\Users\\you\\Second GTO Wizard\\GTO Wizard.exe (desktop app only)"></label>
+      <label>Chrome profile folder <input id="ga-profile" value="${esc(e.profileDir || "")}" placeholder="blank = %LOCALAPPDATA%\\gtow-cdp-profile-${esc(e.id || "<id>")}"></label>
+      <label>Launcher script <input id="ga-launch" value="${esc(e.launchHint)}" placeholder="blank = by client; a scripts\\*.ps1 overrides"></label>
       <label>Order <input id="ga-order" type="number" value="${e.order}"></label>
       <label>Preflop order <input id="ga-porder" type="number" value="${e.preflopOrder}"></label>
       <label>Price / month <input id="ga-price" type="number" step="0.01" value="${e.priceMonthly ?? ""}" placeholder="169"></label>
@@ -5059,6 +5064,7 @@ async function gaToggle(id, enabled) {
 function gaEditRow(id) { gaEdit = id; renderGtowAccounts(); }
 async function gaSave(id) {
   const body = { id: id || undefined, name: $("ga-name").value.trim(), tier: $("ga-tier").value, cdpHost: $("ga-cdp").value.trim(), launchHint: $("ga-launch").value.trim(),
+    client: $("ga-client").value, exe: $("ga-exe").value.trim(), profileDir: $("ga-profile").value.trim(),
     order: Number($("ga-order").value), preflopOrder: Number($("ga-porder").value), priceMonthly: $("ga-price").value === "" ? "" : Number($("ga-price").value), multiway: $("ga-mw").checked, notes: $("ga-notes").value };
   if (!body.name) return alert("a name is required");
   try { const j = await gaPost("/api/gtow/accounts", body); if (j && j.ok) { GA = j; gaEdit = null; } else alert(j && j.error || "save failed"); } catch (e) { alert(`save failed: ${e}`); }

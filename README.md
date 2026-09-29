@@ -33,6 +33,12 @@ Three background services per Windows user, registered by setup (`setup/install_
 The wrapper itself starts from the **Poker Wrapper** shortcut (`ignition-study-wrapper/run-wrapper.vbs`). The
 dashboard is http://localhost:2000.
 
+**GTO Wizard accounts** are rows in `<data root>/gtow-accounts.json`, edited on the dashboard's GTO Wizard tab: each
+has its own DevTools port (`cdpHost`) and how its client runs — a Chrome profile of its own (the default: any number
+side by side), a desktop build (`exe`; one per install), or a launcher script. The watchdog re-reads the registry every
+minute and keeps every enabled account's client drivable (restarting it with the debug flag when it drops, never while
+it waits for a sign-in); the tab's **Connect** button follows the same rule (`services/gtowAccounts.ts` `launchPlan`).
+
 Development: `.claude/launch.json` has `api` (`:2000`, watch), `api-verify` (`:2001`, HTTP only — beside a live
 API), `charts` (`:8777`).
 
