@@ -6,9 +6,10 @@
  *   bun setup/handoff.ts --version <v>        a staged (or older) release
  *   bun setup/handoff.ts --days 3             link lifetime (default 7, the most R2 allows)
  *   bun setup/handoff.ts --public             ALSO copy the files to C:\Users\Public\PokerWrapper — for a second Windows
- *                                             account on this computer (sign out of this one first: the ports are
- *                                             machine-wide) — with the release's data zips, so that install downloads
- *                                             nothing (the same folder on a USB stick is an offline install anywhere)
+ *                                             account on this computer (this one may stay signed in: the install takes
+ *                                             its own ports, PORT_OFFSET) — with the release's data zips, so that
+ *                                             install downloads nothing (the same folder on a USB stick is an offline
+ *                                             install anywhere)
  *   bun setup/handoff.ts --gtow <Setup.exe>   the GTO Wizard desktop app's installer to hand over too (default: the newest
  *                                             "GTO Wizard Setup*.exe" in Downloads; none = the message leaves it out)
  *
@@ -105,6 +106,6 @@ if (toPublic) {
     }
     zips.push(`${part} (${(d.bytes / 1e6).toFixed(0)} MB)`);
   }
-  writeFileSync(join(dir, "README.txt"), `Poker Wrapper ${version}: sign OUT of the owner's account (not switch user — the ports are machine-wide), sign in to the test account, run ${rel.installer.file} from this folder. The key next to it is picked up by itself; the data zips next to it are unpacked instead of downloaded (${zips.join(", ")}).${gtowName ? ` ${gtowName} is the GTO Wizard desktop app (optional; install it first if you want it).` : ""}\n`);
+  writeFileSync(join(dir, "README.txt"), `Poker Wrapper ${version}: sign in to the other Windows account (the owner's can stay signed in: when its Poker Wrapper holds the default ports, this install takes its own — PORT_OFFSET in config\\local.env, e.g. 50 = dashboard http://localhost:2050; the setup window says which) and run ${rel.installer.file} from this folder. The key next to it is picked up by itself; the data zips next to it are unpacked instead of downloaded (${zips.join(", ")}).${gtowName ? ` ${gtowName} is the GTO Wizard desktop app (optional; install it first if you want it).` : ""}\n`);
   console.log(`\ncopied to ${dir} for another Windows account on this computer (installer, key, data zips${gtowName ? ", GTO Wizard app" : ""})`);
 }
