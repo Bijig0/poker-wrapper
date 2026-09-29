@@ -144,9 +144,11 @@ const FIELDS: (keyof GtowAccountEntry)[] = ["id", "name", "tier", "multiway", "c
 function normalize(raw: any, fallback?: GtowAccountEntry): GtowAccountEntry | null {
   const id = String(raw?.id ?? fallback?.id ?? "").trim();
   if (!id) return null;
-  // a NEW row: a Chrome profile of its own (launchPlan names it), no launcher script, no desktop build
-  const f = fallback ?? { ...defaultAccounts()[1]!, id, name: id, tier: "other" as GtowTier, multiway: false, cdpHost: "", launchHint: "",
-                          client: "chrome" as const, exe: null, profileDir: null, order: 9, preflopOrder: 9 };
+  // a row from before a field existed reads as its SEEDED self (the secondary: a desktop build); a NEW row is a Chrome
+  // profile of its own (launchPlan names it), no launcher script, no desktop build
+  const seeded = defaultAccounts().find((d) => d.id === id);
+  const f = fallback ?? seeded ?? { ...defaultAccounts()[1]!, id, name: id, tier: "other" as GtowTier, multiway: false, cdpHost: "", launchHint: "",
+                                    client: "chrome" as const, exe: null, profileDir: null, order: 9, preflopOrder: 9 };
   const tier = ["ultra", "elite", "other"].includes(raw?.tier) ? raw.tier : f.tier;
   const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
   const price = raw?.priceMonthly == null || raw?.priceMonthly === "" ? (raw?.priceMonthly === "" ? null : f.priceMonthly) : Number(raw.priceMonthly);
