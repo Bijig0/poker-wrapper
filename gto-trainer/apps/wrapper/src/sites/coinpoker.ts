@@ -42,7 +42,9 @@ export const FORMATS: any[] = [
       id: `cp-hu-NL${n}`, site: SITE, gameType: "hu", stake: `NL${n}`, seats: 2, name: `CoinPoker NL${n} Heads-Up`,
       sb, bb, anteBb: ante, currency: "USDT", _doc: fmtDoc(sb, bb, ante),
     })),
-  ...([[10, 0.05, 0.1], [25, 0.1, 0.25], [50, 0.25, 0.5], [100, 0.5, 1.0]] as const).map(([n, sb, bb]) => ({
+  // NL200 and NL500 added 2026-09-30 (Brady): the on-demand ring strategy solves at whatever rake terms the table sends,
+  // so a higher table is just its blinds here
+  ...([[10, 0.05, 0.1], [25, 0.1, 0.25], [50, 0.25, 0.5], [100, 0.5, 1.0], [200, 1.0, 2.0], [500, 2.5, 5.0]] as const).map(([n, sb, bb]) => ({
     id: `cp-ring-NL${n}-6`, site: SITE, gameType: "ring", stake: `NL${n}`, seats: 6, name: `CoinPoker NL${n} 6-max`,
     sb, bb, currency: "USDT", _doc: `₮${fmtG(sb)}/₮${fmtG(bb)} 6-max ring (the ANTE tables add 16% of a bb)`,
   })),

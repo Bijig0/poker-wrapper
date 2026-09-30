@@ -211,7 +211,7 @@ describe("the catalogue", () => {
     const v = evaluate().find((s) => s.id === CP_RING_ANTE_STRATEGY_ID)!;
     expect(v.status).toBe("ok");
     expect(v.onDemand).toBe(true);
-    expect(v.formats).toEqual(["cp-ring-NL10-6", "cp-ring-NL25-6", "cp-ring-NL50-6", "cp-ring-NL100-6"]);
+    expect(v.formats).toEqual(["cp-ring-NL10-6", "cp-ring-NL25-6", "cp-ring-NL50-6", "cp-ring-NL100-6", "cp-ring-NL200-6", "cp-ring-NL500-6"]);
     expect(v.preflopLayer.source).toBe("gtow-ai-preflop");
     expect(v.advisories.some((a) => a.startsWith("ON DEMAND"))).toBe(true);
     expect(isOnDemandStrategy(CP_RING_ANTE_STRATEGY_ID)).toBe(true);

@@ -215,7 +215,7 @@ export const STRATEGIES: StrategyDef[] = [
     tagline: "Equilibrium on demand — press Solve and GTO Wizard AI solves the spot live from the table as dealt (stacks, blinds, ante and the table's own rake), preflop and postflop; nothing is solved unasked and nothing auto-executes",
     preflop: "gtowAiCpRing", postflop: "gto", opponent: "gtoAi", matrixRow: "eq_eq_cp_ring_ante",
     format: "cp-ring-6max-ante", stake: "nl100", onDemand: true,
-    formats: ["cp-ring-NL10-6", "cp-ring-NL25-6", "cp-ring-NL50-6", "cp-ring-NL100-6"], defaultFormat: "cp-ring-NL50-6" },
+    formats: ["cp-ring-NL10-6", "cp-ring-NL25-6", "cp-ring-NL50-6", "cp-ring-NL100-6", "cp-ring-NL200-6", "cp-ring-NL500-6"], defaultFormat: "cp-ring-NL50-6" },
 ];
 /** Is this strategy on demand (see StrategyDef.onDemand)? Unknown ids are not. */
 export const isOnDemandStrategy = (id: string | null | undefined): boolean =>
