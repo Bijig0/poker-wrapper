@@ -19,6 +19,7 @@ import { fmtFixed, pyJsonDumps, pyRepr, pyRound, pyStr, sortedNums, truthy } fro
 import { S, TupleSet } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand } from "../archive";
+import { markTopUpRefused } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
 
@@ -902,6 +903,20 @@ export function onGameMsg(d: Record<string, any>): void {
       w.heroCards = names;
       w.heroDealt = true;
       feedAdd(`Your cards: ${names.join(" ")}`);
+    }
+  } else if (pid === "PLAY_ACCOUNT_CASH_RES" && d.type === 5) {
+    // THE CLIENT'S OWN ADD-CHIPS RESULT (2026-09-30). A top-up pressed mid-hand is added when the hand ends; `cash` is
+    // what was added — 0 when hero's stack is already at the max (the buy before a closing river check that then chopped:
+    // session_20260930_104219 hand 4921602320, and six more refusals across the socket dumps, every one of them
+    // {type 5, seat: hero, cash 0} a millisecond after PLAY_STATUS_INFO {type 3, status 2, dwData: the max}). The
+    // client's notice for it follows seconds later and is only filed by a tick that reads it; this word is on the
+    // socket whatever the screen read does. Type 2 is a seat's buy-in (every seat, every hand) — not this.
+    const seat = d.seat ?? null;
+    const hero = w.heroSeat ?? null;
+    if ((d.cash ?? null) === 0 && (seat === null || hero === null || seat === hero)) {
+      if (markTopUpRefused("the table's socket: nothing added, the stack is at the max")) {
+        log(`[ws] top-up refused on the socket: PLAY_ACCOUNT_CASH_RES type 5 seat ${pyStr(seat)} cash 0`);
+      }
     }
   }
 }

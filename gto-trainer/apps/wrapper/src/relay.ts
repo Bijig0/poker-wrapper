@@ -18,6 +18,7 @@ import { fmtFixed, pyFloat, pyFloatStr, pyInt, pyRepr, pyReprStr, pyRound, pyStr
 import { CGG, CP, S, isCgg, isClientSite, isCp, pressBlocked, seams, type ActOpts } from "./state";
 import * as TABLES from "./tables";
 import { ACTION_RE, buyPanelUp, cardKey, findInputJs, framePin, heroCards, modalOf, mySel, pointProbeJs, sameHole, splitStrip, tableJs } from "./ignition/dom";
+import { dismissModal } from "./ignition/checks";
 import { handState, toActSources } from "./ignition/hand";
 import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
@@ -33,6 +34,8 @@ const PICK_NOT_FIRED_S = 1.5;
 const TIME_BANK_COOLDOWN_S = 5.0;
 const BET_INPUT_MAX_DX = 0.5;
 const BET_INPUT_MAX_DY_ROWS = 3.0;
+/** After a notice's OK, before the strip is read again for the press (the client fades the notice out). */
+const MODAL_SETTLE_S = 0.4;
 
 /** A Python dict lookup on a value that is a Map here (int keys) or a plain object (from JSON). */
 export function dget(o: any, k: unknown): any {
@@ -223,8 +226,27 @@ async function actReal(label: string, kind = "action", opts: ActOpts = {}): Prom
     return { ok: false, reason: `table read failed: ${e?.message ?? e}` };
   }
   if (!d.seated) return { ok: false, reason: "no table tab open" };
-  if ((kind === "action" || kind === "preset") && modalOf(d)) {
-    return { ok: false, reason: "a client notice is over the action strip (seen on the press's own read)" };
+  if (kind === "action" || kind === "preset") {
+    // A NOTICE OVER THE STRIP (2026-09-30): one the wrapper KNOWS is harmless is pressed away here, on the press's own
+    // read, and the strip read again. A press only ever refused on a notice, leaving the table tick to dismiss it — and
+    // the tick does not always get there (session_20260930_104219, table 2: a chat line read as "table broke" every
+    // tick, the refused top-up's notice never pressed, eight Fold presses refused, hero timed out and was sat out).
+    // Any OTHER notice still holds the press: it may be the one that matters.
+    let m = modalOf(d);
+    if (m && m.harmless) {
+      const res = await dismissModal(m, "the press's own read");
+      if (!res.ok) return { ok: false, reason: `a client notice is over the action strip and its ${pyStr(m.button.text)} did not go through: ${pyStr(res.reason ?? null)}` };
+      await sleep(MODAL_SETTLE_S);
+      try {
+        d = (await cdp.evaluate(ws, tableJs(mySel()), 6)) || {};
+      } catch (e: any) {
+        return { ok: false, reason: `table read failed after the client's notice was dismissed: ${e?.message ?? e}` };
+      }
+      if (!d.seated) return { ok: false, reason: "no table tab open" };
+      m = modalOf(d);
+      if (!m) S.liveStatus.modal = null;             // the tick's word, until its next read — a retry must not refuse on it
+    }
+    if (m) return { ok: false, reason: "a client notice is over the action strip (seen on the press's own read)" };
   }
   // THE BUY-CHIPS PANEL, on this press's own read (2026-09-25 audit): only our own flag was checked, and a close that
   // was refused (not rendering, another table's point, the press lock) left the panel over the strip — the strip's

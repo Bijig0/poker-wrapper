@@ -83,18 +83,9 @@ export async function handleModal(d: Record<string, any>): Promise<void> {
   const m = modalOf(d);
   S.liveStatus.modal = m ? { text: m.text, harmless: m.harmless } : null;
   if (!m) return;
-  const now = time();
   if (m.harmless) {
-    if (now - S.modalState.lastClickAt < 2.0) return;
-    S.modalState.lastClickAt = now;
-    const res = await seams.act(m.button.text, "button");
-    feedAdd(`Dismissed the client's notice (${m.harmless}): ${[...m.text].slice(0, 80).join("")}`);
-    if (S.session.id) {
-      S.sessions.event(S.session.id, "modal-dismissed", { modalKind: m.harmless, text: [...m.text].slice(0, 200).join(""),
-                                                         ok: !!res.ok, hand: S.handNo });
-    }
-    log(`[modal] dismissed (${m.harmless}): ${pyRepr(res)}`);
-    noteTopUpRefusal(m);
+    if (time() - S.modalState.lastClickAt < 2.0) return;
+    await dismissModal(m, "the table tick");
     return;
   }
   const key = [...m.text].slice(0, 80).join("");
@@ -103,6 +94,26 @@ export async function handleModal(d: Record<string, any>): Promise<void> {
     stateEvent("unknown-modal", `the client shows a notice the wrapper does not know: ${pyReprStr([...m.text].slice(0, 120).join(""))} (buttons ${pyRepr(m.buttons)})`,
                "left on screen — picks are held until it is gone");
   }
+}
+
+/**
+ * PRESS A KNOWN NOTICE AWAY — its OK, on the feed, in the session, and the top-up refusal it may be. `where` names
+ * who saw it: the table tick (handleModal) or a press's own read (relay.ts actReal, 2026-09-30). Until then only the
+ * tick could dismiss a notice while a press could only refuse on one — and the tick does not always get this far
+ * (session_20260930_104219, table 2: a chat line read as "table broke" from 10:46:54 to the end, so the refused
+ * top-up's notice — a KNOWN one — stayed up, eight Fold presses refused on it, hero timed out and was sat out).
+ */
+export async function dismissModal(m: Record<string, any>, where: string): Promise<Record<string, any>> {
+  S.modalState.lastClickAt = time();
+  const res = await seams.act(m.button.text, "button");
+  feedAdd(`Dismissed the client's notice (${m.harmless}): ${[...m.text].slice(0, 80).join("")}`);
+  if (S.session.id) {
+    S.sessions.event(S.session.id, "modal-dismissed", { modalKind: m.harmless, text: [...m.text].slice(0, 200).join(""),
+                                                       ok: !!res.ok, hand: S.handNo, where });
+  }
+  log(`[modal] dismissed (${m.harmless}, ${where}): ${pyRepr(res)}`);
+  noteTopUpRefusal(m);
+  return res;
 }
 
 /** The client's own receipt for a buy: settles the pending top-up record and files the receipt. */

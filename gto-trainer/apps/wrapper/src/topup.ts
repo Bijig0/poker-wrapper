@@ -149,18 +149,29 @@ export function prefoldPickIsFold(r: Record<string, any>): boolean {
  *  client refuses it at the next hand with a notice. Filed against the press it belongs to; presses nothing. */
 export function noteTopUpRefusal(m: Record<string, any> | null): void {
   if (!["buy-in above the table maximum", "buy-in maximum notice"].includes((m || {}).harmless)) return;
+  markTopUpRefused("the client's notice");
+}
+
+/**
+ * The pressed buy the client refused: the record settled (a refused press does not block the next window) and the
+ * refusal filed against it, once. `how` = the word it came by — the client's notice (noteTopUpRefusal), or the table's
+ * socket (ws.ts PLAY_ACCOUNT_CASH_RES type 5 / cash 0, 2026-09-30), which says it seconds BEFORE the notice and
+ * whether or not a screen read ever gets to the notice. Returns whether a press was settled by this call.
+ */
+export function markTopUpRefused(how: string): boolean {
   const rec = S.study.lastTopUp || {};
-  if (!rec.pressed || rec.receiptCents || rec.refused) return;
-  if (time() * 1000 - (rec.at || 0) > 180_000) return;
-  Object.assign(rec, { ok: false, refused: true,
+  if (!rec.pressed || rec.receiptCents || rec.refused) return false;
+  if (time() * 1000 - (rec.at || 0) > 180_000) return false;
+  Object.assign(rec, { ok: false, refused: true, refusedBy: how,
                        reason: "refused by the client at the next hand — hero's stack was above the max (won the pot after the buy)" });
-  feedAdd(`Top-up $${fmtFixed((rec.amountCents || 0) / 100, 2)} refused — hero finished above the max; the next window decides again`);
+  feedAdd(`Top-up $${fmtFixed((rec.amountCents || 0) / 100, 2)} refused (${how}) — hero finished above the max; the next window decides again`);
   if (S.session.id) {
     S.sessions.event(S.session.id, "top-up-refused-over-max", {
       hand: S.handNo, handKey: handKey(), amountCents: rec.amountCents ?? null, pressedHandKey: rec.handKey ?? null,
-      trigger: rec.trigger ?? null, terminalKind: rec.terminalKind ?? null,
+      trigger: rec.trigger ?? null, terminalKind: rec.terminalKind ?? null, how,
     });
   }
+  return true;
 }
 
 const pendingPress = (last: Record<string, any>) =>

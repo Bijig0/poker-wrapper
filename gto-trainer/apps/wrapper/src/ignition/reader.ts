@@ -198,6 +198,8 @@ export function noteFrame(d: Record<string, any>): boolean {
 }
 
 const STABLE_TICKS = 12;
+/** How much of the frame's width is the felt: the client's message panel starts at 0.83 (measured in both layouts). */
+export const FELT_W = 0.78;
 const WINS_POT = /\bwins?\b.*pot/i;
 const RESULT_FOR = /result for hand\s*(\d+)/i;
 
@@ -263,6 +265,12 @@ export async function feedTick(): Promise<void> {
     L.heroSeatDom = domHeroSeat(d);
     tapVerify(heroCards(d), drawn);
   } catch {}
+  // THE CLIENT'S NOTICES BEFORE ANY EARLY RETURN (2026-09-30): a known notice is pressed away on every read that shows
+  // one, whatever else the read says. handleModal used to run only once the tick had passed "not seated" and "table
+  // broke" — session_20260930_104219, table 2: a chat line tripped the table-broke rule every tick from 10:46:54 to
+  // the end, so the refused top-up's notice was never pressed, every press refused on it, hero timed out and was sat
+  // out, and /state's `modal` froze on the last read that got this far.
+  await handleModal(d);
   try {
     L.buyPanel = buyPanelUp(d);
   } catch {}
@@ -278,7 +286,13 @@ export async function feedTick(): Promise<void> {
   }
   const fr0 = d.frame || {};
   const mid = (fr0.y ?? 0) + (fr0.h ?? 0) * 0.7;
-  const waiting = (d.nodes ?? []).some((n: Node) => /please wait|another table/i.test(n.text) && n.y < mid);
+  // ON THE FELT, NOT IN THE CHAT PANEL (2026-09-30): the client's message panel fills the frame's right sixth (its
+  // lines start at 0.83 of the frame's width in both the one-table and the side-by-side layouts, every recording), and
+  // "Player 3 has joined you from another table with $6.08" is an ordinary line there — read as the table breaking, it
+  // returned here every tick for the rest of session_20260930_104219 (no recording, no notices, no state checks). The
+  // client draws a table-broke notice on the felt: left of the panel, upper 70% of the frame.
+  const feltRight = (fr0.x ?? 0) + (fr0.w ?? 0) * FELT_W;
+  const waiting = (d.nodes ?? []).some((n: Node) => /please wait|another table/i.test(n.text) && n.y < mid && n.x < feltRight);
   if (waiting) {
     if (!p.waiting) feedAdd("table broke — waiting for a new table…");
     S.feedPrev = { seated: true, waiting: true };
@@ -316,8 +330,7 @@ export async function feedTick(): Promise<void> {
   }
   L.receipts = nowReceipts;
   stateCheck(toActNow, seats);
-  await handleModal(d);
-  L.timeBank = (d.buttons ?? []).find((b: any) => /^\+\d+s$/.test(String(b.text || "").trim())) ?? null;
+  L.timeBank =(d.buttons ?? []).find((b: any) => /^\+\d+s$/.test(String(b.text || "").trim())) ?? null;
   const prevClock = S.heroClock;
   try {
     S.heroClock = toActNow ? heroClockOf(d, nodes) : null;
