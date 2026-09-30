@@ -28,6 +28,12 @@ import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions"
 // solves, and a poll loop is many requests — see services/gtowRequestLog.ts.
 import { gtowRequests } from "./gtowRequestLog";
 import { tmark } from "./answerTrace";
+// THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): beneath ensureCustomSolution / customNode — the
+// level every test stub and replay sits ABOVE — so a stubbed walk never meets it and a live one always does.
+import {
+  CACHE_SESSION, NO_NODE, NODE_OK, cacheKeyOf, gtowSolveCache, isStoredSolId, keyOfStoredSolId, nodeAddr, storedSolId,
+  type GtowSolveCache, type StoredNode,
+} from "./gtowSolveCache";
 
 const API_BASE = "https://api.gtowizard.com";
 // Zone gives ~15s per decision and the study panel needs the verdict inside
@@ -55,8 +61,19 @@ const FIRST_POLL_MS = Number(process.env.GTOW_FIRST_POLL_MS ?? 600);
 const NO_NODE_GRACE = 1;
 const READY_SET_MAX = 2_000;
 
-type NodeFetchResult = { ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string };
+/** `store`: served from the persistent solve cache (services/gtowSolveCache) — no request was sent for it */
+type NodeFetchResult = { ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource; store?: boolean } | { ok: false; status: number; error: string; store?: boolean };
 type NodeQuery = { flopActions?: string; turnActions?: string; riverActions?: string; board: string };
+/** `noCache`: neither read nor write the persistent solve cache — a check that must reach GTO Wizard (the poller's
+ *  startup probe, the pool-routing script). The in-process caches still apply, as they always have. */
+export interface CacheOpts { noCache?: boolean }
+type SolveMade = { ok: true; solId: string; session: GtowSessionId; stored?: boolean } | { ok: false; status: number; error: string };
+type EnsureResult = { ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string; stored?: boolean } | { ok: false; status: number; error: string };
+
+/** The in-process node cache's key: the solution and the full query. */
+const nodeKeyOf = (solId: string, q: NodeQuery) => JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
+/** The persistent cache's node address for a postflop query (services/gtowSolveCache.nodeAddr). */
+const addrOf = (q: NodeQuery) => nodeAddr({ flop: q.flopActions, turn: q.turnActions, river: q.riverActions, board: q.board });
 
 /** The chain's query shape: at most one street's actions, asked against exactly that street's board. Only this shape
  *  is known to be a single-street solve, where "the root is ready" means "every node is". */
@@ -91,6 +108,10 @@ const noSession = (need: GtowNeed) => ({
 });
 
 class GtowApi {
+  /** `cache`: the persistent solve cache this client reads and writes — the process's own by default; a test hands
+   *  each instance its own (two instances on one file = two processes sharing it). */
+  constructor(private readonly cache: GtowSolveCache = gtowSolveCache) {}
+
   /**
    * Which ACCOUNT minted each custom solution. A cloud solve lives on the
    * account that created it, so every later poll of it must carry that
@@ -353,13 +374,40 @@ class GtowApi {
    * will accept — so the pool is asked for a session that can take it, and a
    * plan refusal walks to the next session rather than failing the spot.
    */
-  private async createCustomSolution(
-    input: CustomTreeInput
-  ): Promise<{ ok: true; solId: string; session: GtowSessionId } | { ok: false; status: number; error: string }> {
+  private async createCustomSolution(input: CustomTreeInput, opts: CacheOpts = {}): Promise<SolveMade> {
+    const body = this.buildCustomTree(input);
+    const solution = { actions: "", board: input.board };
+    // A TREE THE STORE HOLDS IS NOT CREATED AGAIN (services/gtowSolveCache). It is handed out as the synthetic id
+    // `gc:<key>` — no request — and its nodes are served from the store; only a node the store lacks makes an account
+    // mint the solve (materialise), once. The key covers exactly this body and the solution's {actions, board}.
+    const ck = this.cache.enabled && !opts.noCache ? cacheKeyOf("post", body, solution) : null;
+    if (ck && this.cache.hasTree(ck.key)) return { ok: true, solId: storedSolId(ck.key), session: CACHE_SESSION, stored: true };
     // POSTFLOP: heads-up belongs to the Elite account, multiway to Ultra.
     // `preflop` is deliberately absent — that flag is the preflop piece's
     // (services/gtowAiPreflop.ts), and it is what sends preflop to Ultra.
-    const need: GtowNeed = { multiway: Boolean(input.mid) };
+    const made = await this.postCustomSolution(body, solution, { multiway: Boolean(input.mid) });
+    // a fresh solve: every node reply it gives is stored under the tree's key (the tree's row goes in with the first)
+    if (made.ok && ck) {
+      this.cache.noteTree(ck.key, "post", ck.body);
+      this.noteSolKey(made.solId, ck.key);
+    }
+    return made;
+  }
+
+  /** real solution id → its cache key: every reply polled from it is stored under that key */
+  private solKey = new Map<string, string>();
+  private noteSolKey(solId: string, key: string): void {
+    this.solKey.set(solId, key);
+    if (this.solKey.size > READY_SET_MAX) this.solKey.delete(this.solKey.keys().next().value as string);
+  }
+  /** The cache key a solution id answers for: a synthetic id carries it, a real one this process created maps to it. */
+  private cacheKeyOfSol(solId: string): string | null {
+    return isStoredSolId(solId) ? keyOfStoredSolId(solId) : this.solKey.get(solId) ?? null;
+  }
+
+  /** POST a tree and its solution on the first account routing allows (the network half of createCustomSolution, and
+   *  what materialising a stored tree sends — the body exactly as stored). */
+  private async postCustomSolution(body: unknown, solution: { actions: string; board: string }, need: GtowNeed): Promise<SolveMade> {
     // Every wall we record is a GUESS about what the API meant. A wrong quota
     // guess would otherwise disable multiway until the next daily reset, so
     // when nothing is routable we still try the walled sessions rather than
@@ -379,15 +427,15 @@ class GtowApi {
         let treeRes: Response;
         try {
           treeRes = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, {
-            method: "POST", headers, body: JSON.stringify(this.buildCustomTree(input)),
+            method: "POST", headers, body: JSON.stringify(body),
             signal: AbortSignal.timeout(15_000),
           });
         } catch (e) { last = { status: 0, error: `${id}: custom-trees ${e instanceof Error ? e.message : e}` }; break; }
         if (treeRes.status === 401 && attempt === 0) continue;
         if (!treeRes.ok) {
-          const body = (await treeRes.text().catch(() => "")).slice(0, 180);
-          gtowSessions.noteFailure(id, treeRes.status, body, need);
-          last = { status: treeRes.status, error: `custom-trees: ${body}` };
+          const msg = (await treeRes.text().catch(() => "")).slice(0, 180);
+          gtowSessions.noteFailure(id, treeRes.status, msg, need);
+          last = { status: treeRes.status, error: `custom-trees: ${msg}` };
           break; // next session
         }
         const tree = await treeRes.json();
@@ -398,14 +446,14 @@ class GtowApi {
         let solRes: Response;
         try {
           solRes = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, {
-            method: "POST", headers, body: JSON.stringify({ custom_tree_id: treeId, actions: "", board: input.board }),
+            method: "POST", headers, body: JSON.stringify({ custom_tree_id: treeId, actions: solution.actions, board: solution.board }),
             signal: AbortSignal.timeout(15_000),
           });
         } catch (e) { last = { status: 0, error: `${id}: custom-solutions ${e instanceof Error ? e.message : e}` }; break; }
         if (!solRes.ok) {
-          const body = (await solRes.text().catch(() => "")).slice(0, 180);
-          gtowSessions.noteFailure(id, solRes.status, body, need);
-          last = { status: solRes.status, error: `custom-solutions: ${body}` };
+          const msg = (await solRes.text().catch(() => "")).slice(0, 180);
+          gtowSessions.noteFailure(id, solRes.status, msg, need);
+          last = { status: solRes.status, error: `custom-solutions: ${msg}` };
           break; // next session
         }
         const sol = await solRes.json();
@@ -427,8 +475,18 @@ class GtowApi {
   // (fastSolve.warmPostflop6max) and the panel's own feed-spot can all want the same street within a second;
   // each used to mint its own custom solution — two cloud solves for one spot, both slower (hand 4919059283's
   // turn: two 19-24 s answers for the same key). Later callers now join the first request.
-  private treePending = new Map<string, Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string } | { ok: false; status: number; error: string }>>();
-  private nodePending = new Map<string, Promise<{ ok: true; data: any; solveSecs: number; cached: boolean } | { ok: false; status: number; error: string }>>();
+  private treePending = new Map<string, Promise<EnsureResult>>();
+  private nodePending = new Map<string, Promise<NodeFetchResult>>();
+  /**
+   * STORED TREES MINTED IN THIS PROCESS (services/gtowSolveCache). A synthetic id `gc:<key>` is not a solve on any
+   * account; the first node read the store cannot answer creates one (materialise) and every later read polls THAT —
+   * so readiness, ownership and polling all key on the real id, exactly as for a tree created afresh.
+   */
+  private realOf = new Map<string, string>();
+  /** the one in-flight materialisation per synthetic id: concurrent misses join it (one tree + one solution POST) */
+  private matPending = new Map<string, Promise<SolveMade>>();
+  /** speculative reads (the chain's prefetch) waiting for someone to materialise a stored tree — see customNode */
+  private matWaiters = new Map<string, Set<() => void>>();
   /** when this process created each solve — the readiness probe waits FIRST_POLL_MS from here */
   private solCreatedAt = new Map<string, number>();
   /** solves whose street root has answered: every node of them is served now, so a 204 means "no such node" */
@@ -441,25 +499,66 @@ class GtowApi {
    * the next ensureCustomSolution re-creates the SAME tree on an account that can still be polled.
    */
   forgetSolution(solId: string): void {
-    for (const [k, v] of this.treeSolCache) if (v === solId) this.treeSolCache.delete(k);
+    // a stored tree's materialisation lives on the account that minted it: forgetting the synthetic id (or that real
+    // solve) makes the next read mint it again, on whichever account routing allows now — the 429 reroute's point
+    const ids = new Set([solId]);
+    if (isStoredSolId(solId)) {
+      const real = this.realOf.get(solId);
+      if (real) ids.add(real);
+    } else {
+      for (const [g, r] of this.realOf) if (r === solId) ids.add(g);
+    }
+    for (const id of ids) {
+      if (isStoredSolId(id)) { this.realOf.delete(id); this.matPending.delete(id); this.solOwner.delete(id); }
+    }
+    for (const [k, v] of this.treeSolCache) if (ids.has(v)) this.treeSolCache.delete(k);
   }
 
-  /** The solution this process already holds for these tree params, or null — a cache lookup, never a request. */
+  /** The solution this process already holds for these tree params, or null — a cache lookup, never a request. A tree
+   *  the persistent store holds counts: its synthetic id is what ensureCustomSolution would hand out for it. */
   peekSolution(input: CustomTreeInput): string | null {
-    return this.treeSolCache.get(this.treeKey(input)) ?? null;
+    const hit = this.treeSolCache.get(this.treeKey(input));
+    if (hit) return hit;
+    if (!this.cache.enabled) return null;
+    const ck = cacheKeyOf("post", this.buildCustomTree(input), { actions: "", board: input.board });
+    return this.cache.hasTree(ck.key, false) ? storedSolId(ck.key) : null;
   }
 
-  /** A node already in the cache, or null — never a request. (Does not count as a hit for the LRU.) */
+  /** A node already in the cache — this process's, or the persistent store's — or null; never a request. (Does not
+   *  count as a hit, neither for the LRU nor for the store's statistics.) */
   peekNode(solId: string, q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string }): any | null {
-    return this.nodeCache.get(JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board])) ?? null;
+    const mem = this.memNode(solId, q);
+    if (mem) return mem.data;
+    const ck = this.cache.enabled ? this.cacheKeyOfSol(solId) : null;
+    const s = ck ? this.cache.getNode(ck, addrOf(q), false) : null;
+    return s?.status === NODE_OK ? s.data : null;
   }
 
-  async ensureCustomSolution(
-    input: CustomTreeInput
-  ): Promise<{ ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string } | { ok: false; status: number; error: string }> {
+  /** A node in this process's cache: under the id asked for, or — for a stored tree minted here — under its real solve. */
+  private memNode(solId: string, q: NodeQuery): { key: string; data: any } | null {
+    const key = nodeKeyOf(solId, q);
+    const hit = this.nodeCache.get(key);
+    if (hit) return { key, data: hit };
+    const real = isStoredSolId(solId) ? this.realOf.get(solId) : undefined;
+    if (!real) return null;
+    const k2 = nodeKeyOf(real, q);
+    const h2 = this.nodeCache.get(k2);
+    return h2 ? { key: k2, data: h2 } : null;
+  }
+
+  private rememberNode(key: string, data: any): void {
+    this.nodeCache.set(key, data);
+    if (this.nodeCache.size > NODE_CACHE_MAX) this.nodeCache.delete(this.nodeCache.keys().next().value as string);
+  }
+
+  async ensureCustomSolution(input: CustomTreeInput, opts: CacheOpts = {}): Promise<EnsureResult> {
     const key = this.treeKey(input);
     const hit = this.treeSolCache.get(key);
-    if (hit) return { ok: true, solId: hit, created: false, session: this.solOwner.get(hit) ?? "primary" };
+    // (a check that must reach GTO Wizard never takes a stored tree, not even one this process already handed out)
+    if (hit && !(opts.noCache && isStoredSolId(hit))) {
+      return { ok: true, solId: hit, created: false, session: this.solOwner.get(hit) ?? (isStoredSolId(hit) ? CACHE_SESSION : "primary"),
+        ...(isStoredSolId(hit) ? { stored: true } : {}) };
+    }
     const pending = this.treePending.get(key);
     if (pending) return pending.then((r) => (r.ok ? { ...r, created: false, why: `joined a solve another request started (${r.why ?? "same tree"})` } : r));
     // WHY is this tree not in the cache? Answered before the solve is even sent, against the last tree of the
@@ -473,10 +572,16 @@ class GtowApi {
       if (first !== undefined) this.lastTreeByStreet.delete(first);
     }
     tmark(`GTO Wizard tree ${fp.street} ${fp.board} not cached`, why);
-    const p = (async () => {
-      const made = await this.createCustomSolution(input);
+    const p = (async (): Promise<EnsureResult> => {
+      const made = await this.createCustomSolution(input, opts);
       if (!made.ok) return made;
       this.treeSolCache.set(key, made.solId);
+      if (made.stored) {
+        // no solve was created and none may ever be: the store holds the tree, and its nodes are served from there
+        tmark(`GTO Wizard tree ${fp.street} ${fp.board} served from the solve cache`, `stored tree ${keyOfStoredSolId(made.solId).slice(0, 8)} — no request`);
+        return { ok: true, solId: made.solId, created: false, session: made.session, stored: true,
+          why: `served from the persistent solve cache — no request (the in-process cache did not hold it: ${why})` };
+      }
       this.solOwner.set(made.solId, made.session);
       this.solCreatedAt.set(made.solId, Date.now());
       if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
@@ -496,18 +601,67 @@ class GtowApi {
     q: { flopActions?: string; turnActions?: string; riverActions?: string; board: string },
     timeoutMs = CUSTOM_SOLVE_TIMEOUT_MS,
     /** who is asking — rides every request this read sends into the ledger (`cl`): walk | prefetch | study */
-    caller?: string
-  ): Promise<{ ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource } | { ok: false; status: number; error: string }> {
-    const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
-    const hit = this.nodeCache.get(key);
-    if (hit) {
+    caller?: string,
+    opts: CacheOpts = {}
+  ): Promise<NodeFetchResult> {
+    const key = nodeKeyOf(solId, q);
+    const mem = this.memNode(solId, q);
+    if (mem) {
       // a hit is re-inserted so the cache is a true LRU: a hand's earlier-street nodes, read again on every
       // later decision, must outlive the burst of a multiway collapse's fresh nodes (insertion order alone
       // evicted the oldest node first, which is exactly the flop root every turn and river re-walks)
-      this.nodeCache.delete(key);
-      this.nodeCache.set(key, hit);
-      return { ok: true, data: hit, solveSecs: 0, cached: true, src: "cache" };
+      this.nodeCache.delete(mem.key);
+      this.nodeCache.set(mem.key, mem.data);
+      return { ok: true, data: mem.data, solveSecs: 0, cached: true, src: "cache" };
     }
+    // THE PERSISTENT STORE, before any request (services/gtowSolveCache): a node GTO Wizard already answered for this
+    // tree — in this process or any earlier one — is served as it came, and counted as a request not sent
+    const ck = this.cache.enabled && !opts.noCache ? this.cacheKeyOfSol(solId) : null;
+    if (ck) {
+      const addr = addrOf(q);
+      const s = this.cache.getNode(ck, addr, false);
+      const served = s ? this.servedFromStore(key, q, s, caller) : null;
+      this.cache.countNode(ck, addr, served ? s : null);   // a stored verdict this caller is not served is a miss
+      if (served) return served;
+      // A SPECULATIVE READ NEVER MINTS A STORED TREE. The chain prefetches up to 8 addresses the moment it has a
+      // tree; on a stored tree most of the walk is usually in the store, and a mispredicted address must not spend a
+      // tree + a solution POST the walk never needed. So the prefetch waits (within its own timeout) for someone to
+      // materialise the tree — the walk, on a node the store lacks — and only then reads, joining that solve.
+      if (caller === "prefetch" && isStoredSolId(solId) && !this.realOf.has(solId) && !this.matPending.has(solId)) {
+        const t0 = Date.now();
+        if (!(await this.materialisationStarted(solId, timeoutMs))) {
+          return { ok: false, status: 0, error: "speculative read of a stored tree skipped — nothing asked for a node the solve cache lacks, so the tree was never created" };
+        }
+        const again = this.memNode(solId, q);
+        if (again) return { ok: true, data: again.data, solveSecs: 0, cached: true, src: "cache" };
+        return this.readThrough(solId, q, key, Math.max(0, timeoutMs - (Date.now() - t0)), caller);
+      }
+    }
+    return this.readThrough(solId, q, key, timeoutMs, caller);
+  }
+
+  /**
+   * A stored node as customNode's answer, or null to read through. A full node is served to everyone. A stored
+   * NO_NODE — "the solve is served and this line has no decision node", which the poll INFERS from two 204s on a
+   * ready solve — is served to the speculative prefetch only (the addresses it guesses are where such lines live):
+   * a walk that meets one asks GTO Wizard again, so a wrong inference can never become a spot that fails forever.
+   */
+  private servedFromStore(key: string, q: NodeQuery, s: StoredNode, caller?: string): NodeFetchResult | null {
+    if (s.status === NODE_OK) {
+      this.rememberNode(key, s.data);
+      return { ok: true, data: s.data, solveSecs: 0, cached: true, src: "cache", store: true };
+    }
+    if (s.status === NO_NODE) {
+      if (caller !== "prefetch") return null;
+      const line = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
+      return { ok: false, status: 204, store: true,
+        error: `no decision node at [${line || "root"}] — GTO Wizard's verdict on this tree, from the solve cache (the line closes the street or ends the hand)` };
+    }
+    return { ok: false, status: -s.status, store: true, error: `${-s.status}: ${(s.text ?? "").slice(0, 160)} (from the solve cache)` };
+  }
+
+  /** The read itself: join a poll already in flight for this node, or start one. */
+  private readThrough(solId: string, q: NodeQuery, key: string, timeoutMs: number, caller: string | undefined): Promise<NodeFetchResult> {
     const pending = this.nodePending.get(key);
     if (pending) {
       // the same node is already being polled by another request (a warm-up, another panel) — share it. The wait
@@ -522,7 +676,82 @@ class GtowApi {
     return p;
   }
 
+  /** Resolves true once a materialisation of `gcId` is under way (or done), false after `ms`. */
+  private materialisationStarted(gcId: string, ms: number): Promise<boolean> {
+    if (this.realOf.has(gcId) || this.matPending.has(gcId)) return Promise.resolve(true);
+    return new Promise((res) => {
+      let set = this.matWaiters.get(gcId);
+      if (!set) this.matWaiters.set(gcId, (set = new Set()));
+      const waiters = set;
+      const done = (v: boolean) => {
+        clearTimeout(timer);
+        waiters.delete(wake);
+        if (!waiters.size && this.matWaiters.get(gcId) === waiters) this.matWaiters.delete(gcId);
+        res(v);
+      };
+      const wake = () => done(true);
+      const timer = setTimeout(() => done(false), ms);
+      waiters.add(wake);
+    });
+  }
+
+  /**
+   * MATERIALISE A STORED TREE (services/gtowSolveCache): a node read the store could not answer needs a real solve, so
+   * the tree and its solution are POSTed from the stored body — exactly what was POSTed the first time — through the
+   * normal routing (heads-up to Elite, three seats to Ultra), once however many reads miss at the same moment. The
+   * account that mints it owns it; readiness, ownership and the node polls then key on the real id like any fresh solve.
+   */
+  private materialise(gcId: string, mint = true): Promise<SolveMade> {
+    const have = this.realOf.get(gcId);
+    if (have) return Promise.resolve({ ok: true, solId: have, session: this.solOwner.get(have) ?? "primary" });
+    const pending = this.matPending.get(gcId);
+    if (pending) return pending;
+    // the prefetch joins a materialisation, it never starts one (customNode) — nor a second one after a failed first
+    if (!mint) return Promise.resolve({ ok: false, status: 0, error: "speculative read of a stored tree skipped — its solve was not created" });
+    const key = keyOfStoredSolId(gcId);
+    // (declared first: the body compares against it once its POSTs are back, to see whether a forget replaced it)
+    let p!: Promise<SolveMade>;
+    p = (async (): Promise<SolveMade> => {
+      const stored = this.cache.treeBody(key);
+      if (!stored || stored.kind !== "post") {
+        return { ok: false, status: 410, error: `the solve cache no longer holds tree ${key.slice(0, 8)} (${this.cache.enabled ? "evicted" : "the cache is off"}) — ask again to solve it afresh` };
+      }
+      const seats = Array.isArray(stored.tree?.players) ? stored.tree.players.length : 2;
+      tmark(`GTO Wizard stored tree ${key.slice(0, 8)} materialised`, "a node the solve cache does not hold — creating its solve (tree + solution)");
+      const made = await this.postCustomSolution(stored.tree, stored.solution, { multiway: seats > 2 });
+      if (!made.ok) return made;
+      // the real solve is a solve like any other: its owner, its age for the readiness probe, its replies stored
+      this.noteSolKey(made.solId, key);
+      this.solOwner.set(made.solId, made.session);
+      this.solCreatedAt.set(made.solId, Date.now());
+      if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+      this.cache.noteMaterialised(key);
+      // …and it stands for the stored tree unless a 429 reroute forgot this materialisation while it was in flight
+      if (this.matPending.get(gcId) === p) {
+        this.realOf.set(gcId, made.solId);
+        this.solOwner.set(gcId, made.session);
+        if (this.realOf.size > READY_SET_MAX) this.realOf.delete(this.realOf.keys().next().value as string);
+      }
+      return made;
+    })().finally(() => { if (this.matPending.get(gcId) === p) this.matPending.delete(gcId); });
+    this.matPending.set(gcId, p);
+    const waiters = this.matWaiters.get(gcId);
+    if (waiters) { this.matWaiters.delete(gcId); for (const w of [...waiters]) w(); }
+    return p;
+  }
+
   private async customNodeFetch(solId: string, q: NodeQuery, timeoutMs: number, caller?: string): Promise<NodeFetchResult> {
+    if (isStoredSolId(solId)) {
+      // the node's own budget starts once the solve exists — as for a tree created afresh, whose POSTs come before it
+      const m = await this.materialise(solId, caller !== "prefetch");
+      if (!m.ok) return m;
+      return this.fetchOnSolve(m.solId, q, timeoutMs, caller);
+    }
+    return this.fetchOnSolve(solId, q, timeoutMs, caller);
+  }
+
+  /** A node of a real solve: the readiness probe for the chain's single-street shape, then the poll. */
+  private async fetchOnSolve(solId: string, q: NodeQuery, timeoutMs: number, caller?: string): Promise<NodeFetchResult> {
     const t0 = Date.now();
     const deadline = t0 + timeoutMs;
     // anything but the chain's single-street shape keeps the old behaviour: poll until a strategy or the timeout
@@ -564,7 +793,7 @@ class GtowApi {
    * without action_solutions) gets NO_NODE_GRACE retries and is then reported as a missing node (status 204).
    */
   private async pollNode(solId: string, q: NodeQuery, t0: number, deadline: number, mode: "legacy" | "until-ready" | "ready", caller?: string): Promise<NodeFetchResult> {
-    const key = JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
+    const key = nodeKeyOf(solId, q);
     const line = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
     let empties = 0;
     const markReady = () => {
@@ -572,8 +801,14 @@ class GtowApi {
       this.solReady.add(solId);
       if (this.solReady.size > READY_SET_MAX) this.solReady.delete(this.solReady.values().next().value as string);
     };
-    const noNode = (): NodeFetchResult => ({ ok: false, status: 204,
-      error: `no decision node at [${line || "root"}] — the solve is ready and this line has none (it closes the street or ends the hand)` });
+    // every verdict about the solve itself goes to the persistent store too, under the tree's key (a solve created
+    // with the cache on has one — services/gtowSolveCache); a timeout, a wall or a lost token never does
+    const ck = this.cache.enabled ? this.solKey.get(solId) ?? null : null;
+    const noNode = (): NodeFetchResult => {
+      if (ck) this.cache.putNode(ck, addrOf(q), NO_NODE, null);
+      return { ok: false, status: 204,
+        error: `no decision node at [${line || "root"}] — the solve is ready and this line has none (it closes the street or ends the hand)` };
+    };
 
     const params = new URLSearchParams({
       custom_solution_id: solId,
@@ -609,13 +844,14 @@ class GtowApi {
       }
       if (r.status === 401 && !refreshed) { refreshed = true; if (owner) await gtowSessions.tokenFor(owner, true); else await this.accessToken(true); continue; }
       if (r.ok && r.status !== 204) {
-        const j = await r.json().catch(() => null);
+        // read as text, then parsed: the store keeps the reply exactly as GTO Wizard sent it
+        const text = await r.text().catch(() => "");
+        let j: any = null;
+        try { j = text ? JSON.parse(text) : null; } catch { j = null; }
         markReady();                                   // any 200 means the solve is being served
         if (j?.action_solutions?.length) {
-          this.nodeCache.set(key, j);
-          if (this.nodeCache.size > NODE_CACHE_MAX) {
-            this.nodeCache.delete(this.nodeCache.keys().next().value as string);
-          }
+          this.rememberNode(key, j);
+          if (ck) this.cache.putNode(ck, addrOf(q), NODE_OK, text);
           return { ok: true, data: j, solveSecs: (Date.now() - t0) / 1000, cached: false, src: "fetched" };
         }
         // a 200 with no decision: nothing to wait for once the solve is served
@@ -645,20 +881,31 @@ class GtowApi {
    * the cloud solve lands (~2s). Returns the same JSON shape as `spotSolution`.
    * Both layers cache, since every fresh call otherwise mints a new custom
    * solution on the account.
+   *
+   * `opts.noCache` keeps the persistent solve cache out of it (services/gtowSolveCache): the poller's startup probe
+   * and the pool-routing check exist to reach GTO Wizard, and a stored answer would make them pass without doing so.
+   * `stored` says the answer came from the persistent cache (tree, node or both) — no request was sent for it.
    */
   async customSolve(
-    input: CustomSolveInput
-  ): Promise<{ ok: true; customSolutionId: string; solveSecs: number; cached: boolean; data: any; session: GtowSessionId } | { ok: false; status: number; error: string }> {
-    const ens = await this.ensureCustomSolution(input);
+    input: CustomSolveInput,
+    opts: CacheOpts = {}
+  ): Promise<{ ok: true; customSolutionId: string; solveSecs: number; cached: boolean; data: any; session: GtowSessionId; stored?: boolean } | { ok: false; status: number; error: string }> {
+    const ens = await this.ensureCustomSolution(input, opts);
     if (!ens.ok) return ens;
     const node = await this.customNode(ens.solId, {
       flopActions: input.flopActions,
       turnActions: input.turnActions,
       riverActions: input.riverActions,
       board: input.queryBoard ?? input.board,
-    });
+    }, undefined, undefined, opts);
     if (!node.ok) return node;
-    return { ok: true, customSolutionId: ens.solId, solveSecs: node.solveSecs, cached: node.cached, data: node.data, session: ens.session };
+    return { ok: true, customSolutionId: ens.solId, solveSecs: node.solveSecs, cached: node.cached, data: node.data, session: ens.session,
+      ...(ens.stored || node.store ? { stored: true } : {}) };
+  }
+
+  /** The persistent solve cache's statistics (GET /api/gtow/cache). */
+  solveCacheStats() {
+    return this.cache.stats();
   }
 }
 

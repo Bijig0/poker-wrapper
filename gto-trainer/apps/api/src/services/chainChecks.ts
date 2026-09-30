@@ -541,11 +541,12 @@ export function checkTrees(a: {
 }
 
 // ── #10 no node fetched twice ───────────────────────────────────────────────────────────────────────────────────
-export function checkNodeReads(a: { leak?: { code: string; why: string } | null; reads?: { cache: number; joined: number; fetched: number } | null }): CheckResult {
+export function checkNodeReads(a: { leak?: { code: string; why: string } | null; reads?: { cache: number; joined: number; fetched: number; store?: number } | null }): CheckResult {
   if (a.leak?.code === "node:read-twice") return fail(10, a.leak.why, "node:read-twice");
   if (!a.reads) return pass(10, "no node read on this decision");
   const r = a.reads;
-  return pass(10, `${r.cache} node${r.cache === 1 ? "" : "s"} from the cache, ${r.joined} joined, ${r.fetched} fetched — none fetched twice in this hand`);
+  // `store`: of the cache reads, the ones the persistent solve cache served (services/gtowSolveCache)
+  return pass(10, `${r.cache} node${r.cache === 1 ? "" : "s"} from the cache${r.store ? ` (${r.store} from the persistent solve cache)` : ""}, ${r.joined} joined, ${r.fetched} fetched — none fetched twice in this hand`);
 }
 
 // ── #11 warm-up tree = live tree ────────────────────────────────────────────────────────────────────────────────

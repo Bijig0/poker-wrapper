@@ -419,7 +419,7 @@ function chainOffTree(s) {
 }
 function chainSolver(s) {
   if (s.how === "hit") return `<br><span class="sub">reused — not solved again</span>`;
-  const acct = s.account ? ` · ${esc({ primary: "Ultra", secondary: "Elite" }[s.account] || s.account)}` : "";
+  const acct = s.account ? ` · ${esc({ primary: "Ultra", secondary: "Elite", cache: "from the solve cache, no request" }[s.account] || s.account)}` : "";
   return `<br><span class="sub">solved with GTO Wizard AI postflop${acct} · ${s.tree === "created" ? "new tree" : "cached tree"}</span>`;
 }
 /* THE CHECKS TAB (2026-09-27, services/chainChecks) — it took over the Chain path card. At the top, the hand's verdict
@@ -1223,7 +1223,7 @@ function rlStreetHead(street, i) {
 // GTO Wizard's own structure, which the tree builder sends when a solve passes no rake (gtowApi.DEFAULT_TREE_RAKE).
 // The API reports what was sent (spec.rakeSent) since 2026-09-24; this covers an API started before that.
 const GTOW_DEFAULT_RAKE = { pct_of_pot: 5, cap_in_chips: 0.6, preflop_rake_type: null };
-const GTOW_ACCOUNT = { primary: "Ultra account (primary)", secondary: "Elite account (secondary)" };
+const GTOW_ACCOUNT = { primary: "Ultra account (primary)", secondary: "Elite account (secondary)", cache: "the persistent solve cache (no request sent)" };
 function csLoad(D = DETAIL, ids = []) {
   if (!D) return null;
   D.cs ??= { setups: {}, table: null, err: null, p: null, asked: false };
@@ -5035,12 +5035,18 @@ function renderGtowAccounts() {
     <div class="row"><button onclick="gaSave('${esc(e.id)}')">Save</button><button class="ghost" onclick="gaEdit=null;renderGtowAccounts()">Cancel</button>${e.id && e.id !== "primary" && e.id !== "secondary" ? `<button class="ghost bad" onclick="gaDelete('${esc(e.id)}')">Remove</button>` : ""}</div>
     <div class="sub">The slot id stays "${esc(e.id || "(from the name)")}" — the ledger and stored solves are keyed by it. A disabled account takes no work but keeps its token warm.</div>
   </div>`;
+  /* THE AI SOLVE CACHE (2026-09-28, services/gtowSolveCache): every AI tree and node GTO Wizard answered, kept across
+     restarts and served again with no request — its size and what it saved today (all processes); /api/gtow/cache has the rest */
+  const c = j.cache;
+  const cacheLine = !c ? "" : !c.enabled ? `<div class="sub" style="margin:8px 0 6px">AI solve cache: <b>off</b> (GTOW_CACHE=off or GTOW_CACHE_DB_PATH=off)</div>`
+    : `<div class="sub" style="margin:8px 0 6px" title="Every GTO Wizard AI tree and node reply (preflop and postflop) is kept in gtow-cache.sqlite beside the central database and served again with no request — a lower bound on requests saved: one per node served, two per tree not created">AI solve cache: <b>${c.trees.toLocaleString()} trees · ${c.nodes.toLocaleString()} nodes · ${c.mb} MB</b> · hits today <b>${c.hitsToday.toLocaleString()}</b> (${c.savedToday.toLocaleString()} requests saved) · <a href="/api/gtow/cache" target="_blank">details</a></div>`;
   $("view-gtow").innerHTML = `<div class="ga-wrap">
     <div class="ga-sum">
       <div><div class="ttl">All enabled accounts · last hour</div>${sum(j.combined.h1)}</div>
       <div><div class="ttl">All enabled accounts · last 24 h</div>${sum(j.combined.h24)}</div>
       <div class="sub note-ish">Limit: <b>${j.cap.toLocaleString()} requests per rolling hour per account</b> (measured 2026-09-26; a trip held ~24 h). The 24 h column is the conservative budget, not a measured limit. Counts are a lower bound — browsing GTO Wizard yourself on an account counts for them, not for us.${j.allow ? ` · <b>This session may only use: ${j.allow.map(esc).join(", ")}</b>` : ""}</div>
     </div>
+    ${cacheLine}
     <table class="ga-table"><thead><tr><th>account</th><th>signed in as</th><th>last hour</th><th>last 24 h</th><th>wall</th><th>plan</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <div class="row" style="margin-top:10px"><button class="ghost" onclick="gaEdit='__new__';renderGtowAccounts()">+ Add account</button><span class="sub">updated ${new Date(j.now).toLocaleTimeString()}</span></div>
     ${form}

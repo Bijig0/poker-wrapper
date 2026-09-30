@@ -15,6 +15,7 @@ import fastSolverRoutes from "./src/routes/fastSolver";
 import aiStudyRoutes from "./src/routes/aiStudy";
 import dashboardRoutes from "./src/routes/dashboard";
 import gtowAccountsRoutes from "./src/routes/gtowAccounts";
+import gtowCacheRoutes from "./src/routes/gtowCache";
 import sourcesRoutes from "./src/routes/sources";
 import missQueueRoutes from "./src/routes/missQueue";
 import { answerReconciler } from "./src/services/answerReconciler";
@@ -59,6 +60,8 @@ app.route("/api/fast-solver", fastSolverRoutes);
 app.route("/api/ai-study", aiStudyRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/gtow/accounts", gtowAccountsRoutes);
+// the persistent GTO Wizard solve cache: what it holds and what it saved (services/gtowSolveCache)
+app.route("/api/gtow/cache", gtowCacheRoutes);
 app.route("/api/dashboard/sources", sourcesRoutes);
 app.route("/api/dashboard/miss-queue", missQueueRoutes);
 app.route("/api/replay", replayRoutes);

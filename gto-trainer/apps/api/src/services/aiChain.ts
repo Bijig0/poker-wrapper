@@ -175,12 +175,16 @@ export interface ChainTrace {
     /** why the mid-street checkpoint could not be resumed although one existed */
     resumeMiss?: string;
     /** the walk's node reads by source, and the wall-clock of the ones that waited on the network */
-    nodeSrc?: { cache: number; joined: number; fetched: number; fetchMs: number };
+    nodeSrc?: { cache: number; joined: number; fetched: number; fetchMs: number;
+      /** of the `cache` reads, how many came from the PERSISTENT solve cache (services/gtowSolveCache, 2026-09-28) —
+       *  answered by an earlier solve, maybe an earlier process, with no request; absent when none did */
+      store?: number };
     /** WHAT GTO WIZARD WAS ASKED TO SOLVE on this street (2026-09-24): the tree request as sent — rake and cap, pot,
      *  stack, the size grid, the tree's own rules — with the ranges summarised (gtowApi.treeRequestSummary). A cached
      *  tree was created from this same body (the cache key covers every field of it). */
     sent?: unknown;
-    /** the GTO Wizard session whose solve this is (gtowSessions: primary = Ultra, secondary = Elite) */
+    /** the GTO Wizard session whose solve this is (gtowSessions: primary = Ultra, secondary = Elite) — or "cache":
+     *  the tree came from the persistent solve cache (services/gtowSolveCache) and no account was asked for it */
     account?: string | null;
     /** HOW THIS STREET'S RANGES WERE PRODUCED on this call (2026-09-25, the chain ledger — services/chainPath):
      *  hit = the hand's closed-street memo, resumed = from hero's last node, first = walked for the first time in
@@ -851,7 +855,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     let heroNodeSaid: string | null = null;
     const origin = currentRequestScope()?.origin ?? null;
 
-    const nodeSrc = { cache: 0, joined: 0, fetched: 0, fetchMs: 0 };
+    const nodeSrc: { cache: number; joined: number; fetched: number; fetchMs: number; store?: number } = { cache: 0, joined: 0, fetched: 0, fetchMs: 0 };
     const nodeLeaks: string[] = [];
     // every node read is accounted for: the cache it came from, or how long its poll took
     const readNode = async (solId: string, codesStr: string) => {
@@ -864,7 +868,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         if (fetched.has(id)) nodeLeaks.push(`node [${codesStr || "root"}] fetched again from GTO Wizard — this hand had already read it`);
         fetched.add(id);
       }
-      if (src === "cache") nodeSrc.cache++;
+      if (src === "cache") { nodeSrc.cache++; if (r.ok && r.store) nodeSrc.store = (nodeSrc.store ?? 0) + 1; }
       else if (src === "joined") { nodeSrc.joined++; nodeSrc.fetchMs += ms; }
       else if (src === "fetched") { nodeSrc.fetched++; nodeSrc.fetchMs += ms; }
       if (src !== "cache") {

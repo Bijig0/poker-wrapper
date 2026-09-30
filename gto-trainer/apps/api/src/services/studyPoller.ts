@@ -875,6 +875,10 @@ class StudyPoller {
    * the first run in a process: a genuine end-to-end check once per session,
    * a smoke test thereafter. `status.tokenReady` is the signal that stays
    * honest every tick. Set GTOW_STARTUP_PROBE=0 to skip it entirely.
+   *
+   * `noCache` (2026-09-28): the PERSISTENT solve cache (services/gtowSolveCache) holds this very tree from an earlier
+   * process, and serving the probe from it would report GTO Wizard up without asking it. The first run in a process
+   * stays a real network check; only the in-process caches may answer the ones after it, as before.
    */
   private runStartupProbe(): void {
     if (process.env.GTOW_STARTUP_PROBE === "0" || this.probing) return;
@@ -887,7 +891,7 @@ class StudyPoller {
         const r = await gtowApi.customSolve({
           board: "Ts7h2d", pot: 5, stack: 97.5, oopRange: full, ipRange: full,
           oopPos: "BB", ipPos: "SB", startingStreet: "FLOP", flopActions: "X",
-        });
+        }, { noCache: true });
         this.status.startupProbe = {
           at: Date.now(), ok: r.ok, ms: Date.now() - t0, error: r.ok ? null : r.error,
         };

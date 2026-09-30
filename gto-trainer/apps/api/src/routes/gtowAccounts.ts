@@ -6,7 +6,8 @@
  *   DELETE /:id              forget an account
  *   POST   /:id/connect      launch its client if down, then wait for a token
  *   POST   /:id/clear-wall   forget a wall / plan refusal and re-sniff
- *   POST   /:id/probe        ONE request on the account: is the wall really there? (creates its probe solve once)
+ *   POST   /:id/probe        ONE request on the account: is the wall really there? (creates its probe solve once, then
+ *                             READS it — a walled account still accepts POSTs; see probeAccount)
  *   POST   /:id/info         re-read the plan from the client page now (otherwise cached 10 min)
  *
  * The meters count every process's requests (the ledger is shared), the wall comes from the ledger too (it survives
@@ -20,6 +21,7 @@ import { gtowApi } from "../services/gtowApi";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowRequests, type GtowWindow } from "../services/gtowRequestLog";
 import { gtowSessions, type GtowSessionStatus } from "../services/gtowSessions";
+import { gtowSolveCache } from "../services/gtowSolveCache";
 import { REPO } from "../services/repoPaths";
 import {
   accountInfo, cdpHostTakenBy, cdpPort, launchPlan, loadAccounts, noteAccountFact, probeTreeBody, removeAccount, REQUEST_CAP,
@@ -77,7 +79,11 @@ export async function accountsPayload() {
     for (const w of Object.values(windows)) { const v = w[name]; if (!v) continue; n += v.n; x += v.x429; since = since == null ? v.sinceMs : Math.min(since, v.sinceMs); }
     return { n, x429: x, sinceMs: since, cap: REQUEST_CAP * reg.accounts.filter((a) => a.enabled).length };
   };
-  return { ok: true, now, cap: REQUEST_CAP, wallMs: WALL_MS, accounts, combined: { h1: sum("h1"), h24: sum("h24") }, allow: gtowSessions.allowList() };
+  // the persistent solve cache in one line (services/gtowSolveCache; the whole of it: GET /api/gtow/cache) — the requests
+  // it saved are requests these meters never had to count
+  let cache: ReturnType<typeof gtowSolveCache.summary> | null = null;
+  try { cache = gtowSolveCache.summary(); } catch { /* the accounts page never fails on the cache */ }
+  return { ok: true, now, cap: REQUEST_CAP, wallMs: WALL_MS, accounts, combined: { h1: sum("h1"), h24: sum("h24") }, allow: gtowSessions.allowList(), cache };
 }
 
 app.get("/", async (c) => c.json(await accountsPayload()));
@@ -154,17 +160,36 @@ app.post("/:id/info", async (c) => {
   return c.json(await accountsPayload());
 });
 
+export interface ProbeResult {
+  ok: boolean;
+  status?: number;
+  walled?: boolean;
+  retryAfter?: string | null;
+  body?: string;
+  requestsSpent?: number;
+  /** the probe solve was created by this probe (tree + solution POSTs) and then read */
+  created?: boolean;
+  error?: string;
+}
+
 /**
  * ONE request to learn the truth about a wall (or that there is none): poll the root of a solve this account owns.
  * The solve is created the first time (tree + solution: two more requests, once) and remembered in the registry.
- * A 2xx or a 204 (solving) means the account answers — the pool's block is cleared; a 429 renews it.
+ *
+ * THE VERDICT IS A READ, NEVER A POST (2026-09-28). A walled account still ACCEPTS tree and solution POSTs — only the
+ * spot-solution READ is refused with the 2,250-per-hour 429 (measured: Ultra's probe created a fresh probe solve with
+ * 201s and was declared "unwalled", and the very next node read got 429). So when the probe has to create its solve,
+ * it then reads that solve's root: once after ~1 s, again if GTO Wizard says 204 (still solving), at most three
+ * reads in all. A 2xx READ (204 included: the read was answered, not refused) clears the pool's block; a 429 on the
+ * read renews it; a POST refused with a 429 is still a wall. `requestsSpent` counts every request, POSTs included.
+ * `opts` shortens the waits for tests.
  */
-app.post("/:id/probe", async (c) => {
-  const id = c.req.param("id");
+export async function probeAccount(id: string, opts: { firstWaitMs?: number; retryWaitMs?: number; maxPolls?: number } = {}): Promise<ProbeResult | null> {
   const a = loadAccounts().accounts.find((x) => x.id === id);
-  if (!a) return c.json({ ok: false, error: `no account '${id}'` }, 404);
+  if (!a) return null;
   const token = await gtowSessions.tokenFor(id, true);
-  if (!token) return c.json({ ...(await accountsPayload()), probe: { ok: false, error: "no token — the client is down or signed out" } });
+  if (!token) return { ok: false, error: "no token — the client is down or signed out" };
+  const firstWait = opts.firstWaitMs ?? 1_000, retryWait = opts.retryWaitMs ?? 1_000, maxPolls = Math.max(1, opts.maxPolls ?? 3);
   const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const poll = async (solId: string) => {
     const q = new URLSearchParams({ custom_solution_id: solId, preflop_actions: "", flop_actions: "", turn_actions: "", river_actions: "", board: "" });
@@ -173,9 +198,11 @@ app.post("/:id/probe", async (c) => {
   };
   let solId = a.probeSolId;
   let spent = 0;
+  let created = false;
   let res = solId ? (spent++, await poll(solId)) : null;
   if (!res || res.status === 404) {
-    // no probe solve yet (or GTO Wizard forgot it): make one — unless the account is walled, which the tree POST says
+    // no probe solve yet (or GTO Wizard forgot it): make one. A 429 on a POST is a wall too, but a 201 is NOT proof
+    // there is none — the read below is what says so
     const tr = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H, body: JSON.stringify(probeTreeBody()), signal: AbortSignal.timeout(20_000) }, { cl: "account-probe" });
     spent++;
     const trBody = await tr.text().catch(() => "");
@@ -186,14 +213,33 @@ app.post("/:id/probe", async (c) => {
       const so = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H, body: JSON.stringify({ custom_tree_id: treeId, actions: "", board: "" }), signal: AbortSignal.timeout(20_000) }, { cl: "account-probe" });
       spent++;
       const soBody = await so.text().catch(() => "");
-      if (so.ok) { solId = String(JSON.parse(soBody)?.id ?? ""); noteAccountFact(id, { probeSolId: solId || null }); res = { status: so.status, body: "", retryAfter: null }; }
-      else res = { status: so.status, body: soBody.slice(0, 300), retryAfter: so.headers.get("retry-after") };
+      if (so.ok) {
+        solId = String(JSON.parse(soBody)?.id ?? "");
+        noteAccountFact(id, { probeSolId: solId || null });
+        created = true;
+        res = { status: 0, body: "", retryAfter: null };
+        // READ the new solve: the first read after ~1 s (a fresh preflop root solves in ~1-4 s); a 204 (still solving)
+        // gets a short retry; anything else ends it
+        for (let i = 0; i < maxPolls && solId; i++) {
+          await new Promise((r) => setTimeout(r, i === 0 ? firstWait : retryWait));
+          res = await poll(solId);
+          spent++;
+          if (res.status !== 204) break;
+        }
+      } else res = { status: so.status, body: soBody.slice(0, 300), retryAfter: so.headers.get("retry-after") };
     }
   }
   const walled = res.status === 429;
   if (walled) gtowSessions.noteFailure(id, 429, res.body);
   else if (res.status >= 200 && res.status < 300) gtowSessions.noteSuccess(id);
-  return c.json({ ...(await accountsPayload()), probe: { ok: !walled, status: res.status, walled, retryAfter: res.retryAfter, body: res.body, requestsSpent: spent } });
+  return { ok: !walled, status: res.status, walled, retryAfter: res.retryAfter, body: res.body, requestsSpent: spent, ...(created ? { created: true } : {}) };
+}
+
+app.post("/:id/probe", async (c) => {
+  const id = c.req.param("id");
+  const probe = await probeAccount(id);
+  if (!probe) return c.json({ ok: false, error: `no account '${id}'` }, 404);
+  return c.json({ ...(await accountsPayload()), probe });
 });
 
 export default app;

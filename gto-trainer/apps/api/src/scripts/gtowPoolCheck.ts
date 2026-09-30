@@ -64,7 +64,9 @@ const cases = [
 let failures = 0;
 for (const c of cases) {
   const t0 = Date.now();
-  const res: any = await gtowApi.customSolve(c.tree as any);
+  // noCache: the persistent solve cache would hand back a stored tree with no account behind it (session "cache") —
+  // this check exists to see which ACCOUNT a real solve lands on
+  const res: any = await gtowApi.customSolve(c.tree as any, { noCache: true });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   if (!res?.ok) {
     failures++;

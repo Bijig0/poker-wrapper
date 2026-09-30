@@ -42,6 +42,22 @@ it waits for a sign-in); the tab's **Connect** button follows the same rule (`se
 Development: `.claude/launch.json` has `api` (`:2000`, watch), `api-verify` (`:2001`, HTTP only — beside a live
 API), `charts` (`:8777`).
 
+### The GTO Wizard solve cache
+
+Every GTO Wizard AI solve the API makes — the preflop fallback and the postflop chain — is kept in
+`<data root>/gtow-cache.sqlite` (beside `poker.sqlite`; `gto-trainer/apps/api/src/services/gtowSolveCache.ts`): each
+tree exactly as it was POSTed and each node reply exactly as GTO Wizard sent it (gzipped), keyed by a hash of the
+request, so the same spot is answered again — after a restart, in a replay, in the next hand — with **no request**. It
+is exact-match (lossless): only complete replies and GTO Wizard's own "no such node" verdicts are kept. Rows not hit
+for 60 days go at start-up, and the file is held under 2 GB (least-recently-hit nodes first).
+
+- **Inspect:** the dashboard's GTO Wizard tab (one line: trees, nodes, size, hits and requests saved today), or
+  `GET /api/gtow/cache` (all-time totals, since start, the most recently hit nodes).
+- **Turn off:** `GTOW_CACHE=off` (or `GTOW_CACHE_DB_PATH=off`) in `config/local.env`, then restart the API. Also for
+  a script that must measure GTO Wizard itself (a latency bench); the poller's start-up probe and
+  `scripts/gtowPoolCheck.ts` bypass it on their own. `GTOW_CACHE_DB_PATH` moves the file; `GTOW_CACHE_DAYS` and
+  `GTOW_CACHE_MAX_MB` change the retention. Deleting the file just empties the cache. Under `bun test` it is off.
+
 ## Develop
 
 ```bash
