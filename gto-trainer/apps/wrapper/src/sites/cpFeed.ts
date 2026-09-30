@@ -36,17 +36,33 @@ export function learnHero(name: string): void {
   hero.source = "log";
 }
 
-/** The account the client last signed tables in with (whole-file scan). */
+/**
+ * The account the client last signed tables in with (whole-file scan) — and when the current log has no login at all,
+ * the rotated one beside it (main.1.log.gz). THE CLIENT ROTATES ITS LOG WHEN IT STARTS (2026-10-01 01:10, session
+ * session_20261001_011222): the "Login on SFS" line of that run was in main.1.log.gz, main.log held none, so the feed
+ * never learned hero's name — six named seats, "no hero seat", the on-demand Solve never offered.
+ */
 export function lastLogin(path: string): string | null {
+  const scan = (text: string): string | null => {
+    let last: string | null = null;
+    for (const m of text.matchAll(LOGIN_G)) last = m[1]!;
+    return last;
+  };
   let text: string;
   try {
     text = new TextDecoder("utf-8").decode(readFileSync(path));
   } catch {
     return null;
   }
-  let last: string | null = null;
-  for (const m of text.matchAll(LOGIN_G)) last = m[1]!;
-  return last;
+  const cur = scan(text);
+  if (cur) return cur;
+  const rotated = path.replace(/\.log$/i, ".1.log.gz");
+  if (rotated === path || !existsSync(rotated)) return null;
+  try {
+    return scan(new TextDecoder("utf-8").decode(Bun.gunzipSync(readFileSync(rotated))));
+  } catch {
+    return null;
+  }
 }
 
 const RANK: Record<string, string> = {
