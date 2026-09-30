@@ -165,6 +165,7 @@
         <span class="help cgg-only">Every frame the reader reads, as PNG, under this session's id (wrapper debug folder\clubgg) — about 1.5 MB a second, capped at 4 GB. Turn it on to hand over a stretch of play (hero's hole cards) for the reader; tools/cggReplay.ts replays it.</span></div>
       <div class="field no-cgg" style="grid-column: 1 / -1"><span class="k">Auto-execute picks</span>
         <div class="seg" id="autoExecute"><button data-v="1" class="plain">On</button><button data-v="0" class="plain">Off</button></div>
+        <div id="auto-ondemand" class="help" style="display:none;color:#7fb2ff">This strategy is <b>on demand</b>: nothing is solved until you press <b>Solve</b> on the panel for the decision in front of you, and nothing auto-executes — every press on the table is yours.</div>
         <div id="auto-delay-row" style="display:none;margin-top:8px">
           <div class="row"><span class="sub">timing</span>
             <div class="seg" id="autoDelay"><button data-v="instant" class="plain">Instant</button><button data-v="random" class="plain">Randomized 1.5–2 s</button></div></div>
@@ -520,6 +521,11 @@ function fillSettings() {
   seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
   seg("autoFoldNoAnswer", cfg.autoFoldNoAnswer ? 1 : 0);
   seg("autoSitBackIn", cfg.autoSitBackIn ? 1 : 0);
+  // an ON-DEMAND strategy (2026-09-30) never auto-executes: the switch gives way to a statement of that
+  const od = !!cfg.onDemand;
+  if (od) cfg.autoExecute = false;
+  $("autoExecute").style.display = od ? "none" : "";
+  $("auto-ondemand").style.display = od ? "" : "none";
   $("auto-fold-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-delay-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-real-row").style.display = cfg.autoExecute ? "" : "none";
@@ -541,6 +547,7 @@ function fillSettings() {
     : `<span class="chip on">answers on</span> <span class="chip ${cfg.mode === "exploit" ? "mes" : "gto"}">${cfg.mode === "exploit" ? "MES" : "GTO"} primary</span>` +
       (s ? ` <b>${esc(s.name)}</b> <span class="sub">— ${esc(p.tagline)}</span><div class="sub" style="margin-top:4px">${s.layers.map((l) => `<b>${esc(l.role)}</b> ${esc(l.label ?? "")}`).join(" · ")}</div>` : "") +
       `<div class="sub" style="margin-top:4px">sources this mode answers from: ${srcs.map(esc).join(", ") || "none"} — each is a required check below</div>` +
+      (cfg.onDemand ? `<div class="sub" style="margin-top:4px;color:#7fb2ff"><b>on demand</b> — press Solve on the panel for an answer; nothing is solved unasked and nothing auto-executes</div>` : "") +
       (cfg.autoExecute
         ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoFoldNoAnswer ? " · folds (checks if free) on no answer" : ""}${cfg.autoRealMoney
             ? ` for REAL MONEY — bounded to ${cfg.autoBudget.minutes} min / ${cfg.autoBudget.hands} hands, then it disarms itself`
@@ -551,7 +558,7 @@ function fillSettings() {
 function readSettings() {
   // answers / primary / sources are the MODE's — only the session's own knobs are read back
   cfg.recording = $("recording").querySelector("button.on")?.dataset.v === "1";
-  cfg.autoExecute = $("autoExecute").querySelector("button.on")?.dataset.v === "1";
+  cfg.autoExecute = !cfg.onDemand && $("autoExecute").querySelector("button.on")?.dataset.v === "1";
   cfg.autoDelay = $("autoDelay").querySelector("button.on")?.dataset.v === "random" ? "random" : "instant";
   cfg.autoTimeBank = $("autoTimeBank").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";

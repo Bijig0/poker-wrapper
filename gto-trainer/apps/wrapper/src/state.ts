@@ -73,6 +73,10 @@ export function freshStudy(): Record<string, any> {
     // time/hand budget granted per session; these fields hold it. Practice and the fake table need no grant.
     autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
     autoDeclared: false, autoDeclaredReal: false, autoDeclaredBudget: null,
+    // ON DEMAND (2026-09-30, the CoinPoker ring strategy): the session's strategy answers only when the panel's Solve
+    // asks (relay.requestSolve), and auto-execute cannot arm. `solveRequest` is that press: the decision it was made
+    // on (hand, street, the line's length) and when.
+    onDemand: false, solveRequest: null,
   };
 }
 

@@ -15,7 +15,7 @@ import { EXTRACT_DEEP_JS } from "./ignition/dom";
 import { handState } from "./ignition/hand";
 import { stateHealthSummary } from "./ignition/checks";
 import { TAP_STALL_S } from "./ignition/ws";
-import { autoAllowance, currentAnswer, currentChain, currentNote, pickReady } from "./relay";
+import { autoAllowance, currentAnswer, currentChain, currentNote, currentSolveRequest, pickReady } from "./relay";
 import { topUpWindow } from "./topup";
 import { sessionBrief } from "./session";
 import { layoutNote } from "./windows";
@@ -29,7 +29,22 @@ function mtime(p: string): number {
   }
 }
 
+/** The on-demand keys, added only when they say something (a /state with neither is byte-identical to before — the
+ *  reader goldens compare it key by key): `onDemand` while the session's strategy answers only on Solve, and
+ *  `solveRequest` while a Solve press still belongs to the decision on screen (relay.currentSolveRequest). */
+function withOnDemand(out: Record<string, any>): Record<string, any> {
+  if (!S.study.onDemand) return out;
+  out.onDemand = true;
+  const req = currentSolveRequest(out.hand ?? null);
+  if (req) out.solveRequest = req;
+  return out;
+}
+
 export async function state(light = false): Promise<Record<string, any>> {
+  return withOnDemand(await stateInner(light));
+}
+
+async function stateInner(light = false): Promise<Record<string, any>> {
   const st = S.study;
   const L = S.liveStatus;
   const [wOpen, wTrigger, wWhy] = topUpWindow();

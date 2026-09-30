@@ -111,6 +111,11 @@
   #sa-pick.check, #sa-pick.call { background: #1f7a4d; }
   #sa-pick.raise, #sa-pick.bet { background: #b96a1f; }
   #sa-pick.allin { background: #6d3fa8; }
+  /* ON DEMAND (2026-09-30): the Solve button stands where the pick will appear */
+  #sa-solve { display: block; width: 100%; font-family: inherit; font-size: 30px; font-weight: 900; border: 3px solid #7fb2ff; border-radius: 12px; padding: 12px 16px; margin: 6px 0; text-align: center; color: #fff; background: #1d4f91; cursor: pointer; letter-spacing: .06em; }
+  #sa-solve:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+  #sa-solve:disabled { opacity: .6; cursor: default; }
+  #sa-solve .sub2 { display: block; font-size: 13px; font-weight: 700; opacity: .85; letter-spacing: .03em; margin-top: 2px; }
   .card { background: #171d24; border: 1px solid #26303a; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #8fa1b3; margin: 0 0 8px; }
   /* fold: every game card folds to its title bar, so the game state and the
@@ -336,6 +341,7 @@
   <div class="card" id="sa-card">
     <h2>Study answers <span id="sa-health" class="badge">off</span></h2>
     <button id="sa-pick" style="display:none" title="execute this pick on the table — Enter or Space does the same"></button>
+    <button id="sa-solve" style="display:none" title="solve the decision in front of you now — GTO Wizard AI, live; Enter or Space does the same"></button>
     <div id="sa-ready" style="display:none"></div>
     <label id="sa-auto-row"><input type="checkbox" id="sa-auto"><span>auto-execute picks — available once you are seated at a practice table</span></label>
     <div id="sa-answer" class="big">— answers off for this session —</div>
@@ -1046,12 +1052,15 @@
     }
     const navFail = saHealth?.lastNavFailure;
     const freshFail = navFail && (Date.now() - navFail.at) < 15000;
+    const od = renderSolve(answer, myTurn, st);
     $("sa-answer").textContent = answer
       ? answer.text.replace(/ · roll \d+ → .*$/, "")
       : myTurn === "won" ? "— you win, hand over —"
       : myTurn === "folded" ? "— folded, next hand —"
-      : !myTurn ? "waiting for your turn…"
+      : !myTurn ? (od ? "on demand — Solve appears on your turn" : "waiting for your turn…")
+      : od && !st?.solveRequest && !solveBusy ? "press SOLVE for the equilibrium answer"
       : freshFail ? "no answer — couldn't solve this spot"
+      : od ? "solving your spot live (GTO Wizard AI)…"
       : "solving your spot…";
     // the solve's own caveat when there IS an answer; when there is none, why not
     const noteText = answer?.note || st?.panelNote || null;
@@ -1062,6 +1071,37 @@
     if (!spoken) saLastSpoken = "";
     renderChain(st?.panelChain || null, !!answer);
   }
+
+  // ON DEMAND (2026-09-30): a strategy that answers only when asked. The SOLVE button shows on hero's turn while there
+  // is no answer; pressing it (or Enter / Space) records the request on the wrapper (POST /panel/solve) and the API's
+  // poller solves exactly that decision. While the request is live (/state solveRequest) the button reads "solving…".
+  // Returns whether the session is on demand.
+  let solveBusy = false;
+  function renderSolve(answer, myTurn, st) {
+    const btn = $("sa-solve");
+    const od = !!st?.onDemand;
+    const show = od && saOn && myTurn === true && !answer;
+    btn.style.display = show ? "block" : "none";
+    if (!show) { solveBusy = false; return od; }
+    const asked = !!st.solveRequest || solveBusy;
+    btn.disabled = asked;
+    btn.innerHTML = asked ? `SOLVING…<span class="sub2">GTO Wizard AI, live — press again once it gives up to retry</span>`
+      : `SOLVE<span class="sub2">Enter or Space — the equilibrium for this decision, solved now</span>`;
+    return od;
+  }
+  async function doSolve() {
+    const btn = $("sa-solve");
+    if (solveBusy || btn.disabled || btn.style.display === "none") return;
+    solveBusy = true; btn.disabled = true;
+    let r;
+    try { r = await (await fetch("/panel/solve", { method: "POST" })).json(); } catch (e) { r = { ok: false, why: String(e) }; }
+    // the busy flag holds only until /state carries the request (or says why not): the poll redraws from there
+    setTimeout(() => { solveBusy = false; }, 1500);
+    const line = $("sa-ready");
+    if (!r.ok) { line.style.display = "block"; line.className = "bad"; line.textContent = `✕ not solved: ${r.why || "refused"}`; speak("solve refused"); solveBusy = false; }
+    else speak("solving");
+  }
+  $("sa-solve").onclick = doSolve;
 
   // THE CHAIN LINE (2026-09-25): the banner says when this answer's ranges were REBUILT (the recovery path ran), when
   // it cost EXTRA REQUESTS (a tree or node GTO Wizard had already served), or that there is NO ANSWER — the clean and
@@ -1344,7 +1384,8 @@
     // practice or fake table, so until the reader sees one it is greyed with
     // the reason rather than hidden (a hidden control reads as "not built")
     const row = $("sa-auto-row");
-    row.style.display = saOn ? "flex" : "none";
+    // an ON-DEMAND strategy never auto-executes (the wrapper refuses to arm it): no toggle to offer
+    row.style.display = saOn && !s.onDemand ? "flex" : "none";
     // A real-money table needs an explicit, expiring testing allowance. The
     // checkbox stays clickable there (the wrapper asks for the allowance when
     // it is ticked) but the row turns red and counts the budget down, so an
@@ -1514,8 +1555,9 @@
     if (MODE !== "game" || !(enter || space)) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
-    if (t && t.tagName === "BUTTON" && t.id !== "sa-pick") return;   // let other buttons keep their own key
+    if (t && t.tagName === "BUTTON" && t.id !== "sa-pick" && t.id !== "sa-solve") return;   // let other buttons keep their own key
     e.preventDefault();
+    if ($("sa-pick").style.display === "none" && $("sa-solve").style.display !== "none") { doSolve(); return; }
     execPick();
   });
   let autoPending = false;

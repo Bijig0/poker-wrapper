@@ -33,7 +33,7 @@ import { handState } from "./ignition/hand";
 import { fetchHandHistory, listHandHistory } from "./ignition/handHistory";
 import { tableState } from "./ignition/reader";
 import { recFrame, recLog, recordings, saveNote, setDebug } from "./ignition/recorder";
-import { act, executePick, raiseTo, setAuto } from "./relay";
+import { act, executePick, raiseTo, requestSolve, setAuto } from "./relay";
 import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
 import * as SESSION from "./session";
 import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
@@ -687,6 +687,11 @@ export function buildApp(): Hono {
     return json(200, res);
   });
   app.post("/act/pick", async () => json(200, await executePick("press")));
+  // THE SOLVE BUTTON (on-demand strategies, 2026-09-30): ask the API's poller for an answer to the decision on screen
+  app.post("/panel/solve", async () => {
+    const res = requestSolve(handState());
+    return json(res.ok ? 200 : 409, res);
+  });
   app.post("/study-auto", async (c) => {
     const b = await body(c, Body.studyAuto);
     const res = setAuto(truthy(b.auto), {

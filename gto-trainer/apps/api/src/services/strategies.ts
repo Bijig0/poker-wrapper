@@ -29,6 +29,9 @@ import { POOL_DIR, factoryFile } from "./repoPaths";
 /** THE 6-MAX RING STRATEGY'S ID — one constant: fastSolve's routing, the poller's local-preflop check and the coverage
  *  table all key on it, and a rename typed into one of five copies would silently switch the 6-max path off. */
 export const SIX_MAX_STRATEGY_ID = "ign200-ring-6max-equilibrium";
+/** THE COINPOKER RING-WITH-ANTES ON-DEMAND STRATEGY'S ID (2026-09-30) — fastSolve's routing, resolveHand's site gate
+ *  and the poller's on-demand gate key on it. */
+export const CP_RING_ANTE_STRATEGY_ID = "cp-ring-6max-ante-ondemand";
 
 const DATA = join(import.meta.dir, "..", "..", "data");
 const LIMP = POOL_DIR;   // the pool files (services/repoPaths.ts)
@@ -113,6 +116,11 @@ const PREFLOP: Record<string, PreflopLayer> = {
   // with two or three 3-bet sizes each. Routed by services/hrc2max.ts (depth, open, 3-bet).
   chartHuCp200: { id: "chart-hu-cp200", label: "GTO preflop (HRC CoinPoker NL200 heads-up charts, ante 0.2bb, 5% / cap 0.9bb)", short: "GTO pre HU",
     arrival: "chart", source: "hrc-hu", seats: 2, chartConfigs: ["grid-cp200hu"] },
+  // CoinPoker RING with antes (Brady, 2026-09-30): no charts at all. Every preflop answer is a GTO Wizard AI tree
+  // built from the table as dealt — its stacks, its blinds, its ante, the rake terms the CoinPoker server sends with
+  // the table (services/gtowAiPreflop.ts siteRakeOf) — solved when the panel's Solve button asks, never before.
+  gtowAiCpRing: { id: "gtow-ai-cp-ring", label: "GTO Wizard AI preflop, solved live from the table on demand (CoinPoker blinds, ante and rake as dealt)", short: "AI pre (on demand)",
+    arrival: "chart", source: "gtow-ai-preflop" },
 };
 const POSTFLOP: Record<string, PostflopLayer> = {
   // locked at the NL25 rake schedule (5%, cap 4bb) behind the NL25 Zone pool ranges
@@ -126,6 +134,7 @@ const OPPONENT: Record<string, OpponentLayer> = {
   gto: { id: "gto", label: "Equilibrium villains (chart ranges)", short: "GTO villains", source: "hrc-3max" },
   gto6max: { id: "gto", label: "Equilibrium villains (6-max chart ranges)", short: "GTO villains", source: "hrc-6max" },
   gtoHu: { id: "gto", label: "Equilibrium villain (heads-up chart ranges)", short: "GTO villain", source: "hrc-hu" },
+  gtoAi: { id: "gto", label: "Equilibrium villains (the live AI tree's ranges)", short: "GTO villains", source: "gtow-ai-preflop" },
 };
 
 // ---- catalogue ------------------------------------------------------------
@@ -134,9 +143,13 @@ export interface StrategyDef {
   matrixRow: string;   // id in strategy_matrix groups[].rows[]
   recommended?: boolean;
   /** the format this strategy is built for: ledger format id + the matrix rake column */
-  format: string; stake: "nl25" | "nl200";
+  format: string; stake: "nl25" | "nl100" | "nl200";
   /** wrapper formats.json ids the session may be declared in (practice tables always allowed) */
   formats: string[]; defaultFormat: string;
+  /** ON DEMAND (2026-09-30): nothing is solved until the panel's Solve button asks for the decision in front of hero,
+   *  there is no warm-up ahead of the turn, and auto-execute cannot arm — every press is the person's. The poller
+   *  (services/studyPoller.ts) and the wrapper (relay.setAuto) both key on this flag. */
+  onDemand?: boolean;
   /** TEST-STAKE formats (also listed in `formats`): a cheaper real table of the same shape the strategy
    *  may be declared at to exercise the reader / answers / relay. The answers are NOT re-solved for it —
    *  the session is tagged `test` and kept out of the strategy's evidence (see TEST_FORMATS). */
@@ -193,7 +206,20 @@ export const STRATEGIES: StrategyDef[] = [
     tagline: "Equilibrium only — our own CoinPoker NL200 heads-up HRC charts preflop (ante 0.2bb, 5% / cap 0.9bb, 20-150bb), GTO Wizard AI heads-up postflop conditioned on their ranges at the same ante and rake; heads-up tables only, no pool model",
     preflop: "chartHuCp200", postflop: "gto", opponent: "gtoHu", matrixRow: "eq_eq_hu_cp200",
     format: "cp-hu-nl200", stake: "nl200", formats: ["cp-hu-NL200"], defaultFormat: "cp-hu-NL200" },
+  // CoinPoker 6-max RING with antes, ON DEMAND (Brady, 2026-09-30): "an on demand, non auto executing strategy, that
+  // whenever an equilibrium answer needs to be found, it will perform the solve live" from a Solve button on the
+  // panel. No charts exist for this game, so every answer is a GTO Wizard AI solve of the table as dealt: preflop a
+  // custom tree with the table's stacks, blinds, ante and rake; postflop the AI chain conditioned on that tree's
+  // ranges, the antes in the pot. Nothing is asked of GTO Wizard until Solve is pressed.
+  { id: CP_RING_ANTE_STRATEGY_ID, name: "CoinPoker Ring 6-max Ante Equilibrium (On Demand)",
+    tagline: "Equilibrium on demand — press Solve and GTO Wizard AI solves the spot live from the table as dealt (stacks, blinds, ante and the table's own rake), preflop and postflop; nothing is solved unasked and nothing auto-executes",
+    preflop: "gtowAiCpRing", postflop: "gto", opponent: "gtoAi", matrixRow: "eq_eq_cp_ring_ante",
+    format: "cp-ring-6max-ante", stake: "nl100", onDemand: true,
+    formats: ["cp-ring-NL10-6", "cp-ring-NL25-6", "cp-ring-NL50-6", "cp-ring-NL100-6"], defaultFormat: "cp-ring-NL50-6" },
 ];
+/** Is this strategy on demand (see StrategyDef.onDemand)? Unknown ids are not. */
+export const isOnDemandStrategy = (id: string | null | undefined): boolean =>
+  !!id && STRATEGIES.some((s) => s.id === id && s.onDemand);
 /** The full-exploit strategy: a hand that got any MES postflop answer proves both layers were live. */
 export const FULL_EXPLOIT_ID = "ign25-zone-3max-exploit";
 const LEGACY_IDS: Record<string, string> = Object.fromEntries(
@@ -380,6 +406,12 @@ export function evaluate(): StrategyView[] {
         "NO POOL MODEL: equilibrium end to end. The 6-handed pool measurement and the locked continuation charts are a later part of the same proposal, so nothing here exploits how the Ignition 6-max pool actually plays.");
       advisories.push(
         "RANGE SHORTCUT IN USE (2026-09-17): the HRC 6-max trees cap callers - two cold-callers after an open, one caller of a 3-bet, two limpers - so a third caller, a second caller of a 3-bet or a third limper has NO branch in any chart. Rather than re-solve the 100bb rung wider (~3 fleet-days, and HRC may refuse the bigger trees), the postflop range walk BORROWS that seat's calling range from the neighbouring node with one earlier caller folded. The borrowed range is somewhat too wide; pot, stacks and board stay exact. Every affected answer carries 'RANGE SHORTCUT' in its warning. What it buys is small: of 38 such misses in the fake-table test only 6 were heads-up at the flop (the rest were multiway, which the heads-up AI cannot solve anyway), so ~0.6% of postflop spots come back, plus correct preflop range context for a future multiway solver. Hero's own third-call decisions (0.08% of preflop decisions) still have no chart answer. Exact fix = wider trees (genSixMaxPlan flats [0,3,2,1] / [3,3,2,1]); pilot D100_o2_5 first.");
+    }
+    if (s.onDemand) {
+      advisories.push(
+        "ON DEMAND: nothing is solved until you press Solve on the panel for the decision in front of you, and nothing auto-executes. Each Solve is a fresh GTO Wizard AI solve of the table as dealt: preflop one custom tree (about 3-5 s cold), postflop the flop, turn and river trees walked from that tree's ranges (a cold river is about 10 s). A second Solve later in the same hand reuses the trees already solved.");
+      advisories.push(
+        "NO CHARTS, NO POOL MODEL: every answer is the AI's equilibrium for the exact stacks, blinds, ante and rake the CoinPoker server sends with the table. Three or more players preflop and three-way flops need the Ultra account; GTO Wizard caps a preflop tree at one non-SB limper and one cold-caller, so lines past that are answered heads-up against the last aggressor and say so; four-way flops are collapsed to three.");
     }
     return { ...s, preflopLayer: pre, postflopLayer: post, opponentLayer: opp, status, reasons, preconditions: pc, advisories };
   });

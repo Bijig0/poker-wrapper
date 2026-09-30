@@ -565,7 +565,11 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
   Object.assign(S.topupKpi, { hand: null, hands: 0, short: 0, worstBb: 0.0 });
   S.topupPanel.open = false;
   S.topupAbort = false;
-  st.autoDeclared = !!cfg.autoExecute;
+  // ON DEMAND (2026-09-30): the strategy says so (the API's catalogue, carried on the preset's config); it answers only
+  // when Solve is pressed and never auto-executes, whatever else the config declares
+  st.onDemand = !!cfg.onDemand;
+  st.solveRequest = null;
+  st.autoDeclared = !!cfg.autoExecute && !st.onDemand;
   st.autoDeclaredReal = !!cfg.autoRealMoney;
   st.autoDeclaredBudget = { ...(cfg.autoBudget || { minutes: 30, hands: 50 }) };
   if (st.autoDeclared) {

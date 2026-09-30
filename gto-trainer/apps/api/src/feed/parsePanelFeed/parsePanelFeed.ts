@@ -109,6 +109,11 @@ export interface ParsedHand {
   /** Whose betting line `actions` is (wrapper CONTRACT §1c): the WebSocket's own ("ws", amounts exact to the cent) or the
    *  level reconciler's off the chips on screen ("reconciled", amounts to the 0.1bb the screen shows). */
   lineSource?: "ws" | "reconciled";
+  /** THE TABLE'S OWN RAKE TERMS, when the site sends them (CoinPoker: roomProperties rake / rakeHeadsUp / rakeCap /
+   *  isPotRakePf on every table, 2026-09-30). `capBb` is the cap in big blinds (the server's cap is table currency);
+   *  `preflopPots` = the site rakes a pot that ends preflop (CoinPoker does; Ignition is no flop no drop). Absent =
+   *  the strategy's own rake model applies. Read by gtowAiPreflop.siteRakeOf and the postflop chain's rake. */
+  siteRake?: { pct: number; pctHeadsUp: number | null; capBb: number | null; preflopPots: boolean };
   result?: { text: string };
   currentNode: ParsedNode;
   ended: boolean;

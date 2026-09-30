@@ -10,7 +10,7 @@ import type { Database } from "bun:sqlite";
 import { openStore, pollerEventsPath } from "./storePaths";
 import { ensureEventTables, pollerEventRow } from "../../../../packages/data-root/eventTables";
 import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
-import { SIX_MAX_STRATEGY_ID } from "./strategies";
+import { SIX_MAX_STRATEGY_ID, isOnDemandStrategy } from "./strategies";
 import { apiUrl } from "./ports";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
@@ -119,6 +119,9 @@ interface IngestLikeResponse {
   /** the session's declared strategy (services/strategies.ts id) — what decides
    *  which preflop piece answers, forwarded by /api/ingest from the wrapper */
   strategyId?: string | null;
+  /** THE PANEL'S SOLVE PRESS (2026-09-30, on-demand strategies): present only while it belongs to the decision on
+   *  screen — the wrapper drops it the moment the hand, the street or the line moves on. `at` tells two presses apart. */
+  solveRequest?: { at?: number } | null;
   navigation?: {
     ok?: boolean;
     /** True when the failure is the SPOT being off-tree/unsolvable — a fact
@@ -274,6 +277,9 @@ class StudyPoller {
   // looks like GTO Wizard being stuck re-navigating in a loop and never
   // settling. Same idea as the dashboard's own spotKey/lastNavKey guard.
   private lastSolvedKey: string | null = null;
+  /** ON DEMAND: the Solve press (its `at`) whose solve has already been started — a failed solve waits for the next
+   *  press instead of re-solving every tick */
+  private onDemandStarted: number | null = null;
   // Wedge detection: GTO Wizard can stay CDP-connected (debug port answers
   // fine) while its own navigation is stuck rejecting every new URL with the
   // same stale error — confirmed manually. isConnected() alone can't see
@@ -453,6 +459,34 @@ class StudyPoller {
         this.buttonsUpSince = null;
       }
 
+      // ON DEMAND (2026-09-30, the CoinPoker ring strategy): NOTHING IS SOLVED UNASKED. The panel's Solve button puts a
+      // request on the wrapper's /state for the decision on screen; without one the poller does not touch GTO Wizard —
+      // no solve, no GTO Wizard launch, no "no answer" rows for decisions nobody asked about. An answer already given
+      // for this decision is kept alive (the panel expires answers 3 s after the last push). A press whose solve
+      // already ran and gave nothing is not retried every tick: pressing Solve again is the retry.
+      if (isOnDemandStrategy(probe.strategyId)) {
+        const onTurn = probe.ok === true && probe.hero?.toAct === true && probe.hand?.street != null;
+        if (!onTurn) {
+          this.notePollState(`waiting (on demand): ${probe.hand?.street == null ? "no hand" : "not hero's turn"}`, { street: probe.hand?.street ?? null });
+          this.lastSolvedKey = null;
+          await this.push(null);
+          return;
+        }
+        const k = decisionKey(probe);
+        const reqAt = probe.solveRequest ? Number(probe.solveRequest.at) || 0 : null;
+        if (!(k === this.lastSolvedKey && this.status.lastAnswer)) {
+          if (reqAt == null) {
+            this.notePollState("waiting (on demand): press Solve on the panel", { street: probe.hand?.street ?? null });
+            await this.push(null);
+            return;
+          }
+          if (reqAt === this.onDemandStarted && !this.nav) {
+            this.notePollState("waiting (on demand): this Solve press found no answer — press Solve again to retry", { street: probe.hand?.street ?? null });
+            return;
+          }
+        }
+      }
+
       // Study Answers is on — make sure GTO Wizard is actually up. Launching
       // takes up to ~30s, so this is fire-and-forget (never blocks the tick
       // loop) with a cooldown so we don't relaunch every single tick while
@@ -550,7 +584,8 @@ class StudyPoller {
         return;
       }
       this.nav = { key, at: Date.now() };
-      pollerEvent({ url: this.config.assistiveUrl, ev: "solve started", key });
+      if (isOnDemandStrategy(probe.strategyId)) this.onDemandStarted = probe.solveRequest ? Number(probe.solveRequest.at) || 0 : null;
+      pollerEvent({ url: this.config.assistiveUrl, ev: "solve started", key, ...(isOnDemandStrategy(probe.strategyId) ? { onDemand: true } : {}) });
       void this.solveSpot(key, probe).finally(() => {
         this.nav = null;
       });

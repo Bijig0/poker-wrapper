@@ -78,6 +78,28 @@ export interface AiPreflopShape {
   /** dead money in the pot before the first action (bb) — chips of players the LAST RESORT folded out */
   deadBb: number;
   heroApiPos: string | null;
+  /** THE ANTE, per player in bb (2026-09-30, CoinPoker ring): present only on a table that posts one. The stacks above
+   *  are the stacks AS DEALT, before the ante — GTO Wizard takes the ante out of them itself (ante_distribution_method
+   *  PER_PLAYER). Absent on Ignition, so its trees and their keys are exactly what they were. */
+  anteBb?: number;
+  /** THE TABLE'S OWN RAKE (siteRakeOf), when the site sends its terms; absent = Ignition's 5% / rakeCapBb, no flop no drop */
+  siteRake?: SiteRake;
+}
+
+/** A tree's rake when the site states its own terms: percent, cap in bb, and whether a pot that ends preflop pays. */
+export interface SiteRake { pct: number; capBb: number; preflopType: "full" | "no_flop_no_drop"; capKnown: boolean }
+
+/**
+ * The rake a tree for this hand is solved at when the hand carries its SITE's terms (ParsedHand.siteRake — CoinPoker
+ * sends them with every table), else null and the caller keeps Ignition's model. `dealtN`: the players dealt in —
+ * CoinPoker states a separate heads-up percentage. A cap the site did not state is modelled as none (1000bb), and
+ * `capKnown` says so for the answer's note.
+ */
+export function siteRakeOf(hand: Pick<ParsedHand, "siteRake">, dealtN: number): SiteRake | null {
+  const r = hand.siteRake;
+  if (!r) return null;
+  const pct = dealtN === 2 && r.pctHeadsUp != null ? r.pctHeadsUp : r.pct;
+  return { pct, capBb: r.capBb ?? 1000, preflopType: r.preflopPots ? "full" : "no_flop_no_drop", capKnown: r.capBb != null };
 }
 
 export interface AiPreflopResult {
@@ -178,8 +200,13 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   if (deadSb) stacks.SB = DEAD_SB_GHOST;
   // the cap is by players DEALT — the ghost was not dealt in
   // the LAST RESORT reduces the field to two seats but the table still dealt six: the cap follows the table
-  const rakeCapBb = Math.round((rakeCapCents(rakeSeats ?? (n - (deadSb ? 1 : 0))) / bbCents) * 100) / 100;
-  return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null };
+  const dealtN = rakeSeats ?? (n - (deadSb ? 1 : 0));
+  const rakeCapBb = Math.round((rakeCapCents(dealtN) / bbCents) * 100) / 100;
+  // the ANTE and the SITE'S RAKE ride on the shape only when the table has them (CoinPoker ring, 2026-09-30)
+  const anteBb = hand.anteBb != null && hand.anteBb > 0 ? Math.round(hand.anteBb * 1000) / 1000 : 0;
+  const siteRake = siteRakeOf(hand, dealtN);
+  return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null,
+    ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}) };
 }
 
 /**
@@ -273,7 +300,7 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
       bet_sizes: s.opens, raise_sizes: s.three, second_raise_sizes: s.four, third_plus_raise_sizes: s.five };
   };
   return {
-    starting_street: "PREFLOP", pot: shape.deadBb, ante: null, ante_distribution_method: "PER_PLAYER",
+    starting_street: "PREFLOP", pot: shape.deadBb, ante: shape.anteBb || null, ante_distribution_method: "PER_PLAYER",
     max_allowed_limps: shape.n >= 3 ? 2 : null,
     bet_sizes: { allin_threshold: 60, allin_if_less_than: 500, merge_sizes_threshold: 10, max_num_raises: 5,
       street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: shape.positions.map(sizes) }] },
@@ -283,13 +310,17 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
       range: null, stack: shape.stacks[p] ?? 100, tournament_instant_bounty: null, tournament_total_bounty: null,
     })),
     tree_operations: [], resolving_policy: null,
-    rake: { pct_of_pot: 5, cap_in_chips: shape.rakeCapBb, preflop_rake_type: "no_flop_no_drop" },
+    rake: shape.siteRake
+      ? { pct_of_pot: shape.siteRake.pct, cap_in_chips: shape.siteRake.capBb, preflop_rake_type: shape.siteRake.preflopType }
+      : { pct_of_pot: 5, cap_in_chips: shape.rakeCapBb, preflop_rake_type: "no_flop_no_drop" },
     tournament_data: null,
   };
 }
 
 export const treeKeyOf = (shape: AiPreflopShape, m: ReturnType<typeof menus>) =>
-  JSON.stringify([shape.positions, shape.positions.map((p) => shape.stacks[p]), shape.sb, shape.bb, shape.straddle, shape.rakeCapBb, shape.heroApiPos, m, shape.deadBb || 0]);
+  JSON.stringify([shape.positions, shape.positions.map((p) => shape.stacks[p]), shape.sb, shape.bb, shape.straddle, shape.rakeCapBb, shape.heroApiPos, m, shape.deadBb || 0,
+    // a table with an ante or its own rake is a different tree; one with neither keys exactly as before
+    ...(shape.anteBb || shape.siteRake ? [shape.anteBb ?? 0, shape.siteRake ?? null] : [])]);
 
 const solutions = new Map<string, Promise<{ solId: string } | { error: string }>>();
 const nodes = new Map<string, any>();

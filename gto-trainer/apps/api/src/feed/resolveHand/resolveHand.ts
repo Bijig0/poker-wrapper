@@ -9,6 +9,27 @@ import { normalizeHand } from "../normalizeHand/normalizeHand";
 import { withStartStacks } from "../../utils/archivedHand/archivedHand";
 import { StateReply } from "../../../../wrapper/src/contract";
 import { panelUrl } from "../../services/ports";
+import { CP_RING_ANTE_STRATEGY_ID } from "../../services/strategies";
+
+/** The CoinPoker strategies — each answers CoinPoker at its own ante and rake; no other strategy may (the Ignition
+ *  pieces are a different rake and structure). */
+const COINPOKER_STRATEGIES = new Set(["cp200-hu-equilibrium", CP_RING_ANTE_STRATEGY_ID]);
+
+/** THE PANEL'S SOLVE REQUEST (2026-09-30, the on-demand strategy): which decision hero pressed Solve on — the hand,
+ *  the street and how many actions the line had — as the wrapper's /state carries it (omitted when there is none). */
+export interface SolveRequest { handId: number | string | null; clientHandId: string | null; street: string | null; n: number; at: number }
+export function solveRequestOf(raw: unknown): SolveRequest | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const n = Number(r.n);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return {
+    handId: typeof r.handId === "number" || typeof r.handId === "string" ? r.handId : null,
+    clientHandId: typeof r.clientHandId === "string" && r.clientHandId ? r.clientHandId : null,
+    street: typeof r.street === "string" && r.street ? r.street : null,
+    n, at: Number(r.at) || 0,
+  };
+}
 
 /**
  * Resolve a hand from one of the four accepted sources — a Hand-shaped JSON
@@ -45,6 +66,8 @@ export interface ResolvedHand {
    *  which betting line the export carries and whether it can be trusted. Live source
    *  only; absent for pasted/authored hands. */
   liveExtras?: LiveExtras;
+  /** the panel's Solve request, live source only (see SolveRequest) */
+  solveRequest?: SolveRequest | null;
 }
 
 export interface LiveExtras {
@@ -171,6 +194,9 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
       studyAnswers?: boolean;
       sessionId?: string | null;
       session?: { strategy?: string | null } | null;
+      /** CoinPoker: the attached table, carrying the server's rake terms (sites/coinpoker.ts table()) */
+      table?: { rake?: unknown } | null;
+      solveRequest?: unknown;
     };
     // EIP-14 (2026-09-23): the LIGHT path. The wrapper's plain /state runs its deep DOM
     // eval (_EXTRACT_DEEP_JS, every text node of every frame) plus a CDP target listing on
@@ -200,8 +226,11 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     // wrong game. Remove when a CoinPoker strategy exists.
     // 2026-09-22: the CoinPoker 200NL Heads-Up strategy answers CoinPoker (fastSolve CP_HU_STRATEGY, its own
     // charts at its own ante and rake); any OTHER strategy on a CoinPoker table is still the wrong game.
-    if ((state as { site?: string }).site === "coinpoker" && state.session?.strategy !== "cp200-hu-equilibrium") {
-      return { ok: false, status: 409, error: "CoinPoker table: only the CoinPoker 200NL Heads-Up strategy answers CoinPoker (the Ignition charts are a different rake and structure)." };
+    // 2026-09-30: …and the CoinPoker ring-with-antes on-demand strategy (fastSolve CP_RING_STRATEGY: AI trees built from
+    // the table as dealt, at the rake terms the CoinPoker server sends with it).
+    const isCoinPoker = (state as { site?: string }).site === "coinpoker";
+    if (isCoinPoker && !COINPOKER_STRATEGIES.has(state.session?.strategy ?? "")) {
+      return { ok: false, status: 409, error: "CoinPoker table: only the CoinPoker strategies (200NL Heads-Up, Ring 6-max Ante on demand) answer CoinPoker (the Ignition charts are a different rake and structure)." };
     }
     // 2026-09-28: the ClubGG site is a screen READER only (7-max, bomb pots, run-it-multiple, club rake — no strategy
     // is built for it, and its line is rebuilt from the screen). Nothing answers a ClubGG hand yet.
@@ -213,17 +242,22 @@ export async function resolveHand(body: ResolveBody): Promise<ResolvedHand | Res
     sessionId = state.sessionId ?? null;
     strategyId = state.session?.strategy ?? null;
     heroSittingOut = !!state.snapshot?.seats?.find((s) => s.hero)?.sittingOut;
+    const solveRequest = solveRequestOf(state.solveRequest);
     if (state.hand != null) {
       try {
-        const normalized = normalizeHand(state.hand);
+        // CoinPoker's rake terms live on the TABLE, not the hand: carry them onto the live hand (an archived hand has
+        // its own copy, `rake`) so the solve rakes the way this table does (normalizeHand.siteRakeOf)
+        const rawHand = isCoinPoker && state.table?.rake != null && (state.hand as { rake?: unknown }).rake == null
+          ? { ...state.hand, rake: state.table.rake } : state.hand;
+        const normalized = normalizeHand(rawHand);
         // the seats the table's own account covers read their money from it, not the screen (utils/archivedHand)
         return { ok: true, hand: withStartStacks(normalized.hand), source: "live", warnings: [...normalized.warnings, ...contractWarnings], tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId,
-                 liveExtras: liveExtrasOf(state.hand) };
+                 liveExtras: liveExtrasOf(state.hand), solveRequest };
       } catch (e) {
         return { ok: false, status: 502, error: `Live hand not understood: ${e instanceof Error ? e.message : String(e)}` };
       }
     }
-    return { ok: true, hand: null, source: "live", warnings: contractWarnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId };
+    return { ok: true, hand: null, source: "live", warnings: contractWarnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, solveRequest };
   }
 
   if (body.rows || body.text) {

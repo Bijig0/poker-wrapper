@@ -111,10 +111,16 @@ export const deps = {
 
 export const fetchRegistry = (timeoutS = 6.0) => deps.fetchRegistry(timeoutS);
 
-export const CHART_CHECKS: Record<string, string> = { "hrc-6max": "hrc6max" };
+export const CHART_CHECKS: Record<string, string | null> = {
+  "hrc-6max": "hrc6max",
+  // a preflop piece that is GTO Wizard AI alone (the CoinPoker ring on-demand strategy, 2026-09-30) reads no chart:
+  // the chart server is not its requirement, and its being down must not block the session
+  "gtow-ai-preflop": null,
+};
 
-export function chartCheck(preflopLayer: any): string {
-  return CHART_CHECKS[(preflopLayer || {}).source || ""] ?? "hrc";
+export function chartCheck(preflopLayer: any): string | null {
+  const src = (preflopLayer || {}).source || "";
+  return src in CHART_CHECKS ? CHART_CHECKS[src]! : "hrc";
 }
 
 /** One session mode per whole-hand strategy: its config IS the strategy. */
@@ -123,7 +129,8 @@ export function strategyPreset(s: any): any {
   const exploit = pre === "exploit";
   const mes = post === "mes";
   const layers = [s.preflopLayer || {}, s.postflopLayer || {}, s.opponentLayer || {}];
-  const requires = ["api", chartCheck(layers[0]), ...(exploit ? ["exploit"] : []), ...(mes ? ["mes"] : []), "gtow"];
+  const chk = chartCheck(layers[0]);
+  const requires = ["api", ...(chk ? [chk] : []), ...(exploit ? ["exploit"] : []), ...(mes ? ["mes"] : []), "gtow"];
   const fb = FORMAT_FALLBACK[s.id];
   return {
     label: s.name || s.id,
@@ -147,11 +154,16 @@ export function strategyPreset(s: any): any {
       autoTopUp: true,
       strategy: s.id, strategyName: s.name ?? null,
       format: s.defaultFormat ?? null, buyinBb: 100, waitForBb: true, profile: null, tables: 1,
+      // an ON-DEMAND strategy (the API's catalogue, 2026-09-30) answers only when Solve is pressed and never
+      // auto-executes — carried on the config so the session applies it (session.applySessionConfig)
+      ...(s.onDemand ? { onDemand: true } : {}),
     },
+    ...(s.onDemand ? { onDemand: true } : {}),
     formats: s.formats !== null && s.formats !== undefined ? s.formats : fb ? fb.formats : null,
     defaultFormat: s.defaultFormat || (fb ? fb.default : null) || "ign-zone-NL25",
     formatCoverage: s.formatCoverage ?? null,
     requires,
+    ...(chk === null ? { chartFree: true } : {}),
     sites: truthy(s.sites) ? s.sites
       : [...new Set(((truthy(s.formats) ? s.formats : ["ign-"]) as unknown[]).map((f) => (String(f).startsWith("cp-") ? "coinpoker" : String(f).startsWith("cgg-") ? "clubgg" : "ignition")))].sort(),
   };
@@ -275,14 +287,15 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
 
 /** What the DECLARED config needs, not just the preset. */
 export async function requirementsFor(preset: string, config: any): Promise<string[]> {
-  const req: string[] = [...(await presets())[preset].requires];
+  const pre = (await presets())[preset];
+  const req: string[] = [...pre.requires];
   if (truthy(config.answers)) {
     if (!req.includes("api")) req.push("api");
     const src = config.sources || {};
     if (truthy(src.exploitPreflop) && !req.includes("exploit")) req.push("exploit");
     if (truthy(src.mesPostflop) && !req.includes("mes")) req.push("mes");
     if (truthy(src.aiChain) && !req.includes("gtow")) req.push("gtow");
-    if (!["hrc", "hrc6max"].some((k) => req.includes(k))) req.push("hrc");
+    if (!pre.chartFree && !["hrc", "hrc6max"].some((k) => req.includes(k))) req.push("hrc");
   } else {
     for (const k of ["exploit", "mes", "gtow", "hrc", "hrc6max"]) {
       const i = req.indexOf(k);
