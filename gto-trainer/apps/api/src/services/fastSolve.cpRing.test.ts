@@ -254,6 +254,7 @@ describe("the arrival warm-up and the parallel prefix walk (2026-10-01)", () => 
     cold();
     const w = warmArrivalCpRing(flopHand(), "BTN", CP_RING_STRATEGY);
     expect(w).not.toBeNull();
+    expect(warmArrivalCpRing(flopHand(), "BTN", CP_RING_STRATEGY)).toBeNull();   // the next tick, mid-walk: nothing started
     await w;
     expect(preTrees.length).toBe(1);
     expect(postTrees.size).toBe(0);

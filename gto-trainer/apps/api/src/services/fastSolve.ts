@@ -3048,7 +3048,7 @@ export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strat
  */
 /** per hand: attempts so far, and whether one succeeded (a tick that found no spot yet — the capture mid-update — is
  *  tried again on the next tick, at most WARM_ARRIVAL_TRIES times; a done hand is never re-walked) */
-const warmedArrivals = new Map<string, { tries: number; done: boolean }>();
+const warmedArrivals = new Map<string, { tries: number; done: boolean; running: boolean }>();
 const WARM_ARRIVAL_TRIES = 3;
 export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): Promise<void> | null {
   if (strategyId !== CP_RING_STRATEGY) return null;
@@ -3058,9 +3058,12 @@ export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, stra
   const id = hand.clientHandId ?? hand.handId;
   if (id == null) return null;
   const key = String(id);
-  const state = warmedArrivals.get(key) ?? { tries: 0, done: false };
-  if (state.done || state.tries >= WARM_ARRIVAL_TRIES) return null;
+  const state = warmedArrivals.get(key) ?? { tries: 0, done: false, running: false };
+  // one try at a time: the ingest ticks every second and a cold walk takes 2-3 s (hand 145768300152 logged three
+  // "ready" lines — the later ticks joined the walk in flight, so no request was spent twice, but none should start)
+  if (state.done || state.running || state.tries >= WARM_ARRIVAL_TRIES) return null;
   state.tries++;
+  state.running = true;
   warmedArrivals.delete(key);
   warmedArrivals.set(key, state);
   if (warmedArrivals.size > 60) { const first = warmedArrivals.keys().next().value; if (first !== undefined) warmedArrivals.delete(first); }
@@ -3078,10 +3081,11 @@ export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, stra
   });
   return asLive(run).then(({ value, scope }) => {
     handFacts.addRequests(key, scope.origin, scope.counts);
+    state.running = false;
     if (value.ok) state.done = true;
     console.log(`[warm-cpring] hand ${key} at the ${street}: ${value.text} in ${Date.now() - t0} ms — no ${street} tree opened (on demand)` +
       (value.ok || state.tries >= WARM_ARRIVAL_TRIES ? "" : " — will try again on the next tick"));
-  }).catch((e) => { console.log(`[warm-cpring] hand ${key}: ${e instanceof Error ? e.message : e}`); });
+  }).catch((e) => { state.running = false; console.log(`[warm-cpring] hand ${key}: ${e instanceof Error ? e.message : e}`); });
 }
 /** Tests: forget which hands were warmed. */
 export function forgetArrivalWarms(): void { warmedArrivals.clear(); }
