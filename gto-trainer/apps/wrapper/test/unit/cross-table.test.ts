@@ -18,13 +18,13 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as cdp from "../../src/cdp";
-import { setFakeTime, time } from "../../src/clock";
+import { realTime, setFakeTime, time } from "../../src/clock";
 import { reloadConfig } from "../../src/config";
 import { js } from "../../src/js";
 import { pyJsonDumps } from "../../src/py";
 import { S, TupleSet, resetState, seams } from "../../src/state";
 import { archiveHand } from "../../src/archive";
-import { cardKey, cardName, forgetFrame, mySel, pinFrame, sameHole } from "../../src/ignition/dom";
+import { UNPINNED_ALARM_S, cardKey, cardName, forgetFrame, mySel, pinFrame, sameHole, unpinnedTableIssue } from "../../src/ignition/dom";
 import { TAP_DEAL_LAG_S, tapFrame, tapVerify, wsSeams } from "../../src/ignition/ws";
 import {
   act, executePick, holeCardsRefusal, keyCards, maybeFoldNoAnswer, maybeTakeTime, pickReady, pointIsMyTable, raiseTo,
@@ -127,6 +127,62 @@ test("2. a table is the client's TAG: closing one never moves another wrapper on
   eq("  ... and there is no second table", one.frame()({ ord: 1, me: 2 }), null);
   eq("formats binds the same resolver file as dom.ts", F.slotted("__FRAME__", null).includes(js("launch.FRAME_JS")), true);
   expect(fails).toEqual([]);
+});
+
+test("2. the first table seated at tag 1: table 2 takes the free tag 0, never table 1's (session_20260930_140729)", () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  // 14:08 — the leader seats its table; the client puts it in its SECOND place (tag 1), table 1 reads and pins it
+  const page = new Page([["lobby", "-1"], ["first", "1"]]);
+  eq("table 1's first read: the only table", page.frame()({ ord: 0, me: 1 }), "first");
+  eq("table 2 before its table is open: nothing (never the leader's)", page.frame()({ ord: 1, me: 2 }), null);
+  // the second table seated gets tag 0 (A4o was dealt there)
+  page.tables.push(["second", "0"]);
+  page.now += 2_000;
+  eq("table 1 keeps its tag", page.frame()({ tag: "1", ord: 0, me: 1 }), "first");
+  eq("table 2: its place (tag 1) is table 1's, so the free tag 0", page.frame()({ ord: 1, me: 2 }), "second");
+  eq("  ... claimed at once", J(page.window.__pwFramePins["0"].slot), "2");
+  eq("  ... and table 1 still gets its own", page.frame()({ tag: "1", ord: 0, me: 1 }), "first");
+  // four tables, the order scrambled the same way: each wrapper still ends on a table of its own
+  const p4 = new Page([["lobby", "-1"], ["a", "2"]]);
+  const got: Record<number, string | null> = { 1: p4.frame()({ ord: 0, me: 1 }) };
+  p4.tables.push(["b", "0"], ["c", "3"], ["d", "1"]);
+  p4.now += 1_000;
+  for (const s of [3, 2, 4]) got[s] = p4.frame()({ ord: s - 1, me: s });
+  eq("four tables, table 1 on tag 2: every wrapper a different table", new Set(Object.values(got)).size, 4);
+  eq("  ... none of them nothing", Object.values(got).includes(null), false);
+  // a table another wrapper read lately is never taken, even as the fallback
+  const busy = new Page([["lobby", "-1"], ["x", "0"], ["y", "1"]]);
+  busy.window.__pwFramePins = { 0: { slot: 1, at: busy.now - 30_000 }, 1: { slot: 3, at: busy.now - 1_000 } };
+  eq("every table read by another wrapper within the minute: table 2 reads nothing", busy.frame()({ ord: 1, me: 2 }), null);
+  expect(fails).toEqual([]);
+});
+
+test("2. a table that cannot find its frame is a DOWN health issue after 30 s", () => {
+  const restore = saveEnv();
+  const sid0 = S.session.id;
+  try {
+    env(2, 2);
+    setFakeTime(T0);
+    forgetFrame();
+    S.session.id = "session_test";
+    S.frameHealth.tags = [0];
+    expect(unpinnedTableIssue()).toBeNull();            // not every table open yet: still seating
+    S.frameHealth.tags = [0, 1];
+    expect(unpinnedTableIssue()).toBeNull();            // just now
+    setFakeTime(T0 + UNPINNED_ALARM_S + 1);
+    const issue = unpinnedTableIssue();
+    expect(issue?.level).toBe("down");
+    expect(issue?.text).toContain("Table 2 cannot find its table");
+    pinFrame("0", true);
+    expect(unpinnedTableIssue()).toBeNull();            // pinned: fine
+  } finally {
+    S.session.id = sid0;
+    S.frameHealth.tags = null;
+    forgetFrame();
+    realTime();
+    restore();
+  }
 });
 
 test("2. the reader pins its table's tag, says when it goes, and a new table set lets it go", () => {

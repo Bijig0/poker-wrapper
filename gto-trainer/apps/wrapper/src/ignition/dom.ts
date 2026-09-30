@@ -83,6 +83,33 @@ export function pinFrame(tag: unknown, seated: boolean): "pinned" | "lost" | "ba
   return null;
 }
 
+/** How long a table may be unable to find its frame, every table of the set open in the client, before it is DOWN. */
+export const UNPINNED_ALARM_S = 30;
+let unpinnedSince: number | null = null;
+
+/**
+ * THE TABLE THAT CANNOT FIND ITS FRAME (2026-09-30, session_20260930_140729): table 2 pinned no tag for the whole
+ * session — the client showed both tables, but the resolver's pick was table 1's — so it read nothing, bound no socket,
+ * answered nothing, and hero timed out with A4o. The only trace was a feed line. A health issue (the panel's red
+ * banner) once every table of the set is open in the client and ours has still not pinned one for UNPINNED_ALARM_S.
+ */
+export function unpinnedTableIssue(): Record<string, any> | null {
+  const me = TABLES.slot();
+  const tags = S.frameHealth.tags;
+  const stuck = me !== null && !!S.session.id && framePin().tag === null && !!tags && tags.length >= TABLES.count();
+  if (!stuck) {
+    unpinnedSince = null;
+    return null;
+  }
+  if (unpinnedSince === null) unpinnedSince = time();
+  const forS = time() - unpinnedSince;
+  if (forS < UNPINNED_ALARM_S) return null;
+  return { level: "down", piece: "table",
+           text: `Table ${me} cannot find its table in the client — it reads nothing and there are NO ANSWERS on it`,
+           detail: `the client shows tables tagged ${tags!.join(", ")}; none has been free for table ${me} for ${Math.round(forS)} s`,
+           fix: "end the session and start it again; if it happens again, report the session id" };
+}
+
 /** Let go of the pinned tag (a new session, a new table count): the next read pins afresh. */
 export function forgetFrame(): void {
   Object.assign(S.frame, { tag: null, at: 0.0, lost: null });

@@ -29,7 +29,7 @@ import { SITE as CP_SITE, FORMATS as CP_FORMATS } from "./sites/coinpoker";
 import { SITE as CGG_SITE, FORMATS as CGG_FORMATS, Site as CggSite, dirBytes, label as cggLabel, recordingDir as cggRecordingDir } from "./sites/clubgg";
 import { archiveHand, sessionHands } from "./archive";
 import { setDebug } from "./ignition/recorder";
-import { forgetFrame, mySel, slotted } from "./ignition/dom";
+import { forgetFrame, mySel, slotted, unpinnedTableIssue } from "./ignition/dom";
 import { setAuto } from "./relay";
 import { applyLayout, chromeWindow, closeBrowser, killProfileWindows, leaderHwnd, otherArea, panelHwnd, targetArea } from "./windows";
 import { chartsUrl, livePort, port } from "../../api/src/services/ports";
@@ -1542,6 +1542,8 @@ export function standDown(why = "a new instance"): void {
 // ---- the big pieces, watched; a closed panel ends its session -------------------------------------------
 export async function healthCheck(): Promise<any[]> {
   const issues: any[] = [];
+  const lost = unpinnedTableIssue();
+  if (lost) issues.push(lost);
   const api = SES.API().replace(/\/+$/, "");
   if ((await fetchBytes(`${api}/api/dashboard/config`, 5)) === null) {
     issues.push({ level: "down", piece: "study-api", text: `The study API (:${port("api")}) is DOWN — there are no answers at all`,

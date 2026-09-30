@@ -32,9 +32,18 @@
       if (mine) return claim(mine);
       const n = SLOT.ord;
       if (!tagged.length) return n === 0 ? all[0] : undefined;
-      const f = [...tagged].sort((a, b) => Number(tagOf(a)) - Number(tagOf(b)))[n];
-      if (!f || (held(tagOf(f), 15000) && pins[tagOf(f)].slot !== SLOT.me)) return undefined;
-      return claim(f);
+      const inOrder = [...tagged].sort((a, b) => Number(tagOf(a)) - Number(tagOf(b)));
+      const f = inOrder[n];
+      if (!f) return undefined;
+      if (!(held(tagOf(f), 15000) && pins[tagOf(f)].slot !== SLOT.me)) return claim(f);
+      // OUR PLACE IN THE ORDER IS ANOTHER WRAPPER'S TABLE (2026-09-30,
+      // session_20260930_140729): the client put the first table seated at
+      // tag 1, table 1 read it, and table 2's place (the 2nd in tag order =
+      // tag 1) was never free -- it read nothing all session while tag 0, the
+      // table it was dealt A4o at, stood unread. The tables are all there
+      // (the Nth exists), so take the first in the order no wrapper has read
+      // within the minute; a table another wrapper read lately stays theirs.
+      return claim(inOrder.find(x => !held(tagOf(x), 60000)));
     }
     // BY ORDINAL (a bare number: another table named by its place in the
     // client's order). 2026-09-21: asking for `[data-multitableslot="0"]` took
