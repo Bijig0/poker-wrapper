@@ -149,6 +149,21 @@ const num = (n: number) => String(Math.round(n * 100) / 100);
 const putBb = (hand: ParsedHand, a: ParsedAction): number =>
   a.type === "post-sb" && isTestStakeOf("ign-ring-NL200-6", hand.bbCents) ? 0.5 : (a.amount ?? 0);
 
+/** Each seat's chips in the pot preflop: a post / raise / bet / all-in amount is the seat's total, a call adds its
+ *  amount (the same reading as utils/archivedHand.roundContributions). */
+function preflopPutIn(hand: ParsedHand): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const a of hand.actions) {
+    if (a.street !== "preflop") continue;
+    const amt = Number(a.amount ?? 0);
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    const seat = a.hero ? hand.heroSeatId : a.seatId;
+    if (a.type === "call") m.set(seat, (m.get(seat) ?? 0) + amt);
+    else if (a.type === "post-sb" || a.type === "post-bb" || a.type === "raise" || a.type === "bet" || a.type === "all-in") m.set(seat, Math.max(m.get(seat) ?? 0, amt));
+  }
+  return m;
+}
+
 /** Hero's position: an override, his blind post, or the positions map. */
 export function heroPosOf(hand: ParsedHand, heroPos: string | null): string | null {
   const post = hand.actions.find((a) => a.hero && (a.type === "post-sb" || a.type === "post-bb"));
@@ -204,6 +219,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   const sb = deadSb ? DEAD_SB_GHOST : (testStake ? 0.5 : (sbPost?.amount ?? 0.5)), bb = bbPost?.amount ?? 1;
   const stacks: Record<string, number> = {};
   const seatOf: Record<string, number> = {};
+  const putIn = preflopPutIn(hand);
   for (const p of ordered) {
     const seat = byPos.get(p)!;
     seatOf[apiOf[p]!] = seat;
@@ -211,7 +227,15 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
     // `committed` must not be added again on top of it, or a pinned postflop read double-counts this street's chips.
     const cur = dealt ? dealt[seat] : hand.stacks?.[seat];
     const committed = dealt ? 0 : (hand.committed?.[seat] ?? 0);
-    stacks[apiOf[p]!] = Math.min(999, Math.max(1, round5((cur != null ? cur + committed : 100))));
+    const exact = cur != null ? cur + committed : 100;
+    // A SEAT ALL IN HAS EXACTLY ITS STACK (2026-09-30, hand 4921657513). Stacks round to the half-blind so tables a
+    // few chips apart share one tree — but the CO's 12.2bb shove became a 12bb tree stack, whose only raise is the
+    // all-in R12, while the line built from the table says R12.2: more than his tree stack. GTO Wizard's validator
+    // refuses that as "Incorrect actions" (400 VALIDATION_ERROR, not NODE_DOES_NOT_EXIST), so the walk never got to
+    // snap it, the refusal read as a capture fault, and hero timed out on KJo facing the shove. A seat whose chips in
+    // are its whole stack keeps the exact figure, so the tree's all-in sits at the size the table showed.
+    const allIn = (putIn.get(seat) ?? 0) >= exact - 0.05;
+    stacks[apiOf[p]!] = Math.min(999, Math.max(1, allIn ? Math.round(exact * 100) / 100 : round5(exact)));
   }
   if (deadSb) stacks.SB = DEAD_SB_GHOST;
   // the cap is by players DEALT — the ghost was not dealt in
