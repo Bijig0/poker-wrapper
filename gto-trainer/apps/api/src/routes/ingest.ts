@@ -3,7 +3,7 @@ import { renderPanelRows, type PanelRow } from "../feed/parsePanelFeed/parsePane
 import { handToSpot, type SpotOptions } from "../feed/handToSpot/handToSpot";
 import { SOLUTION_SETS } from "../services/gtowCdp";
 import { resolveHand } from "../feed/resolveHand/resolveHand";
-import { warmPreflop6max, warmPostflop6max } from "../services/fastSolve";
+import { warmPreflop6max, warmPostflop6max, warmArrivalCpRing } from "../services/fastSolve";
 
 /**
  * Feed ingestion: turn a hand — the live one from the wrapper's /state, a panel-feed rows payload, the same lines
@@ -104,6 +104,9 @@ app.post("/", async (c) => {
     try { warmPreflop6max(hand, body.heroPos ?? hand.positions[hand.heroSeatId] ?? null, strategyId); } catch { /* never the ingest's problem */ }
     // and each postflop street's cloud tree the moment its card lands (fastSolve.warmPostflop6max)
     try { warmPostflop6max(hand, body.heroPos ?? hand.positions[hand.heroSeatId] ?? null, strategyId); } catch { /* ditto */ }
+    // the CoinPoker ring strategy (on demand): the flop-entering ranges — the preflop tree walked — the moment a postflop
+    // street lands with hero still in; never the street's own tree (fastSolve.warmArrivalCpRing)
+    try { void warmArrivalCpRing(hand, body.heroPos ?? hand.positions[hand.heroSeatId] ?? null, strategyId); } catch { /* ditto */ }
   }
 
   if (!hand) {

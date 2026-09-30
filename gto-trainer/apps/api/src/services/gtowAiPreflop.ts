@@ -522,14 +522,25 @@ const rememberTerminal = (k: string) => {
   if (terminals.size > 2000) terminals.delete(terminals.values().next().value as string);
 };
 
-export async function fetchNode(solId: string, line: string): Promise<{ data: any; cached: boolean; stored?: boolean } | { error: string }> {
+type NodeRead = { data: any; cached: boolean; stored?: boolean } | { error: string };
+export interface FetchNodeOpts {
+  /** ONE LOOK, NO WAITING (the prefix prefetch, 2026-10-01): a single request; a node the cloud has not solved yet, a
+   *  404, a network error come back as an error at once and record NOTHING (no terminal, no store) \— the walk that
+   *  follows reads for real. A stored tree this process has not materialised is left alone (a speculative read never
+   *  mints a solve). A refusal of the LINE (400/422) is a fact about the tree and is kept, as always. */
+  once?: boolean;
+}
+/** the one in-flight read per node, however many ask \— the prefetch and the walk share it (2026-10-01) */
+const pendingNodes = new Map<string, { p: Promise<NodeRead>; once: boolean }>();
+
+export async function fetchNode(solId: string, line: string, opts: FetchNodeOpts = {}): Promise<NodeRead> {
   const k = `${solId}|${line}`;
   const hit = nodes.get(k);
   if (hit) return { data: hit, cached: true };
   const terminalError = `line ends the hand at '${line || "root"}' — no decision node`;
   if (terminals.has(k)) return { error: terminalError };
   // THE PERSISTENT STORE, before any request (services/gtowSolveCache): the node as GTO Wizard sent it, or its verdict
-  // on the line — no decision node (a terminal), or its refusal (NODE_DOES_NOT_EXIST / VALIDATION_ERROR), which the
+  // on the line \— no decision node (a terminal), or its refusal (NODE_DOES_NOT_EXIST / VALIDATION_ERROR), which the
   // callers read exactly as they read a live one
   const ck = solveCache.enabled ? preKeyOfSol(solId) : null;
   const addr = nodeAddr({ preflop: line });
@@ -543,9 +554,39 @@ export async function fetchNode(solId: string, line: string): Promise<{ data: an
     if (s?.status === NO_NODE) { rememberTerminal(k); return { error: terminalError }; }
     if (s) return { error: `${-s.status}: ${(s.text ?? "").slice(0, 160)}` };
   }
+  // ONE REQUEST PER NODE, HOWEVER MANY ASK (2026-10-01, hand 145539300369: the flop's arrival walk read seven prefix
+  // nodes one after another, 0.6-1.6 s each \— 9.5 s before the flop tree was even asked for). The prefixes are now
+  // asked for together (prefetchPrefixes) and the walk that follows JOINS each read instead of sending its own; a
+  // speculative look that found nothing hands over to the real read.
+  const once = !!opts.once;
+  const pending = pendingNodes.get(k);
+  if (pending) {
+    const r = await pending.p;
+    if (!("error" in r) || once || !pending.once) return r;
+  }
+  const p = readNode(solId, k, line, addr, ck, terminalError, once);
+  pendingNodes.set(k, { p, once });
+  try { return await p; } finally { if (pendingNodes.get(k)?.p === p) pendingNodes.delete(k); }
+}
+
+/**
+ * THE PREFIX PREFETCH (2026-10-01): every node a line walk will read \— root, the first token's node, the first two's,
+ * \u2026 \— asked for at once, from the RAW tokens (a size the tree snaps lands the later addresses on nodes that do not
+ * exist; those single looks come back empty and the walk reads the snapped address itself). Fire and forget: the walk
+ * joins each in-flight read (fetchNode). Off with GTOW_PREFETCH=0, as the chain's prefetch is.
+ */
+export function prefetchPrefixes(solId: string, tokens: string[], max = 12): void {
+  if (process.env.GTOW_PREFETCH === "0") return;
+  const n = Math.min(tokens.length, max);
+  for (let k = 0; k < n; k++) void fetchNode(solId, tokens.slice(0, k).join("-"), { once: true }).catch(() => undefined);
+}
+
+/** The network half of fetchNode: poll one node until it is solved (or `once`: look once). */
+async function readNode(solId: string, k: string, line: string, addr: string, ck: string | null, terminalError: string, once: boolean): Promise<NodeRead> {
   // a stored tree with a node the store lacks: its solve is created now (once, however many ask), then polled
   let real = solId;
   if (isStoredSolId(solId)) {
+    if (once && !preRealOf.has(solId)) return { error: "stored tree not materialised \— a speculative read does not mint a solve" };
     const m = await materialisePre(solId);
     if ("error" in m) return m;
     real = m.solId;
@@ -561,7 +602,7 @@ export async function fetchNode(solId: string, line: string): Promise<{ data: an
     const params = new URLSearchParams({ custom_solution_id: real, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
     try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
-    catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
+    catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: last }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
     // THE SAME THREE RULES AS gtowApi's node poll (2026-09-25 audit): this copy re-polled an expired token for the whole
     // NODE_TIMEOUT_MS (a lost preflop answer), never told the pool about a wall it hit, and sat out a 429 quota wall
     if (r.status === 401 && !refreshed) {
@@ -581,6 +622,7 @@ export async function fetchNode(solId: string, line: string): Promise<{ data: an
         return { data: j, cached: false };
       }
       // a 200 with an object body and no action to offer: the spot is solved and nobody is on the clock
+      if (once) return { error: "not solved yet (one look)" };
       if (j != null && typeof j === "object" && ++emptyPolls >= TERMINAL_POLLS) {
         rememberTerminal(k);
         if (ck) solveCache.putNode(ck, addr, NO_NODE, null);
@@ -597,6 +639,7 @@ export async function fetchNode(solId: string, line: string): Promise<{ data: an
       if (owner) gtowSessions.noteFailure(owner, r.status, t.slice(0, 200), { preflop: true });   // the NEXT tree goes elsewhere
       if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: last };   // a quota wall will not lift while we wait
     }
+    if (once) return { error: r.status === 404 ? "no such node (one look)" : last };
     await new Promise((res) => setTimeout(res, POLL_MS));
   }
   return { error: last };
@@ -814,7 +857,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const codes = usedLine ? usedLine.split("-") : [];
   const handKey = preflopPinKey(hand);
   if (handKey) {
-    const warm = (async () => { for (let k = 0; k < codes.length; k++) await fetchNode(usedSol, codes.slice(0, k).join("-")); })().catch(() => undefined);
+    const warm = Promise.allSettled(codes.map((_, k) => fetchNode(usedSol, codes.slice(0, k).join("-")))).then(() => undefined);
     setPreflopPin({
       piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm,
       id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
@@ -1094,6 +1137,7 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   // path and the range looker both repair the line before reading it; this walk trusted the raw tokens and refused
   // hero's own open as "not an action at root" on every postflop street. A line the repair cannot walk keeps the
   // raw tokens so the per-seat fit below still sees the real refusal.
+  prefetchPrefixes(sol.solId, tokens);   // every prefix node asked for together; repairLine joins the reads (2026-10-01)
   const repaired = await repairLine(sol.solId, tokens);
   const codes = "error" in repaired ? tokens : repaired.line.split("-").filter(Boolean);
   const first = await walkArrivalRanges(shape, codes, get, maxPlayers);
@@ -1378,8 +1422,10 @@ export async function resumeAiPreflopRanges(
   hand: ParsedHand,
   heroPos: string | null,
   maxPlayers: SeatCap,
-  get: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }> = (line) => fetchNode(pin.solId, line),
+  get?: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }>,
 ): Promise<ResumeOutcome> {
+  const network = !get;
+  const read = get ?? ((line: string) => fetchNode(pin.solId, line));
   let walked = hand;
   if (pin.reduced) {
     const foldedPos = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => hand.positions[a.seatId]?.toUpperCase()).filter(Boolean));
@@ -1394,8 +1440,10 @@ export async function resumeAiPreflopRanges(
   const fit = pinRest(pin, tokensNow);
   if (!fit.ok) return fit;
   await pin.warm;   // the prefix pre-fetch, normally long done
+  // the nodes after hero's pinned decision, asked for together from the pinned codes + the raw rest (2026-10-01)
+  if (network) prefetchPrefixes(pin.solId, [...pin.codes, ...fit.rest]);
   let reads = 0;
-  const counted = async (line: string) => { const n = await get(line); if (!("error" in n) && !n.cached) reads++; return n; };
+  const counted = async (line: string) => { const n = await read(line); if (!("error" in n) && !n.cached) reads++; return n; };
   const repaired = await repairLineWith(tokensNow, counted);
   if ("error" in repaired) return { ok: false, why: `pinned AI tree ${pin.id}: ${repaired.error}` };
   const codes = repaired.line ? repaired.line.split("-") : [];

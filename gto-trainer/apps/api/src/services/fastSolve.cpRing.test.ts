@@ -17,7 +17,8 @@ import { gtowRequests } from "./gtowRequestLog";
 import { gtowSessions } from "./gtowSessions";
 import { StreetState, forgetCheckpoints } from "./aiChain";
 import { solveStore } from "./solveStore";
-import { fastSolve, forgetPreflopPin, forgetPostflopPin, CP_RING_STRATEGY } from "./fastSolve";
+import { fastSolve, forgetPreflopPin, forgetPostflopPin, warmArrivalCpRing, forgetArrivalWarms, CP_RING_STRATEGY } from "./fastSolve";
+import { fetchNode, resetAiPreflopMemory } from "./gtowAiPreflop";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { withStartStacks } from "../utils/archivedHand/archivedHand";
 
@@ -52,6 +53,9 @@ const PRE = [
 const preTrees: any[] = [];
 const postTrees = new Map<string, any>();
 let n = 0;
+/** the preflop node polls: how many, how many at once (the prefix prefetch reads them together), and whether the
+ *  address R9.9 exists yet (the speculative-look test) */
+const polls = { n: 0, inFlight: 0, max: 0, r99: false };
 const json = (x: unknown, status = 200) => new Response(JSON.stringify(x), { status, headers: { "content-type": "application/json" } });
 /** a preflop node: the seat to act in the first orbit, offered fold / call / one raise (2.5 unopened, else 3x) */
 function preflopNode(line: string) {
@@ -84,7 +88,14 @@ function install() {
   reqs.fetch = async (_s: unknown, kind: string, url: string, init?: RequestInit) => {
     if (kind === "tree") { preTrees.push(JSON.parse(String(init?.body))); return json({ id: `tree${++n}` }); }
     if (kind === "solution") return json({ id: `pre${++n}` });
-    if (kind === "poll") return json(preflopNode(new URL(url).searchParams.get("preflop_actions") ?? ""));
+    if (kind === "poll") {
+      const line = new URL(url).searchParams.get("preflop_actions") ?? "";
+      polls.n++; polls.inFlight++; polls.max = Math.max(polls.max, polls.inFlight);
+      await new Promise((r) => setTimeout(r, 15));
+      polls.inFlight--;
+      if (line.includes("R9.9") && !polls.r99) return json({ detail: "NODE_DOES_NOT_EXIST" }, 404);
+      return json(preflopNode(line));
+    }
     return json({ error: `unexpected ${kind}` }, 500);
   };
   api.peekSolution = () => null;
@@ -217,5 +228,85 @@ describe("the catalogue", () => {
     expect(isOnDemandStrategy(CP_RING_ANTE_STRATEGY_ID)).toBe(true);
     expect(isOnDemandStrategy("cp200-hu-equilibrium")).toBe(false);
     expect(isOnDemandStrategy("ign200-ring-6max-equilibrium")).toBe(false);
+  });
+});
+
+describe("the arrival warm-up and the parallel prefix walk (2026-10-01)", () => {
+  const savedPrefetch = process.env.GTOW_PREFETCH;
+  beforeAll(() => { process.env.GTOW_PREFETCH = "1"; });
+  afterAll(() => { process.env.GTOW_PREFETCH = savedPrefetch ?? "0"; });
+  const CLOSED = [...PRE,
+    { seatId: 4, hero: true, type: "call", street: "preflop", amount: 2.5 },
+    { seatId: 5, hero: false, type: "fold", street: "preflop" },
+    { seatId: 6, hero: false, type: "fold", street: "preflop" },
+  ];
+  /** the flop as the wrapper reports it: with no flop action yet the CO (out of position) is on the clock, not hero;
+   *  once the CO has acted, hero is */
+  const flopHand = (extra: any[] = []) => {
+    const r: any = raw({ street: "flop", board: ["Kc", "7d", "2s"], actions: [...CLOSED, ...extra], committed: {}, stacks: {} });
+    if (!extra.some((a) => a.street === "flop" && !a.hero)) r.currentNode = { ...r.currentNode, toActSeatId: 3, toActIsHero: false };
+    return withStartStacks(normalizeHand(r).hand);
+  };
+  const CHECK = { seatId: 3, hero: false, type: "check", street: "flop" };
+  const cold = () => { forget(); forgetArrivalWarms(); resetAiPreflopMemory(); preTrees.length = 0; postTrees.clear(); polls.n = 0; polls.max = 0; };
+
+  test("the flop lands: the preflop tree is built and walked, NO flop tree is opened, and hero's Solve finds the ranges ready", async () => {
+    cold();
+    const w = warmArrivalCpRing(flopHand(), "BTN", CP_RING_STRATEGY);
+    expect(w).not.toBeNull();
+    await w;
+    expect(preTrees.length).toBe(1);
+    expect(postTrees.size).toBe(0);
+    // F-F-R2.5-C-F-F: the root and one node per token before the last, six reads, asked for TOGETHER
+    expect(polls.n).toBe(6);
+    expect(polls.max).toBeGreaterThan(1);
+    const afterWarm = polls.n;
+    expect(warmArrivalCpRing(flopHand(), "BTN", CP_RING_STRATEGY)).toBeNull();   // once per hand
+    // hero's Solve, villain having checked: the ranges come from the memo (no preflop node re-read), one flop tree
+    const r: any = await fastSolve(flopHand([CHECK]), "BTN", { strategyId: CP_RING_STRATEGY, origin: "test" });
+    expect(r.ok).toBe(true);
+    expect(r.tier).toBe("ai-chain");
+    expect(String(r.rangeSource)).toMatch(/^gtow-ai/);
+    expect(polls.n).toBe(afterWarm);
+    expect(preTrees.length).toBe(1);
+    expect(postTrees.size).toBe(1);
+  });
+
+  test("a Solve that arrives while the warm-up is still walking joins it: one preflop tree, the node reads shared", async () => {
+    cold();
+    const w = warmArrivalCpRing(flopHand(), "BTN", CP_RING_STRATEGY);
+    const r: any = await fastSolve(flopHand([CHECK]), "BTN", { strategyId: CP_RING_STRATEGY, origin: "test" });
+    await w;
+    expect(r.ok).toBe(true);
+    expect(preTrees.length).toBe(1);
+    expect(polls.n).toBe(6);
+    expect(postTrees.size).toBe(1);
+  });
+
+  test("nothing is warmed for a hand hero folded, a preflop hand, or another strategy", () => {
+    forgetArrivalWarms();
+    expect(warmArrivalCpRing(flopHand([CHECK, { seatId: 4, hero: true, type: "fold", street: "flop" }]), "BTN", CP_RING_STRATEGY)).toBeNull();
+    const pre = withStartStacks(normalizeHand(raw({ street: "preflop", board: [], actions: PRE, committed: { 3: 2.5, 5: 0.5, 6: 1 }, stacks: {} })).hand);
+    expect(warmArrivalCpRing(pre, "BTN", CP_RING_STRATEGY)).toBeNull();
+    expect(warmArrivalCpRing(flopHand(), "BTN", "6max-ign200-equilibrium")).toBeNull();
+  });
+
+  test("a speculative look at a node the cloud does not have is ONE request and poisons nothing", async () => {
+    resetAiPreflopMemory(); polls.n = 0; polls.r99 = false;
+    const miss = await fetchNode("pre-spec", "R9.9", { once: true });
+    expect("error" in miss).toBe(true);
+    expect(polls.n).toBe(1);
+    polls.r99 = true;   // the cloud has it now: the real read finds it at once
+    const hit = await fetchNode("pre-spec", "R9.9");
+    expect("error" in hit).toBe(false);
+    expect(polls.n).toBe(2);
+  });
+
+  test("two reads of one node in flight share ONE request", async () => {
+    resetAiPreflopMemory(); polls.n = 0;
+    const [a, b] = await Promise.all([fetchNode("pre-join", "F-F"), fetchNode("pre-join", "F-F")]);
+    expect("error" in a).toBe(false);
+    expect("error" in b).toBe(false);
+    expect(polls.n).toBe(1);
   });
 });

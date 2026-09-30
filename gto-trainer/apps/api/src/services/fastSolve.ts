@@ -1101,6 +1101,8 @@ async function flopArrivalCompute(
 /** hand → its flop arrival, by the preflop inputs it was computed from (derived: dropping it costs a recompute). */
 const arrivalMemo = new Map<string, FlopArrival & { at: number; walks: RecordedRangeWalk[] }>();
 const ARRIVAL_MEMO_MAX = 400;
+/** the one compute per arrival key in flight — the warm-up at the flop deal and hero's Solve a moment later share it */
+const arrivalPending = new Map<string, Promise<{ value: Awaited<ReturnType<typeof flopArrivalCompute>>; walks: RecordedRangeWalk[] }>>();
 
 /** Everything the arrival pieces read: the preflop capture, hero, the pinned stacks, the preflop pin. */
 function arrivalKeyOf(hand: ParsedHand, heroPos: string | null, heroPosName: string, set: (typeof SOLUTION_SETS)[number], depth: number,
@@ -1128,7 +1130,21 @@ async function flopArrival(
     const { how: _h, first: _f, ...first } = hit.prov;
     return { ok: true, a: { ...hit, prov: { how: "hit", producer: hit.prov.producer, first: { how: hit.prov.first?.how ?? hit.prov.how, ...first } } } };
   }
-  const { value: r, walks } = await withRangeWalkCapture(() => flopArrivalCompute(hand, heroPos, heroPosName, set, depth, sixMax, huCp, pinnedDealt, cpRing));
+  // ONE WALK PER HAND, HOWEVER MANY ASK (2026-10-01): the arrival warm-up at the flop deal (warmArrivalCpRing) and
+  // hero's Solve a moment later join the same compute instead of each building and walking a preflop tree
+  const inFlight = key ? arrivalPending.get(key) : undefined;
+  if (inFlight) {
+    tmark("flop ranges: joining the walk in flight", "another ask (the warm-up at the flop deal, normally) is computing them now");
+    const { value: r, walks } = await inFlight;
+    if (r.ok) replayRangeWalks(walks);
+    return r;
+  }
+  const run = withRangeWalkCapture(() => flopArrivalCompute(hand, heroPos, heroPosName, set, depth, sixMax, huCp, pinnedDealt, cpRing));
+  if (key) {
+    arrivalPending.set(key, run);
+    run.finally(() => { if (arrivalPending.get(key) === run) arrivalPending.delete(key); }).catch(() => undefined);
+  }
+  const { value: r, walks } = await run;
   if (r.ok && key) {
     arrivalMemo.delete(key);
     arrivalMemo.set(key, { ...r.a, at: Date.now(), walks });
@@ -2228,13 +2244,19 @@ const SIX_MAX_SITE: PostflopSite = {
   },
 };
 
-async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts, site: PostflopSite): Promise<FastSolveResult> {
+/** What every postflop piece reads before it solves: the set, the capture repaired, the stacks pinned as dealt (the
+ *  FIRST postflop read of the hand pins them — pinPostflop), the depth. The arrival warm-up (warmArrivalCpRing) reads
+ *  the same, so the ranges it computes are the very ones hero's Solve looks up. */
+type PostflopSetup =
+  | { ok: true; heroPos: string | null; set: NonNullable<ReturnType<typeof resolveSet>>; fixed: ReturnType<typeof repairPostflopCapture>; pin: PostflopPin | null; depth: number }
+  | { ok: false; res: FastSolveResult };
+function postflopSetup(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts, site: PostflopSite): PostflopSetup {
   heroPos = heroPos ?? hand.positions[hand.heroSeatId] ?? null;
   const street = hand.currentNode.street;
   const gated = site.gate(hand);
-  if (gated) return { ok: false, street, reason: gated } as FastSolveResult;
+  if (gated) return { ok: false, res: { ok: false, street, reason: gated } as FastSolveResult };
   const set = resolveSet(hand, heroPos, opts.setId);
-  if (!set) return { ok: false, reason: `Unknown solution set: ${opts.setId}`, street };
+  if (!set) return { ok: false, res: { ok: false, reason: `Unknown solution set: ${opts.setId}`, street } };
   // ONE READ OF THE STACKS PER HAND (2026-09-23, hand 729; widened to the chart pick and to CoinPoker 2026-09-24,
   // hand 140706500001). The dealt-stack reconstruction drifts a few blinds between probes as the wrapper's stack
   // and committed readings move (101.1 / 100.4 / 106.1 across one hand's streets; 69.28 → 67.88 on the CoinPoker
@@ -2244,9 +2266,9 @@ async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts:
   // (the capture is repaired FIRST — below — and the depth read from the repaired hand: round 2, harness seed 27266
   // [missed-fold], a later-orbit fold the tap lost left the BTN "in", and his 100bb set the depth where the table's
   // effective stack was the CO's 98.2 — the repair that writes his fold into the line ran after the depth was pinned)
-  const fixedEarly = repairPostflopCapture(hand);
-  const pin = pinPostflop(fixedEarly.hand, (d) => site.depthOf(fixedEarly.hand, heroPos, d));
-  const depth = opts.depth ?? pin?.depth ?? site.depthOf(fixedEarly.hand, heroPos, dealtBySeat(fixedEarly.hand));
+  const fixed = repairPostflopCapture(hand);
+  const pin = pinPostflop(fixed.hand, (d) => site.depthOf(fixed.hand, heroPos, d));
+  const depth = opts.depth ?? pin?.depth ?? site.depthOf(fixed.hand, heroPos, dealtBySeat(fixed.hand));
   // A STREET CAPTURED OUT OF ROTATION POISONS EVERYTHING BELOW (2026-09-21). The tokens are built here, and
   // deriveExploitSpot reads OOP/IP off whoever acted first — so a scrambled street silently reverses the
   // seats and the chain walks a tree with the wrong player out of position. Repair what is provably safe to
@@ -2257,11 +2279,19 @@ async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts:
   // .repairPostflopCapture. A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21). Say so plainly
   // instead of letting it surface as "preflop betting didn't close (missed action?)", which sends you looking for
   // a missing action that was never the problem.
-  const fixed = fixedEarly;
   if (fixed.faults.length) {
-    return { ok: false, kind: "capture-fault", street, gametype: site.gametype, depth,
-      reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${fixed.faults.join("; ")}` };
+    return { ok: false, res: { ok: false, kind: "capture-fault", street, gametype: site.gametype, depth,
+      reason: `the capture of this hand is internally inconsistent, so there is no spot to solve — ${fixed.faults.join("; ")}` } };
   }
+  return { ok: true, heroPos, set, fixed, pin, depth };
+}
+
+async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts, site: PostflopSite): Promise<FastSolveResult> {
+  const setup = postflopSetup(hand, heroPos, opts, site);
+  if (!setup.ok) return setup.res;
+  const { set, fixed, pin, depth } = setup;
+  heroPos = setup.heroPos;
+  const street = hand.currentNode.street;
   const tk = buildSpotSolutionTokens(fixed.hand, heroPos, site.huCp);
   const chain = await solvePostflopViaChain(fixed.hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, site.sixMax,
     fixed.notes, site.huCp, pin?.dealt, !!site.cpRing);
@@ -3006,6 +3036,55 @@ export function warmPostflop6max(hand: ParsedHand, heroPos: string | null, strat
     console.log(`${tag} ${key}: ${r.ok ? "hero's root node answered" : "street tree opened"} in ${Date.now() - t0} ms${r.ok ? "" : ` (${r.reason.slice(0, 100)})`}`);
   }).catch(() => { /* a warm-up never fails anything */ });
 }
+
+/**
+ * THE COINPOKER RING ARRIVAL WARM-UP (2026-10-01, Brady: "warm the preflop walk — not the postflop streets, those are
+ * on demand only"). Hand 145539300369: the flop Solve took 13.3 s, 9.5 s of it building the AI preflop tree and
+ * walking hero's line through it for the flop-entering ranges — work that needs nothing from the flop. So the moment a
+ * postflop street lands with hero still in, that walk runs (once per hand; the memo is what hero's Solve then reads,
+ * and a Solve that arrives mid-walk joins it — flopArrival). NOTHING ELSE: no flop/turn/river tree is opened, no node
+ * of one read; the street tree waits for the press. Counted on the hand under origin "warm" like the other warm-ups.
+ * Returns the run for tests; the ingest fires and forgets.
+ */
+/** per hand: attempts so far, and whether one succeeded (a tick that found no spot yet — the capture mid-update — is
+ *  tried again on the next tick, at most WARM_ARRIVAL_TRIES times; a done hand is never re-walked) */
+const warmedArrivals = new Map<string, { tries: number; done: boolean }>();
+const WARM_ARRIVAL_TRIES = 3;
+export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): Promise<void> | null {
+  if (strategyId !== CP_RING_STRATEGY) return null;
+  const street = hand.currentNode.street;
+  if (street !== "flop" && street !== "turn" && street !== "river") return null;
+  if (hand.ended || hand.actions.some((a) => a.hero && a.type === "fold")) return null;
+  const id = hand.clientHandId ?? hand.handId;
+  if (id == null) return null;
+  const key = String(id);
+  const state = warmedArrivals.get(key) ?? { tries: 0, done: false };
+  if (state.done || state.tries >= WARM_ARRIVAL_TRIES) return null;
+  state.tries++;
+  warmedArrivals.delete(key);
+  warmedArrivals.set(key, state);
+  if (warmedArrivals.size > 60) { const first = warmedArrivals.keys().next().value; if (first !== undefined) warmedArrivals.delete(first); }
+  const t0 = Date.now();
+  const run = () => withRequestScope({ handKey: key, origin: "warm", street }, async (): Promise<{ ok: boolean; text: string }> => {
+    const r = withCpRingRake(hand);
+    const setup = postflopSetup(r.hand, heroPos, { origin: "warm", strategyId }, CP_RING_SITE);
+    if (!setup.ok) return { ok: false, text: `no spot to warm yet (${(setup.res as { reason?: string }).reason ?? "?"})` };
+    const heroPosName = setup.fixed.hand.positions[setup.fixed.hand.heroSeatId] ?? setup.heroPos;
+    if (!heroPosName) return { ok: false, text: "hero position unknown" };
+    const a = await flopArrival(setup.fixed.hand, setup.heroPos, heroPosName, setup.set, setup.depth, false, false, setup.pin?.dealt, true);
+    return a.ok
+      ? { ok: true, text: `preflop arrival ready (${a.a.prov.producer}${a.a.prov.how === "hit" ? ", already had it" : ""})` }
+      : { ok: false, text: `arrival failed: ${a.why.slice(0, 160)}` };
+  });
+  return asLive(run).then(({ value, scope }) => {
+    handFacts.addRequests(key, scope.origin, scope.counts);
+    if (value.ok) state.done = true;
+    console.log(`[warm-cpring] hand ${key} at the ${street}: ${value.text} in ${Date.now() - t0} ms — no ${street} tree opened (on demand)` +
+      (value.ok || state.tries >= WARM_ARRIVAL_TRIES ? "" : " — will try again on the next tick"));
+  }).catch((e) => { console.log(`[warm-cpring] hand ${key}: ${e instanceof Error ? e.message : e}`); });
+}
+/** Tests: forget which hands were warmed. */
+export function forgetArrivalWarms(): void { warmedArrivals.clear(); }
 
 export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): void {
   if (hand.currentNode.street !== "preflop") return;
