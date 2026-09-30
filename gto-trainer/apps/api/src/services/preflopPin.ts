@@ -309,7 +309,7 @@ const bakedGet = (id: string) => async (line: string): Promise<RawNode | null> =
  *   (b) the open size played (after the snap onto the set's sizes, hrc6max.openFromTokens) differs from the pinned
  *       chart's, and the picker's chart for the full line has exactly that open for its depth / short-seat state
  *       (hands 4919312009, 4919213506: hero's 2.5 pick executed as 2bb; the 2x chart exists). A 2x open on a table
- *       whose uneven set has only 2.5x and 3x has no exact chart (the picker snaps it to 2.5x), so nothing moves.
+ *       whose uneven set lacks that open (until 2026-09-30 it had 2.5x and 3x only) has no exact chart, so nothing moves.
  * The exact chart is the one chartFor6max picks for the full line with the hand's pinned dealt stacks, and only when
  * the set has it (no fallback id). Hero's range stays on the pinned chart — his decisions were read there. A villain
  * the re-picked chart cannot read (a node missing, a pruned branch, a size past τ) keeps the pinned chart's read, said
@@ -330,7 +330,7 @@ export async function repickVillainRanges(
   const choice = chartFor6max(hand, heroPos, tokens, dealt);
   const played = openFromTokens(tokens).open;
   // (b): the picker's chart for the full line carries the played open itself — not snapped onto another size, as the
-  // uneven set does for a 2x open (it has 2.5x and 3x only): that chart's state (depth, short seat) HAS a tree at
+  // uneven set does for an open it lacks (2.5x and 3x only until 2026-09-30): that chart's state (depth, short seat) HAS a tree at
   // this open. Its state is the full line's, like (a)'s: the rung the hand's pinned dealt stacks give now
   const openMoved = typeof played === "number" && typeof pinned.open === "number" && played !== pinned.open && choice.openSize === played;
   const trigB = openMoved;

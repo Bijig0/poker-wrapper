@@ -88,6 +88,10 @@ export interface AiPreflopResult {
   pos: string | null;
   heroClass: string | null;
   treeKey: string;
+  /** the solution hero's node was read on, and the line it was read at (after any size snap / fit) — what an
+   *  audit needs to read the same node's EVs back (scripts/stackSnapAudit) */
+  solId: string;
+  usedLine: string;
   solveSecs: number;
   cached: boolean;
   shape: AiPreflopShape;
@@ -101,6 +105,12 @@ export interface AiPreflopResult {
  * only re-solve the same corrupt line as heads-up. fastSolve reads this kind and stops before the last resort.
  */
 export const CAPTURE_FAULT = "capture-fault" as const;
+/** The refusal kind for a line that ends on ANOTHER seat's node (2026-09-30, hand 4921602992): the table's line, walked
+ *  in a tree built from the table, put the BB on the clock, not hero. That is a fact about the LINE — whose turn the
+ *  capture says it is — not about the tree, so the last resort (the same line, heads-up) ends on the same seat's node
+ *  again after a tree build, a solution and a string of polls: 36 s and ~25 requests on a probe for a spot that was
+ *  never hero's, holding the poller's slot while hero's real decision timed out. fastSolve reads this kind and stops. */
+export const LINE_NOT_HERO = "line-not-hero" as const;
 export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string };
 
 const round5 = (x: number) => Math.round(x * 2) / 2;
@@ -369,7 +379,7 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
 const terminals = new Set<string>();
 const TERMINAL_POLLS = 2;
 
-async function fetchNode(solId: string, line: string): Promise<{ data: any; cached: boolean } | { error: string }> {
+export async function fetchNode(solId: string, line: string): Promise<{ data: any; cached: boolean } | { error: string }> {
   const k = `${solId}|${line}`;
   const hit = nodes.get(k);
   if (hit) return { data: hit, cached: true };
@@ -610,7 +620,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const j = node.data;
   const toAct = j.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
   if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) {
-    return { ok: false, reason: `GTO Wizard AI preflop: the walked line puts ${toAct} on the clock, not hero (${shape.heroApiPos}) — line '${line}' does not match the table`, line };
+    return { ok: false, kind: LINE_NOT_HERO, reason: `GTO Wizard AI preflop: the walked line puts ${toAct} on the clock, not hero (${shape.heroApiPos}) — line '${line}' does not match the table`, line };
   }
   const idx = hand.heroCards.length === 2 ? comboIndex(hand.heroCards[0]!, hand.heroCards[1]!) : null;
   if (idx == null) return { ok: false, reason: "GTO Wizard AI preflop: hero's cards are not known", line };
@@ -637,7 +647,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
-    solveSecs: secs, cached: node.cached, shape,
+    solId: usedSol, usedLine, solveSecs: secs, cached: node.cached, shape,
     note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${node.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
       + (fittedFolds.length ? ` LINE FITTED TO THE TREE: GTO Wizard's tree holds one limper, so ${fittedFolds.join(" and ")}'s limp/call was read as a FOLD (the earliest one who does not raise later) — hero faces one player fewer than at the table${deadNote ? `, with ${deadNote}` : ""}.` : ""),

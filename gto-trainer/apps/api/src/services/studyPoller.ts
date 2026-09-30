@@ -341,7 +341,7 @@ class StudyPoller {
     this.lastFailedKey = null;
     this.repeatFail = null;
     this.lastProbeKey = null;
-    this.nav = null;
+    this.navs.clear();
     void this.tick();
     // a rejected tick must not become an unhandled rejection: see services/jobs.ts start()
     this.timer = setInterval(() => { this.tick().catch((e) => console.error(`[studyPoller] tick failed (retrying next tick): ${(e as Error)?.stack ?? String(e)}`)); }, this.config.intervalMs);
@@ -510,8 +510,9 @@ class StudyPoller {
       if (!this.seenKeys.has(key)) {
         this.seenKeys.add(key);
         if (this.seenKeys.size > 200) this.seenKeys = new Set([key]);
+        const nav = this.newestNav();
         pollerEvent({ url: this.config.assistiveUrl, ev: "decision seen", key, street: probe.hand?.street ?? null,
-                      inFlight: this.nav ? { key: this.nav.key, forMs: Date.now() - this.nav.at } : null });
+                      inFlight: nav ? { key: nav.key, forMs: Date.now() - nav.at, n: this.navs.size } : null });
       }
       // Only keep alive an answer that EXISTS. Any push(null) — GTO Wizard
       // dropping for a single tick was enough — blanks lastAnswer while
@@ -530,29 +531,33 @@ class StudyPoller {
         return;
       }
 
-      // Solve in the BACKGROUND. A postflop navigation can take tens of
-      // seconds; awaiting it here froze the whole tick loop, so on a fast
-      // table (Zone) the NEXT hand's preflop couldn't even be probed until
-      // the previous hand's abandoned solve timed out. Strictly ONE solve
-      // outstanding, and never aborted early: cancelling the fetch can't
-      // cancel the server-side navigation, which kept holding the single-
-      // flight navLock and bounced every later solve as "skipped". Let it
-      // finish (a verdict for a spot hero left is dropped) and start the
-      // current spot's solve on the next tick.
-      if (this.nav) {
-        // THE ONE-SOLVE-AT-A-TIME GATE: a decision waiting here is not being answered. Written once per key, with
-        // what it is waiting on and for how long — a slow or hung solve for an OLD spot holds every later one.
-        if (this.nav.key !== key && !this.waitLogged.has(key)) {
+      // Solve in the BACKGROUND: awaiting it here froze the whole tick loop, so on a fast table the NEXT hand's
+      // preflop couldn't be probed until the previous hand's abandoned solve timed out.
+      //
+      // THE CURRENT SPOT NEVER WAITS BEHIND A STALE ONE (2026-09-30, hand 4921602992). The gate used to be strictly
+      // one solve outstanding — written when a solve was a GTO Wizard page navigation that a cancelled fetch could not
+      // stop — so a 36 s solve for a spot hero had already left held the slot while hero's real decision (facing a
+      // jam) was seen, logged as "waiting on another solve", and never sent; hero timed out and was sat out. The fast
+      // path is HTTP now: a new key starts at once beside the stale one, whose verdict solveSpot drops when it lands
+      // (key !== lastProbeKey). At most MAX_INFLIGHT outstanding, so a key churning every tick cannot fan out into a
+      // pile of cloud solves; the same key is never solved twice at once.
+      if (this.navs.has(key)) return;
+      if (this.navs.size >= this.MAX_INFLIGHT) {
+        // every slot is taken by a solve for another spot: written once per key, with what holds it and for how long
+        if (!this.waitLogged.has(key)) {
           this.waitLogged.add(key);
           if (this.waitLogged.size > 200) this.waitLogged = new Set([key]);
-          pollerEvent({ url: this.config.assistiveUrl, ev: "waiting on another solve", key, busyWith: this.nav.key, busyForMs: Date.now() - this.nav.at });
+          const busy = this.newestNav()!;
+          pollerEvent({ url: this.config.assistiveUrl, ev: "waiting on another solve", key, busyWith: busy.key, busyForMs: Date.now() - busy.at, inFlight: this.navs.size });
         }
         return;
       }
-      this.nav = { key, at: Date.now() };
-      pollerEvent({ url: this.config.assistiveUrl, ev: "solve started", key });
+      const stale = this.newestNav();
+      this.navs.set(key, Date.now());
+      pollerEvent({ url: this.config.assistiveUrl, ev: "solve started", key,
+                    ...(stale ? { besideStale: stale.key, staleForMs: Date.now() - stale.at } : {}) });
       void this.solveSpot(key, probe).finally(() => {
-        this.nav = null;
+        this.navs.delete(key);
       });
     } finally {
       this.inFlight = false;
@@ -967,7 +972,15 @@ class StudyPoller {
   /** The in-flight background solve, if any. Never aborted mid-flight (the
    *  server-side navigation can't be cancelled and holds the navLock); a new
    *  spot simply waits for the next tick after this one completes. */
-  private nav: { key: string; at: number } | null = null;
+  /** Solves in flight, key → started at. The NEWEST is the spot hero is on; an older one is a spot hero has left, and
+   *  solveSpot drops its verdict when it lands. At most MAX_INFLIGHT at once (see tick). */
+  private navs = new Map<string, number>();
+  private readonly MAX_INFLIGHT = 2;
+  private newestNav(): { key: string; at: number } | null {
+    let best: { key: string; at: number } | null = null;
+    for (const [key, at] of this.navs) if (!best || at > best.at) best = { key, at };
+    return best;
+  }
   /** decision keys already written as "seen" / "waiting" (poller-events.jsonl): once per key, not once per tick */
   private seenKeys = new Set<string>();
   private waitLogged = new Set<string>();

@@ -49,6 +49,17 @@ describe("dataLayout", () => {
     expect(L.wrapperDebug).toBe(join(resolve(root), "wrapper-debug"));
   });
 
+  test("under bun test a LIVE POKER_DATA_DIR is ignored: the test root wins (the fake 429 that walled Elite 1)", () => {
+    const { wtCode } = fakeRepo();
+    const live = join(import.meta.dir, "live-poker-data");   // outside the temp dir, like the real poker-data
+    const env: NodeJS.ProcessEnv = { POKER_DATA_DIR: live, NODE_ENV: "test" };
+    const L = dataLayout(env, wtCode);
+    expect(L.mode).toBe("test");
+    expect(L.root.startsWith(resolve(tmpdir()))).toBe(true);
+    // outside a test the same env is honoured
+    expect(dataLayout({ POKER_DATA_DIR: live }, wtCode).mode).toBe("env");
+  });
+
   test("under bun test the root is one temp dir per run, handed to child processes through the env", () => {
     const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };
     const a = dataLayout(env);

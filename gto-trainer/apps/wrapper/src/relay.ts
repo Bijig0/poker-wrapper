@@ -19,7 +19,7 @@ import { CGG, CP, S, isCgg, isClientSite, isCp, pressBlocked, seams, type ActOpt
 import * as TABLES from "./tables";
 import { ACTION_RE, buyPanelUp, cardKey, findInputJs, framePin, heroCards, modalOf, mySel, pointProbeJs, sameHole, splitStrip, tableJs } from "./ignition/dom";
 import { dismissModal } from "./ignition/checks";
-import { handState, toActSources } from "./ignition/hand";
+import { handState, stripButtonsUp, stripReadStale, toActSources } from "./ignition/hand";
 import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
 import * as AUTO from "./autoLog";
@@ -463,6 +463,8 @@ export function pickReady(): Record<string, any> {
     if (!(hh && (hh.currentNode || {}).toActIsHero)) return no("not your turn (CoinPoker has not asked you to act)");
   } else if (!S.liveStatus.toAct) {
     return no("not your turn (no turn buttons on the table)");
+  } else if (stripReadStale()) {
+    return no("not your turn (the strip reading is stale — the table reader stood down)");
   }
   if (!isCp() && S.liveStatus.modal) {
     return no(`a client notice is on screen — ${S.liveStatus.modal.harmless ? "dismissing it" : "close it first"}`);
@@ -619,6 +621,7 @@ export function decisionActions(h: Record<string, any>): any[] {
 /** Is the table still showing the EXACT decision this press was sent for? (the whole safety case for a retry) */
 export function spotUnchanged(p: Record<string, any>, h: Record<string, any>): [boolean, string | null] {
   if (!S.liveStatus.toAct) return [false, "hero is no longer on the clock"];
+  if (stripReadStale()) return [false, "the strip reading is stale (the table reader stood down)"];
   if (S.liveStatus.modal) return [false, "a client notice is over the action strip"];
   if (h.handId !== p.handId) return [false, "the table moved to the next hand"];
   if (h.heroFolded || h.ended) return [false, "the hand is over for hero"];
@@ -1098,7 +1101,8 @@ export async function maybeFoldNoAnswer(): Promise<void> {
     return;
   }
   const h = handState();
-  const onClock = isCp() ? !!(h && (h.currentNode || {}).toActIsHero) : !!S.liveStatus.toAct;
+  // a stale strip reading (the reader stood down) is not a clock: hand 4921602992 froze toAct TRUE for four minutes
+  const onClock = isCp() ? !!(h && (h.currentNode || {}).toActIsHero) : stripButtonsUp();
   if (!onClock || !h || h.heroFolded || h.ended) {
     st.noAnswerTurn = null;
     return;

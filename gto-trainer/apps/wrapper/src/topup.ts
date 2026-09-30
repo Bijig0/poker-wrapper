@@ -22,7 +22,7 @@ import { fmtFixed, pyFloat, pyRepr, pyRound, pyStr } from "./py";
 import { S, seams } from "./state";
 import * as TERMINAL from "./terminal";
 import { mySel, topupFillJs, topupReadJs } from "./ignition/dom";
-import { handState } from "./ignition/hand";
+import { handState, stripButtonsUp } from "./ignition/hand";
 import { act, autoTableOk, heroTimeLeft, maybeTakeTime, pickReady } from "./relay";
 
 /** What a test replaces: the table read, the time-bank press, and how a run is started (Python's tests stubbed
@@ -119,7 +119,7 @@ export async function closeBuyPanel(): Promise<void> {
 /** Hero put on the clock with the panel up: close it NOW and call the run off (the DOM decides, not our flag). */
 export async function maybeGuardBuyPanel(): Promise<void> {
   if (!(S.liveStatus.buyPanel || S.topupPanel.open)) return;
-  if (!(S.liveStatus.toAct || S.feedPrev.toAct)) return;
+  if (!(stripButtonsUp() || S.feedPrev.toAct)) return;
   // THE ONE SANCTIONED EXCEPTION, with a fuse: a pre-action run holding the clock on purpose
   if (S.topupPrefold.active) {
     if (time() < S.topupPrefold.deadline) return;
@@ -190,7 +190,7 @@ export async function maybePrefoldTopUp(): Promise<void> {
   if (!st.auto) return;
   const [ok] = autoTableOk();
   if (!ok) return;
-  if (!(S.liveStatus.toAct || S.feedPrev.toAct)) return;
+  if (!(stripButtonsUp() || S.feedPrev.toAct)) return;
   if (S.liveStatus.modal || S.liveStatus.buyPanel) return;
   const r = pickReady();
   if (!r.ok) return;

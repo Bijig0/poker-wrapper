@@ -44,7 +44,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, type AiPreflopOutcome } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -2564,7 +2564,7 @@ function countCallsBefore(tokens: string[]): number {
   return tokens.filter((t) => t === "C").length;
 }
 
-async function solvePreflop6max(
+export async function solvePreflop6max(
   hand: ParsedHand,
   heroPos: string | null,
   origin?: string,
@@ -3238,6 +3238,14 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     if ((ai as { kind?: string }).kind === "capture-fault") {
       return { ok: false, kind: "capture-fault", street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
         reason: `${why}; ${ai.reason}` };
+    }
+    // THE LINE IS NOT HERO'S DECISION (2026-09-30, hand 4921602992): the AI piece walked the table's line in a tree
+    // built from the table and it ended on another seat's node. The last resort keeps the line and only changes the
+    // tree, so it ends on that seat's node again — after a tree build, a solution and 20-odd polls (36 s on a probe
+    // for a spot that was never hero's, holding the poller's slot while hero's real decision timed out). Terminal.
+    if ((ai as { kind?: string }).kind === LINE_NOT_HERO) {
+      return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
+        reason: `${why}; ${ai.reason}; the last resort is not tried — it replays the same line heads-up and lands on the same seat's node` };
     }
     // THE LAST RESORT (2026-09-23): neither piece can walk the line — play it as hero versus the last aggressor
     // with everyone else's chips as dead money (services/gtowAiPreflop.solvePreflopLastResort). Always an answer

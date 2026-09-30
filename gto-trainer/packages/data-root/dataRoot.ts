@@ -16,7 +16,8 @@
  *                         The main checkout is resolved through git's common dir, so a worktree writes where the
  *                         main checkout does.
  *   - under `bun test`  → one temp directory per test run (POKER_TEST_DATA_DIR, inherited by child processes), so no
- *                         test reaches a live store whichever store it opens.
+ *                         test reaches a live store whichever store it opens — a POKER_DATA_DIR outside the temp dir
+ *                         (the live one, exported by env.ps1) is ignored.
  * Tracked reference artifacts (preflop-db.sqlite, resolved-charts.json, mes_postflop.json, ledger.json …) are NOT
  * runtime records: they are versioned with the code and stay beside it.
  *
@@ -85,6 +86,12 @@ export function underTest(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.NODE_ENV === "test";
 }
 
+/** A path inside the OS temp dir — the only POKER_DATA_DIR a test may use. */
+function tempSandbox(dir: string): boolean {
+  const r = relative(resolve(tmpdir()), resolve(dir));
+  return !!r && !r.startsWith("..") && !isAbsolute(r);
+}
+
 function testRoot(env: NodeJS.ProcessEnv): string {
   // one root per test RUN: set once and inherited by every child process the tests spawn, so a spawned wrapper
   // and the test that reads its hands.db agree
@@ -102,7 +109,10 @@ export function dataLayout(env: NodeJS.ProcessEnv = process.env, codeDir: string
   const inWorktree = resolve(mainCheckout) !== resolve(codeCheckout);
   const base = { codeCheckout, mainCheckout, inWorktree };
   const explicit = env.POKER_DATA_DIR?.trim();
-  if (explicit) {
+  // Under `bun test` a POKER_DATA_DIR counts only if it is a temp sandbox. Since the cut-over config\local.env sets it to
+  // the LIVE root and env.ps1 exports it, so a test run from such a shell wrote gtowApi.nodePoll.test's fake 429 into
+  // the live request ledger and walled the real Elite 1 (2026-09-29 16:53Z).
+  if (explicit && (!underTest(env) || tempSandbox(explicit))) {
     const root = resolve(explicit);
     return { mode: "env", root, api: join(root, "api"), wrapper: join(root, "wrapper"), wrapperDebug: join(root, "wrapper-debug"), ...base };
   }

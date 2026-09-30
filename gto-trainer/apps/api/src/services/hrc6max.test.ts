@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "bun:test";
 import { afterEach } from "bun:test";
-import { chartFor6max, openFromTokens, replayTokens6, setPatchSource } from "./hrc6max";
+import { chartFor6max, openFromTokens, replayTokens6, setPatchSource, unevenLadder6, unnameable6max } from "./hrc6max";
 import { patchKeys } from "./patchKey";
 
 /**
@@ -251,22 +251,30 @@ describe("chart-selection gaps (Approx6)", () => {
     committed: {}, actions: [], currentNode: { street: "preflop" },
   }) as never;
 
-  it("names the missing 2x uneven tree, and the missing 80bb rung, separately", () => {
-    const c = chartFor6max(handWith(81), "BTN", ["R2"]);
+  it("names the missing 4x uneven tree, and the missing 40bb rung, separately", () => {
+    // 2026-09-30: the 2x open and the 80bb rung this test used to name are solved sets now; a 4x open and a 40bb
+    // short are the gaps that remain (40 sits between the 30 and 50 rungs, 4x between 3.5x and 5x)
+    const c = chartFor6max(handWith(40), "BTN", ["R4"]);
     const by = Object.fromEntries((c.approx ?? []).map((a) => [a.kind, a]));
 
     expect(by["open-not-in-set"]).toMatchObject({
-      want: 2, got: 2.5, seat: "BB",
-      solve: "ign200_6max_D100_s70_BB_o2",
-      asym: "deep=100;shorts=70;opens=2;seats=BB",
+      want: 4, got: 3.5, seat: "BB",
+      solve: "ign200_6max_D100_s30_BB_o4",
+      asym: "deep=100;shorts=30;opens=4;seats=BB",
     });
     expect(by["short-rung-snapped"]).toMatchObject({
-      want: 80, got: 70, seat: "BB",
-      solve: "ign200_6max_D100_s80_BB_o2_5",
+      want: 40, got: 30, seat: "BB",
+      solve: "ign200_6max_D100_s40_BB_o3_5",
     });
     // the prose the panel shows is unchanged — the structure is additive
-    expect(c.note).toContain("the uneven set has 2.5x and 3x only");
-    expect(c.note).toContain("the BB has 81bb");
+    expect(c.note).toContain("the uneven set has no 4x tree");
+    expect(c.note).toContain("the BB has 40bb");
+  });
+
+  it("the 2x open and the 80bb rung are solved sets now: an 81bb BB facing 2x lands on its own tree, no gaps", () => {
+    const c = chartFor6max(handWith(81), "BTN", ["R2"]);
+    expect(c.id).toBe("ign200_6max_D100_s80_BB_o2");
+    expect(c.approx ?? []).toHaveLength(0);
   });
 
   it("records nothing when the state lands on a tree we actually own", () => {
@@ -294,7 +302,7 @@ describe("patch charts answer first (2026-09-27)", () => {
     setPatchSource(() => []);
     const c = chartFor6max(bb80(), "SB", ["F", "F", "F", "R2.5"]);
     expect(c.patch).toBeUndefined();
-    expect(c.id).toBe("ign200_6max_D100_s70_BB_o2_5");
+    expect(c.id).toBe("ign200_6max_D100_s80_BB_o2_5");       // 2026-09-30: 80 is a rung of its own now (was s70)
   });
 
   test("a solved patch for this table goes first, the grid chart stays behind it, and the stack gap is not filed", () => {
@@ -303,7 +311,7 @@ describe("patch charts answer first (2026-09-27)", () => {
     expect(c.id).toBe("ign200_6max_P_BB80_o2_5");
     expect(c.patch).toEqual({ id: "ign200_6max_P_BB80_o2_5", variant: "exact" });
     expect(c.candidates[0]).toBe("ign200_6max_P_BB80_o2_5");
-    expect(c.candidates).toContain("ign200_6max_D100_s70_BB_o2_5");
+    expect(c.candidates).toContain("ign200_6max_D100_s80_BB_o2_5");
     expect(c.candidates).not.toContain("ign200_6max_P_SB80_o2_5");
     expect((c.approx ?? []).some((a) => a.kind === "short-rung-snapped")).toBe(false);
   });
@@ -360,5 +368,72 @@ describe("the two-short grid (2026-09-27)", () => {
     const t = table(4, { 3: 63, 6: 38 }) as any;
     setPatchSource(() => ["ign200_6max_P_CO60_BB40_o2_5", "ign200_6max_P_CO65_BB40_o2_5"]);
     expect(chartFor6max(t, "BTN", ["F", "F", "R2.5"]).patch).toEqual({ id: "ign200_6max_P_CO65_BB40_o2_5", variant: "exact" });
+  });
+});
+
+// THE SHORT-STACK RUNGS BELOW 30bb AND THE FOUR EXTRA OPENS (2026-09-30, hand 4921602992: an 11bb BB read the 30bb
+// chart while the 20bb tree sat solved and unnamed). The ladder is nearest-first, and a chart the picker cannot
+// name is caught at landing (unnameable6max / scripts/chartNameable.ts).
+describe("short-stack rungs 7-25 and the uneven opens (2026-09-30)", () => {
+  test("an 11bb BB facing hero's open reads the 10bb short chart, not the 30bb one", () => {
+    const t = table(3, { 6: 10.6 });
+    const c = chartFor6max(t as any, "CO", ["F", "F", "R2.6", "F", "F", "R10.6"]);
+    expect(c.id).toBe("ign200_6max_D100_s10_BB_o2_5");
+    expect(c.shortDepth).toBe(10);
+    expect((c.approx ?? []).some((a) => a.kind === "short-rung-snapped")).toBe(false);
+  });
+
+  test("a 2.2x open at a 20bb-short table reads the 2.2x uneven tree, with no open gap at all", () => {
+    const t = table(5, { 4: 20 });
+    const c = chartFor6max(t as any, "SB", ["F", "F", "F", "R2.2"]);
+    expect(c.id).toBe("ign200_6max_D100_s20_BTN_o2_2");
+    expect(c.approx ?? []).toHaveLength(0);
+    expect(c.note ?? "").not.toContain("the open was");
+  });
+
+  test("a 5x open at a 25bb-short table reads the 5x uneven tree (the even grid tops out at 3.5x)", () => {
+    const t = table(5, { 4: 25 });
+    const c = chartFor6max(t as any, "SB", ["F", "F", "F", "R5"]);
+    expect(c.id).toBe("ign200_6max_D100_s25_BTN_o5");
+    expect(c.approx ?? []).toHaveLength(0);
+  });
+
+  test("the fallback ladder walks (rung, open) pairs nearest-first, the stack weighing twice the open — never 30 by default", () => {
+    const t = table(5, { 4: 15 });
+    const c = chartFor6max(t as any, "SB", ["F", "F", "F", "R2.5"]);
+    expect(c.id).toBe("ign200_6max_D100_s15_BTN_o2_5");
+    const cands = c.candidates;
+    // the same rung's nearest opens come first (2.2x is 0.13 away in log terms, 3x 0.18, 2x 0.22; the 18bb rung 0.18)
+    expect(cands.slice(0, 4)).toEqual(["ign200_6max_D100_s15_BTN_o2_5", "ign200_6max_D100_s15_BTN_o2_2", "ign200_6max_D100_s15_BTN_o3", "ign200_6max_D100_s15_BTN_o2"]);
+    const rungs = cands.filter((id) => id.endsWith("_BTN_o2_5")).map((id) => Number(/_s(\d+)_/.exec(id)![1]));
+    expect(rungs.slice(0, 4)).toEqual([15, 18, 20, 10]);      // ln-distance: 0.18, 0.29, 0.41 — 30 (0.69) is far down
+    expect(rungs.slice(0, 5)).not.toContain(30);
+    // the ladder is a bounded list of uneven neighbours, then the even chart last
+    expect(cands.length).toBeLessThanOrEqual(1 + 24 + 2);
+    expect(cands[cands.length - 1]).toBe("ign200_6max_D100_o2_5");   // (the 2.5x open's even chart and the default one coincide)
+    // a whole open unlanded (5x at 25bb): the ladder reaches the 30bb 3x tree before any even chart
+    const d = unevenLadder6(25, 5);
+    const idx = (r: number, x: number) => d.findIndex(([a, b]) => a === r && b === x);
+    expect(idx(25, 3.5)).toBeLessThan(idx(30, 3));
+    expect(idx(30, 3)).toBeGreaterThanOrEqual(0);
+    expect(idx(30, 3)).toBeLessThan(idx(25, 2));            // 0.44 vs 0.46 in log-distance; (50, 5) at 0.69 is off the bounded list
+  });
+
+  test("the 30/50/70 rungs still land where they did", () => {
+    expect(chartFor6max(table(6, { 1: 30 }) as any, "BB", ["R2.5", "F", "F", "F", "F"]).id).toBe("ign200_6max_D100_s30_UTG_o2_5");
+    expect(chartFor6max(table(6, { 4: 70 }) as any, "BB", ["F", "F", "F", "R3", "F"]).id).toBe("ign200_6max_D100_s70_BTN_o3");
+  });
+
+  test("unnameable6max: grid ids off the lists are caught, patch ids are always nameable", () => {
+    expect(unnameable6max("ign200_6max_D100_s20_BB_o2_5")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s7_UTG_o5")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s40_BB_o2_5")).toContain("not on SHORTS6");
+    expect(unnameable6max("ign200_6max_D100_s20_BB_o4")).toContain("not on UNEVEN_OPENS6");
+    expect(unnameable6max("ign200_6max_D100_s30_UTG_olimp")).toContain("uneven limp tree");
+    expect(unnameable6max("ign200_6max_D125_olimp")).toContain("not a limp rung");
+    expect(unnameable6max("ign200_6max_D100_o2_5")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_olimp_pool3")).toBeNull();
+    expect(unnameable6max("ign200_6max_P_BTN80_BB20_o2_5")).toBeNull();
+    expect(unnameable6max("ign200_3maxasym_D100_s20_bb")).toContain("not an ign200 6-max");
   });
 });

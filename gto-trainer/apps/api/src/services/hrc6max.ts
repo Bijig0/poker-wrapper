@@ -40,11 +40,16 @@ export const RUNGS6 = [30, 50, 75, 100, 125, 150];
 export const LIMP_RUNGS6 = [30, 50, 75, 100];
 /** Open sizes with their own tree, biggest share of the pool's opens first. */
 export const OPENS6 = [2.5, 3, 2, 3.5];
-/** Short-stack rungs of the uneven set, all at a 100bb table. */
-export const SHORTS6 = [30, 50, 70];
+/** Short-stack rungs of the uneven set, all at a 100bb table (one seat short, the other five at 100). 30/50/70 were
+ *  the first grid; 60/80 (short-rungs-6080) and 7-25 (short-rungs-20 + the 2026-09-30 short-stack grid, 204 trees
+ *  in the box queue) are the rest. A rung whose tree has not landed falls to its NEAREST neighbour (chartFor6maxGrid's
+ *  candidate ladder), never to a fixed default — until 2026-09-30 the list stopped at 30, so an 11bb blind read the
+ *  30bb chart while its 20bb tree sat solved and unnamed (hand 4921602992). */
+export const SHORTS6 = [7, 10, 15, 18, 20, 25, 30, 50, 60, 70, 80];
 export const DEEP6 = 100;
-/** Only these two open sizes were solved with a short seat at the table. */
-export const UNEVEN_OPENS6 = [2.5, 3];
+/** The open sizes solved with a short seat at the table: 2.5x/3x for every rung, the other four from the 2026-09-30
+ *  short-stack grid (7-25bb). A missing (rung, open) tree falls to the same rung's nearest open first. */
+export const UNEVEN_OPENS6 = [2, 2.2, 2.5, 3, 3.5, 5];
 /** A seat this far below 100bb - the reload line - is "short" rather than noise. */
 export const SHORT_GAP = 15;
 /** Hero below this has not reloaded yet; the rung then follows his own stack like anyone else's. */
@@ -516,11 +521,18 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   }
 
   const s = snapShort6(shortBB);
-  const o = nearest(UNEVEN_OPENS6, open as number);
-  if (o !== open) {
-    gap("open-not-in-set", `the uneven set has ${UNEVEN_OPENS6.join("x and ")}x only — using its ${o}x tree`,
-        open, o, shortSeat, unevenChartId(s, shortSeat, open as number),
-        `deep=${DEEP6};shorts=${s};opens=${open};seats=${shortSeat}`);
+  // THE OPEN AS PLAYED picks the uneven tree (2026-09-30): the uneven set now holds sizes the even grid does not (2.2x,
+  // 5x), so the size is snapped from what was observed, not from the even grid's snap of it — and an even-grid
+  // "open-snapped" gap filed above is withdrawn when the uneven set holds that open exactly.
+  const target = observed ?? (open as number);
+  const o = nearest(UNEVEN_OPENS6, target);
+  if (Math.abs(o - target) > 0.2) {
+    gap("open-not-in-set", `the uneven set has no ${target}x tree — using its ${o}x tree`,
+        target, o, shortSeat, unevenChartId(s, shortSeat, target),
+        `deep=${DEEP6};shorts=${s};opens=${target};seats=${shortSeat}`);
+  } else if (observed != null && Math.abs(observed - (open as number)) > 0.2) {
+    const i = approx.findIndex((a) => a.kind === "open-snapped");
+    if (i >= 0) { notes.splice(notes.indexOf(approx[i]!.note), 1); approx.splice(i, 1); }
   }
   if (Math.abs(shortBB - s) > 8) {
     const want = Math.round(shortBB / 10) * 10;                 // the rung this state wanted
@@ -532,8 +544,64 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   if (others.length) notes.push(`${others.map(([p, bb]) => `${p} ${Math.round(bb)}bb`).join(", ")} also short — not modelled`);
   if (hero > DEEP6 + SHORT_GAP) notes.push(`hero has ${Math.round(hero)}bb — the short chart plays him at 100bb`);
   const id = unevenChartId(s, shortSeat, o);
-  return finish(id, [id, ...SHORTS6.filter((x) => x !== s).map((x) => unevenChartId(x, shortSeat, o)), evenChartId(DEEP6, open), evenChartId(DEEP6, 2.5)],
+  // THE LADDER IS NEAREST-FIRST OVER (RUNG, OPEN) PAIRS (2026-09-30): the set is solved rung by rung and open by
+  // open, so a tree that has not landed falls to the nearest solved neighbour in BOTH dimensions at once — distance
+  // = |ln(rung/short)| + OPEN_WEIGHT·|ln(open/o)|, the stack counting twice the open size (25bb vs 30bb ≈ 5x vs 3.5x)
+  // — and only after every uneven pair to the even 100bb chart. It used to be list order, which sent every unlanded
+  // rung to 30bb; a one-dimensional ladder fell off the short charts entirely when a whole open was unlanded.
+  return finish(id, [id, ...unevenLadder6(s, o).map(([r, x]) => unevenChartId(r, shortSeat, x)),
+    evenChartId(DEEP6, open), evenChartId(DEEP6, 2.5)],
     DEEP6, s, shortSeat, o);
+}
+
+/** The open size counts this much of a stack step in the uneven ladder's distance (both in log terms). */
+export const OPEN_WEIGHT6 = 0.5;
+/** How many uneven (rung, open) neighbours a candidate list carries before the even chart (the record answers a
+ *  lookup in ~0.1 ms, so the cost is the list's length in the answer row, not the lookups). */
+const LADDER_MAX6 = 24;
+
+/** Every other (rung, open) of the uneven set, nearest to (s, o) first — see chartFor6maxGrid's ladder. */
+export function unevenLadder6(s: number, o: number): [number, number][] {
+  const dist = (r: number, x: number) => Math.abs(Math.log(r / s)) + OPEN_WEIGHT6 * Math.abs(Math.log(x / o));
+  const pairs: [number, number][] = [];
+  for (const r of SHORTS6) for (const x of UNEVEN_OPENS6) if (r !== s || x !== o) pairs.push([r, x]);
+  return pairs.sort((a, b) => dist(a[0], a[1]) - dist(b[0], b[1])).slice(0, LADDER_MAX6);
+}
+
+/**
+ * CAN THE PICKER NAME THIS CHART? A solved tree the picker never names answers nothing — the 20bb single-short set sat
+ * in the catalog for four days that way (2026-09-26..30). The landing script (poker-zenbook/hrc-api/scripts/pullChart.sh)
+ * asks this for every chart it bakes, via src/scripts/chartNameable.ts, and says so in its log when the answer is no.
+ * Patch charts are always nameable (their id is computed from the table, services/patchKey.ts); grid charts must sit
+ * on the lists above. Returns null when nameable, else why not.
+ */
+export function unnameable6max(id: string): string | null {
+  const m6 = /^ign200_6max_(.+)$/.exec(id);
+  if (!m6) return "not an ign200 6-max chart id";
+  const rest = m6[1]!;
+  if (rest.startsWith("P_")) return null;
+  const val = (t: string) => Number(t.replace("_", "."));
+  let m: RegExpExecArray | null;
+  if ((m = /^D(\d+)_olimp(?:_(?:pool\d*|poolx\d*|wide))?$/.exec(rest))) {
+    const d = Number(m[1]);
+    return LIMP_RUNGS6.includes(d) ? null : `limp depth ${d}bb is not a limp rung (${LIMP_RUNGS6.join("/")})`;
+  }
+  if ((m = /^D(\d+)_o([\d_]+)$/.exec(rest))) {
+    const d = Number(m[1]), o = val(m[2]!);
+    if (!RUNGS6.includes(d)) return `depth ${d}bb is not a rung (${RUNGS6.join("/")})`;
+    if (!OPENS6.includes(o)) return `open ${o}x is not an even-grid open (${OPENS6.join("/")})`;
+    return null;
+  }
+  if ((m = /^D(\d+)_s(\d+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)$/.exec(rest))) {
+    const d = Number(m[1]), s = Number(m[2]);
+    if (d !== DEEP6) return `uneven depth ${d}bb: the uneven set is at ${DEEP6}bb`;
+    if (m[4] === "limp") return "an uneven limp tree: the picker answers limped pots from the even limp charts";
+    if (!SHORTS6.includes(s)) return `short rung ${s}bb is not on SHORTS6 (${SHORTS6.join("/")})`;
+    const o = val(m[4]!);
+    if (!UNEVEN_OPENS6.includes(o)) return `open ${o}x is not on UNEVEN_OPENS6 (${UNEVEN_OPENS6.join("/")})`;
+    return null;
+  }
+  return "an id shape the picker does not produce";
 }
 
 /**

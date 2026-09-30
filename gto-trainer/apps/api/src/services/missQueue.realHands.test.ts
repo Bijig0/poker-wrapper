@@ -68,20 +68,20 @@ describe("isSyntheticHandId / isRealMissRef — which hands are ours", () => {
 describe("the store", () => {
   it("refuses a synthetic ref even under a real origin", () => {
     const q = fresh();
-    const tokens = ["R2"];
-    const choice = chartFor6max(hand(81), "BTN", tokens);
-    expect(q.observe6max({ choice, hand: hand(81), heroPos: "BTN", tokens, walk: null, ref: ref("mh-163-short-seat") })).toEqual([]);
-    expect(q.observe6max({ choice, hand: hand(81), heroPos: "BTN", tokens, walk: null, ref: ref("postin-5") })).toEqual([]);
+    const tokens = ["R4"];                                 // 2026-09-30: a 40bb short facing 4x — two gaps the sets still have
+    const choice = chartFor6max(hand(40), "BTN", tokens);
+    expect(q.observe6max({ choice, hand: hand(40), heroPos: "BTN", tokens, walk: null, ref: ref("mh-163-short-seat") })).toEqual([]);
+    expect(q.observe6max({ choice, hand: hand(40), heroPos: "BTN", tokens, walk: null, ref: ref("postin-5") })).toEqual([]);
     expect(q.list("all", { synthetic: true })).toHaveLength(0);
     // the same state from a real hand is written down
-    expect(q.observe6max({ choice, hand: hand(81), heroPos: "BTN", tokens, walk: null, ref: ref("4917810302") }).length).toBeGreaterThan(0);
+    expect(q.observe6max({ choice, hand: hand(40), heroPos: "BTN", tokens, walk: null, ref: ref("4917810302") }).length).toBeGreaterThan(0);
   });
 
   it("hides rows filed before the fix from every reader, and says how many", () => {
     const q = fresh();
-    const tokens = ["R2"];
-    const choice = chartFor6max(hand(81), "BTN", tokens);
-    q.observe6max({ choice, hand: hand(81), heroPos: "BTN", tokens, walk: null, ref: ref("4917810302") });
+    const tokens = ["R4"];
+    const choice = chartFor6max(hand(40), "BTN", tokens);
+    q.observe6max({ choice, hand: hand(40), heroPos: "BTN", tokens, walk: null, ref: ref("4917810302") });
     // rewrite them as the pre-fix code left them: one row only the harness hit, one a real hand and the post-in matrix hit
     const db = new Database(q.path);
     const rs = (xs: object[]) => JSON.stringify(xs);

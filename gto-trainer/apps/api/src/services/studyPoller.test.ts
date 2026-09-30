@@ -57,7 +57,9 @@ beforeEach(() => {
       // "REJECT" = the request itself fails, the way a wedged client does:
       // this is the real message Bun's fetch throws on a refused connection.
       if (fastSolveResponse === "REJECT") throw new Error("Unable to connect. Is the computer able to access the url?");
-      return new Response(JSON.stringify(fastSolveResponse), { status: 200 });
+      // a function = a solve whose timing the test controls (a hanging cloud solve): it resolves with the body
+      const res = typeof fastSolveResponse === "function" ? await (fastSolveResponse as (b: unknown) => Promise<unknown>)(body) : fastSolveResponse;
+      return new Response(JSON.stringify(res), { status: 200 });
     }
     if (url.includes("/ingest")) {
       if (ingestResponse === "REJECT") throw new Error("network down");
@@ -151,6 +153,57 @@ describe("studyPoller", () => {
     await wait(120);
     expect(solveCalls().length).toBeGreaterThan(tries);
     expect(studyPoller.getStatus().lastAnswer).toContain("Check");
+  });
+
+  // Hand 4921602992 (2026-09-30): a 36 s solve for a spot hero had already left held the poller's only slot; hero's
+  // real decision (facing a jam) was seen 2 s in, logged "waiting on another solve", never sent — hero timed out.
+  it("a new decision starts at once beside a stale in-flight solve, and the stale verdict is dropped", async () => {
+    const verdict = (action: string) => ({ ok: true, hand: { street: "preflop" }, solution: { ok: true, decision: { action, frequency: 100 }, actions: [{ action, frequency: 100 }] } });
+    let solves = 0;
+    let releaseFirst: () => void = () => {};
+    fastSolveResponse = () => new Promise((resolve) => {
+      solves += 1;
+      if (solves === 1) releaseFirst = () => resolve(verdict("Check"));   // the stale spot: hangs until released
+      else resolve(verdict("Fold"));                                       // hero's real spot: answers at once
+    });
+    const at4 = { street: "preflop", board: [], node: { toCall: 0 }, actions: [1, 2, 3, 4] };
+    ingestResponse = { ok: true, studyAnswersOn: true, hero: { toAct: true, cards: ["Ah", "8h"] }, hand: at4 };
+    studyPoller.start({ intervalMs: 30 });
+    await wait(20);
+    expect(solveCalls().length).toBe(1);                                    // the stale spot's solve, hanging
+
+    // the BB jams: a new key (8 to call, 7 actions) while the first solve is still out
+    ingestResponse = { ...(ingestResponse as object), hand: { street: "preflop", board: [], node: { toCall: 8 }, actions: [1, 2, 3, 4, 5, 6, 7] } };
+    await wait(80);
+    expect(solveCalls().length).toBe(2);                                    // started beside it, not behind it
+    const answered = pushCalls().map((c) => (c.body as { text?: string }).text ?? "").filter(Boolean);
+    expect(answered.length).toBeGreaterThan(0);
+    expect(answered[answered.length - 1]).toContain("Fold");
+
+    // the stale verdict lands now: it is for a spot hero left, so it never reaches the panel
+    releaseFirst();
+    await wait(60);
+    const texts = pushCalls().map((c) => (c.body as { text?: string }).text ?? "");
+    expect(texts.some((t) => t.includes("Check"))).toBe(false);
+    expect(studyPoller.getStatus().lastAnswer ?? "").toContain("Fold");
+  });
+
+  it("at most two solves outstanding: a third key waits, the same key is never solved twice at once", async () => {
+    let solves = 0;
+    fastSolveResponse = () => new Promise(() => { solves += 1; });             // every solve hangs
+    const hand = (n: number) => ({ street: "preflop", board: [], node: { toCall: n }, actions: Array.from({ length: n + 2 }, (_, i) => i) });
+    ingestResponse = { ok: true, studyAnswersOn: true, hero: { toAct: true, cards: ["Ah", "8h"] }, hand: hand(0) };
+    studyPoller.start({ intervalMs: 30 });
+    await wait(20);
+    ingestResponse = { ...(ingestResponse as object), hand: hand(1) };
+    await wait(60);
+    expect(solves).toBe(2);
+    ingestResponse = { ...(ingestResponse as object), hand: hand(2) };
+    await wait(60);
+    expect(solves).toBe(2);                                                 // the third waits for a slot
+    ingestResponse = { ...(ingestResponse as object), hand: hand(1) };      // back to a key already in flight
+    await wait(60);
+    expect(solves).toBe(2);
   });
 
   it("does not re-solve while the same decision is still pending", async () => {

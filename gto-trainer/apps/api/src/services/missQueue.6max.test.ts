@@ -21,25 +21,27 @@ const ref = { origin: "live" as const, clientHandId: "t1", handId: 1, actionInde
 describe("missQueue.observe6max", () => {
   it("turns the picker's prose into one solvable job per gap", () => {
     const q = fresh();
-    const tokens = ["R2"];
-    const choice = chartFor6max(hand(81), "BTN", tokens);
-    const kinds = q.observe6max({ choice, hand: hand(81), heroPos: "BTN", tokens, walk: null, ref });
+    // 2026-09-30: the 2x open and the 80bb rung are solved sets now; a 4x open at a 40bb-short table is the pair of
+    // gaps that remains (40 sits between the 30 and 50 rungs, 4x between 3.5x and 5x)
+    const tokens = ["R4"];
+    const choice = chartFor6max(hand(40), "BTN", tokens);
+    const kinds = q.observe6max({ choice, hand: hand(40), heroPos: "BTN", tokens, walk: null, ref });
 
     expect(kinds.sort()).toEqual(["open-not-in-set", "short-rung-snapped"]);
     const items = q.list("all");
     expect(items).toHaveLength(2);
 
     const open = items.find((i) => i.kind === "open-not-in-set")!;
-    expect(open.want).toBe("2");
-    expect(open.got).toBe("2.5");
+    expect(open.want).toBe("4");
+    expect(open.got).toBe("3.5");
     const j = open.job as { id: string; asym: string; cmd: string };
-    expect(j.id).toBe("ign200_6max_D100_s70_BB_o2");
-    expect(j.asym).toBe("deep=100;shorts=70;opens=2;seats=BB");
+    expect(j.id).toBe("ign200_6max_D100_s30_BB_o4");
+    expect(j.asym).toBe("deep=100;shorts=30;opens=4;seats=BB");
     expect(j.cmd).toContain("genSixMaxPlan.ts");
-    expect(j.cmd).toContain('--asym "deep=100;shorts=70;opens=2;seats=BB"');
+    expect(j.cmd).toContain('--asym "deep=100;shorts=30;opens=4;seats=BB"');
 
     // all six seats are recorded, not just BTN/SB/BB
-    expect(open.state.stacksBB).toMatchObject({ UTG: 100, BTN: 100, SB: 100, BB: 81 });
+    expect(open.state.stacksBB).toMatchObject({ UTG: 100, BTN: 100, SB: 100, BB: 40 });
   });
 
   it("writes nothing when the state lands on a tree we own", () => {
@@ -52,9 +54,9 @@ describe("missQueue.observe6max", () => {
 
   it("counts the same gap once per distinct decision, not once per tick", () => {
     const q = fresh();
-    const tokens = ["R2"];
-    const choice = chartFor6max(hand(81), "BTN", tokens);
-    for (let i = 0; i < 4; i++) q.observe6max({ choice, hand: hand(81), heroPos: "BTN", tokens, walk: null, ref });
+    const tokens = ["R4"];
+    const choice = chartFor6max(hand(40), "BTN", tokens);
+    for (let i = 0; i < 4; i++) q.observe6max({ choice, hand: hand(40), heroPos: "BTN", tokens, walk: null, ref });
     expect(q.list("all")).toHaveLength(2);
     expect(q.list("all").every((i) => i.n === 1)).toBe(true);
   });

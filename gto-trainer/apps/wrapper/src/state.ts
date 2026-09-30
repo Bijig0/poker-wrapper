@@ -92,6 +92,10 @@ function fresh() {
     /** Seconds on hero's action clock as the table shows it (Ignition), null when not on the clock / unreadable. Kept
      *  out of liveStatus, which the reader golden compares key by key against the Python recordings. */
     heroClock: null as number | null,
+    /** When the reader last READ the strip and set liveStatus.toAct (reader.ts feedTick). A tick that stands down
+     *  before that point (table read failed, "table broke", not seated) leaves toAct as it was; hand.ts treats a
+     *  reading older than BUTTONS_STALE_S as no buttons. Not in liveStatus (the golden). */
+    screenReadAt: null as number | null,
     /** Hero's time bank over the current turn (dom.bankStep → relay.heroTimeLeft). Not in liveStatus (the golden). */
     bankSeen: null as { secs: number; at: number; started: boolean } | null,
     /** What the screen's board is worth to /hand's DOM-board override (ws.ts domBoardRefusal), per hand number: the hole

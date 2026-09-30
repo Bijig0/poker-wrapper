@@ -248,6 +248,7 @@ export async function feedTick(): Promise<void> {
       L.board = [...bc];
       L.practice = true;
       L.toAct = toAct(d);
+      S.screenReadAt = time();
       const m = modalOf(d);
       L.modal = m ? { text: m.text, harmless: m.harmless } : null;
       S.feedPrev = { seated: true, seats: parseSeats(d), board: bc.length, heroCards: heroCards(d).join(" ") };
@@ -314,6 +315,7 @@ export async function feedTick(): Promise<void> {
   const heroHand = heroHandOf(d);
   const toActNow = actions.length > 0 && actions.some((a) => /\d/.test(a.text));
   L.toAct = toActNow;
+  S.screenReadAt = time();                           // the strip was read THIS tick (hand.ts toActSources)
   L.toActSince = toActNow ? L.toActSince || time() : null;
   if (time() >= (w.domGraceUntil ?? 0)) {
     const held: Set<number> = (w.heldCards ??= new Set<number>());

@@ -18,15 +18,46 @@ import { potAgrees, wsHand, type WsHand } from "./wsLine";
 
 const ws = () => S.ws;
 
+/** A strip reading older than this is no evidence of the buttons. The reader ticks every ~0.45 s (gaps up to 3.8 s
+ *  under load: session_20260926_030543, 48 of 1,866 ticks over 2 s), so 6 s is a reader that has STOPPED reading, not
+ *  a slow one. A tick that stands down before it reads the strip (table read failed, "table broke", not seated) leaves
+ *  liveStatus.toAct as it was.
+ *  Hand 4921602992 (2026-09-30): the reader returned early for four minutes with toAct frozen TRUE from the moment
+ *  hero had been on the clock, so every action count of every hand went out as hero's turn — phantom solves held the
+ *  API's slot and hero timed out facing a jam. A reading never stamped (S.screenReadAt null: a replay from before the
+ *  field, a test that sets toAct by hand) counts as fresh. */
+export const BUTTONS_STALE_S = 6.0;
+
+/** Seconds since the reader last read the strip, or null when it never has. */
+export function screenReadAgeS(): number | null {
+  const at = S.screenReadAt;
+  return typeof at === "number" ? Math.max(0, time() - at) : null;
+}
+
+/** The strip reading is older than BUTTONS_STALE_S: the reader stood down, and liveStatus.toAct is what it WAS. */
+export function stripReadStale(): boolean {
+  const age = screenReadAgeS();
+  return age !== null && age > BUTTONS_STALE_S;
+}
+
+/** Hero's turn buttons are up ON A FRESH READ — the one test every press-side check should make (relay, top-up),
+ *  never `S.liveStatus.toAct` alone. */
+export function stripButtonsUp(): boolean {
+  return !!S.liveStatus.toAct && !stripReadStale();
+}
+
 /** The three independent views of "hero to act", side by side. */
 export function toActSources(buttonsUp: boolean): Record<string, any> {
   const hero = ws().heroSeat ?? null;
   const turn = ws().heroTurn ?? null;
+  const age = screenReadAgeS();
+  const stale = age !== null && age > BUTTONS_STALE_S;
   return {
-    buttons: !!buttonsUp,
+    buttons: !!buttonsUp && !stale,
     ws: !!(turn && turn.hand === S.handNo && !ws().heroFolded),
     actionOn: hero !== null && (ws().actionOn ?? null) === hero,
     wsAt: (turn || {}).at ?? null, timeBank: (turn || {}).timeBank ?? null,
+    ...(stale && buttonsUp ? { buttonsStaleS: Math.round(age * 10) / 10 } : {}),
   };
 }
 
@@ -428,6 +459,7 @@ export function handStateIgnition(): Record<string, any> | null {
   const notToActWhy = toActHero && !heroFolded && !heroWon ? null
     : heroFolded ? "hero folded" : heroWon ? "hand won"
     : status === "sitting-out" || status === "waiting-for-bb" ? `status ${status}`
+    : src.buttonsStaleS !== undefined ? `the screen's buttons are a stale read (${src.buttonsStaleS} s old, the reader stood down) — not trusted`
     : actionOnOnly ? "action-on names you but the client has not asked and shows no buttons"
     : actionOnRaw !== null ? `action on seat ${pyStr(actionOnRaw)}`
     : "action-on unknown";

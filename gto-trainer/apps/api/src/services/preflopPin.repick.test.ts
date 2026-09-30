@@ -138,7 +138,7 @@ describe("repickVillainRanges — trigger (b): the open played has its own chart
     expect(await repickVillainRanges(pin009, hand009, "BTN", resumed, dealt009, depsFor(charts))).toBeNull();
   });
 
-  it("a 2x open on a table whose uneven set has only 2.5x and 3x: no exact chart, no switch (hand 4919261748's shape, the BB in)", async () => {
+  it("a 2x open at a 70bb-short table: the 2x uneven tree is looked up (it is in the set since 2026-09-30) — not solved here, so no switch (hand 4919261748's shape, the BB in)", async () => {
     // BTN opens 2, hero SB calls, the 70bb BB (modelled) calls: the picker's chart for the full line is the pinned one
     const P = { 1: "HJ", 2: "CO", 3: "BTN", 4: "SB", 5: "BB", 6: "UTG" };
     const h = flopHand("r21-748", 4, P, [a(4, "post-sb", 1), a(5, "post-bb", 2), a(6, "fold"), a(1, "fold"), a(2, "fold"), a(3, "raise", 2), a(4, "call", 1.5, true), a(5, "call", 1)]);
@@ -152,7 +152,7 @@ describe("repickVillainRanges — trigger (b): the open played has its own chart
     const resumed = await resume(pin, h, "SB", charts);
     const calls: string[] = [];
     expect(await repickVillainRanges(pin, h, "SB", resumed, dealt, depsFor(charts, calls))).toBeNull();
-    expect(calls).toEqual([]);                                                  // not even looked up
+    expect(calls).toEqual(["ign200_6max_D100_s70_BB_o2"]);                     // looked up (the set has 2x now); absent here, so no switch
   });
 
   it("…the same hand as dealt, where the modelled BB folded: trigger (a) fires, the even 2x chart reads the BTN", async () => {
