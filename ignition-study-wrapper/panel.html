@@ -1662,13 +1662,15 @@
     const want = $("sa-auto").checked;
     // Arming on a REAL-MONEY table is a deliberate act, so it is confirmed here
     // and asks the wrapper for a bounded allowance by name. Practice arms plain.
-    let body = { auto: want };
+    // who flipped it rides on the session event (a click from a preview tab of this page looks the same otherwise)
+    const via = { via: "panel checkbox", page: { focused: document.hasFocus(), visible: document.visibilityState } };
+    let body = { auto: want, ...via };
     if (want && !lastPractice) {
       if (!confirm("This is a REAL-MONEY table.\n\nArm auto-execute for 240 minutes or 2000 hands (whichever comes first)?\n\nEvery study pick will be played WITHOUT a keypress until that budget runs out, then it disarms itself.")) {
         $("sa-auto").checked = false;
         return;
       }
-      body = { auto: true, allowRealMoney: true, minutes: 240, hands: 2000, reason: "unattended-path test (practice tables empty)" };
+      body = { auto: true, allowRealMoney: true, minutes: 240, hands: 2000, reason: "unattended-path test (practice tables empty)", ...via };
     }
     autoPending = true;
     let r;

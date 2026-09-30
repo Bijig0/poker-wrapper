@@ -856,7 +856,10 @@ export function autoTableOk(): [boolean, string | null] {
 /** Arm/disarm the auto mode. Arms on a practice / fake table with no ask; a real-money table needs `allowReal`
  *  plus a bounded `minutes`/`hands` (clamped 1-2880 / 1-10000 — raised 2026-09-24 to match the research team's
  *  ~2-day check-in cadence; either running out still disarms it — see autoTableOk). */
-export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: number | null; hands?: number | null; reason?: string | null; delay?: string | null; timeBank?: boolean | null; topUp?: boolean | null } = {}): Record<string, any> {
+export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: number | null; hands?: number | null; reason?: string | null; delay?: string | null; timeBank?: boolean | null; topUp?: boolean | null;
+                                            /** who asked: the /study-auto request's source (panel checkbox, headers) or the code path — on the event */
+                                            by?: Record<string, unknown> | null } = {}): Record<string, any> {
+  const by = opts.by ?? null;
   const st = S.study;
   if (opts.delay === "instant" || opts.delay === "random") {
     st.autoDelay = opts.delay;
@@ -870,7 +873,7 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
     Object.assign(st, { autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
     // the LIVE toggle wins over the declaration
     st.autoDeclared = false;
-    if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo });
+    if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo, by });
     log("[pick] auto off");
     return { ok: true, auto: false, allowance: autoAllowance() };
   }
@@ -905,7 +908,7 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
     if (S.session.id) {
       S.sessions.event(S.session.id, "study-auto", {
         on: true, hand: S.handNo, practice: false, delay: st.autoDelay ?? null,
-        realMoneyAllowance: { minutes, hands, reason, site: isCp() ? "coinpoker" : "ignition" },
+        realMoneyAllowance: { minutes, hands, reason, site: isCp() ? "coinpoker" : "ignition" }, by,
       });
     }
     feedAdd(`Auto-execute armed on REAL MONEY — TEMPORARY TEST allowance (${minutes} min / ${hands ?? "no"} hand cap): ${reason}`);
@@ -915,7 +918,7 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
   st.auto = true;
   if (S.session.id) {
     S.sessions.event(S.session.id, "study-auto", { on: true, hand: S.handNo, practice, delay: st.autoDelay ?? null,
-                                                  realMoneyAllowance: null });
+                                                  realMoneyAllowance: null, by });
   }
   log(`[pick] auto ON (practice, ${pyStr(st.autoDelay ?? null)})`);
   return { ok: true, auto: true, practice, delay: st.autoDelay ?? null, allowance: autoAllowance() };
@@ -927,7 +930,7 @@ export function maybeAutoArm(): void {
   if (!(st.on && st.autoDeclared && !st.auto)) return;
   const [ok] = autoTableOk();
   if (!ok) return;
-  const res = setAuto(true);
+  const res = setAuto(true, { by: { via: "declared at session setup — armed when an allowed table appeared" } });
   if (res.ok) feedAdd("Auto-execute armed (declared at session setup)");
 }
 

@@ -698,7 +698,18 @@ export function buildApp(): Hono {
   });
   app.post("/study-auto", async (c) => {
     const b = await body(c, Body.studyAuto);
-    const res = setAuto(truthy(b.auto), {
+    // WHO FLIPPED IT (2026-09-30): an agent's preview browser clicked the live panel's auto label and the event said
+    // only {on: false} — a transcript search found it. The panel names itself (`via`, its window's focus/visibility);
+    // the headers tell a Claude preview tab, the wrapper's own panel window and a script apart.
+    const ua = c.req.header("user-agent") ?? null;
+    const by = {
+      via: typeof b.via === "string" ? b.via.slice(0, 80) : "http (no via)",
+      page: b.page && typeof b.page === "object" ? b.page : null,
+      origin: c.req.header("origin") ?? null,
+      referer: c.req.header("referer") ?? null,
+      ua: ua ? ua.slice(0, 200) : null,
+    };
+    const res = setAuto(truthy(b.auto), { by,
       allowReal: truthy(b.allowRealMoney), delay: (b.delay as string) ?? null,
       minutes: "minutes" in b ? Number(b.minutes) : null, hands: "hands" in b ? Number(b.hands) : null,
       reason: "reason" in b ? String(b.reason) : null,

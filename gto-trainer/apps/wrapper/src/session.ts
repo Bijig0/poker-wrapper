@@ -575,7 +575,7 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
   if (st.autoDeclared) {
     const res = setAuto(true, {
       allowReal: st.autoDeclaredReal, minutes: st.autoDeclaredBudget?.minutes ?? null, hands: st.autoDeclaredBudget?.hands ?? null,
-      reason: "declared at session setup",
+      reason: "declared at session setup", by: { via: "session setup (declared)" },
     });
     if (!res.ok) log(`[pick] declared auto not armed yet: ${pyStr(res.error ?? null)}`);
   }
