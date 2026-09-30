@@ -97,7 +97,7 @@ app.post("/", async (c) => {
     return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
   }
   noteResolveOk();
-  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras } = resolved;
+  const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras, solveRequest } = resolved;
 
   // the tree this hand will need is opened now, not at hero's turn (fastSolve.warmPreflop6max)
   if (hand) {
@@ -120,6 +120,7 @@ app.post("/", async (c) => {
         // the poller never refreshed its GTO Wizard health flag while idle.
         studyAnswersOn,
         strategyId,
+        solveRequest: solveRequest ?? null,
         warnings,
       },
       422
@@ -152,6 +153,8 @@ app.post("/", async (c) => {
     tableStatus,
     studyAnswersOn,
     strategyId,
+    // the panel's Solve press for the decision on screen (on-demand strategies — services/studyPoller.ts)
+    solveRequest: solveRequest ?? null,
     sessionId: sessionId ?? null,
     // round-trip proof surfaced to the caller: the hand re-rendered as rows
     rerendered: renderPanelRows(hand),

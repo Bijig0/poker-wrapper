@@ -50,6 +50,24 @@ export interface NormalizeResult {
   warnings: string[];
 }
 
+/**
+ * A site's own rake terms as ParsedHand.siteRake, or nothing. `raw` is the CoinPoker shape
+ * { rake: 5, rakeHeadsUp: 5, rakeCap: 1.5, isPotRakePf: true } (percent, percent, table currency, boolean);
+ * `bb` is the big blind in the same currency. A missing or unreadable percentage means no terms at all.
+ */
+export function siteRakeOf(raw: unknown, bb: unknown): { siteRake: NonNullable<ParsedHand["siteRake"]> } | Record<string, never> {
+  if (!isRecord(raw)) return {};
+  const pct = Number(raw.rake);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) return {};
+  const hu = Number(raw.rakeHeadsUp), cap = Number(raw.rakeCap), big = Number(bb);
+  return { siteRake: {
+    pct,
+    pctHeadsUp: raw.rakeHeadsUp != null && Number.isFinite(hu) && hu >= 0 ? hu : null,
+    capBb: raw.rakeCap != null && Number.isFinite(cap) && cap > 0 && Number.isFinite(big) && big > 0 ? Math.round((cap / big) * 1000) / 1000 : null,
+    preflopPots: raw.isPotRakePf === true,
+  } };
+}
+
 export const normalizeHand = (input: unknown): NormalizeResult => {
   if (!isRecord(input)) throw new Error("Hand must be a JSON object.");
   const warnings: string[] = [];
@@ -201,6 +219,10 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
       const ante = Number(input.ante), bb = Number(input.bb);
       return Number.isFinite(ante) && Number.isFinite(bb) && bb > 0 && ante >= 0 ? { anteBb: Math.round((ante / bb) * 1000) / 1000 } : {};
     })()),
+    // THE TABLE'S RAKE TERMS (2026-09-30, the CoinPoker ring strategy). CoinPoker sends them with every table
+    // (roomProperties rake / rakeHeadsUp / rakeCap / isPotRakePf; the wrapper archives them on the hand as `rake`,
+    // and resolveHand copies the live table's onto the live hand). The cap is table currency: over `bb` it is bb.
+    ...siteRakeOf(input.rake, input.bb),
     ...(Number.isFinite(Number(input.tableSlot)) && Number(input.tableSlot) > 0
       ? { tableSlot: Number(input.tableSlot) }
       : {}),

@@ -73,6 +73,48 @@ export function currentChain(): Record<string, any> | null {
   return { verdict: answer?.verdict ?? null, label: answer?.label ?? null, reason: answer?.reason ?? null, session: st.chainSession ?? null };
 }
 
+// ---- on demand: the panel's Solve press (2026-09-30) ------------------------------------------------------
+/** The decision a hand is at, as the Solve press records it: the hand, the street, how long the line is. */
+function decisionOf(h: Record<string, any> | null | undefined): { handId: any; clientHandId: string | null; street: string | null; n: number } | null {
+  if (!h) return null;
+  return { handId: h.handId ?? null, clientHandId: typeof h.clientHandId === "string" && h.clientHandId ? h.clientHandId : null,
+           street: typeof h.street === "string" ? h.street : null, n: Array.isArray(h.actions) ? h.actions.length : 0 };
+}
+const heroOnTurn = (h: Record<string, any> | null | undefined) => !!(h && !h.ended && h.currentNode?.toActIsHero);
+
+/**
+ * THE SOLVE BUTTON (2026-09-30, Brady: an on-demand strategy "that on click will then send out a 'solve'"). Records
+ * the press on the decision in front of hero; the API's poller sees it on /state (currentSolveRequest) and solves
+ * that decision — and only that one. Refused when answers are off, when the session's strategy is not on demand
+ * (those answer every decision by themselves), and when it is not hero's turn. Pressing again on the same decision
+ * is how a solve that found nothing is retried: the poller tells presses apart by `at`.
+ */
+export function requestSolve(hand: Record<string, any> | null): Record<string, any> {
+  const st = S.study;
+  if (!st.on) return { ok: false, why: "answers are off for this session" };
+  if (!st.onDemand) return { ok: false, why: "this session's strategy answers every decision by itself — Solve is for on-demand strategies" };
+  if (!hand) return { ok: false, why: "no hand on the table" };
+  if (!heroOnTurn(hand)) return { ok: false, why: "not your turn — Solve asks about the decision in front of you" };
+  const d = decisionOf(hand)!;
+  st.solveRequest = { ...d, at: nowMs() };
+  if (S.session.id) S.sessions.event(S.session.id, "solve-request", { hand: S.handNo, street: d.street, n: d.n });
+  log(`[solve] requested: ${d.street} · ${d.n} action(s) · hand ${pyStr(d.clientHandId ?? d.handId)}`);
+  return { ok: true, request: st.solveRequest };
+}
+
+/** The /state `solveRequest` key: the Solve press while it still belongs to the decision on screen, else null — and
+ *  a press the table has moved past (another street, another action, another hand, hero no longer to act) is dropped. */
+export function currentSolveRequest(hand: Record<string, any> | null): Record<string, any> | null {
+  const st = S.study;
+  const req = st.solveRequest;
+  if (!req) return null;
+  const d = decisionOf(hand);
+  const same = !!d && st.on && st.onDemand && heroOnTurn(hand) && d.street === req.street && d.n === req.n
+    && (req.clientHandId ? d.clientHandId === req.clientHandId : d.handId === req.handId);
+  if (!same) { st.solveRequest = null; return null; }
+  return { ...req };
+}
+
 // ---- the press -------------------------------------------------------------------------------------------
 /** None if that page point is inside THIS table, else why it is not (the client's own hit-testing decides). OUR
  *  table is the client's tag the reader pinned (dom.ts mySel) — the same identity every read used — never a
@@ -819,6 +861,11 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
     if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo });
     log("[pick] auto off");
     return { ok: true, auto: false, allowance: autoAllowance() };
+  }
+  // AN ON-DEMAND STRATEGY NEVER AUTO-EXECUTES (2026-09-30, Brady: "non auto executing"): every press is the person's
+  if (st.onDemand) {
+    st.auto = false;
+    return { ok: false, auto: false, error: "this session's strategy is on demand: every press is yours, so auto-execute cannot arm", allowance: autoAllowance() };
   }
   const practice = !!(S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice));
   if (isCgg()) {

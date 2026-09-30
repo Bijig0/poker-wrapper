@@ -166,7 +166,7 @@ if (!PUBLISH) {
   try {
     const j = await get(`${apiUrl()}/api/dashboard/sources/strategies`);
     const st = new Map<string, string>(j.strategies.map((s: any) => [s.id, s.status]));
-    const ok = ["ign25-zone-3max-exploit", "ign200-zone-3max-equilibrium", "ign200-ring-6max-equilibrium", "cp200-hu-equilibrium"]
+    const ok = ["ign25-zone-3max-exploit", "ign200-zone-3max-equilibrium", "ign200-ring-6max-equilibrium", "cp200-hu-equilibrium", "cp-ring-6max-ante-ondemand"]
       .every((k) => ["ok", "drift"].includes(st.get(k) ?? ""));
     rec("api :2000 strategies", ok, [...st].map(([k, v]) => `${k.split("-")[0]}:${v}`).join(" "));
   } catch (e: any) {
