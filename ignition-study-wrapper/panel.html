@@ -1122,16 +1122,36 @@
       : `SOLVE<span class="sub2">Enter or Space — the equilibrium for this decision, solved now</span>`;
     return od;
   }
+  // THE PRESS BRINGS THE ANSWER INTO VIEW (2026-10-01, Brady): Study answers goes to the top of the panel, so the
+  // button, the answer and the ranges card under it are all on screen. Aligned twice: at the press, and once more
+  // when that decision's grids have drawn (the ranges card only appears then, and until it does the page may be too
+  // short to bring the card all the way up). Scrolling by hand in between cancels the second alignment; so does a
+  // new hand.
+  let saFocus = null;   // { hand } while the press waits for its grids
+  function focusStudyAnswers() {
+    const card = $("sa-card");
+    // ROOM TO SCROLL INTO: before the ranges card exists the page is often barely taller than the window, so the card
+    // could not reach the top at the press. The page is held at least tall enough for it until the next hand.
+    const y = Math.max(0, card.getBoundingClientRect().top + window.scrollY - 8);   // 8px of air above the card
+    const need = y + window.innerHeight;
+    if (need > document.body.scrollHeight) document.body.style.minHeight = `${Math.ceil(need)}px`;
+    window.scrollTo({ top: y, behavior: "smooth" });
+  }
+  const dropSaFocus = () => { saFocus = null; };
+  window.addEventListener("wheel", dropSaFocus, { passive: true });
+  window.addEventListener("touchmove", dropSaFocus, { passive: true });
   async function doSolve() {
     const btn = $("sa-solve");
     if (solveBusy || btn.disabled || btn.style.display === "none") return;
     solveBusy = true; btn.disabled = true;
+    saFocus = { hand: rgHand };
+    focusStudyAnswers();
     let r;
     try { r = await (await fetch("/panel/solve", { method: "POST" })).json(); } catch (e) { r = { ok: false, why: String(e) }; }
     // the busy flag holds only until /state carries the request (or says why not): the poll redraws from there
     setTimeout(() => { solveBusy = false; }, 1500);
     const line = $("sa-ready");
-    if (!r.ok) { line.style.display = "block"; line.className = "bad"; line.textContent = `✕ not solved: ${r.why || "refused"}`; speak("solve refused"); solveBusy = false; }
+    if (!r.ok) { line.style.display = "block"; line.className = "bad"; line.textContent = `✕ not solved: ${r.why || "refused"}`; speak("solve refused"); solveBusy = false; saFocus = null; }
     else speak("solving");
   }
   $("sa-solve").onclick = doSolve;
@@ -1334,7 +1354,7 @@
     const siteId = s.site && typeof s.site === "object" ? s.site.id : s.site;
     const hid = s.hand?.clientHandId ?? null;
     if (siteId !== "coinpoker" || !s.onDemand) { if (card.style.display !== "none") { card.style.display = "none"; rgKey = null; } return; }
-    if (hid !== rgHand) { rgHand = hid; rgKey = null; card.style.display = "none"; $("rg-body").innerHTML = ""; }   // a new hand: the old grids go
+    if (hid !== rgHand) { rgHand = hid; rgKey = null; card.style.display = "none"; $("rg-body").innerHTML = ""; if (saFocus && saFocus.hand !== hid) saFocus = null; document.body.style.minHeight = ""; }   // a new hand: the old grids go
     const ref = s.panelAnswerRef;
     if (!ref || !ref.decisionKey) return;                                          // nothing new: the last grids stay
     if (hid && ref.clientHandId && ref.clientHandId !== hid) return;                // an earlier hand's answer, not this one's
@@ -1350,7 +1370,7 @@
       j = await (await fetch(`${GTOW_API}/api/dashboard/live-node?${q}`)).json();
     } catch (e) { j = { ok: false, error: String(e) }; }
     if (rgKey !== ref.decisionKey) return;                                           // a newer decision arrived meanwhile
-    if (!j.ok) { $("rg-sub").textContent = ""; $("rg-body").innerHTML = `<div class="sub" style="color:#ffce56">no ranges for this decision — ${esc(j.error || "unknown")}</div>`; return; }
+    if (!j.ok) { $("rg-sub").textContent = ""; $("rg-body").innerHTML = `<div class="sub" style="color:#ffce56">no ranges for this decision — ${esc(j.error || "unknown")}</div>`; if (saFocus) { saFocus = null; requestAnimationFrame(focusStudyAnswers); } return; }
     const heroKey = rgClassOf(j.heroCards);
     const board = (j.board || []).length ? rgCards(j.board) : "";
     $("rg-sub").innerHTML = `${esc(String(j.street || "").toUpperCase())}${board ? " · " + board : ""} · ${j.source === "ai-chain" ? "AI chain solve" : "AI preflop tree"}${j.line ? ` · ${esc(j.line)}` : ""}`;
@@ -1373,6 +1393,7 @@
     if (!(j.opponents || []).length) html += `<div class="sub">no opponent left in the hand at this node</div>`;
     if (j.note) html += `<div class="sub" style="color:#ffce56;flex-basis:100%">⚠ ${esc(j.note)}</div>`;
     $("rg-body").innerHTML = html;
+    if (saFocus) { saFocus = null; requestAnimationFrame(focusStudyAnswers); }   // the press's grids are drawn: bring it all into view
   }
 
   (async function pollSa() {
