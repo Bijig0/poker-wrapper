@@ -794,6 +794,8 @@ class StudyPoller {
       // _pick_ready) — a Zone hand moves on, the pick must not
       decisionKey: key,
       handId: full.hand?.handId ?? null,
+      solveId: typeof (sol as { solveId?: unknown }).solveId === "number" ? (sol as { solveId: number }).solveId : null,
+      clientHandId: full.hand?.clientHandId ?? null,
       band: rolled.band,
       strategy: sol.strategyMode ?? null,
       source: sol.source ?? null,
@@ -1001,6 +1003,7 @@ class StudyPoller {
   /** The rolled pick for the current answer, repeated verbatim by the
    *  keep-alive so the sampled action never re-rolls mid-decision. */
   private lastExtra: { pick: string; roll: number | null; decisionKey?: string | null; handId?: number | null;
+                       solveId?: number | null; clientHandId?: string | null;
                        band?: [number, number] | null;
                        strategy?: string | null; source?: string | null; tier?: string | null;
                        chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
@@ -1152,6 +1155,9 @@ class StudyPoller {
   private async push(
     text: string | null,
     extra?: { pick: string; roll: number | null; decisionKey?: string | null; handId?: number | null;
+              /** the stored AI-chain solve this pick was read from, and the client's hand id — the side panel fetches
+               *  the decision's ranges by them (routes/dashboard.ts /live-node, 2026-09-30) */
+              solveId?: number | null; clientHandId?: string | null;
               band?: [number, number] | null;
               strategy?: string | null; source?: string | null; tier?: string | null;
               chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
@@ -1179,6 +1185,8 @@ class StudyPoller {
           roll: this.lastExtra?.roll ?? null,
           decisionKey: this.lastExtra?.decisionKey ?? null,
           handId: this.lastExtra?.handId ?? null,
+          solveId: this.lastExtra?.solveId ?? null,
+          clientHandId: this.lastExtra?.clientHandId ?? null,
           band: this.lastExtra?.band ?? null,
           strategy: this.lastExtra?.strategy ?? null,
           source: this.lastExtra?.source ?? null,

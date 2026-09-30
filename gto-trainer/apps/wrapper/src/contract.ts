@@ -41,6 +41,7 @@ export const Body = {
   panelAnswer: obj({
     text: anyVal.optional(), pick: anyVal.optional(), roll: anyVal.optional(), note: anyVal.optional(),
     uncertain: anyVal.optional(), decisionKey: anyVal.optional(), handId: anyVal.optional(),
+    solveId: anyVal.optional(), clientHandId: anyVal.optional(),
     band: anyVal.optional(), strategy: anyVal.optional(), source: anyVal.optional(), tier: anyVal.optional(),
     chart: anyVal.optional(), exploitPick: anyVal.optional(), chartPick: anyVal.optional(),
   }),

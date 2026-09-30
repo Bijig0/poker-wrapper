@@ -620,6 +620,10 @@ export function buildApp(): Hono {
     st.prov = live ? Object.fromEntries(["band", "strategy", "source", "tier", "chart", "exploitPick", "chartPick"].map((k) => [k, b[k] ?? null])) : null;
     st.decisionKey = live && typeof b.decisionKey === "string" ? b.decisionKey : null;
     st.handId = live && (Number.isInteger(b.handId) || typeof b.handId === "boolean") ? b.handId : null;
+    // the decision's stored solve and the client's hand id (2026-09-30): /state's panelAnswerRef, which the side panel
+    // fetches the decision's ranges by (the study API's /api/dashboard/live-node)
+    st.solveId = live && Number.isInteger(b.solveId) ? b.solveId : null;
+    st.clientHandId = live && typeof b.clientHandId === "string" && b.clientHandId ? b.clientHandId : null;
     // THE CHAIN LINE (2026-09-25): the answer's verdict lives and dies with the answer; the session's clean count is
     // kept until the poller sends the next one (every answer carries it)
     const ch = b.chain && typeof b.chain === "object" ? b.chain : null;

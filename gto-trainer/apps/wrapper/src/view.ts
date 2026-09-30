@@ -14,6 +14,7 @@ import * as TABLES from "./tables";
 import { EXTRACT_DEEP_JS } from "./ignition/dom";
 import { handState } from "./ignition/hand";
 import { stateHealthSummary } from "./ignition/checks";
+import { answerRef } from "./relay";
 import { TAP_STALL_S } from "./ignition/ws";
 import { autoAllowance, currentAnswer, currentChain, currentNote, currentSolveRequest, pickReady } from "./relay";
 import { topUpWindow } from "./topup";
@@ -82,6 +83,8 @@ async function stateInner(light = false): Promise<Record<string, any>> {
     // the chain line (2026-09-25): a top-level key, so the contract's recorded panelAnswer shape is untouched — and
     // only when there is one (answers on, a push received), so a /state with nothing to say is byte-identical to before
     ...((ch) => (ch ? { panelChain: ch } : {}))(currentChain()),
+    // where the last answer's ranges are (2026-09-30, relay.answerRef): the same rule — a top-level key, only when there is one
+    ...((r) => (r ? { panelAnswerRef: r } : {}))(answerRef()),
     practice: !!(S.fakeMode || L.practice),
     studyAuto: !!st.auto,
     studyAutoDelay: st.autoDelay || "instant",

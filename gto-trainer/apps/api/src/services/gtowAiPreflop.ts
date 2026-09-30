@@ -1305,6 +1305,66 @@ function classRangeOf(w: number[]): Record<string, { w: number }> {
   return out;
 }
 
+/** One seat at a live decision node: its range arriving there, by class (w = combos), for the side panel's grids. */
+export interface LiveNodeSeat { pos: string; stack: number | null; range: Record<string, { w: number }> }
+/** THE RANGES AT THE DECISION IN FRONT OF HERO (routes/dashboard.ts /live-node, 2026-09-30): one shape for both streets. */
+export interface LiveNodeView {
+  ok: true;
+  source: "gtow-ai-preflop" | "ai-chain";
+  street: string;
+  board: string[];
+  line: string;
+  heroCards: string[];
+  hero: { pos: string; stack: number | null; actions: string[]; strategy: Record<string, { w: number; acts: number[] }> | null;
+          range: Record<string, { w: number }> } | null;
+  opponents: LiveNodeSeat[];
+  note: string | null;
+}
+
+/**
+ * THE LIVE PREFLOP NODE, FROM ITS PIN (2026-09-30, Brady: the on-demand answer plus "the equilibrium ranges for both
+ * opponents, in the same way it is shown" on the hand page). An AI preflop answer stores no solve; what it leaves is
+ * the pin (services/preflopPin): the solution and the tree's own codes up to hero's node. The walk over those codes
+ * conditions every seat's 1,326 weights on what it did to get here (a seat yet to act keeps its whole range — its
+ * "arrival" range IS its range at the node), hero's node is read for its strategy, and a seat that folded is gone.
+ * `get` is the node getter (tests feed synthetic nodes; live reads the solved tree).
+ */
+export async function livePreflopNodeView(
+  pin: import("./preflopPin").AiPreflopPin,
+  heroCards: string[] = [],
+  get: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }> = (ln) => fetchNode(pin.solId, ln),
+): Promise<LiveNodeView | { ok: false; reason: string }> {
+  const shape = pin.shape;
+  const codes = pin.codes;
+  const weights = new Map<string, number[]>(shape.positions.map((p) => [p, new Array(1326).fill(1)]));
+  const folded = new Set<string>();
+  if (codes.length) {
+    const walked = await walkArrivalRanges(shape, codes, get, 6, (s) => {
+      weights.set(s.actor, s.after);
+      if (s.token === "F") folded.add(s.actor);
+    });
+    // the walk's own verdict on the seats left is the flop's (2..6); a node it could not read is the only failure here
+    if (!walked.ok && !/players reach the flop/.test(walked.reason)) return { ok: false, reason: walked.reason };
+  }
+  const line = codes.join("-");
+  const node = await get(line);
+  if ("error" in node) return { ok: false, reason: `hero's node '${line || "root"}' — ${node.error}` };
+  const j = node.data;
+  const actor: string | null = j.game?.players?.find((p: any) => p.is_hero)?.position ?? shape.heroApiPos ?? null;
+  if (!actor) return { ok: false, reason: `node '${line || "root"}' names no player to act` };
+  const sols: any[] = j.action_solutions ?? [];
+  const handPosOf: Record<string, string> = {};
+  for (const [hp, ap] of Object.entries(shape.apiOf)) handPosOf[ap] = hp;
+  const heroW = weights.get(actor) ?? new Array(1326).fill(1);
+  const seat = (p: string): LiveNodeSeat => ({ pos: handPosOf[p] ?? p, stack: shape.stacks[p] ?? null, range: classRangeOf(weights.get(p) ?? []) });
+  return {
+    ok: true, source: "gtow-ai-preflop", street: "preflop", board: [], line, heroCards,
+    hero: { ...seat(actor), actions: sols.map((a) => labelOf(a.action)), strategy: classStrategyOf(heroW, sols) },
+    opponents: shape.positions.filter((p) => p !== actor && !folded.has(p)).map(seat),
+    note: pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out as dead money` : null,
+  };
+}
+
 /**
  * RESUME AN AI-PREFLOP PIN AT THE FLOP (services/preflopPin, 2026-09-25). The pinned solution is the one that
  * answered hero's last preflop decision; its line is walked onto the tree's sizes (hero's own included) and every

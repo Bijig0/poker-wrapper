@@ -52,6 +52,18 @@ export function currentAnswer(): Record<string, any> | null {
   return { text: st.text, pick: st.pick, roll: st.roll, note: st.note };
 }
 
+/**
+ * WHERE THE LAST ANSWER'S RANGES ARE (2026-09-30): the decision key, the stored solve and the client's hand id of the
+ * answer the poller last pushed — /state's `panelAnswerRef`, a top-level key beside panelAnswer so the contract's
+ * recorded panelAnswer shape is untouched. NOT under the 3 s freshness gate: the side panel keeps a decision's grids
+ * until the next Solve or the next hand, and decides that by the hand id, not by how long ago the answer arrived.
+ */
+export function answerRef(): Record<string, any> | null {
+  const st = S.study;
+  if (!st.on || !st.decisionKey) return null;
+  return { decisionKey: st.decisionKey, solveId: st.solveId ?? null, clientHandId: st.clientHandId ?? null, at: Math.trunc((st.at || 0) * 1000) };
+}
+
 /** WHY there is no answer, when there is none (the same freshness gate, a separate channel). */
 export function currentNote(): string | null {
   const st = S.study;

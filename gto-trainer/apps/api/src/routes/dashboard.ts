@@ -40,7 +40,8 @@ import { fetchNode6max } from "../services/hrc6maxDb";
 import { nodeGetterHu } from "../services/hrc2max";
 import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
-import { preflopPathView, dealtFromTreeId } from "../services/gtowAiPreflop";
+import { preflopPathView, dealtFromTreeId, livePreflopNodeView } from "../services/gtowAiPreflop";
+import { getPreflopPin } from "../services/preflopPin";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
 import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
@@ -1933,6 +1934,65 @@ app.get("/solve/:id", (c) => {
   const got = solveStore.forAnswer(Number.isFinite(id) ? id : null, c.req.query("hand") || null, c.req.query("key") || null);
   if (!got.ok) return c.json({ ok: false, error: got.error }, 404);
   return c.json({ ok: true, row: got.row, via: got.via, ...expandTrace(got.trace) });
+});
+
+/**
+ * GET /live-node?hand=<clientHandId>&key=<decisionKey>&solveId= — THE RANGES AT THE DECISION IN FRONT OF HERO, for the
+ * side panel (2026-09-30, Brady: the on-demand strategy's answer plus "the equilibrium ranges for both opponents … in
+ * the same way that it is shown" on the hand page). One shape for both streets (gtowAiPreflop.LiveNodeView): hero's
+ * strategy at the node and every live seat's range arriving there — conditioned on what it did to get here; a seat yet
+ * to act arrives with its whole range. Postflop it is the stored AI-chain solve for that decision (solveStore.forAnswer,
+ * the walkthrough's own data, its last hero node); preflop the AI tree is not stored as a solve, so the node is walked
+ * from the pin (services/preflopPin) that names the solution and the codes. A CoinPoker hand has no hands row until
+ * it ends, which is why nothing here takes a dbId.
+ */
+app.get("/live-node", async (c) => {
+  const hand = c.req.query("hand") || null;
+  const key = c.req.query("key") || null;
+  const solveIdRaw = Number(c.req.query("solveId"));
+  const solveId = Number.isFinite(solveIdRaw) && solveIdRaw > 0 ? solveIdRaw : null;
+  if (!hand) return c.json({ ok: false, error: "hand (the client's hand id) is required" }, 400);
+  let street: string | null = null;
+  try { street = key ? String(JSON.parse(key)[0] ?? "") : null; } catch { street = null; }
+  const doc = handFacts.get(hand);
+  const heroCards = doc?.heroCards ? (doc.heroCards.match(/[2-9TJQKA][shdc]/g) ?? []) : [];
+  if (street !== "preflop") {
+    const got = solveStore.forAnswer(solveId, hand, key);
+    if (got.ok) {
+      const v = expandTrace(got.trace);
+      const nodes: any[] = v.nodes ?? [];
+      const n = [...nodes].reverse().find((x) => x.isHero) ?? nodes[nodes.length - 1];
+      if (n) {
+        // the walkthrough's label rule, less a zero size ("CHECK 0"): the name, and the size when it has none
+        const labelOfAct = (a: any) => a.name + (a.betsize != null && Number(a.betsize) > 0 && !/\d/.test(a.name) ? ` ${a.betsize}` : "");
+        const st = (v.streets ?? []).find((s: any) => s.si === n.si);
+        const players: string[] = n.players ?? [];
+        const seats = players.map((pos: string, i: number) => {
+          const label = seatLabel(i, players.length);
+          const stackIn = st?.stackIn ?? null;
+          return { pos, label, stack: stackIn != null ? Math.round((stackIn - (n.invested?.[i] ?? 0)) * 10) / 10 : null, range: n.rangesIn?.[label] ?? {} };
+        });
+        const heroSeat = seats.find((s) => s.label === n.heroSeatLabel) ?? null;
+        return c.json({
+          ok: true, source: "ai-chain", street: String(n.street ?? "").toLowerCase(),
+          board: String(n.board ?? "").match(/[2-9TJQKA][shdc]/g) ?? [], line: (n.codes ?? []).join("-"),
+          heroCards: v.spec.heroCombo ? (String(v.spec.heroCombo).match(/.{2}/g) ?? []) : heroCards,
+          hero: heroSeat ? { pos: heroSeat.pos, stack: heroSeat.stack, range: heroSeat.range,
+                             actions: (n.actions ?? []).map(labelOfAct), strategy: n.isHero ? n.actorStrategy : null } : null,
+          opponents: seats.filter((s) => s !== heroSeat).map(({ pos, stack, range }) => ({ pos, stack, range })),
+          note: n.isHero ? null : `the stored solve's last node is ${n.actorPos}'s, not hero's`,
+          solveId: got.row.id,
+        });
+      }
+    }
+    if (street) return c.json({ ok: false, error: got.ok ? "the stored solve holds no node" : got.error }, 404);
+  }
+  const pin = getPreflopPin(hand);
+  if (!pin) return c.json({ ok: false, error: "no preflop tree is pinned for this hand — the answer was not an AI preflop solve, or the hand is over" }, 404);
+  if (pin.piece !== "gtow-ai-preflop") return c.json({ ok: false, error: `the preflop answer was read from a chart (${pin.chartId}), not an AI tree` }, 404);
+  const v = await livePreflopNodeView(pin, heroCards);
+  if (!v.ok) return c.json({ ok: false, error: v.reason }, 502);
+  return c.json(v);
 });
 
 /** GET /storage — where every record lives (the one data root), what was adopted from the legacy files, any split. */

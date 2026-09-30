@@ -1,0 +1,52 @@
+/* THE 13x13 GRID'S STYLES, SHARED (2026-09-30): moved out of dashboard.css verbatim; the wrapper's side panel loads
+   this file too (see grid169.js). Colours come from the host page's theme variables: --surface, --surface2, --line,
+   --grid, --ink, --muted, --faint, --ev, --chip, --shadow, --font-mono. */
+
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend b { color: var(--ink); }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* node viewer (the exact chart / MES node behind an answer) */
+.grid169 { display: grid; grid-template-columns: repeat(13, 30px); gap: 2px; margin-top: 8px; }
+.grid169 div { width: 30px; height: 26px; font-size: 10px; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: var(--surface2); color: var(--ink); font-family: var(--font-mono); }
+.grid169 div.hero { outline: 2px solid var(--ev); z-index: 1; }
+.grid169 div { color: #fff; text-shadow: 0 0 2px rgba(0,0,0,.6); }
+.grid169 div.off { color: rgba(255,255,255,.28); text-shadow: none; }
+.grid169 div.clk { cursor: pointer; }
+.grid169 div.clk:hover { outline: 1px solid rgba(255,255,255,.6); }
+/* the per-combo panel a class cell opens */
+.combo-panel { margin-top: 8px; }
+.combo-panel .cp-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 6px 0; }
+.combo-panel .cp-legend { display: inline-flex; gap: 10px; }
+.combo-panel .cp-legend .sw { width: 10px; height: 10px; margin-right: 4px; }
+.cmb { display: grid; grid-template-columns: 62px 42px 150px 1fr auto; gap: 8px 12px; align-items: center; padding: 8px 10px; margin: 4px 0; border-radius: 6px; font-size: 12.5px; }
+.combo-panel .cp-head { margin: 10px 0 8px; }
+.cmb:nth-child(even) { background: var(--surface2); }
+.cmb.hero { outline: 2px solid var(--ev); }
+.cmb .cards { font-size: 13px; letter-spacing: 1px; }
+.cmb .w { text-align: right; }
+.cmb .bar { display: block; width: 100%; height: 18px; border-radius: 3px; background: rgb(30,30,30); }
+.cmb .nums { padding-left: 6px; white-space: nowrap; }
+.cmb .nums { color: var(--ink); }
+
+.grid169.sm { grid-template-columns: repeat(13, 24px); } .grid169.sm div { width: 24px; height: 20px; font-size: 9px; }
+
+/* suitedness on the grid cell: dimmed so the two ranks stay the thing you read */
+.grid169 i.sfx { font-style: normal; font-size: .82em; opacity: .7; margin-left: .5px; }
+.combo-panel .cp-note { margin: 0 0 8px; line-height: 1.5; max-width: 76ch; }
+/* the collapsed no-board case: the combos listed inline under their single row */
+.combo-panel .cp-combos { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; padding-left: 10px; }
+/* your own combo among them (hero's class opens on its own) */
+.combo-panel .cp-combos .hero { outline: 2px solid var(--ev); border-radius: 4px; padding: 0 4px; color: var(--ink); }
+
+/* grid hover popover (every 13x13 strategy grid) */
+#gridtip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12px; min-width: 190px; box-shadow: var(--shadow); display: none; }
+#gridtip .h { font-weight: 700; font-family: var(--font-mono); margin-bottom: 5px; display: flex; justify-content: space-between; gap: 10px; }
+#gridtip .h .sub { font-weight: 400; }
+#gridtip .r { display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; margin: 2px 0; }
+#gridtip .r .bar { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+#gridtip .r .bar i { display: block; height: 100%; }
+#gridtip .r .lab { display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; }
+#gridtip .r .pct { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; }
+#gridtip .note { color: var(--muted); font-size: 11px; margin-top: 4px; }
