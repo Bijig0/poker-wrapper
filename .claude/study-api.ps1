@@ -16,6 +16,12 @@ $apiPort = if ($env:PORT) { [int]$env:PORT } else { 2000 }   # this install's AP
 # Normal before it starts anything; its children inherit that.
 try { (Get-Process -Id $PID).PriorityClass = 'Normal' } catch { }
 $root = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api'
+# NO PROGRESS BAR, EVER (2026-09-30): this runs with -WindowStyle Hidden, and once its console is gone (a relaunch that
+# killed the conhost) Invoke-WebRequest's progress bar throws "The Win32 internal error 'No process is on the other end
+# of the pipe' 0xE9 ... console output buffer" on EVERY probe - three in a row read as "worker hung", and a healthy
+# API was killed and restarted every ~110 s for ten minutes (14:57-15:08), each fresh worker without a GTO Wizard
+# token for its first seconds. The probe must never depend on a console.
+$ProgressPreference = 'SilentlyContinue'
 $sup = Join-Path $root 'data\jobs\supervisor.log'
 $api = Join-Path $root 'data\jobs\api.log'   # the worker's stdout+stderr: where a failed boot says why
 $bun = $env:BUN
