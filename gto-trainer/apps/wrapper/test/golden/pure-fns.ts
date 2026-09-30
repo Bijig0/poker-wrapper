@@ -14,6 +14,8 @@ import { join } from "node:path";
 
 import * as CPF from "../../src/sites/cpFeed";
 import { Site as CPSite, FORMATS as CP_FORMATS } from "../../src/sites/coinpoker";
+/** CoinPoker ring formats added after the Python recording (2026-09-30) — see the coinpoker.* adapters below */
+const CP_FORMATS_AFTER_RECORDING = new Set(["cp-ring-NL200-6", "cp-ring-NL500-6"]);
 import * as CPA from "../../src/sites/cpActions";
 import { S as ST } from "../../src/state";
 import * as DOM from "../../src/ignition/dom";
@@ -198,8 +200,11 @@ export const FNS_EXTRA: Record<string, (args: any[], rec: any) => unknown> = {
     return CPF.lineTime(s);
   },
   "coinpoker.label": ([room, props]) => CPSite.label(room, props),
-  "coinpoker._format_for": ([props]) => CPSite.formatFor(props),
-  "coinpoker.FORMATS": () => CP_FORMATS,
+  // SUPERSEDED 2026-09-30 (Brady: NL200 and NL500 6-max ring tables for the on-demand ante strategy): two ring formats
+  // the Python recording never had. Projected out — the catalogue less those two, and a table only they match (1/2,
+  // 2.5/5 six-handed) reads as the recording's "no format" — so every other format and match is still compared exactly.
+  "coinpoker._format_for": ([props]) => { const f: any = CPSite.formatFor(props); return f && CP_FORMATS_AFTER_RECORDING.has(typeof f === "string" ? f : f.id) ? null : f; },
+  "coinpoker.FORMATS": () => CP_FORMATS.filter((f: any) => !CP_FORMATS_AFTER_RECORDING.has(f.id)),
   "cp_actions.parse_amount": ([t]) => CPA.parseAmount(t),
   "cp_actions._fmt": ([v]) => CPA.fmtAmount(v),
   "balances.record": () => onBalDb(() => {
