@@ -690,6 +690,22 @@ export function buildApp(): Hono {
     if (S.session.id) S.sessions.event(S.session.id, "sitout", { on, all: truthy(b.all), ok: res.ok ?? null });
     return json(200, res);
   });
+  // COINPOKER CLOSE-OUT (2026-10-01): this panel sits out, lets the hand finish, ends its session, closes its table in
+  // the client and closes itself (session.cpCloseOut). The leader's close-all asks every panel over this.
+  app.post("/panel/close-out", async (c) => {
+    if (!isCp()) return json(409, { ok: false, why: "close-out is a CoinPoker panel's" });
+    const raw = await c.req.text();
+    let why = "the leader closed every panel";
+    try { const b = raw ? JSON.parse(raw) : {}; if (typeof b.why === "string" && b.why) why = b.why; } catch {}
+    const res = SESSION.cpCloseOut(why);
+    return json(res.ok ? 200 : 409, res);
+  });
+  // THE LEADER'S "END ALL SESSIONS" (2026-10-01): every CoinPoker panel and its table close, then the leader window
+  app.post("/admin/close-all", async () => {
+    if (C.TAG) return json(409, { ok: false, why: "only the main panel's process runs the leader" });
+    const { cpPanelPorts } = await import("./admin");
+    return json(200, await SESSION.cpCloseAll("ended from the leader (End all sessions)", await cpPanelPorts()));
+  });
   app.post("/act/pick", async () => json(200, await executePick("press")));
   // THE SOLVE BUTTON (on-demand strategies, 2026-09-30): ask the API's poller for an answer to the decision on screen
   app.post("/panel/solve", async () => {

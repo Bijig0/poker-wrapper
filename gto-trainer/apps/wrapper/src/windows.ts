@@ -284,11 +284,22 @@ export function chromeWindow(url: string, profile: string, x: number, y: number,
   }
 }
 
-/** Stop the app-mode browser running on OUR user-data-dir `profile` (matched on that path only). */
+/**
+ * The pattern that names ONE user-data-dir on a command line: the path, then a quote, a space or the end. A plain
+ * substring match (2026-10-01) let `.profile-panel` also match `.profile-panel-t2`, `-t3`… — so closing the main
+ * CoinPoker panel killed every tagged panel's window, and each of those wrappers then ended its own session 8 s later
+ * ("the panel window was closed"). The same text is a .NET regex (PowerShell -match) and a JS RegExp.
+ */
+export function profileDirPattern(path: string): string {
+  return '--user-data-dir="?' + path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '"?(\\s|$)';
+}
+export const usesProfileDir = (cmdline: string, path: string) => new RegExp(profileDirPattern(path), "i").test(cmdline);
+
+/** Stop the app-mode browser running on OUR user-data-dir `profile` (matched on that exact path only). */
 export async function killProfileWindows(profile: string): Promise<number> {
   const path = profileDir(profile);
-  const ps = "$p = '" + path.replaceAll("'", "''") + "'; "
-    + "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('--user-data-dir=' + $p) } "
+  const ps = "$p = '" + profileDirPattern(path).replaceAll("'", "''") + "'; "
+    + "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -match $p } "
     + "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }";
   try {
     const out = await new Promise<string>((resolve) => {

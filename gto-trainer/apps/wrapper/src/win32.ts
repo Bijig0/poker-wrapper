@@ -48,6 +48,7 @@ const user32 = lazy(() => dlopen("user32.dll", {
   GetDC: { args: [P], returns: P },
   ReleaseDC: { args: [P, P], returns: i32 },
   PrintWindow: { args: [P, P, u32], returns: i32 },
+  PostMessageW: { args: [P, u32, i64, i64], returns: i32 },
 }));
 
 const kernel32 = lazy(() => dlopen("kernel32.dll", {
@@ -194,6 +195,8 @@ export function className(h: number): string {
 }
 
 export const isWindowVisible = (h: number) => !!user32().IsWindowVisible(hwnd(h));
+/** Ask a window to close, exactly as its X button does (WM_CLOSE, posted — the window's own code decides). */
+export const closeWindow = (h: number) => !!user32().PostMessageW(hwnd(h), 0x0010, 0n, 0n);
 export const isWindow = (h: number) => !!h && !!user32().IsWindow(hwnd(h));
 export const isIconic = (h: number) => !!user32().IsIconic(hwnd(h));
 export const isZoomed = (h: number) => !!user32().IsZoomed(hwnd(h));

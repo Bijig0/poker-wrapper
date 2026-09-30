@@ -1303,12 +1303,15 @@ export async function closeOutAfterEnd(sid: string): Promise<Record<string, any>
   if (S.fakeMode) return { left: null, windows: "kept", why: "test rig" };
   if (isClientSite()) {
     const cp = isCp();
+    // THE MAIN COINPOKER PANEL IS A TABLE PANEL LIKE ANY OTHER (2026-10-01): ending its session closes its own window
+    // only — the leader window (and every other panel) stays, and this process with it: it serves the leader page
+    const keep = cp && !C.TAG && !!leaderHwnd();
     later(0.8, async () => {
       await killProfileWindows(C.PROFILE_PANEL);
-      if (cp && !C.TAG) await killProfileWindows(C.PROFILE_LEADER);
-      standDown("session ended");
+      if (!keep) standDown("session ended");
     });
-    return { left: null, windows: "closing", process: "exiting", why: `${cp ? "CoinPoker" : "ClubGG"} tables are left open in the client` };
+    return { left: null, windows: "closing", process: keep ? "kept (it serves the leader window)" : "exiting",
+             why: `${cp ? "CoinPoker" : "ClubGG"} tables are left open in the client` };
   }
   if (!(await cdp.available(C.CDP_PORT))) {
     later(0.8, async () => {
@@ -1620,10 +1623,166 @@ export async function panelWatchLoop(): Promise<void> {
       log(`[session] ${sid}: the panel window was closed — ending the session`);
       S.sessions.event(sid, "panel-closed", { goneS: pyRound(time() - pw.missingSince, 1) });
       Object.assign(pw, { seen: false, missingSince: null });
+      // COINPOKER: a panel is its table (Brady, 2026-10-01) — closing it leaves the table too, once the hand is over
+      if (isCp()) {
+        cpCloseOut("the panel window was closed");
+        continue;
+      }
       const res = await sessionEnd({ note: "ended: the panel window was closed" });
       if (res.ok && isClientSite()) await closeOutAfterEnd(sid);
     } catch (e: any) {
       log(`[session] panel watch: ${e?.message ?? e}`);
+    }
+  }
+}
+
+// ---- CoinPoker: a panel and its table close together; the leader closes them all ----------------------------
+/** How long a close-out waits for hero's hand to finish before it closes the table anyway (sat out by then). */
+export const CP_CLOSE_HAND_WAIT_S = 180;
+/** After the table window is asked to close: how long its process gets to go before the close-out says it did not. */
+const CP_TABLE_GONE_S = 12;
+
+/** What a test replaces: the table, the window and the process (the order and the decisions are the code's). */
+export const cpCloseSeams = {
+  room: (): string | null => CP.table()?.room ?? null,
+  heroSeated: (): boolean => !!CP.table()?.heroSeated,
+  sitOut: (): Promise<Record<string, any>> => CP.sitout(true, false),
+  /** hero is dealt into a hand that has not ended for him */
+  heroInHand: (): boolean => {
+    const h = CP.hand();
+    return !!(h && !h.ended && h.heroSeatId != null && (h.liveSeats || []).includes(h.heroSeatId));
+  },
+  /** ask the table window to close (its X button); true once the table's process is gone */
+  closeTable: async (room: string): Promise<boolean> => {
+    const { tableWindow } = await import("./sites/cpActions");
+    const { Site } = await import("./sites/coinpoker");
+    const h = tableWindow(room);
+    if (h === null) return !Site.openRooms().has(room);
+    W.closeWindow(h);
+    const t0 = time();
+    while (time() - t0 < CP_TABLE_GONE_S) {
+      await sleep(0.5);
+      if (!Site.openRooms().has(room)) return true;
+    }
+    return false;
+  },
+  endSession: (note: string): Promise<Record<string, any>> => sessionEnd({ note }),
+  closePanel: (): Promise<number> => killProfileWindows(C.PROFILE_PANEL),
+  leaderUp: (): boolean => !!leaderHwnd(),
+  exit: (why: string): void => standDown(why),
+};
+
+/**
+ * CLOSE A COINPOKER PANEL AND ITS TABLE (Brady, 2026-10-01: "a sub-panel … if closed, closes just itself + the coinpoker
+ * table/session attached"; the leader closes them all). In order, never mid-hand:
+ *   1. tick "sit out next hand", so no new hand is dealt to hero while this runs;
+ *   2. let the hand hero is in finish (up to CP_CLOSE_HAND_WAIT_S; the table window stays up to act in by hand);
+ *   3. end the session;
+ *   4. close the table window in the client, as its X does — the client takes hero off the table;
+ *   5. close the panel window, and end this process — unless it is the main panel's and the leader window is still
+ *      up: that process serves the leader page (/admin), so it stays, with no session, until the leader closes.
+ * Runs in the background (the caller returns at once); `S.cpClosing` says it is under way, on /state and to a second
+ * caller, which it refuses. A step that fails is logged and the next one still runs.
+ */
+export function cpCloseOut(why: string, opts: { keepProcess?: boolean; closePanel?: boolean } = {}): Record<string, any> {
+  if (S.cpClosing) return { ok: false, why: `already closing (${S.cpClosing.why})` };
+  const room = cpCloseSeams.room();
+  S.cpClosing = { why, room, at: nowMs(), step: "sitting out" };
+  const sid = S.session.id;
+  if (sid) S.sessions.event(sid, "cp-close-out", { why, room });
+  log(`[close-out] CoinPoker: ${why} — ${room ? `leaving ${room} after this hand` : "no table attached"}`);
+  const run = async () => {
+    // each step on its own: one that throws is logged and the next still runs — a close-out never stops half way
+    const step = async (name: string, f: () => unknown) => {
+      if (S.cpClosing) S.cpClosing.step = name;
+      try {
+        await f();
+      } catch (e: any) {
+        log(`[close-out] ${name}: ${e?.message ?? e}`);
+      }
+    };
+    await step("sitting out", async () => {
+      if (!room || !cpCloseSeams.heroSeated()) return;
+      log(`[close-out] sit out next hand: ${pyRepr(await cpCloseSeams.sitOut())}`);
+    });
+    await step("waiting for the hand to finish", async () => {
+      const t0 = time();
+      while (room && cpCloseSeams.heroInHand() && time() - t0 < CP_CLOSE_HAND_WAIT_S) await sleep(1);
+      if (room && cpCloseSeams.heroInHand()) log(`[close-out] the hand is still running after ${CP_CLOSE_HAND_WAIT_S} s — closing the table anyway`);
+    });
+    await step("ending the session", async () => {
+      if (S.session.id) await cpCloseSeams.endSession(`ended: ${why}`);
+    });
+    await step("closing the table", async () => {
+      if (!room) return;
+      const gone = await cpCloseSeams.closeTable(room);
+      log(gone ? `[close-out] ${room} closed in the client` : `[close-out] ${room} did NOT close — the client kept the window (a confirmation?); close it by hand`);
+      if (sid) S.sessions.event(sid, "cp-table-closed", { room, ok: gone });
+    });
+    const keep = opts.keepProcess ?? (!C.TAG && cpCloseSeams.leaderUp());
+    await step("closing the panel", async () => {
+      if (opts.closePanel !== false) await cpCloseSeams.closePanel();
+    });
+    S.cpClosing = null;
+    if (!keep) cpCloseSeams.exit(why);
+    else log("[close-out] this process serves the leader window — it stays, with no session");
+  };
+  void run();
+  return { ok: true, closing: true, room };
+}
+
+/**
+ * THE LEADER CLOSES THEM ALL (Brady, 2026-10-01): every CoinPoker panel this install is running — the tagged ones on
+ * their own ports, and this one — closes itself and its table (cpCloseOut), each after its own hand; then the leader
+ * window itself goes and this process ends. `others` is the panel ports to tell (the admin page's list).
+ */
+export async function cpCloseAll(why: string, others: number[]): Promise<Record<string, any>> {
+  const told = await Promise.all(others.map(async (p) => {
+    try {
+      const r = await postJson(`http://127.0.0.1:${p}/panel/close-out`, { why }, 10);
+      return { port: p, ok: !!(r && (r as any).ok) };
+    } catch (e: any) {
+      return { port: p, ok: false, why: String(e?.message ?? e) };
+    }
+  }));
+  log(`[close-out] leader: closing every CoinPoker panel (${why}) — told ${told.map((t) => `:${t.port} ${t.ok ? "ok" : "failed"}`).join(", ") || "no other panel"}`);
+  S.leaderWatch.closingAll = true;
+  const mine = S.session.id || CP.table() ? cpCloseOut(why, { keepProcess: true }) : { ok: true, closing: false };
+  // the leader window and this process go once this panel's own close-out is done
+  void (async () => {
+    while (S.cpClosing) await sleep(1);
+    await killProfileWindows(C.PROFILE_LEADER);
+    await killProfileWindows(C.PROFILE_PANEL);
+    standDown(why);
+  })();
+  return { ok: true, told, mine };
+}
+
+/** Every 2 s on the main CoinPoker process: the leader window, once seen, gone for PANEL_GONE_S = close them all. */
+export async function leaderWatchLoop(): Promise<void> {
+  for (;;) {
+    await sleep(2);
+    try {
+      const lw = S.leaderWatch;
+      if (C.TAG || S.fakeMode || C.HEADLESS || lw.closingAll) continue;
+      if (time() < lw.quietUntil) continue;                     // we are reopening it ourselves (openLeader)
+      if (leaderHwnd()) {
+        Object.assign(lw, { seen: true, missingSince: null });
+        continue;
+      }
+      if (!lw.seen) continue;
+      if (lw.missingSince === null) {
+        lw.missingSince = time();
+        continue;
+      }
+      if (time() - lw.missingSince < PANEL_GONE_S) continue;
+      log("[close-out] the CoinPoker leader window was closed — closing every panel and its table");
+      if (S.session.id) S.sessions.event(S.session.id, "leader-closed", { goneS: pyRound(time() - lw.missingSince, 1) });
+      Object.assign(lw, { seen: false, missingSince: null });
+      const { cpPanelPorts } = await import("./admin");
+      await cpCloseAll("the leader window was closed", await cpPanelPorts());
+    } catch (e: any) {
+      log(`[close-out] leader watch: ${e?.message ?? e}`);
     }
   }
 }
@@ -1653,6 +1812,8 @@ export const ADMIN_PORTS = [livePort("panel"), ...Array.from({ length: 20 }, (_,
 /** THE LEADER PANEL: while playing CoinPoker the main panel keeps the admin page up in a second window. */
 export async function openLeader(): Promise<void> {
   if (C.TAG || S.fakeMode) return;
+  // the leader watch must not read our own reopen as the leader being closed
+  Object.assign(S.leaderWatch, { quietUntil: time() + 30, seen: false, missingSince: null, closingAll: false });
   if (leaderHwnd()) await killProfileWindows(C.PROFILE_LEADER);
   const area = otherArea() || targetArea();
   const w = Math.min(area.w, Math.max(520, Math.floor(area.w / 3))), ht = Math.trunc(area.h * 0.7);

@@ -27,6 +27,16 @@ export function listeningPorts(ports: number[]): Set<number> {
   }
 }
 
+/** Every OTHER CoinPoker panel this install is running (their ports) — the leader's close-all tells each one. */
+export async function cpPanelPorts(): Promise<number[]> {
+  const ports = [...listeningPorts(ADMIN_PORTS)].filter((p) => ADMIN_PORTS.includes(p) && p !== C.PANEL_PORT);
+  const site = await Promise.all(ports.map(async (p) => {
+    const r = await getJson(`http://127.0.0.1:${p}/state?light=1`, 5).catch(() => ({}) as Record<string, any>);
+    return r && r.site === CP_SITE ? p : null;
+  }));
+  return site.filter((p): p is number => p !== null).sort((a, b) => a - b);
+}
+
 export async function panelProbe(port: number, stateLight: () => Promise<Record<string, any>>): Promise<Record<string, any> | null> {
   if (port !== C.PANEL_PORT && !listeningPorts([port]).has(port)) return null;
   let s: Record<string, any>;

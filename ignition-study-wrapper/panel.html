@@ -476,6 +476,15 @@
   const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const badge = (id, ok, txt) => { const b = $(id); b.className = "badge " + (ok ? "ok" : "bad"); b.textContent = txt; };
   const GTOW_API = "http://127.0.0.1:2000";
+  // CLOSING A COINPOKER PANEL CLOSES ITS TABLE (2026-10-01): with a session running, the window's X asks first. Browsers
+  // allow only their own generic "Leave site?" prompt here (and only once the page has been clicked); what closes is
+  // this panel and its table in the client, after the hand in play — see the wrapper's session.cpCloseOut.
+  let LAST_STATE = null, UNLOAD_OK = false;
+  window.addEventListener("beforeunload", (e) => {
+    if (UNLOAD_OK || !LAST_STATE || LAST_STATE.site !== "coinpoker" || !LAST_STATE.sessionId) return;
+    e.preventDefault();
+    e.returnValue = "Closing this panel ends its session and closes its CoinPoker table after this hand.";
+  });
 
   // ================= modes =================
   // Game: what you need at the table. Analysis: the instruments. Pollers
@@ -484,11 +493,15 @@
   let MODE = "game";
   let modeExplicit = false;
   let analysisEntered = false;
+  // THE WINDOW TITLE IS HOW THE WRAPPER FINDS THIS WINDOW (2026-10-01): the server stamps this panel's tag on it
+  // ("Poker Wrapper #2"). Switching modes used to set a bare "Poker Wrapper", dropping the tag — the #2 wrapper then
+  // could not find its window, read it as closed and ended its session 8 s later, window still open.
+  const BASE_TITLE = document.title.replace(/ · Analysis$/, "");
   function setMode(m, push = true) {
     MODE = m === "analysis" ? "analysis" : "game";
     document.querySelectorAll("section[data-mode]").forEach(s => s.classList.toggle("on", s.dataset.mode === MODE));
     document.querySelectorAll(".modes button").forEach(b => b.classList.toggle("on", b.dataset.mode === MODE));
-    document.title = MODE === "analysis" ? "Poker Wrapper · Analysis" : "Poker Wrapper";
+    document.title = MODE === "analysis" ? `${BASE_TITLE} · Analysis` : BASE_TITLE;
     if (push) { const u = new URL(location.href); u.searchParams.set("mode", MODE); history.replaceState({}, "", u); }
     if (MODE === "analysis" && !analysisEntered) { analysisEntered = true; loadRecs(); }
   }
@@ -1202,13 +1215,30 @@
     $("cp-type").style.background = !t ? "" : t.practice ? "#1c3b2c" : "#57222a";
     $("cp-room").innerHTML = t
       ? `<b title="${esc(t.room)}">${esc(t.label || t.room)}</b> · ${t.heroSeated ? (t.heroSittingOut ? '<span style="color:#ffce56">you are sitting out</span>' : "you are seated") : "you are not seated (observing)"}`
-        + ` · last message ${t.lastEventAgo}s ago` + (t.rake ? ` · rake ${t.rake.rake}% cap ${t.rake.rakeCap}${t.rake.isPotRakePf ? " · preflop pots raked" : ""}` : "")
+        + ` · last message ${t.lastEventAgo}s ago` + cpTermsHtml(s.cpTerms, t)
+        + (s.cpClosing ? `<div style="color:#ffce56;margin-top:4px">⏳ closing this panel and its table — ${esc(s.cpClosing.step)} (${esc(s.cpClosing.why)})</div>` : "")
       : `no table in the client's log — sit down in the CoinPoker client${s.coinpoker && s.coinpoker.client && !s.coinpoker.client.running ? " (the client is not running)" : ""}`;
     $("cp-sitout").classList.toggle("on", !!cpSitOut.sitOutNextHand);
     $("cp-sitout").textContent = cpSitOut.sitOutNextHand ? "✓ Sitting out next hand" : "Sit out next hand";
     $("cp-sitout-all").classList.toggle("on", !!cpSitOut.sitOutAll);
     $("cp-sitout-all").textContent = cpSitOut.sitOutAll ? "✓ Sitting out all" : "Sit out all";
     $("cp-sitout").disabled = $("cp-sitout-all").disabled = !(t && t.heroSeated);
+  }
+  // THE TABLE'S MONEY TERMS (2026-10-01): the rake cap and the ante in table currency AND big blinds — per player, and
+  // the total the hand collects (or would, with the players dealt)
+  function cpTermsHtml(x, t) {
+    if (!x) return t && t.rake ? ` · rake ${t.rake.rake}% cap ${t.rake.rakeCap}` : "";
+    const n = (v) => (v == null ? "?" : String(Math.round(v * 1000) / 1000));
+    const both = (v, vb) => `${n(v)}${vb != null ? ` (${n(vb)}bb)` : ""}`;
+    const parts = [];
+    const r = x.rake;
+    if (r) parts.push(`rake ${n(r.pct)}%${r.pctHeadsUp != null && r.pctHeadsUp !== r.pct ? ` (${n(r.pctHeadsUp)}% heads-up)` : ""} · cap ${both(r.cap, r.capBb)}${r.preflopPots ? " · preflop pots raked" : " · no flop no drop"}`);
+    else parts.push("rake terms not sent by this table");
+    const a = x.ante;
+    if (!a || a.has === null) parts.push("ante not read yet");
+    else if (!a.has) parts.push("no ante");
+    else parts.push(`ante ${both(a.per, a.perBb)} per player · ${both(a.total, a.totalBb)} total${a.dealt ? ` (${a.dealt} dealt)` : ""}`);
+    return `<div class="sub" style="margin:4px 0 0">${parts.map(esc).join(" · ")}</div>`;
   }
   function renderCgg(s) {
     const t = s.table, c = s.clubgg || {};
@@ -1354,7 +1384,7 @@
       // code against a newer server is how "[object Object]" bugs happen.
       if (s.panelVersion) {
         if (panelVersion === null) panelVersion = s.panelVersion;
-        else if (s.panelVersion !== panelVersion) { location.reload(); return; }
+        else if (s.panelVersion !== panelVersion) { UNLOAD_OK = true; location.reload(); return; }
       }
       saOn = !!s.studyAnswers;
       renderSite(s);
@@ -1365,6 +1395,7 @@
       }
       const myTurn = s.hand?.heroWon ? "won" : s.hand?.heroFolded ? "folded"
         : !!(s.hand && s.hand.currentNode && s.hand.currentNode.toActIsHero && !s.hand.ended);
+      LAST_STATE = s;
       const a = typeof s.panelAnswer === "string" ? { text: s.panelAnswer, pick: null, roll: null } : s.panelAnswer;
       renderGameState(s);
       renderSa(a, myTurn, s);
@@ -1884,6 +1915,7 @@
       const notice = !r || !r.ok ? `End session failed: ${r && r.error ? r.error : "no reply"}`
         : co && co.left === false ? `Session ended, but the table was NOT left (${co.why}) — leave it by hand; windows kept open`
         : co && co.why ? `Session ended (${co.why})` : "";
+      UNLOAD_OK = true;
       location.href = "/setup" + (notice ? "?notice=" + encodeURIComponent(notice) : "");
     };
     tick(); setInterval(tick, 5000);

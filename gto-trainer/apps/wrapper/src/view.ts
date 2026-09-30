@@ -33,6 +33,31 @@ function mtime(p: string): number {
 /** The on-demand keys, added only when they say something (a /state with neither is byte-identical to before — the
  *  reader goldens compare it key by key): `onDemand` while the session's strategy answers only on Solve, and
  *  `solveRequest` while a Solve press still belongs to the decision on screen (relay.currentSolveRequest). */
+/**
+ * A CoinPoker table's money terms in table currency AND big blinds (Brady, 2026-10-01: "the cap also in big blinds";
+ * "ante or no ante, how much per person and the total, both in absolute and in big blinds"). The hand's own figures
+ * win over the table's properties: `ante` is what each player posts, the total is what the hand actually collected
+ * (anteBb) or, before one has, the per-player ante times the players dealt. Unknown stays null, never a silent zero.
+ */
+export function cpTermsOf(hand: Record<string, any> | null, props: Record<string, any>, rake: Record<string, any> | null): Record<string, any> {
+  const num = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  const r3 = (v: number | null) => (v === null ? null : Math.round(v * 1000) / 1000);
+  const bb = num(hand?.bb) ?? num(props.bigBlind);
+  const sb = num(hand?.sb) ?? num(props.smallBlind);
+  const antePer = hand ? num(hand.ante) : num(props.ante);
+  const dealt = Array.isArray(hand?.liveSeats) ? hand!.liveSeats.length : null;
+  const collectedBb = num(hand?.anteBb);
+  const anteTotal = collectedBb && bb ? collectedBb * bb : antePer !== null && dealt ? antePer * dealt : antePer === 0 ? 0 : null;
+  const inBb = (v: number | null) => (v === null || !bb ? null : r3(v / bb));
+  const cap = num(rake?.rakeCap);
+  return {
+    sb, bb,
+    ante: { per: antePer, perBb: inBb(antePer), total: r3(anteTotal), totalBb: inBb(anteTotal), dealt,
+            has: antePer === null ? null : antePer > 0 },
+    rake: rake ? { pct: num(rake.rake), pctHeadsUp: num(rake.rakeHeadsUp), cap, capBb: inBb(cap), preflopPots: rake.isPotRakePf === true } : null,
+  };
+}
+
 function withOnDemand(out: Record<string, any>): Record<string, any> {
   if (!S.study.onDemand) return out;
   out.onDemand = true;
@@ -120,6 +145,10 @@ async function stateInner(light = false): Promise<Record<string, any>> {
       coinpoker: { client: CP.clientState(), error: CP.error, snap: S.cpSnap.last ?? null, attached: CP.pinned },
       snapshot: { status: hs, seats: [{ hero: true, sittingOut: hs === "sitting-out" }] },
     });
+    // the table's money terms, as the panel's CoinPoker table card states them (2026-10-01) — a top-level key, so
+    // table() (pinned key by key by the golden) is untouched
+    if (t) out.cpTerms = cpTermsOf(out.hand, CP.roomNow()?.props ?? {}, t.rake ?? null);
+    if (S.cpClosing) out.cpClosing = { ...S.cpClosing };
     return out;
   }
   if (isCgg()) {

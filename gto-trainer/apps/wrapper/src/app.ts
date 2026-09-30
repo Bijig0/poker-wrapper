@@ -22,7 +22,7 @@ import { portOf } from "./ignition/dom";
 import "./ignition/reader";                    // installs the real ignitionTarget seam
 import "./relay";                              // installs act / raiseTo / cdpSeq
 import { feedLoop, wsTap } from "./loops";
-import { chainKeeper, faketableLoad, healthLoop, leftovers, openTableWindow, panelWatchLoop } from "./session";
+import { chainKeeper, faketableLoad, healthLoop, leaderWatchLoop, leftovers, openTableWindow, panelWatchLoop } from "./session";
 import { netGuard } from "./netguard";
 import { serve } from "./server";
 import { chromeWindow, cpFollowLoop, otherArea, panelHwnd, targetArea } from "./windows";
@@ -144,6 +144,7 @@ export async function main(argv: string[]): Promise<void> {
     CGG.start(cggLine, cggFinished, () => isCgg() && !!S.session.id);
     bg("health", healthLoop);
     bg("panel-watch", panelWatchLoop);
+    bg("leader-watch", leaderWatchLoop);
     bg("cp-follow", cpFollowLoop);
     bg("chain", chainKeeper);
     bg("net", netGuard);

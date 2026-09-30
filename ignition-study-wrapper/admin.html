@@ -38,6 +38,8 @@
 <body>
 <h1>CoinPoker leader <span class="sub" style="font-weight:400">· tables and panels</span></h1>
 <div class="sub">Every CoinPoker table open in the client, and every Poker Wrapper panel reading one. Open another panel on a table, move a panel to a different table, or end a panel's session — from here. Refreshes every 3 s.</div>
+<div class="row" style="margin-top:10px"><button class="danger" id="end-all">End all sessions…</button>
+  <span class="sub">closes every panel and its CoinPoker table (each after its hand), then this window. Closing this window does the same.</span></div>
 <div id="msg" class="sub"></div>
 
 <h2>Open tables <span id="t-count" class="sub" style="text-transform:none;letter-spacing:0"></span></h2>
@@ -57,6 +59,13 @@
     <button id="dlg-cancel">Cancel</button>
     <button id="dlg-go" class="primary" disabled>Open panel</button>
   </div>
+</div></div>
+
+<div id="dlg-all" style="position:fixed;inset:0;background:rgba(5,8,11,.72);display:none;align-items:center;justify-content:center;padding:16px"><div class="box" style="background:#171d24;border:1px solid #6b2a31;border-radius:14px;padding:16px 18px;width:min(560px,100%)">
+  <h3 style="margin:0 0 6px;font-size:17px">End all sessions?</h3>
+  <div class="sub">Each panel sits out, lets its hand finish, ends its session and closes its table in the CoinPoker client. Then this window closes.</div>
+  <div id="dlg-all-list" style="margin:10px 0"></div>
+  <div class="row" style="justify-content:flex-end"><button id="dlg-all-cancel">Cancel</button><button class="danger" id="dlg-all-go">End all and close the tables</button></div>
 </div></div>
 
 <script>
@@ -163,6 +172,27 @@ $("dlg-go").onclick = async () => {
   const room = DLG.room, preset = DLG.preset;
   await post("/admin/open", { room, preset }, `opening a panel on ${labelOf(room)} — it starts its session and its window opens beside the table…`);
 };
+
+// ---- End all sessions (2026-10-01): the leader closes every panel and its table ------------------------------
+let CLOSING_ALL = false;
+$("end-all").onclick = () => {
+  const cp = S.panels.filter((p) => p.site === "coinpoker");
+  $("dlg-all-list").innerHTML = cp.length ? cp.map((p) => `<div class="chk"><b>•</b><span>${esc(panelName(p))} — ${p.attached ? "closes " + esc(labelOf(p.attached)) : "no table"}${p.sessionId ? " · session running" : ""}</span></div>`).join("")
+    : '<div class="sub">No panel is running — this window just closes.</div>';
+  $("dlg-all").style.display = "flex";
+};
+$("dlg-all-cancel").onclick = () => { $("dlg-all").style.display = "none"; };
+$("dlg-all-go").onclick = async () => {
+  $("dlg-all").style.display = "none";
+  CLOSING_ALL = true;
+  await post("/admin/close-all", {}, "closing every panel and its table — each after its hand; this window closes last…");
+};
+// closing this window with its X ends every session too: ask first (the browser's own "Leave site?" prompt)
+window.addEventListener("beforeunload", (e) => {
+  if (CLOSING_ALL || !S.panels.some((p) => p.site === "coinpoker" && p.sessionId)) return;
+  e.preventDefault();
+  e.returnValue = "Closing the leader ends every session and closes their CoinPoker tables.";
+});
 
 async function load() {
   try { S = await (await fetch("/admin/state")).json(); } catch (e) { $("msg").textContent = "this panel is not answering"; }

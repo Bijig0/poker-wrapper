@@ -108,6 +108,10 @@ function fresh() {
     domBoard: { hand: 0, hole: [] as string[], stale: new Set<string>(), said: new Set<string>() },
     health: { at: 0.0, issues: [] as any[] },
     panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,
+    /** the CoinPoker leader window's watch (session.leaderWatchLoop): gone for 8 s once seen = close every panel */
+    leaderWatch: { seen: false, missingSince: null as number | null, quietUntil: 0, closingAll: false },
+    /** a CoinPoker close-out under way (session.cpCloseOut): why, the table, the step it is on */
+    cpClosing: null as { why: string; room: string | null; at: number; step: string } | null,
     feed: [] as Record<string, any>[],
     feedPrev: {} as Record<string, any>,
     handNo: 0,
