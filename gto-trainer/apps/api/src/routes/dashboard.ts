@@ -1154,6 +1154,9 @@ app.get("/hand/:dbId", async (c) => {
     clientHandId: e.clientHandId,
     summary: e.summary,
     hand: e.hand,
+    // the stacks AS DEALT: hand.stacks is the money at the END of the hand (the replica table drew a pot winner with
+    // his winnings — hand 4921874909's 80bb BTN as 123.7); startStacksOf = the wrapper's startStacks, else rebuilt
+    dealtStacks: startStacksOf(e.hand),
     feedLines: Array.isArray(e.raw.feedLines) ? e.raw.feedLines : [],
     // did auto-execute play the hand, and how many presses it took (utils/autoExec)
     autoExec: autoExecOf(e.raw),

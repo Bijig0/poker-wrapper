@@ -237,6 +237,13 @@ $("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("onl
 
 /* ================= replayer state ================= */
 const STREET_N = { preflop: 0, flop: 3, turn: 4, river: 5 };
+/** A seat's stack AS DEALT. An archived row's `stacks` is the money behind at the END of the hand (a pot winner
+ *  reads his winnings: hand 4921874909's 80bb BTN read 123.7) - the route's dealtStacks (utils/archivedHand
+ *  startStacksOf) and the wrapper's startStacks are the dealt stacks; `stacks` is the last resort. */
+function dealtStack(hand, seat) {
+  const v = (hand === DETAIL?.hand ? DETAIL?.dealtStacks?.[seat] : null) ?? hand.startStacks?.[seat] ?? hand.stacks?.[seat];
+  return v == null ? null : Number(v);
+}
 function replayState(hand, step) {
   // per-seat committed for the CURRENT street, pot carried from prior streets
   const st = { street: "preflop", potPrev: 0, cur: {}, folded: new Set(), invested: {} };
@@ -311,7 +318,7 @@ function renderMirror(hand, rs) {
     const isHero = seat === hand.heroSeatId;
     const folded = rs.folded.has(seat);
     const toAct = rs.toAct === seat;
-    const stack0 = hand.stacks?.[seat];
+    const stack0 = dealtStack(hand, seat);
     const stackStr = stack0 != null ? `${r2(Math.max(0, stack0 - (rs.invested[seat] ?? 0)))} bb` : "";
     const op = folded ? 0.35 : 1;
     // hole cards
@@ -1446,7 +1453,7 @@ function renderRangeLooker() {
 function rlSpot(i, seat) {
   const h = DETAIL.hand, rs = replayState(h, i), bets = rs.bets || {};
   const toCall = r2(Math.max(0, Math.max(0, ...Object.values(bets).map(Number)) - (bets[seat] ?? 0)));
-  const stack0 = h.stacks?.[seat], stack = stack0 > 0 ? r2(Math.max(0, stack0 - (rs.invested[seat] ?? 0))) : null;
+  const stack0 = dealtStack(h, seat), stack = stack0 > 0 ? r2(Math.max(0, stack0 - (rs.invested[seat] ?? 0))) : null;
   return { pot: r2(rs.pot), toCall, stack };
 }
 function rlRow(i, k) {
