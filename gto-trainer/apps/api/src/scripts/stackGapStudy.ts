@@ -442,12 +442,29 @@ const handQ = (cid: string): ParsedHand | null => dbRead((db) => {
 let n = 0, fails = 0;
 /** A MISSED TOKEN IS NOT A RESULT: the token is read off the GTO Wizard browser and expires every ~15 minutes; a read
  *  that misses holds off for a minute (gtowSessions SNIFF_FAIL_HOLD_MS). Wait it out and ask the same spot again. */
-async function withToken<T extends { ok: boolean; reason?: string }>(solve: () => Promise<T>): Promise<T> {
-  for (let k = 0; ; k++) {
-    const row = await solve();
-    if (row.ok || !/no token/i.test(row.reason ?? "") || k >= 4) return row;
-    log(`  no token yet — waiting 70 s and asking the same spot again (${k + 1}/4)`);
-    await sleep(70_000);
+/** NOR IS A NETWORK DROP (2026-10-01 22:35: the run died on `getaddrinfo ENOTFOUND api.gtowizard.com`, thrown out of the
+ *  tree POST). A request that throws, or a result that only says the network failed, waits and asks the same spot
+ *  again — for up to 40 minutes; a drop longer than that ends the run cleanly (re-run to continue). */
+const NETWORK = /ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|timed out|fetch failed|network|socket|unable to connect|poll failed/i;
+async function withToken<T extends { ok: boolean; reason?: string }>(solve: () => Promise<T>): Promise<T | null> {
+  let tokenTries = 0, netTries = 0;
+  for (;;) {
+    let row: T | null = null, threw = "";
+    try { row = await solve(); } catch (e) { threw = e instanceof Error ? e.message : String(e); }
+    const reason = row ? row.reason ?? "" : threw;
+    if (row?.ok) return row;
+    if (RATE_LIMIT.test(reason)) return row ?? ({ ok: false, reason } as T);
+    if (/no token/i.test(reason) && tokenTries < 4) {
+      log(`  no token yet — waiting 70 s and asking the same spot again (${++tokenTries}/4)`);
+      await sleep(70_000); continue;
+    }
+    if (NETWORK.test(reason)) {
+      if (netTries >= 40) { log(`STOP: the network has been down for 40 minutes — ${reason.slice(0, 160)}`); return null; }
+      log(`  network trouble (${reason.slice(0, 100)}) — waiting 60 s and asking the same spot again (${++netTries}/40)`);
+      await sleep(60_000); continue;
+    }
+    if (!row) throw new Error(threw);
+    return row;
   }
 }
 const pace = async (started: number) => sleep(Math.max(0, EVERY * 1000 - (Date.now() - started)));
@@ -460,6 +477,7 @@ run: {
     if (!(await gate(t0))) break run;
     const started = Date.now();
     const row = await withToken(() => solveSweep(cfg, stack));
+    if (!row) break run;
     appendFileSync(SWEEP_OUT, JSON.stringify(row) + "\n");
     n++;
     log(`[${n}/${total}] sweep ${row.key}: ${row.ok ? `${row.offered!.map((o) => o.label).join(" / ")} at "${row.line}" ${row.secs.toFixed(1)} s` : `FAILED ${row.reason!.slice(0, 160)}`}  (${ownSince(t0)} requests)`);
@@ -472,7 +490,7 @@ run: {
     const hand = handQ(spot.cid);
     if (!hand) continue;
     let row: RealRow;
-    try { row = await withToken(() => solveReal(spot, cutAt(hand, spot.upto))); }
+    try { const r = await withToken(() => solveReal(spot, cutAt(hand, spot.upto))); if (!r) break run; row = r; }
     catch (e) { row = { kind: "real", key: spot.key, ts: started, secs: 0, heroPos: spot.heroPos, heroClass: spot.heroClass, first: spot.first, stratum: spot.stratum, chart: spot.chart, gap: spot.gap, ok: false, reason: `threw: ${e instanceof Error ? e.message : e}` }; }
     appendFileSync(REAL_OUT, JSON.stringify(row) + "\n");
     n++;
