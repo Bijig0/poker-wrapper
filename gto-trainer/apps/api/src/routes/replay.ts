@@ -4,6 +4,7 @@ import { fastSolve } from "../services/fastSolve";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { wrapperDebugDir } from "../services/storePaths";
 
 /**
  * Debug-recording replay: serves the wrapper's captured sessions to the
@@ -17,16 +18,19 @@ import { join } from "node:path";
  * Read-only against the wrapper's directory, same as the hands.db routes:
  * the wrapper writes, we serve.
  */
-const DEBUG_DIR =
-  process.env.IGNITION_DEBUG_DIR ??
-  join(import.meta.dir, "..", "..", "..", "..", "..", "ignition-study-wrapper", "debug");
+// Since the central data root the wrapper records into <data root>/wrapper-debug; the old
+// ignition-study-wrapper/debug path left every hand page "not recorded" (hand 4921874909, 2026-10-01).
+// IGNITION_DEBUG_DIR still overrides (storePaths reads it).
+const DEBUG_DIR = wrapperDebugDir();
+
+/** Recording folder names: wrapper-generated timestamps, optionally per table (`-slot<N>`) with a same-second
+ *  tie suffix (`-2`). Anything else is rejected so a crafted name can never traverse out of DEBUG_DIR. */
+const RECORDING_NAME_RE = /^session_\d{8}_\d{6}(?:-slot\d+)?(?:-\d+)?$/;
 
 const replay = new Hono();
 
 const sessionDir = (name: string): string | null => {
-  // Session names are wrapper-generated timestamps; reject anything else so
-  // a crafted name can never traverse out of the debug directory.
-  if (!/^session_\d{8}_\d{6}$/.test(name)) return null;
+  if (!RECORDING_NAME_RE.test(name)) return null;
   const dir = join(DEBUG_DIR, name);
   return existsSync(dir) ? dir : null;
 };
@@ -42,7 +46,7 @@ replay.get("/sessions", (c) => {
     return c.json({ ok: false, error: `debug dir not found at ${DEBUG_DIR}`, sessions: [] }, 503);
   }
   const sessions = readdirSync(DEBUG_DIR)
-    .filter((n) => /^session_\d{8}_\d{6}$/.test(n))
+    .filter((n) => RECORDING_NAME_RE.test(n))
     .sort()
     .reverse()
     .map((name) => {
@@ -184,7 +188,7 @@ function buildQueue(): QueueItem[] {
   if (queueCache && Date.now() - queueCache.built < 30_000) return queueCache.items;
   const seen = new Map<string, QueueItem>();
   const sessions = existsSync(DEBUG_DIR)
-    ? readdirSync(DEBUG_DIR).filter((n) => /^session_\d{8}_\d{6}$/.test(n)).sort()
+    ? readdirSync(DEBUG_DIR).filter((n) => RECORDING_NAME_RE.test(n)).sort()
     : [];
   for (const name of sessions) {
     const p = join(DEBUG_DIR, name, "log.jsonl");
@@ -486,7 +490,7 @@ replay.get("/:name/hands", (c) => {
 /** Recorded session names, newest first. */
 export function listSessionNames(): string[] {
   if (!existsSync(DEBUG_DIR)) return [];
-  return readdirSync(DEBUG_DIR).filter((n) => /^session_\d{8}_\d{6}$/.test(n)).sort().reverse();
+  return readdirSync(DEBUG_DIR).filter((n) => RECORDING_NAME_RE.test(n)).sort().reverse();
 }
 
 export interface HandRecording {
