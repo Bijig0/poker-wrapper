@@ -509,6 +509,12 @@ export function buildApp(): Hono {
     const [code, res] = await SESSION.sessionDisconnected(await body(c, Body.sessionDisconnected));
     return json(code, res);
   });
+  // the site closed another table under its wrapper (hero alone, no hand on): the leader seats a new one of the same
+  // format instead of counting the drop as a close by hand (session.ts sessionTableClosed, honourClosedTables)
+  app.post("/session/table-closed", async (c) => {
+    const [code, res] = SESSION.sessionTableClosed(await body(c, Body.sessionTableClosed));
+    return json(code, res);
+  });
   // another table's connection check failed: the leader ends the session (session.ts maybeEndForNetDrop)
   app.post("/session/net-drop", async (c) => {
     const [code, res] = await SESSION.sessionNetDrop(await body(c, Body.sessionNetDrop));

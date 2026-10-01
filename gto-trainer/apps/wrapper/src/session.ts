@@ -22,7 +22,7 @@ import { feedAdd, log } from "./feed";
 import { fetchBytes, fetchJson, getJson, postJson } from "./http";
 import { pyFloat, pyInt, pyRepr, pyRound, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
-import { CGG, CP, S, TupleSet, isCgg, isClientSite, isCp, seams } from "./state";
+import { CGG, CP, S, TupleSet, inAHand, isCgg, isClientSite, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import * as faketable from "./faketable";
 import { SITE as CP_SITE, FORMATS as CP_FORMATS } from "./sites/coinpoker";
@@ -48,6 +48,8 @@ export const sessionSeams = {
   tellLeader: (body: Record<string, any>) => postJson(`http://127.0.0.1:${TABLES.leaderPort()}/session/disconnected`, body, 20),
   // a table whose connection check failed tells the leader, which ends the session (maybeEndForNetDrop)
   tellLeaderNetDrop: (body: Record<string, any>) => postJson(`http://127.0.0.1:${TABLES.leaderPort()}/session/net-drop`, body, 20),
+  // the site closed a table under its wrapper: the leader seats a new one (maybeReseatAfterSiteClose → sessionTableClosed)
+  tellLeaderTableClosed: (body: Record<string, any>) => postJson(`http://127.0.0.1:${TABLES.leaderPort()}/session/table-closed`, body, 20),
   hands: (sid: string) => sessionHands(sid),
   join: (body: Record<string, any>) => sessionJoin(body),
   // this wrapper's panel window: found / opened. Inert under bun test — a unit test must never pop a window.
@@ -142,19 +144,67 @@ function nextUnclosedSlot(cfg: Record<string, any>): number {
   return declared;
 }
 
-/** A table that went away AFTER we had them all was closed on purpose: honour it. */
+/** How long the leader keeps a site's close waiting for the seat count to drop — past it the count never fell (the
+ *  client kept the frame, or moved hero itself) and the note must not turn a later close by hand into a re-seat. */
+export const SITE_CLOSE_WINDOW_S = 120;
+/** A close-by-hand verdict this young is undone by a site's notice arriving for the same drop (the router's pass and
+ *  the other table's POST race; the notice is a few seconds behind the count at most). */
+export const HONOUR_UNDO_S = 30;
+
+/** The site's closes the leader has yet to match to a seat-count drop, stale ones dropped. */
+function siteClosesPending(): number[] {
+  const now = time();
+  S.siteClosed.pending = S.siteClosed.pending.filter((t) => now - t <= SITE_CLOSE_WINDOW_S);
+  return S.siteClosed.pending;
+}
+
+/** A table that went away AFTER we had them all was closed on purpose: honour it — unless the site closed it under
+ *  its wrapper (siteClosesPending, one per table gone): that one is asked for again, not given up. */
 export function honourClosedTables(cfg: Record<string, any>, seatedNow: number): number {
   let want = tablesWanted(cfg);
   const reached = S.seating.reached || 0;
   if (!reached || seatedNow >= reached) return want;
   const gone = reached - seatedNow;
   S.seating.reached = seatedNow;
-  for (let i = 0; i < gone; i++) S.closedTables.add(nextUnclosedSlot(cfg));
+  const pending = siteClosesPending();
+  const bySite = Math.min(gone, pending.length);
+  S.siteClosed.pending = pending.slice(bySite);
+  if (bySite) {
+    feedAdd(`${bySite === 1 ? "A table" : `${bySite} tables`} closed by the site — seating ${bySite === 1 ? "a new one" : "new ones"} (the session still wants ${want})`);
+    log(`[tables] seated count fell to ${seatedNow}: ${bySite} closed by the site — re-seating, wanted stays ${want}`);
+    if (S.session.id) S.sessions.event(S.session.id, "table-reseat", { bySite, seatedNow, want });
+  }
+  const byHand = gone - bySite;
+  if (!byHand) return want;
+  const slots: number[] = [];
+  for (let i = 0; i < byHand; i++) {
+    const k = nextUnclosedSlot(cfg);
+    S.closedTables.add(k);
+    slots.push(k);
+  }
+  S.siteClosed.lastHonour = { at: time(), slots };
   want = tablesWanted(cfg);
   feedAdd(`A table was closed — not re-seating it (the session now wants ${want})`);
   log(`[tables] seated count fell to ${seatedNow}; honouring it, wanted is now ${want}`);
   if (S.session.id) S.sessions.event(S.session.id, "table-closed", { slot: null, why: "closed by hand" });
   return want;
+}
+
+/** THE LEADER LEARNS THE SITE CLOSED A TABLE (its own, from the reader; another's, over /session/table-closed): the
+ *  next seat-count drop is not a close by hand (honourClosedTables) — and a drop the router already took for one in the
+ *  last HONOUR_UNDO_S is given back. */
+export function noteSiteClosePending(slotN: number | null, why: string): void {
+  const h = S.siteClosed.lastHonour;
+  if (h.slots.length && time() - h.at <= HONOUR_UNDO_S) {
+    const k = h.slots.pop()!;
+    S.closedTables.delete(k);
+    const want = tablesWanted((S.session.rec || {}).config || {});
+    feedAdd(`Table ${pyStr(slotN ?? 1)} was closed by the site, not by hand — asking for it back (the session wants ${want})`);
+    log(`[tables] the drop taken as table ${k} closed by hand ${pyRound(time() - h.at, 1)} s ago was the site's close of table ${pyStr(slotN)} (${why}) — wanted is ${want} again`);
+    return;
+  }
+  siteClosesPending().push(time());
+  log(`[tables] the site closed table ${pyStr(slotN ?? 1)} (${why}) — the next seat-count drop is not a close by hand; a new table is seated`);
 }
 
 type SeatFns = { count: () => Promise<number[]>; toLobby: () => Promise<Record<string, any>>; goto: () => Promise<Record<string, any>> };
@@ -276,7 +326,15 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
       }
       routerSet("routing", "re-seat: no table open — routing", []);
     }
-    if (st.state === "seated") {
+    // THE LEADER'S OWN TABLE GONE, THE OTHERS UP (the site closed it, 2026-10-01): windowState reads OUR frame, so it
+    // says "signed-in, no table" — but the client still holds the other tables, and the lobby navigation below would
+    // reload the page under them. The seat-count path is the one: honourClosedTables → seatNextTable adds a table
+    // beside the others, and our frame is re-pinned to it (ignition/reader.ts repinAfterSiteClose).
+    let seated = st.state === "seated";
+    if (!seated && st.state === "signed-in" && TABLES.slot() !== null && TABLES.isLeader() && (await F.seatedSlots(C.CDP_PORT)).length) {
+      seated = true;
+    }
+    if (seated) {
       await autoOpenBalance(sid, profile, "seated");
       const leader = TABLES.isLeader();
       const seatedNow = leader ? (await F.seatedSlots(C.CDP_PORT)).length : 1;
@@ -303,6 +361,11 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
           continue;
         }
       }
+      if (!st.detected) {
+        // the tables are up but ours is not read yet (its frame not re-pinned after the site's close): look again
+        await sleep(2);
+        continue;
+      }
       const v = fid ? F.compare(fid, st.detected) : { state: "undeclared", text: st.detected.name };
       if (!["done", "off-format"].includes(S.router.state)) {
         routerSet(v.state === "ok" || v.state === "undeclared" ? "done" : "off-format", `seated: ${st.detected.name} — ${v.text}`);
@@ -318,7 +381,13 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
       await sleep(5);
       continue;
     }
-    if (S.router.state === "done" || S.router.state === "off-format") {
+    if (["done", "off-format", "left"].includes(S.router.state) && siteClosesPending().length) {
+      // THE SITE CLOSED THE TABLE WE WERE ON (the last one open): ask for the format again — there is no seat count to
+      // fall here, so the note is spent now rather than by honourClosedTables
+      S.siteClosed.pending.shift();
+      routerSet("routing", `the site closed the table — going back to ${f.name}`, []);
+      S.sessions.event(sid, "table-reseat", { bySite: 1, seatedNow: 0, want: tablesWanted(cfg) });
+    } else if (S.router.state === "done" || S.router.state === "off-format") {
       routerSet("left", `table closed — not re-seating (declared ${f.name})`);
       await sleep(5);
       continue;
@@ -701,11 +770,8 @@ export function ensurePanelWindow(why: string): Record<string, any> {
   return { ok: pid !== null, opened: true };
 }
 
-/** Hero has cards in front of him right now — money a Leave would forfeit. */
-export function inAHand(): boolean {
-  if (S.ws.handOver || S.ws.heroFolded) return false;
-  return truthy(S.ws.heroCards) || S.liveStatus.hero === "in-hand";
-}
+/** Hero has cards in front of him right now — money a Leave would forfeit (state.ts; the reader asks it too). */
+export { inAHand };
 
 /** This wrapper leaves its own table and stops answering for it — NEVER mid-hand (deferred to the boundary). */
 export async function standDownTable(why: string): Promise<Record<string, any>> {
@@ -795,6 +861,60 @@ export async function sessionDisconnected(body: Record<string, any>): Promise<[n
   const was = S.session.id;
   await maybeEndForDisconnect();
   return [200, { ok: true, ended: S.session.id === null ? was : null }];
+}
+
+/**
+ * THE SITE CLOSED OUR TABLE — KEEP THE SESSION, GET A NEW TABLE (Brady, 2026-10-01: "we keep playing until we get
+ * kicked off the table, and if so, then we try join a new table at that stake"). The reader held the socket close
+ * for its settle window and called it the site's (ignition/reader.ts maybeSettleSiteClose: hero alone, no hand on,
+ * no other socket of the page closing, no disconnect overlay); this, from the feed loop, does the rest ONCE:
+ *   1. the session record says which table the site closed, and what it showed;
+ *   2. the leader notes it (noteSiteClosePending), so the seat count falling is a re-seat, not a close by hand
+ *      (honourClosedTables → seatNextTable at the declared format), or — the only table — the router goes back to
+ *      the format (routeSession); a follower tells the leader over /session/table-closed. The leader not answering
+ *      leaves that table closed: the session goes on at the others, nothing ends.
+ * Nothing is pressed meanwhile: there is no table. Our frame vanishing lets the pinned tag go (reader.ts
+ * repinAfterSiteClose), so the new table's frame is read as ours and its socket binds from its own deal.
+ */
+export async function maybeReseatAfterSiteClose(): Promise<void> {
+  const n = S.siteClosed.notice;
+  if (!n || !n.settled) return;
+  S.siteClosed.notice = null;
+  const sid = n.sid;
+  if (!sid || S.session.id !== sid) return;
+  const me = TABLES.slot();
+  const detail = { slot: me, hand: n.hand, seats: n.seats, hero: n.hero, rid: n.rid };
+  S.sessions.event(sid, "table-closed-by-site", detail);
+  if (TABLES.isLeader()) {
+    noteSiteClosePending(me, "our own socket closed on the empty table");
+    return;
+  }
+  let told: Record<string, any> | null = null;
+  try {
+    told = await sessionSeams.tellLeaderTableClosed({ sid, ...detail });
+  } catch (e: any) {
+    told = { ok: false, error: String(e?.message ?? e) };
+  }
+  if (told && told.ok) {
+    log(`[tables] told table ${TABLES.LEADER}, which seats a new table`);
+    feedAdd(`Table ${TABLES.LEADER} has been asked to seat a new table for this one`);
+    return;
+  }
+  log(`[tables] table ${TABLES.LEADER} did not answer (${pyStr((told || {}).error ?? null)}) — this table stays closed; the session goes on at the others`);
+  feedAdd(`Table ${TABLES.LEADER} could not be told — this table stays closed (re-seat it from table ${TABLES.LEADER}'s panel)`);
+}
+
+/** POST /session/table-closed — the site closed another table under its wrapper: the leader seats a new one. */
+export function sessionTableClosed(body: Record<string, any>): [number, Record<string, any>] {
+  const sid = String(body.sid || "");
+  if (!S.session.id || (sid && sid !== S.session.id)) return [200, { ok: true, noted: false, note: "not this session (already ended?)" }];
+  if (!TABLES.isLeader()) return [409, { ok: false, error: `table ${pyStr(TABLES.slot())} is not the leader — seating is table ${TABLES.LEADER}'s` }];
+  const slot = body.slot === undefined || body.slot === null ? null : pyInt(body.slot);
+  S.sessions.event(S.session.id, "table-closed-by-site", { slot, hand: body.hand ?? null, seats: body.seats ?? null, hero: body.hero ?? null,
+                                                          rid: body.rid ?? null, told: true });
+  feedAdd(`The site closed table ${pyStr(slot)} (its last other player had left) — seating a new table for it`);
+  noteSiteClosePending(slot, `table ${pyStr(slot)} told us`);
+  return [200, { ok: true, noted: true, pending: S.siteClosed.pending.length, want: tablesWanted((S.session.rec || {}).config || {}) }];
 }
 
 /** A connection drop waits this long for hero's hand to end before the session ends anyway. */

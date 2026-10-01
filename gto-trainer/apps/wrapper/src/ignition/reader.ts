@@ -11,15 +11,15 @@ import * as cdp from "../cdp";
 import { time } from "../clock";
 import { C } from "../config";
 import { feedAdd, log } from "../feed";
-import { keepLast, pyRound, pyStr, sortedNums, truthy } from "../py";
-import { S, seams } from "../state";
+import { keepLast, pyRepr, pyRound, pyStr, sortedNums, truthy } from "../py";
+import { S, inAHand, seams } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand, noteAward } from "../archive";
 import {
-  awardName, bankStep, boardCards, buyPanelUp, disconnectOf, domHeroSeat, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
+  awardName, bankStep, boardCards, buyPanelUp, disconnectOf, domHeroSeat, forgetFrame, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, boardCap, dumpEvent, dumpMark, lastStanding, mkey, noteDomBoard, tapVerify, withoutRabbit } from "./ws";
+import { actAdd, actSeen, boardCap, dumpEvent, dumpMark, lastStanding, mkey, noteDomBoard, tapForget, tapVerify, withoutRabbit } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -115,6 +115,15 @@ export function noteDisconnect(what: NonNullable<ReturnType<typeof disconnectOf>
 
 /** How long after we leave a table on purpose its socket closing is ours, not a failure. */
 export const LEAVE_GRACE_S = 30;
+/** Another socket of the page closing within this many seconds of ours is one drop taking them all, not the site
+ *  closing our table alone (2026-09-25 18:10: every table's socket went within 4 minutes; the site's close of an empty
+ *  table, 2026-10-01 04:06:59, took one socket and left the other table's PONGs on schedule). */
+export const SITE_CLOSE_OTHERS_S = 15;
+/** How long a socket close that looks like the site's is held before it counts as one: the window in which the page's
+ *  other sockets would follow ours in a drop, or the client's disconnect overlay would show (dom.ts disconnectOf). */
+export const SITE_CLOSE_SETTLE_S = 3;
+/** How long after the site's close our frame is expected to vanish — the next table the client opens is then ours. */
+export const SITE_CLOSE_REPIN_S = 120;
 
 /**
  * THE TABLE'S GAME SOCKET CLOSED (2026-09-26, Brady: "table open -> connect socket. If it disconnects for any reason,
@@ -124,19 +133,115 @@ export const LEAVE_GRACE_S = 30;
  * binds fresh. Closed any other way — the server dropped us, the network, the client reconnecting (2026-09-25 18:10: every
  * table's socket replaced over 4 minutes, and the capture hunted for the new ones by the cards on screen for 2 minutes,
  * mid-hand) — the session ends exactly as for the disconnect overlay: nothing more is pressed, the client is closed.
+ *
+ * ONE EXCEPTION (Brady, 2026-10-01, after session_20261001_021221 — "we keep playing until we get kicked off the table,
+ * and if so, then we try join a new table at that stake"): THE SITE CLOSING OUR EMPTY TABLE. Table 2 had thinned to hero
+ * alone at 04:06:44; Ignition shut it at 04:06:59 with the connection healthy (PONGs on time, table 1's socket
+ * untouched), and the rule above closed the one client both tables live in — table 1 was in a hand. That close is told
+ * from a drop by what the table was when the socket went: hero alone (or the table already gone from our frame), no
+ * hand on, and no other socket of the page closing around it — a drop takes them all, and would also draw the client's
+ * overlay. Such a close is held for SITE_CLOSE_SETTLE_S (maybeSettleSiteClose) and then handed to the session, which
+ * asks for a table of the same format again (session.ts maybeReseatAfterSiteClose); nothing ends, nothing is pressed
+ * meanwhile (there is no hand to press in). Anything else is the failure it always was.
  */
 export function noteSocketClosed(rid: string): void {
   const ours = rid === S.tapBound;
   dumpEvent("<socket-closed>", { rid, ours });
-  if (!ours) return;
+  if (!ours) {
+    S.tapOtherClosedAt = time();
+    const n = S.siteClosed.notice;
+    if (n && !n.settled) settleSiteClose(n, `another socket of the page (${rid}) closed ${fmtS(time() - n.at)} s after ours`);
+    return;
+  }
   S.tapBound = null;
   S.tapMismatch = 0;
   if (time() - (S.tapLeavingAt || 0) <= LEAVE_GRACE_S) {
     log(`[ws] table socket ${rid} closed — we left the table; the next table binds fresh`);
     return;
   }
+  const site = siteClosedEvidence();
+  if (site && S.session.id && !S.disconnect) {
+    const now = time();
+    S.siteClosed.notice = { at: now, decideAt: now + SITE_CLOSE_SETTLE_S, settled: false, rid, sid: S.session.id, slot: TABLES.slot(),
+                            seats: site.seats, hero: site.hero, hand: S.handNo };
+    tapForget(rid);
+    dumpEvent("<socket-closed-by-site?>", { rid, ...site });
+    feedAdd(`The table's connection closed with the table over (${site.why}) and no hand on — `
+            + `the site closing the table, unless the connection follows in ${SITE_CLOSE_SETTLE_S} s`);
+    log(`[ws] table socket ${rid} closed on an empty table (${site.why}; seats ${pyRepr(site.seats)}, hero ${pyStr(site.hero)}) — holding ${SITE_CLOSE_SETTLE_S} s before calling it the site's close`);
+    return;
+  }
   feedAdd("The table's connection to the poker server closed");
   noteDisconnect({ text: "the table's game socket closed", attempt: null, of: null, reconnected: false }, "the capture saw its table's socket close");
+}
+
+const fmtS = (s: number) => (Math.round(s * 10) / 10).toFixed(1);
+
+/** How long after our frame stopped showing the table (S.tableGoneAt) its socket closing is still that close. */
+export const TABLE_GONE_S = 60;
+
+/** What made the socket close look like the site's, or null when it cannot be. It takes a POSITIVE sign that the
+ *  table was over — our frame's last full read showing no seat but hero's, the felt saying the table is breaking
+ *  ("waiting"), our pinned frame lost, or the frame having just stopped showing a table — and none against: hero in
+ *  a hand, or another socket of the page closed in the last SITE_CLOSE_OTHERS_S. A socket that closes before the
+ *  frame was ever read in full is the failure it always was. `seats` = the seats occupied on that last full read. */
+export function siteClosedEvidence(): { seats: number[]; hero: string | null; why: string } | null {
+  if (inAHand()) return null;
+  if (S.tapOtherClosedAt && time() - S.tapOtherClosedAt <= SITE_CLOSE_OTHERS_S) return null;
+  const p = S.feedPrev;
+  const hero = S.liveStatus.hero ?? null;
+  if (p.seated && p.seats instanceof Map) {
+    const seats = sortedNums(p.seats.keys());
+    const mine = S.liveStatus.heroSeatDom ?? null;
+    const others = seats.filter((n) => n !== mine);
+    return others.length ? null : { seats, hero, why: seats.length ? "hero was the only player seated" : "no seat was occupied" };
+  }
+  if (p.seated && p.waiting) return { seats: [], hero, why: "the felt said the table is breaking" };
+  if (S.frame.lost !== null) return { seats: [], hero, why: "our table's frame is gone from the client" };
+  if (S.tableGoneAt && time() - S.tableGoneAt <= TABLE_GONE_S) return { seats: [], hero, why: "our frame had just stopped showing the table" };
+  return null;
+}
+
+/** The held close is decided: the site's (settled, the session acts on it) or a drop after all (the failure path). */
+function settleSiteClose(n: NonNullable<typeof S.siteClosed.notice>, drop: string | null): void {
+  if (drop) {
+    S.siteClosed.notice = null;
+    log(`[ws] the socket close on table ${pyStr(n.slot ?? 1)} was a drop after all — ${drop}`);
+    feedAdd("The table's connection to the poker server closed");
+    noteDisconnect({ text: "the table's game socket closed", attempt: null, of: null, reconnected: false }, `the capture saw its table's socket close (${drop})`);
+    return;
+  }
+  n.settled = true;
+  S.siteClosed.repinUntil = time() + SITE_CLOSE_REPIN_S;
+  if (TABLES.slot() !== null && S.frame.lost !== null) repinAfterSiteClose("it was already gone");
+  feedAdd("The site closed this table (the last other player had left). Not a connection failure — the session goes on and a table of the same format is asked for");
+  log(`[ws] table ${pyStr(n.slot ?? 1)}: the site closed the table (socket ${n.rid}, hero ${pyStr(n.hero)}, seats ${pyRepr(n.seats)}) — the session goes on`);
+}
+
+/** From the feed loop: a held close whose settle window has passed with no other socket closing and no disconnect
+ *  overlay is the site's. */
+export function maybeSettleSiteClose(): void {
+  const n = S.siteClosed.notice;
+  if (!n || n.settled) return;
+  if (S.disconnect) {
+    S.siteClosed.notice = null;      // the overlay (or another table) already called it a failure
+    return;
+  }
+  if (S.tapOtherClosedAt && S.tapOtherClosedAt >= n.at - SITE_CLOSE_OTHERS_S) {
+    settleSiteClose(n, `another socket of the page closed ${fmtS(Math.abs(n.at - S.tapOtherClosedAt))} s from ours`);
+    return;
+  }
+  if (time() < n.decideAt) return;
+  settleSiteClose(n, null);
+}
+
+/** Our frame is gone after the site's close: let the pinned tag go, so the next table the client opens is read as
+ *  ours (dom.ts pinFrame) — a lost tag is otherwise never replaced. */
+function repinAfterSiteClose(why: string): void {
+  S.siteClosed.repinUntil = 0.0;
+  forgetFrame();
+  feedAdd("This table is gone — the next table the client opens is read as this one");
+  log(`[tables] table ${pyStr(TABLES.slot())}: its frame is gone after the site's close (${why}) — pinning the next table the client opens`);
 }
 
 /** At several tables: is our frame showing the hand the capture is reading? Its hole cards against the capture's —
@@ -232,7 +337,9 @@ export async function feedTick(): Promise<void> {
     throw new TableReadError(d === null || d === undefined ? "table read came back empty (no reply in time, or the page threw)"
                                                            : `table read came back without a table: ${pyStr(JSON.stringify(d).slice(0, 80))}`);
   }
-  notePin(pinFrame(d.frameTag ?? null, !!d.seated));
+  const pin = pinFrame(d.frameTag ?? null, !!d.seated);
+  notePin(pin);
+  if (pin === "lost" && S.siteClosed.repinUntil && time() <= S.siteClosed.repinUntil) repinAfterSiteClose("the client took it down");
   const lost = disconnectOf(d);
   if (lost) noteDisconnect(lost, "our own table showed it");
   const L = S.liveStatus;
@@ -282,6 +389,7 @@ export async function feedTick(): Promise<void> {
       archiveHand();
       S.feedPrev = {};
       S.seatMem.clear();
+      S.tableGoneAt = time();
     }
     return;
   }

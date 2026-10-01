@@ -4,6 +4,8 @@
  * ignition/reader.ts noteSocketClosed, fed by the tap's Network.webSocketClosed: our bound socket closing ends the
  * session through the disconnect path (nothing pressed, auto off, client closed); another table's socket closing is
  * not ours; a close right after WE left the table (session.ts markLeaving) only releases the bind.
+ * The one exception — the site closing our EMPTY table (2026-10-01) — is test/unit/site-close-reseat.test.ts; here the
+ * socket closes on a table never read in full, which is the failure it always was.
  */
 import { expect, test } from "bun:test";
 import { realTime, setFakeTime } from "../../src/clock";

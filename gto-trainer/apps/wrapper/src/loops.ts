@@ -8,10 +8,10 @@ import { feedAdd, log } from "./feed";
 import { pyRepr } from "./py";
 import { S, seams } from "./state";
 import { dumpEvent, tapFrame } from "./ignition/ws";
-import { feedTick, maybeFlushEnded, noteDisconnect, noteSocketClosed } from "./ignition/reader";
+import { feedTick, maybeFlushEnded, maybeSettleSiteClose, noteDisconnect, noteSocketClosed } from "./ignition/reader";
 import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVerifyExec } from "./relay";
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
-import { maybeEndForDisconnect, maybeEndForNetDrop, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
+import { maybeEndForDisconnect, maybeEndForNetDrop, maybeReseatAfterSiteClose, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
 import { maybeSitBackIn } from "./sitback";
 import { liveHandTick } from "./archive";
 
@@ -47,9 +47,12 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
     }
     onError?.("tick", e);
   }
-  // a table that lost the poker server ends the session before anything else in this pass could press
+  // a table that lost the poker server ends the session before anything else in this pass could press; a socket that
+  // closed on an empty table is first given its settle window to prove it was the site's close, not a drop
   try {
+    maybeSettleSiteClose();
     await maybeEndForDisconnect();
+    await maybeReseatAfterSiteClose();
   } catch (e: any) {
     log(`[disconnect] ${errRepr(e)}`);
   }

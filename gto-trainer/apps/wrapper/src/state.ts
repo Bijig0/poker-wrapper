@@ -15,6 +15,7 @@
  * one here replaces it everywhere, as it did in Python.
  */
 import { C } from "./config";
+import { truthy } from "./py";
 import { SessionStore } from "./sessions";
 import { Site } from "./sites/coinpoker";
 import { Site as CggSite } from "./sites/clubgg";
@@ -114,6 +115,9 @@ function fresh() {
     cpClosing: null as { why: string; room: string | null; at: number; step: string } | null,
     feed: [] as Record<string, any>[],
     feedPrev: {} as Record<string, any>,
+    /** When our frame last stopped showing a table it had shown (reader.ts "table closed"): a socket closing right
+     *  after is the site taking the table down, not a drop (reader.ts siteClosedEvidence). */
+    tableGoneAt: 0.0,
     handNo: 0,
     seatMem: new Map<number, Record<string, any>>(),
     handBlinds: { no: 0, sb: false, bb: false, ticks: 0, strength: false, cards: "" } as Record<string, any>,
@@ -130,6 +134,24 @@ function fresh() {
     tapBound: null as string | null,
     // when we last left a table on purpose (session.ts markLeaving): its socket closing then is not a failure
     tapLeavingAt: 0,
+    /** When a socket of the page that is NOT ours last closed (reader.ts noteSocketClosed): the network taking every
+     *  socket closes ours within seconds of the others — the site closing our empty table closes ours alone. */
+    tapOtherClosedAt: 0,
+    /** THE SITE CLOSED OUR TABLE (2026-10-01, session_20261001_021221: table 2 emptied to hero alone and Ignition shut it
+     *  15 s later; the socket-closed rule took the whole client down mid-hand on table 1). Our game socket closing with
+     *  hero alone and no hand on is the site's close, not a connection failure: the session goes on and a table of the
+     *  same format is asked for again (reader.ts noteSocketClosed → maybeSettleSiteClose; session.ts
+     *  maybeReseatAfterSiteClose, honourClosedTables). `notice` = the close awaiting its settle / the feed loop;
+     *  `pending` = closes the LEADER has still to match to a seat-count drop, each when it was noted; `lastHonour` = the
+     *  leader's last close-by-hand verdicts, undone when the site's notice arrives just after; `repinUntil` = our frame
+     *  is about to vanish: pin the next table the client opens (dom.ts forgetFrame) instead of standing down for good. */
+    siteClosed: {
+      notice: null as null | { at: number; decideAt: number; settled: boolean; rid: string; sid: string; slot: number | null;
+                               seats: number[]; hero: string | null; hand: number },
+      pending: [] as number[],
+      lastHonour: { at: 0.0, slots: [] as number[] },
+      repinUntil: 0.0,
+    },
     tapForeign: 0,
     tapHeld: 0,
     tapSeen: new Map<string, number[]>(),
@@ -219,6 +241,13 @@ export function pressBlocked(): string | null {
   if (!x) return null;
   return `table ${x.slot ?? 1} lost the poker server (${x.reconnected ? "the client reconnected on its own" : x.text}) — `
     + "the session is ended there and nothing is pressed";
+}
+
+/** Hero has cards in front of him right now — money a Leave would forfeit (session.ts standDownTable), and the one
+ *  state in which a table's socket closing can never be the site closing an empty table (ignition/reader.ts). */
+export function inAHand(): boolean {
+  if (S.ws.handOver || S.ws.heroFolded) return false;
+  return truthy(S.ws.heroCards) || S.liveStatus.hero === "in-hand";
 }
 
 /** What a relayed press may be told beyond its label. `cards` = the hole cards the decision was made for: the press

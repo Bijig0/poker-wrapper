@@ -34,6 +34,8 @@ export const Body = {
   sessionDisconnected: obj({ sid: anyVal.optional(), slot: anyVal.optional(), text: anyVal.optional(), attempt: anyVal.optional(),
                              of: anyVal.optional(), reconnected: anyVal.optional(), client: anyVal.optional() }),
   sessionNetDrop: obj({ sid: anyVal.optional(), slot: anyVal.optional(), why: anyVal.optional() }),
+  sessionTableClosed: obj({ sid: anyVal.optional(), slot: anyVal.optional(), hand: anyVal.optional(), seats: anyVal.optional(),
+                            hero: anyVal.optional(), rid: anyVal.optional() }),
   sessionEnd: obj({ id: anyVal.optional(), note: anyVal.optional(), all: anyVal.optional(), closeOut: anyVal.optional() }),
   balance: obj({ profile: anyVal.optional() }),
   topupSecond: obj({ cents: anyVal.optional() }),

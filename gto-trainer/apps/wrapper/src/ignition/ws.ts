@@ -442,6 +442,14 @@ export function tapUnbind(why: string): void {
   S.tapHold.clear();
 }
 
+/** A socket that is gone for good (the site closed its table): nothing it dealt or claimed may bind or be replayed
+ *  again — the next table's socket is found from its own deal into our own frame. */
+export function tapForget(rid: string): void {
+  for (const m of [S.tapHist, S.tapHold, S.tapDeals, S.tapClaims, S.tapSeen]) m.delete(rid);
+  S.tapRejected.delete(rid);
+  if (S.tapBound === rid) S.tapBound = null;
+}
+
 /** Bind `rid`: its current hand (every frame since its PLAY_STAGE_INFO, whether or not we were reading it) is
  *  replayed through the reader, so a socket bound mid-hand — first time, or back after a drop — rebuilds the hand
  *  from its start. */
