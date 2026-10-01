@@ -440,6 +440,16 @@ const handQ = (cid: string): ParsedHand | null => dbRead((db) => {
   try { return raw ? normalizeHand(JSON.parse(raw.data)).hand ?? null : null; } catch { return null; }
 });
 let n = 0, fails = 0;
+/** A MISSED TOKEN IS NOT A RESULT: the token is read off the GTO Wizard browser and expires every ~15 minutes; a read
+ *  that misses holds off for a minute (gtowSessions SNIFF_FAIL_HOLD_MS). Wait it out and ask the same spot again. */
+async function withToken<T extends { ok: boolean; reason?: string }>(solve: () => Promise<T>): Promise<T> {
+  for (let k = 0; ; k++) {
+    const row = await solve();
+    if (row.ok || !/no token/i.test(row.reason ?? "") || k >= 4) return row;
+    log(`  no token yet — waiting 70 s and asking the same spot again (${k + 1}/4)`);
+    await sleep(70_000);
+  }
+}
 const pace = async (started: number) => sleep(Math.max(0, EVERY * 1000 - (Date.now() - started)));
 const stopOn = (reason: string | undefined): boolean => {
   if (reason && RATE_LIMIT.test(reason)) { log(`STOP: this reads like a rate limit — ${reason.slice(0, 200)}`); return true; }
@@ -449,7 +459,7 @@ run: {
   for (const { cfg, stack } of sweepTodo) {
     if (!(await gate(t0))) break run;
     const started = Date.now();
-    const row = await solveSweep(cfg, stack);
+    const row = await withToken(() => solveSweep(cfg, stack));
     appendFileSync(SWEEP_OUT, JSON.stringify(row) + "\n");
     n++;
     log(`[${n}/${total}] sweep ${row.key}: ${row.ok ? `${row.offered!.map((o) => o.label).join(" / ")} at "${row.line}" ${row.secs.toFixed(1)} s` : `FAILED ${row.reason!.slice(0, 160)}`}  (${ownSince(t0)} requests)`);
@@ -462,7 +472,7 @@ run: {
     const hand = handQ(spot.cid);
     if (!hand) continue;
     let row: RealRow;
-    try { row = await solveReal(spot, cutAt(hand, spot.upto)); }
+    try { row = await withToken(() => solveReal(spot, cutAt(hand, spot.upto))); }
     catch (e) { row = { kind: "real", key: spot.key, ts: started, secs: 0, heroPos: spot.heroPos, heroClass: spot.heroClass, first: spot.first, stratum: spot.stratum, chart: spot.chart, gap: spot.gap, ok: false, reason: `threw: ${e instanceof Error ? e.message : e}` }; }
     appendFileSync(REAL_OUT, JSON.stringify(row) + "\n");
     n++;
