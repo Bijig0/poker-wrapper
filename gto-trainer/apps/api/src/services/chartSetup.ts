@@ -152,7 +152,7 @@ function aiPreflopSetup(id: string, note: string | null): ChartSetup | null {
   }).filter((s) => s.pos);
   const cap = note?.match(/rake (\d+(?:\.\d+)?)% cap (\d+(?:\.\d+)?)bb/);
   const notes: string[] = [];
-  if (note && /dead SB approximated/.test(note)) notes.push("the missing small blind was approximated (a ghost seat all-in for a penny)");
+  if (note && /dead SB approximated/.test(note)) notes.push("the missing small blind was approximated (a ghost seat posting a penny that can only fold)");
   const dead = note?.match(/(\d+(?:\.\d+)?)bb dead money in the pot/);
   if (dead) notes.push(`${dead[1]}bb of dead money in the pot`);
   if (!cap) notes.push("the rake cap was not in this answer's note");

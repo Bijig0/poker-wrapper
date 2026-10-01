@@ -424,7 +424,7 @@ app.get("/registry", async (c) => {
         ],
         caveats: [
           "two-limper pots are not in the tree (the API stops at one limper)",
-          "a dead small blind cannot be expressed: the missing SB is modelled as a ghost seat all-in for a penny (flagged approx); a capture that labelled the BB poster as SB is relabelled from the post first",
+          "a dead small blind cannot be expressed: the missing SB is modelled as a ghost seat posting a penny whose only action is the fold (flagged approx); a capture that labelled the BB poster as SB is relabelled from the post first",
           "solved fresh in the cloud — an answer can differ slightly between two identical spots (solver noise), unlike a stored chart",
           "needs the GTO Wizard session on CDP 9222 (dedicated-profile Chrome) for the token",
         ],

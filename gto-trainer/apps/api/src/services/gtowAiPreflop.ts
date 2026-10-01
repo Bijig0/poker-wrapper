@@ -21,10 +21,18 @@
  *   - a straddle is just a blind on that player; antes are per player
  *   - a dead small blind cannot be expressed (SB blind 0 is refused at solve time: "Invalid Total Pot = 0",
  *     and a 5-player set without an SB position is refused outright) — the hand is approximated with the
- *     next set up and the SB seat as a GHOST: blind 0.01, stack 0.01, all-in for a penny. Measured
- *     2026-09-23 on hand 732 (HJ first in, 5 dealt): the earlier ghost holding its full 0.5bb blind put
- *     0.5bb of phantom dead money in the pot and made hero limp 1.75% of his range; the penny ghost
- *     removes both (limp 0.01%, raise 20.6% vs 16.1%). Rake cap counts the seats actually dealt.
+ *     next set up and the SB seat as a GHOST posting a penny. Measured 2026-09-23 on hand 732 (HJ first in,
+ *     5 dealt): the earlier ghost holding its full 0.5bb blind put 0.5bb of phantom dead money in the pot and
+ *     made hero limp 1.75% of his range; the penny removes both (limp 0.01%, raise 20.6% vs 16.1%). Rake cap
+ *     counts the seats actually dealt.
+ *     THE GHOST FOLDS, IT IS NOT ALL-IN (2026-10-01, hand 4921843568): the first penny ghost had stack = blind,
+ *     so it was all-in from the deal and always "reached the flop" — one of the THREE flop seats the AI allows.
+ *     With the raiser second and the BB (closing) third, the engine offered no other seat a call: over the solve
+ *     cache, a non-blind seat facing one open had a call in 49 of 49 live-SB trees and 0 of 6 ghost trees. Hero
+ *     opened the CO, the BTN cold-called, and the flop had no ranges ("token C is not an action at 'F-F-R2.6'").
+ *     Now the ghost has a stack behind and NOTHING IT MAY DO BUT FOLD (no limp, no calls, no sizes): probed on
+ *     that table (scripts/_probeDeadSbGhost.ts) its node reads F 100% everywhere and the BTN's reads
+ *     F 81.9 / C 8.2 / R 9.9. The tree puts the ghost on the clock, so the line carries its fold (lineOf).
  *   - one tree per table shape (positions + stacks + blinds + sizes); ~2-4 s to solve the root, 1-2 s
  *     per node after that; solutions are cached per shape for the process's life
  *
@@ -63,8 +71,12 @@ const THREE_BETS = ["3.2x", "3.8x", "4.5x"];
 const FOUR_BETS = ["2.2x", "2.6x"];
 const FIVE_PLUS = ["2.2x"];
 const NODE_TIMEOUT_MS = 30_000;
-/** The dead-SB ghost's blind and stack: all-in for a penny, so it neither adds dead money nor competes for the pot. */
+/** The dead-SB ghost's blind — a penny, so it adds no dead money to speak of — and the label its seat carries in the
+ *  shape's stacks (and so in a tree's id, `SB:0.01`: how a dead-SB tree is told apart everywhere). */
 const DEAD_SB_GHOST = 0.01;
+/** What the ghost has behind in the TREE: enough that it is not all-in for its blind (an all-in seat takes one of the
+ *  three flop seats — see the header). It never plays a chip of it: its only action is the fold. */
+const DEAD_SB_GHOST_STACK = 100;
 const POLL_MS = 1200;
 
 export interface AiPreflopShape {
@@ -194,7 +206,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
     byPos.set("SB", byPos.get("BTN")!); byPos.delete("BTN"); present = present.map((p) => (p === "BTN" ? "SB" : p));
   }
   // a hand with no small blind (the seat emptied between hands): the API cannot express it —
-  // model the missing SB as a ghost all-in for a penny (see the header: measured against the 0.5bb ghost)
+  // model the missing SB as a ghost posting a penny that can only fold (see the header: measured against the 0.5bb ghost)
   const deadSb = !present.includes("SB") && present.includes("BB") && present.length >= 2;
   const ordered = present.slice().sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
   const n = ordered.length + (deadSb ? 1 : 0);
@@ -288,9 +300,17 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   const calls = allInCalls(hand.actions);
   const pendingHero = !hand.ended && hand.currentNode.street === "preflop" && hand.currentNode.toActIsHero;
   const heroApi = shape.heroApiPos;
+  // THE DEAD-SB GHOST FOLDS ON ITS TURN (2026-10-01): the tree puts it on the clock after the button, with the fold
+  // its only action, and no seat at the table makes that fold for it. It is due once every seat ahead of it has a
+  // token (acted, or padded as a fold) — whether the line goes on to the BB or stops there with the BB to act.
+  const ghostAt = shape.deadSb ? order.indexOf("SB") : -1;
+  let ghostFolded = false;
+  const ghostDue = () => ghostAt >= 0 && !ghostFolded && tokens.length === ghostAt;
+  let stoppedAt: string | null = null;
   for (let round = 0; round < 4 && cursor < acted.length; round++) {
     for (const api of order) {
-      if (cursor >= acted.length) break;
+      if (cursor >= acted.length) { if (round === 0) stoppedAt = api; break; }
+      if (round === 0 && api === "SB" && ghostDue()) { tokens.push("F"); ghostFolded = true; continue; }
       const a = acted[cursor]!;
       const aApi = posOf(a) ? shape.apiOf[posOf(a)!] ?? null : null;
       if (aApi === api || aApi == null) {
@@ -307,6 +327,8 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
       }
     }
   }
+  // the line stopped with the ghost next (the button's was the last action): the BB is on the clock behind its fold
+  if (stoppedAt === "SB" && ghostDue()) tokens.push("F");
   return { tokens, levels };
 }
 
@@ -333,6 +355,12 @@ export function menus(levels: number[], n: number) {
 
 function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
   const sizes = (position: string) => {
+    // the dead-SB ghost may only fold: no limp, no call, no size to raise to (see the header — an all-in ghost took a
+    // flop seat and cost every other seat its cold-call)
+    if (shape.deadSb && position === "SB") {
+      return { position, type: "FIXED", use_fixed_sizes: true, allow_limp: false, allow_call_opens: false, allow_3betplus_cold_calls: false,
+        bet_sizes: [], raise_sizes: [], second_raise_sizes: [], third_plus_raise_sizes: [] };
+    }
     const s = position === shape.heroApiPos ? m.hero : m.villain;
     // calls of opens and cold-calls of 3-bets+ must be switched on explicitly in FIXED mode (the web app's own
     // defaults: ccVs2b on, ccVs3bPlus off — we want both, a fish's line is anything)
@@ -347,7 +375,8 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
     players: shape.positions.map((p) => ({
       position: p, display_position: p,
       blind: p === "SB" ? shape.sb : p === "BB" ? shape.bb : (shape.straddle?.pos === p ? shape.straddle.bb : null),
-      range: null, stack: shape.stacks[p] ?? 100, tournament_instant_bounty: null, tournament_total_bounty: null,
+      range: null, stack: shape.deadSb && p === "SB" ? DEAD_SB_GHOST_STACK : (shape.stacks[p] ?? 100),
+      tournament_instant_bounty: null, tournament_total_bounty: null,
     })),
     tree_operations: [], resolving_policy: null,
     rake: shape.siteRake
