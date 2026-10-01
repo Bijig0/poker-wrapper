@@ -40,7 +40,7 @@ import { fetchNode6max } from "../services/hrc6maxDb";
 import { nodeGetterHu } from "../services/hrc2max";
 import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
-import { preflopPathView, dealtFromTreeId, livePreflopNodeView } from "../services/gtowAiPreflop";
+import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct } from "../services/gtowAiPreflop";
 import { getPreflopPin } from "../services/preflopPin";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
@@ -1973,13 +1973,27 @@ app.get("/live-node", async (c) => {
           return { pos, label, stack: stackIn != null ? Math.round((stackIn - (n.invested?.[i] ?? 0)) * 10) / 10 : null, range: n.rangesIn?.[label] ?? {} };
         });
         const heroSeat = seats.find((s) => s.label === n.heroSeatLabel) ?? null;
+        // FACING AN ACTION (Brady, 2026-10-01): an opponent who acted on this street before hero's node shows his
+        // action chart at his LAST decision on it — his range there split by the node's actions, the one he took
+        // named; one yet to act (hero first to act) keeps his arriving range
+        const heroAt = nodes.indexOf(n);
+        const actionOf = (pos: string) => {
+          const m = nodes.slice(0, heroAt).reverse().find((x) => x.si === n.si && x.actorPos === pos && x.taken != null);
+          if (!m) return null;
+          const takenIndex = typeof m.taken === "number" ? m.taken : null;
+          return { actions: (m.actions ?? []).map(labelOfAct), strategy: m.actorStrategy ?? {}, taken: m.takenName ?? null,
+                   takenIndex, takenPct: m.takenOverallPct ?? actionPct(m.actorStrategy ?? {}, takenIndex) };
+        };
         return c.json({
           ok: true, source: "ai-chain", street: String(n.street ?? "").toLowerCase(),
           board: String(n.board ?? "").match(/[2-9TJQKA][shdc]/g) ?? [], line: (n.codes ?? []).join("-"),
           heroCards: v.spec.heroCombo ? (String(v.spec.heroCombo).match(/.{2}/g) ?? []) : heroCards,
           hero: heroSeat ? { pos: heroSeat.pos, stack: heroSeat.stack, range: heroSeat.range,
                              actions: (n.actions ?? []).map(labelOfAct), strategy: n.isHero ? n.actorStrategy : null } : null,
-          opponents: seats.filter((s) => s !== heroSeat).map(({ pos, stack, range }) => ({ pos, stack, range })),
+          opponents: seats.filter((s) => s !== heroSeat).map(({ pos, stack, range }) => {
+            const action = actionOf(pos);
+            return action ? { pos, stack, range, action } : { pos, stack, range };
+          }),
           note: n.isHero ? null : `the stored solve's last node is ${n.actorPos}'s, not hero's`,
           solveId: got.row.id,
         });

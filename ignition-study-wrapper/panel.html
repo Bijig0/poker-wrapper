@@ -1388,7 +1388,15 @@
       }
     }
     for (const o of j.opponents || []) {
-      html += `<div class="rg-one"><div class="rg-h"><b>${esc(o.pos)}</b>${bb(o.stack)} <span class="sub">— range arriving here</span></div>${classGrid(rgGrid(o.range, true), ["in range"], null, { single: true, combosOff: true, foot: "fill = share of the class still in range · hover for the weight" })}</div>`;
+      // FACING HIS ACTION (2026-10-01): he acted on this street before you — his action chart at his last decision
+      // there, the action he took named; yet to act (you first) — his range arriving here
+      const x = o.action;
+      if (x && x.strategy && Object.keys(x.strategy).length) {
+        const took = x.taken ? ` — took <b>${esc(x.taken)}</b>${x.takenPct != null ? ` (${x.takenPct}% of his range)` : ""}` : "";
+        html += `<div class="rg-one"><div class="rg-h"><b>${esc(o.pos)}</b>${bb(o.stack)} <span class="sub">— his action chart${took}</span></div>${classGrid(rgGrid(x.strategy, false), x.actions, null, { combosOff: true, foot: "his whole range at his decision, split by action · hover a cell for its mix" })}</div>`;
+      } else {
+        html += `<div class="rg-one"><div class="rg-h"><b>${esc(o.pos)}</b>${bb(o.stack)} <span class="sub">— range arriving here</span></div>${classGrid(rgGrid(o.range, true), ["in range"], null, { single: true, combosOff: true, foot: "fill = share of the class still in range · hover for the weight" })}</div>`;
+      }
     }
     if (!(j.opponents || []).length) html += `<div class="sub">no opponent left in the hand at this node</div>`;
     if (j.note) html += `<div class="sub" style="color:#ffce56;flex-basis:100%">⚠ ${esc(j.note)}</div>`;

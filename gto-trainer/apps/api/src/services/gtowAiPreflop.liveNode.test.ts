@@ -73,6 +73,13 @@ describe("livePreflopNodeView", () => {
     expect(v.opponents[0]!.range["AA"]!.w).toBe(3);
     expect(v.opponents[0]!.range["72o"]!.w).toBe(6);
     expect(v.opponents[0]!.stack).toBe(shape.stacks[btn]!);
+    // the BTN acted before hero: his action chart at his open — his whole range split raise/fold, the raise named
+    const act = v.opponents[0]!.action!;
+    expect(act.actions).toEqual(["Raise 2.5", "Fold"]);
+    expect(act.taken).toBe("Raise 2.5");
+    expect(act.takenIndex).toBe(0);
+    expect(act.takenPct).toBe(50);
+    expect(act.strategy["AA"]).toEqual({ w: 6, acts: [3, 3] });
   });
 
   it("first to act: nobody has conditioned anything — every opponent arrives whole", async () => {
@@ -92,6 +99,7 @@ describe("livePreflopNodeView", () => {
     expect(v.hero?.pos).toBe("BTN");
     expect(v.opponents.map((o) => o.pos).sort()).toEqual(["BB", "SB"]);
     for (const o of v.opponents) expect(o.range["AA"]!.w).toBe(6);   // whole
+    for (const o of v.opponents) expect(o.action).toBeUndefined();      // first to act: nobody has acted — ranges, no charts
     expect(v.hero!.strategy!["AKo"]!.acts[0]).toBeCloseTo(3.6, 3);    // 12 combos × 0.3 raise
   });
 

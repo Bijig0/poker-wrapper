@@ -1378,8 +1378,31 @@ function classRangeOf(w: number[]): Record<string, { w: number }> {
   return out;
 }
 
-/** One seat at a live decision node: its range arriving there, by class (w = combos), for the side panel's grids. */
-export interface LiveNodeSeat { pos: string; stack: number | null; range: Record<string, { w: number }> }
+/**
+ * One seat at a live decision node: its range arriving there, by class (w = combos), for the side panel's grids — and,
+ * for a seat that acted on this street before hero, its ACTION CHART at its last decision there (Brady, 2026-10-01:
+ * "if we are facing our opponents' action … we want to see our opponent's action chart"): the actions it had, its
+ * whole range at that node split by them, and the one it took.
+ */
+export interface LiveNodeSeat {
+  pos: string; stack: number | null; range: Record<string, { w: number }>;
+  action?: LiveNodeAction;
+}
+export interface LiveNodeAction {
+  actions: string[];
+  strategy: Record<string, { w: number; acts: number[] }>;
+  taken: string | null;
+  takenIndex: number | null;
+  /** the share of the seat's range at that node taking the action it took (0..100), or null */
+  takenPct: number | null;
+}
+/** The share of a strategy's combos on action `i`, in percent. */
+export function actionPct(strategy: Record<string, { w: number; acts: number[] }>, i: number | null): number | null {
+  if (i === null || i < 0) return null;
+  let n = 0, d = 0;
+  for (const e of Object.values(strategy)) { n += e.acts[i] ?? 0; d += e.w; }
+  return d > 0 ? Math.round((1000 * n) / d) / 10 : null;
+}
 /** THE RANGES AT THE DECISION IN FRONT OF HERO (routes/dashboard.ts /live-node, 2026-09-30): one shape for both streets. */
 export interface LiveNodeView {
   ok: true;
@@ -1411,8 +1434,15 @@ export async function livePreflopNodeView(
   const codes = pin.codes;
   const weights = new Map<string, number[]>(shape.positions.map((p) => [p, new Array(1326).fill(1)]));
   const folded = new Set<string>();
+  const lastAction = new Map<string, LiveNodeAction>();
   if (codes.length) {
     const walked = await walkArrivalRanges(shape, codes, get, 6, (s) => {
+      // the seat's action chart at this decision — its range BEFORE it, split by the node's actions; the last one wins
+      const sols: any[] = s.node.action_solutions ?? [];
+      const strategy = classStrategyOf(s.before, sols);
+      const takenIndex = s.taken ? sols.indexOf(s.taken) : -1;
+      lastAction.set(s.actor, { actions: sols.map((a) => labelOf(a.action)), strategy, taken: s.taken ? labelOf(s.taken.action) : null,
+                                takenIndex: takenIndex >= 0 ? takenIndex : null, takenPct: actionPct(strategy, takenIndex >= 0 ? takenIndex : null) });
       weights.set(s.actor, s.after);
       if (s.token === "F") folded.add(s.actor);
     });
@@ -1433,7 +1463,11 @@ export async function livePreflopNodeView(
   return {
     ok: true, source: "gtow-ai-preflop", street: "preflop", board: [], line, heroCards,
     hero: { ...seat(actor), actions: sols.map((a) => labelOf(a.action)), strategy: classStrategyOf(heroW, sols) },
-    opponents: shape.positions.filter((p) => p !== actor && !folded.has(p)).map(seat),
+    // preflop is one street: every opponent who acted before hero shows his action chart; one yet to act, his range
+    opponents: shape.positions.filter((p) => p !== actor && !folded.has(p)).map((p) => {
+      const a = lastAction.get(p);
+      return a ? { ...seat(p), action: a } : seat(p);
+    }),
     note: pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out as dead money` : null,
   };
 }

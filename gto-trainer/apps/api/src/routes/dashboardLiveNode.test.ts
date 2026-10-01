@@ -73,6 +73,13 @@ describe("GET /live-node", () => {
     // the SB's range arriving here: whole, less the board's cards
     expect(j.opponents[0].range["AA"].w).toBe(6);
     expect(j.opponents[0].range["KK"].w).toBe(3);
+    // the SB acted on this street before hero (checked): his action chart at that decision, the check named
+    const act = j.opponents[0].action;
+    expect(act.actions).toEqual(["Check", "Bet 1.8"]);
+    expect(act.taken).toBe("Check");
+    expect(act.takenIndex).toBe(0);
+    expect(act.takenPct).toBe(90);                                          // the node's own overall frequency
+    expect(act.strategy["AKs"]).toEqual({ w: 3, acts: [2, 1] });           // AsKs bets, the other two check
     expect(j.note).toBeNull();
   });
 
