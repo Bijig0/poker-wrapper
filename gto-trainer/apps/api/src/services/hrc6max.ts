@@ -221,7 +221,7 @@ export interface Chart6Choice {
 export { dealtBySeat };
 
 /** dealtBySeat keyed by 6-max position name. */
-function dealtByPos(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): Partial<Record<Seat6, number>> {
+export function dealtByPos(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): Partial<Record<Seat6, number>> {
   const out: Partial<Record<Seat6, number>> = {};
   const bySeat = dealt ?? dealtBySeat(hand);
   const put = (pos: string, seatId: number) => {

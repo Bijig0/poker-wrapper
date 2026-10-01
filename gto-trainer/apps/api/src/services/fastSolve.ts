@@ -1,7 +1,8 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens, allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
-import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective } from "./hrc6max";
+import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6 } from "./hrc6max";
+import { treeGap6, type TreeGap } from "./treeGap";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
@@ -141,6 +142,9 @@ export type FastSolveResult =
       /** HOW THIS ANSWER WAS PRODUCED (2026-09-25, services/chainPath): the flop ranges' provenance, every street's,
        *  the requests the call made, and the verdict (clean / by design / rebuilt / extra requests) */
       path?: DecisionPath;
+      /** a 6-max chart answer: how far the table's stacks are from the chart's (services/treeGap) — LOG ONLY, it
+       *  rides to the answer log on `path` and routes nothing */
+      treeGap?: TreeGap;
       /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
       dryRun?: {
         flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[];
@@ -2993,6 +2997,11 @@ export async function solvePreflop6max(
     // piece makes writes a note or leaves a trace on the walk; flag exactly those.
     approx: notes.length > 0 || walk.repaired.length > 0 || walk.folds.length > 0 || !!borrowed || resolved.fellBack || undefined,
     warning: notes.join(" · "),
+    // THE STACK DISTANCE OF THIS ANSWER (services/treeGap, log only): the table's effective stacks against the
+    // chart's, on the RAW tokens — a caller the fit folded out of the tree is still at the table
+    treeGap: treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeatPos || nodePos,
+      ...replayTokens6(tokens), repaired: walk.repaired,
+      wantedId: retry.keepChart ? null : choice.candidates[0] }) ?? undefined,
   };
 }
 
@@ -3295,7 +3304,8 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
     ?? (value.ok ? classifyPath({ street, streets: [] }) : faultPath(street, (value as { kind?: string }).kind ?? null, value.reason));
   // the decision's own checks (services/chainChecks): the clock, the buttons, the mix, the key, hero's class preflop
   const path = guardChecks(0, () => withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos)), path0);
-  return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin } } as FastSolveResult;
+  const treeGap = value.ok ? value.treeGap : undefined;
+  return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin, ...(treeGap ? { treeGap } : {}) } } as FastSolveResult;
 }
 
 async function fastSolveEntry(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {

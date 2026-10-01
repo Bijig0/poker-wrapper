@@ -108,6 +108,8 @@ export interface DecisionPath {
    *  that was evaluated — pass / fail / flag / na with a one-line reason. A fail no other reason covers is a reason
    *  with the verdict "failed"; #3 (a villain mistake line) is a flag and never a verdict. */
   checks?: PathChecks;
+  /** a 6-max chart answer's stack distance from the table (services/treeGap, 2026-10-01): LOG ONLY, never a reason */
+  treeGap?: import("./treeGap").TreeGap;
 }
 
 /** The reasons a path carries, in the order they happened (arrival, preflop, then street by street, then the checks). */
