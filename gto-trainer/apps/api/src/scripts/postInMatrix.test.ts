@@ -7,13 +7,22 @@
  * poller can roll must be a press Ignition's strip offers. Hero's own free option is swept over all 169 classes.
  * Offline, charts only; its own process in setup/regress.ts (MUTATION_GATE=1). The full tree is the script itself.
  */
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { harnessEnv } from "./mutationHarness";
 import { walk, summarize, renderHand, autoPresses, pressProblem, type Row, type Step } from "./postInMatrix";
 import { exportAt, liveHand } from "./mutationHarness";
 import { fastSolve, forgetPreflopPin } from "../services/fastSolve";
 
 const GATE = process.env.MUTATION_GATE !== "1";
+
+// THE TRUST GUARD AS COMMITTED (2026-10-01). The counts below are for the guard on the limp trees only (services/nodeTrust
+// guardApplies). The owner's config/local.env widens it (TRUST_GUARD_ALL=1), and a gate started from a shell that had
+// loaded config/env.ps1 inherited that: 890 of the 1,448 decisions went to the cloud on BOTH tables (no finding — the
+// post-in table still answers as the ordinary one), 558 stayed on the charts, and the "> 1000" below read as a regression
+// that no commit had made. This file runs with the guard as the code ships it, whatever the machine's own setting.
+const savedGuard = process.env.TRUST_GUARD_ALL;
+beforeAll(() => { delete process.env.TRUST_GUARD_ALL; });
+afterAll(() => { if (savedGuard !== undefined) process.env.TRUST_GUARD_ALL = savedGuard; });
 
 test.skipIf(GATE)("post-ins: every poster seat × every hero seat, the tree to the 3-bet — answered as the ordinary table, pressable", async () => {
   const restore = harnessEnv();
