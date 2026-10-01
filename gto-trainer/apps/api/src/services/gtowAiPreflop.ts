@@ -744,11 +744,32 @@ export function matchToken(tok: string, sols: any[]): { code: string; betsize: n
  *
  * Every prefix visited is cached by fetchNode, so the probe that pays for the walk is
  * the one that failed — the next tick's re-ask lands on cached nodes and answers at once.
+ *
+ * THE WALK READS EACH RUN TOGETHER (2026-10-01). It read one node, matched one token, read the next: 5-7 reads of
+ * 0.6-1.7 s each, 4-7 s of a 9-15 s answer (hand 4921861748: 12.8 s, 5.1 s of it this walk), while the same nodes
+ * asked for together come back in under a second. Only a raise can be renamed by the tree (nearest size) — a fold,
+ * a call, a check keeps its code — so from any point every address up to the next raise is already known, and
+ * prefetchRun asks for those at once; the walk joins each read (fetchNode). The same nodes, the same matches, the same
+ * line: a walk with two raises is three rounds of reads instead of seven. `end` also reads the node the whole line
+ * ends on (hero's), when no raise stands before it — for the caller that reads it on this same tree next.
  */
-async function repairLine(solId: string, tokens: string[]): Promise<{ line: string; changed: string[] } | { error: string }> {
+const isRaiseToken = (tok: string) => /^R/i.test(tok);
+
+function prefetchRun(solId: string, done: string[], rest: string[], end: boolean): void {
+  if (process.env.GTOW_PREFETCH === "0") return;
+  const raise = rest.findIndex(isRaiseToken);
+  // node k is where rest[k] is matched (k = rest.length: where the line ends); node 0 is the walk's own next read
+  const last = raise >= 0 ? raise : end ? rest.length : rest.length - 1;
+  for (let k = 1; k <= last; k++) void fetchNode(solId, [...done, ...rest.slice(0, k)].join("-"), { once: true }).catch(() => undefined);
+}
+
+async function repairLine(solId: string, tokens: string[], opts: { end?: boolean } = {}): Promise<{ line: string; changed: string[] } | { error: string }> {
   const out: string[] = [];
   const changed: string[] = [];
-  for (const tok of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    // a new run starts at the root and after every token the tree was free to rename: a raise, or one it did rename
+    if (i === 0 || isRaiseToken(tokens[i - 1]!) || out[i - 1] !== tokens[i - 1]) prefetchRun(solId, out, tokens.slice(i), !!opts.end);
     const at = out.join("-");
     const node = await fetchNode(solId, at);
     if ("error" in node) return { error: `walking '${at || "root"}': ${node.error}` };
@@ -833,7 +854,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   }
   if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
     // the tree has this line, just not under the sizes we named — walk it and find out
-    let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens);
+    let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens, { end: true });
     if ("error" in fixed && /is not offered/.test(fixed.error)) {
       const fit = await fitAiLine(sol.solId, tokens, shape);
       if (fit) { fixed = fit; fittedFolds = fit.folds; }
