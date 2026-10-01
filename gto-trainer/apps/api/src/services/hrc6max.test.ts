@@ -121,10 +121,92 @@ describe("chartFor6max", () => {
     expect(c.shortSeat).toBe("UTG");
   });
 
-  test("a limped pot at an uneven table uses the even limp chart, since the uneven set has no limp tree", () => {
+  test("a limped pot at an uneven table only ever falls back to limp charts (uneven limp trees first, the even ones behind)", () => {
     const uneven = table(6, { 1: 30 });
     const c = chartFor6max(uneven as any, "BB", ["C", "F", "F", "F", "F"]);
     expect(c.candidates.every((id) => /_olimp(_pool3?|_widex)?$/.test(id))).toBe(true);
+  });
+});
+
+/**
+ * The uneven limp trees (2026-10-01, hand 4921863810: the BTN facing a 45bb HJ's limp was answered from the even 100bb
+ * limp chart). A limped pot at the 100bb rung with a short seat in it names that seat's uneven limp tree, nearest short
+ * rung first; the pool-locked one where the even pick is the pool-locked tree; the even limp ladder stays behind as the
+ * fallback while the trees land.
+ */
+describe("chartFor6max — uneven limp trees", () => {
+  test("hand 4921863810: BTN facing a 45bb HJ limp reads the HJ-short 50bb limp tree, not the even 100bb one", () => {
+    const t = table(4, { 1: 100, 2: 45.2, 3: 31.2, 4: 103.6, 5: 242.6, 6: 87.4 });
+    const c = chartFor6max(t as any, "BTN", ["F", "C", "F"]);
+    // the BTN's over-limp node is locked in the pool trees, so the equilibrium uneven tree answers
+    expect(c.id).toBe("ign200_6max_D100_s50_HJ_olimp");
+    expect(c.shortSeat).toBe("HJ");
+    expect(c.shortDepth).toBe(50);
+    expect(c.candidates.slice(0, 3)).toEqual(["ign200_6max_D100_s50_HJ_olimp", "ign200_6max_D100_s30_HJ_olimp", "ign200_6max_D100_s70_HJ_olimp"]);
+    expect(c.candidates).toContain("ign200_6max_D100_olimp");                // the fallback until it lands
+    // 45.2 is within 8bb of the 50 rung: no gap filed; the folded 31bb CO is not modelled
+    expect((c.approx ?? []).length).toBe(0);
+  });
+
+  test("the BB behind a short limper and a deep one reads the pool-locked uneven tree first, the equilibrium one behind it", () => {
+    const t = table(6, { 2: 50 });
+    const c = chartFor6max(t as any, "BB", ["F", "C", "C", "F", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_s50_HJ_olimp_pool3");
+    expect(c.candidates.slice(0, 2)).toEqual(["ign200_6max_D100_s50_HJ_olimp_pool3", "ign200_6max_D100_s50_HJ_olimp"]);
+    expect(c.candidates).toContain("ign200_6max_D100_olimp_pool3");
+  });
+
+  test("the SB facing limps keeps the pilot tree (pool limpers, his own decision solved) and still files the gap", () => {
+    const t = table(5, { 2: 50 });
+    const c = chartFor6max(t as any, "SB", ["F", "C", "F", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_olimp_pool");
+    expect((c.approx ?? []).map((a) => a.kind)).toContain("no-limp-uneven");
+  });
+
+  test("a stack nearer 100bb than any short rung stays on the even limp chart", () => {
+    const t = table(6, { 2: 84 });
+    const c = chartFor6max(t as any, "BB", ["F", "C", "C", "F", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_olimp_pool3");
+    expect((c.approx ?? []).map((a) => a.kind)).toContain("no-limp-uneven");
+  });
+
+  test("a 40bb limper reads the 50bb tree and files the rung it wanted", () => {
+    const t = table(6, { 2: 40 });
+    const c = chartFor6max(t as any, "BB", ["F", "C", "C", "F", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_s50_HJ_olimp_pool3");
+    const g = (c.approx ?? []).find((a) => a.kind === "short-rung-snapped");
+    expect(g?.want).toBe(40);
+    expect(g?.got).toBe(50);
+    expect(g?.solve).toBe("ign200_6max_D100_s40_HJ_olimp_pool3");
+  });
+
+  test("a deep iso over a short limper: the limper is the seat modelled, a short seat behind is noted, not modelled", () => {
+    const t = table(6, { 2: 30, 5: 60 });
+    // UTG folds, HJ (30bb) limps, CO folds, the BTN (100bb) isos to 5, the SB (60bb) folds: the BB faces the iso
+    const c = chartFor6max(t as any, "BB", ["F", "C", "F", "R5", "F"]);
+    expect(c.shortSeat).toBe("HJ");
+    expect(c.id).toBe("ign200_6max_D100_s30_HJ_olimp_pool3");
+  });
+
+  test("two short limpers and a deep one: the shorter limper is modelled, the other noted", () => {
+    const t = table(6, { 1: 45, 2: 30 });
+    // UTG (45) limps, HJ (30) limps, CO folds, BTN (100) limps, SB folds: three limpers -> the wide tree, by design
+    const c = chartFor6max(t as any, "BB", ["C", "C", "F", "C", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_olimp_widex");
+    const two = chartFor6max(table(6, { 1: 45, 2: 30 }) as any, "BTN", ["C", "C", "F"]);
+    // the BTN facing two short limps (his over-limp node is locked in the pool trees): the equilibrium uneven tree of the shorter
+    expect(two.id).toBe("ign200_6max_D100_s30_HJ_olimp");
+    expect(two.note).toContain("UTG 45bb also short");
+  });
+
+  test("three limpers keep the wide pool tree — no uneven wide tree exists", () => {
+    const t = table(6, { 1: 50 });
+    expect(chartFor6max(t as any, "BB", ["C", "C", "C", "F", "F"]).id).toBe("ign200_6max_D100_olimp_widex");
+  });
+
+  test("a shallow table keeps its even limp rung (the uneven limp set is a 100bb table)", () => {
+    const t = table(6, { 1: 50, 2: 50, 3: 50, 4: 50, 5: 50, 6: 50 });
+    expect(chartFor6max(t as any, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D50_olimp");
   });
 });
 
@@ -429,7 +511,11 @@ describe("short-stack rungs 7-25 and the uneven opens (2026-09-30)", () => {
     expect(unnameable6max("ign200_6max_D100_s7_UTG_o5")).toBeNull();
     expect(unnameable6max("ign200_6max_D100_s40_BB_o2_5")).toContain("not on SHORTS6");
     expect(unnameable6max("ign200_6max_D100_s20_BB_o4")).toContain("not on UNEVEN_OPENS6");
-    expect(unnameable6max("ign200_6max_D100_s30_UTG_olimp")).toContain("uneven limp tree");
+    expect(unnameable6max("ign200_6max_D100_s30_UTG_olimp")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s50_HJ_olimp_pool3")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s40_HJ_olimp")).toContain("not an uneven limp rung");
+    expect(unnameable6max("ign200_6max_D100_s20_BB_o2_5_pool3")).toContain("only limp trees carry the pool lock");
+    expect(unnameable6max("ign200_6max_D100_olimp_widex")).toBeNull();
     expect(unnameable6max("ign200_6max_D125_olimp")).toContain("not a limp rung");
     expect(unnameable6max("ign200_6max_D100_o2_5")).toBeNull();
     expect(unnameable6max("ign200_6max_D100_olimp_pool3")).toBeNull();

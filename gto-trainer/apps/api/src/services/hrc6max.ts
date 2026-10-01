@@ -72,6 +72,17 @@ export const evenChartId = (depth: number, open: number | "limp"): string =>
 export const unevenChartId = (short: number, seat: Seat6, open: number): string =>
   `${SITE_6MAX}_6max_D${num(DEEP6)}_s${num(short)}_${seat}_o${num(open)}`;
 
+/**
+ * THE UNEVEN LIMP TREES (2026-10-01, Brady: "30bb, 50bb, 70bb uneven limp charts for ALL positions" — hand 4921863810, a
+ * 45bb HJ limper read off the even 100bb limp chart). One short seat at a 100bb table, limp tree, every seat:
+ *   _olimp_pool3  the limps and the SB's complete locked to the pool's measured ranges, exactly as POOL_LIMP_CHART
+ *                 (solves/sixmax_grid/limp-uneven-pool3, queued on the Hetzner boxes 2026-10-01);
+ *   _olimp        the equilibrium tree (solves/sixmax_grid/limp-uneven; s30_UTG, s70_BTN and s70_SB solved 2026-09-23).
+ */
+export const LIMP_SHORTS6 = [30, 50, 70];
+export const unevenLimpChartId = (short: number, seat: Seat6, pool: boolean): string =>
+  `${SITE_6MAX}_6max_D${num(DEEP6)}_s${num(short)}_${seat}_olimp${pool ? "_pool3" : ""}`;
+
 /** The two pool-locked limp trees at 100bb (solves/sixmax_grid/limp-pool*, 2026-09-23/24). */
 export const POOL_LIMP_CHART = `${SITE_6MAX}_6max_D100_olimp_pool3`;   // limps AND the SB's complete locked to the pool
 export const POOL_LIMP_CHART_SB = `${SITE_6MAX}_6max_D100_olimp_pool`; // limps locked, the SB's own decision solved
@@ -485,6 +496,52 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     return finish(pool ? pool.id : ladder[0]!, cands, depth, depth, "EQ", open);
   };
 
+  /**
+   * A LIMPED POT WITH A SHORT SEAT READS THE UNEVEN LIMP TREE (2026-10-01). Only at the 100bb rung (the uneven limp set
+   * is a 100bb table with one short seat). The seat that gets modelled: the iso-raiser hero faces if he is short, else
+   * a short limper (he is in the pot), else the first short still to act behind hero, else the shortest. Which variant
+   * follows the even routing: where the even pick is the pool-locked tree (POOL_LIMP_CHART) the pool-locked uneven tree
+   * comes first and the equilibrium one behind it; where hero's own node is one the pool trees lock (his over-limp, the
+   * SB's complete) only the equilibrium tree is named — except the SB facing limps, which keeps the pilot tree (pool
+   * limpers, his own decision solved); three limpers keep the wide tree (no uneven wide tree exists).
+   * Candidates run nearest short rung first, only rungs closer to the real stack than the even chart is, then the even
+   * limp ladder — so an uneven tree that has not landed yet falls back exactly as before, and the answer says so.
+   */
+  function unevenLimp(): Chart6Choice | null {
+    if (rung !== DEEP6) return null;
+    const pool = poolLimpChart(tokens, me);
+    // the wide tree (three limpers) and the SB's own complete (the pilot tree: pool limpers, SB solved) stay as they are —
+    // no uneven tree holds pool-locked limpers with a free SB, and the pool lock is worth more there than the stacks
+    if (pool?.id === POOL_WIDE_CHART || pool?.id === POOL_LIMP_CHART_SB) return null;
+    const usePool = pool?.id === POOL_LIMP_CHART;
+    const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
+    const firstRaise = toks.findIndex((t) => t === "RAI" || /^R[\d.]+$/.test(t));
+    const limpers = new Set<Seat6>();
+    for (let i = 0; i < Math.min(SEATS6.length - 2, firstRaise < 0 ? toks.length : firstRaise); i++) if (toks[i] === "C") limpers.add(SEATS6[i]!);
+    const isShort = (p: Seat6 | null) => !!p && shorts.some(([q]) => q === p);
+    const seat: Seat6 = isShort(readableAgg) ? readableAgg!
+      : shorts.filter(([p]) => limpers.has(p)).sort((a, b) => a[1] - b[1])[0]?.[0]
+        ?? after.find((p) => isShort(p)) ?? shorts.slice().sort((a, b) => a[1] - b[1])[0]![0];
+    const bb = oppStack(seat)!;
+    const evenGap = Math.abs(Math.log(DEEP6 / bb));
+    const rungs = LIMP_SHORTS6.filter((r) => Math.abs(Math.log(r / bb)) < evenGap)
+      .sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)));
+    if (!rungs.length) return null;
+    const s = rungs[0]!;
+    const ids = rungs.flatMap((r) => (usePool ? [unevenLimpChartId(r, seat, true), unevenLimpChartId(r, seat, false)] : [unevenLimpChartId(r, seat, false)]));
+    if (usePool) notes.push(pool!.note);
+    if (Math.abs(bb - s) > 8) {
+      const want = Math.round(bb / 10) * 10;
+      gap("short-rung-snapped", `the ${seat} has ${Math.round(bb)}bb — answered from the ${s}bb short limp chart`,
+          want, s, seat, unevenLimpChartId(want, seat, usePool), `deep=${DEEP6};shorts=${want};opens=limp;seats=${seat}`);
+    }
+    const others = shorts.filter(([p]) => p !== seat);
+    if (others.length) notes.push(`${others.map(([p, x]) => `${p} ${Math.round(x)}bb`).join(", ")} also short — not modelled`);
+    if (hero > DEEP6 + SHORT_GAP) notes.push(`hero has ${Math.round(hero)}bb — the short chart plays him at 100bb`);
+    const evenCands = [...(pool ? [pool.id] : []), ...evenLadder(DEEP6, "limp")];
+    return finish(ids[0]!, [...ids, ...evenCands], DEEP6, s, seat, "limp");
+  }
+
   // hero has not reloaded: his own stack sets the rung like anyone else's
   if (hero < HERO_RELOAD_FLOOR) {
     notes.push(`hero has ${Math.round(hero)}bb — answered from the even ${rung}bb chart`);
@@ -495,6 +552,8 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   const shorts = opps.filter(([, bb]) => bb < DEEP6 - SHORT_GAP);
   if (!shorts.length || open === "limp") {
     if (shorts.length && open === "limp") {
+      const uneven = unevenLimp();
+      if (uneven) return uneven;
       const seat = shorts.slice().sort((a, b) => a[1] - b[1])[0]![0];
       gap("no-limp-uneven", `the uneven set has no limp tree — the even ${rung}bb limp chart answers`,
           "limp", `even ${rung}bb`, seat, unevenChartId(snapShort6(oppStack(seat) ?? DEEP6), seat, 2.5),
@@ -582,7 +641,7 @@ export function unnameable6max(id: string): string | null {
   if (rest.startsWith("P_")) return null;
   const val = (t: string) => Number(t.replace("_", "."));
   let m: RegExpExecArray | null;
-  if ((m = /^D(\d+)_olimp(?:_(?:pool\d*|poolx\d*|wide))?$/.exec(rest))) {
+  if ((m = /^D(\d+)_olimp(?:_(?:pool\d*|poolx\d*|widex?))?$/.exec(rest))) {
     const d = Number(m[1]);
     return LIMP_RUNGS6.includes(d) ? null : `limp depth ${d}bb is not a limp rung (${LIMP_RUNGS6.join("/")})`;
   }
@@ -592,10 +651,11 @@ export function unnameable6max(id: string): string | null {
     if (!OPENS6.includes(o)) return `open ${o}x is not an even-grid open (${OPENS6.join("/")})`;
     return null;
   }
-  if ((m = /^D(\d+)_s(\d+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)$/.exec(rest))) {
+  if ((m = /^D(\d+)_s(\d+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3)?$/.exec(rest))) {
+    if (rest.endsWith("_pool3") && m[4] !== "limp") return "only limp trees carry the pool lock";
     const d = Number(m[1]), s = Number(m[2]);
     if (d !== DEEP6) return `uneven depth ${d}bb: the uneven set is at ${DEEP6}bb`;
-    if (m[4] === "limp") return "an uneven limp tree: the picker answers limped pots from the even limp charts";
+    if (m[4] === "limp") return LIMP_SHORTS6.includes(s) ? null : `short rung ${s}bb is not an uneven limp rung (${LIMP_SHORTS6.join("/")})`;
     if (!SHORTS6.includes(s)) return `short rung ${s}bb is not on SHORTS6 (${SHORTS6.join("/")})`;
     const o = val(m[4]!);
     if (!UNEVEN_OPENS6.includes(o)) return `open ${o}x is not on UNEVEN_OPENS6 (${UNEVEN_OPENS6.join("/")})`;
