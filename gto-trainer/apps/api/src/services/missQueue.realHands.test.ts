@@ -143,7 +143,9 @@ describe.skipIf(process.env.MUTATION_GATE !== "1")("fastSolve files a chart miss
   it("the same decision at the table is written down", async () => {
     await fastSolve(spot("4999000002"), "BTN", { strategyId: "ign200-ring-6max-equilibrium", origin: "live" });
     const rows = filedFor("4999000002");
-    expect(rows.map((m) => m.kind)).toEqual(expect.arrayContaining(["open-not-in-set", "short-rung-snapped"]));
+    // WHICH misses depends on the chart grid (a 2bb open at 80bb filed open-not-in-set + short-rung-snapped until the
+    // short-stack rungs and opens were wired in, 1d648fe; now a size snap) — what is pinned here is THAT it is filed
+    expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((m) => m.refs.find((r) => r.clientHandId === "4999000002")!.origin === "live")).toBe(true);
   });
 });

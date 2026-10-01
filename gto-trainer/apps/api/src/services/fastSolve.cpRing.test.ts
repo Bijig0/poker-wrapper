@@ -228,7 +228,9 @@ describe("the catalogue", () => {
     expect(isOnDemandStrategy(CP_RING_ANTE_STRATEGY_ID)).toBe(true);
     expect(isOnDemandStrategy("cp200-hu-equilibrium")).toBe(false);
     expect(isOnDemandStrategy("ign200-ring-6max-equilibrium")).toBe(false);
-  });
+  // evaluate() reads the chart catalogue and the data stores: 0.65 s cold alone, but 17-18 s twice under a full run beside
+  // the live API (2026-10-01, the release gate) — a slow read, not a wrong answer
+  }, 60_000);
 });
 
 describe("the arrival warm-up and the parallel prefix walk (2026-10-01)", () => {
