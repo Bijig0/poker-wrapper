@@ -272,6 +272,18 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "services/gtowAiPreflop.ts treeBody (max_allowed_limps)",
   },
   {
+    id: "reduced-tree-arrival",
+    source: "gtow-ai-preflop",
+    title: "Flop ranges read around the last raise",
+    what: "when the exact preflop tree cannot hold the line and no per-seat fit mends it, the flop-entering ranges are read around the last raise: the raiser's = his range before it (hero: what the chart told him; a limper: the pool's limp range; otherwise his range on the exact tree) × the share that makes that raise on the exact tree; each caller's = his range before it × the hands that do NOT fold to it on a heads-up GTO Wizard AI tree of him and the raiser where the raise is a forced bet (the raiser posts it, the caller posts the chips he already had in, the rest of the pot is dead money, stacks as dealt, seated by postflop order) — one tree per caller; a caller all in for less is taken as not folding",
+    why: "hand 4921846667 (2026-10-01): UTG limps, hero over-limps, the CO isolates, hero limp-reraises on a line fitted to the tree's one-limper cap (UTG read as folded), UTG calls and leads the flop — the tree that answered preflop had no UTG in the pot and nothing fell back: no answer, a timeout, a sit-out. No limp chart trains that corridor either (reached 1 in 2,500,000 hands at UTG's node in the pool-locked tree, 1 in 167,000 in the boosted one)",
+    fix: "an HRC tree with every step of the corridor locked or boosted (the limps, the iso, the cold-call), one corridor per tree — only worth a solve if these spots show up in the miss data",
+    status: "by-design",
+    coversCaveat: "the folded players' cards and the calls between a player's entry and the last raise are not modelled",
+    cost: "hand 4921846667 replayed 2026-10-01: 77 on K♠9♠Q♦ facing a 72% pot lead answers FOLD 99.99% in 5.4 s (no answer at the table). Which continuing hands re-raise instead of calling is not applied (the solver shoves most of them; the player called)",
+    code: "utils/reducedArrival + services/gtowAiPreflop.ts reducedArrivalRanges",
+  },
+  {
     id: "dead-sb",
     source: "gtow-ai-preflop",
     title: "A dead small blind",

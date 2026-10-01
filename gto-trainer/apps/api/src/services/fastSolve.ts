@@ -843,6 +843,14 @@ interface FlopArrival {
   note: string | null;
   prov: ArrivalPath;
 }
+/** THE REDUCED TREE SAYS SO IN THE PATH (2026-10-01): ranges that came from gtowAiPreflop.reducedArrivalRanges are an
+ *  approximation ("rebuilt", not clean), named by its own code so the session's path report counts them apart. */
+const reducedProv = (ai: { reduced?: { why: string; live: string[]; trees: number } }, otherwise: ArrivalPath): ArrivalPath =>
+  ai.reduced
+    ? { how: "rebuilt", producer: "ai-reduced", code: "arrival:reduced-tree",
+        why: `the exact preflop tree cannot hold the line (${ai.reduced.why.replace(/^GTO Wizard AI preflop ranges: /, "").slice(0, 140)}) — the flop ranges come from a reduced tree of the ${ai.reduced.live.length} players who reached the flop (${ai.reduced.live.join("/")})` }
+    : otherwise;
+
 async function flopArrivalCompute(
   hand: ParsedHand, heroPos: string | null, heroPosName: string, set: (typeof SOLUTION_SETS)[number], depth: number,
   sixMax: boolean, huCp: boolean, pinnedDealt: Record<number, number> | undefined, cpRing = false,
@@ -931,9 +939,9 @@ async function flopArrivalCompute(
       if (!ai.ok) return failA(pinMiss ? `preflop pin: ${pinMiss}; then ${ai.reason}` : ai.reason);
       recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
       sixNote = ai.note ?? null;
-      prov = pinMiss
+      prov = reducedProv(ai, pinMiss
         ? { how: "rebuilt", producer: "ai-arrival", code: "arrival:pin-unusable", why: `the preflop pin could not give the flop ranges — ${pinMiss.slice(0, 160)} — read from a GTO Wizard AI preflop tree built from the table` }
-        : { how: "designed", producer: "ai-arrival" };
+        : { how: "designed", producer: "ai-arrival" });
     }
   }
 
@@ -1002,7 +1010,7 @@ async function flopArrivalCompute(
         if (!ai.ok) return failA(`${devNote}; then ${ai.reason}`);
         recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
         sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
-        prov = { how: "by-design", producer: "ai-arrival", code: "arrival:hero-left-pick", why: `hero took ${dev.action ?? dev.took} at "${dev.codes.join("-") || "root"}", which his pick gave 0% — the flop ranges come from the GTO Wizard AI preflop tree` };
+        prov = reducedProv(ai, { how: "by-design", producer: "ai-arrival", code: "arrival:hero-left-pick", why: `hero took ${dev.action ?? dev.took} at "${dev.codes.join("-") || "root"}", which his pick gave 0% — the flop ranges come from the GTO Wizard AI preflop tree` });
       } else if (resumed.ok) {
         tmark("preflop ranges resumed", `${pin.piece} ${resumed.id} · ${resumed.reads} node read(s) · ${Date.now() - tPin} ms · hero ${cls ?? "?"} weight ${w == null ? "n/a" : w.toFixed(3)}`);
         if (zeroHero) {
@@ -1039,9 +1047,9 @@ async function flopArrivalCompute(
             : `OFF THE CHART: the chart hero's preflop decisions were read on (${pin.chartId}) cannot hold what followed them ` +
               `(${resumed.why.replace(/^pinned chart [^:]+: /, "").slice(0, 240)}) — the flop-entering ranges come from the GTO Wizard AI preflop tree`,
           ai.note].filter(Boolean).join(" · ");
-        prov = { how: "by-design", producer: "ai-arrival", code: resumed.prunedBranch ? "arrival:pruned-branch" : "arrival:chart-cannot-hold",
+        prov = reducedProv(ai, { how: "by-design", producer: "ai-arrival", code: resumed.prunedBranch ? "arrival:pruned-branch" : "arrival:chart-cannot-hold",
           why: resumed.prunedBranch ? "hero's line runs into a branch the 6-max chart never solved — ranges from the GTO Wizard AI preflop tree"
-            : "the chart hero's preflop decisions were read on cannot hold what followed them — ranges from the GTO Wizard AI preflop tree" };
+            : "the chart hero's preflop decisions were read on cannot hold what followed them — ranges from the GTO Wizard AI preflop tree" });
       } else {
         tmark("preflop pin unusable", `${pin.piece}: ${resumed.why}`);
         console.log(`[preflop-pin] hand ${preflopPinKey(hand)} ${pin.piece} not resumed — ${resumed.why}`);
@@ -1076,7 +1084,7 @@ async function flopArrivalCompute(
       seatOrder = ai.seatOrder;
       rangeSource = ai.id;
       sixNote = [six && !six.ok ? `6-max chart could not walk this line (${six.reason})` : null, ai.note].filter(Boolean).join(" · ");
-      prov = rebuiltProv("ai-arrival", six && !six.ok ? six.reason : null);
+      prov = reducedProv(ai, rebuiltProv("ai-arrival", six && !six.ok ? six.reason : null));
     }
   }
   if (!recon) {
