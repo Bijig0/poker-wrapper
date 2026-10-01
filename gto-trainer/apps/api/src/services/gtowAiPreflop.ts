@@ -418,6 +418,38 @@ const owners = new Map<string, GtowSessionId>();
  * refuses outright (`PREFLOP_MULTIWAY_NOT_ALLOWED`), so that one is a hard
  * filter rather than a preference. The pool is told both.
  */
+/**
+ * SOLVE THIS HAND'S TREE WITH EVERY SEAT'S SIZE MENU REPLACED, and read the node the hand's line ends on
+ * (scripts/stackGapStudy, 2026-10-02). The live menus give hero a choice of sizes and every other seat a default plus
+ * the size it used; a study of what ONE size costs needs the tree an HRC chart at that size is: a single open, a single
+ * 3-bet, a single 4-bet for everyone. `posPatch` is laid over every position's size entry (bet_sizes / raise_sizes /
+ * second_raise_sizes / third_plus_raise_sizes). The line is walked onto the tree's own sizes when they differ by a
+ * rounding. Returns the solution id so the caller can read other nodes of the same tree.
+ */
+export async function solvePreflopWithMenus(hand: ParsedHand, heroPos: string | null, posPatch: Record<string, unknown>): Promise<
+  { ok: true; solId: string; line: string; node: any; treeKey: string } | { ok: false; reason: string }
+> {
+  const shape = shapeOf(hand, heroPos);
+  if ("error" in shape) return { ok: false, reason: shape.error };
+  const { tokens, levels } = lineOf(hand, shape);
+  const m = menus(levels, shape.n);
+  const body: any = treeBody(shape, m);
+  for (const st of body.bet_sizes?.street_bet_sizes ?? []) st.position_bet_sizes = st.position_bet_sizes.map((x: any) => ({ ...x, ...posPatch }));
+  const treeKey = `${treeKeyOf(shape, m)}|p${JSON.stringify(posPatch)}`;
+  const sol = await ensureSolution(treeKey, body, { multiway: shape.n > 2, preflop: true });
+  if ("error" in sol) return { ok: false, reason: sol.error };
+  let line = tokens.join("-");
+  let node = await fetchNode(sol.solId, line);
+  if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
+    const fixed = await repairLine(sol.solId, tokens, { end: true });
+    if ("error" in fixed) return { ok: false, reason: `line '${line}' is not in the tree — ${fixed.error}` };
+    line = fixed.line;
+    node = await fetchNode(sol.solId, line);
+  }
+  if ("error" in node) return { ok: false, reason: `node '${line || "root"}' — ${node.error}` };
+  return { ok: true, solId: sol.solId, line, node: node.data, treeKey };
+}
+
 async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Promise<{ solId: string } | { error: string }> {
   const hit = solutions.get(key);
   if (hit) return hit;
