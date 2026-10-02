@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
-  actFromToken, chipsAfter, contestedChips, deadMoney, effectiveStack, foldStreet, moneyEntering, moneyState, streetChips, streetFromTokens,
+  actFromToken, chipsAfter, contestedChips, deadMoney, effectiveStack, foldRound, foldStreet, moneyEntering, moneyState, streetChips, streetFromTokens,
   type Act,
 } from "./tableMoney";
 
@@ -12,7 +12,13 @@ describe("actFromToken / streetFromTokens", () => {
       { seat: "SB", kind: "check" }, { seat: "BB", kind: "raise", to: 3 }, { seat: "CO", kind: "call" }, { seat: "BTN", kind: "fold" }, { seat: "HJ", kind: "allin", to: 28 },
     ]);
     expect(actFromToken("RAI", "HJ")).toEqual({ seat: "HJ", kind: "allin" });
-    expect(() => actFromToken("Q", "HJ")).toThrow();
+    expect(actFromToken("Q", "HJ")).toBeNull();
+  });
+  it("review r2 §2: a bet with no amount (a bare \"R\") is not priced — left out and named, never a throw", () => {
+    expect(actFromToken("R", "CO")).toBeNull();
+    const unpriced: number[] = [];
+    expect(streetFromTokens(["X", "R", "C"], ["BB", "CO", "BTN"], null, unpriced)).toEqual([{ seat: "BB", kind: "check" }, { seat: "BTN", kind: "call" }]);
+    expect(unpriced).toEqual([1]);
   });
 });
 
@@ -63,6 +69,13 @@ describe("contestedChips: the matched chips for a set of contesting seats", () =
     expect(contestedChips(put, { contesting: ["SB", "BB", "CO", "BTN"], folded: new Set(), capOf }).sum).toBe(100);
     expect(contestedChips(put, { contesting: ["BB", "CO", "BTN"], folded: new Set(), capOf, hero: "BTN" }).sum).toBe(40);
   });
+  it("review r2 §1: the dead money's cap counts a folded tree villain at the chips he left (every tree villain folded: not 0)", () => {
+    // hero SB bets 10, BB calls, CO folds, the left-out BTN raises to 30, BB folds: no tree villain is still in
+    const put = new Map([["SB", 10], ["BB", 10], ["BTN", 30]]);
+    const r = contestedChips(put, { contesting: ["SB", "BB", "CO"], folded: new Set(["BB", "CO"]), capOf: caps({ SB: 100, BB: 20, CO: 100, BTN: 100 }), hero: "SB" });
+    expect(r.bySeat.get("BTN")).toBe(10);   // up to the most another tree seat put in (BB's 10) — it was 0
+    expect(r.sum).toBe(30);
+  });
   it("an unknown stack never lets an excess be taken off", () => {
     expect(contestedChips(new Map([["V", 150]]), { contesting: ["V", "H"], folded: new Set(), capOf: () => null }).sum).toBe(150);
   });
@@ -95,36 +108,154 @@ describe("foldStreet / moneyEntering", () => {
   });
 });
 
-describe("properties (seeded random streets)", () => {
-  let seed = 7;
+describe("foldRound: a round's chips, not its tokens", () => {
+  it("the same state as foldStreet over the same street, with the matched chips and the excess handed back", () => {
+    const st0 = moneyState(10, [["A", 100], ["B", 30], ["C", 100]]);
+    const acts = streetFromTokens(["R60", "C", "F"], ["A", "B", "C"]);
+    const f = foldRound(st0, streetChips(acts, (k: string) => st0.behind.get(k) ?? null));
+    expect(f.state).toEqual(foldStreet(st0, acts));
+    expect(f.matched.sum).toBe(60);
+    expect(f.matched.returned).toEqual([{ seat: "A", bb: 30 }]);
+  });
+  it("a named contesting set: a seat outside it never caps anyone", () => {
+    const st0 = moneyState(0, [["A", 100], ["B", 30], ["Z", 500]]);
+    const f = foldRound(st0, { put: new Map([["A", 60], ["B", 30]]), folded: [] }, ["A", "B"]);
+    expect(f.matched.returned).toEqual([{ seat: "A", bb: 30 }]);   // Z (never acted) would have let A's 60 stand
+  });
+});
+
+/**
+ * PROPERTIES OVER LEGAL STREETS (review r2 §4, 2026-10-03). The generator plays only legal streets — a folded or
+ * all-in seat never acts, a call is never more than the level (an all-in for less when the stack is short), a raise is
+ * at least a min-raise and below the stack, an all-in is the seat's whole stack, the action closes — over two or three
+ * streets with short and deep stacks. Each street is checked against an INDEPENDENT settlement written here (side pots
+ * by the levels of the seats still in; the part of a pot only one seat is eligible for, above what anyone else put into
+ * it, goes back): the matched chips per seat, the excess returned, the pot's growth and each seat's stack after — with
+ * no clamp to hide a negative.
+ */
+describe("properties: legal streets against an independent side-pot settlement", () => {
+  let seed = 11;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const seats = ["A", "B", "C", "D"];
-  for (let n = 0; n < 200; n++) {
-    const stacks = Object.fromEntries(seats.map((s) => [s, Math.round(rnd() * 150 * 100) / 100 + 1]));
+  const c2 = (x: number) => Math.round(x * 100) / 100;
+  const SEATS = ["A", "B", "C", "D", "E"];
+  /** how often the hard cases came up (asserted at the end: the properties are not vacuous) */
+  const seen = { excess: 0, allInForLess: 0, sidePots: 0, folds: 0 };
+
+  /** one legal street over `order`: the acts, each seat's chips in, who folded / went all-in */
+  function playStreet(order: string[], behind: Map<string, number>, out: Set<string>) {
+    const active = order.filter((s) => !out.has(s) && (behind.get(s) ?? 0) > 0.005);
+    const inv = new Map<string, number>(), folded = new Set<string>(), allIn = new Set<string>();
     const acts: Act<string>[] = [];
-    let level = 0;
-    for (let i = 0; i < 8; i++) {
-      const seat = seats[i % 4]!;
+    let level = 0, minRaise = 1;
+    const canAct = (s: string) => !folded.has(s) && !allIn.has(s);
+    let toAct = active.slice();
+    for (let guard = 0; toAct.length && guard < 60; guard++) {
+      const s = toAct.shift()!;
+      if (!canAct(s)) continue;
+      const others = active.filter((t) => t !== s && canAct(t));
+      const inHand = active.filter((t) => t !== s && !folded.has(t));
+      if (!inHand.length) break;                                      // everyone else folded: the street is over
+      const stack = behind.get(s)!, mine = inv.get(s) ?? 0;
+      const facing = level > mine + 0.005;
       const r = rnd();
-      if (r < 0.2) acts.push({ seat, kind: "fold" });
-      else if (r < 0.5) acts.push({ seat, kind: level ? "call" : "check" });
-      else if (r < 0.85) { level = Math.round((level + 1 + rnd() * 30) * 100) / 100; acts.push({ seat, kind: "raise", to: level }); }
-      else acts.push({ seat, kind: "allin" });
+      let to = mine, act: Act<string>;
+      if (facing && r < 0.25) { act = { seat: s, kind: "fold" }; folded.add(s); acts.push(act); continue; }
+      if (facing && (r < 0.6 || !others.length)) { to = Math.min(level, stack); act = { seat: s, kind: "call" }; }
+      else if (!facing && (r < 0.45 || !others.length)) { act = { seat: s, kind: "check" }; }
+      else {
+        const minTo = c2(level + minRaise);
+        if (minTo < stack - 0.01 && r < 0.88) {
+          to = c2(minTo + rnd() * Math.min(40, stack - 0.01 - minTo));
+          act = { seat: s, kind: "raise", to };
+        } else {
+          to = stack;
+          act = rnd() < 0.5 ? { seat: s, kind: "allin", to: stack } : { seat: s, kind: "allin" };   // the whole stack
+        }
+      }
+      acts.push(act);
+      inv.set(s, to);
+      if (to >= stack - 0.005) allIn.add(s);
+      if (to > level + 0.005) {
+        if (to - level >= minRaise) minRaise = c2(to - level);
+        level = to;
+        // everyone else still able to act must answer the raise, in turn order after the raiser
+        const i = order.indexOf(s);
+        toAct = [...order.slice(i + 1), ...order.slice(0, i)].filter((t) => active.includes(t) && canAct(t));
+      }
     }
-    const st = foldStreet(moneyState(5, Object.entries(stacks)), acts);
-    const sc = streetChips(acts, (k) => stacks[k]);
-    const putSum = [...sc.put.values()].reduce((s, x) => s + x, 0);
-    it(`street ${n}: pot growth = matched chips ≤ chips in; nobody negative; full table ≥ any tree's seats`, () => {
-      const paid = seats.reduce((s, k) => s + (stacks[k]! - (st.behind.get(k) ?? 0)), 0);
-      expect(Math.abs(st.pot - 5 - paid)).toBeLessThan(0.02);
-      expect(st.pot - 5).toBeLessThanOrEqual(putSum + 0.01);
-      for (const k of seats) expect(st.behind.get(k)!).toBeGreaterThanOrEqual(0);
-      const capOf = (k: string) => stacks[k];
-      const full = contestedChips(sc.put, { contesting: seats, folded: sc.folded, capOf }).sum;
-      const tree = contestedChips(sc.put, { contesting: ["A", "B"], folded: sc.folded, capOf, hero: "A" }).sum;
-      expect(full + 0.01).toBeGreaterThanOrEqual(tree);
+    return { acts, inv, folded, allIn };
+  }
+
+  /** the independent settlement: side pots by the levels the seats still in reached */
+  function settle(inv: Map<string, number>, folded: Set<string>) {
+    const live = [...inv.keys()].filter((s) => !folded.has(s) && inv.get(s)! > 0);
+    const levels = [...new Set(live.map((s) => inv.get(s)!))].sort((x, y) => x - y);
+    const matched = new Map<string, number>([...inv.keys()].map((s) => [s, 0]));
+    const returned = new Map<string, number>();
+    let prev = 0;
+    for (const L of levels) {
+      const part = new Map<string, number>();
+      for (const [s, x] of inv) { const p = Math.max(0, Math.min(x, L) - prev); if (p > 0) part.set(s, p); }
+      const eligible = live.filter((s) => inv.get(s)! >= L);
+      if (eligible.length === 1) {
+        // only one seat can win this layer: his chips above what anyone else put into it go back
+        const e = eligible[0]!;
+        const others = Math.max(0, ...[...part].filter(([s]) => s !== e).map(([, p]) => p));
+        const back = (part.get(e) ?? 0) - others;
+        if (back > 0.005) { returned.set(e, c2((returned.get(e) ?? 0) + back)); part.set(e, others); }
+      }
+      for (const [s, p] of part) matched.set(s, matched.get(s)! + p);
+      prev = L;
+    }
+    // folded chips above the top live level would belong to no pot — a legal street never has any
+    const top = levels.length ? levels[levels.length - 1]! : 0;
+    for (const [s, x] of inv) if (folded.has(s)) expect(x).toBeLessThanOrEqual(top + 0.005);
+    return { matched, returned };
+  }
+
+  for (let n = 0; n < 300; n++) {
+    const k = 2 + Math.floor(rnd() * 4);
+    const order = SEATS.slice(0, k);
+    const stacks = new Map(order.map((s) => [s, c2(rnd() < 0.3 ? 1 + rnd() * 20 : 20 + rnd() * 180)] as [string, number]));
+    it(`hand ${n} (${k} seats): matched chips, the excess, the pot and the stacks agree with the settlement`, () => {
+      let st = moneyState(3, [...stacks]);
+      const out = new Set<string>();
+      for (let street = 0; street < 3; street++) {
+        const behind = new Map([...st.behind].map(([s, b]) => [s, b!] as [string, number]));
+        const g = playStreet(order, behind, out);
+        // the street as streetChips reads it: each seat's chips exactly as played, nobody over his stack
+        const sc = streetChips(g.acts, (s) => behind.get(s)!);
+        for (const s of order) expect(c2(sc.put.get(s) ?? 0)).toBe(c2(g.inv.get(s) ?? 0));
+        for (const [s, x] of sc.put) expect(x).toBeLessThanOrEqual(behind.get(s)! + 0.005);
+        const ref = settle(g.inv, new Set([...g.folded]));
+        if (ref.returned.size) seen.excess++;
+        if ([...g.allIn].some((s) => (g.inv.get(s) ?? 0) < Math.max(...g.inv.values()) - 0.005)) seen.allInForLess++;
+        if (new Set([...g.inv].filter(([s]) => !g.folded.has(s)).map(([, x]) => x)).size > 1) seen.sidePots++;
+        if (g.folded.size) seen.folds++;
+        const f = foldRound(st, sc);
+        for (const s of order) expect(Math.abs((f.matched.bySeat.get(s) ?? 0) - (ref.matched.get(s) ?? 0))).toBeLessThan(0.011);
+        expect(f.matched.returned.map((x) => [x.seat, x.bb])).toEqual([...ref.returned]);
+        const growth = [...ref.matched.values()].reduce((x, y) => x + y, 0);
+        expect(Math.abs(f.state.pot - st.pot - growth)).toBeLessThan(0.011);
+        for (const s of order) {
+          const want = behind.get(s)! - (ref.matched.get(s) ?? 0);
+          expect(want).toBeGreaterThan(-0.005);                         // no negative for a clamp to hide
+          expect(Math.abs(f.state.behind.get(s)! - want)).toBeLessThan(0.011);
+        }
+        expect(foldStreet(st, g.acts)).toEqual(f.state);
+        st = f.state;
+        for (const s of [...g.folded, ...g.allIn]) out.add(s);
+        if (order.filter((s) => !out.has(s)).length < 2) break;
+      }
     });
   }
+  it("the generator reaches the hard cases (an excess handed back, an all-in for less, side pots, folds)", () => {
+    expect(seen.excess).toBeGreaterThan(20);
+    expect(seen.allInForLess).toBeGreaterThan(20);
+    expect(seen.sidePots).toBeGreaterThan(20);
+    expect(seen.folds).toBeGreaterThan(50);
+    console.log(`  legal-street properties: ${JSON.stringify(seen)}`);
+  });
 });
 
 describe("deadMoney / effectiveStack", () => {
