@@ -56,6 +56,10 @@ const PREFIX = "ign200_6max_";
 const COVERAGE_TTL_MS = 60_000;
 
 type Row = { pos: string | null; terminal: number; actions: string; cells: Uint8Array; pruned?: number };
+/** A node's baked trust score (services/nodeTrust): reach null = a token on the line matched no action of its parent. */
+export type BakedTrust = { reach: number | null; regret: number };
+/** What the bake says about its own trust coverage — for the registry and the API's start line. */
+export type TrustAudit = { tables: boolean; trees: number; scored: number; unscored: string[] };
 
 class Hrc6MaxDb {
   private db: Database | null = null;
@@ -69,6 +73,16 @@ class Hrc6MaxDb {
   private patches: string[] = [];
   /** when a failed open was last reported (one line a minute, not one per read) */
   private lastOpenWarn = 0;
+  /**
+   * THE TRUST SCORES BAKED WITH EACH CHART (2026-10-03, audit finding 6). build_6max_preflop_db.py writes every
+   * non-terminal node's [reach, regret] into `trust` in the same transaction as the tree, and `trust_trees` says which
+   * trees are scored FROM WHICH BODY. A tree counts as scored only while its trust_trees stamp (src_mtime/src_size)
+   * equals its `trees` stamp, so a tree re-baked by an older bake script reads as unscored rather than as scored with
+   * another body's numbers. `trustTables` false = a bake from before the scores (every tree unscored).
+   */
+  private trustTables = false;
+  private scored = new Set<string>();
+  private trustStmt: ReturnType<Database["query"]> | null = null;
 
   /** Opened lazily. A missing file (or HRC6MAX_DB=off) is the normal state on a machine that has not run the bake:
    *  that is decided once and costs nothing per call. A file that IS there but would not open is a transient — a lock,
@@ -122,6 +136,9 @@ class Hrc6MaxDb {
     this.patches = [];
     this.coveredAt = 0;
     this.nodeStmt = null;
+    this.trustTables = false;
+    this.scored = new Set();
+    this.trustStmt = null;
   }
 
   private readCoverage(db: Database): void {
@@ -129,7 +146,23 @@ class Hrc6MaxDb {
     for (const r of db.query("SELECT source FROM trees").all() as { source: string }[]) next.add(r.source);
     this.baked = next;
     this.patches = [...next].filter((s) => s.startsWith(`${PREFIX}P_`));
+    this.readTrustCoverage(db);
     this.coveredAt = Date.now();
+  }
+  /** Re-read with the coverage set (at most once a minute): the backfill adds the tables to a file the API already has
+   *  open, and a tree it scores is guarded by its baked scores from the next refresh on — no restart, no flag. */
+  private readTrustCoverage(db: Database): void {
+    const tables = new Set((db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name));
+    if (!tables.has("trust") || !tables.has("trust_trees")) {
+      this.trustTables = false; this.scored = new Set(); this.trustStmt = null;
+      return;
+    }
+    const scored = new Set<string>();
+    for (const r of db.query("SELECT t.source FROM trees t JOIN trust_trees s ON s.source = t.source " +
+        "AND s.src_mtime = t.src_mtime AND s.src_size = t.src_size").all() as { source: string }[]) scored.add(r.source);
+    this.trustStmt ??= db.query("SELECT reach, regret FROM trust WHERE source = ? AND line = ?");
+    this.scored = scored;
+    this.trustTables = true;
   }
   /**
    * A TREE BAKED WHILE THE API RUNS GOES LIVE BY ITSELF (2026-09-27, Brady: "this is a bitch to do if every time a
@@ -181,6 +214,38 @@ class Hrc6MaxDb {
       cells: JSON.parse(inflateSync(row.cells).toString("utf8")) as HrcNode["cells"],
     };
   }
+
+  /**
+   * One node's baked trust score (services/nodeTrust).
+   *   `undefined` = this bake holds no CURRENT scores for the chart (a bake from before the scores, a tree the backfill
+   *                 has not reached, a tree re-baked without scoring, or a chart not baked here) — the caller falls back;
+   *   `null`      = the chart IS scored and this line has no row. Every non-terminal node is scored with its chart, so
+   *                 this is a bug in the scorer or a line that is not a decision node — the caller refuses.
+   */
+  trust(source: string, line: string): BakedTrust | null | undefined {
+    if (!this.covers(source) || !this.trustTables || !this.scored.has(source) || !this.trustStmt) return undefined;
+    const row = this.trustStmt.get(source, line) as BakedTrust | null;
+    return row ? { reach: row.reach, regret: row.regret } : null;
+  }
+
+  /** The bake's trust coverage: the registry shows it, the API says it at start. Must be 0 unscored after the backfill. */
+  trustAudit(): TrustAudit {
+    this.fresh();
+    const unscored = [...this.baked].filter((s) => !this.scored.has(s)).sort();
+    return { tables: this.trustTables, trees: this.baked.size, scored: this.baked.size - unscored.length, unscored };
+  }
+}
+
+/** The API's start line about the bake's trust scores (index.ts). */
+export function trustAuditLine(a: TrustAudit = hrc6maxDb.trustAudit()): string {
+  if (a.trees === 0) return "[hrc6maxDb] trust: no 6-max bake on this machine";
+  const ids = a.unscored.slice(0, 6).map((s) => s.replace(PREFIX, "")).join(", ") + (a.unscored.length > 6 ? ", …" : "");
+  if (!a.tables) return `[hrc6maxDb] trust: this bake carries NO trust scores — all ${a.trees} charts are guarded from ` +
+    `limp_node_trust.json, and the ones it does not score answer UNGUARDED (run backfill_trust.py)`;
+  return a.unscored.length === 0
+    ? `[hrc6maxDb] trust: all ${a.trees} baked charts carry their trust scores`
+    : `[hrc6maxDb] trust: ${a.unscored.length} of ${a.trees} baked charts carry NO current trust scores (${ids}) — they fall back ` +
+      `to limp_node_trust.json and answer unguarded where it has no score (backfill_trust.py / a re-bake scores them)`;
 }
 
 export const hrc6maxDb = new Hrc6MaxDb();

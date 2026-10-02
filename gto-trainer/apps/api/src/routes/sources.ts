@@ -391,6 +391,13 @@ app.get("/registry", async (c) => {
         ["served by", hrc6maxDb.size > 0
           ? `data/hrc6max-preflop.sqlite · ${hrc6maxDb.size} trees baked · the chart server is not used for this family`
           : `no local bake on this machine — every node goes to ${HRC3MAX_BASE} (build_6max_preflop_db.py)`],
+        ["trust scores", (() => {
+          const a = hrc6maxDb.trustAudit();
+          if (!a.trees) return "no bake";
+          if (!a.tables) return `none in the bake — all ${a.trees} charts judged from limp_node_trust.json (backfill_trust.py)`;
+          return a.unscored.length ? `${a.unscored.length} of ${a.trees} charts UNSCORED (old file fallback): ${a.unscored.slice(0, 5).join(", ")}`
+            : `all ${a.trees} charts scored in the bake`;
+        })()],
         ["progress", cl.perConfig.map((p) => `${p.id}: ${p.have}/${p.want}`).join(" · ") || "no configs"],
         ["rake", "5% of the pot, cap $4 = 2bb with six dealt (Ignition's table, checked 2026-09-13)"],
         ["trees", "5 opens (2x / 2.5x / 3x / 3.5x / limp) × 6 depths, plus one short seat (30 / 50 / 70bb) at a 100bb table in every position"],
@@ -671,7 +678,13 @@ app.get("/registry", async (c) => {
       // wrapper's preflight (sessions.py) checks this instead of `hrc` for that strategy.
       // `trees` is the bake's own coverage count; 0 = no bake here, and the 6-max path
       // falls back to :8777 for every node.
-      hrc6max: { db: hrc6maxDb.size > 0, trees: hrc6maxDb.size },
+      // `unscored` = baked charts with no current trust scores (services/nodeTrust): they fall back to the old
+      // limp_node_trust.json and answer unguarded where it has no score. 0 after backfill_trust.py (2026-10-03).
+      hrc6max: (() => {
+        const a = hrc6maxDb.trustAudit();
+        return { db: hrc6maxDb.size > 0, trees: hrc6maxDb.size, trustTables: a.tables, scored: a.scored,
+          unscored: a.unscored.length, unscoredIds: a.unscored.slice(0, 20) };
+      })(),
       // The GTO Wizard POOL, not one client: the Elite session takes heads-up
       // solves so the Ultra session's daily allowance is spent only on the
       // multiway trees that need it (services/gtowSessions.ts). `tokenLive`
