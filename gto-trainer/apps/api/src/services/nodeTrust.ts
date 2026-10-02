@@ -20,10 +20,13 @@ export const TRUST_REGRET_MAX = 0.03;
 export const TRUST_REACH_MIN = 1e-4;
 /** For pool-locked trees only: past this the node is broken whatever its reach. */
 export const TRUST_REGRET_CATASTROPHIC = 0.3;
-const FILE = factoryFile("limp_node_trust.json");
+/** The trust map's file: NODE_TRUST_FILE when set (the mutation harness points a git worktree, which has no data parts,
+ *  at the live one — scripts/mutationHarness.harnessEnv), else the factory's data/limp_node_trust.json. Read per load,
+ *  not at import, so an env set after import is honoured. */
+export const trustFile = (): string => process.env.NODE_TRUST_FILE || factoryFile("limp_node_trust.json");
 
 export type TrustMap = Record<string, Record<string, [number | null, number]>>;
-let cache: { at: number; map: TrustMap } | null = null;
+let cache: { at: number; file: string; map: TrustMap } | null = null;
 let injected: TrustMap | null = null;
 
 /** Tests only: read this map instead of data/limp_node_trust.json (null restores the file). */
@@ -32,16 +35,17 @@ export function setTrustMap(m: TrustMap | null): void { injected = m; cache = nu
 function map(): TrustMap {
   if (injected) return injected;
   const now = Date.now();
-  if (cache && now - cache.at < 10 * 60_000) return cache.map;
+  const FILE = trustFile();
+  if (cache && cache.file === FILE && now - cache.at < 10 * 60_000) return cache.map;
   let m: TrustMap = {};
   try { if (existsSync(FILE)) m = JSON.parse(readFileSync(FILE, "utf8")); } catch {
     // A READ MID-REWRITE (node_trust.py rebuilds the map as each v2 tree lands) must not empty it: since 2026-10-02 an
     // absent limp chart is refused, so an empty map would send every limp-tree decision to the exact tree for the
     // whole cache window. Keep the last good map and try again in a minute.
-    if (cache) { cache = { at: now - 9 * 60_000, map: cache.map }; return cache.map; }
+    if (cache && cache.file === FILE) { cache = { at: now - 9 * 60_000, file: FILE, map: cache.map }; return cache.map; }
     m = {};
   }
-  cache = { at: now, map: m };
+  cache = { at: now, file: FILE, map: m };
   return m;
 }
 

@@ -49,7 +49,8 @@
  * operator set that produces it while the unmutated seed passes (baseline failures are findings of their own).
  */
 import { mkdirSync, writeFileSync } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { trustFile } from "../services/nodeTrust";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -59,7 +60,8 @@ import { spawnSync } from "node:child_process";
 // the request-log and poller tests on the first run).
 process.env.ANSWERS_DB_PATH ??= ":memory:";
 export function harnessEnv(): () => void {
-  const saved = { GTOW_BLOCK: process.env.GTOW_BLOCK, POSTFLOP_DRY_RUN: process.env.POSTFLOP_DRY_RUN, HRC6MAX_DB: process.env.HRC6MAX_DB };
+  const saved = { GTOW_BLOCK: process.env.GTOW_BLOCK, POSTFLOP_DRY_RUN: process.env.POSTFLOP_DRY_RUN, HRC6MAX_DB: process.env.HRC6MAX_DB,
+    NODE_TRUST_FILE: process.env.NODE_TRUST_FILE };
   process.env.GTOW_BLOCK = "1";
   process.env.POSTFLOP_DRY_RUN = "1";
   if (!process.env.HRC6MAX_DB) {
@@ -70,6 +72,21 @@ export function harnessEnv(): () => void {
       const main = common ? join(dirname(common), "gto-trainer", "apps", "api", "data", "hrc6max-preflop.sqlite") : "";
       if (main && existsSync(main)) process.env.HRC6MAX_DB = main;
     }
+  }
+  // THE TRUST MAP THE LIVE API READS (2026-10-02). Since the v2 limp re-solve an olimp chart absent from the trust map is
+  // REFUSED (services/nodeTrust), so a harness that finds no map — a git worktree has none (a data part, not in git), and
+  // the regression gate does not load config/local.env — refused every limp-tree decision (the post-in gate's BTN over
+  // an HJ limp: "UNSCORED CHART: ign200_6max_D100_olimp"); and the main checkout's own data copy is a stale snapshot.
+  // Read the map the live API reads: the main checkout's FACTORY_DATA_DIR (config/local.env, which the supervisor
+  // loads), else whatever factoryFile finds, else the main checkout's data copy.
+  if (!process.env.NODE_TRUST_FILE && !process.env.FACTORY_DATA_DIR) {
+    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: import.meta.dir, encoding: "utf8" }).stdout?.trim();
+    const root = common ? dirname(common) : "";
+    let factory = "";
+    try { factory = /^\s*FACTORY_DATA_DIR\s*=\s*(.+?)\s*$/m.exec(readFileSync(join(root, "config", "local.env"), "utf8"))?.[1] ?? ""; } catch { /* no local.env */ }
+    const found = [factory && join(factory, "limp_node_trust.json"), trustFile(), root && join(root, "gto-trainer", "apps", "api", "data", "limp_node_trust.json")]
+      .find((f) => f && existsSync(f));
+    if (found) process.env.NODE_TRUST_FILE = found;
   }
   return () => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
 }
