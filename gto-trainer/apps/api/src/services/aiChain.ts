@@ -670,7 +670,7 @@ export function actorsOfTokens(toks: string[], n: number, caps: readonly (number
  * the old "60% of the stack" rule — the wager here commits at least everything any opponent can match. Returns the
  * labels with such wagers as AllIn(the actor's stack), and a word for each.
  */
-export function coveringAllIns(labels: string[], n: number, caps: readonly number[]): { labels: string[]; notes: string[] } {
+export function coveringAllIns(labels: string[], n: number, caps: readonly number[], known?: readonly boolean[]): { labels: string[]; notes: string[] } {
   const st = new StreetState(n, caps);
   const out: string[] = [], notes: string[] = [];
   for (const l of labels) {
@@ -680,7 +680,8 @@ export function coveringAllIns(labels: string[], n: number, caps: readonly numbe
     if (x != null && !l.startsWith("AllIn")) {
       const most = Math.max(0, ...st.live.filter((t) => t !== a).map((t) => caps[t] ?? Infinity));
       const own = caps[a];
-      if (own != null && Number.isFinite(own) && (x >= own - 0.005 || x >= most - 0.005)) {
+      // (a seat whose stack is not known is never read as all-in by its own stack: its cap is only a floor)
+      if (own != null && Number.isFinite(own) && known?.[a] !== false && (x >= own - 0.005 || x >= most - 0.005)) {
         lab = `AllIn(${Math.round(own * 100)})`;
         // the actor's whole stack typed as a bet is simply his all-in; a bet that covers the others is worth a word
         if (x < own - 0.005) notes.push(`a ${Math.round(x * 100) / 100}bb wager covers every other stack still in (${Math.round(most * 100) / 100}bb at most) — the tree's all-in`);
@@ -708,9 +709,12 @@ export const playedText = (ws: PlayedWager[], seats: string[]): string[] => ws.m
  * all-in for it is the same action, whatever stack the tree has him at; check #6 compares the sizes.
  */
 export function matchWalkAction(label: string, sols: any[], stack: number): number {
-  const ai = matchActionLoose(label, sols, stack);
-  if (ai >= 0 || !label.startsWith("AllIn(")) return ai;
+  if (!label.startsWith("AllIn(")) return matchActionLoose(label, sols, stack);
+  // AN ALL-IN MATCHES ONLY AN ALL-IN (2026-10-03, review): within 5% a shove could be read as a bet the tree offers
+  // with chips behind it, and hero would be answered against a bet he could raise
   const allIns = sols.map((a, i) => (actionKindOf(a) === "AllIn" ? i : -1)).filter((i) => i >= 0);
+  const ai = matchActionLoose(label, allIns.map((i) => sols[i]), stack);
+  if (ai >= 0) return allIns[ai]!;
   return allIns.length === 1 ? allIns[0]! : -1;
 }
 
@@ -986,7 +990,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
 
     // EACH SEAT'S OWN STACK BEHIND entering the street (2026-10-03): what the tree is sent for that seat, the most it can
     // put in on the street, and what its all-in is. A seat whose stack is not known keeps the tree's one stack.
-    const caps = seats.map((s) => r2(behind?.[s.pos] ?? stack));
+    // A SEAT WHOSE STACK IS NOT KNOWN is never capped below what the street shows it can put in (2026-10-03, review): it
+    // gets the tree's one stack, lifted to the street's largest wager — an unknown stack must not make a legal raise
+    // illegal (StreetState would refuse it, and the old code served the spot).
+    const seenTo = Math.max(0, ...toks.map((t, i) => (/^R[\d.]+$/.test(t) ? parseFloat(t.slice(1)) : t === "RAI" ? (spec.streetAmounts?.[si]?.[i] ?? 0) : 0)));
+    const caps = seats.map((s) => r2(behind?.[s.pos] ?? Math.max(stack, seenTo)));
     // Engine labels for this street's tokens (Bet vs Raise by outstanding wager), and who acts on each. An all-in (RAI)
     // is the ACTOR's all-in: the table's amount beside the token (spec.streetAmounts), never more than the actor has.
     let labels: string[];
@@ -1011,7 +1019,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       });
       if (fixedCap) tokActors = actorsOfTokens(toks, n, caps, amounts);
       labels = wagerLabelForWalk(toks, stack, (i) => Math.min(amounts[i] ?? Infinity, caps[tokActors[i]!] ?? Infinity));
-      const cov = coveringAllIns(labels, n, caps);
+      const cov = coveringAllIns(labels, n, caps, seats.map((s) => behind?.[s.pos] != null));
       labels = cov.labels;
       for (const x of cov.notes) sizeSnaps.push(`${STREET[k]!.toLowerCase()}: ${x}`);
       actors = actorsOf(labels, n, caps);
@@ -1192,7 +1200,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const prefixSizeFree = resuming.codes.every((c) => c === "X" || c === "C" || c === "F");
       if (sameTree || prefixSizeFree) {
         seats = resuming.seats.map((s) => ({ ...s, range: s.range.slice() }));
-        st = StreetState.fromSnapshot(n, resuming.st);
+        // with TODAY's caps, not the snapshot's (2026-10-03, review): a shove since hero's node may have proved a stack
+        // other than the one read then — the stale cap made a 40 shove a 25 call and closed the street under hero
+        st = StreetState.fromSnapshot(n, { ...resuming.st, caps });
         codes = resuming.codes.slice();
         ti0 = codes.length;
         heroDataAtTi0 = sameTree ? resuming.heroData : null;

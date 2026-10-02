@@ -1244,6 +1244,33 @@ export function chainPathChecks(a: {
     // the same rule the flop pot is sent with (tableFlopPot) and the tree walks with (aiChain StreetState.matched)
     return matchedRound(m, acted, foldedBy(st), stackIn).sum;
   };
+  /**
+   * A PLAN THAT LEAVES SEATS OUT (a ghost / merge collapse, a re-root, the last resort) prices the pot its own seats can
+   * contest (2026-10-03, review r1 §2 / r2): a tree seat's bet counts up to the most another TREE seat can put in (the
+   * tree's StreetState.matched), and a left-out seat's chips — dead money to the tree — up to the tree's effective stack
+   * (what hero can win of them). The full-table rule (chipsOn) would count a bet a left-out deeper seat could call, which
+   * hero cannot win and the tree rightly leaves out: 260 against the tree's 200 on a 4-way shove into a 60bb hero.
+   */
+  const chipsOnPlan = (st: string, players: string[]) => {
+    const m = contrib.get(st);
+    if (!m) return 0;
+    if (!a.dealt) return chipsOn(st);
+    const k = roundIdx(st);
+    const stackIn = (sid: number) => {
+      const d = a.dealt![sid];
+      if (d == null || !Number.isFinite(d)) return null;
+      return d - ROUND_ORDER.slice(0, k).reduce((s, r) => s + (contrib.get(r)?.get(sid) ?? 0), 0);
+    };
+    const inTree = new Set(players.map((p) => p.toUpperCase()));
+    const treeIds = [...acted].filter((sid) => inTree.has(String(a.treePos(sid) ?? "").toUpperCase()));
+    const mTree = new Map([...m.entries()].filter(([sid]) => treeIds.includes(sid)));
+    const tree = matchedRound(mTree, new Set(treeIds), foldedBy(st), stackIn).sum;
+    const heroCap = stackIn(hand.heroSeatId) ?? Infinity;
+    const villainCaps = treeIds.filter((sid) => sid !== hand.heroSeatId).map((sid) => stackIn(sid) ?? Infinity);
+    const eff = Math.min(heroCap, villainCaps.length ? Math.max(...villainCaps) : Infinity);
+    const dead = [...m.entries()].filter(([sid]) => !treeIds.includes(sid)).reduce((s, [, c]) => s + Math.min(c, eff), 0);
+    return Math.round((tree + dead) * 100) / 100;
+  };
   const potBefore = (k: number) => ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + chipsOn(st), 0) + a.potExtra;
   const cur = hand.currentNode.street;
   const heroTree = a.treePos(hand.heroSeatId);
@@ -1286,10 +1313,15 @@ export function chainPathChecks(a: {
         ? Object.entries(s.stacksIn).filter(([p]) => known.has(p.toUpperCase()) && beh[p.toUpperCase()] != null)
           .map(([p, x]) => ({ pos: p, tree: x, table: beh[p.toUpperCase()]! }))
         : undefined;
+      // which rule prices the table's side: the full table for an exact tree, the tree's own seats for a plan that
+      // leaves seats out (chipsOnPlan) — the street's own chips; the rounds before it are the pot it entered with
+      const leftOut = !!w.kind && !!s.players?.length;
+      const onStreet = leftOut ? chipsOnPlan(st, s.players!) : chipsOn(st);
       out.push(checkPotStack({
         street: st, potIn: s.potIn, capturePot: potBefore(k), stackIn: s.stackIn, captureStack: Number.isFinite(eff) ? eff : null,
-        ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + chipsOn(st) } : {}),
+        ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + onStreet } : {}),
         plan: w.kind, skipPotIn: lastResort && s.si === 0,
+        potRule: leftOut ? `the pot the tree's seats (${s.players!.join("/")}) can contest` : "the table's pot",
         ...(seatStacks?.length ? { seatStacks } : {}),
       }));
       // #7
@@ -1371,26 +1403,46 @@ function withChecks(p: DecisionPath, street: string, xs: CheckResult[]): Decisio
  * street, or at hero's node, beyond the check's tolerance — is not served as it is. The pot entering the flop is the
  * table's money on every solve (tableFlopPot), so what is left for it to catch is a later street rolled wrong. The
  * decision is solved once more with the hand's chain memo and arrival memo dropped (every street walked again, nothing
- * derived reused); if the pot still disagrees, the answer is REFUSED with the two pots named, rather than served from a
- * wrong pot. Before this, check #5 flagged such answers (15 decisions to 2026-10-02, hand 4922087007's 134.1 against the
- * table's 64.2) and nothing acted on it.
+ * derived reused) — only when the first solve DID reuse something (a street from the hand's memo, a resumed street, the
+ * arrival memo): with nothing reused the second solve's inputs would be byte-identical, and it would only spend the
+ * clock. If the pot still disagrees, the answer is SERVED with check #5 failing and a warning naming both pots — NEVER
+ * refused (lead's decision 2026-10-03): under the 6-max and CoinPoker strategies no answer is a fold on the clock, and a
+ * check can itself be wrong. "A check never costs an answer" stays the rule; the re-solve is all the seatbelt adds.
+ * Before this, check #5 flagged such answers (15 decisions to 2026-10-02, hand 4922087007's 134.1 against the table's
+ * 64.2) and nothing acted on it.
  */
 async function solvePostflopViaChain(...args: Parameters<typeof solvePostflopViaChainOnce>): ReturnType<typeof solvePostflopViaChainOnce> {
   const [hand] = args;
-  const first = await solvePostflopViaChainOnce(...args);
-  const off = potOffOf(first.res);
-  if (!off) return first;
   const handKey = String(hand.clientHandId ?? hand.handId ?? "");
-  tmark("seatbelt: the tree's pot is not the table's", `${off} — solving again with nothing derived reused`);
-  if (handKey) { forgetChainMemo(handKey); forgetArrival(handKey); }
-  const again = await solvePostflopViaChainOnce(...args);
-  if (!again.res) return again;
-  const off2 = potOffOf(again.res);
-  if (!off2) {
-    if (!again.res.ok) return again;
-    return { ...again, res: { ...again.res, warning: [again.res.warning, `SEATBELT: the first solve's pot was not the table's (${off}); solved again from the table's state — the pot now agrees`].filter(Boolean).join(" · ") } };
+  return runSeatbelt(await solvePostflopViaChainOnce(...args), () => {
+    if (handKey) { forgetChainMemo(handKey); forgetArrival(handKey); }
+    return solvePostflopViaChainOnce(...args);
+  });
+}
+
+/** The seatbelt's rule over a first answer and a way to solve again with nothing derived reused (see above). Pure. */
+export async function runSeatbelt<T extends { res: FastSolveResult | null; why: string | null }>(first: T, solveAgain: () => Promise<T>): Promise<T> {
+  const off = potOffOf(first.res);
+  if (!off || !first.res?.ok) return first;
+  const warn = (r: T, text: string): T =>
+    (r.res?.ok ? { ...r, res: { ...r.res, warning: [r.res.warning, text].filter(Boolean).join(" · ") } } : r);
+  if (!reusedMemo(first.res)) {
+    tmark("seatbelt: the tree's pot is not the table's", `${off} — nothing was reused, a second solve would be the same: served as it is`);
+    return warn(first, `POT CHECK FAILED (#5): ${off} — served anyway (nothing derived was reused, so solving again would give the same tree)`);
   }
-  return { res: null, why: `the pot the tree was solved at is not the table's (${off2}) — solved twice from the table's state and still off, so no answer rather than one from a wrong pot (check #5)` };
+  tmark("seatbelt: the tree's pot is not the table's", `${off} — solving again with nothing derived reused`);
+  const again = await solveAgain();
+  if (!again.res?.ok) return warn(first, `POT CHECK FAILED (#5): ${off} — solving again from the table's state gave no answer, so this one is served`);
+  const off2 = potOffOf(again.res);
+  if (!off2) return warn(again, `SEATBELT: the first solve's pot was not the table's (${off}); solved again with nothing derived reused — the pot now agrees`);
+  return warn(again, `POT CHECK FAILED (#5) TWICE: first ${off}; again ${off2} — served anyway (a check never costs an answer)`);
+}
+
+/** Did this answer reuse anything derived — a street from the hand's memo or resumed mid-street, the arrival memo? */
+function reusedMemo(res: FastSolveResult | null): boolean {
+  const p = (res as { path?: DecisionPath } | null)?.path;
+  if (!p) return true;   // unknown: let the second solve decide
+  return p.arrival?.how === "hit" || (p.streets ?? []).some((s) => s.how === "hit" || s.how === "resumed");
 }
 
 /** The first check #5 POT failure on an answer's path (any street, any plan), or null. */
@@ -2015,7 +2067,8 @@ async function solvePostflopViaChainOnce(
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,
-        potExtra: 2 * anteHu + deadPostsBb(hand.postIns, cur) + (!huCp && hand.anteBb ? hand.anteBb * Object.keys(hand.positions ?? {}).length : 0),
+        // the same extras the flop pot was sent with (tableFlopPot): antes only where the strategy puts them in the pot
+        potExtra: 2 * anteHu + deadPostsBb(hand.postIns, cur) + anteRing,
         dealt: pinnedDealt ?? dealtBySeat(hand), treePos: chainPos, rake: rake6,
         site: sixMax ? `the table's: 5%, capped by the players dealt` : huCp ? "CoinPoker HU NL200" : cpRing ? `the CoinPoker table's own: ${cpRingTerms(hand, heroPos)}` : null,
         handTrees: handFacts.trees(String(hand.clientHandId ?? hand.handId ?? "")),

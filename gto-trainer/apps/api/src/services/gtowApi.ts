@@ -335,15 +335,20 @@ class GtowApi {
     const grid = (i: number, g: { bet: readonly string[]; raise: readonly string[] }) => fixedOf(i, [g.bet, g.raise, g.raise, g.raise]);
     /** a street with wagers played: the levels as amounts (see the header) */
     const playedStreet = (ws: PlayedWager[]) => {
-      const lvAmt = (lv: number): string[] => {
-        const xs = ws.filter((_, k) => (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
+      /** a wager that IS its actor's all-in (2026-10-03, review): a short stack's shove is carried by that seat's own
+       *  listed all-in, never handed to the other seats as a size — 12bb over a 10 bet is below their minimum raise, a
+       *  0.6bb all-in bet is no bet size for a 100bb seat */
+      const isAllIn = (w: PlayedWager) => w.to >= allInOf[w.seat]! - 0.005;
+      /** the amounts played at a level, as seat i's list carries them: its own wagers (an all-in among them is its
+       *  all-in), another seat's only when that was not an all-in */
+      const lvAmt = (lv: number, i?: number): string[] => {
+        const xs = ws.filter((w, k) => (lv < 3 ? k === lv : k >= 3) && (i == null || w.seat === i || !isAllIn(w))).map((w) => bbAmount(w.to));
         return xs.length ? [...new Set(xs)] : [];
       };
       const playedBy = (i: number, lv: number) => ws.some((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3));
       if (input.mid || input.huGrid) {
         const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : THREE_WAY_SIZES;
-        const lists = [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv); return a.length ? a : lv === 0 ? base.bet : base.raise; });
-        return seats.map((_, i) => fixedOf(i, lists));
+        return seats.map((_, i) => fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? base.bet : base.raise; })));
       }
       return seats.map((_, i) => {
         // AUTOMATIC ON PURPOSE — Brady's decision, 2026-10-03: the seat that has not wagered on the street is AUTOMATIC
@@ -353,7 +358,9 @@ class GtowApi {
         // make this seat FIXED to get the all-in back: a FIXED seat's null raise list is the min-raise, not GTO Wizard's
         // size, and a listed one is a size we chose.
         if (!ws.some((w) => w.seat === i)) return auto(i);
-        const lists: (readonly string[] | null)[] = [lvAmt(0), null, null, null];
+        // the bet list: the street's bet — the base list where that bet was another seat's all-in
+        const bet = lvAmt(0, i);
+        const lists: (readonly string[] | null)[] = [bet.length ? bet : THREE_WAY_SIZES.bet, null, null, null];
         for (const lv of [1, 2, 3]) {
           if (playedBy(i, lv)) lists[lv] = ws.filter((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
           // GTO Wizard copies the list sent for the level below into a null second / third list: keep it null only

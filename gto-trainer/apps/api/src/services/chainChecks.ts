@@ -454,6 +454,9 @@ export function checkPotStack(a: {
   skipPotIn?: boolean;
   /** EACH SEAT'S STACK as the tree was sent it against the table's (2026-10-03): position, tree, table */
   seatStacks?: { pos: string; tree: number; table: number }[];
+  /** which rule priced the table's side at hero's node (2026-10-03): "the table's pot", or the pot a plan's own seats
+   *  can contest — said in the text */
+  potRule?: string;
 }): CheckResult {
   const bad: string[] = [], ok: string[] = [];
   let potOff = false;
@@ -463,8 +466,8 @@ export function checkPotStack(a: {
   else ok.push(`pot ${r2(a.potIn)}bb = capture ${r2(a.capturePot)}bb`);
   if (a.potNode != null) {
     if (a.captureNodePot == null) ok.push("the capture's pot at hero's node unknown");
-    else if (!within(a.potNode, a.captureNodePot, TOL.potBb, TOL.potPct)) { potOff = true; bad.push(`pot at hero's node ${r2(a.potNode)}bb, the capture's ${r2(a.captureNodePot)}bb (Δ ${r2(a.potNode - a.captureNodePot)}bb)`); }
-    else ok.push(`${r2(a.potNode)}bb at hero's node`);
+    else if (!within(a.potNode, a.captureNodePot, TOL.potBb, TOL.potPct)) { potOff = true; bad.push(`pot at hero's node ${r2(a.potNode)}bb, the capture's ${r2(a.captureNodePot)}bb (Δ ${r2(a.potNode - a.captureNodePot)}bb${a.potRule ? `; ${a.potRule}` : ""})`); }
+    else ok.push(`${r2(a.potNode)}bb at hero's node${a.potRule ? ` (${a.potRule})` : ""}`);
   }
   if (a.seatStacks?.length) {
     const off = a.seatStacks.filter((x) => !within(x.tree, x.table, TOL.stackBb, TOL.stackPct));
