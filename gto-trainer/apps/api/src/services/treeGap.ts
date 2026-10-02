@@ -13,9 +13,16 @@
  *     other seats less), a 3-bet 1.15x off ≤ 0.004, a 4-bet 1.10x off ≈ the solver's own noise — and past those the
  *     loss climbs fast (a 3-bet 1.5x off 0.03-0.045, a 4-bet 1.5x off 0.12-0.22). Until now ONE bound, 1.49x
  *     (utils/snapToken SNAP_TAU, calibrated on river translation), held for every level.
- *   - STACKS do not matter on hero's first decision (≤ 0.01 bb up to 2x off, any seat, two seats, hero's own) and DO
- *     once he faces a re-raise or an all-in, where the aggressor's stack is the price of the call: 1.3x off ≈ 0.01,
- *     1.5x 0.03-0.05, 2x 0.07-0.12, past 3x 0.15-0.31.
+ *   - STACKS matter most once hero faces a re-raise or an all-in, where the aggressor's stack is the price of the call
+ *     (a re-raise 1.3x off ≈ 0.01, 1.5x 0.03-0.05, 2x 0.07-0.12; an open jam 1.3x off 0.007-0.015, 1.5x up to 0.06,
+ *     2x up to 0.23 — the bound there is 1.2x, Brady's call).
+ *   - On hero's FIRST decision the same ratio costs ten times more under 50bb than above 60bb (the short-stack study,
+ *     123 more trees): the raiser he faces, or the other blind when it is blind against blind, read 1.5x off loses
+ *     ≤ 0.007 at every depth; 2x off 0.011-0.021 under 50bb and 0.001 at 60bb+. Hero's own stack matters under 30bb
+ *     (20bb read on the 30bb chart 0.02). A caller, a limper, any other seat still to act: ≤ 0.013 at any ratio.
+ *
+ * THE RULE IS STRICT (Brady, 2026-10-02): a chart answer is acceptable only when the decision is inside EVERY bound —
+ * each raise size at its level AND every stack bound that applies. One bound passed sends it to the exact tree.
  *
  * THE MEASURE OF A STACK IS THE EFFECTIVE STACK, AS A RATIO:
  *   - per opponent STILL IN THE HAND: min(hero, opponent) at the table against min(hero, opponent) in the chart.
@@ -33,8 +40,17 @@ export const STACK_GAP_TAU = 1.25;
 /** THE SIZE BOUND BY LEVEL (ratio between the raise as played and the chart size it was read at): the open (or the
  *  iso over limps), the 3-bet, the 4-bet and later. */
 export const SIZE_TAU = [1.25, 1.15, 1.1] as const;
-/** THE STACK BOUND when hero faces a re-raise or an all-in: the last aggressor's effective stack, table vs chart. */
+/** THE STACK BOUNDS (effective stack, table vs chart). Facing a re-raise: the last aggressor's. */
 export const RERAISE_STACK_TAU = 1.3;
+/** Facing an all-in (an open jam included): the jammer's. */
+export const ALLIN_STACK_TAU = 1.2;
+/** Hero's first decision: the raiser he faces, or the other blind when it is blind against blind — while the smaller of
+ *  the two stacks (table, chart) is under FIRST_STACK_DEPTH. At 60bb+ a first decision has no stack bound. */
+export const FIRST_STACK_TAU = 1.5;
+export const FIRST_STACK_DEPTH = 50;
+/** Hero's own stack against the chart's, while the smaller of the two is under HERO_STACK_DEPTH. */
+export const HERO_STACK_TAU = 1.3;
+export const HERO_STACK_DEPTH = 30;
 
 /** live = a decision past a bound goes to the exact tree; log = the chart answers and the verdict is only recorded;
  *  off = no verdict. PREFLOP_GAP_GATE in the environment, read at every decision; live when unset. */
@@ -60,6 +76,9 @@ export interface SeatGap {
 /** One bound a decision is past. */
 export interface GapReason {
   rule: "size" | "stack";
+  /** a stack bound: which one — facing an all-in, facing a re-raise, hero's first decision (the raiser / the other
+   *  blind), hero's own stack */
+  why?: "allin" | "reraise" | "first" | "hero";
   /** which raise of the line: 1 = the open, 2 = the 3-bet, 3 = the 4-bet or later (stack: the raises hero faces) */
   level: number;
   ratio: number;
@@ -83,6 +102,8 @@ export interface TreeGap {
   /** raises in the line hero faces, and whether the last of them is an all-in */
   raises: number;
   allIn: boolean;
+  /** blind against blind: hero is a blind and the other blind is the only opponent left */
+  bvb?: boolean;
   /** the largest raise-size snap on the walked line (borrowed callers and all-ins left out) — null when none */
   size: { from: string; to: string; ratio: number; level: number } | null;
   /** set when the picker's first choice had not landed: what the worst ratio WOULD have been on it. The difference
@@ -145,7 +166,7 @@ function seatGaps(stacks: Record<Seat6, number>, byPos: Partial<Record<Seat6, nu
 }
 
 /** The bounds a measured decision is past (empty = inside all of them). Pure: the gate's whole rule. */
-export function gapReasons(g: Pick<TreeGap, "seats" | "raises" | "allIn">, snaps: { from: string; to: string; ratio: number; level: number }[]): GapReason[] {
+export function gapReasons(g: Pick<TreeGap, "seats" | "raises" | "allIn"> & Partial<Pick<TreeGap, "hero" | "bvb">>, snaps: { from: string; to: string; ratio: number; level: number }[]): GapReason[] {
   const out: GapReason[] = [];
   for (const s of snaps) {
     const tau = SIZE_TAU[Math.min(Math.max(s.level, 1), SIZE_TAU.length) - 1]!;
@@ -153,8 +174,24 @@ export function gapReasons(g: Pick<TreeGap, "seats" | "raises" | "allIn">, snaps
   }
   // a re-raise or an all-in in front of hero: the aggressor's stack is the price of the call
   const agg = g.seats.find((s) => s.role === "raiser");
-  if (agg && (g.raises >= 2 || g.allIn) && agg.ratio > RERAISE_STACK_TAU) {
-    out.push({ rule: "stack", level: g.raises, ratio: agg.ratio, tau: RERAISE_STACK_TAU, what: `${agg.seat} ${agg.real}bb, ${agg.chart}bb in the chart` });
+  const seatWhat = (s: SeatGap) => `${s.seat} ${s.real}bb, ${s.chart}bb in the chart`;
+  const judged = new Set<string>();
+  if (agg && g.allIn) {
+    judged.add(agg.seat);
+    if (agg.ratio > ALLIN_STACK_TAU) out.push({ rule: "stack", why: "allin", level: g.raises, ratio: agg.ratio, tau: ALLIN_STACK_TAU, what: seatWhat(agg) });
+  } else if (agg && g.raises >= 2) {
+    if (agg.ratio > RERAISE_STACK_TAU) { judged.add(agg.seat); out.push({ rule: "stack", why: "reraise", level: g.raises, ratio: agg.ratio, tau: RERAISE_STACK_TAU, what: seatWhat(agg) }); }
+  }
+  // hero's first decision against a short stack: the raiser he faces, or the other blind when it is blind against
+  // blind (whatever that blind did — nothing yet, a limp, an open). Deep, the same ratio costs nothing.
+  const first = g.bvb ? g.seats[0] : agg && !g.allIn ? agg : undefined;
+  if (first && !judged.has(first.seat) && Math.min(first.real, first.chart) < FIRST_STACK_DEPTH && first.ratio > FIRST_STACK_TAU) {
+    out.push({ rule: "stack", why: "first", level: g.raises, ratio: first.ratio, tau: FIRST_STACK_TAU, what: seatWhat(first) });
+  }
+  // hero's own stack (he has not reloaded): the chart holds him at its own depth
+  if (g.hero && g.hero.real > 0 && g.hero.chart > 0 && Math.min(g.hero.real, g.hero.chart) < HERO_STACK_DEPTH) {
+    const r = ratioOf(g.hero.real, g.hero.chart);
+    if (r > HERO_STACK_TAU) out.push({ rule: "stack", why: "hero", level: g.raises, ratio: r, tau: HERO_STACK_TAU, what: `hero ${g.hero.real}bb, ${g.hero.chart}bb in the chart` });
   }
   return out;
 }
@@ -164,7 +201,9 @@ export function gapText(reasons: GapReason[]): string {
   const lv = (n: number) => (n <= 1 ? "open" : n === 2 ? "3-bet" : "4-bet");
   return reasons.map((r) => (r.rule === "size"
     ? `the ${lv(r.level)} ${r.what} is ${r.ratio}x from the chart's size (bound ${r.tau}x)`
-    : `facing ${r.level >= 2 ? "a re-raise" : "an all-in"} from the ${r.what} — ${r.ratio}x apart (bound ${r.tau}x)`)).join("; ");
+    : r.why === "hero" ? `${r.what} — ${r.ratio}x apart (bound ${r.tau}x under ${HERO_STACK_DEPTH}bb)`
+    : r.why === "first" ? `a short stack in front: ${r.what} — ${r.ratio}x apart (bound ${r.tau}x under ${FIRST_STACK_DEPTH}bb)`
+    : `facing ${r.why === "allin" ? "an all-in" : "a re-raise"} from the ${r.what} — ${r.ratio}x apart (bound ${r.tau}x)`)).join("; ");
 }
 
 /**
@@ -198,9 +237,11 @@ export function treeGap6(a: {
   const raised = (a.rawTokens ?? []).filter(isRaise);
   const raises = raised.length, allIn = raises > 0 && String(raised[raises - 1]).toUpperCase() === "RAI";
   const mode = a.mode ?? gapGateMode();
-  const reasons = mode === "off" ? [] : gapReasons({ seats, raises, allIn }, snaps);
+  const heroGap = { real: Math.round(heroReal * 100) / 100, chart: stacks[hero] };
+  const bvb = (hero === "SB" || hero === "BB") && seats.length === 1 && (seats[0]!.seat === "SB" || seats[0]!.seat === "BB");
+  const reasons = mode === "off" ? [] : gapReasons({ seats, raises, allIn, hero: heroGap, bvb }, snaps);
   const out: TreeGap = {
-    v: 2, chart: a.chartId, hero: { real: Math.round(heroReal * 100) / 100, chart: stacks[hero] }, seats, stack, pot, raises, allIn,
+    v: 2, chart: a.chartId, hero: heroGap, seats, stack, pot, raises, allIn, ...(bvb ? { bvb } : {}),
     size: snaps[0] ?? null, gate: { mode, route: reasons.length > 0, reasons },
   };
   if (a.wantedId && a.wantedId !== a.chartId) {
