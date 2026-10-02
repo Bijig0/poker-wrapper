@@ -212,7 +212,11 @@ describe("nothing changes for Ignition", () => {
     const shape = shapeOf(ign, "BTN");
     if ("error" in shape) throw new Error(shape.error);
     expect("anteBb" in shape || "siteRake" in shape).toBe(false);
-    expect(JSON.parse(treeKeyOf(shape, menus([2.5], shape.n))).length).toBe(9);   // the pre-2026-09-30 key, element for element
+    // the pre-2026-09-30 key, element for element — plus, since 2026-10-03, the settings tag (every preflop tree re-keyed
+    // once: the all-in settings off, each seat's all-in listed)
+    const key = JSON.parse(treeKeyOf(shape, menus([2.5], shape.n)));
+    expect(key.length).toBe(10);
+    expect(key[9]).toBe("allin-listed:100/0/0");
   });
 });
 
