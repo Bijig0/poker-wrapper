@@ -355,7 +355,8 @@ async function main(): Promise<void> {
   const restore = arg("--restore") ?? null;
   const dbPath = arg("--db") ?? (await import("../services/storePaths")).answersDbPath();
   const writes = apply || !!restore;
-  const db = new Database(dbPath, writes ? {} : { readonly: true });
+  // an empty options object is SQLITE_MISUSE in bun:sqlite — a write opens an EXISTING database, never creates one
+  const db = new Database(dbPath, writes ? { readwrite: true } : { readonly: true });
   console.log(`database: ${dbPath} (${writes ? "read-write" : "read-only, dry run"})`);
   const r = await runRescore({ db, dbPath, apply, restore, backupDir: arg("--backup-dir"), examples: Number(arg("--examples")) || 10 });
   db.close();
