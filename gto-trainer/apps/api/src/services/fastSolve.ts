@@ -35,6 +35,7 @@ import {
   checkPotStack, checkPreflopInRange, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
+import { contestedChips, deadMoney } from "../utils/tableMoney/tableMoney";
 import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
@@ -1223,53 +1224,28 @@ export function chainPathChecks(a: {
   /** seats that folded on or before a round */
   const foldedBy = (st: string) => new Set(hand.actions.filter((x) => x.type === "fold" && roundIdx(x.street) <= roundIdx(st))
     .map((x) => (x.hero ? hand.heroSeatId : x.seatId)));
-  /**
-   * The chips of a round that can be MATCHED (2026-10-03): a bet past the most any other seat can put in — a seat still
-   * in: its stack entering the round, a folded seat: its chips — is uncalled and goes back (aiChain StreetState.matched,
-   * the same rule on the tree's side). Heads-up a 150bb shove into 50 behind is a 50bb bet in the pot hero can win.
-   * Without the dealt stacks, every chip counts (the old reading).
-   */
   // the seats that acted in the hand (posts included): only they can match a bet
   const acted = new Set(hand.actions.map((x) => (x.hero ? hand.heroSeatId : x.seatId)));
-  const chipsOn = (st: string) => {
+  /** each seat's stack entering round `st` (null = no dealt reading) */
+  const stackInAt = (st: string) => (sid: number) => {
+    const d = a.dealt?.[sid];
+    if (d == null || !Number.isFinite(d)) return null;
+    return d - ROUND_ORDER.slice(0, roundIdx(st)).reduce((s, r) => s + (contrib.get(r)?.get(sid) ?? 0), 0);
+  };
+  /**
+   * The table's chips of a round that can be MATCHED (utils/tableMoney.contestedChips — the rule the flop pot is sent
+   * with and the tree walks with). `players`: a plan that LEAVES SEATS OUT (a ghost / merge collapse, a re-root, the last
+   * resort — review r1 §2 / r2, 2026-10-03) contests with its own seats only: a left-out seat's chips are dead money to
+   * it, up to what hero can win of them (260 against the tree's 200 on a 4-way shove into a 60bb hero, full-table).
+   * Without the dealt stacks every chip counts (the old reading).
+   */
+  const chipsOn = (st: string, players?: string[]) => {
     const m = contrib.get(st);
     if (!m) return 0;
     if (!a.dealt) return [...m.values()].reduce((s, x) => s + x, 0);
-    const k = roundIdx(st);
-    const stackIn = (sid: number) => {
-      const d = a.dealt![sid];
-      if (d == null || !Number.isFinite(d)) return null;
-      return d - ROUND_ORDER.slice(0, k).reduce((s, r) => s + (contrib.get(r)?.get(sid) ?? 0), 0);
-    };
-    // the same rule the flop pot is sent with (tableFlopPot) and the tree walks with (aiChain StreetState.matched)
-    return matchedRound(m, acted, foldedBy(st), stackIn).sum;
-  };
-  /**
-   * A PLAN THAT LEAVES SEATS OUT (a ghost / merge collapse, a re-root, the last resort) prices the pot its own seats can
-   * contest (2026-10-03, review r1 §2 / r2): a tree seat's bet counts up to the most another TREE seat can put in (the
-   * tree's StreetState.matched), and a left-out seat's chips — dead money to the tree — up to the tree's effective stack
-   * (what hero can win of them). The full-table rule (chipsOn) would count a bet a left-out deeper seat could call, which
-   * hero cannot win and the tree rightly leaves out: 260 against the tree's 200 on a 4-way shove into a 60bb hero.
-   */
-  const chipsOnPlan = (st: string, players: string[]) => {
-    const m = contrib.get(st);
-    if (!m) return 0;
-    if (!a.dealt) return chipsOn(st);
-    const k = roundIdx(st);
-    const stackIn = (sid: number) => {
-      const d = a.dealt![sid];
-      if (d == null || !Number.isFinite(d)) return null;
-      return d - ROUND_ORDER.slice(0, k).reduce((s, r) => s + (contrib.get(r)?.get(sid) ?? 0), 0);
-    };
-    const inTree = new Set(players.map((p) => p.toUpperCase()));
-    const treeIds = [...acted].filter((sid) => inTree.has(String(a.treePos(sid) ?? "").toUpperCase()));
-    const mTree = new Map([...m.entries()].filter(([sid]) => treeIds.includes(sid)));
-    const tree = matchedRound(mTree, new Set(treeIds), foldedBy(st), stackIn).sum;
-    const heroCap = stackIn(hand.heroSeatId) ?? Infinity;
-    const villainCaps = treeIds.filter((sid) => sid !== hand.heroSeatId).map((sid) => stackIn(sid) ?? Infinity);
-    const eff = Math.min(heroCap, villainCaps.length ? Math.max(...villainCaps) : Infinity);
-    const dead = [...m.entries()].filter(([sid]) => !treeIds.includes(sid)).reduce((s, [, c]) => s + Math.min(c, eff), 0);
-    return Math.round((tree + dead) * 100) / 100;
+    const inTree = players ? new Set(players.map((p) => p.toUpperCase())) : null;
+    const contesting = inTree ? [...acted].filter((sid) => inTree.has(String(a.treePos(sid) ?? "").toUpperCase())) : acted;
+    return contestedChips(m, { contesting, folded: foldedBy(st), capOf: stackInAt(st), ...(inTree ? { hero: hand.heroSeatId } : {}) }).sum;
   };
   const potBefore = (k: number) => ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + chipsOn(st), 0) + a.potExtra;
   const cur = hand.currentNode.street;
@@ -1316,7 +1292,7 @@ export function chainPathChecks(a: {
       // which rule prices the table's side: the full table for an exact tree, the tree's own seats for a plan that
       // leaves seats out (chipsOnPlan) — the street's own chips; the rounds before it are the pot it entered with
       const leftOut = !!w.kind && !!s.players?.length;
-      const onStreet = leftOut ? chipsOnPlan(st, s.players!) : chipsOn(st);
+      const onStreet = chipsOn(st, leftOut ? s.players! : undefined);
       out.push(checkPotStack({
         street: st, potIn: s.potIn, capturePot: potBefore(k), stackIn: s.stackIn, captureStack: Number.isFinite(eff) ? eff : null,
         ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + onStreet } : {}),
@@ -2091,32 +2067,7 @@ async function solvePostflopViaChainOnce(
  * more than it would have — is left out (unknown: it never lowers a tree), as is one below the preflop level.
  */
 /**
- * ONE ROUND'S CHIPS THAT CAN BE MATCHED (2026-10-03): each seat's chips in the round (roundContributions), a bet past the
- * most any other seat that acted in the hand can put in — a seat still in: its stack entering the round (`capOf`); a
- * seat that folded by the end of the round: its chips — counted only up to that most; the excess is uncalled and goes
- * back to its owner. The same rule as the tree's side (aiChain StreetState.matched). Returns the matched sum and the
- * excess per seat. `capOf` null = unknown (no excess is ever taken off a seat whose opponents' stacks are unknown).
- */
-export function matchedRound(m: Map<number, number> | undefined, actedIn: Set<number>, folded: Set<number>, capOf: (seat: number) => number | null):
-    { sum: number; returned: { seat: number; bb: number }[] } {
-  if (!m) return { sum: 0, returned: [] };
-  let sum = 0;
-  const returned: { seat: number; bb: number }[] = [];
-  for (const [s, c] of m) {
-    let most = 0;
-    for (const t of new Set([...actedIn, ...m.keys()])) {
-      if (t === s) continue;
-      most = Math.max(most, folded.has(t) ? (m.get(t) ?? 0) : (capOf(t) ?? Infinity));
-    }
-    const got = Math.min(c, most);
-    sum += got;
-    if (c - got > 0.005) returned.push({ seat: s, bb: Math.round((c - got) * 100) / 100 });
-  }
-  return { sum: Math.round(sum * 100) / 100, returned };
-}
-
-/**
- * THE POT ENTERING THE FLOP, FROM THE TABLE (2026-10-03): the preflop chips that can be matched (matchedRound — the
+ * THE POT ENTERING THE FLOP, FROM THE TABLE (2026-10-03): the preflop chips that can be matched (contestedChips — the
  * blinds, every call, raise and all-in; a posted-in player's live post rides on his own limp/call/raise, so it is
  * counted there once) + what no preflop action carries: a folded poster's dead post (deadPostsBb), the antes (CoinPoker:
  * 2 x ante heads-up, the ante x the seats dealt at a ring table). `preflop` is the matched chips alone (0 = the capture
@@ -2126,9 +2077,11 @@ export function tableFlopPot(hand: ParsedHand, dealt: Record<number, number> | n
     { pot: number; preflop: number; returned: { seat: number; bb: number }[] } {
   const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
   const pre = hand.actions.filter((a) => a.street === "preflop");
-  const r = matchedRound(roundContributions(hand).get("preflop"), new Set(pre.map(seatOf)), new Set(pre.filter((a) => a.type === "fold").map(seatOf)),
-    (s) => { const d = dealt?.[s]; return d != null && Number.isFinite(d) ? d : null; });
-  const pot = r.sum + 2 * (extra.anteHu ?? 0) + (extra.anteRing ?? 0) + deadPostsBb(hand.postIns, extra.street ?? "flop");
+  const r = contestedChips(roundContributions(hand).get("preflop") ?? new Map<number, number>(), {
+    contesting: new Set(pre.map(seatOf)), folded: new Set(pre.filter((a) => a.type === "fold").map(seatOf)),
+    capOf: (s) => { const d = dealt?.[s]; return d != null && Number.isFinite(d) ? d : null; },
+  });
+  const pot = r.sum + deadMoney({ antes: 2 * (extra.anteHu ?? 0) + (extra.anteRing ?? 0), deadPosts: deadPostsBb(hand.postIns, extra.street ?? "flop") });
   return { pot: Math.round(pot * 100) / 100, preflop: r.sum, returned: r.returned };
 }
 

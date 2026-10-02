@@ -4,7 +4,8 @@
  * rebuild (preflopPotStack) only a cross-check. And each seat's flop stack is its dealt stack less its own preflop chips.
  */
 import { describe, expect, it } from "bun:test";
-import { flopSeatStacks, matchedRound, tableFlopPot } from "./fastSolve";
+import { flopSeatStacks, tableFlopPot } from "./fastSolve";
+import { contestedChips } from "../utils/tableMoney/tableMoney";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
 
@@ -38,11 +39,12 @@ describe("an uncalled excess is not in the pot (requirement a)", () => {
     expect(t.pot).toBe(17.4);
     expect(t.returned).toEqual([{ seat: 4, bb: 17 }]);
   });
-  it("matchedRound: a bet called by a folded seat's chips and nobody else's stack is capped at the most anyone else can put in", () => {
+  it("contestedChips (the full table): a bet called by a folded seat's chips and nobody else's stack is capped at the most anyone else can put in", () => {
     const m = new Map([[1, 10], [2, 4], [3, 2]]);
-    expect(matchedRound(m, new Set([1, 2, 3]), new Set([3]), (s) => (s === 2 ? 4 : 100))).toEqual({ sum: 10, returned: [{ seat: 1, bb: 6 }] });
+    const r = contestedChips(m, { contesting: [1, 2, 3], folded: new Set([3]), capOf: (s: number) => (s === 2 ? 4 : 100) });
+    expect({ sum: r.sum, returned: r.returned }).toEqual({ sum: 10, returned: [{ seat: 1, bb: 6 }] });
     // an opponent whose stack is unknown never lets an excess be taken off
-    expect(matchedRound(m, new Set([1, 2, 3]), new Set([3]), () => null).returned).toEqual([]);
+    expect(contestedChips(m, { contesting: [1, 2, 3], folded: new Set([3]), capOf: () => null }).returned).toEqual([]);
   });
 });
 
