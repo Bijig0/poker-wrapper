@@ -80,9 +80,9 @@ describe("three seats: FIXED, the base lists where nothing is played (item 7)", 
     expect(seats[0]).toMatchObject({ type: "FIXED", bet_sizes: ["33%", "75%", "28bb"], raise_sizes: ["60%", "28bb"] });
     expect(seats[1]).toMatchObject({ bet_sizes: ["33%", "75%", "97.8bb"], third_plus_raise_sizes: ["60%", "97.8bb"] });
   });
-  it("hand 4922087007: HJ's 28 shove is the bet level, its amount alone on every seat (+ that seat's all-in) — as probed", () => {
+  it("hand 4922087007: HJ's 28 shove is HJ's own all-in — the other seats bet by the base list (a short stack's shove is no size for them; review 2026-10-03)", () => {
     const seats = flop(api.buildCustomTree(three({ played: { FLOP: [{ seat: 0, to: 28 }] } })));
-    expect(seats.map((p: any) => p.bet_sizes)).toEqual([["28bb"], ["28bb", "97.8bb"], ["28bb", "97.8bb"]]);
+    expect(seats.map((p: any) => p.bet_sizes)).toEqual([["28bb"], ["33%", "75%", "97.8bb"], ["33%", "75%", "97.8bb"]]);
     expect(seats.map((p: any) => p.raise_sizes)).toEqual([["60%", "28bb"], ["60%", "97.8bb"], ["60%", "97.8bb"]]);
   });
 });
