@@ -1628,6 +1628,8 @@ async function solvePostflopViaChainOnce(
     /** how this walk's entering ranges were made, when not the flop arrival's alone (the last resort's narrowing) — rides
      *  the trace's rangeSource */
     rangeNote?: string;
+    /** a LAST RESORT: solveOne races its narrowing against the unnarrowed tree (lastResortRace) */
+    lastResort?: { lr: NonNullable<ReturnType<typeof heroVsAggressor>>; heroPos: string };
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -1672,29 +1674,9 @@ async function solvePostflopViaChainOnce(
   /** a plan's merged seats: the tree's seat name → its members */
   const membersOf = (seats: { pos: string; members?: string[] }[]) =>
     Object.fromEntries(seats.filter((x) => (x.members?.length ?? 0) > 1).map((x) => [x.pos, x.members!]));
-  /**
-   * THE LAST RESORT'S ENTERING RANGES, NARROWED (2026-10-03, Brady: "do 1-3"): on the turn or river, hero's and the
-   * aggressor's ranges leaving the earlier streets, from the re-root's own three-seat walks (multiwayReroot
-   * .narrowForLastResort), not the flop arrival's. Nothing to narrow on the flop; a narrowing that fails leaves today's
-   * unnarrowed last resort and says why. LAST_RESORT_NARROW=0 switches it off. Returns the note's clause.
-   */
-  const narrowLastResort = async (lr: NonNullable<ReturnType<typeof heroVsAggressor>>, heroPosLr: string): Promise<string> => {
-    if (lr.first < 1) return "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)";
-    if (process.env.LAST_RESORT_NARROW === "0") return "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)";
-    const t = Date.now();
-    const nr = await narrowForLastResort({
-      ordered, heroPos: heroPosLr, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, board: tk.board, heroComboIdx,
-      rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))), ...(behindFlop ? { behind: behindFlop } : {}), amounts: streetAmounts,
-    }, lr.villain);
-    tspan("last resort: narrowing the two entering ranges", t, nr.ok ? `${nr.walks} walk(s) ${nr.group.join("/")}` : nr.why);
-    if (!nr.ok) return `the two entering ranges are NOT narrowed by the earlier streets (${nr.why})`;
-    const sp = lr.walkable.seatSpec;
-    sp.oopRange = sp.oopPos === heroPosLr ? nr.hero : nr.villain;
-    sp.ipRange = sp.ipPos === heroPosLr ? nr.hero : nr.villain;
-    const secs = (nr.ms / 1000).toFixed(1);
-    (lr.walkable as Walkable).rangeNote = `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${secs} s`;
-    return `the two entering ranges are narrowed by the earlier streets by ${nr.walks} three-seat walk(s) (${nr.group.join("/")}, ${secs} s; seats outside a walk play as if they had folded there)`;
-  };
+  /** the last resort's narrowing clause for the note, filled in by its race (lastResortRace) */
+  let lrNarrowClause = "";
+  const LR_CLAUSE = "\u27e8last-resort narrowing\u27e9";
   const specOf = (three: { pos: string; range: number[] }[], heroIdx: number): SeatSpec => ({
     oopPos: three[0]!.pos, midPos: three[1]!.pos, ipPos: three[2]!.pos,
     oopRange: three[0]!.range, midRange: three[1]!.range, ipRange: three[2]!.range,
@@ -1782,18 +1764,17 @@ async function solvePostflopViaChainOnce(
         // has is HERO and the LAST AGGRESSOR: the street is re-rooted heads-up between them, the other villains'
         // chips (and hero's own earlier chips this street) stay in the pot as dead money, and hero faces the
         // aggressor's bet at the real price. Unmodelled, said in the answer: the other villains' ranges and hands. The
-        // two entering ranges are narrowed through the earlier streets (narrowLastResort, 2026-10-03). It beats a blank.
+        // two entering ranges are narrowed through the earlier streets (lastResortRace, 2026-10-03: within LAST_RESORT_NARROW_MS, else unnarrowed). It beats a blank.
         const lr = heroVsAggressor({ ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts, allIn: allInSeats, behind: behindFlop });
         if (!lr) return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — and no last resort fits (nobody to face, or everyone all-in)`);
-        const narrowed = await narrowLastResort(lr, ordered[heroAt]!);
-        walkables = [lr.walkable];
+        walkables = [{ ...lr.walkable, lastResort: { lr, heroPos: ordered[heroAt]! } }];
         reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
         blendWhy = null;
         const note =
           `POSTFLOP LAST RESORT — ${collapseRefusal(cSeats, toks)}${rerootWhy ? ` (re-rooting at the ${cur}: ${rerootWhy})` : ""}; played as hero (${ordered[heroAt]}) against the last ` +
           `aggressor (${lr.villain}) alone at the ${cur}: ${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
           `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.bet >= lr.stack - 0.005 ? "ALL-IN" : lr.villainBet ? "bet" : "raise"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind${lr.stacks}; ` +
-          `the other villains' ranges and hands are not modelled; ${narrowed}.`;
+          `the other villains' ranges and hands are not modelled; ${LR_CLAUSE}.`;
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
       }
       if (!reroot) walkables = picked!.plans.map((pl) => ({
@@ -1880,7 +1861,8 @@ async function solvePostflopViaChainOnce(
       return allInsBySeat.find((x) => x.k === i + first && who != null && x.pos.toUpperCase() === who.toUpperCase())?.to ?? null;
     }));
   };
-  const solveOne = (w: Walkable) => treeStackOrNull(w) == null
+  const solveOne = (w: Walkable): Promise<AiChainResult> => (w.lastResort ? lastResortRace(w) : solveTree(w));
+  const solveTree = (w: Walkable): Promise<AiChainResult> => treeStackOrNull(w) == null
     ? Promise.resolve({ ok: false as const, trace: undefined, why: `the tree's seats are (near) all-in (${treeStackOf(w)}bb behind) — no tree is sent at that stack` })
     : solveAiChain({
     ...(rake6 ? { rake: rake6 } : {}),
@@ -1899,6 +1881,43 @@ async function solvePostflopViaChainOnce(
     handKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
     planTag: w.kind,
   });
+  /**
+   * THE LAST RESORT'S NARROWING NEVER COSTS AN ANSWER (2026-10-03, review of the narrowing: 4-15 s a walk, on the slow
+   * path, on hero's 15 s clock). The narrowing walk (multiwayReroot.narrowForLastResort — the re-root's own walks) and
+   * the UNNARROWED hero-vs-aggressor tree start together. The narrowing has LAST_RESORT_NARROW_MS (6000) from the
+   * DECISION'S START: inside it, the narrowed tree is solved and served; past it (or refused, or its tree fails), the
+   * unnarrowed answer is served and the note says why. A walk that runs late is left to finish: it lands in the hand's
+   * memo (its own result per hand, and its streets checkpointed under the hand), so the next decision of the hand gets
+   * it without walking again. When the narrowed tree is served, the unnarrowed one was a tree today's last resort
+   * solves anyway — at most the old cost on top. The trace records which was served and every timing.
+   * LAST_RESORT_NARROW=0 switches the narrowing off; the flop has nothing earlier to narrow.
+   */
+  const lastResortRace = async (w: Walkable): Promise<AiChainResult> => {
+    const { lr, heroPos: heroPosLr } = w.lastResort!;
+    const plain: Walkable = { ...w, lastResort: undefined };
+    if (lr.first < 1) { lrNarrowClause = "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)"; return solveTree(plain); }
+    if (process.env.LAST_RESORT_NARROW === "0") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)"; return solveTree(plain); }
+    const r = await raceNarrowing<AiChainResult>({
+      start: tEntry, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 6000) || 0),
+      narrowing: () => narrowForLastResort({
+        ordered, heroPos: heroPosLr, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, board: tk.board, heroComboIdx,
+        rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))), ...(behindFlop ? { behind: behindFlop } : {}), amounts: streetAmounts,
+        memoKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
+      }, lr.villain),
+      unnarrowed: () => solveTree(plain),
+      narrowed: (nr) => {
+        const sp = { ...w.seatSpec };
+        sp.oopRange = sp.oopPos === heroPosLr ? nr.hero : nr.villain;
+        sp.ipRange = sp.ipPos === heroPosLr ? nr.hero : nr.villain;
+        return solveTree({ ...plain, seatSpec: sp, rangeNote: `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s` });
+      },
+    });
+    lrNarrowClause = r.clause;
+    if (r.chain.trace) r.chain.trace.lastResortNarrowing = r.record;
+    tmark("last resort: narrowing", `${r.record.served} served${r.record.why ? ` (${r.record.why})` : ""} · narrowing ${r.record.narrowingMs ?? "still walking"} ms · ` +
+      `unnarrowed tree ${r.record.unnarrowedMs ?? "still solving"} ms · narrowed tree ${r.record.narrowedMs ?? "—"} ms · budget ${r.record.budgetMs} ms from the decision's start`);
+    return r.chain;
+  };
   // THE DRY RUN (2026-09-25, the input-mutation harness): everything up to here is the SOLVER INPUT — ranges for
   // every flop seat, the collapse plan, pot and stacks, the street tokens. The harness asks "does a solver input
   // exist for this capture?" over thousands of mutated hands, offline; the cloud call itself is not the question.
@@ -1911,7 +1930,7 @@ async function solvePostflopViaChainOnce(
         ok: true, source: "gtow-api-postflop", tier: "ai-chain", street: cur, setId: set.id ?? "6max-ign200", gametype: `dry-run · ${walkables.length} walkable(s)`,
         depth, line: `${preTokens.join("-")} / ${streets.map((s) => s.join("-")).join(" | ")}`, pos: heroPosName, heroClass: heroCls,
         actions: [], decision: null, rangeSource: rangeSource ?? undefined,
-        warning: [sixNote, `DRY RUN: solver input built — ${walkables.length} walkable(s), hero ${heroCls ?? "?"} weight ${heroW == null ? "n/a" : heroW.toFixed(3)}, pot ${reroot ? reroot.pot : flopPot}bb, stack ${walkables.map(treeStackOf).join("/")}bb`].filter(Boolean).join(" · "),
+        warning: [sixNote?.replace(LR_CLAUSE, "the two entering ranges: not narrowed in a dry run"), `DRY RUN: solver input built — ${walkables.length} walkable(s), hero ${heroCls ?? "?"} weight ${heroW == null ? "n/a" : heroW.toFixed(3)}, pot ${reroot ? reroot.pot : flopPot}bb, stack ${walkables.map(treeStackOf).join("/")}bb`].filter(Boolean).join(" · "),
         notInRange: heroW != null && !(heroW > 0) ? true : undefined,
         dryRun: {
           flopPot, flopStack: fieldStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats],
@@ -1956,8 +1975,7 @@ async function solvePostflopViaChainOnce(
     if (lr) {
       reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
       blendWhy = null;
-      const narrowed = await narrowLastResort(lr, ordered[heroAtLr]!);
-      const c = await solveOne(lr.walkable as any);
+      const c = await solveOne({ ...(lr.walkable as Walkable), lastResort: { lr, heroPos: ordered[heroAtLr]! } });
       const meta = { ...solveMetaBase, solveMs: Date.now() - t0 };
       if (c.ok) {
         walks.push({
@@ -1969,7 +1987,7 @@ async function solvePostflopViaChainOnce(
           `played as hero (${ordered[heroAtLr]}) against the last aggressor (${lr.villain}) alone at the ${cur}: ` +
           `${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
           `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.bet >= lr.stack - 0.005 ? "ALL-IN" : "bet"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind${lr.stacks}; ` +
-          `the other villains' ranges and hands are not modelled; ${narrowed}.`;
+          `the other villains' ranges and hands are not modelled; ${lrNarrowClause}.`;
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
         walkFails.length = 0;
       } else {
@@ -1977,6 +1995,7 @@ async function solvePostflopViaChainOnce(
       }
     }
   }
+  if (sixNote?.includes(LR_CLAUSE)) sixNote = sixNote.replace(LR_CLAUSE, lrNarrowClause || "the two entering ranges are NOT narrowed (the last resort was not solved)");
   if (!walks.length) return fail(walkFails.join(" · ") || "no walkable tree");
   // THE STACKS THE TREES WERE SOLVED AT, when not the whole field's (2026-09-25): a tree whose seats are shallower than
   // the field's effective stack, and a later street re-derived after a fold (aiChain seatStacks)
@@ -2273,6 +2292,49 @@ function flopSeatStacksRead(a: {
     out[p] = Math.max(0, b);
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * THE LAST RESORT'S RACE (2026-10-03; the policy is on fastSolve's lastResortRace): the narrowing and the UNNARROWED
+ * tree start together; the narrowing has `budgetMs` from `start` (the decision's start). Its ranges inside the budget:
+ * the narrowed tree is solved and served (the unnarrowed one is dropped, its result unused). Past the budget, refused,
+ * or a narrowed tree that fails: the unnarrowed answer is served and `clause` says why. A late narrowing is left
+ * running (its result lands in the hand's memo — multiwayReroot.narrowForLastResort). Times are ms from `start`.
+ */
+export async function raceNarrowing<C extends { ok: boolean; why?: string }>(a: {
+  start: number; budgetMs: number;
+  narrowing: () => Promise<{ ok: true; hero: number[]; villain: number[]; walks: number; ms: number; group: string[] } | { ok: false; why: string; ms: number }>;
+  unnarrowed: () => Promise<C>;
+  narrowed: (nr: { hero: number[]; villain: number[]; walks: number; ms: number; group: string[] }) => Promise<C>;
+}): Promise<{ chain: C; clause: string; record: NonNullable<ChainTrace["lastResortNarrowing"]> }> {
+  let narrowingAt: number | null = null, unnarrowedAt: number | null = null, narrowedAt: number | null = null;
+  const since = (t: number | null) => (t == null ? null : t - a.start);
+  const narrowing = a.narrowing().catch((e) => ({ ok: false as const, why: String((e as Error)?.message ?? e), ms: 0 }));
+  narrowing.then(() => { narrowingAt = Date.now(); });
+  const unnarrowed = a.unnarrowed();
+  unnarrowed.then(() => { unnarrowedAt = Date.now(); }, () => { unnarrowedAt = Date.now(); });
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const late = new Promise<null>((res) => { timer = setTimeout(() => res(null), Math.max(0, a.start + a.budgetMs - Date.now())); });
+  const nr = await Promise.race([narrowing, late]);
+  if (timer) clearTimeout(timer);
+  const done = (chain: C, served: "narrowed" | "unnarrowed", why: string | null, clause: string) => ({
+    chain, clause,
+    record: { served, budgetMs: a.budgetMs, why, narrowingMs: since(narrowingAt), unnarrowedMs: since(unnarrowedAt), narrowedMs: since(narrowedAt) },
+  });
+  if (nr && nr.ok) {
+    const c = await a.narrowed(nr);
+    narrowedAt = Date.now();
+    if (c.ok) {
+      unnarrowed.catch(() => undefined);
+      return done(c, "narrowed", null, `the two entering ranges are narrowed by the earlier streets by ${nr.walks} three-seat walk(s) ` +
+        `(${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s; seats outside a walk play as if they had folded there)`);
+    }
+    return done(await unnarrowed, "unnarrowed", `the narrowed tree failed: ${c.why}`, `the two entering ranges are NOT narrowed: the narrowed tree failed (${c.why}), the unnarrowed one is served`);
+  }
+  if (nr) return done(await unnarrowed, "unnarrowed", nr.why, `the two entering ranges are NOT narrowed by the earlier streets (${nr.why})`);
+  const secs = (a.budgetMs / 1000).toFixed(1);
+  return done(await unnarrowed, "unnarrowed", `the narrowing walk took longer than ${secs} s`,
+    `ranges NOT narrowed: the narrowing walk took longer than ${secs} s (it finishes in the background for the hand's next decision)`);
 }
 
 /**

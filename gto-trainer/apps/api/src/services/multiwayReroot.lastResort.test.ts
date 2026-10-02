@@ -9,13 +9,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { gtowApi } from "./gtowApi";
 import { StreetState, forgetCheckpoints } from "./aiChain";
-import { narrowForLastResort, type RerootArgs } from "./multiwayReroot";
+import { forgetLrNarrowing, narrowForLastResort, type RerootArgs } from "./multiwayReroot";
+import { raceNarrowing } from "./fastSolve";
 
 const api = gtowApi as any;
 let restore: (() => void) | null = null;
 afterEach(() => { restore?.(); restore = null; });
 /** the synthetic GTO Wizard; `fail` makes every node a 429 */
-function install(fail = false) {
+function install(fail = false, delayMs = 0) {
   const saved = { ensure: api.ensureCustomSolution, node: api.customNode, peek: api.peekSolution, peekNode: api.peekNode };
   const trees = new Map<string, any>();
   let n = 0;
@@ -23,6 +24,7 @@ function install(fail = false) {
   api.peekNode = () => null;
   api.ensureCustomSolution = async (input: any) => { const solId = `lr${++n}`; trees.set(solId, input); return { ok: true, solId, created: true, session: "mock" }; };
   api.customNode = async (solId: string, q: any) => {
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
     if (fail) return { ok: false, status: 429, error: `spot-solution 429: {"detail": "Request limit exceeded"}` };
     const t = trees.get(solId)!;
     const seats = [t.oopPos, ...(t.mid ? [t.mid.pos] : []), t.ipPos];
@@ -109,5 +111,71 @@ describe("narrowForLastResort", () => {
     const r = await narrowForLastResort(args([["X", "X", "R", "C", "C", "F"], ["X", "R10"]], [["SB", "BB", "CO", "BTN", "SB", "BB"], ["SB", "CO"]]), "CO");
     expect(r.ok).toBe(false);
     expect(trees.size).toBe(0);
+  });
+});
+
+// ---- the race (fastSolve.raceNarrowing): the narrowing never costs an answer -----------------------------------------
+const okChain = (tag: string) => ({ ok: true as const, tag });
+const nrOk = { ok: true as const, hero: [1], villain: [1], walks: 1, ms: 5, group: ["BTN", "CO"] };
+const after = <T>(ms: number, v: T) => new Promise<T>((r) => setTimeout(() => r(v), ms));
+describe("raceNarrowing", () => {
+  it("the narrowing inside the budget: the narrowed tree is served (the unnarrowed one ran beside it)", async () => {
+    let unn = 0;
+    const r = await raceNarrowing({ start: Date.now(), budgetMs: 300, narrowing: () => after(20, nrOk), unnarrowed: () => { unn++; return after(10, okChain("unnarrowed")); }, narrowed: () => after(10, okChain("narrowed")) });
+    expect((r.chain as any).tag).toBe("narrowed");
+    expect(r.record.served).toBe("narrowed");
+    expect(r.record.narrowingMs).toBeGreaterThanOrEqual(15);
+    expect(r.record.unnarrowedMs).not.toBeNull();
+    expect(r.record.narrowedMs).not.toBeNull();
+    expect(unn).toBe(1);
+    expect(r.clause).toContain("narrowed by the earlier streets by 1 three-seat walk(s) (BTN/CO");
+  });
+  it("past the budget: the unnarrowed answer is served with the note; the walk is left to finish", async () => {
+    let finished = false;
+    const r = await raceNarrowing({ start: Date.now(), budgetMs: 50, narrowing: () => after(200, nrOk).then((x) => { finished = true; return x; }),
+      unnarrowed: () => after(10, okChain("unnarrowed")), narrowed: () => after(10, okChain("narrowed")) });
+    expect((r.chain as any).tag).toBe("unnarrowed");
+    expect(r.record).toMatchObject({ served: "unnarrowed", budgetMs: 50, narrowingMs: null, why: "the narrowing walk took longer than 0.1 s" });
+    expect(r.clause).toBe("ranges NOT narrowed: the narrowing walk took longer than 0.1 s (it finishes in the background for the hand's next decision)");
+    expect(finished).toBe(false);
+    await after(250, null);
+    expect(finished).toBe(true);
+  });
+  it("the budget runs from the decision's start, not from the walk's", async () => {
+    const r = await raceNarrowing({ start: Date.now() - 150, budgetMs: 100, narrowing: () => after(20, nrOk), unnarrowed: () => after(5, okChain("unnarrowed")), narrowed: () => after(5, okChain("narrowed")) });
+    expect(r.record.served).toBe("unnarrowed");
+  });
+  it("a narrowing that refuses, or a narrowed tree that fails: the unnarrowed answer, saying why", async () => {
+    const a = await raceNarrowing({ start: Date.now(), budgetMs: 300, narrowing: () => after(5, { ok: false as const, why: "UTG, BTN all bet or raised earlier", ms: 0 }),
+      unnarrowed: () => after(5, okChain("unnarrowed")), narrowed: () => after(5, okChain("narrowed")) });
+    expect([(a.chain as any).tag, a.record.why]).toEqual(["unnarrowed", "UTG, BTN all bet or raised earlier"]);
+    const b = await raceNarrowing({ start: Date.now(), budgetMs: 300, narrowing: () => after(5, nrOk),
+      unnarrowed: () => after(5, okChain("unnarrowed")), narrowed: () => after(5, { ok: false as const, why: "429" }) as any });
+    expect([(b.chain as any).tag, b.record.why]).toEqual(["unnarrowed", "the narrowed tree failed: 429"]);
+  });
+});
+
+describe("a late narrowing lands in the hand's memo", () => {
+  const turn = args([["X", "X", "R5", "C", "C", "F"], ["X", "R10"]], [["SB", "BB", "CO", "BTN", "SB", "BB"], ["SB", "CO"]]);
+  const river = args([["X", "X", "R5", "C", "C", "F"], ["X", "R10", "C", "C"], ["X", "R20"]], [["SB", "BB", "CO", "BTN", "SB", "BB"], ["SB", "CO", "BTN", "SB"], ["SB", "CO"]]);
+  it("the turn serves unnarrowed past the budget; the walk finishes; a re-ask joins it and the river walks only the turn", async () => {
+    forgetLrNarrowing(); forgetCheckpoints("hand-lr-memo#lr-narrow");
+    const trees = install(false, 40);   // every node 40 ms: the flop walk takes > 100 ms
+    const narrowingP = narrowForLastResort({ ...turn, memoKey: "hand-lr-memo" }, "CO");
+    const r = await raceNarrowing({ start: Date.now(), budgetMs: 60, narrowing: () => narrowingP, unnarrowed: async () => okChain("unnarrowed"), narrowed: async () => okChain("narrowed") });
+    expect(r.record.served).toBe("unnarrowed");
+    const late = await narrowingP;                      // the walk went on in the background
+    expect(late.ok).toBe(true);
+    const flopTrees = () => [...trees.values()].filter((t) => t.startingStreet === "FLOP").length;
+    const n0 = trees.size, f0 = flopTrees();
+    // the same decision asked again: the memo, no walk
+    const again = await narrowForLastResort({ ...turn, memoKey: "hand-lr-memo" }, "CO");
+    expect(again).toBe(late);
+    expect(trees.size).toBe(n0);
+    // the river: the flop comes from the hand's checkpoint — only the turn is walked
+    const rv = await narrowForLastResort({ ...river, memoKey: "hand-lr-memo" }, "CO");
+    expect(rv.ok).toBe(true);
+    expect(flopTrees()).toBe(f0);
+    expect([...trees.values()].filter((t) => t.startingStreet === "TURN").length).toBeGreaterThan(0);
   });
 });

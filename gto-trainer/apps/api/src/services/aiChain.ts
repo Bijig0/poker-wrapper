@@ -224,6 +224,13 @@ export interface ChainTrace {
   /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
    *  reason no checkpoint fit; absent when the spec carried no handKey */
   checkpoint?: { from: string | null; streetsReused: number; note: string };
+  /** THE LAST RESORT'S NARROWING RACE (fastSolve, 2026-10-03): which tree was served — the narrowed one when the
+   *  narrowing walk landed inside its budget, else the unnarrowed one solved beside it — and the timings (ms from the
+   *  decision's start; null = not finished when the answer was served) */
+  lastResortNarrowing?: {
+    served: "narrowed" | "unnarrowed"; budgetMs: number; why: string | null;
+    narrowingMs: number | null; unnarrowedMs: number | null; narrowedMs: number | null;
+  };
   result: { ok: boolean; why?: string; potNode?: number; stackStreet?: number; line?: string; solves?: number };
 }
 

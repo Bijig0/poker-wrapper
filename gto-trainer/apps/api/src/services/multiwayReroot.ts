@@ -45,6 +45,9 @@ export interface RerootArgs {
   behind?: Record<string, number>;
   /** the table's all-in amounts beside the tokens (fastSolve streetAmounts), parallel to `streets` */
   amounts?: (number | null)[][];
+  /** the hand's key (the last resort's narrowing only): the walks checkpoint under `<key>#lr-narrow` — the next street
+   *  of the hand starts from the earlier streets walked — and narrowForLastResort keeps its result per hand */
+  memoKey?: string;
 }
 
 export type RerootResult =
@@ -175,6 +178,8 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
       flopPot: a.flopPot, flopStack: ((e) => (Number.isFinite(e) ? e : a.flopStack))(effectiveBehind(keep, a.heroPos, seatStacks)), board: a.board, streets, streetSeats: seats,
       ...(seatStacks ? { seatStacks } : {}),
       heroComboIdx: a.heroComboIdx, walkThrough: true,
+      // the hand's memo (aiChain checkpoints, content-keyed): a later street's walk of these streets starts past them
+      ...(a.memoKey ? { handKey: `${a.memoKey}#lr-narrow` } : {}),
     };
     const r = await solveAiChain(spec);
     return { keep, r };
@@ -243,8 +248,30 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
  * group), and hands back hero's and the aggressor's ranges leaving the earlier streets. Nothing to narrow on the flop;
  * a group that cannot be formed or walked is a refusal the caller turns into today's unnarrowed last resort.
  */
-export async function narrowForLastResort(a: RerootArgs, villain: string):
-    Promise<{ ok: true; hero: number[]; villain: number[]; walks: number; ms: number; group: string[] } | { ok: false; why: string; ms: number }> {
+type LrNarrowing = { ok: true; hero: number[]; villain: number[]; walks: number; ms: number; group: string[] } | { ok: false; why: string; ms: number };
+/** narrowForLastResort's results in flight or done, per hand and input (memoKey set): a re-ask joins, never re-walks */
+const lrNarrowMemo = new Map<string, Promise<LrNarrowing>>();
+const LR_NARROW_MEMO_MAX = 200;
+const hashOf = (x: unknown): string => Bun.hash(JSON.stringify(x)).toString(36);
+/** Drop the last resort's narrowing memo (tests). */
+export function forgetLrNarrowing(): void { lrNarrowMemo.clear(); }
+
+export function narrowForLastResort(a: RerootArgs, villain: string): Promise<LrNarrowing> {
+  if (!a.memoKey) return narrowForLastResortNow(a, villain);
+  const first = a.streets.length - 1;
+  const key = hashOf([a.memoKey, villain, a.heroPos, first, a.streets.slice(0, first), a.streetSeats.slice(0, first), a.amounts?.slice(0, first) ?? null,
+    a.flopPot, a.flopStack, a.behind ?? null, a.board.slice(0, 6 + 2 * first), a.rake ?? null, a.heroComboIdx, a.ordered.map((p) => [p, hashOf(a.arr(p))])]);
+  const hit = lrNarrowMemo.get(key);
+  if (hit) return hit;
+  const p = narrowForLastResortNow(a, villain);
+  lrNarrowMemo.set(key, p);
+  while (lrNarrowMemo.size > LR_NARROW_MEMO_MAX) { const f = lrNarrowMemo.keys().next().value; if (f === undefined) break; lrNarrowMemo.delete(f); }
+  // a refusal is not remembered (a 429 now may walk later)
+  p.then((r) => { if (!r.ok && lrNarrowMemo.get(key) === p) lrNarrowMemo.delete(key); }, () => { if (lrNarrowMemo.get(key) === p) lrNarrowMemo.delete(key); });
+  return p;
+}
+
+async function narrowForLastResortNow(a: RerootArgs, villain: string): Promise<LrNarrowing> {
   const first = a.streets.length - 1;
   if (first < 1) return { ok: false, why: "on the flop there is nothing earlier to narrow", ms: 0 };
   const m = moneyThrough(a, first);
