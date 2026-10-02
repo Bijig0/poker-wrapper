@@ -1709,7 +1709,7 @@ async function solvePostflopViaChainOnce(
         // by 3-seat walks that each keep hero, every earlier aggressor and some of the callers (the callers left
         // out of a walk are the approximation). Brady 2026-09-22: "let's try solve for it".
         const rr = await rerootCollapse({
-          ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack,
+          ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts,
           board: tk.board, heroComboIdx, rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))),
           ...(behindFlop ? { behind: behindFlop } : {}),
         });
@@ -2189,7 +2189,7 @@ export function heroVsAggressor(a: {
       villain: string; others: string[]; dead: number; bet: number; villainBet: boolean; stacks: string } | null {
   const first = a.streets.length - 1;
   const m = first >= 1
-    ? moneyThrough(a.streets, a.streetSeats, a.flopPot, a.flopStack, first, a.behind)
+    ? moneyThrough({ ordered: a.ordered, heroPos: a.heroPos, streets: a.streets, streetSeats: a.streetSeats, flopPot: a.flopPot, flopStack: a.flopStack, behind: a.behind }, first)
     : { pot: a.flopPot, stack: a.flopStack, folded: new Set<string>(), aggressors: new Set<string>(), behind: a.behind };
   if (m.stack <= 0.5) return null;
   const r2 = (x: number) => Math.round(x * 100) / 100;
