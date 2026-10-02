@@ -86,3 +86,24 @@ describe("heroVsAggressor plays hero against the aggressor at THEIR stacks", () 
     expect(flop.pot).toBe(13.4);
   });
 });
+
+describe("the last resort on the table's money model (utils/tableMoney, 2026-10-03)", () => {
+  test("an all-in at the TABLE's amount: the BTN's turn jam of 20 out of a 31.6 reading is a 20 bet, not his whole reading", () => {
+    const lr = heroVsAggressor({ ...base, streets: [FLOP, ["X", "RAI"]], streetSeats: [FLOP_SEATS, ["CO", "BTN"]], amounts: [FLOP.map(() => null), [null, 20]] })!;
+    expect(lr.bet).toBe(20);
+    expect(lr.walkable.streets).toEqual([["X", "R20"]]);   // 20 of the BTN's 21.6 behind: a bet, not his all-in
+  });
+  test("an earlier-street all-in at the table's amount: the flop pot rolls with it", () => {
+    const flop = ["X", "R1", "C", "RAI", "F", "F", "C"];
+    const lr = heroVsAggressor({ ...base, streets: [flop, ["X", "R5"]], streetSeats: [FLOP_SEATS, ["CO", "BTN"]], amounts: [[null, null, null, 8, null, null, null], [null, null]] })!;
+    expect(lr.pot).toBe(27.4);   // 10.4 + the BB's folded 1 + the BTN's 8 all-in (not his 31.6) + hero's call of it
+  });
+  test("other villains' chips are dead money only up to what hero can win (contestedChips)", () => {
+    // hero CO 20 behind; SB bets 60 (stack 100), BB calls 60, the BTN raises all-in 90: hero vs the BTN, dead SB + BB
+    const lr = heroVsAggressor({ ...base, behind: { SB: 100, BB: 100, CO: 20, BTN: 90 }, flopStack: 100,
+      streets: [["R60", "C", "RAI"]], streetSeats: [["SB", "BB", "BTN"]], amounts: [[null, null, 90]] })!;
+    expect(lr.villain).toBe("BTN");
+    expect(lr.dead).toBe(40);                 // 20 of the SB's 60 and 20 of the BB's: hero can win no more of them
+    expect(lr.bet).toBe(20);                  // the BTN's 90 is a 20 all-in against hero's 20
+  });
+});
