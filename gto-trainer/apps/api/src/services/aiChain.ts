@@ -14,7 +14,7 @@ import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
 import { currentRequestScope } from "./requestScope";
 import {
   checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime,
-  checkTrees, checkWarmTree, guardCheck, guardChecks, solveTimes, type CheckResult,
+  solvePopulation, checkTrees, checkWarmTree, guardCheck, guardChecks, solveTimes, type CheckResult,
 } from "./chainChecks";
 
 /**
@@ -71,6 +71,10 @@ export interface AiChainSpec {
    *  of the seats still in (hero against the deepest villain left). Seats missing here, or the whole map absent, keep
    *  the old rolled number. */
   seatStacks?: Record<string, number>;
+  /** HOW MANY PLAYERS WERE DEALT in the hand, hero included (utils/dealtSeats.dealtCount) — 2026-10-03. Only check #4
+   *  reads it: the heads-up postflop order (big blind first) holds on a table dealt two, never on a blind-vs-blind pot
+   *  at a table dealt three or more. Absent = unknown (an SB-vs-BB pot is then not ordered by the check). */
+  dealt?: number;
   /** Concatenated short cards for the full observed board ("7cKdAh8c3s"). */
   board: string;
   /** GTOW tokens per street (X/C/F/R<bb>/RAI), up to and including the
@@ -1058,17 +1062,19 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const trees = handKey ? handFacts.trees(handKey).filter((t) => t.k === k && t.first === first && (t.plan ?? null) === plan) : [];
       const warm = trees.filter((t) => t.origin === "warm");
       const ms = streetRec.solveMs + streetRec.walkMs;
-      const timeKey = `${STREET[k]}:${streetRec.created ? "new" : "cached"}`;
+      // #12's populations (2026-10-03): a full cache hit and a cached tree whose nodes were fetched are kept apart
+      const population = solvePopulation(streetRec.created, streetRec.nodeSrc);
+      const timeKey = `${STREET[k]}:${population}`;
       const base = solveTimes.median(timeKey);
       const out: CheckResult[] = [
         saneCheck,
         guardCheck(3, () => checkMistakeLines(offs, villainActs)),
-        guardCheck(4, () => checkSeats({ players: streetRec.players, agreed: seatAgreed, unnamed: seatUnnamed, warmSeats: warm[0]?.seats ?? null, origin })),
+        guardCheck(4, () => checkSeats({ players: streetRec.players, agreed: seatAgreed, unnamed: seatUnnamed, warmSeats: warm[0]?.seats ?? null, origin, dealt: spec.dealt ?? null })),
         guardCheck(6, () => checkLine({ captured, walked: walkedActs })),
         guardCheck(9, () => checkTrees({ street, tree: streetRec.created ? "created" : "cached", leak: streetRec.leak, trees })),
         guardCheck(10, () => checkNodeReads({ leak: streetRec.leak, reads: streetRec.nodeSrc })),
         guardCheck(11, () => checkWarmTree({ street, origin, solId: streetRec.solId, fixed: fixedLevels, warm: [...new Set(warm.map((t) => t.solId))] })),
-        guardCheck(12, () => checkSolveTime({ street, ms, median: base.median, samples: base.samples, created: streetRec.created })),
+        guardCheck(12, () => checkSolveTime({ street, ms, median: base.median, samples: base.samples, created: streetRec.created, population })),
       ];
       solveTimes.record(timeKey, ms);
       if (atHero) {

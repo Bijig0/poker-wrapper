@@ -136,3 +136,66 @@ describe("decisionChecks: the answer's own #12 #14 #15 #16", () => {
     expect(dup[0]!.covered).toBe("fault:capture-fault");
   });
 });
+
+/**
+ * #14 ON THE REAL HANDS (2026-10-03, audit finding 5): the three answers #14 failed since 2026-09-27, as the capture
+ * stood when each was asked (poker.sqlite hands.data, cut back to the decision; Ignition's own history agrees).
+ */
+describe("decisionChecks #14 on the three hands it failed", () => {
+  const aiPre = (actions: { action: string; frequency: number }[], pos: string): FastSolveResult => ({
+    ok: true, source: "gtow-ai-preflop", street: "preflop", setId: "gtow-ai-preflop", gametype: "x", depth: 59, line: "", pos, heroClass: "x",
+    actions: actions.map((a) => ({ ...a, ev: 0, betsize: null })) as any, decision: null,
+  });
+  // 4921651217 (2026-09-30): seats 1 BB, 2 CO (hero, 6c2h), 4 BTN, 6 SB — seat 4 sat out (not in liveSeats, no action),
+  // so three were dealt; Ignition's history names hero UTG; the AI tree "3-handed · BTN:109/SB:70/BB:59" put hero's
+  // 108.8bb at its BTN. Hero is first to act facing the big blind: Fold 99.98.
+  const deadButton = (id: string, stacks: Record<number, number>) => normalizeHand({
+    handId: 19, clientHandId: id, bbCents: 5, heroSeatId: 2, heroCards: ["6♣", "2♥"], board: [], street: "preflop",
+    liveSeats: [1, 2, 6], committed: { 6: 0.4, 1: 1 }, potByStreet: {}, positions: { 6: "SB", 1: "BB", 2: "CO", 4: "BTN" },
+    stacks, startStacks: stacks,
+    currentNode: { street: "preflop", toActSeatId: 2, toActIsHero: true, pot: 1.4, toCall: 1, legalActions: [], complete: false },
+    actions: [
+      { seatId: 6, hero: false, type: "post-sb", street: "preflop", amount: 0.4 },
+      { seatId: 1, hero: false, type: "post-bb", street: "preflop", amount: 1 },
+    ],
+    heroFolded: false, ended: false, lineSource: "ws", sessionId: "session_20260930_150739", stakes: "$0.02/$0.05",
+  }).hand!;
+  it("4921651217 / 4922085772: a dead button, three dealt — the tree's BTN is hero's CO seat: pass", () => {
+    const h = deadButton("4921651217", { 1: 57.8, 2: 108.8, 6: 69.4 });
+    const xs = decisionChecks(h, aiPre([{ action: "Fold", frequency: 99.98 }], "BTN"), "live", 4237, "CO");
+    const c14 = xs.find((x) => x.id === 14)!;
+    expect(c14.status).toBe("pass");
+    expect(c14.text).toContain("hero's CO is the tree's BTN at a table dealt 3");
+    // a node of another seat at the same table still fails
+    expect(decisionChecks(h, aiPre([{ action: "Fold", frequency: 100 }], "SB"), "live", 4237, "CO").find((x) => x.id === 14)!.status).toBe("fail");
+    expect(classifyPath({ street: "preflop", streets: [], checks: { preflop: xs } }).verdict).toBe("clean");
+  });
+  it("4921673474: QQ in the BB, 13 in, the button shoves 111.8 — All-in is the call for 87: pass", () => {
+    const h = normalizeHand({
+      handId: 3, clientHandId: "4921673474", bbCents: 5, heroSeatId: 1, heroCards: ["Q♠", "Q♥"], board: [], street: "preflop",
+      liveSeats: [1, 2, 3, 5, 6], committed: { 1: 13, 5: 111.8, 6: 0.4, 3: 1 }, potByStreet: {},
+      positions: { 6: "SB", 1: "BB", 2: "HJ", 3: "CO", 5: "BTN" },
+      stacks: { 1: 87, 2: 92.4, 3: 124.8, 5: 0, 6: 21.8 }, startStacks: { 6: 22.2, 1: 100, 2: 92.4, 3: 125.8, 5: 111.8 },
+      currentNode: { street: "preflop", toActSeatId: 1, toActIsHero: true, pot: 126.2, toCall: 98.8, legalActions: [], complete: false },
+      actions: [
+        { seatId: 6, hero: false, type: "post-sb", street: "preflop", amount: 0.4 },
+        { seatId: 1, hero: true, type: "post-bb", street: "preflop", amount: 1 },
+        { seatId: 2, hero: false, type: "fold", street: "preflop" },
+        { seatId: 3, hero: false, type: "call", street: "preflop", amount: 1 },
+        { seatId: 5, hero: false, type: "raise", street: "preflop", amount: 7 },
+        { seatId: 6, hero: false, type: "fold", street: "preflop" },
+        { seatId: 1, hero: true, type: "raise", street: "preflop", amount: 13 },
+        { seatId: 3, hero: false, type: "fold", street: "preflop" },
+        { seatId: 5, hero: false, type: "raise", street: "preflop", amount: 111.8 },
+      ],
+      heroFolded: false, ended: false, lineSource: "ws", sessionId: "session_20260930_190719", stakes: "$0.02/$0.05",
+    }).hand!;
+    expect(h.stacks?.[1]).toBe(87);
+    const xs = decisionChecks(h, aiPre([{ action: "Fold", frequency: 0.17 }, { action: "All-in", frequency: 99.83 }], "BB"), "live", 4537, "BB");
+    const c14 = xs.find((x) => x.id === 14)!;
+    expect(c14.status).toBe("pass");
+    expect(c14.text).toContain("its all-in is the call for less (87bb behind, 98.8bb to call)");
+    // a SIZED raise there is still impossible
+    expect(decisionChecks(h, aiPre([{ action: "Raise 40", frequency: 100 }], "BB"), "live", 4537, "BB").find((x) => x.id === 14)!.status).toBe("fail");
+  });
+});
