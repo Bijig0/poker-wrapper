@@ -6,7 +6,7 @@ import {
   CHECKS, SolveTimes, addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkCode, checkFlopArrival,
   checkFresh, checkHandoff, checkHeroCombo, checkLine, checkMistakeLines, checkMix, checkNodeReads, checkPotStack,
   checkPreflopInRange, checkRake, checkRangesSane, checkReasons, checkSeats, checkSolveTime, checkTrees, checkWarmTree,
-  comboName, coverageReport, expectedOrder, mergeChecks, type CheckResult, type PathChecks,
+  comboName, coverageReport, dealtSetName, expectedOrder, mergeChecks, solvePopulation, SOLVE_FLAG_NOTE, type CheckResult, type PathChecks,
 } from "./chainChecks";
 import { classifyPath, cleanRate, VERDICT_LABEL } from "./chainPath";
 import { comboIndex } from "../utils/comboIndex/comboIndex";
@@ -43,6 +43,19 @@ describe("folding results: the worst status wins, a failure is a reason, a flag 
       { id: 11, status: "na", text: "x" }, { id: 11, status: "na", text: "y" },
     ]);
     expect(m.map((x) => [x.id, x.status, x.text])).toEqual([[5, "fail", "b"], [11, "na", "x · y"], [12, "pass", "flop 1.2 s · answered in 3 s"]]);
+  });
+  it("a flag keeps the passes beside it (#12: the median flag and the clock's pass); a fail still shows only fails", () => {
+    const flag = mergeChecks([
+      { id: 12, status: "pass", text: "answered in 3.1 s, inside the 15.0 s action clock" },
+      { id: 12, status: "flag", text: "the flop took 2.8 s, over 3× its rolling median of 0.6 s" }, { id: 12, status: "na", text: "x" },
+    ]);
+    expect(flag).toEqual([{ id: 12, status: "flag", text: "the flop took 2.8 s, over 3× its rolling median of 0.6 s · answered in 3.1 s, inside the 15.0 s action clock" }]);
+    const failed = mergeChecks([
+      { id: 12, status: "flag", text: "slow street" }, { id: 12, status: "fail", text: "the answer took 16.3 s, past the 15.0 s action clock" },
+    ]);
+    expect(failed).toEqual([{ id: 12, status: "fail", text: "the answer took 16.3 s, past the 15.0 s action clock" }]);
+    expect(classifyPath({ street: "flop", streets: [], checks: { flop: flag } }).verdict).toBe("clean");
+    expect(classifyPath({ street: "flop", streets: [], checks: { flop: failed } }).verdict).toBe("failed");
   });
   it("a collapse plan's results carry its name", () => {
     const c: PathChecks = {};
@@ -141,11 +154,34 @@ describe("#3 villain mistake lines: a flag, never a fail", () => {
 });
 
 describe("#4 seats right", () => {
-  it("postflop order by position; heads-up the big blind first", () => {
+  it("postflop order by position; on a table DEALT two the big blind first", () => {
     expect(expectedOrder(["BTN", "BB"])).toEqual(["BB", "BTN"]);
-    expect(expectedOrder(["BB", "SB"])).toEqual(["BB", "SB"]);
+    expect(expectedOrder(["BTN", "BB"], 2)).toEqual(["BB", "BTN"]);
+    expect(expectedOrder(["BTN", "BB"], 6)).toEqual(["BB", "BTN"]);
+    expect(expectedOrder(["BB", "SB"], 2)).toEqual(["BB", "SB"]);
+    expect(expectedOrder(["SB", "BB"], 2)).toEqual(["BB", "SB"]);
     expect(expectedOrder(["CO", "SB", "BB"])).toEqual(["SB", "BB", "CO"]);
     expect(expectedOrder(["SB+BB", "CO"])).toBeNull();
+  });
+  it("a blind-vs-blind pot at a table dealt 3-6 is the small blind first (audit finding 5: 198 false fails); dealt unknown: not ordered", () => {
+    for (const dealt of [3, 4, 5, 6]) {
+      expect(expectedOrder(["SB", "BB"], dealt)).toEqual(["SB", "BB"]);
+      const r = checkSeats({ players: ["SB", "BB"], agreed: 4, unnamed: 0, warmSeats: ["SB", "BB"], origin: "live", dealt });
+      expect(r.status).toBe("pass");
+      expect(r.text).toContain(`in postflop order by position (${dealt} dealt)`);
+      // the tree the old check wanted is now the wrong one
+      expect(checkSeats({ players: ["BB", "SB"], agreed: 4, unnamed: 0, dealt }).status).toBe("fail");
+    }
+    const hu = checkSeats({ players: ["BB", "SB"], agreed: 4, unnamed: 0, dealt: 2 });
+    expect([hu.status, hu.text.includes("heads-up, the big blind first")]).toEqual(["pass", true]);
+    const huWrong = checkSeats({ players: ["SB", "BB"], agreed: 4, unnamed: 0, dealt: 2 });
+    expect([huWrong.status, huWrong.text]).toEqual(["fail", "the tree seats SB → BB in acting order; by position it is BB → SB (out of position first; 2 dealt)"]);
+    expect(expectedOrder(["SB", "BB"])).toBeNull();
+    expect(expectedOrder(["SB", "BB"], null)).toBeNull();
+    const unknown = checkSeats({ players: ["SB", "BB"], agreed: 2, unnamed: 0 });
+    expect([unknown.status, unknown.text.includes("a blind-vs-blind order is not checked")]).toEqual(["pass", true]);
+    // the re-score has no node count: it says so instead of claiming one
+    expect(checkSeats({ players: ["SB", "BB"], agreed: null, unnamed: null, dealt: 5 }).text).toContain("the node agreement was not recorded");
   });
   it("OOP out of order, or a warm-up seated otherwise: fail", () => {
     expect(checkSeats({ players: ["CO", "BB"], agreed: 2, unnamed: 0 }).status).toBe("fail");
@@ -251,13 +287,28 @@ describe("#12 solve time bounded", () => {
     for (let i = 1; i <= 60; i++) t.record("FLOP:new", i * 100);
     expect(t.median("FLOP:new")).toEqual({ median: 3550, samples: 50 });
   });
-  it("na until a baseline; over 3× (and a second) the median fails; the multiple is configurable", () => {
+  it("na until a baseline; over 3× (and a second) the median is a FLAG, never a fail; the multiple is configurable", () => {
     expect(checkSolveTime({ street: "flop", ms: 9000, median: 2000, samples: 4, created: true }).status).toBe("na");
-    expect(checkSolveTime({ street: "flop", ms: 9000, median: 2000, samples: 20, created: true }).status).toBe("fail");
+    const slow = checkSolveTime({ street: "flop", ms: 9000, median: 2000, samples: 20, created: true });
+    expect(slow.status).toBe("flag");
+    expect(slow.text).toBe(`the flop took 9.0 s, over 3× its rolling median of 2.0 s (new trees, last 20)${SOLVE_FLAG_NOTE}`);
     expect(checkSolveTime({ street: "flop", ms: 5000, median: 2000, samples: 20, created: true }).status).toBe("pass");
     expect(checkSolveTime({ street: "flop", ms: 40, median: 5, samples: 20, created: false }).status).toBe("pass");   // under a second over
     process.env.CHECK_SOLVE_MEDIAN_X = "2";
-    expect(checkSolveTime({ street: "flop", ms: 5000, median: 2000, samples: 20, created: true }).status).toBe("fail");
+    expect(checkSolveTime({ street: "flop", ms: 5000, median: 2000, samples: 20, created: true }).status).toBe("flag");
+    // the case the log is full of (hand 4921619944): a normal 2.8 s walk against a median a run of cache hits pulled to 0.6 s
+    const noise = checkSolveTime({ street: "flop", ms: 2800, median: 600, samples: 21, created: false, population: "cached-fetched" });
+    expect(noise.status).toBe("flag");
+    expect(classifyPath({ street: "flop", streets: [], checks: { flop: [noise] } }).verdict).toBe("clean");
+  });
+  it("three populations: new trees, cached trees served from the cache, cached trees whose nodes were fetched", () => {
+    expect(solvePopulation(true, { joined: 0, fetched: 3 })).toBe("new");
+    expect(solvePopulation(false, { joined: 0, fetched: 0 })).toBe("cached-hit");
+    expect(solvePopulation(false, null)).toBe("cached-hit");
+    expect(solvePopulation(false, { joined: 1, fetched: 0 })).toBe("cached-fetched");
+    expect(solvePopulation(false, { joined: 0, fetched: 2 })).toBe("cached-fetched");
+    expect(checkSolveTime({ street: "turn", ms: 2500, median: 2400, samples: 12, created: false, population: "cached-fetched" }).text).toContain("cached trees, nodes fetched");
+    expect(checkSolveTime({ street: "turn", ms: 25, median: 24, samples: 12, created: false, population: "cached-hit" }).text).toContain("every node from the cache");
   });
   it("a live answer inside the action clock; other origins are not against it", () => {
     expect(checkAnswerClock({ ms: 4200, origin: "live" }).status).toBe("pass");
@@ -275,13 +326,52 @@ describe("#14 buttons, #15 mix, #16 fresh, #17 hero's combo", () => {
     expect(checkButtons({ actions: mix(["Check", 60], ["Bet 3", 40]), toCall: 3 }).text).toContain("CHECK facing 3bb");
     expect(checkButtons({ actions: mix(["Fold", 10], ["Check", 90]), toCall: 0 }).status).toBe("fail");
     expect(checkButtons({ actions: mix(["Fold", 10], ["Check", 0], ["Bet 3", 90]), toCall: 0 }).status).toBe("fail");
-    expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 20], ["Allin", 30]), toCall: 20, heroBehind: 15 }).text).toContain("all in");
+    const sized = checkButtons({ actions: mix(["Fold", 50], ["Call", 20], ["Raise 40", 30]), toCall: 20, heroBehind: 15 });
+    expect([sized.status, sized.text]).toEqual(["fail", "the answer offers a raise (Raise 40) although calling 20bb puts hero all in (15bb behind)"]);
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "BTN", heroPos: "CO" }).status).toBe("fail");
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "SB", heroPos: "BTN", hu: true }).status).toBe("pass");
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "OOP", heroPos: "CO" }).status).toBe("pass");
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "BU", heroPos: "BTN" }).status).toBe("pass");   // a chart's name for the button
     expect(checkButtons({ actions: mix(["Fold", 50], ["Call", 50]), toCall: 1, nodePos: "LJ", heroPos: "UTG" }).status).toBe("pass");   // another vocabulary: not evidence
     expect(checkButtons({ actions: mix(["Check", 100]), toCall: 0, legal: ["fold", "call"] }).status).toBe("fail");
+  });
+  it("#14: an all-in for no more than the call IS the call (hand 4921673474: QQ, 98.8 to call, 87 behind, ALL-IN 87 BB offered)", () => {
+    // the stored answer: All-in 99.83 / Fold 0.17, hero's stack as dealt 100 (the tree's BB:100), 13 in, 87 behind
+    const r = checkButtons({ actions: mix(["Fold", 0.17], ["All-in", 99.83]), toCall: 98.8, heroBehind: 87, legal: [], nodePos: "BB", heroPos: "BB" });
+    expect(r.status).toBe("pass");
+    expect(r.text).toContain("its all-in is the call for less (87bb behind, 98.8bb to call)");
+    for (const l of ["Allin", "ALL-IN 87 BB", "All In", "Jam"]) expect(checkButtons({ actions: mix([l, 100]), toCall: 20, heroBehind: 15 }).status).toBe("pass");
+    // an all-in that is MORE than the call is a raise, and fine when hero has chips behind the call
+    expect(checkButtons({ actions: mix(["All-in", 100]), toCall: 5, heroBehind: 40 }).status).toBe("pass");
+  });
+  it("#14: the node names hero's seat as a tree for that many DEALT names it (hands 4921651217, 4922085772: dead button)", () => {
+    // three dealt — CO (hero), SB, BB — the BTN seat sat out: GTO Wizard's three-handed tree calls hero's seat BTN
+    const dead = { actions: mix(["Fold", 99.98]), toCall: 1, legal: [] as string[], nodePos: "BTN", heroPos: "CO", hu: false, dealtLabels: ["BB", "CO", "SB"] as string[] | null };
+    const r = checkButtons(dead);
+    expect(r.status).toBe("pass");
+    expect(r.text).toContain("hero's CO is the tree's BTN at a table dealt 3 (BB/CO/SB)");
+    // another seat's node is still caught: the tree's SB or BB answering for hero's CO
+    expect(checkButtons({ ...dead, nodePos: "SB" }).status).toBe("fail");
+    expect(checkButtons({ ...dead, nodePos: "BB" }).text).toBe("the answer is BB's node, not hero's (CO; BTN in the names of a table dealt 3)");
+    // without the dealt seats the old comparison stands (the table's label only)
+    expect(checkButtons({ ...dead, dealtLabels: null }).status).toBe("fail");
+    // four dealt with the BTN seat empty: HJ, CO, SB, BB → the tree's CO, BTN
+    expect(checkButtons({ ...dead, heroPos: "CO", nodePos: "BTN", dealtLabels: ["HJ", "CO", "SB", "BB"] }).status).toBe("pass");
+    expect(checkButtons({ ...dead, heroPos: "HJ", nodePos: "CO", dealtLabels: ["HJ", "CO", "SB", "BB"] }).status).toBe("pass");
+    expect(checkButtons({ ...dead, heroPos: "HJ", nodePos: "BTN", dealtLabels: ["HJ", "CO", "SB", "BB"] }).status).toBe("fail");
+  });
+  it("dealtSetName: GTO Wizard's seat names for a table dealt N", () => {
+    expect(dealtSetName("CO", ["CO", "SB", "BB"])).toBe("BTN");
+    expect(dealtSetName("UTG", ["UTG", "HJ", "CO", "BTN", "SB", "BB"])).toBe("UTG");
+    expect(dealtSetName("HJ", ["HJ", "CO", "BTN", "SB", "BB"])).toBe("HJ");
+    expect(dealtSetName("CO", ["UTG", "CO", "BTN", "SB", "BB"])).toBe("CO");     // UTG, CO, BTN -> HJ, CO, BTN
+    expect(dealtSetName("UTG", ["UTG", "CO", "BTN", "SB", "BB"])).toBe("HJ");
+    expect(dealtSetName("BTN", ["BTN", "BB"])).toBe("SB");                     // heads-up: the dealer is the small blind
+    expect(dealtSetName("BU", ["BU", "SB", "BB"])).toBe("BTN");
+    expect(dealtSetName("CO", ["CO", "BTN", "BB"])).toBe("CO");                // dead SB: the four-handed set with an SB ghost
+    expect(dealtSetName("SB", ["CO", "SB", "BB"])).toBe("SB");
+    expect(dealtSetName("CO", ["SB", "BB"])).toBeNull();                       // hero not among the dealt
+    expect(dealtSetName("CO", ["SB+BB", "CO"])).toBeNull();
   });
   it("#15: ~100%, not all zero", () => {
     expect(checkMix(mix(["Check", 60], ["Bet", 40])).status).toBe("pass");
