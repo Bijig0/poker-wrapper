@@ -95,7 +95,7 @@ const app = new Hono();
 
 // LIVE ANSWERS GO FIRST (services/livePriority): these pages recompute over every hand and answer on the thread that
 // answers hero's decisions, so each one waits for a live answer to finish before it starts. Only the browser pages'
-// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /sources/strategies|registry) never wait.
+// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /gtow-token, /sources/strategies|registry) never wait.
 for (const p of ["/hands", "/analytics", "/hand/*", "/sessions/*", "/profiles/*"]) app.use(p, yieldFirst);  // "/x/*" covers "/x" too
 
 interface HandRow {
@@ -2943,6 +2943,18 @@ async function gtowStatus() {
   };
 }
 app.get("/gtow-status", async (c) => c.json(await gtowStatus()));
+/**
+ * GET /gtow-token — the light token check (2026-10-03): is a GTO Wizard token in hand, and a multiway one. The
+ * wrapper's chain keeper asks this every 20 s per table; it used to ask /sources/registry, which builds the whole
+ * mission-control page (30 days of the answer log, many sync file reads, three network probes) and held the event
+ * loop 0.1-3 s a call — api.log's [stall] lines named it as open in 1,294 stalls, the next route in 389. These are
+ * the registry's own armed.gtow.tokenLive / multiwayLive (gtowApi.tokenStatus(), memory only): no probe, no file
+ * read, no await. Anything that needs the client's state as well asks /gtow-status.
+ */
+app.get("/gtow-token", (c) => {
+  const t = gtowApi.tokenStatus();
+  return c.json({ ok: true, tokenLive: t.live, multiwayLive: t.multiwayLive, expiresInMs: t.expiresInMs });
+});
 /**
  * POST /gtow-connect — bring a session back.
  *

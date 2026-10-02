@@ -92,10 +92,41 @@ export async function realFetchRegistry(timeoutS = 6.0): Promise<any | null> {
   }
 }
 
+/**
+ * The light token check (2026-10-03): GET /api/dashboard/gtow-token → { tokenLive, multiwayLive, expiresInMs }, the
+ * chain keeper's question every 20 s per table (session.ts ensureAnswerChain). It used to read the registry's
+ * armed.gtow, and the registry builds the whole mission-control page: 0.1-3 s of the API's event loop a call, 12-79 s
+ * on a busy machine or a just-restarted API — and the 6 s give-up then read as "GTO Wizard not connected".
+ *
+ * null = the API did not answer (too slow, refused, a 5xx) — which says NOTHING about GTO Wizard. An API older than
+ * this wrapper has no such route and answers 404: then the registry's armed.gtow, as before.
+ */
+export async function realFetchGtowToken(timeoutS = 4.0): Promise<any | null> {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutS * 1000);
+  let status: number;
+  try {
+    const r = await fetch(`${API()}/api/dashboard/gtow-token`, { signal: ctl.signal });
+    status = r.status;
+    if (r.ok) {
+      const j = await r.json();
+      return j && j.ok ? j : null;
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+  if (status !== 404) return null;
+  const reg = await deps.fetchRegistry();
+  return reg ? (reg.armed || {}).gtow || {} : null;
+}
+
 /** Swappable for tests (the goldens replay a captured catalogue and patch the balance / net probes). */
 export const deps = {
   fetchStrategies: realFetchStrategies,
   fetchRegistry: realFetchRegistry,
+  fetchGtowToken: realFetchGtowToken,
   scrapeCached: (port: number) => balances.scrapeCached(port),
   latestBalance: (profile: string) => balances.latest(profile) as any,
   netCached: () => netcheck.cached(),
@@ -110,6 +141,7 @@ export const deps = {
 };
 
 export const fetchRegistry = (timeoutS = 6.0) => deps.fetchRegistry(timeoutS);
+export const fetchGtowToken = (timeoutS = 4.0) => deps.fetchGtowToken(timeoutS);
 
 export const CHART_CHECKS: Record<string, string | null> = {
   "hrc-6max": "hrc6max",
