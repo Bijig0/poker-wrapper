@@ -346,6 +346,12 @@ class GtowApi {
         return seats.map((_, i) => fixedOf(i, lists));
       }
       return seats.map((_, i) => {
+        // AUTOMATIC ON PURPOSE — Brady's decision, 2026-10-03: the seat that has not wagered on the street is AUTOMATIC
+        // even where that means no all-in at its node (probed: GTO Wizard's automatic sizing decides whether to offer
+        // one, `add_allin` does not change it, and the 3 nodes measured that lost it had played the all-in 0%). The
+        // "all-in stays where it was" rule of the 2026-10-03 brief (item 8) does NOT apply to AUTOMATIC seats. Do not
+        // make this seat FIXED to get the all-in back: a FIXED seat's null raise list is the min-raise, not GTO Wizard's
+        // size, and a listed one is a size we chose.
         if (!ws.some((w) => w.seat === i)) return auto(i);
         const lists: (readonly string[] | null)[] = [lvAmt(0), null, null, null];
         for (const lv of [1, 2, 3]) {

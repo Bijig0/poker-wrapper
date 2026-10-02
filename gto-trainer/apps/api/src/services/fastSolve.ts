@@ -1229,27 +1229,20 @@ export function chainPathChecks(a: {
    * the same rule on the tree's side). Heads-up a 150bb shove into 50 behind is a 50bb bet in the pot hero can win.
    * Without the dealt stacks, every chip counts (the old reading).
    */
+  // the seats that acted in the hand (posts included): only they can match a bet
+  const acted = new Set(hand.actions.map((x) => (x.hero ? hand.heroSeatId : x.seatId)));
   const chipsOn = (st: string) => {
     const m = contrib.get(st);
     if (!m) return 0;
-    const ent = [...m.entries()];
-    if (!a.dealt || st === "preflop") return ent.reduce((s, [, x]) => s + x, 0);
+    if (!a.dealt) return [...m.values()].reduce((s, x) => s + x, 0);
     const k = roundIdx(st);
-    const out = foldedBy(st);
     const stackIn = (sid: number) => {
       const d = a.dealt![sid];
-      if (d == null || !Number.isFinite(d)) return Infinity;
+      if (d == null || !Number.isFinite(d)) return null;
       return d - ROUND_ORDER.slice(0, k).reduce((s, r) => s + (contrib.get(r)?.get(sid) ?? 0), 0);
     };
-    const seatsIn = Object.keys(hand.positions ?? {}).map(Number);
-    return ent.reduce((s, [sid, x]) => {
-      let most = 0;
-      for (const t of new Set([...seatsIn, ...m.keys()])) {
-        if (t === sid) continue;
-        most = Math.max(most, out.has(t) ? (m.get(t) ?? 0) : stackIn(t));
-      }
-      return s + Math.min(x, most);
-    }, 0);
+    // the same rule the flop pot is sent with (tableFlopPot) and the tree walks with (aiChain StreetState.matched)
+    return matchedRound(m, acted, foldedBy(st), stackIn).sum;
   };
   const potBefore = (k: number) => ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + chipsOn(st), 0) + a.potExtra;
   const cur = hand.currentNode.street;
@@ -1375,11 +1368,12 @@ function withChecks(p: DecisionPath, street: string, xs: CheckResult[]): Decisio
  * the K9o river-donk misfire this replaced.
  *
  * THE SEATBELT (2026-10-03, check #5): an answer whose tree was solved at a pot that is not the table's — entering a
- * street, or at hero's node, beyond the check's tolerance — is not served as it is. The decision is solved once more
- * from the table's state (the hand's chain memo and arrival memo dropped, so every street is rebuilt from the facts);
- * if the pot still disagrees, the answer is REFUSED with the two pots named, rather than served from a wrong pot. Before
- * this, check #5 flagged such answers (15 decisions to 2026-10-02, hand 4922087007's 134.1 against the table's 64.2)
- * and nothing acted on it.
+ * street, or at hero's node, beyond the check's tolerance — is not served as it is. The pot entering the flop is the
+ * table's money on every solve (tableFlopPot), so what is left for it to catch is a later street rolled wrong. The
+ * decision is solved once more with the hand's chain memo and arrival memo dropped (every street walked again, nothing
+ * derived reused); if the pot still disagrees, the answer is REFUSED with the two pots named, rather than served from a
+ * wrong pot. Before this, check #5 flagged such answers (15 decisions to 2026-10-02, hand 4922087007's 134.1 against the
+ * table's 64.2) and nothing acted on it.
  */
 async function solvePostflopViaChain(...args: Parameters<typeof solvePostflopViaChainOnce>): ReturnType<typeof solvePostflopViaChainOnce> {
   const [hand] = args;
@@ -1387,11 +1381,9 @@ async function solvePostflopViaChain(...args: Parameters<typeof solvePostflopVia
   const off = potOffOf(first.res);
   if (!off) return first;
   const handKey = String(hand.clientHandId ?? hand.handId ?? "");
-  tmark("seatbelt: the tree's pot is not the table's", `${off} — solving again from the table's state`);
+  tmark("seatbelt: the tree's pot is not the table's", `${off} — solving again with nothing derived reused`);
   if (handKey) { forgetChainMemo(handKey); forgetArrival(handKey); }
-  const a2 = [...args] as Parameters<typeof solvePostflopViaChainOnce>;
-  a2[12] = true;   // fromTable: the pot entering the flop as the table's money has it
-  const again = await solvePostflopViaChainOnce(...a2);
+  const again = await solvePostflopViaChainOnce(...args);
   if (!again.res) return again;
   const off2 = potOffOf(again.res);
   if (!off2) {
@@ -1432,8 +1424,6 @@ async function solvePostflopViaChainOnce(
   /** the CoinPoker ring strategy (2026-09-30): ranges from the AI preflop tree built from the table, the antes of
    *  every dealt seat in the pot, the rake the CoinPoker server states for the table */
   cpRing = false,
-  /** the seatbelt's second solve: the pot entering the flop from the table's money, not from the tokens */
-  fromTable = false,
 ): Promise<{ res: FastSolveResult | null; why: string | null; mesInput?: RiverMesInput }> {
   const tEntry = Date.now();
   const fail = (why: string) => ({ res: null, why });
@@ -1508,19 +1498,22 @@ async function solvePostflopViaChainOnce(
   // pot — the same count the chain's pot check makes (potExtra below: the ante times the seats dealt)
   const anteRing = cpRing && hand.anteBb ? hand.anteBb * Object.keys(hand.positions ?? {}).length : 0;
   // …and a posted-in player who folded left his post in the pot, which no token carries (utils/foldPostIns)
-  let flopPot = Math.round((pps.pot + 2 * anteHu + anteRing + deadPostsBb(hand.postIns, cur)) * 100) / 100;
-  // THE SEATBELT'S RE-SOLVE TAKES THE POT FROM THE TABLE (2026-10-03): the pot entering the flop as the capture's money
-  // has it — every seat's preflop chips, antes, dead posts — not as the line's tokens rebuild it. The rebuild assumes a
-  // half-blind small blind and a small blind at all: a table with no small blind posted (hands 4921628906, 4921650780:
-  // the tree 1-2.5bb over the table on every street) or a 0.4bb one (NL5) is priced wrong from the flop on.
-  if (fromTable) {
-    const pre = roundContributions(hand).get("preflop");
-    const table = Math.round(([...(pre?.values() ?? [])].reduce((s, x) => s + x, 0) + 2 * anteHu + anteRing + deadPostsBb(hand.postIns, cur)) * 100) / 100;
-    if (table > 0 && Math.abs(table - flopPot) > 0.005) {
-      const note = `SEATBELT: the flop pot from the line's tokens was ${flopPot}bb, the table's ${table}bb — solved at the table's`;
-      sixNote = sixNote ? `${sixNote} · ${note}` : note;
-      flopPot = table;
+  const tokenPot = Math.round((pps.pot + 2 * anteHu + anteRing + deadPostsBb(hand.postIns, cur)) * 100) / 100;
+  // THE POT ENTERING THE FLOP IS THE TABLE'S MONEY (2026-10-03, Brady): every seat's preflop chips that can be matched,
+  // plus the antes and a folded poster's dead post (tableFlopPot) — on every solve. The line's tokens rebuild it
+  // (preflopPotStack) assuming a half-blind small blind and a small blind at all: a table with no small blind posted
+  // (hands 4921628906, 4921650780: the tree 1-2.5bb over the table on every street) or a 0.4bb one (NL5, +0.1bb) was
+  // priced wrong from the flop on. The rebuild is kept only as a cross-check: a difference past a cent is said.
+  const table = tableFlopPot(hand, pinnedDealt ?? dealtBySeat(hand), { anteHu, anteRing, street: cur });
+  const flopPot = table.preflop > 0 ? table.pot : tokenPot;
+  {
+    const notes: string[] = [];
+    if (!(table.preflop > 0)) notes.push(`FLOP POT: the capture carries no preflop chips — the line's tokens rebuild ${tokenPot}bb, used`);
+    else if (Math.abs(table.pot - tokenPot) > 0.011) {
+      notes.push(`FLOP POT: the table's ${table.pot}bb is sent; the line's tokens rebuild ${tokenPot}bb (${tokenPot > table.pot ? "over" : "under"} the table by ${Math.round(Math.abs(tokenPot - table.pot) * 100) / 100}bb)`);
     }
+    for (const r of table.returned) notes.push(`FLOP POT: ${hand.positions?.[r.seat] ?? `seat ${r.seat}`}'s uncalled ${r.bb}bb preflop is not in it (returned)`);
+    if (notes.length) sixNote = [sixNote, ...notes].filter(Boolean).join(" · ");
   }
   const flopStack = Math.round(pps.stack * 100) / 100;
   if (flopStack <= 0.5) return fail("preflop line is (near) all-in");
@@ -1596,6 +1589,17 @@ async function solvePostflopViaChainOnce(
   // at the effective stack of the seats IT holds, and the chain re-derives it when a fold shrinks the field.
   const behindFlop = flopSeatStacks({
     seats: flopSeats, depth, flopStack, streets, streetSeats,
+    ...(table.preflop > 0 ? { paidPre: (() => {
+      const out: Record<string, number> = {};
+      const ret = new Map(table.returned.map((x) => [x.seat, x.bb]));
+      for (const [sid, c] of roundContributions(hand).get("preflop") ?? []) {
+        const p = chainPos(sid);
+        const name = p ? flopSeats.find((x) => x.toUpperCase() === p.toUpperCase()) : undefined;
+        // + the seat's ante (CoinPoker: no action carries it, and the dealt stack is before it)
+        if (name) out[name] = Math.round((c - (ret.get(sid) ?? 0) + (huCp ? anteHu : cpRing ? hand.anteBb ?? 0 : 0)) * 100) / 100;
+      }
+      return out;
+    })() } : {}),
     allIns: allInsBySeat.map((x) => ({ ...x, pos: flopSeats.find((p) => p.toUpperCase() === x.pos.toUpperCase()) ?? x.pos })),
     dealtByPos: (() => {
       const bySeat = pinnedDealt ?? dealtBySeat(hand);
@@ -1780,7 +1784,11 @@ async function solvePostflopViaChainOnce(
     const sp = w.seatSpec;
     const heroTree = sp.heroSeat === "oop" ? sp.oopPos : sp.heroSeat === "mid" ? sp.midPos! : sp.ipPos;
     const seats = [sp.oopPos, ...(sp.midPos ? [sp.midPos] : []), sp.ipPos];
-    return Math.min(base, Math.round(effectiveBehind(seats, heroTree, w.seatStacks) * 100) / 100);
+    const eff = Math.round(effectiveBehind(seats, heroTree, w.seatStacks) * 100) / 100;
+    // every seat's own stack known (the table's: dealt less its own preflop chips): their effective stack, not capped by
+    // the one number the line's tokens rebuild for the whole field (2026-10-03); a seat unknown keeps the old cap
+    if (!reroot && w.seatStacks && seats.every((p) => w.seatStacks![p] != null)) return eff;
+    return Math.min(base, eff);
   };
   const stackNote = (w: Walkable): string | null => {
     const base = reroot ? reroot.stack : flopStack, st = treeStackOf(w);
@@ -2029,6 +2037,48 @@ async function solvePostflopViaChainOnce(
  * arithmetic that made flopStack). A reading the hand itself contradicts — a seat that has bet or raised postflop to
  * more than it would have — is left out (unknown: it never lowers a tree), as is one below the preflop level.
  */
+/**
+ * ONE ROUND'S CHIPS THAT CAN BE MATCHED (2026-10-03): each seat's chips in the round (roundContributions), a bet past the
+ * most any other seat that acted in the hand can put in — a seat still in: its stack entering the round (`capOf`); a
+ * seat that folded by the end of the round: its chips — counted only up to that most; the excess is uncalled and goes
+ * back to its owner. The same rule as the tree's side (aiChain StreetState.matched). Returns the matched sum and the
+ * excess per seat. `capOf` null = unknown (no excess is ever taken off a seat whose opponents' stacks are unknown).
+ */
+export function matchedRound(m: Map<number, number> | undefined, actedIn: Set<number>, folded: Set<number>, capOf: (seat: number) => number | null):
+    { sum: number; returned: { seat: number; bb: number }[] } {
+  if (!m) return { sum: 0, returned: [] };
+  let sum = 0;
+  const returned: { seat: number; bb: number }[] = [];
+  for (const [s, c] of m) {
+    let most = 0;
+    for (const t of new Set([...actedIn, ...m.keys()])) {
+      if (t === s) continue;
+      most = Math.max(most, folded.has(t) ? (m.get(t) ?? 0) : (capOf(t) ?? Infinity));
+    }
+    const got = Math.min(c, most);
+    sum += got;
+    if (c - got > 0.005) returned.push({ seat: s, bb: Math.round((c - got) * 100) / 100 });
+  }
+  return { sum: Math.round(sum * 100) / 100, returned };
+}
+
+/**
+ * THE POT ENTERING THE FLOP, FROM THE TABLE (2026-10-03): the preflop chips that can be matched (matchedRound — the
+ * blinds, every call, raise and all-in; a posted-in player's live post rides on his own limp/call/raise, so it is
+ * counted there once) + what no preflop action carries: a folded poster's dead post (deadPostsBb), the antes (CoinPoker:
+ * 2 x ante heads-up, the ante x the seats dealt at a ring table). `preflop` is the matched chips alone (0 = the capture
+ * carries none). `dealt`: each seat's stack as dealt, by seat id — what caps an uncalled excess.
+ */
+export function tableFlopPot(hand: ParsedHand, dealt: Record<number, number> | null | undefined, extra: { anteHu?: number; anteRing?: number; street?: string } = {}):
+    { pot: number; preflop: number; returned: { seat: number; bb: number }[] } {
+  const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const pre = hand.actions.filter((a) => a.street === "preflop");
+  const r = matchedRound(roundContributions(hand).get("preflop"), new Set(pre.map(seatOf)), new Set(pre.filter((a) => a.type === "fold").map(seatOf)),
+    (s) => { const d = dealt?.[s]; return d != null && Number.isFinite(d) ? d : null; });
+  const pot = r.sum + 2 * (extra.anteHu ?? 0) + (extra.anteRing ?? 0) + deadPostsBb(hand.postIns, extra.street ?? "flop");
+  return { pot: Math.round(pot * 100) / 100, preflop: r.sum, returned: r.returned };
+}
+
 export function postflopAllInAmounts(hand: ParsedHand): Record<"flop" | "turn" | "river", (number | null)[]> {
   // the same filter as buildSpotSolutionTokens' streets (posts carry no token; an all-in for no more than the price is a
   // call, "C"), so the arrays line up with the tokens one for one
@@ -2049,6 +2099,9 @@ export function flopSeatStacks(a: {
    *  exactly its earlier streets' chips + A behind entering the flop — the table's own figure, which wins over a
    *  reading that says otherwise (or none). */
   allIns?: { pos: string; k: number; to: number }[];
+  /** EACH SEAT'S OWN PREFLOP CHIPS as the table has them (the matched ones — tableFlopPot), by position (2026-10-03):
+   *  the stack entering the flop is the dealt stack less these, not less the price the line's tokens rebuild */
+  paidPre?: Record<string, number>;
 }): Record<string, number> | undefined {
   const out = flopSeatStacksRead(a);
   if (!a.allIns?.length) return out;
@@ -2075,9 +2128,10 @@ export function flopSeatStacks(a: {
 function flopSeatStacksRead(a: {
   seats: string[]; depth: number; flopStack: number; dealtByPos: Record<string, number>;
   streets: string[][]; streetSeats: (string | null)[][];
+  paidPre?: Record<string, number>;
 }): Record<string, number> | undefined {
   const level = a.depth - a.flopStack;
-  if (!Number.isFinite(level) || level < 0) return undefined;
+  if (!a.paidPre && (!Number.isFinite(level) || level < 0)) return undefined;
   // the most each seat is PROVEN to have put in postflop: its bet/raise-to per street (a call may be all-in for less,
   // and an all-in's size is the seat's own stack, so neither can contradict the reading)
   const spent: Record<string, number> = {};
@@ -2093,7 +2147,10 @@ function flopSeatStacksRead(a: {
   for (const p of a.seats) {
     const d = a.dealtByPos[p];
     if (d == null || !Number.isFinite(d)) continue;
-    const b = Math.round((d - level) * 100) / 100;
+    // the seat's own preflop chips as the table has them (2026-10-03); else the price the line's tokens rebuild
+    const paid = a.paidPre?.[p] ?? level;
+    if (!Number.isFinite(paid)) continue;
+    const b = Math.round((d - paid) * 100) / 100;
     if (b < -0.005 || (spent[p] ?? 0) > b + 0.05) continue;
     out[p] = Math.max(0, b);
   }
