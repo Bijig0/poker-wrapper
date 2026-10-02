@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { alignStrategy, blendStrategies, planCollapses, pickCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
+import { alignedAt, alignStrategy, blendEv, blendEvs, blendStrategies, planCollapses, pickCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
 
 const seat = (pos: string, w = 1): CollapseSeat => ({ pos, range: new Array(6).fill(w) });
 /** four-way flop in postflop order */
@@ -135,5 +135,32 @@ describe("alignStrategy", () => {
 
   it("refuses when the menus differ — the collapses disagree about the tree", () => {
     expect(alignStrategy(["F", "C"], [{ code: "F", strategy: [1] }, { code: "R75", strategy: [0] }])).toBeNull();
+  });
+});
+
+describe("blendEvs: the EV beside a blended mix describes the mix (2026-10-03)", () => {
+  // three hand-made walks of the same node (hero facing a bet: fold / call / raise), hero's combo only
+  const codes = ["F", "C", "R30"];
+  const walks = [
+    [{ code: "F", f: 0.2, ev: 0 }, { code: "C", f: 0.8, ev: 4 }, { code: "R30", f: 0, ev: 9 }],
+    [{ code: "F", f: 0.5, ev: 0 }, { code: "C", f: 0.25, ev: 2 }, { code: "R30", f: 0.25, ev: 6 }],
+    [{ code: "F", f: 0.0, ev: 0 }, { code: "C", f: 0.5, ev: 5 }, { code: "R30", f: 0.5, ev: 3 }],
+  ];
+  it("each action's EV is the walks' EVs weighted by how often each walk plays it", () => {
+    const ev = blendEvs(walks.map((w) => alignedAt(codes, w)!));
+    expect(ev[0]).toBe(0);
+    // call: (0.8·4 + 0.25·2 + 0.5·5) / (0.8 + 0.25 + 0.5) = 6.2 / 1.55 = 4
+    expect(ev[1]!).toBeCloseTo(6.2 / 1.55, 10);
+    // raise: walk 1 never raises, so its 9 says nothing: (0.25·6 + 0.5·3) / 0.75 = 4 — not the first walk's 9
+    expect(ev[2]!).toBeCloseTo(4, 10);
+  });
+  it("no walk plays the action: the plain mean of their EVs; no walk gives one: undefined", () => {
+    expect(blendEv([{ f: 0, ev: 9 }, { f: 0, ev: 3 }, { f: 0, ev: 6 }])).toBe(6);
+    expect(blendEv([{ f: 0.5, ev: undefined }, { f: 0.5, ev: null }])).toBeUndefined();
+    expect(blendEv([{ f: 0.5, ev: undefined }, { f: 0.25, ev: 2 }])).toBe(2);   // a walk with no EV is left out
+  });
+  it("a menu that names a code twice: frequencies summed, the EV their own weighted mean; a different menu: null", () => {
+    expect(alignedAt(["X", "R5"], [{ code: "X", f: 0.5, ev: 1 }, { code: "R5", f: 0.25, ev: 2 }, { code: "R5", f: 0.25, ev: 4 }])).toEqual([{ f: 0.5, ev: 1 }, { f: 0.5, ev: 3 }]);
+    expect(alignedAt(["F", "C"], [{ code: "F", f: 1, ev: 0 }, { code: "R75", f: 0, ev: 1 }])).toBeNull();
   });
 });

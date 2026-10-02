@@ -5,7 +5,7 @@ import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
-import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
+import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
 import { narrowForLastResort, rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
@@ -2005,14 +2005,17 @@ async function solvePostflopViaChainOnce(
   const codes: string[] = refSols.map((a) => String(a.action?.code ?? a.action?.display_name ?? "?"));
   let blended: number[][] | null = null;
   let blendedCount = 1;
+  const codeOf = (x: any) => String(x.action?.code ?? x.action?.display_name ?? "?");
+  /** the walks whose menu is the reference's — the ones blended, mix and EV alike */
+  const alignedWalks: typeof walks = [];
   if (walks.length > 1) {
     const aligned: number[][][] = [];
     const dropped: string[] = [];
     for (const w of walks) {
       const a = alignStrategy(codes, (w.data?.action_solutions ?? []).map((x: any) => ({
-        code: String(x.action?.code ?? x.action?.display_name ?? "?"), strategy: x.strategy ?? [],
+        code: codeOf(x), strategy: x.strategy ?? [],
       })));
-      if (a) aligned.push(a); else dropped.push(w.kind ?? "?");
+      if (a) { aligned.push(a); alignedWalks.push(w); } else dropped.push(w.kind ?? "?");
     }
     if (aligned.length > 1) {
       blended = blendStrategies(codes, aligned);
@@ -2032,11 +2035,20 @@ async function solvePostflopViaChainOnce(
   const solveId = ref.solveId;
   const chainLine = ref.line;
   let actions: ActionFreq[];
+  // THE EV DESCRIBES THE MIX BEING PLAYED (2026-10-03, Brady: "do 1-3"): with a blend, each action's EV is the walks'
+  // EVs for it weighted by how often each walk plays it (multiwayCollapse.blendEv); before, it was the first walk's EV
+  // beside a mix the first walk does not play. The bet size stays the reference walk's.
+  const evsAt = (pick: (x: any) => { f: number; ev: number | null | undefined }): (number | undefined)[] | null => {
+    if (alignedWalks.length < 2) return null;
+    const at = alignedWalks.map((w) => alignedAt(codes, (w.data?.action_solutions ?? []).map((x: any) => ({ code: codeOf(x), ...pick(x) }))));
+    return at.every((x) => x) ? blendEvs(at as NonNullable<(typeof at)[number]>[]) : null;
+  };
   if (heroComboIdx != null) {
+    const evBlend = blended ? evsAt((x) => ({ f: x.strategy?.[heroComboIdx] ?? 0, ev: x.evs?.[heroComboIdx] })) : null;
     actions = refSols.map((a: any, i: number) => ({
       action: labelOf(a),
       frequency: (blended ? blended[i]![heroComboIdx] ?? 0 : a.strategy?.[heroComboIdx] ?? 0) * 100,
-      ev: a.evs?.[heroComboIdx], betsize: a.action.betsize,
+      ev: evBlend ? evBlend[i] : a.evs?.[heroComboIdx], betsize: a.action.betsize,
     }));
     // AN ALL-ZERO MIX IS A FAILURE, NOT AN ANSWER (2026-09-24, stress multi-07: FOLD 0 / CALL 0 / RAISE 0 / ALLIN 0,
     // served ok:true with no decision — "notInRange" — after hero's Th was dealt on a board holding Th). The chain
@@ -2053,12 +2065,14 @@ async function solvePostflopViaChainOnce(
       }));
     }
   } else {
-    // no hero cards: aggregate frequency is all the node offers, so average it across the collapses
+    // no hero cards: aggregate frequency is all the node offers, so average it across the collapses; the EV the same
+    // frequency-weighted blend as hero's (total_frequency, total_ev)
+    const evBlend = walks.length > 1 ? evsAt((x) => ({ f: Number(x.total_frequency ?? 0), ev: x.total_ev })) : null;
     actions = refSols.map((a: any, i: number) => {
       const fs = walks.map((w) => Number(w.data?.action_solutions?.[i]?.total_frequency ?? NaN)).filter((x) => Number.isFinite(x));
       return {
         action: labelOf(a), frequency: (fs.length ? fs.reduce((x, y) => x + y, 0) / fs.length : 0) * 100,
-        ev: a.total_ev, betsize: a.action.betsize,
+        ev: evBlend ? evBlend[i] : a.total_ev, betsize: a.action.betsize,
       };
     });
   }

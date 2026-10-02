@@ -264,6 +264,45 @@ export function alignStrategy(codes: string[], sols: { code: string; strategy: n
   return out;
 }
 
+/**
+ * ONE WALK'S ACTIONS ON THE REFERENCE MENU, for one combo (or the node's aggregate): each code's frequency (summed when
+ * the walk's menu names it twice, as alignStrategy does) and its EV — the walk's own EVs for that code weighted by its
+ * frequencies, their plain mean when it never plays them, undefined when it gives none. Null when the menus differ.
+ */
+export function alignedAt(codes: string[], sols: { code: string; f: number; ev: number | null | undefined }[]): { f: number; ev: number | undefined }[] | null {
+  if (!sols.length) return null;
+  const by = codes.map(() => [] as { f: number; ev: number | null | undefined }[]);
+  for (const s of sols) {
+    const t = codes.indexOf(s.code);
+    if (t < 0) return null;
+    by[t]!.push(s);
+  }
+  return by.map((xs) => ({ f: xs.reduce((s, x) => s + (Number.isFinite(x.f) ? x.f : 0), 0), ev: blendEv(xs.map((x) => ({ f: x.f, ev: x.ev }))) }));
+}
+
+/**
+ * THE EV BESIDE A BLENDED MIX (2026-10-03, Brady: "do 1-3" — the EV next to a blended mix should describe the mix being
+ * played). The mix is blendStrategies' (fold at the most folding walk's frequency, bet at the least betting one's); an
+ * action's EV is each walk's EV for it weighted by how often THAT walk plays it,
+ *     ev(a) = Σ_k f_k(a)·ev_k(a) / Σ_k f_k(a)
+ * — so a walk that never bets says nothing about the bet's EV — and the plain mean of ev_k(a) when no walk plays it.
+ * It used to be the first walk's EV alone, whatever the blend did. A walk with no EV for the action is left out.
+ */
+export function blendEv(walks: { f: number; ev: number | null | undefined }[]): number | undefined {
+  const known = walks.filter((w) => w.ev != null && Number.isFinite(w.ev));
+  if (!known.length) return undefined;
+  const wsum = known.reduce((s, w) => s + (w.f > 0 ? w.f : 0), 0);
+  return wsum > 0
+    ? known.reduce((s, w) => s + (w.f > 0 ? w.f : 0) * w.ev!, 0) / wsum
+    : known.reduce((s, w) => s + w.ev!, 0) / known.length;
+}
+
+/** Per action of the reference menu, blendEv over the walks (each already alignedAt the menu). */
+export function blendEvs(walks: { f: number; ev: number | undefined }[][]): (number | undefined)[] {
+  const n = walks[0]?.length ?? 0;
+  return Array.from({ length: n }, (_, a) => blendEv(walks.map((w) => w[a] ?? { f: 0, ev: undefined })));
+}
+
 /** True when this field could not be collapsed and the caller must say so rather than guess. */
 export const collapseRefusal = (seats: CollapseSeat[], streets: SeatTok[][]): string => {
   const stuck = seats.filter((s) => streets.some((st) => st.some((t) => t.seat === s.pos && COMMITS(t.tok))));
