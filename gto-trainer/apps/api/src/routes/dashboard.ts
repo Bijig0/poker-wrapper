@@ -1847,7 +1847,10 @@ function sentOf(spec: any, st: any): { sent: unknown; sentFrom: "recorded" | "re
       ...(n === 2 && spec.huGrid ? { huGrid: spec.huGrid } : {}),
       startingStreet: street,
       ...(spec.rake ? { rake: spec.rake } : {}),
-      ...(Array.isArray(st.fixedLevels) && st.fixedLevels.length ? { fixedLevels: { [street]: st.fixedLevels } } : {}),
+      ...(st.stacksIn && typeof st.stacksIn === "object" ? { stacks: players.map((p) => Number(st.stacksIn[p]) || st.stackIn) } : {}),
+      // the pins: the wagers as amounts since 2026-10-03 (`played`), % of pot before ("62.8%" — fixedLevels)
+      ...(Array.isArray(st.played) && st.played.length ? { played: { [street]: st.played } }
+        : Array.isArray(st.fixedLevels) && st.fixedLevels.length && st.fixedLevels.every((x: unknown) => /%$/.test(String(x))) ? { fixedLevels: { [street]: st.fixedLevels } } : {}),
     };
     return { sent: gtowApi.treeRequestSummary(input), sentFrom: "rebuilt", account: st.account ?? null };
   } catch {

@@ -93,6 +93,9 @@ function merge(st: State, a: number): State | null {
   if (!y) return null;
   if (x.pos === st.heroPos || y.pos === st.heroPos) return null;   // hero is never merged away
   const pair = new Set([x.pos, y.pos]);
+  // AN ALL-IN SEAT IS NEVER MERGED (2026-10-03): a merged seat carries ONE stack (the deeper member's), so a short
+  // member's all-in would become a bet with chips behind it — the 28bb shove walked as 97.8 all over again.
+  if (st.streets.some((street) => street.some((t) => pair.has(t.seat) && t.tok === "RAI"))) return null;
 
   const streets: SeatTok[][] = [];
   let carrier: string | null = null;

@@ -115,14 +115,25 @@ describe("action label mapping", () => {
   });
 });
 
-describe("matchActionLoose — a wager past the all-in threshold", () => {
+describe("matchActionLoose — no 60%-of-the-stack all-in rule (removed 2026-10-03)", () => {
   const sols = [
     { action: { code: "F", type: "FOLD", display_name: "FOLD" } },
     { action: { code: "C", type: "CALL", display_name: "CALL", betsize: "24.39" } },
     { action: { code: "RAI", type: "RAISE", display_name: "ALLIN", betsize: "83.91", allin: true } },
   ];
-  it("a raise to 73.17 with 83.91 behind is the tree's all-in (the tree offers no raise size)", () => {
-    expect(matchActionLoose("Raise(7317)", sols as any, 83.91)).toBe(2);
+  it("a raise to 73.17 with 83.91 behind is NOT the tree's all-in any more: the tree carries the size played (threshold off)", () => {
+    expect(matchActionLoose("Raise(7317)", sols as any, 83.91)).toBe(-1);
+  });
+  it("2026-09-30, hand 4921621593: a 9.4 bet with 14.2 behind is not the all-in (it was walked as ALLIN 14.2)", () => {
+    const river = [
+      { action: { code: "X", type: "CHECK", display_name: "CHECK" } },
+      { action: { code: "R14.2", type: "RAISE", display_name: "ALLIN", betsize: "14.2", allin: true } },
+    ];
+    expect(matchActionLoose("Bet(940)", river as any, 14.2)).toBe(-1);
+  });
+  it("the all-in itself, within the walk's tolerance, still is the all-in", () => {
+    expect(matchActionLoose("AllIn(8391)", sols as any, 83.91)).toBe(2);
+    expect(matchActionLoose("Raise(8300)", sols as any, 83.91)).toBe(2);   // 0.91 off an 83.91 shove: inside 5%
   });
   it("a raise to 40 is NOT the all-in — a different bet stays a miss", () => {
     expect(matchActionLoose("Raise(4000)", sols as any, 83.91)).toBe(-1);

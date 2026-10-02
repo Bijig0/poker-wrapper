@@ -196,16 +196,11 @@ export function matchActionLoose(label: string, sols: ApiAction[], fallbackBetBb
   });
   const tol = Math.max(0.05 * wantBb, 0.15); // 5% relative or 0.15bb
   if (bestDiff <= tol) return best;
-  // A WAGER PAST THE TREE'S ALL-IN THRESHOLD IS THE ALL-IN (2026-09-24, postflop sweep w3-river-facing-raise: a
-  // river raise to 73.2bb with 83.9bb behind). GTO Wizard converts a raise that would leave only a sliver behind
-  // into ALLIN and offers no raise size at that node at all — "offered: FOLD, CALL, ALLIN" — so the walk found no
-  // wager within tolerance and the whole answer failed. A wager committing at least 60% of what the all-in puts in
-  // is that all-in; the chain's size-snap note says so. Below 60% it stays a miss: that is a different bet.
-  const allin = sols.findIndex((a) => actionKindOf(a) === "AllIn");
-  if (allin >= 0) {
-    const shove = Number(sols[allin]!.action.betsize ?? fallbackBetBb);
-    if (Number.isFinite(shove) && shove > 0 && wantBb >= 0.6 * shove && wantBb <= shove + tol) return allin;
-  }
+  // NO "60% OF THE STACK IS THE ALL-IN" RULE (removed 2026-10-03). It was our twin of GTO Wizard's allin_threshold 60
+  // (2026-09-24, sweep w3-river-facing-raise: the tree had turned a 73.2 raise into its all-in and offered no raise
+  // size). Both are gone: the tree is now built with the threshold off and the wager pinned as its amount, so a bet
+  // is the tree's all-in only when it IS the actor's all-in (within the tolerance above). A 9.4 bet with 14.2 behind
+  // walked as ALLIN 14.2 (2026-09-30) is exactly what this rule did.
   return -1;
 }
 

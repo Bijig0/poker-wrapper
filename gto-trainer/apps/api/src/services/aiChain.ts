@@ -1,4 +1,4 @@
-import { gtowApi, type NodeSource } from "./gtowApi";
+import { gtowApi, type NodeSource, type PlayedWager } from "./gtowApi";
 import { tmark, tspan } from "./answerTrace";
 import {
   actionKindOf,
@@ -7,7 +7,7 @@ import {
   wagerLabelForWalk,
 } from "../utils/aiChainTokens/aiChainTokens";
 import { labelBetBb } from "../utils/aiStudyLine/aiStudyLine";
-import { streetFixedPcts, wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
+import { wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
@@ -76,6 +76,10 @@ export interface AiChainSpec {
   /** GTOW tokens per street (X/C/F/R<bb>/RAI), up to and including the
    *  CURRENT street; the last street's tokens end at hero's pending node. */
   streets: string[][];
+  /** THE TABLE'S ALL-IN AMOUNTS, parallel to `streets` (2026-10-03, hand 4922087007): for a "RAI" token, the seat's
+   *  raise-to on the street as the table showed it; null elsewhere (an R token carries its own). The walk caps it at the
+   *  actor's stack behind. Absent or null: the actor's own stack behind — never the tree's one stack. */
+  streetAmounts?: (number | null)[][];
   /** WHO took each token, as a postflop position name, parallel to `streets`
    *  (2026-09-19). The walk is positional — tokens carry no seat — so a line
    *  whose actions are right but ORDERED wrong lands hero's pending decision
@@ -159,6 +163,11 @@ export interface ChainTrace {
   streets: {
     si: number; street: "FLOP" | "TURN" | "RIVER"; board: string; potIn: number; stackIn: number;
     labels: string[]; fixedLevels: string[] | null; solId: string | null; created: boolean;
+    /** the street's wagers as the tree was pinned with them (2026-10-03): seat index + amount; `fixedLevels` says the
+     *  same in words ("9.4bb by HJ") — before 2026-10-03 it held % of pot */
+    played?: PlayedWager[] | null;
+    /** each seat's own stack behind entering the street, by position, as the tree was sent it (2026-10-03) */
+    stacksIn?: Record<string, number>;
     /** wall-clock ms: the cloud solve (ensureCustomSolution) and the node walk on it (since 2026-09-12) */
     solveMs?: number; walkMs?: number;
     /** why the street's tree was CREATED instead of found in the cache (gtowApi.describeTreeChange); null when
@@ -271,7 +280,9 @@ function rootKeyOf(spec: AiChainSpec, seats: { pos: string; label: SeatLabel; ra
   return hashOf([spec.handKey, first, seats.map((s) => [s.pos, s.label, hashOf(s.range)]), spec.flopPot, spec.flopStack,
     spec.seatStacks ?? null, cards.slice(0, 3 + first).join(""), spec.rake ?? null, spec.heroComboIdx, spec.huGrid ?? null]);
 }
-const exitKeyOf = (entry: string, toks: string[], board: string): string => hashOf([entry, toks, board]);
+/** a street's exit key: its entry, its tokens, the table's all-in amounts beside them (2026-10-03), the board */
+const exitKeyOf = (entry: string, toks: string[], board: string, amounts?: (number | null)[] | null): string =>
+  hashOf(amounts?.some((x) => x != null) ? [entry, toks, board, amounts] : [entry, toks, board]);
 /** The fingerprint of a set of ranges: every seat, with its exact range (chainPath.RangeCheck). */
 export const rangesFp = (seats: { pos: string; range: number[] }[]): string => hashOf(seats.map((s) => [s.pos, hashOf(s.range)]));
 const fpShort = (fp: string | null): string => (fp ? `#${fp.slice(0, 6)}` : "—");
@@ -382,6 +393,15 @@ export function forgetCheckpoints(handKey: string): void {
   handIndex.delete(handKey);
   fetchedByHand.delete(handKey);
   handFacts.forgetStreets(handKey);
+}
+
+/** Drop ONE hand's derived memo (its closed and mid-street checkpoints) and keep its facts — the seatbelt's re-solve
+ *  (fastSolve, 2026-10-03): every street is walked again from the table's state, and the ledger still says what was. */
+export function forgetChainMemo(handKey: string): void {
+  for (const key of handIndex.get(handKey) ?? []) {
+    if (key.startsWith("p:")) partials.delete(key.slice(2)); else checkpoints.delete(key);
+  }
+  handIndex.delete(handKey);
 }
 
 /** Drop the derived memo ONLY — every hand's checkpoints — and keep the facts (tests: a restart must read as one). */
@@ -510,55 +530,96 @@ export type ActionKind = "Fold" | "Check" | "Call" | "Bet" | "Raise" | "AllIn";
  * A street is closed once no seat still in owes an action since the last wager (everyone checked, or everyone
  * matched the last bet or left) — or when one seat is left.
  */
-export interface StreetSnapshot { live: number[]; inv: number[]; p: number; owed: number[] }
+export interface StreetSnapshot { live: number[]; inv: number[]; p: number; owed: number[]; caps?: (number | null)[] }
 
+/**
+ * EACH SEAT'S STACK IS ITS CAP (2026-10-03). Every seat brings its own stack behind into the street (`caps`, null =
+ * unbounded): a call puts in no more than the seat has (an all-in call for less), and a seat that has put in all it
+ * has is ALL-IN — it never acts again on the street (the rotation skips it, a raise does not re-open it), exactly as
+ * GTO Wizard's tree has it. Before, every seat carried the tree's one stack, so a short stack could not be all-in for
+ * less and a 28bb shove was a 97.8bb one.
+ */
 export class StreetState {
   /** seat indices still in the hand, acting order */
   live: number[];
   /** committed this street, per seat index */
   inv: number[];
+  /** each seat's stack behind entering the street — the most it can put in (null = unbounded) */
+  readonly caps: (number | null)[];
   private p = 0;
   private owed: Set<number>;
 
-  constructor(n: number) {
+  constructor(n: number, caps?: readonly (number | null | undefined)[]) {
     this.live = Array.from({ length: n }, (_, i) => i);
     this.inv = new Array(n).fill(0);
-    this.owed = new Set(this.live);
+    this.caps = Array.from({ length: n }, (_, i) => { const c = caps?.[i]; return c != null && Number.isFinite(c) ? c : null; });
+    this.owed = new Set(this.live.filter((s) => !this.allIn(s)));
+    this.skipAllIn();
   }
+  /** the seat has put in everything it has */
+  allIn(s: number): boolean { const c = this.caps[s]; return c != null && (this.inv[s] ?? 0) >= c - 0.005; }
   get actor(): number { return this.live[this.p % this.live.length]!; }
   get outstanding(): number { return Math.max(...this.inv); }
   get potIn(): number { return this.inv.reduce((s, x) => s + x, 0); }
   get closed(): boolean { return this.live.length < 2 || !this.live.some((s) => this.owed.has(s)); }
+  /**
+   * What seat `s` has in the pot that can be MATCHED: a bet past the most any other seat can put in (a live seat's
+   * stack, a folded seat's chips) is uncalled and goes back to its owner. The pot hero can win — the tree's, and the
+   * table's once the excess is returned (heads-up: a 150bb shove into a 50bb stack is a 50bb bet).
+   */
+  matched(s: number): number {
+    let most = 0;
+    for (let t = 0; t < this.inv.length; t++) {
+      if (t === s) continue;
+      most = Math.max(most, this.live.includes(t) ? (this.caps[t] ?? Infinity) : (this.inv[t] ?? 0));
+    }
+    return Math.min(this.inv[s] ?? 0, most);
+  }
+  get matchedPotIn(): number { return this.inv.reduce((sum, _, s) => sum + this.matched(s), 0); }
 
   /** The state as plain data — a mid-street checkpoint stores it and a later decision resumes from it (2026-09-24). */
   snapshot(): StreetSnapshot {
-    return { live: this.live.slice(), inv: this.inv.slice(), p: this.p, owed: [...this.owed] };
+    return { live: this.live.slice(), inv: this.inv.slice(), p: this.p, owed: [...this.owed], caps: this.caps.slice() };
   }
   static fromSnapshot(n: number, snap: StreetSnapshot): StreetState {
-    const st = new StreetState(n);
+    const st = new StreetState(n, snap.caps);
     st.live = snap.live.slice(); st.inv = snap.inv.slice(); st.p = snap.p; st.owed = new Set(snap.owed);
     return st;
+  }
+
+  /** the pointer moves past seats that are all-in (they have no decision left on this street) */
+  private skipAllIn(): void {
+    for (let k = 0; k < this.live.length && this.allIn(this.actor); k++) this.p = (this.p + 1) % this.live.length;
   }
 
   /** Apply the acting seat's action; wagers give the raise-to size in bb. */
   apply(kind: ActionKind, raiseTo?: number): void {
     const a = this.actor;
+    const cap = this.caps[a] ?? Infinity;
     if (kind === "Fold") {
       this.live = this.live.filter((s) => s !== a);
       this.owed.delete(a);
       // the pointer now indexes the next seat (it wraps when the folder was last)
       this.p = this.live.length ? this.p % this.live.length : 0;
+      if (this.live.length) this.skipAllIn();
       return;
     }
     if (kind === "Check") this.owed.delete(a);
-    else if (kind === "Call") { this.inv[a] = this.outstanding; this.owed.delete(a); }
+    else if (kind === "Call") { this.inv[a] = Math.min(this.outstanding, cap); this.owed.delete(a); }
     else {
-      const to = raiseTo ?? NaN;
-      if (!(to > this.outstanding)) throw new Error(`${kind} to ${to}bb is not over the ${this.outstanding}bb outstanding`);
-      this.inv[a] = to;
-      this.owed = new Set(this.live.filter((s) => s !== a));   // a wager re-opens everyone else
+      const to = Math.min(raiseTo ?? NaN, cap);
+      if (kind === "AllIn" && to <= this.outstanding + 0.005) {
+        // an all-in for no more than the price is a call for less: nobody is re-opened
+        this.inv[a] = to; this.owed.delete(a);
+      } else {
+        if (!(to > this.outstanding)) throw new Error(`${kind} to ${raiseTo}bb is not over the ${this.outstanding}bb outstanding`);
+        this.inv[a] = to;
+        // a wager re-opens everyone else who still has chips to act with
+        this.owed = new Set(this.live.filter((s) => s !== a && !this.allIn(s)));
+      }
     }
     this.p = (this.p + 1) % this.live.length;
+    this.skipAllIn();
   }
 }
 
@@ -566,15 +627,87 @@ const kindOfLabel = (label: string): ActionKind =>
   label === "Fold" || label === "Check" || label === "Call" ? label
     : label.startsWith("AllIn") ? "AllIn" : label.startsWith("Raise") ? "Raise" : "Bet";
 
-/** Who acts on each engine label of a street, for N seats in acting order — the rotation streetFixedPcts needs. */
-export function actorsOf(labels: string[], n: number): number[] {
-  const st = new StreetState(n);
+/** Who acts on each engine label of a street, for N seats in acting order (each seat's stack behind its cap). */
+export function actorsOf(labels: string[], n: number, caps?: readonly (number | null | undefined)[]): number[] {
+  const st = new StreetState(n, caps);
   const out: number[] = [];
   for (const l of labels) {
     out.push(st.actor);
     st.apply(kindOfLabel(l), wagerBb(l) ?? undefined);
   }
   return out;
+}
+
+/**
+ * Who acts on each capture TOKEN of a street (X / C / F / R<to> / RAI), with each seat's stack behind as its cap and
+ * the table's all-in amounts beside the tokens — what the RAI labels need before there are labels (an all-in is the
+ * ACTOR's all-in, so the actor must be known first).
+ */
+export function actorsOfTokens(toks: string[], n: number, caps: readonly (number | null | undefined)[], amounts?: readonly (number | null | undefined)[]): number[] {
+  const st = new StreetState(n, caps);
+  const out: number[] = [];
+  toks.forEach((t, i) => {
+    const a = st.actor;
+    out.push(a);
+    if (t === "X") st.apply("Check");
+    else if (t === "C") st.apply("Call");
+    else if (t === "F") st.apply("Fold");
+    else if (t === "RAI") st.apply("AllIn", Math.min(amounts?.[i] ?? Infinity, st.caps[a] ?? Infinity));
+    else if (/^R[\d.]+$/.test(t)) st.apply("Raise", parseFloat(t.slice(1)));
+    else throw new Error(`unknown token "${t}"`);
+  });
+  return out;
+}
+
+/**
+ * A WAGER THAT COVERS EVERY OTHER SEAT STILL IN IS THE ACTOR'S ALL-IN (2026-10-03). Heads-up, a 60bb bet from a 150bb
+ * stack into a player with 50 behind can only ever be called for 50: GTO Wizard's tree holds no such bet, only the
+ * all-in (probed: a listed size past what anyone can call is the all-in, named by the actor's own stack). This is not
+ * the old "60% of the stack" rule — the wager here commits at least everything any opponent can match. Returns the
+ * labels with such wagers as AllIn(the actor's stack), and a word for each.
+ */
+export function coveringAllIns(labels: string[], n: number, caps: readonly number[]): { labels: string[]; notes: string[] } {
+  const st = new StreetState(n, caps);
+  const out: string[] = [], notes: string[] = [];
+  for (const l of labels) {
+    const a = st.actor;
+    const x = wagerBb(l);
+    let lab = l;
+    if (x != null && !l.startsWith("AllIn")) {
+      const most = Math.max(0, ...st.live.filter((t) => t !== a).map((t) => caps[t] ?? Infinity));
+      const own = caps[a];
+      if (own != null && Number.isFinite(own) && (x >= own - 0.005 || x >= most - 0.005)) {
+        lab = `AllIn(${Math.round(own * 100)})`;
+        // the actor's whole stack typed as a bet is simply his all-in; a bet that covers the others is worth a word
+        if (x < own - 0.005) notes.push(`a ${Math.round(x * 100) / 100}bb wager covers every other stack still in (${Math.round(most * 100) / 100}bb at most) — the tree's all-in`);
+      }
+    }
+    out.push(lab);
+    st.apply(kindOfLabel(lab), wagerBb(lab) ?? undefined);
+  }
+  return { labels: out, notes };
+}
+
+/** The wagers of a street's labels as the tree takes them: each with its seat and its raise-to amount (gtowApi.played). */
+export function playedOf(labels: string[], actors: number[]): PlayedWager[] {
+  const out: PlayedWager[] = [];
+  labels.forEach((l, i) => { const x = wagerBb(l); if (x != null) out.push({ seat: actors[i]!, to: Math.round(x * 100) / 100 }); });
+  return out;
+}
+/** A street's played wagers in a line a person reads (the trace's `fixedLevels`, the tree ledger, check #11). */
+export const playedText = (ws: PlayedWager[], seats: string[]): string[] => ws.map((w) => `${Math.round(w.to * 100) / 100}bb by ${seats[w.seat] ?? `seat ${w.seat}`}`);
+
+/**
+ * The node's action for one of the walk's labels: the exact one, a wager within the walk's tolerance (5% or 0.15bb,
+ * aiStudyLine.matchActionLoose) — and an ALL-IN is the tree's all-in (2026-10-03). A label is AllIn only when the
+ * actor went all-in at the table (RAI) or his wager covers every other stack (coveringAllIns), so taking the node's
+ * all-in for it is the same action, whatever stack the tree has him at; check #6 compares the sizes.
+ */
+export function matchWalkAction(label: string, sols: any[], stack: number): number {
+  const ai = matchActionLoose(label, sols, stack);
+  if (ai >= 0 || !label.startsWith("AllIn(")) return ai;
+  const allIns = sols.map((a, i) => (actionKindOf(a) === "AllIn" ? i : -1)).filter((i) => i >= 0);
+  return allIns.length === 1 ? allIns[0]! : -1;
 }
 
 /**
@@ -612,7 +745,7 @@ export async function fitsCachedTree(
       if (!node) return { ok: false, why: `node [${codes.join("-") || "root"}] could not be read` };
     }
     const sols: any[] = node.action_solutions ?? [];
-    const ai = matchActionLoose(label, sols, stack);
+    const ai = matchWalkAction(label, sols, stack);
     if (ai < 0) {
       const offered = sols.filter((a) => a.action?.betsize != null && a.action.betsize !== "").map((a) => `${a.action.display_name} ${a.action.betsize}`).join(", ");
       return { ok: false, why: `${label} is not on it (offers ${offered || "no wager"})` };
@@ -649,12 +782,12 @@ export async function fitsHeroAskedTree(
   labels: string[],
   actors: number[],
   heroIdx: number,
-  pot: number,
+  _pot: number,
   stack: number,
-  peekSolution: (levels: string[]) => string | null,
+  peekSolution: (played: PlayedWager[]) => string | null,
   peek: (solId: string, codes: string) => any | null,
   fetchOne: (solId: string, codes: string) => Promise<any | null>,
-): Promise<{ ok: true; labels: string[]; levels: string[]; want: number; got: number; note: string } | { ok: false; why: string | null }> {
+): Promise<{ ok: true; labels: string[]; played: PlayedWager[]; want: number; got: number; note: string } | { ok: false; why: string | null }> {
   const isWager = (l: string) => /\(/.test(l);
   let last = -1;
   labels.forEach((l, i) => { if (isWager(l)) last = i; });
@@ -662,24 +795,21 @@ export async function fitsHeroAskedTree(
   const prefix = labels.slice(0, last);
   if (!prefix.some(isWager)) return { ok: false, why: null };                        // asked on the size-free tree
   const want = wagerBb(labels[last]!)!;
-  let levels: string[];
-  try {
-    levels = streetFixedPcts(prefix, pot, actors.slice(0, last)).pcts;
-  } catch {
-    return { ok: false, why: null };
-  }
-  const solId = peekSolution(levels);
-  if (!solId) return { ok: false, why: `the tree hero was asked on (fixed [${levels.join(",")}]) is not cached — his ${want} is pinned as played` };
+  // the tree hero was asked on: the street pinned with the wagers before his (amounts — gtowApi.played)
+  const played = playedOf(prefix, actors.slice(0, last));
+  const levels = played.map((w) => `${w.to}bb`);
+  const solId = peekSolution(played);
+  if (!solId) return { ok: false, why: `the tree hero was asked on (pinned [${levels.join(",")}]) is not cached — his ${want} is pinned as played` };
   const fit = await fitsCachedTree(solId, labels, stack, (c) => peek(solId, c), (c) => fetchOne(solId, c));
   if (!fit.ok) return { ok: false, why: `hero's ${want} is not on the tree he was asked on (${fit.why}) — pinned as played` };
   const got = wagerBb(fit.labels[last]!)!;
-  // the loose match's ALL-IN fallback (a raise at 60%+ of the stack taken as the shove) is a different action for hero
+  // (the loose match takes nothing past its 5% / 0.15bb tolerance; kept as a guard on what is read as hero's size)
   if (!(Math.abs(got - want) <= Math.max(0.05 * want, 0.15))) {
     return { ok: false, why: `hero's ${want} is ${got} on the tree he was asked on — too far to be his size played — pinned as played` };
   }
   const r = (x: number) => String(Math.round(x * 100) / 100);
-  return { ok: true, labels: fit.labels, levels, want, got,
-    note: `hero's ${r(want)} read as the tree's ${r(got)} — the tree he was asked on (fixed [${levels.join(",")}]) is kept, not re-created` };
+  return { ok: true, labels: fit.labels, played, want, got,
+    note: `hero's ${r(want)} read as the tree's ${r(got)} — the tree he was asked on (pinned [${levels.join(",")}]) is kept, not re-created` };
 }
 
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
@@ -730,7 +860,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   if (rootKey) {
     let prev = rootKey;
     for (let si = 0; si < spec.streets.length - 1; si++) {
-      prev = exitKeyOf(prev, spec.streets[si]!, cards.slice(0, 3 + si + first).join(""));
+      prev = exitKeyOf(prev, spec.streets[si]!, cards.slice(0, 3 + si + first).join(""), spec.streetAmounts?.[si]);
       exitKeys.push(prev);
     }
   }
@@ -801,8 +931,20 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const streetBoard = cards.slice(0, 3 + k).join("");
     const toks = spec.streets[si]!;
     const isLast = si === spec.streets.length - 1;
-    const n = seats.length;
     const resuming = resume && si === startSi ? resume : null;
+    // A SEAT WITH NOTHING BEHIND IS NOT A TREE SEAT (2026-10-03): it is all-in, it has no decision, its chips are in the
+    // pot. The street close drops it; a seat that ENTERS the walk with nothing behind is dropped here the same way
+    // (a zero-stack seat is never sent to GTO Wizard).
+    if (!resuming && behind) {
+      const broke = seats.filter((s) => behind![s.pos] != null && behind![s.pos]! <= 0.005);
+      if (broke.some((s) => s.pos === heroPos)) return fail("hero is all-in — no decision left to solve");
+      if (broke.length && seats.length - broke.length < 2) return fail("every other player still in is all-in — no decision left to solve");
+      if (broke.length) {
+        seats = seats.filter((s) => !broke.includes(s));
+        stackNotes.push(`${STREET[k]!.toLowerCase()}: ${broke.map((s) => s.pos).join(", ")} all-in before the street — left out of the tree, chips in the pot`);
+      }
+    }
+    const n = seats.length;
     // what this street starts from, fingerprinted BEFORE hero's floor (the previous street handed on exactly this); a
     // resumed street started on an earlier decision, and its checkpoint carries the fingerprint taken then
     const startedFp: string | null = resuming ? (resuming.inFp ?? null) : rangesFp(seats);
@@ -838,13 +980,37 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // #2 RANGES SANE (services/chainChecks), on exactly what the tree is asked to solve
     const saneCheck = guardCheck(2, () => checkRangesSane({ seats: entering, heroIdx, heroCombo: spec.heroComboIdx, heroBefore, board: cards.slice(0, 3 + k) }));
 
-    // Engine labels for this street's tokens (Bet vs Raise by outstanding
-    // wager; RAI = all-in to the street-entering stack), and who acts on each.
+    // EACH SEAT'S OWN STACK BEHIND entering the street (2026-10-03): what the tree is sent for that seat, the most it can
+    // put in on the street, and what its all-in is. A seat whose stack is not known keeps the tree's one stack.
+    const caps = seats.map((s) => r2(behind?.[s.pos] ?? stack));
+    // Engine labels for this street's tokens (Bet vs Raise by outstanding wager), and who acts on each. An all-in (RAI)
+    // is the ACTOR's all-in: the table's amount beside the token (spec.streetAmounts), never more than the actor has.
     let labels: string[];
     let actors: number[];
+    const amounts = spec.streetAmounts?.[si] ?? [];
     try {
-      labels = wagerLabelForWalk(toks, stack);
-      actors = actorsOf(labels, n);
+      let tokActors = actorsOfTokens(toks, n, caps, amounts);
+      // THE TABLE'S ALL-IN IS THE SEAT'S STACK: a seat that went all-in on this street for A had exactly A behind
+      // entering it (a raise-to is the street's total). Where our reading of its stack says otherwise, the table wins —
+      // the tree is sent the stack the shove proves, and the answer says so.
+      let fixedCap = false;
+      toks.forEach((t, i) => {
+        const a = amounts[i];
+        if (t !== "RAI" || a == null || !(a > 0)) return;
+        const seat = tokActors[i]!;
+        if (Math.abs((caps[seat] ?? a) - a) > 0.02) {
+          stackNotes.push(`${STREET[k]!.toLowerCase()}: ${seats[seat]!.pos} went all-in for ${r2(a)}bb — the tree has that stack, not the ${caps[seat]}bb read`);
+          caps[seat] = r2(a);
+          if (behind) behind[seats[seat]!.pos] = r2(a);
+          fixedCap = true;
+        }
+      });
+      if (fixedCap) tokActors = actorsOfTokens(toks, n, caps, amounts);
+      labels = wagerLabelForWalk(toks, stack, (i) => Math.min(amounts[i] ?? Infinity, caps[tokActors[i]!] ?? Infinity));
+      const cov = coveringAllIns(labels, n, caps);
+      labels = cov.labels;
+      for (const x of cov.notes) sizeSnaps.push(`${STREET[k]!.toLowerCase()}: ${x}`);
+      actors = actorsOf(labels, n, caps);
     } catch (e) {
       return fail(`tokens: ${e instanceof Error ? e.message : e}`);
     }
@@ -882,6 +1048,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       board: streetBoard,
       pot,
       stack,
+      stacks: caps,
       oopRange: seats[0]!.range,
       ipRange: seats[n - 1]!.range,
       oopPos: seats[0]!.pos,
@@ -905,7 +1072,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // still re-solved the street on the next card (the key carries the pinned size) — one fresh cloud solve and
     // a 3-node re-walk, 2.5-4 s, on every turn and river after a hero bet. The check reads cached nodes and
     // fetches at most one; a miss costs that one fetch and is named in the trace.
-    let fixedLevels: string[] | null = null;
+    //
+    // THE PINS ARE THE AMOUNTS PLAYED (2026-10-03): `played` — each wager with its seat and raise-to, sent as "<bb>bb"
+    // (the node is named by it exactly: "18.8bb" → R18.8). It was a % of the pot to a tenth (streetFixedPcts), a lossy
+    // round trip, and the level's one percentage on every seat — hero's raise facing a bet was the VILLAIN's bet %.
+    let played: PlayedWager[] | null = null;
     let reuse: string | null = null;
     if (labels.some((l) => /\(/.test(l))) {
       const autoSol = gtowApi.peekSolution(baseInput);
@@ -926,12 +1097,12 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const heroIdxHere = seats.findIndex((s) => s.pos === heroPos);
         const tHero = Date.now();
         const hs = await fitsHeroAskedTree(labels, actors, heroIdxHere, pot, stack,
-          (levels) => gtowApi.peekSolution({ ...baseInput, fixedLevels: { [STREET[k]!]: levels } }),
+          (pl) => gtowApi.peekSolution({ ...baseInput, played: { [STREET[k]!]: pl } }),
           (solId, codesStr) => gtowApi.peekNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }),
           async (solId, codesStr) => { const x = await readNode(solId, codesStr); return x.r.ok ? x.r.data : null; });
         if (hs.ok) {
           labels = hs.labels;
-          fixedLevels = hs.levels;
+          played = hs.played;
           reuse = `${reuse ? `${reuse}; ` : ""}${hs.note}`;
           // a real size change is worth a word in the answer (rounding is not — the walk's own threshold)
           if (Math.abs(hs.got - hs.want) > Math.max(0.02 * hs.want, 0.1)) {
@@ -943,16 +1114,14 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
             reuse = `${reuse ? `${reuse}; ` : ""}${hs.why}`;
             tspan(`chain ${STREET[k]} hero's size not on the asked tree`, tHero, hs.why);
           }
-          try {
-            fixedLevels = streetFixedPcts(labels, pot, actors).pcts;
-          } catch (e) {
-            return fail(`fixed sizing: ${e instanceof Error ? e.message : e}`);
-          }
+          played = playedOf(labels, actors);
         }
       }
     }
+    const fixedLevels = played ? playedText(played, seats.map((s) => s.pos)) : null;
     const streetRec = {
-      si, street: STREET[k]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels,
+      si, street: STREET[k]!, board: streetBoard, potIn: pot, stackIn: stack, labels, fixedLevels, played,
+      stacksIn: Object.fromEntries(seats.map((s, i) => [s.pos, caps[i]!])) as Record<string, number>,
       solId: null as string | null, created: false, solveMs: 0, walkMs: 0,
       treeWhy: null as string | null, reuse, nodeSrc,
       resumedAt: undefined as number | undefined, resumeMiss: undefined as string | undefined,
@@ -972,7 +1141,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const tSolve = Date.now();
     const treeInput = {
       ...baseInput,
-      ...(fixedLevels ? { fixedLevels: { [STREET[k]!]: fixedLevels } } : {}),
+      ...(played ? { played: { [STREET[k]!]: played } } : {}),
     };
     let ens = await gtowApi.ensureCustomSolution(treeInput);
     if (!ens.ok) return fail(`solve: ${ens.error}`);
@@ -1003,7 +1172,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     recordTree(false);
     const tWalk = Date.now();
 
-    let st = new StreetState(n);
+    let st = new StreetState(n, caps);
     let codes: string[] = [];
     let closed = false;
     let ti0 = 0;
@@ -1102,39 +1271,21 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // side by side, and the walk's own read of each one JOINS the request already in flight (gtowApi.nodePending).
     // A mispredicted address costs a short poll and nothing else: the walk still reads the real node itself.
     if (process.env.GTOW_PREFETCH !== "0" && process.env.NODE_ENV !== "test" && labels.length > ti0) {
-      // The tree stores a wager as GTO Wizard re-derives it from the pinned pot percentage, not as observed:
-      // bet% is kept to a tenth, a RAISE% is rounded to a whole percent, the size to one decimal; a wager that
-      // is (or is turned into) the all-in is coded as the exact stack to two decimals. Checked against 245
-      // walked wagers in data/solves.sqlite: 0 misses with both candidates. Each wager therefore gets up to two
-      // addresses (the re-derived size, and the all-in when it commits most of the stack).
-      const actors = actorsOf(labels, seats.length);
-      const inv = st.inv.slice();
-      let paths: string[][] = [codes.slice()];
+      // A wager's node is named by its AMOUNT since 2026-10-03: a pinned size exactly as sent ("9.4bb" → R9.4), a size
+      // on a reused size-free tree as that tree has it (the labels were rewritten to it), and the all-in by the actor's
+      // own stack (GTO Wizard names an all-in R<stack>: probed 2026-10-03). One address per wager — the pot-% guesswork
+      // (a raise % to a whole percent, a second "maybe the all-in" address at 60% of the stack) is gone with the pins.
+      const actors = actorsOf(labels, seats.length, caps);
+      let path: string[] = codes.slice();
       const addrs: string[] = [];
       for (let j = ti0; j < labels.length && addrs.length < 8; j++) {
         const l = labels[j]!;
-        const m = l.match(/^(Bet|Raise|AllIn)\((\d+(?:\.\d+)?)\)$/);
-        const actor = actors[j]!;
-        let next: string[] = [];
-        if (l === "Check") next = ["X"];
-        else if (l === "Call") { next = ["C"]; inv[actor] = Math.max(...inv); }
-        else if (l === "Fold") next = ["F"];
-        else if (m) {
-          const x = Number(m[2]) / 100;
-          const outstanding = Math.max(...inv), own = inv[actor] ?? 0, toCall = outstanding - own;
-          const potNow = pot + inv.reduce((s0, v) => s0 + v, 0), denom = potNow + toCall;
-          const pctRaw = denom > 0 ? (100 * (x - outstanding)) / denom : 0;
-          const pct = outstanding > 0 ? Math.round(pctRaw) : Math.round(pctRaw * 10) / 10;
-          const size = Math.round((outstanding + (pct / 100) * denom) * 10) / 10;
-          const behind = Math.round((stack - own) * 100) / 100;
-          const allIn = `R${behind}`;
-          next = m[1] === "AllIn" || x >= behind - 0.01 ? [allIn] : x >= 0.6 * behind ? [`R${size}`, allIn] : [`R${size}`];
-          inv[actor] = x;
-        } else break;
-        const grown: string[][] = [];
-        for (const p of paths) for (const c of next) grown.push([...p, c]);
-        paths = grown.slice(0, 4);
-        for (const p of paths) addrs.push(p.join("-"));
+        const x = wagerBb(l);
+        const c = l === "Check" ? "X" : l === "Call" ? "C" : l === "Fold" ? "F"
+          : x != null ? `R${r2(l.startsWith("AllIn") ? (caps[actors[j]!] ?? x) : x)}` : null;
+        if (!c) break;
+        path = [...path, c];
+        addrs.push(path.join("-"));
       }
       for (const cs of [...new Set(addrs)].slice(0, 8)) {
         void gtowApi.customNode(ens.solId, { [QKEY[k]!]: cs, board: streetBoard }, 6_000, "prefetch").catch(() => { /* speculative */ });
@@ -1210,7 +1361,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       }
       const nodeRec: ChainTraceNode = {
         si, ti, street: STREET[k]!, board: streetBoard, codes: codes.slice(), actor,
-        potNode: r2(pot + st.potIn), invested: st.inv.slice(),
+        potNode: r2(pot + st.matchedPotIn), invested: st.inv.slice(),
         actions: sols.map((a) => ({
           name: String(a.action?.display_name ?? "?"), code: String(a.action?.code ?? ""),
           betsize: a.action?.betsize != null && a.action.betsize !== "" ? Number(a.action.betsize) : null,
@@ -1252,14 +1403,14 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         if (!streetRec.leak && nodeLeaks.length) streetRec.leak = { code: "node:read-twice", why: nodeLeaks[0]! };
         finishChecks(true);
         const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
-        const potNode = r2(pot + st.potIn);
+        const potNode = r2(pot + st.matchedPotIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}),
           ...(stackNotes.length ? { stackNotes } : {}) };
       }
 
       const label = labels[ti]!;
-      const ai = matchActionLoose(label, sols, stack);
+      const ai = matchWalkAction(label, sols, stack);
       if (ai < 0) {
         const offered = sols.map((a) => a.action?.display_name ?? "?").join(", ");
         return fail(`"${label}" not walkable at ${STREET[k]}#${ti} (offered: ${offered})`);
@@ -1311,8 +1462,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         if (ti !== labels.length - 1) {
           return fail("street closed but more actions follow (capture corruption?)");
         }
-        const paid = st.outstanding;
-        pot += st.potIn;
+        // what each seat has in the pot that was matched — an uncalled excess goes back to its owner (StreetState.matched)
+        const paidBy = st.inv.map((_, i) => st.matched(i));
+        const paid = Math.max(0, ...st.live.map((i) => paidBy[i] ?? 0));
+        pot += paidBy.reduce((s0, x) => s0 + x, 0);
         stack -= paid;
         const before = seats.map((s) => s.pos);
         // each seat pays its own chips out of its own stack; a folded seat's stack leaves with it
@@ -1320,11 +1473,19 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           const next: Record<string, number> = {};
           for (const i of st.live) {
             const p = seats[i]!.pos;
-            if (behind[p] != null) next[p] = r2(Math.max(0, behind[p]! - (st.inv[i] ?? 0)));
+            if (behind[p] != null) next[p] = r2(Math.max(0, behind[p]! - (paidBy[i] ?? 0)));
           }
           behind = next;
         }
         seats = st.live.map((i) => seats[i]!);   // folded seats leave the hand
+        // AN ALL-IN SEAT LEAVES THE LATER STREETS' TREES (2026-10-03): it has no decision left, its chips are in the pot.
+        // (The pot is the table's whole pot; hero's showdown against the all-in seat's range is not modelled — said.)
+        const gone = behind ? seats.filter((s) => s.pos !== heroPos && behind![s.pos] != null && behind![s.pos]! <= 0.005) : [];
+        if (gone.length) {
+          seats = seats.filter((s) => !gone.includes(s));
+          stackNotes.push(`${STREET[k + 1]?.toLowerCase() ?? "next street"}: ${gone.map((s) => s.pos).join(", ")} all-in — left out of the tree, ` +
+            `${gone.length === 1 ? "his" : "their"} chips in the pot (the showdown against ${gone.length === 1 ? "that range" : "those ranges"} is not modelled)`);
+        }
         // THE STACK OF THE PLAYERS STILL IN (2026-09-25, hand 4920544353). The tree's stack was the effective stack
         // of the field it started with; once a seat folds, the next street's tree is solved at the effective stack of
         // the seats left — hero against the deepest villain still in — never more than the rolled number.
@@ -1340,7 +1501,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         prevOut = outFp;
         // the street is closed: everything the next street needs is checkpointed for this hand's later decisions
         if (rootKey && handKey) {
-          const key = exitKeys[si] ?? exitKeyOf(entryKeyAt(si), toks, streetBoard);
+          const key = exitKeys[si] ?? exitKeyOf(entryKeyAt(si), toks, streetBoard, spec.streetAmounts?.[si]);
           handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry: entryKeyAt(si), key, tokens: toks.slice(), kind: "closed", solId: String(ens.solId),
             ...(startedFp ? { inFp: startedFp } : {}), out: outFp, at: Date.now() });
           saveCheckpoint(handKey, key, {
@@ -1349,7 +1510,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
             streets: trace.streets.slice(), nodes: trace.nodes.slice(), at: Date.now(),
           });
         }
-        if (seats.length < 2) return fail("everyone else folded — no decision left to solve");
+        if (seats.length < 2) return fail(gone.length ? "every other player still in is all-in — no decision left to solve" : "everyone else folded — no decision left to solve");
         if (stack <= 0.005) return fail("line is all-in — no pending decision to solve");
         closed = true;
         break;
