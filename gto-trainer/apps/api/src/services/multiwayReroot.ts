@@ -118,13 +118,12 @@ export function replayWithout(toks: string[], seats: string[]): { toks: string[]
   return { toks: out, seats: outSeats };
 }
 
-export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
-  const first = a.streets.length - 1;
-  if (first < 1 || first > 2) return { ok: false, why: "nothing to re-root on the flop" };
-  const m = moneyThrough(a, first);
-  if (m.unpriced) return { ok: false, why: "a bet or raise on an earlier street has no amount on the capture — its money cannot be priced" };
-  if (m.stack <= 0.5) return { ok: false, why: "the earlier streets put everyone (near) all-in" };
-  const order = (xs: string[]) => a.ordered.filter((p) => xs.includes(p));
+/**
+ * WHO THE NARROWING WALKS (the re-root's step 2, shared with the last resort): the seats still in at street `first`
+ * — not folded, not all-in since an earlier street — and the fewest three-seat groups (coverGroups) that hold hero,
+ * every earlier aggressor and each of them. `groups` null = more must-seats than a three-seat walk holds.
+ */
+export function narrowingPlan(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>): { allIn: Set<string>; live: string[]; groups: string[][] | null } {
   // A SEAT ALL-IN FROM AN EARLIER STREET NEVER ACTS AGAIN (2026-09-24, sweep side-pot spots). It needs no seat in a
   // tree: its chips are already in the pot (moneyThrough counts them) and nobody can bet into it. Leaving it out is
   // what lets "CO jammed the flop, three called, turn bet to hero" be ONE exact three-seat tree instead of a
@@ -132,22 +131,20 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   const curSeats = new Set(a.streetSeats[first] ?? []);
   const allIn = new Set([...(a.allIn ?? [])].filter((p) => p !== a.heroPos && !curSeats.has(p) && !m.folded.has(p)));
   const live = a.ordered.filter((p) => !m.folded.has(p) && !allIn.has(p));
-  if (!live.includes(a.heroPos)) return { ok: false, why: "hero folded earlier" };
-
-  // ---- 2. narrow each live seat's range through the earlier streets
   const groups = coverGroups(live, a.heroPos, new Set([...m.aggressors].filter((p) => !allIn.has(p))));
-  if (!groups) return { ok: false, why: `${[...m.aggressors].join(", ")} all bet or raised earlier — more aggressors than a three-seat walk holds` };
-  // THE DOOM CHECK COMES FIRST (2026-09-24 latency pass). Whether the current street can be collapsed to three
-  // seats depends only on its tokens, not on the narrowed ranges — so ask before spending 12-24 s of cloud walks
-  // on ranges the last resort would never use (every last-resort turn/river in the sweep paid exactly that).
-  const curToks: SeatTok[][] = [a.streets[first]!.map((tok, j) => ({ tok, seat: a.streetSeats[first]![j]! }))];
-  const probeSeats = live.map((p) => ({ pos: p, range: a.arr(p) }));
-  if (probeSeats.length > 3 && !pickCollapses(planCollapses(probeSeats, a.heroPos, curToks))) {
-    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses` };
-  }
-  if (probeSeats.length <= 3 && (!allIn.size || probeSeats.length !== 3)) {
-    return { ok: false, why: "fewer than four seats left — the plain chain answers this, not a re-root" };
-  }
+  return { allIn, live, groups };
+}
+
+/**
+ * THE NARROWING WALKS (the re-root's step 2, shared with the last resort): each group walks the earlier streets
+ * 0..first-1 as a three-seat (or two-seat) chain with walkThrough — the seats outside it never act there (their chips
+ * are the approximation) — and hands on each seat's range leaving them. The groups walk at once. `ms` is the
+ * wall-clock of the slowest, what the narrowing adds to the answer.
+ */
+export async function narrowThroughEarlier(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][]):
+    Promise<{ ok: true; ranges: Record<string, number[]>; leftOut: Set<string>; walks: number; ms: number } | { ok: false; why: string; ms: number }> {
+  const t0 = Date.now();
+  const order = (xs: string[]) => a.ordered.filter((p) => xs.includes(p));
   const ranges: Record<string, number[]> = {};
   const leftOut = new Set<string>();
   // THE GROUPS WALK AT ONCE (2026-09-24 latency pass): each narrowing walk is its own cloud tree(s), 5-12 s of
@@ -184,9 +181,37 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   };
   const results = await Promise.all(groups.map(walkOne));
   for (const { keep, r } of results) {
-    if (!r.ok) return { ok: false, why: `narrowing walk ${keep.join("/")}: ${r.why}` };
+    if (!r.ok) return { ok: false, why: `narrowing walk ${keep.join("/")}: ${r.why}`, ms: Date.now() - t0 };
     for (const [pos, rng] of Object.entries(r.rangesOut ?? {})) if (!ranges[pos]) ranges[pos] = rng;
   }
+  return { ok: true, ranges, leftOut, walks: groups.length, ms: Date.now() - t0 };
+}
+
+export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
+  const first = a.streets.length - 1;
+  if (first < 1 || first > 2) return { ok: false, why: "nothing to re-root on the flop" };
+  const m = moneyThrough(a, first);
+  if (m.unpriced) return { ok: false, why: "a bet or raise on an earlier street has no amount on the capture — its money cannot be priced" };
+  if (m.stack <= 0.5) return { ok: false, why: "the earlier streets put everyone (near) all-in" };
+  const { allIn, live, groups } = narrowingPlan(a, first, m);
+  if (!live.includes(a.heroPos)) return { ok: false, why: "hero folded earlier" };
+
+  // ---- 2. narrow each live seat's range through the earlier streets
+  if (!groups) return { ok: false, why: `${[...m.aggressors].join(", ")} all bet or raised earlier — more aggressors than a three-seat walk holds` };
+  // THE DOOM CHECK COMES FIRST (2026-09-24 latency pass). Whether the current street can be collapsed to three
+  // seats depends only on its tokens, not on the narrowed ranges — so ask before spending 12-24 s of cloud walks
+  // on ranges the last resort would never use (every last-resort turn/river in the sweep paid exactly that).
+  const curToks: SeatTok[][] = [a.streets[first]!.map((tok, j) => ({ tok, seat: a.streetSeats[first]![j]! }))];
+  const probeSeats = live.map((p) => ({ pos: p, range: a.arr(p) }));
+  if (probeSeats.length > 3 && !pickCollapses(planCollapses(probeSeats, a.heroPos, curToks))) {
+    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses` };
+  }
+  if (probeSeats.length <= 3 && (!allIn.size || probeSeats.length !== 3)) {
+    return { ok: false, why: "fewer than four seats left — the plain chain answers this, not a re-root" };
+  }
+  const nr = await narrowThroughEarlier(a, first, m, groups);
+  if (!nr.ok) return { ok: false, why: nr.why };
+  const { ranges, leftOut } = nr;
   for (const p of live) if (!ranges[p]) return { ok: false, why: `no narrowing walk produced ${p}'s range` };
 
   // ---- 3. collapse the current street on its own
@@ -208,4 +233,29 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   if (!picked) return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses` };
   return { ok: true, picked, first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
     left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(a.behind ? { behind: m.behind } : {}) };
+}
+
+/**
+ * THE LAST RESORT'S RANGES, NARROWED THROUGH THE EARLIER STREETS (2026-10-03, Brady: "do 1-3"). The last resort plays
+ * hero against the last aggressor heads-up at the current street; it used to give both the flop-ARRIVAL ranges, as if
+ * nothing had happened on the flop (or turn). This runs the re-root's own narrowing (narrowingPlan + narrowThroughEarlier
+ * — the same three-seat walks, no second implementation) for the one group that holds the aggressor (hero is in every
+ * group), and hands back hero's and the aggressor's ranges leaving the earlier streets. Nothing to narrow on the flop;
+ * a group that cannot be formed or walked is a refusal the caller turns into today's unnarrowed last resort.
+ */
+export async function narrowForLastResort(a: RerootArgs, villain: string):
+    Promise<{ ok: true; hero: number[]; villain: number[]; walks: number; ms: number; group: string[] } | { ok: false; why: string; ms: number }> {
+  const first = a.streets.length - 1;
+  if (first < 1) return { ok: false, why: "on the flop there is nothing earlier to narrow", ms: 0 };
+  const m = moneyThrough(a, first);
+  if (m.unpriced) return { ok: false, why: "a bet or raise on an earlier street has no amount on the capture", ms: 0 };
+  const { groups } = narrowingPlan(a, first, m);
+  if (!groups) return { ok: false, why: `${[...m.aggressors].join(", ")} all bet or raised earlier — more than a three-seat walk holds`, ms: 0 };
+  const mine = groups.filter((g) => g.includes(villain)).slice(0, 1);
+  if (!mine.length) return { ok: false, why: `${villain} is in no narrowing group`, ms: 0 };
+  const nr = await narrowThroughEarlier(a, first, m, mine);
+  if (!nr.ok) return nr;
+  const hero = nr.ranges[a.heroPos], vil = nr.ranges[villain];
+  if (!hero || !vil) return { ok: false, why: `the narrowing walk ${mine[0]!.join("/")} handed on no range for ${!hero ? a.heroPos : villain}`, ms: nr.ms };
+  return { ok: true, hero, villain: vil, walks: nr.walks, ms: nr.ms, group: mine[0]! };
 }

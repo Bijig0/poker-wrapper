@@ -162,5 +162,10 @@ describe.skipIf(gated)("hand 4920544353: the BTN's turn jam is an all-in in the 
     for (const t of lr) { expect(t.stack).toBe(21.6); expect(t.pot).toBe(31.4); }
     expect(r.warning).toContain("POSTFLOP LAST RESORT");
     expect(r.warning).toContain("before the 21.6bb ALL-IN hero faces, 21.6bb behind (CO 87.4 / BTN 21.6)");
+    // the last resort's two ranges are narrowed through the flop by the re-root's own walk (2026-10-03): hero and the BTN,
+    // the BB and SB folded there — one heads-up walk, its tree a flop tree of CO / BTN alone
+    expect(r.warning).toContain("the two entering ranges are narrowed by the earlier streets by 1 three-seat walk(s) (CO/BTN");
+    const walk = treesOn("FLOP").filter((t) => !t.mid && t.oopPos === "CO" && t.ipPos === "BTN");
+    expect(walk.length).toBeGreaterThan(0);
   }, 120_000);
 });

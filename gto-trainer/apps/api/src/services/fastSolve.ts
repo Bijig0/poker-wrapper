@@ -6,7 +6,7 @@ import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
-import { rerootCollapse, moneyThrough } from "./multiwayReroot";
+import { narrowForLastResort, rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
 import { missQueue, missOriginOf, type MissRef } from "./missQueue";
@@ -36,7 +36,7 @@ import {
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
 import { contestedChips, deadMoney, effectiveStack, foldRound, moneyState, streetChips, streetFromTokens, type MoneyState } from "../utils/tableMoney/tableMoney";
-import { tmark } from "./answerTrace";
+import { tmark, tspan } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
 import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
@@ -1625,6 +1625,9 @@ async function solvePostflopViaChainOnce(
     seatStacks?: Record<string, number>;
     /** a merged seat → the table positions it stands for (check #5 contests with every member) */
     members?: Record<string, string[]>;
+    /** how this walk's entering ranges were made, when not the flop arrival's alone (the last resort's narrowing) — rides
+     *  the trace's rangeSource */
+    rangeNote?: string;
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -1669,6 +1672,29 @@ async function solvePostflopViaChainOnce(
   /** a plan's merged seats: the tree's seat name → its members */
   const membersOf = (seats: { pos: string; members?: string[] }[]) =>
     Object.fromEntries(seats.filter((x) => (x.members?.length ?? 0) > 1).map((x) => [x.pos, x.members!]));
+  /**
+   * THE LAST RESORT'S ENTERING RANGES, NARROWED (2026-10-03, Brady: "do 1-3"): on the turn or river, hero's and the
+   * aggressor's ranges leaving the earlier streets, from the re-root's own three-seat walks (multiwayReroot
+   * .narrowForLastResort), not the flop arrival's. Nothing to narrow on the flop; a narrowing that fails leaves today's
+   * unnarrowed last resort and says why. LAST_RESORT_NARROW=0 switches it off. Returns the note's clause.
+   */
+  const narrowLastResort = async (lr: NonNullable<ReturnType<typeof heroVsAggressor>>, heroPosLr: string): Promise<string> => {
+    if (lr.first < 1) return "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)";
+    if (process.env.LAST_RESORT_NARROW === "0") return "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)";
+    const t = Date.now();
+    const nr = await narrowForLastResort({
+      ordered, heroPos: heroPosLr, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, board: tk.board, heroComboIdx,
+      rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))), ...(behindFlop ? { behind: behindFlop } : {}), amounts: streetAmounts,
+    }, lr.villain);
+    tspan("last resort: narrowing the two entering ranges", t, nr.ok ? `${nr.walks} walk(s) ${nr.group.join("/")}` : nr.why);
+    if (!nr.ok) return `the two entering ranges are NOT narrowed by the earlier streets (${nr.why})`;
+    const sp = lr.walkable.seatSpec;
+    sp.oopRange = sp.oopPos === heroPosLr ? nr.hero : nr.villain;
+    sp.ipRange = sp.ipPos === heroPosLr ? nr.hero : nr.villain;
+    const secs = (nr.ms / 1000).toFixed(1);
+    (lr.walkable as Walkable).rangeNote = `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${secs} s`;
+    return `the two entering ranges are narrowed by the earlier streets by ${nr.walks} three-seat walk(s) (${nr.group.join("/")}, ${secs} s; seats outside a walk play as if they had folded there)`;
+  };
   const specOf = (three: { pos: string; range: number[] }[], heroIdx: number): SeatSpec => ({
     oopPos: three[0]!.pos, midPos: three[1]!.pos, ipPos: three[2]!.pos,
     oopRange: three[0]!.range, midRange: three[1]!.range, ipRange: three[2]!.range,
@@ -1755,10 +1781,11 @@ async function solvePostflopViaChainOnce(
         // this street and no pair is mergeable, so nothing reduces the field to three. What every such spot still
         // has is HERO and the LAST AGGRESSOR: the street is re-rooted heads-up between them, the other villains'
         // chips (and hero's own earlier chips this street) stay in the pot as dead money, and hero faces the
-        // aggressor's bet at the real price. Unmodelled, said in the answer: the other villains' ranges and hands,
-        // and the narrowing of the two entering ranges by the earlier streets. It beats a blank.
+        // aggressor's bet at the real price. Unmodelled, said in the answer: the other villains' ranges and hands. The
+        // two entering ranges are narrowed through the earlier streets (narrowLastResort, 2026-10-03). It beats a blank.
         const lr = heroVsAggressor({ ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts, allIn: allInSeats, behind: behindFlop });
         if (!lr) return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — and no last resort fits (nobody to face, or everyone all-in)`);
+        const narrowed = await narrowLastResort(lr, ordered[heroAt]!);
         walkables = [lr.walkable];
         reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
         blendWhy = null;
@@ -1766,7 +1793,7 @@ async function solvePostflopViaChainOnce(
           `POSTFLOP LAST RESORT — ${collapseRefusal(cSeats, toks)}${rerootWhy ? ` (re-rooting at the ${cur}: ${rerootWhy})` : ""}; played as hero (${ordered[heroAt]}) against the last ` +
           `aggressor (${lr.villain}) alone at the ${cur}: ${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
           `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.bet >= lr.stack - 0.005 ? "ALL-IN" : lr.villainBet ? "bet" : "raise"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind${lr.stacks}; ` +
-          `the other villains' ranges and hands are not modelled and the two entering ranges are not narrowed by the earlier streets.`;
+          `the other villains' ranges and hands are not modelled; ${narrowed}.`;
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
       }
       if (!reroot) walkables = picked!.plans.map((pl) => ({
@@ -1868,7 +1895,7 @@ async function solvePostflopViaChainOnce(
     streetSeats: w.streetSeats,
     heroComboIdx,
     dealt: dealtCount(hand, heroPos),
-    rangeSource: rangeSource ?? undefined,
+    rangeSource: [rangeSource, w.rangeNote].filter(Boolean).join(" + ") || undefined,
     handKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
     planTag: w.kind,
   });
@@ -1929,6 +1956,7 @@ async function solvePostflopViaChainOnce(
     if (lr) {
       reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
       blendWhy = null;
+      const narrowed = await narrowLastResort(lr, ordered[heroAtLr]!);
       const c = await solveOne(lr.walkable as any);
       const meta = { ...solveMetaBase, solveMs: Date.now() - t0 };
       if (c.ok) {
@@ -1941,7 +1969,7 @@ async function solvePostflopViaChainOnce(
           `played as hero (${ordered[heroAtLr]}) against the last aggressor (${lr.villain}) alone at the ${cur}: ` +
           `${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
           `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.bet >= lr.stack - 0.005 ? "ALL-IN" : "bet"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind${lr.stacks}; ` +
-          `the other villains' ranges and hands are not modelled and the two entering ranges are not narrowed by the earlier streets.`;
+          `the other villains' ranges and hands are not modelled; ${narrowed}.`;
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
         walkFails.length = 0;
       } else {
