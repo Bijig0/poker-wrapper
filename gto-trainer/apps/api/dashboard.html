@@ -1403,7 +1403,7 @@ function sentBody(w) {
     ...(ms.some((m) => m.other) ? [["also sent", (m) => m.other ? `<span class="mono">${esc(m.other)}</span>` : ""]] : []),
   ];
   const from = sts.every((st) => st.sentFrom === "recorded") ? "Recorded when the chain ran"
-    : sts.some((st) => st.sent) ? "Rebuilt from the stored trace with the tree builder the chain uses — this solve was stored before requests were recorded (2026-09-24)"
+    : sts.some((st) => st.sent) ? "Rebuilt from the stored trace with TODAY's tree builder — this solve was stored before requests were recorded (2026-09-24); the settings (100/0/0), per-seat stacks and listed all-ins shown are what the builder sends since 2026-10-03, not what this old solve sent (60/500/10, one stack)"
     : "Read from the stored trace — this API predates the request record; restart it (the banner's Restart by hand) for the exact bodies";
   return `<div class="sent-box">
     <div class="scroll"><table class="sent-tbl"><thead><tr><th></th>${sts.map((st) => `<th>${esc(String(st.street ?? "?").toLowerCase())} tree</th>`).join("")}</tr></thead>

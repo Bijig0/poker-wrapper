@@ -141,7 +141,8 @@ describe("solveAiChain three-way", () => {
     expect(r.potNode).toBe(12.21);
     expect(r.solves).toBe(2);
     expect(s.trees[1].startingStreet).toBe("TURN");
-    expect(s.trees[1].fixedLevels).toEqual({ TURN: ["62.8%"] });   // 4.71 / 7.5
+    expect(s.trees[1].played).toEqual({ TURN: [{ seat: 2, to: 4.71 }] });   // the CO's 4.71, as its amount (was "62.8%" of 7.5)
+    expect(s.trees[1].fixedLevels).toBeUndefined();
     expect(s.trees[1].mid).toBeDefined();                            // still three seats entering the turn
     const hero = r.trace.nodes.at(-1)!;
     expect(hero.heroNode).toBe(true);
@@ -262,8 +263,8 @@ describe("solveAiChain heads-up (unchanged behaviour)", () => {
     if (!r.ok) return;
     expect(r.potNode).toBe(12);
     expect(r.stackStreet).toBe(94.5);
-    expect(s.trees[0].fixedLevels).toEqual({ FLOP: ["50%"] });
-    expect(s.trees[1].fixedLevels).toBeUndefined();
+    expect(s.trees[0].played).toEqual({ FLOP: [{ seat: 0, to: 3 }] });   // the 3 bet, as its amount (was "50%")
+    expect(s.trees[1].played).toBeUndefined();
     expect(s.trees[1].mid).toBeUndefined();
   });
 });
@@ -286,7 +287,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     const api = gtowApi as any;
     const saved = { peekSolution: api.peekSolution, peekNode: api.peekNode, ensure: api.ensureCustomSolution };
     const trees: any[] = [];
-    api.peekSolution = (input: any) => (input.startingStreet === "FLOP" && !input.fixedLevels ? "sol-FLOP" : null);
+    api.peekSolution = (input: any) => (input.startingStreet === "FLOP" && !input.played ? "sol-FLOP" : null);
     api.peekNode = (solId: string, q: any) => {
       const acts = q.flopActions ?? q.turnActions ?? q.riverActions ?? "";
       const nd = nodes[`${solId}|${acts}`];
@@ -294,7 +295,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     };
     api.ensureCustomSolution = async (input: any) => {
       trees.push(input);
-      return { ok: true, solId: input.fixedLevels ? `sol-${input.startingStreet}-fixed` : `sol-${input.startingStreet}`, created: !!input.fixedLevels || input.startingStreet !== "FLOP" };
+      return { ok: true, solId: input.played ? `sol-${input.startingStreet}-fixed` : `sol-${input.startingStreet}`, created: !!input.played || input.startingStreet !== "FLOP" };
     };
     return { trees, restore: () => { api.peekSolution = saved.peekSolution; api.peekNode = saved.peekNode; api.ensureCustomSolution = saved.ensure; } };
   };
@@ -312,7 +313,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(c.trees[0].startingStreet).toBe("FLOP");
-    expect(c.trees[0].fixedLevels).toBeUndefined();            // the size-free tree, not a pinned one
+    expect(c.trees[0].played).toBeUndefined();                 // the size-free tree, not a pinned one
     expect(r.trace.streets[0]!.reuse).toContain("size-free tree reused");
     expect(r.trace.streets[0]!.fixedLevels).toBeNull();
     expect(r.trace.streets[0]!.created).toBe(false);
@@ -327,7 +328,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     const r = await solveAiChain(spec(["X", "R3.1", "C"]));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(c.trees[0].fixedLevels).toBeUndefined();
+    expect(c.trees[0].played).toBeUndefined();
     expect(r.trace.streets[0]!.reuse).toContain("Bet(310) taken as the tree's Bet(300)");
     expect(r.trace.streets[0]!.labels).toEqual(["Check", "Bet(300)", "Call"]);
   });
@@ -339,7 +340,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     const r = await solveAiChain(spec(["X", "R4.5", "C"]));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(c.trees[0].fixedLevels).toEqual({ FLOP: ["75%"] });
+    expect(c.trees[0].played).toEqual({ FLOP: [{ seat: 1, to: 4.5 }] });   // the CO's 4.5, as its amount (was "75%")
     expect(r.trace.streets[0]!.created).toBe(true);
     expect(r.trace.streets[0]!.reuse).toContain("not reusable");
     expect(r.trace.streets[0]!.reuse).toContain("Bet(450) is not on it");
@@ -354,7 +355,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.trace.streets[0]!.reuse).toContain("size-free tree reused");
-    expect(c.trees[0].fixedLevels).toBeUndefined();
+    expect(c.trees[0].played).toBeUndefined();
     expect(r.trace.streets[0]!.nodeSrc!.fetched).toBeGreaterThanOrEqual(1);
   });
 
@@ -372,7 +373,7 @@ describe("solveAiChain reuses the street's size-free tree when the observed size
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.trace.streets[0]!.reuse).toContain("one fetch already spent");
-    expect(c.trees[0].fixedLevels?.FLOP).toHaveLength(2);
+    expect(c.trees[0].played?.FLOP).toEqual([{ seat: 1, to: 3 }, { seat: 0, to: 9 }]);
     expect(r.trace.streets[0]!.created).toBe(true);
   });
 });
@@ -462,7 +463,7 @@ describe("per-hand street checkpoints (2026-09-24)", () => {
     });
     const api = gtowApi as any;
     const ensure = api.ensureCustomSolution;
-    api.ensureCustomSolution = async (input: any) => ({ ...(await ensure(input)), solId: input.fixedLevels ? `sol-${input.startingStreet}-fixed` : `sol-${input.startingStreet}` });
+    api.ensureCustomSolution = async (input: any) => ({ ...(await ensure(input)), solId: input.played ? `sol-${input.startingStreet}-fixed` : `sol-${input.startingStreet}` });
     restore = () => { api.ensureCustomSolution = ensure; s.restore(); };
     const h = (streets: string[][], board: string): AiChainSpec => ({
       oopPos: "BB", ipPos: "CO", oopRange: full(), ipRange: full(), flopPot: 6, flopStack: 97.5,
@@ -647,11 +648,11 @@ describe("the trace records each street's tree request", () => {
  * GTO Wizard with a real in-mock tree cache: a tree is "cached" once ensureCustomSolution has created it.
  */
 describe("hero's own postflop size snaps to the tree he was asked on (no rebuild)", () => {
-  const ASKED = ["30%"];   // the flop's levels once the CO's 1.8 bet into 6 is pinned: the tree hero was asked on
+  const ASKED = [{ seat: 1, to: 1.8 }];   // the flop once the CO's 1.8 bet into 6 is pinned (its amount): the tree hero was asked on
   const nodes: Record<string, Node> = {
     "sol-FLOP-asked|": { toAct: "BB", acts: [X, B(1.8)] },
     "sol-FLOP-asked|X": { toAct: "CO", acts: [X, B(1.8)] },
-    // hero's node on the tree he was asked on: its raise level falls back to the pinned 30% — a raise to 4.7
+    // hero's node on the tree he was asked on: his raise is GTO Wizard's own (his seat AUTOMATIC) — a raise to 4.7
     "sol-FLOP-asked|X-R1.8": { toAct: "BB", acts: [F, C(1.8), R(4.7)] },
     "sol-FLOP-asked|X-R1.8-R4.7": { toAct: "CO", acts: [F, C(4.7)] },
     // a flop tree re-created with a second level pinned (whatever size): scripted for the re-create cases
@@ -670,8 +671,8 @@ describe("hero's own postflop size snaps to the tree he was asked on (no rebuild
     const readNodes = new Set<string>();
     const trees: { input: any; solId: string; created: boolean }[] = [];
     const idOf = (input: any) => {
-      const fl = input.fixedLevels?.[input.startingStreet];
-      return !fl ? `sol-${input.startingStreet}` : fl.length === 1 && fl[0] === ASKED[0] ? `sol-${input.startingStreet}-asked` : `sol-${input.startingStreet}-fixed2`;
+      const fl = input.played?.[input.startingStreet];
+      return !fl ? `sol-${input.startingStreet}` : JSON.stringify(fl) === JSON.stringify(ASKED) ? `sol-${input.startingStreet}-asked` : `sol-${input.startingStreet}-fixed2`;
     };
     api.peekSolution = (input: any) => (created.has(idOf(input)) ? idOf(input) : null);
     api.ensureCustomSolution = async (input: any) => {
@@ -715,7 +716,7 @@ describe("hero's own postflop size snaps to the tree he was asked on (no rebuild
     if (!r2.ok) return;
     const flop = c.trees.slice(1).filter((t) => t.input.startingStreet === "FLOP");
     expect(flop.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-asked", false]]);   // the same tree, from the cache
-    expect(flop[0]!.input.fixedLevels).toEqual({ FLOP: ASKED });                            // never [30%, 31.3%]
+    expect(flop[0]!.input.played).toEqual({ FLOP: ASKED });                                 // never [1.8, 4.8]
     const st = r2.trace.streets[0]!;
     expect(st.created).toBe(false);
     expect(st.treeWhy).toBeNull();
@@ -734,13 +735,13 @@ describe("hero's own postflop size snaps to the tree he was asked on (no rebuild
     const c = cachedTrees();
     restore = c.restore;
     // hero is the CO (in position): BB checks, hero bets 1.8, the BB check-raises to 4.8 — hero decides
-    await (gtowApi as any).ensureCustomSolution({ board: "Ts7h2d", startingStreet: "FLOP", fixedLevels: { FLOP: ASKED } });   // the 4.7 tree, cached
+    await (gtowApi as any).ensureCustomSolution({ board: "Ts7h2d", startingStreet: "FLOP", played: { FLOP: ASKED } });   // the 4.7 tree, cached
     const r = await solveAiChain({ ...handSpec([["X", "R1.8", "R4.8"]], "Ts7h2d"), heroSeat: "ip" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const flop = c.trees.slice(1).filter((t) => t.input.startingStreet === "FLOP");
     expect(flop.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-fixed2", true]]);
-    expect(flop[0]!.input.fixedLevels.FLOP).toHaveLength(2);
+    expect(flop[0]!.input.played.FLOP).toEqual([{ seat: 1, to: 1.8 }, { seat: 0, to: 4.8 }]);
     expect(r.trace.streets[0]!.labels).toEqual(["Check", "Bet(180)", "Raise(480)"]);
     expect(r.trace.streets[0]!.reuse ?? "").not.toContain("hero's");
   });
@@ -755,7 +756,7 @@ describe("hero's own postflop size snaps to the tree he was asked on (no rebuild
     if (!r.ok) return;
     const flop = c.trees.slice(1).filter((t) => t.input.startingStreet === "FLOP");
     expect(flop.map((t) => [t.solId, t.created])).toEqual([["sol-FLOP-fixed2", true]]);
-    expect(flop[0]!.input.fixedLevels).toEqual({ FLOP: ["30%", "54.2%"] });
+    expect(flop[0]!.input.played).toEqual({ FLOP: [{ seat: 1, to: 1.8 }, { seat: 0, to: 7 }] });   // the amounts (were "30%", "54.2%")
     expect(r.trace.streets[0]!.reuse).toContain("hero's 7 is not on the tree he was asked on");
     expect(r.trace.streets[0]!.labels).toEqual(["Check", "Bet(180)", "Raise(700)", "Call"]);
   });

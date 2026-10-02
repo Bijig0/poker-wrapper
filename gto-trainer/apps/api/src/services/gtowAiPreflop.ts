@@ -41,6 +41,7 @@
  * class → weight), so fastSolve.solvePostflop6maxStrategy reads one shape whichever piece answered.
  */
 import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { bbAmount, TREE_SETTINGS, TREE_SETTINGS_TAG } from "./gtowApi";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
@@ -383,7 +384,34 @@ export function menus(levels: number[], n: number) {
   return { hero, villain };
 }
 
+/**
+ * EACH SEAT'S ALL-IN, LISTED (2026-10-03). The tree is sent with the settings explicit and off (gtowApi.TREE_SETTINGS):
+ * no all-in threshold turning a big raise into the all-in, no all-in added by GTO Wizard's own rule
+ * (`allin_if_less_than`). So the all-in is in the tree only where it is listed — and it is listed in every size list
+ * of every seat: "<its stack>bb", capped at the deepest other seat (a raise past what anyone can call is the all-in;
+ * GTO Wizard names it by the seat's own stack, R<stack>). Probed 2026-10-03 on two trees from the solve cache, 6-handed
+ * with a 28.5bb seat and 3-handed at 21/30bb: every node that offered an all-in before still does, the open-jam now
+ * exists at 20-30bb (the old rule left it out: an all-in past 5x the pot), and a 3-bet the old threshold had replaced
+ * by the all-in (17.5 of a 28.5 stack) is a size of its own again beside it. The dead-SB ghost is not a seat here.
+ */
+export function seatAllInsPreflop(shape: Pick<AiPreflopShape, "positions" | "stacks" | "deadSb">): Record<string, number> {
+  const real = shape.positions.filter((p) => !(shape.deadSb && p === "SB"));
+  const st = (p: string) => shape.stacks[p] ?? 100;
+  return Object.fromEntries(real.map((p) => {
+    const others = real.filter((q) => q !== p).map(st);
+    return [p, Math.round(Math.min(st(p), others.length ? Math.max(...others) : st(p)) * 100) / 100];
+  }));
+}
+
 function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
+  const allIns = seatAllInsPreflop(shape);
+  /** a list with the seat's all-in at its end (an amount at or past it IS the all-in) */
+  const withAllIn = (position: string, list: string[]) => {
+    const ai = allIns[position];
+    if (ai == null) return list;
+    const out = list.filter((x) => { const mm = /^(\d+(?:\.\d+)?)bb$/.exec(x); return !(mm && Number(mm[1]) >= ai - 0.005); });
+    return [...out, bbAmount(ai)];
+  };
   const sizes = (position: string) => {
     // the dead-SB ghost may only fold: no limp, no call, no size to raise to (see the header — an all-in ghost took a
     // flop seat and cost every other seat its cold-call)
@@ -395,7 +423,8 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
     // calls of opens and cold-calls of 3-bets+ must be switched on explicitly in FIXED mode (the web app's own
     // defaults: ccVs2b on, ccVs3bPlus off — we want both, a fish's line is anything)
     return { position, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
-      bet_sizes: s.opens, raise_sizes: s.three, second_raise_sizes: s.four, third_plus_raise_sizes: s.five };
+      bet_sizes: withAllIn(position, s.opens), raise_sizes: withAllIn(position, s.three),
+      second_raise_sizes: withAllIn(position, s.four), third_plus_raise_sizes: withAllIn(position, s.five) };
   };
   return {
     starting_street: "PREFLOP", pot: shape.deadBb, ante: shape.anteBb || null, ante_distribution_method: "PER_PLAYER",
@@ -405,7 +434,8 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
     // dropped 2.2, 2.3 and 2.6 (kept 2.1, 3, 3.5). The line's own size then has no node, and a missing SIZE is answered
     // 204 for ever, not NODE_DOES_NOT_EXIST: hero's node 'R2.6-R13-F' ran out its 30 s and the hand fell to the last
     // resort. At 0 every declared size is a node (probed: the same node in 0.9 s). The store keys on this body.
-    bet_sizes: { allin_threshold: 60, allin_if_less_than: 500, merge_sizes_threshold: 0, max_num_raises: 5,
+    // …and since 2026-10-03 the two all-in settings are off as well (gtowApi.TREE_SETTINGS — the all-in is LISTED, above)
+    bet_sizes: { ...TREE_SETTINGS, max_num_raises: 5,
       street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: shape.positions.map(sizes) }] },
     players: shape.positions.map((p) => ({
       position: p, display_position: p,
@@ -423,6 +453,8 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
 
 export const treeKeyOf = (shape: AiPreflopShape, m: ReturnType<typeof menus>) =>
   JSON.stringify([shape.positions, shape.positions.map((p) => shape.stacks[p]), shape.sb, shape.bb, shape.straddle, shape.rakeCapBb, shape.heroApiPos, m, shape.deadBb || 0,
+    // the settings off, each seat's all-in listed (2026-10-03): never the same tree as one built under the old settings
+    TREE_SETTINGS_TAG,
     // a table with an ante or its own rake is a different tree; one with neither keys exactly as before
     ...(shape.anteBb || shape.siteRake ? [shape.anteBb ?? 0, shape.siteRake ?? null] : [])]);
 

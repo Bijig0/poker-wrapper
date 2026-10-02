@@ -38,6 +38,9 @@ export interface CheckResult {
   text: string;
   /** a FAIL an existing reason on the path already reports (its code): shown, but not a second reason */
   covered?: string;
+  /** #5 only: the POT the tree was solved at is not the table's (entering the street or at hero's node) — the seatbelt
+   *  re-solves on it (fastSolve, 2026-10-03); a stack-only failure does not set it */
+  potOff?: true;
 }
 export type PathChecks = Partial<Record<CheckStreet, CheckResult[]>>;
 
@@ -90,11 +93,11 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 5, group: "inputs", name: "Pot and stack add up",
     spec: "Pot entering each street = previous pot + chips put in, and matches the capture's pot within a tolerance; stack = effective stack of players still in.",
     build: "built",
-    how: "The tree's pot entering each street, and the pot at hero's node, against the capture's own money (every seat's chips per street from the betting line, plus antes and dead posts): within 0.5bb or 5%. The tree's stack against hero vs the deepest villain still in, from the stacks as dealt less the chips of the earlier streets: within 0.5bb or 3% (a collapse plan's tree may be shallower, never deeper)." },
+    how: "The tree's pot entering each street, and the pot at hero's node, against the capture's own money (every seat's chips per street from the betting line, plus antes and dead posts; a bet past what any other seat can put in counts only what can be matched, on both sides): within 0.5bb or 5%. The tree's stack against hero vs the deepest villain still in, from the stacks as dealt less the chips of the earlier streets: within 0.5bb or 3% (a collapse plan's tree may be shallower, never deeper); and since 2026-10-03 each seat's own stack sent against the table's. A POT that disagrees is a seatbelt, not only a flag: the decision is solved again from the table's state, and refused if the pot still disagrees." },
   { id: 6, group: "inputs", name: "Line matches the table",
     spec: "Walked actions = captured actions in order; each bet size within a set tolerance of what was bet.",
     build: "built",
-    how: "Every captured action of the street is walked, in order, as the same kind (check / call / fold / wager); each wager's size on the tree is within 0.5bb or 10% of the size bet at the table (both all-in = equal). Before 2026-09-27 a snapped size was a note only." },
+    how: "Every captured action of the street is walked, in order, as the same kind (check / call / fold / wager); each wager's size on the tree is within 0.5bb or 10% of the size bet at the table — an all-in too, since 2026-10-03 (it carries the table's amount; before, it was the tree's own stack and \"all-in = all-in\" was all that was compared). Before 2026-09-27 a snapped size was a note only." },
   { id: 7, group: "inputs", name: "Rake and stake right",
     spec: "Rake and stake right AND identical on every street of the hand.",
     build: "built",
@@ -191,7 +194,8 @@ export function mergeChecks(xs: CheckResult[]): CheckResult[] {
         : worst;
     const texts = [...new Set(shown.map((x) => x.text))];
     const covered = worst.every((x) => x.covered) ? worst[0]!.covered : undefined;
-    out.push({ id, status: worst[0]!.status, text: texts.join(" · "), ...(covered ? { covered } : {}) });
+    const potOff = worst.some((x) => x.potOff);
+    out.push({ id, status: worst[0]!.status, text: texts.join(" · "), ...(covered ? { covered } : {}), ...(potOff ? { potOff: true as const } : {}) });
   }
   return out.sort((a, b) => a.id - b.id);
 }
@@ -448,16 +452,27 @@ export function checkPotStack(a: {
   plan?: string | null;
   /** a last resort re-rooted on this street carries this street's dead chips in its entering pot */
   skipPotIn?: boolean;
+  /** EACH SEAT'S STACK as the tree was sent it against the table's (2026-10-03): position, tree, table */
+  seatStacks?: { pos: string; tree: number; table: number }[];
+  /** which rule priced the table's side at hero's node (2026-10-03): "the table's pot", or the pot a plan's own seats
+   *  can contest — said in the text */
+  potRule?: string;
 }): CheckResult {
   const bad: string[] = [], ok: string[] = [];
+  let potOff = false;
   if (a.capturePot == null) ok.push("the capture's pot unknown");
   else if (a.skipPotIn) ok.push(`pot entering not compared (${a.plan ?? "re-rooted"}: this street's dead chips are in it)`);
-  else if (!within(a.potIn, a.capturePot, TOL.potBb, TOL.potPct)) bad.push(`pot entering the ${a.street} ${r2(a.potIn)}bb, the capture's ${r2(a.capturePot)}bb (Δ ${r2(a.potIn - a.capturePot)}bb)`);
+  else if (!within(a.potIn, a.capturePot, TOL.potBb, TOL.potPct)) { potOff = true; bad.push(`pot entering the ${a.street} ${r2(a.potIn)}bb, the capture's ${r2(a.capturePot)}bb (Δ ${r2(a.potIn - a.capturePot)}bb)`); }
   else ok.push(`pot ${r2(a.potIn)}bb = capture ${r2(a.capturePot)}bb`);
   if (a.potNode != null) {
     if (a.captureNodePot == null) ok.push("the capture's pot at hero's node unknown");
-    else if (!within(a.potNode, a.captureNodePot, TOL.potBb, TOL.potPct)) bad.push(`pot at hero's node ${r2(a.potNode)}bb, the capture's ${r2(a.captureNodePot)}bb (Δ ${r2(a.potNode - a.captureNodePot)}bb)`);
-    else ok.push(`${r2(a.potNode)}bb at hero's node`);
+    else if (!within(a.potNode, a.captureNodePot, TOL.potBb, TOL.potPct)) { potOff = true; bad.push(`pot at hero's node ${r2(a.potNode)}bb, the capture's ${r2(a.captureNodePot)}bb (Δ ${r2(a.potNode - a.captureNodePot)}bb${a.potRule ? `; ${a.potRule}` : ""})`); }
+    else ok.push(`${r2(a.potNode)}bb at hero's node${a.potRule ? ` (${a.potRule})` : ""}`);
+  }
+  if (a.seatStacks?.length) {
+    const off = a.seatStacks.filter((x) => !within(x.tree, x.table, TOL.stackBb, TOL.stackPct));
+    if (off.length) bad.push(`seat stacks sent ${off.map((x) => `${x.pos} ${r2(x.tree)}bb (table ${r2(x.table)}bb)`).join(", ")}`);
+    else ok.push(`each seat's own stack (${a.seatStacks.map((x) => `${x.pos} ${r2(x.tree)}`).join(" / ")}) = the table's`);
   }
   if (a.captureStack == null) ok.push("the stacks as dealt unknown");
   else if (a.plan) {
@@ -467,7 +482,7 @@ export function checkPotStack(a: {
   } else if (!within(a.stackIn, a.captureStack, TOL.stackBb, TOL.stackPct)) {
     bad.push(`stack ${r2(a.stackIn)}bb, the effective stack of the players still in is ${r2(a.captureStack)}bb (Δ ${r2(a.stackIn - a.captureStack)}bb)`);
   } else ok.push(`stack ${r2(a.stackIn)}bb = effective ${r2(a.captureStack)}bb`);
-  if (bad.length) return fail(5, bad.join("; "));
+  if (bad.length) return { ...fail(5, bad.join("; ")), ...(potOff ? { potOff: true as const } : {}) };
   if (a.capturePot == null && a.captureStack == null) return na(5, ok.join("; "));
   return pass(5, ok.join("; "));
 }
@@ -497,8 +512,9 @@ export function checkLine(a: {
     if (ck !== wk) { bad.push(`#${i + 1}: captured ${c}, walked ${w.name}`); return; }
     if (ck !== "wager") return;
     const want = labelBb(c), got = w.betsize;
-    const bothAllIn = c.startsWith("AllIn") && /^all/i.test(w.name);
-    if (want == null || got == null || bothAllIn) { sizes.push(bothAllIn ? "all-in = all-in" : `${c} → ${w.name}`); return; }
+    // an all-in carries the table's amount since 2026-10-03 (it was the tree's own stack, so "all-in = all-in" was all
+    // there was to say): both sizes are compared like any wager's — a 28bb shove walked as a 97.8 all-in is a fail
+    if (want == null || got == null) { sizes.push(`${c} → ${w.name}`); return; }
     const diff = Math.abs(got - want);
     if (diff > Math.max(TOL.sizeBb, TOL.sizePct * want)) {
       bad.push(`#${i + 1}: ${r2(want)}bb bet at the table, walked as the tree's ${w.name.toUpperCase()} ${r2(got)}bb (Δ ${r2(diff)}bb, ${Math.round((100 * diff) / want)}%) — over the bound (0.5bb / 10%)`);
