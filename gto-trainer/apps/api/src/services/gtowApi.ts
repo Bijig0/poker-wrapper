@@ -283,10 +283,13 @@ class GtowApi {
    *    anyone can call is the all-in; GTO Wizard names the node by the seat's own stack: probed 2026-10-03).
    *  - A WAGER PLAYED IS ITS AMOUNT ("9.4bb" → node R9.4), never a % of the pot rounded to a tenth (`played`).
    *  - HEADS-UP: a seat that has wagered this street is FIXED at the levels it played; a seat that has not is
-   *    AUTOMATIC (GTO Wizard picks its sizes). A FIXED seat with no bet list is refused at every node (VALIDATION_ERROR,
-   *    probed 2026-10-03), so a raiser who did not bet gets the street's bet amount (the bet that was made there, same
-   *    pot); a raise level GTO Wizard would fill by copying the level below (probed: a null second/third list takes the
-   *    previous list) gets the base raise list instead of a copied amount that does not fit there.
+   *    AUTOMATIC (GTO Wizard picks its sizes — and whether to offer an all-in: an AUTOMATIC seat facing a bet can lose
+   *    the all-in the old FIXED street had, and `add_allin` does not bring it back, probed 2026-10-03). A FIXED seat with
+   *    no bet list is refused at every node (VALIDATION_ERROR, probed), so a raiser who did not bet gets the street's
+   *    bet amount (the bet that was made there, same pot). A raise list left null on a FIXED seat is NOT automatic:
+   *    GTO Wizard offers the min-raise and the all-in there (probed: 8.6 → 17.2, 19.7 → 30.8, 25 → 41.4). A null
+   *    second/third list takes a copy of the list below it (probed), so where that would copy a played amount that
+   *    does not fit there, the level gets the base raise list instead.
    *  - THREE SEATS: FIXED everywhere (AUTOMATIC is refused for 3+ players): a level played is its amount alone on every
    *    seat, a level not played the base list (THREE_WAY_SIZES) — and every list its seat's all-in.
    */

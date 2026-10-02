@@ -133,7 +133,7 @@ describe("customNode request budget", () => {
 
   it("a timeout says what the polls said, not the first failure it kept (2026-10-03)", async () => {
     let n = 0;
-    globalThis.fetch = (async () => { if (n++ === 0) throw new Error("The operation timed out"); return new Response(null, { status: 204 }); }) as typeof fetch;
+    globalThis.fetch = (async () => { if (n++ === 0) throw new Error("The operation timed out"); return new Response(null, { status: 204 }); }) as unknown as typeof fetch;
     const api = newApi("sol-h");
     const r = await api.customNode("sol-h", { flopActions: "X", turnActions: "X", board: "Td6h7s2c" }, 300);
     expect(r.ok).toBe(false);

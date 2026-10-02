@@ -41,7 +41,7 @@ describe("heads-up: state in, everything else automatic (items 3, 6, 8)", () => 
   it("no wager on the street: both seats AUTOMATIC", () => {
     expect(flop(api.buildCustomTree(hu())).map((p: any) => p.type)).toEqual(["AUTOMATIC", "AUTOMATIC"]);
   });
-  it("the bettor FIXED at the amount he bet (+ his all-in), his other levels left to GTO Wizard; the other seat AUTOMATIC", () => {
+  it("the bettor FIXED at the amount he bet (+ his all-in), his raise levels null (GTO Wizard: the min-raise + the all-in there); the other seat AUTOMATIC", () => {
     const [oop, ip] = flop(api.buildCustomTree(hu({ played: { FLOP: [{ seat: 0, to: 8.6 }] } })));
     expect(oop).toMatchObject({ type: "FIXED", bet_sizes: ["8.6bb", "85.8bb"], raise_sizes: null, second_raise_sizes: null, third_plus_raise_sizes: null });
     expect(ip.type).toBe("AUTOMATIC");
