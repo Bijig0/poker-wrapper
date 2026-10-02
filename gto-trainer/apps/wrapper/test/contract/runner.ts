@@ -287,6 +287,11 @@ function startApiStub(): string {
         case "/api/dashboard/config": return Response.json({ ok: true });
         case "/api/dashboard/sources/strategies": return Response.json({ ok: true, strategies: API_STUB.strategies });
         case "/api/dashboard/sources/registry": return Response.json(API_STUB.registry);
+        // the chain keeper's light token check (2026-10-03): the registry's own armed.gtow, as the API answers it
+        case "/api/dashboard/gtow-token": {
+          const g = API_STUB.registry.armed.gtow;
+          return Response.json({ ok: true, tokenLive: g.tokenLive, multiwayLive: g.multiwayLive, expiresInMs: g.expiresInMs });
+        }
         case "/api/dashboard/gtow-status": return Response.json(API_STUB.gtowStatus);
       }
       apiUnstubbed.add(`${r.method} ${path}`);

@@ -77,8 +77,12 @@ export async function ensureAnswerChain(reason: string): Promise<void> {
   const gtowAccounts = (S.session.rec?.config as any)?.gtowAccounts ?? null;
   const r = await apiPost("/api/study-poller/start", { assistiveUrl: pub, gtowAccounts });
   if (!("ok" in (r || {}) ? r.ok : true)) log(`[chain] poller start: ${pyRepr(r)}`);
-  const reg = await SES.fetchRegistry();
-  const g = ((reg || {}).armed || {}).gtow || {};
+  // the light token check, not the registry (2026-10-03, sessions.ts realFetchGtowToken): the registry is the whole
+  // mission-control page and stalled the API every 20 s per table. And an API that does not answer is NOT "GTO Wizard
+  // not connected": the connect would go to the same API, 95 s at a client that is most likely fine — so nothing
+  // is done, and the keeper asks again in 20 s.
+  const g = await SES.fetchGtowToken();
+  if (!g) return;
   if (g.tokenLive && ("multiwayLive" in g ? g.multiwayLive : true)) return;
   if (S.chain.attempting || time() - S.chain.lastAt < 120) return;
   S.chain.attempting = true;
