@@ -1,7 +1,7 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens, allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
-import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6 } from "./hrc6max";
+import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6, limp3Reroute, threeLimpPrefix } from "./hrc6max";
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
@@ -44,7 +44,7 @@ import { rakeCapCents } from "./profiles";
 import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
-import { nodeTrust } from "./nodeTrust";
+import { nodeTrust, arrivalTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
@@ -2344,12 +2344,23 @@ function preflopPieceFor(hand: ParsedHand): "chart6max" | "chart3max" | "gtow-ai
     : "chart6max";
 }
 
+/** Does this chart hold the line's third limper (a node behind it — hrc6max.threeLimpPrefix)? True when the line has
+ *  fewer than three limps or the chart server cannot say (the walk reports that itself). */
+async function holdsThreeLimps(tokens: string[], get: (line: string) => Promise<unknown>): Promise<boolean> {
+  const pre = threeLimpPrefix(tokens);
+  if (!pre) return true;
+  const n = await get(pre);
+  return n === "unreachable" || !!n;
+}
+
 /**
  * Flop-entering ranges for every seat from the 6-max chart the preflop picker chooses for this hand: the same
  * chart, the same token walk (buildPreflopTokens pads a short table's early seats as folds), so what the postflop
  * solve starts from is exactly what the preflop answers said the seats arrive with.
  */
-async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: string | null, dealt?: Record<number, number>): Promise<
+async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: string | null, dealt?: Record<number, number>,
+  /** read on this chart instead of the picker's first (the three-limper fallback, hrc6max.limp3Reroute) */
+  keepChart?: string): Promise<
   | { ok: true; recon: Awaited<ReturnType<typeof reconstructFlopRanges>>; id: string; tokens: string[]; note: string | null }
   | { ok: false; reason: string }
 > {
@@ -2359,7 +2370,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // the ranges are in GTO Wizard's tree key — a pick that moved a rung between streets re-created every tree
   const choice = chartFor6max(hand, heroPos, tokens, dealt);
   const tRes = Date.now();
-  const resolved = await resolveChart6max(choice);
+  const resolved = await resolveChart6max(keepChart ? { ...choice, candidates: [keepChart] } : choice);
   if (Date.now() - tRes > 1000) console.log(`[ranges] chart resolve took ${Date.now() - tRes} ms (${choice.candidates.slice(0, 3).join(" → ")}${resolved && resolved !== "unreachable" ? ` → ${resolved.id}` : ""})`);
   if (resolved === "unreachable") return { ok: false, reason: "6-max chart server (:8777) unreachable" };
   if (!resolved) return { ok: false, reason: `no 6-max chart for this state (${choice.id})` };
@@ -2371,6 +2382,9 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // baked getter falls back to :8777 on its own when a tree is missing from the bake.
   const get = nodeGetter(resolved.id);
   const tRecon = Date.now();
+  // every decision node the ranges are read from — the trust check below judges them all (nodeTrust.arrivalTrust)
+  let stepLines: string[] = [];
+  const onStep = (st: { line: string }) => { stepLines.push(st.line); };
   let recon: Awaited<ReturnType<typeof reconstructFlopRanges>> = await reconstructFlopRanges(tokens, async (line) => {
     const n = await get(line);
     return n === "unreachable" ? null : n;
@@ -2379,7 +2393,7 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
   // arrival range to choose what to drop or merge. The charts stop at the same caller cap GTO Wizard does,
   // so the extra seats arrive through the borrowed-caller shortcut, which is what borrowCaller is for.
   // maxSnap: a size past τ has no node in this chart — the preflop answer refuses the same line (round 2, seed 50)
-  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU });
+  }, { heroPos: mergeHeroPos(heroPosName, false), borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU, onStep });
   if (Date.now() - tRecon > 1000) console.log(`[ranges] reconstructFlopRanges took ${Date.now() - tRecon} ms on ${resolved.id} (${recon.ok ? "ok" : recon.reason.slice(0, 80)})`);
   let fitNote: string | null = null;
   let snaps: string[] = recon.ok ? recon.snaps ?? [] : [];
@@ -2393,21 +2407,37 @@ async function recon6max(hand: ParsedHand, heroPos: string | null, heroPosName: 
     // others instead — the same shortcut, pointed at a different player each time. The pot and stacks stay
     // those of the REAL line (the caller's `tokens`), since every one of those chips is really in the middle.
     const firstFail = recon.reason;
+    // THREE LIMPERS (v2, hrc6max.limp3Reroute): a pool3 tree with no third limper is a v1 tree — the wide tree, which
+    // holds him, gives the ranges instead of a fit that folds one (a fourth limper is still fitted onto three)
+    const re = keepChart || !choice.limp3Fallback ? null
+      : limp3Reroute(choice, resolved.id, { holdsThree: await holdsThreeLimps(tokens, get) });
+    if (re) return recon6max(hand, heroPos, heroPosName, dealt, re.id);
     const tFit = Date.now();
+    stepLines = [];
     const per = await fittedRangesBySeat(tokens, async (line) => {
       const n = await get(line);
       return n === "unreachable" ? null : n;
-    }, { heroPos: mergeHeroPos(heroPosName, false) ?? null, depth: choice.depth });
+    }, { heroPos: mergeHeroPos(heroPosName, false) ?? null, depth: choice.depth, onStep });
     if (Date.now() - tFit > 1000) console.log(`[ranges] fitted per-seat walk took ${Date.now() - tFit} ms (${per.ok ? "ok" : per.reason.slice(0, 80)})`);
     if (!per.ok) return { ok: false, reason: `6-max chart ${resolved.id}: ${firstFail}; ${per.reason}` };
     recon = { ok: true, ranges: per.ranges };
     snaps = per.snaps;
-    fitNote = `LINE FITTED FOR THE RANGES: the tree holds two limpers, two callers and four entrants, so ` +
+    fitNote = `LINE FITTED FOR THE RANGES: the tree holds fewer limpers, callers or entrants than the line (raise charts: two callers, four entrants; limp trees: up to three limpers in the 100bb v2 re-solves, two in the older ones), so ` +
       `${per.borrowed.join(", ")} ${per.borrowed.length === 1 ? "was" : "were"} read from a line with fewer players in — pot and stacks are the real ones`;
+  }
+  // EVERY NODE THE RANGES CAME FROM MUST BE TRUSTED (2026-10-02, nodeTrust.arrivalTrust): a limp tree's untrained or
+  // unscored node gives no flop ranges — the chart has none to give, and the caller falls back as for any line this
+  // chart cannot read. A three-limper line on pool3 tries the wide tree first.
+  const bad = arrivalTrust(resolved.id, stepLines);
+  if (bad) {
+    const re = keepChart ? null : limp3Reroute(choice, resolved.id, { holdsThree: true, trust: bad });
+    if (re) return recon6max(hand, heroPos, heroPosName, dealt, re.id);
+    return { ok: false, reason: `6-max chart ${resolved.id}: no trusted flop ranges — ${bad.why}` };
   }
   const note = [
     choice.note,
-    resolved.fellBack ? `no ${choice.id} tree in the set — ranges from ${resolved.id}` : null,
+    keepChart ? `THREE LIMPERS: ${choice.id} cannot give these ranges — read on ${resolved.id}` : null,
+    !keepChart && resolved.fellBack ? `no ${choice.id} tree in the set — ranges from ${resolved.id}` : null,
     fitNote,
     ...(recon.ok ? (recon.notes ?? []) : []).map((n) => `RANGE SHORTCUT: ${n}`),
     snapsNote(snaps),
@@ -2760,7 +2790,8 @@ export async function solvePreflop6max(
 
   const get = nodeGetter(resolved.id);
   // FIT THE LINE TO THE TREE (2026-09-22, utils/fitLine): fold the earliest plain caller/limper — never hero,
-  // never a later raiser — until the capped tree (two limpers, two callers, four entrants) accepts the line.
+  // never a later raiser — until the capped tree accepts the line (raise charts: two callers, four entrants; the v2 pool
+  // limp trees: three limpers, five active — utils/fitLine asks the tree, it hard-codes no cap).
   // Replaces the node-by-node borrowCaller, which the esoteric stress family broke three ways.
   const heroSeatName = (hand.positions[hand.heroSeatId] ?? heroPos ?? null);
   // THE SAME PLAYERS STAY FOLDED OUT (2026-09-25, harness seed 589 [limps]): a caller an earlier decision of this
@@ -2783,6 +2814,22 @@ export async function solvePreflop6max(
     : [];
   const keepSeats = retry.keepCallers ? earlierCallers : [];
   const walk = await walkFitted(walkTokens, get, { heroSeat: heroSeatName, stack: choice.depth, protect: keepSeats });
+  // THREE LIMPERS ON POOL3 (v2, 2026-10-02, hrc6max.limp3Reroute): the picker names pool3 for a three-limper line, but
+  // only a v2 tree holds the third limper and only a scored, trusted node may answer. A v1 tree (no node behind the
+  // third limp), a walk that fails, or a starved/unscored node → the wide tree, which held these lines alone until v2;
+  // its own refusals then go to the exact tree as before. Decided before anything is filed or pinned for pool3.
+  if (choice.limp3Fallback && !retry.keepChart) {
+    const re = limp3Reroute(choice, resolved.id, {
+      holdsThree: await holdsThreeLimps(walkTokens, get), walk,
+      trust: walk.ok ? nodeTrust(resolved.id, walk.tokens.join("-")) : null,
+    });
+    if (re) {
+      const again = await solvePreflop6max(hand, heroPos, origin, strategyId, { ...retry, keepChart: re.id });
+      const why = `THREE LIMPERS: ${re.why} — read on ${re.id}`;
+      if (again?.ok) return { ...again, approx: true, warning: [why, again.warning].filter(Boolean).join(" · ") };
+      return again ? { ...again, reason: `${why}; ${again.reason}` } : again;
+    }
+  }
   // The 6-max path fed the miss queue nothing until 2026-09-20, so the ring
   // strategy — the one actually played — produced no todo list at all while the
   // 3-max corpus filled 1,105 rows. Chart-selection gaps AND walk misses.
@@ -2978,7 +3025,7 @@ export async function solvePreflop6max(
     farSnapNote(walk.repaired.filter((r) => !r.borrowed))
       ?? (walk.repaired.some((r) => !r.borrowed) ? `${walk.repaired.filter((r) => !r.borrowed).length} action(s) snapped to the tree's sizes` : null),
     walk.folds.length
-      ? `LINE FITTED TO THE TREE: the chart holds at most two limpers, two callers and four players in the pot, so ` +
+      ? `LINE FITTED TO THE TREE: the chart holds fewer players than the line (${/olimp/.test(resolved.id) ? "limp trees: up to three limpers in the 100bb v2 re-solves, two in the older ones" : "at most two callers and four players in the pot"}), so ` +
         walk.folds.map((f) => `${f.seat}'s ${f.dropped.length ? "call (and later actions)" : "call"}`).join(", ") +
         ` ${walk.folds.length === 1 ? "is" : "are"} folded out of the line — ${walk.folds.length} player${walk.folds.length === 1 ? "" : "s"} fewer and a smaller pot, so hero reads a little tight`
       : null,

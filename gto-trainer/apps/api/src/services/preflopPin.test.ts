@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { setTrustMap, type TrustMap } from "./nodeTrust";
 import { setPreflopPin, getPreflopPin, forgetPreflopPin, pinRest, resumeChartPreflopRanges, flopSeatsOf, heroDeviation, type ChartPreflopPin } from "./preflopPin";
 import type { RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -182,7 +183,13 @@ describe("resumeChartPreflopRanges", () => {
  * rest positionally and handed UTG's call to the HJ: the flop had no UTG range ("reconstructed ranges don't cover
  * both seats"). Each flop seat is now read from a fitted line that keeps it, on the pinned chart.
  */
+/** A trust map that scores every node of every chart as trained — for the fake limp trees below, whose lines the live
+ *  map does not hold (since 2026-10-02 an unscored limp-tree node gives no flop ranges). */
+const trustAll = new Proxy({}, { get: () => new Proxy({}, { get: () => [1, 0] }) }) as TrustMap;
+
 describe("resumeChartPreflopRanges — a pin read on a fitted line", () => {
+  beforeAll(() => setTrustMap(trustAll));
+  afterAll(() => setTrustMap(null));
   const node = (pos: string, acts: [string, string][], cells: RawNode["cells"] = []): RawNode =>
     ({ pos, terminal: false, actions: acts.map(([action, token]) => ({ action, token })), cells });
   const T: RawNode = { pos: null, terminal: true, actions: [], cells: [] };
@@ -294,5 +301,81 @@ describe("resumeChartPreflopRanges — a pin read on a fitted line", () => {
   it("flopSeatsOf reads the seats from the capture's line, not the tree's", () => {
     expect(flopSeatsOf(["C", "C", "F", "F", "F", "R4", "C", "F"], 100)).toEqual(["UTG", "BB"]);
     expect(flopSeatsOf(["F", "F", "F", "R2.6", "C", "F"], 100)).toEqual(["BTN", "SB"]);
+  });
+});
+
+/**
+ * THE FLOP-ARRIVAL RANGES ARE TRUST-GATED TOO (2026-10-02, nodeTrust.arrivalTrust): every decision node the ranges are
+ * read from must be trained and scored, not only hero's. A limp tree's untrusted node gives no chart ranges — the same
+ * outcome as a line the chart cannot hold (chartCannotHold: fastSolve's OFF THE CHART path, the AI preflop tree).
+ */
+describe("resumeChartPreflopRanges — every node on a limped line must be trusted", () => {
+  const CHART = "ign200_6max_D100_olimp_pool3";
+  const node = (pos: string, acts: [string, string][], cells: RawNode["cells"] = []): RawNode =>
+    ({ pos, terminal: false, actions: acts.map(([action, token]) => ({ action, token })), cells });
+  const T: RawNode = { pos: null, terminal: true, actions: [], cells: [] };
+  const FC: [string, string][] = [["Fold", "F"], ["Call", "C"]];
+  const BB: [string, string][] = [["Check", "X"], ["Raise 5.5", "R5.5"]];
+  const tree: Record<string, RawNode> = {
+    "": node("UTG", FC, [{ hand: "87s", actions: { Call: 60, Fold: 40 } }]),
+    // three limpers (v2): UTG, HJ, CO limp, BTN and SB fold, the BB checks
+    "C": node("HJ", FC, [{ hand: "A5s", actions: { Call: 100 } }]), "C-C": node("CO", FC, [{ hand: "KQo", actions: { Call: 100 } }]),
+    "C-C-C": node("BTN", FC), "C-C-C-F": node("SB", FC),
+    "C-C-C-F-F": node("BB", BB, [{ hand: "72o", actions: { Check: 100 } }]), "C-C-C-F-F-X": T,
+    // one limper: UTG limps, everyone folds to the BB, who checks
+    "C-F": node("CO", FC), "C-F-F": node("BTN", FC), "C-F-F-F": node("SB", FC),
+    "C-F-F-F-F": node("BB", BB, [{ hand: "72o", actions: { Check: 100 } }]), "C-F-F-F-F-X": T,
+  };
+  const get = async (l: string): Promise<RawNode | null> => tree[l] ?? null;
+  const a = (seatId: number, type: string, amount?: number, hero = false) =>
+    ({ seatId, hero, type, street: "preflop", ...(amount != null ? { amount } : {}) }) as ParsedHand["actions"][number];
+  const handOf = (acts: ParsedHand["actions"]): ParsedHand => ({
+    handId: 7, clientHandId: "limp-trust", bbCents: 200, heroSeatId: 1, heroCards: ["8s", "7s"], board: ["2c", "5d", "Ks"], street: "flop",
+    actions: [a(5, "post-sb", 0.5), a(6, "post-bb", 1), ...acts], liveSeats: [1, 2, 3, 4, 5, 6], committed: {}, potByStreet: {},
+    positions: { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" },
+    currentNode: { street: "flop", toActSeatId: 6, toActIsHero: false, pot: 4, toCall: 0, legalActions: [], complete: false }, ended: false,
+  });
+  // hero (UTG) limped first in, read at the root of the pool tree
+  const pin: ChartPreflopPin = { piece: "chart6max", handKey: "limp-trust", chartId: CHART, rawTokens: [], codes: [], heroPos: "UTG", depth: 100, actionIndex: 2, at: 0 };
+  const threeLimps = handOf([a(1, "call", 1, true), a(2, "call", 1), a(3, "call", 1), a(4, "fold"), a(5, "fold"), a(6, "check")]);
+  const oneLimp = handOf([a(1, "call", 1, true), a(2, "fold"), a(3, "fold"), a(4, "fold"), a(5, "fold"), a(6, "check")]);
+  const scored = (over: Record<string, [number, number]> = {}): TrustMap => ({
+    [CHART]: { "": [1, 0], "C": [0.036, 0.01], "C-C": [0.004, 0.01], "C-C-C": [3e-4, 0.01], "C-C-C-F": [2.9e-4, 0.01], "C-C-C-F-F": [2.8e-4, 0.02],
+      "C-F": [0.03, 0.01], "C-F-F": [0.029, 0.01], "C-F-F-F": [0.028, 0.01], "C-F-F-F-F": [0.02, 0.01], ...over },
+  });
+  afterEach(() => setTrustMap(null));
+
+  it("a closed three-limp line whose BB-check node is untrusted gives no chart ranges", async () => {
+    setTrustMap(scored({ "C-C-C-F-F": [5e-6, 0.02] }));      // the BB's option behind three limps: reach 1 in 200,000
+    const r = await resumeChartPreflopRanges(pin, threeLimps, "UTG", get);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.chartCannotHold).toBe(true);                       // → the AI preflop tree gives the ranges (fastSolve)
+    expect(r.why).toContain("C-C-C-F-F");
+    expect(r.why).toContain("UNTRAINED CHART NODE");
+  });
+
+  it("the same line on a tree node_trust.py has not scored yet gives no chart ranges either", async () => {
+    setTrustMap({});
+    const r = await resumeChartPreflopRanges(pin, threeLimps, "UTG", get);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.why).toContain("not in the trust map yet");
+  });
+
+  it("the three-limp line with every node trusted reads its ranges from the chart", async () => {
+    setTrustMap(scored());
+    const r = await resumeChartPreflopRanges(pin, threeLimps, "UTG", get);
+    if (!r.ok) throw new Error(r.why);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BB", "CO", "HJ", "UTG"]);
+  });
+
+  it("a trusted one-limp closed line: chart ranges as today", async () => {
+    setTrustMap(scored());
+    const r = await resumeChartPreflopRanges(pin, oneLimp, "UTG", get);
+    if (!r.ok) throw new Error(r.why);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BB", "UTG"]);
+    expect(r.ranges.UTG!["87s"]).toBeCloseTo(0.6, 5);
+    expect(r.ranges.BB!["72o"]).toBeCloseTo(1, 5);
+    expect(r.id).toBe(CHART);
   });
 });

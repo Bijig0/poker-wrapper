@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "bun:test";
 import { afterEach } from "bun:test";
-import { chartFor6max, openFromTokens, replayTokens6, setPatchSource, unevenLadder6, unnameable6max } from "./hrc6max";
+import { chartFor6max, limp3Reroute, openFromTokens, poolLimpChart, poolLockedLine, replayTokens6, setPatchSource, threeLimpPrefix, unevenLadder6, unnameable6max } from "./hrc6max";
+import { nodeTrust, setTrustMap } from "./nodeTrust";
 import { patchKeys } from "./patchKey";
 
 /**
@@ -82,19 +83,57 @@ describe("chartFor6max", () => {
     expect(chartFor6max(short as any, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D50_olimp");
   });
 
-  test("three limpers: the BB's option and every response to an iso read the wide tree; BTN/SB facing three limps do not", () => {
+  test("three limpers (v2): the BB's option and every response to an iso read pool3, the wide tree behind it; BTN/SB facing three limps do not", () => {
     const t = table(6) as any;
-    // UTG, HJ, CO limp, BTN folds, SB folds — BB's option
-    expect(chartFor6max(t, "BB", ["C", "C", "C", "F", "F"]).id).toBe("ign200_6max_D100_olimp_widex");
+    // UTG, HJ, CO limp, BTN folds, SB folds — BB's option: pool3 (v2 holds three limpers), the wide tree as the fallback
+    const bb = chartFor6max(t, "BB", ["C", "C", "C", "F", "F"]);
+    expect(bb.id).toBe("ign200_6max_D100_olimp_pool3");
+    expect(bb.limp3Fallback).toBe("ign200_6max_D100_olimp_widex");
+    expect(bb.candidates.slice(0, 2)).toEqual(["ign200_6max_D100_olimp_pool3", "ign200_6max_D100_olimp_widex"]);
     // BB isos to 8 over three limps — the first limper responds
-    expect(chartFor6max(t, "UTG", ["C", "C", "C", "F", "F", "R8"]).id).toBe("ign200_6max_D100_olimp_widex");
-    // BTN facing three limps: the tree has no over-limp there — not the wide tree
-    expect(chartFor6max(t, "BTN", ["C", "C", "C"]).id).not.toBe("ign200_6max_D100_olimp_widex");
-    // SB facing three (or four) limps: no complete in the wide tree, and pool3's SB node is LOCKED — the pilot answers
+    const utg = chartFor6max(t, "UTG", ["C", "C", "C", "F", "F", "R8"]);
+    expect(utg.id).toBe("ign200_6max_D100_olimp_pool3");
+    expect(utg.limp3Fallback).toBe("ign200_6max_D100_olimp_widex");
+    // four limpers are still fitted onto three — the same pick
+    expect(chartFor6max(t, "BB", ["C", "C", "C", "C", "F"]).limp3Fallback).toBe("ign200_6max_D100_olimp_widex");
+    // BTN facing three limps: no tree offers a fourth limp, and his over-limp node is locked — the equilibrium chart
+    expect(chartFor6max(t, "BTN", ["C", "C", "C"]).id).toBe("ign200_6max_D100_olimp");
+    // SB facing three (or four) limps: pool3's SB node is LOCKED (v2 locks the complete behind three) — the pilot answers
     expect(chartFor6max(t, "SB", ["F", "C", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool");
     expect(chartFor6max(t, "SB", ["C", "C", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool");
-    // two limps stay on pool3
+    // two limps stay on pool3, with no three-limper fallback
     expect(chartFor6max(t, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool3");
+    expect(chartFor6max(t, "BB", ["F", "F", "C", "C", "C"]).limp3Fallback).toBeUndefined();
+  });
+
+  test("the SB's complete is locked behind one, two and three limps (v2) — the pilot answers; folded to him is first-in", () => {
+    const t = table(5) as any;
+    for (const line of [["F", "F", "F", "C"], ["F", "C", "C", "F"], ["C", "C", "C", "F"], ["C", "C", "F", "C"], ["C", "F", "C", "C"], ["F", "C", "C", "C"]]) {
+      expect(poolLockedLine(line.join("-"))).toBe(true);
+      expect(poolLimpChart(line, "SB")?.id).toBe("ign200_6max_D100_olimp_pool");
+      expect(chartFor6max(t, "SB", line).id).toBe("ign200_6max_D100_olimp_pool");
+    }
+    // folded to the SB: his first-in node is locked too (the pool's complete) — never a pool tree for hero there
+    expect(poolLockedLine("F-F-F-F")).toBe(true);
+    expect(poolLimpChart(["F", "F", "F", "F"], "SB")).toBeNull();
+    // …and the picker sends a line with no limp to the raise charts, as every first-in decision
+    expect(chartFor6max(t, "SB", ["F", "F", "F", "F"]).openSize).toBe(2.5);
+    expect(chartFor6max(t, "SB", ["F", "F", "F", "F"]).id).toBe("ign200_6max_D100_o2_5");
+    // the over-limp behind two limps (v2 locks it): no pool tree for a non-blind hero
+    for (const line of [["C", "C"], ["F", "C", "C"], ["C", "F", "C"], ["C", "C", "F"]]) {
+      expect(poolLockedLine(line.join("-"))).toBe(true);
+      expect(poolLimpChart(line, (["HJ", "CO", "BTN"] as const)[line.length - 1]!)).toBeNull();
+    }
+    // the BB behind three limps and a complete (v2: five active): pool3, the wide tree behind it
+    expect(chartFor6max(table(6) as any, "BB", ["C", "C", "C", "F", "C"]).id).toBe("ign200_6max_D100_olimp_pool3");
+  });
+
+  test("threeLimpPrefix: the line through the third limp, before any raise", () => {
+    expect(threeLimpPrefix(["C", "C", "C", "F", "F", "R8"])).toBe("C-C-C");
+    expect(threeLimpPrefix(["C", "F", "C", "C", "F"])).toBe("C-F-C-C");
+    expect(threeLimpPrefix(["C", "C", "C", "C"])).toBe("C-C-C");
+    expect(threeLimpPrefix(["F", "C", "C", "F", "F"])).toBeNull();
+    expect(threeLimpPrefix(["C", "C", "R5", "C"])).toBeNull();
   });
 
   test("125bb limp - a chart we deliberately do not have - reaches the 100bb limp chart without naming a phantom", () => {
@@ -190,18 +229,44 @@ describe("chartFor6max — uneven limp trees", () => {
 
   test("two short limpers and a deep one: the shorter limper is modelled, the other noted", () => {
     const t = table(6, { 1: 45, 2: 30 });
-    // UTG (45) limps, HJ (30) limps, CO folds, BTN (100) limps, SB folds: three limpers -> the wide tree, by design
+    // UTG (45) limps, HJ (30) limps, CO folds, BTN (100) limps, SB folds: three limpers -> the uneven pool3 tree of the
+    // shorter limper (v2 holds three limpers), the wide tree as the fallback
     const c = chartFor6max(t as any, "BB", ["C", "C", "F", "C", "F"]);
-    expect(c.id).toBe("ign200_6max_D100_olimp_widex");
+    expect(c.id).toBe("ign200_6max_D100_s30_HJ_olimp_pool3");
+    expect(c.limp3Fallback).toBe("ign200_6max_D100_olimp_widex");
+    expect(c.candidates).toContain("ign200_6max_D100_olimp_widex");
     const two = chartFor6max(table(6, { 1: 45, 2: 30 }) as any, "BTN", ["C", "C", "F"]);
     // the BTN facing two short limps (his over-limp node is locked in the pool trees): the equilibrium uneven tree of the shorter
     expect(two.id).toBe("ign200_6max_D100_s30_HJ_olimp");
     expect(two.note).toContain("UTG 45bb also short");
   });
 
-  test("three limpers keep the wide pool tree — no uneven wide tree exists", () => {
+  test("(c) the BB facing three limps with a short limper reads the uneven pool3 tree (v2), the wide tree behind it", () => {
     const t = table(6, { 1: 50 });
-    expect(chartFor6max(t as any, "BB", ["C", "C", "C", "F", "F"]).id).toBe("ign200_6max_D100_olimp_widex");
+    const c = chartFor6max(t as any, "BB", ["C", "C", "C", "F", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_s50_UTG_olimp_pool3");
+    expect(c.limp3Fallback).toBe("ign200_6max_D100_olimp_widex");
+    // only pool-locked trees hold the third limper: no uneven equilibrium tree is named; the even pool3, then the wide
+    // tree, then the even ladder stand behind
+    expect(c.candidates.filter((id) => /_s\d+_[A-Z]+_olimp$/.test(id))).toEqual([]);
+    const i3 = c.candidates.indexOf("ign200_6max_D100_olimp_pool3"), iw = c.candidates.indexOf("ign200_6max_D100_olimp_widex");
+    expect(i3).toBeGreaterThan(0);
+    expect(iw).toBeGreaterThan(i3);
+  });
+
+  test("(a) a raised three-limp line at an uneven table reads the uneven pool3 tree for that rung and seat", () => {
+    // UTG, HJ (50bb), CO limp; BTN and SB fold; the BB (100bb) isos to 8 — hero UTG responds. The iso-raiser is deep,
+    // so the short limper is the seat modelled — the same selection the one- and two-limp lines use
+    const t = table(1, { 2: 50 });
+    const c = chartFor6max(t as any, "UTG", ["C", "C", "C", "F", "F", "R8"]);
+    expect(c.id).toBe("ign200_6max_D100_s50_HJ_olimp_pool3");
+    expect(c.shortSeat).toBe("HJ");
+    expect(c.limp3Fallback).toBe("ign200_6max_D100_olimp_widex");
+    expect(c.candidates).not.toContain("ign200_6max_D100_s50_HJ_olimp");
+    // a two-limp raised line at the same table keeps the pool3 + equilibrium pair and no fallback
+    const two = chartFor6max(table(1, { 2: 50 }) as any, "UTG", ["C", "C", "F", "F", "F", "R6"]);
+    expect(two.candidates.slice(0, 2)).toEqual(["ign200_6max_D100_s50_HJ_olimp_pool3", "ign200_6max_D100_s50_HJ_olimp"]);
+    expect(two.limp3Fallback).toBeUndefined();
   });
 
   test("a shallow table keeps its even limp rung (the uneven limp set is a 100bb table)", () => {
@@ -523,5 +588,47 @@ describe("short-stack rungs 7-25 and the uneven opens (2026-09-30)", () => {
     expect(unnameable6max("ign200_6max_D100_olimp_pool3")).toBeNull();
     expect(unnameable6max("ign200_6max_P_BTN80_BB20_o2_5")).toBeNull();
     expect(unnameable6max("ign200_3maxasym_D100_s20_bb")).toContain("not an ign200 6-max");
+  });
+});
+
+/**
+ * THE THREE-LIMPER SWITCH (v2, 2026-10-02): a three-limper line picked onto pool3 is read there only when the tree holds
+ * the third limper and its node is trusted — otherwise the wide tree, as before v2.
+ */
+describe("limp3Reroute — pool3 only when it holds the line and the node is trusted", () => {
+  const POOL3 = "ign200_6max_D100_s50_HJ_olimp_pool3", WIDE = "ign200_6max_D100_olimp_widex";
+  const choice = { limp3Fallback: WIDE };
+  const LINE = "C-C-C-F-F-R8";
+  afterEach(() => setTrustMap(null));
+
+  test("a trusted node on a tree that holds three limpers: pool3 answers", () => {
+    setTrustMap({ [POOL3]: { [LINE]: [3e-3, 0.01] } });
+    expect(limp3Reroute(choice, POOL3, { holdsThree: true, walk: { ok: true }, trust: nodeTrust(POOL3, LINE) })).toBeNull();
+  });
+
+  test("(b) the same line when that node is untrusted → the wide tree", () => {
+    setTrustMap({ [POOL3]: { [LINE]: [2e-5, 0.01] } });   // reach 1 in 50,000: starved
+    const re = limp3Reroute(choice, POOL3, { holdsThree: true, walk: { ok: true }, trust: nodeTrust(POOL3, LINE) });
+    expect(re?.id).toBe(WIDE);
+    expect(re?.why).toContain("not trusted");
+  });
+
+  test("an unscored node (the chart, or the line, not in the trust map yet) → the wide tree", () => {
+    setTrustMap({});
+    expect(limp3Reroute(choice, POOL3, { holdsThree: true, walk: { ok: true }, trust: nodeTrust(POOL3, LINE) })?.id).toBe(WIDE);
+    setTrustMap({ [POOL3]: { "C-C-C": [0.002, 0.01] } });
+    expect(limp3Reroute(choice, POOL3, { holdsThree: true, walk: { ok: true }, trust: nodeTrust(POOL3, LINE) })?.id).toBe(WIDE);
+  });
+
+  test("a v1 tree (no node behind the third limp) or a walk that fails → the wide tree; unreachable → no switch", () => {
+    expect(limp3Reroute(choice, POOL3, { holdsThree: false })?.why).toContain("holds two limpers");
+    expect(limp3Reroute(choice, POOL3, { holdsThree: true, walk: { ok: false } })?.id).toBe(WIDE);
+    expect(limp3Reroute(choice, POOL3, { holdsThree: true, walk: { ok: false, unreachable: true } })).toBeNull();
+  });
+
+  test("never on the wide tree itself, a non-pool3 tree, or a choice with no fallback", () => {
+    expect(limp3Reroute(choice, WIDE, { holdsThree: false })).toBeNull();
+    expect(limp3Reroute(choice, "ign200_6max_D100_olimp", { holdsThree: false })).toBeNull();
+    expect(limp3Reroute({}, POOL3, { holdsThree: false })).toBeNull();
   });
 });
