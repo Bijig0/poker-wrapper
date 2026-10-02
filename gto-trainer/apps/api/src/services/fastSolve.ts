@@ -35,7 +35,7 @@ import {
   checkPotStack, checkPreflopInRange, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
-import { contestedChips, deadMoney } from "../utils/tableMoney/tableMoney";
+import { contestedChips, deadMoney, effectiveStack, streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
@@ -1543,8 +1543,8 @@ async function solvePostflopViaChainOnce(
     for (const r of table.returned) notes.push(`FLOP POT: ${hand.positions?.[r.seat] ?? `seat ${r.seat}`}'s uncalled ${r.bb}bb preflop is not in it (returned)`);
     if (notes.length) sixNote = [sixNote, ...notes].filter(Boolean).join(" · ");
   }
+  // the token rebuild's field stack: only the fallback where no seat's own stack is known (fieldStack, below)
   const flopStack = Math.round(pps.stack * 100) / 100;
-  if (flopStack <= 0.5) return fail("preflop line is (near) all-in");
 
   const heroCards = hand.heroCards.filter((c) => /^[2-9TJQKA][shdc]$/i.test(c)).map(SHORT_C);
   const heroComboIdx = heroCards.length === 2 ? comboIndex(heroCards[0]!, heroCards[1]!) : null;
@@ -1618,13 +1618,13 @@ async function solvePostflopViaChainOnce(
   const behindFlop = flopSeatStacks({
     seats: flopSeats, depth, flopStack, streets, streetSeats,
     ...(table.preflop > 0 ? { paidPre: (() => {
+      // each seat's MATCHED preflop chips (tableFlopPot) + its ante (CoinPoker: no action carries it, and the dealt
+      // stack is before it)
       const out: Record<string, number> = {};
-      const ret = new Map(table.returned.map((x) => [x.seat, x.bb]));
-      for (const [sid, c] of roundContributions(hand).get("preflop") ?? []) {
+      for (const [sid, c] of table.paid) {
         const p = chainPos(sid);
         const name = p ? flopSeats.find((x) => x.toUpperCase() === p.toUpperCase()) : undefined;
-        // + the seat's ante (CoinPoker: no action carries it, and the dealt stack is before it)
-        if (name) out[name] = Math.round((c - (ret.get(sid) ?? 0) + (huCp ? anteHu : cpRing ? hand.anteBb ?? 0 : 0)) * 100) / 100;
+        if (name) out[name] = Math.round((c + (huCp ? anteHu : cpRing ? hand.anteBb ?? 0 : 0)) * 100) / 100;
       }
       return out;
     })() } : {}),
@@ -1640,6 +1640,14 @@ async function solvePostflopViaChainOnce(
       return out;
     })(),
   });
+  // THE FIELD'S STACK, FROM THE TABLE (2026-10-03): hero against the deepest villain at the flop, each from his own
+  // stack (behindFlop — the dealt stack less his own matched preflop chips); the line's token rebuild only where no
+  // seat's stack is known. The near-all-in refusal, the base every tree is capped by, the re-root and the last resort
+  // all start from it.
+  const heroAtFlop = flopSeats.find((p) => p.toUpperCase() === heroPosName.toUpperCase());
+  const tableEff = behindFlop && heroAtFlop ? effectiveStack(flopSeats, heroAtFlop, (p) => behindFlop[p]) : Infinity;
+  const fieldStack = Number.isFinite(tableEff) ? Math.round(tableEff * 100) / 100 : flopStack;
+  if (fieldStack <= 0.5) return fail("preflop line is (near) all-in");
   /** a tree's seats → their stacks behind (a merged seat stands for its members: the deeper of them) */
   const stacksOf = (seats: { pos: string; members?: string[] }[], behind: Record<string, number> | undefined) => {
     if (!behind) return undefined;
@@ -1679,8 +1687,8 @@ async function solvePostflopViaChainOnce(
       const note =
         `3-way flop — GTO Wizard AI 3-player tree (Ultra): wager-free streets use fixed bets of ` +
         `${THREE_WAY_SIZES.bet.join("/")} pot and ${THREE_WAY_SIZES.raise.join("/")} raises, each seat's all-in listed; ` +
-        (behindFlop ? `each seat at its own stack (${ordered.map((p) => `${p} ${behindFlop[p] ?? flopStack}`).join(" / ")})`
-          : `every seat modelled at the effective stack (${flopStack}bb)`);
+        (behindFlop ? `each seat at its own stack (${ordered.map((p) => `${p} ${behindFlop[p] ?? fieldStack}`).join(" / ")})`
+          : `every seat modelled at the effective stack (${fieldStack}bb)`);
       sixNote = sixNote ? `${sixNote} · ${note}` : note;
     } else {
       // A collapse has to know WHO played each token; an unattributed one could belong to the seat being
@@ -1808,7 +1816,7 @@ async function solvePostflopViaChainOnce(
   // villain IN THE TREE, from their own stacks — never more than the one number the whole field would have used
   // (the dealt depth rolled forward), which is also what a seat with an unknown stack falls back to.
   const treeStackOf = (w: Walkable): number => {
-    const base = reroot ? reroot.stack : flopStack;
+    const base = reroot ? reroot.stack : fieldStack;
     const sp = w.seatSpec;
     const heroTree = sp.heroSeat === "oop" ? sp.oopPos : sp.heroSeat === "mid" ? sp.midPos! : sp.ipPos;
     const seats = [sp.oopPos, ...(sp.midPos ? [sp.midPos] : []), sp.ipPos];
@@ -1819,7 +1827,7 @@ async function solvePostflopViaChainOnce(
     return Math.min(base, eff);
   };
   const stackNote = (w: Walkable): string | null => {
-    const base = reroot ? reroot.stack : flopStack, st = treeStackOf(w);
+    const base = reroot ? reroot.stack : fieldStack, st = treeStackOf(w);
     if (!(st < base - 0.005) || !w.seatStacks) return null;
     return `${w.kind ?? "tree"} at ${st}bb behind (${Object.entries(w.seatStacks).map(([p, x]) => `${p} ${x}`).join(" / ")}), not the ${base}bb of the whole field`;
   };
@@ -1868,7 +1876,7 @@ async function solvePostflopViaChainOnce(
         warning: [sixNote, `DRY RUN: solver input built — ${walkables.length} walkable(s), hero ${heroCls ?? "?"} weight ${heroW == null ? "n/a" : heroW.toFixed(3)}, pot ${reroot ? reroot.pot : flopPot}bb, stack ${walkables.map(treeStackOf).join("/")}bb`].filter(Boolean).join(" · "),
         notInRange: heroW != null && !(heroW > 0) ? true : undefined,
         dryRun: {
-          flopPot, flopStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats],
+          flopPot, flopStack: fieldStack, walkables: walkables.length, heroWeight: heroW, flopSeats: [...flopSeats],
           ranges: recon.ok ? recon.ranges : undefined, preTokens: [...preTokens], streets, streetSeats, rake: rake6,
           trees: walkables.map((w) => {
             const s = w.seatSpec;
@@ -2074,7 +2082,7 @@ async function solvePostflopViaChainOnce(
  * carries none). `dealt`: each seat's stack as dealt, by seat id — what caps an uncalled excess.
  */
 export function tableFlopPot(hand: ParsedHand, dealt: Record<number, number> | null | undefined, extra: { anteHu?: number; anteRing?: number; street?: string } = {}):
-    { pot: number; preflop: number; returned: { seat: number; bb: number }[] } {
+    { pot: number; preflop: number; returned: { seat: number; bb: number }[]; paid: Map<number, number> } {
   const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
   const pre = hand.actions.filter((a) => a.street === "preflop");
   const r = contestedChips(roundContributions(hand).get("preflop") ?? new Map<number, number>(), {
@@ -2082,7 +2090,7 @@ export function tableFlopPot(hand: ParsedHand, dealt: Record<number, number> | n
     capOf: (s) => { const d = dealt?.[s]; return d != null && Number.isFinite(d) ? d : null; },
   });
   const pot = r.sum + deadMoney({ antes: 2 * (extra.anteHu ?? 0) + (extra.anteRing ?? 0), deadPosts: deadPostsBb(hand.postIns, extra.street ?? "flop") });
-  return { pot: Math.round(pot * 100) / 100, preflop: r.sum, returned: r.returned };
+  return { pot: Math.round(pot * 100) / 100, preflop: r.sum, returned: r.returned, paid: r.bySeat };
 }
 
 export function postflopAllInAmounts(hand: ParsedHand): Record<"flop" | "turn" | "river", (number | null)[]> {
@@ -2114,17 +2122,15 @@ export function flopSeatStacks(a: {
   const res: Record<string, number> = { ...(out ?? {}) };
   for (const x of a.allIns) {
     if (!a.seats.includes(x.pos) || !(x.to > 0)) continue;
-    // the seat's chips on each street before its all-in: its last raise-to there, or the price it called
+    // the seat's chips on each street before its all-in (utils/tableMoney.streetChips: its last raise-to there, or the
+    // price it called — another seat's all-in at the table's amount); a street the model cannot price proves nothing
     let before = 0;
-    for (let i = 0; i < x.k; i++) {
-      let level = 0, mine = 0;
-      (a.streets[i] ?? []).forEach((t, j) => {
-        const who = a.streetSeats[i]?.[j];
-        if (/^R[\d.]+$/.test(t)) { level = Math.max(level, parseFloat(t.slice(1))); if (who === x.pos) mine = level; }
-        else if (t === "C" && who === x.pos) mine = level;
-      });
-      before += mine;
-    }
+    try {
+      for (let i = 0; i < x.k; i++) {
+        const amounts = (a.streets[i] ?? []).map((_, j) => a.allIns!.find((y) => y.k === i && y.pos === a.streetSeats[i]?.[j])?.to ?? null);
+        before += streetChips(streetFromTokens(a.streets[i] ?? [], a.streetSeats[i] ?? [], amounts), () => null).put.get(x.pos) ?? 0;
+      }
+    } catch { continue; }
     const proved = Math.round((before + x.to) * 100) / 100;
     if (res[x.pos] == null || Math.abs(res[x.pos]! - proved) > 0.02) res[x.pos] = proved;
   }
@@ -2140,14 +2146,11 @@ function flopSeatStacksRead(a: {
   if (!a.paidPre && (!Number.isFinite(level) || level < 0)) return undefined;
   // the most each seat is PROVEN to have put in postflop: its bet/raise-to per street (a call may be all-in for less,
   // and an all-in's size is the seat's own stack, so neither can contradict the reading)
+  // (utils/tableMoney.streetChips over the street's bets and raises alone: each seat's raise-to, summed over streets)
   const spent: Record<string, number> = {};
   a.streets.forEach((toks, i) => {
-    const to: Record<string, number> = {};
-    toks.forEach((t, j) => {
-      const who = a.streetSeats[i]?.[j];
-      if (who && /^R[\d.]+$/.test(t)) to[who] = Math.max(to[who] ?? 0, parseFloat(t.slice(1)));
-    });
-    for (const [p, x] of Object.entries(to)) spent[p] = (spent[p] ?? 0) + x;
+    const raises = streetFromTokens(toks, a.streetSeats[i] ?? [], null).filter((x) => x.kind === "raise" && x.seat != null);
+    for (const [p, x] of streetChips(raises, () => null).put) spent[p!] = (spent[p!] ?? 0) + x;
   });
   const out: Record<string, number> = {};
   for (const p of a.seats) {
