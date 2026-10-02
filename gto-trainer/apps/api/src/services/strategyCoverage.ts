@@ -162,10 +162,13 @@ const RING_6MAX: StrategyCoverage = {
       rows: [
         {
           id: "pre-limp", state: "exact",
-          spot: "Limped pots within the caps: up to two limpers, up to two callers of the iso, up to four players in — even stacks, 30-100bb",
+          spot: "Limped pots within the caps: up to three limpers at 100bb (the v2 pool-locked trees; two at 30-75bb), the callers " +
+            "of the iso the tree allows, up to five players in at 100bb (four at 30-75bb) — even stacks, 30-100bb",
           source: "Our HRC limp charts",
-          how: "Four limp charts (30/50/75/100bb): open-limp, over-limp, SB complete, iso-raise (2.5/3/4/5bb at 100bb), " +
-            "3-bets over the iso, limp-reraise, and all-in as the only 4-bet.",
+          how: "Four limp charts (30/50/75/100bb): open-limp, over-limp, SB complete, iso-raise (at 100bb 2.5/3/4/5bb + 1bb " +
+            "per limper: over one limper 3.5/4/5/6bb, over three 5.5/6/7/8bb), 3-bets over the iso (3x and 4.2x of the raise), " +
+            "limp-reraise, and all-in as the only 4-bet. At 100bb the limps and the SB's complete are locked to the pool's " +
+            "measured ranges (hero's own over-limp and complete are read from trees where his seat is solved).",
           cost: { value: "~0.02 bb (same solve quality)", measured: true, note: "the same refined pass as the raise charts." },
         },
         {
@@ -189,8 +192,10 @@ const RING_6MAX: StrategyCoverage = {
         {
           id: "pre-limp-3plus", state: "approx",
           spot: "Three or more limpers",
-          source: "Our HRC limp charts, through the LINE FIT",
-          how: "The line fit: while the chart refuses the line, fold the EARLIEST plain limper or caller — never hero, never " +
+          source: "At 100bb: our pool-locked limp trees (three limpers held); beyond them, the LINE FIT",
+          how: "At 100bb three limpers are held by the v2 pool-locked limp trees (the uneven one when a seat is short), read " +
+            "only where the node is trusted, with the wide tree behind them. A fourth limper, and three at 30-75bb, go through " +
+            "the line fit: while the chart refuses the line, fold the EARLIEST plain limper or caller — never hero, never " +
             "anyone who raises later in the hand (his raise is the spot) — drop his later actions, and read the nearest spot " +
             "the chart holds. Everyone else keeps his real seat. Villains' flop ranges are fitted the same way, one villain at " +
             "a time, each keeping his own seat and line. Labelled \"LINE FITTED TO THE TREE\".",
@@ -200,8 +205,8 @@ const RING_6MAX: StrategyCoverage = {
           cost: { value: "unmeasured (errs slightly tight)", measured: false,
             note: "the folded player's chips and presence are missing, so pot odds look worse and multiway hands are " +
               "under-played. The borrowed flop ranges measured 0.008 bb (240 nodes)." },
-          future: "A three-limper chart needs 20-37 GB against HRC's 20 GB limit — a bigger-memory machine. First, measure " +
-            "this cost against the maxactive-6 test chart.",
+          future: "Three-limper trees at 30-75bb (the 100bb ones are the v2 re-solve, 2026-10-02). First, measure " +
+            "the fit's cost against the wide tree.",
           approx: ["limp-3plus", "line-fit-borrow"],
         },
         {
