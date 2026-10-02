@@ -267,64 +267,110 @@ class GtowApi {
       input.board, input.pot, input.stack, input.startingStreet ?? "FLOP",
       input.oopRange, input.ipRange, input.rake ?? null, input.fixedBets ?? null,
       input.fixedLevels ?? null, input.mid?.range ?? null, input.huGrid ?? null,
+      // what the tree carries since 2026-10-03: each seat's own stack, the wagers played as amounts, the settings
+      treeStacksOf(input), input.played ?? null, TREE_SETTINGS_TAG,
     ]);
   }
 
+  /**
+   * THE TREE REQUEST (rewritten 2026-10-03, hand 4922087007: "send the table's real state"). What goes out is the
+   * table as the reader has it and nothing GTO Wizard would rewrite:
+   *  - EACH SEAT ITS OWN STACK (`stacks`; `stack` for every seat only when the caller has no per-seat stacks).
+   *  - THE SETTINGS EXPLICIT AND OFF (TREE_SETTINGS): no all-in threshold that turns a pinned 72%-of-stack bet into the
+   *    all-in (measured 2026-10-02: 18.8 of 26.2 became ALLIN), no all-in added by `allin_if_less_than`, no size merging.
+   *  - THE ALL-IN LISTED where a FIXED seat's sizes are listed: with the settings off a FIXED list has no all-in unless
+   *    it names one. Each seat's is its own all-in, "<stack>bb" (capped at the deepest other seat — a raise past what
+   *    anyone can call is the all-in; GTO Wizard names the node by the seat's own stack: probed 2026-10-03).
+   *  - A WAGER PLAYED IS ITS AMOUNT ("9.4bb" → node R9.4), never a % of the pot rounded to a tenth (`played`).
+   *  - HEADS-UP: a seat that has wagered this street is FIXED at the levels it played; a seat that has not is
+   *    AUTOMATIC (GTO Wizard picks its sizes). A FIXED seat with no bet list is refused at every node (VALIDATION_ERROR,
+   *    probed 2026-10-03), so a raiser who did not bet gets the street's bet amount (the bet that was made there, same
+   *    pot); a raise level GTO Wizard would fill by copying the level below (probed: a null second/third list takes the
+   *    previous list) gets the base raise list instead of a copied amount that does not fit there.
+   *  - THREE SEATS: FIXED everywhere (AUTOMATIC is refused for 3+ players): a level played is its amount alone on every
+   *    seat, a level not played the base list (THREE_WAY_SIZES) — and every list its seat's all-in.
+   */
   buildCustomTree(input: CustomTreeInput) {
     // Seats in acting order. A third seat makes it GTO Wizard's 3-player tree ("OOP+1" between the two).
     const seats: string[] = input.mid ? ["OOP", "OOP+1", "IP"] : ["OOP", "IP"];
-    const auto = (position: string) => ({ position, type: "AUTOMATIC" as const, allow_limp: false });
-    // FIXED sizing pins a street's bets to an exact % of pot (validated format:
-    // bet_sizes:["90%"]). Used to solve the villain's EXACT off-tree bet when the
-    // nearest library size is too far to snap (see snapToken τ). Applies to every
-    // seat on that street; the string list is what the API expects.
-    const fixed = (position: string, pct: string) => ({
-      position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
-      bet_sizes: [pct], raise_sizes: [pct], second_raise_sizes: [pct], third_plus_raise_sizes: [pct],
-    });
-    // Per-raise-level FIXED sizing: lv[0] pins the street's first bet, lv[1]
-    // the raise over it, lv[2] the re-raise, lv[3]+ beyond. Levels past the
-    // supplied list fall back to the last given pct — they only shape the
-    // (rarely reached) deeper raise war, not the studied line itself.
-    const fixedPerLevel = (position: string, lv: string[]) => {
-      const at = (i: number) => lv[Math.min(i, lv.length - 1)] ?? "50%";
-      return {
-        position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
-        bet_sizes: [at(0)], raise_sizes: [at(1)],
-        second_raise_sizes: [at(2)], third_plus_raise_sizes: [at(3)],
-      };
+    const stacks = treeStacksOf(input);
+    const allInOf = seatAllIns(stacks);
+    const AI = (i: number) => bbAmount(allInOf[i]!);
+    /** a list with the seat's all-in at its end; an amount at or past the all-in IS the all-in (dropped for it) */
+    const withAllIn = (i: number, list: readonly string[]): string[] => {
+      const out: string[] = [];
+      for (const x of list) {
+        const m = /^(\d+(?:\.\d+)?)bb$/.exec(x);
+        if (m && Number(m[1]) >= allInOf[i]! - 0.005) continue;
+        if (!out.includes(x)) out.push(x);
+      }
+      out.push(AI(i));
+      return out;
+    };
+    const LISTS = ["bet_sizes", "raise_sizes", "second_raise_sizes", "third_plus_raise_sizes"] as const;
+    const fixedOf = (i: number, lists: (readonly string[] | null)[]) => {
+      const o: Record<string, unknown> = { position: seats[i]!, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false };
+      LISTS.forEach((k, lv) => { o[k] = lists[lv] == null ? null : withAllIn(i, lists[lv]!); });
+      return o;
+    };
+    const auto = (i: number) => ({ position: seats[i]!, type: "AUTOMATIC" as const, allow_limp: false });
+    // FIXED sizing pins a street's bets to an exact % of pot (validated format: bet_sizes:["90%"]) on every seat — the
+    // street-root fallback's pin (fastSolve). With the all-in listed beside it.
+    const fixed = (i: number, pct: string) => fixedOf(i, [[pct], [pct], [pct], [pct]]);
+    // Per-raise-level FIXED sizing as % of pot (the AI-study route's pins): lv[0] the street's first bet, lv[1] the
+    // raise over it, lv[2] the re-raise, lv[3]+ beyond; levels past the list keep the last one.
+    const fixedPerLevel = (i: number, lv: string[]) => {
+      const at = (k: number) => lv[Math.min(k, lv.length - 1)] ?? "50%";
+      return fixedOf(i, [[at(0)], [at(1)], [at(2)], [at(3)]]);
     };
     // A 3-player tree is FIXED on every street or the API refuses it (422 "Dynamic/Automatic sizings is
     // currently not supported for 3+ players", probed 2026-09-19), so a wager-free street gets this grid
     // where a heads-up tree would get AUTOMATIC.
-    const threeWay = (position: string) => ({
-      position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
-      bet_sizes: THREE_WAY_SIZES.bet, raise_sizes: THREE_WAY_SIZES.raise,
-      second_raise_sizes: THREE_WAY_SIZES.raise, third_plus_raise_sizes: THREE_WAY_SIZES.raise,
-    });
-    // A multi-size FIXED grid for a heads-up wager-free street (2026-09-19): the
-    // alternative to AUTOMATIC, which lets the engine pick ONE size per node
-    // (hand 4919174586: a 300%-pot river bet as the only bet). Opt-in per
-    // tree (huGrid); the chain decides whether to use it.
-    const grid = (position: string, g: { bet: readonly string[]; raise: readonly string[] }) => ({
-      position, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false,
-      bet_sizes: [...g.bet], raise_sizes: [...g.raise],
-      second_raise_sizes: [...g.raise], third_plus_raise_sizes: [...g.raise],
-    });
+    const threeWay = (i: number) => fixedOf(i, [THREE_WAY_SIZES.bet, THREE_WAY_SIZES.raise, THREE_WAY_SIZES.raise, THREE_WAY_SIZES.raise]);
+    // A multi-size FIXED grid for a heads-up wager-free street (2026-09-19): the alternative to AUTOMATIC, opt-in per
+    // tree (huGrid; the collapse-calibration harness).
+    const grid = (i: number, g: { bet: readonly string[]; raise: readonly string[] }) => fixedOf(i, [g.bet, g.raise, g.raise, g.raise]);
+    /** a street with wagers played: the levels as amounts (see the header) */
+    const playedStreet = (ws: PlayedWager[]) => {
+      const lvAmt = (lv: number): string[] => {
+        const xs = ws.filter((_, k) => (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
+        return xs.length ? [...new Set(xs)] : [];
+      };
+      const playedBy = (i: number, lv: number) => ws.some((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3));
+      if (input.mid || input.huGrid) {
+        const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : THREE_WAY_SIZES;
+        const lists = [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv); return a.length ? a : lv === 0 ? base.bet : base.raise; });
+        return seats.map((_, i) => fixedOf(i, lists));
+      }
+      return seats.map((_, i) => {
+        if (!ws.some((w) => w.seat === i)) return auto(i);
+        const lists: (readonly string[] | null)[] = [lvAmt(0), null, null, null];
+        for (const lv of [1, 2, 3]) {
+          if (playedBy(i, lv)) lists[lv] = ws.filter((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
+          // GTO Wizard copies the list sent for the level below into a null second / third list: keep it null only
+          // when the level below went null too, else give the base raise list
+          else if (lv >= 2 && lists[lv - 1] != null) lists[lv] = THREE_WAY_SIZES.raise;
+        }
+        return fixedOf(i, lists);
+      });
+    };
     const fb = input.fixedBets;
     const fl = input.fixedLevels;
+    const pl = input.played;
     const street = (s: "FLOP" | "TURN" | "RIVER") =>
-      fl && fl[s]?.length
-        ? { street: s, position_bet_sizes: seats.map((p) => fixedPerLevel(p, fl[s]!)) }
-        : fb && fb[s] != null
-          ? { street: s, position_bet_sizes: seats.map((p) => fixed(p, `${fb[s]}%`)) }
-          : input.mid
-            ? { street: s, position_bet_sizes: seats.map(threeWay) }
-            : input.huGrid
-              ? { street: s, position_bet_sizes: seats.map((p) => grid(p, input.huGrid!)) }
-              : { street: s, position_bet_sizes: seats.map(auto) };
-    const player = (position: string, display: string, range: number[]) => ({
-      position, display_position: display, blind: null, range, stack: input.stack,
+      pl && pl[s]?.length
+        ? { street: s, position_bet_sizes: playedStreet(pl[s]!) }
+        : fl && fl[s]?.length
+          ? { street: s, position_bet_sizes: seats.map((_, i) => fixedPerLevel(i, fl[s]!)) }
+          : fb && fb[s] != null
+            ? { street: s, position_bet_sizes: seats.map((_, i) => fixed(i, `${fb[s]}%`)) }
+            : input.mid
+              ? { street: s, position_bet_sizes: seats.map((_, i) => threeWay(i)) }
+              : input.huGrid
+                ? { street: s, position_bet_sizes: seats.map((_, i) => grid(i, input.huGrid!)) }
+                : { street: s, position_bet_sizes: seats.map((_, i) => auto(i)) };
+    const player = (i: number, display: string, range: number[]) => ({
+      position: seats[i]!, display_position: display, blind: null, range, stack: stacks[i]!,
       tournament_instant_bounty: null, tournament_total_bounty: null,
     });
     return {
@@ -333,16 +379,14 @@ class GtowApi {
       ante: null,
       ante_distribution_method: "PER_PLAYER",
       bet_sizes: {
-        allin_threshold: 60,
-        allin_if_less_than: 500,
-        merge_sizes_threshold: 10,
+        ...TREE_SETTINGS,
         max_num_raises: 5,
         street_bet_sizes: [street("FLOP"), street("TURN"), street("RIVER")],
       },
       players: [
-        player("OOP", input.oopPos ?? "BB", input.oopRange),
-        ...(input.mid ? [player("OOP+1", input.mid.pos, input.mid.range)] : []),
-        player("IP", input.ipPos ?? "CO", input.ipRange),
+        player(0, input.oopPos ?? "BB", input.oopRange),
+        ...(input.mid ? [player(1, input.mid.pos, input.mid.range)] : []),
+        player(input.mid ? 2 : 1, input.ipPos ?? "CO", input.ipRange),
       ],
       tree_operations: [],
       resolving_policy: null,
@@ -819,6 +863,10 @@ class GtowApi {
       board: q.board,
     });
     let lastErr = "the cloud didn't return a strategy in time";
+    // WHAT THE POLLS SAID (2026-10-03, the postflop twin of the preflop fix b633a50): the timeout used to report the
+    // first failure it kept ("poll request failed: timed out") though every later poll had answered 204 — read as a
+    // network fault when the solve was simply slow, or the node missing. Counted, and the reason says so.
+    const said = { notReady: 0, failed: 0, empty: 0 };
     let refreshed = false;
     // The solve lives on the account that minted it: poll it with THAT
     // session's token, never whichever token happens to be freshest.
@@ -839,6 +887,7 @@ class GtowApi {
         }, { pm, cl: caller ?? null });
       } catch (e) {
         lastErr = `poll request failed: ${e instanceof Error ? e.message : e}`;
+        said.failed++;
         await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
         continue;
       }
@@ -854,13 +903,16 @@ class GtowApi {
           if (ck) this.cache.putNode(ck, addrOf(q), NODE_OK, text);
           return { ok: true, data: j, solveSecs: (Date.now() - t0) / 1000, cached: false, src: "fetched" };
         }
+        said.empty++;
         // a 200 with no decision: nothing to wait for once the solve is served
         if (mode !== "legacy" && ++empties > NO_NODE_GRACE) return noNode();
       } else if (r.status === 204) {
+        said.notReady++;
         if (mode === "ready" && ++empties > NO_NODE_GRACE) return noNode();
       } else if (!r.ok) {
         const body = (await r.text().catch(() => "")).slice(0, 120);
         lastErr = `spot-solution ${r.status}: ${body}`;
+        said.failed++;
         // a wall hit mid-poll is worth recording: the NEXT tree goes elsewhere
         if (owner && r.status !== 404) gtowSessions.noteFailure(owner, r.status, body);
         // …and a QUOTA wall will not lift while we wait (2026-09-22: the stress run sat out a whole timeout on a
@@ -868,10 +920,16 @@ class GtowApi {
         if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(body))) {
           return { ok: false, status: 429, error: lastErr };
         }
+        // A 400 / 422 IS GTO WIZARD'S VERDICT ON THE QUERY (NODE_DOES_NOT_EXIST, VALIDATION_ERROR): polling it again
+        // until the deadline only spent requests and the clock (2026-10-03). Returned at once, as the 400 it is.
+        if (r.status === 400 || r.status === 422) return { ok: false, status: r.status, error: lastErr };
       }
       await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
     }
-    return { ok: false, status: 504, error: `AI solve timed out on ${owner ?? "the GTO Wizard session"} — ${lastErr} (that account may have hit its daily solution limit, or the client lost connection).` };
+    const polls = said.notReady + said.failed + said.empty;
+    const tally = `${polls} poll${polls === 1 ? "" : "s"}: ${said.notReady} answered 204 (not solved yet)` +
+      `${said.empty ? `, ${said.empty} answered with no decision` : ""}, ${said.failed} failed${said.failed ? ` (last: ${lastErr})` : ""}`;
+    return { ok: false, status: 504, error: `AI solve timed out on ${owner ?? "the GTO Wizard session"} — ${polls ? tally : lastErr} (that account may have hit its daily solution limit, or the client lost connection).` };
   }
 
   /**
@@ -930,6 +988,9 @@ export interface TreeFingerprint {
   posKey: string;
   pot: number;
   stack: number;
+  /** each seat's own stack in the tree, acting order (2026-10-03) */
+  stacks: number[];
+  /** the street's pinned sizes: the wagers played as amounts ("R9.4bb by OOP"), or the % pins of older callers */
   fixedLevels: string[] | null;
   rake: string;
   huGrid: string | null;
@@ -946,11 +1007,14 @@ export function treeFingerprint(input: CustomTreeInput): TreeFingerprint {
   };
   const seats = [input.oopRange, ...(input.mid ? [input.mid.range] : []), input.ipRange];
   const fixedBet = input.fixedBets?.[street];
+  const names = input.mid ? ["OOP", "OOP+1", "IP"] : ["OOP", "IP"];
+  const played = input.played?.[street];
   return {
     board: input.board, street, seats: seats.length,
     posKey: [input.oopPos ?? "?", input.mid?.pos, input.ipPos ?? "?"].filter(Boolean).join("-"),
-    pot: input.pot, stack: input.stack,
-    fixedLevels: input.fixedLevels?.[street]?.length ? input.fixedLevels[street]!.slice() : fixedBet != null ? [`${fixedBet}%`] : null,
+    pot: input.pot, stack: input.stack, stacks: treeStacksOf(input),
+    fixedLevels: played?.length ? played.map((w) => `${bbAmount(w.to)} by ${names[w.seat] ?? `seat${w.seat}`}`)
+      : input.fixedLevels?.[street]?.length ? input.fixedLevels[street]!.slice() : fixedBet != null ? [`${fixedBet}%`] : null,
     rake: JSON.stringify(input.rake ?? null), huGrid: input.huGrid ? JSON.stringify(input.huGrid) : null,
     ranges: seats.map(fp),
   };
@@ -966,6 +1030,8 @@ export function describeTreeChange(prev: TreeFingerprint | null, next: TreeFinge
   const d: string[] = [];
   if (prev.pot !== next.pot) d.push(`pot ${prev.pot}→${next.pot}`);
   if (prev.stack !== next.stack) d.push(`stack ${prev.stack}→${next.stack}`);
+  const sk = (x: number[] | undefined) => (x ?? []).join("/");
+  if (prev.stack === next.stack && sk(prev.stacks) !== sk(next.stacks)) d.push(`seat stacks ${sk(prev.stacks) || "?"}→${sk(next.stacks)}`);
   const fl = (x: string[] | null) => (x ? `[${x.join(",")}]` : "null");
   if (fl(prev.fixedLevels) !== fl(next.fixedLevels)) d.push(`fixed sizes ${fl(prev.fixedLevels)}→${fl(next.fixedLevels)}`);
   if (prev.rake !== next.rake) d.push(`rake ${prev.rake}→${next.rake}`);
@@ -980,13 +1046,47 @@ export function describeTreeChange(prev: TreeFingerprint | null, next: TreeFinge
   return `re-created: ${d.join(", ")}`;
 }
 
-/** Everything that defines the custom TREE (and so the cloud solve). */
 /**
  * Bet grid for a 3-player tree's wager-free streets (see buildCustomTree). Two bets and one raise size keep
  * the cloud solve in the same 3-5 s band as heads-up (probed 2026-09-19: root 3.5 s, nodes 1.3-3.1 s);
  * a street that DID see a wager is pinned to the observed sizes instead, exactly as heads-up.
  */
 export const THREE_WAY_SIZES = { bet: ["33%", "75%"], raise: ["60%"] } as const;
+
+/**
+ * THE TREE SETTINGS, EXPLICIT AND OFF (2026-10-03, Brady: "I don't want any weird sort of settings sent"). What was
+ * sent before was never chosen (it came with the first tree builder): `allin_threshold: 60` REPLACED a pinned bet of
+ * 60%+ of the stack by the all-in (2026-09-30: a 9.4 bet walked as ALLIN 14.2, an 18.8 as ALLIN 26.2),
+ * `allin_if_less_than: 500` ADDED an all-in beside the sizes listed, `merge_sizes_threshold: 10` collapsed sizes near
+ * each other. Off, the tree holds exactly the sizes listed — and the all-in where it is listed (buildCustomTree). The
+ * preflop tree (services/gtowAiPreflop) sends the same.
+ */
+export const TREE_SETTINGS = { allin_threshold: 100, allin_if_less_than: 0, merge_sizes_threshold: 0 } as const;
+/** in every tree key: a tree built under other settings is never taken for one built under these */
+export const TREE_SETTINGS_TAG = "allin-listed:100/0/0";
+
+/** A size as the API takes an AMOUNT: "<bb>bb", to the cent ("9.4bb", "28bb", "8.75bb"). A bare number is a 422. */
+export const bbAmount = (x: number): string => `${Math.round(x * 100) / 100}bb`;
+
+/** Each seat's stack in the tree, acting order: its own (`stacks`), else the one `stack` for every seat. */
+export function treeStacksOf(input: Pick<CustomTreeInput, "stack" | "stacks" | "mid">): number[] {
+  const n = input.mid ? 3 : 2;
+  return Array.from({ length: n }, (_, i) => {
+    const v = input.stacks?.[i];
+    return v != null && Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : input.stack;
+  });
+}
+/** Each seat's all-in, acting order: its own stack, capped at the deepest other seat's (nobody can call more). */
+export function seatAllIns(stacks: number[]): number[] {
+  return stacks.map((s, i) => {
+    const others = stacks.filter((_, j) => j !== i);
+    return Math.round(Math.min(s, others.length ? Math.max(...others) : s) * 100) / 100;
+  });
+}
+
+/** One wager played on a street, in order: the seat (index in acting order) and its raise-to amount on the street (bb).
+ *  Its level is its index in the street's list (0 = the bet, 1 = the raise over it, 2 = the re-raise, 3+ beyond). */
+export interface PlayedWager { seat: number; to: number }
 
 /** The rake a custom tree gets when its input carries none: GTO Wizard's own NL500 structure, 5% capped at 0.6bb.
  *  The chain passes the table's rake on the Ignition 6-max and CoinPoker heads-up strategies; a solve without one
@@ -996,7 +1096,13 @@ export const DEFAULT_TREE_RAKE = { pct_of_pot: 5, cap_in_chips: 0.6, preflop_rak
 export interface CustomTreeInput {
   board: string; // concatenated, e.g. "Ts7h2d"
   pot: number; // bb
-  stack: number; // effective, bb
+  stack: number; // effective, bb — every seat's stack when `stacks` is absent
+  /** EACH SEAT'S OWN STACK behind at the tree's starting street, in acting order (OOP, [OOP+1], IP) — 2026-10-03. A seat
+   *  missing (or not a positive number) takes `stack`. Part of the tree key. */
+  stacks?: number[];
+  /** THE WAGERS PLAYED on a street, as amounts (2026-10-03): the street is pinned to exactly these (see buildCustomTree).
+   *  Takes precedence over fixedLevels / fixedBets for that street. Part of the tree key. */
+  played?: Partial<Record<"FLOP" | "TURN" | "RIVER", PlayedWager[]>>;
   /** 1326-weight ranges (see buildRangeArray). */
   oopRange: number[];
   ipRange: number[];
@@ -1004,7 +1110,7 @@ export interface CustomTreeInput {
   ipPos?: string;
   /** A THIRD seat (2026-09-19, Ultra): the middle player of a 3-way flop, GTO Wizard's "OOP+1". Present ⇒ a
    *  3-player tree, which the API accepts only with FIXED sizes on every street (THREE_WAY_SIZES on a
-   *  wager-free street). Absent ⇒ the heads-up tree exactly as before. Same stack as the other two. */
+   *  wager-free street). Absent ⇒ the heads-up tree exactly as before. Its stack is `stacks[1]` (else `stack`). */
   mid?: { pos: string; range: number[] };
   startingStreet?: "FLOP" | "TURN" | "RIVER";
   rake?: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };
