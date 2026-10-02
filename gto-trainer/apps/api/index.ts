@@ -29,6 +29,7 @@ import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
 import { replayScheduler } from "./src/services/replayScheduler";
 import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
+import { trustAuditLine } from "./src/services/hrc6maxDb";
 
 const app = new Hono();
 
@@ -212,6 +213,11 @@ let adoption: Promise<void> = Promise.resolve();
 // every answer it froze, and in the log as [stall] — ownership has nothing to do with it.
 startStallMonitor();
 startBackgroundLock();
+// THE CHART TRUST AUDIT (2026-10-03): how many baked 6-max charts carry no trust scores — each one answers from the old
+// limp_node_trust.json, unguarded where it has no score (services/nodeTrust). Said once at start; the registry shows it live.
+setTimeout(() => {
+  try { const line = trustAuditLine(); console.log(line); say(line); } catch (e) { console.warn(`[hrc6maxDb] trust audit failed: ${e instanceof Error ? e.message : e}`); }
+}, 0);
 // the poller, dispatcher and keepers write the central DB: they start once the legacy rows are in (at once when there
 // is nothing to adopt, or this is not the live API). Registered after, since an owner runs the callback immediately.
 void adoption.then(() => onBackgroundOwnership(() => {

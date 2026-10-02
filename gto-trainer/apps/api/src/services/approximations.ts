@@ -302,7 +302,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "HRC samples in proportion to reach: the SB behind two limps was reached once in 10,000 hands and limped AA 84% from noise; the BB behind two limps and a complete showed a check at −7.8bb in a 4bb pot",
     fix: "WIRED 2026-09-24 at the 100bb rung: limped pots read the pool-locked trees (olimp_pool3; the SB's own complete decision from olimp_pool), whose locks train those nodes — BB behind two limps and a complete reach 1 in 3,400 (was 1 in 147,000). Still fires on the D30-D75 equilibrium limp charts and on a non-blind over-limp behind two limps; the D50/D75 pool re-solves close those",
     status: "solvable",
-    code: "services/nodeTrust.ts; analysis/pipeline/solve/node_trust.py writes data/limp_node_trust.json; fastSolve.solvePreflop6max",
+    code: "services/nodeTrust.ts reads the scores the bake writes with each chart (build_6max_preflop_db.py `trust` table, backfill_trust.py for older bakes; data/limp_node_trust.json only as the old-bake fallback); fastSolve.solvePreflop6max",
   },
   {
     id: "postflop-last-resort",
