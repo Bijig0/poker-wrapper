@@ -19,7 +19,9 @@
 import { pyRound } from "../py";
 import { wireCard } from "./dom";
 
-const BTN: Record<number, string> = { 64: "check", 1024: "fold", 256: "call", 4096: "raise", 2048: "all-in" };
+// 128 (bet) and 512 (raise) carry their chips and fall to the amount rule below. 1048576 = "Folds & shows": a fold with
+// no chips, which that rule would read as a check (hands 4921654555 / 4921725385, 2026-10-01).
+const BTN: Record<number, string> = { 64: "check", 1024: "fold", 1048576: "fold", 256: "call", 4096: "raise", 2048: "all-in" };
 
 export type WsRow = { seatId: number; hero: boolean; type: string; street: string; amount?: number };
 
@@ -104,7 +106,9 @@ export function wsHand(frames: readonly Record<string, any>[], bbCents: number |
         moneyIn.set(seat, (moneyIn.get(seat) ?? 0) + bet + (Number(d.dead) || 0));
         deadCents += Number(d.dead) || 0;
         account(seat, d.account);
-        if (bet && (d.btn === 2 || d.btn === 4 || d.btn === 8)) push(seat, d.btn === 2 ? "post-sb" : d.btn === 4 ? "post-bb" : "post", bet);
+        // btn 16 = a returning player's post WITH a dead small blind (bet = the live blind, dead = the dead one): the
+        // live part is a post like btn 8's; the dead part is in the pot as nobody's bet (hands 4921653890 / 4921673957)
+        if (bet && (d.btn === 2 || d.btn === 4 || d.btn === 8 || d.btn === 16)) push(seat, d.btn === 2 ? "post-sb" : d.btn === 4 ? "post-bb" : "post", bet);
         break;
       }
       case "CO_CARDTABLE_INFO": {

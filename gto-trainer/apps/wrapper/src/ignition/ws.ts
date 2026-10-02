@@ -23,8 +23,10 @@ import { markTopUpRefused } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
 
-const BTN: Record<number, string> = { 64: "checks", 1024: "folds", 256: "calls", 4096: "raises to", 2048: "is ALL-IN" };
-const BLIND_BTN: Record<number, string> = { 2: "small blind", 4: "big blind", 8: "post" };
+// 1048576 = "Folds & shows" (a fold; without it the no-chips rule reads a check); blind 16 = a post with a dead small
+// blind beside it — wsLine.ts has both
+const BTN: Record<number, string> = { 64: "checks", 1024: "folds", 1048576: "folds", 256: "calls", 4096: "raises to", 2048: "is ALL-IN" };
+const BLIND_BTN: Record<number, string> = { 2: "small blind", 4: "big blind", 8: "post", 16: "post" };
 const STREET_RANK: Record<string, number> = { preflop: 0, flop: 1, turn: 2, river: 3 };
 
 const ws = () => S.ws;
@@ -797,7 +799,7 @@ export function onGameMsg(d: Record<string, any>): void {
     // A POST-IN (btn 8): a new/returning player's live blind out of turn — "Seat 1 posts post (1 BB)". Recorded
     // since 2026-09-25 (hands 4920414446 / 4920414607): without it the poster's option-CHECK read as an illegal
     // check and the level reconciler invented a call for the chips. The API folds it into his own action.
-    else if (btn === 8 && truthy(bet)) actAdd(d.seat ?? null, "post", bet);
+    else if ((btn === 8 || btn === 16) && truthy(bet)) actAdd(d.seat ?? null, "post", bet);
     feedAdd(`Seat ${pyStr(d.seat ?? null)} posts ` + (label ? `${label} (${amt(bet)})` : `(${amt(bet)})`));
     if (w.bbGuessed) S.feed[S.feed.length - 1]!.guessCents = bet;
   } else if (pid === "CO_SELECT_REQ") {

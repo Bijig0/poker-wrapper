@@ -670,11 +670,22 @@ export async function feedTick(): Promise<void> {
   S.feedPrev = cur;
 }
 
-/** Archive a FINISHED hand after a short grace even when no next hand ever arrives. */
+/**
+ * Archive a FINISHED hand after a short grace even when no next hand ever arrives.
+ *
+ * THE HAND IS OVER WHEN THE TABLE SAYS SO, NOT WHEN HERO IS OUT (2026-10-03, the reader audit). This used to fire on
+ * `h.ended` too — hero folded or won — so the row was finished 8 s after hero's fold while the others played on, and
+ * the archive's one-write-per-hand guard then turned away the complete record at the next hand: 644 of 1,434 stored
+ * hands were a correct line cut short (no board, no later action, end stacks off the screen), shown on the dashboard
+ * as the whole hand and filed by the hand-history check as mismatches. The reader had the rest all along. The row is
+ * now finished at the table's own end of hand (PLAY_STAGE_END_REQ → `handOver`), by this grace or by the next hand's
+ * start, whichever comes first; until then the live row carries the hand as it stands. A hand cut off before its end
+ * (the table closes, the session ends) is still archived by those paths.
+ */
 export function maybeFlushEnded(): void {
   if (S.site.id === "coinpoker" || S.site.id === "clubgg") return;
   const h = handState();
-  const over = !!S.ws.handOver || !!(h && h.ended);
+  const over = !!S.ws.handOver;
   if (!h || !over || !h.actions.length || h.handId === S.lastArchived.no) {
     S.ws.endedSince = null;
     return;
