@@ -7,7 +7,8 @@
  *
  * LIVE (the default) reads answers.path → $.treeGap, which every 6-max preflop answer carries since the gate shipped:
  *   - how many decisions the gate sent to the exact tree, by rule (raise size / the aggressor's stack) and level;
- *   - how those went: answered by the exact tree, or the chart after all (the tree failed, or ran past the time box);
+ *   - how those went: answered by the exact tree, or an AI FAILURE — it errored or ran past the time box (12 s) and
+ *     the chart answered after all (those rows carry the path code preflop:gap-gate-ai-failed);
  *   - what it cost in time: latency of the routed answers against the chart's;
  *   - what it changed: the exact tree's answer for hero's hand beside what the chart would have said (same action?
  *     how much of the mix moved?) — the side-by-side every routed answer logs;
@@ -105,8 +106,8 @@ if (sent.length) {
   const none = sent.filter((x) => !x.r.text);
   console.log(`\nHOW THEY WENT`);
   console.log(`  answered by the exact tree      ${String(answered.length).padStart(4)}  ${pct(answered.length, sent.length)}`);
-  console.log(`  chart after all — tree failed   ${String(failed.length).padStart(4)}  ${pct(failed.length, sent.length)}`);
-  console.log(`  chart after all — time box      ${String(timeout.length).padStart(4)}  ${pct(timeout.length, sent.length)}`);
+  console.log(`  AI FAILED — errored, chart answered      ${String(failed.length).padStart(4)}  ${pct(failed.length, sent.length)}`);
+  console.log(`  AI FAILED — past the time box, chart answered ${String(timeout.length).padStart(4)}  ${pct(timeout.length, sent.length)}`);
   console.log(`  NO ANSWER AT ALL                ${String(none.length).padStart(4)}  ${pct(none.length, sent.length)}${none.length ? "   ← the gate must never cost an answer: read these first" : ""}`);
   const why = new Map<string, number>(); for (const x of failed) { const k = (x.g.routed!.aiWhy ?? "?").replace(/[\d.]+/g, "#").slice(0, 80); why.set(k, (why.get(k) ?? 0) + 1); }
   for (const [k, n] of [...why].sort((a, b) => b[1] - a[1]).slice(0, 5)) console.log(`      ${n}× ${k}`);

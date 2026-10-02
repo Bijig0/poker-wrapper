@@ -20,6 +20,10 @@
  *   3  REAL DECISIONS WITH A SIZE SNAP, chart against AI: logged chart answers whose line was snapped onto a tree
  *      size, sampled across (level × ratio) among tables whose stacks are near the chart's, plus exact controls;
  *      scored on the tree the live fallback would build.
+ *   5  SHORT STACKS, THOROUGH (2026-10-02, Brady: "20bb on a 10bb chart is not 210 on a 200"): the stack sweeps of
+ *      experiment 0 on a fine ladder down to 7.5bb, plus the spots a short stack actually makes — an open JAM in
+ *      front of hero (three seats), blind against blind (SB first in; BB facing the SB's open, and its limp), a short
+ *      limper, a min-raise. Read by RATIO WITHIN A DEPTH BAND, so "1.3x at 10bb" and "1.3x at 80bb" are told apart.
  *   4  UNEVEN TABLES: (a) TWO seats off where the chart models one; (b) hero's OWN stack off (the picker reads the
  *      even chart at his stack); (c) the real chart decisions sampled across (role × stack ratio) — exp 0's real half.
  *
@@ -163,7 +167,7 @@ async function gate(t0: number): Promise<boolean> {
 const SEAT: Record<string, number> = { UTG: 1, HJ: 2, CO: 3, BTN: 4, SB: 5, BB: 6 };
 type Act = [pos: string, type: "fold" | "raise" | "call" | "all-in", amount?: number];
 interface Build { stacks?: Record<string, number>; line: Act[]; menu?: Record<string, unknown> }
-interface SweepCfg { id: string; exp: 0 | 1 | 2 | 4; axis: "stack" | "size" | "pair" | "check"; role: string; hero: string; ladder: number[]; at: (v: number) => Build; say: string;
+interface SweepCfg { id: string; exp: 0 | 1 | 2 | 4 | 5; axis: "stack" | "size" | "pair" | "check"; role: string; hero: string; ladder: number[]; at: (v: number) => Build; say: string;
   /** the sizes our charts hold on this axis: "true → read" is printed against the nearest of them */
   grid?: number[] }
 const F = (...pos: string[]): Act[] => pos.map((p) => [p, "fold"] as Act);
@@ -173,21 +177,30 @@ const menu = (open: number, three: number, four: number) => ({ bet_sizes: [mult(
 /** a 3-bet to 3.5x the 2.5 open, or the jam when that is 60% of the stack or more (the tree's all-in threshold) */
 const threeBet = (pos: string, stack: number): Act => (8.75 >= 0.6 * stack ? [pos, "all-in", stack] : [pos, "raise", 8.75]);
 const SHORT_LADDER = [100, 90, 80, 70, 60, 50, 40, 30, 25, 20, 15, 10];
+/** the fine ladder of experiment 5: every chart rung from 7.5bb up, and the stacks between them */
+const FINE_LADDER = [100, 90, 80, 70, 60, 50, 40, 35, 30, 25, 22.5, 20, 17.5, 15, 12.5, 10, 7.5];
+const SHORT_FINE = [100, 60, 40, 30, 25, 22.5, 20, 17.5, 15, 12.5, 10, 7.5];
+const JAM_LADDER = [40, 30, 25, 22.5, 20, 17.5, 15, 12.5, 10, 7.5, 5];
+/** the short-stack rungs the chart picker can name (hrc6max SHORTS6) that sit on these ladders, and the 100bb default */
+const STACK_GRID = [7.5, 10, 15, 20, 25, 30, 50, 60, 70, 80, 100];
 const OPEN_SIZES = [2, 2.1, 2.2, 2.3, 2.5, 2.7, 3, 3.3, 3.5, 4, 4.5, 5, 6];
 const OPEN_GRID = [2, 2.5, 3, 3.5];
 const PAIRS = [100, 60, 30].flatMap((a) => [100, 60, 30, 15].map((b) => a * 1000 + b));
 const pairOf = (v: number) => [Math.floor(v / 1000), v % 1000] as const;
-const stackCfg = (id: string, role: string, hero: string, vary: string[], line: Act[], ladder: number[], say: string): SweepCfg =>
-  ({ id, exp: 0, axis: "stack", role, hero, ladder, say, at: (v) => ({ stacks: Object.fromEntries(vary.map((p) => [p, v])), line }) });
+const stackCfg = (id: string, role: string, hero: string, vary: string[], line: Act[], ladder: number[], say: string, exp: 0 | 5 = 0): SweepCfg =>
+  ({ id, exp, axis: "stack", role, hero, ladder, say, ...(ladder[0]! <= 100 ? { grid: STACK_GRID } : {}), at: (v) => ({ stacks: Object.fromEntries(vary.map((p) => [p, v])), line }) });
+/** a short stack's own line: its stack is the variable, and its action may be the jam of exactly that stack */
+const shortCfg = (id: string, role: string, hero: string, seat: string, line: (s: number) => Act[], ladder: number[], say: string): SweepCfg =>
+  ({ id, exp: 5, axis: "stack", role, hero, ladder, grid: STACK_GRID, say, at: (v) => ({ stacks: { [seat]: v }, line: line(v) }) });
 const openCfg = (id: string, hero: string, line: (s: number) => Act[], say: string): SweepCfg =>
   ({ id, exp: 1, axis: "size", role: "open", hero, ladder: OPEN_SIZES, grid: OPEN_GRID, say, at: (s) => ({ line: line(s), menu: menu(s, 3.5, 2.3) }) });
 const SWEEP: SweepCfg[] = [
   // 0 — one seat's stack off (2026-10-01)
-  stackCfg("raiser-co", "raiser", "BTN", ["CO"], [...F("UTG", "HJ"), ["CO", "raise", 2.5]], SHORT_LADDER, "BTN facing a CO open; the CO's stack varies"),
-  stackCfg("caller-btn", "in", "SB", ["BTN"], [...F("UTG", "HJ"), ["CO", "raise", 2.5], ["BTN", "call", 2.5]], SHORT_LADDER, "SB facing a CO open and a BTN call; the BTN's stack varies (hand 4921874909)"),
-  stackCfg("behind-bb", "behind", "BTN", ["BB"], F("UTG", "HJ", "CO"), SHORT_LADDER, "BTN first in; the BB's stack varies"),
+  stackCfg("raiser-co", "raiser", "BTN", ["CO"], [...F("UTG", "HJ"), ["CO", "raise", 2.5]], FINE_LADDER, "BTN facing a CO open; the CO's stack varies"),
+  stackCfg("caller-btn", "in", "SB", ["BTN"], [...F("UTG", "HJ"), ["CO", "raise", 2.5], ["BTN", "call", 2.5]], FINE_LADDER, "SB facing a CO open and a BTN call; the BTN's stack varies (hand 4921874909)"),
+  stackCfg("behind-bb", "behind", "BTN", ["BB"], F("UTG", "HJ", "CO"), FINE_LADDER, "BTN first in; the BB's stack varies"),
   stackCfg("behind-btn", "behind", "CO", ["BTN"], F("UTG", "HJ"), SHORT_LADDER, "CO first in; the BTN's stack varies"),
-  stackCfg("raiser-btn-vs-bb", "raiser", "BB", ["BTN"], [...F("UTG", "HJ", "CO"), ["BTN", "raise", 2.5], ["SB", "fold"]], SHORT_LADDER, "BB facing a BTN open; the BTN's stack varies"),
+  stackCfg("raiser-btn-vs-bb", "raiser", "BB", ["BTN"], [...F("UTG", "HJ", "CO"), ["BTN", "raise", 2.5], ["SB", "fold"]], FINE_LADDER, "BB facing a BTN open; the BTN's stack varies"),
   // (GTO Wizard refuses the 300bb tree: VALIDATION_ERROR)
   stackCfg("deep-pair", "deep", "BTN", ["CO", "BTN"], [...F("UTG", "HJ"), ["CO", "raise", 2.5]], [100, 125, 150, 175, 200, 250], "BTN facing a CO open; BOTH stacks vary (the deep ladder)"),
   // 1 — the size of the raise hero faces
@@ -213,12 +226,21 @@ const SWEEP: SweepCfg[] = [
     at: (s) => ({ stacks: { BTN: s }, line: [...F("UTG", "HJ"), ["CO", "raise", 2.5], threeBet("BTN", s), ...F("SB", "BB")], menu: menu(2.5, 3.5, 2.3) }) },
   { id: "s3b-btn-vs-bb", exp: 2, axis: "stack", role: "3-bettor", hero: "BTN", ladder: SHORT_LADDER, say: "BTN opened 2.5, the BB 3-bets to 8.75 (jams when short); the BB's stack varies",
     at: (s) => ({ stacks: { BB: s }, line: [...F("UTG", "HJ", "CO"), ["BTN", "raise", 2.5], ["SB", "fold"], threeBet("BB", s)], menu: menu(2.5, 3.5, 2.3) }) },
+  // 5 — what a short stack actually does (the fine ladders above are the rest of it)
+  shortCfg("jam-bb-vs-btn", "jam", "BB", "BTN", (v) => [...F("UTG", "HJ", "CO"), ["BTN", "all-in", v], ["SB", "fold"]], JAM_LADDER, "BB facing a BTN open JAM of this stack"),
+  shortCfg("jam-btn-vs-co", "jam", "BTN", "CO", (v) => [...F("UTG", "HJ"), ["CO", "all-in", v]], JAM_LADDER, "BTN facing a CO open JAM of this stack (two blinds still to act)"),
+  shortCfg("jam-bb-vs-sb", "jam", "BB", "SB", (v) => [...F("UTG", "HJ", "CO", "BTN"), ["SB", "all-in", v]], JAM_LADDER, "BB facing an SB open JAM of this stack (blind against blind)"),
+  shortCfg("bvb-sb-first", "behind", "SB", "BB", () => F("UTG", "HJ", "CO", "BTN"), [...FINE_LADDER, 5], "SB first in, blind against blind; the BB's stack varies"),
+  shortCfg("bvb-bb-vs-sb-open", "raiser", "BB", "SB", () => [...F("UTG", "HJ", "CO", "BTN"), ["SB", "raise", 2.5]], FINE_LADDER, "BB facing an SB open to 2.5; the SB's stack varies"),
+  shortCfg("bvb-bb-vs-sb-limp", "limper", "BB", "SB", () => [...F("UTG", "HJ", "CO", "BTN"), ["SB", "call"]], SHORT_FINE, "BB facing an SB limp; the SB's stack varies"),
+  shortCfg("limp-btn-vs-co", "limper", "BTN", "CO", () => [...F("UTG", "HJ"), ["CO", "call"]], SHORT_FINE, "BTN facing a CO limp; the CO's stack varies"),
+  shortCfg("minraise-bb-vs-btn", "raiser", "BB", "BTN", () => [...F("UTG", "HJ", "CO"), ["BTN", "raise", 2], ["SB", "fold"]], SHORT_FINE, "BB facing a BTN min-raise to 2; the BTN's stack varies"),
   // 4 — uneven tables
   { id: "two-raiser-bb", exp: 4, axis: "pair", role: "two seats", hero: "BTN", ladder: PAIRS, say: "BTN facing a CO open; the CO's stack AND the BB's (still to act) are off",
     at: (v) => ({ stacks: { CO: pairOf(v)[0], BB: pairOf(v)[1] }, line: [...F("UTG", "HJ"), ["CO", "raise", 2.5]] }) },
   { id: "two-btn-bb", exp: 4, axis: "pair", role: "two seats", hero: "CO", ladder: PAIRS, say: "CO first in; the BTN's stack AND the BB's are off",
     at: (v) => ({ stacks: { BTN: pairOf(v)[0], BB: pairOf(v)[1] }, line: F("UTG", "HJ") }) },
-  { id: "hero-own", exp: 4, axis: "check", role: "hero", hero: "BTN", ladder: [100, 85, 70, 60, 50, 40, 30], say: "BTN facing a CO open; HERO's own stack is this, everyone else 100",
+  { id: "hero-own", exp: 4, axis: "check", role: "hero", hero: "BTN", ladder: [100, 85, 70, 60, 50, 40, 30, 20, 15, 10], say: "BTN facing a CO open; HERO's own stack is this, everyone else 100",
     at: (h) => ({ stacks: { BTN: h }, line: [...F("UTG", "HJ"), ["CO", "raise", 2.5]] }) },
   { id: "even-all", exp: 4, axis: "check", role: "hero", hero: "BTN", ladder: [100, 75, 50, 30], say: "the same spot with EVERY seat at this stack (the even chart the picker reads for a hero who has not reloaded)",
     at: (d) => ({ stacks: Object.fromEntries(Object.keys(SEAT).map((p) => [p, d])), line: [...F("UTG", "HJ"), ["CO", "raise", 2.5]] }) },
@@ -468,14 +490,17 @@ function played(t: OkSweep, a: OkSweep): { loss: number; tvd: number } | null {
 }
 const STACK_BINS: [string, number][] = [["≤1.15x", 1.15], ["≤1.30x", 1.3], ["≤1.50x", 1.5], ["≤2.0x", 2], ["≤3.0x", 3], [">3x", Infinity]];
 const SIZE_BINS: [string, number][] = [["≤1.05x", 1.05], ["≤1.10x", 1.1], ["≤1.15x", 1.15], ["≤1.25x", 1.25], ["≤1.50x", 1.5], ["≤2.0x", 2], [">2x", Infinity]];
-const EXP_NAME: Record<number, string> = { 0: "one seat's stack off (first decisions)", 1: "the size of the raise hero faces", 2: "the 3-bettor's stack, hero having opened", 4: "uneven tables" };
+const EXP_NAME: Record<number, string> = { 0: "one seat's stack off (first decisions)", 1: "the size of the raise hero faces", 2: "the 3-bettor's stack, hero having opened", 4: "uneven tables", 5: "short stacks, thorough: jams, blind against blind, limps, a min-raise" };
+/** the depth of the TRUE stack: the same ratio is a different amount of money at 10bb and at 80bb */
+const BANDS: [string, number, number][] = [["true ≤ 12.5bb", 0, 12.5], ["true 15-25bb  ", 15, 25], ["true 30-50bb  ", 30, 50], ["true 60bb+    ", 60, Infinity]];
+const BAND_BINS: [string, number][] = [["≤1.15x", 1.15], ["≤1.3x", 1.3], ["≤1.5x", 1.5], ["≤2x", 2], ["≤3x", 3], [">3x", Infinity]];
 function reportSweep(rows: SweepRow[]): void {
   const ok = rows.filter((r) => r.ok && r.offered && r.evs) as OkSweep[];
   const latest = new Map<string, OkSweep>(); for (const r of ok) latest.set(r.key, r);
   const of = (cfg: string) => [...latest.values()].filter((r) => r.cfg === cfg);
   const at = (cfg: string, v: number) => latest.get(`${cfg}@${v}`) ?? null;
   console.log(`\nSWEEPS — tree(read) played inside tree(true): bb lost per decision over hero's range, and the share of the range whose action changes (${latest.size} trees)`);
-  for (const exp of [0, 1, 2, 4]) {
+  for (const exp of [0, 5, 1, 2, 4]) {
     const cfgs = SWEEP.filter((c) => c.exp === exp && of(c.id).length >= 2);
     if (!cfgs.length) continue;
     console.log(`\n═══ EXPERIMENT ${exp}: ${EXP_NAME[exp]} ═══`);
@@ -500,7 +525,21 @@ function reportSweep(rows: SweepRow[]): void {
           const o = pairs.filter((p) => p.t === t.stack && (!grid || grid.includes(p.a))).sort((m, n) => m.ratio - n.ratio)[0];
           return o ? `${t.stack}→${o.a}: ${o.loss.toFixed(3)} (${pc(o.tvd)})` : "";
         }).filter(Boolean);
-        console.log(`    ${grid ? `read on the nearest chart size (${grid.join("/")})` : "nearest neighbour"} — true→read: loss (range changed):  ${near.join("   ")}`);
+        console.log(`    ${grid ? `read on the nearest chart ${size ? "size" : "rung"} (${grid.join("/")})` : "nearest neighbour"} — true→read: loss (range changed):  ${near.join("   ")}`);
+        if (!size && xs.some((t) => t.stack <= 30)) {
+          // BY DEPTH: the mean (max) loss of a ratio bin among the pairs whose TRUE stack is in the band, both directions
+          console.log(`    by the depth of the true stack — mean (max) per ratio:`);
+          for (const [band, lo2, hi2] of BANDS) {
+            const inBand = pairs.filter((p) => p.t >= lo2 && p.t <= hi2);
+            if (!inBand.length) continue;
+            let from = 1;
+            const cells = BAND_BINS.map(([name, hi]) => { const g = inBand.filter((p) => p.ratio > from && p.ratio <= hi); from = hi; return g.length ? `${name} ${mean(g.map((p) => p.loss)).toFixed(3)} (${Math.max(...g.map((p) => p.loss)).toFixed(3)})` : null; }).filter(Boolean);
+            console.log(`      ${band}  ${cells.join("   ")}`);
+          }
+          // the seat is not modelled at all: the chart holds it at 100bb
+          const as100 = xs.filter((t) => t.stack < 100).map((t) => { const o = pairs.find((p) => p.t === t.stack && p.a === 100); return o ? `${t.stack}: ${o.loss.toFixed(3)} (${pc(o.tvd)})` : ""; }).filter(Boolean);
+          if (as100.length) console.log(`    read as 100bb (the seat not modelled) — true: loss (range changed):  ${as100.join("   ")}`);
+        }
       } else if (cfg.axis === "pair") {
         // the chart models the first seat; the second is read as 100bb
         for (const t of xs) {

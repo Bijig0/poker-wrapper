@@ -3118,8 +3118,9 @@ export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, stra
 /** Tests: forget which hands were warmed. */
 export function forgetArrivalWarms(): void { warmedArrivals.clear(); }
 
-/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS, default 8 s). */
-const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 8000; };
+/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS; 12 s by Brady's
+ *  call, 2026-10-02 — the clock is 15 s, so a chart answer that late leans on the time bank). */
+const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 12_000; };
 
 /**
  * THE EXACT TREE IS BUILT WHEN THE RAISE LANDS, NOT WHEN HERO IS ASKED (the gap gate, 2026-10-02). A cold AI preflop
@@ -3497,9 +3498,12 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       pf = { piece: "gtow-ai-preflop", how: "designed" };
     }
     // A GATED DECISION NEVER GOES UNANSWERED FOR THE GATE'S SAKE: the exact tree is asked inside a time box (a cold
-    // tree is 5 s at the median and 13 s at the 90th percentile — measured on 133 live answers — against a 15 s clock),
+    // tree is 5 s at the median and 13 s at the 90th percentile — measured on 133 live answers — against a 15 s clock; the box is 12 s),
     // and when it fails or runs out the chart, which could answer all along, does. A request that throws (the
     // network) is a failure like any other. The late answer must not become the hand's pin (skipPin).
+    // THAT IS A FAILURE OF THE AI PIECE AND IS LOGGED AS ONE (Brady, 2026-10-02): the chart's answer carries the path
+    // code preflop:gap-gate-ai-failed (a fallback — never "clean"), the reason and the seconds waited ride on
+    // treeGap.routed, and api.log gets a [gap-gate] line.
     let ai: AiPreflopOutcome;
     if (gated) {
       const t0 = Date.now();
@@ -3512,9 +3516,12 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
         const how = first === "timeout" ? "timeout" as const : "failed" as const;
         const aiWhy = first === "timeout" ? `no answer inside ${(gapGateAiMs() / 1000).toFixed(0)} s` : first.reason.slice(0, 200);
         const chart = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId, { noGate: true });
+        console.log(`[gap-gate] AI FAILED TO ANSWER (${how}, ${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${aiWhy} — ${gapText(gated.gate.reasons)}`);
         if (chart && chart.ok) {
+          const failNote = `GAP GATE: ${gapText(gated.gate.reasons)} — THE EXACT TREE FAILED TO ANSWER (${aiWhy}), so the chart answers`;
           return { ...chart, approx: true,
-            warning: [`GAP GATE: ${gapText(gated.gate.reasons)} — the exact tree was asked and did not answer (${aiWhy}), so the chart answers`, chart.warning].filter(Boolean).join(" · "),
+            warning: [failNote, chart.warning].filter(Boolean).join(" · "),
+            path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "hrc-6max-preflop", how: "rebuilt", code: "preflop:gap-gate-ai-failed", why: failNote.slice(0, 240) } }),
             treeGap: { ...gated, routed: { ...gated.routed!, ai: how, aiWhy, aiMs: Date.now() - t0 } } };
         }
         ai = first === "timeout" ? await asked : first;      // the chart cannot either: the exact tree is all there is
