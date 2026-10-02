@@ -80,6 +80,8 @@ const THREE_BETS = ["3.2x", "3.8x", "4.5x"];
 const FOUR_BETS = ["2.2x", "2.6x"];
 const FIVE_PLUS = ["2.2x"];
 const NODE_TIMEOUT_MS = 30_000;
+/** How long one node is polled for (GTOW_NODE_TIMEOUT_MS, read at every read — the tests shorten it). */
+const nodeTimeoutMs = (): number => { const v = Number(process.env.GTOW_NODE_TIMEOUT_MS); return v > 0 ? v : NODE_TIMEOUT_MS; };
 /** The dead-SB ghost's blind — a penny, so it adds no dead money to speak of — and the label its seat carries in the
  *  shape's stacks (and so in a tree's id, `SB:0.01`: how a dead-SB tree is told apart everywhere). */
 const DEAD_SB_GHOST = 0.01;
@@ -623,6 +625,9 @@ export interface FetchNodeOpts {
    *  follows reads for real. A stored tree this process has not materialised is left alone (a speculative read never
    *  mints a solve). A refusal of the LINE (400/422) is a fact about the tree and is kept, as always. */
   once?: boolean;
+  /** The caller no longer wants this read (the walk showed the tree names the line differently): the poll loop ends at
+   *  its next turn instead of asking for a node that is not there until NODE_TIMEOUT_MS runs out. */
+  stop?: () => boolean;
 }
 /** the one in-flight read per node, however many ask \— the prefetch and the walk share it (2026-10-01) */
 const pendingNodes = new Map<string, { p: Promise<NodeRead>; once: boolean }>();
@@ -658,7 +663,7 @@ export async function fetchNode(solId: string, line: string, opts: FetchNodeOpts
     const r = await pending.p;
     if (!("error" in r) || once || !pending.once) return r;
   }
-  const p = readNode(solId, k, line, addr, ck, terminalError, once);
+  const p = readNode(solId, k, line, addr, ck, terminalError, once, opts.stop);
   pendingNodes.set(k, { p, once });
   try { return await p; } finally { if (pendingNodes.get(k)?.p === p) pendingNodes.delete(k); }
 }
@@ -676,7 +681,8 @@ export function prefetchPrefixes(solId: string, tokens: string[], max = 12): voi
 }
 
 /** The network half of fetchNode: poll one node until it is solved (or `once`: look once). */
-async function readNode(solId: string, k: string, line: string, addr: string, ck: string | null, terminalError: string, once: boolean): Promise<NodeRead> {
+async function readNode(solId: string, k: string, line: string, addr: string, ck: string | null, terminalError: string, once: boolean,
+    stop?: () => boolean): Promise<NodeRead> {
   // a stored tree with a node the store lacks: its solve is created now (once, however many ask), then polled
   let real = solId;
   if (isStoredSolId(solId)) {
@@ -686,17 +692,22 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
     real = m.solId;
   }
   const t0 = Date.now();
-  let last = "the cloud did not return the node in time";
+  // WHAT EVERY POLL SAID, FOR THE REASON WHEN THE NODE NEVER COMES (2026-10-02, hand 4922086187). The reason used to be
+  // the last FAILURE alone: one request timed out, eleven more answered "not solved yet", and the answer said "poll
+  // failed: The operation timed out" — a network fault that was not one (the node was not in the tree).
+  let notSolved = 0, failed = 0, lastFail = "";
   let emptyPolls = 0;
   let refreshed = false;
   const owner = owners.get(real) ?? null;
-  while (Date.now() - t0 < NODE_TIMEOUT_MS) {
+  const limit = nodeTimeoutMs();
+  while (Date.now() - t0 < limit) {
+    if (stop?.()) return { error: "read abandoned — the tree names this line differently" };
     const token = owner ? await gtowSessions.tokenFor(owner) : (await gtowSessions.bestToken({ preflop: true }))?.token ?? null;
     if (!token) return { error: `no GTO Wizard token for the session that owns this solve${owner ? ` (${owner})` : ""}` };
     const params = new URLSearchParams({ custom_solution_id: real, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
     try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
-    catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: last }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
+    catch (e) { failed++; lastFail = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: lastFail }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
     // THE SAME THREE RULES AS gtowApi's node poll (2026-09-25 audit): this copy re-polled an expired token for the whole
     // NODE_TIMEOUT_MS (a lost preflop answer), never told the pool about a wall it hit, and sat out a 429 quota wall
     if (r.status === 401 && !refreshed) {
@@ -729,14 +740,17 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
         if (ck) solveCache.putNode(ck, addr, -r.status, t);
         return { error: `${r.status}: ${t.slice(0, 160)}` };
       }
-      last = `spot-solution ${r.status}: ${t.slice(0, 120)}`;
+      failed++; lastFail = `spot-solution ${r.status}: ${t.slice(0, 120)}`;
       if (owner) gtowSessions.noteFailure(owner, r.status, t.slice(0, 200), { preflop: true });   // the NEXT tree goes elsewhere
-      if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: last };   // a quota wall will not lift while we wait
-    }
-    if (once) return { error: r.status === 404 ? "no such node (one look)" : last };
+      if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: lastFail };   // a quota wall will not lift while we wait
+    } else if (r.status === 204 || r.status === 404) notSolved++;
+    if (once) return { error: r.status === 404 ? "no such node (one look)" : lastFail || "the cloud did not return the node in time" };
     await new Promise((res) => setTimeout(res, POLL_MS));
   }
-  return { error: last };
+  // ("did not return the node in time" is what answerLog's failKind reads)
+  return { error: `the cloud did not return the node in time — ${Math.round((Date.now() - t0) / 1000)} s, ` +
+    `${notSolved} poll(s) answered "not solved yet"` + (failed ? `, ${failed} failed (last: ${lastFail})` : "") +
+    (notSolved > failed ? ` (a node the tree does not hold is answered "not solved yet" too)` : "") };
 }
 
 const heroClass = (cards: string[]): string | null => {
@@ -899,7 +913,39 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   // walks a repaired line) — what the preflop pin records for the flop to resume from
   let usedSol = sol.solId;
   let usedLine = line;
-  let node = await fetchNode(sol.solId, line);
+  // THE TREE IS ASKED WHAT IT CALLS THE LINE WHILE HERO'S NODE IS ASKED FOR BY THE NAME WE GAVE IT (2026-10-02, hand
+  // 4922086187). The walk below used to start only when GTO Wizard REFUSED the address (NODE_DOES_NOT_EXIST) — and a
+  // three-handed tree does not refuse a size it does not hold: it answers "not solved yet" until NODE_TIMEOUT_MS runs
+  // out (30 s of hero's clock, then the last resort). So the line is walked from the root beside the direct read, and
+  // the walk is the judge: a raise the tree names differently, or an action it does not offer, means the address is
+  // not a node — the direct read is dropped and the walk's line is read at once. An address the walk confirms costs
+  // nothing: the direct read is the answer, and the prefix nodes the walk read are the ones the pin warms anyway.
+  let node: NodeRead;
+  {
+    let abandon = false;
+    const direct = fetchNode(sol.solId, line, { stop: () => abandon });
+    // a fold is always on offer: only a line with a call, a check or a raise can miss the tree
+    const walk = tokens.some((t) => t !== "F")
+      ? repairLine(sol.solId, tokens, { end: true }).catch((e): { error: string } => ({ error: `walk threw: ${e instanceof Error ? e.message : e}` }))
+      : null;
+    const first = walk
+      ? await Promise.race([direct.then((n) => ({ n, w: null })), walk.then((w) => ({ n: null, w }))])
+      : { n: await direct, w: null };
+    if (first.n) node = first.n;
+    else {
+      const w = first.w!;
+      const renamed = !("error" in w) && w.changed.length > 0;
+      const notOffered = "error" in w && /is not offered/.test(w.error);
+      // an action the tree does not offer may be a line that cannot happen at all, and the cloud's own refusal says
+      // which (VALIDATION_ERROR is a capture fault, final): it gets one poll's grace before the walk's word is taken
+      const late = notOffered ? await Promise.race([direct, new Promise<null>((res) => setTimeout(() => res(null), POLL_MS))]) : null;
+      if (late) node = late;
+      else if (renamed || notOffered) {
+        abandon = true;
+        node = { error: `NODE_DOES_NOT_EXIST (read off the tree, not waited for: ${renamed ? (w as { changed: string[] }).changed.join(", ") : (w as { error: string }).error})` };
+      } else node = await direct;
+    }
+  }
   let snapped: string[] = [];
   let fittedFolds: string[] = [];
   let deadNote = "";
