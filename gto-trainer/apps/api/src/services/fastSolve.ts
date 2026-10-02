@@ -1337,14 +1337,17 @@ export function decisionChecks(hand: ParsedHand, value: FastSolveResult, origin:
     }
     return out;
   }
-  const hu = Object.keys(hand.positions ?? {}).length === 2;
+  // the seats DEALT, not the labels (2026-10-03): a sitting-out seat keeps its label — a dead button made a table dealt
+  // three read as four, and the tree's names for a table dealt three as another seat's node (hands 4921651217, 4922085772)
+  const dealtLabels = [...dealtSeats(hand, heroPos).values()];
+  const hu = dealtLabels.length === 2;
   const heroName = hand.positions?.[hand.heroSeatId] ?? heroPos;
   const key = `${street} · ${(hand.board ?? []).join("") || "no board"} · ${(hand.heroCards ?? []).join("")} · to call ${Math.round((hand.currentNode?.toCall ?? 0) * 100) / 100} · after ${hand.actions.length} actions`;
   return [
     checkAnswerClock({ ms, origin }),
     checkButtons({
       actions: value.actions ?? [], toCall: hand.currentNode?.toCall ?? null, heroBehind: hand.stacks?.[hand.heroSeatId] ?? null,
-      legal: hand.currentNode?.legalActions ?? [], nodePos: street === "preflop" ? value.pos : null, heroPos: heroName, hu,
+      legal: hand.currentNode?.legalActions ?? [], nodePos: street === "preflop" ? value.pos : null, heroPos: heroName, hu, dealtLabels,
     }),
     checkMix(value.actions ?? []),
     checkFresh({ answerStreet: value.street, handStreet: street, key }),
@@ -1809,6 +1812,7 @@ async function solvePostflopViaChainOnce(
     ...((am) => (am?.some((s) => s.some((x) => x != null)) ? { streetAmounts: am } : {}))(amountsOf(w)),
     streetSeats: w.streetSeats,
     heroComboIdx,
+    dealt: dealtCount(hand, heroPos),
     rangeSource: rangeSource ?? undefined,
     handKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
     planTag: w.kind,

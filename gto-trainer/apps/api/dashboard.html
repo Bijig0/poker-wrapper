@@ -434,8 +434,9 @@ function chainSolver(s) {
 /* THE CHECKS TAB (2026-09-27, services/chainChecks) — it took over the Chain path card. At the top, the hand's verdict
    and what it cost (the preflop pin, GTO Wizard requests, the streets walked); then per decision: its verdict, requests
    and reasons, how each street's ranges were produced (folded away), and the chain's seventeen invariants as a table of
-   checks × streets: ✓ held · ✗ failed (red, with the reason) · ⚑ a villain mistake line (flagged, never a verdict) ·
-   — not checked (hover says why). Hover a check's name for the rule it enforces. */
+   checks × streets: ✓ held · ✗ failed (red, with the reason) · ⚑ flagged, never a verdict (#3 a villain mistake line;
+   since 2026-10-03 #12 a street slow against its own median) · — not checked (hover says why). Hover a check's name for
+   the rule it enforces. */
 const CK_STREETS = ["preflop", "flop", "turn", "river"];
 const CK_GROUP = { inputs: "Inputs", process: "Process", output: "Output" };
 function ckCellHtml(c) {
@@ -473,7 +474,7 @@ function checksViewHtml(j) {
   const pin = facts?.preflop ? `preflop pin: <b>${esc(facts.preflop.piece)}</b> <span class="mono">${esc(facts.preflop.id || "")}</span> at "${esc((facts.preflop.codes || []).join("-") || "root")}"` : "no preflop pin recorded";
   const walked = (facts?.streets || []).map((s) => `${["flop", "turn", "river"][s.k] || s.k}${s.plan ? ` (${esc(s.plan)})` : ""} ${s.kind === "closed" ? "closed" : "hero's node"} [${esc((s.tokens || []).join(","))}]`).join(" · ");
   const top = `<div class="ck-top">hand verdict ${hv ? chainChip(hv.verdict) : '<span class="sub">—</span>'} <span class="sub">${pin}${origins ? ` · GTO Wizard requests for this hand: ${origins}` : ""}${walked ? `<br>streets walked: ${walked}` : ""}</span></div>
-    <div class="sub" style="margin:0 0 6px"><span class="chain-ok">✓</span> held · <span class="chain-bad">✗</span> failed (a reason on the answer: verdict "check failed") · <span class="ck-flag">⚑</span> a villain mistake line — flagged, never a verdict · — not checked (hover for why) · hover a check for its rule; <a href="/coverage" onclick="go('/coverage');return false">all checks across hands ↗</a></div>`;
+    <div class="sub" style="margin:0 0 6px"><span class="chain-ok">✓</span> held · <span class="chain-bad">✗</span> failed (a reason on the answer: verdict "check failed") · <span class="ck-flag">⚑</span> flagged, never a verdict (#3 a villain mistake line, #12 a street slow against its median) · — not checked (hover for why) · hover a check for its rule; <a href="/coverage" onclick="go('/coverage');return false">all checks across hands ↗</a></div>`;
   const body = rows.map(({ a, p }) => {
     const streets = (p.streets || []).map((s) => `<div style="margin-bottom:4px"><b>${esc(s.street)}</b>${s.plan ? `<span class="sub"> (${esc(s.plan)})</span>` : ""}: ${chainHow(s.how, s.why)}` +
       `${s.leak ? ` <span class="chain-bad" title="${esc(s.leak.why)}">· ${esc(s.leak.code)}</span>` : ""}${chainCheck(s)}${chainOffTree(s)}${chainSolver(s)}</div>`).join("")

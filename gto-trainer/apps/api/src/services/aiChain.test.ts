@@ -905,4 +905,61 @@ describe("the street's checks, as the walk sees them (services/chainChecks, 2026
     forgetCheckpoints("hand-checks-2");
     forgetCheckpoints("hand-checks-3");
   });
+
+  // 2026-10-03, audit finding 5: the heads-up rule (big blind first) only on a table DEALT two
+  it("#4: a blind-vs-blind pot seated SB → BB passes at a table dealt 5, fails at a table dealt 2 — the spec's dealt count decides", async () => {
+    const sbbb: Record<string, Node> = {
+      "sol-FLOP|": { toAct: "SB", acts: [X, B(3)] },
+      "sol-FLOP|X": { toAct: "BB", acts: [X, B(3)] },
+    };
+    const run = async (dealt: number | undefined, key: string) => {
+      forgetCheckpoints(key);
+      const s = script(sbbb);
+      restore = s.restore;
+      const r = await solveAiChain({ ...spec([["X"]], "Ts7h2d", key), oopPos: "SB", ipPos: "BB", heroSeat: "ip", ...(dealt != null ? { dealt } : {}) });
+      s.restore(); restore = null;
+      forgetCheckpoints(key);
+      expect(r.ok).toBe(true);
+      return r.ok ? r.trace.streets[0]!.checks!.find((c) => c.id === 4)! : null;
+    };
+    const ring = await run(5, "hand-checks-4a");
+    expect(ring!.status).toBe("pass");
+    expect(ring!.text).toContain("SB → BB in postflop order by position (5 dealt)");
+    const hu = await run(2, "hand-checks-4b");
+    expect(hu!.status).toBe("fail");
+    expect(hu!.text).toContain("by position it is BB → SB (out of position first; 2 dealt)");
+    const unknown = await run(undefined, "hand-checks-4c");
+    expect([unknown!.status, unknown!.text.includes("a blind-vs-blind order is not checked")]).toEqual(["pass", true]);
+  });
+
+  it("#12: each street's time goes to ITS population's median (new / cached-hit / cached-fetched), and a slow street is never a fail", async () => {
+    forgetCheckpoints("hand-checks-5");
+    solveTimes.reset();
+    const pops = ["new", "cached-hit", "cached-fetched"] as const;
+    for (const p of pops) for (let i = 0; i < 10; i++) solveTimes.record(`FLOP:${p}`, 0);
+    const s = script(nodes);
+    restore = s.restore;
+    const TEXT = { new: "(new trees", "cached-hit": "(cached trees, every node from the cache", "cached-fetched": "(cached trees, nodes fetched" } as const;
+    const walk = async (key: string) => {
+      forgetCheckpoints(key);
+      const r = await solveAiChain(spec([["X"]], "Ts7h2d", key));
+      forgetCheckpoints(key);
+      expect(r.ok).toBe(true);
+      return r.ok ? r.trace.streets[0]!.checks!.find((c) => c.id === 12)! : null;
+    };
+    // a tree created on this decision: the "new" median
+    const created = await walk("hand-checks-5");
+    expect(pops.map((p) => solveTimes.median(`FLOP:${p}`).samples)).toEqual([11, 10, 10]);
+    expect(created!.status).not.toBe("fail");
+    expect(created!.text).toContain(TEXT.new);
+    // the same tree from the cache, its nodes fetched from GTO Wizard: the "cached-fetched" median, not a full cache hit's
+    const api = gtowApi as any;
+    const inner = api.ensureCustomSolution;
+    api.ensureCustomSolution = async (input: any) => ({ ...(await inner(input)), created: false });
+    restore = () => { api.ensureCustomSolution = inner; s.restore(); };
+    const cached = await walk("hand-checks-6");
+    expect(pops.map((p) => solveTimes.median(`FLOP:${p}`).samples)).toEqual([11, 10, 11]);
+    expect(cached!.text).toContain(TEXT["cached-fetched"]);
+    solveTimes.reset();
+  });
 });

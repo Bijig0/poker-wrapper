@@ -15,8 +15,9 @@ import { pctOf, type OffTreeLine } from "./offTree";
  *   fastSolve (per street, against the capture)              #1 #5 #7 #8
  *   fastSolve (per decision, on the answer)                  #12(clock) #14 #15 #16 #17(preflop)
  *
- * Each check yields `{ id, status, text }` per street: pass ✓, fail ✗, flag ⚑ (#3 only — a villain mistake line is
- * worth seeing, never a verdict), na — (not evaluated: nothing to check, or the data is missing; the text says which).
+ * Each check yields `{ id, status, text }` per street: pass ✓, fail ✗, flag ⚑ (worth seeing, never a verdict: #3 a
+ * villain mistake line, and since 2026-10-03 #12's street-over-its-median half), na — (not evaluated: nothing to check,
+ * or the data is missing; the text says which).
  * They travel on the answer's DecisionPath (`checks`, per street), and a FAIL becomes a reason on the path with the
  * verdict "failed" — so the hand's verdict, the panel's banner and the session's Technical tab all see it — unless an
  * existing reason already says the same thing (`covered`: the range hand-off, a re-created tree, a node read twice,
@@ -88,7 +89,7 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 4, group: "inputs", name: "Seats right",
     spec: "OOP by position, GTO Wizard's node agrees on who acts, warm-up seating = live seating.",
     build: "built",
-    how: "The street's seats must be in postflop order by position (heads-up the big blind acts first). GTO Wizard's node names the seat to act at every node and the walk refuses to continue on a disagreement — an answer that exists passed it at every node read. The warm-up's tree for the street must seat the same players in the same order." },
+    how: "The street's seats must be in postflop order by position, judged from the seat labels and the number of players DEALT in the hand (counted from the capture, not taken from the chain): on a table dealt two the big blind acts first (the dealer posts the small blind); on a table dealt three or more a blind-vs-blind pot is the small blind first like any pot. With the dealt count unknown a small-blind-vs-big-blind pot is not ordered. (Before 2026-10-03 the heads-up rule was applied to every SB-vs-BB pot, and every one at a 3-6 handed table failed.) GTO Wizard's node names the seat to act at every node and the walk refuses to continue on a disagreement — an answer that exists passed it at every node read. The warm-up's tree for the street must seat the same players in the same order." },
   { id: 5, group: "inputs", name: "Pot and stack add up",
     spec: "Pot entering each street = previous pot + chips put in, and matches the capture's pot within a tolerance; stack = effective stack of players still in.",
     build: "built",
@@ -118,9 +119,9 @@ export const CHECKS: readonly CheckDef[] = [
     build: "built",
     how: "The street warm-up (fired when the card lands) records its tree in the hand's tree ledger; the live walk of that street must use the same tree, unless the street's wagers pinned sizes into a tree of their own." },
   { id: 12, group: "process", name: "Solve time bounded",
-    spec: "Per-street solve time bounded (≤ 3× that street's rolling median) and the whole answer inside the table's action clock (Ignition ~15 s).",
+    spec: "The whole answer inside the table's action clock (Ignition ~15 s); a street slow against its own rolling median (> 3×) is flagged.",
     build: "built",
-    how: "Each street walked on a decision (tree + walk wall-clock) against the rolling median of the last 50 of that street (new trees and cached trees apart), once 10 are in; CHECK_SOLVE_MEDIAN_X sets the multiple. A live answer's whole time against CHECK_ACTION_CLOCK_MS (15 s). Warm-ups and replays are not against the clock." },
+    how: "A FAIL: a live answer's whole time against CHECK_ACTION_CLOCK_MS (15 s); warm-ups and replays are not against the clock. A FLAG (⚑, never a verdict — since 2026-10-03): each street walked on a decision (tree + walk wall-clock) against the rolling median of the last 50 of that street, once 10 are in, three populations apart — new trees, cached trees with every node from the cache, cached trees with nodes still fetched — CHECK_SOLVE_MEDIAN_X sets the multiple. The median is kept in memory (a restart learns it again); before 2026-10-03 it was a fail, and 140 answers failed it with none past the clock." },
   { id: 13, group: "process", name: "Replay determinism",
     spec: "Same capture ⇒ same trees and mix (a script/nightly job).",
     build: "built",
@@ -128,7 +129,7 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 14, group: "output", name: "Answer at hero's node, legal actions",
     spec: "Answer is at hero's node and its actions ⊆ the table's offered buttons.",
     build: "built",
-    how: "Hero's node: the walk's rotation and GTO Wizard's node both name hero. When the answer is solved, it is checked against the amount to call (no CHECK facing a bet, no FOLD/CALL with nothing to call, no raise when calling puts hero all in). When auto-execute presses it, the wrapper's relay records the action strip's labels on the very read it pressed from (the hand's autoExec), and every action the answer offers must be one of those buttons (a shove the table offers only as a CALL counts). Answers never pressed keep the first half only." },
+    how: "Hero's node: the walk's rotation and GTO Wizard's node both name hero; preflop, the node the answer was read at must be hero's seat by the table's label or by the name a tree for that many dealt players gives it (GTO Wizard's sets: 3 dealt = BTN/SB/BB, so a CO whose button sat out is the tree's BTN). When the answer is solved, it is checked against the amount to call (no CHECK facing a bet, no FOLD/CALL with nothing to call, no sized raise when calling puts hero all in — an all-in for no more than the call is the call for less). When auto-execute presses it, the wrapper's relay records the action strip's labels on the very read it pressed from (the hand's autoExec), and every action the answer offers must be one of those buttons (a shove the table offers only as a CALL counts). Answers never pressed keep the first half only." },
   { id: 15, group: "output", name: "Mix valid",
     spec: "Sums ~100%, not all zero.",
     build: "built",
@@ -185,8 +186,13 @@ export function mergeChecks(xs: CheckResult[]): CheckResult[] {
   for (const [id, list] of by) {
     const top = Math.max(...list.map((x) => STATUS_RANK[x.status]));
     const worst = list.filter((x) => STATUS_RANK[x.status] === top);
-    // a pass that adds a fact to another pass is kept (the street's part and the decision's part of #12, #14, #17)
-    const texts = [...new Set((top <= STATUS_RANK.pass ? list.filter((x) => x.status !== "na" || top === 0) : worst).map((x) => x.text))];
+    // a pass that adds a fact to another pass is kept (the street's part and the decision's part of #12, #14, #17).
+    // A FLAG KEEPS THE PASSES BESIDE IT (2026-10-03): #12's median half is a flag, its clock half a pass or a fail —
+    // a flag on top of a passed clock must still say the answer was inside the clock (a fail still shows only fails)
+    const shown = top <= STATUS_RANK.pass ? list.filter((x) => x.status !== "na" || top === 0)
+      : top === STATUS_RANK.flag ? [...worst, ...list.filter((x) => x.status === "pass")]
+        : worst;
+    const texts = [...new Set(shown.map((x) => x.text))];
     const covered = worst.every((x) => x.covered) ? worst[0]!.covered : undefined;
     const potOff = worst.some((x) => x.potOff);
     out.push({ id, status: worst[0]!.status, text: texts.join(" · "), ...(covered ? { covered } : {}), ...(potOff ? { potOff: true as const } : {}) });
@@ -387,27 +393,50 @@ export function checkMistakeLines(lines: OffTreeLine[], villainActions: number):
 }
 
 // ── #4 seats right ──────────────────────────────────────────────────────────────────────────────────────────────
-/** Postflop acting order by position: blinds first, the button last; heads-up the big blind acts first. */
+/** Postflop acting order by position: blinds first, the button last. */
 const POSTFLOP_ORDER = ["SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "MP", "HJ", "CO", "BTN"];
-export function expectedOrder(players: string[]): string[] | null {
+/**
+ * THE HEADS-UP RULE IS FOR A TABLE DEALT TWO (2026-10-03, audit finding 5). On a table dealt two the dealer posts the
+ * small blind and the BIG BLIND acts first after the flop; on a table dealt three or more a blind-vs-blind pot is the
+ * SMALL BLIND first, like any other pot by position (memory heads-up-postflop-order: only the dealt count matters).
+ * The check used to apply the heads-up rule to any two players named SB and BB, so every blind-vs-blind pot at a 3-6
+ * handed table failed — 198 street fails on 112 answers since 2026-09-27, every one of them a correct tree (SB → BB,
+ * dealt 3/4/5/6: pass 0, fail 198; BB → SB, dealt 2: pass 115, fail 0). The order is derived here from the labels and
+ * the number of players DEALT (the caller counts them from the capture: utils/dealtSeats), never from the chain's own
+ * rotation. `dealt` unknown: an SB+BB pot cannot be ordered (null, not checked); every other pair orders the same at
+ * any table size (heads-up the non-BB seat is the button, last by position too).
+ */
+export function expectedOrder(players: string[], dealt?: number | null): string[] | null {
   const up = players.map((p) => p.toUpperCase());
-  if (up.length === 2 && up.includes("BB") && (up.includes("SB") || up.includes("BTN"))) {
+  if (dealt === 2 && up.length === 2 && up.includes("BB")) {
     return up[0] === "BB" ? players.slice() : [players[1]!, players[0]!];
   }
   if (up.some((p) => !POSTFLOP_ORDER.includes(p))) return null;       // a label outside the order (a merged seat): not checked
+  if (dealt == null && up.length === 2 && up.includes("SB") && up.includes("BB")) return null;
   return players.slice().sort((a, b) => POSTFLOP_ORDER.indexOf(a.toUpperCase()) - POSTFLOP_ORDER.indexOf(b.toUpperCase()));
 }
-export function checkSeats(a: { players: string[]; agreed: number; unnamed: number; warmSeats?: string[] | null; origin?: string | null }): CheckResult {
-  const want = expectedOrder(a.players);
+export function checkSeats(a: {
+  players: string[];
+  /** nodes at which GTO Wizard named the seat the walk had to act; null = not recorded (a re-scored row) */
+  agreed: number | null; unnamed: number | null;
+  warmSeats?: string[] | null; origin?: string | null;
+  /** players DEALT in the hand (hero included) — decides the heads-up rule; null/absent = unknown */
+  dealt?: number | null;
+}): CheckResult {
+  const want = expectedOrder(a.players, a.dealt);
+  const dealtTxt = a.dealt != null ? `${a.dealt} dealt` : "players dealt unknown";
   if (want && want.join("/") !== a.players.join("/")) {
-    return fail(4, `the tree seats ${a.players.join(" → ")} in acting order; by position it is ${want.join(" → ")} (out of position first)`);
+    return fail(4, `the tree seats ${a.players.join(" → ")} in acting order; by position it is ${want.join(" → ")} (out of position first; ${dealtTxt})`);
   }
   if (a.warmSeats && a.origin !== "warm" && a.warmSeats.join("/").toUpperCase() !== a.players.join("/").toUpperCase()) {
     return fail(4, `the warm-up seated ${a.warmSeats.join(" → ")}, this walk ${a.players.join(" → ")}`);
   }
-  const order = want ? "in postflop order by position" : "(a merged seat: order by position not checked)";
-  const node = a.agreed ? `GTO Wizard named the same seat to act at ${a.agreed} node${a.agreed === 1 ? "" : "s"} read${a.unnamed ? ` (${a.unnamed} unnamed)` : ""}`
-    : a.unnamed ? `${a.unnamed} node${a.unnamed === 1 ? "" : "s"} read without a named seat` : "no node read on this decision (resumed)";
+  const order = want ? `in postflop order by position (${dealtTxt}${a.dealt === 2 ? ": heads-up, the big blind first" : ""})`
+    : a.players.some((p) => !POSTFLOP_ORDER.includes(p.toUpperCase())) ? "(a merged seat: order by position not checked)"
+      : "(players dealt unknown: a blind-vs-blind order is not checked)";
+  const node = a.agreed == null ? "the node agreement was not recorded on this result (re-scored from the stored seats)"
+    : a.agreed ? `GTO Wizard named the same seat to act at ${a.agreed} node${a.agreed === 1 ? "" : "s"} read${a.unnamed ? ` (${a.unnamed} unnamed)` : ""}`
+      : a.unnamed ? `${a.unnamed} node${a.unnamed === 1 ? "" : "s"} read without a named seat` : "no node read on this decision (resumed)";
   const warm = a.origin === "warm" ? "this is the warm-up" : a.warmSeats ? "the warm-up seated the same" : "no warm-up tree for this street";
   return pass(4, `${a.players.join(" → ")} ${order}; ${node}; ${warm}`);
 }
@@ -591,12 +620,34 @@ export class SolveTimes {
 }
 export const solveTimes = new SolveTimes();
 
-export function checkSolveTime(a: { street: string; ms: number | null; median: number | null; samples: number; created: boolean }): CheckResult {
-  const kind = a.created ? "new trees" : "cached trees";
+/**
+ * THE STREET'S POPULATION (2026-10-03, audit finding 5): a tree solved on this decision; a cached tree whose nodes
+ * all came from the cache (milliseconds); a cached tree whose nodes were still fetched or joined in flight from GTO
+ * Wizard (2-3 s). The last two used to share one "cached trees" median, which a run of full cache hits pulled down to
+ * 0.6 s — and a normal 2.8 s walk was then "over 3×". Each population keeps its own median (aiChain's time key).
+ */
+export type SolvePopulation = "new" | "cached-hit" | "cached-fetched";
+export const solvePopulation = (created: boolean, nodes?: { joined: number; fetched: number } | null): SolvePopulation =>
+  created ? "new" : nodes && nodes.joined + nodes.fetched > 0 ? "cached-fetched" : "cached-hit";
+const POPULATION_TEXT: Record<SolvePopulation, string> = {
+  new: "new trees", "cached-hit": "cached trees, every node from the cache", "cached-fetched": "cached trees, nodes fetched",
+};
+/**
+ * #12's MEDIAN HALF IS A FLAG, NEVER A VERDICT (2026-10-03, Brady approved; audit finding 5). Of 140 answers this half
+ * failed since 2026-09-27, none was late: the whole answer took a median 3.6 s, at most 14.9 s, inside the 15 s clock
+ * every time. A street slow against its own recent past is worth seeing (⚑) — the bound an answer must hold is the
+ * table's action clock (checkAnswerClock, still a FAIL). The baseline is in memory: a restart learns it again.
+ */
+/** what a #12 median flag says after its numbers (the re-score appends it to stored median fails too) */
+export const SOLVE_FLAG_NOTE = " — a flag, never a verdict: the bound is the action clock";
+export function checkSolveTime(a: { street: string; ms: number | null; median: number | null; samples: number; created: boolean; population?: SolvePopulation }): CheckResult {
+  const kind = POPULATION_TEXT[a.population ?? (a.created ? "new" : "cached-hit")];
   if (a.ms == null) return na(12, "not solved on this decision");
   if (a.median == null || a.samples < TOL.solveMinSamples) return na(12, `${a.street} took ${secs(a.ms)} — collecting a baseline (${a.samples}/${TOL.solveMinSamples} ${kind})`);
   const x = solveMedianX();
-  if (a.ms > x * a.median && a.ms - a.median > TOL.solveMinOverMs) return fail(12, `the ${a.street} took ${secs(a.ms)}, over ${x}× its rolling median of ${secs(a.median)} (${kind}, last ${a.samples})`);
+  if (a.ms > x * a.median && a.ms - a.median > TOL.solveMinOverMs) {
+    return { id: 12, status: "flag", text: `the ${a.street} took ${secs(a.ms)}, over ${x}× its rolling median of ${secs(a.median)} (${kind}, last ${a.samples})${SOLVE_FLAG_NOTE}` };
+  }
   return pass(12, `${a.street} ${secs(a.ms)} ≤ ${x}× the median ${secs(a.median)} (${kind})`);
 }
 export function checkAnswerClock(a: { ms: number; origin: string | null }): CheckResult {
@@ -615,6 +666,35 @@ const answerKind = (label: string): Kind => {
 export function checkHeroNode(a: { heroPos: string; nodeSaid: string | null }): CheckResult {
   return pass(14, `hero's node: the walk's rotation has ${a.heroPos} to act${a.nodeSaid ? ` and GTO Wizard's node names ${a.nodeSaid}` : ""}`);
 }
+/**
+ * HERO'S SEAT IN THE NAMES OF A TABLE DEALT N (2026-10-03, hands 4921651217 / 4922085772). GTO Wizard's AI trees name
+ * their seats from a fixed set per player count — 2 SB/BB · 3 BTN/SB/BB · 4 CO/BTN/SB/BB · 5 HJ/CO/BTN/SB/BB · 6
+ * UTG..BB — so a table's own label is not the tree's name for the same seat when the table is short or a seat sat out.
+ * Both hands were three dealt with the BUTTON seat sitting out (a dead button): hero's seat is labelled CO at the table
+ * (Ignition's own history calls it UTG), first to act and last after the flop — the three-handed tree's BTN. The check
+ * read "BTN's node, not hero's (CO)" although the tree's BTN was built from hero's own stack. This names a seat the
+ * way such a set does, from the DEALT labels alone: the blinds keep their names, the other seats take the set's
+ * non-blind names in table order; a missing small blind (dead SB) still counts as a seat of the set; heads-up the
+ * button is the small blind. null when a label is outside the 6-max names or the count does not fit a set.
+ */
+const TABLE_ORDER = ["UTG", "UTG+1", "UTG+2", "LJ", "MP", "HJ", "CO", "BTN"];
+const DEALT_SETS: Record<number, string[]> = { 2: ["SB", "BB"], 3: ["BTN", "SB", "BB"], 4: ["CO", "BTN", "SB", "BB"], 5: ["HJ", "CO", "BTN", "SB", "BB"], 6: ["UTG", "HJ", "CO", "BTN", "SB", "BB"] };
+const seatName = (p: string): string => { const u = p.trim().toUpperCase(); return u === "BU" || u === "D" || u === "DEALER" ? "BTN" : u; };
+export function dealtSetName(label: string, dealtLabels: string[]): string | null {
+  const present = [...new Set(dealtLabels.map(seatName))];
+  const me = seatName(label);
+  if (!present.includes(me) || present.some((p) => p !== "SB" && p !== "BB" && !TABLE_ORDER.includes(p))) return null;
+  if (present.length === 2 && present.includes("BB") && !present.includes("SB")) return me === "BB" ? "BB" : "SB";   // heads-up: the dealer posts the SB
+  const deadSb = !present.includes("SB") && present.includes("BB");
+  const set = DEALT_SETS[present.length + (deadSb ? 1 : 0)];
+  if (!set) return null;
+  if (me === "SB" || me === "BB") return me;
+  const others = present.filter((p) => p !== "SB" && p !== "BB").sort((x, y) => TABLE_ORDER.indexOf(x) - TABLE_ORDER.indexOf(y));
+  const names = set.filter((p) => p !== "SB" && p !== "BB");
+  return others.length === names.length ? names[others.indexOf(me)]! : null;
+}
+/** a wager that is hero's whole stack: when it is no more than the amount to call it IS the call (for less) */
+const isAllInLabel = (label: string): boolean => /^(all[\s-]?in|allin|jam|shove)\b/i.test(label.trim());
 export function checkButtons(a: {
   actions: { action: string; frequency: number }[];
   toCall: number | null; heroBehind?: number | null;
@@ -622,17 +702,25 @@ export function checkButtons(a: {
   legal?: string[];
   /** the node's seat against hero's, when both are seat names (heads-up BTN and SB are one seat) */
   nodePos?: string | null; heroPos?: string | null; hu?: boolean;
+  /** the labels of every seat DEALT in the hand, hero's included (utils/dealtSeats): the node may name hero's seat in
+   *  the tree's set for that many players (dealtSetName) instead of the table's label */
+  dealtLabels?: string[] | null;
 }): CheckResult {
   // seat names from different vocabularies (a chart's BU is the table's BTN): only the six the table itself uses are
   // compared — a name outside them (OOP/IP, LJ, MP, UTG+1) is not evidence either way
   const seat = (p: string) => {
-    const u0 = p.toUpperCase();
-    const u = u0 === "BU" || u0 === "D" || u0 === "DEALER" ? "BTN" : u0;
+    const u = seatName(p);
     return a.hu && (u === "BTN" || u === "SB") ? "BTN~SB" : u;
   };
   const named = (p: string | null | undefined): p is string => !!p && ["SB", "BB", "UTG", "HJ", "CO", "BTN", "BU"].includes(p.toUpperCase());
+  let seatTxt = "";
   if (named(a.nodePos) && named(a.heroPos) && seat(a.nodePos) !== seat(a.heroPos)) {
-    return fail(14, `the answer is ${a.nodePos}'s node, not hero's (${a.heroPos})`);
+    // the same seat under the tree's name for a table dealt this many is hero's node; anything else is another seat's
+    const asSet = a.dealtLabels?.length ? dealtSetName(a.heroPos, a.dealtLabels) : null;
+    if (!asSet || seat(asSet) !== seat(a.nodePos)) {
+      return fail(14, `the answer is ${a.nodePos}'s node, not hero's (${a.heroPos}${asSet ? `; ${asSet} in the names of a table dealt ${a.dealtLabels!.length}` : ""})`);
+    }
+    seatTxt = `hero's ${a.heroPos} is the tree's ${a.nodePos} at a table dealt ${a.dealtLabels!.length} (${a.dealtLabels!.join("/")}); `;
   }
   const live = a.actions.filter((x) => x.frequency > 0);
   const kinds = new Set(live.map((x) => answerKind(x.action)));
@@ -641,16 +729,23 @@ export function checkButtons(a: {
     const offered = new Set(a.legal.map(answerKind));
     const extra = [...kinds].filter((k) => !offered.has(k));
     if (extra.length) return fail(14, `the answer offers ${extra.join(", ").toUpperCase()}; the table's buttons are ${a.legal.join(" / ")}`);
-    return pass(14, `${names} ⊆ the table's buttons (${a.legal.join(" / ")})`);
+    return pass(14, `${seatTxt}${names} ⊆ the table's buttons (${a.legal.join(" / ")})`);
   }
   if (a.toCall == null) return na(14, "the amount to call is unknown");
   const bad: string[] = [];
   if (a.toCall > 0.005 && kinds.has("check")) bad.push(`CHECK facing ${r2(a.toCall)}bb`);
   if (!(a.toCall > 0.005) && kinds.has("fold")) bad.push("FOLD with nothing to call");
   if (!(a.toCall > 0.005) && kinds.has("call")) bad.push("CALL with nothing to call");
-  if (a.heroBehind != null && a.toCall > 0.005 && a.heroBehind <= a.toCall + 0.01 && kinds.has("wager")) bad.push(`a raise although calling ${r2(a.toCall)}bb puts hero all in (${r2(a.heroBehind)}bb behind)`);
+  // AN ALL-IN FOR NO MORE THAN THE CALL IS THE CALL (2026-10-03, hand 4921673474): hero BB with 100bb raised to 13, the
+  // button (111.8bb) shoved; to call 98.8 with 87 behind, the table offered FOLD / ALL-IN 87 BB, and the tree (hero's
+  // 100bb stack as dealt) answered All-in 100% — the call for less, the very button offered. Only a SIZED raise is
+  // impossible when calling puts hero all in.
+  const allInCall = a.heroBehind != null && a.toCall > 0.005 && a.heroBehind <= a.toCall + 0.01;
+  const raises = live.filter((x) => answerKind(x.action) === "wager" && !(allInCall && isAllInLabel(x.action)));
+  if (allInCall && raises.length) bad.push(`a raise (${raises.map((x) => x.action).join(", ")}) although calling ${r2(a.toCall)}bb puts hero all in (${r2(a.heroBehind!)}bb behind)`);
   if (bad.length) return fail(14, `the answer offers ${bad.join("; ")}`);
-  return pass(14, `${names} — consistent with ${a.toCall > 0.005 ? `facing ${r2(a.toCall)}bb` : "nothing to call"} (the buttons are not captured: checked against the amount to call)`);
+  const callForLess = allInCall && live.some((x) => isAllInLabel(x.action)) ? ` — its all-in is the call for less (${r2(a.heroBehind!)}bb behind, ${r2(a.toCall)}bb to call)` : "";
+  return pass(14, `${seatTxt}${names} — consistent with ${a.toCall > 0.005 ? `facing ${r2(a.toCall)}bb` : "nothing to call"}${callForLess} (the buttons are not captured: checked against the amount to call)`);
 }
 
 // ── #15 mix valid ───────────────────────────────────────────────────────────────────────────────────────────────
