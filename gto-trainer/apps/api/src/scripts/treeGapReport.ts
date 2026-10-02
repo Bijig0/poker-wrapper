@@ -57,7 +57,7 @@ function rebuild(r: Row): TreeGap | null {
   if (aggressor === hero) aggressor = null;
   const after = SEATS6.filter((p) => p !== hero && !folded.has(p) && !inPot.has(p));
   const wanted = /no (\S+) tree in the set/.exec(r.warning ?? "")?.[1] ?? null;
-  return treeGap6({ chartId: r.chart, byPos, hero, folded, aggressor, after, wantedId: wanted, tau });
+  return treeGap6({ chartId: r.chart, byPos, hero, folded, aggressor, after, wantedId: wanted, mode: "off" });
 }
 
 const measured: { r: Row; g: TreeGap; logged: boolean }[] = [];

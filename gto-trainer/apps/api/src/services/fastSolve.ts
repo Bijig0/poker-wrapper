@@ -2,7 +2,7 @@ import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens, allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6 } from "./hrc6max";
-import { treeGap6, type TreeGap } from "./treeGap";
+import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignStrategy, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
@@ -171,6 +171,8 @@ export type FastSolveResult =
        *  (EIP-01). Absent on an ordinary miss, which the next piece in the cascade is welcome to attempt. */
       kind?: string;
       path?: DecisionPath;
+      /** a chart refusal by THE GAP GATE (services/treeGap): the measurement and what the chart would have answered */
+      treeGap?: TreeGap;
     };
 
 /** The terminal refusal classes fastSolve itself emits — see FastSolveResult.kind. */
@@ -2730,7 +2732,7 @@ export async function solvePreflop6max(
   strategyId?: string | null,
   /** a second read after hero's class had no cell: `keepChart` — on the chart hero's earlier decision was read from
    *  instead of the picker's; `keepCallers` — never folding a caller that earlier decision was read with */
-  retry: { keepChart?: string; keepCallers?: boolean } = {},
+  retry: { keepChart?: string; keepCallers?: boolean; /** answer from the chart whatever the gap gate says (the exact tree did not answer) */ noGate?: boolean } = {},
 ): Promise<FastSolveResult | null> {
   void origin; void strategyId;
   // A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21), preflop as much as postflop. Without
@@ -2923,6 +2925,19 @@ export async function solvePreflop6max(
     }
   }
   const rawActions = cell ? Object.entries(cell.actions).map(([action, frequency]) => ({ action, frequency })) : [];
+  // THE GAP GATE (services/treeGap, 2026-10-02): how far the table is from this chart — the raise sizes the line was
+  // snapped onto and, facing a re-raise or an all-in, the aggressor's stack. Past a measured bound the chart declines
+  // and the exact GTO Wizard tree answers; the refusal carries what the chart would have said, so the answer row
+  // holds both (fastSolveInner falls back to this chart when the exact tree does not answer in time). Measured on the
+  // RAW tokens: a caller the fit folded out of the tree is still at the table.
+  const gap = treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeatPos || nodePos,
+    ...replayTokens6(tokens), repaired: walk.repaired, fitted: walk.fittedLine ?? walkTokens, rawTokens: tokens,
+    wantedId: retry.keepChart ? null : choice.candidates[0] }) ?? undefined;
+  if (gap?.gate.route && gap.gate.mode === "live" && !retry.noGate) {
+    return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)",
+      reason: `GAP GATE: ${gapText(gap.gate.reasons)} — past the bound the chart is trusted to, so the exact tree answers`,
+      treeGap: { ...gap, routed: { chartMix: rawActions, ai: "answered" } } };
+  }
   // NEVER ROLL INTO A BRANCH HRC NEVER WROTE (services/prunedPicks, 2026-09-25): an action whose child node is
   // pruned is dropped before the roll and the mix re-spread, so hero's own pick can always be continued at the flop
   const prunedPick = await dropPrunedPicks(rawActions, heroNode, borrowed?.line ?? line, get);
@@ -2997,11 +3012,7 @@ export async function solvePreflop6max(
     // piece makes writes a note or leaves a trace on the walk; flag exactly those.
     approx: notes.length > 0 || walk.repaired.length > 0 || walk.folds.length > 0 || !!borrowed || resolved.fellBack || undefined,
     warning: notes.join(" · "),
-    // THE STACK DISTANCE OF THIS ANSWER (services/treeGap, log only): the table's effective stacks against the
-    // chart's, on the RAW tokens — a caller the fit folded out of the tree is still at the table
-    treeGap: treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeatPos || nodePos,
-      ...replayTokens6(tokens), repaired: walk.repaired,
-      wantedId: retry.keepChart ? null : choice.candidates[0] }) ?? undefined,
+    treeGap: gap,
   };
 }
 
@@ -3107,6 +3118,41 @@ export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, stra
 /** Tests: forget which hands were warmed. */
 export function forgetArrivalWarms(): void { warmedArrivals.clear(); }
 
+/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS, default 8 s). */
+const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 8000; };
+
+/**
+ * THE EXACT TREE IS BUILT WHEN THE RAISE LANDS, NOT WHEN HERO IS ASKED (the gap gate, 2026-10-02). A cold AI preflop
+ * tree costs 5-13 s; the gate's verdict only needs the line so far and the stacks, both known the moment a villain
+ * raises. So every ingest tick with a new line that holds a raise walks the chart the answer would read, and when the
+ * gate would send hero's decision to the exact tree, that tree is pre-built (gtowAiPreflop.warmPreflopGtowAi — the
+ * same key the answer asks for while no further raise lands). One check per (hand, line); nothing when hero is out.
+ */
+const gateWarmed = new Map<string, number>();
+async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string): Promise<void> {
+  if (gapGateMode() !== "live" || hand.ended || (hand as { heroFolded?: boolean }).heroFolded) return;
+  if (hand.actions.some((a) => a.hero && a.type === "fold")) return;
+  const tokens = buildPreflopTokens(hand, heroPos);
+  if (!tokens.some((t) => /^R/i.test(String(t)))) return;
+  const k = `${key}|${tokens.join("-")}`;
+  if (gateWarmed.has(k)) return;
+  gateWarmed.set(k, Date.now());
+  if (gateWarmed.size > 300) { const first = gateWarmed.keys().next().value; if (first !== undefined) gateWarmed.delete(first); }
+  const choice = chartFor6max(hand, heroPos, tokens);
+  const resolved = await resolveChart6max(choice);
+  if (!resolved || resolved === "unreachable") return;
+  const heroSeat = hand.positions[hand.heroSeatId] ?? heroPos ?? null;
+  const walk = await walkFitted(tokens, nodeGetter(resolved.id), { heroSeat, stack: choice.depth });
+  if (!walk.ok) return;
+  const gap = treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeat, ...replayTokens6(tokens),
+    repaired: walk.repaired, fitted: walk.fittedLine ?? tokens, rawTokens: tokens });
+  if (!gap?.gate.route) return;
+  console.log(`[gap-gate] hand ${key}: ${gapText(gap.gate.reasons)} — pre-building the exact tree`);
+  warmPreflopGtowAi(hand, heroPos);
+}
+/** Tests: forget which lines were checked. */
+export function forgetGapGateWarms(): void { gateWarmed.clear(); }
+
 export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strategyId?: string | null): void {
   if (hand.currentNode.street !== "preflop") return;
   if (strategyId === CP_HU_STRATEGY) { warmPreflopHu(hand, heroPos ?? hand.positions[hand.heroSeatId] ?? null); return; }
@@ -3116,6 +3162,7 @@ export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strate
   if (deadSb.note) { hand = deadSb.hand; heroPos = hand.positions[hand.heroSeatId] ?? heroPos; }
   if (!is6Handed(hand, heroPos)) { warmPreflopGtowAi(hand, heroPos); return; }   // 2-5 seats: the AI piece will answer
   const key = String(hand.clientHandId ?? hand.handId ?? "");
+  if (key) void warmGapGate(hand, heroPos, key).catch(() => { /* a warm-up never fails anything */ });
   if (!key || warmedHands.has(key)) return;
   warmedHands.set(key, Date.now());
   if (warmedHands.size > 50) { const first = warmedHands.keys().next().value; if (first !== undefined) warmedHands.delete(first); }
@@ -3304,7 +3351,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
     ?? (value.ok ? classifyPath({ street, streets: [] }) : faultPath(street, (value as { kind?: string }).kind ?? null, value.reason));
   // the decision's own checks (services/chainChecks): the clock, the buttons, the mix, the key, hero's class preflop
   const path = guardChecks(0, () => withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos)), path0);
-  const treeGap = value.ok ? value.treeGap : undefined;
+  const treeGap = value.treeGap;
   return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin, ...(treeGap ? { treeGap } : {}) } } as FastSolveResult;
 }
 
@@ -3423,11 +3470,14 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     /** how the AI piece came to answer: the charts' own limits (by design), a thinned table (its designed piece), or a
      *  chart server that did not answer (the recovery — a rebuild) */
     let pf: NonNullable<DecisionPath["preflop"]>;
+    /** THE GAP GATE sent this decision here (services/treeGap): the chart could answer it, past a measured bound */
+    let gated: TreeGap | null = null;
     if (is6Handed(hand, heroPos)) {
       const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
       if (six && six.ok) return six;
       why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
-      pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: "preflop:charts-cannot-hold", why: why.slice(0, 200) }
+      if (six && !six.ok && six.treeGap?.gate.route) gated = six.treeGap;
+      pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: gated ? "preflop:gap-gate" : "preflop:charts-cannot-hold", why: why.slice(0, 200) }
         : { piece: "gtow-ai-preflop", how: "rebuilt", code: "preflop:charts-unreachable", why: "the 6-max charts did not answer (chart server :8777 down or the tree missing) — a GTO Wizard AI preflop tree answered" };
     } else {
       // THE 3-MAX CORPUS IS CUT FROM THIS STRATEGY (Brady, 2026-09-19). It was wired in earlier the same day
@@ -3446,7 +3496,33 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
         : `table thinned to ${seats} seats — the 6-max charts cover 4-6, and the 3-max corpus is cut from this strategy pending a re-solve of its shallow rungs`;
       pf = { piece: "gtow-ai-preflop", how: "designed" };
     }
-    const ai = await solvePreflopGtowAi(hand, heroPos, why);
+    // A GATED DECISION NEVER GOES UNANSWERED FOR THE GATE'S SAKE: the exact tree is asked inside a time box (a cold
+    // tree is 5 s at the median and 13 s at the 90th percentile — measured on 133 live answers — against a 15 s clock),
+    // and when it fails or runs out the chart, which could answer all along, does. A request that throws (the
+    // network) is a failure like any other. The late answer must not become the hand's pin (skipPin).
+    let ai: AiPreflopOutcome;
+    if (gated) {
+      const t0 = Date.now();
+      let gaveUp = false;
+      const asked = solvePreflopGtowAi(hand, heroPos, why, { skipPin: () => gaveUp })
+        .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
+      const first = await Promise.race([asked, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), gapGateAiMs()))]);
+      if (first === "timeout" || !first.ok) {
+        gaveUp = true;
+        const how = first === "timeout" ? "timeout" as const : "failed" as const;
+        const aiWhy = first === "timeout" ? `no answer inside ${(gapGateAiMs() / 1000).toFixed(0)} s` : first.reason.slice(0, 200);
+        const chart = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId, { noGate: true });
+        if (chart && chart.ok) {
+          return { ...chart, approx: true,
+            warning: [`GAP GATE: ${gapText(gated.gate.reasons)} — the exact tree was asked and did not answer (${aiWhy}), so the chart answers`, chart.warning].filter(Boolean).join(" · "),
+            treeGap: { ...gated, routed: { ...gated.routed!, ai: how, aiWhy, aiMs: Date.now() - t0 } } };
+        }
+        ai = first === "timeout" ? await asked : first;      // the chart cannot either: the exact tree is all there is
+      } else {
+        ai = first;
+        gated = { ...gated, routed: { ...gated.routed!, ai: "answered", aiMs: Date.now() - t0 } };
+      }
+    } else ai = await solvePreflopGtowAi(hand, heroPos, why);
     const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean, pfPath = pf): FastSolveResult => ({
       ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
       setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
@@ -3454,6 +3530,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
       warning: r.note, approx: approx || undefined,
       path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
+      ...(gated ? { treeGap: gated } : {}),
     });
     if (ai.ok) return asResult(ai, ai.shape.deadSb);
     // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR from GTO Wizard on the built

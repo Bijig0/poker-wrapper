@@ -858,7 +858,10 @@ function labelOf(action: any): string {
  * answer trail says both what answered and why the primary piece did not.
  */
 export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | null, why: string,
-    opts: { deadBb?: number; rakeSeats?: number; /** a last-resort call: the seats folded out of the reduced hand */ reduced?: { droppedPos: string[] } | null } = {}): Promise<AiPreflopOutcome> {
+    opts: { deadBb?: number; rakeSeats?: number; /** a last-resort call: the seats folded out of the reduced hand */ reduced?: { droppedPos: string[] } | null;
+      /** true when the caller stopped waiting and another piece answered (the gap gate's time box): this answer must
+       *  not become the hand's preflop pin — the flop resumes from the piece hero was actually told by */
+      skipPin?: () => boolean } = {}): Promise<AiPreflopOutcome> {
   const t0 = Date.now();
   const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
@@ -947,7 +950,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   // pre-fetched in the background so the resume finds them cached; the answer never waits for it.
   const codes = usedLine ? usedLine.split("-") : [];
   const handKey = preflopPinKey(hand);
-  if (handKey) {
+  if (handKey && !opts.skipPin?.()) {
     const warm = Promise.allSettled(codes.map((_, k) => fetchNode(usedSol, codes.slice(0, k).join("-")))).then(() => undefined);
     setPreflopPin({
       piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm,
