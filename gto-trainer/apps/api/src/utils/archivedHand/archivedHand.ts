@@ -23,6 +23,7 @@
  * how often it is right.
  */
 import type { ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
+import { foldRound, moneyState } from "../tableMoney/tableMoney";
 
 const ROUNDS = ["preflop", "flop", "turn", "river"] as const;
 
@@ -76,7 +77,41 @@ export function dealtBySeat(hand: ParsedHand): Record<number, number> {
     const total = behind + (Number.isFinite(inPot) ? inPot : 0) + (earlier[seat] ?? 0);
     if (total > 0) out[seat] = total;
   }
+  // AN EARLIER ROUND'S UNCALLED EXCESS IS ALREADY BACK BEHIND (review r2 §5, 2026-10-03): the live reading holds it (and
+  // so do moneyAt / withStartStacks, which rebuild it), so adding the raw chips the seat put in counted it twice. The
+  // excess comes off (earlierExcess); the stacks it is measured against are this function's own, so it is measured
+  // twice: against the raw sum, then against the sum corrected by that first measure (whose excess is the one taken).
+  if (upto > 0) {
+    const less = (back: Map<number, number>) => {
+      const o = { ...out };
+      for (const [seat, bb] of back) if (o[seat] != null) o[seat] = r2(o[seat]! - bb);
+      return o;
+    };
+    const first = earlierExcess(hand, upto, out);
+    if (first.size) return less(earlierExcess(hand, upto, less(first)));
+  }
   return out;
+}
+
+/**
+ * EACH SEAT'S UNCALLED EXCESS handed back on the rounds BEFORE round index `closedBefore` (review r2 §5, 2026-10-03):
+ * those rounds' chips (roundContributions over actions[0 .. upto)) folded through the table's money model
+ * (utils/tableMoney.foldRound, the seats that acted contesting, each from its stack as `dealt` — unknown: no cap) — the
+ * part of a bet nobody could match. The round being played has none yet: it is not over.
+ */
+function earlierExcess(hand: ParsedHand, closedBefore: number, dealt: Record<number, number>, upto = hand.actions.length): Map<number, number> {
+  const back = new Map<number, number>();
+  if (closedBefore <= 0) return back;
+  const actions = hand.actions.slice(0, Math.max(0, upto));
+  const contrib = roundContributions(hand, upto);
+  const acted = new Set(actions.map((a) => seatOf(hand, a)));
+  let st = moneyState<number>(0, [...acted].map((s) => [s, dealt[s]] as [number, number | undefined]));
+  for (const r of ROUNDS.slice(0, closedBefore)) {
+    const f = foldRound(st, { put: contrib.get(r) ?? new Map<number, number>(), folded: actions.filter((a) => a.street === r && a.type === "fold").map((a) => seatOf(hand, a)) }, acted);
+    for (const x of f.matched.returned) back.set(x.seat, r2((back.get(x.seat) ?? 0) + x.bb));
+    st = f.state;
+  }
+  return back;
 }
 
 /**
@@ -140,11 +175,14 @@ export function moneyAt(hand: ParsedHand, upto: number, start: Record<number, nu
   for (const [st, m] of per) if (st !== street) for (const v of m.values()) pot += v;
   const cur = per.get(street) ?? new Map<number, number>();
   for (const [seat, v] of cur) if (v > 0) committed[seat] = r2(v);
+  // a closed round's uncalled excess went back behind its owner and is not in the pot (earlierExcess, review r2 §5)
+  const back = earlierExcess(hand, (ROUNDS as readonly string[]).indexOf(street), start, upto);
+  for (const bb of back.values()) pot -= bb;
   for (const [k, dealt] of Object.entries(start)) {
     const seat = Number(k);
     let spent = 0;
     for (const m of per.values()) spent += m.get(seat) ?? 0;
-    stacks[seat] = r2(Math.max(0, dealt - spent));
+    stacks[seat] = r2(Math.max(0, dealt - spent + (back.get(seat) ?? 0)));
   }
   const top = Math.max(0, ...cur.values());
   return { stacks, committed, toCall: r2(Math.max(0, top - (cur.get(hand.heroSeatId) ?? 0))), pot: r2(pot) };
@@ -189,11 +227,13 @@ export function withStartStacks(hand: ParsedHand): ParsedHand {
   if (!hand.startStacks || !Object.keys(hand.startStacks).length) return hand;
   const per = roundContributions(hand);
   const stacks: Record<number, number> = { ...(hand.stacks ?? {}) };
+  // a closed round's uncalled excess is back behind its owner (earlierExcess, review r2 §5)
+  const back = earlierExcess(hand, (ROUNDS as readonly string[]).indexOf(String(hand.currentNode?.street ?? "preflop")), hand.startStacks);
   for (const [k, dealt] of Object.entries(hand.startStacks)) {
     const seat = Number(k);
     let spent = 0;
     for (const m of per.values()) spent += m.get(seat) ?? 0;
-    stacks[seat] = r2(Math.max(0, dealt - spent));
+    stacks[seat] = r2(Math.max(0, dealt - spent + (back.get(seat) ?? 0)));
   }
   return { ...hand, stacks };
 }

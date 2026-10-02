@@ -62,12 +62,15 @@ export type RerootResult =
  * The re-root and the last resort both start from it.
  */
 export function moneyThrough(a: Pick<RerootArgs, "ordered" | "heroPos" | "streets" | "streetSeats" | "flopPot" | "flopStack" | "behind" | "amounts">, first: number):
-    { pot: number; stack: number; folded: Set<string>; aggressors: Set<string>; allIn: Set<string>; behind: Record<string, number> } {
+    { pot: number; stack: number; folded: Set<string>; aggressors: Set<string>; allIn: Set<string>; behind: Record<string, number>;
+      /** the earlier streets' tokens the model cannot price (a bet with no amount): the money is not the table's */
+      unpriced: number } {
   const st0 = moneyState(a.flopPot, a.ordered.map((p) => [p, a.behind?.[p] ?? a.flopStack] as [string, number]));
-  const st = moneyEntering(st0, a.streets.map((t, i) => streetFromTokens(t, a.streetSeats[i] ?? [], a.amounts?.[i])), first);
+  const unpriced: number[] = [];
+  const st = moneyEntering(st0, a.streets.slice(0, first).map((t, i) => streetFromTokens(t, a.streetSeats[i] ?? [], a.amounts?.[i], unpriced)), first);
   const behind = Object.fromEntries([...st.behind].map(([p, x]) => [p, x ?? a.flopStack]));
   const still = a.ordered.filter((p) => !st.folded.has(p) && (p === a.heroPos || !st.allIn.has(p)));
-  return { pot: st.pot, stack: Math.round(effectiveStack(still, a.heroPos, (p) => behind[p]) * 100) / 100, folded: st.folded, aggressors: st.aggressors, allIn: st.allIn, behind };
+  return { pot: st.pot, stack: Math.round(effectiveStack(still, a.heroPos, (p) => behind[p]) * 100) / 100, folded: st.folded, aggressors: st.aggressors, allIn: st.allIn, behind, unpriced: unpriced.length };
 }
 
 /** The fewest 3-seat groups — each: hero + every earlier aggressor + villains — that together contain every villain. */
@@ -119,6 +122,7 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   const first = a.streets.length - 1;
   if (first < 1 || first > 2) return { ok: false, why: "nothing to re-root on the flop" };
   const m = moneyThrough(a, first);
+  if (m.unpriced) return { ok: false, why: "a bet or raise on an earlier street has no amount on the capture — its money cannot be priced" };
   if (m.stack <= 0.5) return { ok: false, why: "the earlier streets put everyone (near) all-in" };
   const order = (xs: string[]) => a.ordered.filter((p) => xs.includes(p));
   // A SEAT ALL-IN FROM AN EARLIER STREET NEVER ACTS AGAIN (2026-09-24, sweep side-pot spots). It needs no seat in a

@@ -24,6 +24,8 @@
  *                                     tree's own seats are the same function with a different seat set.
  *   foldStreet / moneyEntering        a street folded into the state (pot, each seat's stack behind, who folded, who is
  *                                     all-in, who was an aggressor); streets 0..k-1 → the state entering street k
+ *   foldRound                         the same from a round's CHIPS (the capture's own contributions per seat) — check #5's
+ *                                     table side and the stacks as dealt (archivedHand) fold the capture's rounds with it
  *   deadMoney                         what no act carries: antes, a folded poster's dead post
  *   effectiveStack                    hero against the deepest villain still in
  *
@@ -39,18 +41,31 @@ export interface Act<K> { seat: K; kind: ActKind; to?: number }
 const r2 = (x: number): number => Math.round(x * 100) / 100;
 const cap0 = (c: number | null | undefined): number => (c != null && Number.isFinite(c) ? c : Infinity);
 
-/** A capture token as a table act ("RAI" with its amount beside it — buildSolutionUrl keeps the literal token). */
-export function actFromToken<K>(tok: string, seat: K, amount?: number | null): Act<K> {
+/**
+ * A capture token as a table act ("RAI" with its amount beside it — buildSolutionUrl keeps the literal token). NULL for
+ * a token the model cannot price — a bet or raise with no amount (buildSolutionUrl.actionToken emits a bare "R" when the
+ * capture carries none), anything unknown — never a throw (review r2, 2026-10-03: a bare "R" threw outside any try on
+ * every postflop hand that had one). The caller decides what an unpriced street proves.
+ */
+export function actFromToken<K>(tok: string, seat: K, amount?: number | null): Act<K> | null {
   if (tok === "X") return { seat, kind: "check" };
   if (tok === "C") return { seat, kind: "call" };
   if (tok === "F") return { seat, kind: "fold" };
   if (tok === "RAI") return amount != null && Number.isFinite(amount) && amount > 0 ? { seat, kind: "allin", to: amount } : { seat, kind: "allin" };
-  if (/^R[\d.]+$/.test(tok)) return { seat, kind: "raise", to: parseFloat(tok.slice(1)) };
-  throw new Error(`unknown token "${tok}"`);
+  if (/^R\d+(\.\d+)?$/.test(tok)) return { seat, kind: "raise", to: parseFloat(tok.slice(1)) };
+  return null;
 }
-/** A street's tokens, the seat of each and the all-in amounts beside them, as table acts. */
-export function streetFromTokens<K>(toks: readonly string[], seats: readonly K[], amounts?: readonly (number | null | undefined)[] | null): Act<K>[] {
-  return toks.map((t, i) => actFromToken(t, seats[i]!, amounts?.[i]));
+/**
+ * A street's tokens, the seat of each and the all-in amounts beside them, as table acts. A token that cannot be priced
+ * (actFromToken → null) is LEFT OUT and its index pushed onto `unpriced` when given — the caller says so or refuses.
+ */
+export function streetFromTokens<K>(toks: readonly string[], seats: readonly K[], amounts?: readonly (number | null | undefined)[] | null, unpriced?: number[]): Act<K>[] {
+  const out: Act<K>[] = [];
+  toks.forEach((t, i) => {
+    const a = actFromToken(t, seats[i]!, amounts?.[i]);
+    if (a) out.push(a); else unpriced?.push(i);
+  });
+  return out;
 }
 
 /**
@@ -113,18 +128,16 @@ export function contestedChips<K>(put: ReadonlyMap<K, number>, o: {
 }): { sum: number; bySeat: Map<K, number>; returned: { seat: K; bb: number }[] } {
   const named = new Set(o.contesting);
   const contesting = named.size ? named : new Set(put.keys());   // nobody named: everyone who put chips in
+  /** the most another contesting seat can match: a seat still in, its stack; a seat that folded, the chips it left */
+  const reach = (t: K) => (o.folded.has(t) ? (put.get(t) ?? 0) : cap0(o.capOf(t)));
   const most = (s: K) => {
     let m = 0;
-    for (const t of contesting) {
-      if (t === s) continue;
-      m = Math.max(m, o.folded.has(t) ? (put.get(t) ?? 0) : cap0(o.capOf(t)));
-    }
+    for (const t of contesting) if (t !== s) m = Math.max(m, reach(t));
     return m;
   };
-  // the dead money's cap: hero against the deepest other contesting seat still in (no hero named: no cap)
-  const deadCap = o.hero != null && contesting.has(o.hero)
-    ? Math.min(cap0(o.capOf(o.hero)), Math.max(0, ...[...contesting].filter((t) => t !== o.hero && !o.folded.has(t)).map((t) => cap0(o.capOf(t)))))
-    : Infinity;
+  // the dead money's cap: hero against the deepest other contesting seat — a folded one at the chips he put in (review
+  // r2, 2026-10-03: every tree villain folded made the cap 0 and dropped the dead money with it); no hero named: no cap
+  const deadCap = o.hero != null && contesting.has(o.hero) ? Math.min(cap0(o.capOf(o.hero)), most(o.hero)) : Infinity;
   const bySeat = new Map<K, number>();
   const returned: { seat: K; bb: number }[] = [];
   let sum = 0;
@@ -156,14 +169,26 @@ export function moneyState<K>(pot: number, behind: Iterable<[K, number | null | 
  * hand contests) out of its own stack, the pot grows by them, folds / all-ins / aggressors accumulate.
  */
 export function foldStreet<K>(st: MoneyState<K>, acts: readonly Act<K>[]): MoneyState<K> {
+  return foldRound(st, streetChips(acts, (k: K) => st.behind.get(k) ?? null)).state;
+}
+
+/**
+ * ONE ROUND'S CHIPS folded into the state, from the chips themselves (each seat's total on the round and who folded in
+ * it) — foldStreet's rule for a caller that has the round's money rather than its tokens (the capture's actions,
+ * roundContributions). `contesting`: the seats that can match a bet (default: every seat in the state not folded
+ * before, and whoever put chips in). Returns the matched chips too (the round's pot share, each seat's matched chips,
+ * the uncalled excess handed back).
+ */
+export function foldRound<K>(st: MoneyState<K>, round: { put: ReadonlyMap<K, number>; folded: Iterable<K>; aggressors?: Iterable<K> }, contesting?: Iterable<K>):
+    { state: MoneyState<K>; matched: ReturnType<typeof contestedChips<K>> } {
   const capOf = (k: K) => st.behind.get(k) ?? null;
-  const sc = streetChips(acts, capOf);
-  const folded = new Set([...st.folded, ...sc.folded]);
-  const m = contestedChips(sc.put, { contesting: [...st.behind.keys(), ...sc.put.keys()].filter((k) => !st.folded.has(k)), folded, capOf });
+  const folded = new Set([...st.folded, ...round.folded]);
+  const who = contesting ? [...contesting] : [...st.behind.keys(), ...round.put.keys()].filter((k) => !st.folded.has(k));
+  const m = contestedChips(round.put, { contesting: who, folded, capOf });
   const behind = new Map(st.behind);
   for (const [k, x] of m.bySeat) { const b = behind.get(k); if (b != null) behind.set(k, r2(Math.max(0, b - x))); }
   const allIn = new Set([...st.allIn, ...[...behind].filter(([k, b]) => b != null && b <= 0.005 && !folded.has(k)).map(([k]) => k)]);
-  return { pot: r2(st.pot + m.sum), behind, folded, allIn, aggressors: new Set([...st.aggressors, ...sc.aggressors]) };
+  return { state: { pot: r2(st.pot + m.sum), behind, folded, allIn, aggressors: new Set([...st.aggressors, ...(round.aggressors ?? [])]) }, matched: m };
 }
 
 /** The state entering street `k` (0 = the first street of `streets`): streets 0..k-1 folded in, in order. */

@@ -35,7 +35,7 @@ import {
   checkPotStack, checkPreflopInRange, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
-import { contestedChips, deadMoney, effectiveStack, streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
+import { contestedChips, deadMoney, effectiveStack, foldRound, moneyState, streetChips, streetFromTokens, type MoneyState } from "../utils/tableMoney/tableMoney";
 import { tmark } from "./answerTrace";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
@@ -1189,6 +1189,19 @@ const CHAIN_STREETS = ["flop", "turn", "river"] as const;
 const ROUND_ORDER = ["preflop", "flop", "turn", "river"] as const;
 
 /**
+ * A collapse plan's merged seats from its name (multiwayCollapse: "merge:CO+BTN", named for the first member; a merge
+ * of a merged seat folds in its members) — for a walk that did not carry its plan's members (a replay of a stored trace).
+ */
+export function mergeMembers(kind: string | null | undefined): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const m of (kind ?? "").matchAll(/merge:([A-Za-z0-9]+)\+([A-Za-z0-9]+)/g)) {
+    const x = m[1]!, y = m[2]!;
+    out[x] = [...(out[x] ?? [x]), ...(out[y] ?? [y])];
+  }
+  return out;
+}
+
+/**
  * THE CHECKS AGAINST THE CAPTURE, per street of every walk (services/chainChecks, 2026-09-27). The walk recorded what it
  * could see itself on each street (aiChain: ranges, seats, the line, trees, reads, time, hero's node); what needs the
  * TABLE is checked here, on every street of every walk of this answer — the memo hits included, since the answer rests
@@ -1205,7 +1218,9 @@ const ROUND_ORDER = ["preflop", "flop", "turn", "river"] as const;
  */
 export function chainPathChecks(a: {
   hand: ParsedHand;
-  walks: { kind: string | null; trace?: ChainTrace }[];
+  walks: { kind: string | null; trace?: ChainTrace;
+    /** a collapse plan's merged seats: the tree's seat name → the table positions it stands for (the plan's members) */
+    members?: Record<string, string[]> }[];
   arrival: ArrivalPath | undefined;
   /** chips in the pot no betting action carries: antes, a folded poster's post */
   potExtra: number;
@@ -1221,44 +1236,61 @@ export function chainPathChecks(a: {
   const { hand } = a;
   const contrib = roundContributions(hand);
   const roundIdx = (st: string) => ROUND_ORDER.indexOf(st as (typeof ROUND_ORDER)[number]);
+  const seatOf = (x: ParsedHand["actions"][number]) => (x.hero ? hand.heroSeatId : x.seatId);
   /** seats that folded on or before a round */
-  const foldedBy = (st: string) => new Set(hand.actions.filter((x) => x.type === "fold" && roundIdx(x.street) <= roundIdx(st))
-    .map((x) => (x.hero ? hand.heroSeatId : x.seatId)));
+  const foldedBy = (st: string) => new Set(hand.actions.filter((x) => x.type === "fold" && roundIdx(x.street) <= roundIdx(st)).map(seatOf));
   // the seats that acted in the hand (posts included): only they can match a bet
-  const acted = new Set(hand.actions.map((x) => (x.hero ? hand.heroSeatId : x.seatId)));
+  const acted = new Set(hand.actions.map(seatOf));
+  // THE TABLE'S MONEY ROUND BY ROUND (utils/tableMoney.foldRound — review r2 §5, 2026-10-03): each round's chips folded
+  // into the state in turn, the full table contesting (the seats that acted), each seat paying its MATCHED chips out of
+  // its own stack. entering[i] is the state entering ROUND_ORDER[i]: a seat's stack there is its dealt stack less the
+  // matched chips of the rounds before — an uncalled excess back to its owner, which the raw chips it put in (the old
+  // stackInAt / behindAt) never returned. fullOn[i] is round i's matched chips (the table's pot share).
+  const entering: MoneyState<number>[] = [];
+  const fullOn: number[] = [];
+  if (a.dealt) {
+    let st = moneyState<number>(0, [...acted].map((sid) => [sid, a.dealt![sid]] as [number, number | undefined]));
+    for (const r of ROUND_ORDER) {
+      entering.push(st);
+      const f = foldRound(st, { put: contrib.get(r) ?? new Map<number, number>(), folded: hand.actions.filter((x) => x.type === "fold" && x.street === r).map(seatOf) }, acted);
+      fullOn.push(f.matched.sum);
+      st = f.state;
+    }
+    entering.push(st);
+  }
   /** each seat's stack entering round `st` (null = no dealt reading) */
-  const stackInAt = (st: string) => (sid: number) => {
-    const d = a.dealt?.[sid];
-    if (d == null || !Number.isFinite(d)) return null;
-    return d - ROUND_ORDER.slice(0, roundIdx(st)).reduce((s, r) => s + (contrib.get(r)?.get(sid) ?? 0), 0);
-  };
+  const stackInAt = (st: string) => (sid: number) => entering[roundIdx(st)]?.behind.get(sid) ?? null;
   /**
    * The table's chips of a round that can be MATCHED (utils/tableMoney.contestedChips — the rule the flop pot is sent
    * with and the tree walks with). `players`: a plan that LEAVES SEATS OUT (a ghost / merge collapse, a re-root, the last
    * resort — review r1 §2 / r2, 2026-10-03) contests with its own seats only: a left-out seat's chips are dead money to
-   * it, up to what hero can win of them (260 against the tree's 200 on a 4-way shove into a 60bb hero, full-table).
-   * Without the dealt stacks every chip counts (the old reading).
+   * it, up to what hero can win of them (260 against the tree's 200 on a 4-way shove into a 60bb hero, full-table). A
+   * MERGED seat contests with every member (review r2 §1: the seat is named after its first member, and the tree plays
+   * the other member's chips as its own). Without the dealt stacks every chip counts (the old reading).
    */
   const chipsOn = (st: string, players?: string[]) => {
     const m = contrib.get(st);
     if (!m) return 0;
     if (!a.dealt) return [...m.values()].reduce((s, x) => s + x, 0);
-    const inTree = players ? new Set(players.map((p) => p.toUpperCase())) : null;
-    const contesting = inTree ? [...acted].filter((sid) => inTree.has(String(a.treePos(sid) ?? "").toUpperCase())) : acted;
-    return contestedChips(m, { contesting, folded: foldedBy(st), capOf: stackInAt(st), ...(inTree ? { hero: hand.heroSeatId } : {}) }).sum;
+    if (!players) return fullOn[roundIdx(st)] ?? 0;
+    const inTree = new Set(players.map((p) => p.toUpperCase()));
+    const contesting = [...acted].filter((sid) => inTree.has(String(a.treePos(sid) ?? "").toUpperCase()));
+    return contestedChips(m, { contesting, folded: foldedBy(st), capOf: stackInAt(st), hero: hand.heroSeatId }).sum;
   };
   const potBefore = (k: number) => ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + chipsOn(st), 0) + a.potExtra;
   const cur = hand.currentNode.street;
   const heroTree = a.treePos(hand.heroSeatId);
-  /** each tree position's stack behind entering street k (flop = 0), from the dealt stacks and the earlier streets */
+  /** each tree position's stack behind entering street k (flop = 0): the state entering it (a seat that never acted:
+   *  its dealt stack) */
   const behindAt = (k: number): Record<string, number> | null => {
     if (!a.dealt) return null;
+    const st = entering[k + 1]!;
     const out: Record<string, number> = {};
     for (const [sid, d] of Object.entries(a.dealt)) {
       const pos = a.treePos(Number(sid));
       if (!pos || !Number.isFinite(d)) continue;
-      const spent = ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + (contrib.get(st)?.get(Number(sid)) ?? 0), 0);
-      out[pos.toUpperCase()] = Math.max(0, d - spent);
+      const b = st.behind.has(Number(sid)) ? st.behind.get(Number(sid)) : Math.max(0, d);
+      if (b != null) out[pos.toUpperCase()] = b;
     }
     return out;
   };
@@ -1269,6 +1301,9 @@ export function chainPathChecks(a: {
     const sp = tr.spec;
     const specFp = rangesFp([{ pos: sp.oopPos, range: sp.oopRange }, ...(sp.midPos && sp.midRange ? [{ pos: sp.midPos, range: sp.midRange }] : []), { pos: sp.ipPos, range: sp.ipRange }]);
     const lastResort = /^last-resort/.test(w.kind ?? "");
+    const members = w.members ?? mergeMembers(w.kind);
+    /** a tree's seats as table positions: a merged seat stands for each of its members */
+    const asTable = (ps: string[]) => ps.flatMap((p) => members[p] ?? members[p.toUpperCase()] ?? [p]);
     for (const s of tr.streets) {
       const k = s.si + (sp.firstStreet ?? 0);
       const st = CHAIN_STREETS[k] ?? "flop";
@@ -1292,7 +1327,7 @@ export function chainPathChecks(a: {
       // which rule prices the table's side: the full table for an exact tree, the tree's own seats for a plan that
       // leaves seats out (chipsOnPlan) — the street's own chips; the rounds before it are the pot it entered with
       const leftOut = !!w.kind && !!s.players?.length;
-      const onStreet = chipsOn(st, leftOut ? s.players! : undefined);
+      const onStreet = chipsOn(st, leftOut ? asTable(s.players!) : undefined);
       out.push(checkPotStack({
         street: st, potIn: s.potIn, capturePot: potBefore(k), stackIn: s.stackIn, captureStack: Number.isFinite(eff) ? eff : null,
         ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + onStreet } : {}),
@@ -1588,6 +1623,8 @@ async function solvePostflopViaChainOnce(
     seatSpec: SeatSpec; streets: string[][]; streetSeats: (string | null)[][]; kind: string | null;
     /** each tree seat's own stack behind entering the walk's first street (the tree's stack is their effective stack) */
     seatStacks?: Record<string, number>;
+    /** a merged seat → the table positions it stands for (check #5 contests with every member) */
+    members?: Record<string, string[]>;
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -1613,40 +1650,11 @@ async function solvePostflopViaChainOnce(
   const allInSeats = new Set(Object.entries(hand.positions ?? {})
     .filter(([id]) => Number(hand.stacks?.[Number(id)] ?? 1) <= 0.01)
     .map(([, pos]) => String(pos).toUpperCase()));
-  // EACH FLOP SEAT'S OWN STACK BEHIND (2026-09-25, hand 4920544353) — see flopSeatStacks. Every tree below is solved
-  // at the effective stack of the seats IT holds, and the chain re-derives it when a fold shrinks the field.
-  const behindFlop = flopSeatStacks({
-    seats: flopSeats, depth, flopStack, streets, streetSeats,
-    ...(table.preflop > 0 ? { paidPre: (() => {
-      // each seat's MATCHED preflop chips (tableFlopPot) + its ante (CoinPoker: no action carries it, and the dealt
-      // stack is before it)
-      const out: Record<string, number> = {};
-      for (const [sid, c] of table.paid) {
-        const p = chainPos(sid);
-        const name = p ? flopSeats.find((x) => x.toUpperCase() === p.toUpperCase()) : undefined;
-        if (name) out[name] = Math.round((c + (huCp ? anteHu : cpRing ? hand.anteBb ?? 0 : 0)) * 100) / 100;
-      }
-      return out;
-    })() } : {}),
-    allIns: allInsBySeat.map((x) => ({ ...x, pos: flopSeats.find((p) => p.toUpperCase() === x.pos.toUpperCase()) ?? x.pos })),
-    dealtByPos: (() => {
-      const bySeat = pinnedDealt ?? dealtBySeat(hand);
-      const out: Record<string, number> = {};
-      for (const [sid, v] of Object.entries(bySeat)) {
-        const p = chainPos(Number(sid));
-        const name = p ? flopSeats.find((x) => x.toUpperCase() === p.toUpperCase()) : undefined;
-        if (name && Number.isFinite(v) && v > 0) out[name] = v;
-      }
-      return out;
-    })(),
+  // EACH FLOP SEAT'S OWN STACK BEHIND and THE FIELD'S STACK (flopFieldMoney) — every tree below starts from them
+  const { behindFlop, fieldStack } = flopFieldMoney({
+    flopSeats, heroPos: heroPosName, chainPos, depth, flopStack, streets, streetSeats, allIns: allInsBySeat,
+    dealt: pinnedDealt ?? dealtBySeat(hand), table, antePerSeat: huCp ? anteHu : cpRing ? hand.anteBb ?? 0 : 0,
   });
-  // THE FIELD'S STACK, FROM THE TABLE (2026-10-03): hero against the deepest villain at the flop, each from his own
-  // stack (behindFlop — the dealt stack less his own matched preflop chips); the line's token rebuild only where no
-  // seat's stack is known. The near-all-in refusal, the base every tree is capped by, the re-root and the last resort
-  // all start from it.
-  const heroAtFlop = flopSeats.find((p) => p.toUpperCase() === heroPosName.toUpperCase());
-  const tableEff = behindFlop && heroAtFlop ? effectiveStack(flopSeats, heroAtFlop, (p) => behindFlop[p]) : Infinity;
-  const fieldStack = Number.isFinite(tableEff) ? Math.round(tableEff * 100) / 100 : flopStack;
   if (fieldStack <= 0.5) return fail("preflop line is (near) all-in");
   /** a tree's seats → their stacks behind (a merged seat stands for its members: the deeper of them) */
   const stacksOf = (seats: { pos: string; members?: string[] }[], behind: Record<string, number> | undefined) => {
@@ -1658,6 +1666,9 @@ async function solvePostflopViaChainOnce(
     }
     return out;
   };
+  /** a plan's merged seats: the tree's seat name → its members */
+  const membersOf = (seats: { pos: string; members?: string[] }[]) =>
+    Object.fromEntries(seats.filter((x) => (x.members?.length ?? 0) > 1).map((x) => [x.pos, x.members!]));
   const specOf = (three: { pos: string; range: number[] }[], heroIdx: number): SeatSpec => ({
     oopPos: three[0]!.pos, midPos: three[1]!.pos, ipPos: three[2]!.pos,
     oopRange: three[0]!.range, midRange: three[1]!.range, ipRange: three[2]!.range,
@@ -1726,6 +1737,7 @@ async function solvePostflopViaChainOnce(
           streetSeats: pl.streets.map((st) => st.map((t) => t.seat)),
           kind: pl.kind,
           seatStacks: stacksOf(pl.seats, rr.behind),
+          members: membersOf(pl.seats),
         }));
         blendWhy = rp.why;
         const note =
@@ -1763,6 +1775,7 @@ async function solvePostflopViaChainOnce(
         streetSeats: pl.streets.map((st) => st.map((t) => t.seat)),
         kind: pl.kind,
         seatStacks: stacksOf(pl.seats, behindFlop),
+        members: membersOf(pl.seats),
       }));
       if (!reroot) {
       blendWhy = picked!.why;
@@ -1806,7 +1819,7 @@ async function solvePostflopViaChainOnce(
 
   // ONE WALK PER COLLAPSE — exactly one when the field already fits a tree. Every walk is kept (inputs, every
   // node, the verdict) so the answer can be inspected later exactly as it was, and diffed against a re-solve.
-  const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any }[] = [];
+  const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any; members?: Record<string, string[]> }[] = [];
   const walkFails: string[] = [];
   // THE COLLAPSES RUN AT ONCE (2026-09-23, hand 729). Each collapse is its own cloud tree and walk, 5-10 s
   // of mostly waiting on GTO Wizard; three of them in a row put a four-way flop at 15-19 s before the answer.
@@ -1815,17 +1828,13 @@ async function solvePostflopViaChainOnce(
   // THE TREE'S STACK IS ITS OWN SEATS' EFFECTIVE STACK (2026-09-25, hand 4920544353): hero against the deepest
   // villain IN THE TREE, from their own stacks — never more than the one number the whole field would have used
   // (the dealt depth rolled forward), which is also what a seat with an unknown stack falls back to.
-  const treeStackOf = (w: Walkable): number => {
-    const base = reroot ? reroot.stack : fieldStack;
+  /** the tree's stack (treeStackFor); null = (near) all-in, never sent */
+  const treeStackOrNull = (w: Walkable): number | null => {
     const sp = w.seatSpec;
     const heroTree = sp.heroSeat === "oop" ? sp.oopPos : sp.heroSeat === "mid" ? sp.midPos! : sp.ipPos;
-    const seats = [sp.oopPos, ...(sp.midPos ? [sp.midPos] : []), sp.ipPos];
-    const eff = Math.round(effectiveBehind(seats, heroTree, w.seatStacks) * 100) / 100;
-    // every seat's own stack known (the table's: dealt less its own preflop chips): their effective stack, not capped by
-    // the one number the line's tokens rebuild for the whole field (2026-10-03); a seat unknown keeps the old cap
-    if (!reroot && w.seatStacks && seats.every((p) => w.seatStacks![p] != null)) return eff;
-    return Math.min(base, eff);
+    return treeStackFor([sp.oopPos, ...(sp.midPos ? [sp.midPos] : []), sp.ipPos], heroTree, w.seatStacks, reroot ? reroot.stack : fieldStack, !!reroot);
   };
+  const treeStackOf = (w: Walkable): number => treeStackOrNull(w) ?? 0;
   const stackNote = (w: Walkable): string | null => {
     const base = reroot ? reroot.stack : fieldStack, st = treeStackOf(w);
     if (!(st < base - 0.005) || !w.seatStacks) return null;
@@ -1844,7 +1853,9 @@ async function solvePostflopViaChainOnce(
       return allInsBySeat.find((x) => x.k === i + first && who != null && x.pos.toUpperCase() === who.toUpperCase())?.to ?? null;
     }));
   };
-  const solveOne = (w: Walkable) => solveAiChain({
+  const solveOne = (w: Walkable) => treeStackOrNull(w) == null
+    ? Promise.resolve({ ok: false as const, trace: undefined, why: `the tree's seats are (near) all-in (${treeStackOf(w)}bb behind) — no tree is sent at that stack` })
+    : solveAiChain({
     ...(rake6 ? { rake: rake6 } : {}),
     ...w.seatSpec,
     flopPot: reroot ? reroot.pot : flopPot,
@@ -1901,7 +1912,7 @@ async function solvePostflopViaChainOnce(
       continue;
     }
     walks.push({
-      kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace,
+      kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace, ...(w.members ? { members: w.members } : {}),
       solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace),
     });
   }
@@ -2105,6 +2116,57 @@ export function postflopAllInAmounts(hand: ParsedHand): Record<"flop" | "turn" |
   return { flop: per("flop"), turn: per("turn"), river: per("river") };
 }
 
+/**
+ * THE MONEY AT THE FLOP, PER SEAT AND FOR THE FIELD (2026-10-03; pulled out of the postflop setup for the review r2 §3
+ * tests — the path tableFlopPot.paid → each seat's stack → the field's stack, offline):
+ *   behindFlop  each flop seat's own stack behind (flopSeatStacks): its dealt stack less its MATCHED preflop chips
+ *               (tableFlopPot.paid) and its ante — a reading the line contradicts (a bet past it) or none is UNKNOWN;
+ *   fieldStack  hero against the deepest villain at the flop (tableMoney.effectiveStack). An unknown villain never
+ *               lowers it, so with a villain unknown it is hero's own stack — intended: a villain whose reading his own
+ *               bet contradicts has MORE than read, hero's stack is then the effective stack, and the line's token
+ *               rebuild (depth − the preflop level) is no better a bound for a seat whose chips we cannot see. Only when
+ *               no flop seat's stack is known (or hero's is not and no villain's is) does it fall back to that rebuild
+ *               (`flopStack`). A preflop jammer is not a flop seat, so his short stack never sets it.
+ * The caller refuses the spot when fieldStack ≤ 0.5 ("(near) all-in").
+ */
+export function flopFieldMoney(a: {
+  flopSeats: string[]; heroPos: string; chainPos: (seatId: number) => string | null;
+  depth: number; flopStack: number; streets: string[][]; streetSeats: (string | null)[][];
+  allIns: { pos: string; k: number; to: number }[];
+  /** each seat's stack as dealt, by seat id */
+  dealt: Record<number, number>;
+  table: { preflop: number; paid: Map<number, number> };
+  /** the ante no action carries (CoinPoker), per seat — the dealt stack is before it */
+  antePerSeat: number;
+}): { behindFlop: Record<string, number> | undefined; fieldStack: number } {
+  const nameOf = (sid: number) => { const p = a.chainPos(sid); return p ? a.flopSeats.find((x) => x.toUpperCase() === p.toUpperCase()) : undefined; };
+  const paidPre: Record<string, number> = {};
+  for (const [sid, c] of a.table.paid) { const n = nameOf(sid); if (n) paidPre[n] = Math.round((c + a.antePerSeat) * 100) / 100; }
+  const dealtByPos: Record<string, number> = {};
+  for (const [sid, v] of Object.entries(a.dealt)) { const n = nameOf(Number(sid)); if (n && Number.isFinite(v) && v > 0) dealtByPos[n] = v; }
+  const behindFlop = flopSeatStacks({
+    seats: a.flopSeats, depth: a.depth, flopStack: a.flopStack, streets: a.streets, streetSeats: a.streetSeats,
+    ...(a.table.preflop > 0 ? { paidPre } : {}),
+    allIns: a.allIns.map((x) => ({ ...x, pos: a.flopSeats.find((p) => p.toUpperCase() === x.pos.toUpperCase()) ?? x.pos })),
+    dealtByPos,
+  });
+  const heroAtFlop = a.flopSeats.find((p) => p.toUpperCase() === a.heroPos.toUpperCase());
+  const tableEff = behindFlop && heroAtFlop ? effectiveStack(a.flopSeats, heroAtFlop, (p) => behindFlop[p]) : Infinity;
+  return { behindFlop, fieldStack: Number.isFinite(tableEff) ? Math.round(tableEff * 100) / 100 : a.flopStack };
+}
+
+/**
+ * THE STACK A TREE IS SENT AT (2026-09-25, hand 4920544353): hero against the deepest villain IN THE TREE, from their
+ * own stacks. Every seat's stack known: their effective stack, uncapped (2026-10-03); a seat unknown: capped by `base`
+ * (the field's stack, or the re-root's) — the unknown seat binds at the base. NULL when it would be (near) all-in
+ * (≤ 0.5): no tree is ever sent at such a stack (review r2 §3) — the walk fails cleanly instead.
+ */
+export function treeStackFor(seats: string[], hero: string, seatStacks: Record<string, number> | undefined, base: number, rerooted: boolean): number | null {
+  const eff = Math.round(effectiveBehind(seats, hero, seatStacks) * 100) / 100;
+  const st = !rerooted && seatStacks && seats.every((p) => seatStacks[p] != null) ? eff : Math.min(base, eff);
+  return st > 0.5 ? st : null;
+}
+
 /** (see flopSeatStacksRead for the reading itself) */
 export function flopSeatStacks(a: {
   seats: string[]; depth: number; flopStack: number; dealtByPos: Record<string, number>;
@@ -2124,13 +2186,17 @@ export function flopSeatStacks(a: {
     if (!a.seats.includes(x.pos) || !(x.to > 0)) continue;
     // the seat's chips on each street before its all-in (utils/tableMoney.streetChips: its last raise-to there, or the
     // price it called — another seat's all-in at the table's amount); a street the model cannot price proves nothing
+    // (a BUG FIX, accepted by review r2 finding 3, 2026-10-03: an earlier street's all-in by another seat is priced at the
+    // table's amount, so a seat that called it and jams later proves 97 behind, not the 77 the old replay made of it)
     let before = 0;
+    const unpriced: number[] = [];
     try {
       for (let i = 0; i < x.k; i++) {
         const amounts = (a.streets[i] ?? []).map((_, j) => a.allIns!.find((y) => y.k === i && y.pos === a.streetSeats[i]?.[j])?.to ?? null);
-        before += streetChips(streetFromTokens(a.streets[i] ?? [], a.streetSeats[i] ?? [], amounts), () => null).put.get(x.pos) ?? 0;
+        before += streetChips(streetFromTokens(a.streets[i] ?? [], a.streetSeats[i] ?? [], amounts, unpriced), () => null).put.get(x.pos) ?? 0;
       }
     } catch { continue; }
+    if (unpriced.length) continue;   // a bet with no amount before the all-in: the chips before it are not known
     const proved = Math.round((before + x.to) * 100) / 100;
     if (res[x.pos] == null || Math.abs(res[x.pos]! - proved) > 0.02) res[x.pos] = proved;
   }
@@ -2146,7 +2212,8 @@ function flopSeatStacksRead(a: {
   if (!a.paidPre && (!Number.isFinite(level) || level < 0)) return undefined;
   // the most each seat is PROVEN to have put in postflop: its bet/raise-to per street (a call may be all-in for less,
   // and an all-in's size is the seat's own stack, so neither can contradict the reading)
-  // (utils/tableMoney.streetChips over the street's bets and raises alone: each seat's raise-to, summed over streets)
+  // (utils/tableMoney.streetChips over the street's bets and raises alone: each seat's raise-to, summed over streets; a
+  // bet with no amount — a bare "R" — proves nothing and is skipped, as before the money model)
   const spent: Record<string, number> = {};
   a.streets.forEach((toks, i) => {
     const raises = streetFromTokens(toks, a.streetSeats[i] ?? [], null).filter((x) => x.kind === "raise" && x.seat != null);
@@ -2196,8 +2263,12 @@ export function heroVsAggressor(a: {
   const r2 = (x: number) => Math.round(x * 100) / 100;
   // each seat's own stack entering this street (the field's token stack only for a seat with no reading)
   const B = (p: string) => m.behind[p] ?? a.flopStack;
+  // a bet or raise with no amount (a bare "R") anywhere in the line: the money is not the table's — no last resort
+  if (m.unpriced) return null;
   const toks = a.streets[first]!, seats = a.streetSeats[first]!;
-  const acts = streetFromTokens(toks, seats, a.amounts?.[first]);
+  const unpriced: number[] = [];
+  const acts = streetFromTokens(toks, seats, a.amounts?.[first], unpriced);
+  if (unpriced.length) return null;
   const sc = streetChips(acts, B);
   const putOf = (p: string) => sc.put.get(p) ?? 0;
   let lastAgg: string | null = null;
