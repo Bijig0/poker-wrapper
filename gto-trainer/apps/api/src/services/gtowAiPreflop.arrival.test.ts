@@ -203,3 +203,72 @@ describe("hero's off-grid size and the preflop pin", () => {
     if (!r.ok) expect(r.why).toContain("no longer starts with the pinned one");
   });
 });
+
+/**
+ * A LAST-RESORT PIN ANSWERS IN THE TABLE'S TERMS (2026-10-02, hand 4922086187). Three-handed: hero on the BTN opens
+ * 2.6, the SB 3-bets to 13, the BB folds, hero calls — and that decision was answered by the last resort, a heads-up
+ * tree of hero against the SB with the BB's blind as dead money. In that tree hero is "SB" and the small blind is
+ * "BB". The flop's ranges came back under those names: no BTN at all ("reconstructed ranges don't cover both
+ * seats"), hero's range sitting under the villain's seat — no answer on the flop, hero timed out and was sat out.
+ */
+import { reduceToHeadsUp } from "./gtowAiPreflop";
+import { preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
+
+describe("a last-resort pin resumes under the table's seat names", () => {
+  const flopHand: ParsedHand = {
+    ...hand3, heroSeatId: 2, heroCards: ["Qd", "7d"], board: ["Qs", "4s", "2c"], positions: { 1: "BB", 2: "BTN", 5: "SB" },
+    liveSeats: [2, 5], stacks: { 1: 89, 2: 104, 5: 86 },
+    actions: [
+      { seatId: 5, hero: false, type: "post-sb", amount: 0.5, street: "preflop" },
+      { seatId: 1, hero: false, type: "post-bb", amount: 1, street: "preflop" },
+      { seatId: 2, hero: true, type: "raise", amount: 2.6, street: "preflop" },
+      { seatId: 5, hero: false, type: "raise", amount: 13, street: "preflop" },
+      { seatId: 1, hero: false, type: "fold", street: "preflop" },
+      { seatId: 2, hero: true, type: "call", amount: 10.4, street: "preflop" },
+    ],
+    currentNode: { street: "flop", toActSeatId: 5, toActIsHero: false, pot: 27, toCall: 0, legalActions: [], complete: false },
+  };
+  // the heads-up tree: its SB (hero) opens, its BB (the table's small blind) 3-bets, its SB calls
+  const nodes: Record<string, any> = {
+    "": node("SB", [{ code: "F", strategy: arr(0.2) }, { code: "R2.6", strategy: arr(0.8) }]),
+    "R2.6": node("BB", [{ code: "F", strategy: arr(0.6) }, { code: "C", strategy: arr(0.3) }, { code: "R13", strategy: arr(0.1) }]),
+    "R2.6-R13": node("SB", [{ code: "F", strategy: arr(0.5) }, { code: "C", strategy: arr(0.5) }]),
+  };
+  const get = async (line: string) => (nodes[line] ? { ...nodes[line], cached: true } : { error: `no node ${line}` });
+
+  it("hero's range under BTN, the 3-bettor's under SB, and the pot counts the folded big blind", async () => {
+    const red = reduceToHeadsUp(flopHand, null)!;
+    expect(red.keptPos).toEqual(["BTN", "SB"]);
+    expect(red.droppedPos).toEqual(["BB"]);
+    const shape = shapeOf(red.hand, null, red.deadBb);
+    if ("error" in shape) throw new Error(shape.error);
+    const pin: AiPreflopPin = {
+      piece: "gtow-ai-preflop", handKey: "t", solId: "sol-lr", shape, codes: ["R2.6", "R13"], rawTokens: ["R2.6", "R13"],
+      id: "gtow-ai · 2-handed", heroPos: "BTN", reduced: { droppedPos: red.droppedPos }, warm: null, actionIndex: 5, at: 0,
+    };
+    const r = await resumeAiPreflopRanges(pin, flopHand, null, 6, get);
+    if (!r.ok) throw new Error(r.why);
+    expect(Object.keys(r.ranges).sort()).toEqual(["BTN", "SB"]);       // the table's seats — not the tree's SB/BB
+    expect(r.ranges.BTN!.Q7s).toBeCloseTo(0.8 * 0.5, 5);              // hero: opened, then called the 3-bet
+    expect(r.ranges.SB!.AA).toBeCloseTo(0.1, 5);                      // the small blind: 3-bet
+    expect(r.codes).toEqual(["R2.6", "R13", "C"]);                    // read on the reduced tree's own line
+    expect(r.tokens).toEqual(["R2.6", "R13", "F", "C"]);              // the pot is rolled from the hand's own line
+    expect(preflopPotStack(r.tokens, 100, r.seatOrder).pot).toBeCloseTo(27, 5);   // 13 + 13 + the folded blind
+    expect(r.note).toContain("LAST RESORT tree: BB folded out");
+  });
+
+  it("still refuses when a player the reduction folded out reached the flop", async () => {
+    const withBb: ParsedHand = { ...flopHand, liveSeats: [1, 2, 5],
+      actions: flopHand.actions.map((a) => (a.seatId === 1 && a.type === "fold" ? { ...a, type: "call", amount: 12 } : a)) as ParsedHand["actions"] };
+    const red = reduceToHeadsUp(flopHand, null)!;
+    const shape = shapeOf(red.hand, null, red.deadBb);
+    if ("error" in shape) throw new Error(shape.error);
+    const pin: AiPreflopPin = {
+      piece: "gtow-ai-preflop", handKey: "t", solId: "sol-lr", shape, codes: ["R2.6", "R13"], rawTokens: ["R2.6", "R13"],
+      id: "gtow-ai · 2-handed", heroPos: "BTN", reduced: { droppedPos: red.droppedPos }, warm: null, actionIndex: 5, at: 0,
+    };
+    const r = await resumeAiPreflopRanges(pin, withBb, null, 6, get);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.why).toContain("BB reached the flop");
+  });
+});

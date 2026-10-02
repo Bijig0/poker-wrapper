@@ -417,7 +417,7 @@ app.get("/registry", async (c) => {
           ["what answers", "hero's exact combo read from the solved node (1,326-combo strategy), rolled like a chart mix"],
           ["speed", "2-4 s for a new table shape (tree + solve), 1-2 s per node after; shapes are cached, and a 2-5 seat table is pre-built from the poller's tick"],
           ["rake in the tree", "5% of pot, cap by players dealt ($1 / $2 / $3 / $4 at 2 / 3 / 4-5 / 6+), no flop no drop"],
-          ["sizes", "opens 2x 2.2x 2.5x 3x 3.5x · 3-bets 3.2x 3.8x 4.5x · 4-bets 2.2x 2.6x · 5-bet+ 2.2x — plus the line's own sizes"],
+          ["sizes", "a level already played: the size played, alone · still to play, 3+ seats: one size per level (open 2.5x, 3-bet 3.5x, 4-bet 2.3x, 5-bet+ 2.2x) · still to play, heads-up: opens 2x 2.2x 2.5x 3x 3.5x · 3-bets 3.2x 3.8x 4.5x · 4-bets 2.2x 2.6x · no size merging"],
           ["limps", "one non-SB limper plus the SB complete (the API's ceiling)"],
           ["source id", "answers.sqlite source gtow-ai-preflop · tier ai-preflop — that is what the hand page shows"],
           ["code", "services/gtowAiPreflop.ts; the hand-off in fastSolve.ts (6-max strategy branch)"],
