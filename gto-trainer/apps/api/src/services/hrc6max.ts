@@ -45,7 +45,9 @@ export const OPENS6 = [2.5, 3, 2, 3.5];
  *  in the box queue) are the rest. A rung whose tree has not landed falls to its NEAREST neighbour (chartFor6maxGrid's
  *  candidate ladder), never to a fixed default — until 2026-09-30 the list stopped at 30, so an 11bb blind read the
  *  30bb chart while its 20bb tree sat solved and unnamed (hand 4921602992). */
-export const SHORTS6 = [7, 10, 15, 18, 20, 25, 30, 50, 60, 70, 80];
+// 7.5, not 7 (2026-10-01): the short-stack grid solved s7_5 (genSixMaxPlan num()s the rung); a 7 here named ids that
+// never existed, and the six 7.5bb trees landed baked but "NOT NAMEABLE".
+export const SHORTS6 = [7.5, 10, 15, 18, 20, 25, 30, 50, 60, 70, 80];
 export const DEEP6 = 100;
 /** The open sizes solved with a short seat at the table: 2.5x/3x for every rung, the other four from the 2026-09-30
  *  short-stack grid (7-25bb). A missing (rung, open) tree falls to the same rung's nearest open first. */
@@ -651,9 +653,9 @@ export function unnameable6max(id: string): string | null {
     if (!OPENS6.includes(o)) return `open ${o}x is not an even-grid open (${OPENS6.join("/")})`;
     return null;
   }
-  if ((m = /^D(\d+)_s(\d+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3)?$/.exec(rest))) {
+  if ((m = /^D(\d+)_s([\d_]+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3)?$/.exec(rest))) {
     if (rest.endsWith("_pool3") && m[4] !== "limp") return "only limp trees carry the pool lock";
-    const d = Number(m[1]), s = Number(m[2]);
+    const d = Number(m[1]), s = val(m[2]!);
     if (d !== DEEP6) return `uneven depth ${d}bb: the uneven set is at ${DEEP6}bb`;
     if (m[4] === "limp") return LIMP_SHORTS6.includes(s) ? null : `short rung ${s}bb is not an uneven limp rung (${LIMP_SHORTS6.join("/")})`;
     if (!SHORTS6.includes(s)) return `short rung ${s}bb is not on SHORTS6 (${SHORTS6.join("/")})`;

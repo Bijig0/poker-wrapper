@@ -508,7 +508,9 @@ describe("short-stack rungs 7-25 and the uneven opens (2026-09-30)", () => {
 
   test("unnameable6max: grid ids off the lists are caught, patch ids are always nameable", () => {
     expect(unnameable6max("ign200_6max_D100_s20_BB_o2_5")).toBeNull();
-    expect(unnameable6max("ign200_6max_D100_s7_UTG_o5")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s7_5_UTG_o5")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s7_5_BTN_o2_5")).toBeNull();
+    expect(unnameable6max("ign200_6max_D100_s7_UTG_o5")).toContain("not on SHORTS6");
     expect(unnameable6max("ign200_6max_D100_s40_BB_o2_5")).toContain("not on SHORTS6");
     expect(unnameable6max("ign200_6max_D100_s20_BB_o4")).toContain("not on UNEVEN_OPENS6");
     expect(unnameable6max("ign200_6max_D100_s30_UTG_olimp")).toBeNull();
