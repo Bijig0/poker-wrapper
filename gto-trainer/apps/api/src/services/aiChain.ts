@@ -8,6 +8,7 @@ import {
 } from "../utils/aiChainTokens/aiChainTokens";
 import { labelBetBb } from "../utils/aiStudyLine/aiStudyLine";
 import { wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
+import { chipsAfter, contestedChips, effectiveStack } from "../utils/tableMoney/tableMoney";
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
@@ -223,6 +224,13 @@ export interface ChainTrace {
   /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
    *  reason no checkpoint fit; absent when the spec carried no handKey */
   checkpoint?: { from: string | null; streetsReused: number; note: string };
+  /** THE LAST RESORT'S NARROWING RACE (fastSolve, 2026-10-03): which tree was served — the narrowed one when the
+   *  narrowing walk landed inside its budget, else the unnarrowed one solved beside it — and the timings (ms from the
+   *  decision's start; null = not finished when the answer was served) */
+  lastResortNarrowing?: {
+    served: "narrowed" | "unnarrowed"; budgetMs: number; why: string | null;
+    narrowingMs: number | null; unnarrowedMs: number | null; narrowedMs: number | null;
+  };
   result: { ok: boolean; why?: string; potNode?: number; stackStreet?: number; line?: string; solves?: number };
 }
 
@@ -471,11 +479,7 @@ const r2 = (x: number): number => Math.round(x * 100) / 100;
  * the result with the stack it would have used anyway. Infinity when nothing is known.
  */
 export function effectiveBehind(seats: string[], heroPos: string, behind: Record<string, number> | null | undefined): number {
-  if (!behind) return Infinity;
-  const of = (p: string) => { const v = behind[p]; return v != null && Number.isFinite(v) ? v : Infinity; };
-  const villains = seats.filter((p) => p !== heroPos);
-  const deepest = villains.length ? Math.max(...villains.map(of)) : Infinity;
-  return Math.min(of(heroPos), deepest);
+  return behind ? effectiveStack(seats, heroPos, (p) => behind[p]) : Infinity;
 }
 
 export type AiChainResult =
@@ -571,15 +575,15 @@ export class StreetState {
    * stack, a folded seat's chips) is uncalled and goes back to its owner. The pot hero can win — the tree's, and the
    * table's once the excess is returned (heads-up: a 150bb shove into a 50bb stack is a 50bb bet).
    */
-  matched(s: number): number {
-    let most = 0;
-    for (let t = 0; t < this.inv.length; t++) {
-      if (t === s) continue;
-      most = Math.max(most, this.live.includes(t) ? (this.caps[t] ?? Infinity) : (this.inv[t] ?? 0));
-    }
-    return Math.min(this.inv[s] ?? 0, most);
+  matched(s: number): number { return this.matchedBySeat().get(s) ?? 0; }
+  get matchedPotIn(): number { return [...this.matchedBySeat().values()].reduce((sum, x) => sum + x, 0); }
+  /** the tree's seats are the contesting set; a folded seat's chips are what it left (utils/tableMoney.contestedChips) */
+  private matchedBySeat(): Map<number, number> {
+    const seats = this.inv.map((_, i) => i);
+    return contestedChips(new Map(seats.map((i) => [i, this.inv[i] ?? 0])), {
+      contesting: seats, folded: new Set(seats.filter((i) => !this.live.includes(i))), capOf: (i) => this.caps[i],
+    }).bySeat;
   }
-  get matchedPotIn(): number { return this.inv.reduce((sum, _, s) => sum + this.matched(s), 0); }
 
   /** The state as plain data — a mid-street checkpoint stores it and a later decision resumes from it (2026-09-24). */
   snapshot(): StreetSnapshot {
@@ -599,7 +603,6 @@ export class StreetState {
   /** Apply the acting seat's action; wagers give the raise-to size in bb. */
   apply(kind: ActionKind, raiseTo?: number): void {
     const a = this.actor;
-    const cap = this.caps[a] ?? Infinity;
     if (kind === "Fold") {
       this.live = this.live.filter((s) => s !== a);
       this.owed.delete(a);
@@ -609,9 +612,10 @@ export class StreetState {
       return;
     }
     if (kind === "Check") this.owed.delete(a);
-    else if (kind === "Call") { this.inv[a] = Math.min(this.outstanding, cap); this.owed.delete(a); }
+    else if (kind === "Call") { this.inv[a] = chipsAfter({ kind: "call" }, this.inv[a] ?? 0, this.outstanding, this.caps[a]); this.owed.delete(a); }
     else {
-      const to = Math.min(raiseTo ?? NaN, cap);
+      // what the act puts the actor at (utils/tableMoney.chipsAfter): a raise / an all-in, never past his stack
+      const to = chipsAfter({ kind: kind === "AllIn" ? "allin" : "raise", to: raiseTo ?? (kind === "AllIn" ? undefined : NaN) }, this.inv[a] ?? 0, this.outstanding, this.caps[a]);
       if (kind === "AllIn" && to <= this.outstanding + 0.005) {
         // an all-in for no more than the price is a call for less: nobody is re-opened
         this.inv[a] = to; this.owed.delete(a);
