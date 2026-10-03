@@ -31,7 +31,7 @@ app.post("/restart", async (c) => {
     return c.json({
       ok: false,
       error: "no supervisor in this process's environment — exiting would leave nothing serving this port.",
-      hint: "Start it from the supervisor (scheduled task \"PokerWrapper API - <user>\"), or relaunch by hand with .claude\dev-api.cmd.",
+      hint: "Start it from the supervisor (scheduled task \"PokerWrapper API - <user>\"), or relaunch by hand with .claude/dev-api.cmd.",
     }, 409);
   }
   const st = buildStamp.status(true);
