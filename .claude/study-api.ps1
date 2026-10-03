@@ -80,6 +80,8 @@ while ($true) {
       Log "straggler on :$apiPort before start - killing bun pid $($o.Id) (started $($o.StartTime))"
       # /T so the cmd.exe wrapper and any bun worker child go too, not just the one holding the socket
       & taskkill /PID $o.Id /T /F 2>&1 | Out-Null
+      # its cmd.exe still holds api.log for a moment: a worker started at once died with exit 1 and no line (2026-10-03)
+      Start-Sleep -Seconds 2
     }
   }
   $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c', "`"cd /d $root && `"$bun`" index.ts >> data\jobs\api.log 2>&1`"" -WindowStyle Hidden -PassThru
@@ -110,9 +112,11 @@ while ($true) {
       }
       break
     }
-    Start-Sleep -Seconds 30
+    # 30 s between probes - but an EXIT is seen within a second (2026-10-03): a worker that left on purpose (its own
+    # restart on a commit) used to wait out the rest of this sleep before it was relaunched, up to 30 s without answers
+    for ($i = 0; $i -lt 30 -and -not $p.HasExited; $i++) { Start-Sleep -Seconds 1 }
   }
-  $lived = [int]((Get-Date) - $startedAt).TotalSeconds
+  $lived =[int]((Get-Date) - $startedAt).TotalSeconds
   $code = if ($p.HasExited) { $p.ExitCode } else { 'killed' }
   # WHAT DID IT LEAVE BEHIND (2026-09-14). This log recorded an exit code and nothing else, so 34
   # kills of a HEALTHY worker (exit -1, lifetimes of 1 min to 2 h) could not be told apart from a
