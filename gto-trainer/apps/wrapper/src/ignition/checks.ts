@@ -13,6 +13,7 @@ import { S, seams } from "../state";
 import { toActSources } from "./hand";
 import { modalOf } from "./dom";
 import { noteTopUpRefusal } from "../topup";
+import { topUpTolCents } from "../topupNeed";
 
 export function stateEvent(kind: string, detail: string, resolved: string): void {
   const key = [S.handNo, kind, (S.ws.actions || []).length];
@@ -119,18 +120,33 @@ export async function dismissModal(m: Record<string, any>, where: string): Promi
   return res;
 }
 
-/** The client's own receipt for a buy: settles the pending top-up record and files the receipt. */
+/**
+ * The client's own receipt for a buy, read off the screen: settles the pending top-up record and files the receipt.
+ * The amount must match the press to within half a big blind (topupNeed.ts topUpTolCents — it was a flat $1, 20bb at
+ * NL5). THE SAME BUY IS FILED ONCE (2026-10-04): the table's socket usually names it first (topup.ts
+ * topUpSocketReceipt, ~4 s ahead of the line on 2026-10-03), and its line on the screen is then only noted on the record.
+ */
 export function topUpReceipt(amount: string): void {
   const now = time();
   S.toastsSeen.push([amount, now]);
   keepLast(S.toastsSeen, 20);
-  feedAdd(`Top-up receipt — the client added $${amount} in chips`);
   const cents = pyRound(pyFloat(amount.replace(/,/g, "")) * 100);
   const rec = S.study.lastTopUp;
-  if (rec && rec.pressed && !rec.receiptCents && now * 1000 - (rec.at || 0) < 180_000
-      && Math.abs(cents - pyInt(rec.amountCents || 0)) <= 100) {
-    const reason = rec.ok ? null : `confirmed by the client's receipt ($${amount} added)`;
-    Object.assign(rec, { ok: true, reason, receiptCents: cents });
+  const tol = topUpTolCents(rec?.bbCents);
+  const pressAt = rec ? Number(rec.pressedAtMs ?? rec.at ?? 0) || 0 : 0;
+  if (rec && rec.pressed && rec.receiptSource === "socket" && now * 1000 - pressAt < 15 * 60_000
+      && (Math.abs(cents - pyInt(rec.receiptCents || 0)) <= tol || Math.abs(cents - pyInt(rec.amountCents || 0)) <= tol)) {
+    rec.receiptSource = "socket+screen";
+    log(`[top-up] the screen's receipt ($${amount}) for the buy the table's socket already settled — not counted again`);
+    return;
   }
-  if (S.session.id) S.sessions.event(S.session.id, "top-up-receipt", { amount, hand: S.handNo, at: Math.trunc(now * 1000) });
+  feedAdd(`Top-up receipt — the client added $${amount} in chips`);
+  let settled = false;
+  if (rec && rec.pressed && !rec.receiptCents && !rec.refused && now * 1000 - pressAt < 180_000
+      && Math.abs(cents - pyInt(rec.amountCents || 0)) <= tol) {
+    const reason = rec.ok && !rec.lost ? null : `confirmed by the client's receipt ($${amount} added)`;
+    Object.assign(rec, { ok: true, reason, receiptCents: cents, receiptSource: "screen", lost: false });
+    settled = true;
+  }
+  if (S.session.id) S.sessions.event(S.session.id, "top-up-receipt", { amount, hand: S.handNo, at: Math.trunc(now * 1000), source: "screen", settled });
 }

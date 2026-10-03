@@ -232,6 +232,8 @@ function fresh() {
     stateHealth: { ticks: 0, events: [] as any[], byKind: new Map<string, number>(), streak: new Map<string, number>(), seen: new TupleSet() },
     modalState: { lastClickAt: 0.0, reported: new Set<string>() },
     toastsSeen: [] as [string, number][],
+    /** the client's buy receipts in its message history, counted by text (reader.ts receiptRises) */
+    receiptCounts: null as Map<string, number> | null,
     lastArchived: { no: 0, fp: null } as Record<string, any>,
     awards: new Map<string, Record<string, any>>(),
     /** The connection guard (netguard.ts). `drop` = the link went bad during session `sid`: the session ends at the hand's
@@ -247,6 +249,18 @@ function fresh() {
     topupAbort: false,
     topupKpi: { hand: null as string | null, hands: 0, short: 0, worstBb: 0.0 },
     topupPrefold: { active: false, key: null, hand: null, deadline: 0.0, startedAt: 0.0, banked: false } as Record<string, any>,
+    /** HERO'S MONEY AS THE TABLE'S SOCKET REPORTS IT (topup.ts noteTopUpFrame, 2026-10-04): each note carries the socket
+     *  (`rid`) and the wrapper's hand counter (`handNo`) it came in. `end` = hero's stack at a hand's end (CO_RESULT_INFO,
+     *  before any buy is added), `cash` = his NEW stack after a buy went through (PLAY_ACCOUNT_CASH_RES type 2), `account`
+     *  = his stack as he folded (PLAY_ACCOUNT_INFO), `buyin` = what the opened Buy-chips panel offers (PLAY_BUYIN_INFO),
+     *  `ends` = when hands ended (ms, the last 20). */
+    topupSock: { end: null as null | Record<string, any>, cash: null as null | Record<string, any>,
+                 account: null as null | Record<string, any>, buyin: null as null | Record<string, any>,
+                 ends: [] as number[], endHand: null as number | null },
+    /** The need at each deal and the stall alarm (topup.ts topUpDealNeed): the last deal's verdict, when a run last
+     *  started, the hand whose final verdict was already said, the alarms raised. */
+    topupNeed: { prev: null as null | { hid: string; need: boolean; at: number; shortBb: number | null },
+                 lastAttemptAt: 0.0, finalSaid: null as string | null, stalls: 0, last: null as any },
     orphanCheck: { at: 0.0, said: null as string | null },
     adoptCheck: { at: 0.0, said: null as string | null },
     chain: { attempting: false, lastAt: 0.0, lastResult: null as any, lastCheck: null as number | null },
