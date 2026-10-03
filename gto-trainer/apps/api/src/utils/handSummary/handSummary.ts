@@ -56,14 +56,18 @@ export function summarizeHand(hand: ParsedHand, heroFoldedFlag?: boolean, heroWo
     else if (a.type === "call") t[a.seatId] = (t[a.seatId] ?? 0) + amt;
     else if (a.type === "bet" || a.type === "raise" || a.type === "all-in") t[a.seatId] = amt;
   }
-  let potBb = 0;
-  let heroInvestedBb = 0;
+  const bySeat: Record<number, number> = {};
   for (const st of STREETS) {
-    for (const [seat, v] of Object.entries(totals[st]!)) {
-      potBb += v;
-      if (Number(seat) === hand.heroSeatId) heroInvestedBb += v;
-    }
+    for (const [seat, v] of Object.entries(totals[st]!)) bySeat[Number(seat)] = (bySeat[Number(seat)] ?? 0) + v;
   }
+  // THE UNCALLED BET COMES BACK (2026-10-03, session_20261003_153908): the seat that put in the most gets back
+  // whatever no other seat matched — hero's 242bb river shove over a 28bb stack cost 28bb, not 242. Without this a
+  // won all-in read as a 192bb loss and the session showed −260bb where Ignition says +98.
+  const amounts = Object.values(bySeat).sort((a, b) => b - a);
+  const uncalled = amounts.length >= 2 ? amounts[0]! - amounts[1]! : 0;
+  const top = Number(Object.keys(bySeat).find((s) => bySeat[Number(s)] === amounts[0]));
+  const potBb = amounts.reduce((s, v) => s + v, 0) - uncalled;
+  const heroInvestedBb = (bySeat[hand.heroSeatId] ?? 0) - (top === hand.heroSeatId ? uncalled : 0);
 
   const pre = hand.actions.filter((a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb");
   const heroPre = pre.filter((a) => a.hero);
@@ -122,4 +126,23 @@ function heroFoldedBefore(hand: ParsedHand, street: (typeof STREETS)[number]): b
   return hand.actions.some(
     (a) => a.hero && a.type === "fold" && STREETS.indexOf(a.street as (typeof STREETS)[number]) < target
   );
+}
+
+/** What hero was awarded at the end of a hand, in cents: the sum of the client's distinct "★ Player N wins [main pot |
+ *  side pot ]($X)" lines naming hero's seat, from the hand's feed and its archived result. null when no line names a
+ *  seat (the July-era nameless "★ wins" lines, or no result at all). */
+export function heroAwardCents(raw: unknown, heroSeat: number): number | null {
+  const r = raw as { feedLines?: unknown; result?: { text?: unknown } } | null;
+  const lines = new Set<string>();
+  for (const l of [...(Array.isArray(r?.feedLines) ? r!.feedLines : []), r?.result?.text]) {
+    if (typeof l === "string" && l.includes("★")) lines.add(l.trim());
+  }
+  let named = false, cents = 0;
+  for (const l of lines) {
+    const m = l.match(/^★\s*Player (\d+) wins (?:main pot |side pot (?:\d+ )?)?\(\$([\d,]+(?:\.\d+)?)\)/);
+    if (!m) continue;
+    named = true;
+    if (Number(m[1]) === heroSeat) cents += Math.round(Number(m[2]!.replace(/,/g, "")) * 100);
+  }
+  return named ? cents : null;
 }

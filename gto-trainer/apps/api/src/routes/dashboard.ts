@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, startStacksOf, roundContributions } from "../utils/archivedHand/archivedHand";
-import { summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
+import { heroAwardCents, summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
 import { autoExecOf } from "../utils/autoExec/autoExec";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { preflopDb } from "../services/preflopDb";
@@ -416,6 +416,13 @@ export function computeNets(hands: Enriched[]): Map<number, number | null> {
     // hero put in. Exact, rake already off the award, and no stack chaining.
     const res = (h.raw as any)?.result as { winnerSeat?: number | null; wonCents?: number | null; heroWon?: boolean | null } | undefined;
     const bbUsd = bbUsdOf(h.stakes);
+    // EVERY award line, not just the one the archive kept (2026-10-03): a split pot or a side pot is two "★ Player N
+    // wins" lines and result holds one of them — a chopped pot read as a loss of everything hero put in
+    const award = heroAwardCents(h.raw, h.hand.heroSeatId);
+    if (award != null && bbUsd) {
+      nets.set(h.dbId, Math.round((award / 100 / bbUsd - s.heroInvestedBb) * 100) / 100);
+      continue;
+    }
     if (res && res.winnerSeat != null && res.wonCents != null && bbUsd) {
       const wonBb = res.wonCents / 100 / bbUsd;
       const heroWon = res.winnerSeat === h.hand.heroSeatId || res.heroWon === true;
