@@ -100,7 +100,12 @@ if (CONTROL) {
   const tag = (SESSION ?? `${FROM}_${TO}`).replace(/[^\w.-]+/g, "_");
   console.log(`== candidate ${git("rev-parse", "--short", "HEAD")} (this checkout)`);
   const n = spawnSync("bun", [join(import.meta.dir, "replayGate.ts"), ...pass, "--work", workN, "--baseline", join(workC, `replay-gate-${tag}.json`)], { cwd: join(import.meta.dir, "..", ".."), stdio: "inherit" });
-  if (!flag("keep-control")) { try { git("-C", top, "worktree", "remove", "--force", dir); } catch (e) { console.error(`(the control worktree stays: ${(e as Error).message})`); } }
+  if (!flag("keep-control")) {
+    // the node_modules junctions are unlinked FIRST (rmdir without /s removes the link, never the target's files) —
+    // git would otherwise leave them behind, and a recursive delete would follow them into this checkout's packages
+    for (const nm of [`${api}/node_modules`, "gto-trainer/node_modules"]) if (existsSync(join(dir, nm))) spawnSync("cmd", ["/c", "rmdir", join(dir, nm)]);
+    try { git("-C", top, "worktree", "remove", "--force", dir); } catch (e) { console.error(`(the control worktree stays: ${(e as Error).message})`); }
+  }
   console.log(`\nVERDICT against ${commit}: ${n.status === 0 ? "PASS" : n.status === 2 ? "STOPPED (a session went live)" : "FAIL"}`);
   process.exit(n.status ?? 1);
 }
