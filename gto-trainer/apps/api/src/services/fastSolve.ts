@@ -1303,7 +1303,11 @@ export function chainPathChecks(a: {
     const tr = w.trace;
     if (!tr) continue;
     const sp = tr.spec;
-    const specFp = rangesFp([{ pos: sp.oopPos, range: sp.oopRange }, ...(sp.midPos && sp.midRange ? [{ pos: sp.midPos, range: sp.midRange }] : []), { pos: sp.ipPos, range: sp.ipRange }]);
+    const specSeats = [{ pos: sp.oopPos, range: sp.oopRange }, ...(sp.midPos && sp.midRange ? [{ pos: sp.midPos, range: sp.midRange }] : []), { pos: sp.ipPos, range: sp.ipRange }];
+    // THE SEATS THE STREET WAS WALKED WITH (2026-10-04, hand 4922269408): a seat with nothing behind at flop entry is
+    // dropped by the walk before it fingerprints what it starts from, so the request's fingerprint is over the same seats
+    // (the walk's `players`) — over all three it said "#34peiz vs #2qfdl5" for a flop that started exactly right
+    const specFpOf = (players?: string[]) => rangesFp(players?.length ? specSeats.filter((x) => players.some((p) => p.toUpperCase() === x.pos.toUpperCase())) : specSeats);
     const lastResort = /^last-resort/.test(w.kind ?? "");
     const members = w.members ?? mergeMembers(w.kind);
     /** a tree's seats as table positions: a merged seat stands for each of its members */
@@ -1314,7 +1318,7 @@ export function chainPathChecks(a: {
       const own = (s.checks ?? []).map((c) => (s.fromCheckpoint ? asWalkedEarlier(c) : c));
       const out: CheckResult[] = [...own];
       // #1
-      if (s.si === 0 && k === 0) out.push(checkFlopArrival({ arrival: a.arrival, started: s.rangeCheck?.inFp ?? null, expected: specFp }));
+      if (s.si === 0 && k === 0) out.push(checkFlopArrival({ arrival: a.arrival, started: s.rangeCheck?.inFp ?? null, expected: specFpOf(s.players) }));
       else out.push(checkHandoff(s.rangeCheck));
       // #5
       const beh = behindAt(k);
@@ -1643,8 +1647,7 @@ async function solvePostflopViaChainOnce(
   // with the jammer "modelled at the effective stack" (82bb he does not have), betting and folding on every street.
   // A seat that went all-in PREFLOP (its own all-in action) leaves the tree while two or more players can still
   // act; its chips stay in the pot. What that loses is the main pot's showdown against his range — said in the note.
-  const preAllIn = new Set(hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in")
-    .map((a) => String(hand.positions?.[a.seatId] ?? "").toUpperCase()).filter(Boolean));
+  const preAllIn = preflopAllInSeats(hand, pinnedDealt ?? dealtBySeat(hand));
   const liveAtFlop = Object.keys(recon.ranges).filter((p) => !preAllIn.has(p.toUpperCase()));
   const droppedAllIn = liveAtFlop.length >= 2 ? Object.keys(recon.ranges).filter((p) => preAllIn.has(p.toUpperCase())) : [];
   if (droppedAllIn.length) {
@@ -1920,7 +1923,9 @@ async function solvePostflopViaChainOnce(
         const sp = { ...w.seatSpec };
         sp.oopRange = sp.oopPos === heroPosLr ? nr.hero : nr.villain;
         sp.ipRange = sp.ipPos === heroPosLr ? nr.hero : nr.villain;
-        return solveTree({ ...plain, seatSpec: sp, rangeNote: `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s` });
+        // ITS OWN PLAN (2026-10-04, check #9 on hand 4922247756): the narrowed tree is not the unnarrowed one created again
+        return solveTree({ ...plain, seatSpec: sp, kind: (plain.kind ?? "last-resort").replace(/^last-resort/, "last-resort:narrowed"),
+          rangeNote: `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s` });
       },
       failed: (why) => ({ ok: false, why, trace: undefined } as AiChainResult),
     });
@@ -2306,6 +2311,28 @@ function flopSeatStacksRead(a: {
     out[p] = Math.max(0, b);
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * THE SEATS ALL-IN PREFLOP, BY THE CHIPS (2026-10-04, hand 4922269408). Ignition files an action by the BUTTON pressed
+ * (wsLine BTN: 2048 = all-in, 4096 = raise): a player who types or slides the raise to his whole stack and presses
+ * Raise is filed as a "raise" — the CO's 13.4 raise of his 13.4. Counted by the action's type, that CO stayed a flop
+ * seat with nothing behind (the chain dropped him on the flop, then a resume put him back: the HTTP 500). A seat is
+ * all-in preflop when its preflop chips reach its stack as dealt (within 0.05, as gtowAiPreflop.shapeOf reads it), or
+ * when its own action says all-in. Position names upper-cased.
+ */
+export function preflopAllInSeats(hand: ParsedHand, dealt: Record<number, number> | null | undefined): Set<string> {
+  const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const name = (sid: number) => String(hand.positions?.[sid] ?? "").toUpperCase();
+  const out = new Set<string>();
+  for (const a of hand.actions) if (a.street === "preflop" && a.type === "all-in") out.add(name(seatOf(a)));
+  const put = roundContributions(hand).get("preflop") ?? new Map<number, number>();
+  for (const [sid, c] of put) {
+    const d = dealt?.[sid];
+    if (d != null && Number.isFinite(d) && d > 0 && c >= d - 0.05) out.add(name(sid));
+  }
+  out.delete("");
+  return out;
 }
 
 /**
@@ -3802,6 +3829,23 @@ export function zeroMixReason(a: {
     `empty; read the walk's trace before trusting this tree`;
 }
 
+/**
+ * A THROW IS A REASONED NO-ANSWER, NEVER AN HTTP 500 (2026-10-04, hand 4922269408: 59 stack traces on hero's turn).
+ * The route turned an exception into a 500; the poller counts a 500 as "the fast-solver did not answer" and asks again
+ * on the next tick — never three times the same way, so it never says "no answer" and fold-on-no-answer waits for
+ * the clock (the time bank included). A refusal is counted: three alike and the panel is told, and the no-answer fold
+ * acts on it. kind "solver-error" with the exception's message; the stack is logged once per call.
+ */
+async function fastSolveSafely(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
+  try {
+    return await fastSolveEntry(hand, heroPos, opts);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[fastSolve] threw on hand ${hand.clientHandId ?? hand.handId ?? "?"} ${hand.currentNode?.street ?? "?"}: ${(e as Error)?.stack ?? msg}`);
+    return { ok: false, kind: "solver-error", street: hand.currentNode?.street ?? undefined, reason: `the solver threw (a bug, not the spot): ${msg.slice(0, 300)}` };
+  }
+}
+
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // EVERY CALL IS ONE SCOPE (2026-09-25, services/requestScope): the GTO Wizard requests it makes are counted on it,
   // added to the hand's facts (by origin: live / warm / replay), and reported on the answer's chain path.
@@ -3813,7 +3857,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   const decisionStart = Date.now();
   const run = () => withRequestScope(
     { handKey, origin: opts.origin ?? "adhoc", street: hand.currentNode?.street ?? null },
-    () => fastSolveEntry(hand, heroPos, opts.decisionStart != null ? opts : { ...opts, decisionStart }));
+    () => fastSolveSafely(hand, heroPos, opts.decisionStart != null ? opts : { ...opts, decisionStart }));
   const t0 = Date.now();
   const { value, scope } = live ? await asLive(run) : await run();
   if (handKey) handFacts.addRequests(handKey, scope.origin, scope.counts);

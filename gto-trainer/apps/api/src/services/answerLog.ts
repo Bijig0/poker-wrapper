@@ -193,6 +193,8 @@ export const FAIL_KINDS = [
   // logs that when present and this classifier covers the history.
   "capture-fault", "no-hero-cards", "board-incomplete", "tree-gap", "ai-node-missing",
   "line-terminal", "table-shape", "size-too-far", "multiway-unsupported",
+  // the solver THREW (a bug, not the spot) — fastSolve turns it into this refusal instead of an HTTP 500 (2026-10-04)
+  "solver-error",
   "unknown",
 ] as const;
 export type FailKind = (typeof FAIL_KINDS)[number];

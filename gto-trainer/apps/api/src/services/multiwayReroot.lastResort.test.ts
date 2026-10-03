@@ -28,6 +28,8 @@ function install(fail = false, delayMs = 0) {
   api.peekNode = () => null;
   api.ensureCustomSolution = async (input: any) => { const solId = `lr${++n}`; trees.set(solId, input); return { ok: true, solId, created: true, session: "mock" }; };
   api.customNode = async (solId: string, q: any) => {
+    const sc = currentRequestScope();
+    if (sc) scopes.add(`${sc.handKey}|${sc.origin}`);
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
     if (fail) return { ok: false, status: 429, error: `spot-solution 429: {"detail": "Request limit exceeded"}` };
     const t = trees.get(solId)!;

@@ -167,5 +167,10 @@ describe.skipIf(gated)("hand 4920544353: the BTN's turn jam is an all-in in the 
     expect(r.warning).toContain("the two entering ranges are narrowed by the earlier streets by 1 three-seat walk(s) (CO/BTN");
     const walk = treesOn("FLOP").filter((t) => !t.mid && t.oopPos === "CO" && t.ipPos === "BTN");
     expect(walk.length).toBeGreaterThan(0);
+    // the race's two turn trees are two plans (check #9 counts re-creations per plan): the unnarrowed last resort and
+    // the narrowed one — never the same plan created twice
+    const plans = treesOn("TURN").filter((t) => /^last-resort/.test(t.planTag ?? "")).map((t) => t.planTag);
+    expect(plans.some((p) => /^last-resort:narrowed:hero vs BTN/.test(p))).toBe(true);
+    expect(plans.some((p) => /^last-resort:hero vs BTN/.test(p))).toBe(true);
   }, 120_000);
 });
