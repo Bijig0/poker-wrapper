@@ -1020,6 +1020,8 @@
     $("gs-board").innerHTML = `<span class="gs-k">board</span>`
       + (h.board && h.board.length ? cardsHtml(h.board) : `<span class="sub">—</span>`)
       + `<span class="gs-k" style="margin-left:14px">pot</span>${esc(bb(node.pot) || "—")}`
+      // Ignition's rake already out of that pot (reader: CO_CHIPTABLE_INFO curRake) — what the winner is paid from it
+      + (node.potRake > 0 ? ` <span class="sub" title="rake taken so far: ${esc(bb(node.potRake))}">(${esc(bb(Math.round((node.pot - node.potRake) * 100) / 100))} after rake)</span>` : "")
       + `<span class="gs-k" style="margin-left:14px">to call</span>${esc(bb(node.toCall) || "0 BB")}`
       + (h.bbCents ? `<span class="gs-k" style="margin-left:14px">blind</span>${(h.bbCents / 100).toFixed(2)}` : "");
 

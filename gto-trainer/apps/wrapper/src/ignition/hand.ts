@@ -489,6 +489,8 @@ export function handStateIgnition(): Record<string, any> | null {
       toActSeatId: actionOn,
       toActIsHero: toActHero,
       pot: toBb(w.potCents ?? null) || 0,
+      // the rake already taken from that pot (bb); pot − potRake is what the winner is paid from it
+      ...(w.rakeCents != null ? { potRake: toBb(w.rakeCents) ?? 0 } : {}),
       toCall: toCall || 0,
       legalActions: [],
       complete: false,
@@ -503,6 +505,9 @@ export function handStateIgnition(): Record<string, any> | null {
     lineSource,
     lineUncertain,
     lineNote,
+    // Ignition's own rake (CO_CHIPTABLE_INFO curRake), bb: taken so far, and as each street was entered ("end" = the
+    // last sweep, all five cards out) — the archive keeps it, so a won pot is priced after rake exactly
+    ...(w.rakeCents != null ? { rake: { bb: toBb(w.rakeCents) ?? 0, byStreet: Object.fromEntries(Object.entries(w.rakeByStreet || {}).map(([k, c]) => [k, toBb(c as number) ?? 0])) } } : {}),
   };
 }
 
