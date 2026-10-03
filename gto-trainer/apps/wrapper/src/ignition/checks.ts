@@ -83,6 +83,9 @@ export async function handleModal(d: Record<string, any>): Promise<void> {
   const m = modalOf(d);
   S.liveStatus.modal = m ? { text: m.text, harmless: m.harmless } : null;
   if (!m) return;
+  // THE DEEP-STACK RESET'S LEAVE (stackReset.ts) puts the client's own leave confirmation up: F.leave answers it —
+  // the tick neither dismisses it nor files it as an unknown notice
+  if (S.stackReset.state === "leaving") return;
   if (m.harmless) {
     if (time() - S.modalState.lastClickAt < 2.0) return;
     await dismissModal(m, "the table tick");

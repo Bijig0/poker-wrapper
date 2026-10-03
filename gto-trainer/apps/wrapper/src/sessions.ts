@@ -303,6 +303,11 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
       } catch {}
     } else if (k === "waitForBb") {
       base[k] = truthy(v);
+    } else if (k === "stackResetBb" || k === "stackResetWaitS") {
+      // THE DEEP-STACK RESET (stackReset.ts, 2026-10-03): only when the setup page sends it (no default key — absent =
+      // off); a value that is not a number ≥ 0 is dropped
+      const n = Number(v);
+      if (v !== null && v !== "" && Number.isFinite(n) && n >= 0) base[k] = k === "stackResetBb" ? Math.min(n, 10_000) : Math.min(n, 3600);
     } else if (k === "profile") {
       base[k] = truthy(v) ? strOf(v) : null;
     } else if (k === "tables") {

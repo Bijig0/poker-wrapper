@@ -12,7 +12,7 @@ import { time } from "../clock";
 import { C } from "../config";
 import { feedAdd, log } from "../feed";
 import { keepLast, pyRepr, pyRound, pyStr, sortedNums, truthy } from "../py";
-import { S, inAHand, seams } from "../state";
+import { S, inAHand, peerIsLeaving, seams, stackResetLeaving } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand, noteAward } from "../archive";
 import {
@@ -149,6 +149,12 @@ export function noteSocketClosed(rid: string): void {
   const ours = rid === S.tapBound;
   dumpEvent("<socket-closed>", { rid, ours });
   if (!ours) {
+    // A SIBLING TABLE LEAVING ON PURPOSE (its deep-stack reset, stackReset.ts — it told us the socket first): not the
+    // network taking the page's sockets, so neither a mark against a site close of ours nor the settle of one
+    if (peerIsLeaving(rid)) {
+      dumpEvent("<socket-closed-peer-leaving>", { rid });
+      return;
+    }
     S.tapOtherClosedAt = time();
     const n = S.siteClosed.notice;
     if (n && !n.settled) settleSiteClose(n, `another socket of the page (${rid}) closed ${fmtS(time() - n.at)} s after ours`);
@@ -159,6 +165,11 @@ export function noteSocketClosed(rid: string): void {
   stallSocketClosed(rid);
   if (time() - (S.tapLeavingAt || 0) <= LEAVE_GRACE_S) {
     log(`[ws] table socket ${rid} closed — we left the table; the next table binds fresh`);
+    return;
+  }
+  // the deep-stack reset's leave (stackReset.ts): ours however long the leave took — no kick check, no failure
+  if (stackResetLeaving(rid)) {
+    log(`[ws] table socket ${rid} closed — we left the table for a deep-stack reset; the next table binds fresh`);
     return;
   }
   // A STALL MAKES IT A KICK (stall.ts): the stalled turn sat hero out, the seat and then the table went after —

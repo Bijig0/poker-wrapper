@@ -73,6 +73,11 @@ export async function maybeSitBackIn(): Promise<void> {
     return;
   }
   if (S.net.drop || S.net.sitout || S.net.bad > 0) return;   // a connection drop ends the session; never sat back in
+  // a deep-stack reset sits hero out on purpose (stackReset.ts): its own abort presses I AM BACK when it gives up
+  if (S.stackReset.state !== "idle") {
+    st.sitBackTurn = null;
+    return;
+  }
   if (L.modal || L.buyPanel) return;           // nothing is pressed through a notice; the next tick looks again
   const now = time();
   const cur = (st.sitBackTurn ??= { since: now, tries: 0, lastTry: 0.0, gaveUp: false });

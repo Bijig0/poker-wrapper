@@ -35,6 +35,7 @@ import { tableState } from "./ignition/reader";
 import { recFrame, recLog, recordings, saveNote, setDebug } from "./ignition/recorder";
 import { act, executePick, raiseTo, requestSolve, setAuto } from "./relay";
 import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
+import { peerLeaving } from "./stackReset";
 import * as SESSION from "./session";
 import { buildAll, buildReply, relaunch } from "./build";
 import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
@@ -514,6 +515,17 @@ export function buildApp(): Hono {
   // format instead of counting the drop as a close by hand (session.ts sessionTableClosed, honourClosedTables)
   app.post("/session/table-closed", async (c) => {
     const [code, res] = SESSION.sessionTableClosed(await body(c, Body.sessionTableClosed));
+    return json(code, res);
+  });
+  // another table is leaving its table for a deep-stack reset: the leader seats a new one after the wait
+  // (session.ts noteStackReset, honourClosedTables; stackReset.ts)
+  app.post("/session/stack-reset", async (c) => {
+    const [code, res] = SESSION.noteStackReset(await body(c, Body.sessionStackReset));
+    return json(code, res);
+  });
+  // a sibling table is about to close its table's socket on purpose (stackReset.ts peerLeaving)
+  app.post("/table/peer-leaving", async (c) => {
+    const [code, res] = peerLeaving(await body(c, Body.peerLeaving));
     return json(code, res);
   });
   // another table's connection check failed: the leader ends the session (session.ts maybeEndForNetDrop)
