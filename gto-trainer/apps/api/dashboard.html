@@ -286,6 +286,15 @@ function replayState(hand, step) {
   };
 }
 
+/** The rake out of the pot at a replay step (hand page's DETAIL.rake, recorded by the reader from Ignition's curRake):
+ *  as the street on screen was entered; the hand's final rake once every action is shown. 0 = none, or not recorded. */
+function potRakeAt(rs) {
+  const rk = DETAIL?.rake;
+  if (!rk) return 0;
+  if (!rs.next) return rk.bb || 0;
+  return (rk.byStreet || {})[rs.next.street] || 0;
+}
+
 /* ================= SVG table mirror ================= */
 function svgCard(x, y, c, w = 26, h = 36) {
   if (!c) return `<rect x="${x}" y="${y}" rx="3" width="${w}" height="${h}" fill="#1b2f4d" stroke="#33507a"/>
@@ -311,6 +320,9 @@ function renderMirror(hand, rs) {
   for (let i = rs.board.length; i < 5; i++) { /* empty slots drawn faint above */ }
   g = g.replace(/fill="none" stroke="#33507a"/g, 'fill="#132030" stroke="#22364e"');
   g += `<text x="${cx}" y="${cy + 34}" text-anchor="middle" font-size="14" fill="#ffd35c" font-weight="700">pot ${rs.pot} bb</text>`;
+  // the rake Ignition had taken by this point (the reader's curRake): what the winner is actually paid from that pot
+  const rk = potRakeAt(rs);
+  if (rk > 0) g += `<text x="${cx}" y="${cy + 50}" text-anchor="middle" font-size="11" fill="#c9b26a">${r2(rs.pot - rk)} bb after ${r2(rk)} rake</text>`;
   for (let k = 0; k < n; k++) {
     const seat = seats[(heroIdx + k) % n];
     const ang = Math.PI / 2 + (k * 2 * Math.PI) / n; // hero at bottom, clockwise

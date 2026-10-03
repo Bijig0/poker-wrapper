@@ -702,6 +702,8 @@ export function beginHand(hid: string | null): void {
   w.heroCards = [];
   w.pot = null;
   w.potCents = null;
+  w.rakeCents = null;              // the rake taken from the pot so far (CO_CHIPTABLE_INFO curRake)
+  w.rakeByStreet = {};             // that rake as each street was entered: flop / turn / river / end
   w.handOver = false;
   w.endedSince = null;
   w.lastHandNoSeen = false;
@@ -904,6 +906,19 @@ export function onGameMsg(d: Record<string, any>): void {
       const sum = pots.reduce((a, b) => a + b, 0);
       w.pot = amt(sum);
       w.potCents = sum;
+    }
+    // THE RAKE, AS IGNITION TAKES IT (2026-10-03, Brady: "on the flop we read 4bb … after rake is 3.8 and that is the
+    // amount we are actually playing for"): curPot is the GROSS pot; curRake beside it is the rake taken so far (5%
+    // rounded down to the cent, none before a flop). Final curPot − curRake = the award, in every hand of the
+    // 2026-10-03 dumps. The pot is swept in before the next street's cards, so the board length names the street
+    // being entered; a frame with all five cards out is the end of the hand.
+    const rakes: number[] = d.curRake || [];
+    if (rakes.length) {
+      const rake = rakes.reduce((a, b) => a + b, 0);
+      w.rakeCents = rake;
+      const out = (w.board || []).filter(Boolean).length;
+      const entering = out >= 5 ? "end" : out === 4 ? "river" : out === 3 ? "turn" : "flop";
+      (w.rakeByStreet ??= {})[entering] = rake;
     }
   } else if (pid === "CO_PCARD_INFO" && d.type === 0) {
     const names = (d.card || []).map(wireCard).filter((n: string | null): n is string => !!n);

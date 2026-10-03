@@ -110,6 +110,31 @@ describe("summarizeHand", () => {
   });
 });
 
+describe("post-in", () => {
+  // hand 4922308885: CO posts 1bb to come in, hero opens 2.6 from UTG, everyone folds — Ignition paid hero 3.4 (2.4 net)
+  test("a seat's post-in is in the pot, and is not a limp", () => {
+    const s = summarizeHand(normalizeHand({
+      handId: 3812, heroSeatId: 3, heroCards: ["Js", "As"], board: [], street: "preflop", ended: true,
+      liveSeats: [1, 2, 3, 4, 5], positions: { 1: "SB", 2: "BB", 3: "UTG", 4: "HJ", 5: "CO" },
+      actions: [
+        { seatId: 1, hero: false, type: "post-sb", street: "preflop", amount: 0.4 },
+        { seatId: 2, hero: false, type: "post-bb", street: "preflop", amount: 1 },
+        { seatId: 5, hero: false, type: "post", street: "preflop", amount: 1 },
+        { seatId: 3, hero: true, type: "raise", street: "preflop", amount: 2.6 },
+        { seatId: 4, hero: false, type: "fold", street: "preflop" },
+        { seatId: 5, hero: false, type: "fold", street: "preflop" },
+        { seatId: 1, hero: false, type: "fold", street: "preflop" },
+        { seatId: 2, hero: false, type: "fold", street: "preflop" },
+      ],
+      currentNode: { street: "preflop", toActIsHero: false, complete: true },
+    }).hand);
+    expect(s.heroWonUncontested).toBe(true);
+    expect(s.heroInvestedBb).toBeCloseTo(1, 2);
+    expect(s.potBb - s.heroInvestedBb).toBeCloseTo(2.4, 2);
+    expect(s.limpedPot).toBe(false);
+  });
+});
+
 describe("heroAwardCents", () => {
   // hand 4922307385: the board played, a chop — the archived result kept seat 2's line only
   test("a split pot credits hero's own line from the feed", () => {

@@ -1,4 +1,5 @@
 import type { ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
+import { deadPostsBb } from "../foldPostIns/foldPostIns";
 
 /**
  * Hand2Note-style per-hand facts from one archived hand (wrapper hands.db
@@ -66,7 +67,9 @@ export function summarizeHand(hand: ParsedHand, heroFoldedFlag?: boolean, heroWo
   const amounts = Object.values(bySeat).sort((a, b) => b - a);
   const uncalled = amounts.length >= 2 ? amounts[0]! - amounts[1]! : 0;
   const top = Number(Object.keys(bySeat).find((s) => bySeat[Number(s)] === amounts[0]));
-  const potBb = amounts.reduce((s, v) => s + v, 0) - uncalled;
+  // a post-in whose poster folded is in the pot with no action carrying it (normalizeHand → foldPostIns keeps it in
+  // postIns): hand 4922308885's CO posted 1bb and folded to hero's open, and the pot hero won was 1bb short
+  const potBb = amounts.reduce((s, v) => s + v, 0) - uncalled + deadPostsBb(hand.postIns, "river");
   const heroInvestedBb = (bySeat[hand.heroSeatId] ?? 0) - (top === hand.heroSeatId ? uncalled : 0);
 
   const pre = hand.actions.filter((a) => a.street === "preflop" && a.type !== "post-sb" && a.type !== "post-bb");
@@ -132,6 +135,13 @@ function heroFoldedBefore(hand: ParsedHand, street: (typeof STREETS)[number]): b
  *  side pot ]($X)" lines naming hero's seat, from the hand's feed and its archived result. null when no line names a
  *  seat (the July-era nameless "★ wins" lines, or no result at all). */
 export function heroAwardCents(raw: unknown, heroSeat: number): number | null {
+  return awardCents(raw, heroSeat);
+}
+/** Every award of the hand, in cents (all seats) — null when no line names a seat. */
+export function allAwardCents(raw: unknown): number | null {
+  return awardCents(raw, null);
+}
+function awardCents(raw: unknown, seat: number | null): number | null {
   const r = raw as { feedLines?: unknown; result?: { text?: unknown } } | null;
   const lines = new Set<string>();
   for (const l of [...(Array.isArray(r?.feedLines) ? r!.feedLines : []), r?.result?.text]) {
@@ -142,7 +152,7 @@ export function heroAwardCents(raw: unknown, heroSeat: number): number | null {
     const m = l.match(/^★\s*Player (\d+) wins (?:main pot |side pot (?:\d+ )?)?\(\$([\d,]+(?:\.\d+)?)\)/);
     if (!m) continue;
     named = true;
-    if (Number(m[1]) === heroSeat) cents += Math.round(Number(m[2]!.replace(/,/g, "")) * 100);
+    if (seat === null || Number(m[1]) === seat) cents += Math.round(Number(m[2]!.replace(/,/g, "")) * 100);
   }
   return named ? cents : null;
 }

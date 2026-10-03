@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, startStacksOf, roundContributions } from "../utils/archivedHand/archivedHand";
-import { heroAwardCents, summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
+import { allAwardCents, heroAwardCents, summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
 import { autoExecOf } from "../utils/autoExec/autoExec";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { preflopDb } from "../services/preflopDb";
@@ -397,13 +397,23 @@ function bodyKey(r: HandRow): string | null {
  *  - showdown → hero stack difference to the NEXT hand in the same session
  *    (accepted only when the delta is plausible for the pot), else null.
  */
+/** The rake Ignition took from the hand's pot as the reader recorded it (wrapper ignition/ws.ts, curRake), or null. */
+export function recordedRake(raw: unknown): { bb: number; byStreet: Record<string, number> } | null {
+  const r = (raw as { rake?: { bb?: unknown; byStreet?: unknown } } | null)?.rake;
+  if (!r || typeof r.bb !== "number" || !Number.isFinite(r.bb)) return null;
+  return { bb: r.bb, byStreet: r.byStreet && typeof r.byStreet === "object" ? r.byStreet as Record<string, number> : {} };
+}
+
 export function computeNets(hands: Enriched[]): Map<number, number | null> {
   const nets = new Map<number, number | null>();
   for (let i = 0; i < hands.length; i++) {
     const h = hands[i]!;
     const s = h.summary;
     if (s.heroWonUncontested) {
-      nets.set(h.dbId, Math.round((s.potBb - s.heroInvestedBb) * 100) / 100);
+      // the pot less the rake Ignition took from it, when the reader recorded it (rows from 2026-10-03 on, and the
+      // backfilled ones); older rows are priced pre-rake and aggregateHands takes an estimate off
+      const rk = recordedRake(h.raw);
+      nets.set(h.dbId, Math.round((s.potBb - (rk?.bb ?? 0) - s.heroInvestedBb) * 100) / 100);
       continue;
     }
     if (s.heroFolded) {
@@ -901,7 +911,14 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
     const won = (h.raw as any)?.heroWon === true || rr?.heroWon === true
       || (rr?.winnerSeat != null && rr.winnerSeat === h.hand.heroSeatId)
       || new RegExp(`^★\\s*Player ${h.hand.heroSeatId}\\b`).test(resultText);
-    const r = rakePaidBb({ ...h.summary, wentToShowdown: h.summary.wentToShowdown || showdownByText, won }, bb, nets.get(h.dbId) ?? null);
+    // Ignition's own figure when the reader recorded it: all of it on a pot hero took alone, hero's share of the
+    // awards on a chop; it is already in the net either way (computeNets), so nothing is "unseen"
+    const rk = recordedRake(h.raw);
+    const award = rk ? heroAwardCents(h.raw, h.hand.heroSeatId) : null;
+    const allAwards = rk ? allAwardCents(h.raw) : null;
+    const r = rk
+      ? { bb: Math.round(rk.bb * (h.summary.heroWonUncontested ? 1 : award && allAwards ? award / allAwards : 0) * 100) / 100, unseen: false }
+      : rakePaidBb({ ...h.summary, wentToShowdown: h.summary.wentToShowdown || showdownByText, won }, bb, nets.get(h.dbId) ?? null);
     if (r.bb > 0) { rakedHands++; rakeBb += r.bb; if (r.unseen) rakeUnseenBb += r.bb; if (bb != null) rakeCents += Math.round(r.bb * bb * 100); }
   }
   rakeBb = Math.round(rakeBb * 100) / 100; rakeUnseenBb = Math.round(rakeUnseenBb * 100) / 100;
@@ -1165,6 +1182,8 @@ app.get("/hand/:dbId", async (c) => {
     // his winnings — hand 4921874909's 80bb BTN as 123.7); startStacksOf = the wrapper's startStacks, else rebuilt
     dealtStacks: startStacksOf(e.hand),
     feedLines: Array.isArray(e.raw.feedLines) ? e.raw.feedLines : [],
+    // Ignition's own rake (the reader's CO_CHIPTABLE_INFO curRake), bb: { bb: final, byStreet: as each street was entered }
+    rake: recordedRake(e.raw),
     // did auto-execute play the hand, and how many presses it took (utils/autoExec)
     autoExec: autoExecOf(e.raw),
     discrepancies: e.discrepancies ?? [],

@@ -49,9 +49,11 @@ const UPDATE = process.env.GOLDEN_UPDATE === "1";
  *  2026-09-25: /state `tableFrame` — our table's frame in the client (the pinned tag, the tags open, drawn or not), read
  *  off capture fields no recording has; verified on its own in test/unit/table-frame.test.ts.
  *  2026-09-26: S.ws.frames — the hand's frames kept for the protocol line (ignition/wsLine.ts); what /hand builds from
- *  them is compared here like any other line, the list itself is bookkeeping (test/unit/ws-line-backtest.test.ts). */
+ *  them is compared here like any other line, the list itself is bookkeeping (test/unit/ws-line-backtest.test.ts).
+ *  2026-10-03: Ignition's rake (CO_CHIPTABLE_INFO curRake) — S.ws.rakeCents / rakeByStreet, /hand `rake` and
+ *  currentNode `potRake` — verified on its own against hand 4922314918's frames in test/unit/ws-rake.test.ts. */
 const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale",
-                                "tableFrame", "frames", "frameFilter"]);
+                                "tableFrame", "frames", "frameFilter", "rakeCents", "rakeByStreet", "rake", "potRake"]);
 /** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
  *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
  *  nothing else here (the pick key never counts one: relay.ts), verified on its own in test/unit/post-in.test.ts
