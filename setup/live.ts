@@ -30,12 +30,14 @@ const JSON_OUT = argv.includes("--json");
 const waitAt = argv.indexOf("--wait");
 const WAIT_S = waitAt < 0 ? 0 : /^\d+$/.test(argv[waitAt + 1] ?? "") ? Number(argv[waitAt + 1]) : 120;
 
-// the install's ports: PORT_OFFSET lives in config/local.env (config/env.ps1 hands it to the services)
-if (!process.env.PORT_OFFSET) {
+// what the services get from config/local.env through config/env.ps1, this script reads itself: the install's ports
+// (PORT_OFFSET) and where the chart factory's API is, if this machine runs one (FACTORY_API_URL)
+for (const key of ["PORT_OFFSET", "FACTORY_API_URL"]) {
+  if (process.env[key]) continue;
   try {
-    const m = /^\s*PORT_OFFSET\s*=\s*"?(\d+)/m.exec(readFileSync(join(ROOT, "config", "local.env"), "utf8"));
-    if (m) process.env.PORT_OFFSET = m[1];
-  } catch { /* no local.env: the default ports */ }
+    const m = new RegExp(`^\\s*${key}\\s*=\\s*"?([^"#\\r\\n]+)`, "m").exec(readFileSync(join(ROOT, "config", "local.env"), "utf8"));
+    if (m && m[1]!.trim()) process.env[key] = m[1]!.trim();
+  } catch { /* no local.env: the defaults */ }
 }
 
 const git = (...args: string[]): string | null => {
