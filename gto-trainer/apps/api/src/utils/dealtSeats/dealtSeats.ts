@@ -69,7 +69,11 @@ export function lostPreflopFold(hand: ParsedHand, seat: number, pos: string): bo
  * With hero in the blinds the villains were one seat early too (a button open read as a CO open).
  *
  * The signature is exact: the seat labelled BTN was not dealt (dealtSeats: missing from liveSeats and no action). The
- * dealt seats are then named among the dealt — the blinds keep their names, the other dealt seats, in table order, take
+ * rule is Brady's, and wider than the button (2026-10-04): ANY undealt seat between hero and the button shifts hero
+ * later — so a labelled non-blind seat that was not dealt, whichever (a source that labels a sitting-out HJ), renames
+ * the dealt seats the same way. (The Ignition wrapper never labelled one: positionsAll orders the dealt seats plus the
+ * dealer, so only the dealer seat could be undealt — 141 hands in four days with a non-dealer seat out between hero and
+ * a live button, 0 mislabelled.) The dealt seats are then named among the dealt — the blinds keep their names, the other dealt seats, in table order, take
  * the LATEST names (five dealt: SB/BB/HJ/CO/BTN, the chart walk padding UTG as the fold exactly as at any five-handed
  * table; four: SB/BB/CO/BTN; three: SB/BB/BTN; two: SB/BB) — the names the fixed wrapper sends (ignition/hand.ts
  * buttonOrder). A dead small blind beside it keeps its BB-first names (the same rule: the blinds keep theirs). The
@@ -78,12 +82,13 @@ export function lostPreflopFold(hand: ParsedHand, seat: number, pos: string): bo
  */
 const NON_BLIND_6 = ["UTG", "HJ", "CO", "BTN"];
 const asSeatName = (p: string): string => { const u = String(p).trim().toUpperCase(); return u === "BU" || u === "D" || u === "DEALER" ? "BTN" : u; };
-export function relabelDeadButton(hand: ParsedHand): { hand: ParsedHand; note: string | null } {
+export function relabelUndealt(hand: ParsedHand): { hand: ParsedHand; note: string | null } {
   const positions = hand.positions ?? {};
   const dealt = dealtSeats(hand);
   const labelled = Object.keys(positions).map(Number);
   const undealt = labelled.filter((s) => !dealt.has(s));
-  if (!undealt.length || !undealt.every((s) => asSeatName(positions[s]!) === "BTN")) return { hand, note: null };
+  if (!undealt.length || !undealt.every((s) => NON_BLIND_6.includes(asSeatName(positions[s]!)))) return { hand, note: null };
+  const deadButton = undealt.some((s) => asSeatName(positions[s]!) === "BTN");
   const kept = labelled.filter((s) => dealt.has(s));
   const names = new Map(kept.map((s) => [s, asSeatName(positions[s]!)]));
   if ([...names.values()].some((p) => p !== "SB" && p !== "BB" && !NON_BLIND_6.includes(p))) return { hand, note: null };
@@ -99,7 +104,11 @@ export function relabelDeadButton(hand: ParsedHand): { hand: ParsedHand; note: s
     others.forEach((s, i) => { fixed[s] = late[i]!; });
   }
   const changed = kept.filter((s) => fixed[s] !== names.get(s)).map((s) => `seat ${s} ${positions[s]}→${fixed[s]}`);
-  const note = `DEAD BUTTON: the button seat (${undealt.map((s) => `seat ${s}`).join(", ")}) was not dealt (it sat out or was empty), so ` +
+  // an undealt seat no dealt seat's name depends on (one that acts before every non-blind seat dealt) changes nothing
+  if (!deadButton && !changed.length) return { hand, note: null };
+  const what = undealt.map((s) => `seat ${s} (${positions[s]})`).join(", ");
+  const note = (deadButton ? `DEAD BUTTON: the button seat — ${what} — was not dealt (it sat out or was empty), so `
+    : `SEAT NOT DEALT: ${what} was labelled but not dealt, so `) +
     `the ${kept.length} dealt seats were named among the dealt${changed.length ? ` — ${changed.join(", ")}` : ""}.`;
   return { hand: { ...hand, positions: fixed, seatRelabel: { from: { ...positions }, note } }, note };
 }

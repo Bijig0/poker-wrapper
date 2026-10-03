@@ -182,14 +182,14 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
   for (let i = deck.length - 1; i > 0; i--) { const j = rng.int(i + 1); [deck[i], deck[j]] = [deck[j]!, deck[i]!]; }
   const heroCards: [string, string] = [deck[0]!, deck[1]!];
   const board = deck.slice(2, 7);
-  // A DEAD BUTTON (2026-10-04, hands 4922296152 / 4922299303): when the seat sitting out is the BUTTON, the truth is the
-  // dealt seats named among the dealt (the dealt non-blind seats take the latest names: five dealt HJ/CO/BTN/SB/BB) —
-  // the BTN acts after the CO, so a missing button is not a padded fold behind hero. The export keeps the labels a
-  // wrapper before the fix sent (the undealt seat BTN, the rest one name early), so normalizeHand's renaming is what the
-  // case tests; the oracle and the action order read the truth. The undealt seat is no position at all here.
+  // A DEAD BUTTON, AND ANY UNDEALT SEAT (2026-10-04, hands 4922296152 / 4922299303; Brady: any undealt seat between hero
+  // and the button shifts hero later): the truth is the dealt seats named among the dealt (the dealt non-blind seats take
+  // the latest names: five dealt HJ/CO/BTN/SB/BB) — a seat missing AFTER hero is not a padded fold behind him. The export
+  // keeps the labels the source sent (the undealt seat labelled, the rest a name early), so normalizeHand's renaming is
+  // what the case tests; the oracle and the action order read the truth. The undealt seat is no position at all here.
   let exportPos: Record<number, string> | null = null;
   const undealtSeat = seats.find((x) => x.id === undealt);
-  if (undealtSeat?.pos === "BTN") {
+  if (undealtSeat) {
     exportPos = Object.fromEntries(seats.map((s) => [s.id, s.pos]));
     const others = seats.filter((s) => s.id !== undealt && s.pos !== "SB" && s.pos !== "BB")
       .sort((x, y) => POS[n]!.indexOf(x.pos) - POS[n]!.indexOf(y.pos));

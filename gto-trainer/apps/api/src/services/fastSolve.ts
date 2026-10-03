@@ -254,7 +254,7 @@ export const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => 
   // 4919260843/4919958663): a three-handed table with a sitting-out label is three-handed (the AI piece's). A DEAD
   // BUTTON is no longer "the six-seat tree with the BTN folded" (2026-10-04): the BTN acts AFTER the seat before it, so
   // that read hero's real button seat as the CO with a live button behind him (4922296152: a four-handed button open
-  // folded 99.6%). normalizeHand renames a dead button's dealt seats among the dealt (utils/dealtSeats.relabelDeadButton)
+  // folded 99.6%). normalizeHand renames a dead button's dealt seats among the dealt (utils/dealtSeats.relabelUndealt)
   // and the fixed wrapper sends them so: five dealt are HJ/CO/BTN/SB/BB, UTG padded as the fold like any five-handed table
   const dealt = dealtSeats(hand, heroPos).size;
   // FOUR-HANDED IS THE SAME GAME (2026-09-17, Brady): a short table is the six-seat tree with its early seats
@@ -4003,7 +4003,7 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
 }
 
 async function fastSolveEntry(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
-  // A DEAD BUTTON RENAMED FROM THE SEATS DEALT (2026-10-04, normalizeHand → utils/dealtSeats.relabelDeadButton): the hand
+  // A DEAD BUTTON RENAMED FROM THE SEATS DEALT (2026-10-04, normalizeHand → utils/dealtSeats.relabelUndealt): the hand
   // already carries the names among the dealt; a caller still holding hero's OLD label (the one the source sent) gets
   // the new one, and the answer says what was renamed. Not an approximation: a table dealt five with its button seat
   // empty is a table dealt five.

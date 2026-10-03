@@ -216,3 +216,55 @@ test("4922299303 from its own frames: seat 4 busted, left, a new player reserved
     expect([...h.positions.keys()].includes(4)).toBe(false);   // the dead button's seat carries no label
   });
 });
+
+/**
+ * BRADY'S RULE (2026-10-04): ANY undealt seat between hero and the button shifts hero later — not only the button.
+ * With a LIVE button the wrapper always had it right: positionsAll orders the dealt seats plus the dealer, so a
+ * non-dealer seat that sat out simply has no name (4921622118: seat 4 out, hero seat 3 → CO; 141 such hands in the
+ * archive's four days, 0 mislabelled). These pin that it stays so, for every set of undealt seats between hero and the
+ * button, with the button live and with it dead. The oracle names the seats the plain way: clockwise from the first dealt
+ * seat after the button seat, the last dealt seat is the BTN, the first two the blinds, the middle seats the latest of
+ * UTG/HJ/CO.
+ */
+function namesAmongDealt(dealt: number[], dealer: number): Map<number, string> {
+  const live = [...dealt].sort((a, b) => a - b);
+  const k = live.findIndex((s) => s > dealer);
+  const order = k < 0 ? live : [...live.slice(k), ...live.slice(0, k)];
+  const mids = ["UTG", "HJ", "CO"].slice(3 - (order.length - 3));
+  const names = order.length === 3 ? ["SB", "BB", "BTN"] : ["SB", "BB", ...mids, "BTN"];
+  return new Map(order.map((s, i) => [s, names[i]!]));
+}
+function subsets<T>(xs: T[]): T[][] {
+  return xs.reduce<T[][]>((acc, x) => [...acc, ...acc.map((s) => [...s, x])], [[]]);
+}
+
+test("4921622118: seat 4 out between hero (seat 3) and a live button (seat 5) — hero is the CO", () => {
+  resetState();
+  state([1, 2, 3, 5, 6], 5, 3, [[6, "post-sb", 2], [1, "post-bb", 5]]);
+  expect(sorted(positionsAll())).toBe(map({ 6: "SB", 1: "BB", 2: "HJ", 3: "CO", 5: "BTN" }));
+  expect(heroPosition()).toBe("CO");
+});
+
+test("every set of undealt seats between hero and the button shifts hero later — live button and dead button", () => {
+  resetState();
+  // a six-seat table, the button on seat 6, blinds 1 and 2: hero on each non-blind seat 3..5 (and the button seat when
+  // it is live); the seats strictly between hero and the button, and the button seat itself (dead), in every combination
+  let cases = 0;
+  for (const deadBtn of [false, true]) {
+    for (const hero of deadBtn ? [3, 4, 5] : [3, 4, 5, 6]) {
+      const between = [4, 5].filter((s) => s > hero);
+      for (const out of subsets(between)) {
+        const dealt = [1, 2, 3, 4, 5, 6].filter((s) => !out.includes(s) && !(deadBtn && s === 6));
+        if (!dealt.includes(hero)) continue;
+        state(dealt, 6, hero, [[1, "post-sb", 2], [2, "post-bb", 5]]);
+        const want = namesAmongDealt(dealt, 6);
+        expect(sorted(positionsAll())).toBe(J([...want].sort((a, b) => a[0] - b[0])));
+        // hero moves one name later for every undealt seat between him and the button (the dead button included)
+        const behind = dealt.filter((s) => s > hero).length;
+        expect(positionsAll().get(hero)).toBe(["BTN", "CO", "HJ", "UTG"][behind]);
+        cases++;
+      }
+    }
+  }
+  expect(cases).toBe(15);   // live: hero 3 ×4, 4 ×2, 5, 6 · dead: hero 3 ×4, 4 ×2, 5
+});

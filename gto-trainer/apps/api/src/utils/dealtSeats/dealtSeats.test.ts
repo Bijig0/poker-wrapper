@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { dealtSeats, dealtCount, namesFromRoster, relabelDeadButton } from "./dealtSeats";
+import { dealtSeats, dealtCount, namesFromRoster, relabelUndealt } from "./dealtSeats";
 import type { ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
 
 const a = (seatId: number, type: string, amount?: number, hero = false) =>
@@ -62,16 +62,16 @@ describe("namesFromRoster", () => {
   });
 });
 
-describe("relabelDeadButton", () => {
+describe("relabelUndealt", () => {
   it("the BTN label on an undealt seat: the dealt non-blind seats take the latest names, the label is dropped", () => {
-    const r = relabelDeadButton(hand({ heroSeatId: 3, liveSeats: [1, 2, 3, 5, 6], positions: { 5: "SB", 6: "BB", 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN" } }));
+    const r = relabelUndealt(hand({ heroSeatId: 3, liveSeats: [1, 2, 3, 5, 6], positions: { 5: "SB", 6: "BB", 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN" } }));
     expect(r.hand.positions).toEqual({ 5: "SB", 6: "BB", 1: "HJ", 2: "CO", 3: "BTN" });
     expect(r.note).toContain("seat 1 UTG→HJ, seat 2 HJ→CO, seat 3 CO→BTN");
     expect(r.hand.seatRelabel?.from[4]).toBe("BTN");
   });
   it("anything else is left as it is", () => {
     const h = hand();   // the CO label sat out, the BTN was dealt
-    expect(relabelDeadButton(h).hand).toBe(h);
-    expect(relabelDeadButton(h).note).toBeNull();
+    expect(relabelUndealt(h).hand).toBe(h);
+    expect(relabelUndealt(h).note).toBeNull();
   });
 });

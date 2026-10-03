@@ -19,7 +19,7 @@ import {
   type Street,
 } from "../parsePanelFeed/parsePanelFeed";
 import { foldPostIns } from "../../utils/foldPostIns/foldPostIns";
-import { relabelDeadButton } from "../../utils/dealtSeats/dealtSeats";
+import { relabelUndealt } from "../../utils/dealtSeats/dealtSeats";
 
 const STREETS: readonly Street[] = ["preflop", "flop", "turn", "river", "showdown"];
 const ACTION_TYPES: readonly ActionType[] = [
@@ -259,10 +259,10 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     },
     ended,
   };
-  // A DEAD BUTTON LABELLED AS A LIVE ONE (2026-10-04, utils/dealtSeats.relabelDeadButton): a wrapper before the fix — and
+  // A DEAD BUTTON LABELLED AS A LIVE ONE (2026-10-04, utils/dealtSeats.relabelUndealt): a wrapper before the fix — and
   // every hand archived by one — labelled the undealt button seat BTN and the dealt seats one name early. Renamed here,
   // once, so every reader of the hand (the answer, the warm-ups, the hand page, a replay) sees the seats as dealt.
-  const relabel = relabelDeadButton(hand);
+  const relabel = relabelUndealt(hand);
   if (relabel.note) warnings.push(relabel.note);
   return { hand: relabel.hand, warnings };
 };

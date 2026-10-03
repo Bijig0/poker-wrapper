@@ -2,7 +2,7 @@
  * IGNITION'S DEAD BUTTON (2026-10-04, hands 4922296152 / 4922299303 of 2026-10-03, table 2). Ignition dealt with the
  * button on a seat it did not deal; the wrapper labelled that seat BTN and the dealt seats one name early, so hero on
  * the real last seat was answered at the CO node of the 6-max charts — a node that assumes a live button behind him.
- * normalizeHand now renames the dealt seats among the dealt (utils/dealtSeats.relabelDeadButton) and the fixed wrapper
+ * normalizeHand now renames the dealt seats among the dealt (utils/dealtSeats.relabelUndealt) and the fixed wrapper
  * sends them so (with the hand's seat roster); #14 checks hero's label against the table's geometry. Pure: no charts —
  * the walk's input (the positional tokens) and the routing are what decide the node.
  */
@@ -43,7 +43,7 @@ describe("a dead button is renamed from the seats dealt (normalizeHand)", () => 
     const { hand, warnings } = h4922296152();
     expect(hand.positions).toEqual({ 5: "SB", 6: "BB", 1: "CO", 3: "BTN" });
     expect(hand.seatRelabel?.from).toEqual({ 5: "SB", 6: "BB", 1: "HJ", 3: "CO", 4: "BTN" });
-    expect(warnings.some((w) => /^DEAD BUTTON: the button seat \(seat 4\) was not dealt .* seat 1 HJ→CO, seat 3 CO→BTN/.test(w))).toBe(true);
+    expect(warnings.some((w) => /^DEAD BUTTON: the button seat — seat 4 \(BTN\) — was not dealt .* seat 1 HJ→CO, seat 3 CO→BTN/.test(w))).toBe(true);
     // the routing: four dealt is the 6-max charts' table (UTG/HJ padded as folds), raked as four ($3 = 1.5bb at NL200)
     expect(is6Handed(hand, "BTN")).toBe(true);
     expect(sixMaxRakeCapBb(hand, "BTN")).toBe(1.5);
@@ -98,16 +98,18 @@ describe("a dead button is renamed from the seats dealt (normalizeHand)", () => 
     });
     expect(hand.positions).toEqual({ 2: "SB", 5: "BB" });
   });
-  test("left alone: a dealt button, an undealt seat that is not the button, a nine-seat vocabulary, a seat that acted", () => {
+  test("left alone: a dealt button, an undealt seat BEFORE every dealt non-blind seat, a nine-seat vocabulary, a seat that acted", () => {
     const base = { handId: 7, clientHandId: "t", bbCents: 5, heroSeatId: 3, heroCards: ["Ah", "Kh"], board: [], street: "preflop",
       committed: {}, potByStreet: {}, currentNode: node(1), ended: false };
     const live = normalizeHand({ ...base, liveSeats: [1, 2, 3, 4, 5, 6], positions: { 5: "SB", 6: "BB", 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN" },
       actions: [act(5, "post-sb", 0.4), act(6, "post-bb", 1)] }).hand;
     expect(live.positions[3]).toBe("CO");
     expect(live.seatRelabel).toBeUndefined();
-    const sitter = normalizeHand({ ...base, liveSeats: [1, 3, 4, 5, 6], positions: { 5: "SB", 6: "BB", 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN" },
+    // the UTG label sat out: it acts before every dealt non-blind seat, so no name depends on it — left as it is
+    const first = normalizeHand({ ...base, liveSeats: [2, 3, 4, 5, 6], positions: { 5: "SB", 6: "BB", 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN" },
       actions: [act(5, "post-sb", 0.4), act(6, "post-bb", 1)] }).hand;
-    expect(sitter.positions[3]).toBe("CO");                 // the HJ label sat out: not this signature (dealtSeats drops it)
+    expect(first.positions[3]).toBe("CO");
+    expect(first.seatRelabel).toBeUndefined();
     const nine = normalizeHand({ ...base, liveSeats: [1, 2, 3, 5, 6], positions: { 5: "SB", 6: "BB", 1: "UTG1", 2: "LJ", 3: "CO", 4: "BTN" },
       actions: [act(5, "post-sb", 0.4), act(6, "post-bb", 1)] }).hand;
     expect(nine.positions[3]).toBe("CO");
@@ -115,6 +117,34 @@ describe("a dead button is renamed from the seats dealt (normalizeHand)", () => 
     const folded = normalizeHand({ ...base, liveSeats: [3, 5, 6], positions: { 5: "SB", 6: "BB", 3: "CO", 4: "BTN" },
       actions: [act(5, "post-sb", 0.4), act(6, "post-bb", 1), act(4, "fold")] }).hand;
     expect(folded.positions).toEqual({ 5: "SB", 6: "BB", 3: "CO", 4: "BTN" });
+  });
+});
+
+/**
+ * BRADY'S RULE (2026-10-04): ANY undealt seat between hero and the button shifts hero later. The Ignition wrapper never
+ * labels a non-dealer seat it did not deal (141 such hands with a live button in four days, all named right); a source
+ * that does is renamed the same way as a dead button.
+ */
+describe("an undealt seat between hero and the button, labelled by the source", () => {
+  const base = { handId: 8, clientHandId: "t", bbCents: 5, heroCards: ["Ah", "Kh"], board: [], street: "preflop",
+    committed: {}, potByStreet: {}, currentNode: node(1), ended: false, actions: [act(5, "post-sb", 0.4), act(6, "post-bb", 1)] };
+  const six = { 5: "SB", 6: "BB", 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN" };
+  test("a live button: each undealt seat behind hero moves him one name later", () => {
+    // hero UTG (seat 1); out: the HJ → hero HJ; the HJ and the CO → hero CO
+    let h = normalizeHand({ ...base, heroSeatId: 1, liveSeats: [1, 3, 4, 5, 6], positions: six }).hand;
+    expect(h.positions).toEqual({ 5: "SB", 6: "BB", 1: "HJ", 3: "CO", 4: "BTN" });
+    expect(h.seatRelabel?.note).toMatch(/^SEAT NOT DEALT: seat 2 \(HJ\) was labelled but not dealt/);
+    h = normalizeHand({ ...base, heroSeatId: 1, liveSeats: [1, 4, 5, 6], positions: six }).hand;
+    expect(h.positions).toEqual({ 5: "SB", 6: "BB", 1: "CO", 4: "BTN" });
+    // hero HJ (seat 2), the CO out → hero CO: UTG padded, seat 1 (HJ) first — no CO padded as a fold behind hero
+    h = normalizeHand({ ...base, heroSeatId: 2, liveSeats: [1, 2, 4, 5, 6], positions: six }).hand;
+    expect(h.positions[2]).toBe("CO");
+    expect(buildPreflopTokens(h, "CO")).toEqual(["F", "F"]);
+  });
+  test("with a dead button too: hero on the last dealt seat is the BTN", () => {
+    const h = normalizeHand({ ...base, heroSeatId: 2, liveSeats: [1, 2, 5, 6], positions: six }).hand;   // the CO and the BTN out
+    expect(h.positions).toEqual({ 5: "SB", 6: "BB", 1: "CO", 2: "BTN" });
+    expect(h.seatRelabel?.note).toMatch(/^DEAD BUTTON: the button seat — seat 3 \(CO\), seat 4 \(BTN\) — was not dealt/);
   });
 });
 

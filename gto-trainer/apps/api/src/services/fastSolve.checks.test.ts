@@ -162,7 +162,7 @@ describe("decisionChecks #14 on the three hands it failed", () => {
   }).hand!;
   it("4921651217 / 4922085772: a dead button, three dealt — the tree's BTN is hero's CO seat: pass", () => {
     // SINCE 2026-10-04 normalizeHand renames a dead button's dealt seats among the dealt (utils/dealtSeats
-    // .relabelDeadButton): hero's seat 2, labelled CO beside the undealt BTN, IS the button of a table dealt three — the
+    // .relabelUndealt): hero's seat 2, labelled CO beside the undealt BTN, IS the button of a table dealt three — the
     // name the AI tree gave him all along. The node and the label now agree outright, and the label's own check says
     // where the name came from.
     const h = deadButton("4921651217", { 1: 57.8, 2: 108.8, 6: 69.4 });
