@@ -112,6 +112,29 @@ export interface AiPreflopShape {
   anteBb?: number;
   /** THE TABLE'S OWN RAKE (siteRakeOf), when the site sends its terms; absent = Ignition's 5% / rakeCapBb, no flop no drop */
   siteRake?: SiteRake;
+  /** THE 250BB CAP (2026-10-03, PREFLOP_STACK_CAP_BB): present only when two seats were deeper than GTO Wizard's preflop
+   *  limit and every stack was clamped to it. `real`: the stacks the clamped seats really had (API position → bb). */
+  stackCap?: { cap: number; real: Record<string, number> };
+}
+
+/**
+ * GTO WIZARD'S PREFLOP LIMIT (2026-10-03, session_20261003_153908). GTO Wizard AI refuses a preflop tree whose
+ * EFFECTIVE stack is over 250bb: the tree and the solution are created (201), then every node, the root included,
+ * answers 422 VALIDATION_ERROR "Preflop: Only effective stacks up to 250bb are supported". Effective = the second-
+ * deepest seat: hand 4922315369 answered at BTN 213 / SB 126 / BB 367 (one deep seat), hands 4922315540 (BTN 369 /
+ * SB 255.5 / BB 77) and 4922316453 (CO 256 / BB 254) did not, and hero got no pick on either. Brady, 2026-10-03: cap the
+ * preflop tree at 250bb while hands are still dealt that deep — accurate enough for the orbit until the wrapper
+ * re-seats. Postflop has no such limit (260bb and 400bb heads-up, 260bb 3-way: all answered) and keeps the table's
+ * stacks. One deep seat alone is left exactly as it was: its trees and stored solves keep their keys.
+ */
+export const PREFLOP_STACK_CAP_BB = 250;
+
+/** The answer's note for a capped tree: "stacks over 250bb capped … BTN 369→250, SB 255.5→250" ("" when not capped). */
+export function stackCapNote(shape: Pick<AiPreflopShape, "stackCap">): string {
+  const c = shape.stackCap;
+  if (!c) return "";
+  const list = Object.entries(c.real).map(([p, v]) => `${p} ${v}→${c.cap}`).join(", ");
+  return `stacks over ${c.cap}bb capped at ${c.cap}bb for the preflop tree (GTO Wizard's limit): ${list}`;
 }
 
 /** A tree's rake when the site states its own terms: percent, cap in bb, and whether a pot that ends preflop pays. */
@@ -163,6 +186,12 @@ export const CAPTURE_FAULT = "capture-fault" as const;
  *  again after a tree build, a solution and a string of polls: 36 s and ~25 requests on a probe for a spot that was
  *  never hero's, holding the poller's slot while hero's real decision timed out. fastSolve reads this kind and stops. */
 export const LINE_NOT_HERO = "line-not-hero" as const;
+/** The refusal kind for a VALIDATION_ERROR that is about the TREE, not the line (2026-10-03): GTO Wizard's own detail
+ *  is the reason. Not a capture fault — fastSolve goes on to the last resort. */
+export const TREE_REFUSED = "tree-refused" as const;
+/** GTO Wizard's own words from a refusal read back as "422: {…"detail": "…"…}" (else the text as it came). */
+const refusalDetail = (error: string): string =>
+  /"detail"\s*:\s*"([^"]+)"/.exec(error)?.[1] ?? error.replace(/^\d{3}:\s*/, "").slice(0, 160);
 export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string };
 
 const round5 = (x: number) => Math.round(x * 2) / 2;
@@ -262,6 +291,20 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
     stacks[apiOf[p]!] = Math.min(999, Math.max(1, allIn ? Math.round(exact * 100) / 100 : round5(exact)));
   }
   if (deadSb) stacks.SB = DEAD_SB_GHOST;
+  // THE 250BB CAP (PREFLOP_STACK_CAP_BB): only when the SECOND-deepest real seat is past it — that is GTO Wizard's
+  // effective stack. Every stack over the cap is clamped to it; the real figures ride on the shape for the note and for
+  // lineOf (a raise at or past a clamped stack is that seat's all-in). The dead-SB ghost is not a seat here.
+  let stackCap: AiPreflopShape["stackCap"];
+  const realStacks = ordered.map((p) => apiOf[p]!).filter((p) => !(deadSb && p === "SB")).map((p) => stacks[p]!).sort((a, b) => b - a);
+  if (realStacks.length >= 2 && realStacks[1]! > PREFLOP_STACK_CAP_BB) {
+    const real: Record<string, number> = {};
+    for (const p of set) {
+      if (deadSb && p === "SB") continue;
+      const v = stacks[p];
+      if (v != null && v > PREFLOP_STACK_CAP_BB) { real[p] = v; stacks[p] = PREFLOP_STACK_CAP_BB; }
+    }
+    stackCap = { cap: PREFLOP_STACK_CAP_BB, real };
+  }
   // the cap is by players DEALT — the ghost was not dealt in
   // the LAST RESORT reduces the field to two seats but the table still dealt six: the cap follows the table
   const dealtN = rakeSeats ?? (n - (deadSb ? 1 : 0));
@@ -270,7 +313,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   const anteBb = hand.anteBb != null && hand.anteBb > 0 ? Math.round(hand.anteBb * 1000) / 1000 : 0;
   const siteRake = siteRakeOf(hand, dealtN);
   return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null,
-    ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}) };
+    ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}), ...(stackCap ? { stackCap } : {}) };
 }
 
 /**
@@ -319,6 +362,14 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   let ghostFolded = false;
   const ghostDue = () => ghostAt >= 0 && !ghostFolded && tokens.length === ghostAt;
   let stoppedAt: string | null = null;
+  // A RAISE PAST A CAPPED TREE STACK IS THAT SEAT'S ALL-IN (2026-10-03, PREFLOP_STACK_CAP_BB): the SB's real 255.5bb
+  // shove in a tree where he holds 250 would ask GTO Wizard for more than his stack ("Incorrect actions", the
+  // 2026-09-30 class). Only in a capped tree — or one rebuilt from a capped tree's logged stacks (dealtFromTreeId:
+  // a seat at exactly the cap) — so every other line is exactly what it was.
+  const capped = (api: string, t: number): number => {
+    const top = shape.stacks[api];
+    return top != null && (shape.stackCap || top === PREFLOP_STACK_CAP_BB) && t >= top ? top : t;
+  };
   for (let round = 0; round < 4 && cursor < acted.length; round++) {
     for (const api of order) {
       if (cursor >= acted.length) { if (round === 0) stoppedAt = api; break; }
@@ -329,7 +380,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
         if (a.type === "fold") tokens.push("F");
         else if (a.type === "check") tokens.push("X");
         else if (a.type === "call" || calls.has(a)) tokens.push("C");   // an all-in for no more than the price is a call
-        else if (a.type === "raise" || a.type === "bet" || a.type === "all-in") { const t = a.amount ?? 0; levels.push(t); tokens.push(`R${num(t)}`); }
+        else if (a.type === "raise" || a.type === "bet" || a.type === "all-in") { const t = capped(api, a.amount ?? 0); levels.push(t); tokens.push(`R${num(t)}`); }
         else tokens.push("C");
         cursor++;
       } else if (round === 0 && api !== heroApi && !tokens.length && api === "SB") {
@@ -969,7 +1020,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       const renamed = !("error" in w) && w.changed.length > 0;
       const notOffered = "error" in w && /is not offered/.test(w.error);
       // an action the tree does not offer may be a line that cannot happen at all, and the cloud's own refusal says
-      // which (VALIDATION_ERROR is a capture fault, final): it gets one poll's grace before the walk's word is taken
+      // which ("Incorrect actions" is a capture fault, final): it gets one poll's grace before the walk's word is taken
       const late = notOffered ? await Promise.race([direct, new Promise<null>((res) => setTimeout(() => res(null), POLL_MS))]) : null;
       if (late) node = late;
       else if (renamed || notOffered) {
@@ -985,9 +1036,17 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   // walked below; 400 VALIDATION_ERROR "Incorrect actions" means the sequence cannot happen in any tree — a
   // capture padded past a terminal or otherwise corrupt. Say so, as a capture fault, and let the caller stop:
   // walking it would fail the same way and the last resort would only re-solve the same corrupt line heads-up.
-  if ("error" in node && /VALIDATION_ERROR|Incorrect actions/i.test(node.error)) {
+  // ONLY "Incorrect actions" IS ABOUT THE LINE (2026-10-03). GTO Wizard sends VALIDATION_ERROR for refusals of the TREE
+  // too — "Preflop: Only effective stacks up to 250bb are supported" (session_20261003_153908), "Engine validation
+  // failed" (a rake cap with too many decimals) — and reading those as a capture fault stopped fastSolve before the
+  // last resort with a reason that blamed the reader. Any other VALIDATION_ERROR says what GTO Wizard itself said.
+  if ("error" in node && /Incorrect actions/i.test(node.error)) {
     return { ok: false, kind: CAPTURE_FAULT, line,
       reason: `GTO Wizard AI preflop: the captured line '${line || "root"}' is not a legal betting sequence (VALIDATION_ERROR)` };
+  }
+  if ("error" in node && /VALIDATION_ERROR/i.test(node.error)) {
+    return { ok: false, kind: TREE_REFUSED, line,
+      reason: `GTO Wizard AI preflop: GTO Wizard refused the tree: ${refusalDetail(node.error)} (line '${line || "root"}')` };
   }
   if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
     // the tree has this line, just not under the sizes we named — walk it and find out
@@ -1068,7 +1127,8 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     solId: usedSol, usedLine, solveSecs: secs, cached: node.cached, ...(stored ? { stored: true } : {}), shape,
     note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : node.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
-      + (fittedFolds.length ? ` LINE FITTED TO THE TREE: GTO Wizard's tree holds one limper, so ${fittedFolds.join(" and ")}'s limp/call was read as a FOLD (the earliest one who does not raise later) — hero faces one player fewer than at the table${deadNote ? `, with ${deadNote}` : ""}.` : ""),
+      + (fittedFolds.length ? ` LINE FITTED TO THE TREE: GTO Wizard's tree holds one limper, so ${fittedFolds.join(" and ")}'s limp/call was read as a FOLD (the earliest one who does not raise later) — hero faces one player fewer than at the table${deadNote ? `, with ${deadNote}` : ""}.` : "")
+      + (shape.stackCap ? ` ${stackCapNote(shape)}.` : ""),
   };
 }
 
@@ -1514,7 +1574,7 @@ export async function walkArrivalRanges(
     ok: true, piece: "gtow-ai-preflop", id, ranges, tokens, seatOrder: shape.positions,
     note: `flop-entering ranges walked from the GTO Wizard AI preflop tree that answered preflop (${shape.n}-handed, ` +
       `${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")}, rake 5% cap ${shape.rakeCapBb}bb; line ${tokens.join("-") || "root"})` +
-      (shape.deadSb ? " · dead SB approximated" : ""),
+      (shape.deadSb ? " · dead SB approximated" : "") + (shape.stackCap ? ` · ${stackCapNote(shape)}` : ""),
   };
 }
 
