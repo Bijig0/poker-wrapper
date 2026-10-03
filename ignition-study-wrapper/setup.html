@@ -195,6 +195,12 @@
       <div class="field ign-only"><span class="k">Sat out</span>
         <div class="seg" id="autoSitBackIn"><button data-v="1" class="plain">Sit back in</button><button data-v="0" class="plain">Stay out</button></div>
         <span class="help">A few timed-out decisions and the table sits you out. With this on, the wrapper presses <b>I AM BACK</b> for you (after 2 s, up to 3 tries per sit-out), logged as a <b>sit-back-in</b> session event. It leaves you out while the connection guard has sat you out for a slow link. If you sit out on purpose, choose Stay out — it cannot tell your sit-out from the table's.</span></div>
+      <div class="field ign-only"><span class="k">Deep stack</span>
+        <div class="seg" id="stackReset"><button data-v="0" class="plain">Off</button><button data-v="1" class="plain">Sit out and re-seat</button></div>
+        <div class="row" id="stack-reset-row" style="display:none;margin-top:6px"><span class="sub">at</span>
+          <input type="number" id="stack-reset-bb" min="101" max="10000" value="250" style="width:70px"> <span class="sub">bb, wait</span>
+          <input type="number" id="stack-reset-wait" min="0" max="3600" value="60" style="width:60px"> <span class="sub">s</span></div>
+        <span class="help">GTO Wizard's preflop solver stops at 250 bb effective (deeper trees are capped at 250 bb). With this on, once your stack reaches the figure the wrapper ticks <b>Sit out next big blind</b>, leaves the table once you are sat out, waits, and takes a fresh seat at this session's format with the normal buy-in — same session, same panel. <b>Not yet checked on a live table: keep it Off for real money until it has been tried on practice tables.</b></span></div>
       <div class="field no-cgg" style="grid-column: 1 / -1"><span class="k">GTO Wizard accounts</span>
         <div id="gtow-allow" class="row" style="flex-wrap:wrap;gap:8px 18px"><span class="sub">reading the account registry…</span></div>
         <span class="help">Which registered accounts this session may spend. All ticked = no restriction (the default). Untick the Ultra to keep its budget for another table, or an account that is walled. Each shows its light and what it has used in the last hour against the 2,250 limit — a trip walls the account for about a day. Register and name accounts on the dashboard's GTO Wizard tab.</span></div>
@@ -522,6 +528,10 @@ function fillSettings() {
   seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
   seg("autoFoldNoAnswer", cfg.autoFoldNoAnswer ? 1 : 0);
   seg("autoSitBackIn", cfg.autoSitBackIn ? 1 : 0);
+  seg("stackReset", cfg.stackResetBb > 0 ? 1 : 0);
+  $("stack-reset-row").style.display = cfg.stackResetBb > 0 ? "" : "none";
+  if (cfg.stackResetBb > 0) $("stack-reset-bb").value = cfg.stackResetBb;
+  if (cfg.stackResetWaitS != null) $("stack-reset-wait").value = cfg.stackResetWaitS;
   // an ON-DEMAND strategy (2026-09-30) never auto-executes: the switch gives way to a statement of that
   const od = !!cfg.onDemand;
   if (od) cfg.autoExecute = false;
@@ -565,6 +575,12 @@ function readSettings() {
   cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoFoldNoAnswer = cfg.autoExecute && $("autoFoldNoAnswer").querySelector("button.on")?.dataset.v === "1";
   cfg.autoSitBackIn = $("autoSitBackIn").querySelector("button.on")?.dataset.v === "1";
+  // the deep-stack reset: sent only when on (absent = off — the wrapper adds no default)
+  if ($("stackReset").querySelector("button.on")?.dataset.v === "1") {
+    cfg.stackResetBb = Number($("stack-reset-bb").value) || 250;
+    const w = Number($("stack-reset-wait").value);
+    cfg.stackResetWaitS = Number.isFinite(w) && w >= 0 ? w : 60;
+  } else { delete cfg.stackResetBb; delete cfg.stackResetWaitS; }
   cfg.autoRealMoney = cfg.autoExecute && $("autoRealMoney").checked;
   cfg.clearCache = $("clearCache").checked;
   // the GTO Wizard allowlist: null (every account) unless at least one registered account is unticked
@@ -608,12 +624,12 @@ $("tables").querySelectorAll("button").forEach((b) => b.onclick = () => {
   schedulePreflight();
 });
 
-["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp", "autoSitBackIn"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
+["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp", "autoSitBackIn", "stackReset"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
   if (!cfg) return;
   $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
   readSettings(); fillSettings(); schedulePreflight();
 }));
-["budget-hands", "budget-min", "auto-min", "auto-hands"].forEach((id) => $(id).onchange = () => { if (cfg) { readSettings(); schedulePreflight(); } });
+["budget-hands", "budget-min", "auto-min", "auto-hands", "stack-reset-bb", "stack-reset-wait"].forEach((id) => $(id).onchange = () => { if (cfg) { readSettings(); schedulePreflight(); } });
 $("auto-budget-max").onclick = () => {
   $("auto-min").value = $("auto-min").max;   // the wrapper's own ceiling (relay.ts setAuto) — kept in one place, here
   $("auto-hands").value = $("auto-hands").max;

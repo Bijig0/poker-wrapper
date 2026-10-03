@@ -14,6 +14,7 @@
  * raise_to, _cdp_seq, TABLES.registry, TABLES.live_peers). Every internal call goes through `seams`, so replacing
  * one here replaces it everywhere, as it did in Python.
  */
+import { time } from "./clock";
 import { C } from "./config";
 import { truthy } from "./py";
 import { SessionStore } from "./sessions";
@@ -79,6 +80,34 @@ export function freshStudy(): Record<string, any> {
     // asks (relay.requestSolve), and auto-execute cannot arm. `solveRequest` is that press: the decision it was made
     // on (hand, street, the line's length) and when.
     onDemand: false, solveRequest: null,
+  };
+}
+
+/** The deep-stack reset's steps (stackReset.ts). */
+export type StackResetState = "idle" | "armed" | "sat-out" | "leaving" | "waiting" | "reseating";
+/** How long a sibling's word that its socket is about to close on purpose holds (stackReset.ts peerLeaving). */
+export const PEER_LEAVING_S = 600;
+
+/** THE DEEP-STACK RESET (stackReset.ts), one table's state plus — at the leader — the notes of the tables resetting.
+ *  Its own top-level key: never on liveStatus or the light /state, which the reader golden compares key by key. */
+export function freshStackReset() {
+  return {
+    /** the session's setting (session.ts applySessionConfig): hero's stack in bb that starts a reset, 0 = off; the
+     *  wait between leaving one table and the next seat */
+    bb: 0, waitS: 60,
+    state: "idle" as StackResetState,
+    since: 0.0,
+    /** a slow step (the press, the leader, the leave) is running in the background: the machine waits for it */
+    busy: false,
+    armedHand: 0, stackBb: null as number | null,
+    ticks: 0, clicked: false, needTick: false, lastTick: null as Record<string, any> | null, bbHands: [] as number[],
+    leftAt: 0.0, notBefore: 0.0, oldRid: null as string | null, oldTag: null as string | null,
+    abortedAt: null as number | null, aborts: 0,
+    /** sockets the sibling tables said are about to close on purpose (rid → when told) */
+    peerLeaving: new Map<string, number>(),
+    /** THE LEADER'S NOTES (session.ts noteStackReset): one per table resetting — `matched` once the seat count fell for
+     *  it (honourClosedTables), `notBefore` when its new seat is due */
+    notes: [] as { slot: number | null; at: number; notBefore: number; left: boolean; matched: boolean }[],
   };
 }
 
@@ -209,6 +238,7 @@ function fresh() {
      *  end (session.ts maybeEndForNetDrop) and hero is never sat back in; `handled` once it has been ended (or passed on). */
     net: { last: null as any, bad: 0, good: 0, sitout: null as any, history: [] as any[],
            drop: null as null | { sid: string; at: number; why: string; via: string; handled: boolean } },
+    stackReset: freshStackReset(),
     shadow: { hand: null as number | null, rc: null as any, seq: 0, done: new Map<number, any>(), agree: 0, differ: 0, last: null as any },
     // the screen checking the protocol's line (ignition/shadow.ts screenPotCheck): consecutive disagreeing ticks, and why
     screenCheck: { hand: null as number | null, bad: 0, since: null as number | null, why: null as string | null },
@@ -255,6 +285,20 @@ export function pressBlocked(): string | null {
 export function inAHand(): boolean {
   if (S.ws.handOver || S.ws.heroFolded) return false;
   return truthy(S.ws.heroCards) || S.liveStatus.hero === "in-hand";
+}
+
+/** Our own socket `rid` closing is the deep-stack reset's leave, not a failure (ignition/reader.ts noteSocketClosed):
+ *  the leave can outlast LEAVE_GRACE_S. Only the socket we left; before a new table binds when none was bound. */
+export function stackResetLeaving(rid: string): boolean {
+  const R = S.stackReset;
+  if (R.state !== "leaving" && R.state !== "waiting" && R.state !== "reseating") return false;
+  return R.oldRid !== null ? R.oldRid === rid : R.state !== "reseating";
+}
+
+/** A sibling table said this socket of the page is about to close on purpose (stackReset.ts peerLeaving). */
+export function peerIsLeaving(rid: string): boolean {
+  const at = S.stackReset.peerLeaving.get(rid);
+  return at !== undefined && time() - at <= PEER_LEAVING_S;
 }
 
 /** What a relayed press may be told beyond its label. `cards` = the hole cards the decision was made for: the press

@@ -22,7 +22,7 @@ import { feedAdd, log } from "./feed";
 import { fetchBytes, fetchJson, getJson, postJson } from "./http";
 import { pyFloat, pyInt, pyRepr, pyRound, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
-import { CGG, CP, S, TupleSet, inAHand, isCgg, isClientSite, isCp, seams } from "./state";
+import { CGG, CP, S, TupleSet, freshStackReset, inAHand, isCgg, isClientSite, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import * as faketable from "./faketable";
 import { SITE as CP_SITE, FORMATS as CP_FORMATS } from "./sites/coinpoker";
@@ -168,8 +168,20 @@ export function honourClosedTables(cfg: Record<string, any>, seatedNow: number):
   let want = tablesWanted(cfg);
   const reached = S.seating.reached || 0;
   if (!reached || seatedNow >= reached) return want;
-  const gone = reached - seatedNow;
+  let gone = reached - seatedNow;
   S.seating.reached = seatedNow;
+  // A DEEP-STACK RESET FIRST (stackReset.ts): the table told us before it left — a re-seat after its wait, never a
+  // close by hand, and the wanted count stays
+  const resets = stackResetNotes().filter((n) => !n.matched);
+  const byReset = Math.min(gone, resets.length);
+  for (const n of resets.slice(0, byReset)) n.matched = true;
+  if (byReset) {
+    gone -= byReset;
+    feedAdd(`${byReset === 1 ? "A table" : `${byReset} tables`} left for a deep-stack reset — a new seat after the wait (the session still wants ${want})`);
+    log(`[tables] seated count fell to ${seatedNow}: ${byReset} left for a deep-stack reset — re-seating after the wait, wanted stays ${want}`);
+    if (S.session.id) S.sessions.event(S.session.id, "table-reseat", { byStackReset: byReset, seatedNow, want });
+    if (!gone) return want;
+  }
   const pending = siteClosesPending();
   const bySite = Math.min(gone, pending.length);
   S.siteClosed.pending = pending.slice(bySite);
@@ -209,6 +221,85 @@ export function noteSiteClosePending(slotN: number | null, why: string): void {
   }
   siteClosesPending().push(time());
   log(`[tables] the site closed table ${pyStr(slotN ?? 1)} (${why}) — the next seat-count drop is not a close by hand; a new table is seated`);
+}
+
+// ---- the deep-stack reset, the leader's half (stackReset.ts is each table's) ----------------------------------
+/** How long the leave may take before a pending note's new seat is due anyway (F.leave can outlast LEAVE_GRACE_S). */
+export const STACK_RESET_LEAVE_S = 120;
+/** A note is forgotten this long after it was taken (a table that never came back is not waited for for ever). */
+export const STACK_RESET_NOTE_S = 1800;
+
+/** The leader's stack-reset notes, stale ones dropped. */
+function stackResetNotes(): typeof S.stackReset.notes {
+  const now = time();
+  S.stackReset.notes = S.stackReset.notes.filter((n) => now - n.at <= STACK_RESET_NOTE_S);
+  return S.stackReset.notes;
+}
+
+/** Tables whose seat is gone for a stack reset and not due yet. */
+export function stackResetDeferred(): number {
+  const now = time();
+  return stackResetNotes().filter((n) => n.matched && n.notBefore > now).length;
+}
+
+/** How many tables the router seats NOW: the wanted count less the resets still in their wait. */
+export function stackResetSeatWant(want: number): number {
+  return Math.max(1, want - stackResetDeferred());
+}
+
+/** A seat was taken after a reset's wait: that note is spent. */
+function spendStackResetNote(): void {
+  const now = time();
+  const notes = stackResetNotes();
+  const i = notes.findIndex((n) => n.matched && n.notBefore <= now);
+  if (i >= 0) notes.splice(i, 1);
+}
+
+/** THE ONLY TABLE (no seat count to fall): a reset noted → "wait" while it is not due, "go" once it is (the note is
+ *  spent), null when there is none. routeSession's single-table branch. */
+export function stackResetRoute(): "wait" | "go" | null {
+  const notes = stackResetNotes();
+  const n = notes[0];
+  if (!n) return null;
+  if (n.notBefore > time()) return "wait";
+  notes.shift();
+  return "go";
+}
+
+/**
+ * POST /session/stack-reset (and the leader's own table, in-process): a table is resetting its deep stack
+ * (stackReset.ts). `pending` — hero is sat out and about to leave: the seat-count drop that follows is a re-seat after
+ * the wait, not a close by hand (honourClosedTables); `left` — the table is gone, its new seat is due at `notBefore`;
+ * `aborted` — given up (a note the count never fell for is dropped; one it fell for is seated now).
+ */
+export function noteStackReset(body: Record<string, any>): [number, Record<string, any>] {
+  const sid = String(body.sid || "");
+  if (!S.session.id || (sid && sid !== S.session.id)) return [200, { ok: false, noted: false, error: "not this session (already ended?)" }];
+  if (!TABLES.isLeader()) return [409, { ok: false, error: `table ${pyStr(TABLES.slot())} is not the leader — seating is table ${TABLES.LEADER}'s` }];
+  const slot = body.slot === undefined || body.slot === null ? null : pyInt(body.slot);
+  const phase = String(body.phase || "");
+  const now = time();
+  const notes = stackResetNotes();
+  const mine = () => [...notes].reverse().find((n) => n.slot === slot && !n.left) ?? null;
+  const due = Number(body.notBefore);
+  if (phase === "pending") {
+    const w = Number(body.waitS);
+    const waitS = body.waitS !== undefined && Number.isFinite(w) ? w : S.stackReset.waitS;
+    notes.push({ slot, at: now, notBefore: now + STACK_RESET_LEAVE_S + waitS, left: false, matched: false });
+    log(`[tables] table ${pyStr(slot ?? 1)} is leaving for a deep-stack reset — its seat is taken again after the wait`);
+  } else if (phase === "left") {
+    const at = body.notBefore !== undefined && Number.isFinite(due) ? due : now + S.stackReset.waitS;
+    const n = mine();
+    if (n) Object.assign(n, { left: true, notBefore: at });
+    else notes.push({ slot, at: now, notBefore: at, left: true, matched: false });
+    log(`[tables] table ${pyStr(slot ?? 1)} left for a deep-stack reset — its new seat in ${pyRound(Math.max(0, at - now), 0)} s`);
+  } else if (phase === "aborted") {
+    const n = mine();
+    if (n && n.matched) n.notBefore = now;                 // its seat is gone already: seat it now
+    else if (n) notes.splice(notes.indexOf(n), 1);
+    log(`[tables] table ${pyStr(slot ?? 1)} gave its deep-stack reset up`);
+  } else return [400, { ok: false, error: `unknown phase ${pyRepr(phase)}` }];
+  return [200, { ok: true, noted: true, notes: notes.length, deferred: stackResetDeferred() }];
 }
 
 type SeatFns = { count: () => Promise<number[]>; toLobby: () => Promise<Record<string, any>>; goto: () => Promise<Record<string, any>> };
@@ -345,7 +436,10 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
       const want = leader ? honourClosedTables(cfg, seatedNow) : tablesWanted(cfg);
       routerSeats(seatedNow, want, leader);
       if (want > 1 && leader) {
-        const step = await seatNextTable(fid!, cfg, want);
+        // a table away for a deep-stack reset is seated again only after its wait (stackResetSeatWant)
+        const seatWant = stackResetSeatWant(want);
+        const step = await seatNextTable(fid!, cfg, seatWant);
+        if (step.ok) spendStackResetNote();
         routerSeats(step.have || seatedNow, want, leader);
         if (step.done) {
           S.seating.reached = Math.max(S.seating.reached || 0, step.have || want);
@@ -385,7 +479,18 @@ async function routeSession(cfg: Record<string, any>, sid: string): Promise<void
       await sleep(5);
       continue;
     }
-    if (["done", "off-format", "left"].includes(S.router.state) && siteClosesPending().length) {
+    // A DEEP-STACK RESET ON THE ONLY TABLE (stackReset.ts): the table was left on purpose — back to the format once its
+    // wait is over, not "left"
+    const reset = ["done", "off-format", "left", "stack-reset"].includes(S.router.state) ? stackResetRoute() : null;
+    if (reset === "wait") {
+      if (S.router.state !== "stack-reset") routerSet("stack-reset", `deep-stack reset — back to ${f.name} after the wait`, []);
+      await sleep(1);
+      continue;
+    }
+    if (reset === "go") {
+      routerSet("routing", `deep-stack reset — going back to ${f.name}`, []);
+      S.sessions.event(sid, "table-reseat", { byStackReset: 1, seatedNow: 0, want: tablesWanted(cfg) });
+    } else if (["done", "off-format", "left"].includes(S.router.state) && siteClosesPending().length) {
       // THE SITE CLOSED THE TABLE WE WERE ON (the last one open): ask for the format again — there is no seat count to
       // fall here, so the note is spent now rather than by honourClosedTables
       S.siteClosed.pending.shift();
@@ -635,6 +740,14 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
     topUpDue: null, topUpTrigger: null, stackStable: { text: null, ticks: 0 },
     autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
   });
+  // THE DEEP-STACK RESET (stackReset.ts): off unless the session declares it — no stackResetBb (every session before
+  // 2026-10-03, and the setup page's "Deep stack: Off") or 0 = off; the wait defaults to 60 s. A session starts clean.
+  {
+    const bb = Number(cfg.stackResetBb), w = Number(cfg.stackResetWaitS);
+    Object.assign(S.stackReset, freshStackReset(), {
+      bb: cfg.stackResetBb !== undefined && cfg.stackResetBb !== null && Number.isFinite(bb) && bb > 0 ? bb : 0,
+      waitS: cfg.stackResetWaitS !== undefined && cfg.stackResetWaitS !== null && Number.isFinite(w) && w >= 0 ? w : 60 });
+  }
   Object.assign(S.topupKpi, { hand: null, hands: 0, short: 0, worstBb: 0.0 });
   S.topupPanel.open = false;
   S.topupAbort = false;
