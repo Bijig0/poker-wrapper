@@ -143,6 +143,9 @@ export interface Hand {
   postIn?: { seat: number; amount: number } | null;
   /** a seat that holds a position label but was not dealt (sitting out): no action, not in liveSeats */
   undealt?: number | null;
+  /** a DEAD BUTTON (the undealt seat is the button): the labels a wrapper before 2026-10-04 exported — the undealt seat
+   *  BTN, the dealt ones a name early — where `seats[].pos` holds the truth, the names among the dealt */
+  exportPos?: Record<number, string> | null;
 }
 export interface GenOpts {
   seatsN?: number; shortSeat?: { pos: string; bb: number } | null; deepSeat?: { pos: string; bb: number } | null; deadSb?: boolean;
@@ -179,7 +182,22 @@ export async function dealHand(rng: Rng, o: GenOpts = {}, heroPolicy?: HeroPolic
   for (let i = deck.length - 1; i > 0; i--) { const j = rng.int(i + 1); [deck[i], deck[j]] = [deck[j]!, deck[i]!]; }
   const heroCards: [string, string] = [deck[0]!, deck[1]!];
   const board = deck.slice(2, 7);
-  const hand: Hand = { seats, hero, bbCents, sbPost, heroCards, board, actions: [], ops: [], undealt };
+  // A DEAD BUTTON (2026-10-04, hands 4922296152 / 4922299303): when the seat sitting out is the BUTTON, the truth is the
+  // dealt seats named among the dealt (the dealt non-blind seats take the latest names: five dealt HJ/CO/BTN/SB/BB) —
+  // the BTN acts after the CO, so a missing button is not a padded fold behind hero. The export keeps the labels a
+  // wrapper before the fix sent (the undealt seat BTN, the rest one name early), so normalizeHand's renaming is what the
+  // case tests; the oracle and the action order read the truth. The undealt seat is no position at all here.
+  let exportPos: Record<number, string> | null = null;
+  const undealtSeat = seats.find((x) => x.id === undealt);
+  if (undealtSeat?.pos === "BTN") {
+    exportPos = Object.fromEntries(seats.map((s) => [s.id, s.pos]));
+    const others = seats.filter((s) => s.id !== undealt && s.pos !== "SB" && s.pos !== "BB")
+      .sort((x, y) => POS[n]!.indexOf(x.pos) - POS[n]!.indexOf(y.pos));
+    const late = ["UTG", "HJ", "CO", "BTN"].slice(4 - others.length);
+    others.forEach((s, i) => { s.pos = late[i]!; });
+    undealtSeat.pos = "-";
+  }
+  const hand: Hand = { seats, hero, bbCents, sbPost, heroCards, board, actions: [], ops: [], undealt, exportPos };
   const byPos = (p: string) => seats.find((x) => x.pos === p);
   const committed = new Map<number, number>(); const behind = new Map(seats.map((s) => [s.id, s.stack]));
   const live = new Set(seats.map((s) => s.id).filter((id) => id !== undealt));
@@ -323,7 +341,7 @@ export function exportAt(hand: Hand, k: number, key: string, drift = 0, streetAt
   const folded = new Set(upto.filter((a) => a.type === "fold").map((a) => a.seat));
   const stacks: Record<number, number> = {};
   for (const s of hand.seats) stacks[s.id] = Math.round((s.stack - (spent[s.id] ?? 0) + (drift ? (((s.id * 7 + cur.street * 3) % 5) - 2) * drift / 2 : 0)) * 100) / 100;
-  const positions: Record<number, string> = {}; for (const s of hand.seats) positions[s.id] = s.pos;
+  const positions: Record<number, string> = {}; for (const s of hand.seats) positions[s.id] = hand.exportPos?.[s.id] ?? s.pos;
   // THE TABLE'S OWN CHIP COUNTS, AS THE WRAPPER EXPORTS THEM (round 3, wrapper ignition/ws.ts wsChips): chips behind for
   // every dealt seat that has sent a frame this hand (a blind, a post, any action — a fold's frame too), chips in front
   // this street for every dealt seat. Computed from the DEALT line, so an export operator that loses an action leaves

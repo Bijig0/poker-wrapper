@@ -129,7 +129,7 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 14, group: "output", name: "Answer at hero's node, legal actions",
     spec: "Answer is at hero's node and its actions ⊆ the table's offered buttons.",
     build: "built",
-    how: "Hero's node: the walk's rotation and GTO Wizard's node both name hero; preflop, the node the answer was read at must be hero's seat by the table's label or by the name a tree for that many dealt players gives it (GTO Wizard's sets: 3 dealt = BTN/SB/BB, so a CO whose button sat out is the tree's BTN). When the answer is solved, it is checked against the amount to call (no CHECK facing a bet, no FOLD/CALL with nothing to call, no sized raise when calling puts hero all in — an all-in for no more than the call is the call for less). When auto-execute presses it, the wrapper's relay records the action strip's labels on the very read it pressed from (the hand's autoExec), and every action the answer offers must be one of those buttons (a shove the table offers only as a CALL counts). Answers never pressed keep the first half only." },
+    how: "Hero's node: the walk's rotation and GTO Wizard's node both name hero; preflop, the node the answer was read at must be hero's seat by the table's label or by the name a tree for that many dealt players gives it (GTO Wizard's sets: 3 dealt = BTN/SB/BB, so a CO whose button sat out is the tree's BTN). Since 2026-10-04 hero's LABEL itself is checked on every decision against the table's geometry — the dealt seats clockwise from the button seat (the hand's seat roster; Ignition deals a dead button on a seat it did not deal), named as a table dealt that many names them: a label that is not hero's name among the seats dealt fails, so an answer read at the wrong seat's node can no longer pass because the node matches the wrong label. When the answer is solved, it is checked against the amount to call (no CHECK facing a bet, no FOLD/CALL with nothing to call, no sized raise when calling puts hero all in — an all-in for no more than the call is the call for less). When auto-execute presses it, the wrapper's relay records the action strip's labels on the very read it pressed from (the hand's autoExec), and every action the answer offers must be one of those buttons (a shove the table offers only as a CALL counts). Answers never pressed keep the first half only." },
   { id: 15, group: "output", name: "Mix valid",
     spec: "Sums ~100%, not all zero.",
     build: "built",
@@ -695,6 +695,25 @@ export function dealtSetName(label: string, dealtLabels: string[]): string | nul
   const others = present.filter((p) => p !== "SB" && p !== "BB").sort((x, y) => TABLE_ORDER.indexOf(x) - TABLE_ORDER.indexOf(y));
   const names = set.filter((p) => p !== "SB" && p !== "BB");
   return others.length === names.length ? names[others.indexOf(me)]! : null;
+}
+/**
+ * HERO'S LABEL IS HIS NAME AMONG THE SEATS DEALT (2026-10-04, Ignition's dead button: hands 4922296152 / 4922299303).
+ * The wrapper named the seats counting a button seat that was not dealt, so hero on the real last seat was labelled CO,
+ * the 6-max chart answered the CO node — and every check passed, because the node WAS the label's: 4922296152's A♠6♥
+ * fold read "clean". This half of #14 judges the label itself, against the table's geometry: the dealt seats clockwise
+ * from the button seat (the hand's seat roster, else the seat the source labelled BTN when that seat was not dealt),
+ * named as a table dealt that many names them (utils/dealtSeats.namesFromRoster). `geometry` null = nothing to place
+ * hero by (no roster, a live button the labels already sit on) — not checked.
+ */
+export function checkHeroSeatName(a: { label: string | null; geometry: string | null; dealtN: number; dealer: number | null;
+  deadButton: boolean; relabelledFrom?: string | null }): CheckResult {
+  if (!a.geometry) return na(14, "hero's label not placed against the table (no seat roster on the hand)");
+  const where = `the ${a.dealtN} seats dealt (button seat ${a.dealer ?? "?"}${a.deadButton ? ", not dealt — a dead button" : ""})`;
+  if (!a.label || seatName(a.label) !== seatName(a.geometry)) {
+    return fail(14, `hero is labelled ${a.label ?? "nothing"} but is the ${a.geometry} among ${where} — the answer is read at another seat's node`);
+  }
+  const renamed = a.relabelledFrom && seatName(a.relabelledFrom) !== seatName(a.label) ? ` (the source labelled him ${a.relabelledFrom}; renamed from the seats dealt)` : "";
+  return pass(14, `hero's ${a.label} is his name among ${where}${renamed}`);
 }
 /** a wager that is hero's whole stack: when it is no more than the amount to call it IS the call (for less) */
 const isAllInLabel = (label: string): boolean => /^(all[\s-]?in|allin|jam|shove)\b/i.test(label.trim());

@@ -91,3 +91,31 @@ export function firstDiff(a: any, b: any, path = "$"): string | null {
   const s = (v: any) => (v === undefined ? "undefined" : JSON.stringify(v)?.slice(0, 300));
   return `${path}: got ${s(a)}, want ${s(b)}`;
 }
+
+/**
+ * SUPERSEDED 2026-10-04 — IGNITION'S DEAD BUTTON (hands 4922299303 / 4922296152). The Python wrapper named positions
+ * counting the dealer seat even when that seat was not dealt (CO_DEALER_SEAT on a seat CO_CARDTABLE_INFO left out): it
+ * labelled the undealt seat BTN and every dealt non-blind seat one name early. The fix names the seats DEALT (hand.ts
+ * buttonOrder). This maps a RECORDED positions map onto the fixed rule, independently of the code under test: the
+ * dealer's label is dropped; a table dealt two is the small blind and the big blind (the seat recorded BB keeps it);
+ * otherwise the blinds keep their names and the other dealt seats, in their recorded order, take the LATEST names
+ * (UTG/HJ/CO/BTN, or the nine-seat UTG/UTG1/UTG2/LJ/HJ/CO/BTN past four). Applied only where the INPUT has the dealer
+ * outside a dealt list of two or more.
+ */
+const LATE6 = ["UTG", "HJ", "CO", "BTN"];
+const LATE9 = ["UTG", "UTG1", "UTG2", "LJ", "HJ", "CO", "BTN"];
+export function asDeadButtonPositions(recorded: Record<string, string>, dealer: number, dealt: number[]): Record<string, string> {
+  const keep = Object.entries(recorded).filter(([k]) => Number(k) !== dealer && dealt.includes(Number(k)));
+  if (keep.length === 2) {
+    const bb = keep.find(([, v]) => v === "BB")?.[0] ?? null;
+    if (bb !== null) return Object.fromEntries(keep.map(([k]) => [k, k === bb ? "BB" : "SB"]));
+    return Object.fromEntries(keep);
+  }
+  const others = keep.filter(([, v]) => v !== "SB" && v !== "BB").sort((a, b) => LATE9.indexOf(a[1]) - LATE9.indexOf(b[1]));
+  const vocab = others.length <= 4 ? LATE6 : LATE9;
+  const names = vocab.slice(vocab.length - others.length);
+  const renamed = new Map(others.map(([k], i) => [k, names[i]!]));
+  return Object.fromEntries(keep.map(([k, v]) => [k, renamed.get(k) ?? v]));
+}
+export const deadDealer = (ws: { dealer?: number | null; dealt?: number[] } | null | undefined): boolean =>
+  !!ws && ws.dealer != null && Array.isArray(ws.dealt) && ws.dealt.length >= 2 && !ws.dealt.includes(ws.dealer);

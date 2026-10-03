@@ -384,6 +384,24 @@ function renderMirror(hand, rs) {
   return g + "</svg>";
 }
 
+/* THE SEAT ROSTER (2026-10-04, the dead-button fix): every seat of the table and why it was or was not in the hand —
+   the wrapper's ParsedHand.roster (ignition/roster.ts). Ignition deals a DEAD BUTTON on a seat it did not deal; the
+   positions are named from the seats dealt. Older hands carry no roster: a hand renamed for a dead button says so. */
+const ROSTER_WORD = { "sitting-out": "sitting out", busted: "busted (sitting out, no chips)", reserved: "a new player sitting down",
+  waiting: "waiting to be dealt in", empty: "empty", "not-dealt": "not dealt" };
+function rosterLine(hand) {
+  const r = hand.roster;
+  if (!r) return hand.seatRelabel ? `<div class="sub" id="seat-roster" title="${esc(hand.seatRelabel.note)}">seats renamed: ${esc(hand.seatRelabel.note)}</div>` : "";
+  const parts = Object.entries(r.seats).sort((a, b) => Number(a[0]) - Number(b[0])).map(([s, x]) => {
+    const seat = Number(s), pos = hand.positions[seat];
+    const what = x.status === "dealt" ? (x.hero ? "you" : "dealt") + (pos ? ` ${pos}` : "") : (ROSTER_WORD[x.status] ?? x.status);
+    const btn = seat === r.dealer ? (r.deadButton ? " · the button, DEAD" : " · the button") : "";
+    return `<span${x.status === "dealt" ? "" : ' style="opacity:.7"'} title="${esc(x.word ? `socket word: ${x.word}` : x.posted ? `posted ${x.posted}` : "")}">${seat} ${esc(what)}${btn}</span>`;
+  });
+  const flags = [r.deadButton ? "dead button" : null, r.deadSb ? "dead small blind" : null].filter(Boolean);
+  return `<div class="sub" id="seat-roster">seats: ${parts.join(" · ")}${flags.length ? ` — <b>${flags.join(", ")}</b>` : ""}</div>`;
+}
+
 /* ================= feed ↔ step sync ================= */
 function feedStepMap(feedLines, actions) {
   // Map each feed line to "actions consumed so far": action lines advance the
@@ -678,6 +696,7 @@ async function showDetail(dbId) {
     <div class="dt-grid">
       <div class="card" style="margin:0">
         <div id="mirror"></div>
+        ${rosterLine(j.hand)}
         <div class="rp-controls">
           <button id="rp-first">⏮</button><button id="rp-prev">◀</button>
           <span id="rp-pos" class="sub" style="min-width:90px;text-align:center"></span>

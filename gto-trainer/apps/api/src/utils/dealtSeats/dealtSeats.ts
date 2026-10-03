@@ -59,6 +59,89 @@ export function lostPreflopFold(hand: ParsedHand, seat: number, pos: string): bo
   return !(/^BB$/i.test(pos) && !raised);
 }
 
+/**
+ * IGNITION'S DEAD BUTTON, RENAMED FROM THE SEATS DEALT (2026-10-04, hands 4922299303 / 4922296152 of 2026-10-03).
+ * When the player due the button has left or sits out, Ignition deals with the button on that empty seat. The wrapper
+ * (before 2026-10-04) counted the dealer seat anyway and labelled it BTN, so every dealt non-blind seat carried the
+ * name one seat EARLY: hero on the real last seat read CO, and the 6-max chart walk — padding the "BTN" as a fold
+ * behind him — answered a CO node that assumes a live button still to act (4922296152: a four-handed button open with
+ * A♠6♥ folded 99.6%, path "clean"). A missing seat that acts BEFORE hero is a fold, but a missing seat AFTER him is not.
+ * With hero in the blinds the villains were one seat early too (a button open read as a CO open).
+ *
+ * The signature is exact: the seat labelled BTN was not dealt (dealtSeats: missing from liveSeats and no action). The
+ * dealt seats are then named among the dealt — the blinds keep their names, the other dealt seats, in table order, take
+ * the LATEST names (five dealt: SB/BB/HJ/CO/BTN, the chart walk padding UTG as the fold exactly as at any five-handed
+ * table; four: SB/BB/CO/BTN; three: SB/BB/BTN; two: SB/BB) — the names the fixed wrapper sends (ignition/hand.ts
+ * buttonOrder). A dead small blind beside it keeps its BB-first names (the same rule: the blinds keep theirs). The
+ * undealt seat's label is dropped. Applied by normalizeHand, so live hands from a wrapper still on the old rule and every
+ * archived hand replay with the fix; a hand that is not the signature (or uses a 9-max vocabulary) is returned as is.
+ */
+const NON_BLIND_6 = ["UTG", "HJ", "CO", "BTN"];
+const asSeatName = (p: string): string => { const u = String(p).trim().toUpperCase(); return u === "BU" || u === "D" || u === "DEALER" ? "BTN" : u; };
+export function relabelDeadButton(hand: ParsedHand): { hand: ParsedHand; note: string | null } {
+  const positions = hand.positions ?? {};
+  const dealt = dealtSeats(hand);
+  const labelled = Object.keys(positions).map(Number);
+  const undealt = labelled.filter((s) => !dealt.has(s));
+  if (!undealt.length || !undealt.every((s) => asSeatName(positions[s]!) === "BTN")) return { hand, note: null };
+  const kept = labelled.filter((s) => dealt.has(s));
+  const names = new Map(kept.map((s) => [s, asSeatName(positions[s]!)]));
+  if ([...names.values()].some((p) => p !== "SB" && p !== "BB" && !NON_BLIND_6.includes(p))) return { hand, note: null };
+  const fixed: Record<number, string> = {};
+  if (kept.length === 2 && [...names.values()].includes("BB")) {
+    // heads-up: the big blind and the small blind (the dealer posts it — here the button was dead, so the other seat)
+    for (const s of kept) fixed[s] = names.get(s) === "BB" ? "BB" : "SB";
+  } else {
+    const others = kept.filter((s) => names.get(s) !== "SB" && names.get(s) !== "BB")
+      .sort((a, b) => NON_BLIND_6.indexOf(names.get(a)!) - NON_BLIND_6.indexOf(names.get(b)!));
+    const late = NON_BLIND_6.slice(NON_BLIND_6.length - others.length);
+    for (const s of kept) fixed[s] = names.get(s)!;
+    others.forEach((s, i) => { fixed[s] = late[i]!; });
+  }
+  const changed = kept.filter((s) => fixed[s] !== names.get(s)).map((s) => `seat ${s} ${positions[s]}→${fixed[s]}`);
+  const note = `DEAD BUTTON: the button seat (${undealt.map((s) => `seat ${s}`).join(", ")}) was not dealt (it sat out or was empty), so ` +
+    `the ${kept.length} dealt seats were named among the dealt${changed.length ? ` — ${changed.join(", ")}` : ""}.`;
+  return { hand: { ...hand, positions: fixed, seatRelabel: { from: { ...positions }, note } }, note };
+}
+
+/**
+ * THE NAMES THE SEATS DEALT GIVE (2026-10-04, the check on hero's label): the table's own geometry, independent of the
+ * labels the hand carries — the dealt seats clockwise from the first one after the button seat (the roster's `dealer`,
+ * which may be a seat not dealt), named as the wrapper names them (ignition/hand.ts positionsAll): SB, BB, the middle
+ * seats on the latest of UTG/HJ/CO, BTN last; with no small blind posted and the big blind on the first seat, BB first
+ * (a dead small blind); heads-up the small blind is the seat that posted it (else the button). null when the roster or
+ * the dealt list cannot place it (no button seat, fewer than two or more than six dealt).
+ */
+export function namesFromRoster(hand: ParsedHand): Map<number, string> | null {
+  const r = hand.roster;
+  if (!r || r.dealer == null || !Array.isArray(r.dealt)) return null;
+  const live = [...new Set(r.dealt)].sort((a, b) => a - b);
+  if (live.length < 2 || live.length > 6) return null;
+  const btn = r.dealer;
+  let order: number[];
+  if (live.includes(btn)) { const i = live.indexOf(btn); order = [...live.slice(i + 1), ...live.slice(0, i + 1)]; }
+  else { const k = live.findIndex((s) => s > btn); const i = k < 0 ? 0 : k; order = [...live.slice(i), ...live.slice(0, i)]; }
+  const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const sbPost = hand.actions.find((a) => a.type === "post-sb");
+  const bbPost = hand.actions.find((a) => a.type === "post-bb");
+  const out = new Map<number, string>();
+  if (live.length === 2) {
+    const sb = sbPost && order.includes(seatOf(sbPost)) ? seatOf(sbPost)
+      : bbPost && order.includes(seatOf(bbPost)) ? order.find((s) => s !== seatOf(bbPost))!
+        : live.includes(btn) ? btn : order[0]!;
+    for (const s of order) out.set(s, s === sb ? "SB" : "BB");
+    return out;
+  }
+  const n = order.length;
+  const deadSb = !sbPost && !!bbPost && seatOf(bbPost) === order[0];
+  if (deadSb && n > 5) return null;   // six dealt with no small blind is a nine-seat table: not this vocabulary
+  const names = deadSb
+    ? ["BB", ...["UTG", "HJ", "CO"].slice(3 - (n - 2)), "BTN"]
+    : n === 3 ? ["SB", "BB", "BTN"] : ["SB", "BB", ...["UTG", "HJ", "CO"].slice(3 - (n - 3)), "BTN"];
+  order.forEach((s, i) => out.set(s, names[i]!));
+  return out;
+}
+
 /** How many players were dealt in: the labelled seats minus the ones that were not dealt, hero included. */
 export const dealtCount = (hand: ParsedHand, heroPos?: string | null): number =>
   dealtSeats(hand, heroPos).size + (dealtSeats(hand, heroPos).has(hand.heroSeatId) ? 0 : 1);

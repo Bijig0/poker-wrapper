@@ -35,7 +35,7 @@ import { holeCardsRefusal, keyCards, pickReady } from "../../src/relay";
 import { feedLoopOnce } from "../../src/loops";
 import { state } from "../../src/view";
 import "../../src/session";
-import { canon, CORPUS, corpusFiles, firstDiff, normPy, readCorpus } from "./lib";
+import { asDeadButtonPositions, canon, CORPUS, corpusFiles, deadDealer, firstDiff, normPy, readCorpus } from "./lib";
 
 const UPDATE = process.env.GOLDEN_UPDATE === "1";
 
@@ -51,9 +51,12 @@ const UPDATE = process.env.GOLDEN_UPDATE === "1";
  *  2026-09-26: S.ws.frames — the hand's frames kept for the protocol line (ignition/wsLine.ts); what /hand builds from
  *  them is compared here like any other line, the list itself is bookkeeping (test/unit/ws-line-backtest.test.ts).
  *  2026-10-03: Ignition's rake (CO_CHIPTABLE_INFO curRake) — S.ws.rakeCents / rakeByStreet, /hand `rake` and
- *  currentNode `potRake` — verified on its own against hand 4922314918's frames in test/unit/ws-rake.test.ts. */
+ *  currentNode `potRake` — verified on its own against hand 4922314918's frames in test/unit/ws-rake.test.ts.
+ *  2026-10-04: the seat roster (the dead-button fix) — S.ws.seatWords (each seat's latest PLAY_SEAT_INFO /
+ *  PLAY_SEAT_RESERVATION / CO_TABLE_INFO word, ignition/roster.ts) and /hand `roster`, verified on their own against
+ *  hands 4922296152 / 4922299303's frames in test/unit/dead-button.test.ts. */
 const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale",
-                                "tableFrame", "frames", "frameFilter", "rakeCents", "rakeByStreet", "rake", "potRake"]);
+                                "tableFrame", "frames", "frameFilter", "rakeCents", "rakeByStreet", "rake", "potRake", "seatWords", "roster"]);
 /** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
  *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
  *  nothing else here (the pick key never counts one: relay.ts), verified on its own in test/unit/post-in.test.ts
@@ -136,6 +139,33 @@ function supersededHu(key: string, x: any): any {
              preflop: (x.journal || []).filter((a: any) => a.street === "preflop") };
   }
   return x;
+}
+
+/**
+ * SUPERSEDED 2026-10-04 — IGNITION'S DEAD BUTTON (lib.ts asDeadButtonPositions): while the table's state has the dealer
+ * outside the dealt seats, the recorded /hand positions (`hand`, and `light`'s copy) are compared as the fixed rule names
+ * them — the dealer's label gone, the dealt non-blind seats on the latest names. Decided by the INPUT (S.ws after the
+ * input), every other field still compared exactly. Two hands in this corpus: 20260920_131406 (seat 1's CO → BTN) and
+ * 20260923_020036 (seat 4's UTG → HJ).
+ */
+function supersededDeadButton(key: string, want: any): any {
+  // the ARCHIVED row is the hand before (archived as the next hand's first frame lands): its own record says whether
+  // its button was dead — a seat labelled BTN that is not among its dealt seats (liveSeats)
+  if (key === "archived" && Array.isArray(want)) {
+    return want.map((row: any) => {
+      const d = row?.data;
+      if (!d || !d.positions || !Array.isArray(d.liveSeats)) return row;
+      const btn = Object.entries(d.positions).find(([, v]) => v === "BTN")?.[0];
+      if (btn === undefined || !deadDealer({ dealer: Number(btn), dealt: d.liveSeats })) return row;
+      return { ...row, data: { ...d, positions: asDeadButtonPositions(d.positions, Number(btn), d.liveSeats) } };
+    });
+  }
+  if (!deadDealer(S.ws as any)) return want;
+  const fix = (h: any) => (h && h.positions && typeof h.positions === "object"
+    ? { ...h, positions: asDeadButtonPositions(h.positions, S.ws.dealer, S.ws.dealt) } : h);
+  if (key === "hand") return fix(want);
+  if (key === "light" && want && want.hand) return { ...want, hand: fix(want.hand) };
+  return want;
 }
 
 /** The only snapshots in the corpus the heads-up fix changes — three heads-up hands of one session, every one of the
@@ -455,7 +485,7 @@ for (const file of corpusFiles("reader-")) {
             expected[key] = normPy(v);
             continue;
           }
-          const [vv, ww] = supersededCrossTable(key, v, supersededHu(key, expected[key]));
+          const [vv, ww] = supersededCrossTable(key, v, supersededDeadButton(key, supersededHu(key, expected[key])));
           if (canon(vv) !== canon(ww)) {
             const hk = String(S.handIds.get(S.handNo) ?? S.handNo);
             const why = key === "pick" && v && typeof v === "object"

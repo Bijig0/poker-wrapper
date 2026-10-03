@@ -23,6 +23,7 @@ import { markTopUpRefused } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
 import { noteHeroDealt, noteTapFrame } from "./stall";
+import { noteRosterFrame } from "./roster";
 
 // 1048576 = "Folds & shows" (a fold; without it the no-chips rule reads a check); blind 16 = a post with a dead small
 // blind beside it — wsLine.ts has both
@@ -750,6 +751,7 @@ export function onGameMsg(d: Record<string, any>): void {
   }
   const w = ws();
   const pid = d.pid;
+  noteRosterFrame(d);   // the seats' words between hands — why a seat was not dealt (roster.ts)
   // THE HAND'S FRAMES (wsLine.ts builds /hand's line from them): every frame this handler takes, in order; a new
   // hand's PLAY_STAGE_INFO opens the list below, after beginHand has emptied it
   if (pid !== "PLAY_STAGE_INFO") keepFrame(w, d);
