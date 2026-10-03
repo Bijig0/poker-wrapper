@@ -9,6 +9,10 @@
  *   GET /api/progress        liveness, 2 bytes (the API's sources probe)
  *   GET /api/solutions       the chart index: the GTOW crawl + every sidecar
  *   GET /api/preflop/node    ?source=<chart id>&line=<tokens>   (source=gtow: &gametype=&depth= from the crawl SQLite)
+ *   GET /api/build           is this process behind the code on disk (services/loadedCode.ts; the API's /api/build shape)
+ *   POST /api/build/restart  exit cleanly for the supervisor to relaunch
+ *
+ * A committed change to the code this server loaded restarts it by itself when no session is live (services/autoRestart.ts).
  *
  * Env: HRC_UI_PORT (8777), CHART_SOLUTIONS_DIR (default data/charts: services/repoPaths.ts, the folder the API's
  * chart catalog reads too), HRC_UI_REMOTE, HRC_UI_DOC_CACHE_MAX, HRC_UI_SMALL_BODY_BYTES, HRC_UI_SMALL_DOC_MAX,
@@ -19,6 +23,8 @@ import { join } from "node:path";
 import { CHARTS_DIR, DATA_DIR } from "../services/repoPaths";
 import { ChartStore, optsFromEnv } from "./chartStore";
 import { port } from "../services/ports";
+import { AutoRestart, liveSessionReason } from "../services/autoRestart";
+import { LoadedCode } from "../services/loadedCode";
 
 const DIR = CHARTS_DIR;
 const PREFLOP_DB = join(DATA_DIR, "preflop-db.sqlite");
@@ -28,13 +34,18 @@ const HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Head
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...HEADERS, "Content-Type": "application/json" } });
 
-export function chartServerFetch(store: ChartStore) {
+/** The build report and the restart, when the server runs as a process (tests serve a store without them). */
+export interface ChartServerBuild { status: (force: boolean) => unknown; restart: () => Response }
+
+export function chartServerFetch(store: ChartStore, build?: ChartServerBuild) {
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: HEADERS });
+    if (build && req.method === "POST" && url.pathname === "/api/build/restart") return build.restart();
     if (req.method !== "GET") return json({ error: "not found" }, 404);
     try {
       switch (url.pathname) {
+        case "/api/build": return build ? json(build.status(url.searchParams.get("force") === "1")) : json({ error: "not found" }, 404);
         case "/": case "/index.html": return new Response("chart server (TypeScript)\n", { headers: HEADERS });
         case "/api/progress": return json({});
         case "/api/solutions": return json(store.solutions());
@@ -52,7 +63,21 @@ if (import.meta.main) {
   const opts = optsFromEnv(DIR, PREFLOP_DB);
   const store = new ChartStore(opts);
   store.refreshIndex();
-  Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: chartServerFetch(store), idleTimeout: 255 });
+  // what this process loaded, taken before it serves anything; chart-server.ps1 exports POKER_SUPERVISOR
+  const code = new LoadedCode({ entry: import.meta.path });
+  const supervised = () => !!process.env.POKER_SUPERVISOR;
+  const auto = new AutoRestart({ code, name: "charts", supervised, busy: () => liveSessionReason() });
+  auto.start();
+  const build: ChartServerBuild = {
+    status: (force) => ({ ok: true, service: "charts", ...code.status(force), supervised: supervised(), auto: auto.status() }),
+    restart: () => {
+      if (!supervised()) return json({ ok: false, error: "no supervisor in this process's environment — exiting would leave nothing serving this port" }, 409);
+      console.log("[build] restart requested — exiting for the supervisor");
+      setTimeout(() => process.exit(0), 250);
+      return json({ ok: true, restarting: true });
+    },
+  };
+  Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: chartServerFetch(store, build), idleTimeout: 255 });
   const n = store.solutions().length - 1;
   console.log(`chart server (TypeScript) -> http://127.0.0.1:${PORT}  ${n} charts indexed in ${DIR} ` +
               `(loaded lazily, ${opts.bigMax} big + ${opts.smallMax} small cached; bodies from ${opts.remote || "nowhere"})`);

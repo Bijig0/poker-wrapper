@@ -58,6 +58,11 @@ $fastFails = 0
 # update" button knows a clean exit actually comes back here (services/buildStamp.ts).
 # A hand-started worker has no such parent and the dashboard offers the command instead.
 $env:STUDY_API_SUPERVISOR = $PID
+# The same fact under the name every supervisor uses (services/buildStamp.ts isSupervised): a supervised worker restarts
+# ITSELF, by a clean exit, when a commit changes code it loaded and no session is live (services/autoRestart.ts).
+$env:POKER_SUPERVISOR = $PID
+# what this supervisor read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
+Write-SupervisorStamp 'api' @($PSCommandPath)
 Log "supervisor started (pid $PID) - exploit overlay $(if ($env:EXPLOIT_CHART) { 'ARMED' } else { 'OFF (exploit_ranges_nl25.json missing)' })"
 while ($true) {
   # STRAGGLER SWEEP BEFORE EVERY START (2026-09-14). This used to run only in the hang path below,
@@ -130,6 +135,9 @@ while ($true) {
   # reason in THIS log, which is the one that gets read when the API will not stay up.
   if ($lived -lt 15) { $fastFails++ } else { $fastFails = 0 }
   $wait = 10
+  # exit 0 = the worker left on purpose (a restart asked for by the dashboard, or its own auto-restart on a commit):
+  # nothing to cool down from, and every second here is a second without answers
+  if ("$code" -eq '0') { $wait = 2 }
   if ($fastFails -ge 3) {
     $wait = [Math]::Min(300, 20 * ($fastFails - 2))
     $tail = ((Get-Content $api -Tail 400 -ErrorAction SilentlyContinue) |

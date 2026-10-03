@@ -13,6 +13,9 @@
 # 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
 # Normal before it starts anything; its children inherit that.
 try { (Get-Process -Id $PID).PriorityClass = 'Normal' } catch { }
+# NO PROGRESS BAR, EVER: a hidden supervisor whose console is gone throws on Invoke-WebRequest's progress bar, three
+# throws read as "server hung", and a healthy server is killed in a loop (.claude\study-api.ps1, 2026-09-30).
+$ProgressPreference = 'SilentlyContinue'
 $logDir = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\data\jobs'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
 $sup = Join-Path $logDir 'chart-server-supervisor.log'
@@ -26,6 +29,11 @@ if ($others.Count) { Log "another supervisor is already running (pid $($others.P
 $server = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\src\charts\chartServer.ts'
 if (-not ($env:BUN -and (Test-Path $server))) { Log "no Bun (config\env.ps1) or no $server - cannot start the chart server"; exit 1 }
 Log "supervisor started (pid $PID) - $env:BUN, cache $env:HRC_UI_DOC_CACHE_MAX trees, port $port"
+# Tells the server it is supervised: a clean exit comes back here, so it may restart ITSELF when a commit changes code
+# it loaded and no session is live (services/autoRestart.ts), and answer POST /api/build/restart.
+$env:POKER_SUPERVISOR = $PID
+# what this supervisor read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
+Write-SupervisorStamp 'charts' @($PSCommandPath)
 $fastFails = 0
 while ($true) {
   # a server already on the port (started by hand) is left alone: watch it instead of fighting it
@@ -58,9 +66,13 @@ while ($true) {
     Start-Sleep -Seconds 30
   }
   $lived = [int]((Get-Date) - $startedAt).TotalSeconds
-  Log "server gone after $lived s"
+  $code = 'killed'
+  try { if ($p -and $p.HasExited -and $null -ne $p.ExitCode) { $code = $p.ExitCode } } catch { }
+  Log "server gone (exit $code) after $lived s"
   if ($lived -lt 15) { $fastFails++ } else { $fastFails = 0 }
   $wait = 10
+  # exit 0 = the server left on purpose (its own restart on a commit, or one asked for): nothing to cool down from
+  if ("$code" -eq '0') { $wait = 2 }
   if ($fastFails -ge 3) {
     $wait = [Math]::Min(300, 20 * ($fastFails - 2))
     $tail = ((Get-Content $out -Tail 200 -ErrorAction SilentlyContinue) | Where-Object { $_.Trim() } | Select-Object -Last 5) -join ' | '

@@ -69,6 +69,8 @@ if (-not $Once -and -not $DryRun) {
         Say 'gtow watchdog already running - exiting'
         exit 0
     }
+    # what this watchdog read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
+    Write-SupervisorStamp 'gtow' @($PSCommandPath)
 }
 
 function Get-Targets([int]$port) {
