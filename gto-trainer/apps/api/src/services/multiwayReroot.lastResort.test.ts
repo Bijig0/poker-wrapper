@@ -8,12 +8,16 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { gtowApi } from "./gtowApi";
+import { handFacts } from "./handFacts";
+import { currentRequestScope } from "./requestScope";
 import { StreetState, forgetCheckpoints } from "./aiChain";
 import { forgetLrNarrowing, narrowForLastResort, type RerootArgs } from "./multiwayReroot";
 import { raceNarrowing } from "./fastSolve";
 
 const api = gtowApi as any;
 let restore: (() => void) | null = null;
+/** the request scopes the synthetic GTO Wizard was called under ("hand|origin") */
+const scopes = new Set<string>();
 afterEach(() => { restore?.(); restore = null; });
 /** the synthetic GTO Wizard; `fail` makes every node a 429 */
 function install(fail = false, delayMs = 0) {
@@ -85,7 +89,6 @@ describe("narrowForLastResort", () => {
     // each range is the arrival's times the share of each action its seat took (hero: one call facing F/C/R15/R30/all-in)
     expect(r.hero[100]).toBeCloseTo(1 / 5, 6);
     expect(r.villain[100]).toBeLessThan(1);
-    expect(r.ms).toBeGreaterThanOrEqual(0);
   });
 
   it("more earlier aggressors than a three-seat walk holds: refused, saying why (the caller keeps the unnarrowed last resort)", async () => {
@@ -118,40 +121,85 @@ describe("narrowForLastResort", () => {
 const okChain = (tag: string) => ({ ok: true as const, tag });
 const nrOk = { ok: true as const, hero: [1], villain: [1], walks: 1, ms: 5, group: ["BTN", "CO"] };
 const after = <T>(ms: number, v: T) => new Promise<T>((r) => setTimeout(() => r(v), ms));
-describe("raceNarrowing", () => {
-  it("the narrowing inside the budget: the narrowed tree is served (the unnarrowed one ran beside it)", async () => {
+describe("raceNarrowing: one deadline for the narrowed path (review 3)", () => {
+  type Ch = { ok: boolean; why?: string; tag?: string };
+  const failedC = (why: string): Ch => ({ ok: false, why });
+  /** a race with fake solvers; times in ms; `floorMs` 0 unless a test sets it */
+  const race = (o: { budget: number; startAgo?: number; floor?: number; later?: boolean; narrowing: () => Promise<any>; un: () => Promise<Ch>; n: () => Promise<Ch> }) =>
+    raceNarrowing<Ch>({ start: Date.now() - (o.startAgo ?? 0), budgetMs: o.budget, floorMs: o.floor ?? 0, later: o.later ?? true,
+      narrowing: o.narrowing, unnarrowed: o.un, narrowed: o.n, failed: failedC });
+  const unhandled: string[] = [];
+  const onUnhandled = (e: unknown) => { unhandled.push(String((e as Error)?.message ?? e)); };
+  process.on("unhandledRejection", onUnhandled);
+
+  it("N's answer (walk + tree) inside the deadline: the narrowed tree is served; U ran beside it", async () => {
     let unn = 0;
-    const r = await raceNarrowing({ start: Date.now(), budgetMs: 300, narrowing: () => after(20, nrOk), unnarrowed: () => { unn++; return after(10, okChain("unnarrowed")); }, narrowed: () => after(10, okChain("narrowed")) });
-    expect((r.chain as any).tag).toBe("narrowed");
-    expect(r.record.served).toBe("narrowed");
-    expect(r.record.narrowingMs).toBeGreaterThanOrEqual(15);
-    expect(r.record.unnarrowedMs).not.toBeNull();
-    expect(r.record.narrowedMs).not.toBeNull();
+    const r = await race({ budget: 300, narrowing: () => after(20, nrOk), un: () => { unn++; return after(10, okChain("U")); }, n: () => after(10, okChain("N")) });
+    expect([(r.chain as Ch).tag, r.record.served, r.record.narrowedPath]).toEqual(["N", "narrowed", "raced"]);
     expect(unn).toBe(1);
+    expect(r.record.narrowedMs).not.toBeNull();
     expect(r.clause).toContain("narrowed by the earlier streets by 1 three-seat walk(s) (BTN/CO");
   });
-  it("past the budget: the unnarrowed answer is served with the note; the walk is left to finish", async () => {
-    let finished = false;
-    const r = await raceNarrowing({ start: Date.now(), budgetMs: 50, narrowing: () => after(200, nrOk).then((x) => { finished = true; return x; }),
-      unnarrowed: () => after(10, okChain("unnarrowed")), narrowed: () => after(10, okChain("narrowed")) });
-    expect((r.chain as any).tag).toBe("unnarrowed");
-    expect(r.record).toMatchObject({ served: "unnarrowed", budgetMs: 50, narrowingMs: null, why: "the narrowing walk took longer than 0.1 s" });
-    expect(r.clause).toBe("ranges NOT narrowed: the narrowing walk took longer than 0.1 s (it finishes in the background for the hand's next decision)");
-    expect(finished).toBe(false);
-    await after(250, null);
-    expect(finished).toBe(true);
+  it("a SLOW narrowed tree: U (ready at 10 ms) is served AT the deadline, never later; N's late answer is ignored", async () => {
+    const t = Date.now();
+    const r = await race({ budget: 150, narrowing: () => after(20, nrOk), un: () => after(10, okChain("U")), n: () => after(600, okChain("N")) });
+    const at = Date.now() - t;
+    expect([(r.chain as Ch).tag, r.record.served]).toEqual(["U", "unnarrowed"]);
+    expect(at).toBeGreaterThanOrEqual(140);
+    expect(at).toBeLessThan(400);
+    expect(r.record.narrowedMs).toBeNull();
+    expect(r.clause).toContain("did not answer within 0.1 s of the decision");
   });
-  it("the budget runs from the decision's start, not from the walk's", async () => {
-    const r = await raceNarrowing({ start: Date.now() - 150, budgetMs: 100, narrowing: () => after(20, nrOk), unnarrowed: () => after(5, okChain("unnarrowed")), narrowed: () => after(5, okChain("narrowed")) });
+  it("a THROWING narrowed tree: U served (no rejection)", async () => {
+    const r = await race({ budget: 300, narrowing: () => after(5, nrOk), un: () => after(30, okChain("U")), n: async () => { throw new Error("tree boom"); } });
+    expect([(r.chain as Ch).tag, r.record.why]).toEqual(["U", "the narrowed tree failed: the narrowed tree threw: tree boom"]);
+  });
+  it("a throw anywhere is a failure, never a rejection: the walk throws, U throws synchronously", async () => {
+    const a = await race({ budget: 300, narrowing: () => { throw new Error("walk boom"); }, un: () => after(5, okChain("U")), n: () => after(5, okChain("N")) });
+    expect([(a.chain as Ch).tag, a.record.why]).toEqual(["U", "the narrowing walk threw: walk boom"]);
+    const b = await race({ budget: 300, narrowing: () => after(5, nrOk), un: () => { throw new Error("U boom"); }, n: () => after(5, okChain("N")) });
+    expect([(b.chain as Ch).tag, b.record.served]).toEqual(["N", "narrowed"]);
+  });
+  it("U fails fast: N is awaited past the deadline (nothing else to serve) and served", async () => {
+    const r = await race({ budget: 50, narrowing: () => after(30, nrOk), un: () => after(5, failedC("429")), n: () => after(200, okChain("N")) });
+    expect([(r.chain as Ch).tag, r.record.served, r.record.why]).toEqual(["N", "narrowed", "the unnarrowed tree failed: 429"]);
+    expect(r.record.servedMs).toBeGreaterThanOrEqual(200);
+  });
+  it("U fails fast and N cannot help (refused): U's failure at once", async () => {
+    const t = Date.now();
+    const r = await race({ budget: 500, narrowing: () => after(5, { ok: false as const, why: "UTG, BTN all bet or raised earlier", ms: 0 }), un: () => after(15, failedC("429")), n: () => after(5, okChain("N")) });
+    expect([(r.chain as Ch).ok, (r.chain as Ch).why]).toEqual([false, "429"]);
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it("N refused before the deadline: U served as soon as it is ready, no wait for the deadline", async () => {
+    const t = Date.now();
+    const r = await race({ budget: 2000, narrowing: () => after(5, { ok: false as const, why: "no group", ms: 0 }), un: () => after(30, okChain("U")), n: () => after(5, okChain("N")) });
+    expect([(r.chain as Ch).tag, r.record.why]).toEqual(["U", "no group"]);
+    expect(Date.now() - t).toBeLessThan(500);
+  });
+  it("no room left (elapsed + the floor past the deadline): N is not raced — detached for the memo when the hand goes on, else not started", async () => {
+    let walks = 0, trees = 0;
+    const go = (later: boolean) => race({ budget: 6000, startAgo: 4000, floor: 2500, later, narrowing: () => { walks++; return after(5, nrOk); }, un: () => after(5, okChain("U")), n: () => { trees++; return after(5, okChain("N")); } });
+    const a = await go(false);
+    expect([(a.chain as Ch).tag, a.record.narrowedPath, walks, trees]).toEqual(["U", "skipped", 0, 0]);
+    const b = await go(true);
+    expect([(b.chain as Ch).tag, b.record.narrowedPath, walks, trees]).toEqual(["U", "detached", 1, 0]);
+    expect(b.clause).toContain("2.0 s of the 6.0 s narrowing deadline was left");
+  });
+  it("a memo hit (the walk already done) whose narrowed tree is still too slow: U served at the deadline", async () => {
+    const r = await race({ budget: 100, narrowing: () => Promise.resolve(nrOk), un: () => after(10, okChain("U")), n: () => after(500, okChain("N")) });
+    expect([(r.chain as Ch).tag, r.record.served]).toEqual(["U", "unnarrowed"]);
+    expect(r.record.narrowingMs).not.toBeNull();
+    expect(r.record.servedMs).toBeLessThan(400);
+  });
+  it("the deadline runs from the decision's start, not the walk's", async () => {
+    const r = await race({ budget: 100, startAgo: 150, narrowing: () => after(20, nrOk), un: () => after(5, okChain("U")), n: () => after(5, okChain("N")) });
     expect(r.record.served).toBe("unnarrowed");
   });
-  it("a narrowing that refuses, or a narrowed tree that fails: the unnarrowed answer, saying why", async () => {
-    const a = await raceNarrowing({ start: Date.now(), budgetMs: 300, narrowing: () => after(5, { ok: false as const, why: "UTG, BTN all bet or raised earlier", ms: 0 }),
-      unnarrowed: () => after(5, okChain("unnarrowed")), narrowed: () => after(5, okChain("narrowed")) });
-    expect([(a.chain as any).tag, a.record.why]).toEqual(["unnarrowed", "UTG, BTN all bet or raised earlier"]);
-    const b = await raceNarrowing({ start: Date.now(), budgetMs: 300, narrowing: () => after(5, nrOk),
-      unnarrowed: () => after(5, okChain("unnarrowed")), narrowed: () => after(5, { ok: false as const, why: "429" }) as any });
-    expect([(b.chain as any).tag, b.record.why]).toEqual(["unnarrowed", "the narrowed tree failed: 429"]);
+  it("no unhandled rejection from any of the above", async () => {
+    await after(700, null);
+    process.off("unhandledRejection", onUnhandled);
+    expect(unhandled).toEqual([]);
   });
 });
 
@@ -159,10 +207,10 @@ describe("a late narrowing lands in the hand's memo", () => {
   const turn = args([["X", "X", "R5", "C", "C", "F"], ["X", "R10"]], [["SB", "BB", "CO", "BTN", "SB", "BB"], ["SB", "CO"]]);
   const river = args([["X", "X", "R5", "C", "C", "F"], ["X", "R10", "C", "C"], ["X", "R20"]], [["SB", "BB", "CO", "BTN", "SB", "BB"], ["SB", "CO", "BTN", "SB"], ["SB", "CO"]]);
   it("the turn serves unnarrowed past the budget; the walk finishes; a re-ask joins it and the river walks only the turn", async () => {
-    forgetLrNarrowing(); forgetCheckpoints("hand-lr-memo#lr-narrow");
+    forgetLrNarrowing(); forgetCheckpoints("hand-lr-memo#lr-narrow"); scopes.clear();
     const trees = install(false, 40);   // every node 40 ms: the flop walk takes > 100 ms
     const narrowingP = narrowForLastResort({ ...turn, memoKey: "hand-lr-memo" }, "CO");
-    const r = await raceNarrowing({ start: Date.now(), budgetMs: 60, narrowing: () => narrowingP, unnarrowed: async () => okChain("unnarrowed"), narrowed: async () => okChain("narrowed") });
+    const r = await raceNarrowing<{ ok: boolean; why?: string }>({ start: Date.now(), budgetMs: 60, floorMs: 0, later: true, narrowing: () => narrowingP, unnarrowed: async () => okChain("unnarrowed"), narrowed: async () => okChain("narrowed"), failed: (why) => ({ ok: false, why }) });
     expect(r.record.served).toBe("unnarrowed");
     const late = await narrowingP;                      // the walk went on in the background
     expect(late.ok).toBe(true);
@@ -177,5 +225,11 @@ describe("a late narrowing lands in the hand's memo", () => {
     expect(rv.ok).toBe(true);
     expect(flopTrees()).toBe(f0);
     expect([...trees.values()].filter((t) => t.startingStreet === "TURN").length).toBeGreaterThan(0);
+    // review 3: the walks' requests are the hand's (scope: the real hand, caller tag lr-narrow), and their checkpoints
+    // stay in this process — nothing in the hand's persistent facts, under any key
+    expect([...scopes]).toEqual(["hand-lr-memo|lr-narrow"]);
+    expect(handFacts.streets("hand-lr-memo#lr-narrow")).toEqual([]);
+    expect(handFacts.trees("hand-lr-memo#lr-narrow")).toEqual([]);
+    expect(handFacts.trees("hand-lr-memo")).toEqual([]);
   });
 });

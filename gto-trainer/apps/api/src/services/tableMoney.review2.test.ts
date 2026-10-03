@@ -69,6 +69,9 @@ describe("1. a merged seat contests with every member (check #5's plan rule)", (
   it("a stored trace with no members: the plan's name gives them (mergeMembers)", () => {
     expect(mergeMembers("drop:UTG + merge:CO+BTN (BTN's action)")).toEqual({ CO: ["CO", "BTN"] });
     expect(mergeMembers("merge:BTN+SB + merge:CO+BTN")).toEqual({ BTN: ["BTN", "SB"], CO: ["CO", "BTN", "SB"] });
+    // review 3: the names are the table's positions — "UTG+1" is one seat, not UTG and "1"
+    expect(mergeMembers("merge:UTG+1+HJ")).toEqual({ "UTG+1": ["UTG+1", "HJ"] });
+    expect(mergeMembers("merge:UTG+UTG+1 + merge:HJ+UTG")).toEqual({ UTG: ["UTG", "UTG+1"], HJ: ["HJ", "UTG", "UTG+1"] });
     expect(check5(h1, t1).status).toBe("pass");
   });
   it("without the members (the old rule) the same spot is a false fail", () => {
@@ -182,7 +185,7 @@ describe("3. the field's stack and the tree's stack, from the table", () => {
     expect(r.fieldStack).toBe(90);
     expect(treeStackFor(["BB", "BTN"], "BTN", r.behindFlop, r.fieldStack, false)).toBe(90);
   });
-  it("no tree is ever sent at 0.5bb or less: treeStackFor refuses (null), over 5,000 random seat stacks and bases", () => {
+  it("the tree's stack over 5,000 random seat stacks and bases: the effective stack, the base where a seat is unknown, null at 0.5bb or less and only then", () => {
     expect(treeStackFor(["BB", "BTN"], "BTN", { BB: 0.3, BTN: 50 }, 60, false)).toBeNull();
     expect(treeStackFor(["BB", "BTN"], "BTN", { BTN: 50 }, 0.4, false)).toBeNull();
     let seed = 5;
@@ -191,8 +194,13 @@ describe("3. the field's stack and the tree's stack, from the table", () => {
       const seats = ["BB", "CO", "BTN"].slice(0, 2 + Math.floor(rnd() * 2));
       const ss: Record<string, number> = {};
       for (const p of seats) if (rnd() < 0.8) ss[p] = Math.round(rnd() * (rnd() < 0.2 ? 1.2 : 200) * 100) / 100;
-      const st = treeStackFor(seats, "BTN", ss, Math.round(rnd() * (rnd() < 0.2 ? 1 : 150) * 100) / 100, rnd() < 0.3);
-      if (st != null) expect(st).toBeGreaterThan(0.5);
+      const base = Math.round(rnd() * (rnd() < 0.2 ? 1 : 150) * 100) / 100, rerooted = rnd() < 0.3;
+      // the rule, stated on its own: hero against the deepest villain (an unknown stack never binds); every stack known
+      // and not re-rooted → that, else capped by the base; refused (null) at 0.5bb or less — and ONLY then
+      const v = seats.filter((p) => p !== "BTN").map((p) => ss[p] ?? Infinity);
+      const eff = Math.round(Math.min(ss.BTN ?? Infinity, Math.max(...v)) * 100) / 100;
+      const sent = !rerooted && seats.every((p) => ss[p] != null) ? eff : Math.min(base, eff);
+      expect(treeStackFor(seats, "BTN", ss, base, rerooted)).toBe(sent > 0.5 ? sent : null);
     }
   });
 });

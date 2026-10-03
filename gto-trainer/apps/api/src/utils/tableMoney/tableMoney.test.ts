@@ -44,6 +44,12 @@ describe("streetChips: one street", () => {
     expect([...sc.aggressors]).toEqual(["HJ"]);
     expect([...sc.folded]).toEqual(["CO"]);
   });
+  it("review 3: an all-in CALL for exactly the level (or within half a cent) is not an aggressor; a cent over is", () => {
+    const caps10 = caps({ A: 100, B: 10, C: 10.01 });
+    expect([...streetChips([{ seat: "A", kind: "raise", to: 10 }, { seat: "B", kind: "allin" }], caps10).aggressors]).toEqual(["A"]);
+    expect([...streetChips([{ seat: "A", kind: "raise", to: 10 }, { seat: "B", kind: "allin", to: 10.004 }], caps({ A: 100, B: 10.004 })).aggressors]).toEqual(["A"]);
+    expect([...streetChips([{ seat: "A", kind: "raise", to: 10 }, { seat: "C", kind: "allin" }], caps10).aggressors]).toEqual(["A", "C"]);
+  });
   it("an all-in for no more than the price is a call: not an aggressor", () => {
     const sc = streetChips([{ seat: "A", kind: "raise", to: 50 }, { seat: "B", kind: "allin", to: 20 }], caps({ A: 100, B: 20 }));
     expect([...sc.aggressors]).toEqual(["A"]);
@@ -109,11 +115,13 @@ describe("foldStreet / moneyEntering", () => {
 });
 
 describe("foldRound: a round's chips, not its tokens", () => {
-  it("the same state as foldStreet over the same street, with the matched chips and the excess handed back", () => {
+  it("a round's chips: the pot, each stack after, the matched chips and the excess handed back", () => {
     const st0 = moneyState(10, [["A", 100], ["B", 30], ["C", 100]]);
     const acts = streetFromTokens(["R60", "C", "F"], ["A", "B", "C"]);
     const f = foldRound(st0, streetChips(acts, (k: string) => st0.behind.get(k) ?? null));
-    expect(f.state).toEqual(foldStreet(st0, acts));
+    expect(f.state.pot).toBe(70);
+    expect([...f.state.behind]).toEqual([["A", 70], ["B", 0], ["C", 100]]);
+    expect([...f.state.allIn]).toEqual(["B"]);
     expect(f.matched.sum).toBe(60);
     expect(f.matched.returned).toEqual([{ seat: "A", bb: 30 }]);
   });
@@ -139,7 +147,7 @@ describe("properties: legal streets against an independent side-pot settlement",
   const c2 = (x: number) => Math.round(x * 100) / 100;
   const SEATS = ["A", "B", "C", "D", "E"];
   /** how often the hard cases came up (asserted at the end: the properties are not vacuous) */
-  const seen = { excess: 0, allInForLess: 0, sidePots: 0, folds: 0 };
+  const seen = { excess: 0, allInForLess: 0, sidePots: 0, folds: 0, subsets: 0, hiddenExcess: 0 };
 
   /** one legal street over `order`: the acts, each seat's chips in, who folded / went all-in */
   function playStreet(order: string[], behind: Map<string, number>, out: Set<string>) {
@@ -242,7 +250,33 @@ describe("properties: legal streets against an independent side-pot settlement",
           expect(want).toBeGreaterThan(-0.005);                         // no negative for a clamp to hide
           expect(Math.abs(f.state.behind.get(s)! - want)).toBeLessThan(0.011);
         }
-        expect(foldStreet(st, g.acts)).toEqual(f.state);
+        // A TREE'S SEATS (contestedChips over a contesting subset with hero's dead-money cap), against the settlement:
+        // a contesting seat's chips up to the most another contesting seat can match, a left-out seat's up to what
+        // hero can win of them — and never more of anyone's chips than the full table counts
+        const foldedAll = new Set([...st.folded, ...g.folded]);   // an earlier street's fold included
+        const hero = order[0]!;
+        const sub = [hero, ...order.slice(1).filter(() => rnd() < 0.5)];
+        const reach = (t: string) => (foldedAll.has(t) ? (g.inv.get(t) ?? 0) : behind.get(t)!);
+        const deadCap = Math.min(behind.get(hero)!, Math.max(0, ...sub.filter((t) => t !== hero).map(reach)));
+        const tree = contestedChips(sc.put, { contesting: sub, folded: foldedAll, capOf: (t) => behind.get(t)!, hero });
+        for (const s of order) {
+          const put = g.inv.get(s) ?? 0;
+          if (!put) continue;
+          const want = sub.includes(s) ? Math.min(put, Math.max(0, ...sub.filter((t) => t !== s).map(reach))) : Math.min(put, deadCap);
+          expect(Math.abs((tree.bySeat.get(s) ?? 0) - want)).toBeLessThan(0.011);
+          expect(tree.bySeat.get(s) ?? 0).toBeLessThanOrEqual((ref.matched.get(s) ?? 0) + 0.011);
+        }
+        if (sub.length < order.length && [...sc.put.keys()].some((x) => !sub.includes(x))) seen.subsets++;
+        // UNKNOWN STACKS: a seat still in whose stack the model cannot see may match anything — no excess is taken off
+        // the others' chips because of him; everyone else's chips settle as before
+        const unknown = new Set(order.filter(() => rnd() < 0.3));
+        const blind = contestedChips(sc.put, { contesting: order, folded: foldedAll, capOf: (t) => (unknown.has(t) ? null : behind.get(t)!) });
+        for (const s of order) {
+          const hidden = order.some((t) => t !== s && !foldedAll.has(t) && unknown.has(t));
+          const want = hidden ? (g.inv.get(s) ?? 0) : (ref.matched.get(s) ?? 0);
+          expect(Math.abs((blind.bySeat.get(s) ?? 0) - want)).toBeLessThan(0.011);
+          if (hidden && ref.returned.has(s)) seen.hiddenExcess++;
+        }
         st = f.state;
         for (const s of [...g.folded, ...g.allIn]) out.add(s);
         if (order.filter((s) => !out.has(s)).length < 2) break;
@@ -254,6 +288,8 @@ describe("properties: legal streets against an independent side-pot settlement",
     expect(seen.allInForLess).toBeGreaterThan(20);
     expect(seen.sidePots).toBeGreaterThan(20);
     expect(seen.folds).toBeGreaterThan(50);
+    expect(seen.subsets).toBeGreaterThan(50);
+    expect(seen.hiddenExcess).toBeGreaterThan(5);
     console.log(`  legal-street properties: ${JSON.stringify(seen)}`);
   });
 });
