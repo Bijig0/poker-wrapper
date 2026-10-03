@@ -956,11 +956,16 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         stackNotes.push(`${STREET[k]!.toLowerCase()}: ${broke.map((s) => s.pos).join(", ")} all-in before the street — left out of the tree, chips in the pot`);
       }
     }
-    const n = seats.length;
     // what this street starts from, fingerprinted BEFORE hero's floor (the previous street handed on exactly this); a
     // resumed street started on an earlier decision, and its checkpoint carries the fingerprint taken then
     const startedFp: string | null = resuming ? (resuming.inFp ?? null) : rangesFp(seats);
     if (resuming) seats = resuming.entering.map((s) => ({ ...s, range: s.range.slice() }));
+    // THE SEAT COUNT IS THE SEATS THE STREET IS WALKED WITH (2026-10-04, hand 4922269408: HTTP 500 on hero's turn). It
+    // was taken before the resume put the checkpoint's seats back: a seat dropped as all-in when the street was first
+    // walked (the CO, all-in preflop for 13.4 by a "raise") is not dropped again on a resume (the filter above is for a
+    // fresh walk), so n said 3 for the 2 seats the street resumed with — `seats[n - 1]` was undefined and every re-ask of
+    // that decision threw.
+    const n = seats.length;
     const heroIdx = seats.findIndex((s) => s.pos === heroPos);
     if (heroIdx < 0) return fail("hero is no longer in the hand — nothing to solve");
     if (n < 2) return fail("only one player left in the hand — no decision to solve");
