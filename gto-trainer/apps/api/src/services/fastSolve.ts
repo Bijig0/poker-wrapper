@@ -65,6 +65,8 @@ import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
  */
 
 export interface FastSolveOpts {
+  /** when this decision's ask began (fastSolve sets it on entry) — the last resort's narrowing deadline counts from it */
+  decisionStart?: number;
   setId?: string;
   depth?: number;
   heroPos?: string | null;
@@ -1192,9 +1194,11 @@ const ROUND_ORDER = ["preflop", "flop", "turn", "river"] as const;
  * A collapse plan's merged seats from its name (multiwayCollapse: "merge:CO+BTN", named for the first member; a merge
  * of a merged seat folds in its members) — for a walk that did not carry its plan's members (a replay of a stored trace).
  */
+const POSITION_NAME = "(UTG\\+1|UTG\\+2|MP\\+1|UTG|MP|LJ|HJ|CO|BTN|SB|BB|EP)";
 export function mergeMembers(kind: string | null | undefined): Record<string, string[]> {
   const out: Record<string, string[]> = {};
-  for (const m of (kind ?? "").matchAll(/merge:([A-Za-z0-9]+)\+([A-Za-z0-9]+)/g)) {
+  // against the known position names (review 3): "merge:UTG+1+HJ" is UTG+1 with HJ, not UTG with "1"
+  for (const m of (kind ?? "").matchAll(new RegExp(`merge:${POSITION_NAME}\\+${POSITION_NAME}(?![A-Za-z0-9])`, "gi"))) {
     const x = m[1]!, y = m[2]!;
     out[x] = [...(out[x] ?? [x]), ...(out[y] ?? [y])];
   }
@@ -1299,7 +1303,11 @@ export function chainPathChecks(a: {
     const tr = w.trace;
     if (!tr) continue;
     const sp = tr.spec;
-    const specFp = rangesFp([{ pos: sp.oopPos, range: sp.oopRange }, ...(sp.midPos && sp.midRange ? [{ pos: sp.midPos, range: sp.midRange }] : []), { pos: sp.ipPos, range: sp.ipRange }]);
+    const specSeats = [{ pos: sp.oopPos, range: sp.oopRange }, ...(sp.midPos && sp.midRange ? [{ pos: sp.midPos, range: sp.midRange }] : []), { pos: sp.ipPos, range: sp.ipRange }];
+    // THE SEATS THE STREET WAS WALKED WITH (2026-10-04, hand 4922269408): a seat with nothing behind at flop entry is
+    // dropped by the walk before it fingerprints what it starts from, so the request's fingerprint is over the same seats
+    // (the walk's `players`) — over all three it said "#34peiz vs #2qfdl5" for a flop that started exactly right
+    const specFpOf = (players?: string[]) => rangesFp(players?.length ? specSeats.filter((x) => players.some((p) => p.toUpperCase() === x.pos.toUpperCase())) : specSeats);
     const lastResort = /^last-resort/.test(w.kind ?? "");
     const members = w.members ?? mergeMembers(w.kind);
     /** a tree's seats as table positions: a merged seat stands for each of its members */
@@ -1310,7 +1318,7 @@ export function chainPathChecks(a: {
       const own = (s.checks ?? []).map((c) => (s.fromCheckpoint ? asWalkedEarlier(c) : c));
       const out: CheckResult[] = [...own];
       // #1
-      if (s.si === 0 && k === 0) out.push(checkFlopArrival({ arrival: a.arrival, started: s.rangeCheck?.inFp ?? null, expected: specFp }));
+      if (s.si === 0 && k === 0) out.push(checkFlopArrival({ arrival: a.arrival, started: s.rangeCheck?.inFp ?? null, expected: specFpOf(s.players) }));
       else out.push(checkHandoff(s.rangeCheck));
       // #5
       const beh = behindAt(k);
@@ -1487,8 +1495,11 @@ async function solvePostflopViaChainOnce(
   /** the CoinPoker ring strategy (2026-09-30): ranges from the AI preflop tree built from the table, the antes of
    *  every dealt seat in the pot, the rake the CoinPoker server states for the table */
   cpRing = false,
+  /** when the decision's ask began (FastSolveOpts.decisionStart); absent = this call's own start */
+  decisionStart?: number,
 ): Promise<{ res: FastSolveResult | null; why: string | null; mesInput?: RiverMesInput }> {
   const tEntry = Date.now();
+  const tDecision = decisionStart ?? tEntry;
   const fail = (why: string) => ({ res: null, why });
   let sixNote: string | null = captureNotes.length ? captureNotes.join(" · ") : null;
   const cur = hand.currentNode.street as "flop" | "turn" | "river";
@@ -1636,8 +1647,7 @@ async function solvePostflopViaChainOnce(
   // with the jammer "modelled at the effective stack" (82bb he does not have), betting and folding on every street.
   // A seat that went all-in PREFLOP (its own all-in action) leaves the tree while two or more players can still
   // act; its chips stay in the pot. What that loses is the main pot's showdown against his range — said in the note.
-  const preAllIn = new Set(hand.actions.filter((a) => a.street === "preflop" && a.type === "all-in")
-    .map((a) => String(hand.positions?.[a.seatId] ?? "").toUpperCase()).filter(Boolean));
+  const preAllIn = preflopAllInSeats(hand, pinnedDealt ?? dealtBySeat(hand));
   const liveAtFlop = Object.keys(recon.ranges).filter((p) => !preAllIn.has(p.toUpperCase()));
   const droppedAllIn = liveAtFlop.length >= 2 ? Object.keys(recon.ranges).filter((p) => preAllIn.has(p.toUpperCase())) : [];
   if (droppedAllIn.length) {
@@ -1882,26 +1892,27 @@ async function solvePostflopViaChainOnce(
     planTag: w.kind,
   });
   /**
-   * THE LAST RESORT'S NARROWING NEVER COSTS AN ANSWER (2026-10-03, review of the narrowing: 4-15 s a walk, on the slow
-   * path, on hero's 15 s clock). The narrowing walk (multiwayReroot.narrowForLastResort — the re-root's own walks) and
-   * the UNNARROWED hero-vs-aggressor tree start together. The narrowing has LAST_RESORT_NARROW_MS (6000) from the
-   * DECISION'S START: inside it, the narrowed tree is solved and served; past it (or refused, or its tree fails), the
-   * unnarrowed answer is served and the note says why. A walk that runs late is left to finish: it lands in the hand's
-   * memo (its own result per hand, and its streets checkpointed under the hand), so the next decision of the hand gets
-   * it without walking again. When the narrowed tree is served, the unnarrowed one was a tree today's last resort
-   * solves anyway — at most the old cost on top. The trace records which was served and every timing.
+   * THE LAST RESORT'S NARROWING NEVER COSTS AN ANSWER (2026-10-03; ONE DEADLINE FOR THE NARROWED PATH since 2026-10-04,
+   * review 3: a narrowed tree solved after an in-time walk had no deadline of its own — 3.7 s walk + 3.9 s tree served
+   * at 7.6 s where the unnarrowed answer was ready at 4.0, and a failed narrowed tree at 13 s). Two paths start
+   * together: U, today's unnarrowed hero-vs-aggressor tree, and N, the narrowing walk (multiwayReroot
+   * .narrowForLastResort — the re-root's own walks) chained into the narrowed tree. N is served iff its ANSWER is in
+   * by LAST_RESORT_NARROW_MS (6000) from the DECISION'S start (FastSolveOpts.decisionStart, set by fastSolve on entry —
+   * a seatbelt re-solve gets no fresh budget); otherwise U, the moment it is ready. When too little of the budget is
+   * left to try (the fallback after every collapse walk failed), N is not raced at all: it starts detached for the
+   * hand's memo when the hand can have a later decision. N always finishes in the background into the hand's memo, so
+   * the hand's next decision starts at "narrowed tree only" — under the same deadline. raceNarrowing has the table.
    * LAST_RESORT_NARROW=0 switches the narrowing off; the flop has nothing earlier to narrow.
    */
   const lastResortRace = async (w: Walkable): Promise<AiChainResult> => {
     const { lr, heroPos: heroPosLr } = w.lastResort!;
     const plain: Walkable = { ...w, lastResort: undefined };
     if (lr.first < 1) { lrNarrowClause = "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)"; return solveTree(plain); }
-    // OFF UNLESS ASKED FOR (2026-10-04, second review): the race bounds the narrowing WALK but not the narrowed TREE
-    // solved after it, so a ready unnarrowed answer could be held past hero's clock (walk 5.9 s + a 13 s tree failure).
-    // Until the narrowed tree has its own deadline, the narrowing runs only with LAST_RESORT_NARROW=1.
-    if (process.env.LAST_RESORT_NARROW !== "1") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW is not 1)"; return solveTree(plain); }
+    if (process.env.LAST_RESORT_NARROW === "0") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)"; return solveTree(plain); }
     const r = await raceNarrowing<AiChainResult>({
-      start: tEntry, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 6000) || 0),
+      start: tDecision, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 6000) || 0),
+      // a later decision of this hand is possible unless hero faces an all-in (call or fold ends his action)
+      later: !(lr.bet > 0 && lr.bet >= lr.stack - 0.005),
       narrowing: () => narrowForLastResort({
         ordered, heroPos: heroPosLr, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, board: tk.board, heroComboIdx,
         rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))), ...(behindFlop ? { behind: behindFlop } : {}), amounts: streetAmounts,
@@ -1912,13 +1923,18 @@ async function solvePostflopViaChainOnce(
         const sp = { ...w.seatSpec };
         sp.oopRange = sp.oopPos === heroPosLr ? nr.hero : nr.villain;
         sp.ipRange = sp.ipPos === heroPosLr ? nr.hero : nr.villain;
-        return solveTree({ ...plain, seatSpec: sp, rangeNote: `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s` });
+        // ITS OWN PLAN (2026-10-04, check #9 on hand 4922247756): the narrowed tree is not the unnarrowed one created again
+        return solveTree({ ...plain, seatSpec: sp, kind: (plain.kind ?? "last-resort").replace(/^last-resort/, "last-resort:narrowed"),
+          rangeNote: `last-resort narrowing: ${nr.walks} three-seat walk(s) ${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s` });
       },
+      failed: (why) => ({ ok: false, why, trace: undefined } as AiChainResult),
     });
     lrNarrowClause = r.clause;
     if (r.chain.trace) r.chain.trace.lastResortNarrowing = r.record;
-    tmark("last resort: narrowing", `${r.record.served} served${r.record.why ? ` (${r.record.why})` : ""} · narrowing ${r.record.narrowingMs ?? "still walking"} ms · ` +
-      `unnarrowed tree ${r.record.unnarrowedMs ?? "still solving"} ms · narrowed tree ${r.record.narrowedMs ?? "—"} ms · budget ${r.record.budgetMs} ms from the decision's start`);
+    const ms = (x: number | null, none: string) => (x == null ? none : `${x} ms`);
+    tmark("last resort: narrowing", `${r.record.served} served at ${r.record.servedMs} ms${r.record.why ? ` (${r.record.why})` : ""} · narrowed path ${r.record.narrowedPath} · ` +
+      `walk ${ms(r.record.narrowingMs, "still walking")} · unnarrowed tree ${ms(r.record.unnarrowedMs, "still solving")} · narrowed tree ${ms(r.record.narrowedMs, "—")} · ` +
+      `deadline ${r.record.budgetMs} ms from the decision's start`);
     return r.chain;
   };
   // THE DRY RUN (2026-09-25, the input-mutation harness): everything up to here is the SOLVER INPUT — ranges for
@@ -2298,46 +2314,116 @@ function flopSeatStacksRead(a: {
 }
 
 /**
- * THE LAST RESORT'S RACE (2026-10-03; the policy is on fastSolve's lastResortRace): the narrowing and the UNNARROWED
- * tree start together; the narrowing has `budgetMs` from `start` (the decision's start). Its ranges inside the budget:
- * the narrowed tree is solved and served (the unnarrowed one is dropped, its result unused). Past the budget, refused,
- * or a narrowed tree that fails: the unnarrowed answer is served and `clause` says why. A late narrowing is left
- * running (its result lands in the hand's memo — multiwayReroot.narrowForLastResort). Times are ms from `start`.
+ * THE SEATS ALL-IN PREFLOP, BY THE CHIPS (2026-10-04, hand 4922269408). Ignition files an action by the BUTTON pressed
+ * (wsLine BTN: 2048 = all-in, 4096 = raise): a player who types or slides the raise to his whole stack and presses
+ * Raise is filed as a "raise" — the CO's 13.4 raise of his 13.4. Counted by the action's type, that CO stayed a flop
+ * seat with nothing behind (the chain dropped him on the flop, then a resume put him back: the HTTP 500). A seat is
+ * all-in preflop when its preflop chips reach its stack as dealt (within 0.05, as gtowAiPreflop.shapeOf reads it), or
+ * when its own action says all-in. Position names upper-cased.
+ */
+export function preflopAllInSeats(hand: ParsedHand, dealt: Record<number, number> | null | undefined): Set<string> {
+  const seatOf = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const name = (sid: number) => String(hand.positions?.[sid] ?? "").toUpperCase();
+  const out = new Set<string>();
+  for (const a of hand.actions) if (a.street === "preflop" && a.type === "all-in") out.add(name(seatOf(a)));
+  const put = roundContributions(hand).get("preflop") ?? new Map<number, number>();
+  for (const [sid, c] of put) {
+    const d = dealt?.[sid];
+    if (d != null && Number.isFinite(d) && d > 0 && c >= d - 0.05) out.add(name(sid));
+  }
+  out.delete("");
+  return out;
+}
+
+/**
+ * THE LAST RESORT'S RACE (2026-10-04, review 3: ONE DEADLINE FOR THE NARROWED PATH; the policy is on fastSolve's
+ * lastResortRace). U = the unnarrowed tree; N = the narrowing walk chained into the narrowed tree (a memo hit makes it
+ * the narrowed tree alone). deadline = start + budgetMs, `start` the DECISION's start. Never rejects: a throw anywhere
+ * is that path's failure.
+ *
+ *   room left (start + budget − now) < floorMs        N not raced: started detached for the memo if `later`, else not
+ *                                                      at all; U served when ready (its failure if it fails)
+ *   N answers ok by the deadline                       N served (U's result unused; at most today's cost on top)
+ *   N refused / failed before the deadline             U served as soon as ready
+ *   the deadline passes, N still running               U served as soon as ready — never a wait past the deadline for N
+ *   U fails (any time) and N may still answer          N awaited with NO deadline (nothing else to serve): N if ok,
+ *                                                      else U's failure; U's failure at once if N already failed
+ * N always runs to its end in the background (the hand's memo). Times are ms from `start`.
  */
 export async function raceNarrowing<C extends { ok: boolean; why?: string }>(a: {
   start: number; budgetMs: number;
+  /** the least room worth racing for: walk + tree in less than this is not expected (default 2500 ms) */
+  floorMs?: number;
+  /** the hand can have a later decision (a narrowing started without room is then still worth it, for the memo) */
+  later: boolean;
   narrowing: () => Promise<{ ok: true; hero: number[]; villain: number[]; walks: number; ms: number; group: string[] } | { ok: false; why: string; ms: number }>;
   unnarrowed: () => Promise<C>;
   narrowed: (nr: { hero: number[]; villain: number[]; walks: number; ms: number; group: string[] }) => Promise<C>;
+  /** a failure answer, for a path that threw */
+  failed: (why: string) => C;
 }): Promise<{ chain: C; clause: string; record: NonNullable<ChainTrace["lastResortNarrowing"]> }> {
+  const floor = a.floorMs ?? 2500;
+  const deadline = a.start + a.budgetMs;
+  const secs = (a.budgetMs / 1000).toFixed(1);
+  const msg = (e: unknown) => String((e as Error)?.message ?? e);
   let narrowingAt: number | null = null, unnarrowedAt: number | null = null, narrowedAt: number | null = null;
   const since = (t: number | null) => (t == null ? null : t - a.start);
-  const narrowing = a.narrowing().catch((e) => ({ ok: false as const, why: String((e as Error)?.message ?? e), ms: 0 }));
-  narrowing.then(() => { narrowingAt = Date.now(); });
-  const unnarrowed = a.unnarrowed();
-  unnarrowed.then(() => { unnarrowedAt = Date.now(); }, () => { unnarrowedAt = Date.now(); });
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const late = new Promise<null>((res) => { timer = setTimeout(() => res(null), Math.max(0, a.start + a.budgetMs - Date.now())); });
-  const nr = await Promise.race([narrowing, late]);
-  if (timer) clearTimeout(timer);
-  const done = (chain: C, served: "narrowed" | "unnarrowed", why: string | null, clause: string) => ({
+  const safely = <T>(f: () => Promise<T>): Promise<T | { thrown: string }> => { try { return f().catch((e) => ({ thrown: msg(e) })); } catch (e) { return Promise.resolve({ thrown: msg(e) }); } };
+  const startNarrowing = () => safely(a.narrowing).then((nr) => { narrowingAt = Date.now(); return "thrown" in nr ? { ok: false as const, why: `the narrowing walk threw: ${nr.thrown}`, ms: 0 } : nr; });
+  const U: Promise<C> = safely(a.unnarrowed).then((c) => { unnarrowedAt = Date.now(); return "thrown" in c ? a.failed(`the unnarrowed tree threw: ${c.thrown}`) : c; });
+  const done = (chain: C, served: "narrowed" | "unnarrowed", path: "raced" | "detached" | "skipped", why: string | null, clause: string) => ({
     chain, clause,
-    record: { served, budgetMs: a.budgetMs, why, narrowingMs: since(narrowingAt), unnarrowedMs: since(unnarrowedAt), narrowedMs: since(narrowedAt) },
+    record: { served, budgetMs: a.budgetMs, why, narrowedPath: path, narrowingMs: since(narrowingAt), unnarrowedMs: since(unnarrowedAt), narrowedMs: since(narrowedAt), servedMs: Date.now() - a.start },
   });
-  if (nr && nr.ok) {
-    const c = await a.narrowed(nr);
-    narrowedAt = Date.now();
-    if (c.ok) {
-      unnarrowed.catch(() => undefined);
-      return done(c, "narrowed", null, `the two entering ranges are narrowed by the earlier streets by ${nr.walks} three-seat walk(s) ` +
-        `(${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s; seats outside a walk play as if they had folded there)`);
-    }
-    return done(await unnarrowed, "unnarrowed", `the narrowed tree failed: ${c.why}`, `the two entering ranges are NOT narrowed: the narrowed tree failed (${c.why}), the unnarrowed one is served`);
+
+  // ---- no room on this decision's clock
+  const room = deadline - Date.now();
+  if (room < floor) {
+    const path = a.later ? "detached" as const : "skipped" as const;
+    if (a.later) startNarrowing().catch(() => undefined);
+    const left = (Math.max(0, room) / 1000).toFixed(1);
+    const c = await U;
+    return done(c, "unnarrowed", path, `${left} s of the ${secs} s left when the last resort started`,
+      `ranges NOT narrowed: ${left} s of the ${secs} s narrowing deadline was left when the last resort started` +
+      (a.later ? " (the narrowing runs in the background for the hand's next decision)" : ""));
   }
-  if (nr) return done(await unnarrowed, "unnarrowed", nr.why, `the two entering ranges are NOT narrowed by the earlier streets (${nr.why})`);
-  const secs = (a.budgetMs / 1000).toFixed(1);
-  return done(await unnarrowed, "unnarrowed", `the narrowing walk took longer than ${secs} s`,
-    `ranges NOT narrowed: the narrowing walk took longer than ${secs} s (it finishes in the background for the hand's next decision)`);
+
+  // ---- the race
+  type NOut = { c: C; nr: { walks: number; ms: number; group: string[] } } | { refused: string };
+  const N: Promise<NOut> = startNarrowing().then(async (nr): Promise<NOut> => {
+    if (!nr.ok) return { refused: nr.why };
+    const c = await safely(() => a.narrowed(nr));
+    narrowedAt = Date.now();
+    return { c: "thrown" in c ? a.failed(`the narrowed tree threw: ${c.thrown}`) : c, nr };
+  });
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const atDeadline = new Promise<{ k: "deadline" }>((res) => { timer = setTimeout(() => res({ k: "deadline" }), Math.max(0, deadline - Date.now())); });
+  const uFailed = new Promise<{ k: "u-failed" }>((res) => { U.then((c) => { if (!c.ok) res({ k: "u-failed" }); }); });
+  const first = await Promise.race([N.then((n) => ({ k: "n" as const, n })), atDeadline, uFailed]);
+  if (timer) clearTimeout(timer);
+  const narrowedClause = (nr: { walks: number; ms: number; group: string[] }) => `the two entering ranges are narrowed by the earlier streets by ${nr.walks} ` +
+    `three-seat walk(s) (${nr.group.join("/")}, ${(nr.ms / 1000).toFixed(1)} s; seats outside a walk play as if they had folded there)`;
+  const whyN = (n: NOut) => ("refused" in n ? n.refused : `the narrowed tree failed: ${n.c.why ?? "?"}`);
+  const clauseN = (n: NOut) => ("refused" in n ? `the two entering ranges are NOT narrowed by the earlier streets (${n.refused})`
+    : `the two entering ranges are NOT narrowed: the narrowed tree failed (${n.c.why ?? "?"}), the unnarrowed one is served`);
+  // U failed: N is the only answer left — awaited with no deadline
+  const afterUFailed = async (u: C) => {
+    const n = await N;
+    if ("c" in n && n.c.ok) return done(n.c, "narrowed", "raced", `the unnarrowed tree failed: ${u.why ?? "?"}`, `${narrowedClause(n.nr)} (served after the unnarrowed tree failed: ${u.why ?? "?"})`);
+    return done(u, "unnarrowed", "raced", `both failed: ${u.why ?? "?"} / ${whyN(n)}`, clauseN(n));
+  };
+  if (first.k === "n") {
+    const n = first.n;
+    if ("c" in n && n.c.ok) { U.catch(() => undefined); return done(n.c, "narrowed", "raced", null, narrowedClause(n.nr)); }
+    const u = await U;
+    return done(u, "unnarrowed", "raced", whyN(n), clauseN(n));
+  }
+  if (first.k === "u-failed") return afterUFailed(await U);
+  // the deadline: U the moment it is ready (N, ok or not, after the deadline is not served — unless U fails)
+  const u = await U;
+  if (!u.ok) return afterUFailed(u);
+  return done(u, "unnarrowed", "raced", `the narrowed path did not answer within ${secs} s of the decision`,
+    `ranges NOT narrowed: the narrowing walk and its tree did not answer within ${secs} s of the decision (the narrowing finishes in the background for the hand's next decision)`);
 }
 
 /**
@@ -2353,7 +2439,8 @@ export async function raceNarrowing<C extends { ok: boolean; why?: string }>(a: 
  *                        this street — the two players' real stacks, not the field's (2026-09-25);
  *   the bet hero faces  = the aggressor's matched total this street − hero's total this street, and an ALL-IN when it is
  *                        everything the smaller stack has (the aggressor's jam, or a bet that covers hero).
- * Both entering ranges are the flop-arrival ranges (not narrowed by earlier streets — the approximation named in the note).
+ * Both entering ranges are the flop-arrival ranges here; the caller narrows them through the earlier streets when that
+ * answers in time (lastResortRace / raceNarrowing) and the note says which was served.
  */
 export function heroVsAggressor(a: {
   ordered: string[]; heroPos: string; arr: (p: string) => number[]; streets: string[][]; streetSeats: string[][];
@@ -2716,7 +2803,7 @@ async function solvePostflopSite(hand: ParsedHand, heroPos: string | null, opts:
   const street = hand.currentNode.street;
   const tk = buildSpotSolutionTokens(fixed.hand, heroPos, site.huCp);
   const chain = await solvePostflopViaChain(fixed.hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, site.sixMax,
-    fixed.notes, site.huCp, pin?.dealt, !!site.cpRing);
+    fixed.notes, site.huCp, pin?.dealt, !!site.cpRing, opts.decisionStart);
   if (chain.res && chain.mesInput && site.riverMes) {
     // On-the-fly river MES (services/riverMes.ts). shadow (default): logged only, the answer untouched.
     // serve: MES becomes the pick when its gate passes. Never throws; any failure returns the chain's answer.
@@ -2885,7 +2972,7 @@ async function solvePostflop(hand: ParsedHand, heroPos: string | null, opts: Fas
   // The per-street chain answers with ranges conditioned on the actual line —
   // the correct equilibrium at hero's node. It requires a clean, walkable
   // capture; anything broken falls through to the street-root net.
-  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk, opts.origin, opts.sessionId);
+  const chain = await solvePostflopViaChain(hand, heroPos, set, depth, tk, opts.origin, opts.sessionId, false, [], false, undefined, false, opts.decisionStart);
   if (chain.res) return chain.res;
 
   // Street-root net: solves the current street with FLOP-ENTRY ranges and
@@ -3742,6 +3829,23 @@ export function zeroMixReason(a: {
     `empty; read the walk's trace before trusting this tree`;
 }
 
+/**
+ * A THROW IS A REASONED NO-ANSWER, NEVER AN HTTP 500 (2026-10-04, hand 4922269408: 59 stack traces on hero's turn).
+ * The route turned an exception into a 500; the poller counts a 500 as "the fast-solver did not answer" and asks again
+ * on the next tick — never three times the same way, so it never says "no answer" and fold-on-no-answer waits for
+ * the clock (the time bank included). A refusal is counted: three alike and the panel is told, and the no-answer fold
+ * acts on it. kind "solver-error" with the exception's message; the stack is logged once per call.
+ */
+async function fastSolveSafely(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
+  try {
+    return await fastSolveEntry(hand, heroPos, opts);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[fastSolve] threw on hand ${hand.clientHandId ?? hand.handId ?? "?"} ${hand.currentNode?.street ?? "?"}: ${(e as Error)?.stack ?? msg}`);
+    return { ok: false, kind: "solver-error", street: hand.currentNode?.street ?? undefined, reason: `the solver threw (a bug, not the spot): ${msg.slice(0, 300)}` };
+  }
+}
+
 export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // EVERY CALL IS ONE SCOPE (2026-09-25, services/requestScope): the GTO Wizard requests it makes are counted on it,
   // added to the hand's facts (by origin: live / warm / replay), and reported on the answer's chain path.
@@ -3749,9 +3853,11 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   // LIVE ANSWERS GO FIRST (2026-09-26, services/livePriority): a decision at the table (and the street warm-up that
   // pre-solves it) marks itself, and heavy dashboard reads wait until it is done instead of stalling it
   const live = opts.origin === "live" || opts.origin === "warm";
+  // the decision's clock starts HERE, before any queue (asLive) — the last resort's narrowing deadline counts from it
+  const decisionStart = Date.now();
   const run = () => withRequestScope(
     { handKey, origin: opts.origin ?? "adhoc", street: hand.currentNode?.street ?? null },
-    () => fastSolveEntry(hand, heroPos, opts));
+    () => fastSolveSafely(hand, heroPos, opts.decisionStart != null ? opts : { ...opts, decisionStart }));
   const t0 = Date.now();
   const { value, scope } = live ? await asLive(run) : await run();
   if (handKey) handFacts.addRequests(handKey, scope.origin, scope.counts);

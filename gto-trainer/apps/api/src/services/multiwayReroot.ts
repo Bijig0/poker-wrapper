@@ -19,6 +19,8 @@
  * aggressors than a three-seat walk can hold.
  */
 import { effectiveBehind, solveAiChain, type AiChainSpec } from "./aiChain";
+import { handFacts } from "./handFacts";
+import { withRequestScope } from "./requestScope";
 import { effectiveStack, moneyEntering, moneyState, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses, pickCollapses, type Picked, type SeatTok } from "./multiwayCollapse";
 
@@ -178,8 +180,9 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
       flopPot: a.flopPot, flopStack: ((e) => (Number.isFinite(e) ? e : a.flopStack))(effectiveBehind(keep, a.heroPos, seatStacks)), board: a.board, streets, streetSeats: seats,
       ...(seatStacks ? { seatStacks } : {}),
       heroComboIdx: a.heroComboIdx, walkThrough: true,
-      // the hand's memo (aiChain checkpoints, content-keyed): a later street's walk of these streets starts past them
-      ...(a.memoKey ? { handKey: `${a.memoKey}#lr-narrow` } : {}),
+      // the hand's memo (aiChain checkpoints, content-keyed, in this process only — never the hand's persistent facts,
+      // review 3): a later street's walk of these streets starts past them
+      ...(a.memoKey ? { handKey: `${a.memoKey}#lr-narrow`, checkpointOnly: true } : {}),
     };
     const r = await solveAiChain(spec);
     return { keep, r };
@@ -263,7 +266,11 @@ export function narrowForLastResort(a: RerootArgs, villain: string): Promise<LrN
     a.flopPot, a.flopStack, a.behind ?? null, a.board.slice(0, 6 + 2 * first), a.rake ?? null, a.heroComboIdx, a.ordered.map((p) => [p, hashOf(a.arr(p))])]);
   const hit = lrNarrowMemo.get(key);
   if (hit) return hit;
-  const p = narrowForLastResortNow(a, villain);
+  // THE WALKS' REQUESTS ARE THE HAND'S (review 3): counted on their own scope (the hand, caller tag "lr-narrow" — the
+  // ledger's rows carry both) and added to the hand's facts when the walk ends, even after the answer was served
+  const memoKey = a.memoKey;
+  const p = withRequestScope({ handKey: memoKey, origin: "lr-narrow", street: ["flop", "turn", "river"][first] ?? null }, () => narrowForLastResortNow(a, villain))
+    .then(({ value, scope }) => { handFacts.addRequests(memoKey, "lr-narrow", scope.counts); return value; });
   lrNarrowMemo.set(key, p);
   while (lrNarrowMemo.size > LR_NARROW_MEMO_MAX) { const f = lrNarrowMemo.keys().next().value; if (f === undefined) break; lrNarrowMemo.delete(f); }
   // a refusal is not remembered (a 429 now may walk later)

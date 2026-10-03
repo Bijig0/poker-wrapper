@@ -126,6 +126,10 @@ export interface AiChainSpec {
    *  deepest checkpoint whose tokens still match the capture. A previous street's ranges are then never computed
    *  twice for one hand, whatever happens to the tree cache. Without it the walk starts at the flop as before. */
   handKey?: string;
+  /** with handKey: checkpoint in this process's memory ONLY — nothing written to the hand's facts (services/handFacts,
+   *  persisted). The last resort's narrowing walks (2026-10-04, review 3): their trees are not the hand's answer
+   *  trees, and the hand page must show only those. */
+  checkpointOnly?: boolean;
 }
 
 /**
@@ -229,7 +233,12 @@ export interface ChainTrace {
    *  decision's start; null = not finished when the answer was served) */
   lastResortNarrowing?: {
     served: "narrowed" | "unnarrowed"; budgetMs: number; why: string | null;
-    narrowingMs: number | null; unnarrowedMs: number | null; narrowedMs: number | null;
+    /** the narrowed path on this decision's clock ("raced"), started for the hand's memo only ("detached": no room
+     *  left on the clock, a later decision can use it), or not started ("skipped") */
+    narrowedPath: "raced" | "detached" | "skipped";
+    /** ms from the decision's start: the narrowing walk done, the unnarrowed tree's answer, the narrowed tree's answer
+     *  (null = not finished when the answer was served), and when the answer was served */
+    narrowingMs: number | null; unnarrowedMs: number | null; narrowedMs: number | null; servedMs: number;
   };
   result: { ok: boolean; why?: string; potNode?: number; stackStreet?: number; line?: string; solves?: number };
 }
@@ -878,7 +887,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   }
   const entryKeyAt = (si: number): string => (si === 0 ? rootKey! : exitKeys[si - 1]!);
   /** what this hand's ledger says was walked before (services/handFacts) — how a re-walk is told from a first walk */
-  const records = handKey ? handFacts.streets(handKey) : [];
+  /** the hand whose facts this walk reads and writes (none for a checkpoint-only walk) */
+  const factsKey = spec.checkpointOnly ? null : handKey;
+  const records = factsKey ? handFacts.streets(factsKey) : [];
   if (rootKey) {
     for (let si = exitKeys.length - 1; si >= 0; si--) {
       const cp = checkpoints.get(exitKeys[si]!);
@@ -1156,7 +1167,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     trace.streets.push(streetRec);
     streetRec.rangeCheck = rangeCheckOf({
       k, first, si, plan, started: startedFp, prevOut,
-      prevKey: si > 0 && rootKey ? entryKeyAt(si) : null, records: handKey ? handFacts.streets(handKey) : [],
+      prevKey: si > 0 && rootKey ? entryKeyAt(si) : null, records: factsKey ? handFacts.streets(factsKey) : [],
     });
 
     const tSolve = Date.now();
@@ -1183,8 +1194,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // THE HAND'S TREE LEDGER (services/handFacts TreeRecord, 2026-09-27): every tree asked for, by street, plan and
     // origin — the warm-up's included, whether or not its walk reached hero — for checks #4, #7, #9 and #11
     const recordTree = (reroute: boolean) => {
-      if (!handKey) return;
-      handFacts.recordTree(handKey, {
+      if (!factsKey) return;
+      handFacts.recordTree(factsKey, {
         k, first, plan, origin, solId: String(ens.ok ? ens.solId : ""), sizeFree: !fixedLevels, fixed: fixedLevels,
         seats: seats.map((s) => s.pos), rake: ((streetRec.sent as { rake?: { pct_of_pot: number; cap_in_chips: number } } | null)?.rake) ?? null,
         created: !!(ens.ok && ens.created), ...(reroute ? { reroute: true } : {}), at: Date.now(),
@@ -1247,7 +1258,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       });
       const villainActs = nodes.filter((x) => x.taken != null && x.actor !== heroIdx).length;
       const offs = nodes.filter((x) => x.offTree).map((x) => x.offTree!);
-      const trees = handKey ? handFacts.trees(handKey).filter((t) => t.k === k && t.first === first && (t.plan ?? null) === plan) : [];
+      const trees = factsKey ? handFacts.trees(factsKey).filter((t) => t.k === k && t.first === first && (t.plan ?? null) === plan) : [];
       const warm = trees.filter((t) => t.origin === "warm");
       const ms = streetRec.solveMs + streetRec.walkMs;
       // #12's populations (2026-10-03): a full cache hit and a cached tree whose nodes were fetched are kept apart
@@ -1412,7 +1423,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         // HERO'S NODE IS THE HAND'S MID-STREET CHECKPOINT: the next decision resumes from here (see PartialCheckpoint)
         if (rootKey && handKey) {
           const entry = entryKeyAt(si);
-          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry, key: entry, tokens: toks.slice(), kind: "partial", solId: String(ens.solId), ...(startedFp ? { inFp: startedFp } : {}), at: Date.now() });
+          if (factsKey) handFacts.recordStreet(factsKey, { k, first, plan, root: rootKey, entry, key: entry, tokens: toks.slice(), kind: "partial", solId: String(ens.solId), ...(startedFp ? { inFp: startedFp } : {}), at: Date.now() });
           savePartial(handKey, entry, {
             k, tokens: spec.streets.slice(0, si + 1).map((t) => t.slice()),
             entering, seats: seats.map((s) => ({ ...s, range: s.range.slice() })), pot, stack,
@@ -1527,7 +1538,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         // the street is closed: everything the next street needs is checkpointed for this hand's later decisions
         if (rootKey && handKey) {
           const key = exitKeys[si] ?? exitKeyOf(entryKeyAt(si), toks, streetBoard, spec.streetAmounts?.[si]);
-          handFacts.recordStreet(handKey, { k, first, plan, root: rootKey, entry: entryKeyAt(si), key, tokens: toks.slice(), kind: "closed", solId: String(ens.solId),
+          if (factsKey) handFacts.recordStreet(factsKey, { k, first, plan, root: rootKey, entry: entryKeyAt(si), key, tokens: toks.slice(), kind: "closed", solId: String(ens.solId),
             ...(startedFp ? { inFp: startedFp } : {}), out: outFp, at: Date.now() });
           saveCheckpoint(handKey, key, {
             k, root: rootKey, out: outFp,
