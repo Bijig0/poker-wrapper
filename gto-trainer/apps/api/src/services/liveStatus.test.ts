@@ -96,7 +96,7 @@ describe("liveStatus", () => {
     try {
       const s = await liveStatus(null, { ...ENV, FACTORY_API_URL: `http://127.0.0.1:${srv.port}/` });
       const f = s.services.find((x) => x.name === "factory")!;
-      expect([f.up, f.current, f.port]).toEqual([true, true, srv.port]);
+      expect([f.up, f.current, f.port]).toEqual([true, true, Number(srv.port)]);
       expect(s.supervisors.find((x) => x.name === "factory")?.changed).toEqual(["x.ps1"]);
       expect(s.current).toBe(false);
       const none = await liveStatus(null, ENV);
