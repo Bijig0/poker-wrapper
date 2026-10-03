@@ -21,7 +21,7 @@ if (!rows.length) process.exit(0);
 // Not every live failure is a SOLVER failure, and the replay must not take credit for the others.
 // "never asked" — the poller skipped the decision, or hero was judged not to act: the replay answers it because it
 // asks, which proves nothing. "infrastructure" — GTO Wizard or the chart server was down at the table.
-const NEVER_ASKED = new Set(["no-probe", "not-to-act-live", "abandoned-stale", "not-heros-turn"]);
+const NEVER_ASKED = new Set(["no-probe", "socket-stall", "not-to-act-live", "abandoned-stale", "not-heros-turn"]);
 const INFRA = new Set(["gtow-down", "solver-unreachable", "solver-timeout"]);
 const S = (x: unknown) => (x === null || x === undefined ? "None" : String(x));
 

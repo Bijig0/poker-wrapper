@@ -818,6 +818,17 @@ tr.catnode > td { background: var(--surface2); padding: 14px 12px; }
 /* ---- the range looker (Hand Detail → Timeline card → Ranges): one row per hero decision, top to bottom ---- */
 .tl-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .tl-head h2 { margin: 0; }
+/* minimize / expand a hand-page card (dashboard.html foldCards) */
+.card.foldable { position: relative; }
+.card.foldable > h2 { padding-right: 30px; cursor: pointer; }
+.card.foldable > .tl-head > h2 { cursor: pointer; }
+.fold-tog { background: none; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; padding: 3px 6px; }
+.fold-tog:hover { color: var(--ink); border-color: var(--muted); }
+.card.foldable > .fold-tog { position: absolute; top: 12px; right: 14px; }
+.tl-head > .fold-tog { order: -1; }
+.tl-head > h2 { flex: 1; }
+.card.folded > :not(h2):not(.tl-head):not(.fold-tog) { display: none !important; }
+.card.folded > h2, .card.folded > .tl-head { margin-bottom: 0; }
 .rl-row { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .rl-row.cur { border-color: var(--info); box-shadow: 0 0 0 1px var(--info) inset; }
 .rl-facts { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; cursor: pointer; min-width: 0; }

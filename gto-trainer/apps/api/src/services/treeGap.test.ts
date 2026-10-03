@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chartStacks6, treeGap6, gapReasons, gapGateMode, SIZE_TAU, RERAISE_STACK_TAU } from "./treeGap";
+import { chartStacks6, treeGap6, gapReasons, gapGateMode, SIZE_TAU, RERAISE_STACK_TAU, ALLIN_STACK_TAU, FIRST_STACK_TAU, FIRST_STACK_DEPTH, HERO_STACK_TAU, HERO_STACK_DEPTH } from "./treeGap";
 
 describe("chartStacks6 — the stacks a chart was solved at, off its id", () => {
   test("even, limp, one-short, patch", () => {
@@ -33,7 +33,7 @@ describe("treeGap6 — effective stacks at the table against the chart's", () =>
     expect(g.gate).toEqual({ mode: "live", route: false, reasons: [] });
   });
 
-  test("a short seat far from its rung, hero first in: measured, not routed", () => {
+  test("a short seat still to act (not blind against blind), hero first in: measured, not routed", () => {
     const g = treeGap6({ chartId: "ign200_6max_D100_s30_BB_o2_5", byPos: { BTN: 100, SB: 250, BB: 44 }, hero: "BTN",
       folded: new Set(["UTG", "HJ", "CO"]), rawTokens: ["F", "F", "F"], mode: "live" })!;
     expect([g.stack!.seat, g.stack!.ratio]).toEqual(["BB", 1.467]);
@@ -59,7 +59,7 @@ describe("the gap gate — past a measured bound the exact tree answers", () => 
 
   test("the bounds as measured: open 1.25x, 3-bet 1.15x, 4-bet 1.10x; a re-raiser's stack 1.3x", () => {
     expect([...SIZE_TAU]).toEqual([1.25, 1.15, 1.1]);
-    expect(RERAISE_STACK_TAU).toBe(1.3);
+    expect([RERAISE_STACK_TAU, ALLIN_STACK_TAU, FIRST_STACK_TAU, FIRST_STACK_DEPTH, HERO_STACK_TAU, HERO_STACK_DEPTH]).toEqual([1.3, 1.2, 1.5, 50, 1.3, 30]);
   });
 
   test("an open: 2.7 on the 2.5 tree stays, 3.3 on it goes; the level is the raise's place in the line", () => {
@@ -87,7 +87,7 @@ describe("the gap gate — past a measured bound the exact tree answers", () => 
     expect(opened.gate.route).toBe(false);
     const reraised = treeGap6({ chartId: even, byPos, hero: "CO", folded: new Set(["UTG", "HJ", "SB", "BB"]), aggressor: "BTN", after: [],
       rawTokens: ["F", "F", "R2.5", "R8.75", "F", "F"], mode: "live" })!;
-    expect(reraised.gate.reasons).toEqual([{ rule: "stack", level: 2, ratio: 1.667, tau: 1.3, what: "BTN 60bb, 100bb in the chart" }]);
+    expect(reraised.gate.reasons).toEqual([{ rule: "stack", why: "reraise", level: 2, ratio: 1.667, tau: 1.3, what: "BTN 60bb, 100bb in the chart" }]);
     // on that seat's own short chart the stacks agree
     expect(treeGap6({ chartId: "ign200_6max_D100_s60_BTN_o2_5", byPos, hero: "CO", folded: new Set(["UTG", "HJ", "SB", "BB"]), aggressor: "BTN", after: [],
       rawTokens: ["F", "F", "R2.5", "R8.75", "F", "F"], mode: "live" })!.gate.route).toBe(false);
@@ -97,7 +97,55 @@ describe("the gap gate — past a measured bound the exact tree answers", () => 
     const g = treeGap6({ chartId: "ign200_6max_D100_s30_CO_o2_5", byPos: { CO: 14, BTN: 100, BB: 100 }, hero: "BTN",
       folded: new Set(["UTG", "HJ"]), aggressor: "CO", after: ["SB", "BB"], rawTokens: ["F", "F", "RAI"], mode: "live" })!;
     expect([g.raises, g.allIn]).toEqual([1, true]);
-    expect(g.gate.reasons.map((r) => [r.rule, r.ratio])).toEqual([["stack", 2.143]]);
+    expect(g.gate.reasons.map((r) => [r.rule, r.why, r.ratio, r.tau])).toEqual([["stack", "allin", 2.143, 1.2]]);
+    // the all-in bound is 1.2x: a 24bb jam on the 30bb chart (1.25x) goes, a 26bb one (1.154x) stays
+    const jam = (co: number) => treeGap6({ chartId: "ign200_6max_D100_s30_CO_o2_5", byPos: { CO: co, BTN: 100, BB: 100 }, hero: "BTN",
+      folded: new Set(["UTG", "HJ"]), aggressor: "CO", after: ["SB", "BB"], rawTokens: ["F", "F", "RAI"], mode: "live" })!.gate.route;
+    expect([jam(24), jam(26)]).toEqual([true, false]);
+  });
+
+  test("a first decision against a short raiser: past 1.5x under 50bb goes; the same ratio deep, or a caller, stays", () => {
+    const open = (chartId: string, btn: number) => treeGap6({ chartId, byPos: { BTN: btn, SB: 100, BB: 100 }, hero: "BB",
+      folded: new Set(["UTG", "HJ", "CO", "SB"]), aggressor: "BTN", after: [], rawTokens: ["F", "F", "F", "R2.5", "F"], mode: "live" })!;
+    // a 22bb opener the chart holds at 100bb (the seat not modelled): 4.5x, under 50bb
+    expect(open("ign200_6max_D100_o2_5", 22).gate.reasons).toEqual([{ rule: "stack", why: "first", level: 1, ratio: 4.545, tau: 1.5, what: "BTN 22bb, 100bb in the chart" }]);
+    expect(open("ign200_6max_D100_s20_BTN_o2_5", 22).gate.route).toBe(false);      // on his own rung: 1.1x
+    expect(open("ign200_6max_D100_s30_BTN_o2_5", 19).gate.route).toBe(true);       // 19 on 30: 1.579x
+    expect(open("ign200_6max_D100_o2_5", 60).gate.route).toBe(false);              // 60 read as 100: 1.667x, but deep
+    expect(open("ign200_6max_D100_o2_5", 45).gate.route).toBe(true);               // 45 read as 100: 2.2x, under 50bb
+    // a short CALLER behind a full-stack opener is not the raiser: no bound
+    const caller = treeGap6({ chartId: "ign200_6max_D100_o2_5", byPos: { CO: 100, BTN: 20, SB: 100, BB: 100 }, hero: "SB",
+      folded: new Set(["UTG", "HJ"]), aggressor: "CO", after: ["BB"], rawTokens: ["F", "F", "R2.5", "C"], mode: "live" })!;
+    expect(caller.gate.route).toBe(false);
+  });
+
+  test("blind against blind: the other blind's stack counts whatever it did — nothing yet, a limp, an open", () => {
+    const others = new Set(["UTG", "HJ", "CO", "BTN"]);
+    const first = treeGap6({ chartId: "ign200_6max_D100_o2_5", byPos: { SB: 100, BB: 9 }, hero: "SB", folded: others, aggressor: null, after: ["BB"],
+      rawTokens: ["F", "F", "F", "F"], mode: "live" })!;
+    expect(first.bvb).toBe(true);
+    expect(first.gate.reasons.map((r) => [r.why, r.ratio])).toEqual([["first", 11.111]]);
+    const limp = treeGap6({ chartId: "ign200_6max_D100_olimp", byPos: { SB: 14, BB: 100 }, hero: "BB", folded: others, aggressor: null, after: [],
+      rawTokens: ["F", "F", "F", "F", "C"], mode: "live" })!;
+    expect(limp.gate.reasons.map((r) => r.why)).toEqual(["first"]);
+    // not blind against blind while the button is still in
+    const three = treeGap6({ chartId: "ign200_6max_D100_o2_5", byPos: { BTN: 100, SB: 100, BB: 9 }, hero: "SB", folded: new Set(["UTG", "HJ", "CO"]),
+      aggressor: "BTN", after: ["BB"], rawTokens: ["F", "F", "F", "R2.5"], mode: "live" })!;
+    expect([three.bvb ?? false, three.gate.route]).toEqual([false, false]);
+  });
+
+  test("hero's own stack: 20bb on the even 30bb chart goes, 28bb on it stays, 45bb on the 50bb chart stays", () => {
+    const own = (chartId: string, hero: number) => treeGap6({ chartId, byPos: { CO: 100, BTN: hero, BB: 100 }, hero: "BTN",
+      folded: new Set(["UTG", "HJ"]), aggressor: "CO", after: ["SB", "BB"], rawTokens: ["F", "F", "R2.5"], mode: "live" })!.gate.reasons.map((r) => r.why);
+    expect(own("ign200_6max_D30_o2_5", 20)).toEqual(["hero"]);
+    expect(own("ign200_6max_D30_o2_5", 28)).toEqual([]);
+    expect(own("ign200_6max_D50_o2_5", 45)).toEqual([]);
+  });
+
+  test("strict: every bound at once — a size past its bound AND a stack past its bound are both named", () => {
+    const g = treeGap6({ chartId: "ign200_6max_D100_o2_5", byPos: { BTN: 30, BB: 100 }, hero: "BB", folded: new Set(["UTG", "HJ", "CO", "SB"]),
+      aggressor: "BTN", after: [], repaired: [snap(3, 3.3, 2.5)], fitted: ["F", "F", "F", "R2.5", "F"], rawTokens: ["F", "F", "F", "R3.3", "F"], mode: "live" })!;
+    expect(g.gate.reasons.map((r) => `${r.rule}:${r.why ?? r.level}`)).toEqual(["size:1", "stack:first"]);
   });
 
   test("a stack still to act never routes, whatever its ratio", () => {

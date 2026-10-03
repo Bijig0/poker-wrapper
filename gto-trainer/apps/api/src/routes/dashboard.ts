@@ -8,12 +8,12 @@ import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, startStacksOf, roundContributions } from "../utils/archivedHand/archivedHand";
-import { summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
+import { heroAwardCents, summarizeHand, type HandSummary } from "../utils/handSummary/handSummary";
 import { autoExecOf } from "../utils/autoExec/autoExec";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { preflopDb } from "../services/preflopDb";
 import { resolveSet, resolveDepth } from "../services/fastSolve";
-import { answerLog, failKindOf, type LoggedAnswer } from "../services/answerLog";
+import { answerLog, failKindOf, NEVER_ASKED, type LoggedAnswer } from "../services/answerLog";
 import { sameAction, heroActionAt } from "../services/adherence";
 import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
@@ -95,7 +95,7 @@ const app = new Hono();
 
 // LIVE ANSWERS GO FIRST (services/livePriority): these pages recompute over every hand and answer on the thread that
 // answers hero's decisions, so each one waits for a live answer to finish before it starts. Only the browser pages'
-// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /sources/strategies|registry) never wait.
+// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /gtow-token, /sources/strategies|registry) never wait.
 for (const p of ["/hands", "/analytics", "/hand/*", "/sessions/*", "/profiles/*"]) app.use(p, yieldFirst);  // "/x/*" covers "/x" too
 
 interface HandRow {
@@ -416,6 +416,13 @@ export function computeNets(hands: Enriched[]): Map<number, number | null> {
     // hero put in. Exact, rake already off the award, and no stack chaining.
     const res = (h.raw as any)?.result as { winnerSeat?: number | null; wonCents?: number | null; heroWon?: boolean | null } | undefined;
     const bbUsd = bbUsdOf(h.stakes);
+    // EVERY award line, not just the one the archive kept (2026-10-03): a split pot or a side pot is two "★ Player N
+    // wins" lines and result holds one of them — a chopped pot read as a loss of everything hero put in
+    const award = heroAwardCents(h.raw, h.hand.heroSeatId);
+    if (award != null && bbUsd) {
+      nets.set(h.dbId, Math.round((award / 100 / bbUsd - s.heroInvestedBb) * 100) / 100);
+      continue;
+    }
     if (res && res.winnerSeat != null && res.wonCents != null && bbUsd) {
       const wonBb = res.wonCents / 100 / bbUsd;
       const heroWon = res.winnerSeat === h.hand.heroSeatId || res.heroWon === true;
@@ -739,7 +746,7 @@ function answerStatusOf(e: Enriched, byCid: Map<string, LoggedAnswer[]>): Answer
   const answered = rows.filter((a) => a.text != null).length;
   // A no-probe row is the reconciler's note that nobody ASKED here; it is not a
   // solve that failed, and counting it as one turned "no answer" into "failed ×1".
-  const fails = rows.filter((a) => a.text == null && (a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe");
+  const fails = rows.filter((a) => a.text == null && !NEVER_ASKED.has(a.fail_kind ?? failKindOf(a.fail_reason)));
   const failed = fails.length;
   const cov = coverageOf(e, rows);
   const base = { answered, failed, decisions: cov.decisions.length, covered: cov.covered, uncovered: cov.uncovered, stray: cov.stray };
@@ -955,7 +962,7 @@ function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
     if (!a.client_hand_id || !byCid.has(a.client_hand_id)) continue;
     // a no-probe row records a decision nobody asked about — counting it as a
     // failed solve would blame the solver for a capture fault
-    if (a.text == null) { if ((a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe") failed++; continue; }
+    if (a.text == null) { if (!NEVER_ASKED.has(a.fail_kind ?? failKindOf(a.fail_reason))) failed++; continue; }
     answers++;
     const t = (tiers[a.tier ?? "unknown"] ??= { n: 0, lat: [] });
     t.n++;
@@ -1847,7 +1854,10 @@ function sentOf(spec: any, st: any): { sent: unknown; sentFrom: "recorded" | "re
       ...(n === 2 && spec.huGrid ? { huGrid: spec.huGrid } : {}),
       startingStreet: street,
       ...(spec.rake ? { rake: spec.rake } : {}),
-      ...(Array.isArray(st.fixedLevels) && st.fixedLevels.length ? { fixedLevels: { [street]: st.fixedLevels } } : {}),
+      ...(st.stacksIn && typeof st.stacksIn === "object" ? { stacks: players.map((p) => Number(st.stacksIn[p]) || st.stackIn) } : {}),
+      // the pins: the wagers as amounts since 2026-10-03 (`played`), % of pot before ("62.8%" — fixedLevels)
+      ...(Array.isArray(st.played) && st.played.length ? { played: { [street]: st.played } }
+        : Array.isArray(st.fixedLevels) && st.fixedLevels.length && st.fixedLevels.every((x: unknown) => /%$/.test(String(x))) ? { fixedLevels: { [street]: st.fixedLevels } } : {}),
     };
     return { sent: gtowApi.treeRequestSummary(input), sentFrom: "rebuilt", account: st.account ?? null };
   } catch {
@@ -2219,7 +2229,7 @@ function sessionCard(s: ReturnType<typeof sessionsStore.list>[number], all: Enri
     hands: hands.length, knownHands: known.length, netBb, bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
     stakes: hands[0]?.stakes ?? null,
     // no-probe rows are decisions nobody asked about, not solves that failed
-    answers: answered.length, failed: answers.filter((a) => a.text == null && (a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe").length, tiers, disagreements,
+    answers: answered.length, failed: answers.filter((a) => a.text == null && !NEVER_ASKED.has(a.fail_kind ?? failKindOf(a.fail_reason))).length, tiers, disagreements,
     decisions: cov.decisions, decisionsCovered: cov.covered, decisionsCoveredPct: cov.coveredPct,
     unansweredNodes: cov.unansweredNodes, partialHands: cov.partialHands, strayCaptures: cov.stray, failKinds: cov.kinds,
     solves: solveStore.forSession(s.id).length,
@@ -2943,6 +2953,18 @@ async function gtowStatus() {
   };
 }
 app.get("/gtow-status", async (c) => c.json(await gtowStatus()));
+/**
+ * GET /gtow-token — the light token check (2026-10-03): is a GTO Wizard token in hand, and a multiway one. The
+ * wrapper's chain keeper asks this every 20 s per table; it used to ask /sources/registry, which builds the whole
+ * mission-control page (30 days of the answer log, many sync file reads, three network probes) and held the event
+ * loop 0.1-3 s a call — api.log's [stall] lines named it as open in 1,294 stalls, the next route in 389. These are
+ * the registry's own armed.gtow.tokenLive / multiwayLive (gtowApi.tokenStatus(), memory only): no probe, no file
+ * read, no await. Anything that needs the client's state as well asks /gtow-status.
+ */
+app.get("/gtow-token", (c) => {
+  const t = gtowApi.tokenStatus();
+  return c.json({ ok: true, tokenLive: t.live, multiwayLive: t.multiwayLive, expiresInMs: t.expiresInMs });
+});
 /**
  * POST /gtow-connect — bring a session back.
  *

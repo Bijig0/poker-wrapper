@@ -19,6 +19,7 @@ import { handState } from "./ignition/hand";
 import { awardName, type Node } from "./ignition/dom";
 import { shadowArchive } from "./ignition/shadow";
 import { autoLogFor } from "./autoLog";
+import { stallsFor } from "./ignition/stall";
 import { SITE as CP_SITE } from "./sites/coinpoker";
 import * as feed from "./sites/cpFeed";
 import * as cgg from "./sites/cggFeed";
@@ -89,6 +90,9 @@ function archiveHandLocked(): void {
     // what the relay did with each decision (autoLog.ts) — the hand page's "Auto-execute: worked, 1 try"
     const autoExec = autoLogFor(S.handNo);
     if (autoExec) h.autoExec = autoExec;
+    // the hand's connection stalls (ignition/stall.ts): a decision lost to one is filed as socket-stall, not no-probe
+    const stalls = stallsFor(S.handNo);
+    if (stalls) h.connStalls = stalls;
     if (result) h.result = { text: result };
     const aw = S.awards.get(h.clientHandId || "");
     if (aw) h.result = { ...(h.result || { text: aw.text }), ...aw, heroWon: aw.winnerSeat === h.heroSeatId };
@@ -183,6 +187,8 @@ export function liveHandTick(): void {
     h.sessionId = S.session.id;
     const autoExec = autoLogFor(S.handNo);
     if (autoExec) h.autoExec = autoExec;
+    const stalls = stallsFor(S.handNo);
+    if (stalls) h.connStalls = stalls;
     const now = nowMs();
     const row = c.query("SELECT rowid, status FROM hands WHERE client_hand_id = ? ORDER BY rowid DESC LIMIT 1").get(cid) as { rowid: number; status: string } | null;
     if (row?.status === "done") { liveFp = fp; return; }

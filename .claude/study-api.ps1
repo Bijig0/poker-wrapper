@@ -58,6 +58,11 @@ $fastFails = 0
 # update" button knows a clean exit actually comes back here (services/buildStamp.ts).
 # A hand-started worker has no such parent and the dashboard offers the command instead.
 $env:STUDY_API_SUPERVISOR = $PID
+# The same fact under the name every supervisor uses (services/buildStamp.ts isSupervised): a supervised worker restarts
+# ITSELF, by a clean exit, when a commit changes code it loaded and no session is live (services/autoRestart.ts).
+$env:POKER_SUPERVISOR = $PID
+# what this supervisor read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
+Write-SupervisorStamp 'api' @($PSCommandPath)
 Log "supervisor started (pid $PID) - exploit overlay $(if ($env:EXPLOIT_CHART) { 'ARMED' } else { 'OFF (exploit_ranges_nl25.json missing)' })"
 while ($true) {
   # STRAGGLER SWEEP BEFORE EVERY START (2026-09-14). This used to run only in the hang path below,
@@ -75,6 +80,8 @@ while ($true) {
       Log "straggler on :$apiPort before start - killing bun pid $($o.Id) (started $($o.StartTime))"
       # /T so the cmd.exe wrapper and any bun worker child go too, not just the one holding the socket
       & taskkill /PID $o.Id /T /F 2>&1 | Out-Null
+      # its cmd.exe still holds api.log for a moment: a worker started at once died with exit 1 and no line (2026-10-03)
+      Start-Sleep -Seconds 2
     }
   }
   $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c', "`"cd /d $root && `"$bun`" index.ts >> data\jobs\api.log 2>&1`"" -WindowStyle Hidden -PassThru
@@ -105,9 +112,11 @@ while ($true) {
       }
       break
     }
-    Start-Sleep -Seconds 30
+    # 30 s between probes - but an EXIT is seen within a second (2026-10-03): a worker that left on purpose (its own
+    # restart on a commit) used to wait out the rest of this sleep before it was relaunched, up to 30 s without answers
+    for ($i = 0; $i -lt 30 -and -not $p.HasExited; $i++) { Start-Sleep -Seconds 1 }
   }
-  $lived = [int]((Get-Date) - $startedAt).TotalSeconds
+  $lived =[int]((Get-Date) - $startedAt).TotalSeconds
   $code = if ($p.HasExited) { $p.ExitCode } else { 'killed' }
   # WHAT DID IT LEAVE BEHIND (2026-09-14). This log recorded an exit code and nothing else, so 34
   # kills of a HEALTHY worker (exit -1, lifetimes of 1 min to 2 h) could not be told apart from a
@@ -130,6 +139,9 @@ while ($true) {
   # reason in THIS log, which is the one that gets read when the API will not stay up.
   if ($lived -lt 15) { $fastFails++ } else { $fastFails = 0 }
   $wait = 10
+  # exit 0 = the worker left on purpose (a restart asked for by the dashboard, or its own auto-restart on a commit):
+  # nothing to cool down from, and every second here is a second without answers
+  if ("$code" -eq '0') { $wait = 2 }
   if ($fastFails -ge 3) {
     $wait = [Math]::Min(300, 20 * ($fastFails - 2))
     $tail = ((Get-Content $api -Tail 400 -ErrorAction SilentlyContinue) |

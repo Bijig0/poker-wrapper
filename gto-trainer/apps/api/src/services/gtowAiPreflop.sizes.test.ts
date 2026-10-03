@@ -15,23 +15,57 @@ const fold = { action: { code: "F", type: "FOLD" } };
 const call = { action: { code: "C", type: "CALL" } };
 
 describe("the line's own sizes reach the tree", () => {
-  it("keeps enough precision for the size actually played", () => {
+  it("carries the size actually played as its exact amount", () => {
     const m = menus(LEVELS, 4);
-    // the villain's 5-bet is 14.4 over 9.2 = 1.5652x. At one decimal that is 1.6x, and
-    // the tree's node lands at 14.72 — a node the walk never asks for.
-    const five = m.villain.five.map((s) => parseFloat(s));
-    const best = five.reduce((b, v) => (Math.abs(9.2 * v - 14.4) < Math.abs(9.2 * b - 14.4) ? v : b));
-    expect(Math.abs(9.2 * best - 14.4)).toBeLessThan(0.05);
+    // the villain's 5-bet is 14.4 over 9.2 = 1.5652x. As a multiple at one decimal that was 1.6x, and the tree's
+    // node landed at 14.72 — a node the walk never asks for. As an amount it is the node the line spells.
+    expect(m.villain.five).toContain("14.4bb");
   });
 
-  it("still carries every level's observed size", () => {
+  it("carries every level's observed size, to the cent of a blind", () => {
     const m = menus(LEVELS, 4);
-    const near = (list: string[], base: number, want: number) =>
-      list.map((x) => base * parseFloat(x)).some((v) => Math.abs(v - want) < 0.05);
-    expect(near(m.hero.opens, 1, 2.5)).toBe(true);
-    expect(near(m.villain.three, 2.5, 4)).toBe(true);
-    expect(near(m.hero.four, 4, 9.2)).toBe(true);
-    expect(near(m.villain.five, 9.2, 14.4)).toBe(true);
+    expect(m.hero.opens).toEqual(["2.5bb"]);
+    expect(m.villain.three).toEqual(["4bb"]);
+    expect(m.hero.four).toEqual(["9.2bb"]);
+    expect(m.villain.five).toEqual(["2.2x", "14.4bb"]);   // this list also serves every raise after the fifth
+    expect(menus([2.5, 8.75], 6).hero.three).toEqual(["8.75bb"]);
+  });
+
+  it("a 'raise' that does not top the one below it is not a level: the default stays", () => {
+    expect(menus([3, 3], 6).hero.three).toEqual(["3.5x"]);
+    expect(menus([1], 6).hero.opens).toEqual(["2.5x"]);
+  });
+});
+
+/**
+ * Hand 4922086187 (2026-10-02). Three-handed, hero BTN opens 2.6 (a 2.5 pick, a cent up at NL5), the SB 3-bets to 13.
+ * The tree listed 2.2/2.5/3 beside the 2.6: GTO Wizard merged the 2.6 away, hero's node 'R2.6-R13-F' had no address
+ * and the hand fell to the last resort. A level already played holds the size played and nothing else.
+ */
+describe("a level already played holds only the size played", () => {
+  it("three-handed, facing the 3-bet: one open and one 3-bet on every seat, the 4-bet still a choice", () => {
+    const m = menus([2.6, 13], 3);
+    for (const seat of [m.hero, m.villain]) {
+      expect(seat.opens).toEqual(["2.6bb"]);
+      expect(seat.three).toEqual(["13bb"]);
+    }
+    expect(m.hero.four).toEqual(["2.3x"]);
+  });
+
+  it("nothing played yet, three or more seats: every seat opens one size, 2.5x — hero's included", () => {
+    for (const n of [3, 4, 5, 6]) {
+      const m = menus([], n);
+      expect(m.hero.opens).toEqual(["2.5x"]);
+      expect(m.villain.opens).toEqual(["2.5x"]);
+      expect(m.hero.three).toEqual(["3.5x"]);
+    }
+  });
+
+  it("heads-up: the played open alone, the full 3-bet menu still to choose from", () => {
+    const m = menus([2.6], 2);
+    expect(m.hero.opens).toEqual(["2.6bb"]);
+    expect(m.hero.three.length).toBeGreaterThan(1);
+    expect(m.villain).toEqual(m.hero);
   });
 });
 

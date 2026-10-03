@@ -48,9 +48,8 @@
  * throw, a zero-weight hero, or a slow local answer where an answer was due). A finding is reported with the SMALLEST
  * operator set that produces it while the unmutated seed passes (baseline failures are findings of their own).
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { existsSync, readFileSync } from "node:fs";
-import { trustFile } from "../services/nodeTrust";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -65,28 +64,40 @@ export function harnessEnv(): () => void {
   process.env.GTOW_BLOCK = "1";
   process.env.POSTFLOP_DRY_RUN = "1";
   if (!process.env.HRC6MAX_DB) {
-    // a git worktree has no bake of its own (a data part, not in git): read the main checkout's
-    const local = join(import.meta.dir, "..", "..", "data", "hrc6max-preflop.sqlite");
-    if (!existsSync(local)) {
-      const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: import.meta.dir, encoding: "utf8" }).stdout?.trim();
-      const main = common ? join(dirname(common), "gto-trainer", "apps", "api", "data", "hrc6max-preflop.sqlite") : "";
-      if (main && existsSync(main)) process.env.HRC6MAX_DB = main;
+    // THE BAKE THE LIVE API READS (2026-10-03). The harness used to take the main checkout's own data/ copy — which on
+    // the owner's machine was a bake of 2026-09-27, 124 charts, from the bodies as they were BEFORE the 2026-10-01
+    // re-conversion; the live API reads the factory's bake (FACTORY_DATA_DIR in config/local.env). So the gated tests,
+    // the replay gate's first run and every offline check answered from charts the tables no longer get. Order now:
+    // FACTORY_DATA_DIR (the env's, else config/local.env's of the main checkout), then a data/ copy as before.
+    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: import.meta.dir, encoding: "utf8" }).stdout?.trim();
+    const root = common ? dirname(common) : "";
+    let factory = process.env.FACTORY_DATA_DIR ?? "";
+    if (!factory && root) {
+      try {
+        const m = readFileSync(join(root, "config", "local.env"), "utf8").match(/^\s*FACTORY_DATA_DIR\s*=\s*(.+?)\s*$/m);
+        if (m) factory = m[1]!;
+      } catch { /* no local.env on this machine: the data/ copies below */ }
     }
+    const candidates = [
+      factory ? join(factory, "hrc6max-preflop.sqlite") : "",
+      join(import.meta.dir, "..", "..", "data", "hrc6max-preflop.sqlite"),
+      root ? join(root, "gto-trainer", "apps", "api", "data", "hrc6max-preflop.sqlite") : "",
+    ];
+    const found = candidates.find((p) => p && existsSync(p));
+    if (found) process.env.HRC6MAX_DB = found;
   }
-  // THE TRUST MAP THE LIVE API READS (2026-10-02). Since the v2 limp re-solve an olimp chart absent from the trust map is
-  // REFUSED (services/nodeTrust), so a harness that finds no map — a git worktree has none (a data part, not in git), and
-  // the regression gate does not load config/local.env — refused every limp-tree decision (the post-in gate's BTN over
-  // an HJ limp: "UNSCORED CHART: ign200_6max_D100_olimp"); and the main checkout's own data copy is a stale snapshot.
-  // Read the map the live API reads: the main checkout's FACTORY_DATA_DIR (config/local.env, which the supervisor
-  // loads), else whatever factoryFile finds, else the main checkout's data copy.
+  // THE TRUST SCORES THE LIVE API READS (2026-10-02/03). Trust comes from the bake set above (its trust tables); the
+  // factory's limp_node_trust.json is only the fallback for a chart the bake does not score — and since the v2 limp
+  // re-solve an olimp chart scored by neither is REFUSED (services/nodeTrust). A git worktree has no data/ copy and the
+  // gate does not load config/local.env, so point the fallback at the factory's file (FACTORY_DATA_DIR of the env, else
+  // of the main checkout's config/local.env) — never at a checkout's stale data/ snapshot.
   if (!process.env.NODE_TRUST_FILE && !process.env.FACTORY_DATA_DIR) {
     const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: import.meta.dir, encoding: "utf8" }).stdout?.trim();
     const root = common ? dirname(common) : "";
     let factory = "";
     try { factory = /^\s*FACTORY_DATA_DIR\s*=\s*(.+?)\s*$/m.exec(readFileSync(join(root, "config", "local.env"), "utf8"))?.[1] ?? ""; } catch { /* no local.env */ }
-    const found = [factory && join(factory, "limp_node_trust.json"), trustFile(), root && join(root, "gto-trainer", "apps", "api", "data", "limp_node_trust.json")]
-      .find((f) => f && existsSync(f));
-    if (found) process.env.NODE_TRUST_FILE = found;
+    const file = factory ? join(factory, "limp_node_trust.json") : "";
+    if (file && existsSync(file)) process.env.NODE_TRUST_FILE = file;
   }
   return () => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
 }

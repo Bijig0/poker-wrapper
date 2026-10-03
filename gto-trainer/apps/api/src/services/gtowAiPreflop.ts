@@ -41,6 +41,7 @@
  * class → weight), so fastSolve.solvePostflop6maxStrategy reads one shape whichever piece answered.
  */
 import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { bbAmount, TREE_SETTINGS, TREE_SETTINGS_TAG } from "./gtowApi";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
@@ -80,6 +81,8 @@ const THREE_BETS = ["3.2x", "3.8x", "4.5x"];
 const FOUR_BETS = ["2.2x", "2.6x"];
 const FIVE_PLUS = ["2.2x"];
 const NODE_TIMEOUT_MS = 30_000;
+/** How long one node is polled for (GTOW_NODE_TIMEOUT_MS, read at every read — the tests shorten it). */
+const nodeTimeoutMs = (): number => { const v = Number(process.env.GTOW_NODE_TIMEOUT_MS); return v > 0 ? v : NODE_TIMEOUT_MS; };
 /** The dead-SB ghost's blind — a penny, so it adds no dead money to speak of — and the label its seat carries in the
  *  shape's stacks (and so in a tree's id, `SB:0.01`: how a dead-SB tree is told apart everywhere). */
 const DEAD_SB_GHOST = 0.01;
@@ -342,27 +345,73 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
 }
 
 /** Size menus. The tree's size is (sizes per level)^levels × seats, and the API refuses a tree past its ceiling
- *  ("TREE_IS_TOO_BIG" — a 3-handed tree with 5 opens × 3 three-bets tripped it). So HERO's seat carries the menu
- *  (his decision is what we read), every other seat carries the size it actually used (or one default), and the
- *  line's own sizes are always present so the walk lands on the exact node. Heads-up trees are small enough for
- *  the full menu on both seats. */
+ *  ("TREE_IS_TOO_BIG" — a 3-handed tree with 5 opens × 3 three-bets tripped it). So with three or more seats every
+ *  seat carries ONE size per level: the size played where the level has been played, else one default (open 2.5x,
+ *  3-bet 3.5x, 4-bet 2.3x). Heads-up trees are small enough for the full menu, on both seats, at the levels still
+ *  to be played. */
 export function menus(levels: number[], n: number) {
-  // THREE DECIMALS, not one (2026-09-19). A rounded ratio puts the tree's node a few
-  // hundredths of a blind from the size actually played; repairLine now walks onto it
-  // either way, but a menu that lands exactly keeps that walk a rare path rather than
-  // the normal one — and keeps the strategy read on the size that was really faced.
-  const add = (base: string[], v: number | null) => (v && v > 1 ? [...new Set([...base, `${Math.round(v * 1000) / 1000}x`])] : base);
-  const l0 = levels[0] ?? null, l1 = levels[1] && levels[0] ? levels[1] / levels[0] : null;
-  const l2 = levels[2] && levels[1] ? levels[2] / levels[1] : null, l3 = levels[3] && levels[2] ? levels[3] / levels[2] : null;
+  // THE SIZE PLAYED GOES OUT AS ITS EXACT AMOUNT, "13bb" — not a multiple of the raise below it (2026-10-02, Brady:
+  // "why aren't we sending the exact numbers"). GTO Wizard takes an amount in any size list and names the node by
+  // it, to the cent of a blind ("8.75bb" → R8.75); a multiple it works out and names at ONE decimal ("3.5x" over 2.5
+  // → R8.8), so the address the line spells — the amounts as played, the same two decimals as lineOf's tokens — could
+  // miss its own node by a few hundredths. Probed on 30 archived decisions (2-6 seats, dead small blind, dead money,
+  // limped pots, jams past 100bb, the heads-up last resort): the same answers as the multiples wherever those landed.
+  // repairLine stays the backstop. The defaults of a level still to be played stay multiples.
+  const amt = (total: number | undefined, below: number) => (total != null && total > below ? `${num(total)}bb` : null);
+  const one = (base: string[], total: number | undefined, below: number) => { const a = amt(total, below); return a ? [a] : base; };
+  const add = (base: string[], total: number | undefined, below: number) => { const a = amt(total, below); return a ? [...base, a] : base; };
+  // A LEVEL ALREADY PLAYED HOLDS THE SIZE PLAYED AND NOTHING ELSE (2026-10-02, hand 4922086187, Brady: "for levels
+  // already played just have a single size"). The open, the 3-bet, the 4-bet that happened are facts: the menu beside
+  // them bought nothing and cost three things — GTO Wizard merged the played size into a neighbour (2.6 into 2.5, so
+  // hero's node had no address), an unmerged neighbour split the raiser's range (a villain's 3.5x open read as the 1%
+  // of hands the solver opens 3.5x rather than 2.5x), and every extra size is tree to solve (facing a 3-bet
+  // three-handed: 22 s with the menus, against a 15 s clock). A menu stays where a decision is still to be made.
+  // (The fifth-raise list also serves every raise after it, so it keeps its default beside the size played.)
+  // a level is played when its raise is in the line and tops the one below it (the open: the 1bb blind)
+  const [r0, r1, r2, r3] = levels;
+  const lv = (base4: [string[], string[], string[], string[]]) => ({
+    opens: one(base4[0], r0, 1), three: one(base4[1], r1, r0 ?? Infinity), four: one(base4[2], r2, r1 ?? Infinity),
+    five: add(base4[3], r3, r2 ?? Infinity),
+  });
   const hero = n <= 2
-    ? { opens: add(OPENS, l0), three: add(THREE_BETS, l1), four: add(FOUR_BETS, l2), five: add(FIVE_PLUS, l3) }
-    : { opens: add(["2.2x", "2.5x", "3x"], l0), three: add(["3.5x"], l1), four: add(["2.3x"], l2), five: add(FIVE_PLUS, l3) };
-  const villain = n <= 2 ? hero
-    : { opens: add(["2.5x"], l0), three: add(["3.5x"], l1), four: add(["2.3x"], l2), five: add(FIVE_PLUS, l3) };
+    ? lv([OPENS, THREE_BETS, FOUR_BETS, FIVE_PLUS])
+    // HERO OPENS ONE SIZE, 2.5x (Brady, 2026-10-02: "set our open always at a single size of 2.5x") — the size every
+    // 6-max chart opens. The 2.2x/2.5x/3x menu this replaces split his opening range over the sizes, and his next
+    // decision is read on a tree where the open played is the only one: the two trees disagreed about his range.
+    : lv([["2.5x"], ["3.5x"], ["2.3x"], FIVE_PLUS]);
+  // three or more seats: every seat one size per level, hero's included (the heads-up menus are shared above)
+  const villain = hero;
   return { hero, villain };
 }
 
+/**
+ * EACH SEAT'S ALL-IN, LISTED (2026-10-03). The tree is sent with the settings explicit and off (gtowApi.TREE_SETTINGS):
+ * no all-in threshold turning a big raise into the all-in, no all-in added by GTO Wizard's own rule
+ * (`allin_if_less_than`). So the all-in is in the tree only where it is listed — and it is listed in every size list
+ * of every seat: "<its stack>bb", capped at the deepest other seat (a raise past what anyone can call is the all-in;
+ * GTO Wizard names it by the seat's own stack, R<stack>). Probed 2026-10-03 on two trees from the solve cache, 6-handed
+ * with a 28.5bb seat and 3-handed at 21/30bb: every node that offered an all-in before still does, the open-jam now
+ * exists at 20-30bb (the old rule left it out: an all-in past 5x the pot), and a 3-bet the old threshold had replaced
+ * by the all-in (17.5 of a 28.5 stack) is a size of its own again beside it. The dead-SB ghost is not a seat here.
+ */
+export function seatAllInsPreflop(shape: Pick<AiPreflopShape, "positions" | "stacks" | "deadSb">): Record<string, number> {
+  const real = shape.positions.filter((p) => !(shape.deadSb && p === "SB"));
+  const st = (p: string) => shape.stacks[p] ?? 100;
+  return Object.fromEntries(real.map((p) => {
+    const others = real.filter((q) => q !== p).map(st);
+    return [p, Math.round(Math.min(st(p), others.length ? Math.max(...others) : st(p)) * 100) / 100];
+  }));
+}
+
 function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
+  const allIns = seatAllInsPreflop(shape);
+  /** a list with the seat's all-in at its end (an amount at or past it IS the all-in) */
+  const withAllIn = (position: string, list: string[]) => {
+    const ai = allIns[position];
+    if (ai == null) return list;
+    const out = list.filter((x) => { const mm = /^(\d+(?:\.\d+)?)bb$/.exec(x); return !(mm && Number(mm[1]) >= ai - 0.005); });
+    return [...out, bbAmount(ai)];
+  };
   const sizes = (position: string) => {
     // the dead-SB ghost may only fold: no limp, no call, no size to raise to (see the header — an all-in ghost took a
     // flop seat and cost every other seat its cold-call)
@@ -374,12 +423,19 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
     // calls of opens and cold-calls of 3-bets+ must be switched on explicitly in FIXED mode (the web app's own
     // defaults: ccVs2b on, ccVs3bPlus off — we want both, a fish's line is anything)
     return { position, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
-      bet_sizes: s.opens, raise_sizes: s.three, second_raise_sizes: s.four, third_plus_raise_sizes: s.five };
+      bet_sizes: withAllIn(position, s.opens), raise_sizes: withAllIn(position, s.three),
+      second_raise_sizes: withAllIn(position, s.four), third_plus_raise_sizes: withAllIn(position, s.five) };
   };
   return {
     starting_street: "PREFLOP", pot: shape.deadBb, ante: shape.anteBb || null, ante_distribution_method: "PER_PLAYER",
     max_allowed_limps: shape.n >= 3 ? 2 : null,
-    bet_sizes: { allin_threshold: 60, allin_if_less_than: 500, merge_sizes_threshold: 10, max_num_raises: 5,
+    // NO SIZE MERGING (2026-10-02, hand 4922086187, Brady: "it should obviously always be exact"). At 10 — a value copied
+    // from the postflop tree, never chosen — GTO Wizard drops a declared size that sits near another: beside 2.5x it
+    // dropped 2.2, 2.3 and 2.6 (kept 2.1, 3, 3.5). The line's own size then has no node, and a missing SIZE is answered
+    // 204 for ever, not NODE_DOES_NOT_EXIST: hero's node 'R2.6-R13-F' ran out its 30 s and the hand fell to the last
+    // resort. At 0 every declared size is a node (probed: the same node in 0.9 s). The store keys on this body.
+    // …and since 2026-10-03 the two all-in settings are off as well (gtowApi.TREE_SETTINGS — the all-in is LISTED, above)
+    bet_sizes: { ...TREE_SETTINGS, max_num_raises: 5,
       street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: shape.positions.map(sizes) }] },
     players: shape.positions.map((p) => ({
       position: p, display_position: p,
@@ -397,6 +453,8 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
 
 export const treeKeyOf = (shape: AiPreflopShape, m: ReturnType<typeof menus>) =>
   JSON.stringify([shape.positions, shape.positions.map((p) => shape.stacks[p]), shape.sb, shape.bb, shape.straddle, shape.rakeCapBb, shape.heroApiPos, m, shape.deadBb || 0,
+    // the settings off, each seat's all-in listed (2026-10-03): never the same tree as one built under the old settings
+    TREE_SETTINGS_TAG,
     // a table with an ante or its own rake is a different tree; one with neither keys exactly as before
     ...(shape.anteBb || shape.siteRake ? [shape.anteBb ?? 0, shape.siteRake ?? null] : [])]);
 
@@ -599,6 +657,9 @@ export interface FetchNodeOpts {
    *  follows reads for real. A stored tree this process has not materialised is left alone (a speculative read never
    *  mints a solve). A refusal of the LINE (400/422) is a fact about the tree and is kept, as always. */
   once?: boolean;
+  /** The caller no longer wants this read (the walk showed the tree names the line differently): the poll loop ends at
+   *  its next turn instead of asking for a node that is not there until NODE_TIMEOUT_MS runs out. */
+  stop?: () => boolean;
 }
 /** the one in-flight read per node, however many ask \— the prefetch and the walk share it (2026-10-01) */
 const pendingNodes = new Map<string, { p: Promise<NodeRead>; once: boolean }>();
@@ -634,7 +695,7 @@ export async function fetchNode(solId: string, line: string, opts: FetchNodeOpts
     const r = await pending.p;
     if (!("error" in r) || once || !pending.once) return r;
   }
-  const p = readNode(solId, k, line, addr, ck, terminalError, once);
+  const p = readNode(solId, k, line, addr, ck, terminalError, once, opts.stop);
   pendingNodes.set(k, { p, once });
   try { return await p; } finally { if (pendingNodes.get(k)?.p === p) pendingNodes.delete(k); }
 }
@@ -652,7 +713,8 @@ export function prefetchPrefixes(solId: string, tokens: string[], max = 12): voi
 }
 
 /** The network half of fetchNode: poll one node until it is solved (or `once`: look once). */
-async function readNode(solId: string, k: string, line: string, addr: string, ck: string | null, terminalError: string, once: boolean): Promise<NodeRead> {
+async function readNode(solId: string, k: string, line: string, addr: string, ck: string | null, terminalError: string, once: boolean,
+    stop?: () => boolean): Promise<NodeRead> {
   // a stored tree with a node the store lacks: its solve is created now (once, however many ask), then polled
   let real = solId;
   if (isStoredSolId(solId)) {
@@ -662,17 +724,22 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
     real = m.solId;
   }
   const t0 = Date.now();
-  let last = "the cloud did not return the node in time";
+  // WHAT EVERY POLL SAID, FOR THE REASON WHEN THE NODE NEVER COMES (2026-10-02, hand 4922086187). The reason used to be
+  // the last FAILURE alone: one request timed out, eleven more answered "not solved yet", and the answer said "poll
+  // failed: The operation timed out" — a network fault that was not one (the node was not in the tree).
+  let notSolved = 0, failed = 0, lastFail = "";
   let emptyPolls = 0;
   let refreshed = false;
   const owner = owners.get(real) ?? null;
-  while (Date.now() - t0 < NODE_TIMEOUT_MS) {
+  const limit = nodeTimeoutMs();
+  while (Date.now() - t0 < limit) {
+    if (stop?.()) return { error: "read abandoned — the tree names this line differently" };
     const token = owner ? await gtowSessions.tokenFor(owner) : (await gtowSessions.bestToken({ preflop: true }))?.token ?? null;
     if (!token) return { error: `no GTO Wizard token for the session that owns this solve${owner ? ` (${owner})` : ""}` };
     const params = new URLSearchParams({ custom_solution_id: real, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
     try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
-    catch (e) { last = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: last }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
+    catch (e) { failed++; lastFail = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: lastFail }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
     // THE SAME THREE RULES AS gtowApi's node poll (2026-09-25 audit): this copy re-polled an expired token for the whole
     // NODE_TIMEOUT_MS (a lost preflop answer), never told the pool about a wall it hit, and sat out a 429 quota wall
     if (r.status === 401 && !refreshed) {
@@ -705,14 +772,17 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
         if (ck) solveCache.putNode(ck, addr, -r.status, t);
         return { error: `${r.status}: ${t.slice(0, 160)}` };
       }
-      last = `spot-solution ${r.status}: ${t.slice(0, 120)}`;
+      failed++; lastFail = `spot-solution ${r.status}: ${t.slice(0, 120)}`;
       if (owner) gtowSessions.noteFailure(owner, r.status, t.slice(0, 200), { preflop: true });   // the NEXT tree goes elsewhere
-      if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: last };   // a quota wall will not lift while we wait
-    }
-    if (once) return { error: r.status === 404 ? "no such node (one look)" : last };
+      if (r.status === 429 || (r.status === 403 && /limit|quota|exceed/i.test(t))) return { error: lastFail };   // a quota wall will not lift while we wait
+    } else if (r.status === 204 || r.status === 404) notSolved++;
+    if (once) return { error: r.status === 404 ? "no such node (one look)" : lastFail || "the cloud did not return the node in time" };
     await new Promise((res) => setTimeout(res, POLL_MS));
   }
-  return { error: last };
+  // ("did not return the node in time" is what answerLog's failKind reads)
+  return { error: `the cloud did not return the node in time — ${Math.round((Date.now() - t0) / 1000)} s, ` +
+    `${notSolved} poll(s) answered "not solved yet"` + (failed ? `, ${failed} failed (last: ${lastFail})` : "") +
+    (notSolved > failed ? ` (a node the tree does not hold is answered "not solved yet" too)` : "") };
 }
 
 const heroClass = (cards: string[]): string | null => {
@@ -875,7 +945,39 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   // walks a repaired line) — what the preflop pin records for the flop to resume from
   let usedSol = sol.solId;
   let usedLine = line;
-  let node = await fetchNode(sol.solId, line);
+  // THE TREE IS ASKED WHAT IT CALLS THE LINE WHILE HERO'S NODE IS ASKED FOR BY THE NAME WE GAVE IT (2026-10-02, hand
+  // 4922086187). The walk below used to start only when GTO Wizard REFUSED the address (NODE_DOES_NOT_EXIST) — and a
+  // three-handed tree does not refuse a size it does not hold: it answers "not solved yet" until NODE_TIMEOUT_MS runs
+  // out (30 s of hero's clock, then the last resort). So the line is walked from the root beside the direct read, and
+  // the walk is the judge: a raise the tree names differently, or an action it does not offer, means the address is
+  // not a node — the direct read is dropped and the walk's line is read at once. An address the walk confirms costs
+  // nothing: the direct read is the answer, and the prefix nodes the walk read are the ones the pin warms anyway.
+  let node: NodeRead;
+  {
+    let abandon = false;
+    const direct = fetchNode(sol.solId, line, { stop: () => abandon });
+    // a fold is always on offer: only a line with a call, a check or a raise can miss the tree
+    const walk = tokens.some((t) => t !== "F")
+      ? repairLine(sol.solId, tokens, { end: true }).catch((e): { error: string } => ({ error: `walk threw: ${e instanceof Error ? e.message : e}` }))
+      : null;
+    const first = walk
+      ? await Promise.race([direct.then((n) => ({ n, w: null })), walk.then((w) => ({ n: null, w }))])
+      : { n: await direct, w: null };
+    if (first.n) node = first.n;
+    else {
+      const w = first.w!;
+      const renamed = !("error" in w) && w.changed.length > 0;
+      const notOffered = "error" in w && /is not offered/.test(w.error);
+      // an action the tree does not offer may be a line that cannot happen at all, and the cloud's own refusal says
+      // which (VALIDATION_ERROR is a capture fault, final): it gets one poll's grace before the walk's word is taken
+      const late = notOffered ? await Promise.race([direct, new Promise<null>((res) => setTimeout(() => res(null), POLL_MS))]) : null;
+      if (late) node = late;
+      else if (renamed || notOffered) {
+        abandon = true;
+        node = { error: `NODE_DOES_NOT_EXIST (read off the tree, not waited for: ${renamed ? (w as { changed: string[] }).changed.join(", ") : (w as { error: string }).error})` };
+      } else node = await direct;
+    }
+  }
   let snapped: string[] = [];
   let fittedFolds: string[] = [];
   let deadNote = "";
@@ -1881,6 +1983,9 @@ export async function resumeAiPreflopRanges(
   const network = !get;
   const read = get ?? ((line: string) => fetchNode(pin.solId, line));
   let walked = hand;
+  /** a last-resort pin: the reduced tree's two seat names → the seats those players hold at the table */
+  let tableSeat: Record<string, string> | null = null;
+  const tableHeroPos = heroPos;
   if (pin.reduced) {
     const foldedPos = new Set(hand.actions.filter((a) => a.type === "fold").map((a) => hand.positions[a.seatId]?.toUpperCase()).filter(Boolean));
     const stillIn = pin.reduced.droppedPos.filter((p) => !foldedPos.has(p));
@@ -1889,6 +1994,7 @@ export async function resumeAiPreflopRanges(
     if (!red) return { ok: false, why: "the pinned last-resort reduction could not be rebuilt from the hand" };
     walked = red.hand;
     heroPos = red.hand.positions[red.hand.heroSeatId] ?? null;
+    tableSeat = { SB: red.keptPos[0], BB: red.keptPos[1] };
   }
   const { tokens: tokensNow } = lineOf(walked, pin.shape);
   const fit = pinRest(pin, tokensNow);
@@ -1903,8 +2009,20 @@ export async function resumeAiPreflopRanges(
   const codes = repaired.line ? repaired.line.split("-") : [];
   const r = await walkArrivalRanges(pin.shape, codes, counted, maxPlayers);
   if (!r.ok) return { ok: false, why: `pinned AI tree ${pin.id}: ${r.reason}` };
+  // A LAST-RESORT PIN ANSWERS IN THE TABLE'S TERMS (2026-10-02, hand 4922086187). The reduced tree is heads-up, so
+  // its two seats are called SB and BB whoever they are at the table (hero on the BTN against the small blind: hero
+  // is its "SB", the small blind its "BB"). The ranges went out under those names: the flop looked for BTN, found
+  // none ("reconstructed ranges don't cover both seats"), and under "SB" held HERO's range for the villain's seat.
+  // So each range goes back to the seat its player holds — and the pot is rolled from the hand's own line in the
+  // table's seat order, which counts the folded players' chips the reduced line leaves out (they are its dead money).
+  let ranges = r.ranges, tokens = tokensNow, seatOrder: readonly string[] | undefined = pin.shape.positions;
+  if (tableSeat) {
+    ranges = Object.fromEntries(Object.entries(r.ranges).map(([p, w]) => [tableSeat![p.toUpperCase()] ?? p, w]));
+    const table = shapeOf(hand, tableHeroPos);
+    if (!("error" in table)) { tokens = lineOf(hand, table).tokens; seatOrder = table.positions; }
+  }
   return {
-    ok: true, ranges: r.ranges, tokens: tokensNow, codes, seatOrder: pin.shape.positions, id: pin.id, reads,
+    ok: true, ranges, tokens, codes, seatOrder, id: pin.id, reads,
     note: `PREFLOP RANGES FROM THE PIN: the GTO Wizard AI preflop tree that answered hero's last preflop decision ` +
       `(${pin.shape.n}-handed, ${pin.shape.positions.map((p) => `${p} ${pin.shape.stacks[p]}bb`).join(", ")}; hero's node at "${pin.codes.join("-") || "root"}") — ` +
       `hero's action and ${fit.rest.length - 1} later action(s) read on the same solution, no tree rebuilt` +

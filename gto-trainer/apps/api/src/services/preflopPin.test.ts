@@ -359,7 +359,7 @@ describe("resumeChartPreflopRanges — every node on a limped line must be trust
     setTrustMap({});
     const r = await resumeChartPreflopRanges(pin, threeLimps, "UTG", get);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.why).toContain("not in the trust map yet");
+    if (!r.ok) expect(r.why).toContain("UNSCORED CHART:");
   });
 
   it("the three-limp line with every node trusted reads its ranges from the chart", async () => {

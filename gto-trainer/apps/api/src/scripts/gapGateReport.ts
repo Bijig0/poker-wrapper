@@ -32,7 +32,8 @@ const SINCE = Date.parse(`${arg("--since") ?? "2026-10-02"}T00:00:00+07:00`);
 const pct = (k: number, d: number) => (d ? `${((100 * k) / d).toFixed(1)}%` : "—");
 const q = (xs: number[], p: number) => { const s = xs.slice().sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : NaN; };
 const lv = (n: number) => (n <= 1 ? "open" : n === 2 ? "3-bet" : "4-bet+");
-const cell = (r: GapReason) => (r.rule === "size" ? `size · ${lv(r.level)}` : `stack · facing ${r.level >= 2 ? "a re-raise" : "an all-in"}`);
+const STACK_WHY: Record<string, string> = { allin: "facing an all-in", reraise: "facing a re-raise", first: "first decision vs a short stack", hero: "hero's own stack" };
+const cell = (r: GapReason) => (r.rule === "size" ? `size · ${lv(r.level)}` : `stack · ${STACK_WHY[r.why ?? (r.level >= 2 ? "reraise" : "allin")]}`);
 const tally = (rows: GapReason[][]) => { const c = new Map<string, number>(); for (const rs of rows) for (const k of new Set(rs.map(cell))) c.set(k, (c.get(k) ?? 0) + 1); return [...c].sort((a, b) => b[1] - a[1]); };
 
 if (REPLAY) {

@@ -1,19 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import { coverGroups, moneyThrough } from "./multiwayReroot";
 
-describe("moneyThrough", () => {
+const line = (streets: string[][], streetSeats: string[][], o: { behind?: Record<string, number>; amounts?: (number | null)[][]; heroPos?: string } = {}) =>
+  ({ ordered: ["SB", "BB", "CO", "BTN"], heroPos: o.heroPos ?? "BTN", streets, streetSeats, flopPot: 6, flopStack: 97, ...o });
+describe("moneyThrough (utils/tableMoney)", () => {
   test("a bet and three calls on the flop: every seat's chips are pot entering the turn", () => {
-    const m = moneyThrough([["R3", "C", "C", "C"], ["X"]], [["SB", "BB", "CO", "BTN"], ["SB"]], 6, 97, 1);
+    const m = moneyThrough(line([["R3", "C", "C", "C"], ["X"]], [["SB", "BB", "CO", "BTN"], ["SB"]]), 1);
     expect(m.pot).toBe(18);
     expect(m.stack).toBe(94);
     expect([...m.aggressors]).toEqual(["SB"]);
     expect(m.folded.size).toBe(0);
   });
   test("a raise and a fold: the raiser's level is what the stack pays, the folder leaves", () => {
-    const m = moneyThrough([["R3", "R9", "F", "C"]], [["SB", "BB", "CO", "BTN"]], 6, 97, 1);
+    const m = moneyThrough(line([["R3", "R9", "F", "C"]], [["SB", "BB", "CO", "BTN"]]), 1);
     expect(m.pot).toBe(6 + 3 + 9 + 9);   // SB's 3 stays in, BB and BTN put in 9
     expect(m.stack).toBe(88);
     expect(m.folded.has("CO")).toBe(true);
+  });
+  test("an earlier-street all-in at the TABLE's amount, not the seat's whole stack (2026-10-03)", () => {
+    const m = moneyThrough(line([["RAI", "C", "C", "C"]], [["SB", "BB", "CO", "BTN"]], { behind: { SB: 40, BB: 97, CO: 97, BTN: 97 }, amounts: [[25, null, null, null]] }), 1);
+    expect(m.pot).toBe(6 + 25 * 4);
+    expect(m.behind.SB).toBe(15);           // was 0: the RAI put in his whole 40
+    expect(m.allIn.size).toBe(0);
+  });
+  test("an uncalled excess goes back; each seat's own stack, not capped by the field's", () => {
+    const m = moneyThrough(line([["R50", "C", "F", "F"]], [["SB", "BB", "CO", "BTN"]], { behind: { SB: 150, BB: 30, CO: 97, BTN: 97 }, heroPos: "SB" }), 1);
+    expect(m.pot).toBe(6 + 30 + 30);        // SB's 20 over the BB's 30 is returned
+    expect(m.behind.SB).toBe(120);
+    expect([...m.allIn]).toEqual(["BB"]);
   });
 });
 

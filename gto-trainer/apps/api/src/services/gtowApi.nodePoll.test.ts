@@ -120,6 +120,28 @@ describe("customNode request budget", () => {
     expect(asks.filter((a) => a.at < 450).every((a) => a.node === "")).toBe(true);
   });
 
+  it("a 400 (VALIDATION_ERROR / NODE_DOES_NOT_EXIST) is GTO Wizard's verdict: returned at once, not polled to the deadline (2026-10-03)", async () => {
+    const asks = fakeGtow({ readyAfterMs: 0, nodes: [], status: () => 400 });
+    const api = newApi("sol-g");
+    const t0 = Date.now();
+    const r = await api.customNode("sol-g", { flopActions: "X", turnActions: "X", board: "Td6h7s2c" }, 2_000);
+    expect(r.ok).toBe(false);
+    expect((r as { status: number }).status).toBe(400);
+    expect(asks.length).toBe(1);
+    expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+
+  it("a timeout says what the polls said, not the first failure it kept (2026-10-03)", async () => {
+    let n = 0;
+    globalThis.fetch = (async () => { if (n++ === 0) throw new Error("The operation timed out"); return new Response(null, { status: 204 }); }) as unknown as typeof fetch;
+    const api = newApi("sol-h");
+    const r = await api.customNode("sol-h", { flopActions: "X", turnActions: "X", board: "Td6h7s2c" }, 300);
+    expect(r.ok).toBe(false);
+    const err = (r as { error: string }).error;
+    expect(err).toMatch(/\d+ polls?: \d+ answered 204 \(not solved yet\)/);
+    expect(err).toContain("1 failed (last: poll request failed: The operation timed out)");
+  });
+
   it("a 429 on the probe reaches every waiting ask without them polling", async () => {
     const asks = fakeGtow({ readyAfterMs: 0, nodes: ["", "X"], status: (n) => (n === "" ? 429 : null) });
     const api = newApi("sol-e");

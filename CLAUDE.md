@@ -12,6 +12,30 @@ Read README.md first: what each folder is, the three services and their ports, t
 - **The gate:** `bun setup/regress.ts --publish` (all green before any commit that touches the answer path).
   Use config/env.ps1's Bun (1.3.14, `C:\Users\<you>\AppData\Local\Programs\node-v*\node_modules\bun\bin\bun.exe`
   on the owner's machine) — PATH's `bun` can be a different version that behaves differently.
+- **What is live — a merge to main is the deploy** (2026-10-03). The live services run the MAIN checkout of this
+  repo, and each reads its code once, at start. A commit on `main` that changes a file a service loaded restarts the
+  API and the chart server by themselves (`services/autoRestart.ts`) — within about a minute when no poker session is
+  live, at the end of the session when one is. Nothing else goes live by itself: not a branch, not a worktree, not an
+  uncommitted edit in the main checkout. So:
+  - **Merge every finished change into `main` at once** (commit on your branch, run the gate that fits, merge). Work
+    parked on a `claude/*` branch is the stale code the owner keeps meeting.
+  - **"Done" means running**: `bun setup/live.ts` prints one line per service (commit, uptime, current or why not)
+    and what is not on main; `bun setup/live.ts --wait` after a merge waits for the restart. Report "merged, live" or
+    "merged, restart held until the session ends" — never just "fixed". `GET :2000/api/build/all` is the same answer.
+  - The states it names: `settling` (restarting in seconds), `held` (a session is live), `uncommitted` (edits nobody
+    committed — never picked up automatically), `boot-check-failed` (the code on disk does not bundle; the old process
+    keeps serving — fix it), `unsupervised` (a hand-started process, or the wrapper: it has no supervisor, a launch
+    always loads the disk, and the setup page offers Relaunch).
+  - **Supervisors are code too**: `.claude/study-api.ps1`, `.claude/chart-server.ps1`, `scripts/gtow_watchdog.ps1`
+    read themselves, `config/env.ps1` and `config/local.env` once. After editing any of those the SUPERVISOR must be
+    restarted (the worker restarting is not enough) — `live.ts` shows `OLD supervisor: <name>`. Recipe, when no
+    session is live: `Stop-Process` that supervisor's powershell (never `/T`: the watchdog's children are the GTO
+    Wizard windows), then `Start-ScheduledTask "PokerWrapper API - <user>"` (`… Charts …`, `… GTO Wizard …`). Never
+    Stop/Start the task while its supervisor is still running.
+  - Pages (`dashboard.html`, `static/study`, `setup.html`, `panel.html`) are read from disk on every request: an
+    edit in the main checkout is live on save, ahead of the routes behind it — land the route first, or in the same
+    merge.
+  - `AUTO_RESTART=off` in `config/local.env` turns the automatic restart off (the reporting stays).
 - **Never test against the live ports** (:2000 API, :7700 wrapper, :8777 charts, :9222 GTO Wizard). Beside a live
   stack: `.claude/dev-api-verify.cmd` (:2001, HTTP only), `HRC_UI_PORT` for a second chart server, the contract
   suite and rig test pick their own ports. Never relaunch the owner's `:7701` test rig without asking.

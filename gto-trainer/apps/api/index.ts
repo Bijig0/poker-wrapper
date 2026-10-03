@@ -29,6 +29,9 @@ import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
 import { replayScheduler } from "./src/services/replayScheduler";
 import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
+import { trustAuditLine } from "./src/services/hrc6maxDb";
+import { autoRestart, buildStamp, isSupervised } from "./src/services/buildStamp";
+import { gitAnswers } from "./src/services/loadedCode";
 
 const app = new Hono();
 
@@ -212,6 +215,24 @@ let adoption: Promise<void> = Promise.resolve();
 // every answer it froze, and in the log as [stall] — ownership has nothing to do with it.
 startStallMonitor();
 startBackgroundLock();
+// A MERGE TO MAIN IS THE DEPLOY (services/autoRestart.ts): a committed change to code this process loaded restarts it
+// by a clean exit — when no session is live, and only under a supervisor. Everything else it only reports (/api/build).
+autoRestart.start();
+// WHAT THIS WORKER STARTED WITH, in both logs: the commit, how many files it stamped, whether a supervisor will bring it
+// back, and whether git answers here — git is what tells a committed change from somebody's uncommitted edit, and a
+// scheduled task's PATH has surprised this service before (config\env.ps1 puts Git on it).
+void gitAnswers(buildStamp.repo).then((git) => {
+  const line = `[build] running ${buildStamp.commit?.slice(0, 7) ?? "no commit"} · ${buildStamp.loaded().length} files stamped · ` +
+    `${isSupervised() ? "supervised: restarts itself on a commit to loaded code when no session is live" : "not supervised: never restarts itself"} · ` +
+    `git ${git ? "answers" : "DOES NOT ANSWER — a committed change is told from an edit by the commit having moved"}`;
+  console.log(line);
+  say(line);
+});
+// THE CHART TRUST AUDIT (2026-10-03): how many baked 6-max charts carry no trust scores — each one answers from the old
+// limp_node_trust.json, unguarded where it has no score (services/nodeTrust). Said once at start; the registry shows it live.
+setTimeout(() => {
+  try { const line = trustAuditLine(); console.log(line); say(line); } catch (e) { console.warn(`[hrc6maxDb] trust audit failed: ${e instanceof Error ? e.message : e}`); }
+}, 0);
 // the poller, dispatcher and keepers write the central DB: they start once the legacy rows are in (at once when there
 // is nothing to adopt, or this is not the live API). Registered after, since an owner runs the callback immediately.
 void adoption.then(() => onBackgroundOwnership(() => {

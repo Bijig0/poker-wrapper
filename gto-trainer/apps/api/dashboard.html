@@ -434,8 +434,9 @@ function chainSolver(s) {
 /* THE CHECKS TAB (2026-09-27, services/chainChecks) — it took over the Chain path card. At the top, the hand's verdict
    and what it cost (the preflop pin, GTO Wizard requests, the streets walked); then per decision: its verdict, requests
    and reasons, how each street's ranges were produced (folded away), and the chain's seventeen invariants as a table of
-   checks × streets: ✓ held · ✗ failed (red, with the reason) · ⚑ a villain mistake line (flagged, never a verdict) ·
-   — not checked (hover says why). Hover a check's name for the rule it enforces. */
+   checks × streets: ✓ held · ✗ failed (red, with the reason) · ⚑ flagged, never a verdict (#3 a villain mistake line;
+   since 2026-10-03 #12 a street slow against its own median) · — not checked (hover says why). Hover a check's name for
+   the rule it enforces. */
 const CK_STREETS = ["preflop", "flop", "turn", "river"];
 const CK_GROUP = { inputs: "Inputs", process: "Process", output: "Output" };
 function ckCellHtml(c) {
@@ -473,7 +474,7 @@ function checksViewHtml(j) {
   const pin = facts?.preflop ? `preflop pin: <b>${esc(facts.preflop.piece)}</b> <span class="mono">${esc(facts.preflop.id || "")}</span> at "${esc((facts.preflop.codes || []).join("-") || "root")}"` : "no preflop pin recorded";
   const walked = (facts?.streets || []).map((s) => `${["flop", "turn", "river"][s.k] || s.k}${s.plan ? ` (${esc(s.plan)})` : ""} ${s.kind === "closed" ? "closed" : "hero's node"} [${esc((s.tokens || []).join(","))}]`).join(" · ");
   const top = `<div class="ck-top">hand verdict ${hv ? chainChip(hv.verdict) : '<span class="sub">—</span>'} <span class="sub">${pin}${origins ? ` · GTO Wizard requests for this hand: ${origins}` : ""}${walked ? `<br>streets walked: ${walked}` : ""}</span></div>
-    <div class="sub" style="margin:0 0 6px"><span class="chain-ok">✓</span> held · <span class="chain-bad">✗</span> failed (a reason on the answer: verdict "check failed") · <span class="ck-flag">⚑</span> a villain mistake line — flagged, never a verdict · — not checked (hover for why) · hover a check for its rule; <a href="/coverage" onclick="go('/coverage');return false">all checks across hands ↗</a></div>`;
+    <div class="sub" style="margin:0 0 6px"><span class="chain-ok">✓</span> held · <span class="chain-bad">✗</span> failed (a reason on the answer: verdict "check failed") · <span class="ck-flag">⚑</span> flagged, never a verdict (#3 a villain mistake line, #12 a street slow against its median) · — not checked (hover for why) · hover a check for its rule; <a href="/coverage" onclick="go('/coverage');return false">all checks across hands ↗</a></div>`;
   const body = rows.map(({ a, p }) => {
     const streets = (p.streets || []).map((s) => `<div style="margin-bottom:4px"><b>${esc(s.street)}</b>${s.plan ? `<span class="sub"> (${esc(s.plan)})</span>` : ""}: ${chainHow(s.how, s.why)}` +
       `${s.leak ? ` <span class="chain-bad" title="${esc(s.leak.why)}">· ${esc(s.leak.code)}</span>` : ""}${chainCheck(s)}${chainOffTree(s)}${chainSolver(s)}</div>`).join("")
@@ -596,7 +597,52 @@ function sessTechHtml(t) {
     ${bad.length ? `<div class="card"><h2>Hands off the happy path <span class="sub">— ${bad.length}</span></h2>${bad.map((h) => `<div class="tl-row">${chainChip(h.verdict)} ${handLink(h.hand)} <span class="sub">${esc((h.reasons || []).map((r) => r.text).join(" · ").slice(0, 240))}</span></div>`).join("")}</div>` : ""}`;
 }
 
+/* ---- Minimize / expand the hand page's cards (2026-10-03, Brady: "the timeline auto minimized … minimize/expand
+   functionality to the timeline and other cards"). Every card with a heading gets a ▾/▸ toggle (the heading itself
+   toggles too). The hand card (Timeline / Ranges / Actual / Checks) opens minimized; a choice holds while you page
+   through hands, until the page is reloaded. Cards drawn later (the solve under #solution) are picked up as they land. ---- */
+const FOLD_DEFAULT = { "tl-card": true };
+const FOLDS = new Map();   // card key → minimized
+function foldKey(card, head) {
+  if (card.id) return card.id;
+  const h2 = head.matches("h2") ? head : head.querySelector("h2");
+  return "h:" + (h2?.firstChild?.textContent || head.textContent || "").trim().slice(0, 48);
+}
+function setFold(card, folded) {
+  if (!card?.dataset.foldKey) return;
+  card.classList.toggle("folded", folded);
+  FOLDS.set(card.dataset.foldKey, folded);
+  const b = card.querySelector(":scope > .fold-tog, :scope > .tl-head > .fold-tog");
+  if (b) { b.textContent = folded ? "▸" : "▾"; b.title = folded ? "expand" : "minimize"; b.setAttribute("aria-expanded", String(!folded)); }
+}
+function foldCards(root) {
+  for (const card of root.querySelectorAll(".card")) {
+    if (card.dataset.foldKey) continue;
+    const head = card.querySelector(":scope > .tl-head") || card.querySelector(":scope > h2");
+    if (!head) continue;   // the replay table and one-line notices have nothing to fold under
+    const key = foldKey(card, head);
+    card.dataset.foldKey = key;
+    card.classList.add("foldable");
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "fold-tog";
+    b.onclick = (e) => { e.stopPropagation(); setFold(card, !card.classList.contains("folded")); };
+    if (head.matches(".tl-head")) head.prepend(b); else card.prepend(b);
+    const h2 = head.matches("h2") ? head : head.querySelector("h2");
+    if (h2) h2.addEventListener("click", (e) => { if (!e.target.closest("a,button,input,select,label")) setFold(card, !card.classList.contains("folded")); });
+    setFold(card, FOLDS.has(key) ? FOLDS.get(key) : !!FOLD_DEFAULT[key]);
+  }
+}
+let FOLD_WATCH = null;
+function watchFolds() {
+  if (FOLD_WATCH) return;
+  const v = $("view-detail");
+  if (!v) return;
+  FOLD_WATCH = new MutationObserver(() => foldCards(v));
+  FOLD_WATCH.observe(v, { childList: true, subtree: true });
+}
+
 async function showDetail(dbId) {
+  watchFolds();
   const v = $("view-detail"); v.innerHTML = '<div class="card sub">loading…</div>';
   const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
   if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
@@ -627,7 +673,7 @@ async function showDetail(dbId) {
         ${j.feedLines.map((l, i) => `<div data-fl="${i}">${esc(l)}</div>`).join("")}
       </div></div>
     </div>
-    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button><button data-v="checks" title="how each answer was produced, and the chain's seventeen invariants on it — per decision, per street">Checks${j.chain?.verdict && j.chain.verdict.verdict === "failed" ? ' <span class="chain-bad">✗</span>' : ""}</button></span></div>
+    <div class="card" id="tl-card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button><button data-v="checks" title="how each answer was produced, and the chain's seventeen invariants on it — per decision, per street">Checks${j.chain?.verdict && j.chain.verdict.verdict === "failed" ? ' <span class="chain-bad">✗</span>' : ""}</button></span></div>
       <div id="timeline"></div><div id="rangelook" class="rl" hidden></div><div id="actual" hidden></div><div id="checks" hidden></div></div>
     <div id="solution"></div>
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
@@ -636,8 +682,10 @@ async function showDetail(dbId) {
        <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
   DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
   renderTimeline();
-  $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => tlView(b.dataset.v));
+  // picking a view on a minimized hand card opens it
+  $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => { tlView(b.dataset.v); setFold($("tl-card"), false); });
   tlView(TL_VIEW);
+  foldCards(v);
   setStep(STEP);
   $("rp-first").onclick = () => setStep(0);
   $("rp-prev").onclick = () => setStep(STEP - 1);
@@ -1402,7 +1450,7 @@ function sentBody(w) {
     ...(ms.some((m) => m.other) ? [["also sent", (m) => m.other ? `<span class="mono">${esc(m.other)}</span>` : ""]] : []),
   ];
   const from = sts.every((st) => st.sentFrom === "recorded") ? "Recorded when the chain ran"
-    : sts.some((st) => st.sent) ? "Rebuilt from the stored trace with the tree builder the chain uses — this solve was stored before requests were recorded (2026-09-24)"
+    : sts.some((st) => st.sent) ? "Rebuilt from the stored trace with TODAY's tree builder — this solve was stored before requests were recorded (2026-09-24); the settings (100/0/0), per-seat stacks and listed all-ins shown are what the builder sends since 2026-10-03, not what this old solve sent (60/500/10, one stack)"
     : "Read from the stored trace — this API predates the request record; restart it (the banner's Restart by hand) for the exact bodies";
   return `<div class="sent-box">
     <div class="scroll"><table class="sent-tbl"><thead><tr><th></th>${sts.map((st) => `<th>${esc(String(st.street ?? "?").toLowerCase())} tree</th>`).join("")}</tr></thead>
@@ -2558,6 +2606,7 @@ const WHY_MEANS = {
   "gtow-down": "GTO Wizard was not connected while hero was on the clock",
   "abandoned-stale": "the verdict arrived after hero had already acted",
   "no-probe": "hero acted and the decision was never asked about",
+  "socket-stall": "the table's connection went silent — hero's turn reached us too late to ask",
   unexplained: "no trace of this decision anywhere — from before the reasons were logged",
   unknown: "logged, but the reason did not match a known kind",
 };
@@ -5047,45 +5096,70 @@ setInterval(() => {
   if (PATH.view === "sources" && PATH.pane === "pieces" && !PATH.id) whenVisible("sources", loadSources);
 }, 15000);
 
-/* ================= "there's been an update" ================= */
-/* The API runs WITHOUT --watch on purpose (a --watch worker crash leaves the
-   watcher alive and hides the failure), so an edit changes nothing until the
-   process restarts — and nothing used to say so. On 2026-09-19 it stayed up from
-   19:54 while four fixes landed on disk, including the one that made every
-   decision get solved and rolled twice all evening. */
-let BUILD_DISMISSED = 0;
+/* ================= is everything running the code on disk ================= */
+/* The services run WITHOUT --watch on purpose (a --watch worker crash leaves the
+   watcher alive and hides the failure), so each keeps the code it started with.
+   On 2026-09-19 the API stayed up from 19:54 while four fixes landed on disk,
+   including the one that made every decision get solved and rolled twice all
+   evening. Since 2026-10-03 a COMMITTED change restarts the API and the chart
+   server by themselves when no session is live (services/autoRestart.ts); this
+   bar says what is still behind and why — an uncommitted edit, a restart held
+   for a live session, code that does not build, a wrapper left open across a
+   merge — and keeps the button for doing it by hand. /api/build/all answers
+   for the whole install; this page itself is read from disk on every request,
+   so an open tab can be older than the page: that is the last line. */
+let BUILD_DISMISSED = "";
+let PAGE_TOKEN = null;
 
 async function checkBuild() {
   const host = $("build-alert");
   if (!host) return;
   let j;
-  try { j = await (await fetch("/api/build")).json(); } catch { return; }
-  if (!j.ok || !j.stale || j.bootStamp === BUILD_DISMISSED) { host.innerHTML = ""; return; }
-  const n = j.changedCount;
-  const files = (j.changed || []).slice(0, 3).join("  ");
-  const more = n > 3 ? `  +${n - 3} more` : "";
-  host.innerHTML = `<div class="ba">
-    <span>⟳ <b>This API is running older code than the disk.</b>
-      Booted ${fmtAgo(j.bootAt)} · ${n} source file${n === 1 ? "" : "s"} changed since —
-      none of it is live until it restarts.</span>
-    <span class="files">${esc(files)}${esc(more)}</span>
+  // an API from before 2026-10-03 answers 404 (not JSON) here: that is the fallback below, not a reason to say nothing
+  try { j = await (await fetch("/api/build/all")).json(); } catch { j = null; }
+  if (!j || !j.ok || !Array.isArray(j.services)) {
+    // an API from before /api/build/all: it can only speak for itself
+    try { j = await (await fetch("/api/build")).json(); } catch { return; }
+    if (!j.ok || !j.stale) { host.innerHTML = ""; return; }
+    host.innerHTML = `<div class="ba"><span>⟳ <b>This API is running older code than the disk.</b> ${j.changedCount} file(s) changed since it started.</span>
+      <span class="act">${j.supervised ? `<button onclick="restartApi(this)">Restart now</button>` : ""}</span></div>`;
+    return;
+  }
+  // the API that served this page: its own line is marked `self` (a verify or factory API is not the line named "api")
+  const api = j.services.find((x) => x.self) || j.services.find((x) => x.name === "api");
+  const page = api && api.build ? api.build.page : null;
+  if (page && PAGE_TOKEN === null) PAGE_TOKEN = page;
+  const pageOld = !!(page && PAGE_TOKEN && page !== PAGE_TOKEN);
+  const behind = [...j.services.filter((x) => x.up && !x.current), ...(j.supervisors || []).filter((x) => x.pid !== null && !x.current)];
+  const sig = behind.map((x) => `${x.name}:${x.build ? x.build.sig : x.text}`).join("|") + (pageOld ? `|page:${page}` : "");
+  if ((!behind.length && !pageOld) || sig === BUILD_DISMISSED) { host.innerHTML = ""; return; }
+  const b = api && api.build;
+  const st = b && b.auto ? b.auto.state : "";
+  // settling / restarting: it is about to go by itself — no button to race it. Held for a live session: the button
+  // stays, behind a question, because pressing it takes the answers away for ~20 s.
+  const apiButton = !b || !b.stale || st === "settling" || st === "restarting" ? ""
+    : !b.supervised ? `<button disabled title="no supervisor in this process — exiting would leave nothing serving it">Restart API by hand</button>`
+    : `<button onclick="restartApi(this, ${st === "held"})">Restart API now</button>`;
+  host.innerHTML = `<div class="ba" style="flex-wrap:wrap">
+    <span>⟳ <b>${behind.length ? "Not everything is running the code on disk." : "This page has a newer version."}</b></span>
     <span class="act">
-      ${j.supervised
-        ? `<button onclick="restartApi(this)">Restart now</button>`
-        : `<button disabled title="no StudyAPI supervisor in this process — exiting would leave nothing serving :2000">Restart by hand</button>`}
-      <button class="ghost" title="hide until something else changes"
-              onclick="BUILD_DISMISSED=${j.bootStamp};$('build-alert').innerHTML='';">✕</button>
-    </span></div>`;
+      ${apiButton}
+      ${pageOld ? `<button onclick="location.reload()">Reload page</button>` : ""}
+      <button class="ghost" title="hide until something else changes" onclick="BUILD_DISMISSED=this.dataset.sig;$('build-alert').innerHTML='';" data-sig="${esc(sig)}">✕</button>
+    </span>
+    <span class="files" style="flex-basis:100%;white-space:normal">${behind.map((x) => `<span style="display:block"><b>${esc(x.name)}</b> — ${esc(x.text)}</span>`).join("")}${
+      pageOld ? `<span style="display:block"><b>this page</b> — dashboard.html changed on disk after this tab loaded it; reload to get it</span>` : ""}</span></div>`;
 }
 
-async function restartApi(btn) {
+async function restartApi(btn, held) {
+  if (held && !confirm("A poker session is live. Restarting the API now leaves it without answers for about 20 seconds. Restart anyway?")) return;
   btn.disabled = true; btn.textContent = "restarting…";
   let j = null;
   try { j = await (await fetch("/api/build/restart", { method: "POST" })).json(); }
   catch { /* the exit can cut the response — that is a restart, not a failure */ }
   if (j && j.ok === false) { btn.textContent = "can't restart"; btn.title = j.error || ""; return; }
   const host = $("build-alert");
-  host.innerHTML = `<div class="ba done">⟳ <b>Restarting.</b> The supervisor relaunches within ~10s; this page reloads itself when it answers again.</div>`;
+  host.innerHTML = `<div class="ba done">⟳ <b>Restarting.</b> The supervisor relaunches within seconds; this page reloads itself when it answers again.</div>`;
   const t0 = Date.now();
   const tick = async () => {
     if (Date.now() - t0 > 90000) {
