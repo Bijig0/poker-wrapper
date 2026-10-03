@@ -1516,6 +1516,7 @@ export async function sessionEnd(body: Record<string, any>): Promise<Record<stri
     S.sessions.event(sid, "ended", { hand: S.handNo });
     Object.assign(S.session, { id: null, rec: null, started: 0.0 });
     Object.assign(S.net, { bad: 0, good: 0, sitout: null, drop: null });   // the guard's stretch belonged to this session
+    Object.assign(S.socketStall, { cur: null, last: null, dealtSince: false });   // a stall is this session's evidence only
     log(`[session] ${sid} ended · ${pyRepr(summary)}`);
   }
   const out = S.sessions.end(sid, summary, body.note ?? null);

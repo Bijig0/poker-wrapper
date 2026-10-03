@@ -24,6 +24,12 @@ import { asActivity } from "./answerTrace";
  * Both are idempotent: a decision that already has a row is never given a
  * second one, so the pass can run as often as it likes.
  *
+ * A decision lost to a CONNECTION STALL (the wrapper stamps the hand's
+ * `connStalls`, ignition/stall.ts: the table's socket went silent mid-hand,
+ * hero's turn reached us after hero's clock had run out — session_20261003_111447
+ * hand 4922280690) is filed as socket-stall, not no-probe: nothing was asked
+ * because nothing arrived, which is neither a capture fault nor the solver's.
+ *
  * A no-probe row is only written where an answer was actually OWED: the hand
  * belongs to a declared session that was started with study answers ON. The
  * first backfill without that gate wrote 354 of them against the pre-session
@@ -37,14 +43,24 @@ interface HandRowLite { rowid: number; hand_id: number | null; played_at: number
 /** the dashboard's connection to the hands table (one opener, one schema) */
 const open = (): Database | null => openHandsDb();
 
-export interface ReconcileResult { hands: number; attached: number; noProbe: number; skippedNoSession: number; sinceMs: number }
+export interface ReconcileResult { hands: number; attached: number; noProbe: number; socketStall: number; skippedNoSession: number; sinceMs: number }
+
+type ConnStall = { street?: string; silentS?: number | null };
+
+/** The hand's connection stall on this decision's street (the wrapper's `connStalls`), or null. A stall without a
+ *  street (or a decision without one) covers the whole hand. */
+export function stallOn(raw: unknown, street: string | null): ConnStall | null {
+  const list = (raw as { connStalls?: ConnStall[] } | null)?.connStalls;
+  if (!Array.isArray(list)) return null;
+  return list.find((s) => !s.street || !street || s.street === street) ?? null;
+}
 
 /**
  * @param sinceMs only hands played at or after this instant (0 = the whole archive)
  */
 export function reconcileAnswers(sinceMs: number): ReconcileResult {
   const d = open();
-  const out: ReconcileResult = { hands: 0, attached: 0, noProbe: 0, skippedNoSession: 0, sinceMs };
+  const out: ReconcileResult = { hands: 0, attached: 0, noProbe: 0, socketStall: 0, skippedNoSession: 0, sinceMs };
   if (!d) return out;
   let rows: HandRowLite[];
   try {
@@ -98,6 +114,7 @@ export function reconcileAnswers(sinceMs: number): ReconcileResult {
       // nothing anywhere: hero acted and nobody ever asked. Only a fault when
       // this session was actually answering.
       if (!owed) { out.skippedNoSession++; continue; }
+      const stall = stallOn(e.raw, dec.street);
       answerLog.add({
         ts: e.playedAt ?? Date.now(),
         wrapperHandId: e.handId ?? null,
@@ -109,11 +126,14 @@ export function reconcileAnswers(sinceMs: number): ReconcileResult {
         // element is hero's action index, which is what the coverage join reads
         decisionKey: JSON.stringify([dec.street, e.hand.board ?? [], e.heroCards ?? [], null, dec.index]),
         text: null, pick: null, roll: null, tier: null, warning: null, latencyMs: null,
-        failReason: "hero acted here but the decision was never asked about — no probe, no solve, no failure",
-        failKind: "no-probe" as FailKind,
+        failReason: stall
+          ? `the table's connection went silent ${stall.silentS ?? "?"} s on the ${stall.street} — hero's turn never reached the wrapper in time to ask`
+          : "hero acted here but the decision was never asked about — no probe, no solve, no failure",
+        failKind: (stall ? "socket-stall" : "no-probe") as FailKind,
         sessionId: sid,
       });
-      out.noProbe++;
+      if (stall) out.socketStall++;
+      else out.noProbe++;
     }
   }
   return out;

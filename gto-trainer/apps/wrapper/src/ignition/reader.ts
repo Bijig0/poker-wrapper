@@ -24,6 +24,7 @@ import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
 import { dbgRecord, writeHandIds } from "./recorder";
+import { stallMakesKick, stallSocketClosed } from "./stall";
 
 /** The poker client's page target — the one that isn't our own panel. ONE page is shared by every table, so it
  *  is never claimed per slot; tables are told apart inside it (the `data-multitableslot` frames). */
@@ -155,11 +156,15 @@ export function noteSocketClosed(rid: string): void {
   }
   S.tapBound = null;
   S.tapMismatch = 0;
+  stallSocketClosed(rid);
   if (time() - (S.tapLeavingAt || 0) <= LEAVE_GRACE_S) {
     log(`[ws] table socket ${rid} closed — we left the table; the next table binds fresh`);
     return;
   }
-  const site = siteClosedEvidence();
+  // A STALL MAKES IT A KICK (stall.ts): the stalled turn sat hero out, the seat and then the table went after —
+  // session_20261003_111447 table 2 read "no seat was occupied" at its close because HERO had been removed
+  const kick = stallMakesKick(rid);
+  const site = kick ? null : siteClosedEvidence();
   if (site && S.session.id && !S.disconnect) {
     const now = time();
     S.siteClosed.notice = { at: now, decideAt: now + SITE_CLOSE_SETTLE_S, settled: false, rid, sid: S.session.id, slot: TABLES.slot(),
@@ -171,8 +176,10 @@ export function noteSocketClosed(rid: string): void {
     log(`[ws] table socket ${rid} closed on an empty table (${site.why}; seats ${pyRepr(site.seats)}, hero ${pyStr(site.hero)}) — holding ${SITE_CLOSE_SETTLE_S} s before calling it the site's close`);
     return;
   }
-  feedAdd("The table's connection to the poker server closed");
-  noteDisconnect({ text: "the table's game socket closed", attempt: null, of: null, reconnected: false }, "the capture saw its table's socket close");
+  feedAdd(kick ? `The table's connection to the poker server closed — a kick, not the site closing the table: ${kick}`
+               : "The table's connection to the poker server closed");
+  noteDisconnect({ text: "the table's game socket closed", attempt: null, of: null, reconnected: false },
+                 kick ? `the capture saw its table's socket close after a connection stall (${kick})` : "the capture saw its table's socket close");
 }
 
 const fmtS = (s: number) => (Math.round(s * 10) / 10).toFixed(1);
@@ -184,7 +191,8 @@ export const TABLE_GONE_S = 60;
  *  table was over — our frame's last full read showing no seat but hero's, the felt saying the table is breaking
  *  ("waiting"), our pinned frame lost, or the frame having just stopped showing a table — and none against: hero in
  *  a hand, or another socket of the page closed in the last SITE_CLOSE_OTHERS_S. A socket that closes before the
- *  frame was ever read in full is the failure it always was. `seats` = the seats occupied on that last full read. */
+ *  frame was ever read in full is the failure it always was. `seats` = the seats occupied on that last full read.
+ *  (A connection stall on the closing socket overrides all of this — noteSocketClosed asks stall.ts first.) */
 export function siteClosedEvidence(): { seats: number[]; hero: string | null; why: string } | null {
   if (inAHand()) return null;
   if (S.tapOtherClosedAt && time() - S.tapOtherClosedAt <= SITE_CLOSE_OTHERS_S) return null;

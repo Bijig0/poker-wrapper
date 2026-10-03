@@ -13,7 +13,7 @@ import { autoExecOf } from "../utils/autoExec/autoExec";
 import { buildSpotSolutionTokens, buildPreflopTokens, buildPreflopTokensHu, buildSolutionUrl } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { preflopDb } from "../services/preflopDb";
 import { resolveSet, resolveDepth } from "../services/fastSolve";
-import { answerLog, failKindOf, type LoggedAnswer } from "../services/answerLog";
+import { answerLog, failKindOf, NEVER_ASKED, type LoggedAnswer } from "../services/answerLog";
 import { sameAction, heroActionAt } from "../services/adherence";
 import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
@@ -739,7 +739,7 @@ function answerStatusOf(e: Enriched, byCid: Map<string, LoggedAnswer[]>): Answer
   const answered = rows.filter((a) => a.text != null).length;
   // A no-probe row is the reconciler's note that nobody ASKED here; it is not a
   // solve that failed, and counting it as one turned "no answer" into "failed ×1".
-  const fails = rows.filter((a) => a.text == null && (a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe");
+  const fails = rows.filter((a) => a.text == null && !NEVER_ASKED.has(a.fail_kind ?? failKindOf(a.fail_reason)));
   const failed = fails.length;
   const cov = coverageOf(e, rows);
   const base = { answered, failed, decisions: cov.decisions.length, covered: cov.covered, uncovered: cov.uncovered, stray: cov.stray };
@@ -955,7 +955,7 @@ function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
     if (!a.client_hand_id || !byCid.has(a.client_hand_id)) continue;
     // a no-probe row records a decision nobody asked about — counting it as a
     // failed solve would blame the solver for a capture fault
-    if (a.text == null) { if ((a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe") failed++; continue; }
+    if (a.text == null) { if (!NEVER_ASKED.has(a.fail_kind ?? failKindOf(a.fail_reason))) failed++; continue; }
     answers++;
     const t = (tiers[a.tier ?? "unknown"] ??= { n: 0, lat: [] });
     t.n++;
@@ -2222,7 +2222,7 @@ function sessionCard(s: ReturnType<typeof sessionsStore.list>[number], all: Enri
     hands: hands.length, knownHands: known.length, netBb, bb100: known.length ? Math.round((10000 * netBb) / known.length) / 100 : null,
     stakes: hands[0]?.stakes ?? null,
     // no-probe rows are decisions nobody asked about, not solves that failed
-    answers: answered.length, failed: answers.filter((a) => a.text == null && (a.fail_kind ?? failKindOf(a.fail_reason)) !== "no-probe").length, tiers, disagreements,
+    answers: answered.length, failed: answers.filter((a) => a.text == null && !NEVER_ASKED.has(a.fail_kind ?? failKindOf(a.fail_reason))).length, tiers, disagreements,
     decisions: cov.decisions, decisionsCovered: cov.covered, decisionsCoveredPct: cov.coveredPct,
     unansweredNodes: cov.unansweredNodes, partialHands: cov.partialHands, strayCaptures: cov.stray, failKinds: cov.kinds,
     solves: solveStore.forSession(s.id).length,
