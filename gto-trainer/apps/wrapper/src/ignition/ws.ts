@@ -11,7 +11,7 @@
  * "which socket is ours" below says why a seat number alone never binds).
  */
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { strftime, time } from "../clock";
 import { wsDumpPath } from "../config";
 import { feedAdd, log } from "../feed";
@@ -243,12 +243,38 @@ export function dumpMark(reason: string): void {
   if (S.wsDumpCur !== null) S.wsDumpCur.status = reason;
 }
 
+/**
+ * THE RAW FRAMES ARE KEPT FOR GOOD (2026-10-04, Brady: "make the logs permanent"). The dump is the only record of WHEN
+ * each frame arrived (ms) — a seat's time to act is CO_CURRENT_PLAYER → its CO_SELECT_INFO — and the archive stores no
+ * time per action. A full file (20 MB, ~20 table-hours) used to be renamed over the one before it, which deleted that
+ * one. Now the one before it moves to debug/ws-archive/ under the time it was put away (ws_dump-2_20261004_153000.jsonl)
+ * and nothing is ever removed: ~1 MB a table-hour, plain JSONL (gzips 12x if the space is ever wanted). ws_dump*.jsonl
+ * and .jsonl.1 stay where the backtests read them. Throws when a move fails — dumpCommit then keeps writing to the full
+ * file, never over an old one.
+ */
+export const WS_KEEP_DIR = "ws-archive";
+const WS_DUMP_FULL = 20_000_000;
+export function keepDump(p: string): void {
+  const prev = p.replace(/\.jsonl$/, ".jsonl.1");
+  if (existsSync(prev)) {
+    const keep = join(dirname(p), WS_KEEP_DIR);
+    mkdirSync(keep, { recursive: true });
+    const name = basename(p, ".jsonl") + "_" + strftime("%Y%m%d_%H%M%S");
+    let to = join(keep, name + ".jsonl");
+    for (let n = 2; existsSync(to); n++) to = join(keep, `${name}_${n}.jsonl`);
+    renameSync(prev, to);
+  }
+  renameSync(p, prev);
+}
+
 export function dumpCommit(e: Record<string, any>): void {
   S.wsDumpCur = null;
   try {
     const p = wsDumpPath();
     mkdirSync(dirname(p), { recursive: true });
-    if (existsSync(p) && statSync(p).size > 20_000_000) renameSync(p, p.replace(/\.jsonl$/, ".jsonl.1"));
+    try {
+      if (existsSync(p) && statSync(p).size > WS_DUMP_FULL) keepDump(p);
+    } catch {}
     appendFileSync(p, pyJsonDumps(e) + "\n", "utf8");
   } catch {}
 }
