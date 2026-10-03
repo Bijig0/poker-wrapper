@@ -5068,7 +5068,8 @@ async function checkBuild() {
   const host = $("build-alert");
   if (!host) return;
   let j;
-  try { j = await (await fetch("/api/build/all")).json(); } catch { return; }
+  // an API from before 2026-10-03 answers 404 (not JSON) here: that is the fallback below, not a reason to say nothing
+  try { j = await (await fetch("/api/build/all")).json(); } catch { j = null; }
   if (!j || !j.ok || !Array.isArray(j.services)) {
     // an API from before /api/build/all: it can only speak for itself
     try { j = await (await fetch("/api/build")).json(); } catch { return; }
