@@ -22,6 +22,7 @@ import { archiveHand } from "../archive";
 import { markTopUpRefused } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
+import { noteHeroDealt, noteTapFrame } from "./stall";
 
 // 1048576 = "Folds & shows" (a fold; without it the no-chips rule reads a check); blind 16 = a post with a dead small
 // blind beside it — wsLine.ts has both
@@ -896,6 +897,7 @@ export function onGameMsg(d: Record<string, any>): void {
     }
     w.dealt = sortedNums(dealt);
     w.heroDealt = faceUp !== null;
+    if (w.heroDealt) noteHeroDealt(S.handNo);
   } else if (pid === "CO_CHIPTABLE_INFO") {
     const pots: number[] = d.curPot || [];
     if (pots.length) {
@@ -912,6 +914,7 @@ export function onGameMsg(d: Record<string, any>): void {
     } else {
       w.heroCards = names;
       w.heroDealt = true;
+      noteHeroDealt(S.handNo);
       feedAdd(`Your cards: ${names.join(" ")}`);
     }
   } else if (pid === "PLAY_ACCOUNT_CASH_RES" && d.type === 5) {
@@ -934,6 +937,7 @@ export function onGameMsg(d: Record<string, any>): void {
 /** One frame through the tap, exactly as the live loop runs it: accept or hold, the replay of what a socket that
  *  just bound had held, then the reader. (launch._ws_tap's per-frame body; the golden harness calls this.) */
 export function tapFrame(d: Record<string, any>, rid: string | null | undefined): void {
+  noteTapFrame(rid, d.pid);
   const take = tapAccepts(d, rid);
   const batch: [Record<string, any>, string | null, boolean][] = tapTakeReplay().map((hd) => [hd, S.tapBound, true]);
   if (take) batch.push([d, rid ?? null, false]);

@@ -14,6 +14,7 @@ import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from 
 import { maybeEndForDisconnect, maybeEndForNetDrop, maybeReseatAfterSiteClose, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
 import { maybeSitBackIn } from "./sitback";
 import { liveHandTick } from "./archive";
+import { checkSocketStall } from "./ignition/stall";
 
 export const FEED_STALL_TICKS = 8;
 
@@ -49,6 +50,11 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
   }
   // a table that lost the poker server ends the session before anything else in this pass could press; a socket that
   // closed on an empty table is first given its settle window to prove it was the site's close, not a drop
+  try {
+    checkSocketStall();
+  } catch (e: any) {
+    log(`[ws] stall check: ${errRepr(e)}`);
+  }
   try {
     maybeSettleSiteClose();
     await maybeEndForDisconnect();

@@ -154,6 +154,8 @@ const EXTRA_COLUMNS: [string, string][] = [
  *  gtow-down            GTO Wizard was not connected while hero was on the clock
  *  abandoned-stale      the verdict arrived after hero had already acted
  *  no-probe             hero's decision was never asked about at all
+ *  socket-stall         never asked about because the table's connection went silent: hero's turn reached the
+ *                       wrapper late or not at all (the wrapper stamps the hand's `connStalls`, ignition/stall.ts)
  *
  * The last five used to leave no trace whatsoever: the poller returned early
  * and the node simply had no row.
@@ -161,7 +163,7 @@ const EXTRA_COLUMNS: [string, string][] = [
 export const FAIL_KINDS = [
   "no-solution", "off-tree", "not-in-range", "not-heros-turn", "hand-over",
   "solver-timeout", "solver-unreachable", "solver-bad-response", "gtow-down",
-  "abandoned-stale", "no-probe",
+  "abandoned-stale", "no-probe", "socket-stall",
   // hero's buttons were up for 2 s while the wrapper's export said "not hero's
   // turn" — the reason (notToActWhy) is in failReason. Written LIVE, the first
   // time it happens, so this class can never again pass in silence (2026-09-19,
@@ -196,6 +198,9 @@ export const FAIL_KINDS = [
   "unknown",
 ] as const;
 export type FailKind = (typeof FAIL_KINDS)[number];
+
+/** Rows that record a decision nobody ASKED about — not a solve that failed, so never counted as one. */
+export const NEVER_ASKED: ReadonlySet<string> = new Set<FailKind>(["no-probe", "socket-stall"]);
 
 /** A machine `kind` from the fast-solver is only trusted when it is one of ours. */
 export const isFailKind = (k: unknown): k is FailKind =>

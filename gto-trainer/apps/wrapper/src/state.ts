@@ -19,6 +19,7 @@ import { truthy } from "./py";
 import { SessionStore } from "./sessions";
 import { Site } from "./sites/coinpoker";
 import { Site as CggSite } from "./sites/clubgg";
+import type { Stall } from "./ignition/stall";
 
 export class TupleSet extends Set<unknown[]> {
   private index = new Map<string, unknown[]>();
@@ -169,6 +170,12 @@ function fresh() {
     tapAmbiguousSaid: new TupleSet(),
     tapMismatch: 0,
     tapStall: { since: null as number | null, said: false },
+    /** Every socket's last frame and last PONG (ignition/stall.ts noteTapFrame): what a silent socket is told by. */
+    tapLast: new Map<string, { at: number; pongAt: number | null }>(),
+    /** OUR SOCKET WENT SILENT MID-HAND (ignition/stall.ts): `cur` = the stall open now, `last` = the latest one,
+     *  `byHand` = each hand's stalls for its row, `dealtSince` = hero has been dealt a hand after `last` (the seat
+     *  survived it, so a later close of this table may be the site's again). */
+    socketStall: { cur: null as Stall | null, last: null as Stall | null, byHand: new Map<number, Stall[]>(), dealtSince: false },
     /** Hero's cards in the hand before this one, and when the bound socket dealt the current one: our frame still
      *  showing those a few seconds after a new deal is the DOM catching up, not another table (tapVerify). */
     tapPrevHero: [] as string[],
