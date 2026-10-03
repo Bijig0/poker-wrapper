@@ -19,7 +19,7 @@ import { fmtFixed, pyJsonDumps, pyRepr, pyRound, pyStr, sortedNums, truthy } fro
 import { S, TupleSet } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand } from "../archive";
-import { markTopUpRefused } from "../topup";
+import { markTopUpRefused, noteTopUpFrame } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
 import { noteHeroDealt, noteTapFrame } from "./stall";
@@ -750,6 +750,9 @@ export function onGameMsg(d: Record<string, any>): void {
   }
   const w = ws();
   const pid = d.pid;
+  // HERO'S MONEY for the top-up (topup.ts noteTopUpFrame): the hand's end stacks, his buy's receipt, the Buy-chips
+  // panel's offer — read before this handler can return early, and before a new hand's frame moves the hand counter
+  noteTopUpFrame(d);
   // THE HAND'S FRAMES (wsLine.ts builds /hand's line from them): every frame this handler takes, in order; a new
   // hand's PLAY_STAGE_INFO opens the list below, after beginHand has emptied it
   if (pid !== "PLAY_STAGE_INFO") keepFrame(w, d);
@@ -938,7 +941,9 @@ export function onGameMsg(d: Record<string, any>): void {
     // session_20260930_104219 hand 4921602320, and six more refusals across the socket dumps, every one of them
     // {type 5, seat: hero, cash 0} a millisecond after PLAY_STATUS_INFO {type 3, status 2, dwData: the max}). The
     // client's notice for it follows seconds later and is only filed by a tick that reads it; this word is on the
-    // socket whatever the screen read does. Type 2 is a seat's buy-in (every seat, every hand) — not this.
+    // socket whatever the screen read does. Type 2 is a buy that WENT THROUGH, `cash` = the seat's new stack: other
+    // seats' buy-ins and rebuys, and for hero's seat the receipt of his own top-up (2026-10-04 — the comment here used to
+    // call every type 2 "a seat's buy-in", and hero's receipts went unread: topup.ts noteTopUpFrame files them now).
     const seat = d.seat ?? null;
     const hero = w.heroSeat ?? null;
     if ((d.cash ?? null) === 0 && (seat === null || hero === null || seat === hero)) {

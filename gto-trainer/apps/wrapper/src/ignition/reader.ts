@@ -26,6 +26,38 @@ import { shadowTick } from "./shadow";
 import { dbgRecord, writeHandIds } from "./recorder";
 import { stallMakesKick, stallSocketClosed } from "./stall";
 
+const RECEIPT_RE = /successfully added \$?([\d,]+(?:\.\d+)?) in chips/i;
+
+/**
+ * THE CLIENT'S BUY RECEIPTS ON THE SCREEN, ON THEIR RISING EDGE, COUNTED (2026-10-04): this tick's receipt lines by
+ * text, against the last counts (`prev`), give the amount of every line that is new — two identical "$0.05" lines
+ * after one are one new receipt. Returns [amounts, the counts to keep]; a tick with no receipt line at all keeps the
+ * last counts (the list hidden or undrawn for a tick is not every buy over again when it is back).
+ * ONE COLUMN: the client can draw the same receipt twice at once — a toast at the top of the table (y ≈ 116, 108 px
+ * wide, drifting a few px) beside the line in the message history (the golden recordings of 2026-08-07 → 09-23) — so a
+ * text is counted in the column (x) holding most of it: the history's lines share one x, the toast's is apart.
+ */
+export function receiptRises(nodes: { text: string; x?: number }[], prev: Map<string, number> | null): [string[], Map<string, number> | null] {
+  const cols = new Map<string, Map<number, number>>();
+  for (const n of nodes) {
+    if (RECEIPT_RE.test(n.text)) {
+      const txt = n.text.trim();
+      const byX = cols.get(txt) ?? new Map<number, number>();
+      const x = Math.round(Number(n.x) || 0);
+      byX.set(x, (byX.get(x) ?? 0) + 1);
+      cols.set(txt, byX);
+    }
+  }
+  const now = new Map<string, number>();
+  for (const [txt, byX] of cols) now.set(txt, Math.max(...byX.values()));
+  if (!now.size) return [[], prev];
+  const out: string[] = [];
+  for (const [txt, k] of now) {
+    for (let i = prev?.get(txt) ?? 0; i < k; i++) out.push(RECEIPT_RE.exec(txt)![1]!);
+  }
+  return [out, now];
+}
+
 /** The poker client's page target — the one that isn't our own panel. ONE page is shared by every table, so it
  *  is never claimed per slot; tables are told apart inside it (the `data-multitableslot` frames). */
 export async function ignitionTargetReal(): Promise<Record<string, any> | null> {
@@ -448,16 +480,19 @@ export async function feedTick(): Promise<void> {
     const held: Set<number> = (w.heldCards ??= new Set<number>());
     for (const [num, cs] of seats) if ((cs.cards || 0) >= 1) held.add(num);
   }
-  // the client's own top-up receipt — counted on its RISING EDGE (the line stays in the message history)
-  const nowReceipts = new Set<string>();
-  for (const n of nodes) {
-    if (/successfully added \$?([\d,]+(?:\.\d+)?) in chips/i.test(n.text)) nowReceipts.add(n.text.trim());
-  }
-  const before: Set<string> = L.receipts ?? new Set();
-  for (const txt of nowReceipts) {
-    if (!before.has(txt)) topUpReceipt(/\$?([\d,]+(?:\.\d+)?) in chips/i.exec(txt)![1]!);
-  }
-  L.receipts = nowReceipts;
+  // the client's own top-up receipt — counted on its RISING EDGE (the line stays in the message history). COUNTED, not
+  // merely seen (2026-10-04): a second buy of the same amount writes a line IDENTICAL to the first ("You have
+  // successfully added $0.05 in chips." for hand 2's buy and again for hand 8's, session_20261003_234358), so a set of
+  // texts never rose for it and the buy stayed "pending" — one more line of a text = one more receipt. A tick showing no
+  // receipt line at all (the list hidden or not drawn) keeps the last count, so the history coming back is no new buy.
+  // The socket's receipt (topup.ts topUpSocketReceipt) usually comes first; checks.ts topUpReceipt files a buy once.
+  // On table 1's recording of that session this files the three buys the set missed (23:54:15, 23:57:46, 00:05:20) and
+  // nothing else: the history only ever loses lines off its top.
+  const [risen, counts] = receiptRises(nodes, S.receiptCounts);
+  S.receiptCounts = counts;
+  // the texts on screen this tick (what /state has always shown); the counts above are what files a receipt
+  L.receipts = new Set(nodes.filter((n) => RECEIPT_RE.test(n.text)).map((n) => n.text.trim()));
+  for (const amount of risen) topUpReceipt(amount);
   stateCheck(toActNow, seats);
   L.timeBank =(d.buttons ?? []).find((b: any) => /^\+\d+s$/.test(String(b.text || "").trim())) ?? null;
   const prevClock = S.heroClock;

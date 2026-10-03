@@ -57,15 +57,22 @@ test("PLAY_ACCOUNT_CASH_RES type 5 / cash 0 for hero's seat settles the pressed 
   }
 });
 
-test("a seat's buy-in (type 2), another seat's result, or chips actually added is not a refusal; nor is a press already settled", () => {
+test("another seat's buy-in (type 2) or result, or chips actually added is not a refusal; hero's type 2 is his RECEIPT; nor is a press already settled refused", () => {
   const { events, pressed, undo } = rig();
   try {
     S.study.lastTopUp = pressed();
-    onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 2, seat: 5, cash: 500 });
+    onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 2, seat: 3, cash: 500 });
     onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 5, seat: 3, cash: 0 });
     onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 5, seat: 5, cash: 5 });
     expect(S.study.lastTopUp.refused).toBeUndefined();
+    expect(S.study.lastTopUp.receiptCents).toBeNull();
     expect(events.filter(([k]) => k === "top-up-refused-over-max").length).toBe(0);
+    // 2026-10-04: type 2 for HERO's seat is the add going through — the receipt (topup.ts topUpSocketReceipt)
+    onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 2, seat: 5, cash: 500 });
+    expect(S.study.lastTopUp.receiptCents).toBe(5);
+    expect(S.study.lastTopUp.receiptSource).toBe("socket");
+    onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 5, seat: 5, cash: 0 });
+    expect(S.study.lastTopUp.refused).toBeUndefined();
     // the client's receipt came first: the socket's later word changes nothing
     S.study.lastTopUp = { ...pressed(), receiptCents: 5, ok: true };
     onGameMsg({ pid: "PLAY_ACCOUNT_CASH_RES", type: 5, seat: 5, cash: 0 });
