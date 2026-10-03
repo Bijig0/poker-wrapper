@@ -63,9 +63,11 @@ while ($true) {
       & taskkill /PID $p.Id /T /F | Out-Null
       break
     }
-    Start-Sleep -Seconds 30
+    # 30 s between probes - but an EXIT is seen within a second: a server that left on purpose (its own restart on a
+    # commit) must not wait out the rest of this sleep before it is relaunched (.claude\study-api.ps1, 2026-10-03)
+    for ($i = 0; $i -lt 30 -and -not $p.HasExited; $i++) { Start-Sleep -Seconds 1 }
   }
-  $lived = [int]((Get-Date) - $startedAt).TotalSeconds
+  $lived =[int]((Get-Date) - $startedAt).TotalSeconds
   $code = 'killed'
   try { if ($p -and $p.HasExited -and $null -ne $p.ExitCode) { $code = $p.ExitCode } } catch { }
   Log "server gone (exit $code) after $lived s"

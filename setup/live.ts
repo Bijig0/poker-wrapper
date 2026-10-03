@@ -61,9 +61,14 @@ function notOnMain(): string[] {
   return out;
 }
 
-/** Everything behind is in a state that time alone resolves (about to restart): worth waiting for. */
-const willResolve = (s: LiveStatus) => s.services.filter((x) => x.up && !x.current)
-  .every((x) => !!x.build && ["settling", "restarting", "current"].includes(x.build.auto?.state));
+/**
+ * Something is on its way to a restart, so time alone will change the answer: a service that is behind and about to
+ * go (settling / restarting / not looked yet), or the API or chart server in the gap between exit and relaunch.
+ * A line that will NOT change by itself — a wrapper left open, an uncommitted edit, a held restart — is not waited for.
+ */
+const onItsWay = (s: LiveStatus) => s.services.some((x) =>
+  (!x.up && (x.name === "api" || x.name === "charts")) ||
+  (x.up && !x.current && !!x.build && ["settling", "restarting", "current"].includes(x.build.auto?.state)));
 
 function print(s: LiveStatus): void {
   const w = Math.max(...s.services.map((x) => x.name.length), 10);
@@ -80,10 +85,10 @@ function print(s: LiveStatus): void {
 }
 
 let s = await liveStatus();
-// --wait: a service says it is behind the moment the files change, so "current" on the first look means nothing this
-// merge touched is loaded by anything running. Otherwise wait while every behind service is on its way to a restart.
+// --wait: a service says it is behind the moment the files change, so nothing on its way at the first look means
+// nothing this merge touched is loaded by a service that restarts itself. Otherwise wait for those to come back.
 const until = Date.now() + WAIT_S * 1000;
-while (!s.current && willResolve(s) && Date.now() < until) {
+while (onItsWay(s) && Date.now() < until) {
   await Bun.sleep(3_000);
   s = await liveStatus();
 }
