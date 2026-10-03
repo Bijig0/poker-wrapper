@@ -274,10 +274,14 @@ function replayState(hand, step) {
   }
   const next = hand.actions[step] ?? null;
   const shownStreet = next ? next.street : st.street;
+  // once the hand is over, the part of the biggest bet nobody matched has gone back (hand 4922314918: hero's 242bb
+  // shove over a 28bb stack left a 56.8bb pot, not 274.6) — the same rule as the API's handSummary
+  const tot = Object.values(inv).sort((a, b) => b - a);
+  const uncalled = !next && tot.length >= 2 ? tot[0] - tot[1] : 0;
   return {
     street: st.street,
     board: hand.board.slice(0, STREET_N[shownStreet] ?? hand.board.length),
-    pot: r2(st.potPrev + Object.values(st.cur).reduce((s, x) => s + x, 0)),
+    pot: r2(st.potPrev + Object.values(st.cur).reduce((s, x) => s + x, 0) - uncalled),
     bets: st.cur,
     folded: st.folded,
     invested: inv,
