@@ -79,7 +79,32 @@ export const FACING_COVERING_JAM: typeof RIVER_FACING_BET = {
   field: { x: 0, y: 0, h: 0 },
 };
 
-const TURN_QA = /^(fold|check|call|raise|bet|allIn)Button$/;
+/** Session_20261003_153908 seq 5037, hand 55 preflop: A♦Q♥ facing a raise to 60 — the smallest raise the client allows
+ *  is hero's whole stack, so it offers it as allInRaiseButton, labelled IN DOLLARS. No bet field, no sizing row. */
+export const FACING_RAISE_ONLY_ALLIN: typeof RIVER_FACING_BET = {
+  frame: { x: 1282, y: 70, w: 1276, h: 1528 },
+  buttons: [
+    { text: "Buy chips", x: 1298, y: 1558, w: 164, h: 24, qa: "buyMoreChipsButton" },
+    { text: "FOLD", x: 1689, y: 1479, w: 132, h: 40, qa: "foldButton" },
+    { text: "CALL 56 BB", x: 1829, y: 1479, w: 132, h: 40, qa: "callButton" },
+    { text: "ALL-IN $5.17", x: 1969, y: 1479, w: 132, h: 40, qa: "allInRaiseButton" },
+  ],
+  field: { x: 0, y: 0, h: 0 },
+};
+
+/** Session_20261003_153922 seq 6230, hand 51 river: 2♦2♥, hero 0.8 bb behind, nothing to call — CHECK and the only
+ *  bet there is, ALL-IN $0.04 (allInRaiseButton). The reader saw CHECK alone ("not your turn"); hero timed out. */
+export const CHECK_OR_ONLY_ALLIN: typeof RIVER_FACING_BET = {
+  frame: { x: 2, y: 70, w: 1276, h: 1528 },
+  buttons: [
+    { text: "Buy chips", x: 18, y: 1558, w: 164, h: 24, qa: "buyMoreChipsButton" },
+    { text: "CHECK", x: 549, y: 1479, w: 132, h: 40, qa: "checkButton" },
+    { text: "ALL-IN $0.04", x: 689, y: 1479, w: 132, h: 40, qa: "allInRaiseButton" },
+  ],
+  field: { x: 0, y: 0, h: 0 },
+};
+
+const TURN_QA = /^(fold|check|call|raise|bet|allIn|allInRaise)Button$/;
 const CONFIRM_QA = /^(raise|bet)Button$/;
 
 export class FakeIgnition {

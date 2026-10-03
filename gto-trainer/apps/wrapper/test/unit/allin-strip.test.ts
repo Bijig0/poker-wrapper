@@ -11,7 +11,9 @@
  */
 import { expect, test } from "bun:test";
 import { realTime, setFakeTime, time } from "../../src/clock";
-import { bankStep } from "../../src/ignition/dom";
+import { bankStep, splitStrip, toAct } from "../../src/ignition/dom";
+import { tableState } from "../../src/ignition/reader";
+import { HandReconciler, buttonsUp, makeTick } from "../../src/reconcile";
 import { handSeams } from "../../src/ignition/hand";
 import { pyJsonDumps } from "../../src/py";
 import {
@@ -20,7 +22,9 @@ import {
 import { S, resetState } from "../../src/state";
 import { callIsMaxCommit } from "../../src/terminal";
 import * as FAKE from "../../src/faketable";
-import { BET_SPOT, FACING_COVERING_JAM, FACING_JAM, FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
+import {
+  BET_SPOT, CHECK_OR_ONLY_ALLIN, FACING_COVERING_JAM, FACING_JAM, FACING_RAISE_ONLY_ALLIN, FakeIgnition, RIVER_FACING_BET,
+} from "./fakeIgnition";
 import { checker, J, scratchDirs } from "./helpers";
 
 const T0 = 1_790_320_459;
@@ -390,5 +394,205 @@ test("the fake table relabels its confirm the way the client does (so rig shoves
   t = run("betButton", "BET 1 BB", "50");
   t.type("50");
   check("a bet typed at the stack → 'ALL-IN 50 BB'", t.conf.innerText === "ALL-IN 50 BB", t.conf.innerText);
+  expect(fails).toEqual([]);
+});
+
+// ================================================================================================================
+// THE CLIENT'S THIRD ALL-IN (2026-10-03): allInRaiseButton, labelled IN DOLLARS, when the smallest raise/bet the
+// client allows is already hero's whole stack — no RAISE/BET control, no bet field, no sizing row. Kept apart from
+// (a) the RAISE/BET control a preset relabels "ALL-IN N BB" (a shove hero sized) and (b) allInButton "ALL-IN N BB"
+// (the CALL that takes hero's last chip). Strips: session_20261003_153908 seq 5037, session_20261003_153922 seq 6230.
+// ================================================================================================================
+
+/** Hand 55 (session 153908) preflop: A♦Q♥, hero opened to 4, seat 6 raised to 60; hero 99.4 behind (103.4 = $5.17). */
+function aqFacingBigRaise(heroAct: Record<string, any> | null = null): Record<string, any> {
+  const actions: any[] = [
+    { seatId: 1, type: "post-sb", street: "preflop", amount: 0.4 }, { seatId: 2, type: "post-bb", street: "preflop", amount: 1 },
+    { seatId: 3, hero: true, type: "raise", street: "preflop", amount: 4 }, { seatId: 4, type: "fold", street: "preflop" },
+    { seatId: 5, type: "fold", street: "preflop" }, { seatId: 6, type: "raise", street: "preflop", amount: 60 },
+    { seatId: 1, type: "fold", street: "preflop" }, { seatId: 2, type: "fold", street: "preflop" },
+  ];
+  if (heroAct) actions.push({ seatId: 3, hero: true, street: "preflop", ...heroAct });
+  return {
+    handId: 55, heroSeatId: 3, street: "preflop", liveSeats: [1, 2, 3, 4, 5, 6], actions,
+    stacks: new Map([[1, 99.6], [2, 99], [3, 99.4], [4, 100], [5, 100], [6, 140]]), committed: new Map([[3, 4], [6, 60]]),
+    currentNode: { street: "preflop", toActIsHero: true, pot: 65.4, toCall: 56 }, heroFolded: false, ended: false,
+  };
+}
+
+/** Hand 51 (session 153922) river: 2♦2♥, checked to hero, 0.8 behind. */
+function deucesRiverShort(): Record<string, any> {
+  return {
+    handId: 51, heroSeatId: 4, street: "river", liveSeats: [2, 4], actions: [
+      { seatId: 2, type: "post-sb", street: "preflop", amount: 0.4 }, { seatId: 4, hero: true, type: "post-bb", street: "preflop", amount: 1 },
+      { seatId: 2, type: "call", street: "preflop", amount: 0.6 }, { seatId: 4, hero: true, type: "check", street: "preflop" },
+      { seatId: 2, type: "check", street: "river" },
+    ],
+    stacks: new Map([[2, 120], [4, 0.8]]), committed: new Map(),
+    currentNode: { street: "river", toActIsHero: true, pot: 2, toCall: 0 }, heroFolded: false, ended: false,
+  };
+}
+
+test("allInRaiseButton: CHECK / ALL-IN $0.04 is hero's turn, and the dollar label is never read as BB", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  let undo = () => {};
+  try {
+    // the reader's own split and turn test, on the recorded frames
+    for (const [name, spec, want] of [
+      ["CHECK / ALL-IN $0.04 (153922 seq 6230)", CHECK_OR_ONLY_ALLIN, ["CHECK", "ALL-IN $0.04"]],
+      ["FOLD / CALL 56 BB / ALL-IN $5.17 (153908 seq 5037)", FACING_RAISE_ONLY_ALLIN, ["FOLD", "CALL 56 BB", "ALL-IN $5.17"]],
+    ] as const) {
+      const d = { frame: spec.frame, buttons: spec.buttons.map((b) => ({ ...b })) };
+      const [acts, presets] = splitStrip(d);
+      check(`${name}: the ALL-IN is a turn action`, J(acts.map((a: any) => a.text)) === J(want), J(acts));
+      check(`${name}: no sizing preset read`, presets.length === 0, J(presets));
+      check(`${name}: hero is on the clock`, toAct(d) === true);
+      check(`${name}: the level reconciler sees hero's buttons up`, buttonsUp(acts.map((a: any) => a.text)) === true);
+    }
+    // ... and the reader's /table answer (tableState) on the fake client: hero's turn, the strip as the panel shows it
+    const t = new FakeIgnition(CHECK_OR_ONLY_ALLIN, { stack: 0.8 });
+    undo = t.install();
+    const st = await tableState();
+    check("tableState: CHECK / ALL-IN $0.04 → toAct", st.toAct === true, J(st));
+    check("  ... with both controls listed", J(st.actions) === J([{ text: "CHECK" }, { text: "ALL-IN $0.04" }]), J(st.actions));
+    // a dollar ALL-IN carries no BB amount: the reconciler's CALL check never reads it, nothing parses "$0.04" as 0.04 bb
+    const rc = new HandReconciler(51);
+    rc.observe(makeTick({ seq: 1, seats: new Map([[2, { stack: 120, bet: null, cards: 2, hero: false }], [4, { stack: 0.8, bet: null, cards: 2, hero: true }]]),
+                          pot: 2, board: 5, buttons: ["CHECK", "ALL-IN $0.04"], hero: 4 }));
+    check("the reconciler files no violation off the dollar label", rc.violations.length === 0, J(rc.violations));
+  } finally {
+    undo();
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("allInRaiseButton: a shove or a sized raise presses it; a CALL never does; CHECK stays CHECK", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  let undo = () => {};
+  const table = (spec: typeof RIVER_FACING_BET, stack: number, o: { untagged?: boolean } = {}) => {
+    undo();
+    const t = new FakeIgnition(spec, { stack });
+    if (o.untagged) for (const b of t.buttons) delete b.qa;
+    undo = t.install();
+    return t;
+  };
+  try {
+    // --- (c) shove picks --------------------------------------------------------------------------------------------
+    let t = table(CHECK_OR_ONLY_ALLIN, 0.8);
+    handSeams.override = () => deucesRiverShort();
+    let r = await actuate({ kind: "action", label: "all-in" });
+    check("hand 51: ALLIN 0.8 on CHECK / ALL-IN $0.04 → the ALL-IN is pressed", r.ok === true && t.pressed?.qa === "allInRaiseButton", J({ r, pressed: t.pressed }));
+    check("  ... one press, no preset, no confirm", J(t.clicks) === J(["ALL-IN $0.04"]), J(t.clicks));
+
+    t = table(FACING_RAISE_ONLY_ALLIN, 103.4);
+    handSeams.override = () => aqFacingBigRaise();
+    r = await actuate({ kind: "action", label: "all-in" });
+    check("hand 55: a shove on FOLD / CALL 56 BB / ALL-IN $5.17 → the ALL-IN, not the CALL", r.ok === true && J(t.clicks) === J(["ALL-IN $5.17"]) && r.as === undefined, J({ r, clicks: t.clicks }));
+
+    // --- (c) a sized raise / bet where the client allows no size but all-in ----------------------------------------
+    t = table(FACING_RAISE_ONLY_ALLIN, 103.4);
+    r = await actuate({ kind: "raise-to", amount: "107.5", verb: "raise" });
+    check("hand 55: Raise 107.5 → the client's only raise, ALL-IN $5.17", r.ok === true && t.pressed?.qa === "allInRaiseButton" && J(t.clicks) === J(["ALL-IN $5.17"]), J({ r, clicks: t.clicks }));
+    check("  ... said as the shove it is, and why", r.as === "all-in" && r.kind === "all-in-raise" && String(r.why).includes("only raise") && String(r.why).includes("ALL-IN $5.17"), J(r));
+
+    t = table(CHECK_OR_ONLY_ALLIN, 0.8);
+    handSeams.override = () => deucesRiverShort();
+    r = await actuate({ kind: "raise-to", amount: "0.5", verb: "bet" });
+    check("hand 51: a sized BET where the only bet is ALL-IN $0.04 → pressed", r.ok === true && J(t.clicks) === J(["ALL-IN $0.04"]) && String(r.why).includes("only bet"), J({ r, clicks: t.clicks }));
+
+    t = table(CHECK_OR_ONLY_ALLIN, 0.8);
+    t.buttons.push({ text: "BET 1 BB", x: 829, y: 1479, w: 132, h: 40, qa: "betButton" });
+    r = await actuate({ kind: "raise-to", amount: "0.5", verb: "bet" });
+    check("a BET control beside it (no field read) → refused, nothing pressed", r.ok === false && t.clicks.length === 0 && String(r.reason).includes("beside the ALL-IN"), J({ r, clicks: t.clicks }));
+
+    t = table(FACING_RAISE_ONLY_ALLIN, 103.4, { untagged: true });
+    handSeams.override = () => aqFacingBigRaise();
+    r = await actuate({ kind: "raise-to", amount: "107.5", verb: "raise" });
+    check("the same strip without data-qa → refused (never by label), nothing pressed", r.ok === false && t.clicks.length === 0 && String(r.reason).includes("no bet input"), J({ r, clicks: t.clicks }));
+
+    // --- point 5, unchanged: no bet field and no allInRaiseButton → a sized raise stays refused ---------------------
+    t = table(FACING_COVERING_JAM, 88.4);
+    handSeams.override = () => aqFacingCoveringJam();
+    r = await actuate({ kind: "raise-to", amount: "20", verb: "raise" });
+    check("FOLD / ALL-IN 88.4 BB (allInButton = the call): a sized raise → refused, nothing pressed", r.ok === false && t.clicks.length === 0 && String(r.reason).includes("no bet input"), J({ r, clicks: t.clicks }));
+    t = table(FACING_JAM, 87.4);
+    handSeams.override = () => kjFacingJam();
+    r = await actuate({ kind: "raise-to", amount: "50", verb: "raise" });
+    check("FOLD / CALL 21.6 BB: a sized raise → refused, nothing pressed", r.ok === false && t.clicks.length === 0 && String(r.reason).includes("no bet input"), J({ r, clicks: t.clicks }));
+
+    // --- CALL never presses allInRaiseButton; CHECK presses CHECK -----------------------------------------------------
+    t = table(FACING_RAISE_ONLY_ALLIN, 103.4);
+    handSeams.override = () => aqFacingBigRaise();
+    r = await actuate({ kind: "action", label: "call" });
+    check("hand 55: CALL → CALL 56 BB", r.ok === true && t.pressed?.qa === "callButton" && J(t.clicks) === J(["CALL 56 BB"]), J({ r, clicks: t.clicks }));
+
+    t = table(FACING_RAISE_ONLY_ALLIN, 103.4);
+    t.buttons = t.buttons.filter((b) => b.qa !== "callButton");
+    r = await actuate({ kind: "action", label: "call" });
+    check("FOLD / ALL-IN $5.17 (no CALL): CALL → refused, the raise is never pressed as the call", r.ok === false && t.clicks.length === 0, J({ r, clicks: t.clicks }));
+    t = table(FACING_RAISE_ONLY_ALLIN, 103.4, { untagged: true });
+    t.buttons = t.buttons.filter((b) => !/^CALL/.test(b.text));
+    r = await actuate({ kind: "action", label: "call" });
+    check("  ... nor without data-qa (the dollar label is the raise)", r.ok === false && t.clicks.length === 0, J({ r, clicks: t.clicks }));
+
+    t = table(CHECK_OR_ONLY_ALLIN, 0.8);
+    handSeams.override = () => deucesRiverShort();
+    r = await actuate({ kind: "action", label: "call" });
+    check("CHECK / ALL-IN $0.04: CALL → refused, nothing pressed", r.ok === false && t.clicks.length === 0, J({ r, clicks: t.clicks }));
+    t = table(CHECK_OR_ONLY_ALLIN, 0.8);
+    r = await actuate({ kind: "action", label: "check" });
+    check("CHECK / ALL-IN $0.04: CHECK → CHECK", r.ok === true && t.pressed?.qa === "checkButton" && J(t.clicks) === J(["CHECK"]), J({ r, clicks: t.clicks }));
+
+    // --- (a) and (b) beside it, unchanged ---------------------------------------------------------------------------
+    t = table(RIVER_FACING_BET, 89.2);
+    handSeams.override = () => qjRiver();
+    r = await actuate({ kind: "action", label: "all-in" });
+    check("(a) a shove sized on the preset: preset, then the relabelled RAISE", r.ok === true && J(t.clicks) === J(["ALL-IN", "ALL-IN 89.2 BB"]) && t.pressed?.qa === "raiseButton", J({ r, clicks: t.clicks }));
+    t = table(FACING_COVERING_JAM, 88.4);
+    handSeams.override = () => aqFacingCoveringJam();
+    r = await actuate({ kind: "action", label: "call" });
+    check("(b) a covered CALL on allInButton", r.ok === true && t.pressed?.qa === "allInButton" && r.kind === "all-in-as-call", J({ r, pressed: t.pressed }));
+
+    // --- the whole press as auto-execute makes it: executed, said in the feed, judged as a shove, confirmed ----------
+    const fake = table(FACING_RAISE_ONLY_ALLIN, 103.4);
+    handSeams.override = () => aqFacingBigRaise(fake.pressed ? { type: "all-in", amount: 103.4 } : null);
+    Object.assign(S.liveStatus, { toAct: true, practice: true, modal: null, buyPanel: null, timeBank: null });
+    S.handNo = 55;
+    Object.assign(S.study, {
+      on: true, auto: true, foldNoAnswer: false, timeBank: false, autoDelay: "instant",
+      text: "≈ PREFLOP — Fold 82% · Raise 107.5 18%", pick: "Raise 107.5", note: null, at: time(),
+      decisionKey: pyJsonDumps(["preflop", [], ["A♦", "Q♥"], 56, 8]),
+      handId: 55, executed: null, autoTried: null, lastExec: null, autoRetry: null, autoDue: null,
+      autoHeld: null, pendingExec: null, noAnswerTurn: null, lastNoAnswerFold: null, timeBankDecision: null, timeBankAt: 0,
+    });
+    S.feed.length = 0;
+    Object.assign(S.topupPrefold, { active: false, deadline: 0, kind: null });
+    await maybeAutoAct();
+    const feed = S.feed.map((f: any) => f.text ?? f.line ?? J(f)).join("\n");
+    check("auto-execute presses ALL-IN $5.17 for Raise 107.5", fake.pressed?.qa === "allInRaiseButton" && S.study.lastExec?.ok === true, J({ pressed: fake.pressed, exec: S.study.lastExec, feed }));
+    check("  ... and the feed says the client's only raise took it", feed.includes("Study pick executed — Raise 107.5") && feed.includes("ALL-IN $5.17") && feed.includes("only raise"), feed);
+    check("  ... verified as a shove (the capped-raise shape)", J(S.study.pendingExec?.plan) === J({ kind: "action", label: "all-in", from: { kind: "raise-to", amount: "107.5", verb: "raise" } }), J(S.study.pendingExec));
+    S.liveStatus.toAct = false;
+    setFakeTime(T0 + 1);
+    await maybeVerifyExec();
+    check("  ... confirmed against the table's own line (hero all-in 103.4)", S.study.lastExec?.outcome === "confirmed", J(S.study.lastExec));
+  } finally {
+    undo();
+    handSeams.override = null;
+    console.log = log0;
+    realTime();
+  }
   expect(fails).toEqual([]);
 });

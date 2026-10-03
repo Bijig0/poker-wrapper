@@ -448,6 +448,27 @@ describe("checks #14 / #16 at the press (2026-09-27)", () => {
     expect(checksOf(q, 14)).toMatchObject({ status: "fail" });
     expect(checksOf(q, 14).text).toContain("the answer offers CALL; the table's buttons were CHECK / BET");   // the 1e-6 % FOLD is residue, not an action
   });
+  it("a CALL the client offers only as its ALL-IN N BB passes (hand 4922346841); an ALL-IN in dollars is a raise, never the call", async () => {
+    const { pressedAnswerPath } = await import("./chainChecks");
+    const callRow = { ...row, decision_key: JSON.stringify(["flop", ["Qh", "8h", "4c"], ["Ah", "Qc"], 245.2, 7]),
+      decision_json: JSON.stringify([{ action: "FOLD", frequency: 0 }, { action: "CALL 88.4", frequency: 100 }]) };
+    const covered = pressedAnswerPath(callRow, [{ street: "flop", keyActs: 7, buttons: ["FOLD", "ALL-IN 88.4 BB"], atPress: "flop|7", stale: false }]);
+    expect(checksOf(covered, 14)).toMatchObject({ status: "pass" });
+    expect(checksOf(covered, 14).text).toContain("the call offered as ALL-IN");
+    // allInRaiseButton (session_20261003_153922 / 153908): "ALL-IN $0.04" beside CHECK, "ALL-IN $5.17" beside FOLD
+    const dollars = pressedAnswerPath(callRow, [{ street: "flop", keyActs: 7, buttons: ["FOLD", "ALL-IN $5.17"], atPress: "flop|7", stale: false }]);
+    expect(checksOf(dollars, 14)).toMatchObject({ status: "fail" });
+    expect(checksOf(dollars, 14).text).toContain("the answer offers CALL");
+    // ... and a RAISE beside an ALL-IN N BB means the ALL-IN is not the call either
+    const beside = pressedAnswerPath(callRow, [{ street: "flop", keyActs: 7, buttons: ["FOLD", "ALL-IN 88.4 BB", "RAISE TO 20 BB"], atPress: "flop|7", stale: false }]);
+    expect(checksOf(beside, 14)).toMatchObject({ status: "fail" });
+    // the only raise is ALL-IN $N: a raise / shove answer passes on it (hand 51: ALLIN 0.8 on CHECK / ALL-IN $0.04)
+    const shoveRow = { ...row, decision_key: JSON.stringify(["river", ["2c", "7s", "9d", "Jh", "Kc"], ["2d", "2h"], 0, 5]),
+      decision_json: JSON.stringify([{ action: "CHECK", frequency: 40 }, { action: "ALLIN 0.8", frequency: 60 }]),
+      path: PATH.replace(/"flop"/g, '"river"') };
+    const only = pressedAnswerPath(shoveRow, [{ street: "river", keyActs: 5, buttons: ["CHECK", "ALL-IN $0.04"], atPress: "river|5", stale: false }]);
+    expect((JSON.parse(only!).checks.river as any[]).find((c) => c.id === 14)).toMatchObject({ status: "pass" });
+  });
   it("no press for this decision (another street, or no read) leaves the path as it was", async () => {
     const { pressedAnswerPath } = await import("./chainChecks");
     expect(pressedAnswerPath(row, [{ street: "turn", keyActs: 11, buttons: ["CHECK"], stale: false }])).toBe(PATH);

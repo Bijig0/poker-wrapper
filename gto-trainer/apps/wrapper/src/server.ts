@@ -317,8 +317,8 @@ export function buildApp(): Hono {
       ? await raiseTo([...pyStr(b.amount ?? "")].slice(0, 12).join(""), false, guard)
       : await act([...pyStr(b.label ?? "")].slice(0, 32).join(""), kind, guard);
     log(`[act] ${pyRepr(b.label || b.amount || null)} -> ${pyRepr(res)}`);
-    // offerQa / missing / wrongHand are the relay's own (actuateAllIn reads the strip off a refusal) — not the reply's
-    const { offerQa: _qa, missing: _missing, wrongHand: _wrong, ...reply } = res;
+    // offerQa / missing / wrongHand / noInput are the relay's own (actuateAllIn reads the strip off a refusal) — not the reply's
+    const { offerQa: _qa, missing: _missing, wrongHand: _wrong, noInput: _noInput, ...reply } = res;
     return json(200, reply);
   });
   app.post("/quit", () => {
