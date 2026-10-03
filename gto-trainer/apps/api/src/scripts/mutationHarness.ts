@@ -59,7 +59,8 @@ import { spawnSync } from "node:child_process";
 // the request-log and poller tests on the first run).
 process.env.ANSWERS_DB_PATH ??= ":memory:";
 export function harnessEnv(): () => void {
-  const saved = { GTOW_BLOCK: process.env.GTOW_BLOCK, POSTFLOP_DRY_RUN: process.env.POSTFLOP_DRY_RUN, HRC6MAX_DB: process.env.HRC6MAX_DB };
+  const saved = { GTOW_BLOCK: process.env.GTOW_BLOCK, POSTFLOP_DRY_RUN: process.env.POSTFLOP_DRY_RUN, HRC6MAX_DB: process.env.HRC6MAX_DB,
+    NODE_TRUST_FILE: process.env.NODE_TRUST_FILE };
   process.env.GTOW_BLOCK = "1";
   process.env.POSTFLOP_DRY_RUN = "1";
   if (!process.env.HRC6MAX_DB) {
@@ -84,6 +85,19 @@ export function harnessEnv(): () => void {
     ];
     const found = candidates.find((p) => p && existsSync(p));
     if (found) process.env.HRC6MAX_DB = found;
+  }
+  // THE TRUST SCORES THE LIVE API READS (2026-10-02/03). Trust comes from the bake set above (its trust tables); the
+  // factory's limp_node_trust.json is only the fallback for a chart the bake does not score — and since the v2 limp
+  // re-solve an olimp chart scored by neither is REFUSED (services/nodeTrust). A git worktree has no data/ copy and the
+  // gate does not load config/local.env, so point the fallback at the factory's file (FACTORY_DATA_DIR of the env, else
+  // of the main checkout's config/local.env) — never at a checkout's stale data/ snapshot.
+  if (!process.env.NODE_TRUST_FILE && !process.env.FACTORY_DATA_DIR) {
+    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: import.meta.dir, encoding: "utf8" }).stdout?.trim();
+    const root = common ? dirname(common) : "";
+    let factory = "";
+    try { factory = /^\s*FACTORY_DATA_DIR\s*=\s*(.+?)\s*$/m.exec(readFileSync(join(root, "config", "local.env"), "utf8"))?.[1] ?? ""; } catch { /* no local.env */ }
+    const file = factory ? join(factory, "limp_node_trust.json") : "";
+    if (file && existsSync(file)) process.env.NODE_TRUST_FILE = file;
   }
   return () => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
 }

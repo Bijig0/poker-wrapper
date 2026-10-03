@@ -1,6 +1,7 @@
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
-import { reconstructFlopRanges, type RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
+import { arrivalTrust } from "./nodeTrust";
 import { nodeGetter, chartFor6max, resolveChart6max, openFromTokens, type Chart6Choice } from "./hrc6max";
 import type { GetNode, HrcNode } from "./hrc3max";
 import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
@@ -189,11 +190,21 @@ export async function resumeChartPreflopRanges(
   if (!fit.ok) return fit;   // the capture outgrew the pin: the unpinned walk may read it afresh
   // PAST THIS POINT THE CAPTURE STILL STARTS WITH THE PINNED LINE: a failure is the pinned chart's inability to hold what
   // followed hero's decision, never a reason to read the hand on another chart (hero's picks were read on this one)
-  const r = await resumeOnPin(pin, tokensNow, fit.rest, get);
-  return r.ok ? r : { ...r, chartCannotHold: true };
+  const lines: string[] = [];
+  const r = await resumeOnPin(pin, tokensNow, fit.rest, get, lines);
+  if (!r.ok) return { ...r, chartCannotHold: true };
+  // EVERY NODE ON THE LINE MUST BE TRUSTED (2026-10-02, nodeTrust.arrivalTrust): hero's own node passed the guard when
+  // he decided, the villains' nodes after it never were. A limp tree's untrained or unscored node gives no ranges — the
+  // chart cannot give them, exactly as when it cannot hold the line (the AI preflop tree, fastSolve OFF THE CHART).
+  const bad = arrivalTrust(pin.chartId, lines);
+  if (bad) return { ok: false, chartCannotHold: true, why: `pinned chart ${pin.chartId}: ${bad.why}` };
+  return r;
 }
 
-async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: string[], get: (line: string) => Promise<RawNode | null>): Promise<ResumeOutcome> {
+async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: string[], get: (line: string) => Promise<RawNode | null>,
+  /** filled with the tree path before every decision the SUCCESSFUL read used (a failed attempt's reads are dropped) */
+  lines: string[] = []): Promise<ResumeOutcome> {
+  const onStep = (st: WalkStep) => { lines.push(st.line); };
   const fit = { rest };
   let reads = 0;
   const counted = async (l: string) => { reads++; return get(l); };
@@ -213,7 +224,7 @@ async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: stri
   const heroAgain = who.some((s, i) => i > pin.rawTokens.length && s === pin.heroPos.toUpperCase());
   const heroPrefix = heroAgain ? undefined : [...pin.codes, tokensNow[pin.rawTokens.length]!];
   const perSeat = async (why: string): Promise<ResumeOutcome> => {
-    const per = await fittedRangesBySeat(tokensNow, counted, { heroPos: pin.heroPos, depth: pin.depth, heroPrefix });
+    const per = await fittedRangesBySeat(tokensNow, counted, { heroPos: pin.heroPos, depth: pin.depth, heroPrefix, onStep });
     if (!per.ok) return { ok: false, why: `pinned chart ${pin.chartId}: ${why}; ${per.reason}` };
     return {
       ok: true, ranges: per.ranges, tokens: tokensNow, codes: per.heroLine, seatOrder: undefined, id: pin.chartId, reads,
@@ -230,6 +241,7 @@ async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: stri
   if (fitted) {
     const r = await perSeat(fittedDesc);
     if (r.ok) return r;
+    lines.length = 0;
     // a seat no fit can keep (a tree with no cold call of a 3-bet at all): the pinned walk below, whose caller
     // borrow reads such a call one caller fewer, is still worth a try — its seats are checked against the table
     fittedWhy = r.why;
@@ -238,7 +250,7 @@ async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: stri
   const line = [...pin.codes, ...fit.rest];
   const stepped: string[] = [];   // the tree's own token at every decision read (a snapped size shows as the node's)
   const recon = await reconstructFlopRanges(line, counted,
-    { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU, onStep: (s) => stepped.push(s.token) });
+    { heroPos: pin.heroPos, borrowCaller: true, maxPlayers: 6, maxSnap: SNAP_TAU, onStep: (s) => { stepped.push(s.token); onStep(s); } });
   // a size past τ has no node in this chart, fitted or not (round 2, seed 50 [jam]): the pin cannot give the ranges
   if (!recon.ok && /^size past τ/.test(recon.reason)) return { ok: false, why: `pinned chart ${pin.chartId}: ${recon.reason}` };
   if (!recon.ok) {
@@ -250,12 +262,14 @@ async function resumeOnPin(pin: ChartPreflopPin, tokensNow: string[], rest: stri
     const first = `pinned chart ${pin.chartId}: ${recon.reason}`;
     if (fittedWhy) return { ok: false, why: `${fittedWhy}; the pinned walk: ${recon.reason}` };
     if (/terminal before the line ends/.test(recon.reason)) return { ok: false, why: first, prunedBranch: true };
+    lines.length = 0;
     const r = await perSeat(`the pinned walk stopped (${recon.reason})`);
     return r.ok ? r : { ok: false, why: `${first}; ${r.why}` };
   }
   const got = Object.keys(recon.ranges).map((p) => p.toUpperCase());
   if (!sameSeats(want, got)) {
     if (fittedWhy) return { ok: false, why: `${fittedWhy}; the pinned walk reached the flop with ${got.join("/") || "nobody"} where the table has ${want.join("/")}` };
+    lines.length = 0;
     return perSeat(`the tree's path reached the flop with ${got.join("/") || "nobody"} where the table has ${want.join("/")}`);
   }
   const codes = [...stepped, ...line.slice(stepped.length)];
@@ -459,6 +473,8 @@ export async function fittedRangesBySeat(
     heroPrefix?: string[];
     /** read these flop seats only (the ranges re-pick reads one villain at a time: one seat's miss costs that seat only) */
     only?: string[];
+    /** every decision each per-seat walk reads (reconstructFlopRanges onStep) — the arrival trust check reads the lines */
+    onStep?: (step: WalkStep) => void;
   },
 ): Promise<{ ok: true; ranges: Record<string, Record<string, number>>; borrowed: string[]; heroLine: string[]; snaps: string[] } | { ok: false; reason: string }> {
   const getHrc: GetNode = async (l) => (await get(l)) as HrcNode | null;
@@ -469,7 +485,7 @@ export async function fittedRangesBySeat(
   for (const seat of flopSeatsOf(tokens, o.depth)) {
     if (o.only && !o.only.some((x) => x.toUpperCase() === seat)) continue;
     if (o.heroPrefix && o.heroPos && seat === o.heroPos.toUpperCase()) {
-      const r = await reconstructFlopRanges(o.heroPrefix, get, { heroPos: o.heroPos, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU });
+      const r = await reconstructFlopRanges(o.heroPrefix, get, { heroPos: o.heroPos, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU, onStep: o.onStep });
       const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
       if (!mine) return { ok: false, reason: `hero's range on the pinned line "${o.heroPrefix.join("-")}": ${r.ok ? "absent" : r.reason}` };
       ranges[seat] = mine;
@@ -484,7 +500,7 @@ export async function fittedRangesBySeat(
     const lineFor = fit.fittedLine ?? tokens;
     // partial: only THIS seat's range is wanted, and the fitted line may leave it alone at the flop (hero squeezes,
     // and the limper who called it is the one the fit folded) — a player count says nothing about one seat's range
-    const r = await reconstructFlopRanges(lineFor, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU });
+    const r = await reconstructFlopRanges(lineFor, get, { heroPos: o.heroPos ?? undefined, borrowCaller: true, maxPlayers: 6, partial: true, maxSnap: SNAP_TAU, onStep: o.onStep });
     const mine = r.ok ? Object.entries(r.ranges).find(([k]) => k.toUpperCase() === seat)?.[1] : undefined;
     if (!mine) {
       return { ok: false, reason: fit.fitted

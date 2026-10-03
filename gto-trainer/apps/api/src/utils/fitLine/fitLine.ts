@@ -1,8 +1,9 @@
 /**
  * FIT A REAL LINE INTO A CAPPED TREE (2026-09-22).
  *
- * The 6-max charts are solved under three caps (HRC tree spec): at most two limpers, at most two flat-callers
- * of a raise, and `maxactive: 4` — once four players have voluntarily put money in, every other seat is folded
+ * The 6-max charts are solved under three caps (HRC tree spec): at most two limpers (three in the 100bb v2 pool limp
+ * trees, 2026-10-02), at most two flat-callers of a raise, and `maxactive: 4` (5 in the v2 limp trees) — once that many
+ * players have voluntarily put money in, every other seat is folded
  * by the engine without a decision. Real hands ignore all three: five limpers, an iso with three callers, a
  * squeeze over a limped iso. The first borrow (hrc3max.walk3max `borrowCaller`) patched this node by node and
  * the esoteric stress family found every hole in that: it only fired where a node existed without the call,

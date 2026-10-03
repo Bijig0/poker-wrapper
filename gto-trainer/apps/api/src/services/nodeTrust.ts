@@ -24,6 +24,12 @@
  *     (an old bake, or the backfill has       process — so the switch from "trusted" to "judged" happens by itself
  *     not reached it yet)                     the moment the backfill scores the chart, with no flag.
  * Once every chart is scored the 70 MB file is never parsed on the API's thread at all.
+ *
+ * THE LIMP TREES ARE NEVER ANSWERED UNSCORED (2026-10-02/03, the v2 limp re-solve). For an `olimp` chart the file
+ * fallback refuses what it cannot score — a chart neither the bake nor the file scores ("UNSCORED CHART"), and a line
+ * the file does not hold ("UNSCORED CHART NODE"; the file scores every decision node up to 12 tokens) — where the raise
+ * charts still answer unguarded with the loud line above. A fresh limp tree served before anything scored it is exactly
+ * the one nobody has checked. arrivalTrust applies the same verdicts to every node a flop-range walk reads.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { factoryFile } from "./repoPaths";
@@ -33,16 +39,30 @@ export const TRUST_REGRET_MAX = 0.03;
 export const TRUST_REACH_MIN = 1e-4;
 /** For pool-locked trees only: past this the node is broken whatever its reach. */
 export const TRUST_REGRET_CATASTROPHIC = 0.3;
-type TrustMap = Record<string, Record<string, [number | null, number]>>;
+export type TrustMap = Record<string, Record<string, [number | null, number]>>;
 let cache: { at: number; file: string; map: TrustMap } | null = null;
+let injected: TrustMap | null = null;
+
+/** The old file: NODE_TRUST_FILE when set (the mutation harness points a git worktree, which has no data parts, at the
+ *  factory's — scripts/mutationHarness.harnessEnv), else the factory's data/limp_node_trust.json. Read per call. */
+export const trustFile = (): string => process.env.NODE_TRUST_FILE || factoryFile("limp_node_trust.json");
+
+/** Tests only: judge every chart from this map, as the file would be, and skip the bake (null restores both). */
+export function setTrustMap(m: TrustMap | null): void { injected = m; cache = null; }
 
 /** The old file, parsed only when a chart without baked scores is asked about (read per call, like factoryFile). */
 function map(): TrustMap {
+  if (injected) return injected;
   const now = Date.now();
-  const file = factoryFile("limp_node_trust.json");
+  const file = trustFile();
   if (cache && cache.file === file && now - cache.at < 10 * 60_000) return cache.map;
   let m: TrustMap = {};
-  try { if (existsSync(file)) m = JSON.parse(readFileSync(file, "utf8")); } catch { m = {}; }
+  try { if (existsSync(file)) m = JSON.parse(readFileSync(file, "utf8")); } catch {
+    // A READ MID-REWRITE (node_trust.py rewrites the file as trees land) must not empty it: an empty map refuses every
+    // limp chart the bake does not score for the whole cache window. Keep the last good map and try again in a minute.
+    if (cache && cache.file === file) { cache = { at: now - 9 * 60_000, file, map: cache.map }; return cache.map; }
+    m = {};
+  }
   cache = { at: now, file, map: m };
   return m;
 }
@@ -70,11 +90,13 @@ const refusedNoRow = new Set<string>();
  *  starved by the same bound (94-98% of their nodes) and switching them over to the exact tree is Brady's call —
  *  TRUST_GUARD_ALL=1 widens it; until then only the limp trees are guarded. */
 export const guardApplies = (chartId: string): boolean => process.env.TRUST_GUARD_ALL === "1" || /olimp/.test(chartId);
+/** The limp trees: never answered from a node nothing has scored (see the module doc). */
+const isLimpTree = (chartId: string): boolean => /olimp/.test(chartId);
 
 /** The trust verdict for one chart node; `known:false` when nothing scores the node (no verdict). */
 export function nodeTrust(chartId: string, line: string): NodeTrust {
   if (!guardApplies(chartId)) return { known: false, reach: null, regret: null, starved: false, why: null, from: null };
-  const baked = hrc6maxDb.trust(chartId, line);
+  const baked = injected ? undefined : hrc6maxDb.trust(chartId, line);
   if (baked === null) {
     const key = `${chartId} ${line}`;
     if (!refusedNoRow.has(key)) {
@@ -91,7 +113,19 @@ export function nodeTrust(chartId: string, line: string): NodeTrust {
   else {
     from = "file";
     const chart = map()[chartId];
-    warnFallback(chartId, !!chart);
+    if (isLimpTree(chartId)) {
+      // A LIMP TREE NOTHING SCORES IS REFUSED (2026-10-02): the raise charts answer unguarded below, a limp tree does not
+      if (!chart) {
+        return { known: false, reach: null, regret: null, starved: true, from: null,
+          why: `UNSCORED CHART: ${chartId} is scored neither in the bake nor in limp_node_trust.json — refused until ` +
+            `node_trust.py / backfill_trust.py has scored it; the exact tree answers instead` };
+      }
+      if (!chart[line]) {
+        return { known: false, reach: null, regret: null, starved: true, from: "file",
+          why: `UNSCORED CHART NODE: "${line || "root"}" is not in ${chartId}'s trust scores (limp_node_trust.json scores ` +
+            `every decision node up to 12 tokens — deeper or absent means unscored), so its mix is unchecked; the exact tree answers instead` };
+      }
+    } else warnFallback(chartId, !!chart);
     t = chart?.[line];
   }
   if (!t) return { known: false, reach: null, regret: null, starved: false, why: null, from: null };
@@ -118,4 +152,21 @@ export function resetNodeTrustForTests(): void {
   warned.clear();
   refusedNoRow.clear();
   cache = null;
+}
+
+/**
+ * THE FLOP-ARRIVAL RANGES MUST COME FROM TRUSTED NODES TOO (2026-10-02). A limp chart's flop ranges are the product of
+ * every decision on the preflop line — the limpers', the iso-raiser's, the callers' — and until now only hero's own
+ * node was ever judged: a closed limped line read its villains' ranges from nodes the solver never trained (or nothing
+ * has scored) without a word. `lines` = the tree path before each decision the range walk read (reconstructFlopRanges
+ * onStep `line`: real nodes only, forced folds have none). Limp trees only (whatever TRUST_GUARD_ALL says, the raise
+ * charts' ranges stay as they were). Returns the first refusal, or null.
+ */
+export function arrivalTrust(chartId: string, lines: Iterable<string>): (NodeTrust & { line: string }) | null {
+  if (!isLimpTree(chartId)) return null;
+  for (const line of new Set(lines)) {
+    const t = nodeTrust(chartId, line);
+    if (t.starved) return { ...t, line };
+  }
+  return null;
 }

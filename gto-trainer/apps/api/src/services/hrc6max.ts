@@ -45,7 +45,9 @@ export const OPENS6 = [2.5, 3, 2, 3.5];
  *  in the box queue) are the rest. A rung whose tree has not landed falls to its NEAREST neighbour (chartFor6maxGrid's
  *  candidate ladder), never to a fixed default — until 2026-09-30 the list stopped at 30, so an 11bb blind read the
  *  30bb chart while its 20bb tree sat solved and unnamed (hand 4921602992). */
-export const SHORTS6 = [7, 10, 15, 18, 20, 25, 30, 50, 60, 70, 80];
+// 7.5, not 7 (2026-10-01): the short-stack grid solved s7_5 (genSixMaxPlan num()s the rung); a 7 here named ids that
+// never existed, and the six 7.5bb trees landed baked but "NOT NAMEABLE".
+export const SHORTS6 = [7.5, 10, 15, 18, 20, 25, 30, 50, 60, 70, 80];
 export const DEEP6 = 100;
 /** The open sizes solved with a short seat at the table: 2.5x/3x for every rung, the other four from the 2026-09-30
  *  short-stack grid (7-25bb). A missing (rung, open) tree falls to the same rung's nearest open first. */
@@ -87,8 +89,18 @@ export const unevenLimpChartId = (short: number, seat: Seat6, pool: boolean): st
 export const POOL_LIMP_CHART = `${SITE_6MAX}_6max_D100_olimp_pool3`;   // limps AND the SB's complete locked to the pool
 export const POOL_LIMP_CHART_SB = `${SITE_6MAX}_6max_D100_olimp_pool`; // limps locked, the SB's own decision solved
 /** The wide limp tree (2026-09-25): room for a THIRD limper and four callers of an iso, isos to 8bb, pool limp locks
- *  scaled to full weight so the three-limper nodes are actually trained (BB facing three limps: regret 1.06 → 0.009). */
+ *  scaled to full weight so the three-limper nodes are actually trained (BB facing three limps: regret 1.06 → 0.009).
+ *  Since the v2 pool3 re-solve (2026-10-02) it is the FALLBACK for three-limper lines: read when the pool3 tree's node
+ *  is not trusted or the tree cannot hold the third limper (a v1 tree not yet replaced) — see limp3Reroute. */
 export const POOL_WIDE_CHART = `${SITE_6MAX}_6max_D100_olimp_widex`;
+
+/**
+ * THE V2 POOL3 SHAPE (2026-10-02 re-solve, ids unchanged: even `_olimp_pool3` / `_olimp_pool` / `_olimp`, uneven
+ * `_s{30,50,70}_{SEAT}_olimp_pool3`): up to three limpers (flats 3/3/1/1), five players active (the SB may complete
+ * behind three limps, the BB may call an iso over three), isos 2.5/3/4/5bb + 1bb per limper (over one R3.5/R4/R5/R6,
+ * over two R4.5/R5/R6/R7, over three R5.5/R6/R7/R8), 3-bets 3x / 4.2x of the raise, the 4-bet all-in.
+ */
+export const POOL3_MAX_LIMPERS = 3;
 
 /** Limps before the first raise, counting the four non-blind seats' opening-orbit calls (the SB's call is a complete). */
 export function limpsBeforeRaise(tokens: string[]): { limps: number; raised: boolean } {
@@ -98,53 +110,101 @@ export function limpsBeforeRaise(tokens: string[]): { limps: number; raised: boo
   return { limps: pre.filter((t) => t === "C").length, raised: firstRaise >= 0 };
 }
 
-/** Every first-round line over {F,C} up to three tokens that contains a limp: the limpers' locked nodes. */
+/** The non-blind seats' opening-orbit nodes (root and every {F,C} line up to three tokens): the first-in limp and every
+ *  over-limp — behind one, two or three limps — are locked to the pool's limp range in the pool trees (v2 locks the
+ *  over-limp behind two limps too: C-C, F-C-C, C-F-C, C-C-F). Hero first-in never reaches a limp tree (openFromTokens
+ *  sends a line with no limp to the raise charts); hero over-limping reads the equilibrium limp chart. */
 const POOL_LIMP_LOCKED = new Set<string>();
-/** The SB's complete-decision lines: four tokens over {F,C} with one or two limps in front. */
+/** The SB's complete decision: every four-token {F,C} line — folded to him (F-F-F-F) and behind one, two or three limps
+ *  (v2 locks C-C-C-F, C-C-F-C, C-F-C-C, F-C-C-C too); four limps are fitted onto three. All locked in pool3. */
 const POOL_SB_LOCKED = new Set<string>();
-for (const n of [1, 2, 3, 4]) {
+for (const n of [0, 1, 2, 3, 4]) {
   for (let m = 0; m < 1 << n; m++) {
     const toks = Array.from({ length: n }, (_, i) => ((m >> i) & 1 ? "C" : "F"));
-    const c = toks.filter((t) => t === "C").length;
-    if (n <= 3 && c >= 1) POOL_LIMP_LOCKED.add(toks.join("-"));
-    if (n === 4 && (c === 1 || c === 2)) POOL_SB_LOCKED.add(toks.join("-"));
+    (n <= 3 ? POOL_LIMP_LOCKED : POOL_SB_LOCKED).add(toks.join("-"));
   }
+}
+/** Is this line one of the pool trees' locked opening-orbit nodes (whoever acts there)? */
+export const poolLockedLine = (line: string): boolean => POOL_LIMP_LOCKED.has(line) || POOL_SB_LOCKED.has(line);
+
+export interface PoolLimpPick {
+  id: string;
+  note: string;
+  /** set on a THREE-LIMPER line read from a pool3 tree: the chart to read instead when that node is not trusted or
+   *  the tree cannot hold the third limper (limp3Reroute) — the wide tree, as before the v2 re-solve */
+  limp3Fallback?: string;
 }
 
 /**
  * Which pool-locked limp tree answers this node — or none, when the node is one the pool trees LOCK for the seat
  * hero is in. A locked node's mix is the pool's play, not a solution (HRC fixes the locked action and solves the
  * rest of the tree against it), so hero never reads his own decision from one:
- *   - hero is the SB facing limps and no raise → the pilot tree, whose SB was left free and best-responds to the
- *     same pool limpers (reach 1 in 1,200 at two limps, regret 0.019 — trained);
- *   - hero is a non-blind seat facing limps (the over-limp decision, locked in both pool trees) → no pool tree;
- *     the equilibrium limp chart answers as before (its one-limp nodes agree with the exact tree; its two-limp
+ *   - hero is the SB facing one to four limps and no raise → the pilot tree, whose SB was left free and best-responds
+ *     to the same pool limpers (reach 1 in 1,200 at two limps, regret 0.019 — trained); folded to the SB (F-F-F-F) is
+ *     his first-in decision → no pool tree (the equilibrium charts, as every first-in node);
+ *   - hero is a non-blind seat at an opening-orbit node (first-in or over-limp, locked in both pool trees) → no pool
+ *     tree; the equilibrium limp chart answers as before (its one-limp nodes agree with the exact tree; its two-limp
  *     nodes are refused by the trust guard and the exact tree answers);
+ *   - THREE LIMPERS and a raise, or the BB's option behind three limps → pool3 (v2 holds three limpers), with the wide
+ *     tree as limp3Fallback when pool3's node is not trusted or the tree cannot hold the line;
  *   - anything else (the BB behind limps and a complete, anyone facing an iso, every later node, and the
  *     flop-arrival ranges of a closed line) → the full pool tree, SB complete locked too.
  */
-export function poolLimpChart(tokens: string[], hero: Seat6 | ""): { id: string; note: string } | null {
-  const line = tokens.map((t) => String(t ?? "").trim().toUpperCase()).join("-");
-  // THREE (OR MORE) LIMPERS → THE WIDE TREE, where its node offers hero every real option: the BB's check-or-iso
-  // after three limps, and every response once someone has isolated. NOT the BTN or SB facing three limps: HRC's tree
-  // has no over-limp or complete there (a node facing exactly three limps offers fold or raise only), so those two
-  // decisions keep the line fit onto a two-limp node that does offer the limp. Four limpers fit onto three.
+export function poolLimpChart(tokens: string[], hero: Seat6 | ""): PoolLimpPick | null {
+  const opening = tokens.map((t) => String(t ?? "").trim().toUpperCase());
+  const line = opening.join("-");
+  // THE SB'S COMPLETE DECISION (2026-09-25 fix, v2 2026-10-02): pool3's SB node is LOCKED behind one, two and (v2) three
+  // limps — reading it gave hero the fish's play — so every such decision goes to the pilot, whose SB is solved; four
+  // limps are fitted onto three there. Folded to the SB is a first-in decision: no pool tree.
+  if (hero === "SB" && POOL_SB_LOCKED.has(line)) {
+    if (!opening.includes("C")) return null;
+    return { id: POOL_LIMP_CHART_SB, note: "pool-locked limpers; the SB's own decision from the tree that solved it" };
+  }
+  // THREE (OR MORE) LIMPERS (v2, 2026-10-02): pool3 now holds the third limper, so the BB's check-or-iso after three
+  // limps and every response once someone has isolated read pool3 — trust-gated, with the wide tree behind it (it held
+  // these lines alone until v2; limp3Reroute in solvePreflop6max / recon6max switches when pool3 cannot answer). NOT
+  // the BTN facing three limps: no tree offers a fourth limp (flats cap at three), so his decision keeps the line fit
+  // onto a node that does offer the over-limp. Four limpers fit onto three.
   const { limps, raised } = limpsBeforeRaise(tokens);
-  if (limps >= 3 && (raised || hero === "BB")) {
-    return { id: POOL_WIDE_CHART, note: "wide pool-locked limp tree (three limpers, isos to 8bb)" };
-  }
-  // THE SB FACING ANY NUMBER OF LIMPS, NO RAISE (2026-09-25 fix): three or four limps are fitted down to two, and
-  // pool3's SB node at two limps is LOCKED (the pool's complete range) — reading it gave hero the fish's play. Every
-  // such decision goes to the pilot, whose SB is solved.
-  const opening = line.split("-");
-  if (hero === "SB" && opening.length === 4 && opening.every((t) => t === "F" || t === "C") && opening.includes("C")) {
-    return { id: POOL_LIMP_CHART_SB, note: "pool-locked limpers; the SB's own decision from the tree that solved it" };
-  }
-  if (POOL_SB_LOCKED.has(line) && hero === "SB") {
-    return { id: POOL_LIMP_CHART_SB, note: "pool-locked limpers; the SB's own decision from the tree that solved it" };
+  if (limps >= POOL3_MAX_LIMPERS && (raised || hero === "BB")) {
+    return { id: POOL_LIMP_CHART, note: "pool-locked limp tree (three limpers; isos 2.5/3/4/5bb + 1bb per limper)", limp3Fallback: POOL_WIDE_CHART };
   }
   if (POOL_LIMP_LOCKED.has(line)) return null;
   return { id: POOL_LIMP_CHART, note: "pool-locked limp tree (limps and the SB's complete at the pool's measured ranges)" };
+}
+
+/** The opening-orbit line through the THIRD limp (e.g. "C-F-C-C"), or null when the line has fewer than three limps
+ *  before the first raise. A tree holds three limpers iff it has a node at this line (a v1 tree's seat behind two limps
+ *  has no limp action, so the line through a third limp leads nowhere). */
+export function threeLimpPrefix(tokens: string[]): string | null {
+  const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
+  let c = 0;
+  for (let i = 0; i < Math.min(4, toks.length); i++) {
+    if (toks[i] === "RAI" || /^R[\d.]+$/.test(toks[i]!)) return null;
+    if (toks[i] === "C" && ++c === POOL3_MAX_LIMPERS) return toks.slice(0, i + 1).join("-");
+  }
+  return null;
+}
+
+/**
+ * THE THREE-LIMPER SWITCH (v2, 2026-10-02). A three-limper line picked onto a pool3 tree (Chart6Choice.limp3Fallback)
+ * is read there only when that tree really holds it — it has a node behind the third limp (`holdsThree`, probed at
+ * threeLimpPrefix: a v1 tree, not yet replaced by its v2 re-solve, has none) — and the read itself worked: the walk did
+ * not fail and the node passed the trust guard (an unscored node — a fresh tree node_trust.py has not reached — is
+ * starved). Otherwise → the fallback (the wide tree), and from there the exact tree as for any refused node. A fourth
+ * limper is fitted onto three on whichever tree answers, as before. Returns the chart to re-read on, or null to keep it.
+ */
+export function limp3Reroute(
+  choice: { limp3Fallback?: string },
+  resolvedId: string,
+  read: { holdsThree: boolean; walk?: { ok: boolean; unreachable?: boolean }; trust?: { starved: boolean; why: string | null } | null },
+): { id: string; why: string } | null {
+  const to = choice.limp3Fallback;
+  if (!to || resolvedId === to || !/_olimp_pool3$/.test(resolvedId)) return null;
+  if (!read.holdsThree) return { id: to, why: `${resolvedId} holds two limpers, not three (its v2 re-solve has not landed)` };
+  if (read.walk && !read.walk.ok) return read.walk.unreachable ? null : { id: to, why: `${resolvedId} cannot walk this three-limper line` };
+  if (read.trust?.starved) return { id: to, why: `${resolvedId}'s node is not trusted (${read.trust.why ?? "starved"})` };
+  return null;
 }
 
 /**
@@ -206,6 +266,9 @@ export interface Chart6Choice {
   approx?: Approx6[];
   /** set when a solved PATCH chart answers — see chartFor6max. "snapped" = the two-short grid at its nearest rungs */
   patch?: { id: string; variant: "exact" | "capped" | "snapped" };
+  /** a three-limper line picked onto a pool3 tree: the chart to read instead when that tree cannot hold the line or
+   *  its node is not trusted (hrc6max.limp3Reroute) — the wide tree */
+  limp3Fallback?: string;
 }
 
 /**
@@ -492,8 +555,9 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     if (open === "limp" && !LIMP_RUNGS6.includes(depth)) {
       notes.push(`${depth}bb limped pot — no limp tree past ${LIMP_RUNGS6[LIMP_RUNGS6.length - 1]}bb (by decision); the ${nearest(LIMP_RUNGS6, depth)}bb limp chart answers`);
     }
-    const cands = pool ? [pool.id, ...ladder] : ladder;
-    return finish(pool ? pool.id : ladder[0]!, cands, depth, depth, "EQ", open);
+    const cands = pool ? [pool.id, ...(pool.limp3Fallback ? [pool.limp3Fallback] : []), ...ladder] : ladder;
+    const c = finish(pool ? pool.id : ladder[0]!, cands, depth, depth, "EQ", open);
+    return pool?.limp3Fallback ? { ...c, limp3Fallback: pool.limp3Fallback } : c;
   };
 
   /**
@@ -503,17 +567,21 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
    * follows the even routing: where the even pick is the pool-locked tree (POOL_LIMP_CHART) the pool-locked uneven tree
    * comes first and the equilibrium one behind it; where hero's own node is one the pool trees lock (his over-limp, the
    * SB's complete) only the equilibrium tree is named — except the SB facing limps, which keeps the pilot tree (pool
-   * limpers, his own decision solved); three limpers keep the wide tree (no uneven wide tree exists).
+   * limpers, his own decision solved). THREE LIMPERS (v2, 2026-10-02) read the uneven pool3 tree too — v2 holds three
+   * limpers — with only the pool-locked trees named (the uneven equilibrium trees hold two) and the wide tree as the
+   * limp3Fallback behind the even pool3 tree, taken when the pool3 node is untrusted or the tree cannot hold the line.
    * Candidates run nearest short rung first, only rungs closer to the real stack than the even chart is, then the even
    * limp ladder — so an uneven tree that has not landed yet falls back exactly as before, and the answer says so.
    */
   function unevenLimp(): Chart6Choice | null {
     if (rung !== DEEP6) return null;
     const pool = poolLimpChart(tokens, me);
-    // the wide tree (three limpers) and the SB's own complete (the pilot tree: pool limpers, SB solved) stay as they are —
-    // no uneven tree holds pool-locked limpers with a free SB, and the pool lock is worth more there than the stacks
-    if (pool?.id === POOL_WIDE_CHART || pool?.id === POOL_LIMP_CHART_SB) return null;
+    // the SB's own complete (the pilot tree: pool limpers, SB solved) stays as it is — no uneven tree holds pool-locked
+    // limpers with a free SB, and the pool lock is worth more there than the stacks
+    if (pool?.id === POOL_LIMP_CHART_SB) return null;
     const usePool = pool?.id === POOL_LIMP_CHART;
+    // three limpers: only the pool-locked uneven trees hold the third limper (v2); the equilibrium ones stop at two
+    const limp3 = pool?.limp3Fallback;
     const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
     const firstRaise = toks.findIndex((t) => t === "RAI" || /^R[\d.]+$/.test(t));
     const limpers = new Set<Seat6>();
@@ -528,7 +596,8 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
       .sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)));
     if (!rungs.length) return null;
     const s = rungs[0]!;
-    const ids = rungs.flatMap((r) => (usePool ? [unevenLimpChartId(r, seat, true), unevenLimpChartId(r, seat, false)] : [unevenLimpChartId(r, seat, false)]));
+    const ids = rungs.flatMap((r) => (limp3 ? [unevenLimpChartId(r, seat, true)]
+      : usePool ? [unevenLimpChartId(r, seat, true), unevenLimpChartId(r, seat, false)] : [unevenLimpChartId(r, seat, false)]));
     if (usePool) notes.push(pool!.note);
     if (Math.abs(bb - s) > 8) {
       const want = Math.round(bb / 10) * 10;
@@ -538,8 +607,9 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     const others = shorts.filter(([p]) => p !== seat);
     if (others.length) notes.push(`${others.map(([p, x]) => `${p} ${Math.round(x)}bb`).join(", ")} also short — not modelled`);
     if (hero > DEEP6 + SHORT_GAP) notes.push(`hero has ${Math.round(hero)}bb — the short chart plays him at 100bb`);
-    const evenCands = [...(pool ? [pool.id] : []), ...evenLadder(DEEP6, "limp")];
-    return finish(ids[0]!, [...ids, ...evenCands], DEEP6, s, seat, "limp");
+    const evenCands = [...(pool ? [pool.id] : []), ...(limp3 ? [limp3] : []), ...evenLadder(DEEP6, "limp")];
+    const c = finish(ids[0]!, [...ids, ...evenCands], DEEP6, s, seat, "limp");
+    return limp3 ? { ...c, limp3Fallback: limp3 } : c;
   }
 
   // hero has not reloaded: his own stack sets the rung like anyone else's
@@ -651,9 +721,9 @@ export function unnameable6max(id: string): string | null {
     if (!OPENS6.includes(o)) return `open ${o}x is not an even-grid open (${OPENS6.join("/")})`;
     return null;
   }
-  if ((m = /^D(\d+)_s(\d+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3)?$/.exec(rest))) {
+  if ((m = /^D(\d+)_s([\d_]+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3)?$/.exec(rest))) {
     if (rest.endsWith("_pool3") && m[4] !== "limp") return "only limp trees carry the pool lock";
-    const d = Number(m[1]), s = Number(m[2]);
+    const d = Number(m[1]), s = val(m[2]!);
     if (d !== DEEP6) return `uneven depth ${d}bb: the uneven set is at ${DEEP6}bb`;
     if (m[4] === "limp") return LIMP_SHORTS6.includes(s) ? null : `short rung ${s}bb is not an uneven limp rung (${LIMP_SHORTS6.join("/")})`;
     if (!SHORTS6.includes(s)) return `short rung ${s}bb is not on SHORTS6 (${SHORTS6.join("/")})`;

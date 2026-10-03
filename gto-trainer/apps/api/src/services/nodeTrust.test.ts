@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { hrc6maxDb, trustAuditLine } from "./hrc6maxDb";
-import { nodeTrust, resetNodeTrustForTests } from "./nodeTrust";
+import { arrivalTrust, nodeTrust, resetNodeTrustForTests, setTrustMap } from "./nodeTrust";
 
 // THE TRUST SCORE IS BAKED WITH THE CHART (2026-10-03, audit finding 6). Before it, a chart missing from
 // limp_node_trust.json answered every node unguarded with no log line at all (70 of 1,092 live chart answers).
@@ -172,5 +172,61 @@ describe("nodeTrust: a bake that carries trust scores", () => {
     } finally {
       process.env.TRUST_GUARD_ALL = "1";
     }
+  });
+});
+
+// THE LIMP TREES ARE NEVER ANSWERED UNSCORED (2026-10-02/03, the v2 limp re-solve): where the bake has no scores for an
+// olimp chart, the file fallback refuses a chart it does not score and a line it does not hold — the raise charts keep
+// "unguarded, loudly" above.
+describe("nodeTrust: a limp tree the bake does not score", () => {
+  const EQ = "ign200_6max_D100_olimp";
+  beforeEach(() => {
+    hrc6maxDb.reload(); bake(true); hrc6maxDb.reload();        // POOL baked but not scored; EQ not baked at all
+    writeFileSync(join(dir, "limp_node_trust.json"), JSON.stringify({
+      [EVEN]: { "": [1, 0.001] },
+      [EQ]: { "": [1, 0.0002], "F-C-F": [0.0073, 0.0037], "F-F-C-C": [1e-4, 0.056] },
+    }));
+    resetNodeTrustForTests();
+  });
+
+  it("scored neither in the bake nor in the file: REFUSED, with the reason (not answered unguarded)", () => {
+    const t = nodeTrust(POOL, "C-C-C-F-F");
+    expect(t).toMatchObject({ known: false, starved: true });
+    expect(t.why).toStartWith("UNSCORED CHART:");
+    expect(t.why).toContain("neither in the bake nor in limp_node_trust.json");
+    expect(nodeTrust("ign200_6max_D100_s50_HJ_olimp_pool3", "C").starved).toBe(true);
+    expect(warns.some((w) => w.includes("ANSWERING UNGUARDED"))).toBe(false);
+  });
+
+  it("in the file: judged from it; a line it does not hold is REFUSED (unscored), not answered", () => {
+    expect(nodeTrust(EQ, "F-C-F")).toMatchObject({ known: true, starved: false, from: "file" });
+    expect(nodeTrust(EQ, "F-F-C-C")).toMatchObject({ known: true, starved: true });          // regret 0.056
+    const t = nodeTrust(EQ, "F-C-F-F-F-F-R4");
+    expect(t).toMatchObject({ starved: true, from: "file" });
+    expect(t.why).toStartWith("UNSCORED CHART NODE:");
+  });
+
+  it("a raise chart the file does not score still answers unguarded (loudly), as on main", () => {
+    expect(nodeTrust(SHORT, "R2.5")).toMatchObject({ known: false, starved: false });
+    expect(warns.some((w) => w.includes("UNSCORED CHART ANSWERING UNGUARDED"))).toBe(true);
+  });
+});
+
+describe("arrivalTrust — every decision node the flop ranges come from (limp trees only)", () => {
+  afterAll(() => setTrustMap(null));
+
+  it("the first starved/unscored node on the line refuses; a fully trusted line passes", () => {
+    setTrustMap({ [POOL]: { "": [1, 0], "C": [0.036, 0.01], "C-C": [0.004, 0.01], "C-C-C": [3e-4, 0.01], "C-C-C-F": [2.9e-4, 0.01],
+      "C-C-C-F-F": [5e-5, 0.02], "C-F": [0.035, 0.01], "C-F-F": [0.034, 0.01], "C-F-F-F": [0.033, 0.01], "C-F-F-F-F": [0.03, 0.01] } });
+    const bad = arrivalTrust(POOL, ["", "C", "C-C", "C-C-C", "C-C-C-F", "C-C-C-F-F"]);
+    expect(bad?.line).toBe("C-C-C-F-F");
+    expect(bad?.why).toContain("UNTRAINED CHART NODE");
+    expect(arrivalTrust(POOL, ["", "C", "C-F", "C-F-F", "C-F-F-F", "C-F-F-F-F"])).toBeNull();
+    expect(arrivalTrust(POOL, ["", "C", "C-F-C"])?.line).toBe("C-F-C");                      // a node nothing scores
+  });
+
+  it("raise charts are never judged here, whatever TRUST_GUARD_ALL says", () => {
+    setTrustMap({ [EVEN]: { "F-F-R2.5-R9": [5e-5, 0.08] } });
+    expect(arrivalTrust(EVEN, ["", "F", "F-F", "F-F-R2.5", "F-F-R2.5-R9"])).toBeNull();
   });
 });
