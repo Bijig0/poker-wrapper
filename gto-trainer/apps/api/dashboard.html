@@ -597,7 +597,52 @@ function sessTechHtml(t) {
     ${bad.length ? `<div class="card"><h2>Hands off the happy path <span class="sub">— ${bad.length}</span></h2>${bad.map((h) => `<div class="tl-row">${chainChip(h.verdict)} ${handLink(h.hand)} <span class="sub">${esc((h.reasons || []).map((r) => r.text).join(" · ").slice(0, 240))}</span></div>`).join("")}</div>` : ""}`;
 }
 
+/* ---- Minimize / expand the hand page's cards (2026-10-03, Brady: "the timeline auto minimized … minimize/expand
+   functionality to the timeline and other cards"). Every card with a heading gets a ▾/▸ toggle (the heading itself
+   toggles too). The hand card (Timeline / Ranges / Actual / Checks) opens minimized; a choice holds while you page
+   through hands, until the page is reloaded. Cards drawn later (the solve under #solution) are picked up as they land. ---- */
+const FOLD_DEFAULT = { "tl-card": true };
+const FOLDS = new Map();   // card key → minimized
+function foldKey(card, head) {
+  if (card.id) return card.id;
+  const h2 = head.matches("h2") ? head : head.querySelector("h2");
+  return "h:" + (h2?.firstChild?.textContent || head.textContent || "").trim().slice(0, 48);
+}
+function setFold(card, folded) {
+  if (!card?.dataset.foldKey) return;
+  card.classList.toggle("folded", folded);
+  FOLDS.set(card.dataset.foldKey, folded);
+  const b = card.querySelector(":scope > .fold-tog, :scope > .tl-head > .fold-tog");
+  if (b) { b.textContent = folded ? "▸" : "▾"; b.title = folded ? "expand" : "minimize"; b.setAttribute("aria-expanded", String(!folded)); }
+}
+function foldCards(root) {
+  for (const card of root.querySelectorAll(".card")) {
+    if (card.dataset.foldKey) continue;
+    const head = card.querySelector(":scope > .tl-head") || card.querySelector(":scope > h2");
+    if (!head) continue;   // the replay table and one-line notices have nothing to fold under
+    const key = foldKey(card, head);
+    card.dataset.foldKey = key;
+    card.classList.add("foldable");
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "fold-tog";
+    b.onclick = (e) => { e.stopPropagation(); setFold(card, !card.classList.contains("folded")); };
+    if (head.matches(".tl-head")) head.prepend(b); else card.prepend(b);
+    const h2 = head.matches("h2") ? head : head.querySelector("h2");
+    if (h2) h2.addEventListener("click", (e) => { if (!e.target.closest("a,button,input,select,label")) setFold(card, !card.classList.contains("folded")); });
+    setFold(card, FOLDS.has(key) ? FOLDS.get(key) : !!FOLD_DEFAULT[key]);
+  }
+}
+let FOLD_WATCH = null;
+function watchFolds() {
+  if (FOLD_WATCH) return;
+  const v = $("view-detail");
+  if (!v) return;
+  FOLD_WATCH = new MutationObserver(() => foldCards(v));
+  FOLD_WATCH.observe(v, { childList: true, subtree: true });
+}
+
 async function showDetail(dbId) {
+  watchFolds();
   const v = $("view-detail"); v.innerHTML = '<div class="card sub">loading…</div>';
   const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
   if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
@@ -628,7 +673,7 @@ async function showDetail(dbId) {
         ${j.feedLines.map((l, i) => `<div data-fl="${i}">${esc(l)}</div>`).join("")}
       </div></div>
     </div>
-    <div class="card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button><button data-v="checks" title="how each answer was produced, and the chain's seventeen invariants on it — per decision, per street">Checks${j.chain?.verdict && j.chain.verdict.verdict === "failed" ? ' <span class="chain-bad">✗</span>' : ""}</button></span></div>
+    <div class="card" id="tl-card"><div class="tl-head"><h2 id="tl-title"></h2><span class="seg" id="tl-seg"><button data-v="actions">Timeline</button><button data-v="ranges">Ranges</button><button data-v="actual">Actual</button><button data-v="checks" title="how each answer was produced, and the chain's seventeen invariants on it — per decision, per street">Checks${j.chain?.verdict && j.chain.verdict.verdict === "failed" ? ' <span class="chain-bad">✗</span>' : ""}</button></span></div>
       <div id="timeline"></div><div id="rangelook" class="rl" hidden></div><div id="actual" hidden></div><div id="checks" hidden></div></div>
     <div id="solution"></div>
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
@@ -637,8 +682,10 @@ async function showDetail(dbId) {
        <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
   DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
   renderTimeline();
-  $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => tlView(b.dataset.v));
+  // picking a view on a minimized hand card opens it
+  $("tl-seg").querySelectorAll("button").forEach((b) => b.onclick = () => { tlView(b.dataset.v); setFold($("tl-card"), false); });
   tlView(TL_VIEW);
+  foldCards(v);
   setStep(STEP);
   $("rp-first").onclick = () => setStep(0);
   $("rp-prev").onclick = () => setStep(STEP - 1);
