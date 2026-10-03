@@ -1896,7 +1896,10 @@ async function solvePostflopViaChainOnce(
     const { lr, heroPos: heroPosLr } = w.lastResort!;
     const plain: Walkable = { ...w, lastResort: undefined };
     if (lr.first < 1) { lrNarrowClause = "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)"; return solveTree(plain); }
-    if (process.env.LAST_RESORT_NARROW === "0") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)"; return solveTree(plain); }
+    // OFF UNLESS ASKED FOR (2026-10-04, second review): the race bounds the narrowing WALK but not the narrowed TREE
+    // solved after it, so a ready unnarrowed answer could be held past hero's clock (walk 5.9 s + a 13 s tree failure).
+    // Until the narrowed tree has its own deadline, the narrowing runs only with LAST_RESORT_NARROW=1.
+    if (process.env.LAST_RESORT_NARROW !== "1") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW is not 1)"; return solveTree(plain); }
     const r = await raceNarrowing<AiChainResult>({
       start: tEntry, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 6000) || 0),
       narrowing: () => narrowForLastResort({
