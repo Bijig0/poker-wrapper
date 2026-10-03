@@ -23,7 +23,7 @@
  * VERDICTS per decision: SAME (the served mix to 0.5pp, or both refused) · DIFF (both answered, mixes differ) ·
  * NEW BODY / NEW NODE (a request the cache lacks — the branch built something live did not) · REFUSAL-CHANGE (one
  * answered, the other refused) · CRASH (a throw, or the solver-error refusal a throw becomes) · SKIPPED (after a hand
- * stopped). A DIFF is EXPLAINED when the answer's path differs (a plan, the narrowing) — the cause is named.
+ * stopped) · CACHE-MISS (live answered on a tree the copied solve cache no longer holds: the hand stops). A DIFF is EXPLAINED when the answer's path differs (a plan, the narrowing) — the cause is named.
  * PREFLOP (--preflop served, the default since 2026-10-04): a hand's preflop decisions are replayed and reported on
  * their own (SAME, or DIFF classified: the chart's content changed / a different chart picked / a GTO Wizard AI tree,
  * same body or new) but they no longer decide what the postflop replays from: the flop-entering ranges are the ones
@@ -142,11 +142,15 @@ Object.assign(process.env, {
 });
 delete process.env.GTOW_BLOCK;
 delete process.env.GTOW_CACHE;
-if (!process.env.HRC6MAX_DB) {
-  // a worktree carries no chart bake: the main checkout's, read only
-  const here = join(import.meta.dir, "..", "..", "data", "hrc6max-preflop.sqlite");
-  const main = "C:/Users/Brady/poker-wrapper/gto-trainer/apps/api/data/hrc6max-preflop.sqlite";
-  process.env.HRC6MAX_DB = existsSync(here) ? here : main;
+// THE CHARTS ARE THE LIVE API'S (2026-10-04, the coordinator's finding): the 6-max bake is read where the live API reads
+// it — factoryFile("hrc6max-preflop.sqlite") under FACTORY_DATA_DIR from config/local.env — in place, read-only (never
+// copied: 11 GB). The first gate set HRC6MAX_DB to the wrapper repo's apps/api/data copy, a STALE bake of 2026-09-27
+// (124 charts, the bodies before the 2026-10-01 re-conversion): that, not a re-bake, was its 37 preflop DIFFs. So no
+// override here, and the run refuses to start unless the bake resolves to the factory's file.
+{
+  const factory = process.env.FACTORY_DATA_DIR;
+  if (process.env.HRC6MAX_DB) { console.error(`HRC6MAX_DB is set (${process.env.HRC6MAX_DB}) — the replay must read the live API's bake; unset it`); process.exit(64); }
+  if (!factory) { console.error(`FACTORY_DATA_DIR is not set (${ENV_FILE}) — the bake would resolve to the checkout's own data/ copy, which may be stale`); process.exit(64); }
 }
 type Blocked = { kind: "tree" | "node" | "other"; url: string; body: unknown };
 let blocked: Blocked[] = [];
@@ -164,6 +168,20 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch;
 (globalThis as any).WebSocket = class { constructor(u: string) { blocked.push({ kind: "other", url: String(u), body: null }); throw new Error("replay gate: no websockets"); } };
 
+{
+  const { factoryFile } = await import("../services/repoPaths");
+  const bake = factoryFile("hrc6max-preflop.sqlite");
+  const want = join(process.env.FACTORY_DATA_DIR!, "hrc6max-preflop.sqlite");
+  if (bake.replace(/\\/g, "/").toLowerCase() !== want.replace(/\\/g, "/").toLowerCase() || !existsSync(bake)) {
+    console.error(`the 6-max bake resolves to ${bake}, not the live API's ${want} — refusing to replay against other charts`);
+    process.exit(64);
+  }
+  const b = new Database(bake, { readonly: true });
+  let trees = 0, built = 0;
+  try { const r = b.query("select count(*) n, max(built_at) m from trees").get() as { n: number; m: number }; trees = r.n; built = r.m; } finally { b.close(); }
+  console.log(`charts: ${bake} (read-only) · ${trees} trees · last built ${new Date(built * 1000).toISOString()}`);
+  (globalThis as any).__replayBake = { path: bake, trees, built };
+}
 const FS = await import("../services/fastSolve");
 const { fastSolve } = FS;
 const seams = (FS as any).replaySeams as { arrival: ((h: any) => any) | null; computingArrival: number } | undefined;
@@ -318,7 +336,7 @@ const storedBodies = (hand: string): { street: string; body: unknown }[] => {
 };
 
 // ---- the replay --------------------------------------------------------------------------------------------------
-type Verdict = "SAME" | "DIFF" | "NEW BODY" | "NEW NODE" | "REFUSAL-CHANGE" | "CRASH" | "SKIPPED";
+type Verdict = "SAME" | "DIFF" | "NEW BODY" | "NEW NODE" | "REFUSAL-CHANGE" | "CRASH" | "CACHE-MISS" | "SKIPPED";
 const results: any[] = [];
 const hows: Record<string, number> = {};
 let stoppedLive: string | null = null;
@@ -402,6 +420,13 @@ for (const [hi, h] of handIds.entries()) {
     const liveAnswered = r.text != null && r.decision_json != null;
     const replayAnswered = !!(res?.ok && res.decision != null);
     if (res && res.ok === false && res.kind === "solver-error") Object.assign(out, { verdict: "CRASH", why: res.reason });
+    else if (out.liveAlsoFailed && liveAnswered && !replayAnswered) {
+      // THE CACHE LOST LIVE'S TREE: live answered on a tree whose body this replay asked for again, and the copy of the
+      // solve cache does not hold it (written after the copy, lost when the API worker was killed before its flush, or
+      // evicted). Nothing about the code: the hand stops here, as it would at any request the cache cannot answer.
+      Object.assign(out, { verdict: "CACHE-MISS", why: `live answered on a tree the solve cache no longer holds (${String(res?.reason ?? "").slice(0, 120)})` });
+      stopped = `stopped: CACHE-MISS at answer ${r.id}`;
+    }
     else if (liveAnswered !== replayAnswered) Object.assign(out, { verdict: "REFUSAL-CHANGE", why: liveAnswered ? `live answered (${r.text?.slice(0, 80)}), the replay refused: ${res?.reason ?? "no decision"}` : `live refused (${r.fail_reason?.slice(0, 120)}), the replay answered` });
     else if (!liveAnswered) Object.assign(out, { verdict: "SAME", why: "both refused" });
     else {
@@ -451,7 +476,7 @@ const unexplained = results.filter((r) => r.verdict === "DIFF" && !r.explained);
 const report = {
   args: { SESSION, FROM, TO, EXTRA_SINCE, WORK, LIVE_DIR }, decisions: results.length, hands: handIds.length, totals,
   byStreet: tally((r) => r.street), byPlanKind: tally((r) => r.kind ?? kindOf(r.livePlans ?? "—")), bySet: tally((r) => r.set),
-  streetHows: hows, copyMs, replayMs, stoppedLive, preflopMode: PREFLOP,
+  streetHows: hows, copyMs, replayMs, stoppedLive, preflopMode: PREFLOP, bake: (globalThis as any).__replayBake ?? null,
   preflop: (() => {
     const pf = results.filter((r) => r.street === "preflop");
     const cls: Record<string, number> = {};
