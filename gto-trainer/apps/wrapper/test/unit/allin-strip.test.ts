@@ -20,7 +20,7 @@ import {
 import { S, resetState } from "../../src/state";
 import { callIsMaxCommit } from "../../src/terminal";
 import * as FAKE from "../../src/faketable";
-import { BET_SPOT, FACING_JAM, FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
+import { BET_SPOT, FACING_COVERING_JAM, FACING_JAM, FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
 import { checker, J, scratchDirs } from "./helpers";
 
 const T0 = 1_790_320_459;
@@ -256,6 +256,110 @@ test("hand 4920545590 replayed: the shove goes, and nothing folds it with the ti
     check("the bank is running → no fold, not even past the 30 s backstop", fake!.pressed === null, J({ clicks: fake!.clicks, why: S.study.lastNoAnswerFold }));
     await tick(15.5 + 41.5, { answer: false });           // the bank's own clock at 4
     check("the bank's own clock at the mark → FOLD", fake!.pressed?.qa === "foldButton", J({ pressed: fake!.pressed, why: S.study.lastNoAnswerFold }));
+  } finally {
+    undo();
+    handSeams.override = null;
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+/** Hand 4922346841 at hero's flop decision: A♥Q♣ on Q♥8♥4♣, the BB (245.2 behind) shoved into hero's 88.4. */
+function aqFacingCoveringJam(heroAct: Record<string, any> | null = null, o: { toCall?: number } = {}): Record<string, any> {
+  const actions: any[] = [
+    { seatId: 6, type: "post-sb", street: "preflop", amount: 0.4 }, { seatId: 1, type: "post-bb", street: "preflop", amount: 1 },
+    { seatId: 3, hero: true, type: "raise", street: "preflop", amount: 2.6 }, { seatId: 6, type: "fold", street: "preflop" },
+    { seatId: 1, type: "raise", street: "preflop", amount: 11.6 }, { seatId: 3, hero: true, type: "call", street: "preflop", amount: 9 },
+    { seatId: 1, type: "all-in", street: "flop", amount: 245.2 },
+  ];
+  if (heroAct) actions.push({ seatId: 3, hero: true, street: "flop", ...heroAct });
+  return {
+    handId: 55, heroSeatId: 3, street: "flop", liveSeats: [1, 3, 6], actions,
+    stacks: new Map([[1, 0], [3, 88.4], [6, 99.6]]), committed: new Map([[1, 245.2]]),
+    currentNode: { street: "flop", toActIsHero: true, pot: 267.8, toCall: o.toCall ?? 245.2 }, heroFolded: false, ended: false,
+  };
+}
+
+test("hand 4922346841: a CALL the client only offers as its ALL-IN control is pressed there", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  let undo = () => {};
+  const table = (o: { untagged?: boolean } = {}) => {
+    undo();
+    const t = new FakeIgnition(FACING_COVERING_JAM, { stack: 88.4 });
+    if (o.untagged) for (const b of t.buttons) delete b.qa;
+    undo = t.install();
+    return t;
+  };
+  try {
+    // --- as recorded: FOLD / ALL-IN 88.4 BB, the answer CALL 88.4 ------------------------------------------------
+    let t = table();
+    handSeams.override = () => aqFacingCoveringJam();
+    let r = await actuate({ kind: "action", label: "call" });
+    check("FOLD / ALL-IN 88.4 BB, pick CALL → the ALL-IN control is pressed", r.ok === true && t.pressed?.qa === "allInButton", J({ r, pressed: t.pressed }));
+    check("  ... one press, nothing else", J(t.clicks) === J(["ALL-IN 88.4 BB"]), J(t.clicks));
+    check("  ... and it says how and why", r.as === "all-in" && String(r.why).includes("hero's last 88.4"), J(r));
+    check("verification: the table's all-in confirms the call", didAsTold({ kind: "action", label: "call" }, { type: "all-in", amount: 88.4 }, 88.4) === true);
+
+    // the same strip without data-qa (read by its labels)
+    t = table({ untagged: true });
+    r = await actuate({ kind: "action", label: "call" });
+    check("the same strip without data-qa → pressed by its label", r.ok === true && J(t.clicks) === J(["ALL-IN 88.4 BB"]), J({ r, clicks: t.clicks }));
+
+    // --- the ALL-IN is NOT the call when anything else can be pressed, or hero owes nothing ------------------------
+    t = table();
+    t.buttons.push({ text: "RAISE TO 20 BB", x: 835, y: 1479, w: 132, h: 40, qa: "raiseButton" });
+    r = await actuate({ kind: "action", label: "call" });
+    check("a RAISE control beside it → refused, nothing pressed", r.ok === false && t.clicks.length === 0 && String(r.reason).includes("not on offer"), J({ r, clicks: t.clicks }));
+
+    t = table();
+    t.buttons.push({ text: "CHECK", x: 549, y: 1479, w: 132, h: 40, qa: "checkButton" });
+    r = await actuate({ kind: "action", label: "call" });
+    check("a CHECK control beside it → refused, nothing pressed", r.ok === false && t.clicks.length === 0, J({ r, clicks: t.clicks }));
+
+    t = table();
+    handSeams.override = () => aqFacingCoveringJam(null, { toCall: 0 });
+    r = await actuate({ kind: "action", label: "call" });
+    check("the hand does not show hero facing a bet → refused, nothing pressed", r.ok === false && t.clicks.length === 0 && String(r.reason).includes("facing a bet"), J({ r, clicks: t.clicks }));
+
+    t = table();
+    handSeams.override = () => null;
+    r = await actuate({ kind: "action", label: "call" });
+    check("no hand state → refused, nothing pressed", r.ok === false && t.clicks.length === 0, J({ r, clicks: t.clicks }));
+
+    // --- an ALLIN answer on this strip was never the problem: the control reads ALL-IN ------------------------------
+    t = table();
+    handSeams.override = () => aqFacingCoveringJam();
+    r = await actuate({ kind: "action", label: "all-in" });
+    check("pick ALLIN on the same strip → the same control, directly", r.ok === true && t.pressed?.qa === "allInButton" && r.as === undefined, J({ r, pressed: t.pressed }));
+
+    // --- the whole press, as the auto-executor makes it: executed, said in the feed, confirmed by the table's line ---
+    const fake = table();
+    handSeams.override = () => aqFacingCoveringJam(fake.pressed ? { type: "all-in", amount: 88.4 } : null);
+    Object.assign(S.liveStatus, { toAct: true, practice: true, modal: null, buyPanel: null, timeBank: null });
+    S.handNo = 55;
+    Object.assign(S.study, {
+      on: true, auto: true, foldNoAnswer: false, timeBank: false, autoDelay: "instant",
+      text: "≈ FLOP — CALL 88.4 100%", pick: "CALL 88.4", note: null, at: time(),
+      decisionKey: pyJsonDumps(["flop", ["Q♥", "8♥", "4♣"], ["A♥", "Q♣"], 245.2, 7]),
+      handId: 55, executed: null, autoTried: null, lastExec: null, autoRetry: null, autoDue: null,
+      autoHeld: null, pendingExec: null, noAnswerTurn: null, lastNoAnswerFold: null, timeBankDecision: null, timeBankAt: 0,
+    });
+    S.feed.length = 0;
+    Object.assign(S.topupPrefold, { active: false, deadline: 0, kind: null });
+    await maybeAutoAct();
+    const feed = S.feed.map((f: any) => f.text ?? f.line ?? J(f)).join("\n");
+    check("auto-execute presses it", fake.pressed?.qa === "allInButton" && S.study.lastExec?.ok === true, J({ pressed: fake.pressed, exec: S.study.lastExec, feed }));
+    check("  ... and the feed says which control took the call", feed.includes("Study pick executed — CALL 88.4") && feed.includes("ALL-IN 88.4 BB"), feed);
+    S.liveStatus.toAct = false;
+    setFakeTime(T0 + 1);
+    await maybeVerifyExec();
+    check("  ... confirmed against the table's own line (hero all-in 88.4)", S.study.lastExec?.outcome === "confirmed", J(S.study.lastExec));
   } finally {
     undo();
     handSeams.override = null;

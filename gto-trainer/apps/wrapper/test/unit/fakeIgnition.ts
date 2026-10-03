@@ -66,6 +66,19 @@ export const FACING_JAM: typeof RIVER_FACING_BET = {
   field: { x: 0, y: 0, h: 0 },
 };
 
+/** Hand 4922346841 flop, session_20261003_234358 frame 4318: the BB shoved 245.2 into hero's 88.4 — the call takes
+ *  hero's last chip, and the client offers it as its own ALL-IN control. No callButton, no sizing row. */
+export const FACING_COVERING_JAM: typeof RIVER_FACING_BET = {
+  frame: { x: 2, y: 70, w: 1276, h: 1528 },
+  buttons: [
+    { text: "Buy chips", x: 18, y: 1558, w: 164, h: 24, qa: "buyMoreChipsButton" },
+    { text: "FOLD", x: 409, y: 1479, w: 132, h: 40, qa: "foldButton" },
+    { text: "ALL-IN 88.4 BB", x: 689, y: 1479, w: 132, h: 40, qa: "allInButton" },
+    { text: "+45s", x: 729, y: 1557, w: 92, h: 24, qa: "timeBankButton" },
+  ],
+  field: { x: 0, y: 0, h: 0 },
+};
+
 const TURN_QA = /^(fold|check|call|raise|bet|allIn)Button$/;
 const CONFIRM_QA = /^(raise|bet)Button$/;
 

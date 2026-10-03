@@ -215,7 +215,9 @@ seams.cdpSeq = cdpSeqReal;
  *  looked for a label starting "raise"/"bet", found "ALL-IN 89.2 BB", refused — and fold-on-no-answer folded).
  *  Every label ever recorded on the strip, by data-qa (112 MB of DOM frames, 2026-09-25): foldButton FOLD ·
  *  checkButton CHECK · callButton "CALL N BB" · betButton "BET N BB" · raiseButton "RAISE TO N BB" | "ALL-IN N BB";
- *  no allInButton ever — ALL-IN is a sizing preset (allInSelector). */
+ *  no allInButton — ALL-IN is a sizing preset (allInSelector). SINCE SEEN (2026-10-04, hand 4922346841, frame 4318):
+ *  allInButton "ALL-IN 88.4 BB" beside FOLD and nothing else — the CALL of a bet that takes hero's last chip against
+ *  a bigger stack. There is no callButton on that strip (actuateCall). */
 const QA_OF: Record<string, RegExp> = {
   fold: /^foldButton$/i, check: /^checkButton$/i, call: /^callButton$/i, raise: /^raiseButton$/i, bet: /^betButton$/i,
   "all-in": /^allInButton$/i,
@@ -572,7 +574,46 @@ export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): P
   const g: ActOpts = guard.cards !== undefined ? { cards: guard.cards, strict: guard.strict } : {};
   if (plan.kind === "raise-to") return raiseTo(plan.amount, true, g);
   if (plan.label === "all-in") return actuateAllIn(g);
+  if (plan.label === "call") return actuateCall(g);
   return act(plan.label, "action", g);
+}
+
+/** Every turn control but FOLD and the client's own ALL-IN — one of these beside the ALL-IN means it is not the call. */
+const OTHER_TURN_QA = /^(check|call|raise|bet)Button$/i;
+const OTHER_TURN_LABEL = /^(check|call|raise|bet)\b/i;
+
+/** A CALL, by whichever control the client offers it through:
+ *   1. the CALL control (its label, then its data-qa);
+ *   2. a call that takes hero's last chip against a bigger stack has NO call control: the strip is FOLD and the
+ *      client's own ALL-IN control (data-qa allInButton), nothing else. Hand 4922346841 (2026-10-04, A♥Q♣ on
+ *      Q♥8♥4♣): the BB shoved 245.2 into hero's 88.4, the strip read FOLD / ALL-IN 88.4 BB, the answer was
+ *      CALL 88.4 100% — "'call' not on offer", refused three times, and the press was left to the player. That
+ *      ALL-IN is the call when it is the ONLY way to put chips in (were a raise possible the client would offer the
+ *      call beside it) and the hand has hero facing a bet. Pressed by identity, checked on the press's own read.
+ *      The result carries `as: "all-in"`. */
+export async function actuateCall(guard: ActOpts = {}): Promise<Record<string, any>> {
+  const res = await act("call", "action", guard);
+  if (res.ok || res.wrongHand || !res.missing) return res;
+  const qa: string[] = (res.offerQa ?? []).map((q: any) => String(q ?? ""));
+  const labels: string[] = (res.offer ?? []).map((t: any) => String(t));
+  const tagged = qa.some((q) => q);
+  const hasAllIn = tagged ? qa.some((q) => QA_OF["all-in"]!.test(q)) : labels.some((t) => isAllInLabel(t));
+  const hasOther = tagged ? qa.some((q) => OTHER_TURN_QA.test(q)) : labels.some((t) => OTHER_TURN_LABEL.test(t));
+  if (!hasAllIn || hasOther) return res;
+  const h = handState();
+  const toCall = Number(((h || {}).currentNode || {}).toCall) || 0;
+  if (!h || !(toCall > 0)) {
+    return { ok: false, reason: `only FOLD / ALL-IN on offer (strip: ${pyRepr(labels)}) and the hand does not show hero facing a bet — not pressing ALL-IN as the call`, offer: res.offer };
+  }
+  const c = await act("all-in", "action", {
+    ...guard,
+    expect: (hit) => (!tagged || QA_OF["all-in"]!.test(String(hit.qa || "")) ? null
+      : `the control reading '${pyStr(hit.text)}' is not the client's ALL-IN control — not pressing it as the call`),
+  });
+  if (!c.ok) return c;
+  const max = callIsMaxCommit(h);
+  return { ...c, kind: "all-in-as-call", as: "all-in",
+           why: max.yes ? max.why : `FOLD and ${pyStr(c.clicked ?? "ALL-IN")} are the only controls — the client offers the call no other way` };
 }
 
 /** How long the confirm may take to show the preset's size (the client re-renders the strip on the next frame). */
@@ -783,7 +824,8 @@ export function executePick(source: string, waitedS: number | null = null): Prom
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
       const how = res.as === "call" ? ` — as a CALL: ${pyStr(res.why ?? "the call is hero's whole stack")}`
-        : res.as === "all-in" && plan.kind === "raise-to" ? ` — the client capped ${pyStr(res.typed ?? plan.amount)} at hero's stack: ALL-IN ${pyStr(res.field ?? "")}` : "";
+        : res.as === "all-in" && plan.kind === "raise-to" ? ` — the client capped ${pyStr(res.typed ?? plan.amount)} at hero's stack: ALL-IN ${pyStr(res.field ?? "")}`
+        : res.as === "all-in" && plan.label === "call" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the call is hero's whole stack")}` : "";
       feedAdd(`Study pick executed — ${pyStr(pick)} (${source}${waited})${how}`);
       if (kN !== null) {
         const h0 = handState() || {};
