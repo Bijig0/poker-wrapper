@@ -816,7 +816,8 @@ async function checkCode() {
     host.innerHTML = `<div class="check ok"><span class="dot"></span><span class="l"><b>Running the current code</b><span>${esc((j.services || []).map((x) => x.name).join(" · "))} — commit ${esc(commits.join(", ") || "unknown")}</span></span><span class="req">check</span></div>`;
     return;
   }
-  const me = (j.services || []).find((x) => x.name === "wrapper");
+  // this wrapper's own line is marked `self`: on a test rig's port the line named "wrapper" is the install's, not this one
+  const me = (j.services || []).find((x) => x.self);
   const canRelaunch = me && me.build && me.build.stale && !j.sessionActive;
   host.innerHTML = `<div class="check bad"><span class="dot"></span><span class="l"><b>Not running the current code</b>${behind.map((x) => `<span style="display:block">${esc(x.name)}: ${esc(x.text)}</span>`).join("")}</span>
     <span>${canRelaunch ? `<button class="mini" id="code-relaunch">Relaunch wrapper</button>` : `<span class="req">check</span>`}</span></div>`;

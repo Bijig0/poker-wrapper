@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeBuild, supervisorLine, type ServiceBuild } from "./liveStatus";
+import { describeBuild, liveStatus, supervisorLine, type ServiceBuild } from "./liveStatus";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -68,4 +68,39 @@ describe("supervisorLine", () => {
     expect(line.current).toBe(false);
     expect(line.text).toContain("not running");
   });
+});
+
+describe("liveStatus", () => {
+  // ports nothing listens on: PORT_OFFSET moves the whole install (api 33000, charts 39777, panel 38700)
+  const ENV = { PORT_OFFSET: "31000" };
+
+  test("the asking process answers for itself: its line is its own build, marked self, on the install's port", async () => {
+    const s = await liveStatus({ port: 38700, build: build({ service: "wrapper" }) }, ENV);
+    expect(s.services.map((x) => [x.name, x.up, !!x.self])).toEqual([["api", false, false], ["charts", false, false], ["wrapper", true, true]]);
+    expect(s.head).toBe("dd69935aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    // the API and the chart server are down: that is not "current"
+    expect(s.current).toBe(false);
+  }, 30_000);
+
+  test("a process on a port of its own (a rig, a verify API) is listed as this one, beside the install's lines", async () => {
+    const s = await liveStatus({ port: 38795, build: build({ service: "wrapper", stale: true, changedCount: 1, changed: ["a.ts"] }) }, ENV);
+    const me = s.services.find((x) => x.self)!;
+    expect(me.name).toBe("wrapper :38795 (this one)");
+    expect(me.current).toBe(false);
+    expect(s.services.filter((x) => x.name === "wrapper").length).toBe(0);
+  }, 30_000);
+
+  test("the chart factory's API is a line, and its supervisor one, only where FACTORY_API_URL names it", async () => {
+    const sup = { name: "factory", pid: 4242, alive: true, startedAt: "2026-10-03T21:00:00", changed: ["x.ps1"], current: false, text: "pid 4242 · BEHIND THE DISK: x.ps1" };
+    const srv = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ ...build({ service: "factory" }), supervisor: sup }) });
+    try {
+      const s = await liveStatus(null, { ...ENV, FACTORY_API_URL: `http://127.0.0.1:${srv.port}/` });
+      const f = s.services.find((x) => x.name === "factory")!;
+      expect([f.up, f.current, f.port]).toEqual([true, true, srv.port]);
+      expect(s.supervisors.find((x) => x.name === "factory")?.changed).toEqual(["x.ps1"]);
+      expect(s.current).toBe(false);
+      const none = await liveStatus(null, ENV);
+      expect(none.services.some((x) => x.name === "factory")).toBe(false);
+    } finally { srv.stop(true); }
+  }, 30_000);
 });
