@@ -317,7 +317,8 @@ export function peerIsLeaving(rid: string): boolean {
 
 /** What a relayed press may be told beyond its label. `cards` = the hole cards the decision was made for: the press
  *  is refused unless OUR table shows them (relay.ts holeCardsRefusal); `strict` = refuse when they cannot be seen. */
-export type ActOpts = { expect?: (hit: any) => string | null; cards?: readonly unknown[] | null; strict?: boolean };
+/** `expect` sees the matched control and, beside it, every control of its row on the SAME read (`pool`). */
+export type ActOpts = { expect?: (hit: any, pool?: any[]) => string | null; cards?: readonly unknown[] | null; strict?: boolean };
 
 /** The functions a test may replace (see the header). Filled in by the modules that own them. */
 export const seams: {
