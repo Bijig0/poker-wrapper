@@ -217,16 +217,24 @@ seams.cdpSeq = cdpSeqReal;
  *  checkButton CHECK · callButton "CALL N BB" · betButton "BET N BB" · raiseButton "RAISE TO N BB" | "ALL-IN N BB";
  *  no allInButton — ALL-IN is a sizing preset (allInSelector). SINCE SEEN (2026-10-04, hand 4922346841, frame 4318):
  *  allInButton "ALL-IN 88.4 BB" beside FOLD and nothing else — the CALL of a bet that takes hero's last chip against
- *  a bigger stack. There is no callButton on that strip (actuateCall). */
+ *  a bigger stack. There is no callButton on that strip (actuateCall). AND (2026-10-03, sessions 153908 / 153922):
+ *  allInRaiseButton "ALL-IN $5.17" — labelled in DOLLARS — the raise/bet when the smallest the client allows is
+ *  hero's whole stack; no raiseButton / betButton, no bet field, no sizing row beside it (actuateRaiseTo). Three
+ *  ALL-IN states, kept apart by identity: the RAISE/BET control relabelled by a size (a shove hero sized), allInButton
+ *  (the call that takes hero's last chip), allInRaiseButton (the only raise there is). */
 const QA_OF: Record<string, RegExp> = {
   fold: /^foldButton$/i, check: /^checkButton$/i, call: /^callButton$/i, raise: /^raiseButton$/i, bet: /^betButton$/i,
   "all-in": /^allInButton$/i,
+  // the only raise/bet the client allows, by identity alone (findControl never matches it by label)
+  "all-in-raise": /^allInRaiseButton$/i,
   // the control a sized raise/bet (or a shove sized on a preset) is CONFIRMED on, whatever it reads
   confirm: /^(raise|bet)Button$/i,
 };
 /** The confirm control on a strip without data-qa: the action-row button that raises, bets, or (sized) shoves. */
 const CONFIRM_LABEL = /^(raise|bet|all[ -]?in)\b/i;
 export const isAllInLabel = (text: unknown) => /^all[ -]?in\b/i.test(String(text ?? "").trim());
+/** The client's allInRaiseButton by its label alone (a strip without data-qa): the only ALL-IN it labels in dollars. */
+export const isAllInRaiseLabel = (text: unknown) => isAllInLabel(text) && String(text ?? "").includes("$");
 
 /** The button `label` names within `pool`: exact label, then first word, then (turn actions) the client's data-qa
  *  identity — a CALL relabelled by the client is still the call. "confirm" = the RAISE/BET control, any label. */
@@ -235,6 +243,7 @@ export function findControl(pool: any[], label: string, kind: string): any | nul
     return pool.find((b) => QA_OF.confirm!.test(String(b.qa || "")))
       ?? pool.find((b) => !b.qa && CONFIRM_LABEL.test(String(b.text))) ?? null;
   }
+  if (label === "all-in-raise") return pool.find((b) => QA_OF["all-in-raise"]!.test(String(b.qa || ""))) ?? null;
   const want = label.trim().toLowerCase();
   let hit = pool.find((b) => String(b.text).toLowerCase() === want);
   if (!hit) {
@@ -332,7 +341,7 @@ async function actReal(label: string, kind = "action", opts: ActOpts = {}): Prom
     const what = label === "confirm" ? "a RAISE/BET control" : `'${label}'`;
     return { ok: false, reason: `${what} not on offer (${kind})`, offer, offerQa, missing: true };
   }
-  const refusal = opts.expect ? opts.expect(hit) : null;
+  const refusal = opts.expect ? opts.expect(hit, pool) : null;
   if (refusal) return { ok: false, reason: refusal, offer, offerQa, seen: hit.text };
   const lk = await TABLES.pressLock();
   try {
@@ -420,7 +429,9 @@ async function raiseToReal(amount: string, strict = false, opts: ActOpts = {}): 
   let [inp, refusal] = pickBetInput(d.inputs || [], d.anchor ?? null, d.frameW ?? null);
   if (refusal) {
     if (d.buyPanel) refusal += " — the Buy-chips panel is open over the strip";
-    return { ok: false, reason: refusal };
+    // `noInput`: nothing typed, nothing pressed, and no bet field at all (actuateRaiseTo looks for the client's
+    // allInRaiseButton then); the Buy-chips panel over the strip is not that
+    return { ok: false, reason: refusal, ...(!(d.inputs || []).length && !d.buyPanel ? { noInput: true } : {}) };
   }
   const wrong = await pointIsMyTable(ws, inp.x, inp.y);
   if (wrong) return { ok: false, reason: wrong };
@@ -572,14 +583,40 @@ export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): P
     return CP.actuate(plan, { auto, allowReal: auto && autoAllowance().live });
   }
   const g: ActOpts = guard.cards !== undefined ? { cards: guard.cards, strict: guard.strict } : {};
-  if (plan.kind === "raise-to") return raiseTo(plan.amount, true, g);
+  if (plan.kind === "raise-to") return actuateRaiseTo(plan, g);
   if (plan.label === "all-in") return actuateAllIn(g);
   if (plan.label === "call") return actuateCall(g);
   return act(plan.label, "action", g);
 }
 
-/** Every turn control but FOLD and the client's own ALL-IN — one of these beside the ALL-IN means it is not the call. */
-const OTHER_TURN_QA = /^(check|call|raise|bet)Button$/i;
+/** A SIZED RAISE/BET, by whichever control the client offers it through:
+ *   1. typed into the client's bet field and confirmed on its RAISE/BET control (raiseTo, strict);
+ *   2. NO bet field at all and the client's allInRaiseButton on the strip with no RAISE/BET control beside it: the
+ *      smallest raise the client allows is already hero's whole stack, so ALL-IN is the only raise there is — pressed
+ *      by identity (never by label), checked on the press's own read. Session_20261003_153908 seq 5037 (hand 55,
+ *      A♦Q♥ facing a raise to 60: FOLD / CALL 56 BB / ALL-IN $5.17, answer Raise 107.5) was refused "no bet input on
+ *      screen". The result carries `as: "all-in"` (judged as the shove it is, like a raise the client capped).
+ *  Anything else without a bet field — FOLD / ALL-IN N BB (allInButton is the CALL), FOLD / CALL — stays refused. */
+export async function actuateRaiseTo(plan: Record<string, any>, guard: ActOpts = {}): Promise<Record<string, any>> {
+  const res = await raiseTo(plan.amount, true, guard);
+  if (res.ok || !res.noInput) return res;
+  const c = await act("all-in-raise", "action", {
+    ...guard,
+    expect: (_hit, pool) => {
+      const beside = (pool ?? []).find((b: any) => QA_OF.confirm!.test(String(b.qa || "")));
+      return beside ? `a ${pyStr(beside.text)} control is on the strip beside the ALL-IN — the raise is sized there, not pressed as ALL-IN` : null;
+    },
+  });
+  if (c.missing) return res;
+  if (!c.ok) return { ok: false, reason: `${pyStr(res.reason ?? null)}; ${pyStr(c.reason ?? null)}`, offer: c.offer };
+  const verb = plan.verb === "bet" ? "bet" : "raise";
+  return { ...c, kind: "all-in-raise", as: "all-in", typed: plan.amount,
+           why: `the only ${verb} the client offers is ${pyStr(c.clicked ?? "ALL-IN")} (no bet field, no RAISE/BET control) — every ${verb} is hero's whole stack` };
+}
+
+/** Every turn control but FOLD and the client's own ALL-IN — one of these beside the ALL-IN means it is not the call.
+ *  allInRaiseButton among them: a raise on offer means the ALL-IN beside it is not the call either. */
+const OTHER_TURN_QA = /^(check|call|raise|bet|allInRaise)Button$/i;
 const OTHER_TURN_LABEL = /^(check|call|raise|bet)\b/i;
 
 /** A CALL, by whichever control the client offers it through:
@@ -597,8 +634,10 @@ export async function actuateCall(guard: ActOpts = {}): Promise<Record<string, a
   const qa: string[] = (res.offerQa ?? []).map((q: any) => String(q ?? ""));
   const labels: string[] = (res.offer ?? []).map((t: any) => String(t));
   const tagged = qa.some((q) => q);
-  const hasAllIn = tagged ? qa.some((q) => QA_OF["all-in"]!.test(q)) : labels.some((t) => isAllInLabel(t));
-  const hasOther = tagged ? qa.some((q) => OTHER_TURN_QA.test(q)) : labels.some((t) => OTHER_TURN_LABEL.test(t));
+  // never the client's allInRaiseButton (the RAISE that is hero's whole stack): by data-qa, or its dollar label
+  const hasAllIn = tagged ? qa.some((q) => QA_OF["all-in"]!.test(q)) : labels.some((t) => isAllInLabel(t) && !isAllInRaiseLabel(t));
+  const hasOther = tagged ? qa.some((q) => OTHER_TURN_QA.test(q))
+    : labels.some((t) => OTHER_TURN_LABEL.test(t) || isAllInRaiseLabel(t));
   if (!hasAllIn || hasOther) return res;
   const h = handState();
   const toCall = Number(((h || {}).currentNode || {}).toCall) || 0;
@@ -622,7 +661,9 @@ const SHOVE_CONFIRM_POLL_S = 0.15;
 
 /** A SHOVE, by whichever control the client offers it through — in this order, every step on the client's own
  *  word (never a size of ours):
- *   1. a turn control that already reads ALL-IN (the raise button when the smallest raise is hero's stack);
+ *   1. a turn control that already reads ALL-IN (the raise button when the smallest raise is hero's stack; the
+ *      client's allInRaiseButton "ALL-IN $0.04", session_20261003_153922 hand 51; allInButton). Every one of them
+ *      puts hero's whole stack in, so whichever comes first on the strip is the shove;
  *   2. a RAISE/BET control on the strip: size it on the ALL-IN (else MAX) preset, then press that control ONLY once
  *      it reads ALL-IN. The client relabels it — "RAISE TO 2 BB" → "ALL-IN 89.2 BB" (hand 4920545590); this used to
  *      look for a "raise"/"bet" label, so EVERY Ignition shove sized on the preset was refused (ALLIN 18, 94.2,
@@ -824,6 +865,7 @@ export function executePick(source: string, waitedS: number | null = null): Prom
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
       const how = res.as === "call" ? ` — as a CALL: ${pyStr(res.why ?? "the call is hero's whole stack")}`
+        : res.kind === "all-in-raise" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the client's only raise is hero's whole stack")}`
         : res.as === "all-in" && plan.kind === "raise-to" ? ` — the client capped ${pyStr(res.typed ?? plan.amount)} at hero's stack: ALL-IN ${pyStr(res.field ?? "")}`
         : res.as === "all-in" && plan.label === "call" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the call is hero's whole stack")}` : "";
       feedAdd(`Study pick executed — ${pyStr(pick)} (${source}${waited})${how}`);
@@ -833,7 +875,7 @@ export function executePick(source: string, waitedS: number | null = null): Prom
         const behind0 = dget(h0.stacks, hero0) ?? null;
         const committed0 = dget(h0.committed, hero0) || 0;
         // judge the press by what the client was actually asked to do (a shove it only offered as a call, a raise
-        // it capped into a shove) — the retry re-sends this plan, which re-derives the same control
+        // it capped into a shove or only offered as ALL-IN) — the retry re-sends this plan, which re-derives the same control
         const vplan = res.as === "call" ? { kind: "action", label: "all-in", realized: "call", ...(plan.kind === "raise-to" ? { from: plan } : {}) }
           : res.as === "all-in" && plan.kind === "raise-to" ? { kind: "action", label: "all-in", from: plan } : plan;
         S.study.pendingExec = { key, pick, plan: vplan, kN, handId: S.study.handId ?? null, sentAt: time(),

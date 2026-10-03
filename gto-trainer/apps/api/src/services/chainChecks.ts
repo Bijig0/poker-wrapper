@@ -215,10 +215,16 @@ export function pressChecks(a: {
     const live = a.actions.filter((x) => x.frequency > 0.001);   // percent: a 1e-6 residue is not an action the answer offers
     const need = [...new Set(live.map((x) => answerKind(x.action)))];
     const asCall = !offered.has("wager") && offered.has("call");  // the client offers a shove as a CALL when it is hero's stack
-    const missing = need.filter((k) => !offered.has(k) && !(k === "wager" && asCall));
+    // THE CALL OFFERED AS ALL-IN (hand 4922346841, 2026-10-04): a call that takes hero's last chip against a bigger stack
+    // has no CALL button — the strip is FOLD / "ALL-IN 88.4 BB" (the client's allInButton) and nothing else. That ALL-IN
+    // is the call. Never an ALL-IN labelled in dollars ("ALL-IN $5.17", allInRaiseButton): that one is a RAISE.
+    const allInIsCall = !offered.has("call") && !offered.has("check")
+      && a.buttons.some((b) => isAllInLabel(b) && !b.includes("$"))
+      && a.buttons.every((b) => answerKind(b) !== "wager" || (isAllInLabel(b) && !b.includes("$")));
+    const missing = need.filter((k) => !offered.has(k) && !(k === "wager" && asCall) && !(k === "call" && allInIsCall));
     out.push(missing.length
       ? fail(14, `at the press: the answer offers ${missing.map((k) => k.toUpperCase()).join(", ")}; the table's buttons were ${a.buttons.join(" / ")}`)
-      : pass(14, `at the press: ${live.map((x) => x.action).join(" / ") || "the pick"} ⊆ the table's buttons (${a.buttons.join(" / ")})${need.includes("wager") && asCall ? " — the shove offered as a CALL" : ""}`));
+      : pass(14, `at the press: ${live.map((x) => x.action).join(" / ") || "the pick"} ⊆ the table's buttons (${a.buttons.join(" / ")})${need.includes("wager") && asCall ? " — the shove offered as a CALL" : ""}${need.includes("call") && allInIsCall ? " — the call offered as ALL-IN (it takes hero's last chip)" : ""}`));
   }
   if (a.stale === true) out.push(fail(16, `at the press the table showed ${a.atPress}, not the spot the answer was solved for (${a.answerKey})`));
   else if (a.stale === false) out.push(pass(16, `at the press the table still showed the answer's spot (${a.atPress})`));

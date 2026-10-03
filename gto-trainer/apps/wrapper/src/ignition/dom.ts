@@ -266,7 +266,11 @@ export function heroCards(d: Record<string, any>): string[] {
 
 // ---- the action strip -----------------------------------------------------------------------------------
 export const ACTION_RE = /^(fold|check|call|raise|bet|all[ -]?in)\b/i;
-const ACTION_QA = /^(fold|check|call|bet|raise|allIn)Button$/i;
+/** The client's turn controls by data-qa. `allInRaiseButton` (seen 2026-10-03) is the raise/bet when the smallest one
+ *  the client allows is already hero's whole stack: labelled IN DOLLARS ("ALL-IN $0.04"), no bet field, no sizing
+ *  row — session_20261003_153922 seq 6230 (CHECK / ALL-IN $0.04, hand 51), session_20261003_153908 seq 5037 (FOLD /
+ *  CALL 56 BB / ALL-IN $5.17). Left out, the strip read CHECK alone, no digit, "not your turn" — hero timed out. */
+const ACTION_QA = /^(fold|check|call|bet|raise|allIn|allInRaise)Button$/i;
 const PRESET_QA = /Selector$/;
 
 /** Split the bottom strip's buttons into (turn actions, sizing presets) — by the client's own data-qa when the
