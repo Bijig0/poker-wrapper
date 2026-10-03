@@ -85,6 +85,28 @@ $extra = @(
 $have = $env:Path -split ';'
 $env:Path = ((@($extra | Where-Object { $have -notcontains $_ }) + $have) | Where-Object { $_ }) -join ';'
 
+# 5. THE START STAMP (2026-10-03): a supervisor reads its own script, this file and local.env ONCE, at start, so a fix
+#    to any of them needs the SUPERVISOR restarted, not its worker - and nothing said so. Each supervisor calls this
+#    when it starts; the API compares the hashes with the files on disk (services/liveStatus.ts) and the dashboard
+#    banner, the wrapper's setup page and `bun setup\live.ts` say when one is behind.
+function Write-SupervisorStamp([string]$Name, [string[]]$Files) {
+  try {
+    $dir = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\data\jobs'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $all = @($Files) + @((Join-Path $env:POKER_ROOT 'config\env.ps1'), (Join-Path $env:POKER_ROOT 'config\local.env'))
+    $hashes = [ordered]@{}
+    foreach ($f in $all) {
+      if ($f -and (Test-Path -LiteralPath $f)) {
+        $p = (Resolve-Path -LiteralPath $f).Path
+        $hashes[$p] = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()
+      }
+    }
+    $stamp = [ordered]@{ name = $Name; pid = $PID; startedAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'); files = $hashes }
+    # WriteAllText = UTF-8 without a BOM (Out-File in PowerShell 5.1 would add one)
+    [IO.File]::WriteAllText((Join-Path $dir "supervisor-$Name.json"), ($stamp | ConvertTo-Json -Depth 4))
+  } catch { }
+}
+
 if ($EmitCmd) {
   foreach ($k in (@('POKER_ROOT', 'BUN', 'EXPLOIT_CHART', 'POOL_MODEL', 'HRC_UI_DOC_CACHE_MAX', 'CP_HERO', 'POKER_DATA_DIR', 'RCLONE_CONFIG', 'Path') + @($portDefaults.Keys) + $localKeys | Select-Object -Unique)) {
     $v = [Environment]::GetEnvironmentVariable($k, 'Process')

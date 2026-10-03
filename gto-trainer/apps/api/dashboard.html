@@ -5049,45 +5049,68 @@ setInterval(() => {
   if (PATH.view === "sources" && PATH.pane === "pieces" && !PATH.id) whenVisible("sources", loadSources);
 }, 15000);
 
-/* ================= "there's been an update" ================= */
-/* The API runs WITHOUT --watch on purpose (a --watch worker crash leaves the
-   watcher alive and hides the failure), so an edit changes nothing until the
-   process restarts — and nothing used to say so. On 2026-09-19 it stayed up from
-   19:54 while four fixes landed on disk, including the one that made every
-   decision get solved and rolled twice all evening. */
-let BUILD_DISMISSED = 0;
+/* ================= is everything running the code on disk ================= */
+/* The services run WITHOUT --watch on purpose (a --watch worker crash leaves the
+   watcher alive and hides the failure), so each keeps the code it started with.
+   On 2026-09-19 the API stayed up from 19:54 while four fixes landed on disk,
+   including the one that made every decision get solved and rolled twice all
+   evening. Since 2026-10-03 a COMMITTED change restarts the API and the chart
+   server by themselves when no session is live (services/autoRestart.ts); this
+   bar says what is still behind and why — an uncommitted edit, a restart held
+   for a live session, code that does not build, a wrapper left open across a
+   merge — and keeps the button for doing it by hand. /api/build/all answers
+   for the whole install; this page itself is read from disk on every request,
+   so an open tab can be older than the page: that is the last line. */
+let BUILD_DISMISSED = "";
+let PAGE_TOKEN = null;
 
 async function checkBuild() {
   const host = $("build-alert");
   if (!host) return;
   let j;
-  try { j = await (await fetch("/api/build")).json(); } catch { return; }
-  if (!j.ok || !j.stale || j.bootStamp === BUILD_DISMISSED) { host.innerHTML = ""; return; }
-  const n = j.changedCount;
-  const files = (j.changed || []).slice(0, 3).join("  ");
-  const more = n > 3 ? `  +${n - 3} more` : "";
-  host.innerHTML = `<div class="ba">
-    <span>⟳ <b>This API is running older code than the disk.</b>
-      Booted ${fmtAgo(j.bootAt)} · ${n} source file${n === 1 ? "" : "s"} changed since —
-      none of it is live until it restarts.</span>
-    <span class="files">${esc(files)}${esc(more)}</span>
+  try { j = await (await fetch("/api/build/all")).json(); } catch { return; }
+  if (!j || !j.ok || !Array.isArray(j.services)) {
+    // an API from before /api/build/all: it can only speak for itself
+    try { j = await (await fetch("/api/build")).json(); } catch { return; }
+    if (!j.ok || !j.stale) { host.innerHTML = ""; return; }
+    host.innerHTML = `<div class="ba"><span>⟳ <b>This API is running older code than the disk.</b> ${j.changedCount} file(s) changed since it started.</span>
+      <span class="act">${j.supervised ? `<button onclick="restartApi(this)">Restart now</button>` : ""}</span></div>`;
+    return;
+  }
+  const api = j.services.find((x) => x.name === "api");
+  const page = api && api.build ? api.build.page : null;
+  if (page && PAGE_TOKEN === null) PAGE_TOKEN = page;
+  const pageOld = !!(page && PAGE_TOKEN && page !== PAGE_TOKEN);
+  const behind = [...j.services.filter((x) => x.up && !x.current), ...(j.supervisors || []).filter((x) => x.pid !== null && !x.current)];
+  const sig = behind.map((x) => `${x.name}:${x.build ? x.build.sig : x.text}`).join("|") + (pageOld ? `|page:${page}` : "");
+  if ((!behind.length && !pageOld) || sig === BUILD_DISMISSED) { host.innerHTML = ""; return; }
+  const b = api && api.build;
+  const st = b && b.auto ? b.auto.state : "";
+  // settling / restarting: it is about to go by itself — no button to race it. Held for a live session: the button
+  // stays, behind a question, because pressing it takes the answers away for ~20 s.
+  const apiButton = !b || !b.stale || st === "settling" || st === "restarting" ? ""
+    : !b.supervised ? `<button disabled title="no supervisor in this process — exiting would leave nothing serving it">Restart API by hand</button>`
+    : `<button onclick="restartApi(this, ${st === "held"})">Restart API now</button>`;
+  host.innerHTML = `<div class="ba" style="flex-wrap:wrap">
+    <span>⟳ <b>${behind.length ? "Not everything is running the code on disk." : "This page has a newer version."}</b></span>
     <span class="act">
-      ${j.supervised
-        ? `<button onclick="restartApi(this)">Restart now</button>`
-        : `<button disabled title="no StudyAPI supervisor in this process — exiting would leave nothing serving :2000">Restart by hand</button>`}
-      <button class="ghost" title="hide until something else changes"
-              onclick="BUILD_DISMISSED=${j.bootStamp};$('build-alert').innerHTML='';">✕</button>
-    </span></div>`;
+      ${apiButton}
+      ${pageOld ? `<button onclick="location.reload()">Reload page</button>` : ""}
+      <button class="ghost" title="hide until something else changes" onclick="BUILD_DISMISSED=this.dataset.sig;$('build-alert').innerHTML='';" data-sig="${esc(sig)}">✕</button>
+    </span>
+    <span class="files" style="flex-basis:100%;white-space:normal">${behind.map((x) => `<span style="display:block"><b>${esc(x.name)}</b> — ${esc(x.text)}</span>`).join("")}${
+      pageOld ? `<span style="display:block"><b>this page</b> — dashboard.html changed on disk after this tab loaded it; reload to get it</span>` : ""}</span></div>`;
 }
 
-async function restartApi(btn) {
+async function restartApi(btn, held) {
+  if (held && !confirm("A poker session is live. Restarting the API now leaves it without answers for about 20 seconds. Restart anyway?")) return;
   btn.disabled = true; btn.textContent = "restarting…";
   let j = null;
   try { j = await (await fetch("/api/build/restart", { method: "POST" })).json(); }
   catch { /* the exit can cut the response — that is a restart, not a failure */ }
   if (j && j.ok === false) { btn.textContent = "can't restart"; btn.title = j.error || ""; return; }
   const host = $("build-alert");
-  host.innerHTML = `<div class="ba done">⟳ <b>Restarting.</b> The supervisor relaunches within ~10s; this page reloads itself when it answers again.</div>`;
+  host.innerHTML = `<div class="ba done">⟳ <b>Restarting.</b> The supervisor relaunches within seconds; this page reloads itself when it answers again.</div>`;
   const t0 = Date.now();
   const tick = async () => {
     if (Date.now() - t0 > 90000) {

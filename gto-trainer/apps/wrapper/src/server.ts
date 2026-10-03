@@ -36,6 +36,7 @@ import { recFrame, recLog, recordings, saveNote, setDebug } from "./ignition/rec
 import { act, executePick, raiseTo, requestSolve, setAuto } from "./relay";
 import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
 import * as SESSION from "./session";
+import { buildAll, buildReply, relaunch } from "./build";
 import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
 import { domDump, shot, state, toolShell } from "./view";
 import { applyLayout, dpiAt, monitors, panelHwnd, slotTitle, targetArea, wantFullscreen } from "./windows";
@@ -641,6 +642,13 @@ export function buildApp(): Hono {
     }
     st.at = time();
     return json(200, { ok: true });
+  });
+  // is this wrapper — and the API and chart server beside it — running the code on disk (src/build.ts)
+  app.get("/build", async (c) => json(200, await buildReply(queryOf(c).includes("force=1"))));
+  app.get("/build/all", async () => json(200, await buildAll()));
+  app.post("/build/relaunch", () => {
+    const [code, res] = relaunch();
+    return json(code, res);
   });
   app.post("/update", () => {
     const [code, res] = SESSION.startUpdate();

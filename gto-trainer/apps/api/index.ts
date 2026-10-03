@@ -30,6 +30,7 @@ import { hhChecker } from "./src/services/hhCheck";
 import { replayScheduler } from "./src/services/replayScheduler";
 import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
 import { trustAuditLine } from "./src/services/hrc6maxDb";
+import { autoRestart } from "./src/services/buildStamp";
 
 const app = new Hono();
 
@@ -213,6 +214,9 @@ let adoption: Promise<void> = Promise.resolve();
 // every answer it froze, and in the log as [stall] — ownership has nothing to do with it.
 startStallMonitor();
 startBackgroundLock();
+// A MERGE TO MAIN IS THE DEPLOY (services/autoRestart.ts): a committed change to code this process loaded restarts it
+// by a clean exit — when no session is live, and only under a supervisor. Everything else it only reports (/api/build).
+autoRestart.start();
 // THE CHART TRUST AUDIT (2026-10-03): how many baked 6-max charts carry no trust scores — each one answers from the old
 // limp_node_trust.json, unguarded where it has no score (services/nodeTrust). Said once at start; the registry shows it live.
 setTimeout(() => {

@@ -210,6 +210,7 @@
 <section class="step" id="step-preflight">
   <h2><span class="n">5</span> Preflight <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400" id="pf-when"></span></h2>
   <div class="card">
+    <div class="checks" id="code-check" style="margin-bottom:6px"></div>
     <div class="checks" id="checks"></div>
     <div class="verdict">
       <button class="start" id="start" disabled>Start session</button>
@@ -789,6 +790,50 @@ setInterval(async () => {
     else if (s.setupVersion !== setupVersion) location.reload();
   } catch (e) { /* wrapper restarting */ }
 }, 10000);
+
+// RUNNING THE CURRENT CODE (2026-10-03): the API, the chart server and this wrapper each read their code once, at
+// start. A committed change restarts the API and the chart server by themselves when no session is live; the wrapper
+// has no supervisor, so a wrapper left open across a merge says so here and offers the relaunch. The row sits above
+// the preflight list and is not a blocker: an uncommitted edit on disk is somebody's work in progress, not a reason
+// to refuse a session. /build/all answers for the whole install (src/build.ts, the API's services/liveStatus.ts).
+let codeTimer = null;
+async function checkCode() {
+  const host = $("code-check");
+  if (!host) return;
+  clearTimeout(codeTimer);
+  let j = null;
+  try { j = await (await fetch("/build/all", { signal: AbortSignal.timeout(15000) })).json(); } catch (e) { /* an older wrapper has no such route */ }
+  // behind = re-ask soon (a restart is seconds away); current = every half minute
+  codeTimer = setTimeout(checkCode, j && j.ok && !j.current ? 8000 : 30000);
+  if (!j || !j.ok) {
+    host.innerHTML = `<div class="check bad"><span class="dot"></span><span class="l"><b>Running the current code</b><span>this wrapper is running code from before this check existed — relaunch Poker Wrapper from its shortcut</span></span><span class="req">check</span></div>`;
+    return;
+  }
+  const lines = [...(j.services || []), ...(j.supervisors || []).filter((x) => x.pid !== null)];
+  const behind = lines.filter((x) => !x.current);
+  if (!behind.length) {
+    const commits = [...new Set((j.services || []).map((x) => x.build && x.build.commit ? x.build.commit.slice(0, 7) : null).filter(Boolean))];
+    host.innerHTML = `<div class="check ok"><span class="dot"></span><span class="l"><b>Running the current code</b><span>${esc((j.services || []).map((x) => x.name).join(" · "))} — commit ${esc(commits.join(", ") || "unknown")}</span></span><span class="req">check</span></div>`;
+    return;
+  }
+  const me = (j.services || []).find((x) => x.name === "wrapper");
+  const canRelaunch = me && me.build && me.build.stale && !j.sessionActive;
+  host.innerHTML = `<div class="check bad"><span class="dot"></span><span class="l"><b>Not running the current code</b>${behind.map((x) => `<span style="display:block">${esc(x.name)}: ${esc(x.text)}</span>`).join("")}</span>
+    <span>${canRelaunch ? `<button class="mini" id="code-relaunch">Relaunch wrapper</button>` : `<span class="req">check</span>`}</span></div>`;
+  if (canRelaunch) $("code-relaunch").onclick = async () => {
+    const b = $("code-relaunch"); b.disabled = true; b.textContent = "relaunching…";
+    let r; try { r = await (await fetch("/build/relaunch", { method: "POST" })).json(); } catch (e) { r = { ok: true }; }
+    if (r && r.ok === false) { b.disabled = false; b.textContent = "Relaunch wrapper"; b.title = r.why || ""; return; }
+    // the new instance answers on the same port: reload once it is the one serving
+    const t0 = Date.now(), was = me.build.bootAt;
+    const tick = async () => {
+      try { const n = await (await fetch("/build", { cache: "no-store" })).json(); if (n && n.bootAt && n.bootAt !== was) { location.reload(); return; } } catch (e) { /* between instances */ }
+      if (Date.now() - t0 < 60000) setTimeout(tick, 1000); else { b.textContent = "not back after 60 s — use the shortcut"; }
+    };
+    setTimeout(tick, 1500);
+  };
+}
+checkCode();
 
 // PACKAGED INSTALLS: a newer release on the update channel shows a banner with a one-press update
 // (the wrapper hands over to setup\update.ps1, which closes this window and reopens it when done).
