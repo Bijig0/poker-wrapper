@@ -24,3 +24,15 @@ export const POOL_DIR = process.env.POOL_DIR ?? join(DATA_DIR, "pool");
  * docs/CUTOVER.md. A file's own override (HRC6MAX_DB, MES_POSTFLOP, MES_TURN_DIR) still wins. Read per call.
  */
 export const factoryFile = (name: string): string => join(process.env.FACTORY_DATA_DIR || DATA_DIR, name);
+/**
+ * The CHART MANIFEST (2026-10-03): chart id -> the raw export (sha256) its body is built from. It is git-tracked in the
+ * FACTORY repo beside its tool (poker/analysis/pipeline/solve/chart_manifest.json), not in the factory's data dir, so it
+ * resolves the way factoryFile does but from the factory checkout: CHART_MANIFEST wins; else FACTORY_DATA_DIR
+ * (= <factory>/gto-trainer/apps/api/data) four levels up + analysis/pipeline/solve/; else data/chart_manifest.json (an
+ * installed copy, normally absent - then the 6-max provenance check says "manifest not readable"). Read per call.
+ */
+export const factoryManifestFile = (): string =>
+  process.env.CHART_MANIFEST
+  || (process.env.FACTORY_DATA_DIR
+    ? resolve(process.env.FACTORY_DATA_DIR, "..", "..", "..", "..", "analysis", "pipeline", "solve", "chart_manifest.json")
+    : join(DATA_DIR, "chart_manifest.json"));

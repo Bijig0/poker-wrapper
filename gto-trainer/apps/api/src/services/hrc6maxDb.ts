@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { factoryFile } from "./repoPaths";
-import { existsSync } from "node:fs";
+import { factoryFile, factoryManifestFile } from "./repoPaths";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 // Python's zlib.compress() is zlib-wrapped deflate, NOT gzip — inflateSync, never gunzipSync.
 import { inflateSync } from "node:zlib";
@@ -60,6 +60,39 @@ type Row = { pos: string | null; terminal: number; actions: string; cells: Uint8
 export type BakedTrust = { reach: number | null; regret: number };
 /** What the bake says about its own trust coverage — for the registry and the API's start line. */
 export type TrustAudit = { tables: boolean; trees: number; scored: number; unscored: string[] };
+/** One baked chart's provenance row (build_6max_preflop_db.py writes it with the tree; chart_manifest.py names it). */
+export type BakedProvenance = { raw: string | null; body: string; converter: string | null; plan: string | null;
+  refineMin: number | null; status: string };
+/**
+ * THE BAKE AGAINST THE CHART MANIFEST (2026-10-03). A chart id names the spot, not the solve: twice a rebuild put a
+ * round-1 export behind a round-2 chart and nothing could tell (29 six-max charts, 48% of chart answers). The bake now
+ * carries, per tree, the raw export's and the body's sha256 (`provenance`, written in the tree's own transaction), and the
+ * factory's git-tracked chart_manifest.json names the export each chart must be built from.
+ *   `table` false    = a bake from before provenance (an older file): the check is inert and says so;
+ *   `manifest` false = chart_manifest.json could not be read here: the mismatch count is UNKNOWN (null), never 0;
+ *   `mismatches`     = baked charts whose provenance row is missing, or names another raw/body than the manifest, or that
+ *                      the manifest does not know.
+ */
+export type ProvenanceAudit = { table: boolean; trees: number; withRow: number; manifest: boolean; manifestPath: string;
+  mismatches: number | null; mismatchIds: string[];
+  charts: Record<string, { refineMin: number | null; raw: string | null; status: string }> };
+
+type ManifestEntry = { raw_sha256?: string; body_sha256?: string; refine_min?: number; status?: string };
+let manifestCache: { path: string; mtimeMs: number; charts: Record<string, ManifestEntry> } | null = null;
+/** chart_manifest.json's charts, re-read when its mtime changes; null when it cannot be read (or is another schema). */
+export function readChartManifest(): Record<string, ManifestEntry> | null {
+  const path = factoryManifestFile();
+  try {
+    const m = statSync(path).mtimeMs;
+    if (manifestCache && manifestCache.path === path && manifestCache.mtimeMs === m) return manifestCache.charts;
+    const doc = JSON.parse(readFileSync(path, "utf8")) as { schema?: number; charts?: Record<string, ManifestEntry> };
+    if (doc.schema !== 1 || !doc.charts) return null;
+    manifestCache = { path, mtimeMs: m, charts: doc.charts };
+    return doc.charts;
+  } catch {
+    return null;
+  }
+}
 
 class Hrc6MaxDb {
   private db: Database | null = null;
@@ -83,6 +116,11 @@ class Hrc6MaxDb {
   private trustTables = false;
   private scored = new Set<string>();
   private trustStmt: ReturnType<Database["query"]> | null = null;
+  /** the bake's `provenance` table (chart_manifest.py): which raw export and body each baked tree was built from */
+  private provTable = false;
+  private prov = new Map<string, BakedProvenance & { stamp: string }>();
+  /** each baked tree's stamp (src_mtime/src_size): a provenance row counts only for the tree as baked now */
+  private stamps = new Map<string, string>();
 
   /** Opened lazily. A missing file (or HRC6MAX_DB=off) is the normal state on a machine that has not run the bake:
    *  that is decided once and costs nothing per call. A file that IS there but would not open is a transient — a lock,
@@ -139,15 +177,39 @@ class Hrc6MaxDb {
     this.trustTables = false;
     this.scored = new Set();
     this.trustStmt = null;
+    this.provTable = false;
+    this.prov = new Map();
+    this.stamps = new Map();
   }
 
   private readCoverage(db: Database): void {
     const next = new Set<string>();
-    for (const r of db.query("SELECT source FROM trees").all() as { source: string }[]) next.add(r.source);
+    const stamps = new Map<string, string>();
+    for (const r of db.query("SELECT source, src_mtime, src_size FROM trees").all() as { source: string; src_mtime: number; src_size: number }[]) {
+      next.add(r.source);
+      stamps.set(r.source, `${r.src_mtime}/${r.src_size}`);
+    }
     this.baked = next;
+    this.stamps = stamps;
     this.patches = [...next].filter((s) => s.startsWith(`${PREFIX}P_`));
     this.readTrustCoverage(db);
+    this.readProvenance(db);
     this.coveredAt = Date.now();
+  }
+  /** The bake's provenance rows, re-read with the coverage set (the backfill adds the table to a file the API has open). */
+  private readProvenance(db: Database): void {
+    const has = !!db.query("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'provenance'").get();
+    const m = new Map<string, BakedProvenance & { stamp: string }>();
+    if (has) {
+      for (const r of db.query("SELECT source, raw_sha256, body_sha256, converter, plan, refine_min, status, src_mtime, src_size FROM provenance").all() as
+          { source: string; raw_sha256: string | null; body_sha256: string; converter: string | null; plan: string | null;
+            refine_min: number | null; status: string; src_mtime: number; src_size: number }[]) {
+        m.set(r.source, { raw: r.raw_sha256, body: r.body_sha256, converter: r.converter, plan: r.plan, refineMin: r.refine_min,
+          status: r.status, stamp: `${r.src_mtime}/${r.src_size}` });
+      }
+    }
+    this.provTable = has;
+    this.prov = m;
   }
   /** Re-read with the coverage set (at most once a minute): the backfill adds the tables to a file the API already has
    *  open, and a tree it scores is guarded by its baked scores from the next refresh on — no restart, no flag. */
@@ -228,6 +290,32 @@ class Hrc6MaxDb {
     return row ? { reach: row.reach, regret: row.regret } : null;
   }
 
+  /** One baked chart's provenance row - only while it was written for the tree as it is baked now (same stamp). */
+  provenance(source: string): BakedProvenance | undefined {
+    if (!this.covers(source)) return undefined;
+    const p = this.prov.get(source);
+    if (!p || p.stamp !== this.stamps.get(source)) return undefined;
+    return { raw: p.raw, body: p.body, converter: p.converter, plan: p.plan, refineMin: p.refineMin, status: p.status };
+  }
+
+  /** The bake against the chart manifest: the registry, the 6-max card and the API's start line show it. */
+  provenanceAudit(manifest: Record<string, ManifestEntry> | null = readChartManifest()): ProvenanceAudit {
+    this.fresh();
+    const charts: ProvenanceAudit["charts"] = {};
+    const bad: string[] = [];
+    let withRow = 0;
+    for (const s of [...this.baked].sort()) {
+      const p = this.provenance(s);
+      if (p) withRow++;
+      charts[s] = { refineMin: p?.refineMin ?? null, raw: p?.raw ? p.raw.slice(0, 12) : null, status: p?.status ?? "no row" };
+      const e = manifest?.[s];
+      if (!p || !e || e.raw_sha256 !== p.raw || e.body_sha256 !== p.body) bad.push(s);
+    }
+    const known = manifest !== null && this.provTable;
+    return { table: this.provTable, trees: this.baked.size, withRow, manifest: manifest !== null, manifestPath: factoryManifestFile(),
+      mismatches: known ? bad.length : null, mismatchIds: known ? bad : [], charts };
+  }
+
   /** The bake's trust coverage: the registry shows it, the API says it at start. Must be 0 unscored after the backfill. */
   trustAudit(): TrustAudit {
     this.fresh();
@@ -246,6 +334,20 @@ export function trustAuditLine(a: TrustAudit = hrc6maxDb.trustAudit()): string {
     ? `[hrc6maxDb] trust: all ${a.trees} baked charts carry their trust scores`
     : `[hrc6maxDb] trust: ${a.unscored.length} of ${a.trees} baked charts carry NO current trust scores (${ids}) — they fall back ` +
       `to limp_node_trust.json and answer unguarded where it has no score (backfill_trust.py / a re-bake scores them)`;
+}
+
+/** The API's start line about the bake against the chart manifest (index.ts), beside the trust line. */
+export function provenanceAuditLine(a: ProvenanceAudit = hrc6maxDb.provenanceAudit()): string {
+  if (a.trees === 0) return "[hrc6maxDb] provenance: no 6-max bake on this machine";
+  if (!a.table) return `[hrc6maxDb] provenance: no provenance in this bake (an older file) - which raw export each of the ${a.trees} ` +
+    `charts was built from is not recorded here (chart_manifest.py backfill-bake)`;
+  if (!a.manifest) return `[hrc6maxDb] provenance: ${a.withRow} of ${a.trees} baked charts carry a provenance row; manifest not ` +
+    `readable (${a.manifestPath}) - mismatches UNKNOWN`;
+  const ids = a.mismatchIds.slice(0, 6).map((s) => s.replace(PREFIX, "")).join(", ") + (a.mismatchIds.length > 6 ? ", …" : "");
+  return a.mismatches === 0
+    ? `[hrc6maxDb] provenance: all ${a.trees} baked charts match the chart manifest (raw export + body by sha256)`
+    : `[hrc6maxDb] provenance: ${a.mismatches} of ${a.trees} baked charts do NOT match the chart manifest (${ids}) - ` +
+      `chart_manifest.py verify names each`;
 }
 
 export const hrc6maxDb = new Hrc6MaxDb();
