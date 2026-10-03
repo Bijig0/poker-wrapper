@@ -15,6 +15,7 @@ import { TOL } from "../reconcile";
 import { potVal } from "./dom";
 import { domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
 import { potAgrees, wsHand, type WsHand } from "./wsLine";
+import { seatWords, undealtStatus } from "./roster";
 
 const ws = () => S.ws;
 
@@ -78,19 +79,68 @@ export function deadSmallBlind(order: number[]): boolean {
   return sb === null && bbSeat !== null && order[0] === bbSeat;
 }
 
+/**
+ * THE DEALT SEATS IN BUTTON ORDER (2026-10-04, Ignition's DEAD BUTTON). `order` runs clockwise from the seat after the
+ * button to the button: SB … BTN, the last seat to act before the blinds. Ignition deals a DEAD BUTTON when the player
+ * due the button has left or sits out — CO_DEALER_SEAT names a seat CO_CARDTABLE_INFO did not deal: hand 4922299303
+ * (2026-10-03, table 2) put the button on seat 4, emptied by a bust 40 s earlier, and dealt 1,2,3,5,6; 4922296152 put
+ * it on seat 4 sitting out and dealt 1,3,5,6. Positions used to count the dealer seat in all the same and label it BTN,
+ * so the real last seat — hero's seat 3 in both — was named CO: the 6-max chart answered a four-handed button open as a
+ * CO's (A♠6♥ folded 99.6%), and with hero in the blinds every villain was read one seat early (a button open as a CO
+ * open). 56 of 1,544 hands in the socket dumps of 2026-10-02/03 dealt a dead button (3.6%), hero on its right in 13.
+ * Now the seats are named from the seats DEALT: the order starts at the first dealt seat after the dealer, so the last
+ * dealt seat before the blinds is the BTN, and the early names are the ones a short table drops (five dealt:
+ * SB/BB/HJ/CO/BTN — the 6-max chart walk pads UTG as the fold, exactly as at any five-handed table).
+ * A dealt list of one seat (the Python recorder's partial states, never a real hand) keeps the old rule. CO_CARDTABLE_INFO
+ * lists every dealt seat at once, so a dealer missing from a non-empty dealt list is a dead button, not a late frame.
+ */
+export function buttonOrder(dealt: number[], btn: number): { order: number[]; deadButton: boolean } {
+  const live = sortedNums(new Set(dealt));
+  if (!live.includes(btn) && live.length >= 2) {
+    const k = live.findIndex((s) => s > btn);
+    const i = k < 0 ? 0 : k;
+    return { order: [...live.slice(i), ...live.slice(0, i)], deadButton: true };
+  }
+  const seats = live.includes(btn) ? live : sortedNums(new Set([...live, btn]));
+  const i = seats.indexOf(btn);
+  return { order: [...seats.slice(i + 1), ...seats.slice(0, i + 1)], deadButton: false };
+}
+
+/** The seats the positions are named from: the dealt list, plus the dealer seat when it has ACTED this hand — a seat that
+ *  acted was dealt, whatever the list says. On a live table CO_CARDTABLE_INFO already lists it; an authored fake-table
+ *  state (contract fixture preflop-hero-bb-limped) lists only the seats still holding cards, and its button had folded:
+ *  that is a live button that folded, not a dead one. */
+function dealtForPositions(): number[] {
+  const dealt: number[] = ws().dealt || [];
+  const btn = ws().dealer ?? null;
+  if (btn === null || dealt.includes(btn) || !dealt.length) return dealt;
+  return (ws().actions || []).some((a: any) => a.seat === btn) ? sortedNums(new Set([...dealt, btn])) : dealt;
+}
+
+/** Heads-up names [SB, BB]. The dealer posts the small blind; with a dead button (none in the socket dumps — every dead
+ *  button there dealt three or more) the posts decide: the seat that posted the small blind, else the one that did NOT
+ *  post the big blind, else the first seat after the button (as the old rule named it). */
+function headsUpSeats(order: number[], btn: number, deadButton: boolean): [number, number] {
+  if (!deadButton) return [btn, order.find((s) => s !== btn)!];
+  const acts: any[] = ws().actions || [];
+  const posted = (t: string) => acts.find((a) => a.type === t && order.includes(a.seat))?.seat ?? null;
+  const sbPost = posted("post-sb"), bbPost = posted("post-bb");
+  const sb = sbPost ?? (bbPost !== null ? order.find((s) => s !== bbPost)! : order[0]!);
+  return [sb, order.find((s) => s !== sb)!];
+}
+
 /** Hero's position name (the panel's vocabulary: UTG+1 / MP). */
 export function heroPosition(): string | null {
-  let seats: number[] = ws().dealt || [];
+  const seats: number[] = dealtForPositions();
   const btn = ws().dealer ?? null, hero = ws().heroSeat ?? null;
   if (!seats.length || btn === null || hero === null || !seats.includes(hero)) return null;
-  if (!seats.includes(btn)) seats = sortedNums(new Set([...seats, btn]));
-  const i = seats.indexOf(btn);
-  let order = [...seats.slice(i + 1), ...seats.slice(0, i + 1)];
+  const bo = buttonOrder(seats, btn);
+  let order = bo.order;
   const n = order.length;
   let names: string[];
   if (n === 2) {
     names = ["SB", "BB"];
-    order = [btn, order.filter((s) => s !== btn)[0]!];
+    order = headsUpSeats(order, btn, bo.deadButton);
   } else if (deadSmallBlind(order)) {
     const late = ["CO", "BTN"];
     const early = ["UTG", "UTG+1", "MP", "MP+1", "HJ"].slice(0, Math.max(0, n - 3));
@@ -108,16 +158,15 @@ export function heroPosition(): string | null {
 
 /** Every dealt seat's position, gto-trainer's names. */
 export function positionsAll(): Map<number, string> {
-  const dealt: number[] = ws().dealt || [];
+  const dealt: number[] = dealtForPositions();
   const btn = ws().dealer ?? null;
   if (!dealt.length || btn === null) return new Map();
-  const seats = sortedNums(new Set([...dealt, btn]));
-  const i = seats.indexOf(btn);
-  const order = [...seats.slice(i + 1), ...seats.slice(0, i + 1)];
+  const bo = buttonOrder(dealt, btn);
+  const order = bo.order;
   const n = order.length;
   if (n === 2) {
-    const other = order.find((s) => s !== btn)!;
-    return new Map([[btn, "SB"], [other, "BB"]]);
+    const [sb, bb] = headsUpSeats(order, btn, bo.deadButton);
+    return new Map([[sb, "SB"], [bb, "BB"]]);
   }
   const BIG = ["UTG", "UTG1", "UTG2", "LJ", "HJ", "CO"], SMALL = ["UTG", "HJ", "CO"];
   let names: string[];
@@ -133,6 +182,42 @@ export function positionsAll(): Map<number, string> {
   const out = new Map<number, string>();
   for (let k = 0; k < Math.min(order.length, names.length); k++) out.set(order[k]!, names[k]!);
   return out;
+}
+
+/**
+ * THE HAND'S SEAT ROSTER (2026-10-04): every seat of the table and why it was or was not in this hand — dealt, or
+ * sitting out / busted / reserved by a new player / waiting / empty (roster.ts says what each socket word means and what
+ * is not established) — with the button seat and whether it, or the small blind, was dead. Exported on /hand and
+ * archived with the hand, so a dead button is a fact of the record and never again inferred from labels. null before
+ * the deal.
+ */
+export function seatRoster(): Record<string, any> | null {
+  const w = ws();
+  const dealt: number[] = sortedNums(dealtForPositions());
+  const btn: number | null = w.dealer ?? null;
+  if (!dealt.length) return null;
+  const bo = btn !== null ? buttonOrder(dealt, btn) : null;
+  const words = seatWords();
+  const heard = [...words].filter(([, x]) => x.type !== undefined || x.tableState).map(([s]) => s);
+  const top = Math.max(...dealt, btn ?? 0, ...heard);
+  const posts = new Map<number, string>();
+  for (const a of w.actions || []) {
+    if (a.street !== "preflop" || a.seat === null || a.seat === undefined || posts.has(a.seat)) continue;
+    if (a.type === "post-sb") posts.set(a.seat, "sb");
+    else if (a.type === "post-bb") posts.set(a.seat, "bb");
+    else if (a.type === "post") posts.set(a.seat, "in");
+  }
+  const seats: Record<string, any> = {};
+  for (let s = 1; s <= (top <= 6 ? 6 : top); s++) {
+    if (dealt.includes(s)) {
+      seats[s] = { status: "dealt", ...(s === w.heroSeat ? { hero: true } : {}), ...(posts.has(s) ? { posted: posts.get(s) } : {}) };
+      continue;
+    }
+    const x = words.get(s);
+    seats[s] = { status: undealtStatus(x), ...(x && x.type !== undefined ? { word: `type ${x.type} state ${x.state}` } : {}),
+                 ...(x?.reserved ? { reserved: true } : {}) };
+  }
+  return { dealer: btn, deadButton: !!bo?.deadButton, deadSb: !!bo && deadSmallBlind(bo.order), dealt, seats };
 }
 
 /** A DOM stack label in BB — an explicit 'BB' suffix, else currency over the hand's observed blind. */
@@ -372,6 +457,7 @@ export function handStateIgnition(): Record<string, any> | null {
   if (w.heroDealt === false) return null;
   const positions = positionsAll();
   if (!positions.size) return null;
+  const roster = seatRoster();
   const actsSrc: any[] = [...(w.actions || [])];
   const committedSrc: Map<number | null, number> = new Map(w.committed || []);
   const seatsSrc: Map<any, any> = new Map(S.feedPrev.seats || []);
@@ -479,6 +565,8 @@ export function handStateIgnition(): Record<string, any> | null {
     committed,
     potByStreet: {},
     positions,
+    // every seat of the table and why it was or was not dealt, the button seat, a dead button / small blind (seatRoster)
+    ...(roster ? { roster } : {}),
     stacks: stacks.size ? stacks : null,
     ...(startStacks.size ? { startStacks } : {}),
     ...(wsStack.size ? { wsStack } : {}),

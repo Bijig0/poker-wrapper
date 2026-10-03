@@ -7,7 +7,7 @@
  * as PENDING and reported; the final gate (PORT-PLAN.md, phase D) requires none.
  */
 import { expect, test } from "bun:test";
-import { asRecordedFrame, canon, firstDiff, normPy, readCorpus } from "./lib";
+import { asDeadButtonPositions, asRecordedFrame, canon, deadDealer, firstDiff, normPy, readCorpus } from "./lib";
 import * as TERMINAL from "../../src/terminal";
 import { HandReconciler, bb as rcBb, buttonsUp, makeTick, STREETS } from "../../src/reconcile";
 import { FNS_EXTRA } from "./pure-fns";
@@ -94,7 +94,7 @@ test("golden: pure functions match the Python wrapper", async () => {
   const pending = new Map<string, number>();
   const fails: string[] = [];
   const passed = new Map<string, number>();
-  let superseded = 0;
+  let superseded = 0, deadButtonMaps = 0, deadButtonHero = 0;
   for (const rec of readCorpus("pure.jsonl.gz")) {
     if (supersededHeadsUp(rec)) {
       superseded++;
@@ -105,6 +105,15 @@ test("golden: pure functions match the Python wrapper", async () => {
       pending.set(rec.fn, (pending.get(rec.fn) || 0) + 1);
       continue;
     }
+    // THE DEAD BUTTON (lib.ts asDeadButtonPositions, 2026-10-04): a recorded positions map with the dealer outside the
+    // dealt seats is compared as the fixed rule names it; hero's PANEL name there is the unit tests' (dead-button.test.ts)
+    const deadBtn = (rec.fn === "launch._positions_all" || rec.fn === "launch._hero_position") && deadDealer(rec.state?.ws);
+    if (deadBtn && rec.fn === "launch._hero_position") {
+      deadButtonHero++;
+      continue;
+    }
+    const want = deadBtn ? asDeadButtonPositions(rec.out, rec.state.ws.dealer, rec.state.ws.dealt) : rec.out;
+    if (deadBtn) deadButtonMaps++;
     let got: unknown;
     try {
       got = normPy(await fn(rec.args, rec));
@@ -115,8 +124,8 @@ test("golden: pure functions match the Python wrapper", async () => {
     } catch (e: any) {
       got = { __error__: `${e?.name || "Error"}: ${e?.message || e}` };
     }
-    if (canon(got) !== canon(rec.out)) {
-      if (fails.length < 25) fails.push(`${rec.fn}(${JSON.stringify(rec.args).slice(0, 200)}): ${firstDiff(got, rec.out)}`);
+    if (canon(got) !== canon(want)) {
+      if (fails.length < 25) fails.push(`${rec.fn}(${JSON.stringify(rec.args).slice(0, 200)}): ${firstDiff(got, want)}`);
       else fails.length === 25 && fails.push("…");
     } else {
       passed.set(rec.fn, (passed.get(rec.fn) || 0) + 1);
@@ -124,7 +133,8 @@ test("golden: pure functions match the Python wrapper", async () => {
   }
   const p = [...pending].map(([k, v]) => `${k}×${v}`).join(", ");
   console.log(`golden pure: ${[...passed.values()].reduce((a, b) => a + b, 0)} calls matched across ${passed.size} functions` +
-              ` (${superseded} heads-up postflop calls superseded — see supersededHeadsUp)` + (p ? `; PENDING (not ported yet): ${p}` : ""));
+              ` (${superseded} heads-up postflop calls superseded — see supersededHeadsUp; ${deadButtonMaps} dead-button position maps` +
+              ` compared as the fixed rule names them, ${deadButtonHero} dead-button panel names left to dead-button.test.ts)` + (p ? `; PENDING (not ported yet): ${p}` : ""));
   expect(fails).toEqual([]);
 // 29k recorded calls: 2-5 s alone, past Bun's 5 s default when other test runs share the CPU (2026-09-26: every call
 // matched and the test still failed on the timer) — the same allowance the other replay goldens carry

@@ -31,7 +31,7 @@ import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
 import {
-  addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkMix,
+  addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
   checkPotStack, checkPreflopInRange, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
@@ -46,11 +46,11 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
-import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
+import { dealtSeats, dealtCount, namesFromRoster } from "../utils/dealtSeats/dealtSeats";
 import { setPreflopPin, preflopPinFor, preflopPinKey, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
@@ -251,8 +251,11 @@ export const is6Handed = (hand: ParsedHand, heroPos: string | null): boolean => 
     [...Object.values(hand.positions), ...(heroPos ? [heroPos] : [])].map((p) => p.toUpperCase())
   );
   // HOW MANY WERE DEALT decides the piece, the LABELS the tree's shape (round 2, `undealt-seat` + golden hands
-  // 4919260843/4919958663): a three-handed table with a sitting-out label is three-handed (the AI piece's), and a
-  // dead button — the BTN label on a sitting-out seat, five dealt — is still the six-seat tree with the BTN folded
+  // 4919260843/4919958663): a three-handed table with a sitting-out label is three-handed (the AI piece's). A DEAD
+  // BUTTON is no longer "the six-seat tree with the BTN folded" (2026-10-04): the BTN acts AFTER the seat before it, so
+  // that read hero's real button seat as the CO with a live button behind him (4922296152: a four-handed button open
+  // folded 99.6%). normalizeHand renames a dead button's dealt seats among the dealt (utils/dealtSeats.relabelUndealt)
+  // and the fixed wrapper sends them so: five dealt are HJ/CO/BTN/SB/BB, UTG padded as the fold like any five-handed table
   const dealt = dealtSeats(hand, heroPos).size;
   // FOUR-HANDED IS THE SAME GAME (2026-09-17, Brady): a short table is the six-seat tree with its early seats
   // folded - the token walk already pads UTG/HJ as folds - so 4-6 seats all route to the 6-max charts; only the
@@ -1426,16 +1429,59 @@ export function decisionChecks(hand: ParsedHand, value: FastSolveResult, origin:
   const hu = dealtLabels.length === 2;
   const heroName = hand.positions?.[hand.heroSeatId] ?? heroPos;
   const key = `${street} · ${(hand.board ?? []).join("") || "no board"} · ${(hand.heroCards ?? []).join("")} · to call ${Math.round((hand.currentNode?.toCall ?? 0) * 100) / 100} · after ${hand.actions.length} actions`;
+  // HERO'S LABEL AGAINST THE TABLE (2026-10-04, the dead button): the seat roster's geometry, else — a hand renamed from
+  // its dealt seats — the seat the source labelled BTN as the button seat, with the seats dealt. Nothing to place him by
+  // (another site, an older row with a live button) = not part of #14 at all.
+  const geo = heroGeometry(hand);
   return [
     checkAnswerClock({ ms, origin }),
     checkButtons({
       actions: value.actions ?? [], toCall: hand.currentNode?.toCall ?? null, heroBehind: hand.stacks?.[hand.heroSeatId] ?? null,
       legal: hand.currentNode?.legalActions ?? [], nodePos: street === "preflop" ? value.pos : null, heroPos: heroName, hu, dealtLabels,
     }),
+    ...(geo ? [checkHeroSeatName({ label: heroName, geometry: geo.name, dealtN: geo.dealtN, dealer: geo.dealer,
+      deadButton: geo.deadButton, relabelledFrom: hand.seatRelabel?.from[hand.heroSeatId] ?? null })] : []),
     checkMix(value.actions ?? []),
     checkFresh({ answerStreet: value.street, handStreet: street, key }),
     ...(street === "preflop" ? [checkPreflopInRange({ notInRange: value.notInRange, heroClass: value.heroClass })] : []),
   ];
+}
+
+/** Hero's name among the seats dealt, from the table's geometry (utils/dealtSeats.namesFromRoster): the hand's seat
+ *  roster, else a hand normalizeHand renamed for a dead button (its source's BTN seat, the seats dealt). null = none. */
+export function heroGeometry(hand: ParsedHand): { name: string; dealtN: number; dealer: number; deadButton: boolean } | null {
+  let roster = hand.roster ?? null;
+  if (!roster && hand.seatRelabel) {
+    const btn = Object.entries(hand.seatRelabel.from).find(([, p]) => /^(BTN|BU|D)$/i.test(String(p)))?.[0];
+    const dealt = [...dealtSeats(hand).keys()];
+    if (btn !== undefined) roster = { dealer: Number(btn), deadButton: !dealt.includes(Number(btn)), deadSb: false, dealt, seats: {} };
+  }
+  if (!roster || roster.dealer == null) return null;
+  const names = namesFromRoster({ ...hand, roster });
+  const name = names?.get(hand.heroSeatId);
+  return name ? { name, dealtN: names!.size, dealer: roster.dealer, deadButton: !roster.dealt.includes(roster.dealer) } : null;
+}
+
+/**
+ * THE DEPTH A GTO WIZARD AI PREFLOP ANSWER IS LOGGED AT (2026-10-04, hand 4922314840): hero's effective stack against
+ * the players still in at his decision — the smaller of his tree stack and the deepest villain not folded. It was the
+ * SHORTEST stack of the whole tree: that answer row read 71bb, the button who had already folded, where hero (173bb)
+ * played a deeper opponent. Only the row's `depth` — the tree is built from every seat's own stack either way. A shape
+ * without hero's seat keeps the old reading.
+ */
+export function aiHeroDepth(shape: AiPreflopShape, hand: ParsedHand, heroPos: string | null): number {
+  const hp = shape.heroApiPos;
+  const own = hp ? shape.stacks[hp] : undefined;
+  if (own == null) return Math.round(Math.min(...shape.positions.map((p) => shape.stacks[p] ?? 100)));
+  // dealt and not folded — every seat still to act preflop is in (seatsInHand reads a seat with no action as a lost
+  // fold once the round is under way: right for a finished preflop line, not at a decision in the middle of it)
+  const seatOfAct = (a: ParsedHand["actions"][number]) => (a.hero ? hand.heroSeatId : a.seatId);
+  const folded = new Set(hand.actions.filter((a) => a.type === "fold").map(seatOfAct));
+  const inHand = new Set([...dealtSeats(hand, heroPos).keys()].filter((s) => !folded.has(s)));
+  const villains = shape.positions
+    .filter((p) => p !== hp && shape.seatOf[p] != null && inHand.has(shape.seatOf[p]!))
+    .map((p) => shape.stacks[p]!).filter((x) => Number.isFinite(x));
+  return Math.round(villains.length ? Math.min(own, Math.max(...villains)) : own);
 }
 
 /** A path with more checks on one street, classified again (its fault, if any, kept). */
@@ -2654,7 +2700,7 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
   const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean, pfPath = pf): FastSolveResult => ({
     ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
     setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
-    depth: Math.round(Math.min(...r.shape.positions.map((p) => r.shape.stacks[p] ?? 100))),
+    depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     warning: note(r.note), approx: approx || !!rakeNote || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
@@ -3957,6 +4003,21 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
 }
 
 async function fastSolveEntry(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
+  // A DEAD BUTTON RENAMED FROM THE SEATS DEALT (2026-10-04, normalizeHand → utils/dealtSeats.relabelUndealt): the hand
+  // already carries the names among the dealt; a caller still holding hero's OLD label (the one the source sent) gets
+  // the new one, and the answer says what was renamed. Not an approximation: a table dealt five with its button seat
+  // empty is a table dealt five.
+  const rl = hand.seatRelabel;
+  if (rl) {
+    const old = rl.from[hand.heroSeatId];
+    if (heroPos && old && heroPos.toUpperCase() === old.toUpperCase()) heroPos = hand.positions[hand.heroSeatId] ?? heroPos;
+    const r = await fastSolveEntryInner(hand, heroPos, opts);
+    return r.ok ? { ...r, warning: `${rl.note}${r.warning ? ` ${r.warning}` : ""}` } : r;
+  }
+  return fastSolveEntryInner(hand, heroPos, opts);
+}
+
+async function fastSolveEntryInner(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // POSTED-IN PLAYERS (2026-09-25, Brady: "treat them as a normal player"). normalizeHand already folded each post
   // into the poster's own action (utils/foldPostIns — an option-check reads as a limp), so every piece below sees an
   // ordinary hand; the answer only has to SAY it is an approximation, and hero must never fold a free check.
@@ -4133,7 +4194,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean, pfPath = pf): FastSolveResult => ({
       ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
       setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
-      depth: Math.round(Math.min(...r.shape.positions.map((p) => r.shape.stacks[p] ?? 100))),
+      depth: aiHeroDepth(r.shape, hand, heroPos),
       line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
       warning: r.note, approx: approx || undefined,
       path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),

@@ -30,7 +30,10 @@ describe("the seats that were dealt decide the piece and the rake", () => {
   });
   // golden hands 4919260843 and 4919958663 (2026-09-19/22, answered from the 6-max charts then): six labels, the BTN
   // seat not in liveSeats and never acting — a sitting-out player on a dead button, five dealt. The first cut of the
-  // dealt-seats rule asked for a DEALT BTN and sent both to the AI piece; the BTN position is still in the tree (folded)
+  // dealt-seats rule asked for a DEALT BTN and sent both to the AI piece. Five dealt IS the 6-max charts' table — but
+  // since 2026-10-04 not "with the BTN folded": the BTN acts after the CO, so the CO label here is the real button.
+  // normalizeHand renames such a hand among its dealt seats first (fastSolve.deadButton.test.ts); the raw labels below
+  // only pin the routing and the rake, which the renaming does not change.
   test("a dead button (the BTN label on a sitting-out seat, five dealt) is still the 6-max charts' table", () => {
     const deadButton = hand({ 1: "BB", 2: "UTG", 3: "HJ", 4: "CO", 5: "BTN", 6: "SB" }, [1, 2, 3, 4, 6],
       [a(6, "post-sb", 0.5), a(1, "post-bb", 1), a(2, "raise", 2.5)]);

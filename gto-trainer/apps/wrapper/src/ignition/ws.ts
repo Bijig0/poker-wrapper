@@ -23,6 +23,7 @@ import { markTopUpRefused, noteTopUpFrame } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
 import { noteHeroDealt, noteTapFrame } from "./stall";
+import { noteRosterFrame } from "./roster";
 
 // 1048576 = "Folds & shows" (a fold; without it the no-chips rule reads a check); blind 16 = a post with a dead small
 // blind beside it — wsLine.ts has both
@@ -789,6 +790,7 @@ export function onGameMsg(d: Record<string, any>): void {
   }
   const w = ws();
   const pid = d.pid;
+  noteRosterFrame(d);   // the seats' words between hands — why a seat was not dealt (roster.ts)
   // HERO'S MONEY for the top-up (topup.ts noteTopUpFrame): the hand's end stacks, his buy's receipt, the Buy-chips
   // panel's offer — read before this handler can return early, and before a new hand's frame moves the hand counter
   noteTopUpFrame(d);

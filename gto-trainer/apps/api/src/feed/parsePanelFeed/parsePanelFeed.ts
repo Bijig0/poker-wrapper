@@ -114,9 +114,27 @@ export interface ParsedHand {
    *  `preflopPots` = the site rakes a pot that ends preflop (CoinPoker does; Ignition is no flop no drop). Absent =
    *  the strategy's own rake model applies. Read by gtowAiPreflop.siteRakeOf and the postflop chain's rake. */
   siteRake?: { pct: number; pctHeadsUp: number | null; capBb: number | null; preflopPots: boolean };
+  /** THE HAND'S SEAT ROSTER (Ignition wrapper since 2026-10-04, ignition/roster.ts): every seat of the table and why it
+   *  was or was not dealt, the button seat (`dealer`, which may be a seat not dealt — a dead button) and whether the
+   *  button / the small blind was dead. Absent on older rows and other sites. */
+  roster?: SeatRoster;
+  /** THE SEATS WERE RENAMED FROM THE SEATS DEALT by normalizeHand (utils/dealtSeats.relabelUndealt, 2026-10-04): a
+   *  labelled seat was not dealt (Ignition's dead button, labelled BTN by wrappers before the fix) and the dealt seats
+   *  took their names among the dealt. `from` = the labels as the source sent them; `note` says what changed. */
+  seatRelabel?: { from: Record<number, string>; note: string };
   result?: { text: string };
   currentNode: ParsedNode;
   ended: boolean;
+}
+
+export type SeatRosterStatus = "dealt" | "sitting-out" | "busted" | "waiting" | "reserved" | "empty" | "not-dealt";
+export interface SeatRoster {
+  dealer: number | null;
+  deadButton: boolean;
+  deadSb: boolean;
+  dealt: number[];
+  /** seat id → its status this hand; `posted` (sb / bb / in) on a dealt seat, `word` = the socket word an undealt one rests on */
+  seats: Record<number, { status: SeatRosterStatus; hero?: boolean; posted?: string; word?: string; reserved?: boolean }>;
 }
 
 export interface ParseResult {

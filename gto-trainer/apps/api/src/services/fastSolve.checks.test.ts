@@ -161,14 +161,25 @@ describe("decisionChecks #14 on the three hands it failed", () => {
     heroFolded: false, ended: false, lineSource: "ws", sessionId: "session_20260930_150739", stakes: "$0.02/$0.05",
   }).hand!;
   it("4921651217 / 4922085772: a dead button, three dealt — the tree's BTN is hero's CO seat: pass", () => {
+    // SINCE 2026-10-04 normalizeHand renames a dead button's dealt seats among the dealt (utils/dealtSeats
+    // .relabelUndealt): hero's seat 2, labelled CO beside the undealt BTN, IS the button of a table dealt three — the
+    // name the AI tree gave him all along. The node and the label now agree outright, and the label's own check says
+    // where the name came from.
     const h = deadButton("4921651217", { 1: 57.8, 2: 108.8, 6: 69.4 });
+    expect(h.positions).toEqual({ 6: "SB", 1: "BB", 2: "BTN" });
     const xs = decisionChecks(h, aiPre([{ action: "Fold", frequency: 99.98 }], "BTN"), "live", 4237, "CO");
-    const c14 = xs.find((x) => x.id === 14)!;
-    expect(c14.status).toBe("pass");
-    expect(c14.text).toContain("hero's CO is the tree's BTN at a table dealt 3");
+    const c14 = xs.filter((x) => x.id === 14);
+    expect(c14.map((x) => x.status)).toEqual(["pass", "pass"]);
+    expect(c14[1]!.text).toContain("hero's BTN is his name among the 3 seats dealt (button seat 4, not dealt — a dead button) (the source labelled him CO");
     // a node of another seat at the same table still fails
     expect(decisionChecks(h, aiPre([{ action: "Fold", frequency: 100 }], "SB"), "live", 4237, "CO").find((x) => x.id === 14)!.status).toBe("fail");
     expect(classifyPath({ street: "preflop", streets: [], checks: { preflop: xs } }).verdict).toBe("clean");
+    // the hand as the old wrapper sent it, had nothing renamed it: hero's CO is NOT his name among the seats dealt
+    const raw = { ...h, positions: { 6: "SB", 1: "BB", 2: "CO" }, seatRelabel: { ...h.seatRelabel!, from: { 6: "SB", 1: "BB", 2: "CO", 4: "BTN" } } };
+    const bad = decisionChecks(raw, aiPre([{ action: "Fold", frequency: 99.98 }], "BTN"), "live", 4237, "CO").filter((x) => x.id === 14);
+    expect(bad.map((x) => x.status)).toEqual(["pass", "fail"]);
+    expect(bad[1]!.text).toContain("hero is labelled CO but is the BTN among the 3 seats dealt");
+    expect(classifyPath({ street: "preflop", streets: [], checks: { preflop: bad } }).verdict).toBe("failed");
   });
   it("4921673474: QQ in the BB, 13 in, the button shoves 111.8 — All-in is the call for 87: pass", () => {
     const h = normalizeHand({

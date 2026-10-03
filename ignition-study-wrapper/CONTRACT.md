@@ -42,7 +42,8 @@ defaults). Invariants the wrapper guarantees at the export boundary:
 | `actions` | ParsedAction[] | in true action order, blinds included |
 | `actions[].type` | `post-sb\|post-bb\|post\|fold\|check\|call\|bet\|raise\|all-in` | `post` = a live blind POSTED IN out of turn by a new/returning player (Ignition btn 8); the API folds it into the poster's own next action (`utils/foldPostIns`) |
 | `actions[].amount` | number (BB) | **raise/bet = the seat's round total** ("raises to"), call = the top-up; omitted until the BB scale is known |
-| `positions` | `{seatId: pos}` | gto-trainer vocabulary only: `UTG/UTG1/UTG2/LJ/HJ/CO/BTN/SB/BB` — short tables fill **button-backwards** (5-handed = HJ CO BTN SB BB) |
+| `positions` | `{seatId: pos}` | gto-trainer vocabulary only: `UTG/UTG1/UTG2/LJ/HJ/CO/BTN/SB/BB` — short tables fill **button-backwards** (5-handed = HJ CO BTN SB BB). The DEALT seats only (2026-10-04): with a dead button (Ignition's dealer on a seat it did not deal) the last dealt seat before the blinds is the BTN and the dealer seat has no label |
+| `roster` | object \| absent | the hand's seats (2026-10-04, `ignition/roster.ts`): `{dealer, deadButton, deadSb, dealt, seats: {seatId: {status, hero?, posted?, word?, reserved?}}}`; `status` = `dealt\|sitting-out\|busted\|reserved\|waiting\|empty\|not-dealt` from the seat's latest `PLAY_SEAT_INFO` / `PLAY_SEAT_RESERVATION` / `CO_TABLE_INFO` word. Archived with the row |
 | `stacks` | `{seatId: bb}` \| absent | from DOM labels; trusted only with an explicit "BB" suffix or a known blind size |
 | `committed` | `{seatId: bb}` | this betting round (the reconciler's ledger when `lineSource` is `reconciled`) |
 | `startStacks` | `{seatId: bb}` \| absent | each dealt seat's stack AS DEALT, off the table's own WebSocket `account` on its first frame this hand plus what it had put in by then; present once the seat has sent a frame. Archived with the row |

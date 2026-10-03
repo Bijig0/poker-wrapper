@@ -14,9 +14,12 @@ import {
   type ActionType,
   type ParsedAction,
   type ParsedHand,
+  type SeatRoster,
+  type SeatRosterStatus,
   type Street,
 } from "../parsePanelFeed/parsePanelFeed";
 import { foldPostIns } from "../../utils/foldPostIns/foldPostIns";
+import { relabelUndealt } from "../../utils/dealtSeats/dealtSeats";
 
 const STREETS: readonly Street[] = ["preflop", "flop", "turn", "river", "showdown"];
 const ACTION_TYPES: readonly ActionType[] = [
@@ -177,6 +180,7 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
   const wsInFront = seatMoney(input.wsInFront);
   const wsDead = seatMoney(input.wsDead);
   const lineSource = input.lineSource === "ws" || input.lineSource === "reconciled" ? input.lineSource : undefined;
+  const roster = rosterOf(input.roster);
 
   let result: { text: string } | undefined;
   // a CoinPoker hand with no winners is archived with result.text null (archive.ts archiveCp): that is "no result
@@ -243,6 +247,7 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     ...(wsDead ? { wsDead } : {}),
     ...(lineSource ? { lineSource } : {}),
     ...(result ? { result } : {}),
+    ...(roster ? { roster } : {}),
     currentNode: {
       street: nodeStreet,
       toActSeatId: rawNode?.toActSeatId == null ? null : Number(rawNode.toActSeatId),
@@ -254,5 +259,32 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     },
     ended,
   };
-  return { hand, warnings };
+  // A DEAD BUTTON LABELLED AS A LIVE ONE (2026-10-04, utils/dealtSeats.relabelUndealt): a wrapper before the fix — and
+  // every hand archived by one — labelled the undealt button seat BTN and the dealt seats one name early. Renamed here,
+  // once, so every reader of the hand (the answer, the warm-ups, the hand page, a replay) sees the seats as dealt.
+  const relabel = relabelUndealt(hand);
+  if (relabel.note) warnings.push(relabel.note);
+  return { hand: relabel.hand, warnings };
 };
+
+const ROSTER_STATUSES: readonly SeatRosterStatus[] = ["dealt", "sitting-out", "busted", "waiting", "reserved", "empty", "not-dealt"];
+/** The wrapper's per-hand seat roster (ParsedHand.roster), or undefined when absent or not that shape. Forgiving like
+ *  the money maps: a seat entry that is not understood is dropped, a malformed roster is dropped whole. */
+export function rosterOf(v: unknown): SeatRoster | undefined {
+  if (!isRecord(v) || !isRecord(v.seats) || !Array.isArray(v.dealt)) return undefined;
+  const dealt = (v.dealt as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const seats: SeatRoster["seats"] = {};
+  for (const [k, x] of Object.entries(v.seats)) {
+    const id = Number(k);
+    if (!Number.isInteger(id) || id < 1 || !isRecord(x) || !ROSTER_STATUSES.includes(x.status as SeatRosterStatus)) continue;
+    seats[id] = {
+      status: x.status as SeatRosterStatus,
+      ...(x.hero === true ? { hero: true } : {}),
+      ...(typeof x.posted === "string" ? { posted: x.posted } : {}),
+      ...(typeof x.word === "string" ? { word: x.word } : {}),
+      ...(x.reserved === true ? { reserved: true } : {}),
+    };
+  }
+  const dealer = v.dealer == null || !Number.isInteger(Number(v.dealer)) ? null : Number(v.dealer);
+  return { dealer, deadButton: v.deadButton === true, deadSb: v.deadSb === true, dealt, seats };
+}
