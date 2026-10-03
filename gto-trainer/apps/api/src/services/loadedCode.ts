@@ -14,7 +14,8 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
  * So the stamp is THE FILES THIS PROCESS LOADED: the import graph walked from the entry file (static, dynamic and
  * require imports that resolve to a file outside node_modules), plus any files the process reads once and keeps (the
  * wrapper's src/js snippets), each with a hash of its content. Stale = one of those files now has other content.
- * A touched file with the same bytes is not stale; a test or a script the entry never imports is not in the set.
+ * A touched file with the same text is not stale (line endings aside); a test or a script the entry never imports is
+ * not in the set.
  *
  * It also reads the checkout's commit (straight from .git, no process spawned), so a service can say which commit it
  * is running, and `autoRestart.ts` uses both to restart a supervised worker when a commit changed code it loaded.
@@ -28,7 +29,10 @@ const LOADERS: Record<string, "ts" | "tsx" | "js" | "jsx"> = {
 const THROTTLE_MS = 5_000;
 
 const inNodeModules = (p: string) => p.split(sep).includes("node_modules");
-const hashOf = (bytes: Uint8Array | Buffer) => Bun.hash(bytes).toString(36);
+const hashOf = (text: string) => Bun.hash(text).toString(36);
+/** A file's content as the runtime reads it, line endings aside: git writes CRLF or LF by its autocrlf setting, and a
+ *  checkout that only re-wrote the line endings (a reset, a merge of an untouched file) is not a new version. */
+const contentOf = (file: string) => readFileSync(file, "utf8").replace(/\r\n/g, "\n");
 
 /** The local files `entry` loads, itself included: the import graph, node_modules and built-ins left out. */
 export function importGraph(entry: string): { files: string[]; errors: string[] } {
@@ -136,7 +140,7 @@ interface Stamp { size: number; mtimeMs: number; hash: string | null }
 function stampOf(file: string): Stamp {
   try {
     const st = statSync(file);
-    return { size: st.size, mtimeMs: st.mtimeMs, hash: hashOf(readFileSync(file)) };
+    return { size: st.size, mtimeMs: st.mtimeMs, hash: hashOf(contentOf(file)) };
   } catch { return { size: -1, mtimeMs: 0, hash: null }; }
 }
 
@@ -186,7 +190,7 @@ export class LoadedCode {
       // rewrote the same bytes, or a save without a change, is not a new version.
       if (st.size === was.size && st.mtimeMs === was.mtimeMs) continue;
       let now: string | null = null;
-      try { now = hashOf(readFileSync(file)); } catch { /* unreadable = changed */ }
+      try { now = hashOf(contentOf(file)); } catch { /* unreadable = changed */ }
       if (now !== was.hash) out.push(file);
     }
     return out;
@@ -215,7 +219,7 @@ export class LoadedCode {
       changedCount: changed.length,
       changed: changed.slice(0, 12).map((f) => this.rel(f)),
       changedAt: Math.round(changedAt),
-      sig: changed.length ? hashOf(Buffer.from(parts.join("|"))) : "",
+      sig: changed.length ? hashOf(parts.join("|")) : "",
       files: this.boot.size,
       scanMs: Math.round(performance.now() - t0),
       graphErrors: this.graphErrors.slice(0, 5),

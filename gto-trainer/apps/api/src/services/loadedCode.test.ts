@@ -84,6 +84,14 @@ describe("LoadedCode", () => {
     expect(code.status(true).stale).toBe(false);
   });
 
+  test("line endings alone are not a change: git rewriting a file as CRLF is the same code", () => {
+    const root = tree(APP);
+    const code = new LoadedCode({ entry: join(root, "app/index.ts"), root });
+    const f = join(root, "app/src/a.ts");
+    writeFileSync(f, readFileSync(f, "utf8").replace(/\n/g, "\r\n"));
+    expect(code.status(true).stale).toBe(false);
+  });
+
   test("a deleted loaded file is stale; an edit put back is current again", () => {
     const root = tree(APP);
     const code = new LoadedCode({ entry: join(root, "app/index.ts"), root });

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AutoStatus } from "./autoRestart";
 import type { CodeStatus } from "./loadedCode";
-import { livePort } from "./ports";
+import { livePort, port } from "./ports";
 import { API_DIR, REPO } from "./repoPaths";
 
 /**
@@ -137,7 +137,8 @@ export async function liveStatus(known: { api?: ServiceBuild } = {}, env: NodeJS
   const apiPort = livePort("api", env), chartsPort = livePort("charts", env), panel = livePort("panel", env);
   const [api, charts, ...tables] = await Promise.all([
     known.api
-      ? Promise.resolve<ServiceLine>({ name: "api", port: apiPort, up: true, current: !known.api.stale, build: known.api, text: describeBuild(known.api) })
+      // the caller's own line carries the port IT serves (a verify API beside the live one is not :2000)
+      ? Promise.resolve<ServiceLine>({ name: "api", port: port("api", env), up: true, current: !known.api.stale, build: known.api, text: describeBuild(known.api) })
       : ask("api", apiPort, "/api/build?force=1", 4_000),
     ask("charts", chartsPort, "/api/build?force=1", 4_000),
     ...[0, 1, 2, 3].map((i) => ask(i === 0 ? "wrapper" : `wrapper table ${i + 1}`, panel + 10 * i, "/build?force=1", 3_000)),
