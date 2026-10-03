@@ -11,7 +11,7 @@
  * "which socket is ours" below says why a seat number alone never binds).
  */
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { strftime, time } from "../clock";
 import { wsDumpPath } from "../config";
 import { feedAdd, log } from "../feed";
@@ -19,7 +19,7 @@ import { fmtFixed, pyJsonDumps, pyRepr, pyRound, pyStr, sortedNums, truthy } fro
 import { S, TupleSet } from "../state";
 import * as TABLES from "../tables";
 import { archiveHand } from "../archive";
-import { markTopUpRefused } from "../topup";
+import { markTopUpRefused, noteTopUpFrame } from "../topup";
 import { faceUpSeats, heroClaim, wireCard } from "./dom";
 import { TwinFilter } from "./wsLine";
 import { noteHeroDealt, noteTapFrame } from "./stall";
@@ -224,11 +224,24 @@ export function amt(cents: number | null | undefined): string {
 }
 
 // ---- the WS message dump -------------------------------------------------------------------------------
+/**
+ * WHEN THE BROWSER GOT THE FRAME (2026-10-04, Brady: "add a receiver for browser receive time"). `ts` is OUR clock at
+ * the moment this process read the frame: late by the debug connection, by any stall of this process, and for a frame
+ * held while no socket was bound (`replayed`) by the whole hold. Chrome stamps every Network.webSocketFrameReceived
+ * itself (`timestamp`, seconds on its own monotonic clock — not the time of day), and that is what the dump keeps as
+ * `bts`: a seat's time to act is the difference of two of them (CO_CURRENT_PLAYER → its CO_SELECT_INFO), exact
+ * whatever we were doing. `ts − bts` moves only by our own delay, so its excess over the smallest seen is that delay.
+ * Kept beside the frame, not in it: the frame object is what the hold replays and what /hand's line is built from.
+ */
+const browserAt = new WeakMap<object, number>();
+
 export function dumpBegin(d: Record<string, any>, rid: string | null = null): Record<string, any> {
   const now = time();
+  const bts = browserAt.get(d);
   const e: Record<string, any> = {
     ts: pyRound(now, 3),
     t: strftime("%H:%M:%S", now) + "." + String(Math.trunc(now * 1000) % 1000).padStart(3, "0"),
+    ...(bts === undefined ? {} : { bts }),
     hand: S.handNo, pid: d.pid ?? null, seat: d.seat ?? null,
     rid,
     status: "ok", data: d,
@@ -244,12 +257,38 @@ export function dumpMark(reason: string): void {
   if (S.wsDumpCur !== null) S.wsDumpCur.status = reason;
 }
 
+/**
+ * THE RAW FRAMES ARE KEPT FOR GOOD (2026-10-04, Brady: "make the logs permanent"). The dump is the only record of WHEN
+ * each frame arrived (ms) — a seat's time to act is CO_CURRENT_PLAYER → its CO_SELECT_INFO — and the archive stores no
+ * time per action. A full file (20 MB, ~20 table-hours) used to be renamed over the one before it, which deleted that
+ * one. Now the one before it moves to debug/ws-archive/ under the time it was put away (ws_dump-2_20261004_153000.jsonl)
+ * and nothing is ever removed: ~1 MB a table-hour, plain JSONL (gzips 12x if the space is ever wanted). ws_dump*.jsonl
+ * and .jsonl.1 stay where the backtests read them. Throws when a move fails — dumpCommit then keeps writing to the full
+ * file, never over an old one.
+ */
+export const WS_KEEP_DIR = "ws-archive";
+const WS_DUMP_FULL = 20_000_000;
+export function keepDump(p: string): void {
+  const prev = p.replace(/\.jsonl$/, ".jsonl.1");
+  if (existsSync(prev)) {
+    const keep = join(dirname(p), WS_KEEP_DIR);
+    mkdirSync(keep, { recursive: true });
+    const name = basename(p, ".jsonl") + "_" + strftime("%Y%m%d_%H%M%S");
+    let to = join(keep, name + ".jsonl");
+    for (let n = 2; existsSync(to); n++) to = join(keep, `${name}_${n}.jsonl`);
+    renameSync(prev, to);
+  }
+  renameSync(p, prev);
+}
+
 export function dumpCommit(e: Record<string, any>): void {
   S.wsDumpCur = null;
   try {
     const p = wsDumpPath();
     mkdirSync(dirname(p), { recursive: true });
-    if (existsSync(p) && statSync(p).size > 20_000_000) renameSync(p, p.replace(/\.jsonl$/, ".jsonl.1"));
+    try {
+      if (existsSync(p) && statSync(p).size > WS_DUMP_FULL) keepDump(p);
+    } catch {}
     appendFileSync(p, pyJsonDumps(e) + "\n", "utf8");
   } catch {}
 }
@@ -752,6 +791,9 @@ export function onGameMsg(d: Record<string, any>): void {
   const w = ws();
   const pid = d.pid;
   noteRosterFrame(d);   // the seats' words between hands — why a seat was not dealt (roster.ts)
+  // HERO'S MONEY for the top-up (topup.ts noteTopUpFrame): the hand's end stacks, his buy's receipt, the Buy-chips
+  // panel's offer — read before this handler can return early, and before a new hand's frame moves the hand counter
+  noteTopUpFrame(d);
   // THE HAND'S FRAMES (wsLine.ts builds /hand's line from them): every frame this handler takes, in order; a new
   // hand's PLAY_STAGE_INFO opens the list below, after beginHand has emptied it
   if (pid !== "PLAY_STAGE_INFO") keepFrame(w, d);
@@ -940,7 +982,9 @@ export function onGameMsg(d: Record<string, any>): void {
     // session_20260930_104219 hand 4921602320, and six more refusals across the socket dumps, every one of them
     // {type 5, seat: hero, cash 0} a millisecond after PLAY_STATUS_INFO {type 3, status 2, dwData: the max}). The
     // client's notice for it follows seconds later and is only filed by a tick that reads it; this word is on the
-    // socket whatever the screen read does. Type 2 is a seat's buy-in (every seat, every hand) — not this.
+    // socket whatever the screen read does. Type 2 is a buy that WENT THROUGH, `cash` = the seat's new stack: other
+    // seats' buy-ins and rebuys, and for hero's seat the receipt of his own top-up (2026-10-04 — the comment here used to
+    // call every type 2 "a seat's buy-in", and hero's receipts went unread: topup.ts noteTopUpFrame files them now).
     const seat = d.seat ?? null;
     const hero = w.heroSeat ?? null;
     if ((d.cash ?? null) === 0 && (seat === null || hero === null || seat === hero)) {
@@ -953,7 +997,8 @@ export function onGameMsg(d: Record<string, any>): void {
 
 /** One frame through the tap, exactly as the live loop runs it: accept or hold, the replay of what a socket that
  *  just bound had held, then the reader. (launch._ws_tap's per-frame body; the golden harness calls this.) */
-export function tapFrame(d: Record<string, any>, rid: string | null | undefined): void {
+export function tapFrame(d: Record<string, any>, rid: string | null | undefined, browserTs: unknown = null): void {
+  if (typeof browserTs === "number" && Number.isFinite(browserTs)) browserAt.set(d, Math.round(browserTs * 1e6) / 1e6);
   noteTapFrame(rid, d.pid);
   const take = tapAccepts(d, rid);
   const batch: [Record<string, any>, string | null, boolean][] = tapTakeReplay().map((hd) => [hd, S.tapBound, true]);

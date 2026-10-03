@@ -171,7 +171,7 @@ export async function wsTap(): Promise<void> {
           const d = o && typeof o === "object" && !Array.isArray(o) ? o.data : null;
           if (d && typeof d === "object" && !Array.isArray(d) && d.pid) {
             try {
-              tapFrame(d, (m.params || {}).requestId ?? null);
+              tapFrame(d, (m.params || {}).requestId ?? null, (m.params || {}).timestamp ?? null);
             } catch (e: any) {
               log(`[ws] frame: ${e?.message ?? e}`);
             }
