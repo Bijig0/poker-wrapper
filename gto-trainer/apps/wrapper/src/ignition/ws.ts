@@ -223,11 +223,24 @@ export function amt(cents: number | null | undefined): string {
 }
 
 // ---- the WS message dump -------------------------------------------------------------------------------
+/**
+ * WHEN THE BROWSER GOT THE FRAME (2026-10-04, Brady: "add a receiver for browser receive time"). `ts` is OUR clock at
+ * the moment this process read the frame: late by the debug connection, by any stall of this process, and for a frame
+ * held while no socket was bound (`replayed`) by the whole hold. Chrome stamps every Network.webSocketFrameReceived
+ * itself (`timestamp`, seconds on its own monotonic clock — not the time of day), and that is what the dump keeps as
+ * `bts`: a seat's time to act is the difference of two of them (CO_CURRENT_PLAYER → its CO_SELECT_INFO), exact
+ * whatever we were doing. `ts − bts` moves only by our own delay, so its excess over the smallest seen is that delay.
+ * Kept beside the frame, not in it: the frame object is what the hold replays and what /hand's line is built from.
+ */
+const browserAt = new WeakMap<object, number>();
+
 export function dumpBegin(d: Record<string, any>, rid: string | null = null): Record<string, any> {
   const now = time();
+  const bts = browserAt.get(d);
   const e: Record<string, any> = {
     ts: pyRound(now, 3),
     t: strftime("%H:%M:%S", now) + "." + String(Math.trunc(now * 1000) % 1000).padStart(3, "0"),
+    ...(bts === undefined ? {} : { bts }),
     hand: S.handNo, pid: d.pid ?? null, seat: d.seat ?? null,
     rid,
     status: "ok", data: d,
@@ -982,7 +995,8 @@ export function onGameMsg(d: Record<string, any>): void {
 
 /** One frame through the tap, exactly as the live loop runs it: accept or hold, the replay of what a socket that
  *  just bound had held, then the reader. (launch._ws_tap's per-frame body; the golden harness calls this.) */
-export function tapFrame(d: Record<string, any>, rid: string | null | undefined): void {
+export function tapFrame(d: Record<string, any>, rid: string | null | undefined, browserTs: unknown = null): void {
+  if (typeof browserTs === "number" && Number.isFinite(browserTs)) browserAt.set(d, Math.round(browserTs * 1e6) / 1e6);
   noteTapFrame(rid, d.pid);
   const take = tapAccepts(d, rid);
   const batch: [Record<string, any>, string | null, boolean][] = tapTakeReplay().map((hd) => [hd, S.tapBound, true]);
