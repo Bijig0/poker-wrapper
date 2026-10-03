@@ -29,7 +29,7 @@ import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
 import { replayScheduler } from "./src/services/replayScheduler";
 import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
-import { trustAuditLine } from "./src/services/hrc6maxDb";
+import { provenanceAuditLine, trustAuditLine } from "./src/services/hrc6maxDb";
 import { autoRestart, buildStamp, isSupervised } from "./src/services/buildStamp";
 import { gitAnswers } from "./src/services/loadedCode";
 
@@ -232,6 +232,8 @@ void gitAnswers(buildStamp.repo).then((git) => {
 // limp_node_trust.json, unguarded where it has no score (services/nodeTrust). Said once at start; the registry shows it live.
 setTimeout(() => {
   try { const line = trustAuditLine(); console.log(line); say(line); } catch (e) { console.warn(`[hrc6maxDb] trust audit failed: ${e instanceof Error ? e.message : e}`); }
+  // which raw export each baked chart is, against the factory's chart_manifest.json (2026-10-03)
+  try { const line = provenanceAuditLine(); console.log(line); say(line); } catch (e) { console.warn(`[hrc6maxDb] provenance audit failed: ${e instanceof Error ? e.message : e}`); }
 }, 0);
 // the poller, dispatcher and keepers write the central DB: they start once the legacy rows are in (at once when there
 // is nothing to adopt, or this is not the live API). Registered after, since an owner runs the callback immediately.

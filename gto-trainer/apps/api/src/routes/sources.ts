@@ -398,6 +398,21 @@ app.get("/registry", async (c) => {
           return a.unscored.length ? `${a.unscored.length} of ${a.trees} charts UNSCORED (old file fallback): ${a.unscored.slice(0, 5).join(", ")}`
             : `all ${a.trees} charts scored in the bake`;
         })()],
+        // WHICH SOLVE each chart is (2026-10-03): the bake's provenance row against the factory's chart_manifest.json.
+        // "manifest not readable" is said as such - never as 0 mismatches.
+        ["charts not matching the manifest", (() => {
+          const p = hrc6maxDb.provenanceAudit();
+          if (!p.trees) return "no bake";
+          if (!p.table) return "no provenance in this bake (an older file) - not checked";
+          if (!p.manifest) return `manifest not readable (${p.manifestPath}) - unknown`;
+          return p.mismatches ? `${p.mismatches} of ${p.trees}: ${p.mismatchIds.slice(0, 8).map((s) => s.replace("ign200_6max_", "")).join(", ")}`
+            : `0 of ${p.trees} - every baked chart is the export chart_manifest.json names`;
+        })()],
+        ["refine min · raw export (per chart)", (() => {
+          const p = hrc6maxDb.provenanceAudit();
+          if (!p.trees || !p.table) return "-";
+          return Object.entries(p.charts).map(([s, c]) => `${s.replace("ign200_6max_", "")} ${c.refineMin ?? "?"}m ${c.raw ?? "no row"}`).join(" · ");
+        })()],
         ["progress", cl.perConfig.map((p) => `${p.id}: ${p.have}/${p.want}`).join(" · ") || "no configs"],
         ["rake", "5% of the pot, cap $4 = 2bb with six dealt (Ignition's table, checked 2026-09-13)"],
         ["trees", "5 opens (2x / 2.5x / 3x / 3.5x / limp) × 6 depths, plus one short seat (30 / 50 / 70bb) at a 100bb table in every position"],
@@ -680,10 +695,16 @@ app.get("/registry", async (c) => {
       // falls back to :8777 for every node.
       // `unscored` = baked charts with no current trust scores (services/nodeTrust): they fall back to the old
       // limp_node_trust.json and answer unguarded where it has no score. 0 after backfill_trust.py (2026-10-03).
+      // `provenance` (2026-10-03): the bake against the factory's chart_manifest.json - per chart the refine minutes and
+      // the raw export's sha256 (short), and how many baked charts do not match. mismatches null = not known (no
+      // provenance in this bake, or the manifest not readable here), never 0.
       hrc6max: (() => {
         const a = hrc6maxDb.trustAudit();
+        const p = hrc6maxDb.provenanceAudit();
         return { db: hrc6maxDb.size > 0, trees: hrc6maxDb.size, trustTables: a.tables, scored: a.scored,
-          unscored: a.unscored.length, unscoredIds: a.unscored.slice(0, 20) };
+          unscored: a.unscored.length, unscoredIds: a.unscored.slice(0, 20),
+          provenance: { table: p.table, manifest: p.manifest ? "readable" : "manifest not readable", withRow: p.withRow,
+            mismatches: p.mismatches, mismatchIds: p.mismatchIds.slice(0, 20), charts: p.charts } };
       })(),
       // The GTO Wizard POOL, not one client: the Elite session takes heads-up
       // solves so the Ultra session's daily allowance is spent only on the
