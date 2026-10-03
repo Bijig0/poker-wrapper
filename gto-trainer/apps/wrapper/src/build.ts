@@ -41,7 +41,8 @@ export async function buildReply(force = false): Promise<ServiceBuild> {
 }
 
 export async function buildAll(): Promise<LiveStatus & { ok: true; sessionActive: boolean }> {
-  return { ok: true, sessionActive: !!S.session.rec, ...(await liveStatus()) };
+  // this wrapper hands in its own line: on a rig or a second site's panel port it is "this one", not the install's :7700
+  return { ok: true, sessionActive: !!S.session.rec, ...(await liveStatus({ port: C.PANEL_PORT, build: await buildReply(true) })) };
 }
 
 /** The launcher the desktop shortcut runs; a sandboxed copy of the pages (WRAPPER_ROOT, the tests) has none. */

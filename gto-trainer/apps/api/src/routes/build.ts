@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { autoRestart, buildStamp, isSupervised, pageToken } from "../services/buildStamp";
 import { liveStatus } from "../services/liveStatus";
+import { port } from "../services/ports";
 
 /**
  * "You are running older code than the disk" — what is done about it, and a way to do it by hand.
@@ -24,7 +25,8 @@ export const selfBuild = (force = false) => ({
 
 app.get("/", (c) => c.json(selfBuild(c.req.query("force") === "1")));
 
-app.get("/all", async (c) => c.json({ ok: true, ...(await liveStatus({ api: selfBuild(true) })) }));
+// this process hands in its own line (the port IT serves: a verify API beside the live one is listed as "this one")
+app.get("/all", async (c) => c.json({ ok: true, ...(await liveStatus({ port: port("api"), build: selfBuild(true) })) }));
 
 app.post("/restart", async (c) => {
   if (!isSupervised()) {

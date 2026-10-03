@@ -5078,7 +5078,8 @@ async function checkBuild() {
       <span class="act">${j.supervised ? `<button onclick="restartApi(this)">Restart now</button>` : ""}</span></div>`;
     return;
   }
-  const api = j.services.find((x) => x.name === "api");
+  // the API that served this page: its own line is marked `self` (a verify or factory API is not the line named "api")
+  const api = j.services.find((x) => x.self) || j.services.find((x) => x.name === "api");
   const page = api && api.build ? api.build.page : null;
   if (page && PAGE_TOKEN === null) PAGE_TOKEN = page;
   const pageOld = !!(page && PAGE_TOKEN && page !== PAGE_TOKEN);
