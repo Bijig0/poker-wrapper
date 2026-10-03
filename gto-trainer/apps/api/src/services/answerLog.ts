@@ -239,7 +239,9 @@ export function failKindOf(reason: string | null | undefined): FailKind {
   if (r.includes("terminal before the line ends")) return "tree-gap";
   // table shape and multiway, before the generic line/tree needles
   if (r.includes("players reach the flop")) return "multiway-unsupported";
-  if (r.includes("table thinned") || r.includes("seats: the ai preflop piece covers")) return "table-shape";
+  // …and stacks past GTO Wizard's preflop limit ("GTO Wizard refused the tree: Preflop: Only effective stacks up to
+  // 250bb are supported", 2026-10-03 — the tree is capped since; a refusal of it is still a table GTO Wizard cannot hold)
+  if (r.includes("table thinned") || r.includes("seats: the ai preflop piece covers") || r.includes("only effective stacks up to")) return "table-shape";
   // GTO Wizard's own tree (gtowAiPreflop): the node is not there and the walk could not mend it
   if (r.includes("node_does_not_exist") || r.includes("does not exist and the line could not be walked")) return "ai-node-missing";
   // the line itself is wrong: past/onto a terminal, on a villain's turn, or never closed

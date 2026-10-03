@@ -4093,9 +4093,10 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       ...(gated ? { treeGap: gated } : {}),
     });
     if (ai.ok) return asResult(ai, ai.shape.deadSb);
-    // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR from GTO Wizard on the built
-    // shape means the table as captured is not a table, and the last resort would only rebuild the same
-    // impossible hand heads-up. Terminal, like the gate at the entry.
+    // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR "Incorrect actions" from GTO
+    // Wizard on the built line means the table as captured is not a table, and the last resort would only rebuild the
+    // same impossible hand heads-up. Terminal, like the gate at the entry. (Any other VALIDATION_ERROR is a refusal of
+    // the TREE — kind tree-refused, 2026-10-03 — and goes on to the last resort below.)
     if ((ai as { kind?: string }).kind === "capture-fault") {
       return { ok: false, kind: "capture-fault", street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
         reason: `${why}; ${ai.reason}` };
