@@ -156,7 +156,7 @@ function supersededDeadButton(key: string, want: any): any {
       const d = row?.data;
       if (!d || !d.positions || !Array.isArray(d.liveSeats)) return row;
       const btn = Object.entries(d.positions).find(([, v]) => v === "BTN")?.[0];
-      if (btn === undefined || !deadDealer({ dealer: Number(btn), dealt: d.liveSeats })) return row;
+      if (btn === undefined || !deadDealer({ dealer: Number(btn), dealt: d.liveSeats, actions: d.actions })) return row;
       return { ...row, data: { ...d, positions: asDeadButtonPositions(d.positions, Number(btn), d.liveSeats) } };
     });
   }

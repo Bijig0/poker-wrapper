@@ -117,5 +117,8 @@ export function asDeadButtonPositions(recorded: Record<string, string>, dealer: 
   const renamed = new Map(others.map(([k], i) => [k, names[i]!]));
   return Object.fromEntries(keep.map(([k, v]) => [k, renamed.get(k) ?? v]));
 }
-export const deadDealer = (ws: { dealer?: number | null; dealt?: number[] } | null | undefined): boolean =>
-  !!ws && ws.dealer != null && Array.isArray(ws.dealt) && ws.dealt.length >= 2 && !ws.dealt.includes(ws.dealer);
+/** The dealer seat outside a dealt list of two or more, and no action of its own this hand (a seat that acted was dealt —
+ *  hand.ts dealtForPositions; the socket-mixing capture of 20260920_131406 files another table's "2 check"). */
+export const deadDealer = (ws: { dealer?: number | null; dealt?: number[]; actions?: any[] } | null | undefined): boolean =>
+  !!ws && ws.dealer != null && Array.isArray(ws.dealt) && ws.dealt.length >= 2 && !ws.dealt.includes(ws.dealer)
+  && !(ws.actions || []).some((a: any) => (a.seat ?? a.seatId) === ws.dealer);

@@ -106,6 +106,17 @@ export function buttonOrder(dealt: number[], btn: number): { order: number[]; de
   return { order: [...seats.slice(i + 1), ...seats.slice(0, i + 1)], deadButton: false };
 }
 
+/** The seats the positions are named from: the dealt list, plus the dealer seat when it has ACTED this hand — a seat that
+ *  acted was dealt, whatever the list says. On a live table CO_CARDTABLE_INFO already lists it; an authored fake-table
+ *  state (contract fixture preflop-hero-bb-limped) lists only the seats still holding cards, and its button had folded:
+ *  that is a live button that folded, not a dead one. */
+function dealtForPositions(): number[] {
+  const dealt: number[] = ws().dealt || [];
+  const btn = ws().dealer ?? null;
+  if (btn === null || dealt.includes(btn) || !dealt.length) return dealt;
+  return (ws().actions || []).some((a: any) => a.seat === btn) ? sortedNums(new Set([...dealt, btn])) : dealt;
+}
+
 /** Heads-up names [SB, BB]. The dealer posts the small blind; with a dead button (none in the socket dumps — every dead
  *  button there dealt three or more) the posts decide: the seat that posted the small blind, else the one that did NOT
  *  post the big blind, else the first seat after the button (as the old rule named it). */
@@ -120,7 +131,7 @@ function headsUpSeats(order: number[], btn: number, deadButton: boolean): [numbe
 
 /** Hero's position name (the panel's vocabulary: UTG+1 / MP). */
 export function heroPosition(): string | null {
-  const seats: number[] = ws().dealt || [];
+  const seats: number[] = dealtForPositions();
   const btn = ws().dealer ?? null, hero = ws().heroSeat ?? null;
   if (!seats.length || btn === null || hero === null || !seats.includes(hero)) return null;
   const bo = buttonOrder(seats, btn);
@@ -147,7 +158,7 @@ export function heroPosition(): string | null {
 
 /** Every dealt seat's position, gto-trainer's names. */
 export function positionsAll(): Map<number, string> {
-  const dealt: number[] = ws().dealt || [];
+  const dealt: number[] = dealtForPositions();
   const btn = ws().dealer ?? null;
   if (!dealt.length || btn === null) return new Map();
   const bo = buttonOrder(dealt, btn);
@@ -182,7 +193,7 @@ export function positionsAll(): Map<number, string> {
  */
 export function seatRoster(): Record<string, any> | null {
   const w = ws();
-  const dealt: number[] = sortedNums(w.dealt || []);
+  const dealt: number[] = sortedNums(dealtForPositions());
   const btn: number | null = w.dealer ?? null;
   if (!dealt.length) return null;
   const bo = btn !== null ? buttonOrder(dealt, btn) : null;

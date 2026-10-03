@@ -268,3 +268,11 @@ test("every set of undealt seats between hero and the button shifts hero later �
   }
   expect(cases).toBe(15);   // live: hero 3 ×4, 4 ×2, 5, 6 · dead: hero 3 ×4, 4 ×2, 5
 });
+
+test("a dealer seat that ACTED was dealt, whatever the dealt list says (an authored state listing only the seats with cards)", () => {
+  resetState();
+  // contract fixture preflop-hero-bb-limped: the button (seat 1) folded and lost its cards; the dealt list is 2-5
+  state([2, 3, 4, 5], 1, 3, [[2, "post-sb", 2], [3, "post-bb", 5], [4, "call", 5], [5, "call", 5], [1, "fold", 0]]);
+  expect(sorted(positionsAll())).toBe(map({ 2: "SB", 3: "BB", 4: "HJ", 5: "CO", 1: "BTN" }));
+  expect(seatRoster()!.deadButton).toBe(false);
+});
