@@ -90,7 +90,8 @@ async function ask(name: string, port: number, path: string, timeoutMs: number):
   try { b = await res.json(); } catch { /* not JSON */ }
   if (!res.ok || !b || typeof b.stale !== "boolean" || !("commit" in b)) {
     // a process started before 2026-10-03 has no build report (or the old one): that alone says it is old code
-    return { name, port, up: true, current: false, build: null, text: "up, but running code from before the build report existed — restart it" };
+    const how = name.startsWith("wrapper") ? "relaunch Poker Wrapper from its shortcut (when no session is running)" : "restart it";
+    return { name, port, up: true, current: false, build: null, text: `up, but running code from before the build report existed — ${how}` };
   }
   return { name, port, up: true, current: !b.stale, build: b as ServiceBuild, text: describeBuild(b as ServiceBuild) };
 }

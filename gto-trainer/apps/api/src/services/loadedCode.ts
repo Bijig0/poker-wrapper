@@ -229,6 +229,18 @@ export class LoadedCode {
   }
 }
 
+/** Can this process run git on the checkout? (said once at start: uncommittedOf below depends on it) */
+export async function gitAnswers(repo: string | null): Promise<boolean> {
+  if (!repo) return false;
+  try {
+    const p = Bun.spawn(["git", "-C", repo, "rev-parse", "--git-dir"], { stdout: "ignore", stderr: "ignore", stdin: "ignore", windowsHide: true });
+    const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, 15_000);
+    const code = await p.exited;
+    clearTimeout(timer);
+    return code === 0;
+  } catch { return false; }
+}
+
 /**
  * Of `files` (absolute, inside `repo`), the ones git says differ from the commit: edits nobody committed.
  * null = git could not say (not a checkout, git missing) — the caller falls back to "did the commit move".

@@ -40,7 +40,8 @@ if (!process.env.PORT_OFFSET) {
 
 const git = (...args: string[]): string | null => {
   const r = spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8", timeout: 30_000, windowsHide: true });
-  return r.status === 0 ? r.stdout.trim() : null;
+  // the END only: a porcelain status line starts with a space (" M path"), and trimming it shifts the path by one
+  return r.status === 0 ? r.stdout.replace(/\s+$/, "") : null;
 };
 
 /** What is not on main, so not live: branches ahead of it, and uncommitted files in this checkout. */
