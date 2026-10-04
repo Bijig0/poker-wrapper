@@ -25,9 +25,9 @@ const hand = (heroPos: P, cards: [string, string], acts: [P, string, number?][])
 };
 
 const seams0 = { ...lastResortSeams };
-// the locked tree ships off (LAST_RESORT_LOCKED=on turns it on): these tests run with it on, the last one without
+// the locked tree is on unless LAST_RESORT_LOCKED=off: these tests run with the switch unset, the last one flips it
 const locked0 = process.env.LAST_RESORT_LOCKED;
-beforeEach(() => { process.env.LAST_RESORT_LOCKED = "on"; });
+beforeEach(() => { delete process.env.LAST_RESORT_LOCKED; });
 afterEach(() => {
   Object.assign(lastResortSeams, seams0);
   if (locked0 == null) delete process.env.LAST_RESORT_LOCKED; else process.env.LAST_RESORT_LOCKED = locked0;
@@ -125,10 +125,10 @@ describe("the locked tree first (2026-10-04)", () => {
     } finally { delete process.env.LAST_RESORT_LOCKED_MS; }
   });
 
-  it("it ships OFF: without LAST_RESORT_LOCKED=on (or with nobody raised) the locked tree is not asked and the plain tree pins at once", async () => {
+  it("the off switch: with LAST_RESORT_LOCKED=off (or with nobody raised) the locked tree is not asked and the plain tree pins at once", async () => {
     let lockedAsked = 0;
-    for (const v of [undefined, "off", ""]) {
-      if (v == null) delete process.env.LAST_RESORT_LOCKED; else process.env.LAST_RESORT_LOCKED = v;
+    for (const v of ["off", "0", "false", "no"]) {
+      process.env.LAST_RESORT_LOCKED = v;
       const asked = rig(async () => { lockedAsked++; return lockedAnswer; });
       const r = await solvePreflopLastResort(h(), "UTG", "why");
       expect(r.ok && r.solId).toBe("sol-hu");
@@ -136,7 +136,8 @@ describe("the locked tree first (2026-10-04)", () => {
       expect(asked[0]!.skipped).toBe(false);
       if (r.ok) expect(r.note).not.toContain("locked tree");
     }
-    process.env.LAST_RESORT_LOCKED = "on";
+    expect(lockedAsked).toBe(0);
+    delete process.env.LAST_RESORT_LOCKED;                      // on again: still not asked when nobody has raised
     rig(async () => { lockedAsked++; return lockedAnswer; });
     await solvePreflopLastResort(hand("BB", ["7d", "4d"], [["UTG", "call", 1], ["HJ", "fold"], ["CO", "fold"], ["BTN", "fold"], ["SB", "fold"]]), "BB", "why");
     expect(lockedAsked).toBe(0);
