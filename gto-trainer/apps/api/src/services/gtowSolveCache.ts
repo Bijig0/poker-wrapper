@@ -96,7 +96,15 @@ export function canonicalJson(v: unknown, drop?: ReadonlySet<string>): string {
   return walk(v);
 }
 
-export interface PostedTree { tree: unknown; solution: { actions: string; board: string } }
+/**
+ * What was POSTed for one solve. `locks` (2026-10-04, scripts/_probePreflopNodeLock.ts): a NODE-LOCKED solution is a
+ * chain — the plain solution, then one `POST /v4/custom-solutions/ {parent_solution_id, last_node_lock}` per lock, each
+ * forked from the one before. Its identity is the plain tree + solution + every lock body in order (which is the
+ * parent's key plus the locks: the parent's key is a function of the first two). A plain solve has no `locks` member,
+ * so its canonical JSON — and its key — is exactly what it was before locks existed. Materialising a locked entry
+ * re-POSTs the tree, the solution and each lock in turn (gtowAiPreflop.postPreflopSolution).
+ */
+export interface PostedTree { tree: unknown; solution: { actions: string; board: string }; locks?: unknown[] }
 
 /**
  * THE SEAM FOR A LOSSY KEY (bucketed stacks, rounded ranges …). The identity today, on purpose: every hit is then the
@@ -110,8 +118,8 @@ export function normalizeForKey(_kind: CacheKind, posted: PostedTree): PostedTre
 export interface TreeCacheKey { key: string; /** canonical JSON of what was POSTed — the stored body */ body: string }
 
 /** The key of a tree + its solution request, and the canonical body the store keeps for it. */
-export function cacheKeyOf(kind: CacheKind, tree: unknown, solution: { actions: string; board: string }): TreeCacheKey {
-  const posted: PostedTree = { tree, solution: { actions: solution.actions, board: solution.board } };
+export function cacheKeyOf(kind: CacheKind, tree: unknown, solution: { actions: string; board: string }, locks?: readonly unknown[]): TreeCacheKey {
+  const posted: PostedTree = { tree, solution: { actions: solution.actions, board: solution.board }, ...(locks?.length ? { locks: [...locks] } : {}) };
   const body = canonicalJson(posted);
   const keyed = canonicalJson(normalizeForKey(kind, posted), KEY_EXCLUDE);
   return { key: createHash("sha256").update(`${KEY_VERSION}|${kind}|${keyed}`).digest("hex"), body };
@@ -362,7 +370,7 @@ export class GtowSolveCache {
   }
 
   /** What was POSTed for a stored tree — for materialising it. null when the store does not hold it. */
-  treeBody(key: string): { kind: CacheKind; tree: any; solution: { actions: string; board: string } } | null {
+  treeBody(key: string): { kind: CacheKind; tree: any; solution: { actions: string; board: string }; locks: any[] } | null {
     try {
       const pend = this.pendingTrees.get(key) ?? this.fresh.get(key);
       let kind: CacheKind | null = null, text: string | null = null;
@@ -377,7 +385,7 @@ export class GtowSolveCache {
       }
       if (!kind || text == null) return null;
       const j = JSON.parse(text) as PostedTree;
-      return { kind, tree: j.tree, solution: j.solution };
+      return { kind, tree: j.tree, solution: j.solution, locks: Array.isArray(j.locks) ? j.locks : [] };
     } catch {
       return null;
     }

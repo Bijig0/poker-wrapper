@@ -2718,7 +2718,7 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
   }
   const last = await solvePreflopLastResort(hand, heroPos, `${why}; ${ai.reason}`);
   if (last.ok) return asResult(last, true, { piece: "gtow-ai-preflop:last-resort", how: "by-design", code: "preflop:last-resort",
-    why: `GTO Wizard's tree cannot hold this line — ${last.lastResort?.how ?? "hero vs the last aggressor heads-up"} (${ai.reason.slice(0, 120)})` });
+    why: `GTO Wizard's tree cannot hold this line — ${last.lastResort?.how ?? "hero vs the last raise heads-up"}${/locked to his range/.test(last.lastResort?.how ?? "") ? " (locked tree)" : " (plain heads-up tree)"} (${ai.reason.slice(0, 120)})` });
   return { ok: false, street: "preflop", gametype: CP_RING_GAMETYPE, depth: 0, line: ai.line ?? "", reason: `${why}; ${ai.reason}; ${last.reason}` };
 }
 
@@ -4223,13 +4223,13 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
         reason: `${why}; ${ai.reason}; the last resort is not tried — it replays the same line heads-up and lands on the same seat's node` };
     }
-    // THE LAST RESORT (2026-09-23): neither piece can walk the line — play it as hero versus the last aggressor on a
-    // heads-up tree, the folded-out players' chips left out (no dead money since 2026-10-04 —
-    // services/gtowAiPreflop.solvePreflopLastResort). Always flagged; no answer only when nobody has raised and hero
-    // is not in the blinds.
+    // THE LAST RESORT (2026-09-23): neither piece can walk the line — play it heads-up: first hero against the last
+    // raise on a tree where that raise is NODE-LOCKED to the raiser's range on the exact tree (2026-10-04), else the plain
+    // heads-up tree with the folded-out players' chips left out (services/gtowAiPreflop.solvePreflopLastResort). Always
+    // flagged; no answer only when nobody has raised and hero is not in the blinds.
     const last = await solvePreflopLastResort(hand, heroPos, `${why}; ${ai.reason}`);
     if (last.ok) return asResult(last, true, { piece: "gtow-ai-preflop:last-resort", how: pf.how === "rebuilt" ? "rebuilt" : "by-design",
-      code: pf.how === "rebuilt" ? pf.code : "preflop:last-resort", why: `neither preflop piece could walk the line — ${last.lastResort?.how ?? "hero vs the last aggressor heads-up"} (${why.slice(0, 120)})` });
+      code: pf.how === "rebuilt" ? pf.code : "preflop:last-resort", why: `neither preflop piece could walk the line — ${last.lastResort?.how ?? "hero vs the last raise heads-up"}${/locked to his range/.test(last.lastResort?.how ?? "") ? " (locked tree)" : " (plain heads-up tree)"} (${why.slice(0, 120)})` });
     return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
       reason: `${why}; ${ai.reason}; ${last.reason}` };
   }

@@ -25,10 +25,28 @@
  *   no dead money (8, same tree)    both           28.6%                  0.062   <- the heads-up re-seating alone
  * The plain tree was never the worse of the two by more than 0.001 bb on any decision. It is still rough.
  *
- *   . config/env.ps1; bun run src/scripts/lastResortStudy.ts [--since 2026-10-03] [--max 40] [--hands id,id] [--out file.json]
+ * THE LOCKED TREE (2026-10-04, gtowAiPreflop.solveLockedLastResort): hero against the last raise, the raise an action
+ * NODE-LOCKED to the raiser's range on the exact tree; `locked` prices hero with the folded players' chips and a blind
+ * still to act as dead money, `lockednd` with none. 45 decisions of 2026-10-03/04 (the newest), 43 answered by all three
+ * (two min-raises the even-post tree cannot list fell to the plain tree):
+ *                                              top action differs      costs, bb/hand        hero's dealt hand
+ *   all 43                          plain          30.2%                  0.220             15/43 differ, 0.134 bb
+ *                                   locked          7.4%                  0.026              6/43 differ, 0.101 bb
+ *                                   lockednd        9.0%                  0.023              8/43 differ, 0.110 bb
+ *   a live player folded out (15)   plain 29.0% / 0.209 · locked 2.8% / 0.006 · lockednd 3.1% / 0.007
+ *   only folded chips dead (20)     plain 31.8% / 0.292 · locked 9.7% / 0.048 · lockednd 13.0% / 0.043
+ *   2bb or more dead (13)           plain 28.6% / 0.480 · locked 6.6% / 0.074 · lockednd 7.3% / 0.066
+ *   no dead money (8, same tree)    plain 28.6% / 0.062 · locked 10.2% / 0.007
+ * Worst locked decision: a 5-bet pot (QhTh calls 86% where the exact tree folds, 0.716 bb/hand) — hero's own range is
+ * every hand on the locked tree. CAVEAT: here the raiser's range is read on an exact tree that held the whole line; in a
+ * real last resort it is read on a line fitted for him, so the locked tree's real error is larger than this.
+ * Fresh locked solves: median 4.1 s, p90 5.8 s, worst 11 s (the first, exact-tree reads included).
  *
- * It SOLVES on the live GTO Wizard accounts (two heads-up trees a decision; the exact nodes come from the solve
- * cache) and stops when the hour's request count passes --budget (default 1200). NOT while a session is live.
+ *   . config/env.ps1; bun run src/scripts/lastResortStudy.ts [--since 2026-10-03] [--max 40] [--hands id,id] [--out file.json]
+ *     [--variants plain,locked,lockednd]   (the default; "old" is the retired dead-money tree)
+ *
+ * It SOLVES on the live GTO Wizard accounts (a heads-up tree a variant per decision, a locked one is ~6-8 requests;
+ * the exact nodes come from the solve cache) and stops when the hour's request count passes --budget (default 1200). NOT while a session is live.
  */
 import { Database } from "bun:sqlite";
 import { writeFileSync } from "node:fs";
@@ -36,7 +54,7 @@ import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, withStartStacks } from "../utils/archivedHand/archivedHand";
 import { dealtCount } from "../utils/dealtSeats/dealtSeats";
 import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
-import { fetchNode, reduceToHeadsUp, solvePreflopGtowAi, type AiPreflopOutcome } from "../services/gtowAiPreflop";
+import { fetchNode, reduceToHeadsUp, solvePreflopGtowAi, solveLockedLastResort, type AiPreflopOutcome } from "../services/gtowAiPreflop";
 import { comboIndex } from "../utils/comboIndex/comboIndex";
 
 const argv = process.argv.slice(2);
@@ -87,7 +105,10 @@ interface Row { hand: string; line: string; heroPos: string; cards: string; rais
   exact: { mine: Group; rangeCombos: number };
   variants: Record<string, { ok: boolean; why?: string; mine?: Group | null; flip?: number; loss?: number; mineLoss?: number; mineFlip?: boolean; secs?: number }> }
 const rows: Row[] = [];
-const VARIANTS = ["old", "plain"] as const;
+const ALL_VARIANTS = ["old", "plain", "locked", "lockednd"] as const;
+type Variant = (typeof ALL_VARIANTS)[number];
+// --variants plain,locked,lockednd (the default): "old" is the dead-money heads-up tree retired 2026-10-04
+const VARIANTS: readonly Variant[] = arg("variants")?.split(",").filter((v): v is Variant => (ALL_VARIANTS as readonly string[]).includes(v)) ?? ["plain", "locked", "lockednd"];
 
 let done = 0;
 for (const id of ids) {
@@ -132,7 +153,13 @@ for (const id of ids) {
     const dealt = dealtCount(t, heroPos);
     const headsUp = (deadBb: number): Promise<AiPreflopOutcome> =>
       solvePreflopGtowAi(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, "study", { deadBb, rakeSeats: dealt, skipPin: () => true });
-    const run: Record<(typeof VARIANTS)[number], () => Promise<AiPreflopOutcome>> = { old: () => headsUp(red.deadBb), plain: () => headsUp(0) };
+    const run: Record<Variant, () => Promise<AiPreflopOutcome>> = {
+      old: () => headsUp(red.deadBb), plain: () => headsUp(0),
+      // THE LOCKED TREE (2026-10-04): the raiser's raise locked to his range on the exact tree; with the folded
+      // players' chips and the blinds still to act as dead money ("locked"), and with none ("lockednd")
+      locked: () => solveLockedLastResort(t, heroPos, "study", { dead: true }),
+      lockednd: () => solveLockedLastResort(t, heroPos, "study", { dead: false }),
+    };
     for (const v of VARIANTS) {
       const t0 = Date.now();
       let out: AiPreflopOutcome;
@@ -173,7 +200,7 @@ const table = (label: string, sel: (r: Row) => boolean) => {
   const sub = rows.filter(sel);
   // only decisions every variant answered: the same hands under each
   const all = sub.filter((r) => VARIANTS.every((v) => r.variants[v]?.ok));
-  console.log(`\n== ${label}: ${sub.length} decisions, ${all.length} answered by both`);
+  console.log(`\n== ${label}: ${sub.length} decisions, ${all.length} answered by every variant (${VARIANTS.join(", ")})`);
   for (const v of VARIANTS) {
     const xs = all.map((r) => r.variants[v]!);
     const answered = sub.filter((r) => r.variants[v]?.ok).length;
