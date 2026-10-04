@@ -3,6 +3,7 @@ import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, build
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6, limp3Reroute, threeLimpPrefix } from "./hrc6max";
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
+import { applyPoolLimpFloor, poolLimpFloorNote, shortLimpPoolOn } from "./poolLimpFloor";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
@@ -1143,6 +1144,20 @@ async function flopArrivalCompute(
   }
   if (!recon.ok) return failA(`range reconstruction: ${recon.reason}`);
   prov ??= { how: "designed", producer: "preflop-db" };
+  // THE POOL LIMP FLOOR (services/poolLimpFloor, 2026-10-05): a short limper whose stack no pool-locked tree covers yet
+  // enters the flop with the pool's measured limp range, whichever piece produced the rest — said in the answer's note
+  if (sixMax && shortLimpPoolOn()) {
+    const floor = applyPoolLimpFloor({ hand, heroPos, ranges: recon.ranges, chartId: rangeSource, dealt: pinnedDealt });
+    if (floor.applied.length) {
+      const note = poolLimpFloorNote(floor.applied, rangeSource);
+      tmark("pool limp floor", note);
+      recon = { ...recon, ranges: floor.ranges };
+      sixNote = [sixNote, note].filter(Boolean).join(" · ");
+      // Brady's rule, so by design (counted clean, named by its own code); a source already rebuilt keeps its own code
+      // (the larger story) and the floor's note rides along either way
+      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-limp-floor", why: note.slice(0, 300) };
+    }
+  }
   return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };
 }
 

@@ -269,6 +269,39 @@ describe("chartFor6max — uneven limp trees", () => {
     expect(two.limp3Fallback).toBeUndefined();
   });
 
+  test("hand 4922555015: a short limper alone with a deep hero reads his pool-locked uneven tree, the even short limp ladder behind it", () => {
+    // UTG folds, the HJ (39bb) limps, CO/BTN/SB fold: hero's BB option. The effective stack is the HJ's (rung 30, not
+    // 100), which used to send the hand straight to the even 30bb equilibrium limp chart.
+    const t = table(6, { 2: 39 });
+    const c = chartFor6max(t as any, "BB", ["F", "C", "F", "F", "F"]);
+    expect(c.id).toBe("ign200_6max_D100_s50_HJ_olimp_pool3");
+    expect(c.shortSeat).toBe("HJ");
+    // 39 → 50 (1.28x) and 39 → 30 (1.3x) are inside the first-decision bound, 70 is not; nearest (by ratio) first
+    expect(c.candidates.slice(0, 2)).toEqual(["ign200_6max_D100_s50_HJ_olimp_pool3", "ign200_6max_D100_s30_HJ_olimp_pool3"]);
+    expect(c.candidates).not.toContain("ign200_6max_D100_s70_HJ_olimp_pool3");
+    // until one lands, the even limp ladder answers exactly as before
+    expect(c.candidates.slice(2).every((x) => /_D\d+_olimp$/.test(x))).toBe(true);
+    expect(c.candidates.indexOf("ign200_6max_D30_olimp")).toBe(2);
+    expect(c.note).toContain("pool-locked uneven limp tree");
+  });
+
+  test("a short limper outside the bound of every short rung keeps the even limp chart", () => {
+    // 18bb: 30bb is 1.67x away (the bound is 1.5x under 50bb)
+    const c = chartFor6max(table(6, { 2: 18 }) as any, "BB", ["F", "C", "F", "F", "F"]);
+    expect(c.id).not.toContain("_olimp_pool3");
+    expect(c.id).toMatch(/_D\d+_olimp$/);
+  });
+
+  test("a short limper alone, but hero isolated: the pool3 tree still answers the rest of the hand", () => {
+    const c = chartFor6max(table(6, { 2: 32 }) as any, "BB", ["F", "C", "F", "F", "F", "R4"]);
+    expect(c.id).toBe("ign200_6max_D100_s30_HJ_olimp_pool3");
+  });
+
+  test("a short seat that raised first in is not a limper — the raise charts answer", () => {
+    const c = chartFor6max(table(6, { 2: 39 }) as any, "BB", ["F", "R2.5", "F", "F", "F"]);
+    expect(c.id).not.toContain("olimp");
+  });
+
   test("a shallow table keeps its even limp rung (the uneven limp set is a 100bb table)", () => {
     const t = table(6, { 1: 50, 2: 50, 3: 50, 4: 50, 5: 50, 6: 50 });
     expect(chartFor6max(t as any, "BB", ["F", "F", "C", "C", "C"]).id).toBe("ign200_6max_D50_olimp");
