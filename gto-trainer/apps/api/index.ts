@@ -14,6 +14,7 @@ import feedSpotRoutes from "./src/routes/feedSpot";
 import fastSolverRoutes from "./src/routes/fastSolver";
 import aiStudyRoutes from "./src/routes/aiStudy";
 import dashboardRoutes from "./src/routes/dashboard";
+import { chartsReviewRoutes } from "./src/routes/chartsReview";
 import gtowAccountsRoutes from "./src/routes/gtowAccounts";
 import gtowCacheRoutes from "./src/routes/gtowCache";
 import sourcesRoutes from "./src/routes/sources";
@@ -29,7 +30,8 @@ import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
 import { replayScheduler } from "./src/services/replayScheduler";
 import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
-import { provenanceAuditLine, trustAuditLine } from "./src/services/hrc6maxDb";
+import { hrc6maxDb, provenanceAuditLine, trustAuditLine } from "./src/services/hrc6maxDb";
+import { registerAuditLine, solveRegister } from "./src/services/solveRegister";
 import { autoRestart, buildStamp, isSupervised } from "./src/services/buildStamp";
 import { gitAnswers } from "./src/services/loadedCode";
 
@@ -61,6 +63,8 @@ app.route("/api/gtow-api", gtowApiRoutes);
 app.route("/api/feed-spot", feedSpotRoutes);
 app.route("/api/fast-solver", fastSolverRoutes);
 app.route("/api/ai-study", aiStudyRoutes);
+// the chart review page's data (precomputed per chart by the factory's chart_review.py; grids read by node) - 2026-10-04
+app.route("/api/dashboard/charts-review", chartsReviewRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/gtow/accounts", gtowAccountsRoutes);
 // the persistent GTO Wizard solve cache: what it holds and what it saved (services/gtowSolveCache)
@@ -91,6 +95,10 @@ app.get("/dashboard.css", () =>
   new Response(Bun.file(`${import.meta.dir}/dashboard.css`), {
     headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-cache" },
   }));
+// THE CHART REVIEW PAGE (2026-10-04): its own file beside the dashboard, registered BEFORE the /sources/* catch-all so it
+// is not swallowed by the dashboard's one-page routing; read per request like the dashboard, so an edit is live
+app.get("/sources/charts-review", () =>
+  new Response(rewritePorts(nodeFs.readFileSync(`${import.meta.dir}/charts-review.html`, "utf-8")), { headers: { "Content-Type": "text/html; charset=utf-8" } }));
 for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/gtow", "/review", "/playthrough", "/playthrough/*"]) {
   app.get(p, dashboardPage);
 }
@@ -234,6 +242,12 @@ setTimeout(() => {
   try { const line = trustAuditLine(); console.log(line); say(line); } catch (e) { console.warn(`[hrc6maxDb] trust audit failed: ${e instanceof Error ? e.message : e}`); }
   // which raw export each baked chart is, against the factory's chart_manifest.json (2026-10-03)
   try { const line = provenanceAuditLine(); console.log(line); say(line); } catch (e) { console.warn(`[hrc6maxDb] provenance audit failed: ${e instanceof Error ? e.message : e}`); }
+  // is every baked chart the best MEASURED solve of its spot? (the factory's solve register, 2026-10-04)
+  try {
+    const ids = Object.keys(hrc6maxDb.provenanceAudit().charts);
+    const line = registerAuditLine(solveRegister.audit(ids, (id) => hrc6maxDb.provenance(id)?.raw));
+    console.log(line); say(line);
+  } catch (e) { console.warn(`[solveRegister] audit failed: ${e instanceof Error ? e.message : e}`); }
 }, 0);
 // the poller, dispatcher and keepers write the central DB: they start once the legacy rows are in (at once when there
 // is nothing to adopt, or this is not the live API). Registered after, since an owner runs the callback immediately.
