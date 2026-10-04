@@ -1522,19 +1522,20 @@ export const lastResortSeams = {
  *  whole last resort must fit hero's clock: a locked answer is a tree, a solution, one or two node reads, one or two
  *  locks and hero's node — 3-6 s measured; the plain tree is solved beside it from the start. */
 const lockedDeadlineMs = (): number => { const v = Number(process.env.LAST_RESORT_LOCKED_MS); return v > 0 ? v : 10_000; };
-/** THE LOCKED TREE SHIPS OFF (2026-10-04): it is asked only with LAST_RESORT_LOCKED=on (config/local.env; read at every
- *  call). Measured far closer to exact answers than the plain tree (scripts/lastResortStudy.ts), but a locked solve
- *  keeps its lock bodies in the GTO Wizard account's solution history, and whether that shows on Fair Play could not be
- *  learned from public sources — the owner's check, then his switch. Off, the last resort is the plain tree alone. */
-export const lockedLastResortOn = (): boolean => /^(on|1|true|yes)$/i.test(process.env.LAST_RESORT_LOCKED?.trim() ?? "");
+/** THE LOCKED TREE IS ON (the owner's word, 2026-10-04, the evening it was merged: "let's turn on the node locked last
+ *  resort"). It shipped off for some hours because a locked solve keeps its lock bodies in the GTO Wizard account's
+ *  solution history and whether that shows on Fair Play could not be learned from public sources — a risk he took
+ *  knowingly. THE OFF SWITCH: LAST_RESORT_LOCKED=off in config/local.env (read at every call) — the last resort is
+ *  then the plain tree alone. */
+export const lockedLastResortOn = (): boolean => !/^(off|0|false|no)$/i.test(process.env.LAST_RESORT_LOCKED?.trim() ?? "");
 
 /**
  * The last resort answer. FIRST the LOCKED tree (2026-10-04, solveLockedLastResort): hero against the last raise, the
  * raiser's raise locked to his range on the exact tree — scripts/lastResortStudy.ts measured it against exact answers
  * (the header of that script). Within lockedDeadlineMs, else, or when it refuses, the PLAIN heads-up reduction — no dead
  * money (the header above) — which is started beside it from the first moment. With nobody having raised only a hero
- * in the blinds is answered, and only by the plain tree (there is no raise to lock). The locked tree is asked only
- * with LAST_RESORT_LOCKED=on (lockedLastResortOn — it ships off); otherwise plain only.
+ * in the blinds is answered, and only by the plain tree (there is no raise to lock). LAST_RESORT_LOCKED=off
+ * (lockedLastResortOn) turns the locked tree off: plain only.
  *
  * THE PREFLOP PIN: a locked answer sets none (the flop reads its ranges the ordinary way — arrivalRangesGtowAi — not
  * from a tree where hero's range was every hand). The plain tree pins only when it is the answer: while the locked
