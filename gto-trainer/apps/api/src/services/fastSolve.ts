@@ -2694,7 +2694,7 @@ function cpRingTerms(hand: ParsedHand, heroPos: string | null): string {
 /**
  * Preflop under the CoinPoker ring strategy: ONE piece, the GTO Wizard AI tree built from the table as dealt
  * (services/gtowAiPreflop.ts — its stacks, blinds, ante and the table's rake), then the last resort (hero against the
- * last aggressor, everyone else's chips dead) for a line GTO Wizard's tree cannot hold. No charts behind it.
+ * last aggressor heads-up, no dead money) for a line GTO Wizard's tree cannot hold. No charts behind it.
  */
 async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rakeNote: string | null): Promise<FastSolveResult> {
   const terms = cpRingTerms(hand, heroPos ?? hand.positions[hand.heroSeatId] ?? null);
@@ -2718,7 +2718,7 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
   }
   const last = await solvePreflopLastResort(hand, heroPos, `${why}; ${ai.reason}`);
   if (last.ok) return asResult(last, true, { piece: "gtow-ai-preflop:last-resort", how: "by-design", code: "preflop:last-resort",
-    why: `GTO Wizard's tree cannot hold this line — hero vs the last aggressor, the rest dead money (${ai.reason.slice(0, 120)})` });
+    why: `GTO Wizard's tree cannot hold this line — ${last.lastResort?.how ?? "hero vs the last aggressor heads-up"} (${ai.reason.slice(0, 120)})` });
   return { ok: false, street: "preflop", gametype: CP_RING_GAMETYPE, depth: 0, line: ai.line ?? "", reason: `${why}; ${ai.reason}; ${last.reason}` };
 }
 
@@ -4223,12 +4223,13 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
         reason: `${why}; ${ai.reason}; the last resort is not tried — it replays the same line heads-up and lands on the same seat's node` };
     }
-    // THE LAST RESORT (2026-09-23): neither piece can walk the line — play it as hero versus the last aggressor
-    // with everyone else's chips as dead money (services/gtowAiPreflop.solvePreflopLastResort). Always an answer
-    // while GTO Wizard is up; always flagged.
+    // THE LAST RESORT (2026-09-23): neither piece can walk the line — play it as hero versus the last aggressor on a
+    // heads-up tree, the folded-out players' chips left out (no dead money since 2026-10-04 —
+    // services/gtowAiPreflop.solvePreflopLastResort). Always flagged; no answer only when nobody has raised and hero
+    // is not in the blinds.
     const last = await solvePreflopLastResort(hand, heroPos, `${why}; ${ai.reason}`);
     if (last.ok) return asResult(last, true, { piece: "gtow-ai-preflop:last-resort", how: pf.how === "rebuilt" ? "rebuilt" : "by-design",
-      code: pf.how === "rebuilt" ? pf.code : "preflop:last-resort", why: `neither preflop piece could walk the line — hero vs the last aggressor, the rest dead money (${why.slice(0, 120)})` });
+      code: pf.how === "rebuilt" ? pf.code : "preflop:last-resort", why: `neither preflop piece could walk the line — ${last.lastResort?.how ?? "hero vs the last aggressor heads-up"} (${why.slice(0, 120)})` });
     return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
       reason: `${why}; ${ai.reason}; ${last.reason}` };
   }

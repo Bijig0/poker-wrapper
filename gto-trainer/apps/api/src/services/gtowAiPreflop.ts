@@ -57,7 +57,7 @@ import { setPreflopPin, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOu
 // THE REDUCED TREE (2026-10-01, utils/reducedArrival): flop-entering ranges for a line no tree holds
 import {
   classesToCombos, combosToClasses, forcedHandOf, normalised, normalisedCombos, planReducedArrival, readCaller,
-  type ReducedCaller, type ReducedPlan,
+  ROOT_CHECK_MIN, type ReducedCaller, type ReducedPlan,
 } from "../utils/reducedArrival/reducedArrival";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
@@ -179,6 +179,8 @@ export interface AiPreflopResult {
   /** a FITTED answer only: each villain action on the fitted line(s), with its share of that seat's range at its node
    *  in this tree — check #3's material (an action the tree all but never takes leaves hero's node off its path) */
   villainLines?: PreflopVillainLine[];
+  /** a LAST RESORT answer: the one line fastSolve's path carries about how it was played */
+  lastResort?: { how: string };
 }
 /** One fit of a line the tree cannot hold, as hero's node was read on it. */
 export interface AiFitRead { folds: string[]; line: string; actions: MixAction[]; offPath: boolean }
@@ -1263,16 +1265,32 @@ export function warmPreflopGtowAi(hand: ParsedHand, heroPos: string | null): voi
 // THE LAST RESORT (2026-09-23, Brady: "we need 100% coverage — anything reasonable"). A preflop line neither
 // the charts nor the exact AI tree can walk — three limpers who all raise later, a 4-bet size the limp tree
 // cannot snap, three cold-callers who then re-raise each other — is reduced to the one thing every such spot
-// still has: HERO and the LAST AGGRESSOR. Everyone else is folded out and every chip they put in stays in the
-// pot as dead money, so hero faces the real raise at the real price, from the real stacks, against the player
-// who actually made it. What it loses: the folded players' ranges and anyone still to act behind hero. That is
-// an approximation, said out loud in the answer, and it beats a blank.
+// still has: HERO and the LAST AGGRESSOR, on a heads-up tree at the real sizes and stacks. What it loses: the
+// folded players' ranges, anyone still to act behind hero, and both seats' own ranges (they play a heads-up
+// blind's). That is an approximation, said out loud in the answer, and it beats a blank.
+//
+// NO DEAD MONEY (2026-10-04). Until then every chip the folded-out players had put in went into the tree's `pot`.
+// GTO Wizard books `pot` as chips in the pot BEFORE the first action — an ante — so every seat plays another game
+// from the root. Measured on the solve cache (116 preflop trees with `pot` > 0): a villain's first-in raise into
+// dead money was under 1% of his range in 33 of 33 trees (median 0.10%; 16% on the same tree without it — he limps
+// 45-61% instead), so hero's node sat off that tree's own path; and the chips were often a LIVE caller's (K5o jammed
+// 97bb into a 3-bet and two cold-callers, hand 4920545432). scripts/lastResortStudy.ts reads both trees beside exact
+// answers. The folded players' chips are now left out and the note names them: hero is priced tighter than the table.
+//
+// THE FORCED-BET TREE WAS TRIED AND IS NOT THE ANSWER (2026-10-04, scripts/_probeForcedDecision.ts): the last raise
+// posted as a blind with the raiser's own range GIVEN to the tree. GTO Wizard ignores a seat's `range` on a preflop
+// tree — three trees given premiums, nothing, and 72o alone came back identical to the cent — so hero would be read
+// against any two cards; against exact answers it did worse than either heads-up tree.
+//
+// NOBODY HAS RAISED: the heads-up tree answers only for a hero in the blinds. From any other seat it hands him a
+// small blind's opening range (74s opened under the gun, hand 4920544810): no answer there.
 // ---------------------------------------------------------------------------
 const ORBIT = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
 
 export interface HeadsUpReduction { hand: ParsedHand; deadBb: number; aggressorPos: string; keptPos: [string, string]; droppedPos: string[]; heroPos: string }
 
-/** Hero versus the last aggressor, the rest folded, their chips as dead money. null when hero's seat is unknown. */
+/** Hero versus the last aggressor, the rest folded. `deadBb` is what the folded-out players had in: since 2026-10-04
+ *  it is left OUT of the tree and only named in the note (the header). null when hero's seat is unknown. */
 export function reduceToHeadsUp(hand: ParsedHand, heroPos: string | null): HeadsUpReduction | null {
   const hp = heroPosOf(hand, heroPos);
   if (!hp) return null;
@@ -1351,17 +1369,30 @@ export function reduceToHeadsUp(hand: ParsedHand, heroPos: string | null): Heads
   return { hand: reduced, deadBb, aggressorPos: aggPos, keptPos: [posOf(first)!, posOf(second)!], droppedPos: dropped, heroPos: hp };
 }
 
-/** The last resort answer: the heads-up reduction solved as a GTO Wizard AI tree with the dead money in the pot. */
+/** What the last resort asks of the outside (a test replaces it). */
+export const lastResortSeams = {
+  headsUp: (hand: ParsedHand, heroPos: string | null, why: string, opts: NonNullable<Parameters<typeof solvePreflopGtowAi>[3]>): Promise<AiPreflopOutcome> =>
+    solvePreflopGtowAi(hand, heroPos, why, opts),
+};
+
+/** The last resort answer: the heads-up reduction solved as a plain GTO Wizard AI tree — no dead money (the header). */
 export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string | null, why: string): Promise<AiPreflopOutcome> {
   const red = reduceToHeadsUp(hand, heroPos);
   if (!red) return { ok: false, reason: "last resort: hero's seat or the opponent's could not be read" };
+  // nobody has raised: only a hero in the blinds is answered heads-up (the header)
+  const calls = allInCalls(hand.actions);
+  const raised = hand.actions.some((a) => a.street === "preflop" && (a.type === "raise" || a.type === "bet" || (a.type === "all-in" && !calls.has(a))));
+  if (!raised && red.heroPos !== "SB" && red.heroPos !== "BB") {
+    return { ok: false, reason: `last resort: nobody has raised and hero (${red.heroPos}) is not in the blinds — the heads-up tree would give him a small blind's opening range from his seat, so there is no answer` };
+  }
   const dealt = dealtCount(hand, heroPos);   // the players DEALT (a sitting-out label is not one — utils/dealtSeats)
-  const r = await solvePreflopGtowAi(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: red.deadBb, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos } });
+  const r = await lastResortSeams.headsUp(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: 0, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos } });
   if (!r.ok) return { ok: false, kind: r.kind, reason: `last resort (hero vs ${red.aggressorPos}, ${red.droppedPos.join("/") || "nobody"} folded out): ${r.reason}` };
-  const note = `LAST RESORT — no tree holds this line, so it is played as hero (${red.heroPos}) against the last aggressor (${red.aggressorPos}) alone: ` +
-    `${red.droppedPos.length ? `${red.droppedPos.join(", ")} folded out with their ${red.deadBb}bb left in the pot as dead money` : "nobody else in the pot"}; ` +
-    `the folded players' ranges and anyone still to act behind hero are not modelled. ` + r.note;
-  return { ...r, pos: red.heroPos, note };
+  const left = Math.round(red.deadBb * 100) / 100;
+  const note = `LAST RESORT — no tree holds this line, so it is played as hero (${red.heroPos}) against the last aggressor (${red.aggressorPos}) alone on a heads-up tree: ` +
+    `${red.droppedPos.length ? `${red.droppedPos.join(", ")} folded out` + (left > 0 ? ` and NONE of the ${left}bb they put in is in the tree's pot (chips there before the first action are an ante and move every range — hero is priced tighter than the table)` : "") : "nobody else in the pot"}; ` +
+    `both seats play a heads-up blind's range, and the folded players' ranges and anyone still to act behind hero are not modelled. ` + r.note;
+  return { ...r, pos: red.heroPos, note, lastResort: { how: `hero (${red.heroPos}) vs ${red.aggressorPos} heads-up, ${red.droppedPos.join("/") || "nobody"} folded out, no dead money` } };
 }
 
 /** The exact request a hand would produce (for tests and the state tester — nothing is sent). */
@@ -1803,7 +1834,13 @@ async function startRangeOf(hand: ParsedHand, seat: number, pos: string, raiseIn
 }
 
 /** One caller's tree: he and the raiser heads-up, the raise and his own earlier chips posted as the two blinds, the
- *  rest of the pot dead money, the stacks as dealt. Only the caller may put more in first; the raiser has his check. */
+ *  rest of the pot dead money, the stacks as dealt. Only the caller may put more in first; the raiser has his check.
+ *
+ *  THE RANGES SENT ARE NOT USED BY GTO WIZARD (found 2026-10-04, scripts/_probeForcedDecision.ts `range`): a preflop
+ *  tree is solved from full ranges whatever a seat's `range` says — the same tree given the raiser premiums, nothing,
+ *  and 72o alone came back identical to the cent. So the caller's fold here is his fold against ANY TWO CARDS posting
+ *  the raise, not against the raiser's range: he is read too wide. They are still sent (a body that changed would
+ *  re-solve every stored tree); the note and services/approximations say what the read is. OPEN: no fix chosen. */
 function forcedTree(hand: ParsedHand, plan: ReducedPlan, c: ReducedCaller, raiserRange: number[] | null, callerRange: number[] | null,
     rakeSeats: number, dealt: Record<number, number>): { body: any; shape: AiPreflopShape } | { error: string } {
   const reduced = forcedHandOf(hand, plan, c);
@@ -1812,9 +1849,12 @@ function forcedTree(hand: ParsedHand, plan: ReducedPlan, c: ReducedCaller, raise
   if ("error" in shape) return shape;
   const m = menus([], 2);
   const base: any = treeBody(shape, m);
-  // the caller's re-raise: about 2.5x the raise, written the API's way — as a multiple of the tree's big blind
-  const bbPost = c.tree.caller === "BB" ? c.tree.callerPost : c.tree.raiserPost;
-  const reraise = `${Math.max(1.1, Math.round(((2.5 * plan.raiseTo) / bbPost) * 100) / 100)}x`;
+  // THE CALLER'S RE-RAISE: 2.5 times the raise. A multiple in a size list is a multiple of the bet being faced — here
+  // the forced bet (probed 2026-10-04, scripts/_probeForcedDecision.ts: "2.5x" over a 17.6 post is R44 from either
+  // seat). Until then it was written as a multiple of the tree's big blind, which is the CALLER's small post when the
+  // raiser is in position: "8.8x" there asked for 8.8 times the raise and came back as the caller's all-in, so his
+  // only raise was the jam.
+  const reraise = "2.5x";
   const positions = shape.positions.map((position) => ({
     position, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
     bet_sizes: position === c.tree.caller ? [reraise] : [],
@@ -1893,6 +1933,14 @@ export async function reducedArrivalRanges(
     if ("error" in sol) return { c, error: sol.error };
     const read = await readCaller(c, sol.get);
     if (!read.ok) return { c, error: read.reason };
+    // THE RAISER'S CHECK MUST CARRY HIS RANGE (2026-10-04). The caller sits behind the raiser's root check, and a tree
+    // that gives the raiser anything else there thins his range before the caller is read: on the trees solved under
+    // the old all-in rule he jammed 30-95% of the time. Today he has the check alone (probed: 100%); if a tree ever
+    // offers more and the check is taken under ROOT_CHECK_MIN, the read is not taken and the caller's starting range stands.
+    if (read.rootCheck != null && read.rootCheck < ROOT_CHECK_MIN && cs.combos) {
+      return { c, combos: cs.combos.slice(), read: null, keptStart: false,
+        how: `his starting range kept whole (the tree's raiser checks only ${Math.round(read.rootCheck * 100)}% of the time at the root, so the node behind that check is not read)` };
+    }
     let combos = (cs.combos ?? ones()).map((w, i) => w * read.stays[i]!);
     let keptStart = false;
     if (!combos.some((x) => x > 1e-6)) {
@@ -1930,7 +1978,7 @@ export async function reducedArrivalRanges(
     `REDUCED TREE — approximate: the exact preflop tree cannot hold this line (${ctx.why.replace(/^GTO Wizard AI preflop ranges: /, "").slice(0, 160)}), ` +
     `so the flop-entering ranges are read around the last raise. ${me(plan.raiser.pos)} raised to ${plan.raiseTo}bb: ${rs.how}, narrowed by that raise as the exact tree plays it. ` +
     callers.map((x) => `${me(x.c.pos)} met it for ${x.c.toCall}bb more into a pot of ${x.c.potBefore}bb: ${start.get(x.c.pos)!.how}, then ${x.how}` +
-      (x.read ? ` — read heads-up against the raiser with the raise as a forced bet and the other ${x.c.deadBb}bb as dead money` : "")).join(". ") +
+      (x.read ? ` — read heads-up against the raiser with the raise as a forced bet and the other ${x.c.deadBb}bb as dead money (GTO Wizard solves that tree from full ranges: the fold is his fold against any two cards posting the raise, so he is read wide)` : "")).join(". ") +
     `. Not modelled: the folded players' cards; the calls between a player's entry and the last raise where the full range or the pool's stands in` +
     (callers.length > 1 ? "; the other callers when one is read (their chips are in his pot, their ranges are not)" : "") +
     `; and of the hands that continue, which ones re-raise instead of calling (the player called).` +
@@ -2125,7 +2173,7 @@ export async function livePreflopNodeView(
       const a = lastAction.get(p);
       return a ? { ...seat(p), action: a } : seat(p);
     }),
-    note: pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out as dead money` : null,
+    note: pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " as dead money" : ", none of their chips in it"}` : null,
   };
 }
 
@@ -2191,7 +2239,7 @@ export async function resumeAiPreflopRanges(
       `(${pin.shape.n}-handed, ${pin.shape.positions.map((p) => `${p} ${pin.shape.stacks[p]}bb`).join(", ")}; hero's node at "${pin.codes.join("-") || "root"}") — ` +
       `hero's action and ${fit.rest.length - 1} later action(s) read on the same solution, no tree rebuilt` +
       (repaired.changed.length ? ` · sizes snapped to the tree's own: ${repaired.changed.join(", ")}` : "") +
-      (pin.reduced ? ` · LAST RESORT tree: ${pin.reduced.droppedPos.join(", ")} folded out with their chips as dead money` : ""),
+      (pin.reduced ? ` · LAST RESORT tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " with their chips as dead money" : ", none of their chips in the tree"}` : ""),
   };
 }
 

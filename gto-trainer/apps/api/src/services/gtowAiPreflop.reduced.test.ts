@@ -45,9 +45,12 @@ const chart = (pos: string, action: string, token: string, pct: Record<string, n
   pos, terminal: false, actions: [{ action: "Fold", token: "F" }, { action, token }],
   cells: [...new Set(COMBOS.map((c) => c.cls))].map((h) => ({ hand: h, actions: { Fold: 100 - (pct[h] ?? 0), [action]: pct[h] ?? 0 } })),
 });
-/** the raiser in position: he checks, then the caller folds `foldOf(class)` and continues with the rest */
-const ipTree = (foldOf: (cls: string) => number) => ({
-  "": node("SB", [{ code: "X", freq: 0.7, strategy: arr(0.7) }, { code: "R153.5", allin: true, freq: 0.3, strategy: arr(0.3) }]),
+/** the raiser in position: he checks — the only action the tree gives him (probed 2026-10-04, the 2026-10-03 settings) —
+ *  then the caller folds `foldOf(class)` and continues with the rest. `check` < 1: a tree solved under the old all-in
+ *  rule, where GTO Wizard added the raiser's jam at the root. */
+const ipTree = (foldOf: (cls: string) => number, check = 1) => ({
+  "": node("SB", check >= 1 ? [{ code: "X", freq: 1, strategy: arr(1) }]
+    : [{ code: "X", freq: check, strategy: arr(check) }, { code: "R153.5", allin: true, freq: 1 - check, strategy: arr(1 - check) }]),
   "X": node("BB", [{ code: "F", freq: 0.14, strategy: arr(foldOf) }, { code: "C", freq: 0.2, strategy: arr((c) => (1 - foldOf(c)) * 0.25) }, { code: "R91.5", allin: true, freq: 0.66, strategy: arr((c) => (1 - foldOf(c)) * 0.75) }]),
 });
 /** the raiser out of position: the caller is at the root */
@@ -101,7 +104,7 @@ describe("reducedArrivalRanges", () => {
     expect(body.starting_street).toBe("PREFLOP");
     expect(body.pot).toBe(10.4);                               // the dead money as it lay when UTG met the raise
     expect(body.players.map((p: any) => `${p.position} posts ${p.blind} of ${p.stack}`)).toEqual(["SB posts 17.6 of 153.5", "BB posts 5 of 91.5"]);
-    expect(sizesOf(body)).toEqual({ SB: [], BB: ["8.8x"] });   // only the caller may put more in first: to ~2.5x the raise (8.8 of his 5)
+    expect(sizesOf(body)).toEqual({ SB: [], BB: ["2.5x"] });   // only the caller may put more in first: 2.5 times the forced bet (a multiple of the bet faced, probed)
     expect(body.rake.cap_in_chips).toBeGreaterThan(0);
     // the raiser's range in the tree: the chart's limp (ATs 28.79, 77 12.17, 55 19.85) × the exact tree's raise
     // (ATs 0.25, 77 0.5, 55 0) — 7.2 and 6.1, scaled so the heaviest is 1
@@ -135,7 +138,7 @@ describe("reducedArrivalRanges", () => {
     expect(r.note).toContain("UTG met it for 12.6bb more into a pot of 33bb: the pool's limp range");
     expect(r.note).toContain("his 1 later action before the raise not applied");
     expect(r.note).toContain("the hands that do not fold to it (the tree: fold 14% · call 20% · re-raise 66%)");
-    expect(r.note).toContain("the raise as a forced bet and the other 10.4bb as dead money");
+    expect(r.note).toContain("the raise as a forced bet and the other 10.4bb as dead money (GTO Wizard solves that tree from full ranges");
   });
 
   it("refused: a raiser whose raise the exact tree cannot read has no range to put behind it", async () => {
@@ -238,6 +241,22 @@ describe("reducedArrivalRanges", () => {
     expect(r.reduced?.trees).toBe(0);
     expect(r.note).toContain("UTG met it for 7bb more into a pot of 33bb");
     expect(r.note).toContain("taken as not folding (all in for 7bb more)");
+  });
+
+  it("the raiser's root check must carry his range: under 90% the node behind it is not read and the caller's starting range stands", async () => {
+    // the 2026-10-01 shape: GTO Wizard's old all-in rule gave the raiser a jam at the root and he took it with 30%
+    rig(() => ipTree((c) => (c === "72o" ? 1 : 0), 0.7));
+    const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.ranges.UTG!["72o"]).toBeCloseTo(0.5 / 25.45, 3);   // the tree folds it — not read: the pool's limp range, whole
+    expect(r.note).toContain("his starting range kept whole (the tree's raiser checks only 70% of the time at the root, so the node behind that check is not read)");
+    expect(r.reduced!.trees).toBe(0);
+    // the check alone at the root (today's tree): read
+    rig(() => ipTree((c) => (c === "72o" ? 1 : 0)));
+    const ok = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
+    if (!ok.ok) throw new Error(ok.reason);
+    expect(ok.ranges.UTG!["72o"]).toBeUndefined();
+    expect(ok.reduced!.trees).toBe(1);
   });
 
   it("a caller the tree folds entirely keeps his starting range — he did not fold", async () => {
