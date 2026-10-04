@@ -20,7 +20,7 @@ import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedActi
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { SNAP_TAU, SNAP_MAX } from "../utils/snapToken/snapToken";
 import type { Walk3Repair } from "./hrc3max";
-import { walkFitted, foldSeatsOut, actorsWithAllins } from "../utils/fitLine/fitLine";
+import { walkFitted, foldSeatsOut, actorsWithAllins, emptiedGroups, groupText, type CallerGroup } from "../utils/fitLine/fitLine";
 import { reconstructFlopRanges, classWeightsToSpec, withRangeWalkCapture, replayRangeWalks, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
@@ -151,6 +151,9 @@ export type FastSolveResult =
       /** a 6-max chart answer: how far the table's stacks are from the chart's (services/treeGap) — LOG ONLY, it
        *  rides to the answer log on `path` and routes nothing */
       treeGap?: TreeGap;
+      /** the chart answered although its fit folds the only limper / caller out (the exact tree failed to answer in
+       *  its time box): what the rule found and how the exact tree's turn went */
+      fitEmpties?: FitEmpties;
       /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
       dryRun?: {
         flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[];
@@ -179,7 +182,25 @@ export type FastSolveResult =
       path?: DecisionPath;
       /** a chart refusal by THE GAP GATE (services/treeGap): the measurement and what the chart would have answered */
       treeGap?: TreeGap;
+      /** a chart refusal because its line fit would fold the ONLY limper / caller out (utils/fitLine.emptiedGroups) */
+      fitEmpties?: FitEmpties;
     };
+
+/**
+ * THE FIT WOULD EMPTY A GROUP (2026-10-04, utils/fitLine.emptiedGroups): the chart holds no branch for the table's only
+ * limper, or the only caller of a raise, so fitting the line would answer hero as if that player had folded. The chart
+ * refuses and the exact GTO Wizard tree answers; this is the record of it on the answer (answers.path → fitEmpties).
+ */
+export interface FitEmpties {
+  /** the chart that refused, the line as the table played it, and the line its fit would have read hero at */
+  chart: string; raw: string; readAt: string;
+  /** every group the fit leaves nobody in (level 0 = limpers, k = callers of the k-th raise) */
+  groups: CallerGroup[];
+  /** what the chart would have answered for hero's hand on the fitted line */
+  chartMix?: { action: string; frequency: number }[];
+  /** how the exact tree's turn went (fastSolveInner): it answered, or the chart answered after all */
+  ai?: "answered" | "failed" | "timeout"; aiWhy?: string; aiMs?: number;
+}
 
 /** The terminal refusal classes fastSolve itself emits — see FastSolveResult.kind. */
 export type RefusalKind = "capture-fault" | "no-hero-cards" | "board-incomplete";
@@ -1071,7 +1092,11 @@ async function flopArrivalCompute(
         pinMiss = resumed.why;
       }
     }
-    const wantAi = piece === "gtow-ai-preflop" || piece === "chart3max" || !is6Handed(hand, heroPos);
+    // AN AI PIN THAT COULD NOT BE RESUMED IS STILL AN AI ANSWER (2026-10-04): the pin says which piece hero's last
+    // decision was read on, whatever the answer log holds (a decision the poller's probe never logged used to send
+    // the hand back to the charts here — and to a per-seat chart fit that folds the very caller the chart refused
+    // hero's decision over, utils/fitLine.emptiedGroups)
+    const wantAi = piece === "gtow-ai-preflop" || pin?.piece === "gtow-ai-preflop" || piece === "chart3max" || !is6Handed(hand, heroPos);
     let six: Awaited<ReturnType<typeof recon6max>> | null = null;
     if (!recon && !wantAi) {
       six = await recon6max(hand, heroPos, heroPosName, pinnedDealt);
@@ -3347,7 +3372,8 @@ export async function solvePreflop6max(
   strategyId?: string | null,
   /** a second read after hero's class had no cell: `keepChart` — on the chart hero's earlier decision was read from
    *  instead of the picker's; `keepCallers` — never folding a caller that earlier decision was read with */
-  retry: { keepChart?: string; keepCallers?: boolean; /** answer from the chart whatever the gap gate says (the exact tree did not answer) */ noGate?: boolean } = {},
+  retry: { keepChart?: string; keepCallers?: boolean; /** answer from the chart whatever the gap gate says (the exact tree did not answer) */ noGate?: boolean;
+    /** answer from the chart although its fit folds the only limper / caller out (the exact tree did not answer) */ allowEmptied?: boolean } = {},
 ): Promise<FastSolveResult | null> {
   void origin; void strategyId;
   // A CAPTURE THAT CONTRADICTS ITSELF HAS NO RIGHT ANSWER (2026-09-21), preflop as much as postflop. Without
@@ -3441,6 +3467,35 @@ export async function solvePreflop6max(
   const heroNode = borrowed?.node ?? walk.node;
 
   const line = walk.tokens.join("-");
+  // THE FIT MAY THIN A CROWD, NEVER EMPTY IT (2026-10-04, Brady: "as much as possible I want the game state to be
+  // reflected" — utils/fitLine.emptiedGroups). The fit and the caller-cap borrow were built for the trees' caps (a third
+  // limper, a third caller: no tree holds the line, one player fewer is the nearest spot). But the walk also fails on
+  // an action this chart never exported — a 30bb UTG's limp HRC pruned at 0.07%, a short small blind's flat of a button
+  // open — and folding THAT player deletes the only limper or cold-caller: hero was answered as if he had folded (hand
+  // 4922293970, HJ ATo facing a 30bb UTG limp: the first-in "Raise 2.5"; 26 live answers 2026-09-27..10-04). GTO
+  // Wizard's preflop tree holds one limper (plus the SB completing) and one cold-caller (plus the BB), so it holds
+  // every such line: the chart refuses and the exact tree answers. Measured on the RAW tokens, over every seat folded
+  // out of hero's line (this fit, an earlier decision's, the borrow). A group thinned but not emptied stays here.
+  const foldedSeats = [...new Set([...sticky, ...walk.folds.map((f) => f.seat), ...(borrowed ? [borrowed.dropped] : [])])];
+  const emptied = emptiedGroups(tokens, foldedSeats, { heroSeat: heroSeatName, stack: choice.depth });
+  /** the rule's record when the chart answers anyway (allowEmptied: the exact tree failed) */
+  let fitEmpties: FitEmpties | undefined;
+  if (emptied.length) {
+    const readAt = borrowed?.line ?? line;
+    const mine = heroClassOf(hand);
+    const mix = mine ? heroNode.cells.find((c) => c.hand === mine)?.actions : undefined;
+    fitEmpties = { chart: resolved.id, raw: tokens.join("-"), readAt: readAt || "(root)", groups: emptied,
+      ...(mix ? { chartMix: Object.entries(mix).map(([action, frequency]) => ({ action, frequency })) } : {}) };
+    if (!retry.allowEmptied) {
+      const what = emptied.map(groupText).join(" and ");
+      const one = emptied.length === 1 && emptied[0]!.seats.length === 1;
+      return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)", fitEmpties,
+        reason: `LINE NOT HELD: ${resolved.id} has no branch for ${what} ("${tokens.join("-")}") — fitting the line would fold ` +
+          `${one ? "that player" : "those players"} out and answer hero as if ${one ? "he" : "they"} had folded (read at "${readAt || "root"}"), ` +
+          `and the fit may thin a crowd but never empty it — GTO Wizard's preflop tree holds one limper and one cold-caller, so the exact tree answers. ` +
+          `It is an equilibrium solve too: hero gets the right node, pot and sizes, against the solver's model of a player who takes this line, not the pool's` };
+    }
+  }
   // THE NODE MUST BE HERO'S (2026-09-22). A chart node carries the position it belongs to, and until now
   // nothing checked it against the seat we are actually answering for — so a tree whose rotation disagrees
   // with the table handed hero ANOTHER SEAT'S STRATEGY, with no warning and no approximation flag. It is
@@ -3587,7 +3642,6 @@ export async function solvePreflop6max(
     // named the real two-limp node while the pick came from the one-limp donor, and the flop read hero's A4s iso at
     // a node the chart folds it at — zero weight after following the pick). The seats folded out ride along.
     const heroCodes = borrowed ? borrowed.line.split("-").filter(Boolean) : walk.tokens;
-    const foldedSeats = [...new Set([...sticky, ...walk.folds.map((f) => f.seat), ...(borrowed ? [borrowed.dropped] : [])])];
     const picks = cell ? [{ rawTokens: tokens, codes: heroCodes, heroClass,
       mix: heroNode.actions.map((x) => ({ action: x.action, token: x.token, frequency: actions.find((a) => a.action === x.action)?.frequency ?? 0 })) }] : [];
     // the sizes this decision was read at instead of the ones played: the flop's ranges sit on the same codes
@@ -3645,6 +3699,7 @@ export async function solvePreflop6max(
     approx: notes.length > 0 || walk.repaired.length > 0 || walk.folds.length > 0 || !!borrowed || resolved.fellBack || undefined,
     warning: notes.join(" · "),
     treeGap: gap,
+    ...(fitEmpties ? { fitEmpties } : {}),
   };
 }
 
@@ -3760,13 +3815,28 @@ const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS)
  * raises. So every ingest tick with a new line that holds a raise walks the chart the answer would read, and when the
  * gate would send hero's decision to the exact tree, that tree is pre-built (gtowAiPreflop.warmPreflopGtowAi — the
  * same key the answer asks for while no further raise lands). One check per (hand, line); nothing when hero is out.
+ *
+ * AND WHEN THE LIMP OR THE CALL LANDS (the fit rule, 2026-10-04, utils/fitLine.emptiedGroups): a line whose only limper
+ * or only caller this chart has no branch for is the exact tree's to answer, and that is known the moment he calls —
+ * the same walk says so, so the same tick pre-builds the tree. (Hero next to act after the limp gets no head start
+ * from it: the tree is asked for when he is; a seat or more between them is the seconds this buys.)
  */
 const gateWarmed = new Map<string, number>();
 async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string): Promise<void> {
-  if (gapGateMode() !== "live" || hand.ended || (hand as { heroFolded?: boolean }).heroFolded) return;
+  if (hand.ended || (hand as { heroFolded?: boolean }).heroFolded) return;
   if (hand.actions.some((a) => a.hero && a.type === "fold")) return;
-  const tokens = buildPreflopTokens(hand, heroPos);
-  if (!tokens.some((t) => /^R/i.test(String(t)))) return;
+  // THE LINE HERO WILL FACE IF IT FOLDS TO HIM (2026-10-04). Until hero has acted, the token builder leaves his node
+  // open only while he is ON THE CLOCK; on any earlier tick it pads every seat with no action yet as a fold — hero's
+  // own and the blinds' — a line that ends the hand, which no chart walks: the check below never fired before hero's
+  // turn in the first orbit, exactly when the head start is worth most. So the hand is read as if he were on the
+  // clock: the seats between the last action and hero fold (the likeliest line; the exact tree's key holds the raise
+  // sizes seen, not the folds), and a seat that acts instead is a new line, checked on its own tick.
+  const heroActed = hand.actions.some((a) => a.hero && a.street === "preflop" && !/^post/.test(a.type));
+  const asked = heroActed || hand.currentNode.toActIsHero ? hand : { ...hand, currentNode: { ...hand.currentNode, toActIsHero: true } };
+  const tokens = buildPreflopTokens(asked, heroPos);
+  // the gate needs a raise in the line (and to be live); the fit rule needs a call in it
+  const gateCan = gapGateMode() === "live" && tokens.some((t) => /^R/i.test(String(t)));
+  if (!gateCan && !tokens.includes("C")) return;
   const k = `${key}|${tokens.join("-")}`;
   if (gateWarmed.has(k)) return;
   gateWarmed.set(k, Date.now());
@@ -3777,6 +3847,13 @@ async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string
   const heroSeat = hand.positions[hand.heroSeatId] ?? heroPos ?? null;
   const walk = await walkFitted(tokens, nodeGetter(resolved.id), { heroSeat, stack: choice.depth });
   if (!walk.ok) return;
+  const emptied = emptiedGroups(tokens, walk.folds.map((f) => f.seat), { heroSeat, stack: choice.depth });
+  if (emptied.length) {
+    console.log(`[fit-empties] hand ${key}: ${resolved.id} has no branch for ${emptied.map(groupText).join(" and ")} ("${tokens.join("-")}") — pre-building the exact tree`);
+    warmPreflopGtowAi(hand, heroPos);
+    return;
+  }
+  if (!gateCan) return;
   const gap = treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeat, ...replayTokens6(tokens),
     repaired: walk.repaired, fitted: walk.fittedLine ?? tokens, rawTokens: tokens });
   if (!gap?.gate.route) return;
@@ -4004,7 +4081,8 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   // the decision's own checks (services/chainChecks): the clock, the buttons, the mix, the key, hero's class preflop
   const path = guardChecks(0, () => withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos)), path0);
   const treeGap = value.treeGap;
-  return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin, ...(treeGap ? { treeGap } : {}) } } as FastSolveResult;
+  const fitEmpties = value.fitEmpties;
+  return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin, ...(treeGap ? { treeGap } : {}), ...(fitEmpties ? { fitEmpties } : {}) } } as FastSolveResult;
 }
 
 async function fastSolveEntry(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
@@ -4139,12 +4217,16 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     let pf: NonNullable<DecisionPath["preflop"]>;
     /** THE GAP GATE sent this decision here (services/treeGap): the chart could answer it, past a measured bound */
     let gated: TreeGap | null = null;
+    /** THE FIT RULE sent this decision here (utils/fitLine.emptiedGroups): the chart could answer it, by folding the
+     *  table's only limper / caller out of hero's line */
+    let emptied: FitEmpties | null = null;
     if (is6Handed(hand, heroPos)) {
       const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
       if (six && six.ok) return six;
       why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
       if (six && !six.ok && six.treeGap?.gate.route) gated = six.treeGap;
-      pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: gated ? "preflop:gap-gate" : "preflop:charts-cannot-hold", why: why.slice(0, 200) }
+      if (six && !six.ok && six.fitEmpties) emptied = six.fitEmpties;
+      pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: gated ? "preflop:gap-gate" : emptied ? "preflop:fit-empties" : "preflop:charts-cannot-hold", why: why.slice(0, 200) }
         : { piece: "gtow-ai-preflop", how: "rebuilt", code: "preflop:charts-unreachable", why: "the 6-max charts did not answer (chart server :8777 down or the tree missing) — a GTO Wizard AI preflop tree answered" };
     } else {
       // THE 3-MAX CORPUS IS CUT FROM THIS STRATEGY (Brady, 2026-09-19). It was wired in earlier the same day
@@ -4170,30 +4252,41 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // THAT IS A FAILURE OF THE AI PIECE AND IS LOGGED AS ONE (Brady, 2026-10-02): the chart's answer carries the path
     // code preflop:gap-gate-ai-failed (a fallback — never "clean"), the reason and the seconds waited ride on
     // treeGap.routed, and api.log gets a [gap-gate] line.
+    // THE FIT RULE'S DECISIONS TAKE THE SAME BOX (2026-10-04): the chart could answer those too — by folding the only
+    // limper / caller out, the answer the rule exists to replace — so a failed or late exact tree is not a no-answer
+    // (a fold on the clock, whatever hero holds): the chart's fitted answer is served, flagged, under the path code
+    // preflop:fit-empties-ai-failed, with the reason and the seconds on fitEmpties and a [fit-empties] line in api.log.
     let ai: AiPreflopOutcome;
-    if (gated) {
+    if (gated || emptied) {
       const t0 = Date.now();
+      const tag = gated ? "gap-gate" : "fit-empties";
+      const rule = gated ? `GAP GATE: ${gapText(gated.gate.reasons)}`
+        : `LINE NOT HELD: the chart has no branch for ${emptied!.groups.map(groupText).join(" and ")}`;
       let gaveUp = false;
-      const asked = solvePreflopGtowAi(hand, heroPos, why, { skipPin: () => gaveUp })
+      // check #3 for the exact line (the fit rule only): how often the tree's own villain takes the action the chart lacks
+      const asked = solvePreflopGtowAi(hand, heroPos, why, { skipPin: () => gaveUp, ...(emptied ? { villainLines: true } : {}) })
         .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
       const first = await Promise.race([asked, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), gapGateAiMs()))]);
       if (first === "timeout" || !first.ok) {
         gaveUp = true;
         const how = first === "timeout" ? "timeout" as const : "failed" as const;
         const aiWhy = first === "timeout" ? `no answer inside ${(gapGateAiMs() / 1000).toFixed(0)} s` : first.reason.slice(0, 200);
-        const chart = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId, { noGate: true });
-        console.log(`[gap-gate] AI FAILED TO ANSWER (${how}, ${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${aiWhy} — ${gapText(gated.gate.reasons)}`);
+        const chart = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId, { noGate: true, allowEmptied: true });
+        console.log(`[${tag}] AI FAILED TO ANSWER (${how}, ${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${aiWhy} — ${rule}`);
         if (chart && chart.ok) {
-          const failNote = `GAP GATE: ${gapText(gated.gate.reasons)} — THE EXACT TREE FAILED TO ANSWER (${aiWhy}), so the chart answers`;
+          const failNote = `${rule} — THE EXACT TREE FAILED TO ANSWER (${aiWhy}), so the chart answers` +
+            (emptied ? ` WITH THAT PLAYER FOLDED OUT OF THE LINE: hero is read as if he had folded` : "");
           return { ...chart, approx: true,
             warning: [failNote, chart.warning].filter(Boolean).join(" · "),
-            path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "hrc-6max-preflop", how: "rebuilt", code: "preflop:gap-gate-ai-failed", why: failNote.slice(0, 240) } }),
-            treeGap: { ...gated, routed: { ...gated.routed!, ai: how, aiWhy, aiMs: Date.now() - t0 } } };
+            path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "hrc-6max-preflop", how: "rebuilt", code: `preflop:${tag}-ai-failed`, why: failNote.slice(0, 240) } }),
+            ...(gated ? { treeGap: { ...gated, routed: { ...gated.routed!, ai: how, aiWhy, aiMs: Date.now() - t0 } } } : {}),
+            ...(emptied ? { fitEmpties: { ...(chart.fitEmpties ?? emptied), ai: how, aiWhy, aiMs: Date.now() - t0 } } : {}) };
         }
         ai = first === "timeout" ? await asked : first;      // the chart cannot either: the exact tree is all there is
       } else {
         ai = first;
-        gated = { ...gated, routed: { ...gated.routed!, ai: "answered", aiMs: Date.now() - t0 } };
+        if (gated) gated = { ...gated, routed: { ...gated.routed!, ai: "answered", aiMs: Date.now() - t0 } };
+        if (emptied) emptied = { ...emptied, ai: "answered", aiMs: Date.now() - t0 };
       }
     } else ai = await solvePreflopGtowAi(hand, heroPos, why);
     const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean, pfPath = pf): FastSolveResult => ({
@@ -4205,6 +4298,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       warning: r.note, approx: approx || undefined,
       path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
       ...(gated ? { treeGap: gated } : {}),
+      ...(emptied ? { fitEmpties: emptied } : {}),
     });
     if (ai.ok) return asResult(ai, ai.shape.deadSb);
     // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR "Incorrect actions" from GTO
