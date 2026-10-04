@@ -1901,23 +1901,14 @@ async function solvePostflopViaChainOnce(
         }
       }
       if (!picked) {
-        // THE POSTFLOP LAST RESORT (2026-09-23, Brady: "100% coverage on all spots"). Every villain has chips in on
-        // this street and no pair is mergeable, so nothing reduces the field to three. What every such spot still
-        // has is HERO and the LAST AGGRESSOR: the street is re-rooted heads-up between them, the other villains'
-        // chips (and hero's own earlier chips this street) stay in the pot as dead money, and hero faces the
-        // aggressor's bet at the real price. Unmodelled, said in the answer: the other villains' ranges and hands. The
-        // two entering ranges are narrowed through the earlier streets (lastResortRace, 2026-10-03: within LAST_RESORT_NARROW_MS, else unnarrowed). It beats a blank.
-        const lr = heroVsAggressor({ ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts, allIn: allInSeats, behind: behindFlop });
-        if (!lr) return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — and no last resort fits (nobody to face, or everyone all-in)`);
-        walkables = [{ ...lr.walkable, lastResort: { lr, heroPos: ordered[heroAt]! } }];
-        reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
-        blendWhy = null;
-        const note =
-          `POSTFLOP LAST RESORT — ${collapseRefusal(cSeats, toks)}${rerootWhy ? ` (re-rooting at the ${cur}: ${rerootWhy})` : ""}; played as hero (${ordered[heroAt]}) against the last ` +
-          `aggressor (${lr.villain}) alone at the ${cur}: ${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
-          `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.bet >= lr.stack - 0.005 ? "ALL-IN" : lr.villainBet ? "bet" : "raise"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind${lr.stacks}; ` +
-          `the other villains' ranges and hands are not modelled; ${LR_CLAUSE}.`;
-        sixNote = sixNote ? `${sixNote} · ${note}` : note;
+        // NO COLLAPSE → NO ANSWER (2026-10-05, Brady: "do NOT use heads up last resort it is a terrible model"). The
+        // postflop last resort played hero against the last aggressor alone, every other villain's chips dead money:
+        // hand 4922578344 (88 on AdTc6d, CO bets 3, the 17.4bb BTN raises to 16.8, the 82bb SB calls) answered ALLIN
+        // 17.4 on a tree without the SB and hero shoved 138.8 into him. Two 3-seat trees that keep the SB or the CO
+        // (the dropped seat's chips as dead money) both FOLD 88 99.99%. Until that replacement is built and measured,
+        // a field nothing reduces to three is a reasoned refusal.
+        return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — ` +
+          `no answer: the heads-up last resort is off (2026-10-05)`);
       }
       if (!reroot) walkables = picked!.plans.map((pl) => ({
         seatSpec: specOf(pl.seats, pl.heroIdx),
@@ -2114,38 +2105,8 @@ async function solvePostflopViaChainOnce(
     });
   }
   logChain(hand, cur, origin, chains, tEntry, t0);
-  // A collapse that will not walk is survivable while another one did. ALL of them failing used to be the miss;
-  // since 2026-09-24 (postflop sweep: a merged SB+BB check-raise nobody could walk) a 3+ way field that faces a bet
-  // falls back to the POSTFLOP LAST RESORT here too — hero against the last aggressor, heads-up at this street, the
-  // other villains' chips as dead money — exactly as when no collapse is legal at all. A blank is never the answer.
-  if (!walks.length && flopSeats.length >= 3 && !walkables.some((w) => /^last-resort/.test(w.kind ?? ""))) {
-    const heroAtLr = ordered.findIndex((p) => p.toUpperCase() === heroPosName.toUpperCase());
-    const lr = heroAtLr >= 0
-      ? heroVsAggressor({ ordered, heroPos: ordered[heroAtLr]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts, allIn: allInSeats, behind: behindFlop })
-      : null;
-    if (lr) {
-      reroot = { first: lr.first as 1 | 2, pot: lr.pot, stack: lr.stack };
-      blendWhy = null;
-      const c = await solveOne({ ...(lr.walkable as Walkable), lastResort: { lr, heroPos: ordered[heroAtLr]! } });
-      const meta = { ...solveMetaBase, solveMs: Date.now() - t0 };
-      if (c.ok) {
-        walks.push({
-          kind: lr.walkable.kind, data: c.data, line: `${preTokens.join("-")} / ${c.line}`, trace: c.trace,
-          solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${c.line}`, solves: c.solves, ok: true, why: null }, c.trace),
-        });
-        const note =
-          `POSTFLOP LAST RESORT — no collapse of the ${ordered.length}-way field could be walked (${walkFails.join("; ")}); ` +
-          `played as hero (${ordered[heroAtLr]}) against the last aggressor (${lr.villain}) alone at the ${cur}: ` +
-          `${lr.others.length ? `${lr.others.join(", ")}'s ${lr.dead}bb left in the pot as dead money` : "no other chips"}, ` +
-          `${lr.pot}bb in the middle ${lr.bet > 0 ? `before the ${lr.bet}bb ${lr.bet >= lr.stack - 0.005 ? "ALL-IN" : "bet"} hero faces` : "with the action checked to hero"}, ${lr.stack}bb behind${lr.stacks}; ` +
-          `the other villains' ranges and hands are not modelled; ${lrNarrowClause}.`;
-        sixNote = sixNote ? `${sixNote} · ${note}` : note;
-        walkFails.length = 0;
-      } else {
-        walkFails.push(`last resort: ${c.why}`);
-      }
-    }
-  }
+  // A collapse that will not walk is survivable while another one did. ALL of them failing is a refusal: the heads-up
+  // last resort that used to catch it here (2026-09-24) is off since 2026-10-05 (see "NO COLLAPSE → NO ANSWER" above).
   if (sixNote?.includes(LR_CLAUSE)) sixNote = sixNote.replace(LR_CLAUSE, lrNarrowClause || "the two entering ranges are NOT narrowed (the last resort was not solved)");
   if (!walks.length) return fail(walkFails.join(" · ") || "no walkable tree");
   // THE STACKS THE TREES WERE SOLVED AT, when not the whole field's (2026-09-25): a tree whose seats are shallower than

@@ -331,12 +331,12 @@ export const APPROXIMATIONS: Approximation[] = [
   {
     id: "postflop-last-resort",
     source: "gtow-ai",
-    title: "A 4+ way street no collapse can reduce is played heads-up against the last aggressor",
-    what: "every villain has chips in on this street and no pair is mergeable, so the street is re-rooted heads-up between hero and the last aggressor: the other villains' chips (and hero's own earlier chips this street) stay in the pot as dead money and hero faces the aggressor's bet at the real price",
-    why: "the collapse primitives (ghost a seat that committed nothing, merge an adjacent pair) have nothing to work with when everyone committed; this shape was seen 0 times in 425 real 4+ way decisions but a blank is not an answer (Brady, 2026-09-23)",
-    fix: "unmodelled: the other villains' ranges and hands, and the narrowing of the two entering ranges by earlier streets — a 4-player postflop solver would be the exact fix and none exists",
-    status: "vendor-ceiling",
-    code: "fastSolve.ts heroVsAggressor / solvePostflopViaChain (the !picked branch)",
+    title: "A 4+ way street no collapse can reduce gets no answer (the heads-up last resort is off)",
+    what: "OFF since 2026-10-05 (Brady: \"do NOT use heads up last resort it is a terrible model\"). When two or more villains have chips in on this street and no pair is mergeable (bet-call-call, bet-raise-call, ...), or every collapse fails to walk, the decision is refused with the reason. It used to be re-rooted heads-up between hero and the last aggressor, every other villain's chips as dead money: hand 4922578344 (88 on AdTc6d facing the CO's 3, the 17.4bb BTN's raise to 16.8 and the 82bb SB's call) answered ALLIN 17.4, a tree without the SB",
+    why: "the collapse primitives (ghost a seat that committed nothing, merge an adjacent pair committing once a street) have nothing to work with when two villains committed on the street; 35 of 222 4+ way postflop decisions 2026-09-27..10-05 landed here",
+    fix: "three-seat trees that keep hero, the aggressor and one other live villain, the dropped seats' chips on this street as dead money from the street's start, blended by action class (fold = the most folding tree, raise = the least raising) — on hand 4922578344 both such trees fold 88 99.99%; to be measured (collapse calibration at 3->2 and the 35 logged decisions) before it ships",
+    status: "solvable",
+    code: "fastSolve.ts solvePostflopViaChain (the !picked branch: refusal); heroVsAggressor kept, unused by the answer path",
   },
   {
     id: "last-resort-heads-up",
