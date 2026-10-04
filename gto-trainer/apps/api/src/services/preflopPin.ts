@@ -8,6 +8,7 @@ import { walkFitted, actorsWithAllins } from "../utils/fitLine/fitLine";
 import type { AiPreflopShape } from "./gtowAiPreflop";
 import { tmark } from "./answerTrace";
 import { handFacts } from "./handFacts";
+import { currentRequestScope } from "./requestScope";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
 
 /**
@@ -81,8 +82,54 @@ export interface AiPreflopPin extends PinBase {
   reduced: { droppedPos: string[] } | null;
   /** the background pre-fetch of every prefix node (never awaited by the answer) */
   warm: Promise<void> | null;
+  /** the tree's key in the GTO Wizard solve cache (services/gtowSolveCache): its nodes read back without a request */
+  cacheKey?: string | null;
+  /** a LOCKED last-resort tree (gtowAiPreflop.solveLockedLastResort): how it was built — kept on its node record only,
+   *  never pinned (the flop does not resume from a tree where hero's range is every hand) */
+  lastResort?: string;
 }
 export type PreflopPin = ChartPreflopPin | AiPreflopPin;
+
+/**
+ * EVERY PREFLOP DECISION'S NODE, KEPT (2026-10-04, Brady: "make it so that all decisions preflop are saved and
+ * retrievable"). The pin holds only the hand's LAST preflop answer (it is what the flop resumes from), so the hand page
+ * could show no node for a GTO Wizard AI preflop answer at all — an AI answer stores no solve — and an earlier one of
+ * the same hand was gone the moment hero acted again. Each answer hero was given now leaves its own record in the
+ * hand's facts, keyed by the decision (`actionIndex` = the answer log's decision key [4]): the pin as written for it,
+ * and for a locked last-resort answer (which pins nothing) the same fields. With `cacheKey` the page reads the node and
+ * every seat's range back from the solve cache — no request. A replay (origin "replay") records nothing: it must not
+ * replace what hero was actually told.
+ */
+export type PreflopNodeRecord = Omit<ChartPreflopPin, "picks"> | Omit<AiPreflopPin, "picks" | "warm">;
+
+export function recordPreflopNode(pin: PreflopPin, heroCards?: string | null): void {
+  if (!pin.handKey || currentRequestScope()?.origin === "replay") return;
+  const { picks: _p, ...rest } = pin as PreflopPin & { warm?: unknown };
+  if ("warm" in rest) delete (rest as { warm?: unknown }).warm;
+  handFacts.recordPreflopNode(pin.handKey, rest as PreflopNodeRecord, heroCards);
+}
+
+/**
+ * The record of the preflop decision at `actionIndex`, found by the hand's site id (or its wrapper counter, as
+ * preflopPinFor). A hand answered before every decision was kept (2026-10-04) has only its pin: that stands in when it
+ * was written for this very decision.
+ */
+export function preflopNodeFor(hand: ParsedHand, actionIndex: number): PreflopNodeRecord | undefined {
+  const keys = [preflopPinKey(hand), hand.clientHandId && hand.handId != null ? String(hand.handId) : null].filter((k): k is string => !!k);
+  const cards = (hand.heroCards ?? []).join("");
+  for (const [i, key] of keys.entries()) {
+    const doc = handFacts.get(key);
+    if (!doc || (i > 0 && !(cards && doc.heroCards === cards))) continue;
+    const rec = (doc.preflopNodes ?? []).find((r) => r.actionIndex === actionIndex);
+    if (rec) return rec;
+    if (doc.preflop?.actionIndex === actionIndex) {
+      const { picks: _p, ...pin } = doc.preflop as PreflopPin & { warm?: unknown };
+      delete (pin as { warm?: unknown }).warm;
+      return pin as PreflopNodeRecord;
+    }
+  }
+  return undefined;
+}
 
 /**
  * SIZES READ AT THE CHART'S, SAID (2026-09-25, round 2 of the input-mutation harness, range-level oracle). A walk
@@ -121,6 +168,7 @@ export function setPreflopPin(pin: PreflopPin, heroCards?: string | null): void 
   const carried = (prev?.picks ?? []).filter((p) => isStrictPrefix(p.rawTokens, pin.rawTokens));
   pin = { ...pin, picks: [...carried, ...(pin.picks ?? [])] } as PreflopPin;
   handFacts.setPreflop(pin.handKey, pin, heroCards);
+  recordPreflopNode(pin, heroCards);
   tmark("preflop ranges pinned", `hand ${pin.handKey}: ${pin.piece} ${pin.piece === "chart6max" ? pin.chartId : pin.id} at "${pin.codes.join("-") || "root"}" (${pin.heroPos} to act)`);
 }
 export const getPreflopPin = (handKey: string): PreflopPin | undefined => handFacts.preflop(handKey);

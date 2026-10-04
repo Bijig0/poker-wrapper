@@ -53,7 +53,7 @@ import { isTestStakeOf } from "./strategies";
 import { actorsWithAllins, foldEarliestCaller, foldableCallers, foldSeatsOut } from "../utils/fitLine/fitLine";
 import { blendFitMixes, type MixAction } from "../utils/fitBlend/fitBlend";
 import { isOffTree, offTreeStats, pctOf } from "./offTree";
-import { setPreflopPin, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, recordPreflopNode, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
 // THE REDUCED TREE (2026-10-01, utils/reducedArrival): flop-entering ranges for a line no tree holds
 import {
   cameInLimping, classesToCombos, combosToClasses, normalised, normalisedCombos, planReducedArrival, type ReducedCaller,
@@ -1352,7 +1352,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   if (handKey && !opts.skipPin?.()) {
     const warm = Promise.allSettled(codes.map((_, k) => fetchNode(usedSol, codes.slice(0, k).join("-")))).then(() => undefined);
     setPreflopPin({
-      piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm,
+      piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(usedSol),
       id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
       heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: hand.actions.length, at: Date.now(),
     } satisfies AiPreflopPin, hand.heroCards.join(""));
@@ -1569,7 +1569,7 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
       late,
     ]);
     if (timer) clearTimeout(timer);
-    if (locked.ok) return locked;
+    if (locked.ok) { recordLockedNode(hand, locked); return locked; }
     lockedWhy = locked.reason;
     lockedOut = false;
   }
@@ -1587,6 +1587,22 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
     (lockedWhy ? ` The locked tree (the raiser's range imposed) did not answer: ${lockedWhy.replace(/^locked tree:\s*/, "")}.` : "") + ` ` + r.note;
   return { ...r, pos: red.heroPos, note, lastResort: { how: `hero (${red.heroPos}) vs ${red.aggressorPos} heads-up, ${red.droppedPos.join("/") || "nobody"} folded out, no dead money` +
     (lockedWhy ? " (plain tree: the locked one did not answer)" : "") } };
+}
+
+/**
+ * A LOCKED ANSWER'S NODE, KEPT (preflopPin.recordPreflopNode): it sets no pin, but hero was told its mix, so the hand
+ * page must be able to show it (solveLockedLastResort reads the prefix nodes on the locked solution, so the store holds
+ * every node the page walks).
+ */
+function recordLockedNode(hand: ParsedHand, r: Extract<AiPreflopOutcome, { ok: true }>): void {
+  const handKey = preflopPinKey(hand);
+  if (!handKey) return;
+  const codes = r.usedLine ? r.usedLine.split("-") : [];
+  recordPreflopNode({
+    piece: "gtow-ai-preflop", handKey, solId: r.solId, shape: r.shape, codes, rawTokens: codes, warm: null, cacheKey: preKeyOfSol(r.solId),
+    id: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`, lastResort: r.lastResort?.how ?? "locked tree",
+    heroPos: r.pos ?? "", reduced: null, actionIndex: hand.actions.length, at: Date.now(),
+  }, hand.heroCards.join(""));
 }
 
 // ---------------------------------------------------------------------------
@@ -1751,6 +1767,10 @@ export async function solveLockedLastResort(hand: ParsedHand, heroPos: string | 
   if ("error" in locked) return no(locked.error);
   const hn = await read(locked.solId, heroLine, plan.heroTree);
   if ("error" in hn) return no(hn.error);
+  // the prefix nodes on the LOCKED solution (the walk above read them on the parent): one or two reads in the background,
+  // so the hand page can walk the kept node from the store (recordLockedNode)
+  const heroCodes = heroLine.split("-");
+  for (let k = 0; k < heroCodes.length; k++) void lockedSeams.node(locked.solId, heroCodes.slice(0, k).join("-")).catch(() => undefined);
   // HERO IS PRICED AS AT THE TABLE, or there is no answer: the chips on the table at his node are his post and the raise
   // (as a pair — GTO Wizard shows a small blind that posted more under the big blind's name; an all-in that covers hero
   // is named by the raiser's own stack, so anything from hero's stack up is the shove)
@@ -2560,7 +2580,7 @@ export interface LiveNodeView {
  * `get` is the node getter (tests feed synthetic nodes; live reads the solved tree).
  */
 export async function livePreflopNodeView(
-  pin: import("./preflopPin").AiPreflopPin,
+  pin: Pick<AiPreflopPin, "solId" | "shape" | "codes" | "reduced" | "lastResort">,
   heroCards: string[] = [],
   get: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }> = (ln) => fetchNode(pin.solId, ln),
 ): Promise<LiveNodeView | { ok: false; reason: string }> {
@@ -2602,7 +2622,35 @@ export async function livePreflopNodeView(
       const a = lastAction.get(p);
       return a ? { ...seat(p), action: a } : seat(p);
     }),
-    note: pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " as dead money" : ", none of their chips in it"}` : null,
+    note: pin.lastResort ? `a locked last-resort tree: ${pin.lastResort} — hero's range at the node is every hand`
+      : pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " as dead money" : ", none of their chips in it"}` : null,
+  };
+}
+
+/**
+ * THE KEPT NODE'S TREE IN THE SOLVE CACHE (the hand page, 2026-10-04). A record written since then carries its key; an
+ * older pin is keyed again from what it holds — a stored id names its key, a solve this process made maps to it, and
+ * otherwise the tree's body is rebuilt from the pin's shape and the raise amounts of its line (lineOf's levels are
+ * exactly the line's R-amounts), which is the body the answer POSTed.
+ */
+export function preflopCacheKeyOf(rec: Pick<AiPreflopPin, "solId" | "shape" | "rawTokens" | "cacheKey" | "lastResort">): string | null {
+  if (rec.cacheKey) return rec.cacheKey;
+  const known = preKeyOfSol(rec.solId);
+  if (known) return known;
+  if (rec.lastResort) return null;
+  const levels = rec.rawTokens.filter((t) => /^R\d/.test(t)).map((t) => Number(t.slice(1)));
+  return cacheKeyOf("pre", treeBody(rec.shape, menus(levels, rec.shape.n)), { actions: "", board: "" }).key;
+}
+
+/** A node getter that reads ONLY the solve cache: never a request, never a solve (the hand page views old answers). */
+export function storedPreflopGetter(key: string): (line: string) => Promise<{ data: any; cached: boolean } | { error: string }> {
+  return async (line) => {
+    if (!solveCache.enabled) return { error: "the GTO Wizard solve cache is off in this process" };
+    const s = solveCache.getNode(key, nodeAddr({ preflop: line }));
+    if (s?.status === NODE_OK) return { data: s.data, cached: true };
+    if (s?.status === NO_NODE) return { error: `line ends the hand at '${line || "root"}' — no decision node` };
+    if (s) return { error: `${-s.status}: ${(s.text ?? "").slice(0, 160)}` };
+    return { error: `node '${line || "root"}' is not in the GTO Wizard solve cache (tree ${key.slice(0, 8)})` };
   };
 }
 

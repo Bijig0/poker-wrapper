@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { lastResortSeams, solvePreflopLastResort, type AiPreflopOutcome } from "./gtowAiPreflop";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
+import { getPreflopPin, preflopNodeFor } from "./preflopPin";
 
 /**
  * THE PREFLOP LAST RESORT HAS NO DEAD MONEY (2026-10-04 — gtowAiPreflop.solvePreflopLastResort's header): the
@@ -63,6 +64,20 @@ describe("the preflop last resort: heads-up, no dead money", () => {
     expect(r.note).toContain("the heads-up tree's own note.");
     expect(r.lastResort!.how).toBe("hero (UTG) vs HJ heads-up, CO/BTN/SB/BB folded out, no dead money (plain tree: the locked one did not answer)");
     expect(r.note).toContain("The locked tree (the raiser's range imposed) did not answer: stubbed.");
+  });
+
+  it("a locked answer pins nothing, but its node is kept for the hand page (2026-10-04)", async () => {
+    rig(async () => ({ ok: true, actions: [{ action: "Fold", frequency: 100 }], decision: null, line: "R2.6", pos: "BB", heroClass: "K5o", treeKey: "locked|BB-UTG",
+      solId: "sol-locked", usedLine: "R2.6", solveSecs: 1, cached: false, shape: { n: 2, positions: ["SB", "BB"], stacks: { SB: 100, BB: 100 }, deadBb: 1.5 } as any,
+      note: "locked", lastResort: { how: "hero (BB) vs UTG's raise to 2.6bb heads-up, the raise locked to his range (200 combos)" } }) as AiPreflopOutcome);
+    const h = { ...hand("BB", ["Kh", "5c"], [["UTG", "raise", 2.6], ["HJ", "fold"], ["CO", "fold"], ["BTN", "fold"], ["SB", "fold"]]), clientHandId: "lr-locked-kept" } as ParsedHand;
+    const r = await solvePreflopLastResort(h, "BB", "why");
+    if (!r.ok) throw new Error(r.reason);
+    expect(getPreflopPin("lr-locked-kept")).toBeUndefined();
+    const rec = preflopNodeFor(h, h.actions.length);
+    if (!rec || rec.piece !== "gtow-ai-preflop") throw new Error("no record kept");
+    expect([rec.solId, rec.codes, rec.heroPos]).toEqual(["sol-locked", ["R2.6"], "BB"]);
+    expect(rec.lastResort).toContain("locked to his range");
   });
 
   it("nobody has raised: no answer from a seat outside the blinds — the heads-up tree would open a small blind's range there (74s under the gun, hand 4920544810)", async () => {

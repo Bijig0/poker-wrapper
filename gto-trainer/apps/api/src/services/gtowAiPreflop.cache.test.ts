@@ -103,6 +103,42 @@ const hand: ParsedHand = {
   currentNode: { street: "preflop", toActSeatId: 6, toActIsHero: true, pot: 4, toCall: 1.5, legalActions: [], complete: false }, ended: false,
 } as unknown as ParsedHand;
 
+describe("AI preflop: every decision's node kept and read back (2026-10-04)", () => {
+  it("the answer's record names its tree in the store; after a restart the node and every seat's range read back with ZERO requests", async () => {
+    const path = tempFile();
+    const log = fakeGtow(NODES);
+    restartOn(path);
+    const h = { ...hand, clientHandId: "gtow-cache-pre-kept" } as ParsedHand;
+    const first = await P.solvePreflopGtowAi(h, null, "test");
+    if (!first.ok) throw new Error(first.reason);
+    await Bun.sleep(50);                                   // the pin's background pre-fetch of the prefix nodes
+    const { preflopNodeFor } = await import("./preflopPin");
+    const rec = preflopNodeFor(h, h.actions.length);
+    if (!rec || rec.piece !== "gtow-ai-preflop") throw new Error("no AI record kept");
+    expect(rec.cacheKey).toBeTruthy();
+    expect(rec).not.toHaveProperty("warm");
+    // a pin written before the key was kept: the tree's key is rebuilt from its shape and line — the same key
+    expect(P.preflopCacheKeyOf({ ...rec, cacheKey: null, solId: "sol-from-another-process" })).toBe(rec.cacheKey!);
+    reset(log);
+    restartOn(path);
+    const v = await P.livePreflopNodeView(rec, h.heroCards, P.storedPreflopGetter(P.preflopCacheKeyOf(rec)!));
+    if (!v.ok) throw new Error(v.reason);
+    expect([log.tree, log.solution, log.poll]).toEqual([0, 0, 0]);
+    expect(v.hero?.pos).toBe("BB");
+    expect(v.hero?.actions).toEqual(["Fold", "Call"]);
+    expect(v.opponents.map((o) => o.pos)).toEqual(["BTN"]);   // the SB folded
+    expect(v.opponents[0]!.action?.taken).toBe("Raise 2.5");
+  });
+
+  it("the store-only getter never asks GTO Wizard: a node it lacks is an error, not a request", async () => {
+    const log = fakeGtow(NODES);
+    restartOn(tempFile());
+    const r = await P.storedPreflopGetter("no-such-tree")("R2.5");
+    expect("error" in r && r.error).toContain("not in the GTO Wizard solve cache");
+    expect([log.tree, log.solution, log.poll]).toEqual([0, 0, 0]);
+  });
+});
+
 describe("AI preflop: the persistent solve cache", () => {
   it("an answer solved once is answered again after a restart with ZERO requests, and says it came from the cache", async () => {
     const path = tempFile();

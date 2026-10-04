@@ -1617,6 +1617,11 @@ async function rlLoad(i, D) {
     if (CHART_NODE_KINDS.has(j.kind)) return put(j.node ? { kind: "chart", j } : { kind: "none", why: j.note ?? "the chart has no node for this line" });
     if (j.kind === "mes") return put({ kind: "mes", j });
     if (j.logged?.solveId != null) { const w = await getJ(solveUrl(j.logged.solveId, D.clientHandId, j.logged.decisionKey ?? j.logged.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    if (j.kind === "ai-preflop" && j.view?.hero?.strategy) {
+      const v = j.view;
+      return put({ kind: "aiview", v: { id: j.tree.id, note: v.note ?? "read back from the GTO Wizard solve cache (no request)", actions: v.hero.actions, strategy: v.hero.strategy, heroKey: v.hero.pos,
+        villains: (v.opponents || []).map((o) => [o.pos, o.range]) } });
+    }
     put({ kind: D.hand.actions[i].street === "preflop" ? "ai-preflop" : "unsolved", j });
   } catch (e) { put({ kind: "none", why: String(e) }); }
 }
@@ -1969,6 +1974,26 @@ async function openAnswerNode(upto) {
       ${csNodeHtml(j.chart ?? lg?.chart ?? null, lg?.depth ?? j.depth ?? null)}
       <div class="nv-two"><div class="card" style="margin:0"><h2>Chart strategy at this node</h2>${body}
         <div class="sub" style="margin-top:8px">${j.browse ? `<a class="ev-link" href="${esc(j.browse)}" target="_blank" rel="noopener">raw node JSON from :8777 ↗</a> · ` : ""}<a class="ev-link" href="/sources/pieces/${piece}" onclick="go('/sources/pieces/${piece}');return false">source page ↗</a></div></div>${exHtml}</div></div>`;
+  } else if (j.kind === "ai-preflop") {
+    // THE KEPT AI PREFLOP NODE (2026-10-04): the tree and line the answer was read on, read back from the solve cache
+    const v = j.view, t = j.tree, hero = v.hero;
+    const cell = hero?.strategy?.[heroKey];
+    const mix = cell && cell.w > 0 ? hero.actions.map((a, ai) => ({ a, p: (100 * cell.acts[ai]) / cell.w })).filter((x) => x.p > 0.5).sort((x, y) => y.p - x.p) : [];
+    const seatCard = (o) => `<div class="card" style="margin:0"><h2>${esc(o.pos)} <span class="sub">— ${o.action
+        ? `${o.action.taken ? `took <b>${esc(o.action.taken)}</b>${o.action.takenPct != null ? ` (${o.action.takenPct}% of his range)` : ""}` : "acted"}`
+        : "yet to act"}${o.stack != null ? ` · ${o.stack}bb` : ""}</span></h2>
+      ${o.action ? `${classGrid(o.action.strategy, o.action.actions, null, { small: true, foot: "his range before that action, split by the node's actions" })}<div class="sub" style="margin:8px 0 4px">his range now</div>` : ""}
+      ${weightGrid(o.range, null, "range")}</div>`;
+    sol.innerHTML = `<div class="card"><h2>GTO Wizard AI preflop node <span class="sub">— what answered at action ${upto}</span></h2>
+      ${loggedLine}
+      <div class="nv-head"><span><span class="sub">tree</span> <span class="mono">${esc(t.id)}</span></span><span><span class="sub">line</span> ${crumb(t.line)}</span>${hero ? `<span><span class="sub">to act</span> <b>${esc(hero.pos)}</b>${hero.stack != null ? ` ${hero.stack}bb` : ""}</span>` : ""}</div>
+      ${t.rawLine !== t.line ? `<div class="sub" style="margin-bottom:8px">line as played <span class="mono">${esc(t.rawLine || "root")}</span>, read on the tree as <span class="mono">${esc(t.line || "root")}</span></div>` : ""}
+      ${v.note ? `<div class="ans-note" style="margin-bottom:8px">⚠ ${esc(v.note)}</div>` : ""}
+      <div class="nv-two"><div class="card" style="margin:0"><h2>Hero's strategy at this node</h2>
+        ${hero?.strategy ? classGrid(hero.strategy, hero.actions, heroKey, { heroCombo, foot: "hero's range at this node by class · fill height = share of the class still in range · hover for the mix" }) : `<div class="warn">the node names no strategy for hero</div>`}
+        <div class="nv-hero"><span class="big">${heroTag}</span> ${mix.length ? `<span class="sub">— the tree says</span> ${mix.map((x) => `<b>${esc(x.a)}</b> ${x.p.toFixed(0)}%`).join(" · ")}` : `<span class="warn">is not in hero's range at this node</span>`}</div>
+        <div class="sub" style="margin-top:8px">read back from the GTO Wizard solve cache (no request) · tree kept ${esc(new Date(t.at).toLocaleString())}</div></div>
+        ${(v.opponents || []).map(seatCard).join("")}</div></div>`;
   } else if (j.kind === "mes") {
     const m = j.mes;
     let mode = "mes";
