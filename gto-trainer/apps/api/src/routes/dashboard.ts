@@ -1463,7 +1463,7 @@ app.get("/answer-node", async (c) => {
     logged: logged
       ? { id: logged.id, chart: logged.chart, line: logged.line, tier: logged.tier, source: logged.source, exploitTag: logged.exploit_tag,
           strategyMode: logged.strategy_mode, pick: logged.pick, exploitPick: logged.exploit_pick, chartPick: logged.chart_pick,
-          mesBoard: logged.mes_board, depth: logged.depth, solveId: logged.solve_id ?? null }
+          mesBoard: logged.mes_board, depth: logged.depth, solveId: logged.solve_id ?? null, decisionKey: logged.decision_key ?? null }
       : null,
   };
 

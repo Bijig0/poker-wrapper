@@ -2001,7 +2001,8 @@ async function openAnswerNode(upto) {
         <span class="sub">re-runs the live path on the archived hand · stored as a replay solve · costs GTO Wizard quota when the trees are not cached</span>
       </div>
       <div id="walk-compare"></div></div>`;
-    if (solveId != null) renderWalkthrough(solveId, "walk-host", upto);
+    let shownId = null;
+    if (solveId != null) renderWalkthrough(solveId, "walk-host", upto, DETAIL.clientHandId, lg?.decisionKey ?? null).then((w) => { shownId = w?.ok ? Number(w.row.id) : null; });
     $("nv-resolve").onclick = async () => {
       const b = $("nv-resolve"); b.disabled = true; b.textContent = "solving…";
       let r;
@@ -2010,7 +2011,7 @@ async function openAnswerNode(upto) {
       b.disabled = false; b.textContent = "▶ re-solve again";
       if (!r.ok) { $("walk-compare").innerHTML = `<div class="card warn" style="margin-top:10px">re-solve failed: ${esc(r.error)}</div>`; return; }
       if (r.tier !== "ai-chain" || r.solveId == null) { $("walk-compare").innerHTML = `<div class="card warn" style="margin-top:10px">the re-solve answered from ${esc(r.tier ?? r.source ?? "another tier")}, not the AI chain, so there is no chain trace to compare.</div>`; return; }
-      if (solveId != null) renderCompare(solveId, r.solveId, "walk-compare");
+      if (shownId != null) renderCompare(shownId, r.solveId, "walk-compare");
       else { $("walk-host").innerHTML = ""; renderWalkthrough(r.solveId, "walk-host", upto); }
     };
   }
@@ -2096,11 +2097,18 @@ function solveIoHtml(w, hostId, upto) {
     <div style="margin-top:8px"><button class="mini" onclick="this.disabled=true;renderWalkthrough(${w.row.id}, '${hostId}-walk', ${upto ?? "null"})">walk every node of this chain ▸</button> <span class="sub">every street's ranges in, strategy, and the conditioning that fed the next node</span><div id="${hostId}-walk"></div></div>`;
   return `<div class="sio-box">${timing}${inputs}${outputs}</div>`;
 }
-async function renderWalkthrough(solveId, hostId, upto) {
+/* hand + key (the answer's client hand id and decision key) make the solve route refuse a row that belongs to another
+   hand or decision — answers logged on 2026-09-24 carry solve numbers from a store that was never merged, and those
+   numbers now name other hands' solves (hand 4920429872 drew hand 9000723's J7 chain). On a mismatch the route serves
+   the newest solve of this exact decision instead, and the walkthrough says so. Returns the payload it drew. */
+async function renderWalkthrough(solveId, hostId, upto, hand = null, key = null) {
   const host = $(hostId);
   let w;
-  try { w = await (await fetch(`/api/dashboard/solve/${solveId}`)).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return; }
-  if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return; }
+  try { w = await (await fetch(solveUrl(solveId, hand, key))).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return null; }
+  if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return w; }
+  const swapped = w.via === "key" && Number(w.row.id) !== Number(solveId)
+    ? `<div class="card warn" style="margin-bottom:10px">The solve logged with this answer (#${esc(solveId)}) is not this hand's — that number belongs to another hand's solve in today's store. Showing #${esc(w.row.id)} instead: the newest solve stored for this exact decision (${esc(w.row.origin === "replay" ? "a re-solve with the code of " : "stored ")}${esc(new Date(Number(w.row.ts)).toLocaleString())}).</div>`
+    : "";
   const sp = w.spec, heroKey = DETAIL?.summary ? classOfCardsJs(DETAIL.hand.heroCards) : (sp.heroCombo ? classOfCardsJs(sp.heroCombo.match(/.{2}/g) || []) : null);
   const heroSeatPos = sp.heroPos ?? (sp.heroSeat === "oop" ? sp.oopPos : sp.ipPos);
   // chain node k ↔ the k-th postflop action of the archived hand (hero's pending node ↔ upto)
@@ -2160,6 +2168,8 @@ async function renderWalkthrough(solveId, hostId, upto) {
     if (upto != null && DETAIL?.hand) setStep(n.heroNode ? upto : (postIdx[sel] ?? upto));
   });
   bind();
+  if (swapped) host.insertAdjacentHTML("afterbegin", swapped);
+  return w;
 }
 const classOfCardsJs = (cards) => {
   const cs = (cards || []).filter((c) => /^[2-9TJQKA][shdc]$/.test(c));
@@ -4204,7 +4214,7 @@ async function playStudyAnswer() {
   }
   slot.innerHTML = answerCard(a) + (take ? `<div class="pl-take">${take}<span class="sub">or choose any action above</span></div>` : "")
     + (a.solve_id != null ? `<div class="card" style="margin-top:10px"><h2>The solve behind it <span class="sub">— chain #${a.solve_id}: the ranges assumed, every node walked, and the full strategy grid at your node</span></h2><div id="pl-walk" class="sub">loading the stored solve…</div></div>` : "");
-  if (a.solve_id != null) renderWalkthrough(a.solve_id, "pl-walk", null);
+  if (a.solve_id != null) renderWalkthrough(a.solve_id, "pl-walk", null, a.client_hand_id ?? null, a.decision_key ?? null);
 }
 function renderPlayPostflop(fam) {
   const el = $("pl-post");
