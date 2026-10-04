@@ -4,40 +4,72 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chart review</title>
+<!-- THE 13x13 GRID IS THE DASHBOARD'S OWN (2026-10-04, Brady: "how it looks in the dashboard ... 'see exact node', that same
+     styling"): classGrid from /study/grid169.js draws every grid here, and the tokens below are dashboard.css's, so a chart
+     node on this page and the exact node behind an answer on a hand page are the same picture. -->
+<link rel="stylesheet" href="/study/grid169.css">
+<script src="/study/grid169.js"></script>
 <style>
-  :root { --bg:#fbfbf9; --fg:#1d1d1b; --mut:#6b6b66; --line:#e2e1dc; --card:#fff; --acc:#2f5fb3; --bad:#b3372f; --ok:#2f7d4f; --warn:#a86b12;
-          --fold:#c9ccd3; --call:#4f9d69; --raise:#d0573f; --jam:#7a2a8c; --limp:#3f7fbf; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141413; --fg:#ecebe6; --mut:#9b9a94; --line:#2c2c29; --card:#1c1c1a;
-          --acc:#7ea6ec; --bad:#e57a70; --ok:#6cc08f; --warn:#e0a548; --fold:#3a3d44; } }
+  :root { color-scheme: light;
+    --bg:#F2F4F1; --surface:#FFFFFF; --surface2:#E9EDE9; --line:#D6DDD7; --grid:#E3E8E3; --ink:#1A2320; --muted:#5F6D65; --faint:#8A968E;
+    --win:#1F7A4D; --ev:#C4861A; --loss:#B8433A; --info:#2F6FB3; --info-soft:rgba(47,111,179,.12); --ev-soft:rgba(196,134,26,.14);
+    --chip:#E4EAE5; --chip-on:#1A2320; --chip-on-ink:#F2F4F1; --shadow:0 1px 2px rgba(20,30,25,.06), 0 8px 20px rgba(20,30,25,.06);
+    --font-mono:"JetBrains Mono", ui-monospace, Consolas, monospace; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+    --bg:#121715; --surface:#1B211E; --surface2:#242B27; --line:#2E3733; --grid:#273029; --ink:#E7ECE8; --muted:#9AA69E; --faint:#6E7A72;
+    --win:#4CC382; --ev:#E5AE4A; --loss:#E0675C; --info:#6FA8E6; --info-soft:rgba(111,168,230,.16); --ev-soft:rgba(229,174,74,.16);
+    --chip:#262E29; --chip-on:#E7ECE8; --chip-on-ink:#121715; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.35); } }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 "Source Sans 3", "Segoe UI", system-ui, sans-serif; }
   header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; }
-  header h1 { font-size:18px; margin:0; } .mut { color:var(--mut); } a { color:var(--acc); }
-  main { padding:12px 16px; max-width:1200px; margin:0 auto; }
+  header h1 { font-size:18px; margin:0; } .mut, .sub { color:var(--muted); } .sub { font-size:12px; } a { color:var(--info); }
+  .mono { font-family:var(--font-mono); } .warn { color:var(--loss); }
+  main { padding:12px 16px 60px; max-width:1200px; margin:0 auto; }
   .bar { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px; align-items:center; }
-  select, input, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
-  button { cursor:pointer; } button.ok { border-color:var(--ok); color:var(--ok); } button.flag { border-color:var(--bad); color:var(--bad); }
-  .tablewrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  select, input, textarea, button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+  button { cursor:pointer; } button.ok { border-color:var(--win); color:var(--win); } button.flag { border-color:var(--loss); color:var(--loss); }
+  button:disabled { opacity:.45; cursor:default; }
+  .tablewrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--surface); }
   table { border-collapse:collapse; width:100%; font-size:13px; }
   th, td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
-  th { cursor:pointer; position:sticky; top:0; background:var(--card); user-select:none; }
-  tr.row:hover { background:color-mix(in srgb, var(--acc) 8%, transparent); cursor:pointer; }
-  .pill { display:inline-block; padding:0 6px; border-radius:9px; font-size:12px; border:1px solid var(--line); }
-  .pill.promote { border-color:var(--warn); color:var(--warn); } .pill.ok { border-color:var(--ok); color:var(--ok); } .pill.flag { border-color:var(--bad); color:var(--bad); }
+  th { cursor:pointer; position:sticky; top:0; background:var(--surface); user-select:none; }
+  tr.row:hover { background:var(--info-soft); cursor:pointer; }
+  .pill, .chip { display:inline-block; padding:0 6px; border-radius:9px; font-size:12px; border:1px solid var(--line); }
+  .chip { background:var(--chip); } .chip.good { border-color:var(--win); color:var(--win); } .chip.dim { color:var(--muted); } .chip.bad { border-color:var(--loss); color:var(--loss); }
+  .pill.promote { border-color:var(--ev); color:var(--ev); } .pill.ok { border-color:var(--win); color:var(--win); } .pill.flag { border-color:var(--loss); color:var(--loss); }
   .num { font-variant-numeric:tabular-nums; text-align:right; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin:12px 0; }
-  .card h2 { font-size:15px; margin:0 0 8px; } .card h3 { font-size:13px; margin:10px 0 6px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:12px; margin:12px 0; }
+  .card h2 { font-size:15px; margin:0 0 8px; } .card h3 { font-size:13px; margin:10px 0 6px; } .card h2 .sub { font-weight:400; }
   .flags li { margin:2px 0; } .flags .k { font-weight:600; }
-  .mix { display:flex; height:14px; border-radius:3px; overflow:hidden; min-width:140px; }
+  .mix { display:flex; height:14px; border-radius:3px; overflow:hidden; min-width:140px; background:rgb(30,30,30); }
   .mix span { display:block; height:100%; }
-  .grid { display:grid; grid-template-columns:repeat(13, minmax(0,1fr)); gap:1px; max-width:520px; font-size:10px; }
-  .cell { position:relative; aspect-ratio:1; display:flex; align-items:center; justify-content:center; color:#fff; text-shadow:0 0 2px #000;
-          background:var(--fold); overflow:hidden; border-radius:2px; }
-  .cell b { position:relative; z-index:1; font-weight:600; }
-  .cell i { position:absolute; left:0; bottom:0; top:0; }
-  .twocol { display:grid; grid-template-columns:1fr 1fr; gap:12px; } @media (max-width:700px) { .twocol { grid-template-columns:1fr; } }
-  .nodes { display:flex; flex-wrap:wrap; gap:6px; } .nodes button.sel { border-color:var(--acc); color:var(--acc); }
-  .legend span { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
+  .mixkey i { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
+  /* the node view: dashboard.css's rules for the exact node behind an answer */
+  .nv-head { display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; margin-bottom:8px; }
+  .nv-crumb { display:inline-flex; flex-wrap:wrap; gap:4px; align-items:center; }
+  .nv-crumb .sep { color:var(--faint); }
+  .nv-crumb button { background:var(--chip); border:1px solid var(--line); border-radius:6px; padding:1px 8px; font-family:var(--font-mono); font-size:11.5px; }
+  .nv-crumb button:hover { border-color:var(--info); color:var(--info); } .nv-crumb button.here { border-color:var(--ev); color:var(--ev); }
+  .nv-two { display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:14px; }
+  .nv-facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:5px 14px; font-size:12.5px; margin:10px 0; }
+  .nv-facts .f { display:flex; flex-direction:column; gap:1px; }
+  .nv-facts .k { color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; }
+  .nv-hero { background:var(--info-soft); border:1px solid var(--info); border-radius:10px; padding:8px 12px; margin-top:8px; }
+  .nv-hero .big { font-size:15px; font-weight:600; font-family:var(--font-mono); }
+  /* the table as it stands at this node */
+  .seats { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:6px; margin:8px 0; }
+  .seat { border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:var(--surface2); display:flex; flex-direction:column; gap:1px; font-size:12.5px; min-width:0; }
+  .seat b { font-size:13px; } .seat.act { border-color:var(--ev); background:var(--ev-soft); } .seat.out { opacity:.45; }
+  .play2 { display:grid; grid-template-columns:minmax(0, 440px) minmax(260px, 1fr); gap:18px; align-items:start; }
+  .gridwrap { overflow-x:auto; }
+  .acts { display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+  .acts button { display:grid; grid-template-columns:14px 1fr auto 14px; gap:8px; align-items:center; text-align:left; padding:7px 10px; border-radius:8px; font-weight:600; }
+  .acts button:hover:not(:disabled) { border-color:var(--info); background:var(--info-soft); }
+  .acts button .n { font-variant-numeric:tabular-nums; font-family:var(--font-mono); font-weight:400; }
+  .acts button small { font-weight:400; color:var(--muted); margin-left:6px; }
+  .others { display:flex; flex-wrap:wrap; gap:14px 22px; }
+  @media (max-width:820px) { .play2 { grid-template-columns:1fr; } .seats { grid-template-columns:repeat(3, minmax(0, 1fr)); } .nv-two { grid-template-columns:1fr; } }
+  @media (max-width:480px) { .grid169 { grid-template-columns:repeat(13, 24px); } .grid169 div { width:24px; height:22px; font-size:9px; } }
 </style>
 </head>
 <body>
@@ -54,50 +86,50 @@
       <select id="fProp"><option value="">all charts</option><option value="promote">has a proposal</option><option value="flags">has flags</option>
         <option value="todo">not reviewed</option><option value="flagged">flagged</option></select>
       <input id="fText" placeholder="search (e.g. BTN 30bb)" size="18">
-      <span class="legend mut">mix: <span style="background:var(--fold)"></span>fold<span style="background:var(--limp)"></span>limp
-        <span style="background:var(--call)"></span>call<span style="background:var(--raise)"></span>raise<span style="background:var(--jam)"></span>jam</span>
+      <span class="mixkey mut">mix: <i style="background:#7D1F1F"></i>all-in<i style="background:#F03C3C"></i>raise (darker = bigger)<i style="background:#5AB966"></i>call / limp<i style="background:#3D7CB8"></i>fold</span>
     </div>
     <div class="tablewrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
   </div>
   <div id="detail" hidden></div>
 </main>
 <script>
-const RANKS = "AKQJT98765432";
-const COL = { fold: "var(--fold)", limp: "var(--limp)", call: "var(--call)", raise: "var(--raise)", jam: "var(--jam)" };
-const kindOf = (l) => { l = (l || "").toLowerCase(); return l === "fold" ? "fold" : l === "call" || l === "check" ? "call" : l === "limp" ? "limp" : l === "all-in" ? "jam" : "raise"; };
+const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (x, d = 1) => x == null ? "–" : (x * 100).toFixed(d) + "%";
 const sc = (x) => x == null ? "–" : (x * 1000).toFixed(3);
-let IDX = null, SORT = { k: "answers_since_0927", d: -1 };
+const bb = (x) => String(+Number(x).toFixed(2));
+let IDX = null, SORT = { k: "answers_since_0927", d: -1 }, ORDER = [];
 
+/** one node's mix as a bar, in the grid's colours and order (all-in, raises big to small, call, fold) */
 function mixBar(mix) {
-  const parts = Object.entries(mix || {}).sort((a, b) => ["fold", "limp", "call", "raise", "jam"].indexOf(kindOf(a[0])) - ["fold", "limp", "call", "raise", "jam"].indexOf(kindOf(b[0])));
-  return `<div class="mix" title="${esc(parts.map(([k, v]) => `${k} ${pct(v)}`).join(" · "))}">${parts.map(([k, v]) =>
-    `<span style="width:${(v * 100).toFixed(2)}%;background:${COL[kindOf(k)]};opacity:${kindOf(k) === "raise" ? 0.55 + 0.45 * (parts.filter(p => kindOf(p[0]) === "raise").findIndex(p => p[0] === k) % 2) : 1}"></span>`).join("")}</div>`;
+  const labels = Object.keys(mix || {}), cols = gtowColors(labels);
+  return `<div class="mix" title="${esc(mixText(mix))}">${gtowOrder(labels).map((i) =>
+    `<span style="width:${(mix[labels[i]] * 100).toFixed(2)}%;background:${cols[i]}"></span>`).join("")}</div>`;
 }
-const mixText = (mix) => Object.entries(mix || {}).filter(([, v]) => v >= 0.005).map(([k, v]) => `${esc(k)} ${pct(v)}`).join(" · ");
+const mixText = (mix) => Object.entries(mix || {}).filter(([, v]) => v >= 0.005).map(([k, v]) => `${k} ${pct(v)}`).join(" · ");
 
 async function j(url, opt) { const r = await fetch(url, opt); const b = await r.json().catch(() => ({})); if (!r.ok || b.ok === false) throw new Error(b.error || r.status); return b; }
 
 async function loadIndex() {
   IDX = await j("/api/dashboard/charts-review/index");
   const reg = IDX.register;
-  document.getElementById("sub").textContent = `${IDX.charts.length} live 6-max charts · summaries built ${IDX.meta.built_at} · ` +
+  $("sub").textContent = `${IDX.charts.length} live 6-max charts · summaries built ${IDX.meta.built_at} · ` +
     (reg.readable ? `${reg.clearlyBetter} with a clearly better solve (≥ ${Math.round((IDX.meta.margin || 0.15) * 100)}% lower regret) not live` : "register not readable");
-  document.getElementById("prog").innerHTML = `<b>reviewed ${IDX.progress.reviewed} of ${IDX.progress.of}</b>` + (IDX.progress.flagged ? ` · <span style="color:var(--bad)">${IDX.progress.flagged} flagged</span>` : "");
-  const g = document.getElementById("fGroup");
+  $("prog").innerHTML = `<b>reviewed ${IDX.progress.reviewed} of ${IDX.progress.of}</b>` + (IDX.progress.flagged ? ` · <span class="warn">${IDX.progress.flagged} flagged</span>` : "");
+  const g = $("fGroup");
   if (g.options.length === 1) for (const x of [...new Set(IDX.charts.map((c) => c.group))].sort()) g.add(new Option(x, x));
   renderList();
 }
 const COLS = [["words", "chart"], ["group", "family"], ["candidates", "solves"], ["score", "live score"], ["runner_up_score", "runner-up"],
   ["proposal", "proposal"], ["samples_m", "samples (m)"], ["solvedAt", "solved"], ["answers_since_0927", "answers since 09-27"], ["flags", "flags"], ["review", "review"]];
 function renderList() {
-  const q = document.getElementById("fText").value.toLowerCase(), fg = document.getElementById("fGroup").value, fp = document.getElementById("fProp").value;
+  const q = $("fText").value.toLowerCase(), fg = $("fGroup").value, fp = $("fProp").value;
   let rows = IDX.charts.filter((c) => (!fg || c.group === fg) && (!q || (c.words + " " + c.id).toLowerCase().includes(q)) &&
     (!fp || (fp === "promote" ? c.proposal === "promote" : fp === "flags" ? c.flags > 0 : fp === "todo" ? !c.review : c.review?.verdict === "flag")));
   const key = (c) => SORT.k === "review" ? (c.review?.verdict || "") : c[SORT.k] ?? "";
   rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * SORT.d);
-  const t = document.getElementById("tbl");
+  ORDER = rows.map((c) => c.id);                      // prev / next on a chart walk the list as it is filtered and sorted
+  const t = $("tbl");
   t.tHead.innerHTML = `<tr>${COLS.map(([k, l]) => `<th data-k="${k}">${l}${SORT.k === k ? (SORT.d > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>`;
   t.tBodies[0].innerHTML = rows.map((c) => `<tr class="row" data-id="${c.id}"><td>${esc(c.words)}${c.staleSummary ? ' <span class="pill flag">summary stale</span>' : ""}</td>
     <td>${esc(c.group)}</td><td class="num">${c.candidates ?? "–"}</td><td class="num">${sc(c.score)}</td><td class="num">${sc(c.runner_up_score)}</td>
@@ -105,87 +137,239 @@ function renderList() {
     <td class="num">${c.samples_m ?? "–"}</td><td>${esc((c.solvedAt || "").slice(0, 10))}</td><td class="num">${c.answers_since_0927}</td>
     <td class="num">${c.flags || ""}</td><td>${c.review ? `<span class="pill ${c.review.verdict}">${c.review.verdict === "ok" ? "looks right" : "flag"}</span>` : ""}</td></tr>`).join("");
 }
-document.getElementById("tbl").addEventListener("click", (e) => {
+$("tbl").addEventListener("click", (e) => {
   const th = e.target.closest("th"); if (th) { SORT = { k: th.dataset.k, d: SORT.k === th.dataset.k ? -SORT.d : -1 }; renderList(); return; }
   const tr = e.target.closest("tr.row"); if (tr) location.hash = tr.dataset.id;
 });
-for (const id of ["fGroup", "fProp", "fText"]) document.getElementById(id).addEventListener("input", renderList);
+for (const id of ["fGroup", "fProp", "fText"]) $(id).addEventListener("input", renderList);
 
-function gridHtml(cells, actions) {
-  const out = [];
-  for (let i = 0; i < 13; i++) for (let k = 0; k < 13; k++) {
-    const hi = RANKS[Math.min(i, k)], lo = RANKS[Math.max(i, k)];
-    const h = i === k ? hi + lo : hi + lo + (i < k ? "s" : "o");
-    const a = cells?.[h];
-    let x = 0, bands = "";
-    if (a) for (const lab of actions) { const v = a[lab] || 0; if (v <= 0 || kindOf(lab) === "fold") continue;
-      bands += `<i style="left:${x}%;width:${v}%;background:${COL[kindOf(lab)]}"></i>`; x += v; }
-    out.push(`<div class="cell" title="${h}: ${esc(a ? Object.entries(a).map(([k2, v]) => `${k2} ${v}%`).join(", ") : "not in range")}"
-      style="${a ? "" : "opacity:.25"}">${bands}<b>${h}</b></div>`);
-  }
-  return `<div class="grid">${out.join("")}</div>`;
+/* ================= the chart, playable (2026-10-04) =================
+   Brady reviews a chart the way he would play it: the table at the top, the seat to act's grid in the dashboard's
+   exact-node styling, every action a button that walks on, the crumb the way back. A cell's FILL HEIGHT is how much of
+   that hand the seat still holds when it gets here (its own earlier actions on this line multiplied through), so a
+   3-bet pot shows the 3-bettor's range and not 169 hands of untrained noise. Every node is one prepared-statement read
+   of the bake (/node/:id?line=), cached here for the chart on screen. */
+const POS = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+const ALLH = (() => { const o = []; for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) o.push(classKey(r, c)); return o; })();
+const W = { id: null, line: [], hero: null, flat: false };
+const NODES = new Map();
+function nodeAt(id, line) {
+  const k = `${id}|${line}`;
+  if (!NODES.has(k)) { const p = j(`/api/dashboard/charts-review/node/${id}?line=${encodeURIComponent(line)}`); p.catch(() => NODES.delete(k)); NODES.set(k, p); }
+  return NODES.get(k);
 }
-async function showNode(id, line, box, cand) {
+/** the stacks a chart was solved with, from its id: D<depth> for the table, _s<n>_<SEAT> one short seat, P_<SEAT><n>… a patch */
+function stacksOf(id) {
+  const num = (s) => parseFloat(s.replace("_", "."));
+  const d = id.match(/_D(\d+(?:_\d)?)(?=_|$)/);
+  const st = Object.fromEntries(POS.map((p) => [p, d ? num(d[1]) : 100]));
+  for (const m of id.matchAll(/_s(\d+(?:_\d)?)_(UTG|HJ|CO|BTN|SB|BB)(?=_|$)/g)) st[m[2]] = num(m[1]);
+  const patch = id.match(/_P((?:_(?:UTG|HJ|CO|BTN|SB|BB)\d+)+)/);
+  if (patch) for (const m of patch[1].matchAll(/(UTG|HJ|CO|BTN|SB|BB)(\d+)/g)) st[m[1]] = +m[2];
+  return st;
+}
+/** "AKs", "aks", "AhKh", "77" → the class key; null when it is not a hand */
+function classOf(s) {
+  const m = (s || "").trim().match(/^([2-9tjqka])([shdc])?([2-9tjqka])([shdc])?([so])?$/i);
+  if (!m) return null;
+  let a = m[1].toUpperCase(), b = m[3].toUpperCase();
+  if (RANKS.indexOf(a) > RANKS.indexOf(b)) [a, b] = [b, a];
+  if (a === b) return a + b;
+  const sfx = m[2] && m[4] ? (m[2].toLowerCase() === m[4].toLowerCase() ? "s" : "o") : (m[5] || (!m[2] && /^s$/i.test(m[4] || "") ? "s" : "")).toLowerCase();
+  return sfx ? a + b + sfx : null;
+}
+const shareOf = (w) => ALLH.reduce((a, h) => a + COMBOS(h) * w[h], 0) / 1326;
+/** the table at the end of a line: every node on the way (to know who acted), each seat's chips and its arrival range */
+async function spot(id, toks) {
+  const got = await Promise.all(toks.map((_, i) => toks.slice(0, i).join("-")).concat([toks.join("-")]).map((l) => nodeAt(id, l)));
+  const stack = stacksOf(id), put = Object.fromEntries(POS.map((p) => [p, p === "SB" ? 0.5 : p === "BB" ? 1 : 0]));
+  // a seat's all-in is named by its own stack (token R<stack>): where the tree says so, it outranks the id
+  for (const g of got) for (const a of g.node.actions) if (/^all-?in$/i.test(a.action) && /^R[\d.]+$/.test(a.token ?? "")) stack[g.node.pos] = parseFloat(a.token.slice(1));
+  const folded = new Set(), acted = new Set(), steps = [], w = Object.fromEntries(POS.map((p) => [p, Object.fromEntries(ALLH.map((h) => [h, 1]))]));
+  toks.forEach((t, i) => {
+    const n = got[i].node, p = n.pos, top = Math.max(...POS.map((x) => put[x]));
+    const labs = n.actions.filter((a) => a.token === t).map((a) => a.action);
+    const cell = Object.fromEntries(n.cells.map((c) => [c.hand, c.actions]));
+    for (const h of ALLH) w[p][h] *= labs.reduce((s, l) => s + (cell[h]?.[l] ?? 0), 0) / 100;
+    if (t === "F") folded.add(p);
+    else if (t === "C") put[p] = Math.min(stack[p], top);
+    else if (t[0] === "R") put[p] = Math.min(stack[p], parseFloat(t.slice(1)));
+    acted.add(p);
+    steps.push({ pos: p, label: labs[0] ?? t });
+  });
+  return { node: got[got.length - 1].node, trust: got[got.length - 1].trust, stack, put, folded, acted, steps, w };
+}
+const crumbText = (steps) => steps.length ? steps.map((x) => `${x.pos} ${x.label}`).join(" › ") : "root";
+/** a node's cells as classGrid's classes, each hand weighted by `wt` (its share still in range) */
+function clsOf(cells, labels, wt) {
+  const cls = {};
+  for (const h of ALLH) { const a = cells[h]; if (!a) continue; const x = COMBOS(h) * (wt ? wt[h] ?? 0 : 1); cls[h] = { w: x, acts: labels.map((l) => (x * (a[l] ?? 0)) / 100) }; }
+  return cls;
+}
+function setLine(toks) {
+  W.line = toks;
+  history.replaceState(null, "", "#" + W.id + (toks.length ? "@" + toks.join("-") : ""));
+  return renderPlay();
+}
+async function renderPlay() {
+  const box = $("play"); if (!box) return;
+  const id = W.id, toks = W.line.slice();
+  let s;
+  try { s = await spot(id, toks); }
+  catch (e) { box.innerHTML = `<div class="warn">${esc(e.message)}</div><div class="bar"><button data-go="0">back to the root</button></div>`; return; }
+  if (W.id !== id || W.line.join("-") !== toks.join("-")) return;          // a later click won
+  const n = s.node, labels = n.actions.map((a) => a.action), top = Math.max(...POS.map((p) => s.put[p]));
+  const crumb = `<span class="nv-crumb"><button data-go="0"${toks.length ? "" : ' class="here"'}>root</button>${s.steps.map((x, i) =>
+    `<span class="sep">›</span><button data-go="${i + 1}"${i === toks.length - 1 ? ' class="here"' : ""}>${esc(x.pos)} ${esc(x.label)}</button>`).join("")}</span>`;
+  const seats = POS.map((p) => {
+    const out = s.folded.has(p), act = !n.terminal && p === n.pos, allin = s.put[p] >= s.stack[p] - 1e-9;
+    const range = out ? "folded" : s.acted.has(p) ? `${(100 * shareOf(s.w[p])).toFixed(1)}% of hands` : "any two";
+    return `<div class="seat${act ? " act" : ""}${out ? " out" : ""}"><span><b>${p}</b>${act ? ' <span class="sub">to act</span>' : ""}${allin ? ' <span class="chip">all-in</span>' : ""}</span>
+      <span>${bb(s.stack[p] - s.put[p])}bb behind</span><span>${s.put[p] ? `${bb(s.put[p])}bb in` : "—"}</span><span class="sub">${range}</span></div>`;
+  }).join("");
+  const live = POS.filter((p) => !s.folded.has(p));
+  // what is actually contested: a bet nobody matched goes back
+  const matched = POS.reduce((a, p) => a + Math.min(s.put[p], Math.max(...POS.filter((x) => x !== p).map((x) => s.put[x]))), 0);
+  let body;
+  if (n.terminal || !n.actions.length) {
+    const allins = live.filter((p) => s.put[p] >= s.stack[p] - 1e-9);
+    const end = live.length === 1 ? `${live[0]} takes the pot (${bb(matched)}bb) — everyone else folded`
+      : allins.length && live.length - allins.length <= 1 ? `all-in before the flop: ${live.join(" vs ")} · pot ${bb(matched)}bb`
+      : `to the flop: ${live.join(", ")} · pot ${bb(matched)}bb`;
+    body = `<div class="nv-hero"><span class="big">The hand ends here</span> <span class="sub">${esc(end)}</span></div>`;
+  } else {
+    const wA = s.w[n.pos], cells = Object.fromEntries(n.cells.map((c) => [c.hand, c.actions]));
+    const den = ALLH.reduce((a, h) => a + COMBOS(h) * wA[h], 0) || 1;
+    const freq = labels.map((l) => ALLH.reduce((a, h) => a + (COMBOS(h) * wA[h] * (cells[h]?.[l] ?? 0)) / 100, 0) / den);
+    const cols = gtowColors(labels), toCall = Math.min(s.stack[n.pos], top) - s.put[n.pos];
+    const what = (a) => a.token === "C" ? (toCall > 0 ? `${bb(toCall)}bb more` : "") : /^R/.test(a.token ?? "") ? `to ${bb(Math.min(s.stack[n.pos], parseFloat(a.token.slice(1))))}bb` : "";
+    const acts = gtowOrder(labels).map((i) => { const a = n.actions[i];
+      return `<button data-tok="${esc(a.token ?? "")}"${a.token == null ? " disabled" : ""}><span class="sw" style="background:${cols[i]}"></span><span>${esc(n.pos)} ${esc(a.action)}<small>${what(a)}</small></span><span class="n">${pct(freq[i])}</span><span>›</span></button>`; }).join("");
+    let hero = "";
+    if (W.hero) {
+      const mine = Object.entries(cells[W.hero] ?? {}).filter(([, p]) => p > 0.5).sort((a, b) => b[1] - a[1]);
+      hero = `<div class="nv-hero"><span class="big">${esc(W.hero)}</span> <span class="sub">— the chart says</span> ${mine.length ? mine.map(([a, p]) => `<b>${esc(a)}</b> ${p.toFixed(1)}%`).join(" · ") : "nothing: this hand is not in the node"}
+        <div class="sub">${wA[W.hero] < 0.005 ? `${esc(n.pos)} never gets here with ${esc(W.hero)} on this line — the mix above is noise the solver did not train` : `${esc(n.pos)} gets here with ${(100 * wA[W.hero]).toFixed(0)}% of its ${esc(W.hero)}`}</div></div>`;
+    }
+    const t = s.trust, starved = t && ((t.reach != null && t.reach < 1e-4) || t.regret > 0.03);
+    const fact = (k, v) => `<div class="f"><span class="k">${k}</span><span>${v}</span></div>`;
+    const facts = `<div class="nv-facts">${fact("in the middle", `${bb(POS.reduce((a, p) => a + s.put[p], 0))}bb`)}${fact("to call", toCall > 0 ? `${bb(toCall)}bb` : "nothing")}
+      ${fact("range arriving", pct(shareOf(wA)))}${fact("reach of this node", t?.reach == null ? "–" : t.reach < 0.001 ? t.reach.toExponential(1) : pct(t.reach, 2))}
+      ${fact("regret here", t ? `${t.regret.toFixed(4)} bb` : "not scored")}
+      ${fact("trust guard", !t ? "–" : starved ? '<span class="chip bad" title="reach under 1e-4 or regret over 0.03: live play does not answer from this node, it asks the exact tree">starved — live asks the exact tree</span>' : '<span class="chip good">answers live from here</span>')}
+      ${n.pruned ? fact("pruned", esc(n.pruned)) : ""}</div>`;
+    body = `<div class="play2"><div class="gridwrap">${classGrid(clsOf(cells, labels, W.flat ? null : wA), labels, W.hero, { openHero: false,
+        foot: W.flat ? "every hand the chart holds at this node, at full height · hover for the mix" : "fill height = how much of the hand gets here · hover for the mix" })}</div>
+      <div><div class="sub"><b style="font-size:14px;color:var(--ink)">${esc(n.pos)} to act</b> · pick an action to walk on (the % is how often ${esc(n.pos)} takes it here)</div>
+        <div class="acts">${acts}</div>
+        <div class="bar"><input id="pHand" placeholder="a hand: AKs, 76o, 99" size="14" value="${esc(W.hero ?? "")}"><button id="pDeal" title="a random hand from the range ${esc(n.pos)} arrives with">deal ${esc(n.pos)} a hand</button>${W.hero ? '<button id="pClear">clear</button>' : ""}</div>
+        ${hero}
+        <label class="sub" style="display:block;margin-top:8px"><input type="checkbox" id="pFlat"${W.flat ? " checked" : ""}> show every hand at full height (ignore how ${esc(n.pos)} got here)</label>
+        ${facts}</div></div>`;
+  }
+  const others = POS.filter((p) => !s.folded.has(p) && s.acted.has(p) && (n.terminal || p !== n.pos));
+  const ranges = others.length ? `<h3>The ranges still in the hand</h3><div class="others">${others.map((p) => {
+    const cls = {}; for (const h of ALLH) { const x = COMBOS(h) * s.w[p][h]; cls[h] = { w: x, acts: [x] }; }
+    return `<div class="gridwrap">${classGrid(cls, ["in range"], W.hero, { single: true, small: true, combosOff: true, foot: `<b>${p}</b> · ${(100 * shareOf(s.w[p])).toFixed(1)}% of hands · ${bb(s.put[p])}bb in` })}</div>`; }).join("")}</div>` : "";
+  box.innerHTML = `<div class="nv-head"><span><span class="sub">line</span> ${crumb}</span>
+      <span class="bar" style="margin:0"><button data-go="${Math.max(0, toks.length - 1)}"${toks.length ? "" : " disabled"}>← back one</button><button id="pNote" title="write this spot into the review note">note this spot</button></span></div>
+    <div class="seats">${seats}</div>${body}${ranges}`;
+  box.dataset.crumb = crumbText(s.steps);
+  box.dataset.pos = n.terminal ? "" : n.pos;
+}
+function wirePlay() {
+  const box = $("play");
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b || b.disabled) return;
+    if (b.dataset.go != null) return setLine(W.line.slice(0, +b.dataset.go));
+    if (b.dataset.tok) return setLine([...W.line, b.dataset.tok]);
+    if (b.id === "pClear") { W.hero = null; return renderPlay(); }
+    if (b.id === "pNote") { const nt = $("vNote"); nt.value = `${nt.value ? nt.value.trimEnd() + " " : ""}[${box.dataset.crumb}] `; nt.focus(); return; }
+    if (b.id === "pDeal") return spot(W.id, W.line).then((s) => {
+      const w = s.w[s.node.pos]; let r = Math.random() * ALLH.reduce((a, h) => a + COMBOS(h) * w[h], 0);
+      for (const h of ALLH) { r -= COMBOS(h) * w[h]; if (r <= 0) { W.hero = h; break; } }
+      renderPlay();
+    });
+  });
+  box.addEventListener("change", (e) => {
+    if (e.target.id === "pFlat") { W.flat = e.target.checked; renderPlay(); }
+    if (e.target.id === "pHand") { const h = classOf(e.target.value); if (h || !e.target.value.trim()) { W.hero = h; renderPlay(); } else e.target.style.borderColor = "var(--loss)"; }
+  });
+}
+function openSpot(line) { setLine(line ? line.split("-") : []); $("playcard").scrollIntoView({ behavior: "smooth", block: "start" }); }
+
+/** live vs the proposed solve at one node, both weighted by the range that arrives in the LIVE chart */
+async function showCompare(id, cand, box) {
   box.innerHTML = '<span class="mut">loading node…</span>';
   try {
-    const r = await j(`/api/dashboard/charts-review/node/${id}?line=${encodeURIComponent(line)}`);
-    const labs = r.node.actions.map((a) => a.action);
-    let html = `<div class="mut">${esc(line || "(root)")} · ${esc(r.node.pos)} · trust ${r.trust ? `regret ${r.trust.regret}, reach ${r.trust.reach}` : "–"}</div>`;
-    if (cand) html += `<div class="twocol"><div><h3>live</h3>${gridHtml(Object.fromEntries(r.node.cells.map((c) => [c.hand, c.actions])), labs)}</div>
-      <div><h3>proposed</h3>${gridHtml(cand.cells, labs)}</div></div>` +
+    const s = await spot(id, cand.line ? cand.line.split("-") : []), n = s.node, labels = n.actions.map((a) => a.action), wA = s.w[n.pos];
+    const g = (cells) => `<div class="gridwrap">${classGrid(clsOf(cells, labels, wA), labels, W.hero, { openHero: false, foot: "fill height = how much of the hand gets here" })}</div>`;
+    box.innerHTML = `<div class="nv-head" style="margin-top:10px"><span class="sub">${esc(crumbText(s.steps))} · ${esc(n.pos)} to act</span><button class="openbtn" data-line="${esc(cand.line)}">open in the walker</button></div>
+      <div class="nv-two"><div><h3>live</h3>${g(Object.fromEntries(n.cells.map((c) => [c.hand, c.actions])))}</div><div><h3>proposed</h3>${g(cand.cells)}</div></div>` +
       (cand.flips?.length ? `<h3>${cand.flips.length} hand(s) whose top action flips</h3><div class="mut">${cand.flips.map(esc).join(" · ")}</div>` : "");
-    else html += gridHtml(Object.fromEntries(r.node.cells.map((c) => [c.hand, c.actions])), labs);
-    box.innerHTML = html;
-  } catch (e) { box.innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`; }
+    box.querySelector(".openbtn").onclick = () => openSpot(cand.line);
+  } catch (e) { box.innerHTML = `<span class="warn">${esc(e.message)}</span>`; }
 }
-function nodeSection(title, rows, id, label) {
+function nodeSection(title, rows, label) {
   if (!rows?.length) return "";
-  return `<div class="card"><h2>${title}</h2><div class="tablewrap"><table><thead><tr><th>${label}</th><th>mix</th><th></th></tr></thead><tbody>${rows.map((r) =>
-    `<tr><td>${esc(r.pos)}${r.vs ? ` vs ${esc(r.vs)} ${esc(r.vsAction)}` : ""}</td><td>${mixBar(r.mix)}</td><td class="mut">${mixText(r.mix)}</td>
-     <td><button data-line="${esc(r.line)}" class="nodebtn">grid</button></td></tr>`).join("")}</tbody></table></div><div class="nodebox"></div></div>`;
+  return `<div class="card"><h2>${title}</h2><div class="tablewrap"><table><thead><tr><th>${label}</th><th>mix</th><th></th><th></th></tr></thead><tbody>${rows.map((r) =>
+    `<tr><td>${esc(r.pos)}${r.vs ? ` vs ${esc(r.vs)} ${esc(r.vsAction)}` : ""}</td><td>${mixBar(r.mix)}</td><td class="mut">${esc(mixText(r.mix))}</td>
+     <td><button data-line="${esc(r.line)}" class="openbtn">open ›</button></td></tr>`).join("")}</tbody></table></div></div>`;
 }
-async function showChart(id) {
-  const d = document.getElementById("detail"); document.getElementById("list").hidden = true; d.hidden = false;
+async function showChart(id, line) {
+  const d = $("detail"); $("list").hidden = true; d.hidden = false;
   d.innerHTML = '<span class="mut">loading…</span>';
+  if (W.id !== id) NODES.clear();
+  W.id = id; W.line = line ? line.split("-") : [];
   try {
+    if (!IDX) await loadIndex().catch(() => {});
     const r = await j(`/api/dashboard/charts-review/chart/${id}`); const c = r.chart; const pv = c.proposal_view;
     const rev = r.history?.[0] && r.history[0].raw === r.liveRaw ? r.history[0] : null;
-    d.innerHTML = `<p><a href="#" id="back">← all charts</a></p>
-      <div class="card"><h2>${esc(c.words)} <span class="mut">${esc(c.id)}</span></h2>
+    const at = ORDER.indexOf(id), todo = IDX ? Object.fromEntries(IDX.charts.map((x) => [x.id, !x.review])) : {};
+    const nextTodo = at < 0 ? null : ORDER.slice(at + 1).concat(ORDER.slice(0, at)).find((x) => todo[x]);
+    const nav = (to, text) => to ? `<a href="#${to}">${text}</a>` : "";
+    d.innerHTML = `<p class="bar"><a href="#" id="back">← all charts</a>${at >= 0 ? `<span class="mut">${at + 1} of ${ORDER.length} in the list</span>` : ""}
+        ${nav(ORDER[at - 1], "‹ previous")}${nav(at >= 0 ? ORDER[at + 1] : null, "next ›")}${nav(nextTodo, "next not reviewed ››")}</p>
+      <div class="card"><h2>${esc(c.words)} <span class="mut mono" style="font-size:12px">${esc(c.id)}</span></h2>
         <div class="mut">live raw ${esc((r.liveRaw || "").slice(0, 12))} · ${esc(c.plan || "")} · refine ${c.refine_min ?? "?"} min (${c.samples_m ?? "?"}m samples) ·
           solved ${esc(c.solvedAt || "?")} · ${c.answers_since_0927} live answers since 09-27 · ${c.candidates ?? 1} known solve(s) of this spot ·
           live score ${sc(c.score)} (×1000 bb/hand, reach-weighted regret)${c.runner_up ? ` · runner-up ${sc(c.runner_up.score)} (${(c.runner_up.gain * 100).toFixed(0)}% vs live on ${c.runner_up.common} nodes)` : ""}</div>
-        ${r.staleSummary ? '<p style="color:var(--bad)">The live solve changed after this summary was built — rerun chart_review.py.</p>' : ""}
+        ${r.staleSummary ? '<p class="warn">The live solve changed after this summary was built — rerun chart_review.py.</p>' : ""}
         ${c.proposal?.verdict === "promote" ? `<p><span class="pill promote">PROPOSED</span> raw ${esc((c.proposal.cand_raw || "").slice(0, 12))}: ${c.proposal.better_pct}% lower reach-weighted regret (at ${esc((c.proposal.where || [])[0] || "?")}). Nothing is promoted until you say so.</p>` : ""}
         <div class="bar"><button class="ok" id="vOk">Looks right</button><button class="flag" id="vFlag">Flag</button>
           <input id="vNote" placeholder="note (what looks wrong, which node)" style="flex:1;min-width:180px" value="${esc(rev?.note || "")}">
           <span id="vState" class="mut">${rev ? `${rev.verdict === "ok" ? "looks right" : "FLAGGED"} · ${new Date(rev.at).toLocaleString()}` : "not reviewed"}</span></div>
       </div>
+      <div class="card" id="playcard"><h2>Play this chart <span class="sub">— the seat to act, its range and what it does; click an action to walk on</span></h2><div id="play"><span class="mut">reading the node…</span></div></div>
       <div class="card"><h2>Sanity flags (${c.flags.length})</h2>${c.flags.length ? `<ul class="flags">${c.flags.map((f) => `<li><span class="k">${esc(f.kind)}</span> · ${esc(f.node)} · ${esc(f.detail)}</li>`).join("")}</ul>` : '<span class="mut">none</span>'}</div>
-      ${pv && pv.nodes ? `<div class="card"><h2>Live vs proposed (first orbit)</h2><div class="tablewrap"><table><thead><tr><th>node</th><th>live</th><th>proposed</th><th>range diff</th><th>flips</th><th></th></tr></thead><tbody>${pv.nodes.filter((n) => n.line.split("-").length <= 5).map((n, k) =>
+      ${pv && pv.nodes ? `<div class="card"><h2>Live vs proposed (first orbit)</h2><div class="tablewrap"><table><thead><tr><th>node</th><th>live</th><th>proposed</th><th>range diff</th><th>flips</th><th></th></tr></thead><tbody>${pv.nodes.filter((n) => n.line.split("-").length <= 5).map((n) =>
         `<tr><td>${esc(n.pos)} <span class="mut">${esc(n.line || "(root)")}</span></td><td>${mixBar(n.live)}</td><td>${mixBar(n.proposed)}</td><td class="num">${pct(n.tv)}</td><td class="num">${n.flips.length}</td>
-        <td><button class="pvbtn" data-k="${k}">compare</button></td></tr>`).join("")}</tbody></table></div><div id="pvbox"></div></div>` : pv?.error ? `<div class="card">proposal view failed: ${esc(pv.error)}</div>` : ""}
-      ${nodeSection("First in (RFI)", c.rfi, id, "seat")}
-      ${nodeSection("Facing a first-in action (open / limp / jam)", c.facing, id, "defender")}
-      ${nodeSection("The opener facing a 3-bet / iso", c.vs3bet, id, "opener")}`;
-    document.getElementById("back").onclick = (e) => { e.preventDefault(); location.hash = ""; };
-    d.querySelectorAll(".nodebtn").forEach((b) => b.onclick = () => showNode(id, b.dataset.line, b.closest(".card").querySelector(".nodebox")));
-    d.querySelectorAll(".pvbtn").forEach((b) => b.onclick = () => { const n = pv.nodes[+b.dataset.k]; showNode(id, n.line, document.getElementById("pvbox"), n); });
+        <td><button class="pvbtn" data-k="${pv.nodes.indexOf(n)}">compare</button></td></tr>`).join("")}</tbody></table></div><div id="pvbox"></div></div>` : pv?.error ? `<div class="card">proposal view failed: ${esc(pv.error)}</div>` : ""}
+      ${nodeSection("First in (RFI)", c.rfi, "seat")}
+      ${nodeSection("Facing a first-in action (open / limp / jam)", c.facing, "defender")}
+      ${nodeSection("The opener facing a 3-bet / iso", c.vs3bet, "opener")}`;
+    $("back").onclick = (e) => { e.preventDefault(); location.hash = ""; };
+    d.querySelectorAll(".openbtn").forEach((b) => b.onclick = () => openSpot(b.dataset.line));
+    d.querySelectorAll(".pvbtn").forEach((b) => b.onclick = () => showCompare(id, pv.nodes[+b.dataset.k], $("pvbox")));
     const save = async (verdict) => {
-      const st = document.getElementById("vState"); st.textContent = "saving…";
+      const st = $("vState"); st.textContent = "saving…";
       try { const s = await j("/api/dashboard/charts-review/review", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chartId: id, raw: r.liveRaw, verdict, note: document.getElementById("vNote").value }) });
-        st.textContent = `${verdict === "ok" ? "looks right" : "FLAGGED"} · saved ${new Date(s.review.at).toLocaleTimeString()}`; IDX = null;
+        body: JSON.stringify({ chartId: id, raw: r.liveRaw, verdict, note: $("vNote").value }) });
+        st.textContent = `${verdict === "ok" ? "looks right" : "FLAGGED"} · saved ${new Date(s.review.at).toLocaleTimeString()}`;
+        loadIndex().catch(() => {});                       // the header's progress and the list's review column
       } catch (e) { st.textContent = "not saved: " + e.message; }
     };
-    document.getElementById("vOk").onclick = () => save("ok"); document.getElementById("vFlag").onclick = () => save("flag");
-  } catch (e) { d.innerHTML = `<p><a href="#">← all charts</a></p><p style="color:var(--bad)">${esc(e.message)}</p>`; }
+    $("vOk").onclick = () => save("ok"); $("vFlag").onclick = () => save("flag");
+    wirePlay(); renderPlay();
+  } catch (e) { d.innerHTML = `<p><a href="#">← all charts</a></p><p class="warn">${esc(e.message)}</p>`; }
 }
+/** #<chart id> opens a chart at its root; #<chart id>@<line> opens it at that spot (the address follows the walk) */
 async function route() {
-  const id = decodeURIComponent(location.hash.slice(1));
-  if (id) return showChart(id);
-  document.getElementById("detail").hidden = true; document.getElementById("list").hidden = false;
-  try { if (!IDX) await loadIndex(); else renderList(); } catch (e) { document.getElementById("sub").textContent = "could not load: " + e.message; }
+  const [id, line = ""] = decodeURIComponent(location.hash.slice(1)).split("@");
+  if (id) return showChart(id, line);
+  W.id = null;
+  $("detail").hidden = true; $("list").hidden = false;
+  try { if (!IDX) await loadIndex(); else renderList(); } catch (e) { $("sub").textContent = "could not load: " + e.message; }
 }
 window.addEventListener("hashchange", route); route();
 </script>
