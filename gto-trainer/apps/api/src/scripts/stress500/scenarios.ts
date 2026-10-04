@@ -163,6 +163,8 @@ interface Build {
   hero: Pos;
   strength?: Strength;
   postIns?: Pos[];
+  /** extra fields on the archive record (e.g. dropStartStacks: the run hides the dealt stacks from the answer) */
+  meta?: Record<string, unknown>;
   /** drives the table after the blinds */
   run: (t: Table, rng: Rng) => void;
 }
@@ -177,7 +179,7 @@ function realise(family: string, idx: number, b: Build, rng: Rng, seed: number):
   if (!t.ended) throw new IllegalAction(`${id}: the hand did not finish`);
   const heroDecisions = t.actions.filter((a) => a.hero && !/^post/.test(a.type)).length;
   if (!heroDecisions) throw new IllegalAction(`${id}: hero never acted`);
-  return { id, family, title: b.title, tags: b.tags, hero: b.hero, heroDecisions, raw: t.toRaw({ handId: 900000 + idx, family, title: b.title, tags: b.tags }) };
+  return { id, family, title: b.title, tags: b.tags, hero: b.hero, heroDecisions, raw: t.toRaw({ handId: 900000 + idx, family, title: b.title, tags: b.tags, ...(b.meta ?? {}) }) };
 }
 
 type Template = (rng: Rng, i: number) => Build;
@@ -841,6 +843,67 @@ const briefH: Template = (rng) => ({
     calm(t, r);
   },
 });
+/**
+ * THE HAND-4587 SESSION'S SECOND BATCH (2026-10-05, its review of the first 43 hands): the shapes its fixes have no
+ * spot for yet — a cut on the turn/river, two flop jammers with three still acting, a dropped seat's raise called and
+ * re-raised, a short holder all-in with a deep caller (the latent mis-press), a committed folder, a min-bet into a big
+ * multiway pot, dead money with the dealt stacks unknown, a short hero facing a dropped seat's bet, a double reopen.
+ */
+const briefI: Template = (rng, i) => {
+  const v = i % 14;
+  const str = (): Strength => pick(rng, ["strong", "medium", "spec"]);
+  const pre4 = (): Step[] => [["UTG", "r", 2.5], ["HJ", "f"], ["CO", "f"], ["BTN", "c"], ["SB", "c"], ["BB", "c"]];
+  const limp6: Step[] = [["UTG", "c"], ["HJ", "c"], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "x"]];
+  const checks4: Step[] = [["SB", "x"], ["BB", "x"], ["UTG", "x"], ["BTN", "x"]];
+  const cutLine: Step[] = [["SB", "x"], ["BB", "r", 6], ["UTG", "c"], ["BTN", "c"], ["SB", "r", 20], ["BB", "c"], ["UTG", "c"], ["BTN", "r", 55]];
+  switch (v) {
+    case 0: return { title: `turn cut: flop checked 4-way; turn SB X, hero BB bets 6, UTG BTN call, SB check-raises 20, hero calls, UTG calls, BTN raises 55 → hero`,
+      tags: ["brief-I", "cut", "turn-cut", "ways-4"], stacks: full(100), hero: "BB", strength: str(),
+      run: (t, r) => { play(t, pre4()); play(t, checks4); play(t, cutLine); calm(t, r); } };
+    case 1: return { title: `river cut: flop and turn checked 4-way; river SB X, hero BB bets 6, UTG BTN call, SB check-raises 20, hero calls, UTG calls, BTN raises 55 → hero`,
+      tags: ["brief-I", "cut", "river-cut", "ways-4"], stacks: full(100), hero: "BB", strength: str(),
+      run: (t, r) => { play(t, pre4()); play(t, checks4); play(t, checks4); play(t, cutLine); calm(t, r); } };
+    case 2: case 3: return { title: `two flop jammers then three acting: SB jams 15, BB calls, UTG jams 22, CO BTN call, BB calls; turn CO bets → hero ${v === 2 ? "BTN" : "BB (BTN calls)"}`,
+      tags: ["brief-I", "two-jammers", "side-pot", "ways-5"], stacks: full(100, { SB: 17.5, UTG: 24.5 }), hero: v === 2 ? "BTN" : "BB", strength: str(),
+      run: (t, r) => {
+        play(t, [["UTG", "r", 2.5], ["HJ", "f"], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "c"]]);
+        play(t, [["SB", "j"], ["BB", "c"], ["UTG", "j"], ["CO", "c"], ["BTN", "c"], ["BB", "c"]]);
+        play(t, v === 2 ? [["BB", "x"], ["CO", "r", betPot(0.4)]] : [["BB", "x"], ["CO", "r", betPot(0.4)], ["BTN", "c"]]);
+        calm(t, r);
+      } };
+    case 4: return { title: `a dropped seat's raise called, the holder re-raises: SB X, hero BB bets 3, UTG raises 9, HJ calls, CO 3-bets 27, SB folds → hero`,
+      tags: ["brief-I", "dead-money", "reraise", "ways-5"], stacks: full(100), hero: "BB", strength: str(),
+      run: (t, r) => { play(t, [["UTG", "r", 2.5], ["HJ", "c"], ["CO", "c"], ["BTN", "f"], ["SB", "c"], ["BB", "c"]]); play(t, [["SB", "x"], ["BB", "r", 3], ["UTG", "r", 9], ["HJ", "c"], ["CO", "r", 27], ["SB", "f"]]); calm(t, r); } };
+    case 5: case 12: {
+      const btn = v === 5 ? 12 : 8;
+      return { title: `short holder all-in, deep caller behind: CO bets 4, BTN (${btn} behind) jams, SB (150 behind) calls → hero HJ (200) — an ALL-IN pick must not be the tree's short amount`,
+        tags: ["brief-I", "short-allin", "mis-press-class", "ways-4"], stacks: full(100, { HJ: 202.5, BTN: btn + 2.5, SB: 152.5 }), hero: "HJ", strength: pick(rng, ["strong", "premium"]),
+        run: (t, r) => { play(t, [["UTG", "f"], ["HJ", "r", 2.5], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "f"]]); play(t, [["SB", "x"], ["HJ", "x"], ["CO", "r", 4], ["BTN", "j"], ["SB", "c"]]); calm(t, r); } };
+    }
+    case 6: return { title: `committed folder: flop SB bets 3, BB raises 10, HJ calls, hero CO calls, SB folds; turn BB bets, HJ calls → hero`,
+      tags: ["brief-I", "committed-folder", "dead-money", "ways-4"], stacks: full(100), hero: "CO", strength: str(),
+      run: (t, r) => { play(t, [["UTG", "f"], ["HJ", "r", 2.5], ["CO", "c"], ["BTN", "f"], ["SB", "c"], ["BB", "c"]]); play(t, [["SB", "r", 3], ["BB", "r", 10], ["HJ", "c"], ["CO", "c"], ["SB", "f"]]); play(t, [["BB", "r", betPot(0.5)], ["HJ", "c"]]); calm(t, r); } };
+    case 7: return { title: `min-bet into a big multiway pot: 6-way limped, SB bets 1, BB UTG HJ call, CO raises 6 → hero BTN`,
+      tags: ["brief-I", "min-bet", "ways-6"], stacks: full(100), hero: "BTN", strength: pick(rng, ["medium", "spec"]),
+      run: (t, r) => { play(t, limp6); play(t, [["SB", "r", 1], ["BB", "c"], ["UTG", "c"], ["HJ", "c"], ["CO", "r", 6]]); calm(t, r); } };
+    case 8: return { title: `UNKNOWN DEALT STACKS: 4587-shape 5-way flop, CO bets, BTN (17.9 behind) jams, SB calls, BB folds → hero HJ — the answer is not told the dealt stacks`,
+      tags: ["brief-I", "dead-money", "no-start-stacks", "ways-5"], stacks: full(100, { BTN: 20.4, HJ: 138.8, SB: 85 }), hero: "HJ", strength: pick(rng, ["medium", "strong"]), meta: { dropStartStacks: true },
+      run: (t, r) => { play(t, [["HJ", "r", 2.5], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "c"]]); play(t, [["SB", "x"], ["BB", "x"], ["HJ", "x"], ["CO", "r", 3], ["BTN", "j"], ["SB", "c"], ["BB", "f"]]); calm(t, r); } };
+    case 9: return { title: `UNKNOWN DEALT STACKS: reopened — SB X, hero HJ bets 4, CO BTN call, SB check-raises 12, hero calls, CO calls, BTN raises 30 → hero — the answer is not told the dealt stacks`,
+      tags: ["brief-I", "cut", "no-start-stacks", "ways-4"], stacks: full(100, { BTN: 140 }), hero: "HJ", strength: pick(rng, ["strong", "medium"]), meta: { dropStartStacks: true },
+      run: (t, r) => { play(t, [["HJ", "r", 2.5], ["CO", "c"], ["BTN", "c"], ["SB", "c"], ["BB", "f"]]); play(t, [["SB", "x"], ["HJ", "r", 4], ["CO", "c"], ["BTN", "c"], ["SB", "r", 12], ["HJ", "c"], ["CO", "c"], ["BTN", "r", 30]]); calm(t, r); } };
+    case 10: case 11: {
+      const behind = v === 10 ? 15 : 10;
+      return { title: `short hero (${behind}bb behind) facing a dropped seat's bet: UTG bets 4, HJ calls, CO raises 18, BTN calls → hero BB — his call is his stack, the tree pot the main pot`,
+        tags: ["brief-I", "short-hero", "side-pot", "ways-5"], stacks: full(100, { BB: behind + 2.5 }), hero: "BB", strength: pick(rng, ["strong", "medium"]),
+        run: (t, r) => { play(t, [["UTG", "r", 2.5], ["HJ", "c"], ["CO", "c"], ["BTN", "c"], ["SB", "f"], ["BB", "c"]]); play(t, [["BB", "x"], ["UTG", "r", 4], ["HJ", "c"], ["CO", "r", 18], ["BTN", "c"]]); calm(t, r); } };
+    }
+    default: return { title: `double reopen (two dropped raisers): SB X, BB bets 2, UTG calls, HJ raises 8, CO calls, BTN raises 24, hero SB calls, BB calls, UTG folds, HJ calls, CO raises 70 → hero`,
+      tags: ["brief-I", "cut", "double-reopen", "ways-6"], stacks: full(100), hero: "SB", strength: str(),
+      run: (t, r) => { play(t, limp6); play(t, [["SB", "x"], ["BB", "r", 2], ["UTG", "c"], ["HJ", "r", 8], ["CO", "c"], ["BTN", "r", 24], ["SB", "c"], ["BB", "c"], ["UTG", "f"], ["HJ", "c"], ["CO", "r", 70]]); calm(t, r); } };
+  }
+};
+
 /** hero leaves his own pick: a tiny donk, a call of a river overbet with air, a min-raise */
 const poDeviate: Template = (rng, i) => {
   const v = i % 3;
@@ -892,6 +955,8 @@ export const FAMILIES: { family: string; count: number; tpl: Template; about: st
   { family: "brief_G", count: 16, tpl: briefG, about: "donk + check-raise wars, overbets, min-bets into big pots, multiway river jams" },
   { family: "brief_H", count: 8, tpl: briefH, about: "merged pairs carrying a check-raise into the turn and river" },
   { family: "po_deviate", count: 12, tpl: poDeviate, about: "hero leaves his own pick: tiny donks, overbet calls with air, min-raises" },
+  // appended (2026-10-05): every family draws from its own seeds, so the families above are unchanged
+  { family: "brief_I", count: 28, tpl: briefI, about: "the hand-4587 session's second batch: turn/river cuts, two flop jammers, a dropped seat's raise re-raised, a short holder with a deep caller, a committed folder, a min-bet into a big pot, unknown dealt stacks, a short hero vs a dropped seat's bet, a double reopen" },
 ];
 
 /** every synthetic scenario; a template whose draw is illegal tries the next seed (yield is reported) */

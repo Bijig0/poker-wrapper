@@ -204,6 +204,8 @@ for (const sc of todo) {
     if (!a.hero || /^post/.test(a.type)) continue;
     await gate();
     const cut = withStartStacks(truncateAt(hand, i));
+    // UNKNOWN DEALT STACKS (brief_I): the cut keeps the stacks behind at this point, the answer is not told the dealt ones
+    if ((sc.raw as any)?.dropStartStacks) delete (cut as any).startStacks;
     const h = { ...cut, currentNode: { ...cut.currentNode, toActIsHero: true } };
     const t0 = Date.now();
     let r: any;
