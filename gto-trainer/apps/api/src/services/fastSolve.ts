@@ -860,7 +860,7 @@ interface FlopArrival {
 }
 /** THE REDUCED TREE SAYS SO IN THE PATH (2026-10-01): ranges that came from gtowAiPreflop.reducedArrivalRanges are an
  *  approximation ("rebuilt", not clean), named by its own code so the session's path report counts them apart. */
-const reducedProv = (ai: { reduced?: { why: string; live: string[]; trees: number } }, otherwise: ArrivalPath): ArrivalPath =>
+const reducedProv = (ai: { reduced?: { why: string; live: string[] } }, otherwise: ArrivalPath): ArrivalPath =>
   ai.reduced
     ? { how: "rebuilt", producer: "ai-reduced", code: "arrival:reduced-tree",
         why: `the exact preflop tree cannot hold the line (${ai.reduced.why.replace(/^GTO Wizard AI preflop ranges: /, "").slice(0, 140)}) — the flop ranges come from a reduced tree of the ${ai.reduced.live.length} players who reached the flop (${ai.reduced.live.join("/")})` }

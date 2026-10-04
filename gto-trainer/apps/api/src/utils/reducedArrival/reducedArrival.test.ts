@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { classesToCombos, combosToClasses, forcedHandOf, normalised, normalisedCombos, planReducedArrival, readCaller, type ReducedCaller } from "./reducedArrival";
+import { cameInLimping, classesToCombos, combosToClasses, normalised, normalisedCombos, planReducedArrival, type ReducedCaller } from "./reducedArrival";
 import { COMBOS } from "../comboIndex/comboIndex";
 import type { ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
 
@@ -37,7 +37,7 @@ const plan = (h: ParsedHand) => {
   if (!p.ok) throw new Error(p.reason);
   return p;
 };
-const brief = (c: ReducedCaller) => `${c.pos}: had ${c.prior} in, ${c.toCall} to call into ${c.potBefore} (${c.deadBb} dead) · raiser ${c.raiserInPosition ? "in" : "out of"} position → ${c.tree.raiser} posts ${c.tree.raiserPost}, ${c.tree.caller} posts ${c.tree.callerPost}`;
+const brief = (c: ReducedCaller) => `${c.pos}: had ${c.prior} in, ${c.toCall} to call into ${c.potBefore}`;
 
 describe("planReducedArrival", () => {
   it("the hand as played: hero raised to 17.6 with 1 in; UTG had 5 in and met it for 12.6 into 33, 10.4 of it dead", () => {
@@ -47,25 +47,24 @@ describe("planReducedArrival", () => {
     expect(p.raiser).toEqual({ seat: 2, pos: "HJ", putIn: 17.6, prior: 1 });
     expect(p.raiseTo).toBe(17.6);
     expect(REAL.actions[p.raiseIndex]).toMatchObject({ type: "raise", seatId: 2 });
-    // the raiser acts after UTG on the flop: he is the tree's SB (its button), UTG its BB — each posting what he had in
-    expect(p.callers.map(brief)).toEqual(["UTG: had 5 in, 12.6 to call into 33 (10.4 dead) · raiser in position → SB posts 17.6, BB posts 5"]);
-    // the tree's pot once he calls is the table's flop pot
+    expect(p.callers.map(brief)).toEqual(["UTG: had 5 in, 12.6 to call into 33"]);
+    // the pot once he calls is the table's flop pot
     const c = p.callers[0]!;
-    expect(c.tree.raiserPost + c.tree.callerPost + c.toCall + c.deadBb).toBeCloseTo(p.potBb, 5);
+    expect(c.potBefore + c.toCall).toBeCloseTo(p.potBb, 5);
   });
 
   it("the raiser out of position: the caller is the tree's SB (in position) and acts at its root", () => {
     const p = plan(UTG_RERAISES);
     expect(p.raiser).toMatchObject({ pos: "UTG", prior: 1, putIn: 17.6 });
-    expect(p.callers.map(brief)).toEqual(["HJ: had 1 in, 16.6 to call into 25 (6.4 dead) · raiser out of position → BB posts 17.6, SB posts 1"]);
+    expect(p.callers.map(brief)).toEqual(["HJ: had 1 in, 16.6 to call into 25"]);
   });
 
-  it("three to the flop: one tree per caller — a later caller's pot holds the earlier caller's chips as dead money", () => {
+  it("three to the flop: each caller at his own price — a later caller's pot holds the earlier caller's chips", () => {
     const p = plan(THREE);
     expect(p.live).toEqual(["BB", "UTG", "HJ"]);
     expect(p.callers.map(brief)).toEqual([
-      "BB: had 5 in, 12.6 to call into 33 (10.4 dead) · raiser in position → SB posts 17.6, BB posts 5",
-      "UTG: had 5 in, 12.6 to call into 45.6 (23 dead) · raiser in position → SB posts 17.6, BB posts 5",
+      "BB: had 5 in, 12.6 to call into 33",
+      "UTG: had 5 in, 12.6 to call into 45.6",
     ]);
     expect(p.potBb).toBe(58.2);
   });
@@ -74,19 +73,19 @@ describe("planReducedArrival", () => {
     const p = plan(MIDDLE);
     expect(p.raiser.pos).toBe("UTG");
     expect(p.callers.map(brief)).toEqual([
-      "BB: had 5 in, 12.6 to call into 45.6 (23 dead) · raiser in position → SB posts 17.6, BB posts 5",      // called second, after hero
-      "HJ: had 1 in, 16.6 to call into 29 (10.4 dead) · raiser out of position → BB posts 17.6, SB posts 1",
+      "BB: had 5 in, 12.6 to call into 45.6",      // called second, after hero
+      "HJ: had 1 in, 16.6 to call into 29",
     ]);
   });
 
-  it("four to the flop: three callers, three trees, every live seat accounted for", () => {
+  it("four to the flop: three callers, every live seat accounted for", () => {
     const p = plan(FOUR);
     expect(p.live).toEqual(["BB", "UTG", "HJ", "CO"]);
     expect([p.raiser.pos, ...p.callers.map((c) => c.pos)].sort()).toEqual([...p.live].sort());
     expect(p.callers.map(brief)).toEqual([
-      "BB: had 5 in, 12.6 to call into 45.6 (23 dead) · raiser in position → SB posts 17.6, BB posts 5",
-      "UTG: had 5 in, 12.6 to call into 58.2 (35.6 dead) · raiser in position → SB posts 17.6, BB posts 5",
-      "CO: had 5 in, 12.6 to call into 33 (10.4 dead) · raiser out of position → BB posts 17.6, SB posts 5",   // the CO called first
+      "BB: had 5 in, 12.6 to call into 45.6",
+      "UTG: had 5 in, 12.6 to call into 58.2",
+      "CO: had 5 in, 12.6 to call into 33",   // the CO called first
     ]);
   });
 
@@ -94,23 +93,23 @@ describe("planReducedArrival", () => {
     const short = hand([...OPENING, a("call", 6, 4), a("call", 1, 4), a("raise", 2, 17.6), a("fold", 3), a("fold", 6), a("all-in", 1, 12)]);
     const p = plan(short);
     expect(REAL.actions[p.raiseIndex]).toMatchObject({ seatId: 2 });        // the all-in for less than the price is a call, not the last raise
-    expect(p.callers.map(brief)).toEqual(["UTG: had 5 in, 7 to call into 33 (10.4 dead) · raiser in position → SB posts 17.6, BB posts 5"]);
+    expect(p.callers.map(brief)).toEqual(["UTG: had 5 in, 7 to call into 33"]);
   });
 
-  it("a raiser with nothing in before his raise; a caller with nothing in yet posts the tree's minimum", () => {
+  it("a raiser with nothing in before his raise; a caller with nothing in yet", () => {
     // UTG opens, hero calls, the BTN squeezes to 11 (his first chip), both call
     const squeeze = plan(hand([a("post-sb", 5, 0.4), a("post-bb", 6, 1), a("raise", 1, 2.5), a("call", 2, 2.5), a("fold", 3), a("raise", 4, 11), a("fold", 5), a("fold", 6), a("call", 1, 8.5), a("call", 2, 8.5)]));
     expect(squeeze.raiser).toMatchObject({ pos: "BTN", prior: 0, putIn: 11 });
-    expect(squeeze.callers.map((c) => `${c.pos}:${c.tree.callerPost}`)).toEqual(["UTG:2.5", "HJ:2.5"]);
+    expect(squeeze.callers.map((c) => `${c.pos}:${c.prior}`)).toEqual(["UTG:2.5", "HJ:2.5"]);
     // UTG opens, hero 3-bets to 9, the CO cold-calls with nothing in, UTG calls
     const cold = plan(hand([a("post-sb", 5, 0.4), a("post-bb", 6, 1), a("raise", 1, 2.5), a("raise", 2, 9), a("call", 3, 9), a("fold", 4), a("fold", 5), a("fold", 6), a("call", 1, 6.5)]));
     expect(cold.callers.map(brief)).toEqual([
-      "UTG: had 2.5 in, 6.5 to call into 21.9 (10.4 dead) · raiser in position → SB posts 9, BB posts 2.5",
-      "CO: had 0 in, 9 to call into 12.9 (3.9 dead) · raiser out of position → BB posts 9, SB posts 0.01",
+      "UTG: had 2.5 in, 6.5 to call into 21.9",
+      "CO: had 0 in, 9 to call into 12.9",
     ]);
     // a blind who had only his blind in
     const bb = plan(hand([a("post-sb", 5, 0.4), a("post-bb", 6, 1), a("raise", 1, 2.5), a("fold", 2), a("fold", 3), a("raise", 4, 9), a("fold", 5), a("call", 6, 8), a("call", 1, 6.5)]));
-    expect(bb.callers.map(brief)[0]).toBe("BB: had 1 in, 8 to call into 12.9 (2.9 dead) · raiser in position → SB posts 9, BB posts 1");
+    expect(bb.callers.map(brief)[0]).toBe("BB: had 1 in, 8 to call into 12.9");
   });
 
   it("has no reduced tree: a limped pot, one player left, a raiser who is not there", () => {
@@ -122,90 +121,20 @@ describe("planReducedArrival", () => {
   });
 });
 
-describe("forcedHandOf", () => {
-  it("the caller and the raiser on the heads-up set, the two posts as its blinds, hero kept as hero", () => {
-    const p = plan(REAL);
-    const r = forcedHandOf(REAL, p, p.callers[0]!);
-    expect(r.positions).toEqual({ 2: "SB", 1: "BB" });
-    expect(r.heroSeatId).toBe(2);
-    expect(r.actions.map((x) => `${x.seatId}:${x.type} ${x.amount}${x.hero ? " (hero)" : ""}`)).toEqual(["2:post-sb 17.6 (hero)", "1:post-bb 5"]);
-    expect(r.liveSeats).toEqual([2, 1]);
-    expect(r.currentNode.street).toBe("preflop");
-  });
-  it("the raiser out of position posts the tree's BB; a pair without hero has the raiser stand in", () => {
-    const p = plan(UTG_RERAISES);
-    const r = forcedHandOf(UTG_RERAISES, p, p.callers[0]!);
-    expect(r.positions).toEqual({ 2: "SB", 1: "BB" });
-    expect(r.actions.map((x) => `${x.seatId}:${x.type} ${x.amount}`)).toEqual(["2:post-sb 1", "1:post-bb 17.6"]);
-    const m = plan(MIDDLE);                                    // UTG raised; the BB's tree holds no hero
-    const bb = forcedHandOf(MIDDLE, m, m.callers.find((c) => c.pos === "BB")!);
-    expect(bb.heroSeatId).toBe(1);
-    expect(bb.positions).toEqual({ 1: "SB", 6: "BB" });
+describe("cameInLimping", () => {
+  it("a first chip that is a call with no raise ahead of it — the SB's complete too; not a cold-call, a raise, a blind", () => {
+    expect(cameInLimping(REAL, 1, REAL.actions.length)).toBe(true);           // UTG limped, then called the iso and the re-raise
+    expect(cameInLimping(REAL, 2, REAL.actions.length)).toBe(true);           // hero over-limped
+    expect(cameInLimping(REAL, 6, REAL.actions.length)).toBe(false);          // the BB's first chip after his blind is the call of the iso
+    expect(cameInLimping(REAL, 3, REAL.actions.length)).toBe(false);          // the iso-raiser
+    const sbComplete = hand([a("post-sb", 5, 0.4), a("post-bb", 6, 1), a("call", 1, 1), a("fold", 2), a("fold", 3), a("fold", 4), a("call", 5, 0.6), a("raise", 6, 5), a("call", 1, 4), a("call", 5, 4)]);
+    expect(cameInLimping(sbComplete, 5, sbComplete.actions.length)).toBe(true);
+    const cold = hand([a("post-sb", 5, 0.4), a("post-bb", 6, 1), a("raise", 1, 2.5), a("call", 2, 2.5), a("fold", 3), a("fold", 4), a("fold", 5), a("call", 6, 1.5)]);
+    expect(cameInLimping(cold, 2, cold.actions.length)).toBe(false);
+    // only what happened before `upto` counts: before his limp he has not come in at all
+    expect(cameInLimping(REAL, 1, 2)).toBe(false);
   });
 });
-
-const arr = (v: number | ((cls: string) => number)) => COMBOS.map((c) => (typeof v === "number" ? v : v(c.cls)));
-const node = (actor: string, actions: { code: string; type?: string; allin?: boolean; freq?: number; strategy: number[] }[]) => ({
-  data: {
-    game: { players: [{ position: actor, is_hero: true }] },
-    action_solutions: actions.map((x) => ({
-      action: { code: x.code, type: x.type ?? (x.code[0] === "R" ? "RAISE" : x.code === "C" ? "CALL" : x.code === "X" ? "CHECK" : "FOLD"), allin: !!x.allin },
-      total_frequency: x.freq ?? 0, strategy: x.strategy,
-    })),
-  },
-});
-const getter = (nodes: Record<string, any>) => async (l: string) => nodes[l] ?? { error: `no node ${l}` };
-
-describe("readCaller", () => {
-  const ip = plan(REAL).callers[0]!;                          // the raiser in position: the caller is behind his check
-  const oop = plan(UTG_RERAISES).callers[0]!;                 // the raiser out of position: the caller is at the root
-
-  it("the raiser out of position: the caller's node is the root — every hand that does not fold stays", async () => {
-    const r = await readCaller(oop, getter({
-      "": node("SB", [
-        { code: "F", freq: 0.28, strategy: arr((c) => (c === "72o" ? 1 : c === "T9s" ? 0.4 : 0)) },
-        { code: "C", freq: 0.0, strategy: arr(0) },
-        { code: "R44", freq: 0.03, strategy: arr((c) => (c === "T9s" ? 0.6 : 0)) },
-        { code: "R91.5", allin: true, freq: 0.69, strategy: arr((c) => (c === "72o" || c === "T9s" ? 0 : 1)) },
-      ]),
-    }));
-    if (!r.ok) throw new Error(r.reason);
-    expect(r.line).toBe("");
-    const at = (cls: string) => r.stays[COMBOS.findIndex((c) => c.cls === cls)];
-    expect(at("72o")).toBe(0);
-    expect(at("T9s")).toBeCloseTo(0.6, 5);
-    expect(at("AA")).toBe(1);                                  // the solver shoves it; the player called — it stays
-    expect([r.fold, r.call, r.raise]).toEqual([28, 0, 72]);
-  });
-
-  it("the raiser in position: he checks first (his all-in, when the tree adds one, is not walked), then the caller", async () => {
-    const r = await readCaller(ip, getter({
-      "": node("SB", [{ code: "X", freq: 0.7, strategy: arr(0.7) }, { code: "R153.5", allin: true, freq: 0.3, strategy: arr(0.3) }]),
-      "X": node("BB", [{ code: "F", freq: 0.12, strategy: arr((c) => (c === "72o" ? 1 : 0.1)) }, { code: "C", freq: 0.25, strategy: arr(0.3) }, { code: "R91.5", allin: true, freq: 0.63, strategy: arr(0.6) }]),
-    }));
-    if (!r.ok) throw new Error(r.reason);
-    expect(r.line).toBe("X");
-    expect(r.stays[COMBOS.findIndex((c) => c.cls === "AA")]).toBeCloseTo(0.9, 5);
-    expect(r.stays[COMBOS.findIndex((c) => c.cls === "72o")]).toBe(0);
-    expect([r.fold, r.call, r.raise]).toEqual([12, 25, 63]);
-  });
-
-  it("refuses out loud: the wrong seat to act, no check for the raiser, a node the tree does not have", async () => {
-    const wrongRoot = await readCaller(oop, getter({ "": node("BB", [{ code: "F", strategy: arr(1) }]) }));
-    expect(wrongRoot.ok).toBe(false);
-    if (!wrongRoot.ok) expect(wrongRoot.reason).toContain("not the caller's seat (SB)");
-    const noCheck = await readCaller(ip, getter({ "": node("SB", [{ code: "R153.5", allin: true, strategy: arr(1) }]) }));
-    expect(noCheck.ok).toBe(false);
-    if (!noCheck.ok) expect(noCheck.reason).toContain("no check at the root");
-    const missing = await readCaller(ip, getter({ "": node("SB", [{ code: "X", strategy: arr(1) }]) }));
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) expect(missing.reason).toContain("the node behind the raiser's check");
-    const dead = await readCaller(oop, getter({}));
-    expect(dead.ok).toBe(false);
-    if (!dead.ok) expect(dead.reason).toContain("reduced tree (HJ): the root");
-  });
-});
-
 describe("range helpers", () => {
   it("normalised: the heaviest class becomes 1, the composition is kept, zeros dropped", () => {
     expect(normalised({ AQs: 0.2545, "77": 0.1798, "72o": 0 })).toEqual({ AQs: 1, "77": 0.7065 });

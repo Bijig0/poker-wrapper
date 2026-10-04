@@ -5,10 +5,11 @@ import { COMBOS } from "../utils/comboIndex/comboIndex";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 /**
- * THE REDUCED TREE, end to end over stubbed solves (2026-10-01, hand 4921846667 — utils/reducedArrival). What each
- * caller's tree is built with (the two posts, the dead money, the stacks as dealt, both starting ranges and where
- * they came from), what comes back (ranges on the table's own position names, the table's own line for the pot), what
- * the note says — and what is refused. The live half is scripts/_probeReducedE2e.ts.
+ * THE REDUCED TREE, end to end over stubbed reads (2026-10-01, hand 4921846667 — utils/reducedArrival; the caller read
+ * on the exact tree since 2026-10-04). Where each range starts (the chart, the pool's limp range, the exact tree), how
+ * each caller is read (hero's call, a limper kept whole, a villain's answer walked on the exact tree), what comes back
+ * (ranges on the table's own position names, the table's own line for the pot), what the note says — and what is
+ * refused. Nothing is solved here: every read is a ctx closure (lastRaiseReads in the live path).
  */
 
 const POS = { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" } as const;
@@ -31,38 +32,16 @@ const SEATS = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
 const WHY = "GTO Wizard AI preflop ranges: token C is not an action at 'C'";
 
 const arr = (v: number | ((cls: string) => number)) => COMBOS.map((c) => (typeof v === "number" ? v : v(c.cls)));
-const node = (actor: string, actions: { code: string; allin?: boolean; freq?: number; strategy: number[] }[]) => ({
-  data: {
-    game: { players: [{ position: actor, is_hero: true }] },
-    action_solutions: actions.map((x) => ({
-      action: { code: x.code, type: x.code[0] === "R" ? "RAISE" : x.code === "C" ? "CALL" : x.code === "X" ? "CHECK" : "FOLD", allin: !!x.allin },
-      total_frequency: x.freq ?? 0, strategy: x.strategy,
-    })),
-  },
-});
 /** a chart node: every class folds, the named classes take `action` with these percentages */
 const chart = (pos: string, action: string, token: string, pct: Record<string, number>) => ({
   pos, terminal: false, actions: [{ action: "Fold", token: "F" }, { action, token }],
   cells: [...new Set(COMBOS.map((c) => c.cls))].map((h) => ({ hand: h, actions: { Fold: 100 - (pct[h] ?? 0), [action]: pct[h] ?? 0 } })),
 });
-/** the raiser in position: he checks — the only action the tree gives him (probed 2026-10-04, the 2026-10-03 settings) —
- *  then the caller folds `foldOf(class)` and continues with the rest. `check` < 1: a tree solved under the old all-in
- *  rule, where GTO Wizard added the raiser's jam at the root. */
-const ipTree = (foldOf: (cls: string) => number, check = 1) => ({
-  "": node("SB", check >= 1 ? [{ code: "X", freq: 1, strategy: arr(1) }]
-    : [{ code: "X", freq: check, strategy: arr(check) }, { code: "R153.5", allin: true, freq: 1 - check, strategy: arr(1 - check) }]),
-  "X": node("BB", [{ code: "F", freq: 0.14, strategy: arr(foldOf) }, { code: "C", freq: 0.2, strategy: arr((c) => (1 - foldOf(c)) * 0.25) }, { code: "R91.5", allin: true, freq: 0.66, strategy: arr((c) => (1 - foldOf(c)) * 0.75) }]),
-});
-/** the raiser out of position: the caller is at the root */
-const oopTree = (foldOf: (cls: string) => number) => ({
-  "": node("SB", [{ code: "F", freq: 0.3, strategy: arr(foldOf) }, { code: "R44", freq: 0.7, strategy: arr((c) => 1 - foldOf(c)) }]),
-});
 
 const seams0 = { ...reducedSeams };
 afterEach(() => { Object.assign(reducedSeams, seams0); });
 
-function rig(nodesFor: (body: any) => Record<string, any>, answers: any[] | null = null) {
-  const solves: { key: string; body: any; n: number }[] = [];
+function rig(answers: any[] | null = null) {
   const chartReads: string[] = [];
   reducedSeams.chartNode = async (id: string, line: string) => {
     chartReads.push(`${id}|${line}`);
@@ -76,101 +55,76 @@ function rig(nodesFor: (body: any) => Record<string, any>, answers: any[] | null
     { id: 2, ts: 2, street: "preflop", source: "hrc-6max-preflop", chart: "ign200_6max_D100_olimp", line: "C", pick: "Limp", decision_key: "k1" },   // the same decision, probed again
     { id: 3, ts: 3, street: "preflop", source: "gtow-ai-preflop", chart: "gtow-ai · 6-handed", line: "F-C-R5-F-F-C", pick: "Raise 17.5", decision_key: "k2" },
   ];
-  reducedSeams.solve = async (key: string, body: any, n: number) => {
-    solves.push({ key, body, n });
-    const nodes = nodesFor(body);
-    return { get: async (l: string) => nodes[l] ?? { error: `no node ${l}` } };
-  };
-  return { solves, chartReads };
+  return { chartReads };
 }
-const playerOf = (body: any, pos: string) => body.players.find((p: any) => p.position === pos);
-const sizesOf = (body: any) => Object.fromEntries(body.bet_sizes.street_bet_sizes[0].position_bet_sizes.map((x: any) => [x.position, x.bet_sizes]));
-const weightOf = (range: number[], cls: string) => range[COMBOS.findIndex((c) => c.cls === cls)];
 /** the exact tree's reading of hero's limp-reraise: 77 half the time, ATs a quarter, 55 never */
 const heroRaise = async (pos: string) => (pos === "HJ" ? arr((c) => (c === "77" ? 0.5 : c === "ATs" ? 0.25 : 0)) : null);
+/** a stayRange stub that records who was asked */
+const stays = (by: Record<string, { range: number[]; folded: string[] } | null>, asked: string[] = []) =>
+  async (pos: string) => { asked.push(pos); return by[pos] ?? null; };
 const ctx = (extra: Record<string, unknown> = {}) => ({ why: WHY, tokens: TOKENS, seatOrder: SEATS, raiseFilter: heroRaise, ...extra });
 
 describe("reducedArrivalRanges", () => {
-  it("hand 4921846667: hero's range from the chart and the exact tree, UTG's the pool limpers who do not fold to the raise", async () => {
-    const { solves, chartReads } = rig(() => ipTree((c) => (c === "72o" ? 1 : c === "T9s" ? 0.5 : 0)));
-    const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
+  it("hand 4921846667: hero's range from the chart and the exact tree; UTG limped in, so the pool's limp range stands whole", async () => {
+    const { chartReads } = rig();
+    const asked: string[] = [];
+    const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx({ stayRange: stays({}, asked) }));
     if (!r.ok) throw new Error(r.reason);
-
-    // ONE tree: UTG against the raiser, the raise a forced bet
-    expect(solves.length).toBe(1);
-    const { body, n, key } = solves[0]!;
-    expect(n).toBe(2);
-    expect(key.startsWith("reduced|")).toBe(true);
-    expect(body.starting_street).toBe("PREFLOP");
-    expect(body.pot).toBe(10.4);                               // the dead money as it lay when UTG met the raise
-    expect(body.players.map((p: any) => `${p.position} posts ${p.blind} of ${p.stack}`)).toEqual(["SB posts 17.6 of 153.5", "BB posts 5 of 91.5"]);
-    expect(sizesOf(body)).toEqual({ SB: [], BB: ["2.5x"] });   // only the caller may put more in first: 2.5 times the forced bet (a multiple of the bet faced, probed)
-    expect(body.rake.cap_in_chips).toBeGreaterThan(0);
-    // the raiser's range in the tree: the chart's limp (ATs 28.79, 77 12.17, 55 19.85) × the exact tree's raise
-    // (ATs 0.25, 77 0.5, 55 0) — 7.2 and 6.1, scaled so the heaviest is 1
-    const hero = playerOf(body, "SB").range as number[], utg = playerOf(body, "BB").range as number[];
-    expect(weightOf(hero, "ATs")).toBe(1);
-    expect(weightOf(hero, "77")).toBeCloseTo((12.17 * 0.5) / (28.79 * 0.25), 3);
-    expect(weightOf(hero, "55")).toBe(0);
-    // the caller's: the pool's limp range, scaled the same way
-    expect(weightOf(utg, "AQs")).toBe(1);
-    expect(weightOf(utg, "77")).toBeCloseTo(17.98 / 25.45, 3);
-    expect(weightOf(utg, "AA")).toBe(0);
+    expect(asked).toEqual([]);                                 // a limper is not read at all
     expect(chartReads).toContain(`${POOL_LIMP_CHART}|`);
     expect(chartReads).toContain("ign200_6max_D100_olimp|C");
-
-    // what comes back
     expect(Object.keys(r.ranges).sort()).toEqual(["HJ", "UTG"]);
+    // hero: the chart's limp (ATs 28.79, 77 12.17, 55 19.85) × the exact tree's raise (ATs 0.25, 77 0.5, 55 0)
     expect(r.ranges.HJ!.ATs).toBeCloseTo(1, 3);
     expect(r.ranges.HJ!["77"]).toBeCloseTo((12.17 * 0.5) / (28.79 * 0.25), 3);
     expect(Object.keys(r.ranges.HJ!).sort()).toEqual(["77", "ATs"]);
-    expect(r.ranges.UTG!.AQs).toBeCloseTo(1, 3);               // the solver shoves it — the player called: it stays, in full
-    expect(r.ranges.UTG!.T9s).toBeCloseTo((10 / 25.45) * 0.5, 3);
-    expect(r.ranges.UTG!["72o"]).toBeUndefined();              // folds
+    // UTG: the pool's limp range, scaled so the heaviest is 1 — nothing taken out
+    expect(r.ranges.UTG!.AQs).toBeCloseTo(1, 3);
+    expect(r.ranges.UTG!.T9s).toBeCloseTo(10 / 25.45, 3);
+    expect(r.ranges.UTG!["72o"]).toBeCloseTo(0.5 / 25.45, 3);
     expect(r.tokens).toEqual(TOKENS);
     expect(r.seatOrder).toEqual(SEATS);
     expect(r.piece).toBe("gtow-ai-preflop");
     expect(r.id).toBe("gtow-ai · reduced · HJ:153.5 raises 17.6 / UTG:91.5");
-    expect(r.reduced).toEqual({ why: WHY, live: ["UTG", "HJ"], trees: 1 });
+    expect(r.reduced).toEqual({ why: WHY, live: ["UTG", "HJ"], fitted: 0 });
     expect(r.note).toContain("REDUCED TREE");
     expect(r.note).toContain("token C is not an action at 'C'");
     expect(r.note).toContain(`HJ (hero) raised to 17.6bb: his own range as the chart played it (Limp at "C" of ign200_6max_D100_olimp), narrowed by that raise as the exact tree plays it`);
-    expect(r.note).toContain("UTG met it for 12.6bb more into a pot of 33bb: the pool's limp range");
-    expect(r.note).toContain("his 1 later action before the raise not applied");
-    expect(r.note).toContain("the hands that do not fold to it (the tree: fold 14% · call 20% · re-raise 66%)");
-    expect(r.note).toContain("the raise as a forced bet and the other 10.4bb as dead money (GTO Wizard solves that tree from full ranges");
+    expect(r.note).toContain("UTG met it for 12.6bb more into a pot of 33bb: the pool's limp range (shown limps, as the pool-locked limp chart holds it) — his 1 later action before the raise not applied, kept whole — a limper's call of the raise is not narrowed");
+    expect(r.note).toContain("A limper's range is the pool's whole limp range, wide by design");
+    expect(r.note).not.toContain("forced bet");
+    expect(r.note).not.toContain("still read WIDE");             // nobody was read on a fitted line
   });
 
   it("refused: a raiser whose raise the exact tree cannot read has no range to put behind it", async () => {
-    const { solves } = rig(() => ipTree(() => 0));
+    rig();
     const none = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, { why: WHY, tokens: TOKENS, seatOrder: SEATS });
     expect(none.ok).toBe(false);
     if (!none.ok) expect(none.reason).toContain("HJ's raise to 17.6bb cannot be read on the exact tree (the line up to it does not fit");
     const zero = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx({ raiseFilter: async () => arr(0) }));
     expect(zero.ok).toBe(false);
     if (!zero.ok) expect(zero.reason).toContain("none of his starting range makes it there");
-    expect(solves.length).toBe(0);                             // nothing was solved for a spot that is refused
   });
 
   it("hero's own hand is never left out of his range", async () => {
-    rig(() => ipTree(() => 0));
+    rig();
     const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx({ raiseFilter: async () => arr((c) => (c === "ATs" ? 1 : 0)) }));
     if (!r.ok) throw new Error(r.reason);
     expect(r.ranges.HJ!["77"]).toBe(0.05);
     expect(r.note).toContain("Hero's 77 was not in the range read for his line and is kept at 5%");
   });
 
-  it("the limper re-raises and hero calls: his call is read on the exact tree when it holds his line — no tree is solved", async () => {
-    const { solves } = rig(() => oopTree(() => 0.5));
+  it("the limper re-raises and hero calls: his call is read on the exact tree when it holds his line", async () => {
+    rig();
     const asked: string[] = [];
     const r = await reducedArrivalRanges(UTG_RERAISES, "HJ", 6, DEALT, {
       why: WHY, tokens: ["C", "C", "R5", "F", "F", "F", "R17.6", "C", "F"], seatOrder: SEATS,
       raiseFilter: async (pos) => { asked.push(`raise ${pos}`); return arr((c) => (c === "QQ" ? 1 : c === "AQs" ? 0.2 : 0)); },
       callFilter: async (pos) => { asked.push(`call ${pos}`); return arr((c) => (c === "77" ? 0.8 : 0.1)); },
+      stayRange: async (pos) => { asked.push(`stay ${pos}`); return null; },
     });
     if (!r.ok) throw new Error(r.reason);
-    expect(asked).toEqual(["raise UTG", "call HJ"]);
-    expect(solves.length).toBe(0);
+    expect(asked).toEqual(["raise UTG", "call HJ"]);           // hero is never read by stayRange
     // UTG: the pool's limp range × the exact tree's limp-reraise — a narrow range, not every hand he limps
     expect(Object.keys(r.ranges.UTG!).sort()).toEqual(["AQs", "QQ"]);
     expect(r.ranges.UTG!.QQ).toBeCloseTo(1, 3);
@@ -178,109 +132,99 @@ describe("reducedArrivalRanges", () => {
     // hero: the chart's limp × his call as the exact tree plays it
     expect(r.ranges.HJ!["77"]).toBeCloseTo(1, 3);              // 12.17 × 0.8 = 9.7, the heaviest
     expect(r.ranges.HJ!.ATs).toBeCloseTo((28.79 * 0.1) / (12.17 * 0.8), 3);
-    expect(r.reduced?.trees).toBe(0);
+    expect(r.reduced?.fitted).toBe(0);
     expect(r.note).toContain("HJ (hero) met it for 16.6bb more into a pot of 25bb");
     expect(r.note).toContain("then his call as the exact tree plays it");
   });
 
-  it("… and on his own forced-raise tree when it cannot: the raiser out of position, hero at the root", async () => {
-    const { solves } = rig(() => oopTree((c) => (c === "55" ? 1 : 0.25)));
+  it("… and when it cannot: hero's starting range stands whole (no other read), the floor still holds his hand", async () => {
+    rig();
     const r = await reducedArrivalRanges(UTG_RERAISES, "HJ", 6, DEALT, {
       why: WHY, tokens: ["C", "C", "R5", "F", "F", "F", "R17.6", "C", "F"], seatOrder: SEATS,
       raiseFilter: async () => arr((c) => (c === "QQ" ? 1 : 0)), callFilter: async () => null,
     });
     if (!r.ok) throw new Error(r.reason);
-    expect(solves.length).toBe(1);
-    const { body } = solves[0]!;
-    expect(body.players.map((p: any) => `${p.position} posts ${p.blind} of ${p.stack}`)).toEqual(["SB posts 1 of 153.5", "BB posts 17.6 of 91.5"]);
-    expect(body.pot).toBe(6.4);
-    expect(sizesOf(body)).toEqual({ SB: ["2.5x"], BB: [] });
-    expect(r.ranges.HJ!.ATs).toBeCloseTo(0.75, 3);
-    expect(r.ranges.HJ!["55"]).toBeUndefined();
-    expect(r.ranges.HJ!["77"]).toBeCloseTo((12.17 / 28.79) * 0.75, 3);
+    expect(r.ranges.HJ!.ATs).toBeCloseTo(1, 3);
+    expect(r.ranges.HJ!["77"]).toBeCloseTo(12.17 / 28.79, 3);
+    expect(r.ranges.HJ!["55"]).toBeCloseTo(19.85 / 28.79, 3);
+    expect(r.note).toContain("kept whole — the exact tree cannot read his call");
   });
 
-  it("four to the flop: a tree per caller, each at its own price, every live seat with a range", async () => {
-    const { solves } = rig((body) => (playerOf(body, "SB").blind === 17.6 ? ipTree(() => 0.5) : oopTree(() => 0.25)));
-    const asked: string[] = [];
-    const before = async (pos: string) => { asked.push(pos); return pos === "BB" ? arr((c) => (c === "JJ" ? 0.5 : c === "A5s" ? 0.25 : 0)) : null; };
-    const r = await reducedArrivalRanges(FOUR, "HJ", 6, DEALT, ctx({ before }));
+  it("four to the flop: each villain caller read on the exact tree, the limper kept whole, every live seat with a range", async () => {
+    rig();
+    const asked: string[] = [], before: string[] = [];
+    const r = await reducedArrivalRanges(FOUR, "HJ", 6, DEALT, ctx({
+      before: async (pos: string) => { before.push(pos); return pos === "BB" ? arr((c) => (c === "JJ" ? 0.5 : c === "A5s" ? 0.25 : 0)) : null; },
+      stayRange: stays({
+        BB: { range: arr((c) => (c === "JJ" ? 0.4 : c === "A5s" ? 0.1 : c === "72o" ? 0 : 0.02)), folded: ["UTG"] },
+        CO: { range: arr((c) => (c === "AA" ? 0.3 : c === "KQs" ? 0.2 : 0)), folded: [] },
+      }, asked),
+    }));
     if (!r.ok) throw new Error(r.reason);
-    expect(solves.length).toBe(3);
-    // by the dead money each caller met: the CO called first (10.4), then the BB (23), then UTG (35.6)
-    expect(solves.map((s) => s.body.pot).sort((x, y) => x - y)).toEqual([10.4, 23, 35.6]);
-    const co = solves.find((s) => s.body.pot === 10.4)!.body;
-    expect(co.players.map((p: any) => `${p.position} posts ${p.blind} of ${p.stack}`)).toEqual(["SB posts 5 of 100.5", "BB posts 17.6 of 153.5"]);   // the CO acts after hero on the flop
-    const bb = solves.find((s) => s.body.pot === 23)!.body;
-    expect(bb.players.map((p: any) => `${p.position} posts ${p.blind} of ${p.stack}`)).toEqual(["SB posts 17.6 of 153.5", "BB posts 5 of 55.5"]);
-    // the same raiser's range in every tree
-    for (const s of solves) expect(playerOf(s.body, s.body.players.find((p: any) => p.blind === 17.6).position).range).toEqual(playerOf(solves[0]!.body, solves[0]!.body.players.find((p: any) => p.blind === 17.6).position).range);
-    // starting ranges: UTG limped (the pool's); the BB and the CO did not come in limping — the exact tree's reading, or the full range
-    expect(asked.sort()).toEqual(["BB", "CO"]);
-    expect(weightOf(playerOf(bb, "BB").range, "JJ")).toBe(1);
-    expect(playerOf(co, "SB").range).toBeNull();
+    expect(asked.sort()).toEqual(["BB", "CO"]);                // UTG limped: not read
     expect(Object.keys(r.ranges).sort()).toEqual(["BB", "CO", "HJ", "UTG"]);
-    expect(r.ranges.BB!.JJ).toBeCloseTo(0.5, 3);
-    expect(r.ranges.CO!.AA).toBeCloseTo(0.75, 3);
-    expect(r.ranges.UTG!.AQs).toBeCloseTo(0.5, 3);
-    expect(r.reduced).toEqual({ why: WHY, live: ["BB", "UTG", "HJ", "CO"], trees: 3 });
-    expect(r.note).toContain("the other callers when one is read");
+    // the walked range is HIS range: scaled so the heaviest is 1, the starting range (`before`) not multiplied in again
+    expect(r.ranges.BB!.JJ).toBeCloseTo(1, 3);
+    expect(r.ranges.BB!.A5s).toBeCloseTo(0.25, 3);
+    expect(r.ranges.BB!["72o"]).toBeUndefined();
+    expect(r.ranges.BB!.KQo).toBeCloseTo(0.05, 3);
+    expect(r.ranges.CO!.AA).toBeCloseTo(1, 3);
+    expect(r.ranges.CO!.KQs).toBeCloseTo(0.2 / 0.3, 3);
+    expect(r.ranges.UTG!.AQs).toBeCloseTo(1, 3);               // the pool's limp range, whole
+    expect(r.ranges.UTG!["72o"]).toBeCloseTo(0.5 / 25.45, 3);
+    expect(r.reduced).toEqual({ why: WHY, live: ["BB", "UTG", "HJ", "CO"], fitted: 2 });
+    expect(r.note).toContain("BB met it for 12.6bb more into a pot of 45.6bb: his range on the exact tree, walked on the line fitted for him (UTG folded out), less the hands that fold to the raise at his node there");
+    expect(r.note).toContain("CO met it for 12.6bb more into a pot of 33bb: his range on the exact tree through his own node, less the hands that fold to the raise there");
+    expect(r.note).toContain("A caller read on a fitted line is still read WIDE");
     // capped by what the caller can use
     const capped = await reducedArrivalRanges(FOUR, "HJ", 3, DEALT, ctx());
     expect(capped.ok).toBe(false);
   });
 
-  it("a caller all in for less than the raise is not solved for: his range before the raise stands whole", async () => {
-    const short = hand([...OPENING, a("call", 6, 4), a("call", 1, 4), a("raise", 2, 17.6), a("fold", 3), a("fold", 6), a("all-in", 1, 12)]);
-    const { solves } = rig(() => ipTree(() => 0.9));
-    const r = await reducedArrivalRanges(short, "HJ", 6, { ...DEALT, 1: 12 }, ctx());
+  it("a villain caller the exact tree cannot read keeps his starting range whole, and the note says why", async () => {
+    rig();
+    const before = async (pos: string) => (pos === "BB" ? arr((c) => (c === "JJ" ? 0.5 : c === "A5s" ? 0.25 : 0)) : null);
+    const r = await reducedArrivalRanges(FOUR, "HJ", 6, DEALT, ctx({ before, stayRange: stays({ CO: { range: arr(0), folded: [] } }) }));
     if (!r.ok) throw new Error(r.reason);
-    expect(solves.length).toBe(0);
-    expect(r.ranges.UTG!.AQs).toBeCloseTo(1, 3);
-    expect(r.ranges.UTG!["77"]).toBeCloseTo(17.98 / 25.45, 3);
-    expect(r.reduced?.trees).toBe(0);
-    expect(r.note).toContain("UTG met it for 7bb more into a pot of 33bb");
-    expect(r.note).toContain("taken as not folding (all in for 7bb more)");
+    expect(r.ranges.BB!.JJ).toBeCloseTo(1, 3);                 // `before`, scaled: JJ 0.5 → 1, A5s 0.25 → 0.5
+    expect(r.ranges.BB!.A5s).toBeCloseTo(0.5, 3);
+    expect(r.note).toContain("BB met it for 12.6bb more into a pot of 45.6bb: his range on the exact tree up to the raise, kept whole — the exact tree could not read his answer to the raise, even on a line fitted for him");
+    expect(r.ranges.CO!.AA).toBeCloseTo(1, 3);                 // the full range: the tree folds all of it, he did not fold
+    expect(r.note).toContain("CO met it for 12.6bb more into a pot of 33bb: the full range (his earlier action is not modelled), kept whole — on the exact tree every hand he holds there folds to the raise, and he did not fold");
+    expect(r.reduced?.fitted).toBe(0);
+    // no stayRange at all (an older caller of this function): the same
+    const bare = await reducedArrivalRanges(FOUR, "HJ", 6, DEALT, ctx({ before }));
+    if (!bare.ok) throw new Error(bare.reason);
+    expect(bare.ranges.BB!.A5s).toBeCloseTo(0.5, 3);
   });
 
-  it("the raiser's root check must carry his range: under 90% the node behind it is not read and the caller's starting range stands", async () => {
-    // the 2026-10-01 shape: GTO Wizard's old all-in rule gave the raiser a jam at the root and he took it with 30%
-    rig(() => ipTree((c) => (c === "72o" ? 1 : 0), 0.7));
-    const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
+  it("a caller all in for less than the raise is not read: his range before the raise stands whole", async () => {
+    // the BB, not a limper: he called the iso (4), then shoved 12 total over hero's 17.6 — all in for less
+    const short = hand([...OPENING, a("call", 6, 4), a("fold", 1), a("raise", 2, 17.6), a("fold", 3), a("all-in", 6, 12)]);
+    rig();
+    const asked: string[] = [];
+    const r = await reducedArrivalRanges(short, "HJ", 6, { ...DEALT, 6: 12 }, ctx({
+      before: async (pos: string) => (pos === "BB" ? arr((c) => (c === "JJ" ? 1 : c === "A5s" ? 0.5 : 0)) : null),
+      stayRange: stays({}, asked),
+    }));
     if (!r.ok) throw new Error(r.reason);
-    expect(r.ranges.UTG!["72o"]).toBeCloseTo(0.5 / 25.45, 3);   // the tree folds it — not read: the pool's limp range, whole
-    expect(r.note).toContain("his starting range kept whole (the tree's raiser checks only 70% of the time at the root, so the node behind that check is not read)");
-    expect(r.reduced!.trees).toBe(0);
-    // the check alone at the root (today's tree): read
-    rig(() => ipTree((c) => (c === "72o" ? 1 : 0)));
-    const ok = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
-    if (!ok.ok) throw new Error(ok.reason);
-    expect(ok.ranges.UTG!["72o"]).toBeUndefined();
-    expect(ok.reduced!.trees).toBe(1);
-  });
-
-  it("a caller the tree folds entirely keeps his starting range — he did not fold", async () => {
-    rig(() => ipTree(() => 1));
-    const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
-    if (!r.ok) throw new Error(r.reason);
-    expect(r.ranges.UTG!.AQs).toBeCloseTo(1, 3);
-    expect(r.note).toContain("UTG: the tree folds everything he starts with, so his starting range stands.");
+    expect(asked).toEqual([]);
+    expect(r.ranges.BB!.JJ).toBeCloseTo(1, 3);
+    expect(r.ranges.BB!.A5s).toBeCloseTo(0.5, 3);
+    expect(r.note).toContain("BB met it for 7bb more into a pot of 29bb");
+    expect(r.note).toContain("kept whole — taken as not folding (all in for 7bb more)");
   });
 
   it("no chart answer on record for hero's limp: the pool's limp range stands in, and says so", async () => {
-    const { solves } = rig(() => ipTree(() => 0), []);
+    rig([]);
     const r = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx({ raiseFilter: async () => arr(0.5) }));
     if (!r.ok) throw new Error(r.reason);
-    expect(weightOf(playerOf(solves[0]!.body, "SB").range, "AQs")).toBe(1);
+    expect(r.ranges.HJ!.AQs).toBeCloseTo(1, 3);
     expect(r.note).toContain("HJ (hero) raised to 17.6bb: the pool's limp range");
   });
 
-  it("refuses with the reason: a solve that fails, a line with no raise, hero not in the hand", async () => {
-    rig(() => ({}));
-    reducedSeams.solve = async () => ({ error: "primary: no token" });
-    const down = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
-    expect(down.ok).toBe(false);
-    if (!down.ok) expect(down.reason).toBe("primary: no token");
+  it("refuses with the reason: a line with no raise, hero not in the hand", async () => {
+    rig();
     const limped = hand([a("post-sb", 5, 0.4), a("post-bb", 6, 1), a("call", 1, 1), a("call", 2, 1), a("fold", 3), a("fold", 4), a("fold", 5), a("check", 6)]);
     const noRaise = await reducedArrivalRanges(limped, "HJ", 6, DEALT, ctx());
     expect(noRaise.ok).toBe(false);
@@ -289,10 +233,5 @@ describe("reducedArrivalRanges", () => {
     const gone = await reducedArrivalRanges(heroOut, "HJ", 6, DEALT, ctx());
     expect(gone.ok).toBe(false);
     if (!gone.ok) expect(gone.reason).toContain("hero is not among the players who reach the flop");
-    // a tree that comes back without the caller's node
-    rig(() => ({ "": node("SB", [{ code: "X", strategy: arr(1) }]) }));
-    const broken = await reducedArrivalRanges(REAL, "HJ", 6, DEALT, ctx());
-    expect(broken.ok).toBe(false);
-    if (!broken.ok) expect(broken.reason).toContain("reduced tree (UTG): the node behind the raiser's check");
   });
 });
