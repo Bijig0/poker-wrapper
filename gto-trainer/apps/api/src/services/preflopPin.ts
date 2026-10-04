@@ -87,6 +87,9 @@ export interface AiPreflopPin extends PinBase {
   /** a LOCKED last-resort tree (gtowAiPreflop.solveLockedLastResort): how it was built — kept on its node record only,
    *  never pinned (the flop does not resume from a tree where hero's range is every hand) */
   lastResort?: string;
+  /** a POOL-LOCKED tree (gtowAiPreflop.solvePreflopPoolLocked): the limper whose limp it locked to the pool's range —
+   *  the flop walks his range off this tree, so the pool limp floor leaves him as walked (services/poolLimpFloor) */
+  poolLocks?: { pos: string; key: string }[];
 }
 export type PreflopPin = ChartPreflopPin | AiPreflopPin;
 

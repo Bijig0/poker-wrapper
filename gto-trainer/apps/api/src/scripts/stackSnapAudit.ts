@@ -124,7 +124,7 @@ async function collectSpots(): Promise<{ spots: Spot[]; stats: Record<string, nu
       const stacks: Record<string, number> = {};
       for (const [seat, pos] of Object.entries(cut.positions)) { const s = cut.stacks?.[Number(seat)]; if (s != null) stacks[pos] = Math.round(s + (cut.committed?.[Number(seat)] ?? 0)); }
       const shape = shapeOf(cut, heroPos);
-      const treeKey = "error" in shape ? null : treeKeyOf(shape, menus(lineOf(cut, shape).levels, shape.n));
+      const treeKey = "error" in shape ? null : treeKeyOf(shape, ((l) => menus(l.levels, shape.n, l.iso))(lineOf(cut, shape)));
       const key = `${cid}@${i}`;
       if (seen.has(key)) continue;
       seen.add(key);

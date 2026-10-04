@@ -1,6 +1,6 @@
 /**
  * THE SHORT-LIMP POOL EXPERIMENT'S DIAGNOSTIC (2026-10-05; services/poolLimpFloor + hrc6max shortLimperAlone, off switch
- * SHORT_LIMP_POOL=off). Reads the answer log only — no requests, no solves:
+ * SHORT_LIMP_POOL=off|floor|on). Reads the answer log only — no requests, no solves:
  *   - the POOL LIMP FLOOR: postflop decisions whose flop ranges gave a short limper the pool's limp range (the answer's
  *     note "POOL LIMP RANGE: …"), by pool key, the limper's combos before → after, and how those decisions went
  *     (answered / refused, and why);
@@ -61,8 +61,21 @@ for (const r of picked) byChart.set(r.chart ?? "?", (byChart.get(r.chart ?? "?")
 console.log(`\nPICKER: ${picked.length} preflop decisions read on a short limper's own pool-locked uneven tree`);
 for (const [c, n] of [...byChart].sort((a, b) => b[1] - a[1])) console.log(`  ${c.padEnd(44)} ${n}`);
 
+// ── the preflop lock (SHORT_LIMP_POOL=on) ──
+const locked = rows.filter((r) => r.street === "preflop" && /POOL-LOCKED LIMPER:/.test(r.warning ?? ""));
+const lockFailed = rows.filter((r) => r.street === "preflop" && /POOL LIMP LOCK FAILED/.test(r.warning ?? ""));
+const lockKeys = new Map<string, number>();
+for (const r of locked) { const m = /LOCKED to the pool's (\w+) range/.exec(r.warning ?? ""); if (m) lockKeys.set(m[1]!, (lockKeys.get(m[1]!) ?? 0) + 1); }
+const lat = db.query<{ ms: number }, [number]>(`SELECT latency_ms ms FROM answers WHERE ts >= ? AND street = 'preflop' AND warning LIKE '%POOL-LOCKED LIMPER:%'`).all(SINCE).map((x) => x.ms).filter((x) => x > 0).sort((a, b) => a - b);
+const q = (p: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(p * lat.length))] : NaN);
+console.log(`
+PREFLOP LOCK: ${locked.length} decisions answered on a pool-locked tree, ${lockFailed.length} where it failed and the old path answered (${pct(lockFailed.length, locked.length + lockFailed.length)} failed)`);
+for (const [k, v] of [...lockKeys].sort((a, b) => b[1] - a[1])) console.log(`  ${k.padEnd(28)} ${v}`);
+if (lat.length) console.log(`  latency: median ${q(0.5)} ms · p90 ${q(0.9)} ms · max ${lat[lat.length - 1]} ms (the clock is 15 s; the box 12 s)`);
+for (const r of lockFailed.slice(-LIST)) console.log(`  failed · hand ${r.cid}: ${String(/POOL LIMP LOCK FAILED: ([^·]+)/.exec(r.warning ?? "")?.[1] ?? "").slice(0, 160)}`);
+
 // ── what it is for ──
 const empty = allPost.filter((r) => /no decision node at|range is empty/.test(r.fail ?? ""));
 console.log(`\n"no decision node" / empty-range refusals: ${empty.length}${empty.length ? "" : " (good)"}`);
 for (const r of empty.slice(-LIST)) console.log(`  hand ${r.cid} ${r.street}${flooredHands.has(r.cid) ? " (floored)" : ""}: ${String(r.fail).slice(0, 140)}`);
-console.log(`\noff switch: SHORT_LIMP_POOL=off in config/local.env (the :2000 worker reads it at every decision once restarted)`);
+console.log(`\nswitch: SHORT_LIMP_POOL=on (default: picker + floor + preflop lock) | floor (no preflop lock) | off — config/local.env (a supervisor restart picks up the file)`);

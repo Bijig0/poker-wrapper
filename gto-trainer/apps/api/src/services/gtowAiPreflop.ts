@@ -62,6 +62,7 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 // THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
 import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
+import { poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
 import type { HrcNode } from "./hrc3max";
 import { answerLog } from "./answerLog";
 // THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): the preflop half, at ensureSolution / fetchNode.
@@ -387,9 +388,13 @@ export function dealtFromTreeId(hand: ParsedHand, heroPos: string | null, id: st
   return out;
 }
 
-/** The line so far as the API walks it: seat order, F / C / X / R<total bb>; also the raise totals by level. */
-export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: string[]; levels: number[] } {
+/** The line so far as the API walks it: seat order, F / C / X / R<total bb>; also the raise totals by level, and — in a
+ *  limped pot before any raise — each seat's iso size (isoSizes). */
+export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: string[]; levels: number[]; iso: Record<string, number> | null } {
   const tokens: string[] = []; const levels: number[] = [];
+  /** limps (calls before any raise, the SB's complete included) in front of each seat when the line reaches it */
+  const limpsAt: Record<string, number> = {};
+  let limps = 0;
   const posOf = (a: ParsedAction) => (a.hero ? heroPosOf(hand, null) : hand.positions[a.seatId]?.toUpperCase()) ?? null;
   // the API's tree acts in its own seat order; a seat that never acted before the line reaches
   // a later seat is a fold it did not show — pad it, exactly as the chart walk does
@@ -416,6 +421,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   };
   for (let round = 0; round < 4 && cursor < acted.length; round++) {
     for (const api of order) {
+      if (round === 0 && limpsAt[api] == null) limpsAt[api] = limps;
       if (cursor >= acted.length) { if (round === 0) stoppedAt = api; break; }
       if (round === 0 && api === "SB" && ghostDue()) { tokens.push("F"); ghostFolded = true; continue; }
       const a = acted[cursor]!;
@@ -423,7 +429,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
       if (aApi === api || aApi == null) {
         if (a.type === "fold") tokens.push("F");
         else if (a.type === "check") tokens.push("X");
-        else if (a.type === "call" || calls.has(a)) tokens.push("C");   // an all-in for no more than the price is a call
+        else if (a.type === "call" || calls.has(a)) { tokens.push("C"); if (round === 0 && !levels.length && api !== "BB") limps++; }   // an all-in for no more than the price is a call
         else if (a.type === "raise" || a.type === "bet" || a.type === "all-in") { const t = capped(api, a.amount ?? 0); levels.push(t); tokens.push(`R${num(t)}`); }
         else tokens.push("C");
         cursor++;
@@ -436,7 +442,26 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   }
   // the line stopped with the ghost next (the button's was the last action): the BB is on the clock behind its fold
   if (stoppedAt === "SB" && ghostDue()) tokens.push("F");
-  return { tokens, levels };
+  for (const api of order) if (limpsAt[api] == null) limpsAt[api] = limps;   // seats the line has not reached yet
+  return { tokens, levels, iso: isoSizes(shape, levels, limpsAt) };
+}
+
+/**
+ * THE ISO SIZE OVER LIMPERS (2026-10-05, the pool-lock study). With three or more seats every seat carries ONE size per
+ * level (menus: GTO Wizard's tree ceiling), and the first raise was "2.5x" of the bet faced for everyone — over a limp
+ * that is a raise to 2.5bb, a min-raise: the AI tree's only iso was 2.5bb or the all-in, so its seats behind a limp
+ * almost never isolated (a 100bb HJ limp locked to the pool's 3.1%: the BB raised 0.2% of hands on GTO Wizard against
+ * 3.4% on D100_olimp_pool3, whose isos are 3.5-6bb), and a "Raise 2.5" answer was executed as one. A seat with a limp in
+ * front of it now isolates to 3bb + 1bb per limper (the SB's complete counts) — the pool's median iso (4bb over one
+ * limper, 5 over two: analysis/pipeline/limp_study/locks_v2 report.txt) and the middle of the charts' iso menu
+ * (2.5/3/4/5bb + 1bb per limper). Only while nobody has raised (a raise played is the level's size, menus) and only with
+ * three or more seats (heads-up keeps its full menu); a seat with no limp in front of it keeps the open, 2.5x.
+ */
+export function isoSizes(shape: Pick<AiPreflopShape, "n" | "positions">, levels: number[], limpsAt: Record<string, number>): Record<string, number> | null {
+  if (shape.n < 3 || levels.length) return null;
+  const out: Record<string, number> = {};
+  for (const p of shape.positions) if ((limpsAt[p] ?? 0) > 0) out[p] = 3 + limpsAt[p]!;
+  return Object.keys(out).length ? out : null;
 }
 
 /** Size menus. The tree's size is (sizes per level)^levels × seats, and the API refuses a tree past its ceiling
@@ -444,7 +469,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
  *  seat carries ONE size per level: the size played where the level has been played, else one default (open 2.5x,
  *  3-bet 3.5x, 4-bet 2.3x). Heads-up trees are small enough for the full menu, on both seats, at the levels still
  *  to be played. */
-export function menus(levels: number[], n: number) {
+export function menus(levels: number[], n: number, iso?: Record<string, number> | null) {
   // THE SIZE PLAYED GOES OUT AS ITS EXACT AMOUNT, "13bb" — not a multiple of the raise below it (2026-10-02, Brady:
   // "why aren't we sending the exact numbers"). GTO Wizard takes an amount in any size list and names the node by
   // it, to the cent of a blind ("8.75bb" → R8.75); a multiple it works out and names at ONE decimal ("3.5x" over 2.5
@@ -476,7 +501,9 @@ export function menus(levels: number[], n: number) {
     : lv([["2.5x"], ["3.5x"], ["2.3x"], FIVE_PLUS]);
   // three or more seats: every seat one size per level, hero's included (the heads-up menus are shared above)
   const villain = hero;
-  return { hero, villain };
+  // a seat behind a limp isolates to its own size (isoSizes) — only listed when there is one, so every other tree keys
+  // exactly as before
+  return iso && n >= 3 && !levels.length ? { hero, villain, iso } : { hero, villain };
 }
 
 /**
@@ -514,7 +541,9 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
       return { position, type: "FIXED", use_fixed_sizes: true, allow_limp: false, allow_call_opens: false, allow_3betplus_cold_calls: false,
         bet_sizes: [], raise_sizes: [], second_raise_sizes: [], third_plus_raise_sizes: [] };
     }
-    const s = position === shape.heroApiPos ? m.hero : m.villain;
+    const s0 = position === shape.heroApiPos ? m.hero : m.villain;
+    const isoBb = (m as { iso?: Record<string, number> }).iso?.[position];
+    const s = isoBb != null ? { ...s0, opens: [`${num(isoBb)}bb`] } : s0;
     // every amount in chips, written as GTO Wizard reads it (sizeTo: N × the largest post — identity at a 1bb blind)
     const unit = largestPostOf(shape);
     // calls of opens and cold-calls of 3-bets+ must be switched on explicitly in FIXED mode (the web app's own
@@ -586,8 +615,8 @@ export async function solvePreflopWithMenus(hand: ParsedHand, heroPos: string | 
 > {
   const shape = shapeOf(hand, heroPos);
   if ("error" in shape) return { ok: false, reason: shape.error };
-  const { tokens, levels } = lineOf(hand, shape);
-  const m = menus(levels, shape.n);
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const m = menus(levels, shape.n, iso);
   const body: any = treeBody(shape, m);
   for (const st of body.bet_sizes?.street_bet_sizes ?? []) st.position_bet_sizes = st.position_bet_sizes.map((x: any) => ({ ...x, ...posPatch }));
   const treeKey = `${treeKeyOf(shape, m)}|p${JSON.stringify(posPatch)}`;
@@ -1199,9 +1228,9 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const t0 = Date.now();
   const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
-  const { tokens, levels } = lineOf(hand, shape);
+  const { tokens, levels, iso } = lineOf(hand, shape);
   const line = tokens.join("-");
-  const m = menus(levels, shape.n);
+  const m = menus(levels, shape.n, iso);
   const key = treeKeyOf(shape, m);
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop: ${sol.error}`, line };
@@ -1384,8 +1413,8 @@ export function warmPreflopGtowAi(hand: ParsedHand, heroPos: string | null): voi
     if (hand.actions.some((a) => a.hero && a.type === "fold")) return;
     const shape = shapeOf(hand, heroPos);
     if ("error" in shape) return;
-    const { levels } = lineOf(hand, shape);
-    const m = menus(levels, shape.n);
+    const { levels, iso } = lineOf(hand, shape);
+    const m = menus(levels, shape.n, iso);
     const key = treeKeyOf(shape, m);
     if (solutions.has(key)) return;   // ensureSolution keeps the PENDING promise in this map too, so a 1 Hz tick during a build joins it
     const t0 = Date.now();
@@ -1687,8 +1716,8 @@ export const lockedSeams = {
   raiserRange: async (hand: ParsedHand, heroPos: string | null, plan: LockedPlan): Promise<{ w: number[]; how: string } | null> => {
     const shape = shapeOf(hand, heroPos);
     if ("error" in shape) return null;
-    const { tokens, levels } = lineOf(hand, shape);
-    const m = menus(levels, shape.n);
+    const { tokens, levels, iso } = lineOf(hand, shape);
+    const m = menus(levels, shape.n, iso);
     const sol = await ensureSolution(treeKeyOf(shape, m), treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
     if ("error" in sol) return null;
     const reads = lastRaiseReads(sol.solId, shape, tokens, { fitOnly: lockedSeams.fitOnly });
@@ -1825,12 +1854,164 @@ export async function solveLockedLastResort(hand: ParsedHand, heroPos: string | 
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE POOL-LOCKED LIMPER (2026-10-05, Brady: "every time hero is facing a decision, use gto wizard ai preflop, to send in
+// the pool measured range for the original limper, then re-solve the tree from there to give the correct decision for
+// hero … and then for flop, obviously, we just go on with whatever ranges are recorded"). A short stack's limp is in no
+// equilibrium tree — a 38bb HJ limps 0.048% of hands on GTO Wizard AI preflop, 0.2% on the even 30bb chart — while the
+// pool limps 26% of hands at 60bb or less (analysis/pipeline/limp_study/locks_v2). Until a pool-locked chart covers his
+// stack (hrc6max: the uneven `_olimp_pool3` / `_olimp_poolh` trees), hero's preflop node is read on the EXACT GTO Wizard
+// AI tree of the table with the limper's node LOCKED: his limp is the pool's range for his role and stack bucket, the
+// rest of each hand folds or raises in the proportions the solver gives it there (the pool measures how often a hand
+// limps, not how the rest splits — and hero, on the limp branch, never meets the rest). Everything after the lock
+// re-solves; earlier nodes are frozen with it (street_all, as the locked last resort). The tree holds one non-blind
+// limper (max_allowed_limps 2), so this is ONE lock: two limpers stay with the charts and the line fit
+// (poolLimpFloor.poolLockTarget). The answer PINS the locked solution with the limper named on it, so the flop walks his
+// range off this tree (the pool range narrowed by what he did after the limp) and the floor leaves it alone.
+// ---------------------------------------------------------------------------
+
+/** What the pool-locked answer asks of the outside (a test replaces it). */
+export const poolLockSeams = {
+  solve: (key: string, body: any, need: GtowNeed): Promise<{ solId: string } | { error: string }> => ensureSolution(key, body, need),
+  node: (solId: string, line: string): Promise<NodeRead> => fetchNode(solId, line),
+  lock: (parent: string, body: any, locks: NodeLock[]): Promise<{ solId: string } | { error: string }> => lockedSolution(parent, body, locks),
+  repair: (solId: string, tokens: string[]): Promise<{ line: string; changed: string[] } | { error: string }> => repairLine(solId, tokens, { end: true }),
+  prefetch: (solId: string, tokens: string[]): void => prefetchPrefixes(solId, tokens),
+};
+
+/**
+ * The lock for the limper's node: his limp at the pool's per-combo weights `w`; the rest of each hand (1 − w) spread over
+ * the node's other actions in the proportions the unlocked solution plays them for that hand (a hand the solver only
+ * limps folds the rest). Every combo's strategy sums to 1.
+ */
+export function poolLimpLockOf(line: string, sols: any[], limpCode: string, w: readonly number[]): NodeLock {
+  const others = sols.filter((a) => String(a?.action?.code ?? "") !== limpCode);
+  const foldCode = String(others.find((a) => /^F/i.test(String(a?.action?.code ?? "")))?.action?.code ?? others[0]?.action?.code ?? "");
+  const rest = new Array<number>(1326).fill(0);
+  for (const a of others) for (let i = 0; i < 1326; i++) rest[i]! += Math.max(0, Number(a.strategy?.[i] ?? 0));
+  return {
+    action_history: [line],
+    strategy: sols.map((a) => {
+      const code = String(a?.action?.code ?? "");
+      if (code === limpCode) return { action: code, strategy: w.slice() };
+      return {
+        action: code,
+        strategy: w.map((wi, i) => {
+          const left = 1 - wi;
+          if (rest[i]! > 1e-9) return left * Math.max(0, Number(a.strategy?.[i] ?? 0)) / rest[i]!;
+          return code === foldCode ? left : 0;
+        }),
+      };
+    }),
+    hands_locked: new Array<boolean>(1326).fill(true),
+    previous_nodes_lock_type: "street_all",
+  };
+}
+
+/** How long the pool-locked answer may take before the answer goes on as before (POOL_LOCK_MS; GAP_GATE_AI_MS's 12 s). */
+export const poolLockMs = (): number => {
+  const v = Number(process.env.POOL_LOCK_MS ?? process.env.GAP_GATE_AI_MS);
+  return v > 0 ? v : 12_000;
+};
+
+/**
+ * Hero's preflop answer against `target` at the pool's range (the header above). `warmOnly`: build the tree and the lock
+ * (the poller's tick, when the limp lands) and read nothing of hero's. `skipPin`: the caller stopped waiting — this
+ * answer must not become the hand's pin.
+ */
+export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string | null, target: PoolLockTarget,
+    opts: { skipPin?: () => boolean; warmOnly?: boolean } = {}): Promise<AiPreflopOutcome> {
+  const t0 = Date.now();
+  const no = (reason: string, line?: string): AiPreflopOutcome => ({ ok: false, reason: `pool-locked tree: ${reason}`, ...(line != null ? { line } : {}) });
+  const shape = shapeOf(hand, heroPos);
+  if ("error" in shape) return no(shape.error);
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const line = tokens.join("-");
+  const heroIdx = hand.heroCards?.length === 2 ? comboIndex(hand.heroCards[0]!, hand.heroCards[1]!) : null;
+  if (heroIdx == null && !opts.warmOnly) return no("hero's cards are not known", line);
+  const api = shape.apiOf[target.pos];
+  if (!api) return no(`the ${target.pos} is not a seat of the table's tree`, line);
+  const m = menus(levels, shape.n, iso);
+  const key = treeKeyOf(shape, m);
+  const body = treeBody(shape, m);
+  const parent = await poolLockSeams.solve(key, body, { multiway: shape.n > 2, preflop: true });
+  if ("error" in parent) return no(parent.error, line);
+  poolLockSeams.prefetch(parent.solId, tokens);
+  // the limper's node: the limp ("C") he made before any raise, read where the tree puts him on the clock
+  const firstRaise = tokens.findIndex((t) => /^R/i.test(t));
+  let at: { line: string; sols: any[]; limp: string } | null = null;
+  for (let k = 0; k < (firstRaise < 0 ? tokens.length : firstRaise) && !at; k++) {
+    if (tokens[k] !== "C") continue;
+    const prefix = tokens.slice(0, k).join("-");
+    const n = await poolLockSeams.node(parent.solId, prefix);
+    if ("error" in n) return no(`node '${prefix || "root"}': ${n.error}`, line);
+    if (n.data?.game?.players?.find((p: any) => p.is_hero)?.position !== api) continue;
+    const sols = (n.data?.action_solutions ?? []) as any[];
+    const limp = sols.find((a) => /^C/i.test(String(a?.action?.code ?? "")));
+    if (!limp) return no(`the ${target.pos}'s node '${prefix || "root"}' offers no limp (${sols.map((a) => a?.action?.code).join("/")})`, line);
+    at = { line: prefix, sols, limp: String(limp.action.code) };
+  }
+  if (!at) return no(`no limp by the ${target.pos} on the line '${line || "root"}'`, line);
+  const w = poolLimpWeights(target.key);
+  const lock = poolLimpLockOf(at.line, at.sols, at.limp, w);
+  const locked = await poolLockSeams.lock(parent.solId, body, [lock]);
+  if ("error" in locked) return no(locked.error, line);
+  if (opts.warmOnly) return no("warmed (no answer read)", line);
+  // THE LOCK HELD, OR THERE IS NO ANSWER: the limper's node on the locked solution plays exactly the pool's limp
+  const ln = await poolLockSeams.node(locked.solId, at.line);
+  if ("error" in ln) return no(`the locked node '${at.line || "root"}': ${ln.error}`, line);
+  const lsol = ((ln.data?.action_solutions ?? []) as any[]).find((a) => String(a?.action?.code ?? "") === at!.limp);
+  let off = 0;
+  for (let i = 0; i < 1326; i++) off += Math.abs(Number(lsol?.strategy?.[i] ?? NaN) - w[i]!);
+  if (!lsol || !(off / 1326 <= 0.02)) return no(`the lock did not hold at '${at.line || "root"}' (mean distance ${Number.isFinite(off) ? (off / 1326).toFixed(3) : "n/a"} from the pool range)`, line);
+  // hero's node on the locked solution, at the tree's own sizes
+  const repaired = await poolLockSeams.repair(locked.solId, tokens);
+  if ("error" in repaired) return no(`hero's line on the locked tree: ${repaired.error}`, line);
+  const hn = await poolLockSeams.node(locked.solId, repaired.line);
+  if ("error" in hn) return no(`hero's node '${repaired.line || "root"}': ${hn.error}`, line);
+  const toAct = hn.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+  if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) {
+    return { ok: false, kind: LINE_NOT_HERO, reason: `pool-locked tree: the line puts ${toAct} on the clock, not hero (${shape.heroApiPos})`, line };
+  }
+  let actions = ((hn.data?.action_solutions ?? []) as any[]).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[heroIdx!] ?? 0) }));
+  const sum = actions.reduce((t, a) => t + a.frequency, 0);
+  if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
+  actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
+  const decision = actions.length ? pickWeightedAction(actions) : null;
+  const codes = repaired.line ? repaired.line.split("-") : [];
+  const id = `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`;
+  const handKey = preflopPinKey(hand);
+  if (handKey && !opts.skipPin?.()) {
+    const warm = Promise.allSettled(codes.map((_, k) => poolLockSeams.node(locked.solId, codes.slice(0, k).join("-")))).then(() => undefined);
+    setPreflopPin({
+      piece: "gtow-ai-preflop", handKey, solId: locked.solId, shape, codes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(locked.solId),
+      id, heroPos: heroPosOf(hand, heroPos) ?? "", reduced: null, actionIndex: hand.actions.length, at: Date.now(),
+      poolLocks: [{ pos: target.pos, key: target.key }],
+    } satisfies AiPreflopPin, hand.heroCards.join(""));
+  }
+  const { freq, n } = poolLimpRange(target.key);
+  const combos = Math.round(w.reduce((t, x) => t + x, 0));
+  const secs = (Date.now() - t0) / 1000;
+  const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
+  const note = `POOL-LOCKED LIMPER: the ${target.pos} (${target.stack}bb) ${target.complete ? "completed" : "limped"} and no pool-locked chart covers his stack yet — ` +
+    `GTO Wizard AI preflop solved this table with his ${target.complete ? "complete" : "limp"} LOCKED to the pool's ${target.key} range ` +
+    `(${(100 * freq).toFixed(1)}% of hands, n=${n}, ${combos} combos; the rest of each hand folds or raises as the solver plays it) and hero's node re-solved behind it` +
+    (target.alsoSb ? `; the SB's complete is the solver's (one lock per tree)` : "") +
+    `. Tree: ${shapeText}; ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}.` +
+    (repaired.changed.length ? ` Sizes snapped to the tree's own: ${repaired.changed.join(", ")}.` : "") +
+    (shape.stackCap ? ` ${stackCapNote(shape)}.` : "");
+  return {
+    ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|pool:${target.pos}:${target.key}`,
+    solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note,
+  };
+}
+
 /** The exact request a hand would produce (for tests and the state tester — nothing is sent). */
 export function debugTree(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): { shape: AiPreflopShape; line: string; body: any } | { error: string } {
   const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
   if ("error" in shape) return shape;
-  const { tokens, levels } = lineOf(hand, shape);
-  const m = menus(levels, shape.n);
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const m = menus(levels, shape.n, iso);
   return { shape, line: tokens.join("-"), body: treeBody(shape, m) };
 }
 
@@ -1855,8 +2036,8 @@ export function debugTree(hand: ParsedHand, heroPos: string | null, dealt?: Reco
 export async function debugCreateTree(hand: ParsedHand, heroPos: string | null, patch?: Record<string, unknown>, posPatch?: Record<string, unknown>): Promise<any> {
   const shape = shapeOf(hand, heroPos);
   if ("error" in shape) return { error: shape.error };
-  const { levels } = lineOf(hand, shape);
-  const body: any = { ...treeBody(shape, menus(levels, shape.n)), ...(patch ?? {}) };
+  const { levels, iso } = lineOf(hand, shape);
+  const body: any = { ...treeBody(shape, menus(levels, shape.n, iso)), ...(patch ?? {}) };
   if (posPatch) {
     for (const st of body.bet_sizes?.street_bet_sizes ?? []) {
       st.position_bet_sizes = st.position_bet_sizes.map((x: any) => ({ ...x, ...posPatch }));
@@ -1883,14 +2064,14 @@ export async function debugPreflopNode(hand: ParsedHand, heroPos: string | null,
 > {
   const shape = shapeOf(hand, heroPos);
   if ("error" in shape) return { ok: false, reason: shape.error };
-  const { levels } = lineOf(hand, shape);
-  const body: any = { ...treeBody(shape, menus(levels, shape.n)), ...(patch ?? {}) };
+  const { levels, iso } = lineOf(hand, shape);
+  const body: any = { ...treeBody(shape, menus(levels, shape.n, iso)), ...(patch ?? {}) };
   if (posPatch) {
     for (const st of body.bet_sizes?.street_bet_sizes ?? []) {
       st.position_bet_sizes = st.position_bet_sizes.map((x: any) => ({ ...x, ...posPatch }));
     }
   }
-  const key = treeKeyOf(shape, menus(levels, shape.n)) +
+  const key = treeKeyOf(shape, menus(levels, shape.n, iso)) +
     (patch ? `|${JSON.stringify(patch)}` : "") + (posPatch ? `|p${JSON.stringify(posPatch)}` : "");
   const sol = await ensureSolution(key, body, { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: sol.error };
@@ -1950,8 +2131,8 @@ const codeNum = (c: string) => Number(String(c).replace(/^[A-Z]+/i, ""));
 export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | null, maxPlayers: SeatCap, dealt?: Record<number, number>): Promise<ArrivalOutcome> {
   const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop ranges: ${shape.error}` };
-  const { tokens, levels } = lineOf(hand, shape);
-  const m = menus(levels, shape.n);
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const m = menus(levels, shape.n, iso);
   const key = treeKeyOf(shape, m);
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop ranges: ${sol.error}` };
@@ -2477,8 +2658,8 @@ export interface PreflopPathView { ok: true; id: string; line: string; steps: Pr
 export async function preflopPathView(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): Promise<PreflopPathView | { ok: false; reason: string }> {
   const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
   if ("error" in shape) return { ok: false, reason: shape.error };
-  const { tokens, levels } = lineOf(hand, shape);
-  const m = menus(levels, shape.n);
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const m = menus(levels, shape.n, iso);
   const sol = await ensureSolution(treeKeyOf(shape, m), treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: sol.error };
   // the line as the tree holds it: sizes snapped to its own, one limper fitted out when it holds fewer
@@ -2639,7 +2820,12 @@ export function preflopCacheKeyOf(rec: Pick<AiPreflopPin, "solId" | "shape" | "r
   if (known) return known;
   if (rec.lastResort) return null;
   const levels = rec.rawTokens.filter((t) => /^R\d/.test(t)).map((t) => Number(t.slice(1)));
-  return cacheKeyOf("pre", treeBody(rec.shape, menus(levels, rec.shape.n)), { actions: "", board: "" }).key;
+  // a limped line before any raise: the iso sizes of the seats behind its limps, rebuilt from the raw tokens (the API's
+  // seat order, the first orbit) as lineOf counts them
+  const limpsAt: Record<string, number> = {};
+  let limps = 0;
+  rec.shape.positions.forEach((p, i) => { limpsAt[p] = limps; if (rec.rawTokens[i] === "C" && p !== "BB") limps++; });
+  return cacheKeyOf("pre", treeBody(rec.shape, menus(levels, rec.shape.n, isoSizes(rec.shape, levels, limpsAt))), { actions: "", board: "" }).key;
 }
 
 /** A node getter that reads ONLY the solve cache: never a request, never a solve (the hand page views old answers). */
