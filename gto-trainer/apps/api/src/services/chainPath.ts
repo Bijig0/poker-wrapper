@@ -110,6 +110,9 @@ export interface DecisionPath {
   checks?: PathChecks;
   /** a 6-max chart answer's stack distance from the table (services/treeGap, 2026-10-01): LOG ONLY, never a reason */
   treeGap?: import("./treeGap").TreeGap;
+  /** the chart's line fit would have folded the only limper / caller out (utils/fitLine.emptiedGroups, 2026-10-04):
+   *  what the rule found and how the exact tree's turn went — fastSolve.FitEmpties */
+  fitEmpties?: import("./fastSolve").FitEmpties;
 }
 
 /** The reasons a path carries, in the order they happened (arrival, preflop, then street by street, then the checks). */
