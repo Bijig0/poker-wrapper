@@ -1805,6 +1805,9 @@ export async function walkArrivalRanges(
 const LINE_NOT_IN_TREE = /is not an action|is not offered|NODE_DOES_NOT_EXIST|node in the actions doesn't exist/i;
 /** Hero's own hand is never left out of his range: a class the reduced solve gave nothing is kept at this weight. */
 const HERO_FLOOR = 0.05;
+/** How long a villain caller's read on the exact tree may take before he is kept whole — the forced-bet tree it
+ *  replaced had the same 12 s (REDUCED_READ_MS, read at every read: the tests shorten it). */
+const reducedReadMs = (): number => { const v = Number(process.env.REDUCED_READ_MS); return v > 0 ? v : 12_000; };
 /** The pool chart's SB node behind one limper — its "C" is the pool's complete, as locked (hrc6max POOL_LIMP_CHART). */
 const POOL_SB_COMPLETE_LINE = "F-F-F-C";
 
@@ -1962,8 +1965,21 @@ export async function reducedArrivalRanges(
     }
     if (c.putIn < plan.raiseTo - 0.05) return whole(`taken as not folding (all in for ${c.toCall}bb more)`);
     if (cs.limped) return whole("a limper's call of the raise is not narrowed");
-    const st = ctx.stayRange ? await ctx.stayRange(c.pos).catch(() => null) : null;
-    if (!st) return whole("the exact tree could not read his answer to the raise, even on a line fitted for him");
+    // A LIMIT ON THE WAIT (reducedReadMs): the read is node reads on the tree already solved — the prefix is cached,
+    // his own node on the fitted line may not be — and an unsolved node is otherwise waited on for the ordinary 30 s,
+    // per caller, on hero's clock. Past the limit he is kept whole, said so.
+    let late = false;
+    const limitMs = reducedReadMs();
+    const st = ctx.stayRange
+      ? await Promise.race([
+          ctx.stayRange(c.pos).catch(() => null),
+          new Promise<null>((res) => setTimeout(() => { late = true; res(null); }, limitMs)),
+        ])
+      : null;
+    if (!st) {
+      return whole(late ? `the exact tree did not return his node within ${limitMs / 1000} s`
+        : "the exact tree could not read his answer to the raise, even on a line fitted for him");
+    }
     const combos = normalisedCombos(st.range);
     if (!combos) return whole("on the exact tree every hand he holds there folds to the raise, and he did not fold");
     return {

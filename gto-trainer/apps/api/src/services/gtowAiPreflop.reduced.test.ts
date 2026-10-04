@@ -198,6 +198,25 @@ describe("reducedArrivalRanges", () => {
     expect(bare.ranges.BB!.A5s).toBeCloseTo(0.5, 3);
   });
 
+  it("a read the exact tree does not return in time costs hero's clock no more than the limit: the caller is kept whole, said so", async () => {
+    rig();
+    const was = process.env.REDUCED_READ_MS;
+    process.env.REDUCED_READ_MS = "40";
+    try {
+      const before = async (pos: string) => (pos === "BB" ? arr((c) => (c === "JJ" ? 0.5 : 0)) : null);
+      const t0 = Date.now();
+      // the node never comes (an unsolved node is otherwise waited on for the ordinary 30 s, per caller)
+      const r = await reducedArrivalRanges(FOUR, "HJ", 6, DEALT, ctx({ before, stayRange: () => new Promise<null>(() => undefined) }));
+      if (!r.ok) throw new Error(r.reason);
+      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(r.ranges.BB!.JJ).toBeCloseTo(1, 3);
+      expect(r.note).toContain("kept whole — the exact tree did not return his node within 0.04 s");
+      expect(r.reduced?.fitted).toBe(0);
+    } finally {
+      if (was == null) delete process.env.REDUCED_READ_MS; else process.env.REDUCED_READ_MS = was;
+    }
+  });
+
   it("a caller all in for less than the raise is not read: his range before the raise stands whole", async () => {
     // the BB, not a limper: he called the iso (4), then shoved 12 total over hero's 17.6 — all in for less
     const short = hand([...OPENING, a("call", 6, 4), a("fold", 1), a("raise", 2, 17.6), a("fold", 3), a("all-in", 6, 12)]);
