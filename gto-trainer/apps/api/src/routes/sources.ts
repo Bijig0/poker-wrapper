@@ -1,3 +1,4 @@
+import { solveRegister } from "../services/solveRegister";
 import { cachedBehindLive, yieldFirst } from "../services/livePriority";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
@@ -408,6 +409,14 @@ app.get("/registry", async (c) => {
           return p.mismatches ? `${p.mismatches} of ${p.trees}: ${p.mismatchIds.slice(0, 8).map((s) => s.replace("ign200_6max_", "")).join(", ")}`
             : `0 of ${p.trees} - every baked chart is the export chart_manifest.json names`;
         })()],
+        ["charts with a clearly better solve not live", (() => {
+          const ids = Object.keys(hrc6maxDb.provenanceAudit().charts);
+          if (!ids.length) return "no bake";
+          const a = solveRegister.audit(ids, (id) => hrc6maxDb.provenance(id)?.raw);
+          if (!a.readable) return `register not readable (${a.path}) - unknown`;
+          return a.clearlyBetter ? `${a.clearlyBetter} of ${ids.length} (>= 15% lower regret): ${a.clearlyBetterIds.slice(0, 8).map((s) => s.replace("ign200_6max_", "")).join(", ")} - review on /sources/charts-review`
+            : `0 of ${ids.length} - every baked chart is the best measured solve of its spot`;
+        })()],
         ["refine min · raw export (per chart)", (() => {
           const p = hrc6maxDb.provenanceAudit();
           if (!p.trees || !p.table) return "-";
@@ -704,7 +713,17 @@ app.get("/registry", async (c) => {
         return { db: hrc6maxDb.size > 0, trees: hrc6maxDb.size, trustTables: a.tables, scored: a.scored,
           unscored: a.unscored.length, unscoredIds: a.unscored.slice(0, 20),
           provenance: { table: p.table, manifest: p.manifest ? "readable" : "manifest not readable", withRow: p.withRow,
-            mismatches: p.mismatches, mismatchIds: p.mismatchIds.slice(0, 20), charts: p.charts } };
+            mismatches: p.mismatches, mismatchIds: p.mismatchIds.slice(0, 20), charts: p.charts },
+          // the solve register (2026-10-04): per chart the solves of its spot, the live score, the runner-up's; and how many
+          // charts have a CLEARLY better solve (>= 15% lower reach-weighted regret) that is not live. null = not readable, never 0
+          register: (() => {
+            const ids = Object.keys(p.charts);
+            const a = solveRegister.audit(ids, (id) => hrc6maxDb.provenance(id)?.raw);
+            const per: Record<string, { candidates: number | null; liveScore: number | null; runnerUpScore: number | null; verdict: string | null }> = {};
+            if (a.readable) for (const id of ids) { const r = solveRegister.chart(id); if (r) per[id] = { candidates: r.candidates, liveScore: r.liveScore, runnerUpScore: r.runnerUpScore, verdict: r.verdict }; }
+            return { readable: a.readable ? "readable" : "register not readable", clearlyBetterNotLive: a.clearlyBetter,
+              clearlyBetterIds: a.clearlyBetterIds.slice(0, 40), charts: per };
+          })() };
       })(),
       // The GTO Wizard POOL, not one client: the Elite session takes heads-up
       // solves so the Ultra session's daily allowance is spent only on the

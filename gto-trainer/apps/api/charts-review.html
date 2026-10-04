@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chart review</title>
+<style>
+  :root { --bg:#fbfbf9; --fg:#1d1d1b; --mut:#6b6b66; --line:#e2e1dc; --card:#fff; --acc:#2f5fb3; --bad:#b3372f; --ok:#2f7d4f; --warn:#a86b12;
+          --fold:#c9ccd3; --call:#4f9d69; --raise:#d0573f; --jam:#7a2a8c; --limp:#3f7fbf; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141413; --fg:#ecebe6; --mut:#9b9a94; --line:#2c2c29; --card:#1c1c1a;
+          --acc:#7ea6ec; --bad:#e57a70; --ok:#6cc08f; --warn:#e0a548; --fold:#3a3d44; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; }
+  header h1 { font-size:18px; margin:0; } .mut { color:var(--mut); } a { color:var(--acc); }
+  main { padding:12px 16px; max-width:1200px; margin:0 auto; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px; align-items:center; }
+  select, input, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+  button { cursor:pointer; } button.ok { border-color:var(--ok); color:var(--ok); } button.flag { border-color:var(--bad); color:var(--bad); }
+  .tablewrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+  th { cursor:pointer; position:sticky; top:0; background:var(--card); user-select:none; }
+  tr.row:hover { background:color-mix(in srgb, var(--acc) 8%, transparent); cursor:pointer; }
+  .pill { display:inline-block; padding:0 6px; border-radius:9px; font-size:12px; border:1px solid var(--line); }
+  .pill.promote { border-color:var(--warn); color:var(--warn); } .pill.ok { border-color:var(--ok); color:var(--ok); } .pill.flag { border-color:var(--bad); color:var(--bad); }
+  .num { font-variant-numeric:tabular-nums; text-align:right; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin:12px 0; }
+  .card h2 { font-size:15px; margin:0 0 8px; } .card h3 { font-size:13px; margin:10px 0 6px; }
+  .flags li { margin:2px 0; } .flags .k { font-weight:600; }
+  .mix { display:flex; height:14px; border-radius:3px; overflow:hidden; min-width:140px; }
+  .mix span { display:block; height:100%; }
+  .grid { display:grid; grid-template-columns:repeat(13, minmax(0,1fr)); gap:1px; max-width:520px; font-size:10px; }
+  .cell { position:relative; aspect-ratio:1; display:flex; align-items:center; justify-content:center; color:#fff; text-shadow:0 0 2px #000;
+          background:var(--fold); overflow:hidden; border-radius:2px; }
+  .cell b { position:relative; z-index:1; font-weight:600; }
+  .cell i { position:absolute; left:0; bottom:0; top:0; }
+  .twocol { display:grid; grid-template-columns:1fr 1fr; gap:12px; } @media (max-width:700px) { .twocol { grid-template-columns:1fr; } }
+  .nodes { display:flex; flex-wrap:wrap; gap:6px; } .nodes button.sel { border-color:var(--acc); color:var(--acc); }
+  .legend span { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Chart review</h1>
+  <span class="mut" id="sub">loading…</span>
+  <span id="prog"></span>
+  <a href="/sources">Sources</a>
+</header>
+<main>
+  <div id="list">
+    <div class="bar">
+      <select id="fGroup"><option value="">every family</option></select>
+      <select id="fProp"><option value="">all charts</option><option value="promote">has a proposal</option><option value="flags">has flags</option>
+        <option value="todo">not reviewed</option><option value="flagged">flagged</option></select>
+      <input id="fText" placeholder="search (e.g. BTN 30bb)" size="18">
+      <span class="legend mut">mix: <span style="background:var(--fold)"></span>fold<span style="background:var(--limp)"></span>limp
+        <span style="background:var(--call)"></span>call<span style="background:var(--raise)"></span>raise<span style="background:var(--jam)"></span>jam</span>
+    </div>
+    <div class="tablewrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <div id="detail" hidden></div>
+</main>
+<script>
+const RANKS = "AKQJT98765432";
+const COL = { fold: "var(--fold)", limp: "var(--limp)", call: "var(--call)", raise: "var(--raise)", jam: "var(--jam)" };
+const kindOf = (l) => { l = (l || "").toLowerCase(); return l === "fold" ? "fold" : l === "call" || l === "check" ? "call" : l === "limp" ? "limp" : l === "all-in" ? "jam" : "raise"; };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = (x, d = 1) => x == null ? "–" : (x * 100).toFixed(d) + "%";
+const sc = (x) => x == null ? "–" : (x * 1000).toFixed(3);
+let IDX = null, SORT = { k: "answers_since_0927", d: -1 };
+
+function mixBar(mix) {
+  const parts = Object.entries(mix || {}).sort((a, b) => ["fold", "limp", "call", "raise", "jam"].indexOf(kindOf(a[0])) - ["fold", "limp", "call", "raise", "jam"].indexOf(kindOf(b[0])));
+  return `<div class="mix" title="${esc(parts.map(([k, v]) => `${k} ${pct(v)}`).join(" · "))}">${parts.map(([k, v]) =>
+    `<span style="width:${(v * 100).toFixed(2)}%;background:${COL[kindOf(k)]};opacity:${kindOf(k) === "raise" ? 0.55 + 0.45 * (parts.filter(p => kindOf(p[0]) === "raise").findIndex(p => p[0] === k) % 2) : 1}"></span>`).join("")}</div>`;
+}
+const mixText = (mix) => Object.entries(mix || {}).filter(([, v]) => v >= 0.005).map(([k, v]) => `${esc(k)} ${pct(v)}`).join(" · ");
+
+async function j(url, opt) { const r = await fetch(url, opt); const b = await r.json().catch(() => ({})); if (!r.ok || b.ok === false) throw new Error(b.error || r.status); return b; }
+
+async function loadIndex() {
+  IDX = await j("/api/dashboard/charts-review/index");
+  const reg = IDX.register;
+  document.getElementById("sub").textContent = `${IDX.charts.length} live 6-max charts · summaries built ${IDX.meta.built_at} · ` +
+    (reg.readable ? `${reg.clearlyBetter} with a clearly better solve (≥ ${Math.round((IDX.meta.margin || 0.15) * 100)}% lower regret) not live` : "register not readable");
+  document.getElementById("prog").innerHTML = `<b>reviewed ${IDX.progress.reviewed} of ${IDX.progress.of}</b>` + (IDX.progress.flagged ? ` · <span style="color:var(--bad)">${IDX.progress.flagged} flagged</span>` : "");
+  const g = document.getElementById("fGroup");
+  if (g.options.length === 1) for (const x of [...new Set(IDX.charts.map((c) => c.group))].sort()) g.add(new Option(x, x));
+  renderList();
+}
+const COLS = [["words", "chart"], ["group", "family"], ["candidates", "solves"], ["score", "live score"], ["runner_up_score", "runner-up"],
+  ["proposal", "proposal"], ["samples_m", "samples (m)"], ["solvedAt", "solved"], ["answers_since_0927", "answers since 09-27"], ["flags", "flags"], ["review", "review"]];
+function renderList() {
+  const q = document.getElementById("fText").value.toLowerCase(), fg = document.getElementById("fGroup").value, fp = document.getElementById("fProp").value;
+  let rows = IDX.charts.filter((c) => (!fg || c.group === fg) && (!q || (c.words + " " + c.id).toLowerCase().includes(q)) &&
+    (!fp || (fp === "promote" ? c.proposal === "promote" : fp === "flags" ? c.flags > 0 : fp === "todo" ? !c.review : c.review?.verdict === "flag")));
+  const key = (c) => SORT.k === "review" ? (c.review?.verdict || "") : c[SORT.k] ?? "";
+  rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * SORT.d);
+  const t = document.getElementById("tbl");
+  t.tHead.innerHTML = `<tr>${COLS.map(([k, l]) => `<th data-k="${k}">${l}${SORT.k === k ? (SORT.d > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>`;
+  t.tBodies[0].innerHTML = rows.map((c) => `<tr class="row" data-id="${c.id}"><td>${esc(c.words)}${c.staleSummary ? ' <span class="pill flag">summary stale</span>' : ""}</td>
+    <td>${esc(c.group)}</td><td class="num">${c.candidates ?? "–"}</td><td class="num">${sc(c.score)}</td><td class="num">${sc(c.runner_up_score)}</td>
+    <td>${c.proposal === "promote" ? `<span class="pill promote">promote −${c.better_pct}%</span>` : '<span class="mut">keep</span>'}</td>
+    <td class="num">${c.samples_m ?? "–"}</td><td>${esc((c.solvedAt || "").slice(0, 10))}</td><td class="num">${c.answers_since_0927}</td>
+    <td class="num">${c.flags || ""}</td><td>${c.review ? `<span class="pill ${c.review.verdict}">${c.review.verdict === "ok" ? "looks right" : "flag"}</span>` : ""}</td></tr>`).join("");
+}
+document.getElementById("tbl").addEventListener("click", (e) => {
+  const th = e.target.closest("th"); if (th) { SORT = { k: th.dataset.k, d: SORT.k === th.dataset.k ? -SORT.d : -1 }; renderList(); return; }
+  const tr = e.target.closest("tr.row"); if (tr) location.hash = tr.dataset.id;
+});
+for (const id of ["fGroup", "fProp", "fText"]) document.getElementById(id).addEventListener("input", renderList);
+
+function gridHtml(cells, actions) {
+  const out = [];
+  for (let i = 0; i < 13; i++) for (let k = 0; k < 13; k++) {
+    const hi = RANKS[Math.min(i, k)], lo = RANKS[Math.max(i, k)];
+    const h = i === k ? hi + lo : hi + lo + (i < k ? "s" : "o");
+    const a = cells?.[h];
+    let x = 0, bands = "";
+    if (a) for (const lab of actions) { const v = a[lab] || 0; if (v <= 0 || kindOf(lab) === "fold") continue;
+      bands += `<i style="left:${x}%;width:${v}%;background:${COL[kindOf(lab)]}"></i>`; x += v; }
+    out.push(`<div class="cell" title="${h}: ${esc(a ? Object.entries(a).map(([k2, v]) => `${k2} ${v}%`).join(", ") : "not in range")}"
+      style="${a ? "" : "opacity:.25"}">${bands}<b>${h}</b></div>`);
+  }
+  return `<div class="grid">${out.join("")}</div>`;
+}
+async function showNode(id, line, box, cand) {
+  box.innerHTML = '<span class="mut">loading node…</span>';
+  try {
+    const r = await j(`/api/dashboard/charts-review/node/${id}?line=${encodeURIComponent(line)}`);
+    const labs = r.node.actions.map((a) => a.action);
+    let html = `<div class="mut">${esc(line || "(root)")} · ${esc(r.node.pos)} · trust ${r.trust ? `regret ${r.trust.regret}, reach ${r.trust.reach}` : "–"}</div>`;
+    if (cand) html += `<div class="twocol"><div><h3>live</h3>${gridHtml(Object.fromEntries(r.node.cells.map((c) => [c.hand, c.actions])), labs)}</div>
+      <div><h3>proposed</h3>${gridHtml(cand.cells, labs)}</div></div>` +
+      (cand.flips?.length ? `<h3>${cand.flips.length} hand(s) whose top action flips</h3><div class="mut">${cand.flips.map(esc).join(" · ")}</div>` : "");
+    else html += gridHtml(Object.fromEntries(r.node.cells.map((c) => [c.hand, c.actions])), labs);
+    box.innerHTML = html;
+  } catch (e) { box.innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`; }
+}
+function nodeSection(title, rows, id, label) {
+  if (!rows?.length) return "";
+  return `<div class="card"><h2>${title}</h2><div class="tablewrap"><table><thead><tr><th>${label}</th><th>mix</th><th></th></tr></thead><tbody>${rows.map((r) =>
+    `<tr><td>${esc(r.pos)}${r.vs ? ` vs ${esc(r.vs)} ${esc(r.vsAction)}` : ""}</td><td>${mixBar(r.mix)}</td><td class="mut">${mixText(r.mix)}</td>
+     <td><button data-line="${esc(r.line)}" class="nodebtn">grid</button></td></tr>`).join("")}</tbody></table></div><div class="nodebox"></div></div>`;
+}
+async function showChart(id) {
+  const d = document.getElementById("detail"); document.getElementById("list").hidden = true; d.hidden = false;
+  d.innerHTML = '<span class="mut">loading…</span>';
+  try {
+    const r = await j(`/api/dashboard/charts-review/chart/${id}`); const c = r.chart; const pv = c.proposal_view;
+    const rev = r.history?.[0] && r.history[0].raw === r.liveRaw ? r.history[0] : null;
+    d.innerHTML = `<p><a href="#" id="back">← all charts</a></p>
+      <div class="card"><h2>${esc(c.words)} <span class="mut">${esc(c.id)}</span></h2>
+        <div class="mut">live raw ${esc((r.liveRaw || "").slice(0, 12))} · ${esc(c.plan || "")} · refine ${c.refine_min ?? "?"} min (${c.samples_m ?? "?"}m samples) ·
+          solved ${esc(c.solvedAt || "?")} · ${c.answers_since_0927} live answers since 09-27 · ${c.candidates ?? 1} known solve(s) of this spot ·
+          live score ${sc(c.score)} (×1000 bb/hand, reach-weighted regret)${c.runner_up ? ` · runner-up ${sc(c.runner_up.score)} (${(c.runner_up.gain * 100).toFixed(0)}% vs live on ${c.runner_up.common} nodes)` : ""}</div>
+        ${r.staleSummary ? '<p style="color:var(--bad)">The live solve changed after this summary was built — rerun chart_review.py.</p>' : ""}
+        ${c.proposal?.verdict === "promote" ? `<p><span class="pill promote">PROPOSED</span> raw ${esc((c.proposal.cand_raw || "").slice(0, 12))}: ${c.proposal.better_pct}% lower reach-weighted regret (at ${esc((c.proposal.where || [])[0] || "?")}). Nothing is promoted until you say so.</p>` : ""}
+        <div class="bar"><button class="ok" id="vOk">Looks right</button><button class="flag" id="vFlag">Flag</button>
+          <input id="vNote" placeholder="note (what looks wrong, which node)" style="flex:1;min-width:180px" value="${esc(rev?.note || "")}">
+          <span id="vState" class="mut">${rev ? `${rev.verdict === "ok" ? "looks right" : "FLAGGED"} · ${new Date(rev.at).toLocaleString()}` : "not reviewed"}</span></div>
+      </div>
+      <div class="card"><h2>Sanity flags (${c.flags.length})</h2>${c.flags.length ? `<ul class="flags">${c.flags.map((f) => `<li><span class="k">${esc(f.kind)}</span> · ${esc(f.node)} · ${esc(f.detail)}</li>`).join("")}</ul>` : '<span class="mut">none</span>'}</div>
+      ${pv && pv.nodes ? `<div class="card"><h2>Live vs proposed (first orbit)</h2><div class="tablewrap"><table><thead><tr><th>node</th><th>live</th><th>proposed</th><th>range diff</th><th>flips</th><th></th></tr></thead><tbody>${pv.nodes.filter((n) => n.line.split("-").length <= 5).map((n, k) =>
+        `<tr><td>${esc(n.pos)} <span class="mut">${esc(n.line || "(root)")}</span></td><td>${mixBar(n.live)}</td><td>${mixBar(n.proposed)}</td><td class="num">${pct(n.tv)}</td><td class="num">${n.flips.length}</td>
+        <td><button class="pvbtn" data-k="${k}">compare</button></td></tr>`).join("")}</tbody></table></div><div id="pvbox"></div></div>` : pv?.error ? `<div class="card">proposal view failed: ${esc(pv.error)}</div>` : ""}
+      ${nodeSection("First in (RFI)", c.rfi, id, "seat")}
+      ${nodeSection("Facing a first-in action (open / limp / jam)", c.facing, id, "defender")}
+      ${nodeSection("The opener facing a 3-bet / iso", c.vs3bet, id, "opener")}`;
+    document.getElementById("back").onclick = (e) => { e.preventDefault(); location.hash = ""; };
+    d.querySelectorAll(".nodebtn").forEach((b) => b.onclick = () => showNode(id, b.dataset.line, b.closest(".card").querySelector(".nodebox")));
+    d.querySelectorAll(".pvbtn").forEach((b) => b.onclick = () => { const n = pv.nodes[+b.dataset.k]; showNode(id, n.line, document.getElementById("pvbox"), n); });
+    const save = async (verdict) => {
+      const st = document.getElementById("vState"); st.textContent = "saving…";
+      try { const s = await j("/api/dashboard/charts-review/review", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chartId: id, raw: r.liveRaw, verdict, note: document.getElementById("vNote").value }) });
+        st.textContent = `${verdict === "ok" ? "looks right" : "FLAGGED"} · saved ${new Date(s.review.at).toLocaleTimeString()}`; IDX = null;
+      } catch (e) { st.textContent = "not saved: " + e.message; }
+    };
+    document.getElementById("vOk").onclick = () => save("ok"); document.getElementById("vFlag").onclick = () => save("flag");
+  } catch (e) { d.innerHTML = `<p><a href="#">← all charts</a></p><p style="color:var(--bad)">${esc(e.message)}</p>`; }
+}
+async function route() {
+  const id = decodeURIComponent(location.hash.slice(1));
+  if (id) return showChart(id);
+  document.getElementById("detail").hidden = true; document.getElementById("list").hidden = false;
+  try { if (!IDX) await loadIndex(); else renderList(); } catch (e) { document.getElementById("sub").textContent = "could not load: " + e.message; }
+}
+window.addEventListener("hashchange", route); route();
+</script>
+</body>
+</html>
