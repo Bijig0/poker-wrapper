@@ -8,8 +8,9 @@
  *
  * THE RULE (Brady: "apply it to all the short stacks that don't cover the stack size threshold we have, and aren't
  * solved yet"): a villain who limped (or, from the SB, completed) before any raise and never raised after keeps the
- * range the pool-locked tree that answered gives him when that tree locks his node AND its stacks are inside the gap
- * gate's first-decision bound (treeGap.withinFirstStackBound, on the effective stack against hero). Otherwise — an
+ * range the pool-locked tree that answered gives him when that tree locks his node AT HIS STACK'S BUCKET (60bb or less /
+ * 60-85bb) AND its stacks are inside the gap gate's first-decision bound (treeGap.withinFirstStackBound, on the
+ * effective stack against hero) — see poolChartCovers. Otherwise — an
  * equilibrium limp chart, the GTO Wizard AI tree, a reduced tree, a pool tree at a stack outside the bound — his
  * flop-entering range is the pool's measured limp range for his role and stack bucket, the very range the limp-v2 pool3
  * trees lock (poolLimpLocks.v2.json is a copy of locks_v2.json; the key is chosen as genLimpPlanV2.lock_for chooses it).
@@ -22,7 +23,7 @@
  * Pure: ranges in, ranges out, and a record of what was replaced.
  */
 import LOCKS from "./poolLimpLocks.v2.json";
-import { dealtByPos, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS6, type Seat6 } from "./hrc6max";
+import { dealtByPos, limpStackBucket, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS6, type Seat6 } from "./hrc6max";
 import { hrc6maxDb } from "./hrc6maxDb";
 import { chartStacks6, withinFirstStackBound } from "./treeGap";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -102,19 +103,29 @@ export function poolLimpKey(l: Pick<PoolLimper, "limpsBefore" | "complete">, sta
 /** The plan a baked chart was solved from (the bake's provenance row): `limp-v2-…` = the v2 locks, by stack bucket. */
 const bakedPlanOf = (id: string): string | null => hrc6maxDb.provenance(id)?.plan ?? null;
 
-/** Does the chart that gave the flop ranges hold this limper's node at the pool's range, at stacks inside the bound?
- *  The pool3 trees (even and uneven) lock every limp and the SB's complete; the pilot (`_olimp_pool`) locks the limps
- *  only. ONLY A V2 TREE (its bake provenance names a `limp-v2-…` plan): the v1 uneven pool3 trees still baked under the
- *  same ids (s30_SB, s30_BTN, s70_BB — plan `limp-uneven-pool3…`) locked every limper to the DEEP pool range, so a short
- *  limper there is not at his own; their v2 re-solves replace them in place, and the floor stands down by itself. The
- *  wide tree's locks are the v1 deep ones at full weight, so it never covers. */
+/**
+ * Does the chart that gave the flop ranges hold this limper's node at the range HIS stack calls for?
+ *   - it locks his node: the pool3 trees (even and uneven) lock every limp and the SB's complete; the pilot
+ *     (`_olimp_pool`) and the hero-free trees (`_olimp_poolh`) lock the limps, not the SB's complete (in a hero-free tree
+ *     the deep seats' over-limps are solved too — a deep limper is never floored, so that changes nothing here);
+ *   - a V2 tree (its bake provenance names a `limp-v2-…` plan): the v1 uneven pool3 trees still baked under the same ids
+ *     (s30_SB, s30_BTN, s70_BB) locked every limper to the DEEP range; their v2 re-solves replace them in place;
+ *   - THE SAME STACK BUCKET (Brady 2026-10-05: "say the 60bb one hasn't [been solved], then we'll just use this one"):
+ *     a tree locks a seat at the range of ITS stack in the tree — 26.3% at 60bb or less, 15.1% at 60-85bb, 3.1%
+ *     deeper — so a 55bb limper read on the 100bb pool tree holds the deep range, an eighth of his own. Covered only
+ *     when the tree's stack for his seat is in his bucket;
+ *   - and the effective stack inside the gap gate's first-decision bound.
+ * The wide tree's locks are the v1 deep ones at full weight, so it never covers.
+ */
 export function poolChartCovers(chartId: string | null, l: Pick<PoolLimper, "pos" | "complete">, heroPos: Seat6,
                                 table: { hero: number; limper: number }, planOf: (id: string) => string | null = bakedPlanOf): boolean {
   if (!chartId) return false;
-  const locksHim = chartId === POOL_LIMP_CHART || /_olimp_pool3$/.test(chartId) || (chartId === POOL_LIMP_CHART_SB && !l.complete);
-  if (!locksHim || !/^limp-v2/.test(planOf(chartId) ?? "")) return false;
+  const full = chartId === POOL_LIMP_CHART || /_olimp_pool3$/.test(chartId);
+  const limpsOnly = chartId === POOL_LIMP_CHART_SB || /_olimp_poolh$/.test(chartId);
+  if (!(full || (limpsOnly && !l.complete)) || !/^limp-v2/.test(planOf(chartId) ?? "")) return false;
   const st = chartStacks6(chartId);
   if (!st) return false;
+  if (limpStackBucket(st[l.pos]) !== limpStackBucket(table.limper)) return false;
   return withinFirstStackBound(Math.min(table.hero, table.limper), Math.min(st[heroPos], st[l.pos]));
 }
 
