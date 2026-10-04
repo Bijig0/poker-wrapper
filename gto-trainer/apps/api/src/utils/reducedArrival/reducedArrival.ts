@@ -9,42 +9,49 @@
  * The flop takes its ranges from the piece that answered last; that tree has no UTG in the pot; nothing fell back; no
  * answer, a timeout, a sit-out, and Ignition removed hero from the table.
  *
- * Every such spot still has one thing a tree CAN hold: the last raise, and each player who met it. So:
+ * Every such spot still has one thing a tree CAN hold: the last raise, and each player who met it — and the exact tree
+ * already solved for the hand holds most of what is around it. Every read below is on THAT tree (no tree is solved for
+ * the reduced read), on the line cut where it is needed and, when the tree cannot hold the cut, fitted for that seat
+ * (fitAiLine: the earliest other limper or caller folded out). services/gtowAiPreflop lastRaiseReads makes the reads.
  *
- *   THE RAISER's range is what he held before the raise, narrowed by how the exact tree plays that raise from his seat
- *   (services/gtowAiPreflop raiseFilter — the union of its raise sizes, read on the line fitted for HIS actions).
+ *   THE RAISER's range is what he held before the raise (hero: what the chart told him; a limper: the pool's limp
+ *   range; otherwise his range on the exact tree), narrowed by how the exact tree plays that raise from his seat
+ *   (raiseFilter — the union of its raise sizes).
  *
- *   EACH CALLER's range is what he held before the raise, less the hands that fold to it — read on a heads-up tree of
- *   him and the raiser in which THE RAISE IS A FORCED BET: the raiser posts it as his blind, the caller posts the
- *   chips he already had in as his, everything else in the pot is dead money, and the stacks are the stacks as dealt.
- *   The caller's fold / call / re-raise is then the tree's first decision — trained by construction — at exactly the
- *   price and into exactly the pot he faced. Seated by POSTFLOP order: whoever acts first after the flop is the tree's
- *   BB. Any number of callers: one tree each (earlier callers' chips are dead money in a later caller's tree).
+ *   EACH CALLER (since 2026-10-04):
+ *     hero        his starting range × his call as the exact tree plays it (callFilter); his starting range whole
+ *                 when that cannot be read; his own hand is floored back in at 5%;
+ *     all in for less than the raise: his starting range whole (the rest of a short stack in at a price nobody folds);
+ *     a LIMPER    (cameInLimping — his first chip a call with no raise ahead, the SB's complete included): the pool's
+ *                 limp range WHOLE, not narrowed (two independent studies found narrowing it did not help);
+ *     any other   his range WALKED on the exact tree along the line fitted for him, through his own node, less the
+ *                 hands that fold there (stayRange); when that cannot be read, his starting range whole. Never another
+ *                 tree.
  *
- * WHY THE RAISE IS NOT A DECISION IN THE TREE (measured 2026-10-01 on this hand, the first build of this piece): with
- * the raise offered as an action the solver never takes it — raising into dead money with nobody's bet to answer, it
- * limps 73.2% and jams 26.8%, the raise 0.0% — so the caller's node behind it is as untrained as the chart node this
- * whole thing stands in for: it shoved 22 and every pair there (EV of the shove +10bb for 22 against KK/QQ/JJ/AK),
- * left UTG a "calling" range of 64s and Q2s, and the flop answer for 77 facing a 72% pot lead was CALL 85%. With the
- * raise forced and the caller read as "did not fold", the same decision is FOLD 99.99%.
+ * WHY NOT THE FORCED-BET TREE IT REPLACES (2026-10-01 to 2026-10-04): each caller used to be read on a heads-up tree of
+ * him and the raiser with the raise posted as a forced bet (offered as an action, the solver never took it — limp 73%,
+ * jam 27%, raise 0% — so the caller's node behind it was untrained). GTO Wizard solves a preflop tree from FULL ranges
+ * whatever a seat's `range` says (scripts/_probeForcedDecision.ts `range`, the record of those probes), so that caller
+ * folded against ANY TWO CARDS posting the raise. Measured (scripts/callerReadStudy.ts, 65 villain calls on lines the
+ * exact tree holds, the exact node as truth): the forced tree kept 84.5% of the caller's range where his node keeps
+ * 35.7% — barely better than no narrowing (TV distance 55.2% against 58.6%).
  *
- * WHY "DID NOT FOLD", NOT "CALLED" (probed, scripts/_probeForcedRaise.ts): at these prices the solver hardly ever
- * just calls — it re-raises all in or folds (call 25% with the raiser in position, 0% out of it). The player at the
- * table called. Which of the continuing hands a real player shoves and which he calls is not something the solver's
- * mix says about him — and one who limped in and flatted the whole way has shown he calls — so his range is every
- * hand that continues.
+ * WHAT THE READ STILL GETS WRONG (the same study, measured): on the 22 non-limper calls read on a fitted line it keeps
+ * 31.2% where the exact node keeps 18.2% — 13 points wide, TV 42.1% (the forced tree: 78.3%, TV 74.1%). Every fit
+ * measured folded exactly ONE seat (GTO Wizard holds three to the flop); a real reduced spot folds more, and each fold
+ * loosens the read — that is inferred, not measured. Limpers kept whole: their node keeps 55.5% (25 calls); worst, a
+ * small blind who completed behind a limper keeps 1-24%. When nobody ahead of the caller needs folding, the read is his
+ * own node — exact (17 of the 65).
+ *
+ * WHY "DID NOT FOLD", NOT "CALLED" (probed, scripts/_probeForcedRaise.ts): at these prices the solver often re-raises
+ * where the player called. Which of the continuing hands a real player shoves and which he calls is not something the
+ * solver's mix says about him — and one who flatted has shown he calls — so his range is every hand that continues.
  *
  * What it does NOT model, said in the answer's note: the folded players' cards; the calls between a player's entry
- * and the last raise (UTG's call of the iso) where no source gives his range there; the other callers when one caller
- * is read (their chips are in his pot, their ranges are not); a limper's range is the pool's, not this player's.
+ * and the last raise where the pool's or the full range stands in; a limper's range is the pool's, not this player's.
  *
- * WHAT THE TREE DOES NOT DO (found 2026-10-04, scripts/_probeForcedDecision.ts `range`): it does not take the two
- * starting ranges. GTO Wizard solves a preflop tree from full ranges whatever a seat's `range` says, so the caller's
- * fold is read against ANY TWO CARDS posting the raise — every caller is read wider than he is. The 2026-10-01
- * measurements above were taken on such trees. Nothing here corrects for it yet.
- *
- * This file is the pure half: the plan and the read of a solved tree. The solves, the starting ranges and the wiring
- * are services/gtowAiPreflop.ts (reducedArrivalRanges).
+ * This file is the pure half: the plan (who met the last raise, at what price) and the limp test. The reads, the
+ * starting ranges and the wiring are services/gtowAiPreflop.ts (reducedArrivalRanges, lastRaiseReads).
  */
 import type { ParsedAction, ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
 import { allInCalls } from "../../feed/buildSolutionUrl/buildSolutionUrl";
@@ -53,8 +60,6 @@ import { COMBOS, toClassWeights } from "../comboIndex/comboIndex";
 
 /** First to act after the flop first. */
 const POSTFLOP = ["SB", "BB", "UTG", "HJ", "CO", "BTN"];
-/** A seat with nothing in yet still needs a blind to sit in the tree. */
-const MIN_POST = 0.01;
 
 export interface ReducedSeat {
   /** the table's seat id and position name (upper case) */
@@ -65,13 +70,7 @@ export interface ReducedSeat {
   prior: number;
 }
 export interface ReducedCaller extends ReducedSeat {
-  /** the raiser acts after this caller on the flop: the tree's SB (the button) is the raiser, its BB the caller */
-  raiserInPosition: boolean;
-  /** the tree's seats and what each posts: the raiser the raise, the caller the chips he already had in */
-  tree: { raiser: "SB" | "BB"; caller: "SB" | "BB"; raiserPost: number; callerPost: number };
-  /** chips in the pot when he met the raise that neither he nor the raiser put there */
-  deadBb: number;
-  /** what the call cost him, and the pot he called into (the raise, his chips, the dead money) */
+  /** what the call cost him, and the pot he called into (everything in before his answer, his own chips included) */
   toCall: number;
   potBefore: number;
 }
@@ -151,11 +150,8 @@ export function planReducedArrival(hand: ParsedHand, heroPos: string | null): Re
     const before = answerIdx >= 0 ? putAt(answerIdx) : putAt(raiseIndex + 1);
     const mine = before.get(s) ?? 0;
     const potBefore = sum(before);
-    const raiserInPosition = byPostflop(aggSeat, s) > 0;
     return {
-      ...seatRec(s), prior: r2(mine), raiserInPosition,
-      tree: { raiser: raiserInPosition ? "SB" : "BB", caller: raiserInPosition ? "BB" : "SB", raiserPost: r2(raiseTo), callerPost: Math.max(MIN_POST, r2(mine)) },
-      deadBb: Math.max(0, r2(potBefore - raiseTo - mine)),
+      ...seatRec(s), prior: r2(mine),
       toCall: r2(Math.max(0, Math.min(raiseTo, put.get(s) ?? raiseTo) - mine)),
       potBefore: r2(potBefore),
     };
@@ -163,23 +159,18 @@ export function planReducedArrival(hand: ParsedHand, heroPos: string | null): Re
   return { ok: true, live: live.map((s) => posOf(s)!), raiser: seatRec(aggSeat), raiseTo: r2(raiseTo), callers, raiseIndex, potBb: r2(potBb) };
 }
 
-/** The reduced hand one caller's tree is shaped from (the stacks, the rake): him and the raiser on the heads-up set,
- *  the two posts as its blinds. The raiser stands in as "hero" when hero is neither. */
-export function forcedHandOf(hand: ParsedHand, plan: ReducedPlan, c: ReducedCaller): ParsedHand {
-  const seatOfTree = (t: "SB" | "BB") => (c.tree.raiser === t ? plan.raiser.seat : c.seat);
-  const postOfTree = (t: "SB" | "BB") => (c.tree.raiser === t ? c.tree.raiserPost : c.tree.callerPost);
-  const heroSeatId = hand.heroSeatId === c.seat || hand.heroSeatId === plan.raiser.seat ? hand.heroSeatId : plan.raiser.seat;
-  const act = (seat: number, type: string, amount: number): ParsedAction =>
-    ({ seatId: seat, hero: seat === heroSeatId, type, street: "preflop", amount } as ParsedAction);
-  const positions: Record<number, string> = { [seatOfTree("SB")]: "SB", [seatOfTree("BB")]: "BB" };
-  const stacks: Record<number, number> = {};
-  for (const s of [c.seat, plan.raiser.seat]) { const v = hand.stacks?.[s]; if (v != null) stacks[s] = v; }
-  return {
-    ...hand, heroSeatId, positions,
-    actions: [act(seatOfTree("SB"), "post-sb", postOfTree("SB")), act(seatOfTree("BB"), "post-bb", postOfTree("BB"))],
-    liveSeats: [seatOfTree("SB"), seatOfTree("BB")], stacks, committed: { [c.seat]: 0, [plan.raiser.seat]: 0 }, board: [], street: "preflop",
-    currentNode: { ...hand.currentNode, street: "preflop", toActIsHero: false },
-  } as ParsedHand;
+/**
+ * Did this seat come into the pot with a LIMP before the action at `upto` — its first voluntary chip a call with no
+ * raise ahead of it (the small blind's complete counts)? Such a caller's range is the pool's limp range and is kept
+ * whole when he calls the last raise (see the header).
+ */
+export function cameInLimping(hand: ParsedHand, seat: number, upto: number): boolean {
+  const seatOf = (a: ParsedAction) => (a.hero ? hand.heroSeatId : a.seatId);
+  const calls = allInCalls(hand.actions);
+  const pre = hand.actions.slice(0, upto).map((a, i) => ({ a, i })).filter(({ a }) => a.street === "preflop");
+  const first = pre.find(({ a }) => seatOf(a) === seat && ["call", "raise", "bet", "all-in"].includes(a.type));
+  if (!first || !(first.a.type === "call" || calls.has(first.a))) return false;
+  return !pre.some(({ a, i }) => i < first.i && isRaise(a, calls));
 }
 
 /** class → weight (0..1) as the 1,326 per-combo weights a tree's `range` takes; null in → null out (the full range). */
@@ -217,70 +208,4 @@ export function combosToClasses(w: readonly number[]): Record<string, number> {
   const rec: Record<string, number> = {};
   for (const [cls, v] of Object.entries(cw)) if (v.weight > 0) rec[cls] = Math.min(1, v.weight / (CLASS_COMBOS[cls] ?? v.combos));
   return rec;
-}
-
-type NodeGet = (line: string) => Promise<{ data: any } | { error: string }>;
-const codeOf = (a: any) => String(a?.action?.code ?? "");
-const typeOf = (a: any) => String(a?.action?.type ?? a?.action?.display_name ?? "").toUpperCase();
-const isFold = (a: any) => /^F/i.test(codeOf(a)) || typeOf(a).startsWith("FOLD");
-const isPass = (a: any) => /^[XC]$/i.test(codeOf(a)) || typeOf(a).startsWith("CHECK") || typeOf(a).startsWith("CALL");
-
-export interface CallerRead {
-  ok: true;
-  /** per combo, the share that does NOT fold to the raise */
-  stays: number[];
-  /** the node's own totals over the range it was solved with, for the note and the trace (percent) */
-  fold: number; call: number; raise: number;
-  /** the tree line of the caller's node ("" = the root) */
-  line: string;
-  /** the raiser sat ahead of the caller: how often the tree's raiser takes the root's check, over all hands — the
-   *  tree is solved from full ranges (1 when the check is the only action there); null when the caller is at the
-   *  root. Under ROOT_CHECK_MIN the caller's node is read against a range the tree has already thinned — the read is
-   *  not taken (2026-10-04, measured on the solve cache: trees solved under the old all-in rule had the raiser jam
-   *  30-95% of the time at the root). */
-  rootCheck: number | null;
-}
-
-/** The raiser's root check must carry at least this share of his range for the caller's node behind it to be read. */
-export const ROOT_CHECK_MIN = 0.9;
-
-/**
- * Read a caller's answer to the forced raise on his solved tree. The raiser out of position posted the tree's BB: the
- * caller (its SB) acts at the root. The raiser in position posted its SB and acts first — he has only the check
- * (and, when the tree adds one, an all-in we do not walk) — and the caller's node is behind that check.
- */
-export async function readCaller(c: ReducedCaller, get: NodeGet): Promise<CallerRead | { ok: false; reason: string }> {
-  const no = (reason: string) => ({ ok: false as const, reason: `reduced tree (${c.pos}): ${reason}` });
-  const actorOf = (j: any): string | null => j?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
-  let line = "";
-  let node = await get(line);
-  if ("error" in node) return no(`the root — ${node.error}`);
-  let rootCheck: number | null = null;
-  if (c.raiserInPosition) {
-    if (actorOf(node.data) !== "SB") return no(`the tree has ${actorOf(node.data) ?? "nobody"} first to act, not the raiser's seat`);
-    const rootSols: any[] = node.data?.action_solutions ?? [];
-    const pass = rootSols.find(isPass);
-    if (!pass) return no(`the raiser has no check at the root (offered: ${rootSols.map(codeOf).join(", ") || "nothing"})`);
-    if (rootSols.length === 1) rootCheck = 1;
-    else {
-      let f = 0;
-      for (let i = 0; i < 1326; i++) f += Number(pass.strategy?.[i] ?? 0);
-      rootCheck = Math.min(1, f / 1326);
-    }
-    line = codeOf(pass);
-    node = await get(line);
-    if ("error" in node) return no(`the node behind the raiser's check — ${node.error}`);
-  }
-  if (actorOf(node.data) !== c.tree.caller) return no(`the tree has ${actorOf(node.data) ?? "nobody"} to act at '${line || "root"}', not the caller's seat (${c.tree.caller})`);
-  const sols: any[] = node.data?.action_solutions ?? [];
-  const folds = sols.filter(isFold);
-  if (!sols.length) return no(`no actions at '${line || "root"}'`);
-  const stays = new Array<number>(1326);
-  for (let i = 0; i < 1326; i++) {
-    let f = 0;
-    for (const a of folds) f += Number(a.strategy?.[i] ?? 0);
-    stays[i] = Math.min(1, Math.max(0, 1 - f));
-  }
-  const pct = (pick: (a: any) => boolean) => Math.round(1000 * sols.filter(pick).reduce((x, a) => x + Number(a.total_frequency ?? 0), 0)) / 10;
-  return { ok: true, stays, line, rootCheck, fold: pct(isFold), call: pct((a) => !isFold(a) && isPass(a)), raise: pct((a) => !isFold(a) && !isPass(a)) };
 }

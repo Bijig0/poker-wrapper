@@ -29,7 +29,7 @@
  * NOT while a session is live (it solves on the live GTO Wizard accounts).
  */
 import { Database } from "bun:sqlite";
-import { debugTree, reducedSeams } from "../services/gtowAiPreflop";
+import { debugSolveBody, debugTree } from "../services/gtowAiPreflop";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -69,7 +69,7 @@ async function run(label: string, bd: any, lines: (root: any[]) => string[], ran
     bd.players.map((p: any) => `${p.position} posts ${p.blind} of ${p.stack}`).join(", ") + " · bets " +
     JSON.stringify(Object.fromEntries(bd.bet_sizes.street_bet_sizes[0].position_bet_sizes.map((x: any) => [x.position, x.bet_sizes]))));
   const t0 = Date.now();
-  const sol = await reducedSeams.solve(`probe|${Bun.hash(JSON.stringify(bd)).toString(36)}`, bd, 2);
+  const sol = await debugSolveBody(`probe|${Bun.hash(JSON.stringify(bd)).toString(36)}`, bd, 2);
   if ("error" in sol) { console.log("   REFUSED —", sol.error.slice(0, 300)); return; }
   const show = async (line: string) => {
     const n = await sol.get(line);
@@ -131,7 +131,7 @@ if (on("range")) {
   for (const [label, rr] of [["raiser = KK/QQ/JJ/AK/AQs/KQs/AJs", strong], ["raiser = no range given", null], ["raiser = 72o only", only72]] as const) {
     const bd = body(1, { blind: 2.6, stack: 100, range: full }, { blind: 13, stack: 100, range: rr as any }, { SB: { bet: ["2.5x"] } });
     console.log(`\n== range: ${label} — raiser BB posts 13, hero SB posts 2.6, 1 dead`);
-    const sol = await reducedSeams.solve(`probe|${Bun.hash(JSON.stringify(bd)).toString(36)}`, bd, 2);
+    const sol = await debugSolveBody(`probe|${Bun.hash(JSON.stringify(bd)).toString(36)}`, bd, 2);
     if ("error" in sol) { console.log("   REFUSED —", sol.error.slice(0, 300)); continue; }
     const n = await sol.get("");
     if ("error" in n) { console.log("   root —", n.error.slice(0, 200)); continue; }

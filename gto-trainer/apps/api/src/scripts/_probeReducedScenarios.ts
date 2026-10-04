@@ -51,7 +51,7 @@ for (const [name, sc] of Object.entries(SCENARIOS)) {
   const r = await arrivalRangesGtowAi(sc.hand, "HJ", 6, dealt);
   console.log(`\n== ${name}: ${sc.what}\n   ${r.ok ? "ok" : "REFUSED — " + r.reason} (${Date.now() - t0} ms)`);
   if (!r.ok) continue;
-  console.log("   id:", r.id, "· trees:", r.reduced?.trees ?? "(not reduced)");
+  console.log("   id:", r.id, "· fitted callers:", r.reduced?.fitted ?? "(not reduced)");
   for (const [pos, rec] of Object.entries(r.ranges)) console.log(`   ${pos.padEnd(4)} ${summary(rec)}`);
   console.log("   note:", String(r.note).slice(0, 1400));
 }
