@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { lastResortSeams, solvePreflopLastResort, type AiPreflopOutcome } from "./gtowAiPreflop";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -25,11 +25,18 @@ const hand = (heroPos: P, cards: [string, string], acts: [P, string, number?][])
 };
 
 const seams0 = { ...lastResortSeams };
-afterEach(() => { Object.assign(lastResortSeams, seams0); });
-function rig() {
-  const asked: { hand: ParsedHand; pos: string | null; opts: any }[] = [];
+// the locked tree ships off (LAST_RESORT_LOCKED=on turns it on): these tests run with it on, the last one without
+const locked0 = process.env.LAST_RESORT_LOCKED;
+beforeEach(() => { process.env.LAST_RESORT_LOCKED = "on"; });
+afterEach(() => {
+  Object.assign(lastResortSeams, seams0);
+  if (locked0 == null) delete process.env.LAST_RESORT_LOCKED; else process.env.LAST_RESORT_LOCKED = locked0;
+});
+function rig(locked: () => Promise<AiPreflopOutcome> = async () => ({ ok: false, reason: "locked tree: stubbed" })) {
+  const asked: { hand: ParsedHand; pos: string | null; opts: any; skipped?: boolean }[] = [];
+  lastResortSeams.locked = locked;
   lastResortSeams.headsUp = async (h, pos, _why, opts) => {
-    asked.push({ hand: h, pos, opts });
+    asked.push({ hand: h, pos, opts, skipped: opts.skipPin?.() ?? false });
     return { ok: true, actions: [{ action: "Fold", frequency: 100 }], decision: null, line: "R2.6-R8.2", pos, heroClass: "K5o", treeKey: "k", solId: "sol-hu",
       usedLine: "R2.6-R8.2", solveSecs: 1, cached: false, shape: { n: 2, positions: ["SB", "BB"], stacks: { SB: 100, BB: 100 }, deadBb: 0 } as any, note: "the heads-up tree's own note." } as AiPreflopOutcome;
   };
@@ -42,7 +49,9 @@ describe("the preflop last resort: heads-up, no dead money", () => {
     const h = hand("UTG", ["Kh", "5c"], [["UTG", "raise", 2.6], ["HJ", "raise", 8.2], ["CO", "call", 8.2], ["BTN", "call", 8.2], ["SB", "fold"], ["BB", "fold"]]);
     const r = await solvePreflopLastResort(h, "UTG", "the charts could not");
     if (!r.ok) throw new Error(r.reason);
-    expect(asked.length).toBe(1);
+    expect(asked.length).toBe(2);                              // the plain tree, then read again to pin (the locked one was out)
+    expect(asked[0]!.skipped).toBe(true);
+    expect(asked[1]!.opts.skipPin).toBeUndefined();
     expect(asked[0]!.opts.deadBb).toBe(0);                     // was 17.9: in `pot` before the first action — an ante
     expect(asked[0]!.opts.rakeSeats).toBe(6);                  // the rake cap still follows the table
     expect(asked[0]!.opts.reduced).toEqual({ droppedPos: ["CO", "BTN", "SB", "BB"] });
@@ -52,7 +61,8 @@ describe("the preflop last resort: heads-up, no dead money", () => {
     expect(r.note).toContain("CO, BTN, SB, BB folded out and NONE of the 17.9bb they put in is in the tree's pot");
     expect(r.note).toContain("both seats play a heads-up blind's range");
     expect(r.note).toContain("the heads-up tree's own note.");
-    expect(r.lastResort!.how).toBe("hero (UTG) vs HJ heads-up, CO/BTN/SB/BB folded out, no dead money");
+    expect(r.lastResort!.how).toBe("hero (UTG) vs HJ heads-up, CO/BTN/SB/BB folded out, no dead money (plain tree: the locked one did not answer)");
+    expect(r.note).toContain("The locked tree (the raiser's range imposed) did not answer: stubbed.");
   });
 
   it("nobody has raised: no answer from a seat outside the blinds — the heads-up tree would open a small blind's range there (74s under the gun, hand 4920544810)", async () => {
@@ -78,13 +88,57 @@ describe("the preflop last resort: heads-up, no dead money", () => {
     const asked = rig();
     const r = await solvePreflopLastResort(hand("BTN", ["Ah", "Qh"], [["UTG", "call", 1], ["HJ", "fold"], ["CO", "all-in", 28]]), "BTN", "why");
     expect(r.ok).toBe(true);
-    expect(asked.length).toBe(1);
+    expect(asked.length).toBeGreaterThanOrEqual(1);
   });
 
   it("the heads-up tree's own refusal is passed on with its kind", async () => {
+    lastResortSeams.locked = async () => ({ ok: false, reason: "locked tree: stubbed" });
     lastResortSeams.headsUp = async () => ({ ok: false, kind: "capture-fault", reason: "not a legal line" });
     const r = await solvePreflopLastResort(hand("BB", ["Ah", "Qh"], [["UTG", "raise", 3], ["HJ", "fold"], ["CO", "fold"], ["BTN", "fold"], ["SB", "fold"]]), "BB", "why");
     expect(r).toMatchObject({ ok: false, kind: "capture-fault" });
     if (!r.ok) expect(r.reason).toContain("last resort (hero vs UTG, HJ/CO/BTN/SB folded out): not a legal line");
+  });
+});
+
+describe("the locked tree first (2026-10-04)", () => {
+  const lockedAnswer = { ok: true, actions: [{ action: "Call", frequency: 100 }], decision: null, line: "R8.2", pos: "UTG", heroClass: "K5o", treeKey: "locked|UTG-HJ",
+    solId: "sol-locked", usedLine: "R8.2", solveSecs: 1, cached: false, shape: { n: 2, positions: ["SB", "BB"], stacks: { SB: 100, BB: 100 }, deadBb: 1.5 } as any,
+    note: "LAST RESORT, LOCKED TREE — …", lastResort: { how: "hero (UTG) vs HJ's raise to 8.2bb heads-up, the raise locked to his range (180 combos), 1.5bb dead" } } as AiPreflopOutcome;
+  const h = () => hand("UTG", ["Kh", "5c"], [["UTG", "raise", 2.6], ["HJ", "raise", 8.2], ["CO", "call", 8.2], ["BTN", "call", 8.2], ["SB", "fold"], ["BB", "fold"]]);
+
+  it("its answer is the answer; the plain tree was started beside it and never pins", async () => {
+    const asked = rig(async () => lockedAnswer);
+    const r = await solvePreflopLastResort(h(), "UTG", "why");
+    expect(r).toBe(lockedAnswer);
+    expect(asked.length).toBe(1);
+    expect(asked[0]!.skipped).toBe(true);
+  });
+
+  it("past its deadline the plain tree answers, and says why", async () => {
+    process.env.LAST_RESORT_LOCKED_MS = "30";
+    try {
+      rig(() => new Promise<AiPreflopOutcome>((res) => setTimeout(() => res(lockedAnswer), 500)));
+      const r = await solvePreflopLastResort(h(), "UTG", "why");
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.solId).toBe("sol-hu");
+      expect(r.note).toContain("did not answer: no answer within 0.03 s");
+    } finally { delete process.env.LAST_RESORT_LOCKED_MS; }
+  });
+
+  it("it ships OFF: without LAST_RESORT_LOCKED=on (or with nobody raised) the locked tree is not asked and the plain tree pins at once", async () => {
+    let lockedAsked = 0;
+    for (const v of [undefined, "off", ""]) {
+      if (v == null) delete process.env.LAST_RESORT_LOCKED; else process.env.LAST_RESORT_LOCKED = v;
+      const asked = rig(async () => { lockedAsked++; return lockedAnswer; });
+      const r = await solvePreflopLastResort(h(), "UTG", "why");
+      expect(r.ok && r.solId).toBe("sol-hu");
+      expect(asked.length).toBe(1);                            // one read, pinned as it answers: nothing was held back
+      expect(asked[0]!.skipped).toBe(false);
+      if (r.ok) expect(r.note).not.toContain("locked tree");
+    }
+    process.env.LAST_RESORT_LOCKED = "on";
+    rig(async () => { lockedAsked++; return lockedAnswer; });
+    await solvePreflopLastResort(hand("BB", ["7d", "4d"], [["UTG", "call", 1], ["HJ", "fold"], ["CO", "fold"], ["BTN", "fold"], ["SB", "fold"]]), "BB", "why");
+    expect(lockedAsked).toBe(0);
   });
 });

@@ -59,6 +59,8 @@ import {
   cameInLimping, classesToCombos, combosToClasses, normalised, normalisedCombos, planReducedArrival, type ReducedCaller,
 } from "../utils/reducedArrival/reducedArrival";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
+// THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
+import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
 import type { HrcNode } from "./hrc3max";
 import { answerLog } from "./answerLog";
@@ -211,6 +213,32 @@ export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; li
 const round5 = (x: number) => Math.round(x * 2) / 2;
 const num = (n: number) => String(Math.round(n * 100) / 100);
 
+/**
+ * THE ONE WAY A PREFLOP TREE WRITES "RAISE TO <total>" AS AN AMOUNT (2026-10-04, scripts/_probeNodeLockStageA.ts
+ * `units` `straddle` `levels` `cap`). GTO Wizard reads "<N>bb" in ANY size list of a preflop tree — the open, every
+ * raise level, an all-in — as N times the tree's LARGEST POST, not N chips:
+ *   posts 0.5/1 (control):          "6bb" → R6
+ *   posts 0.5/3:                    "6bb" → R18                (and "4.23x" → R12.69: a multiple of the bet faced)
+ *   posts 2.6/1 (the larger the SB): "13bb" → R33.8            ("5x" → R13)
+ *   a straddle, 0.5/1/2 (CO 2):     open "6bb" → R12, "2.5x" → R5; a raise list "15bb" → R30, "3x" → R15;
+ *                                   "100bb" → R100, the all-in (a size past the stack IS the all-in)
+ * "<N>x" is always N times the bet being faced. Stacks, posts, `pot` and the rake cap are read in our units. A LARGEST
+ * POST UNDER 1 CANNOT BE EXPRESSED: GTO Wizard rescales the posts so it is 1 and leaves the stacks as sent (0.01/0.5
+ * played as 0.02/1; 0.25/0.25 as 1/1) — such a tree is refused (shapeOf; the locked tree's plan keeps hero's post ≥ 1).
+ * With the largest post 1 — every tree the builder makes today: a 1bb big blind, `straddle` null, the dead-SB ghost a
+ * penny — this writes exactly what was written before (`${num(total)}bb`), so no stored tree changes its key.
+ */
+export function sizeTo(total: number, largestPost: number): string {
+  return largestPost === 1 ? `${num(total)}bb` : `${Math.round((total / largestPost) * 1000) / 1000}bb`;
+}
+/** A size list written in chips ("<total>bb", "<N>x") as the tree must send it (sizeTo); identity when the largest post is 1. */
+export function sizesFor(list: string[], largestPost: number): string[] {
+  if (largestPost === 1) return list;
+  return list.map((x) => { const m = /^(\d+(?:\.\d+)?)bb$/.exec(x); return m ? sizeTo(Number(m[1]), largestPost) : x; });
+}
+/** The largest post of a shape: what a "<N>bb" size counts in. */
+export const largestPostOf = (shape: Pick<AiPreflopShape, "sb" | "bb" | "straddle">): number => Math.max(shape.sb, shape.bb, shape.straddle?.bb ?? 0);
+
 /** What an action put in the pot, in the tree's own blinds: the NL5 test stake's 0.4bb small-blind post is the
  *  NL200 game's 0.5 (PF-06 — the same pin shapeOf applies to the blind itself), everything else as recorded. */
 const putBb = (hand: ParsedHand, a: ParsedAction): number =>
@@ -326,6 +354,8 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   // the ANTE and the SITE'S RAKE ride on the shape only when the table has them (CoinPoker ring, 2026-09-30)
   const anteBb = hand.anteBb != null && hand.anteBb > 0 ? Math.round(hand.anteBb * 1000) / 1000 : 0;
   const siteRake = siteRakeOf(hand, dealtN);
+  // a largest post under 1 cannot be expressed: GTO Wizard rescales the posts to it and not the stacks (sizeTo)
+  if (Math.max(sb, bb) < 1) return { error: `the largest post is ${Math.max(sb, bb)}bb — GTO Wizard rescales a largest post under 1bb and not the stacks, so the tree cannot be written` };
   return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null,
     ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}), ...(stackCap ? { stackCap } : {}) };
 }
@@ -485,11 +515,13 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
         bet_sizes: [], raise_sizes: [], second_raise_sizes: [], third_plus_raise_sizes: [] };
     }
     const s = position === shape.heroApiPos ? m.hero : m.villain;
+    // every amount in chips, written as GTO Wizard reads it (sizeTo: N × the largest post — identity at a 1bb blind)
+    const unit = largestPostOf(shape);
     // calls of opens and cold-calls of 3-bets+ must be switched on explicitly in FIXED mode (the web app's own
     // defaults: ccVs2b on, ccVs3bPlus off — we want both, a fish's line is anything)
     return { position, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
-      bet_sizes: withAllIn(position, s.opens), raise_sizes: withAllIn(position, s.three),
-      second_raise_sizes: withAllIn(position, s.four), third_plus_raise_sizes: withAllIn(position, s.five) };
+      bet_sizes: sizesFor(withAllIn(position, s.opens), unit), raise_sizes: sizesFor(withAllIn(position, s.three), unit),
+      second_raise_sizes: sizesFor(withAllIn(position, s.four), unit), third_plus_raise_sizes: sizesFor(withAllIn(position, s.five), unit) };
   };
   return {
     starting_street: "PREFLOP", pot: shape.deadBb, ante: shape.anteBb || null, ante_distribution_method: "PER_PLAYER",
@@ -602,7 +634,7 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
 
 /** POST a preflop tree and its solution on the first account routing allows (the network half of ensureSolution, and
  *  what materialising a stored tree sends — the body exactly as stored). Records the owner. */
-async function postPreflopSolution(body: any, need: GtowNeed, solution: { actions: string; board: string }): Promise<{ solId: string } | { error: string }> {
+async function postPreflopSolution(body: any, need: GtowNeed, solution: { actions: string; board: string }, locks: readonly any[] = []): Promise<{ solId: string } | { error: string }> {
   // A recorded wall is a guess; when it leaves nothing routable, try the
   // walled sessions anyway rather than refusing the spot (see gtowApi).
   const ids = gtowSessions.route(need);
@@ -633,13 +665,85 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       continue;
     }
     const sol = await so.json();
-    const solId = String(sol.id);
+    let solId = String(sol.id);
+    // A LOCKED SOLVE IS A CHAIN (services/gtowSolveCache PostedTree.locks): each lock forks the solution before it, on
+    // the same account. A lock refused is a fact about the lock, not the account: no other account is tried.
+    for (const lock of locks) {
+      const lk = await postLock(id, token, solId, lock);
+      if ("error" in lk) return lk;
+      solId = lk.solId;
+    }
     owners.set(solId, id);
     if (owners.size > 400) owners.delete(owners.keys().next().value as string);
     gtowSessions.noteSuccess(id, { tree: true });
     return { solId };
   }
   return { error: last };
+}
+
+/** One NODE LOCK as GTO Wizard's own nodelock dialog sends it (scripts/_probePreflopNodeLock.ts): the locked node's line,
+ *  each action's per-combo frequency, which combos are held, and which earlier nodes on the street are frozen with it
+ *  (street_all: every one — probed 2026-10-04, scripts/_probeNodeLockStageA.ts `prev`; last_node: none, they re-solve;
+ *  street_current_player: the locked player's own). */
+export interface NodeLock {
+  action_history: string[];
+  strategy: { action: string; strategy: number[] }[];
+  hands_locked: boolean[];
+  previous_nodes_lock_type: "street_all" | "last_node" | "street_current_player";
+}
+
+/** One lock on the parent's account: POST /v4/custom-solutions/ {parent_solution_id, last_node_lock} → the child. */
+async function postLock(session: GtowSessionId, token: string, parent: string, lock: unknown): Promise<{ solId: string } | { error: string }> {
+  const r = await gtowRequests.fetch(session, "solution", `${API_BASE}/v4/custom-solutions/`, {
+    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ parent_solution_id: parent, last_node_lock: lock }), signal: AbortSignal.timeout(20_000),
+  });
+  const t = await r.text().catch(() => "");
+  if (!r.ok) {
+    gtowSessions.noteFailure(session, r.status, t.slice(0, 200), { preflop: true });
+    return { error: `node lock ${r.status}: ${t.slice(0, 200)}` };
+  }
+  try { const j = JSON.parse(t); if (j?.id) return { solId: String(j.id) }; } catch { /* below */ }
+  return { error: `node lock: no solution id in the reply (${t.slice(0, 120)})` };
+}
+
+const lockedSolutions = new Map<string, Promise<{ solId: string } | { error: string }>>();
+/**
+ * A NODE-LOCKED SOLUTION of `body`, already solved as `parentSolId`: every lock applied in turn, each forked from the one
+ * before. The solve cache keys it on the tree + every lock body (gtowSolveCache PostedTree.locks): a chain it holds is
+ * handed out as `gc:<key>` without a request, and a node it lacks re-POSTs tree, solution and locks (materialisePre).
+ * Otherwise the locks are POSTed on the parent's own account (a stored parent is materialised first).
+ */
+export async function lockedSolution(parentSolId: string, body: unknown, locks: readonly NodeLock[]): Promise<{ solId: string } | { error: string }> {
+  const ck = cacheKeyOf("pre", body, { actions: "", board: "" }, locks);
+  const memo = lockedSolutions.get(ck.key);
+  if (memo) return memo;
+  if (solveCache.enabled && solveCache.hasTree(ck.key)) return { solId: storedSolId(ck.key) };
+  const p = (async (): Promise<{ solId: string } | { error: string }> => {
+    let parent = parentSolId;
+    if (isStoredSolId(parent)) {
+      const m = await materialisePre(parent);
+      if ("error" in m) return m;
+      parent = m.solId;
+    }
+    const owner = owners.get(parent);
+    if (!owner) return { error: "node lock: the account that owns the parent solution is not known" };
+    const token = await gtowSessions.tokenFor(owner);
+    if (!token) return { error: `node lock: no GTO Wizard token for ${owner}` };
+    let solId = parent;
+    for (const lock of locks) {
+      const lk = await postLock(owner, token, solId, lock);
+      if ("error" in lk) return lk;
+      solId = lk.solId;
+    }
+    owners.set(solId, owner);
+    if (solveCache.enabled) { solveCache.noteTree(ck.key, "pre", ck.body); notePreKey(solId, ck.key); }
+    return { solId };
+  })();
+  lockedSolutions.set(ck.key, p);
+  p.then((r) => { if ("error" in r) lockedSolutions.delete(ck.key); }).catch(() => lockedSolutions.delete(ck.key));
+  if (lockedSolutions.size > 200) lockedSolutions.delete(lockedSolutions.keys().next().value as string);
+  return p;
 }
 
 // ── the persistent solve cache's preflop half (services/gtowSolveCache) ───────────────────────────────────────────
@@ -674,7 +778,7 @@ function materialisePre(gcId: string): Promise<{ solId: string } | { error: stri
     const stored = solveCache.treeBody(key);
     if (!stored || stored.kind !== "pre") return { error: `the solve cache no longer holds preflop tree ${key.slice(0, 8)} — ask again to solve it afresh` };
     const seats = Array.isArray(stored.tree?.players) ? stored.tree.players.length : 2;
-    const made = await postPreflopSolution(stored.tree, { multiway: seats > 2, preflop: true }, stored.solution);
+    const made = await postPreflopSolution(stored.tree, { multiway: seats > 2, preflop: true }, stored.solution, stored.locks ?? []);
     if ("error" in made) return made;
     preRealOf.set(gcId, made.solId);
     if (preRealOf.size > 400) preRealOf.delete(preRealOf.keys().next().value as string);
@@ -694,7 +798,7 @@ export function setPreflopSolveCache(c: GtowSolveCache | null): void {
 }
 /** Tests: forget every in-process solution, node and verdict — what an API restart does. */
 export function resetAiPreflopMemory(): void {
-  solutions.clear(); nodes.clear(); owners.clear(); terminals.clear();
+  solutions.clear(); nodes.clear(); owners.clear(); terminals.clear(); lockedSolutions.clear();
   preKeys.clear(); preRealOf.clear(); preMat.clear();
 }
 
@@ -1203,6 +1307,11 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     }
     snapped = fixed.changed;
     usedLine = fixed.line;
+    // A TREE WHOSE LARGEST POST IS NOT 1 lists its played sizes through sizeTo; a node named otherwise is not the size
+    // intended (the unit rule did not hold) — the tree is unusable, not answered from (none is built today)
+    if (largestPostOf(shape) !== 1 && snapped.length) {
+      return { ok: false, kind: TREE_REFUSED, line, reason: `GTO Wizard AI preflop: the tree named the line's sizes otherwise (${snapped.join(", ")}) — its largest post is ${largestPostOf(shape)}bb, so the sizes were not read as intended` };
+    }
     node = await fetchNode(sol.solId, fixed.line);
     if ("error" in node) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${fixed.line || "root"}' (walked from '${line}') — ${node.error}`, line };
@@ -1307,6 +1416,14 @@ export function warmPreflopGtowAi(hand: ParsedHand, heroPos: string | null): voi
 // tree — three trees given premiums, nothing, and 72o alone came back identical to the cent — so hero would be read
 // against any two cards; against exact answers it did worse than either heads-up tree.
 //
+// THE LOCKED TREE IS (2026-10-04, solveLockedLastResort below; utils/lockedHeadsUp): GTO Wizard's NODE LOCK — a new
+// solution forked from a solved one with a seat's strategy at one node fixed — does impose a range on a preflop tree
+// (scripts/_probePreflopNodeLock.ts: the next node reports exactly the locked range). So the last raise is an ACTION the
+// raiser takes, locked to his range on the exact tree, and hero is read behind it, priced as at the table (the folded
+// players' chips and a blind still to act are dead money there: with the raise locked they move nothing before hero's
+// node — measured beside a no-dead-money copy). It is asked first; the plain heads-up tree below answers when it does
+// not, within lockedDeadlineMs. Measured against exact answers in scripts/lastResortStudy.ts (its header).
+//
 // NOBODY HAS RAISED: the heads-up tree answers only for a hero in the blinds. From any other seat it hands him a
 // small blind's opening range (74s opened under the gun, hand 4920544810): no answer there.
 // ---------------------------------------------------------------------------
@@ -1398,9 +1515,32 @@ export function reduceToHeadsUp(hand: ParsedHand, heroPos: string | null): Heads
 export const lastResortSeams = {
   headsUp: (hand: ParsedHand, heroPos: string | null, why: string, opts: NonNullable<Parameters<typeof solvePreflopGtowAi>[3]>): Promise<AiPreflopOutcome> =>
     solvePreflopGtowAi(hand, heroPos, why, opts),
+  locked: (hand: ParsedHand, heroPos: string | null, why: string): Promise<AiPreflopOutcome> => solveLockedLastResort(hand, heroPos, why),
 };
 
-/** The last resort answer: the heads-up reduction solved as a plain GTO Wizard AI tree — no dead money (the header). */
+/** How long the LOCKED tree may take before the plain one answers (LAST_RESORT_LOCKED_MS; the tests shorten it). The
+ *  whole last resort must fit hero's clock: a locked answer is a tree, a solution, one or two node reads, one or two
+ *  locks and hero's node — 3-6 s measured; the plain tree is solved beside it from the start. */
+const lockedDeadlineMs = (): number => { const v = Number(process.env.LAST_RESORT_LOCKED_MS); return v > 0 ? v : 10_000; };
+/** THE LOCKED TREE SHIPS OFF (2026-10-04): it is asked only with LAST_RESORT_LOCKED=on (config/local.env; read at every
+ *  call). Measured far closer to exact answers than the plain tree (scripts/lastResortStudy.ts), but a locked solve
+ *  keeps its lock bodies in the GTO Wizard account's solution history, and whether that shows on Fair Play could not be
+ *  learned from public sources — the owner's check, then his switch. Off, the last resort is the plain tree alone. */
+export const lockedLastResortOn = (): boolean => /^(on|1|true|yes)$/i.test(process.env.LAST_RESORT_LOCKED?.trim() ?? "");
+
+/**
+ * The last resort answer. FIRST the LOCKED tree (2026-10-04, solveLockedLastResort): hero against the last raise, the
+ * raiser's raise locked to his range on the exact tree — scripts/lastResortStudy.ts measured it against exact answers
+ * (the header of that script). Within lockedDeadlineMs, else, or when it refuses, the PLAIN heads-up reduction — no dead
+ * money (the header above) — which is started beside it from the first moment. With nobody having raised only a hero
+ * in the blinds is answered, and only by the plain tree (there is no raise to lock). The locked tree is asked only
+ * with LAST_RESORT_LOCKED=on (lockedLastResortOn — it ships off); otherwise plain only.
+ *
+ * THE PREFLOP PIN: a locked answer sets none (the flop reads its ranges the ordinary way — arrivalRangesGtowAi — not
+ * from a tree where hero's range was every hand). The plain tree pins only when it is the answer: while the locked
+ * tree is still out its pin is held back, and when it then becomes the answer it is read once more (from memory, no
+ * request) to pin.
+ */
 export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string | null, why: string): Promise<AiPreflopOutcome> {
   const red = reduceToHeadsUp(hand, heroPos);
   if (!red) return { ok: false, reason: "last resort: hero's seat or the opponent's could not be read" };
@@ -1411,13 +1551,257 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
     return { ok: false, reason: `last resort: nobody has raised and hero (${red.heroPos}) is not in the blinds — the heads-up tree would give him a small blind's opening range from his seat, so there is no answer` };
   }
   const dealt = dealtCount(hand, heroPos);   // the players DEALT (a sitting-out label is not one — utils/dealtSeats)
-  const r = await lastResortSeams.headsUp(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, { deadBb: 0, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos } });
-  if (!r.ok) return { ok: false, kind: r.kind, reason: `last resort (hero vs ${red.aggressorPos}, ${red.droppedPos.join("/") || "nobody"} folded out): ${r.reason}` };
+  const tryLocked = raised && lockedLastResortOn();
+  let lockedOut = tryLocked;                 // the locked tree is still being asked: the plain tree holds its pin back
+  let plainPinSkipped = false;
+  const plainOpts = (pinNow: boolean) => ({ deadBb: 0, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos },
+    ...(pinNow ? {} : { skipPin: () => { const skip = lockedOut; if (skip) plainPinSkipped = true; return skip; } }) });
+  const plain = lastResortSeams.headsUp(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, plainOpts(false));
+  plain.catch(() => undefined);
+  let lockedWhy: string | null = null;
+  if (tryLocked) {
+    const ms = lockedDeadlineMs();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const late = new Promise<AiPreflopOutcome>((res) => { timer = setTimeout(() => res({ ok: false, reason: `locked tree: no answer within ${ms / 1000} s` }), ms); });
+    const locked = await Promise.race([
+      lastResortSeams.locked(hand, heroPos, why).catch((e): AiPreflopOutcome => ({ ok: false, reason: `locked tree threw: ${e instanceof Error ? e.message : e}` })),
+      late,
+    ]);
+    if (timer) clearTimeout(timer);
+    if (locked.ok) return locked;
+    lockedWhy = locked.reason;
+    lockedOut = false;
+  }
+  let r = await plain;
+  // the plain tree answered while the locked one was still out, so it did not pin: it is the answer now — pin it
+  if (r.ok && plainPinSkipped) r = await lastResortSeams.headsUp(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, plainOpts(true));
+  if (!r.ok) {
+    return { ok: false, kind: r.kind, reason: `last resort (hero vs ${red.aggressorPos}, ${red.droppedPos.join("/") || "nobody"} folded out): ${r.reason}` +
+      (lockedWhy ? `; before it, ${lockedWhy}` : "") };
+  }
   const left = Math.round(red.deadBb * 100) / 100;
   const note = `LAST RESORT — no tree holds this line, so it is played as hero (${red.heroPos}) against the last aggressor (${red.aggressorPos}) alone on a heads-up tree: ` +
     `${red.droppedPos.length ? `${red.droppedPos.join(", ")} folded out` + (left > 0 ? ` and NONE of the ${left}bb they put in is in the tree's pot (chips there before the first action are an ante and move every range — hero is priced tighter than the table)` : "") : "nobody else in the pot"}; ` +
-    `both seats play a heads-up blind's range, and the folded players' ranges and anyone still to act behind hero are not modelled. ` + r.note;
-  return { ...r, pos: red.heroPos, note, lastResort: { how: `hero (${red.heroPos}) vs ${red.aggressorPos} heads-up, ${red.droppedPos.join("/") || "nobody"} folded out, no dead money` } };
+    `both seats play a heads-up blind's range, and the folded players' ranges and anyone still to act behind hero are not modelled.` +
+    (lockedWhy ? ` The locked tree (the raiser's range imposed) did not answer: ${lockedWhy.replace(/^locked tree:\s*/, "")}.` : "") + ` ` + r.note;
+  return { ...r, pos: red.heroPos, note, lastResort: { how: `hero (${red.heroPos}) vs ${red.aggressorPos} heads-up, ${red.droppedPos.join("/") || "nobody"} folded out, no dead money` +
+    (lockedWhy ? " (plain tree: the locked one did not answer)" : "") } };
+}
+
+// ---------------------------------------------------------------------------
+// THE LOCKED LAST RESORT (2026-10-04) — hero against the last raise on a heads-up tree where the raise is an ACTION
+// the raiser takes, NODE-LOCKED to his range as the exact tree plays it up to that raise. The plan (seating, posts,
+// the pot, units) is utils/lockedHeadsUp; the lock request is scripts/_probePreflopNodeLock.ts. Why: GTO Wizard
+// ignores `players[].range` on a preflop tree, so every heads-up reduction before this read the raiser as a heads-up
+// blind (the plain tree) or as any two cards (a forced bet) — a lock is the one input that holds.
+// ---------------------------------------------------------------------------
+
+/** the size menu of raise level `lv` of the table's line (1 = the open) */
+const defaultsAt = (lv: number): string[] => (lv <= 1 ? OPENS : lv === 2 ? THREE_BETS : lv === 3 ? FOUR_BETS : FIVE_PLUS);
+
+/** The locked heads-up tree's body: the plan's posts, stacks and pot; the raiser's first raise is the table's raise,
+ *  listed alone (beside his all-in); hero's re-raise and everything after it use the menus of the table's next levels. */
+export function lockedTreeBody(plan: LockedPlan, rake: Pick<AiPreflopShape, "rakeCapBb" | "siteRake">) {
+  // every amount through sizeTo (N × the largest post: hero's, never under 1 — utils/lockedHeadsUp); an all-in is the
+  // deeper stack (a size past a seat's stack IS its all-in)
+  const allIn = sizeTo(Math.max(plan.stacks.SB, plan.stacks.BB), plan.unit);
+  const raiseList = lockedRaiseIsAllIn(plan) ? [allIn] : [sizeTo(plan.raiseToTree, plan.unit), allIn];
+  const entry = (t: TreeSeat) => {
+    const raiser = t === plan.raiserTree;
+    const later = [...defaultsAt(plan.raiseLevel + (raiser ? 2 : 1)), allIn];
+    return { position: t, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
+      bet_sizes: raiser ? raiseList : [], raise_sizes: raiser ? raiseList : later, second_raise_sizes: later, third_plus_raise_sizes: later };
+  };
+  return {
+    starting_street: "PREFLOP", pot: plan.pot, ante: null, ante_distribution_method: "PER_PLAYER", max_allowed_limps: null,
+    bet_sizes: { ...TREE_SETTINGS, max_num_raises: 5, street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: (["SB", "BB"] as TreeSeat[]).map(entry) }] },
+    players: (["SB", "BB"] as TreeSeat[]).map((t) => ({
+      position: t, display_position: t, blind: plan.posts[t], range: null, stack: plan.stacks[t], tournament_instant_bounty: null, tournament_total_bounty: null,
+    })),
+    tree_operations: [], resolving_policy: null,
+    rake: rake.siteRake
+      ? { pct_of_pot: rake.siteRake.pct, cap_in_chips: rake.siteRake.capBb, preflop_rake_type: rake.siteRake.preflopType }
+      : { pct_of_pot: 5, cap_in_chips: rake.rakeCapBb, preflop_rake_type: "no_flop_no_drop" },
+    tournament_data: null,
+  };
+}
+
+/** the raiser's raise is his all-in, or covers hero: the tree names it as the all-in */
+const lockedRaiseIsAllIn = (plan: LockedPlan) => plan.raiserAllIn || plan.raiseToTree >= Math.min(plan.stacks.SB, plan.stacks.BB) - 0.01;
+
+/** The raiser's action at his node: the all-in when his raise is one, else the raise AT his size — GTO Wizard names a
+ *  listed amount to the cent; a node named otherwise means the size was not read as intended, and the tree is not used. */
+export function raiseCodeAt(sols: any[], plan: LockedPlan): string | null {
+  if (lockedRaiseIsAllIn(plan)) {
+    // the all-in GTO Wizard flags, else (with a pot it never flags one — utils/lockedHeadsUp) the largest raise
+    const flagged = sols.find((a) => a?.action?.allin === true);
+    if (flagged) return String(flagged.action.code);
+    const raises = sols.filter((a) => /^R/i.test(String(a?.action?.code ?? "")));
+    return raises.length ? String(raises.reduce((x, y) => (codeNum(y.action.code) > codeNum(x.action.code) ? y : x)).action.code) : null;
+  }
+  let best: any = null;
+  for (const a of sols) {
+    if (!isRaiseCode(a)) continue;
+    if (!best || Math.abs(codeNum(a.action.code) - plan.raiseToTree) < Math.abs(codeNum(best.action.code) - plan.raiseToTree)) best = a;
+  }
+  return best && Math.abs(codeNum(best.action.code) - plan.raiseToTree) <= 0.015 ? String(best.action.code) : null;
+}
+
+const lockOf = (line: string, sols: any[], w: (code: string) => number[] | number): NodeLock => ({
+  action_history: [line],
+  strategy: sols.map((a) => {
+    const code = String(a?.action?.code ?? "");
+    const v = w(code);
+    return { action: code, strategy: typeof v === "number" ? new Array<number>(1326).fill(v) : v };
+  }),
+  hands_locked: new Array<boolean>(1326).fill(true),
+  previous_nodes_lock_type: "street_all",
+});
+
+/** What the locked last resort asks of the outside (a test replaces it). */
+export const lockedSeams = {
+  /** read the raiser on a line FITTED for him even where the exact tree holds it (lastRaiseReads' fitOnly) — what a
+   *  real last resort meets; scripts/lastResortStudy.ts sets it to score that case */
+  fitOnly: false,
+  node: (solId: string, line: string): Promise<NodeRead> => fetchNode(solId, line),
+  solve: (key: string, body: any): Promise<{ solId: string } | { error: string }> => ensureSolution(key, body, { preflop: true }),
+  lock: (parent: string, body: any, locks: NodeLock[]): Promise<{ solId: string } | { error: string }> => lockedSolution(parent, body, locks),
+  /** the raiser's 1,326 weights as the exact tree plays him up to and including his raise (null: cannot be read) */
+  raiserRange: async (hand: ParsedHand, heroPos: string | null, plan: LockedPlan): Promise<{ w: number[]; how: string } | null> => {
+    const shape = shapeOf(hand, heroPos);
+    if ("error" in shape) return null;
+    const { tokens, levels } = lineOf(hand, shape);
+    const m = menus(levels, shape.n);
+    const sol = await ensureSolution(treeKeyOf(shape, m), treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
+    if ("error" in sol) return null;
+    const reads = lastRaiseReads(sol.solId, shape, tokens, { fitOnly: lockedSeams.fitOnly });
+    const rs = await startRangeOf(hand, plan.raiserSeat, plan.raiserPos, plan.raiseIndex, reads.before);
+    const f = await reads.raiseFilter(plan.raiserPos).catch(() => null);
+    if (!f) return null;
+    const clamp = (x: unknown) => Math.max(0, Math.min(1, Number(x ?? 0) || 0));
+    const w = normalisedCombos((rs.combos ?? new Array<number>(1326).fill(1)).map((x, i) => x * clamp(f[i])));
+    return w ? { w, how: `${rs.how}, then the share of it that makes the raise there` } : null;
+  },
+  rake: (hand: ParsedHand, heroPos: string | null): Pick<AiPreflopShape, "rakeCapBb" | "siteRake" | "anteBb"> | null => {
+    const shape = shapeOf(hand, heroPos);
+    return "error" in shape ? null : { rakeCapBb: shape.rakeCapBb, siteRake: shape.siteRake, anteBb: shape.anteBb };
+  },
+};
+
+/**
+ * THE LAST RESORT ON A LOCKED TREE: hero against the last raise, the raiser's raise locked to his range on the exact
+ * tree (lockedSeams.raiserRange — startRangeOf × the exact tree's share of it that raises, as the reduced arrival tree
+ * reads its raiser). `dead: false` leaves every chip but the two players' own out of the pot (the study's comparison).
+ * No preflop pin: the flop reads its ranges the ordinary way (arrivalRangesGtowAi), not from this tree.
+ */
+export async function solveLockedLastResort(hand: ParsedHand, heroPos: string | null, why: string, opts: { dead?: boolean } = {}): Promise<AiPreflopOutcome> {
+  const t0 = Date.now();
+  const no = (reason: string): AiPreflopOutcome => ({ ok: false, reason: reason.startsWith("locked tree") ? reason : `locked tree: ${reason}` });
+  const plan = planLockedHeadsUp(hand, heroPos, { dead: opts.dead });
+  if (!plan.ok) return plan;
+  const heroIdx = hand.heroCards?.length === 2 ? comboIndex(hand.heroCards[0]!, hand.heroCards[1]!) : null;
+  if (heroIdx == null) return no("hero's cards are not known");
+  const rake = lockedSeams.rake(hand, heroPos);
+  if (!rake) return no("the table's shape could not be read");
+  if (rake.anteBb) return no("a table with an ante is not modelled");
+  const range = await lockedSeams.raiserRange(hand, heroPos, plan);
+  if (!range) return no(`${plan.raiserPos}'s raise to ${plan.raiseTo}bb cannot be read on the exact tree, so there is no range to lock`);
+  const w = range.w;
+  const body = lockedTreeBody(plan, rake);
+  const parent = await lockedSeams.solve(`locked|${Bun.hash(JSON.stringify(body)).toString(36)}`, body);
+  if ("error" in parent) return no(parent.error);
+  const read = async (solId: string, line: string, actor: TreeSeat): Promise<{ error: string } | { sols: any[]; cached: boolean; stored: boolean; data: any }> => {
+    const n = await lockedSeams.node(solId, line);
+    if ("error" in n) return { error: `node '${line || "root"}': ${n.error}` };
+    const who = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+    if (who !== actor) return { error: `node '${line || "root"}' puts ${who} on the clock, not ${actor}` };
+    return { sols: (n.data?.action_solutions ?? []) as any[], cached: !!n.cached, stored: !!n.stored, data: n.data };
+  };
+  const passiveOf = (sols: any[]) =>
+    String(sols.find((a) => /^F/i.test(String(a?.action?.code)))?.action?.code ?? sols.find((a) => /^X/i.test(String(a?.action?.code)))?.action?.code ?? "");
+  const codes = (sols: any[]) => sols.map((a) => a.action.code).join("/");
+  const locks: NodeLock[] = [];
+  let heroLine: string;
+  if (!plan.heroFirst) {
+    const root = await read(parent.solId, "", plan.raiserTree);
+    if ("error" in root) return no(root.error);
+    const rc = raiseCodeAt(root.sols, plan), pass = passiveOf(root.sols);
+    if (!rc || !pass) return no(`the raiser's root offers no ${rc ? "fold or check" : `raise to ${plan.raiseToTree}`} (${codes(root.sols)})`);
+    locks.push(lockOf("", root.sols, (code) => (code === rc ? w : code === pass ? w.map((x) => 1 - x) : 0)));
+    heroLine = rc;
+  } else {
+    const root = await read(parent.solId, "", plan.heroTree);
+    if ("error" in root) return no(root.error);
+    // hero's passive action costs him nothing: a check, or — with posts equal, where GTO Wizard still offers the small
+    // blind fold/call — the call of nothing
+    const even = Math.abs(plan.posts[plan.heroTree] - plan.posts[plan.raiserTree]) < 0.005;
+    const x = String(root.sols.find((a) => /^X/i.test(String(a?.action?.code)))?.action?.code
+      ?? (even ? root.sols.find((a) => /^C$/i.test(String(a?.action?.code)))?.action?.code : null) ?? "");
+    if (!x) return no(`hero's root offers no check (${codes(root.sols)})`);
+    locks.push(lockOf("", root.sols, (code) => (code === x ? 1 : 0)));
+    const at = await read(parent.solId, x, plan.raiserTree);
+    if ("error" in at) return no(at.error);
+    const rc = raiseCodeAt(at.sols, plan), pass = passiveOf(at.sols);
+    if (!rc || !pass) return no(`the raiser's node offers no ${rc ? "fold or check" : `raise to ${plan.raiseToTree}`} (${codes(at.sols)})`);
+    locks.push(lockOf(x, at.sols, (code) => (code === rc ? w : code === pass ? w.map((v) => 1 - v) : 0)));
+    heroLine = `${x}-${rc}`;
+  }
+  const locked = await lockedSeams.lock(parent.solId, body, locks);
+  if ("error" in locked) return no(locked.error);
+  const hn = await read(locked.solId, heroLine, plan.heroTree);
+  if ("error" in hn) return no(hn.error);
+  // HERO IS PRICED AS AT THE TABLE, or there is no answer: the chips on the table at his node are his post and the raise
+  // (as a pair — GTO Wizard shows a small blind that posted more under the big blind's name; an all-in that covers hero
+  // is named by the raiser's own stack, so anything from hero's stack up is the shove)
+  const chips = (["SB", "BB"] as TreeSeat[]).map((t) => Number(hn.data?.game?.players?.find((p: any) => p.position === t)?.chips_on_table ?? NaN)).sort((x, y) => x - y);
+  const want = [plan.posts[plan.heroTree], lockedRaiseIsAllIn(plan) ? Math.min(plan.stacks.SB, plan.stacks.BB) : plan.raiseToTree].sort((x, y) => x - y);
+  // (a seat that has only posted is shown in units of the big blind's post — even posts of 2.6 show hero at 1 — so his
+  // post may read either way; a raise is shown in chips)
+  const near = (x: number, y: number) => Math.abs(x - y) <= Math.max(0.02, y * 0.005);
+  const heroShown = [plan.posts[plan.heroTree], plan.posts[plan.heroTree] / Math.max(plan.posts.SB, plan.posts.BB)];
+  const raiseShown = (x: number) => (lockedRaiseIsAllIn(plan) ? x >= want[1]! - 0.02 : near(x, want[1]!));
+  const priced = chips.some((c, k) => heroShown.some((h) => near(c, h)) && raiseShown(chips[1 - k]!));
+  if (!priced) return no(`hero's node is not priced as the table (chips on it ${chips.join(" / ")}, expected ${want.map((x) => Math.round(x * 100) / 100).join(" / ")})`);
+  // hero's mix in percent; a raise named at the table's size (the shift taken back out)
+  const label = (a: any) => {
+    const l = labelOf(a);
+    const m = /^Raise (\d+(?:\.\d+)?)$/.exec(l);
+    return m && plan.shift ? `Raise ${Math.round((Number(m[1]) - plan.shift) * 100) / 100}` : l;
+  };
+  let actions = hn.sols.map((a) => ({ action: label(a.action), frequency: Number(a.strategy?.[heroIdx] ?? 0) }));
+  const sum = actions.reduce((t, a) => t + a.frequency, 0);
+  if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
+  actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
+  const raiserCombos = Math.round(w.reduce((t, x) => t + x, 0));
+  const shape: AiPreflopShape = {
+    n: 2, apiOf: { [plan.heroPos]: plan.heroTree, [plan.raiserPos]: plan.raiserTree }, seatOf: { [plan.heroTree]: plan.heroSeat, [plan.raiserTree]: plan.raiserSeat },
+    positions: ["SB", "BB"], stacks: { ...plan.stacks }, sb: plan.posts.SB, bb: plan.posts.BB, straddle: null, rakeCapBb: rake.rakeCapBb,
+    deadSb: false, deadBb: plan.pot, heroApiPos: plan.heroTree, ...(rake.siteRake ? { siteRake: rake.siteRake } : {}),
+  };
+  const ip = plan.heroTree === "SB" ? plan.heroPos : plan.raiserPos;
+  const r2n = (x: number) => Math.round(x * 100) / 100;
+  const dead = opts.dead === false ? 0 : plan.deadBb;
+  const from = [plan.foldedPos.length ? `${plan.foldedPos.join(", ")} (folded)` : "", plan.blindsBehindPos.length ? `${plan.blindsBehindPos.join(", ")} (a blind still to act)` : ""].filter(Boolean).join(" and ");
+  const left = [
+    plan.livePos.length ? `${plan.livePos.join(", ")} still in the hand (left out, with their chips)` : "",
+    plan.toActPos.length ? `${plan.toActPos.join(", ")} still to act behind hero` : "",
+    "the folded players' ranges",
+  ].filter(Boolean);
+  const how = `hero (${plan.heroPos}) vs ${plan.raiserPos}'s raise to ${plan.raiseTo}bb heads-up, the raise locked to his range (${raiserCombos} combos)` +
+    (dead > 0 ? `, ${r2n(dead)}bb dead` : ", no dead money");
+  const secs = (Date.now() - t0) / 1000;
+  const note = `LAST RESORT, LOCKED TREE — no tree holds this line, so hero (${plan.heroPos}) is played against the last raise alone: ` +
+    `${plan.raiserPos} raised to ${plan.raiseTo}bb, and on a heads-up tree (${ip} in position) that raise is an action LOCKED to his range — ` +
+    `${range.how} (${raiserCombos} combos) — so hero's node is solved against exactly that range. Hero's own range there is every hand (his earlier actions are not applied). ` +
+    `Priced as at the table: hero has ${plan.heroIn}bb in and ${r2n(plan.raiseTo - plan.heroIn)}bb to call; ` +
+    (dead > 0 ? `${r2n(dead)}bb dead in the pot from ${from}` : "no dead money in the pot") +
+    (plan.potOver > 0 ? ` (the tree's pot is ${plan.potOver}bb bigger than that: both posts shifted under GTO Wizard's 250bb unit rule)` : "") +
+    `. Not modelled: ${left.join("; ")}. Solved in ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}. Why: ${why}.`;
+  return {
+    ok: true, actions, decision: actions.length ? pickWeightedAction(actions) : null, line: heroLine, pos: plan.heroPos, heroClass: heroClass(hand.heroCards),
+    treeKey: `locked|${plan.heroPos}-${plan.raiserPos}`, solId: locked.solId, usedLine: heroLine, solveSecs: secs, cached: hn.cached,
+    ...(hn.stored ? { stored: true } : {}), shape, note, lastResort: { how },
+  };
 }
 
 /** The exact request a hand would produce (for tests and the state tester — nothing is sent). */
