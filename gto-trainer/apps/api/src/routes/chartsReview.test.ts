@@ -113,6 +113,7 @@ describe("chart review routes", () => {
     expect(ch).toMatchObject({ ok: true, liveRaw: RAW_A, staleSummary: false });
     const node = await (await chartsReviewRoutes.request(`/node/${A}?line=`)).json();
     expect(node.node.cells.find((c: any) => c.hand === "AA").actions).toEqual({ "Raise 2.5": 100 });
+    expect(node.guard).toMatchObject({ applies: process.env.TRUST_GUARD_ALL === "1", starved: false });   // the live guard's verdict rides along
     expect((await chartsReviewRoutes.request(`/node/ign200_6max_not_baked?line=`)).status).toBe(404);
     const wrong = await chartsReviewRoutes.request("/review", { method: "POST", body: JSON.stringify({ chartId: A, raw: "f".repeat(64), verdict: "ok" }) });
     expect(wrong.status).toBe(409);

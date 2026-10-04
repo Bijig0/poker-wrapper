@@ -5,6 +5,7 @@ import { factoryFile } from "../services/repoPaths";
 import { hrc6maxDb } from "../services/hrc6maxDb";
 import { solveRegister } from "../services/solveRegister";
 import { chartReviews } from "../services/chartReviews";
+import { guardApplies, nodeTrust } from "../services/nodeTrust";
 
 /**
  * THE CHART REVIEW PAGE's data (2026-10-04): /sources/charts-review. Brady goes through all live 6-max charts by hand
@@ -65,7 +66,12 @@ export const chartsReviewRoutes = new Hono()
     const n = hrc6maxDb.node(id, line);
     if (n === undefined) return c.json({ ok: false, error: `${id} is not baked here` }, 404);
     if (n === null) return c.json({ ok: false, error: `no node ${line || "(root)"} in ${id}` }, 404);
-    return c.json({ ok: true, line, node: n, trust: hrc6maxDb.trust(id, line) ?? null });
+    // THE GUARD'S OWN VERDICT, not the page's reading of two numbers (2026-10-04): a pool-locked tree is judged by reach
+    // with only a catastrophic regret refusing, and whether the raise charts are guarded at all is this machine's
+    // TRUST_GUARD_ALL - the page shows what services/nodeTrust would decide for a live decision at this node.
+    const g = nodeTrust(id, line);
+    return c.json({ ok: true, line, node: n, trust: hrc6maxDb.trust(id, line) ?? null,
+      guard: { applies: guardApplies(id), known: g.known, starved: g.starved, why: g.why } });
   })
   .post("/review", async (c) => {
     let b: any;

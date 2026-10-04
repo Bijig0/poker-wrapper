@@ -197,7 +197,7 @@ async function spot(id, toks) {
     acted.add(p);
     steps.push({ pos: p, label: labs[0] ?? t });
   });
-  return { node: got[got.length - 1].node, trust: got[got.length - 1].trust, stack, put, folded, acted, steps, w };
+  return { node: got[got.length - 1].node, trust: got[got.length - 1].trust, guard: got[got.length - 1].guard, stack, put, folded, acted, steps, w };
 }
 const crumbText = (steps) => steps.length ? steps.map((x) => `${x.pos} ${x.label}`).join(" › ") : "root";
 /** a node's cells as classGrid's classes, each hand weighted by `wt` (its share still in range) */
@@ -251,12 +251,17 @@ async function renderPlay() {
       hero = `<div class="nv-hero"><span class="big">${esc(W.hero)}</span> <span class="sub">— the chart says</span> ${mine.length ? mine.map(([a, p]) => `<b>${esc(a)}</b> ${p.toFixed(1)}%`).join(" · ") : "nothing: this hand is not in the node"}
         <div class="sub">${wA[W.hero] < 0.005 ? `${esc(n.pos)} never gets here with ${esc(W.hero)} on this line — the mix above is noise the solver did not train` : `${esc(n.pos)} gets here with ${(100 * wA[W.hero]).toFixed(0)}% of its ${esc(W.hero)}`}</div></div>`;
     }
-    const t = s.trust, starved = t && ((t.reach != null && t.reach < 1e-4) || t.regret > 0.03);
+    // the verdict is the live guard's own (services/nodeTrust, sent with the node): pool-locked trees are judged by reach, and
+    // whether raise charts are guarded at all is this machine's setting - the page does not re-derive it from the two numbers
+    const t = s.trust, g = s.guard;
+    const verdict = !g ? "–" : g.starved ? `<span class="chip bad" title="${esc(g.why ?? "")}">refused — live asks GTO Wizard AI preflop</span>`
+      : !g.applies ? '<span class="chip dim" title="the guard is not switched on for this chart family on this machine">not guarded — answers from here</span>'
+      : g.known ? '<span class="chip good">answers live from here</span>' : '<span class="chip dim">no score — answers unguarded</span>';
     const fact = (k, v) => `<div class="f"><span class="k">${k}</span><span>${v}</span></div>`;
     const facts = `<div class="nv-facts">${fact("in the middle", `${bb(POS.reduce((a, p) => a + s.put[p], 0))}bb`)}${fact("to call", toCall > 0 ? `${bb(toCall)}bb` : "nothing")}
       ${fact("range arriving", pct(shareOf(wA)))}${fact("reach of this node", t?.reach == null ? "–" : t.reach < 0.001 ? t.reach.toExponential(1) : pct(t.reach, 2))}
       ${fact("regret here", t ? `${t.regret.toFixed(4)} bb` : "not scored")}
-      ${fact("trust guard", !t ? "–" : starved ? '<span class="chip bad" title="reach under 1e-4 or regret over 0.03: live play does not answer from this node, it asks the exact tree">starved — live asks the exact tree</span>' : '<span class="chip good">answers live from here</span>')}
+      ${fact("trust guard", verdict)}
       ${n.pruned ? fact("pruned", esc(n.pruned)) : ""}</div>`;
     body = `<div class="play2"><div class="gridwrap">${classGrid(clsOf(cells, labels, W.flat ? null : wA), labels, W.hero, { openHero: false,
         foot: W.flat ? "every hand the chart holds at this node, at full height · hover for the mix" : "fill height = how much of the hand gets here · hover for the mix" })}</div>
