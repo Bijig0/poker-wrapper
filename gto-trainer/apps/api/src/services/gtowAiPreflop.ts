@@ -50,7 +50,9 @@ import { comboIndex, toClassWeights, COMBOS } from "../utils/comboIndex/comboInd
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 import { rakeCapCents } from "./profiles";
 import { isTestStakeOf } from "./strategies";
-import { actorsWithAllins, foldEarliestCaller } from "../utils/fitLine/fitLine";
+import { actorsWithAllins, foldEarliestCaller, foldableCallers, foldSeatsOut } from "../utils/fitLine/fitLine";
+import { blendFitMixes, type MixAction } from "../utils/fitBlend/fitBlend";
+import { isOffTree, offTreeStats, pctOf } from "./offTree";
 import { setPreflopPin, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
 // THE REDUCED TREE (2026-10-01, utils/reducedArrival): flop-entering ranges for a line no tree holds
 import {
@@ -171,7 +173,17 @@ export interface AiPreflopResult {
   stored?: boolean;
   shape: AiPreflopShape;
   note: string;
+  /** a FITTED answer only: every fit hero's node was read on (the seats folded out, the line, hero's mix there in
+   *  percent) — more than one means `actions` is their blend (utils/fitBlend) */
+  fits?: AiFitRead[];
+  /** a FITTED answer only: each villain action on the fitted line(s), with its share of that seat's range at its node
+   *  in this tree — check #3's material (an action the tree all but never takes leaves hero's node off its path) */
+  villainLines?: PreflopVillainLine[];
 }
+/** One fit of a line the tree cannot hold, as hero's node was read on it. */
+export interface AiFitRead { folds: string[]; line: string; actions: MixAction[]; offPath: boolean }
+/** One villain action on a line hero's preflop node was read at: how much of his range takes it at that node. */
+export interface PreflopVillainLine { seat: string; code: string; line: string; nodeFreq: number; maxHand: number; offTree: boolean }
 /**
  * A refusal's `kind` names the CLASS of failure when the caller should treat it differently from "the cloud
  * could not answer". CAPTURE_FAULT (PF-26, 2026-09-23): GTO Wizard rejected the line itself with 400
@@ -944,6 +956,8 @@ async function repairLine(solId: string, tokens: string[], opts: { end?: boolean
  * no chart of ours holds either (the esoteric stress run's eso-14). Same rule as the charts (utils/fitLine): fold the
  * earliest plain limper or caller who is not hero and does not raise later, drop his later actions, walk again.
  * Returns the walked line and who was folded, or null when no fold makes it walkable.
+ * Since 2026-10-04 this ONE fit serves the per-seat range walks and the line view only; hero's own decision reads
+ * every fit (fitAiLines) and blends them.
  */
 async function fitAiLine(solId: string, tokens: string[], shape: AiPreflopShape, keep: string[] = [], maxFolds = 4, keepHero = true):
     Promise<{ line: string; changed: string[]; folds: string[]; tokens: string[] } | null> {
@@ -962,6 +976,64 @@ async function fitAiLine(solId: string, tokens: string[], shape: AiPreflopShape,
   return null;
 }
 
+/** A fit of a line: the tree's own codes for it, the sizes it renamed, the seats folded out, the tokens walked. */
+type AiFit = { line: string; changed: string[]; folds: string[]; tokens: string[] };
+/** at most this many fits are walked per fold count (each is node reads on the solved tree) */
+const MAX_FITS = 6;
+
+/**
+ * EVERY FIT, NOT THE FIRST (2026-10-04, hand 4922379136). fitAiLine folds the EARLIEST caller and stops — usually the
+ * cold-caller, the tightest range at the table and the one hero's answer depends on most (utils/fitBlend has the
+ * numbers). Here each foldable caller is folded in turn (never hero, never a seat that raises later), and every line
+ * the tree then holds comes back; only when no single fold fits are two folded, and so on. The fewest folds win: a
+ * fit with two players removed is not read beside one with one removed. All on the SAME solved tree — the walks share
+ * their prefix nodes, a fit costs the few nodes past its fold.
+ */
+async function fitAiLines(solId: string, tokens: string[], shape: AiPreflopShape, maxFolds = 4): Promise<AiFit[]> {
+  const keep = new Set([shape.heroApiPos].filter(Boolean).map((x) => x!.toUpperCase()));
+  const cands = foldableCallers(tokens, { keep, stack: shape.stacks, seats: shape.positions });
+  const subsets = (k: number, from = 0): string[][] =>
+    k === 0 ? [[]] : cands.slice(from).flatMap((c, i) => subsets(k - 1, from + i + 1).map((rest) => [c, ...rest]));
+  for (let k = 1; k <= Math.min(maxFolds, cands.length); k++) {
+    const tries = subsets(k).slice(0, MAX_FITS).map((folds) => ({ folds, cur: foldSeatsOut(tokens, folds, shape.stacks, shape.positions) }));
+    const walked = await Promise.all(tries.map((t) => repairLine(solId, t.cur, { end: true })));
+    const fits = walked.flatMap((r, i) => ("error" in r ? [] : [{ ...r, folds: tries[i]!.folds, tokens: tries[i]!.cur }]));
+    if (fits.length) return fits;
+    // a real failure (a node that cannot be read), not the tree's cap: folding more will not help
+    if (!walked.some((r) => "error" in r && /is not offered/.test(r.error))) return [];
+  }
+  return [];
+}
+
+/**
+ * EACH VILLAIN ACTION ON A FITTED LINE, AGAINST THE TREE'S OWN PLAY (2026-10-04, check #3 for preflop). The dead-money
+ * tree answered hero at a node its own strategies never reach: the opener's raise was 0.06% of his range there. The
+ * walk already read every prefix node; this reads them back (cached) and scores each villain action the way the
+ * postflop chain does (services/offTree: under 1% of his range at the node and no hand above 2%). Preflop every seat
+ * acts on its whole range the first time, and on what its earlier actions left after that.
+ */
+async function villainLinesOf(solId: string, codes: string[], shape: AiPreflopShape): Promise<PreflopVillainLine[]> {
+  const out: PreflopVillainLine[] = [];
+  const weights = new Map<string, number[]>();
+  for (let k = 0; k < codes.length; k++) {
+    const at = codes.slice(0, k).join("-");
+    const node = await fetchNode(solId, at, { once: true });
+    if ("error" in node) break;
+    const sols: any[] = node.data?.action_solutions ?? [];
+    const actor: string | null = node.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+    const taken = sols.findIndex((a) => String(a?.action?.code ?? "") === codes[k]);
+    if (!actor || taken < 0) break;
+    const range = weights.get(actor) ?? new Array<number>(1326).fill(1);
+    const f: number[] = sols[taken]?.strategy ?? [];
+    if (actor !== shape.heroApiPos && codes[k] !== "F") {
+      const st = offTreeStats(range, sols, taken);
+      out.push({ seat: actor, code: codes[k]!, line: at, nodeFreq: st.nodeFreq, maxHand: st.maxHand, offTree: isOffTree(st) });
+    }
+    weights.set(actor, range.map((w, i) => w * (f[i] ?? 0)));
+  }
+  return out;
+}
+
 function labelOf(action: any): string {
   const type = String(action?.type ?? action?.display_name ?? "").toUpperCase();
   const bb = Number(action?.betsize);
@@ -971,6 +1043,27 @@ function labelOf(action: any): string {
   if (type.startsWith("CALL")) return "Call";
   if (type.startsWith("RAISE") || type.startsWith("BET")) return Number.isFinite(bb) && bb > 0 ? `Raise ${Math.round(bb * 100) / 100}` : "Raise";
   return String(action?.code ?? type ?? "?");
+}
+
+/** a mix as PERCENT, rounded, the actions hero never takes left out (what the answer and its trail show) */
+const pctMix = (mix: MixAction[]): MixAction[] => {
+  const sum = mix.reduce((t, a) => t + (a.frequency > 0 ? a.frequency : 0), 0) || 1;
+  return mix.map((a) => ({ action: a.action, frequency: Math.round((a.frequency / sum) * 10000) / 100 })).filter((a) => a.frequency > 0.05);
+};
+const mixText = (mix: MixAction[]): string => pctMix(mix).map((a) => `${a.action} ${a.frequency.toFixed(0)}%`).join(" / ") || "no action";
+
+/** The answer's note for a fitted line. It keeps the registered opening (services/approximations `warn`). */
+export function fitNote(fits: AiFitRead[], villainLines: PreflopVillainLine[]): string {
+  const who = (f: AiFitRead) => f.folds.join(" and ");
+  const off = villainLines.filter((l) => l.offTree);
+  return `LINE FITTED TO THE TREE: GTO Wizard's tree takes three players to a flop at most, so it cannot hold every limper or caller of this line. ` +
+    (fits.length > 1
+      ? `Hero's node was read on ${fits.length} fits of it, each with one of them folded out (${fits.map((f) => `${who(f)} folded: ${mixText(f.actions)}`).join(" · ")}), ` +
+        `and the mixes blended to the TIGHTEST: fold as often as the most folding fit, raise as often as the least raising one.`
+      : `Hero's node was read with ${who(fits[0]!)}'s limp/call folded out (${mixText(fits[0]!.actions)}) — the only fit the tree holds.`) +
+    ` Same tree, no dead money: every fit has one player fewer than the table and none of his chips, and still leans loose` +
+    ` (measured 2026-10-04 one player down: 7% of hands continue that the true spot folds).` +
+    (off.length ? ` OFF THE TREE'S PATH: ${off.map((l) => `${l.seat}'s ${l.code} at "${l.line || "root"}" is ${pctOf(l.nodeFreq)} of his range in this tree`).join("; ")} — the ranges behind it are the solver's model of a mistake.` : "");
 }
 
 /**
@@ -992,9 +1085,9 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const key = treeKeyOf(shape, m);
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
   if ("error" in sol) return { ok: false, reason: `GTO Wizard AI preflop: ${sol.error}`, line };
-  // the solution and the line hero's node was finally read on (a fit re-builds the tree with dead money and
-  // walks a repaired line) — what the preflop pin records for the flop to resume from
-  let usedSol = sol.solId;
+  // the solution and the line hero's node was finally read on (sizes snapped to the tree's own; a fitted line is the
+  // leading fit's, on this same solution) — what the preflop pin records for the flop to resume from
+  const usedSol = sol.solId;
   let usedLine = line;
   // THE TREE IS ASKED WHAT IT CALLS THE LINE WHILE HERO'S NODE IS ASKED FOR BY THE NAME WE GAVE IT (2026-10-02, hand
   // 4922086187). The walk below used to start only when GTO Wizard REFUSED the address (NODE_DOES_NOT_EXIST) — and a
@@ -1030,8 +1123,13 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     }
   }
   let snapped: string[] = [];
-  let fittedFolds: string[] = [];
-  let deadNote = "";
+  /** a fitted answer: every fit read (hero's mix on each), and the villain actions on their lines */
+  let fitReads: (AiFitRead & { data: any })[] = [];
+  let villainLines: PreflopVillainLine[] = [];
+  const heroIdx = hand.heroCards.length === 2 ? comboIndex(hand.heroCards[0]!, hand.heroCards[1]!) : null;
+  /** hero's own mix at a node, as fractions (labels as the answer uses them) */
+  const mixAt = (data: any): MixAction[] => heroIdx == null ? []
+    : ((data?.action_solutions as any[]) ?? []).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[heroIdx] ?? 0) }));
   // THE LINE ITSELF IS ILLEGAL (PF-26). NODE_DOES_NOT_EXIST means "a legal line, not under these sizes" and is
   // walked below; 400 VALIDATION_ERROR "Incorrect actions" means the sequence cannot happen in any tree — a
   // capture padded past a terminal or otherwise corrupt. Say so, as a capture fault, and let the caller stop:
@@ -1051,42 +1149,45 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
     // the tree has this line, just not under the sizes we named — walk it and find out
     let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens, { end: true });
+    // THE LINE FIT: EVERY FIT, ON THIS TREE, NO DEAD MONEY (2026-10-04, hand 4922379136). The tree holds three players
+    // to the flop: a second cold-caller or limper is "not offered". From 2026-09-23 the earliest such caller was folded
+    // and the tree REBUILT with his chips as `pot` — and chips in the pot before the first action are an ante: every
+    // seat plays another game from the root (UTG folds 61 / limps 39 / raises to 2bb 0.06% there, against 16.1% on this
+    // tree), hero's node sat off that tree's path and his K7o read "Call 100%" facing an open and two callers. A
+    // removed player loosens hero even WITHOUT his chips (utils/fitBlend: measured 7.0% of hands), so the chips are not
+    // given back at all. Each foldable caller is folded in turn on the tree already solved, hero's node is read on
+    // every line it holds, and the mixes are blended to the tightest (fold at the most folding fit's frequency, raise
+    // at the least raising one's). A fit whose villains' actions the tree all but never takes is left out when another
+    // is on its path. No second tree, no second solve.
     if ("error" in fixed && /is not offered/.test(fixed.error)) {
-      const fit = await fitAiLine(sol.solId, tokens, shape);
-      if (fit) { fixed = fit; fittedFolds = fit.folds; }
+      const fits = await fitAiLines(sol.solId, tokens, shape);
+      const reads = (await Promise.all(fits.map(async (fit) => {
+        const n = await fetchNode(sol.solId, fit.line);
+        if ("error" in n) return null;
+        const toAct = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+        if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) return null;
+        const lines = await villainLinesOf(sol.solId, fit.line ? fit.line.split("-") : [], shape);
+        return { fit, n, lines, offPath: lines.some((l) => l.offTree) };
+      }))).filter((x): x is NonNullable<typeof x> => !!x);
+      if (reads.length) {
+        // an on-path fit is never blended with an off-path one; all off-path = all read, and check #3 says so
+        const use = reads.some((r) => !r.offPath) ? reads.filter((r) => !r.offPath) : reads;
+        // the fit hero's mix leans on most leads (the pin and the hand page show its node): the most folding one,
+        // then the one that folds the LATER caller — it keeps the cold-caller, whose range constrains hero most
+        const foldAt = (r: (typeof use)[number]) => mixAt(r.n.data).find((a) => /^fold/i.test(a.action))?.frequency ?? 0;
+        const lastFold = (r: (typeof use)[number]) => Math.max(...r.fit.folds.map((f) => shape.positions.indexOf(f)));
+        use.sort((a, b) => foldAt(b) - foldAt(a) || lastFold(b) - lastFold(a));
+        fixed = use[0]!.fit;
+        fitReads = use.map((r) => ({ folds: r.fit.folds, line: r.fit.line, actions: mixAt(r.n.data), offPath: r.offPath, data: r.n.data }));
+        villainLines = use.flatMap((r) => r.lines);
+      }
     }
     if ("error" in fixed) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${line || "root"}' does not exist and the line could not be walked — ${fixed.error}`, line };
     }
     snapped = fixed.changed;
-    // THE FOLDED-OUT PLAYERS' CHIPS STAY IN THE POT (2026-09-23). The fit folds a limper or caller the API's tree
-    // cannot hold; until now his chips left with him, so hero faced the real raise at the wrong price. The API
-    // accepts dead money (`pot`; probed: 1bb dead moves an SB complete from 29% to 65% with A5s), so the tree is
-    // rebuilt with what the folded seats had put in, and the fitted line is read on that tree instead.
-    let solId = sol.solId;
-    if (fittedFolds.length) {
-      const handPosOf: Record<string, string> = {};
-      for (const [hp, ap] of Object.entries(shape.apiOf)) handPosOf[ap] = hp;
-      let dead = 0;
-      for (const api of fittedFolds) {
-        const hp = handPosOf[api];
-        const seat = Object.entries(hand.positions).find(([, p]) => p.toUpperCase() === hp)?.[0];
-        if (seat == null) continue;
-        const put = hand.actions.filter((x) => x.street === "preflop" && (x.hero ? hand.heroSeatId : x.seatId) === Number(seat));
-        const lastRaise = [...put].reverse().find((x) => x.type === "raise" || x.type === "bet" || x.type === "all-in");
-        dead += lastRaise ? (lastRaise.amount ?? 0) : put.filter((x) => x.type === "call" || x.type === "post-sb" || x.type === "post-bb").reduce((acc, x) => acc + putBb(hand, x), 0);
-      }
-      if (dead > 0) {
-        const shape2 = shapeOf(hand, heroPos, (opts.deadBb ?? 0) + dead, opts.rakeSeats);
-        if (!("error" in shape2)) {
-          const sol2 = await ensureSolution(treeKeyOf(shape2, m), treeBody(shape2, m), { multiway: shape2.n > 2, preflop: true });
-          if (!("error" in sol2)) { solId = sol2.solId; deadNote = `${Math.round(dead * 100) / 100}bb of the folded players' chips kept in the pot as dead money`; }
-        }
-      }
-    }
-    usedSol = solId;
     usedLine = fixed.line;
-    node = await fetchNode(solId, fixed.line);
+    node = await fetchNode(sol.solId, fixed.line);
     if ("error" in node) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${fixed.line || "root"}' (walked from '${line}') — ${node.error}`, line };
     }
@@ -1097,13 +1198,15 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) {
     return { ok: false, kind: LINE_NOT_HERO, reason: `GTO Wizard AI preflop: the walked line puts ${toAct} on the clock, not hero (${shape.heroApiPos}) — line '${line}' does not match the table`, line };
   }
-  const idx = hand.heroCards.length === 2 ? comboIndex(hand.heroCards[0]!, hand.heroCards[1]!) : null;
+  const idx = heroIdx;
   if (idx == null) return { ok: false, reason: "GTO Wizard AI preflop: hero's cards are not known", line };
   // the node's per-combo strategy is a 0-1 fraction; our chart mixes are PERCENT (Q8o: {Fold: 99.97}), and
   // the panel text / hand card format them as such — so the fallback speaks percent too
   let actions = (j.action_solutions as any[]).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[idx] ?? 0) }));
   const sum = actions.reduce((s, a) => s + a.frequency, 0);
   if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
+  // several fits: hero's mix is their blend to the tightest (utils/fitBlend), not the leading fit's own
+  if (fitReads.length > 1) actions = blendFitMixes(fitReads.map((f) => f.actions));
   actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
   const decision = actions.length ? pickWeightedAction(actions) : null;
   const secs = (Date.now() - t0) / 1000;
@@ -1125,9 +1228,10 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
     solId: usedSol, usedLine, solveSecs: secs, cached: node.cached, ...(stored ? { stored: true } : {}), shape,
+    ...(fitReads.length ? { fits: fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })), villainLines } : {}),
     note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : node.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
-      + (fittedFolds.length ? ` LINE FITTED TO THE TREE: GTO Wizard's tree holds one limper, so ${fittedFolds.join(" and ")}'s limp/call was read as a FOLD (the earliest one who does not raise later) — hero faces one player fewer than at the table${deadNote ? `, with ${deadNote}` : ""}.` : "")
+      + (fitReads.length ? ` ${fitNote(fitReads, villainLines)}` : "")
       + (shape.stackCap ? ` ${stackCapNote(shape)}.` : ""),
   };
 }

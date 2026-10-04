@@ -32,7 +32,7 @@ import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
-  checkPotStack, checkPreflopInRange, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
+  checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
 import { contestedChips, deadMoney, effectiveStack, foldRound, moneyState, streetChips, streetFromTokens, type MoneyState } from "../utils/tableMoney/tableMoney";
@@ -46,7 +46,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -140,6 +140,9 @@ export type FastSolveResult =
       exploitActions?: ActionFreq[];
       decision: WeightedPick | null;
       notInRange?: boolean;
+      /** a GTO Wizard AI preflop answer read on a fitted line: the villain actions on it, against the tree's own play
+       *  (check #3 — services/gtowAiPreflop.villainLinesOf) */
+      villainLines?: PreflopVillainLine[];
       approx?: boolean;
       warning?: string | null;
       /** HOW THIS ANSWER WAS PRODUCED (2026-09-25, services/chainPath): the flop ranges' provenance, every street's,
@@ -1444,6 +1447,7 @@ export function decisionChecks(hand: ParsedHand, value: FastSolveResult, origin:
     checkMix(value.actions ?? []),
     checkFresh({ answerStreet: value.street, handStreet: street, key }),
     ...(street === "preflop" ? [checkPreflopInRange({ notInRange: value.notInRange, heroClass: value.heroClass })] : []),
+    ...(street === "preflop" && value.villainLines ? [checkPreflopVillainLines(value.villainLines)] : []),
   ];
 }
 
@@ -2702,6 +2706,7 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
     setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
+    ...(r.villainLines ? { villainLines: r.villainLines } : {}),
     warning: note(r.note), approx: approx || !!rakeNote || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
   });
@@ -4196,6 +4201,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
       setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
       depth: aiHeroDepth(r.shape, hand, heroPos),
       line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
+      ...(r.villainLines ? { villainLines: r.villainLines } : {}),
       warning: r.note, approx: approx || undefined,
       path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
       ...(gated ? { treeGap: gated } : {}),

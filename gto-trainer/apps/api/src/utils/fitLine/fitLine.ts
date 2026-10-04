@@ -101,6 +101,28 @@ export function foldEarliestCaller(
 }
 
 /**
+ * EVERY SEAT A FIT MAY FOLD (2026-10-04): the plain callers and limpers of the line, in the order they first called —
+ * never a kept seat (hero, a protected seat), never a seat that raises later (his raise is the spot itself). The same
+ * rule as foldEarliestCaller, which folds the first of these; a caller that reads EVERY fit (GTO Wizard AI preflop,
+ * services/gtowAiPreflop.fitAiLines) folds each in turn with foldSeatsOut.
+ */
+export function foldableCallers(
+  tokens: string[],
+  opts: { keep: Set<string>; stack: number | Record<string, number>; seats: readonly string[] },
+): string[] {
+  const who = actorsWithAllins(tokens, opts.stack, opts.seats);
+  const raisers = new Set(tokens.map((t, i) => (/^R/.test(t) || t === "RAI" ? who[i] : null)).filter((s): s is string => !!s));
+  const out: string[] = [];
+  tokens.forEach((t, i) => {
+    const s = who[i];
+    if (t !== "C" || !s || out.includes(s)) return;
+    if (opts.keep.has(s.toUpperCase()) || raisers.has(s)) return;
+    out.push(s);
+  });
+  return out;
+}
+
+/**
  * FOLD THE SAME PLAYERS AGAIN (2026-09-25, mutation harness seed 589 [limps]). When hero's decision was read on a
  * line with a caller folded out (a fit, or the caller-cap borrow), every later decision of the same hand must be read
  * on a line with that caller folded too — otherwise the later walk runs through the REAL node, where hero's own

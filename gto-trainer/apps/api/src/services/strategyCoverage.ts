@@ -232,9 +232,9 @@ const RING_6MAX: StrategyCoverage = {
         {
           id: "pre-untrained-node", state: "approx",
           spot: "A limped-pot node the chart never trained — since 2026-09-24 only below the 100bb rung (D30-D75 equilibrium limp charts) or a non-blind over-limp behind two limps; at 100bb the pool-locked trees answer — or a size past the snap tolerance",
-          source: "GTO Wizard AI preflop (Ultra), exact sizes; a second limper folded out with his chips kept as dead money",
+          source: "GTO Wizard AI preflop (Ultra), exact sizes; a limper or caller the tree cannot hold is folded out — every such fit read on the same tree and blended to the tightest, no dead money (2026-10-04)",
           how: "The chart node is refused by the trust map (reach and regret precomputed per node) and the spot is solved as its own tree from the table.",
-          example: "BB with KJs behind CO + BTN limps and an SB complete: the chart's untrained node said raise 98%; the exact tree (CO folded out, 1bb dead) raises 3bb 100%.",
+          example: "BB with KJs behind CO + BTN limps and an SB complete: the chart's untrained node said raise 98%; the exact tree answers instead, read with CO folded out and with BTN folded out, the two mixes blended to the tightest (raise as often as the least raising one).",
           cost: { value: "the fitted-out limper's range (his chips stay)", measured: false, note: "the exact tree cannot hold a second limper." },
           approx: ["untrained-chart-node"],
         },
