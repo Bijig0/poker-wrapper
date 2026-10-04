@@ -6,7 +6,8 @@ import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
-import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type SeatTok } from "./multiwayCollapse";
+import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
+import { menuAction, menuByClass, pickDeadMoney, planDeadMoney, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { narrowForLastResort, rerootCollapse, moneyThrough } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
@@ -1397,6 +1398,10 @@ export function chainPathChecks(a: {
     // (the walk's `players`) — over all three it said "#34peiz vs #2qfdl5" for a flop that started exactly right
     const specFpOf = (players?: string[]) => rangesFp(players?.length ? specSeats.filter((x) => players.some((p) => p.toUpperCase() === x.pos.toUpperCase())) : specSeats);
     const lastResort = /^last-resort/.test(w.kind ?? "");
+    // a DEAD-MONEY plan (deadMoneyCollapse): its first street starts with the dropped seats' chips on it in the pot, and
+    // its node pot is the table's whole pot (hero's price is exact)
+    // ("heads-up: folded:SB + …" too — review 2026-10-05: the heads-up label slipped past "dead:")
+    const deadPlan = /\b(dead|folded):/.test(w.kind ?? "");
     const members = w.members ?? mergeMembers(w.kind);
     /** a tree's seats as table positions: a merged seat stands for each of its members */
     const asTable = (ps: string[]) => ps.flatMap((p) => members[p] ?? members[p.toUpperCase()] ?? [p]);
@@ -1416,18 +1421,18 @@ export function chainPathChecks(a: {
       // each seat's own stack as sent, against the table's — where the walk was given that seat's stack, and not for a
       // merged seat (it carries its deeper member's) or a last resort (its seats are re-rooted, hero's chips out)
       const known = new Set(Object.keys(sp.seatStacks ?? {}).map((p) => p.toUpperCase()));
-      const seatStacks = s.stacksIn && beh && !lastResort && !/merge/.test(w.kind ?? "")
+      const seatStacks = s.stacksIn && beh && !lastResort && !(deadPlan && /street cut/.test(w.kind ?? "")) && !/merge/.test(w.kind ?? "")
         ? Object.entries(s.stacksIn).filter(([p]) => known.has(p.toUpperCase()) && beh[p.toUpperCase()] != null)
           .map(([p, x]) => ({ pos: p, tree: x, table: beh[p.toUpperCase()]! }))
         : undefined;
       // which rule prices the table's side: the full table for an exact tree, the tree's own seats for a plan that
       // leaves seats out (chipsOnPlan) — the street's own chips; the rounds before it are the pot it entered with
       const leftOut = !!w.kind && !!s.players?.length;
-      const onStreet = chipsOn(st, leftOut ? asTable(s.players!) : undefined);
+      const onStreet = chipsOn(st, leftOut && !(deadPlan && s.si === 0) ? asTable(s.players!) : undefined);
       out.push(checkPotStack({
         street: st, potIn: s.potIn, capturePot: potBefore(k), stackIn: s.stackIn, captureStack: Number.isFinite(eff) ? eff : null,
         ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + onStreet } : {}),
-        plan: w.kind, skipPotIn: lastResort && s.si === 0,
+        plan: w.kind, skipPotIn: (lastResort || deadPlan) && s.si === 0,
         potRule: leftOut ? `the pot the tree's seats (${s.players!.join("/")}) can contest` : "the table's pot",
         ...(seatStacks?.length ? { seatStacks } : {}),
       }));
@@ -1773,6 +1778,8 @@ async function solvePostflopViaChainOnce(
     rangeNote?: string;
     /** a LAST RESORT: solveOne races its narrowing against the unnarrowed tree (lastResortRace) */
     lastResort?: { lr: NonNullable<ReturnType<typeof heroVsAggressor>>; heroPos: string };
+    /** a DEAD-MONEY collapse (deadMoneyCollapse): the dropped seats' chips on this street, added to the starting pot */
+    deadPot?: number;
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -1824,6 +1831,30 @@ async function solvePostflopViaChainOnce(
     oopRange: three[0]!.range, midRange: three[1]!.range, ipRange: three[2]!.range,
     heroSeat: heroIdx === 0 ? "oop" : heroIdx === 1 ? "mid" : "ip",
   });
+  /** a plan's seats as a tree: three seats (specOf), or two — a dead-money collapse can leave hero and one villain */
+  const specAny = (seats: CollapseSeat[], heroIdx: number): SeatSpec => seats.length === 3 ? specOf(seats, heroIdx) : {
+    oopPos: seats[0]!.pos, ipPos: seats[1]!.pos, oopRange: seats[0]!.range, ipRange: seats[1]!.range,
+    heroSeat: heroIdx === 0 ? "oop" : "ip",
+  };
+  /** a plan's walkable: its tokens, its seats' stacks, and a dead-money plan's dead chips */
+  const walkableOf = (pl: { seats: CollapseSeat[]; heroIdx: number; streets: SeatTok[][]; kind: string }, behind: Record<string, number> | undefined, fallback: number): Walkable => ({
+    seatSpec: specAny(pl.seats, pl.heroIdx),
+    streets: pl.streets.map((st) => st.map((t) => t.tok)),
+    streetSeats: pl.streets.map((st) => st.map((t) => t.seat)),
+    kind: pl.kind,
+    // a dead-money plan's cut (replayKept): the kept seats' chips before it are in the starting pot, off their stacks
+    seatStacks: ((ss) => {
+      const pre = (pl as Partial<DeadMoneyPlan>).preload;
+      if (!pre || !Object.keys(pre).length) return ss;
+      // every tree seat's stack less its preload — a seat with no stack reading starts from the field's (review 3)
+      return Object.fromEntries(pl.seats.map((x) => [x.pos, Math.round(((ss?.[x.pos] ?? fallback) - (pre[x.pos] ?? 0)) * 100) / 100]));
+    })(stacksOf(pl.seats, behind)),
+    members: membersOf(pl.seats),
+    ...((pl as Partial<DeadMoneyPlan>).dead != null ? { deadPot: Math.round(((pl as DeadMoneyPlan).dead +
+      Object.values((pl as DeadMoneyPlan).preload ?? {}).reduce((a, b) => a + b, 0)) * 100) / 100 } : {}),
+  });
+  /** the walks are dead-money collapses: their menus are blended by action class (menuByClass) */
+  let deadMode = false;
 
   // THE SOLVE RAKES LIKE THE GAME (2026-09-17). Without a rake spec the AI custom solve defaults to GTO Wizard's
   // 5% / 0.6bb cap (their NL500). Ignition NL200 ring is 5% with a cap by players DEALT ($1/$2/$3/$4 at 2/3/4-5/6+,
@@ -1881,24 +1912,32 @@ async function solvePostflopViaChainOnce(
         const rp = rr.picked;
         picked = rp;
         reroot = { first: rr.first, pot: rr.pot, stack: rr.stack };
-        walkables = rp.plans.map((pl) => ({
-          seatSpec: specOf(pl.seats, pl.heroIdx),
-          streets: pl.streets.map((st) => st.map((t) => t.tok)),
-          streetSeats: pl.streets.map((st) => st.map((t) => t.seat)),
-          kind: pl.kind,
-          seatStacks: stacksOf(pl.seats, rr.behind),
-          members: membersOf(pl.seats),
-        }));
+        walkables = rp.plans.map((pl) => walkableOf(pl, rr.behind, rr.stack));
+        deadMode = rp.plans.some((pl) => (pl as Partial<DeadMoneyPlan>).dead != null);
         blendWhy = rp.why;
         const note =
           `${flopSeats.length}-WAY, RE-ROOTED AT THE ${cur.toUpperCase()}: no collapse fits from the flop (every villain ` +
           `put chips in earlier), so the earlier streets are pot (${rr.pot}bb, ${rr.stack}bb behind) and the ` +
           `${cur} alone is collapsed: ${rp.plans.map((pl) => pl.kind).join(" | ")}. Entering ranges narrowed through ` +
           `the earlier streets by ${rr.walks} three-seat walk(s) (${rr.left} left out of some) — approximate. ${rp.why}.` +
+          (rr.unnarrowed?.length ? ` NOT NARROWED: ${rr.unnarrowed.join(", ")} enter${rr.unnarrowed.length === 1 ? "s" : ""} with the flop-arrival range — no three-seat walk of the earlier streets could hold ${rr.unnarrowed.length === 1 ? "him" : "them"}.` : "") +
           (rr.allIn.length ? ` ALL-IN LEFT OUT: ${rr.allIn.join(", ")} went all-in on an earlier street and cannot act again — ` +
             `their chips are in the pot, but hero's showdown equity against their range (the main pot they contest) is not modelled.` : "");
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
         }
+      }
+      let deadWhy: string | null = null;
+      if (!picked && cur === "flop") {
+        // THE DEAD-MONEY COLLAPSE (deadMoneyCollapse, 2026-10-05): two or more villains have chips in on the flop (or
+        // one bet and folded to a raise) — keep hero, the wager hero faces and each other villain still in in turn,
+        // the dropped seats' flop chips dead money in the starting pot, and blend the trees
+        const dm = planDeadMoney({
+          seats: cSeats, heroPos: ordered[heroAt]!, street: toks[0]!, amounts: streetAmounts[0] ?? null,
+          behind: (p) => behindFlop?.[p] ?? fieldStack,
+        });
+        deadWhy = dm.why;
+        const dp = pickDeadMoney(dm.plans);
+        if (dp) { picked = dp; deadMode = true; }
       }
       if (!picked) {
         // NO COLLAPSE → NO ANSWER (2026-10-05, Brady: "do NOT use heads up last resort it is a terrible model"). The
@@ -1907,21 +1946,21 @@ async function solvePostflopViaChainOnce(
         // 17.4 on a tree without the SB and hero shoved 138.8 into him. Two 3-seat trees that keep the SB or the CO
         // (the dropped seat's chips as dead money) both FOLD 88 99.99%. Until that replacement is built and measured,
         // a field nothing reduces to three is a reasoned refusal.
-        return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""} — ` +
-          `no answer: the heads-up last resort is off (2026-10-05)`);
+        return fail(`${collapseRefusal(cSeats, toks)}${rerootWhy ? ` — re-rooting at the ${cur} failed: ${rerootWhy}` : ""}` +
+          `${deadWhy ? ` — no dead-money collapse: ${deadWhy}` : ""} — no answer: the heads-up last resort is off (2026-10-05)`);
       }
-      if (!reroot) walkables = picked!.plans.map((pl) => ({
-        seatSpec: specOf(pl.seats, pl.heroIdx),
-        streets: pl.streets.map((st) => st.map((t) => t.tok)),
-        streetSeats: pl.streets.map((st) => st.map((t) => t.seat)),
-        kind: pl.kind,
-        seatStacks: stacksOf(pl.seats, behindFlop),
-        members: membersOf(pl.seats),
-      }));
+      if (!reroot) walkables = picked!.plans.map((pl) => walkableOf(pl, behindFlop, fieldStack));
       if (!reroot) {
       blendWhy = picked!.why;
-      const note =
-        `${flopSeats.length}-WAY APPROXIMATION — no solver models more than three postflop seats, so ` +
+      const huPlan = deadMode && (picked!.plans[0] as Partial<DeadMoneyPlan>).headsUp ? picked!.plans[0] as DeadMoneyPlan : null;
+      const note = huPlan
+        ? `${picked!.why}${huPlan.tookOver.length ? ` (${huPlan.tookOver.join(", ")}'s call of a folded seat's wager is that wager in the tree)` : ""}`
+        : deadMode
+        ? `${flopSeats.length}-WAY, DEAD-MONEY COLLAPSE — two or more villains have chips in on the flop, so no seat can ` +
+          `be dropped as it played: ${picked!.plans.map((pl) => `${pl.kind} (${(pl as DeadMoneyPlan).dead}bb dead)`).join(" | ")}. ` +
+          `${picked!.why}. Hero's price is the table's; a dropped seat's flop chips are in the pot from the flop's first action, ` +
+          `so the kept seats' earlier wagers met a bigger pot than they did.`
+        : `${flopSeats.length}-WAY APPROXIMATION — no solver models more than three postflop seats, so ` +
         `${ordered.join("/")} is collapsed to three: ${picked!.plans.map((pl) => pl.kind).join(" | ")}. ` +
         `${picked!.why}. Dropped seats keep their chips in the pot; a merged seat holds both ranges.`;
       sixNote = sixNote ? `${sixNote} · ${note}` : note;
@@ -2000,7 +2039,7 @@ async function solvePostflopViaChainOnce(
     : solveAiChain({
     ...(rake6 ? { rake: rake6 } : {}),
     ...w.seatSpec,
-    flopPot: reroot ? reroot.pot : flopPot,
+    flopPot: Math.round(((reroot ? reroot.pot : flopPot) + (w.deadPot ?? 0)) * 100) / 100,
     flopStack: treeStackOf(w),
     ...(w.seatStacks ? { seatStacks: w.seatStacks } : {}),
     ...(reroot ? { firstStreet: reroot.first } : {}),
@@ -2137,6 +2176,22 @@ async function solvePostflopViaChainOnce(
   let blended: number[][] | null = null;
   let blendedCount = 1;
   const codeOf = (x: any) => String(x.action?.code ?? x.action?.display_name ?? "?");
+  /** a walk's action as the reference menu names it: itself, or — dead-money trees, whose sizes and all-in are each
+   *  their own — the reference action of its class (menuByClass) */
+  const classMaps = new Map<unknown, Map<string, string | null>>();
+  const codeOn = (w: (typeof walks)[number], x: any): string => {
+    const c = codeOf(x);
+    if (!deadMode || w === ref) return c;
+    let m = classMaps.get(w);
+    if (!m) {
+      const asMenu = (xs: any[]) => xs.map((y: any) => menuAction(codeOf(y), y.action?.display_name));
+      const mine = asMenu(w.data?.action_solutions ?? []);
+      const to = menuByClass(asMenu(refSols), mine);
+      m = new Map(mine.map((k, i) => [k.code, to[i] ?? null]));
+      classMaps.set(w, m);
+    }
+    return m.get(c) ?? `${c}?`;
+  };
   /** the walks whose menu is the reference's — the ones blended, mix and EV alike */
   const alignedWalks: typeof walks = [];
   if (walks.length > 1) {
@@ -2144,7 +2199,7 @@ async function solvePostflopViaChainOnce(
     const dropped: string[] = [];
     for (const w of walks) {
       const a = alignStrategy(codes, (w.data?.action_solutions ?? []).map((x: any) => ({
-        code: codeOf(x), strategy: x.strategy ?? [],
+        code: codeOn(w, x), strategy: x.strategy ?? [],
       })));
       if (a) { aligned.push(a); alignedWalks.push(w); } else dropped.push(w.kind ?? "?");
     }
@@ -2171,7 +2226,7 @@ async function solvePostflopViaChainOnce(
   // beside a mix the first walk does not play. The bet size stays the reference walk's.
   const evsAt = (pick: (x: any) => { f: number; ev: number | null | undefined }): (number | undefined)[] | null => {
     if (alignedWalks.length < 2) return null;
-    const at = alignedWalks.map((w) => alignedAt(codes, (w.data?.action_solutions ?? []).map((x: any) => ({ code: codeOf(x), ...pick(x) }))));
+    const at = alignedWalks.map((w) => alignedAt(codes, (w.data?.action_solutions ?? []).map((x: any) => ({ code: codeOn(w, x), ...pick(x) }))));
     return at.every((x) => x) ? blendEvs(at as NonNullable<(typeof at)[number]>[]) : null;
   };
   if (heroComboIdx != null) {

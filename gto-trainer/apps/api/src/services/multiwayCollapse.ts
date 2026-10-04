@@ -28,6 +28,10 @@
  * plain mean over the same ghosts. Facing more opponents can only shrink hero's share of the pot, so fold as
  * often as the MOST folding collapse and bet as often as the LEAST betting one. Every single collapse
  * over-bets by +8 to +13pp of aggression; the blend is the only rule that corrects it (−5.6pp).
+ *
+ * A seat that FOLDED without committing chips is not a collapse at all (2026-09-27): he leaves first, as a fold,
+ * and the policy above runs on the players still in. See planCollapses. (Ported to poker-wrapper 2026-10-05: it was
+ * one of the product edits left uncommitted in the factory repo at the 2026-09-28 cut-over.)
  */
 
 /** One postflop token and the seat that played it. */
@@ -45,15 +49,17 @@ export interface CollapseSeat {
 }
 
 export interface CollapsePlan {
-  /** "ghost:CO", "merge:HJ+CO", "ghost:CO+merge:SB+BB" — what was done, for the answer's warning */
+  /** "ghost:CO", "merge:HJ+CO", "ghost:CO + merge:SB+BB", "fold:BB + ghost:SB" — what was done, for the answer's
+   *  warning. A "fold:" is not an approximation: the seat folded and simply left (2026-09-27). */
   kind: string;
-  /** exactly three seats, in postflop order */
+  /** the tree's seats in postflop order: three, or two when the folds left a heads-up street */
   seats: CollapseSeat[];
   /** hero's index within `seats` */
   heroIdx: number;
   /** the walked streets with the dropped seats' tokens removed and merged pairs reduced to one actor */
   streets: SeatTok[][];
-  /** how many primitives were applied — 1 for a four-way flop, 2 for five-way */
+  /** how many primitives were applied — 1 for a four-way flop, 2 for five-way; 0 when the folds alone left three
+   *  seats or fewer (an exact tree, nothing collapsed) */
   steps: number;
   /** true when every primitive was a GHOST (what the blend was measured on) */
   ghostOnly: boolean;
@@ -99,6 +105,8 @@ function merge(st: State, a: number): State | null {
 
   const streets: SeatTok[][] = [];
   let carrier: string | null = null;
+  // the members still in: the composite folds only when the last of them folds (hand 4922575177, 2026-10-05)
+  const alive = new Set([x.pos, y.pos]);
   for (const street of st.streets) {
     const mine = street.filter((t) => pair.has(t.seat));
     const commits = mine.filter((t) => COMMITS(t.tok));
@@ -111,17 +119,24 @@ function merge(st: State, a: number): State | null {
     // old rule kept ONE action per street at the pair's first slot, which moved a check-RAISE back in front of the
     // bet it raises ("SB x, BB x, hero bets, SB raises" became "SB raises, hero bets") and the walk refused the line.
     const nth = new Map<string, number>();
-    const orbits: { at: number; toks: string[] }[] = [];
+    const orbits: { at: number; toks: string[]; seats: string[] }[] = [];
     street.forEach((t, i) => {
       if (!pair.has(t.seat)) return;
       const n = nth.get(t.seat) ?? 0;
       nth.set(t.seat, n + 1);
-      (orbits[n] ??= { at: i, toks: [] }).toks.push(t.tok);
+      const o = (orbits[n] ??= { at: i, toks: [], seats: [] });
+      o.toks.push(t.tok); o.seats.push(t.seat);
     });
+    // A MEMBER'S FOLD IS THE COMPOSITE'S ONLY WHEN NO MEMBER IS LEFT (2026-10-05, hand 4922575177: UTG checks, CO bets,
+    // two callers, UTG folds — the orbit's lone action was UTG's fold, the composite "folded" after its own bet had
+    // been called, and every walk refused "street closed but more actions follow"). The other member is still in: the
+    // composite carries on as him and does nothing in that orbit.
     const emit = new Map<number, string>();
     for (const o of orbits) {
+      o.toks.forEach((tok, k) => { if (tok === "F") alive.delete(o.seats[k]!); });
       const commit = o.toks.find(COMMITS);
-      emit.set(o.at, commit ?? (o.toks.includes("X") ? "X" : o.toks[0]!));
+      const tok = commit ?? (o.toks.includes("X") ? "X" : alive.size === 0 ? "F" : null);
+      if (tok != null) emit.set(o.at, tok);
     }
     const out: SeatTok[] = [];
     street.forEach((t, i) => {
@@ -147,23 +162,54 @@ function merge(st: State, a: number): State | null {
   };
 }
 
+/** A villain who has FOLDED on the walked streets without ever putting chips in: every token of his is X or F, one is F. */
+const hasFolded = (pos: string, streets: SeatTok[][]): boolean => {
+  let folded = false;
+  for (const street of streets) {
+    for (const t of street) {
+      if (t.seat !== pos) continue;
+      if (COMMITS(t.tok)) return false;
+      if (t.tok === "F") folded = true;
+    }
+  }
+  return folded;
+};
+
 /**
  * Every distinct way to bring `seats` down to three, cheapest primitive first. Returns [] when the field
  * cannot be collapsed at all — every villain has chips in this street and no pair is mergeable.
+ *
+ * A FOLDED SEAT LEAVES FIRST, AS A FOLD, NEVER AS AN APPROXIMATION (2026-09-27, Brady: "folded seat always
+ * ghosted"). A villain who folded without ever committing chips on the walked streets has no future in the hand:
+ * dropping him and his tokens is the ordinary treatment of a fold — the very tree the chain builds when he folds
+ * preflop instead — not a collapse. Until now he counted as "the only legal ghost", so the picker preferred
+ * MERGING him into his neighbour: "SB bets, BB calls, CO folds" was solved as SB / BB+CO / hero, a caller holding
+ * BB's and CO's ranges added together, and hero's answer was read against hands that had already left the pot.
+ * The calibration that ranks a merge above a lone ghost never held a folded seat (at three seats a fold makes the
+ * pot heads-up). A seat that committed chips and THEN folded stays as before: his chips are in the street, and
+ * only a seat in the tree, or a composite carrying his call, can have put them there. When the folds alone leave
+ * three seats or fewer, the one plan returned has `steps: 0` — the field IS the tree (two seats: heads-up).
  */
 export function planCollapses(
   seats: CollapseSeat[],
   heroPos: string,
   streets: SeatTok[][]
 ): CollapsePlan[] {
-  const start: State = { seats, heroPos, streets, kinds: [], ghostOnly: true };
+  const folds = seats.filter((s) => s.pos !== heroPos && hasFolded(s.pos, streets)).map((s) => s.pos);
+  const gone = new Set(folds);
+  const start: State = {
+    seats: seats.filter((s) => !gone.has(s.pos)), heroPos,
+    streets: streets.map((street) => street.filter((t) => !gone.has(t.seat))),
+    kinds: [], ghostOnly: true,
+  };
+  const label = (kinds: string[]) => [...folds.map((p) => `fold:${p}`), ...kinds].join(" + ");
   const out: CollapsePlan[] = [];
   const seen = new Set<string>();
 
   const walk = (st: State): void => {
-    if (st.seats.length === 3) {
+    if (st.seats.length <= 3) {
       const heroIdx = st.seats.findIndex((s) => s.pos === st.heroPos);
-      if (heroIdx < 0) return;
+      if (heroIdx < 0 || st.seats.length < 2) return;   // hero gone, or alone: nothing to solve
       // The RANGES are part of the identity, not just the shape: ghosting a villain who only checked and
       // merging him into his neighbour leave the same seats and the same tokens, but the merged seat carries
       // both ranges. Keying on shape alone silently threw the merge away as a duplicate.
@@ -172,12 +218,11 @@ export function planCollapses(
       if (seen.has(key)) return;
       seen.add(key);
       out.push({
-        kind: st.kinds.join(" + "), seats: st.seats, heroIdx, streets: st.streets,
+        kind: label(st.kinds), seats: st.seats, heroIdx, streets: st.streets,
         steps: st.kinds.length, ghostOnly: st.ghostOnly,
       });
       return;
     }
-    if (st.seats.length < 3) return;
     for (let i = 0; i < st.seats.length; i++) {
       const g = ghost(st, i);
       if (g) walk(g);
@@ -206,6 +251,13 @@ export interface Picked {
  */
 export function pickCollapses(plans: CollapsePlan[], max = 3): Picked | null {
   if (!plans.length) return null;
+  // no primitive applied: the folds alone left the tree's seats — nothing to blend and nothing approximate
+  const exact = plans.find((p) => p.steps === 0);
+  if (exact) {
+    const who = exact.kind.split(" + ").map((k) => k.replace(/^fold:/, "")).join(", ");
+    return { plans: [exact], mode: "single",
+      why: `${who} folded — the ${exact.seats.length} seats still in are the tree, nothing collapsed` };
+  }
   const ghosts = plans.filter((p) => p.ghostOnly);
   if (ghosts.length >= 2) {
     return {

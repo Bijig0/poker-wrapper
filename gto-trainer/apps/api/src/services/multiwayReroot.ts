@@ -21,8 +21,9 @@
 import { effectiveBehind, solveAiChain, type AiChainSpec } from "./aiChain";
 import { handFacts } from "./handFacts";
 import { withRequestScope } from "./requestScope";
-import { effectiveStack, moneyEntering, moneyState, streetFromTokens } from "../utils/tableMoney/tableMoney";
+import { contestedChips, effectiveStack, moneyEntering, moneyState, streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses, pickCollapses, type Picked, type SeatTok } from "./multiwayCollapse";
+import { pickDeadMoney, planDeadMoney, replayKept } from "./deadMoneyCollapse";
 
 type SeatSpec = Pick<AiChainSpec, "oopPos" | "ipPos" | "oopRange" | "ipRange" | "midPos" | "midRange" | "heroSeat">;
 
@@ -55,7 +56,11 @@ export interface RerootArgs {
 export type RerootResult =
   | { ok: true; picked: Picked; first: 1 | 2; pot: number; stack: number; walks: number; left: string; allIn: string[];
       /** each live seat's own stack behind entering the re-rooted street (from RerootArgs.behind) */
-      behind?: Record<string, number> }
+      behind?: Record<string, number>;
+      /** the current street was collapsed with dead money (deadMoneyCollapse): its plans carry `dead` */
+      dead?: boolean;
+      /** seats whose ranges entering the street are the flop arrival's — no narrowing walk could hold them */
+      unnarrowed?: string[] }
   | { ok: false; why: string };
 
 /**
@@ -92,6 +97,71 @@ export function coverGroups(live: string[], hero: string, aggressors: Set<string
   const last = groups[groups.length - 1]!;
   for (const p of rest) { if (last.length >= 3) break; if (!last.includes(p)) last.push(p); }
   return groups;
+}
+
+/**
+ * A NARROWING GROUP'S EARLIER STREETS BY THE TAKEOVER (2026-10-05, Brady: "Need 100% coverage"). coverGroups keeps
+ * every earlier aggressor in every walk — a call with its bettor dropped has nothing to call — so two earlier bettors
+ * and a caller left no group at all ("more aggressors than a three-seat walk holds"). With the takeover replay
+ * (deadMoneyCollapse.replayKept) a dropped bettor's wager is the first kept caller's own, so any group can walk the
+ * earlier streets with every kept seat's chips where they were; the dropped seats' chips (what the group can contest
+ * of them) go into the walk's starting pot. Per street; null when a street cannot be walked by the group (a dropped
+ * seat's raise reopened betting the group had closed).
+ */
+export function takeoverStreets(a: Pick<RerootArgs, "ordered" | "heroPos" | "streets" | "streetSeats" | "flopPot" | "flopStack" | "behind" | "amounts">,
+    first: number, group: string[]): { streets: string[][]; seats: string[][]; dead: number; preload: Record<string, number> } | null {
+  const kept = new Set(group);
+  const streets: string[][] = [], seats: string[][] = [];
+  let dead = 0;
+  let preload: Record<string, number> = {};
+  for (let i = 0; i < first; i++) {
+    const toks = a.streets[i]!, who = a.streetSeats[i]!;
+    const unpriced: number[] = [];
+    const acts = streetFromTokens(toks, who, a.amounts?.[i] ?? null, unpriced);
+    if (unpriced.length) return null;
+    const beh = moneyThrough(a, i).behind;
+    const capOf = (p: string) => beh[p];
+    const r = replayKept(acts, toks, kept, capOf, a.ordered);
+    // a cut that moved chips puts them in the pot the walk STARTS with — only the walk's first street can take it (a
+    // check-around cut moves none and walks on any street — review 3)
+    const moved = Object.keys(r.preload).length > 0;
+    if (moved && i > 0) return null;
+    if (moved) preload = r.preload;
+    const sc = streetChips(acts, capOf);
+    const c = contestedChips(sc.put, { contesting: [...kept].filter((p) => !sc.folded.has(p)), folded: sc.folded, capOf, hero: a.heroPos });
+    for (const [p, x] of c.bySeat) if (!kept.has(p)) dead += x;
+    streets.push(r.toks); seats.push(r.seats);
+  }
+  return { streets, seats, dead: Math.round(dead * 100) / 100, preload };
+}
+
+/** The fewest groups of hero + up to two live seats, each walkable by the takeover, that hold every villain in
+ *  `needed` — groups with more earlier aggressors first (their lines are the least rewritten). `uncovered` = the
+ *  villains no walkable group holds; null when nothing is needed or no group walks at all. */
+export function takeoverCover(a: Pick<RerootArgs, "ordered" | "heroPos" | "streets" | "streetSeats" | "flopPot" | "flopStack" | "behind" | "amounts">,
+    first: number, live: string[], aggressors: Set<string>, needed?: string[]): { groups: string[][]; uncovered: string[] } | null {
+  const villains = live.filter((p) => p !== a.heroPos);
+  const cands: string[][] = [];
+  if (villains.length <= 2) cands.push([a.heroPos, ...villains]);
+  else for (let i = 0; i < villains.length; i++) for (let j = i + 1; j < villains.length; j++) cands.push([a.heroPos, villains[i]!, villains[j]!]);
+  const ok = cands.filter((g) => takeoverStreets(a, first, g) != null)
+    .sort((x, y) => y.filter((p) => aggressors.has(p)).length - x.filter((p) => aggressors.has(p)).length);
+  // the seats whose ranges the current street needs: a seat that folded on it is dead money there, not a range
+  const need = new Set(needed ?? villains), out: string[][] = [];
+  while (need.size) {
+    let best: string[] | null = null, gain = 0;
+    for (const g of ok) { const n = g.filter((p) => need.has(p)).length; if (n > gain) { best = g; gain = n; } }
+    if (!best) break;
+    out.push(best);
+    for (const p of best) need.delete(p);
+  }
+  return out.length ? { groups: out, uncovered: [...need] } : null;
+}
+
+/** takeoverCover, all or nothing: the groups when they hold every needed villain, else null. */
+export function takeoverGroups(a: Parameters<typeof takeoverCover>[0], first: number, live: string[], aggressors: Set<string>, needed?: string[]): string[][] | null {
+  const c = takeoverCover(a, first, live, aggressors, needed);
+  return c && !c.uncovered.length ? c.groups : null;
 }
 
 /**
@@ -146,7 +216,7 @@ export function narrowingPlan(a: RerootArgs, first: number, m: ReturnType<typeof
  * are the approximation) — and hands on each seat's range leaving them. The groups walk at once. `ms` is the
  * wall-clock of the slowest, what the narrowing adds to the answer.
  */
-export async function narrowThroughEarlier(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][]):
+export async function narrowThroughEarlier(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][], takeover = false):
     Promise<{ ok: true; ranges: Record<string, number[]>; leftOut: Set<string>; walks: number; ms: number } | { ok: false; why: string; ms: number }> {
   const t0 = Date.now();
   const order = (xs: string[]) => a.ordered.filter((p) => xs.includes(p));
@@ -158,18 +228,32 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
     const keep = order(g);
     const kept = new Set(keep);
     // the earlier streets as this walk plays them: the seats outside it never act (their chips are the approximation)
-    const streets: string[][] = [];
-    const seats: string[][] = [];
-    for (let i = 0; i < first; i++) {
-      const t: string[] = [], s: string[] = [];
-      a.streets[i]!.forEach((tok, j) => { const who = a.streetSeats[i]![j]!; if (kept.has(who)) { t.push(tok); s.push(who); } else if (!m.folded.has(who)) leftOut.add(who); });
-      const fixed = replayWithout(t, s);
-      streets.push(fixed.toks); seats.push(fixed.seats);
+    let streets: string[][] = [];
+    let seats: string[][] = [];
+    let deadIn = 0;
+    let preload: Record<string, number> = {};
+    if (takeover) {
+      // the takeover (takeoverStreets): every kept seat's chips where they were, the dropped seats' into the pot (and a
+      // cut's kept chips — replayKept — into it too, off their stacks)
+      const tk = takeoverStreets(a, first, keep)!;
+      streets = tk.streets; seats = tk.seats; deadIn = tk.dead + Object.values(tk.preload).reduce((x, y) => x + y, 0);
+      preload = tk.preload;
+      for (let i = 0; i < first; i++) for (const who of a.streetSeats[i]!) if (!kept.has(who) && !m.folded.has(who)) leftOut.add(who);
+    } else {
+      for (let i = 0; i < first; i++) {
+        const t: string[] = [], s: string[] = [];
+        a.streets[i]!.forEach((tok, j) => { const who = a.streetSeats[i]![j]!; if (kept.has(who)) { t.push(tok); s.push(who); } else if (!m.folded.has(who)) leftOut.add(who); });
+        const fixed = replayWithout(t, s);
+        streets.push(fixed.toks); seats.push(fixed.seats);
+      }
     }
     const three = keep.map((p) => ({ pos: p, range: a.arr(p) }));
     const heroIdx = keep.indexOf(a.heroPos);
     // the walk's own seats' stacks: its flop at their effective stack, and each later street at the stack of those left
-    const seatStacks = a.behind ? Object.fromEntries(keep.filter((p) => a.behind![p] != null).map((p) => [p, a.behind![p]!])) : undefined;
+    const seatStacks = a.behind || Object.keys(preload).length
+      ? Object.fromEntries(keep.filter((p) => a.behind?.[p] != null || preload[p] != null)
+        .map((p) => [p, Math.round(((a.behind?.[p] ?? a.flopStack) - (preload[p] ?? 0)) * 100) / 100]))
+      : undefined;
     const spec: AiChainSpec = {
       ...(a.rake ? { rake: a.rake } : {}),
       ...(three.length === 3 ? a.specOf(three, heroIdx) : {
@@ -177,7 +261,7 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
         heroSeat: heroIdx === 0 ? "oop" as const : "ip" as const,
       }),
       // the walk's own seats' effective stack (the field's only where none of theirs is known)
-      flopPot: a.flopPot, flopStack: ((e) => (Number.isFinite(e) ? e : a.flopStack))(effectiveBehind(keep, a.heroPos, seatStacks)), board: a.board, streets, streetSeats: seats,
+      flopPot: Math.round((a.flopPot + deadIn) * 100) / 100, flopStack: ((e) => (Number.isFinite(e) ? e : a.flopStack))(effectiveBehind(keep, a.heroPos, seatStacks)), board: a.board, streets, streetSeats: seats,
       ...(seatStacks ? { seatStacks } : {}),
       heroComboIdx: a.heroComboIdx, walkThrough: true,
       // the hand's memo (aiChain checkpoints, content-keyed, in this process only — never the hand's persistent facts,
@@ -201,46 +285,88 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   const m = moneyThrough(a, first);
   if (m.unpriced) return { ok: false, why: "a bet or raise on an earlier street has no amount on the capture — its money cannot be priced" };
   if (m.stack <= 0.5) return { ok: false, why: "the earlier streets put everyone (near) all-in" };
-  const { allIn, live, groups } = narrowingPlan(a, first, m);
+  const plan = narrowingPlan(a, first, m);
+  const { allIn, live } = plan;
+  let groups = plan.groups;
   if (!live.includes(a.heroPos)) return { ok: false, why: "hero folded earlier" };
 
   // ---- 2. narrow each live seat's range through the earlier streets
-  if (!groups) return { ok: false, why: `${[...m.aggressors].join(", ")} all bet or raised earlier — more aggressors than a three-seat walk holds` };
+  // more earlier aggressors than one three-seat walk holds: the takeover groups (takeoverCover) instead; a villain no
+  // walkable group holds keeps his flop-arrival range — not narrowed by the earlier streets, said in the answer
+  let takeover = false;
+  let unnarrowed: string[] = [];
+  // a seat that folded on the CURRENT street needs no range: the current street drops him (his chips dead money)
+  const curFolded = new Set<string>();
+  a.streets[first]!.forEach((t, j) => { if (t === "F") curFolded.add(a.streetSeats[first]![j]!); });
+  if (!groups) {
+    const cov = takeoverCover(a, first, live, new Set([...m.aggressors].filter((p) => !allIn.has(p))),
+      live.filter((p) => p !== a.heroPos && !curFolded.has(p)));
+    if (cov) { groups = cov.groups; takeover = true; unnarrowed = cov.uncovered; }
+  }
+  // no three-seat group walks the earlier streets at all: every seat (hero too) enters with its flop-arrival range —
+  // the current street is still solved three-handed (Brady: never heads-up behind a spot meant to be three-handed)
+  if (!groups) { groups = []; takeover = true; unnarrowed = [...live]; }
   // THE DOOM CHECK COMES FIRST (2026-09-24 latency pass). Whether the current street can be collapsed to three
   // seats depends only on its tokens, not on the narrowed ranges — so ask before spending 12-24 s of cloud walks
   // on ranges the last resort would never use (every last-resort turn/river in the sweep paid exactly that).
   const curToks: SeatTok[][] = [a.streets[first]!.map((tok, j) => ({ tok, seat: a.streetSeats[first]![j]! }))];
   const probeSeats = live.map((p) => ({ pos: p, range: a.arr(p) }));
-  if (probeSeats.length > 3 && !pickCollapses(planCollapses(probeSeats, a.heroPos, curToks))) {
-    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses` };
+  // the current street's own chips per seat, for a DEAD-MONEY collapse (deadMoneyCollapse, 2026-10-05): when no seat
+  // can be ghosted or merged on it, hero, the wager he faces and each other villain in turn are kept, the dropped
+  // seats' chips on this street dead money in the pot it starts with — the heads-up last resort that used to answer
+  // here is off (Brady: "do NOT use heads up last resort it is a terrible model")
+  const deadOf = (seats: { pos: string; range: number[] }[]) => planDeadMoney({
+    seats, heroPos: a.heroPos, street: curToks[0]!, amounts: a.amounts?.[first] ?? null, behind: (p) => m.behind[p],
+  });
+  // a street where a seat put chips in and then folded: nothing ghosts him, the dead-money collapse drops him
+  const committedFold = (() => {
+    const put = new Set<string>();
+    for (const t of curToks[0]!) { if (t.tok !== "X" && t.tok !== "F") put.add(t.seat); else if (t.tok === "F" && put.has(t.seat)) return true; }
+    return false;
+  })();
+  if (probeSeats.length > 3 && !pickCollapses(planCollapses(probeSeats, a.heroPos, curToks)) && !deadOf(probeSeats).plans.length) {
+    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses (${deadOf(probeSeats).why})` };
   }
-  if (probeSeats.length <= 3 && (!allIn.size || probeSeats.length !== 3)) {
-    return { ok: false, why: "fewer than four seats left — the plain chain answers this, not a re-root" };
+  if (probeSeats.length < 2) return { ok: false, why: "no villain is left in" };
+  // three or fewer seats with a fold after chips on this street: only the dead-money collapse fits — ask before the
+  // narrowing walks (review 2026-10-05: they ran even when it could not)
+  if (probeSeats.length <= 3 && committedFold && !deadOf(probeSeats).plans.length) {
+    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} the seats left cannot be walked (${deadOf(probeSeats).why})` };
   }
-  const nr = await narrowThroughEarlier(a, first, m, groups);
+  const nr = groups.length ? await narrowThroughEarlier(a, first, m, groups, takeover)
+    : { ok: true as const, ranges: {} as Record<string, number[]>, leftOut: new Set<string>(), walks: 0, ms: 0 };
   if (!nr.ok) return { ok: false, why: nr.why };
   const { ranges, leftOut } = nr;
+  // review 2026-10-05: a seat that folded on this street, or that no takeover group held, takes his flop-arrival range
+  for (const p of live) if (!ranges[p] && (curFolded.has(p) || unnarrowed.includes(p))) ranges[p] = a.arr(p);
   for (const p of live) if (!ranges[p]) return { ok: false, why: `no narrowing walk produced ${p}'s range` };
 
   // ---- 3. collapse the current street on its own
   const cur: SeatTok[][] = [a.streets[first]!.map((tok, j) => ({ tok, seat: a.streetSeats[first]![j]! }))];
   const cSeats = live.map((p) => ({ pos: p, range: ranges[p]! }));
   const covered = [...leftOut].filter((p) => live.includes(p));
-  if (cSeats.length <= 3) {
-    // three or fewer ACTIVE seats only because the all-ins stepped out: that field IS the tree, nothing to collapse
-    if (!allIn.size || cSeats.length !== 3) return { ok: false, why: "fewer than four seats left — the plain chain answers this, not a re-root" };
+  const base = { first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
+    left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(a.behind ? { behind: m.behind } : {}),
+    ...(unnarrowed.length ? { unnarrowed } : {}) };
+  if (cSeats.length <= 3 && !committedFold) {
+    // THREE OR FEWER SEATS STILL ACT — the all-ins stepped out, or the seats that left folded on an earlier street
+    // after putting chips in (so no collapse from the flop could drop them): that field IS the tree, re-rooted here
+    // (2026-10-05: it used to be refused as "the plain chain answers this", which it had just failed to)
     const heroIdx = cSeats.findIndex((s) => s.pos === a.heroPos);
+    const why = allIn.size ? `${[...allIn].join(", ")} all-in since an earlier street — ${cSeats.length} seats still act`
+      : `${cSeats.length} seats still act — the rest folded earlier, their chips in the pot`;
     const picked: Picked = {
-      plans: [{ kind: `all-in left out: ${[...allIn].join("+")}`, seats: cSeats, heroIdx, streets: cur, steps: 0, ghostOnly: true }],
-      mode: "single", why: `${[...allIn].join(", ")} all-in since an earlier street — ${cSeats.length} seats still act`,
+      plans: [{ kind: allIn.size ? `all-in left out: ${[...allIn].join("+")}` : "re-rooted: the seats still in", seats: cSeats, heroIdx, streets: cur, steps: 0, ghostOnly: true }],
+      mode: "single", why,
     };
-    return { ok: true, picked, first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
-      left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(a.behind ? { behind: m.behind } : {}) };
+    return { ok: true, picked, ...base };
   }
-  const picked = pickCollapses(planCollapses(cSeats, a.heroPos, cur));
-  if (!picked) return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses` };
-  return { ok: true, picked, first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
-    left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(a.behind ? { behind: m.behind } : {}) };
+  const picked = cSeats.length > 3 ? pickCollapses(planCollapses(cSeats, a.heroPos, cur)) : null;
+  if (picked) return { ok: true, picked, ...base };
+  const dm = deadOf(cSeats);
+  const dp = pickDeadMoney(dm.plans);
+  if (!dp) return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses (${dm.why})` };
+  return { ok: true, picked: dp, ...base, dead: true };
 }
 
 /**
