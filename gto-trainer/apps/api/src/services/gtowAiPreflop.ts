@@ -56,8 +56,7 @@ import { isOffTree, offTreeStats, pctOf } from "./offTree";
 import { setPreflopPin, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
 // THE REDUCED TREE (2026-10-01, utils/reducedArrival): flop-entering ranges for a line no tree holds
 import {
-  classesToCombos, combosToClasses, forcedHandOf, normalised, normalisedCombos, planReducedArrival, readCaller,
-  ROOT_CHECK_MIN, type ReducedCaller, type ReducedPlan,
+  cameInLimping, classesToCombos, combosToClasses, normalised, normalisedCombos, planReducedArrival, type ReducedCaller,
 } from "../utils/reducedArrival/reducedArrival";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 // THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
@@ -1619,6 +1618,9 @@ const lockOf = (line: string, sols: any[], w: (code: string) => number[] | numbe
 
 /** What the locked last resort asks of the outside (a test replaces it). */
 export const lockedSeams = {
+  /** read the raiser on a line FITTED for him even where the exact tree holds it (lastRaiseReads' fitOnly) — what a
+   *  real last resort meets; scripts/lastResortStudy.ts sets it to score that case */
+  fitOnly: false,
   node: (solId: string, line: string): Promise<NodeRead> => fetchNode(solId, line),
   solve: (key: string, body: any): Promise<{ solId: string } | { error: string }> => ensureSolution(key, body, { preflop: true }),
   lock: (parent: string, body: any, locks: NodeLock[]): Promise<{ solId: string } | { error: string }> => lockedSolution(parent, body, locks),
@@ -1630,7 +1632,7 @@ export const lockedSeams = {
     const m = menus(levels, shape.n);
     const sol = await ensureSolution(treeKeyOf(shape, m), treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
     if ("error" in sol) return null;
-    const reads = exactTreeReads(shape, sol.solId, tokens);
+    const reads = lastRaiseReads(sol.solId, shape, tokens, { fitOnly: lockedSeams.fitOnly });
     const rs = await startRangeOf(hand, plan.raiserSeat, plan.raiserPos, plan.raiseIndex, reads.before);
     const f = await reads.raiseFilter(plan.raiserPos).catch(() => null);
     if (!f) return null;
@@ -1761,8 +1763,8 @@ export async function solveLockedLastResort(hand: ParsedHand, heroPos: string | 
 }
 
 /** The exact request a hand would produce (for tests and the state tester — nothing is sent). */
-export function debugTree(hand: ParsedHand, heroPos: string | null): { shape: AiPreflopShape; line: string; body: any } | { error: string } {
-  const shape = shapeOf(hand, heroPos);
+export function debugTree(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): { shape: AiPreflopShape; line: string; body: any } | { error: string } {
+  const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
   if ("error" in shape) return shape;
   const { tokens, levels } = lineOf(hand, shape);
   const m = menus(levels, shape.n);
@@ -1849,8 +1851,9 @@ export interface ArrivalRanges {
   /** the seat order the tokens walk (the API's set for this table size) — for rolling the pot forward */
   seatOrder: readonly string[];
   note: string | null;
-  /** the ranges came from the REDUCED tree (reducedArrivalRanges): the exact tree could not hold the line, and why */
-  reduced?: { why: string; live: string[]; trees: number };
+  /** the ranges came from the REDUCED tree (reducedArrivalRanges): the exact tree could not hold the line, and why;
+   *  `fitted` = the villain callers read on the exact tree through their own node (the rest are kept whole) */
+  reduced?: { why: string; live: string[]; fitted: number };
 }
 export type ArrivalOutcome = ArrivalRanges | { ok: false; reason: string };
 
@@ -1881,68 +1884,6 @@ const CLASS_COMBOS: Record<string, number> = (() => {
 const isRaiseCode = (a: any) => /^R/i.test(String(a?.action?.code ?? "")) && a?.action?.allin !== true;
 const codeNum = (c: string) => Number(String(c).replace(/^[A-Z]+/i, ""));
 
-/**
- * HOW THE EXACT TREE PLAYS THE LINE UP TO ITS LAST RAISE (2026-10-01, moved out of arrivalRangesGtowAi 2026-10-04 so the
- * locked last resort reads the raiser the same way): a seat's range before the last raise (`before`), the share of it
- * that makes that raise (`raiseFilter`) and that calls it (`callFilter`), each on the line fitted for that seat.
- */
-function exactTreeReads(shape: AiPreflopShape, solId: string, tokens: string[]) {
-  const sol = { solId };
-  const get = (line: string) => fetchNode(solId, line);
-  const lastRaise = tokens.reduce((k, t, i) => (/^R/.test(t) ? i : k), -1);
-  const apiOfPos = (handPos: string) => shape.apiOf[handPos.toUpperCase()] ?? handPos.toUpperCase();
-  /** a cut of the line as this tree walks it for ONE seat: as it stands, else fitted keeping that seat's own actions
-   *  (hero's limp is folded like anyone's when the seat is not hero) */
-  const fitted = async (cut: string[], api: string): Promise<string[] | null> => {
-    const direct = await repairLine(sol.solId, cut);
-    if (!("error" in direct)) return direct.line.split("-").filter(Boolean);
-    const fit = await fitAiLine(sol.solId, cut, shape, [api], 4, api === shape.heroApiPos);
-    return fit ? fit.line.split("-").filter(Boolean) : null;
-  };
-  const before = async (handPos: string): Promise<number[] | null> => {
-    const api = apiOfPos(handPos);
-    if (lastRaise <= 0 || !shape.positions.includes(api)) return null;
-    const line = await fitted(tokens.slice(0, lastRaise), api);
-    if (!line) return null;
-    let got: number[] | null = null;
-    await walkArrivalRanges(shape, line, get, 6, (s) => { if (s.actor === api && s.token !== "F") got = s.after; });
-    return got;
-  };
-  /** per combo, the share of a seat's range that takes `kind` of action at the node the line cut ends on — as THIS
-   *  tree plays it, on the line fitted for that seat: a raise is the union of the node's raise sizes (the menu carries
-   *  the line's own size beside its grid's, and one player's raise is not the slice that mixes into one of them) */
-  const shareAt = async (api: string, cut: string[], kind: "raise" | "call"): Promise<number[] | null> => {
-    const line = await fitted(cut, api);
-    if (!line || !line.length) return null;
-    const node = await get(line.slice(0, -1).join("-"));
-    if ("error" in node) return null;
-    if ((node.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null) !== api) return null;
-    const sols: any[] = node.data?.action_solutions ?? [];
-    const pick = sols.filter((x) => (kind === "raise" ? /^R/i.test(String(x?.action?.code ?? "")) : /^C/i.test(String(x?.action?.code ?? ""))));
-    if (!pick.length) return null;
-    const f = new Array<number>(1326);
-    for (let i = 0; i < 1326; i++) { let v = 0; for (const x of pick) v += Number(x.strategy?.[i] ?? 0); f[i] = Math.min(1, Math.max(0, v)); }
-    return f;
-  };
-  // HOW THIS TREE PLAYS THE LAST RAISE, for the seat that made it. The reduced tree cannot say: there the raise is a
-  // forced bet (utils/reducedArrival: offered as an action, the solver never takes it).
-  const raiseFilter = async (handPos: string): Promise<number[] | null> => {
-    const api = apiOfPos(handPos);
-    if (lastRaise < 0 || !shape.positions.includes(api)) return null;
-    return shareAt(api, tokens.slice(0, lastRaise + 1), "raise");
-  };
-  // … and how it plays a seat's CALL of that raise (hero's own call, when this tree can hold his line)
-  const callFilter = async (handPos: string): Promise<number[] | null> => {
-    const api = apiOfPos(handPos);
-    if (lastRaise < 0 || !shape.positions.includes(api)) return null;
-    const who = actorsWithAllins(tokens, shape.stacks, shape.positions);
-    let at = -1;
-    tokens.forEach((t, i) => { if (i > lastRaise && t === "C" && who[i] === api) at = i; });
-    return at < 0 ? null : shareAt(api, tokens.slice(0, at + 1), "call");
-  };
-  return { lastRaise, before, raiseFilter, callFilter };
-}
-
 export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | null, maxPlayers: SeatCap, dealt?: Record<number, number>): Promise<ArrivalOutcome> {
   const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop ranges: ${shape.error}` };
@@ -1965,12 +1906,10 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   // THE REDUCED TREE, WHEN THE EXACT ONE CANNOT HOLD THE LINE (2026-10-01, hand 4921846667): a refusal of the LINE —
   // an action the tree does not offer, a node it does not have — that the per-seat fit below cannot mend either used
   // to be the end ("no library fallback under this strategy": no answer, a timeout, a sit-out). The players who
-  // reach the flop and the last raise they met are always solvable on a tree of their own (reducedArrivalRanges).
-  // A seat's range BEFORE that raise, where nothing better is known, is read on this exact tree: the line cut before
-  // the raise, fitted for that seat.
-  const { before, raiseFilter, callFilter } = exactTreeReads(shape, sol.solId, tokens);
+  // reach the flop are read around the last raise they met (reducedArrivalRanges), every read on THIS exact tree, on
+  // the line cut where it is needed and fitted for that seat (lastRaiseReads).
   const viaReduced = async (why: string): Promise<ArrivalOutcome> => {
-    const red = await reducedArrivalRanges(hand, heroPos, maxPlayers, dealt, { why, tokens, seatOrder: shape.positions, before, raiseFilter, callFilter });
+    const red = await reducedArrivalRanges(hand, heroPos, maxPlayers, dealt, { why, tokens, seatOrder: shape.positions, ...lastRaiseReads(sol.solId, shape, tokens) });
     return red.ok ? red : { ok: false, reason: `${why}; then the reduced tree: ${red.reason}` };
   };
   if (!/is not an action/.test(first.reason)) return LINE_NOT_IN_TREE.test(first.reason) ? viaReduced(first.reason) : first;
@@ -2001,6 +1940,114 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
       `one limper, so each seat's range was read from a line that keeps its own actions and folds the earliest other ` +
       `limper or caller (${[...folded].join(", ")} folded in some of them).`,
   };
+}
+
+/** What the reduced tree reads from the exact tree (ctx of reducedArrivalRanges). */
+export interface LastRaiseReads {
+  /** a seat's range on the exact tree up to the last raise (table position) */
+  before: (handPos: string) => Promise<number[] | null>;
+  /** per combo, the share of the raiser's range that makes the last raise */
+  raiseFilter: (handPos: string) => Promise<number[] | null>;
+  /** per combo, the share of hero's range that calls it */
+  callFilter: (handPos: string) => Promise<number[] | null>;
+  /** a villain caller's range through his answer to the last raise: walked on the line fitted for him, his answer read
+   *  as "did not fold"; `folded` = the seats the fit folded out (table positions; none = the tree holds his line) */
+  stayRange: (handPos: string) => Promise<{ range: number[]; folded: string[] } | null>;
+}
+
+/**
+ * THE EXACT TREE'S READS AROUND THE LAST RAISE, for the reduced tree (2026-10-01; the caller's read 2026-10-04). Every
+ * read is on the tree already solved for this hand, on the line cut where it is needed, as the tree walks it — as it
+ * stands, else fitted keeping that seat's own actions (fitAiLine: the earliest other limper or caller folded). Exported
+ * so scripts/callerReadStudy.ts scores exactly this code; `opts.fitOnly` (the study's only use) skips the direct walk,
+ * which is what the reduced tree meets: a line the exact tree cannot hold.
+ */
+export function lastRaiseReads(solId: string, shape: AiPreflopShape, tokens: string[], opts: { fitOnly?: boolean } = {}): LastRaiseReads {
+  const get = (line: string) => fetchNode(solId, line);
+  const lastRaise = tokens.reduce((k, t, i) => (/^R/.test(t) ? i : k), -1);
+  const apiOfPos = (handPos: string) => shape.apiOf[handPos.toUpperCase()] ?? handPos.toUpperCase();
+  const handPosOf: Record<string, string> = {};
+  for (const [handPos, apiPos] of Object.entries(shape.apiOf)) handPosOf[apiPos] = handPos;
+  /** a cut of the line as this tree walks it for ONE seat: as it stands, else fitted keeping that seat's own actions
+   *  (hero's limp is folded like anyone's when the seat is not hero); with the seats the fit folded out */
+  const fitFor = async (cut: string[], api: string): Promise<{ codes: string[]; folds: string[] } | null> => {
+    if (!opts.fitOnly) {
+      const direct = await repairLine(solId, cut);
+      if (!("error" in direct)) return { codes: direct.line.split("-").filter(Boolean), folds: [] };
+    }
+    const fit = await fitAiLine(solId, cut, shape, [api], 4, api === shape.heroApiPos);
+    return fit ? { codes: fit.line.split("-").filter(Boolean), folds: fit.folds } : null;
+  };
+  const fitted = async (cut: string[], api: string): Promise<string[] | null> => (await fitFor(cut, api))?.codes ?? null;
+  /** the index in `tokens` of this seat's call of the last raise (-1: none) */
+  const callAt = (api: string): number => {
+    const who = actorsWithAllins(tokens, shape.stacks, shape.positions);
+    let at = -1;
+    tokens.forEach((t, i) => { if (i > lastRaise && t === "C" && who[i] === api) at = i; });
+    return at;
+  };
+  const before = async (handPos: string): Promise<number[] | null> => {
+    const api = apiOfPos(handPos);
+    if (lastRaise <= 0 || !shape.positions.includes(api)) return null;
+    const line = await fitted(tokens.slice(0, lastRaise), api);
+    if (!line) return null;
+    let got: number[] | null = null;
+    await walkArrivalRanges(shape, line, get, 6, (s) => { if (s.actor === api && s.token !== "F") got = s.after; });
+    return got;
+  };
+  /** per combo, the share of a seat's range that takes `kind` of action at the node the line cut ends on — as THIS
+   *  tree plays it, on the line fitted for that seat: a raise is the union of the node's raise sizes (the menu carries
+   *  the line's own size beside its grid's, and one player's raise is not the slice that mixes into one of them) */
+  const shareAt = async (api: string, cut: string[], kind: "raise" | "call"): Promise<number[] | null> => {
+    const line = await fitted(cut, api);
+    if (!line || !line.length) return null;
+    const node = await get(line.slice(0, -1).join("-"));
+    if ("error" in node) return null;
+    if ((node.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null) !== api) return null;
+    const sols: any[] = node.data?.action_solutions ?? [];
+    const pick = sols.filter((x) => (kind === "raise" ? /^R/i.test(String(x?.action?.code ?? "")) : /^C/i.test(String(x?.action?.code ?? ""))));
+    if (!pick.length) return null;
+    const f = new Array<number>(1326);
+    for (let i = 0; i < 1326; i++) { let v = 0; for (const x of pick) v += Number(x.strategy?.[i] ?? 0); f[i] = Math.min(1, Math.max(0, v)); }
+    return f;
+  };
+  // HOW THIS TREE PLAYS THE LAST RAISE, for the seat that made it (the union of the node's raise sizes).
+  const raiseFilter = async (handPos: string): Promise<number[] | null> => {
+    const api = apiOfPos(handPos);
+    if (lastRaise < 0 || !shape.positions.includes(api)) return null;
+    return shareAt(api, tokens.slice(0, lastRaise + 1), "raise");
+  };
+  // … and how it plays a seat's CALL of that raise (hero's own call, when this tree can hold his line)
+  const callFilter = async (handPos: string): Promise<number[] | null> => {
+    const api = apiOfPos(handPos);
+    if (lastRaise < 0 || !shape.positions.includes(api)) return null;
+    const at = callAt(api);
+    return at < 0 ? null : shareAt(api, tokens.slice(0, at + 1), "call");
+  };
+  // A VILLAIN'S ANSWER TO THE LAST RAISE (2026-10-04, scripts/callerReadStudy.ts): his range WALKED on the line fitted
+  // for him, through his own node, less the hands that fold there — "did not fold", not "called" (utils/reducedArrival).
+  // His starting range is the walk's own: every action of his on the fitted line, read on this tree.
+  const stayRange = async (handPos: string): Promise<{ range: number[]; folded: string[] } | null> => {
+    const api = apiOfPos(handPos);
+    if (lastRaise < 0 || !shape.positions.includes(api)) return null;
+    const at = callAt(api);
+    if (at < 0) return null;
+    const fit = await fitFor(tokens.slice(0, at + 1), api);
+    if (!fit || !fit.codes.length) return null;
+    const nodeLine = fit.codes.slice(0, -1).join("-");
+    let got: number[] | null = null;
+    await walkArrivalRanges(shape, fit.codes, get, 6, (s) => {
+      if (s.line !== nodeLine || s.actor !== api) return;
+      const folds = (s.node?.action_solutions ?? []).filter((a: any) => /^F/i.test(String(a?.action?.code ?? "")));
+      got = s.before.map((w, i) => {
+        let f = 0;
+        for (const a of folds) f += Number(a.strategy?.[i] ?? 0);
+        return w * Math.max(0, 1 - Math.min(1, f));
+      });
+    });
+    return got ? { range: got, folded: fit.folds.map((x) => handPosOf[x] ?? x) } : null;
+  };
+  return { before, raiseFilter, callFilter, stayRange };
 }
 
 /** One decision of the AI walk: the node, its actor (API position), the action(s) the range was conditioned on and
@@ -2100,29 +2147,26 @@ export async function walkArrivalRanges(
 const LINE_NOT_IN_TREE = /is not an action|is not offered|NODE_DOES_NOT_EXIST|node in the actions doesn't exist/i;
 /** Hero's own hand is never left out of his range: a class the reduced solve gave nothing is kept at this weight. */
 const HERO_FLOOR = 0.05;
+/** How long a villain caller's read on the exact tree may take before he is kept whole — the forced-bet tree it
+ *  replaced had the same 12 s (REDUCED_READ_MS, read at every read: the tests shorten it). */
+const reducedReadMs = (): number => { const v = Number(process.env.REDUCED_READ_MS); return v > 0 ? v : 12_000; };
 /** The pool chart's SB node behind one limper — its "C" is the pool's complete, as locked (hrc6max POOL_LIMP_CHART). */
 const POOL_SB_COMPLETE_LINE = "F-F-F-C";
-/** How long one node of a reduced tree may take. These trees solve in 3-5 s; the ordinary node wait is 30 s, and a
- *  tree the cloud never solves (probed: a forced bet larger than the caller's stack — those are not asked for any
- *  more) would spend hero's whole clock on a fallback. Past this the read is a refusal, at once. */
-export const REDUCED_NODE_MS = 12_000;
 
 type ChartNodeRead = HrcNode | null | "unreachable";
 /** What the reduced tree asks of the outside (a test replaces these). */
 export const reducedSeams = {
   chartNode: (chartId: string, line: string): Promise<ChartNodeRead> => nodeGetter(chartId)(line),
   answersFor: (clientHandId: string): any[] => answerLog.forHand(clientHandId) as any[],
-  solve: async (key: string, body: any, n: number): Promise<{ get: (line: string) => Promise<{ data: any } | { error: string }> } | { error: string }> => {
-    const sol = await ensureSolution(key, body, { multiway: n > 2, preflop: true });
-    if ("error" in sol) return sol;
-    return {
-      get: (line: string) => Promise.race([
-        fetchNode(sol.solId, line),
-        new Promise<{ error: string }>((res) => setTimeout(() => res({ error: `not solved within ${REDUCED_NODE_MS / 1000} s` }), REDUCED_NODE_MS)),
-      ]),
-    };
-  },
 };
+
+/** SOLVE A HAND-BUILT PREFLOP BODY and read its nodes — the forced-bet probes' only way in (scripts/_probeForcedDecision.ts,
+ *  the record of why the forced-bet tree was retired 2026-10-04). Nothing on the answer path calls it. */
+export async function debugSolveBody(key: string, body: any, n: number): Promise<{ solId: string; get: (line: string) => Promise<NodeRead> } | { error: string }> {
+  const sol = await ensureSolution(key, body, { multiway: n > 2, preflop: true });
+  if ("error" in sol) return sol;
+  return { solId: sol.solId, get: (line: string) => fetchNode(sol.solId, line) };
+}
 
 /** class → fraction of the class taking the action with this token at a chart node (the charts store percent). */
 function chartActionRange(node: ChartNodeRead, pick: (a: { action: string; token: string | null }) => boolean): Record<string, number> | null {
@@ -2137,7 +2181,8 @@ function chartActionRange(node: ChartNodeRead, pick: (a: { action: string; token
   return Object.keys(out).length ? out : null;
 }
 
-interface StartRange { cls: Record<string, number> | null; combos: number[] | null; how: string }
+/** `limped`: he came in with a limp (utils/reducedArrival cameInLimping) — a caller who did is kept whole */
+interface StartRange { cls: Record<string, number> | null; combos: number[] | null; how: string; limped: boolean }
 
 /**
  * A kept seat's range BEFORE the last raise — what the reduced tree starts it from.
@@ -2156,9 +2201,8 @@ async function startRangeOf(hand: ParsedHand, seat: number, pos: string, raiseIn
   const isHero = seat === hand.heroSeatId;
   const earlier = hand.actions.slice(0, raiseIndex).map((a, i) => ({ a, i }))
     .filter(({ a }) => a.street === "preflop" && seatOf(a) === seat && ["call", "raise", "bet", "all-in"].includes(a.type));
-  if (!earlier.length) return { cls: null, combos: null, how: "the full range (no action before the raise)" };
-  const raisedBefore = (i: number) => hand.actions.slice(0, i).some((a) => a.street === "preflop" && (a.type === "raise" || a.type === "bet" || a.type === "all-in"));
-  const cameInLimping = earlier[0]!.a.type === "call" && !raisedBefore(earlier[0]!.i);
+  if (!earlier.length) return { cls: null, combos: null, how: "the full range (no action before the raise)", limped: false };
+  const limped = cameInLimping(hand, seat, raiseIndex);
   const later = earlier.length > 1 ? ` — his ${earlier.length - 1} later action${earlier.length > 2 ? "s" : ""} before the raise not applied` : "";
 
   if (isHero) {
@@ -2188,79 +2232,37 @@ async function startRangeOf(hand: ParsedHand, seat: number, pos: string, raiseIn
         const n = normalised(cls);
         const rest = earlier.length - used.length;
         return { cls: n, combos: classesToCombos(n), how: `his own range as the chart played it (${used.join(", then ")})` +
-          (rest > 0 ? ` — his ${rest} later action${rest > 1 ? "s" : ""} before the raise not applied` : "") };
+          (rest > 0 ? ` — his ${rest} later action${rest > 1 ? "s" : ""} before the raise not applied` : ""), limped };
       }
     }
   }
-  if (cameInLimping) {
+  if (limped) {
     const sb = pos === "SB";
     const node = await reducedSeams.chartNode(POOL_LIMP_CHART, sb ? POOL_SB_COMPLETE_LINE : "");
     const range = chartActionRange(node, (a) => a.token === "C");
     if (range) {
       const n = normalised(range);
-      return { cls: n, combos: classesToCombos(n), how: (sb ? "the pool's small-blind complete range (the pool-locked limp chart)" : "the pool's limp range (shown limps, as the pool-locked limp chart holds it)") + later };
+      return { cls: n, combos: classesToCombos(n), how: (sb ? "the pool's small-blind complete range (the pool-locked limp chart)" : "the pool's limp range (shown limps, as the pool-locked limp chart holds it)") + later, limped };
     }
   }
   const w = before ? await before(pos).catch(() => null) : null;
   if (w && w.some((x) => x > 0)) {
     const max = Math.max(...w);
     const combos = w.map((x) => Math.round((x / max) * 1e4) / 1e4);
-    return { cls: null, combos, how: "his range on the exact tree up to the raise" };
+    return { cls: null, combos, how: "his range on the exact tree up to the raise", limped };
   }
-  return { cls: null, combos: null, how: `the full range (his earlier ${earlier.length === 1 ? "action is" : "actions are"} not modelled)` };
-}
-
-/** One caller's tree: he and the raiser heads-up, the raise and his own earlier chips posted as the two blinds, the
- *  rest of the pot dead money, the stacks as dealt. Only the caller may put more in first; the raiser has his check.
- *
- *  THE RANGES SENT ARE NOT USED BY GTO WIZARD (found 2026-10-04, scripts/_probeForcedDecision.ts `range`): a preflop
- *  tree is solved from full ranges whatever a seat's `range` says — the same tree given the raiser premiums, nothing,
- *  and 72o alone came back identical to the cent. So the caller's fold here is his fold against ANY TWO CARDS posting
- *  the raise, not against the raiser's range: he is read too wide. They are still sent (a body that changed would
- *  re-solve every stored tree); the note and services/approximations say what the read is. OPEN: no fix chosen. */
-function forcedTree(hand: ParsedHand, plan: ReducedPlan, c: ReducedCaller, raiserRange: number[] | null, callerRange: number[] | null,
-    rakeSeats: number, dealt: Record<number, number>): { body: any; shape: AiPreflopShape } | { error: string } {
-  const reduced = forcedHandOf(hand, plan, c);
-  const heroTree = reduced.heroSeatId === c.seat ? c.tree.caller : c.tree.raiser;
-  const shape = shapeOf(reduced, heroTree, c.deadBb, rakeSeats, dealt);
-  if ("error" in shape) return shape;
-  const m = menus([], 2);
-  const base: any = treeBody(shape, m);
-  // THE CALLER'S RE-RAISE: 2.5 times the raise. A multiple in a size list is a multiple of the bet being faced — here
-  // the forced bet (probed 2026-10-04, scripts/_probeForcedDecision.ts: "2.5x" over a 17.6 post is R44 from either
-  // seat). Until then it was written as a multiple of the tree's big blind, which is the CALLER's small post when the
-  // raiser is in position: "8.8x" there asked for 8.8 times the raise and came back as the caller's all-in, so his
-  // only raise was the jam.
-  const reraise = "2.5x";
-  const positions = shape.positions.map((position) => ({
-    position, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
-    bet_sizes: position === c.tree.caller ? [reraise] : [],
-    raise_sizes: m.villain.three, second_raise_sizes: m.villain.four, third_plus_raise_sizes: m.villain.five,
-  }));
-  const body = {
-    ...base,
-    bet_sizes: { ...base.bet_sizes, street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: positions }] },
-    players: base.players.map((p: any) => ({
-      ...p,
-      blind: p.position === c.tree.raiser ? c.tree.raiserPost : c.tree.callerPost,
-      range: p.position === c.tree.raiser ? raiserRange : callerRange,
-    })),
-  };
-  return { body, shape };
+  return { cls: null, combos: null, how: `the full range (his earlier ${earlier.length === 1 ? "action is" : "actions are"} not modelled)`, limped };
 }
 
 /**
  * FLOP-ENTERING RANGES FROM THE REDUCED TREE (utils/reducedArrival). Called by arrivalRangesGtowAi when the exact tree
  * refuses the line and no per-seat fit mends it. `ctx.tokens` / `ctx.seatOrder` are the table's own line (the pot is
- * rolled forward from them, exactly as for every other arrival); `ctx.before`, `ctx.raiseFilter`, `ctx.callFilter` read
- * the exact tree: a seat's range up to the last raise, and the share of it that makes / calls that raise.
+ * rolled forward from them, exactly as for every other arrival); the reads (`before`, `raiseFilter`, `callFilter`,
+ * `stayRange` — lastRaiseReads) are all on the exact tree already solved for this hand: no tree is solved here.
  */
 export async function reducedArrivalRanges(
   hand: ParsedHand, heroPos: string | null, maxPlayers: SeatCap, dealt: Record<number, number> | undefined,
-  ctx: { why: string; tokens: string[]; seatOrder: readonly string[];
-         before?: (handPos: string) => Promise<number[] | null>;
-         raiseFilter?: (handPos: string) => Promise<number[] | null>;
-         callFilter?: (handPos: string) => Promise<number[] | null> },
+  ctx: { why: string; tokens: string[]; seatOrder: readonly string[] } & Partial<LastRaiseReads>,
 ): Promise<ArrivalOutcome> {
   const no = (reason: string): ArrivalOutcome => ({ ok: false, reason });
   const hp = heroPosOf(hand, heroPos);
@@ -2269,7 +2271,6 @@ export async function reducedArrivalRanges(
   if (plan.live.length > maxPlayers) return no(`${plan.live.length} players reach the flop — need 2 to ${maxPlayers}`);
   if (!hp || !plan.live.includes(hp.toUpperCase())) return no("hero is not among the players who reach the flop");
   const stacks = dealt ?? dealtBySeat(hand);
-  const rakeSeats = dealtCount(hand, heroPos);
   const ones = () => new Array<number>(1326).fill(1);
   const clamp = (x: unknown) => Math.max(0, Math.min(1, Number(x ?? 0) || 0));
 
@@ -2287,53 +2288,52 @@ export async function reducedArrivalRanges(
       `(${f ? "none of his starting range makes it there" : "the line up to it does not fit, even for his own actions"}), so there is no range to put behind it`);
   }
 
-  // EACH CALLER: hero's own call as the exact tree plays it when it can hold his line; otherwise the hands that do
-  // not fold to the raise on his own heads-up tree, where the raise is a forced bet
-  const reads = await Promise.all(plan.callers.map(async (c) => {
+  // EACH CALLER (2026-10-04, scripts/callerReadStudy.ts — the forced-bet tree this replaces read him against ANY TWO
+  // CARDS posting the raise, because GTO Wizard ignores a seat's range on a preflop tree):
+  //   hero      his call as the exact tree plays it, on his starting range; else his starting range whole
+  //   all in for less than the raise: his starting range whole (he put the rest of a short stack in)
+  //   a LIMPER  his starting range — the pool's limp range — whole: narrowing it did not help in two studies
+  //   any other his range on the exact tree, walked on the line fitted for him through his own node, less the hands
+  //             that fold there; when that cannot be read, his starting range whole
+  type Read = { c: ReducedCaller; combos: number[]; how: string; kind: "exact" | "fit" | "whole"; folded?: string[] };
+  const reads: Read[] = await Promise.all(plan.callers.map(async (c): Promise<Read> => {
     const cs = start.get(c.pos)!;
-    if (c.seat === hand.heroSeatId && ctx.callFilter) {
-      const cf = await ctx.callFilter(c.pos).catch(() => null);
+    const whole = (why: string): Read => ({ c, combos: (cs.combos ?? ones()).slice(), kind: "whole", how: `${cs.how}, kept whole — ${why}` });
+    if (c.seat === hand.heroSeatId) {
+      const cf = ctx.callFilter ? await ctx.callFilter(c.pos).catch(() => null) : null;
       const own = cf ? normalisedCombos((cs.combos ?? ones()).map((w, i) => w * clamp(cf[i]))) : null;
-      if (own) return { c, combos: own, how: "his call as the exact tree plays it", read: null, keptStart: false };
+      if (own) return { c, combos: own, kind: "exact", how: `${cs.how}, then his call as the exact tree plays it` };
+      return whole("the exact tree cannot read his call");
     }
-    // ALL IN FOR LESS THAN THE RAISE: he put the rest of a short stack in at a price nobody folds (7bb more into 33),
-    // and the cloud does not solve a tree whose forced bet is the other seat's whole stack (probed, 2026-10-01:
-    // scripts/_probeReducedScenarios.ts shortCaller — 12 s of hero's clock for nothing). No tree: his range before the
-    // raise stands whole.
-    if (c.putIn < plan.raiseTo - 0.05) {
-      return { c, combos: (cs.combos ?? ones()).slice(), read: null, keptStart: false, how: `taken as not folding (all in for ${c.toCall}bb more)` };
+    if (c.putIn < plan.raiseTo - 0.05) return whole(`taken as not folding (all in for ${c.toCall}bb more)`);
+    if (cs.limped) return whole("a limper's call of the raise is not narrowed");
+    // A LIMIT ON THE WAIT (reducedReadMs): the read is node reads on the tree already solved — the prefix is cached,
+    // his own node on the fitted line may not be — and an unsolved node is otherwise waited on for the ordinary 30 s,
+    // per caller, on hero's clock. Past the limit he is kept whole, said so.
+    let late = false;
+    const limitMs = reducedReadMs();
+    const st = ctx.stayRange
+      ? await Promise.race([
+          ctx.stayRange(c.pos).catch(() => null),
+          new Promise<null>((res) => setTimeout(() => { late = true; res(null); }, limitMs)),
+        ])
+      : null;
+    if (!st) {
+      return whole(late ? `the exact tree did not return his node within ${limitMs / 1000} s`
+        : "the exact tree could not read his answer to the raise, even on a line fitted for him");
     }
-    const tree = forcedTree(hand, plan, c, raiserCombos, cs.combos, rakeSeats, stacks);
-    if ("error" in tree) return { c, error: tree.error };
-    const key = `reduced|${Bun.hash(JSON.stringify(tree.body)).toString(36)}`;
-    const sol = await reducedSeams.solve(key, tree.body, 2);
-    if ("error" in sol) return { c, error: sol.error };
-    const read = await readCaller(c, sol.get);
-    if (!read.ok) return { c, error: read.reason };
-    // THE RAISER'S CHECK MUST CARRY HIS RANGE (2026-10-04). The caller sits behind the raiser's root check, and a tree
-    // that gives the raiser anything else there thins his range before the caller is read: on the trees solved under
-    // the old all-in rule he jammed 30-95% of the time. Today he has the check alone (probed: 100%); if a tree ever
-    // offers more and the check is taken under ROOT_CHECK_MIN, the read is not taken and the caller's starting range stands.
-    if (read.rootCheck != null && read.rootCheck < ROOT_CHECK_MIN && cs.combos) {
-      return { c, combos: cs.combos.slice(), read: null, keptStart: false,
-        how: `his starting range kept whole (the tree's raiser checks only ${Math.round(read.rootCheck * 100)}% of the time at the root, so the node behind that check is not read)` };
-    }
-    let combos = (cs.combos ?? ones()).map((w, i) => w * read.stays[i]!);
-    let keptStart = false;
-    if (!combos.some((x) => x > 1e-6)) {
-      // the tree folds everything he starts with — he did not fold, so his starting range stands
-      if (!cs.combos) return { c, error: `reduced tree (${c.pos}): every hand folds to the raise and he has no starting range to stand on` };
-      combos = cs.combos.slice();
-      keptStart = true;
-    }
-    return { c, combos, how: `the hands that do not fold to it (the tree: fold ${read.fold}% · call ${read.call}% · re-raise ${read.raise}%)`, read, keptStart };
+    const combos = normalisedCombos(st.range);
+    if (!combos) return whole("on the exact tree every hand he holds there folds to the raise, and he did not fold");
+    return {
+      c, combos, kind: "fit", folded: st.folded,
+      how: st.folded.length
+        ? `his range on the exact tree, walked on the line fitted for him (${st.folded.join(", ")} folded out), less the hands that fold to the raise at his node there`
+        : "his range on the exact tree through his own node, less the hands that fold to the raise there",
+    };
   }));
-  const failed = reads.find((x) => "error" in x) as { c: ReducedCaller; error: string } | undefined;
-  if (failed) return no(failed.error);
-  const callers = reads as { c: ReducedCaller; combos: number[]; how: string; read: unknown; keptStart: boolean }[];
 
   const ranges: Record<string, Record<string, number>> = { [plan.raiser.pos]: combosToClasses(raiserCombos) };
-  for (const x of callers) {
+  for (const x of reads) {
     const rec = combosToClasses(x.combos);
     if (!Object.keys(rec).length) return no(`reduced tree: ${x.c.pos} has no range after the line`);
     ranges[x.c.pos] = rec;
@@ -2349,25 +2349,34 @@ export async function reducedArrivalRanges(
 
   const me = (p: string) => (p === hp.toUpperCase() ? `${p} (hero)` : p);
   const stackOf = (seat: number) => Math.round((stacks[seat] ?? 0) * 2) / 2;
-  const kept = callers.filter((x) => x.keptStart).map((x) => x.c.pos);
-  const trees = callers.filter((x) => x.read).length;
+  const fits = reads.filter((x) => x.kind === "fit");
+  const fitted = fits.filter((x) => x.folded?.length);
   const note =
     `REDUCED TREE — approximate: the exact preflop tree cannot hold this line (${ctx.why.replace(/^GTO Wizard AI preflop ranges: /, "").slice(0, 160)}), ` +
-    `so the flop-entering ranges are read around the last raise. ${me(plan.raiser.pos)} raised to ${plan.raiseTo}bb: ${rs.how}, narrowed by that raise as the exact tree plays it. ` +
-    callers.map((x) => `${me(x.c.pos)} met it for ${x.c.toCall}bb more into a pot of ${x.c.potBefore}bb: ${start.get(x.c.pos)!.how}, then ${x.how}` +
-      (x.read ? ` — read heads-up against the raiser with the raise as a forced bet and the other ${x.c.deadBb}bb as dead money (GTO Wizard solves that tree from full ranges: the fold is his fold against any two cards posting the raise, so he is read wide)` : "")).join(". ") +
-    `. Not modelled: the folded players' cards; the calls between a player's entry and the last raise where the full range or the pool's stands in` +
-    (callers.length > 1 ? "; the other callers when one is read (their chips are in his pot, their ranges are not)" : "") +
-    `; and of the hands that continue, which ones re-raise instead of calling (the player called).` +
-    (kept.length ? ` ${kept.join(", ")}: the tree folds everything he starts with, so his starting range stands.` : "") +
+    `so the flop-entering ranges are read around the last raise, every read on the exact tree. ${me(plan.raiser.pos)} raised to ${plan.raiseTo}bb: ${rs.how}, narrowed by that raise as the exact tree plays it. ` +
+    reads.map((x) => `${me(x.c.pos)} met it for ${x.c.toCall}bb more into a pot of ${x.c.potBefore}bb: ${x.how}`).join(". ") + "." +
+    (fitted.length
+      ? ` A caller read on a fitted line is still read WIDE: measured on ${FIT_WIDE.n} such calls on lines the exact tree holds (one other caller folded out each time, ` +
+        `scripts/callerReadStudy.ts) the read keeps ${FIT_WIDE.kept}% of his range where his own node keeps ${FIT_WIDE.truth}%.`
+      : "") +
+    (reads.some((x) => x.kind === "whole" && start.get(x.c.pos)!.limped)
+      ? ` A limper's range is the pool's whole limp range, wide by design: on lines the exact tree holds his node keeps ${FIT_WIDE.limpTruth}% of it (${FIT_WIDE.limpN} calls), ` +
+        `and a small blind who completed behind a limper keeps only ${FIT_WIDE.sbCompleteTruth}.`
+      : "") +
+    ` Not modelled: the folded players' cards; the calls between a player's entry and the last raise where the pool's or the full range stands in; ` +
+    `and of the hands that continue, which ones re-raise instead of calling (the player called).` +
     (floored ? ` Hero's ${floored} was not in the range read for his line and is kept at ${Math.round(HERO_FLOOR * 100)}%.` : "");
   return {
     ok: true, piece: "gtow-ai-preflop",
-    id: `gtow-ai · reduced · ${plan.raiser.pos}:${stackOf(plan.raiser.seat)} raises ${plan.raiseTo} / ${callers.map((x) => `${x.c.pos}:${stackOf(x.c.seat)}`).join("/")}`,
+    id: `gtow-ai · reduced · ${plan.raiser.pos}:${stackOf(plan.raiser.seat)} raises ${plan.raiseTo} / ${reads.map((x) => `${x.c.pos}:${stackOf(x.c.seat)}`).join("/")}`,
     ranges, tokens: ctx.tokens, seatOrder: ctx.seatOrder, note,
-    reduced: { why: ctx.why, live: plan.live, trees },
+    reduced: { why: ctx.why, live: plan.live, fitted: fits.length },
   };
 }
+
+/** How wide the fitted caller read still is (scripts/callerReadStudy.ts, 2026-10-04 — measured, see its header): the
+ *  share of his range he keeps against the exact tree's. Said in the note so nobody reads the flop range as exact. */
+const FIT_WIDE = { n: 22, truth: 18, kept: 31, limpN: 25, limpTruth: 56, sbCompleteTruth: "1-24%" } as const;
 
 /** One decision on the preflop path, in the shape the range looker draws (the chart path's shape too). */
 export interface PreflopPathStep {
