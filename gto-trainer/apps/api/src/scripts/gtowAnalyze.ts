@@ -1,7 +1,7 @@
 /**
  * Send played Ignition hands to GTO Wizard's analyzer (the Analyze tab of a pool account) in one go.
  *
- *   bun src/scripts/gtowAnalyze.ts --session session_20261004_021501      every Ignition hand of one session
+ *   bun src/scripts/gtowAnalyze.ts --session session_20261004_021501      every Ignition hand of one session (or a,b,c)
  *   bun src/scripts/gtowAnalyze.ts --since 2026-10-03 [--until 2026-10-04] by local play day
  *   bun src/scripts/gtowAnalyze.ts --last 50                               the newest N archived hands
  *   bun src/scripts/gtowAnalyze.ts --hands 4922381703,4922381674           these hand numbers (archived or not)
@@ -45,14 +45,15 @@ let ids: string[];
 if (arg("hands")) {
   ids = arg("hands")!.split(",").map((s) => s.trim()).filter(isIgnitionHandId);
 } else {
-  const session = arg("session"), since = arg("since"), until = arg("until"), last = Number(arg("last") ?? 0);
+  const sessions = arg("session")?.split(",").map((x) => x.trim()).filter(Boolean) ?? [];
+  const session = sessions.length ? new Set(sessions) : null, since = arg("since"), until = arg("until"), last = Number(arg("last") ?? 0);
   if (!session && !since && !until && !last) {
     console.error("say which hands: --session <id> | --since <day> [--until <day>] | --last <n> | --hands <id,id>   (or --status)");
     process.exit(2);
   }
   let rows: Enriched[] = allRows().map(enrichSync).filter((e): e is Enriched => !!e)
     .filter((e) => isIgnitionHandId(e.clientHandId))
-    .filter((e) => !session || e.raw.sessionId === session)
+    .filter((e) => !session || session.has(e.raw.sessionId))
     .filter((e) => (!since || localDay(e.playedAt) >= since) && (!until || localDay(e.playedAt) <= until));
   if (last > 0) rows = rows.slice(-last);
   ids = [...new Set(rows.map((e) => e.clientHandId!))];
@@ -85,7 +86,7 @@ if (!texts.length) process.exit(1);
 
 // ── upload ──────────────────────────────────────────────────────────────────────────────────────────────────────
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const label = arg("session") ?? (arg("since") ? `${arg("since")}_${arg("until") ?? ""}` : arg("last") ? `last${arg("last")}` : "hands");
+const label = (arg("session")?.includes(",") ? `${arg("session")!.split(",").length}sessions` : arg("session")) ?? (arg("since") ? `${arg("since")}_${arg("until") ?? ""}` : arg("last") ? `last${arg("last")}` : "hands");
 const outDir = join(apiDataDir(), "gtow_analyze");
 mkdirSync(outDir, { recursive: true });
 const uploaded: string[] = [];
