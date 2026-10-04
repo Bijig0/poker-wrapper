@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import type { PreflopPin } from "./preflopPin";
+import type { PreflopPin, PreflopNodeRecord } from "./preflopPin";
 import { emptyCounts, type RequestCounts } from "./requestScope";
 import { handFactsDbPath, openStore } from "./storePaths";
 
@@ -100,6 +100,8 @@ export interface HandDoc {
   key: string;
   heroCards?: string | null;
   preflop?: PreflopPin;
+  /** every preflop decision's node, by actionIndex (preflopPin.recordPreflopNode) — the pin is only the last one */
+  preflopNodes?: PreflopNodeRecord[];
   dealt?: DealtFact;
   streets?: StreetRecord[];
   trees?: TreeRecord[];
@@ -112,6 +114,7 @@ const RETAIN_DAYS = 30;
 const MEMORY_MAX = 600;
 const STREETS_MAX = 60;
 const TREES_MAX = 40;
+const PREFLOP_NODES_MAX = 12;
 
 /** A key worth persisting: a real site hand id, not the wrapper's small per-process counter (see above). */
 export const isDurableKey = (key: string): boolean => !!key && !/^\d{1,6}$/.test(key);
@@ -225,6 +228,17 @@ class HandFacts {
   }
   forgetPreflop(key: string): void {
     if (this.get(key)?.preflop) this.update(key, (d) => { delete d.preflop; });
+  }
+
+  // ── every preflop decision's node: one per decision, a re-ask of the same decision replaces it ─────────────────
+  preflopNodes(key: string): PreflopNodeRecord[] { return this.get(key)?.preflopNodes ?? []; }
+  recordPreflopNode(key: string, rec: PreflopNodeRecord, heroCards?: string | null): void {
+    this.update(key, (d) => {
+      const list = (d.preflopNodes ?? []).filter((x) => x.actionIndex !== rec.actionIndex);
+      list.push(rec);
+      d.preflopNodes = list.sort((a, b) => a.actionIndex - b.actionIndex).slice(-PREFLOP_NODES_MAX);
+      if (heroCards) d.heroCards = heroCards;
+    });
   }
 
   // ── the stacks as dealt: read ONCE per hand, the first read wins ────────────────────────────────────────────

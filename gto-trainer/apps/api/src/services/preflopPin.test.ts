@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { setTrustMap, type TrustMap } from "./nodeTrust";
-import { setPreflopPin, getPreflopPin, forgetPreflopPin, pinRest, resumeChartPreflopRanges, flopSeatsOf, heroDeviation, type ChartPreflopPin } from "./preflopPin";
+import { setPreflopPin, getPreflopPin, forgetPreflopPin, preflopNodeFor, pinRest, resumeChartPreflopRanges, flopSeatsOf, heroDeviation, type ChartPreflopPin } from "./preflopPin";
 import type { RawNode } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
+import { handFacts } from "./handFacts";
+import { withRequestScope } from "./requestScope";
 
 /**
  * The preflop pin: the last preflop answer of a hand names the tree the flop resumes from. Modelled on hand
@@ -115,6 +117,43 @@ describe("heroDeviation — the picks each answer gave hero, carried from pin to
     setPreflopPin({ ...base, rawTokens: ["F", "F", "R2.2"], codes: ["F", "F", "R2"], picks: [bb3bet] });  // a replay of the first
     expect(getPreflopPin(key)?.picks?.map((p) => p.rawTokens.length)).toEqual([3]);
     forgetPreflopPin(key);
+  });
+});
+
+describe("every preflop decision's node is kept (2026-10-04)", () => {
+  const handOf = (key: string, cards: string[] = []) => ({ clientHandId: key, handId: 9, heroCards: cards } as unknown as ParsedHand);
+
+  it("each decision keeps its own record beside the pin; a re-ask of a decision replaces only its own", () => {
+    const key = "nodes-kept";
+    const base = { ...pinAtOpen, handKey: key };
+    setPreflopPin({ ...base, actionIndex: 4, rawTokens: ["F", "F", "F"], codes: ["F", "F", "F"] });
+    setPreflopPin({ ...base, actionIndex: 8, rawTokens: ["F", "F", "F", "R2.6", "R7.5"], codes: ["F", "F", "F", "R2.5", "R7.5"], chartId: "later" });
+    expect(getPreflopPin(key)?.actionIndex).toBe(8);                       // the pin is still the last answer
+    expect(preflopNodeFor(handOf(key), 4)?.codes).toEqual(["F", "F", "F"]);   // …and the first is still there
+    expect((preflopNodeFor(handOf(key), 8) as ChartPreflopPin).chartId).toBe("later");
+    expect(preflopNodeFor(handOf(key), 5)).toBeUndefined();
+    setPreflopPin({ ...base, actionIndex: 4, rawTokens: ["F", "F", "F"], codes: ["F", "F", "F"], chartId: "re-asked" });
+    expect(handFacts.preflopNodes(key).map((r) => r.actionIndex)).toEqual([4, 8]);
+    expect((preflopNodeFor(handOf(key), 4) as ChartPreflopPin).chartId).toBe("re-asked");
+    expect(preflopNodeFor(handOf(key), 4)).not.toHaveProperty("picks");
+    handFacts.forget(key);
+  });
+
+  it("a replay records nothing: what hero was told stays", async () => {
+    const key = "nodes-replay";
+    setPreflopPin({ ...pinAtOpen, handKey: key, chartId: "live" });
+    await withRequestScope({ handKey: key, origin: "replay", street: "preflop" }, async () => { setPreflopPin({ ...pinAtOpen, handKey: key, chartId: "replayed" }); });
+    expect((preflopNodeFor(handOf(key), 4) as ChartPreflopPin).chartId).toBe("live");
+    handFacts.forget(key);
+  });
+
+  it("a hand from before the records stands on its pin, for the pin's own decision only", () => {
+    const key = "nodes-old";
+    handFacts.setPreflop(key, { ...pinAtOpen, handKey: key, picks: [] });
+    expect(preflopNodeFor(handOf(key), 4)?.piece).toBe("chart6max");
+    expect(preflopNodeFor(handOf(key), 4)).not.toHaveProperty("picks");
+    expect(preflopNodeFor(handOf(key), 7)).toBeUndefined();
+    handFacts.forget(key);
   });
 });
 

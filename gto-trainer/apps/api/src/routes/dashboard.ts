@@ -40,8 +40,8 @@ import { fetchNode6max } from "../services/hrc6maxDb";
 import { nodeGetterHu } from "../services/hrc2max";
 import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
-import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct } from "../services/gtowAiPreflop";
-import { getPreflopPin } from "../services/preflopPin";
+import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter } from "../services/gtowAiPreflop";
+import { getPreflopPin, preflopNodeFor } from "../services/preflopPin";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
 import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
@@ -1472,9 +1472,21 @@ app.get("/answer-node", async (c) => {
     // its `chart` is a shape label ("gtow-ai · 3-handed · BTN:102/…"), which looked up
     // in the crawled DB below could only come back "not stored" — the same blank grid.
     // The AI panel below re-solves instead, and shows the stored chain when there is one.
+    // THE KEPT NODE (2026-10-04, preflopPin.recordPreflopNode): every AI preflop answer leaves a record of the tree and
+    // the line hero's node was read on; the node and every seat's range are read back from the solve cache — never a
+    // request. With no record (a hand answered before, or whose facts were pruned) the panel says so.
     if (logged?.tier === "ai-preflop" || /^gtow-ai/.test(logged?.chart ?? "")) {
-      return c.json({ ...base, kind: "ai-chain",
-        note: "This preflop decision was answered by the GTO Wizard AI chain, not a chart — there is no stored chart node to open." });
+      const noNode = (why: string) => c.json({ ...base, kind: "ai-chain",
+        note: `This preflop decision was answered by GTO Wizard AI preflop, not a chart, and its node cannot be shown: ${why}.` });
+      const rec = preflopNodeFor({ ...hand, clientHandId: hand.clientHandId ?? e.clientHandId ?? undefined }, upto);
+      if (!rec) return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04, and a hand's facts are pruned after 30 days)");
+      if (rec.piece !== "gtow-ai-preflop") return noNode(`the record kept for this decision is a chart's (${rec.chartId}), not an AI tree's`);
+      const key = preflopCacheKeyOf(rec);
+      if (!key) return noNode("the tree's key in the GTO Wizard solve cache is not known");
+      const view = await livePreflopNodeView(rec, hand.heroCards, storedPreflopGetter(key));
+      if (!view.ok) return noNode(`the stored tree could not be read — ${view.reason}`);
+      return c.json({ ...base, kind: "ai-preflop", view, tree: { id: rec.id, line: rec.codes.join("-"), rawLine: rec.rawTokens.join("-"),
+        lastResort: rec.lastResort ?? null, reduced: rec.reduced?.droppedPos ?? null, at: rec.at } });
     }
     const live = new Set(hand.liveSeats);
     const posOf = (s: number) => (hand.positions[s] ?? (s === hand.heroSeatId ? heroPos : null) ?? "").toUpperCase();
