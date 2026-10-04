@@ -11,7 +11,7 @@
  */
 import { planCollapses, pickCollapses, type SeatTok } from "../services/multiwayCollapse";
 import { pickDeadMoney, planDeadMoney } from "../services/deadMoneyCollapse";
-import { moneyThrough, narrowingPlan, takeoverCover, takeoverStreets, type RerootArgs } from "../services/multiwayReroot";
+import { legacyStreets, moneyThrough, narrowingPlan, takeoverCover, takeoverStreets, walkPlays, type RerootArgs } from "../services/multiwayReroot";
 
 const argv = process.argv.slice(2);
 const arg = (k: string): string | null => { const i = argv.indexOf(`--${k}`); return i >= 0 ? argv[i + 1] ?? "" : null; };
@@ -225,6 +225,16 @@ function planSpot(s: Spot): Verdict {
   const curFolded = new Set<string>();
   s.streets[cur]!.forEach((t, j) => { if (t === "F") curFolded.add(s.streetSeats[cur]![j]!); });
   let groups = plan.groups, how = "re-root";
+  // as rerootCollapse: a coverGroups walk the tree cannot play sends the hand to the takeover narrowing
+  if (groups) {
+    const capAt = (i: number) => { const b = moneyThrough(a, i).behind; return (p: string) => b[p]; };
+    if (groups.some((g) => { const k = s.seats.filter((p) => g.includes(p)); const lg = legacyStreets(a, cur, m.folded, k); return walkPlays(s.seats, k, lg.streets, lg.seats, capAt) != null; })) groups = null;
+    // and the legacy walks that stay must close every earlier street (stress-500 brief_D-001 slipped through here)
+    for (const g of groups ?? []) {
+      const k = s.seats.filter((p) => g.includes(p)); const lg = legacyStreets(a, cur, m.folded, k);
+      for (let i = 0; i < cur; i++) { const bad = checkStreetCloses(s.seats, k, lg.streets[i]!, lg.seats[i]!, (p) => moneyThrough(a, i).behind[p], {}); if (bad) return { ok: false, why: `legacy narrowing group ${k.join("/")} ${["flop", "turn", "river"][i]}: ${bad}` }; }
+    }
+  }
   if (!groups) {
     const cov = takeoverCover(a, cur, live, new Set([...m.aggressors].filter((p) => !plan.allIn.has(p))), live.filter((p) => p !== s.hero && !curFolded.has(p)));
     groups = cov?.groups ?? [];

@@ -164,6 +164,65 @@ export function takeoverGroups(a: Parameters<typeof takeoverCover>[0], first: nu
   return c && !c.uncovered.length ? c.groups : null;
 }
 
+/** The earlier streets as a coverGroups narrowing walk plays them: the kept seats' tokens, a dropped seat's removed and
+ *  the street repaired by replayWithout (the walks before the takeover existed). */
+export function legacyStreets(a: Pick<RerootArgs, "streets" | "streetSeats">, first: number, folded: ReadonlySet<string>, keep: string[]):
+    { streets: string[][]; seats: string[][]; leftOut: string[] } {
+  const kept = new Set(keep);
+  const streets: string[][] = [], seats: string[][] = [], leftOut = new Set<string>();
+  for (let i = 0; i < first; i++) {
+    const t: string[] = [], s: string[] = [];
+    a.streets[i]!.forEach((tok, j) => { const who = a.streetSeats[i]![j]!; if (kept.has(who)) { t.push(tok); s.push(who); } else if (!folded.has(who)) leftOut.add(who); });
+    const fixed = replayWithout(t, s);
+    streets.push(fixed.toks); seats.push(fixed.seats);
+  }
+  return { streets, seats, leftOut: [...leftOut] };
+}
+
+/**
+ * CAN THE WALK PLAY THESE STREETS (2026-10-05, stress-500 brief_D-001): every street legal in the rotation of the
+ * walk's seats — each token by the seat whose turn it is, no check facing a bet, no raise under the level — and CLOSED
+ * at its end; a seat all in stays out of later streets. `capAt(i)` = each seat's stack entering street i. The reason
+ * when not, else null. (A coverGroups walk whose dropped seats were ALL IN on an earlier street — "HJ jams 9.18, BTN
+ * calls, SB raises 28.33…" without HJ and SB — loses the levels the kept seats called, and its street closed early:
+ * "street closed but more actions follow" on a hand that is fine.)
+ */
+export function walkPlays(order: readonly string[], keep: readonly string[], streets: string[][], seats: string[][],
+    capAt: (i: number) => (p: string) => number | null | undefined): string | null {
+  const rot = order.filter((p) => keep.includes(p));
+  const out = new Set<string>(), allIn = new Set<string>();
+  for (let i = 0; i < streets.length; i++) {
+    const cap = (p: string) => capAt(i)(p) ?? Infinity;
+    const put: Record<string, number> = {};
+    let level = 0, acted = new Set<string>(), at = 0;
+    const next = (k0: number) => { for (let k = 0; k < rot.length; k++) { const p = rot[(k0 + k) % rot.length]!; if (!out.has(p) && !allIn.has(p)) return { p, k: (k0 + k) % rot.length }; } return null; };
+    const live = () => rot.filter((p) => !out.has(p) && !allIn.has(p));
+    const closed = () => live().every((p) => acted.has(p) && (put[p] ?? 0) >= level - 0.005);
+    const toks = streets[i]!, who = seats[i]!;
+    for (let j = 0; j < toks.length; j++) {
+      const t = toks[j]!, p = who[j]!;
+      if (j > 0 && closed()) return `street ${i}: closed before ${p}:${t}`;
+      const nx = next(at);
+      if (!nx || nx.p !== p) return `street ${i}: ${p}:${t} out of turn (${nx?.p ?? "nobody"} to act)`;
+      const mine = put[p] ?? 0;
+      if (t === "F") out.add(p);
+      else if (t === "X") { if (level > mine + 0.005) return `street ${i}: ${p} checks facing a bet`; }
+      else {
+        // cap(p) = his stack entering the street = all he can have in on it
+        const to = t === "C" ? Math.min(level, cap(p)) : t === "RAI" ? cap(p) : Math.min(parseFloat(t.slice(1)), cap(p));
+        if (t !== "C" && to <= level + 0.005 && to < cap(p) - 0.005) return `street ${i}: ${p}:${t} is no raise over ${level}`;
+        if (to < mine - 0.005) return `street ${i}: ${p}:${t} takes chips back`;
+        put[p] = to;
+        if (to > level + 0.005) { level = to; acted = new Set(); }
+        if (to >= cap(p) - 0.005) allIn.add(p);
+      }
+      acted.add(p); at = nx.k + 1;
+    }
+    if (rot.filter((p) => !out.has(p)).length >= 2 && live().length >= 1 && !closed()) return `street ${i}: does not close`;
+  }
+  return null;
+}
+
 /**
  * A street replayed WITHOUT some seats (2026-09-24, sweep side-pot spots). Dropping a seat's tokens can leave the
  * rest meaningless: "HJ bets 4, CO jams, BTN calls, BB calls, HJ calls" without CO has HJ calling nothing, and the
@@ -240,12 +299,9 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
       preload = tk.preload;
       for (let i = 0; i < first; i++) for (const who of a.streetSeats[i]!) if (!kept.has(who) && !m.folded.has(who)) leftOut.add(who);
     } else {
-      for (let i = 0; i < first; i++) {
-        const t: string[] = [], s: string[] = [];
-        a.streets[i]!.forEach((tok, j) => { const who = a.streetSeats[i]![j]!; if (kept.has(who)) { t.push(tok); s.push(who); } else if (!m.folded.has(who)) leftOut.add(who); });
-        const fixed = replayWithout(t, s);
-        streets.push(fixed.toks); seats.push(fixed.seats);
-      }
+      const lg = legacyStreets(a, first, m.folded, keep);
+      streets = lg.streets; seats = lg.seats;
+      for (const p of lg.leftOut) leftOut.add(p);
     }
     const three = keep.map((p) => ({ pos: p, range: a.arr(p) }));
     const heroIdx = keep.indexOf(a.heroPos);
@@ -288,6 +344,12 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   const plan = narrowingPlan(a, first, m);
   const { allIn, live } = plan;
   let groups = plan.groups;
+  // A coverGroups walk the tree cannot play (stress-500 brief_D-001: its dropped seats were all in on an earlier street
+  // and the levels the kept seats called went with them) — the takeover narrowing instead (walkPlays)
+  if (groups) {
+    const capAt = (i: number) => { const b = moneyThrough(a, i).behind; return (p: string) => b[p]; };
+    if (groups.some((g) => { const k = a.ordered.filter((p) => g.includes(p)); const lg = legacyStreets(a, first, m.folded, k); return walkPlays(a.ordered, k, lg.streets, lg.seats, capAt) != null; })) groups = null;
+  }
   if (!live.includes(a.heroPos)) return { ok: false, why: "hero folded earlier" };
 
   // ---- 2. narrow each live seat's range through the earlier streets
