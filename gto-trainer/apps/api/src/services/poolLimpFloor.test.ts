@@ -70,8 +70,24 @@ describe("poolChartCovers", () => {
     expect(poolChartCovers("ign200_6max_D100_olimp_pool3", hj, "BB", { hero: 135, limper: 39 }, V2)).toBe(false);
     expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp_pool3", hj, "BB", { hero: 135, limper: 18 }, V2)).toBe(false);
   });
-  test("from 50bb the even pool3 tree is inside the bound; equilibrium trees and the AI tree never cover", () => {
-    expect(poolChartCovers("ign200_6max_D100_olimp_pool3", hj, "BB", { hero: 135, limper: 55 }, V2)).toBe(true);
+  test("THE SAME BUCKET: a tree covers only a limper it locked at his own stack's range", () => {
+    // the 100bb pool tree locks every limper at the deep 3.1% — inside the stack bound from 50bb, and still not his range
+    expect(poolChartCovers("ign200_6max_D100_olimp_pool3", hj, "BB", { hero: 135, limper: 55 }, V2)).toBe(false);
+    expect(poolChartCovers("ign200_6max_D100_olimp_pool3", hj, "BB", { hero: 135, limper: 84 }, V2)).toBe(false);
+    // 59bb is a 26% limper: the 50bb tree locked him so, the (nearer) 70bb tree at 15%
+    expect(poolChartCovers("ign200_6max_D100_s50_HJ_olimp_pool3", hj, "BB", { hero: 135, limper: 59 }, V2)).toBe(true);
+    expect(poolChartCovers("ign200_6max_D100_s70_HJ_olimp_pool3", hj, "BB", { hero: 135, limper: 59 }, V2)).toBe(false);
+    expect(poolChartCovers("ign200_6max_D100_s70_HJ_olimp_pool3", hj, "BB", { hero: 135, limper: 62 }, V2)).toBe(true);
+    // another seat's uneven tree holds the HJ at 100bb: the deep range
+    expect(poolChartCovers("ign200_6max_D100_s30_UTG_olimp_pool3", hj, "BB", { hero: 135, limper: 30 }, V2)).toBe(false);
+  });
+  test("the hero-free trees cover the short limper they lock, not an SB complete (solved there)", () => {
+    expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp_poolh", hj, "BTN", { hero: 100, limper: 39 }, V2)).toBe(true);
+    expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp_poolh", hj, "BTN", { hero: 100, limper: 70 }, V2)).toBe(false);
+    expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp_poolh", { pos: "SB", complete: true }, "BB", { hero: 100, limper: 30 }, V2)).toBe(false);
+    expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp_poolh", hj, "BTN", { hero: 100, limper: 39 }, () => null)).toBe(false);
+  });
+  test("equilibrium trees and the AI tree never cover", () => {
     expect(poolChartCovers("ign200_6max_D30_olimp", hj, "BB", { hero: 135, limper: 30 }, V2)).toBe(false);
     expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp", hj, "BB", { hero: 135, limper: 30 }, V2)).toBe(false);
     expect(poolChartCovers("gtow-ai · 6-handed · UTG:11.5/HJ:38/CO:26/BTN:96/SB:151/BB:135", hj, "BB", { hero: 135, limper: 38 }, V2)).toBe(false);
@@ -83,8 +99,10 @@ describe("poolChartCovers", () => {
     expect(poolChartCovers("ign200_6max_D100_s30_HJ_olimp_pool3", hj, "BB", { hero: 135, limper: 39 }, () => null)).toBe(false);
   });
   test("the SB pilot locks the limps, not the SB's complete", () => {
-    expect(poolChartCovers("ign200_6max_D100_olimp_pool", hj, "BB", { hero: 100, limper: 70 }, V2)).toBe(true);
-    expect(poolChartCovers("ign200_6max_D100_olimp_pool", { pos: "SB", complete: true }, "BB", { hero: 100, limper: 70 }, V2)).toBe(false);
+    // (a 100bb tree: its limpers hold the deep range, so the only limper it can cover is a deep one — never floored)
+    expect(poolChartCovers("ign200_6max_D100_olimp_pool", hj, "BB", { hero: 100, limper: 100 }, V2)).toBe(true);
+    expect(poolChartCovers("ign200_6max_D100_olimp_pool", hj, "BB", { hero: 100, limper: 70 }, V2)).toBe(false);
+    expect(poolChartCovers("ign200_6max_D100_olimp_pool", { pos: "SB", complete: true }, "BB", { hero: 100, limper: 100 }, V2)).toBe(false);
   });
 });
 
@@ -119,11 +137,13 @@ describe("applyPoolLimpFloor", () => {
     expect(r.ranges.HJ).toEqual(TINY);
   });
 
-  test("a 70bb limper on the 100bb pool3 tree is inside the bound (no bound from 50bb); on the even 50bb chart he gets the 60-85bb range", () => {
+  test("a 70bb limper: the 60-85bb range on the 100bb pool3 tree (deep lock) and on an equilibrium chart; his own 70bb tree covers", () => {
     const d = dealt({ 3: 70 });
-    expect(applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: ranges(), chartId: "ign200_6max_D100_olimp_pool3", dealt: d, planOf: V2 }).applied).toEqual([]);
-    expect(applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: ranges(), chartId: "ign200_6max_D50_olimp", dealt: d, planOf: V2 }).applied.map((x) => x.key))
-      .toEqual(["limp_first_short_60_85"]);
+    const on = (chartId: string) => applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: ranges(), chartId, dealt: d, planOf: V2 }).applied.map((x) => x.key);
+    expect(on("ign200_6max_D100_olimp_pool3")).toEqual(["limp_first_short_60_85"]);
+    expect(on("ign200_6max_D50_olimp")).toEqual(["limp_first_short_60_85"]);
+    expect(on("ign200_6max_D100_s70_HJ_olimp_pool3")).toEqual([]);
+    expect(on("ign200_6max_D100_s70_HJ_olimp_poolh")).toEqual([]);
   });
 
   test("a deep limper keeps the tree's range; a limp-raiser keeps his; a limper not at the flop is skipped", () => {

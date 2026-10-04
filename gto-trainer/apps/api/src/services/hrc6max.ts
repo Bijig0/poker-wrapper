@@ -85,6 +85,30 @@ export const unevenChartId = (short: number, seat: Seat6, open: number): string 
 export const LIMP_SHORTS6 = [30, 50, 70];
 export const unevenLimpChartId = (short: number, seat: Seat6, pool: boolean): string =>
   `${SITE_6MAX}_6max_D${num(DEEP6)}_s${num(short)}_${seat}_olimp${pool ? "_pool3" : ""}`;
+/**
+ * THE HERO-FREE UNEVEN LIMP TREES (2026-10-05, Brady: "the queued pool trees don't cover ALL positions? only in the
+ * blinds? Make it cover all"). A pool3 tree locks EVERY limp node, hero's seat included, so behind a limper hero's own
+ * first decision (his over-limp node in HJ-BTN, his complete in the SB) is the pool's play there and the picker read the
+ * equilibrium tree instead — whose short limper is near-empty (0.05% of hands against the pool's 26%). Of 387 logged
+ * hands with a 20-85bb limper, hero sat in UTG-BTN in 155 and the SB in 108; pool3 serves only the BB's 124.
+ *   _olimp_poolh  the SHORT seat's limps (first-in and over-limp, at his stack's bucket) and every seat's FIRST-IN limp
+ *                 locked as in pool3; the deep seats' over-limps and every SB complete SOLVED — so a deep hero behind
+ *                 the short limper reads a solved node in every seat (poker-zenbook solves/sixmax_grid/limp-v2-herofree,
+ *                 short UTG/HJ/CO/BTN x 30/50/70bb, queued 2026-10-05).
+ */
+export const HERO_FREE_SEATS6: readonly Seat6[] = ["UTG", "HJ", "CO", "BTN"];
+export const unevenLimpFreeChartId = (short: number, seat: Seat6): string =>
+  `${SITE_6MAX}_6max_D${num(DEEP6)}_s${num(short)}_${seat}_olimp_poolh`;
+/** The pool's limp ranges come by stack bucket (locks_v2: 60bb or less, 60-85bb, deeper) — the bucket a stack falls in. */
+export const limpStackBucket = (bb: number): "le60" | "60_85" | "deep" => (bb > 85 ? "deep" : bb <= 60 ? "le60" : "60_85");
+/** Short limp rungs for a seat at `bb` (effective `eff` against hero): a rung that would COVER him first — locked at his
+ *  own bucket and inside the first-decision stack bound, the test services/poolLimpFloor.poolChartCovers makes (a 59bb
+ *  limper's range is the 50bb tree's 26%, not the nearer 70bb tree's 15%) — then the nearest by ratio, as before. */
+const byLimpFit = (bb: number, eff: number) => {
+  const covers = (r: number) => limpStackBucket(r) === limpStackBucket(bb) && withinFirstStackBound(eff, Math.min(DEEP6, r));
+  return (x: number, y: number): number =>
+    (Number(covers(y)) - Number(covers(x))) || (Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)));
+};
 
 /** The two pool-locked limp trees at 100bb (solves/sixmax_grid/limp-pool*, 2026-09-23/24). */
 export const POOL_LIMP_CHART = `${SITE_6MAX}_6max_D100_olimp_pool3`;   // limps AND the SB's complete locked to the pool
@@ -577,9 +601,7 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   function unevenLimp(): Chart6Choice | null {
     if (rung !== DEEP6) return null;
     const pool = poolLimpChart(tokens, me);
-    // the SB's own complete (the pilot tree: pool limpers, SB solved) stays as it is — no uneven tree holds pool-locked
-    // limpers with a free SB, and the pool lock is worth more there than the stacks
-    if (pool?.id === POOL_LIMP_CHART_SB) return null;
+    const sbNode = pool?.id === POOL_LIMP_CHART_SB;
     const usePool = pool?.id === POOL_LIMP_CHART;
     // three limpers: only the pool-locked uneven trees hold the third limper (v2); the equilibrium ones stop at two
     const limp3 = pool?.limp3Fallback;
@@ -592,14 +614,27 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
       : shorts.filter(([p]) => limpers.has(p)).sort((a, b) => a[1] - b[1])[0]?.[0]
         ?? after.find((p) => isShort(p)) ?? shorts.slice().sort((a, b) => a[1] - b[1])[0]![0];
     const bb = oppStack(seat)!;
+    // the hero-free tree of this seat exists when he is a short non-blind seat who LIMPED: hero's own node is solved there
+    const free = limpers.has(seat) && HERO_FREE_SEATS6.includes(seat);
+    // the SB's own complete: the hero-free tree of the short limper when there is one (the pool limper at his own stack,
+    // the SB solved); else the pilot as before (pool limpers at 100bb, SB solved) — the lock is worth more than the stacks
+    if (sbNode && !free) return null;
     const evenGap = Math.abs(Math.log(DEEP6 / bb));
-    const rungs = LIMP_SHORTS6.filter((r) => Math.abs(Math.log(r / bb)) < evenGap)
-      .sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)));
+    const rungs = LIMP_SHORTS6.filter((r) => Math.abs(Math.log(r / bb)) < evenGap).sort(byLimpFit(bb, Math.min(hero, bb)));
     if (!rungs.length) return null;
     const s = rungs[0]!;
+    // WHICH TREES, per rung. Three limpers → pool3 only (as before). Hero in HJ-BTN or the SB, BEHIND a limp → the
+    // hero-free tree first, at his own opening-orbit node AND at every later node of the hand (his first decision was
+    // read there), then what answered before: pool3 past the opening orbit, the equilibrium tree. Anyone else (the BB;
+    // a seat no one limped in front of) → pool3, the hero-free tree behind it (it locks the same short limper).
+    const behind = me !== "BB" && [...limpers].some((p) => SEATS6.indexOf(p) < SEATS6.indexOf(me));
+    const freeId = (r: number): string[] => (free ? [unevenLimpFreeChartId(r, seat)] : []);
     const ids = rungs.flatMap((r) => (limp3 ? [unevenLimpChartId(r, seat, true)]
-      : usePool ? [unevenLimpChartId(r, seat, true), unevenLimpChartId(r, seat, false)] : [unevenLimpChartId(r, seat, false)]));
-    if (usePool) notes.push(pool!.note);
+      : sbNode ? freeId(r)
+        : usePool ? [...(behind ? [...freeId(r), unevenLimpChartId(r, seat, true)] : [unevenLimpChartId(r, seat, true), ...freeId(r)]), unevenLimpChartId(r, seat, false)]
+          : [...freeId(r), unevenLimpChartId(r, seat, false)]));
+    if (usePool || sbNode) notes.push(pool!.note);
+    if (free && !limp3 && behind) notes.push(`hero acts behind the ${seat}'s limp — the hero-free pool tree (his limp locked, hero's node solved) is asked first`);
     if (Math.abs(bb - s) > 8) {
       const want = Math.round(bb / 10) * 10;
       gap("short-rung-snapped", `the ${seat} has ${Math.round(bb)}bb — answered from the ${s}bb short limp chart`,
@@ -638,11 +673,13 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     const pool = poolLimpChart(tokens, me);
     if (pool?.id !== POOL_LIMP_CHART) return null;
     const eff = Math.min(hero, bb);
-    const rungs = LIMP_SHORTS6.filter((r) => withinFirstStackBound(eff, Math.min(DEEP6, r)))
-      .sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)));
+    const rungs = LIMP_SHORTS6.filter((r) => withinFirstStackBound(eff, Math.min(DEEP6, r))).sort(byLimpFit(bb, eff));
     if (!rungs.length) return null;
     const s = rungs[0]!;
-    const ids = rungs.map((r) => unevenLimpChartId(r, seat, true));
+    // the BB reads pool3 first, a seat behind the limper the hero-free tree (see unevenLimp) — each with the other behind it
+    const behind = me !== "BB" && SEATS6.indexOf(seat) < SEATS6.indexOf(me);
+    const freeId = (r: number): string[] => (HERO_FREE_SEATS6.includes(seat) ? [unevenLimpFreeChartId(r, seat)] : []);
+    const ids = rungs.flatMap((r) => (behind ? [...freeId(r), unevenLimpChartId(r, seat, true)] : [unevenLimpChartId(r, seat, true), ...freeId(r)]));
     notes.push(`the ${seat} (${Math.round(bb)}bb) limped and is hero's only opponent — his pool-locked uneven limp tree (${s}bb) answers`);
     if (Math.abs(bb - s) > 8) {
       const want = Math.round(bb / 10) * 10;
@@ -761,8 +798,9 @@ export function unnameable6max(id: string): string | null {
     if (!OPENS6.includes(o)) return `open ${o}x is not an even-grid open (${OPENS6.join("/")})`;
     return null;
   }
-  if ((m = /^D(\d+)_s([\d_]+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3)?$/.exec(rest))) {
-    if (rest.endsWith("_pool3") && m[4] !== "limp") return "only limp trees carry the pool lock";
+  if ((m = /^D(\d+)_s([\d_]+)_(UTG|HJ|CO|BTN|SB|BB)_o(limp|[\d_]+)(?:_pool3|_poolh)?$/.exec(rest))) {
+    if (/_pool(?:3|h)$/.test(rest) && m[4] !== "limp") return "only limp trees carry the pool lock";
+    if (rest.endsWith("_poolh") && !HERO_FREE_SEATS6.includes(m[3] as Seat6)) return "the hero-free limp trees are for a short UTG/HJ/CO/BTN (a short blind never limps first in)";
     const d = Number(m[1]), s = val(m[2]!);
     if (d !== DEEP6) return `uneven depth ${d}bb: the uneven set is at ${DEEP6}bb`;
     if (m[4] === "limp") return LIMP_SHORTS6.includes(s) ? null : `short rung ${s}bb is not an uneven limp rung (${LIMP_SHORTS6.join("/")})`;
