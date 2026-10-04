@@ -4205,7 +4205,7 @@ async function fastSolveOuter(hand: ParsedHand, heroPos: string | null, opts: Fa
 
 /**
  * The 6-max strategy's preflop answer: the charts first, then whatever they cannot hold goes to GTO Wizard AI preflop
- * (the gap gate and the fit rule inside a time box, the last resort behind it). Lifted out of fastSolveInner unchanged
+ * (the gap gate and the fit rule inside a time box; no heads-up last resort since 2026-10-05). Lifted out of fastSolveInner unchanged
  * (2026-10-05) so the pool-locked limper (poolLimpLockFirst) can stand in front of it.
  */
 async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult> {
@@ -4304,30 +4304,25 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
   });
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
   // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR "Incorrect actions" from GTO
-  // Wizard on the built line means the table as captured is not a table, and the last resort would only rebuild the
-  // same impossible hand heads-up. Terminal, like the gate at the entry. (Any other VALIDATION_ERROR is a refusal of
-  // the TREE — kind tree-refused, 2026-10-03 — and goes on to the last resort below.)
+  // Wizard on the built line means the table as captured is not a table. Terminal, like the gate at the entry, and
+  // marked capture-fault. (Any other VALIDATION_ERROR is a refusal of the TREE — kind tree-refused, 2026-10-03.)
   if ((ai as { kind?: string }).kind === "capture-fault") {
     return { ok: false, kind: "capture-fault", street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
       reason: `${why}; ${ai.reason}` };
   }
   // THE LINE IS NOT HERO'S DECISION (2026-09-30, hand 4921602992): the AI piece walked the table's line in a tree
-  // built from the table and it ended on another seat's node. The last resort keeps the line and only changes the
-  // tree, so it ends on that seat's node again — after a tree build, a solution and 20-odd polls (36 s on a probe
-  // for a spot that was never hero's, holding the poller's slot while hero's real decision timed out). Terminal.
+  // built from the table and it ended on another seat's node. Terminal (its own reason kept for the miss queue).
   if ((ai as { kind?: string }).kind === LINE_NOT_HERO) {
     return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
-      reason: `${why}; ${ai.reason}; the last resort is not tried — it replays the same line heads-up and lands on the same seat's node` };
+      reason: `${why}; ${ai.reason}` };
   }
-  // THE LAST RESORT (2026-09-23): neither piece can walk the line — play it heads-up: first hero against the last
-  // raise on a tree where that raise is NODE-LOCKED to the raiser's range on the exact tree (2026-10-04), else the plain
-  // heads-up tree with the folded-out players' chips left out (services/gtowAiPreflop.solvePreflopLastResort). Always
-  // flagged; no answer only when nobody has raised and hero is not in the blinds.
-  const last = await solvePreflopLastResort(hand, heroPos, `${why}; ${ai.reason}`);
-  if (last.ok) return asResult(last, true, { piece: "gtow-ai-preflop:last-resort", how: pf.how === "rebuilt" ? "rebuilt" : "by-design",
-    code: pf.how === "rebuilt" ? pf.code : "preflop:last-resort", why: `neither preflop piece could walk the line — ${last.lastResort?.how ?? "hero vs the last raise heads-up"}${/locked to his range/.test(last.lastResort?.how ?? "") ? " (locked tree)" : " (plain heads-up tree)"} (${why.slice(0, 120)})` });
+  // NO HEADS-UP LAST RESORT IN THE 6-MAX STRATEGY (2026-10-05, Brady: "remove it entirely"). Until today a line
+  // neither piece answered was played heads-up against the last raise (solvePreflopLastResort) — whatever made the
+  // exact tree fail, a GTO Wizard node that never came back included (hand 4922577812: HJ 73s facing a 20bb UTG jam,
+  // hero's node unanswered for 36 s, the heads-up tree's answer landed at 47.6 s, after the 45 s ask had given up).
+  // Now the exact tree's refusal is the answer: no answer. The CoinPoker ring strategy keeps its last resort.
   return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
-    reason: `${why}; ${ai.reason}; ${last.reason}` };
+    reason: `${why}; ${ai.reason}; no heads-up last resort in the 6-max strategy` };
 }
 
 /**
