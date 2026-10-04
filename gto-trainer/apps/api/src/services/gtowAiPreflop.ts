@@ -60,7 +60,7 @@ import {
 } from "../utils/reducedArrival/reducedArrival";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 // THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
-import { allInListing, planLockedHeadsUp, raiseListings, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
+import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
 import type { HrcNode } from "./hrc3max";
 import { answerLog } from "./answerLog";
@@ -213,6 +213,32 @@ export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; li
 const round5 = (x: number) => Math.round(x * 2) / 2;
 const num = (n: number) => String(Math.round(n * 100) / 100);
 
+/**
+ * THE ONE WAY A PREFLOP TREE WRITES "RAISE TO <total>" AS AN AMOUNT (2026-10-04, scripts/_probeNodeLockStageA.ts
+ * `units` `straddle` `levels` `cap`). GTO Wizard reads "<N>bb" in ANY size list of a preflop tree — the open, every
+ * raise level, an all-in — as N times the tree's LARGEST POST, not N chips:
+ *   posts 0.5/1 (control):          "6bb" → R6
+ *   posts 0.5/3:                    "6bb" → R18                (and "4.23x" → R12.69: a multiple of the bet faced)
+ *   posts 2.6/1 (the larger the SB): "13bb" → R33.8            ("5x" → R13)
+ *   a straddle, 0.5/1/2 (CO 2):     open "6bb" → R12, "2.5x" → R5; a raise list "15bb" → R30, "3x" → R15;
+ *                                   "100bb" → R100, the all-in (a size past the stack IS the all-in)
+ * "<N>x" is always N times the bet being faced. Stacks, posts, `pot` and the rake cap are read in our units. A LARGEST
+ * POST UNDER 1 CANNOT BE EXPRESSED: GTO Wizard rescales the posts so it is 1 and leaves the stacks as sent (0.01/0.5
+ * played as 0.02/1; 0.25/0.25 as 1/1) — such a tree is refused (shapeOf; the locked tree's plan keeps hero's post ≥ 1).
+ * With the largest post 1 — every tree the builder makes today: a 1bb big blind, `straddle` null, the dead-SB ghost a
+ * penny — this writes exactly what was written before (`${num(total)}bb`), so no stored tree changes its key.
+ */
+export function sizeTo(total: number, largestPost: number): string {
+  return largestPost === 1 ? `${num(total)}bb` : `${Math.round((total / largestPost) * 1000) / 1000}bb`;
+}
+/** A size list written in chips ("<total>bb", "<N>x") as the tree must send it (sizeTo); identity when the largest post is 1. */
+export function sizesFor(list: string[], largestPost: number): string[] {
+  if (largestPost === 1) return list;
+  return list.map((x) => { const m = /^(\d+(?:\.\d+)?)bb$/.exec(x); return m ? sizeTo(Number(m[1]), largestPost) : x; });
+}
+/** The largest post of a shape: what a "<N>bb" size counts in. */
+export const largestPostOf = (shape: Pick<AiPreflopShape, "sb" | "bb" | "straddle">): number => Math.max(shape.sb, shape.bb, shape.straddle?.bb ?? 0);
+
 /** What an action put in the pot, in the tree's own blinds: the NL5 test stake's 0.4bb small-blind post is the
  *  NL200 game's 0.5 (PF-06 — the same pin shapeOf applies to the blind itself), everything else as recorded. */
 const putBb = (hand: ParsedHand, a: ParsedAction): number =>
@@ -328,6 +354,8 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   // the ANTE and the SITE'S RAKE ride on the shape only when the table has them (CoinPoker ring, 2026-09-30)
   const anteBb = hand.anteBb != null && hand.anteBb > 0 ? Math.round(hand.anteBb * 1000) / 1000 : 0;
   const siteRake = siteRakeOf(hand, dealtN);
+  // a largest post under 1 cannot be expressed: GTO Wizard rescales the posts to it and not the stacks (sizeTo)
+  if (Math.max(sb, bb) < 1) return { error: `the largest post is ${Math.max(sb, bb)}bb — GTO Wizard rescales a largest post under 1bb and not the stacks, so the tree cannot be written` };
   return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null,
     ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}), ...(stackCap ? { stackCap } : {}) };
 }
@@ -487,11 +515,13 @@ function treeBody(shape: AiPreflopShape, m: ReturnType<typeof menus>) {
         bet_sizes: [], raise_sizes: [], second_raise_sizes: [], third_plus_raise_sizes: [] };
     }
     const s = position === shape.heroApiPos ? m.hero : m.villain;
+    // every amount in chips, written as GTO Wizard reads it (sizeTo: N × the largest post — identity at a 1bb blind)
+    const unit = largestPostOf(shape);
     // calls of opens and cold-calls of 3-bets+ must be switched on explicitly in FIXED mode (the web app's own
     // defaults: ccVs2b on, ccVs3bPlus off — we want both, a fish's line is anything)
     return { position, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
-      bet_sizes: withAllIn(position, s.opens), raise_sizes: withAllIn(position, s.three),
-      second_raise_sizes: withAllIn(position, s.four), third_plus_raise_sizes: withAllIn(position, s.five) };
+      bet_sizes: sizesFor(withAllIn(position, s.opens), unit), raise_sizes: sizesFor(withAllIn(position, s.three), unit),
+      second_raise_sizes: sizesFor(withAllIn(position, s.four), unit), third_plus_raise_sizes: sizesFor(withAllIn(position, s.five), unit) };
   };
   return {
     starting_street: "PREFLOP", pot: shape.deadBb, ante: shape.anteBb || null, ante_distribution_method: "PER_PLAYER",
@@ -1277,6 +1307,11 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     }
     snapped = fixed.changed;
     usedLine = fixed.line;
+    // A TREE WHOSE LARGEST POST IS NOT 1 lists its played sizes through sizeTo; a node named otherwise is not the size
+    // intended (the unit rule did not hold) — the tree is unusable, not answered from (none is built today)
+    if (largestPostOf(shape) !== 1 && snapped.length) {
+      return { ok: false, kind: TREE_REFUSED, line, reason: `GTO Wizard AI preflop: the tree named the line's sizes otherwise (${snapped.join(", ")}) — its largest post is ${largestPostOf(shape)}bb, so the sizes were not read as intended` };
+    }
     node = await fetchNode(sol.solId, fixed.line);
     if ("error" in node) {
       return { ok: false, reason: `GTO Wizard AI preflop: node '${fixed.line || "root"}' (walked from '${line}') — ${node.error}`, line };
@@ -1561,13 +1596,13 @@ const defaultsAt = (lv: number): string[] => (lv <= 1 ? OPENS : lv === 2 ? THREE
 /** The locked heads-up tree's body: the plan's posts, stacks and pot; the raiser's first raise is the table's raise,
  *  listed alone (beside his all-in); hero's re-raise and everything after it use the menus of the table's next levels. */
 export function lockedTreeBody(plan: LockedPlan, rake: Pick<AiPreflopShape, "rakeCapBb" | "siteRake">) {
-  const other = (t: TreeSeat): TreeSeat => (t === "SB" ? "BB" : "SB");
-  // a size past the deeper stack in any reading: the seat's all-in
-  const allIn = (t: TreeSeat) => allInListing(Math.max(plan.stacks[t], plan.stacks[other(t)]), plan.unit);
-  const raiseList = lockedRaiseIsAllIn(plan) ? [allIn(plan.raiserTree)] : [...raiseListings(plan.raiseToTree, plan.unit), allIn(plan.raiserTree)];
+  // every amount through sizeTo (N × the largest post: hero's, never under 1 — utils/lockedHeadsUp); an all-in is the
+  // deeper stack (a size past a seat's stack IS its all-in)
+  const allIn = sizeTo(Math.max(plan.stacks.SB, plan.stacks.BB), plan.unit);
+  const raiseList = lockedRaiseIsAllIn(plan) ? [allIn] : [sizeTo(plan.raiseToTree, plan.unit), allIn];
   const entry = (t: TreeSeat) => {
     const raiser = t === plan.raiserTree;
-    const later = [...defaultsAt(plan.raiseLevel + (raiser ? 2 : 1)), allIn(t)];
+    const later = [...defaultsAt(plan.raiseLevel + (raiser ? 2 : 1)), allIn];
     return { position: t, type: "FIXED", use_fixed_sizes: true, allow_limp: true, allow_call_opens: true, allow_3betplus_cold_calls: true,
       bet_sizes: raiser ? raiseList : [], raise_sizes: raiser ? raiseList : later, second_raise_sizes: later, third_plus_raise_sizes: later };
   };
@@ -1588,7 +1623,8 @@ export function lockedTreeBody(plan: LockedPlan, rake: Pick<AiPreflopShape, "rak
 /** the raiser's raise is his all-in, or covers hero: the tree names it as the all-in */
 const lockedRaiseIsAllIn = (plan: LockedPlan) => plan.raiserAllIn || plan.raiseToTree >= Math.min(plan.stacks.SB, plan.stacks.BB) - 0.01;
 
-/** The raiser's action at his node: the all-in when his raise is one, else the raise nearest his size (within 1%). */
+/** The raiser's action at his node: the all-in when his raise is one, else the raise AT his size — GTO Wizard names a
+ *  listed amount to the cent; a node named otherwise means the size was not read as intended, and the tree is not used. */
 export function raiseCodeAt(sols: any[], plan: LockedPlan): string | null {
   if (lockedRaiseIsAllIn(plan)) {
     // the all-in GTO Wizard flags, else (with a pot it never flags one — utils/lockedHeadsUp) the largest raise
@@ -1602,7 +1638,7 @@ export function raiseCodeAt(sols: any[], plan: LockedPlan): string | null {
     if (!isRaiseCode(a)) continue;
     if (!best || Math.abs(codeNum(a.action.code) - plan.raiseToTree) < Math.abs(codeNum(best.action.code) - plan.raiseToTree)) best = a;
   }
-  return best && Math.abs(codeNum(best.action.code) - plan.raiseToTree) <= Math.max(0.06, plan.raiseToTree * 0.01) ? String(best.action.code) : null;
+  return best && Math.abs(codeNum(best.action.code) - plan.raiseToTree) <= 0.015 ? String(best.action.code) : null;
 }
 
 const lockOf = (line: string, sols: any[], w: (code: string) => number[] | number): NodeLock => ({

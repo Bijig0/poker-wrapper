@@ -35,10 +35,10 @@
  *   - `pot` IS AN ANTE PAID FROM CHIPS GTO WIZARD ADDS: a stack of 100 with a pot of 2 reads 101 but 100 is all that can
  *     be bet (a raiser of 4.2 with a pot of 0.4 shoves to 4). So the stacks sent are the table's, and with a pot the
  *     all-in is never flagged (the largest raise is the shove).
- *   - "<N>bb" IS N OF THE LARGER POST (6bb over 0.5/3 is R18; 13bb over 2.6/1 is R33.8); "<N>x" is N times the bet
- *     faced. Stacks, posts, `pot` and the rake cap are in our units (a game and its copy at half scale solve the same).
- *     The raiser's size is listed in both readings and the code nearest his raise is the one locked (his node is
- *     locked: a size he does not take costs nothing); an all-in is listed past the stack (a size past it IS the all-in).
+ *   - "<N>bb" IS N OF THE LARGEST POST (6bb over 0.5/3 is R18; 13bb over 2.6/1 is R33.8; on a straddled 0.5/1/2 table
+ *     6bb is R12); "<N>x" is N times the bet faced. Stacks, posts, `pot` and the rake cap are in our units. The tree's
+ *     sizes go through gtowAiPreflop.sizeTo with `unit` (hero's post, the largest), and the raiser's node must name the
+ *     raise at its amount or the tree is not used.
  */
 import type { ParsedAction, ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
 import { allInCalls } from "../../feed/buildSolutionUrl/buildSolutionUrl";
@@ -182,11 +182,3 @@ export function planLockedHeadsUp(hand: ParsedHand, heroPosIn: string | null, op
     foldedPos, livePos, blindsBehindPos, toActPos,
   };
 }
-
-/** three decimals at most: GTO Wizard refuses a ratio with more ("Bet type 'Ratio' with more than 3 decimals") */
-const r3 = (x: number) => Math.round(x * 1e3) / 1e3;
-/** The raiser's raise to `amount` (tree chips), in every reading GTO Wizard may give it (the module header). */
-export const raiseListings = (amount: number, unit: number): string[] =>
-  [...new Set([`${r3(amount / unit)}x`, `${r3(amount / unit)}bb`, `${r2(amount)}bb`])];
-/** An all-in: an amount past the stack whichever unit a "bb" is read in (a size past the stack is the all-in). */
-export const allInListing = (stack: number, unit: number): string => `${Math.ceil(stack / Math.min(1, unit)) + 1}bb`;

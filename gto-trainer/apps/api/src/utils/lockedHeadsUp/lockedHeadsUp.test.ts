@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { allInListing, planLockedHeadsUp, raiseListings, type LockedPlan } from "./lockedHeadsUp";
+import { planLockedHeadsUp, type LockedPlan } from "./lockedHeadsUp";
 import type { ParsedHand } from "../../feed/parsePanelFeed/parsePanelFeed";
 
 /** The locked heads-up tree's plan (utils/lockedHeadsUp): seating, posts, the pot hero is priced at, the shift. */
@@ -73,15 +73,5 @@ describe("the locked heads-up tree's plan", () => {
     // BB limps... SB completes 1, BB raises: hero SB is OOP — fine; hero BTN behind a limp-raiser with less in is refused
     const r = planLockedHeadsUp(hand("BTN", [["UTG", "call", 1], ["HJ", "fold"], ["CO", "fold"], ["BTN", "call", 1], ["SB", "fold"], ["BB", "check"], ["UTG", "raise", 5]]), "BTN");
     expect(r.ok).toBe(true);   // hero has 1 in, the raiser had 1: even
-  });
-});
-
-describe("the sizes the raiser's node lists", () => {
-  it("his raise in every reading GTO Wizard may give a size, and an all-in past any reading of the stack", () => {
-    expect(raiseListings(3.85, 1)).toEqual(["3.85x", "3.85bb"]);
-    expect(raiseListings(15.4, 3.7)).toEqual(["4.162x", "4.162bb", "15.4bb"]);   // a ratio is cut to three decimals
-    expect(raiseListings(13, 2.6)).toEqual(["5x", "5bb", "13bb"]);
-    expect(allInListing(100, 2.6)).toBe("101bb");
-    expect(allInListing(58.65, 0.25)).toBe("236bb");
   });
 });

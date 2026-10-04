@@ -14,7 +14,13 @@
  *   prev      street_all freezes every earlier node of the street (node_locks_count 3 for a lock at R2.5-R8.8: the root and
  *             BB's node unchanged); last_node freezes none (count 1: SB's root went to limp 99.4%, BB 3-bets 57.5%);
  *             street_current_player freezes the locked player's own earlier nodes (count 2: SB's root kept, BB 3-bets 99.8%).
- *   units     "<N>bb" is N of the LARGER post: 6bb over posts 0.5/3 → R18 (4.23x → R12.69, a multiple of the bet faced).
+ *   units     "<N>bb" is N of the LARGEST post: 6bb over posts 0.5/3 → R18 (4.23x → R12.69, a multiple of the bet faced);
+ *             13bb in the BB's raise list over posts 2.6/1 → R33.8 (5x → R13).
+ *   straddle  CO/BTN/SB/BB, blinds 0.5/1, CO straddles 2: BTN's open list "6bb" → R12, "2.5x" → R5, "100bb" → R100 (the
+ *             all-in, flagged); SB facing R5, raise list "15bb" → R30, "3x" → R15. THE RULE: "<N>bb" in any preflop size
+ *             list is N × the largest post on the tree; "<N>x" is N × the bet faced; a size past the stack is the all-in.
+ *             Written once, in gtowAiPreflop.sizeTo (identity at a 1bb largest post: every live tree is byte-identical,
+ *             gtowAiPreflop.sizeTo.test.ts against 24 bodies dumped from main 2a39ce6).
  *   cap       stacks 600 over a post of 3: accepted — the 250bb limit counts in the larger post (a penny each at 100 deep:
  *             refused, "Only effective stacks up to 250bb").
  *   levels    a larger post UNDER 1 is rescaled to 1 and the stacks are not (0.01/0.5 played as 0.02/1); the larger post
@@ -23,7 +29,7 @@
  *   rakecap   cap_in_chips is in our units: a game and its copy at half scale (cap halved) solve identically (max |Δ| 0.0000);
  *             the half-scale copy with the cap NOT halved differs (0.435).
  *
- *   . config/env.ps1; & $env:BUN run src/scripts/_probeNodeLockStageA.ts [multiway] [units] [prev] [cap] [levels] [potante] [rakecap]
+ *   . config/env.ps1; & $env:BUN run src/scripts/_probeNodeLockStageA.ts [multiway] [units] [prev] [cap] [levels] [potante] [rakecap] [straddle]
  *
  * NOT while a session is live. Stops on any 429 / limit-flavoured 401/403, past 1,200 requests in the account's last
  * hour, or past its own budget.
@@ -203,6 +209,35 @@ if (want.includes("levels")) {
     for (const l of [next, r].filter(Boolean)) {
       const n = await node(sol!, l);
       console.log(`   '${l}' ${n?.game?.players?.find((p: any) => p.is_hero)?.position}: ${JSON.stringify(n?.action_solutions?.map((a: any) => [a.action.code, a.action.betsize]))} · ${JSON.stringify(n?.game?.players?.map((p: any) => [p.position, p.chips_on_table, p.current_stack]))}`);
+    }
+  }
+}
+
+if (want.includes("straddle")) {
+  // "<N>bb" ON A STRADDLED TABLE: CO/BTN/SB/BB 100bb, blinds 0.5/1, CO straddles 2 (the largest post). BTN opens from
+  // ["6bb", "2.5x", "100bb"]; SB faces the 2.5x open with ["15bb", "3x", "100bb"]. N × 2 or N chips?
+  const h4: ParsedHand = {
+    handId: 1, clientHandId: "probe-straddle", bbCents: 200, heroSeatId: 1, heroCards: ["7s", "7c"], board: [], street: "preflop",
+    actions: [pre("post-sb", 3, 0.5), pre("post-bb", 4, 1)], liveSeats: [1, 2, 3, 4], committed: {}, potByStreet: {}, positions: { 1: "BTN", 2: "CO", 3: "SB", 4: "BB" }, stacks: { 1: 100, 2: 100, 3: 100, 4: 100 },
+    currentNode: { street: "preflop", toActSeatId: 1, toActIsHero: true, pot: 1.5, toCall: 1, legalActions: [], complete: false }, ended: false,
+  } as unknown as ParsedHand;
+  const dt4 = debugTree(h4, null);
+  if ("error" in dt4) throw new Error(dt4.error);
+  const positions: string[] = dt4.body.players.map((p: any) => p.position);
+  const b4 = {
+    ...dt4.body,
+    bet_sizes: { ...dt4.body.bet_sizes, street_bet_sizes: [{ street: "PREFLOP", position_bet_sizes: sizesFor(positions, (p) => (p === "BTN" ? { bet: ["6bb", "2.5x", "100bb"] } : p === "SB" ? { raise: ["15bb", "3x", "100bb"] } : {})) }] },
+    players: dt4.body.players.map((p: any) => ({ ...p, blind: p.position === "CO" ? 2 : p.blind, stack: 100 })),
+  };
+  console.log(`\n== STRADDLE ${b4.players.map((p: any) => `${p.position} ${p.blind ?? 0}`).join(", ")}`);
+  const sol = await solve(b4);
+  const root = sol ? await node(sol, "") : null;
+  if (sol && root) {
+    console.log(`   root ${root.game?.players?.find((p: any) => p.is_hero)?.position}: ${JSON.stringify(root.action_solutions.map((a: any) => [a.action.code, a.action.betsize, a.action.allin]))} · chips ${JSON.stringify(root.game?.players?.map((p: any) => [p.position, p.chips_on_table]))}`);
+    const open = root.action_solutions.find((a: any) => /^R5(\.0+)?$/.test(a.action.code))?.action.code;
+    if (open) {
+      const n = await node(sol, open);
+      console.log(`   '${open}' ${n?.game?.players?.find((p: any) => p.is_hero)?.position}: ${JSON.stringify(n?.action_solutions?.map((a: any) => [a.action.code, a.action.betsize, a.action.allin]))}`);
     }
   }
 }

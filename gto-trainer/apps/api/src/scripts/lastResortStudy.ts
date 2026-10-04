@@ -41,6 +41,10 @@
  * every hand on the locked tree. CAVEAT: here the raiser's range is read on an exact tree that held the whole line; in a
  * real last resort it is read on a line fitted for him, so the locked tree's real error is larger than this.
  * Fresh locked solves: median 4.1 s, p90 5.8 s, worst 11 s (the first, exact-tree reads included).
+ * --fit-only (the raiser read on a line fitted for him, as a real last resort meets it), 12 decisions: 11 could not be
+ * read that way at all (their lines need no fit — lastRaiseReads' fitOnly then has nothing to read) and the locked tree
+ * refused (the plain tree answers); the one it read: 8.6% / 0.036 bb (plain 83.5% / 0.454). How often a real last
+ * resort can read its raiser is not measured.
  *
  *   . config/env.ps1; bun run src/scripts/lastResortStudy.ts [--since 2026-10-03] [--max 40] [--hands id,id] [--out file.json]
  *     [--variants plain,locked,lockednd]   (the default; "old" is the retired dead-money tree)
@@ -54,7 +58,7 @@ import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, withStartStacks } from "../utils/archivedHand/archivedHand";
 import { dealtCount } from "../utils/dealtSeats/dealtSeats";
 import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
-import { fetchNode, reduceToHeadsUp, solvePreflopGtowAi, solveLockedLastResort, type AiPreflopOutcome } from "../services/gtowAiPreflop";
+import { fetchNode, lockedSeams, reduceToHeadsUp, solvePreflopGtowAi, solveLockedLastResort, type AiPreflopOutcome } from "../services/gtowAiPreflop";
 import { comboIndex } from "../utils/comboIndex/comboIndex";
 
 const argv = process.argv.slice(2);
@@ -64,6 +68,9 @@ const MAX = Number(arg("max") ?? 40);
 const BUDGET = Number(arg("budget") ?? 1200);
 const ONLY = arg("hands")?.split(",").filter(Boolean) ?? null;
 const OUT = arg("out");
+// --fit-only: the locked tree reads the raiser on a line FITTED for him, as a real last resort meets it (the exact tree
+// cannot hold the line there); without it the exact tree's own walk is used where it holds — an easier case
+if (argv.includes("--fit-only")) lockedSeams.fitOnly = true;
 const DATA = (process.env.POKER_DATA_DIR ?? "C:/Users/Brady/poker-data").replace(/\\/g, "/");
 const db = new Database(`${DATA}/poker.sqlite`, { readonly: true });
 const live = () => (db.query("select id from sessions where ended_at is null").all() as any[]).length > 0;
