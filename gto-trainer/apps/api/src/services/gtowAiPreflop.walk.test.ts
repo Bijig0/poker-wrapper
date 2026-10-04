@@ -151,11 +151,14 @@ describe("AI preflop: the line walk reads each run together", () => {
     expect(one.usedLine).toBe("F-F-C-R5-F");
     expect(one.fitted).toBe(true);
     expect({ ...run, polls: null, inWalk: null }).toEqual({ ...one, polls: null, inWalk: null });
-    // "C-F-C" is the run's look at the node behind the second limp, asked for before the walk learned it is not offered
+    // "C-F-C" is the run's look at the node behind the second limp, asked for before the walk learned it is not offered.
+    // "C-F-F" is the OTHER fit (2026-10-04: every fit is read — CO's limp folded instead of UTG's), which this fake
+    // tree does not hold: both walks ask for it once, and the run's speculative look at it is one more.
+    expect(one.polls.filter((p) => p === "C-F-F").length).toBe(1);
     const extra = run.polls.slice();
     for (const p of one.polls) extra.splice(extra.indexOf(p), 1);
-    expect(extra).toEqual(["C-F-C"]);
-    expect(run.polls.length).toBe(one.polls.length + 1);
+    expect(extra).toEqual(["C-F-C", "C-F-F"]);
+    expect(run.polls.length).toBe(one.polls.length + 2);
   });
 });
 
