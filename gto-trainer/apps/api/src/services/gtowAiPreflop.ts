@@ -176,8 +176,9 @@ export interface AiPreflopResult {
   /** a FITTED answer only: every fit hero's node was read on (the seats folded out, the line, hero's mix there in
    *  percent) — more than one means `actions` is their blend (utils/fitBlend) */
   fits?: AiFitRead[];
-  /** a FITTED answer only: each villain action on the fitted line(s), with its share of that seat's range at its node
-   *  in this tree — check #3's material (an action the tree all but never takes leaves hero's node off its path) */
+  /** each villain action on the line(s) hero's node was read at, with its share of that seat's range at its node in
+   *  this tree — check #3's material (an action the tree all but never takes leaves hero's node off its path). On a
+   *  FITTED answer always; on an exact line when the caller asked (opts.villainLines: the chart's fit rule) */
   villainLines?: PreflopVillainLine[];
 }
 /** One fit of a line the tree cannot hold, as hero's node was read on it. */
@@ -1066,6 +1067,17 @@ export function fitNote(fits: AiFitRead[], villainLines: PreflopVillainLine[]): 
     (off.length ? ` OFF THE TREE'S PATH: ${off.map((l) => `${l.seat}'s ${l.code} at "${l.line || "root"}" is ${pctOf(l.nodeFreq)} of his range in this tree`).join("; ")} — the ranges behind it are the solver's model of a mistake.` : "");
 }
 
+/** how long an answer waits for check #3's node reads on an exact line (they are the walk's own, normally cached) */
+const VILLAIN_LINES_MS = 1000;
+/** The answer's note for the villain actions on an EXACT line (no fit): how often this tree's own villain takes each. */
+export function exactLineNote(villainLines: PreflopVillainLine[]): string {
+  const say = (l: PreflopVillainLine) => `${l.seat}'s ${l.code} at "${l.line || "root"}" is ${pctOf(l.nodeFreq)} of his range`;
+  const off = villainLines.filter((l) => l.offTree);
+  return off.length
+    ? `OFF THE TREE'S PATH: ${off.map(say).join("; ")} in this tree — it all but never takes that action, so the ranges behind hero's node are the solver's model of a mistake, not the pool's.`
+    : `In this tree ${villainLines.map(say).join("; ")}.`;
+}
+
 /**
  * Solve hero's preflop decision with GTO Wizard AI, from the table as it stands.
  * `why` is the reason the charts could not answer — it rides along in the note so the
@@ -1075,7 +1087,10 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     opts: { deadBb?: number; rakeSeats?: number; /** a last-resort call: the seats folded out of the reduced hand */ reduced?: { droppedPos: string[] } | null;
       /** true when the caller stopped waiting and another piece answered (the gap gate's time box): this answer must
        *  not become the hand's preflop pin — the flop resumes from the piece hero was actually told by */
-      skipPin?: () => boolean } = {}): Promise<AiPreflopOutcome> {
+      skipPin?: () => boolean;
+      /** read each villain action on hero's EXACT line against the tree's own play (check #3) — asked for when the
+       *  chart refused because it has no branch for a villain's limp or call (fastSolve, the fit rule) */
+      villainLines?: boolean } = {}): Promise<AiPreflopOutcome> {
   const t0 = Date.now();
   const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
@@ -1200,6 +1215,16 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   }
   const idx = heroIdx;
   if (idx == null) return { ok: false, reason: "GTO Wizard AI preflop: hero's cards are not known", line };
+  // CHECK #3 ON AN EXACT LINE (2026-10-04, the fit rule): the chart had no branch for a villain's limp or call and this
+  // tree holds it — but it is an equilibrium solve too, and how often ITS villain takes that action says how much of
+  // a model the ranges behind hero's node are (a 30bb UTG limp is rare here as well). Best effort: the prefix nodes
+  // are the walk's own (cached, or in flight and joined), and the answer never waits more than VILLAIN_LINES_MS.
+  if (opts.villainLines && !fitReads.length && usedLine) {
+    villainLines = await Promise.race([
+      villainLinesOf(usedSol, usedLine.split("-"), shape).catch((): PreflopVillainLine[] => []),
+      new Promise<PreflopVillainLine[]>((res) => setTimeout(() => res([]), VILLAIN_LINES_MS)),
+    ]);
+  }
   // the node's per-combo strategy is a 0-1 fraction; our chart mixes are PERCENT (Q8o: {Fold: 99.97}), and
   // the panel text / hand card format them as such — so the fallback speaks percent too
   let actions = (j.action_solutions as any[]).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[idx] ?? 0) }));
@@ -1228,10 +1253,11 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
     solId: usedSol, usedLine, solveSecs: secs, cached: node.cached, ...(stored ? { stored: true } : {}), shape,
-    ...(fitReads.length ? { fits: fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })), villainLines } : {}),
+    ...(fitReads.length ? { fits: fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })), villainLines }
+      : villainLines.length ? { villainLines } : {}),
     note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : node.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
-      + (fitReads.length ? ` ${fitNote(fitReads, villainLines)}` : "")
+      + (fitReads.length ? ` ${fitNote(fitReads, villainLines)}` : villainLines.length ? ` ${exactLineNote(villainLines)}` : "")
       + (shape.stackCap ? ` ${stackCapNote(shape)}.` : ""),
   };
 }

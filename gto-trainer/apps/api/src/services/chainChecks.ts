@@ -799,8 +799,9 @@ export function checkHeroCombo(a: { heroCombo: number | null; weight: number | n
   if (!(w > 0)) return fail(17, `hero's ${name} has no weight in his range at the node — the strategy read is not his hand's`);
   return pass(17, `hero's ${name} carries weight ${w.toFixed(3)} in his range at the node`);
 }
-/** #3 for a preflop answer read on a FITTED line (services/gtowAiPreflop.villainLinesOf): the villain actions on the
- *  line(s) hero's node was read at, each against the tree's own play. A flag, as postflop — never a verdict. */
+/** #3 for a GTO Wizard AI preflop answer (services/gtowAiPreflop.villainLinesOf) — one read on a FITTED line, or on an
+ *  exact line the chart had no branch for (the fit rule, 2026-10-04): the villain actions on the line(s) hero's node
+ *  was read at, each against the tree's own play. A flag, as postflop — never a verdict. */
 export function checkPreflopVillainLines(lines: { seat: string; code: string; line: string; nodeFreq: number; maxHand: number; offTree: boolean }[]): CheckResult {
   const off = lines.filter((l) => l.offTree);
   if (off.length) {
@@ -808,9 +809,9 @@ export function checkPreflopVillainLines(lines: { seat: string; code: string; li
       `${l.seat} ${l.code} at "${l.line || "root"}": ${pctOf(l.nodeFreq)} of his range, no hand above ${pctOf(l.maxHand)}`).join("; ") +
       " — the tree all but never takes this action, so hero's node is off its path and the ranges behind it are the solver's model of a mistake" };
   }
-  if (!lines.length) return na(3, "no villain action on the fitted line");
+  if (!lines.length) return na(3, "no villain action on the line hero's node was read at");
   const least = lines.reduce((b, l) => (l.nodeFreq < b.nodeFreq ? l : b));
-  return pass(3, `${lines.length} villain action${lines.length === 1 ? "" : "s"} on the fitted line${lines.length === 1 ? "" : "s"}, none under 1% of his range at the node (least: ${least.seat} ${least.code} ${pctOf(least.nodeFreq)})`);
+  return pass(3, `${lines.length} villain action${lines.length === 1 ? "" : "s"} on the line${lines.length === 1 ? "" : "s"} hero's node was read at, none under 1% of his range at the node (least: ${least.seat} ${least.code} ${pctOf(least.nodeFreq)})`);
 }
 export function checkPreflopInRange(a: { notInRange?: boolean | null; heroClass: string | null | undefined }): CheckResult {
   if (a.notInRange) return fail(17, `hero's ${a.heroClass ?? "hand"} is not in the chart's range at the node`);

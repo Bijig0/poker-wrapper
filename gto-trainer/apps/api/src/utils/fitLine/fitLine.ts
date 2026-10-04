@@ -123,6 +123,64 @@ export function foldableCallers(
 }
 
 /**
+ * THE FIT MAY THIN A CROWD, NEVER EMPTY IT (2026-10-04, Brady: "as much as possible I want the game state to be
+ * reflected"). The fit was built for the trees' CAPS — a third limper, a third cold-caller — where no tree holds the
+ * line and one player fewer is the nearest spot there is. But walkFitted folds a caller whenever the walk fails,
+ * whatever the reason, and a walk also fails on an action the chart never exported: a 30bb UTG's limp in a chart
+ * whose UTG limps 0.07% (HRC pruned the branch), a short small blind's flat of a button open. Then the fold deletes
+ * the ONLY limper or cold-caller and hero is answered as if that player had folded (hand 4922293970: HJ ATo facing
+ * a 30bb UTG limp was served the first-in "Raise 2.5"). GTO Wizard's preflop tree holds one limper (plus the small
+ * blind completing) and one cold-caller (plus the big blind), so it holds every such line exactly.
+ *
+ * The callers of a line fall into GROUPS, one per raise level: level 0 = the limpers of the unraised pot, level k =
+ * the callers of the k-th raise. Hero is in no group (his own call is never folded). `emptiedGroups` names every
+ * group the table has at least one player in and the folds leave NONE in — the caller refuses the chart for it and
+ * the exact tree answers. A group thinned but not emptied (three limpers read as two) stays the chart's: neither
+ * tree holds that line, and the chart removes no more players than GTO Wizard's would.
+ */
+export interface CallerGroup {
+  /** raises before the call: 0 = a limp, k = a call of the k-th raise */
+  level: number;
+  kind: "limp" | "call";
+  seats: string[];
+}
+export function callerGroups(
+  tokens: string[],
+  opts: { heroSeat: string | null; stack: number | Record<string, number>; seats?: readonly string[] },
+): CallerGroup[] {
+  const who = actorsWithAllins(tokens, opts.stack, opts.seats ?? SEATS6);
+  const hero = opts.heroSeat?.toUpperCase() ?? null;
+  const groups: CallerGroup[] = [];
+  let level = 0;
+  tokens.forEach((t, i) => {
+    if (/^R/.test(t)) { level++; return; }
+    const s = who[i];
+    if (t !== "C" || !s || s.toUpperCase() === hero) return;
+    let g = groups.find((x) => x.level === level);
+    if (!g) groups.push(g = { level, kind: level === 0 ? "limp" : "call", seats: [] });
+    if (!g.seats.includes(s)) g.seats.push(s);
+  });
+  return groups;
+}
+/** The groups of `tokens` (the line as the table played it) that `folded` leaves nobody in. */
+export function emptiedGroups(
+  tokens: string[], folded: readonly string[],
+  opts: { heroSeat: string | null; stack: number | Record<string, number>; seats?: readonly string[] },
+): CallerGroup[] {
+  const out = new Set(folded.map((s) => s.toUpperCase()));
+  if (!out.size) return [];
+  return callerGroups(tokens, opts).filter((g) => g.seats.every((s) => out.has(s.toUpperCase())));
+}
+/** "UTG's limp" / "SB's call of the raise" / "CO's and BTN's calls of the 3-bet" — for the refusal's reason. */
+export function groupText(g: CallerGroup): string {
+  const who = g.seats.map((s) => `${s}'s`).join(" and ");
+  const many = g.seats.length > 1;
+  if (g.kind === "limp") return `${who} limp${many ? "s" : ""}`;
+  const raise = g.level === 1 ? "the raise" : g.level === 2 ? "the 3-bet" : g.level === 3 ? "the 4-bet" : `raise ${g.level}`;
+  return `${who} call${many ? "s" : ""} of ${raise}`;
+}
+
+/**
  * FOLD THE SAME PLAYERS AGAIN (2026-09-25, mutation harness seed 589 [limps]). When hero's decision was read on a
  * line with a caller folded out (a fit, or the caller-cap borrow), every later decision of the same hand must be read
  * on a line with that caller folded too — otherwise the later walk runs through the REAL node, where hero's own
