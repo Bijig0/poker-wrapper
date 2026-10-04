@@ -248,6 +248,18 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "fastSolve.ts solvePreflop6max (the refusal) · gtowAiPreflop.ts villainLinesOf / exactLineNote · chainChecks.ts checkPreflopVillainLines",
   },
   {
+    id: "pool-limp-lock",
+    source: "gtow-ai-preflop",
+    title: "A short limper no pool chart covers: hero's preflop node read on the exact tree with the limp locked to the pool's range",
+    what: "a villain at 85bb or less limped (or completed) before any raise, the only non-blind limp in the line, and no v2 pool-locked chart holds him at his own stack bucket: GTO Wizard AI preflop solves the table with his limp node-locked to the pool's measured range (locks_v2: 26.3% of hands at 60bb or less, 15.1% at 60-85bb), the rest of each hand split as the solver plays it, and hero's node re-solved behind it; the flop walks his range off that tree. Behind a limp every seat isolates to 3bb + 1bb per limper (the AI tree's one first-raise size; it was 2.5x — a min-raise iso). Two or more limpers stay with the charts and the line fit. Post-ins are treated as limpers for now (memory todo-post-in-ranges)",
+    why: "no equilibrium tree, ours or GTO Wizard's, gives a short stack's limp a real range (a 38bb HJ limps 0.048% on GTO Wizard, 0.2% on D30_olimp; the pool limps 26%); only a lock imposes one, and the pool-locked uneven trees that would hold it are still solving",
+    fix: "the uneven pool-locked limp trees (D100_s{30,50,70}_<SEAT>_olimp_pool3 and the hero-free _olimp_poolh, queued on hrc-l1): when one covers the limper the chart answers and this stands down by itself; limpers under 20bb and hero under 85bb stay here",
+    status: "solvable",
+    warn: "POOL-LOCKED LIMPER",
+    cost: "measured 2026-10-05 (scripts/poolLockStudy.ts): against D100_olimp_pool3, solved with the same deep lock on HRC, the locked GTO Wizard tree's BB differs in top action on 0.6% of hands (raise share 2.4% vs 3.4%); a cold tree can miss the 12 s box (then the chart answers as before, 'POOL LIMP LOCK FAILED'); the pool ranges are NL200's",
+    code: "poolLimpFloor.ts poolLockTarget · gtowAiPreflop.ts solvePreflopPoolLocked / poolLimpLockOf / isoSizes · fastSolve.ts poolLimpLockFirst / warmPoolLimpLock",
+  },
+  {
     id: "limp-4bet-menu",
     source: "hrc-6max",
     title: "A named 4-bet inside a limped pot",

@@ -26,14 +26,31 @@ import LOCKS from "./poolLimpLocks.v2.json";
 import { dealtByPos, limpStackBucket, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS6, type Seat6 } from "./hrc6max";
 import { hrc6maxDb } from "./hrc6maxDb";
 import { chartStacks6, withinFirstStackBound } from "./treeGap";
+import { COMBOS } from "../utils/comboIndex/comboIndex";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 export type PoolLimpKey = keyof typeof LOCKS.ranges;
 
-/** THE OFF SWITCH (an experiment, 2026-10-05): SHORT_LIMP_POOL=off in the environment turns off both halves — this floor
- *  and the picker's short-limper routing (hrc6max shortLimperAlone). Read at every decision; on when unset.
+/** THE SWITCH (an experiment, 2026-10-05), SHORT_LIMP_POOL in the environment, read at every decision:
+ *   on (unset)  the picker's short-limper routing (hrc6max shortLimperAlone), this floor, AND the GTO Wizard preflop
+ *               lock (gtowAiPreflop.solvePreflopPoolLocked: hero's preflop answer against the limper at the pool range);
+ *   floor       the routing and this floor only — hero's preflop answer as before the lock;
+ *   off         none of them.
  *  Diagnostic: bun src/scripts/shortLimpPoolReport.ts [--since 2026-10-05]. */
-export const shortLimpPoolOn = (): boolean => String(process.env.SHORT_LIMP_POOL ?? "on").toLowerCase() !== "off";
+export type ShortLimpPoolMode = "on" | "floor" | "off";
+export const shortLimpPoolMode = (): ShortLimpPoolMode => {
+  const v = String(process.env.SHORT_LIMP_POOL ?? "on").trim().toLowerCase();
+  return v === "off" ? "off" : v === "floor" ? "floor" : "on";
+};
+export const shortLimpPoolOn = (): boolean => shortLimpPoolMode() !== "off";
+export const poolLimpLockOn = (): boolean => shortLimpPoolMode() === "on";
+
+/** A pool range as 1,326 per-combo weights (each combo its class's weight) — the strategy a lock gives the limp. */
+export function poolLimpWeights(key: PoolLimpKey): number[] {
+  const w = LOCKS.ranges[key].weights as Record<string, number>;
+  return COMBOS.map((c) => Math.max(0, Math.min(1, Number(w[c.cls] ?? 0))));
+}
+export const poolLimpRange = (key: PoolLimpKey): { freq: number; n: number } => ({ freq: LOCKS.ranges[key].freq, n: LOCKS.ranges[key].n });
 type ClassRange = Record<string, number>;
 
 /** A seat that limped (or completed from the SB) before any raise. */
@@ -69,6 +86,12 @@ export function poolLimpersOf(hand: ParsedHand, heroPos: string | null): PoolLim
     return SEATS6.includes(p) ? p : null;
   };
   const hero = posOf(hand.heroSeatId);
+  // A POST-IN IS TREATED AS A LIMPER, FOR NOW (Brady 2026-10-05). A new player who posts 1bb to come in and checks his
+  // option is read as a limp by normalizeHand (hand.postIns, readAs "limp") — and given the limp's pool range here, the
+  // lock's and the floor's alike (hands 4921628232, 4921841315 in the replay gate). Strictly his range is closer to any
+  // two cards, but there is no way yet to emulate a post-in's game state on a tree and too little data on how posters
+  // play, so the minimally defensive choice is the limp. TO REVISIT as post-in data accumulates (memory:
+  // todo-post-in-ranges): measure posters' hands from the downloaded histories, then give them their own range or tree.
   const out: PoolLimper[] = [];
   const acted = new Set<Seat6>();
   let raised = false, limps = 0;
@@ -129,6 +152,73 @@ export function poolChartCovers(chartId: string | null, l: Pick<PoolLimper, "pos
   return withinFirstStackBound(Math.min(table.hero, table.limper), Math.min(st[heroPos], st[l.pos]));
 }
 
+/**
+ * THE GTO WIZARD PREFLOP LOCK'S TARGET (2026-10-05, Brady: "use gto wizard ai preflop, to send in the pool measured range
+ * for the original limper, then re-solve the tree from there to give the correct decision for hero"). Which limper, if
+ * any, hero's preflop decision should be read against at the pool's range on a node-locked GTO Wizard AI tree:
+ *   - a villain who limped (or, from the SB, completed) before any raise, at 85bb or less (his range by his own stack's
+ *     bucket, poolLimpKey) — whatever he did after (a limp-raise is solved behind the locked limp);
+ *   - EXACTLY ONE non-blind limp in the line, his: GTO Wizard's preflop tree holds one non-SB limper and the SB's complete
+ *     (max_allowed_limps 2). Two or more limpers — or hero's own limp before his — are the charts' and the line fit's,
+ *     unchanged (Brady 2026-10-05: "this is just an addition to it"). With a non-blind limper AND the SB completing, the
+ *     limper is locked and the SB's complete is the solver's;
+ *   - not covered by the chart the picker would answer from (poolChartCovers: a v2 pool tree that locked him at his own
+ *     bucket, inside the stack bound) — a covered limper is that chart's;
+ *   - three or more players dealt (as the floor).
+ */
+export interface PoolLockTarget {
+  pos: Seat6;
+  key: PoolLimpKey;
+  /** his stack as dealt (bb) */
+  stack: number;
+  complete: boolean;
+  /** an SB who completed short too, left to the solver (the tree holds one lock per hand) */
+  alsoSb: boolean;
+}
+export function poolLockTarget(a: {
+  hand: ParsedHand; heroPos: string | null;
+  /** the chart the picker would answer this decision from (null: none — a thinned table, the chart server down) */
+  chartId: string | null;
+  dealt?: Record<number, number>;
+  planOf?: (id: string) => string | null;
+}): { ok: true; target: PoolLockTarget } | { ok: false; why: string } {
+  const hero = String(a.heroPos ?? "").toUpperCase() as Seat6;
+  const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
+  if (!SEATS6.includes(hero)) return { ok: false, why: "hero's seat is not known" };
+  if (Object.keys(byPos).length < 3) return { ok: false, why: "fewer than three players dealt" };
+  // every non-blind limp before the first raise, hero's included
+  const posOf = (seatId: number): Seat6 | null => {
+    const p = String(seatId === a.hand.heroSeatId && a.heroPos ? a.heroPos : a.hand.positions?.[seatId] ?? "").toUpperCase() as Seat6;
+    return SEATS6.includes(p) ? p : null;
+  };
+  let raised = false, nonBlindLimps = 0;
+  const acted = new Set<Seat6>();
+  for (const x of a.hand.actions ?? []) {
+    if (x.street !== "preflop" || POSTS.has(String(x.type))) continue;
+    const p = posOf(x.seatId);
+    if (!p) continue;
+    if (AGGRESSIVE.has(String(x.type))) raised = true;
+    else if (x.type === "call" && !raised && !acted.has(p) && p !== "SB" && p !== "BB") nonBlindLimps++;
+    acted.add(p);
+  }
+  if (nonBlindLimps > 1) return { ok: false, why: `${nonBlindLimps} limpers — GTO Wizard's preflop tree holds one (the charts and the line fit answer)` };
+  const limpers = poolLimpersOf(a.hand, a.heroPos);
+  const nonBlind = limpers.find((l) => !l.complete);
+  if (nonBlindLimps === 1 && !nonBlind) return { ok: false, why: "the one limp is hero's" };
+  const l = nonBlind ?? limpers.find((x) => x.complete);
+  if (!l) return { ok: false, why: "no villain limped" };
+  const stack = Number(byPos[l.pos] ?? NaN);
+  const key = poolLimpKey(l, stack);
+  if (!key) return { ok: false, why: `the ${l.pos} limped deep (${Number.isFinite(stack) ? Math.round(stack) : "?"}bb) — the charts' own range` };
+  const heroStack = Number(byPos[hero] ?? NaN);
+  if (Number.isFinite(heroStack) && poolChartCovers(a.chartId, l, hero, { hero: heroStack, limper: stack }, a.planOf)) {
+    return { ok: false, why: `${a.chartId} covers the ${l.pos}'s limp at his own range` };
+  }
+  const sb = limpers.find((x) => x.complete);
+  const alsoSb = !!(nonBlind && sb && poolLimpKey(sb, Number(byPos.SB ?? NaN)));
+  return { ok: true, target: { pos: l.pos, key, stack: Math.round(stack * 10) / 10, complete: l.complete, alsoSb } };
+}
+
 const classCombos = (c: string): number => (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12);
 const combosOf = (r: ClassRange | undefined): number =>
   Math.round(Object.entries(r ?? {}).reduce((s, [c, w]) => s + (Number(w) > 0 ? Number(w) * classCombos(c) : 0), 0) * 100) / 100;
@@ -144,6 +234,8 @@ export function applyPoolLimpFloor(a: {
   dealt?: Record<number, number>;
   /** the plan a baked chart was solved from (tests); the bake's provenance by default */
   planOf?: (id: string) => string | null;
+  /** limpers the tree the ranges were walked off LOCKED to the pool range (a pool-locked AI pin): kept as walked */
+  lockedPools?: readonly { pos: string; key: string }[];
 }): { ranges: Record<string, ClassRange>; applied: PoolLimpFloorRecord[] } {
   const hero = String(a.heroPos ?? "").toUpperCase() as Seat6;
   const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
@@ -161,6 +253,9 @@ export function applyPoolLimpFloor(a: {
     const rk = Object.keys(out).find((p) => p.toUpperCase() === l.pos);
     if (!rk) continue;                                                           // not at the flop
     if (Number.isFinite(heroStack) && poolChartCovers(a.chartId, l, hero, { hero: heroStack, limper: stack }, a.planOf)) continue;
+    // his range was walked off a tree that locked his limp to exactly this pool range: it is already his, narrowed by
+    // what he did after the limp — replacing it with the whole range would undo that
+    if (a.lockedPools?.some((p) => p.pos.toUpperCase() === l.pos && p.key === key)) continue;
     const lock = LOCKS.ranges[key];
     const was = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
