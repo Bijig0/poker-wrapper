@@ -48,6 +48,15 @@ export const ALLIN_STACK_TAU = 1.2;
  *  the two stacks (table, chart) is under FIRST_STACK_DEPTH. At 60bb+ a first decision has no stack bound. */
 export const FIRST_STACK_TAU = 1.5;
 export const FIRST_STACK_DEPTH = 50;
+/** Is an effective stack at the table close enough to a chart's for a first decision (FIRST_STACK_TAU while the smaller
+ *  of the two is under FIRST_STACK_DEPTH; no bound above it)? The same bound decides whether a pool-locked limp tree
+ *  covers a short limper (hrc6max short-limper routing, services/poolLimpFloor — Brady 2026-10-05: "the threshold before
+ *  passing to GTO Wizard AI, we just use it here as well"). */
+export const withinFirstStackBound = (table: number, chart: number): boolean => {
+  const lo = Math.min(table, chart), hi = Math.max(table, chart);
+  if (!(lo > 0)) return false;
+  return lo >= FIRST_STACK_DEPTH || hi / lo <= FIRST_STACK_TAU;
+};
 /** Hero's own stack against the chart's, while the smaller of the two is under HERO_STACK_DEPTH. */
 export const HERO_STACK_TAU = 1.3;
 export const HERO_STACK_DEPTH = 30;

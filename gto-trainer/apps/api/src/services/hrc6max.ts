@@ -10,6 +10,7 @@ import { type GetNode, type HrcNode } from "./hrc3max";
 // latency exactly where it was.
 import { fetchNode6max, hrc6maxDb } from "./hrc6maxDb";
 import { patchBase, patchKeys } from "./patchKey";
+import { withinFirstStackBound } from "./treeGap";
 
 /**
  * Chart picker for the 6-max NL200 ring set (ledger proposal `sixmax-nl200`).
@@ -612,6 +613,45 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     return limp3 ? { ...c, limp3Fallback: limp3 } : c;
   }
 
+  /**
+   * A SHORT LIMPER ALONE WITH HERO READS HIS OWN POOL-LOCKED UNEVEN TREE (2026-10-05, hand 4922555015: a 39bb HJ limped,
+   * hero checked his BB, and the even 30bb limp chart — an equilibrium solve, every seat 30bb — gave the HJ 2.98 combos;
+   * two checks later his range was empty and the river had no node). With the short limper the only opponent left, the
+   * effective stack is his and the rung drops below 100, so unevenLimp (a 100bb-rung rule) never ran: the even short
+   * limp chart answered even where `D100_s30_HJ_olimp_pool3` — the same effective stack, the limper holding the pool's
+   * measured short-stack limp range — would be baked. The uneven pool3 trees of that seat are named first, every rung
+   * whose effective stack is inside the gap gate's first-decision bound (treeGap.withinFirstStackBound: 1.5x under
+   * 50bb), nearest first; the even ladder stands behind, so a tree that has not landed falls back exactly as before
+   * (and services/poolLimpFloor gives the limper the pool range there). Only where hero's own node is not one the pool
+   * trees lock (poolLimpChart names the full pool tree).
+   */
+  function shortLimperAlone(): Chart6Choice | null {
+    // SHORT_LIMP_POOL=off turns this off with the pool limp floor (services/poolLimpFloor): the even ladder as before
+    if (String(process.env.SHORT_LIMP_POOL ?? "on").toLowerCase() === "off") return null;
+    if (rung === DEEP6 || opps.length !== 1) return null;
+    const [seat, bb] = opps[0]!;
+    if (!(bb < DEEP6 - SHORT_GAP)) return null;
+    const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
+    const firstRaise = toks.findIndex((t) => t === "RAI" || /^R[\d.]+$/.test(t));
+    const pre = toks.slice(0, Math.min(SEATS6.length - 1, firstRaise < 0 ? toks.length : firstRaise));
+    if (pre[SEATS6.indexOf(seat)] !== "C") return null;                     // he limped (or completed) before any raise
+    const pool = poolLimpChart(tokens, me);
+    if (pool?.id !== POOL_LIMP_CHART) return null;
+    const eff = Math.min(hero, bb);
+    const rungs = LIMP_SHORTS6.filter((r) => withinFirstStackBound(eff, Math.min(DEEP6, r)))
+      .sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)));
+    if (!rungs.length) return null;
+    const s = rungs[0]!;
+    const ids = rungs.map((r) => unevenLimpChartId(r, seat, true));
+    notes.push(`the ${seat} (${Math.round(bb)}bb) limped and is hero's only opponent — his pool-locked uneven limp tree (${s}bb) answers`);
+    if (Math.abs(bb - s) > 8) {
+      const want = Math.round(bb / 10) * 10;
+      gap("short-rung-snapped", `the ${seat} has ${Math.round(bb)}bb — answered from the ${s}bb short limp chart`,
+          want, s, seat, unevenLimpChartId(want, seat, true), `deep=${DEEP6};shorts=${want};opens=limp;seats=${seat}`);
+    }
+    return finish(ids[0]!, [...ids, ...evenLadder(rung, "limp")], DEEP6, s, seat, "limp");
+  }
+
   // hero has not reloaded: his own stack sets the rung like anyone else's
   if (hero < HERO_RELOAD_FLOOR) {
     notes.push(`hero has ${Math.round(hero)}bb — answered from the even ${rung}bb chart`);
@@ -622,7 +662,7 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   const shorts = opps.filter(([, bb]) => bb < DEEP6 - SHORT_GAP);
   if (!shorts.length || open === "limp") {
     if (shorts.length && open === "limp") {
-      const uneven = unevenLimp();
+      const uneven = unevenLimp() ?? shortLimperAlone();
       if (uneven) return uneven;
       const seat = shorts.slice().sort((a, b) => a[1] - b[1])[0]![0];
       gap("no-limp-uneven", `the uneven set has no limp tree — the even ${rung}bb limp chart answers`,
