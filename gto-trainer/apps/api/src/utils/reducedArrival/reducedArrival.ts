@@ -38,6 +38,11 @@
  * and the last raise (UTG's call of the iso) where no source gives his range there; the other callers when one caller
  * is read (their chips are in his pot, their ranges are not); a limper's range is the pool's, not this player's.
  *
+ * WHAT THE TREE DOES NOT DO (found 2026-10-04, scripts/_probeForcedDecision.ts `range`): it does not take the two
+ * starting ranges. GTO Wizard solves a preflop tree from full ranges whatever a seat's `range` says, so the caller's
+ * fold is read against ANY TWO CARDS posting the raise — every caller is read wider than he is. The 2026-10-01
+ * measurements above were taken on such trees. Nothing here corrects for it yet.
+ *
  * This file is the pure half: the plan and the read of a solved tree. The solves, the starting ranges and the wiring
  * are services/gtowAiPreflop.ts (reducedArrivalRanges).
  */
@@ -228,7 +233,16 @@ export interface CallerRead {
   fold: number; call: number; raise: number;
   /** the tree line of the caller's node ("" = the root) */
   line: string;
+  /** the raiser sat ahead of the caller: how often the tree's raiser takes the root's check, over all hands — the
+   *  tree is solved from full ranges (1 when the check is the only action there); null when the caller is at the
+   *  root. Under ROOT_CHECK_MIN the caller's node is read against a range the tree has already thinned — the read is
+   *  not taken (2026-10-04, measured on the solve cache: trees solved under the old all-in rule had the raiser jam
+   *  30-95% of the time at the root). */
+  rootCheck: number | null;
 }
+
+/** The raiser's root check must carry at least this share of his range for the caller's node behind it to be read. */
+export const ROOT_CHECK_MIN = 0.9;
 
 /**
  * Read a caller's answer to the forced raise on his solved tree. The raiser out of position posted the tree's BB: the
@@ -241,10 +255,18 @@ export async function readCaller(c: ReducedCaller, get: NodeGet): Promise<Caller
   let line = "";
   let node = await get(line);
   if ("error" in node) return no(`the root — ${node.error}`);
+  let rootCheck: number | null = null;
   if (c.raiserInPosition) {
     if (actorOf(node.data) !== "SB") return no(`the tree has ${actorOf(node.data) ?? "nobody"} first to act, not the raiser's seat`);
-    const pass = (node.data?.action_solutions ?? []).find(isPass);
-    if (!pass) return no(`the raiser has no check at the root (offered: ${(node.data?.action_solutions ?? []).map(codeOf).join(", ") || "nothing"})`);
+    const rootSols: any[] = node.data?.action_solutions ?? [];
+    const pass = rootSols.find(isPass);
+    if (!pass) return no(`the raiser has no check at the root (offered: ${rootSols.map(codeOf).join(", ") || "nothing"})`);
+    if (rootSols.length === 1) rootCheck = 1;
+    else {
+      let f = 0;
+      for (let i = 0; i < 1326; i++) f += Number(pass.strategy?.[i] ?? 0);
+      rootCheck = Math.min(1, f / 1326);
+    }
     line = codeOf(pass);
     node = await get(line);
     if ("error" in node) return no(`the node behind the raiser's check — ${node.error}`);
@@ -260,5 +282,5 @@ export async function readCaller(c: ReducedCaller, get: NodeGet): Promise<Caller
     stays[i] = Math.min(1, Math.max(0, 1 - f));
   }
   const pct = (pick: (a: any) => boolean) => Math.round(1000 * sols.filter(pick).reduce((x, a) => x + Number(a.total_frequency ?? 0), 0)) / 10;
-  return { ok: true, stays, line, fold: pct(isFold), call: pct((a) => !isFold(a) && isPass(a)), raise: pct((a) => !isFold(a) && !isPass(a)) };
+  return { ok: true, stays, line, rootCheck, fold: pct(isFold), call: pct((a) => !isFold(a) && isPass(a)), raise: pct((a) => !isFold(a) && !isPass(a)) };
 }
