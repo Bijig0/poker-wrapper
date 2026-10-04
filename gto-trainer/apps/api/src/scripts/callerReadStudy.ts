@@ -15,8 +15,29 @@
  *             run here with `fitOnly`, i.e. as the reduced tree meets him: on the line FITTED for him (fitAiLine, the
  *             earliest other limper/caller folded), never the direct line the exact tree holds
  *
- * RESULT (2026-10-04, the 65 decisions of study2.json; SHIPPED re-read from the solve cache, 0 requests):
- *   see SHIPPED_TABLE below — the table this script prints, pasted.
+ * RESULT (2026-10-04, the 65 decisions of study2.json; SHIPPED re-read from the solve cache, 0 requests). SHIPPED:
+ * 22 read on a fitted line, 17 read directly (nobody ahead of him to fold — his own node, exact), 26 limpers kept whole.
+ * Means per decision, over the decisions both current and SHIPPED answered:
+ *                                      n  truth cont%  est cont%   TV%   est. range truth folds  truth range est. folds
+ *   ALL                current         61     35.7        84.5      55.2          61.5                    0.0
+ *                      whole           61     35.7       100.0      58.6          64.3                    0.0
+ *                      SHIPPED         61     35.7        58.6      30.4          38.6                    3.2
+ *   fitted line (22)   current         22     18.2        78.3      74.1          79.3                    0.0
+ *                      SHIPPED         22     18.2        31.2      42.1          49.8                    2.1
+ *   limpers etc. (25)  current         25     55.5       100.0      37.1          44.5                    0.0
+ *                      SHIPPED (whole) 25     55.5       100.0      37.1          44.5                    0.0
+ *   direct (14)        current         14     27.9        66.8      57.5          64.2                    0.0
+ *                      SHIPPED         14     27.9        27.9       0.0          10.5 *                 10.5 *
+ *   by line: limp-iso (41) SHIPPED TV 41.3 (current 54.4) · single-raised (12) 4.1 (69.2) · 3bet+ (8) 13.9 (37.9)
+ *   blinds (31) SHIPPED TV 34.0 (current 76.5) · not blinds (30) 26.7 (33.1)
+ *   head to head: SHIPPED closer in 33, equal in 24 (limpers the forced tree did not narrow), further in 4 (limpers it
+ *   had trimmed by under 1.5%); median TV 69.1% → 22.8%.
+ *   (* the floor of those two columns: a combo the node mixes counts partly as folded even in the node's own range)
+ * The fitted read on the 22 is the study's fitWalk exactly (the same 22 numbers): the shipped code is what was measured.
+ * WHAT THIS DOES NOT SHOW: a limper's start in the live code is the POOL's limp range, not the exact tree's (the truth's
+ * entry here), so "limpers kept whole" is scored kinder than it plays; the study's fitWalk narrowed limpers to TV 23.8
+ * (from 37.1) — keeping them whole is a decision (two other studies), not this measurement's verdict. A real reduced
+ * spot folds two or more seats; every fit here folded one.
  *
  *   . config/env.ps1; & $env:BUN run src/scripts/callerReadStudy.ts --data <study2.json> [--shipped] [--list]
  *

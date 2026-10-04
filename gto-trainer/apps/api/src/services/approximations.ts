@@ -280,7 +280,7 @@ export const APPROXIMATIONS: Approximation[] = [
     fix: "an HRC tree with every step of the corridor locked or boosted (the limps, the iso, the cold-call), one corridor per tree — only worth a solve if these spots show up in the miss data",
     status: "by-design",
     coversCaveat: "the folded players' cards and the calls between a player's entry and the last raise are not modelled",
-    cost: "a fitted caller read is ~13 points too wide (measured, above); a limper is the pool's whole limp range. Which continuing hands re-raise instead of calling is not applied (the player called). Hand 4921846667 (2026-10-01): 77 on K♠9♠Q♦ facing a 72% pot lead answers FOLD — see the replay of 2026-10-04 in the branch report",
+    cost: "a fitted caller read is ~13 points too wide (measured, above); a limper is the pool's whole limp range. Which continuing hands re-raise instead of calling is not applied (the player called). Replayed 2026-10-04 (scripts/_probeReducedCallers.ts): hand 4921846667, 77 on K♠9♠Q♦ facing a 72% pot lead, FOLD 99.95% (forced-bet read: 99.91%); hand 4921861748, QTo on 6♠8♥Q♥, CALL 89.7% / RAISE 10.2% (forced-bet read: 89.1% / 10.9%) — in both the only villain caller is a limper, now kept whole (the forced tree had trimmed 1.0-1.5% of his range, trash offsuit)",
     code: "utils/reducedArrival + services/gtowAiPreflop.ts reducedArrivalRanges",
   },
   {

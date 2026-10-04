@@ -6,6 +6,8 @@
  *
  *   . config/env.ps1; & $env:BUN run src/scripts/_probeReducedCallers.ts [--hands 4921861748,4921846667] [--cap 60] [--ranges]
  *
+ * --dump <file>: append each hand's ranges (class weights) as a JSON line, to compare two checkouts.
+ *
  * It SOLVES on the live GTO Wizard accounts where the solve cache lacks a node (every request counted; refused past
  * --cap). NOT while a session is live.
  */
@@ -55,6 +57,7 @@ for (const id of IDS) {
     console.log("   id:", r.id, "| reduced:", JSON.stringify(r.reduced ?? null));
     for (const [pos, rec] of Object.entries(r.ranges)) console.log(`   ${pos.padEnd(4)} ${brief(rec)}`);
     console.log("   note:", r.note);
+    if (arg("dump")) { const { appendFileSync } = await import("node:fs"); appendFileSync(arg("dump")!, JSON.stringify({ id, ranges: r.ranges }) + "\n"); }
   }
   if (argv.includes("--ranges")) continue;
   const s1 = spent, t1 = Date.now();
