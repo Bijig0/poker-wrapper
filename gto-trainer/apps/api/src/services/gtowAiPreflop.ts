@@ -63,6 +63,7 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
 import { poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
+import { COLD_CALL_LOCK_BELOW, coldCallRange, coldCallWeights, type ColdCallLockTarget } from "./poolColdCall";
 import type { HrcNode } from "./hrc3max";
 import { answerLog } from "./answerLog";
 // THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): the preflop half, at ensureSolution / fetchNode.
@@ -2002,6 +2003,108 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
     (shape.stackCap ? ` ${stackCapNote(shape)}.` : "");
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|pool:${target.pos}:${target.key}`,
+    solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note,
+  };
+}
+
+/** The refusal that is not a failure: the unlocked tree already gives the cold-call a real share (no lock needed). */
+export const COLD_CALL_NOT_NEEDED = "NOT NEEDED:";
+
+/**
+ * THE POOL'S 3-BET COLD-CALL, LOCKED (2026-10-05, services/poolColdCall has the why). Hero's preflop answer on the exact
+ * GTO Wizard AI tree of the table with the cold-caller's node LOCKED: his call at the pool's range for his seat and stack,
+ * the rest of each hand folding or raising as the solver plays it there (poolLimpLockOf — any action code). Only when the
+ * unlocked tree gives that call under COLD_CALL_LOCK_BELOW of his range at the node; otherwise a refusal starting
+ * COLD_CALL_NOT_NEEDED (the answer goes on as before). Pins the locked solution, the caller named on it.
+ */
+export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: string | null, target: ColdCallLockTarget,
+    opts: { skipPin?: () => boolean } = {}): Promise<AiPreflopOutcome> {
+  const t0 = Date.now();
+  const no = (reason: string, line?: string): AiPreflopOutcome => ({ ok: false, reason: `cold-call-locked tree: ${reason}`, ...(line != null ? { line } : {}) });
+  const shape = shapeOf(hand, heroPos);
+  if ("error" in shape) return no(shape.error);
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const line = tokens.join("-");
+  const heroIdx = hand.heroCards?.length === 2 ? comboIndex(hand.heroCards[0]!, hand.heroCards[1]!) : null;
+  if (heroIdx == null) return no("hero's cards are not known", line);
+  const api = shape.apiOf[target.pos];
+  if (!api) return no(`the ${target.pos} is not a seat of the table's tree`, line);
+  const m = menus(levels, shape.n, iso);
+  const key = treeKeyOf(shape, m);
+  const body = treeBody(shape, m);
+  const parent = await poolLockSeams.solve(key, body, { multiway: shape.n > 2, preflop: true });
+  if ("error" in parent) return no(parent.error, line);
+  poolLockSeams.prefetch(parent.solId, tokens);
+  // the caller's node: his "C" after exactly two raises, where the tree puts him on the clock — read on the tree's own
+  // sizes (the repaired prefix), as the walk reads it
+  const rep = await poolLockSeams.repair(parent.solId, tokens);
+  const codes = "error" in rep ? tokens : rep.line.split("-").filter(Boolean);
+  let at: { line: string; sols: any[]; call: string; share: number } | null = null;
+  let raises = 0;
+  for (let k = 0; k < codes.length && !at; k++) {
+    const tok = codes[k]!;
+    if (/^R/i.test(tok)) { raises++; continue; }
+    if (tok !== "C" || raises !== 2) continue;
+    const prefix = codes.slice(0, k).join("-");
+    const n = await poolLockSeams.node(parent.solId, prefix);
+    if ("error" in n) return no(`node '${prefix || "root"}': ${n.error}`, line);
+    if (n.data?.game?.players?.find((p: any) => p.is_hero)?.position !== api) continue;
+    const sols = (n.data?.action_solutions ?? []) as any[];
+    const call = sols.find((a) => /^C/i.test(String(a?.action?.code ?? "")));
+    if (!call) return no(`the ${target.pos}'s node '${prefix || "root"}' offers no call (${sols.map((a) => a?.action?.code).join("/")})`, line);
+    at = { line: prefix, sols, call: String(call.action.code), share: Number(call.total_frequency ?? 0) };
+  }
+  if (!at) return no(`no cold-call by the ${target.pos} on the line '${line || "root"}'`, line);
+  if (at.share >= COLD_CALL_LOCK_BELOW) {
+    return no(`${COLD_CALL_NOT_NEEDED} the tree's own ${target.pos} cold-calls ${(100 * at.share).toFixed(1)}% of his range at '${at.line}'`, line);
+  }
+  const w = coldCallWeights(target.key);
+  const lock = poolLimpLockOf(at.line, at.sols, at.call, w);
+  const locked = await poolLockSeams.lock(parent.solId, body, [lock]);
+  if ("error" in locked) return no(locked.error, line);
+  // THE LOCK HELD, OR THERE IS NO ANSWER: the caller's node on the locked solution calls exactly the pool's range
+  const ln = await poolLockSeams.node(locked.solId, at.line);
+  if ("error" in ln) return no(`the locked node '${at.line}': ${ln.error}`, line);
+  const lsol = ((ln.data?.action_solutions ?? []) as any[]).find((a) => String(a?.action?.code ?? "") === at!.call);
+  let off = 0;
+  for (let i = 0; i < 1326; i++) off += Math.abs(Number(lsol?.strategy?.[i] ?? NaN) - w[i]!);
+  if (!lsol || !(off / 1326 <= 0.02)) return no(`the lock did not hold at '${at.line}' (mean distance ${Number.isFinite(off) ? (off / 1326).toFixed(3) : "n/a"} from the pool range)`, line);
+  const repaired = await poolLockSeams.repair(locked.solId, tokens);
+  if ("error" in repaired) return no(`hero's line on the locked tree: ${repaired.error}`, line);
+  const hn = await poolLockSeams.node(locked.solId, repaired.line);
+  if ("error" in hn) return no(`hero's node '${repaired.line || "root"}': ${hn.error}`, line);
+  const toAct = hn.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+  if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) {
+    return { ok: false, kind: LINE_NOT_HERO, reason: `cold-call-locked tree: the line puts ${toAct} on the clock, not hero (${shape.heroApiPos})`, line };
+  }
+  let actions = ((hn.data?.action_solutions ?? []) as any[]).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[heroIdx] ?? 0) }));
+  const sum = actions.reduce((t, a) => t + a.frequency, 0);
+  if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
+  actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
+  const decision = actions.length ? pickWeightedAction(actions) : null;
+  const pinCodes = repaired.line ? repaired.line.split("-") : [];
+  const id = `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`;
+  const handKey = preflopPinKey(hand);
+  if (handKey && !opts.skipPin?.()) {
+    const warm = Promise.allSettled(pinCodes.map((_, k) => poolLockSeams.node(locked.solId, pinCodes.slice(0, k).join("-")))).then(() => undefined);
+    setPreflopPin({
+      piece: "gtow-ai-preflop", handKey, solId: locked.solId, shape, codes: pinCodes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(locked.solId),
+      id, heroPos: heroPosOf(hand, heroPos) ?? "", reduced: null, actionIndex: hand.actions.length, at: Date.now(),
+      poolLocks: [{ pos: target.pos, key: target.key }],
+    } satisfies AiPreflopPin, hand.heroCards.join(""));
+  }
+  const { freq, calls } = coldCallRange(target.key);
+  const combos = Math.round(w.reduce((t, x) => t + x, 0) * 10) / 10;
+  const secs = (Date.now() - t0) / 1000;
+  const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
+  const note = `POOL-LOCKED COLD-CALL: the ${target.pos} (${target.stack}bb) cold-called the 3-bet, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range — ` +
+    `GTO Wizard AI preflop solved this table with his call LOCKED to the pool's ${target.key} range (${(100 * freq).toFixed(2)}% of chances, ` +
+    `${calls.toLocaleString("en-US")} cold-calls measured, ${combos} combos; the rest of each hand folds or raises as the solver plays it) and hero's node re-solved behind it. ` +
+    `Tree: ${shapeText}; ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}.` +
+    (repaired.changed.length ? ` Sizes snapped to the tree's own: ${repaired.changed.join(", ")}.` : "") +
+    (shape.stackCap ? ` ${stackCapNote(shape)}.` : "");
+  return {
+    ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|coldcall:${target.pos}:${target.key}`,
     solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note,
   };
 }
