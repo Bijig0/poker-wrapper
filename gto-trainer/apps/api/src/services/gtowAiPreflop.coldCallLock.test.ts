@@ -144,6 +144,21 @@ describe("solvePreflopColdCallLocked over its seams", () => {
     expect((pin as any).poolLocks).toEqual([{ pos: "BB", key: "coldcall3b_BB_40_80" }]);
   });
 
+  it("the regular (unlocked) answer for the same decision never pins over the locked tree; a later decision does (stress-500 pf_3bet-034)", async () => {
+    rig();
+    const hd = po3way001();
+    const r = await P.solvePreflopColdCallLocked(hd, "CO", target);
+    expect(r.ok).toBe(true);
+    const locked = Pin.preflopPinFor(hd) as any;
+    expect(locked.solId).toBe("L");
+    // the regular GTO Wizard AI answer of the same decision lands after it
+    Pin.setPreflopPin({ ...locked, solId: "U", poolLocks: undefined }, hd.heroCards.join(""));
+    expect((Pin.preflopPinFor(hd) as any).solId).toBe("L");
+    // hero's NEXT preflop decision (a longer line) replaces it as before
+    Pin.setPreflopPin({ ...locked, solId: "N", poolLocks: undefined, rawTokens: [...locked.rawTokens, "R30"] }, hd.heroCards.join(""));
+    expect((Pin.preflopPinFor(hd) as any).solId).toBe("N");
+  });
+
   it("the exact tree already gives the call a real share (2%): NOT NEEDED, nothing locked", async () => {
     const calls = rig({ share: 0.02 });
     const r = await P.solvePreflopColdCallLocked(po3way001(), "CO", target);
