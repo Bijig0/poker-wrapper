@@ -13,7 +13,9 @@
  *                        size played
  *   size-snap-unreported a size the tree does not have (beyond snapToken's on-tree tolerance) and the answer's note
  *                        does not say a size was snapped
- *   range-provenance     a seat's solver-input range is not the output of any chart walk the pipeline made
+ *   range-provenance     a seat's solver-input range is not the output of any chart walk the pipeline made (a seat
+ *                        the note floors to a pool range: that range exactly, a seat that limped / cold-called a
+ *                        3-bet, and the range it replaced a walk's output — poolFloorsOf)
  *   range-product        the product of the chart's own per-class frequencies along that walk (nodes read afresh from
  *                        the chart) does not reproduce the seat's weights
  *   tree-range-mismatch  the 1326-combo array a tree seat is built with is not that seat's class range
@@ -28,6 +30,9 @@ import { buildRangeArray } from "../../utils/buildRangeArray/buildRangeArray";
 import { classWeightsToSpec, type RawNode, type RecordedRangeWalk } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { comboIndex } from "../../utils/comboIndex/comboIndex";
 import { referenceRanges, rangeDiff, type RefAction } from "./referenceRanges";
+import COLD_CALL_LOCKS from "../../services/poolColdCallLocks.json";
+import LIMP_LOCKS from "../../services/poolLimpLocks.v2.json";
+import { COLD_CALL_FLOOR_COMBOS } from "../../services/poolColdCall";
 
 export interface OracleFinding { kind: string; reason: string }
 export interface OracleStats { explained: number; compared: number; refUnwalkable: number }
@@ -65,6 +70,39 @@ export function repickOf(note: string): { seats: string[]; chart: string } | nul
   return m ? { seats: m[1]!.split(", "), chart: m[2]! } : null;
 }
 const withoutRepick = (note: string) => note.split(" · ").filter((s) => !/^RANGES RE-PICK/.test(s.trim())).join(" · ");
+
+/**
+ * THE POOL FLOORS (fastSolve, 2026-10-05): a short limper no chart covers (services/poolLimpFloor) and a 3-bet
+ * cold-caller the walk left under 1% of hands (services/poolColdCall) enter the flop with the pool's measured range
+ * instead of the walked one — by design (departures register: arrival:pool-limp-floor / arrival:pool-coldcall-floor),
+ * said in the note. Such a seat's solver input must be the named pool range EXACTLY, and the range it replaced (the
+ * note's "N combos on <chart>") is still one walk's output, judged as any other. Seat → the pool range and the floor.
+ */
+export interface PoolFloor { kind: "limp" | "coldcall"; key: string; was: number }
+export function poolFloorsOf(note: string): Map<string, PoolFloor> {
+  const out = new Map<string, PoolFloor>();
+  for (const seg of note.split(" · ")) {
+    const m = /^POOL (LIMP|COLD-CALL) RANGE: (.*)$/.exec(seg.trim());
+    if (!m) continue;
+    const re = /the ([A-Z]+) \(\d+bb\) (?:limped|cold-called the 3-bet) — ([\d.]+) combos on .*?, now the pool's (\S+) \(/g;
+    for (let e; (e = re.exec(m[2]!)); ) out.set(e[1]!, { kind: m[1] === "LIMP" ? "limp" : "coldcall", key: e[3]!, was: Number(e[2]) });
+  }
+  return out;
+}
+/** the pool's range for a floor's key, as class weights (null: the key is not in the pool's table) */
+export function poolRangeOf(f: PoolFloor): Record<string, number> | null {
+  const t = (f.kind === "limp" ? LIMP_LOCKS : COLD_CALL_LOCKS).ranges as Record<string, { weights: Record<string, number> }>;
+  return t[f.key]?.weights ?? null;
+}
+const classCombos = (c: string): number => (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12);
+const combosOf = (r: Record<string, number>): number => Object.entries(r).reduce((s, [c, w]) => s + (w > 0 ? w * classCombos(c) : 0), 0);
+/** what the floor's trigger needs of the seat's preflop actions (the truth): a limp, or a call of a 3-bet as his first chips in */
+function floorFits(f: PoolFloor, mine: RefAction[], all: RefAction[]): boolean {
+  const first = all.findIndex((a) => a === mine.find((x) => x.kind !== "F"));
+  if (first < 0 || all[first]!.kind !== "C") return false;
+  const raises = all.slice(0, first).filter((a) => a.kind === "R" || a.kind === "A").length;
+  return f.kind === "limp" ? raises === 0 : raises === 2;
+}
 
 /** An answer that says a size was moved onto the tree. */
 export const SNAP_NOTE = /snapped|SNAPPED/;
@@ -131,11 +169,25 @@ export async function layer1(o: {
   const okWalks = o.walks.filter((w) => w.result.ok);
   const truthBy = new Map<string, RefAction[]>();
   for (const a of o.truth) (truthBy.get(a.pos) ?? truthBy.set(a.pos, []).get(a.pos)!).push(a);
+  const floors = poolFloorsOf(o.note);
+  const seatRange = (w: RecordedRangeWalk, P: string) => (w.result.ok ? Object.entries(w.result.ranges).find(([p]) => p.toUpperCase() === P)?.[1] : undefined);
   for (const pos of o.dry.flopSeats) {
     const P = pos.toUpperCase();
-    const mine = Object.entries(o.dry.ranges).find(([p]) => p.toUpperCase() === P)?.[1];
+    let mine = Object.entries(o.dry.ranges).find(([p]) => p.toUpperCase() === P)?.[1];
     if (!mine) continue;
-    const walk = okWalks.find((w) => { const r = w.result.ok ? Object.entries(w.result.ranges).find(([p]) => p.toUpperCase() === P)?.[1] : undefined; return !!r && sameRange(r, mine); });
+    // a pool floor the note names for this seat: the input is that pool range, and the walk is judged on what it replaced
+    const floor = floors.get(P);
+    if (floor) {
+      const pool = poolRangeOf(floor);
+      if (!pool || !sameRange(pool, mine)) { say("range-provenance", `${P}'s solver-input range is not the pool's ${floor.key} the note names`); continue; }
+      // the cold-call floor replaces only a range under 1% of hands
+      if (floor.kind === "coldcall" && !(floor.was < COLD_CALL_FLOOR_COMBOS)) { say("range-provenance", `${P}'s ${floor.was} combos were replaced by the pool's ${floor.key} — the floor is for under ${COLD_CALL_FLOOR_COMBOS}`); continue; }
+      if (!floorFits(floor, truthBy.get(P) ?? [], o.truth)) { say("range-provenance", `${P} was given the pool's ${floor.key}, and did not ${floor.kind === "limp" ? "limp" : "cold-call a 3-bet"}`); continue; }
+      const was = okWalks.map((w) => seatRange(w, P)).find((r) => !!r && Math.abs(combosOf(r) - floor.was) <= 0.006);
+      if (!was) { say("range-provenance", `${P}'s range before the pool floor (${floor.was} combos) is the output of none of the ${okWalks.length} chart walk(s) the answer made`); continue; }
+      mine = was;
+    }
+    const walk = okWalks.find((w) => { const r = seatRange(w, P); return !!r && sameRange(r, mine!); });
     if (!walk) { say("range-provenance", `${P}'s solver-input range is the output of none of the ${okWalks.length} chart walk(s) the answer made`); continue; }
     const steps = walk.steps.filter((s) => s.pos.toUpperCase() === P);
     const truth = truthBy.get(P) ?? [];
@@ -220,6 +272,7 @@ export async function layer2Postflop(o: {
   const rp = repickOf(o.note);
   let refRp: Awaited<ReturnType<typeof referenceRanges>> | null = null;
   const hero = o.heroPos.toUpperCase();
+  const floors = poolFloorsOf(o.note);
   for (const pos of o.dry.flopSeats) {
     const P = pos.toUpperCase();
     const mine = Object.entries(o.dry.ranges ?? {}).find(([p]) => p.toUpperCase() === P)?.[1];
@@ -240,6 +293,10 @@ export async function layer2Postflop(o: {
         : `${P} was re-picked onto ${rp.chart}, where the reference ${refRp.ok ? `does not bring ${P} to the flop` : `cannot walk the dealt line (${refRp.why})`} and no fit is named` });
       continue;
     }
+    // a seat the note floors to a pool range holds that range by design — layer 1 checked it is exactly the pool's and
+    // that the walked range it replaced is the chart's own
+    const floor = floors.get(P), pool = floor ? poolRangeOf(floor) : null;
+    if (mine && pool && sameRange(pool, mine)) continue;
     if (!mine || !theirs) { findings.push({ kind: "range-mismatch", reason: `${P} is a flop seat of the ${mine ? "pipeline" : "reference"} only (reference at the flop: ${ref.atFlop.join("/")})` }); continue; }
     const d = rangeDiff(mine, theirs);
     if (d.max <= RANGE_TOL) continue;

@@ -1,15 +1,18 @@
 /**
  * HAND 4920544353, END TO END (2026-09-25, Ignition NL5 6-max, session_20260925_135420). The archived hand replayed
- * decision by decision through the real fastSolve — the pinned 6-max chart, the four-way collapse, the chain and its
- * checkpoints, the postflop last resort — against a SYNTHETIC GTO Wizard that answers any node from the tree it was
- * sent (check / bet grid / all-in at the tree's own stack, or fold / call / raise grid / all-in). Nothing leaves the
+ * decision by decision through the real fastSolve — the pinned 6-max chart, the four-way plan, the chain and its
+ * checkpoints — against a SYNTHETIC GTO Wizard that answers any node from the tree it was sent (check / bet grid /
+ * all-in at the tree's own stack, or fold / call / raise grid / all-in). Nothing leaves the
  * process (GTOW_BLOCK=1 and both cloud calls replaced); stored traces are kept in memory.
  *
  * Hero CO 100bb opens 2.6; BTN (34.2), SB (52.4) and BB (34) call. Flop 6s8hKs: SB checks, BB bets 1, hero calls,
  * BTN raises to 10, both blinds fold, hero calls. Turn Qh: hero checks, BTN jams his last 21.6. Live, the answer was
  * "ALLIN 39.8 100%": the turn tree carried the four-way field's stack (49.8, the SB's) rolled forward, so the jam was a
- * bet with 18.2 behind it. Asserted here, both ways the turn is answered: through the merge collapse (the SB+BB seat
- * folds on the flop and the chain goes heads-up), and through the last resort (every multiway node 429, as live).
+ * bet with 18.2 behind it. Asserted here: the turn is answered heads-up at the BTN's 21.6. Since FOLDED SEATS LEAVE FIRST
+ * (f2f9b18, 2026-10-05) the flop tree is not the SB+BB merge any more: the SB, who folds on the flop, leaves first, and
+ * the BB/CO/BTN tree is solved at the three seats' own stacks (31.6 behind) — so the turn needs no re-derived stack. And
+ * with every multiway node 429 (as live) there is no answer: the heads-up last resort that answered it is gone
+ * (e7def6a, Brady 2026-10-05: "do NOT use heads up last resort it is a terrible model").
  *
  * Gated like the harness fixtures (MUTATION_GATE=1, run by setup/regress.ts in its own process): it needs the chart
  * bake, which a worktree does not carry (harnessEnv points HRC6MAX_DB at the main checkout's).
@@ -138,7 +141,7 @@ afterAll(() => {
 });
 
 describe.skipIf(gated)("hand 4920544353: the BTN's turn jam is an all-in in the tree (the table's stacks after the blinds fold)", () => {
-  test("through the merge collapse: the turn goes heads-up at the BTN's 21.6 and hero may only fold or call", async () => {
+  test("folded seats leave first: the flop tree is BB/CO/BTN at 31.6, the turn heads-up at the BTN's 21.6, hero may only fold or call", async () => {
     multiway429 = false; trees.clear();
     const r = await replayTo(JAM);
     expect(r.ok).toBe(true);
@@ -147,30 +150,17 @@ describe.skipIf(gated)("hand 4920544353: the BTN's turn jam is an all-in in the 
     expect(r.actions[1].action).toMatch(/21\.6/);
     const turn = treesOn("TURN");
     expect(turn.length).toBeGreaterThan(0);
-    for (const t of turn) expect(t.stack).toBe(21.6);
-    expect(r.warning).toContain("CO 87.4 / BTN 21.6 behind");
+    for (const t of turn) { expect(t.stack).toBe(21.6); expect([t.oopPos, t.mid?.pos ?? null, t.ipPos]).toEqual(["CO", null, "BTN"]); }
+    expect(r.warning).toContain("fold:SB at 31.6bb behind (BB 31.4 / CO 97.4 / BTN 31.6), not the 49.8bb of the whole field");
   }, 120_000);
 
-  test("through the last resort (every multiway node 429, as live): hero vs the BTN at 21.6, facing his ALL-IN", async () => {
+  test("every multiway node 429 (as live): no answer, named — never the heads-up last resort", async () => {
     multiway429 = true; trees.clear();
     const r = await replayTo(JAM);
     multiway429 = false;
-    expect(r.ok).toBe(true);
-    expect(r.actions.map((a: any) => a.action.split(" ")[0].toUpperCase())).toEqual(["FOLD", "CALL"]);
-    const lr = treesOn("TURN").filter((t) => /^last-resort/.test(t.planTag ?? ""));
-    expect(lr.length).toBeGreaterThan(0);
-    for (const t of lr) { expect(t.stack).toBe(21.6); expect(t.pot).toBe(31.4); }
-    expect(r.warning).toContain("POSTFLOP LAST RESORT");
-    expect(r.warning).toContain("before the 21.6bb ALL-IN hero faces, 21.6bb behind (CO 87.4 / BTN 21.6)");
-    // the last resort's two ranges are narrowed through the flop by the re-root's own walk (2026-10-03): hero and the BTN,
-    // the BB and SB folded there — one heads-up walk, its tree a flop tree of CO / BTN alone
-    expect(r.warning).toContain("the two entering ranges are narrowed by the earlier streets by 1 three-seat walk(s) (CO/BTN");
-    const walk = treesOn("FLOP").filter((t) => !t.mid && t.oopPos === "CO" && t.ipPos === "BTN");
-    expect(walk.length).toBeGreaterThan(0);
-    // the race's two turn trees are two plans (check #9 counts re-creations per plan): the unnarrowed last resort and
-    // the narrowed one — never the same plan created twice
-    const plans = treesOn("TURN").filter((t) => /^last-resort/.test(t.planTag ?? "")).map((t) => t.planTag);
-    expect(plans.some((p) => /^last-resort:narrowed:hero vs BTN/.test(p))).toBe(true);
-    expect(plans.some((p) => /^last-resort:hero vs BTN/.test(p))).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("fold:SB: node: spot-solution 429");
+    expect([...trees.values()].some((t) => /^last-resort/.test(t.planTag ?? ""))).toBe(false);
+    expect(treesOn("TURN")).toEqual([]);
   }, 120_000);
 });
