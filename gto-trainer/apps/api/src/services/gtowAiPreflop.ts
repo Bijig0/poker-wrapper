@@ -2012,7 +2012,7 @@ export const COLD_CALL_NOT_NEEDED = "NOT NEEDED:";
 
 /**
  * THE POOL'S 3-BET COLD-CALL, LOCKED (2026-10-05, services/poolColdCall has the why). Hero's preflop answer on the exact
- * GTO Wizard AI tree of the table with the cold-caller's node LOCKED: his call at the pool's range for his seat and stack,
+ * GTO Wizard AI tree of the table with the cold-caller's node LOCKED: his call at the pool's range for his seat, stack and 3-bet size,
  * the rest of each hand folding or raising as the solver plays it there (poolLimpLockOf — any action code). Only when the
  * unlocked tree gives that call under COLD_CALL_LOCK_BELOW of his range at the node; otherwise a refusal starting
  * COLD_CALL_NOT_NEEDED (the answer goes on as before). Pins the locked solution, the caller named on it.
