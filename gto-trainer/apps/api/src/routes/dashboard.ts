@@ -40,8 +40,9 @@ import { fetchNode6max } from "../services/hrc6maxDb";
 import { nodeGetterHu } from "../services/hrc2max";
 import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
-import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter } from "../services/gtowAiPreflop";
-import { getPreflopPin, preflopNodeFor } from "../services/preflopPin";
+import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter, seatActionOnTree } from "../services/gtowAiPreflop";
+import { getPreflopPin, preflopNodeFor, preflopNodesFor } from "../services/preflopPin";
+import { APPROXIMATIONS, departuresOf, departureBadge } from "../services/approximations";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
 import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
@@ -1441,6 +1442,56 @@ async function rangesAlong(line: string | null, get: (ln: string) => unknown, ac
     : { ranges: null, heroKey: actorPos, rangesNote: `the ranges could not be walked: ${r.reason}` };
 }
 
+/**
+ * THE DEPARTURES BEHIND AN ANSWER, AND THE SEATS A POOL OVERLAY REPLACED (2026-10-05, Brady: show the additions on
+ * top of base GTO honestly). `departures` = the register entries (services/approximations) the logged answer's chain-path
+ * codes and warning resolve to. `poolSeats` = the seats whose range at this node is the POOL's, not GTO's: a preflop
+ * tree that locked a seat (the kept node record's poolLocks — this decision's, or for a postflop decision the last
+ * preflop one, whose tree the flop walked), and a flop floor (the arrival's code, or its first computation on a memo
+ * hit, naming the seat in its note). Each carries the register entry's badge; the page labels that seat
+ * "POOL RANGE — <badge>" and every other seat "GTO range".
+ */
+interface PoolSeat { pos: string; id: string; badge: string; how: "lock" | "floor"; key?: string; atIndex?: number }
+const POOL_LOCK_ENTRY = (key: string) => (/^coldcall3b_/.test(key) ? "pool-coldcall-lock" : "pool-limp-lock");
+function answerPathOf(row: any): any {
+  try { return row?.path ? JSON.parse(row.path) : null; } catch { return null; }
+}
+function departuresFor(row: any): ReturnType<typeof departureBadge>[] {
+  if (!row) return [];
+  const p = answerPathOf(row);
+  const codes = [...(p?.reasons ?? []).map((r: any) => r?.code), p?.arrival?.code, p?.arrival?.first?.code];
+  const out = departuresOf(codes, [row.warning, row.text].filter(Boolean).join(" · "));
+  // a pool-locked limp CHART answered: its id is the only trace (no code, no warning)
+  if (/_olimp_pool/.test(String(row.chart ?? ""))) {
+    const e = APPROXIMATIONS.find((a) => a.id === "pool-locked-limp-charts");
+    if (e && !out.some((x) => x.id === e.id)) out.unshift(e);
+  }
+  return out.map(departureBadge);
+}
+function poolSeatsFor(hand: ParsedHand, upto: number, street: string, row: any): PoolSeat[] {
+  const out: PoolSeat[] = [];
+  const badgeOf = (id: string) => APPROXIMATIONS.find((a) => a.id === id)?.badge ?? id;
+  const recs = preflopNodesFor(hand);
+  const rec = street === "preflop"
+    ? recs.find((r) => r.actionIndex === upto)
+    : [...recs].reverse().find((r) => r.actionIndex < upto);
+  for (const l of (rec as any)?.poolLocks ?? []) {
+    const id = POOL_LOCK_ENTRY(String(l.key));
+    out.push({ pos: String(l.pos).toUpperCase(), id, badge: badgeOf(id), how: "lock", key: String(l.key), atIndex: rec!.actionIndex });
+  }
+  if (street !== "preflop") {
+    const a = answerPathOf(row)?.arrival;
+    for (const x of [a, a?.first].filter(Boolean)) {
+      const id = x.code === "arrival:pool-limp-floor" ? "pool-limp-floor" : x.code === "arrival:pool-coldcall-floor" ? "pool-coldcall-floor" : null;
+      if (!id) continue;
+      for (const m of String(x.why ?? "").matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) {
+        if (!out.some((s) => s.pos === m[1])) out.push({ pos: m[1]!, id, badge: badgeOf(id), how: "floor" });
+      }
+    }
+  }
+  return out;
+}
+
 app.get("/answer-node", async (c) => {
   const dbId = Number(c.req.query("dbId"));
   const upto = Number(c.req.query("upto"));
@@ -1472,6 +1523,8 @@ app.get("/answer-node", async (c) => {
           strategyMode: logged.strategy_mode, pick: logged.pick, exploitPick: logged.exploit_pick, chartPick: logged.chart_pick,
           mesBoard: logged.mes_board, depth: logged.depth, solveId: logged.solve_id ?? null, decisionKey: logged.decision_key ?? null }
       : null,
+    departures: departuresFor(logged),
+    poolSeats: poolSeatsFor({ ...hand, clientHandId: hand.clientHandId ?? e.clientHandId ?? undefined }, upto, t.street, logged),
   };
 
   if (t.street === "preflop") {
@@ -1492,8 +1545,25 @@ app.get("/answer-node", async (c) => {
       if (!key) return noNode("the tree's key in the GTO Wizard solve cache is not known");
       const view = await livePreflopNodeView(rec, hand.heroCards, storedPreflopGetter(key));
       if (!view.ok) return noNode(`the stored tree could not be read — ${view.reason}`);
-      return c.json({ ...base, kind: "ai-preflop", view, tree: { id: rec.id, line: rec.codes.join("-"), rawLine: rec.rawTokens.join("-"),
-        lastResort: rec.lastResort ?? null, reduced: rec.reduced?.droppedPos ?? null, at: rec.at } });
+      // A POOL-LOCKED TREE: at the locked seat's node the view above draws the LOCKED strategy (the pool's range). The
+      // page shows GTO's own strategy there — the same node on the UNLOCKED tree the lock was built on, read back from
+      // the solve cache (no request) — and, when that tree is not at hand, the unlocked share the answer's note names.
+      const unlocked: Record<string, { action: any | null; sharePct: number | null; why: string | null }> = {};
+      if (rec.poolLocks?.length) {
+        const parentKey = preflopCacheKeyOf({ ...rec, cacheKey: null, solId: "" });
+        const said = /which the exact tree gives ([\d.]+)% of his range/.exec([logged?.warning, logged?.text].filter(Boolean).join(" "));
+        for (const l of rec.poolLocks) {
+          const pos = l.pos.toUpperCase();
+          const action = parentKey ? await seatActionOnTree(rec, pos, storedPreflopGetter(parentKey)) : null;
+          unlocked[pos] = {
+            action,
+            sharePct: action?.takenPct ?? (said ? Number(said[1]) : null),
+            why: action ? null : parentKey ? "his node on the unlocked tree is not in the GTO Wizard solve cache" : "the unlocked tree's key is not known",
+          };
+        }
+      }
+      return c.json({ ...base, kind: "ai-preflop", view, unlocked, tree: { id: rec.id, line: rec.codes.join("-"), rawLine: rec.rawTokens.join("-"),
+        lastResort: rec.lastResort ?? null, reduced: rec.reduced?.droppedPos ?? null, at: rec.at, poolLocks: rec.poolLocks ?? null } });
     }
     const live = new Set(hand.liveSeats);
     const posOf = (s: number) => (hand.positions[s] ?? (s === hand.heroSeatId ? heroPos : null) ?? "").toUpperCase();

@@ -1,5 +1,28 @@
 /**
- * approximations — the register of places the strategy is KNOWINGLY not exact.
+ * approximations — THE REGISTER OF EVERY PLACE THE ANSWER PATH DEPARTS FROM BASE GTO.
+ *
+ * ┌─ THE RULE (Brady, 2026-10-05) ──────────────────────────────────────────────────────────────────────────────────┐
+ * │ NO ADDITION MERGES INTO MAIN WITHOUT AN ENTRY HERE. An "addition" is anything that makes an answer differ from    │
+ * │ what plain base GTO (the chart / the exact solver tree, unlocked) would say: an approximation we cannot avoid, a  │
+ * │ pool overlay that swaps a villain's GTO range for measured pool data, or a policy / experiment switched on to be  │
+ * │ judged later. The entry ships in the SAME merge as the code and names: kind, trigger, what replaces what, data    │
+ * │ source + sample size (pool overlays), off switch, the path code(s) and warning prefix(es) it emits, badge text,   │
+ * │ owner + date, review-by date (overlays and experiments), status. approximations.test.ts fails when the answer     │
+ * │ path emits a path code or a warning prefix no entry (or the NOT_DEPARTURES list below) accounts for.              │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * THREE KINDS (`kind`, 2026-10-05 — Brady: "how are we currently documenting all the different ways we're doing
+ * additional things [on top of our base 'gto' strategy]?"):
+ *   approximation      we cannot be exact: a collapse, a line fit, a size snap, a vendor cap. Would go away with a
+ *                      bigger tree or a better solver.
+ *   pool-overlay       we DELIBERATELY replace GTO's villain range with measured pool data (the short-limper lock and
+ *                      flop floor, the 3-bet cold-call lock and floor, a post-in read as a limp, the 3-max exploit
+ *                      overlays). Would stay with unlimited compute; it is an exploit, and the hand page labels the
+ *                      seat "POOL RANGE" wherever one applied.
+ *   policy-experiment  a rule or threshold switched on as policy, usually to be judged (the gap gate, the deep-stack
+ *                      reset). Carries an off switch and a review-by date.
+ * `lifecycle`: experiment (on, to be judged by `reviewBy`) / live (kept) / retired (no longer reachable on the strategy
+ * it was written for — kept so old answers that carry its code still resolve).
  *
  * WHY THIS EXISTS (2026-09-21, Brady: "do we have somewhere where we are
  * creating a list of these sorts of 'imperfections' we have in our strategy
@@ -17,10 +40,11 @@
  * approximations fires most often?* So this is the list, with the joins. Each
  * entry names what we do INSTEAD of the exact thing, why it cannot be exact
  * yet, and what would close it — and carries the keys that let the endpoint
- * attach live volume: `missKinds` (rows + live hits in the miss queue) and
- * `warn` (how many logged answers actually said it).
+ * attach live volume: `missKinds` (rows + live hits in the miss queue), `warn`
+ * (how many logged answers actually said it) and `pathCodes` (how many answers'
+ * chain path carried the code).
  *
- * THE HONEST PART IS `measured`. An entry with neither key is an approximation
+ * THE HONEST PART IS `measured`. An entry with no key is an approximation
  * we make with NO telemetry at all — we know we do it, we cannot say how often.
  * Those are listed too, and marked, because "unmeasured" is the finding: it is
  * the difference between a known cost and an unknown one, and it is the queue
@@ -41,6 +65,11 @@ export type ApproxStatus =
   /** a modelling choice we would keep even with unlimited compute */
   | "by-design";
 
+/** What kind of departure from base GTO (see the header). */
+export type DepartureKind = "approximation" | "pool-overlay" | "policy-experiment";
+/** experiment = on, to be judged by `reviewBy`; live = kept; retired = no longer reachable where it was written for. */
+export type Lifecycle = "experiment" | "live" | "retired";
+
 export interface Approximation {
   id: string;
   /** the Sources registry card this belongs to */
@@ -53,10 +82,35 @@ export interface Approximation {
   /** what would close it — a solve, a vendor change, or nothing */
   fix: string;
   status: ApproxStatus;
+  kind: DepartureKind;
+  lifecycle: Lifecycle;
+  /** when it fires, in one line */
+  trigger: string;
+  /** what base GTO would have used there, and what we use instead */
+  replaces: { gto: string; with: string };
+  /** the data it rests on — required for a pool-overlay */
+  data?: { source: string; sample: string };
+  /** the environment switch that turns it off (read from config/local.env), or null = always on */
+  offSwitch: { env: string; values: string; where: string } | null;
+  /** chain-path reason codes (services/chainPath) an answer carries when this fired */
+  pathCodes?: string[];
   /** miss-queue kinds that count this firing */
   missKinds?: string[];
   /** a distinctive substring of the answer warning this writes */
   warn?: string;
+  /** further warning prefixes this entry writes (the coverage test resolves each to its entry; not counted) */
+  warnAlso?: string[];
+  /** the short label pages print beside an answer / a seat it applied to ("POOL RANGE — <badge>") */
+  badge: string;
+  /** who decided it, and when it went in */
+  owner: string;
+  since: string;
+  /** the date its diagnostic is due (required for a pool-overlay or a policy-experiment that is not retired) */
+  reviewBy?: string;
+  /** the one-command diagnostic that reads its log */
+  diagnostic?: string;
+  /** a retired entry: when and why */
+  retired?: { on: string; why: string };
   /** the caveat line(s) on the source card(s) this entry accounts for — a
    *  distinctive substring each. Several, because one approximation is often
    *  printed on both cards it sits between, and because some caveats are
@@ -73,6 +127,13 @@ export const APPROXIMATIONS: Approximation[] = [
   // ---- preflop, chart side ------------------------------------------------
   {
     id: "far-size-snap",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a villain's raise size is not in the 3-max/6-max chart's menu but within 2x of a size that is",
+    replaces: { gto: "the node at the size actually played", with: "the node at the tree's nearest size (log space)" },
+    offSwitch: null,
+    badge: "SIZE SNAPPED",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Villain's raise size is not in the tree",
     what: "the answer is read at the tree's nearest size, in log space, whenever that is within 2x",
@@ -86,6 +147,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "size-refused",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a villain's raise size is more than 2x from every size in the chart's menu",
+    replaces: { gto: "the node at the size actually played", with: "no chart answer — the AI preflop tree or nothing" },
+    offSwitch: null,
+    badge: "SIZE OFF TREE",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Villain's size is more than 2x from anything in the tree",
     what: "nothing — the chart declines, and the spot falls to the AI preflop piece or goes unanswered",
@@ -97,6 +165,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "beyond-ladder",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "3-max: the effective stack is deeper than the deepest solved rung (150bb NL200 / 200bb NL25)",
+    replaces: { gto: "a tree at the real depth", with: "the deepest rung's chart" },
+    offSwitch: null,
+    badge: "DEEPER THAN THE LADDER",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-3max",
     title: "Stacks deeper than the solved ladder",
     what: "the deepest rung answers, as if the stacks were that deep",
@@ -108,6 +183,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "short-rung-snap",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "3-max: the short stack falls between two solved rungs",
+    replaces: { gto: "a tree at the real short stack", with: "the nearest solved rung" },
+    offSwitch: null,
+    badge: "SHORT RUNG SNAPPED",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-3max",
     title: "The short stack is between solved rungs",
     what: "the nearest solved short rung answers",
@@ -119,6 +201,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "open-not-in-set",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "6-max: the open size has no tree in the uneven set",
+    replaces: { gto: "a tree with that open size", with: "the nearest open size's tree" },
+    offSwitch: null,
+    badge: "OPEN SIZE SNAPPED",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "The open size has no tree in the uneven set",
     what: "the nearest open size's tree answers",
@@ -130,6 +219,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "no-limp-uneven",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "6-max: a limped pot at uneven stacks with no uneven limp tree",
+    replaces: { gto: "a limp tree at the real stacks", with: "the even 100bb limp chart" },
+    offSwitch: null,
+    badge: "EVEN LIMP CHART",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Limped pot at uneven stacks",
     what: "the EVEN 100bb limp chart answers, whatever the real stacks are",
@@ -141,6 +237,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "caller-cap-chart",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "hero would be a third caller and the chart node offers no call for him",
+    replaces: { gto: "the node with hero as the extra caller", with: "the node one caller fewer (earliest call folded) — never the last one" },
+    offSwitch: null,
+    badge: "CALLER CAP",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Hero is the third caller and the tree has no call for him",
     what: "his decision is read one caller fewer, with the earliest call folded — while a caller is left. The borrow may NOT fold the last one: when the call it would fold is the only limp, or the only call of that raise, the chart refuses (LINE NOT HELD, see line-fit-borrow) and the GTO Wizard AI preflop tree answers",
@@ -154,6 +257,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "hrc3max-rake",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "3-max NL25 play outside the ign25 grid",
+    replaces: { gto: "a chart at NL25's rake cap", with: "the chart solved at the NL200 1bb cap" },
+    offSwitch: null,
+    badge: "NL200 RAKE",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-3max",
     title: "3-max grid solved at a rake we no longer play",
     what: "NL25 play reads charts solved at the NL200 1bb cap unless the ign25 grid covers the state",
@@ -165,6 +275,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "no-river-betting",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "3-max rung not yet re-solved (v2ci)",
+    replaces: { gto: "a chart with heads-up river betting", with: "the CI-10 auto-solve chart" },
+    offSwitch: null,
+    badge: "OLD 3-MAX CHART",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-3max",
     title: "Un-resolved rungs have no heads-up river betting",
     what: "those charts come from the original CI-10 auto-solve generation",
@@ -177,6 +294,14 @@ export const APPROXIMATIONS: Approximation[] = [
 
   {
     id: "limp-3plus",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "three or more limpers (a fourth at 100bb; three at 30-75bb)",
+    replaces: { gto: "a tree holding every limper", with: "the pool-locked/wide limp tree, or a fitted line with the earliest limper folded" },
+    offSwitch: null,
+    warnAlso: ["THREE LIMPERS"],
+    badge: "THREE LIMPERS",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Three or more limpers",
     what: "at 100bb three limpers are answered from the pool-locked limp tree (the v2 re-solve holds three limpers; the uneven pool3 tree at a table with a short seat), trust-gated, with the wide tree (olimp_widex) behind it when that tree's node is untrusted or cannot hold the line; a fourth limper, and three at 30-75bb, are FITTED: the earliest limper is folded until the line fits the chart (see line-fit-borrow) — answered, one player lighter",
@@ -189,6 +314,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "coldcall-3plus",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "three or more cold callers of one raise",
+    replaces: { gto: "a tree with every caller", with: "a fitted line with the earliest plain caller folded" },
+    offSwitch: null,
+    badge: "3+ CALLERS FITTED",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Three or more cold callers",
     what: "the line is FITTED: the earliest plain caller is folded (see line-fit-borrow), or hero's own call is read one caller fewer (caller-cap-chart)",
@@ -201,6 +333,14 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "no-legal-collapse",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a 4+ way street where no ghost/merge collapse applies from the flop",
+    replaces: { gto: "a 4+ seat postflop tree", with: "a re-root at the current street, earlier streets as pot" },
+    offSwitch: null,
+    warnAlso: ["NOT NARROWED", "ALL-IN LEFT OUT"],
+    badge: "RE-ROOTED",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai",
     title: "A 4+ way street no collapse can reduce",
     what: "RE-ROOTED at the current street (services/multiwayReroot.ts): earlier streets become pot, the entering ranges are narrowed by three-seat walks, and the current street alone is collapsed — refused only when every villain has paid on the current street itself",
@@ -213,6 +353,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "limped-multiway-postflop",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "postflop out of a limped-and-isolated multiway pot neither tree holds",
+    replaces: { gto: "arrival ranges walked on a tree holding the whole line", with: "per-villain arrival ranges from a fitted line keeping his seat" },
+    offSwitch: null,
+    badge: "FITTED ARRIVAL",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Postflop out of a limped-and-isolated multiway pot",
     what: "each villain's arrival range is read from a FITTED line that keeps his own seat and action (see line-fit-borrow)",
@@ -225,6 +372,14 @@ export const APPROXIMATIONS: Approximation[] = [
 
   {
     id: "line-fit-borrow",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the chart refuses the line as played (past its limper/caller/entrant caps)",
+    replaces: { gto: "the node of the line as played", with: "the node of a fitted line (earliest plain limper/caller folded; never the last one)" },
+    offSwitch: null,
+    warnAlso: ["LINE FITTED FOR THE RANGES", "LINE FITTED FOR THE RE-PICKED RANGES", "LINE KEPT AS THE HAND WAS READ", "WITH THAT PLAYER FOLDED OUT OF THE LINE"],
+    badge: "LINE FITTED",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "Lines past the chart's caps are fitted by folding the earliest caller — a crowd is thinned, never emptied",
     what: "while the chart refuses the line, the EARLIEST plain limper or caller is folded (never hero, never a later raiser), his later actions dropped, and the nearest spot read — everyone else keeps his real seat; flop ranges are fitted per villain the same way. WHAT THE FIT MAY DO: reduce the limpers of a pot, or the callers of a raise, to fewer (three limpers read as two) — neither tree holds such a line and the chart removes no more players than GTO Wizard's would. WHAT IT MAY NOT (2026-10-04): fold the LAST one out — the only limper, or the only caller of a raise, counted per raise level over every seat folded out of hero's line (this fit, an earlier decision's, the caller-cap borrow), hero himself not counted. Then the chart refuses (LINE NOT HELD, path code preflop:fit-empties) and the GTO Wizard AI preflop tree, which holds one limper (plus the SB completing) and one cold-caller (plus the BB), answers the line as played; its tree is pre-built on the tick the limp or call lands. Only when that tree fails or runs past its 12 s box does the chart's fitted answer go out, flagged (preflop:fit-empties-ai-failed)",
@@ -237,6 +392,15 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "rare-line-exact-tree",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the chart has no branch for the table's only limper or cold-caller (the fit may not fold him out)",
+    replaces: { gto: "(this IS the exact tree) — its villain takes the line ~never, so the range behind it is the solver's model of a mistake", with: "GTO Wizard AI preflop at the real node" },
+    offSwitch: null,
+    pathCodes: ["preflop:fit-empties", "preflop:fit-empties-ai-failed"],
+    warnAlso: ["OFF THE TREE'S PATH"],
+    badge: "LINE NOT HELD",
+    owner: "Brady", since: "2026-10-04",
     source: "gtow-ai-preflop",
     title: "A limp or call the chart never makes, answered by the exact tree against the solver's model of it",
     what: "the chart has no branch for the table's only limper or cold-caller (the fit rule, see line-fit-borrow), so GTO Wizard's preflop tree answers at the real node, pot and sizes — but it is an equilibrium solve too: its own villain takes that action about as rarely (a 30bb UTG limp), so the range behind the limp or call is the solver's model of a player who takes the line, not the pool's. Check #3 reads how often the tree's villain takes each action on hero's line and flags one under 1% (OFF THE TREE'S PATH)",
@@ -249,18 +413,261 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "pool-limp-lock",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "hero's preflop decision behind ONE short (≤85bb) non-blind limp or an SB complete, before any raise, that no v2 pool-locked chart covers at the limper's stack bucket",
+    replaces: { gto: "the limper's equilibrium limp range (a 38bb HJ limps 0.048% on GTO Wizard) and hero's node on the unlocked tree", with: "the exact GTO Wizard AI tree with the limper's limp node LOCKED to the pool's limp range for his role and stack bucket; hero's node re-solved behind it; the flop walks his range off the locked tree" },
+    data: {
+      source: "poker analysis/pipeline/limp_study/locks_v2/locks_v2.json @ d6a04fd0 (build_locks.py; report.txt, build_locks.txt) — copied to services/poolLimpLocks.v2.json",
+      sample: "NL200 ring 5+6-handed pool, own + anonymised histories, hero excluded (6,755 6-handed + 4,535 5-handed hands): first-in limp at ≤60bb 278 of 1,056 chances (26.3%), 60-85bb 166 of 1,103 (15.1%), deep 667 of 21,647 (3.1%); short over-limps (9 / 21 limps) and short SB completes (2-50) too thin for their own shape — shrunk to the pooled rates (build_locks.txt notes)",
+    },
+    offSwitch: { env: "SHORT_LIMP_POOL", values: "on (unset) = lock + floor + short-limper routing · floor = no preflop lock · off = none of them", where: "config/local.env, read at every decision" },
+    pathCodes: ["preflop:pool-limp-lock"],
+    warnAlso: ["POOL LIMP LOCK FAILED"],
+    badge: "POOL LIMP LOCK (NL200 pool, locks_v2)",
+    owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-19",
+    diagnostic: "bun src/scripts/shortLimpPoolReport.ts --since 2026-10-05 · bun src/scripts/departuresReport.ts --id pool-limp-lock",
     source: "gtow-ai-preflop",
     title: "A short limper no pool chart covers: hero's preflop node read on the exact tree with the limp locked to the pool's range",
     what: "a villain at 85bb or less limped (or completed) before any raise, the only non-blind limp in the line, and no v2 pool-locked chart holds him at his own stack bucket: GTO Wizard AI preflop solves the table with his limp node-locked to the pool's measured range (locks_v2: 26.3% of hands at 60bb or less, 15.1% at 60-85bb), the rest of each hand split as the solver plays it, and hero's node re-solved behind it; the flop walks his range off that tree. Behind a limp every seat isolates to 3bb + 1bb per limper (the AI tree's one first-raise size; it was 2.5x — a min-raise iso). Two or more limpers stay with the charts and the line fit. Post-ins are treated as limpers for now (memory todo-post-in-ranges)",
     why: "no equilibrium tree, ours or GTO Wizard's, gives a short stack's limp a real range (a 38bb HJ limps 0.048% on GTO Wizard, 0.2% on D30_olimp; the pool limps 26%); only a lock imposes one, and the pool-locked uneven trees that would hold it are still solving",
     fix: "the uneven pool-locked limp trees (D100_s{30,50,70}_<SEAT>_olimp_pool3 and the hero-free _olimp_poolh, queued on hrc-l1): when one covers the limper the chart answers and this stands down by itself; limpers under 20bb and hero under 85bb stay here",
     status: "solvable",
-    warn: "POOL-LOCKED LIMPER",
+    // with its colon: matching is case-insensitive, and the pool-locked limp CHARTS' note says "pool-locked limpers;"
+    warn: "POOL-LOCKED LIMPER:",
     cost: "measured 2026-10-05 (scripts/poolLockStudy.ts): against D100_olimp_pool3, solved with the same deep lock on HRC, the locked GTO Wizard tree's BB differs in top action on 0.6% of hands (raise share 2.4% vs 3.4%); a cold tree can miss the 12 s box (then the chart answers as before, 'POOL LIMP LOCK FAILED'); the pool ranges are NL200's",
     code: "poolLimpFloor.ts poolLockTarget · gtowAiPreflop.ts solvePreflopPoolLocked / poolLimpLockOf / isoSizes · fastSolve.ts poolLimpLockFirst / warmPoolLimpLock",
   },
+
+  // ---- pool overlays: a villain's GTO range replaced by measured pool data (kind "pool-overlay") ---------------
+  {
+    id: "pool-limp-floor",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "at the flop: a villain who limped (or completed) before any raise, never raised, ≤85bb, whose range was not walked off a tree that locked him at his own stack bucket",
+    replaces: { gto: "the limper's flop-entering range from the chart / AI tree (2.98 combos for a 39bb HJ on D30_olimp; 0.6 on GTO Wizard)", with: "the pool's whole limp range for his role and stack bucket (locks_v2), kept whole whatever he did after the limp" },
+    data: {
+      source: "the same locks_v2.json as pool-limp-lock (services/poolLimpLocks.v2.json)",
+      sample: "first-in ≤60bb 26.3% (n=278), 60-85bb 15.1% (n=166); why the floor: over 253 hands since 2026-09-19 a short limper reached the postflop solve with under half a combo 33 times",
+    },
+    offSwitch: { env: "SHORT_LIMP_POOL", values: "on / floor = floored · off = the tree's range", where: "config/local.env, read at every decision" },
+    pathCodes: ["arrival:pool-limp-floor"],
+    warn: "POOL LIMP RANGE:",
+    badge: "POOL LIMP RANGE (NL200 pool, locks_v2)",
+    owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-19",
+    diagnostic: "bun src/scripts/shortLimpPoolReport.ts --since 2026-10-05",
+    source: "gtow-ai",
+    title: "A short limper enters the flop with the pool's limp range",
+    what: "the flop-entering range of a short limper no pool-locked tree covers at his stack bucket is replaced, whole, by the pool's measured limp range; a limper the preflop lock already locked (the pin's poolLocks) keeps his walked range",
+    why: "no equilibrium tree gives a short stack's limp a real range, and every later street narrows an already-empty range until the river has no node (hand 4922555015)",
+    fix: "the uneven pool-locked limp trees (queued on hrc-l1); when one covers him the floor stands down by itself",
+    status: "solvable",
+    code: "services/poolLimpFloor.ts applyPoolLimpFloor / poolChartCovers · fastSolve.ts (the flop arrival exit)",
+  },
+  {
+    id: "pool-coldcall-lock",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "hero's preflop decision after ONE villain cold-called an open and a 3-bet in an unlimped pot, when no 6-max chart held the line (GTO Wizard AI answered) and the exact tree gives that call under 1% of his range",
+    replaces: { gto: "the caller's equilibrium cold-call range (the BB cold-calls 0% on the exact tree of stress-500 po_3way-001: 0.01 combos at the flop) and hero's node on the unlocked tree", with: "the exact GTO Wizard AI tree with the caller's node LOCKED to the pool's cold-call range for his seat and stack; hero's node re-solved behind it; the flop walks his range off the locked tree" },
+    data: {
+      source: "poker analysis/pipeline/limp_study/locks_v2/coldcall3b_locks.json (build_coldcall_locks.py, poker 132f03f9; build_coldcall_locks.txt) — copied to services/poolColdCallLocks.json",
+      sample: "CoinPoker, 9.1M hands: rate from 65,530 cold-calls in 2.8M chances (~2-2.5% every seat; Ignition NL100+NL200 2.5-3.5%), shape from the 18,324 seen at showdown, showdown bias corrected per hand group against 156 Ignition cold-calls with every card visible; per seat (HJ borrows the CO's shape) and per stack bucket where 300+ were shown (BTN/SB/BB under 80bb cold-call 8-9%)",
+    },
+    offSwitch: { env: "COLD_CALL_POOL", values: "on (unset) = lock + floor · floor = the flop floor only · off = neither", where: "config/local.env, read at every decision" },
+    pathCodes: ["preflop:pool-coldcall-lock"],
+    warn: "POOL-LOCKED COLD-CALL:",
+    warnAlso: ["COLD-CALL LOCK FAILED"],
+    badge: "POOL COLD-CALL LOCK (CoinPoker 9.1M hands)",
+    owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-19",
+    diagnostic: "bun src/scripts/departuresReport.ts --id pool-coldcall-lock --since 2026-10-05",
+    source: "gtow-ai-preflop",
+    title: "A 3-bet cold-caller the exact tree all but never has: hero's node read with his call locked to the pool's range",
+    what: "Brady's rule, charts first: the regular preflop answer runs; a 6-max chart that holds the line answers and the lock is dropped. Only when GTO Wizard AI had to answer AND its exact tree gives the call under 1% of the caller's range (else NOT NEEDED) is hero re-solved on that tree with the caller's node locked (his call = the pool's range, the rest of each hand folding or raising as the solver plays it), the lock checked to hold, and the locked solution pinned so the flop walks his range off it. One lone unlimped cold-caller only; 2+ callers and limped pots are unchanged",
+    why: "an equilibrium tree gives a cold-call of a 3-bet ~0% of a range the pool calls with 2-2.5% of the time; every street after it was solved against a seat holding nothing",
+    fix: "nothing on the solver side — it is an exploit of how the pool plays; a pool-locked HRC 3-bet tree would make it a chart",
+    status: "by-design",
+    cost: "unmeasured live (never seen at a real table as of 2026-10-05); replay gate PASS (hand 4922576846: a 48bb SB cold-calls the CO's 3-bet); 12 s POOL_LOCK_MS box — a refusal or timeout keeps the unlocked answer ('COLD-CALL LOCK FAILED')",
+    code: "services/poolColdCall.ts coldCallersOf / coldCallLockTarget · gtowAiPreflop.ts solvePreflopColdCallLocked · fastSolve.ts poolColdCallLockFirst",
+  },
+  {
+    id: "pool-coldcall-floor",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "at the flop: a villain who cold-called an open and a 3-bet (unlimped, never raised after) holds under 13.26 combos (1% of hands), unless the preflop lock pinned him",
+    replaces: { gto: "his flop-entering range from whatever piece produced the flop ranges (chart, unlocked AI tree)", with: "the pool's cold-call range for his seat and stack" },
+    data: {
+      source: "the same coldcall3b_locks.json as pool-coldcall-lock (services/poolColdCallLocks.json)",
+      sample: "CoinPoker 9.1M hands, 65,530 cold-calls, 18,324 at showdown, bias-corrected against 156 Ignition hands",
+    },
+    offSwitch: { env: "COLD_CALL_POOL", values: "on / floor = floored · off = the tree's range", where: "config/local.env, read at every decision" },
+    pathCodes: ["arrival:pool-coldcall-floor"],
+    warn: "POOL COLD-CALL RANGE:",
+    badge: "POOL COLD-CALL RANGE (CoinPoker 9.1M hands)",
+    owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-19",
+    diagnostic: "bun src/scripts/departuresReport.ts --id pool-coldcall-floor --since 2026-10-05",
+    source: "gtow-ai",
+    title: "A 3-bet cold-caller left under 1% of hands enters the flop with the pool's cold-call range",
+    what: "whatever piece produced the flop ranges, a lone unlimped 3-bet cold-caller reaching the flop with under 13.26 combos gets the pool's range for his seat and stack instead; a caller the preflop lock pinned keeps his walked range",
+    why: "the same empty-range failure as the short limper: a range the equilibrium gives ~0 combos is narrowed to nothing by the later streets",
+    fix: "nothing on the solver side (an exploit)",
+    status: "by-design",
+    code: "services/poolColdCall.ts applyPoolColdCallFloor · fastSolve.ts (the flop arrival exit)",
+  },
+  {
+    id: "post-in-as-limp",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "a player who posted 1bb to come in and checked his option",
+    replaces: { gto: "a poster's range (closer to any two cards — a forced post) on a tree that models the post", with: "a LIMP: the pool's limp range, the short-limper preflop lock and the flop floor apply to him as to any limper (pool-limp-lock / pool-limp-floor)" },
+    data: {
+      source: "none of its own — it borrows the limp ranges (locks_v2); posters' hands are not measured yet",
+      sample: "0 post-in hands measured; seen in the replay gate on hands 4921628232 and 4921841315 (a 30bb CO posting in)",
+    },
+    offSwitch: { env: "SHORT_LIMP_POOL", values: "off = no pool limp range for anyone, posters included (no switch of its own)", where: "config/local.env" },
+    warn: "POSTED IN",
+    badge: "POST-IN READ AS A LIMP",
+    owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-19",
+    diagnostic: "none yet — measure posters' hands from the downloaded Ignition histories (memory todo-post-in-ranges)",
+    source: "gtow-ai-preflop",
+    title: "A post-in is read as a limper",
+    what: "the post is folded into the actions (utils/foldPostIns: a poster who checks his option reads as a limp; the answer says 'POSTED IN (approximation)'); poolLimpFloor.poolLimpersOf then gives him the limp's pool range, the preflop lock can lock him and the flop floor can floor him. It has no path code of its own (the limp entries' codes fire when the lock or the floor takes him)",
+    why: "Brady 2026-10-05: no way yet to emulate a post-in's game state on a tree and too little post-in data, so the minimally defensive choice is the limp",
+    fix: "measure posters' hands, then their own range or a tree that models the post",
+    status: "solvable",
+    code: "utils/foldPostIns · services/poolLimpFloor.ts poolLimpersOf",
+  },
+  {
+    id: "pool-locked-limp-charts",
+    kind: "pool-overlay",
+    lifecycle: "live",
+    trigger: "a limped 6-max pot the picker answers from a pool-locked limp tree: 100bb (D100_olimp_pool3 / _pool, _widex behind), and the uneven short-limper trees (_olimp_pool3, hero-free _olimp_poolh) where they are baked",
+    replaces: { gto: "the equilibrium limp charts (D*_olimp), where nobody limps", with: "HRC trees whose villains' limps and SB completes are LOCKED to the pool's limp ranges; hero's strategy is the best response inside that tree" },
+    data: {
+      source: "v1 locks (limp_study pool3, deep) and locks_v2.json for the limp-v2 re-solves (bake provenance plan limp-v2-*)",
+      sample: "the locks_v2 sample above (NL200 ring 5+6-handed); v1 locks deep only",
+    },
+    offSwitch: { env: "SHORT_LIMP_POOL", values: "off = the short-limper routing to the uneven pool trees stops (the 100bb pool trees have no switch)", where: "config/local.env" },
+    // the chart's own note (hrc6max poolLimpChart), lower case: "pool-locked limp tree (…)" / "pool-locked limpers; the SB's own decision …"
+    warn: "pool-locked limp tree",
+    warnAlso: ["pool-locked limpers;"],
+    badge: "POOL-LOCKED LIMP CHART",
+    owner: "Brady", since: "2026-09-24",
+    diagnostic: "bun src/scripts/shortLimpPoolReport.ts --since 2026-10-05 (the short-limper routing)",
+    source: "hrc-6max",
+    title: "Limped pots read on pool-locked limp trees",
+    what: "the picker sends limped pots to HRC trees whose villain limps are locked to the pool's limp ranges (100bb: olimp_pool3 for the BB / olimp_pool for the SB's complete, olimp_widex behind an untrusted node); a lone short limper is routed to his seat's uneven pool3 / poolh tree inside the first-decision stack bound. No path code says so — the chart's note in the warning ('pool-locked limp tree …', 'pool-locked limpers; …') and the chart id (…_pool3, …_poolh) are the trace",
+    why: "the equilibrium limp charts never limp, so their limp nodes are untrained (reach 1 in 147,000) and their ranges for a limper are noise",
+    fix: "nothing — it is the design (an exploit of how the pool limps); a path code of its own would make it exact to count",
+    status: "by-design",
+    code: "services/hrc6max.ts poolLimpChart / shortLimperAlone / unevenLimp",
+  },
+  {
+    id: "river-mes-shadow",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "6-max ring: hero's heads-up river decision on the AI chain",
+    replaces: { gto: "GTO Wizard's equilibrium river answer", with: "nothing yet in shadow mode (a local river solve against the pool-locked villain is LOGGED beside the answer); in serve mode the MES pick at hero's first river decision" },
+    data: {
+      source: "data/river_lock.json (analysis/pipeline/solve/river/riverlock.py): CoinPoker's structure at Ignition's level, validated on held-out Ignition hands",
+      sample: "backtest 2026-09-22: 800 river decisions from Brady's Ignition 6-max corpus — MES-first-then-GTO +0.97 bb/decision [+0.48, +1.42] on 565 spots; facing a bet MES lost 3.08 bb/decision",
+    },
+    offSwitch: { env: "RIVER_MES", values: "off / shadow (default) / serve — data/river_mes_config.json wins when present (none on this machine 2026-10-05 → shadow)", where: "poker-data/api/river_mes_config.json or config/local.env" },
+    badge: "RIVER MES (shadow)",
+    owner: "Brady", since: "2026-09-22", reviewBy: "2026-10-19",
+    diagnostic: "the river_mes table in poker.sqlite (riverMes.ts shadow log)",
+    source: "gtow-ai",
+    title: "River MES runs in shadow beside the 6-max river answer",
+    what: "after every heads-up river answer a local river subgame is solved with the villain locked to the pool and hero's best response read off; in shadow mode it is logged only and the answer is untouched. Serve mode would make it the pick at hero's first river decision",
+    why: "the backtest found the exploit pays first-to-act/checked-to and loses facing a bet; shadow collects live evidence before serving",
+    fix: "a decision: serve (first) or off",
+    status: "by-design",
+    code: "services/riverMes.ts · fastSolve.ts (river)",
+  },
+
+  // ---- policies and experiments (kind "policy-experiment") ---------------------------------------------------
+  {
+    id: "gap-gate",
+    kind: "policy-experiment",
+    lifecycle: "experiment",
+    trigger: "a 6-max chart decision past a size bound (open 1.25x, 3-bet 1.15x, 4-bet+ 1.10x) or a stack bound (jammer 1.2x, re-raiser 1.3x, first decision 1.5x under 50bb, hero 1.3x under 30bb)",
+    replaces: { gto: "the chart's answer read at a snapped size / stack (GTO for a nearby spot)", with: "the exact GTO Wizard AI preflop tree (12 s box; on failure the chart answers after all, preflop:gap-gate-ai-failed)" },
+    offSwitch: { env: "PREFLOP_GAP_GATE", values: "unset = route · log = record the verdict only · off", where: "config/local.env + restart the :2000 worker" },
+    pathCodes: ["preflop:gap-gate", "preflop:gap-gate-ai-failed"],
+    warn: "GAP GATE:",
+    badge: "GAP GATE",
+    owner: "Brady", since: "2026-10-02", reviewBy: "2026-10-16",
+    diagnostic: "bun src/scripts/gapGateReport.ts --since 2026-10-02 (--replay = what it would route)",
+    source: "hrc-6max",
+    title: "Chart answers past a size or stack bound go to the exact tree",
+    what: "STRICT (Brady: 'we must be within the threshold … else delegate'): one bound passed routes the decision to GTO Wizard AI preflop; the late AI answer never becomes the pin; warmGapGate pre-builds the tree the moment a routed raise lands",
+    why: "past those bounds the snapped chart node is measurably a different spot (the 2026-10-02 overnight study, 577 exact trees)",
+    fix: "a decision after the review: keep, re-tune the bounds, or off",
+    status: "by-design",
+    cost: "at go-live 11 of 1,485 chart answers (0.7%) would route — 7 three-bet sizes, 4 open sizes, 0 stack",
+    code: "services/treeGap.ts · fastSolve.ts solvePreflop6max / warmGapGate",
+  },
+  {
+    id: "mix-noise-floor",
+    kind: "policy-experiment",
+    lifecycle: "live",
+    trigger: "every pick hero is given",
+    replaces: { gto: "the solver's mix as given", with: "the mix with actions at 1% or less dropped (never rolled) and a decision at 99% or more played pure" },
+    offSwitch: null,
+    badge: "MIX FLOOR 1%",
+    owner: "Brady", since: "2026-09-22",
+    source: "gtow-ai",
+    title: "Actions at 1% or less are never played; 99% or more is played pure",
+    what: "the roller plays only actions above MIX_FLOOR_PCT (1%) and returns a ≥99% action outright",
+    why: "below 1% an action is noise in the solve (an untrained node's stray raise), not something the strategy plays",
+    fix: "nothing — a policy; measure the EV it moves if it ever matters",
+    status: "by-design",
+    code: "services/answerIntegrity.ts MIX_FLOOR_PCT / playedActions · rollDecision (>= 99 pure)",
+  },
+  {
+    id: "fold-on-no-answer",
+    kind: "policy-experiment",
+    lifecycle: "live",
+    trigger: "no answer reaches the table in time (hero's clock at 4 s or less, a poller note, or the deadline)",
+    replaces: { gto: "the solver's answer", with: "check if free, else fold" },
+    offSwitch: { env: "autoFoldNoAnswer (session config)", values: "on / off per session", where: "wrapper session setup" },
+    badge: "NO ANSWER → CHECK/FOLD",
+    owner: "Brady", since: "2026-09-25",
+    source: "wrapper",
+    title: "No answer in time: check if free, else fold",
+    what: "the relay checks or folds for hero when no answer arrives before his clock runs out (the code says temporarily on for all tables, real money included)",
+    why: "a timed-out hand is sat out, and a sat-out table ends the session (memory session-end-2026-09-30/10-01)",
+    fix: "fewer no-answers; the policy stays as the safety net",
+    status: "by-design",
+    code: "apps/wrapper/src/relay.ts (autoFoldNoAnswer)",
+  },
+  {
+    id: "deep-stack-reset",
+    kind: "policy-experiment",
+    lifecycle: "experiment",
+    trigger: "hero's own stack reaches 250bb (only with the setup page's 'Deep stack' on — OFF by default)",
+    replaces: { gto: "playing on at any depth", with: "sit out the next big blind, leave, wait 60 s, take a fresh seat at the normal buy-in" },
+    offSwitch: { env: "stackResetBb (session config)", values: "absent = off (default) · setup page 'Deep stack' On = 250bb, stackResetWaitS 60", where: "wrapper setup page" },
+    badge: "DEEP-STACK RESET",
+    owner: "Brady", since: "2026-10-03", reviewBy: "2026-10-19",
+    diagnostic: "wrapper events stack-reset-armed / -done / -aborted",
+    source: "wrapper",
+    title: "At 250bb hero leaves and re-seats",
+    what: "a per-table state machine (armed → sat out → left → wait → reseated); any failure aborts back to play. Not yet checked on a live client",
+    why: "past 250bb GTO Wizard's preflop tree is capped (gtow-preflop-250bb-cap) and the charts stop at 150bb — deeper play is played on approximations",
+    fix: "a decision after a practice-table check",
+    status: "by-design",
+    code: "apps/wrapper/src/stackReset.ts",
+  },
   {
     id: "limp-4bet-menu",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a named 4-bet size inside a limped pot",
+    replaces: { gto: "a limp tree with a named 4-bet", with: "GTO Wizard AI after the line fit folds the extra limper" },
+    offSwitch: null,
+    badge: "LIMP 4-BET FITTED",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "A named 4-bet inside a limped pot",
     what: "the chart refuses (its 4-bet menu is all-in only); GTO Wizard AI answers with the real sizes after the line fit folds the extra limper — refused only when both limpers stay in to the 4-bet",
@@ -273,6 +680,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "rekeyed-in-place",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a walk into one of the 26 charts re-keyed without raw output",
+    replaces: { gto: "every node HRC solved", with: "the nodes that survived the converter's key collision (a missing one refuses)" },
+    offSwitch: null,
+    badge: "RE-KEYED CHART",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
     title: "26 charts were re-keyed without their raw output",
     what: "their node keys were corrected in place, but nodes the old converter lost to key collisions are still missing",
@@ -286,6 +700,13 @@ export const APPROXIMATIONS: Approximation[] = [
   // ---- preflop, GTO Wizard AI side ---------------------------------------
   {
     id: "gtow-limp-cap",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "two or more non-SB limpers on a GTO Wizard AI preflop line",
+    replaces: { gto: "a tree holding every limper", with: "the one-limper tree on a fitted line" },
+    offSwitch: null,
+    badge: "ONE LIMPER (GTOW CAP)",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai-preflop",
     title: "Two limpers cannot be expressed",
     what: "the line fit folds the extra limpers (never hero, never a later raiser) so the one-limper tree can answer — for hero's decision and, seat by seat, for the flop ranges",
@@ -297,6 +718,14 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "reduced-tree-arrival",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the exact preflop tree cannot hold the line and no per-seat fit mends it",
+    replaces: { gto: "every seat's range walked on a tree holding the line", with: "ranges read around the last raise on the exact tree (limpers = pool limp range whole)" },
+    offSwitch: null,
+    pathCodes: ["arrival:reduced-tree"],
+    badge: "REDUCED ARRIVAL",
+    owner: "Brady", since: "2026-10-01",
     source: "gtow-ai-preflop",
     title: "Flop ranges read around the last raise",
     what: "when the exact preflop tree cannot hold the line and no per-seat fit mends it, the flop-entering ranges are read around the last raise, every read on the exact tree already solved (no other tree): the raiser's = his range before it (hero: what the chart told him; a limper: the pool's limp range; otherwise his range on the exact tree) × the share that makes that raise on the exact tree; hero calling = his starting range × his call on the exact tree (whole when it cannot be read); a caller all in for less = his starting range whole; a caller who came in LIMPING = the pool's limp range whole, not narrowed; any other caller = his range walked on the exact tree along the line fitted for him (the earliest other limper or caller folded out), through his own node, less the hands that fold there (whole when that cannot be read). MEASURED 2026-10-04 (scripts/callerReadStudy.ts, 65 villain calls on lines the exact tree holds, his own node as truth): the fitted read keeps 31.2% of the range where the node keeps 18.2% (22 calls, TV 42.1%) — still WIDE; limpers kept whole: the node keeps 55.5% (25 calls), a small blind who completed behind a limper 1-24%; every measured fit folded exactly one seat (a real reduced spot folds more: wider still, inferred). Until 2026-10-04 each caller was read on a heads-up forced-bet tree that GTO Wizard solves against any two cards (it ignores a preflop seat's range): it kept 84.5% where the node keeps 35.7%",
@@ -309,6 +738,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "dead-sb",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the small blind seat is empty",
+    replaces: { gto: "a table with no small blind", with: "a penny ghost SB whose only action is the fold" },
+    offSwitch: null,
+    badge: "DEAD SB GHOST",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai-preflop",
     title: "A dead small blind",
     what: "the missing SB is modelled as a ghost seat posting a penny whose only action is the fold (blind 0.01, no limp, no calls, no sizes) — a penny of dead money, nobody extra in the pot; the rake cap counts the seats actually dealt",
@@ -320,6 +756,14 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "untrained-chart-node",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a chart node past the trust bounds (regret > 0.03 bb/hand or reach < 1 in 10,000), or no trust score",
+    replaces: { gto: "the chart node", with: "the exact GTO Wizard AI tree" },
+    offSwitch: { env: "TRUST_GUARD_ALL", values: "1 = guard every chart node (config/local.env sets it); unset = the limp charts only", where: "config/local.env" },
+    warnAlso: ["UNTRAINED CHART NODE", "UNSCORED CHART", "UNSCORED CHART NODE", "NO TRUST SCORE"],
+    badge: "UNTRAINED NODE",
+    owner: "Brady", since: "2026-09-23",
     source: "hrc-6max",
     title: "A chart node the solver never trained is refused",
     what: "per node, reach (the chart's own play) and regret (its mix against its own EVs) are precomputed; a node past the bounds (regret > 0.03 bb/hand or reach < 1 in 10,000) is refused and the exact GTO Wizard tree answers",
@@ -330,6 +774,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "postflop-dead-money-collapse",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a 4+ way postflop street where two or more villains have chips in on the street",
+    replaces: { gto: "a 4+ seat postflop tree", with: "three-seat trees with the dropped seats' chips as dead money, blended by action class" },
+    offSwitch: { env: "DEAD_MONEY_COLLAPSE", values: "off = refuse those spots (no answer)", where: "config/local.env" },
+    badge: "DEAD-MONEY COLLAPSE",
+    owner: "Brady", since: "2026-10-05",
     source: "gtow-ai",
     title: "A 4+ way street where two or more villains have chips in is solved as three-seat trees with the dropped seats' chips as dead money, blended",
     what: "Since 2026-10-05 (replacing the heads-up last resort — Brady: \"do NOT use heads up last resort it is a terrible model\"). When no seat can be ghosted or merged (bet-call-call, bet-raise-call, a bet raised and folded): one tree per choice of the third seat — hero, the villain whose wager hero faces, and each other villain still in — the dropped seats' chips on this street in the pot from the street's first action, the kept seats' line as they played it with a kept seat's CALL of a dropped seat's wager played as that wager (and, where the kept seats' round had closed before a dropped seat reopened it, the street CUT there: their chips so far into the starting pot, off their stacks) (every kept seat's chips, the pot hero can win and hero's call are the table's), blended by action class: fold as often as the most folding tree, wager as often as the least wagering one. On the turn/river the ranges entering the street are narrowed through the earlier streets by three-seat walks — when one walk cannot hold every earlier bettor, a dropped bettor's wager is taken over by its caller there too. HEADS-UP AFTER FOLDS (everyone but one villain folded) and THREE OR FEWER SEATS STILL IN are not approximations: the tree is the hand. DEAD_MONEY_COLLAPSE=off turns the multi-villain trees off (refused)",
@@ -341,6 +792,15 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "last-resort-heads-up",
+    kind: "approximation",
+    lifecycle: "retired",
+    trigger: "CoinPoker ring only: a preflop line neither the charts nor the exact AI tree answer",
+    replaces: { gto: "the exact tree of the line", with: "a heads-up tree against the last raise (locked to the raiser's range, else plain)" },
+    offSwitch: { env: "LAST_RESORT_LOCKED", values: "off = the plain heads-up tree only (the locked one first by default)", where: "config/local.env" },
+    pathCodes: ["preflop:last-resort"],
+    badge: "HEADS-UP LAST RESORT",
+    owner: "Brady", since: "2026-09-23",
+    retired: { on: "2026-10-05", why: "Brady after hand 4922577812 (no answer, 47.6 s): the Ignition 6-max strategy has NO heads-up last resort (poker-wrapper main 959adee) — a 6-max line the exact tree does not answer gets no answer. solvePreflopLastResort's only caller left is fastSolve.solvePreflopCpRing (CoinPoker ring, not played); kept so old answers carrying preflop:last-resort still resolve" },
     source: "gtow-ai-preflop",
     title: "A preflop line no tree can walk is played heads-up against the last raise",
     what: "CoinPoker ring only: the Ignition 6-max strategy dropped it on 2026-10-05 (Brady), and a 6-max line the exact tree does not answer gets no answer. ON since 2026-10-04 (LAST_RESORT_LOCKED=off in config/local.env turns it off; the plain heads-up tree described at the end then answers alone). FIRST a LOCKED heads-up tree: hero against the last raise, seated by postflop position, the raise an action the raiser takes NODE-LOCKED to his range on the exact tree up to that raise; hero priced as at the table (his own chips in, the folded players' chips and a blind still to act as dead money). Hero's own range there is every hand; players still in the hand by choice are left out with their chips; anyone still to act behind hero is not modelled. When that tree does not answer within 10 s, or cannot be built (the raiser's range unreadable on the exact tree, a min-raise the tree cannot list, an ante), the PLAIN heads-up tree answers: hero and the last aggressor only, none of the folded-out chips in its pot, both seats playing a heads-up blind's range. With no raise in the line only a hero in the blinds is answered (plain tree); from any other seat there is no answer",
@@ -352,6 +812,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "position-relabel",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "every GTO Wizard AI preflop tree",
+    replaces: { gto: "the table's own position labels", with: "the API's fixed position set for that player count, order preserved" },
+    offSwitch: null,
+    badge: "SEATS RELABELLED",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai-preflop",
     title: "Our seats are relabelled onto the API's fixed position set",
     what: "earlier seats are mapped in order onto the set for that player count (3 = BTN/SB/BB, 4 = CO/BTN/SB/BB, …)",
@@ -362,6 +829,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "solver-noise",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "every GTO Wizard AI preflop tree",
+    replaces: { gto: "one stored solution per spot", with: "a fresh cloud solve per shape" },
+    offSwitch: null,
+    badge: "SOLVED FRESH",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai-preflop",
     title: "Two identical spots can get different answers",
     what: "each shape is solved fresh in the cloud rather than read from a stored chart",
@@ -372,9 +846,123 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "services/gtowAiPreflop.ts solutions cache",
   },
 
+  {
+    id: "ai-preflop-size-menu",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "every GTO Wizard AI preflop tree with 3+ seats",
+    replaces: { gto: "a full size menu at every level, for every seat", with: "ONE size per level: the size played where the level was played, else open 2.5x / 3-bet 3.5x / 4-bet 2.3x; hero always opens 2.5x; behind a limp each seat isolates to 3bb + 1bb per limper" },
+    offSwitch: null,
+    badge: "ONE SIZE PER LEVEL",
+    owner: "Brady", since: "2026-10-02",
+    source: "gtow-ai-preflop",
+    title: "AI preflop trees with 3+ seats carry one raise size per level",
+    what: "a played level holds exactly the size played; a level still to be played holds one default (open 2.5x, 3-bet 3.5x, 4-bet 2.3x); hero opens one size, 2.5x (Brady 2026-10-02: 'set our open always at a single size of 2.5x'); behind a limp, before any raise, every seat isolates to 3bb + 1bb per limper (2026-10-05; it was a 2.5x min-raise iso). Heads-up trees keep the full menu",
+    why: "every extra size is tree to solve (facing a 3-bet three-handed: 22 s with the menus, against a 15 s clock), and a menu beside a played size split the raiser's range over sizes he did not use",
+    fix: "nothing on our side within the clock",
+    status: "by-design",
+    code: "services/gtowAiPreflop.ts menus / isoSizes",
+  },
+  {
+    id: "ai-preflop-250bb-cap",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "an AI preflop tree whose second-deepest real seat is past 250bb",
+    replaces: { gto: "the tree at the real stacks", with: "every stack over 250bb clamped to 250bb (the note names the real figures)" },
+    offSwitch: null,
+    badge: "STACKS CAPPED 250BB",
+    owner: "Brady", since: "2026-10-03",
+    source: "gtow-ai-preflop",
+    title: "AI preflop stacks are capped at 250bb",
+    what: "GTO Wizard AI preflop refuses an effective stack over 250bb, so stacks past it are clamped (only when the second-deepest seat is past it — that is the effective stack)",
+    why: "a vendor limit",
+    fix: "nothing on our side; the deep-stack reset (when on) keeps hero under it",
+    status: "vendor-ceiling",
+    code: "services/gtowAiPreflop.ts PREFLOP_STACK_CAP_BB / stackCapNote",
+  },
+  {
+    id: "test-stake-as-nl200",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a test-stake table (ign-ring-NL5-6)",
+    replaces: { gto: "trees priced at NL5's blinds and rake", with: "the NL200 game: blinds 0.5/1, NL200's rake cap" },
+    offSwitch: null,
+    badge: "PRICED AS NL200",
+    owner: "Brady", since: "2026-09-29",
+    source: "gtow-ai-preflop",
+    title: "The NL5 test stake is solved as NL200",
+    what: "an NL5 ring table plays the NL200 answers, so its trees are priced at NL200 too (otherwise the $4 cap at NL5 is a different game and a different solve)",
+    why: "the test stake exists to exercise the NL200 strategy at low risk (memory test-stake-nl5)",
+    fix: "nothing — by design while NL5 is a test stake",
+    status: "by-design",
+    code: "services/gtowAiPreflop.ts (isTestStakeOf)",
+  },
+  {
+    id: "chart-kept",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "hero's class is not in the newly picked 6-max chart's range at his node, and the chart his earlier decision was read on can continue the line",
+    replaces: { gto: "the node on the chart the picker wants for this decision", with: "the node on the chart hero's earlier decision was read on (else the AI tree, 'CHART CHANGED UNDER HERO')" },
+    offSwitch: null,
+    warn: "CHART KEPT",
+    warnAlso: ["CHART CHANGED UNDER HERO"],
+    badge: "CHART KEPT",
+    owner: "Brady", since: "2026-09-25",
+    source: "hrc-6max",
+    title: "Hero's later decision is read on the chart his earlier one was",
+    what: "when the picker moves to another chart between hero's decisions (a seat folded, a pool tree stood down) and hero's hand is not in that chart's range, the earlier chart answers; when it cannot hold the line either, the exact AI tree does",
+    why: "two charts model hero's earlier decision differently; a hand the new chart never plays has no strategy there",
+    fix: "nothing — continuity by design",
+    status: "by-design",
+    code: "services/fastSolve.ts solvePreflop6max (keepChart)",
+  },
+  {
+    id: "pruned-pick",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "hero's chart mix includes an action that leads into a branch HRC pruned (never exported)",
+    replaces: { gto: "the chart's mix", with: "the mix with those actions dropped and the rest re-spread" },
+    offSwitch: null,
+    warn: "PICK KEPT ON SOLVED BRANCHES",
+    badge: "PRUNED ACTION DROPPED",
+    owner: "Brady", since: "2026-09-28",
+    source: "hrc-6max",
+    title: "Actions into pruned chart branches are not played",
+    what: "an action whose subtree HRC pruned at ~0% is dropped from hero's pick and the mix re-normalised, so hero never lands on a line the chart cannot continue",
+    why: "a pick into a pruned branch leaves the next decision with no node (and the AI tree with a line the chart's ranges cannot feed)",
+    fix: "charts exported with every branch",
+    status: "solvable",
+    code: "services/prunedPicks.ts",
+  },
+  {
+    id: "rake-assumed",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "CoinPoker ring: the table's rake terms were not read from the log",
+    replaces: { gto: "the table's rake", with: "5%, no cap" },
+    offSwitch: null,
+    warn: "RAKE ASSUMED",
+    badge: "RAKE ASSUMED",
+    owner: "Brady", since: "2026-09-20",
+    source: "gtow-ai",
+    title: "CoinPoker rake assumed when unread",
+    what: "a CoinPoker ring tree is solved at 5% with no cap when the log carried no rake terms",
+    why: "the rake is read from the client log; some tables never print it",
+    fix: "read the terms from another source",
+    status: "solvable",
+    code: "services/fastSolve.ts solvePreflopCpRing / CoinPoker postflop",
+  },
+
   // ---- postflop -----------------------------------------------------------
   {
     id: "field-cap-3",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a 4- or 5-way flop",
+    replaces: { gto: "a 4/5-seat postflop tree", with: "every legal three-seat collapse, solved and blended" },
+    offSwitch: null,
+    badge: "COLLAPSED TO 3",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai",
     title: "Four and five-way flops are collapsed to three seats",
     what: "the field is collapsed to three in every legal way, each solved, and the results blended",
@@ -385,7 +973,104 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "services/multiwayCollapse.ts · fastSolve.ts (planCollapses / blendStrategies)",
   },
   {
+    id: "allin-preflop-dropped",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a seat went all-in preflop and two or more others still act postflop",
+    replaces: { gto: "a tree with the all-in seat's range in the main pot's showdown", with: "a tree of the seats still acting, his chips in the pot" },
+    offSwitch: null,
+    warn: "ALL-IN PREFLOP",
+    badge: "ALL-IN SEAT DROPPED",
+    owner: "Brady", since: "2026-10-03",
+    source: "gtow-ai",
+    title: "A preflop all-in seat leaves the postflop tree",
+    what: "he never acts again, so the tree holds the others with his chips in the pot; the main pot's showdown against his range is not modelled",
+    why: "GTO Wizard's postflop trees hold three seats and no all-in-for-less side pot",
+    fix: "nothing on our side",
+    status: "vendor-ceiling",
+    code: "services/fastSolve.ts (preflopAllInSeats)",
+  },
+  {
+    id: "tree-stacks",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a postflop tree whose seats are shallower than the field's effective stack, or a street re-derived after a fold",
+    replaces: { gto: "each seat at its own stack", with: "the stacks the tree was solved at (named in the note)" },
+    offSwitch: null,
+    warn: "STACKS OF THE PLAYERS IN THE TREE",
+    badge: "TREE STACKS",
+    owner: "Brady", since: "2026-09-25",
+    source: "gtow-ai",
+    title: "Postflop trees carry the stacks they were solved at",
+    what: "a collapse or a re-derived street solves at the stacks of the seats it keeps; the note names them",
+    why: "one tree, one stack per seat; a dropped seat's depth is not in it",
+    fix: "nothing on our side",
+    status: "vendor-ceiling",
+    code: "services/fastSolve.ts (stackNotes) · aiChain.ts seatStacks",
+  },
+  {
+    id: "postflop-size-menu",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "every postflop GTO Wizard tree",
+    replaces: { gto: "every bet size", with: "three-way unbet streets bet 33/75% and raise 60% (each seat's all-in listed); heads-up GTO Wizard's automatic sizing; streets already played pinned to the sizes played" },
+    offSwitch: null,
+    badge: "FIXED BET SIZES",
+    owner: "Brady", since: "2026-10-03",
+    source: "gtow-ai",
+    title: "Postflop trees use a fixed bet-size menu",
+    what: "three-way trees offer bet 33% / 75% and raise 60% (settings 100/0/0); heads-up uses the vendor's automatic sizes; a played street is pinned to its real sizes",
+    why: "tree size against the clock; one size per node costs ~0.01-0.02 bb heads-up on the flop (published work, memory bet-size-literature); the 3-way study found 33/75 | 60 best of the menus measured",
+    fix: "nothing — a measured choice",
+    status: "by-design",
+    cost: "the 3-way bet-size study, 2026-10-03 (memory betsize-study-3way)",
+    code: "services/gtowApi.ts (size settings)",
+  },
+  {
+    id: "postflop-size-snap",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a villain's postflop wager is not a size the tree offers",
+    replaces: { gto: "the node at the wager actually made", with: "the node at the tree's nearest size" },
+    offSwitch: null,
+    warn: "WAGER SIZE SNAPPED",
+    badge: "WAGER SIZE SNAPPED",
+    owner: "Brady", since: "2026-09-25",
+    source: "gtow-ai",
+    title: "Postflop wagers are read at the tree's nearest size",
+    what: "when a played street cannot be pinned to the exact wager, the walk reads the tree's nearest size and the note says so",
+    why: "a pinned size is a new tree; some lines arrive after the street was solved",
+    fix: "pin every wager (the played-street pinning closes most)",
+    status: "solvable",
+    code: "services/aiChain.ts · fastSolve.ts (sizeSnaps)",
+  },
+  {
+    id: "postflop-last-resort-heads-up",
+    kind: "approximation",
+    lifecycle: "retired",
+    trigger: "a 4+ way postflop street no collapse could reduce",
+    replaces: { gto: "a 4+ seat tree", with: "a heads-up tree, hero against the bettor" },
+    offSwitch: { env: "LAST_RESORT_NARROW", values: "inert since 2026-10-05 (no walkable is built with lastResort set)", where: "config/local.env" },
+    badge: "POSTFLOP HEADS-UP LAST RESORT",
+    owner: "Brady", since: "2026-09-24",
+    retired: { on: "2026-10-05", why: "replaced by the dead-money collapse (poker-wrapper b1d53b1) — Brady: 'do NOT use heads up last resort it is a terrible model'; fastSolve.lastResortRace is now dead code" },
+    source: "gtow-ai",
+    title: "4+ way postflop played heads-up (retired)",
+    what: "retired — see postflop-dead-money-collapse",
+    why: "two villains with chips in on the street left no ghost or merge",
+    fix: "done: the dead-money collapse",
+    status: "by-design",
+    code: "services/fastSolve.ts lastResortRace (dead code)",
+  },
+  {
     id: "borrowed-caller-ranges",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the AI chain's range walk meets a node with more callers than the tree holds",
+    replaces: { gto: "the node with every caller", with: "the nearest node the tree has" },
+    offSwitch: null,
+    badge: "BORROWED CALLER",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-ai",
     title: "The range walk borrows past the tree's caller cap",
     what: "a node with too many callers is read from the nearest one the tree has",
@@ -396,6 +1081,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "mes-off-list-flop",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "an MES-strategy flop not in the solved board list",
+    replaces: { gto: "a solve on this flop", with: "the family's nearest stored texture" },
+    offSwitch: null,
+    badge: "NEAREST TEXTURE",
+    owner: "Brady", since: "2026-09-22",
     source: "mes-postflop",
     title: "Off-list flops answer from the nearest texture",
     what: "a board that is not one of the solved boards reads its family's nearest stored texture",
@@ -407,6 +1099,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "mes-drift",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the preflop layer was refit after the MES batch was built",
+    replaces: { gto: "MES solves against today's hero range", with: "the solves built against the old one" },
+    offSwitch: null,
+    badge: "MES DRIFT",
+    owner: "Brady", since: "2026-09-22",
     source: "mes-postflop",
     title: "The MES solves are conditioned on a preflop layer that has moved",
     what: "the locked solves answer against the hero range they were built with, not the live one",
@@ -426,6 +1125,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "mes-flop-only",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "an MES-strategy decision on the turn or river",
+    replaces: { gto: "a locked solve continuing past the flop", with: "the AI chain" },
+    offSwitch: null,
+    badge: "MES FLOP ONLY",
+    owner: "Brady", since: "2026-09-22",
     source: "mes-postflop",
     title: "Flop and turn stored, nothing beyond",
     what: "every other postflop line goes to the AI chain instead",
@@ -438,6 +1144,13 @@ export const APPROXIMATIONS: Approximation[] = [
 
   {
     id: "gtow-charts-deep",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the crawled GTO Wizard chart fallback at stacks over 150bb",
+    replaces: { gto: "a chart at the real depth", with: "a snap to a 200bb set that does not exist (nothing)" },
+    offSwitch: null,
+    badge: "CRAWLED CHART DEPTH",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-charts",
     title: "Crawled charts stop at 200bb",
     what: "a deeper stack snaps to the 200bb set and finds nothing there",
@@ -449,6 +1162,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "gtow-charts-no-limp",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "a limped pot reaching the crawled 6-max chart fallback",
+    replaces: { gto: "a limp node", with: "nothing — another piece answers" },
+    offSwitch: null,
+    badge: "NO LIMP IN CRAWL",
+    owner: "Brady", since: "2026-09-22",
     source: "gtow-charts",
     title: "Crawled 6-max charts have no limp lines",
     what: "a limped pot has no node in this set at all — it falls through to another piece",
@@ -462,9 +1182,17 @@ export const APPROXIMATIONS: Approximation[] = [
   // ---- opponent model -----------------------------------------------------
   {
     id: "no-6max-pool-model",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "every 6-max ring spot",
+    replaces: { gto: "(this is plain GTO) — no general exploit overlay", with: "the equilibrium mix, except where a targeted pool overlay applies (pool-limp-lock / -floor, pool-coldcall-lock / -floor, post-in-as-limp, pool-locked-limp-charts, river-mes-shadow)" },
+    offSwitch: null,
+    warnAlso: ["NO POOL MODEL"],
+    badge: "NO 6-MAX POOL MODEL",
+    owner: "Brady", since: "2026-09-22",
     source: "hrc-6max",
-    title: "No pool model at six seats",
-    what: "ring spots get the equilibrium mix — no exploit overlay at all",
+    title: "No pool model at six seats (only targeted pool overlays)",
+    what: "ring spots get the equilibrium mix — no general exploit overlay. Since 2026-09-24 a few TARGETED pool overlays replace one villain's range where equilibrium gives him ~nothing (the pool-overlay entries in this register); everything else is equilibrium",
     why: "the pool-model builder walks a 3-seat tree",
     fix: "pool-model-6max-nl200 (blocked on the builder)",
     status: "solvable",
@@ -473,6 +1201,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "exploit-first-decision-only",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "3-max exploit strategy past hero's first decision",
+    replaces: { gto: "an exploit at every node", with: "the equilibrium chart" },
+    offSwitch: null,
+    badge: "EXPLOIT FIRST NODE ONLY",
+    owner: "Brady", since: "2026-09-22",
     source: "exploit-preflop",
     title: "The exploit overlay stops after hero's first decision",
     what: "facing a 4-bet, limp lines and every other depth fall back to the equilibrium chart",
@@ -483,6 +1218,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "exploit-one-state",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the exploit overlay answering at any stake or depth",
+    replaces: { gto: "an overlay derived per stake and depth", with: "the one 100bb ign200 overlay" },
+    offSwitch: null,
+    badge: "EXPLOIT ONE STATE",
+    owner: "Brady", since: "2026-09-22",
     source: "exploit-preflop",
     title: "One 100bb state, reused at every stake and depth",
     what: "the overlay derived at 100bb ign200 answers wherever it is armed",
@@ -494,6 +1236,13 @@ export const APPROXIMATIONS: Approximation[] = [
   },
   {
     id: "pool-thin-reads",
+    kind: "approximation",
+    lifecycle: "live",
+    trigger: "the pool model's fold-vs-3-bet reads (n≈266 / 170)",
+    replaces: { gto: "the measured frequency", with: "the frequency shrunk 1.5 SE toward equilibrium" },
+    offSwitch: null,
+    badge: "THIN POOL READ",
+    owner: "Brady", since: "2026-09-22",
     source: "pool-model",
     title: "Some pool reads are thin",
     what: "fold-vs-3-bet frequencies rest on n≈266 / 170 and are shrunk 1.5 SE toward equilibrium before use",
@@ -504,3 +1253,95 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "analysis pool model build",
   },
 ];
+
+/**
+ * WHAT THE ANSWER PATH EMITS THAT IS NOT A DEPARTURE FROM BASE GTO. approximations.test.ts scans the answer path for
+ * every chain-path code and every warning prefix ("UPPERCASE WORDS:" opening a note) and requires each to resolve to a
+ * register entry (`pathCodes`, `warn`, `warnAlso`) or to this list, with the reason it is not one. A new code or a new
+ * warning lands in one or the other in the same merge — that is the rule in the header, made mechanical.
+ */
+export const NOT_DEPARTURES: {
+  codes: Record<string, string>;
+  codePrefixes: Record<string, string>;
+  warnings: Record<string, string>;
+} = {
+  codes: {
+    "preflop:charts-cannot-hold": "routing: the 6-max charts cannot hold the line, so the exact GTO Wizard AI tree answers the same spot (the fit and size snaps that make it happen have their own entries)",
+    "preflop:charts-unreachable": "availability: the chart server is down or the tree missing; the exact AI tree answers",
+    "arrival:hero-left-pick": "routing: hero took an action his pick gave 0%; the flop ranges come from the exact AI tree of the line he played",
+    "arrival:chart-cannot-hold": "routing: the pinned chart cannot hold what followed hero's decision; the exact AI tree gives the flop ranges",
+    "arrival:pruned-branch": "routing: hero's line runs into a branch the chart never exported; the exact AI tree gives the flop ranges",
+    "arrival:villains-repicked": "routing: the villains' ranges are re-picked on the chart for the line as played",
+    "arrival:no-pin": "recovery: the preflop pin is missing; the flop ranges are derived again",
+    "arrival:pin-unusable": "recovery: the preflop pin does not fit the line; the flop ranges are derived again",
+    "arrival:first-rebuilt": "recovery (the memo's first computation was rebuilt)",
+  },
+  codePrefixes: {
+    "street:": "the chain's bookkeeping: memo hits, new collapse plans, trees changed or re-walked",
+    "tree:": "extra requests: a tree created again, a 429 re-route",
+    "node:": "extra requests: a node read twice",
+    "check:": "a chain invariant failed (services/chainChecks) — a fault in an answer, not a strategy choice",
+    "fault:": "no answer",
+  },
+  warnings: {
+    "PREFLOP RANGES FROM THE PIN": "the happy path: the flop resumes from the tree that answered preflop",
+    "RANGE SHORTCUT": "a note on how the chart's ranges were walked (the walk's own notes, prefixed)",
+    "OFF THE CHART": "routing note: where the flop ranges came from when hero left the chart's line (see the arrival:* routing codes)",
+    "SEATBELT": "recovery: the first solve's pot disagreed with the table; solved again",
+    "FLOP POT": "a capture note: the pot sent vs the line's tokens",
+    "HEADS-UP": "not an approximation: every other villain folded, the tree is the hand",
+    "DEAD BUTTON": "capture repair: positions from the dealt seats",
+    "SEAT NOT DEALT": "capture repair: a labelled seat was not dealt",
+    "DEAD SMALL BLIND": "capture repair: seats relabelled from the BB's post (the dead SB ghost is the dead-sb entry)",
+    "FOLDS FILED LATE": "capture repair: a late-captured fold moved back into rotation",
+    "FOLDS NOT CAPTURED": "capture repair",
+    "DRY RUN": "a test mode, never live",
+    "PREFLOP PIN": "a refusal reason: hero's hand is not in range on the pinned tree (the answer falls back)",
+    "POT CHECK FAILED": "a chain check (#5) reported on an answer served anyway — a fault report, not a strategy choice",
+    "FAILED": "a chain check failure line",
+    "A FAIL": "the checker coverage spec text (services/chainChecks), not an answer",
+    "CAPTURE REPAIR": "capture repair notes (the capture, not the strategy)",
+    "INCOMPLETE SET": "a strategy card advisory (services/strategies), not an answer",
+    "STILL REFINING": "a strategy card advisory (services/strategies), not an answer",
+    "ON DEMAND": "a strategy card advisory (services/strategies), not an answer",
+    "NOT NEEDED": "a refusal reason: the cold-call lock was not needed (the unlocked tree gives the call a real share)",
+  },
+};
+
+const lc = (s: string) => s.toLowerCase();
+
+/** The register entry a chain-path code belongs to, or null (a NOT_DEPARTURES code or an unknown one). */
+export function departureForCode(code: string | null | undefined): Approximation | null {
+  if (!code) return null;
+  return APPROXIMATIONS.find((a) => a.pathCodes?.includes(code)) ?? null;
+}
+
+/** The register entry a warning prefix belongs to (its `warn` or one of its `warnAlso`), or null. */
+export function departureForWarning(tag: string): Approximation | null {
+  const t = lc(tag.trim());
+  return APPROXIMATIONS.find((a) => [a.warn, ...(a.warnAlso ?? [])].some((w) => {
+    if (!w) return false;
+    const n = lc(w.split(":")[0]!.trim());
+    return t === n || t.startsWith(n) || n.startsWith(t);
+  })) ?? null;
+}
+
+/**
+ * Every register entry one answer leans on — by its chain-path reason codes first (exact), then by the phrases its
+ * warning carries. Pool overlays and policies first: those are the ones a page labels.
+ */
+export function departuresOf(codes: (string | null | undefined)[], warning?: string | null): Approximation[] {
+  const out = new Map<string, Approximation>();
+  for (const c of codes) { const a = departureForCode(c); if (a) out.set(a.id, a); }
+  const w = lc(warning ?? "");
+  if (w) {
+    for (const a of APPROXIMATIONS) {
+      if ([a.warn, ...(a.warnAlso ?? [])].some((x) => x && w.includes(lc(x)))) out.set(a.id, a);
+    }
+  }
+  const rank = { "pool-overlay": 0, "policy-experiment": 1, approximation: 2 } as const;
+  return [...out.values()].sort((x, y) => rank[x.kind] - rank[y.kind]);
+}
+
+/** The compact form pages and exports carry for an answer (badge + kind + id). */
+export const departureBadge = (a: Approximation) => ({ id: a.id, kind: a.kind, lifecycle: a.lifecycle, badge: a.badge, title: a.title });

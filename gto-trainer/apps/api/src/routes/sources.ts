@@ -1116,8 +1116,21 @@ function approximationRows(days: number) {
   const vol = missQueue.volumeByKind();
   const needles = [...new Set(APPROXIMATIONS.map((a) => a.warn).filter(Boolean) as string[])];
   const warns = answerLog.countWarnings(needles, days);
+  const codeCounts = answerLog.countPathCodes(days);
+  const today = new Date().toISOString().slice(0, 10);
 
   const rows = APPROXIMATIONS.map((a: Approximation) => {
+    // the chain-path codes this entry owns, with how many answered decisions carried each (services/chainPath)
+    const codeRows = (a.pathCodes ?? []).map((code) => ({ code, ...(codeCounts[code] ?? { n: 0, lastTs: null }) }));
+    const codes = codeRows.length
+      ? { codes: codeRows, n: codeRows.reduce((s, k) => s + k.n, 0),
+          lastTs: codeRows.reduce<number | null>((m, k) => (k.lastTs != null && (m == null || k.lastTs > m) ? k.lastTs : m), null) }
+      : null;
+    // its off switch as this process reads it (unset = the entry's default)
+    const sw = a.offSwitch && /^[A-Z][A-Z0-9_]+$/.test(a.offSwitch.env)
+      ? { ...a.offSwitch, now: process.env[a.offSwitch.env] ?? null }
+      : a.offSwitch ? { ...a.offSwitch, now: null } : null;
+    const overdue = a.lifecycle === "experiment" && !!a.reviewBy && a.reviewBy < today;
     const kinds = (a.missKinds ?? []).map((k) => ({ kind: k, ...(vol[k] ?? { rows: 0, live: 0, corpus: 0, lastSeen: null }) }));
     const miss = kinds.length
       ? {
@@ -1129,13 +1142,15 @@ function approximationRows(days: number) {
         }
       : null;
     const warn = a.warn ? { needle: a.warn, ...warns[a.warn]! } : null;
-    const measured = miss != null || warn != null;
+    const measured = miss != null || warn != null || codes != null;
     // What to sort on. Live hits are the truth — a hand that actually took the
     // approximation — and an answer that printed the warning is the same
-    // event seen from the other side. Open rows are a backlog, not a rate, so
-    // they only break ties.
-    const fires = (miss?.live ?? 0) + (warn?.n ?? 0);
-    return { ...a, miss, warn, measured, fires };
+    // event seen from the other side (so is its path code: the larger of the
+    // two, never their sum). Open rows are a backlog, not a rate, so they only
+    // break ties.
+    const fires = (miss?.live ?? 0) + Math.max(warn?.n ?? 0, codes?.n ?? 0);
+    const lastTs = [warn?.lastTs, codes?.lastTs, miss?.lastSeen].reduce<number | null>((m, x) => (x != null && (m == null || x > m) ? x : m), null);
+    return { ...a, miss, warn, codes, measured, fires, lastTs, offSwitch: sw, overdue };
   });
 
   rows.sort((x, y) =>
@@ -1164,7 +1179,9 @@ app.get("/approximations", (c) => {
       measured: rows.filter((r) => r.measured).length,
       unmeasured: rows.filter((r) => !r.measured).length,
       byStatus: rows.reduce<Record<string, number>>((m, r) => { m[r.status] = (m[r.status] ?? 0) + 1; return m; }, {}),
-      liveHits: rows.reduce((s, r) => s + (r.miss?.live ?? 0) + (r.warn?.n ?? 0), 0),
+      byKind: rows.reduce<Record<string, number>>((m, r) => { m[r.kind] = (m[r.kind] ?? 0) + 1; return m; }, {}),
+      overdue: rows.filter((r) => r.overdue).map((r) => r.id),
+      liveHits: rows.reduce((s, r) => s + r.fires, 0),
     },
   });
 });
