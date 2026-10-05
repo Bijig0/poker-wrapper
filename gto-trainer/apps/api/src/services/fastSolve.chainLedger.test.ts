@@ -22,6 +22,10 @@ import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { truncateAt, withStartStacks } from "../utils/archivedHand/archivedHand";
 
 const gated = process.env.MUTATION_GATE !== "1";
+// THE FAKE NODES OFFER A WAGER AT EVERY 0.1bb, each action at 1/n of hundreds: every villain action reads as off-tree
+// (under 1% of his range, no hand above 2%), which no GTO Wizard node does. This suite is about the ledger, not the
+// off-tree rule (services/offTree.test.ts): the walk narrows as before 2026-10-06.
+process.env.OFFTREE_RANGE = "off";
 const HID = "4999000001";
 const STRATEGY = "ign200-ring-6max-equilibrium";
 
