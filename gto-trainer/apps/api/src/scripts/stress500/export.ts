@@ -110,7 +110,7 @@ const fixGrade = (d: any): string => (refusedBefore(d) ? "pre" : d.g);
 const fixAcc = FIXES.map((f) => ({ f, target: new Set<string>(), tg: zero(), fired: new Set<string>(), fg: zero(), firedN: 0 }));
 for (const h of hands) {
   const dec = (h.decisions ?? []).map((d: any) => ({
-    i: d.index, st: d.street, pick: d.pick, mix: (d.actions ?? []).map((a: any) => [a.action, Math.round(Number(a.frequency) * 100) / 100]),
+    i: d.index, st: d.street, pick: d.pick, roll: d.roll ?? null, band: d.band ?? null, mix: (d.actions ?? []).map((a: any) => [a.action, Math.round(Number(a.frequency) * 100) / 100]),
     src: d.source, tier: d.tier, chart: d.gametype, line: d.line, pv: d.path?.verdict ?? null,
     pcodes: (d.path?.reasons ?? []).map((r: any) => r.code).filter(Boolean),
     req: d.path?.requests ?? null, g: d.grade, fl: d.flags ?? [], k: d.kinds ?? [], w: d.warning, why: d.reason, ms: d.ms, n: d.reqs, mp: d.misPress,

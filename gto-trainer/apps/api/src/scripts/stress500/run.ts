@@ -265,7 +265,9 @@ for (const sc of todo) {
       decisions.push({
         index: i, street: a.street, took: { type: a.type, amount: a.amount ?? null }, toCall: h.currentNode.toCall, ms, reqs,
         ok: !!r.ok, source: r.source ?? null, tier: r.tier ?? null, gametype: r.gametype ?? null, line: r.line ?? null, pos: r.pos ?? null,
-        heroClass: r.heroClass ?? null, actions: r.actions ?? [], pick: r.decision?.action ?? null, warning: r.warning ?? null,
+        heroClass: r.heroClass ?? null, actions: r.actions ?? [], pick: r.decision?.action ?? null,
+        // the answer's own draw (pickWeightedAction): the 0-100 roll and the picked action's band — the SCRIPT never rolls
+        roll: r.decision?.roll ?? null, band: r.decision?.band ?? null, warning: r.warning ?? null,
         reason: r.ok ? null : String(r.reason ?? ""), kind: r.kind ?? null, approx: !!r.approx,
         path: r.path ? { verdict: r.path.verdict ?? null, reasons: r.path.reasons ?? [], requests: r.path.requests ?? null, checks: r.path.checks ?? null } : null,
         solveId: r.solveId ?? null, grade: g.verdict, flags: g.flags, kinds: g.kinds, misPress: mp,
