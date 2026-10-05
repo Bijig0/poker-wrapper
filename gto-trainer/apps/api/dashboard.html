@@ -1927,8 +1927,25 @@ function mesClasses(m, strat, evs) {
   const labels = m.acts.map((a) => a.replace(/\((\d+(?:\.\d+)?)\)/, (_, x) => ` ${(x / 100).toFixed(1)}bb`));
   return { cls, combos, labels };
 }
+/* POOL RANGE LABELS (2026-10-05, Brady: show the additions on top of base GTO honestly). The answer-node route names
+   the register entries an answer leans on (services/approximations) and the seats whose range at this node is the
+   POOL's: a preflop tree that locked a seat, or a flop floor. Where any applies, that seat's range card reads
+   "POOL RANGE — <the entry's badge>" and every other seat's "GTO range"; where none applies nothing is added. */
+let NV_POOL = null;
+const poolSeatOf = (pos) => (NV_POOL || []).find((x) => x.pos === String(pos ?? "").toUpperCase()) || null;
+const rangeTag = (pos) => {
+  if (!NV_POOL) return "";
+  const p = poolSeatOf(pos);
+  return p ? ` <span class="chip warn" title="measured pool data replaces GTO's range for this seat (${p.how === "lock" ? "his node is LOCKED to it" : "his flop range is FLOORED to it"}) — register entry ${esc(p.id)}">POOL RANGE — ${esc(p.badge)}</span>`
+    : ` <span class="chip dim" title="the solver's own range (base GTO)">GTO range</span>`;
+};
+const DEP_CLS = { "pool-overlay": "warn", "policy-experiment": "off", approximation: "dim" };
+const depChips = (deps) => (deps || []).length
+  ? `<div class="sub" style="margin-bottom:8px">departs from base GTO: ${deps.map((d) => `<a class="chip ${DEP_CLS[d.kind] || "dim"}" href="/sources/approx" onclick="go('/sources/approx');return false" title="${esc(d.kind)} · ${esc(d.lifecycle)} — ${esc(d.title)} (register entry ${esc(d.id)})">${esc(d.badge)}</a>`).join(" ")}</div>`
+  : "";
 async function openAnswerNode(upto) {
   if (!DETAIL) return;
+  NV_POOL = null;
   setStep(upto);
   const sol = $("solution");
   sol.innerHTML = `<div class="card sub">fetching the node that answered…</div>`;
@@ -1937,7 +1954,8 @@ async function openAnswerNode(upto) {
   catch (e) { sol.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   if (!j.ok) { sol.innerHTML = `<div class="card warn">${esc(j.error ?? "no node")}</div>`; return; }
   const lg = j.logged;
-  const loggedLine = lg ? `<div class="sub" style="margin-bottom:8px">This is the node behind answer <b>#${lg.id}</b> at action ${upto}${lg.tier ? ` · tier <span class="chip">${esc(lg.tier)}</span>` : ""}${lg.line ? " · line as logged live" : " · line rebuilt from the archive (this answer predates line logging)"}</div>` : `<div class="sub" style="margin-bottom:8px">No answer was logged at action ${upto}; this is the node the resolver would use today.</div>`;
+  NV_POOL = (j.poolSeats || []).length ? j.poolSeats : null;
+  const loggedLine = depChips(j.departures) + (lg ? `<div class="sub" style="margin-bottom:8px">This is the node behind answer <b>#${lg.id}</b> at action ${upto}${lg.tier ? ` · tier <span class="chip">${esc(lg.tier)}</span>` : ""}${lg.line ? " · line as logged live" : " · line rebuilt from the archive (this answer predates line logging)"}</div>` : `<div class="sub" style="margin-bottom:8px">No answer was logged at action ${upto}; this is the node the resolver would use today.</div>`);
   const heroKey = j.heroClass;
   const heroCombo = (j.heroCards || []).filter((c) => /^[2-9TJQKA][shdc]$/.test(c)).join("");
   const heroTag = heroCombo.length === 4 ? `${heroCombo.match(/.{2}/g).map(cardHtml).join("")} <span class="sub">${esc(heroKey)}</span>` : esc(heroKey);
@@ -1979,11 +1997,27 @@ async function openAnswerNode(upto) {
     const v = j.view, t = j.tree, hero = v.hero;
     const cell = hero?.strategy?.[heroKey];
     const mix = cell && cell.w > 0 ? hero.actions.map((a, ai) => ({ a, p: (100 * cell.acts[ai]) / cell.w })).filter((x) => x.p > 0.5).sort((x, y) => y.p - x.p) : [];
-    const seatCard = (o) => `<div class="card" style="margin:0"><h2>${esc(o.pos)} <span class="sub">— ${o.action
-        ? `${o.action.taken ? `took <b>${esc(o.action.taken)}</b>${o.action.takenPct != null ? ` (${o.action.takenPct}% of his range)` : ""}` : "acted"}`
-        : "yet to act"}${o.stack != null ? ` · ${o.stack}bb` : ""}</span></h2>
-      ${o.action ? `${classGrid(o.action.strategy, o.action.actions, null, { small: true, foot: "his range before that action, split by the node's actions" })}<div class="sub" style="margin:8px 0 4px">his range now</div>` : ""}
+    // A SEAT THIS TREE LOCKED to the pool: at his node GTO's own strategy (the unlocked tree), marked off-GTO; from
+    // there on his range is the pool's. Every other seat is the solver's.
+    const locks = (t.poolLocks || []).map((l) => String(l.pos).toUpperCase());
+    // a share read off the unlocked node is rounded to 0.1 (0 = under 0.05%); one from the note carries two decimals
+    const pctTxt = (x) => x == null ? "?" : Number(x) === 0 ? "under 0.05%" : Number(x) < 0.01 ? "under 0.01%" : `${Number(x).toFixed(Number(x) < 1 ? 2 : 1)}%`;
+    const seatCard = (o) => {
+      const P = String(o.pos).toUpperCase();
+      const locked = locks.includes(P) && o.action;
+      const u = locked ? (j.unlocked || {})[P] : null;
+      const head = `<h2>${esc(o.pos)} <span class="sub">— ${o.action
+        ? `${o.action.taken ? `took <b>${esc(o.action.taken)}</b>${o.action.takenPct != null ? ` (${o.action.takenPct}% of his range${locked ? " on the locked tree — the pool's" : ""})` : ""}` : "acted"}`
+        : "yet to act"}${o.stack != null ? ` · ${o.stack}bb` : ""}</span></h2>`;
+      const atNode = !o.action ? ""
+        : locked
+          ? `<div class="ans-note" style="margin-bottom:6px">⚑ <b>off-GTO action</b>: ${esc(o.action.taken ?? "his action")} — GTO plays this <b>${pctTxt(u?.sharePct)}</b> of his range here. This tree locks it to the pool's range.</div>` +
+            (u?.action ? classGrid(u.action.strategy, u.action.actions, null, { small: true, foot: "GTO's own strategy at his node — the UNLOCKED tree, his range before the action" })
+              : `<div class="sub">GTO's own node is not shown: ${esc(u?.why || "not at hand")}${u?.sharePct != null ? " — the share above is from the answer's note" : ""}.</div>`)
+          : classGrid(o.action.strategy, o.action.actions, null, { small: true, foot: "his range before that action, split by the node's actions" });
+      return `<div class="card" style="margin:0">${head}${atNode}${o.action ? `<div class="sub" style="margin:8px 0 4px">his range now${rangeTag(o.pos)}</div>` : (NV_POOL ? `<div class="sub" style="margin:0 0 4px">his range${rangeTag(o.pos)}</div>` : "")}
       ${weightGrid(o.range, null, "range")}</div>`;
+    };
     sol.innerHTML = `<div class="card"><h2>GTO Wizard AI preflop node <span class="sub">— what answered at action ${upto}</span></h2>
       ${loggedLine}
       <div class="nv-head"><span><span class="sub">tree</span> <span class="mono">${esc(t.id)}</span></span><span><span class="sub">line</span> ${crumb(t.line)}</span>${hero ? `<span><span class="sub">to act</span> <b>${esc(hero.pos)}</b>${hero.stack != null ? ` ${hero.stack}bb` : ""}</span>` : ""}</div>
@@ -2172,9 +2206,9 @@ async function renderWalkthrough(solveId, hostId, upto, hand = null, key = null)
     return `<div>
       <div class="nv-head"><span><span class="sub">node ${sel + 1} of ${w.nodes.length}</span></span><span><b>${esc(n.street)}</b> <span class="mono">${esc(n.board)}</span></span><span><span class="sub">to act</span> <b>${esc(n.actorPos)}</b> (${n.actor.toUpperCase()}${isHeroActor ? ", you" : ", villain"})</span><span><span class="sub">pot</span> ${n.potNode}bb</span><span><span class="sub">invested this street</span> ${(n.players ?? [sp.oopPos, sp.ipPos]).map((p, i) => `${esc(p)} ${n.invested[i] ?? 0}`).join(" · ")}</span></div>
       <div class="walk-grids">
-        <div class="card"><h2>OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])}</span></h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", n.rangesInCombos?.oop, sp.heroCombo, n.board)}</div>
-        ${n.rangesIn.mid ? `<div class="card"><h2>OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · middle seat</span></h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)", n.rangesInCombos?.mid, sp.heroCombo, n.board)}</div>` : ""}
-        <div class="card"><h2>IP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])}</span></h2>${weightGrid(n.rangesIn.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", n.rangesInCombos?.ip, sp.heroCombo, n.board)}</div>
+        <div class="card"><h2>OOP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[0])}</span>${rangeTag((n.players ?? [sp.oopPos, sp.ipPos])[0])}</h2>${weightGrid(n.rangesIn.oop, (n.heroSeatLabel ?? sp.heroSeat) === "oop" ? heroKey : null, "var(--oop)", n.rangesInCombos?.oop, sp.heroCombo, n.board)}</div>
+        ${n.rangesIn.mid ? `<div class="card"><h2>OOP+1 range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[1])} · middle seat</span>${rangeTag((n.players ?? [sp.oopPos, sp.ipPos])[1])}</h2>${weightGrid(n.rangesIn.mid, (n.heroSeatLabel ?? sp.heroSeat) === "mid" ? heroKey : null, "var(--oop)", n.rangesInCombos?.mid, sp.heroCombo, n.board)}</div>` : ""}
+        <div class="card"><h2>IP range entering this node <span class="sub">${esc((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])}</span>${rangeTag((n.players ?? [sp.oopPos, sp.ipPos])[(n.players ?? [sp.oopPos, sp.ipPos]).length - 1])}</h2>${weightGrid(n.rangesIn.ip, (n.heroSeatLabel ?? sp.heroSeat) === "ip" ? heroKey : null, "var(--ip)", n.rangesInCombos?.ip, sp.heroCombo, n.board)}</div>
       </div>
       <div class="card" style="margin-top:12px"><h2>${esc(n.actorPos)}'s strategy at this node <span class="sub">— what the solve says the whole range does here${n.taken != null ? `; the observed action was <b style="color:#fff">${esc(n.takenName)}</b>` : ""}</span></h2>
         ${classGrid(stratCls, labels, isHeroActor ? heroKey : null, { combos: n.actorCombos, board: n.board, heroCombo: sp.heroCombo, foot: isHeroActor ? "your class outlined · hover for the mix" : "villain's range · hover for the mix" })}
@@ -4759,15 +4793,16 @@ async function loadApprox() {
     if (!r.measured) return '<td class="num"><span class="chip dim" title="no miss-queue kind and no answer warning carries this — we know we do it, we cannot say how often">unmeasured</span></td>';
     const bits = [];
     if (r.warn && r.warn.n) bits.push(`${r.warn.n} answer${r.warn.n === 1 ? "" : "s"} said so`);
+    if (r.codes && r.codes.n) bits.push(`${r.codes.n} path${r.codes.n === 1 ? "" : "s"} carried ${r.codes.codes.filter((c) => c.n).map((c) => c.code).join("/")}`);
     if (r.miss && r.miss.live) bits.push(`${r.miss.live} live hit${r.miss.live === 1 ? "" : "s"}`);
     if (r.miss && r.miss.rows) bits.push(`${r.miss.rows} open state${r.miss.rows === 1 ? "" : "s"}`);
     const n = r.fires;
     return `<td class="num">${n > 0 ? `<b>${n}</b>` : '<span class="sub">0</span>'}<div class="sub">${esc(bits.join(" · ") || "never yet")}</div></td>`;
   };
 
-  const rows = (j.rows || []).map((r) => `
-    <tr class="${r.measured ? "" : "reuse"}">
-      <td><b>${esc(r.title)}</b>
+  const rows = (j.rows || []).filter((r) => r.kind === "approximation").map((r) => `
+    <tr class="${r.measured && r.lifecycle !== "retired" ? "" : "reuse"}">
+      <td><b>${esc(r.title)}</b>${r.lifecycle === "retired" ? ` <span class="chip dim" title="${esc(r.retired?.why ?? "")}">retired ${esc(r.retired?.on ?? "")}</span>` : ""}
         <div class="sub">${esc(r.what)}</div>
         ${r.cost ? `<div class="sub"><i>cost:</i> ${esc(r.cost)}</div>` : ""}</td>
       <td><span class="chip">${esc(r.source)}</span></td>
@@ -4794,11 +4829,52 @@ async function loadApprox() {
          </tbody></table></div></div>`
     : "";
 
+  // THE DEPARTURES FROM BASE GTO THAT ARE CHOICES (2026-10-05, Brady: "how are we currently documenting all the
+  // different ways we're doing additional things?"): the pool overlays and the policies / experiments, each with its
+  // switch as this process reads it, how often it fired, and when it is due for review. Approximations stay below.
+  const KIND = { "pool-overlay": ["warn", "pool overlay"], "policy-experiment": ["off", "policy / experiment"], approximation: ["dim", "approximation"] };
+  const LIFE = { experiment: ["warn", "experiment"], live: ["good", "live"], retired: ["dim", "retired"] };
+  const chipOf = (map, k) => { const [cls, label] = map[k] || ["dim", k]; return `<span class="chip ${cls}">${esc(label)}</span>`; };
+  const fmtDay = (ts) => ts ? new Date(ts).toISOString().slice(0, 10) : "";
+  const depFires = (r) => {
+    const bits = [];
+    if (r.codes) bits.push(r.codes.codes.map((c) => `<span class="mono">${esc(c.code)}</span> ${c.n}`).join(" · "));
+    if (r.warn) bits.push(`"${esc(r.warn.needle)}" ${r.warn.n}`);
+    if (!r.codes && !r.warn) return '<td class="num"><span class="chip dim" title="no path code and no answer warning names it">unmeasured</span></td>';
+    return `<td class="num" style="white-space:normal;min-width:150px">${r.fires ? `<b>${r.fires}</b>` : '<span class="sub">0</span>'}<div class="sub">${bits.join("<br>")}${r.lastTs ? `<br>last ${fmtDay(r.lastTs)}` : ""}</div></td>`;
+  };
+  const swCell = (r) => {
+    const s = r.offSwitch;
+    if (!s) return '<td class="sub">no switch</td>';
+    const now = s.now == null ? "unset (default)" : `= ${s.now}`;
+    return `<td><span class="mono">${esc(s.env)}</span> <span class="chip">${esc(now)}</span><div class="sub">${esc(s.values)}</div><div class="sub">${esc(s.where)}</div></td>`;
+  };
+  const deps = (j.rows || []).filter((r) => r.kind !== "approximation")
+    .sort((x, y) => (x.lifecycle === "retired") - (y.lifecycle === "retired") || (x.kind === "pool-overlay" ? 0 : 1) - (y.kind === "pool-overlay" ? 0 : 1) || y.fires - x.fires);
+  const depRows = deps.map((r) => `
+    <tr class="${r.lifecycle === "retired" ? "reuse" : ""}">
+      <td><b>${esc(r.badge)}</b> <span class="sub mono">${esc(r.id)}</span><div>${esc(r.title)}</div>
+        <div class="sub"><i>when:</i> ${esc(r.trigger)}</div>
+        <div class="sub"><i>GTO:</i> ${esc(r.replaces.gto)}<br><i>we use:</i> ${esc(r.replaces.with)}</div>
+        ${r.data ? `<div class="sub"><i>data:</i> ${esc(r.data.sample)} <span class="mono">— ${esc(r.data.source)}</span></div>` : ""}
+        ${r.diagnostic ? `<div class="sub"><i>diagnostic:</i> <span class="mono">${esc(r.diagnostic)}</span></div>` : ""}</td>
+      <td>${chipOf(KIND, r.kind)}<div style="margin-top:4px">${chipOf(LIFE, r.lifecycle)}</div></td>
+      ${swCell(r)}
+      ${depFires(r)}
+      <td>${r.reviewBy ? (r.overdue ? `<span class="chip crit" title="past its review-by date — run the diagnostic and decide keep / re-tune / off">due ${esc(r.reviewBy)}</span>` : esc(r.reviewBy)) : '<span class="sub">—</span>'}
+        <div class="sub">${esc(r.owner)} · since ${esc(r.since)}</div>${r.retired ? `<div class="sub">retired ${esc(r.retired.on)}: ${esc(r.retired.why)}</div>` : ""}</td>
+    </tr>`).join("");
+  const departures = `<div class="card" id="departures"><h2>Departures from base GTO — pool overlays &amp; experiments <span class="n">${deps.filter((r) => r.lifecycle !== "retired").length}</span></h2>
+      <div class="sub">Choices, not limits: where we deliberately replace GTO's villain range with measured pool data, or play a policy on top of the solver. Every one has an off switch (as this API process reads it now), a firing count from the answers' path codes and warnings over ${j.days} days, and a review-by date. The rule: no addition merges without an entry in <span class="mono">services/approximations.ts</span> (its test fails on an unregistered path code or warning). On the hand page a seat whose range came from a pool overlay is labelled <b>POOL RANGE</b>.</div>
+      <div class="scroll"><table><thead><tr><th>what we do instead of GTO</th><th>kind</th><th>switch</th><th class="num">fired (${j.days}d)</th><th>review by</th></tr></thead>
+      <tbody class="src-static">${depRows}</tbody></table></div></div>`;
+
   const t = j.totals || {};
   el.innerHTML = `
+    ${departures}
     <div class="banner">⚠ Every place the strategy is knowingly not exact. Ranked by how often it actually fires — live miss-queue hits plus answers that printed the warning, over ${j.days} days — not by how bad it sounds. <b>Open states are a backlog, not a rate:</b> a kind with hundreds of rows and no live hits costs less today than one with a handful that bites every session.</div>
     <div class="armed">
-      <div class="cell"><span class="k">Known approximations</span><span class="v">${t.all ?? 0}</span><span class="s">authored in services/approximations.ts</span></div>
+      <div class="cell"><span class="k">Known approximations</span><span class="v">${(t.byKind || {}).approximation ?? t.all ?? 0}</span><span class="s">authored in services/approximations.ts · ${((t.byKind || {})["pool-overlay"] ?? 0) + ((t.byKind || {})["policy-experiment"] ?? 0)} overlays &amp; experiments above${(t.overdue || []).length ? ` · <b class="bad">${t.overdue.length} past review</b>` : ""}</span></div>
       <div class="cell"><span class="k">Measured</span><span class="v">${t.measured ?? 0}</span><span class="s">a miss-queue kind or an answer warning counts them</span></div>
       <div class="cell"><span class="k">Unmeasured</span><span class="v">${t.unmeasured ?? 0}</span><span class="s">no telemetry — instrument these next</span></div>
       <div class="cell"><span class="k">Fired in ${j.days}d</span><span class="v">${t.liveHits ?? 0}</span><span class="s">live hits + warned answers</span></div>

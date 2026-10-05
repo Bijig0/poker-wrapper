@@ -1940,7 +1940,7 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   poolLockSeams.prefetch(parent.solId, tokens);
   // the limper's node: the limp ("C") he made before any raise, read where the tree puts him on the clock
   const firstRaise = tokens.findIndex((t) => /^R/i.test(t));
-  let at: { line: string; sols: any[]; limp: string } | null = null;
+  let at: { line: string; sols: any[]; limp: string; share: number } | null = null;
   for (let k = 0; k < (firstRaise < 0 ? tokens.length : firstRaise) && !at; k++) {
     if (tokens[k] !== "C") continue;
     const prefix = tokens.slice(0, k).join("-");
@@ -1950,7 +1950,8 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
     const sols = (n.data?.action_solutions ?? []) as any[];
     const limp = sols.find((a) => /^C/i.test(String(a?.action?.code ?? "")));
     if (!limp) return no(`the ${target.pos}'s node '${prefix || "root"}' offers no limp (${sols.map((a) => a?.action?.code).join("/")})`, line);
-    at = { line: prefix, sols, limp: String(limp.action.code) };
+    // the unlocked tree's own share of the limp: the hand page shows it at his node ("off-GTO action: GTO plays this X%")
+    at = { line: prefix, sols, limp: String(limp.action.code), share: Number(limp.total_frequency ?? NaN) };
   }
   if (!at) return no(`no limp by the ${target.pos} on the line '${line || "root"}'`, line);
   const w = poolLimpWeights(target.key);
@@ -1994,7 +1995,8 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   const combos = Math.round(w.reduce((t, x) => t + x, 0));
   const secs = (Date.now() - t0) / 1000;
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
-  const note = `POOL-LOCKED LIMPER: the ${target.pos} (${target.stack}bb) ${target.complete ? "completed" : "limped"} and no pool-locked chart covers his stack yet — ` +
+  const note = `POOL-LOCKED LIMPER: the ${target.pos} (${target.stack}bb) ${target.complete ? "completed" : "limped"}` +
+    (Number.isFinite(at.share) ? `, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range,` : "") + ` and no pool-locked chart covers his stack yet — ` +
     `GTO Wizard AI preflop solved this table with his ${target.complete ? "complete" : "limp"} LOCKED to the pool's ${target.key} range ` +
     `(${(100 * freq).toFixed(1)}% of hands, n=${n}, ${combos} combos; the rest of each hand folds or raises as the solver plays it) and hero's node re-solved behind it` +
     (target.alsoSb ? `; the SB's complete is the solver's (one lock per tree)` : "") +
@@ -2919,6 +2921,32 @@ export async function livePreflopNodeView(
     note: pin.lastResort ? `a locked last-resort tree: ${pin.lastResort} — hero's range at the node is every hand`
       : pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " as dead money" : ", none of their chips in it"}` : null,
   };
+}
+
+/**
+ * GTO'S OWN STRATEGY AT ONE SEAT'S NODE (the hand page, 2026-10-05). A pool-locked tree draws the locked seat's node at
+ * the pool's range; the page shows the UNLOCKED tree's node beside it, marked off-GTO. Walks the tree's codes and keeps
+ * that seat's last action chart; nothing after it is needed, so a node the cache lacks later in the line (hero's own,
+ * never read on the unlocked tree) does not matter. Null when the seat is not in the tree or never acted on the read part.
+ */
+export async function seatActionOnTree(
+  pin: Pick<AiPreflopPin, "shape" | "codes">, pos: string,
+  get: (line: string) => Promise<{ data: any; cached?: boolean } | { error: string }>,
+): Promise<LiveNodeAction | null> {
+  const api = pin.shape.apiOf[pos] ?? (pin.shape.positions.includes(pos) ? pos : null);
+  if (!api) return null;
+  let found: LiveNodeAction | null = null;
+  try {
+    await walkArrivalRanges(pin.shape, pin.codes, get, 6, (s) => {
+      if (s.actor !== api) return;
+      const sols: any[] = s.node.action_solutions ?? [];
+      const strategy = classStrategyOf(s.before, sols);
+      const takenIndex = s.taken ? sols.indexOf(s.taken) : -1;
+      found = { actions: sols.map((a) => labelOf(a.action)), strategy, taken: s.taken ? labelOf(s.taken.action) : null,
+                takenIndex: takenIndex >= 0 ? takenIndex : null, takenPct: actionPct(strategy, takenIndex >= 0 ? takenIndex : null) };
+    });
+  } catch { /* a node past his is not needed */ }
+  return found;
 }
 
 /**
