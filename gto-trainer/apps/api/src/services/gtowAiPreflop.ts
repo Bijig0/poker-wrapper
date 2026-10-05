@@ -63,7 +63,7 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
 import { poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
-import { COLD_CALL_LOCK_BELOW, coldCallRange, coldCallWeights, type ColdCallLockTarget } from "./poolColdCall";
+import { coldCallLockBelow, coldCallRange, coldCallWeights, type ColdCallLockTarget } from "./poolColdCall";
 import type { HrcNode } from "./hrc3max";
 import { answerLog } from "./answerLog";
 // THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): the preflop half, at ensureSolution / fetchNode.
@@ -2016,11 +2016,13 @@ export const COLD_CALL_NOT_NEEDED = "NOT NEEDED:";
  * THE POOL'S 3-BET COLD-CALL, LOCKED (2026-10-05, services/poolColdCall has the why). Hero's preflop answer on the exact
  * GTO Wizard AI tree of the table with the cold-caller's node LOCKED: his call at the pool's range for his seat, stack and 3-bet size,
  * the rest of each hand folding or raising as the solver plays it there (poolLimpLockOf — any action code). Only when the
- * unlocked tree gives that call under COLD_CALL_LOCK_BELOW of his range at the node; otherwise a refusal starting
- * COLD_CALL_NOT_NEEDED (the answer goes on as before). Pins the locked solution, the caller named on it.
+ * unlocked tree gives that call under coldCallLockBelow (the larger of 1% and a third of the pool's rate) of his range
+ * at the node; otherwise a refusal starting COLD_CALL_NOT_NEEDED (the answer goes on as before). Pins the locked
+ * solution, the caller named on it. `lockBelow` overrides the trigger (scripts/coldCallCutoffStudy.ts: 0 reads the
+ * share and locks nothing, above 1 always locks).
  */
 export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: string | null, target: ColdCallLockTarget,
-    opts: { skipPin?: () => boolean } = {}): Promise<AiPreflopOutcome> {
+    opts: { skipPin?: () => boolean; lockBelow?: number } = {}): Promise<AiPreflopOutcome> {
   const t0 = Date.now();
   const no = (reason: string, line?: string): AiPreflopOutcome => ({ ok: false, reason: `cold-call-locked tree: ${reason}`, ...(line != null ? { line } : {}) });
   const shape = shapeOf(hand, heroPos);
@@ -2057,8 +2059,9 @@ export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: stri
     at = { line: prefix, sols, call: String(call.action.code), share: Number(call.total_frequency ?? 0) };
   }
   if (!at) return no(`no cold-call by the ${target.pos} on the line '${line || "root"}'`, line);
-  if (at.share >= COLD_CALL_LOCK_BELOW) {
-    return no(`${COLD_CALL_NOT_NEEDED} the tree's own ${target.pos} cold-calls ${(100 * at.share).toFixed(1)}% of his range at '${at.line}'`, line);
+  const below = opts.lockBelow ?? coldCallLockBelow(target.key);
+  if (at.share >= below) {
+    return no(`${COLD_CALL_NOT_NEEDED} the tree's own ${target.pos} cold-calls ${(100 * at.share).toFixed(2)}% of his range at '${at.line}' (the lock is under ${(100 * below).toFixed(2)}% for ${target.key})`, line);
   }
   const w = coldCallWeights(target.key);
   const lock = poolLimpLockOf(at.line, at.sols, at.call, w);
@@ -2099,7 +2102,7 @@ export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: stri
   const combos = Math.round(w.reduce((t, x) => t + x, 0) * 10) / 10;
   const secs = (Date.now() - t0) / 1000;
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
-  const note = `POOL-LOCKED COLD-CALL: the ${target.pos} (${target.stack}bb) cold-called the 3-bet, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range — ` +
+  const note = `POOL-LOCKED COLD-CALL: the ${target.pos} (${target.stack}bb) cold-called the 3-bet, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range (the lock is under ${(100 * below).toFixed(2)}%) — ` +
     `GTO Wizard AI preflop solved this table with his call LOCKED to the pool's ${target.key} range (${(100 * freq).toFixed(2)}% of chances, ` +
     `${calls.toLocaleString("en-US")} cold-calls measured, ${combos} combos; the rest of each hand folds or raises as the solver plays it) and hero's node re-solved behind it. ` +
     `Tree: ${shapeText}; ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}.` +
