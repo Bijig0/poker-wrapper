@@ -196,7 +196,9 @@ function grade(r: any, cut: any, heroPos: string): { verdict: "ok" | "approx" | 
   if (!r.decision && acts.length) flags.push("no-pick");
   const toCall = Number(cut.currentNode?.toCall ?? 0);
   const names = acts.map((a) => String(a.action).toUpperCase());
-  if (toCall > 0.01) { if (names.some((n) => /^CHECK/.test(n))) flags.push("check-facing-bet"); if (!names.some((n) => /^(FOLD)/.test(n)) && acts.length > 1) flags.push("no-fold-facing-bet"); }
+  if (toCall > 0.01) { if (names.some((n) => /^CHECK/.test(n))) flags.push("check-facing-bet"); }
+  // (no "no-fold-facing-bet": a chart cell lists only the actions the hand takes, so JJ facing an open has no Fold row
+  // because it folds 0% — that is not a fault; the export's grade.ts never had the rule)
   else if (names.some((n) => /^FOLD/.test(n) && (acts.find((a) => String(a.action).toUpperCase() === n)?.frequency ?? 0) > 0.5)) flags.push("fold-when-free");
   if (/last-resort/i.test(JSON.stringify(r.path ?? {})) || kinds.includes("LAST RESORT")) flags.push("last-resort");
   const v = r.path?.verdict;
@@ -204,7 +206,7 @@ function grade(r: any, cut: any, heroPos: string): { verdict: "ok" | "approx" | 
   const failed = Object.values(r.path?.checks ?? {}).flat().filter((c: any) => c?.status === "fail").map((c: any) => `check#${c.id}`);
   for (const f of new Set(failed)) flags.push(f);
   if (r.notInRange) flags.push("not-in-range");
-  const bad = flags.some((f) => /^(wrong-seat|empty-mix|all-zero-mix|sum-|check-facing-bet|no-fold-facing-bet|last-resort|path-fault)/.test(f));
+  const bad = flags.some((f) => /^(wrong-seat|empty-mix|all-zero-mix|sum-|check-facing-bet|last-resort|path-fault)/.test(f));
   return { verdict: bad ? "bad" : (r.approx || kinds.some((k) => !["size snapped", "AI preflop"].includes(k)) || failed.length) ? "approx" : "ok", flags, kinds };
 }
 
