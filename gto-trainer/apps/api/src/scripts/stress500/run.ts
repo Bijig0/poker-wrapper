@@ -26,7 +26,11 @@ const DATA = (arg("data") ?? "C:/Users/Brady/poker-data-stress500").replace(/\\/
 const LIVE_DIR = "C:/Users/Brady/poker-data";
 const WORK = join(DATA, "root");
 const OUT = join(DATA, "hands");
-const HOUR_CAP = Number(arg("hour-cap") ?? 1150);
+const HOUR_CAP = Number(arg("hour-cap") ?? 500);
+/** THE DAY CAP (2026-10-05): primary walled at 01:32Z with the DAILY throttle ("1275 / 86400 s", Retry-After 8.5 h)
+ *  at 6,589 requests in its trailing 24 h (952 in the last hour: the hourly cap never fired). Every origin counts —
+ *  live play included — so the run waits while the account's 24 h total is at or past this. */
+const DAY_CAP = Number(arg("day-cap") ?? 3000);
 const ONLY = arg("only")?.split(",").filter(Boolean) ?? null;
 const FAMS = arg("families")?.split(",").filter(Boolean) ?? null;
 const LIMIT = Number(arg("limit") ?? 1e9);
@@ -40,6 +44,10 @@ const liveDb = new Database(join(LIVE_DIR, "poker.sqlite"), { readonly: true });
 const isLive = (): boolean => ((liveDb.query("select count(*) n from sessions where ended_at is null").get() as { n: number }).n ?? 0) > 0;
 const trailingHour = (): Record<string, number> => {
   const rows = liveDb.query("select s, count(*) n from gtow_requests where ts > ? group by s").all(Date.now() - 3_600_000) as { s: string; n: number }[];
+  return Object.fromEntries(rows.map((r) => [r.s ?? "?", r.n]));
+};
+const trailingDay = (): Record<string, number> => {
+  const rows = liveDb.query("select s, count(*) n from gtow_requests where ts > ? group by s").all(Date.now() - 86_400_000) as { s: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.s ?? "?", r.n]));
 };
 /** this run's own requests since `t` (its ledger origin) */
@@ -68,6 +76,12 @@ async function gate(): Promise<void> {
     if (worst >= HOUR_CAP) {
       log(`trailing hour ${JSON.stringify(h)} — at the cap (${HOUR_CAP}); waiting 60 s`);
       await Bun.sleep(60_000);
+      continue;
+    }
+    const d = trailingDay();
+    if (Math.max(0, ...Object.values(d)) >= DAY_CAP) {
+      log(`trailing 24 h ${JSON.stringify(d)} — at the day cap (${DAY_CAP}, every origin counts); waiting 10 min`);
+      await Bun.sleep(600_000);
       continue;
     }
     if (!(await tokenOk())) {
@@ -132,7 +146,7 @@ const { handHistoryText } = await import("./hhText");
 const V = await import("./views");
 const { factoryFile } = await import("../../services/repoPaths");
 const commit = (() => { try { return require("node:child_process").execSync("git rev-parse --short HEAD", { cwd: import.meta.dir }).toString().trim(); } catch { return "?"; } })();
-log(`stress-500 on ${commit} · charts ${factoryFile("hrc6max-preflop.sqlite")} · data ${WORK} · cap ${HOUR_CAP}/h per account`);
+log(`stress-500 on ${commit} · charts ${factoryFile("hrc6max-preflop.sqlite")} · data ${WORK} · caps ${HOUR_CAP}/h and ${DAY_CAP}/24 h per account (every origin)`);
 
 // ── the scenarios ────────────────────────────────────────────────────────────────────────────────────────────────
 const set = JSON.parse(readFileSync(join(DATA, "scenarios.json"), "utf8")) as { scenarios: any[] };
