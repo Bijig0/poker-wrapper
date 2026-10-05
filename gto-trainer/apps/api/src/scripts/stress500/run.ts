@@ -49,6 +49,15 @@ const wallsSinceStart = (): number =>
 const log = (s: string): void => { const line = `[${new Date().toISOString().slice(11, 19)}] ${s}`; console.log(line); try { require("node:fs").appendFileSync(join(DATA, "run.log"), line + "\n"); } catch { /* best effort */ } };
 if (isLive()) { log("a poker session is LIVE — not starting (exit 2)"); process.exit(2); }
 
+/** A GTO Wizard account without an access token (2026-10-05 00:30-01:16Z: primary had none for 45 minutes and the run
+ *  recorded ~450 hands of instant refusals as results). The gate waits for one; a hand whose answers still say so is
+ *  thrown away and played again. */
+const NO_TOKEN = /no access token|: no token\b/i;
+let tokenWaits = 0;
+async function tokenOk(): Promise<boolean> {
+  const { gtowSessions } = await import("../../services/gtowSessions");
+  try { return !!((await gtowSessions.tokenFor("primary" as any)) ?? (await gtowSessions.tokenFor("primary" as any, true))); } catch { return false; }
+}
 async function gate(): Promise<void> {
   for (;;) {
     if (isLive()) { log("a poker session went LIVE — stopping (exit 2); resume with the same command when it ends"); process.exit(2); }
@@ -56,9 +65,19 @@ async function gate(): Promise<void> {
     if (w > 0) { log(`GTO Wizard answered 429 ${w}× since this run started — STOPPING to protect the accounts (exit 3)`); process.exit(3); }
     const h = trailingHour();
     const worst = Math.max(0, ...Object.values(h));
-    if (worst < HOUR_CAP) return;
-    log(`trailing hour ${JSON.stringify(h)} — at the cap (${HOUR_CAP}); waiting 60 s`);
-    await Bun.sleep(60_000);
+    if (worst >= HOUR_CAP) {
+      log(`trailing hour ${JSON.stringify(h)} — at the cap (${HOUR_CAP}); waiting 60 s`);
+      await Bun.sleep(60_000);
+      continue;
+    }
+    if (!(await tokenOk())) {
+      if (++tokenWaits > 45) { log("GTO Wizard primary has had no access token for 45 minutes — exit 4 (the supervisor restarts later)"); process.exit(4); }
+      log("GTO Wizard primary has no access token — waiting 60 s (no decision is answered without one)");
+      await Bun.sleep(60_000);
+      continue;
+    }
+    tokenWaits = 0;
+    return;
   }
 }
 
@@ -197,39 +216,49 @@ for (const sc of todo) {
   const hand = normalizeHand(sc.raw).hand;
   const heroPos = String(hand.positions[hand.heroSeatId] ?? "");
   const key = preflopPinKey(hand) ?? hand.clientHandId ?? sc.id;
-  const decisions: any[] = [];
-  const t0h = Date.now();
-  for (let i = 0; i < hand.actions.length; i++) {
-    const a = hand.actions[i]!;
-    if (!a.hero || /^post/.test(a.type)) continue;
-    await gate();
-    const cut = withStartStacks(truncateAt(hand, i));
-    // UNKNOWN DEALT STACKS (brief_I): the cut keeps the stacks behind at this point, the answer is not told the dealt ones
-    if ((sc.raw as any)?.dropStartStacks) delete (cut as any).startStacks;
-    const h = { ...cut, currentNode: { ...cut.currentNode, toActIsHero: true } };
-    const t0 = Date.now();
-    let r: any;
-    try { r = await fastSolve(h, heroPos, { heroPos, strategyId: STRATEGY, origin: "stress" } as any); }
-    catch (e) { r = { ok: false, reason: `threw: ${e instanceof Error ? e.stack?.split("\n").slice(0, 3).join(" | ") : e}` }; }
-    const ms = Date.now() - t0;
-    const reqs = ownSince(t0);
-    const g = grade(r, h, heroPos);
-    let trace: any = null;
-    if (r.solveId) { try { trace = solveStore.get(Number(r.solveId))?.trace ?? null; } catch { trace = null; } }
-    const mp = r.ok && a.street !== "preflop" ? misPress(r, h, trace) : null;
-    if (mp) g.flags.push("mis-press");
-    if (ms > 15_000) g.flags.push(`slow-${Math.round(ms / 1000)}s`);
-    tally[g.verdict]++;
-    decisions.push({
-      index: i, street: a.street, took: { type: a.type, amount: a.amount ?? null }, toCall: h.currentNode.toCall, ms, reqs,
-      ok: !!r.ok, source: r.source ?? null, tier: r.tier ?? null, gametype: r.gametype ?? null, line: r.line ?? null, pos: r.pos ?? null,
-      heroClass: r.heroClass ?? null, actions: r.actions ?? [], pick: r.decision?.action ?? null, warning: r.warning ?? null,
-      reason: r.ok ? null : String(r.reason ?? ""), kind: r.kind ?? null, approx: !!r.approx,
-      path: r.path ? { verdict: r.path.verdict ?? null, reasons: r.path.reasons ?? [], requests: r.path.requests ?? null, checks: r.path.checks ?? null } : null,
-      solveId: r.solveId ?? null, grade: g.verdict, flags: g.flags, kinds: g.kinds, misPress: mp,
-    });
-    decisionsDone++;
+  let decisions: any[] = [];
+  let t0h = Date.now();
+  let outage = false;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    decisions = []; t0h = Date.now(); outage = false;
+    for (let i = 0; i < hand.actions.length; i++) {
+      const a = hand.actions[i]!;
+      if (!a.hero || /^post/.test(a.type)) continue;
+      await gate();
+      const cut = withStartStacks(truncateAt(hand, i));
+      // UNKNOWN DEALT STACKS (brief_I): the cut keeps the stacks behind at this point, the answer is not told the dealt ones
+      if ((sc.raw as any)?.dropStartStacks) delete (cut as any).startStacks;
+      const h = { ...cut, currentNode: { ...cut.currentNode, toActIsHero: true } };
+      const t0 = Date.now();
+      let r: any;
+      try { r = await fastSolve(h, heroPos, { heroPos, strategyId: STRATEGY, origin: "stress" } as any); }
+      catch (e) { r = { ok: false, reason: `threw: ${e instanceof Error ? e.stack?.split("\n").slice(0, 3).join(" | ") : e}` }; }
+      // an answer GTO Wizard could not be asked for is not a result: the hand is played again (NO_TOKEN)
+      if (NO_TOKEN.test(`${r?.reason ?? ""} ${r?.warning ?? ""} ${JSON.stringify(r?.path?.reasons ?? [])}`)) { outage = true; break; }
+      const ms = Date.now() - t0;
+      const reqs = ownSince(t0);
+      const g = grade(r, h, heroPos);
+      let trace: any = null;
+      if (r.solveId) { try { trace = solveStore.get(Number(r.solveId))?.trace ?? null; } catch { trace = null; } }
+      const mp = r.ok && a.street !== "preflop" ? misPress(r, h, trace) : null;
+      if (mp) g.flags.push("mis-press");
+      if (ms > 15_000) g.flags.push(`slow-${Math.round(ms / 1000)}s`);
+      decisions.push({
+        index: i, street: a.street, took: { type: a.type, amount: a.amount ?? null }, toCall: h.currentNode.toCall, ms, reqs,
+        ok: !!r.ok, source: r.source ?? null, tier: r.tier ?? null, gametype: r.gametype ?? null, line: r.line ?? null, pos: r.pos ?? null,
+        heroClass: r.heroClass ?? null, actions: r.actions ?? [], pick: r.decision?.action ?? null, warning: r.warning ?? null,
+        reason: r.ok ? null : String(r.reason ?? ""), kind: r.kind ?? null, approx: !!r.approx,
+        path: r.path ? { verdict: r.path.verdict ?? null, reasons: r.path.reasons ?? [], requests: r.path.requests ?? null, checks: r.path.checks ?? null } : null,
+        solveId: r.solveId ?? null, grade: g.verdict, flags: g.flags, kinds: g.kinds, misPress: mp,
+      });
+    }
+    if (!outage) break;
+    log(`${sc.id}: an answer had no GTO Wizard access token — the hand is thrown away and played again in 60 s`);
+    try { forgetPreflopPin(key); forgetPostflopPin(key); forgetCheckpoints(key); } catch { /* best effort */ }
+    await Bun.sleep(60_000);
   }
+  if (outage) { log(`${sc.id}: still no GTO Wizard access token after 6 tries — exit 4 (the supervisor restarts later)`); process.exit(4); }
+  for (const d of decisions) { tally[d.grade as keyof typeof tally]++; decisionsDone++; }
 
   // ── the views: preflop from the pin, postflop from the traces ──
   const views: Record<number, any> = {};
@@ -275,7 +304,8 @@ for (const sc of todo) {
   // postflop: per street, the trace whose walk covers the most nodes of that street (the latest on a tie)
   const plans: any[] = [];
   try {
-    const rows = solveStore.forHand(hand.clientHandId!);
+    // this attempt's solves only (a hand played again keeps the earlier attempts' rows in the store)
+    const rows = solveStore.forHand(hand.clientHandId!).filter((row: any) => Number(row.ts) >= t0h);
     const traces = rows.map((row: any) => ({ row, trace: solveStore.get(row.id)?.trace })).filter((x: any) => x.trace);
     for (const x of traces) plans.push({ solveId: x.row.id, decisionKey: x.row.decision_key, street: x.row.street, planTag: x.trace.spec?.planTag ?? null, ok: !!x.row.ok, why: x.row.why ?? null });
     Object.assign(views, V.postflopViews(hand.actions as any, hand.positions as any, traces.map((x: any) => ({ id: x.row.id, trace: x.trace }))));
@@ -283,7 +313,7 @@ for (const sc of todo) {
 
   const result = {
     id: sc.id, family: sc.family, title: sc.title, tags: sc.tags, hero: heroPos, source: sc.source ?? null, commit,
-    ranAt: new Date().toISOString(), ms: Date.now() - t0h,
+    startedAt: new Date(t0h).toISOString(), ranAt: new Date().toISOString(), ms: Date.now() - t0h,
     hh: handHistoryText(hand, sc), hand: { positions: hand.positions, startStacks: (hand as any).startStacks ?? null, heroSeatId: hand.heroSeatId, heroCards: hand.heroCards, board: hand.board, actions: hand.actions, postIns: (hand as any).postIns ?? null },
     decisions, views, preflopNote, plans,
   };
