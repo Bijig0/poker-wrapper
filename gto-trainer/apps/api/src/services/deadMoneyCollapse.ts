@@ -131,7 +131,8 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
       // (or, under a `startBase`, a wager that does not reach past it: his chips are in the starting pot already)
       if (rel0 <= mineT + 0.005 && (a.kind === "call" || a.kind === "allin" || a.kind === "raise")) {
         takeLayers();
-        if (!actedSince.has(a.seat)) emit(a.seat, "X");
+        // (review 5: a seat whose share leaves him all in in the tree has nothing to check with — nothing at all)
+        if (!actedSince.has(a.seat) && !allIn(a.seat)) emit(a.seat, "X");
         return;
       }
       if (rel0 > treeLevel + 0.005 && rel0 < cap(a.seat) - layerAdd() - 0.005 && rel0 - treeLevel < lastInc - 0.005) {
@@ -190,6 +191,9 @@ export function walkPlays(order: readonly string[], keep: readonly string[], str
     const cap = (p: string) => capAt(i)(p) ?? Infinity;
     const put: Record<string, number> = {};
     let level = 0, acted = new Set<string>(), at = 0, lastInc = 1;
+    // a seat with nothing behind at the street's start (a cut put his whole stack in the pot) never acts: all in
+    // (review 5 — replayKept skips him and aiChain drops him; the walk check expected him to act)
+    for (const p of rot) if (!out.has(p) && (cap(p) ?? Infinity) <= 0.005) allIn.add(p);
     const next = (k0: number) => { for (let k = 0; k < rot.length; k++) { const p = rot[(k0 + k) % rot.length]!; if (!out.has(p) && !allIn.has(p)) return { p, k: (k0 + k) % rot.length }; } return null; };
     const live = () => rot.filter((p) => !out.has(p) && !allIn.has(p));
     const closed = () => live().every((p) => acted.has(p) && (put[p] ?? 0) >= level - 0.005);
@@ -293,7 +297,8 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     if (walkPlays(order, keepOrd, [fixed.toks], [fixed.seats], () => (p) => ((a.behind(p) ?? Infinity) as number) - (fixed.preload[p] ?? 0), a.heroPos) != null) return;
     // a seat kept although he folded (the fallback below): his line is walked, fold included — the tree is not heads-up
     const keptFolder = extra.some((p) => sc.folded.has(p));
-    const headsUp = live.length === 1 && !keptFolder;
+    // heads-up IS the hand only when the line is the table's (review 5: an opening base or a cut rewrote it)
+    const headsUp = live.length === 1 && !keptFolder && startBase === 0 && !fixed.cuts && !fixed.shifts;
     const dropped = a.seats.filter((s) => !kept.has(s.pos)).map((s) =>
       `${sc.folded.has(s.pos) ? (putOf(s.pos) > 0 ? (headsUp ? "folded" : "dead") : "fold") : putOf(s.pos) > 0 ? "dead" : "ghost"}:${s.pos}`);
     plans.push({

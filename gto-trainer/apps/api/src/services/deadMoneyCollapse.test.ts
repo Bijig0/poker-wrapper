@@ -126,6 +126,20 @@ describe("planDeadMoney", () => {
     expect(p.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["BB:RAI", "UTG:C", "HJ:R69.76"]);
   });
 
+  test("review 5: an all-in caller whose layer share leaves him all in does not check; a zero-stack seat after a cut is out", () => {
+    // SB 1.98, BB (7.1 behind) raises 5.97, UTG 9.96, HJ 33.87, SB calls, BB calls all in — keep BB/UTG/HJ, hero UTG
+    const b: Record<string, number> = { SB: 100, BB: 7.1, UTG: 100, HJ: 100 };
+    const r1 = planDeadMoney({ seats: seatsOf("SB", "BB", "UTG", "HJ"), heroPos: "UTG", street: line("SB:R1.98 BB:R5.97 UTG:R9.96 HJ:R33.87 SB:C BB:C"), behind: (p) => b[p] });
+    const k1 = r1.plans.find((p) => p.seats.map((s) => s.pos).join("/") === "BB/UTG/HJ");
+    expect(k1).toBeDefined();
+    expect(k1!.streets[0]!.some((t) => t.seat === "BB" && t.tok === "X")).toBe(false);
+    // a cut that puts the BB's whole stack in the pot: the plan walks without him acting again (hero CO)
+    const b2: Record<string, number> = { SB: 14.16, BB: 30.48, CO: 100, BTN: 100 };
+    const r2 = planDeadMoney({ seats: seatsOf("SB", "BB", "CO", "BTN"), heroPos: "CO",
+      street: line("SB:R3 BB:R6 CO:C BTN:C SB:RAI BB:C CO:C BTN:R22.32 BB:R30.48"), amounts: [null, null, null, null, 14.16, null, null, null, null], behind: (p) => b2[p] });
+    expect(r2.plans.length).toBeGreaterThan(0);
+  });
+
   test("the takeover keeps a kept seat's price: a caller of a dropped bet bets it in the tree", () => {
     // UTG bets 3, hero (HJ) calls, CO raises to 10, UTG calls; the BTN is still to act — hero faces 7 more
     const { plans } = planDeadMoney({ seats: seatsOf("UTG", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("UTG:R3 HJ:C CO:R10 BTN:F UTG:C"), behind: () => 100 });

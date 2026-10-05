@@ -525,6 +525,17 @@ export function rotationDisagrees(listed: { position?: unknown; is_hero?: unknow
   const o = ours.map(norm);
   const said = listed.find((p) => p?.is_hero)?.position;
   if (said == null) return false;
+  // BY TREE SLOT (review 5): a solution's seats are its walk's, but every tree seats them in POSTFLOP ORDER — OOP,
+  // OOP+1, IP — so the actor's SLOT is comparable whatever the names: the node's actor's place among the node's names
+  // in postflop order against ours among ours. A shared solution with other names can then neither misfire nor slip a
+  // real disagreement through. Three or more seats with known names only (heads-up the dealer's name is ambiguous).
+  const ORDER = ["SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "MP", "MP+1", "HJ", "CO", "BTN"];
+  const rank = (p: string) => ORDER.indexOf(String(p).toUpperCase());
+  const theirs = listed.map((p) => String(p?.position ?? ""));
+  if (theirs.length === ours.length && ours.length >= 3 && [...theirs, ...ours].every((p) => rank(p) >= 0)) {
+    const slot = (names: string[], who: string) => [...names].sort((x, y) => rank(x) - rank(y)).findIndex((p) => p.toUpperCase() === who.toUpperCase());
+    return slot(theirs, String(said)) !== slot(ours, ours[0]!);
+  }
   // review 4: names that are not exactly OUR seats' are another walk's — a shared solution — and say nothing (neither
   // agreement nor disagreement); only our own names, in a list that lines up, are compared slot by slot
   const names = listed.map((p) => norm(String(p?.position ?? "")));
