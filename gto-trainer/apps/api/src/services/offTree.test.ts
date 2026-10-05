@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isOffTree, offTreeFamily, offTreeStats, offTreeText } from "./offTree";
+import { OFF_TREE_DUST, isOffTree, offTreeFamily, offTreeLock, offTreeRangeMode, offTreeSoftT, offTreeStats, offTreeText, softOffTreeRange } from "./offTree";
 import { OffTreeLog } from "./offTreeLog";
 
 const N = 1326;
@@ -53,5 +53,99 @@ describe("off-tree villain lines (2026-09-27)", () => {
     expect(log.fillShown("4920638634", [{ position: "BTN", cards: ["As", "Ts"], hero: true }, { position: "HJ", cards: ["Kd", "Kc"] }])).toBe(1);
     const fams = log.families(log.recent());
     expect(fams).toEqual([{ family: "flop · bet out of position · T-high board", n: 2, shown: [{ hand: "4920638634", cards: "KdKc", action: "HJ BET 2.6" }] }]);
+  });
+});
+
+describe("the soft range after an off-tree action (option 3, 2026-10-06)", () => {
+  // 300 hands; the bet loses gap(i) bb against checking: 0 for the first 10 (the bet is their best action), then growing
+  const gap = (i: number) => (i < 10 ? 0 : 0.01 * i);
+  const sols = node((i) => (i < 10 ? 0.002 : 0.0001), () => 1, (i) => 1 - gap(i));
+
+  it("the dust fix: a sliver-weight combo betting often no longer vetoes the flag (po_hu-004's Td9d)", () => {
+    const r = range();
+    r[400] = 0.0001;                                         // dust: 0.01% of the top weight
+    const s2 = node((i) => (i === 400 ? 0.023 : 0.001), () => 1, () => 0.9);
+    expect(isOffTree(offTreeStats(r, s2, 1))).toBe(false);   // without it: maxHand 2.3%
+    const d = offTreeStats(r, s2, 1, { dust: OFF_TREE_DUST });
+    expect(d.maxHand).toBeCloseTo(0.001, 9);
+    expect(isOffTree(d)).toBe(true);
+  });
+
+  it("range x exp(-dEV / (t x pot)): best-action hands keep full weight, worse ones fall off with the gap", () => {
+    const r = softOffTreeRange(range(), sols, 1, 10, 0.1);
+    if ("why" in r) throw new Error(r.why);
+    expect(r.range[0]).toBe(1);
+    expect(r.range[100]).toBeCloseTo(Math.exp(-1 / 1), 9);   // gap 1bb, T = 1bb
+    expect(r.range[299]).toBeCloseTo(Math.exp(-2.99), 9);
+    expect(r.range[500]).toBe(0);                             // not in his range: stays out
+    // a combo with a board card: in his range as sent, but strategy 0 and EV 0 for every action at the node — dropped
+    const blocked = sols.map((x) => ({ strategy: x.strategy.map((v, i) => (i === 5 ? 0 : v)), evs: x.evs.map((v, i) => (i === 5 ? 0 : v)) }));
+    const rb = softOffTreeRange(range(), blocked, 1, 10, 0.1);
+    if ("why" in rb) throw new Error(rb.why);
+    expect(rb.range[5]).toBe(0);
+    expect(r.combos).toBeGreaterThan(10);
+  });
+
+  it("T -> 0 keeps only the hands for which the action is best; T -> infinity is the range before the action", () => {
+    const cold = softOffTreeRange(range(), sols, 1, 10, 1e-6);
+    const hot = softOffTreeRange(range(), sols, 1, 10, 1e6);
+    if ("why" in cold || "why" in hot) throw new Error("not computable");
+    expect(cold.combos).toBeCloseTo(10, 6);
+    expect(hot.combos).toBeCloseTo(300, 1);
+  });
+
+  it("T is a share of the pot: double the pot and the EVs, the same range", () => {
+    const big = node((i) => (i < 10 ? 0.002 : 0.0001), () => 2, (i) => 2 - 2 * gap(i));
+    const a = softOffTreeRange(range(), sols, 1, 10, 0.1), b = softOffTreeRange(range(), big, 1, 20, 0.1);
+    if ("why" in a || "why" in b) throw new Error("not computable");
+    expect(b.range[150]).toBeCloseTo(a.range[150]!, 9);
+  });
+
+  it("no per-combo EVs or no pot: not computable, said why", () => {
+    const noEv = [{ strategy: range() }, { strategy: range() }];
+    expect(softOffTreeRange(range(), noEv, 1, 10, 0.1)).toEqual({ why: "the node carries no per-combo EVs" });
+    expect("why" in softOffTreeRange(range(), sols, 1, 0, 0.1)).toBe(true);
+  });
+
+  it("the switches: OFFTREE_RANGE soft by default, log, off; OFFTREE_RANGE_T sane or 0.10", () => {
+    const keep = { r: process.env.OFFTREE_RANGE, t: process.env.OFFTREE_RANGE_T };
+    try {
+      delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_RANGE_T;
+      expect(offTreeRangeMode()).toBe("soft");
+      expect(offTreeSoftT()).toBe(0.1);
+      process.env.OFFTREE_RANGE = "log"; expect(offTreeRangeMode()).toBe("log");
+      process.env.OFFTREE_RANGE = "OFF"; expect(offTreeRangeMode()).toBe("off");
+      process.env.OFFTREE_RANGE_T = "0.2"; expect(offTreeSoftT()).toBe(0.2);
+      process.env.OFFTREE_RANGE_T = "abc"; expect(offTreeSoftT()).toBe(0.1);
+    } finally {
+      if (keep.r == null) delete process.env.OFFTREE_RANGE; else process.env.OFFTREE_RANGE = keep.r;
+      if (keep.t == null) delete process.env.OFFTREE_RANGE_T; else process.env.OFFTREE_RANGE_T = keep.t;
+    }
+  });
+
+  it("the node lock: one history line per street from preflop, the taken action = the soft factor scaled to 1, each hand sums to 1", () => {
+    const r = softOffTreeRange(range(), sols, 1, 10, 0.1);
+    if ("why" in r) throw new Error(r.why);
+    const withCodes = sols.map((x, j) => ({ ...x, action: { code: j ? "R3" : "X" } }));
+    const lk = offTreeLock(withCodes, 1, r.factor, 2, ["X"]);    // a turn tree: ["", "", "X"]
+    expect(lk.action_history).toEqual(["", "", "X"]);
+    expect(lk.previous_nodes_lock_type).toBe("street_all");
+    expect(lk.strategy.map((x) => x.action)).toEqual(["X", "R3"]);
+    expect(lk.strategy[1]!.strategy[0]).toBe(1);
+    expect(lk.strategy[1]!.strategy[100]).toBeCloseTo(Math.exp(-1), 9);
+    for (const i of [0, 100, 299, 700]) expect(lk.strategy[0]!.strategy[i]! + lk.strategy[1]!.strategy[i]!).toBeCloseTo(1, 9);
+    // range x lock = the soft range (up to scale)
+    expect((range()[100]! * lk.strategy[1]!.strategy[100]!) / (range()[0]! * lk.strategy[1]!.strategy[0]!)).toBeCloseTo(r.range[100]! / r.range[0]!, 9);
+  });
+
+  it("says what was carried, and the log keeps the soft and QRE combos", () => {
+    const l = { street: "flop" as const, seat: "BB", inPosition: false, action: "BET", code: "R5", betsize: 5, codes: ["X"], potNode: 10.4,
+      nodeFreq: 0.0005, maxHand: 0.015, evGapBb: 0.89,
+      soft: { mode: "soft" as const, t: 0.1, pot: 10.4, qreCombos: 0.0719, softCombos: 55.7, applied: true } };
+    expect(offTreeText(l)).toContain("his range carried as 56 combos instead of QRE's 0.072 (soft, T = 10% of the 10.4bb pot)");
+    const log = new OffTreeLog(":memory:");
+    log.record({ clientHandId: "4921650489", sessionId: "s", origin: "live", board: "QsKcJd", heroPos: "BTN" }, l);
+    const row = log.forHand("4921650489")[0]!;
+    expect([row.softMode, row.softT, row.qreCombos, row.softCombos]).toEqual(["soft", 0.1, 0.0719, 55.7]);
   });
 });
