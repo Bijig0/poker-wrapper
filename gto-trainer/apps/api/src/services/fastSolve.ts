@@ -4404,13 +4404,13 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
  * already gives his call a real share (COLD_CALL_NOT_NEEDED); an ok answer; or a refusal whose reason the answer that
  * follows carries ("COLD-CALL LOCK FAILED …"). Inside poolLockMs (12 s). COLD_CALL_POOL=on only (the default).
  */
-async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null): Promise<FastSolveResult | null> {
+async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, dropped: () => boolean = () => false): Promise<FastSolveResult | null> {
   if (coldCallPoolMode() !== "on") return null;
   const t = coldCallLockTarget({ hand, heroPos });
   if (!t.ok) return null;
   const t0 = Date.now();
   let gaveUp = false;
-  const asked = solvePreflopColdCallLocked(hand, heroPos, t.target, { skipPin: () => gaveUp })
+  const asked = solvePreflopColdCallLocked(hand, heroPos, t.target, { skipPin: () => gaveUp || dropped() })
     .catch((e): AiPreflopOutcome => ({ ok: false, reason: `cold-call-locked tree threw: ${e instanceof Error ? e.message : e}` }));
   const ms = poolLockMs();
   const first = await Promise.race([asked, new Promise<"timeout">((res) => setTimeout(() => res("timeout"), ms))]);
@@ -4497,11 +4497,30 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     if (locked && locked.ok) return locked;
     // THE POOL'S 3-BET COLD-CALL (2026-10-05, services/poolColdCall): a lone cold-caller of a 3-bet whom the exact tree
     // gives ~0% is read at the pool's range on the exact tree with his call node-locked
-    const cc = locked ? null : await poolColdCallLockFirst(hand, heroPos);
+    // ONLY WHERE NOTHING ELSE COVERS HIM (Brady 2026-10-05: "we still do the regular check … then once we discover
+    // 'can't cover', we use this range instead"): the regular answer runs first — a 6-max chart that holds the line
+    // answers as before and the lock is dropped; only when GTO Wizard AI had to answer (the charts could not hold the
+    // cold-call) does the lock stand, and even then only if the exact tree gives his call under 1% (NOT NEEDED
+    // otherwise: a short stack or a shape the tree really calls with keeps the tree's range). Asked in parallel so the
+    // clock does not pay for both.
+    let ccDropped = false;
+    // the lock's pin is taken as it lands: the regular answer may pin its unlocked tree after it, and the hand's flop
+    // must walk the locked one when the lock answers
+    const ccAsked = locked ? null : poolColdCallLockFirst(hand, heroPos, () => ccDropped)
+      .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
+    const r = await solvePreflopSixStrategy(hand, heroPos, opts);
+    let cc: FastSolveResult | null = null;
+    if (ccAsked) {
+      if (r.ok && r.source !== GTOW_AI_PREFLOP_SOURCE) ccDropped = true;     // the charts hold the line: theirs
+      else {
+        const got = await ccAsked;
+        cc = got.res;
+        if (cc?.ok && got.pin && preflopPinFor(hand) !== got.pin) setPreflopPin(got.pin, hand.heroCards?.join("") ?? null);
+      }
+    }
     if (cc && cc.ok) return cc;
     const failed: string[] = [];
     for (const x of [locked, cc]) if (x && !x.ok) failed.push(x.reason);
-    const r = await solvePreflopSixStrategy(hand, heroPos, opts);
     return failed.length && r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") } : r;
   }
 
