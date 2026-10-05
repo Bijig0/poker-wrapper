@@ -59,7 +59,7 @@ export interface DeadMoneyPlan extends CollapsePlan {
  * `order` = the seats in postflop order (default: the order they first act in).
  */
 export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySet<string>, capOf: (p: string) => number | null | undefined,
-    order?: readonly string[], startBase = 0): { toks: string[]; seats: string[]; tookOver: string[]; preload: Record<string, number>; cuts: number; shifts: number; closed: false; lostFold: boolean } {
+    order?: readonly string[], startBase = 0, layerTo = 0): { toks: string[]; seats: string[]; tookOver: string[]; preload: Record<string, number>; cuts: number; shifts: number; layered: number; closed: false; lostFold: boolean } {
   const rot = order?.length ? [...order] : [...new Set(acts.map((x) => x.seat))];
   const out: string[] = [], seats: string[] = [], tookOver: string[] = [];
   const put = new Map<string, number>(), treePut = new Map<string, number>();
@@ -67,7 +67,7 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
   // dropped seats' opening levels, when every kept seat went past them
   const preload: Record<string, number> = {};
   if (startBase > 0) for (const p of kept) preload[p] = startBase;
-  let level = 0, treeLevel = 0, base = startBase, cuts = 0, shifts = 0;
+  let level = 0, treeLevel = 0, base = startBase, cuts = 0, shifts = 0, layered = 0;
   // THE TREE'S MINIMUM RAISE (stress-500 brief_D-001 / brief_I-003, 2026-10-05): a wager in the tree must raise by at
   // least the last raise's increment (a bet by 1bb), unless it is the seat's all-in — GTO Wizard offers nothing else.
   // A takeover of a dropped seat's INCOMPLETE all-in raise ("SB jams 15, UTG jams 22, CO calls 22" kept without
@@ -135,12 +135,22 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
         if (!actedSince.has(a.seat) && !allIn(a.seat)) emit(a.seat, "X");
         return;
       }
-      if (rel0 > treeLevel + 0.005 && rel0 < cap(a.seat) - layerAdd() - 0.005 && rel0 - treeLevel < lastInc - 0.005) {
+      // A CALL OF A DROPPED SEAT'S LEVEL AT OR BELOW HERO'S CHIPS (`layerTo`, stress-500 brief_B-002, 2026-10-05): not
+      // taken over — a takeover plays the caller LEADING that size and narrows his range by how often the tree leads
+      // it (hero's 288 combos fell to 0.5 at his own decision). The level goes into the pot as a layer for every kept
+      // seat passing it, hero included (his price unchanged), and the caller does in the tree what he did: call what
+      // the tree has, or check, or nothing. Above hero's chips (a level hero has not met) the takeover stands.
+      // (an ALL-IN call stays a takeover: layered, his whole stack would go to the pot and the tree would drop a seat
+      // that is still in the hand at showdown)
+      const layerCall = a.kind === "call" && to <= layerTo + 0.005 && to < (capOf(a.seat) ?? Infinity) - 0.005;
+      if (rel0 > treeLevel + 0.005 && (layerCall || (rel0 < cap(a.seat) - layerAdd() - 0.005 && rel0 - treeLevel < lastInc - 0.005))) {
         // no legal raise in the tree (an incomplete all-in raise taken over, or a raise its increment no longer
-        // reaches): he calls the tree's level, the rest into the starting pot
+        // reaches) — or a call that is not to become a lead (above): he calls the tree's level, the rest into the pot
         takeLayers();
         const amt = r(rel0 - treeLevel);
-        preload[a.seat] = r((preload[a.seat] ?? 0) + amt); shifts++;
+        const incomplete = rel0 < cap(a.seat) - layerAdd() - 0.005 && rel0 - treeLevel < lastInc - 0.005;
+        preload[a.seat] = r((preload[a.seat] ?? 0) + amt);
+        if (incomplete) shifts++; else layered++;
         layers.push({ at: to, amt, done: new Set([a.seat]) });
         // in the tree: a call of its level, a check when there is nothing to call and he has not acted this round
         if (mineT < treeLevel - 0.005) { emit(a.seat, "C"); treePut.set(a.seat, treeLevel); }
@@ -171,7 +181,7 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
     treePut.set(a.seat, rel);
     if (rel > treeLevel + 0.005) { lastInc = Math.max(lastInc, r(rel - treeLevel)); treeLevel = rel; actedSince = new Set([a.seat]); }
   });
-  return { toks: out, seats, tookOver, preload, cuts, shifts, closed: false, lostFold };
+  return { toks: out, seats, tookOver, preload, cuts, shifts, layered, closed: false, lostFold };
 }
 
 /**
@@ -284,7 +294,8 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     const c = contestedChips(sc.put, { contesting: [...kept], folded: sc.folded, capOf: a.behind, hero: a.heroPos });
     const deadBy: Record<string, number> = {};
     for (const s of a.seats) if (!kept.has(s.pos) && (c.bySeat.get(s.pos) ?? 0) > 0) deadBy[s.pos] = r2(c.bySeat.get(s.pos)!);
-    const fixed = replayKept(acts, toks, kept, a.behind, a.seats.map((s) => s.pos), startBase);
+    // hero's chips at his decision: a dropped level at or below them is a layer, never a takeover (brief_B-002)
+    const fixed = replayKept(acts, toks, kept, a.behind, a.seats.map((s) => s.pos), startBase, putOf(a.heroPos));
     if (fixed.lostFold) return;
     // HERO'S PRICE MUST BE THE TABLE'S (2026-10-05): an incomplete raise moved into the pot for some seats and not for
     // hero would show him a cheaper call — such a plan is not taken (the plan keeping the incomplete raiser plays it)
@@ -298,11 +309,12 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     // a seat kept although he folded (the fallback below): his line is walked, fold included — the tree is not heads-up
     const keptFolder = extra.some((p) => sc.folded.has(p));
     // heads-up IS the hand only when the line is the table's (review 5: an opening base or a cut rewrote it)
+    // (a layered call keeps the line the table's: the caller calls or checks there as he did — heads-up still)
     const headsUp = live.length === 1 && !keptFolder && startBase === 0 && !fixed.cuts && !fixed.shifts;
     const dropped = a.seats.filter((s) => !kept.has(s.pos)).map((s) =>
       `${sc.folded.has(s.pos) ? (putOf(s.pos) > 0 ? (headsUp ? "folded" : "dead") : "fold") : putOf(s.pos) > 0 ? "dead" : "ghost"}:${s.pos}`);
     plans.push({
-      kind: `${headsUp ? `heads-up: ${dropped.join(" + ")}` : dropped.join(" + ") || "exact"}${fixed.cuts ? " (street cut)" : ""}${fixed.shifts ? " (incomplete raise)" : ""}`, seats, heroIdx: seats.findIndex((s) => s.pos === a.heroPos),
+      kind: `${headsUp ? `heads-up: ${dropped.join(" + ")}` : dropped.join(" + ") || "exact"}${fixed.cuts ? " (street cut)" : ""}${fixed.shifts ? " (incomplete raise)" : ""}${fixed.layered ? " (called level in the pot)" : ""}`, seats, heroIdx: seats.findIndex((s) => s.pos === a.heroPos),
       streets: [fixed.toks.map((tok, i) => ({ tok, seat: fixed.seats[i]! }))],
       steps: dropped.length, ghostOnly: false,
       dead: r2(Object.values(deadBy).reduce((s, x) => s + x, 0)), deadBy, tookOver: fixed.tookOver, headsUp,

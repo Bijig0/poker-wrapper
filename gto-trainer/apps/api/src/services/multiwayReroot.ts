@@ -110,11 +110,12 @@ export function coverGroups(live: string[], hero: string, aggressors: Set<string
  * seat's raise reopened betting the group had closed).
  */
 export function takeoverStreets(a: Pick<RerootArgs, "ordered" | "heroPos" | "streets" | "streetSeats" | "flopPot" | "flopStack" | "behind" | "amounts">,
-    first: number, group: string[]): { streets: string[][]; seats: string[][]; dead: number; preload: Record<string, number> } | null {
+    first: number, group: string[]): { streets: string[][]; seats: string[][]; dead: number; preload: Record<string, number>; preloadBy: Record<string, number>[] } | null {
   const kept = new Set(group);
   const streets: string[][] = [], seats: string[][] = [];
   let dead = 0;
-  let preload: Record<string, number> = {};
+  const preload: Record<string, number> = {};
+  const preloadBy: Record<string, number>[] = [];
   for (let i = 0; i < first; i++) {
     const toks = a.streets[i]!, who = a.streetSeats[i]!;
     const unpriced: number[] = [];
@@ -122,18 +123,21 @@ export function takeoverStreets(a: Pick<RerootArgs, "ordered" | "heroPos" | "str
     if (unpriced.length) return null;
     const beh = moneyThrough(a, i).behind;
     const capOf = (p: string) => beh[p];
-    const r = replayKept(acts, toks, kept, capOf, a.ordered);
-    // a cut that moved chips puts them in the pot the walk STARTS with — only the walk's first street can take it (a
-    // check-around cut moves none and walks on any street — review 3)
-    const moved = Object.keys(r.preload).length > 0;
-    if (moved && i > 0) return null;
-    if (moved) preload = r.preload;
+    // an earlier street is complete and hero matched its last level: every dropped level a kept seat called is at or
+    // below hero's chips — a layer, never a takeover (stress-500 brief_H-002: hero's turn call rewritten as a lead
+    // took his river range from 5.38 combos to 1.29)
+    const heroOn = streetChips(acts, capOf).put.get(a.heroPos) ?? 0;
+    const r = replayKept(acts, toks, kept, capOf, a.ordered, 0, heroOn);
+    // chips moved to the pot (a cut, a layer) go into the pot the walk STARTS with, off the seat's stack — on a later
+    // street too (the pots of the streets before it run high by them; the walk only narrows ranges)
+    for (const [p, x] of Object.entries(r.preload)) preload[p] = Math.round(((preload[p] ?? 0) + x) * 100) / 100;
+    preloadBy.push(r.preload);
     const sc = streetChips(acts, capOf);
     const c = contestedChips(sc.put, { contesting: [...kept].filter((p) => !sc.folded.has(p)), folded: sc.folded, capOf, hero: a.heroPos });
     for (const [p, x] of c.bySeat) if (!kept.has(p)) dead += x;
     streets.push(r.toks); seats.push(r.seats);
   }
-  return { streets, seats, dead: Math.round(dead * 100) / 100, preload };
+  return { streets, seats, dead: Math.round(dead * 100) / 100, preload, preloadBy };
 }
 
 /** The fewest groups of hero + up to two live seats, each walkable by the takeover, that hold every villain in
@@ -151,7 +155,11 @@ export function takeoverCover(a: Pick<RerootArgs, "ordered" | "heroPos" | "stree
     const t = takeoverStreets(a, first, g);
     if (!t) return false;
     const k = a.ordered.filter((p) => g.includes(p));
-    return walkPlays(a.ordered, k, t.streets, t.seats, (i) => (p) => { const c = capAt(i)(p); return c == null ? c : c - (i === 0 ? t.preload[p] ?? 0 : 0); }) == null;
+    // each street's stack in the walk: the table's less every chip moved to the starting pot on that street or later
+    return walkPlays(a.ordered, k, t.streets, t.seats, (i) => (p) => {
+      const c = capAt(i)(p);
+      return c == null ? c : c - t.preloadBy.slice(i).reduce((s2, x) => s2 + (x[p] ?? 0), 0);
+    }) == null;
   })
     .sort((x, y) => y.filter((p) => aggressors.has(p)).length - x.filter((p) => aggressors.has(p)).length);
   // the seats whose ranges the current street needs: a seat that folded on it is dead money there, not a range

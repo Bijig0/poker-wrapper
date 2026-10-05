@@ -42,10 +42,13 @@ describe("planDeadMoney", () => {
     expect(plans[0]!.headsUp).toBe(true);
     expect(plans[0]!.seats.map((s) => s.pos)).toEqual(["HJ", "CO"]);
     expect(plans[0]!.dead).toBe(4);
-    expect(plans[0]!.kind).toBe("heads-up: folded:SB + fold:BB");
-    // hero's 4 stays his: the table has hero 4 in facing 14 (10 to call) — so does the tree
-    expect(plans[0]!.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:R4", "CO:R14"]);
-    expect(plans[0]!.tookOver).toEqual(["HJ"]);
+    expect(plans[0]!.kind).toBe("heads-up: folded:SB + fold:BB (called level in the pot)");
+    // hero CALLED the SB's 4 — he never led (stress-500 brief_B-002: as a lead his range was cut to the tree's betting
+    // frequency): the 4 is in the pot for hero and the CO alike, hero checks, the CO's raise to 14 is a bet of 10 —
+    // hero faces 10, the table's 14 - 4
+    expect(plans[0]!.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:X", "CO:R10"]);
+    expect(plans[0]!.preload).toEqual({ HJ: 4, CO: 4 });
+    expect(plans[0]!.tookOver).toEqual([]);
     expect(pickDeadMoney(plans)!.why).toMatch(/^HEADS-UP/);
   });
 
@@ -60,10 +63,11 @@ describe("planDeadMoney", () => {
     // tree's street restarts at the SB's raise: hero's call of it is hero's wager of 8 more, the BTN raises 26 more
     const keepCo = plans.find((p) => p.seats.some((s) => s.pos === "CO"))!;
     expect(keepCo.cuts).toBe(1);
-    expect(keepCo.preload).toEqual({ HJ: 4, CO: 4, BTN: 4 });
+    // hero's and the CO's calls of the SB's 12 are a layer (never hero's lead); the BTN's raise over the closed round
+    // cuts it: 12 each into the pot, hero and the CO check, the BTN bets 18 — hero faces the table's 30 - 12
+    expect(keepCo.preload).toEqual({ HJ: 12, CO: 12, BTN: 12 });
     expect(keepCo.dead).toBe(30);
-    expect(keepCo.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:R8", "CO:C", "BTN:R26"]);
-    // the price: hero faces 26 - 8 = 18 = the table's 30 - 12
+    expect(keepCo.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:X", "CO:X", "BTN:R18"]);
   });
 
   test("a line that does not end on hero gives no plan (the walk is checked)", () => {
@@ -140,6 +144,17 @@ describe("planDeadMoney", () => {
     expect(r2.plans.length).toBeGreaterThan(0);
   });
 
+  test("stress-500 brief_B-002: hero CALLED a dropped raise — he checks in the tree, he never leads it", () => {
+    // SB bets 4, BB raises 12, hero (HJ) calls 12, CO 3-bets 36, SB and BB fold → hero
+    const { plans } = planDeadMoney({ seats: seatsOf("SB", "BB", "HJ", "CO"), heroPos: "HJ", street: line("SB:R4 BB:R12 HJ:C CO:R36 SB:F BB:F"), behind: () => 100 });
+    expect(plans).toHaveLength(1);
+    const p = plans[0]!;
+    expect(p.headsUp).toBe(true);
+    expect(p.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:X", "CO:R24"]);   // was HJ:R12 CO:R36 (a lead)
+    expect(p.preload).toEqual({ HJ: 12, CO: 12 });
+    expect(p.dead).toBe(16);
+  });
+
   test("the takeover keeps a kept seat's price: a caller of a dropped bet bets it in the tree", () => {
     // UTG bets 3, hero (HJ) calls, CO raises to 10, UTG calls; the BTN is still to act — hero faces 7 more
     const { plans } = planDeadMoney({ seats: seatsOf("UTG", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("UTG:R3 HJ:C CO:R10 BTN:F UTG:C"), behind: () => 100 });
@@ -178,7 +193,9 @@ describe("review 2026-10-05 probes", () => {
     const { plans } = planDeadMoney({ seats: seatsOf("SB", "BB", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("SB:R5 BB:F HJ:C CO:R15 BTN:C SB:C"), behind: () => 100 });
     const keepBtn = plans.find((p) => p.seats.some((s) => s.pos === "BTN"))!;
     expect(keepBtn.dead).toBe(15);
-    expect(keepBtn.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:R5", "CO:R15", "BTN:C"]);
+    // hero called the SB's 5: a layer (5 into the pot for hero, the CO and the BTN), hero checks, the CO bets 10
+    expect(keepBtn.preload).toEqual({ HJ: 5, CO: 5, BTN: 5 });
+    expect(keepBtn.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:X", "CO:R10", "BTN:C"]);
   });
   test("a kept short all-in does not turn a later raise into a call", () => {
     const b: Record<string, number> = { SB: 100, BB: 100, HJ: 100, CO: 100, BTN: 10 };
