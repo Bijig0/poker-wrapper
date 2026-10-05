@@ -151,13 +151,15 @@ describe("coldCallLockTarget: which cold-caller, if any", () => {
     const combos = (key: string) => C.coldCallWeights(key as any).reduce((t, x) => t + x, 0);
     expect(combos("coldcall3b_BB_jam_covers_40p")).toBeLessThan(20);           // was 56 pooled (the cutoff study's 60bb jam)
   });
-  it("THE TRIGGER (cutoff study 2026-10-05): the larger of 1% and a third of the pool's rate, a jam 1%; COLD_CALL_LOCK_RATIO=off is the flat 1%", () => {
+  it("THE TRIGGER (cutoff study 2026-10-05): the larger of 1% and a third of the pool's rate, the pooled jam range 1%; COLD_CALL_LOCK_RATIO=off is the flat 1%", () => {
     expect(C.coldCallLockBelow("coldcall3b_BB_80p_large")).toBe(0.01);                       // pool 1.88% / 3 → 1%
     expect(C.coldCallLockBelow("coldcall3b_BB_80p_small")).toBeCloseTo(0.0644 / 3, 4);         // 2.15%
     expect(C.coldCallLockBelow("coldcall3b_BB_40_80_large")).toBeCloseTo(0.067 / 3, 4);        // 2.23%
     expect(C.coldCallLockBelow("coldcall3b_BB_jam")).toBe(0.01);                                // a jam: the flat 1% (4.23% / 3 = 1.41% not used)
-    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covered_le10")).toBe(0.01);                    // by depth too (36% / 3 not used)
-    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covers_le10")).toBe(0.01);
+    // a jam by side x depth takes the rule (2026-10-06): the 9.5bb BB flatting a 3-bet to 9, GTO 3.53%, pool 36.5% → locks
+    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covered_le10")).toBeCloseTo(0.3649 / 3, 3);
+    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covered_le10")).toBeGreaterThan(0.0353);
+    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covers_40p")).toBe(0.01);                      // pool 1.04% / 3 → 1%
     process.env.COLD_CALL_LOCK_RATIO = "2";
     expect(C.coldCallLockBelow("coldcall3b_BB_80p_mid")).toBeCloseTo(0.0214 / 2, 4);
     process.env.COLD_CALL_LOCK_RATIO = "off";

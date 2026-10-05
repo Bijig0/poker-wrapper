@@ -52,11 +52,14 @@
  * hand at the node, whichever range is right), and that range pools the calls of jams of every depth — mostly short
  * shoves — so its cutoff is not raised until it is split by the jam's size. COLD_CALL_LOCK_RATIO (default 3; off = the
  * flat 1% alone) is read at every decision.
- * The depth split (2026-10-06) KEEPS the jams' flat 1%: on the two jam spots measured the depth ranges now sit near
- * GTO's own call (13.4bb jam: pool 2.96%, GTO 4.20%; 60bb jam: pool 1.04%, GTO 1.65% — so neither locks under either
- * rule), and the covering side's cells would trigger at 1-2.6% under the ratio, about the same; the cells where the
- * ratio WOULD matter are the covered short caller's (pool 5-36%: a trigger of 1.6-12%), and no GTO Wizard spot has
- * measured what locking there does to hero.
+ * Since the depth split (2026-10-06) a jam's SIDE x DEPTH range takes the same rule; only the pooled `_jam` fallback keeps
+ * the flat 1% (it still pools every depth). Measured (cutoff study, 24 + earlier requests): on the covering side the
+ * depth ranges sit near GTO's own call (13.4bb shove: pool 2.96%, GTO 4.20%; 60bb: 1.04% vs 1.65% — no lock under
+ * either rule; its triggers are 1-2.6%). On the covered side GTO's call is ~0% for a 15bb BB flatting a 3-bet to 9
+ * (pool 8.7%) and a 25bb BB flatting 11 (pool 4.9%) — a lock under either rule — and 3.53% for a 9.5bb BB flatting 9
+ * (pool 36.5%): the one place the rule decides. There GTO's "call" is a near-indifferent sliver beside shoving the last
+ * 0.5bb, while the pool continues with 36% (127 BB calls, 96% seen at showdown); a flat 1% would leave him 47 combos of a
+ * 484-combo range, so the ratio's lock (under 12.2%) is the honest one.
  *
  * THE SWITCH, COLD_CALL_POOL in the environment, read at every decision: on (unset) = the lock and the floor; floor = the
  * floor only; off = neither. Unlimped pots only (the ranges were measured there; an iso over limpers is another node).
@@ -82,11 +85,11 @@ export const coldCallLockRatio = (): number => {
   return Number.isFinite(v) && v > 0 ? v : 0;
 };
 /** The lock's trigger for this range: the tree's call share under the larger of 1% and the pool's rate / the ratio.
- *  A jam's range — pooled or by side and depth — keeps the flat 1% (the header: measured on two jam spots only, and
- *  where the ratio would raise it, the covered short caller, not at all). */
+ *  The pooled jam range (every depth in one, the fallback when the stacks do not say) keeps the flat 1%; a jam's side x
+ *  depth range takes the rule like any other (the header). */
 export const coldCallLockBelow = (key: ColdCallKey): number => {
   const k = coldCallLockRatio();
-  if (LOCKS.ranges[key].size === "jam") return COLD_CALL_LOCK_BELOW;
+  if (key.endsWith("_jam")) return COLD_CALL_LOCK_BELOW;
   return Math.max(COLD_CALL_LOCK_BELOW, k > 0 ? LOCKS.ranges[key].freq / k : 0);
 };
 /** a cold-caller reaching the flop with under this many combos (1% of hands) gets the pool's range */
