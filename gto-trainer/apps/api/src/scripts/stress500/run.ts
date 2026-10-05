@@ -31,6 +31,9 @@ const HOUR_CAP = Number(arg("hour-cap") ?? 500);
  *  at 6,589 requests in its trailing 24 h (952 in the last hour: the hourly cap never fired). Every origin counts —
  *  live play included — so the run waits while the account's 24 h total is at or past this. */
 const DAY_CAP = Number(arg("day-cap") ?? 3000);
+/** --gap S: at least S seconds between the starts of two decisions (Brady 2026-10-05: "pace at like 1 per minute") */
+const GAP_MS = Number(arg("gap") ?? 0) * 1000;
+let lastDecisionAt = 0;
 const ONLY = arg("only")?.split(",").filter(Boolean) ?? null;
 const FAMS = arg("families")?.split(",").filter(Boolean) ?? null;
 const LIMIT = Number(arg("limit") ?? 1e9);
@@ -238,7 +241,9 @@ for (const sc of todo) {
     for (let i = 0; i < hand.actions.length; i++) {
       const a = hand.actions[i]!;
       if (!a.hero || /^post/.test(a.type)) continue;
+      if (GAP_MS > 0) { const wait = lastDecisionAt + GAP_MS - Date.now(); if (wait > 0) await Bun.sleep(wait); }
       await gate();
+      lastDecisionAt = Date.now();
       const cut = withStartStacks(truncateAt(hand, i));
       // UNKNOWN DEALT STACKS (brief_I): the cut keeps the stacks behind at this point, the answer is not told the dealt ones
       if ((sc.raw as any)?.dropStartStacks) delete (cut as any).startStacks;
