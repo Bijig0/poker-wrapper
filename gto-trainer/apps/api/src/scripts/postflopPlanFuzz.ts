@@ -41,7 +41,10 @@ function genSpot(): Spot | null {
     const toks: string[] = [], who: string[] = [], am: (number | null)[] = [];
     streets.push(toks); streetSeats.push(who); amounts.push(am);
     const put: Record<string, number> = {};
-    let level = 0;
+    let level = 0, lastIncG = 1;
+    // REAL NO-LIMIT: an all-in short of a full raise does not reopen the betting — a seat that has acted since the last
+    // FULL raise may only call or fold (review 4: the generator wrote re-raises the table would never allow)
+    let actedSinceFull = new Set<string>();
     const active = () => seats.filter((p) => !folded.has(p) && !allIn.has(p));
     if (active().length < 2) return null;
     // the round: walk the order until everyone still active has acted since the last wager and matched it
@@ -74,13 +77,16 @@ function genSpot(): Spot | null {
           if (size >= room - 0.005) { tok = "RAI"; to = mine + room; amount = r2(to); } else { tok = `R${r2(mine + size)}`; to = mine + size; }
         }
       } else if (roll < 0.35) tok = "F";
-      else if (roll < 0.8 || facing >= room - 0.005) {
+      else if (roll < 0.8 || facing >= room - 0.005 || actedSinceFull.has(p)) {
         // a call that takes the last chip: the capture writes it as C or (Ignition's all-in button) as RAI
         if (facing >= room - 0.005) { to = mine + room; if (rnd() < 0.5) { tok = "RAI"; amount = r2(to); } else tok = "C"; } else { tok = "C"; to = level; }
       } else {
-        const raiseTo = r2(level + Math.max(facing, pot * pick([0.5, 0.75, 1])));
+        // a third of the raises are MIN-raises (review 4: the generator almost never made one) — the last increment
+        const raiseTo = rnd() < 0.33 ? r2(level + Math.max(lastIncG, 1)) : r2(level + Math.max(facing, pot * pick([0.5, 0.75, 1])));
         if (raiseTo - mine >= room - 0.005) { tok = "RAI"; to = mine + room; amount = r2(to); } else { tok = `R${raiseTo}`; to = raiseTo; }
       }
+      if (tok !== "F" && tok !== "X" && to - level > 0.005 && to - level >= lastIncG - 0.005) { lastIncG = r2(to - level); actedSinceFull = new Set(); }
+      actedSinceFull.add(p);
       if (tok === "F") folded.add(p);
       else {
         const paid = r2(to - mine);
@@ -105,7 +111,7 @@ type Verdict = { ok: true; how: string } | { ok: false; why: string };
 function checkStreetCloses(order: string[], kept: string[], toks: string[], who: string[], behind: (p: string) => number | undefined, pre: Record<string, number>): string | null {
   const seats = order.filter((p) => kept.includes(p));
   const cap = (p: string) => (behind(p) ?? Infinity) - (pre[p] ?? 0);
-  const put: Record<string, number> = {}; let level = 0;
+  const put: Record<string, number> = {}; let level = 0, lastInc = 1;
   const out = new Set<string>(), allin = new Set<string>(seats.filter((p) => cap(p) <= 0.005));
   let acted = new Set<string>(), at = 0;
   const nextFrom = (i: number) => { for (let k = 0; k < seats.length; k++) { const p = seats[(i + k) % seats.length]!; if (!out.has(p) && !allin.has(p)) return { p, i: (i + k) % seats.length }; } return null; };
@@ -121,8 +127,9 @@ function checkStreetCloses(order: string[], kept: string[], toks: string[], who:
     else if (t === "X") { if (level > mine + 0.005) return `${p} checks facing a bet`; }
     else {
       const to = t === "C" ? Math.min(level, cap(p)) : t === "RAI" ? cap(p) : Math.min(parseFloat(t.slice(1)), cap(p));
+      if (t !== "C" && to > level + 0.005 && to < cap(p) - 0.005 && to - level < lastInc - 0.005) return `${p}:${t} raises by less than the minimum ${lastInc}`;
       put[p] = to;
-      if (to > level + 0.005) { level = to; acted = new Set(); }
+      if (to > level + 0.005) { if (to - level >= lastInc - 0.005) lastInc = to - level; level = to; acted = new Set(); }
       if (to >= cap(p) - 0.005) allin.add(p);
     }
     acted.add(p); at = nx.i + 1;
@@ -160,7 +167,7 @@ function checkPlan(order: string[], hero: string, plan: { seats: { pos: string }
   const capT = (p: string) => capOf(p) - (pre[p] ?? 0);
   const seats = order.filter((p) => plan.seats.some((x) => x.pos === p));
   const st = plan.streets[plan.streets.length - 1]!;
-  const put: Record<string, number> = {}; let level = 0;
+  const put: Record<string, number> = {}; let level = 0, lastInc = 1;
   const out = new Set<string>(), allin = new Set<string>();
   let acted = new Set<string>();
   let at = 0;
@@ -178,10 +185,12 @@ function checkPlan(order: string[], hero: string, plan: { seats: { pos: string }
     else if (t.tok === "X") { if (level > mine + 0.005) return `tree: ${t.seat} checks facing ${level - mine}`; }
     else {
       let to = t.tok === "C" ? Math.min(level, capT(t.seat)) : t.tok === "RAI" ? capT(t.seat) : Math.min(parseFloat(t.tok.slice(1)), capT(t.seat));
-      if (t.tok === "RAI") { const j2 = table.findIndex((x, k) => x.seat === t.seat && x.tok === "RAI"); if (j2 >= 0 && amounts?.[j2] != null) to = amounts[j2]!; }
+      // an all-in in the tree is the seat's whole TREE stack: the table's amount less what a cut put in the pot for him
+      if (t.tok === "RAI") { const j2 = table.findIndex((x) => x.seat === t.seat && x.tok === "RAI"); if (j2 >= 0 && amounts?.[j2] != null) to = Math.min(amounts[j2]! - (pre[t.seat] ?? 0), capT(t.seat)); }
       if (t.tok !== "C" && to <= level + 0.005 && to < capT(t.seat) - 0.005) return `tree: ${t.seat}:${t.tok} is no raise over ${level}`;
+      if (t.tok !== "C" && to > level + 0.005 && to < capT(t.seat) - 0.005 && to - level < lastInc - 0.005) return `tree: ${t.seat}:${t.tok} raises by less than the minimum ${lastInc}`;
       put[t.seat] = to;
-      if (to > level + 0.005) { level = to; acted = new Set(); }
+      if (to > level + 0.005) { if (to - level >= lastInc - 0.005) lastInc = to - level; level = to; acted = new Set(); }
       if (to >= capT(t.seat) - 0.005) allin.add(t.seat);
     }
     acted.add(t.seat);

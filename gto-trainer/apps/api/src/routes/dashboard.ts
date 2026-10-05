@@ -1217,6 +1217,13 @@ export const doneIgnitionHandsAfter = (afterRowid: number): Enriched[] =>
     .map(enrichSync)
     .filter((e): e is Enriched => !!e && isIgnitionHandId(e.clientHandId));
 
+/** The same hands' client ids only — no row data read, nothing enriched (the checker's queue: it enriches just the hands
+ *  it has not checked yet; enriching all of them every 10 s froze the API at 3,350 hands, 2026-10-05). */
+export const doneIgnitionHandIdsAfter = (afterRowid: number): string[] =>
+  (openDb()?.query<{ c: string | null }, [number]>(`SELECT client_hand_id AS c FROM hands WHERE rowid > ? AND ${FINISHED} ORDER BY rowid`).all(afterRowid) ?? [])
+    .map((r) => r.c)
+    .filter((c): c is string => !!c && isIgnitionHandId(c));
+
 /** The newest row id (0 for an empty or missing archive) — the checker's one-time "from here on" cutoff. */
 export const lastArchivedRowid = (): number =>
   openDb()?.query<{ m: number | null }, []>("SELECT MAX(rowid) AS m FROM hands").get()?.m ?? 0;

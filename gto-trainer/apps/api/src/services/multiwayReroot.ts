@@ -23,7 +23,8 @@ import { handFacts } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { contestedChips, effectiveStack, moneyEntering, moneyState, streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses, pickCollapses, type Picked, type SeatTok } from "./multiwayCollapse";
-import { pickDeadMoney, planDeadMoney, replayKept } from "./deadMoneyCollapse";
+import { pickDeadMoney, planDeadMoney, replayKept, walkPlays } from "./deadMoneyCollapse";
+export { walkPlays };
 
 type SeatSpec = Pick<AiChainSpec, "oopPos" | "ipPos" | "oopRange" | "ipRange" | "midPos" | "midRange" | "heroSeat">;
 
@@ -144,7 +145,14 @@ export function takeoverCover(a: Pick<RerootArgs, "ordered" | "heroPos" | "stree
   const cands: string[][] = [];
   if (villains.length <= 2) cands.push([a.heroPos, ...villains]);
   else for (let i = 0; i < villains.length; i++) for (let j = i + 1; j < villains.length; j++) cands.push([a.heroPos, villains[i]!, villains[j]!]);
-  const ok = cands.filter((g) => takeoverStreets(a, first, g) != null)
+  // walkable: the takeover replays it, and the tree can play what it replays (walkPlays: rotation, minimum raises, closed)
+  const capAt = (i: number) => { const b = moneyThrough(a, i).behind; return (p: string) => b[p]; };
+  const ok = cands.filter((g) => {
+    const t = takeoverStreets(a, first, g);
+    if (!t) return false;
+    const k = a.ordered.filter((p) => g.includes(p));
+    return walkPlays(a.ordered, k, t.streets, t.seats, (i) => (p) => { const c = capAt(i)(p); return c == null ? c : c - (i === 0 ? t.preload[p] ?? 0 : 0); }) == null;
+  })
     .sort((x, y) => y.filter((p) => aggressors.has(p)).length - x.filter((p) => aggressors.has(p)).length);
   // the seats whose ranges the current street needs: a seat that folded on it is dead money there, not a range
   const need = new Set(needed ?? villains), out: string[][] = [];
@@ -177,50 +185,6 @@ export function legacyStreets(a: Pick<RerootArgs, "streets" | "streetSeats">, fi
     streets.push(fixed.toks); seats.push(fixed.seats);
   }
   return { streets, seats, leftOut: [...leftOut] };
-}
-
-/**
- * CAN THE WALK PLAY THESE STREETS (2026-10-05, stress-500 brief_D-001): every street legal in the rotation of the
- * walk's seats — each token by the seat whose turn it is, no check facing a bet, no raise under the level — and CLOSED
- * at its end; a seat all in stays out of later streets. `capAt(i)` = each seat's stack entering street i. The reason
- * when not, else null. (A coverGroups walk whose dropped seats were ALL IN on an earlier street — "HJ jams 9.18, BTN
- * calls, SB raises 28.33…" without HJ and SB — loses the levels the kept seats called, and its street closed early:
- * "street closed but more actions follow" on a hand that is fine.)
- */
-export function walkPlays(order: readonly string[], keep: readonly string[], streets: string[][], seats: string[][],
-    capAt: (i: number) => (p: string) => number | null | undefined): string | null {
-  const rot = order.filter((p) => keep.includes(p));
-  const out = new Set<string>(), allIn = new Set<string>();
-  for (let i = 0; i < streets.length; i++) {
-    const cap = (p: string) => capAt(i)(p) ?? Infinity;
-    const put: Record<string, number> = {};
-    let level = 0, acted = new Set<string>(), at = 0;
-    const next = (k0: number) => { for (let k = 0; k < rot.length; k++) { const p = rot[(k0 + k) % rot.length]!; if (!out.has(p) && !allIn.has(p)) return { p, k: (k0 + k) % rot.length }; } return null; };
-    const live = () => rot.filter((p) => !out.has(p) && !allIn.has(p));
-    const closed = () => live().every((p) => acted.has(p) && (put[p] ?? 0) >= level - 0.005);
-    const toks = streets[i]!, who = seats[i]!;
-    for (let j = 0; j < toks.length; j++) {
-      const t = toks[j]!, p = who[j]!;
-      if (j > 0 && closed()) return `street ${i}: closed before ${p}:${t}`;
-      const nx = next(at);
-      if (!nx || nx.p !== p) return `street ${i}: ${p}:${t} out of turn (${nx?.p ?? "nobody"} to act)`;
-      const mine = put[p] ?? 0;
-      if (t === "F") out.add(p);
-      else if (t === "X") { if (level > mine + 0.005) return `street ${i}: ${p} checks facing a bet`; }
-      else {
-        // cap(p) = his stack entering the street = all he can have in on it
-        const to = t === "C" ? Math.min(level, cap(p)) : t === "RAI" ? cap(p) : Math.min(parseFloat(t.slice(1)), cap(p));
-        if (t !== "C" && to <= level + 0.005 && to < cap(p) - 0.005) return `street ${i}: ${p}:${t} is no raise over ${level}`;
-        if (to < mine - 0.005) return `street ${i}: ${p}:${t} takes chips back`;
-        put[p] = to;
-        if (to > level + 0.005) { level = to; acted = new Set(); }
-        if (to >= cap(p) - 0.005) allIn.add(p);
-      }
-      acted.add(p); at = nx.k + 1;
-    }
-    if (rot.filter((p) => !out.has(p)).length >= 2 && live().length >= 1 && !closed()) return `street ${i}: does not close`;
-  }
-  return null;
 }
 
 /**

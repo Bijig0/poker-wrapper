@@ -76,6 +76,25 @@ describe("tick", () => {
     expect(deps.store.get("4920544353")).toMatchObject({ status: "match", dbId: 6 });
   });
 
+  test("with the ids pass only the unchecked hands are read in full (2026-10-05: enriching every checked hand each tick froze the API)", async () => {
+    const checked = enriched(6, faithful4920544353);
+    const fresh = { ...enriched(8, faithful4920544353), clientHandId: "4920544355" };
+    const hands: Enriched[] = [checked, fresh];
+    const reads: string[] = [];
+    const deps: CheckerDeps = {
+      ...depsFor(hands, found),
+      findArchived: (id) => { reads.push(id); return hands.findLast((h) => h.clientHandId === id) ?? null; },
+      doneAfter: () => { throw new Error("the full pass must not run when the ids pass is given"); },
+      doneIdsAfter: (rowid: number) => hands.filter((h) => h.dbId > rowid).map((h) => h.clientHandId!),
+    };
+    await tick(deps);                                              // sets the cutoff at 5
+    deps.store.save({ ...freshCheck(checked, T0), status: "match", nextAt: null, checkedAt: T0 });   // row 6 already checked
+    await tick(deps);
+    // row 6 is never read again; row 8 is read to queue it, then again by its attempt
+    expect(reads.filter((id) => id === "4920544353")).toEqual([]);
+    expect(deps.store.get("4920544355")).toMatchObject({ status: "match", dbId: 8 });
+  });
+
   test("a record Ignition does not have yet stays pending for the next try", async () => {
     const deps = depsFor([enriched(6, faithful4920544353)], { ok: false, reason: "not-found", error: "no hand history" });
     await tick(deps);
