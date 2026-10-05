@@ -2166,8 +2166,15 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   for (const [handPos, apiPos] of Object.entries(shape.apiOf)) handPosOf[apiPos] = handPos;
   const ranges: Record<string, Record<string, number>> = {};
   const folded = new Set<string>();
+  const heroApi = String(shape.heroApiPos ?? "").toUpperCase();
   for (const p of live) {
-    const fit = await fitAiLine(sol.solId, tokens, shape, [p]);
+    // HERO AMONG THE LIMPERS (2026-10-05, stress-500 po_4way-002): every fit keeps hero's actions, and when hero is
+    // himself a non-SB limper a line that keeps both his limp and another limper's is one the tree cannot hold (GTO
+    // Wizard holds one) — that seat's fit failed and the whole flop went unanswered. Another seat's range is then read
+    // on a line that folds hero's limp instead: a limper before hero limped exactly so; one behind him is read as
+    // every fitted seat is, with the earliest other limper gone. Hero's own range always keeps hero's line.
+    const fit = (await fitAiLine(sol.solId, tokens, shape, [p]))
+      ?? (p.toUpperCase() !== heroApi ? await fitAiLine(sol.solId, tokens, shape, [p], 4, false) : null);
     if (!fit) return viaReduced(first.reason);
     fit.folds.forEach((f) => folded.add(f));
     const r = await walkArrivalRanges(shape, fit.tokens, get, 6);
