@@ -75,7 +75,7 @@ describe("the soft range after an off-tree villain action", () => {
     const turnIn = s.trees.find((t) => t.startingStreet === "TURN")!.oopRange as number[];
     expect(turnIn[0]).toBeCloseTo(1, 9);                         // the bet is this hand's best action: kept whole
     expect(turnIn[100]).toBeCloseTo(Math.exp(-1 / 1), 9);       // gap 1bb, T = 10% of the 10bb pot
-    const flopNode = r.trace.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!;
+    const flopNode = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!;
     expect(flopNode.offTree?.soft?.applied).toBe(true);
     expect(flopNode.offTree!.soft!.qreCombos).toBeCloseTo(N * 0.001, 6);
     expect(flopNode.offTree!.soft!.softCombos!).toBeGreaterThan(50);
@@ -88,7 +88,7 @@ describe("the soft range after an off-tree villain action", () => {
     expect(r.ok).toBe(true);
     const turnIn = s.trees.find((t) => t.startingStreet === "TURN")!.oopRange as number[];
     expect(turnIn[100]).toBeCloseTo(0.001, 9);
-    const soft = r.trace.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree!.soft!;
+    const soft = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree!.soft!;
     expect([soft.mode, soft.applied, soft.softCombos! > 50]).toEqual(["log", false, true]);
   });
 
@@ -98,7 +98,7 @@ describe("the soft range after an off-tree villain action", () => {
     const r = await solveAiChain({ ...base, streets: [["R5", "C"], ["X"]] });
     expect(r.ok).toBe(true);
     expect((s.trees.find((t) => t.startingStreet === "TURN")!.oopRange as number[])[100]).toBeCloseTo(0.001, 9);
-    expect(r.trace.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree?.soft).toBeUndefined();
+    expect(r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree?.soft).toBeUndefined();
   });
 
   it("OFFTREE_LOCK=on: hero answers on the same street — villain's node is locked and hero's node read on the child", async () => {
@@ -110,9 +110,9 @@ describe("the soft range after an off-tree villain action", () => {
     expect(s.locks[0].parent).toBe("sol-FLOP");
     expect(s.locks[0].lock.action_history).toEqual(["", ""]);  // preflop, then the flop's line before the bet (root)
     expect(s.locks[0].lock.strategy[1].strategy[100]).toBeCloseTo(Math.exp(-1), 9);
-    const hero = r.trace.nodes.find((n) => n.heroNode)!;
+    const hero = r.trace!.nodes.find((n) => n.heroNode)!;
     expect(hero.codes).toEqual(["R5"]);
-    expect(r.trace.nodes.find((n) => n.codes.length === 0)!.offTree!.soft!.lock).toEqual({ ok: true, solId: "sol-FLOP-locked" });
+    expect(r.trace!.nodes.find((n) => n.codes.length === 0)!.offTree!.soft!.lock).toEqual({ ok: true, solId: "sol-FLOP-locked" });
   });
 
   it("OFFTREE_LOCK unset: no lock, hero's node read on the street's own tree", async () => {
