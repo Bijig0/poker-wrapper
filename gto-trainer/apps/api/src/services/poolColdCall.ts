@@ -27,6 +27,16 @@
  * other range (they were 21% of the old under-40bb buckets' calls). coldCallKey picks the most specific range built:
  * seat+stack+size, seat+stack, seat+size, seat. Edges and the jam share come from the JSON (size_edges, jam_commit).
  *
+ * JAMS BY SIDE AND DEPTH (2026-10-06, poker locks_v2/coldcall3b_jamdepth_report.txt): the one `_jam` range per seat
+ * pooled jams of every depth — mostly calls of short ones — so a deep jam's caller held ~4x the combos the pool calls
+ * it with. A jam is now read by WHO IS SHORT and the EFFECTIVE STACK (caller vs 3-bettor, as dealt): `covers` — the
+ * caller covers the 3-bettor and calls his shove: 5.9% under 10bb, 2.75% at 10-20, 1.9% at 20-40, 1.0% at 40bb+, the
+ * premiums going from 10% to 53% of the calls; `covered` — the 3-bettor covers the caller, whom the 3-bet commits:
+ * 33% / 7.8% / 4.8% / 6.6%, junk-heavy (a short stack getting a price). The 3-bettor's seat, the table size and the
+ * stake move it far less. Key `coldcall3b_<seat>_jam_<side>_<depth>` (depth le10 / 10_20 / 20_40 / 40p, edges from the
+ * JSON's jam_depth_edges), every seat built (its own rate with 50+ calls — the BB's and the SB's short cells — else all
+ * seats'; the shape all seats'), the pooled `_jam` kept for a line whose stacks are unknown.
+ *
  * THE TRIGGER (cutoff study 2026-10-05, scripts/coldCallCutoffStudy.ts): the lock stands when the exact tree's call is
  * under coldCallLockBelow(key) = the larger of 1% and a third of the pool's own rate for the range picked ("the pool
  * cold-calls at least 3x as often as the tree here"). Deep mid/large 3-bets (pool 1.2-2.2%) keep the flat 1%; a deep
@@ -42,6 +52,11 @@
  * hand at the node, whichever range is right), and that range pools the calls of jams of every depth — mostly short
  * shoves — so its cutoff is not raised until it is split by the jam's size. COLD_CALL_LOCK_RATIO (default 3; off = the
  * flat 1% alone) is read at every decision.
+ * The depth split (2026-10-06) KEEPS the jams' flat 1%: on the two jam spots measured the depth ranges now sit near
+ * GTO's own call (13.4bb jam: pool 2.96%, GTO 4.20%; 60bb jam: pool 1.04%, GTO 1.65% — so neither locks under either
+ * rule), and the covering side's cells would trigger at 1-2.6% under the ratio, about the same; the cells where the
+ * ratio WOULD matter are the covered short caller's (pool 5-36%: a trigger of 1.6-12%), and no GTO Wizard spot has
+ * measured what locking there does to hero.
  *
  * THE SWITCH, COLD_CALL_POOL in the environment, read at every decision: on (unset) = the lock and the floor; floor = the
  * floor only; off = neither. Unlimped pots only (the ranges were measured there; an iso over limpers is another node).
@@ -67,11 +82,11 @@ export const coldCallLockRatio = (): number => {
   return Number.isFinite(v) && v > 0 ? v : 0;
 };
 /** The lock's trigger for this range: the tree's call share under the larger of 1% and the pool's rate / the ratio.
- *  A jam's range keeps the flat 1% (the header: the one place the lock moves hero a lot, on a range pooled over jams of
- *  every depth). */
+ *  A jam's range — pooled or by side and depth — keeps the flat 1% (the header: measured on two jam spots only, and
+ *  where the ratio would raise it, the covered short caller, not at all). */
 export const coldCallLockBelow = (key: ColdCallKey): number => {
   const k = coldCallLockRatio();
-  if (key.endsWith("_jam")) return COLD_CALL_LOCK_BELOW;
+  if (LOCKS.ranges[key].size === "jam") return COLD_CALL_LOCK_BELOW;
   return Math.max(COLD_CALL_LOCK_BELOW, k > 0 ? LOCKS.ranges[key].freq / k : 0);
 };
 /** a cold-caller reaching the flop with under this many combos (1% of hands) gets the pool's range */
@@ -148,14 +163,42 @@ export function coldCallSize(c: Pick<ColdCaller, "pos" | "open" | "threeBet" | "
   return null;
 }
 
+/** Who is short in a jam the cold-caller called: `covers` = he covers the 3-bettor (calls a shove of the 3-bettor's
+ *  stack; equal stacks count here), `covered` = the 3-bettor covers him (the 3-bet commits him). */
+export type ColdCallJamSide = "covers" | "covered";
+export interface ColdCallJam { side: ColdCallJamSide; /** the effective stack caller vs 3-bettor, as dealt (bb) */ depth: number }
+
+/**
+ * The side and depth of a jam (coldCallSize "jam"): depth = the smaller of his stack and the 3-bettor's, as dealt (an
+ * all-in 3-bet stands for the 3-bettor's stack when that is unknown); null when his own stack is unknown.
+ */
+export function coldCallJam(c: Pick<ColdCaller, "pos" | "threeBet" | "threeBettor" | "threeBetAllIn">,
+                            stacks: Partial<Record<Seat6, number>> = {}): ColdCallJam | null {
+  const mine = Number(stacks[c.pos] ?? NaN);
+  let his = c.threeBettor ? Number(stacks[c.threeBettor] ?? NaN) : NaN;
+  if (!(his > 0) && c.threeBetAllIn && c.threeBet > 0) his = c.threeBet;
+  if (!(mine > 0) || !(his > 0)) return null;
+  return { side: mine < his ? "covered" : "covers", depth: Math.min(mine, his) };
+}
+
 /**
  * The pool range for a cold-caller of this seat, stack and 3-bet size: the most specific one built — seat+stack+size,
- * seat+stack, seat+size, seat. A jam has its own range per seat only (calling a jam is another node: no fallback).
+ * seat+stack, seat+size, seat. A jam has its own ranges per seat (calling a jam is another node: no non-jam fallback) —
+ * by side and depth when `jam` is known, else the seat's pooled jam range.
  */
-export function coldCallKey(pos: Seat6, stack: number, size: ColdCallSize | null = null): ColdCallKey | null {
+export function coldCallKey(pos: Seat6, stack: number, size: ColdCallSize | null = null, jam: ColdCallJam | null = null): ColdCallKey | null {
   if (!CC_SEATS.has(pos)) return null;
   const has = (k: string): k is ColdCallKey => k in LOCKS.ranges;
-  if (size === "jam") { const j = `coldcall3b_${pos}_jam`; return has(j) ? j : null; }
+  if (size === "jam") {
+    if (jam) {
+      const d = (Object.entries(LOCKS.jam_depth_edges) as [string, [number, number | null]][])
+        .find(([, [lo, hi]]) => jam.depth >= lo && (hi == null || jam.depth < hi))?.[0];
+      const k = d ? `coldcall3b_${pos}_jam_${jam.side}_${d}` : null;
+      if (k && has(k)) return k;
+    }
+    const j = `coldcall3b_${pos}_jam`;
+    return has(j) ? j : null;
+  }
   const b = !(stack > 0) ? null : stack < 40 ? "le40" : stack < 80 ? "40_80" : "80p";
   const order = [b && size ? `${b}_${size}` : null, b, size, "all"].filter((x): x is string => !!x);
   for (const o of order) { const k = `coldcall3b_${pos}_${o}`; if (has(k)) return k; }
@@ -177,6 +220,8 @@ export interface ColdCallLockTarget {
   stack: number;
   /** the 3-bet he called (null: the line does not say) */
   size: ColdCallSize | null;
+  /** a jam's side and depth (absent: not a jam, or the stacks do not say) */
+  jam?: ColdCallJam;
 }
 
 /**
@@ -195,9 +240,10 @@ export function coldCallLockTarget(a: { hand: ParsedHand; heroPos: string | null
   const c = live[0]!;
   const stack = Number(byPos[c.pos] ?? NaN);
   const size = coldCallSize(c, byPos);
-  const key = coldCallKey(c.pos, stack, size);
+  const jam = size === "jam" ? coldCallJam(c, byPos) : null;
+  const key = coldCallKey(c.pos, stack, size, jam);
   if (!key) return { ok: false, why: `no pool cold-call range for the ${c.pos}${size ? ` (${size} 3-bet)` : ""}` };
-  return { ok: true, target: { pos: c.pos, key, stack: Math.round(stack * 10) / 10, size } };
+  return { ok: true, target: { pos: c.pos, key, stack: Math.round(stack * 10) / 10, size, ...(jam ? { jam } : {}) } };
 }
 
 type ClassRange = Record<string, number>;
@@ -225,7 +271,8 @@ export function applyPoolColdCallFloor(a: {
   for (const c of callers) {
     if (c.raisedLater) continue;
     const stack = Number(byPos[c.pos] ?? NaN);
-    const key = coldCallKey(c.pos, stack, coldCallSize(c, byPos));
+    const size = coldCallSize(c, byPos);
+    const key = coldCallKey(c.pos, stack, size, size === "jam" ? coldCallJam(c, byPos) : null);
     if (!key) continue;
     if (a.lockedPools?.some((p) => p.pos.toUpperCase() === c.pos && p.key === key)) continue;
     const rk = Object.keys(out).find((p) => p.toUpperCase() === c.pos);
