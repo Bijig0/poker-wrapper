@@ -9,8 +9,8 @@
  *   - THE PREFLOP LOCK (gtowAiPreflop.solvePreflopColdCallLocked, fastSolve.poolColdCallLockFirst): hero's preflop
  *     decision after such a call is read on the exact GTO Wizard AI tree of the table with the caller's node LOCKED — his
  *     call at the pool's range for his seat and stack, the rest of each hand folding or raising as the solver plays it —
- *     when the unlocked tree gives that call under COLD_CALL_LOCK_BELOW (1%) of his range there. The answer pins the
- *     locked solution, so the flop walks his range off it.
+ *     when the unlocked tree gives that call under coldCallLockBelow (the larger of 1% and a third of the pool's rate) of
+ *     his range there. The answer pins the locked solution, so the flop walks his range off it.
  *   - THE FLOP FLOOR (applyPoolColdCallFloor): whatever piece produced the flop ranges (a chart, an unlocked AI tree, a
  *     cold-call after hero's last preflop decision), a cold-caller who reaches the flop with under 1% of hands enters it
  *     with the pool's range for his seat and stack instead.
@@ -26,6 +26,22 @@
  * effective stack caller vs 3-bettor, is a call of a jam — its own range (`_jam`, ~4%); those calls are out of every
  * other range (they were 21% of the old under-40bb buckets' calls). coldCallKey picks the most specific range built:
  * seat+stack+size, seat+stack, seat+size, seat. Edges and the jam share come from the JSON (size_edges, jam_commit).
+ *
+ * THE TRIGGER (cutoff study 2026-10-05, scripts/coldCallCutoffStudy.ts): the lock stands when the exact tree's call is
+ * under coldCallLockBelow(key) = the larger of 1% and a third of the pool's own rate for the range picked ("the pool
+ * cold-calls at least 3x as often as the tree here"). Deep mid/large 3-bets (pool 1.2-2.2%) keep the flat 1%; a deep
+ * small 3-bet 1-2.2%, under 80bb 2.3-5%. Why relative: the cliff a cutoff leaves (just under it the
+ * caller holds the pool's combos, just over it the tree's) is then at most 3x — a flat 1% left up to 15x against the
+ * 40-80bb small-3-bet range (200 combos vs 13) — and the lock goes where the pool really differs from the tree.
+ * Measured on 22 real spots + 7 variants (GTO Wizard AI, the ranges before the size split): GTO's share is ~0% on every
+ * standard 3-bet (19/22), 0.35-1.43% only against 1.5-2x 3-bets 100bb+ deep, 4.2% calling a 13bb jam; where it is
+ * 0.35-1.43%, locking moves 2-5% of hero's range and <= 0.016 bb a hand at the node; at ~0% it moves 10-29% (up to
+ * 0.18 bb). On the size-split ranges the same three deep spots lock to 56-85 combos instead of 5-19 and hero still
+ * moves 1-2% (<= 0.006 bb). A JAM KEEPS THE FLAT 1%: locking the deep BB's call of a 60bb jam (GTO 1.65%, a 22-combo
+ * call-off) to the _jam range (56 combos, TT and AQs in it) took UTG's re-jam from 2% to 21% of his range (2-6 bb a
+ * hand at the node, whichever range is right), and that range pools the calls of jams of every depth — mostly short
+ * shoves — so its cutoff is not raised until it is split by the jam's size. COLD_CALL_LOCK_RATIO (default 3; off = the
+ * flat 1% alone) is read at every decision.
  *
  * THE SWITCH, COLD_CALL_POOL in the environment, read at every decision: on (unset) = the lock and the floor; floor = the
  * floor only; off = neither. Unlimped pots only (the ranges were measured there; an iso over limpers is another node).
@@ -43,8 +59,21 @@ export const coldCallPoolMode = (): ColdCallPoolMode => {
   const v = String(process.env.COLD_CALL_POOL ?? "on").trim().toLowerCase();
   return v === "off" ? "off" : v === "floor" ? "floor" : "on";
 };
-/** the unlocked tree's call, as a share of the caller's range at his node, under which the lock applies */
+/** the unlocked tree's call, as a share of the caller's range at his node, under which the lock always applies */
 export const COLD_CALL_LOCK_BELOW = 0.01;
+/** the pool cold-calling at least this many times as often as the tree also locks (COLD_CALL_LOCK_RATIO; off = 1% only) */
+export const coldCallLockRatio = (): number => {
+  const v = Number(process.env.COLD_CALL_LOCK_RATIO ?? 3);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+};
+/** The lock's trigger for this range: the tree's call share under the larger of 1% and the pool's rate / the ratio.
+ *  A jam's range keeps the flat 1% (the header: the one place the lock moves hero a lot, on a range pooled over jams of
+ *  every depth). */
+export const coldCallLockBelow = (key: ColdCallKey): number => {
+  const k = coldCallLockRatio();
+  if (key.endsWith("_jam")) return COLD_CALL_LOCK_BELOW;
+  return Math.max(COLD_CALL_LOCK_BELOW, k > 0 ? LOCKS.ranges[key].freq / k : 0);
+};
 /** a cold-caller reaching the flop with under this many combos (1% of hands) gets the pool's range */
 export const COLD_CALL_FLOOR_COMBOS = 13.26;
 
