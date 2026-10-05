@@ -4509,8 +4509,8 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // ONLY WHERE NOTHING ELSE COVERS HIM (Brady 2026-10-05: "we still do the regular check … then once we discover
     // 'can't cover', we use this range instead"): the regular answer runs first — a 6-max chart that holds the line
     // answers as before and the lock is dropped; only when GTO Wizard AI had to answer (the charts could not hold the
-    // cold-call) does the lock stand, and even then only if the exact tree gives his call under 1% (NOT NEEDED
-    // otherwise: a short stack or a shape the tree really calls with keeps the tree's range). Asked in parallel so the
+    // cold-call) does the lock stand, and even then only if the exact tree gives his call under the larger of 1% and a
+    // third of the pool's rate (NOT NEEDED otherwise: a shape the tree really calls with keeps the tree's range). Asked in parallel so the
     // clock does not pay for both.
     let ccDropped = false;
     // the lock's pin is taken as it lands: the regular answer may pin its unlocked tree after it, and the hand's flop

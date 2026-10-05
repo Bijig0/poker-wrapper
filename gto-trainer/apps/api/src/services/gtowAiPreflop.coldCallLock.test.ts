@@ -21,6 +21,7 @@ afterEach(() => {
   Object.assign(P.poolLockSeams, seams0);
   P.resetAiPreflopMemory();
   delete process.env.COLD_CALL_POOL;
+  delete process.env.COLD_CALL_LOCK_RATIO;
 });
 
 const POS = { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" } as const;
@@ -113,6 +114,16 @@ describe("coldCallLockTarget: which cold-caller, if any", () => {
     expect(C.coldCallersOf(jam, "CO").callers[0]).toMatchObject({ pos: "BB", open: 2.5, threeBet: 30, threeBettor: "SB", threeBetAllIn: true });
     expect((C.coldCallLockTarget({ hand: jam, heroPos: "CO", dealt: dealt(jam) }) as any).target).toEqual({ pos: "BB", key: "coldcall3b_BB_jam", stack: 100, size: "jam" });
   });
+  it("THE TRIGGER (cutoff study 2026-10-05): the larger of 1% and a third of the pool's rate, a jam 1%; COLD_CALL_LOCK_RATIO=off is the flat 1%", () => {
+    expect(C.coldCallLockBelow("coldcall3b_BB_80p_large")).toBe(0.01);                       // pool 1.88% / 3 → 1%
+    expect(C.coldCallLockBelow("coldcall3b_BB_80p_small")).toBeCloseTo(0.0644 / 3, 4);         // 2.15%
+    expect(C.coldCallLockBelow("coldcall3b_BB_40_80_large")).toBeCloseTo(0.067 / 3, 4);        // 2.23%
+    expect(C.coldCallLockBelow("coldcall3b_BB_jam")).toBe(0.01);                                // a jam: the flat 1% (4.23% / 3 = 1.41% not used)
+    process.env.COLD_CALL_LOCK_RATIO = "2";
+    expect(C.coldCallLockBelow("coldcall3b_BB_80p_mid")).toBeCloseTo(0.0214 / 2, 4);
+    process.env.COLD_CALL_LOCK_RATIO = "off";
+    expect(C.coldCallLockBelow("coldcall3b_BB_40_80_small")).toBe(0.01);
+  });
   it("the switch: COLD_CALL_POOL", () => {
     expect(C.coldCallPoolMode()).toBe("on");
     process.env.COLD_CALL_POOL = "floor";
@@ -199,11 +210,30 @@ describe("solvePreflopColdCallLocked over its seams", () => {
     expect((Pin.preflopPinFor(hd) as any).solId).toBe("N");
   });
 
-  it("the exact tree already gives the call a real share (2%): NOT NEEDED, nothing locked", async () => {
-    const calls = rig({ share: 0.02 });
+  it("the exact tree already gives the call a real share (3%, over a third of the pool's 6.7%): NOT NEEDED, nothing locked", async () => {
+    const calls = rig({ share: 0.03 });
     const r = await P.solvePreflopColdCallLocked(po3way001(), "CO", target);
     expect(r.ok).toBe(false);
     expect((r as { reason: string }).reason).toContain(P.COLD_CALL_NOT_NEEDED);
+    expect((r as { reason: string }).reason).toContain("the lock is under 2.23%");
+    expect(calls.locks).toHaveLength(0);
+  });
+
+  it("2%: locked against the 40-80bb pool (6.7%, over 3x the tree's); NOT NEEDED against the deep pool (1.88%) or with the ratio off", async () => {
+    let calls = rig({ share: 0.02 });
+    const r = await P.solvePreflopColdCallLocked(po3way001(), "CO", target);
+    expect(r.ok).toBe(true);
+    expect(calls.locks).toHaveLength(1);
+    if (r.ok) expect(r.note).toContain("the lock is under 2.23%");
+    P.resetAiPreflopMemory();
+    calls = rig({ share: 0.02 });
+    const deep = await P.solvePreflopColdCallLocked(po3way001(), "CO", { ...target, key: "coldcall3b_BB_80p_large" as const }, { skipPin: () => true });
+    expect((deep as { reason: string }).reason).toContain(P.COLD_CALL_NOT_NEEDED);
+    process.env.COLD_CALL_LOCK_RATIO = "off";
+    P.resetAiPreflopMemory();
+    calls = rig({ share: 0.02 });
+    const flat = await P.solvePreflopColdCallLocked(po3way001(), "CO", target, { skipPin: () => true });
+    expect((flat as { reason: string }).reason).toContain(P.COLD_CALL_NOT_NEEDED);
     expect(calls.locks).toHaveLength(0);
   });
 
