@@ -708,6 +708,12 @@ function renderNode(rs) {
     host.innerHTML = `${head}<p class="sub">No range read at this node — ${esc(why)}.</p>`;
     return;
   }
+  // POOL RANGE LABELS (2026-10-05): a seat a pool overlay replaced — from his own locked action on, or from the flop for a
+  // floor — is labelled with the register's badge; every other seat is GTO's
+  const POOL = (H.pool || []).filter((x) => STEP >= x.at);
+  const poolAt = (p) => POOL.find((x) => x.p === String(p).toUpperCase() && STEP > x.at) || null;
+  const rangeTag = (p) => !POOL.length ? "" : poolAt(p) ? ` <span class="chip warn" title="measured pool data replaces GTO's range for this seat — register entry ${esc(poolAt(p).id)}">POOL RANGE — ${esc(poolAt(p).b)}</span>` : ` <span class="chip dim" title="the solver's own range (base GTO)">GTO range</span>`;
+  const lockHere = POOL.find((x) => x.how === "lock" && x.at === STEP && x.p === String(v.a).toUpperCase());
   const acts = v.acts || [];
   const strat = v.st ? v.st.map(dec) : null;
   const ranges = Object.fromEntries(Object.entries(v.r || {}).map(([p, s]) => [p, dec(s)]));
@@ -721,7 +727,8 @@ function renderNode(rs) {
   if (strat && acts.length) {
     const first = !actorRange || isFull(actorRange);
     const thin = !first && combosIn(actorRange) < THIN;
-    actorCard = `<div class="rl-card actor"><h3>${esc(v.a)} <span class="sub">${a.hero ? "hero's" : "villain's"} strategy at this node · ${first ? "every hand (nothing narrowed yet)" : `range so far ${rangeStat(actorRange)}`}</span>${thin ? ` <span class="chip crit">range collapsed</span>` : ""}</h3>` +
+    actorCard = `<div class="rl-card actor"><h3>${esc(v.a)} <span class="sub">${a.hero ? "hero's" : "villain's"} strategy at this node · ${first ? "every hand (nothing narrowed yet)" : `range so far ${rangeStat(actorRange)}`}</span>${thin ? ` <span class="chip crit">range collapsed</span>` : ""}${lockHere ? "" : rangeTag(v.a)}</h3>` +
+      (lockHere ? `<div class="sub" style="max-width:60ch;margin:4px 0"><span class="chip warn">⚑ off-GTO action</span> ${esc(actionText(a, rs))} — GTO plays this ${lockHere.gto == null ? "(share not in the answer's note)" : `<b>${lockHere.gto < 0.01 ? "under 0.01%" : lockHere.gto.toFixed(lockHere.gto < 1 ? 2 : 1) + "%"}</b>`} of his range here. The tree drawn below is the LOCKED one: this node plays the pool's range (${esc(lockHere.b)}); from the next node on his range is the pool's.</div>` : "") +
       (thin ? `<div class="sub" style="max-width:56ch;margin:4px 0">Under ${THIN} combos are left in this range — an earlier action of this seat is one the solver almost never takes. The cells are drawn at full height (not range-weighted) so the mix stays visible; the tree's numbers here rest on almost nothing.</div>` : "") +
       `${classGrid(strategyCls(thin ? actorRange.map((x) => (x > 0 ? 1 : 0)) : actorRange, strat, acts.length), acts, H.heroKey, { board, openHero: !!a.hero, foot: `${thin ? "every class with any weight left, full height" : "fill = share of each class still in range"} · colour = how it acts${a.hero ? " · your class outlined" : " · your class outlined for reference"}` })}</div>`;
   }
@@ -729,9 +736,9 @@ function renderNode(rs) {
   const otherCards = others.map(([p, arr]) => {
     const isHeroSeat = String(H.positions[H.heroSeatId]).toUpperCase() === String(p).toUpperCase();
     const you = isHeroSeat ? ` <span class="chip good">you</span>` : "";
-    if (!arr || isFull(arr)) return `<div class="rl-card v"><h3>${esc(p)}${you}</h3><div class="any">every hand — nothing narrowed yet (has not acted, or only posted)</div></div>`;
+    if (!arr || isFull(arr)) return `<div class="rl-card v"><h3>${esc(p)}${you}${rangeTag(p)}</h3><div class="any">every hand — nothing narrowed yet (has not acted, or only posted)</div></div>`;
     const thin = combosIn(arr) < THIN;
-    return `<div class="rl-card v"><h3>${esc(p)}${you} <span class="sub">range now · ${rangeStat(arr)}</span>${thin ? ` <span class="chip crit">collapsed</span>` : ""}</h3>${classGrid(rangeCls(arr), ["in range"], isHeroSeat ? H.heroKey : null, { single: true, small: true, combosOff: true, board, foot: "range so far" })}</div>`;
+    return `<div class="rl-card v"><h3>${esc(p)}${you} <span class="sub">range now · ${rangeStat(arr)}</span>${thin ? ` <span class="chip crit">collapsed</span>` : ""}${rangeTag(p)}</h3>${classGrid(rangeCls(arr), ["in range"], isHeroSeat ? H.heroKey : null, { single: true, small: true, combosOff: true, board, foot: "range so far" })}</div>`;
   }).join("");
   const dealt = Object.values(H.positions).map(String);
   const outside = dealt.filter((p) => !(p in ranges) && !rs.folded.has(Number(Object.keys(H.positions).find((s) => H.positions[s] === p))));
@@ -792,6 +799,7 @@ function renderAnswer() {
       ${d.chart ? `<b>chart / tree</b><span class="mono">${esc(d.chart)}</span>` : ""}${(d.tags || []).length ? `<b>trees solved</b><span class="mono sub">${d.tags.map(esc).join(" | ")}</span>` : ""}${d.line ? `<b>line</b><span class="mono">${esc(d.line)}</span>` : ""}
       ${(d.fl || []).length ? `<b>flags</b><span class="chips">${d.fl.map((f) => `<span class="chip ${chipClass(f) === "dim" ? "warn" : chipClass(f)}" title="${esc(FLAG_INFO[f] || "")}">${esc(f)}</span>`).join("")}</span>` : ""}
       ${(d.k || []).length ? `<b>approximations</b><span class="chips">${d.k.map((k) => `<span class="chip dim">${esc(k)}</span>`).join("")}</span>` : ""}
+      ${(d.dep || []).length ? `<b>departs from GTO</b><span class="chips">${d.dep.map(([id, kind, badge]) => `<span class="chip ${kind === "pool-overlay" ? "warn" : kind === "policy-experiment" ? "" : "dim"}" title="${esc(kind)} — register entry ${esc(id)} (services/approximations.ts)">${esc(badge)}</span>`).join("")}</span>` : ""}
       ${(d.pcodes || []).length ? `<b>path codes</b><span class="mono sub">${d.pcodes.map(esc).join(" · ")}</span>` : ""}
       ${d.mp ? `<b>mis-press</b><span>${esc(d.mp)}</span>` : ""}
       ${(d.lint || []).length ? `<b>poker sense</b><span>${d.lint.map((t) => { const [f, ...r] = t.split(": "); return `<div><span class="chip ${chipClass(f)}" title="${esc(FLAG_INFO[f] || "")}">${esc(f)}</span> ${esc(r.join(": "))}</div>`; }).join("")}</span>` : ""}

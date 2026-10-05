@@ -11,6 +11,44 @@ import { FAMILIES } from "./scenarios";
 import { gradeDecision } from "./grade";
 import { CLASSES, postflopViewsByDecision } from "./views";
 import { LINT_FLAGS, lintHand } from "./lint";
+import { APPROXIMATIONS, departuresOf } from "../../services/approximations";
+
+/**
+ * THE DEPARTURES FROM BASE GTO (2026-10-05, services/approximations): per decision, the register entries its path codes
+ * and warning resolve to (id, kind, badge); per hand, the seats a pool overlay replaced — a preflop lock from the locked
+ * seat's own action on, a flop floor from the flop on — with the unlocked tree's share of his action where the answer's
+ * note names it. The replayer labels those seats "POOL RANGE — <badge>" and every other seat "GTO range".
+ */
+const codesOfPath = (p: any): string[] => [...(p?.reasons ?? []).map((r: any) => r?.code), p?.arrival?.code, p?.arrival?.first?.code].filter(Boolean);
+const badgeOf = (id: string) => APPROXIMATIONS.find((a) => a.id === id)?.badge ?? id;
+function poolSeatsOf(h: any): { p: string; id: string; b: string; how: "lock" | "floor"; at: number; gto: number | null }[] {
+  const out: { p: string; id: string; b: string; how: "lock" | "floor"; at: number; gto: number | null }[] = [];
+  const acts: any[] = h.hand?.actions ?? [];
+  const posOf = (a: any) => String(h.hand?.positions?.[a.seatId] ?? "").toUpperCase();
+  const firstPost = acts.findIndex((a) => a.street !== "preflop");
+  for (const d of h.decisions ?? []) {
+    const codes = new Set(codesOfPath(d.path));
+    const w = String(d.warning ?? "");
+    const lock = codes.has("preflop:pool-coldcall-lock") ? "pool-coldcall-lock" : codes.has("preflop:pool-limp-lock") ? "pool-limp-lock" : null;
+    if (lock) {
+      const m = /POOL-LOCKED (?:LIMPER|COLD-CALL): the (UTG|HJ|CO|BTN|SB|BB) \(/.exec(w);
+      const g = /which the exact tree gives ([\d.]+)% of his range/.exec(w);
+      if (m && !out.some((x) => x.p === m[1] && x.how === "lock")) {
+        const at = acts.findIndex((a) => a.street === "preflop" && a.type === "call" && posOf(a) === m[1]);
+        out.push({ p: m[1]!, id: lock, b: badgeOf(lock), how: "lock", at: at >= 0 ? at : (d.index ?? 0), gto: g ? Number(g[1]) : null });
+      }
+    }
+    for (const [code, id] of [["arrival:pool-limp-floor", "pool-limp-floor"], ["arrival:pool-coldcall-floor", "pool-coldcall-floor"]] as const) {
+      if (!codes.has(code)) continue;
+      const text = [d.path?.arrival?.why, d.path?.arrival?.first?.why, w].filter(Boolean).join(" ");
+      for (const m of text.matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: the (UTG|HJ|CO|BTN|SB|BB) \(|; the (UTG|HJ|CO|BTN|SB|BB) \(\d+bb\) (?:limped|cold-called)/g)) {
+        const p = (m[1] ?? m[2])!;
+        if (!out.some((x) => x.p === p)) out.push({ p, id, b: badgeOf(id), how: "floor", at: firstPost >= 0 ? firstPost : (d.index ?? 0), gto: null });
+      }
+    }
+  }
+  return out;
+}
 
 const argv = process.argv.slice(2);
 const arg = (k: string): string | undefined => { const i = argv.indexOf(`--${k}`); return i >= 0 ? argv[i + 1] : undefined; };
@@ -116,6 +154,7 @@ for (const h of hands) {
     i: d.index, st: d.street, pick: d.pick, roll: d.roll ?? null, band: d.band ?? null, mix: (d.actions ?? []).map((a: any) => [a.action, Math.round(Number(a.frequency) * 100) / 100]),
     src: d.source, tier: d.tier, chart: d.gametype, line: d.line, pv: d.path?.verdict ?? null,
     pcodes: (d.path?.reasons ?? []).map((r: any) => r.code).filter(Boolean),
+    dep: departuresOf(codesOfPath(d.path), d.warning ?? null).map((a) => [a.id, a.kind, a.badge]),
     req: d.path?.requests ?? null, g: d.grade, fl: d.flags ?? [], k: d.kinds ?? [], w: d.warning, why: d.reason, ms: d.ms, n: d.reqs, mp: d.misPress,
     cf: Object.entries(d.path?.checks ?? {}).flatMap(([st, cs]: [string, any]) => (cs ?? []).filter((c: any) => c.status === "fail" || c.status === "flag").map((c: any) => ({ st, id: c.id, s: c.status, t: String(c.text ?? "").slice(0, 400) }))),
     ok: !!d.ok, toCall: d.toCall, pos: d.pos, kind: d.kind, tk: d.took ? [d.took.type, d.took.amount ?? null] : null,
@@ -170,7 +209,7 @@ for (const h of hands) {
     id: h.id, fam: h.family, title: h.title, tags: h.tags, hero: h.hero, src: h.source, hh: h.hh,
     hand: { pos: h.hand.positions, ss: h.hand.startStacks, hs: h.hand.heroSeatId, hc: h.hand.heroCards, b: h.hand.board,
             ac: h.hand.actions.map((a: any) => [a.seatId, a.type, a.amount ?? null, a.street[0], a.hero ? 1 : 0]) },
-    dec, views, alt, pn: h.preflopNote, plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
+    dec, views, alt, pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
   };
   const grades = { ok: 0, approx: 0, refused: 0, bad: 0 } as Record<string, number>;
   const fl = new Set<string>(), kd = new Set<string>();
