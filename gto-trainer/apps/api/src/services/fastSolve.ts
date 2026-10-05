@@ -4,6 +4,7 @@ import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6, limp3Reroute, threeLimpPrefix } from "./hrc6max";
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
+import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -48,7 +49,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopPoolLocked, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -1160,6 +1161,18 @@ async function flopArrivalCompute(
       // Brady's rule, so by design (counted clean, named by its own code); a source already rebuilt keeps its own code
       // (the larger story) and the floor's note rides along either way
       if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-limp-floor", why: note.slice(0, 300) };
+    }
+  }
+  // THE POOL COLD-CALL FLOOR (services/poolColdCall, 2026-10-05): a villain who cold-called a 3-bet and reaches the flop
+  // with under 1% of hands (the tree gave his call ~0%) enters it with the pool's cold-call range for his seat and stack
+  if (sixMax && coldCallPoolMode() !== "off") {
+    const ccf = applyPoolColdCallFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, lockedPools: pinPools });
+    if (ccf.applied.length) {
+      const note = poolColdCallFloorNote(ccf.applied, rangeSource);
+      tmark("pool cold-call floor", note);
+      recon = { ...recon, ranges: ccf.ranges };
+      sixNote = [sixNote, note].filter(Boolean).join(" · ");
+      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-coldcall-floor", why: note.slice(0, 300) };
     }
   }
   return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };
@@ -4385,6 +4398,47 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
   };
 }
 
+/**
+ * THE POOL'S 3-BET COLD-CALL, ASKED FIRST (2026-10-05; services/poolColdCall.coldCallLockTarget says when,
+ * gtowAiPreflop.solvePreflopColdCallLocked how). null when it does not apply — no lone cold-caller, or the exact tree
+ * already gives his call a real share (COLD_CALL_NOT_NEEDED); an ok answer; or a refusal whose reason the answer that
+ * follows carries ("COLD-CALL LOCK FAILED …"). Inside poolLockMs (12 s). COLD_CALL_POOL=on only (the default).
+ */
+async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null): Promise<FastSolveResult | null> {
+  if (coldCallPoolMode() !== "on") return null;
+  const t = coldCallLockTarget({ hand, heroPos });
+  if (!t.ok) return null;
+  const t0 = Date.now();
+  let gaveUp = false;
+  const asked = solvePreflopColdCallLocked(hand, heroPos, t.target, { skipPin: () => gaveUp })
+    .catch((e): AiPreflopOutcome => ({ ok: false, reason: `cold-call-locked tree threw: ${e instanceof Error ? e.message : e}` }));
+  const ms = poolLockMs();
+  const first = await Promise.race([asked, new Promise<"timeout">((res) => setTimeout(() => res("timeout"), ms))]);
+  const handId = hand.clientHandId ?? hand.handId ?? "?";
+  if (first !== "timeout" && !first.ok && first.reason.includes(COLD_CALL_NOT_NEEDED)) {
+    console.log(`[coldcall-lock] hand ${handId}: not needed — ${first.reason.slice(0, 160)}`);
+    return null;
+  }
+  if (first === "timeout" || !first.ok) {
+    gaveUp = true;
+    const why = first === "timeout" ? `no answer inside ${(ms / 1000).toFixed(0)} s` : first.reason.slice(0, 220);
+    console.log(`[coldcall-lock] FAILED (${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${handId}: the ${t.target.pos} (${t.target.stack}bb, ${t.target.key}) — ${why}`);
+    return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0,
+      reason: `COLD-CALL LOCK FAILED: the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet, but the locked GTO Wizard tree did not answer (${why}) — answered as before` };
+  }
+  console.log(`[coldcall-lock] hand ${handId}: the ${t.target.pos} (${t.target.stack}bb) at ${t.target.key} — answered in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  const r = first;
+  return {
+    ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
+    setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
+    depth: aiHeroDepth(r.shape, hand, heroPos),
+    line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision, warning: r.note,
+    approx: r.shape.deadSb || undefined,
+    path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:coldcall-lock", how: "by-design", code: "preflop:pool-coldcall-lock",
+      why: `the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet at ~0% on the exact tree — his call locked to ${t.target.key}`.slice(0, 200) } }),
+  };
+}
+
 async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
   // THE 6-MAX RING STRATEGY IS OUR OWN SOLVE END TO END (2026-09-17, Brady). Preflop from the 6-max charts,
   // postflop from the AI chain conditioned on those charts' ranges; a spot neither can answer is a miss, never a
@@ -4441,8 +4495,14 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // time the decision goes on exactly as before, and the answer says the lock failed
     const locked = await poolLimpLockFirst(hand, heroPos, opts);
     if (locked && locked.ok) return locked;
+    // THE POOL'S 3-BET COLD-CALL (2026-10-05, services/poolColdCall): a lone cold-caller of a 3-bet whom the exact tree
+    // gives ~0% is read at the pool's range on the exact tree with his call node-locked
+    const cc = locked ? null : await poolColdCallLockFirst(hand, heroPos);
+    if (cc && cc.ok) return cc;
+    const failed: string[] = [];
+    for (const x of [locked, cc]) if (x && !x.ok) failed.push(x.reason);
     const r = await solvePreflopSixStrategy(hand, heroPos, opts);
-    return locked && !locked.ok && r.ok ? { ...r, warning: [locked.reason, r.warning].filter(Boolean).join(" · ") } : r;
+    return failed.length && r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") } : r;
   }
 
   // 3-handed preflop answers from the asym HRC charts (unless the caller
