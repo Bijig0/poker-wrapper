@@ -2,7 +2,9 @@
  * The range-level oracle's own checks, on toy walks and a toy chart — pure, no charts, no network (plain `bun test`).
  */
 import { describe, expect, test } from "bun:test";
-import { explainsSeat, layer1, layer2Postflop, layer2Preflop, truthLine, postflopTokenMismatch, repickOf } from "./rangeOracle";
+import { explainsSeat, layer1, layer2Postflop, layer2Preflop, truthLine, postflopTokenMismatch, repickOf, poolFloorsOf, poolRangeOf } from "./rangeOracle";
+import { poolColdCallFloorNote, type ColdCallKey } from "../../services/poolColdCall";
+import { poolLimpFloorNote, type PoolLimpKey } from "../../services/poolLimpFloor";
 import type { RawNode, RecordedRangeWalk, WalkStep } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../../utils/buildRangeArray/buildRangeArray";
 import { classWeightsToSpec } from "../../utils/reconstructFlopRanges/reconstructFlopRanges";
@@ -189,5 +191,77 @@ describe("the ranges re-pick", () => {
     const o = { ...base, heroPos: "HJ", heroCards: ["Ah", "Ad"] as [string, string], note: noteFor("CO"), dry: heroHJ(CO2), walks: [w], get };
     expect((await layer1(o)).map((x) => x.kind)).toContain("range-product");        // on the pinned chart: not its product
     expect(await layer1({ ...o, getFor: (seat) => (seat === "CO" ? getFor("toy_repick") : null) })).toEqual([]);
+  });
+});
+
+// THE POOL FLOORS (fastSolve, 2026-10-05): a 3-bet cold-caller the walk left under 1% of hands enters the flop with the
+// pool's range (services/poolColdCall), a short limper with the pool's limp range (services/poolLimpFloor) — by design,
+// said in the note. The note is built here by the services' own note functions, so a change of its wording fails here.
+describe("layer 1 + 2 — the pool floors", () => {
+  // HJ opens 2.5, CO (hero) 3-bets to 8, the BTN cold-calls, the blinds and the HJ fold: CO and BTN see the flop
+  const TREE3: Record<string, RawNode> = {
+    ...TREE,
+    "F-R2.5-R8": N("BTN", [["Fold", "F"], ["Call", "C"]], { AKo: { Call: 10 } }),
+    "F-R2.5-R8-C": N("SB", [["Fold", "F"]], {}), "F-R2.5-R8-C-F": N("BB", [["Fold", "F"]], {}),
+    "F-R2.5-R8-C-F-F": N("HJ", [["Fold", "F"], ["Call", "C"]], { AA: { Call: 100 }, KK: { Call: 100 } }),
+    "F-R2.5-R8-C-F-F-F": { pos: null, terminal: true, actions: [], cells: [] },
+  };
+  const get3 = async (l: string) => TREE3[l] ?? null;
+  const DEALT3 = ["UTG", "HJ", "CO", "BTN", "SB", "BB"];
+  const TRUTH3 = truthLine([
+    { street: 0, seat: 1, type: "fold" }, { street: 0, seat: 2, type: "raise", amount: 2.5 }, { street: 0, seat: 3, type: "raise", amount: 8 },
+    { street: 0, seat: 4, type: "call", amount: 8 }, { street: 0, seat: 5, type: "fold" }, { street: 0, seat: 6, type: "fold" }, { street: 0, seat: 2, type: "fold" },
+  ], (s) => DEALT3[s - 1]!);
+  const CO3 = { AKo: 0.6 }, BTN0 = { AKo: 0.1 };     // the BTN walked to 1.2 combos: under the floor's 13.26
+  const st = (line: string, pos: string, token: string, label: string, rangeIn: Record<string, number> | null, rangeOut: Record<string, number> | null): WalkStep =>
+    ({ line, node: TREE3[line]!, pos, token, rawToken: token, label, labels: [label], rangeIn, rangeOut });
+  const walk3 = (btn = BTN0): RecordedRangeWalk => ({
+    tokens: ["F", "R2.5", "R8", "C", "F", "F", "F"], heroPos: "CO",
+    steps: [st("", "UTG", "F", "Fold", null, null), st("F", "HJ", "R2.5", "Raise 2.5", null, HJ), st("F-R2.5", "CO", "R8", "Raise 8", null, CO3),
+      st("F-R2.5-R8", "BTN", "C", "Call", null, btn), st("F-R2.5-R8-C", "SB", "F", "Fold", null, null), st("F-R2.5-R8-C-F", "BB", "F", "Fold", null, null),
+      st("F-R2.5-R8-C-F-F", "HJ", "F", "Fold", HJ, {})],
+    result: { ok: true, ranges: { CO: CO3, BTN: btn } },
+  });
+  const KEY = "coldcall3b_BTN_80p_large" as ColdCallKey;
+  const note = (was = 1.2, key: ColdCallKey = KEY) =>
+    `PREFLOP RANGES FROM THE PIN: toy · ${poolColdCallFloorNote([{ pos: "BTN", key, stack: 100, freq: 0.0166, calls: 1092, was, now: 21.98 }], "toy")} · DRY RUN: toy`;
+  const pool = poolRangeOf({ kind: "coldcall", key: KEY, was: 0 })!;
+  const o3 = (btnInput: Record<string, number>, n = note()) =>
+    ({ truth: TRUTH3, heroPos: "CO", heroCards: ["Ah", "Kd"] as [string, string], note: n, dry: { ranges: { CO: CO3, BTN: btnInput }, flopSeats: ["CO", "BTN"] }, walks: [walk3()], get: get3 });
+
+  test("the note's floors, read back from the services' own notes", () => {
+    expect(pool && Object.keys(pool).length).toBeGreaterThan(10);
+    expect([...poolFloorsOf(note())]).toEqual([["BTN", { kind: "coldcall", key: KEY, was: 1.2 }]]);
+    const limp = poolLimpFloorNote([{ pos: "UTG", key: "limp_first_short_le60" as PoolLimpKey, stack: 30, freq: 0.1, n: 500, was: 3.5, now: 120 } as any], "toy");
+    expect([...poolFloorsOf(`x · ${limp}`)]).toEqual([["UTG", { kind: "limp", key: "limp_first_short_le60", was: 3.5 }]]);
+    expect(poolRangeOf({ kind: "limp", key: "limp_first_short_le60", was: 0 })).not.toBeNull();
+  });
+  test("the cold-caller floored to the pool range the note names passes both layers", async () => {
+    expect(await layer1(o3(pool))).toEqual([]);
+    const l2 = await layer2Postflop({ ...o3(pool), dealt: DEALT3, get: get3 });
+    expect(l2.findings).toEqual([]);
+  });
+  test("without the note, the pool range is a range no walk produced", async () => {
+    expect((await layer1(o3(pool, "PREFLOP RANGES FROM THE PIN: toy"))).map((x) => x.kind)).toContain("range-provenance");
+  });
+  test("a floored seat holding anything but the named pool range", async () => {
+    const f = await layer1(o3({ ...pool, AA: 0.123 }));
+    expect(f.map((x) => x.reason)).toEqual([expect.stringContaining("is not the pool's coldcall3b_BTN_80p_large")]);
+  });
+  test("the range the floor replaced must be a walk's output, and under 1% of hands", async () => {
+    expect((await layer1(o3(pool, note(2.4)))).map((x) => x.reason)).toEqual([expect.stringContaining("before the pool floor (2.4 combos)")]);
+    expect((await layer1(o3(pool, note(20)))).map((x) => x.reason)).toEqual([expect.stringContaining("the floor is for under 13.26")]);
+  });
+  test("the walk behind the floor is still judged: the chart's own product", async () => {
+    const w = walk3({ AKo: 0.2 });
+    const f = await layer1({ ...o3(pool, note(2.4)), walks: [w] });
+    expect(f.map((x) => x.kind)).toEqual(["range-product"]);
+  });
+  test("a floor for a seat that never cold-called a 3-bet", async () => {
+    // the toy 5-handed line: the CO called an open — no 3-bet
+    const n = poolColdCallFloorNote([{ pos: "CO", key: "coldcall3b_CO_80p_large" as ColdCallKey, stack: 100, freq: 0.02, calls: 100, was: 4.8, now: 20 }], "toy");
+    const coPool = poolRangeOf({ kind: "coldcall", key: "coldcall3b_CO_80p_large", was: 0 })!;
+    const f = await layer1({ ...base, note: n, dry: { ranges: { HJ, CO: coPool }, flopSeats: ["HJ", "CO"] }, walks: [goodWalk()], get });
+    expect(f.map((x) => x.reason)).toEqual([expect.stringContaining("did not cold-call a 3-bet")]);
   });
 });
