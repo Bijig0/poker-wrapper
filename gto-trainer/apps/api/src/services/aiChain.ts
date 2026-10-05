@@ -514,6 +514,21 @@ export type AiChainResult =
     }
   | { ok: false; why: string; trace?: ChainTrace };
 
+/**
+ * DOES A NODE'S SEAT ORDER CONTRADICT OURS (2026-10-05, stress-500 pf_postin-003)? `listed` = the node's players, in
+ * rotation from the one to act (GTO Wizard's order, hero first); `ours` = our tree seats in rotation from our actor.
+ * The names are the SOLUTION's — a tree shared from a walk with other seats (the cache keys on ranges, stacks, pot and
+ * sizes, not on names) keeps that walk's names — so only a name this walk has can disagree, slot by slot. Lists that
+ * do not line up (another length, hero not first) fall back to the actor's name alone.
+ */
+export function rotationDisagrees(listed: { position?: unknown; is_hero?: unknown }[], ours: string[], norm: (p: string) => string = (p) => p.toUpperCase()): boolean {
+  const o = ours.map(norm);
+  const said = listed.find((p) => p?.is_hero)?.position;
+  if (said == null) return false;
+  if (listed.length !== o.length || !listed[0]?.is_hero) return norm(String(said)) !== o[0];
+  return listed.some((p, j) => { const nm = norm(String(p?.position ?? "")); return o.includes(nm) && nm !== o[j]; });
+}
+
 // ---- 1326-combo arithmetic (GTO Wizard's ordering, see utils/comboIndex): card = rank*4 + suit, combo(a<b) = b(b-1)/2 + a
 const RANKS_ = "23456789TJQKA", SUITS_ = "cdhs";
 const cardIdx = (card: string): number => RANKS_.indexOf(card[0]!.toUpperCase()) * 4 + SUITS_.indexOf(card[1]!.toLowerCase());
@@ -1388,7 +1403,15 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           const u = p.toUpperCase();
           return seats.length === 2 && (u === "BTN" || u === "SB") ? "BTN~SB" : u;
         };
-        if (said && norm(String(said)) !== norm(seats[actor]!.pos)) {
+        // THE NAMES ARE THE SOLUTION'S, NOT THIS WALK'S (2026-10-05, stress-500 pf_postin-003): the tree cache keys
+        // on ranges, stacks, pot and sizes — not on the seats' display names — so two walks whose trees differ only in
+        // who sits there (SB/BB/HJ and SB/BB/BTN with the same ranges) share one solution, and its nodes name the
+        // seats as the FIRST walk did ("we have BTN to act, the node says HJ" on a right rotation). The node lists
+        // the players in rotation from the one to act: compared slot by slot with ours from the actor, only a name
+        // this walk has can disagree; a name only the other walk had says nothing either way.
+        const listed: any[] = Array.isArray(nq.data?.game?.players) ? nq.data.game.players : [];
+        const ours = seats.map((_, j) => seats[(actor + j) % seats.length]!.pos);
+        if (said && rotationDisagrees(listed, ours, norm)) {
           return fail(`seat rotation disagrees with GTO Wizard at ${STREET[k]}#${ti}: we have ${seats[actor]!.pos} to act, the node says ${said}`);
         }
         // #4 / #14: the agreement is a passed check, counted (services/chainChecks)

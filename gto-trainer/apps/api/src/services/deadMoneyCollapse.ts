@@ -59,12 +59,22 @@ export interface DeadMoneyPlan extends CollapsePlan {
  * `order` = the seats in postflop order (default: the order they first act in).
  */
 export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySet<string>, capOf: (p: string) => number | null | undefined,
-    order?: readonly string[]): { toks: string[]; seats: string[]; tookOver: string[]; preload: Record<string, number>; cuts: number; closed: false } {
+    order?: readonly string[]): { toks: string[]; seats: string[]; tookOver: string[]; preload: Record<string, number>; cuts: number; shifts: number; closed: false } {
   const rot = order?.length ? [...order] : [...new Set(acts.map((x) => x.seat))];
   const out: string[] = [], seats: string[] = [], tookOver: string[] = [];
   const put = new Map<string, number>(), treePut = new Map<string, number>();
   const preload: Record<string, number> = {};
-  let level = 0, treeLevel = 0, base = 0, cuts = 0;
+  let level = 0, treeLevel = 0, base = 0, cuts = 0, shifts = 0;
+  // THE TREE'S MINIMUM RAISE (stress-500 brief_D-001 / brief_I-003, 2026-10-05): a wager in the tree must raise by at
+  // least the last raise's increment (a bet by 1bb), unless it is the seat's all-in — GTO Wizard offers nothing else.
+  // A takeover of a dropped seat's INCOMPLETE all-in raise ("SB jams 15, UTG jams 22, CO calls 22" kept without
+  // UTG: the CO "raising" 15 to 22) is no legal raise: the seat CALLS the tree's level and the rest of his chips go
+  // into the starting pot, off his stack (`preload`, as a cut does) — every chip still where it was.
+  let lastInc = 1;
+  // each incomplete increment moved to the pot, at the real level it was made: every kept seat whose chips go past
+  // that level moves the same amount (a caller of it, and a raiser over it — or hero's price would differ from the
+  // holder's by it). They outlive a cut: a seat that passes the level after it still owes its share
+  const layers: { at: number; amt: number; done: Set<string> }[] = [];
   const inTree = new Set(kept);
   const cap = (p: string) => (capOf(p) ?? Infinity) - (preload[p] ?? 0);
   const allIn = (p: string) => (treePut.get(p) ?? 0) >= cap(p) - 0.005;
@@ -79,7 +89,7 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
       // the cut: the kept seats' chips so far are the tree's starting pot, the round starts again here
       for (const p of inTree) { const x = treePut.get(p) ?? 0; if (x > 0) preload[p] = r((preload[p] ?? 0) + x); }
       base = r(base + treeLevel); cuts++;
-      out.length = 0; seats.length = 0; treePut.clear(); treeLevel = 0; actedSince = new Set();
+      out.length = 0; seats.length = 0; treePut.clear(); treeLevel = 0; lastInc = 1; actedSince = new Set();
       for (const p of rot) {
         if (p === seat) break;
         if (inTree.has(p) && cap(p) > 0.005) { out.push("X"); seats.push(p); actedSince.add(p); }
@@ -97,22 +107,59 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
     put.set(a.seat, to);
     level = Math.max(level, to);
     if (!kept.has(a.seat)) return;
+    if (a.kind === "check") { maybeCut(a.seat); emit(a.seat, "X"); return; }
+    // FIRST, WITHOUT CUTTING: an action that puts nothing more in the tree, or only an incomplete increment, is
+    // settled in the round as it stands (stress-500 brief_I-003: the BB's last call of a 7 increment had cut the
+    // street and wiped the line to "BB X") — a cut is for a wager the closed round cannot hold
+    const layerAdd = (): number => layers.reduce((s2, L) => s2 + (to >= L.at - 0.005 && !L.done.has(a.seat) ? L.amt : 0), 0);
+    const takeLayers = () => { for (const L of layers) if (to >= L.at - 0.005 && !L.done.has(a.seat)) { preload[a.seat] = r((preload[a.seat] ?? 0) + L.amt); L.done.add(a.seat); } };
+    {
+      const rel0 = r(to - (preload[a.seat] ?? 0) - layerAdd());
+      const mineT = treePut.get(a.seat) ?? 0;
+      // a call that puts nothing more in the tree (its level is what he has in: an increment moved): a check when he
+      // has not acted this round, nothing when he has
+      if (rel0 <= mineT + 0.005 && (a.kind === "call" || a.kind === "allin")) {
+        takeLayers();
+        if (!actedSince.has(a.seat)) emit(a.seat, "X");
+        return;
+      }
+      if (rel0 > treeLevel + 0.005 && rel0 < cap(a.seat) - layerAdd() - 0.005 && rel0 - treeLevel < lastInc - 0.005) {
+        // no legal raise in the tree (an incomplete all-in raise taken over, or a raise its increment no longer
+        // reaches): he calls the tree's level, the rest into the starting pot
+        takeLayers();
+        const amt = r(rel0 - treeLevel);
+        preload[a.seat] = r((preload[a.seat] ?? 0) + amt); shifts++;
+        layers.push({ at: to, amt, done: new Set([a.seat]) });
+        // in the tree: a call of its level, a check when there is nothing to call and he has not acted this round
+        if (mineT < treeLevel - 0.005) { emit(a.seat, "C"); treePut.set(a.seat, treeLevel); }
+        else if (!actedSince.has(a.seat)) emit(a.seat, "X");
+        return;
+      }
+    }
     maybeCut(a.seat);
-    if (a.kind === "check") { emit(a.seat, "X"); return; }
-    const rel = r(to - base);
+    takeLayers();
+    // his chips in the tree: his total on the street less what a cut or an incomplete raise put in the pot for him
+    const rel = r(to - (preload[a.seat] ?? 0));
     if (a.kind === "call" && rel > treeLevel + 0.005) {
-      // the level he called was a dropped seat's: in the tree it is his own wager
-      emit(a.seat, `R${rel}`); tookOver.push(a.seat);
+      // the level he called was a dropped seat's: in the tree it is his own wager (his all-in when it is his stack)
+      emit(a.seat, rel >= cap(a.seat) - 0.005 ? "RAI" : `R${rel}`); tookOver.push(a.seat);
+      lastInc = Math.max(lastInc, r(rel - treeLevel));
       treePut.set(a.seat, rel); treeLevel = rel; actedSince = new Set([a.seat]); return;
+    }
+    if (rel <= (treePut.get(a.seat) ?? 0) + 0.005 && (a.kind === "call" || a.kind === "allin")) {
+      if (!actedSince.has(a.seat)) emit(a.seat, "X");
+      return;
     }
     // after a cut the tree counts from the cut's level: a wager's amount is re-expressed (an all-in included) — but an
     // all-in that does not reach the level is a CALL for less (review 3, 2026-10-05: "R7" over a 45 threw in the walk)
     const allInCall = a.kind === "allin" && rel <= treeLevel + 0.005;
-    emit(a.seat, allInCall && base > 0 ? "C" : base > 0 && a.kind !== "call" ? `R${rel}` : toks[i]!);
+    const moved = (preload[a.seat] ?? 0) > 0;
+    emit(a.seat, allInCall && (base > 0 || moved) ? "C"
+      : (base > 0 || moved) && a.kind !== "call" ? (rel >= cap(a.seat) - 0.005 ? "RAI" : `R${rel}`) : toks[i]!);
     treePut.set(a.seat, rel);
-    if (rel > treeLevel + 0.005) { treeLevel = rel; actedSince = new Set([a.seat]); }
+    if (rel > treeLevel + 0.005) { lastInc = Math.max(lastInc, r(rel - treeLevel)); treeLevel = rel; actedSince = new Set([a.seat]); }
   });
-  return { toks: out, seats, tookOver, preload, cuts, closed: false };
+  return { toks: out, seats, tookOver, preload, cuts, shifts, closed: false };
 }
 
 const r2 = (x: number): number => Math.round(x * 100) / 100;
@@ -169,11 +216,15 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     const deadBy: Record<string, number> = {};
     for (const s of a.seats) if (!kept.has(s.pos) && (c.bySeat.get(s.pos) ?? 0) > 0) deadBy[s.pos] = r2(c.bySeat.get(s.pos)!);
     const fixed = replayKept(acts, toks, kept, a.behind, a.seats.map((s) => s.pos));
+    // HERO'S PRICE MUST BE THE TABLE'S (2026-10-05): an incomplete raise moved into the pot for some seats and not for
+    // hero would show him a cheaper call — such a plan is not taken (the plan keeping the incomplete raiser plays it)
+    const tableCall = Math.min(sc.level, (a.behind(a.heroPos) ?? Infinity) as number) - putOf(a.heroPos);
+    if (fixed.shifts && Math.abs(treeCallOf(fixed, a.heroPos, (p) => (a.behind(p) ?? Infinity) as number) - tableCall) > 0.02) continue;
     const headsUp = live.length === 1;
     const dropped = a.seats.filter((s) => !kept.has(s.pos)).map((s) =>
       `${sc.folded.has(s.pos) ? (putOf(s.pos) > 0 ? (headsUp ? "folded" : "dead") : "fold") : putOf(s.pos) > 0 ? "dead" : "ghost"}:${s.pos}`);
     plans.push({
-      kind: `${headsUp ? `heads-up: ${dropped.join(" + ")}` : dropped.join(" + ") || "exact"}${fixed.cuts ? " (street cut)" : ""}`, seats, heroIdx: seats.findIndex((s) => s.pos === a.heroPos),
+      kind: `${headsUp ? `heads-up: ${dropped.join(" + ")}` : dropped.join(" + ") || "exact"}${fixed.cuts ? " (street cut)" : ""}${fixed.shifts ? " (incomplete raise)" : ""}`, seats, heroIdx: seats.findIndex((s) => s.pos === a.heroPos),
       streets: [fixed.toks.map((tok, i) => ({ tok, seat: fixed.seats[i]! }))],
       steps: dropped.length, ghostOnly: false,
       dead: r2(Object.values(deadBy).reduce((s, x) => s + x, 0)), deadBy, tookOver: fixed.tookOver, headsUp,
@@ -182,6 +233,21 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
   }
   if (!plans.length) return { plans: [], why: "no seat set holds hero and a villain" };
   return { plans: plans.slice(0, max), why: null };
+}
+
+/** Hero's amount to call at the end of a replayed street, in the tree: the tree's level (capped at his tree stack) less
+ *  his tree chips — each seat's stack less its preload, an all-in its whole tree stack. */
+function treeCallOf(r: { toks: string[]; seats: string[]; preload: Record<string, number> }, hero: string, capOf: (p: string) => number): number {
+  const cap = (p: string) => capOf(p) - (r.preload[p] ?? 0);
+  const put: Record<string, number> = {};
+  let level = 0;
+  r.toks.forEach((t, i) => {
+    const p = r.seats[i]!;
+    if (t === "X" || t === "F") return;
+    const to = t === "C" ? Math.min(level, cap(p)) : t === "RAI" ? cap(p) : Math.min(parseFloat(t.slice(1)), cap(p));
+    put[p] = to; level = Math.max(level, to);
+  });
+  return Math.min(level, cap(hero)) - (put[hero] ?? 0);
 }
 
 /** k-subsets of xs, in xs order (xs is short: the villains still in) */

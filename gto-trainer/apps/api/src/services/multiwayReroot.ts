@@ -144,7 +144,14 @@ export function takeoverCover(a: Pick<RerootArgs, "ordered" | "heroPos" | "stree
   const cands: string[][] = [];
   if (villains.length <= 2) cands.push([a.heroPos, ...villains]);
   else for (let i = 0; i < villains.length; i++) for (let j = i + 1; j < villains.length; j++) cands.push([a.heroPos, villains[i]!, villains[j]!]);
-  const ok = cands.filter((g) => takeoverStreets(a, first, g) != null)
+  // walkable: the takeover replays it, and the tree can play what it replays (walkPlays: rotation, minimum raises, closed)
+  const capAt = (i: number) => { const b = moneyThrough(a, i).behind; return (p: string) => b[p]; };
+  const ok = cands.filter((g) => {
+    const t = takeoverStreets(a, first, g);
+    if (!t) return false;
+    const k = a.ordered.filter((p) => g.includes(p));
+    return walkPlays(a.ordered, k, t.streets, t.seats, (i) => (p) => { const c = capAt(i)(p); return c == null ? c : c - (i === 0 ? t.preload[p] ?? 0 : 0); }) == null;
+  })
     .sort((x, y) => y.filter((p) => aggressors.has(p)).length - x.filter((p) => aggressors.has(p)).length);
   // the seats whose ranges the current street needs: a seat that folded on it is dead money there, not a range
   const need = new Set(needed ?? villains), out: string[][] = [];
@@ -194,7 +201,7 @@ export function walkPlays(order: readonly string[], keep: readonly string[], str
   for (let i = 0; i < streets.length; i++) {
     const cap = (p: string) => capAt(i)(p) ?? Infinity;
     const put: Record<string, number> = {};
-    let level = 0, acted = new Set<string>(), at = 0;
+    let level = 0, acted = new Set<string>(), at = 0, lastInc = 1;
     const next = (k0: number) => { for (let k = 0; k < rot.length; k++) { const p = rot[(k0 + k) % rot.length]!; if (!out.has(p) && !allIn.has(p)) return { p, k: (k0 + k) % rot.length }; } return null; };
     const live = () => rot.filter((p) => !out.has(p) && !allIn.has(p));
     const closed = () => live().every((p) => acted.has(p) && (put[p] ?? 0) >= level - 0.005);
@@ -211,9 +218,11 @@ export function walkPlays(order: readonly string[], keep: readonly string[], str
         // cap(p) = his stack entering the street = all he can have in on it
         const to = t === "C" ? Math.min(level, cap(p)) : t === "RAI" ? cap(p) : Math.min(parseFloat(t.slice(1)), cap(p));
         if (t !== "C" && to <= level + 0.005 && to < cap(p) - 0.005) return `street ${i}: ${p}:${t} is no raise over ${level}`;
+        // GTO Wizard's minimum raise: the last increment (a bet: 1bb), unless it is the seat's all-in
+        if (t !== "C" && to > level + 0.005 && to < cap(p) - 0.005 && to - level < lastInc - 0.005) return `street ${i}: ${p}:${t} raises by less than the minimum (${lastInc})`;
         if (to < mine - 0.005) return `street ${i}: ${p}:${t} takes chips back`;
         put[p] = to;
-        if (to > level + 0.005) { level = to; acted = new Set(); }
+        if (to > level + 0.005) { if (to - level >= lastInc - 0.005) lastInc = to - level; level = to; acted = new Set(); }
         if (to >= cap(p) - 0.005) allIn.add(p);
       }
       acted.add(p); at = nx.k + 1;

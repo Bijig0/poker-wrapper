@@ -88,6 +88,38 @@ describe("planDeadMoney", () => {
     expect(keep.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["BB:R45", "CO:C"]);
   });
 
+  test("stress-500: a takeover of an INCOMPLETE all-in raise is a call, the increment into the pot (never a raise under the minimum)", async () => {
+    const { replayKept } = await import("./deadMoneyCollapse");
+    const { streetFromTokens } = await import("../utils/tableMoney/tableMoney");
+    // brief_I-003: SB jams 15, BB calls, UTG jams 22 (+7 over 15: incomplete), CO calls 22, BTN calls 22, BB calls 7
+    const b: Record<string, number> = { SB: 15, BB: 100, UTG: 22, CO: 100, BTN: 100 };
+    const toks = ["RAI", "C", "RAI", "C", "C", "C"], who = ["SB", "BB", "UTG", "CO", "BTN", "BB"];
+    const r = replayKept(streetFromTokens(toks, who, [15, null, 22, null, null, null]), toks, new Set(["BB", "CO", "BTN"]), (p) => b[p], ["SB", "BB", "UTG", "CO", "BTN"]);
+    expect(r.toks.map((t, i) => `${r.seats[i]}:${t}`)).toEqual(["BB:R15", "CO:C", "BTN:C"]);
+    expect(r.preload).toEqual({ CO: 7, BTN: 7, BB: 7 });
+    // brief_D-001: … BTN raises 69.22 (+40.89), SB jams 78 (+8.78: incomplete), BB calls 78, BTN calls 78
+    const b2: Record<string, number> = { SB: 78, BB: 99, UTG: 99, HJ: 9.18, BTN: 109 };
+    const t2 = ["X", "R1.75", "C", "RAI", "C", "R28.33", "C", "F", "R69.22", "RAI", "C", "C"];
+    const w2 = ["SB", "BB", "UTG", "HJ", "BTN", "SB", "BB", "UTG", "BTN", "SB", "BB", "BTN"];
+    const r2 = replayKept(streetFromTokens(t2, w2, [null, null, null, 9.18, null, null, null, null, null, 78, null, null]), t2, new Set(["BB", "BTN"]), (p) => b2[p], ["SB", "BB", "UTG", "HJ", "BTN"]);
+    expect(r2.toks.map((t, i) => `${r2.seats[i]}:${t}`)).toEqual(["BB:R1.75", "BTN:R9.18", "BB:R28.33", "BTN:R69.22", "BB:C"]);
+    expect(r2.preload).toEqual({ BB: 8.78, BTN: 8.78 });
+  });
+
+  test("an incomplete increment applies to the raiser past it too: hero's call is the table's", () => {
+    // SB X, BB bets 3.5, UTG(hero) calls, HJ calls, CO folds, SB raises 16.63, BB all in 14.75, hero calls, HJ raises 75.14, SB folds
+    const b: Record<string, number> = { SB: 190.7, BB: 14.75, UTG: 146.14, HJ: 197.02, CO: 177.55 };
+    const { plans } = planDeadMoney({ seats: seatsOf("SB", "BB", "UTG", "HJ", "CO"), heroPos: "UTG",
+      street: line("SB:X BB:R3.5 UTG:C HJ:C CO:F SB:R16.63 BB:C UTG:C HJ:R75.14 SB:F"), behind: (p) => b[p] });
+    expect(plans).toHaveLength(1);
+    const p = plans[0]!;
+    // the kept round (BB 3.5, hero and HJ call) closed before the SB's raise: CUT — 3.5 each into the pot; the BB's all-in
+    // call of 14.75 is his all-in; hero's call of 16.63 is 1.88 short of a legal raise over it: called, 1.88 into the pot;
+    // the HJ's raise to 75.14 passes that level: his 1.88 too. Hero faces 69.76 - 11.25 = 58.51 = the table's 75.14 - 16.63
+    expect(p.preload).toEqual({ BB: 3.5, UTG: 5.38, HJ: 5.38 });
+    expect(p.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["BB:RAI", "UTG:C", "HJ:R69.76"]);
+  });
+
   test("the takeover keeps a kept seat's price: a caller of a dropped bet bets it in the tree", () => {
     // UTG bets 3, hero (HJ) calls, CO raises to 10, UTG calls; the BTN is still to act — hero faces 7 more
     const { plans } = planDeadMoney({ seats: seatsOf("UTG", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("UTG:R3 HJ:C CO:R10 BTN:F UTG:C"), behind: () => 100 });
