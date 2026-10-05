@@ -1,0 +1,458 @@
+<meta charset="utf-8">
+<title>Off-tree Villain Ranges</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: the study dashboard's chrome (sticky bar, cards) and the Stress 500 replayer's node view — a node list on
+   the left, the exact node on the right with one 13x13 grid per belief. Tokens copied from dashboard.css. */
+:root {
+  color-scheme: light;
+  --bg: #F2F4F1; --surface: #FFFFFF; --surface2: #E9EDE9; --surface3: #DEE4DF;
+  --line: #D6DDD7; --grid: #E3E8E3; --ink: #1A2320; --muted: #5F6D65; --faint: #8A968E;
+  --win: #1F7A4D; --win-soft: rgba(31,122,77,.12);
+  --ev: #C4861A; --ev-soft: rgba(196,134,26,.14);
+  --loss: #B8433A; --loss-soft: rgba(184,67,58,.12);
+  --info: #2F6FB3; --info-soft: rgba(47,111,179,.12);
+  --chip: #E4EAE5;
+  --shadow: 0 1px 2px rgba(20,30,25,.06), 0 8px 20px rgba(20,30,25,.06);
+  --s-soft: #2a78d6; --s-qre: #eb6834; --s-pool: #1baf7a; --s-hyb: #9a7a00; --s-pre: #8A968E;
+  --cat0: #d7e5f6; --cat1: #a9c8ee; --cat2: #6a9fe0; --cat3: #2a78d6; --cat4: #17488a;
+  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-head: Sora, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  color-scheme: dark;
+  --bg: #121715; --surface: #1B211E; --surface2: #242B27; --surface3: #2B3330;
+  --line: #2E3733; --grid: #273029; --ink: #E7ECE8; --muted: #9AA69E; --faint: #6E7A72;
+  --win: #4CC382; --win-soft: rgba(76,195,130,.14); --ev: #E5AE4A; --ev-soft: rgba(229,174,74,.16);
+  --loss: #E0675C; --loss-soft: rgba(224,103,92,.16); --info: #6FA8E6; --info-soft: rgba(111,168,230,.16);
+  --chip: #262E29; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.35);
+  --s-soft: #3987e5; --s-qre: #d95926; --s-pool: #199e70; --s-hyb: #c98500; --s-pre: #6E7A72;
+  --cat0: #22344d; --cat1: #2c5287; --cat2: #3987e5; --cat3: #7aaff0; --cat4: #c4dbf8;
+} }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121715; --surface: #1B211E; --surface2: #242B27; --surface3: #2B3330;
+  --line: #2E3733; --grid: #273029; --ink: #E7ECE8; --muted: #9AA69E; --faint: #6E7A72;
+  --win: #4CC382; --win-soft: rgba(76,195,130,.14); --ev: #E5AE4A; --ev-soft: rgba(229,174,74,.16);
+  --loss: #E0675C; --loss-soft: rgba(224,103,92,.16); --info: #6FA8E6; --info-soft: rgba(111,168,230,.16);
+  --chip: #262E29; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.35);
+  --s-soft: #3987e5; --s-qre: #d95926; --s-pool: #199e70; --s-hyb: #c98500; --s-pre: #6E7A72;
+  --cat0: #22344d; --cat1: #2c5287; --cat2: #3987e5; --cat3: #7aaff0; --cat4: #c4dbf8;
+}
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; font: 14px/1.45 var(--font-body); background: var(--bg); color: var(--ink); }
+header { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding-block: 10px; padding-inline: 16px; }
+header h1 { font-family: var(--font-head); font-weight: 600; font-size: 16px; margin: 0; white-space: nowrap; }
+.sub { color: var(--muted); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+nav.tabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 auto; }
+nav.tabs a { padding: 5px 11px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: 13.5px; }
+nav.tabs a.on { background: var(--ink); color: var(--bg); }
+nav.tabs a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+.seg { display: inline-flex; background: var(--surface2); border-radius: 8px; padding: 2px; }
+.seg button { font: inherit; font-size: 12.5px; border: 0; background: none; color: var(--muted); padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+main { padding-block: 16px 48px; padding-inline: 16px; max-width: 1480px; margin: 0 auto; }
+section[hidden] { display: none; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); min-width: 0; }
+h2 { font-family: var(--font-head); font-weight: 600; font-size: 15px; margin: 0 0 8px; text-wrap: balance; }
+h3 { font-family: var(--font-head); font-weight: 600; font-size: 13.5px; margin: 14px 0 6px; }
+p { margin: 6px 0; max-width: 78ch; }
+.lead { font-size: 15.5px; max-width: 82ch; }
+.stack { display: grid; gap: 14px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.stat { background: var(--surface2); border-radius: 10px; padding: 10px 12px; }
+.stat b { display: block; font-family: var(--font-head); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12.5px; color: var(--muted); }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; letter-spacing: .02em; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.best { font-weight: 700; }
+.ci { display: block; font-size: 11px; color: var(--faint); }
+.pill { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 99px; background: var(--chip); color: var(--ink); white-space: nowrap; }
+.pill.good { background: var(--win-soft); color: var(--win); }
+.pill.bad { background: var(--loss-soft); color: var(--loss); }
+.pill.warn { background: var(--ev-soft); color: var(--ev); }
+.pill.info { background: var(--info-soft); color: var(--info); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }
+@media (max-width: 520px) { .two { grid-template-columns: 1fr; } }
+/* composition bars */
+.comp-row { display: grid; grid-template-columns: 104px 1fr; gap: 8px; align-items: center; margin: 3px 0; font-size: 12.5px; }
+.comp-bar { display: flex; height: 16px; gap: 2px; }
+.comp-bar i { display: block; height: 100%; min-width: 0; }
+.comp-bar i:first-child { border-radius: 4px 0 0 4px; } .comp-bar i:last-child { border-radius: 0 4px 4px 0; }
+.comp-row.real span { font-weight: 700; }
+/* nodes */
+.replay { display: grid; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.6fr); gap: 14px; align-items: start; }
+@media (max-width: 1100px) { .replay { grid-template-columns: 1fr; } }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.filters select, .filters input { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); color: var(--ink); min-width: 0; }
+.filters input { flex: 1 1 140px; }
+.nl { max-height: 78vh; overflow: auto; }
+.nl-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.nl-row:hover { background: var(--surface2); }
+.nl-row.on { border-color: var(--ink); background: var(--surface2); }
+.nl-row .t { font-weight: 600; font-size: 13px; }
+.nl-row .m { font-size: 12px; color: var(--muted); grid-column: 1 / -1; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; min-width: 0; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.act { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--surface2); font-family: var(--font-mono); }
+.act.taken { background: var(--loss-soft); color: var(--loss); outline: 1px solid var(--loss); }
+.grids { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 10px; }
+.gcard { border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-width: 0; }
+.gcard.today { border-color: var(--s-qre); }
+.gcard h4 { margin: 0; font-size: 13px; font-family: var(--font-head); font-weight: 600; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.gcard .cmb { font-family: var(--font-mono); font-size: 13px; }
+.gcard .note { font-size: 11.5px; color: var(--muted); margin: 2px 0 6px; min-height: 2.6em; }
+.grid169 { display: grid; grid-template-columns: repeat(13, 20px); gap: 2px; margin-top: 6px; }
+.grid169 div { width: 20px; height: 17px; font-size: 8px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-family: var(--font-mono);
+  color: #fff; text-shadow: 0 0 2px rgba(0,0,0,.6); }
+.grid169 div.off { color: rgba(255,255,255,.28); text-shadow: none; }
+.grid169 div.real { outline: 2px solid var(--ev); z-index: 1; }
+.cards { font-family: var(--font-mono); font-weight: 600; letter-spacing: .5px; }
+.suit-h, .suit-d { color: var(--loss); }
+#tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); max-width: 260px; }
+.chart svg text { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
+.chart svg .ax { stroke: var(--line); }
+.chart svg .gl { stroke: var(--grid); }
+.callout { border-left: 3px solid var(--info); padding: 6px 12px; background: var(--info-soft); border-radius: 0 8px 8px 0; }
+ol, ul { padding-left: 20px; margin: 6px 0; } li { margin: 3px 0; max-width: 80ch; }
+code { font-family: var(--font-mono); font-size: 12.5px; background: var(--surface2); padding: 0 4px; border-radius: 4px; }
+@media (max-width: 520px) { .grid169 { grid-template-columns: repeat(13, 19px); } .grid169 div { width: 19px; height: 16px; font-size: 7px; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<header>
+  <h1>Off-tree villain ranges <span class="sub" style="font-weight:400;font-family:var(--font-body)">· option 3 measurement · 2026-10-06</span></h1>
+  <nav class="tabs" id="tabs">
+    <a href="#findings" data-t="findings">Findings</a>
+    <a href="#nodes" data-t="nodes">Nodes</a>
+    <a href="#thin" data-t="thin">Thin states</a>
+    <a href="#method" data-t="method">Method &amp; proposal</a>
+  </nav>
+  <div class="seg" id="themeSeg" role="group" aria-label="Theme"><button data-t="">Auto</button><button data-t="light">Light</button><button data-t="dark">Dark</button></div>
+</header>
+<main>
+<section id="s-findings" class="stack"></section>
+<section id="s-nodes" hidden></section>
+<section id="s-thin" class="stack" hidden></section>
+<section id="s-method" class="stack" hidden></section>
+</main>
+<div id="tip" hidden></div>
+<script type="application/json" id="data">/*DATA*/</script>
+<script>
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[x]));
+const fmt = (x, d = 2) => x == null || !isFinite(x) ? "–" : (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d);
+const pct = (x, d = 1) => x == null ? "–" : (100 * x).toFixed(x < 0.001 ? 3 : x < 0.01 ? 2 : d) + "%";
+const cmb = (x) => x == null ? "–" : x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x >= 0.1 ? x.toFixed(2) : x >= 0.001 ? x.toFixed(3) : x.toExponential(1);
+const cardsHtml = (s) => (String(s || "").match(/[2-9TJQKA][cdhs]/gi) || []).map((c) => `<span class="suit-${c[1].toLowerCase()}">${c[0].toUpperCase()}${{ c: "♣", d: "♦", h: "♥", s: "♠" }[c[1].toLowerCase()]}</span>`).join("");
+const MODELS = [
+  { k: "qre", name: "QRE (today)", col: "var(--s-qre)" },
+  { k: "pre", name: "Pre-action", col: "var(--s-pre)" },
+  { k: "soft", name: "Soft (option 3)", col: "var(--s-soft)" },
+  { k: "pool", name: "Pool (option 2)", col: "var(--s-pool)" },
+  { k: "hybrid", name: "Pool × soft", col: "var(--s-hyb)" },
+];
+const CATS = D.catNames;
+const CATCOL = ["var(--cat0)", "var(--cat1)", "var(--cat2)", "var(--cat3)", "var(--cat4)"];
+
+/* ---------- theme + tabs ---------- */
+(function () {
+  let t = ""; try { t = localStorage.getItem("ot-theme") || ""; } catch (e) {}
+  const apply = (v) => { if (v) document.documentElement.dataset.theme = v; else delete document.documentElement.dataset.theme;
+    document.querySelectorAll("#themeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.t === v)); };
+  apply(t);
+  $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; apply(b.dataset.t); try { localStorage.setItem("ot-theme", b.dataset.t); } catch (e) {} });
+})();
+function showTab() {
+  const t = (location.hash || "#findings").slice(1);
+  const known = ["findings", "nodes", "thin", "method"];
+  const tab = known.includes(t) ? t : "findings";
+  for (const k of known) $("s-" + k).hidden = k !== tab;
+  document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.t === tab));
+}
+window.addEventListener("hashchange", showTab);
+
+/* ---------- tooltip ---------- */
+const tip = $("tip");
+document.addEventListener("mouseover", (e) => { const el = e.target.closest("[data-tip]"); if (!el) return; tip.innerHTML = el.dataset.tip; tip.hidden = false; });
+document.addEventListener("mousemove", (e) => { if (tip.hidden) return; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); const y = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8); tip.style.left = x + "px"; tip.style.top = y + "px"; });
+document.addEventListener("mouseout", (e) => { const el = e.target.closest("[data-tip]"); if (el && !(e.relatedTarget && el.contains(e.relatedTarget))) tip.hidden = true; });
+
+/* ---------- findings ---------- */
+function bandRows() {
+  const F = D.fit2, S = D.score;
+  const rows = [
+    ["Off-tree actions (the trigger)", F["off-tree"], "The lines option 3 changes. Too few to separate the models."],
+    ["Node share < 5%", F["node < 5%"], ""],
+    ["Node share < 20%", F["node < 20%"], "The band T is fitted on."],
+    ["  … aggressive (bet / raise)", F["node < 20% aggressive"], ""],
+    ["  … passive (check / call)", F["node < 20% passive"], ""],
+    ["  … flop bet OOP, no bet faced", F["node < 20% flop wager OOP no bet faced"], "Donks: 27 of the 37 live off-tree lines."],
+    ["Common actions (node share ≥ 20%)", F["node >= 20%"], "For scale: on-tree play."],
+  ];
+  return rows;
+}
+function cell(v, ci, best) {
+  if (v == null) return `<td class="num">–</td>`;
+  return `<td class="num${best ? " best" : ""}">${fmt(v)}${ci ? `<span class="ci">${fmt(ci[0])} … ${fmt(ci[1])}</span>` : ""}</td>`;
+}
+function bandTable(lvl) {
+  let h = `<div class="tbl-wrap"><table><thead><tr><th>Actions</th><th>n</th><th style="color:var(--s-qre)">QRE (today)</th><th>Pre-action</th><th style="color:var(--s-soft)">Soft, fitted t</th><th style="color:var(--s-pool)">Pool</th><th style="color:var(--s-hyb)">Pool × soft</th><th></th></tr></thead><tbody>`;
+  for (const [name, r, note] of bandRows()) {
+    const b = r?.[lvl];
+    const n = lvl === "combo" ? r?.in_range : r?.n;
+    if (!b) { h += `<tr><td>${esc(name)}</td><td class="num">${n ?? 0}</td><td colspan="6" class="sub">no sample</td></tr>`; continue; }
+    const vals = [b.qre, 0, b.soft, b.pool, b.hyb];
+    const mx = Math.max(...vals);
+    h += `<tr><td>${esc(name).replace(/^ +/, (m) => "&nbsp;".repeat(m.length * 2))}</td><td class="num">${n}</td>` +
+      cell(b.qre, b.qre_ci, b.qre === mx) + `<td class="num${mx === 0 ? " best" : ""}">0 <span class="ci">baseline</span></td>` +
+      cell(b.soft, b.soft_ci, b.soft === mx).replace("</td>", `<span class="ci">t = ${b.soft_t >= 1e8 ? "∞" : (100 * b.soft_t).toFixed(1) + "% pot"}</span></td>`) +
+      cell(b.pool, b.pool_ci, b.pool === mx) +
+      cell(b.hyb, b.hyb_ci, b.hyb === mx).replace("</td>", `<span class="ci">t = ${b.hyb_t >= 1e8 ? "∞" : (100 * b.hyb_t).toFixed(1) + "% pot"}</span></td>`) +
+      `<td class="sub" style="font-size:12px;min-width:160px">${esc(note)}</td></tr>`;
+  }
+  return h + `</tbody></table></div>`;
+}
+function curveChart() {
+  // gain vs t for the soft model, combo level, three bands
+  const F = D.fit2;
+  const series = [
+    { name: "Node share < 20% (n=" + F["node < 20%"].in_range + ")", col: "var(--s-soft)", c: F["node < 20%"].combo.soft_curve },
+    { name: "Off-tree (n=" + F["off-tree"].in_range + ")", col: "var(--s-qre)", c: F["off-tree"].combo.soft_curve },
+    { name: "Common actions (n=" + F["node >= 20%"].in_range + ")", col: "var(--s-pre)", c: F["node >= 20%"].combo.soft_curve },
+  ];
+  const W = 560, H = 230, L = 44, R = 12, T = 12, B = 34;
+  const ts = series[0].c.map((p) => p[0]).filter((t) => t < 1e8);
+  const xs = (t) => L + (Math.log10(t) - Math.log10(ts[0])) / (Math.log10(ts[ts.length - 1]) - Math.log10(ts[0])) * (W - L - R);
+  let ymin = 0, ymax = 0;
+  for (const s of series) for (const [t, g] of s.c) if (t < 1e8) { ymin = Math.min(ymin, g); ymax = Math.max(ymax, g); }
+  ymin = Math.max(ymin, -0.6); ymax = Math.max(ymax, 0.1);
+  const ys = (g) => T + (ymax - Math.max(ymin, g)) / (ymax - ymin) * (H - T - B);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Soft model gain against T">`;
+  const yt = []; for (let v = Math.ceil(ymin * 10) / 10; v <= ymax + 1e-9; v += 0.1) yt.push(+v.toFixed(1));
+  for (const v of yt) svg += `<line class="${v === 0 ? "ax" : "gl"}" x1="${L}" x2="${W - R}" y1="${ys(v)}" y2="${ys(v)}"/><text x="${L - 6}" y="${ys(v) + 4}" text-anchor="end">${v === 0 ? "0" : fmt(v, 1)}</text>`;
+  for (const t of [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 5]) if (t >= ts[0] && t <= ts[ts.length - 1]) svg += `<text x="${xs(t)}" y="${H - B + 16}" text-anchor="middle">${t * 100 >= 1 ? (t * 100).toFixed(0) : (t * 100).toFixed(1)}%</text>`;
+  svg += `<text x="${(L + W - R) / 2}" y="${H - 4}" text-anchor="middle">T as a share of the pot (log scale) · y = bits per action vs pre-action</text>`;
+  svg += `<line x1="${xs(0.1)}" x2="${xs(0.1)}" y1="${T}" y2="${H - B}" stroke="var(--s-soft)" stroke-dasharray="3 3" stroke-width="1"/>`;
+  for (const s of series) {
+    const pts = s.c.filter((p) => p[0] < 1e8);
+    svg += `<path d="${pts.map((p, i) => (i ? "L" : "M") + xs(p[0]).toFixed(1) + "," + ys(p[1]).toFixed(1)).join("")}" fill="none" stroke="${s.col}" stroke-width="2"/>`;
+    for (const p of pts) svg += `<circle cx="${xs(p[0])}" cy="${ys(p[1])}" r="9" fill="transparent" data-tip="<b>${esc(s.name)}</b><br>t = ${(100 * p[0]).toFixed(1)}% pot · ${fmt(p[1])} bits"/><circle cx="${xs(p[0])}" cy="${ys(p[1])}" r="2.5" fill="${s.col}" stroke="var(--surface)" stroke-width="1" pointer-events="none"/>`;
+  }
+  svg += `</svg>`;
+  return `<div class="chart">${svg}</div><div class="legend">${series.map((s) => `<span><span class="sw" style="background:${s.col}"></span>${esc(s.name)}</span>`).join("")}<span><span class="sw" style="background:none;border:1px dashed var(--s-soft)"></span>t = 10% (fitted)</span></div>`;
+}
+function compBlock(name) {
+  const c = D.composition[name];
+  if (!c) return "";
+  const bar = (mix, lab, cls) => `<div class="comp-row ${cls || ""}"><span>${esc(lab)}</span><div class="comp-bar">${mix.map((m, i) => `<i style="width:${(100 * m).toFixed(1)}%;background:${CATCOL[i]}" data-tip="<b>${esc(lab)}</b>: ${esc(CATS[i])} ${pct(m, 0)}${cls === "real" ? ` (${c.realN[i]} hands)` : ""}"></i>`).join("")}</div></div>`;
+  return `<div><h3>${esc(name)} <span class="sub" style="font-weight:400">· ${c.n} actions</span></h3>` +
+    bar(c.real, "Real hands", "real") + bar(c.exp.qre, "QRE (today)") + bar(c.exp.pre, "Pre-action") + bar(c.exp.soft, "Soft t=10%") + bar(c.exp.pool, "Pool") + bar(c.exp.hybrid, "Pool × soft") + `</div>`;
+}
+const med = (k) => { const v = D.nodes.map((n) => n.beliefs[k].combos).sort((a, b) => a - b); return v[Math.floor(v.length / 2)]; };
+function renderFindings() {
+  const F = D.fit2, S = D.sample;
+  const lo = F["node < 20%"], off = F["off-tree"];
+  const nOffNodes = D.nodes.filter((n) => n.offTree).length, nLive = D.nodes.filter((n) => n.liveLog).length;
+  const excluded = S.items - D.score["all villain actions"].in_range;
+  $("s-findings").innerHTML = `
+  <div class="card">
+    <h2>What real players held after an unusual action</h2>
+    <p class="lead">I scored ${S.items.toLocaleString()} villain actions from ${S.hands} hands where we have both the exact GTO Wizard node the chain walked and villain's real cards (Ignition's downloaded histories show every seat). On the ${lo.n} actions the solver takes less than 20% of the time, <b>narrowing by the QRE strategy is far worse than ignoring the action</b>: ${fmt(lo.combo.qre)} bits per action, because it rules out hands real players actually hold. The soft model (option 3) at <b>T = 10% of the pot</b> gains ${fmt(lo.combo.soft)} bits, the pool model ${fmt(lo.combo.pool)}, and pool × soft ${fmt(lo.combo.hyb)}, the best.</p>
+    <p class="lead">On the off-tree lines themselves (the detector's trigger) there are only ${off.n} actions, ${off.in_range} with villain's hand inside his entering range. That is too few to separate the models: every interval spans zero. So T is fitted on the neighbouring band and applied to the off-tree lines.</p>
+    <div class="stats" style="margin-top:12px">
+      <div class="stat"><b>${S.items.toLocaleString()}</b><span>villain actions with exact node + real cards (${S.hands} hands)</span></div>
+      <div class="stat"><b>${lo.n}</b><span>with node share under 20% (${lo.in_range} hand in range)</span></div>
+      <div class="stat"><b>${off.n}</b><span>off-tree by the detector (${off.in_range} in range)</span></div>
+      <div class="stat"><b>10% pot</b><span>fitted T (looser 20%, tighter 5%)</span></div>
+      <div class="stat"><b>${Math.round(100 * excluded / S.items)}%</b><span>real hands already outside the range entering the node (preflop misses)</span></div>
+      <div class="stat"><b>${nOffNodes}</b><span>collapsed nodes shown (${nLive} from the live off-tree log)</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Score by band: bits per action against ignoring the action</h2>
+    <p class="sub">Log-likelihood of villain's real hand under each belief, minus the same under his range before the action. Positive = the belief predicted the real hand better. 90% bootstrap intervals below each number. Bold = best in the row.</p>
+    <div class="seg" id="lvlSeg" style="margin:6px 0"><button data-l="combo" class="on">Exact combo (hand in range)</button><button data-l="cat">Hand category (all)</button></div>
+    <div id="bandTbl">${bandTable("combo")}</div>
+    <p class="sub" style="margin-top:8px">Exact combo: only actions whose real combo carries weight in the entering range, so the update is what gets measured. Hand category: air / draw / weak pair / top pair-overpair / two pair+, every action.</p>
+  </div>
+  <div class="two">
+    <div class="card"><h2>Fitting T</h2><p class="sub">Soft model gain against T. Pot-relative T beat T in bb in every band; the low-frequency band peaks at 10% of the pot. Off-tree is flat within noise.</p>${curveChart()}</div>
+    <div class="card"><h2>What the hands were</h2><p class="sub">Real hands' category mix against each belief's expected mix. Flop donks: real players held fewer air hands and more pairs and two pair+ than QRE predicts. They under-bluff, as you suspected. The pool model gets the air share closest.</p>
+      <div class="legend" style="margin:6px 0">${CATS.map((c, i) => `<span><span class="sw" style="background:${CATCOL[i]}"></span>${esc(c)}</span>`).join("")}</div>
+      ${compBlock("node share < 20%, flop bet OOP (no bet faced)")}${compBlock("node share < 20%, aggressive")}${compBlock("off-tree (all)")}</div>
+  </div>
+  <div class="card">
+    <h2>Passive and aggressive T</h2>
+    <p>Aggressive low-frequency actions (${F["node < 20% aggressive"].in_range} in range) fit t = ${(100 * F["node < 20% aggressive"].combo.soft_t).toFixed(0)}% of the pot. Passive ones (${F["node < 20% passive"].in_range}) are inconclusive: ${(100 * F["node < 20% passive"].combo.soft_t).toFixed(0)}% on exact combos, ${(100 * F["node < 20% passive"].cat.soft_t).toFixed(1)}% on categories, both within noise of each other. One T for both is what the data supports today. The pool model gains on aggressive actions (${fmt(F["node < 20% aggressive"].combo.pool)}) and not on passive ones (${fmt(F["node < 20% passive"].combo.pool)}).</p>
+    <p>Transfer check: t fitted on the 1–20% band without the off-tree lines (${F.transfer.train_n} actions) is ${(100 * F.transfer.t_train).toFixed(0)}%; on the off-tree lines it scores ${fmt(F.transfer.offtree_combo)} (${fmt(F.transfer.offtree_combo_ci[0])} … ${fmt(F.transfer.offtree_combo_ci[1])}). It neither helps nor hurts measurably there; what it changes is the range size: across the ${D.nodes.length} collapsed nodes the median range goes from ${cmb(med("qre"))} combos (QRE) to ${cmb(med("soft"))} (soft, 10% pot); pre-action ${cmb(med("pre"))}, pool ${cmb(med("pool"))}.</p>
+  </div>`;
+  $("lvlSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; document.querySelectorAll("#lvlSeg button").forEach((x) => x.classList.toggle("on", x === b)); $("bandTbl").innerHTML = bandTable(b.dataset.l); });
+}
+
+/* ---------- nodes ---------- */
+const GRIDS = [
+  { k: "qre", name: "QRE sliver (today)", note: "range × the solver's strategy for this action — what aiChain carries now", today: true },
+  { k: "pre", name: "Pre-action", note: "option 1: his range entering the node, the action ignored" },
+  { k: "soft_tight", name: "Soft, T = 5% pot", note: "tighter: range × exp(−ΔEV / (0.05·pot))" },
+  { k: "soft", name: "Soft, T = 10% pot (fitted)", note: "option 3: range × exp(−ΔEV / (0.10·pot))" },
+  { k: "soft_loose", name: "Soft, T = 20% pot", note: "looser: range × exp(−ΔEV / (0.20·pot))" },
+  { k: "pool", name: "Pool family", note: "option 2: range × the pool's rate of this action by hand category" },
+  { k: "hybrid", name: "Pool × soft (T = 20%)", note: "best measured: range × pool rate × exp(−ΔEV / (0.20·pot))" },
+];
+let scale = "shape", curNode = null, list = [];
+const SRC = { live: "live", backtest: "backtest", adhoc: "adhoc", replay: "replay", warm: "warm", stress: "stress-500" };
+function nodeTitle(n) { return `${n.actor} ${n.acts[n.taken].name || n.acts[n.taken].code}${n.acts[n.taken].betsize ? " " + n.acts[n.taken].betsize : ""}`; }
+function famOf(n) { const k = n.kind === "wager" ? (n.spot[1] === "none" ? "bet" : "raise") : n.kind === "call" && n.spot[1] === "betcall" ? "over-call" : n.kind === "check" && n.inPosition ? "check back" : n.kind; return `${n.street.toLowerCase()} ${k} ${n.inPosition ? "IP" : "OOP"}`; }
+function renderNodes() {
+  const fams = [...new Set(D.nodes.map(famOf))].sort();
+  $("s-nodes").innerHTML = `<div class="replay">
+    <div class="card"><h2>${D.nodes.length} collapsed nodes</h2>
+      <p class="sub" style="margin-top:0">Every villain action the off-tree detector flags (node share under 1%, no hand above 2% once dust under 1% of his top weight is ignored) in the stored chain traces: live play, the Sep 21 backtest, ad-hoc runs and stress-500.</p>
+      <div class="filters">
+        <select id="fSrc" aria-label="Source"><option value="">All sources</option>${Object.entries(SRC).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <select id="fFam" aria-label="Family"><option value="">All families</option>${fams.map((f) => `<option>${esc(f)}</option>`).join("")}</select>
+        <select id="fMore" aria-label="Only"><option value="">Any</option><option value="live">In the live off-tree log</option><option value="real">Villain's cards known</option><option value="dust">Flagged only with the dust fix</option><option value="precise">Full-precision node</option></select>
+        <input id="fQ" type="search" placeholder="Hand id, board, seat…" aria-label="Search">
+      </div>
+      <div class="nl" id="nl"></div></div>
+    <div class="card" id="nd"></div></div>`;
+  for (const id of ["fSrc", "fFam", "fMore", "fQ"]) $(id).addEventListener("input", drawList);
+  drawList();
+  const want = (() => { try { const v = sessionStorage.getItem("ot-node"); return v == null ? NaN : +v; } catch (e) { return NaN; } })();
+  const first = D.nodes.find((n) => n.id === want) || D.nodes.find((n) => /po_hu-004/.test(n.hand)) || D.nodes[0];
+  showNode(first.id);
+}
+function drawList() {
+  const s = $("fSrc").value, f = $("fFam").value, m = $("fMore").value, q = $("fQ").value.trim().toLowerCase();
+  list = D.nodes.filter((n) => (!s || n.src === s) && (!f || famOf(n) === f) &&
+    (!m || (m === "live" && n.liveLog) || (m === "real" && n.villainCards) || (m === "dust" && n.dustFixOnly) || (m === "precise" && n.precise)) &&
+    (!q || `${n.hand} ${n.board} ${n.actor} ${famOf(n)}`.toLowerCase().includes(q)));
+  const order = { stress: 0, live: 1, backtest: 2, adhoc: 3, replay: 4, warm: 5 };
+  list.sort((a, b) => (order[a.src] - order[b.src]) || (a.hand < b.hand ? -1 : 1));
+  $("nl").innerHTML = list.map((n) => `<div class="nl-row${curNode === n.id ? " on" : ""}" data-id="${n.id}" tabindex="0" role="button">
+     <span class="t">${esc(nodeTitle(n))} <span class="sub" style="font-weight:400">· ${esc(n.street.toLowerCase())} ${cardsHtml(n.board)}</span></span>
+     <span class="mono" style="font-size:12px">${cmb(n.beliefs.qre.combos)} → ${cmb(n.beliefs.soft.combos)}</span>
+     <span class="m"><span class="pill${n.src === "live" ? " info" : ""}">${esc(SRC[n.src] || n.src)}</span> ${esc(n.hand.replace(/^stress-s5-/, ""))} · node ${pct(n.nodeFreq)}${n.liveLog ? ` <span class="pill warn">live log</span>` : ""}${n.dustFixOnly ? ` <span class="pill">dust fix</span>` : ""}${n.villainCards ? ` · held ${cardsHtml(n.villainCards.join(""))}` : ""}</span></div>`).join("") || `<p class="sub">No node matches these filters.</p>`;
+  $("nl").onclick = (e) => { const r = e.target.closest(".nl-row"); if (r) showNode(+r.dataset.id); };
+  $("nl").onkeydown = (e) => { if (e.key === "Enter") { const r = e.target.closest(".nl-row"); if (r) showNode(+r.dataset.id); } };
+}
+function gridHtml(b, realCls) {
+  const g = b.grid;
+  const tot = b.combos || 0;
+  let mx = 0; const cc = [];
+  for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) { const cls = D.grid[r][c]; const n = cls.length === 2 ? 6 : cls.endsWith("s") ? 4 : 12; cc.push(n); mx = Math.max(mx, g[r * 13 + c] / n); }
+  let h = `<div class="grid169">`;
+  for (let i = 0; i < 169; i++) {
+    const cls = D.grid[Math.floor(i / 13)][i % 13];
+    const frac = g[i] / cc[i];
+    const w = scale === "shape" ? (mx > 0 ? frac / mx : 0) : Math.min(1, frac);
+    const on = g[i] > 0 && (tot > 0 ? g[i] / tot > 1e-4 : false);
+    const hgt = (Math.max(0, Math.min(1, w)) * 100).toFixed(1);
+    const style = on && w > 0.002 ? `background-color:rgb(30,30,30);background-image:linear-gradient(#FF8F00,#FF8F00);background-size:100% ${hgt}%;background-position:0 100%;background-repeat:no-repeat` : "background:rgb(30,30,30)";
+    const tipTxt = `<b>${cls}</b>: ${cmb(g[i])} of ${cc[i]} combos${tot > 0 ? ` · ${pct(g[i] / tot)} of this range` : ""}`;
+    h += `<div class="${on ? "" : "off"}${cls === realCls ? " real" : ""}" style="${style}" data-tip="${esc(tipTxt)}">${cls.slice(0, 2)}</div>`;
+  }
+  return h + `</div>`;
+}
+function mixBar(mix) {
+  return `<div class="comp-bar" style="height:8px;margin-top:6px">${mix.map((m, i) => `<i style="width:${(100 * m).toFixed(1)}%;background:${CATCOL[i]}" data-tip="${esc(CATS[i])} ${pct(m, 0)}"></i>`).join("")}</div>`;
+}
+function showNode(id) {
+  const n = D.nodes.find((x) => x.id === id); if (!n) return;
+  curNode = id; try { sessionStorage.setItem("ot-node", id); } catch (e) {}
+  document.querySelectorAll(".nl-row").forEach((r) => r.classList.toggle("on", +r.dataset.id === id));
+  const a = n.acts[n.taken];
+  const earlier = D.nodes.filter((x) => x.hand === n.hand && x.actor === n.actor && x.id !== n.id && (["FLOP", "TURN", "RIVER"].indexOf(x.street) < ["FLOP", "TURN", "RIVER"].indexOf(n.street) || (x.street === n.street && x.codes.length < n.codes.length)));
+  const ds = n.downstream;
+  const spot = n.spot;
+  const spotTxt = `${["", "flop", "turn", "river"][spot[0]]} · facing ${spot[1] === "none" ? "no bet" : spot[1] === "betcall" ? "bet + call" : spot[1]} · ${spot[2]} · ${spot[3] === "agg" ? "last aggressor" : "not the aggressor"} · ${spot[4] === "HU" ? "heads-up" : "multiway"}`;
+  let h = `<h2>${esc(nodeTitle(n))} <span class="sub" style="font-weight:400">· ${esc(n.street.toLowerCase())} ${cardsHtml(n.board)} · ${esc(n.hand.replace(/^stress-s5-/, "stress "))}</span></h2>
+  <div class="acts">${n.acts.map((x, i) => `<span class="act${i === n.taken ? " taken" : ""}" data-tip="GTO share of his range at this node">${esc(x.name || x.code)}${x.betsize && +x.betsize ? " " + esc(x.betsize) : ""} · ${pct(x.share)}</span>`).join("")}</div>
+  <div class="two" style="gap:10px 20px">
+  <dl class="kv">
+    <dt>Line</dt><dd class="mono" style="font-size:12px">${esc(n.pfLine || "")} / ${esc(n.street.toLowerCase())} ${esc(n.codes.join("-") || "root")} → <b>${esc(a.code)}</b></dd>
+    <dt>Seats</dt><dd>${esc(n.players.join(" → "))} · hero ${esc(n.hero)} ${cardsHtml(n.heroCards)}</dd>
+    <dt>Pot</dt><dd class="mono">${n.pot}bb</dd>
+    <dt>Off-tree</dt><dd>node share ${pct(n.nodeFreq)}, top hand ${pct(n.maxHand)}${n.dustFixOnly ? ` <span class="pill">flagged only with the dust fix</span> (with dust: top hand ${pct(n.maxHandNoDust)})` : ""}; costs him ${n.evGap != null ? n.evGap.toFixed(2) + "bb" : "–"} on average</dd>
+    <dt>Source</dt><dd>${esc(SRC[n.src] || n.src)}${n.liveLog ? ` · <span class="pill warn">live off-tree log</span> ${esc(n.liveLog.session || "")}` : ""} · ${n.precise ? "full-precision node (GTO Wizard cache)" : "trace numbers (4 dp)"}</dd>
+  </dl>
+  <dl class="kv">
+    <dt>Pool spot</dt><dd>${esc(spotTxt)}<br><span class="sub">${n.poolN.toLocaleString()} pool decisions in this spot, ${n.poolNkind.toLocaleString()} took this action${n.poolN < 100 ? " — thin, backs off to wider spots" : ""}</span></dd>
+    <dt>Pool rate</dt><dd class="mono" style="font-size:12px">${n.poolRate.map((r, i) => `${esc(CATS[i])} ${pct(r, 0)}`).join(" · ")}</dd>
+    ${n.villainCards ? `<dt>He held</dt><dd><span class="cards">${cardsHtml(n.villainCards.join(""))}</span> (${esc(n.villainClass)}, ${esc(CATS[n.villainCat])}) — share of each belief: ${Object.entries(n.villainShare).map(([k, v]) => `${esc(MODELS.find((m) => m.k === k)?.name || k)} ${pct(v, 2)}`).join(" · ")}</dd>` : `<dt>He held</dt><dd class="sub">${n.src === "stress" ? "scripted hand: no real cards" : "not in the downloaded histories (they end 2026-10-02)"}</dd>`}
+    ${earlier.length ? `<dt>Already thin</dt><dd>his range was collapsed earlier in this hand by <a href="#nodes" data-node="${earlier[0].id}">${esc(earlier[0].street.toLowerCase())} ${esc(nodeTitle(earlier[0]))}</a>; option 3 would replace that one first</dd>` : ""}
+    ${ds && ds.later.length ? `<dt>Carried</dt><dd>${ds.later.map((l) => `${esc(l.street.toLowerCase())} tree solved vs ${cmb(l.combos)} combos`).join(" · ")}</dd>` : ""}
+    ${ds && ds.hero ? `<dt>Hero today</dt><dd>${esc(ds.hero.street.toLowerCase())} ${esc((ds.hero.codes || []).join("-") || "root")}: ${ds.hero.mix.filter((m) => m.p > 0.004).map((m) => `${esc(m.a)} ${pct(m.p, 0)}`).join(" · ")} <span class="sub">(how it would change needs new solves — not run)</span></dd>` : ""}
+  </dl></div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-top:12px">
+    <div class="seg" id="scaleSeg"><button data-s="shape" class="${scale === "shape" ? "on" : ""}">Shape (each grid scaled to its top class)</button><button data-s="abs" class="${scale === "abs" ? "on" : ""}">Absolute weight</button></div>
+    <div class="legend">${CATS.map((c, i) => `<span><span class="sw" style="background:${CATCOL[i]}"></span>${esc(c)}</span>`).join("")}${n.villainCards ? `<span><span class="sw" style="outline:2px solid var(--ev);background:none"></span>his class</span>` : ""}</div>
+  </div>
+  <div class="grids">${GRIDS.map((gd) => { const b = n.beliefs[gd.k]; return `<div class="gcard${gd.today ? " today" : ""}"><h4><span>${esc(gd.name)}</span><span class="cmb">${cmb(b.combos)} combos</span></h4><div class="note">${esc(gd.note)}</div>${mixBar(b.mix)}${gridHtml(b, n.villainClass)}</div>`; }).join("")}</div>`;
+  $("nd").innerHTML = h;
+  $("scaleSeg").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; scale = b.dataset.s; showNode(curNode); };
+  $("nd").querySelectorAll("[data-node]").forEach((el) => el.addEventListener("click", (e) => { e.preventDefault(); showNode(+el.dataset.node); }));
+}
+
+/* ---------- thin states ---------- */
+function renderThin() {
+  const T = D.thinStates;
+  const rows = T.map((t) => {
+    const cause = D.nodes.filter((n) => n.hand === "stress-s5-" + t.hand && n.actor === t.seat).sort((a, b) => ["FLOP", "TURN", "RIVER"].indexOf(a.street) - ["FLOP", "TURN", "RIVER"].indexOf(b.street))[0];
+    return { ...t, cause };
+  });
+  const byCause = { off: rows.filter((r) => r.cause).length, none: rows.filter((r) => !r.cause).length };
+  $("s-thin").innerHTML = `<div class="card"><h2>Stress-500: hero decisions facing a seat under ${1.5} combos</h2>
+    <p>${T.length} hero decision × seat pairs in the stress run (hands/ and the pre-cold-call run) where a villain entered hero's node with under 1.5 combos. ${byCause.off} trace back to a postflop off-tree action of that seat (option 3's job, linked). The other ${byCause.none} have no flagged postflop action of that seat: the range came in thin from preflop (a cold-call or limp the tree gives ~0%, which the cold-call and short-limp pool locks now cover) or from a line the detector does not flag.</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Hand</th><th>Run</th><th>Hero decision</th><th>Seat</th><th>Combos</th><th>Cause</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td><b>${esc(r.hand)}</b><div class="sub" style="font-size:12px;max-width:52ch">${esc(r.title || "")}</div></td><td>${esc(r.run === "hands" ? "current" : "pre-cold-call")}</td><td class="mono" style="font-size:12px">${esc(r.street)} ${esc(r.line || "root")}</td><td>${esc(r.seat)}</td><td class="num">${cmb(r.combos)}</td><td>${r.cause ? `<a href="#nodes" data-node="${r.cause.id}">${esc(r.cause.street.toLowerCase())} ${esc(nodeTitle(r.cause))}</a> <span class="sub">(${pct(r.cause.nodeFreq)})</span>` : `<span class="sub">preflop / not flagged</span>`}</td></tr>`).join("")}
+    </tbody></table></div></div>`;
+  $("s-thin").querySelectorAll("[data-node]").forEach((el) => el.addEventListener("click", () => { location.hash = "#nodes"; setTimeout(() => showNode(+el.dataset.node), 0); }));
+}
+
+/* ---------- method ---------- */
+function renderMethod() {
+  const S = D.sample;
+  $("s-method").innerHTML = `<div class="card"><h2>Data</h2><ul>
+    <li><b>Solver nodes:</b> every villain action in the chain's stored solve traces (poker.sqlite <code>solves</code>, ${S.origins.map(([o, n]) => `${n} ${o}`).join(", ")} scored). Range entering the node = the street's ranges walked through the street's earlier actions, as aiChain does. Strategies and EVs per combo; where the GTO Wizard node cache still holds the reply, its full-precision numbers replace the trace's 4-dp ones (the thin QRE slivers need them). Zero new GTO Wizard requests.</li>
+    <li><b>Real cards:</b> Ignition's downloaded hand histories (${S.hhHands.toLocaleString()} hands, every dealt seat's cards, no showdown bias). A trace action is kept only when the history agrees on hero's seat and cards, the board, the seat acting at that place in the street and the kind of action. Stakes of the scored actions: ${S.itemStakes.map(([k, n]) => `${k}bb ${n}`).join(", ")}.</li>
+    <li><b>Pool model:</b> ${S.poolDecisions.toLocaleString()} postflop decisions of non-hero seats in the same histories (scored hands left out): the rate of each action kind by hand category (air / draw / weak pair / top pair-overpair / two pair+) in its spot (street · facing · IP/OOP · last aggressor or not · heads-up or multiway), backed off to wider spots with 20 pseudo-counts.</li>
+    <li>CoinPoker's 9.1M hands were not needed: showdown-only cards bias exactly the bluff share this question is about, and Ignition's histories show every seat.</li></ul>
+    <h3>Beliefs</h3><ul>
+    <li><b>QRE (today):</b> R(h) × strategy<sub>a</sub>(h). <b>Pre-action:</b> R(h). <b>Soft:</b> R(h) × exp(−ΔEV<sub>h</sub> / T), ΔEV = best action's EV − the taken action's EV for that combo; T in bb or as a share of the pot (pot-relative won in every band). <b>Pool:</b> R(h) × P<sub>pool</sub>(action kind | category(h), spot). <b>Pool × soft:</b> both factors.</li>
+    <li><b>Score:</b> log-likelihood of villain's real combo (belief mixed 1% with uniform, so ruling out the real hand costs about 10–17 bits, not infinity), minus the pre-action score, in bits; 90% bootstrap intervals. The category score uses the real hand's category instead of its combo.</li></ul>
+    <h3>Limits</h3><ul>
+    <li>Off-tree sample: 43 actions (13 with the real combo in range). The fitted T comes from the 1–20% band and is assumed to carry over.</li>
+    <li>A third of real villain hands were already outside the range entering the node: the chain's preflop ranges miss hands real callers flat (as the caller-read research found). No postflop update can recover those; they cap every model's score equally.</li>
+    <li>82% of scored actions come from the Sep 21 backtest (Brady's own hands from June to September replayed through the chain); downloaded histories stop at 2026-10-02, so the 1,250 live traces from Oct 3–5 have no cards. Downloading Ignition's histories for Oct 3 onward would add them.</li>
+    <li>Hero's answer under each belief needs new solves (one tree per changed street, or a node-lock mid-street); not run. Each node shows what hero did against today's range.</li>
+    <li>Later-street numbers in a hand rest on trees solved against the collapsed range; the page marks nodes whose entering range was already collapsed by an earlier off-tree action.</li></ul></div>
+  <div class="card"><h2>Proposed build (not built — waiting for your go)</h2>
+    <ol>
+      <li><b>Dust fix in the detector</b> (<code>offTree.ts offTreeStats</code>): a combo under 1% of the seat's top weight does not vote in <i>top hand</i>. It adds 41 of the 148 flagged nodes (23 of the 81 live ones) (po_hu-004's check-back among them).</li>
+      <li><b>Soft range</b> (<code>offTree.ts softOffTreeRange(range, sols, taken, pot, t)</code>, pure): R(h) × exp(−ΔEV<sub>h</sub> / (t·pot)), t = 0.10. In <code>aiChain.ts</code> where the walk narrows a villain's range: when the action is off-tree, use it instead of R × strategy. The next street's tree gets the soft range through <code>players[].range</code>.</li>
+      <li><b>Mid-street off-tree action that hero answers on the same street</b> (e.g. an off-tree check-raise): node-lock villain's node so that range × lock = the soft range (the postflop lock works, one POST per lock). Costs requests: behind its own switch, off at first.</li>
+      <li><b>Departures register entry</b> <code>offtree-soft-range</code> in <code>services/approximations.ts</code>: kind policy-experiment, lifecycle experiment; trigger = the detector with the dust fix; replaces {gto: "villain range × QRE strategy of the off-tree action", with: "range × exp(−ΔEV / (0.10·pot))"}; data = 2,773 villain actions / 930 Ignition hands with every seat's cards at exact nodes (251 under 20% node share, 43 off-tree); offSwitch <code>OFFTREE_RANGE=soft|log|off</code> (log = compute and record, keep QRE); path code <code>postflop:offtree-soft</code>; warning <code>OFF-TREE RANGE:</code>; badge "SOFT RANGE"; review-by 2026-10-20; diagnostic <code>departuresReport.ts --id offtree-soft-range</code>. Task-board EXPERIMENT entry + REMIND memory per the experiments rule.</li>
+      <li><b>Diagnostic:</b> <code>off_tree_lines</code> gains the soft range's combos and the QRE combos per line; a replay study re-solves the 39 live-log nodes' next street with the soft range on the secondary account (~3 requests per node, ~120 total, your budget) to show how hero's answers move.</li>
+      <li><b>Option 2 later:</b> pool × soft was best on the low-frequency band (+0.19 vs +0.06 bits). It needs the pool rate table shipped as data (a pool-overlay entry). Worth a second step once the soft range has run live.</li>
+    </ol>
+    <p>Tests: unit tests for the dust fix and <code>softOffTreeRange</code> (scale invariance, T→0 = best-response hands only, T→∞ = pre-action); <code>approximations.test.ts</code>; replay gate before merging.</p></div>`;
+}
+
+renderFindings(); renderNodes(); renderThin(); renderMethod(); showTab();
+document.addEventListener("click", (e) => { const a = e.target.closest("a[data-node]"); if (a && a.closest("#s-findings, #s-method")) { location.hash = "#nodes"; showNode(+a.dataset.node); } });
+</script>
