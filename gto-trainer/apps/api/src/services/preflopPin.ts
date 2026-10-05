@@ -134,6 +134,24 @@ export function preflopNodeFor(hand: ParsedHand, actionIndex: number): PreflopNo
   return undefined;
 }
 
+/** Every kept preflop node record of a hand, in decision order (the hand page's pool-overlay labels, 2026-10-05). */
+export function preflopNodesFor(hand: ParsedHand): PreflopNodeRecord[] {
+  const keys = [preflopPinKey(hand), hand.clientHandId && hand.handId != null ? String(hand.handId) : null].filter((k): k is string => !!k);
+  const cards = (hand.heroCards ?? []).join("");
+  for (const [i, key] of keys.entries()) {
+    const doc = handFacts.get(key);
+    if (!doc || (i > 0 && !(cards && doc.heroCards === cards))) continue;
+    const recs = [...(doc.preflopNodes ?? [])];
+    if (doc.preflop && !recs.some((r) => r.actionIndex === doc.preflop!.actionIndex)) {
+      const { picks: _p, ...pin } = doc.preflop as PreflopPin & { warm?: unknown };
+      delete (pin as { warm?: unknown }).warm;
+      recs.push(pin as PreflopNodeRecord);
+    }
+    return recs.sort((a, b) => (a.actionIndex ?? 0) - (b.actionIndex ?? 0));
+  }
+  return [];
+}
+
 /**
  * SIZES READ AT THE CHART'S, SAID (2026-09-25, round 2 of the input-mutation harness, range-level oracle). A walk
  * that moved a size onto the tree (a 2.6 open read as 2.5 at a 5c blind, an 8.75 3-bet read as 9) conditions every

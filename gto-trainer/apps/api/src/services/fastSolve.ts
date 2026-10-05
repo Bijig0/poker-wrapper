@@ -1164,7 +1164,7 @@ async function flopArrivalCompute(
     }
   }
   // THE POOL COLD-CALL FLOOR (services/poolColdCall, 2026-10-05): a villain who cold-called a 3-bet and reaches the flop
-  // with under 1% of hands (the tree gave his call ~0%) enters it with the pool's cold-call range for his seat and stack
+  // with under 1% of hands (the tree gave his call ~0%) enters it with the pool's cold-call range for his seat, stack and the 3-bet's size
   if (sixMax && coldCallPoolMode() !== "off") {
     const ccf = applyPoolColdCallFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, lockedPools: pinPools });
     if (ccf.applied.length) {
