@@ -25,9 +25,10 @@ describe("hand 4921735317 turn: UTG bet 2, BTN raised 4, SB and hero called, UTG
     expect(g).not.toBeNull();
     expect(new Set(g.flat())).toEqual(new Set(["BB", "SB", "UTG"]));
   });
-  test("walking SB/BB/UTG through the flop: the SB's call of the BTN's raise is the SB's raise; the BTN's 4 is dead money", () => {
+  test("walking SB/BB/UTG through the flop: the calls of the BTN's raise are a layer (2 each into the pot), never a lead", () => {
     const t = takeoverStreets(a, 1, ["BB", "SB", "UTG"])!;
-    expect(t.streets[0]!.map((x, i) => `${t.seats[0]![i]}:${x}`)).toEqual(["SB:X", "BB:X", "UTG:R2", "SB:R4", "BB:C", "UTG:C"]);
+    expect(t.streets[0]!.map((x, i) => `${t.seats[0]![i]}:${x}`)).toEqual(["SB:X", "BB:X", "UTG:R2", "SB:C", "BB:C"]);
+    expect(t.preload).toEqual({ SB: 2, BB: 2, UTG: 2 });
     expect(t.dead).toBe(4);
   });
 });
@@ -45,8 +46,10 @@ describe("hand 4922305100 turn: flop UTG bets 1, hero/BTN call, SB raises 10.2, 
     for (const p of ["SB", "BB", "BTN"]) expect(g.some((x) => x.includes(p))).toBe(true);
     for (const x of g) expect(takeoverStreets(a, 1, x)).not.toBeNull();
   });
-  test("a group without the UTG: hero's call of his 1 bet is hero's bet", () => {
+  test("a group without the UTG: hero's call of his 1 bet is a layer, never hero's lead (stress-500 brief_H-002)", () => {
     const t = takeoverStreets(a, 1, ["HJ", "SB", "BB"])!;
-    expect(t.streets[0]!.map((x, i) => `${t.seats[0]![i]}:${x}`)).toEqual(["SB:X", "BB:X", "HJ:R1", "SB:R10.2", "BB:C", "HJ:C"]);
+    // the three checks then the SB's raise: the kept round restarts there, the SB bets 9.2 over the 1 in the pot
+    expect(t.streets[0]!.map((x, i) => `${t.seats[0]![i]}:${x}`)).toEqual(["SB:R9.2", "BB:C", "HJ:C"]);
+    expect(t.preload).toEqual({ HJ: 1, SB: 1, BB: 1 });
   });
 });

@@ -1434,7 +1434,7 @@ export function chainPathChecks(a: {
       // each seat's own stack as sent, against the table's — where the walk was given that seat's stack, and not for a
       // merged seat (it carries its deeper member's) or a last resort (its seats are re-rooted, hero's chips out)
       const known = new Set(Object.keys(sp.seatStacks ?? {}).map((p) => p.toUpperCase()));
-      const seatStacks = s.stacksIn && beh && !lastResort && !(deadPlan && /street cut|incomplete raise|opening [\d.]+ in the pot/.test(w.kind ?? "")) && !/merge/.test(w.kind ?? "")
+      const seatStacks = s.stacksIn && beh && !lastResort && !(deadPlan && /street cut|incomplete raise|opening [\d.]+ in the pot|called level in the pot/.test(w.kind ?? "")) && !/merge/.test(w.kind ?? "")
         ? Object.entries(s.stacksIn).filter(([p]) => known.has(p.toUpperCase()) && beh[p.toUpperCase()] != null)
           .map(([p, x]) => ({ pos: p, tree: x, table: beh[p.toUpperCase()]! }))
         : undefined;

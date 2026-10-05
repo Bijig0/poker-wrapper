@@ -198,6 +198,9 @@ function checkPlan(order: string[], hero: string, plan: { seats: { pos: string }
   }
   const nx = nextFrom(at);
   if (!nx || nx.p !== hero) return `tree: the line ends with ${nx?.p ?? "nobody"} to act, not hero`;
+  // HERO NEVER LEADS WHAT HE ONLY CALLED (stress-500 brief_B-002): a wager of hero's in the tree needs one at the table
+  const heroWagered = table.some((t) => t.seat === hero && (t.tok === "RAI" || /^R/.test(t.tok)));
+  if (!heroWagered && st.some((t) => t.seat === hero && (t.tok === "RAI" || /^R/.test(t.tok)))) return "range: hero wagers in the tree where he only called";
   const whole: Record<string, number> = {};
   for (const p of seats) whole[p] = (pre[p] ?? 0) + (put[p] ?? 0);
   const pot = potIn + plan.dead + eligible(whole);
@@ -252,7 +255,9 @@ function planSpot(s: Spot): Verdict {
       const t = takeoverStreets(a, cur, g);
       if (!t) return { ok: false, why: `narrowing group ${g.join("/")} chosen but not walkable` };
       for (let i = 0; i < cur; i++) {
-        const bad = checkStreetCloses(s.seats, g, t.streets[i]!, t.seats[i]!, (p) => moneyThrough(a, i).behind[p], i === 0 ? t.preload : {});
+        const pre: Record<string, number> = {};
+        for (const x of t.preloadBy.slice(i)) for (const [q, v] of Object.entries(x)) pre[q] = (pre[q] ?? 0) + v;
+        const bad = checkStreetCloses(s.seats, g, t.streets[i]!, t.seats[i]!, (p) => moneyThrough(a, i).behind[p], pre);
         if (bad) return { ok: false, why: `narrowing group ${g.join("/")} ${["flop", "turn", "river"][i]}: ${bad}` };
       }
     }
