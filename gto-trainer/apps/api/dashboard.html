@@ -2000,7 +2000,8 @@ async function openAnswerNode(upto) {
     // A SEAT THIS TREE LOCKED to the pool: at his node GTO's own strategy (the unlocked tree), marked off-GTO; from
     // there on his range is the pool's. Every other seat is the solver's.
     const locks = (t.poolLocks || []).map((l) => String(l.pos).toUpperCase());
-    const pctTxt = (x) => x == null ? "?" : Number(x) < 0.1 ? "under 0.1%" : `${Number(x).toFixed(Number(x) < 1 ? 2 : 1)}%`;
+    // a share read off the unlocked node is rounded to 0.1 (0 = under 0.05%); one from the note carries two decimals
+    const pctTxt = (x) => x == null ? "?" : Number(x) === 0 ? "under 0.05%" : Number(x) < 0.01 ? "under 0.01%" : `${Number(x).toFixed(Number(x) < 1 ? 2 : 1)}%`;
     const seatCard = (o) => {
       const P = String(o.pos).toUpperCase();
       const locked = locks.includes(P) && o.action;
