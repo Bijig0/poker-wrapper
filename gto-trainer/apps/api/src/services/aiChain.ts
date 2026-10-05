@@ -525,8 +525,16 @@ export function rotationDisagrees(listed: { position?: unknown; is_hero?: unknow
   const o = ours.map(norm);
   const said = listed.find((p) => p?.is_hero)?.position;
   if (said == null) return false;
-  if (listed.length !== o.length || !listed[0]?.is_hero) return norm(String(said)) !== o[0];
-  return listed.some((p, j) => { const nm = norm(String(p?.position ?? "")); return o.includes(nm) && nm !== o[j]; });
+  // review 4: names that are not exactly OUR seats' are another walk's — a shared solution — and say nothing (neither
+  // agreement nor disagreement); only our own names, in a list that lines up, are compared slot by slot
+  const names = listed.map((p) => norm(String(p?.position ?? "")));
+  // a list that does not line up with ours (another length — a node that lists fewer players): the actor's name alone,
+  // when it is one of ours; a foreign actor name is another walk's and says nothing
+  if (names.length !== o.length) return o.includes(norm(String(said))) && norm(String(said)) !== o[0];
+  const same = names.every((n) => o.includes(n)) && o.every((n) => names.includes(n));
+  if (!same) return false;
+  if (!listed[0]?.is_hero) return norm(String(said)) !== o[0];
+  return names.some((nm, j) => nm !== o[j]);
 }
 
 // ---- 1326-combo arithmetic (GTO Wizard's ordering, see utils/comboIndex): card = rank*4 + suit, combo(a<b) = b(b-1)/2 + a

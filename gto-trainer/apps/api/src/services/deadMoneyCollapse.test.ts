@@ -50,19 +50,25 @@ describe("planDeadMoney", () => {
   });
 
   test("a dropped raise that REOPENED the betting: the plan without him CUTS the street (2026-10-05)", () => {
-    // SB checks, hero bets 4, CO and BTN call, the SB check-raises to 12, hero calls, the CO calls, the BTN raises to 30
-    const { plans } = planDeadMoney({ seats: seatsOf("SB", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("SB:X HJ:R4 CO:C BTN:C SB:R12 HJ:C CO:C BTN:R30"), behind: () => 100 });
+    // SB checks, hero bets 4, CO and BTN call, the SB check-raises to 12, hero calls, the CO calls, the BTN raises to 30,
+    // the SB calls — hero to act (the plans are walked: the line must end on hero, which it does only after the SB acts)
+    const { plans } = planDeadMoney({ seats: seatsOf("SB", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("SB:X HJ:R4 CO:C BTN:C SB:R12 HJ:C CO:C BTN:R30 SB:C"), behind: () => 100 });
     const keepSb = plans.find((p) => p.seats.some((s) => s.pos === "SB"))!;
     expect(keepSb.cuts).toBe(0);
-    expect(keepSb.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["SB:X", "HJ:R4", "BTN:C", "SB:R12", "HJ:C", "BTN:R30"]);
+    expect(keepSb.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["SB:X", "HJ:R4", "BTN:C", "SB:R12", "HJ:C", "BTN:R30", "SB:C"]);
     // without the SB the kept seats' round closed at the BTN's call: cut there — each kept seat's 4 into the pot, the
     // tree's street restarts at the SB's raise: hero's call of it is hero's wager of 8 more, the BTN raises 26 more
     const keepCo = plans.find((p) => p.seats.some((s) => s.pos === "CO"))!;
     expect(keepCo.cuts).toBe(1);
     expect(keepCo.preload).toEqual({ HJ: 4, CO: 4, BTN: 4 });
-    expect(keepCo.dead).toBe(12);
+    expect(keepCo.dead).toBe(30);
     expect(keepCo.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["HJ:R8", "CO:C", "BTN:R26"]);
-    // the price: hero faces 26 - 8 = 18 = the table's 30 - 12; the pot 12 dead + 12 preload + 8 + 8 + 26 = the table's 66
+    // the price: hero faces 26 - 8 = 18 = the table's 30 - 12
+  });
+
+  test("a line that does not end on hero gives no plan (the walk is checked)", () => {
+    const { plans } = planDeadMoney({ seats: seatsOf("SB", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("SB:X HJ:R4 CO:C BTN:C SB:R12 HJ:C CO:C BTN:R30"), behind: () => 100 });
+    expect(plans.some((p) => p.seats.some((s) => s.pos === "SB"))).toBe(false);   // the SB is to act, not hero
   });
 
   test("review 2026-10-05: a kept seat ALL IN on the street has acted — the round closes, the reopening is cut", () => {

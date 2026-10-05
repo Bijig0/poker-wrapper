@@ -41,7 +41,10 @@ function genSpot(): Spot | null {
     const toks: string[] = [], who: string[] = [], am: (number | null)[] = [];
     streets.push(toks); streetSeats.push(who); amounts.push(am);
     const put: Record<string, number> = {};
-    let level = 0;
+    let level = 0, lastIncG = 1;
+    // REAL NO-LIMIT: an all-in short of a full raise does not reopen the betting — a seat that has acted since the last
+    // FULL raise may only call or fold (review 4: the generator wrote re-raises the table would never allow)
+    let actedSinceFull = new Set<string>();
     const active = () => seats.filter((p) => !folded.has(p) && !allIn.has(p));
     if (active().length < 2) return null;
     // the round: walk the order until everyone still active has acted since the last wager and matched it
@@ -74,13 +77,16 @@ function genSpot(): Spot | null {
           if (size >= room - 0.005) { tok = "RAI"; to = mine + room; amount = r2(to); } else { tok = `R${r2(mine + size)}`; to = mine + size; }
         }
       } else if (roll < 0.35) tok = "F";
-      else if (roll < 0.8 || facing >= room - 0.005) {
+      else if (roll < 0.8 || facing >= room - 0.005 || actedSinceFull.has(p)) {
         // a call that takes the last chip: the capture writes it as C or (Ignition's all-in button) as RAI
         if (facing >= room - 0.005) { to = mine + room; if (rnd() < 0.5) { tok = "RAI"; amount = r2(to); } else tok = "C"; } else { tok = "C"; to = level; }
       } else {
-        const raiseTo = r2(level + Math.max(facing, pot * pick([0.5, 0.75, 1])));
+        // a third of the raises are MIN-raises (review 4: the generator almost never made one) — the last increment
+        const raiseTo = rnd() < 0.33 ? r2(level + Math.max(lastIncG, 1)) : r2(level + Math.max(facing, pot * pick([0.5, 0.75, 1])));
         if (raiseTo - mine >= room - 0.005) { tok = "RAI"; to = mine + room; amount = r2(to); } else { tok = `R${raiseTo}`; to = raiseTo; }
       }
+      if (tok !== "F" && tok !== "X" && to - level > 0.005 && to - level >= lastIncG - 0.005) { lastIncG = r2(to - level); actedSinceFull = new Set(); }
+      actedSinceFull.add(p);
       if (tok === "F") folded.add(p);
       else {
         const paid = r2(to - mine);
