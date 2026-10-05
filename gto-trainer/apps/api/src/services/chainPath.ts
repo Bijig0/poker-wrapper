@@ -1,5 +1,5 @@
 import type { RequestCounts } from "./requestScope";
-import type { OffTreeLine } from "./offTree";
+import { softText, type OffTreeLine } from "./offTree";
 import { checkReasons, type PathChecks } from "./chainChecks";
 
 /**
@@ -131,6 +131,13 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
       out.push({ v: s.how, code: s.code ?? `street:${s.how}`, text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.why ?? s.how}` });
     }
     if (s.leak) out.push({ v: "leaked", code: s.leak.code, text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.leak.why}` });
+    // THE SOFT RANGE after an off-tree villain action (services/offTree, register entry offtree-soft-range): by design
+    for (const l of s.offTree ?? []) {
+      if (!l.soft?.applied) continue;
+      const at = `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${l.seat} ${l.action}${l.betsize != null ? ` ${l.betsize}` : ""}`;
+      out.push({ v: "by-design", code: "postflop:offtree-soft", text: `${at} off-tree — ${softText(l.soft)}` });
+      if (l.soft.lock?.ok) out.push({ v: "by-design", code: "postflop:offtree-lock", text: `${at}: the rest of the street node-locked to his soft range` });
+    }
     // a street that did not start from the previous street's solved output broke the chain itself
     if (s.check?.ok === false && s.how !== "hit") {
       out.push({ v: "rebuilt", code: "check:range-handoff", text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.check.why}` });

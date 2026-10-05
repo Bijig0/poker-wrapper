@@ -29,6 +29,7 @@ import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
 import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot";
 import { effectiveBehind, forgetChainMemo, rangesFp, solveAiChain, type AiChainResult, type ChainTrace, type ChainTraceNode } from "./aiChain";
 import { offTreeLog } from "./offTreeLog";
+import { pctOf, softText } from "./offTree";
 import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
@@ -2169,6 +2170,14 @@ async function solvePostflopViaChainOnce(
   ])];
   if (stackNotes.length) {
     sixNote = [sixNote, `STACKS OF THE PLAYERS IN THE TREE: ${stackNotes.join("; ")}`].filter(Boolean).join(" · ");
+  }
+  // THE SOFT RANGE (services/offTree, OPTION 3, 2026-10-06): an off-tree villain action this answer rests on — on this
+  // street or an earlier one the walk carried — had his range carried soft, not as the QRE sliver
+  const softLines = [...new Set(chains.flatMap((c) => (c.ok ? c.trace?.nodes ?? [] : []))
+    .filter((n) => n.offTree?.soft?.applied)
+    .map((n) => { const l = n.offTree!; return `${l.street} ${l.seat} ${l.action}${l.betsize != null ? ` ${l.betsize}` : ""} (the solver ${pctOf(l.nodeFreq)}): ${softText(l.soft!)}`; }))];
+  if (softLines.length) {
+    sixNote = [sixNote, `OFF-TREE RANGE: ${softLines.join("; ")}`].filter(Boolean).join(" · ");
   }
   const sizeSnaps = [...new Set(chains.flatMap((c) => (c.ok ? c.snaps ?? [] : [])))];
   if (sizeSnaps.length) {

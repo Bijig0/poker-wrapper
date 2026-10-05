@@ -36,7 +36,7 @@ function stripComments(s: string): string {
   return s.replace(/\/\*[\s\S]*?\*\//g, "").split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join("\n");
 }
 
-const CODE_RE = /["'`]((?:preflop|arrival|street|tree|node|check|fault):[a-z0-9${}._-]+)["'`]/g;
+const CODE_RE = /["'`]((?:preflop|arrival|postflop|street|tree|node|check|fault):[a-z0-9${}._-]+)["'`]/g;
 /** a note opening with an upper-case tag: "TAG:" or "TAG (qualifier):", right after the quote or a single space */
 const TAG_RE = /["'`] ?([A-Z][A-Z0-9'/+-]*(?: [A-Z0-9'/+-]+)*)(?: \([^)]*\))?: /g;
 /** tags that are never answer warnings (labels in logs and prompts) */
@@ -117,6 +117,9 @@ describe("the answer path emits nothing the register does not account for", () =
     expect(departureForCode("preflop:pool-limp-lock")?.id).toBe("pool-limp-lock");
     expect(departureForCode("arrival:pool-limp-floor")?.id).toBe("pool-limp-floor");
     expect(departureForCode("preflop:gap-gate")?.id).toBe("gap-gate");
+    expect(departureForCode("postflop:offtree-soft")?.id).toBe("offtree-soft-range");
+    expect(departureForCode("postflop:offtree-lock")?.id).toBe("offtree-node-lock");
+    expect(departureForWarning("OFF-TREE RANGE")?.id).toBe("offtree-soft-range");
     expect(departureForCode("street:new-plan")).toBeNull();
     const d = departuresOf(["preflop:charts-cannot-hold"], "LINE FITTED TO THE TREE: … · POOL-LOCKED COLD-CALL: the BB (48bb) cold-called");
     expect(d.map((x) => x.id)).toEqual(["pool-coldcall-lock", "line-fit-borrow"]);

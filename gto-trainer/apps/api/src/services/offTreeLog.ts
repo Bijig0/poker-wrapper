@@ -13,6 +13,9 @@ export interface OffTreeRow {
   street: string; board: string; heroPos: string | null; villainPos: string; inPosition: boolean;
   action: string; code: string; betsize: number | null; pot: number; codes: string[];
   nodeFreq: number; maxHand: number; evGapBb: number | null; family: string; villainCards: string | null;
+  /** the soft range at the line (services/offTree, since 2026-10-06): soft = carried, log = computed only; null = not
+   *  computed (OFFTREE_RANGE=off, or a line logged before) */
+  softMode: string | null; softT: number | null; qreCombos: number | null; softCombos: number | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS off_tree_lines (
@@ -23,12 +26,15 @@ const DDL = `CREATE TABLE IF NOT EXISTS off_tree_lines (
 CREATE INDEX IF NOT EXISTS idx_off_tree_hand ON off_tree_lines(client_hand_id);
 CREATE INDEX IF NOT EXISTS idx_off_tree_session ON off_tree_lines(session_id);
 CREATE INDEX IF NOT EXISTS idx_off_tree_ts ON off_tree_lines(ts)`;
+/** columns added after the table first shipped (2026-10-06, the soft range): added in place on an existing database */
+const ADDED: [string, string][] = [["soft_mode", "TEXT"], ["soft_t", "REAL"], ["qre_combos", "REAL"], ["soft_combos", "REAL"]];
 
 const fromRow = (r: any): OffTreeRow => ({
   key: r.key, ts: r.ts, clientHandId: r.client_hand_id, sessionId: r.session_id, origin: r.origin, street: r.street, board: r.board,
   heroPos: r.hero_pos, villainPos: r.villain_pos, inPosition: !!r.in_position, action: r.action, code: r.code, betsize: r.betsize,
   pot: r.pot, codes: JSON.parse(r.codes || "[]"), nodeFreq: r.node_freq, maxHand: r.max_hand, evGapBb: r.ev_gap, family: r.family,
   villainCards: r.villain_cards,
+  softMode: r.soft_mode ?? null, softT: r.soft_t ?? null, qreCombos: r.qre_combos ?? null, softCombos: r.soft_combos ?? null,
 });
 
 export class OffTreeLog {
@@ -38,6 +44,8 @@ export class OffTreeLog {
     if (this.db) return this.db;
     this.db = openStore(this.path ?? answersDbPath());
     this.db.exec(DDL);
+    const have = new Set((this.db.query("PRAGMA table_info(off_tree_lines)").all() as { name: string }[]).map((c) => c.name));
+    for (const [c, t] of ADDED) if (!have.has(c)) this.db.exec(`ALTER TABLE off_tree_lines ADD COLUMN ${c} ${t}`);
     return this.db;
   }
 
@@ -49,9 +57,12 @@ export class OffTreeLog {
       if (!hand) return;
       const board = (meta.board.match(/[2-9TJQKA][cdhs]/gi) ?? []).slice(0, l.street === "flop" ? 3 : l.street === "turn" ? 4 : 5).join("");
       const key = [hand, l.street, l.codes.join("-") || "root", l.seat, meta.plan ?? ""].join("|");
-      this.open().query(`INSERT OR IGNORE INTO off_tree_lines VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      this.open().query(`INSERT OR IGNORE INTO off_tree_lines (key, ts, client_hand_id, session_id, origin, street, board, hero_pos,
+        villain_pos, in_position, action, code, betsize, pot, codes, node_freq, max_hand, ev_gap, family, villain_cards,
+        soft_mode, soft_t, qre_combos, soft_combos) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         key, Date.now(), meta.clientHandId, meta.sessionId, meta.origin, l.street, board, meta.heroPos, l.seat, l.inPosition ? 1 : 0,
-        l.action, l.code, l.betsize, l.potNode, JSON.stringify(l.codes), l.nodeFreq, l.maxHand, l.evGapBb, offTreeFamily(l, board), null);
+        l.action, l.code, l.betsize, l.potNode, JSON.stringify(l.codes), l.nodeFreq, l.maxHand, l.evGapBb, offTreeFamily(l, board), null,
+        !l.soft ? null : l.soft.softCombos == null ? "not-computable" : l.soft.applied ? "soft" : "log", l.soft?.t ?? null, l.soft?.qreCombos ?? null, l.soft?.softCombos ?? null);
     } catch (e) {
       console.warn(`[off-tree] could not log a line: ${e instanceof Error ? e.message : e}`);
     }

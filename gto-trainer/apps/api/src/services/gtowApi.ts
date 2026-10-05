@@ -574,6 +574,58 @@ class GtowApi {
     for (const [k, v] of this.treeSolCache) if (ids.has(v)) this.treeSolCache.delete(k);
   }
 
+  /**
+   * A POSTFLOP NODE-LOCKED CHILD of a solve this process holds (services/offTree offTreeLock, 2026-10-06, OFFTREE_LOCK=on):
+   * POST /v4/custom-solutions/ {parent_solution_id, last_node_lock} on the account that owns the parent (a stored tree is
+   * materialised first — a lock forks a real solve). The child is read like any solve (customNode); it is not written to
+   * the persistent store (its key would need the lock: in-process memo only, one POST per parent + lock).
+   */
+  private lockedPending = new Map<string, Promise<EnsureResult>>();
+  async lockedCustomSolution(parentSolId: string, lock: unknown): Promise<EnsureResult> {
+    const memoKey = `${parentSolId}|${Bun.hash(JSON.stringify(lock)).toString(36)}`;
+    const memo = this.lockedPending.get(memoKey);
+    if (memo) return memo.then((r) => (r.ok ? { ...r, created: false, why: "node-locked child already made in this process" } : r));
+    const p = (async (): Promise<EnsureResult> => {
+      let parent = parentSolId;
+      if (isStoredSolId(parent)) {
+        const m = await this.materialise(parent);
+        if (!m.ok) return m;
+        parent = m.solId;
+      }
+      const owner = this.solOwner.get(parent);
+      if (!owner || owner === CACHE_SESSION) return { ok: false, status: 0, error: "node lock: the account that owns the parent solution is not known" };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const token = await gtowSessions.tokenFor(owner, attempt === 1);
+        if (!token) return { ok: false, status: 0, error: `node lock: no GTO Wizard token for ${owner}` };
+        let res: Response;
+        try {
+          res = await gtowRequests.fetch(owner, "solution", `${API_BASE}/v4/custom-solutions/`, {
+            method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ parent_solution_id: parent, last_node_lock: lock }), signal: AbortSignal.timeout(15_000),
+          });
+        } catch (e) { return { ok: false, status: 0, error: `node lock: ${e instanceof Error ? e.message : e}` }; }
+        if (res.status === 401 && attempt === 0) continue;
+        const t = await res.text().catch(() => "");
+        if (!res.ok) {
+          gtowSessions.noteFailure(owner, res.status, t.slice(0, 180), {});
+          return { ok: false, status: res.status, error: `node lock ${res.status}: ${t.slice(0, 180)}` };
+        }
+        let id: string | null = null;
+        try { const j = JSON.parse(t); id = j?.id ?? j?.custom_solution_id ?? null; } catch { /* below */ }
+        if (!id) return { ok: false, status: 502, error: `node lock: no solution id in the reply (${t.slice(0, 120)})` };
+        this.solOwner.set(String(id), owner);
+        this.solCreatedAt.set(String(id), Date.now());
+        if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+        return { ok: true, solId: String(id), created: true, session: owner, why: "node-locked child of the street's solve" };
+      }
+      return { ok: false, status: 401, error: "node lock: unauthorized after a token refresh" };
+    })();
+    this.lockedPending.set(memoKey, p);
+    p.then((r) => { if (!r.ok) this.lockedPending.delete(memoKey); }).catch(() => this.lockedPending.delete(memoKey));
+    if (this.lockedPending.size > 200) this.lockedPending.delete(this.lockedPending.keys().next().value as string);
+    return p;
+  }
+
   /** The solution this process already holds for these tree params, or null — a cache lookup, never a request. A tree
    *  the persistent store holds counts: its synthetic id is what ensureCustomSolution would hand out for it. */
   peekSolution(input: CustomTreeInput): string | null {

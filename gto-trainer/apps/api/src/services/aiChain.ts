@@ -11,7 +11,10 @@ import { wagerBb } from "../utils/streetFixedPcts/streetFixedPcts";
 import { chipsAfter, contestedChips, effectiveStack } from "../utils/tableMoney/tableMoney";
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
-import { isOffTree, offTreeStats, type OffTreeLine } from "./offTree";
+import {
+  OFF_TREE_DUST, isOffTree, offTreeLock, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
+  type OffTreeLine, type OffTreeSoft,
+} from "./offTree";
 import { currentRequestScope } from "./requestScope";
 import {
   checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime,
@@ -164,7 +167,8 @@ export interface ChainTraceNode {
   ms?: number;
   /** this node was not read by this call: its record travels with the hand's checkpoint (2026-09-24) */
   fromCheckpoint?: boolean;
-  /** villain took an action the solver almost never takes here (services/offTree, 2026-09-27) — flagged, not acted on */
+  /** villain took an action the solver almost never takes here (services/offTree, 2026-09-27): flagged, and since
+   *  2026-10-06 his range after it is the soft range (offTree.soft says what was carried) */
   offTree?: OffTreeLine;
 }
 export interface ChainTrace {
@@ -1241,6 +1245,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     let st = new StreetState(n, caps);
     let codes: string[] = [];
     let closed = false;
+    /** an off-tree villain action on this street was node-locked (OFFTREE_LOCK=on): the rest of the street reads the
+     *  locked child, so hero's node is not kept as a mid-street checkpoint (a resume would read the unlocked tree) */
+    let lockedOnStreet = false;
     let ti0 = 0;
     let heroDataAtTi0: any = null;
     if (resuming) {
@@ -1463,7 +1470,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         }
         nodeRec.heroNode = true;
         // HERO'S NODE IS THE HAND'S MID-STREET CHECKPOINT: the next decision resumes from here (see PartialCheckpoint)
-        if (rootKey && handKey) {
+        if (rootKey && handKey && !lockedOnStreet) {
           const entry = entryKeyAt(si);
           if (factsKey) handFacts.recordStreet(factsKey, { k, first, plan, root: rootKey, entry, key: entry, tokens: toks.slice(), kind: "partial", solId: String(ens.solId), ...(startedFp ? { inFp: startedFp } : {}), at: Date.now() });
           savePartial(handKey, entry, {
@@ -1513,7 +1520,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // solver's modelled mistake distribution, and the range narrowed below is "the hands QRE says would make this
       // mistake". Flagged and logged (a flag, never a verdict — chainChecks #3); the walk goes on exactly as before.
       if (actor !== heroIdx) {
-        const ot = offTreeStats(seats[actor]!.range, sols, ai);
+        const ot = offTreeStats(seats[actor]!.range, sols, ai, { dust: OFF_TREE_DUST });
         if (isOffTree(ot)) {
           nodeRec.offTree = {
             ...ot, street: STREET[k]!.toLowerCase() as OffTreeLine["street"], seat: seats[actor]!.pos, inPosition: actor === seats.length - 1,
@@ -1526,7 +1533,29 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // Condition the actor's range on the observed action — the step that
       // makes the NEXT street's tree see post-action ranges.
       const strat: number[] = a.strategy ?? [];
-      seats[actor]!.range = seats[actor]!.range.map((w, i) => w * (strat[i] ?? 0));
+      let after = seats[actor]!.range.map((w, i) => w * (strat[i] ?? 0));
+      // THE SOFT RANGE after an OFF-TREE villain action (services/offTree, OPTION 3, 2026-10-06): range x exp(-dEV/(t x pot))
+      // instead of the QRE sliver, which holds only "the hands QRE says would make this mistake" (measured worse than
+      // ignoring the action on real hands). OFFTREE_RANGE=log computes and records it and keeps the sliver; off = neither.
+      let pendingLock: { factor: number[] } | null = null;
+      if (nodeRec.offTree) {
+        const mode = offTreeRangeMode();
+        if (mode !== "off") {
+          const t = offTreeSoftT();
+          const potAt = nodeRec.potNode;
+          const qreCombos = after.reduce((x, y) => x + y, 0);
+          const sr = softOffTreeRange(seats[actor]!.range, sols, ai, potAt, t);
+          const soft: OffTreeSoft = "why" in sr
+            ? { mode, t, pot: potAt, qreCombos, softCombos: null, applied: false, why: sr.why }
+            : { mode, t, pot: potAt, qreCombos, softCombos: sr.combos, applied: mode === "soft" };
+          if (soft.applied && !("why" in sr)) {
+            after = sr.range;
+            if (offTreeLockOn()) pendingLock = { factor: sr.factor };
+          }
+          nodeRec.offTree.soft = soft;
+        }
+      }
+      seats[actor]!.range = after;
 
       try {
         const to = Number(a.action?.betsize);
@@ -1534,7 +1563,25 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       } catch (e) {
         return fail(`${STREET[k]}#${ti}: ${e instanceof Error ? e.message : e}`);
       }
+      const codesBefore = codes.slice();
       codes.push(String(a.action?.code ?? ""));
+      // THE REST OF THE STREET AGAINST THE SOFT RANGE (OFFTREE_LOCK=on): the street's later nodes — hero's included — come
+      // from the tree solved with villain playing QRE at this node. A node lock makes his action here = the soft range and
+      // re-solves what follows (one POST on the solve's own account; scripts/_probePostflopNodeLock.ts). A failed lock
+      // keeps the unlocked tree and says so; a street this action closes needs none (the next tree gets the range).
+      if (pendingLock && !st.closed && nodeRec.offTree?.soft) {
+        const lock = offTreeLock(sols, ai, pendingLock.factor, k + 1, codesBefore);
+        const tLock = Date.now();
+        const lk = await gtowApi.lockedCustomSolution(String(ens.solId), lock);
+        if (lk.ok) {
+          ens = { ...ens, solId: lk.solId };
+          lockedOnStreet = true;
+          nodeRec.offTree.soft.lock = { ok: true, solId: String(lk.solId) };
+        } else {
+          nodeRec.offTree.soft.lock = { ok: false, why: lk.error.slice(0, 160) };
+        }
+        tspan(`chain ${STREET[k]} off-tree node lock`, tLock, lk.ok ? `child ${String(lk.solId).slice(0, 8)}` : lk.error.slice(0, 120));
+      }
 
       if (st.closed) {
         if (ti !== labels.length - 1) {

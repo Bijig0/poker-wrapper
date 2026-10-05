@@ -112,13 +112,52 @@ describe("coldCallLockTarget: which cold-caller, if any", () => {
     expect((C.coldCallLockTarget({ hand: min3, heroPos: "CO", dealt: dealt(min3) }) as any).target).toEqual({ pos: "BB", key: "coldcall3b_BB_80p_small", stack: 100, size: "small" });
     const jam = hand("CO", [["UTG", "fold"], ["HJ", "fold"], ["CO", "raise", 2.5], ["BTN", "fold"], ["SB", "all-in", 30], ["BB", "call", 30]], { SB: 30 });
     expect(C.coldCallersOf(jam, "CO").callers[0]).toMatchObject({ pos: "BB", open: 2.5, threeBet: 30, threeBettor: "SB", threeBetAllIn: true });
-    expect((C.coldCallLockTarget({ hand: jam, heroPos: "CO", dealt: dealt(jam) }) as any).target).toEqual({ pos: "BB", key: "coldcall3b_BB_jam", stack: 100, size: "jam" });
+    expect((C.coldCallLockTarget({ hand: jam, heroPos: "CO", dealt: dealt(jam) }) as any).target)
+      .toEqual({ pos: "BB", key: "coldcall3b_BB_jam_covers_20_40", stack: 100, size: "jam", jam: { side: "covers", depth: 30 } });
+    // the cutoff study's two jam spots: a 13.4bb CO jam and a 60bb one, a 139.6bb BB calling
+    const jamOf = (to: number) => hand("UTG", [["UTG", "raise", 2.6], ["HJ", "fold"], ["CO", "all-in", to], ["BTN", "fold"], ["SB", "fold"], ["BB", "call", to]], { CO: to, BB: 139.6 });
+    const j13 = jamOf(13.4), j60 = jamOf(60);
+    expect((C.coldCallLockTarget({ hand: j13, heroPos: "UTG", dealt: dealt(j13) }) as any).target.key).toBe("coldcall3b_BB_jam_covers_10_20");
+    expect((C.coldCallLockTarget({ hand: j60, heroPos: "UTG", dealt: dealt(j60) }) as any).target.key).toBe("coldcall3b_BB_jam_covers_40p");
+    // a 3-bet to 9 that commits a 15bb BB: the covered short caller
+    const committed = hand("CO", [["UTG", "fold"], ["HJ", "fold"], ["CO", "raise", 2.5], ["BTN", "raise", 9], ["SB", "fold"], ["BB", "call", 9]], { BB: 15 });
+    expect((C.coldCallLockTarget({ hand: committed, heroPos: "CO", dealt: dealt(committed) }) as any).target)
+      .toEqual({ pos: "BB", key: "coldcall3b_BB_jam_covered_10_20", stack: 15, size: "jam", jam: { side: "covered", depth: 15 } });
+  });
+  it("JAMS BY SIDE AND DEPTH (2026-10-06): who is short, and the effective stack as dealt", () => {
+    const cc = (threeBet: number, allIn = false, tb: "SB" | "BTN" = "BTN") => ({ pos: "BB" as const, threeBet, threeBettor: tb, threeBetAllIn: allIn });
+    expect(C.coldCallJam(cc(30, true), { BB: 100, BTN: 30 })).toEqual({ side: "covers", depth: 30 });
+    expect(C.coldCallJam(cc(9), { BB: 15, BTN: 100 })).toEqual({ side: "covered", depth: 15 });
+    expect(C.coldCallJam(cc(40, true), { BB: 40, BTN: 40 })).toEqual({ side: "covers", depth: 40 });   // equal: he covers
+    expect(C.coldCallJam(cc(25, true), { BB: 100 })).toEqual({ side: "covers", depth: 25 });           // the all-in stands for his stack
+    expect(C.coldCallJam(cc(25), { BB: 100 })).toBeNull();
+    expect(C.coldCallJam(cc(25, true), { BTN: 25 })).toBeNull();
+    const k = (side: "covers" | "covered", depth: number, pos: any = "BB") => C.coldCallKey(pos, 100, "jam", { side, depth });
+    expect(k("covers", 8)).toBe("coldcall3b_BB_jam_covers_le10");
+    expect(k("covers", 10)).toBe("coldcall3b_BB_jam_covers_10_20");
+    expect(k("covers", 39.9)).toBe("coldcall3b_BB_jam_covers_20_40");
+    expect(k("covers", 40)).toBe("coldcall3b_BB_jam_covers_40p");
+    expect(k("covered", 5)).toBe("coldcall3b_BB_jam_covered_le10");
+    expect(k("covers", 13, "HJ")).toBe("coldcall3b_HJ_jam_covers_10_20");    // every seat built (the HJ borrows all seats' rate)
+    expect(C.coldCallKey("BB", 100, "jam", null)).toBe("coldcall3b_BB_jam");  // stacks unknown: the pooled jam range
+    const f = (key: string) => C.coldCallRange(key as any).freq;
+    // a deeper shove is called less, and a deep one far less than the pooled range had it
+    expect(f("coldcall3b_BB_jam_covers_le10")).toBeGreaterThan(f("coldcall3b_BB_jam_covers_10_20"));
+    expect(f("coldcall3b_BB_jam_covers_10_20")).toBeGreaterThan(f("coldcall3b_BB_jam_covers_20_40"));
+    expect(f("coldcall3b_BB_jam_covers_20_40")).toBeGreaterThan(f("coldcall3b_BB_jam_covers_40p"));
+    expect(f("coldcall3b_BB_jam_covers_40p")).toBeLessThan(f("coldcall3b_BB_jam") / 3);
+    // a short stack the 3-bet commits calls far wider than a deep caller of a short shove
+    expect(f("coldcall3b_BB_jam_covered_le10")).toBeGreaterThan(4 * f("coldcall3b_BB_jam_covers_le10"));
+    const combos = (key: string) => C.coldCallWeights(key as any).reduce((t, x) => t + x, 0);
+    expect(combos("coldcall3b_BB_jam_covers_40p")).toBeLessThan(20);           // was 56 pooled (the cutoff study's 60bb jam)
   });
   it("THE TRIGGER (cutoff study 2026-10-05): the larger of 1% and a third of the pool's rate, a jam 1%; COLD_CALL_LOCK_RATIO=off is the flat 1%", () => {
     expect(C.coldCallLockBelow("coldcall3b_BB_80p_large")).toBe(0.01);                       // pool 1.88% / 3 → 1%
     expect(C.coldCallLockBelow("coldcall3b_BB_80p_small")).toBeCloseTo(0.0644 / 3, 4);         // 2.15%
     expect(C.coldCallLockBelow("coldcall3b_BB_40_80_large")).toBeCloseTo(0.067 / 3, 4);        // 2.23%
     expect(C.coldCallLockBelow("coldcall3b_BB_jam")).toBe(0.01);                                // a jam: the flat 1% (4.23% / 3 = 1.41% not used)
+    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covered_le10")).toBe(0.01);                    // by depth too (36% / 3 not used)
+    expect(C.coldCallLockBelow("coldcall3b_BB_jam_covers_le10")).toBe(0.01);
     process.env.COLD_CALL_LOCK_RATIO = "2";
     expect(C.coldCallLockBelow("coldcall3b_BB_80p_mid")).toBeCloseTo(0.0214 / 2, 4);
     process.env.COLD_CALL_LOCK_RATIO = "off";
@@ -256,6 +295,11 @@ describe("applyPoolColdCallFloor: the flop", () => {
     expect(r.applied[0]!.now).toBeGreaterThan(50);
     expect(r.ranges.SB).toEqual({ AA: 1, KK: 1 });
     expect(C.poolColdCallFloorNote(r.applied, "gtow-ai")).toContain("POOL COLD-CALL RANGE");
+  });
+  it("a jam's caller gets the range of his side and depth", () => {
+    const h = hand("CO", [["UTG", "fold"], ["HJ", "fold"], ["CO", "raise", 2.5], ["BTN", "fold"], ["SB", "all-in", 60], ["BB", "call", 60], ["CO", "call", 60]], { SB: 60, BB: 140 });
+    const r = C.applyPoolColdCallFloor({ hand: h, heroPos: "CO", ranges: { BB: { "72o": 0.001 } }, dealt: dealt(h) });
+    expect(r.applied.map((x) => [x.pos, x.key])).toEqual([["BB", "coldcall3b_BB_jam_covers_40p"]]);
   });
   it("a cold-caller the tree gave a real range keeps it; one the pinned tree locked keeps his walked range", () => {
     const h = flop();
