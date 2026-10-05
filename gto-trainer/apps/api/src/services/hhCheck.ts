@@ -15,7 +15,7 @@
  */
 import { offTreeLog } from "./offTreeLog";
 import type { Database } from "bun:sqlite";
-import { archivedByClientHandId, doneIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
+import { archivedByClientHandId, doneIgnitionHandIdsAfter, doneIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
 import { hhChecksDbPath, openStore } from "./storePaths";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
@@ -123,6 +123,9 @@ export interface CheckerDeps {
   findArchived: (clientHandId: string) => Enriched | null;
   /** FINISHED hands after the cutoff row (routes/dashboard.doneIgnitionHandsAfter) */
   doneAfter: (rowid: number) => Enriched[];
+  /** the same hands' client ids only, nothing enriched (routes/dashboard.doneIgnitionHandIdsAfter) — when given, the
+   *  queue is built from these and only the hands with no check row yet are enriched */
+  doneIdsAfter?: (rowid: number) => string[];
   lastRowid: () => number;
   now: () => number;
 }
@@ -147,7 +150,19 @@ export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
     store.setMeta("cutoffRowid", String(deps.lastRowid())); // first start: from here on (never moved again)
     return;
   }
-  for (const e of deps.doneAfter(cutoff)) if (!store.get(e.clientHandId!)) store.save(freshCheck(e, deps.now()));
+  // THE QUEUE WITHOUT ENRICHING THE CHECKED (2026-10-05): every tick enriched EVERY finished hand since the cutoff to
+  // skip the ones already checked — synchronous work that grew with the archive (3,350 hands: 120 s a tick, every
+  // 10 s) and froze the API until its supervisor killed each new worker as hung. Ids first; only an unchecked hand is
+  // read in full.
+  if (deps.doneIdsAfter) {
+    for (const id of deps.doneIdsAfter(cutoff)) {
+      if (store.get(id)) continue;
+      const e = deps.findArchived(id);
+      if (e) store.save(freshCheck(e, deps.now()));
+    }
+  } else {
+    for (const e of deps.doneAfter(cutoff)) if (!store.get(e.clientHandId!)) store.save(freshCheck(e, deps.now()));
+  }
   for (const c of store.due(deps.now(), maxAttempts)) store.save(await attempt(c, deps));
 }
 
@@ -161,7 +176,7 @@ class HhChecker {
     if (this.timer) return;
     const deps: CheckerDeps = {
       store: hhCheckStore(), fetchRecord: (id) => fetchIgnitionRecord(id), findArchived: archivedByClientHandId,
-      doneAfter: doneIgnitionHandsAfter, lastRowid: lastArchivedRowid, now: Date.now,
+      doneAfter: doneIgnitionHandsAfter, doneIdsAfter: doneIgnitionHandIdsAfter, lastRowid: lastArchivedRowid, now: Date.now,
     };
     this.timer = setInterval(() => {
       if (this.busy) return;
