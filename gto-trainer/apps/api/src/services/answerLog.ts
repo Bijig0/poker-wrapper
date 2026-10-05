@@ -586,6 +586,47 @@ class AnswerLog {
     return out;
   }
 
+  /**
+   * How many answered decisions' chain paths carried each reason code (services/chainPath), over the last `days` —
+   * the register's `pathCodes` join (2026-10-05). One SQL pass over the paths' `reasons` (~80 ms over 30 days of
+   * ~11,000 answers); remembered for a minute, because the Sources page asks on every visit.
+   */
+  countPathCodes(days = 30): Record<string, { n: number; lastTs: number | null }> {
+    const key = `${this.path}|${days}`;
+    const hit = this.pathCodeMemo;
+    if (hit && hit.key === key && Date.now() - hit.at < 60_000) return hit.out;
+    const out: Record<string, { n: number; lastTs: number | null }> = {};
+    try {
+      const since = Date.now() - days * 86_400_000;
+      const rows = this.open()
+        .query<{ code: string | null; n: number; last: number | null }, [number]>(
+          // the reasons' codes, and the arrival's own code and its first computation's (a flop floor's code rides on
+          // the arrival — on a later street's memo hit, on arrival.first — even where it is not a reason); UNION counts
+          // an answer once per code
+          `SELECT code, count(*) AS n, max(ts) AS last FROM (
+             SELECT a.id, a.ts, json_extract(j.value, '$.code') AS code
+               FROM answers a, json_each(a.path, '$.reasons') j
+              WHERE a.ts >= ?1 AND a.text IS NOT NULL AND a.path IS NOT NULL AND json_valid(a.path)
+             UNION
+             SELECT a.id, a.ts, json_extract(a.path, '$.arrival.code') AS code
+               FROM answers a
+              WHERE a.ts >= ?1 AND a.text IS NOT NULL AND a.path IS NOT NULL AND json_valid(a.path)
+             UNION
+             SELECT a.id, a.ts, json_extract(a.path, '$.arrival.first.code') AS code
+               FROM answers a
+              WHERE a.ts >= ?1 AND a.text IS NOT NULL AND a.path IS NOT NULL AND json_valid(a.path)
+           ) WHERE code IS NOT NULL GROUP BY code`
+        )
+        .all(since);
+      for (const r of rows) if (r.code) out[r.code] = { n: r.n, lastTs: r.last };
+    } catch {
+      /* the register degrades to "unmeasured", it never throws */
+    }
+    this.pathCodeMemo = { key, at: Date.now(), out };
+    return out;
+  }
+  private pathCodeMemo: { key: string; at: number; out: Record<string, { n: number; lastTs: number | null }> } | null = null;
+
   /** Latency percentiles + counts per tier, over the last `days`. */
   stats(days = 30): unknown {
     try {
