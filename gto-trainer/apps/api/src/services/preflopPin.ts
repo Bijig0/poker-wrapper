@@ -168,7 +168,16 @@ export function setPreflopPin(pin: PreflopPin, heroCards?: string | null): void 
   // the earlier decisions' picks ride along; a re-ask of the same decision (the poller probes it every second) or of
   // an earlier one (a replay) replaces what it supersedes — only picks strictly before this node are kept
   const prev = handFacts.preflop(pin.handKey);
-  const carried = (prev?.picks ?? []).filter((p) => isStrictPrefix(p.rawTokens, pin.rawTokens));
+  // A POOL-LOCKED ANSWER IS NOT REPLACED BY THE UNLOCKED ONE FOR THE SAME DECISION (2026-10-05, stress-500 pf_3bet-034):
+  // the cold-call lock is asked beside the regular answer, and the regular GTO Wizard AI answer pinned the UNLOCKED tree
+  // after it — the flop then walked a tree where the cold-call is ~0% and everything behind it barely reached (hero's
+  // own range 0.4 combos). Same decision = the same raw line; a later decision replaces it as before.
+  if (prev && prev.piece === "gtow-ai-preflop" && (prev as AiPreflopPin).poolLocks?.length && pin.piece === "gtow-ai-preflop"
+      && !(pin as AiPreflopPin).poolLocks?.length && prev.rawTokens.join("-") === pin.rawTokens.join("-")) {
+    tmark("preflop pin kept", `hand ${pin.handKey}: the pool-locked tree stays pinned at "${pin.rawTokens.join("-") || "root"}" (an unlocked answer for the same decision is not pinned over it)`);
+    return;
+  }
+  const carried =(prev?.picks ?? []).filter((p) => isStrictPrefix(p.rawTokens, pin.rawTokens));
   pin = { ...pin, picks: [...carried, ...(pin.picks ?? [])] } as PreflopPin;
   handFacts.setPreflop(pin.handKey, pin, heroCards);
   recordPreflopNode(pin, heroCards);
