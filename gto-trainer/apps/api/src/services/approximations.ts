@@ -650,7 +650,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "GTO Wizard's preflop tree is an equilibrium: a short UTG never limps there, so after a chart's limp (hero limps / completes ~108 times a week from the limp, 3-max and HU charts) any line the chart cannot hold leaves hero with no range at all",
     fix: "nothing on the solver side while charts that limp feed GTO Wizard's tree; a chart that holds the line answers instead",
     status: "by-design",
-    cost: "one lock POST + hero's node read per decision it fires on (the prefix nodes are the walk's, cached); never seen on a live hand as of 2026-10-07",
+    cost: "one lock POST + hero's node read per decision it fires on (the prefix nodes are the walk's, cached); never seen on a live hand as of 2026-10-07. Stress-500 pf_limp1-001 re-run on GTO Wizard 2026-10-07: 4 requests, the lock answered in 6.9 s (7.0 s the whole decision); the D30 chart offers UTG no limp, so the lock took the pool's limp_first_short_le60 range (349 combos, K9o in it); K9o facing the 4.1 raise now Fold 99.99% (was an empty answer), flagged OFF-ANSWER (the chart said Fold 100%). Replay gate session_20261005_020142: 0 differ",
     code: "gtowAiPreflop.ts heroSelfLock / heroSelfLockWeights / heroOffNodeOf / heroSelfLockReasons (solvePreflopGtowAi, the empty-mix check) · fastSolve.ts asResult (preflopAlso) / the HERO_OFF_TREE refusal · chainPath.ts preflopAlso",
   },
   {

@@ -2191,7 +2191,7 @@ export function heroSelfLockReasons(s: HeroSelfLock, cls: string | null): PathRe
   const out: PathReason[] = [{ v: "by-design", code: "preflop:hero-self-lock",
     text: `hero's own ${s.taken} at "${s.line || "root"}" locked to ${s.source === "chart" ? "his chart range" : s.source === "pool" ? "the pool's limp range" : "the tree's own play"} (${s.combos} combos) — his ${cls ?? "hand"} was out of his own range on GTO Wizard's tree` }];
   if (s.offAnswer) out.push({ v: "failed", code: "preflop:hero-off-answer",
-    text: `HERO OFF-ANSWER: hero played ${cls ?? "his hand"} where his answer did not${s.chartSaid ? ` (the chart said ${s.chartSaid})` : ""}${s.classAdded ? "; his class was added to the lock" : ""} — review the hand` });
+    text: `HERO OFF-ANSWER: hero played ${cls ?? "his hand"} where his answer did not${s.chartSaid ? ` — the chart said ${s.chartSaid}, he took ${s.taken}` : ""}${s.classAdded ? "; his class was added to the lock" : ""} — review the hand` });
   return out;
 }
 
