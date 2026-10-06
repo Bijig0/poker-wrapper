@@ -521,6 +521,11 @@ export function checkLine(a: {
     // an all-in carries the table's amount since 2026-10-03 (it was the tree's own stack, so "all-in = all-in" was all
     // there was to say): both sizes are compared like any wager's — a 28bb shove walked as a 97.8 all-in is a fail
     if (want == null || got == null) { sizes.push(`${c} → ${w.name}`); return; }
+    // A SHOVE BIGGER THAN ANYONE IN THE TREE CAN CALL (2026-10-07, stress brief_A-007: the SB all-in to 87.1bb, hero
+    // with 7.1bb behind): the tree's all-in is capped at the deepest other seat (gtowApi.seatAllIns), so a table all-in
+    // walked as a SMALLER tree all-in is the same action — what is above the cap goes back uncalled. The other way round
+    // (a 28bb shove walked as a 97.8 all-in: the tree's stack is too deep) still fails below.
+    if (/^allin/i.test(c) && /^all-?in$/i.test(w.name) && got < want) { sizes.push(`${r2(want)} all-in → the tree's ${r2(got)} (all the others can call)`); return; }
     const diff = Math.abs(got - want);
     if (diff > Math.max(TOL.sizeBb, TOL.sizePct * want)) {
       bad.push(`#${i + 1}: ${r2(want)}bb bet at the table, walked as the tree's ${w.name.toUpperCase()} ${r2(got)}bb (Δ ${r2(diff)}bb, ${Math.round((100 * diff) / want)}%) — over the bound (0.5bb / 10%)`);
