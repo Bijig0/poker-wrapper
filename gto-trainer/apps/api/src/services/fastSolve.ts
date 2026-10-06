@@ -50,7 +50,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -2788,8 +2788,8 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
-    warning: note(r.note), approx: approx || !!rakeNote || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
+    warning: note(r.note), approx: approx || !!rakeNote || !!r.heroSelfLock || undefined,
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
   });
   const ai = await solvePreflopGtowAi(hand, heroPos, why);
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
@@ -4335,12 +4335,19 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
-    warning: r.note, approx: approx || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
+    warning: r.note, approx: approx || !!r.heroSelfLock || undefined,
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
     ...(gated ? { treeGap: gated } : {}),
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
+  // HERO OFF HIS OWN TREE (2026-10-07, gtowAiPreflop's self-lock): his hand reads 0 at his node because of an earlier
+  // action of his own the tree never takes with it, and the lock that would put it back failed, timed out or is off.
+  // Terminal and said as such — no other piece is asked (the reason, unchanged, is what the panel and hand page show).
+  if ((ai as { kind?: string }).kind === HERO_OFF_TREE) {
+    return { ok: false, kind: "not-in-range", street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
+      reason: `${ai.reason} (${why.slice(0, 160)})` };
+  }
   // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR "Incorrect actions" from GTO
   // Wizard on the built line means the table as captured is not a table. Terminal, like the gate at the entry, and
   // marked capture-fault. (Any other VALIDATION_ERROR is a refusal of the TREE — kind tree-refused, 2026-10-03.)

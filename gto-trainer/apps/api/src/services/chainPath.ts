@@ -101,6 +101,10 @@ export interface DecisionPath {
   streets: StreetPath[];
   /** preflop: which piece answered, and why when it was not the first choice */
   preflop?: { piece: string; how: "designed" | "by-design" | "rebuilt"; code?: string; why?: string | null };
+  /** preflop reasons a piece reports BESIDE its own code (2026-10-07: the hero self-lock, and the HERO OFF-ANSWER flag,
+   *  under whatever routed the decision to GTO Wizard AI — the gap gate, the fit rule, the charts' limits). Kept on the
+   *  path so a re-classification (withChecks) keeps them. */
+  preflopAlso?: PathReason[];
   /** GTO Wizard requests this call made (services/requestScope) */
   requests?: RequestCounts;
   origin?: string;
@@ -116,7 +120,7 @@ export interface DecisionPath {
 }
 
 /** The reasons a path carries, in the order they happened (arrival, preflop, then street by street, then the checks). */
-export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets" | "checks">): PathReason[] {
+export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets" | "checks"> & Partial<Pick<DecisionPath, "preflopAlso">>): PathReason[] {
   const out: PathReason[] = [];
   const a = p.arrival;
   if (a && (a.how === "by-design" || a.how === "rebuilt")) {
@@ -126,6 +130,7 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
   if (pf && (pf.how === "by-design" || pf.how === "rebuilt")) {
     out.push({ v: pf.how, code: pf.code ?? `preflop:${pf.piece}`, text: `preflop ${pf.how === "rebuilt" ? "fallback" : "by design"}: ${pf.why ?? pf.piece}` });
   }
+  for (const x of p.preflopAlso ?? []) out.push(x);
   for (const s of p.streets) {
     if (s.how === "by-design" || s.how === "rebuilt" || s.how === "leaked") {
       out.push({ v: s.how, code: s.code ?? `street:${s.how}`, text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.why ?? s.how}` });
