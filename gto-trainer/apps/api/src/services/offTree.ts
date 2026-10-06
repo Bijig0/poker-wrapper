@@ -28,6 +28,15 @@
  * seat's top weight — in po_hu-004 Td9d at weight 0.0001 checking 2.3% vetoed the flag. Postflop chain only: the
  * preflop fit (gtowAiPreflop) calls offTreeStats without it and is unchanged.
  *
+ * THE POSTFLOP TRIGGER IS THE NODE SHARE ALONE (2026-10-06, Brady's go relayed; scripts/research/offtree-ranges/
+ * detector_rules.py). The "no hand above 2%" half kept the QRE sliver wherever one hand took the action a little more
+ * often: 111 of the 334 villain nodes under 1% in the traces, 98 of them leaving him under 1.5 combos (stress-500
+ * pf_srp-001's turn bet at 0.1%, po_3way-004's flop call at 0.3%). On those nodes with villain's real cards (NL100/200,
+ * 17 with the hand in range) the QRE narrowing scored -1.70 bits per action against ignoring the action [-2.78, -0.70]
+ * and the soft range +0.01; every looser cut (5%, 10%, 20%) pointed the same way. So the postflop chain fires on share
+ * < 1% alone (isOffTreePostflop); OFFTREE_MAX_HAND=0.02 brings the old second condition back. maxHand is still computed
+ * and shown. The preflop fit's isOffTree keeps both halves.
+ *
  * Pure: the chain computes the numbers on the node it already read.
  */
 
@@ -110,6 +119,16 @@ export function offTreeStats(range: number[], sols: Sol[], taken: number, opts: 
 }
 
 export const isOffTree = (s: OffTreeStats): boolean => s.nodeFreq < OFF_TREE_NODE_FREQ && s.maxHand < OFF_TREE_MAX_HAND;
+
+/** OFFTREE_MAX_HAND, read at every decision: the postflop trigger's "no hand above" cut — unset = none (the node share
+ *  alone, since 2026-10-06), a number in (0, 1] = that cut (0.02 = the rule before). */
+export function offTreeMaxHand(): number {
+  const v = Number(process.env.OFFTREE_MAX_HAND);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : Infinity;
+}
+/** THE POSTFLOP CHAIN'S TRIGGER: the action is under 1% of his range at the node (and under OFFTREE_MAX_HAND's cut for
+ *  every hand, when one is set). The preflop fit keeps isOffTree. */
+export const isOffTreePostflop = (s: OffTreeStats): boolean => s.nodeFreq < OFF_TREE_NODE_FREQ && s.maxHand < offTreeMaxHand();
 
 /** OFFTREE_RANGE, read at every decision: soft (unset) = carry the soft range · log = compute and record it, keep the QRE
  *  narrowing · off = neither (the narrowing of before 2026-10-06). */
