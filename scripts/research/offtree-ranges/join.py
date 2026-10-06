@@ -33,7 +33,15 @@ def main(acts_p, hh_p, out):
     why = Counter()
     keep = []
     for r in acts:
-        h = hh.get(r["hand"])
+        # a pilot spot (offtreePilot.ts, client id "pilot-<hand>"): the chain's hero is whichever player it answered for,
+        # not Brady's [ME] seat — that player's seat and cards are the history's hero for the checks below
+        if str(r["hand"]).startswith("pilot-"):
+            base = hh.get(str(r["hand"])[6:])
+            h = dict(base, hero=r["hero"]) if base else None
+            if h is not None:
+                r = dict(r, hand=str(r["hand"])[6:], pilot=True)
+        else:
+            h = hh.get(r["hand"])
         if h is None:
             why["no history"] += 1
             continue

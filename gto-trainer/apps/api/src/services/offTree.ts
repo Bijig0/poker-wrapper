@@ -19,7 +19,7 @@
  * the QRE narrowing scores -1.39 bits per action against ignoring the action (it rules out hands real players hold);
  * range x exp(-dEV_h / T) with T = 10% of the pot scores +0.06, pot-relative T beating T in bb in every band. So after
  * an OFF-TREE villain action the chain carries
- *     range(h) x exp(-(EV_best(h) - EV_taken(h)) / (t x pot at the node)),   t = 0.10
+ *     range(h) x exp(-(EV_best(h) - EV_taken(h)) / (t x pot at the node)),   t = 0.20 (0.10 until the re-fit below)
  * instead of range x strategy (T -> 0 = only the hands for which the action is best; T -> infinity = the range before
  * the action). Off switch OFFTREE_RANGE (soft = carry it · log = compute + record, keep QRE · off = neither), read at
  * every decision; register entry offtree-soft-range (services/approximations).
@@ -46,7 +46,7 @@ export const OFF_TREE_MAX_HAND = 0.02;
 /** a combo under this share of the seat's top weight does not vote in maxHand (the dust fix, postflop chain only) */
 export const OFF_TREE_DUST = 0.01;
 /** the soft range's temperature as a share of the pot at the node (fitted 2026-10-06; OFFTREE_RANGE_T overrides) */
-export const OFF_TREE_SOFT_T = 0.1;
+export const OFF_TREE_SOFT_T = 0.2;
 
 export interface OffTreeStats {
   /** share of villain's range (by weight) that takes the action at this node */
@@ -136,7 +136,12 @@ export function offTreeRangeMode(): "soft" | "log" | "off" {
   const v = String(process.env.OFFTREE_RANGE ?? "soft").trim().toLowerCase();
   return v === "off" || v === "0" || v === "false" ? "off" : v === "log" ? "log" : "soft";
 }
-/** the soft range's temperature as a share of the pot: OFFTREE_RANGE_T when it is a sane number, else 0.10 */
+/** the soft range's temperature as a share of the pot: OFFTREE_RANGE_T when it is a sane number, else 0.20 (pool-soft: 0.20).
+ *  T RE-FITTED 2026-10-06 on the trigger itself: with the NL200 pilot (526 heads-up NL200 spots solved on GTO Wizard
+ *  from Ignition's downloaded histories, scripts/offtreePilot.ts) the NL100/200 off-tree sample reached 57 actions with
+ *  villain's hand in range (81 at share < 1%). T = 10% of the pot scored -0.11 bits/action against ignoring the action
+ *  there; 20% -0.01, paired +0.10 [+0.01, +0.19] over 10% (share < 1%: +0.07 [+0.01, +0.14]; < 5%: +0.05 [+0.00,
+ *  +0.10]); 30-100% no better than 20% (the curve is flat at the value of ignoring the action). QRE -0.30 / -0.53. */
 export function offTreeSoftT(): number {
   const t = Number(process.env.OFFTREE_RANGE_T);
   return Number.isFinite(t) && t > 0 && t < 100 ? t : OFF_TREE_SOFT_T;
@@ -226,7 +231,7 @@ export const offTreeText = (l: OffTreeLine): string =>
   (l.soft ? ` · ${softText(l.soft)}` : "");
 
 const combosText = (x: number): string => (x >= 10 ? x.toFixed(0) : x >= 0.1 ? x.toFixed(1) : x.toFixed(3));
-/** "his range carried as 55 combos instead of QRE's 0.007 (soft, T = 10% of the 10.4bb pot)" */
+/** "his range carried as 55 combos instead of QRE's 0.007 (soft, T = 20% of the 10.4bb pot)" */
 export const softText = (s: OffTreeSoft): string =>
   s.softCombos == null ? `soft range not computable (${s.why ?? "?"}): QRE narrowing kept`
     : `his range ${s.applied ? "carried as" : "would be"} ${combosText(s.softCombos)} combos instead of QRE's ${combosText(s.qreCombos)} ` +

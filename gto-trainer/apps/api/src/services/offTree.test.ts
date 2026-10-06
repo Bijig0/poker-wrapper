@@ -107,16 +107,16 @@ describe("the soft range after an off-tree action (option 3, 2026-10-06)", () =>
     expect("why" in softOffTreeRange(range(), sols, 1, 0, 0.1)).toBe(true);
   });
 
-  it("the switches: OFFTREE_RANGE soft by default, log, off; OFFTREE_RANGE_T sane or 0.10", () => {
+  it("the switches: OFFTREE_RANGE soft by default, log, off; OFFTREE_RANGE_T sane or 0.20", () => {
     const keep = { r: process.env.OFFTREE_RANGE, t: process.env.OFFTREE_RANGE_T };
     try {
       delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_RANGE_T;
       expect(offTreeRangeMode()).toBe("soft");
-      expect(offTreeSoftT()).toBe(0.1);
+      expect(offTreeSoftT()).toBe(0.2);
       process.env.OFFTREE_RANGE = "log"; expect(offTreeRangeMode()).toBe("log");
       process.env.OFFTREE_RANGE = "OFF"; expect(offTreeRangeMode()).toBe("off");
       process.env.OFFTREE_RANGE_T = "0.2"; expect(offTreeSoftT()).toBe(0.2);
-      process.env.OFFTREE_RANGE_T = "abc"; expect(offTreeSoftT()).toBe(0.1);
+      process.env.OFFTREE_RANGE_T = "abc"; expect(offTreeSoftT()).toBe(0.2);
     } finally {
       if (keep.r == null) delete process.env.OFFTREE_RANGE; else process.env.OFFTREE_RANGE = keep.r;
       if (keep.t == null) delete process.env.OFFTREE_RANGE_T; else process.env.OFFTREE_RANGE_T = keep.t;
