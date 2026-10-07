@@ -17,33 +17,41 @@
  * the table (a dead-money tree moves the kept seats' earlier chips into its starting pot — brief_I-004's second flop
  * decision: the tree's "ALLIN 82.5" there is 15 + 82.5 = hero's whole 97.5, not a short all-in). Several blended trees:
  * each tree's own all-in, the SMALLEST is pressed (said when they disagree) and "outside" means outside that tree.
- * THE TABLE'S MINIMUM RAISE: a tree all-in is a legal raise for any amount (it is the tree seat's all-in); at the table
- * hero is NOT all-in at that size, so it must be at least the street's level plus its last full raise (brief_I-004: the
- * SB's 15 jam is a full bet — hero's smallest raise is to 30, the tree's 22 cannot be typed). The press is lifted to that
- * minimum and says so; when that minimum is already hero's whole stack there is no sized raise to make — no press.
+ * THE TABLE'S MINIMUM RAISE (Brady 2026-10-07: "only priced actions get executed; rare multiway spots lean
+ * conservative"): a tree all-in is a legal raise for any amount (it is the tree seat's all-in); at the table hero is NOT
+ * all-in at that size, so it must be at least the street's level plus its last full raise. When the tree's amount is a
+ * legal raise it is pressed as it is (kind "raise-to"); when it is under the minimum (brief_I-004: the SB's 15 jam is a
+ * full bet, hero's smallest raise is to 30 and the tree's 22 cannot be typed) no size the table allows was priced — the
+ * all-in is DROPPED from the served mix (kind "dropped", its share recorded), the rest re-spread and the pick re-rolled
+ * (dropShortAllIns — the prunedPicks pattern), note "SHORT ALL-IN DROPPED:". It is never lifted to another size and the
+ * plain ALL-IN preset is never pressed for a short tree all-in.
  *
- * ALLIN_SIZE_TO_TREE=off (config/local.env, read at every decision): no press, the plain all-in (the old behaviour).
+ * ALLIN_SIZE_TO_TREE=off (config/local.env, read at every decision): no press, no drop — the plain all-in (the old
+ * behaviour).
  * Register: services/approximations.ts `allin-sized-to-tree`. Wrapper: relay.ts pickReady / actuateSizedAllIn.
  */
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
 import type { PathReason } from "./chainPath";
 
-/** One press instruction on an answer: how the wrapper executes the action it names, when it is the pick. */
+/** One press instruction on an answer: how the wrapper executes the action it names, when it is the pick — or, kind
+ *  "dropped", a short all-in the table cannot take at its size, taken out of the served mix. */
 export interface PressEntry {
   /** the answer's action label, as the mix and the pick spell it ("ALLIN 22") */
   action: string;
-  kind: "raise-to";
-  /** the street total to type into the client's bet field (bb) */
-  amount: number;
+  kind: "raise-to" | "dropped";
+  /** raise-to: the street total to type into the client's bet field (bb) — the tree's amount itself */
+  amount?: number;
   /** "raise" facing a wager, "bet" when nothing is in on the street */
   verb: "raise" | "bet";
   /** the tree's all-in as a table street total, before any lift to the table's minimum raise */
   treeAmount: number;
   /** what a shove at the table would put in: hero's whole street total */
   heroAllIn: number;
-  /** the table's smallest legal raise-to at hero's node, when the tree's amount was under it (the press is lifted) */
-  minRaiseTo?: number;
+  /** the table's smallest legal raise-to at hero's node */
+  minRaiseTo: number;
+  /** dropped: the all-in's share of the served mix (%) before it was taken out */
+  share?: number;
   /** the collapse whose tree carries the amount (its plan tag), null = the one tree */
   plan: string | null;
   /** the live villains outside that tree with more chips than the amount (their street totals) */
@@ -129,7 +137,7 @@ export function treeAllInTo(node: { actor: number; invested: number[]; actions: 
  * blended ones; the one tree otherwise), each with hero's all-in in table terms. Empty = press as before (the shove).
  */
 export function shortAllInPress(a: {
-  actions: { action: string }[];
+  actions: { action: string; frequency?: number }[];
   heroPos: string;
   money: StreetMoney;
   trees: TreeAllIn[];
@@ -151,15 +159,10 @@ export function shortAllInPress(a: {
     .filter((v) => !inTree.has(up(v.pos)) && v.chips != null && v.chips > tree.to + 0.5)
     .map((v) => ({ pos: v.pos, chips: v.chips! }));
   if (!outside.length) return [];
-  // THE TABLE'S MINIMUM RAISE: the tree's all-in is legal there at any size; at the table hero is not all-in at it
-  let amount = tree.to;
-  let minRaiseTo: number | undefined;
-  if (amount < money.minRaiseTo - 0.005) {
-    const lifted = Math.min(money.minRaiseTo, heroAllIn);
-    if (!(lifted < heroAllIn - 0.5)) return [];   // the smallest raise the table allows is the shove itself
-    amount = r2(lifted);
-    minRaiseTo = r2(money.minRaiseTo);
-  }
+  // THE TABLE'S MINIMUM RAISE: the tree's all-in is legal there at any size; at the table hero is not all-in at it —
+  // under the minimum, no size the table allows was priced: dropped from the mix, never lifted
+  const minRaiseTo = r2(money.minRaiseTo);
+  const legal = tree.to >= minRaiseTo - 0.005;
   const verb: "raise" | "bet" = money.level > 0.005 ? "raise" : "bet";
   const disagree = new Set(carried.map((t) => fmt(t.to))).size > 1;
   const deepest = tree.deepest ? ` (${tree.deepest.pos}'s ${fmt(tree.deepest.chips)}, the deepest seat it holds)` : "";
@@ -167,29 +170,61 @@ export function shortAllInPress(a: {
   const why = `the tree's all-in is ${fmt(tree.to)}${deepest}${tree.plan ? ` in ${tree.plan}` : ""}; ${out} ` +
     `${outside.length === 1 ? "is" : "are"} outside the tree and deeper — a shove at the table would be ${fmt(heroAllIn)}, ` +
     `which the tree never priced` +
-    (minRaiseTo != null ? `; the table's smallest ${verb} is to ${fmt(minRaiseTo)} (level ${fmt(money.level)}), so ${fmt(tree.to)} is lifted to it` : "") +
+    (legal ? "" : `; the table's smallest ${verb} is to ${fmt(minRaiseTo)} (level ${fmt(money.level)}), so ${fmt(tree.to)} cannot be played there`) +
     (disagree ? `; the blended trees disagree (${carried.map((t) => `${t.plan ?? "tree"} ${fmt(t.to)}`).join(", ")}) — the smallest is pressed` : "");
+  const share = (label: string) => {
+    const f = Number(a.actions.find((x) => x.action === label)?.frequency);
+    return Number.isFinite(f) ? r2(f) : undefined;
+  };
   return labels.map((action) => ({
-    action, kind: "raise-to" as const, amount, verb, treeAmount: tree.to, heroAllIn,
-    ...(minRaiseTo != null ? { minRaiseTo } : {}),
+    action, ...(legal ? { kind: "raise-to" as const, amount: tree.to } : { kind: "dropped" as const, share: share(action) }),
+    verb, treeAmount: tree.to, heroAllIn, minRaiseTo,
     plan: tree.plan, outside,
     ...(disagree ? { trees: carried.map((t) => ({ plan: t.plan, to: t.to })) } : {}),
     why,
   }));
 }
 
-/** The press entry for a pick, if the pick is one of the pressed actions. */
+/** The press entry (kind raise-to) for a pick, if the pick is one of the pressed actions. */
 export function pressForPick(press: readonly PressEntry[] | null | undefined, pick: string | null | undefined): PressEntry | null {
   if (!press?.length || !pick) return null;
   const p = up(pick).replace(/\s+/g, " ");
-  return press.find((x) => up(x.action).replace(/\s+/g, " ") === p) ?? null;
+  return press.find((x) => x.kind === "raise-to" && up(x.action).replace(/\s+/g, " ") === p) ?? null;
+}
+
+/**
+ * THE SAFETY NET (pure): every "dropped" entry's action out of the mix, the rest re-spread to the mix's own sum (the
+ * prunedPicks pattern); the caller re-rolls on the result. Nothing left with weight (the all-in was the whole mix): the
+ * check / call takes it all — a rare multiway spot leans conservative — else the fold. Returns the dropped share (%).
+ */
+export function dropShortAllIns<T extends { action: string; frequency: number }>(actions: T[], press: readonly PressEntry[]):
+    { actions: T[]; dropped: number; toPassive: string | null } {
+  const out = new Set(press.filter((e) => e.kind === "dropped").map((e) => up(e.action)));
+  if (!out.size) return { actions, dropped: 0, toPassive: null };
+  const keep = actions.filter((x) => !out.has(up(x.action)));
+  if (!keep.length) return { actions, dropped: 0, toPassive: null };
+  const pos = (x: T) => (x.frequency > 0 ? x.frequency : 0);
+  const sum = actions.reduce((t, x) => t + pos(x), 0);
+  const rest = keep.reduce((t, x) => t + pos(x), 0);
+  const dropped = r2(sum - rest);
+  if (rest > 1e-9) return { actions: keep.map((x) => ({ ...x, frequency: x.frequency > 0 ? (x.frequency * sum) / rest : x.frequency })), dropped, toPassive: null };
+  const passive = keep.find((x) => /^(check|call)\b/i.test(x.action)) ?? keep.find((x) => /^fold\b/i.test(x.action)) ?? keep[0]!;
+  return { actions: keep.map((x) => ({ ...x, frequency: x === passive ? sum : 0 })), dropped, toPassive: passive.action };
+}
+
+export const DROP_NOTE_TAG = "SHORT ALL-IN DROPPED:";
+
+/** The note an answer with a dropped short all-in carries (always — it changed the mix, whatever the pick). */
+export function dropNote(e: PressEntry, toPassive: string | null): string {
+  return `${DROP_NOTE_TAG} ${e.action} cannot be played at the table (minimum ${e.verb} ${fmt(e.minRaiseTo)}): dropped from the mix ` +
+    `(its share ${fmt(e.share ?? 0)}%) and the pick re-rolled${toPassive ? ` — it was the whole mix, so ${toPassive} takes it` : ""} — ${e.why.replaceAll(" · ", "; ")}`;
 }
 
 export const PRESS_NOTE_TAG = "SHOVE SIZED TO THE TREE:";
 
 /** The note that opens an answer whose PICK is a sized all-in (one segment — no " · " inside). */
 export function pressNote(e: PressEntry): string {
-  return `${PRESS_NOTE_TAG} pressed as a ${e.verb} to ${fmt(e.amount)}bb, not hero's ${fmt(e.heroAllIn)}bb — ${e.why.replaceAll(" · ", "; ")}`;
+  return `${PRESS_NOTE_TAG} pressed as a ${e.verb} to ${fmt(e.amount ?? e.treeAmount)}bb, not hero's ${fmt(e.heroAllIn)}bb — ${e.why.replaceAll(" · ", "; ")}`;
 }
 
 /** The answer's warning with the press note in front when the pick is a pressed all-in, and without it otherwise (the
@@ -201,10 +236,16 @@ export function withPressNote(warning: string | null | undefined, press: readonl
   return out || null;
 }
 
-/** The chain-path reason an answer carrying a press gets (by-design: the departure is deliberate). */
-export function pressReason(press: readonly PressEntry[], street: string): PathReason {
-  const e = press[0]!;
-  return { v: "by-design", code: "postflop:allin-sized-to-tree",
-    text: `${street}: if ${e.action}: ${e.verb} to ${fmt(e.amount)}, not hero's ${fmt(e.heroAllIn)} — the tree's all-in is ${fmt(e.treeAmount)}` +
-      `${e.plan ? ` (${e.plan})` : ""}, ${e.outside.map((v) => v.pos).join("/")} outside it and deeper` };
+/** The chain-path reasons an answer carrying press entries gets (by-design: the departure is deliberate), one per kind. */
+export function pressReasons(press: readonly PressEntry[], street: string): PathReason[] {
+  const out: PathReason[] = [];
+  const sized = press.find((e) => e.kind === "raise-to");
+  if (sized) out.push({ v: "by-design", code: "postflop:allin-sized-to-tree",
+    text: `${street}: if ${sized.action}: ${sized.verb} to ${fmt(sized.amount ?? sized.treeAmount)}, not hero's ${fmt(sized.heroAllIn)}` +
+      `${sized.plan ? ` (${sized.plan})` : ""}, ${sized.outside.map((v) => v.pos).join("/")} outside it and deeper` });
+  const dropped = press.find((e) => e.kind === "dropped");
+  if (dropped) out.push({ v: "by-design", code: "postflop:short-allin-dropped",
+    text: `${street}: ${dropped.action} dropped from the mix (share ${fmt(dropped.share ?? 0)}%) — under the table's minimum ${dropped.verb} ` +
+      `${fmt(dropped.minRaiseTo)}, hero's whole stack ${fmt(dropped.heroAllIn)}${dropped.plan ? ` (${dropped.plan})` : ""}` });
+  return out;
 }

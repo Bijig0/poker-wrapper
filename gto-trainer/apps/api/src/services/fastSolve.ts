@@ -8,7 +8,7 @@ import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdC
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
-import { menuAction, menuByClass, pickDeadMoney, planDeadMoney, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { codesOnRef, pickDeadMoney, planDeadMoney, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
@@ -34,7 +34,7 @@ import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type PathReason, type StreetPath } from "./chainPath";
-import { allInSizeToTreeOn, pressReason, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
+import { allInSizeToTreeOn, dropNote, dropShortAllIns, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
   checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
@@ -2219,40 +2219,62 @@ async function solvePostflopViaChainOnce(
       .filter(Boolean).join(" · ");
   }
 
-  // The first walk defines the action menu; the others are re-expressed on it and blended. A collapse whose
-  // menu differs is dropped rather than mixed in — different menus mean they disagree about the tree itself.
+  // The first walk defines the action menu; the others are re-expressed on it and blended. EVERY COLLAPSE BY ACTION CLASS
+  // (2026-10-07, Brady): ghost collapses keep different seats, so each tree's pot and deepest stack — and with them the
+  // bb amount of the same 33% bet or of the all-in — are its own; aligned by EXACT code, every collapse but the first was
+  // left out of the blend and "bet as often as the least betting collapse" never ran (stress-500 brief_I-004: the two
+  // trees keeping CO / BTN, hero calling 99.9-100%, dropped — the served ALLIN 22 4.4% was the UTG tree alone; live
+  // since 09-21, 11 of 250 collapsed answers). A walk whose codes match the reference's is taken as it is; otherwise it
+  // is re-expressed BY CLASS as the dead-money trees always were (menuByClass: fold, check, call, each wager onto the
+  // reference's nearest non-all-in size, the all-in onto the reference's all-in). A collapse that still cannot be
+  // aligned (a class the reference has nothing of) is left out and said.
   const ref = walks[0]!;
   const refSols: any[] = ref.data?.action_solutions ?? [];
   const codes: string[] = refSols.map((a) => String(a.action?.code ?? a.action?.display_name ?? "?"));
   let blended: number[][] | null = null;
   let blendedCount = 1;
   const codeOf = (x: any) => String(x.action?.code ?? x.action?.display_name ?? "?");
-  /** a walk's action as the reference menu names it: itself, or — dead-money trees, whose sizes and all-in are each
-   *  their own — the reference action of its class (menuByClass) */
-  const classMaps = new Map<unknown, Map<string, string | null>>();
+  /** a walk's actions as the reference menu names them (codesOnRef): its own codes when they are all on the menu, else
+   *  by class — always by class for dead-money trees */
+  const onRef = new Map<unknown, { map: Map<string, string | null>; byClass: boolean }>();
+  const asSol = (y: any) => ({ code: codeOf(y), name: y.action?.display_name ?? null });
+  const onRefOf = (w: (typeof walks)[number]) => {
+    let r = onRef.get(w);
+    if (!r) {
+      const sols: any[] = w.data?.action_solutions ?? [];
+      const c = codesOnRef(refSols.map(asSol), sols.map(asSol), deadMode);
+      r = { map: new Map(sols.map((y, i) => [codeOf(y), c.codes[i] ?? null])), byClass: c.byClass };
+      onRef.set(w, r);
+    }
+    return r;
+  };
   const codeOn = (w: (typeof walks)[number], x: any): string => {
     const c = codeOf(x);
-    if (!deadMode || w === ref) return c;
-    let m = classMaps.get(w);
-    if (!m) {
-      const asMenu = (xs: any[]) => xs.map((y: any) => menuAction(codeOf(y), y.action?.display_name));
-      const mine = asMenu(w.data?.action_solutions ?? []);
-      const to = menuByClass(asMenu(refSols), mine);
-      m = new Map(mine.map((k, i) => [k.code, to[i] ?? null]));
-      classMaps.set(w, m);
-    }
-    return m.get(c) ?? `${c}?`;
+    return w === ref ? c : onRefOf(w).map.get(c) ?? `${c}?`;
   };
   /** the walks whose menu is the reference's — the ones blended, mix and EV alike */
   const alignedWalks: typeof walks = [];
   if (walks.length > 1) {
     const aligned: number[][][] = [];
     const dropped: string[] = [];
+    const classNotes: string[] = [];
     for (const w of walks) {
       const a = alignStrategy(codes, (w.data?.action_solutions ?? []).map((x: any) => ({
         code: codeOn(w, x), strategy: x.strategy ?? [],
       })));
+      if (a && w !== ref && !deadMode && onRefOf(w).byClass) {
+        // the actions whose label changes on the reference menu ("RAISE 40.5→ALLIN 22")
+        const moved = (w.data?.action_solutions ?? [])
+          .map((x: any) => ({ from: labelOf(x), to: labelOf(refSols[codes.indexOf(codeOn(w, x))]) }))
+          .filter((m: { from: string; to: string }) => m.from !== m.to)
+          .map((m: { from: string; to: string }) => `${m.from}→${m.to}`);
+        classNotes.push(`${w.kind ?? "?"}${moved.length ? ` (${moved.join(", ")})` : ""}`);
+      }
       if (a) { aligned.push(a); alignedWalks.push(w); } else dropped.push(w.kind ?? "?");
+    }
+    if (classNotes.length) {
+      sixNote = [sixNote, `ALIGNED BY ACTION CLASS: ${classNotes.join("; ")} — its sizes are its own tree's (another pot and stack), each ` +
+        `wager read as the reference collapse's nearest size and its all-in as the reference's all-in`].filter(Boolean).join(" · ");
     }
     if (aligned.length > 1) {
       blended = blendStrategies(codes, aligned);
@@ -2333,8 +2355,16 @@ async function solvePostflopViaChainOnce(
       return [];
     }
   })();
+  // THE SAFETY NET: a short all-in under the table's minimum raise was priced at no size the table allows — out of the
+  // mix, the rest re-spread, the pick rolled on what is left (never lifted, never the plain shove)
+  if (press.some((e) => e.kind === "dropped")) {
+    const d = dropShortAllIns(actions, press);
+    actions = d.actions;
+    const notes = press.filter((e) => e.kind === "dropped").map((e) => dropNote(e, d.toPassive));
+    sixNote = [...notes, sixNote].filter(Boolean).join(" · ");
+  }
   const decision = pickWeightedAction(actions);
-  if (press.length) sixNote = withPressNote(sixNote, press, decision?.action ?? null);
+  if (press.some((e) => e.kind === "raise-to")) sixNote = withPressNote(sixNote, press, decision?.action ?? null);
   return { why: null, res: {
     ok: true,
     source: "gtow-api-postflop",
@@ -2354,7 +2384,7 @@ async function solvePostflopViaChainOnce(
     approx: true,
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
-      ...(rerootAlso.length || press.length ? { postflopAlso: [...rerootAlso, ...(press.length ? [pressReason(press, cur)] : [])] } : {}),
+      ...(rerootAlso.length || press.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur)] } : {}),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,

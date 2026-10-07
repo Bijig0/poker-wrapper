@@ -512,8 +512,9 @@ export function pickPlan(pick: string | null | undefined, potBb: number | null =
  * is solved on three-seat trees, and a tree caps a seat's all-in at the deepest other seat IN it: with a deeper player
  * dropped from the tree but live at the table, the tree's "ALLIN 22" is a raise to 22 — while an all-in pick is pressed
  * here as the client's ALL-IN preset + confirm, hero's WHOLE stack (stress-500 brief_I-004: 97.5bb into two 100bb players
- * the tree never saw). Such an answer carries `press` entries; an ALLIN pick matching one is pressed as a raise TO the
- * entry's amount (the API has already lifted it to the table's smallest legal raise). null = press as before.
+ * the tree never saw). Such an answer carries `press` entries; an ALLIN pick matching a "raise-to" one is pressed as a
+ * raise TO the entry's amount — the tree's own, a legal raise at the table (one under the table's minimum is "dropped" by
+ * the API, out of the mix; pickReady refuses it if it is ever the pick). null = press as before.
  */
 export function sizedAllInPlan(pick: string | null | undefined, press: unknown, plan: Record<string, any> | null): Record<string, any> | null {
   if (!pick || !plan || plan.kind !== "action" || plan.label !== "all-in" || !Array.isArray(press) || !press.length) return null;
@@ -582,7 +583,12 @@ export function pickReady(): Record<string, any> {
   out.kN = kN;
   let plan = pickPlan(st.pick, (h.currentNode || {}).pot ?? null);
   if (!plan) return no(`cannot map pick ${pyReprStr(String(st.pick))} to a table action`);
-  // an ALLIN the answer sized to its tree (sizedAllInPlan) is a raise to that amount, not the shove
+  // an ALLIN the answer sized to its tree (sizedAllInPlan) is a raise to that amount, not the shove — and one the answer
+  // DROPPED (under the table's minimum raise) is never pressed at all: the plain ALL-IN is not the action it priced
+  if (plan.label === "all-in" && Array.isArray(st.press)
+      && st.press.some((e: any) => e?.kind === "dropped" && String(e.action ?? "").trim().toUpperCase() === String(st.pick).trim().toUpperCase())) {
+    return no(`${pyStr(st.pick)} was dropped from the answer's mix (under the table's minimum raise) — never pressed as the shove`);
+  }
   plan = sizedAllInPlan(st.pick, st.press, plan) ?? plan;
   // the hand the pick was made for must be the hand OUR table shows (holeCardsRefusal) — checked here against the
   // last read, so auto waits (and says why) instead of firing, and again on the press's own read

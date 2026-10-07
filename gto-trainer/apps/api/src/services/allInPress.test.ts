@@ -5,13 +5,20 @@
  * ghost:BTN and ghost:UTG+ghost:CO (all-in 97.5). Decision 13 (hero called 15, UTG jammed 22, CO and BTN called) on
  * dead-money trees whose preload moved hero's 15 into the starting pot: the tree's "ALLIN 82.5" is 15 + 82.5 = his whole
  * 97.5 — not short. The node values are the stored traces' (stress DB solves 9087-9089, 9093-9095).
+ * Brady 2026-10-07: a short all-in is pressed only when the tree's own amount is a legal raise at the table; under the
+ * minimum (decision 9: 22 < 30) it is DROPPED from the mix and the pick re-rolled — never lifted, never the shove. And
+ * every collapse stays in the blend, aligned by action class (codesOnRef) — decision 9's two trees that hold CO / BTN
+ * (hero calls 99.9-100%) were being left out, so the served ALLIN 22 4.4% was the UTG tree alone.
  */
 import { describe, expect, test } from "bun:test";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { truncateAt, withStartStacks } from "../utils/archivedHand/archivedHand";
 import {
-  allInSizeToTreeOn, pressForPick, pressNote, pressReason, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type TreeAllIn,
+  allInSizeToTreeOn, dropNote, dropShortAllIns, pressForPick, pressNote, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote,
+  type PressEntry, type TreeAllIn,
 } from "./allInPress";
+import { codesOnRef } from "./deadMoneyCollapse";
+import { alignStrategy, blendStrategies } from "./multiwayCollapse";
 import { pressTreeOf } from "./fastSolve";
 import { departureForCode, departureForWarning } from "./approximations";
 
@@ -43,7 +50,7 @@ const node = (actor: number, invested: number[], actions: [string, number][]) =>
 const walk = (kind: string, seats: [string, string, string], n: ReturnType<typeof node>, members?: Record<string, string[]>) =>
   ({ kind, members, trace: { spec: { oopPos: seats[0], midPos: seats[1], ipPos: seats[2] }, streets: [], nodes: [n] } as any });
 
-const D9_MIX = [{ action: "FOLD" }, { action: "CALL 15" }, { action: "ALLIN 22" }];
+const D9_MIX = [{ action: "FOLD", frequency: 0 }, { action: "CALL 15", frequency: 95.56 }, { action: "ALLIN 22", frequency: 4.44 }];
 const D9_WALKS = [
   walk("ghost:CO + ghost:BTN", ["SB", "BB", "UTG"], node(1, [15, 0, 0], [["FOLD", 0], ["CALL", 15], ["ALLIN", 22]])),
   walk("ghost:UTG + ghost:BTN", ["SB", "BB", "CO"], node(1, [15, 0, 0], [["FOLD", 0], ["CALL", 15], ["RAISE", 40.5], ["ALLIN", 97.5]])),
@@ -84,27 +91,47 @@ describe("hero's all-in in a tree, in table terms", () => {
 });
 
 describe("shortAllInPress — brief_I-004", () => {
-  test("decision 9: ALLIN 22 with CO and BTN deeper outside the 22 tree → pressed as a raise, lifted to the table's minimum 30", () => {
+  test("decision 9: ALLIN 22 with CO and BTN deeper outside the 22 tree, under the table's minimum raise 30 → DROPPED, never lifted", () => {
     const money = streetMoneyAt(at(9), "flop");
     const p = shortAllInPress({ actions: D9_MIX, heroPos: "BB", money, trees: D9_WALKS.map((w) => pressTreeOf(w, money)) });
     expect(p).toHaveLength(1);
     const e = p[0]!;
-    expect(e).toMatchObject({ action: "ALLIN 22", kind: "raise-to", amount: 30, verb: "raise", treeAmount: 22, heroAllIn: 97.5, minRaiseTo: 30, plan: "ghost:CO + ghost:BTN" });
+    expect(e).toMatchObject({ action: "ALLIN 22", kind: "dropped", share: 4.44, verb: "raise", treeAmount: 22, heroAllIn: 97.5, minRaiseTo: 30, plan: "ghost:CO + ghost:BTN" });
+    expect(e.amount).toBeUndefined();
     expect(e.outside).toEqual([{ pos: "CO", chips: 97.5 }, { pos: "BTN", chips: 97.5 }]);
     expect(e.trees).toEqual([{ plan: "ghost:CO + ghost:BTN", to: 22 }, { plan: "ghost:UTG + ghost:BTN", to: 97.5 }, { plan: "ghost:UTG + ghost:CO", to: 97.5 }]);
     expect(e.why).toContain("the tree's all-in is 22 (UTG's 22, the deepest seat it holds)");
     expect(e.why).toContain("CO (97.5) and BTN (97.5) are outside the tree and deeper");
-    expect(e.why).toContain("a shove at the table would be 97.5");
-    expect(e.why).toContain("the smallest is pressed");
-    expect(pressNote(e)).toStartWith("SHOVE SIZED TO THE TREE: pressed as a raise to 30bb, not hero's 97.5bb — ");
+    expect(e.why).toContain("the table's smallest raise is to 30 (level 15), so 22 cannot be played there");
+    expect(e.why).not.toContain("lifted");
+    expect(pressForPick(p, "ALLIN 22")).toBeNull();          // nothing to press: the wrapper never sees it as a pick
   });
-  test("a tree amount the table allows is pressed as it is (no lift)", () => {
+  test("the drop: out of the mix, the rest re-spread to the mix's sum, the share recorded in the note", () => {
+    const money = streetMoneyAt(at(9), "flop");
+    const p = shortAllInPress({ actions: D9_MIX, heroPos: "BB", money, trees: D9_WALKS.map((w) => pressTreeOf(w, money)) });
+    const d = dropShortAllIns(D9_MIX, p);
+    expect(d.actions.map((x) => x.action)).toEqual(["FOLD", "CALL 15"]);
+    expect(d.actions[1]!.frequency).toBeCloseTo(100, 6);
+    expect(d.dropped).toBe(4.44);
+    expect(d.toPassive).toBeNull();
+    expect(dropNote(p[0]!, d.toPassive)).toStartWith("SHORT ALL-IN DROPPED: ALLIN 22 cannot be played at the table (minimum raise 30): dropped from the mix (its share 4.44%) and the pick re-rolled — ");
+    // the all-in the whole mix: the passive action takes it all (a rare multiway spot leans conservative)
+    const whole = dropShortAllIns([{ action: "FOLD", frequency: 0 }, { action: "CALL 15", frequency: 0 }, { action: "ALLIN 22", frequency: 100 }], p);
+    expect(whole.actions).toEqual([{ action: "FOLD", frequency: 0 }, { action: "CALL 15", frequency: 100 }]);
+    expect(whole.toPassive).toBe("CALL 15");
+    expect(dropNote({ ...p[0]!, share: 100 }, whole.toPassive)).toContain("it was the whole mix, so CALL 15 takes it");
+    // a raise-to entry drops nothing
+    expect(dropShortAllIns(D9_MIX, [{ ...p[0]!, kind: "raise-to", amount: 22 }]).actions).toBe(D9_MIX);
+  });
+  test("a tree amount the table allows is pressed as it is (kind raise-to, its own amount)", () => {
     const money = { ...streetMoneyAt(at(9), "flop"), minRaiseTo: 20 };
     const e = shortAllInPress({ actions: D9_MIX, heroPos: "BB", money, trees: [pressTreeOf(D9_WALKS[0]!, money)] })[0]!;
-    expect(e.amount).toBe(22);
-    expect(e.minRaiseTo).toBeUndefined();
+    expect(e).toMatchObject({ kind: "raise-to", amount: 22, minRaiseTo: 20 });
+    expect(e.share).toBeUndefined();
     expect(e.trees).toBeUndefined();
-    expect(e.why).not.toContain("lifted");
+    expect(e.why).not.toContain("cannot be played");
+    expect(pressNote(e)).toStartWith("SHOVE SIZED TO THE TREE: pressed as a raise to 22bb, not hero's 97.5bb — ");
+    expect(dropShortAllIns(D9_MIX, [e]).actions).toBe(D9_MIX);
   });
   test("decision 13: the dead-money trees' ALLIN 82.5 is hero's whole 97.5 → no press", () => {
     const money = streetMoneyAt(at(13), "flop");
@@ -141,9 +168,9 @@ describe("shortAllInPress — brief_I-004", () => {
     const money2 = { ...money, heroBehind: 22.4 };   // within 0.5bb
     expect(shortAllInPress({ actions: D9_MIX, heroPos: "BB", money: money2, trees: [pressTreeOf(D9_WALKS[0]!, money2)] })).toEqual([]);
   });
-  test("the table's smallest raise is hero's whole stack → no sized raise exists, no press", () => {
+  test("the table's smallest raise is hero's whole stack → no sized raise exists: dropped", () => {
     const money = { ...streetMoneyAt(at(9), "flop"), minRaiseTo: 97.3 };
-    expect(shortAllInPress({ actions: D9_MIX, heroPos: "BB", money, trees: [pressTreeOf(D9_WALKS[0]!, money)] })).toEqual([]);
+    expect(shortAllInPress({ actions: D9_MIX, heroPos: "BB", money, trees: [pressTreeOf(D9_WALKS[0]!, money)] })[0]?.kind).toBe("dropped");
   });
   test("no ALLIN in the mix, or no tree carrying one → no press", () => {
     const money = streetMoneyAt(at(9), "flop");
@@ -163,35 +190,88 @@ describe("shortAllInPress — brief_I-004", () => {
     const money = { heroCommitted: 0, heroBehind: 80, level: 0, minRaiseTo: 1, villains: [{ pos: "CO", chips: 80, seat: 1 }, { pos: "SB", chips: 10, seat: 3 }] };
     const e = shortAllInPress({ actions: [{ action: "CHECK" }, { action: "ALLIN 10" }], heroPos: "BB", money,
       trees: [{ plan: "ghost:CO", seats: ["SB", "BB"], to: 10 }] })[0]!;
-    expect(e).toMatchObject({ verb: "bet", amount: 10, heroAllIn: 80 });
+    expect(e).toMatchObject({ kind: "raise-to", verb: "bet", amount: 10, heroAllIn: 80 });
   });
 });
 
 describe("the note and the pick", () => {
-  const money = streetMoneyAt(at(9), "flop");
+  // the same spot with a table minimum the tree's 22 clears (a raise-to entry)
+  const money = { ...streetMoneyAt(at(9), "flop"), minRaiseTo: 20 };
   const press = shortAllInPress({ actions: D9_MIX, heroPos: "BB", money, trees: D9_WALKS.map((w) => pressTreeOf(w, money)) });
   test("pressForPick matches the label, case and spacing aside", () => {
-    expect(pressForPick(press, "ALLIN 22")?.amount).toBe(30);
-    expect(pressForPick(press, "allin  22")?.amount).toBe(30);
+    expect(pressForPick(press, "ALLIN 22")?.amount).toBe(22);
+    expect(pressForPick(press, "allin  22")?.amount).toBe(22);
     expect(pressForPick(press, "CALL 15")).toBeNull();
     expect(pressForPick(null, "ALLIN 22")).toBeNull();
   });
   test("withPressNote opens the warning on the all-in pick, and takes it off again on another pick", () => {
     const w = "5-WAY APPROXIMATION — collapsed · STACKS OF THE PLAYERS IN THE TREE: …";
     const on = withPressNote(w, press, "ALLIN 22")!;
-    expect(on).toStartWith("SHOVE SIZED TO THE TREE: pressed as a raise to 30bb, not hero's 97.5bb — ");
+    expect(on).toStartWith("SHOVE SIZED TO THE TREE: pressed as a raise to 22bb, not hero's 97.5bb — ");
     expect(on.endsWith(` · ${w}`)).toBe(true);
     expect(withPressNote(on, press, "CALL 15")).toBe(w);
     expect(withPressNote(on, press, "ALLIN 22")).toBe(on);   // idempotent
     expect(withPressNote(null, press, "ALLIN 22")).toStartWith("SHOVE SIZED TO THE TREE:");
     expect(withPressNote(null, press, "CALL 15")).toBeNull();
+    // a drop note stays whatever the pick
+    const drop = `SHORT ALL-IN DROPPED: ALLIN 22 … · ${w}`;
+    expect(withPressNote(drop, press, "CALL 15")).toBe(drop);
   });
-  test("the path reason is by-design, and the register knows its code and its note", () => {
-    const r = pressReason(press, "flop");
-    expect(r.v).toBe("by-design");
-    expect(r.code).toBe("postflop:allin-sized-to-tree");
-    expect(r.text).toContain("if ALLIN 22: raise to 30, not hero's 97.5");
+  test("the path reasons are by-design, and the register knows the codes and the notes", () => {
+    const [r] = pressReasons(press, "flop");
+    expect(r!.v).toBe("by-design");
+    expect(r!.code).toBe("postflop:allin-sized-to-tree");
+    expect(r!.text).toContain("if ALLIN 22: raise to 22, not hero's 97.5");
+    const dropped: PressEntry = { ...press[0]!, kind: "dropped", amount: undefined, share: 4.44, minRaiseTo: 30 };
+    const [rd] = pressReasons([dropped], "flop");
+    expect(rd).toMatchObject({ v: "by-design", code: "postflop:short-allin-dropped" });
+    expect(rd!.text).toContain("ALLIN 22 dropped from the mix (share 4.44%)");
     expect(departureForCode("postflop:allin-sized-to-tree")?.id).toBe("allin-sized-to-tree");
+    expect(departureForCode("postflop:short-allin-dropped")?.id).toBe("allin-sized-to-tree");
     expect(departureForWarning(pressNote(press[0]!))?.id).toBe("allin-sized-to-tree");
+    expect(departureForWarning(dropNote(dropped, null))?.id).toBe("allin-sized-to-tree");
+    expect(departureForWarning("ALIGNED BY ACTION CLASS: ghost:UTG + ghost:BTN (RAISE 40.5→ALLIN 22)")?.id).toBe("field-cap-3");
+  });
+});
+
+/** a node menu as GTO Wizard sends it (code, display name) with one combo's strategy */
+const sols = (xs: [string, string, number][]) => xs.map(([code, name, f]) => ({ code, name, f }));
+
+describe("every collapse stays in the blend, aligned by action class (codesOnRef)", () => {
+  test("brief_I-004 decision 9: the CO / BTN trees (RAISE 40.5 and an ALLIN of 97.5) align onto the UTG tree's menu; hero's ALLIN blends to 0", () => {
+    // the UTG tree (the reference): F / C / ALLIN 22 — code R97.5, betsize 22; hero Ts9s calls 95.56%, shoves 4.44%
+    const ref = sols([["F", "FOLD", 0], ["C", "CALL", 0.9556], ["R97.5", "ALLIN", 0.0444]]);
+    // the trees keeping CO and BTN: hero calls 99.9-100% (stress DB 9088 / 9089)
+    const co = sols([["F", "FOLD", 0], ["C", "CALL", 0.999], ["R40.5", "RAISE", 0.0005], ["R97.5", "ALLIN", 0.0005]]);
+    const btn = sols([["F", "FOLD", 0], ["C", "CALL", 1], ["R40.5", "RAISE", 0], ["R97.5", "ALLIN", 0]]);
+    const codes = ref.map((x) => x.code);
+    // by exact code they could never align (R40.5 is not on the reference menu) — that is how they were left out
+    expect(alignStrategy(codes, co.map((x) => ({ code: x.code, strategy: [x.f] })))).toBeNull();
+    const on = (m: typeof ref) => { const c = codesOnRef(ref, m); return alignStrategy(codes, m.map((x, i) => ({ code: c.codes[i] ?? `${x.code}?`, strategy: [x.f] }))); };
+    expect(codesOnRef(ref, co)).toEqual({ codes: ["F", "C", "R97.5", "R97.5"], byClass: true });
+    const blended = blendStrategies(codes, [on(ref)!, on(co)!, on(btn)!]);
+    expect(blended[2]![0]).toBe(0);                    // the all-in: as often as the least shoving collapse
+    expect(blended[1]![0]).toBeCloseTo(1, 9);          // the call takes the rest
+  });
+  test("the 11 live cases' shape (4919957671 turn AcAh: CO trees bet 2.3 81%, BTN trees check 100%; sizes illustrative) → aligned, the bet blends to 0", () => {
+    const ref = sols([["X", "CHECK", 0.19], ["B2.3", "BET", 0.81], ["B5.6", "BET", 0], ["R48.2", "ALLIN", 0]]);
+    const btn = sols([["X", "CHECK", 1], ["B2.6", "BET", 0], ["B6.1", "BET", 0], ["R52.4", "ALLIN", 0]]);
+    const codes = ref.map((x) => x.code);
+    const c = codesOnRef(ref, btn);
+    expect(c).toEqual({ codes: ["X", "B2.3", "B5.6", "R48.2"], byClass: true });
+    const a = alignStrategy(codes, btn.map((x, i) => ({ code: c.codes[i]!, strategy: [x.f] })))!;
+    const r = alignStrategy(codes, ref.map((x) => ({ code: x.code, strategy: [x.f] })))!;
+    const b = blendStrategies(codes, [r, a]);
+    expect(b.map((x) => x[0])).toEqual([1, 0, 0, 0]);
+  });
+  test("identical menus keep their own codes (nothing changes where the exact blend already worked); dead-money trees always by class", () => {
+    const ref = sols([["F", "FOLD", 0], ["C", "CALL", 1], ["R30", "RAISE", 0]]);
+    expect(codesOnRef(ref, ref)).toEqual({ codes: ["F", "C", "R30"], byClass: false });
+    expect(codesOnRef(ref, ref, true).byClass).toBe(true);
+  });
+  test("a class the reference has nothing of still cannot be aligned (that collapse is left out, said)", () => {
+    const ref = sols([["F", "FOLD", 0], ["C", "CALL", 1]]);
+    const other = sols([["F", "FOLD", 0], ["C", "CALL", 0.9], ["R40", "RAISE", 0.1]]);
+    expect(codesOnRef(ref, other).codes).toEqual(["F", "C", null]);
   });
 });
