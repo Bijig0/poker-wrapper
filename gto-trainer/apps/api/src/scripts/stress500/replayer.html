@@ -199,6 +199,12 @@ pre.hh { font: 12.5px/1.5 var(--font-mono); background: var(--surface2); border-
 .dmark .seg button.fine.on { background: var(--win); color: #fff; } .dmark .seg button.discuss.on { background: var(--ev); color: #fff; } .dmark .seg button.wrong.on { background: var(--loss); color: #fff; }
 .dmark input { font: 12px var(--font-body); color: var(--ink); background: var(--surface2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; width: 180px; }
 #revProg { font-size: 12px; color: var(--muted); white-space: nowrap; }
+body.focus .replay { grid-template-columns: minmax(300px, 0.5fr) minmax(0, 1.5fr); }
+body.focus #tableCard, body.focus .hand-foot, body.focus #reviewBar .keys { display: none; }
+body.focus .replay-left .tl { max-height: calc(100vh - 150px); }
+body.focus .mini.on { background: var(--chip-on); color: var(--chip-on-ink); border-color: transparent; }
+@media (max-width: 1100px) { body.focus .replay { grid-template-columns: minmax(260px, 0.45fr) minmax(0, 1.55fr); } body.focus .replay-left { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 60px); max-height: calc(100vh - 72px); overflow-y: auto; } }
+@media (max-width: 760px) { body.focus .replay { grid-template-columns: 1fr; } body.focus .replay-left { position: static; max-height: none; } }
 </style>
 
 <header>
@@ -470,6 +476,9 @@ function importMarks(file) {
 // ---- theme (the dashboard's switch) ----
 function setTheme(t) { if (t) document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme"); store.set("s5_theme", t || ""); for (const b of document.querySelectorAll("#themeSeg button")) b.classList.toggle("on", b.dataset.t === (t || "")); }
 setTheme(store.get("s5_theme") || "");
+// ---- focus mode (Brady 2026-10-07: "view the timeline and the ranges side by side instead of scrolling") ----
+let FOCUS = store.get("s5_focus") === "1";
+function setFocus(on) { FOCUS = !!on; store.set("s5_focus", FOCUS ? "1" : "0"); document.body.classList.toggle("focus", FOCUS && !VIEW.list); const b = $("b-focus"); if (b) { b.textContent = FOCUS ? "focus: on" : "focus: off"; b.classList.toggle("on", FOCUS); } }
 $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTheme(b.dataset.t); });
 
 // ---- data ----
@@ -506,7 +515,7 @@ function matches(h) {
 }
 function renderList() {
   VIEW = { list: true };
-  document.body.classList.remove("hand-open");
+  document.body.classList.remove("hand-open", "focus");
   const T = INDEX.totals, hands = INDEX.hands.filter(matches);
   const pct = (n) => T.decisions ? (100 * n / T.decisions) : 0;
   const fams = [...new Set(INDEX.hands.map((h) => h.fam))];
@@ -681,6 +690,7 @@ async function openHand(id) {
   ALT_SEL = {};
   VIEW = { list: false, id };
   document.body.classList.add("hand-open");
+  document.body.classList.toggle("focus", FOCUS);
   if (location.hash.slice(1) !== id) history.replaceState(null, "", `#${id}`);
   store.set("s5_last", id);
   const firstHero = H.actions.findIndex((a) => a.hero && !/^post/.test(a.type));
@@ -706,19 +716,19 @@ function renderHand() {
     <section class="card" id="reviewBar"></section>
     <div class="replay">
      <div class="replay-left">
-      <section class="card"><h2>The table</h2><div id="mirror"></div>
+      <section class="card" id="tableCard"><h2>The table</h2><div id="mirror"></div>
         <div class="ctrl"><button class="mini" id="b-first" aria-label="First step">⏮</button><button class="mini" id="b-prev" aria-label="Previous step">◀</button>
           <span class="pos" id="stepPos"></span><button class="mini" id="b-next" aria-label="Next step">▶</button><button class="mini" id="b-last" aria-label="Last step">⏭</button>
           <button class="mini" id="b-play">▶ play</button><button class="mini" id="b-hero">next hero decision</button></div>
         <p class="sub" style="margin:8px 0 0">The table just before the highlighted action. ← / → step.</p></section>
-      <section class="card"><h2>Hand timeline</h2><div class="tl" id="tl">${tl}</div></section>
+      <section class="card"><h2>Hand timeline <button class="mini${FOCUS ? " on" : ""}" id="b-focus" style="text-transform:none;letter-spacing:0;float:right" title="F · hide the table and the footer, keep the timeline beside the ranges">${FOCUS ? "focus: on" : "focus: off"}</button></h2><div class="tl" id="tl">${tl}</div></section>
      </div>
      <div class="replay-right">
       <section class="card" id="node"></section>
       <section class="card" id="answer" hidden></section>
      </div>
     </div>
-    <div class="two">
+    <div class="two hand-foot">
       <section class="card"><h2>Full hand history</h2><pre class="hh">${esc(h.hh)}</pre></section>
       <section class="card"><h2>Where the ranges come from</h2>
         <div class="kv"><b>preflop</b><span>${esc(h.pn || "—")}</span>
@@ -728,6 +738,7 @@ function renderHand() {
       </section>
     </div>`;
   $("backBtn").addEventListener("click", () => { stopPlay(); renderList(); });
+  $("b-focus").addEventListener("click", () => setFocus(!FOCUS));
   renderReviewBar();
   $("b-first").addEventListener("click", () => setStep(0));
   $("b-prev").addEventListener("click", () => setStep(STEP - 1));
@@ -927,6 +938,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") setStep(STEP + 1); else if (e.key === "ArrowLeft") setStep(STEP - 1);
   else if (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "0") { setMark(H.id, { v: { "1": "fine", "2": "discuss", "3": "wrong", "0": null }[e.key] }); renderReviewBar(); }
   else if (e.key === "[") { const p = neighbourHand(H.id, -1); if (p) openHand(p); } else if (e.key === "]") { const n = neighbourHand(H.id, 1); if (n) openHand(n); }
+  else if (e.key === "f" || e.key === "F") setFocus(!FOCUS);
 });
 window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (id && INDEX.hands.some((h) => h.id === id)) openHand(id); else if (!id && !VIEW.list) renderList(); });
 
