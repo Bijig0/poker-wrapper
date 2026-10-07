@@ -34,6 +34,10 @@ type Row = { id: number; ts: number; client_hand_id: string | null; street: stri
 const rows = db.query<Row, [number]>(
   "SELECT id, ts, client_hand_id, street, decision_key, warning, path FROM answers WHERE ts >= ? AND text IS NOT NULL ORDER BY ts",
 ).all(SINCE);
+type Refusal = { id: number; ts: number; client_hand_id: string | null; street: string | null; decision_key: string | null; fail_reason: string | null };
+const refusals = db.query<Refusal, [number]>(
+  "SELECT id, ts, client_hand_id, street, decision_key, fail_reason FROM answers WHERE ts >= ? AND text IS NULL AND fail_reason IS NOT NULL ORDER BY ts",
+).all(SINCE);
 
 const codesOf = (r: Row): Set<string> => {
   const out = new Set<string>();
@@ -45,7 +49,7 @@ const codesOf = (r: Row): Set<string> => {
   } catch { /* an unreadable path counts nothing */ }
   return out;
 };
-const actionIndex = (r: Row) => { try { const k = JSON.parse(r.decision_key ?? "null"); return Array.isArray(k) ? k[4] : "?"; } catch { return "?"; } };
+const actionIndex = (r: Pick<Row, "decision_key">) => { try { const k = JSON.parse(r.decision_key ?? "null"); return Array.isArray(k) ? k[4] : "?"; } catch { return "?"; } };
 
 console.log(`DEPARTURES REPORT · answers since ${new Date(SINCE).toISOString().slice(0, 10)} · ${rows.length} answered decisions · ${answersDbPath()}`);
 const today = new Date().toISOString().slice(0, 10);
@@ -68,7 +72,21 @@ for (const a of entries) {
   console.log(`  switch: ${sw}`);
   console.log(`  decisions: ${all.length} (path code ${byCode.length}${a.pathCodes?.length ? ` — ${a.pathCodes.join(", ")}` : ", no code"} · warning ${byWarn.length}${needles.length ? "" : ", no phrase"}) · hands ${hands.size}` +
     (all.length ? ` · last ${new Date(all[0]!.ts).toISOString().replace("T", " ").slice(0, 16)}Z` : ""));
-  for (const r of all.slice(0, LIST)) console.log(`    ${r.client_hand_id ?? "?"} · ${r.street ?? "?"} · action ${actionIndex(r)} · answer #${r.id}`);
+  // an entry with several codes (hero-self-lock: the lock, and the off-answer flag to REVIEW): how often each fired
+  if ((a.pathCodes?.length ?? 0) > 1) {
+    console.log(`  by code: ${a.pathCodes!.map((c) => `${c} ${byCode.filter((r) => codesOf(r).has(c)).length}`).join(" · ")}`);
+  }
+  for (const r of all.slice(0, LIST)) {
+    const cs = codesOf(r);
+    const tags = (a.pathCodes ?? []).length > 1 ? (a.pathCodes ?? []).filter((c) => cs.has(c)).map((c) => c.replace(/^\w+:/, "")).join(", ") : "";
+    console.log(`    ${r.client_hand_id ?? "?"} · ${r.street ?? "?"} · action ${actionIndex(r)} · answer #${r.id}${tags ? ` · ${tags}` : ""}`);
+  }
+  // decisions it REFUSED (no answer): the refusal reason carries one of its phrases ("HERO OFF HIS OWN TREE:", "… LOCK FAILED")
+  const refused = refusals.filter((r) => needles.some((n) => (r.fail_reason ?? "").toLowerCase().includes(n)));
+  if (refused.length) {
+    console.log(`  refused (no answer): ${refused.length}`);
+    for (const r of refused.slice(-LIST).reverse()) console.log(`    ${r.client_hand_id ?? "?"} · ${r.street ?? "?"} · action ${actionIndex(r)} · row #${r.id} · ${(r.fail_reason ?? "").slice(0, 140)}`);
+  }
   if (a.diagnostic && !a.diagnostic.includes("departuresReport")) console.log(`  its own diagnostic: ${a.diagnostic}`);
 }
 if (!ID && entries.length > 1) console.log(`\n(entries that never fired in the window are not listed; --id <entry> shows one regardless)`);

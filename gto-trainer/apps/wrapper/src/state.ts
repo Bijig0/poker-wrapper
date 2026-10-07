@@ -137,7 +137,8 @@ function fresh() {
      *  cards the SAME capture showed at hero's seat, the flops it showed before anyone had acted this hand, and the
      *  refusals already logged. Kept out of S.ws / liveStatus, which the reader golden compares key by key. */
     domBoard: { hand: 0, hole: [] as string[], stale: new Set<string>(), said: new Set<string>() },
-    health: { at: 0.0, issues: [] as any[] },
+    /** `load`: the API's GET /api/load as load.ts reads it (null = not measured), refreshed with the issues */
+    health: { at: 0.0, issues: [] as any[], load: null as import("./load").Load | null, loadAt: 0.0 },
     panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,
     /** the CoinPoker leader window's watch (session.leaderWatchLoop): gone for 8 s once seen = close every panel */
     leaderWatch: { seen: false, missingSince: null as number | null, quietUntil: 0, closingAll: false },

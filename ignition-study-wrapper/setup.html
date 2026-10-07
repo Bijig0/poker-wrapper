@@ -52,6 +52,9 @@
   .check { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; background: #0c1013; border: 1px solid #1f2731; }
   .check .dot { width: 10px; height: 10px; border-radius: 50%; margin-left: 5px; }
   .check.ok .dot { background: #5ee39a; } .check.bad .dot { background: #ff8a80; } .check.pending .dot { background: #3a4a5a; }
+  /* an optional row with a level of its own (Machine load, 2026-10-07): amber warn, red heavy, grey not measured */
+  .check.warn .dot { background: #ffce56; } .check.warn .req { color: #ffce56; } .check.heavy .dot { background: #ff8a80; } .check.heavy .req { color: #ff8a80; }
+  .check.unknown .dot { background: #3a4a5a; }
   .check.bad.required { border-color: #6a2a2a; background: #1c1214; }
   .check .l b { display: block; } .check .l span { color: #8fa1b3; font-size: 12.5px; }
   .check .req { font-size: 11px; color: #8fa1b3; text-transform: uppercase; letter-spacing: .06em; }
@@ -711,6 +714,14 @@ async function gtowConnect(source) {
   runPreflight();
 }
 
+// THE MACHINE LOAD ROW (2026-10-07): optional, never a blocker — its own level picks the colour (warn amber, heavy red,
+// unknown grey); every other row is ok / bad as before
+function checkClass(c) { return c.level === "warn" || c.level === "heavy" || c.level === "unknown" ? c.level : c.ok ? "ok" : "bad"; }
+function loadNote(j) {
+  const l = (j.checks || []).find((c) => c.id === "load");
+  return l && (l.level === "warn" || l.level === "heavy") ? ` The machine is ${l.level === "heavy" ? "under heavy load" : "busy"} — you can start, but answers may be slow (see Machine load).` : "";
+}
+
 // A preflight that never returns used to leave "Checking…" up forever (2026-09-24: the wrapper had died and its
 // port was still held open, so the request was accepted and never answered). Give up after PF_TIMEOUT_S and say so.
 const PF_TIMEOUT_S = 30;
@@ -735,9 +746,9 @@ async function runPreflight() {
   if (seq !== pfSeq) return;   // a newer check started while this one was in flight: its result wins
   lastPf = j;
   $("pf-when").textContent = `— checked ${new Date().toLocaleTimeString()}`;
-  $("checks").innerHTML = (j.checks || []).map((c) => `<div class="check ${c.ok ? "ok" : "bad"}${c.required ? " required" : ""}"><span class="dot"></span><span class="l"><b>${esc(c.label)}</b><span>${esc(c.detail)}</span>${gtowRows(c)}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`).join("");
+  $("checks").innerHTML = (j.checks || []).map((c) => `<div class="check ${checkClass(c)}${c.required ? " required" : ""}"><span class="dot"></span><span class="l"><b>${esc(c.label)}</b><span>${esc(c.detail)}</span>${gtowRows(c)}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`).join("");
   $("step-preflight").classList.toggle("done", !!j.ok);
-  if (j.ok) { $("start").disabled = false; $("pf-msg").className = "msg ok"; $("pf-msg").textContent = "Everything this mode needs is up."; }
+  if (j.ok) { $("start").disabled = false; $("pf-msg").className = "msg ok"; $("pf-msg").textContent = "Everything this mode needs is up." + loadNote(j); }
   else { $("pf-msg").className = "msg bad"; $("pf-msg").textContent = `Blocked: ${(j.blockers || []).join(" · ")}. Fix it, or pick a mode that does not need it.`; }
 }
 

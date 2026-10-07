@@ -50,7 +50,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { THREE_WAY_SIZES } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -885,6 +885,24 @@ interface FlopArrival {
 }
 /** THE REDUCED TREE SAYS SO IN THE PATH (2026-10-01): ranges that came from gtowAiPreflop.reducedArrivalRanges are an
  *  approximation ("rebuilt", not clean), named by its own code so the session's path report counts them apart. */
+/**
+ * A PIN THE TREE'S OWN CAP DEFEATS IS NOT A RECOVERY (2026-10-07, Brady: "1 is correct"). GTO Wizard's AI preflop tree
+ * holds ONE caller behind an open and ONE limper (three players to the flop — see gtowAiPreflop's header), so a second
+ * call or limp is "'C' is not offered" on the pinned tree and the flop ranges are read from fitted lines (each seat on
+ * a line that folds the earliest other caller) — the design for every 4-way pot, 7% of live postflop answers. That is
+ * `by-design` (clean) under its own code, not `rebuilt`; a pin that fails for any other reason stays a recovery.
+ */
+export function pinMissProv(a: { pin: boolean; pinPiece?: string | null; pinMiss: string | null; producer: string; via: string; extra?: string | null }): ArrivalPath {
+  if (!a.pin) return { how: "rebuilt", producer: a.producer, code: "arrival:no-pin", why: `no preflop answer is recorded for this hand, so the flop ranges were ${a.via}${a.extra ? ` (${a.extra.slice(0, 120)})` : ""}` };
+  const miss = (a.pinMiss ?? "not resumable").slice(0, 160);
+  const who = a.pinPiece ? ` (${a.pinPiece})` : "";
+  if (/'C' is not offered at/.test(a.pinMiss ?? "")) {
+    return { how: "by-design", producer: a.producer, code: "arrival:pin-cap",
+      why: `the pinned GTO Wizard AI tree holds one caller behind an open and one limper (three to the flop), so it cannot hold the line as played — ${miss} — each seat's range ${a.via}` };
+  }
+  return { how: "rebuilt", producer: a.producer, code: "arrival:pin-unusable", why: `the preflop pin${who} could not give the flop ranges — ${miss} — ${a.via}` };
+}
+
 const reducedProv = (ai: { reduced?: { why: string; live: string[] } }, otherwise: ArrivalPath): ArrivalPath =>
   ai.reduced
     ? { how: "rebuilt", producer: "ai-reduced", code: "arrival:reduced-tree",
@@ -982,7 +1000,7 @@ async function flopArrivalCompute(
       recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
       sixNote = ai.note ?? null;
       prov = reducedProv(ai, pinMiss
-        ? { how: "rebuilt", producer: "ai-arrival", code: "arrival:pin-unusable", why: `the preflop pin could not give the flop ranges — ${pinMiss.slice(0, 160)} — read from a GTO Wizard AI preflop tree built from the table` }
+        ? pinMissProv({ pin: true, pinMiss, producer: "ai-arrival", via: "read from a GTO Wizard AI preflop tree built from the table" })
         : { how: "designed", producer: "ai-arrival" });
     }
   }
@@ -1024,9 +1042,7 @@ async function flopArrivalCompute(
     let pinMiss: string | null = null;
     const rebuiltProv = (producer: string, extra?: string | null): ArrivalPath => {
       const via = producer === "recon6max" ? "read again from the 6-max chart the picker chooses" : "read from a GTO Wizard AI preflop tree built from the table";
-      return pin
-        ? { how: "rebuilt", producer, code: "arrival:pin-unusable", why: `the preflop pin (${pin.piece}) could not give the flop ranges — ${(pinMiss ?? "not resumable").slice(0, 160)} — ${via}` }
-        : { how: "rebuilt", producer, code: "arrival:no-pin", why: `no preflop answer is recorded for this hand, so the flop ranges were ${via}${extra ? ` (${extra.slice(0, 120)})` : ""}` };
+      return pinMissProv({ pin: !!pin, pinPiece: pin?.piece ?? null, pinMiss, producer, via, extra });
     };
     if (pin) {
       const tPin = Date.now();
@@ -2788,8 +2804,8 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
-    warning: note(r.note), approx: approx || !!rakeNote || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
+    warning: note(r.note), approx: approx || !!rakeNote || !!r.heroSelfLock || undefined,
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
   });
   const ai = await solvePreflopGtowAi(hand, heroPos, why);
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
@@ -4335,12 +4351,19 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
-    warning: r.note, approx: approx || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath }),
+    warning: r.note, approx: approx || !!r.heroSelfLock || undefined,
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
     ...(gated ? { treeGap: gated } : {}),
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
+  // HERO OFF HIS OWN TREE (2026-10-07, gtowAiPreflop's self-lock): his hand reads 0 at his node because of an earlier
+  // action of his own the tree never takes with it, and the lock that would put it back failed, timed out or is off.
+  // Terminal and said as such — no other piece is asked (the reason, unchanged, is what the panel and hand page show).
+  if ((ai as { kind?: string }).kind === HERO_OFF_TREE) {
+    return { ok: false, kind: "not-in-range", street: "preflop", gametype: "6max-ign200", depth: 0, line: ai.line ?? "",
+      reason: `${ai.reason} (${why.slice(0, 160)})` };
+  }
   // THE AI PIECE CAN ALSO NAME A CAPTURE FAULT (2026-09-23): a 400 VALIDATION_ERROR "Incorrect actions" from GTO
   // Wizard on the built line means the table as captured is not a table. Terminal, like the gate at the entry, and
   // marked capture-fault. (Any other VALIDATION_ERROR is a refusal of the TREE — kind tree-refused, 2026-10-03.)

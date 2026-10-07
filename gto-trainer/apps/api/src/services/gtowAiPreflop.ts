@@ -40,7 +40,7 @@
  * ranges — arrivalRangesGtowAi walks the same solved tree and exposes the chart piece's shape (position →
  * class → weight), so fastSolve.solvePostflop6maxStrategy reads one shape whichever piece answered.
  */
-import { allInCalls } from "../feed/buildSolutionUrl/buildSolutionUrl";
+import { allInCalls, buildPreflopTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { bbAmount, TREE_SETTINGS, TREE_SETTINGS_TAG } from "./gtowApi";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -53,7 +53,7 @@ import { isTestStakeOf } from "./strategies";
 import { actorsWithAllins, foldEarliestCaller, foldableCallers, foldSeatsOut } from "../utils/fitLine/fitLine";
 import { blendFitMixes, type MixAction } from "../utils/fitBlend/fitBlend";
 import { isOffTree, offTreeStats, pctOf } from "./offTree";
-import { setPreflopPin, recordPreflopNode, pinRest, preflopPinKey, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, recordPreflopNode, pinRest, preflopPinKey, preflopNodeFor, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
 // THE REDUCED TREE (2026-10-01, utils/reducedArrival): flop-entering ranges for a line no tree holds
 import {
   cameInLimping, classesToCombos, combosToClasses, normalised, normalisedCombos, planReducedArrival, type ReducedCaller,
@@ -62,9 +62,10 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 // THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
 import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
-import { poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
+import { poolLimpKey, poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
 import { coldCallLockBelow, coldCallRange, coldCallWeights, type ColdCallLockTarget } from "./poolColdCall";
 import type { HrcNode } from "./hrc3max";
+import type { PathReason } from "./chainPath";
 import { answerLog } from "./answerLog";
 // THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): the preflop half, at ensureSolution / fetchNode.
 import {
@@ -185,6 +186,8 @@ export interface AiPreflopResult {
   villainLines?: PreflopVillainLine[];
   /** a LAST RESORT answer: the one line fastSolve's path carries about how it was played */
   lastResort?: { how: string };
+  /** HERO'S OWN OFF-TREE ACTION LOCKED (2026-10-07): his hand read 0 at his node until his earlier action was locked */
+  heroSelfLock?: HeroSelfLock;
 }
 /** One fit of a line the tree cannot hold, as hero's node was read on it. */
 export interface AiFitRead { folds: string[]; line: string; actions: MixAction[]; offPath: boolean }
@@ -207,6 +210,137 @@ export const LINE_NOT_HERO = "line-not-hero" as const;
 /** The refusal kind for a VALIDATION_ERROR that is about the TREE, not the line (2026-10-03): GTO Wizard's own detail
  *  is the reason. Not a capture fault — fastSolve goes on to the last resort. */
 export const TREE_REFUSED = "tree-refused" as const;
+/** The refusal kind for HERO'S OWN HAND NOT IN HIS RANGE at his node (2026-10-07, stress pf_limp1-001): an earlier
+ *  action of his own that this tree gives his hand 0% (a chart told him to limp; GTO Wizard's tree never limps UTG), and
+ *  the self-lock below could not put it back. Not a fault of the line — nothing else is tried; the decision has no answer. */
+export const HERO_OFF_TREE = "hero-off-tree" as const;
+/** HERO_SELF_LOCK=off: no lock — hero's hand missing from his own range is refused at once ("HERO OFF HIS OWN TREE") */
+export const heroSelfLockOn = (): boolean => String(process.env.HERO_SELF_LOCK ?? "on").trim().toLowerCase() !== "off";
+/** The openings the self-lock writes (services/approximations entry hero-self-lock): the refusal, the lock's note, and
+ *  the loud flag for a hand hero played that his own range does not hold */
+export const HERO_OFF_TREE_TAG = "HERO OFF HIS OWN TREE:";
+export const HERO_SELF_LOCK_TAG = "HERO SELF-LOCK:";
+export const HERO_OFF_ANSWER_TAG = "HERO OFF-ANSWER:";
+
+/** One node of hero's line as read: its line, whether hero is on the clock there, and its action_solutions. */
+export interface LineNodeRead { line: string; isHero: boolean; sols: any[] }
+/**
+ * Where HERO'S OWN HAND LEFT HIS RANGE on this tree: the first of his nodes on the line where the action he took has
+ * (all but) 0% for his combo. `reads[k]` is the node at codes.slice(0, k). null = no such node (his hand was never in).
+ */
+export function heroOffNodeOf(reads: LineNodeRead[], codes: string[], heroIdx: number): { k: number; line: string; taken: string; sols: any[]; share: number | null } | null {
+  for (let k = 0; k < codes.length && k < reads.length; k++) {
+    const r = reads[k]!;
+    if (!r.isHero) continue;
+    const sol = r.sols.find((a) => String(a?.action?.code ?? "") === codes[k]);
+    if (!sol) return null;
+    if (Number(sol.strategy?.[heroIdx] ?? 0) < 1e-4) {
+      const share = typeof sol.total_frequency === "number" ? sol.total_frequency : null;
+      return { k, line: r.line, taken: codes[k]!, sols: r.sols, share };
+    }
+  }
+  return null;
+}
+
+/** Where the weights of hero's self-lock came from (heroSelfLockWeights, in this order of preference). */
+export type HeroLockSource = "chart" | "pool" | "tree";
+/**
+ * THE WEIGHTS HERO'S OWN OFF-TREE ACTION IS LOCKED TO at his node, per combo (Brady 2026-10-07), the first source that
+ * gives the action any hand:
+ *   (a) `chart` — his range AS THE CHART PLAYED IT: the class weights of the action he took at the 6-max chart node that
+ *       answered that decision (class → fraction);
+ *   (b) `pool`  — the pool's limp range for his role and stack (an open-limp / SB complete the pool table covers);
+ *   (c) `tree`  — the tree's own per-combo frequency of the action (all but nothing, by the time we are here).
+ * Then HIS CLASS: when the range chosen does not hold it (he played a hand that range folds — live a misclick or an
+ * answer he did not follow), every combo of it is added at weight 1 (so the lock does not play his exact cards face
+ * up) and `classAdded` says so — the answer goes on and is flagged HERO OFF-ANSWER. Pure.
+ */
+export function heroSelfLockWeights(c: { heroCls: string | null; chart: Record<string, number> | null; pool: readonly number[] | null; tree: readonly number[] }):
+    { weights: number[]; source: HeroLockSource; classAdded: boolean } {
+  const clamp = (x: unknown) => Math.max(0, Math.min(1, Number(x ?? 0) || 0));
+  const any = (w: number[]) => w.some((x) => x > 1e-6);
+  let weights: number[] = [];
+  let source: HeroLockSource = "tree";
+  const fromChart = c.chart ? COMBOS.map((k) => clamp(c.chart![k.cls])) : null;
+  const fromPool = c.pool ? COMBOS.map((_, i) => clamp(c.pool![i])) : null;
+  if (fromChart && any(fromChart)) { weights = fromChart; source = "chart"; }
+  else if (fromPool && any(fromPool)) { weights = fromPool; source = "pool"; }
+  else weights = COMBOS.map((_, i) => clamp(c.tree[i]));
+  let classAdded = false;
+  if (c.heroCls) {
+    const idx = COMBOS.map((k, i) => (k.cls === c.heroCls ? i : -1)).filter((i) => i >= 0);
+    if (idx.length && idx.every((i) => weights[i]! < 1e-4)) {
+      for (const i of idx) weights[i] = 1;
+      classAdded = true;
+    }
+  }
+  return { weights, source, classAdded };
+}
+
+/** hand.actions' index of hero's `m`-th voluntary preflop action (1-based; posts are not decisions), or null. */
+export function heroDecisionIndexOf(hand: Pick<ParsedHand, "actions">, m: number): number | null {
+  let n = 0;
+  for (let i = 0; i < hand.actions.length; i++) {
+    const a = hand.actions[i]!;
+    if (a.street !== "preflop" || !a.hero || /^post|^ante/.test(String(a.type))) continue;
+    if (++n === m) return i;
+  }
+  return null;
+}
+
+/** Hero's action at `i` as a pool LIMP: a call before any raise, not from the BB (the SB's is a complete) — with the
+ *  non-blind limps before it, as poolLimpFloor.poolLimpKey reads them. null = not a limp. */
+export function heroLimpAt(hand: Pick<ParsedHand, "actions" | "heroSeatId" | "positions">, heroPos: string | null, i: number): { limpsBefore: number; complete: boolean } | null {
+  const a = hand.actions[i];
+  if (!a || a.type !== "call" || a.street !== "preflop") return null;
+  const pos = String((heroPos ?? hand.positions?.[hand.heroSeatId]) || "").toUpperCase();
+  if (pos === "BB") return null;
+  let limps = 0;
+  for (let j = 0; j < i; j++) {
+    const x = hand.actions[j]!;
+    if (x.street !== "preflop") continue;
+    if (["raise", "bet", "all-in"].includes(String(x.type))) return null;
+    if (x.type !== "call") continue;
+    const p = String(hand.positions?.[x.seatId] ?? "").toUpperCase();
+    if (p !== "SB" && p !== "BB") limps++;
+  }
+  return { limpsBefore: limps, complete: pos === "SB" };
+}
+
+/** Which of a chart node's actions hero's chart token means: the same token, else (a raise) the nearest offered size, our
+ *  all-in token the largest — as preflopPin.heroDeviation matches it. null = the chart offers nothing like it. */
+export function matchChartAction(raw: string, actions: readonly { action: string; token: string | null }[]): { action: string; token: string } | null {
+  const offered = actions.filter((a): a is { action: string; token: string } => a.token != null);
+  const exact = offered.find((a) => a.token === raw);
+  if (exact) return exact;
+  if (raw === "F" || raw === "C" || raw === "X") return null;
+  const size = (t: string) => { const m = /^R([\d.]+)$/.exec(t); return m ? Number(m[1]) : null; };
+  const raises = offered.filter((a) => size(a.token) != null);
+  if (!raises.length) return null;
+  if (raw === "RAI") return raises.reduce((b, a) => (size(a.token)! > size(b.token)! ? a : b));
+  const want = size(raw);
+  if (want == null || !(want > 0)) return null;
+  return raises.reduce((b, a) => (Math.abs(Math.log(want / size(a.token)!)) < Math.abs(Math.log(want / size(b.token)!)) ? a : b));
+}
+
+/** What the self-lock did (rides on the answer: fastSolve turns it into the path codes, the note says it). */
+export interface HeroSelfLock {
+  /** hero's node the lock was posted at, the action locked, and the unlocked tree's share of it there */
+  line: string; taken: string; share: number | null;
+  source: HeroLockSource;
+  /** how the source was found, in words (the chart id and node, the pool key, or "the tree's own play") */
+  sourceText: string;
+  /** combos in the locked action's range */
+  combos: number;
+  /** hero's class was not in the range and was added at weight 1 */
+  classAdded: boolean;
+  /** HERO OFF-ANSWER: he played a hand his own answer did not hold — the class was added, or the chart that answered
+   *  that decision gave his class 0% of the action he took */
+  offAnswer: boolean;
+  /** the chart's mix for his class at that decision, when a chart answered it ("Fold 100%") */
+  chartSaid: string | null;
+  secs: number;
+}
 /** GTO Wizard's own words from a refusal read back as "422: {…"detail": "…"…}" (else the text as it came). */
 const refusalDetail = (error: string): string =>
   /"detail"\s*:\s*"([^"]+)"/.exec(error)?.[1] ?? error.replace(/^\d{3}:\s*/, "").slice(0, 160);
@@ -1372,6 +1506,38 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
   // several fits: hero's mix is their blend to the tightest (utils/fitBlend), not the leading fit's own
   if (fitReads.length > 1) actions = blendFitMixes(fitReads.map((f) => f.actions));
+  // HERO'S HAND IS NOT IN HIS OWN RANGE (2026-10-07, the self-lock above solvePreflopGtowAi's callers): every action reads 0
+  // for his combo — an earlier action of his own that this tree never takes with it. Never an answer with no action:
+  // his action is locked on this tree and his node read on the locked child, or the decision is refused, explicitly.
+  /** the solution the answer was read on and pins: the tree's own, or the self-locked child */
+  let ansSol = usedSol;
+  let selfLock: HeroSelfLock | null = null;
+  let ansNode = node;
+  if (!(actions.reduce((s, a) => s + Math.max(0, a.frequency), 0) > 0.01)) {
+    const cls = heroClass(hand.heroCards);
+    const head = `${HERO_OFF_TREE_TAG} hero's ${cls ?? "hand"} reads 0% for every action at his node '${usedLine || "root"}' on GTO Wizard's tree — an earlier action of his own is one this tree never takes with his hand`;
+    const no = (why: string): AiPreflopOutcome => {
+      console.log(`[hero-self-lock] REFUSED hand ${hand.clientHandId ?? hand.handId ?? "?"} ${cls ?? "?"} at '${usedLine || "root"}': ${why}`);
+      return { ok: false, kind: HERO_OFF_TREE, line, reason: `${head}; ${why}` };
+    };
+    if (!heroSelfLockOn()) return no("HERO_SELF_LOCK=off, so it is not locked back in — no answer");
+    // inside poolLockMs (12 s); the lock never pins anything itself, so a late one is simply dropped
+    const ms = poolLockMs();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const r = await Promise.race([
+      heroSelfLock(hand, heroPos, shape, treeBody(shape, m), usedSol, usedLine, idx).catch((e): { ok: false; why: string } => ({ ok: false, why: `the self-lock threw: ${e instanceof Error ? e.message : e}` })),
+      new Promise<"timeout">((res) => { timer = setTimeout(() => res("timeout"), ms); }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+    if (r === "timeout") return no(`the self-lock did not answer inside ${(ms / 1000).toFixed(0)} s — no answer`);
+    if (!r.ok) return no(`the self-lock failed: ${r.why} — no answer`);
+    ansSol = r.solId;
+    ansNode = r.node;
+    selfLock = r.info;
+    actions = mixAt(r.node.data);
+    if (actions.reduce((s, a) => s + a.frequency, 0) <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
+    console.log(`[hero-self-lock] hand ${hand.clientHandId ?? hand.handId ?? "?"} ${cls ?? "?"}: ${selfLock.taken} at '${selfLock.line || "root"}' locked to ${selfLock.source} (${selfLock.combos} combos)` +
+      `${selfLock.offAnswer ? " — HERO OFF-ANSWER, review" : ""}; answered in ${selfLock.secs.toFixed(1)} s`);
+  }
   actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
   const decision = actions.length ? pickWeightedAction(actions) : null;
   const secs = (Date.now() - t0) / 1000;
@@ -1380,22 +1546,24 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const codes = usedLine ? usedLine.split("-") : [];
   const handKey = preflopPinKey(hand);
   if (handKey && !opts.skipPin?.()) {
-    const warm = Promise.allSettled(codes.map((_, k) => fetchNode(usedSol, codes.slice(0, k).join("-")))).then(() => undefined);
+    const warm = Promise.allSettled(codes.map((_, k) => fetchNode(ansSol, codes.slice(0, k).join("-")))).then(() => undefined);
     setPreflopPin({
-      piece: "gtow-ai-preflop", handKey, solId: usedSol, shape, codes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(usedSol),
+      piece: "gtow-ai-preflop", handKey, solId: ansSol, shape, codes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(ansSol),
       id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
       heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: hand.actions.length, at: Date.now(),
     } satisfies AiPreflopPin, hand.heroCards.join(""));
   }
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
   // a node from the persistent solve cache says so: the hand page must tell a stored answer from a fresh solve
-  const stored = !!node.stored;
+  const stored = !!ansNode.stored;
   return {
-    ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: key,
-    solId: usedSol, usedLine, solveSecs: secs, cached: node.cached, ...(stored ? { stored: true } : {}), shape,
+    ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: selfLock ? `${key}|hero-self-lock:${selfLock.line}` : key,
+    solId: ansSol, usedLine, solveSecs: secs, cached: ansNode.cached, ...(stored ? { stored: true } : {}), shape,
     ...(fitReads.length ? { fits: fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })), villainLines }
       : villainLines.length ? { villainLines } : {}),
-    note: `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : node.cached ? " (cached)" : ""}.`
+    ...(selfLock ? { heroSelfLock: selfLock } : {}),
+    note: (selfLock ? `${heroSelfLockNote(selfLock, heroClass(hand.heroCards))} ` : "") +
+      `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : ansNode.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
       + (fitReads.length ? ` ${fitNote(fitReads, villainLines)}` : villainLines.length ? ` ${exactLineNote(villainLines)}` : "")
       + (shape.stackCap ? ` ${stackCapNote(shape)}.` : ""),
@@ -1915,6 +2083,127 @@ export const poolLockMs = (): number => {
   return v > 0 ? v : 12_000;
 };
 
+// ---------------------------------------------------------------------------
+// HERO'S OWN OFF-TREE ACTION, LOCKED (2026-10-07, Brady; stress-500 pf_limp1-001). A 6-max chart told a 39bb UTG to limp
+// (the stress script limped K9o for it); the HJ raised, and the chart's node behind it is untrained, so GTO Wizard AI
+// preflop answered on the exact tree — where UTG never limps. His range at his node was all zeros, every action read 0
+// for his combo, and the answer came back ok with NO ACTION: no decision, the clock ran out, the hand folded. Hero limps
+// or completes live ~108 times a week from the limp / 3-max / HU charts; any of those followed by a line the chart cannot
+// hold lands here. Now his own action is NODE-LOCKED on the tree already solved, so his hand is in his range, and his
+// node is read on the locked child (heroSelfLockWeights says what the lock holds; one POST, inside poolLockMs). A lock
+// that fails, times out, or still leaves his hand at 0 is an explicit refusal (HERO_OFF_TREE, "HERO OFF HIS OWN TREE:")
+// — never an answer with an empty mix. HERO_SELF_LOCK=off refuses at once.
+// ---------------------------------------------------------------------------
+
+/** What the self-lock asks of the outside beyond GTO Wizard (a test replaces these): the kept record of the preflop
+ *  decision at an action index (which chart answered it, at which node) and a chart node. */
+export const heroSelfLockSeams = {
+  chartRecord: (hand: ParsedHand, actionIndex: number) => preflopNodeFor(hand, actionIndex),
+  chartNode: (chartId: string, line: string): Promise<ChartNodeRead> => reducedSeams.chartNode(chartId, line),
+};
+
+/** The 6-max chart's answer to hero's decision at `i` (when a chart gave it): the class range of the action he took
+ *  there, and what it said for his class. null = no chart answered that decision (or its node cannot be read). */
+async function heroChartAt(hand: ParsedHand, heroPos: string | null, i: number, cls: string | null):
+    Promise<{ chartId: string; line: string; range: Record<string, number> | null; said: string | null; offered: boolean; heroW: number } | null> {
+  const rec = heroSelfLockSeams.chartRecord(hand, i);
+  if (!rec || rec.piece !== "chart6max") return null;
+  const tokens = buildPreflopTokens(hand, heroPos);
+  if (!rec.rawTokens.every((t, j) => tokens[j] === t)) return null;
+  const raw = tokens[rec.rawTokens.length];
+  if (raw == null) return null;
+  const line = rec.codes.join("-");
+  const node = await heroSelfLockSeams.chartNode(rec.chartId, line);
+  if (!node || node === "unreachable") return null;
+  const hit = matchChartAction(raw, node.actions);
+  const range = hit ? chartActionRange(node, (a) => a.token === hit.token && a.action === hit.action) : null;
+  const cell = cls ? node.cells.find((c) => c.hand === cls) : null;
+  const said = cell ? Object.entries(cell.actions).filter(([, f]) => Number(f) > 0.05).map(([a, f]) => `${a} ${Number(f).toFixed(0)}%`).join(" / ") || null : null;
+  return { chartId: rec.chartId, line, range, said, offered: !!hit, heroW: cls ? (range?.[cls] ?? 0) : 0 };
+}
+
+/**
+ * The self-lock itself: find hero's first node on `usedLine` where his own action reads 0 for his combo, lock that
+ * action there (heroSelfLockWeights; the rest of each hand over the other actions in the solver's proportions —
+ * poolLimpLockOf), and read his node on the locked child. ok = his hand is in his range again; the caller answers from
+ * `node` and pins `solId`. Never pins anything itself.
+ */
+async function heroSelfLock(hand: ParsedHand, heroPos: string | null, shape: AiPreflopShape, body: any, solId: string, usedLine: string,
+    heroIdx: number): Promise<{ ok: true; solId: string; node: { data: any; cached: boolean; stored?: boolean }; info: HeroSelfLock } | { ok: false; why: string }> {
+  const t0 = Date.now();
+  const cls = heroClass(hand.heroCards);
+  const codes = usedLine ? usedLine.split("-") : [];
+  const reads: (LineNodeRead | null)[] = await Promise.all(codes.map(async (_, k) => {
+    const line = codes.slice(0, k).join("-");
+    const n = await fetchNode(solId, line);
+    if ("error" in n) return null;
+    const actor = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+    return { line, isHero: !!actor && actor === shape.heroApiPos, sols: (n.data?.action_solutions ?? []) as any[] };
+  }));
+  const bad = reads.findIndex((r) => !r);
+  if (bad >= 0) return { ok: false, why: `the node '${codes.slice(0, bad).join("-") || "root"}' of his line could not be read` };
+  const off = heroOffNodeOf(reads as LineNodeRead[], codes, heroIdx);
+  if (!off) return { ok: false, why: `none of his own earlier actions on '${usedLine || "root"}' reads 0 for ${cls ?? "his hand"} — nothing to lock` };
+  const m = (reads as LineNodeRead[]).slice(0, off.k + 1).filter((r) => r.isHero).length;
+  const at = heroDecisionIndexOf(hand, m);
+  const chart = at != null ? await heroChartAt(hand, heroPos, at, cls).catch(() => null) : null;
+  // (b) the pool's limp range: his off action is a limp / complete with no raise before it, at a stack the table covers
+  const limp = at != null && /^C/i.test(off.taken) && !codes.slice(0, off.k).some(isRaiseToken) ? heroLimpAt(hand, heroPos, at) : null;
+  const stack = shape.heroApiPos ? Number(shape.stacks[shape.heroApiPos] ?? NaN) : NaN;
+  const poolKey = limp ? poolLimpKey(limp, stack) : null;
+  const takenSol = off.sols.find((a) => String(a?.action?.code ?? "") === off.taken);
+  const w = heroSelfLockWeights({ heroCls: cls, chart: chart?.range ?? null, pool: poolKey ? poolLimpWeights(poolKey) : null,
+    tree: (takenSol?.strategy ?? []) as number[] });
+  const lock = poolLimpLockOf(off.line, off.sols, off.taken, w.weights);
+  const child = await lockedSolution(solId, body, [lock]);
+  if ("error" in child) return { ok: false, why: `the lock of his ${off.taken} at '${off.line || "root"}' failed: ${child.error}` };
+  const hn = await fetchNode(child.solId, usedLine);
+  if ("error" in hn) return { ok: false, why: `his node '${usedLine || "root"}' on the locked tree: ${hn.error}` };
+  const toAct = hn.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+  if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) return { ok: false, why: `the locked tree puts ${toAct} on the clock at '${usedLine}', not hero` };
+  const sum = ((hn.data?.action_solutions ?? []) as any[]).reduce((t, a) => t + Math.max(0, Number(a?.strategy?.[heroIdx] ?? 0)), 0);
+  if (!(sum > 1e-4)) return { ok: false, why: `his ${off.taken} at '${off.line || "root"}' was locked but his ${cls ?? "hand"} still reads 0 at his node` };
+  const sourceText = w.source === "chart" ? `his range as the chart played it (${chart!.chartId} at "${chart!.line || "root"}")`
+    : w.source === "pool" ? `the pool's ${limp!.complete ? "complete" : "limp"} range ${poolKey} (${(100 * poolLimpRange(poolKey!).freq).toFixed(1)}% of hands)`
+    : `the tree's own play of the action`;
+  // HE PLAYED OFF HIS ANSWER: his class was not in the range, or the chart that answered that decision gave it 0%
+  const chartOff = !!chart && (!chart.offered || chart.heroW < 1e-4);
+  return {
+    ok: true, solId: child.solId, node: hn,
+    info: { line: off.line, taken: off.taken, share: off.share, source: w.source, sourceText, combos: Math.round(w.weights.reduce((t, x) => t + x, 0) * 10) / 10,
+      classAdded: w.classAdded, offAnswer: w.classAdded || chartOff, chartSaid: chart ? `${chart.said ?? "nothing"} (${chart.chartId} at "${chart.line || "root"}")` : null,
+      secs: (Date.now() - t0) / 1000 },
+  };
+}
+
+/** The refusal of a pool- / cold-call-locked tree whose hero node reads 0 for his hand (the regular answer takes over). */
+const heroOffLockedText = (hand: ParsedHand, line: string): string =>
+  `${HERO_OFF_TREE_TAG} hero's ${heroClass(hand.heroCards) ?? "hand"} reads 0% for every action at his node '${line || "root"}' on the locked tree — ` +
+  `an earlier action of his own that this tree never takes with his hand (answered as before, where his own action is self-locked)`;
+
+/**
+ * The chain-path reasons of a self-locked answer (fastSolve puts them beside the piece's own preflop code): the lock, by
+ * design; and a HERO OFF-ANSWER as a FAILED check — hero's own hand was not in what he was told to play, the loudest
+ * thing the path can say short of no answer (Brady: answer it, "we don't wanna lose the hand if we're live", but flag
+ * it for review). Both codes belong to the register entry hero-self-lock.
+ */
+export function heroSelfLockReasons(s: HeroSelfLock, cls: string | null): PathReason[] {
+  const out: PathReason[] = [{ v: "by-design", code: "preflop:hero-self-lock",
+    text: `hero's own ${s.taken} at "${s.line || "root"}" locked to ${s.source === "chart" ? "his chart range" : s.source === "pool" ? "the pool's limp range" : "the tree's own play"} (${s.combos} combos) — his ${cls ?? "hand"} was out of his own range on GTO Wizard's tree` }];
+  if (s.offAnswer) out.push({ v: "failed", code: "preflop:hero-off-answer",
+    text: `HERO OFF-ANSWER: hero played ${cls ?? "his hand"} where his answer did not${s.chartSaid ? ` — the chart said ${s.chartSaid}, he took ${s.taken}` : ""}${s.classAdded ? "; his class was added to the lock" : ""} — review the hand` });
+  return out;
+}
+
+/** The answer's words for a self-lock (the note's opening, the path reasons' text). */
+export function heroSelfLockNote(s: HeroSelfLock, cls: string | null): string {
+  const at = `his ${s.taken} at "${s.line || "root"}"`;
+  const share = s.share != null ? ` (the tree gives it ${(100 * s.share).toFixed(2)}% of his range)` : "";
+  return (s.offAnswer ? `${HERO_OFF_ANSWER_TAG} hero played ${cls ?? "his hand"} where his own answer did not — ${s.chartSaid ? `the chart said ${s.chartSaid}, he took ${s.taken}` : `${cls ?? "his class"} is not in the range of ${at}`}${s.classAdded ? `; his class was ADDED to the lock at weight 1 so the hand is answered` : ""}. REVIEW THIS HAND (a misclick or an answer not followed). ` : "") +
+    `${HERO_SELF_LOCK_TAG} ${at}${share} left his ${cls ?? "hand"} out of his own range on GTO Wizard's tree, so that action was NODE-LOCKED to ${s.sourceText}` +
+    ` (${s.combos} combos${s.classAdded ? `, ${cls} added` : ""}) and his node re-solved behind it (${s.secs.toFixed(1)} s).`;
+}
+
 /**
  * Hero's preflop answer against `target` at the pool's range (the header above). `warmOnly`: build the tree and the lock
  * (the poller's tick, when the limp lands) and read nothing of hero's. `skipPin`: the caller stopped waiting — this
@@ -1977,6 +2266,10 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   }
   let actions = ((hn.data?.action_solutions ?? []) as any[]).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[heroIdx!] ?? 0) }));
   const sum = actions.reduce((t, a) => t + a.frequency, 0);
+  // HERO'S HAND NOT IN HIS RANGE ON THE LOCKED TREE (2026-10-07): an earlier action of his own the tree never takes with
+  // it (an SB complete beside the locked limper). Not an empty answer: refused, and fastSolve answers as before — the
+  // regular AI answer, where the self-lock puts his hand back (one lock per tree here; chaining both is not built)
+  if (!(sum > 1e-4)) return { ok: false, kind: HERO_OFF_TREE, line, reason: `pool-locked tree: ${heroOffLockedText(hand, repaired.line)}` };
   if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
   actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
   const decision = actions.length ? pickWeightedAction(actions) : null;
@@ -2084,6 +2377,9 @@ export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: stri
   }
   let actions = ((hn.data?.action_solutions ?? []) as any[]).map((a) => ({ action: labelOf(a.action), frequency: Number(a.strategy?.[heroIdx] ?? 0) }));
   const sum = actions.reduce((t, a) => t + a.frequency, 0);
+  // hero's own open (or other earlier action) is one the tree never takes with his hand: refused, as on the pool-locked
+  // tree — the regular answer that runs beside it self-locks his action instead
+  if (!(sum > 1e-4)) return { ok: false, kind: HERO_OFF_TREE, line, reason: `cold-call-locked tree: ${heroOffLockedText(hand, repaired.line)}` };
   if (sum <= 1.5) actions = actions.map((a) => ({ ...a, frequency: a.frequency * 100 }));
   actions = actions.filter((a) => a.frequency > 0.05).map((a) => ({ ...a, frequency: Math.round(a.frequency * 100) / 100 }));
   const decision = actions.length ? pickWeightedAction(actions) : null;

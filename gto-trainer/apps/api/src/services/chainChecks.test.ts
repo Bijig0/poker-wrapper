@@ -228,6 +228,16 @@ describe("#6 line matches the table", () => {
     expect(checkLine({ captured: ["AllIn(9750)"], walked: [{ name: "Allin", betsize: 95 }] }).status).toBe("pass");
     expect(checkLine({ captured: [], walked: [] }).status).toBe("pass");
   });
+  it("a table all-in walked as a SMALLER tree all-in (capped at what the others can call) passes; a bigger one fails", () => {
+    // stress brief_A-007: SB all-in to 87.1bb, hero has 7.1bb behind — the tree's all-in is 7.1
+    const capped = checkLine({ captured: ["AllIn(8710)"], walked: [{ name: "ALLIN", betsize: 7.1 }] });
+    expect(capped.status).toBe("pass");
+    expect(capped.text).toContain("87.1 all-in → the tree's 7.1");
+    // the tree's stack too deep: a 28bb shove walked as a 97.8 all-in
+    expect(checkLine({ captured: ["AllIn(2800)"], walked: [{ name: "ALLIN", betsize: 97.8 }] }).status).toBe("fail");
+    // a raise (not an all-in) bigger than the tree's all-in is still a mismatch
+    expect(checkLine({ captured: ["Raise(8710)"], walked: [{ name: "ALLIN", betsize: 7.1 }] }).status).toBe("fail");
+  });
 });
 
 describe("#7 rake and stake", () => {
