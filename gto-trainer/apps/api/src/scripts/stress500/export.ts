@@ -124,7 +124,7 @@ const tracesOf = (clientHandId: string, since = 0): { id: number; decisionIndex:
   // `since` = the hand's own attempt (startedAt): a hand played again leaves the earlier attempts' rows in the store
   const rows = rootDb.query("select id, decision_key, trace from solves where client_hand_id = ? and ts >= ? order by ts").all(clientHandId, since) as { id: number; decision_key: string | null; trace: Uint8Array }[];
   const decisionIndexOf = (key: string | null): number | null => { try { const k = JSON.parse(key ?? "null"); const i = Array.isArray(k) ? Number(k[k.length - 1]) : NaN; return Number.isFinite(i) ? i : null; } catch { return null; } };
-  return rows.flatMap((r) => { try { return [{ id: r.id, decisionIndex: decisionIndexOf(r.decision_key), trace: JSON.parse(Buffer.from(Bun.gunzipSync(r.trace)).toString("utf-8")) }]; } catch { return []; } });
+  return rows.flatMap((r) => { try { return [{ id: r.id, decisionIndex: decisionIndexOf(r.decision_key), trace: JSON.parse(Buffer.from(Bun.gunzipSync(r.trace as Uint8Array<ArrayBuffer>)).toString("utf-8")) }]; } catch { return []; } });
 };
 const encView = (v: any): any => ({
   a: v.actor, ln: v.line, acts: v.actions, st: (v.strat ?? null)?.map((col: number[]) => enc(col)) ?? null, tot: v.totals, tk: v.taken,
