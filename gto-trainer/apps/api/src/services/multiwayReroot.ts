@@ -17,6 +17,9 @@
  *      yet, THIS street can be ghosted again, his earlier chips now plain pot.
  * Refused only when the current street itself leaves nothing collapsible, or the earlier streets had more
  * aggressors than a three-seat walk can hold.
+ * A narrowing walk that FAILS (2026-10-07) is retried once when the failure is transient and the decision's narrowing
+ * deadline leaves room (walkFailureIsTransient, RerootArgs.deadline); one that still fails no longer fails the re-root:
+ * the seats only it held enter NOT NARROWED, with their flop-arrival range, and the answer names the walk and the seats.
  */
 import { effectiveBehind, solveAiChain, type AiChainSpec } from "./aiChain";
 import { handFacts } from "./handFacts";
@@ -52,6 +55,20 @@ export interface RerootArgs {
   /** the hand's key (the last resort's narrowing only): the walks checkpoint under `<key>#lr-narrow` — the next street
    *  of the hand starts from the earlier streets walked — and narrowForLastResort keeps its result per hand */
   memoKey?: string;
+  /** the re-root's NARROWING DEADLINE (epoch ms; fastSolve: the decision's start + REROOT_NARROW_MS): a walk that failed
+   *  for a transient reason is retried once only while REROOT_RETRY_MIN_MS of it remain, and the retry is waited for
+   *  until it at most. Absent = no retry (the walk's first verdict is final). */
+  deadline?: number;
+}
+
+/** A narrowing walk the re-root could not use (2026-10-07): its group, why, what the retry did, and the seats only it held */
+export interface WalkFailure {
+  group: string[];
+  why: string;
+  /** "retried once, failed again: …" / "not retried: …" — for the note */
+  retry: string;
+  /** the seats that enter NOT NARROWED because of it (no other walk held them; hero only when every walk failed) */
+  lost: string[];
 }
 
 export type RerootResult =
@@ -60,9 +77,32 @@ export type RerootResult =
       behind?: Record<string, number>;
       /** the current street was collapsed with dead money (deadMoneyCollapse): its plans carry `dead` */
       dead?: boolean;
-      /** seats whose ranges entering the street are the flop arrival's — no narrowing walk could hold them */
-      unnarrowed?: string[] }
+      /** seats whose ranges entering the street are the flop arrival's — no narrowing walk could hold them, or the only
+       *  walk that held them failed (those are also in `failedWalks[].lost`) */
+      unnarrowed?: string[];
+      /** narrowing walks that failed (after the retry, if one ran): the re-root carried on without them */
+      failedWalks?: WalkFailure[] }
   | { ok: false; why: string };
+
+/**
+ * IS A NARROWING WALK'S FAILURE WORTH ONE MORE TRY (2026-10-07, stress-500 po_56way-003: one stalled poll — "AI solve
+ * timed out on primary — 1 poll: … 1 failed (poll request failed: The operation timed out.)" — failed the whole turn
+ * re-root, and the river of the same hand re-rooted fine). TRANSIENT: a node poll timeout / 504 "AI solve timed out", a
+ * network error, a 5xx. FINAL — GTO Wizard's verdict on the query or a fact of the line, which the same request gets
+ * again: a 400 / 422 (NODE_DOES_NOT_EXIST, VALIDATION_ERROR), a 429 / quota wall (aiChain already re-routes those), a
+ * lost token, an action not offered / not walkable, a capture fault, a verdict from the solve cache. Anything not
+ * recognised is final: a retry costs requests and the clock.
+ */
+const FINAL_WALK_RE = /NODE_DOES_NOT_EXIST|VALIDATION_ERROR|\b(?:400|401|403|404|409|410|422|429)\b|request limit|quota|no access token|no GTO Wizard token|unauthori[sz]ed|not offered|is not an action|not walkable|is not on it|capture corruption|rotation disagrees|no decision node|from the solve cache|no longer holds tree|missed action|walk exhausted|no decision left|no pending decision/i;
+const TRANSIENT_WALK_RE = /AI solve timed out|timed out|time-?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|EAI_AGAIN|socket hang up|socket (?:closed|connection)|network|fetch failed|Unable to connect|connection (?:was )?(?:closed|reset|refused)|aborted|\b5\d\d\b|bad gateway|service unavailable|internal server error/i;
+export function walkFailureIsTransient(why: string): boolean {
+  return !FINAL_WALK_RE.test(why) && TRANSIENT_WALK_RE.test(why);
+}
+/** the least room before the narrowing deadline for a retry to be sent (ms) */
+export const rerootRetryMinMs = (): number => {
+  const v = Number(process.env.REROOT_RETRY_MIN_MS ?? 4000);
+  return Number.isFinite(v) && v >= 0 ? v : 4000;
+};
 
 /**
  * THE MONEY ENTERING STREET `first` of a 4+ way line — every seat counted, nothing collapsed (utils/tableMoney): each
@@ -247,8 +287,12 @@ export function narrowingPlan(a: RerootArgs, first: number, m: ReturnType<typeof
  * are the approximation) — and hands on each seat's range leaving them. The groups walk at once. `ms` is the
  * wall-clock of the slowest, what the narrowing adds to the answer.
  */
-export async function narrowThroughEarlier(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][], takeover = false):
-    Promise<{ ok: true; ranges: Record<string, number[]>; leftOut: Set<string>; walks: number; ms: number } | { ok: false; why: string; ms: number }> {
+export async function narrowThroughEarlier(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][], takeover = false,
+    /** tolerate: a walk that still fails (after its retry) does not fail the narrowing — it is listed in `failed` and the
+     *  seats only it held get no range (the re-root's NOT-NARROWED fallback). Off = the first failure fails it all. */
+    opts: { tolerate?: boolean } = {}):
+    Promise<{ ok: true; ranges: Record<string, number[]>; leftOut: Set<string>; walks: number; ms: number; failed: { group: string[]; why: string; retry: string }[] }
+      | { ok: false; why: string; ms: number }> {
   const t0 = Date.now();
   const order = (xs: string[]) => a.ordered.filter((p) => xs.includes(p));
   const ranges: Record<string, number[]> = {};
@@ -258,6 +302,7 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
   const walkOne = async (g: string[]) => {
     const keep = order(g);
     const kept = new Set(keep);
+    const leftOut = new Set<string>();
     // the earlier streets as this walk plays them: the seats outside it never act (their chips are the approximation)
     let streets: string[][] = [];
     let seats: string[][] = [];
@@ -296,15 +341,45 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
       // review 3): a later street's walk of these streets starts past them
       ...(a.memoKey ? { handKey: `${a.memoKey}#lr-narrow`, checkpointOnly: true } : {}),
     };
-    const r = await solveAiChain(spec);
-    return { keep, r };
+    let r = await solveAiChain(spec);
+    // RETRY ONCE (2026-10-07, Brady: "build it then, the retry + not narrowed fallback"): a transient failure (a stalled
+    // poll, a network error, a 5xx) is sent again at once while the narrowing deadline leaves room — cheap: the solve
+    // cache and the node cache hold the walk's tree and the nodes it read, only the stalled read goes out again. The
+    // retry is waited for until the deadline at most; one still running then is left to finish (it warms the caches).
+    let retry = "";
+    if (!r.ok) {
+      const first = r.why;
+      const room = a.deadline != null ? a.deadline - Date.now() : null;
+      if (!walkFailureIsTransient(first)) retry = "not retried: not a transient failure";
+      else if (room == null) retry = "not retried: no narrowing deadline to retry within";
+      else if (room < rerootRetryMinMs()) retry = `not retried: ${(Math.max(0, room) / 1000).toFixed(1)} s of the narrowing deadline left`;
+      else {
+        const again = solveAiChain(spec);
+        again.catch(() => {});   // a throw after the deadline is nobody's to handle
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<null>((res) => { timer = setTimeout(() => res(null), room); });
+        const got = await Promise.race([again, late]);
+        clearTimeout(timer);
+        if (!got) { r = { ok: false, why: first }; retry = `retried once, still walking at the narrowing deadline (${(room / 1000).toFixed(1)} s)`; }
+        else if (got.ok) r = got;
+        else { r = got; retry = `retried once, failed again${got.why !== first ? ` (first: ${first.slice(0, 120)})` : ""}`; }
+      }
+    }
+    return { keep, r, leftOut, retry };
   };
   const results = await Promise.all(groups.map(walkOne));
-  for (const { keep, r } of results) {
-    if (!r.ok) return { ok: false, why: `narrowing walk ${keep.join("/")}: ${r.why}`, ms: Date.now() - t0 };
+  const failed: { group: string[]; why: string; retry: string }[] = [];
+  for (const { keep, r, leftOut: lo, retry } of results) {
+    if (!r.ok) {
+      if (!opts.tolerate) return { ok: false, why: `narrowing walk ${keep.join("/")}: ${r.why}`, ms: Date.now() - t0 };
+      failed.push({ group: keep, why: r.why, retry });
+      continue;
+    }
+    // the seats left out of a walk the narrowing USED (a failed walk's left nobody out of anything)
+    for (const p of lo) leftOut.add(p);
     for (const [pos, rng] of Object.entries(r.rangesOut ?? {})) if (!ranges[pos]) ranges[pos] = rng;
   }
-  return { ok: true, ranges, leftOut, walks: groups.length, ms: Date.now() - t0 };
+  return { ok: true, ranges, leftOut, walks: groups.length - failed.length, ms: Date.now() - t0, failed };
 }
 
 export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
@@ -367,21 +442,34 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
   if (probeSeats.length <= 3 && committedFold && !deadOf(probeSeats).plans.length) {
     return { ok: false, why: `on the ${["flop", "turn", "river"][first]} the seats left cannot be walked (${deadOf(probeSeats).why})` };
   }
-  const nr = groups.length ? await narrowThroughEarlier(a, first, m, groups, takeover)
-    : { ok: true as const, ranges: {} as Record<string, number[]>, leftOut: new Set<string>(), walks: 0, ms: 0 };
+  // REROOT_WALK_FALLBACK=off: a failed walk fails the re-root again (the refusal before 2026-10-07); the retry stays
+  const nr = groups.length ? await narrowThroughEarlier(a, first, m, groups, takeover, { tolerate: process.env.REROOT_WALK_FALLBACK !== "off" })
+    : { ok: true as const, ranges: {} as Record<string, number[]>, leftOut: new Set<string>(), walks: 0, ms: 0, failed: [] };
   if (!nr.ok) return { ok: false, why: nr.why };
   const { ranges, leftOut } = nr;
   // review 2026-10-05: a seat that folded on this street, or that no takeover group held, takes his flop-arrival range
   for (const p of live) if (!ranges[p] && (curFolded.has(p) || unnarrowed.includes(p))) ranges[p] = a.arr(p);
+  // THE NOT-NARROWED FALLBACK (2026-10-07): a walk that failed (after its retry) no longer fails the re-root. The seats
+  // only it held enter with their flop-arrival range, exactly as a seat no walk could hold does — hero too when every
+  // walk failed (he is in every walk). Every walk failing still answers: the current street is the same three-seat tree
+  // with wider entering ranges (the model the re-root already serves when no walk can be formed at all), not the heads-up
+  // shortcut whose MODEL was wrong — Brady: a reasoned approximation beats no answer where the model is sound.
+  const failedWalks: WalkFailure[] = [];
+  for (const f of nr.failed) {
+    const lost = live.filter((p) => f.group.includes(p) && !ranges[p]);
+    for (const p of lost) ranges[p] = a.arr(p);
+    unnarrowed = [...unnarrowed, ...lost.filter((p) => !unnarrowed.includes(p))];
+    failedWalks.push({ ...f, lost });
+  }
   for (const p of live) if (!ranges[p]) return { ok: false, why: `no narrowing walk produced ${p}'s range` };
 
   // ---- 3. collapse the current street on its own
   const cur: SeatTok[][] = [a.streets[first]!.map((tok, j) => ({ tok, seat: a.streetSeats[first]![j]! }))];
   const cSeats = live.map((p) => ({ pos: p, range: ranges[p]! }));
   const covered = [...leftOut].filter((p) => live.includes(p));
-  const base = { first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: groups.length,
+  const base = { first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: nr.walks,
     left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(a.behind ? { behind: m.behind } : {}),
-    ...(unnarrowed.length ? { unnarrowed } : {}) };
+    ...(unnarrowed.length ? { unnarrowed } : {}), ...(failedWalks.length ? { failedWalks } : {}) };
   if (cSeats.length <= 3 && !committedFold) {
     // THREE OR FEWER SEATS STILL ACT — the all-ins stepped out, or the seats that left folded on an earlier street
     // after putting chips in (so no collapse from the flop could drop them): that field IS the tree, re-rooted here

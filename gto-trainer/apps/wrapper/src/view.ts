@@ -77,7 +77,9 @@ async function stateInner(light = false): Promise<Record<string, any>> {
   const out: Record<string, any> = {
     cdp: await cdp.available(C.CDP_PORT), ignition: null, targets: [],
     panelVersion: mtime(join(C.ROOT, "panel.html")), setupVersion: mtime(join(C.ROOT, "setup.html")),
-    health: { issues: S.health.issues, checkedAgo: S.health.at ? pyRound(time() - S.health.at, 1) : null },
+    // `load` only when measured (load.ts) — absent otherwise, so the reader goldens stay byte-identical
+    health: { issues: S.health.issues, checkedAgo: S.health.at ? pyRound(time() - S.health.at, 1) : null,
+              ...(S.health.load ? { load: S.health.load } : {}) },
     fakeTable: S.fakeMode, fakeRig: C.FAKE_RIG, panelPort: C.PANEL_PORT, cdpPort: C.CDP_PORT,
     tableSlot: TABLES.slot(), tables: seams.registry(),
     tap: {

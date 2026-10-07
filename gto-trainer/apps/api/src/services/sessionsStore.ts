@@ -50,6 +50,15 @@ export const sessionsStore = {
     catch { return []; }
     finally { db.close(); }
   },
+  /** The live session's id (a declared session not ended yet), or null — one query on a small table, no JSON
+   *  parsed. undefined when the store cannot be read. Callers cache it (services/sessionLive.ts). */
+  liveId(): string | null | undefined {
+    const db = open();
+    if (!db) return existsSync(PATH) ? undefined : null;
+    try { return db.query<{ id: string }, []>("SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1").get()?.id ?? null; }
+    catch { return undefined; }
+    finally { db.close(); }
+  },
   get(id: string): DeclaredSession | null {
     const db = open();
     if (!db) return null;

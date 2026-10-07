@@ -94,7 +94,8 @@ def main(db, out, origins=None):
                     key = (str(hand), s.get("street"), "-".join(nd.get("codes") or []), pos)
                     pref = PREF.get(origin, 9)
                     old = recs.get(key)
-                    if old is None or pref < old["pref"]:
+                    # the preferred origin wins; within one origin the LATEST trace (a re-run on newer code)
+                    if old is None or pref < old["pref"] or (pref == old["pref"] and (ts or 0) > (old["ts"] or 0)):
                         recs[key] = {
                             "key": key, "pref": pref, "origin": origin, "solve": sid, "hand": str(hand), "ts": ts,
                             "street": s.get("street"), "board": nd.get("board") or s.get("board"),
