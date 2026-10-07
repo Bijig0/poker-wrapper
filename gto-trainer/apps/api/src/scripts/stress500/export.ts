@@ -1,6 +1,8 @@
 /**
  * Export the stress-500 results for the replayer artifact: an index (one row per hand, the grades and flags, the run's
- * totals) and the hands in batches, every 169-value range / strategy packed as 2 base64 characters per value (0..4095).
+ * totals) and the hands in batches, every 169-value range / strategy packed as 2 base64 characters per value (0..4095) — a hand's
+ * class ranges once each in hand.rw (view.r[seat] = its index) — and, postflop where a range is narrow, thin or hero's,
+ * the per-combo detail (hand.cw / view.cw, cs, ce, cbr — see viewEncoder).
  *
  *   bun src/scripts/stress500/export.ts [--data C:/Users/Brady/poker-data-stress500] --out <artifact dir>
  */
@@ -9,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { FAMILIES } from "./scenarios";
 import { gradeDecision } from "./grade";
-import { CLASSES, postflopViewsByDecision } from "./views";
+import { CB_ACTOR_MAX, CB_MIN_W, CB_THIN, CLASSES, postflopViewsByDecision, type ComboRow, type ComboSet } from "./views";
 import { LINT_FLAGS, lintHand } from "./lint";
 import { APPROXIMATIONS, departuresOf } from "../../services/approximations";
 
@@ -126,10 +128,81 @@ const tracesOf = (clientHandId: string, since = 0): { id: number; decisionIndex:
   const decisionIndexOf = (key: string | null): number | null => { try { const k = JSON.parse(key ?? "null"); const i = Array.isArray(k) ? Number(k[k.length - 1]) : NaN; return Number.isFinite(i) ? i : null; } catch { return null; } };
   return rows.flatMap((r) => { try { return [{ id: r.id, decisionIndex: decisionIndexOf(r.decision_key), trace: JSON.parse(Buffer.from(Bun.gunzipSync(r.trace as Uint8Array<ArrayBuffer>)).toString("utf-8")) }]; } catch { return []; } });
 };
-const encView = (v: any): any => ({
-  a: v.actor, ln: v.line, acts: v.actions, st: (v.strat ?? null)?.map((col: number[]) => enc(col)) ?? null, tot: v.totals, tk: v.taken,
-  r: Object.fromEntries(Object.entries(v.ranges ?? {}).map(([p, xs]) => [p, enc(xs as number[] | null)])), src: v.src, pot: v.pot ?? null, hm: v.heroMix ?? null,
-});
+/**
+ * PER-COMBO DETAIL, PACKED (views.ts cb / cbr; Brady 2026-10-07 "AJhh same as AJcc"). Base64, deduplicated per hand:
+ *   - hand.cw = the hand's distinct WEIGHT VECTORS (a seat's range repeats node after node until he acts): the floor it
+ *     was cut at ("a" = 0.0005, a range under CB_SMALL combos; "b" = 0.01), then one record per kept combo in GTO Wizard's 1,326 order —
+ *     the gap from the previous combo index (1 char; "A" + 2-char index when the gap is 64+), then the weight 0..1
+ *     (2 chars, the ranges' scale);
+ *   - view.cbr = { seat: index into cw } for the other seats; view.cw = the actor's own vector's index;
+ *   - view.cs = the actor's split and EV, one record per combo of that vector: a PURE combo (one action >= 99.95%) is
+ *     that action's number (1 char) and its EV; a mixed one is "_", the first n-1 shares (2 chars each, the last is the
+ *     rest) and the EV of every action it plays at least 0.5% (what the replayer prints). EVs are 2 chars on the
+ *     view's own scale view.ce = [lowest EV, step] (bb); view.cbn = 1 when the node carried no EVs.
+ * Hero's wide node (over CB_ACTOR_MAX combos) is kept on the served tree only, not on the blend's other trees.
+ */
+const q12 = (x: number): number => Math.max(0, Math.min(4095, Math.round(Number(x ?? 0) * 4095)));
+const c12 = (q: number): string => B64[q >> 6]! + B64[q & 63]!;
+const PURE = 0.9995, EV_SHOWN = 0.005;
+function encWeights(set: ComboSet): string {
+  const rows = set.rows;
+  let s = set.floor <= CB_MIN_W ? "a" : "b", prev = -1;
+  for (const r of rows) { const gap = r.i - prev; s += (gap > 0 && gap < 64 ? B64[gap]! : "A" + c12(r.i)) + c12(q12(r.w)); prev = r.i; }
+  return s;
+}
+function encSplit(rows: ComboRow[], n: number): { cs: string; ce: [number, number] | null } {
+  const hasEv = rows.some((r) => r.ev?.length);
+  let lo = Infinity, hi = -Infinity;
+  if (hasEv) for (const r of rows) for (const e of r.ev ?? []) { lo = Math.min(lo, e); hi = Math.max(hi, e); }
+  const ce: [number, number] | null = hasEv ? [Math.floor(lo * 100) / 100, Math.max(0.01, Math.ceil(((hi - Math.floor(lo * 100) / 100) / 4095) * 1e4) / 1e4)] : null;
+  const ev = (x: number): string => (ce ? c12(Math.max(0, Math.min(4095, Math.round((x - ce[0]) / ce[1])))) : "");
+  let cs = "";
+  for (const r of rows) {
+    const s = r.s ?? [];
+    const k = s.findIndex((x) => x >= PURE);
+    if (k >= 0 && k < 63) { cs += B64[k]! + ev(r.ev?.[k] ?? 0); continue; }
+    const q = s.slice(0, n - 1).map(q12);
+    const shares = [...q.map((x) => x / 4095), Math.max(0, 1 - q.reduce((t, x) => t + x / 4095, 0))];
+    cs += "_" + q.map(c12).join("");
+    shares.forEach((p, j) => { if (p >= EV_SHOWN) cs += ev(r.ev?.[j] ?? 0); });
+  }
+  return { cs, ce };
+}
+/** one hand's encoder: its views share the hand's tables — the per-combo weight vectors (cw) and the class ranges (rw:
+ *  a seat's 169-class range repeats node after node until he acts, so view.r[seat] is an index into hand.rw) */
+function viewEncoder(hero: string) {
+  const cw: string[] = [], at = new Map<string, number>();
+  const rw: string[] = [], rat = new Map<string, number>();
+  const rref = (xs: number[] | null): number | null => { const s = enc(xs); if (s == null) return null; let i = rat.get(s); if (i == null) { i = rw.length; rw.push(s); rat.set(s, i); } return i; };
+  const ref = (set: ComboSet): number => { const s = encWeights(set); let i = at.get(s); if (i == null) { i = cw.length; cw.push(s); at.set(s, i); } return i; };
+  const encode = (v: any, alt = false): any => {
+    const n = (v.actions ?? []).length;
+    let cb: ComboSet | null = v.cb ?? null;
+    if (cb && alt && String(v.actor).toUpperCase() === String(hero).toUpperCase() && cb.rows.reduce((t, r) => t + r.w, 0) > CB_ACTOR_MAX) cb = null;
+    const split = cb ? encSplit(cb.rows, n) : null;
+    countCombos(cb, v.cbr, split);
+    return {
+      a: v.actor, ln: v.line, acts: v.actions, st: (v.strat ?? null)?.map((col: number[]) => enc(col)) ?? null, tot: v.totals, tk: v.taken,
+      r: Object.fromEntries(Object.entries(v.ranges ?? {}).map(([p, xs]) => [p, rref(xs as number[] | null)])), src: v.src, pot: v.pot ?? null, hm: v.heroMix ?? null,
+      ...(cb && split ? { cw: ref(cb), cs: split.cs, ...(split.ce ? { ce: split.ce } : { cbn: 1 }) } : {}),
+      ...(v.cbr ? { cbr: Object.fromEntries(Object.entries(v.cbr as Record<string, ComboSet>).map(([p, set]) => [p, ref(set)])) } : {}),
+    };
+  };
+  return { cw, rw, encode };
+}
+const comboStats = { views: 0, actor: 0, actorHero: 0, actorNarrow: 0, actorThin: 0, other: 0, wChars: 0, sChars: 0, sHero: 0 };
+function countCombos(cb: ComboSet | null, cbr: Record<string, ComboSet> | null | undefined, split: { cs: string } | null): void {
+  comboStats.views++;
+  if (cb) {
+    comboStats.actor++;
+    const n = cb.rows.reduce((t, r) => t + r.w, 0);
+    if (n < CB_THIN) comboStats.actorThin++;
+    else if (n <= CB_ACTOR_MAX) comboStats.actorNarrow++;
+    else { comboStats.actorHero++; comboStats.sHero += split?.cs.length ?? 0; }
+    comboStats.sChars += split?.cs.length ?? 0;
+  }
+  if (cbr) comboStats.other += Object.keys(cbr).length;
+}
 const files = existsSync(join(DATA, "hands")) ? readdirSync(join(DATA, "hands")).filter((f) => f.endsWith(".json")) : [];
 const hands = files.map((f) => JSON.parse(readFileSync(join(DATA, "hands", f), "utf8"))).sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
@@ -202,21 +275,23 @@ for (const h of hands) {
     const n = dec.filter((d: any) => d.fl.includes(f)).length;
     if (n) { totals.lint[f]!.n += n; totals.lint[f]!.hands++; }
   }
-  for (const [i, v] of Object.entries(allViews) as [string, any][]) views[i] = encView(v);
+  const E = viewEncoder(String(h.hero ?? ""));
+  for (const [i, v] of Object.entries(allViews) as [string, any][]) views[i] = E.encode(v);
   const alt: Record<string, any[]> = {};
-  for (const [i, vs] of Object.entries(allAlts) as [string, any[]][]) alt[i] = vs.map(encView);
+  for (const [i, vs] of Object.entries(allAlts) as [string, any[]][]) alt[i] = vs.map((v) => E.encode(v, true));
   // REVIEW-ONLY REPLIES (replies.ts): GTO Wizard's nodes for the villains after hero's LAST action on a street, read for
   // the harness only — the live path never reads them (hero has no further decision). Kept apart from `views` (no grade,
   // no lint, no thin-range count reads them); the replayer draws them under a REVIEW ONLY banner.
   const rep: Record<string, any> = {};
   for (const [i, v] of Object.entries(h.replies ?? {}) as [string, any][]) {
-    rep[i] = { ...encView(v), rv: 1, sn: v.snapped ?? null, rq: v.requests ?? null, nt: v.note ?? null, bn: v.banner ?? null };
+    rep[i] = { ...E.encode(v), rv: 1, sn: v.snapped ?? null, rq: v.requests ?? null, nt: v.note ?? null, bn: v.banner ?? null };
   }
+  comboStats.wChars += E.cw.reduce((t, x) => t + x.length, 0);
   const out = {
     id: h.id, fam: h.family, title: h.title, tags: h.tags, hero: h.hero, src: h.source, hh: h.hh,
     hand: { pos: h.hand.positions, ss: h.hand.startStacks, hs: h.hand.heroSeatId, hc: h.hand.heroCards, b: h.hand.board,
             ac: h.hand.actions.map((a: any) => [a.seatId, a.type, a.amount ?? null, a.street[0], a.hero ? 1 : 0]) },
-    dec, views, alt, rep, pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
+    dec, views, alt, rep, rw: E.rw, ...(E.cw.length ? { cw: E.cw } : {}), pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
   };
   const grades = { ok: 0, approx: 0, refused: 0, bad: 0 } as Record<string, number>;
   const fl = new Set<string>(), kd = new Set<string>();
@@ -258,4 +333,8 @@ const commits = [...new Set(byRun.map((h) => h.commit).filter(Boolean))].map((c)
 writeFileSync(join(OUT, "data", "index.json"), JSON.stringify({ builtAt: new Date().toISOString(), planned, commit: byRun[byRun.length - 1]?.commit ?? null, commits, totals, about: ABOUT, fixes, hands: index }));
 console.log(`exported ${hands.length}/${planned} hands in ${bn} batches → ${join(OUT, "data")}`);
 console.log(JSON.stringify({ ...totals, flags: undefined, kinds: undefined, lint: undefined }));
+{
+  const bytes = readdirSync(join(OUT, "data")).reduce((t, f) => t + Bun.file(join(OUT, "data", f)).size, 0);
+  console.log(`per-combo detail (postflop): ${comboStats.actor} of ${comboStats.views} views carry the actor's combos (thin ${comboStats.actorThin}, narrow ${comboStats.actorNarrow}, hero wide ${comboStats.actorHero}), ${comboStats.other} other-seat ranges · splits ${(comboStats.sChars / 1e6).toFixed(2)} MB (hero wide ${(comboStats.sHero / 1e6).toFixed(2)}), weight vectors ${(comboStats.wChars / 1e6).toFixed(2)} MB · data ${(bytes / 1e6).toFixed(2)} MB`);
+}
 console.log("poker-sense checks:", LINT_FLAGS.map((f) => `${f} ${totals.lint[f]!.n} (${totals.lint[f]!.hands} hands)`).join(" · "));

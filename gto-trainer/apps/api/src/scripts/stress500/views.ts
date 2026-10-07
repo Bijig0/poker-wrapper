@@ -85,6 +85,78 @@ export interface NodeView {
   /** postflop: the pot at the node (bb) and hero's combo mix when hero acts */
   pot?: number;
   heroMix?: { action: string; p: number }[] | null;
+  /** PER-COMBO DETAIL (2026-10-07, Brady: "AJhh same as AJcc" in thin nodes), POSTFLOP only, sparse and only where it
+   *  is useful: the actor's own combos (entering weight, his split and EV per action) when his range is narrow, thin or
+   *  hero's; the other seats' combo weights when theirs is narrow. Absent = class level only (the replayer says so).
+   *  Not preflop: GTO Wizard's AI preflop nodes are identical for every combo of a class (300 cached nodes, 184k
+   *  class x action checks: strategy and EV differ by exactly 0), so a preflop combo row only repeats its class. */
+  cb?: ComboSet | null;
+  cbr?: Record<string, ComboSet> | null;
+}
+
+// ── per-combo detail ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** one combo of a range: its index in GTO Wizard's 1,326 order (utils/comboIndex), the hand ("AhJh", higher card
+ *  first), the weight 0..1 and — at the actor's node — his share of each action (0..1) and its EV (bb) */
+export interface ComboRow { i: number; hand: string; w: number; s?: number[]; ev?: number[] }
+/** a seat's kept combos and the weight floor they were cut at (a legal combo absent from rows weighs under it) */
+export interface ComboSet { floor: number; rows: ComboRow[] }
+/** the actor's combos are kept when his range (board-dead removed) is at most this many combos, or thin, or hero's */
+export const CB_ACTOR_MAX = 120;
+/** another seat's combos are kept when his range is at most this many combos */
+export const CB_OTHER_MAX = 80;
+export const CB_THIN = 1.5;
+/** a combo below this weight is left out: a small range (under CB_SMALL combos, thin ones included) keeps everything
+ *  above the grid's own "in range" floor; a bigger one drops its dust under 1% of a combo (the size budget — the
+ *  replayer lists them as "under 1%") */
+export const CB_MIN_W = 0.0005;
+export const CB_MIN_W_WIDE = 0.01;
+export const CB_SMALL = 10;
+const blockedOf = (board: string[]): Set<number> => new Set(board.map(CARD_INDEX).filter((x) => x >= 0));
+/** combos in a 1,326 range, the board's dead cards removed */
+export function liveCombos(w: readonly number[], board: string[] = []): number {
+  const blocked = blockedOf(board);
+  let n = 0;
+  for (let i = 0; i < 1326; i++) {
+    const [a, b] = COMBO_CARDS[i]!;
+    if (blocked.has(a) || blocked.has(b)) continue;
+    n += Math.max(0, Math.min(1, Number(w[i] ?? 0)));
+  }
+  return n;
+}
+/** the sparse rows of a 1,326 range (weight > CB_MIN_W, board-dead left out); with strategies / evs, each combo's own */
+export function comboRowsOf(w: readonly number[], board: string[] = [], strategies?: readonly (readonly number[])[] | null, evs?: readonly (readonly number[])[] | null, floor = CB_MIN_W): ComboRow[] {
+  const blocked = blockedOf(board);
+  const out: ComboRow[] = [];
+  for (let i = 0; i < 1326; i++) {
+    const x = Math.max(0, Math.min(1, Number(w[i] ?? 0)));
+    if (!(x > floor)) continue;
+    const [a, b] = COMBO_CARDS[i]!;
+    if (blocked.has(a) || blocked.has(b)) continue;
+    const row: ComboRow = { i, hand: COMBOS[i]!.hand, w: Math.round(x * 10000) / 10000 };
+    if (strategies) row.s = strategies.map((s) => Math.round(Math.max(0, Math.min(1, Number(s[i] ?? 0))) * 10000) / 10000);
+    if (evs && evs.some((e) => Array.isArray(e) && e.length === 1326)) row.ev = evs.map((e) => Math.round(Number(e?.[i] ?? 0) * 100) / 100);
+    out.push(row);
+  }
+  return out;
+}
+/**
+ * The node's per-combo detail by the size rule: the actor's combos (weight, split, EV) when his entering range is at
+ * most CB_ACTOR_MAX combos (a thin one under CB_THIN included) or the node is hero's; every other seat's combo weights when his range is at
+ * most CB_OTHER_MAX combos. Nothing kept → nulls (the view stays class level).
+ */
+export function comboDetail(seats: { pos: string; w: readonly number[] }[], actorPos: string, isHero: boolean, board: string[],
+  strategies: readonly (readonly number[])[], evs: readonly (readonly number[])[] | null): { cb: ComboSet | null; cbr: Record<string, ComboSet> | null } {
+  let cb: ComboSet | null = null;
+  const cbr: Record<string, ComboSet> = {};
+  for (const s of seats) {
+    const n = liveCombos(s.w, board);
+    const floor = n < CB_SMALL ? CB_MIN_W : CB_MIN_W_WIDE;
+    if (s.pos === actorPos) {
+      if (isHero || n <= CB_ACTOR_MAX) cb = { floor, rows: comboRowsOf(s.w, board, strategies, evs, floor) };
+    } else if (n <= CB_OTHER_MAX) cbr[s.pos] = { floor, rows: comboRowsOf(s.w, board, null, null, floor) };
+  }
+  return { cb, cbr: Object.keys(cbr).length ? cbr : null };
 }
 
 // ── preflop ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -212,6 +284,8 @@ export function traceToViews(trace: any, src: string): NodeView[] {
       taken: n.taken != null ? (labels[n.taken] ?? null) : null,
       ranges, src, pot: n.potNode,
       heroMix: isHero && heroIdx != null ? (n.actions ?? []).map((a: any, j: number) => ({ action: labels[j]!, p: Math.round(Number(a.strategy?.[heroIdx] ?? 0) * 1000) / 10 })) : null,
+      ...comboDetail(r.players.map((p, k) => ({ pos: p, w: r.ranges[k] ?? [] })), actorPos, isHero, board, strategies,
+        (n.actions ?? []).map((a: any) => a.evs ?? [])),
     });
     if (n.taken != null) {
       const s = strategies[n.taken] ?? [];
