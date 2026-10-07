@@ -245,9 +245,47 @@ export interface Picked {
   why: string;
 }
 
+/** The table seats a plan keeps in its tree besides hero (a merged seat counts each of its members). */
+export const keptVillains = (p: CollapsePlan): string[] =>
+  p.seats.filter((_, i) => i !== p.heroIdx).flatMap((s) => s.members ?? [s.pos]);
+
+/**
+ * THREE-AND-COVER (2026-10-07, Brady: "three-and-cover, go"). At most `max` of `plans` (planCollapses' order), chosen
+ * so that every villain any of them keeps is kept in at least one: greedy — repeatedly the plan that keeps the most
+ * villains not yet kept by one already taken, ties to the earlier plan; once every villain is in, the rest in order.
+ * With `max` plans or fewer nothing is chosen: all of them, in order, exactly as before (every 4-way field, and a
+ * 5-way field with a villain who has chips in).
+ *
+ * Why: the pick used to be the first `max` in name order. A 5-way flop with all four villains free has six two-ghost
+ * plans, and the first three by name all ghost the alphabetically first villain — stress-500 po_56way-004 (hero SB;
+ * BB, UTG, HJ, CO all checked): "ghost:BB + ghost:CO", "ghost:BB + ghost:HJ", "ghost:BB + ghost:UTG", so the BB sat in
+ * none of the three trees and the blend was over three answers that all ignored him. Three plans of two kept villains
+ * are six slots for four villains, so a full cover always exists at 5-way; the request count is unchanged.
+ */
+export function coverPick(plans: CollapsePlan[], max: number): CollapsePlan[] {
+  if (plans.length <= max) return plans.slice();
+  const left = plans.slice();
+  const kept = new Set<string>();
+  const out: CollapsePlan[] = [];
+  while (out.length < max && left.length) {
+    let best = 0;
+    let bestGain = -1;
+    left.forEach((p, i) => {
+      const gain = new Set(keptVillains(p).filter((v) => !kept.has(v))).size;
+      if (gain > bestGain) { best = i; bestGain = gain; }   // strict: a tie stays with the earlier plan
+    });
+    const p = left.splice(best, 1)[0]!;
+    out.push(p);
+    for (const v of keptVillains(p)) kept.add(v);
+  }
+  return out;
+}
+
 /**
  * The shipped policy, straight off the calibration: blend two or more GHOST plans; failing that take a MERGE;
- * failing that the single ghost. `max` bounds the cloud cost — each plan is one full chain walk.
+ * failing that the single ghost. `max` bounds the cloud cost — each plan is one full chain walk. When more than `max`
+ * ghost plans are legal (a 5-way flop with every villain free), the `max` blended are chosen to keep every villain in
+ * at least one tree (coverPick, 2026-10-07).
  */
 export function pickCollapses(plans: CollapsePlan[], max = 3): Picked | null {
   if (!plans.length) return null;
@@ -260,10 +298,16 @@ export function pickCollapses(plans: CollapsePlan[], max = 3): Picked | null {
   }
   const ghosts = plans.filter((p) => p.ghostOnly);
   if (ghosts.length >= 2) {
+    const chosen = coverPick(ghosts, max);
+    const all = new Set(ghosts.flatMap(keptVillains));
+    const kept = new Set(chosen.flatMap(keptVillains));
     return {
-      plans: ghosts.slice(0, max), mode: "blend",
-      why: `${Math.min(ghosts.length, max)} independent collapses blended (measured 0.008bb vs the true tree; ` +
-        `a single collapse costs 0.020-0.066bb)`,
+      plans: chosen, mode: "blend",
+      why: `${chosen.length} independent collapses blended (measured 0.008bb vs the true tree; ` +
+        `a single collapse costs 0.020-0.066bb)` +
+        (ghosts.length <= max ? ""
+          : kept.size >= all.size ? `; the ${chosen.length} of ${ghosts.length} legal chosen so every villain is in at least one tree`
+          : `; the ${chosen.length} of ${ghosts.length} legal chosen to keep the most villains in a tree (${kept.size} of ${all.size})`),
     };
   }
   const m = plans.find((p) => !p.ghostOnly);
