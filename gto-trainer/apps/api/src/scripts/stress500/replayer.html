@@ -74,6 +74,11 @@ main { padding-block: 16px 60px; padding-inline: 16px; max-width: 1480px; margin
 .chip.good { background: var(--win-soft); color: var(--win); } .chip.warn { background: var(--ev-soft); color: var(--ev); }
 .chip.crit { background: var(--loss-soft); color: var(--loss); } .chip.dim { background: var(--chip); color: var(--muted); }
 .chip.sev { background: var(--severe); color: #fff; }
+.rv-only { border: 2px solid var(--severe); background: var(--loss-soft); border-radius: 10px; padding: 8px 12px; margin: 0 0 10px; font-weight: 600; }
+.rv-only .sub { font-weight: 400; margin-top: 4px; }
+.collapse-at { border: 1px dashed var(--loss); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+.collapse-at .pair { display: flex; flex-wrap: wrap; gap: 12px; }
+.collapse-at .pair > div { flex: 1 1 200px; min-width: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 /* grade string: one square per hero decision */
 .gs { display: inline-flex; gap: 2px; vertical-align: middle; }
@@ -713,7 +718,7 @@ function renderHand() {
   const tl = h.actions.map((a, i) => {
     const rs = replayState(h, i);
     const d = h.decAt[i];
-    return `<div class="tl-row${a.hero ? " hero" : ""}${/^post/.test(a.type) ? " post" : ""}" data-i="${i}"><span class="st">${a.street}</span><span class="who">${a.hero ? "YOU · " : ""}${esc(h.positions[a.seatId] || "seat " + a.seatId)}</span><span>${esc(actionText(a, rs))}${pickDiffers(d) ? ` <span class="ours" title="the script played this; our answer picked ${esc(d.pick)}">· ours: ${esc(d.pick)}</span>` : ""}</span><span>${d ? `<span class="chip ${GRADE[GRADE_FULL[d.g]][0]}">${GRADE[GRADE_FULL[d.g]][1]}</span>` : ""}</span></div>`;
+    return `<div class="tl-row${a.hero ? " hero" : ""}${/^post/.test(a.type) ? " post" : ""}" data-i="${i}"><span class="st">${a.street}</span><span class="who">${a.hero ? "YOU · " : ""}${esc(h.positions[a.seatId] || "seat " + a.seatId)}</span><span>${esc(actionText(a, rs))}${pickDiffers(d) ? ` <span class="ours" title="the script played this; our answer picked ${esc(d.pick)}">· ours: ${esc(d.pick)}</span>` : ""}</span><span>${d ? `<span class="chip ${GRADE[GRADE_FULL[d.g]][0]}">${GRADE[GRADE_FULL[d.g]][1]}</span>` : ""}${!(h.views || {})[i] && (h.rep || {})[i] ? ` <span class="chip sev" title="REVIEW ONLY: GTO Wizard's reply to hero's last action, read for the harness — the live path never reads this node">review</span>` : ""}</span></div>`;
   }).join("");
   $("main").innerHTML = `
     <div class="back"><button class="mini" id="backBtn">← All hands</button></div>
@@ -816,7 +821,9 @@ function renderNode(rs) {
   if (!a) { host.innerHTML = `<h2>End of hand</h2><p class="sub">${esc(H.hh.split("\n").pop())}</p>`; return; }
   const pos = H.positions[a.seatId] || `seat ${a.seatId}`;
   if (/^post/.test(a.type)) { host.innerHTML = `<h2>Exact node</h2><p class="sub">${esc(pos)} posts — not a decision. Step on to the first action.</p>`; return; }
-  const options = H.views[STEP] ? [H.views[STEP], ...((H.alt || {})[STEP] || [])] : [];
+  // REVIEW-ONLY REPLIES (replies.ts): a villain node after hero's last action on the street, read for the harness only
+  const rep = !H.views[STEP] && H.rep ? H.rep[STEP] || null : null;
+  const options = H.views[STEP] ? [H.views[STEP], ...((H.alt || {})[STEP] || [])] : rep ? [rep] : [];
   const sel = Math.min(ALT_SEL[STEP] ?? 0, Math.max(0, options.length - 1));
   const v = options[sel];
   const board = rs.board.join("");
@@ -837,6 +844,7 @@ function renderNode(rs) {
   const strat = v.st ? v.st.map(dec) : null;
   const ranges = Object.fromEntries(Object.entries(v.r || {}).map(([p, s]) => [p, dec(s)]));
   const actorRange = ranges[v.a] ?? null;
+  const rvBanner = v.rv ? `<div class="rv-only" role="note"><span class="chip sev">REVIEW ONLY</span> ${esc(String(v.bn || "REVIEW ONLY — GTO Wizard's reply to hero's last action, read for the harness. The live path never reads this node: hero has no further decision here.").replace(/^REVIEW ONLY — /, ""))}${v.nt ? `<div class="sub">${esc(v.nt)}</div>` : ""}<div class="sub">${v.rq ?? 0} GTO Wizard request${v.rq === 1 ? "" : "s"} spent by the harness on this read — no answer, grade or check uses it.</div></div>` : "";
   const facts = `<div class="nv-facts"><div><b>tree path</b><span class="mono">${esc(v.ln || "root")}</span></div><div><b>source</b><span>${esc(v.src || "")}</span></div>${v.pot != null ? `<div><b>pot at node</b><span class="num">${r2(v.pot)} bb</span></div>` : ""}<div><b>took</b><span>${esc(v.tk || "")}</span></div></div>`;
   let actorCard = "";
   const isFull = (arr) => !!arr && arr.every((x) => x >= 0.999);
@@ -849,7 +857,8 @@ function renderNode(rs) {
     actorCard = `<div class="rl-card actor"><h3>${esc(v.a)} <span class="sub">${a.hero ? "hero's" : "villain's"} strategy at this node · ${first ? "every hand (nothing narrowed yet)" : `range so far ${rangeStat(actorRange)}`}</span>${thin ? ` <span class="chip crit">range collapsed</span>` : ""}${lockHere ? "" : rangeTag(v.a)}</h3>` +
       (lockHere ? `<div class="sub" style="max-width:60ch;margin:4px 0"><span class="chip warn">⚑ off-GTO action</span> ${esc(actionText(a, rs))} — GTO plays this ${lockHere.gto == null ? "(share not in the answer's note)" : `<b>${lockHere.gto < 0.01 ? "under 0.01%" : lockHere.gto.toFixed(lockHere.gto < 1 ? 2 : 1) + "%"}</b>`} of his range here. The tree drawn below is the LOCKED one: this node plays the pool's range (${esc(lockHere.b)}); from the next node on his range is the pool's.</div>` : "") +
       (thin ? `<div class="sub" style="max-width:56ch;margin:4px 0">Under ${THIN} combos are left in this range — an earlier action of this seat is one the solver almost never takes. The cells are drawn at full height (not range-weighted) so the mix stays visible; the tree's numbers here rest on almost nothing.</div>` : "") +
-      `${classGrid(strategyCls(thin ? actorRange.map((x) => (x > 0 ? 1 : 0)) : actorRange, strat, acts.length), acts, H.heroKey, { board, openHero: !!a.hero, foot: `${thin ? "every class with any weight left, full height" : "fill = share of each class still in range"} · colour = how it acts${a.hero ? " · your class outlined" : " · your class outlined for reference"}` })}</div>`;
+      `${classGrid(strategyCls(thin ? actorRange.map((x) => (x > 0 ? 1 : 0)) : actorRange, strat, acts.length), acts, H.heroKey, { board, openHero: !!a.hero, foot: `${thin ? "every class with any weight left, full height" : "fill = share of each class still in range"} · colour = how it acts${a.hero ? " · your class outlined" : " · your class outlined for reference"}` })}` +
+      collapseBlock(v, a, rs, strat, acts, actorRange, board, combosIn, THIN) + `</div>`;
   }
   const others = Object.entries(ranges).filter(([p]) => p !== v.a);
   const otherCards = others.map(([p, arr]) => {
@@ -865,9 +874,43 @@ function renderNode(rs) {
   const picker = options.length > 1 ? `<div style="margin:8px 0 2px"><div class="sub" style="margin-bottom:4px">This answer blends ${options.length} trees (each holds three seats) — pick one:</div><div class="seg" id="altSeg" role="group" aria-label="Tree" style="flex-wrap:wrap;border-radius:12px">${options.map((o, k) => `<button data-k="${k}" class="${k === sel ? "on" : ""}">${esc(String(o.src || `tree ${k + 1}`).replace(/^tree /, ""))}</button>`).join("")}</div></div>` : "";
   let heroLine = "";
   if (v.hm && v.hm.length) heroLine = `<div class="nv-hero"><span class="big">${cardsHtml(H.heroCards)}</span> — this tree's own mix for your exact combo: ${v.hm.filter((x) => x.p >= 0.05).map((x) => `${esc(x.action)} <b>${x.p.toFixed(1)}%</b>`).join(" · ")}${options.length > 1 ? `<div class="sub" style="margin-top:2px">one of ${options.length} blended trees — the answer below is the blend</div>` : ""}</div>`;
-  host.innerHTML = `${head}${picker}${facts}<div class="seats" style="margin-top:10px">${actorCard}${otherCards}</div>${note}${heroLine}`;
+  host.innerHTML = `${rvBanner}${head}${picker}${facts}<div class="seats" style="margin-top:10px">${actorCard}${otherCards}</div>${note}${heroLine}`;
   const seg = $("altSeg");
   if (seg) seg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; ALT_SEL[STEP] = Number(b.dataset.k); renderNode(replayState(H, STEP)); });
+}
+/**
+ * RANGE COLLAPSE AT THIS ACTION (Brady 2026-10-07: "if there is range collapse, show the pre-range-collapse range and the
+ * post-range-collapse range, two ranges, so it's clear"). The actor's range after the action he takes here — the next
+ * node's range for his seat on the same tree, else entering × the taken action's strategy — when it is under THIN combos
+ * or under 1% of what he entered with (the off-tree trigger): both grids side by side, and how the answer carried it
+ * (the SOFT range when a decision's note says OFF-TREE RANGE for this seat and street, else GTO's own QRE sliver).
+ */
+function collapseBlock(v, a, rs, strat, acts, actorRange, board, combosIn, THIN) {
+  if (!strat || !acts.length) return "";
+  const j = acts.indexOf(v.tk);
+  if (j < 0 || !strat[j]) return "";
+  const entering = actorRange || new Array(169).fill(1);
+  const nx = H.views[STEP + 1] || (H.rep || {})[STEP + 1];
+  const nxR = nx && nx.src === v.src && nx.r && nx.r[v.a] ? dec(nx.r[v.a]) : null;
+  const after = nxR || entering.map((x, k) => x * (strat[j][k] || 0));
+  const nIn = combosIn(entering), nOut = combosIn(after);
+  if (!(nIn > 0) || !(nOut < THIN || nOut < 0.01 * nIn)) return "";
+  const fmt = (n) => (n >= 10 ? String(Math.round(n)) : n >= 0.1 ? n.toFixed(2) : n.toFixed(3));
+  const pct = (100 * nOut) / nIn;
+  // the answer's note: "OFF-TREE RANGE: river BB BET 34.15 (the solver 0.14%): his range carried as 0.009 combos instead of QRE's 0.000 (soft, …)"
+  const pos = String(v.a).toUpperCase(), st = String(a.street).toLowerCase();
+  let soft = null;
+  for (const d of H.dec || []) {
+    const m = /OFF-TREE RANGE: (.*)$/.exec(String(d.w || ""));
+    if (!m) continue;
+    for (const part of m[1].split(/; | · /)) if (part.toLowerCase().startsWith(`${st} `) && part.toUpperCase().startsWith(`${st.toUpperCase()} ${pos} `)) { soft = part; break; }
+    if (soft) break;
+  }
+  const grid = (arr, foot) => classGrid(rangeCls(arr), ["in range"], null, { single: true, small: true, combosOff: true, board, foot });
+  return `<div class="collapse-at"><div style="margin-bottom:6px"><span class="chip crit">RANGE COLLAPSE AT THIS ACTION</span></div><div class="pair">` +
+    `<div><div class="sub">before this action · <b>${fmt(nIn)}</b> combos (entering)</div>${grid(entering, "entering range")}</div>` +
+    `<div><div class="sub">after ${esc(v.tk)} · <b>${fmt(nOut)}</b> combos (${pct >= 0.1 ? pct.toFixed(1) : pct.toFixed(3)}% of his range)</div>${(() => { const mx = Math.max(...after); return mx > 0 && mx < 0.5 ? grid(after.map((x) => x / mx), `${nxR ? "the next node's range" : "entering × this action's strategy"} · scaled to its largest class (×${fmt(1 / mx)})`) : grid(after, nxR ? "the next node's range" : "entering × this action's strategy"); })()}</div></div>` +
+    `<div class="sub" style="margin-top:6px">${soft ? `carried as the SOFT range from here (see the answer's note: ${esc(soft)})` : "carried as GTO's own (QRE) range: a sliver"}</div></div>`;
 }
 /** an action label's kind as the poker-sense checks count it (lint.ts actionKind) */
 function kindOf(label) {

@@ -205,11 +205,18 @@ for (const h of hands) {
   for (const [i, v] of Object.entries(allViews) as [string, any][]) views[i] = encView(v);
   const alt: Record<string, any[]> = {};
   for (const [i, vs] of Object.entries(allAlts) as [string, any[]][]) alt[i] = vs.map(encView);
+  // REVIEW-ONLY REPLIES (replies.ts): GTO Wizard's nodes for the villains after hero's LAST action on a street, read for
+  // the harness only — the live path never reads them (hero has no further decision). Kept apart from `views` (no grade,
+  // no lint, no thin-range count reads them); the replayer draws them under a REVIEW ONLY banner.
+  const rep: Record<string, any> = {};
+  for (const [i, v] of Object.entries(h.replies ?? {}) as [string, any][]) {
+    rep[i] = { ...encView(v), rv: 1, sn: v.snapped ?? null, rq: v.requests ?? null, nt: v.note ?? null, bn: v.banner ?? null };
+  }
   const out = {
     id: h.id, fam: h.family, title: h.title, tags: h.tags, hero: h.hero, src: h.source, hh: h.hh,
     hand: { pos: h.hand.positions, ss: h.hand.startStacks, hs: h.hand.heroSeatId, hc: h.hand.heroCards, b: h.hand.board,
             ac: h.hand.actions.map((a: any) => [a.seatId, a.type, a.amount ?? null, a.street[0], a.hero ? 1 : 0]) },
-    dec, views, alt, pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
+    dec, views, alt, rep, pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
   };
   const grades = { ok: 0, approx: 0, refused: 0, bad: 0 } as Record<string, number>;
   const fl = new Set<string>(), kd = new Set<string>();

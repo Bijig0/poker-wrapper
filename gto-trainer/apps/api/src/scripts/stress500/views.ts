@@ -176,7 +176,7 @@ export function labelOfTrace(a: any, pot?: number | null): string {
 }
 
 /** the seats of a trace street and their entering 1,326 ranges (dashboard.ts traceSeats) */
-function traceSeats(spec: any, st: any): { players: string[]; ranges: number[][] } {
+export function traceSeats(spec: any, st: any): { players: string[]; ranges: number[][] } {
   if (Array.isArray(st?.players) && Array.isArray(st?.rangesIn) && st.rangesIn.length === st.players.length) {
     return { players: st.players.slice(), ranges: st.rangesIn.map((r: number[]) => r.slice()) };
   }
