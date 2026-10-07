@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyPoolCallRanges, poolCallKey, poolCallNote, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
+import { applyPoolCallRanges, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
 import { poolFloorsOf } from "../scripts/mutation/rangeOracle";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -112,8 +112,17 @@ describe("poolCallKey (the most specific key built)", () => {
     expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 30)).toEqual({ table: "limp", key: "overlimp_short_le60" });
     expect(poolCallKey({ pos: "UTG", line: "limp", opener: null, before: 0, openTo: 0, complete: false }, NaN)).toBeNull();
   });
-  test("with the provisional (empty) shipped table nothing is replaced", () => {
-    expect(poolCallKey({ pos: "BTN", line: "flat", opener: "UTG", before: 0, openTo: 2.5, complete: false }, 100)).toBeNull();
+  test("the shipped table (poker locks_v2/poolcalls_locks.json): brief_I-002's seats resolve to their own cells, the open size first", () => {
+    expect(poolCallKey({ pos: "BTN", line: "flat", opener: "UTG", before: 0, openTo: 2.5, complete: false }, 100)).toEqual({ table: "call", key: "poolcall_flat_BTN_vsUTG_oM_80p" });
+    expect(poolCallKey({ pos: "SB", line: "overcall", opener: "UTG", before: 1, openTo: 2.5, complete: false }, 100)).toEqual({ table: "call", key: "poolcall_overcall_SB_b1_oM_80p" });
+    expect(poolCallKey({ pos: "SB", line: "overcall", opener: "UTG", before: 1, openTo: 2.0, complete: false }, 30)).toEqual({ table: "call", key: "poolcall_overcall_SB_b1_oS_le40" });
+    expect(poolCallKey({ pos: "BB", line: "bbiso", opener: "CO", before: 1, openTo: 5, complete: false }, 100)).toEqual({ table: "call", key: "poolcall_bbiso_BB_l1_80p" });
+    expect(poolCallKey({ pos: "UTG", line: "limpcall", opener: "CO", before: 2, openTo: 5, complete: false }, 50)).toEqual({ table: "call", key: "poolcall_limpcall_UTG_l2p_40_80" });
+    expect(poolCallKey({ pos: "SB", line: "sbiso", opener: "CO", before: 1, openTo: 5, complete: true }, 100)).toEqual({ table: "call", key: "poolcall_sbiso_SB_l1_80p" });
+    expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 100)).toEqual({ table: "call", key: "poolcall_overlimp_BTN_b2p_80p" });
+    const r = poolCallRange({ table: "call", key: "poolcall_overcall_SB_b1_oM_80p" })!;
+    expect(r.freq).toBeGreaterThan(0.05);
+    expect(Object.keys(r.weights).length).toBe(169);
   });
 });
 
@@ -153,7 +162,8 @@ describe("applyPoolCallRanges", () => {
     expect(r.ranges.BB).toEqual({ AA: 1 });
     expect(r.applied[0]!.now).toBeGreaterThan(20);
   });
-  test("no table: ranges untouched, nothing applied", () => {
+  test("no range for the line (an empty call table, a raised pot): ranges untouched, nothing applied", () => {
+    setPoolCallTable({ ranges: {} });
     const rg = fitted();
     const r = applyPoolCallRanges({ hand: hand(BRIEF_I_002, 6), heroPos: "BB", ranges: rg, dealt: dealt() });
     expect(r.applied).toEqual([]);

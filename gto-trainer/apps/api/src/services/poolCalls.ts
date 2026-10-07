@@ -155,7 +155,7 @@ export function poolCallersOf(hand: ParsedHand, heroPos: string | null): PoolCal
 /** the open as a multiple of the big blind → the table's size qualifier, when the split was adopted */
 function openQual(openTo: number): string | null {
   if (!table.open_split_adopted || !table.open_edges || !(openTo > 0)) return null;
-  for (const [k, [lo, hi]] of Object.entries(table.open_edges)) if (openTo >= lo && (hi == null || openTo < hi)) return k;
+  for (const [k, [lo, hi]] of Object.entries(table.open_edges)) if ((lo == null || openTo >= lo) && (hi == null || openTo < hi)) return k;
   return null;
 }
 const stackBucket = (stack: number): string | null => (!(stack > 0) ? null : stack < 40 ? "le40" : stack < 80 ? "40_80" : "80p");
@@ -187,21 +187,17 @@ export function poolCallKey(c: Pick<PoolCaller, "pos" | "line" | "opener" | "bef
     : c.line === "overcall" ? (c.before >= 2 ? "b2p" : "b1")
     : (c.before >= 2 ? "l2p" : "l1");
   const o = openQual(c.openTo);
-  const cands = [
-    qual && o && b ? `poolcall_${c.line}_${c.pos}_${qual}_${o}_${b}` : null,
-    qual && o ? `poolcall_${c.line}_${c.pos}_${qual}_${o}` : null,
-    qual && b ? `poolcall_${c.line}_${c.pos}_${qual}_${b}` : null,
-    qual ? `poolcall_${c.line}_${c.pos}_${qual}` : null,
-    b ? `poolcall_${c.line}_${c.pos}_${b}` : null,
-    `poolcall_${c.line}_${c.pos}_all`,
-    `poolcall_${c.line}_${c.pos}`,
-    qual && b ? `poolcall_${c.line}_ALL_${qual}_${b}` : null,
-    qual ? `poolcall_${c.line}_ALL_${qual}` : null,
-    b ? `poolcall_${c.line}_ALL_${b}` : null,
-    `poolcall_${c.line}_ALL_all`,
-    `poolcall_${c.line}_ALL`,
-  ];
-  for (const k of cands) if (k && has(k)) return { table: "call", key: k };
+  // the builder writes a stack suffix on every key ("_all" for no bucket); the older spelling without one is tried too
+  const stacks = b ? [b, "all", ""] : ["all", ""];
+  const cands: string[] = [];
+  const quals: (string | null)[] = [];
+  if (qual && o) quals.push(`${qual}_${o}`);
+  if (qual) quals.push(qual);
+  quals.push(null);
+  for (const seat of [c.pos, "ALL"]) {
+    for (const q of quals) for (const st of stacks) cands.push(`poolcall_${c.line}_${seat}${q ? `_${q}` : ""}${st ? `_${st}` : ""}`);
+  }
+  for (const k of cands) if (has(k)) return { table: "call", key: k };
   return null;
 }
 
