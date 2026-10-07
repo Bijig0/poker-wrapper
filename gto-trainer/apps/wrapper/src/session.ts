@@ -22,6 +22,7 @@ import { feedAdd, log } from "./feed";
 import { fetchBytes, fetchJson, getJson, postJson } from "./http";
 import { pyFloat, pyInt, pyRepr, pyRound, pyStr, truthy } from "./py";
 import * as SES from "./sessions";
+import { loadDeps, loadRow, type Load } from "./load";
 import { CGG, CP, S, TupleSet, freshStackReset, inAHand, isCgg, isClientSite, isCp, seams } from "./state";
 import * as TABLES from "./tables";
 import * as faketable from "./faketable";
@@ -615,9 +616,23 @@ export async function enrichGtowRow(pf: any): Promise<void> {
   } catch { /* informational */ }
 }
 
+/** The machine load (load.ts) for a check: the health loop's reading when it is under 20 s old, else asked now. */
+export async function loadNow(): Promise<Load | null> {
+  if (S.health.loadAt && time() - S.health.loadAt < 20) return S.health.load;
+  return await loadDeps.fetchLoad();
+}
+
+/** THE MACHINE LOAD ROW (2026-10-07): an OPTIONAL preflight row for a session with answers (not the rig) — amber /
+ *  red with the reasons when the API says the machine is busy; never required, so never a blocker. */
+export async function addLoadRow(pf: any, cfg: Record<string, any>): Promise<void> {
+  if (!truthy(cfg.answers) || S.fakeMode) return;
+  pf.checks.push(loadRow(await loadNow()));
+}
+
 export async function preflight(preset: string, cfg: Record<string, any>, registry: any = undefined): Promise<Record<string, any>> {
   const pf: any = await SES.runPreflight(preset, cfg, S.fakeMode, registry !== undefined ? registry : await SES.fetchRegistry(), C.CDP_PORT);
   await enrichGtowRow(pf);
+  await addLoadRow(pf, cfg);
   if (cfg.site === CP_SITE || cfg.site === CGG_SITE) {
     pf.checks = [...pf.checks, ...(cfg.site === CP_SITE ? CP.preflight(cfg.cpTable ?? null) : CGG.preflight(cfg.cggTable ?? null))];
     const blockers = pf.checks.filter((c: any) => c.required && !c.ok);
@@ -648,6 +663,7 @@ export async function sessionChecks(): Promise<Record<string, any>> {
   }
   const pf: any = await SES.runPreflight(preset, cfg, S.fakeMode, registry, C.CDP_PORT);
   await enrichGtowRow(pf);
+  await addLoadRow(pf, cfg);
   const cdpUp = await cdp.available(C.CDP_PORT);
   const tgt = cdpUp ? await seams.ignitionTarget() : null;
   const table = {
@@ -1825,8 +1841,9 @@ export async function healthCheck(): Promise<any[]> {
 export async function healthLoop(): Promise<void> {
   for (;;) {
     try {
-      const issues = await healthCheck();
-      Object.assign(S.health, { issues, at: time() });
+      // the machine load rides along (load.ts): the panel's header chip; a failed read = null = no chip
+      const [issues, load] = await Promise.all([healthCheck(), loadDeps.fetchLoad().catch(() => null)]);
+      Object.assign(S.health, { issues, at: time(), load, loadAt: time() });
     } catch (e: any) {
       log(`[health] check failed: ${e?.message ?? e}`);
     }

@@ -293,6 +293,9 @@ function startApiStub(): string {
           return Response.json({ ok: true, tokenLive: g.tokenLive, multiwayLive: g.multiwayLive, expiresInMs: g.expiresInMs });
         }
         case "/api/dashboard/gtow-status": return Response.json(API_STUB.gtowStatus);
+        // the machine load (2026-10-07, load.ts): a quiet machine — the health loop's chip stays off
+        case "/api/load": return Response.json({ ok: true, at: Date.now(), verdict: "ok", reasons: [],
+          loop: { stalls1m: 0, stalls5m: 0, maxMs5m: 0, blockedMs5m: 0, lastStallAt: null }, machine: { cpuPct: null, heavy: [] }, sessionLive: false });
       }
       apiUnstubbed.add(`${r.method} ${path}`);
       return Response.json({ ok: false, error: "not in the contract suite's study API stub" }, { status: 404 });
