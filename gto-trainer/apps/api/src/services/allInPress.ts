@@ -171,7 +171,7 @@ export function shortAllInPress(a: {
     `${outside.length === 1 ? "is" : "are"} outside the tree and deeper — a shove at the table would be ${fmt(heroAllIn)}, ` +
     `which the tree never priced` +
     (legal ? "" : `; the table's smallest ${verb} is to ${fmt(minRaiseTo)} (level ${fmt(money.level)}), so ${fmt(tree.to)} cannot be played there`) +
-    (disagree ? `; the blended trees disagree (${carried.map((t) => `${t.plan ?? "tree"} ${fmt(t.to)}`).join(", ")}) — the smallest is pressed` : "");
+    (disagree ? `; the blended trees disagree (${carried.map((t) => `${t.plan ?? "tree"} ${fmt(t.to)}`).join(", ")}) — the smallest ${legal ? "is pressed" : "is the one judged"}` : "");
   const share = (label: string) => {
     const f = Number(a.actions.find((x) => x.action === label)?.frequency);
     return Number.isFinite(f) ? r2(f) : undefined;

@@ -104,6 +104,7 @@ describe("shortAllInPress — brief_I-004", () => {
     expect(e.why).toContain("CO (97.5) and BTN (97.5) are outside the tree and deeper");
     expect(e.why).toContain("the table's smallest raise is to 30 (level 15), so 22 cannot be played there");
     expect(e.why).not.toContain("lifted");
+    expect(e.why).toContain("the blended trees disagree (ghost:CO + ghost:BTN 22, ghost:UTG + ghost:BTN 97.5, ghost:UTG + ghost:CO 97.5) — the smallest is the one judged");
     expect(pressForPick(p, "ALLIN 22")).toBeNull();          // nothing to press: the wrapper never sees it as a pick
   });
   test("the drop: out of the mix, the rest re-spread to the mix's sum, the share recorded in the note", () => {
