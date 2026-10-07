@@ -39,15 +39,10 @@ function split(mix: MixAction[]): { fold: number; passive: number; aggr: number 
   return sum > 0 ? { fold: fold / sum, passive: passive / sum, aggr: aggr / sum } : null;
 }
 
-/**
- * Hero's mix over several fits of one line, each given as its own actions for hero's combo (labels "Fold", "Call",
- * "Check", "Raise 7", "All-in"; frequencies in any one scale). Returns PERCENT, in the order fold, passive, raises.
- * The raise sizes are the least-raising fit's own, in its proportions. One usable fit comes back as it is (in
- * percent); none → an empty list.
- */
-export function blendFitMixes(mixes: MixAction[][]): MixAction[] {
-  const parts = mixes.map((m) => ({ m, s: split(m) })).filter((x): x is { m: MixAction[]; s: NonNullable<ReturnType<typeof split>> } => !!x.s);
-  if (!parts.length) return [];
+/** The blend itself, shared by the answer (blendFitMixes) and the range (blendTaken) so the two cannot drift. */
+function blendCore<M extends MixAction>(mixes: M[][]) {
+  const parts = mixes.map((m) => ({ m, s: split(m) })).filter((x): x is { m: M[]; s: NonNullable<ReturnType<typeof split>> } => !!x.s);
+  if (!parts.length) return null;
   const passiveLabel = parts.map((p) => p.m.find((a) => kindOf(a.action) === "passive")?.action).find(Boolean) ?? null;
   // a node that offers hero no call or check (fold or raise only) has no passive action to absorb the rest:
   // blendStrategies then renormalises fold and raise, as it does for a postflop menu without one
@@ -56,11 +51,49 @@ export function blendFitMixes(mixes: MixAction[][]): MixAction[] {
   const fold = blended[0] ?? 0, passive = passiveLabel ? blended[1] ?? 0 : 0, aggr = blended[passiveLabel ? 2 : 1] ?? 0;
   // the raise sizes of the fit that raises least (the one the blend's aggression IS), in its own proportions
   const least = parts.reduce((b, p) => (p.s.aggr < b.s.aggr ? p : b));
-  const raises = least.m.filter((a) => kindOf(a.action) === "aggr" && a.frequency > 0);
+  const hasFold = parts.some((p) => p.m.some((a) => kindOf(a.action) === "fold"));
+  return { fold, passive, aggr, passiveLabel, hasFold, sizes: least.m };
+}
+
+/**
+ * Hero's mix over several fits of one line, each given as its own actions for hero's combo (labels "Fold", "Call",
+ * "Check", "Raise 7", "All-in"; frequencies in any one scale). Returns PERCENT, in the order fold, passive, raises.
+ * The raise sizes are the least-raising fit's own, in its proportions. One usable fit comes back as it is (in
+ * percent); none → an empty list.
+ */
+export function blendFitMixes(mixes: MixAction[][]): MixAction[] {
+  const b = blendCore(mixes);
+  if (!b) return [];
+  const raises = b.sizes.filter((a) => kindOf(a.action) === "aggr" && a.frequency > 0);
   const raiseSum = raises.reduce((s, a) => s + a.frequency, 0);
   const out: MixAction[] = [];
-  if (parts.some((p) => p.m.some((a) => kindOf(a.action) === "fold"))) out.push({ action: "Fold", frequency: fold * 100 });
-  if (passiveLabel) out.push({ action: passiveLabel, frequency: passive * 100 });
-  if (raiseSum > 0) for (const a of raises) out.push({ action: a.action, frequency: (aggr * 100 * a.frequency) / raiseSum });
+  if (b.hasFold) out.push({ action: "Fold", frequency: b.fold * 100 });
+  if (b.passiveLabel) out.push({ action: b.passiveLabel, frequency: b.passive * 100 });
+  if (raiseSum > 0) for (const a of raises) out.push({ action: a.action, frequency: (b.aggr * 100 * a.frequency) / raiseSum });
   return out;
+}
+
+/**
+ * THE RANGE SIDE OF THE SAME BLEND (2026-10-04 on claude/tight-fit-2, re-ported 2026-10-07): how often hero takes the
+ * action he TOOK, for one hand, over the fits his decision was read on — each fit's actions for that hand, the taken
+ * one(s) marked (a raise: the size he made, as that fit's menu names it). A fraction 0-1: the blended fold, the blended
+ * passive action, or the blended aggression times the taken size's share of the least raising fit's raises (the sizes
+ * blendFitMixes answers with). Multiplied into hero's range, it leaves exactly the hands the blended answer continues
+ * with, at the weight it continues them. A fit that gives the hand no weight is left out, as in the answer.
+ */
+export function blendTaken(fits: (MixAction & { taken?: boolean })[][]): number {
+  const b = blendCore(fits);
+  if (!b) return 0;
+  const taken = fits.flatMap((f) => f.filter((a) => a.taken))[0];
+  if (!taken) return 0;
+  const k = kindOf(taken.action);
+  if (k === "fold") return b.fold;
+  if (k === "passive") return b.passive;
+  let sum = 0, mine = 0;
+  for (const a of b.sizes) {
+    if (kindOf(a.action) !== "aggr" || !(a.frequency > 0)) continue;
+    sum += a.frequency;
+    if (a.taken) mine += a.frequency;
+  }
+  return sum > 0 ? (b.aggr * mine) / sum : 0;
 }

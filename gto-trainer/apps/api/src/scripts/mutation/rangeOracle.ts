@@ -56,7 +56,9 @@ export function explainsSeat(note: string, seat: string, isHero: boolean): boole
   // a different chart, or every range read on the pin's fitted line ("these ranges are read on that line"): all seats
   if (/tree in the set|these ranges are read on that line/i.test(note)) return true;
   if (new RegExp(`${P} with [A-Z+]+ folded|${P}: |${P}'s call at "[^"]*" is not in the tree`).test(note)) return true;
-  if (isHero && /hero's decision was read on a line fitted|CALLER CAP|LINE KEPT|CHART KEPT|OFF THE CHART/.test(note)) return true;
+  // HERO'S OWN RANGE IS THE ANSWER'S (gtowAiPreflop.heroRangeAsAnswered, 2026-10-07): on a fitted GTO Wizard AI line
+  // hero's flop range is the blend of the fits his answer was read on — the output of no single walk, hero only
+  if (isHero && /hero's decision was read on a line fitted|CALLER CAP|LINE KEPT|CHART KEPT|OFF THE CHART|HERO'S OWN RANGE IS THE ANSWER'S/.test(note)) return true;
   return false;
 }
 
@@ -180,6 +182,10 @@ export async function layer1(o: {
     const P = pos.toUpperCase();
     let mine = Object.entries(o.dry.ranges).find(([p]) => p.toUpperCase() === P)?.[1];
     if (!mine) continue;
+    // HERO'S OWN RANGE IS THE ANSWER'S (gtowAiPreflop.heroRangeAsAnswered, 2026-10-07): hero's range on a fitted GTO
+    // Wizard AI line is the blend of the fits his preflop answer was read on — the output of no single walk, and of no
+    // chart (the AI tree's nodes are not readable offline): its provenance is the note, layer 2 excuses the seat
+    if (P === hero && /HERO'S OWN RANGE IS THE ANSWER'S: /.test(o.note)) continue;
     // a pool floor the note names for this seat: the input is that pool range, and the walk is judged on what it replaced
     const floor = floors.get(P);
     if (floor) {

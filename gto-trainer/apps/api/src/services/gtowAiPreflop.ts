@@ -51,9 +51,9 @@ import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedActi
 import { rakeCapCents } from "./profiles";
 import { isTestStakeOf } from "./strategies";
 import { actorsWithAllins, foldEarliestCaller, foldableCallers, foldSeatsOut } from "../utils/fitLine/fitLine";
-import { blendFitMixes, type MixAction } from "../utils/fitBlend/fitBlend";
+import { blendFitMixes, blendTaken, type MixAction } from "../utils/fitBlend/fitBlend";
 import { isOffTree, offTreeStats, pctOf } from "./offTree";
-import { setPreflopPin, recordPreflopNode, pinRest, preflopPinKey, preflopNodeFor, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, recordPreflopNode, pinRest, preflopPinKey, preflopNodeFor, preflopNodesFor, preflopPinFor, type AiPreflopPin, type ResumeOutcome } from "./preflopPin";
 // THE REDUCED TREE (2026-10-01, utils/reducedArrival): flop-entering ranges for a line no tree holds
 import {
   cameInLimping, classesToCombos, combosToClasses, normalised, normalisedCombos, planReducedArrival, type ReducedCaller,
@@ -221,6 +221,12 @@ export const heroSelfLockOn = (): boolean => String(process.env.HERO_SELF_LOCK ?
 export const HERO_OFF_TREE_TAG = "HERO OFF HIS OWN TREE:";
 export const HERO_SELF_LOCK_TAG = "HERO SELF-LOCK:";
 export const HERO_OFF_ANSWER_TAG = "HERO OFF-ANSWER:";
+/**
+ * HERO_RANGE_AS_ANSWERED, read at every decision (services/approximations entry hero-range-as-answered, 2026-10-07):
+ * on (unset) = on a line GTO Wizard's preflop tree cannot hold, hero's flop-entering range is the blend of fits his
+ * preflop answer was read on (heroWeightsAsAnswered); off = read on ONE fit like every other seat (the rule before).
+ */
+export const heroRangeAsAnsweredOn = (): boolean => String(process.env.HERO_RANGE_AS_ANSWERED ?? "on").trim().toLowerCase() !== "off";
 
 /** One node of hero's line as read: its line, whether hero is on the clock there, and its action_solutions. */
 export interface LineNodeRead { line: string; isHero: boolean; sols: any[] }
@@ -1247,7 +1253,7 @@ async function fitAiLine(solId: string, tokens: string[], shape: AiPreflopShape,
 }
 
 /** A fit of a line: the tree's own codes for it, the sizes it renamed, the seats folded out, the tokens walked. */
-type AiFit = { line: string; changed: string[]; folds: string[]; tokens: string[] };
+export type AiFit = { line: string; changed: string[]; folds: string[]; tokens: string[] };
 /** at most this many fits are walked per fold count (each is node reads on the solved tree) */
 const MAX_FITS = 6;
 
@@ -1302,6 +1308,114 @@ async function villainLinesOf(solId: string, codes: string[], shape: AiPreflopSh
     weights.set(actor, range.map((w, i) => w * (f[i] ?? 0)));
   }
   return out;
+}
+
+/** One fit with hero's node read on it, and its villains' actions scored against the tree's own play. */
+export type AiFitNode = { fit: AiFit; n: { data: any; cached?: boolean; stored?: boolean }; lines: PreflopVillainLine[]; offPath: boolean };
+
+/**
+ * THE FITS HERO'S NODE IS READ ON — one rule for the answer and for hero's flop range (2026-10-04 on claude/tight-fit-2,
+ * re-ported 2026-10-07). Every fit the tree holds (fitAiLines), hero's node read on each, the ones that put another seat
+ * on the clock dropped, each villain action scored (villainLinesOf). A fit whose villains' actions the tree all but never
+ * takes is left out when another is on its path: an on-path fit is never blended with an off-path one; all off-path =
+ * all read, and check #3 says so. (Lifted out of solvePreflopGtowAi unchanged, so the range cannot drift from the answer.)
+ */
+export async function readFitNodes(solId: string, tokens: string[], shape: AiPreflopShape): Promise<AiFitNode[]> {
+  const fits = await fitAiLines(solId, tokens, shape);
+  const reads = (await Promise.all(fits.map(async (fit): Promise<AiFitNode | null> => {
+    const n = await fetchNode(solId, fit.line);
+    if ("error" in n) return null;
+    const toAct = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+    if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) return null;
+    const lines = await villainLinesOf(solId, fit.line ? fit.line.split("-") : [], shape);
+    return { fit, n, lines, offPath: lines.some((l) => l.offTree) };
+  }))).filter((x): x is AiFitNode => !!x);
+  return reads.some((r) => !r.offPath) ? reads.filter((r) => !r.offPath) : reads;
+}
+
+/** The actions of a node hero's token takes, exactly as walkArrivalRanges conditions hero's range on them (a fold, a
+ *  call, a check: every such code; a raise: the codes within 0.06bb of his size, else the nearest raise, else the
+ *  all-in). Empty: the node does not offer it. */
+function heroTakenAt(tok: string, sols: any[]): any[] {
+  if (tok === "F") return sols.filter((a) => /^F/i.test(String(a.action?.code ?? "")));
+  if (tok === "C") return sols.filter((a) => /^C/i.test(String(a.action?.code ?? "")));
+  if (tok === "X") return sols.filter((a) => /^X/i.test(String(a.action?.code ?? "")));
+  const want = codeNum(tok);
+  const exact = sols.filter((a) => isRaiseCode(a) && Math.abs(codeNum(a.action.code) - want) <= 0.06);
+  const near = matchToken(tok, sols);
+  const nearest = near ? sols.filter((a) => String(a.action?.code ?? "") === near.code) : [];
+  const chosen = exact.length ? exact : nearest;
+  return chosen.length ? chosen : sols.filter((a) => a.action?.allin === true);
+}
+
+/** What heroWeightsAsAnswered read: hero's 1,326 weights, the most fits one decision of his was blended over (0: every
+ *  decision read on one node), and each decision's reading (its line, the fits' folded seats). */
+export interface HeroAsAnswered { weights: number[]; blended: number; reads: { at: string; token: string; fits: string[][] }[] }
+
+/**
+ * HERO'S RANGE IS THE RANGE HE WAS ANSWERED WITH (2026-10-04 on claude/tight-fit-2, hand 4922379136; re-ported
+ * 2026-10-07, live hand 4922577588). On a line the tree cannot hold, hero's answer is the blend of every fit
+ * (solvePreflopGtowAi: fold at the most folding fit's frequency, raise at the least raising one's) — and his
+ * flop-entering range was read on ONE fit (the earliest other caller folded), so it held hands the answer had folded
+ * and lacked hands it called (4922577588, BB 66 vs CO open + BTN + SB calls: the flop range was the BTN-folded fit's,
+ * which 3-bets 77/88/AJo/ATs the blend calls, and calls 73s/J2s/A8o the blend folds — 105 combos apart). Here every
+ * decision hero made on the line is read the way the answer reads it — the node itself where the tree holds the line
+ * up to it, else the same fits (readFitNodes) — and his range is multiplied, combo by combo, by the blended frequency
+ * of the action he TOOK (fitBlend.blendTaken, the answer's own blend). A decision read on ONE node (the line itself, or
+ * the only fit) takes that node's frequency exactly as walkArrivalRanges does. Null when a decision of his cannot be
+ * read: the caller keeps the single fit.
+ */
+export async function heroWeightsAsAnswered(solId: string, tokens: string[], shape: AiPreflopShape): Promise<HeroAsAnswered | null> {
+  const hero = shape.heroApiPos;
+  if (!hero) return null;
+  const who = actorsWithAllins(tokens, shape.stacks, shape.positions);
+  const w = new Array<number>(1326).fill(1);
+  let blended = 0;
+  const reads: HeroAsAnswered["reads"] = [];
+  for (let k = 0; k < tokens.length; k++) {
+    if (who[k] !== hero) continue;
+    const tok = tokens[k]!;
+    if (tok === "F") return null;
+    const prefix = tokens.slice(0, k);
+    const direct = await repairLine(solId, prefix, { end: true });
+    let nodes: any[];
+    let fits: string[][] = [];
+    if (!("error" in direct)) {
+      const node = await fetchNode(solId, direct.line);
+      if ("error" in node) return null;
+      nodes = [node.data];
+    } else if (/is not offered/.test(direct.error)) {
+      const use = await readFitNodes(solId, prefix, shape);
+      nodes = use.map((r) => r.n.data);
+      fits = use.map((r) => r.fit.folds);
+    } else return null;
+    if (!nodes.length) return null;
+    // each node's actions, the ones hero's token takes marked (walkArrivalRanges' own choice: heroTakenAt)
+    const menus = nodes.map((data) => {
+      if ((data?.game?.players?.find((p: any) => p.is_hero)?.position ?? hero) !== hero) return null;
+      const sols: any[] = data?.action_solutions ?? [];
+      const taken = new Set(heroTakenAt(tok, sols));
+      return taken.size ? sols.map((a) => ({ label: labelOf(a.action), strategy: (a.strategy ?? []) as number[], taken: taken.has(a) })) : null;
+    }).filter((m): m is NonNullable<typeof m> => !!m);
+    if (menus.length !== nodes.length) return null;
+    reads.push({ at: prefix.join("-"), token: tok, fits });
+    if (menus.length === 1) {
+      // one node: its own frequency, as the per-seat walk reads it (no blend, no renormalising)
+      const m = menus[0]!;
+      for (let i = 0; i < 1326; i++) {
+        let f = 0;
+        for (const a of m) if (a.taken) f += Number(a.strategy[i] ?? 0);
+        w[i] = w[i]! * Math.min(1, f);
+      }
+      continue;
+    }
+    blended = Math.max(blended, menus.length);
+    for (let i = 0; i < 1326; i++) {
+      if (!(w[i]! > 0)) continue;
+      w[i] = w[i]! * Math.min(1, blendTaken(menus.map((m) => m.map((a) => ({ action: a.label, frequency: Number(a.strategy[i] ?? 0), taken: a.taken })))));
+    }
+  }
+  return { weights: w, blended, reads };
 }
 
 function labelOf(action: any): string {
@@ -1444,18 +1558,10 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     // at the least raising one's). A fit whose villains' actions the tree all but never takes is left out when another
     // is on its path. No second tree, no second solve.
     if ("error" in fixed && /is not offered/.test(fixed.error)) {
-      const fits = await fitAiLines(sol.solId, tokens, shape);
-      const reads = (await Promise.all(fits.map(async (fit) => {
-        const n = await fetchNode(sol.solId, fit.line);
-        if ("error" in n) return null;
-        const toAct = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
-        if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) return null;
-        const lines = await villainLinesOf(sol.solId, fit.line ? fit.line.split("-") : [], shape);
-        return { fit, n, lines, offPath: lines.some((l) => l.offTree) };
-      }))).filter((x): x is NonNullable<typeof x> => !!x);
-      if (reads.length) {
-        // an on-path fit is never blended with an off-path one; all off-path = all read, and check #3 says so
-        const use = reads.some((r) => !r.offPath) ? reads.filter((r) => !r.offPath) : reads;
+      // (readFitNodes: an on-path fit is never blended with an off-path one; all off-path = all read, and check #3 says
+      // so — the one rule hero's flop range is read by too, heroWeightsAsAnswered)
+      const use = await readFitNodes(sol.solId, tokens, shape);
+      if (use.length) {
         // the fit hero's mix leans on most leads (the pin and the hand page show its node): the most folding one,
         // then the one that folds the LATER caller — it keeps the cold-caller, whose range constrains hero most
         const foldAt = (r: (typeof use)[number]) => mixAt(r.n.data).find((a) => /^fold/i.test(a.action))?.frequency ?? 0;
@@ -1551,6 +1657,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       piece: "gtow-ai-preflop", handKey, solId: ansSol, shape, codes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(ansSol),
       id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
       heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: hand.actions.length, at: Date.now(),
+      ...(selfLock ? { heroSelfLock: selfLock.line } : {}),
     } satisfies AiPreflopPin, hand.heroCards.join(""));
   }
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
@@ -2593,14 +2700,93 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
     if (!rec) return viaReduced(first.reason);
     ranges[key] = rec;
   }
+  // HERO'S OWN RANGE IS THE ONE HE WAS ANSWERED WITH (heroWeightsAsAnswered, 2026-10-07): the seat-by-seat fit above
+  // reads hero on the earliest-caller fit; his preflop answer was read on every fit and blended — his range follows it
+  const heroNote = heroRangeAsAnsweredOn() && shape.heroApiPos && live.includes(shape.heroApiPos)
+    ? await heroRangeAsAnswered(hand, sol.solId, tokens, shape, ranges, handPosOf[shape.heroApiPos] ?? shape.heroApiPos).catch((e) => {
+        console.log(`[hero-range-as-answered] hand ${hand.clientHandId ?? hand.handId ?? "?"}: threw (${e instanceof Error ? e.message : e}) — the single fit kept`);
+        return null;
+      })
+    : null;
   const id = `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`;
   return {
     ok: true, piece: "gtow-ai-preflop", id, ranges, tokens, seatOrder: shape.positions,
     note: `flop-entering ranges walked from the GTO Wizard AI preflop tree. LINE FITTED FOR THE RANGES: the tree holds ` +
       `one limper, so each seat's range was read from a line that keeps its own actions and folds the earliest other ` +
-      `limper or caller (${[...folded].join(", ")} folded in some of them).`,
+      `limper or caller (${[...folded].join(", ")} folded in some of them).` + (heroNote ? ` ${heroNote}` : ""),
     fitted: { folded: [...folded].map((p) => handPosOf[p] ?? p) },
   };
+}
+
+const classCount = (rec: Record<string, number>): number => Object.entries(rec).reduce((s, [c, w]) => s + (w > 0 ? w * (CLASS_COMBOS[c] ?? 0) : 0), 0);
+const sameClassRange = (a: Record<string, number>, b: Record<string, number>): boolean => {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) if (Math.abs((a[k] ?? 0) - (b[k] ?? 0)) > 1e-9) return false;
+  return true;
+};
+
+/**
+ * Why hero's answers on this hand were NOT read on the plain tree's fits (so the blend there is not what he was
+ * answered with), from the hand's kept preflop records and its pin: a HERO SELF-LOCK (his answer read on the locked
+ * child), a pool-locked tree, a last-resort / reduced tree, or the 6-max chart. Null: every answer of his was the plain
+ * AI tree's.
+ */
+function heroNotOnPlainTree(hand: ParsedHand): string | null {
+  const recs: any[] = [...preflopNodesFor(hand)];
+  const pin = preflopPinFor(hand);
+  if (pin) recs.push(pin);
+  if (recs.some((r) => r.piece === "gtow-ai-preflop" && r.heroSelfLock != null)) {
+    const at = recs.find((r) => r.heroSelfLock != null)?.heroSelfLock;
+    return `his preflop answer was read on a tree where his own action at "${at || "root"}" was node-locked (hero self-lock), not on this tree's fits`;
+  }
+  if (recs.some((r) => r.piece === "gtow-ai-preflop" && (r.poolLocks?.length || r.reduced || r.lastResort))) {
+    return "his preflop answer was read on a locked or reduced tree, not on this tree's fits";
+  }
+  if (pin?.piece === "chart6max") return "his last preflop decision was answered by the 6-max chart, not by this tree";
+  return null;
+}
+
+/**
+ * Hero's flop-entering range replaced, in `ranges`, by the range he was answered with (heroWeightsAsAnswered) — or kept
+ * as the single fit read it, and why. Returns the note to add (null: nothing to say — the same range, or no read).
+ * A range identical to the single fit's is left exactly as it was (a line with one fit, the one the other seats use).
+ */
+async function heroRangeAsAnswered(hand: ParsedHand, solId: string, tokens: string[], shape: AiPreflopShape,
+    ranges: Record<string, Record<string, number>>, heroKey: string): Promise<string | null> {
+  const old = ranges[heroKey];
+  if (!old) return null;
+  const notPlain = heroNotOnPlainTree(hand);
+  if (notPlain) {
+    console.log(`[hero-range-as-answered] hand ${hand.clientHandId ?? hand.handId ?? "?"}: single fit kept — ${notPlain}`);
+    return `Hero's own range is read on one fit like the others: ${notPlain}.`;
+  }
+  const mine = await heroWeightsAsAnswered(solId, tokens, shape);
+  if (!mine) return null;
+  const rec = classRangeOfWeights(mine.weights);
+  if (!Object.keys(rec).length || sameClassRange(rec, old)) return null;
+  // his own hand left out by the blend: the answer gave it 0% of what he did (a manual deviation, a lock the records
+  // missed) — the blend cannot be "his answered range" then; the single fit stays
+  const cls = heroClass(hand.heroCards);
+  if (cls && !(rec[cls]! > 0) && old[cls]! > 0) {
+    console.log(`[hero-range-as-answered] hand ${hand.clientHandId ?? hand.handId ?? "?"}: single fit kept — his ${cls} reads 0 on the blend`);
+    return `Hero's own range is read on one fit like the others: his ${cls} reads 0 on the blend of the fits his answer was read on (he took an action his answer gave it 0%).`;
+  }
+  ranges[heroKey] = rec;
+  const was = classCount(old), now = classCount(rec);
+  const blendAt = mine.reads.find((r) => r.fits.length > 1);
+  const pos = (f: string[]) => f.map((s) => Object.entries(shape.apiOf).find(([, api]) => api === s)?.[0] ?? s).join(" and ");
+  console.log(`[hero-range-as-answered] hand ${hand.clientHandId ?? hand.handId ?? "?"}: hero ${heroKey} ${was.toFixed(1)} -> ${now.toFixed(1)} combos (${mine.blended > 1 ? `blend of ${mine.blended} fits` : "his answer's own node"})`);
+  return `HERO'S OWN RANGE IS THE ANSWER'S: ` + (blendAt
+    ? `his decision at "${blendAt.at || "root"}" was read on ${blendAt.fits.length} fits (${blendAt.fits.map((f) => `${pos(f)} folded`).join(" · ")}) and blended to the tightest (fold at the most folding fit's frequency, raise at the least raising one's), and his range is that same blend for the action he took`
+    : `his decisions are read at the nodes his answer was read on (${mine.reads.map((r) => r.fits.length ? `"${r.at || "root"}" with ${pos(r.fits[0]!)} folded` : `"${r.at || "root"}" as played`).join(", ")})`) +
+    ` — not the earliest-caller fit the other seats are read on (${was.toFixed(1)} → ${now.toFixed(1)} combos).`;
+}
+
+/** class → the fraction of the WHOLE class in a 1,326-combo range (walkArrivalRanges' convention) */
+function classRangeOfWeights(weights: number[]): Record<string, number> {
+  const rec: Record<string, number> = {};
+  for (const [cls, v] of Object.entries(toClassWeights(weights))) if (v.weight > 0) rec[cls] = Math.min(1, v.weight / (CLASS_COMBOS[cls] ?? v.combos));
+  return rec;
 }
 
 /** What the reduced tree reads from the exact tree (ctx of reducedArrivalRanges). */

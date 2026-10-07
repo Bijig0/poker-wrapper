@@ -90,6 +90,10 @@ export interface AiPreflopPin extends PinBase {
   /** a POOL-LOCKED tree (gtowAiPreflop.solvePreflopPoolLocked): the limper whose limp it locked to the pool's range —
    *  the flop walks his range off this tree, so the pool limp floor leaves him as walked (services/poolLimpFloor) */
   poolLocks?: { pos: string; key: string }[];
+  /** a HERO SELF-LOCKED tree (gtowAiPreflop.heroSelfLock, 2026-10-07): the line of hero's own node that was locked —
+   *  his answer was read on that locked child, so the flop's fitted read of his range (heroWeightsAsAnswered, which
+   *  reads the plain tree) is not what he was answered with and keeps the single fit */
+  heroSelfLock?: string;
 }
 export type PreflopPin = ChartPreflopPin | AiPreflopPin;
 

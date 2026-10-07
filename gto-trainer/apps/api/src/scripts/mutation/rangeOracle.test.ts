@@ -66,6 +66,12 @@ describe("layer 1 — invariants", () => {
     const f = await layer1({ ...base, dry: dry({ HJ, CO: { QQ: 1 } }), walks: [goodWalk()], get });
     expect(f.map((x) => x.kind)).toContain("range-provenance");
   });
+  test("hero's range the note says is his answer's blend (HERO'S OWN RANGE IS THE ANSWER'S) is no single walk's: not a provenance finding — for hero only", async () => {
+    const note = "flop-entering ranges walked from the GTO Wizard AI preflop tree. LINE FITTED FOR THE RANGES: … HERO'S OWN RANGE IS THE ANSWER'S: his decision at \"F-R2.5\" was read on 2 fits";
+    expect(await layer1({ ...base, note, dry: dry({ HJ, CO: { QQ: 1 } }), walks: [goodWalk()], get })).toEqual([]);
+    const f = await layer1({ ...base, note, dry: dry({ HJ: { QQ: 1 }, CO }), walks: [goodWalk()], get });
+    expect(f.map((x) => x.kind)).toContain("range-provenance");
+  });
   test("a walk whose weights the chart's own frequencies do not give", async () => {
     const bad = { QQ: 1, AKo: 0.5 };
     const w = goodWalk(); w.steps[2] = step("F-R2.5", "CO", "C", "Call", null, bad); w.result = { ok: true, ranges: { HJ, CO: bad } };
@@ -127,6 +133,8 @@ describe("explainsSeat", () => {
     expect(explainsSeat("CHART KEPT: …", "BB", false)).toBe(false);
     expect(explainsSeat("no ign200_6max_D100_o3 tree in the set — ranges from ign200_6max_D100_o2_5", "CO", false)).toBe(true);
     expect(explainsSeat("hero's decision was read on a line fitted to the tree (CO's call folded out), and these ranges are read on that line", "HJ", false)).toBe(true);
+    expect(explainsSeat("LINE FITTED FOR THE RANGES: … HERO'S OWN RANGE IS THE ANSWER'S: his decision …", "BB", true)).toBe(true);
+    expect(explainsSeat("LINE FITTED FOR THE RANGES: … HERO'S OWN RANGE IS THE ANSWER'S: his decision …", "SB", false)).toBe(false);
   });
 });
 
