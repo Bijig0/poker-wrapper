@@ -9,7 +9,8 @@
  *    "ALL-IN <stack> BB" (frames 2038 → 2039) — `relabelAfterReads` holds that back for N strip reads (the client
  *    re-renders on its next frame), `presetTakes: false` never shows it;
  *  - typing into the bet field relabels the confirm "RAISE TO n BB" / "BET n BB", or "ALL-IN <stack> BB" at the stack;
- *    `clampTyped` caps a size above the stack at the stack, `fieldIgnoresTyping` keeps the default (hand 4920431586);
+ *    `clampTyped` caps a size above the stack at the stack, `fieldIgnoresTyping` keeps the default (hand 4920431586),
+ *    `minTyped` lifts a size under the client's minimum raise to it (the client's min clamp — "client changed … (min/max clamp)");
  *  - a turn control (fold / check / call / raise / bet) ends the turn: the strip goes;
  *  - "+45s" changes nothing on screen (every recorded press).
  */
@@ -120,6 +121,7 @@ export class FakeIgnition {
   private relabelAt: number | null = null;
   constructor(private spec: typeof RIVER_FACING_BET, private o: {
     stack: number; field?: string; relabelAfterReads?: number; presetTakes?: boolean; clampTyped?: boolean; fieldIgnoresTyping?: boolean;
+    minTyped?: number;
   }) {
     this.buttons = spec.buttons.map((b) => ({ ...b }));
     this.field = o.field ?? "2.0";
@@ -158,7 +160,8 @@ export class FakeIgnition {
   private type(text: string): void {
     if (this.o.fieldIgnoresTyping) return;
     const v = Number(text);
-    this.field = this.o.clampTyped && v > this.o.stack ? String(this.o.stack) : text;
+    this.field = this.o.clampTyped && v > this.o.stack ? String(this.o.stack)
+      : this.o.minTyped != null && v < this.o.minTyped ? String(this.o.minTyped) : text;
     const c = this.confirm();
     if (!c) return;
     const shown = Number(this.field);

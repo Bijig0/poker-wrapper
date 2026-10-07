@@ -43,7 +43,7 @@
  * refusal corrects it.
  */
 
-import { asActivity, timed } from "./answerTrace";
+import { asActivity, currentStepper, step, timed } from "./answerTrace";
 import { loadAccounts, WALL_MS, type GtowTier } from "./gtowAccounts";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
@@ -374,6 +374,8 @@ class GtowSessions {
     }
     const page = targets.find((t) => t.type === "page" && /gtowizard/i.test(t.url ?? ""));
     if (!page?.webSocketDebuggerUrl) return null;
+    // the keeper tick's step timer (services/answerTrace): every CDP frame is parsed on the loop, timed as one step
+    const stepIn = currentStepper();
 
     return new Promise<string | null>((resolve) => {
       const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -418,7 +420,7 @@ class GtowSessions {
       };
       ws.onmessage = (ev) => {
         let m: any;
-        try { m = JSON.parse(String(ev.data)); } catch { return; }
+        try { m = stepIn("cdp frame parse", () => JSON.parse(String(ev.data))); } catch { return; }
         if (m.method === "Network.requestWillBeSent") {
           const h = m.params?.request?.headers ?? {};
           const auth: string | undefined = h.Authorization ?? h.authorization;
@@ -556,7 +558,8 @@ class GtowSessions {
   }
 
   private async refreshAll(): Promise<void> {
-    await Promise.all(this.all().map((s) => this.refreshIfExpiring(s)));
+    // the synchronous part of each session's check (until its first await) is a step of the keeper tick
+    await Promise.all(this.all().map((s) => step(`session ${s.cfg.id}`, () => this.refreshIfExpiring(s))));
   }
 
   private async refreshIfExpiring(s: SessionState): Promise<void> {

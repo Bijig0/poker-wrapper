@@ -49,6 +49,8 @@ export const Body = {
     solveId: anyVal.optional(), clientHandId: anyVal.optional(),
     band: anyVal.optional(), strategy: anyVal.optional(), source: anyVal.optional(), tier: anyVal.optional(),
     chart: anyVal.optional(), exploitPick: anyVal.optional(), chartPick: anyVal.optional(),
+    // THE SHORT ALL-IN PRESS (2026-10-07, the API's services/allInPress): [{action, kind: "raise-to", amount, verb, why, …}]
+    press: anyVal.optional(),
   }),
   room: obj({ room: anyVal.optional(), preset: anyVal.optional() }),
   adminPanel: obj({ port: anyVal.optional(), action: anyVal.optional(), room: anyVal.optional() }),

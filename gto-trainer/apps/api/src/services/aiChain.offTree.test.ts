@@ -1,6 +1,6 @@
 /**
  * THE SOFT RANGE THROUGH THE WALK (services/offTree, OPTION 3, 2026-10-06): an off-tree villain bet on the flop, hero
- * calls, and the TURN tree is asked with villain's soft range — range x exp(-dEV / (0.10 x pot)) — not the QRE sliver;
+ * calls, and the TURN tree is asked with villain's soft range — range x exp(-dEV / (0.20 x pot)) — not the QRE sliver;
  * OFFTREE_RANGE=log / off keep the sliver; OFFTREE_LOCK=on node-locks a mid-street off-tree action and reads the rest
  * of the street (hero's node) on the locked child.
  */
@@ -67,14 +67,14 @@ const toTurn = {
 };
 
 describe("the soft range after an off-tree villain action", () => {
-  it("soft (the default): the turn tree is asked with range x exp(-dEV / (0.10 x pot)), and the node says what was carried", async () => {
+  it("soft (the default): the turn tree is asked with range x exp(-dEV / (0.20 x pot)), and the node says what was carried", async () => {
     delete process.env.OFFTREE_RANGE;
     const s = script(toTurn); restore = s.restore;
     const r = await solveAiChain({ ...base, streets: [["R5", "C"], ["X"]] });
     expect(r.ok).toBe(true);
     const turnIn = s.trees.find((t) => t.startingStreet === "TURN")!.oopRange as number[];
     expect(turnIn[0]).toBeCloseTo(1, 9);                         // the bet is this hand's best action: kept whole
-    expect(turnIn[100]).toBeCloseTo(Math.exp(-1 / 1), 9);       // gap 1bb, T = 10% of the 10bb pot
+    expect(turnIn[100]).toBeCloseTo(Math.exp(-1 / 2), 9);       // gap 1bb, T = 20% of the 10bb pot
     const flopNode = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!;
     expect(flopNode.offTree?.soft?.applied).toBe(true);
     expect(flopNode.offTree!.soft!.qreCombos).toBeCloseTo(N * 0.001, 6);
@@ -109,7 +109,7 @@ describe("the soft range after an off-tree villain action", () => {
     expect(s.locks).toHaveLength(1);
     expect(s.locks[0].parent).toBe("sol-FLOP");
     expect(s.locks[0].lock.action_history).toEqual(["", ""]);  // preflop, then the flop's line before the bet (root)
-    expect(s.locks[0].lock.strategy[1].strategy[100]).toBeCloseTo(Math.exp(-1), 9);
+    expect(s.locks[0].lock.strategy[1].strategy[100]).toBeCloseTo(Math.exp(-1 / 2), 9);   // gap 1bb, T = 20% of 10bb
     const hero = r.trace!.nodes.find((n) => n.heroNode)!;
     expect(hero.codes).toEqual(["R5"]);
     expect(r.trace!.nodes.find((n) => n.codes.length === 0)!.offTree!.soft!.lock).toEqual({ ok: true, solId: "sol-FLOP-locked" });

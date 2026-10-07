@@ -12,7 +12,7 @@ import { chipsAfter, contestedChips, effectiveStack } from "../utils/tableMoney/
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import {
-  OFF_TREE_DUST, isOffTree, offTreeLock, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
+  OFF_TREE_DUST, isOffTreePostflop, offTreeLock, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
   type OffTreeLine, type OffTreeSoft,
 } from "./offTree";
 import { currentRequestScope } from "./requestScope";
@@ -1521,7 +1521,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // mistake". Flagged and logged (a flag, never a verdict — chainChecks #3); the walk goes on exactly as before.
       if (actor !== heroIdx) {
         const ot = offTreeStats(seats[actor]!.range, sols, ai, { dust: OFF_TREE_DUST });
-        if (isOffTree(ot)) {
+        if (isOffTreePostflop(ot)) {
           nodeRec.offTree = {
             ...ot, street: STREET[k]!.toLowerCase() as OffTreeLine["street"], seat: seats[actor]!.pos, inPosition: actor === seats.length - 1,
             action: String(a.action?.display_name ?? kind).toUpperCase(), code: String(a.action?.code ?? ""),

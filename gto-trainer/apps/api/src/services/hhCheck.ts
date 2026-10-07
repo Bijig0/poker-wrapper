@@ -19,7 +19,7 @@ import { archivedByClientHandId, doneIgnitionHandIdsAfter, doneIgnitionHandsAfte
 import { hhChecksDbPath, openStore } from "./storePaths";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
-import { asActivity } from "./answerTrace";
+import { asActivity, step } from "./answerTrace";
 
 export type CheckStatus = "pending" | "match" | "mismatch" | "unavailable";
 export interface HhCheck {
@@ -132,20 +132,21 @@ export interface CheckerDeps {
 
 /** One attempt at a pending check: fetch, compare, move the state machine on. */
 export async function attempt(prev: HhCheck, deps: Pick<CheckerDeps, "fetchRecord" | "findArchived" | "now">): Promise<HhCheck> {
-  const archived = deps.findArchived(prev.clientHandId);
+  const archived = step("read archived hand", () => deps.findArchived(prev.clientHandId));
   if (!archived) return { ...prev, status: "unavailable", nextAt: null, error: "no longer in the archive" };
   const rec = await deps.fetchRecord(prev.clientHandId);
   if (!rec.ok) return nextCheck(prev, rec, deps.now());
   // villains' hole cards, when the history shows them, onto the hand's off-tree lines (services/offTreeLog)
-  try { offTreeLog.fillShown(prev.clientHandId, parseIgnitionHh(rec.body).seats); } catch { /* a convenience, never the check */ }
-  const { diffs, through } = compareRecord(rec.body, archived);
+  try { step("off-tree shown cards", () => offTreeLog.fillShown(prev.clientHandId, parseIgnitionHh(rec.body).seats)); } catch { /* a convenience, never the check */ }
+  const { diffs, through } = step("compare", () => compareRecord(rec.body, archived));
   return nextCheck({ ...prev, dbId: archived.dbId }, { kind: "compared", diffs, through }, deps.now());
 }
 
 /** Queue every finished hand after the cutoff that has no check yet, then work through what is due. */
 export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
   const { store } = deps;
-  const cutoff = Number(store.meta("cutoffRowid") ?? NaN);
+  // the synchronous steps are timed into the tick's activity (services/answerTrace step()) for the [stall] lines
+  const cutoff = Number(step("meta", () => store.meta("cutoffRowid")) ?? NaN);
   if (!Number.isFinite(cutoff)) {
     store.setMeta("cutoffRowid", String(deps.lastRowid())); // first start: from here on (never moved again)
     return;
@@ -155,15 +156,18 @@ export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
   // 10 s) and froze the API until its supervisor killed each new worker as hung. Ids first; only an unchecked hand is
   // read in full.
   if (deps.doneIdsAfter) {
-    for (const id of deps.doneIdsAfter(cutoff)) {
-      if (store.get(id)) continue;
-      const e = deps.findArchived(id);
-      if (e) store.save(freshCheck(e, deps.now()));
+    for (const id of step("finished ids", () => deps.doneIdsAfter!(cutoff))) {
+      if (step("check rows", () => store.get(id))) continue;
+      const e = step("read archived hand", () => deps.findArchived(id));
+      if (e) step("save", () => store.save(freshCheck(e, deps.now())));
     }
   } else {
     for (const e of deps.doneAfter(cutoff)) if (!store.get(e.clientHandId!)) store.save(freshCheck(e, deps.now()));
   }
-  for (const c of store.due(deps.now(), maxAttempts)) store.save(await attempt(c, deps));
+  for (const c of step("due", () => store.due(deps.now(), maxAttempts))) {
+    const next = await attempt(c, deps);
+    step("save", () => store.save(next));
+  }
 }
 
 let store: HhCheckStore | null = null;

@@ -105,6 +105,9 @@ export interface DecisionPath {
    *  under whatever routed the decision to GTO Wizard AI — the gap gate, the fit rule, the charts' limits). Kept on the
    *  path so a re-classification (withChecks) keeps them. */
   preflopAlso?: PathReason[];
+  /** postflop reasons a plan reports beside its streets (2026-10-07: a re-root whose narrowing walk failed,
+   *  postflop:reroot-walk-failed). Kept on the path like preflopAlso. */
+  postflopAlso?: PathReason[];
   /** GTO Wizard requests this call made (services/requestScope) */
   requests?: RequestCounts;
   origin?: string;
@@ -120,7 +123,7 @@ export interface DecisionPath {
 }
 
 /** The reasons a path carries, in the order they happened (arrival, preflop, then street by street, then the checks). */
-export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets" | "checks"> & Partial<Pick<DecisionPath, "preflopAlso">>): PathReason[] {
+export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets" | "checks"> & Partial<Pick<DecisionPath, "preflopAlso" | "postflopAlso">>): PathReason[] {
   const out: PathReason[] = [];
   const a = p.arrival;
   if (a && (a.how === "by-design" || a.how === "rebuilt")) {
@@ -148,6 +151,7 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
       out.push({ v: "rebuilt", code: "check:range-handoff", text: `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${s.check.why}` });
     }
   }
+  for (const x of p.postflopAlso ?? []) out.push(x);
   // a failed invariant that no reason above already reports (services/chainChecks)
   out.push(...checkReasons(p.checks));
   return out;

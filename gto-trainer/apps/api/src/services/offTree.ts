@@ -19,7 +19,7 @@
  * the QRE narrowing scores -1.39 bits per action against ignoring the action (it rules out hands real players hold);
  * range x exp(-dEV_h / T) with T = 10% of the pot scores +0.06, pot-relative T beating T in bb in every band. So after
  * an OFF-TREE villain action the chain carries
- *     range(h) x exp(-(EV_best(h) - EV_taken(h)) / (t x pot at the node)),   t = 0.10
+ *     range(h) x exp(-(EV_best(h) - EV_taken(h)) / (t x pot at the node)),   t = 0.20 (0.10 until the re-fit below)
  * instead of range x strategy (T -> 0 = only the hands for which the action is best; T -> infinity = the range before
  * the action). Off switch OFFTREE_RANGE (soft = carry it · log = compute + record, keep QRE · off = neither), read at
  * every decision; register entry offtree-soft-range (services/approximations).
@@ -27,6 +27,15 @@
  * THE DUST FIX (2026-10-06): `maxHand` (the "no hand above 2%" half of the detector) ignores combos under 1% of the
  * seat's top weight — in po_hu-004 Td9d at weight 0.0001 checking 2.3% vetoed the flag. Postflop chain only: the
  * preflop fit (gtowAiPreflop) calls offTreeStats without it and is unchanged.
+ *
+ * THE POSTFLOP TRIGGER IS THE NODE SHARE ALONE (2026-10-06, Brady's go relayed; scripts/research/offtree-ranges/
+ * detector_rules.py). The "no hand above 2%" half kept the QRE sliver wherever one hand took the action a little more
+ * often: 111 of the 334 villain nodes under 1% in the traces, 98 of them leaving him under 1.5 combos (stress-500
+ * pf_srp-001's turn bet at 0.1%, po_3way-004's flop call at 0.3%). On those nodes with villain's real cards (NL100/200,
+ * 17 with the hand in range) the QRE narrowing scored -1.70 bits per action against ignoring the action [-2.78, -0.70]
+ * and the soft range +0.01; every looser cut (5%, 10%, 20%) pointed the same way. So the postflop chain fires on share
+ * < 1% alone (isOffTreePostflop); OFFTREE_MAX_HAND=0.02 brings the old second condition back. maxHand is still computed
+ * and shown. The preflop fit's isOffTree keeps both halves.
  *
  * Pure: the chain computes the numbers on the node it already read.
  */
@@ -37,7 +46,7 @@ export const OFF_TREE_MAX_HAND = 0.02;
 /** a combo under this share of the seat's top weight does not vote in maxHand (the dust fix, postflop chain only) */
 export const OFF_TREE_DUST = 0.01;
 /** the soft range's temperature as a share of the pot at the node (fitted 2026-10-06; OFFTREE_RANGE_T overrides) */
-export const OFF_TREE_SOFT_T = 0.1;
+export const OFF_TREE_SOFT_T = 0.2;
 
 export interface OffTreeStats {
   /** share of villain's range (by weight) that takes the action at this node */
@@ -111,13 +120,28 @@ export function offTreeStats(range: number[], sols: Sol[], taken: number, opts: 
 
 export const isOffTree = (s: OffTreeStats): boolean => s.nodeFreq < OFF_TREE_NODE_FREQ && s.maxHand < OFF_TREE_MAX_HAND;
 
+/** OFFTREE_MAX_HAND, read at every decision: the postflop trigger's "no hand above" cut — unset = none (the node share
+ *  alone, since 2026-10-06), a number in (0, 1] = that cut (0.02 = the rule before). */
+export function offTreeMaxHand(): number {
+  const v = Number(process.env.OFFTREE_MAX_HAND);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : Infinity;
+}
+/** THE POSTFLOP CHAIN'S TRIGGER: the action is under 1% of his range at the node (and under OFFTREE_MAX_HAND's cut for
+ *  every hand, when one is set). The preflop fit keeps isOffTree. */
+export const isOffTreePostflop = (s: OffTreeStats): boolean => s.nodeFreq < OFF_TREE_NODE_FREQ && s.maxHand < offTreeMaxHand();
+
 /** OFFTREE_RANGE, read at every decision: soft (unset) = carry the soft range · log = compute and record it, keep the QRE
  *  narrowing · off = neither (the narrowing of before 2026-10-06). */
 export function offTreeRangeMode(): "soft" | "log" | "off" {
   const v = String(process.env.OFFTREE_RANGE ?? "soft").trim().toLowerCase();
   return v === "off" || v === "0" || v === "false" ? "off" : v === "log" ? "log" : "soft";
 }
-/** the soft range's temperature as a share of the pot: OFFTREE_RANGE_T when it is a sane number, else 0.10 */
+/** the soft range's temperature as a share of the pot: OFFTREE_RANGE_T when it is a sane number, else 0.20 (pool-soft: 0.20).
+ *  T RE-FITTED 2026-10-06 on the trigger itself: with the NL200 pilot (526 heads-up NL200 spots solved on GTO Wizard
+ *  from Ignition's downloaded histories, scripts/offtreePilot.ts) the NL100/200 off-tree sample reached 57 actions with
+ *  villain's hand in range (81 at share < 1%). T = 10% of the pot scored -0.11 bits/action against ignoring the action
+ *  there; 20% -0.01, paired +0.10 [+0.01, +0.19] over 10% (share < 1%: +0.07 [+0.01, +0.14]; < 5%: +0.05 [+0.00,
+ *  +0.10]); 30-100% no better than 20% (the curve is flat at the value of ignoring the action). QRE -0.30 / -0.53. */
 export function offTreeSoftT(): number {
   const t = Number(process.env.OFFTREE_RANGE_T);
   return Number.isFinite(t) && t > 0 && t < 100 ? t : OFF_TREE_SOFT_T;
@@ -207,7 +231,7 @@ export const offTreeText = (l: OffTreeLine): string =>
   (l.soft ? ` · ${softText(l.soft)}` : "");
 
 const combosText = (x: number): string => (x >= 10 ? x.toFixed(0) : x >= 0.1 ? x.toFixed(1) : x.toFixed(3));
-/** "his range carried as 55 combos instead of QRE's 0.007 (soft, T = 10% of the 10.4bb pot)" */
+/** "his range carried as 55 combos instead of QRE's 0.007 (soft, T = 20% of the 10.4bb pot)" */
 export const softText = (s: OffTreeSoft): string =>
   s.softCombos == null ? `soft range not computable (${s.why ?? "?"}): QRE narrowing kept`
     : `his range ${s.applied ? "carried as" : "would be"} ${combosText(s.softCombos)} combos instead of QRE's ${combosText(s.qreCombos)} ` +

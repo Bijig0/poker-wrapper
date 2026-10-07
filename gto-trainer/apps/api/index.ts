@@ -25,6 +25,7 @@ import studyUiRoutes from "./src/routes/studyUi";
 import { studyPoller } from "./src/services/studyPoller";
 import { gtowApi } from "./src/services/gtowApi";
 import { startStallMonitor, trackActivity } from "./src/services/answerTrace";
+import { loadReport, machineSampler } from "./src/services/machineLoad";
 import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
 import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
@@ -55,6 +56,9 @@ app.use("*", cors());
 // Routes
 // the launchers' "is an API up?" probe (.claude/dev-api.cmd)
 app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+// is this machine fit to answer a table right now — the wrapper's panel and preflight (services/machineLoad.ts; also at
+// /api/dashboard/load). Memory only and never held behind live answers, like /api/dashboard/gtow-token.
+app.get("/api/load", (c) => c.json(loadReport()));
 app.route("/api/ingest", ingestRoutes);
 app.route("/api/study-poller", studyPollerRoutes);
 app.route("/api/build", buildRoutes);
@@ -222,6 +226,9 @@ let adoption: Promise<void> = Promise.resolve();
 // Every API process watches its own event loop (services/answerTrace.ts): a stall lands in the timeline of
 // every answer it froze, and in the log as [stall] — ownership has nothing to do with it.
 startStallMonitor();
+// the machine's CPU + the processes loading it, and whether a session is live, sampled every 20 s off the request path
+// for GET /api/load (services/machineLoad.ts)
+machineSampler.start();
 startBackgroundLock();
 // A MERGE TO MAIN IS THE DEPLOY (services/autoRestart.ts): a committed change to code this process loaded restarts it
 // by a clean exit — when no session is live, and only under a supervisor. Everything else it only reports (/api/build).

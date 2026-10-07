@@ -9,8 +9,8 @@ import { applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
-import { menuAction, menuByClass, pickDeadMoney, planDeadMoney, type DeadMoneyPlan } from "./deadMoneyCollapse";
-import { narrowForLastResort, rerootCollapse, moneyThrough } from "./multiwayReroot";
+import { codesOnRef, heroPreloadAtNode, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
 import { missQueue, missOriginOf, type MissRef } from "./missQueue";
@@ -34,7 +34,8 @@ import { pctOf, softText } from "./offTree";
 import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
-import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type StreetPath } from "./chainPath";
+import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type PathReason, type StreetPath } from "./chainPath";
+import { allInSizeToTreeOn, dropNote, dropShortAllIns, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
   checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
@@ -97,6 +98,9 @@ interface ActionFreq {
   frequency: number;
   ev?: number;
   betsize?: string;
+  /** a dead-money plan's preloaded tree: the tree's own betsize, where `betsize` and the label are the table's street
+   *  total (deadMoneyCollapse.tableTotalActions) */
+  treeBetsize?: string;
 }
 
 export type FastSolveResult =
@@ -159,6 +163,10 @@ export type FastSolveResult =
       /** the chart answered although its fit folds the only limper / caller out (the exact tree failed to answer in
        *  its time box): what the rule found and how the exact tree's turn went */
       fitEmpties?: FitEmpties;
+      /** THE SHORT ALL-IN PRESS (2026-10-07, services/allInPress): an ALLIN in the mix that a collapsed tree capped below
+       *  hero's stack while a deeper villain outside that tree is live — the wrapper presses it as a raise to `amount`,
+       *  not as the shove. Absent = every action presses as before. */
+      press?: PressEntry[];
       /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
       dryRun?: {
         flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[];
@@ -1835,6 +1843,9 @@ async function solvePostflopViaChainOnce(
     lastResort?: { lr: NonNullable<ReturnType<typeof heroVsAggressor>>; heroPos: string };
     /** a DEAD-MONEY collapse (deadMoneyCollapse): the dropped seats' chips on this street, added to the starting pot */
     deadPot?: number;
+    /** a DEAD-MONEY collapse's kept seats' chips moved into that starting pot (DeadMoneyPlan.preload): off their stacks,
+     *  and off their all-in amounts on the plan's street (amountsOf → treeAllInAmounts) */
+    preload?: Record<string, number>;
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -1907,6 +1918,7 @@ async function solvePostflopViaChainOnce(
     members: membersOf(pl.seats),
     ...((pl as Partial<DeadMoneyPlan>).dead != null ? { deadPot: Math.round(((pl as DeadMoneyPlan).dead +
       Object.values((pl as DeadMoneyPlan).preload ?? {}).reduce((a, b) => a + b, 0)) * 100) / 100 } : {}),
+    ...((pre) => (pre && Object.keys(pre).length ? { preload: pre } : {}))((pl as Partial<DeadMoneyPlan>).preload),
   });
   /** the walks are dead-money collapses: their menus are blended by action class (menuByClass) */
   let deadMode = false;
@@ -1925,6 +1937,8 @@ async function solvePostflopViaChainOnce(
   let blendWhy: string | null = null;
   /** RE-ROOT: the chain starts at the current street with this pot/stack (see rerootCollapse below) */
   let reroot: { first: 1 | 2; pot: number; stack: number } | null = null;
+  /** the re-root's own chain-path reasons (a failed narrowing walk, 2026-10-07) */
+  const rerootAlso: PathReason[] = [];
   if (flopSeats.length >= 3) {
     const heroAt = ordered.findIndex((p) => p.toUpperCase() === heroPosName.toUpperCase());
     if (heroAt < 0) return fail(`hero (${heroPosName}) is not among the ${ordered.length} seats reaching the flop (${ordered.join("/")})`);
@@ -1959,6 +1973,9 @@ async function solvePostflopViaChainOnce(
           ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts,
           board: tk.board, heroComboIdx, rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))),
           ...(behindFlop ? { behind: behindFlop } : {}),
+          // a narrowing walk that failed for a transient reason is retried once within this (2026-10-07): the decision's
+          // start + REROOT_NARROW_MS (10 s of the 15 s clock — the re-rooted street's own tree takes ~3-5 s after it)
+          deadline: tDecision + rerootNarrowMs(),
         });
         if (!rr.ok) {
           // the re-root could not collapse the current street either — fall through to the postflop last resort
@@ -1970,12 +1987,15 @@ async function solvePostflopViaChainOnce(
         walkables = rp.plans.map((pl) => walkableOf(pl, rr.behind, rr.stack));
         deadMode = rp.plans.some((pl) => (pl as Partial<DeadMoneyPlan>).dead != null);
         blendWhy = rp.why;
+        if (rr.failedWalks?.length) rerootAlso.push(rerootWalkFailedReason(rr.failedWalks, cur));
         const note =
           `${flopSeats.length}-WAY, RE-ROOTED AT THE ${cur.toUpperCase()}: no collapse fits from the flop (every villain ` +
           `put chips in earlier), so the earlier streets are pot (${rr.pot}bb, ${rr.stack}bb behind) and the ` +
           `${cur} alone is collapsed: ${rp.plans.map((pl) => pl.kind).join(" | ")}. Entering ranges narrowed through ` +
           `the earlier streets by ${rr.walks} three-seat walk(s) (${rr.left} left out of some) — approximate. ${rp.why}.` +
-          (rr.unnarrowed?.length ? ` NOT NARROWED: ${rr.unnarrowed.join(", ")} enter${rr.unnarrowed.length === 1 ? "s" : ""} with the flop-arrival range — no three-seat walk of the earlier streets could hold ${rr.unnarrowed.length === 1 ? "him" : "them"}.` : "") +
+          ((un) => un.length ? ` NOT NARROWED: ${un.join(", ")} enter${un.length === 1 ? "s" : ""} with the flop-arrival range — no three-seat walk of the earlier streets could hold ${un.length === 1 ? "him" : "them"}.` : "")(
+            (rr.unnarrowed ?? []).filter((p) => !(rr.failedWalks ?? []).some((f) => f.lost.includes(p)))) +
+          (rr.failedWalks?.length ? ` ${rerootWalkFailedNote(rr.failedWalks, ordered[heroAt]!, rr.walks)}` : "") +
           (rr.allIn.length ? ` ALL-IN LEFT OUT: ${rr.allIn.join(", ")} went all-in on an earlier street and cannot act again — ` +
             `their chips are in the pot, but hero's showdown equity against their range (the main pot they contest) is not modelled.` : "");
         sixNote = sixNote ? `${sixNote} · ${note}` : note;
@@ -2054,7 +2074,9 @@ async function solvePostflopViaChainOnce(
 
   // ONE WALK PER COLLAPSE — exactly one when the field already fits a tree. Every walk is kept (inputs, every
   // node, the verdict) so the answer can be inspected later exactly as it was, and diffed against a re-solve.
-  const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any; members?: Record<string, string[]> }[] = [];
+  const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any; members?: Record<string, string[]>;
+    /** a dead-money plan's preload of hero's own chips, when his node is on the plan's street (tableTotalActions) */
+    heroPreload?: number }[] = [];
   const walkFails: string[] = [];
   // THE COLLAPSES RUN AT ONCE (2026-09-23, hand 729). Each collapse is its own cloud tree and walk, 5-10 s
   // of mostly waiting on GTO Wizard; three of them in a row put a four-way flop at 15-19 s before the answer.
@@ -2082,11 +2104,17 @@ async function solvePostflopViaChainOnce(
     if (/^last-resort/.test(w.kind ?? "")) return undefined;
     if (w.streets === streets) return streetAmounts;
     const first = reroot ? reroot.first : 0;
-    return w.streets.map((st, i) => st.map((t, j) => {
-      if (t !== "RAI") return null;
-      const who = w.streetSeats[i]?.[j];
-      return allInsBySeat.find((x) => x.k === i + first && who != null && x.pos.toUpperCase() === who.toUpperCase())?.to ?? null;
-    }));
+    const tableTo = (who: string | null | undefined, i: number) =>
+      allInsBySeat.find((x) => x.k === i + first && who != null && x.pos.toUpperCase() === who.toUpperCase())?.to ?? null;
+    // A DEAD-MONEY PLAN'S PRELOAD IS OFF ITS ALL-INS TOO (2026-10-07, stress-500 brief_I-004 flop decision 13): its kept
+    // seats are sent their stacks less the chips moved into the starting pot, and the chain takes an all-in's amount as
+    // the seat's stack — the table's 22 for UTG (7 behind in the tree, 15 preloaded) put the 15 in twice (pot at hero's
+    // node 138.5 for the table's 108.5). The amount sent is the table's less the preload (treeAllInAmounts).
+    if (w.preload) {
+      return treeAllInAmounts({ streets: w.streets.map((st, i) => st.map((tok, j) => ({ tok, seat: w.streetSeats[i]?.[j] ?? "" }))), preload: w.preload },
+        (seat, i) => tableTo(seat || null, i));
+    }
+    return w.streets.map((st, i) => st.map((t, j) => (t !== "RAI" ? null : tableTo(w.streetSeats[i]?.[j], i))));
   };
   const solveOne = (w: Walkable): Promise<AiChainResult> => (w.lastResort ? lastResortRace(w) : solveTree(w));
   const solveTree = (w: Walkable): Promise<AiChainResult> => treeStackOrNull(w) == null
@@ -2193,8 +2221,10 @@ async function solvePostflopViaChainOnce(
       walkFails.push(w.kind ? `${w.kind}: ${chain.why}` : chain.why);
       continue;
     }
+    const heroPre = heroPreloadAtNode(w, w.seatSpec.heroSeat === "oop" ? w.seatSpec.oopPos : w.seatSpec.heroSeat === "mid" ? w.seatSpec.midPos : w.seatSpec.ipPos);
     walks.push({
       kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace, ...(w.members ? { members: w.members } : {}),
+      ...(heroPre > 0 ? { heroPreload: heroPre } : {}),
       solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace),
     });
   }
@@ -2210,7 +2240,10 @@ async function solvePostflopViaChainOnce(
     ...chains.flatMap((c) => (c.ok ? c.stackNotes ?? [] : [])),
   ])];
   if (stackNotes.length) {
-    sixNote = [sixNote, `STACKS OF THE PLAYERS IN THE TREE: ${stackNotes.join("; ")}`].filter(Boolean).join(" · ");
+    // a preloaded reference tree's sizes are served as the table's (tableTotalActions, below): said in one clause
+    const pre0 = walks[0]?.heroPreload ?? 0;
+    sixNote = [sixNote, `STACKS OF THE PLAYERS IN THE TREE: ${stackNotes.join("; ")}` +
+      (pre0 > 0 ? `; sizes served as table totals (the tree's + hero's ${pre0} in its starting pot)` : "")].filter(Boolean).join(" · ");
   }
   // THE SOFT RANGE (services/offTree, OPTION 3, 2026-10-06): an off-tree villain action this answer rests on — on this
   // street or an earlier one the walk carried — had his range carried soft, not as the QRE sliver
@@ -2231,40 +2264,62 @@ async function solvePostflopViaChainOnce(
       .filter(Boolean).join(" · ");
   }
 
-  // The first walk defines the action menu; the others are re-expressed on it and blended. A collapse whose
-  // menu differs is dropped rather than mixed in — different menus mean they disagree about the tree itself.
+  // The first walk defines the action menu; the others are re-expressed on it and blended. EVERY COLLAPSE BY ACTION CLASS
+  // (2026-10-07, Brady): ghost collapses keep different seats, so each tree's pot and deepest stack — and with them the
+  // bb amount of the same 33% bet or of the all-in — are its own; aligned by EXACT code, every collapse but the first was
+  // left out of the blend and "bet as often as the least betting collapse" never ran (stress-500 brief_I-004: the two
+  // trees keeping CO / BTN, hero calling 99.9-100%, dropped — the served ALLIN 22 4.4% was the UTG tree alone; live
+  // since 09-21, 11 of 250 collapsed answers). A walk whose codes match the reference's is taken as it is; otherwise it
+  // is re-expressed BY CLASS as the dead-money trees always were (menuByClass: fold, check, call, each wager onto the
+  // reference's nearest non-all-in size, the all-in onto the reference's all-in). A collapse that still cannot be
+  // aligned (a class the reference has nothing of) is left out and said.
   const ref = walks[0]!;
   const refSols: any[] = ref.data?.action_solutions ?? [];
   const codes: string[] = refSols.map((a) => String(a.action?.code ?? a.action?.display_name ?? "?"));
   let blended: number[][] | null = null;
   let blendedCount = 1;
   const codeOf = (x: any) => String(x.action?.code ?? x.action?.display_name ?? "?");
-  /** a walk's action as the reference menu names it: itself, or — dead-money trees, whose sizes and all-in are each
-   *  their own — the reference action of its class (menuByClass) */
-  const classMaps = new Map<unknown, Map<string, string | null>>();
+  /** a walk's actions as the reference menu names them (codesOnRef): its own codes when they are all on the menu, else
+   *  by class — always by class for dead-money trees */
+  const onRef = new Map<unknown, { map: Map<string, string | null>; byClass: boolean }>();
+  const asSol = (y: any) => ({ code: codeOf(y), name: y.action?.display_name ?? null });
+  const onRefOf = (w: (typeof walks)[number]) => {
+    let r = onRef.get(w);
+    if (!r) {
+      const sols: any[] = w.data?.action_solutions ?? [];
+      const c = codesOnRef(refSols.map(asSol), sols.map(asSol), deadMode);
+      r = { map: new Map(sols.map((y, i) => [codeOf(y), c.codes[i] ?? null])), byClass: c.byClass };
+      onRef.set(w, r);
+    }
+    return r;
+  };
   const codeOn = (w: (typeof walks)[number], x: any): string => {
     const c = codeOf(x);
-    if (!deadMode || w === ref) return c;
-    let m = classMaps.get(w);
-    if (!m) {
-      const asMenu = (xs: any[]) => xs.map((y: any) => menuAction(codeOf(y), y.action?.display_name));
-      const mine = asMenu(w.data?.action_solutions ?? []);
-      const to = menuByClass(asMenu(refSols), mine);
-      m = new Map(mine.map((k, i) => [k.code, to[i] ?? null]));
-      classMaps.set(w, m);
-    }
-    return m.get(c) ?? `${c}?`;
+    return w === ref ? c : onRefOf(w).map.get(c) ?? `${c}?`;
   };
   /** the walks whose menu is the reference's — the ones blended, mix and EV alike */
   const alignedWalks: typeof walks = [];
   if (walks.length > 1) {
     const aligned: number[][][] = [];
     const dropped: string[] = [];
+    const classNotes: string[] = [];
     for (const w of walks) {
       const a = alignStrategy(codes, (w.data?.action_solutions ?? []).map((x: any) => ({
         code: codeOn(w, x), strategy: x.strategy ?? [],
       })));
+      if (a && w !== ref && !deadMode && onRefOf(w).byClass) {
+        // the actions whose label changes on the reference menu ("RAISE 40.5→ALLIN 22")
+        const moved = (w.data?.action_solutions ?? [])
+          .map((x: any) => ({ from: labelOf(x), to: labelOf(refSols[codes.indexOf(codeOn(w, x))]) }))
+          .filter((m: { from: string; to: string }) => m.from !== m.to)
+          .map((m: { from: string; to: string }) => `${m.from}→${m.to}`);
+        classNotes.push(`${w.kind ?? "?"}${moved.length ? ` (${moved.join(", ")})` : ""}`);
+      }
       if (a) { aligned.push(a); alignedWalks.push(w); } else dropped.push(w.kind ?? "?");
+    }
+    if (classNotes.length) {
+      sixNote = [sixNote, `ALIGNED BY ACTION CLASS: ${classNotes.join("; ")} — its sizes are its own tree's (another pot and stack), each ` +
+        `wager read as the reference collapse's nearest size and its all-in as the reference's all-in`].filter(Boolean).join(" · ");
     }
     if (aligned.length > 1) {
       blended = blendStrategies(codes, aligned);
@@ -2325,6 +2380,10 @@ async function solvePostflopViaChainOnce(
       };
     });
   }
+  // TABLE TOTALS ON A PRELOADED PLAN (2026-10-07): a dead-money plan that moved hero's earlier chips on the street into
+  // the tree's starting pot priced every size less them — the menu (the reference walk's) is served in the table's street
+  // totals, after the blend (which aligns tree codes) and before the press (matched to the pick by the served label)
+  if (ref.heroPreload) actions = tableTotalActions(actions, ref.heroPreload);
   // OFF-TREE VILLAIN LINES of real play are logged once per hand and spot (services/offTreeLog) — for a pool range later
   if (origin === "live" || origin === "warm") {
     for (const w of walks) for (const n of (w.trace?.nodes ?? []) as ChainTraceNode[]) {
@@ -2332,6 +2391,29 @@ async function solvePostflopViaChainOnce(
         origin, board: tk.board, heroPos: heroPosName, plan: w.kind }, n.offTree);
     }
   }
+  // THE SHORT ALL-IN (services/allInPress, 2026-10-07): an ALLIN a collapsed tree capped below hero's stack, with a
+  // deeper villain outside that tree still live, is pressed as a raise to the tree's amount — never as the shove
+  const press: PressEntry[] = (() => {
+    if (!allInSizeToTreeOn() || !actions.some((a) => /^all[ -]?in\b/i.test(String(a.action)))) return [];
+    try {
+      const money = streetMoneyAt(hand, cur);
+      return shortAllInPress({ actions, heroPos: heroPosName, money,
+        trees: (blended ? alignedWalks : [ref]).map((w) => pressTreeOf(w, money)) });
+    } catch (e) {
+      console.error(`[allin-press] skipped: ${e instanceof Error ? e.message : e}`);
+      return [];
+    }
+  })();
+  // THE SAFETY NET: a short all-in under the table's minimum raise was priced at no size the table allows — out of the
+  // mix, the rest re-spread, the pick rolled on what is left (never lifted, never the plain shove)
+  if (press.some((e) => e.kind === "dropped")) {
+    const d = dropShortAllIns(actions, press);
+    actions = d.actions;
+    const notes = press.filter((e) => e.kind === "dropped").map((e) => dropNote(e, d.toPassive));
+    sixNote = [...notes, sixNote].filter(Boolean).join(" · ");
+  }
+  const decision = pickWeightedAction(actions);
+  if (press.some((e) => e.kind === "raise-to")) sixNote = withPressNote(sixNote, press, decision?.action ?? null);
   return { why: null, res: {
     ok: true,
     source: "gtow-api-postflop",
@@ -2346,10 +2428,12 @@ async function solvePostflopViaChainOnce(
     pos: j.action_solutions?.[0]?.action?.position ?? null,
     heroClass: heroClassOf(hand),
     actions,
-    decision: pickWeightedAction(actions),
+    decision,
+    ...(press.length ? { press } : {}),
     approx: true,
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
+      ...(rerootAlso.length || press.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur)] } : {}),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,
@@ -2365,6 +2449,20 @@ async function solvePostflopViaChainOnce(
   // collapses are left out: their answer is a mix of trees, not one tree a local solve could reproduce.
   mesInput: cur === "river" && walks.length === 1 && heroComboIdx != null && ref.trace
     ? { trace: ref.trace, preTokens, heroCards } : undefined };
+}
+
+/**
+ * ONE SOLVED WALK AS THE SHORT ALL-IN DETECTION READS IT (services/allInPress): the table seats its tree holds (a merged
+ * seat stands for its members), and hero's all-in at his node in the TABLE's street terms (treeAllInTo).
+ */
+export function pressTreeOf(w: { kind: string | null; trace?: ChainTrace; members?: Record<string, string[]> }, money: StreetMoney): TreeAllIn {
+  const sp = w.trace?.spec;
+  const named = [sp?.oopPos, sp?.midPos, sp?.ipPos].filter((x): x is string => !!x);
+  const seats = [...new Set(named.flatMap((p) => w.members?.[p] ?? [p]))];
+  const node = [...(w.trace?.nodes ?? [])].reverse().find((n) => n.heroNode) ?? null;
+  const inTree = new Set(seats.map((s) => s.toUpperCase()));
+  const deep = money.villains.filter((v) => inTree.has(v.pos.toUpperCase()) && v.chips != null).sort((a, b) => b.chips! - a.chips!)[0];
+  return { plan: w.kind, seats, to: treeAllInTo(node, money.heroCommitted), deepest: deep ? { pos: deep.pos, chips: deep.chips! } : null };
 }
 
 /**
@@ -2444,6 +2542,38 @@ export function flopFieldMoney(a: {
   const heroAtFlop = a.flopSeats.find((p) => p.toUpperCase() === a.heroPos.toUpperCase());
   const tableEff = behindFlop && heroAtFlop ? effectiveStack(a.flopSeats, heroAtFlop, (p) => behindFlop[p]) : Infinity;
   return { behindFlop, fieldStack: Number.isFinite(tableEff) ? Math.round(tableEff * 100) / 100 : a.flopStack };
+}
+
+/** The re-root's narrowing deadline from the decision's start (ms): a transient walk failure is retried within it. */
+export const rerootNarrowMs = (): number => {
+  const v = Number(process.env.REROOT_NARROW_MS ?? 10_000);
+  return Number.isFinite(v) && v >= 0 ? v : 10_000;
+};
+
+/**
+ * THE NOTE FOR A RE-ROOT WITH A FAILED NARROWING WALK (2026-10-07, register no-legal-collapse): each failed walk, why
+ * and what its retry did, and the seats that enter NOT NARROWED because of it. `walks` = the walks that succeeded.
+ */
+export function rerootWalkFailedNote(failed: WalkFailure[], heroPos: string, walks: number): string {
+  const cut = (s: string) => (s.length > 160 ? `${s.slice(0, 159)}…` : s);
+  const one = (f: WalkFailure) => {
+    const lost = f.lost.filter((p) => p !== heroPos);
+    return `${f.group.join("/")} (${cut(f.why)}; ${f.retry})` + (walks === 0 ? "" : lost.length
+      ? ` — ${lost.join(", ")} enter${lost.length === 1 ? "s" : ""} NOT NARROWED, with the flop-arrival range`
+      : " — its seats were narrowed by the other walk(s)");
+  };
+  const head = `NARROWING WALK FAILED: ${failed.map(one).join("; ")}.`;
+  if (walks > 0) return head;
+  return `${head} Every narrowing walk failed: every seat, hero (${heroPos}) too, enters with the flop-arrival range — the ` +
+    `three-seat tree of this street is solved on the ranges as they reached the flop, not narrowed by the earlier streets.`;
+}
+
+/** The chain-path reason of a re-root with a failed narrowing walk (code postflop:reroot-walk-failed). */
+export function rerootWalkFailedReason(failed: WalkFailure[], street: string): PathReason {
+  const lost = [...new Set(failed.flatMap((f) => f.lost))];
+  return { v: "rebuilt", code: "postflop:reroot-walk-failed",
+    text: `${street} re-root: narrowing walk${failed.length === 1 ? "" : "s"} ${failed.map((f) => f.group.join("/")).join(", ")} failed ` +
+      `(${failed[0]!.why.slice(0, 80)}; ${failed[0]!.retry}) — ${lost.length ? `${lost.join(", ")} not narrowed` : "every seat narrowed by another walk"}` };
 }
 
 /**

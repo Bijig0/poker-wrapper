@@ -3,6 +3,7 @@ import { replayChecks, replayText } from "../services/replayCheck";
 import { launchReplay } from "../services/replayScheduler";
 import { offTreeLog } from "../services/offTreeLog";
 import { yieldFirst, yieldToLive } from "../services/livePriority";
+import { loadReport } from "../services/machineLoad";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
@@ -96,7 +97,7 @@ const app = new Hono();
 
 // LIVE ANSWERS GO FIRST (services/livePriority): these pages recompute over every hand and answer on the thread that
 // answers hero's decisions, so each one waits for a live answer to finish before it starts. Only the browser pages'
-// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /gtow-token, /sources/strategies|registry) never wait.
+// heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /gtow-token, /load, /sources/strategies|registry) never wait.
 for (const p of ["/hands", "/analytics", "/hand/*", "/sessions/*", "/profiles/*"]) app.use(p, yieldFirst);  // "/x/*" covers "/x" too
 
 interface HandRow {
@@ -2995,6 +2996,8 @@ app.post("/study-answer", async (c) => {
     mes_ev_gain_bb: sol.ok ? sol.mesEvGainBb ?? null : null, mes_exact: sol.ok ? (sol.mesExact == null ? null : sol.mesExact ? 1 : 0) : null,
     hero_pos: hero, depth: sol.ok ? sol.depth : depth, set_id: sol.ok ? sol.setId : null,
     decision_json: sol.ok && sol.actions ? JSON.stringify(sol.actions) : null, line: sol.ok ? sol.line : (sol.line ?? null), solve_id: sol.ok ? sol.solveId ?? null : null,
+    // the short all-in press (services/allInPress), as the answer log stores it
+    press: sol.ok && sol.press?.length ? JSON.stringify(sol.press) : null,
   };
   if (!(sol.ok && sol.decision)) {
     const reason = sol.ok ? (sol.notInRange ? "hero's hand isn't in the chart range at this node" : "no decision in response") : sol.reason;
@@ -3073,6 +3076,14 @@ app.get("/gtow-token", (c) => {
   const t = gtowApi.tokenStatus();
   return c.json({ ok: true, tokenLive: t.live, multiwayLive: t.multiwayLive, expiresInMs: t.expiresInMs });
 });
+/**
+ * GET /load — is this machine fit to answer a table right now (2026-10-07, services/machineLoad.ts): the API's own
+ * event-loop freezes in the last 5 min, the machine's CPU and the processes loading it, whether a session is live, and
+ * a verdict (ok / warn / heavy) with plain reasons. Also served at GET /api/load (index.ts) — the wrapper's panel and
+ * preflight poll it like /gtow-token, so it is memory only (the samples are taken by a timer, never by the request) and
+ * is never held behind live answers.
+ */
+app.get("/load", (c) => c.json(loadReport()));
 /**
  * POST /gtow-connect — bring a session back.
  *

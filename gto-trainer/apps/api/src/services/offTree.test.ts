@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { OFF_TREE_DUST, isOffTree, offTreeFamily, offTreeLock, offTreeRangeMode, offTreeSoftT, offTreeStats, offTreeText, softOffTreeRange } from "./offTree";
+import { OFF_TREE_DUST, isOffTree, isOffTreePostflop, offTreeMaxHand, offTreeFamily, offTreeLock, offTreeRangeMode, offTreeSoftT, offTreeStats, offTreeText, softOffTreeRange } from "./offTree";
 import { OffTreeLog } from "./offTreeLog";
 
 const N = 1326;
@@ -107,16 +107,16 @@ describe("the soft range after an off-tree action (option 3, 2026-10-06)", () =>
     expect("why" in softOffTreeRange(range(), sols, 1, 0, 0.1)).toBe(true);
   });
 
-  it("the switches: OFFTREE_RANGE soft by default, log, off; OFFTREE_RANGE_T sane or 0.10", () => {
+  it("the switches: OFFTREE_RANGE soft by default, log, off; OFFTREE_RANGE_T sane or 0.20", () => {
     const keep = { r: process.env.OFFTREE_RANGE, t: process.env.OFFTREE_RANGE_T };
     try {
       delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_RANGE_T;
       expect(offTreeRangeMode()).toBe("soft");
-      expect(offTreeSoftT()).toBe(0.1);
+      expect(offTreeSoftT()).toBe(0.2);
       process.env.OFFTREE_RANGE = "log"; expect(offTreeRangeMode()).toBe("log");
       process.env.OFFTREE_RANGE = "OFF"; expect(offTreeRangeMode()).toBe("off");
       process.env.OFFTREE_RANGE_T = "0.2"; expect(offTreeSoftT()).toBe(0.2);
-      process.env.OFFTREE_RANGE_T = "abc"; expect(offTreeSoftT()).toBe(0.1);
+      process.env.OFFTREE_RANGE_T = "abc"; expect(offTreeSoftT()).toBe(0.2);
     } finally {
       if (keep.r == null) delete process.env.OFFTREE_RANGE; else process.env.OFFTREE_RANGE = keep.r;
       if (keep.t == null) delete process.env.OFFTREE_RANGE_T; else process.env.OFFTREE_RANGE_T = keep.t;
@@ -147,5 +147,30 @@ describe("the soft range after an off-tree action (option 3, 2026-10-06)", () =>
     log.record({ clientHandId: "4921650489", sessionId: "s", origin: "live", board: "QsKcJd", heroPos: "BTN" }, l);
     const row = log.forHand("4921650489")[0]!;
     expect([row.softMode, row.softT, row.qreCombos, row.softCombos]).toEqual(["soft", 0.1, 0.0719, 55.7]);
+  });
+});
+
+describe("the postflop trigger: the node share alone (2026-10-06)", () => {
+  it("a rare action one hand takes often: flagged postflop, not by the preflop rule; OFFTREE_MAX_HAND=0.02 brings the old cut back", () => {
+    const keep = process.env.OFFTREE_MAX_HAND;
+    try {
+      delete process.env.OFFTREE_MAX_HAND;
+      const s = offTreeStats(range(), node((i) => (i < 3 ? 0.25 : 0), () => 1, () => 1), 1, { dust: OFF_TREE_DUST });
+      expect(s.nodeFreq).toBeLessThan(0.01);
+      expect(offTreeMaxHand()).toBe(Infinity);
+      expect(isOffTreePostflop(s)).toBe(true);
+      expect(isOffTree(s)).toBe(false);
+      process.env.OFFTREE_MAX_HAND = "0.02";
+      expect(isOffTreePostflop(s)).toBe(false);
+      process.env.OFFTREE_MAX_HAND = "nonsense";
+      expect(isOffTreePostflop(s)).toBe(true);
+    } finally {
+      if (keep == null) delete process.env.OFFTREE_MAX_HAND; else process.env.OFFTREE_MAX_HAND = keep;
+    }
+  });
+
+  it("a common action never fires", () => {
+    const s = offTreeStats(range(), [{ strategy: range().map(() => 0.6) }, { strategy: range().map(() => 0.4) }], 1, { dust: OFF_TREE_DUST });
+    expect(isOffTreePostflop(s)).toBe(false);
   });
 });
