@@ -189,6 +189,16 @@ pre.hh { font: 12.5px/1.5 var(--font-mono); background: var(--surface2); border-
 #gridtip .r .lab { display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; }
 #gridtip .r .pct { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; }
 #gridtip .note { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.review { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.review .seg button.fine.on { background: var(--win); color: #fff; } .review .seg button.discuss.on { background: var(--ev); color: #fff; } .review .seg button.wrong.on { background: var(--loss); color: #fff; }
+.review textarea { flex: 1 1 260px; min-height: 34px; max-height: 120px; resize: vertical; font: 13px var(--font-body); color: var(--ink); background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.review .keys { color: var(--muted); font-size: 11.5px; }
+.chip.fine { background: var(--win-soft); color: var(--win); } .chip.discuss { background: var(--ev-soft); color: var(--ev); } .chip.wrong { background: var(--loss-soft); color: var(--loss); }
+.rev-note { display: block; color: var(--muted); font-size: 11.5px; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dmark { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }
+.dmark .seg button.fine.on { background: var(--win); color: #fff; } .dmark .seg button.discuss.on { background: var(--ev); color: #fff; } .dmark .seg button.wrong.on { background: var(--loss); color: #fff; }
+.dmark input { font: 12px var(--font-body); color: var(--ink); background: var(--surface2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; width: 180px; }
+#revProg { font-size: 12px; color: var(--muted); white-space: nowrap; }
 </style>
 
 <header>
@@ -200,6 +210,10 @@ pre.hh { font: 12.5px/1.5 var(--font-mono); background: var(--surface2); border-
       <button data-g="" class="on">All</button><button data-g="b">Bad</button><button data-g="r">Refused</button><button data-g="a">Approx</button><button data-g="o">Clean</button>
     </div>
     <select id="flag" aria-label="Flag"><option value="">Any flag</option></select>
+    <div class="seg" id="revSeg" role="group" aria-label="Review filter" title="Your review marks (1 Fine / 2 Discuss / 3 Wrong / N next unreviewed)">
+      <button data-r="" class="on">Any</button><button data-r="un">Unreviewed</button><button data-r="fine">Fine</button><button data-r="discuss">Discuss</button><button data-r="wrong">Wrong</button>
+    </div>
+    <span id="revProg"></span><button class="mini" id="nextUn" title="N">next unreviewed &rarr;</button>
   </div>
   <div class="seg" id="themeSeg" role="group" aria-label="Theme"><button data-t="">Auto</button><button data-t="light">Light</button><button data-t="dark">Dark</button></div>
 </header>
@@ -401,8 +415,57 @@ const FLAG_INFO = {
 const LINT_FLAGS = ["hero-hand-absent-real", "fold-strong", "check-monster-river", "served-minority", "collapses-disagree", "hero-hand-absent-script", "deep-vs-rung"];
 const chipClass = (f) => /^(wrong-seat|empty-mix|all-zero-mix|sum-off|check-facing-bet|fold-when-free|last-resort|mis-press|check#15)$/.test(f) ? "crit"
   : /^(arrival|other|no-node|timeout|thin-villain|limped-pot|no-collapse|hero-hand-absent-real|fold-strong|check-monster-river|served-minority)$/.test(f) ? "warn" : "dim";
-let INDEX = null, BATCHES = {}, VIEW = { list: true }, FILTER = { q: "", fam: "", g: "", flag: "", fix: "" };
+let INDEX = null, BATCHES = {}, VIEW = { list: true }, FILTER = { q: "", fam: "", g: "", flag: "", fix: "", rev: "" };
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+// ---- review marks (Brady's walkthrough, 2026-10-07) ----
+// A verdict per hand (and optionally per decision): fine = the answer looks right / discuss = talk it through with Claude /
+// wrong = a defect. Saved to the local server's marks.json when the page is served by serve.ts (GET/POST api/marks), else to
+// this browser's localStorage; Export / Import move them between the two. Keys: "<hand id>" and "<hand id>#<step>".
+const VERDICTS = { fine: ["fine", "Fine"], discuss: ["discuss", "Discuss"], wrong: ["wrong", "Wrong"] };
+let MARKS = {}, MARKS_SERVER = false, MARKS_TIMER = null;
+async function loadMarks() {
+  try { const r = await fetch("api/marks", { cache: "no-store" }); if (r.ok) { MARKS = (await r.json()) || {}; MARKS_SERVER = true; return; } } catch {}
+  try { MARKS = JSON.parse(store.get("s5_marks") || "{}") || {}; } catch { MARKS = {}; }
+}
+function persistMarks() {
+  store.set("s5_marks", JSON.stringify(MARKS));
+  if (!MARKS_SERVER) return;
+  clearTimeout(MARKS_TIMER);
+  MARKS_TIMER = setTimeout(() => fetch("api/marks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(MARKS) }).catch(() => {}), 250);
+}
+function setMark(key, patch) {
+  const next = { ...(MARKS[key] || {}), ...patch, at: new Date().toISOString() };
+  if (!next.v && !(next.note || "").trim()) delete MARKS[key]; else MARKS[key] = next;
+  persistMarks(); updateProgress();
+}
+function decisionMarks(id) { return Object.keys(MARKS).filter((k) => k.startsWith(id + "#")).map((k) => ({ step: Number(k.slice(id.length + 1)), ...MARKS[k] })); }
+/** the hand's verdict: its own mark, else the worst of its decisions' marks */
+function handVerdict(id) {
+  const m = MARKS[id]; if (m && m.v) return m.v;
+  const vs = decisionMarks(id).map((d) => d.v).filter(Boolean);
+  return !vs.length ? null : vs.includes("wrong") ? "wrong" : vs.includes("discuss") ? "discuss" : "fine";
+}
+const verdictChip = (v) => v ? `<span class="chip ${VERDICTS[v][0]}">${VERDICTS[v][1]}</span>` : "";
+function reviewCounts() { const c = { fine: 0, discuss: 0, wrong: 0, un: 0 }; for (const h of INDEX.hands) { const v = handVerdict(h.id); if (v) c[v]++; else c.un++; } return c; }
+function updateProgress() { const el = $("revProg"); if (el) { const c = reviewCounts(); el.textContent = `${INDEX.hands.length - c.un} / ${INDEX.hands.length} reviewed`; } }
+/** the hands in the current list order (filters applied; the review filter ignored so "next unreviewed" always finds one) */
+function listOrder() { const keep = FILTER.rev; FILTER.rev = ""; const hs = INDEX.hands.filter(matches); FILTER.rev = keep; return hs; }
+function nextUnreviewed(fromId) {
+  const hs = listOrder(); const i = fromId ? hs.findIndex((h) => h.id === fromId) : -1;
+  for (let k = 1; k <= hs.length; k++) { const h = hs[(i + k) % hs.length]; if (!handVerdict(h.id)) return h.id; }
+  return null;
+}
+function neighbourHand(fromId, dir) { const hs = listOrder(); const i = hs.findIndex((h) => h.id === fromId); if (i < 0) return null; const j = i + dir; return j >= 0 && j < hs.length ? hs[j].id : null; }
+function exportMarks() {
+  const blob = new Blob([JSON.stringify(MARKS, null, 1)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `stress500-marks-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+}
+function importMarks(file) {
+  const rd = new FileReader();
+  rd.onload = () => { try { const m = JSON.parse(String(rd.result)); if (m && typeof m === "object") { for (const [k, v] of Object.entries(m)) if (!MARKS[k] || (v.at || "") > (MARKS[k].at || "")) MARKS[k] = v; persistMarks(); renderList(); } } catch {} };
+  rd.readAsText(file);
+}
 
 // ---- theme (the dashboard's switch) ----
 function setTheme(t) { if (t) document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme"); store.set("s5_theme", t || ""); for (const b of document.querySelectorAll("#themeSeg button")) b.classList.toggle("on", b.dataset.t === (t || "")); }
@@ -427,6 +490,7 @@ function heroClass(cs) {
 }
 function matches(h) {
   if (FILTER.fam && h.fam !== FILTER.fam) return false;
+  if (FILTER.rev) { const v = handVerdict(h.id); if (FILTER.rev === "un" ? !!v : v !== FILTER.rev) return false; }
   if (FILTER.g && !h.g.includes(FILTER.g)) return false;
   if (FILTER.flag && !h.fl.includes(FILTER.flag) && !h.k.includes(FILTER.flag)) return false;
   if (FILTER.fix) {
@@ -487,6 +551,12 @@ function renderList() {
       <div class="bar" style="margin-top:12px;height:12px"><span class="g-o" style="width:${pct(T.ok)}%"></span><span class="g-a" style="width:${pct(T.approx)}%"></span><span class="g-r" style="width:${pct(T.refused)}%"></span><span class="g-b" style="width:${pct(T.bad)}%"></span></div>
       <p class="sub" style="margin:10px 0 0;max-width:110ch">Every hero decision of every hand ran through the live answer path (poker-wrapper ${(INDEX.commits || []).length ? INDEX.commits.map((x) => `<span class="mono">${esc(x.c)}</span> for ${x.n} hand${x.n === 1 ? "" : "s"}`).join(", ") : esc(INDEX.commit || "")} — every commit after b1d53b1 carries main's fe31bf2 re-root fix; live GTO Wizard) in a private copy of the data. One square per decision: <span class="chip good">clean</span> <span class="chip warn">approximated</span> (a named approximation fired) <span class="chip dim">refused</span> (no answer) <span class="chip crit">bad</span> (an answer that cannot be right). The batch's time boxes are 45 s, not the table's 12 s, so slow trees are graded on what they answer; anything over 15 s is flagged. Updated ${esc((INDEX.builtAt || "").slice(0, 16).replace("T", " "))} UTC.</p>
     </section>
+    <section class="card" id="reviewCard"><h2>Your review</h2>
+      ${(() => { const c = reviewCounts(); return `<div class="review"><span class="chip fine">${c.fine} fine</span><span class="chip discuss">${c.discuss} discuss</span><span class="chip wrong">${c.wrong} wrong</span><span class="chip dim">${c.un} unreviewed</span>
+        <button class="mini" id="revNext">next unreviewed &rarr;</button><button class="mini" id="revExport">export marks</button><label class="mini" style="cursor:pointer">import marks<input type="file" id="revImport" accept="application/json" hidden></label>
+        <span class="sub">${MARKS_SERVER ? "saved to marks.json on this machine" : "saved in this browser only — export before switching"}</span></div>
+        <p class="sub" style="margin:8px 0 0;max-width:110ch">Open a hand, press <b>1</b> Fine · <b>2</b> Discuss (talk it through with Claude) · <b>3</b> Wrong (a defect) · <b>0</b> clear · <b>N</b> next unreviewed · <b>[</b> / <b>]</b> previous / next hand. A note on the hand or on a single decision is kept with the mark; a decision's mark rolls up to the hand when the hand has none of its own.</p>`; })()}
+    </section>
     <section class="card"><h2>The fixes — did they hold?</h2>
       <p class="sub" style="margin:0 0 10px;max-width:110ch">What "fixed" means for each multiway fix, in the words of the session that built it, and how its spots came out. <b>Spots</b> = the hands built to exercise it (their postflop decisions: clean · approximated · no answer · bad). <b>Fired</b> = the decisions where the fix left its own mark (its warning or plan kind) anywhere in the run. Click a row to list its hands.</p>
       <div class="tbl-wrap"><table><thead><tr><th>Fix</th><th>What "fixed" means</th><th>Spots</th><th>Fired</th></tr></thead><tbody>${fixRows}</tbody></table></div>
@@ -496,14 +566,19 @@ function renderList() {
       <section class="card"><h2>Flags</h2>${flagRows}${lintRows ? `<h2 style="margin-top:14px">Poker-sense checks</h2><p class="sub" style="margin:0 0 6px">What a player would stop at — they flag a decision, never change its grade. decisions · hands; 0 = checked, none found.</p>${lintRows}` : ""}<h2 style="margin-top:14px">Approximations fired</h2>${kindRows}</section>
     </div>
     <section class="card" id="handsCard"><h2>Hands <span class="sub" style="text-transform:none;letter-spacing:0">${hands.length} shown</span>${fixName ? ` <button class="mini" id="clearFix" style="text-transform:none;letter-spacing:0">fix: ${esc(fixName)} ✕</button>` : ""}</h2>
-      <div class="tbl-wrap"><table><thead><tr><th>Hand</th><th>Hero</th><th>Cards</th><th>Board</th><th>Decisions</th><th>What it tests</th><th>Flags</th><th class="num">s</th></tr></thead>
+      <div class="tbl-wrap"><table><thead><tr><th>Hand</th><th>Hero</th><th>Cards</th><th>Board</th><th>Decisions</th><th>What it tests</th><th>Flags</th><th>Review</th><th class="num">s</th></tr></thead>
       <tbody>${hands.map((h) => `<tr class="row" data-id="${esc(h.id)}"><td class="mono">${esc(h.id)}</td><td>${esc(h.hero)}</td><td>${cardsHtml(h.hc)}</td><td>${cardsHtml(h.b)}</td>
         <td>${gradeStr(h.g)}</td><td class="t">${esc(h.title)}</td><td><div class="chips">${h.fl.map((f) => `<span class="chip ${chipClass(f)}" title="${esc(FLAG_INFO[f] || "")}">${esc(f)}</span>`).join("")}</div></td>
-        <td class="num">${Math.round((h.ms || 0) / 1000)}</td></tr>`).join("") || `<tr><td colspan="8" class="empty">No hands match these filters.</td></tr>`}</tbody></table></div>
+        <td>${(() => { const v = handVerdict(h.id), m = MARKS[h.id]; const n = ((m && m.note) || "").trim() || decisionMarks(h.id).map((d) => d.note).filter(Boolean).join(" · "); return v ? verdictChip(v) + (n ? `<span class="rev-note" title="${esc(n)}">${esc(n)}</span>` : "") : `<span class="sub">—</span>`; })()}</td>
+        <td class="num">${Math.round((h.ms || 0) / 1000)}</td></tr>`).join("") || `<tr><td colspan="9" class="empty">No hands match these filters.</td></tr>`}</tbody></table></div>
     </section>`;
   for (const r of document.querySelectorAll("tr.row:not(.fix-row)")) r.addEventListener("click", () => openHand(r.dataset.id));
   for (const r of document.querySelectorAll("tr.fix-row")) r.addEventListener("click", () => { FILTER.fix = FILTER.fix === r.dataset.fix ? "" : r.dataset.fix; renderList(); if (FILTER.fix) $("handsCard")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
   $("clearFix")?.addEventListener("click", () => { FILTER.fix = ""; renderList(); });
+  $("revNext")?.addEventListener("click", () => { const id = nextUnreviewed(null); if (id) openHand(id); });
+  $("revExport")?.addEventListener("click", exportMarks);
+  $("revImport")?.addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; if (f) importMarks(f); });
+  updateProgress();
   for (const r of document.querySelectorAll(".fam-row")) r.addEventListener("click", () => { $("fam").value = r.dataset.fam; FILTER.fam = r.dataset.fam; renderList(); });
   for (const r of document.querySelectorAll(".flag-row")) r.addEventListener("click", () => { FILTER.flag = r.dataset.flag; syncFlagSelect(); renderList(); });
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
@@ -628,6 +703,7 @@ function renderHand() {
       <div class="sub" style="margin-top:4px">${esc(fam)}</div>
       <div class="chips" style="margin-top:8px">${(h.tags || []).map((t) => `<span class="chip dim">${esc(t)}</span>`).join("")}</div>
     </section>
+    <section class="card" id="reviewBar"></section>
     <div class="replay">
      <div class="replay-left">
       <section class="card"><h2>The table</h2><div id="mirror"></div>
@@ -652,6 +728,7 @@ function renderHand() {
       </section>
     </div>`;
   $("backBtn").addEventListener("click", () => { stopPlay(); renderList(); });
+  renderReviewBar();
   $("b-first").addEventListener("click", () => setStep(0));
   $("b-prev").addEventListener("click", () => setStep(STEP - 1));
   $("b-next").addEventListener("click", () => setStep(STEP + 1));
@@ -661,6 +738,27 @@ function renderHand() {
   for (const r of document.querySelectorAll(".tl-row")) r.addEventListener("click", () => setStep(Number(r.dataset.i)));
   setStep(STEP);
   window.scrollTo({ top: 0 });
+}
+function renderReviewBar() {
+  const host = $("reviewBar"); if (!host || !H) return;
+  const id = H.id, m = MARKS[id] || {}, own = m.v || null, roll = handVerdict(id);
+  const dm = decisionMarks(id).filter((d) => d.v || d.note);
+  const prev = neighbourHand(id, -1), next = neighbourHand(id, 1), un = nextUnreviewed(id);
+  const keyOf = { fine: "1", discuss: "2", wrong: "3" };
+  host.innerHTML = `<h2>Your review <span class="sub" style="text-transform:none;letter-spacing:0">${own ? "" : roll ? `rolled up from a decision's mark (${VERDICTS[roll][1]})` : "unreviewed"}</span></h2>
+    <div class="review">
+      <div class="seg" id="handVerdict">${Object.entries(VERDICTS).map(([k, [cls, label]]) => `<button class="${cls}${own === k ? " on" : ""}" data-v="${k}" title="${keyOf[k]}">${label}</button>`).join("")}<button data-v="" title="0"${own ? "" : ' class="on"'}>clear</button></div>
+      <textarea id="handNote" placeholder="note for this hand (optional)">${esc(m.note || "")}</textarea>
+      <span class="keys">1 · 2 · 3 · 0 · N · [ ]</span>
+      <span style="display:inline-flex;gap:6px"><button class="mini" id="revPrev"${prev ? "" : " disabled"}>&larr; prev</button><button class="mini" id="revNextHand"${next ? "" : " disabled"}>next &rarr;</button><button class="mini" id="revNextUn"${un ? "" : " disabled"}>next unreviewed &rarr;</button></span>
+    </div>
+    ${dm.length ? `<div class="chips" style="margin-top:8px">${dm.map((d) => `<span class="chip ${d.v ? VERDICTS[d.v][0] : "dim"}" title="${esc(d.note || "")}" data-step="${d.step}" style="cursor:pointer">step ${d.step}: ${d.v ? VERDICTS[d.v][1] : "note"}${d.note ? ` — ${esc(d.note.slice(0, 40))}${d.note.length > 40 ? "…" : ""}` : ""}</span>`).join("")}</div>` : ""}`;
+  $("handVerdict").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; setMark(id, { v: b.dataset.v || null }); renderReviewBar(); });
+  $("handNote").addEventListener("input", (e) => setMark(id, { note: e.target.value }));
+  $("revPrev").addEventListener("click", () => prev && openHand(prev));
+  $("revNextHand").addEventListener("click", () => next && openHand(next));
+  $("revNextUn").addEventListener("click", () => un && openHand(un));
+  for (const c of host.querySelectorAll(".chip[data-step]")) c.addEventListener("click", () => setStep(Number(c.dataset.step)));
 }
 function startPlay() { $("b-play").textContent = "❚❚ pause"; PLAY = setInterval(() => { if (STEP >= H.actions.length) return stopPlay(); setStep(STEP + 1); }, 1100); }
 function stopPlay() { if (PLAY) clearInterval(PLAY); PLAY = null; const b = $("b-play"); if (b) b.textContent = "▶ play"; }
@@ -789,6 +887,8 @@ function renderAnswer() {
   const pickKind = d.pick ? actKind(d.pick) : null;
   const differs = scripted && pickKind && !(pickKind === scriptKind || (pickKind === "allin" && scriptKind === "raise") || (pickKind === "raise" && scriptKind === "allin"));
   const failing =(d.cf || []).map((c) => `<div><span class="chip ${c.s === "fail" ? "crit" : "warn"}">#${c.id} ${esc(c.s)}</span> <span class="sub">${esc(c.st)}</span> ${esc(c.t)}</div>`).join("");
+  const dkey = `${H.id}#${STEP}`, dmk = MARKS[dkey] || {};
+  const dmark = `<span class="dmark"><span class="seg">${Object.entries(VERDICTS).map(([k, [cls, label]]) => `<button class="${cls}${dmk.v === k ? " on" : ""}" data-dv="${k}">${label}</button>`).join("")}<button data-dv=""${dmk.v ? "" : ' class="on"'}>–</button></span><input id="decNote" placeholder="note on this decision" value="${esc(dmk.note || "")}"></span>`;
   host.innerHTML = `<div class="nv-head"><h2 style="margin:0">Our answer</h2><span class="chip ${GRADE[gk][0]}">${GRADE[gk][1]}</span>${v ? `<span class="chip ${v[0]}">path: ${esc(v[1])}</span>` : ""}<span class="sub">${esc(d.st)} · ${d.ms != null ? (d.ms / 1000).toFixed(1) + " s" : ""} · ${d.n ?? 0} GTO Wizard requests</span></div>
     ${d.pick ? `<div class="ans-pick ${kind === "fold" ? "fold" : kind === "call" ? "call" : "raise"}">${esc(d.pick)}</div>` : d.why ? `<div class="ans-pick none">No answer</div>` : `<div class="ans-pick none">No action</div>`}
     ${mixbar}
@@ -808,18 +908,30 @@ function renderAnswer() {
     ${d.why ? `<h2 style="margin-top:12px">Why there is no answer</h2><div class="warn-text">${esc(d.why)}</div>` : ""}
     ${d.w ? `<h2 style="margin-top:12px">The answer's note</h2><div class="warn-text">${esc(d.w)}</div>` : ""}
     ${failing ? `<h2 style="margin-top:12px">Checks failed or flagged</h2><div class="checks">${failing}</div>` : ""}`;
+  const head = host.querySelector(".nv-head"); if (head) head.insertAdjacentHTML("beforeend", dmark);
+  const dseg = host.querySelector(".dmark .seg"); if (dseg) dseg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; setMark(dkey, { v: b.dataset.dv || null }); renderAnswer(); renderReviewBar(); });
+  const dn = $("decNote"); if (dn) dn.addEventListener("input", (e) => setMark(dkey, { note: e.target.value }));
 }
 
 // ---- filters ----
 $("q").addEventListener("input", (e) => { FILTER.q = e.target.value.trim(); if (VIEW.list) renderList(); });
 $("fam").addEventListener("change", (e) => { FILTER.fam = e.target.value; renderList(); });
 $("flag").addEventListener("change", (e) => { FILTER.flag = e.target.value; renderList(); });
+$("revSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; FILTER.rev = b.dataset.r; for (const x of $("revSeg").querySelectorAll("button")) x.classList.toggle("on", x === b); renderList(); });
+$("nextUn").addEventListener("click", () => { const id = nextUnreviewed(VIEW.list ? null : VIEW.id); if (id) openHand(id); });
 $("gradeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; FILTER.g = b.dataset.g; for (const x of $("gradeSeg").querySelectorAll("button")) x.classList.toggle("on", x === b); renderList(); });
-document.addEventListener("keydown", (e) => { if (VIEW.list || !H || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || "")) return; if (e.key === "ArrowRight") setStep(STEP + 1); else if (e.key === "ArrowLeft") setStep(STEP - 1); });
+document.addEventListener("keydown", (e) => {
+  if (/INPUT|SELECT|TEXTAREA/.test((document.activeElement && document.activeElement.tagName) || "")) return;
+  if (e.key === "n" || e.key === "N") { const id = nextUnreviewed(VIEW.list ? null : VIEW.id); if (id) openHand(id); return; }
+  if (VIEW.list || !H) return;
+  if (e.key === "ArrowRight") setStep(STEP + 1); else if (e.key === "ArrowLeft") setStep(STEP - 1);
+  else if (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "0") { setMark(H.id, { v: { "1": "fine", "2": "discuss", "3": "wrong", "0": null }[e.key] }); renderReviewBar(); }
+  else if (e.key === "[") { const p = neighbourHand(H.id, -1); if (p) openHand(p); } else if (e.key === "]") { const n = neighbourHand(H.id, 1); if (n) openHand(n); }
+});
 window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (id && INDEX.hands.some((h) => h.id === id)) openHand(id); else if (!id && !VIEW.list) renderList(); });
 
 (async function boot() {
-  try { INDEX = await loadIndex(); }
+  try { INDEX = await loadIndex(); await loadMarks(); }
   catch (e) { $("main").innerHTML = `<div class="card">The run's data could not be loaded (${esc(e.message)}).</div>`; return; }
   $("hdr-sub").textContent = `${INDEX.totals.hands} of ${INDEX.planned} hands · ${INDEX.totals.decisions} decisions`;
   const fams = [...new Set(INDEX.hands.map((h) => h.fam))];
