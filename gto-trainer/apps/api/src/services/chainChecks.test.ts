@@ -6,11 +6,14 @@ import {
   CHECKS, SolveTimes, addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkCode, checkFlopArrival,
   checkFresh, checkHandoff, checkHeroCombo, checkLine, checkMistakeLines, checkMix, checkNodeReads, checkPotStack,
   checkPreflopInRange, checkRake, checkRangesSane, checkReasons, checkSeats, checkSolveTime, checkTrees, checkWarmTree,
-  comboName, coverageReport, dealtSetName, expectedOrder, mergeChecks, solvePopulation, SOLVE_FLAG_NOTE, type CheckResult, type PathChecks,
+  comboName, coverageReport, dealtSetName, expectedOrder, mergeChecks, sidePotParts, solvePopulation, SOLVE_FLAG_NOTE, type CheckResult, type PathChecks,
 } from "./chainChecks";
 import { classifyPath, cleanRate, VERDICT_LABEL } from "./chainPath";
 import { comboIndex } from "../utils/comboIndex/comboIndex";
 import type { OffTreeLine } from "./offTree";
+import { chainPathChecks } from "./fastSolve";
+import type { ChainTrace } from "./aiChain";
+import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 
 const N = 1326;
 const full = (w = 1) => new Array(N).fill(w);
@@ -484,5 +487,154 @@ describe("checks #14 / #16 at the press (2026-09-27)", () => {
     expect(pressedAnswerPath(row, [{ street: "turn", keyActs: 11, buttons: ["CHECK"], stale: false }])).toBe(PATH);
     expect(pressedAnswerPath(row, [{ street: "flop", keyActs: 9, tries: 1 }])).toBe(PATH);
     expect(pressedAnswerPath(row, null)).toBe(PATH);
+  });
+});
+
+// ── #5 at hero's node: the HERO-CONTESTABLE pot (2026-10-08) ────────────────────────────────────────────────────────
+/**
+ * Brady 2026-10-08, stress-500: check #5 failed on three hands for one reason that is no defect in the answers — the
+ * table's pot holds SIDE-POT money hero cannot win (a seat put in more than hero's stack), while a dead-money plan caps a
+ * dropped seat's chips at hero's stack and GTO Wizard prices a kept seat's side pot natively. Both pots are now compared
+ * less their side pot (each seat's street chips above hero's stack on the street). The traces below are the stored
+ * ones (poker-data-stress500 root/poker.sqlite solves) — players, the pot entering, each seat's stack as sent, hero's
+ * node — and the hands the stress scenarios' own lines.
+ */
+describe("check #5 compares the HERO-CONTESTABLE pot at hero's node (2026-10-08)", () => {
+  type A = [number, string, number?, string?];
+  const handOf = (positions: Record<number, string>, startStacks: Record<number, number>, heroSeatId: number, acts: A[], toCall: number) => normalizeHand({
+    handId: 900000 + heroSeatId, clientHandId: `check5-${heroSeatId}`, bbCents: 200, heroSeatId, heroCards: ["A♦", "Q♣"], board: ["K♥", "T♦", "T♥"], street: "flop",
+    liveSeats: Object.keys(positions).map(Number), committed: {}, potByStreet: {}, positions, stacks: {}, startStacks,
+    currentNode: { street: "flop", toActSeatId: heroSeatId, toActIsHero: true, pot: 0, toCall, legalActions: [], complete: false },
+    actions: acts.map(([seatId, type, amount, street]) => ({ seatId, hero: seatId === heroSeatId, type, street: street ?? "flop", ...(amount != null ? { amount } : {}) })),
+    heroFolded: false, ended: false, lineSource: "ws", sessionId: "s", stakes: "$1/$2",
+  } as any).hand!;
+  /** a stored walk: its seats in acting order, hero's index, the pot entering, each seat's stack as sent, and the nodes
+   *  [codes, actor, invested, pot, taken] with hero's last */
+  const traceOf = (plan: string, players: string[], heroIdx: number, potIn: number, stacksIn: number[],
+      nodes: [string[], number, number[], number, string | null][]): ChainTrace => ({
+    spec: { oopPos: players[0]!, ...(players.length === 3 ? { midPos: players[1]!, midRange: [] } : {}), ipPos: players.at(-1)!, oopRange: [], ipRange: [],
+      flopPot: potIn, flopStack: Math.min(...stacksIn), board: "KhTdTh", streets: [nodes.at(-1)![0]], heroComboIdx: null, planTag: plan,
+      heroSeat: heroIdx === 0 ? "oop" : heroIdx === players.length - 1 ? "ip" : "mid" },
+    streets: [{ si: 0, street: "FLOP", board: "KhTdTh", potIn, stackIn: Math.min(stacksIn[heroIdx]!, Math.max(...stacksIn.filter((_, i) => i !== heroIdx))),
+      labels: [], fixedLevels: null, solId: "s", created: false, oopIn: [], ipIn: [], players, stacksIn: Object.fromEntries(players.map((p, i) => [p, stacksIn[i]!])) }],
+    nodes: nodes.map(([codes, actor, invested, potNode, taken], ti) => ({ si: 0, ti, street: "FLOP", board: "KhTdTh", codes, actor, potNode, invested,
+      actions: taken ? [{ name: taken, code: "", betsize: null, position: null, totalFrequency: null, totalEv: null, strategy: [], evs: [] }] : [],
+      taken: taken ? 0 : null, heroNode: taken == null })),
+    result: { ok: true },
+  } as ChainTrace);
+  const five = (h: any, dealt: Record<number, number>, walks: ChainTrace[]) => chainPathChecks({
+    hand: h, walks: walks.map((t) => ({ kind: t.spec.planTag ?? null, trace: t })), arrival: undefined, potExtra: 0, dealt,
+    treePos: (sid) => h.positions[sid] ?? null, rake: null, site: null, handTrees: [],
+  }).flop!.find((x) => x.id === 5)!;
+
+  it("sidePotParts: each seat's chips above hero's stack, nothing for a seat at or under it, nothing with no stack", () => {
+    expect(sidePotParts([["BB", 149], ["UTG", 119], ["HJ", 59], ["SB", 0]], 79)).toEqual([{ pos: "BB", bb: 70 }, { pos: "UTG", bb: 40 }]);
+    expect(sidePotParts([["CO", 15], ["BTN", 15.004]], 15)).toEqual([]);
+    expect(sidePotParts([["CO", 18]], null)).toEqual([]);
+  });
+
+  it("checkPotStack: each pot less its side pot; the text names what was left out; no side pot = the old text byte for byte", () => {
+    const sidePot = { heroStack: 79, table: [{ pos: "BB", bb: 70 }, { pos: "UTG", bb: 40 }], treeStack: 79, tree: [{ pos: "BB", bb: 40 }, { pos: "UTG", bb: 40 }] };
+    const c = checkPotStack({ street: "flop", potIn: 65, capturePot: 6, stackIn: 79, captureStack: 79, potNode: 303, captureNodePot: 333, skipPotIn: true, plan: "ghost:SB + dead:HJ + ghost:BTN", sidePot });
+    expect(c.status).toBe("pass");
+    expect(c.text).toContain("223bb at hero's node (table 333, hero can contest 223: BB 70 and UTG 40 above hero's stack (79) are a side pot; tree 303, hero can contest 223: BB 40 and UTG 40 above hero's 79)");
+    const plain = { street: "flop", potIn: 16.9, capturePot: 16.9, stackIn: 83.4, captureStack: 83.4, potNode: 30, captureNodePot: 30, potRule: "the table's pot" };
+    expect(checkPotStack({ ...plain, sidePot: { heroStack: 83.4, table: [], tree: [] } })).toEqual(checkPotStack(plain));
+  });
+
+  it("brief_I-004 flop decision 13 (the preload double count, fixed 2026-10-07): 138.5 against the table's 108.5 STILL FAILS — no side pot hides it", () => {
+    // SB jams 15, hero BB (97.5 behind) calls, UTG jams 22, CO and BTN call: the table's 108.5, hero facing 7, no seat
+    // above hero's 97.5. The plan keeping UTG and CO layers the 15 hero called (15 each into a starting pot of 94.5):
+    // fixed, UTG's all-in goes out as the 7 he has in the tree → 108.5; the bug sent the table's 22 → 138.5
+    const h = handOf({ 1: "CO", 2: "BTN", 3: "SB", 4: "BB", 5: "UTG", 6: "HJ" }, { 1: 100, 2: 100, 3: 17.5, 4: 100, 5: 24.5, 6: 100 }, 4, [
+      [3, "post-sb", 0.5, "preflop"], [4, "post-bb", 1, "preflop"], [5, "raise", 2.5, "preflop"], [6, "fold", undefined, "preflop"], [1, "call", 2.5, "preflop"],
+      [2, "call", 2.5, "preflop"], [3, "call", 2, "preflop"], [4, "call", 1.5, "preflop"],
+      [3, "all-in", 15], [4, "call", 15], [5, "all-in", 22], [1, "call", 22], [2, "call", 22]], 7);
+    const dealt = { 1: 100, 2: 100, 3: 17.5, 4: 100, 5: 24.5, 6: 100 };
+    const plan = "dead:SB + dead:BTN (called level in the pot)";
+    const walk = (inv: number) => traceOf(plan, ["BB", "UTG", "CO"], 0, 94.5, [82.5, 7, 82.5], [
+      [[], 0, [0, 0, 0], 94.5, "CHECK"], [["X"], 1, [0, 0, 0], 94.5, "ALLIN"], [["X", `R${inv}`], 2, [0, inv, 0], 94.5 + inv, "CALL"],
+      [["X", `R${inv}`, "C"], 0, [0, inv, inv], 94.5 + 2 * inv, null]]);
+    const fixed = five(h, dealt, [walk(7)]);
+    expect(fixed.status).toBe("pass");
+    expect(fixed.text).toContain("108.5bb at hero's node (the table's pot)");
+    expect(fixed.text).not.toContain("side pot");
+    const bug = five(h, dealt, [walk(22)]);
+    expect(bug.status).toBe("fail");
+    expect(bug.potOff).toBe(true);
+    expect(bug.text).toContain("pot at hero's node 138.5bb, the capture's 108.5bb (Δ 30bb; the table's pot)");
+  });
+
+  // UTG bets 4, HJ calls, CO raises to 18, BTN calls 18, hero BB to act with his stack under 18 (the SB folded preflop:
+  // 13 in the pot). brief_I-011: hero 15 behind; brief_I-012: hero 10 (its seats renumbered onto I-011's)
+  const shortHero = (bb: number) => {
+    const h = handOf({ 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" }, { 1: 100, 2: 100, 3: 100, 4: 100, 5: 100, 6: bb + 2.5 }, 6, [
+      [5, "post-sb", 0.5, "preflop"], [6, "post-bb", 1, "preflop"], [1, "raise", 2.5, "preflop"], [2, "call", 2.5, "preflop"], [3, "call", 2.5, "preflop"],
+      [4, "call", 2.5, "preflop"], [5, "fold", undefined, "preflop"], [6, "call", 1.5, "preflop"],
+      [6, "check"], [1, "bet", 4], [2, "call", 4], [3, "raise", 18], [4, "call", 18]], bb);
+    const dealt = { 1: 100, 2: 100, 3: 100, 4: 100, 5: 100, 6: bb + 2.5 };
+    // the three stored plans: two drop the BTN (his 18 dead, capped at hero's stack) and keep the CO's raise of 18; the
+    // third keeps the CO and the BTN, 18 each
+    const raiseTo18 = (plan: string, seat: string) => traceOf(plan, ["BB", seat, "CO"], 0, 13 + 4 + bb, [bb, 97.5, 97.5], [
+      [[], 0, [0, 0, 0], 17 + bb, "CHECK"], [["X"], 1, [0, 0, 0], 17 + bb, "BET"], [["X", "R4"], 2, [0, 4, 0], 21 + bb, "RAISE"],
+      [["X", "R4", "R18"], 0, [0, 4, 18], 39 + bb, null]]);
+    const both = traceOf("dead:UTG + dead:HJ", ["BB", "CO", "BTN"], 0, 21, [bb, 97.5, 97.5], [
+      [[], 0, [0, 0, 0], 21, "CHECK"], [["X"], 1, [0, 0, 0], 21, "BET"], [["X", "R18"], 2, [0, 18, 0], 39, "CALL"], [["X", "R18", "C"], 0, [0, 18, 18], 57, null]]);
+    return { h, dealt, walks: [raiseTo18("dead:HJ + dead:BTN", "UTG"), raiseTo18("dead:UTG + dead:BTN", "HJ"), both] };
+  };
+
+  it("brief_I-011 flop decision 13 (hero 15): table 57 less CO 3 and BTN 3 = 51; trees 54 / 54 / 57 less their CO / CO+BTN above 15 = 51 — PASS", () => {
+    const s = shortHero(15);
+    expect(s.walks.map((w) => w.nodes.at(-1)!.potNode)).toEqual([54, 54, 57]);
+    const c = five(s.h, s.dealt, s.walks);
+    expect(c.status).toBe("pass");
+    expect(c.text).toContain("dead:HJ + dead:BTN: pot entering not compared (dead:HJ + dead:BTN: this street's dead chips are in it); 51bb at hero's node (the table's pot; table 57, hero can contest 51: CO 3 and BTN 3 above hero's stack (15) are a side pot; tree 54, hero can contest 51: CO 3 above hero's 15)");
+    expect(c.text).toContain("dead:UTG + dead:HJ: pot entering not compared (dead:UTG + dead:HJ: this street's dead chips are in it); 51bb at hero's node (the table's pot; table 57, hero can contest 51: CO 3 and BTN 3 above hero's stack (15) are a side pot; tree 57, hero can contest 51: CO 3 and BTN 3 above hero's 15)");
+  });
+
+  it("brief_I-012 flop decision 13 (hero 10): table 57 → 41; trees 49 / 49 / 57 → 41 — PASS", () => {
+    const s = shortHero(10);
+    expect(s.walks.map((w) => w.nodes.at(-1)!.potNode)).toEqual([49, 49, 57]);
+    const c = five(s.h, s.dealt, s.walks);
+    expect(c.status).toBe("pass");
+    expect(c.text).toContain("41bb at hero's node (the table's pot; table 57, hero can contest 41: CO 8 and BTN 8 above hero's stack (10) are a side pot; tree 49, hero can contest 41: CO 8 above hero's 10)");
+  });
+
+  it("a tree pot off by more than its side pot still FAILS (hero 15, the dropped BTN's dead chips counted at 18, not 15)", () => {
+    const s = shortHero(15);
+    const off = traceOf("dead:HJ + dead:BTN", ["BB", "UTG", "CO"], 0, 35, [15, 97.5, 97.5], [[["X", "R4", "R18"], 0, [0, 4, 18], 57, null]]);
+    const c = five(s.h, s.dealt, [off]);
+    expect(c.status).toBe("fail");
+    expect(c.text).toContain("pot at hero's node 54bb, the capture's 51bb (Δ 3bb; the table's pot; table 57, hero can contest 51: CO 3 and BTN 3 above hero's stack (15) are a side pot; tree 57, hero can contest 54: CO 3 above hero's 15)");
+  });
+
+  it("po_56way-006 flop decision 12 (hero CO 79; BB jams 149, UTG calls 119 all in, HJ 59 all in): every plan's 223 = the table's 333 less BB 70 and UTG 40", () => {
+    const h = handOf({ 1: "SB", 2: "BB", 3: "UTG", 4: "HJ", 5: "CO", 6: "BTN" }, { 1: 100, 2: 150, 3: 120, 4: 60, 5: 80, 6: 150 }, 5, [
+      [1, "post-sb", 0.5, "preflop"], [2, "post-bb", 1, "preflop"], [3, "call", 1, "preflop"], [4, "call", 1, "preflop"], [5, "call", 1, "preflop"],
+      [6, "call", 1, "preflop"], [1, "call", 0.5, "preflop"], [2, "check", undefined, "preflop"],
+      [1, "check"], [2, "all-in", 149], [3, "call", 119], [4, "call", 59]], 79);
+    const dealt = { 1: 100, 2: 150, 3: 120, 4: 60, 5: 80, 6: 150 };
+    // as stored: GTO Wizard's pot counts the BB's jam up to the deepest OTHER tree seat — hero's 79, the SB's 99, the UTG's 119
+    const walks = [
+      traceOf("dead:UTG + dead:HJ + ghost:BTN", ["SB", "BB", "CO"], 2, 144, [99, 149, 79], [[[], 0, [0, 0, 0], 144, "CHECK"], [["X"], 1, [0, 0, 0], 144, "ALLIN"], [["X", "R149"], 2, [0, 99, 0], 243, null]]),
+      traceOf("ghost:SB + dead:HJ + ghost:BTN", ["BB", "UTG", "CO"], 2, 65, [149, 119, 79], [[[], 0, [0, 0, 0], 65, "ALLIN"], [["R149"], 1, [119, 0, 0], 184, "CALL"], [["R149", "C"], 2, [119, 119, 0], 303, null]]),
+      traceOf("ghost:SB + dead:UTG + ghost:BTN", ["BB", "HJ", "CO"], 2, 85, [149, 59, 79], [[[], 0, [0, 0, 0], 85, "ALLIN"], [["R149"], 1, [79, 0, 0], 164, "CALL"], [["R149", "C"], 2, [79, 59, 0], 223, null]]),
+    ];
+    const c = five(h, dealt, walks);
+    expect(c.status).toBe("pass");
+    const side = "table 333, hero can contest 223: BB 70 and UTG 40 above hero's stack (79) are a side pot";
+    expect(c.text).toContain(`dead:UTG + dead:HJ + ghost:BTN: pot entering not compared (dead:UTG + dead:HJ + ghost:BTN: this street's dead chips are in it); 223bb at hero's node (the table's pot; ${side}; tree 243, hero can contest 223: BB 20 above hero's 79)`);
+    expect(c.text).toContain(`223bb at hero's node (the table's pot; ${side}; tree 303, hero can contest 223: BB 40 and UTG 40 above hero's 79)`);
+    expect(c.text).toContain(`223bb at hero's node (the table's pot; ${side})`);
+  });
+
+  it("a trace without each seat's stack (before 2026-10-03): both pots whole, as before", () => {
+    const s = shortHero(15);
+    const old = s.walks[2]!;
+    const bare = { ...old, streets: old.streets.map(({ stacksIn: _, ...x }) => x) } as ChainTrace;
+    const c = five(s.h, s.dealt, [bare]);
+    expect(c.status).toBe("pass");
+    expect(c.text).toContain("57bb at hero's node (the table's pot)");
+    expect(c.text).not.toContain("side pot");
   });
 });
