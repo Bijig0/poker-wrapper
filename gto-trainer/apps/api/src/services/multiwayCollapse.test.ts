@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { alignedAt, alignStrategy, blendEv, blendEvs, blendStrategies, planCollapses, pickCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
+import { alignedAt, alignStrategy, blendEv, blendEvs, blendStrategies, coverPick, keptVillains, planCollapses, pickCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
 
 const seat = (pos: string, w = 1): CollapseSeat => ({ pos, range: new Array(6).fill(w) });
 /** four-way flop in postflop order */
@@ -176,6 +176,135 @@ describe("pickCollapses", () => {
 
   it("is null when nothing is legal", () => {
     expect(pickCollapses([])).toBeNull();
+  });
+});
+
+describe("pickCollapses: three-and-cover (2026-10-07)", () => {
+  /** the pick before 2026-10-07: the first `max` ghost-only plans in planCollapses' (name) order */
+  const legacy = (plans: ReturnType<typeof planCollapses>, max = 3) => plans.filter((p) => p.ghostOnly).slice(0, max);
+  const keptBy = (plans: ReturnType<typeof planCollapses>) => new Set(plans.flatMap((p) => keptVillains(p)));
+
+  it("stress po_56way-004: hero SB; BB 60 / UTG 120 / HJ 100 / CO 80 all checked the flop — the BB is in a tree", () => {
+    const five = [seat("SB", 1), seat("BB", 60), seat("UTG", 120), seat("HJ", 100), seat("CO", 80)];
+    const plans = planCollapses(five, "SB", [toks(["X", "SB"], ["X", "BB"], ["X", "UTG"], ["X", "HJ"], ["X", "CO"])]);
+    expect(plans.filter((p) => p.ghostOnly)).toHaveLength(6);
+    // the defect: the first three by name all ghost the BB
+    expect(legacy(plans).map((p) => p.kind)).toEqual(["ghost:BB + ghost:CO", "ghost:BB + ghost:HJ", "ghost:BB + ghost:UTG"]);
+    expect(keptBy(legacy(plans)).has("BB")).toBe(false);
+    const p = pickCollapses(plans)!;
+    expect(p.mode).toBe("blend");
+    // greedy: the first by name (keeps UTG + HJ), then the one keeping both others (BB + CO), then the next by name
+    expect(p.plans.map((x) => x.kind)).toEqual(["ghost:BB + ghost:CO", "ghost:UTG + ghost:HJ", "ghost:BB + ghost:HJ"]);
+    expect([...keptBy(p.plans)].sort()).toEqual(["BB", "CO", "HJ", "UTG"]);
+    for (const x of p.plans) { expect(x.seats).toHaveLength(3); expect(x.seats[x.heroIdx]!.pos).toBe("SB"); }
+    expect(p.why).toContain("the 3 of 6 legal chosen so every villain is in at least one tree");
+    // same request count as before
+    expect(p.plans).toHaveLength(legacy(plans).length);
+  });
+
+  it("live hand 4921735323 (hero CO, KhKs; SB / BB / UTG / HJ checked): the BB was in no tree — now he is", () => {
+    const five = [seat("SB", 1), seat("BB", 2), seat("UTG", 3), seat("HJ", 4), seat("CO", 5)];
+    const plans = planCollapses(five, "CO", [toks(["X", "SB"], ["X", "BB"], ["X", "UTG"], ["X", "HJ"])]);
+    expect(legacy(plans).map((p) => p.kind)).toEqual(["ghost:BB + ghost:HJ", "ghost:BB + ghost:UTG", "ghost:SB + ghost:BB"]);
+    const p = pickCollapses(plans)!;
+    expect(p.plans.map((x) => x.kind)).toEqual(["ghost:BB + ghost:HJ", "ghost:SB + ghost:UTG", "ghost:BB + ghost:UTG"]);
+    expect([...keptBy(p.plans)].sort()).toEqual(["BB", "HJ", "SB", "UTG"]);
+    expect(p.why).toContain("the 3 of 6 legal chosen so every villain is in at least one tree");
+  });
+
+  it("5-way all free where the first three by name ALREADY keep everyone: the old pick and its why stand (amendment)", () => {
+    // live hand 4922578344 (hero HJ, 8s8d; SB and BB checked, CO and BTN behind): ghost:BB+BTN keeps SB/CO,
+    // ghost:BB+CO keeps SB/BTN, ghost:CO+BTN keeps SB/BB — every villain is in a tree, so nothing moves
+    const five = [seat("SB", 1), seat("BB", 2), seat("HJ", 3), seat("CO", 4), seat("BTN", 5)];
+    const plans = planCollapses(five, "HJ", [toks(["X", "SB"], ["X", "BB"])]);
+    expect(plans.filter((p) => p.ghostOnly)).toHaveLength(6);
+    const p = pickCollapses(plans)!;
+    expect(p.plans).toEqual(legacy(plans));
+    expect(p.plans.map((x) => x.kind)).toEqual(["ghost:BB + ghost:BTN", "ghost:BB + ghost:CO", "ghost:CO + ghost:BTN"]);
+    expect(p.why).toBe("3 independent collapses blended (measured 0.008bb vs the true tree; a single collapse costs 0.020-0.066bb)");
+  });
+
+  it("5-way all free, every shape: the old pick whenever it covers, else a cover that differs from it", () => {
+    const order = ["SB", "BB", "UTG", "HJ", "CO", "BTN"];
+    let kept = 0, changed = 0;
+    for (const drop of order) {
+      const pos = order.filter((p) => p !== drop);
+      for (const hero of pos) {
+        const plans = planCollapses(pos.map((p, i) => seat(p, i + 1)), hero, [toks(...pos.map((p) => ["X", p] as [string, string]).slice(0, pos.indexOf(hero)))]);
+        const p = pickCollapses(plans)!;
+        const villains = pos.filter((x) => x !== hero).length;
+        if (keptBy(legacy(plans)).size === villains) { expect(p.plans).toEqual(legacy(plans)); expect(p.why).not.toContain("chosen"); kept++; }
+        else { expect(p.plans).not.toEqual(legacy(plans)); expect(p.why).toContain("chosen so every villain"); changed++; }
+      }
+    }
+    expect(kept + changed).toBe(30);
+    expect(changed).toBeGreaterThan(0);
+  });
+
+  it("5-way all free: every villain kept in at least one of the 3 plans, for every hero seat, deterministically", () => {
+    const order = ["SB", "BB", "UTG", "HJ", "CO", "BTN"];
+    for (const drop of order) {
+      const pos = order.filter((p) => p !== drop);
+      for (const hero of pos) {
+        const five = pos.map((p, i) => seat(p, i + 1));
+        const line = [toks(...pos.map((p) => ["X", p] as [string, string]).slice(0, pos.indexOf(hero)))];
+        const plans = planCollapses(five, hero, line);
+        const a = pickCollapses(plans)!;
+        const b = pickCollapses(planCollapses(five, hero, line))!;
+        expect(a.plans.map((x) => x.kind)).toEqual(b.plans.map((x) => x.kind));
+        expect(a.plans).toHaveLength(3);
+        expect([...keptBy(a.plans)].sort()).toEqual(pos.filter((p) => p !== hero).sort());
+      }
+    }
+  });
+
+  it("4-way all free: the plans are exactly the old pick, in the old order", () => {
+    const order = ["SB", "BB", "UTG", "HJ", "CO", "BTN"];
+    let n = 0;
+    for (let a = 0; a < 6; a++) for (let b = a + 1; b < 6; b++) {
+      const pos = order.filter((_, i) => i !== a && i !== b);
+      for (const hero of pos) {
+        const four = pos.map((p, i) => seat(p, i + 1));
+        const plans = planCollapses(four, hero, [toks(...pos.map((p) => ["X", p] as [string, string]).slice(0, pos.indexOf(hero)))]);
+        const p = pickCollapses(plans)!;
+        expect(p.plans).toEqual(legacy(plans));
+        expect(p.why).toBe("3 independent collapses blended (measured 0.008bb vs the true tree; a single collapse costs 0.020-0.066bb)");
+        n++;
+      }
+    }
+    expect(n).toBe(60);
+  });
+
+  it("mixed (one villain has chips in, not ghostable): unchanged at 5-way; at 6-way he is in every tree", () => {
+    // 6-way: SB x, BB x, UTG x, HJ bets, hero (CO) to act, BTN behind — HJ cannot be ghosted; three of the four free
+    // villains must go, so C(4,3) = 4 ghost plans, each keeping HJ + one free villain: 3 plans can keep only 3 of the 4
+    // (no full cover exists), and the greedy keeps 3 distinct ones — the first three by name, as before
+    const six = [seat("SB", 1), seat("BB", 2), seat("UTG", 3), seat("HJ", 4), seat("CO", 5), seat("BTN", 6)];
+    const sixPlans = planCollapses(six, "CO", [toks(["X", "SB"], ["X", "BB"], ["X", "UTG"], ["R3", "HJ"])]);
+    expect(sixPlans.filter((p) => p.ghostOnly)).toHaveLength(4);
+    const sp = pickCollapses(sixPlans)!;
+    expect(sp.plans).toHaveLength(3);
+    expect(sp.plans.every((p) => keptVillains(p).includes("HJ"))).toBe(true);
+    expect(keptBy(sp.plans).size).toBe(4);                        // HJ + three distinct free villains
+    expect(sp.plans).toEqual(legacy(sixPlans));
+    expect(sp.why).not.toContain("chosen");                      // the cover changed nothing, so nothing is said
+    // 5-way, one committed villain: three ghost-pair plans = the old pick, byte for byte
+    const five = [seat("SB", 1), seat("BB", 2), seat("HJ", 3), seat("CO", 4), seat("BTN", 5)];
+    const plans = planCollapses(five, "CO", [toks(["X", "SB"], ["R3", "BB"], ["X", "HJ"])]);
+    expect(plans.filter((p) => p.ghostOnly)).toHaveLength(3);
+    const p = pickCollapses(plans)!;
+    expect(p.plans).toEqual(legacy(plans));
+    expect(p.plans.every((x) => keptVillains(x).includes("BB"))).toBe(true);
+    expect(p.why).not.toContain("chosen so every villain");
+  });
+
+  it("coverPick: max or fewer plans are returned as given; a cap of 2 still covers when it can", () => {
+    const five = [seat("SB"), seat("BB"), seat("HJ"), seat("CO"), seat("BTN")];
+    const plans = planCollapses(five, "BTN", [toks(["X", "SB"], ["X", "BB"], ["X", "HJ"], ["X", "CO"])]).filter((p) => p.ghostOnly);
+    expect(coverPick(plans.slice(0, 3), 3)).toEqual(plans.slice(0, 3));
+    const two = coverPick(plans, 2);
+    expect(two).toHaveLength(2);
+    expect([...keptBy(two)].sort()).toEqual(["BB", "CO", "HJ", "SB"]);
   });
 });
 
