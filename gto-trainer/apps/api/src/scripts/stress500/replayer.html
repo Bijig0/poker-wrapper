@@ -429,17 +429,27 @@ const store = { get(k) { try { return localStorage.getItem(k); } catch { return 
 // wrong = a defect. Saved to the local server's marks.json when the page is served by serve.ts (GET/POST api/marks), else to
 // this browser's localStorage; Export / Import move them between the two. Keys: "<hand id>" and "<hand id>#<step>".
 const VERDICTS = { fine: ["fine", "Fine"], discuss: ["discuss", "Discuss"], wrong: ["wrong", "Wrong"] };
-let MARKS = {}, MARKS_SERVER = false, MARKS_TIMER = null;
+let MARKS = {}, MARKS_SERVER = false, MARKS_MODE = "browser", MARKS_TIMER = null, CDB = null, CDB_WRITE = Promise.resolve();
+/** Where the marks live, in order: the artifact's shared store on claude.ai (the `db` capability, document review/marks —
+ *  Claude reads it back with ArtifactData), else the local serve.ts file (api/marks), else this browser's localStorage. */
 async function loadMarks() {
-  try { const r = await fetch("api/marks", { cache: "no-store" }); if (r.ok) { MARKS = (await r.json()) || {}; MARKS_SERVER = true; return; } } catch {}
+  try {
+    if (window.claude && typeof window.claude.use === "function") {
+      const db = await window.claude.use("db");
+      if (db) { CDB = db.doc("review/marks"); const snap = await CDB.get(); MARKS = (snap.exists && snap.data()) || {}; MARKS_MODE = "artifact"; return; }
+    }
+  } catch {}
+  try { const r = await fetch("api/marks", { cache: "no-store" }); if (r.ok) { MARKS = (await r.json()) || {}; MARKS_SERVER = true; MARKS_MODE = "file"; return; } } catch {}
   try { MARKS = JSON.parse(store.get("s5_marks") || "{}") || {}; } catch { MARKS = {}; }
 }
 function persistMarks() {
   store.set("s5_marks", JSON.stringify(MARKS));
-  if (!MARKS_SERVER) return;
   clearTimeout(MARKS_TIMER);
+  if (CDB) { MARKS_TIMER = setTimeout(() => { const body = JSON.parse(JSON.stringify(MARKS)); CDB_WRITE = CDB_WRITE.then(() => CDB.set(body)).catch(() => {}); }, 400); return; }
+  if (!MARKS_SERVER) return;
   MARKS_TIMER = setTimeout(() => fetch("api/marks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(MARKS) }).catch(() => {}), 250);
 }
+const marksWhere = () => MARKS_MODE === "artifact" ? "saved to this artifact's shared store (Claude reads it)" : MARKS_MODE === "file" ? "saved to marks.json on this machine (Claude reads it)" : "saved in this browser only — export before switching";
 function setMark(key, patch) {
   const next = { ...(MARKS[key] || {}), ...patch, at: new Date().toISOString() };
   if (!next.v && !(next.note || "").trim()) delete MARKS[key]; else MARKS[key] = next;
@@ -562,8 +572,8 @@ function renderList() {
     </section>
     <section class="card" id="reviewCard"><h2>Your review</h2>
       ${(() => { const c = reviewCounts(); return `<div class="review"><span class="chip fine">${c.fine} fine</span><span class="chip discuss">${c.discuss} discuss</span><span class="chip wrong">${c.wrong} wrong</span><span class="chip dim">${c.un} unreviewed</span>
-        <button class="mini" id="revNext">next unreviewed &rarr;</button><button class="mini" id="revExport">export marks</button><label class="mini" style="cursor:pointer">import marks<input type="file" id="revImport" accept="application/json" hidden></label>
-        <span class="sub">${MARKS_SERVER ? "saved to marks.json on this machine" : "saved in this browser only — export before switching"}</span></div>
+        <button class="mini" id="revNext">next unreviewed &rarr;</button>${MARKS_MODE === "artifact" ? "" : `<button class="mini" id="revExport">export marks</button><label class="mini" style="cursor:pointer">import marks<input type="file" id="revImport" accept="application/json" hidden></label>`}
+        <span class="sub">${marksWhere()}</span></div>
         <p class="sub" style="margin:8px 0 0;max-width:110ch">Open a hand, press <b>1</b> Fine · <b>2</b> Discuss (talk it through with Claude) · <b>3</b> Wrong (a defect) · <b>0</b> clear · <b>N</b> next unreviewed · <b>[</b> / <b>]</b> previous / next hand. A note on the hand or on a single decision is kept with the mark; a decision's mark rolls up to the hand when the hand has none of its own.</p>`; })()}
     </section>
     <section class="card"><h2>The fixes — did they hold?</h2>
@@ -943,7 +953,7 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (id && INDEX.hands.some((h) => h.id === id)) openHand(id); else if (!id && !VIEW.list) renderList(); });
 
 (async function boot() {
-  try { INDEX = await loadIndex(); await loadMarks(); }
+  try { INDEX = await loadIndex(); }
   catch (e) { $("main").innerHTML = `<div class="card">The run's data could not be loaded (${esc(e.message)}).</div>`; return; }
   $("hdr-sub").textContent = `${INDEX.totals.hands} of ${INDEX.planned} hands · ${INDEX.totals.decisions} decisions`;
   const fams = [...new Set(INDEX.hands.map((h) => h.fam))];
@@ -952,5 +962,6 @@ window.addEventListener("hashchange", () => { const id = location.hash.slice(1);
   for (const f of flags) $("flag").add(new Option(f, f));
   const id = location.hash.slice(1);
   if (id && INDEX.hands.some((h) => h.id === id)) openHand(id); else renderList();
+  loadMarks().then(() => { updateProgress(); if (VIEW.list) renderList(); else { renderReviewBar(); renderAnswer(); } });
 })();
 </script>
