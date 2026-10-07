@@ -271,15 +271,19 @@ for (const sc of todo) {
       if (r.solveId) { try { trace = solveStore.get(Number(r.solveId))?.trace ?? null; } catch { trace = null; } }
       // THE SHORT ALL-IN (services/allInPress, 2026-10-07): an all-in the answer sized to its tree is no longer a latent
       // mis-press — `misPress` keeps only the ones with no press; the old detector must agree with the press field
-      const oldMp = r.ok && a.street !== "preflop" ? misPress(r, h, trace) : null;
       const press = r.ok && Array.isArray(r.press) && r.press.length ? r.press : null;
+      // a DROPPED short all-in (under the table's minimum raise) is no longer in the served mix: the old detector reads it
+      // back in, so the two still judge the same all-in
+      const dropped = (press ?? []).filter((e: any) => e.kind === "dropped").map((e: any) => ({ action: e.action, frequency: 0 }));
+      const oldMp = r.ok && a.street !== "preflop" ? misPress(dropped.length ? { ...r, actions: [...(r.actions ?? []), ...dropped] } : r, h, trace) : null;
       const mp = oldMp && !press ? oldMp : null;
       // agree = both fire or neither; a press the old detector misses, or a flag with no press, is a disagreement
       // (the press may legitimately be absent when the table's smallest raise is hero's whole stack — said in the text)
-      const pressCheck = !!oldMp === !!press ? null : press ? `press without the old flag (${press[0].action} → ${press[0].verb} to ${press[0].amount})` : `old flag without a press: ${oldMp}`;
+      const pressCheck = !!oldMp === !!press ? null : press ? `press without the old flag (${press[0].action} → ${press[0].kind === "dropped" ? "dropped" : `${press[0].verb} to ${press[0].amount}`})` : `old flag without a press: ${oldMp}`;
       if (pressCheck) log(`${sc.id} #${i}: SHORT ALL-IN CROSS-CHECK DISAGREES — ${pressCheck}`);
       if (mp) g.flags.push("mis-press");
-      if (press) g.flags.push("allin-sized");
+      if (press?.some((e: any) => e.kind === "raise-to")) g.flags.push("allin-sized");
+      if (dropped.length) g.flags.push("allin-dropped");
       if (pressCheck) g.flags.push("press-disagree");
       if (ms > 15_000) g.flags.push(`slow-${Math.round(ms / 1000)}s`);
       decisions.push({
