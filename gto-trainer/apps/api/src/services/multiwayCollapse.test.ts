@@ -202,6 +202,45 @@ describe("pickCollapses: three-and-cover (2026-10-07)", () => {
     expect(p.plans).toHaveLength(legacy(plans).length);
   });
 
+  it("live hand 4921735323 (hero CO, KhKs; SB / BB / UTG / HJ checked): the BB was in no tree — now he is", () => {
+    const five = [seat("SB", 1), seat("BB", 2), seat("UTG", 3), seat("HJ", 4), seat("CO", 5)];
+    const plans = planCollapses(five, "CO", [toks(["X", "SB"], ["X", "BB"], ["X", "UTG"], ["X", "HJ"])]);
+    expect(legacy(plans).map((p) => p.kind)).toEqual(["ghost:BB + ghost:HJ", "ghost:BB + ghost:UTG", "ghost:SB + ghost:BB"]);
+    const p = pickCollapses(plans)!;
+    expect(p.plans.map((x) => x.kind)).toEqual(["ghost:BB + ghost:HJ", "ghost:SB + ghost:UTG", "ghost:BB + ghost:UTG"]);
+    expect([...keptBy(p.plans)].sort()).toEqual(["BB", "HJ", "SB", "UTG"]);
+    expect(p.why).toContain("the 3 of 6 legal chosen so every villain is in at least one tree");
+  });
+
+  it("5-way all free where the first three by name ALREADY keep everyone: the old pick and its why stand (amendment)", () => {
+    // live hand 4922578344 (hero HJ, 8s8d; SB and BB checked, CO and BTN behind): ghost:BB+BTN keeps SB/CO,
+    // ghost:BB+CO keeps SB/BTN, ghost:CO+BTN keeps SB/BB — every villain is in a tree, so nothing moves
+    const five = [seat("SB", 1), seat("BB", 2), seat("HJ", 3), seat("CO", 4), seat("BTN", 5)];
+    const plans = planCollapses(five, "HJ", [toks(["X", "SB"], ["X", "BB"])]);
+    expect(plans.filter((p) => p.ghostOnly)).toHaveLength(6);
+    const p = pickCollapses(plans)!;
+    expect(p.plans).toEqual(legacy(plans));
+    expect(p.plans.map((x) => x.kind)).toEqual(["ghost:BB + ghost:BTN", "ghost:BB + ghost:CO", "ghost:CO + ghost:BTN"]);
+    expect(p.why).toBe("3 independent collapses blended (measured 0.008bb vs the true tree; a single collapse costs 0.020-0.066bb)");
+  });
+
+  it("5-way all free, every shape: the old pick whenever it covers, else a cover that differs from it", () => {
+    const order = ["SB", "BB", "UTG", "HJ", "CO", "BTN"];
+    let kept = 0, changed = 0;
+    for (const drop of order) {
+      const pos = order.filter((p) => p !== drop);
+      for (const hero of pos) {
+        const plans = planCollapses(pos.map((p, i) => seat(p, i + 1)), hero, [toks(...pos.map((p) => ["X", p] as [string, string]).slice(0, pos.indexOf(hero)))]);
+        const p = pickCollapses(plans)!;
+        const villains = pos.filter((x) => x !== hero).length;
+        if (keptBy(legacy(plans)).size === villains) { expect(p.plans).toEqual(legacy(plans)); expect(p.why).not.toContain("chosen"); kept++; }
+        else { expect(p.plans).not.toEqual(legacy(plans)); expect(p.why).toContain("chosen so every villain"); changed++; }
+      }
+    }
+    expect(kept + changed).toBe(30);
+    expect(changed).toBeGreaterThan(0);
+  });
+
   it("5-way all free: every villain kept in at least one of the 3 plans, for every hero seat, deterministically", () => {
     const order = ["SB", "BB", "UTG", "HJ", "CO", "BTN"];
     for (const drop of order) {
@@ -248,7 +287,7 @@ describe("pickCollapses: three-and-cover (2026-10-07)", () => {
     expect(sp.plans.every((p) => keptVillains(p).includes("HJ"))).toBe(true);
     expect(keptBy(sp.plans).size).toBe(4);                        // HJ + three distinct free villains
     expect(sp.plans).toEqual(legacy(sixPlans));
-    expect(sp.why).toContain("the 3 of 4 legal chosen to keep the most villains in a tree (4 of 5)");
+    expect(sp.why).not.toContain("chosen");                      // the cover changed nothing, so nothing is said
     // 5-way, one committed villain: three ghost-pair plans = the old pick, byte for byte
     const five = [seat("SB", 1), seat("BB", 2), seat("HJ", 3), seat("CO", 4), seat("BTN", 5)];
     const plans = planCollapses(five, "CO", [toks(["X", "SB"], ["R3", "BB"], ["X", "HJ"])]);

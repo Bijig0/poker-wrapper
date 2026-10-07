@@ -251,7 +251,8 @@ export const keptVillains = (p: CollapsePlan): string[] =>
 
 /**
  * THREE-AND-COVER (2026-10-07, Brady: "three-and-cover, go"). At most `max` of `plans` (planCollapses' order), chosen
- * so that every villain any of them keeps is kept in at least one: greedy — repeatedly the plan that keeps the most
+ * so that every villain any of them keeps is kept in at least one. The first `max` in order (the pick before) stand
+ * whenever they already do that; only when they leave a villain out, greedy — repeatedly the plan that keeps the most
  * villains not yet kept by one already taken, ties to the earlier plan; once every villain is in, the rest in order.
  * With `max` plans or fewer nothing is chosen: all of them, in order, exactly as before (every 4-way field, and a
  * 5-way field with a villain who has chips in).
@@ -264,6 +265,11 @@ export const keptVillains = (p: CollapsePlan): string[] =>
  */
 export function coverPick(plans: CollapsePlan[], max: number): CollapsePlan[] {
   if (plans.length <= max) return plans.slice();
+  // THE OLD PICK STAYS WHEN IT ALREADY COVERS (2026-10-07, coordinator's amendment): a different trio where every villain
+  // was already in a tree moves the served mix with no coverage gain (12 of the 14 live all-free 5-way answers)
+  const first = plans.slice(0, max);
+  const all = new Set(plans.flatMap(keptVillains));
+  if (new Set(first.flatMap(keptVillains)).size >= all.size) return first;
   const left = plans.slice();
   const kept = new Set<string>();
   const out: CollapsePlan[] = [];
@@ -284,8 +290,8 @@ export function coverPick(plans: CollapsePlan[], max: number): CollapsePlan[] {
 /**
  * The shipped policy, straight off the calibration: blend two or more GHOST plans; failing that take a MERGE;
  * failing that the single ghost. `max` bounds the cloud cost — each plan is one full chain walk. When more than `max`
- * ghost plans are legal (a 5-way flop with every villain free), the `max` blended are chosen to keep every villain in
- * at least one tree (coverPick, 2026-10-07).
+ * ghost plans are legal (a 5-way flop with every villain free) and the first `max` by name leave a villain in no tree,
+ * the `max` blended are chosen to keep every villain in at least one (coverPick, 2026-10-07).
  */
 export function pickCollapses(plans: CollapsePlan[], max = 3): Picked | null {
   if (!plans.length) return null;
@@ -299,13 +305,15 @@ export function pickCollapses(plans: CollapsePlan[], max = 3): Picked | null {
   const ghosts = plans.filter((p) => p.ghostOnly);
   if (ghosts.length >= 2) {
     const chosen = coverPick(ghosts, max);
+    // said only when the cover changed the pick: the first `max` by name is what every other answer blends
+    const covered = chosen.some((p, i) => p !== ghosts[i]);
     const all = new Set(ghosts.flatMap(keptVillains));
     const kept = new Set(chosen.flatMap(keptVillains));
     return {
       plans: chosen, mode: "blend",
       why: `${chosen.length} independent collapses blended (measured 0.008bb vs the true tree; ` +
         `a single collapse costs 0.020-0.066bb)` +
-        (ghosts.length <= max ? ""
+        (!covered ? ""
           : kept.size >= all.size ? `; the ${chosen.length} of ${ghosts.length} legal chosen so every villain is in at least one tree`
           : `; the ${chosen.length} of ${ghosts.length} legal chosen to keep the most villains in a tree (${kept.size} of ${all.size})`),
     };
