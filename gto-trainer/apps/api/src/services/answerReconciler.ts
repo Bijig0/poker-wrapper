@@ -3,7 +3,8 @@ import { answerLog, type FailKind } from "./answerLog";
 import { sessionsStore } from "./sessionsStore";
 import { HAND_COLS, openDb as openHandsDb, enrichSync, coverageOf, answersByHand, decisionIndexOf } from "../routes/dashboard";
 import { FINISHED } from "../../../../packages/data-root/handsSchema";
-import { asActivity } from "./answerTrace";
+import { asActivity, step } from "./answerTrace";
+import { sessionLive } from "./sessionLive";
 
 /**
  * Why a decision got no answer, settled AFTER the hand is over.
@@ -59,30 +60,32 @@ export function stallOn(raw: unknown, street: string | null): ConnStall | null {
  * @param sinceMs only hands played at or after this instant (0 = the whole archive)
  */
 export function reconcileAnswers(sinceMs: number): ReconcileResult {
-  const d = open();
+  // each synchronous step is timed into the tick's activity (services/answerTrace step()): a [stall] of a second or
+  // more names the one that held the loop — "timer answerReconciler (55.5 s: hands query 55.4 s)"
+  const d = step("openDb", open);
   const out: ReconcileResult = { hands: 0, attached: 0, noProbe: 0, socketStall: 0, skippedNoSession: 0, sinceMs };
   if (!d) return out;
   let rows: HandRowLite[];
   try {
-    rows = d.query<HandRowLite, [number]>(
+    rows = step("hands query", () => d.query<HandRowLite, [number]>(
       `SELECT ${HAND_COLS} FROM hands WHERE ${FINISHED} AND COALESCE(played_at, 0) >= ? ORDER BY played_at`
-    ).all(sinceMs);
+    ).all(sinceMs));
   } catch { return out; }
   if (!rows.length) return out;
 
   // one read of the answer log for the whole pass
   const days = Math.max(1, Math.ceil((Date.now() - (sinceMs || rows[0]!.played_at || Date.now())) / 86_400_000) + 1);
-  const all = answerLog.rows(days);
-  const byCid = answersByHand(all);
+  const all = step("answerLog.rows", () => answerLog.rows(days));
+  const byCid = step("answersByHand", () => answersByHand(all));
   // failures the poller could not attribute: matched on hero's cards and the
   // time the hand was live, which is unambiguous inside one session
   const orphans = all.filter((a) => !a.client_hand_id && a.text == null);
   // sessions that were declared WITH study answers on — the only hands where a
   // missing answer is a fault rather than the expected state
   const answering = new Map<string, boolean>();
-  for (const sess of sessionsStore.list(500)) answering.set(sess.id, sess.config?.answers === true);
+  for (const sess of step("sessions list", () => sessionsStore.list(500))) answering.set(sess.id, sess.config?.answers === true);
 
-  for (const row of rows) {
+  step("loop", () => { for (const row of rows) {
     const e = enrichSync(row as never);
     if (!e?.clientHandId) continue;
     out.hands++;
@@ -135,17 +138,43 @@ export function reconcileAnswers(sinceMs: number): ReconcileResult {
       if (stall) out.socketStall++;
       else out.noProbe++;
     }
-  }
+  } });
   return out;
 }
 
-/** Rolling pass over the last day's hands, a minute after the hand is done. */
+/**
+ * Rolling pass over the last day's hands — POST-HAND BOOKKEEPING, so it waits for a quiet table (2026-10-07).
+ *
+ * The latency audit of 2026-10-07 found the API's event loop frozen 14-93 s at a time with this tick the open activity
+ * (the pass itself is 12 ms standalone; the mechanism is not pinned — the [stall] lines now carry the CPU used and the
+ * per-step timings to pin it). Nothing here is needed while hands are being played: a no-answer row is written after the
+ * hand anyway. So the tick does nothing while a poker session is live (services/sessionLive.ts: a declared session not
+ * ended, or a live answer within the last minute — a value in memory, re-read at most once a minute), and runs at most
+ * once per `minGapMs` (10 min) when idle. The first idle tick after a session runs it, so the session's hands are
+ * settled within a couple of minutes of its end.
+ */
+export type ReconcileTick = "ran" | "live" | "recent";
+export interface ReconcilerOpts { live?: () => boolean; minGapMs?: number; now?: () => number; run?: (sinceMs: number) => unknown }
+export const RECONCILE_MIN_GAP_MS = 10 * 60_000;
+
 class AnswerReconciler {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private lastRunAt = 0;
+  private o: Required<ReconcilerOpts> = { live: () => sessionLive(), minGapMs: RECONCILE_MIN_GAP_MS, now: Date.now, run: reconcileAnswers };
+  configure(opts: ReconcilerOpts): this { this.o = { ...this.o, ...opts }; this.lastRunAt = 0; return this; }
+  /** One tick: skipped while a session is live, or when the last pass ran less than minGapMs ago. */
+  tick(): ReconcileTick {
+    const now = this.o.now();
+    if (step("session live?", () => this.o.live())) return "live";
+    if (this.lastRunAt && now - this.lastRunAt < this.o.minGapMs) return "recent";
+    this.lastRunAt = now;
+    this.o.run(now - 86_400_000);
+    return "ran";
+  }
   start(everyMs = 120_000): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      try { asActivity("timer answerReconciler", () => reconcileAnswers(Date.now() - 86_400_000)); } catch { /* a reconcile pass never takes the process down */ }
+      try { asActivity("timer answerReconciler", () => this.tick()); } catch { /* a reconcile pass never takes the process down */ }
     }, everyMs);
     this.timer.unref?.();
   }
