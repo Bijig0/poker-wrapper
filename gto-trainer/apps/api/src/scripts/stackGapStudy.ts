@@ -26,6 +26,18 @@
  *      limper, a min-raise. Read by RATIO WITHIN A DEPTH BAND, so "1.3x at 10bb" and "1.3x at 80bb" are told apart.
  *   4  UNEVEN TABLES: (a) TWO seats off where the chart models one; (b) hero's OWN stack off (the picker reads the
  *      even chart at his stack); (c) the real chart decisions sampled across (role × stack ratio) — exp 0's real half.
+ *   6  DEEP LIMPED POTS (2026-10-07, ledger config deep-6max-nl200-measure, Part 1 of proposal deep-stack-6max-nl200):
+ *      the limper(s) NODE-LOCKED to the pool's 'deep' limp range (poolLimpLocks.v2.json, the lock
+ *      gtowAiPreflop.solvePreflopPoolLocked posts live) on an even table at 100 / 150 / 200 / 250bb; the 100bb tree
+ *      stands for the 100bb limp chart that answers every deep limped pot today, scored inside each deeper tree.
+ *      8 spots: iso BTN/CO/HJ over one limp, SB vs one limp, BB vs one limp, BB vs a limp + the SB's complete (GTO
+ *      Wizard holds ONE non-SB limper, so "two limps" = limp + complete, both locked), SB facing the BB's iso after
+ *      completing (hero's range = his complete on the same tree), BB facing an iso over a limp.
+ *   7  DEEP RE-RAISE LINES: hero opens 2.5x on an even table at 150 / 175 / 200bb and faces a 3x 3-bet (BTN vs CO, BB
+ *      vs BTN, SB vs BTN); the 150bb tree stands for the D150 chart — 175 = 1.17x, inside RERAISE_STACK_TAU 1.3;
+ *      200 = 1.33x, just past it.
+ *      Exps 6/7 must run with GTOW_REQUEST_ORIGIN=deepStackStudy; their budget (--budget, default 450) counts every
+ *      request that origin ever sent, results go to audits/deep-stack-study.jsonl, `--report-deep` writes the report.
  *
  * SAFE TO LEAVE RUNNING: one spot every --every seconds; before each spot it WAITS while a poker session is live,
  * waits while the Ultra account has more than --hour-cap requests in the trailing hour (the wall is 2,250), stops at
@@ -40,7 +52,7 @@
  */
 process.env.GTOW_REQUEST_ORIGIN ??= "stackGapStudy";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
 import { buildPreflopTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -50,22 +62,30 @@ import { comboIndex, COMBOS } from "../utils/comboIndex/comboIndex";
 import { is6Handed, solvePreflop6max } from "../services/fastSolve";
 import { nodeGetter } from "../services/hrc6max";
 import { SIX_MAX_STRATEGY_ID } from "../services/strategies";
-import { solvePreflopGtowAi, solvePreflopWithMenus, fetchNode, debugTree } from "../services/gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopWithMenus, fetchNode, debugTree, shapeOf, lineOf, menus as treeMenus, treeKeyOf, lockedSolution,
+  poolLimpLockOf, poolLockSeams, type NodeLock } from "../services/gtowAiPreflop";
+import { poolLimpWeights, type PoolLimpKey } from "../services/poolLimpFloor";
 import type { TreeGap } from "../services/treeGap";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 const argv = process.argv.slice(2);
 const flag = (n: string) => argv.includes(n);
 const num = (n: string, d: number) => { const i = argv.indexOf(n); return i >= 0 ? Number(argv[i + 1]) || d : d; };
-const PLAN = flag("--plan"), RUN = flag("--run"), REPORT = flag("--report"), TREES = flag("--trees");
-const EVERY = num("--every", 45), HOUR_CAP = num("--hour-cap", 900), BUDGET = num("--budget", 2600), LIMIT = num("--limit", 0);
-const REAL_SIZE = num("--real-size", 190), REAL_STACK = num("--real-stack", 233);
+const PLAN = flag("--plan"), RUN = flag("--run"), REPORT = flag("--report"), TREES = flag("--trees"), REPORT_DEEP = flag("--report-deep");
 const EXPS = (argv.includes("--exp") ? String(argv[argv.indexOf("--exp") + 1]) : "1,2,3,4").split(",").map(Number);
+/** the deep-stack measurement (exps 6/7): its own origin, file, and a budget over every request that origin ever sent */
+const DEEP = EXPS.some((e) => e === 6 || e === 7);
+const DEEP_ORIGIN = "deepStackStudy";
+const EVERY = num("--every", 45), HOUR_CAP = num("--hour-cap", 900), BUDGET = num("--budget", DEEP ? 450 : 2600), LIMIT = num("--limit", 0);
+const REAL_SIZE = num("--real-size", 190), REAL_STACK = num("--real-stack", 233);
 const API = process.env.STUDY_API ?? "http://127.0.0.1:2000";
 const DATA = process.env.POKER_DATA_DIR ?? "C:\\Users\\Brady\\poker-data";
 const DB = join(DATA, "poker.sqlite");
 const OUT_DIR = join(DATA, "audits");
 const SWEEP_OUT = join(OUT_DIR, "stack-sweep.jsonl"), REAL_OUT = join(OUT_DIR, "stack-gap-real.jsonl"), SIZE_OUT = join(OUT_DIR, "size-gap-real.jsonl");
+const DEEP_OUT = join(OUT_DIR, "deep-stack-study.jsonl");
+const DEEP_REPORT = join(OUT_DIR, "deep-stack-report-2026-10-07.txt");
+const outOf = (exp: number) => (exp === 6 || exp === 7 ? DEEP_OUT : SWEEP_OUT);
 const ORIGIN = "audit";   // not in missQueue's REAL_SOLVE_ORIGINS: files nothing
 const log = (s: string) => console.log(`${new Date().toTimeString().slice(0, 8)} ${s}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -144,15 +164,30 @@ async function ultraUp(): Promise<{ ok: boolean; walled: boolean; why: string }>
 }
 const RATE_LIMIT = /\b429\b|request limit|rate.?limit|walled|too many requests/i;
 const NETWORK = /ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|timed out|fetch failed|network|socket|unable to connect|poll failed/i;
+/** the deep study's own 429s (any of its requests answered 429 since `ts`): one is enough to stop for good */
+const own429Since = (ts: number): number => dbRead((db) => db.query<{ n: number }, [string, number]>(`SELECT count(*) n FROM gtow_requests WHERE o = ? AND ts >= ? AND st = 429`).get(process.env.GTOW_REQUEST_ORIGIN!, ts)?.n ?? 0);
+/** the live API's own word on a session (GET /api/load → sessionLive); null = it did not answer */
+async function apiSessionLive(): Promise<boolean | null> {
+  try { const j = await (await fetch(`${API}/api/load`, { signal: AbortSignal.timeout(8000) })).json() as any; return typeof j?.sessionLive === "boolean" ? j.sessionLive : null; }
+  catch { return null; }
+}
+/** the most one spot has cost so far (the deep budget stops a spot short of the cap, not after it) */
+let spotMax = 15;
 /** wait until it is safe to spend one more spot; false = stop the run */
 async function gate(t0: number): Promise<boolean> {
   let said = "", notUp = 0;
   const say = (s: string) => { if (s !== said) { log(s); said = s; } };
   for (;;) {
-    const used = ownSince(t0);
-    if (used >= BUDGET) { log(`STOP: budget reached (${used} requests of ${BUDGET}); re-run to continue`); return false; }
+    // the deep study counts every request its origin ever sent (a resumed run does not start a fresh budget), and
+    // stops while one more spot at the worst cost seen could pass the cap
+    const used = DEEP ? ownSince(0) : ownSince(t0);
+    if (used >= BUDGET || (DEEP && used + spotMax > BUDGET)) { log(`STOP: budget reached (${used} requests of ${BUDGET}${DEEP ? `; a spot costs up to ${spotMax}` : ""}); re-run to continue`); return false; }
+    if (DEEP && own429Since(0) > 0) { log(`STOP: a request of ${process.env.GTOW_REQUEST_ORIGIN} was answered 429 — stopping for good`); return false; }
     const live = liveSession();
     if (live) { say(`PAUSED: session ${live} is live — waiting for it to end`); await sleep(60_000); continue; }
+    const apiLive = await apiSessionLive();
+    if (apiLive === null && ++notUp > 30) { log(`STOP: ${API}/api/load has not answered for 30 minutes`); return false; }
+    if (apiLive !== false) { say(apiLive ? `PAUSED: ${API}/api/load says a session is live — waiting` : `PAUSED: ${API}/api/load did not answer — waiting (no request while a session cannot be ruled out)`); await sleep(60_000); continue; }
     const h = hourCount();
     if (h >= HOUR_CAP) { say(`PAUSED: Ultra has ${h} requests in the trailing hour (cap ${HOUR_CAP}) — waiting`); await sleep(60_000); continue; }
     const g = await ultraUp();
@@ -167,9 +202,13 @@ async function gate(t0: number): Promise<boolean> {
 const SEAT: Record<string, number> = { UTG: 1, HJ: 2, CO: 3, BTN: 4, SB: 5, BB: 6 };
 type Act = [pos: string, type: "fold" | "raise" | "call" | "all-in", amount?: number];
 interface Build { stacks?: Record<string, number>; line: Act[]; menu?: Record<string, unknown> }
-interface SweepCfg { id: string; exp: 0 | 1 | 2 | 4 | 5; axis: "stack" | "size" | "pair" | "check"; role: string; hero: string; ladder: number[]; at: (v: number) => Build; say: string;
+interface SweepCfg { id: string; exp: 0 | 1 | 2 | 4 | 5 | 6 | 7; axis: "stack" | "size" | "pair" | "check"; role: string; hero: string; ladder: number[]; at: (v: number) => Build; say: string;
   /** the sizes our charts hold on this axis: "true → read" is printed against the nearest of them */
-  grid?: number[] }
+  grid?: number[];
+  /** exp 6: each seat's limp (or the SB's complete) NODE-LOCKED to this pool range (the first "call" of that seat in the line) */
+  locks?: { pos: string; key: PoolLimpKey }[];
+  /** exps 6/7: the depth the chart answering today stands at (the tree every deeper one is read against) */
+  chartAt?: number }
 const F = (...pos: string[]): Act[] => pos.map((p) => [p, "fold"] as Act);
 const mult = (v: number) => `${Math.round(v * 1000) / 1000}x`;
 /** single-size menus for every seat: the open (bb), the 3-bet and the 4-bet as multiples of the bet before */
@@ -194,6 +233,32 @@ const shortCfg = (id: string, role: string, hero: string, seat: string, line: (s
   ({ id, exp: 5, axis: "stack", role, hero, ladder, grid: STACK_GRID, say, at: (v) => ({ stacks: { [seat]: v }, line: line(v) }) });
 const openCfg = (id: string, hero: string, line: (s: number) => Act[], say: string): SweepCfg =>
   ({ id, exp: 1, axis: "size", role: "open", hero, ladder: OPEN_SIZES, grid: OPEN_GRID, say, at: (s) => ({ line: line(s), menu: menu(s, 3.5, 2.3) }) });
+const evenAt = (d: number) => Object.fromEntries(Object.keys(SEAT).map((p) => [p, d]));
+/** exp 6's spots: [id, hero, line, locks, what]. The limp ranges are the 'deep' bucket (over 85bb) of locks_v2 — the
+ *  same at every depth here, so only the depth moves. GTO Wizard holds ONE non-SB limper (max_allowed_limps 2 = one
+ *  limp + the SB's complete; seats behind a limp get fold / raise only), so "BB vs 2 limps" is a limp + the SB's
+ *  complete, and the isolating seats have no over-limp. The BB "facing an iso after checking" cannot happen (his
+ *  check closes the action): read as the BB facing an iso over a limp, his first decision. Isos are 3bb + 1 per limp. */
+const DEEP_LIMP: [string, string, Act[], { pos: string; key: PoolLimpKey }[], string][] = [
+  ["deep-iso-btn-vs-utg", "BTN", [["UTG", "call"], ...F("HJ", "CO")], [{ pos: "UTG", key: "limp_first_deep" }], "BTN behind a UTG limp (fold / iso 4bb / all-in)"],
+  ["deep-iso-co-vs-hj", "CO", [["UTG", "fold"], ["HJ", "call"]], [{ pos: "HJ", key: "limp_first_deep" }], "CO behind an HJ limp"],
+  ["deep-iso-hj-vs-utg", "HJ", [["UTG", "call"]], [{ pos: "UTG", key: "limp_first_deep" }], "HJ behind a UTG limp"],
+  ["deep-sb-vs-limp", "SB", [...F("UTG", "HJ"), ["CO", "call"], ["BTN", "fold"]], [{ pos: "CO", key: "limp_first_deep" }], "SB vs a CO limp (fold / complete / iso)"],
+  ["deep-bb-vs-limp", "BB", [["UTG", "fold"], ["HJ", "call"], ...F("CO", "BTN", "SB")], [{ pos: "HJ", key: "limp_first_deep" }], "BB vs an HJ limp (check / iso)"],
+  ["deep-bb-vs-limp-sb", "BB", [...F("UTG", "HJ"), ["CO", "call"], ["BTN", "fold"], ["SB", "call"]],
+    [{ pos: "CO", key: "limp_first_deep" }, { pos: "SB", key: "sbcomplete_b1_deep" }], "BB vs a CO limp AND the SB's complete (both locked: the 'two limps' GTO Wizard can hold)"],
+  // (the limper acts on the BB's iso BEFORE the SB: the first version of this spot left his action out — failed, renamed)
+  ["deep-sb-vs-bb-iso-cofold", "SB", [...F("UTG", "HJ"), ["CO", "call"], ["BTN", "fold"], ["SB", "call"], ["BB", "raise", 5], ["CO", "fold"]], [{ pos: "CO", key: "limp_first_deep" }],
+    "SB completed behind a CO limp, the BB isolates to 5, the CO folds (hero's range = his complete on the same tree)"],
+  ["deep-bb-vs-iso", "BB", [["UTG", "fold"], ["HJ", "call"], ["CO", "fold"], ["BTN", "raise", 4], ["SB", "fold"]], [{ pos: "HJ", key: "limp_first_deep" }],
+    "BB facing a BTN iso to 4 over an HJ limp"],
+];
+/** exp 7's spots: [id, hero, line, what] — the 3-bet to 7.5 = 3x the 2.5 open */
+const DEEP_3BET: [string, string, Act[], string][] = [
+  ["deep3b-co-vs-btn", "CO", [...F("UTG", "HJ"), ["CO", "raise", 2.5], ["BTN", "raise", 7.5], ...F("SB", "BB")], "CO opened 2.5, the BTN 3-bets to 7.5"],
+  ["deep3b-btn-vs-bb", "BTN", [...F("UTG", "HJ", "CO"), ["BTN", "raise", 2.5], ["SB", "fold"], ["BB", "raise", 7.5]], "BTN opened 2.5, the BB 3-bets to 7.5"],
+  ["deep3b-btn-vs-sb", "BTN", [...F("UTG", "HJ", "CO"), ["BTN", "raise", 2.5], ["SB", "raise", 7.5], ["BB", "fold"]], "BTN opened 2.5, the SB 3-bets to 7.5"],
+];
 const SWEEP: SweepCfg[] = [
   // 0 — one seat's stack off (2026-10-01)
   stackCfg("raiser-co", "raiser", "BTN", ["CO"], [...F("UTG", "HJ"), ["CO", "raise", 2.5]], FINE_LADDER, "BTN facing a CO open; the CO's stack varies"),
@@ -244,6 +309,14 @@ const SWEEP: SweepCfg[] = [
     at: (h) => ({ stacks: { BTN: h }, line: [...F("UTG", "HJ"), ["CO", "raise", 2.5]] }) },
   { id: "even-all", exp: 4, axis: "check", role: "hero", hero: "BTN", ladder: [100, 75, 50, 30], say: "the same spot with EVERY seat at this stack (the even chart the picker reads for a hero who has not reloaded)",
     at: (d) => ({ stacks: Object.fromEntries(Object.keys(SEAT).map((p) => [p, d])), line: [...F("UTG", "HJ"), ["CO", "raise", 2.5]] }) },
+  // 6 — deep LIMPED pots, the limper(s) locked to the pool's deep range; every seat at the depth
+  ...DEEP_LIMP.map(([id, hero, line, locks, say]): SweepCfg => ({ id, exp: 6, axis: "stack", role: "limped", hero, ladder: [100, 150, 200, 250], chartAt: 100, say, locks,
+    at: (d) => ({ stacks: evenAt(d), line }) })),
+  // 7 — deep re-raise lines: hero opens 2.5x, faces a 3x 3-bet (7.5); every seat at the depth. The LIVE tree (the one
+  // the gap gate routes to: the played sizes, 4-bet 2.3x, 5-bet+ 2.2x, and every seat's all-in listed) — not exp 1/2's
+  // single-size menu, which drops the all-ins: at 150-200bb five raises at those multiples stop near 84bb, no jam
+  ...DEEP_3BET.map(([id, hero, line, say]): SweepCfg => ({ id, exp: 7, axis: "stack", role: "3-bet", hero, ladder: [150, 175, 200], chartAt: 150, say,
+    at: (d) => ({ stacks: evenAt(d), line }) })),
 ];
 function synthHand(heroPos: string, b: Build): ParsedHand {
   const positions: Record<number, string> = {}, dealt: Record<number, number> = {}, committed: Record<number, number> = { 5: 0.5, 6: 1 };
@@ -267,7 +340,72 @@ function synthHand(heroPos: string, b: Build): ParsedHand {
 interface SweepRow { kind: "sweep"; key: string; cfg: string; exp?: number; role: string; stack: number; ts: number; secs: number;
   ok: boolean; reason?: string; treeKey?: string; line?: string; offered?: Offered[]; strat?: number[][]; evs?: number[][];
   /** hero's range at the node when he acted earlier in the line: per-combo weight (absent = every combo) */
-  w?: number[]; wWhy?: string }
+  w?: number[]; wWhy?: string;
+  /** exp 6: each lock — the limp's share in the UNLOCKED tree, and the locked node's mean per-combo distance from the pool range */
+  locks?: { pos: string; key: string; at: string; unlockedShare: number; dist: number; combos: number }[];
+  /** the request count this spot cost (from the ledger) */
+  requests?: number }
+/**
+ * Exp 6's tree: the exact GTO Wizard AI preflop tree of the spot (the live body: treeBody via debugTree), each listed
+ * seat's limp node-locked to its pool range (poolLimpLockOf, as solvePreflopPoolLocked does live; several locks chain,
+ * each forked from the one before, all read off the UNLOCKED tree), each lock checked to hold (mean distance ≤ 0.02),
+ * and hero's node read on the locked solution.
+ */
+async function solveLockedTree(cfg: SweepCfg, b: Build, hand: ParsedHand): Promise<{ solId: string; line: string; data: any; treeKey: string; locks: NonNullable<SweepRow["locks"]> } | { error: string }> {
+  const shape = shapeOf(hand, cfg.hero);
+  if ("error" in shape) return { error: shape.error };
+  const { tokens, levels, iso } = lineOf(hand, shape);
+  const dbg = debugTree(hand, cfg.hero);
+  if ("error" in dbg) return { error: dbg.error };
+  if (tokens.length !== b.line.length) return { error: `the tree's line has ${tokens.length} actions, the spot ${b.line.length}` };
+  const key = treeKeyOf(shape, treeMenus(levels, shape.n, iso));
+  const parent = await poolLockSeams.solve(key, dbg.body, { multiway: shape.n > 2, preflop: true });
+  if ("error" in parent) return { error: `tree: ${parent.error}` };
+  const locks: NodeLock[] = [];
+  const info: NonNullable<SweepRow["locks"]> = [];
+  const weights: number[][] = [];
+  for (const L of cfg.locks ?? []) {
+    const k = b.line.findIndex(([p, t]) => p === L.pos && t === "call");
+    if (k < 0) return { error: `the ${L.pos} does not limp on the line` };
+    const at = tokens.slice(0, k).join("-");
+    const n = await fetchNode(parent.solId, at);
+    if ("error" in n) return { error: `the ${L.pos}'s node '${at || "root"}': ${n.error}` };
+    const actor = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+    if (actor !== shape.apiOf[L.pos]) return { error: `the tree puts ${actor} on the clock at '${at || "root"}', not the ${L.pos}` };
+    const sols = (n.data?.action_solutions ?? []) as any[];
+    const limp = sols.find((a) => /^C/i.test(String(a?.action?.code ?? "")));
+    if (!limp) return { error: `the ${L.pos}'s node '${at || "root"}' offers no limp (${sols.map((a) => a?.action?.code).join("/")})` };
+    const w = poolLimpWeights(L.key);
+    weights.push(w);
+    locks.push(poolLimpLockOf(at, sols, String(limp.action.code), w));
+    info.push({ pos: L.pos, key: L.key, at, unlockedShare: r4(Number(limp.total_frequency ?? NaN)), dist: NaN, combos: Math.round(w.reduce((s, x) => s + x, 0) * 10) / 10 });
+  }
+  const locked = await lockedSolution(parent.solId, dbg.body, locks);
+  if ("error" in locked) return { error: `lock: ${locked.error}` };
+  // THE LOCKS HELD, OR NO RESULT
+  for (let j = 0; j < info.length; j++) {
+    const ln = await fetchNode(locked.solId, info[j]!.at);
+    if ("error" in ln) return { error: `the locked node '${info[j]!.at || "root"}': ${ln.error}` };
+    const code = String(locks[j]!.strategy.find((s) => /^C/i.test(s.action))!.action);
+    const lsol = ((ln.data?.action_solutions ?? []) as any[]).find((a) => String(a?.action?.code ?? "") === code);
+    let off = 0;
+    for (let i = 0; i < 1326; i++) off += Math.abs(Number(lsol?.strategy?.[i] ?? NaN) - weights[j]![i]!);
+    info[j]!.dist = r4(off / 1326);
+    if (!lsol || !(off / 1326 <= 0.02)) return { error: `the lock of the ${info[j]!.pos} did not hold at '${info[j]!.at || "root"}' (mean distance ${Number.isFinite(off) ? (off / 1326).toFixed(3) : "n/a"})` };
+  }
+  let line = tokens.join("-");
+  let node = await fetchNode(locked.solId, line);
+  if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
+    const fixed = await poolLockSeams.repair(locked.solId, tokens);
+    if ("error" in fixed) return { error: `hero's line '${line}' on the locked tree: ${fixed.error}` };
+    line = fixed.line;
+    node = await fetchNode(locked.solId, line);
+  }
+  if ("error" in node) return { error: `hero's node '${line || "root"}': ${node.error}` };
+  const toAct = node.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+  if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) return { error: `the locked tree puts ${toAct} on the clock at '${line}', not hero` };
+  return { solId: locked.solId, line, data: node.data, treeKey: `${key}|locks:${info.map((l) => `${l.pos}:${l.key}`).join(",")}`, locks: info };
+}
 async function solveSweep(cfg: SweepCfg, v: number): Promise<SweepRow> {
   const t0 = Date.now();
   const base = { kind: "sweep" as const, key: `${cfg.id}@${v}`, cfg: cfg.id, exp: cfg.exp, role: cfg.role, stack: v, ts: t0 };
@@ -275,7 +413,12 @@ async function solveSweep(cfg: SweepCfg, v: number): Promise<SweepRow> {
   const b = cfg.at(v);
   const hand = synthHand(cfg.hero, b);
   let solId: string, line: string, data: any, treeKey: string;
-  if (b.menu) {
+  let lockInfo: SweepRow["locks"];
+  if (cfg.locks?.length) {
+    const r = await solveLockedTree(cfg, b, hand);
+    if ("error" in r) return fail(r.error);
+    ({ solId, line, data, treeKey } = r); lockInfo = r.locks;
+  } else if (b.menu) {
     const r = await solvePreflopWithMenus(hand, cfg.hero, b.menu);
     if (!r.ok) return fail(r.reason);
     ({ solId, line, treeKey } = r); data = r.node;
@@ -309,7 +452,8 @@ async function solveSweep(cfg: SweepCfg, v: number): Promise<SweepRow> {
       if (w) w = w.map(r4);
     }
   }
-  return { ...base, ok: true, treeKey, line, offered: offeredOf(sols), strat: strat.map((a) => a.map(r4)), evs: evs.map((a) => a.map(r4)), ...(w ? { w } : {}), ...(wWhy ? { wWhy } : {}), secs: (Date.now() - t0) / 1000 };
+  return { ...base, ok: true, treeKey, line, offered: offeredOf(sols), strat: strat.map((a) => a.map(r4)), evs: evs.map((a) => a.map(r4)), ...(w ? { w } : {}), ...(wWhy ? { wWhy } : {}),
+    ...(lockInfo ? { locks: lockInfo } : {}), secs: (Date.now() - t0) / 1000 };
 }
 
 // ── the real decisions ─────────────────────────────────────────────────────────────────────────────────────────
@@ -598,6 +742,117 @@ function reportRealSize(rows: RealRow[]): void {
   }
   realTail(rows, (r) => (r.gap.size ? `${LEVELS[r.level ?? 0]} ${r.gap.size.from} read as ${r.gap.size.to}, ${r.gap.size.ratio}x` : "no size snap"));
 }
+// ── the deep-stack report (exps 6/7) ──────────────────────────────────────────────────────────────────────────
+/** tree A's mix for combo i, in tree T's codes */
+const mixIn = (t: OkSweep, a: OkSweep) => { const codes = a.offered.map((o) => mapAction(o.label, t.offered)); return (i: number) => {
+  const m: Record<string, number> = {}; a.offered.forEach((_, k) => { const c = codes[k]; if (c) m[c] = (m[c] ?? 0) + (a.strat[k]![i] ?? 0); }); return m; }; };
+/** hero's range-wide frequency of each of T's actions, under T's own strategy or A's played in T (weighted by T's range) */
+function aggOf(t: OkSweep, mix: (i: number) => Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {}; let tw = 0;
+  for (let i = 0; i < 1326; i++) { const wi = t.w ? t.w[i] ?? 0 : 1; if (!(wi > 0)) continue; const m = mix(i); const tot = Object.values(m).reduce((s, f) => s + f, 0); if (!(tot > 0.9)) continue;
+    tw += wi; for (const [c, f] of Object.entries(m)) out[c] = (out[c] ?? 0) + wi * f / tot; }
+  for (const c of Object.keys(out)) out[c] = out[c]! / (tw || 1);
+  return out;
+}
+const topOf = (agg: Record<string, number>) => Object.entries(agg).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "?";
+const labelIn = (t: OkSweep, code: string) => t.offered.find((o) => o.code === code)?.label ?? code;
+const aggText = (t: OkSweep, agg: Record<string, number>) => t.offered.map((o) => `${o.label} ${pc(agg[o.code] ?? 0)}`).join(" / ");
+/** per combo: the EV A's mix gives up inside T beyond T's own (bb), with T's range weight */
+function comboLosses(t: OkSweep, a: OkSweep): { loss: number[]; w: number[] } {
+  const mix = mixIn(t, a), own = ownMix(t);
+  const loss = new Array<number>(1326).fill(NaN), w = new Array<number>(1326).fill(0);
+  for (let i = 0; i < 1326; i++) {
+    const wi = t.w ? t.w[i] ?? 0 : 1; if (!(wi > 0)) continue;
+    const ev = (m: Record<string, number>) => { let tot = 0, s = 0; t.offered.forEach((o, k) => { const f = m[o.code] ?? 0; tot += f; s += f * t.evs[k]![i]!; }); return tot > 0.9 ? s / tot : NaN; };
+    const l = ev(own(i)) - ev(mix(i));
+    if (Number.isFinite(l)) { loss[i] = l; w[i] = wi; }
+  }
+  return { loss, w };
+}
+/** the share of hero's range (by T's weights) whose single most-played action differs between A-in-T and T */
+function handFlips(t: OkSweep, a: OkSweep): number {
+  const mix = mixIn(t, a), own = ownMix(t); let f = 0, tw = 0;
+  for (let i = 0; i < 1326; i++) { const wi = t.w ? t.w[i] ?? 0 : 1; if (!(wi > 0)) continue; const ma = mix(i); if (!(Object.values(ma).reduce((s, x) => s + x, 0) > 0.9)) continue;
+    tw += wi; if (topOf(ma) !== topOf(own(i))) f += wi; }
+  return tw ? f / tw : NaN;
+}
+/** the hand classes that cost most (share of the spot's loss), with the read and the true mix of each */
+function worstClasses(t: OkSweep, a: OkSweep, n = 4): string[] {
+  const { loss, w } = comboLosses(t, a);
+  const by = new Map<string, { s: number; w: number; idx: number[] }>(); let total = 0, tw = 0;
+  for (let i = 0; i < 1326; i++) { if (!(w[i]! > 0)) continue; const c = COMBOS[i]!.cls; const e = by.get(c) ?? by.set(c, { s: 0, w: 0, idx: [] }).get(c)!; e.s += w[i]! * loss[i]!; e.w += w[i]!; e.idx.push(i); total += w[i]! * loss[i]!; tw += w[i]!; }
+  const mixA = mixIn(t, a), own = ownMix(t);
+  const clsMix = (idx: number[], f: (i: number) => Record<string, number>) => { const m: Record<string, number> = {}; let ww = 0; for (const i of idx) { const wi = w[i]!; ww += wi; const x = f(i); const tot = Object.values(x).reduce((s, v) => s + v, 0) || 1; for (const [c, v] of Object.entries(x)) m[c] = (m[c] ?? 0) + wi * v / tot; }
+    return Object.entries(m).map(([c, v]) => [c, v / (ww || 1)] as const).filter(([, v]) => v >= 0.05).sort((x, y) => y[1] - x[1]).map(([c, v]) => `${labelIn(t, c)} ${Math.round(100 * v)}`).join("/"); };
+  return [...by.entries()].filter(([, e]) => e.s > 0).sort((x, y) => y[1].s - x[1].s).slice(0, n).map(([c, e]) =>
+    `${c} ${(e.s / e.w).toFixed(3)} bb when dealt, ${pc(total > 0 ? e.s / total : NaN)} of the loss (read ${clsMix(e.idx, mixA)} → true ${clsMix(e.idx, own)})`);
+}
+function reportDeep(rows: SweepRow[], write: boolean): void {
+  const lines: string[] = [];
+  const say = (s = "") => { console.log(s); lines.push(s); };
+  const ok = rows.filter((r) => r.ok && r.offered && r.evs) as OkSweep[];
+  const latest = new Map<string, OkSweep>(); for (const r of ok) latest.set(r.key, r);
+  const at = (cfg: string, v: number) => latest.get(`${cfg}@${v}`) ?? null;
+  const spent = rows.reduce((s, r) => s + (r.requests ?? 0), 0);
+  let ledger = NaN; try { ledger = dbRead((db) => db.query<{ n: number }, [string]>(`SELECT count(*) n FROM gtow_requests WHERE o = ?`).get(DEEP_ORIGIN)?.n ?? 0); } catch { /* no db */ }
+  say(`DEEP-STACK MEASUREMENT — 6-max NL200, ledger config deep-6max-nl200-measure (Part 1 of proposal deep-stack-6max-nl200), written ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`);
+  say(`GTO Wizard AI preflop (Ultra) as the truth; ${latest.size} trees solved, ${rows.filter((r) => !r.ok).length} failed rows; GTO Wizard requests: ${Number.isFinite(ledger) ? ledger : "?"} by origin ${DEEP_ORIGIN} (ledger), ${spent} counted per spot; budget ${BUDGET}.`);
+  say(`SCORE = bb hero gives up per decision, over his whole range at the node (weighted by his own earlier action on the same tree`);
+  say(`where he acted before), when he plays the strategy of the tree the chart stands for (100bb limped / 150bb raised) inside the`);
+  say(`tree at the table's real depth, against that tree's own strategy; "changed" = the share of his range whose action mix moves (TV);`);
+  say(`"hands flipped" = the share whose single most-played action differs. Every seat at the depth; one size per level (live menus).`);
+  const sl = [...latest.values()].map(selfLoss).filter(Number.isFinite);
+  say(`AI self-loss (units check, should be ≈ 0): mean ${mean(sl).toFixed(4)}, max ${sl.length ? Math.max(...sl).toFixed(4) : "—"}`);
+
+  type Cell = { cfg: string; d: number; loss: number; tvd: number; flips: number; topRead: string; topTrue: string; flipped: boolean };
+  const cells: Cell[] = [];
+  for (const exp of [6, 7] as const) {
+    const cfgs = SWEEP.filter((c) => c.exp === exp);
+    say(); say(exp === 6
+      ? `═══ SET A — DEEP LIMPED POTS: the limper(s) node-locked to the pool's deep limp range; the 100bb tree (what the 100bb limp chart answers) read at 150 / 200 / 250bb ═══`
+      : `═══ SET B — FACING A 3x 3-BET AFTER A 2.5x OPEN: the 150bb tree (the D150 chart) read at 175bb (1.17x, inside RERAISE_STACK_TAU 1.3) and 200bb (1.33x, past it) ═══`);
+    for (const cfg of cfgs) {
+      const base = at(cfg.id, cfg.chartAt!);
+      say(); say(`  ${cfg.id} — ${cfg.say}`);
+      if (!base) { say(`    no ${cfg.chartAt}bb tree: ${rows.filter((r) => r.key === `${cfg.id}@${cfg.chartAt}`).map((r) => r.reason).join(" | ") || "not run"}`); continue; }
+      const lockText = (t: OkSweep) => (t.locks ?? []).map((l) => `${l.pos} ${l.key} ${l.combos} combos (unlocked tree limps ${pc(l.unlockedShare)}; lock held, dist ${l.dist})`).join("; ");
+      if (base.locks?.length) say(`    locks at ${cfg.chartAt}bb: ${lockText(base)}`);
+      say(`    ${String(cfg.chartAt).padStart(3)}bb (the chart's depth): ${aggText(base, aggOf(base, ownMix(base)))}${base.w ? ` — hero's range ${Math.round(base.w.reduce((s, x) => s + x, 0))} combos` : ""}${base.wWhy ? ` [UNWEIGHTED: ${base.wWhy}]` : ""}`);
+      for (const d of cfg.ladder.filter((x) => x !== cfg.chartAt)) {
+        const t = at(cfg.id, d);
+        if (!t) { const why = rows.filter((r) => r.key === `${cfg.id}@${d}` && !r.ok).map((r) => r.reason?.slice(0, 160)).join(" | "); say(`    ${String(d).padStart(3)}bb: NOT SOLVED${why ? ` — ${why}` : ""}`); continue; }
+        const p = played(t, base);
+        if (!p) { say(`    ${String(d).padStart(3)}bb: not scoreable`); continue; }
+        const aTrue = aggOf(t, ownMix(t)), aRead = aggOf(t, mixIn(t, base));
+        const topTrue = topOf(aTrue), topRead = topOf(aRead);
+        const c: Cell = { cfg: cfg.id, d, loss: p.loss, tvd: p.tvd, flips: handFlips(t, base), topRead: labelIn(t, topRead), topTrue: labelIn(t, topTrue), flipped: topTrue !== topRead };
+        cells.push(c);
+        say(`    ${String(d).padStart(3)}bb (${(d / cfg.chartAt!).toFixed(2)}x): LOSS ${p.loss.toFixed(4)} bb/decision · changed ${pc(p.tvd)} · hands flipped ${pc(c.flips)} · top action ${c.topRead} → ${c.topTrue}${c.flipped ? "  ** FLIPPED **" : " (same)"}`);
+        say(`          true: ${aggText(t, aTrue)}`);
+        say(`          read: ${aggText(t, aRead)}`);
+        for (const w of worstClasses(t, base)) say(`          worst: ${w}`);
+      }
+    }
+  }
+  // ── the gate ──
+  const A = cells.filter((c) => SWEEP.find((s) => s.id === c.cfg)?.exp === 6), B = cells.filter((c) => SWEEP.find((s) => s.id === c.cfg)?.exp === 7);
+  const byD = (xs: Cell[], d: number) => xs.filter((c) => c.d === d);
+  say(); say(`═══ SUMMARY ═══`);
+  for (const d of [150, 200, 250]) { const g = byD(A, d); if (g.length) say(`  SET A ${d}bb: mean ${mean(g.map((c) => c.loss)).toFixed(4)}  max ${Math.max(...g.map((c) => c.loss)).toFixed(4)} (${g.reduce((m, c) => (c.loss > m.loss ? c : m)).cfg})  changed ${pc(mean(g.map((c) => c.tvd)))}  top action flipped in ${g.filter((c) => c.flipped).length} of ${g.length} spots`); }
+  const meanA = mean(A.map((c) => c.loss));
+  if (A.length) say(`  SET A all depths (1.5-2.5x, the live mix 1.35-2.5x): mean ${meanA.toFixed(4)} bb/decision over ${A.length} spot×depth cells ≈ ${(meanA * 2.2).toFixed(3)} bb/100 at 2.2 such decisions per 100 hands`);
+  for (const d of [175, 200]) { const g = byD(B, d); if (g.length) say(`  SET B ${d}bb (${d === 175 ? "1.17x, INSIDE" : "1.33x, PAST"} the 1.3x bound): mean ${mean(g.map((c) => c.loss)).toFixed(4)}  max ${Math.max(...g.map((c) => c.loss)).toFixed(4)}  top action flipped in ${g.filter((c) => c.flipped).length} of ${g.length}`); }
+  const flips200 = byD(A, 200).filter((c) => c.flipped).length;
+  const inside = byD(B, 175), past = byD(B, 200);
+  const insideMax = inside.length ? Math.max(...inside.map((c) => c.loss)) : NaN, insideMean = mean(inside.map((c) => c.loss));
+  say(); say(`═══ VERDICT against the proposal's gate ═══`);
+  const queueA = meanA >= 0.02 || flips200 >= 3;
+  say(`  Deep limped pots: mean ${meanA.toFixed(4)} bb/decision (gate 0.02), top action flipped in ${flips200} of ${byD(A, 200).length} spots at 200bb (gate 3) → ${A.length < 24 ? `(only ${A.length} of 24 cells measured) ` : ""}${queueA ? "QUEUE Part 2 (the 175bb limp trees)" : "do NOT queue Part 2 — close the limp half as (c)"}`);
+  const leakB = insideMean >= 0.02;
+  say(`  Facing a 3-bet inside 1.3x (175bb on the 150 chart): mean ${insideMean.toFixed(4)} (max ${Number.isFinite(insideMax) ? insideMax.toFixed(4) : "—"}) bb/decision (gate 0.02) → ${leakB ? "LEAKS: consider Part 4 (200bb raised-pot trees) — first try a tighter deep-side tau" : "no 200bb raised-pot trees (Part 4 stays closed)"}`);
+  if (past.length) say(`  Past the bound (200bb, already routed to the exact tree today): mean ${mean(past.map((c) => c.loss)).toFixed(4)} — ${mean(past.map((c) => c.loss)) < 0.02 ? "the bound could even be loosened on the deep side; it costs nothing to keep" : "the bound earns its keep"}; tightening the tau to send 175bb to the AI too ${leakB ? "WOULD remove the measured inside-bound loss (~0.5 deep 3-bet decisions per 100 hands, a few seconds each) — cheaper than Part 4" : "is not needed"}.`);
+  if (write) { mkdirSync(OUT_DIR, { recursive: true }); writeFileSync(DEEP_REPORT, lines.join("\n") + "\n"); console.log(`\n(written to ${DEEP_REPORT})`); }
+}
 if (TREES) {
   for (const cfg of SWEEP.filter((c) => EXPS.includes(c.exp))) for (const v of cfg.ladder) {
     const b = cfg.at(v);
@@ -608,12 +863,21 @@ if (TREES) {
   process.exit(0);
 }
 if (REPORT) { reportSweep(load<SweepRow>(SWEEP_OUT)); reportRealSize(load<RealRow>(SIZE_OUT)); reportRealStack(load<RealRow>(REAL_OUT)); process.exit(0); }
+if (REPORT_DEEP) { reportDeep(load<SweepRow>(DEEP_OUT), true); process.exit(0); }
+if (DEEP && EXPS.some((e) => e !== 6 && e !== 7)) { console.log("exps 6/7 (the deep-stack measurement) run on their own: --exp 6,7"); process.exit(2); }
+if (DEEP && RUN && process.env.GTOW_REQUEST_ORIGIN !== DEEP_ORIGIN) {
+  console.log(`exps 6/7 must run with GTOW_REQUEST_ORIGIN=${DEEP_ORIGIN} in the environment (the request ledger reads it when the module loads; the budget counts that origin)`);
+  process.exit(2);
+}
 
 // ── plan / run ─────────────────────────────────────────────────────────────────────────────────────────────────
 type Outcome = { ok: boolean; reason?: string; text: string };
 interface Task { label: string; go: () => Promise<Outcome> }
 const t0 = Date.now();
-const sweepDone = new Set(load<SweepRow>(SWEEP_OUT).filter((r) => r.ok).map((r) => r.key));
+const sweepDone = new Set([...load<SweepRow>(SWEEP_OUT), ...load<SweepRow>(DEEP_OUT)].filter((r) => r.ok).map((r) => r.key));
+/** a refusal (written, not transient) is asked again ONCE, never more: a deep spot that failed twice is left alone */
+const deepFails = new Map<string, number>();
+for (const r of load<SweepRow>(DEEP_OUT)) if (!r.ok) deepFails.set(r.key, (deepFails.get(r.key) ?? 0) + 1);
 /** a failure that says nothing about the spot (the network, a token, a rate limit): asked again, never written */
 const transient = (reason: string | undefined) => NETWORK.test(reason ?? "") || /no token/i.test(reason ?? "") || RATE_LIMIT.test(reason ?? "");
 /** an experiment's trees in ladder order across its spots, so a partial run still has every spot */
@@ -622,11 +886,14 @@ const sweepTasks = (exp: number): Task[] => {
   const out: Task[] = [];
   for (let k = 0; k < Math.max(0, ...cfgs.map((c) => c.ladder.length)); k++) for (const cfg of cfgs) {
     const v = cfg.ladder[k];
-    if (v == null || sweepDone.has(`${cfg.id}@${v}`)) continue;
+    if (v == null || sweepDone.has(`${cfg.id}@${v}`) || (deepFails.get(`${cfg.id}@${v}`) ?? 0) >= 2) continue;
     out.push({ label: `exp ${exp} tree ${cfg.id}@${v}`, go: async () => {
+      const before = DEEP ? ownSince(0) : 0;
       const row = await solveSweep(cfg, v);
+      if (DEEP) { row.requests = ownSince(0) - before; spotMax = Math.max(spotMax, row.requests); }
       if (!row.ok && transient(row.reason)) return { ok: false, reason: row.reason, text: `FAILED ${row.reason}` };
-      appendFileSync(SWEEP_OUT, JSON.stringify(row) + "\n");
+      if (!row.ok) deepFails.set(row.key, (deepFails.get(row.key) ?? 0) + 1);
+      appendFileSync(outOf(exp), JSON.stringify(row) + "\n");
       return { ok: row.ok, reason: row.reason, text: row.ok
         ? `${row.offered!.map((o) => o.label).join(" / ")} at "${row.line}"${row.w ? ` (hero's range ${Math.round(row.w.reduce((a, b) => a + b, 0))} combos)` : ""}${row.wWhy ? ` [unweighted: ${row.wWhy}]` : ""} ${row.secs.toFixed(1)} s`
         : `FAILED ${row.reason!.slice(0, 160)}` };
@@ -702,6 +969,8 @@ async function withRetry(go: Task["go"]): Promise<Outcome | "stop"> {
     if (RATE_LIMIT.test(reason)) { log(`STOP: this reads like a rate limit — ${reason.slice(0, 200)}`); return "stop"; }
     if (/no token/i.test(reason) && tokenTries < 4) { log(`  no token yet — waiting 70 s and asking the same spot again (${++tokenTries}/4)`); await sleep(70_000); continue; }
     if (NETWORK.test(reason)) {
+      // the deep study's budget is small: a node that keeps timing out costs up to 25 polls an ask — three asks, then stop
+      if (DEEP && netTries >= 3) { log(`STOP: network trouble three times on one spot (the deep budget is small) — ${reason.slice(0, 160)}`); return "stop"; }
       if (netTries >= 40) { log(`STOP: the network has been down for 40 minutes — ${reason.slice(0, 160)}`); return "stop"; }
       log(`  network trouble (${reason.slice(0, 100)}) — waiting 60 s and asking the same spot again (${++netTries}/40)`);
       await sleep(60_000); continue;
@@ -710,16 +979,25 @@ async function withRetry(go: Task["go"]): Promise<Outcome | "stop"> {
   }
 }
 let n = 0, fails = 0, streak = 0;
-for (const task of todo) {
+const askedAgain = new Set<string>();
+for (let ti = 0; ti < todo.length; ti++) {
+  const task = todo[ti]!;
   if (!(await gate(t0))) break;
   const started = Date.now();
   const r = await withRetry(task.go);
   if (r === "stop") break;
   n++;
-  log(`[${n}/${todo.length}] ${task.label}: ${r.text}  (${ownSince(t0)} requests)`);
-  if (!r.ok) { fails++; streak++; if (streak >= 12) { log("STOP: twelve spots in a row failed"); break; } } else streak = 0;
+  log(`[${n}/${todo.length}] ${task.label}: ${r.text}  (${ownSince(t0)} requests this run${DEEP ? `, ${ownSince(0)} of ${BUDGET} in all` : ""})`);
+  if (!r.ok) { fails++; streak++; if (streak >= (DEEP ? 4 : 12)) { log(`STOP: ${DEEP ? "four" : "twelve"} spots in a row failed`); break; } } else streak = 0;
+  // a deep refusal is asked again ONCE, at the end of the queue (never more: deepFails)
+  if (DEEP && !r.ok && !askedAgain.has(task.label) && /tree \S+@\S+$/.test(task.label)) {
+    const key = task.label.split(" ").pop()!;
+    if ((deepFails.get(key) ?? 0) < 2) { askedAgain.add(task.label); todo.push(task); log(`  ${key} will be asked once more at the end of the queue`); }
+  }
+  if (DEEP && own429Since(0) > 0) { log(`STOP: a request of ${process.env.GTOW_REQUEST_ORIGIN} was answered 429 — stopping for good`); break; }
   await sleep(Math.max(0, EVERY * 1000 - (Date.now() - started)));
 }
-log(`done: ${n} spots this run (${fails} failed), ${ownSince(t0)} requests`);
-reportSweep(load<SweepRow>(SWEEP_OUT)); reportRealSize(load<RealRow>(SIZE_OUT)); reportRealStack(load<RealRow>(REAL_OUT));
+log(`done: ${n} spots this run (${fails} failed), ${ownSince(t0)} requests${DEEP ? ` (${ownSince(0)} of ${BUDGET} by ${process.env.GTOW_REQUEST_ORIGIN} in all)` : ""}`);
+if (DEEP) reportDeep(load<SweepRow>(DEEP_OUT), true);
+else { reportSweep(load<SweepRow>(SWEEP_OUT)); reportRealSize(load<RealRow>(SIZE_OUT)); reportRealStack(load<RealRow>(REAL_OUT)); }
 process.exit(0);
