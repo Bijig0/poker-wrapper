@@ -247,8 +247,9 @@ const DEEP_LIMP: [string, string, Act[], { pos: string; key: PoolLimpKey }[], st
   ["deep-bb-vs-limp", "BB", [["UTG", "fold"], ["HJ", "call"], ...F("CO", "BTN", "SB")], [{ pos: "HJ", key: "limp_first_deep" }], "BB vs an HJ limp (check / iso)"],
   ["deep-bb-vs-limp-sb", "BB", [...F("UTG", "HJ"), ["CO", "call"], ["BTN", "fold"], ["SB", "call"]],
     [{ pos: "CO", key: "limp_first_deep" }, { pos: "SB", key: "sbcomplete_b1_deep" }], "BB vs a CO limp AND the SB's complete (both locked: the 'two limps' GTO Wizard can hold)"],
-  ["deep-sb-vs-bb-iso", "SB", [...F("UTG", "HJ"), ["CO", "call"], ["BTN", "fold"], ["SB", "call"], ["BB", "raise", 5]], [{ pos: "CO", key: "limp_first_deep" }],
-    "SB completed behind a CO limp, the BB isolates to 5 (hero's range = his complete on the same tree)"],
+  // (the limper acts on the BB's iso BEFORE the SB: the first version of this spot left his action out — failed, renamed)
+  ["deep-sb-vs-bb-iso-cofold", "SB", [...F("UTG", "HJ"), ["CO", "call"], ["BTN", "fold"], ["SB", "call"], ["BB", "raise", 5], ["CO", "fold"]], [{ pos: "CO", key: "limp_first_deep" }],
+    "SB completed behind a CO limp, the BB isolates to 5, the CO folds (hero's range = his complete on the same tree)"],
   ["deep-bb-vs-iso", "BB", [["UTG", "fold"], ["HJ", "call"], ["CO", "fold"], ["BTN", "raise", 4], ["SB", "fold"]], [{ pos: "HJ", key: "limp_first_deep" }],
     "BB facing a BTN iso to 4 over an HJ limp"],
 ];
@@ -850,7 +851,7 @@ function reportDeep(rows: SweepRow[], write: boolean): void {
   const leakB = insideMean >= 0.02;
   say(`  Facing a 3-bet inside 1.3x (175bb on the 150 chart): mean ${insideMean.toFixed(4)} (max ${Number.isFinite(insideMax) ? insideMax.toFixed(4) : "—"}) bb/decision (gate 0.02) → ${leakB ? "LEAKS: consider Part 4 (200bb raised-pot trees) — first try a tighter deep-side tau" : "no 200bb raised-pot trees (Part 4 stays closed)"}`);
   if (past.length) say(`  Past the bound (200bb, already routed to the exact tree today): mean ${mean(past.map((c) => c.loss)).toFixed(4)} — ${mean(past.map((c) => c.loss)) < 0.02 ? "the bound could even be loosened on the deep side; it costs nothing to keep" : "the bound earns its keep"}; tightening the tau to send 175bb to the AI too ${leakB ? "WOULD remove the measured inside-bound loss (~0.5 deep 3-bet decisions per 100 hands, a few seconds each) — cheaper than Part 4" : "is not needed"}.`);
-  if (write) { mkdirSync(OUT_DIR, { recursive: true }); Bun.write(DEEP_REPORT, lines.join("\n") + "\n"); console.log(`\n(written to ${DEEP_REPORT})`); }
+  if (write) { mkdirSync(OUT_DIR, { recursive: true }); writeFileSync(DEEP_REPORT, lines.join("\n") + "\n"); console.log(`\n(written to ${DEEP_REPORT})`); }
 }
 if (TREES) {
   for (const cfg of SWEEP.filter((c) => EXPS.includes(c.exp))) for (const v of cfg.ladder) {
