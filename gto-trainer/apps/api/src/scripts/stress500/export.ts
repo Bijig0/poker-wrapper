@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { FAMILIES } from "./scenarios";
 import { gradeDecision } from "./grade";
 import { CLASSES, postflopViewsByDecision } from "./views";
+import { LINT_FLAGS, lintHand } from "./lint";
 
 const argv = process.argv.slice(2);
 const arg = (k: string): string | undefined => { const i = argv.indexOf(`--${k}`); return i >= 0 ? argv[i + 1] : undefined; };
@@ -102,7 +103,9 @@ const flush = (): void => {
   writeFileSync(join(OUT, "data", name), JSON.stringify(batch));
   bn++; batch = [];
 };
-const totals = { hands: 0, decisions: 0, ok: 0, approx: 0, refused: 0, bad: 0, reqs: 0, ms: 0, flags: {} as Record<string, number>, kinds: {} as Record<string, number> };
+const totals = { hands: 0, decisions: 0, ok: 0, approx: 0, refused: 0, bad: 0, reqs: 0, ms: 0, flags: {} as Record<string, number>, kinds: {} as Record<string, number>,
+  // the poker-sense checks (lint.ts): decisions and hands per flag, every flag listed (0 = checked, none found)
+  lint: Object.fromEntries(LINT_FLAGS.map((f) => [f, { n: 0, hands: 0 }])) as Record<string, { n: number; hands: number }> };
 const zero = (): Record<string, number> => ({ ok: 0, approx: 0, refused: 0, bad: 0, pre: 0 });
 /** a refusal before any postflop fix could act: no flop ranges (the preflop side), a capture fault, a phantom ask */
 const refusedBefore = (d: any): boolean => !d.ok && (d.fl ?? []).some((f: string) => /^(arrival|hero-off-chart|limped-pot|capture-fault|not-hero-turn)$/.test(f));
@@ -148,6 +151,18 @@ for (const h of hands) {
       if (d.g === "ok") d.g = "approx";
     }
   }
+  // POKER-SENSE CHECKS (lint.ts): flags only — the grade stays what the answer path earned
+  const lint = lintHand(h.hand, h.decisions ?? [], allViews, allAlts);
+  for (const d of dec) {
+    const lf = lint.flags.get(d.i);
+    if (lf?.length) { d.fl = [...d.fl, ...lf]; d.lint = lint.notes.get(d.i); }
+    const pl = lint.plans.get(d.i);
+    if (pl) d.pl = pl.map((x) => [x.src, x.mix.map(([a, p]) => [a, Math.round(p * 10) / 10]), x.kind]);
+  }
+  for (const f of LINT_FLAGS) {
+    const n = dec.filter((d: any) => d.fl.includes(f)).length;
+    if (n) { totals.lint[f]!.n += n; totals.lint[f]!.hands++; }
+  }
   for (const [i, v] of Object.entries(allViews) as [string, any][]) views[i] = encView(v);
   const alt: Record<string, any[]> = {};
   for (const [i, vs] of Object.entries(allAlts) as [string, any[]][]) alt[i] = vs.map(encView);
@@ -185,6 +200,8 @@ for (const h of hands) {
   if (batch.length >= BATCH) flush();
 }
 flush();
+// the replayer page beside its data (publish <out>/stress500.html)
+writeFileSync(join(OUT, "stress500.html"), readFileSync(join(import.meta.dir, "replayer.html")));
 const planned = scen.length;
 const fixes = fixAcc.map((a) => ({
   id: a.f.id, name: a.f.name, commit: a.f.commit ?? null, means: a.f.means, must: a.f.must ?? null,
@@ -194,4 +211,5 @@ const byRun = hands.slice().sort((a, b) => String(a.ranAt ?? "").localeCompare(S
 const commits = [...new Set(byRun.map((h) => h.commit).filter(Boolean))].map((c) => ({ c, n: hands.filter((h) => h.commit === c).length }));
 writeFileSync(join(OUT, "data", "index.json"), JSON.stringify({ builtAt: new Date().toISOString(), planned, commit: byRun[byRun.length - 1]?.commit ?? null, commits, totals, about: ABOUT, fixes, hands: index }));
 console.log(`exported ${hands.length}/${planned} hands in ${bn} batches → ${join(OUT, "data")}`);
-console.log(JSON.stringify({ ...totals, flags: undefined, kinds: undefined }));
+console.log(JSON.stringify({ ...totals, flags: undefined, kinds: undefined, lint: undefined }));
+console.log("poker-sense checks:", LINT_FLAGS.map((f) => `${f} ${totals.lint[f]!.n} (${totals.lint[f]!.hands} hands)`).join(" · "));
