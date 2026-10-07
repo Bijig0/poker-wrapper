@@ -1052,12 +1052,18 @@ function mixBarHtml(mix, pick, roll, compact) {
     </div>`;
 }
 /** THE SHORT ALL-IN PRESS (2026-10-07, the API's services/allInPress): an ALLIN in this mix that a collapsed tree capped
- *  below hero's stack is pressed as a raise to the tree's amount, not as the shove — "if ALLIN 22: raise to 30". */
+ *  below hero's stack is pressed as a raise to the tree's amount, not as the shove — "if ALLIN 40: raise to 40" — or,
+ *  under the table's minimum raise, taken out of the mix ("ALLIN 22 dropped from the mix (share 4.4%)"). */
 function pressHtml(a, pick) {
   let press = null;
   try { press = JSON.parse(a.press ?? "null"); } catch { /* not stored */ }
   if (!Array.isArray(press) || !press.length) return "";
   return press.map((e) => {
+    if (e.kind === "dropped") {
+      return `<div class="press sub" style="margin:4px 0 0;font-size:12px"><b>${esc(e.action)} dropped from the mix</b> (share ${esc(e.share ?? 0)}%):` +
+        ` under the table's minimum ${esc(e.verb ?? "raise")} ${esc(e.minRaiseTo)}bb — never shoved (${esc(e.heroAllIn)}bb)` +
+        `<br><span title="${esc(e.why)}">${esc(e.why)}</span></div>`;
+    }
     const hit = !!pick && String(pick).trim().toUpperCase() === String(e.action).trim().toUpperCase();
     return `<div class="press sub" style="margin:4px 0 0;font-size:12px"><b>if ${esc(e.action)}: ${esc(e.verb ?? "raise")} to ${esc(e.amount)}bb</b>` +
       ` (not the shove, ${esc(e.heroAllIn)}bb)${hit ? ' <span class="chip warn">picked — pressed this way</span>' : ""}` +

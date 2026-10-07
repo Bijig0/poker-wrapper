@@ -416,3 +416,16 @@ export function menuByClass(ref: MenuAction[], mine: MenuAction[]): (string | nu
     return refSized.reduce((b, c) => (Math.abs(size(c) - n) < Math.abs(size(b) - n) ? c : b));
   });
 }
+
+/** One action of a walk's node menu: its code and GTO Wizard's display name (an all-in is named ALLIN). */
+export interface MenuSol { code: string; name?: string | null }
+/**
+ * A WALK'S CODES ON THE REFERENCE MENU (2026-10-07, every collapse of a blend — Brady): its own codes when every one is on
+ * the reference menu, else each re-expressed BY CLASS (menuByClass); `alwaysByClass` = the dead-money trees, which always
+ * were. null for an action whose class the reference has nothing of — that walk cannot be aligned.
+ */
+export function codesOnRef(ref: MenuSol[], mine: MenuSol[], alwaysByClass = false): { codes: (string | null)[]; byClass: boolean } {
+  const refCodes = new Set(ref.map((r) => r.code));
+  if (!alwaysByClass && mine.every((m) => refCodes.has(m.code))) return { codes: mine.map((m) => m.code), byClass: false };
+  return { codes: menuByClass(ref.map((r) => menuAction(r.code, r.name)), mine.map((m) => menuAction(m.code, m.name))), byClass: true };
+}
