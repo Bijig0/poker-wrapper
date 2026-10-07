@@ -1341,6 +1341,7 @@ export const NOT_DEPARTURES: {
     "arrival:villains-repicked": "routing: the villains' ranges are re-picked on the chart for the line as played",
     "arrival:no-pin": "recovery: the preflop pin is missing; the flop ranges are derived again",
     "arrival:pin-unusable": "recovery: the preflop pin does not fit the line; the flop ranges are derived again",
+    "arrival:pin-cap": "routing: the pinned GTO Wizard AI tree holds one caller behind an open and one limper (three to the flop), so a 4-way line is read from fitted lines on that tree — the design, counted clean (2026-10-07)",
     "arrival:first-rebuilt": "recovery (the memo's first computation was rebuilt)",
   },
   codePrefixes: {
