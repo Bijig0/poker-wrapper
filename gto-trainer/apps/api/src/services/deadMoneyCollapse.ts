@@ -33,7 +33,8 @@ export interface DeadMoneyPlan extends CollapsePlan {
   tookOver: string[];
   /** every villain but one has folded: the tree is the heads-up spot itself, not an approximation of hero's opponents */
   headsUp: boolean;
-  /** kept seats' own chips moved into the starting pot by a cut (replayKept): off their stacks, into the pot */
+  /** kept seats' own chips moved into the starting pot by a cut (replayKept): off their stacks, into the pot — and off
+   *  their all-in amounts too (treeAllInAmounts: the chain is sent a kept seat's all-in less its preload) */
   preload: Record<string, number>;
   /** how many times the street was cut (0 = walked from its first action) */
   cuts: number;
@@ -301,6 +302,15 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     // hero would show him a cheaper call — such a plan is not taken (the plan keeping the incomplete raiser plays it)
     const tableCall = Math.min(sc.level, (a.behind(a.heroPos) ?? Infinity) as number) - putOf(a.heroPos);
     if (Math.abs(treeCallOf(fixed, a.heroPos, (p) => (a.behind(p) ?? Infinity) as number) - tableCall) > 0.02) return;
+    // AND SO MUST THE POT AT HERO'S NODE (2026-10-07, stress-500 brief_I-004): every kept seat's chips — its preload and
+    // what it puts in in the tree, an all-in at the table's amount less its preload as the chain is sent it
+    // (treeAllInAmounts) — are its chips at the table, so the tree's pot is the table's less what no kept seat contests
+    const tableAllIn = (p: string) => { let to: number | null = null; for (const x of acts) if (x.seat === p && x.kind === "allin" && x.to != null) to = x.to; return to; };
+    const keptToks = fixed.toks.map((tok, i) => ({ tok, seat: fixed.seats[i]! }));
+    const am = treeAllInAmounts({ streets: [keptToks], preload: fixed.preload }, tableAllIn)[0];
+    const inTree = treeStreetChips(fixed, (p) => (a.behind(p) ?? Infinity) as number, am).put;
+    // (a seat all in at the table: its amount there, as the chain takes it — our reading of its stack may differ)
+    if ([...kept].some((p) => Math.abs((fixed.preload[p] ?? 0) + (inTree[p] ?? 0) - (tableAllIn(p) ?? putOf(p))) > 0.02)) return;
     // AND THE TREE CAN WALK IT (review 4): the seats in rotation, GTO Wizard's minimum raises, the street open with hero
     // to act — a plan that would not walk is never handed on (it would only cost a cloud walk and a refusal)
     const order = a.seats.map((s) => s.pos);
@@ -358,7 +368,46 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
 /** Hero's amount to call at the end of a replayed street, in the tree: the tree's level (capped at his tree stack) less
  *  his tree chips — each seat's stack less its preload, an all-in its whole tree stack. */
 function treeCallOf(r: { toks: string[]; seats: string[]; preload: Record<string, number> }, hero: string, capOf: (p: string) => number): number {
-  const cap = (p: string) => capOf(p) - (r.preload[p] ?? 0);
+  const t = treeStreetChips(r, capOf);
+  return Math.min(t.level, t.cap(hero)) - (t.put[hero] ?? 0);
+}
+
+/**
+ * A DEAD-MONEY PLAN'S ALL-IN AMOUNTS, IN THE TREE'S TERMS (2026-10-07, stress-500 brief_I-004 flop decision 13). An
+ * all-in token ("RAI") travels to the chain with the TABLE's amount beside it (fastSolve streetAmounts — the seat's
+ * street total), and the chain takes that amount as the seat's stack ("the table's all-in is the seat's stack": aiChain
+ * lifts the seat's cap to it). A plan that moved some of that seat's chips into the starting pot (`preload`: a called
+ * level layered, a cut, an incomplete raise) sends the seat with its stack LESS the preload — so the table's amount puts
+ * the preloaded chips in twice: once in the starting pot, once again in the tree. brief_I-004: SB jams 15, hero calls,
+ * UTG (22 behind) jams 22, CO and BTN call — the plan keeping UTG and CO layers the 15 hero called (15 each into the pot,
+ * UTG sent 7 behind), UTG's all-in went out as 22, the chain lifted him to 22, the CO's call was 22: pot at hero's node
+ * 138.5 for the table's 108.5, hero facing 22 instead of 7. The tree's amount is the table's less the seat's preload —
+ * what he has in in the tree. Street 0 is the plan's (only) street, the one the preload belongs to; later streets have
+ * no preload. `tableAllInOf(seat, i)` = the table's all-in amount (street total) of `seat` on the plan's street `i`.
+ */
+export function treeAllInAmounts(plan: { streets: SeatTok[][]; preload?: Record<string, number> | null },
+    tableAllInOf: (seat: string, i: number) => number | null | undefined): (number | null)[][] {
+  return plan.streets.map((st, i) => st.map((t) => {
+    if (t.tok !== "RAI") return null;
+    const to = tableAllInOf(t.seat, i);
+    if (to == null || !Number.isFinite(to)) return null;
+    return r2(to - (i === 0 ? plan.preload?.[t.seat] ?? 0 : 0));
+  }));
+}
+
+/**
+ * ONE STREET OF A TREE, CHIP BY CHIP, as the chain walks it: each seat's cap = its stack less its preload, an all-in with
+ * an amount beside it (`amounts`) is that amount (the chain lifts the cap to it when they differ by more than 0.02, as
+ * aiChain does), a call the level (capped at the cap), a raise its size (capped). `put` = each seat's chips in the tree.
+ */
+export function treeStreetChips(r: { toks: string[]; seats: string[]; preload: Record<string, number> }, capOf: (p: string) => number,
+    amounts?: readonly (number | null | undefined)[] | null): { put: Record<string, number>; level: number; cap: (p: string) => number } {
+  const caps: Record<string, number> = {};
+  const cap = (p: string) => caps[p] ?? capOf(p) - (r.preload[p] ?? 0);
+  r.toks.forEach((t, i) => {
+    const a = amounts?.[i];
+    if (t === "RAI" && a != null && a > 0 && Math.abs(cap(r.seats[i]!) - a) > 0.02) caps[r.seats[i]!] = a;
+  });
   const put: Record<string, number> = {};
   let level = 0;
   r.toks.forEach((t, i) => {
@@ -367,7 +416,21 @@ function treeCallOf(r: { toks: string[]; seats: string[]; preload: Record<string
     const to = t === "C" ? Math.min(level, cap(p)) : t === "RAI" ? cap(p) : Math.min(parseFloat(t.slice(1)), cap(p));
     put[p] = to; level = Math.max(level, to);
   });
-  return Math.min(level, cap(hero)) - (put[hero] ?? 0);
+  return { put, level, cap };
+}
+
+/**
+ * THE TREE'S POT AT HERO'S NODE (2026-10-07): the pot the plan's tree starts the street with (`streetStart` — the pot
+ * entering the street — plus the dropped seats' contested chips `dead` and every kept seat's `preload`) plus every tree
+ * seat's chips on the street, its all-ins at `amounts` (treeAllInAmounts) as the chain takes them. Must equal the pot the
+ * table shows that the tree's seats can contest: the pot entering the street + the kept seats' chips + `dead`.
+ */
+export function treePotAtHero(plan: { streets: SeatTok[][]; preload: Record<string, number>; dead: number }, streetStart: number,
+    capOf: (p: string) => number, amounts?: readonly (number | null | undefined)[] | null): number {
+  const st = plan.streets[0] ?? [];
+  const t = treeStreetChips({ toks: st.map((x) => x.tok), seats: st.map((x) => x.seat), preload: plan.preload }, capOf, amounts);
+  const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
+  return r2(streetStart + plan.dead + sum(plan.preload) + sum(t.put));
 }
 
 /** k-subsets of xs, in xs order (xs is short: the villains still in) */

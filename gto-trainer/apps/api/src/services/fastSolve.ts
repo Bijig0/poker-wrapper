@@ -8,7 +8,7 @@ import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdC
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
-import { codesOnRef, pickDeadMoney, planDeadMoney, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { codesOnRef, pickDeadMoney, planDeadMoney, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
@@ -1815,6 +1815,9 @@ async function solvePostflopViaChainOnce(
     lastResort?: { lr: NonNullable<ReturnType<typeof heroVsAggressor>>; heroPos: string };
     /** a DEAD-MONEY collapse (deadMoneyCollapse): the dropped seats' chips on this street, added to the starting pot */
     deadPot?: number;
+    /** a DEAD-MONEY collapse's kept seats' chips moved into that starting pot (DeadMoneyPlan.preload): off their stacks,
+     *  and off their all-in amounts on the plan's street (amountsOf → treeAllInAmounts) */
+    preload?: Record<string, number>;
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -1887,6 +1890,7 @@ async function solvePostflopViaChainOnce(
     members: membersOf(pl.seats),
     ...((pl as Partial<DeadMoneyPlan>).dead != null ? { deadPot: Math.round(((pl as DeadMoneyPlan).dead +
       Object.values((pl as DeadMoneyPlan).preload ?? {}).reduce((a, b) => a + b, 0)) * 100) / 100 } : {}),
+    ...((pre) => (pre && Object.keys(pre).length ? { preload: pre } : {}))((pl as Partial<DeadMoneyPlan>).preload),
   });
   /** the walks are dead-money collapses: their menus are blended by action class (menuByClass) */
   let deadMode = false;
@@ -2070,11 +2074,17 @@ async function solvePostflopViaChainOnce(
     if (/^last-resort/.test(w.kind ?? "")) return undefined;
     if (w.streets === streets) return streetAmounts;
     const first = reroot ? reroot.first : 0;
-    return w.streets.map((st, i) => st.map((t, j) => {
-      if (t !== "RAI") return null;
-      const who = w.streetSeats[i]?.[j];
-      return allInsBySeat.find((x) => x.k === i + first && who != null && x.pos.toUpperCase() === who.toUpperCase())?.to ?? null;
-    }));
+    const tableTo = (who: string | null | undefined, i: number) =>
+      allInsBySeat.find((x) => x.k === i + first && who != null && x.pos.toUpperCase() === who.toUpperCase())?.to ?? null;
+    // A DEAD-MONEY PLAN'S PRELOAD IS OFF ITS ALL-INS TOO (2026-10-07, stress-500 brief_I-004 flop decision 13): its kept
+    // seats are sent their stacks less the chips moved into the starting pot, and the chain takes an all-in's amount as
+    // the seat's stack — the table's 22 for UTG (7 behind in the tree, 15 preloaded) put the 15 in twice (pot at hero's
+    // node 138.5 for the table's 108.5). The amount sent is the table's less the preload (treeAllInAmounts).
+    if (w.preload) {
+      return treeAllInAmounts({ streets: w.streets.map((st, i) => st.map((tok, j) => ({ tok, seat: w.streetSeats[i]?.[j] ?? "" }))), preload: w.preload },
+        (seat, i) => tableTo(seat || null, i));
+    }
+    return w.streets.map((st, i) => st.map((t, j) => (t !== "RAI" ? null : tableTo(w.streetSeats[i]?.[j], i))));
   };
   const solveOne = (w: Walkable): Promise<AiChainResult> => (w.lastResort ? lastResortRace(w) : solveTree(w));
   const solveTree = (w: Walkable): Promise<AiChainResult> => treeStackOrNull(w) == null
