@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { menuAction, menuByClass, pickDeadMoney, planDeadMoney, treeAllInAmounts, treePotAtHero, treeStreetChips, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { heroPreloadAtNode, menuAction, menuByClass, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, treePotAtHero, treeStreetChips, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { shortAllInPress, treeAllInTo } from "./allInPress";
 import { streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses } from "./multiwayCollapse";
@@ -320,5 +320,57 @@ describe("THE POT AT HERO'S NODE IS THE TABLE'S (2026-10-07, stress-500 brief_I-
     const rs = jam.plans.map(jam.read);
     for (const r of rs) { expect(r.pot).toBe(112.5); expect(r.heroCall).toBe(25); }
     expect(rs.filter((r) => /called level/.test(r.kind)).map((r) => [r.amounts[1], r.potRaw])).toEqual([[25, 122.5], [25, 122.5]]);
+  });
+});
+
+describe("THE SERVED SIZES ARE THE TABLE'S on a preloaded plan (tableTotalActions, 2026-10-07)", () => {
+  /** the menu as fastSolve builds it from GTO Wizard's action_solutions (label = name + betsize, betsize as sent) */
+  const menu = (xs: [string, string][]) => xs.map(([action, betsize]) => ({ action, frequency: 0, betsize }));
+  const planOf = (seats: string[], hero: string, l: string, amounts: (number | null)[], b: Record<string, number>, kind: RegExp) => {
+    const { plans } = planDeadMoney({ seats: seatsOf(...seats), heroPos: hero, street: line(l), amounts, behind: (p) => b[p] });
+    return plans.find((p) => kind.test(p.kind))!;
+  };
+
+  test("brief_I-004 decision 13: hero's 15 preloaded — RAISE 76.3 → 91.3, ALLIN 82.5 → his whole 97.5, CALL 7 → the call to 22", () => {
+    const p = planOf(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:RAI BB:C UTG:RAI CO:C BTN:C", [15, null, 22, null, null],
+      { SB: 15, BB: 97.5, UTG: 22, CO: 97.5, BTN: 97.5 }, /called level/);
+    expect(heroPreloadAtNode(p, "BB")).toBe(15);
+    const served = tableTotalActions(menu([["FOLD", "0"], ["CALL 7", "7.000"], ["RAISE 76.3", "76.3"], ["ALLIN 82.5", "82.500"]]), heroPreloadAtNode(p, "BB"));
+    expect(served.map((a) => a.action)).toEqual(["FOLD", "CALL 22", "RAISE 91.3", "ALLIN 97.5"]);
+    expect(served.map((a) => a.betsize)).toEqual(["0", "22", "91.3", "97.5"]);
+    expect(served.map((a) => a.treeBetsize)).toEqual([undefined, "7.000", "76.3", "82.500"]);
+    // the third plan (dead:CO + dead:BTN) preloads nothing: its sizes are the table's already
+    const plain = planOf(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:RAI BB:C UTG:RAI CO:C BTN:C", [15, null, 22, null, null],
+      { SB: 15, BB: 97.5, UTG: 22, CO: 97.5, BTN: 97.5 }, /^dead:CO \+ dead:BTN$/);
+    expect(heroPreloadAtNode(plain, "BB")).toBe(0);
+  });
+
+  test("brief_D-001 / D-004 decision 18: the called level preloads hero's 7.43 — CALL 70.57 → the call to 78, ALLIN 91.57 → 99", () => {
+    const p = planOf(["SB", "BB", "UTG", "HJ", "BTN"], "BB", "SB:X BB:R1.75 UTG:C HJ:RAI BTN:C SB:R28.33 BB:C UTG:F BTN:R69.22 SB:RAI",
+      [null, null, null, 9.18, null, null, null, null, null, 78], { SB: 78, BB: 99, UTG: 99, HJ: 9.18, BTN: 109 }, /called level/);
+    expect(heroPreloadAtNode(p, "BB")).toBe(7.43);
+    const served = tableTotalActions(menu([["FOLD", "0"], ["CALL 70.57", "70.570"], ["ALLIN 91.57", "91.570"]]), 7.43);
+    expect(served.map((a) => a.action)).toEqual(["FOLD", "CALL 78", "ALLIN 99"]);
+    expect(served.map((a) => a.betsize)).toEqual(["0", "78", "99"]);
+  });
+
+  test("a plan without preload, or hero not preloaded, or hero's node past the plan's street: the menu byte-identical", () => {
+    const m = menu([["CHECK", "0"], ["BET 38.1", "38.1"], ["ALLIN 75.5", "75.500"]]);
+    const before = JSON.stringify(m);
+    for (const pre of [0, null, undefined, 0.004, NaN]) {
+      const out = tableTotalActions(m, pre);
+      expect(out).toBe(m);
+      expect(JSON.stringify(out)).toBe(before);
+    }
+    expect(heroPreloadAtNode({ streets: [[]] }, "BB")).toBe(0);
+    expect(heroPreloadAtNode({ preload: {}, streets: [[]] }, "BB")).toBe(0);
+    expect(heroPreloadAtNode({ preload: { UTG: 15 }, streets: [[]] }, "BB")).toBe(0);
+    expect(heroPreloadAtNode({ preload: { BB: 15 }, streets: [[], []] }, "BB")).toBe(0);   // a later street: no preload
+    expect(heroPreloadAtNode({ preload: { BB: 15 }, streets: [[]] }, null)).toBe(0);
+  });
+
+  test("a label the betsize does not end (a name with its own number) keeps its label; the betsize is still the table's", () => {
+    const out = tableTotalActions([{ action: "Raise 2.5", frequency: 1, betsize: "6" }], 4);
+    expect(out[0]).toMatchObject({ action: "Raise 2.5", betsize: "10", treeBetsize: "6" });
   });
 });

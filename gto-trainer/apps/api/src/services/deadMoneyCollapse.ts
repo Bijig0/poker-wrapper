@@ -492,3 +492,39 @@ export function codesOnRef(ref: MenuSol[], mine: MenuSol[], alwaysByClass = fals
   if (!alwaysByClass && mine.every((m) => refCodes.has(m.code))) return { codes: mine.map((m) => m.code), byClass: false };
   return { codes: menuByClass(ref.map((r) => menuAction(r.code, r.name)), mine.map((m) => menuAction(m.code, m.name))), byClass: true };
 }
+
+/**
+ * THE SERVED SIZES ARE THE TABLE'S (2026-10-07, Brady: "go for it"). A plan with a `preload` moves part of each kept
+ * seat's street chips into the tree's starting pot and sends the seat with that much less behind, so every amount of
+ * the tree on the plan's street is a TREE total = the table's street total less that seat's preload. GTO Wizard's
+ * betsize is served as the action's label, and the wrapper types a RAISE / BET pick's number as the raise-to (relay.ts
+ * pickPlan) — a RAISE rolled on such a plan was typed short by hero's preload (stress-500 brief_I-004 flop decision 13,
+ * hero's 15 preloaded: the tree's RAISE 76.3 is the table's raise to 91.3, its ALLIN 82.5 hero's whole 97.5, its CALL 7
+ * the call to 22). `heroPreload` = hero's preload when his node is on the plan's street (heroPreloadAtNode; later
+ * streets have none, as treeAllInAmounts). Every action with a positive betsize gets it added, label and betsize alike,
+ * and keeps the tree's own as `treeBetsize`; fold / check, and a plan without preload (heroPreload 0), are returned as
+ * they are (the same array). Applied after the blend (alignment runs on the trees' codes) and before the short all-in
+ * press (whose entries are matched to the pick by the served label; its amounts come from the trace, in table terms).
+ */
+export function tableTotalActions<T extends { action: string; betsize?: string | number | null }>(actions: T[], heroPreload: number | null | undefined):
+    (T & { treeBetsize?: string })[] {
+  const pre = Number(heroPreload);
+  if (!Number.isFinite(pre) || !(pre > 0.005)) return actions;
+  return actions.map((a) => {
+    const bs = parseFloat(String(a.betsize ?? ""));
+    if (!(bs > 0)) return a;
+    const table = r2(bs + pre);
+    // the label carries the tree's amount as fastSolve.labelOf wrote it (the name + the betsize to 2 decimals)
+    const m = /^(.*?\D)\s*(\d+(?:\.\d+)?)$/.exec(String(a.action).trim());
+    const action = m && Math.abs(Number(m[2]) - r2(bs)) < 0.006 ? `${m[1]!.trimEnd()} ${table}` : a.action;
+    return { ...a, action, betsize: String(table), treeBetsize: String(a.betsize) };
+  });
+}
+
+/** Hero's preload in one walk of a plan when his node is on the plan's street — the walk's first and only street (a
+ *  dead-money plan is one street, the flop's or the re-rooted street's); 0 otherwise. */
+export function heroPreloadAtNode(w: { preload?: Record<string, number> | null; streets: readonly unknown[] }, heroTreePos: string | null | undefined): number {
+  if (!w.preload || !heroTreePos || w.streets.length !== 1) return 0;
+  const x = Number(w.preload[heroTreePos] ?? 0);
+  return Number.isFinite(x) && x > 0 ? r2(x) : 0;
+}

@@ -8,7 +8,7 @@ import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdC
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
-import { codesOnRef, pickDeadMoney, planDeadMoney, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { codesOnRef, heroPreloadAtNode, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
@@ -97,6 +97,9 @@ interface ActionFreq {
   frequency: number;
   ev?: number;
   betsize?: string;
+  /** a dead-money plan's preloaded tree: the tree's own betsize, where `betsize` and the label are the table's street
+   *  total (deadMoneyCollapse.tableTotalActions) */
+  treeBetsize?: string;
 }
 
 export type FastSolveResult =
@@ -2046,7 +2049,9 @@ async function solvePostflopViaChainOnce(
 
   // ONE WALK PER COLLAPSE — exactly one when the field already fits a tree. Every walk is kept (inputs, every
   // node, the verdict) so the answer can be inspected later exactly as it was, and diffed against a re-solve.
-  const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any; members?: Record<string, string[]> }[] = [];
+  const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any; members?: Record<string, string[]>;
+    /** a dead-money plan's preload of hero's own chips, when his node is on the plan's street (tableTotalActions) */
+    heroPreload?: number }[] = [];
   const walkFails: string[] = [];
   // THE COLLAPSES RUN AT ONCE (2026-09-23, hand 729). Each collapse is its own cloud tree and walk, 5-10 s
   // of mostly waiting on GTO Wizard; three of them in a row put a four-way flop at 15-19 s before the answer.
@@ -2191,8 +2196,10 @@ async function solvePostflopViaChainOnce(
       walkFails.push(w.kind ? `${w.kind}: ${chain.why}` : chain.why);
       continue;
     }
+    const heroPre = heroPreloadAtNode(w, w.seatSpec.heroSeat === "oop" ? w.seatSpec.oopPos : w.seatSpec.heroSeat === "mid" ? w.seatSpec.midPos : w.seatSpec.ipPos);
     walks.push({
       kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace, ...(w.members ? { members: w.members } : {}),
+      ...(heroPre > 0 ? { heroPreload: heroPre } : {}),
       solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace),
     });
   }
@@ -2208,7 +2215,10 @@ async function solvePostflopViaChainOnce(
     ...chains.flatMap((c) => (c.ok ? c.stackNotes ?? [] : [])),
   ])];
   if (stackNotes.length) {
-    sixNote = [sixNote, `STACKS OF THE PLAYERS IN THE TREE: ${stackNotes.join("; ")}`].filter(Boolean).join(" · ");
+    // a preloaded reference tree's sizes are served as the table's (tableTotalActions, below): said in one clause
+    const pre0 = walks[0]?.heroPreload ?? 0;
+    sixNote = [sixNote, `STACKS OF THE PLAYERS IN THE TREE: ${stackNotes.join("; ")}` +
+      (pre0 > 0 ? `; sizes served as table totals (the tree's + hero's ${pre0} in its starting pot)` : "")].filter(Boolean).join(" · ");
   }
   // THE SOFT RANGE (services/offTree, OPTION 3, 2026-10-06): an off-tree villain action this answer rests on — on this
   // street or an earlier one the walk carried — had his range carried soft, not as the QRE sliver
@@ -2345,6 +2355,10 @@ async function solvePostflopViaChainOnce(
       };
     });
   }
+  // TABLE TOTALS ON A PRELOADED PLAN (2026-10-07): a dead-money plan that moved hero's earlier chips on the street into
+  // the tree's starting pot priced every size less them — the menu (the reference walk's) is served in the table's street
+  // totals, after the blend (which aligns tree codes) and before the press (matched to the pick by the served label)
+  if (ref.heroPreload) actions = tableTotalActions(actions, ref.heroPreload);
   // OFF-TREE VILLAIN LINES of real play are logged once per hand and spot (services/offTreeLog) — for a pool range later
   if (origin === "live" || origin === "warm") {
     for (const w of walks) for (const n of (w.trace?.nodes ?? []) as ChainTraceNode[]) {

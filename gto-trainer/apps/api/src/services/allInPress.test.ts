@@ -17,7 +17,7 @@ import {
   allInSizeToTreeOn, dropNote, dropShortAllIns, pressForPick, pressNote, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote,
   type PressEntry, type TreeAllIn,
 } from "./allInPress";
-import { codesOnRef } from "./deadMoneyCollapse";
+import { codesOnRef, tableTotalActions } from "./deadMoneyCollapse";
 import { alignStrategy, blendStrategies } from "./multiwayCollapse";
 import { pressTreeOf } from "./fastSolve";
 import { departureForCode, departureForWarning } from "./approximations";
@@ -151,6 +151,29 @@ describe("shortAllInPress — brief_I-004", () => {
       walk("dead:CO + dead:BTN", ["SB", "BB", "UTG"], node(1, [15, 15, 22], [["FOLD", 0], ["CALL", 7]]))].map((w) => pressTreeOf(w, money));
     expect(trees.map((t) => t.to)).toEqual([97.5, 97.5, null]);
     expect(shortAllInPress({ actions: [{ action: "FOLD" }, { action: "CALL 7" }, { action: "ALLIN 82.5" }], heroPos: "BB", money, trees })).toEqual([]);
+  });
+  test("decision 13 served in TABLE totals (tableTotalActions): ALLIN 97.5 — still no press, the preload never added twice", () => {
+    const money = streetMoneyAt(at(13), "flop");
+    const dm = (kind: string, seats: [string, string, string]) => walk(kind, seats, node(0, [0, 7, 7], [["FOLD", 0], ["CALL", 7], ["RAISE", 76.3], ["ALLIN", 82.5]]));
+    const trees = [dm("dead:SB + dead:BTN (called level in the pot)", ["BB", "UTG", "CO"]), dm("dead:SB + dead:CO (called level in the pot)", ["BB", "UTG", "BTN"])]
+      .map((w) => pressTreeOf(w, money));
+    expect(trees.map((t) => t.to)).toEqual([97.5, 97.5]);   // from the trace (tree terms) + hero's 15 on the street, once
+    const served = tableTotalActions([{ action: "FOLD", frequency: 0, betsize: "0" }, { action: "CALL 7", frequency: 100, betsize: "7.000" },
+      { action: "RAISE 76.3", frequency: 0, betsize: "76.3" }, { action: "ALLIN 82.5", frequency: 0, betsize: "82.500" }], 15);
+    expect(served.map((a) => a.action)).toEqual(["FOLD", "CALL 22", "RAISE 91.3", "ALLIN 97.5"]);
+    expect(shortAllInPress({ actions: served, heroPos: "BB", money, trees })).toEqual([]);
+  });
+  test("a SHORT all-in on a preloaded tree: the press entry carries the SERVED label and the table amount (no double preload)", () => {
+    // hypothetical: the tree caps hero at 30 over his preloaded 15 (table 45 < his 97.5), BTN deeper outside the tree
+    const money = streetMoneyAt(at(13), "flop");
+    const w = walk("dead:SB + dead:BTN (called level in the pot)", ["BB", "UTG", "CO"], node(0, [0, 7, 7], [["FOLD", 0], ["CALL", 7], ["ALLIN", 30]]));
+    const served = tableTotalActions([{ action: "FOLD", frequency: 50, betsize: "0" }, { action: "CALL 7", frequency: 40, betsize: "7.000" },
+      { action: "ALLIN 30", frequency: 10, betsize: "30.000" }], 15);
+    const p = shortAllInPress({ actions: served, heroPos: "BB", money, trees: [pressTreeOf(w, money)] });
+    expect(p).toHaveLength(1);
+    expect(p[0]).toMatchObject({ action: "ALLIN 45", kind: "raise-to", amount: 45, treeAmount: 45, heroAllIn: 97.5, minRaiseTo: 37 });
+    expect(pressForPick(p, "ALLIN 45")).toBe(p[0]!);   // the wrapper matches the entry to the served pick
+    expect(pressForPick(p, "ALLIN 30")).toBeNull();
   });
   test("the deeper seats are not live (folded) → no press", () => {
     const h = at(9);
