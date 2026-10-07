@@ -210,14 +210,22 @@ function grade(r: any, cut: any, heroPos: string): { verdict: "ok" | "approx" | 
   return { verdict: bad ? "bad" : (r.approx || kinds.some((k) => !["size snapped", "AI preflop"].includes(k)) || failed.length) ? "approx" : "ok", flags, kinds };
 }
 
-/** the mis-press check (the hand-4587 session): a tree all-in below hero's chips behind while a deeper villain is not in the tree */
+/** the mis-press check (the hand-4587 session): a tree all-in below hero's chips behind while a deeper villain is not in
+ *  the tree. Since 2026-10-07 (services/allInPress) the answer itself carries a `press` for such an all-in and the wrapper
+ *  presses it as a raise to the tree's amount — this detector stays as the CROSS-CHECK of that field (oldVsPress below).
+ *  The tree's all-in is read in TABLE terms: a dead-money tree preloads hero's earlier chips on the street into its pot,
+ *  so its ALLIN label counts from there (brief_I-004 decision 13: "ALLIN 82.5" + hero's 15 = his whole 97.5 — the
+ *  detector used to flag it). */
 function misPress(r: any, cut: any, trace: any): string | null {
   const all = (r.actions ?? []).find((a: any) => /^ALL-?IN/i.test(String(a.action)));
   if (!all || !trace) return null;
   const m = /([\d.]+)/.exec(String(all.action));
-  const treeAllIn = m ? Number(m[1]) : NaN;
-  if (!Number.isFinite(treeAllIn)) return null;
+  const label = m ? Number(m[1]) : NaN;
+  if (!Number.isFinite(label)) return null;
   const heroSeat = cut.heroSeatId;
+  const heroNode = [...(trace.nodes ?? [])].reverse().find((n: any) => n.heroNode);
+  const inTreeChips = Number(heroNode?.invested?.[heroNode?.actor] ?? 0) || 0;
+  const treeAllIn = Math.round((label - inTreeChips + Number(cut.committed?.[heroSeat] ?? 0)) * 100) / 100;
   const heroBehind = Number(cut.stacks?.[heroSeat] ?? NaN) + Number(cut.committed?.[heroSeat] ?? 0);
   const inTree = new Set<string>([trace.spec?.oopPos, trace.spec?.midPos, trace.spec?.ipPos].filter(Boolean).map((x: string) => x.toUpperCase()));
   const outside = Object.entries(cut.positions ?? {}).filter(([seat, pos]) => !inTree.has(String(pos).toUpperCase()) && Number(seat) !== heroSeat
@@ -261,8 +269,18 @@ for (const sc of todo) {
       const g = grade(r, h, heroPos);
       let trace: any = null;
       if (r.solveId) { try { trace = solveStore.get(Number(r.solveId))?.trace ?? null; } catch { trace = null; } }
-      const mp = r.ok && a.street !== "preflop" ? misPress(r, h, trace) : null;
+      // THE SHORT ALL-IN (services/allInPress, 2026-10-07): an all-in the answer sized to its tree is no longer a latent
+      // mis-press — `misPress` keeps only the ones with no press; the old detector must agree with the press field
+      const oldMp = r.ok && a.street !== "preflop" ? misPress(r, h, trace) : null;
+      const press = r.ok && Array.isArray(r.press) && r.press.length ? r.press : null;
+      const mp = oldMp && !press ? oldMp : null;
+      // agree = both fire or neither; a press the old detector misses, or a flag with no press, is a disagreement
+      // (the press may legitimately be absent when the table's smallest raise is hero's whole stack — said in the text)
+      const pressCheck = !!oldMp === !!press ? null : press ? `press without the old flag (${press[0].action} → ${press[0].verb} to ${press[0].amount})` : `old flag without a press: ${oldMp}`;
+      if (pressCheck) log(`${sc.id} #${i}: SHORT ALL-IN CROSS-CHECK DISAGREES — ${pressCheck}`);
       if (mp) g.flags.push("mis-press");
+      if (press) g.flags.push("allin-sized");
+      if (pressCheck) g.flags.push("press-disagree");
       if (ms > 15_000) g.flags.push(`slow-${Math.round(ms / 1000)}s`);
       decisions.push({
         index: i, street: a.street, took: { type: a.type, amount: a.amount ?? null }, toCall: h.currentNode.toCall, ms, reqs,
@@ -273,6 +291,7 @@ for (const sc of todo) {
         reason: r.ok ? null : String(r.reason ?? ""), kind: r.kind ?? null, approx: !!r.approx,
         path: r.path ? { verdict: r.path.verdict ?? null, reasons: r.path.reasons ?? [], requests: r.path.requests ?? null, checks: r.path.checks ?? null } : null,
         solveId: r.solveId ?? null, grade: g.verdict, flags: g.flags, kinds: g.kinds, misPress: mp,
+        press, misPressOld: oldMp, pressCheck,
       });
     }
     if (!outage) break;
