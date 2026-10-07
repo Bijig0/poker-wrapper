@@ -32,6 +32,7 @@ import { comboIndex } from "../../utils/comboIndex/comboIndex";
 import { referenceRanges, rangeDiff, type RefAction } from "./referenceRanges";
 import COLD_CALL_LOCKS from "../../services/poolColdCallLocks.json";
 import LIMP_LOCKS from "../../services/poolLimpLocks.v2.json";
+import POOL_CALL_LOCKS from "../../services/poolCallLocks.json";
 import { COLD_CALL_FLOOR_COMBOS } from "../../services/poolColdCall";
 
 export interface OracleFinding { kind: string; reason: string }
@@ -78,20 +79,23 @@ const withoutRepick = (note: string) => note.split(" · ").filter((s) => !/^RANG
  * said in the note. Such a seat's solver input must be the named pool range EXACTLY, and the range it replaced (the
  * note's "N combos on <chart>") is still one walk's output, judged as any other. Seat → the pool range and the floor.
  */
-export interface PoolFloor { kind: "limp" | "coldcall"; key: string; was: number }
+export interface PoolFloor { kind: "limp" | "coldcall" | "call"; key: string; was: number }
 export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   const out = new Map<string, PoolFloor>();
-  for (const seg of note.split(" · ")) {
-    const m = /^POOL (LIMP|COLD-CALL) RANGE: (.*)$/.exec(seg.trim());
-    if (!m) continue;
-    const re = /the ([A-Z]+) \(\d+bb\) (?:limped|cold-called the 3-bet) — ([\d.]+) combos on .*?, now the pool's (\S+) \(/g;
-    for (let e; (e = re.exec(m[2]!)); ) out.set(e[1]!, { kind: m[1] === "LIMP" ? "limp" : "coldcall", key: e[3]!, was: Number(e[2]) });
-  }
+  // each "POOL … RANGE:" tag to the next (not the note's " · " separators: a GTO Wizard source id carries " · " itself)
+  const heads = [...note.matchAll(/POOL (LIMP|COLD-CALL|CALL) RANGE: /g)];
+  heads.forEach((h, i) => {
+    const body = note.slice(h.index! + h[0].length, i + 1 < heads.length ? heads[i + 1]!.index : undefined);
+    // the pool-call overlay (services/poolCalls, 2026-10-07) names what the seat did in words; the shape is the floors'
+    const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \(/g;
+    for (let e; (e = re.exec(body)); ) out.set(e[1]!, { kind: h[1] === "LIMP" ? "limp" : h[1] === "CALL" ? "call" : "coldcall", key: e[3]!, was: Number(e[2]) });
+  });
   return out;
 }
 /** the pool's range for a floor's key, as class weights (null: the key is not in the pool's table) */
 export function poolRangeOf(f: PoolFloor): Record<string, number> | null {
-  const t = (f.kind === "limp" ? LIMP_LOCKS : COLD_CALL_LOCKS).ranges as Record<string, { weights: Record<string, number> }>;
+  // the pool-call overlay's key is this table's or (a plain limp in a two-limper pot) the limp table's
+  const t = (f.kind === "limp" ? LIMP_LOCKS : f.kind === "call" ? (f.key in POOL_CALL_LOCKS.ranges ? POOL_CALL_LOCKS : LIMP_LOCKS) : COLD_CALL_LOCKS).ranges as Record<string, { weights: Record<string, number> }>;
   return t[f.key]?.weights ?? null;
 }
 const classCombos = (c: string): number => (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12);
@@ -101,7 +105,8 @@ function floorFits(f: PoolFloor, mine: RefAction[], all: RefAction[]): boolean {
   const first = all.findIndex((a) => a === mine.find((x) => x.kind !== "F"));
   if (first < 0 || all[first]!.kind !== "C") return false;
   const raises = all.slice(0, first).filter((a) => a.kind === "R" || a.kind === "A").length;
-  return f.kind === "limp" ? raises === 0 : raises === 2;
+  // a pool call: a limp (0 raises) or a call of the open / iso (1 raise) as his first chips in
+  return f.kind === "limp" ? raises === 0 : f.kind === "call" ? raises <= 1 : raises === 2;
 }
 
 /** An answer that says a size was moved onto the tree. */

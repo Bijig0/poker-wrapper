@@ -1482,7 +1482,7 @@ function poolSeatsFor(hand: ParsedHand, upto: number, street: string, row: any):
   if (street !== "preflop") {
     const a = answerPathOf(row)?.arrival;
     for (const x of [a, a?.first].filter(Boolean)) {
-      const id = x.code === "arrival:pool-limp-floor" ? "pool-limp-floor" : x.code === "arrival:pool-coldcall-floor" ? "pool-coldcall-floor" : null;
+      const id = x.code === "arrival:pool-limp-floor" ? "pool-limp-floor" : x.code === "arrival:pool-coldcall-floor" ? "pool-coldcall-floor" : x.code === "arrival:pool-call" ? "pool-call-ranges" : null;
       if (!id) continue;
       for (const m of String(x.why ?? "").matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) {
         if (!out.some((s) => s.pos === m[1])) out.push({ pos: m[1]!, id, badge: badgeOf(id), how: "floor" });

@@ -1,0 +1,13 @@
+{
+ "source": "PROVISIONAL — the table is built in poker analysis/pipeline/limp_study/locks_v2/build_poolcall_locks.py (poolcalls_locks.json) and copied here; until then no key exists and the overlay replaces nothing",
+ "built": "2026-10-07",
+ "stack_edges": { "le40": [0, 40], "40_80": [40, 80], "80p": [80, null] },
+ "open_edges": {},
+ "open_split_adopted": false,
+ "min_calls": 50,
+ "min_shown": 300,
+ "bias_ratio": {},
+ "ignition": { "hands": 0, "calls_with_cards": 0, "files": 0 },
+ "coinpoker": { "hands": 0, "chances": 0, "calls": 0, "shown": 0 },
+ "ranges": {}
+}

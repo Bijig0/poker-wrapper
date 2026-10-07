@@ -5,6 +5,7 @@ import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
+import { applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -919,6 +920,9 @@ async function flopArrivalCompute(
   let prov: ArrivalPath | null = null;
   /** the limpers a pool-locked AI pin's tree locked (gtowAiPreflop.solvePreflopPoolLocked): their ranges are walked off it */
   let pinPools: readonly { pos: string; key: string }[] | undefined;
+  /** the AI arrival read the seats on FITTED lines (the exact tree cannot hold the line): the seats some fit folded out.
+   *  Set, the pool-call overlay below replaces the villain callers' ranges (services/poolCalls, Brady 2026-10-07) */
+  let aiFitted: string[] | null = null;
   // A 3-handed flop is entered from a 3-handed preflop, so its ranges come from
   // the asymmetric 3-max corpus. Tried FIRST and fallen back from rather than
   // replacing the 6-max walk: if the chart server is down, conditioned 6-max
@@ -997,7 +1001,7 @@ async function flopArrivalCompute(
     if (!recon) {
       const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
       if (!ai.ok) return failA(pinMiss ? `preflop pin: ${pinMiss}; then ${ai.reason}` : ai.reason);
-      recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+      recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id; aiFitted = ai.fitted?.folded ?? null;
       sixNote = ai.note ?? null;
       prov = reducedProv(ai, pinMiss
         ? pinMissProv({ pin: true, pinMiss, producer: "ai-arrival", via: "read from a GTO Wizard AI preflop tree built from the table" })
@@ -1066,7 +1070,7 @@ async function flopArrivalCompute(
         tmark("preflop pin: hero deviated", devNote);
         const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
         if (!ai.ok) return failA(`${devNote}; then ${ai.reason}`);
-        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id; aiFitted = ai.fitted?.folded ?? null;
         sixNote = [sixNote, devNote, ai.note].filter(Boolean).join(" · ");
         prov = reducedProv(ai, { how: "by-design", producer: "ai-arrival", code: "arrival:hero-left-pick", why: `hero took ${dev.action ?? dev.took} at "${dev.codes.join("-") || "root"}", which his pick gave 0% — the flop ranges come from the GTO Wizard AI preflop tree` });
       } else if (resumed.ok) {
@@ -1094,7 +1098,7 @@ async function flopArrivalCompute(
         tmark("preflop pin: pruned branch", `${resumed.why} — ranges from the AI preflop tree`);
         const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
         if (!ai.ok) return failA(`${resumed.why}; then ${ai.reason}`);
-        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id;
+        recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id; aiFitted = ai.fitted?.folded ?? null;
         sixNote = [sixNote,
           resumed.prunedBranch
             ? `OFF THE CHART: hero's line runs into a branch the 6-max chart never solved (${resumed.why.replace(/^pinned chart [^:]+: /, "")}) — ` +
@@ -1146,6 +1150,7 @@ async function flopArrivalCompute(
       preTokens = ai.tokens;
       seatOrder = ai.seatOrder;
       rangeSource = ai.id;
+      aiFitted = ai.fitted?.folded ?? null;
       sixNote = [six && !six.ok ? `6-max chart could not walk this line (${six.reason})` : null, ai.note].filter(Boolean).join(" · ");
       prov = reducedProv(ai, rebuiltProv("ai-arrival", six && !six.ok ? six.reason : null));
     }
@@ -1190,6 +1195,26 @@ async function flopArrivalCompute(
       recon = { ...recon, ranges: ccf.ranges };
       sixNote = [sixNote, note].filter(Boolean).join(" · ");
       if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-coldcall-floor", why: note.slice(0, 300) };
+    }
+  }
+  // THE POOL CALL RANGES (services/poolCalls, Brady 2026-10-07): the exact tree could not hold the line (a 4-way raised
+  // pot, a two-limper pot — arrival:pin-cap) and every seat was read on a FITTED line; the villain CALLERS enter the flop
+  // with the pool's measured calling range for their seat, line and stack instead of the solver's neighbouring-line read.
+  // Hero's own range, the raisers', and a seat a floor above already gave a pool range keep what they have.
+  if (aiFitted && poolCallsMode() !== "off") {
+    const given = (pinPools ?? []).map((p) => p.pos);
+    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: [^·]*/g)) {
+      for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) given.push(m[1]!);
+    }
+    const pc = applyPoolCallRanges({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
+    if (pc.applied.length) {
+      const note = poolCallNote(pc.applied, rangeSource);
+      tmark("pool call ranges", note);
+      recon = { ...recon, ranges: pc.ranges };
+      sixNote = [sixNote, note].filter(Boolean).join(" · ");
+      // by design under its own code; the cap that brought us here stays in the reason
+      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-call",
+        why: `${prov.code === "arrival:pin-cap" ? "the pinned AI tree cannot hold the line (its caller/limper cap); " : ""}${note.slice(0, 300)}` };
     }
   }
   return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };

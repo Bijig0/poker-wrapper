@@ -2502,6 +2502,11 @@ export interface ArrivalRanges {
   /** the ranges came from the REDUCED tree (reducedArrivalRanges): the exact tree could not hold the line, and why;
    *  `fitted` = the villain callers read on the exact tree through their own node (the rest are kept whole) */
   reduced?: { why: string; live: string[]; fitted: number };
+  /** the ranges came from the per-seat LINE FIT (the exact tree cannot hold the line: a second caller or limper is not
+   *  offered): each seat read on a line that folds the earliest other caller — `folded` = the seats some fit folded out.
+   *  The pool-call overlay (services/poolCalls) keys on this: those callers' ranges are the solver's neighbouring-line
+   *  reads, which Brady's rule replaces with the pool's measured calling ranges (2026-10-07). */
+  fitted?: { folded: string[] };
 }
 export type ArrivalOutcome = ArrivalRanges | { ok: false; reason: string };
 
@@ -2594,6 +2599,7 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
     note: `flop-entering ranges walked from the GTO Wizard AI preflop tree. LINE FITTED FOR THE RANGES: the tree holds ` +
       `one limper, so each seat's range was read from a line that keeps its own actions and folds the earliest other ` +
       `limper or caller (${[...folded].join(", ")} folded in some of them).`,
+    fitted: { folded: [...folded].map((p) => handPosOf[p] ?? p) },
   };
 }
 
