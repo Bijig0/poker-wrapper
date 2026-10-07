@@ -1,0 +1,832 @@
+<meta charset="utf-8">
+<title>Stress 500 Replayer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: the study dashboard's own chrome — a sticky bar, then cards; the hand page is the dashboard's hand detail
+   (table mirror + timeline, the exact node, the answer card). Tokens copied from dashboard.css. */
+:root {
+  color-scheme: light;
+  --bg: #F2F4F1; --surface: #FFFFFF; --surface2: #E9EDE9; --surface3: #DEE4DF;
+  --line: #D6DDD7; --grid: #E3E8E3; --ink: #1A2320; --muted: #5F6D65; --faint: #8A968E;
+  --win: #1F7A4D; --win-soft: rgba(31,122,77,.12);
+  --ev: #C4861A; --ev-soft: rgba(196,134,26,.14);
+  --loss: #B8433A; --loss-soft: rgba(184,67,58,.12);
+  --info: #2F6FB3; --info-soft: rgba(47,111,179,.12);
+  --violet: #6B4FBB; --violet-soft: rgba(107,79,187,.12);
+  --severe: #8E1E2B; --severe-soft: rgba(184,67,58,.2);
+  --chip: #E4EAE5; --chip-on: #1A2320; --chip-on-ink: #F2F4F1;
+  --shadow: 0 1px 2px rgba(20,30,25,.06), 0 8px 20px rgba(20,30,25,.06);
+  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-head: Sora, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  color-scheme: dark;
+  --bg: #121715; --surface: #1B211E; --surface2: #242B27; --surface3: #2B3330;
+  --line: #2E3733; --grid: #273029; --ink: #E7ECE8; --muted: #9AA69E; --faint: #6E7A72;
+  --win: #4CC382; --win-soft: rgba(76,195,130,.14);
+  --ev: #E5AE4A; --ev-soft: rgba(229,174,74,.16);
+  --loss: #E0675C; --loss-soft: rgba(224,103,92,.16);
+  --info: #6FA8E6; --info-soft: rgba(111,168,230,.16);
+  --violet: #B48CFF; --violet-soft: rgba(180,140,255,.16);
+  --severe: #FF5470; --severe-soft: rgba(255,84,112,.18);
+  --chip: #262E29; --chip-on: #E7ECE8; --chip-on-ink: #121715;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.35);
+} }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121715; --surface: #1B211E; --surface2: #242B27; --surface3: #2B3330;
+  --line: #2E3733; --grid: #273029; --ink: #E7ECE8; --muted: #9AA69E; --faint: #6E7A72;
+  --win: #4CC382; --win-soft: rgba(76,195,130,.14);
+  --ev: #E5AE4A; --ev-soft: rgba(229,174,74,.16);
+  --loss: #E0675C; --loss-soft: rgba(224,103,92,.16);
+  --info: #6FA8E6; --info-soft: rgba(111,168,230,.16);
+  --violet: #B48CFF; --violet-soft: rgba(180,140,255,.16);
+  --severe: #FF5470; --severe-soft: rgba(255,84,112,.18);
+  --chip: #262E29; --chip-on: #E7ECE8; --chip-on-ink: #121715;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 20px rgba(0,0,0,.35);
+}
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; font: 14px/1.45 var(--font-body); background: var(--bg); color: var(--ink); }
+header { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 10px; padding-inline: 16px; }
+header h1 { font-family: var(--font-head); font-weight: 600; font-size: 16px; margin: 0; white-space: nowrap; }
+header h1 .sub { font-family: var(--font-body); font-weight: 400; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 520px; min-width: 0; }
+.filters input[type=search], .filters select { font: inherit; font-size: 13px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); color: var(--ink); min-width: 0; }
+.filters input[type=search] { flex: 1 1 200px; }
+body.hand-open .filters { display: none; }
+.seg { display: inline-flex; background: var(--chip); border-radius: 999px; padding: 2px; gap: 2px; }
+.seg button { font: 600 12px var(--font-body); border: 0; background: transparent; color: var(--muted); padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+.seg button.on { background: var(--chip-on); color: var(--chip-on-ink); }
+.seg button:focus-visible, .mini:focus-visible, button:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+main { padding-block: 16px 60px; padding-inline: 16px; max-width: 1480px; margin: 0 auto; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 16px 18px; margin: 14px 0; min-width: 0; }
+.card h2 { font-family: var(--font-head); margin: 0 0 10px; font-size: 13px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.sub { color: var(--muted); font-size: 12.5px; }
+.mono { font-family: var(--font-mono); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.mini { font: 600 12px var(--font-body); border: 1px solid var(--line); background: var(--surface2); color: var(--ink); padding: 4px 10px; border-radius: 8px; cursor: pointer; }
+.mini:hover { border-color: var(--faint); }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--info-soft); color: var(--info); white-space: nowrap; }
+.chip.good { background: var(--win-soft); color: var(--win); } .chip.warn { background: var(--ev-soft); color: var(--ev); }
+.chip.crit { background: var(--loss-soft); color: var(--loss); } .chip.dim { background: var(--chip); color: var(--muted); }
+.chip.sev { background: var(--severe); color: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+/* grade string: one square per hero decision */
+.gs { display: inline-flex; gap: 2px; vertical-align: middle; }
+.gs i { width: 10px; height: 14px; border-radius: 2px; display: inline-block; }
+.g-o { background: var(--win); } .g-a { background: var(--ev); } .g-r { background: var(--faint); } .g-b { background: var(--loss); }
+/* summary */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.stat { background: var(--surface2); border-radius: 10px; padding: 10px 12px; }
+.stat .v { font: 600 22px var(--font-head); font-variant-numeric: tabular-nums; }
+.stat .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--surface3); }
+.bar span { display: block; height: 100%; }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; position: sticky; top: 0; background: var(--surface); }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr.row { cursor: pointer; } tr.row:hover td { background: var(--surface2); }
+tr.fix-row.on td { background: var(--info-soft); }
+td.t { min-width: 260px; }
+.cardsuit { font-family: var(--font-mono); font-weight: 600; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+.fam-row { display: grid; grid-template-columns: 120px 1fr 64px; gap: 10px; align-items: center; padding: 4px 0; cursor: pointer; }
+.fam-row:hover .fname { text-decoration: underline; }
+.flag-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; cursor: pointer; }
+.flag-row:hover span:first-child { text-decoration: underline; }
+/* hand page */
+.dt-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 14px; }
+@media (max-width: 980px) { .dt-grid { grid-template-columns: 1fr; } }
+#mirror svg { width: 100%; height: auto; display: block; }
+.ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.ctrl .pos { font-family: var(--font-mono); color: var(--muted); }
+.tl { max-height: 460px; overflow: auto; font-size: 13px; position: relative; }
+/* the hand page: the table + timeline on the left, held in view while the node, ranges and answer scroll on the right */
+.replay { display: grid; grid-template-columns: minmax(340px, 0.85fr) minmax(0, 1.15fr); gap: 14px; align-items: start; }
+.replay-left { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 60px); max-height: calc(100vh - 72px); overflow-y: auto; overscroll-behavior: contain; }
+.replay-left .card, .replay-right .card { margin-top: 0; }
+.replay-left .tl { max-height: 34vh; }
+.replay-right { min-width: 0; }
+@media (max-width: 1100px) { .replay { grid-template-columns: 1fr; } .replay-left { position: static; max-height: none; overflow: visible; } .replay-left .tl { max-height: 320px; } }
+.tl-row { display: grid; grid-template-columns: 54px 92px 1fr auto; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; align-items: center; }
+.tl-row .ours { color: var(--ev); font-size: 11.5px; font-weight: 600; }
+.roll-line { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+.roll-line b { color: var(--ink); }
+.tl-row:hover { background: var(--surface2); }
+.tl-row.cur { background: var(--info-soft); outline: 1px solid var(--info); }
+.tl-row.hero .who { color: var(--info); font-weight: 600; }
+.tl-row.post { color: var(--faint); }
+.tl-row .st { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+.nv-head { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline; margin-bottom: 6px; }
+.nv-facts { display: flex; flex-wrap: wrap; gap: 10px 20px; }
+.nv-facts div { display: flex; flex-direction: column; } .nv-facts b { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.seats { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.rl-card { background: var(--surface2); border-radius: 8px; padding: 8px 10px; width: min-content; max-width: 100%; }
+.rl-card h3 { margin: 0 0 2px; font: 600 13px var(--font-head); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.rl-card.actor { outline: 2px solid var(--info); }
+.rl-card.v .grid169.sm div { width: 20px; height: 17px; font-size: 8.5px; }
+.rl-card.v .grid169.sm { grid-template-columns: repeat(13, 20px); }
+.any { padding: 10px 0; color: var(--muted); font-size: 12.5px; width: 230px; }
+.nv-hero { background: var(--info-soft); border: 1px solid var(--info); border-radius: 10px; padding: 8px 12px; margin-top: 10px; }
+.nv-hero .big { font-size: 15px; font-weight: 600; }
+.ans-pick { font: 600 22px var(--font-head); }
+.ans-pick.fold { color: var(--info); } .ans-pick.call { color: var(--win); } .ans-pick.raise { color: var(--ev); } .ans-pick.none { color: var(--loss); }
+.mixbar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; margin: 6px 0; background: var(--surface3); }
+.mixbar span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.warn-text { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; background: var(--surface2); border-radius: 8px; padding: 8px 10px; max-height: 240px; overflow: auto; }
+.checks div { font-size: 12.5px; padding: 3px 0; border-bottom: 1px solid var(--grid); }
+pre.hh { font: 12.5px/1.5 var(--font-mono); background: var(--surface2); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0; white-space: pre; }
+.empty { padding: 30px 0; text-align: center; color: var(--muted); }
+.back { margin-bottom: 4px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+.kv b { color: var(--muted); font-weight: 600; font-size: 12px; }
+@media (max-width: 520px) {
+  .grid169 { grid-template-columns: repeat(13, 22px) !important; } .grid169 div { width: 22px !important; height: 19px !important; font-size: 8px !important; }
+  .rl-card.v .grid169.sm { grid-template-columns: repeat(13, 19px) !important; } .rl-card.v .grid169.sm div { width: 19px !important; height: 16px !important; font-size: 7.5px !important; }
+  td.t { min-width: 180px; }
+  .tl-row { grid-template-columns: 44px 70px 1fr auto; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+/* ---- the shared 13x13 grid (static/study/grid169.css, verbatim) ---- */
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend b { color: var(--ink); }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.grid169 { display: grid; grid-template-columns: repeat(13, 30px); gap: 2px; margin-top: 8px; }
+.grid169 div { width: 30px; height: 26px; font-size: 10px; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: var(--surface2); color: var(--ink); font-family: var(--font-mono); }
+.grid169 div.hero { outline: 2px solid var(--ev); z-index: 1; }
+.grid169 div { color: #fff; text-shadow: 0 0 2px rgba(0,0,0,.6); }
+.grid169 div.off { color: rgba(255,255,255,.28); text-shadow: none; }
+.grid169 div.clk { cursor: pointer; }
+.grid169 div.clk:hover { outline: 1px solid rgba(255,255,255,.6); }
+.combo-panel { margin-top: 8px; max-width: 460px; }
+.combo-panel .cp-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 10px 0 8px; }
+.combo-panel .cp-legend { display: inline-flex; gap: 10px; flex-wrap: wrap; }
+.combo-panel .cp-legend .sw { width: 10px; height: 10px; margin-right: 4px; }
+.cmb { display: grid; grid-template-columns: 62px 42px 120px 1fr auto; gap: 8px 12px; align-items: center; padding: 8px 10px; margin: 4px 0; border-radius: 6px; font-size: 12.5px; }
+.cmb:nth-child(even) { background: var(--surface2); }
+.cmb.hero { outline: 2px solid var(--ev); }
+.cmb .cards { font-size: 13px; letter-spacing: 1px; }
+.cmb .w { text-align: right; }
+.cmb .bar { display: block; width: 100%; height: 18px; border-radius: 3px; background: rgb(30,30,30); }
+.cmb .nums { padding-left: 6px; white-space: nowrap; color: var(--ink); }
+.grid169.sm { grid-template-columns: repeat(13, 24px); } .grid169.sm div { width: 24px; height: 20px; font-size: 9px; }
+.grid169 i.sfx { font-style: normal; font-size: .82em; opacity: .7; margin-left: .5px; }
+.combo-panel .cp-note { margin: 0 0 8px; line-height: 1.5; max-width: 76ch; }
+.combo-panel .cp-combos { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; padding-left: 10px; }
+.combo-panel .cp-combos .hero { outline: 2px solid var(--ev); border-radius: 4px; padding: 0 4px; color: var(--ink); }
+#gridtip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12px; min-width: 190px; box-shadow: var(--shadow); display: none; }
+#gridtip .h { font-weight: 700; font-family: var(--font-mono); margin-bottom: 5px; display: flex; justify-content: space-between; gap: 10px; }
+#gridtip .h .sub { font-weight: 400; }
+#gridtip .r { display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; margin: 2px 0; }
+#gridtip .r .bar { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+#gridtip .r .bar i { display: block; height: 100%; }
+#gridtip .r .lab { display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; }
+#gridtip .r .pct { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; }
+#gridtip .note { color: var(--muted); font-size: 11px; margin-top: 4px; }
+</style>
+
+<header>
+  <h1>Stress 500 <span class="sub" id="hdr-sub">loading…</span></h1>
+  <div class="filters" id="filters">
+    <input type="search" id="q" placeholder="Search id, title, tag, flag, K9o…" aria-label="Search hands">
+    <select id="fam" aria-label="Family"><option value="">All families</option></select>
+    <div class="seg" id="gradeSeg" role="group" aria-label="Grade filter">
+      <button data-g="" class="on">All</button><button data-g="b">Bad</button><button data-g="r">Refused</button><button data-g="a">Approx</button><button data-g="o">Clean</button>
+    </div>
+    <select id="flag" aria-label="Flag"><option value="">Any flag</option></select>
+  </div>
+  <div class="seg" id="themeSeg" role="group" aria-label="Theme"><button data-t="">Auto</button><button data-t="light">Light</button><button data-t="dark">Dark</button></div>
+</header>
+<main id="main"><div class="empty">Loading the stress run…</div></main>
+
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[x]));
+const $ = (id) => document.getElementById(id);
+window.cardHtml = (c) => {
+  if (!c || c.length < 2) return String(c ?? "");
+  const S = { s: ["♠", "var(--ink)"], h: ["♥", "var(--loss)"], d: ["♦", "var(--loss)"], c: ["♣", "var(--ink)"] };
+  const [sym, col] = S[c[1]] ?? ["?", "inherit"];
+  return `<span class="cardsuit" style="color:${col}">${esc(c[0])}${sym}</span>`;
+};
+</script>
+<script>
+/* ===== static/study/grid169.js — the dashboard's 13x13 grid, verbatim (GTO Wizard's palette, hover mix, combos) ===== */
+const GWPAL = { base: "rgb(30,30,30)", call: "#5AB966", fold: "#3D7CB8", range: "#FF8F00", allin: "#7D1F1F",
+               raise: ["#F03C3C", "#DD3737", "#CA3232", "#B62E2E", "#A32929", "#912424"] };
+const actKind = (label) => {
+  const l = String(label ?? "").toLowerCase();
+  if (/^(fold)/.test(l)) return "fold";
+  if (/^(check|call|limp|in range)/.test(l)) return "call";
+  if (/all-?in|jam|\brai\b/.test(l)) return "allin";
+  return "raise";
+};
+const actSize = (label) => { const m = String(label ?? "").match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
+function gtowColors(labels) {
+  const raises = labels.map((l, i) => ({ l, i, k: actKind(l), sz: actSize(l) })).filter((x) => x.k === "raise").sort((a, b) => a.sz - b.sz);
+  const out = labels.map((l) => { const k = actKind(l); return k === "fold" ? GWPAL.fold : k === "call" ? GWPAL.call : k === "allin" ? GWPAL.allin : GWPAL.raise[0]; });
+  const n = raises.length;
+  raises.forEach((r, rank) => { const t = n <= 1 ? 0 : rank / (n - 1); out[r.i] = GWPAL.raise[Math.round(t * (GWPAL.raise.length - 1))]; });
+  return out;
+}
+function gtowOrder(labels) {
+  const rank = (l) => { const k = actKind(l); return k === "allin" ? 0 : k === "raise" ? 1 : k === "call" ? 2 : 3; };
+  return labels.map((l, i) => i).sort((a, b) => rank(labels[a]) - rank(labels[b]) || (actKind(labels[a]) === "raise" ? actSize(labels[b]) - actSize(labels[a]) : 0));
+}
+function gtowCellStyle(segs, weight) {
+  const h = Math.max(0, Math.min(1, weight)) * 100;
+  const live = segs.filter((x) => x.frac > 0.004);
+  if (!live.length || h <= 0.2) return `background:${GWPAL.base}`;
+  let acc = 0;
+  const layers = [], sizes = [];
+  for (const x of live) { acc = Math.min(1, acc + x.frac); layers.push(`linear-gradient(to right,${x.color},${x.color})`); sizes.push(`${(acc * 100).toFixed(2)}% ${h.toFixed(1)}%`); }
+  sizes[sizes.length - 1] = `100% ${h.toFixed(1)}%`;
+  return `background-color:${GWPAL.base};background-image:${layers.join(",")};background-size:${sizes.join(",")};background-position:${live.map(() => "0 100%").join(",")};background-repeat:no-repeat`;
+}
+const gtowColor = (label, labels) => gtowColors(labels ?? [label])[(labels ?? [label]).indexOf(label)] ?? GWPAL.raise[0];
+const colorFor = (label, i, labels) => labels ? gtowColor(label, labels) : (actKind(label) === "fold" ? GWPAL.fold : actKind(label) === "call" ? GWPAL.call : actKind(label) === "allin" ? GWPAL.allin : GWPAL.raise[Math.min(Math.max(i - 2, 0), GWPAL.raise.length - 1)]);
+const RANKS = "AKQJT98765432";
+const COMBOS = (k) => k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12;
+const classKey = (r, c) => r === c ? RANKS[r] + RANKS[c] : r < c ? RANKS[r] + RANKS[c] + "s" : RANKS[c] + RANKS[r] + "o";
+const COMBO_DATA = {};
+let comboSeq = 0;
+const COMBO_DATA_MAX = 60;
+const SUIT_ORDER = ["s", "h", "d", "c"];
+function comboRows(cls, weights, acts, board) {
+  const dead = new Set((board || "").match(/[2-9TJQKA][shdc]/gi)?.map((c) => c[0].toUpperCase() + c[1].toLowerCase()) ?? []);
+  const [a, b] = [cls[0], cls[1]];
+  const out = [];
+  if (cls.length === 2) { for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) out.push(a + SUIT_ORDER[i] + b + SUIT_ORDER[j]); }
+  else if (cls.endsWith("s")) { for (const su of SUIT_ORDER) out.push(a + su + b + su); }
+  else { for (const s1 of SUIT_ORDER) for (const s2 of SUIT_ORDER) if (s1 !== s2) out.push(a + s1 + b + s2); }
+  const legal = out.filter((h) => !dead.has(h.slice(0, 2)) && !dead.has(h.slice(2)));
+  if (!legal.length) return [];
+  const per = weights / legal.length;
+  const s = acts ? acts.map((x) => x / (weights || 1)) : null;
+  return legal.map((hand) => ({ hand, w: per, ...(s ? { s } : {}) }));
+}
+function classGrid(cls, actions, heroKey, opt = {}) {
+  const cid = `cg${++comboSeq}`;
+  COMBO_DATA[cid] = { combos: opt.combos ?? null, cls, actions, single: !!opt.single, heroKey, heroCombo: opt.heroCombo ?? null, board: opt.board ?? null };
+  for (const k of Object.keys(COMBO_DATA)) { if (Object.keys(COMBO_DATA).length <= COMBO_DATA_MAX) break; delete COMBO_DATA[k]; }
+  const totals = actions.map((_, ai) => { let n = 0, d = 0; for (const k in cls) { n += cls[k].acts[ai]; d += cls[k].w; } return d ? (100 * n) / d : 0; });
+  const colors = opt.single ? [GWPAL.range] : gtowColors(actions);
+  const order = opt.single ? [0] : gtowOrder(actions);
+  let html = opt.single ? "" : `<div class="legend">` + order.map((ai) => `<span><span class="sw" style="background:${colors[ai]}"></span>${esc(actions[ai])} <b>${totals[ai].toFixed(1)}%</b></span>`).join("") + `</div>`;
+  html += `<div class="grid169${opt.small ? " sm" : ""}">`;
+  for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) {
+    const key = classKey(r, c), e = cls[key];
+    const inRange = !!(e && e.w > 0.0005);
+    let style = `background:${GWPAL.base}`;
+    if (inRange) {
+      const weight = Math.min(1, e.w / COMBOS(key));
+      const segs = opt.single ? [{ color: GWPAL.range, frac: 1 }] : order.map((ai) => ({ color: colors[ai], frac: e.acts[ai] / e.w }));
+      style = gtowCellStyle(segs, weight);
+    }
+    const tip = opt.tip ? opt.tip(key, inRange, e) : key + ": " + (inRange
+      ? (opt.single ? `${(100 * Math.min(1, e.w / COMBOS(key))).toFixed(0)}% of the class in range`
+                    : `${(100 * Math.min(1, e.w / COMBOS(key))).toFixed(0)}% in range · ` + order.map((ai) => `${actions[ai]} ${((100 * e.acts[ai]) / (e.w || 1)).toFixed(0)}%`).join(" · "))
+      : "not in range");
+    const clk = inRange && !opt.combosOff ? ` onclick="showCombos('${cid}','${key}')"` : "";
+    const suit = key.length > 2 ? `<i class="sfx ${key[2]}">${key[2]}</i>` : "";
+    html += `<div class="${key === heroKey ? "hero" : ""}${inRange ? "" : " off"}${clk ? " clk" : ""}" style="${style}" title="${esc(tip)}${clk ? " · click for the combos" : ""}"${clk}>${key.slice(0, 2)}${suit}</div>`;
+  }
+  html += `</div><div class="sub" style="margin-top:6px">${opt.foot ?? "hero's class outlined · hover any cell for its mix"}${opt.combosOff ? "" : " · click a class for its combos"}</div>`;
+  const open = heroKey && opt.openHero !== false && !opt.combosOff && cls[heroKey]?.w > 0.0005 ? heroKey : null;
+  if (!opt.combosOff) html += `<div class="combo-panel" id="cp-${cid}"${open ? ` data-cls="${open}"` : ""}>${open ? comboPanelHtml(COMBO_DATA[cid], open) : ""}</div>`;
+  return html;
+}
+const sameCombo = (a, b) => { if (!a || !b) return false; const A = a.match(/.{2}/g) || [], B = b.match(/.{2}/g) || []; return A.length === 2 && B.length === 2 && ((A[0] === B[0] && A[1] === B[1]) || (A[0] === B[1] && A[1] === B[0])); };
+function showCombos(cid, cls) {
+  const d = COMBO_DATA[cid], host = $(`cp-${cid}`);
+  if (!d || !host) return;
+  if (host.dataset.cls === cls) { host.innerHTML = ""; host.dataset.cls = ""; return; }
+  host.dataset.cls = cls;
+  host.innerHTML = comboPanelHtml(d, cls);
+  host.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function comboPanelHtml(d, cls) {
+  const e = d.cls?.[cls];
+  const derived = !d.combos;
+  const rows = derived ? (e ? comboRows(cls, e.w, d.single ? null : e.acts, d.board) : []) : (d.combos[cls] || []);
+  const colors = d.single ? [GWPAL.range] : gtowColors(d.actions), order = d.single ? [0] : gtowOrder(d.actions);
+  const inRange = rows.reduce((a, r) => a + r.w, 0), nCls = COMBOS(cls);
+  const hand = (h) => (h.match(/.{2}/g) || []).map(cardHtml).join(" ");
+  const what = derived ? (d.board ? "the class spread over the combos the board leaves" : "no board yet — every combo of this class is the same hand") : (d.single ? "weight per combo" : "each combo's own split and EV");
+  let html = `<div class="cp-head"><b>${esc(cls)}</b> <span class="sub">${rows.length} legal combo${rows.length === 1 ? "" : "s"} · ${inRange.toFixed(2)} of ${nCls} in range · ${what}</span>` +
+    `<span class="sub cp-legend">${order.map((ai) => `<span><span class="sw" style="background:${colors[ai]}"></span>${esc(d.actions[ai])}</span>`).join("")}</span></div>`;
+  const collapse = derived && !d.board && rows.length > 1;
+  const heroRow = rows.find((r) => sameCombo(r.hand, d.heroCombo)) ?? null;
+  if (derived && rows.length > 1) html += `<div class="cp-note sub">${d.board
+    ? `This grid carries no per-combo solve, so each combo shows the CLASS average — blockers are not reflected. Only nodes solved per combo (the AI chain, the MES locked solves) split them apart.`
+    : `Preflop a solver stores 169 classes, not 1,326 combos: with no board there are no blockers, so all ${rows.length} of these are the same hand and play identically — shown as one row${heroRow ? ", yours" : ""}.`}</div>`;
+  if (!rows.length) html += `<div class="sub">no legal combo of ${esc(cls)} is in range here (blocked by the board or folded out)</div>`;
+  else if (!heroRow && d.heroKey === cls && d.heroCombo) html += `<div class="sub">your ${hand(d.heroCombo)} has no weight in this range</div>`;
+  const drawn = collapse ? [heroRow ?? rows[0]] : rows;
+  for (const r of drawn) {
+    const isHero = r === heroRow;
+    const segs = d.single ? [{ color: GWPAL.range, frac: 1 }] : order.map((ai) => ({ color: colors[ai], frac: r.s?.[ai] ?? 0 }));
+    const nums = d.single ? "" : order.map((ai) => { const p = (r.s?.[ai] ?? 0) * 100; if (p < 0.5) return ""; const ev = r.ev?.[ai]; return `<span style="color:${colors[ai]}">${esc(d.actions[ai])}</span> ${p.toFixed(1)}%${ev != null ? `<span class="sub"> ev ${Number(ev).toFixed(2)}</span>` : ""}`; }).filter(Boolean).join(" · ");
+    const you = isHero ? `<span class="chip good">you</span>` : "";
+    html += `<div class="cmb${isHero ? " hero" : ""}"><span class="cards mono">${collapse && !isHero ? esc(cls) : hand(r.hand)}</span><span class="w sub">${(r.w * 100).toFixed(0)}%</span>` +
+      `<span class="bar" style="${gtowCellStyle(segs, 1)}"></span><span class="nums">${nums}</span>${collapse ? `<span>${you}<span class="chip dim">×${rows.length}</span></span>` : you}</div>`;
+  }
+  if (collapse) html += `<div class="cp-combos sub">${rows.map((r) => `<span class="mono${r === heroRow ? " hero" : ""}">${hand(r.hand)}</span>`).join("")}</div>`;
+  return html;
+}
+(function gridTip() {
+  const tip = document.createElement("div"); tip.id = "gridtip";
+  if (document.body) document.body.appendChild(tip); else document.addEventListener("DOMContentLoaded", () => document.body.appendChild(tip));
+  const cellOf = (e) => e.target && e.target.closest ? e.target.closest(".grid169 > div") : null;
+  const render = (raw) => {
+    const [head, ...rest] = raw.split(/:\s(.*)/s).filter(Boolean);
+    const body = (rest[0] ?? "").trim();
+    if (!body || /not in range/i.test(body)) return `<div class="h">${esc(head)}</div><div class="note">${esc(body || "not in range")}</div>`;
+    const segs = body.split(/\s·\s|,\s(?=[A-Z])/).map((x) => x.trim()).filter(Boolean);
+    const rows = segs.map((sg) => { const m = sg.match(/^(.*?)\s(\d+(?:\.\d+)?)%(?:\s\((.*?)\))?$/); return m ? { label: m[1], pct: Number(m[2]), ev: m[3] } : { label: sg, pct: null }; });
+    const withPct = rows.filter((r) => r.pct != null);
+    const total = withPct.reduce((s, r) => s + r.pct, 0) || 100;
+    return `<div class="h"><span>${esc(head)}</span><span class="sub">${withPct.length ? `${withPct.length} action${withPct.length === 1 ? "" : "s"}` : ""}</span></div>` +
+      rows.map((r, i) => r.pct == null ? `<div class="note">${esc(r.label)}</div>` :
+        `<div class="r"><div><div class="lab"><span>${esc(r.label)}</span>${r.ev ? `<span class="sub">${esc(r.ev)}</span>` : ""}</div><div class="bar"><i style="width:${Math.min(100, 100 * r.pct / total).toFixed(1)}%;background:${colorFor(r.label, i)}"></i></div></div><div class="pct">${r.pct}%</div></div>`).join("");
+  };
+  const place = (e) => { const x = Math.min(window.innerWidth - tip.offsetWidth - 12, e.clientX + 14), y = e.clientY + 16 + tip.offsetHeight > window.innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16; tip.style.left = `${Math.max(4, x)}px`; tip.style.top = `${Math.max(4, y)}px`; };
+  document.addEventListener("mouseover", (e) => { const c = cellOf(e); if (!c) return; if (c.title) { c.dataset.tip = c.title; c.removeAttribute("title"); } const raw = c.dataset.tip; if (!raw) return; tip.innerHTML = render(raw); tip.style.display = "block"; place(e); });
+  document.addEventListener("mousemove", (e) => { if (tip.style.display === "block" && cellOf(e)) place(e); });
+  document.addEventListener("mouseout", (e) => { const c = cellOf(e); if (c && !(e.relatedTarget && c.contains(e.relatedTarget))) tip.style.display = "none"; });
+})();
+</script>
+
+<script>
+/* ===================== the replayer ===================== */
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const B64I = Object.fromEntries([...B64].map((c, i) => [c, i]));
+const dec = (s) => { if (s == null) return null; const out = new Array(169); for (let i = 0; i < 169; i++) out[i] = ((B64I[s[2 * i]] << 6) | B64I[s[2 * i + 1]]) / 4095; return out; };
+const CLASS_LIST = (() => { const o = []; for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) o.push(classKey(r, c)); return o; })();
+const r2 = (x) => Math.round(x * 100) / 100;
+const STREET_N = { preflop: 0, flop: 3, turn: 4, river: 5 };
+const STREET_OF = { p: "preflop", f: "flop", t: "turn", r: "river" };
+const GRADE = { o: ["good", "clean"], a: ["warn", "approx"], r: ["dim", "refused"], b: ["crit", "bad"] };
+const GRADE_FULL = { ok: "o", approx: "a", refused: "r", bad: "b" };
+const VERDICT = { clean: ["good", "clean"], "by-design": ["good", "clean · by design"], rebuilt: ["warn", "rebuilt"], leaked: ["crit", "extra requests"], failed: ["crit", "check failed"], fault: ["crit", "no answer"] };
+const FLAG_INFO = {
+  "capture-fault": "the hand as captured is not a legal hand — refused by the capture gate (expected for the corrupt real hands)",
+  arrival: "postflop had no flop ranges: the preflop piece could not be walked to the flop",
+  timeout: "the solve did not answer in time", "not-hero-turn": "asked after hero had acted (a phantom ask) — correctly refused",
+  "no-node": "the solve had no decision node on hero's line", other: "refused for another reason (see the answer)",
+  "wrong-seat": "the answer came from another seat's node", "empty-mix": "the answer carries no action", "all-zero-mix": "every action at 0%",
+  "sum-off": "the mix does not sum to 100%", "check-facing-bet": "a check offered while facing a bet", "fold-when-free": "folds although checking is free",
+  "last-resort": "the removed heads-up last resort", "mis-press": "a tree all-in short of hero's stack with a deeper villain outside the tree",
+  "over-15s": "took longer than the 15 s table clock (the batch's time boxes are 45 s)",
+  "thin-hero": "hero's own range held under 1.5 combos at this node — the script made hero take an action the solver almost never takes (live, hero follows the pick), and the later streets were solved on almost nothing",
+  "thin-villain": "a villain's range held under 1.5 combos at hero's node — the villain took an action the solver almost never takes, the tree narrowed that range to almost nothing, and the answer rests on it (this happens live whenever a player leaves GTO)",
+  "no-collapse": "5+ players in the pot and no collapse to three seats is legal (everyone has chips in on the street) — no answer",
+  "hero-off-chart": "the script made hero take a preflop action the chart never takes, so no tree holds hero's line (live, hero follows the pick)",
+  "limped-pot": "a limped pot whose flop ranges no tree could give: the chart node is untrained or absent, GTO Wizard AI holds one non-blind limper, and the reduced tree needs a raise",
+  "short-all-in": "the tree's all-in is short of hero's chips with a deeper villain outside the tree — latent (hero's pick is not the all-in)", "path-failed": "a check failed on the answer's path", "path-fault": "no answer",
+  // the poker-sense checks (export's lint.ts) — they flag, they never change the grade
+  "hero-hand-absent-script": "hero's own class holds under 2% of itself in his own range at this node, in every tree that answered it, after the script played a hero action our mix gave under 1% earlier in the hand — script-made (live, hero follows the pick)",
+  "hero-hand-absent-real": "hero's own class holds under 2% of itself in his own range at this node, in every tree that answered it, and every earlier hero action was at 1%+ of our mix — real: hero's own low-frequency (2-28%) actions compounding, so the answer rests on a hand the tree barely holds; this happens live whenever the roll lands on thin branches twice",
+  "collapses-disagree": "the answer blends 2+ trees (multiway collapses) and they pick different kinds of action for hero's hand (fold / check / call / bet-raise / all-in), each at 60%+ — what hero does depends on which seats the collapse keeps; the answer card lists what each tree said",
+  "served-minority": "the trees disagree and the served pick is not the kind a strict majority of them pick at 60%+ — the blend (or the roll) went with the minority",
+  "fold-strong": "hero folds 50%+ facing a bet with a real two pair (both hole cards pair the board), a set, trips, a straight on an unpaired board with no 4-flush, or a flush or better (a pocket pair under a paired board, board trips and a straight on a paired or 4-flush board are left out)",
+  "check-monster-river": "checked to hero on the river with a full house or better, and the answer checks 90%+",
+  "deep-vs-rung": "a 6-max chart answered preflop from a depth under the hand's effective stack / 1.35 (effective = hero's start stack against the deepest other dealt stack) — informational: the gap gate measures per opponent in the pot and may rightly clear it",
+};
+const LINT_FLAGS = ["hero-hand-absent-real", "fold-strong", "check-monster-river", "served-minority", "collapses-disagree", "hero-hand-absent-script", "deep-vs-rung"];
+const chipClass = (f) => /^(wrong-seat|empty-mix|all-zero-mix|sum-off|check-facing-bet|fold-when-free|last-resort|mis-press|check#15)$/.test(f) ? "crit"
+  : /^(arrival|other|no-node|timeout|thin-villain|limped-pot|no-collapse|hero-hand-absent-real|fold-strong|check-monster-river|served-minority)$/.test(f) ? "warn" : "dim";
+let INDEX = null, BATCHES = {}, VIEW = { list: true }, FILTER = { q: "", fam: "", g: "", flag: "", fix: "" };
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+// ---- theme (the dashboard's switch) ----
+function setTheme(t) { if (t) document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme"); store.set("s5_theme", t || ""); for (const b of document.querySelectorAll("#themeSeg button")) b.classList.toggle("on", b.dataset.t === (t || "")); }
+setTheme(store.get("s5_theme") || "");
+$("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTheme(b.dataset.t); });
+
+// ---- data ----
+async function loadIndex() { const r = await fetch("data/index.json"); if (!r.ok) throw new Error(`index ${r.status}`); return r.json(); }
+async function loadHand(entry) {
+  if (!BATCHES[entry.f]) { const r = await fetch(`data/${entry.f}`); BATCHES[entry.f] = r.ok ? await r.json() : []; }
+  return BATCHES[entry.f].find((h) => h.id === entry.id) ?? null;
+}
+
+// ---- list ----
+const gradeStr = (g) => `<span class="gs" title="${esc([...g].map((c) => GRADE[c]?.[1] ?? c).join(" · "))}">${[...g].map((c) => `<i class="g-${c}"></i>`).join("")}</span>`;
+const cardsHtml = (cs) => (cs || []).map(cardHtml).join("");
+function heroClass(cs) {
+  if (!cs || cs.length !== 2) return null;
+  const R = "23456789TJQKA";
+  let [a, b] = cs; if (R.indexOf(a[0]) < R.indexOf(b[0])) [a, b] = [b, a];
+  return a[0] === b[0] ? a[0] + b[0] : a[0] + b[0] + (a[1] === b[1] ? "s" : "o");
+}
+function matches(h) {
+  if (FILTER.fam && h.fam !== FILTER.fam) return false;
+  if (FILTER.g && !h.g.includes(FILTER.g)) return false;
+  if (FILTER.flag && !h.fl.includes(FILTER.flag) && !h.k.includes(FILTER.flag)) return false;
+  if (FILTER.fix) {
+    const fx = (INDEX.fixes || []).find((f) => f.id === FILTER.fix);
+    if (fx && !fx.target.hands.includes(h.id) && !(fx.fired?.hands || []).includes(h.id)) return false;
+  }
+  if (FILTER.q) {
+    const q = FILTER.q.toLowerCase();
+    const hay = [h.id, h.fam, h.title, h.hero, ...(h.tags || []), ...(h.fl || []), ...(h.k || []), heroClass(h.hc) || "", h.real || ""].join(" ").toLowerCase();
+    if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
+  }
+  return true;
+}
+function renderList() {
+  VIEW = { list: true };
+  document.body.classList.remove("hand-open");
+  const T = INDEX.totals, hands = INDEX.hands.filter(matches);
+  const pct = (n) => T.decisions ? (100 * n / T.decisions) : 0;
+  const fams = [...new Set(INDEX.hands.map((h) => h.fam))];
+  const famRows = fams.map((f) => {
+    const hs = INDEX.hands.filter((h) => h.fam === f);
+    const c = { o: 0, a: 0, r: 0, b: 0 }; for (const h of hs) for (const g of h.g) c[g]++;
+    const n = c.o + c.a + c.r + c.b || 1;
+    return `<div class="fam-row" data-fam="${esc(f)}" title="${esc(INDEX.about[f] || "")}"><span class="fname mono">${esc(f)}</span>
+      <span class="bar"><span class="g-o" style="width:${100 * c.o / n}%"></span><span class="g-a" style="width:${100 * c.a / n}%"></span><span class="g-r" style="width:${100 * c.r / n}%"></span><span class="g-b" style="width:${100 * c.b / n}%"></span></span>
+      <span class="num sub">${hs.length} · ${n}</span></div>`;
+  }).join("");
+  const lintRows = T.lint ? LINT_FLAGS.filter((f) => T.lint[f]).map((f) => `<div class="flag-row" data-flag="${esc(f)}" title="${esc(FLAG_INFO[f] || "")}"><span><span class="chip ${chipClass(f)}">${esc(f)}</span></span><span class="num">${T.lint[f].n}<span class="sub"> · ${T.lint[f].hands} hand${T.lint[f].hands === 1 ? "" : "s"}</span></span></div>`).join("") : "";
+  const flagRows = Object.entries(T.flags).filter(([f]) => !(T.lint && f in T.lint)).sort((a, b) => b[1] - a[1]).map(([f, n]) => `<div class="flag-row" data-flag="${esc(f)}" title="${esc(FLAG_INFO[f] || "")}"><span>${esc(f)}</span><span class="num">${n}</span></div>`).join("") || `<div class="sub">none</div>`;
+  const kindRows = Object.entries(T.kinds).sort((a, b) => b[1] - a[1]).map(([f, n]) => `<div class="flag-row" data-flag="${esc(f)}"><span>${esc(f)}</span><span class="num">${n}</span></div>`).join("") || `<div class="sub">none</div>`;
+  const gbar = (o) => { const n = (o.ok + o.approx + o.refused + o.bad + (o.pre || 0)) || 1; return `<span class="bar" style="width:140px;display:inline-flex;vertical-align:middle"><span class="g-o" style="width:${100 * o.ok / n}%"></span><span class="g-a" style="width:${100 * o.approx / n}%"></span><span class="g-r" style="width:${100 * o.refused / n}%"></span><span class="g-b" style="width:${100 * o.bad / n}%"></span><span style="width:${100 * (o.pre || 0) / n}%;background:var(--surface3)"></span></span>`; };
+  const gcount = (o) => `<span class="sub num" title="clean · approximated · no answer · bad">${o.ok} · ${o.approx} · ${o.refused} · ${o.bad}</span>${o.pre ? `<br><span class="sub" title="refused before any postflop fix could act: no flop ranges (the preflop side), a capture fault or a phantom ask">+ ${o.pre} with no flop ranges</span>` : ""}`;
+  const fixVerdict = (f) => {
+    const t = f.target, fr = f.fired;
+    if (f.must === "never") return fr && fr.n ? `<span class="chip sev">fired ${fr.n}× — fault</span>` : `<span class="chip good">never fired</span>`;
+    if (!t.hands.length) return `<span class="chip dim">no spot run yet</span>`;
+    if (t.bad) return `<span class="chip crit">${t.bad} bad</span>`;
+    if (t.refused) return `<span class="chip warn">${t.refused} no answer</span>`;
+    if (t.ok + t.approx === 0) return `<span class="chip dim">its spots never reached it</span>`;
+    return `<span class="chip good">answered every spot it reached</span>`;
+  };
+  const fixRows = (INDEX.fixes || []).map((f) => `<tr class="row fix-row${FILTER.fix === f.id ? " on" : ""}" data-fix="${esc(f.id)}"><td><b>${esc(f.name)}</b>${f.commit ? ` <span class="chip dim mono">${esc(f.commit)}</span>` : ""}<div style="margin-top:4px">${fixVerdict(f)}</div></td>
+      <td class="t sub">${esc(f.means)}</td>
+      <td style="white-space:nowrap">${f.target.hands.length} hands<br>${gbar(f.target)}<br>${gcount(f.target)}</td>
+      <td style="white-space:nowrap">${f.fired ? `${f.fired.n} decisions<br>${gbar(f.fired)}<br>${gcount(f.fired)}` : `<span class="sub">leaves no mark<br>of its own</span>`}</td></tr>`).join("");
+  const fixName = FILTER.fix ? ((INDEX.fixes || []).find((f) => f.id === FILTER.fix)?.name ?? FILTER.fix) : "";
+  $("main").innerHTML = `
+    <section class="card"><h2>The run</h2>
+      <div class="stats">
+        <div class="stat"><div class="v">${T.hands}<span class="sub"> / ${INDEX.planned}</span></div><div class="k">hands run</div></div>
+        <div class="stat"><div class="v">${T.decisions}</div><div class="k">hero decisions</div></div>
+        <div class="stat"><div class="v" style="color:var(--win)">${T.ok}</div><div class="k">clean</div></div>
+        <div class="stat"><div class="v" style="color:var(--ev)">${T.approx}</div><div class="k">approximated</div></div>
+        <div class="stat"><div class="v" style="color:var(--muted)">${T.refused}</div><div class="k">refused</div></div>
+        <div class="stat"><div class="v" style="color:var(--loss)">${T.bad}</div><div class="k">bad</div></div>
+        <div class="stat"><div class="v">${T.reqs.toLocaleString()}</div><div class="k">GTO Wizard requests</div></div>
+      </div>
+      <div class="bar" style="margin-top:12px;height:12px"><span class="g-o" style="width:${pct(T.ok)}%"></span><span class="g-a" style="width:${pct(T.approx)}%"></span><span class="g-r" style="width:${pct(T.refused)}%"></span><span class="g-b" style="width:${pct(T.bad)}%"></span></div>
+      <p class="sub" style="margin:10px 0 0;max-width:110ch">Every hero decision of every hand ran through the live answer path (poker-wrapper ${(INDEX.commits || []).length ? INDEX.commits.map((x) => `<span class="mono">${esc(x.c)}</span> for ${x.n} hand${x.n === 1 ? "" : "s"}`).join(", ") : esc(INDEX.commit || "")} — every commit after b1d53b1 carries main's fe31bf2 re-root fix; live GTO Wizard) in a private copy of the data. One square per decision: <span class="chip good">clean</span> <span class="chip warn">approximated</span> (a named approximation fired) <span class="chip dim">refused</span> (no answer) <span class="chip crit">bad</span> (an answer that cannot be right). The batch's time boxes are 45 s, not the table's 12 s, so slow trees are graded on what they answer; anything over 15 s is flagged. Updated ${esc((INDEX.builtAt || "").slice(0, 16).replace("T", " "))} UTC.</p>
+    </section>
+    <section class="card"><h2>The fixes — did they hold?</h2>
+      <p class="sub" style="margin:0 0 10px;max-width:110ch">What "fixed" means for each multiway fix, in the words of the session that built it, and how its spots came out. <b>Spots</b> = the hands built to exercise it (their postflop decisions: clean · approximated · no answer · bad). <b>Fired</b> = the decisions where the fix left its own mark (its warning or plan kind) anywhere in the run. Click a row to list its hands.</p>
+      <div class="tbl-wrap"><table><thead><tr><th>Fix</th><th>What "fixed" means</th><th>Spots</th><th>Fired</th></tr></thead><tbody>${fixRows}</tbody></table></div>
+    </section>
+    <div class="two">
+      <section class="card"><h2>By family</h2>${famRows}<p class="sub" style="margin:8px 0 0">hands · decisions. Click a family to filter.</p></section>
+      <section class="card"><h2>Flags</h2>${flagRows}${lintRows ? `<h2 style="margin-top:14px">Poker-sense checks</h2><p class="sub" style="margin:0 0 6px">What a player would stop at — they flag a decision, never change its grade. decisions · hands; 0 = checked, none found.</p>${lintRows}` : ""}<h2 style="margin-top:14px">Approximations fired</h2>${kindRows}</section>
+    </div>
+    <section class="card" id="handsCard"><h2>Hands <span class="sub" style="text-transform:none;letter-spacing:0">${hands.length} shown</span>${fixName ? ` <button class="mini" id="clearFix" style="text-transform:none;letter-spacing:0">fix: ${esc(fixName)} ✕</button>` : ""}</h2>
+      <div class="tbl-wrap"><table><thead><tr><th>Hand</th><th>Hero</th><th>Cards</th><th>Board</th><th>Decisions</th><th>What it tests</th><th>Flags</th><th class="num">s</th></tr></thead>
+      <tbody>${hands.map((h) => `<tr class="row" data-id="${esc(h.id)}"><td class="mono">${esc(h.id)}</td><td>${esc(h.hero)}</td><td>${cardsHtml(h.hc)}</td><td>${cardsHtml(h.b)}</td>
+        <td>${gradeStr(h.g)}</td><td class="t">${esc(h.title)}</td><td><div class="chips">${h.fl.map((f) => `<span class="chip ${chipClass(f)}" title="${esc(FLAG_INFO[f] || "")}">${esc(f)}</span>`).join("")}</div></td>
+        <td class="num">${Math.round((h.ms || 0) / 1000)}</td></tr>`).join("") || `<tr><td colspan="8" class="empty">No hands match these filters.</td></tr>`}</tbody></table></div>
+    </section>`;
+  for (const r of document.querySelectorAll("tr.row:not(.fix-row)")) r.addEventListener("click", () => openHand(r.dataset.id));
+  for (const r of document.querySelectorAll("tr.fix-row")) r.addEventListener("click", () => { FILTER.fix = FILTER.fix === r.dataset.fix ? "" : r.dataset.fix; renderList(); if (FILTER.fix) $("handsCard")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  $("clearFix")?.addEventListener("click", () => { FILTER.fix = ""; renderList(); });
+  for (const r of document.querySelectorAll(".fam-row")) r.addEventListener("click", () => { $("fam").value = r.dataset.fam; FILTER.fam = r.dataset.fam; renderList(); });
+  for (const r of document.querySelectorAll(".flag-row")) r.addEventListener("click", () => { FILTER.flag = r.dataset.flag; syncFlagSelect(); renderList(); });
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+}
+function syncFlagSelect() {
+  const s = $("flag");
+  if (FILTER.flag && ![...s.options].some((o) => o.value === FILTER.flag)) s.add(new Option(FILTER.flag, FILTER.flag));
+  s.value = FILTER.flag;
+}
+
+// ---- the hand page ----
+let H = null, STEP = 0, PLAY = null, ALT_SEL = {};
+function inflate(h) {
+  const acts = h.hand.ac.map(([seatId, type, amount, st, hero]) => ({ seatId, type, amount, street: STREET_OF[st], hero: !!hero }));
+  return { ...h, actions: acts, positions: h.hand.pos, startStacks: h.hand.ss || {}, heroSeatId: h.hand.hs, heroCards: h.hand.hc, board: h.hand.b,
+    heroKey: heroClass(h.hand.hc), decAt: Object.fromEntries((h.dec || []).map((d) => [d.i, d])) };
+}
+function replayState(hand, step) {
+  const st = { street: "preflop", potPrev: 0, cur: {}, folded: new Set() };
+  for (let i = 0; i < step; i++) {
+    const a = hand.actions[i];
+    if (a.street !== st.street) { st.potPrev += Object.values(st.cur).reduce((s, x) => s + x, 0); st.cur = {}; st.street = a.street; }
+    const amt = a.amount ?? 0;
+    if (a.type === "post-sb" || a.type === "post-bb" || a.type === "post" || a.type === "call") st.cur[a.seatId] = (st.cur[a.seatId] ?? 0) + amt;
+    else if (a.type === "bet" || a.type === "raise" || a.type === "all-in") st.cur[a.seatId] = amt;
+    else if (a.type === "fold") st.folded.add(a.seatId);
+  }
+  const inv = {};
+  { let street = "preflop", cur = {};
+    for (let i = 0; i < step; i++) {
+      const a = hand.actions[i];
+      if (a.street !== street) { for (const [s, v] of Object.entries(cur)) inv[s] = (inv[s] ?? 0) + v; cur = {}; street = a.street; }
+      const amt = a.amount ?? 0;
+      if (a.type === "post-sb" || a.type === "post-bb" || a.type === "post" || a.type === "call") cur[a.seatId] = (cur[a.seatId] ?? 0) + amt;
+      else if (a.type === "bet" || a.type === "raise" || a.type === "all-in") cur[a.seatId] = amt;
+    }
+    for (const [s, v] of Object.entries(cur)) inv[s] = (inv[s] ?? 0) + v; }
+  const next = hand.actions[step] ?? null;
+  const shownStreet = next ? next.street : st.street;
+  const tot = Object.values(inv).sort((a, b) => b - a);
+  const uncalled = !next && tot.length >= 2 ? tot[0] - tot[1] : 0;
+  return { street: st.street, board: hand.board.slice(0, next ? (STREET_N[shownStreet] ?? 0) : hand.board.length), pot: r2(st.potPrev + Object.values(st.cur).reduce((s, x) => s + x, 0) - uncalled),
+    bets: st.cur, folded: st.folded, invested: inv, toAct: next ? next.seatId : null, next };
+}
+const SUITSYM = { s: ["♠", "#22303f"], h: ["♥", "#d3364b"], d: ["♦", "#d3364b"], c: ["♣", "#22303f"] };
+function svgCard(x, y, c, w = 26, h = 36) {
+  if (!c) return `<rect x="${x}" y="${y}" rx="3" width="${w}" height="${h}" fill="#1b2f4d" stroke="#33507a"/><rect x="${x + 4}" y="${y + 4}" rx="2" width="${w - 8}" height="${h - 8}" fill="none" stroke="#3d5f8f" stroke-width="1"/>`;
+  const [sym, col] = SUITSYM[c[1]] ?? ["?", "#22303f"];
+  return `<rect x="${x}" y="${y}" rx="3" width="${w}" height="${h}" fill="#eef2f7"/><text x="${x + w / 2}" y="${y + h / 2 - 3}" text-anchor="middle" font-size="13" font-weight="700" fill="${col}">${c[0]}</text><text x="${x + w / 2}" y="${y + h / 2 + 12}" text-anchor="middle" font-size="12" fill="${col}">${sym}</text>`;
+}
+function renderMirror(hand, rs) {
+  const W = 640, H2 = 380, cx = W / 2, cy = H2 / 2 - 6, RX = 240, RY = 128;
+  const seats = Object.keys(hand.positions).map(Number).sort((a, b) => a - b);
+  const heroIdx = Math.max(0, seats.indexOf(hand.heroSeatId));
+  const n = seats.length;
+  const btnSeat = seats.find((s) => hand.positions[s] === "BTN") ?? seats.find((s) => hand.positions[s] === "SB");
+  let g = `<svg viewBox="0 0 ${W} ${H2}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The table at this step">
+    <ellipse cx="${cx}" cy="${cy}" rx="${RX + 44}" ry="${RY + 44}" fill="#12202e" stroke="#243447" stroke-width="3"/>
+    <ellipse cx="${cx}" cy="${cy}" rx="${RX + 22}" ry="${RY + 22}" fill="#173042" stroke="#2c4a63" stroke-width="2"/>`;
+  const b0 = cx - (5 * 30) / 2;
+  for (let i = 0; i < 5; i++) g += rs.board[i] ? svgCard(b0 + i * 30, cy - 30, rs.board[i], 26, 36) : `<rect x="${b0 + i * 30}" y="${cy - 30}" rx="3" width="26" height="36" fill="#132030" stroke="#22364e"/>`;
+  g += `<text x="${cx}" y="${cy + 34}" text-anchor="middle" font-size="14" fill="#ffd35c" font-weight="700">pot ${rs.pot} bb</text>`;
+  for (let k = 0; k < n; k++) {
+    const seat = seats[(heroIdx + k) % n];
+    const ang = Math.PI / 2 + (k * 2 * Math.PI) / n;
+    const sx = cx + RX * Math.cos(ang), sy = cy + RY * Math.sin(ang);
+    const isHero = seat === hand.heroSeatId, folded = rs.folded.has(seat), toAct = rs.toAct === seat;
+    const stack0 = hand.startStacks[seat];
+    const stackStr = stack0 != null ? `${r2(Math.max(0, stack0 - (rs.invested[seat] ?? 0)))} bb` : "";
+    const op = folded ? 0.35 : 1, cardY = sy - 52;
+    if (!folded) g += `<g opacity="${op}">${svgCard(sx - 27, cardY, isHero ? hand.heroCards[0] : null)}${svgCard(sx + 1, cardY, isHero ? hand.heroCards[1] : null)}</g>`;
+    g += `<g opacity="${op}"><rect x="${sx - 46}" y="${sy - 12}" rx="7" width="92" height="36" fill="${isHero ? "#1c3550" : "#182230"}" stroke="${toAct ? "#ffd35c" : isHero ? "#3f6d9e" : "#2a3a4e"}" stroke-width="${toAct ? 2.5 : 1.2}"/>
+      <text x="${sx}" y="${sy + 2}" text-anchor="middle" font-size="12" font-weight="700" fill="${isHero ? "#9fd1ff" : "#c8d5e2"}">${isHero ? "YOU" : "seat " + seat}${hand.positions[seat] ? " · " + esc(hand.positions[seat]) : ""}</text>
+      <text x="${sx}" y="${sy + 17}" text-anchor="middle" font-size="11" fill="#8fa1b6">${folded ? "folded" : stackStr}</text></g>`;
+    const cardRect = !folded ? { x1: sx - 30, y1: cardY - 3, x2: sx + 30, y2: cardY + 39 } : null;
+    const alongLine = (t0, w, h, dx) => { let t = t0, x = 0, y = 0; for (; t <= 0.72; t += 0.03) { x = sx + (cx - sx) * t + dx; y = sy + (cy - sy) * t; const clear = !cardRect || x + w / 2 < cardRect.x1 || x - w / 2 > cardRect.x2 || y + h / 2 < cardRect.y1 || y - h / 2 > cardRect.y2; if (clear) break; } return { x, y }; };
+    if (seat === btnSeat) { const { x, y } = alongLine(0.26, 20, 20, -40); g += `<circle cx="${x}" cy="${y}" r="9" fill="#e8ecf2"/><text x="${x}" y="${y + 3.5}" text-anchor="middle" font-size="10" font-weight="800" fill="#22303f">D</text>`; }
+    const bet = rs.bets[seat];
+    if (bet) { const { x, y } = alongLine(0.34, 52, 22, 0); g += `<rect x="${x - 24}" y="${y - 10}" rx="9" width="48" height="18" fill="#0f1a26" stroke="#3b556f"/><text x="${x}" y="${y + 3.5}" text-anchor="middle" font-size="11" font-weight="700" fill="#ffd35c">${r2(bet)}</text>`; }
+  }
+  return g + "</svg>";
+}
+function actionText(a, rsBefore) {
+  const amt = a.amount != null ? `${r2(a.amount)}bb` : "";
+  switch (a.type) {
+    case "post-sb": return `posts SB ${amt}`; case "post-bb": return `posts BB ${amt}`; case "post": return `posts ${amt} to come in`;
+    case "fold": return "folds"; case "check": return "checks"; case "call": return `calls ${amt}`;
+    case "bet": return `bets ${amt}`; case "raise": return `raises to ${amt}`;
+    case "all-in": { const high = Math.max(0, ...Object.values(rsBefore?.bets || {})); return a.amount > high + 0.001 ? `all-in to ${amt}` : `calls all-in (${amt})`; }
+    default: return `${a.type} ${amt}`;
+  }
+}
+async function openHand(id) {
+  const entry = INDEX.hands.find((h) => h.id === id);
+  if (!entry) { renderList(); return; }
+  $("main").innerHTML = `<div class="empty">Loading ${esc(id)}…</div>`;
+  const raw = await loadHand(entry);
+  if (!raw) { $("main").innerHTML = `<div class="card">This hand's data could not be loaded.</div>`; return; }
+  H = inflate(raw);
+  ALT_SEL = {};
+  VIEW = { list: false, id };
+  document.body.classList.add("hand-open");
+  if (location.hash.slice(1) !== id) history.replaceState(null, "", `#${id}`);
+  store.set("s5_last", id);
+  const firstHero = H.actions.findIndex((a) => a.hero && !/^post/.test(a.type));
+  STEP = firstHero >= 0 ? firstHero : 0;
+  renderHand();
+}
+function renderHand() {
+  const h = H;
+  const fam = INDEX.about[h.fam] || "";
+  const tl = h.actions.map((a, i) => {
+    const rs = replayState(h, i);
+    const d = h.decAt[i];
+    return `<div class="tl-row${a.hero ? " hero" : ""}${/^post/.test(a.type) ? " post" : ""}" data-i="${i}"><span class="st">${a.street}</span><span class="who">${a.hero ? "YOU · " : ""}${esc(h.positions[a.seatId] || "seat " + a.seatId)}</span><span>${esc(actionText(a, rs))}${pickDiffers(d) ? ` <span class="ours" title="the script played this; our answer picked ${esc(d.pick)}">· ours: ${esc(d.pick)}</span>` : ""}</span><span>${d ? `<span class="chip ${GRADE[GRADE_FULL[d.g]][0]}">${GRADE[GRADE_FULL[d.g]][1]}</span>` : ""}</span></div>`;
+  }).join("");
+  $("main").innerHTML = `
+    <div class="back"><button class="mini" id="backBtn">← All hands</button></div>
+    <section class="card">
+      <div class="nv-head"><h2 style="margin:0">${esc(h.id)}</h2><span class="chip dim">${esc(h.fam)}</span>${h.src ? `<span class="chip">real hand ${esc(h.src.clientHandId)}</span>` : ""}<span class="sub">hero ${esc(h.hero)} ${cardsHtml(h.heroCards)}</span></div>
+      <div style="font-size:15px;font-weight:600">${esc(h.title)}</div>
+      <div class="sub" style="margin-top:4px">${esc(fam)}</div>
+      <div class="chips" style="margin-top:8px">${(h.tags || []).map((t) => `<span class="chip dim">${esc(t)}</span>`).join("")}</div>
+    </section>
+    <div class="replay">
+     <div class="replay-left">
+      <section class="card"><h2>The table</h2><div id="mirror"></div>
+        <div class="ctrl"><button class="mini" id="b-first" aria-label="First step">⏮</button><button class="mini" id="b-prev" aria-label="Previous step">◀</button>
+          <span class="pos" id="stepPos"></span><button class="mini" id="b-next" aria-label="Next step">▶</button><button class="mini" id="b-last" aria-label="Last step">⏭</button>
+          <button class="mini" id="b-play">▶ play</button><button class="mini" id="b-hero">next hero decision</button></div>
+        <p class="sub" style="margin:8px 0 0">The table just before the highlighted action. ← / → step.</p></section>
+      <section class="card"><h2>Hand timeline</h2><div class="tl" id="tl">${tl}</div></section>
+     </div>
+     <div class="replay-right">
+      <section class="card" id="node"></section>
+      <section class="card" id="answer" hidden></section>
+     </div>
+    </div>
+    <div class="two">
+      <section class="card"><h2>Full hand history</h2><pre class="hh">${esc(h.hh)}</pre></section>
+      <section class="card"><h2>Where the ranges come from</h2>
+        <div class="kv"><b>preflop</b><span>${esc(h.pn || "—")}</span>
+        <b>postflop trees</b><span>${(h.plans || []).length ? (h.plans || []).map(([id, st, tag, ok]) => `<div><span class="mono">#${id}</span> ${esc(st)} ${tag ? `<span class="chip dim">${esc(tag)}</span>` : ""}${ok ? "" : ` <span class="chip crit">refused</span>`}</div>`).join("") : "none (no postflop answer)"}</span>
+        <b>run</b><span>${esc((h.at || "").slice(0, 16).replace("T", " "))} UTC · ${Math.round((h.ms || 0) / 1000)} s · poker-wrapper ${esc(h.commit || "")}</span></div>
+        <p class="sub" style="margin:10px 0 0">Preflop ranges come from the chart or GTO Wizard tree pinned at hero's last preflop decision; postflop from the stored chain solves, each street's entering ranges narrowed node by node by the action taken. Seats a multiway collapse leaves out of the tree (ghosted, merged, dead money, folded) have no range there.</p>
+      </section>
+    </div>`;
+  $("backBtn").addEventListener("click", () => { stopPlay(); renderList(); });
+  $("b-first").addEventListener("click", () => setStep(0));
+  $("b-prev").addEventListener("click", () => setStep(STEP - 1));
+  $("b-next").addEventListener("click", () => setStep(STEP + 1));
+  $("b-last").addEventListener("click", () => setStep(H.actions.length));
+  $("b-play").addEventListener("click", () => (PLAY ? stopPlay() : startPlay()));
+  $("b-hero").addEventListener("click", () => { const n = H.actions.findIndex((a, i) => i > STEP && a.hero && !/^post/.test(a.type)); setStep(n >= 0 ? n : H.actions.length); });
+  for (const r of document.querySelectorAll(".tl-row")) r.addEventListener("click", () => setStep(Number(r.dataset.i)));
+  setStep(STEP);
+  window.scrollTo({ top: 0 });
+}
+function startPlay() { $("b-play").textContent = "❚❚ pause"; PLAY = setInterval(() => { if (STEP >= H.actions.length) return stopPlay(); setStep(STEP + 1); }, 1100); }
+function stopPlay() { if (PLAY) clearInterval(PLAY); PLAY = null; const b = $("b-play"); if (b) b.textContent = "▶ play"; }
+function setStep(s) {
+  STEP = Math.max(0, Math.min(H.actions.length, s));
+  const rs = replayState(H, STEP);
+  $("mirror").innerHTML = renderMirror(H, rs);
+  $("stepPos").textContent = `${STEP} / ${H.actions.length}`;
+  for (const r of document.querySelectorAll(".tl-row")) r.classList.toggle("cur", Number(r.dataset.i) === STEP);
+  // keep the current row in view INSIDE the timeline box only — scrollIntoView also scrolled the page on every step
+  const cur = document.querySelector(".tl-row.cur"), box = $("tl");
+  if (cur && box) {
+    const top = cur.offsetTop, bottom = top + cur.offsetHeight;
+    if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) box.scrollTop = Math.max(0, top - box.clientHeight / 3);
+  }
+  renderNode(rs);
+  renderAnswer();
+}
+function rangeCls(arr) { const cls = {}; if (!arr) return cls; arr.forEach((v, k) => { if (v > 0.0005) { const key = CLASS_LIST[k]; const w = v * COMBOS(key); cls[key] = { w, acts: [w] }; } }); return cls; }
+function strategyCls(rangeArr, stratArrs, n) {
+  const cls = {};
+  for (let k = 0; k < 169; k++) {
+    const key = CLASS_LIST[k];
+    const frac = rangeArr ? rangeArr[k] : 1;
+    if (!(frac > 0.0005)) continue;
+    const w = frac * COMBOS(key);
+    cls[key] = { w, acts: Array.from({ length: n }, (_, j) => (stratArrs[j] ? stratArrs[j][k] : 0) * w) };
+  }
+  return cls;
+}
+function renderNode(rs) {
+  const host = $("node");
+  const a = H.actions[STEP];
+  if (!a) { host.innerHTML = `<h2>End of hand</h2><p class="sub">${esc(H.hh.split("\n").pop())}</p>`; return; }
+  const pos = H.positions[a.seatId] || `seat ${a.seatId}`;
+  if (/^post/.test(a.type)) { host.innerHTML = `<h2>Exact node</h2><p class="sub">${esc(pos)} posts — not a decision. Step on to the first action.</p>`; return; }
+  const options = H.views[STEP] ? [H.views[STEP], ...((H.alt || {})[STEP] || [])] : [];
+  const sel = Math.min(ALT_SEL[STEP] ?? 0, Math.max(0, options.length - 1));
+  const v = options[sel];
+  const board = rs.board.join("");
+  const head = `<div class="nv-head"><h2 style="margin:0">Exact node</h2><span class="sub">${esc(a.street)} · ${a.hero ? "hero" : "villain"} ${esc(pos)} to act · then ${esc(actionText(a, rs))}</span></div>`;
+  if (!v) {
+    const why = a.street === "preflop" ? (H.pn && /no preflop pin/.test(H.pn) ? H.pn : "the preflop walk did not reach this action (a fitted or refused line)")
+      : "no tree read this action: the seat was left out of the multiway tree (ghosted / merged / dead money), or it came after hero's last decision on the street";
+    host.innerHTML = `${head}<p class="sub">No range read at this node — ${esc(why)}.</p>`;
+    return;
+  }
+  // POOL RANGE LABELS (2026-10-05): a seat a pool overlay replaced — from his own locked action on, or from the flop for a
+  // floor — is labelled with the register's badge; every other seat is GTO's
+  const POOL = (H.pool || []).filter((x) => STEP >= x.at);
+  const poolAt = (p) => POOL.find((x) => x.p === String(p).toUpperCase() && STEP > x.at) || null;
+  const rangeTag = (p) => !POOL.length ? "" : poolAt(p) ? ` <span class="chip warn" title="measured pool data replaces GTO's range for this seat — register entry ${esc(poolAt(p).id)}">POOL RANGE — ${esc(poolAt(p).b)}</span>` : ` <span class="chip dim" title="the solver's own range (base GTO)">GTO range</span>`;
+  const lockHere = POOL.find((x) => x.how === "lock" && x.at === STEP && x.p === String(v.a).toUpperCase());
+  const acts = v.acts || [];
+  const strat = v.st ? v.st.map(dec) : null;
+  const ranges = Object.fromEntries(Object.entries(v.r || {}).map(([p, s]) => [p, dec(s)]));
+  const actorRange = ranges[v.a] ?? null;
+  const facts = `<div class="nv-facts"><div><b>tree path</b><span class="mono">${esc(v.ln || "root")}</span></div><div><b>source</b><span>${esc(v.src || "")}</span></div>${v.pot != null ? `<div><b>pot at node</b><span class="num">${r2(v.pot)} bb</span></div>` : ""}<div><b>took</b><span>${esc(v.tk || "")}</span></div></div>`;
+  let actorCard = "";
+  const isFull = (arr) => !!arr && arr.every((x) => x >= 0.999);
+  const combosIn = (arr) => { let n = 0; arr.forEach((x, k) => { n += x * COMBOS(CLASS_LIST[k]); }); return n; };
+  const rangeStat = (arr) => { const n = combosIn(arr), p = (100 * n) / 1326; return `${p >= 0.1 ? p.toFixed(1) : p.toFixed(3)}% · ${n >= 10 ? Math.round(n) : n.toFixed(2)} combos`; };
+  const THIN = 1.5;
+  if (strat && acts.length) {
+    const first = !actorRange || isFull(actorRange);
+    const thin = !first && combosIn(actorRange) < THIN;
+    actorCard = `<div class="rl-card actor"><h3>${esc(v.a)} <span class="sub">${a.hero ? "hero's" : "villain's"} strategy at this node · ${first ? "every hand (nothing narrowed yet)" : `range so far ${rangeStat(actorRange)}`}</span>${thin ? ` <span class="chip crit">range collapsed</span>` : ""}${lockHere ? "" : rangeTag(v.a)}</h3>` +
+      (lockHere ? `<div class="sub" style="max-width:60ch;margin:4px 0"><span class="chip warn">⚑ off-GTO action</span> ${esc(actionText(a, rs))} — GTO plays this ${lockHere.gto == null ? "(share not in the answer's note)" : `<b>${lockHere.gto < 0.01 ? "under 0.01%" : lockHere.gto.toFixed(lockHere.gto < 1 ? 2 : 1) + "%"}</b>`} of his range here. The tree drawn below is the LOCKED one: this node plays the pool's range (${esc(lockHere.b)}); from the next node on his range is the pool's.</div>` : "") +
+      (thin ? `<div class="sub" style="max-width:56ch;margin:4px 0">Under ${THIN} combos are left in this range — an earlier action of this seat is one the solver almost never takes. The cells are drawn at full height (not range-weighted) so the mix stays visible; the tree's numbers here rest on almost nothing.</div>` : "") +
+      `${classGrid(strategyCls(thin ? actorRange.map((x) => (x > 0 ? 1 : 0)) : actorRange, strat, acts.length), acts, H.heroKey, { board, openHero: !!a.hero, foot: `${thin ? "every class with any weight left, full height" : "fill = share of each class still in range"} · colour = how it acts${a.hero ? " · your class outlined" : " · your class outlined for reference"}` })}</div>`;
+  }
+  const others = Object.entries(ranges).filter(([p]) => p !== v.a);
+  const otherCards = others.map(([p, arr]) => {
+    const isHeroSeat = String(H.positions[H.heroSeatId]).toUpperCase() === String(p).toUpperCase();
+    const you = isHeroSeat ? ` <span class="chip good">you</span>` : "";
+    if (!arr || isFull(arr)) return `<div class="rl-card v"><h3>${esc(p)}${you}${rangeTag(p)}</h3><div class="any">every hand — nothing narrowed yet (has not acted, or only posted)</div></div>`;
+    const thin = combosIn(arr) < THIN;
+    return `<div class="rl-card v"><h3>${esc(p)}${you} <span class="sub">range now · ${rangeStat(arr)}</span>${thin ? ` <span class="chip crit">collapsed</span>` : ""}${rangeTag(p)}</h3>${classGrid(rangeCls(arr), ["in range"], isHeroSeat ? H.heroKey : null, { single: true, small: true, combosOff: true, board, foot: "range so far" })}</div>`;
+  }).join("");
+  const dealt = Object.values(H.positions).map(String);
+  const outside = dealt.filter((p) => !(p in ranges) && !rs.folded.has(Number(Object.keys(H.positions).find((s) => H.positions[s] === p))));
+  const note = outside.length ? `<p class="sub" style="margin:8px 0 0">Not in this tree: ${outside.map(esc).join(", ")} — still in the hand but left out of the model at this node (a collapse ghosts, merges or prices them as dead money)${options.length > 1 ? "; switch trees above to see them" : ", or not yet read"}.</p>` : "";
+  const picker = options.length > 1 ? `<div style="margin:8px 0 2px"><div class="sub" style="margin-bottom:4px">This answer blends ${options.length} trees (each holds three seats) — pick one:</div><div class="seg" id="altSeg" role="group" aria-label="Tree" style="flex-wrap:wrap;border-radius:12px">${options.map((o, k) => `<button data-k="${k}" class="${k === sel ? "on" : ""}">${esc(String(o.src || `tree ${k + 1}`).replace(/^tree /, ""))}</button>`).join("")}</div></div>` : "";
+  let heroLine = "";
+  if (v.hm && v.hm.length) heroLine = `<div class="nv-hero"><span class="big">${cardsHtml(H.heroCards)}</span> — this tree's own mix for your exact combo: ${v.hm.filter((x) => x.p >= 0.05).map((x) => `${esc(x.action)} <b>${x.p.toFixed(1)}%</b>`).join(" · ")}${options.length > 1 ? `<div class="sub" style="margin-top:2px">one of ${options.length} blended trees — the answer below is the blend</div>` : ""}</div>`;
+  host.innerHTML = `${head}${picker}${facts}<div class="seats" style="margin-top:10px">${actorCard}${otherCards}</div>${note}${heroLine}`;
+  const seg = $("altSeg");
+  if (seg) seg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; ALT_SEL[STEP] = Number(b.dataset.k); renderNode(replayState(H, STEP)); });
+}
+/** an action label's kind as the poker-sense checks count it (lint.ts actionKind) */
+function kindOf(label) {
+  const l = String(label ?? "").trim().toUpperCase();
+  return l.startsWith("FOLD") ? "fold" : l.startsWith("CHECK") ? "check" : l.startsWith("CALL") ? "call" : /^(ALL|RAI\b)/.test(l) ? "all-in" : /^(BET|RAISE)/.test(l) ? "bet-raise" : "?";
+}
+/** the script's action vs our pick, by kind (a raise and an all-in count as the same kind) */
+function pickDiffers(d) {
+  if (!d || !d.tk || !d.pick) return false;
+  const sk = ({ fold: "fold", check: "call", call: "call", bet: "raise", raise: "raise", "all-in": "allin" }[d.tk[0]] ?? "raise");
+  const pk = actKind(d.pick);
+  return !(pk === sk || (pk === "allin" && sk === "raise") || (pk === "raise" && sk === "allin"));
+}
+/** our answer's draw: the recorded roll + band (runs since 2026-10-05 evening), else the band rebuilt from the mix the
+ *  same way pickWeightedAction lays it out (positive frequencies in the listed order, scaled to 0-100) */
+function rollOf(d) {
+  if (!d || !d.pick) return null;
+  if (d.roll != null && Array.isArray(d.band)) return { roll: d.roll, band: d.band, exact: true };
+  const pos = (d.mix || []).filter((m) => m[1] > 0), tot = pos.reduce((a, m) => a + m[1], 0);
+  if (!tot) return null;
+  let from = 0;
+  for (const [l, f] of pos) { if (l === d.pick) return { roll: null, band: [Math.round(from / tot * 1000) / 10, Math.round((from + f) / tot * 1000) / 10], exact: false }; from += f; }
+  return null;
+}
+function renderAnswer() {
+  const host = $("answer");
+  const d = H.decAt[STEP];
+  if (!d) { host.hidden = true; return; }
+  host.hidden = false;
+  const gk = GRADE_FULL[d.g] ?? "a";
+  const kind = d.pick ? actKind(d.pick) : "none";
+  const labels = d.mix.map((m) => m[0]);
+  const order = gtowOrder(labels), colors = gtowColors(labels);
+  const mixbar = d.mix.length ? `<div class="mixbar">${order.map((ai) => { const [l, f] = d.mix[ai]; return f > 0 ? `<span style="width:${f}%;background:${colors[ai]};opacity:${l === d.pick ? 1 : .55}" title="${esc(l)} ${f}%">${f >= 8 ? `${esc(l)} ${Math.round(f)}%` : ""}</span>` : ""; }).join("")}</div>` : "";
+  const v = VERDICT[d.pv] || null;
+  const scripted = d.tk ? actionText({ type: d.tk[0], amount: d.tk[1] }, replayState(H, STEP)) : null;
+  const scriptKind = d.tk ? ({ fold: "fold", check: "call", call: "call", bet: "raise", raise: "raise", "all-in": "allin" }[d.tk[0]] ?? "raise") : null;
+  const pickKind = d.pick ? actKind(d.pick) : null;
+  const differs = scripted && pickKind && !(pickKind === scriptKind || (pickKind === "allin" && scriptKind === "raise") || (pickKind === "raise" && scriptKind === "allin"));
+  const failing =(d.cf || []).map((c) => `<div><span class="chip ${c.s === "fail" ? "crit" : "warn"}">#${c.id} ${esc(c.s)}</span> <span class="sub">${esc(c.st)}</span> ${esc(c.t)}</div>`).join("");
+  host.innerHTML = `<div class="nv-head"><h2 style="margin:0">Our answer</h2><span class="chip ${GRADE[gk][0]}">${GRADE[gk][1]}</span>${v ? `<span class="chip ${v[0]}">path: ${esc(v[1])}</span>` : ""}<span class="sub">${esc(d.st)} · ${d.ms != null ? (d.ms / 1000).toFixed(1) + " s" : ""} · ${d.n ?? 0} GTO Wizard requests</span></div>
+    ${d.pick ? `<div class="ans-pick ${kind === "fold" ? "fold" : kind === "call" ? "call" : "raise"}">${esc(d.pick)}</div>` : d.why ? `<div class="ans-pick none">No answer</div>` : `<div class="ans-pick none">No action</div>`}
+    ${mixbar}
+    ${(() => { const r = rollOf(d); if (!r) return ""; const b = `${r.band[0].toFixed(1)}–${r.band[1].toFixed(1)}`;
+      return `<div class="roll-line">${r.exact ? `rolled <b class="num">${r.roll.toFixed(1)}</b> → ${esc(d.pick)} (its band ${b} of 0–100)` : `${esc(d.pick)} = any roll in <b class="num">${b}</b> of 0–100 <span class="sub">(this run did not record the exact roll)</span>`}</div>`; })()}
+    <div class="kv" style="margin-top:8px">${scripted ? `<b>the script plays</b><span>hero ${esc(scripted)} <span class="sub">(fixed by the hand's script — not rolled)</span>${differs ? ` <span class="chip warn" title="every hand follows its fixed script so the later streets can be tested; our pick is graded at this node only">our pick differs — the hand plays on as scripted</span>` : ""}</span>` : ""}
+      <b>answered by</b><span>${esc(d.src || "—")}${d.tier ? ` · ${esc(d.tier)}` : ""}</span>
+      ${d.chart ? `<b>chart / tree</b><span class="mono">${esc(d.chart)}</span>` : ""}${(d.tags || []).length ? `<b>trees solved</b><span class="mono sub">${d.tags.map(esc).join(" | ")}</span>` : ""}${d.line ? `<b>line</b><span class="mono">${esc(d.line)}</span>` : ""}
+      ${(d.fl || []).length ? `<b>flags</b><span class="chips">${d.fl.map((f) => `<span class="chip ${chipClass(f) === "dim" ? "warn" : chipClass(f)}" title="${esc(FLAG_INFO[f] || "")}">${esc(f)}</span>`).join("")}</span>` : ""}
+      ${(d.k || []).length ? `<b>approximations</b><span class="chips">${d.k.map((k) => `<span class="chip dim">${esc(k)}</span>`).join("")}</span>` : ""}
+      ${(d.dep || []).length ? `<b>departs from GTO</b><span class="chips">${d.dep.map(([id, kind, badge]) => `<span class="chip ${kind === "pool-overlay" ? "warn" : kind === "policy-experiment" ? "" : "dim"}" title="${esc(kind)} — register entry ${esc(id)} (services/approximations.ts)">${esc(badge)}</span>`).join("")}</span>` : ""}
+      ${(d.pcodes || []).length ? `<b>path codes</b><span class="mono sub">${d.pcodes.map(esc).join(" · ")}</span>` : ""}
+      ${d.mp ? `<b>mis-press</b><span>${esc(d.mp)}</span>` : ""}
+      ${(d.lint || []).length ? `<b>poker sense</b><span>${d.lint.map((t) => { const [f, ...r] = t.split(": "); return `<div><span class="chip ${chipClass(f)}" title="${esc(FLAG_INFO[f] || "")}">${esc(f)}</span> ${esc(r.join(": "))}</div>`; }).join("")}</span>` : ""}
+      ${(d.pl || []).length ? `<b>each tree said</b><span>${(() => { const sk = d.pick ? kindOf(d.pick) : null; return d.pl.map(([src, mix, k]) => `<div><span class="mono sub">${esc(String(src).replace(/^tree /, ""))}</span> — ${mix.filter((m) => m[1] >= 1).sort((a, b) => b[1] - a[1]).map(([a, p]) => `${esc(a)} <b>${p.toFixed(0)}%</b>`).join(" · ")}${sk && k === sk ? ` <span class="chip good" title="the served pick's kind">= served</span>` : ""}</div>`).join(""); })()}<span class="sub">hero's exact combo in each tree this answer blends; the served pick ${esc(d.pick || "—")} came from the blend</span></span>` : ""}
+      ${(d.thin || []).length ? `<b>thin ranges</b><span>${d.thin.map((t) => `<span class="chip crit">${esc(t)} combos</span>`).join(" ")} <span class="sub">a seat of the tree held under 1.5 combos at this node</span></span>` : ""}</div>
+    ${d.why ? `<h2 style="margin-top:12px">Why there is no answer</h2><div class="warn-text">${esc(d.why)}</div>` : ""}
+    ${d.w ? `<h2 style="margin-top:12px">The answer's note</h2><div class="warn-text">${esc(d.w)}</div>` : ""}
+    ${failing ? `<h2 style="margin-top:12px">Checks failed or flagged</h2><div class="checks">${failing}</div>` : ""}`;
+}
+
+// ---- filters ----
+$("q").addEventListener("input", (e) => { FILTER.q = e.target.value.trim(); if (VIEW.list) renderList(); });
+$("fam").addEventListener("change", (e) => { FILTER.fam = e.target.value; renderList(); });
+$("flag").addEventListener("change", (e) => { FILTER.flag = e.target.value; renderList(); });
+$("gradeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; FILTER.g = b.dataset.g; for (const x of $("gradeSeg").querySelectorAll("button")) x.classList.toggle("on", x === b); renderList(); });
+document.addEventListener("keydown", (e) => { if (VIEW.list || !H || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || "")) return; if (e.key === "ArrowRight") setStep(STEP + 1); else if (e.key === "ArrowLeft") setStep(STEP - 1); });
+window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (id && INDEX.hands.some((h) => h.id === id)) openHand(id); else if (!id && !VIEW.list) renderList(); });
+
+(async function boot() {
+  try { INDEX = await loadIndex(); }
+  catch (e) { $("main").innerHTML = `<div class="card">The run's data could not be loaded (${esc(e.message)}).</div>`; return; }
+  $("hdr-sub").textContent = `${INDEX.totals.hands} of ${INDEX.planned} hands · ${INDEX.totals.decisions} decisions`;
+  const fams = [...new Set(INDEX.hands.map((h) => h.fam))];
+  for (const f of fams) $("fam").add(new Option(`${f} (${INDEX.hands.filter((h) => h.fam === f).length})`, f));
+  const flags = Object.keys(INDEX.totals.flags).concat(Object.keys(INDEX.totals.kinds)).sort();
+  for (const f of flags) $("flag").add(new Option(f, f));
+  const id = location.hash.slice(1);
+  if (id && INDEX.hands.some((h) => h.id === id)) openHand(id); else renderList();
+})();
+</script>
