@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { heroPreloadAtNode, menuAction, menuByClass, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, treePotAtHero, treeStreetChips, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { heroContestable, heroPreloadAtNode, menuAction, menuByClass, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, treePotAtHero, treeStreetChips, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { shortAllInPress, treeAllInTo } from "./allInPress";
 import { streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses } from "./multiwayCollapse";
@@ -320,6 +320,63 @@ describe("THE POT AT HERO'S NODE IS THE TABLE'S (2026-10-07, stress-500 brief_I-
     const rs = jam.plans.map(jam.read);
     for (const r of rs) { expect(r.pot).toBe(112.5); expect(r.heroCall).toBe(25); }
     expect(rs.filter((r) => /called level/.test(r.kind)).map((r) => [r.amounts[1], r.potRaw])).toEqual([[25, 122.5], [25, 122.5]]);
+  });
+});
+
+describe("THE POT HERO CAN CONTEST (2026-10-08, check #5's rule): every seat's street chips up to hero's stack on the street", () => {
+  /** a spot's plans, and for each: the plan's pot at hero's node whole and hero-contestable (its all-ins as the chain is
+   *  sent them), against the table's hero-contestable pot */
+  const spot = (seats: string[], hero: string, l: string, amounts: (number | null)[], b: Record<string, number>, start: number) => {
+    const street = line(l);
+    const { plans, why } = planDeadMoney({ seats: seatsOf(...seats), heroPos: hero, street, amounts, behind: (p) => b[p] });
+    expect(why).toBeNull();
+    const sc = streetChips(streetFromTokens(street.map((t) => t.tok), street.map((t) => t.seat), amounts), (p) => b[p]);
+    const tableAllIn = (p: string) => { let to: number | null = null; street.forEach((t, i) => { if (t.seat === p && t.tok === "RAI" && amounts[i] != null) to = amounts[i]!; }); return to; };
+    const rows = plans.map((p) => {
+      const am = treeAllInAmounts(p, tableAllIn)[0]!;
+      const raw = p.streets[0]!.map((t) => (t.tok === "RAI" ? tableAllIn(t.seat) : null));
+      return { kind: p.kind, whole: treePotAtHero(p, start, (q) => b[q]!, am), hero: treePotAtHero(p, start, (q) => b[q]!, am, hero),
+        heroRaw: treePotAtHero(p, start, (q) => b[q]!, raw, hero) };
+    });
+    return { rows, table: Math.round((start + heroContestable(sc.put, b[hero]!)) * 100) / 100, whole: start + [...sc.put.values()].reduce((x, y) => x + y, 0) };
+  };
+
+  test("heroContestable: each seat's chips up to hero's stack", () => {
+    expect(heroContestable(new Map([["BB", 149], ["UTG", 119], ["HJ", 59]]), 79)).toBe(217);
+    expect(heroContestable({ UTG: 4, HJ: 4, CO: 18, BTN: 18 }, 15)).toBe(38);
+  });
+
+  test("brief_I-011 / brief_I-012 flop decision 13 (hero BB 15 / 10 behind; UTG bets 4, HJ calls, CO raises 18, BTN calls): every plan's contestable pot = the table's", () => {
+    for (const [bb, plansWhole, contest] of [[15, [54, 54, 57], 51], [10, [49, 49, 57], 41]] as const) {
+      const s = spot(["BB", "UTG", "HJ", "CO", "BTN"], "BB", "BB:X UTG:R4 HJ:C CO:R18 BTN:C", [null, null, null, null, null],
+        { BB: bb, UTG: 97.5, HJ: 97.5, CO: 97.5, BTN: 97.5 }, 13);
+      expect(s.whole).toBe(57);
+      expect(s.table).toBe(contest);
+      expect(s.rows.map((r) => r.kind)).toEqual(["dead:HJ + dead:BTN", "dead:UTG + dead:BTN", "dead:UTG + dead:HJ"]);
+      // whole: the BTN dropped is dead money capped at hero's stack, the CO kept raises to his 18 (the -3 / -8 check #5 failed on)
+      expect(s.rows.map((r) => r.whole)).toEqual([...plansWhole]);
+      for (const r of s.rows) expect(r.hero).toBe(contest);
+    }
+  });
+
+  test("po_56way-006 flop decision 12 (hero CO 79; BB jams 149, UTG calls 119 all in, HJ 59 all in): each plan's kept all-ins capped at hero's 79 — 223 in every plan", () => {
+    const s = spot(["SB", "BB", "UTG", "HJ", "CO", "BTN"], "CO", "SB:X BB:RAI UTG:C HJ:C", [null, 149, null, null],
+      { SB: 99, BB: 149, UTG: 119, HJ: 59, CO: 79, BTN: 149 }, 6);
+    expect(s.whole).toBe(333);
+    expect(s.table).toBe(223);
+    expect(s.rows.map((r) => r.kind)).toEqual(["dead:UTG + dead:HJ + ghost:BTN", "ghost:SB + dead:HJ + ghost:BTN", "ghost:SB + dead:UTG + ghost:BTN"]);
+    // (GTO Wizard's own pot at hero's node counts the jam to the deepest OTHER tree seat: 243 / 303 / 223 — check #5's tree
+    // side; the plan's whole sum here is the chips as sent, the jam at 149)
+    expect(s.rows.map((r) => r.whole)).toEqual([293, 333, 293]);
+    for (const r of s.rows) expect(r.hero).toBe(223);
+  });
+
+  test("brief_I-004 flop decision 13: hero 97.5 deep, no side pot — the contestable pot is the table's 108.5, and the preload double count (138.5) still disagrees", () => {
+    const s = spot(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:RAI BB:C UTG:RAI CO:C BTN:C", [15, null, 22, null, null],
+      { SB: 15, BB: 97.5, UTG: 22, CO: 97.5, BTN: 97.5 }, 12.5);
+    expect(s.table).toBe(108.5);
+    for (const r of s.rows) expect(r.hero).toBe(108.5);
+    expect(s.rows.map((r) => r.heroRaw)).toEqual([138.5, 138.5, 108.5]);
   });
 });
 

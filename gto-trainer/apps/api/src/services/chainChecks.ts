@@ -93,7 +93,7 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 5, group: "inputs", name: "Pot and stack add up",
     spec: "Pot entering each street = previous pot + chips put in, and matches the capture's pot within a tolerance; stack = effective stack of players still in.",
     build: "built",
-    how: "The tree's pot entering each street, and the pot at hero's node, against the capture's own money (every seat's chips per street from the betting line, plus antes and dead posts; a bet past what any other seat can put in counts only what can be matched, on both sides): within 0.5bb or 5%. The tree's stack against hero vs the deepest villain still in, from the stacks as dealt less the chips of the earlier streets: within 0.5bb or 3% (a collapse plan's tree may be shallower, never deeper); and since 2026-10-03 each seat's own stack sent against the table's. A POT that disagrees is a seatbelt, not only a flag: the decision is solved again from the table's state, and refused if the pot still disagrees." },
+    how: "The tree's pot entering each street, and the pot at hero's node, against the capture's own money (every seat's chips per street from the betting line, plus antes and dead posts; a bet past what any other seat can put in counts only what can be matched, on both sides): within 0.5bb or 5%. At hero's node since 2026-10-08 the HERO-CONTESTABLE pot is compared: on both sides each seat's chips on the street above what hero can match (his chips on it + his stack behind) are a side pot hero cannot win and are left out — a dead-money plan caps a dropped seat's chips at hero's stack while GTO Wizard prices a kept seat's side pot natively, so the whole pots differ when both are right; the text names the side pot left out. The tree's stack against hero vs the deepest villain still in, from the stacks as dealt less the chips of the earlier streets: within 0.5bb or 3% (a collapse plan's tree may be shallower, never deeper); and since 2026-10-03 each seat's own stack sent against the table's. A POT that disagrees is a seatbelt, not only a flag: the decision is solved again from the table's state, and refused if the pot still disagrees." },
   { id: 6, group: "inputs", name: "Line matches the table",
     spec: "Walked actions = captured actions in order; each bet size within a set tolerance of what was bet.",
     build: "built",
@@ -448,6 +448,32 @@ export function checkSeats(a: {
 }
 
 // ── #5 pot and stack add up ─────────────────────────────────────────────────────────────────────────────────────
+/** One seat's street chips above hero's stack: a side pot hero cannot win (check #5, 2026-10-08). */
+export interface SidePotPart { pos: string; bb: number }
+/**
+ * EACH SEAT'S STREET CHIPS ABOVE HERO'S STACK (2026-10-08): `chips` = every other seat's chips on the street (as they
+ * count in the pot), `heroStack` = hero's chips on the street + his stack behind — what he can match if he calls
+ * everything. A seat past it has the excess in a side pot hero cannot contest. Seats with nothing over are left out.
+ */
+export function sidePotParts(chips: Iterable<[string, number]>, heroStack: number | null | undefined): SidePotPart[] {
+  if (heroStack == null || !Number.isFinite(heroStack)) return [];
+  const out: SidePotPart[] = [];
+  for (const [pos, x] of chips) if (Number.isFinite(x) && x > heroStack + 0.005) out.push({ pos, bb: r2(x - heroStack) });
+  return out;
+}
+/** The side-pot clause of check #5's text, or "" when neither pot had money above hero's stack. */
+function sidePotText(sp: { heroStack: number; table: SidePotPart[]; treeStack?: number; tree: SidePotPart[] } | undefined,
+    tableAll: number, table: number, treeAll: number, tree: number): string {
+  if (!sp || (!sp.table.length && !sp.tree.length)) return "";
+  const parts = (xs: SidePotPart[]) => {
+    const n = xs.map((x) => `${x.pos} ${x.bb}`);
+    return n.length < 2 ? n.join("") : `${n.slice(0, -1).join(", ")} and ${n.at(-1)}`;
+  };
+  const out: string[] = [];
+  if (sp.table.length) out.push(`table ${r2(tableAll)}, hero can contest ${table}: ${parts(sp.table)} above hero's stack (${r2(sp.heroStack)}) ${sp.table.length === 1 ? "is" : "are"} a side pot`);
+  if (sp.tree.length) out.push(`tree ${r2(treeAll)}, hero can contest ${tree}: ${parts(sp.tree)} above hero's ${r2(sp.treeStack ?? sp.heroStack)}`);
+  return out.join("; ");
+}
 export function checkPotStack(a: {
   street: string;
   potIn: number; capturePot: number | null;
@@ -463,6 +489,10 @@ export function checkPotStack(a: {
   /** which rule priced the table's side at hero's node (2026-10-03): "the table's pot", or the pot a plan's own seats
    *  can contest — said in the text */
   potRule?: string;
+  /** THE SIDE POT HERO CANNOT CONTEST (2026-10-08): hero's stack on the street (his chips on it + what he has behind),
+   *  and each other seat's street chips above it — at the table (`table`, from the capture) and in the tree (`tree`,
+   *  from hero's node; `treeStack` = hero's stack in the tree's terms). Both pots are compared less their side pot. */
+  sidePot?: { heroStack: number; table: SidePotPart[]; treeStack?: number; tree: SidePotPart[] };
 }): CheckResult {
   const bad: string[] = [], ok: string[] = [];
   let potOff = false;
@@ -472,8 +502,21 @@ export function checkPotStack(a: {
   else ok.push(`pot ${r2(a.potIn)}bb = capture ${r2(a.capturePot)}bb`);
   if (a.potNode != null) {
     if (a.captureNodePot == null) ok.push("the capture's pot at hero's node unknown");
-    else if (!within(a.potNode, a.captureNodePot, TOL.potBb, TOL.potPct)) { potOff = true; bad.push(`pot at hero's node ${r2(a.potNode)}bb, the capture's ${r2(a.captureNodePot)}bb (Δ ${r2(a.potNode - a.captureNodePot)}bb${a.potRule ? `; ${a.potRule}` : ""})`); }
-    else ok.push(`${r2(a.potNode)}bb at hero's node${a.potRule ? ` (${a.potRule})` : ""}`);
+    else {
+      // THE HERO-CONTESTABLE POT (2026-10-08, Brady — stress-500 brief_I-011 / brief_I-012 / po_56way-006): a seat's
+      // street chips above hero's stack are a side pot hero cannot win. The dead-money plans cap a dropped seat's chips at
+      // hero's stack and GTO Wizard prices a kept seat's side pot natively, so the table's whole pot and the tree's are
+      // not the same number while both are right: each is compared less its side pot
+      const sp = a.sidePot;
+      const over = (xs: SidePotPart[] | undefined) => r2((xs ?? []).reduce((s, x) => s + x.bb, 0));
+      const tableOver = over(sp?.table), treeOver = over(sp?.tree);
+      const table = a.captureNodePot - tableOver, tree = a.potNode - treeOver;
+      const side = sidePotText(sp, a.captureNodePot, r2(table), a.potNode, r2(tree));
+      if (!within(tree, table, TOL.potBb, TOL.potPct)) {
+        potOff = true;
+        bad.push(`pot at hero's node ${r2(tree)}bb, the capture's ${r2(table)}bb (Δ ${r2(tree - table)}bb${a.potRule ? `; ${a.potRule}` : ""}${side ? `; ${side}` : ""})`);
+      } else ok.push(`${r2(tree)}bb at hero's node${a.potRule || side ? ` (${[a.potRule, side].filter(Boolean).join("; ")})` : ""}`);
+    }
   }
   if (a.seatStacks?.length) {
     const off = a.seatStacks.filter((x) => !within(x.tree, x.table, TOL.stackBb, TOL.stackPct));

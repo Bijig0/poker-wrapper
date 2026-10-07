@@ -311,6 +311,15 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     const inTree = treeStreetChips(fixed, (p) => (a.behind(p) ?? Infinity) as number, am).put;
     // (a seat all in at the table: its amount there, as the chain takes it — our reading of its stack may differ)
     if ([...kept].some((p) => Math.abs((fixed.preload[p] ?? 0) + (inTree[p] ?? 0) - (tableAllIn(p) ?? putOf(p))) > 0.02)) return;
+    // AND THE POT HERO CAN CONTEST IS THE TABLE'S (2026-10-08, check #5's rule — the check and this guard agree): the
+    // dropped seats' dead chips + every kept seat's chips, each up to hero's stack on the street, against every seat's
+    // chips at the table up to the same. A kept seat's side pot above hero (po_56way-006: the BB's 149 jam, hero 79) is
+    // no disagreement — GTO Wizard prices it; a dead chip short of what hero could win of it would be
+    if (Number.isFinite(heroCap)) {
+      const planSide = r2(Object.values(deadBy).reduce((s, x) => s + Math.min(x, heroCap), 0)
+        + [...kept].reduce((s, p) => s + Math.min((fixed.preload[p] ?? 0) + (inTree[p] ?? 0), heroCap), 0));
+      if (Math.abs(planSide - heroContestable(sc.put, heroCap)) > 0.02) return;
+    }
     // AND THE TREE CAN WALK IT (review 4): the seats in rotation, GTO Wizard's minimum raises, the street open with hero
     // to act — a plan that would not walk is never handed on (it would only cost a cloud walk and a refusal)
     const order = a.seats.map((s) => s.pos);
@@ -426,11 +435,28 @@ export function treeStreetChips(r: { toks: string[]; seats: string[]; preload: R
  * table shows that the tree's seats can contest: the pot entering the street + the kept seats' chips + `dead`.
  */
 export function treePotAtHero(plan: { streets: SeatTok[][]; preload: Record<string, number>; dead: number }, streetStart: number,
-    capOf: (p: string) => number, amounts?: readonly (number | null | undefined)[] | null): number {
+    capOf: (p: string) => number, amounts?: readonly (number | null | undefined)[] | null, heroPos?: string | null): number {
   const st = plan.streets[0] ?? [];
   const t = treeStreetChips({ toks: st.map((x) => x.tok), seats: st.map((x) => x.seat), preload: plan.preload }, capOf, amounts);
   const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
-  return r2(streetStart + plan.dead + sum(plan.preload) + sum(t.put));
+  if (heroPos == null) return r2(streetStart + plan.dead + sum(plan.preload) + sum(t.put));
+  // THE HERO-CONTESTABLE POT (2026-10-08, check #5's rule): each kept seat's chips on the street — its preload and its
+  // chips in the tree — counted up to hero's stack on the street (capOf(hero): his chips on it + his stack behind); the
+  // rest is a side pot hero cannot win (po_56way-006: hero 79, the BB's jam of 149 and the UTG's 119 count 79 each, in
+  // every plan — 223 for the table's 333). The dropped seats' `dead` is capped at hero's stack already (contestedChips).
+  const H = capOf(heroPos);
+  const seats = new Set([...Object.keys(plan.preload), ...Object.keys(t.put)]);
+  return r2(streetStart + plan.dead + [...seats].reduce((s, p) => s + Math.min((plan.preload[p] ?? 0) + (t.put[p] ?? 0), H), 0));
+}
+
+/**
+ * THE TABLE'S HERO-CONTESTABLE CHIPS ON A STREET (2026-10-08, check #5's rule): every seat's chips on it counted up to
+ * hero's stack on the street (`heroStack`: his chips on it + his stack behind). With hero contesting, what can be
+ * matched of a seat's chips (contestedChips) is never less than this, so the raw chips capped are the matched ones capped.
+ */
+export function heroContestable(put: ReadonlyMap<string, number> | Record<string, number>, heroStack: number): number {
+  const xs = put instanceof Map ? [...put.values()] : Object.values(put);
+  return r2(xs.reduce((s, x) => s + Math.min(x, heroStack), 0));
 }
 
 /** k-subsets of xs, in xs order (xs is short: the villains still in) */

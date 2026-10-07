@@ -38,7 +38,7 @@ import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type Path
 import { allInSizeToTreeOn, dropNote, dropShortAllIns, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
-  checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
+  checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, sidePotParts, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
 } from "./chainChecks";
 import { roundContributions } from "../utils/archivedHand/archivedHand";
 import { contestedChips, deadMoney, effectiveStack, foldRound, moneyState, streetChips, streetFromTokens, type MoneyState } from "../utils/tableMoney/tableMoney";
@@ -1404,12 +1404,15 @@ export function chainPathChecks(a: {
   // stackInAt / behindAt) never returned. fullOn[i] is round i's matched chips (the table's pot share).
   const entering: MoneyState<number>[] = [];
   const fullOn: number[] = [];
+  /** round i's matched chips seat by seat (fullOn[i]'s parts) */
+  const fullBySeat: Map<number, number>[] = [];
   if (a.dealt) {
     let st = moneyState<number>(0, [...acted].map((sid) => [sid, a.dealt![sid]] as [number, number | undefined]));
     for (const r of ROUND_ORDER) {
       entering.push(st);
       const f = foldRound(st, { put: contrib.get(r) ?? new Map<number, number>(), folded: hand.actions.filter((x) => x.type === "fold" && x.street === r).map(seatOf) }, acted);
       fullOn.push(f.matched.sum);
+      fullBySeat.push(f.matched.bySeat);
       st = f.state;
     }
     entering.push(st);
@@ -1429,9 +1432,47 @@ export function chainPathChecks(a: {
     if (!m) return 0;
     if (!a.dealt) return [...m.values()].reduce((s, x) => s + x, 0);
     if (!players) return fullOn[roundIdx(st)] ?? 0;
+    return contestedOf(st, m, players).sum;
+  };
+  const contestedOf = (st: string, m: Map<number, number>, players: string[]) => {
     const inTree = new Set(players.map((p) => p.toUpperCase()));
     const contesting = [...acted].filter((sid) => inTree.has(String(a.treePos(sid) ?? "").toUpperCase()));
-    return contestedChips(m, { contesting, folded: foldedBy(st), capOf: stackInAt(st), hero: hand.heroSeatId }).sum;
+    return contestedChips(m, { contesting, folded: foldedBy(st), capOf: stackInAt(st), hero: hand.heroSeatId });
+  };
+  /** chipsOn's parts: each seat's chips of the round as they count (empty without the dealt stacks) */
+  const chipsOnBySeat = (st: string, players?: string[]): Map<number, number> => {
+    const m = contrib.get(st);
+    if (!m || !a.dealt) return new Map();
+    return !players ? fullBySeat[roundIdx(st)] ?? new Map() : contestedOf(st, m, players).bySeat;
+  };
+  /**
+   * THE SIDE POT AT HERO'S NODE (check #5, 2026-10-08): each other seat's chips on the street above hero's stack on it
+   * (his chips on it + his stack behind) — at the table, the chips as check #5 counts them; in the tree, at hero's node,
+   * each tree seat's chips as GTO Wizard's pot counts them (matched: StreetState.matchedBySeat's rule, a seat that folded
+   * before the node at what it left) against hero's stack as the tree was sent it. Null without hero's stack at the
+   * table (no dealt stacks): nothing is left out on either side.
+   */
+  const sidePotAtHero = (tr: ChainTrace, s: ChainTrace["streets"][number], node: ChainTrace["nodes"][number], st: string, contestBy: string[] | undefined) => {
+    const heroStack = stackInAt(st)(hand.heroSeatId);
+    if (heroStack == null || !Number.isFinite(heroStack)) return null;
+    const posOf = (sid: number) => String(a.treePos(sid) ?? `seat ${sid}`);
+    const table = sidePotParts([...chipsOnBySeat(st, contestBy)].filter(([sid]) => sid !== hand.heroSeatId)
+      .map(([sid, x]) => [posOf(sid), x] as [string, number]), heroStack);
+    const sp = tr.spec;
+    const players = s.players?.length ? s.players : [sp.oopPos, ...(sp.midPos ? [sp.midPos] : []), sp.ipPos];
+    const heroPos = sp.heroSeat === "oop" ? sp.oopPos : sp.heroSeat === "mid" ? sp.midPos : sp.ipPos;
+    const hi = players.findIndex((p) => p.toUpperCase() === String(heroPos ?? "").toUpperCase());
+    // a trace that does not carry every tree seat's stack (before 2026-10-03) cannot say what its seats matched: both
+    // pots are compared whole, as before
+    const sent = (i: number) => { const x = s.stacksIn?.[players[i]!]; return x != null && Number.isFinite(x) ? x : null; };
+    if (hi < 0 || players.some((_, i) => sent(i) == null)) return null;
+    const treeStack = sent(hi)!;
+    const folded = new Set(tr.nodes.filter((n) => n.si === s.si && n.ti < node.ti && n.taken != null && /^fold/i.test(n.actions[n.taken]?.name ?? ""))
+      .map((n) => n.actor));
+    const inv = new Map(players.map((_, i) => [i, Number(node.invested?.[i] ?? 0) || 0] as [number, number]));
+    const m = contestedChips(inv, { contesting: players.map((_, i) => i), folded, capOf: sent }).bySeat;
+    const tree = sidePotParts([...m].filter(([i]) => i !== hi).map(([i, x]) => [players[i]!, x] as [string, number]), treeStack);
+    return { heroStack, table, treeStack, tree };
   };
   const potBefore = (k: number) => ROUND_ORDER.slice(0, k + 1).reduce((s, st) => s + chipsOn(st), 0) + a.potExtra;
   const cur = hand.currentNode.street;
@@ -1491,13 +1532,17 @@ export function chainPathChecks(a: {
       // which rule prices the table's side: the full table for an exact tree, the tree's own seats for a plan that
       // leaves seats out (chipsOnPlan) — the street's own chips; the rounds before it are the pot it entered with
       const leftOut = !!w.kind && !!s.players?.length;
-      const onStreet = chipsOn(st, leftOut && !(deadPlan && s.si === 0) ? asTable(s.players!) : undefined);
+      const contestBy = leftOut && !(deadPlan && s.si === 0) ? asTable(s.players!) : undefined;
+      const onStreet = chipsOn(st, contestBy);
+      const sidePot = heroNode ? sidePotAtHero(tr, s, heroNode, st, contestBy) : null;
       out.push(checkPotStack({
         street: st, potIn: s.potIn, capturePot: potBefore(k), stackIn: s.stackIn, captureStack: Number.isFinite(eff) ? eff : null,
         ...(heroNode ? { potNode: heroNode.potNode, captureNodePot: potBefore(k) + onStreet } : {}),
         plan: w.kind, skipPotIn: (lastResort || deadPlan) && s.si === 0,
-        potRule: leftOut ? `the pot the tree's seats (${s.players!.join("/")}) can contest` : "the table's pot",
+        // (a dead-money plan's first street is priced with the whole table: its dropped seats' chips are in its pot)
+        potRule: contestBy ? `the pot the tree's seats (${s.players!.join("/")}) can contest` : "the table's pot",
         ...(seatStacks?.length ? { seatStacks } : {}),
+        ...(sidePot ? { sidePot } : {}),
       }));
       // #7
       const rakeOf = (x: unknown) => (x as { rake?: RakeSpec } | null | undefined)?.rake ?? null;
