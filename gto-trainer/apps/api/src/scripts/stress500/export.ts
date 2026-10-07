@@ -121,13 +121,18 @@ const clientIdOf = new Map(scen.map((s) => [s.id, String(s.raw?.clientHandId ?? 
 // reaches the hands already run
 const ROOT_DB = join(DATA, "root", "poker.sqlite");
 const rootDb = existsSync(ROOT_DB) ? new Database(ROOT_DB, { readonly: true }) : null;
-const tracesOf = (clientHandId: string, since = 0): { id: number; decisionIndex: number | null; trace: any }[] => {
+const tracesOf = (clientHandId: string, since = 0): { id: number; decisionIndex: number | null; trace: any; ok: boolean }[] => {
   if (!rootDb) return [];
-  // `since` = the hand's own attempt (startedAt): a hand played again leaves the earlier attempts' rows in the store
-  const rows = rootDb.query("select id, decision_key, trace from solves where client_hand_id = ? and ts >= ? order by ts").all(clientHandId, since) as { id: number; decision_key: string | null; trace: Uint8Array }[];
+  // `since` = the hand's own attempt (sinceOf): a hand played again leaves the earlier attempts' rows in the store
+  const rows = rootDb.query("select id, decision_key, ok, trace from solves where client_hand_id = ? and ts >= ? order by ts").all(clientHandId, since) as { id: number; decision_key: string | null; ok: number; trace: Uint8Array }[];
   const decisionIndexOf = (key: string | null): number | null => { try { const k = JSON.parse(key ?? "null"); const i = Array.isArray(k) ? Number(k[k.length - 1]) : NaN; return Number.isFinite(i) ? i : null; } catch { return null; } };
-  return rows.flatMap((r) => { try { return [{ id: r.id, decisionIndex: decisionIndexOf(r.decision_key), trace: JSON.parse(Buffer.from(Bun.gunzipSync(r.trace as Uint8Array<ArrayBuffer>)).toString("utf-8")) }]; } catch { return []; } });
+  return rows.flatMap((r) => { try { return [{ id: r.id, decisionIndex: decisionIndexOf(r.decision_key), ok: !!r.ok, trace: JSON.parse(Buffer.from(Bun.gunzipSync(r.trace as Uint8Array<ArrayBuffer>)).toString("utf-8")) }]; } catch { return []; } });
 };
+/** where the hand's own attempt starts in the solves table: startedAt, else (the 55 hands run before it was recorded)
+ *  ranAt − ms − 0.5 s — 0 kept the earlier attempts' trees too (brief_A-001: 7459-7463 beside 7484-7488, every tree
+ *  offered twice) */
+export const sinceOf = (h: { startedAt?: string | null; ranAt?: string | null; ms?: number | null }): number =>
+  h.startedAt ? Date.parse(h.startedAt) : h.ranAt && Number.isFinite(Number(h.ms)) ? Date.parse(h.ranAt) - Number(h.ms) - 500 : 0;
 /**
  * PER-COMBO DETAIL, PACKED (views.ts cb / cbr; Brady 2026-10-07 "AJhh same as AJcc"). Base64, deduplicated per hand:
  *   - hand.cw = the hand's distinct WEIGHT VECTORS (a seat's range repeats node after node until he acts): the floor it
@@ -186,10 +191,16 @@ function viewEncoder(hero: string) {
       r: Object.fromEntries(Object.entries(v.ranges ?? {}).map(([p, xs]) => [p, rref(xs as number[] | null)])), src: v.src, pot: v.pot ?? null, hm: v.heroMix ?? null,
       ...(cb && split ? { cw: ref(cb), cs: split.cs, ...(split.ce ? { ce: split.ce } : { cbn: 1 }) } : {}),
       ...(v.cbr ? { cbr: Object.fromEntries(Object.entries(v.cbr as Record<string, ComboSet>).map(([p, set]) => [p, ref(set)])) } : {}),
+      ...(v.absent ? { ab: v.absent } : {}), ...(v.fitted ? { fit: v.fitted, fk: v.fitKind ?? "fit" } : {}),
     };
   };
   return { cw, rw, encode };
 }
+/** the blend's other trees (2026-10-08): steps with a picker, the trees offered, the absent ones among them */
+const altStats = {
+  steps: 0, trees: 0, absent: 0, absentMain: 0, fitted: {} as Record<string, number>,
+  add(_i: string, vs: any[], main: any): void { this.steps++; this.trees += vs.length + (main ? 1 : 0); this.absent += vs.filter((v) => v.absent).length + (main?.absent ? 1 : 0); },
+};
 const comboStats = { views: 0, actor: 0, actorHero: 0, actorNarrow: 0, actorThin: 0, other: 0, wChars: 0, sChars: 0, sHero: 0 };
 function countCombos(cb: ComboSet | null, cbr: Record<string, ComboSet> | null | undefined, split: { cs: string } | null): void {
   comboStats.views++;
@@ -233,22 +244,32 @@ for (const h of hands) {
     ok: !!d.ok, toCall: d.toCall, pos: d.pos, kind: d.kind, tk: d.took ? [d.took.type, d.took.amount ?? null] : null,
   })).map((x: any) => { const gr = gradeDecision({ ...x, reason: x.why, kinds: x.k, hero: h.hero }); return { ...x, g: gr.g, fl: gr.fl }; });
   const views: Record<string, any> = {};
-  const traces = tracesOf(clientIdOf.get(h.id) ?? `stress-s5-${h.id}`, h.startedAt ? Date.parse(h.startedAt) : 0);
+  const traces = tracesOf(clientIdOf.get(h.id) ?? `stress-s5-${h.id}`, sinceOf(h));
   // every decision's plan kinds (the trees its answer solved: ghost:/dead:/fold:/merge:/heads-up/(street cut))
   for (const d of dec) d.tags = [...new Set(traces.filter((t) => t.decisionIndex === d.i).map((t) => String(t.trace?.spec?.planTag ?? "")).filter(Boolean))];
   const allViews: Record<string, any> = { ...(h.views ?? {}) };
-  let allAlts: Record<string, any[]> = {};
+  // the hand file's own alternatives (rebuildViews.ts: preflop fits; postflop the same as below)
+  let allAlts: Record<string, any[]> = { ...(h.alt ?? {}) };
   if (traces.length) {
     for (const [i] of Object.entries(allViews)) if (h.hand.actions[Number(i)]?.street !== "preflop") delete allViews[i];
+    for (const [i] of Object.entries(allAlts)) if (h.hand.actions[Number(i)]?.street !== "preflop") delete allAlts[i];
     const by = postflopViewsByDecision(h.hand.actions, h.hand.positions, traces);
     Object.assign(allViews, by.views);
-    allAlts = by.alts;
+    Object.assign(allAlts, by.alts);
   }
+  for (const [i, vs] of Object.entries(allAlts)) altStats.add(i, vs, allViews[i]);
+  for (const [i, v] of Object.entries(allViews)) if (v?.absent) altStats.absentMain++;
+  for (const [, v] of Object.entries(allViews)) if (v?.fitted) altStats.fitted[v.fitKind ?? "fit"] = (altStats.fitted[v.fitKind ?? "fit"] ?? 0) + 1;
+  // the checks read the trees that hold the seat: a tree's state where it does not (absent) carries no strategy
+  const heldAlts: Record<string, any[]> = Object.fromEntries(Object.entries(allAlts).map(([i, vs]) => [i, vs.filter((v) => !v.absent)]));
+  // … and what the answer itself read: a FITTED preflop view (rebuildViews.ts, the arrival's per-seat reads, added after
+  // the run) is for the eye only — the grades, thin ranges and checks stay what the run measured
+  const checkViews: Record<string, any> = Object.fromEntries(Object.entries(allViews).filter(([, v]) => !v?.fitted));
   // THIN RANGES: a seat of hero's tree(s) holding under 1.5 combos at hero's node (a scripted action the solver almost
   // never takes collapses the range of whoever took it — the tree then answers on almost nothing)
   const combosOf = (xs: number[] | null | undefined): number | null => xs ? xs.reduce((t, x, k) => t + x * (CLASS_SIZES[k] ?? 0), 0) : null;
   for (const d of dec) {
-    const vs = [allViews[String(d.i)], ...(allAlts[String(d.i)] ?? [])].filter(Boolean);
+    const vs = [checkViews[String(d.i)], ...(heldAlts[String(d.i)] ?? [])].filter((v) => v && !v.absent && !v.fitted);
     if (!vs.length || !d.ok) continue;
     const least = new Map<string, number>();
     for (const v of vs) for (const [p, xs] of Object.entries(v.ranges ?? {})) {
@@ -264,7 +285,7 @@ for (const h of hands) {
     }
   }
   // POKER-SENSE CHECKS (lint.ts): flags only — the grade stays what the answer path earned
-  const lint = lintHand(h.hand, h.decisions ?? [], allViews, allAlts);
+  const lint = lintHand(h.hand, h.decisions ?? [], checkViews, heldAlts);
   for (const d of dec) {
     const lf = lint.flags.get(d.i);
     if (lf?.length) { d.fl = [...d.fl, ...lf]; d.lint = lint.notes.get(d.i); }
@@ -291,7 +312,7 @@ for (const h of hands) {
     id: h.id, fam: h.family, title: h.title, tags: h.tags, hero: h.hero, src: h.source, hh: h.hh,
     hand: { pos: h.hand.positions, ss: h.hand.startStacks, hs: h.hand.heroSeatId, hc: h.hand.heroCards, b: h.hand.board,
             ac: h.hand.actions.map((a: any) => [a.seatId, a.type, a.amount ?? null, a.street[0], a.hero ? 1 : 0]) },
-    dec, views, alt, rep, rw: E.rw, ...(E.cw.length ? { cw: E.cw } : {}), pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
+    dec, views, alt, rep, rw: E.rw, ...(h.viewsMeta?.fitted?.missing && Object.keys(h.viewsMeta.fitted.missing).length ? { pfm: h.viewsMeta.fitted.missing } : {}), ...(E.cw.length ? { cw: E.cw } : {}), pn: h.preflopNote, pool: poolSeatsOf(h), plans: (h.plans ?? []).map((p: any) => [p.solveId, p.street, p.planTag, p.ok ? 1 : 0]), ms: h.ms, at: h.ranAt, commit: h.commit,
   };
   const grades = { ok: 0, approx: 0, refused: 0, bad: 0 } as Record<string, number>;
   const fl = new Set<string>(), kd = new Set<string>();
@@ -337,4 +358,5 @@ console.log(JSON.stringify({ ...totals, flags: undefined, kinds: undefined, lint
   const bytes = readdirSync(join(OUT, "data")).reduce((t, f) => t + Bun.file(join(OUT, "data", f)).size, 0);
   console.log(`per-combo detail (postflop): ${comboStats.actor} of ${comboStats.views} views carry the actor's combos (thin ${comboStats.actorThin}, narrow ${comboStats.actorNarrow}, hero wide ${comboStats.actorHero}), ${comboStats.other} other-seat ranges · splits ${(comboStats.sChars / 1e6).toFixed(2)} MB (hero wide ${(comboStats.sHero / 1e6).toFixed(2)}), weight vectors ${(comboStats.wChars / 1e6).toFixed(2)} MB · data ${(bytes / 1e6).toFixed(2)} MB`);
 }
+console.log(`blend pickers: ${altStats.steps} steps offer ${altStats.trees} trees (${altStats.absent} of them a tree that does not hold the acting seat; ${altStats.absentMain} steps whose actor no tree holds) · fitted preflop views ${JSON.stringify(altStats.fitted)}`);
 console.log("poker-sense checks:", LINT_FLAGS.map((f) => `${f} ${totals.lint[f]!.n} (${totals.lint[f]!.hands} hands)`).join(" · "));

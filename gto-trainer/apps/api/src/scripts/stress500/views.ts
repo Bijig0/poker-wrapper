@@ -92,6 +92,17 @@ export interface NodeView {
    *  class x action checks: strategy and EV differ by exactly 0), so a preflop combo row only repeats its class. */
   cb?: ComboSet | null;
   cbr?: Record<string, ComboSet> | null;
+  /** NOT IN THIS TREE (2026-10-08): a tree of the decision's blend that does not hold the seat acting here (it ghosts,
+   *  merges, folds or prices him as dead money) — the view carries that tree's seats' ranges at this point (before its
+   *  next node; nothing it holds acts in between) and no strategy. The sentence says so. */
+  absent?: string;
+  /** FITTED LINE (preflop, 2026-10-08): GTO Wizard's AI preflop tree cannot hold the real line, so this seat was read on
+   *  a line with other callers folded out — "<fitted line> (HJ+CO folded out)"; the flop ranges were read the same way
+   *  (gtowAiPreflop.arrivalRangesGtowAi) */
+  fitted?: string;
+  /** what the fitted read is: "fit" (a per-seat fit, as the flop ranges were read), "exact" (the AI tree held the line the
+   *  chart could not — the flop ranges were read on it), "blend" (one of the fits hero's own answer was read on) */
+  fitKind?: "fit" | "exact" | "blend";
 }
 
 // ── per-combo detail ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -295,30 +306,100 @@ export function traceToViews(trace: any, src: string): NodeView[] {
   return out;
 }
 
+const srcOf = (id: number, trace: any): string => `tree #${id}${trace?.spec?.planTag ? ` · ${trace.spec.planTag}` : ""}`;
+
+/**
+ * One tree's state at the table's steps it does NOT hold (2026-10-08): for every postflop action of a street the trace
+ * covers that none of its nodes matched (the actor is ghosted / merged / folded / dead money in this tree), the ranges
+ * of the tree's seats at that point — the ranges before its NEXT matched node on the street (nothing it holds acts in
+ * between, so they are the same) — as an `absent` view with no strategy. Steps after the tree's last node get none.
+ */
+export function absentViews(actions: { seatId: number; street: string }[], positions: Record<string | number, string>,
+  held: Record<number, NodeView>, src: string): Record<number, NodeView> {
+  const out: Record<number, NodeView> = {};
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i]!;
+    if (a.street === "preflop" || held[i] || /^post/.test(String((a as any).type ?? ""))) continue;
+    let j = i + 1;
+    while (j < actions.length && actions[j]!.street === a.street && !held[j]) j++;
+    const next = j < actions.length && actions[j]!.street === a.street ? held[j] : undefined;
+    if (!next) continue;
+    const pos = String(positions[a.seatId] ?? `seat ${a.seatId}`);
+    const kept = Object.keys(next.ranges);
+    out[i] = {
+      street: next.street, actor: pos, line: next.line, actions: [], strat: null, totals: null, taken: null,
+      ranges: next.ranges, src, pot: next.pot,
+      absent: `${pos} is not in this tree (it holds ${kept.join(", ")}): these are its seats' ranges at this point, before its next node (${next.actor} at ${next.line || "the street's root"})`,
+    };
+  }
+  return out;
+}
+
+/**
+ * One trace's nodes matched to the table's actions FROM ITS DECISION BACKWARDS (2026-10-08): a decision's walk ends on
+ * hero's node at the decision's own step, so its last node is that step and each earlier node is the nearest earlier
+ * action of the same seat. Matching from the street's first action (postflopViews) put a STREET-CUT tree's first node
+ * on the street's first action of that seat (brief_C-002: decision 18's cut tree landed on step 8, and steps 14-18 had
+ * no view). Null when the trace does not end on hero's node at that step, or a node finds no action (the caller falls
+ * back to the forward match).
+ */
+export function decisionViews(actions: { seatId: number; street: string }[], positions: Record<string | number, string>,
+  t: { id: number; decisionIndex: number | null; trace: any }): Record<number, NodeView> | null {
+  const d = t.decisionIndex;
+  const nodes = t.trace?.nodes ?? [];
+  if (d == null || !actions[d] || !nodes.length || !nodes[nodes.length - 1]?.heroNode) return null;
+  const tv = traceToViews(t.trace, srcOf(t.id, t.trace));
+  const street = actions[d]!.street;
+  if (tv.some((v) => v.street !== street)) return null;
+  const posOf = (i: number) => String(positions[actions[i]!.seatId] ?? "").toUpperCase();
+  if (String(tv[tv.length - 1]!.actor).toUpperCase() !== posOf(d)) return null;
+  const out: Record<number, NodeView> = {};
+  let j = tv.length - 1;
+  for (let i = d; i >= 0 && j >= 0 && actions[i]!.street === street; i--) {
+    if (/^post/.test(String((actions[i] as any).type ?? ""))) continue;
+    if (posOf(i) === String(tv[j]!.actor).toUpperCase()) { out[i] = tv[j]!; j--; }
+  }
+  return j < 0 ? out : null;
+}
+
 /**
  * The postflop views of a hand BY THE DECISION THEY LEAD TO: every stored trace's own nodes matched to the table's
- * actions; a node shows the trees of the first hero decision at or after it that holds it (a blended multiway answer
- * solves 2-3 collapses per decision — each holds three seats, so together they show every seat), the first of them as
- * the view and the rest as alternatives. A seat no tree holds (ghosted / merged / dead money in all of them) gets none.
- * decisionIndex = the hero action the trace was solved for (solves.decision_key's last element).
+ * actions. A blended multiway answer solves 2-3 collapses per decision, each holding three seats, so together they show
+ * every seat: a node shows EVERY ok tree of the first hero decision at or after it — the trees that hold the acting seat
+ * first (the lowest solve id is the view), then (2026-10-08) the trees that do not, as `absent` views carrying that
+ * tree's seats' ranges at this point (absentViews), so a seat only another tree keeps is one click away. A step no tree
+ * of the decision holds (the actor ghosted / merged / dead money in all of them) shows the trees' absent views alone.
+ * decisionIndex = the hero action the trace was solved for (solves.decision_key's last element); ok = solves.ok (a
+ * failed tree is never an option).
  */
-export function postflopViewsByDecision(actions: { seatId: number; street: string }[], positions: Record<string | number, string>,
-  traces: { id: number; decisionIndex: number | null; trace: any }[]): { views: Record<number, NodeView>; alts: Record<number, NodeView[]> } {
+export function postflopViewsByDecision(actions: { seatId: number; street: string; hero?: boolean; type?: string }[], positions: Record<string | number, string>,
+  traces: { id: number; decisionIndex: number | null; trace: any; ok?: boolean }[]): { views: Record<number, NodeView>; alts: Record<number, NodeView[]> } {
   const per = traces.map((t) => {
-    const vs = postflopViews(actions, positions, [{ id: t.id, trace: t.trace }]);
+    const vs = decisionViews(actions, positions, t) ?? postflopViews(actions, positions, [{ id: t.id, trace: t.trace }]);
     const covered = Object.keys(vs).map(Number);
-    return { id: t.id, d: t.decisionIndex ?? (covered.length ? Math.max(...covered) : -1), vs };
+    const d = t.decisionIndex ?? (covered.length ? Math.max(...covered) : -1);
+    return { id: t.id, d, ok: t.ok !== false, vs, ab: absentViews(actions, positions, vs, srcOf(t.id, t.trace)) };
   });
+  const heroAt = actions.map((a, i) => (a.hero && !/^post/.test(String(a.type ?? "")) ? i : -1)).filter((i) => i >= 0);
   const views: Record<number, NodeView> = {}, alts: Record<number, NodeView[]> = {};
   for (let i = 0; i < actions.length; i++) {
-    if (actions[i]!.street === "preflop") continue;
+    if (actions[i]!.street === "preflop" || /^post/.test(String(actions[i]!.type ?? ""))) continue;
     const holding = per.filter((p) => p.vs[i]);
-    if (!holding.length) continue;
-    const ahead = holding.filter((p) => p.d >= i);
-    const d = ahead.length ? Math.min(...ahead.map((p) => p.d)) : Math.max(...holding.map((p) => p.d));
-    const group = holding.filter((p) => p.d === d).sort((a, b) => a.id - b.id);
-    views[i] = group[0]!.vs[i]!;
-    if (group.length > 1) alts[i] = group.slice(1).map((p) => p.vs[i]!);
+    let d: number;
+    if (holding.length) {
+      const ahead = holding.filter((p) => p.d >= i);
+      d = ahead.length ? Math.min(...ahead.map((p) => p.d)) : Math.max(...holding.map((p) => p.d));
+    } else {
+      // nobody holds the actor: the decision this step leads to is hero's next one on the same street
+      const next = heroAt.find((k) => k >= i);
+      if (next == null || actions[next]!.street !== actions[i]!.street) continue;
+      d = next;
+    }
+    const group = per.filter((p) => p.d === d && (p.ok || p.vs[i])).sort((a, b) => a.id - b.id);
+    const options = [...group.filter((p) => p.vs[i]).map((p) => p.vs[i]!), ...group.filter((p) => !p.vs[i] && p.ab[i]).map((p) => p.ab[i]!)];
+    if (!options.length) continue;
+    views[i] = options[0]!;
+    if (options.length > 1) alts[i] = options.slice(1);
   }
   return { views, alts };
 }
@@ -334,7 +415,7 @@ export function postflopViews(actions: { seatId: number; street: string }[], pos
   for (const street of ["flop", "turn", "river"] as const) {
     let best: NodeView[] = [];
     for (const x of traces) {
-      const vs = traceToViews(x.trace, `tree #${x.id}${x.trace?.spec?.planTag ? ` · ${x.trace.spec.planTag}` : ""}`).filter((v) => v.street === street);
+      const vs = traceToViews(x.trace, srcOf(x.id, x.trace)).filter((v) => v.street === street);
       if (vs.length >= best.length) best = vs;
     }
     let k = 0;

@@ -74,6 +74,7 @@ main { padding-block: 16px 60px; padding-inline: 16px; max-width: 1480px; margin
 .chip.good { background: var(--win-soft); color: var(--win); } .chip.warn { background: var(--ev-soft); color: var(--ev); }
 .chip.crit { background: var(--loss-soft); color: var(--loss); } .chip.dim { background: var(--chip); color: var(--muted); }
 .chip.sev { background: var(--severe); color: #fff; }
+.fit-line { border: 1px solid var(--info); background: var(--info-soft); border-radius: 10px; padding: 8px 12px; margin: 6px 0 10px; overflow-wrap: anywhere; }
 .rv-only { border: 2px solid var(--severe); background: var(--loss-soft); border-radius: 10px; padding: 8px 12px; margin: 0 0 10px; font-weight: 600; }
 .rv-only .sub { font-weight: 400; margin-top: 4px; }
 .collapse-at { border: 1px dashed var(--loss); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
@@ -900,8 +901,10 @@ function renderNode(rs) {
   const board = rs.board.join("");
   const head = `<div class="nv-head"><h2 style="margin:0">Exact node</h2><span class="sub">${esc(a.street)} · ${a.hero ? "hero" : "villain"} ${esc(pos)} to act · then ${esc(actionText(a, rs))}</span></div>`;
   if (!v) {
-    const why = a.street === "preflop" ? (H.pn && /no preflop pin/.test(H.pn) ? H.pn : "the preflop walk did not reach this action (a fitted or refused line)")
-      : "no tree read this action: the seat was left out of the multiway tree (ghosted / merged / dead money), or it came after hero's last decision on the street";
+    const why = a.street === "preflop" ? (H.pn && /no preflop pin/.test(H.pn) ? H.pn : (H.pfm || {})[STEP] ? `the preflop walk did not reach this action (${(H.pn || "").replace(/^.*the walk stopped: /, "")}) and its fitted read is not available: ${H.pfm[STEP]}` : "the preflop walk did not reach this action (a fitted or refused line)")
+      : H.actions.some((x, k) => k > STEP && x.hero && x.street === a.street && !/^post/.test(x.type))
+        ? "no tree of the decision this action leads to holds it (a refused decision, or a line its trees do not walk)"
+        : `it came after hero's last decision on the ${a.street}: the live path never reads this node (hero has no further decision on the street), so no tree holds it — the harness's review replies read such nodes only after the hand's last decision`;
     host.innerHTML = `${head}<p class="sub">No range read at this node — ${esc(why)}.</p>`;
     return;
   }
@@ -916,6 +919,10 @@ function renderNode(rs) {
   const ranges = Object.fromEntries(Object.entries(v.r || {}).map(([p, s]) => [p, dec(s)]));
   const actorRange = ranges[v.a] ?? null;
   const rvBanner = v.rv ? `<div class="rv-only" role="note"><span class="chip sev">REVIEW ONLY</span> ${esc(String(v.bn || "REVIEW ONLY — GTO Wizard's reply to hero's last action, read for the harness. The live path never reads this node: hero has no further decision here.").replace(/^REVIEW ONLY — /, ""))}${v.nt ? `<div class="sub">${esc(v.nt)}</div>` : ""}<div class="sub">${v.rq ?? 0} GTO Wizard request${v.rq === 1 ? "" : "s"} spent by the harness on this read — no answer, grade or check uses it.</div></div>` : "";
+  // FITTED LINE (preflop, 2026-10-08): the AI tree cannot hold the real line — this seat's read on the fitted line the flop
+  // ranges were read on; NOT IN THIS TREE: a blend tree that does not hold the acting seat (its seats' ranges only)
+  const fitBanner = v.fit ? `<div class="fit-line" role="note"><span class="chip warn">${v.fk === "exact" ? "AI TREE — the chart cannot hold this line" : "FITTED LINE — the tree cannot hold the real line"}</span> ${v.fk === "exact" ? "read on GTO Wizard's AI preflop tree, which holds it" : "this seat read on"} <span class="mono">${esc(v.fit)}</span>${v.fk === "exact" ? "" : `<div class="sub">GTO Wizard's AI preflop tree holds one limper or caller behind an open; each seat's range here is read on a line that keeps its own actions and folds the other callers out — how the live path read this hand's flop ranges (gtowAiPreflop.arrivalRangesGtowAi).</div>`}</div>` : "";
+  const absentBanner = v.ab ? `<div class="fit-line" role="note"><span class="chip dim">NOT IN THIS TREE</span> ${esc(v.ab)}.</div>` : "";
   const facts = `<div class="nv-facts"><div><b>tree path</b><span class="mono">${esc(v.ln || "root")}</span></div><div><b>source</b><span>${esc(v.src || "")}</span></div>${v.pot != null ? `<div><b>pot at node</b><span class="num">${r2(v.pot)} bb</span></div>` : ""}<div><b>took</b><span>${esc(v.tk || "")}</span></div></div>`;
   let actorCard = "";
   const isFull = (arr) => !!arr && arr.every((x) => x >= 0.999);
@@ -945,11 +952,16 @@ function renderNode(rs) {
   }).join("");
   const dealt = Object.values(H.positions).map(String);
   const outside = dealt.filter((p) => !(p in ranges) && !rs.folded.has(Number(Object.keys(H.positions).find((s) => H.positions[s] === p))));
-  const note = outside.length ? `<p class="sub" style="margin:8px 0 0">Not in this tree: ${outside.map(esc).join(", ")} — still in the hand but left out of the model at this node (a collapse ghosts, merges or prices them as dead money)${options.length > 1 ? "; switch trees above to see them" : ", or not yet read"}.</p>` : "";
-  const picker = options.length > 1 ? `<div style="margin:8px 0 2px"><div class="sub" style="margin-bottom:4px">This answer blends ${options.length} trees (each holds three seats) — pick one:</div><div class="seg" id="altSeg" role="group" aria-label="Tree" style="flex-wrap:wrap;border-radius:12px">${options.map((o, k) => `<button data-k="${k}" class="${k === sel ? "on" : ""}">${esc(String(o.src || `tree ${k + 1}`).replace(/^tree /, ""))}</button>`).join("")}</div></div>` : "";
+  // where each seat this tree leaves out IS held: the other trees of the blend, by their picker label
+  const label = (o, k) => String(o.src || `tree ${k + 1}`).replace(/^tree /, "");
+  const heldBy = (p) => options.map((o, k) => (k !== sel && o.r && p in o.r ? label(o, k).split(" · ")[0] : null)).filter(Boolean);
+  const outsideText = outside.map((p) => { const by = heldBy(p); return by.length ? `${esc(p)} (in ${by.map(esc).join(", ")} — switch trees above)` : `${esc(p)} (${options.length > 1 ? "in none of this answer's trees" : "not in the tree"})`; });
+  const why0 = a.street === "preflop" ? (v.fit ? "the fit folded it out, or it has folded" : "not yet read") : "a collapse ghosts, merges or prices them as dead money";
+  const note = outside.length ? `<p class="sub" style="margin:8px 0 0">Not in this tree: ${outsideText.join(", ")} — still in the hand but left out of the model at this node (${why0}).</p>` : "";
+  const picker = options.length > 1 ? `<div style="margin:8px 0 2px"><div class="sub" style="margin-bottom:4px">This answer blends ${options.length} trees (each holds three seats) — pick one${options.some((o) => o.ab) ? `; a tree marked "no ${esc(pos)}" does not hold the seat acting here (its seats' ranges only)` : ""}:</div><div class="seg" id="altSeg" role="group" aria-label="Tree" style="flex-wrap:wrap;border-radius:12px">${options.map((o, k) => `<button data-k="${k}" class="${k === sel ? "on" : ""}">${esc(label(o, k))}${o.ab ? ` <span class="sub">(no ${esc(pos)})</span>` : ""}</button>`).join("")}</div></div>` : "";
   let heroLine = "";
   if (v.hm && v.hm.length) heroLine = `<div class="nv-hero"><span class="big">${cardsHtml(H.heroCards)}</span> — this tree's own mix for your exact combo: ${v.hm.filter((x) => x.p >= 0.05).map((x) => `${esc(x.action)} <b>${x.p.toFixed(1)}%</b>`).join(" · ")}${options.length > 1 ? `<div class="sub" style="margin-top:2px">one of ${options.length} blended trees — the answer below is the blend</div>` : ""}</div>`;
-  host.innerHTML = `${rvBanner}${head}${picker}${facts}<div class="seats" style="margin-top:10px">${actorCard}${otherCards}</div>${note}${heroLine}`;
+  host.innerHTML = `${rvBanner}${head}${picker}${fitBanner}${absentBanner}${facts}<div class="seats" style="margin-top:10px">${actorCard}${otherCards}</div>${note}${heroLine}`;
   const seg = $("altSeg");
   if (seg) seg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; ALT_SEL[STEP] = Number(b.dataset.k); renderNode(replayState(H, STEP)); });
 }
@@ -965,8 +977,10 @@ function collapseBlock(v, a, rs, strat, acts, actorRange, board, combosIn, THIN)
   const j = acts.indexOf(v.tk);
   if (j < 0 || !strat[j]) return "";
   const entering = actorRange || new Array(169).fill(1);
-  const nx = H.views[STEP + 1] || (H.rep || {})[STEP + 1];
-  const nxR = nx && nx.src === v.src && nx.r && nx.r[v.a] ? dec(nx.r[v.a]) : null;
+  // the next node ON THE SAME TREE (a blend's other trees are alternatives at the next step too)
+  const nxAll = [H.views[STEP + 1], ...((H.alt || {})[STEP + 1] || []), (H.rep || {})[STEP + 1]].filter(Boolean);
+  const nx = nxAll.find((o) => o.src === v.src) || null;
+  const nxR = nx && nx.r && nx.r[v.a] ? dec(nx.r[v.a]) : null;
   const after = nxR || entering.map((x, k) => x * (strat[j][k] || 0));
   const nIn = combosIn(entering), nOut = combosIn(after);
   if (!(nIn > 0) || !(nOut < THIN || nOut < 0.01 * nIn)) return "";

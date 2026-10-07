@@ -347,21 +347,36 @@ for (const sc of todo) {
     }
   } catch (e) { preflopNote = `preflop views failed: ${e instanceof Error ? e.message : e}`; }
 
-  // postflop: per street, the trace whose walk covers the most nodes of that street (the latest on a tie)
+  // postflop (2026-10-08): by the decision being answered — the tree of the EARLIEST hero decision whose walk covers the
+  // step, every ok tree of that decision as an alternative (views.postflopViewsByDecision; was: per street the trace
+  // covering the most nodes, the latest on a tie — a later decision's tree replaced the one that answered)
   const plans: any[] = [];
+  let alt: Record<number, any[]> = {};
   try {
     // this attempt's solves only (a hand played again keeps the earlier attempts' rows in the store)
     const rows = solveStore.forHand(hand.clientHandId!).filter((row: any) => Number(row.ts) >= t0h);
     const traces = rows.map((row: any) => ({ row, trace: solveStore.get(row.id)?.trace })).filter((x: any) => x.trace);
     for (const x of traces) plans.push({ solveId: x.row.id, decisionKey: x.row.decision_key, street: x.row.street, planTag: x.trace.spec?.planTag ?? null, ok: !!x.row.ok, why: x.row.why ?? null });
-    Object.assign(views, V.postflopViews(hand.actions as any, hand.positions as any, traces.map((x: any) => ({ id: x.row.id, trace: x.trace }))));
+    const dIdx = (key: string | null): number | null => { try { const k = JSON.parse(key ?? "null"); const n = Array.isArray(k) ? Number(k[k.length - 1]) : NaN; return Number.isFinite(n) ? n : null; } catch { return null; } };
+    const by = V.postflopViewsByDecision(hand.actions as any, hand.positions as any, traces.map((x: any) => ({ id: x.row.id, decisionIndex: dIdx(x.row.decision_key), ok: !!x.row.ok, trace: x.trace })));
+    Object.assign(views, by.views);
+    alt = by.alts;
   } catch (e) { plans.push({ error: `postflop views failed: ${e instanceof Error ? e.message : e}` }); }
+  // preflop steps past a walk the AI tree could not hold: each seat's FITTED read from the solve cache (fitted.ts)
+  if (/walk stopped/.test(preflopNote ?? "")) {
+    try {
+      const { cacheReader, fittedPreflopViews } = await import("./fitted");
+      const ids = [/(gtow-ai · \d-handed · \S+)/.exec(String(preflopNote))?.[1]].filter((x): x is string => !!x);
+      const r = await fittedPreflopViews(hand, heroPos, views, ids, cacheReader(join(WORK, "gtow-cache.sqlite")));
+      Object.assign(views, r.views);
+    } catch (e) { preflopNote = `${preflopNote} · fitted views failed: ${e instanceof Error ? e.message : e}`; }
+  }
 
   const result = {
     id: sc.id, family: sc.family, title: sc.title, tags: sc.tags, hero: heroPos, source: sc.source ?? null, commit,
     startedAt: new Date(t0h).toISOString(), ranAt: new Date().toISOString(), ms: Date.now() - t0h,
     hh: handHistoryText(hand, sc), hand: { positions: hand.positions, startStacks: (hand as any).startStacks ?? null, heroSeatId: hand.heroSeatId, heroCards: hand.heroCards, board: hand.board, actions: hand.actions, postIns: (hand as any).postIns ?? null },
-    decisions, views, preflopNote, plans,
+    decisions, views, alt, preflopNote, plans,
   };
   writeFileSync(file + ".tmp", JSON.stringify(result));
   renameSync(file + ".tmp", file);
