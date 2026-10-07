@@ -79,6 +79,9 @@ export interface AnswerRow {
    *  joined / fetched), the fresh cloud solves — the line that answers "was an earlier street re-solved?". Kept ON
    *  the answer so the question never depends on which log file survived (hand 973: none did). */
   chain?: string | null;
+  /** THE SHORT ALL-IN PRESS (2026-10-07, services/allInPress): the answer's press entries (JSON) — how an ALLIN in its
+   *  mix is pressed when a collapsed tree capped it below hero's stack. Null = every action presses as before. */
+  press?: string | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS answers (
@@ -138,6 +141,8 @@ const EXTRA_COLUMNS: [string, string][] = [
   ["path_verdict", "TEXT"],
   ["path", "TEXT"],
   ["chain", "TEXT"],
+  // THE SHORT ALL-IN PRESS (2026-10-07, services/allInPress): an ALLIN pressed as a raise to the tree's amount
+  ["press", "TEXT"],
 ];
 
 /**
@@ -393,8 +398,8 @@ class AnswerLog {
              hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
              strategy_mode, source, band_lo, band_hi, exploit_pick, chart_pick, exploit_tag,
              mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, table_slot, hero_pos,
-             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path, chain)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path, chain, press)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
@@ -407,7 +412,7 @@ class AnswerLog {
           row.bbCents ?? null, row.tableSeats ?? null, row.tableSlot ?? null, row.heroPos ?? null,
           row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null,
           row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null,
-          row.pathVerdict ?? null, row.path ?? null, row.chain ?? null
+          row.pathVerdict ?? null, row.path ?? null, row.chain ?? null, row.press ?? null
         );
       this.writeSeq++;
     } catch (e) {

@@ -63,6 +63,8 @@ export function freshStudy(): Record<string, any> {
     // requests / no answer — and the session's clean count, which outlives any one answer
     chain: null, chainSession: null,
     decisionKey: null, handId: null, solveId: null as number | null, clientHandId: null as string | null,
+    // the answer's short all-in press entries (relay.sizedAllInPlan), null = none
+    press: null as any[] | null,
     auto: false, executed: null, autoTried: null, lastExec: null,
     autoHeld: null,
     pendingExec: null,
