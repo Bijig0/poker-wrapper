@@ -142,6 +142,16 @@ describe("shortAllInPress — brief_I-004", () => {
     expect(trees.map((t) => t.to)).toEqual([97.5, 97.5, null]);
     expect(shortAllInPress({ actions: [{ action: "FOLD" }, { action: "CALL 22" }, { action: "ALLIN 82.5" }], heroPos: "BB", money, trees })).toEqual([]);
   });
+  test("decision 13 with the dead-money pot fixed (2026-10-07): UTG's all-in sent as the 7 over his preloaded 15 — hero faces CALL 7, still no press", () => {
+    // the called-level trees as the chain now walks them (deadMoneyCollapse.treeAllInAmounts): BB X, UTG all in for 7, CO
+    // calls 7 — hero 0 in the tree, his ALLIN his 82.5 tree stack = 15 + 82.5 = his whole 97.5 at the table
+    const money = streetMoneyAt(at(13), "flop");
+    const dm = (kind: string, seats: [string, string, string]) => walk(kind, seats, node(0, [0, 7, 7], [["FOLD", 0], ["CALL", 7], ["ALLIN", 82.5]]));
+    const trees = [dm("dead:SB + dead:BTN (called level in the pot)", ["BB", "UTG", "CO"]), dm("dead:SB + dead:CO (called level in the pot)", ["BB", "UTG", "BTN"]),
+      walk("dead:CO + dead:BTN", ["SB", "BB", "UTG"], node(1, [15, 15, 22], [["FOLD", 0], ["CALL", 7]]))].map((w) => pressTreeOf(w, money));
+    expect(trees.map((t) => t.to)).toEqual([97.5, 97.5, null]);
+    expect(shortAllInPress({ actions: [{ action: "FOLD" }, { action: "CALL 7" }, { action: "ALLIN 82.5" }], heroPos: "BB", money, trees })).toEqual([]);
+  });
   test("the deeper seats are not live (folded) → no press", () => {
     const h = at(9);
     h.actions = [...h.actions, A(1, "fold", "flop"), A(2, "fold", "flop")];   // as if CO and BTN had folded before

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { menuAction, menuByClass, pickDeadMoney, planDeadMoney } from "./deadMoneyCollapse";
+import { menuAction, menuByClass, pickDeadMoney, planDeadMoney, treeAllInAmounts, treePotAtHero, treeStreetChips, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { shortAllInPress, treeAllInTo } from "./allInPress";
+import { streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses } from "./multiwayCollapse";
 
 const R = () => new Array(1326).fill(1);
@@ -208,5 +210,115 @@ describe("review 2026-10-05 probes", () => {
     const { plans } = planDeadMoney({ seats: seatsOf("SB", "HJ", "CO", "BTN"), heroPos: "HJ", street: line("SB:X HJ:X CO:R5 BTN:C SB:R20"), behind: () => 100 });
     const keepBtn = plans.find((p) => p.seats.some((s) => s.pos === "BTN"))!;
     expect(keepBtn.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["SB:X", "HJ:X", "BTN:R5", "SB:R20"]);
+  });
+});
+
+describe("THE POT AT HERO'S NODE IS THE TABLE'S (2026-10-07, stress-500 brief_I-004 flop decision 13)", () => {
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  /** a spot, its plans, and for each plan: the tree's pot at hero's node as the chain is sent it (its all-ins at
+   *  treeAllInAmounts), the same with the table's raw all-in amounts (the bug), the table's pot the tree's seats contest,
+   *  and hero's amount to call in the tree */
+  const spot = (seats: string[], hero: string, l: string, amounts: (number | null)[], b: Record<string, number>, start: number) => {
+    const street = line(l);
+    const { plans, why } = planDeadMoney({ seats: seatsOf(...seats), heroPos: hero, street, amounts, behind: (p) => b[p] });
+    expect(why).toBeNull();
+    const sc = streetChips(streetFromTokens(street.map((t) => t.tok), street.map((t) => t.seat), amounts), (p) => b[p]);
+    const tableAllIn = (p: string) => { let to: number | null = null; street.forEach((t, i) => { if (t.seat === p && t.tok === "RAI" && amounts[i] != null) to = amounts[i]!; }); return to; };
+    const tablePot = r2(start + [...sc.put.values()].reduce((x, y) => x + y, 0));
+    const read = (p: DeadMoneyPlan) => {
+      const am = treeAllInAmounts(p, tableAllIn)[0]!;
+      const raw = p.streets[0]!.map((t) => (t.tok === "RAI" ? tableAllIn(t.seat) : null));
+      const st = p.streets[0]!;
+      const tc = treeStreetChips({ toks: st.map((x) => x.tok), seats: st.map((x) => x.seat), preload: p.preload }, (q) => b[q]!, am);
+      return {
+        kind: p.kind, amounts: am,
+        pot: treePotAtHero(p, start, (q) => b[q]!, am),
+        potRaw: treePotAtHero(p, start, (q) => b[q]!, raw),
+        contested: r2(start + p.dead + p.seats.reduce((x, s) => x + (sc.put.get(s.pos) ?? 0), 0)),
+        heroCall: r2(Math.min(tc.level, tc.cap(hero)) - (tc.put[hero] ?? 0)),
+        heroCap: tc.cap(hero), heroIn: tc.put[hero] ?? 0,
+      };
+    };
+    return { plans, tablePot, read, heroCall: r2(sc.level - (sc.put.get(hero) ?? 0)) };
+  };
+
+  test("brief_I-004: SB jams 15, hero calls, UTG jams 22 over it, CO and BTN call — hero faces 7 into 108.5 in every tree", () => {
+    const b = { SB: 15, BB: 97.5, UTG: 22, CO: 97.5, BTN: 97.5 };
+    const s = spot(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:RAI BB:C UTG:RAI CO:C BTN:C", [15, null, 22, null, null], b, 12.5);
+    expect(s.tablePot).toBe(108.5);
+    expect(s.heroCall).toBe(7);
+    const rs = s.plans.map(s.read);
+    expect(rs.map((x) => x.kind)).toEqual(["dead:SB + dead:BTN (called level in the pot)", "dead:SB + dead:CO (called level in the pot)", "dead:CO + dead:BTN"]);
+    // the called level (15) is in the starting pot for every kept seat past it — hero, and UTG / CO who went past it to 22
+    expect(s.plans[0]!.preload).toEqual({ BB: 15, UTG: 15, CO: 15 });
+    expect(s.plans[0]!.streets[0]!.map((t) => `${t.seat}:${t.tok}`)).toEqual(["BB:X", "UTG:RAI", "CO:C"]);
+    // so UTG's all-in is sent as the 7 he has in in the tree, not the table's 22
+    expect(rs[0]!.amounts).toEqual([null, 7, null]);
+    for (const r of rs) {
+      expect(r.pot).toBe(108.5);
+      expect(r.contested).toBe(108.5);
+      expect(r.heroCall).toBe(7);
+    }
+    // THE BUG: the table's 22 beside UTG's all-in (the chain lifts his 7 to it, the CO calls 22) = 15 twice for each
+    expect(rs.slice(0, 2).map((x) => x.potRaw)).toEqual([138.5, 138.5]);
+    expect(rs[2]!.potRaw).toBe(108.5);   // no preload: the table's amount is the tree's
+  });
+
+  test("brief_I-004: the short all-in press detector still sees no short all-in at decision 13", () => {
+    const b = { SB: 15, BB: 97.5, UTG: 22, CO: 97.5, BTN: 97.5 };
+    const s = spot(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:RAI BB:C UTG:RAI CO:C BTN:C", [15, null, 22, null, null], b, 12.5);
+    const money = { heroCommitted: 15, heroBehind: 82.5, level: 22, minRaiseTo: 37,
+      villains: [{ pos: "UTG", chips: 22, seat: 5 }, { pos: "CO", chips: 97.5, seat: 1 }, { pos: "BTN", chips: 97.5, seat: 2 }] };
+    // hero's all-in in a tree = his tree stack there, his tree chips in at his node (treeAllInTo puts back his
+    // preloaded 15); the third tree (SB, hero, UTG — both villains all in) offers hero no raise
+    const trees = s.plans.map((p) => {
+      const r = s.read(p);
+      const live = p.streets[0]!.filter((t) => t.seat !== "BB").some((t) => t.tok !== "RAI");
+      const node = live ? { actor: 0, invested: [r.heroIn], actions: [{ name: "FOLD", betsize: null }, { name: "CALL", betsize: null }, { name: "ALLIN", betsize: r.heroCap }] } : null;
+      return { plan: p.kind, seats: p.seats.map((x) => x.pos), to: treeAllInTo(node, money.heroCommitted) };
+    });
+    expect(trees.map((t) => t.to)).toEqual([97.5, 97.5, null]);   // hero's whole 97.5: not short
+    expect(shortAllInPress({ actions: [{ action: "FOLD", frequency: 0 }, { action: "CALL 7", frequency: 100 }, { action: "ALLIN 82.5", frequency: 0 }],
+      heroPos: "BB", money, trees })).toEqual([]);
+  });
+
+  test("brief_D-001: a street cut and a called level, the SB jamming 78 over them — every tree's pot is the table's 191.48", () => {
+    const b = { SB: 78, BB: 99, UTG: 99, HJ: 9.18, BTN: 109 };
+    const s = spot(["SB", "BB", "UTG", "HJ", "BTN"], "BB", "SB:X BB:R1.75 UTG:C HJ:RAI BTN:C SB:R28.33 BB:C UTG:F BTN:R69.22 SB:RAI",
+      [null, null, null, 9.18, null, null, null, null, null, 78], b, 5);
+    expect(s.tablePot).toBe(191.48);
+    const rs = s.plans.map(s.read);
+    expect(rs.length).toBe(2);
+    for (const r of rs) {
+      expect(r.pot).toBe(191.48);
+      expect(r.contested).toBe(191.48);
+      expect(r.heroCall).toBe(49.67);
+    }
+    // the cut plan: the SB's 28.33 in the starting pot, his all-in sent as the 49.67 over it (the table's 78 put the
+    // 28.33 in twice); the called-level plan: 7.43 (the HJ's 9.18 less hero's 1.75) layered, 70.57 sent
+    expect(rs.find((x) => /street cut/.test(x.kind))!.amounts).toEqual([49.67]);
+    expect(rs.find((x) => /called level/.test(x.kind))!.amounts.at(-1)).toBe(70.57);
+    for (const r of rs) expect(r.potRaw).toBeGreaterThan(191.48 + 7);
+  });
+
+  test("bet-call-call (no preload): the tree's pot is the table's, unchanged", () => {
+    const b = { SB: 90, HJ: 100, CO: 100, BTN: 100 };
+    const s = spot(["SB", "HJ", "CO", "BTN"], "HJ", "SB:X HJ:X CO:R3 BTN:C SB:C", [null, null, null, null, null], b, 10);
+    expect(s.plans.length).toBe(2);
+    for (const r of s.plans.map(s.read)) { expect(r.pot).toBe(19); expect(r.potRaw).toBe(19); expect(r.heroCall).toBe(3); }
+    for (const p of s.plans) expect(p.preload).toEqual({});
+  });
+
+  test("a kept seat RAISES OVER the level hero called: a sized raise and an all-in raise both price hero's node as the table", () => {
+    const deep = { SB: 97.5, BB: 97.5, UTG: 97.5, CO: 97.5, BTN: 97.5 };
+    const sized = spot(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:R5 BB:C UTG:R20 CO:C BTN:C", [null, null, null, null, null], deep, 12.5);
+    expect(sized.tablePot).toBe(82.5);
+    expect(sized.plans.length).toBeGreaterThan(0);
+    for (const r of sized.plans.map(sized.read)) { expect(r.pot).toBe(82.5); expect(r.heroCall).toBe(15); }
+    const jam = spot(["SB", "BB", "UTG", "CO", "BTN"], "BB", "SB:R5 BB:C UTG:RAI CO:C BTN:C", [null, null, 30, null, null], { ...deep, UTG: 30 }, 12.5);
+    expect(jam.tablePot).toBe(112.5);
+    const rs = jam.plans.map(jam.read);
+    for (const r of rs) { expect(r.pot).toBe(112.5); expect(r.heroCall).toBe(25); }
+    expect(rs.filter((r) => /called level/.test(r.kind)).map((r) => [r.amounts[1], r.potRaw])).toEqual([[25, 122.5], [25, 122.5]]);
   });
 });
