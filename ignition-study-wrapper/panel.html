@@ -64,6 +64,13 @@
   #conn-pill.busy { background: #3a2f16; color: #ffce56; border-color: #8a6a22; } #conn-pill.busy .dot { background: #ffce56; }
   @keyframes pulse { 0%, 100% { box-shadow: none; } 50% { box-shadow: 0 0 0 6px rgba(255,115,115,.22); } }
   @media (prefers-reduced-motion: reduce) { #conn-pill.bad { animation: none; } .spin { animation: none; } }
+  /* MACHINE LOAD (2026-10-07): the API's /api/load, read by the wrapper's health check (/state health.load). The slot
+     takes the header's free space and nothing more (flex-basis 0), so the chip appearing never wraps the header or
+     moves anything below it; long reasons are cut with an ellipsis (the whole line is the tooltip). Not a control. */
+  #load-slot { flex: 1 1 0; min-width: 0; display: flex; justify-content: flex-end; margin-left: -12px; padding-left: 12px; }   /* cancels the gap: adds 0 px to the row */
+  #load-chip { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 20px; padding: 5px 12px; font-size: 13px; font-weight: 700; border: 1px solid; cursor: default; user-select: none; }
+  #load-chip.warn { background: #3a2f16; color: #ffce56; border-color: #8a6a22; }
+  #load-chip.heavy { background: #57222a; color: #ff9a9a; border-color: #ff7373; }
   /* GTO Wizard meter (2026-09-27): each registered account's light and its trailing hour against the 2,250 limit,
      plus all of them combined, from /session/gtow-accounts every 10 s. Click = the account list under Connection. */
   #gtow-meter { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: #8fa1b3; }
@@ -261,6 +268,7 @@
       <button data-mode="analysis" title="the instruments: table link, mirror, feed audit, protocol dump, recordings">Analysis</button>
     </nav>
     <div id="gtow-meter" title="GTO Wizard: each account's requests in the trailing hour against the 2,250 limit (a trip walls the account for about a day) — click for the account list"></div>
+    <div id="load-slot"><span id="load-chip" style="display:none"></span></div>
     <button id="conn-pill" title="every link the answers depend on — click for the list"><span class="dot"></span><span id="conn-pill-t">checking…</span></button>
   </div>
 
@@ -587,7 +595,8 @@
     const busy = j.chain && j.chain.attempting;
     const rows = (j.checks || []).map((c) => {
       const isG = c.id === "gtow";
-      const cls = c.ok ? "ok" : !c.required ? "off" : (isG && busy ? "busy" : "bad");
+      const cls = c.level === "warn" ? "busy" : c.level === "heavy" ? "bad" : c.level === "unknown" ? "off"
+        : c.ok ? "ok" : !c.required ? "off" : (isG && busy ? "busy" : "bad");
       const extra = isG && !c.ok ? (busy ? ' · <span class="spin">⟳</span> reconnecting on its own…' : j.chain?.lastResult && !j.chain.lastResult.connected ? ` · last attempt: ${esc(j.chain.lastResult.text || "failed")} — retries every 2 min` : "") : "";
       return `<div class="chk ${cls}"><span class="dot"></span><span><b>${esc(c.label)}</b><span class="d">${esc(c.detail)}${extra}</span>${isG ? gtowAccounts(c.sessions) : ""}</span><span class="req">${c.required ? "required" : "optional"}</span></div>`;
     });
@@ -1309,6 +1318,18 @@
     $("cp-msg").textContent = r.ok && r.side ? `beside the table (${r.side})${r.note ? " — " + r.note : ""}` : `not moved: ${r.why || "no table"}`;
   };
 
+  // the machine load chip (2026-10-07): amber "warn", red "heavy", gone on "ok" or when not measured
+  function renderLoad(l) {
+    const el = document.getElementById("load-chip");
+    const v = l && (l.verdict === "warn" || l.verdict === "heavy") ? l.verdict : null;
+    const txt = v ? `${v === "heavy" ? "⛔ heavy load" : "⚠ machine busy"} · ${l.text || "the study API is slowing down"}` : "";
+    if (el.dataset.sig === txt) return;
+    el.dataset.sig = txt;
+    el.className = v || "";
+    el.textContent = txt;
+    el.title = v ? `${txt} — answers may run past the clock: close test runs / wait for the API to settle` : "";
+    el.style.display = v ? "" : "none";
+  }
   function renderHealth(h) {
     const el = document.getElementById("health-banner");
     const issues = (h && h.issues) || [];
@@ -1411,6 +1432,7 @@
     try {
       const s = await (await fetch("/state?light=1")).json();
       renderHealth(s.health);
+      renderLoad(s.health && s.health.load);
       // Self-heal version skew: a long-lived panel window running old page
       // code against a newer server is how "[object Object]" bugs happen.
       if (s.panelVersion) {
