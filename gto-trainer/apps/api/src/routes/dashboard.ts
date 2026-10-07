@@ -2996,6 +2996,8 @@ app.post("/study-answer", async (c) => {
     mes_ev_gain_bb: sol.ok ? sol.mesEvGainBb ?? null : null, mes_exact: sol.ok ? (sol.mesExact == null ? null : sol.mesExact ? 1 : 0) : null,
     hero_pos: hero, depth: sol.ok ? sol.depth : depth, set_id: sol.ok ? sol.setId : null,
     decision_json: sol.ok && sol.actions ? JSON.stringify(sol.actions) : null, line: sol.ok ? sol.line : (sol.line ?? null), solve_id: sol.ok ? sol.solveId ?? null : null,
+    // the short all-in press (services/allInPress), as the answer log stores it
+    press: sol.ok && sol.press?.length ? JSON.stringify(sol.press) : null,
   };
   if (!(sol.ok && sol.decision)) {
     const reason = sol.ok ? (sol.notInRange ? "hero's hand isn't in the chart range at this node" : "no decision in response") : sol.reason;

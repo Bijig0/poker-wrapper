@@ -12,6 +12,7 @@ import { ensureEventTables, pollerEventRow } from "../../../../packages/data-roo
 import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type DecisionPath } from "./chainPath";
 import { SIX_MAX_STRATEGY_ID, isOnDemandStrategy } from "./strategies";
 import { apiUrl } from "./ports";
+import { withPressNote, type PressEntry } from "./allInPress";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
 export interface ChainBanner {
@@ -199,6 +200,8 @@ interface FastSolveLikeResponse {
         warning?: string | null;
         /** how the answer was produced (services/chainPath) */
         path?: DecisionPath;
+        /** a short all-in pressed as a raise to the tree's amount (services/allInPress) */
+        press?: PressEntry[];
       }
     | { ok: false; reason: string; street?: string; gametype?: string; depth?: number; line?: string; path?: DecisionPath }
     /* ok:true also carries rangeSource?: string (see fastSolve.ts) */
@@ -682,6 +685,8 @@ class StudyPoller {
       solveId: (sol?.ok === true ? sol.solveId : null) ?? null,
       sessionId: full.sessionId ?? null,
       chain: this.lastChainLine,
+      // THE SHORT ALL-IN PRESS (services/allInPress): how an ALLIN in this mix is pressed, when not as the shove
+      press: sol?.ok === true && sol.press?.length ? JSON.stringify(sol.press) : null,
     };
     // THE CHAIN PATH (services/chainPath): an answer carries the one fastSolve made; a decision with no answer is a
     // fault (its requests still counted) — unless the chain was never the question (hero acted first, hand over)
@@ -740,6 +745,9 @@ class StudyPoller {
     // both pieces' picks all come from this decision's one roll. A pure decision
     // (>=99%, e.g. the exploit overlay's pick) IS the answer, with no roll.
     const rolled = rollDecision({ ...sol, decision: sol.decision }, this.memoRoll(full, probe));
+    // THE SHORT ALL-IN PRESS (services/allInPress): the note opens the answer when the ROLLED pick is a pressed all-in
+    // (fastSolve put it on its own pick; the roll here is the one played)
+    const warning = sol.press?.length ? withPressNote(sol.warning, sol.press, rolled.pick) : sol.warning ?? null;
     const text = approx + buildAnswerText({
       street: full.hand!.street!,
       decision: { action: rolled.pick, frequency: rolled.frequency ?? undefined },
@@ -777,7 +785,7 @@ class StudyPoller {
       pick: rolled.pick,
       roll: rolled.roll,
       tier: sol.tier ?? (full.hand?.street === "preflop" ? "local-preflop" : null),
-      warning: sol.warning ?? null,
+      warning,
       failReason: null,
       pathVerdict: chainPath?.verdict ?? null,
       path: chainPath ? JSON.stringify(chainPath) : null,
@@ -807,7 +815,9 @@ class StudyPoller {
       uncertain: full.hand?.lineUncertain ?? null,
       // the panel's banner: this answer's verdict, and the session's clean count so far
       chain: this.chainBanner(chainPath, full.sessionId ?? null),
-    }, [(sol as { warning?: string | null }).warning ?? null, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
+      // how the wrapper presses an ALLIN of this mix when it is not the shove (relay.ts pickReady)
+      ...(sol.press?.length ? { press: sol.press } : {}),
+    }, [warning, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
       .filter((s): s is string => !!s).join(" · ") || null);
   }
 
@@ -1007,7 +1017,7 @@ class StudyPoller {
                        band?: [number, number] | null;
                        strategy?: string | null; source?: string | null; tier?: string | null;
                        chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
-                       uncertain?: string | null; chain?: ChainBanner | null } | null = null;
+                       uncertain?: string | null; chain?: ChainBanner | null; press?: PressEntry[] } | null = null;
   /** The solve's caveat (snapped sizes, generic ranges) for the current
    *  answer — repeated by the keep-alive alongside it. */
   private lastNote: string | null = null;
@@ -1161,7 +1171,7 @@ class StudyPoller {
               band?: [number, number] | null;
               strategy?: string | null; source?: string | null; tier?: string | null;
               chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
-              uncertain?: string | null; chain?: ChainBanner | null } | null,
+              uncertain?: string | null; chain?: ChainBanner | null; press?: PressEntry[] } | null,
     note?: string | null,
   ): Promise<void> {
     this.status.lastAnswer = text;
@@ -1196,6 +1206,8 @@ class StudyPoller {
           chartPick: this.lastExtra?.chartPick ?? null,
           uncertain: this.lastExtra?.uncertain ?? null,
           chain: this.lastExtra?.chain ?? null,
+          // only when the answer carries one: a body without it is byte-identical to before (services/allInPress)
+          ...(this.lastExtra?.press?.length ? { press: this.lastExtra.press } : {}),
           note: this.lastNote,
         }),
         signal: AbortSignal.timeout(3000),

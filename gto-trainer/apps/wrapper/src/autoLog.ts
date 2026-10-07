@@ -31,6 +31,8 @@ export type AutoDecision = {
   stale?: boolean | null;
   /** the decision's action count, from its key (k[4]) — what the API joins the answer on, with the street */
   keyActs?: number | null;
+  /** an ALLIN pressed SIZED TO THE TREE (2026-10-07, relay.actuateSizedAllIn): as / typed / why — absent otherwise */
+  sized?: { as: string | null; typed: string | null; why: string | null };
 };
 
 const KEEP_HANDS = 30;
@@ -86,10 +88,13 @@ export function notePress(key: string | null | undefined, p: {
   pick?: string | null; source?: string | null; ok: boolean; reason?: string | null;
   /** the press's own read (relay.lastPressRead): the strip's labels and the spot just before the click */
   buttons?: string[] | null; atPress?: string | null;
+  /** an ALLIN pressed SIZED TO THE TREE (relay.actuateSizedAllIn): how it went — only then, so other records are as before */
+  sized?: { as: string | null; typed: string | null; why: string | null } | null;
 }): void {
   const d = autoDecision(key);
   if (!d) return;
   d.tries += 1;
+  if (p.sized) d.sized = p.sized;
   if (p.buttons !== undefined || p.atPress !== undefined) {
     d.buttons = p.buttons ?? null;
     d.atPress = p.atPress ?? null;

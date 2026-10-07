@@ -34,6 +34,7 @@ import { handFacts, type DealtFact } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type PathReason, type StreetPath } from "./chainPath";
+import { allInSizeToTreeOn, pressReason, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
   checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
@@ -158,6 +159,10 @@ export type FastSolveResult =
       /** the chart answered although its fit folds the only limper / caller out (the exact tree failed to answer in
        *  its time box): what the rule found and how the exact tree's turn went */
       fitEmpties?: FitEmpties;
+      /** THE SHORT ALL-IN PRESS (2026-10-07, services/allInPress): an ALLIN in the mix that a collapsed tree capped below
+       *  hero's stack while a deeper villain outside that tree is live — the wrapper presses it as a raise to `amount`,
+       *  not as the shove. Absent = every action presses as before. */
+      press?: PressEntry[];
       /** POSTFLOP_DRY_RUN only (the input-mutation harness): the solver input's numbers, for the harness's oracle */
       dryRun?: {
         flopPot: number; flopStack: number; walkables: number; heroWeight: number | null; flopSeats: string[];
@@ -2315,6 +2320,21 @@ async function solvePostflopViaChainOnce(
         origin, board: tk.board, heroPos: heroPosName, plan: w.kind }, n.offTree);
     }
   }
+  // THE SHORT ALL-IN (services/allInPress, 2026-10-07): an ALLIN a collapsed tree capped below hero's stack, with a
+  // deeper villain outside that tree still live, is pressed as a raise to the tree's amount — never as the shove
+  const press: PressEntry[] = (() => {
+    if (!allInSizeToTreeOn() || !actions.some((a) => /^all[ -]?in\b/i.test(String(a.action)))) return [];
+    try {
+      const money = streetMoneyAt(hand, cur);
+      return shortAllInPress({ actions, heroPos: heroPosName, money,
+        trees: (blended ? alignedWalks : [ref]).map((w) => pressTreeOf(w, money)) });
+    } catch (e) {
+      console.error(`[allin-press] skipped: ${e instanceof Error ? e.message : e}`);
+      return [];
+    }
+  })();
+  const decision = pickWeightedAction(actions);
+  if (press.length) sixNote = withPressNote(sixNote, press, decision?.action ?? null);
   return { why: null, res: {
     ok: true,
     source: "gtow-api-postflop",
@@ -2329,11 +2349,12 @@ async function solvePostflopViaChainOnce(
     pos: j.action_solutions?.[0]?.action?.position ?? null,
     heroClass: heroClassOf(hand),
     actions,
-    decision: pickWeightedAction(actions),
+    decision,
+    ...(press.length ? { press } : {}),
     approx: true,
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
-      ...(rerootAlso.length ? { postflopAlso: rerootAlso } : {}),
+      ...(rerootAlso.length || press.length ? { postflopAlso: [...rerootAlso, ...(press.length ? [pressReason(press, cur)] : [])] } : {}),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,
@@ -2349,6 +2370,20 @@ async function solvePostflopViaChainOnce(
   // collapses are left out: their answer is a mix of trees, not one tree a local solve could reproduce.
   mesInput: cur === "river" && walks.length === 1 && heroComboIdx != null && ref.trace
     ? { trace: ref.trace, preTokens, heroCards } : undefined };
+}
+
+/**
+ * ONE SOLVED WALK AS THE SHORT ALL-IN DETECTION READS IT (services/allInPress): the table seats its tree holds (a merged
+ * seat stands for its members), and hero's all-in at his node in the TABLE's street terms (treeAllInTo).
+ */
+export function pressTreeOf(w: { kind: string | null; trace?: ChainTrace; members?: Record<string, string[]> }, money: StreetMoney): TreeAllIn {
+  const sp = w.trace?.spec;
+  const named = [sp?.oopPos, sp?.midPos, sp?.ipPos].filter((x): x is string => !!x);
+  const seats = [...new Set(named.flatMap((p) => w.members?.[p] ?? [p]))];
+  const node = [...(w.trace?.nodes ?? [])].reverse().find((n) => n.heroNode) ?? null;
+  const inTree = new Set(seats.map((s) => s.toUpperCase()));
+  const deep = money.villains.filter((v) => inTree.has(v.pos.toUpperCase()) && v.chips != null).sort((a, b) => b.chips! - a.chips!)[0];
+  return { plan: w.kind, seats, to: treeAllInTo(node, money.heroCommitted), deepest: deep ? { pos: deep.pos, chips: deep.chips! } : null };
 }
 
 /**

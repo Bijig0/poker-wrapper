@@ -638,6 +638,9 @@ export function buildApp(): Hono {
     st.uncertain = live && typeof b.uncertain === "string" && b.uncertain ? b.uncertain : null;
     st.prov = live ? Object.fromEntries(["band", "strategy", "source", "tier", "chart", "exploitPick", "chartPick"].map((k) => [k, b[k] ?? null])) : null;
     st.decisionKey = live && typeof b.decisionKey === "string" ? b.decisionKey : null;
+    // THE SHORT ALL-IN PRESS (2026-10-07): how an ALLIN of this answer's mix is pressed when a collapsed tree capped it
+    // below hero's stack (relay.sizedAllInPlan) — it lives and dies with the answer
+    st.press = live && Array.isArray(b.press) ? b.press.filter((x: any) => x && typeof x === "object" && typeof x.action === "string") : null;
     st.handId = live && (Number.isInteger(b.handId) || typeof b.handId === "boolean") ? b.handId : null;
     // the decision's stored solve and the client's hand id (2026-09-30): /state's panelAnswerRef, which the side panel
     // fetches the decision's ranges by (the study API's /api/dashboard/live-node)

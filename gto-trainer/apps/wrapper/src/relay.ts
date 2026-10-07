@@ -507,6 +507,26 @@ export function pickPlan(pick: string | null | undefined, potBb: number | null =
   return null;
 }
 
+/**
+ * THE SHORT ALL-IN, SIZED TO THE TREE (2026-10-07, Brady: "option 1" — the API's services/allInPress). A 4-/5-way street
+ * is solved on three-seat trees, and a tree caps a seat's all-in at the deepest other seat IN it: with a deeper player
+ * dropped from the tree but live at the table, the tree's "ALLIN 22" is a raise to 22 — while an all-in pick is pressed
+ * here as the client's ALL-IN preset + confirm, hero's WHOLE stack (stress-500 brief_I-004: 97.5bb into two 100bb players
+ * the tree never saw). Such an answer carries `press` entries; an ALLIN pick matching one is pressed as a raise TO the
+ * entry's amount (the API has already lifted it to the table's smallest legal raise). null = press as before.
+ */
+export function sizedAllInPlan(pick: string | null | undefined, press: unknown, plan: Record<string, any> | null): Record<string, any> | null {
+  if (!pick || !plan || plan.kind !== "action" || plan.label !== "all-in" || !Array.isArray(press) || !press.length) return null;
+  const norm = (x: unknown) => String(x ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+  const e: any = press.find((x: any) => x && x.kind === "raise-to" && norm(x.action) === norm(pick));
+  const amt = Number(e?.amount);
+  if (!e || !Number.isFinite(amt) || amt <= 0) return null;
+  return {
+    kind: "raise-to", amount: fmtFixed(amt, 2).replace(/0+$/, "").replace(/\.$/, ""), verb: e.verb === "bet" ? "bet" : "raise",
+    sized: { action: String(e.action), treeAmount: e.treeAmount ?? null, heroAllIn: e.heroAllIn ?? null, why: String(e.why ?? "") },
+  };
+}
+
 /** Can the current pick be executed right now? Every guard names its reason. */
 export function pickReady(): Record<string, any> {
   const st = S.study;
@@ -560,8 +580,10 @@ export function pickReady(): Record<string, any> {
     return no(`pick was for ${pyStr(kStreet)} after ${kN} actions; table is ${h.street} after ${nActs}`);
   }
   out.kN = kN;
-  const plan = pickPlan(st.pick, (h.currentNode || {}).pot ?? null);
+  let plan = pickPlan(st.pick, (h.currentNode || {}).pot ?? null);
   if (!plan) return no(`cannot map pick ${pyReprStr(String(st.pick))} to a table action`);
+  // an ALLIN the answer sized to its tree (sizedAllInPlan) is a raise to that amount, not the shove
+  plan = sizedAllInPlan(st.pick, st.press, plan) ?? plan;
   // the hand the pick was made for must be the hand OUR table shows (holeCardsRefusal) — checked here against the
   // last read, so auto waits (and says why) instead of firing, and again on the press's own read
   if (!isCp()) {
@@ -583,6 +605,7 @@ export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): P
     return CP.actuate(plan, { auto, allowReal: auto && autoAllowance().live });
   }
   const g: ActOpts = guard.cards !== undefined ? { cards: guard.cards, strict: guard.strict } : {};
+  if (plan.sized) return actuateSizedAllIn(plan, g);
   if (plan.kind === "raise-to") return actuateRaiseTo(plan, g);
   if (plan.label === "all-in") return actuateAllIn(g);
   if (plan.label === "call") return actuateCall(g);
@@ -612,6 +635,29 @@ export async function actuateRaiseTo(plan: Record<string, any>, guard: ActOpts =
   const verb = plan.verb === "bet" ? "bet" : "raise";
   return { ...c, kind: "all-in-raise", as: "all-in", typed: plan.amount,
            why: `the only ${verb} the client offers is ${pyStr(c.clicked ?? "ALL-IN")} (no bet field, no RAISE/BET control) — every ${verb} is hero's whole stack` };
+}
+
+/** AN ALLIN SIZED TO THE TREE (sizedAllInPlan): typed into the client's bet field at the tree's amount and confirmed on
+ *  its RAISE/BET control (raiseTo, strict — a size the client clamps is refused, never pressed at another size). The
+ *  result carries `kind: "sized-all-in"`, `as` ("raise-to", or "all-in" when the client capped the size at hero's stack),
+ *  `typed` and `why`. NO BET FIELD on the strip (FOLD / CALL only, FOLD / ALL-IN, the client's allInRaiseButton — the
+ *  smallest raise is hero's whole stack): no sized raise exists there, so the plain all-in press runs with its own
+ *  fallbacks (actuateAllIn) and the result says the sized press was not possible (`sizedPress`). */
+export async function actuateSizedAllIn(plan: Record<string, any>, guard: ActOpts = {}): Promise<Record<string, any>> {
+  const verb = plan.verb === "bet" ? "bet" : "raise";
+  const res = await raiseTo(plan.amount, true, guard);
+  if (res.ok) {
+    return { ...res, kind: "sized-all-in", as: res.as ?? "raise-to", typed: res.typed ?? plan.amount,
+             why: `ALLIN sized to the tree: ${verb} to ${pyStr(plan.amount)}, not hero's whole stack — ${pyStr(plan.sized?.why ?? "")}` };
+  }
+  if (!res.noInput) {
+    return { ...res, kind: "sized-all-in", typed: res.typed ?? plan.amount,
+             sizedPress: `the ${verb} to ${pyStr(plan.amount)} was refused — ${pyStr(res.reason ?? null)}` };
+  }
+  const not = `the sized press was not possible (${pyStr(res.reason ?? null)}) — pressed as the plain ALL-IN`;
+  const all = await actuateAllIn(guard);
+  if (!all.ok) return { ...all, sizedPress: not, reason: `${not}: ${pyStr(all.reason ?? null)}` };
+  return { ...all, as: all.as ?? "all-in", sizedPress: not, why: all.why ? `${not}; ${pyStr(all.why)}` : not };
 }
 
 /** Every turn control but FOLD and the client's own ALL-IN — one of these beside the ALL-IN means it is not the call.
@@ -860,11 +906,16 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const rec: Record<string, any> = { at: nowMs(), source, pick, plan, ok, result: res, hand: S.handNo, waitedS, key,
                                        outcome: ok ? "pending" : "refused" };
     S.study.lastExec = rec;
-    AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null });
+    // an ALLIN sized to the tree: what was pressed, recorded beside the press (only then — other records as before)
+    const sized = plan.sized ? { as: res.as ?? null, typed: res.typed ?? null, why: res.why ?? res.sizedPress ?? res.reason ?? null } : null;
+    AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null,
+                          ...(sized ? { sized } : {}) });
     if (ok) {
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
-      const how = res.as === "call" ? ` — as a CALL: ${pyStr(res.why ?? "the call is hero's whole stack")}`
+      const how = res.kind === "sized-all-in" ? ` — SIZED TO THE TREE: ${pyStr(res.why ?? "")}`
+        : res.sizedPress ? ` — ${pyStr(res.sizedPress)}`
+        : res.as === "call" ? ` — as a CALL: ${pyStr(res.why ?? "the call is hero's whole stack")}`
         : res.kind === "all-in-raise" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the client's only raise is hero's whole stack")}`
         : res.as === "all-in" && plan.kind === "raise-to" ? ` — the client capped ${pyStr(res.typed ?? plan.amount)} at hero's stack: ALL-IN ${pyStr(res.field ?? "")}`
         : res.as === "all-in" && plan.label === "call" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the call is hero's whole stack")}` : "";
@@ -887,7 +938,8 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     }
     if (S.session.id) {
       S.sessions.event(S.session.id, ok ? "pick-executed" : "pick-refused", { source, pick, plan, hand: S.handNo,
-                                                                             waitedS, reason: ok ? null : res.reason ?? null });
+                                                                             waitedS, reason: ok ? null : res.reason ?? null,
+                                                                             ...(sized ? { sized } : {}) });
     }
     log(`[pick] ${source}: ${pyRepr(pick)} -> ${pyRepr(res)}`);
     return { ok, ...rec };

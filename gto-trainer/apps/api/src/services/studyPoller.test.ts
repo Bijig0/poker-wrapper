@@ -118,6 +118,46 @@ describe("studyPoller", () => {
     expect(studyPoller.getStatus().lastAnswer).toBe(body.text);
   });
 
+  // THE SHORT ALL-IN PRESS (services/allInPress, 2026-10-07): the answer's press rides to the wrapper, and the note opens
+  // with "SHOVE SIZED TO THE TREE:" when the ROLLED pick is the pressed all-in — and not when it is another action
+  it("pushes the answer's press, and opens the note when the rolled pick is the pressed all-in", async () => {
+    ingestResponse = { ok: true, studyAnswersOn: true, hero: { toAct: true }, hand: { street: "flop" } };
+    const press = [{ action: "ALLIN 22", kind: "raise-to", amount: 30, verb: "raise", treeAmount: 22, heroAllIn: 97.5, minRaiseTo: 30,
+      plan: "ghost:CO + ghost:BTN", outside: [{ pos: "CO", chips: 97.5 }], why: "the tree's all-in is 22; CO (97.5) is outside the tree and deeper" }];
+    const solution = (pickAllIn: boolean) => ({
+      ok: true, warning: "5-WAY APPROXIMATION — collapsed", press,
+      decision: { action: pickAllIn ? "ALLIN 22" : "CALL 15", frequency: 100 },
+      actions: [{ action: "CALL 15", frequency: pickAllIn ? 0 : 100 }, { action: "ALLIN 22", frequency: pickAllIn ? 100 : 0 }],
+    });
+    fastSolveResponse = { ok: true, hero: { toAct: true }, hand: { street: "flop" }, solution: solution(true) };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(20);
+    let body = pushCalls().at(-1)!.body as { pick: string; note: string | null; press?: unknown };
+    expect(body.pick).toBe("ALLIN 22");
+    expect(body.press).toEqual(press);
+    expect(body.note).toStartWith("SHOVE SIZED TO THE TREE: pressed as a raise to 30bb, not hero's 97.5bb — ");
+    expect(body.note).toEndWith(" · 5-WAY APPROXIMATION — collapsed");
+    await studyPoller.stop();
+    calls = [];
+    fastSolveResponse = { ok: true, hero: { toAct: true }, hand: { street: "flop", actions: [1] }, solution: solution(false) };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(20);
+    body = pushCalls().at(-1)!.body as { pick: string; note: string | null; press?: unknown };
+    expect(body.pick).toBe("CALL 15");
+    expect(body.press).toEqual(press);                  // the press rides along: the wrapper matches it to the pick
+    expect(body.note).toBe("5-WAY APPROXIMATION — collapsed");
+  });
+
+  it("an answer without a press pushes no press key (the body is as before)", async () => {
+    ingestResponse = { ok: true, studyAnswersOn: true, hero: { toAct: true }, hand: { street: "flop" } };
+    fastSolveResponse = { ok: true, hero: { toAct: true }, hand: { street: "flop" },
+      solution: { ok: true, decision: { action: "Check", frequency: 100 }, actions: [{ action: "Check", frequency: 100 }] } };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(20);
+    const body = pushCalls().at(-1)!.body as Record<string, unknown>;
+    expect("press" in body).toBe(false);
+  });
+
   // Hand 4919236052 asked the same unanswerable question 13 times, ~1 s apart, and got the
   // same sentence back every time — clock and solve budget spent on a question whose
   // answer could not change, behind a blank panel. Re-asking is only worth something when
