@@ -14,6 +14,7 @@ import { checkHeroCombo } from "./chainChecks";
 import { heroAbsentAnswer, heroAbsentPick, HERO_ABSENT_TAG } from "./heroAbsent";
 import { dropShortAllIns, type PressEntry } from "./allInPress";
 import { solveStore } from "./solveStore";
+import { OLD_MENUS, useMenus } from "../test/menuEnv";
 
 interface Fixture {
   heroComboIdx: number; board: string; pot: number; stack: number; rake: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };
@@ -57,9 +58,8 @@ const turnEntry = (input: CustomTreeInput) => (gtowApi.buildCustomTree(input).be
 
 // the fixture's trees are the AUTOMATIC heads-up ones it was stored from: HU_FIXED_MENU=off for this file (the fixed
 // heads-up menu of 2026-10-08 and its re-tree: gtowApi.huFixedMenu.test.ts)
-const huMenuBefore = process.env.HU_FIXED_MENU;
-beforeAll(() => { process.env.HU_FIXED_MENU = "off"; });
-afterAll(() => { if (huMenuBefore == null) delete process.env.HU_FIXED_MENU; else process.env.HU_FIXED_MENU = huMenuBefore; });
+// heads-up/off and three-way B on the gross pot (the three-seat case was written for menu B; menus F / C / net: gtowApi.menus.test.ts)
+useMenus({ ...OLD_MENUS, HU_FIXED_MENU: "off" });
 let restore: (() => void) | null = null;
 const envBefore = process.env.HERO_STREET_AS_ANSWERED;
 afterEach(() => {

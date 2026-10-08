@@ -1,4 +1,4 @@
-import { bbAmount, gtowApi, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
+import { bbAmount, gtowApi, postflopNodeTimeoutMs, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
 import { solveStore } from "./solveStore";
 import { isDurableKey } from "./handFacts";
 import { servedActionIndex, servedHeroStrategy, type ServedMix } from "./servedStrategy";
@@ -1391,7 +1391,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // every node read is accounted for: the cache it came from, or how long its poll took
     const readNode = async (solId: string, codesStr: string) => {
       const t = Date.now();
-      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, undefined, "walk");
+      // the node clock: 12 s heads-up, 15 s on a 3-player tree (menu C, 2026-10-08 — gtowApi.postflopNodeTimeoutMs)
+      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, postflopNodeTimeoutMs(n), "walk");
       const ms = Date.now() - t;
       const src: NodeSource | "failed" = r.ok ? (r.src ?? (r.cached ? "cache" : "fetched")) : "failed";
       if (src === "fetched" && fetched) {
@@ -1408,8 +1409,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       return { r, src, ms };
     };
 
-    // The size-free tree for this street: the fixed 33/75 | 60 menu heads-up (HU_FIXED_MENU, 2026-10-08; AUTOMATIC when
-    // off) and three-way (gtowApi supplies it).
+    // The size-free tree for this street: the fixed menu heads-up (HU_FIXED_MENU: F 25/33/50/75/100/125/150 | 60/100 since
+    // 2026-10-08 evening, b = 33/75 | 60, AUTOMATIC when off) and three-way (THREEWAY_MENU: C flop 25/75/125, turn / river 33/75/125 | 60; b = 33/75 | 60),
+    // bets on the pot after rake (MENU_POT) — gtowApi supplies it.
     const baseInput = {
       board: streetBoard,
       pot,

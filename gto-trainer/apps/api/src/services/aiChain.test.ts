@@ -627,7 +627,9 @@ describe("the trace records each street's tree request", () => {
     expect(sent.players[1].range.weight).toBeLessThan(sent.players[0].range.weight);
     expect(sent.bet_sizes.street_bet_sizes.map((x: any) => [x.street, x.position_bet_sizes[0].type]))
       .toEqual([["FLOP", "FIXED"], ["TURN", "FIXED"], ["RIVER", "FIXED"]]);   // the heads-up fixed menu (HU_FIXED_MENU, 2026-10-08)
-    expect(sent.bet_sizes.street_bet_sizes[0].position_bet_sizes[0].bet_sizes).toEqual(["33%", "75%", "114.4bb"]);
+    // heads-up menu F on the pot after rake (2026-10-08 evening): pot 20 raked 5% capped 0.9 -> net 19.1, every bet x 0.955
+    expect(sent.bet_sizes.street_bet_sizes[0].position_bet_sizes[0].bet_sizes).toEqual(["23.9%", "31.5%", "47.8%", "71.6%", "95.5%", "119.4%", "143.3%", "114.4bb"]);
+    expect(sent.bet_sizes.street_bet_sizes[0].position_bet_sizes[0].raise_sizes).toEqual(["60%", "100%", "114.4bb"]);
   });
 
   it("a spec without a rake records the default the builder sent, not nothing", async () => {

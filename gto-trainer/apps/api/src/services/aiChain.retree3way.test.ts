@@ -10,6 +10,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import fxJson from "./__fixtures__/retreeCoreSrp3way003.json";
 import { gtowApi, type CustomTreeInput } from "./gtowApi";
 import { dropAnsweredNodes, forgetCheckpoints, solveAiChain, type AiChainSpec } from "./aiChain";
+import { OLD_MENUS, useMenus } from "../test/menuEnv";
+
+// the fixture's trees are three-way menu B on the gross pot (menu C / net: gtowApi.menus.test.ts)
+useMenus(OLD_MENUS);
 
 interface Fixture {
   heroComboIdx: number; board: string; pot: number; stack: number; rake: { pct_of_pot: number; cap_in_chips: number; preflop_rake_type: string | null };

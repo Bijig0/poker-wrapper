@@ -51,7 +51,7 @@ import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
 import { mesRiverLookup } from "./mesRiver";
 import { rakeCapCents } from "./profiles";
 import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
-import { THREE_WAY_SIZES } from "./gtowApi";
+import { menuPotMode, threeWaySizes } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
 import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
@@ -1994,7 +1994,7 @@ async function solvePostflopViaChainOnce(
         seatStacks: stacksOf(ordered.map((p) => ({ pos: p })), behindFlop) }];
       const note =
         `3-way flop — GTO Wizard AI 3-player tree (Ultra): wager-free streets use fixed bets of ` +
-        `${THREE_WAY_SIZES.bet.join("/")} pot and ${THREE_WAY_SIZES.raise.join("/")} raises, each seat's all-in listed; ` +
+        `${threeWaySizes("FLOP").bet.join("/")} pot${threeWaySizes("FLOP").bet.join() !== threeWaySizes("TURN").bet.join() ? ` on the flop, ${threeWaySizes("TURN").bet.join("/")} on the turn and river` : ""}${menuPotMode() === "net" ? " (on the pot after rake)" : ""} and ${threeWaySizes().raise.join("/")} raises, each seat's all-in listed; ` +
         (behindFlop ? `each seat at its own stack (${ordered.map((p) => `${p} ${behindFlop[p] ?? fieldStack}`).join(" / ")})`
           : `every seat modelled at the effective stack (${fieldStack}bb)`);
       sixNote = sixNote ? `${sixNote} · ${note}` : note;

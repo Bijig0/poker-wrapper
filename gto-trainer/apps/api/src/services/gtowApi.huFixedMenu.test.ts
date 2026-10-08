@@ -11,6 +11,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import fx from "./__fixtures__/huMenuControlBodies.e50e3b8.json";
 import { GtowApi, HU_FIXED_MENU_TAG, huFixedMenuOn, type CustomTreeInput, type PlayedWager } from "./gtowApi";
 import { retreeInputs } from "./aiChain";
+import { OLD_MENUS, useMenus } from "../test/menuEnv";
+
+// THIS FILE IS MENU B (HU_FIXED_MENU=b since 2026-10-08 evening; "on" here = b), three-way B, the gross pot — the
+// request of fada815. Menus F / C / net, the list cap and the node clock: gtowApi.menus.test.ts
+useMenus(OLD_MENUS);
 
 const api = new GtowApi();
 const ones = () => new Array(1326).fill(1);
@@ -29,11 +34,11 @@ const lists = (p: any) => [p.bet_sizes, p.raise_sizes, p.second_raise_sizes, p.t
 
 const before = process.env.HU_FIXED_MENU;
 afterEach(() => { if (before == null) delete process.env.HU_FIXED_MENU; else process.env.HU_FIXED_MENU = before; });
-const on = () => { delete process.env.HU_FIXED_MENU; };
+const on = () => { process.env.HU_FIXED_MENU = "b"; };
 const off = () => { process.env.HU_FIXED_MENU = "off"; };
 
 describe("the switch", () => {
-  it("unset = on; 'off' (any case, spaces) = off; anything else on", () => {
+  it("unset = on (menu F since 2026-10-08 evening); 'off' (any case, spaces) = off; anything else on", () => {
     expect(huFixedMenuOn({})).toBe(true);
     expect(huFixedMenuOn({ HU_FIXED_MENU: "on" })).toBe(true);
     expect(huFixedMenuOn({ HU_FIXED_MENU: " OFF " })).toBe(false);

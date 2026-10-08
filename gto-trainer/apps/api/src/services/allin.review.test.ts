@@ -12,6 +12,10 @@ import { chainPathChecks, heroVsAggressor, runSeatbelt, type FastSolveResult } f
 import { gtowApi, GtowApi } from "./gtowApi";
 import { forgetCheckpoints, matchWalkAction, solveAiChain, StreetState, type AiChainSpec, type ChainTrace } from "./aiChain";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
+import { OLD_MENUS, useMenus } from "../test/menuEnv";
+
+// written for menu B (heads-up and three-way) on the gross pot — the all-in rules hold on every menu (gtowApi.menus.test.ts)
+useMenus(OLD_MENUS);
 
 // ---- 1 ---------------------------------------------------------------------------------------------------------
 const answer = (potOff: boolean, how: "first" | "hit" = "first"): { res: FastSolveResult; why: null } => ({

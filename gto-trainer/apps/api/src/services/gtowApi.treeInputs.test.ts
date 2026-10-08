@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { bbAmount, describeTreeChange, GtowApi, seatAllIns, treeFingerprint, treeStacksOf, TREE_SETTINGS, type CustomTreeInput } from "./gtowApi";
+import { OLD_MENUS, useMenus } from "../test/menuEnv";
+
+// written for menu B (heads-up and three-way) on the gross pot — menus F / C / net: gtowApi.menus.test.ts
+useMenus(OLD_MENUS);
 
 /**
  * THE TREE REQUEST IS THE TABLE'S STATE (2026-10-03, hand 4922087007: HJ shoved 28 on the flop, the tree had every seat

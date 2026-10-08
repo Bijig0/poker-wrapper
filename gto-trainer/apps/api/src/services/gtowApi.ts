@@ -279,8 +279,10 @@ class GtowApi {
       treeStacksOf(input), input.played ?? null, TREE_SETTINGS_TAG,
       // a re-tree's carried menus (2026-10-08, retree-consistency) — only when present, so every other key is unchanged
       ...(input.carry ? [input.carry] : []),
-      // the heads-up fixed menu (2026-10-08, HU_FIXED_MENU) — only when it applies, so every other key is unchanged
-      ...(huFixedMenuApplies(input) ? [HU_FIXED_MENU_TAG] : []),
+      // the heads-up fixed menu (2026-10-08, HU_FIXED_MENU: B's tag as before, F its own) — only when it applies, so every
+      // other key is unchanged; the three-way menu C and the net-pot sizes likewise (THREEWAY_MENU, MENU_POT): with
+      // HU_FIXED_MENU=b, THREEWAY_MENU=b and MENU_POT=gross every key is fada815's. Deterministic: identical tables, one key.
+      ...menuTagsOf(input),
     ]);
   }
 
@@ -310,6 +312,10 @@ class GtowApi {
    *    played: every seat keeps that menu and its OWN wagers are added at their levels (the union the re-tree carry
    *    builds from a FIXED tree — the first tree of a played street and the re-tree are the same request); a base bet
    *    within the walk's tolerance of the seat's own played bet is dropped for it (one size, the one played).
+   *  - THE MENUS SINCE 2026-10-08 EVENING (Brady's decisions on the menu study): heads-up menu F (HU_FIXED_MENU=f: bets
+   *    25/33/50/75/100/125/150%, raises 60/100%), three-way menu C (THREEWAY_MENU=c: flop bets 25/75/125%, turn / river 33/75/125%, raises 60%), every
+   *    BET size of our menus sent on the pot after rake (MENU_POT=net: onNetPot), every list held to GTO Wizard's
+   *    10-entry cap (capSizeList, `[menu-cap]`). Each switch's old value gives the request before, byte for byte.
    */
   buildCustomTree(input: CustomTreeInput) {
     // Seats in acting order. A third seat makes it GTO Wizard's 3-player tree ("OOP+1" between the two).
@@ -329,11 +335,37 @@ class GtowApi {
       return out;
     };
     const LISTS = ["bet_sizes", "raise_sizes", "second_raise_sizes", "third_plus_raise_sizes"] as const;
-    const fixedOf = (i: number, lists: (readonly string[] | null)[]) => {
+    /** GTO Wizard's 10-entry cap per list (capSizeList): on a played street, past the cap the menu size nearest a played
+     *  size goes — amounts compared in bb: a bet % on the street's pot, a raise % as raise-to over the wager it faces */
+    const capped = (i: number, lv: number, list: string[], ws: PlayedWager[] | null, s: string | null): string[] => {
+      if (list.length <= GTOW_SIZE_LIST_MAX) return list;
+      const played = (ws ?? []).map((w) => bbAmount(w.to));
+      const facing = lv === 0 ? 0 : (ws?.[Math.min(lv, 3) - 1]?.to ?? 0);
+      const toBb = (x: string): number | null => {
+        const a = /^(\d+(?:\.\d+)?)bb$/.exec(x);
+        if (a) return Number(a[1]);
+        const m = /^(\d+(?:\.\d+)?)%$/.exec(x);
+        if (!m) return null;
+        return lv === 0 ? (Number(m[1]) / 100) * input.pot : facing + (Number(m[1]) / 100) * (input.pot + 2 * facing);
+      };
+      const r = capSizeList(list, played, toBb);
+      if (r.dropped.length) {
+        logMenuCap(`[menu-cap] ${input.board} ${s ?? input.startingStreet ?? "FLOP"} ${seats[i]} ${LISTS[lv]}: ${list.length} sizes > ${GTOW_SIZE_LIST_MAX} ` +
+          `(GTO Wizard's cap, all-in included) — dropped ${r.dropped.join(", ")} (nearest the played ${played.join(", ") || "none: nearest the all-in"}); sent [${r.list.join(", ")}]`);
+      }
+      return r.list;
+    };
+    const fixedOf = (i: number, lists: (readonly string[] | null)[], ws: PlayedWager[] | null = null, s: string | null = null) => {
       const o: Record<string, unknown> = { position: seats[i]!, type: "FIXED" as const, use_fixed_sizes: true, allow_limp: false };
-      LISTS.forEach((k, lv) => { o[k] = lists[lv] == null ? null : withAllIn(i, lists[lv]!); });
+      LISTS.forEach((k, lv) => { o[k] = lists[lv] == null ? null : capped(i, lv, withAllIn(i, lists[lv]!), ws, s); });
       return o;
     };
+    // OUR MENUS (2026-10-08 evening): three-way C or B (THREEWAY_MENU), heads-up F or B (HU_FIXED_MENU), their BET sizes on
+    // the pot after rake (MENU_POT=net: onNetPot at this tree's pot and rake — see the header of MENU_POT_NET_TAG)
+    const potFactor = menuOnNetPot(input) ? netPotFactor(input.pot, input.rake ?? DEFAULT_TREE_RAKE) : 1;
+    // three-way C is street-specific (flop 25/75/125, turn and river 33/75/125): the bet list by street, one raise list
+    const TW = threeWaySizes();
+    const twBetOf = (s: "FLOP" | "TURN" | "RIVER") => onNetPot(threeWaySizes(s).bet, potFactor);
     const auto = (i: number) => ({ position: seats[i]!, type: "AUTOMATIC" as const, allow_limp: false });
     // FIXED sizing pins a street's bets to an exact % of pot (validated format: bet_sizes:["90%"]) on every seat — the
     // street-root fallback's pin (fastSolve). With the all-in listed beside it.
@@ -347,14 +379,16 @@ class GtowApi {
     // A 3-player tree is FIXED on every street or the API refuses it (422 "Dynamic/Automatic sizings is
     // currently not supported for 3+ players", probed 2026-09-19), so a wager-free street gets this grid
     // where a heads-up tree would get AUTOMATIC.
-    const threeWay = (i: number) => fixedOf(i, [THREE_WAY_SIZES.bet, THREE_WAY_SIZES.raise, THREE_WAY_SIZES.raise, THREE_WAY_SIZES.raise]);
+    const threeWay = (i: number, s: "FLOP" | "TURN" | "RIVER") => fixedOf(i, [twBetOf(s), TW.raise, TW.raise, TW.raise]);
     // A multi-size FIXED grid for a heads-up wager-free street (2026-09-19): the alternative to AUTOMATIC, opt-in per
     // tree (huGrid; the collapse-calibration harness).
     const grid = (i: number, g: { bet: readonly string[]; raise: readonly string[] }) => fixedOf(i, [g.bet, g.raise, g.raise, g.raise]);
     // THE HEADS-UP FIXED MENU (2026-10-08, HU_FIXED_MENU): where a heads-up seat was AUTOMATIC it is FIXED at
     // HU_FIXED_SIZES instead (+ its all-in), so the menu is ours and the same on every tree of the hand
     const huFix = huFixedMenuApplies(input);
-    const huBase = (lv: number): readonly string[] => (lv === 0 ? HU_FIXED_SIZES.bet : HU_FIXED_SIZES.raise);
+    const HU = huMenuSizes();
+    const huBet = onNetPot(HU.bet, potFactor);
+    const huBase = (lv: number): readonly string[] => (lv === 0 ? huBet : HU.raise);
     const huFixed = (i: number) => fixedOf(i, [huBase(0), huBase(1), huBase(2), huBase(3)]);
     /** a heads-up fixed bet list with the seat's own played bet: a base % within the walk's tolerance (5% or 0.15bb,
      *  matchActionLoose) of that amount on the street's starting pot is the same size — the played amount stays */
@@ -390,12 +424,12 @@ class GtowApi {
       if (input.mid && carried) {
         return seats.map((_, i) => {
           const cs = carried.seats[i] ?? null;
-          return cs ? fixedOf(i, carriedLists(cs, i, ws)) : fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? THREE_WAY_SIZES.bet : THREE_WAY_SIZES.raise; }));
+          return cs ? fixedOf(i, carriedLists(cs, i, ws, s), ws, s) : fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? twBetOf(s) : TW.raise; }), ws, s);
         });
       }
       if (input.mid || input.huGrid) {
-        const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : THREE_WAY_SIZES;
-        return seats.map((_, i) => fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? base.bet : base.raise; })));
+        const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : { bet: twBetOf(s), raise: TW.raise };
+        return seats.map((_, i) => fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? base.bet : base.raise; }), ws, s));
       }
       if (huFix) {
         // THE HEADS-UP FIXED MENU: each seat its base menu with its own wagers added — or, on a re-tree, the menus
@@ -403,13 +437,13 @@ class GtowApi {
         const own = (i: number, lv: number) => ws.filter((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
         return seats.map((_, i) => {
           const cs = carried?.seats[i] ?? null;
-          const lists = cs ? carriedLists(cs, i, ws) : [0, 1, 2, 3].map((lv) => [...new Set([...huBase(lv), ...own(i, lv)])]);
-          return fixedOf(i, lists.map((l, lv) => (lv === 0 && l ? huBetUnion(l, s, own(i, 0)) : l)));
+          const lists = cs ? carriedLists(cs, i, ws, s) : [0, 1, 2, 3].map((lv) => [...new Set([...huBase(lv), ...own(i, lv)])]);
+          return fixedOf(i, lists.map((l, lv) => (lv === 0 && l ? huBetUnion(l, s, own(i, 0)) : l)), ws, s);
         });
       }
       return seats.map((_, i) => {
         const cs = carried?.seats[i] ?? null;
-        if (cs) return fixedOf(i, carriedLists(cs, i, ws));
+        if (cs) return fixedOf(i, carriedLists(cs, i, ws, s), ws, s);
         // AUTOMATIC ON PURPOSE — Brady's decision, 2026-10-03: the seat that has not wagered on the street is AUTOMATIC
         // even where that means no all-in at its node (probed: GTO Wizard's automatic sizing decides whether to offer
         // one, `add_allin` does not change it, and the 3 nodes measured that lost it had played the all-in 0%). The
@@ -426,9 +460,12 @@ class GtowApi {
           // when the level below went null too, else give the base raise list
           else if (lv >= 2 && lists[lv - 1] != null) lists[lv] = THREE_WAY_SIZES.raise;
         }
-        return fixedOf(i, lists);
+        return fixedOf(i, lists, ws, s);
       });
     };
+    /** the base lists a carried seat's missing level takes: this tree's menu (three-way / heads-up fixed), else B as before */
+    const baseBet = (s: "FLOP" | "TURN" | "RIVER"): readonly string[] => (input.mid ? twBetOf(s) : huFix ? huBet : THREE_WAY_SIZES.bet);
+    const baseRaise: readonly string[] = input.mid ? TW.raise : huFix ? HU.raise : THREE_WAY_SIZES.raise;
     /**
      * A CARRIED SEAT'S LISTS (retree-consistency, 2026-10-08). Each level: the earlier tree's list for the seat — as it was
      * SENT (a FIXED seat: carried exactly, a null list stays null) or as GTO Wizard RESOLVED it at that tree's nodes (an
@@ -436,7 +473,7 @@ class GtowApi {
      * the earlier tree never showed for an AUTOMATIC seat: its bet takes the street's bet as a seat that wagered does
      * today, its raises the base raise list (the size we use wherever no size was chosen by GTO Wizard or played).
      */
-    const carriedLists = (cs: CarriedSeat, i: number, ws: PlayedWager[]): (readonly string[] | null)[] => {
+    const carriedLists = (cs: CarriedSeat, i: number, ws: PlayedWager[], s: "FLOP" | "TURN" | "RIVER"): (readonly string[] | null)[] => {
       const own = (lv: number) => ws.filter((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
       const out: (readonly string[] | null | undefined)[] = [0, 1, 2, 3].map((lv) => {
         const c = cs.lists[lv];
@@ -448,10 +485,10 @@ class GtowApi {
       if (out[0] === undefined || out[0] === null) {
         // the bet list may never be empty on a FIXED seat (GTO Wizard refuses it): the street's bet, else the base list
         const streetBet = ws.filter((_, k) => k === 0 && !(ws[0]!.to >= allInOf[ws[0]!.seat]! - 0.005)).map((w) => bbAmount(w.to));
-        out[0] = streetBet.length ? streetBet : THREE_WAY_SIZES.bet;
+        out[0] = streetBet.length ? streetBet : baseBet(s);
       }
-      if (out[1] === undefined) out[1] = THREE_WAY_SIZES.raise;
-      for (const lv of [2, 3]) if (out[lv] === undefined) out[lv] = out[lv - 1] != null ? THREE_WAY_SIZES.raise : null;
+      if (out[1] === undefined) out[1] = baseRaise;
+      for (const lv of [2, 3]) if (out[lv] === undefined) out[lv] = out[lv - 1] != null ? baseRaise : null;
       return out as (readonly string[] | null)[];
     };
     const fb = input.fixedBets;
@@ -465,7 +502,7 @@ class GtowApi {
           : fb && fb[s] != null
             ? { street: s, position_bet_sizes: seats.map((_, i) => fixed(i, `${fb[s]}%`)) }
             : input.mid
-              ? { street: s, position_bet_sizes: seats.map((_, i) => threeWay(i)) }
+              ? { street: s, position_bet_sizes: seats.map((_, i) => threeWay(i, s)) }
               : input.huGrid
                 ? { street: s, position_bet_sizes: seats.map((_, i) => grid(i, input.huGrid!)) }
                 : huFix
@@ -1201,7 +1238,7 @@ export function treeFingerprint(input: CustomTreeInput): TreeFingerprint {
     pot: input.pot, stack: input.stack, stacks: treeStacksOf(input),
     fixedLevels: played?.length ? played.map((w) => `${bbAmount(w.to)} by ${names[w.seat] ?? `seat${w.seat}`}`)
       : input.fixedLevels?.[street]?.length ? input.fixedLevels[street]!.slice() : fixedBet != null ? [`${fixedBet}%`] : null,
-    rake: JSON.stringify(input.rake ?? null), huGrid: input.huGrid ? JSON.stringify(input.huGrid) : huFixedMenuApplies(input) ? HU_FIXED_MENU_TAG : null,
+    rake: JSON.stringify(input.rake ?? null), huGrid: input.huGrid ? JSON.stringify(input.huGrid) : menuTagsOf(input).join(" ") || null,
     ranges: seats.map(fp),
   };
 }
@@ -1236,6 +1273,8 @@ export function describeTreeChange(prev: TreeFingerprint | null, next: TreeFinge
  * Bet grid for a 3-player tree's wager-free streets (see buildCustomTree). Two bets and one raise size keep
  * the cloud solve in the same 3-5 s band as heads-up (probed 2026-09-19: root 3.5 s, nodes 1.3-3.1 s);
  * a street that DID see a wager is pinned to the observed sizes instead, exactly as heads-up.
+ * Since 2026-10-08 this is menu B: the three-way default is menu C below (THREEWAY_MENU); B is also the heads-up
+ * HU_FIXED_MENU=b menu and the fallback list of the AUTOMATIC (HU_FIXED_MENU=off) rules.
  */
 export const THREE_WAY_SIZES = { bet: ["33%", "75%"], raise: ["60%"] } as const;
 
@@ -1245,18 +1284,187 @@ export const THREE_WAY_SIZES = { bet: ["33%", "75%"], raise: ["60%"] } as const;
  * carry (retree-consistency) then carried whatever `auto` returned first — stress core-bvb-007 turn: tree A offered hero
  * CHECK / BET 20.5 (a lone ~137% bet), he checked Q8 100% and later folded it 98% to a half-pot bet; with a 25% bet on
  * the menu he bets it 99.6%. Across 52 re-run core hands 22 mixes moved ≥10 points and 12 top actions flipped only
- * because the carried auto menu differed from a fresh one. Now the heads-up menu is ours: the 3-way study's 33% / 75%
- * bets and 60% raises (memory betsize-study-3way) + each seat's all-in, on every street of every heads-up answer-path
- * tree. Identical tables now send identical trees (a cache win: one body per table state, never per auto pick).
- * HU_FIXED_MENU=on (unset) | off (the AUTOMATIC rules, the request byte for byte as before), read at every tree.
+ * because the carried auto menu differed from a fresh one. Now the heads-up menu is ours, + each seat's all-in, on every
+ * street of every heads-up answer-path tree. Identical tables send identical trees (one body per table state).
+ *
+ * MENU F (2026-10-08 evening, Brady: "is there anything wrong with just doing F?" — the menu study, memory menu-study,
+ * poker-data/audits/menu-study-hu-2026-10-08.txt): bets 25 / 33 / 50 / 75 / 100 / 125 / 150% and raises 60 / 100% at
+ * every level, every unforced street, both seats. Best EV of the six menus on every street (mean loss 0.017% pot vs B's
+ * 0.068%, at the yardstick's own noise floor), no re-tree on any stability spot, cold solve 1.3 s median (flop 1.9 s),
+ * first node max 6.6 s. B (33/75 | 60) failed the turn and river: facing a bet only a 60% raise exists where ~100% is
+ * wanted, and no overbet on a polarized river (core-real-4921729477). 8 entries with the all-in, under GTO Wizard's
+ * 10-entry list cap (capSizeList). A % bet past a seat's stack is GTO Wizard's all-in (one node, no refusal: seen in
+ * the live cache, 33/75 trees where 75% of the pot was more than the stack).
+ * HU_FIXED_MENU = f (unset, the default) | b (33/75 | 60, the menu of fada815) | off (the AUTOMATIC rules, the request
+ * byte for byte as e50e3b8). "on" (the old value) and anything else = f. Read at every tree.
  */
 export const HU_FIXED_SIZES = THREE_WAY_SIZES;
+export const HU_MENU_F = { bet: ["25%", "33%", "50%", "75%", "100%", "125%", "150%"], raise: ["60%", "100%"] } as const;
+/** in the tree key of a heads-up tree on menu B (unchanged since fada815, so a B tree keeps its key) */
 export const HU_FIXED_MENU_TAG = "hu-fixed:33/75|60";
-export const huFixedMenuOn = (env: Record<string, string | undefined> = process.env): boolean =>
-  String(env.HU_FIXED_MENU ?? "on").trim().toLowerCase() !== "off";
-/** The heads-up fixed menu applies to this tree: heads-up, no explicit grid (the collapse-calibration harness), switch on. */
+/** in the tree key of a heads-up tree on menu F */
+export const HU_MENU_F_TAG = "hu-fixed:F 25/33/50/75/100/125/150|60/100";
+export type HuMenuMode = "f" | "b" | "off";
+export const huMenuMode = (env: Record<string, string | undefined> = process.env): HuMenuMode => {
+  const v = String(env.HU_FIXED_MENU ?? "").trim().toLowerCase();
+  return v === "off" ? "off" : v === "b" ? "b" : "f";
+};
+export const huFixedMenuOn = (env: Record<string, string | undefined> = process.env): boolean => huMenuMode(env) !== "off";
+/** The heads-up fixed menu applies to this tree: heads-up, no explicit grid (the collapse-calibration harness), switch not off. */
 export const huFixedMenuApplies = (input: Pick<CustomTreeInput, "mid" | "huGrid">): boolean =>
   !input.mid && !input.huGrid && huFixedMenuOn();
+/** The heads-up menu's sizes as listed (% of the pot; MENU_POT says what is actually sent). */
+export const huMenuSizes = (env: Record<string, string | undefined> = process.env): { bet: readonly string[]; raise: readonly string[] } =>
+  (huMenuMode(env) === "f" ? HU_MENU_F : HU_FIXED_SIZES);
+/** The heads-up menu's key tag for this tree, or null when the fixed menu does not apply. */
+export const huMenuTag = (input: Pick<CustomTreeInput, "mid" | "huGrid">): string | null =>
+  (huFixedMenuApplies(input) ? (huMenuMode() === "f" ? HU_MENU_F_TAG : HU_FIXED_MENU_TAG) : null);
+
+/**
+ * THE THREE-WAY MENU (2026-10-08 evening, Brady: "for 3 way I'm ok with doing C, we just need to be within the 15 second
+ * cap, I approve"). Menu C = FLOP bets 25 / 75 / 125%, TURN and RIVER bets 33 / 75 / 125%, raises 60% (+ each seat's
+ * all-in) on every unforced street of a 3-player tree. THE 25% FLOP (follow-up measured the same evening, Brady approved
+ * the test): on the 6 three-way flop spots 25/75/125 cuts the flop loss from 0.091% to 0.015% of the pot (worst 0.225%
+ * -> 0.108%), first node 5.3 s median / 11.9 s max, no tree over 15 s, stability TV 0.002; turn and river are C's exactly.
+ * Cost: fewer pool flop bets land on 25/75/125 than on 33/75/125 (12% vs 28% on the post-rake pot), so more three-way
+ * flop re-trees — each one more ~5 s tree, and the carry keeps them stable. Study (memory menu-study, poker-data/audits/menu-study-3way-2026-10-08.txt, 15 spots): mean loss 0.035%
+ * pot (B 0.047%), cold solve 5.5 s median, 2 of 15 trees past 12 s, worst first node 13.4 s (core-srp-3way-001 deep flop,
+ * idle machine) — hence the three-way node clock of 15 s (postflopNodeTimeoutMs). F is not possible three-way
+ * (TREE_IS_TOO_BIG on 9 of 15). A 4+-way flop collapsed to three seats IS a 3-player tree here (buildCustomTree cannot
+ * tell them apart), so it takes the same menu; one collapsed to two seats takes the heads-up menu.
+ * THREEWAY_MENU = c (unset, the default) | b (33/75 | 60, the menu before) | off (= b: a 3-player tree cannot be
+ * AUTOMATIC). Read at every tree.
+ */
+export const THREE_WAY_MENU_C = { flopBet: ["25%", "75%", "125%"], bet: ["33%", "75%", "125%"], raise: ["60%"] } as const;
+/** in the tree key of a 3-player tree on menu C (a B tree carries no tag: its key is unchanged) */
+export const THREE_WAY_MENU_C_TAG = "3way:C flop 25/75/125 turn+river 33/75/125|60";
+export type ThreeWayMenuMode = "c" | "b";
+export const threeWayMenuMode = (env: Record<string, string | undefined> = process.env): ThreeWayMenuMode => {
+  const v = String(env.THREEWAY_MENU ?? "").trim().toLowerCase();
+  return v === "b" || v === "off" ? "b" : "c";
+};
+/** The three-way menu's sizes on `street` (C's bet list is the flop's or the turn / river one; B is one list). */
+export const threeWaySizes = (street: "FLOP" | "TURN" | "RIVER" = "TURN", env: Record<string, string | undefined> = process.env): { bet: readonly string[]; raise: readonly string[] } =>
+  (threeWayMenuMode(env) === "c" ? { bet: street === "FLOP" ? THREE_WAY_MENU_C.flopBet : THREE_WAY_MENU_C.bet, raise: THREE_WAY_MENU_C.raise } : THREE_WAY_SIZES);
+/** The three-way menu's key tag for this tree, or null (heads-up, or menu B). */
+export const threeWayMenuTag = (input: Pick<CustomTreeInput, "mid">): string | null =>
+  (input.mid && threeWayMenuMode() === "c" ? THREE_WAY_MENU_C_TAG : null);
+
+/**
+ * MENU SIZES ON THE POT AFTER RAKE (2026-10-08 evening, Brady: "Sure put menu sizes on pot after rake"). The pool sizes its
+ * bets on the pot NET of Ignition's rake (menu study, coverage pass over 14,208 Ignition NL100-500 hands / 7,033 pool
+ * wagers: the modes are 32.5 / 50 / 75 / 100% of the net pot = 47.5 / 71.3% of the gross pot). GTO Wizard takes a size
+ * list as % of the GROSS pot it is sent, so our 75% (gross) and the pool's 75% (of net, 71.25% gross) were 5.3% apart —
+ * past the walk's 5% / 0.15bb tolerance — and every such bet re-treed the street. Now each BET size s% of our menus is
+ * sent as s × (pot_net / pot_gross), to a tenth of a percent (GTO Wizard takes "71.3%"; a tenth of a percent of the pot is
+ * far inside the matcher's 5% of the amount), where pot_net = pot − min(rake% × pot, cap) with the rake THIS TREE is
+ * solved with (input.rake, else DEFAULT_TREE_RAKE: on the live path the table's 5% and its cap by players dealt). So the
+ * menu's 75% is the pool's 75%: its node's AMOUNT is what a pool 75%-of-net bet comes to, and the walk's matcher
+ * (matchActionLoose, which compares AMOUNTS, never percentages) lands it without a re-tree — matcher and menu speak the
+ * same convention by construction (gtowApi.menus.test.ts).
+ *  - WHICH POT: the pot at the tree's starting street (`pot`). Every street hero is answered on is the starting street of
+ *    its own tree (aiChain builds one tree per street), so that street is exact. The later streets of a tree
+ *    (continuation only) take the same factor: exact on the line that checks through, and below the rake cap (pots under
+ *    cap / 5%: 40bb at NL200 with six dealt) the factor is 0.95 at every pot; past the cap a bigger later pot is raked a
+ *    smaller share, so those later-street sizes are up to ~5% small — never on the street being answered.
+ *  - PREFLOP: no flop, no drop — a hand that ends preflop is not raked, so a preflop pot has nothing to take off and its
+ *    sizes stay as they are (the preflop trees, services/gtowAiPreflop, and the charts are untouched). Every tree built
+ *    here starts on the flop or later, where the flop has been dealt and the rake WILL be taken from the final pot: the
+ *    pool's buttons size on the pot after it, so the conversion applies to every street of these trees.
+ *  - RAISES are NOT converted: the coverage pass found the pool's raises do not follow the net pot (heads-up flop raises
+ *    on F: 18.8% land with the gross convention, 16.5% with net; turn 28.9 -> 25.8). Played amounts (bb), the street-root
+ *    pins (fixedBets / fixedLevels: the table's real sizes), an explicit huGrid and the AUTOMATIC rules
+ *    (HU_FIXED_MENU=off) are never converted.
+ * MENU_POT = net (unset, the default) | gross (the sizes as listed, the request before). Read at every tree; the key
+ * carries MENU_POT_NET_TAG only where a converted menu is sent.
+ */
+export const MENU_POT_NET_TAG = "menu-pot:net";
+export type MenuPotMode = "net" | "gross";
+export const menuPotMode = (env: Record<string, string | undefined> = process.env): MenuPotMode =>
+  (String(env.MENU_POT ?? "").trim().toLowerCase() === "gross" ? "gross" : "net");
+/** The menu is sent on the net pot for this tree: switch net, and a fixed menu of ours applies (three-way or the
+ *  heads-up fixed menu; never an explicit grid or the AUTOMATIC rules). */
+export const menuOnNetPot = (input: Pick<CustomTreeInput, "mid" | "huGrid">): boolean =>
+  menuPotMode() === "net" && !input.huGrid && (!!input.mid || huFixedMenuApplies(input));
+/** pot_net / pot_gross for a pot raked `rake` (pct_of_pot, capped at cap_in_chips, both in the tree's units = bb). */
+export function netPotFactor(pot: number, rake: { pct_of_pot: number; cap_in_chips: number } | null | undefined): number {
+  if (!(pot > 0) || !rake) return 1;
+  const pct = Number(rake.pct_of_pot) || 0;
+  const cap = Number(rake.cap_in_chips);
+  const taken = Math.min((pct / 100) * pot, Number.isFinite(cap) && cap >= 0 ? cap : Infinity);
+  return taken > 0 ? (pot - taken) / pot : 1;
+}
+/** A bet list's % sizes as sent on the net pot: s × factor, to a tenth of a percent; amounts ("9.4bb") as they are. */
+export function onNetPot(list: readonly string[], factor: number): string[] {
+  if (factor === 1) return list.slice();
+  return list.map((x) => {
+    const m = /^(\d+(?:\.\d+)?)%$/.exec(x);
+    if (!m) return x;
+    // half a tenth rounds up (the epsilon keeps 143.25 from reading as 143.2499999 in floating point)
+    return `${Math.round(Number(m[1]) * factor * 10 + 1e-6) / 10}%`;
+  });
+}
+
+/**
+ * GTO WIZARD'S SIZE-LIST CAP (menu study 2026-10-08): every size list (bet / raise / second / third+) may hold at most 10
+ * entries INCLUDING the all-in — 11 is refused (422 too_long), and the refusal comes at the FIRST POLL, after the tree and
+ * the solution were accepted (3 requests spent). Menu F is 8 with the all-in; the re-tree carry adds the played sizes, so
+ * a list with three played sizes at one level would be refused. RULE: past the cap, drop the menu size(s) NEAREST a
+ * played size (by amount), one at a time — never a played size, never the all-in (the last entry); with no played size
+ * in the list, the size nearest the all-in. Three-way the same (one fixedOf for both). api.log `[menu-cap]`.
+ */
+/** The menu tags in a tree's key (and fingerprint): the heads-up menu's, menu C's, the net pot's — each only where it
+ *  applies, so with HU_FIXED_MENU=b, THREEWAY_MENU=b and MENU_POT=gross the key is fada815's byte for byte. */
+export const menuTagsOf = (input: Pick<CustomTreeInput, "mid" | "huGrid">): string[] =>
+  [huMenuTag(input), threeWayMenuTag(input), menuOnNetPot(input) ? MENU_POT_NET_TAG : null].filter((x): x is string => !!x);
+
+export const GTOW_SIZE_LIST_MAX = 10;
+export function capSizeList(list: readonly string[], played: readonly string[], toBb: (x: string) => number | null, max = GTOW_SIZE_LIST_MAX): { list: string[]; dropped: string[] } {
+  const out = list.slice();
+  const dropped: string[] = [];
+  const isPlayed = (x: string) => played.includes(x);
+  while (out.length > max) {
+    const allIn = out[out.length - 1]!;
+    const anchors = out.filter(isPlayed).map(toBb).filter((v): v is number => v != null && Number.isFinite(v));
+    const ref = anchors.length ? anchors : [toBb(allIn) ?? Infinity];
+    let best = -1, bestD = Infinity;
+    out.forEach((x, k) => {
+      if (k === out.length - 1 || isPlayed(x)) return;
+      const v = toBb(x);
+      if (v == null || !Number.isFinite(v)) return;
+      const d = Math.min(...ref.map((a) => Math.abs(a - v)));
+      if (d < bestD) { bestD = d; best = k; }
+    });
+    if (best < 0) break;   // only played sizes and the all-in left: nothing of ours to drop
+    dropped.push(out.splice(best, 1)[0]!);
+  }
+  return { list: out, dropped };
+}
+const menuCapLogged = new Set<string>();
+/** one api.log line per distinct cut (buildCustomTree runs several times per tree: key, peek, summary, POST) */
+function logMenuCap(line: string): void {
+  if (menuCapLogged.has(line)) return;
+  menuCapLogged.add(line);
+  if (menuCapLogged.size > 500) menuCapLogged.delete(menuCapLogged.values().next().value as string);
+  console.log(line);
+}
+
+/**
+ * THE POSTFLOP NODE CLOCK (CUSTOM_SOLVE_TIMEOUT_MS = 12 s: how long one walk's node read — the solve's first poll
+ * included — may take before the decision is given up; counted from the read's start, after the tree and solution
+ * POSTs). THREE-WAY 15 s since 2026-10-08 (menu C: worst cold first node 13.4 s on an idle machine, 11.8 s of it the
+ * solve — 0.2 s inside 12 s; Brady: "we just need to be within the 15 second cap"). Heads-up stays 12 s.
+ * THREEWAY_NODE_TIMEOUT_MS = 15000 (unset, the default) | a number of ms | off (= 12000, the clock before).
+ */
+export const threeWayNodeTimeoutMs = (env: Record<string, string | undefined> = process.env): number => {
+  const raw = String(env.THREEWAY_NODE_TIMEOUT_MS ?? "").trim().toLowerCase();
+  if (raw === "off") return CUSTOM_SOLVE_TIMEOUT_MS;
+  const v = Number(raw);
+  return raw && v > 0 ? v : 15_000;
+};
+/** The walk's node-read clock for a tree of `seats` seats. */
+export const postflopNodeTimeoutMs = (seats: number, env: Record<string, string | undefined> = process.env): number =>
+  (seats >= 3 ? threeWayNodeTimeoutMs(env) : CUSTOM_SOLVE_TIMEOUT_MS);
 
 /**
  * THE TREE SETTINGS, EXPLICIT AND OFF (2026-10-03, Brady: "I don't want any weird sort of settings sent"). What was
