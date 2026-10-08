@@ -109,7 +109,12 @@ describe("poolCallKey (the most specific key built)", () => {
     expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 100)).toEqual({ table: "call", key: "poolcall_overlimp_ALL_b2p" });
     setPoolCallTable({ ...TABLE, ranges: {} });
     expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 100)).toEqual({ table: "limp", key: "overlimp_deep" });
-    expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 30)).toEqual({ table: "limp", key: "overlimp_short_le60" });
+    // the limp table's finest band for his stack (LIMP_LOCKS=v3, the default), the coarse one under v2
+    expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 30)).toEqual({ table: "limp", key: "overlimp_short_25_40" });
+    process.env.LIMP_LOCKS = "v2";
+    try {
+      expect(poolCallKey({ pos: "BTN", line: "overlimp", opener: null, before: 3, openTo: 0, complete: false }, 30)).toEqual({ table: "limp", key: "overlimp_short_le60" });
+    } finally { delete process.env.LIMP_LOCKS; }
     expect(poolCallKey({ pos: "UTG", line: "limp", opener: null, before: 0, openTo: 0, complete: false }, NaN)).toBeNull();
   });
   test("the shipped table (poker locks_v2/poolcalls_locks.json): brief_I-002's seats resolve to their own cells, the open size first", () => {
@@ -157,7 +162,13 @@ describe("applyPoolCallRanges", () => {
   test("the limped pot: deep limpers take the limp table's keys, the over-limp behind 3 this table's", () => {
     setPoolCallTable(TABLE);
     const r = applyPoolCallRanges({ hand: hand(LIMPED_6, 3), heroPos: "CO", ranges: { UTG: { AA: 1 }, HJ: { AA: 1 }, CO: { AA: 1 }, BTN: { AA: 1 }, SB: { AA: 1 }, BB: { AA: 1 } }, dealt: dealt({ 2: 60, 5: 100 }) });
-    expect(r.applied.map((x) => [x.pos, x.table, x.key])).toEqual([["UTG", "limp", "limp_first_deep"], ["HJ", "limp", "overlimp_short_le60"], ["BTN", "call", "poolcall_overlimp_ALL_b2p"], ["SB", "limp", "sbcomplete_b3"]]);
+    expect(r.applied.map((x) => [x.pos, x.table, x.key])).toEqual([["UTG", "limp", "limp_first_deep"], ["HJ", "limp", "overlimp_short_40_60"], ["BTN", "call", "poolcall_overlimp_ALL_b2p"], ["SB", "limp", "sbcomplete_b3"]]);
+    expect(r.applied.map((x) => x.limpTable ?? null)).toEqual(["v3", "v3", null, "v3"]);
+    // the note tags a limp-table range with its table; the oracle reads it back
+    const note = poolCallNote(r.applied, "gtow-ai · 6-handed");
+    expect(note).toContain("now the pool's overlimp_short_40_60 (v3: ");
+    expect(poolFloorsOf(`x · ${note}`).get("HJ")).toEqual({ kind: "call", key: "overlimp_short_40_60", was: 6, limpTable: "v3" });          // AA = 6 combos
+    expect(poolFloorsOf(`x · ${note}`).get("BTN")).toEqual({ kind: "call", key: "poolcall_overlimp_ALL_b2p", was: 6 });
     expect(r.ranges.CO).toEqual({ AA: 1 });
     expect(r.ranges.BB).toEqual({ AA: 1 });
     expect(r.applied[0]!.now).toBeGreaterThan(20);

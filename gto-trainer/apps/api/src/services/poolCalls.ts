@@ -35,7 +35,8 @@
  * seat+line → ALL seats+line+qual+stack → ALL+line+qual → ALL+line+stack → ALL+line (the seat before the qualifier: the
  * BB calls an open 34% of the time, a cold caller 9% — the seat is the larger effect). An open-size qualifier (_oS/_oM/_oL/_oXL) is tried first only when the
  * table says the split was adopted (`open_split_adopted`). Plain limps in a two-limper pot (first-in, over-limp behind one,
- * the SB's complete) are the LIMP table's (poolLimpLocks.v2.json: limp_first_*, overlimp_*, sbcomplete_*), deep keys
+ * the SB's complete) are the LIMP table's (poolLimpFloor.limpLockRange — poolLimpLocks.v3.json, or .v2 under
+ * LIMP_LOCKS=v2: limp_first_*, overlimp_*, sbcomplete_*), deep keys
  * included — the short-limper floor (poolLimpFloor) already gave a short one his range and is not repeated.
  *
  * THE SWITCH, POOL_CALLS in the environment, read at every decision: on (unset) = the overlay; off = the fitted ranges as
@@ -43,9 +44,8 @@
  * Pure: ranges in, ranges out, and a record of what was replaced.
  */
 import LOCKS from "./poolCallLocks.json";
-import LIMP from "./poolLimpLocks.v2.json";
 import { dealtByPos, SEATS6, type Seat6 } from "./hrc6max";
-import { poolLimpKey } from "./poolLimpFloor";
+import { limpLockRange, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 export type PoolCallLine = "flat" | "overcall" | "limpcall" | "bbiso" | "sbiso" | "overlimp" | "limp";
@@ -181,7 +181,7 @@ export function poolCallKey(c: Pick<PoolCaller, "pos" | "line" | "opener" | "bef
     const deep = c.complete
       ? (c.before >= 3 ? "sbcomplete_b3" : c.before === 0 ? "sbcomplete_fold_deep" : `sbcomplete_b${c.before}_deep`)
       : (c.before === 0 ? "limp_first_deep" : "overlimp_deep");
-    return deep in LIMP.ranges ? { table: "limp", key: deep } : null;
+    return limpLockRange(deep) ? { table: "limp", key: deep } : null;
   }
   const qual = c.line === "flat" ? (c.opener ? `vs${c.opener}` : null)
     : c.line === "overcall" ? (c.before >= 2 ? "b2p" : "b1")
@@ -207,10 +207,10 @@ const combosOf = (r: ClassRange | undefined): number =>
   Math.round(Object.entries(r ?? {}).reduce((s, [c, w]) => s + (Number(w) > 0 ? Number(w) * classCombos(c) : 0), 0) * 100) / 100;
 
 /** a key's range and its measurement, from whichever table holds it */
-export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: number; calls: number; shown: number | null } | null {
+export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: number; calls: number; shown: number | null; limpTable?: LimpLocksVersion } | null {
   if (k.table === "limp") {
-    const r = (LIMP.ranges as Record<string, { freq: number; n: number; weights: ClassRange }>)[k.key];
-    return r ? { weights: r.weights, freq: r.freq, calls: r.n, shown: null } : null;
+    const r = limpLockRange(k.key);
+    return r ? { weights: r.weights, freq: r.freq, calls: r.n, shown: null, limpTable: r.table } : null;
   }
   const r = table.ranges[k.key];
   return r ? { weights: r.weights, freq: r.freq, calls: r.calls, shown: r.shown } : null;
@@ -225,6 +225,8 @@ export interface PoolCallRecord {
   was: number; now: number;
   /** what he did, for the note */
   did: string;
+  /** a limp-table key: the table it came from (LIMP_LOCKS) */
+  limpTable?: LimpLocksVersion;
 }
 
 const didText = (c: PoolCaller): string => {
@@ -265,7 +267,7 @@ export function applyPoolCallRanges(a: {
     const was = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
     out[rk] = { ...r.weights };
-    applied.push({ pos: c.pos, line: c.line, key: k.key, table: k.table, stack: Math.round(stack * 10) / 10, freq: r.freq, calls: r.calls, was, now: combosOf(out[rk]), did: didText(c) });
+    applied.push({ pos: c.pos, line: c.line, key: k.key, table: k.table, stack: Math.round(stack * 10) / 10, freq: r.freq, calls: r.calls, was, now: combosOf(out[rk]), did: didText(c), ...(r.limpTable ? { limpTable: r.limpTable } : {}) });
   }
   return { ranges: out, applied };
 }
@@ -273,5 +275,5 @@ export function applyPoolCallRanges(a: {
 /** The answer's note (its opening is the register entry's `warn`; the hand page and the mutation oracle parse it). */
 export const poolCallNote = (applied: PoolCallRecord[], source: string | null): string =>
   `POOL CALL RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) ${r.did} — ${r.was} combos on ${source ?? "the preflop tree"}, `
-    + `now the pool's ${r.key} (${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos)`).join("; ")}`
+    + `now the pool's ${r.key} (${limpTableTag(r.limpTable)}${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos)`).join("; ")}`
   + " — the tree cannot hold this line, so the callers hold the pool's measured ranges, not the solver's neighbouring-line ones";

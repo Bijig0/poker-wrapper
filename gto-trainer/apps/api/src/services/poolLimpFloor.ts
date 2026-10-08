@@ -22,14 +22,56 @@
  *
  * Pure: ranges in, ranges out, and a record of what was replaced.
  */
-import LOCKS from "./poolLimpLocks.v2.json";
+import LOCKS_V2 from "./poolLimpLocks.v2.json";
+import LOCKS_V3 from "./poolLimpLocks.v3.json";
 import { dealtByPos, limpStackBucket, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS6, type Seat6 } from "./hrc6max";
 import { hrc6maxDb } from "./hrc6maxDb";
 import { chartStacks6, withinFirstStackBound } from "./treeGap";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
-export type PoolLimpKey = keyof typeof LOCKS.ranges;
+/** v3 holds every v2 key (8 copied unchanged, the 8 thin ones re-measured under the same names) plus the finer bands */
+export type PoolLimpKey = keyof typeof LOCKS_V3.ranges | keyof typeof LOCKS_V2.ranges;
+
+/** THE TABLE SWITCH (2026-10-09, Brady: the thin Ignition cells replaced by CoinPoker-backed ranges, finer stack bands
+ *  with real samples, Ignition-corrected where Ignition has the limps — TEMPORARY until auto-execute collects 30+
+ *  Ignition limps per cell). LIMP_LOCKS in the environment, read at every decision:
+ *   v3 (unset)  poolLimpLocks.v3.json (poker locks_v2/limp_locks_v3.json, build_limp_locks_v3.py): the 8 cells with 30+
+ *               Ignition limps as v2; the 8 thin ones (n < 30: short over-limps, short SB completes behind limps,
+ *               sbcomplete_b2_deep, sbcomplete_b3) from the CoinPoker 9.1M-hand corpus, the frequency anchored on the
+ *               nearest Ignition cell with 30+ limps, the shape CoinPoker's showdown limps corrected against Ignition's
+ *               visible cards; and finer stack bands (<=25 / 25-40 / 40-60bb) for the over-limp and the SB's complete
+ *               behind limps — poolLimpKey takes the finest band the table has for the stack, else the coarse one;
+ *   v2          poolLimpLocks.v2.json (locks_v2.json, NL200 Ignition only) and the two coarse bands — the picks before
+ *               2026-10-09, byte for byte.
+ *  It changes WHICH range a pool limp key names, never whether the floor / lock fires (SHORT_LIMP_POOL decides that).
+ *  The HRC pool-locked limp trees stay solved on locks_v2 (their coverage rule, poolChartCovers, is unchanged). */
+export type LimpLocksVersion = "v2" | "v3";
+export const limpLocksVersion = (): LimpLocksVersion =>
+  String(process.env.LIMP_LOCKS ?? "v3").trim().toLowerCase() === "v2" ? "v2" : "v3";
+type LimpRange = { freq: number; n: number; weights: Record<string, number> };
+const TABLES: Record<LimpLocksVersion, Record<string, LimpRange>> = {
+  v2: LOCKS_V2.ranges as unknown as Record<string, LimpRange>,
+  v3: LOCKS_V3.ranges as unknown as Record<string, LimpRange>,
+};
+/** the keys a table holds (tests, reports) */
+export const limpLockKeys = (version: LimpLocksVersion = limpLocksVersion()): string[] => Object.keys(TABLES[version]);
+/** A key's range from the table the switch names; a key only the other table has (a fine v3 band named by an answer
+ *  recorded under v3, read back under v2) from that one. null = no table has it. */
+export function limpLockRange(key: string, version: LimpLocksVersion = limpLocksVersion()): (LimpRange & { table: LimpLocksVersion }) | null {
+  const other: LimpLocksVersion = version === "v3" ? "v2" : "v3";
+  const own = TABLES[version][key];
+  const r = own ?? TABLES[other][key];
+  return r ? { ...r, table: own ? version : other } : null;
+}
+
+/** THE STACK BANDS (his stack as dealt, bb; the upper edge inclusive, as the tables were measured): the two coarse ones
+ *  every table has, and v3's finer ones inside 60bb. Over 85bb: no short key (the `_deep` ones are the charts' own). */
+export type LimpCoarseBand = "le60" | "60_85";
+export type LimpFineBand = "le25" | "25_40" | "40_60" | "60_85";
+export const limpCoarseBand = (stack: number): LimpCoarseBand | null => (!(stack > 0) || stack > 85 ? null : stack <= 60 ? "le60" : "60_85");
+export const limpFineBand = (stack: number): LimpFineBand | null =>
+  !(stack > 0) || stack > 85 ? null : stack <= 25 ? "le25" : stack <= 40 ? "25_40" : stack <= 60 ? "40_60" : "60_85";
 
 /** THE SWITCH (an experiment, 2026-10-05), SHORT_LIMP_POOL in the environment, read at every decision:
  *   on (unset)  the picker's short-limper routing (hrc6max shortLimperAlone), this floor, AND the GTO Wizard preflop
@@ -47,10 +89,13 @@ export const poolLimpLockOn = (): boolean => shortLimpPoolMode() === "on";
 
 /** A pool range as 1,326 per-combo weights (each combo its class's weight) — the strategy a lock gives the limp. */
 export function poolLimpWeights(key: PoolLimpKey): number[] {
-  const w = LOCKS.ranges[key].weights as Record<string, number>;
+  const w = limpLockRange(key)!.weights;
   return COMBOS.map((c) => Math.max(0, Math.min(1, Number(w[c.cls] ?? 0))));
 }
-export const poolLimpRange = (key: PoolLimpKey): { freq: number; n: number } => ({ freq: LOCKS.ranges[key].freq, n: LOCKS.ranges[key].n });
+export const poolLimpRange = (key: PoolLimpKey): { freq: number; n: number } => {
+  const r = limpLockRange(key)!;
+  return { freq: r.freq, n: r.n };
+};
 type ClassRange = Record<string, number>;
 
 /** A seat that limped (or completed from the SB) before any raise. */
@@ -74,6 +119,8 @@ export interface PoolLimpFloorRecord {
   /** combos before (the tree's range) and after (the pool's) */
   was: number;
   now: number;
+  /** the table the range came from (LIMP_LOCKS) */
+  table: LimpLocksVersion;
 }
 
 const POSTS = new Set(["post-sb", "post-bb", "post", "post-dead", "ante"]);
@@ -112,15 +159,22 @@ export function poolLimpersOf(hand: ParsedHand, heroPos: string | null): PoolLim
   return out;
 }
 
-/** The pool range for a limper at this stack, as genLimpPlanV2.lock_for picks it — null for a deep one (over 85bb). */
-export function poolLimpKey(l: Pick<PoolLimper, "limpsBefore" | "complete">, stack: number): PoolLimpKey | null {
-  if (!(stack > 0) || stack > 85) return null;
-  const b = stack <= 60 ? "le60" : "60_85";
-  if (l.complete) {
-    if (l.limpsBefore >= 3) return "sbcomplete_b3";
-    return (l.limpsBefore === 0 ? `sbcomplete_fold_short_${b}` : `sbcomplete_b${l.limpsBefore}_short_${b}`) as PoolLimpKey;
+/** The pool range for a limper at this stack — null for a deep one (over 85bb). Role and coarse band as
+ *  genLimpPlanV2.lock_for picks it; under LIMP_LOCKS=v3 the finest band the table has for his stack first (a 30bb
+ *  over-limp: overlimp_short_25_40), the coarse one when the table has no finer key (a first-in limp, the SB folded to,
+ *  an SB complete behind 2 limps at 25bb or less). */
+export function poolLimpKey(l: Pick<PoolLimper, "limpsBefore" | "complete">, stack: number, version: LimpLocksVersion = limpLocksVersion()): PoolLimpKey | null {
+  const b = limpCoarseBand(stack);
+  if (!b) return null;
+  if (l.complete && l.limpsBefore >= 3) return "sbcomplete_b3";
+  const base = l.complete
+    ? (l.limpsBefore === 0 ? "sbcomplete_fold_short" : `sbcomplete_b${l.limpsBefore}_short`)
+    : (l.limpsBefore === 0 ? "limp_first_short" : "overlimp_short");
+  if (version === "v3") {
+    const fine = `${base}_${limpFineBand(stack)}`;
+    if (fine in TABLES.v3) return fine as PoolLimpKey;
   }
-  return (l.limpsBefore === 0 ? `limp_first_short_${b}` : `overlimp_short_${b}`) as PoolLimpKey;
+  return `${base}_${b}` as PoolLimpKey;
 }
 
 /** The plan a baked chart was solved from (the bake's provenance row): `limp-v2-…` = the v2 locks, by stack bucket. */
@@ -256,11 +310,12 @@ export function applyPoolLimpFloor(a: {
     // his range was walked off a tree that locked his limp to exactly this pool range: it is already his, narrowed by
     // what he did after the limp — replacing it with the whole range would undo that
     if (a.lockedPools?.some((p) => p.pos.toUpperCase() === l.pos && p.key === key)) continue;
-    const lock = LOCKS.ranges[key];
+    const lock = limpLockRange(key);
+    if (!lock) continue;
     const was = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
     out[rk] = { ...(lock.weights as ClassRange) };
-    applied.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, freq: lock.freq, n: lock.n, was, now: combosOf(out[rk]) });
+    applied.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, freq: lock.freq, n: lock.n, was, now: combosOf(out[rk]), table: lock.table });
   }
   return { ranges: out, applied };
 }
@@ -268,5 +323,9 @@ export function applyPoolLimpFloor(a: {
 /** The answer's note for the replaced limpers. */
 export const poolLimpFloorNote = (applied: PoolLimpFloorRecord[], chartId: string | null): string =>
   `POOL LIMP RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) limped — ${r.was} combos on ${chartId ?? "the preflop tree"}, `
-    + `now the pool's ${r.key} (${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`).join("; ")}`
+    + `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`).join("; ")}`
   + " — no pool-locked tree covers this stack yet";
+
+/** The table tag a note carries right after the key — none for v2 (the notes exactly as before 2026-10-09), "v3: " for
+ *  v3 (rangeOracle.poolFloorsOf reads it back, so a recorded answer is checked against the table it was answered from). */
+export const limpTableTag = (t: LimpLocksVersion | undefined): string => (t === "v3" ? "v3: " : "");
