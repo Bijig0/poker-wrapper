@@ -1968,6 +1968,9 @@ async function openAnswerNode(upto) {
   setStep(upto);
   const sol = $("solution");
   sol.innerHTML = `<div class="card sub">fetching the node that answered…</div>`;
+  // the node renders HERE, near the top of the hand page, while the "open the exact node" links sit thousands of pixels
+  // down the decision list (Brady 2026-10-09: "I'm clicking it and it's not opening anything") — bring it into view
+  try { sol.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
   let j;
   try { j = await (await fetch(`/api/dashboard/answer-node?dbId=${DETAIL.dbId}&upto=${upto}`)).json(); }
   catch (e) { sol.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
