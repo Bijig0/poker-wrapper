@@ -7,66 +7,27 @@
  * session.ts maybeEndForNetDrop ends it when the hand in play is over (a follower hands it to the leader). A link
  * that comes back does not undo it, and nothing sits hero back in (sitback.ts stands aside while a drop is noted).
  */
-import * as cdp from "./cdp";
 import { sleep, time } from "./clock";
 import { C } from "./config";
 import { feedAdd, log } from "./feed";
 import * as NC from "./netcheck";
 import { pyRepr, pyStr } from "./py";
-import { CGG, CP, S, isCgg, isCp, seams } from "./state";
+import { CGG, CP, S, isCgg, isCp } from "./state";
 import * as TABLES from "./tables";
-import { mySel, sitoutReadJs } from "./ignition/dom";
-import { ensureVisible, pointIsMyTable } from "./relay";
+import { netClickedBefore, tickSitoutBox } from "./sitoutBox";
 
 export const NET_BAD_TO_SITOUT = 2;
 export const NET_GOOD_TO_CLEAR = 2;
 
-/** Tick "Sit out next hand" on OUR table — idempotent: reads the tick first, clicks only when unticked. */
-export async function ignitionSitoutNextHand(): Promise<Record<string, any>> {
-  const t = await seams.ignitionTarget();
-  if (!t) return { ok: false, why: "poker client not open" };
-  const ws = t.webSocketDebuggerUrl;
-  const js = sitoutReadJs(mySel());
-  let d: Record<string, any>;
-  try {
-    d = (await cdp.evaluate(ws, js, 6)) || {};
-  } catch (e: any) {
-    return { ok: false, why: `table read failed: ${e?.message ?? e}` };
-  }
-  if (!d.ok) return { ok: false, why: d.reason || "table not readable" };
-  if (d.back) return { ok: true, state: "already sitting out (I'm back is showing)" };
-  if (!d.found) return { ok: false, why: "no 'Sit out next hand' box on the table" + (d.seated ? "" : " - not seated") };
-  if (d.checked === true) return { ok: true, state: "already ticked" };
-  if ((d.checked === null || d.checked === undefined) && S.net.sitout && S.net.sitout.clicked) {
-    return { ok: true, state: "clicked earlier this bad stretch (tick state unreadable)", html: d.html ?? null };
-  }
-  const lk = await TABLES.pressLock();
-  try {
-    const blind = await ensureVisible(ws);
-    if (blind) return { ok: false, why: blind };
-    const wrong = await pointIsMyTable(ws, d.x, d.y);
-    if (wrong) return { ok: false, why: wrong };
-    try {
-      await cdp.dispatchClick(ws, d.x, d.y);
-    } catch (e: any) {
-      return { ok: false, why: `click did not go through: ${e?.message ?? e}` };
-    }
-  } finally {
-    lk.release();
-  }
-  await sleep(0.4);
-  let after: Record<string, any> = {};
-  try {
-    after = (await cdp.evaluate(ws, js, 6)) || {};
-  } catch {
-    after = {};
-  }
-  if (after.checked === false && d.checked === false) {
-    return { ok: false, why: "clicked, but the box still reads unticked", clicked: true, html: after.html ?? null };
-  }
-  return { ok: true, clicked: true, state: after.checked ? "ticked" : "clicked (tick state unreadable - check the table)",
-           via: d.via ?? null, html: after.checked ? null : d.html ?? null };
-}
+/** Tick "Sit out next hand" on OUR table — idempotent: reads the tick first, clicks only when unticked (or unreadable
+ *  and not pressed this bad stretch). THE READ THAT NEVER FOUND THE BOX (session_20261008_185314, 2026-10-08: four
+ *  drops, each `[net] sit-out: {'ok': False, 'why': "no 'Sit out next hand' box on the table"}` — hero was never sat
+ *  out; the session ended at the hand's end as before): it looked only at leaf elements, and the client's label is not
+ *  one; and its walk-up took the first checkbox in any ancestor, which in a row shared with "Sit out next big blind"
+ *  could be that box. Since 2026-10-09 the read and the press are sitoutBox.ts tickSitoutBox — the deep-stack reset's
+ *  rewrite (label by its text, shown by style, the box through <label for> or a walk-up that rejects a container
+ *  holding the other label, pointer click with a DOM click in our frame as the fallback), aimed at this label. */
+export const ignitionSitoutNextHand = (): Promise<Record<string, any>> => tickSitoutBox("Sit out next hand", netClickedBefore());
 
 export function netCompact(p: Record<string, any>): Record<string, any> {
   return Object.fromEntries(["ok", "at", "rttMs", "lostOf10", "warmMedMs", "warmMaxMs"].map((k) => [k, p[k] ?? null]));

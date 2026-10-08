@@ -95,6 +95,14 @@ export const Hand = obj({
 
 export const HandReply = obj({ ok: z.boolean(), hand: Hand.nullable() });
 
+/** /state `stackReset` (2026-10-09): the deep-stack reset's step, its ticks and aborts, the last tick's outcome. */
+export const StackResetBrief = obj({
+  state: z.enum(["idle", "armed", "sat-out", "leaving", "waiting", "reseating"]), bb: z.number(), waitS: z.number(),
+  since: z.number().nullable(), forS: z.number().nullable(), armedHand: z.number().nullable(), stackBb: z.number().nullable(),
+  ticks: z.number(), maxTicks: z.number(), misses: z.number(), aborts: z.number(), maxAborts: z.number(), off: z.boolean(),
+  lastTick: obj({ at: z.number().nullable(), ok: z.boolean(), why: z.string().nullable(), method: z.string().nullable() }).nullable(),
+});
+
 /** GET /state (light or full): the fields the poller and the panel act on. */
 export const StateReply = obj({
   cdp: z.boolean(), connected: z.boolean(), hand: Hand.nullable(), studyAnswers: z.boolean(),
@@ -102,5 +110,7 @@ export const StateReply = obj({
   panelPort: z.number(), cdpPort: z.number(), tableSlot: z.number().nullable(),
   pickReady: obj({ ok: z.boolean(), reason: z.string().nullable() }),
   snapshot: obj({ status: z.string().nullable(), seats: z.array(obj({ hero: z.boolean(), sittingOut: z.boolean() })) }),
+  /** the deep-stack reset's machine (stackReset.ts stackResetBrief) — present only while the session has the reset on */
+  stackReset: StackResetBrief.optional(),
 });
 

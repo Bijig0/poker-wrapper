@@ -31,22 +31,29 @@
  * Stands aside while a disconnect or a connection drop is noted (the session ends), outside a session, on the fake
  * table, and off Ignition. Any failure before the leave presses I AM BACK if hero is sitting out (event
  * stack-reset-aborted {why}) and play goes on under the API's 250bb cap; the reset is not tried again for
- * STACK_RESET_RETRY_HANDS hands, and not at all after STACK_RESET_MAX_ABORTS aborts in a session.
+ * STACK_RESET_RETRY_HANDS hands, and not at all after STACK_RESET_MAX_ABORTS aborts in a session (event stack-reset-off,
+ * said on the feed).
+ *
+ * A READ IS NOT A TICK (2026-10-09, session_20261009_052537: five resets armed, each burned its three ticks within a
+ * second on "no 'Sit out next big blind' box on the table" - the read's fault, not the box's - and the session's
+ * reset was off after the third). A tick that pressed nothing (the read failed, found no box, or the press was
+ * refused before it went out) is tried again STACK_RESET_MISS_S later and counts against nothing; only presses count
+ * towards STACK_RESET_TICKS. The armed state ends in an abort only on what the table did: hero posting the big blind
+ * after the arming STACK_RESET_TICKS times (whatever was or was not pressed in between). /state `stackReset` carries
+ * the machine (stackResetBrief).
  */
-import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
 import { C } from "./config";
 import { feedAdd, log } from "./feed";
 import { postJson } from "./http";
-import { js } from "./js";
 import { pyRepr, pyRound, pyStr } from "./py";
 import { PEER_LEAVING_S, S, inAHand, isClientSite, seams, type StackResetState } from "./state";
 import * as TABLES from "./tables";
-import { forgetFrame, mySel, slotted, type FrameSel } from "./ignition/dom";
+import { forgetFrame, type FrameSel } from "./ignition/dom";
 import { stackBb } from "./ignition/hand";
 import { tapForget } from "./ignition/ws";
-import { ensureVisible, pointIsMyTable } from "./relay";
 import { ignitionSitBackIn } from "./sitback";
+import { sitoutBoxJs, tickSitoutBox } from "./sitoutBox";
 import { markLeaving, noteStackReset, sessionSeams } from "./session";
 
 /** Ticks of the box per reset before it is given up (a box that never takes is not clicked for ever). */
@@ -57,57 +64,22 @@ export const STACK_RESET_RETRY_HANDS = 10;
 export const STACK_RESET_MAX_ABORTS = 3;
 /** How long the new table may take to seat, pin and bind after the wait before the reset gives up waiting for it. */
 export const STACK_RESET_RESEAT_S = 600;
+/** A tick that pressed nothing (no box read, the read failed, the press refused before it went out) is tried again
+ *  this many seconds later — it costs no tick. */
+export const STACK_RESET_MISS_S = 5;
 
-/** Finds "Sit out next big blind" on one table: {ok, found, checked (null = unknown), back, seated, x, y}. */
-export const sitoutBbReadJs = (sel: FrameSel = null) => slotted(js("stackreset.SITOUT_BB_READ_JS_TMPL"), sel);
+/** The read of "Sit out next big blind" on one table (sitoutBox.ts sitoutBoxJs): {ok, found, checked (null = unknown),
+ *  via, shared, back, seated, x, y (null when nothing measures), on, hidden, idleMs}. */
+export const sitoutBbReadJs = (sel: FrameSel = null) => sitoutBoxJs("Sit out next big blind", sel);
+/** The same read, then a DOM click on the box (or on the label when no box is ours): {..., domClicked | domClickError}. */
+export const sitoutBbClickJs = (sel: FrameSel = null) => sitoutBoxJs("Sit out next big blind", sel, true);
 
-/** Tick "Sit out next big blind" on OUR table — reads first, clicks only when the box reads unticked, or its state is
- *  unreadable and this reset has not clicked it yet (`clickedBefore`). netguard.ignitionSitoutNextHand's pattern. */
-export async function ignitionSitoutNextBb(clickedBefore: boolean): Promise<Record<string, any>> {
-  const t = await seams.ignitionTarget();
-  if (!t) return { ok: false, why: "poker client not open" };
-  const ws = t.webSocketDebuggerUrl;
-  const read = sitoutBbReadJs(mySel());
-  let d: Record<string, any>;
-  try {
-    d = (await cdp.evaluate(ws, read, 6)) || {};
-  } catch (e: any) {
-    return { ok: false, why: `table read failed: ${e?.message ?? e}` };
-  }
-  if (!d.ok) return { ok: false, why: d.reason || "table not readable" };
-  if (d.back) return { ok: true, state: "already sitting out (I'm back is showing)" };
-  if (!d.found) return { ok: false, why: "no 'Sit out next big blind' box on the table" + (d.seated ? "" : " - not seated") };
-  if (d.checked === true) return { ok: true, state: "already ticked", via: d.via ?? null };
-  if ((d.checked === null || d.checked === undefined) && clickedBefore) {
-    return { ok: true, state: "clicked earlier (tick state unreadable)", html: d.html ?? null };
-  }
-  const lk = await TABLES.pressLock();
-  try {
-    const blind = await ensureVisible(ws);
-    if (blind) return { ok: false, why: blind };
-    const wrong = await pointIsMyTable(ws, d.x, d.y);
-    if (wrong) return { ok: false, why: wrong };
-    try {
-      await cdp.dispatchClick(ws, d.x, d.y);
-    } catch (e: any) {
-      return { ok: false, why: `click did not go through: ${e?.message ?? e}` };
-    }
-  } finally {
-    lk.release();
-  }
-  await sleep(0.4);
-  let after: Record<string, any> = {};
-  try {
-    after = (await cdp.evaluate(ws, read, 6)) || {};
-  } catch {
-    after = {};
-  }
-  if (after.checked === false && d.checked === false) {
-    return { ok: false, why: "clicked, but the box still reads unticked", clicked: true, html: after.html ?? null };
-  }
-  return { ok: true, clicked: true, state: after.checked ? "ticked" : "clicked (tick state unreadable - check the table)",
-           via: d.via ?? null, html: after.checked ? null : d.html ?? null };
-}
+/** Tick "Sit out next big blind" on OUR table — reads first, presses only when the box reads unticked, or its state is
+ *  unreadable and this reset has not pressed it yet (`clickedBefore`). The read, the press and its DOM fallback are
+ *  sitoutBox.ts tickSitoutBox (2026-10-09), shared with the connection guard's "Sit out next hand"; `pressed` = a
+ *  click went out (it counts a tick); `retry` = nothing went out (tried again later, no tick spent). */
+export const ignitionSitoutNextBb = (clickedBefore: boolean): Promise<Record<string, any>> =>
+  tickSitoutBox("Sit out next big blind", clickedBefore);
 
 /** What a test replaces: the tick, the I AM BACK press, the leader, the siblings, the leave, how a slow step runs. */
 export const stackResetSeams = {
@@ -176,7 +148,8 @@ export async function maybeStackReset(): Promise<void> {
       if (R.abortedAt !== null && S.handNo < R.abortedAt + STACK_RESET_RETRY_HANDS) return;
       const st = heroStackBb();
       if (st === null || st < R.bb) return;
-      Object.assign(R, { armedHand: S.handNo, stackBb: st, ticks: 0, clicked: false, needTick: true, lastTick: null, bbHands: [] });
+      Object.assign(R, { armedHand: S.handNo, stackBb: st, ticks: 0, clicked: false, needTick: true, lastTick: null, bbHands: [],
+                         misses: 0, retryAt: 0.0, lastMissWhy: null });
       setState("armed");
       feedAdd(`DEEP STACK: ${st} bb ≥ ${R.bb} bb — sitting out at the next big blind, then a fresh table of this format`);
       log(`[stack-reset] armed at ${st} bb (hand ${S.handNo})`);
@@ -198,7 +171,8 @@ export async function maybeStackReset(): Promise<void> {
         const waited = pyRound(now - R.leftAt, 1);
         const tag = S.frame.tag, rid = S.tapBound;
         setState("idle");
-        Object.assign(R, { armedHand: 0, stackBb: null, ticks: 0, clicked: false, needTick: false, bbHands: [], oldRid: null, oldTag: null });
+        Object.assign(R, { armedHand: 0, stackBb: null, ticks: 0, clicked: false, needTick: false, bbHands: [], oldRid: null, oldTag: null,
+                           misses: 0, retryAt: 0.0, lastMissWhy: null });
         feedAdd(`Deep stack: seated at a fresh table (${waited} s after leaving the old one)`);
         log(`[stack-reset] done: frame ${pyStr(tag)}, socket ${pyStr(rid)} (${waited} s after the leave)`);
         event("stack-reset-done", { waitedS: waited, tag, rid });
@@ -206,11 +180,12 @@ export async function maybeStackReset(): Promise<void> {
       }
       if (now - R.notBefore > STACK_RESET_RESEAT_S) {
         setState("idle");
-        R.aborts += 1;
-        R.abortedAt = S.handNo;
+        const why = `no new table seated, pinned and bound within ${STACK_RESET_RESEAT_S} s of the wait`;
+        countAbort(why);
         feedAdd("Deep stack: no new table came up for this slot — check the lobby and the leader's panel");
         log(`[stack-reset] gave up waiting for the new table (${STACK_RESET_RESEAT_S} s after the wait)`);
-        event("stack-reset-aborted", { why: `no new table seated, pinned and bound within ${STACK_RESET_RESEAT_S} s of the wait`, phase: "reseating" });
+        event("stack-reset-aborted", { why, phase: "reseating" });
+        sayOff(why);
       }
       return;
     }
@@ -229,18 +204,22 @@ export async function maybeStackReset(): Promise<void> {
     });
     return;
   }
-  // a hand after the arming in which hero still posted the big blind: the tick did not take
+  // a hand after the arming in which hero still posted the big blind: the tick did not take (or none went out yet)
   if (S.handNo > R.armedHand && heroPostedBb() && !R.bbHands.includes(S.handNo)) {
     R.bbHands.push(S.handNo);
-    if (R.ticks >= STACK_RESET_TICKS) {
-      await abort(`the box did not take: hero posted the big blind after ${R.ticks} tick(s)`);
+    if (R.ticks >= STACK_RESET_TICKS || R.bbHands.length >= STACK_RESET_TICKS) {
+      await abort(R.ticks >= STACK_RESET_TICKS
+        ? `the box did not take: hero posted the big blind after ${R.ticks} tick(s)`
+        : `hero posted the big blind ${R.bbHands.length} times since the arming with ${R.ticks} press(es) of the box`
+          + (R.misses ? ` (${R.misses} read(s) pressed nothing: ${pyStr(R.lastMissWhy)})` : ""));
       return;
     }
-    log(`[stack-reset] hero posted the big blind in hand ${S.handNo} — the tick did not take; ticking again`);
-    Object.assign(R, { needTick: true, clicked: false });
+    log(`[stack-reset] hero posted the big blind in hand ${S.handNo} — ` + (R.ticks ? "the tick did not take; ticking again" : "no press has gone out yet; still trying"));
+    Object.assign(R, { needTick: true, clicked: false, retryAt: 0.0 });
   }
-  // the press waits while hero is on the clock or a notice is up (nothing is clicked over a decision)
-  if (R.needTick && !S.liveStatus.toAct && !S.liveStatus.modal) tickBox();
+  // the press waits while hero is on the clock or a notice is up (nothing is clicked over a decision), and a tick that
+  // pressed nothing waits STACK_RESET_MISS_S before the next read
+  if (R.needTick && now >= R.retryAt && !S.liveStatus.toAct && !S.liveStatus.modal) tickBox();
 }
 
 /** A slow step in the background; the machine waits for it (`busy`). */
@@ -258,22 +237,40 @@ function background(f: () => Promise<unknown>): void {
   })());
 }
 
-/** Tick the box, in the background. */
+/** Tick the box, in the background. A result that pressed nothing (`ok` false and no click went out) is a MISS: no
+ *  tick spent, the read tried again STACK_RESET_MISS_S later, said once per reason (log, feed, event stack-reset-miss)
+ *  and counted on /state. A press counts a tick whatever came of it. */
 function tickBox(): void {
   const R = S.stackReset;
   R.needTick = false;
-  R.ticks += 1;
   background(async () => {
     const res = await stackResetSeams.tick(R.clicked);
-    R.clicked = R.clicked || !!res.clicked;
+    const pressed = !!(res.pressed || res.clicked);
+    R.clicked = R.clicked || pressed;
     const { html: _h, ...result } = res;
     R.lastTick = { at: nowMs(), ...result };
+    if (!res.ok && !pressed) {
+      R.misses += 1;
+      R.retryAt = time() + STACK_RESET_MISS_S;
+      if (R.state === "armed") R.needTick = true;
+      const why = pyStr(res.why ?? null);
+      if (why !== R.lastMissWhy) {
+        R.lastMissWhy = why;
+        log(`[stack-reset] nothing pressed (read ${R.misses}, no tick spent — ${R.ticks}/${STACK_RESET_TICKS} so far): ${pyRepr(result)}; trying again every ${STACK_RESET_MISS_S} s`);
+        feedAdd(`Deep stack: "Sit out next big blind" not pressed yet (${why}) — trying again every ${STACK_RESET_MISS_S} s`);
+        event("stack-reset-miss", { misses: R.misses, ticks: R.ticks, result });
+      } else if (R.misses % 12 === 0) {
+        log(`[stack-reset] still nothing pressed after ${R.misses} reads (${why})`);
+      }
+      return;
+    }
+    R.ticks += 1;
     log(`[stack-reset] tick ${R.ticks}/${STACK_RESET_TICKS}: ${pyRepr(result)}`);
     event("stack-reset-tick", { attempt: R.ticks, result });
     if (res.ok) return;
     feedAdd(`Deep stack: could not tick "Sit out next big blind" (${pyStr(res.why ?? null)})`);
     if (R.ticks >= STACK_RESET_TICKS) await abort(`could not tick the box: ${pyStr(res.why ?? null)}`);
-    else R.needTick = true;            // tried again on a later tick
+    else if (R.state === "armed") R.needTick = true;            // tried again on a later tick
   });
 }
 
@@ -318,8 +315,7 @@ async function abort(why: string): Promise<void> {
   const phase = R.state;
   setState("idle");
   R.needTick = false;
-  R.aborts += 1;
-  R.abortedAt = S.handNo;
+  countAbort(why);
   let back: Record<string, any> | null = null;
   if (S.liveStatus.hero === "sitting-out" && !S.disconnect) {
     try {
@@ -331,11 +327,47 @@ async function abort(why: string): Promise<void> {
   feedAdd(`Deep stack reset given up (${why})` + (back ? (back.ok ? " — pressed I AM BACK" : ` — could NOT press I AM BACK (${pyStr(back.why ?? null)}): press it yourself`) : ""));
   log(`[stack-reset] aborted in ${phase}: ${why}; I AM BACK ${pyRepr(back)}`);
   event("stack-reset-aborted", { why, phase, sitBack: back ? { ok: !!back.ok, why: back.why ?? null } : null });
+  sayOff(why);
   if (phase === "sat-out" || phase === "leaving") {
     try {
       await stackResetSeams.tellLeader({ sid: S.session.id, slot: TABLES.slot(), phase: "aborted" });
     } catch {}
   }
+}
+
+/** One more abort on the session's count; the reset re-arms no sooner than STACK_RESET_RETRY_HANDS hands from now. */
+function countAbort(why: string): void {
+  const R = S.stackReset;
+  R.aborts += 1;
+  R.abortedAt = S.handNo;
+  R.lastAbortWhy = why;
+}
+
+/** The abort that reached STACK_RESET_MAX_ABORTS: said once — feed, log, event stack-reset-off. */
+function sayOff(why: string): void {
+  const R = S.stackReset;
+  if (R.aborts !== STACK_RESET_MAX_ABORTS) return;
+  feedAdd(`Deep stack reset is OFF for the rest of this session (${R.aborts} aborts; the last: ${why}) — deep hands play under the API's 250 bb cap`);
+  log(`[stack-reset] off for the rest of the session after ${R.aborts} aborts (the last: ${why})`);
+  event("stack-reset-off", { aborts: R.aborts, why });
+}
+
+/** /state `stackReset` (only while the session has the reset on): the machine, readable without the log. */
+export function stackResetBrief(): Record<string, any> {
+  const R = S.stackReset;
+  const lt = R.lastTick;
+  return {
+    state: R.state, bb: R.bb, waitS: R.waitS, since: R.since || null, forS: R.since ? pyRound(time() - R.since, 1) : null,
+    busy: R.busy, armedHand: R.state === "idle" ? null : R.armedHand, stackBb: R.stackBb,
+    ticks: R.ticks, maxTicks: STACK_RESET_TICKS, clicked: R.clicked, misses: R.misses,
+    retryInS: R.state === "armed" && R.needTick && R.retryAt > time() ? pyRound(R.retryAt - time(), 1) : null,
+    bbHands: [...R.bbHands],
+    lastTick: lt ? { at: lt.at ?? null, ok: !!lt.ok, why: lt.why ?? null, state: lt.state ?? null, method: lt.method ?? null,
+                     via: lt.via ?? null, pressed: !!(lt.pressed || lt.clicked) } : null,
+    aborts: R.aborts, maxAborts: STACK_RESET_MAX_ABORTS, lastAbortWhy: R.lastAbortWhy,
+    abortedHand: R.abortedAt, off: R.aborts >= STACK_RESET_MAX_ABORTS,
+    notBefore: R.state === "waiting" || R.state === "reseating" ? R.notBefore : null,
+  };
 }
 
 /** POST /table/peer-leaving — a sibling table is about to leave its table on purpose: its socket closing is not ours to

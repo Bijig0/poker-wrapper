@@ -91,7 +91,8 @@ export type StackResetState = "idle" | "armed" | "sat-out" | "leaving" | "waitin
 export const PEER_LEAVING_S = 600;
 
 /** THE DEEP-STACK RESET (stackReset.ts), one table's state plus — at the leader — the notes of the tables resetting.
- *  Its own top-level key: never on liveStatus or the light /state, which the reader golden compares key by key. */
+ *  Its own top-level key: never on liveStatus. /state carries `stackReset` (stackResetBrief) only while the session
+ *  has the reset on, so a /state without it — every reader golden's — is byte-identical to before. */
 export function freshStackReset() {
   return {
     /** the session's setting (session.ts applySessionConfig): hero's stack in bb that starts a reset, 0 = off; the
@@ -103,8 +104,10 @@ export function freshStackReset() {
     busy: false,
     armedHand: 0, stackBb: null as number | null,
     ticks: 0, clicked: false, needTick: false, lastTick: null as Record<string, any> | null, bbHands: [] as number[],
+    /** reads that pressed nothing (stackReset.ts tickBox): no tick spent, the next read no sooner than `retryAt` */
+    misses: 0, retryAt: 0.0, lastMissWhy: null as string | null,
     leftAt: 0.0, notBefore: 0.0, oldRid: null as string | null, oldTag: null as string | null,
-    abortedAt: null as number | null, aborts: 0,
+    abortedAt: null as number | null, aborts: 0, lastAbortWhy: null as string | null,
     /** sockets the sibling tables said are about to close on purpose (rid → when told) */
     peerLeaving: new Map<string, number>(),
     /** THE LEADER'S NOTES (session.ts noteStackReset): one per table resetting — `matched` once the seat count fell for
