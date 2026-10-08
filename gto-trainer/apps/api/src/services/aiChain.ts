@@ -1408,7 +1408,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       return { r, src, ms };
     };
 
-    // The size-free tree for this street: AUTOMATIC heads-up, the fixed grid three-way (gtowApi supplies it).
+    // The size-free tree for this street: the fixed 33/75 | 60 menu heads-up (HU_FIXED_MENU, 2026-10-08; AUTOMATIC when
+    // off) and three-way (gtowApi supplies it).
     const baseInput = {
       board: streetBoard,
       pot,

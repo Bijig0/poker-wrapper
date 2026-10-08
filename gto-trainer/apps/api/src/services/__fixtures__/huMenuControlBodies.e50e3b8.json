@@ -1,0 +1,2977 @@
+{
+ "control": "e50e3b8",
+ "cases": {
+  "hu_unforced": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN"
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_unforced_turn_rake": {
+   "input": {
+    "board": "Qs4s2c9h",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "startingStreet": "TURN",
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 4,
+     "preflop_rake_type": null
+    }
+   },
+   "body": {
+    "starting_street": "TURN",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 4,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_bet": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "played": {
+     "FLOP": [
+      {
+       "seat": 0,
+       "to": 8.6
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "8.6bb",
+          "85.8bb"
+         ],
+         "raise_sizes": null,
+         "second_raise_sizes": null,
+         "third_plus_raise_sizes": null
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_bet_raise": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "played": {
+     "FLOP": [
+      {
+       "seat": 0,
+       "to": 8.6
+      },
+      {
+       "seat": 1,
+       "to": 25
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "8.6bb",
+          "85.8bb"
+         ],
+         "raise_sizes": null,
+         "second_raise_sizes": null,
+         "third_plus_raise_sizes": null
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "8.6bb",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "25bb",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_bet_raise_reraise": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "played": {
+     "FLOP": [
+      {
+       "seat": 0,
+       "to": 8.6
+      },
+      {
+       "seat": 1,
+       "to": 25
+      },
+      {
+       "seat": 0,
+       "to": 60
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "8.6bb",
+          "85.8bb"
+         ],
+         "raise_sizes": null,
+         "second_raise_sizes": [
+          "60bb",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "8.6bb",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "25bb",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_short_river": {
+   "input": {
+    "board": "4sJh9d",
+    "pot": 19.6,
+    "stack": 26.2,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "stacks": [
+     26.2,
+     152
+    ],
+    "played": {
+     "FLOP": [
+      {
+       "seat": 0,
+       "to": 18.8
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 19.6,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "18.8bb",
+          "26.2bb"
+         ],
+         "raise_sizes": null,
+         "second_raise_sizes": null,
+         "third_plus_raise_sizes": null
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 26.2,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 152,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_shove": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "stacks": [
+     28,
+     100
+    ],
+    "played": {
+     "FLOP": [
+      {
+       "seat": 0,
+       "to": 28
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "28bb"
+         ],
+         "raise_sizes": null,
+         "second_raise_sizes": null,
+         "third_plus_raise_sizes": null
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 28,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 100,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_carry_resolved": {
+   "input": {
+    "board": "Kd7c3s2h",
+    "pot": 15,
+    "stack": 96.7,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "startingStreet": "TURN",
+    "played": {
+     "TURN": [
+      {
+       "seat": 1,
+       "to": 7.5
+      }
+     ]
+    },
+    "carry": {
+     "street": "TURN",
+     "seats": [
+      {
+       "from": "resolved",
+       "lists": [
+        [
+         "20.5bb"
+        ],
+        null,
+        null,
+        null
+       ]
+      },
+      {
+       "from": "resolved",
+       "lists": [
+        [
+         "10.1bb"
+        ],
+        null,
+        null,
+        null
+       ]
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "TURN",
+    "pot": 15,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "20.5bb",
+          "96.7bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "96.7bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "96.7bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "96.7bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "10.1bb",
+          "7.5bb",
+          "96.7bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "96.7bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "96.7bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "96.7bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 96.7,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 96.7,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_grid": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "huGrid": {
+     "bet": [
+      "33%",
+      "75%"
+     ],
+     "raise": [
+      "60%"
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_grid_played": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "huGrid": {
+     "bet": [
+      "33%",
+      "75%"
+     ],
+     "raise": [
+      "60%"
+     ]
+    },
+    "played": {
+     "FLOP": [
+      {
+       "seat": 1,
+       "to": 9
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "9bb",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "9bb",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "85.8bb"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_fixedBets": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "fixedBets": {
+     "FLOP": 50
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "50%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "50%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "50%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "50%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "50%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "50%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "50%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "50%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "hu_fixedLevels": {
+   "input": {
+    "board": "Qs4s2c",
+    "pot": 27,
+    "stack": 85.8,
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "SB",
+    "ipPos": "BTN",
+    "fixedLevels": {
+     "FLOP": [
+      "33%",
+      "120%"
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 27,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "120%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "120%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "120%",
+          "85.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "85.8bb"
+         ],
+         "raise_sizes": [
+          "120%",
+          "85.8bb"
+         ],
+         "second_raise_sizes": [
+          "120%",
+          "85.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "120%",
+          "85.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        },
+        {
+         "position": "IP",
+         "type": "AUTOMATIC",
+         "allow_limp": false
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "SB",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 85.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "three_unforced": {
+   "input": {
+    "board": "7sJd5s",
+    "pot": 36.3,
+    "stack": 97.8,
+    "stacks": [
+     28,
+     113.2,
+     97.8
+    ],
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "HJ",
+    "ipPos": "BTN",
+    "mid": {
+     "pos": "CO",
+     "range": "ones"
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 36.3,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "HJ",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 28,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "OOP+1",
+      "display_position": "CO",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 113.2,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 97.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "three_played": {
+   "input": {
+    "board": "7sJd5s",
+    "pot": 36.3,
+    "stack": 97.8,
+    "stacks": [
+     28,
+     113.2,
+     97.8
+    ],
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "HJ",
+    "ipPos": "BTN",
+    "mid": {
+     "pos": "CO",
+     "range": "ones"
+    },
+    "played": {
+     "FLOP": [
+      {
+       "seat": 0,
+       "to": 28
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 36.3,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "HJ",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 28,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "OOP+1",
+      "display_position": "CO",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 113.2,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 97.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "three_played_bet": {
+   "input": {
+    "board": "7sJd5s",
+    "pot": 36.3,
+    "stack": 97.8,
+    "stacks": [
+     28,
+     113.2,
+     97.8
+    ],
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "HJ",
+    "ipPos": "BTN",
+    "mid": {
+     "pos": "CO",
+     "range": "ones"
+    },
+    "played": {
+     "FLOP": [
+      {
+       "seat": 1,
+       "to": 12
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 36.3,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "12bb",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "12bb",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "12bb",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "HJ",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 28,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "OOP+1",
+      "display_position": "CO",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 113.2,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 97.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  },
+  "three_carry": {
+   "input": {
+    "board": "7sJd5s",
+    "pot": 36.3,
+    "stack": 97.8,
+    "stacks": [
+     28,
+     113.2,
+     97.8
+    ],
+    "oopRange": "ones",
+    "ipRange": "ones",
+    "oopPos": "HJ",
+    "ipPos": "BTN",
+    "mid": {
+     "pos": "CO",
+     "range": "ones"
+    },
+    "played": {
+     "FLOP": [
+      {
+       "seat": 1,
+       "to": 12
+      }
+     ]
+    },
+    "carry": {
+     "street": "FLOP",
+     "seats": [
+      {
+       "from": "sent",
+       "lists": [
+        [
+         "33%",
+         "75%",
+         "28bb"
+        ],
+        [
+         "60%",
+         "28bb"
+        ],
+        [
+         "60%",
+         "28bb"
+        ],
+        [
+         "60%",
+         "28bb"
+        ]
+       ]
+      },
+      {
+       "from": "sent",
+       "lists": [
+        [
+         "33%",
+         "75%",
+         "97.8bb"
+        ],
+        [
+         "60%",
+         "97.8bb"
+        ],
+        [
+         "60%",
+         "97.8bb"
+        ],
+        [
+         "60%",
+         "97.8bb"
+        ]
+       ]
+      },
+      {
+       "from": "sent",
+       "lists": [
+        [
+         "33%",
+         "75%",
+         "97.8bb"
+        ],
+        [
+         "60%",
+         "97.8bb"
+        ],
+        [
+         "60%",
+         "97.8bb"
+        ],
+        [
+         "60%",
+         "97.8bb"
+        ]
+       ]
+      }
+     ]
+    }
+   },
+   "body": {
+    "starting_street": "FLOP",
+    "pot": 36.3,
+    "ante": null,
+    "ante_distribution_method": "PER_PLAYER",
+    "bet_sizes": {
+     "allin_threshold": 100,
+     "allin_if_less_than": 0,
+     "merge_sizes_threshold": 0,
+     "max_num_raises": 5,
+     "street_bet_sizes": [
+      {
+       "street": "FLOP",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "12bb",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "TURN",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      },
+      {
+       "street": "RIVER",
+       "position_bet_sizes": [
+        {
+         "position": "OOP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "28bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "28bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "28bb"
+         ]
+        },
+        {
+         "position": "OOP+1",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        },
+        {
+         "position": "IP",
+         "type": "FIXED",
+         "use_fixed_sizes": true,
+         "allow_limp": false,
+         "bet_sizes": [
+          "33%",
+          "75%",
+          "97.8bb"
+         ],
+         "raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "second_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ],
+         "third_plus_raise_sizes": [
+          "60%",
+          "97.8bb"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "players": [
+     {
+      "position": "OOP",
+      "display_position": "HJ",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 28,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "OOP+1",
+      "display_position": "CO",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 113.2,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     },
+     {
+      "position": "IP",
+      "display_position": "BTN",
+      "blind": null,
+      "range": "1326 weights, sum 1326",
+      "stack": 97.8,
+      "tournament_instant_bounty": null,
+      "tournament_total_bounty": null
+     }
+    ],
+    "tree_operations": [],
+    "resolving_policy": null,
+    "rake": {
+     "pct_of_pot": 5,
+     "cap_in_chips": 0.6,
+     "preflop_rake_type": null
+    },
+    "tournament_data": null
+   }
+  }
+ }
+}

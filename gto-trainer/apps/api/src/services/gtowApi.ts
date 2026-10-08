@@ -279,6 +279,8 @@ class GtowApi {
       treeStacksOf(input), input.played ?? null, TREE_SETTINGS_TAG,
       // a re-tree's carried menus (2026-10-08, retree-consistency) — only when present, so every other key is unchanged
       ...(input.carry ? [input.carry] : []),
+      // the heads-up fixed menu (2026-10-08, HU_FIXED_MENU) — only when it applies, so every other key is unchanged
+      ...(huFixedMenuApplies(input) ? [HU_FIXED_MENU_TAG] : []),
     ]);
   }
 
@@ -302,6 +304,12 @@ class GtowApi {
    *    does not fit there, the level gets the base raise list instead.
    *  - THREE SEATS: FIXED everywhere (AUTOMATIC is refused for 3+ players): a level played is its amount alone on every
    *    seat, a level not played the base list (THREE_WAY_SIZES) — and every list its seat's all-in.
+   *  - HEADS-UP FIXED MENU (2026-10-08, Brady "fix 3"; HU_FIXED_MENU=on, the default — off = the AUTOMATIC rules above,
+   *    byte for byte): NO AUTOMATIC SEAT on a heads-up tree. A street with no wager played: every seat FIXED at
+   *    HU_FIXED_SIZES (bets 33% / 75%, raises 60% at every level — the 3-way list) + its all-in. A street with wagers
+   *    played: every seat keeps that menu and its OWN wagers are added at their levels (the union the re-tree carry
+   *    builds from a FIXED tree — the first tree of a played street and the re-tree are the same request); a base bet
+   *    within the walk's tolerance of the seat's own played bet is dropped for it (one size, the one played).
    */
   buildCustomTree(input: CustomTreeInput) {
     // Seats in acting order. A third seat makes it GTO Wizard's 3-player tree ("OOP+1" between the two).
@@ -343,6 +351,24 @@ class GtowApi {
     // A multi-size FIXED grid for a heads-up wager-free street (2026-09-19): the alternative to AUTOMATIC, opt-in per
     // tree (huGrid; the collapse-calibration harness).
     const grid = (i: number, g: { bet: readonly string[]; raise: readonly string[] }) => fixedOf(i, [g.bet, g.raise, g.raise, g.raise]);
+    // THE HEADS-UP FIXED MENU (2026-10-08, HU_FIXED_MENU): where a heads-up seat was AUTOMATIC it is FIXED at
+    // HU_FIXED_SIZES instead (+ its all-in), so the menu is ours and the same on every tree of the hand
+    const huFix = huFixedMenuApplies(input);
+    const huBase = (lv: number): readonly string[] => (lv === 0 ? HU_FIXED_SIZES.bet : HU_FIXED_SIZES.raise);
+    const huFixed = (i: number) => fixedOf(i, [huBase(0), huBase(1), huBase(2), huBase(3)]);
+    /** a heads-up fixed bet list with the seat's own played bet: a base % within the walk's tolerance (5% or 0.15bb,
+     *  matchActionLoose) of that amount on the street's starting pot is the same size — the played amount stays */
+    const huBetUnion = (list: readonly string[], s: "FLOP" | "TURN" | "RIVER", own: string[]): string[] => {
+      const amts = own.map((x) => Number(/^(\d+(?:\.\d+)?)bb$/.exec(x)?.[1])).filter((x) => Number.isFinite(x));
+      const onStart = s === (input.startingStreet ?? "FLOP");
+      const keep = list.filter((x) => {
+        const m = /^(\d+(?:\.\d+)?)%$/.exec(x);
+        if (!m || !onStart) return true;
+        const amt = Math.round(Number(m[1]) * input.pot) / 100;
+        return !amts.some((a) => Math.abs(a - amt) <= Math.max(0.05 * a, 0.15));
+      });
+      return [...new Set([...keep, ...own])];
+    };
     /** a street with wagers played: the levels as amounts (see the header) */
     const playedStreet = (ws: PlayedWager[], s: "FLOP" | "TURN" | "RIVER") => {
       /** a wager that IS its actor's all-in (2026-10-03, review): a short stack's shove is carried by that seat's own
@@ -370,6 +396,16 @@ class GtowApi {
       if (input.mid || input.huGrid) {
         const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : THREE_WAY_SIZES;
         return seats.map((_, i) => fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? base.bet : base.raise; })));
+      }
+      if (huFix) {
+        // THE HEADS-UP FIXED MENU: each seat its base menu with its own wagers added — or, on a re-tree, the menus
+        // carried (a FIXED tree's, as sent: the same lists), its own wagers added; the base bet a played bet replaces dropped
+        const own = (i: number, lv: number) => ws.filter((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
+        return seats.map((_, i) => {
+          const cs = carried?.seats[i] ?? null;
+          const lists = cs ? carriedLists(cs, i, ws) : [0, 1, 2, 3].map((lv) => [...new Set([...huBase(lv), ...own(i, lv)])]);
+          return fixedOf(i, lists.map((l, lv) => (lv === 0 && l ? huBetUnion(l, s, own(i, 0)) : l)));
+        });
       }
       return seats.map((_, i) => {
         const cs = carried?.seats[i] ?? null;
@@ -432,7 +468,9 @@ class GtowApi {
               ? { street: s, position_bet_sizes: seats.map((_, i) => threeWay(i)) }
               : input.huGrid
                 ? { street: s, position_bet_sizes: seats.map((_, i) => grid(i, input.huGrid!)) }
-                : { street: s, position_bet_sizes: seats.map((_, i) => auto(i)) };
+                : huFix
+                  ? { street: s, position_bet_sizes: seats.map((_, i) => huFixed(i)) }
+                  : { street: s, position_bet_sizes: seats.map((_, i) => auto(i)) };
     const player = (i: number, display: string, range: number[]) => ({
       position: seats[i]!, display_position: display, blind: null, range, stack: stacks[i]!,
       tournament_instant_bounty: null, tournament_total_bounty: null,
@@ -1163,7 +1201,7 @@ export function treeFingerprint(input: CustomTreeInput): TreeFingerprint {
     pot: input.pot, stack: input.stack, stacks: treeStacksOf(input),
     fixedLevels: played?.length ? played.map((w) => `${bbAmount(w.to)} by ${names[w.seat] ?? `seat${w.seat}`}`)
       : input.fixedLevels?.[street]?.length ? input.fixedLevels[street]!.slice() : fixedBet != null ? [`${fixedBet}%`] : null,
-    rake: JSON.stringify(input.rake ?? null), huGrid: input.huGrid ? JSON.stringify(input.huGrid) : null,
+    rake: JSON.stringify(input.rake ?? null), huGrid: input.huGrid ? JSON.stringify(input.huGrid) : huFixedMenuApplies(input) ? HU_FIXED_MENU_TAG : null,
     ranges: seats.map(fp),
   };
 }
@@ -1200,6 +1238,25 @@ export function describeTreeChange(prev: TreeFingerprint | null, next: TreeFinge
  * a street that DID see a wager is pinned to the observed sizes instead, exactly as heads-up.
  */
 export const THREE_WAY_SIZES = { bet: ["33%", "75%"], raise: ["60%"] } as const;
+
+/**
+ * THE HEADS-UP FIXED MENU (2026-10-08, Brady "fix 3"; register `postflop-size-menu`). A heads-up tree used to leave every
+ * seat that had not wagered on the street AUTOMATIC: GTO Wizard chose its sizes, a different menu per tree. The re-tree
+ * carry (retree-consistency) then carried whatever `auto` returned first — stress core-bvb-007 turn: tree A offered hero
+ * CHECK / BET 20.5 (a lone ~137% bet), he checked Q8 100% and later folded it 98% to a half-pot bet; with a 25% bet on
+ * the menu he bets it 99.6%. Across 52 re-run core hands 22 mixes moved ≥10 points and 12 top actions flipped only
+ * because the carried auto menu differed from a fresh one. Now the heads-up menu is ours: the 3-way study's 33% / 75%
+ * bets and 60% raises (memory betsize-study-3way) + each seat's all-in, on every street of every heads-up answer-path
+ * tree. Identical tables now send identical trees (a cache win: one body per table state, never per auto pick).
+ * HU_FIXED_MENU=on (unset) | off (the AUTOMATIC rules, the request byte for byte as before), read at every tree.
+ */
+export const HU_FIXED_SIZES = THREE_WAY_SIZES;
+export const HU_FIXED_MENU_TAG = "hu-fixed:33/75|60";
+export const huFixedMenuOn = (env: Record<string, string | undefined> = process.env): boolean =>
+  String(env.HU_FIXED_MENU ?? "on").trim().toLowerCase() !== "off";
+/** The heads-up fixed menu applies to this tree: heads-up, no explicit grid (the collapse-calibration harness), switch on. */
+export const huFixedMenuApplies = (input: Pick<CustomTreeInput, "mid" | "huGrid">): boolean =>
+  !input.mid && !input.huGrid && huFixedMenuOn();
 
 /**
  * THE TREE SETTINGS, EXPLICIT AND OFF (2026-10-03, Brady: "I don't want any weird sort of settings sent"). What was

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { bbAmount, describeTreeChange, GtowApi, seatAllIns, treeFingerprint, treeStacksOf, TREE_SETTINGS, type CustomTreeInput } from "./gtowApi";
 
 /**
@@ -38,6 +38,10 @@ describe("each seat its own stack (item 1)", () => {
 });
 
 describe("heads-up: state in, everything else automatic (items 3, 6, 8)", () => {
+  // the AUTOMATIC rules: HU_FIXED_MENU=off (since 2026-10-08 the heads-up default is the fixed menu — gtowApi.huFixedMenu.test.ts)
+  const huMenuBefore = process.env.HU_FIXED_MENU;
+  beforeAll(() => { process.env.HU_FIXED_MENU = "off"; });
+  afterAll(() => { if (huMenuBefore == null) delete process.env.HU_FIXED_MENU; else process.env.HU_FIXED_MENU = huMenuBefore; });
   it("no wager on the street: both seats AUTOMATIC", () => {
     expect(flop(api.buildCustomTree(hu())).map((p: any) => p.type)).toEqual(["AUTOMATIC", "AUTOMATIC"]);
   });

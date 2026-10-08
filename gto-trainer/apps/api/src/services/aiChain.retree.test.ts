@@ -6,7 +6,7 @@
  * weight 0.0005 at his facing node. Now: B carries A's menus (hero 20.5, BB 10.1 + the 7.5) and his check is narrowed by
  * the strategy he was answered with.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import fxJson from "./__fixtures__/retreeCoreBvb007.json";
 import { gtowApi, THREE_WAY_SIZES, type CustomTreeInput, type PlayedWager } from "./gtowApi";
 import { dropAnsweredNodes, forgetCheckpoints, resolvedMenus, retreeInputs, solveAiChain, type AiChainSpec } from "./aiChain";
@@ -55,6 +55,11 @@ const spec = (streets: string[][]): AiChainSpec => ({
 });
 const turnEntry = (input: CustomTreeInput) => (gtowApi.buildCustomTree(input).bet_sizes.street_bet_sizes as any[]).find((s) => s.street === "TURN").position_bet_sizes;
 
+// the fixture's trees are the AUTOMATIC heads-up ones it was stored from: HU_FIXED_MENU=off for this file (the fixed
+// heads-up menu of 2026-10-08 and its re-tree: gtowApi.huFixedMenu.test.ts)
+const huMenuBefore = process.env.HU_FIXED_MENU;
+beforeAll(() => { process.env.HU_FIXED_MENU = "off"; });
+afterAll(() => { if (huMenuBefore == null) delete process.env.HU_FIXED_MENU; else process.env.HU_FIXED_MENU = huMenuBefore; });
 let restore: (() => void) | null = null;
 const envBefore = process.env.HERO_STREET_AS_ANSWERED;
 afterEach(() => {
