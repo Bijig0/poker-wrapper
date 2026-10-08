@@ -721,7 +721,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "a re-tree that re-chooses hero's menu is another game: his range under it is not the range he played (stress core-bvb-007, solves 7733 → 7734: hero's weight at his facing node 0.123 → 0.0005, the served mix a hand the model does not hold)",
     fix: "none needed — this is the consistent read; a vendor tree that adds a size to a solved tree would make it exact",
     status: "by-design",
-    cost: "0 requests (the earlier tree's nodes are read from the cache). Measured offline 2026-10-08 (stored traces, live since 09-21): see the hero-absent-passive entry's cost and the retree-consistency memory for the numbers",
+    cost: "0 requests (the earlier tree's nodes are read from the cache). Measured offline 2026-10-08 on the stored traces: live since 09-21, 2,488 postflop walks — 380 had hero acting earlier on the street, 277 of them on another tree than his answer's; his hand's share of the action he took, that tree's over the answered one: p10 0.72, median 1.00, p90 1.09; under half in 21 (7.6%), under 1e-3 in 3 (answered: 0). Core stress store 54 such walks, 3 under half. Every re-treed street is a NEW BODY (its menus differ): the postflop effect needs requests to measure",
     code: "services/aiChain.ts retreeInputs / resolvedMenus / answeredHeroNode / recordAnsweredHeroNode / retreeNotesOf · gtowApi.ts buildCustomTree carriedLists (CarriedMenus)",
   },
   {
@@ -742,7 +742,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "within a street nothing re-floors hero's combo; a re-tree that changed his menu (fixed at its cause by retree-consistency) or a very rare hero action can leave his hand all but out of his own range, and the solver's strategy there is untrained",
     fix: "the cause, case by case (retree-consistency removed the known one); the net stays for the rest",
     status: "by-design",
-    cost: "measured offline 2026-10-08 on the stored traces (live since 09-21): 5 walks under 1e-3 at hero's node; 2 after retree-consistency — see the retree-consistency memory for the pick changes",
+    cost: "measured offline 2026-10-08 on the stored traces (live since 09-21, 2,488 postflop walks): 5 answers had hero under 1e-3 at his node — the passive pick moves 2 of them (13033 ALLIN 80.8 → CALL 20, 11380 RAISE 73.1 → CALL 18; the other 3 were CALL 100% already); with retree-consistency 2 remain (both CALL 100%: no pick moves). Stress stores (scripted hero lines take actions his answer gave 0%): core 1 → 0; the 243 store 58 → 64",
     code: "services/heroAbsent.ts heroAbsentPick / heroAbsentNote / heroAbsentPassiveOn · chainChecks.checkHeroCombo (HERO_ABSENT_WEIGHT) · fastSolve.ts solvePostflopViaChainOnce · aiChain.ts (heroWeight at hero's node)",
   },
   {
