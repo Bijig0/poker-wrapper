@@ -241,7 +241,7 @@ describe("layer 1 + 2 — the pool floors", () => {
     expect(pool && Object.keys(pool).length).toBeGreaterThan(10);
     expect([...poolFloorsOf(note())]).toEqual([["BTN", { kind: "coldcall", key: KEY, was: 1.2 }]]);
     const limp = poolLimpFloorNote([{ pos: "UTG", key: "limp_first_short_le60" as PoolLimpKey, stack: 30, freq: 0.1, n: 500, was: 3.5, now: 120 } as any], "toy");
-    expect([...poolFloorsOf(`x · ${limp}`)]).toEqual([["UTG", { kind: "limp", key: "limp_first_short_le60", was: 3.5 }]]);
+    expect([...poolFloorsOf(`x · ${limp}`)]).toEqual([["UTG", { kind: "limp", key: "limp_first_short_le60", was: 3.5, limpTable: "v2" }]]);
     expect(poolRangeOf({ kind: "limp", key: "limp_first_short_le60", was: 0 })).not.toBeNull();
   });
   test("the cold-caller floored to the pool range the note names passes both layers", async () => {
