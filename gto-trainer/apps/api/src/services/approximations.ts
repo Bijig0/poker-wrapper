@@ -808,15 +808,18 @@ export const APPROXIMATIONS: Approximation[] = [
     replaces: { gto: "playing on at any depth", with: "sit out the next big blind, leave, wait 60 s, take a fresh seat at the normal buy-in" },
     offSwitch: { env: "stackResetBb (session config)", values: "absent = off (default) · setup page 'Deep stack' On = 150bb (Brady 2026-10-09: the chart ladder ends at 150; was 250), stackResetWaitS 60", where: "wrapper setup page" },
     badge: "DEEP-STACK RESET",
-    owner: "Brady", since: "2026-10-03", reviewBy: "2026-10-19",
-    diagnostic: "wrapper events stack-reset-armed / -done / -aborted",
+    owner: "Brady", since: "2026-10-03", reviewBy: "2026-10-23",
+    diagnostic: "wrapper events stack-reset-armed / -miss / -tick / -satout / -left / -done / -aborted / -off; GET :77xx/state `stackReset` (state, ticks, misses, aborts, off, lastTick)",
     source: "wrapper",
-    title: "At 250bb hero leaves and re-seats",
-    what: "a per-table state machine (armed → sat out → left → wait → reseated); any failure aborts back to play. Not yet checked on a live client",
+    title: "At the threshold (150bb) hero leaves and re-seats",
+    what: "a per-table state machine (armed → sat out → left → wait → reseated); any failure aborts back to play (off for the session after 3 aborts). "
+      + "DEFECT 2026-10-09 (session_20261009_052537, both tables): every reset since 10-03 aborted on \"no 'Sit out next big blind' box\" — the read looked only at leaf elements; the client's label is not one (the reader's own capture listed it at 90 x 13 px in 5,474 of 5,474 captures, the frame undrawn throughout, so not a paint problem), and the three ticks burned in a second. "
+      + "FIX (branch claude/stack-reset-undrawn-frame, NOT MERGED): the label found by its text and shown-by-style, its box by the same shared-row guard; pointer click on the box (else the label), a DOM click in our frame when there is no point / the page is not rendering / the pointer click did not take; a read that pressed nothing costs no tick (retried every 5 s), an abort only when hero posts the big blind 3 times after the arming. "
+      + "PRACTICE-TABLE CHECK STILL OWED (Brady present): 2 practice tables, threshold just above the buy-in; expect stack-reset-armed → -satout → -left → -done, the box visibly ticked, no table-disconnected, the other table uninterrupted",
     why: "past 250bb GTO Wizard's preflop tree is capped (gtow-preflop-250bb-cap) and the charts stop at 150bb — deeper play is played on approximations",
-    fix: "a decision after a practice-table check",
+    fix: "merge claude/stack-reset-undrawn-frame, relaunch the wrapper, then the practice-table check; a decision after it",
     status: "by-design",
-    code: "apps/wrapper/src/stackReset.ts",
+    code: "apps/wrapper/src/stackReset.ts · src/js/stackreset.SITOUT_BB_READ_JS_TMPL.js",
   },
   {
     id: "limp-4bet-menu",

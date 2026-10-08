@@ -19,7 +19,15 @@ import {
   STACK_RESET_LEAVE_S, applySessionConfig, honourClosedTables, noteStackReset, stackResetDeferred, stackResetRoute, stackResetSeatWant, tablesWanted,
 } from "../../src/session";
 import { maybeSitBackIn, sitBackSeams } from "../../src/sitback";
-import { STACK_RESET_TICKS, heroStackBb, maybeStackReset, peerLeaving, stackResetSeams } from "../../src/stackReset";
+import {
+  STACK_RESET_MAX_ABORTS, STACK_RESET_MISS_S, STACK_RESET_RETRY_HANDS, STACK_RESET_TICKS, heroStackBb, ignitionSitoutNextBb, maybeStackReset,
+  peerLeaving, sitoutBbReadJs, stackResetSeams,
+} from "../../src/stackReset";
+import * as cdp from "../../src/cdp";
+import { seams } from "../../src/state";
+import { StateReply } from "../../src/contract";
+import { state } from "../../src/view";
+import { FakeSitoutTable, FDoc, FEl, ariaRows, labelRows, sharedRow } from "./fakeSitoutBox";
 import { checker, J, scratchDirs } from "./helpers";
 
 const T0 = 1_791_032_000;
@@ -351,5 +359,247 @@ test("two tables resetting at once each end on a frame of their own (the page's 
   r2({ tag: "0", ord: 0, me: 1 });
   const a = r2({ ord: 1, me: 2 }), b = r2({ ord: 2, me: 3 });
   eq("one new frame: the first unpinned table takes it, the other takes none", [tagOf(a), tagOf(b)], ["7", null]);
+  expect(fails).toEqual([]);
+});
+
+// ---- 2026-10-09 (session_20261009_052537): the read that never found the box, the ticks it burned, /state ----------
+
+/** The real tick (ignitionSitoutNextBb) over a fake table frame: one table, fake time (its 0.4 s waits are instant). */
+async function realTick(doc: FDoc, o: { clickedBefore?: boolean; visibility?: string } = {}) {
+  delete process.env.TABLE_SLOT;
+  delete process.env.TABLE_COUNT;
+  reloadConfig();
+  resetState();
+  setFakeTime(T0);
+  const t = new FakeSitoutTable(doc);
+  if (o.visibility) t.visibility = o.visibility;
+  const undo = t.install();
+  try {
+    const res = await ignitionSitoutNextBb(!!o.clickedBefore);
+    return { res, t };
+  } finally {
+    undo();
+    realTime();
+    resetState();
+  }
+}
+
+test("the read finds the label by its text — a <label> holding its box is not a leaf — presses the box, reads it ticked", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const L = labelRows();
+  const t = new FakeSitoutTable(L.doc);
+  const d = t.run(sitoutBbReadJs(null));
+  eq("found, unticked, by the box inside the label, pointing at the box", [d.found, d.checked, d.via, d.shared, d.on], [true, false, "input", false, "box"]);
+  eq("  ... at the box's centre in page coordinates (frame 2,70)", [d.x, d.y], [2 + 18 + 6.5, 70 + 1460 + 6.5]);
+  // what the old read did with the same frame: leaves only — the label holds an <input>, so it never matched
+  const old = L.doc.body.querySelectorAll("*").filter((e) => e.children.length === 0 && /^\s*sit out next big blind\s*$/i.test(e.textContent));
+  eq("  (the old leaf-only read: nothing — the live defect)", old.length, 0);
+  const { res, t: t2 } = await realTick(L.doc);
+  eq("the tick: a pointer press on the box, ticked", [res.ok, res.pressed, res.state, res.method, L.bbBox.checked], [true, true, "ticked", "point (box)", true]);
+  eq("  ... one press, on our box; the other box untouched", [t2.presses.map((p) => p.hit), L.handBox.checked], [["input"], false]);
+  const again = await realTick(L.doc);
+  eq("read again: already ticked, nothing pressed", [again.res.ok, again.res.state, again.t.presses.length], [true, "already ticked", 0]);
+  expect(fails).toEqual([]);
+});
+
+test("an undrawn frame (every box 0 x 0): the label is still found, pressed through the DOM in our frame, ticked", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const A = ariaRows();
+  A.doc.undrawn = true;
+  const d = new FakeSitoutTable(A.doc).run(sitoutBbReadJs(null));
+  eq("found by text, unticked (aria), nothing to point at", [d.found, d.checked, d.via, d.x, d.y, d.w, d.h], [true, false, "aria", null, null, 0, 0]);
+  check("  ... the frame's draw heartbeat reported (idle 2,593 s)", d.idleMs > 2_000_000, J(d.idleMs));
+  const { res, t } = await realTick(A.doc);
+  eq("the tick: no pointer press, a DOM click on the box, ticked", [res.ok, res.pressed, res.state, t.presses.length, A.bb.box.attrs["aria-checked"]],
+     [true, true, "ticked", 0, "true"]);
+  check("  ... said so", /^dom: div \(the box\) \(nothing to point at/.test(res.method), res.method);
+  eq("  ... the other row untouched", A.hand.box.attrs["aria-checked"], "false");
+  // drawn, the same component shape: the span measures nothing itself (display: contents) — the box is pressed
+  const B = ariaRows();
+  const p = await realTick(B.doc);
+  eq("drawn: a pointer press on the aria box, the row's handler ticks it", [p.res.ok, p.res.method, p.t.presses[0]?.hit, B.bb.box.attrs["aria-checked"]],
+     [true, "point (box)", "div", "true"]);
+  // the page not rendering (minimised): a pointer press would be parked — the DOM click goes instead
+  const C = ariaRows();
+  const h = await realTick(C.doc, { visibility: "hidden" });
+  eq("page hidden: DOM click, ticked", [h.res.ok, h.t.presses.length, C.bb.box.attrs["aria-checked"]], [true, 0, "true"]);
+  expect(fails).toEqual([]);
+});
+
+test("a pointer press that leaves the box unticked: once more through the DOM, on the box", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  // the handler sits on the box alone; the box measures nothing, so the press goes to the label text — which does nothing
+  const box = new FEl("div", { attrs: { "aria-checked": "false" } });
+  box.onClick = () => { box.attrs["aria-checked"] = "true"; };
+  const lab = new FEl("span", { text: "Sit out next big blind", rect: { x: 36, y: 1460, width: 90, height: 13 } });
+  const doc = new FDoc([new FEl("div", { attrs: { "data-qa": "myPlayerTag" } }), new FEl("div", {}, [box, lab])]);
+  const { res, t } = await realTick(doc);
+  eq("pointer on the label, then the DOM click on the box: ticked", [res.ok, t.presses.map((p) => p.hit), box.attrs["aria-checked"], box.clicks],
+     [true, ["span:Sit out next big blind"], "true", 1]);
+  check("  ... the method says both", /^point \(label\) → dom: div \(the box\)$/.test(res.method), res.method);
+  expect(fails).toEqual([]);
+});
+
+test("a container holding BOTH labels is rejected: its box never answers for ours, never pressed for ours", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const Sh = sharedRow();
+  const d = new FakeSitoutTable(Sh.doc).run(sitoutBbReadJs(null));
+  eq("found; the shared row's (ticked) box is NOT read as ours — unknown", [d.found, d.checked, d.via, d.shared, d.on], [true, null, null, true, "label"]);
+  const { res, t } = await realTick(Sh.doc);
+  eq("the press goes to OUR label, the other box stays as it was", [t.presses.map((p) => p.hit), Sh.handBox.checked, Sh.handBox.clicks],
+     [["span:Sit out next big blind"], true, 0]);
+  eq("  ... and the result says the state is unreadable, never 'ticked'", [res.ok, res.state], [true, "clicked (tick state unreadable - check the table)"]);
+  const again = await realTick(Sh.doc, { clickedBefore: true });
+  eq("pressed before, state unreadable: not pressed again", [again.res.state, again.t.presses.length], ["clicked earlier (tick state unreadable)", 0]);
+  expect(fails).toEqual([]);
+});
+
+test("a hidden label (display: none up its chain, [hidden], visibility: hidden, opacity 0) is not found and not clicked", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  type Rows = ReturnType<typeof labelRows>;
+  const ways: [string, (L: Rows) => void][] = [
+    ["display: none on the row", (L) => { L.bb.parentElement!.style.display = "none"; }],
+    ["[hidden] on the label", (L) => { L.bb.hidden = true; }],
+    ["visibility: hidden", (L) => { L.bb.style.visibility = "hidden"; }],
+    ["opacity 0", (L) => { L.bb.style.opacity = "0"; }],
+  ];
+  for (const [name, hide] of ways) {
+    const L = labelRows();
+    hide(L);
+    const { res, t } = await realTick(L.doc);
+    eq(`${name}: not found, nothing pressed, a retry (no tick)`,
+       [res.ok, res.retry, res.pressed ?? false, t.presses.length, t.evals.filter((e) => e === "click").length, L.bbBox.checked],
+       [false, true, false, 0, 0, false]);
+    check(`  ... says it is hidden`, /\(1 hidden by style\)/.test(res.why), res.why);
+  }
+  // a hidden stale copy beside the shown one: the shown one is the one pressed
+  const L = labelRows();
+  const stale = new FEl("label", { text: "Sit out next big blind", style: { display: "none" } }, [new FEl("input", { type: "checkbox" })]);
+  L.doc.body.append(stale);
+  stale.doc = L.doc;
+  const { res } = await realTick(L.doc);
+  eq("a hidden stale copy beside the shown one: the shown one ticked", [res.ok, L.bbBox.checked], [true, true]);
+  expect(fails).toEqual([]);
+});
+
+test("a read that presses nothing costs no tick: tried again after STACK_RESET_MISS_S, said once; ticks count presses only", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const r = rig(null);
+  try {
+    const nobox = { ok: false, retry: true, why: "no 'Sit out next big blind' box on the table" };
+    const answers: Record<string, any>[] = [
+      { ok: false, retry: true, why: "table read failed: the page's reply never came" },
+      nobox, nobox, nobox, nobox,
+      { ok: true, clicked: true, pressed: true, state: "ticked", method: "dom: div (the box)" },
+    ];
+    stackResetSeams.tick = async (cb: boolean) => { r.calls.tick.push(cb); return { ...answers.shift()! }; };
+    r.stack(170);
+    S.stackReset.bb = 150;
+    await r.tick(0);
+    eq("armed; the first read failed: no tick spent, still armed", [S.stackReset.state, S.stackReset.ticks, S.stackReset.misses, r.calls.tick.length], ["armed", 0, 1, 1]);
+    await r.tick(1); await r.tick(STACK_RESET_MISS_S - 0.5);
+    eq(`  ... not read again inside ${STACK_RESET_MISS_S} s`, r.calls.tick.length, 1);
+    for (let k = 1; k <= 4; k++) await r.tick(k * STACK_RESET_MISS_S + 0.1);
+    eq("four more reads that found nothing (more than STACK_RESET_TICKS): still armed, 0 ticks, 5 misses",
+       [S.stackReset.state, S.stackReset.ticks, S.stackReset.misses, r.kinds().includes("stack-reset-aborted")], ["armed", 0, 5, false]);
+    eq("  ... said once per reason (two reasons), not per read", r.kinds().filter((k) => k === "stack-reset-miss").length, 2);
+    await r.tick(5 * STACK_RESET_MISS_S + 0.2);
+    eq("the box found and pressed: tick 1", [S.stackReset.ticks, S.stackReset.clicked, S.stackReset.lastTick?.method], [1, true, "dom: div (the box)"]);
+    eq("  ... one stack-reset-tick event, attempt 1", r.events().filter((e) => e.kind === "stack-reset-tick").map((e) => e.attempt), [1]);
+    S.liveStatus.hero = "sitting-out";
+    await r.tick(40);
+    eq("then the client sat hero out: the reset goes on (left)", [S.stackReset.state, r.calls.leave], ["waiting", 1]);
+  } finally {
+    r.undo();
+  }
+  // nothing ever found, and hero keeps posting the big blind: THAT is the failure (the table's, not a read's)
+  const r2 = rig(null);
+  try {
+    stackResetSeams.tick = async (cb: boolean) => { r2.calls.tick.push(cb); return { ok: false, retry: true, why: "no 'Sit out next big blind' box on the table" }; };
+    r2.stack(260);
+    await r2.tick(0);
+    for (let k = 1; k <= STACK_RESET_TICKS; k++) {
+      S.handNo += 1;
+      S.ws.actions = [{ seat: 1, type: "post-bb", cents: 200 }];
+      await r2.tick(100 * k);
+      if (k < STACK_RESET_TICKS) eq(`posted big blind ${k}: still armed, retrying`, S.stackReset.state, "armed");
+    }
+    const ab = r2.events().find((e) => e.kind === "stack-reset-aborted");
+    eq(`the big blind posted ${STACK_RESET_TICKS} times: aborted`, [S.stackReset.state, S.stackReset.aborts, S.stackReset.ticks], ["idle", 1, 0]);
+    check("  ... saying the presses and the reads",
+          ab && /posted the big blind 3 times since the arming with 0 press/.test(ab.why) && /read\(s\) pressed nothing/.test(ab.why), J(ab));
+  } finally {
+    r2.undo();
+  }
+  expect(fails).toEqual([]);
+});
+
+test(`stack-reset-off after ${STACK_RESET_MAX_ABORTS} aborts: said on the feed once, then nothing arms`, async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const r = rig(null, { leaderOk: false });
+  try {
+    for (let k = 0; k < STACK_RESET_MAX_ABORTS; k++) {
+      S.liveStatus.hero = "in-hand";
+      r.stack(300);
+      await r.tick(10 * k);
+      eq(`round ${k + 1}: armed`, S.stackReset.state, "armed");
+      S.liveStatus.hero = "sitting-out";
+      await r.tick(10 * k + 1);
+      eq(`round ${k + 1}: the leader silent — aborted`, [S.stackReset.state, S.stackReset.aborts], ["idle", k + 1]);
+      eq(`  ... stack-reset-off ${k + 1 < STACK_RESET_MAX_ABORTS ? "not yet" : "now"}`, r.kinds().filter((x) => x === "stack-reset-off").length,
+         k + 1 < STACK_RESET_MAX_ABORTS ? 0 : 1);
+      S.handNo += STACK_RESET_RETRY_HANDS;
+    }
+    const off = r.events().find((e) => e.kind === "stack-reset-off");
+    eq("the off event carries the count and the last reason", [off?.aborts, /leader did not answer/.test(off?.why ?? "")], [STACK_RESET_MAX_ABORTS, true]);
+    check("the feed says it is off for the session", S.feed.some((f: any) => /Deep stack reset is OFF for the rest of this session/.test(String(f.line ?? f))),
+          J(S.feed.slice(-3)));
+    S.liveStatus.hero = "in-hand";
+    S.handNo += 100;
+    await r.tick(500);
+    eq("a deep stack later: nothing arms, no second off", [S.stackReset.state, r.kinds().filter((x) => x === "stack-reset-off").length], ["idle", 1]);
+  } finally {
+    r.undo();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("/state carries stackReset while the session has the reset on (and not otherwise); the reply schema takes it", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const r = rig(null);
+  const io0 = { ...cdp.io };
+  const reg0 = seams.registry;
+  try {
+    cdp.io.available = async () => false;
+    seams.registry = () => [];
+    stackResetSeams.tick = async () => ({ ok: false, retry: true, why: "no 'Sit out next big blind' box on the table" });
+    r.stack(255);
+    await r.tick(0);
+    const st = await state(true);
+    const sr = st.stackReset;
+    eq("state, bb, armed hand, ticks, misses, aborts, off",
+       [sr?.state, sr?.bb, sr?.armedHand, sr?.ticks, sr?.maxTicks, sr?.misses, sr?.aborts, sr?.maxAborts, sr?.off],
+       ["armed", 250, S.handNo, 0, STACK_RESET_TICKS, 1, 0, STACK_RESET_MAX_ABORTS, false]);
+    eq("  ... since (epoch s) and for how long", [sr?.since, sr?.forS], [T0, 0]);
+    eq("  ... the last tick's why, and when the next read is due", [sr?.lastTick?.ok, sr?.lastTick?.why, sr?.retryInS],
+       [false, "no 'Sit out next big blind' box on the table", STACK_RESET_MISS_S]);
+    const parsed = StateReply.safeParse({ ...st, connected: false, hand: null, studyAnswers: false, site: "ignition", sessionId: r.sid,
+                                          practice: false, fakeTable: false, pickReady: { ok: false, reason: null } });
+    check("  ... the reply schema (src/contract.ts StateReply) takes it", parsed.success, J(parsed.error?.issues?.slice(0, 3)));
+    S.stackReset.bb = 0;
+    eq("the reset off for the session: no stackReset key (a /state as before)", "stackReset" in (await state(true)), false);
+  } finally {
+    Object.assign(cdp.io, io0);
+    seams.registry = reg0;
+    r.undo();
+  }
   expect(fails).toEqual([]);
 });

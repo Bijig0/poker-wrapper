@@ -19,6 +19,7 @@ import { TAP_STALL_S } from "./ignition/ws";
 import { autoAllowance, currentAnswer, currentChain, currentNote, currentSolveRequest, pickReady } from "./relay";
 import { topUpWindow } from "./topup";
 import { sessionBrief } from "./session";
+import { stackResetBrief } from "./stackReset";
 import { layoutNote } from "./windows";
 import { apiUrl, port } from "../../api/src/services/ports";
 
@@ -101,6 +102,9 @@ async function stateInner(light = false): Promise<Record<string, any>> {
       everyS: C.NET_PROBE_EVERY_S,
     },
     layout: layoutNote(),
+    // the deep-stack reset's machine (stackReset.ts, 2026-10-09): a top-level key, only while the session has the reset
+    // on — a /state without it (every recording's) is byte-identical to before
+    ...(S.stackReset.bb ? { stackReset: stackResetBrief() } : {}),
     connected: false, hand: null, studyAnswers: st.on,
     sessionId: S.session.id,
     panelTag: C.TAG || null,
