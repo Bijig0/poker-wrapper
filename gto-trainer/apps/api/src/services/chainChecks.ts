@@ -141,7 +141,7 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 17, group: "output", name: "Strategy is for hero's combo",
     spec: "Hero's combo has weight at the node.",
     build: "built",
-    how: "Postflop: hero's exact combo carries weight in his conditioned range at his node (the class floor keeps it alive on every street's entry). Preflop: the chart's range holds hero's class at the node." },
+    how: "Postflop: hero's exact combo carries at least 1e-3 of weight in his conditioned range at his node (the class floor keeps it alive on every street's entry; under 1e-3 he is ABSENT there — the mix is untrained noise for a hand the model does not hold: the check FAILS, path postflop:hero-absent, since 2026-10-08). Preflop: the chart's range holds hero's class at the node." },
 ];
 export const CHECK_NAME: Record<number, string> = Object.fromEntries(CHECKS.map((c) => [c.id, c.name]));
 
@@ -840,11 +840,20 @@ export function checkFresh(a: { answerStreet: string | null | undefined; handStr
 }
 
 // ── #17 strategy for hero's combo ───────────────────────────────────────────────────────────────────────────────
+/** HERO ABSENT AT HIS NODE (2026-10-08): under this weight in his conditioned range the strategy read for his combo is the
+ *  solver's untrained noise (stress core-bvb-007: 0.0005 after a re-tree; live answer 13033 ALLIN from 0.000) */
+export const HERO_ABSENT_WEIGHT = 1e-3;
+const weightText = (w: number): string => (w >= 0.001 || w === 0 ? w.toFixed(3) : w.toExponential(1));
 export function checkHeroCombo(a: { heroCombo: number | null; weight: number | null | undefined }): CheckResult {
   if (a.heroCombo == null) return na(17, "hero's cards unknown");
   const name = comboName(a.heroCombo) ?? "hero's combo";
   const w = a.weight ?? 0;
-  if (!(w > 0)) return fail(17, `hero's ${name} has no weight in his range at the node — the strategy read is not his hand's`);
+  if (!(w > 0)) return fail(17, `hero's ${name} has no weight in his range at the node — the strategy read is not his hand's`, "postflop:hero-absent");
+  // NEVER A SILENT PASS UNDER THE FLOOR (2026-10-08, Brady): "carries weight 0.000" passed on the re-treed turn of
+  // core-bvb-007 and on 5 live answers — one an ALLIN executed from noise
+  if (w < HERO_ABSENT_WEIGHT) {
+    return fail(17, `hero's ${name} carries weight ${weightText(w)} in his range at the node — under ${HERO_ABSENT_WEIGHT}: he is ABSENT there, the mix is noise for a hand the model does not hold`, "postflop:hero-absent");
+  }
   return pass(17, `hero's ${name} carries weight ${w.toFixed(3)} in his range at the node`);
 }
 /** #3 for a GTO Wizard AI preflop answer (services/gtowAiPreflop.villainLinesOf) — one read on a FITTED line, or on an

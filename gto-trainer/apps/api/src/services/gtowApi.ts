@@ -269,6 +269,8 @@ class GtowApi {
       input.fixedLevels ?? null, input.mid?.range ?? null, input.huGrid ?? null,
       // what the tree carries since 2026-10-03: each seat's own stack, the wagers played as amounts, the settings
       treeStacksOf(input), input.played ?? null, TREE_SETTINGS_TAG,
+      // a re-tree's carried menus (2026-10-08, retree-consistency) — only when present, so every other key is unchanged
+      ...(input.carry ? [input.carry] : []),
     ]);
   }
 
@@ -334,7 +336,7 @@ class GtowApi {
     // tree (huGrid; the collapse-calibration harness).
     const grid = (i: number, g: { bet: readonly string[]; raise: readonly string[] }) => fixedOf(i, [g.bet, g.raise, g.raise, g.raise]);
     /** a street with wagers played: the levels as amounts (see the header) */
-    const playedStreet = (ws: PlayedWager[]) => {
+    const playedStreet = (ws: PlayedWager[], s: "FLOP" | "TURN" | "RIVER") => {
       /** a wager that IS its actor's all-in (2026-10-03, review): a short stack's shove is carried by that seat's own
        *  listed all-in, never handed to the other seats as a size — 12bb over a 10 bet is below their minimum raise, a
        *  0.6bb all-in bet is no bet size for a 100bb seat */
@@ -350,7 +352,12 @@ class GtowApi {
         const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : THREE_WAY_SIZES;
         return seats.map((_, i) => fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? base.bet : base.raise; })));
       }
+      // A RE-TREE CARRIES THE MENUS (2026-10-08, retree-consistency — aiChain.retreeInputs): the street re-solved because a
+      // played size was not on the tree hero was answered on keeps that tree's menus, seat by seat, with the size added
+      const carried = input.carry && input.carry.street === s ? input.carry : null;
       return seats.map((_, i) => {
+        const cs = carried?.seats[i] ?? null;
+        if (cs) return fixedOf(i, carriedLists(cs, i, ws));
         // AUTOMATIC ON PURPOSE — Brady's decision, 2026-10-03: the seat that has not wagered on the street is AUTOMATIC
         // even where that means no all-in at its node (probed: GTO Wizard's automatic sizing decides whether to offer
         // one, `add_allin` does not change it, and the 3 nodes measured that lost it had played the all-in 0%). The
@@ -370,12 +377,37 @@ class GtowApi {
         return fixedOf(i, lists);
       });
     };
+    /**
+     * A CARRIED SEAT'S LISTS (retree-consistency, 2026-10-08). Each level: the earlier tree's list for the seat — as it was
+     * SENT (a FIXED seat: carried exactly, a null list stays null) or as GTO Wizard RESOLVED it at that tree's nodes (an
+     * AUTOMATIC seat) — with every wager this seat played at the level added (the size the earlier tree lacked). A level
+     * the earlier tree never showed for an AUTOMATIC seat: its bet takes the street's bet as a seat that wagered does
+     * today, its raises the base raise list (the size we use wherever no size was chosen by GTO Wizard or played).
+     */
+    const carriedLists = (cs: CarriedSeat, i: number, ws: PlayedWager[]): (readonly string[] | null)[] => {
+      const own = (lv: number) => ws.filter((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3)).map((w) => bbAmount(w.to));
+      const out: (readonly string[] | null | undefined)[] = [0, 1, 2, 3].map((lv) => {
+        const c = cs.lists[lv];
+        const mine = own(lv);
+        if (c != null) return [...new Set([...c, ...mine])];
+        if (mine.length) return mine;
+        return cs.from === "sent" ? null : undefined;
+      });
+      if (out[0] === undefined || out[0] === null) {
+        // the bet list may never be empty on a FIXED seat (GTO Wizard refuses it): the street's bet, else the base list
+        const streetBet = ws.filter((_, k) => k === 0 && !(ws[0]!.to >= allInOf[ws[0]!.seat]! - 0.005)).map((w) => bbAmount(w.to));
+        out[0] = streetBet.length ? streetBet : THREE_WAY_SIZES.bet;
+      }
+      if (out[1] === undefined) out[1] = THREE_WAY_SIZES.raise;
+      for (const lv of [2, 3]) if (out[lv] === undefined) out[lv] = out[lv - 1] != null ? THREE_WAY_SIZES.raise : null;
+      return out as (readonly string[] | null)[];
+    };
     const fb = input.fixedBets;
     const fl = input.fixedLevels;
     const pl = input.played;
     const street = (s: "FLOP" | "TURN" | "RIVER") =>
       pl && pl[s]?.length
-        ? { street: s, position_bet_sizes: playedStreet(pl[s]!) }
+        ? { street: s, position_bet_sizes: playedStreet(pl[s]!, s) }
         : fl && fl[s]?.length
           ? { street: s, position_bet_sizes: seats.map((_, i) => fixedPerLevel(i, fl[s]!)) }
           : fb && fb[s] != null
@@ -1156,6 +1188,21 @@ export function seatAllIns(stacks: number[]): number[] {
  *  Its level is its index in the street's list (0 = the bet, 1 = the raise over it, 2 = the re-raise, 3+ beyond). */
 export interface PlayedWager { seat: number; to: number }
 
+/**
+ * ONE SEAT'S MENU CARRIED INTO A RE-TREE (2026-10-08, Brady: "one tree; if we need to re-tree, from the original tree up
+ * to the point of disagreement capture EVERYTHING including menu bet sizes, recreate the new tree with the same details,
+ * add the bet size we didn't have, and loop" — services/aiChain.retreeInputs). `lists` = bet / raise / second raise /
+ * third+ raise, as the API takes them. from "sent": the earlier tree sent this seat FIXED — carried exactly (a null
+ * list stays null: GTO Wizard's min-raise + all-in there, as before). from "resolved": the earlier tree had the seat
+ * AUTOMATIC and these are the sizes GTO Wizard chose at that tree's nodes — a bet as its amount, a raise as GTO Wizard's
+ * % of the pot (its betsize_by_pot, the % a FIXED list takes: probed in the cache, "60%" → 0.6); null = a level the
+ * earlier tree's nodes never showed (buildCustomTree fills it).
+ */
+export interface CarriedSeat { from: "sent" | "resolved"; lists: (string[] | null)[] }
+/** The menus a re-tree carries on its starting street, one entry per seat in acting order (null = as before: AUTOMATIC
+ *  unless the seat wagered). Heads-up only — a three-seat tree is FIXED everywhere already. Part of the tree key. */
+export interface CarriedMenus { street: "FLOP" | "TURN" | "RIVER"; seats: (CarriedSeat | null)[] }
+
 /** The rake a custom tree gets when its input carries none: GTO Wizard's own NL500 structure, 5% capped at 0.6bb.
  *  The chain passes the table's rake on the Ignition 6-max and CoinPoker heads-up strategies; a solve without one
  *  is solved at this, and the hand page says so rather than "no rake" (2026-09-24). */
@@ -1190,6 +1237,9 @@ export interface CustomTreeInput {
   /** A multi-size FIXED grid for heads-up wager-free streets instead of AUTOMATIC
    *  (e.g. {bet:["33%","75%","150%"], raise:["55%","100%"]}). Part of the tree key. */
   huGrid?: { bet: readonly string[]; raise: readonly string[] };
+  /** A RE-TREE'S CARRIED MENUS (2026-10-08, retree-consistency): the starting street's per-seat menus from the tree hero
+   *  was answered on, the played size added (see CarriedMenus). Heads-up, with `played` on the same street. */
+  carry?: CarriedMenus | null;
   /** Diagnostic only (2026-09-24, aiChain.AiChainSpec.planTag) — which concurrent collapse plan this tree belongs
    *  to, so the tree-miss "why" doesn't compare two unrelated plans' trees to each other. NEVER part of treeKey(). */
   planTag?: string | null;

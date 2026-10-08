@@ -36,6 +36,7 @@ import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type PathReason, type StreetPath } from "./chainPath";
 import { allInSizeToTreeOn, dropNote, dropShortAllIns, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
+import { heroAbsentAnswer } from "./heroAbsent";
 import {
   addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkFlopArrival, checkFresh, checkHandoff, checkHeroSeatName, checkMix,
   checkPotStack, checkPreflopInRange, checkPreflopVillainLines, checkRake, guardChecks, sidePotParts, type CheckResult, type CheckStreet, type PathChecks, type RakeSpec,
@@ -2121,7 +2122,9 @@ async function solvePostflopViaChainOnce(
   // node, the verdict) so the answer can be inspected later exactly as it was, and diffed against a re-solve.
   const walks: { kind: string | null; data: any; line: string; solveId: number | null; trace?: any; members?: Record<string, string[]>;
     /** a dead-money plan's preload of hero's own chips, when his node is on the plan's street (tableTotalActions) */
-    heroPreload?: number }[] = [];
+    heroPreload?: number;
+    /** hero's combo weight in his conditioned range at his node (services/heroAbsent) */
+    heroWeight?: number | null }[] = [];
   const walkFails: string[] = [];
   // THE COLLAPSES RUN AT ONCE (2026-09-23, hand 729). Each collapse is its own cloud tree and walk, 5-10 s
   // of mostly waiting on GTO Wizard; three of them in a row put a four-way flop at 15-19 s before the answer.
@@ -2269,7 +2272,7 @@ async function solvePostflopViaChainOnce(
     const heroPre = heroPreloadAtNode(w, w.seatSpec.heroSeat === "oop" ? w.seatSpec.oopPos : w.seatSpec.heroSeat === "mid" ? w.seatSpec.midPos : w.seatSpec.ipPos);
     walks.push({
       kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace, ...(w.members ? { members: w.members } : {}),
-      ...(heroPre > 0 ? { heroPreload: heroPre } : {}),
+      ...(heroPre > 0 ? { heroPreload: heroPre } : {}), heroWeight: chain.heroWeight ?? null,
       solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace),
     });
   }
@@ -2298,6 +2301,10 @@ async function solvePostflopViaChainOnce(
   if (softLines.length) {
     sixNote = [sixNote, `OFF-TREE RANGE: ${softLines.join("; ")}`].filter(Boolean).join(" · ");
   }
+  // THE RE-TREES (aiChain retree-consistency, 2026-10-08): a street re-solved with the tree's menus carried, hero's earlier
+  // action on it narrowed by the strategy he was answered with
+  const retreeLines = [...new Set(chains.flatMap((c) => (c.ok ? c.retreeNotes ?? [] : [])))];
+  if (retreeLines.length) sixNote = [sixNote, ...retreeLines].filter(Boolean).join(" · ");
   const sizeSnaps = [...new Set(chains.flatMap((c) => (c.ok ? c.snaps ?? [] : [])))];
   if (sizeSnaps.length) {
     sixNote = [sixNote, `WAGER SIZE SNAPPED onto the tree: ${sizeSnaps.join("; ")} — the tree offers no closer size there` +
@@ -2457,6 +2464,20 @@ async function solvePostflopViaChainOnce(
     const notes = press.filter((e) => e.kind === "dropped").map((e) => dropNote(e, d.toPassive));
     sixNote = [...notes, sixNote].filter(Boolean).join(" · ");
   }
+  // HERO ABSENT AT HIS NODE (services/heroAbsent, 2026-10-08): his weight there under 1e-3 in a tree the mix was read from
+  // — LOUD always (check #17 failed, path postflop:hero-absent, the warning, the log line); the pick passive unless
+  // HERO_ABSENT_PASSIVE=off. After the short all-in drop: a dropped all-in is already out of the mix.
+  const absentAlso: PathReason[] = [];
+  const absent = heroComboIdx == null ? null : heroAbsentAnswer({
+    actions, trees: (blended ? alignedWalks : [ref]).map((w) => ({ plan: w.kind, w: w.heroWeight })),
+    street: cur, hand: String(hand.clientHandId ?? hand.handId ?? "?"), who: `${heroCards.join("")} ${heroPosName}`,
+  });
+  if (absent) {
+    actions = absent.actions;
+    sixNote = [absent.note, sixNote].filter(Boolean).join(" · ");
+    absentAlso.push(absent.reason);
+    console.log(absent.log);
+  }
   const decision = pickWeightedAction(actions);
   if (press.some((e) => e.kind === "raise-to")) sixNote = withPressNote(sixNote, press, decision?.action ?? null);
   return { why: null, res: {
@@ -2478,7 +2499,7 @@ async function solvePostflopViaChainOnce(
     approx: true,
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
-      ...(rerootAlso.length || press.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur)] } : {}),
+      ...(rerootAlso.length || press.length || absentAlso.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur), ...absentAlso] } : {}),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,

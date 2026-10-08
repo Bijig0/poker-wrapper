@@ -1,4 +1,6 @@
-import { gtowApi, type NodeSource, type PlayedWager } from "./gtowApi";
+import { bbAmount, gtowApi, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
+import { solveStore } from "./solveStore";
+import { isDurableKey } from "./handFacts";
 import { tmark, tspan } from "./answerTrace";
 import {
   actionKindOf,
@@ -170,6 +172,17 @@ export interface ChainTraceNode {
   /** villain took an action the solver almost never takes here (services/offTree, 2026-09-27): flagged, and since
    *  2026-10-06 his range after it is the soft range (offTree.soft says what was carried) */
   offTree?: OffTreeLine;
+  /** HERO'S ACTION HERE WAS NARROWED BY THE STRATEGY HE WAS ANSWERED WITH (retree-consistency, 2026-10-08): this node is
+   *  on a tree other than the one his decision here was read on; `strategy` (4 dp) is the answered one for the action he
+   *  took — what his range was multiplied by instead of this node's — and `combo` his own hand's share on each */
+  heroAnswered?: HeroAnswered;
+}
+export interface HeroAnswered {
+  solId: string; src: "memory" | "store"; solveRow?: number; action: string;
+  strategy: number[] | null;
+  combo: { answered: number; tree: number } | null;
+  /** the answered node did not offer his action (it is then narrowed by this tree's strategy, as before) */
+  miss?: string;
 }
 export interface ChainTrace {
   spec: AiChainSpec;
@@ -227,6 +240,9 @@ export interface ChainTrace {
      *  tree, the street's time, and on the decision street hero's node and combo. They travel with the street's
      *  checkpoint, so a memo hit on a later decision still shows how the street was walked. */
     checks?: CheckResult[];
+    /** THE RE-TREE (2026-10-08, retree-consistency): this street's pinned tree carries the menus of the tree before the
+     *  disagreement (retreeInputs) — which tree, each seat's source, the wager added */
+    retree?: RetreeCarry;
   }[];
   nodes: ChainTraceNode[];
   /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
@@ -514,6 +530,12 @@ export type AiChainResult =
       snaps?: string[];
       /** Streets solved at a smaller stack than the field rolled forward, because seats left (spec.seatStacks). */
       stackNotes?: string[];
+      /** "RE-TREE: …" lines (retree-consistency, 2026-10-08): a street re-solved with its menus carried, hero's earlier
+       *  action on it narrowed by his answered strategy */
+      retreeNotes?: string[];
+      /** hero's combo weight in his conditioned range at his node (null = cards unknown) — under HERO_ABSENT_WEIGHT he
+       *  is absent there (services/heroAbsent) */
+      heroWeight?: number | null;
       trace: ChainTrace;
     }
   | { ok: false; why: string; trace?: ChainTrace };
@@ -871,9 +893,256 @@ export async function fitsHeroAskedTree(
     note: `hero's ${r(want)} read as the tree's ${r(got)} — the tree he was asked on (pinned [${levels.join(",")}]) is kept, not re-created` };
 }
 
+// ── retree consistency (2026-10-08) ─────────────────────────────────────────────────────────────────────────────
+/**
+ * ONE TREE PER STREET, AND A RE-TREE THAT IS THE SAME TREE PLUS ONE SIZE (2026-10-08, Brady: "one tree; if we need to
+ * re-tree, from the original tree up to the point of disagreement capture EVERYTHING including menu bet sizes, recreate
+ * the new tree with the same details, add the bet size we didn't have, and loop"). Register: services/approximations.ts
+ * `retree-consistency`. Switch HERO_STREET_AS_ANSWERED=on (unset) | off (the rule before), read at every decision.
+ *
+ * THE DEFECT (stress core-bvb-007, solves 7733 / 7734): heads-up turn, hero SB Qc8c first. Tree A (the street's
+ * size-free tree, AUTOMATIC) offered him CHECK / BET 20.5 and he checked Qc8c 100%. The BB bet 7.5, not on A's menu, so
+ * the street was re-solved as tree B with ONLY the BB's 7.5 pinned; hero's own seat went AUTOMATIC again and GTO Wizard
+ * gave him CHECK / BET 3.8 there — under which he BETS Qc8c 99.6%. The walk read his check on B: Qc8c kept 0.004 of its
+ * weight, hero's weight at his facing node was 0.000 and the mix served was for a hand the model does not hold. Live
+ * since 09-21: 5 of ~2,500 postflop walks had hero under 1e-3 at his node (one, answer 13033, an ALLIN executed).
+ *
+ * TWO PARTS, both under the switch:
+ *  1. THE MENUS ARE CARRIED (retreeInputs): a street pinned with the wagers played is built from the tree before the
+ *     disagreement — the size-free tree for the first wager off it, the previous re-tree for the next (the loop) — seat by
+ *     seat: a FIXED seat's lists as sent, an AUTOMATIC seat's sizes as GTO Wizard resolved them at that tree's nodes up to
+ *     the point of disagreement (read from the cache, never a request), and the played size ADDED to its actor's level.
+ *     Heads-up only: three seats are FIXED everywhere already (THREE_WAY_SIZES, a played level its amount alone).
+ *  2. HERO'S EARLIER ACTIONS ON THE STREET ARE NARROWED BY THE STRATEGY HE WAS ANSWERED WITH (answeredHeroNode): at a node
+ *     where hero acted earlier on this street, on a tree that is not the one his decision there was read on, his range is
+ *     multiplied by that answer's strategy for the action he took, not the new tree's. Villains keep the new tree's.
+ */
+export const heroStreetAsAnsweredOn = (env: Record<string, string | undefined> = process.env): boolean =>
+  String(env.HERO_STREET_AS_ANSWERED ?? "on").trim().toLowerCase() !== "off";
+
+/** One hero node as it was ANSWERED: the tree it was read on and its actions with their full strategies. */
+export interface AnsweredHeroNode {
+  solId: string;
+  actions: { action: { code: string; betsize: number | string | null; display_name: string; type?: string; allin?: boolean }; strategy: ArrayLike<number> }[];
+  /** where it came from: this process's walk, or a stored answer's trace (solves table row, strategies to 4 dp) */
+  src: "memory" | "store";
+  solveRow?: number;
+  at: number;
+}
+/** the decision a hero node belongs to: hand, plan, first street, the street, every earlier street's tokens, and the
+ *  tokens on this street before hero's node */
+export interface AnsweredAt { handKey: string; plan: string | null; first: number; k: number; earlier: string[][]; prefix: string[] }
+const ANSWERED_MAX = 300;
+const answeredNodes = new Map<string, AnsweredHeroNode>();
+export const answeredKeyOf = (a: AnsweredAt): string => JSON.stringify([a.handKey, a.plan, a.first, a.k, a.earlier, a.prefix]);
+
+function rememberAnswered(key: string, node: AnsweredHeroNode): void {
+  answeredMisses.delete(key);
+  answeredNodes.delete(key);
+  answeredNodes.set(key, node);
+  while (answeredNodes.size > ANSWERED_MAX) {
+    const first = answeredNodes.keys().next().value;
+    if (first === undefined) break;
+    answeredNodes.delete(first);
+  }
+}
+/** tests: forget every answered hero node (a restart) */
+export function dropAnsweredNodes(): void { answeredNodes.clear(); answeredMisses.clear(); }
+
+/** A stored answer's trace, read back as the hero node it answered (the solves table — after a restart). */
+function answeredFromStore(a: AnsweredAt): AnsweredHeroNode | null {
+  if (!isDurableKey(a.handKey)) return null;
+  const want = STREET[a.k]!.toLowerCase();
+  const same = (x: string[], y: string[]) => x.length === y.length && x.every((t, i) => t === y[i]);
+  // newest first, the live answers before anything else (a dashboard replay of the hand writes rows of its own)
+  const rows = solveStore.forHand(a.handKey).filter((r) => r.ok && r.street === want).reverse()
+    .sort((x, y) => Number(x.origin !== "live") - Number(y.origin !== "live"));
+  for (const r of rows) {
+    const got = solveStore.get(r.id);
+    const sp = got?.trace?.spec as AiChainSpec | undefined;
+    if (!sp || (sp.planTag ?? null) !== a.plan || (sp.firstStreet ?? 0) !== a.first) continue;
+    const st = sp.streets ?? [];
+    if (st.length !== a.earlier.length + 1 || !a.earlier.every((t, i) => same(t, st[i] ?? [])) || !same(st[st.length - 1] ?? [], a.prefix)) continue;
+    const nodes: ChainTraceNode[] = got!.trace.nodes ?? [];
+    const hero = [...nodes].reverse().find((x) => x.heroNode);
+    const street = (got!.trace.streets ?? []).find((x: { si: number }) => x.si === hero?.si);
+    if (!hero || !street?.solId) continue;
+    return {
+      solId: String(street.solId), src: "store", solveRow: r.id, at: r.ts,
+      actions: hero.actions.map((x) => ({ action: { code: x.code, betsize: x.betsize, display_name: x.name }, strategy: x.strategy })),
+    };
+  }
+  return null;
+}
+
+/** The hero node his decision at this point of the street was answered on: this process's record, else the stored
+ *  answer's trace (solves table). Null when neither has it. */
+export function answeredHeroNode(a: AnsweredAt): AnsweredHeroNode | null {
+  const key = answeredKeyOf(a);
+  const hit = answeredNodes.get(key);
+  if (hit) return hit;
+  // the store is read once per point of a hand in a process: a miss there is remembered (this process records every
+  // later answer in memory, which is looked at first)
+  if (answeredMisses.has(key)) return null;
+  try {
+    const st = answeredFromStore(a);
+    if (st) rememberAnswered(key, st);
+    else {
+      answeredMisses.add(key);
+      if (answeredMisses.size > ANSWERED_MAX * 2) answeredMisses.delete(answeredMisses.values().next().value as string);
+    }
+    return st;
+  } catch {
+    return null;   // the store is a fallback: a read that fails costs the correction, never the answer
+  }
+}
+const answeredMisses = new Set<string>();
+
+/** Record the node hero is being answered on (the walk, at his node). */
+export function recordAnsweredHeroNode(a: AnsweredAt, solId: string, data: any): void {
+  const sols: any[] = data?.action_solutions ?? [];
+  if (!sols.length) return;
+  rememberAnswered(answeredKeyOf(a), {
+    solId, src: "memory", at: Date.now(),
+    actions: sols.map((x) => ({
+      action: { code: String(x.action?.code ?? ""), betsize: x.action?.betsize ?? null, display_name: String(x.action?.display_name ?? "?"), type: x.action?.type, allin: x.action?.allin },
+      strategy: Float32Array.from(x.strategy ?? []),
+    })),
+  });
+}
+
+/** A wager as GTO Wizard's % of the pot (its betsize_by_pot) — the % a FIXED raise list takes. */
+const pctOfPot = (x: unknown): string | null => {
+  const v = Number(x);
+  return Number.isFinite(v) && v > 0 ? `${Math.round(v * 1000) / 10}%` : null;
+};
+
+/**
+ * THE MENUS GTO WIZARD RESOLVED on a solved tree, seat by seat and level by level, along the street's line up to and
+ * including node `upTo` (the point of disagreement: the node where the size that is not on the tree was played). Read
+ * from the cache only (`peek`), stopping at the first node it does not hold. A level's sizes: the bet as its amount, a
+ * raise as GTO Wizard's % of the pot; the all-in is left out (a FIXED list always carries its seat's own).
+ */
+export function resolvedMenus(labels: string[], actors: number[], upTo: number, stack: number, peek: (codes: string) => any | null): Map<number, (string[] | null)[]> {
+  const out = new Map<number, (string[] | null)[]>();
+  const codes: string[] = [];
+  let level = 0;
+  for (let t = 0; t <= upTo && t < labels.length; t++) {
+    const node = peek(codes.join("-"));
+    const sols: any[] = node?.action_solutions ?? [];
+    if (!sols.length) break;
+    const actor = actors[t]!;
+    const lv = Math.min(level, 3);
+    const wagers = sols.filter((x) => { const kd = actionKindOf(x); return (kd === "Bet" || kd === "Raise") && !x.action?.allin; });
+    const sizes = wagers.map((x) => (lv === 0 ? bbAmount(Number(x.action?.betsize)) : pctOfPot(x.action?.betsize_by_pot))).filter((x): x is string => !!x);
+    const lists = out.get(actor) ?? [null, null, null, null];
+    if (lists[lv] == null) lists[lv] = [...new Set(sizes)];
+    out.set(actor, lists);
+    if (t === upTo) break;
+    const ai = matchWalkAction(labels[t]!, sols, stack);
+    if (ai < 0) break;
+    codes.push(String(sols[ai]!.action?.code ?? ""));
+    if (/\(/.test(labels[t]!)) level++;
+  }
+  return out;
+}
+
+/** What a re-tree carried, for the answer's note: the tree carried from, each seat's source, the sizes added. */
+export interface RetreeCarry { from: string | null; seats: ("sent" | "resolved" | "auto")[]; added: PlayedWager }
+
+/**
+ * THE TREE FOR A STREET PINNED WITH `played` (the street's first `played.length` wagers, in label order), built by the
+ * loop: tree 0 is `base` (the size-free tree); tree j carries tree j−1's menus (as sent / as GTO Wizard resolved them at
+ * its nodes up to wager j) with wager j added to its actor's level. Heads-up only (`base.mid` / `base.huGrid` → today's
+ * pinned input). Pure over its getters.
+ */
+export function retreeInputs(a: {
+  base: CustomTreeInput; played: PlayedWager[]; labels: string[]; actors: number[]; stack: number;
+  build: (input: CustomTreeInput) => any;
+  peekSolution: (input: CustomTreeInput) => string | null;
+  peekNode: (solId: string, codes: string) => any | null;
+}): { input: CustomTreeInput; carry: RetreeCarry | null } {
+  const street = (a.base.startingStreet ?? "FLOP") as "FLOP" | "TURN" | "RIVER";
+  const plain = { ...a.base, played: { [street]: a.played } } as CustomTreeInput;
+  if (!a.played.length || a.base.mid || a.base.huGrid) return { input: plain, carry: null };
+  const wagerAt: number[] = [];
+  a.labels.forEach((l, i) => { if (/\(/.test(l)) wagerAt.push(i); });
+  let prev: CustomTreeInput = a.base;
+  let last: RetreeCarry | null = null;
+  /** the trees of the loop that are solved (in the cache), newest first: an AUTOMATIC seat's sizes are read on the
+   *  newest one whose nodes reach the point of disagreement — a tree of the loop that was never solved (its wager was on
+   *  the tree before it) leaves its seats to the tree before */
+  const solved: string[] = [];
+  for (let j = 1; j <= a.played.length; j++) {
+    const body = a.build(prev);
+    const entry: any[] = body?.bet_sizes?.street_bet_sizes?.find((x: any) => x.street === street)?.position_bet_sizes ?? [];
+    const sol = a.peekSolution(prev);
+    if (sol) solved.unshift(sol);
+    const upTo = wagerAt[j - 1] ?? -1;
+    const resolved = new Map<number, (string[] | null)[]>();
+    if (upTo >= 0) {
+      for (const s of solved) {
+        for (const [seat, lists] of resolvedMenus(a.labels, a.actors, upTo, a.stack, (c) => a.peekNode(s, c))) {
+          const have = resolved.get(seat) ?? [null, null, null, null];
+          resolved.set(seat, have.map((x, lv) => x ?? lists[lv] ?? null));
+        }
+      }
+    }
+    const seats: (CarriedSeat | null)[] = entry.map((p, i) => {
+      if (p?.type === "FIXED") {
+        return { from: "sent" as const, lists: [p.bet_sizes, p.raise_sizes, p.second_raise_sizes, p.third_plus_raise_sizes].map((x: unknown) => (Array.isArray(x) ? x.map(String) : null)) };
+      }
+      const r = resolved.get(i);
+      return r && r.some((x) => x != null) ? { from: "resolved" as const, lists: r } : null;
+    });
+    const carry: CarriedMenus | null = seats.some((x) => x) ? { street, seats } : null;
+    prev = { ...a.base, played: { [street]: a.played.slice(0, j) }, ...(carry ? { carry } : {}) };
+    last = carry ? { from: solved[0] ?? null, seats: seats.map((x) => (x ? x.from : "auto")), added: a.played[j - 1]! } : null;
+  }
+  return { input: prev, carry: last };
+}
+
+/** The tag every re-tree line of an answer opens with (approximations: retree-consistency). */
+export const RETREE_NOTE_TAG = "RE-TREE:";
+
+/**
+ * The answer's "RE-TREE:" lines, one per street walked on this call that was re-solved with its menus carried or on
+ * which hero's earlier action was narrowed by his answered strategy: "RE-TREE: turn re-solved with BB's 7.5bb added;
+ * menus carried from tree #febb2f11; hero's CHECK narrowed by his answered strategy (his hand 1 there, 0.004 here)".
+ */
+export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes">, _narrowed?: readonly HeroAnswered[]): string[] {
+  const out: string[] = [];
+  for (const s of trace.streets) {
+    if (s.fromCheckpoint) continue;
+    const name = s.street.toLowerCase();
+    const narrowed = trace.nodes.filter((x) => x.si === s.si && !x.fromCheckpoint && x.heroAnswered?.strategy);
+    if (!s.retree && !narrowed.length) continue;
+    const parts: string[] = [];
+    const w = s.retree?.added ?? (s.played?.length ? s.played[s.played.length - 1] : null);
+    const seat = w ? s.players?.[w.seat] ?? `seat ${w.seat}` : null;
+    if (s.retree) {
+      parts.push(`${name} re-solved with ${seat}'s ${bbAmount(w!.to)} added`);
+      parts.push(s.retree.from ? `menus carried from tree #${s.retree.from.replace(/^gc:/, "").slice(0, 8)}` : "menus carried as sent (no earlier tree's nodes in the cache)");
+    } else if (w) {
+      parts.push(`${name} re-solved with ${seat}'s ${bbAmount(w.to)} pinned${(s.players?.length ?? 2) > 2 ? " (three seats: the menus are FIXED already)" : ""}`);
+    } else {
+      parts.push(`${name} walked on a tree other than the one hero was answered on`);
+    }
+    for (const x of narrowed) {
+      const h = x.heroAnswered!;
+      parts.push(`hero's ${h.action.toUpperCase()} narrowed by his answered strategy` +
+        (h.combo ? ` (his hand ${h.combo.answered} on the tree he was answered on, ${h.combo.tree} on this one)` : ""));
+    }
+    out.push(`${RETREE_NOTE_TAG} ${parts.join("; ")}`);
+  }
+  return out;
+}
+
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
   const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
   const sizeSnaps: string[] = [];
+  /** hero's earlier actions on a street narrowed by his answered strategy on this call (retree-consistency) */
+  const heroNarrowed: HeroAnswered[] = [];
   const fail = (why: string): AiChainResult => { trace.result = { ok: false, why }; return { ok: false, why, trace }; };
   const cards = spec.board.match(/.{2}/g) ?? [];
   if (cards.length < 3) return fail(`board too short ("${spec.board}")`);
@@ -1148,6 +1417,25 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // round trip, and the level's one percentage on every seat — hero's raise facing a bet was the VILLAIN's bet %.
     let played: PlayedWager[] | null = null;
     let reuse: string | null = null;
+    // A RE-TREE CARRIES THE MENUS OF THE TREE BEFORE IT (retree-consistency, 2026-10-08 — retreeInputs): the tree pinned
+    // with a set of wagers is the same tree for the walk's own pin and for the "tree hero was asked on" lookup below
+    const retreeOn = heroStreetAsAnsweredOn() && n === 2 && !spec.huGrid;
+    const pinnedMemo = new Map<string, { input: CustomTreeInput; carry: RetreeCarry | null }>();
+    const pinnedInput = (pl: PlayedWager[]): { input: CustomTreeInput; carry: RetreeCarry | null } => {
+      if (!retreeOn) return { input: { ...baseInput, played: { [STREET[k]!]: pl } }, carry: null };
+      const key = JSON.stringify([pl, labels]);
+      let hit = pinnedMemo.get(key);
+      if (!hit) {
+        hit = retreeInputs({
+          base: baseInput, played: pl, labels, actors, stack,
+          build: (x) => gtowApi.buildCustomTree(x),
+          peekSolution: (x) => gtowApi.peekSolution(x),
+          peekNode: (sol, c) => gtowApi.peekNode(sol, { [QKEY[k]!]: c, board: streetBoard }),
+        });
+        pinnedMemo.set(key, hit);
+      }
+      return hit;
+    };
     if (labels.some((l) => /\(/.test(l))) {
       const autoSol = gtowApi.peekSolution(baseInput);
       if (autoSol) {
@@ -1167,7 +1455,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const heroIdxHere = seats.findIndex((s) => s.pos === heroPos);
         const tHero = Date.now();
         const hs = await fitsHeroAskedTree(labels, actors, heroIdxHere, pot, stack,
-          (pl) => gtowApi.peekSolution({ ...baseInput, played: { [STREET[k]!]: pl } }),
+          (pl) => gtowApi.peekSolution(pinnedInput(pl).input),
           (solId, codesStr) => gtowApi.peekNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }),
           async (solId, codesStr) => { const x = await readNode(solId, codesStr); return x.r.ok ? x.r.data : null; });
         if (hs.ok) {
@@ -1201,6 +1489,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       sent: null as unknown, account: null as string | null,
       rangeCheck: undefined as RangeCheck | undefined,
       checks: undefined as CheckResult[] | undefined,
+      retree: undefined as RetreeCarry | undefined,
     };
     trace.streets.push(streetRec);
     streetRec.rangeCheck = rangeCheckOf({
@@ -1209,10 +1498,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     });
 
     const tSolve = Date.now();
-    const treeInput = {
-      ...baseInput,
-      ...(played ? { played: { [STREET[k]!]: played } } : {}),
-    };
+    const pinned = played ? pinnedInput(played) : null;
+    const treeInput: CustomTreeInput = pinned ? pinned.input : baseInput;
+    if (pinned?.carry) streetRec.retree = pinned.carry;
     let ens = await gtowApi.ensureCustomSolution(treeInput);
     if (!ens.ok) return fail(`solve: ${ens.error}`);
     let rerouted = false;
@@ -1469,6 +1757,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           );
         }
         nodeRec.heroNode = true;
+        // THE NODE HERO IS ANSWERED ON, kept for the street's later decisions (retree-consistency: a re-tree narrows his
+        // action here by this strategy, not by the new tree's)
+        if (handKey && !spec.checkpointOnly && !spec.walkThrough) {
+          recordAnsweredHeroNode({ handKey, plan, first, k, earlier: spec.streets.slice(0, si), prefix: toks.slice() }, String(ens.solId), nq.data);
+        }
         // HERO'S NODE IS THE HAND'S MID-STREET CHECKPOINT: the next decision resumes from here (see PartialCheckpoint)
         if (rootKey && handKey && !lockedOnStreet) {
           const entry = entryKeyAt(si);
@@ -1490,8 +1783,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const line = [...walked, `(${STREET[k]!.toLowerCase()} node after ${codes.join("-") || "root"})`].join(" / ");
         const potNode = r2(pot + st.matchedPotIn);
         trace.result = { ok: true, potNode, stackStreet: stack, line, solves };
+        const retreeNotes = retreeNotesOf(trace, heroNarrowed);
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}),
-          ...(stackNotes.length ? { stackNotes } : {}) };
+          ...(stackNotes.length ? { stackNotes } : {}), ...(retreeNotes.length ? { retreeNotes } : {}),
+          heroWeight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] ?? 0 : null };
       }
 
       const label = labels[ti]!;
@@ -1532,7 +1827,29 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
 
       // Condition the actor's range on the observed action — the step that
       // makes the NEXT street's tree see post-action ranges.
-      const strat: number[] = a.strategy ?? [];
+      let strat: ArrayLike<number> = a.strategy ?? [];
+      // HERO'S OWN EARLIER ACTION ON THIS STREET IS NARROWED BY THE STRATEGY HE WAS ANSWERED WITH (retree-consistency,
+      // 2026-10-08): on a tree that is not the one his decision here was read on (a re-tree since), his range is what that
+      // answer played — not what this tree would have him play (core-bvb-007: CHECK 100% answered, 0.4% on the re-tree)
+      if (actor === heroIdx && heroStreetAsAnsweredOn() && handKey && !spec.checkpointOnly && !spec.walkThrough) {
+        const ans = answeredHeroNode({ handKey, plan, first, k, earlier: spec.streets.slice(0, si), prefix: toks.slice(0, ti) });
+        if (ans && ans.solId !== String(ens.solId)) {
+          const j = matchWalkAction(label, ans.actions as any[], stack);
+          const c = spec.heroComboIdx;
+          if (j >= 0) {
+            strat = ans.actions[j]!.strategy;
+            nodeRec.heroAnswered = {
+              solId: ans.solId, src: ans.src, ...(ans.solveRow != null ? { solveRow: ans.solveRow } : {}),
+              action: String(ans.actions[j]!.action.display_name), strategy: r4(Array.from(strat)),
+              combo: c != null ? { answered: r4([strat[c] ?? 0])[0]!, tree: r4([a.strategy?.[c] ?? 0])[0]! } : null,
+            };
+            heroNarrowed.push(nodeRec.heroAnswered);
+          } else {
+            nodeRec.heroAnswered = { solId: ans.solId, src: ans.src, action: label, strategy: null, combo: null,
+              miss: `his ${label} is not on the node he was answered on — narrowed by this tree's strategy` };
+          }
+        }
+      }
       let after = seats[actor]!.range.map((w, i) => w * (strat[i] ?? 0));
       // THE SOFT RANGE after an OFF-TREE villain action (services/offTree, OPTION 3, 2026-10-06): range x exp(-dEV/(t x pot))
       // instead of the QRE sliver, which holds only "the hands QRE says would make this mistake" (measured worse than
