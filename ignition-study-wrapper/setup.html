@@ -201,9 +201,9 @@
       <div class="field ign-only"><span class="k">Deep stack</span>
         <div class="seg" id="stackReset"><button data-v="0" class="plain">Off</button><button data-v="1" class="plain">Sit out and re-seat</button></div>
         <div class="row" id="stack-reset-row" style="display:none;margin-top:6px"><span class="sub">at</span>
-          <input type="number" id="stack-reset-bb" min="101" max="10000" value="250" style="width:70px"> <span class="sub">bb, wait</span>
+          <input type="number" id="stack-reset-bb" min="101" max="10000" value="150" style="width:70px"> <span class="sub">bb, wait</span>
           <input type="number" id="stack-reset-wait" min="0" max="3600" value="60" style="width:60px"> <span class="sub">s</span></div>
-        <span class="help">GTO Wizard's preflop solver stops at 250 bb effective (deeper trees are capped at 250 bb). With this on, once your stack reaches the figure the wrapper ticks <b>Sit out next big blind</b>, leaves the table once you are sat out, waits, and takes a fresh seat at this session's format with the normal buy-in — same session, same panel. <b>Not yet checked on a live table: keep it Off for real money until it has been tried on practice tables.</b></span></div>
+        <span class="help">The HRC chart ladder ends at 150 bb (deeper spots read the 150 bb chart; GTO Wizard's preflop solver itself stops at 250 bb). Brady 2026-10-09: 150 keeps every decision inside the charts, about one reset per 200 hands. With this on, once your stack reaches the figure the wrapper ticks <b>Sit out next big blind</b>, leaves the table once you are sat out, waits, and takes a fresh seat at this session's format with the normal buy-in — same session, same panel. <b>Not yet checked on a live table: keep it Off for real money until it has been tried on practice tables.</b></span></div>
       <div class="field no-cgg" style="grid-column: 1 / -1"><span class="k">GTO Wizard accounts</span>
         <div id="gtow-allow" class="row" style="flex-wrap:wrap;gap:8px 18px"><span class="sub">reading the account registry…</span></div>
         <span class="help">Which registered accounts this session may spend. All ticked = no restriction (the default). Untick the Ultra to keep its budget for another table, or an account that is walled. Each shows its light and what it has used in the last hour against the 2,250 limit — a trip walls the account for about a day. Register and name accounts on the dashboard's GTO Wizard tab.</span></div>
@@ -580,7 +580,7 @@ function readSettings() {
   cfg.autoSitBackIn = $("autoSitBackIn").querySelector("button.on")?.dataset.v === "1";
   // the deep-stack reset: sent only when on (absent = off — the wrapper adds no default)
   if ($("stackReset").querySelector("button.on")?.dataset.v === "1") {
-    cfg.stackResetBb = Number($("stack-reset-bb").value) || 250;
+    cfg.stackResetBb = Number($("stack-reset-bb").value) || 150;
     const w = Number($("stack-reset-wait").value);
     cfg.stackResetWaitS = Number.isFinite(w) && w >= 0 ? w : 60;
   } else { delete cfg.stackResetBb; delete cfg.stackResetWaitS; }
