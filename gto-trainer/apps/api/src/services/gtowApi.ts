@@ -27,6 +27,10 @@ import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions"
 // EVERY request to api.gtowizard.com goes through the ledger (2026-09-23): GTO Wizard caps REQUESTS, not
 // solves, and a poll loop is many requests — see services/gtowRequestLog.ts.
 import { gtowRequests } from "./gtowRequestLog";
+// AN AUTH REFUSAL IS NOT A VERDICT (2026-10-08, services/gtowAuth): every request below goes through sendWithAuthRetry —
+// one token refresh, the same request once more, else the decision fails with "GTO Wizard auth failed twice".
+import { AUTH_RETRY_RESERVE_MS, authFailedReason, authRefreshBudgetMs, sendWithAuthRetry, type AuthRound } from "./gtowAuth";
+import { NT_AUTH_RETRY, isAuthFailure, refusalDetail } from "./gtowAuthBody";
 import { tmark } from "./answerTrace";
 // THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): beneath ensureCustomSolution / customNode — the
 // level every test stub and replay sits ABOVE — so a stubbed walk never meets it and a live one always does.
@@ -207,8 +211,8 @@ class GtowApi {
   }
 
   /**
-   * Fetch a spot solution. Returns the parsed JSON on success. On a 401 the
-   * token is re-sniffed once and the call retried. `null` means the API/client
+   * Fetch a spot solution. Returns the parsed JSON on success. On an auth refusal (a 401, or a 400 "Invalid API Key")
+   * the token is refreshed once and the call retried (services/gtowAuth). `null` means the API/client
    * is unreachable or a solution doesn't exist for the spot.
    */
   async spotSolution(p: SpotSolutionParams): Promise<{ ok: true; data: any } | { ok: false; status: number; error: string }> {
@@ -219,31 +223,35 @@ class GtowApi {
     if (!candidates.length) return noSession(need);
     let last: { status: number; error: string } | null = null;
     for (const id of candidates) {
-      // one re-sniff per session: a token that went stale between the keeper's
-      // tick and this call is the common 401, not a signed-out account
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const token = await gtowSessions.tokenFor(id, attempt === 1);
-        if (!token) { last = { status: 0, error: `${id}: no access token` }; break; }
-        let res: Response;
-        try {
-          res = await gtowRequests.fetch(id, "library", url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12_000) });
-        } catch (e) {
-          last = { status: 0, error: `${id}: ${e instanceof Error ? e.message : e}` };
-          break;
-        }
-        if (res.status === 401 && attempt === 0) continue;
-        if (!res.ok) {
-          const body = (await res.text().catch(() => "")).slice(0, 200);
-          // 404 means this SPOT has no library solution — every account would
-          // say the same, so don't burn the pool walking to the next one.
-          if (res.status === 404) return { ok: false, status: 404, error: body };
-          gtowSessions.noteFailure(id, res.status, body, need);
-          last = { status: res.status, error: body };
-          break;
-        }
-        gtowSessions.noteSuccess(id);
-        return { ok: true, data: await res.json() };
+      // one token refresh per session (services/gtowAuth): a token that went stale or was rotated between the keeper's
+      // tick and this call is the common auth refusal, not a signed-out account
+      const token = await gtowSessions.tokenFor(id);
+      if (!token) { last = { status: 0, error: `${id}: no access token` }; continue; }
+      let sent: Awaited<ReturnType<typeof sendWithAuthRetry>>;
+      try {
+        sent = await sendWithAuthRetry(id, "library", token, (tok, retry) =>
+          gtowRequests.fetch(id, "library", url, { headers: { Authorization: `Bearer ${tok}` }, signal: AbortSignal.timeout(12_000) }, retry ? { nt: NT_AUTH_RETRY } : undefined));
+      } catch (e) {
+        last = { status: 0, error: `${id}: ${e instanceof Error ? e.message : e}` };
+        continue;
       }
+      if (sent.auth && !sent.auth.recovered) {
+        gtowSessions.noteAuthFailure(id, sent.token, sent.auth.detail);
+        last = { status: 401, error: authFailedReason(sent.auth) };
+        continue;
+      }
+      const res = sent.res;
+      if (!res.ok) {
+        const body = (await res.text().catch(() => "")).slice(0, 200);
+        // 404 means this SPOT has no library solution — every account would
+        // say the same, so don't burn the pool walking to the next one.
+        if (res.status === 404) return { ok: false, status: 404, error: body };
+        gtowSessions.noteFailure(id, res.status, body, need);
+        last = { status: res.status, error: body };
+        continue;
+      }
+      gtowSessions.noteSuccess(id);
+      return { ok: true, data: await res.json() };
     }
     return { ok: false, status: last?.status ?? 401, error: last?.error ?? "Unauthorized after token refresh" };
   }
@@ -516,52 +524,62 @@ class GtowApi {
     const candidates = gtowSessions.liveFirst(ids.length ? ids : gtowSessions.routeIgnoringBlocks(need));
     if (!candidates.length) return noSession(need);
     let last: { status: number; error: string } | null = null;
+    const headersOf = (tok: string) => ({ Authorization: `Bearer ${tok}`, "Content-Type": "application/json" });
     for (const id of candidates) {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const token = await gtowSessions.tokenFor(id, attempt === 1);
-        if (!token) { last = { status: 0, error: `${id}: no access token` }; break; }
-        const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+      const token = await gtowSessions.tokenFor(id);
+      if (!token) { last = { status: 0, error: `${id}: no access token` }; continue; }
 
-        // 1. create the tree (bounded — an unbounded fetch here hung whole
-        // solves when the API stalled; nothing upstream can cancel it)
-        let treeRes: Response;
-        try {
-          treeRes = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, {
-            method: "POST", headers, body: JSON.stringify(body),
-            signal: AbortSignal.timeout(15_000),
-          });
-        } catch (e) { last = { status: 0, error: `${id}: custom-trees ${e instanceof Error ? e.message : e}` }; break; }
-        if (treeRes.status === 401 && attempt === 0) continue;
-        if (!treeRes.ok) {
-          const msg = (await treeRes.text().catch(() => "")).slice(0, 180);
-          gtowSessions.noteFailure(id, treeRes.status, msg, need);
-          last = { status: treeRes.status, error: `custom-trees: ${msg}` };
-          break; // next session
-        }
-        const tree = await treeRes.json();
-        const treeId = tree.id ?? tree.custom_tree_id ?? tree.uuid;
-        if (!treeId) return { ok: false, status: 502, error: "custom-trees returned no id" };
-
-        // 2. create the solution
-        let solRes: Response;
-        try {
-          solRes = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, {
-            method: "POST", headers, body: JSON.stringify({ custom_tree_id: treeId, actions: solution.actions, board: solution.board }),
-            signal: AbortSignal.timeout(15_000),
-          });
-        } catch (e) { last = { status: 0, error: `${id}: custom-solutions ${e instanceof Error ? e.message : e}` }; break; }
-        if (!solRes.ok) {
-          const msg = (await solRes.text().catch(() => "")).slice(0, 180);
-          gtowSessions.noteFailure(id, solRes.status, msg, need);
-          last = { status: solRes.status, error: `custom-solutions: ${msg}` };
-          break; // next session
-        }
-        const sol = await solRes.json();
-        const solId = sol.id ?? sol.custom_solution_id ?? sol.uuid;
-        if (!solId) return { ok: false, status: 502, error: "custom-solutions returned no id" };
-        gtowSessions.noteSuccess(id, { tree: true });
-        return { ok: true, solId: String(solId), session: id };
+      // 1. create the tree (bounded — an unbounded fetch here hung whole
+      // solves when the API stalled; nothing upstream can cancel it). An auth refusal: one token refresh, the same POST
+      // once more (services/gtowAuth) — then the next session.
+      let tr: Awaited<ReturnType<typeof sendWithAuthRetry>>;
+      try {
+        tr = await sendWithAuthRetry(id, "tree", token, (tok, retry) => gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, {
+          method: "POST", headers: headersOf(tok), body: JSON.stringify(body),
+          signal: AbortSignal.timeout(15_000),
+        }, retry ? { nt: NT_AUTH_RETRY } : undefined));
+      } catch (e) { last = { status: 0, error: `${id}: custom-trees ${e instanceof Error ? e.message : e}` }; continue; }
+      if (tr.auth && !tr.auth.recovered) {
+        gtowSessions.noteAuthFailure(id, tr.token, tr.auth.detail);
+        last = { status: 401, error: `custom-trees: ${authFailedReason(tr.auth)}` };
+        continue; // next session
       }
+      const treeRes = tr.res;
+      if (!treeRes.ok) {
+        const msg = (await treeRes.text().catch(() => "")).slice(0, 180);
+        gtowSessions.noteFailure(id, treeRes.status, msg, need);
+        last = { status: treeRes.status, error: `custom-trees: ${msg}` };
+        continue; // next session
+      }
+      const tree = await treeRes.json();
+      const treeId = tree.id ?? tree.custom_tree_id ?? tree.uuid;
+      if (!treeId) return { ok: false, status: 502, error: "custom-trees returned no id" };
+
+      // 2. create the solution (with the token the tree went through — the refreshed one after an auth round)
+      let so: Awaited<ReturnType<typeof sendWithAuthRetry>>;
+      try {
+        so = await sendWithAuthRetry(id, "solution", tr.token, (tok, retry) => gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, {
+          method: "POST", headers: headersOf(tok), body: JSON.stringify({ custom_tree_id: treeId, actions: solution.actions, board: solution.board }),
+          signal: AbortSignal.timeout(15_000),
+        }, retry ? { nt: NT_AUTH_RETRY } : undefined));
+      } catch (e) { last = { status: 0, error: `${id}: custom-solutions ${e instanceof Error ? e.message : e}` }; continue; }
+      if (so.auth && !so.auth.recovered) {
+        gtowSessions.noteAuthFailure(id, so.token, so.auth.detail);
+        last = { status: 401, error: `custom-solutions: ${authFailedReason(so.auth)}` };
+        continue; // next session
+      }
+      const solRes = so.res;
+      if (!solRes.ok) {
+        const msg = (await solRes.text().catch(() => "")).slice(0, 180);
+        gtowSessions.noteFailure(id, solRes.status, msg, need);
+        last = { status: solRes.status, error: `custom-solutions: ${msg}` };
+        continue; // next session
+      }
+      const sol = await solRes.json();
+      const solId = sol.id ?? sol.custom_solution_id ?? sol.uuid;
+      if (!solId) return { ok: false, status: 502, error: "custom-solutions returned no id" };
+      gtowSessions.noteSuccess(id, { tree: true });
+      return { ok: true, solId: String(solId), session: id };
     }
     return { ok: false, status: last?.status ?? 401, error: last?.error ?? "Unauthorized after token refresh" };
   }
@@ -634,31 +652,32 @@ class GtowApi {
       }
       const owner = this.solOwner.get(parent);
       if (!owner || owner === CACHE_SESSION) return { ok: false, status: 0, error: "node lock: the account that owns the parent solution is not known" };
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const token = await gtowSessions.tokenFor(owner, attempt === 1);
-        if (!token) return { ok: false, status: 0, error: `node lock: no GTO Wizard token for ${owner}` };
-        let res: Response;
-        try {
-          res = await gtowRequests.fetch(owner, "solution", `${API_BASE}/v4/custom-solutions/`, {
-            method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ parent_solution_id: parent, last_node_lock: lock }), signal: AbortSignal.timeout(15_000),
-          });
-        } catch (e) { return { ok: false, status: 0, error: `node lock: ${e instanceof Error ? e.message : e}` }; }
-        if (res.status === 401 && attempt === 0) continue;
-        const t = await res.text().catch(() => "");
-        if (!res.ok) {
-          gtowSessions.noteFailure(owner, res.status, t.slice(0, 180), {});
-          return { ok: false, status: res.status, error: `node lock ${res.status}: ${t.slice(0, 180)}` };
-        }
-        let id: string | null = null;
-        try { const j = JSON.parse(t); id = j?.id ?? j?.custom_solution_id ?? null; } catch { /* below */ }
-        if (!id) return { ok: false, status: 502, error: `node lock: no solution id in the reply (${t.slice(0, 120)})` };
-        this.solOwner.set(String(id), owner);
-        this.solCreatedAt.set(String(id), Date.now());
-        if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
-        return { ok: true, solId: String(id), created: true, session: owner, why: "node-locked child of the street's solve" };
+      const token = await gtowSessions.tokenFor(owner);
+      if (!token) return { ok: false, status: 0, error: `node lock: no GTO Wizard token for ${owner}` };
+      let sent: Awaited<ReturnType<typeof sendWithAuthRetry>>;
+      try {
+        sent = await sendWithAuthRetry(owner, "solution", token, (tok, retry) => gtowRequests.fetch(owner, "solution", `${API_BASE}/v4/custom-solutions/`, {
+          method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ parent_solution_id: parent, last_node_lock: lock }), signal: AbortSignal.timeout(15_000),
+        }, retry ? { nt: NT_AUTH_RETRY } : undefined));
+      } catch (e) { return { ok: false, status: 0, error: `node lock: ${e instanceof Error ? e.message : e}` }; }
+      if (sent.auth && !sent.auth.recovered) {
+        gtowSessions.noteAuthFailure(owner, sent.token, sent.auth.detail);
+        return { ok: false, status: 401, error: `node lock: ${authFailedReason(sent.auth)}` };
       }
-      return { ok: false, status: 401, error: "node lock: unauthorized after a token refresh" };
+      const res = sent.res;
+      const t = await res.text().catch(() => "");
+      if (!res.ok) {
+        gtowSessions.noteFailure(owner, res.status, t.slice(0, 180), {});
+        return { ok: false, status: res.status, error: `node lock ${res.status}: ${t.slice(0, 180)}` };
+      }
+      let id: string | null = null;
+      try { const j = JSON.parse(t); id = j?.id ?? j?.custom_solution_id ?? null; } catch { /* below */ }
+      if (!id) return { ok: false, status: 502, error: `node lock: no solution id in the reply (${t.slice(0, 120)})` };
+      this.solOwner.set(String(id), owner);
+      this.solCreatedAt.set(String(id), Date.now());
+      if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+      return { ok: true, solId: String(id), created: true, session: owner, why: "node-locked child of the street's solve" };
     })();
     this.lockedPending.set(memoKey, p);
     p.then((r) => { if (!r.ok) this.lockedPending.delete(memoKey); }).catch(() => this.lockedPending.delete(memoKey));
@@ -975,7 +994,9 @@ class GtowApi {
     // first failure it kept ("poll request failed: timed out") though every later poll had answered 204 — read as a
     // network fault when the solve was simply slow, or the node missing. Counted, and the reason says so.
     const said = { notReady: 0, failed: 0, empty: 0 };
-    let refreshed = false;
+    // ONE AUTH ROUND PER READ (services/gtowAuth): the first auth refusal refreshes the token and polls again at once;
+    // a later one (the refreshed token refused too) ends the read with the auth reason — never as a verdict on the line
+    let authRound: AuthRound | null = null;
     // The solve lives on the account that minted it: poll it with THAT
     // session's token, never whichever token happens to be freshest.
     const owner = this.solOwner.get(solId) ?? null;
@@ -988,18 +1009,35 @@ class GtowApi {
       // the ledger learns what this poll was for: the readiness probe, a read of a served solve, the grace retry of an
       // empty answer, or the old loop — with that, a hand's 204s can be told apart later (solving vs no such node)
       const pm = mode === "legacy" ? "legacy" : mode === "until-ready" ? "probe" : empties ? "retry" : "node";
+      const poll = (tok: string, retry: boolean) => gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+        signal: AbortSignal.timeout(8_000),
+      }, { pm, cl: caller ?? null, ...(retry ? { nt: NT_AUTH_RETRY } : {}) });
+      let sent: Awaited<ReturnType<typeof sendWithAuthRetry>>;
       try {
-        r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(8_000),
-        }, { pm, cl: caller ?? null });
+        // the refresh fits the read's own clock: its deadline, less a second for the retry itself
+        sent = authRound ? { res: await poll(token, false), auth: null, token }
+          : await sendWithAuthRetry(owner, "poll", token, poll, Math.min(authRefreshBudgetMs(), deadline - Date.now() - AUTH_RETRY_RESERVE_MS));
       } catch (e) {
         lastErr = `poll request failed: ${e instanceof Error ? e.message : e}`;
         said.failed++;
         await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
         continue;
       }
-      if (r.status === 401 && !refreshed) { refreshed = true; if (owner) await gtowSessions.tokenFor(owner, true); else await this.accessToken(true); continue; }
+      r = sent.res;
+      if (sent.auth) authRound = sent.auth;
+      if (sent.auth && !sent.auth.recovered) {
+        gtowSessions.noteAuthFailure(owner, sent.token, sent.auth.detail);
+        return { ok: false, status: 401, error: authFailedReason(sent.auth) };
+      }
+      if (authRound && !sent.auth && r.status !== 204 && !r.ok) {
+        // a later poll of this read refused for auth again, after the round: no second refresh
+        const b = await r.clone().text().catch(() => "");
+        if (isAuthFailure(r.status, b)) {
+          gtowSessions.noteAuthFailure(owner, token, refusalDetail(b));
+          return { ok: false, status: 401, error: authFailedReason({ ...authRound, retryStatus: r.status, recovered: false }) };
+        }
+      }
       if (r.ok && r.status !== 204) {
         // read as text, then parsed: the store keeps the reply exactly as GTO Wizard sent it
         const text = await r.text().catch(() => "");
@@ -1029,7 +1067,9 @@ class GtowApi {
           return { ok: false, status: 429, error: lastErr };
         }
         // A 400 / 422 IS GTO WIZARD'S VERDICT ON THE QUERY (NODE_DOES_NOT_EXIST, VALIDATION_ERROR): polling it again
-        // until the deadline only spent requests and the clock (2026-10-03). Returned at once, as the 400 it is.
+        // until the deadline only spent requests and the clock (2026-10-03). Returned at once, as the 400 it is. An AUTH
+        // refusal never gets here (2026-10-08): "Invalid API Key" is a VALIDATION_ERROR 400 too, and it was read as this
+        // verdict — sendWithAuthRetry above refreshed the token and polled again, or the read ended with the auth reason.
         if (r.status === 400 || r.status === 422) return { ok: false, status: r.status, error: lastErr };
       }
       await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));

@@ -63,7 +63,11 @@ const GTOW_REQUESTS_ADDED = [["q", "TEXT"], ["hd", "TEXT"],
   // retry = the grace retry of an empty answer, legacy = the old poll-until-strategy loop) and WHO asked
   // (walk = the chain's read, prefetch = its speculative lookahead, study = the study page) — so the 204s of a
   // hand can be told apart after the fact: solve still running, or a node that does not exist
-  ["pm", "TEXT"], ["cl", "TEXT"]] as const;
+  ["pm", "TEXT"], ["cl", "TEXT"],
+  // 2026-10-08: a note on what a refusal WAS (services/gtowAuthBody): auth = GTO Wizard refused the token ("Invalid API
+  // Key", status kept as sent — a 400), auth-retry = the same request sent again after the token refresh and not refused
+  // for auth, auth-twice = that retry refused for auth again. A 400 without it is a refusal of the query (the line)
+  ["nt", "TEXT"]] as const;
 
 export function ensureEventTables(db: Database): void {
   db.run(GTOW_REQUESTS_DDL);

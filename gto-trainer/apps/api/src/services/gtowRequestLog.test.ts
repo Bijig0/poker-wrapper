@@ -206,6 +206,35 @@ describe("gtowRequestLog", () => {
     } finally { db.close(); }
   });
 
+  test("an auth refusal keeps its 400 but is NOTED as one (nt), kept whole, and counted apart from the line's refusals", async () => {
+    const log = fresh();
+    const auth = JSON.stringify({ code: "VALIDATION_ERROR", detail: "Invalid API Key", data: { detail: "Invalid API Key" } });
+    const dne = JSON.stringify({ code: "NODE_DOES_NOT_EXIST", detail: "The node in the actions doesn't exists" });
+    const replies: [number, string][] = [[400, auth], [200, "{}"], [400, auth], [400, auth], [400, dne], [422, "{}"]];
+    const orig = globalThis.fetch;
+    // @ts-expect-error test stub
+    globalThis.fetch = async () => { const [st, b] = replies.shift()!; return new Response(b, { status: st }); };
+    try {
+      const r = await log.fetch("primary", "poll", "https://api.gtowizard.com/a");
+      expect(await r.text()).toBe(auth);                                   // the caller still reads the body
+      await log.fetch("primary", "poll", "https://api.gtowizard.com/a", undefined, { nt: "auth-retry" });   // the retry, got through
+      await log.fetch("primary", "poll", "https://api.gtowizard.com/b");
+      await log.fetch("primary", "poll", "https://api.gtowizard.com/b", undefined, { nt: "auth-retry" });   // refused again
+      await log.fetch("primary", "poll", "https://api.gtowizard.com/c");
+      await log.fetch("primary", "poll", "https://api.gtowizard.com/d");
+    } finally {
+      globalThis.fetch = orig;
+    }
+    const rows = log.rows();
+    expect(rows.map((x) => [x.st, x.nt ?? null])).toEqual([[400, "auth"], [200, "auth-retry"], [400, "auth"], [400, "auth-twice"], [400, null], [422, null]]);
+    const ref = log.refusals();
+    expect(ref.byOrigin[Object.keys(ref.byOrigin)[0]!]).toEqual({ auth: 3, retryOk: 1, retryAuth: 1, line400: 1, line422: 1 });
+    expect(ref.since).not.toBeNull();
+    const kept = log.responses(0, "auth");
+    expect(kept).toHaveLength(3);
+    expect(kept[0]!.body).toContain("Invalid API Key");
+  });
+
   test("a ledger created before the q/hd columns is migrated in place and keeps its rows", () => {
     const d = mkdtempSync(join(tmpdir(), "gtow-req-"));
     dirs.push(d);

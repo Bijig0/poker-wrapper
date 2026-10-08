@@ -19,6 +19,7 @@
  */
 import { Database } from "bun:sqlite";
 import { gtowRequestsPath } from "../services/storePaths";
+import { refusalsIn } from "../services/gtowRequestLog";
 
 const days = Number(process.argv[process.argv.indexOf("--days") + 1]) || 30;
 const db = new Database(gtowRequestsPath(), { readonly: true });
@@ -152,4 +153,14 @@ if (hasResponses) {
     console.log("=== header samples of normal replies (one per account x kind x status):");
     for (const r of samples) console.log(`  ${r.s} ${r.k} ${r.st}: ${r.headers}`);
   }
+}
+
+// AUTH REFUSALS vs REFUSALS OF THE QUERY (2026-10-08, services/gtowAuthBody). A 400 is either GTO Wizard refusing the
+// LINE (NODE_DOES_NOT_EXIST, "Incorrect actions") or refusing the TOKEN ("Invalid API Key" while it rotates); the ledger
+// keeps the status as sent and notes the second kind in `nt` (auth / auth-retry / auth-twice). Rows from before the note
+// carry none: counted as the query's.
+if (cols.has("nt")) {
+  const { since: first, byOrigin } = refusalsIn(db, since);
+  console.log(`=== 4xx refusals (last ${days} day(s)): auth refusals vs refusals of the query${first ? ` — exact since ${iso(first)}Z, earlier 400s all counted as the query's` : " — no auth note in the ledger yet"}`);
+  for (const [o, v] of Object.entries(byOrigin)) console.log(`  ${o}: auth ${v.auth} (retries recovered ${v.retryOk}, refused again ${v.retryAuth}) · query 400 ${v.line400} · query 422 ${v.line422}`);
 }

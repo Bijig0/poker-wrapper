@@ -43,6 +43,7 @@ import { createHash } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
+import { isAuthFailure } from "./gtowAuthBody";
 import { gtowCachePath, openStore } from "./storePaths";
 
 export type CacheKind = "pre" | "post";
@@ -53,8 +54,16 @@ export const NODE_OK = 200;
 export const NO_NODE = -204;
 /** GTO Wizard's own refusals of a LINE, deterministic for the tree: stored as the negative HTTP status. */
 const REFUSALS = new Set([-400, -422]);
-/** the refusal bodies that are a verdict about the line (not a malformed request or a transient) */
+/** the refusal bodies that are a verdict about the line (not a malformed request or a transient). NOT ENOUGH ALONE
+ *  (2026-10-08): GTO Wizard's auth refusal is a VALIDATION_ERROR too — `400 {"code": "VALIDATION_ERROR", "detail":
+ *  "Invalid API Key"}` — so `isLineVerdict` also requires the body not to be one (services/gtowAuthBody). */
 export const DETERMINISTIC_REFUSAL = /NODE_DOES_NOT_EXIST|VALIDATION_ERROR|Incorrect actions/i;
+
+/** A refusal the store may keep as a fact about the line: a verdict body that is not an auth refusal. */
+export function isLineVerdict(status: number, raw: string | null | undefined): boolean {
+  const st = Math.abs(status);
+  return !!raw && DETERMINISTIC_REFUSAL.test(raw) && !isAuthFailure(st, raw);
+}
 
 /** Synthetic solution ids: `gc:<key>` — a tree the store holds, not (yet) a solve on any account. */
 export const STORED_PREFIX = "gc:";
@@ -465,6 +474,9 @@ export class GtowSolveCache {
       const data = JSON.parse(raw);
       return data?.action_solutions?.length ? { status, data, text: null, bytes: raw.length } : null;
     }
+    // a stored refusal that is an auth body (never written since 2026-10-08; one from before would answer for ever) is
+    // a miss: the caller asks GTO Wizard again
+    if (REFUSALS.has(status) && !isLineVerdict(status, raw)) return null;
     return { status, data: null, text: raw, bytes: raw?.length ?? 0 };
   }
 
@@ -481,7 +493,8 @@ export class GtowSolveCache {
     } else if (status === NO_NODE) {
       raw = null;
     } else if (REFUSALS.has(status)) {
-      if (!raw || !DETERMINISTIC_REFUSAL.test(raw)) return;
+      // a verdict about the line, never an auth refusal: "Invalid API Key" says nothing about the tree (2026-10-08)
+      if (!raw || !isLineVerdict(status, raw)) return;
       raw = raw.slice(0, 2000);
     } else {
       return;

@@ -22,6 +22,7 @@ import { gtowRequestsPath } from "./storePaths";
 import type { Database } from "bun:sqlite";
 import { openStore } from "./storePaths";
 import { ensureEventTables } from "../../../../packages/data-root/eventTables";
+import { AUTH_STATUSES, NT_AUTH, NT_AUTH_RETRY, NT_AUTH_TWICE, authNote } from "./gtowAuthBody";
 
 export type GtowRequestKind = "tree" | "solution" | "poll" | "library" | "other";
 
@@ -48,10 +49,16 @@ export interface GtowRequestRow {
   pm?: string;
   /** who asked: walk | prefetch | study (the chain's callers tag themselves; scripts leave it empty) */
   cl?: string;
+  /** what a refusal was (2026-10-08, services/gtowAuthBody): auth | auth-retry | auth-twice — empty for everything else */
+  nt?: string;
 }
 
 /** Per-request context a caller may attach: it rides the ledger row, nothing else. */
-export interface GtowRequestExtra { pm?: string | null; cl?: string | null }
+export interface GtowRequestExtra { pm?: string | null; cl?: string | null; nt?: string | null }
+
+/** One origin's 4xx refusals, told apart (see `refusals`): auth refusals (incl. a retry refused again), the retries
+ *  that got past auth, the retries refused for auth again, and the 400 / 422 refusals of the query. */
+export interface GtowRefusals { auth: number; retryOk: number; retryAuth: number; line400: number; line422: number }
 
 /** One account's requests inside a trailing window (see `windows`). */
 export interface GtowWindow { n: number; sinceMs: number; x429: number; ok: number; byOrigin: Record<string, number> }
@@ -76,7 +83,7 @@ export interface GtowResponseRow {
   k: GtowRequestKind;
   st: number;
   o: string;
-  why: "limit" | "sample";
+  why: "limit" | "sample" | "auth";
   url: string | null;
   headers: Record<string, string>;
   body: string | null;
@@ -151,8 +158,8 @@ class GtowRequestLog {
       countRequest(row.kind, row.status);
       const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin,
         ...(scope ? { h: scope.handKey, ...(scope.street ? { sr: scope.street } : {}), go: scope.origin } : {}) };
-      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd, pm, cl) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null, row.pm ?? null, row.cl ?? null);
+      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd, pm, cl, nt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null, row.pm ?? null, row.cl ?? null, row.nt ?? null);
       if (++this.written % LOG_EVERY === 0) {
         const s = this.stats();
         console.log(`[gtow-requests] ${s.last24h.total} in the last 24 h (${Object.entries(s.last24h.bySession).map(([k, v]) => `${k} ${v}`).join(", ")}; ${s.last24h.status429} x 429) · cap ${CAP}`);
@@ -198,8 +205,12 @@ class GtowRequestLog {
     if (blocked) return blocked;
     try {
       const r = await timed(`GTO Wizard ${kind} (${session ?? "?"})`, () => fetch(url, init), (x) => `HTTP ${x.status}`);
-      this.note({ session, kind, status: r.status, q: requestTarget(url), hd: limitHeaders(r.headers), ...extra });
-      await this.keepResponse(session, kind, url, r);
+      // AN AUTH REFUSAL IS NOTED AS ONE (2026-10-08): the row keeps the status GTO Wizard sent (a 400 "Invalid API Key"),
+      // and `nt` says it refused the token, not the query — so a 400 count can tell the two apart (services/gtowAuthBody)
+      const body = AUTH_STATUSES.has(r.status) ? await r.clone().text().catch(() => "") : "";
+      const nt = authNote(r.status, body, extra?.nt);
+      this.note({ session, kind, status: r.status, q: requestTarget(url), hd: limitHeaders(r.headers), ...extra, nt });
+      await this.keepResponse(session, kind, url, r, nt === NT_AUTH || nt === NT_AUTH_TWICE);
       return r;
     } catch (e) {
       this.note({ session, kind, status: 0, q: requestTarget(url), ...extra });
@@ -211,12 +222,13 @@ class GtowRequestLog {
 
   /**
    * Keep a response whole when it is a plan/throttle answer (402/403/429: every header + the full body — the logs
-   * cut the 429 body off mid-sentence), and one header sample per account × kind × status per hour otherwise.
+   * cut the 429 body off mid-sentence) or an auth refusal (`auth`, 2026-10-08: the 400 "Invalid API Key" bodies were
+   * kept nowhere), and one header sample per account × kind × status per hour otherwise.
    * The body is read from a clone, so the caller still reads its own. Never throws.
    */
-  async keepResponse(session: string | null | undefined, kind: GtowRequestKind, url: string, r: Response): Promise<void> {
+  async keepResponse(session: string | null | undefined, kind: GtowRequestKind, url: string, r: Response, auth = false): Promise<void> {
     try {
-      const limit = LIMIT_STATUS.has(r.status);
+      const limit = LIMIT_STATUS.has(r.status) || auth;
       const key = `${session ?? "unknown"}|${kind}|${r.status}`;
       const now = Date.now();
       if (!limit && now - (this.sampledAt.get(key) ?? 0) < SAMPLE_EVERY_MS) return;
@@ -225,7 +237,7 @@ class GtowRequestLog {
       r.headers.forEach((v, k) => { headers[k] = v; });
       const body = limit ? (await r.clone().text().catch(() => "")).slice(0, BODY_CAP) : null;
       this.open().query("INSERT INTO gtow_responses (ts, s, k, st, o, why, url, headers, body) VALUES (?,?,?,?,?,?,?,?,?)")
-        .run(now, session ?? "unknown", kind, r.status, this.origin, limit ? "limit" : "sample", requestTarget(url), JSON.stringify(headers), body);
+        .run(now, session ?? "unknown", kind, r.status, this.origin, auth ? "auth" : limit ? "limit" : "sample", requestTarget(url), JSON.stringify(headers), body);
       if (r.status === 429) console.log(`[gtow-requests] 429 on ${session ?? "?"} ${kind} — kept whole in gtow_responses: ${(body ?? "").slice(0, 400)} | headers ${JSON.stringify(headers)}`);
     } catch {
       /* the ledger is an observer */
@@ -233,7 +245,7 @@ class GtowRequestLog {
   }
 
   /** Stored responses since `sinceMs`, oldest first (`why` narrows to limit answers or samples). */
-  responses(sinceMs = 0, why?: "limit" | "sample"): GtowResponseRow[] {
+  responses(sinceMs = 0, why?: "limit" | "sample" | "auth"): GtowResponseRow[] {
     try {
       return this.open()
         .query<Omit<GtowResponseRow, "headers"> & { headers: string }, [number, string, string]>(
@@ -250,11 +262,11 @@ class GtowRequestLog {
     try {
       return this.open()
         .query<Record<string, unknown> & { ts: number; s: string; k: GtowRequestKind; st: number; o: string }, [number]>(
-          "SELECT ts, s, k, st, o, h, sr, go, q, hd, pm, cl FROM gtow_requests WHERE ts >= ? ORDER BY id")
+          "SELECT ts, s, k, st, o, h, sr, go, q, hd, pm, cl, nt FROM gtow_requests WHERE ts >= ? ORDER BY id")
         .all(sinceMs)
         .map((r) => {
           const out: Record<string, unknown> = { ts: r.ts, s: r.s, k: r.k, st: r.st, o: r.o };
-          for (const c of ["h", "sr", "go", "q", "hd", "pm", "cl"]) if (r[c] != null) out[c] = r[c];
+          for (const c of ["h", "sr", "go", "q", "hd", "pm", "cl", "nt"]) if (r[c] != null) out[c] = r[c];
           return out as unknown as GtowRequestRow;
         });
     } catch {
@@ -354,6 +366,20 @@ class GtowRequestLog {
     }
   }
 
+  /**
+   * THE 4xx REFUSALS, TOLD APART (2026-10-08): per origin, the auth refusals (nt auth / auth-twice — GTO Wizard refused
+   * the TOKEN), how the retries after a refresh went, and the 400 / 422 refusals of the QUERY (the line or the tree:
+   * NODE_DOES_NOT_EXIST, "Incorrect actions", "Engine validation failed"). Rows from before the note existed carry none
+   * and count as the query's — `since` says from when the split is exact.
+   */
+  refusals(sinceMs = 0): { since: number | null; byOrigin: Record<string, GtowRefusals> } {
+    try {
+      return refusalsIn(this.open(), sinceMs);
+    } catch {
+      return { since: null, byOrigin: {} };   // an empty ledger has none
+    }
+  }
+
   /** How many requests one account may still send before the stated cap, over the trailing 24 h. */
   headroom(session: string, now = Date.now()): number {
     try {
@@ -374,6 +400,24 @@ class GtowRequestLog {
       /* best effort */
     }
   }
+}
+
+/** The 4xx refusals of a gtow_requests table, told apart per origin (GtowRequestLog.refusals; gtowQuotaReport reads a
+ *  read-only copy with it). `since`: the first row carrying a note — before it every 400 counts as the query's. */
+export function refusalsIn(db: Database, sinceMs: number): { since: number | null; byOrigin: Record<string, GtowRefusals> } {
+  const out: Record<string, GtowRefusals> = {};
+  const since = db.query<{ ts: number | null }, []>("SELECT MIN(ts) ts FROM gtow_requests WHERE nt IS NOT NULL").get()?.ts ?? null;
+  const rows = db.query<{ o: string; st: number; nt: string | null; n: number }, [number]>(
+    "SELECT o, st, nt, COUNT(*) n FROM gtow_requests WHERE ts >= ? AND (nt IS NOT NULL OR st IN (400, 422)) GROUP BY o, st, nt").all(sinceMs);
+  for (const r of rows) {
+    const o = (out[r.o] ??= { auth: 0, retryOk: 0, retryAuth: 0, line400: 0, line422: 0 });
+    if (r.nt === NT_AUTH) o.auth += r.n;
+    else if (r.nt === NT_AUTH_TWICE) { o.auth += r.n; o.retryAuth += r.n; }
+    else if (r.nt === NT_AUTH_RETRY) o.retryOk += r.n;
+    else if (r.st === 400) o.line400 += r.n;
+    else if (r.st === 422) o.line422 += r.n;
+  }
+  return { since, byOrigin: out };
 }
 
 export const gtowRequests = new GtowRequestLog();

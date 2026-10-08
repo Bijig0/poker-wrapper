@@ -46,6 +46,10 @@ import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
 import { gtowRequests } from "./gtowRequestLog";
+// AN AUTH REFUSAL IS NOT A VERDICT (2026-10-08, services/gtowAuth): one token refresh, the same request once more, else
+// "GTO Wizard auth failed twice" — never cached, never read as a refusal of the line or the tree
+import { AUTH_RETRY_RESERVE_MS, authFailedReason, authRefreshBudgetMs, sendWithAuthRetry, type AuthRound } from "./gtowAuth";
+import { NT_AUTH_RETRY, isAuthFailure, refusalDetail as authDetail } from "./gtowAuthBody";
 import { comboIndex, toClassWeights, COMBOS } from "../utils/comboIndex/comboIndex";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 import { rakeCapCents } from "./profiles";
@@ -815,11 +819,20 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       : "no GTO Wizard token (no session attached)" };
   }
   let last = "no GTO Wizard token";
+  const H = (tok: string) => ({ Authorization: `Bearer ${tok}`, "Content-Type": "application/json" });
+  const tag = (retry: boolean) => (retry ? { nt: NT_AUTH_RETRY } : undefined);
   for (const id of candidates) {
     const token = await gtowSessions.tokenFor(id);
     if (!token) { last = `${id}: no token`; continue; }
-    const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-    const tr = await gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+    // an auth refusal (services/gtowAuth): one token refresh and the same POST once more — then the next account
+    const t = await sendWithAuthRetry(id, "tree", token, (tok, retry) =>
+      gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H(tok), body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) }, tag(retry)));
+    if (t.auth && !t.auth.recovered) {
+      gtowSessions.noteAuthFailure(id, t.token, t.auth.detail);
+      last = `custom-trees: ${authFailedReason(t.auth)}`;
+      continue;
+    }
+    const tr = t.res;
     if (!tr.ok) {
       const b = (await tr.text().catch(() => "")).slice(0, 200);
       gtowSessions.noteFailure(id, tr.status, b, need);
@@ -827,7 +840,14 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       continue; // a refusal here is this ACCOUNT's, not the tree's — try the next
     }
     const tree = await tr.json();
-    const so = await gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H, body: JSON.stringify({ custom_tree_id: tree.id, actions: solution.actions, board: solution.board }), signal: AbortSignal.timeout(20_000) });
+    const s = await sendWithAuthRetry(id, "solution", t.token, (tok, retry) =>
+      gtowRequests.fetch(id, "solution", `${API_BASE}/v4/custom-solutions/`, { method: "POST", headers: H(tok), body: JSON.stringify({ custom_tree_id: tree.id, actions: solution.actions, board: solution.board }), signal: AbortSignal.timeout(20_000) }, tag(retry)));
+    if (s.auth && !s.auth.recovered) {
+      gtowSessions.noteAuthFailure(id, s.token, s.auth.detail);
+      last = `custom-solutions: ${authFailedReason(s.auth)}`;
+      continue;
+    }
+    const so = s.res;
     if (!so.ok) {
       const b = (await so.text().catch(() => "")).slice(0, 200);
       gtowSessions.noteFailure(id, so.status, b, need);
@@ -839,7 +859,7 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
     // A LOCKED SOLVE IS A CHAIN (services/gtowSolveCache PostedTree.locks): each lock forks the solution before it, on
     // the same account. A lock refused is a fact about the lock, not the account: no other account is tried.
     for (const lock of locks) {
-      const lk = await postLock(id, token, solId, lock);
+      const lk = await postLock(id, s.token, solId, lock);
       if ("error" in lk) return lk;
       solId = lk.solId;
     }
@@ -864,10 +884,16 @@ export interface NodeLock {
 
 /** One lock on the parent's account: POST /v4/custom-solutions/ {parent_solution_id, last_node_lock} → the child. */
 async function postLock(session: GtowSessionId, token: string, parent: string, lock: unknown): Promise<{ solId: string } | { error: string }> {
-  const r = await gtowRequests.fetch(session, "solution", `${API_BASE}/v4/custom-solutions/`, {
-    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  // an auth refusal: one token refresh and the same POST once more (services/gtowAuth)
+  const sent = await sendWithAuthRetry(session, "solution", token, (tok, retry) => gtowRequests.fetch(session, "solution", `${API_BASE}/v4/custom-solutions/`, {
+    method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
     body: JSON.stringify({ parent_solution_id: parent, last_node_lock: lock }), signal: AbortSignal.timeout(20_000),
-  });
+  }, retry ? { nt: NT_AUTH_RETRY } : undefined));
+  if (sent.auth && !sent.auth.recovered) {
+    gtowSessions.noteAuthFailure(session, sent.token, sent.auth.detail);
+    return { error: `node lock: ${authFailedReason(sent.auth)}` };
+  }
+  const r = sent.res;
   const t = await r.text().catch(() => "");
   if (!r.ok) {
     gtowSessions.noteFailure(session, r.status, t.slice(0, 200), { preflop: true });
@@ -1068,7 +1094,9 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
   // failed: The operation timed out" — a network fault that was not one (the node was not in the tree).
   let notSolved = 0, failed = 0, lastFail = "";
   let emptyPolls = 0;
-  let refreshed = false;
+  // ONE AUTH ROUND PER READ (services/gtowAuth): the first auth refusal refreshes the token and polls again at once; a
+  // later one ends the read with the auth reason — never cached, never a verdict on the line
+  let authRound: AuthRound | null = null;
   const owner = owners.get(real) ?? null;
   const limit = nodeTimeoutMs();
   while (Date.now() - t0 < limit) {
@@ -1077,15 +1105,27 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
     if (!token) return { error: `no GTO Wizard token for the session that owns this solve${owner ? ` (${owner})` : ""}` };
     const params = new URLSearchParams({ custom_solution_id: real, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
-    try { r = await gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) }); }
-    catch (e) { failed++; lastFail = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: lastFail }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
-    // THE SAME THREE RULES AS gtowApi's node poll (2026-09-25 audit): this copy re-polled an expired token for the whole
-    // NODE_TIMEOUT_MS (a lost preflop answer), never told the pool about a wall it hit, and sat out a 429 quota wall
-    if (r.status === 401 && !refreshed) {
-      refreshed = true;
-      if (owner) await gtowSessions.tokenFor(owner, true); else await gtowSessions.forceRefresh();
-      continue;
+    const poll = (tok: string, retry: boolean) => gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`,
+      { headers: { Authorization: `Bearer ${tok}` }, signal: AbortSignal.timeout(8_000) }, retry ? { nt: NT_AUTH_RETRY } : undefined);
+    try {
+      if (authRound) r = await poll(token, false);
+      else {
+        // THE SAME RULES AS gtowApi's node poll (2026-09-25 audit; auth 2026-10-08): an auth refusal — a 401, or a 400
+        // "Invalid API Key" that the 400 branch below would have CACHED as the line's refusal — refreshes the token
+        // within this read's clock (less a second for the retry) and polls again once
+        const sent = await sendWithAuthRetry(owner, "poll", token, poll, Math.min(authRefreshBudgetMs(), limit - (Date.now() - t0) - AUTH_RETRY_RESERVE_MS));
+        r = sent.res;
+        if (sent.auth) {
+          authRound = sent.auth;
+          if (!sent.auth.recovered) {
+            gtowSessions.noteAuthFailure(owner, sent.token, sent.auth.detail);
+            return { error: authFailedReason(sent.auth) };
+          }
+        }
+      }
     }
+    catch (e) { failed++; lastFail = `poll failed: ${e instanceof Error ? e.message : e}`; if (once) return { error: lastFail }; await new Promise((res) => setTimeout(res, POLL_MS)); continue; }
+    // …and the other two rules: tell the pool about a wall it hit, and do not sit out a 429 quota wall
     if (r.ok && r.status !== 204) {
       // read as text, then parsed: the store keeps the reply exactly as GTO Wizard sent it
       const text = await r.text().catch(() => "");
@@ -1106,6 +1146,15 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
       }
     } else if (!r.ok && r.status !== 404) {
       const t = await r.text().catch(() => "");
+      if (isAuthFailure(r.status, t)) {
+        // refused for auth again after this read's round: no second refresh, and nothing cached
+        gtowSessions.noteAuthFailure(owner, token, authDetail(t));
+        const round: AuthRound = authRound
+          ? { ...authRound, retryStatus: r.status, recovered: false }
+          : { session: owner, kind: "poll", status: r.status, detail: authDetail(t), budgetMs: 0, retryStatus: r.status, recovered: false,
+              refresh: { session: owner, token: null, ms: 0, same: false, timedOut: false } };
+        return { error: authFailedReason(round) };
+      }
       if (r.status === 400 || r.status === 422) {
         // GTO Wizard's refusal of the LINE is a fact about this tree: kept (putNode keeps only the verdict bodies)
         if (ck) solveCache.putNode(ck, addr, -r.status, t);

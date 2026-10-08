@@ -45,6 +45,7 @@
 
 import { asActivity, currentStepper, step, timed } from "./answerTrace";
 import { loadAccounts, WALL_MS, type GtowTier } from "./gtowAccounts";
+import { isAuthFailure } from "./gtowAuthBody";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
@@ -92,6 +93,10 @@ export interface GtowSessionCfg {
 
 /** Why a session is not taking work right now. */
 export type BlockKind = "quota" | "plan" | "auth" | "unreachable";
+
+/** What refreshAfterAuthFailure brought back: the token to retry with (null: none), how long the read took, whether it
+ *  is the very token that was refused (`same`), and whether the caller's budget ran out first. */
+export interface AuthRefresh { session: GtowSessionId | null; token: string | null; ms: number; same: boolean; timedOut: boolean }
 
 export interface GtowSessionStatus {
   id: GtowSessionId;
@@ -183,7 +188,9 @@ export const nextDailyResetMs = (now = Date.now()): number => {
  */
 export function classifyFailure(status: number, body: string): BlockKind | null {
   const b = (body ?? "").toLowerCase();
-  if (status === 401) return "auth";
+  // a 401, or a 400 / 403 whose body refuses the TOKEN ("Invalid API Key", 2026-10-08): auth, before anything below —
+  // a 403 "Invalid API Key" used to fall to the bare-403 rule and read as a ~24 h QUOTA wall
+  if (isAuthFailure(status, body)) return "auth";
   if (status === 402 || status === 429) return "quota";
   if (status === 403 || status === 422 || status === 400) {
     // The refusal GTO Wizard actually sends when Elite is handed a 3+ player
@@ -438,6 +445,22 @@ class GtowSessions {
     if (!s || !s.cfg.enabled) return null;
     if (!force && this.live(s)) return s.token;
     if (!force && s.sniffFailedMs && Date.now() - s.sniffFailedMs < SNIFF_FAIL_HOLD_MS) return null;   // known signed out
+    // ONE CDP READ AT A TIME PER SESSION (2026-10-08). The keeper, an auth retry and every poll refused at the same
+    // moment all ask for a fresh token; each sniff may Page.reload the client, and a reload can rotate the very token
+    // the sniff before it just caught. Callers join the read in flight instead.
+    const inflight = this.sniffing.get(id);
+    if (inflight) return inflight;
+    let p!: Promise<string | null>;
+    p = this.sniffInto(s, id).finally(() => { if (this.sniffing.get(id) === p) this.sniffing.delete(id); });
+    this.sniffing.set(id, p);
+    return p;
+  }
+
+  /** the sniff in flight per session (tokenFor) */
+  private sniffing = new Map<GtowSessionId, Promise<string | null>>();
+
+  /** Sniff one session's token and keep it (tokenFor's read). */
+  private async sniffInto(s: SessionState, id: GtowSessionId): Promise<string | null> {
     const tok = await timed(`GTO Wizard token sniff ${id} (${s.cfg.cdpHost})`, () => this.sniff(s.cfg.cdpHost), (t: string | null) => (t ? "token" : "none"));
     s.lastAttemptMs = Date.now();
     if (!tok) {
@@ -482,6 +505,59 @@ class GtowSessions {
       if (this.live(s)) return { id, token: s.token! };
     }
     return null;
+  }
+
+  /**
+   * A FRESH TOKEN AFTER AN AUTH REFUSAL (2026-10-08, services/gtowAuth): GTO Wizard refused `failed` ("Invalid API Key"
+   * while the account's token was being rotated). A token another caller already put in its place is handed out at
+   * once; otherwise the session's token is read again over CDP — joining a read already in flight (the keeper's, another
+   * refused poll's) — within `budgetMs`, the caller's clock. A read that began before the rotation can bring the refused
+   * token back: then one more read, if the budget allows. `token` null = none in time (`timedOut`) or none at all.
+   * `id` null (a poll whose solve has no recorded owner): the session that held `failed`, else the best one.
+   */
+  async refreshAfterAuthFailure(id: GtowSessionId | null, failed: string | null, budgetMs: number): Promise<AuthRefresh> {
+    const t0 = Date.now();
+    const done = (session: GtowSessionId | null, token: string | null, timedOut = false): AuthRefresh =>
+      ({ session, token, ms: Date.now() - t0, same: token != null && token === failed, timedOut });
+    let sid = id;
+    if (!sid && failed) for (const s of this.sessions.values()) if (s.token === failed) { sid = s.cfg.id; break; }
+    if (!sid) {
+      const b = await this.bestToken();
+      return done(b?.id ?? null, b && b.token !== failed ? b.token : null);
+    }
+    const s = this.sessions.get(sid);
+    if (!s || !s.cfg.enabled) return done(sid, null);
+    if (s.token && s.token !== failed && this.live(s)) return done(sid, s.token);
+    let tok: string | null = null;
+    for (let read = 0; read < 2; read++) {
+      const left = budgetMs - (Date.now() - t0);
+      if (left <= 0) return done(sid, null, true);
+      s.lastAttemptMs = 0;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = Symbol("late");
+      const got = await Promise.race([
+        this.tokenFor(sid, true),
+        new Promise<typeof late>((res) => { timer = setTimeout(() => res(late), left); }),
+      ]).finally(() => clearTimeout(timer));
+      // the read goes on in the background (the keeper and the next request get its token); this caller is out of time
+      if (got === late) return done(sid, null, true);
+      tok = got;
+      if (!tok || tok !== failed) break;
+    }
+    return done(sid, tok);
+  }
+
+  /**
+   * An auth refusal the refresh did not cure (services/gtowAuth). The refused token is dropped — only while it is still
+   * the session's (a newer one a read brought in meanwhile stays), so the next request reads a fresh one — and the error
+   * is recorded. No block: noteFailure's auth block would take a rotating account off routing for a minute, and a
+   * signed-out client is already held off by the failed sniff (SNIFF_FAIL_HOLD_MS).
+   */
+  noteAuthFailure(id: GtowSessionId | null, token: string | null, detail: string): void {
+    const s = id ? this.sessions.get(id) : [...this.sessions.values()].find((x) => token != null && x.token === token);
+    if (!s) return;
+    s.lastError = `auth refused: ${detail}`;
+    if (token && s.token === token) { s.token = null; s.tokenExpMs = 0; }
   }
 
   /** Record what the API said when this session was refused, and stop routing

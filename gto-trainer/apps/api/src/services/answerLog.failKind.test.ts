@@ -14,4 +14,7 @@ describe("failKindOf", () => {
   it("a pinned range without hero's hand is not-in-range", () => {
     expect(failKindOf(`PREFLOP PIN (gtow-ai-preflop gtow-ai · 4-handed): hero's KQo is not in range after the line "R2.5-C-C-R15-C-F-F"`)).toBe("not-in-range");
   });
+  it("an auth refusal the token refresh did not cure is GTO Wizard being down, not a refusal of the line (2026-10-08)", () => {
+    expect(failKindOf(`6-max strategy postflop: node: GTO Wizard auth failed twice (token rotation): poll 400 "Invalid API Key" on primary, and the retry with a refreshed token (a new token) was refused too (400) — no library fallback under this strategy`)).toBe("gtow-down");
+  });
 });

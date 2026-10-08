@@ -257,7 +257,9 @@ export function failKindOf(reason: string | null | undefined): FailKind {
   if (r.includes("node not in chart") || r.includes("not in the charts") || r.includes("not walkable")
       || r.includes("no 6-max chart for this state")) return "tree-gap";
   // infrastructure, last: the same sentences ride along inside composed refusals
-  if (r.includes("no gto wizard session") || r.includes("no gto wizard token") || r.includes("did not return the node in time")) return "gtow-down";
+  // …and an auth refusal the token refresh did not cure ("GTO Wizard auth failed twice (token rotation)", services/gtowAuth)
+  if (r.includes("no gto wizard session") || r.includes("no gto wizard token") || r.includes("did not return the node in time")
+      || r.includes("gto wizard auth failed")) return "gtow-down";
   if (r.includes("unable to connect") || r.includes("unreachable")) return "solver-unreachable";
   return "unknown";
 }
