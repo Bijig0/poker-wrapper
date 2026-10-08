@@ -1,6 +1,7 @@
 import { bbAmount, gtowApi, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
 import { solveStore } from "./solveStore";
 import { isDurableKey } from "./handFacts";
+import { servedActionIndex, servedHeroStrategy, type ServedMix } from "./servedStrategy";
 import { tmark, tspan } from "./answerTrace";
 import {
   actionKindOf,
@@ -178,11 +179,14 @@ export interface ChainTraceNode {
   heroAnswered?: HeroAnswered;
 }
 export interface HeroAnswered {
-  solId: string; src: "memory" | "store"; solveRow?: number; action: string;
+  /** "served": no node of this plan answered his action — the mix he was SERVED for it (servedStrategy) narrowed it */
+  solId: string; src: "memory" | "store" | "served"; solveRow?: number; action: string;
   strategy: number[] | null;
   combo: { answered: number; tree: number } | null;
   /** the answered node did not offer his action (it is then narrowed by this tree's strategy, as before) */
   miss?: string;
+  /** src "served": the plans the served mix was read on (blended or one), where it was kept, the plan walked here */
+  served?: { plans: (string | null)[]; blended: boolean; first: number; kept: "memory" | "store" | "rebuilt"; plan: string | null; byClass?: boolean };
 }
 export interface ChainTrace {
   spec: AiChainSpec;
@@ -260,6 +264,8 @@ export interface ChainTrace {
      *  (null = not finished when the answer was served), and when the answer was served */
     narrowingMs: number | null; unnarrowedMs: number | null; narrowedMs: number | null; servedMs: number;
   };
+  /** THE MIX SERVED AT THIS DECISION (fastSolve, on the reference walk's trace only — servedStrategy, 2026-10-08) */
+  served?: ServedMix;
   result: { ok: boolean; why?: string; potNode?: number; stackStreet?: number; line?: string; solves?: number };
 }
 
@@ -536,6 +542,8 @@ export type AiChainResult =
       /** hero's combo weight in his conditioned range at his node (null = cards unknown) — under HERO_ABSENT_WEIGHT he
        *  is absent there (services/heroAbsent) */
       heroWeight?: number | null;
+      /** hero's node: the street (0 flop .. 2 river) and his action number on it — the served mix's key (servedStrategy) */
+      heroAt?: { k: number; n: number };
       trace: ChainTrace;
     }
   | { ok: false; why: string; trace?: ChainTrace };
@@ -917,6 +925,9 @@ export async function fitsHeroAskedTree(
  *  2. HERO'S EARLIER ACTIONS ON THE STREET ARE NARROWED BY THE STRATEGY HE WAS ANSWERED WITH (answeredHeroNode): at a node
  *     where hero acted earlier on this street, on a tree that is not the one his decision there was read on, his range is
  *     multiplied by that answer's strategy for the action he took, not the new tree's. Villains keep the new tree's.
+ *     The order (2026-10-08, served-strategy narrowing): (1) the node he was answered on in THIS walk's plan; (2) else the
+ *     mix he was SERVED for that action (servedStrategy — the blend over the plans it was read on, or its one tree's
+ *     node; live 11381: answered on merge:CO+BTN, walked on ghost:BTN); (3) else, nothing of that answer kept, this tree's.
  */
 export const heroStreetAsAnsweredOn = (env: Record<string, string | undefined> = process.env): boolean =>
   String(env.HERO_STREET_AS_ANSWERED ?? "on").trim().toLowerCase() !== "off";
@@ -1111,7 +1122,7 @@ export const RETREE_NOTE_TAG = "RE-TREE:";
  * which hero's earlier action was narrowed by his answered strategy: "RE-TREE: turn re-solved with BB's 7.5bb added;
  * menus carried from tree #febb2f11; hero's CHECK narrowed by his answered strategy (his hand 1 there, 0.004 here)".
  */
-export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes">, _narrowed?: readonly HeroAnswered[]): string[] {
+export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes"> & Partial<Pick<ChainTrace, "spec">>, _narrowed?: readonly HeroAnswered[]): string[] {
   const out: string[] = [];
   for (const s of trace.streets) {
     if (s.fromCheckpoint) continue;
@@ -1131,6 +1142,20 @@ export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes">, _nar
     }
     for (const x of narrowed) {
       const h = x.heroAnswered!;
+      if (h.src === "served" && h.served) {
+        // no node of this plan answered it: the mix he was served (servedStrategy) — say which plans it came from
+        const sv = h.served;
+        const here = trace.spec?.firstStreet ?? 0;
+        // where each tree starts is said only when it differs (a re-root on one side)
+        const rooted = (first: number) => (sv.first !== here ? ` (rooted at the ${STREET[first]!.toLowerCase()})` : "");
+        const from = `${sv.blended ? `the blend of ${sv.plans.map((p) => p ?? "one tree").join(" + ")}` : sv.plans[0] ?? "one tree"}${rooted(sv.first)}`;
+        const to = `${sv.plan ?? "one tree"}${rooted(here)}`;
+        // the same plan whose answered node this walk does not reach (the line before it read otherwise): said as such
+        const how = from === to ? `answered on ${from}, a node this walk does not reach` : `plan changed: ${from} → ${to}`;
+        parts.push(`hero's ${h.action.toUpperCase()} narrowed by the mix he was served (${how}` +
+          (h.combo ? `; his hand ${h.combo.answered} in that mix, ${h.combo.tree} on this tree` : "") + ")");
+        continue;
+      }
       parts.push(`hero's ${h.action.toUpperCase()} narrowed by his answered strategy` +
         (h.combo ? ` (his hand ${h.combo.answered} on the tree he was answered on, ${h.combo.tree} on this one)` : ""));
     }
@@ -1787,7 +1812,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const retreeNotes = retreeNotesOf(trace, heroNarrowed);
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}),
           ...(stackNotes.length ? { stackNotes } : {}), ...(retreeNotes.length ? { retreeNotes } : {}),
-          heroWeight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] ?? 0 : null };
+          heroWeight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] ?? 0 : null,
+          heroAt: { k, n: actorsOf(labels, seats.length, caps).filter((x) => x === heroIdx).length } };
       }
 
       const label = labels[ti]!;
@@ -1848,6 +1874,30 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           } else {
             nodeRec.heroAnswered = { solId: ans.solId, src: ans.src, action: label, strategy: null, combo: null,
               miss: `his ${label} is not on the node he was answered on — narrowed by this tree's strategy` };
+          }
+        } else if (!ans) {
+          // NO NODE OF THIS PLAN ANSWERED IT (served-strategy narrowing, 2026-10-08 — live 11381: answered on merge:CO+BTN,
+          // this decision only on ghost:BTN): the mix he was SERVED for that action — the blend over the plans it was
+          // read on, or its one tree's node — not this tree's strategy. Keyed by his action number on the street.
+          const nHero = actorsOf(labels, seats.length, caps).slice(0, ti).filter((x) => x === heroIdx).length;
+          const sv = servedHeroStrategy(handKey, k, nHero);
+          if (sv && !(sv.solId === String(ens.solId) && !sv.blended)) {
+            const m = servedActionIndex(label, sv.menu, (l, s) => matchWalkAction(l, s, stack));
+            const c = spec.heroComboIdx;
+            const servedInfo = { plans: sv.plans, blended: sv.blended, first: sv.first, kept: sv.src, plan, ...(m.byClass ? { byClass: true } : {}) };
+            if (m.j >= 0) {
+              strat = sv.strategy[m.j]!;
+              nodeRec.heroAnswered = {
+                solId: sv.solId ?? "?", src: "served", ...(sv.solveRow != null ? { solveRow: sv.solveRow } : {}),
+                action: String(sv.menu[m.j]!.name), strategy: r4(Array.from(strat)),
+                combo: c != null ? { answered: r4([strat[c] ?? 0])[0]!, tree: r4([a.strategy?.[c] ?? 0])[0]! } : null,
+                served: servedInfo,
+              };
+              heroNarrowed.push(nodeRec.heroAnswered);
+            } else {
+              nodeRec.heroAnswered = { solId: sv.solId ?? "?", src: "served", action: label, strategy: null, combo: null, served: servedInfo,
+                miss: `his ${label} is not on the menu he was served (${sv.menu.map((x) => x.name).join(", ")}) — narrowed by this tree's strategy` };
+            }
           }
         }
       }

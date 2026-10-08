@@ -8,8 +8,9 @@ import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdC
 import { applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
-import { alignedAt, alignStrategy, blendEvs, blendStrategies, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
-import { codesOnRef, heroPreloadAtNode, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
+import { heroPreloadAtNode, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
+import { blendWalks, recordServed, servedMixOf, servedTraceField } from "./servedStrategy";
 import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
 import { borrowHeroCall } from "../utils/borrowHeroCall/borrowHeroCall";
 import { captureFaults, repairPostflopCapture, repairDeadSmallBlind, repairPreflopFoldOrder } from "../utils/repairPostflopRotation/repairPostflopRotation";
@@ -2124,7 +2125,9 @@ async function solvePostflopViaChainOnce(
     /** a dead-money plan's preload of hero's own chips, when his node is on the plan's street (tableTotalActions) */
     heroPreload?: number;
     /** hero's combo weight in his conditioned range at his node (services/heroAbsent) */
-    heroWeight?: number | null }[] = [];
+    heroWeight?: number | null;
+    /** hero's node: the street and his action number on it (servedStrategy's key) */
+    heroAt?: { k: number; n: number } }[] = [];
   const walkFails: string[] = [];
   // THE COLLAPSES RUN AT ONCE (2026-09-23, hand 729). Each collapse is its own cloud tree and walk, 5-10 s
   // of mostly waiting on GTO Wizard; three of them in a row put a four-way flop at 15-19 s before the answer.
@@ -2260,27 +2263,33 @@ async function solvePostflopViaChainOnce(
   const chains = process.env.CHAIN_SERIAL_COLLAPSES === "1"
     ? await (async () => { const out = []; for (const w of walkables) out.push(await solveOne(w)); return out; })()
     : await Promise.all(walkables.map(solveOne));
+  // THE WALKS ARE STORED AFTER THE BLEND (served-strategy narrowing, 2026-10-08): the reference walk's trace carries the mix
+  // that was served (`served`), so the saves wait for it — in the walks' order, as before, one synchronous run
+  const pendingSaves: (() => void)[] = [];
+  const flushSaves = () => { for (const s of pendingSaves.splice(0)) s(); };
   for (let wi = 0; wi < walkables.length; wi++) {
     const w = walkables[wi]!;
     const chain = chains[wi]!;
     const meta = { ...solveMetaBase, solveMs: Date.now() - t0 };
     if (!chain.ok) {
-      if (chain.trace && origin !== "warm") solveStore.save({ ...meta, line: null, solves: null, ok: false, why: chain.why }, chain.trace);
+      if (chain.trace && origin !== "warm") pendingSaves.push(() => { solveStore.save({ ...meta, line: null, solves: null, ok: false, why: chain.why }, chain.trace); });
       walkFails.push(w.kind ? `${w.kind}: ${chain.why}` : chain.why);
       continue;
     }
     const heroPre = heroPreloadAtNode(w, w.seatSpec.heroSeat === "oop" ? w.seatSpec.oopPos : w.seatSpec.heroSeat === "mid" ? w.seatSpec.midPos : w.seatSpec.ipPos);
-    walks.push({
+    const walk: (typeof walks)[number] = {
       kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace, ...(w.members ? { members: w.members } : {}),
-      ...(heroPre > 0 ? { heroPreload: heroPre } : {}), heroWeight: chain.heroWeight ?? null,
-      solveId: solveStore.save({ ...meta, line: `${preTokens.join("-")} / ${chain.line}`, solves: chain.solves, ok: true, why: null }, chain.trace),
-    });
+      ...(heroPre > 0 ? { heroPreload: heroPre } : {}), heroWeight: chain.heroWeight ?? null, ...(chain.heroAt ? { heroAt: chain.heroAt } : {}),
+      solveId: null,
+    };
+    walks.push(walk);
+    pendingSaves.push(() => { walk.solveId = solveStore.save({ ...meta, line: walk.line, solves: chain.solves, ok: true, why: null }, chain.trace); });
   }
   logChain(hand, cur, origin, chains, tEntry, t0);
   // A collapse that will not walk is survivable while another one did. ALL of them failing is a refusal: the heads-up
   // last resort that used to catch it here (2026-09-24) is off since 2026-10-05 (see "NO COLLAPSE → NO ANSWER" above).
   if (sixNote?.includes(LR_CLAUSE)) sixNote = sixNote.replace(LR_CLAUSE, lrNarrowClause || "the two entering ranges are NOT narrowed (the last resort was not solved)");
-  if (!walks.length) return fail(walkFails.join(" · ") || "no walkable tree");
+  if (!walks.length) { flushSaves(); return fail(walkFails.join(" · ") || "no walkable tree"); }
   // THE STACKS THE TREES WERE SOLVED AT, when not the whole field's (2026-09-25): a tree whose seats are shallower than
   // the field's effective stack, and a later street re-derived after a fold (aiChain seatStacks)
   const stackNotes = [...new Set([
@@ -2327,39 +2336,25 @@ async function solvePostflopViaChainOnce(
   // aligned (a class the reference has nothing of) is left out and said.
   const ref = walks[0]!;
   const refSols: any[] = ref.data?.action_solutions ?? [];
-  const codes: string[] = refSols.map((a) => String(a.action?.code ?? a.action?.display_name ?? "?"));
   let blended: number[][] | null = null;
   let blendedCount = 1;
   const codeOf = (x: any) => String(x.action?.code ?? x.action?.display_name ?? "?");
-  /** a walk's actions as the reference menu names them (codesOnRef): its own codes when they are all on the menu, else
-   *  by class — always by class for dead-money trees */
-  const onRef = new Map<unknown, { map: Map<string, string | null>; byClass: boolean }>();
-  const asSol = (y: any) => ({ code: codeOf(y), name: y.action?.display_name ?? null });
-  const onRefOf = (w: (typeof walks)[number]) => {
-    let r = onRef.get(w);
-    if (!r) {
-      const sols: any[] = w.data?.action_solutions ?? [];
-      const c = codesOnRef(refSols.map(asSol), sols.map(asSol), deadMode);
-      r = { map: new Map(sols.map((y, i) => [codeOf(y), c.codes[i] ?? null])), byClass: c.byClass };
-      onRef.set(w, r);
-    }
-    return r;
-  };
-  const codeOn = (w: (typeof walks)[number], x: any): string => {
-    const c = codeOf(x);
-    return w === ref ? c : onRefOf(w).map.get(c) ?? `${c}?`;
-  };
+  /** the blend (servedStrategy.blendWalks — the code the stored answers are rebuilt with): each walk's actions as the
+   *  reference menu names them (codesOnRef: its own codes when they are all on the menu, else by class — always by
+   *  class for dead-money trees), re-expressed on it, and the monotone blend of those that align */
+  const bw = blendWalks(walks.map((w) => (w.data?.action_solutions ?? []).map((x: any) => ({
+    code: codeOf(x), name: x.action?.display_name ?? null, strategy: x.strategy ?? [],
+  }))), deadMode);
+  const codes: string[] = bw.codes;
+  const codeOn = (w: (typeof walks)[number], x: any): string => bw.codeOn(walks.indexOf(w), codeOf(x));
   /** the walks whose menu is the reference's — the ones blended, mix and EV alike */
   const alignedWalks: typeof walks = [];
   if (walks.length > 1) {
-    const aligned: number[][][] = [];
     const dropped: string[] = [];
     const classNotes: string[] = [];
-    for (const w of walks) {
-      const a = alignStrategy(codes, (w.data?.action_solutions ?? []).map((x: any) => ({
-        code: codeOn(w, x), strategy: x.strategy ?? [],
-      })));
-      if (a && w !== ref && !deadMode && onRefOf(w).byClass) {
+    for (const [wi, w] of walks.entries()) {
+      const a = bw.aligned[wi];
+      if (a && w !== ref && !deadMode && bw.onRef[wi]?.byClass) {
         // the actions whose label changes on the reference menu ("RAISE 40.5→ALLIN 22")
         const moved = (w.data?.action_solutions ?? [])
           .map((x: any) => ({ from: labelOf(x), to: labelOf(refSols[codes.indexOf(codeOn(w, x))]) }))
@@ -2367,15 +2362,15 @@ async function solvePostflopViaChainOnce(
           .map((m: { from: string; to: string }) => `${m.from}→${m.to}`);
         classNotes.push(`${w.kind ?? "?"}${moved.length ? ` (${moved.join(", ")})` : ""}`);
       }
-      if (a) { aligned.push(a); alignedWalks.push(w); } else dropped.push(w.kind ?? "?");
+      if (a) alignedWalks.push(w); else dropped.push(w.kind ?? "?");
     }
     if (classNotes.length) {
       sixNote = [sixNote, `ALIGNED BY ACTION CLASS: ${classNotes.join("; ")} — its sizes are its own tree's (another pot and stack), each ` +
         `wager read as the reference collapse's nearest size and its all-in as the reference's all-in`].filter(Boolean).join(" · ");
     }
-    if (aligned.length > 1) {
-      blended = blendStrategies(codes, aligned);
-      blendedCount = aligned.length;
+    if (bw.blended) {
+      blended = bw.blended;
+      blendedCount = alignedWalks.length;
     }
     if (dropped.length) {
       sixNote = [sixNote, `${dropped.join(", ")} offered a different action menu and was left out of the blend`]
@@ -2386,6 +2381,23 @@ async function solvePostflopViaChainOnce(
     sixNote = [sixNote, `blended ${blendedCount} collapses: fold at the most folding one's frequency, bet at the ` +
       `least betting one's — a single collapse over-bets by 8-13pp of aggression`].filter(Boolean).join(" · ");
   }
+  // THE MIX SERVED, PER COMBO (servedStrategy, 2026-10-08): kept for the hand's later decisions — hero's action here
+  // narrows his range at his later nodes on the street by this mix when their plan holds no node of this answer — in
+  // memory and on the reference walk's stored trace (`served`: the descriptor, the strategies when blended). The
+  // warm-up is never served. Then the walks are stored.
+  try {
+    const handKey = String(hand.clientHandId ?? hand.handId ?? "");
+    if (ref.heroAt && ref.trace) {
+      const mix = servedMixOf({ walks, aligned: blended ? alignedWalks : [ref], blended, heroAt: ref.heroAt });
+      if (mix) {
+        (ref.trace as ChainTrace).served = servedTraceField(mix);
+        if (origin !== "warm" && handKey) recordServed(handKey, mix);
+      }
+    }
+  } catch (e) {
+    console.error(`[served] not kept: ${e instanceof Error ? e.message : e}`);
+  }
+  flushSaves();
 
   const j = ref.data;
   const solveId = ref.solveId;
