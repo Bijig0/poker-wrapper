@@ -177,19 +177,20 @@ describe("the loop: the next disagreement carries the re-tree's menus", () => {
     expect(resolvedMenus(["Check", "Bet(750)"], [0, 1], 1, fx.stack, () => null).size).toBe(0);
   });
 
-  it("three seats: no carry, the pinned tree exactly as before", () => {
+  it("three seats (Brady 2026-10-08 \"do the 3-way too\"): every seat keeps 33/75 | 60 + its all-in, the actor gains the amount", () => {
     const base: CustomTreeInput = { board: fx.board, pot: fx.pot, stack: 90, oopRange: dense(fx.rangesIn[0]!), ipRange: dense(fx.rangesIn[1]!),
       mid: { pos: "BTN", range: dense(fx.rangesIn[1]!) }, oopPos: "SB", ipPos: "BB", startingStreet: "TURN" };
     const played = [{ seat: 2, to: 7.5 }];
-    let peeks = 0;
+    // the three seats are FIXED: carried as sent whether or not the tree is solved (nothing is read from its nodes)
     const r = retreeInputs({ base, played, labels: ["Check", "Check", "Bet(750)"], actors: [0, 1, 2], stack: 90, build: (x) => gtowApi.buildCustomTree(x),
-      peekSolution: () => { peeks++; return "A3"; }, peekNode: () => null });
-    expect(r.carry).toBeNull();
-    expect(peeks).toBe(0);
-    expect(gtowApi.buildCustomTree(r.input)).toEqual(gtowApi.buildCustomTree({ ...base, played: { TURN: played } }));
+      peekSolution: () => null, peekNode: () => null });
+    expect(r.carry?.seats).toEqual(["sent", "sent", "sent"]);
     const ent = turnEntry(r.input);
-    expect(ent.map((p: any) => p.bet_sizes)).toEqual([["7.5bb", "90bb"], ["7.5bb", "90bb"], ["7.5bb", "90bb"]]);
+    expect(ent.map((p: any) => p.bet_sizes)).toEqual([["33%", "75%", "90bb"], ["33%", "75%", "90bb"], ["33%", "75%", "7.5bb", "90bb"]]);
     expect(ent.map((p: any) => p.raise_sizes)).toEqual([["60%", "90bb"], ["60%", "90bb"], ["60%", "90bb"]]);
+    // the old pin (the switch off): the 7.5 alone on every seat
+    const old = turnEntry({ ...base, played: { TURN: played } });
+    expect(old.map((p: any) => p.bet_sizes)).toEqual([["7.5bb", "90bb"], ["7.5bb", "90bb"], ["7.5bb", "90bb"]]);
   });
 });
 

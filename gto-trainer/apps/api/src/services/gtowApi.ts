@@ -348,13 +348,21 @@ class GtowApi {
         return xs.length ? [...new Set(xs)] : [];
       };
       const playedBy = (i: number, lv: number) => ws.some((w, k) => w.seat === i && (lv < 3 ? k === lv : k >= 3));
+      // A RE-TREE CARRIES THE MENUS (2026-10-08, retree-consistency — aiChain.retreeInputs): the street re-solved because a
+      // played size was not on the tree hero was answered on keeps that tree's menus, seat by seat, with the size added —
+      // heads-up and THREE-WAY (Brady 2026-10-08: "do the 3-way too"): every seat keeps its 33% / 75% | 60% (+ its all-in)
+      // and only the actor's list gains the amount played, never "the played amount alone on every seat" (below)
+      const carried = input.carry && input.carry.street === s ? input.carry : null;
+      if (input.mid && carried) {
+        return seats.map((_, i) => {
+          const cs = carried.seats[i] ?? null;
+          return cs ? fixedOf(i, carriedLists(cs, i, ws)) : fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? THREE_WAY_SIZES.bet : THREE_WAY_SIZES.raise; }));
+        });
+      }
       if (input.mid || input.huGrid) {
         const base = input.huGrid ? { bet: input.huGrid.bet, raise: input.huGrid.raise } : THREE_WAY_SIZES;
         return seats.map((_, i) => fixedOf(i, [0, 1, 2, 3].map((lv) => { const a = lvAmt(lv, i); return a.length ? a : lv === 0 ? base.bet : base.raise; })));
       }
-      // A RE-TREE CARRIES THE MENUS (2026-10-08, retree-consistency — aiChain.retreeInputs): the street re-solved because a
-      // played size was not on the tree hero was answered on keeps that tree's menus, seat by seat, with the size added
-      const carried = input.carry && input.carry.street === s ? input.carry : null;
       return seats.map((_, i) => {
         const cs = carried?.seats[i] ?? null;
         if (cs) return fixedOf(i, carriedLists(cs, i, ws));
@@ -1200,7 +1208,7 @@ export interface PlayedWager { seat: number; to: number }
  */
 export interface CarriedSeat { from: "sent" | "resolved"; lists: (string[] | null)[] }
 /** The menus a re-tree carries on its starting street, one entry per seat in acting order (null = as before: AUTOMATIC
- *  unless the seat wagered). Heads-up only — a three-seat tree is FIXED everywhere already. Part of the tree key. */
+ *  unless the seat wagered). Heads-up and three-way (a three-seat tree's seats are all FIXED: carried as sent). Part of the tree key. */
 export interface CarriedMenus { street: "FLOP" | "TURN" | "RIVER"; seats: (CarriedSeat | null)[] }
 
 /** The rake a custom tree gets when its input carries none: GTO Wizard's own NL500 structure, 5% capped at 0.6bb.
@@ -1238,7 +1246,7 @@ export interface CustomTreeInput {
    *  (e.g. {bet:["33%","75%","150%"], raise:["55%","100%"]}). Part of the tree key. */
   huGrid?: { bet: readonly string[]; raise: readonly string[] };
   /** A RE-TREE'S CARRIED MENUS (2026-10-08, retree-consistency): the starting street's per-seat menus from the tree hero
-   *  was answered on, the played size added (see CarriedMenus). Heads-up, with `played` on the same street. */
+   *  was answered on, the played size added (see CarriedMenus). Heads-up or three-way, with `played` on the same street. */
   carry?: CarriedMenus | null;
   /** Diagnostic only (2026-09-24, aiChain.AiChainSpec.planTag) — which concurrent collapse plan this tree belongs
    *  to, so the tree-miss "why" doesn't compare two unrelated plans' trees to each other. NEVER part of treeKey(). */

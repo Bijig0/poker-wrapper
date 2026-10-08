@@ -912,7 +912,8 @@ export async function fitsHeroAskedTree(
  *     disagreement — the size-free tree for the first wager off it, the previous re-tree for the next (the loop) — seat by
  *     seat: a FIXED seat's lists as sent, an AUTOMATIC seat's sizes as GTO Wizard resolved them at that tree's nodes up to
  *     the point of disagreement (read from the cache, never a request), and the played size ADDED to its actor's level.
- *     Heads-up only: three seats are FIXED everywhere already (THREE_WAY_SIZES, a played level its amount alone).
+ *     Heads-up and three-way (Brady 2026-10-08: "do the 3-way too"): a three-seat tree's seats are FIXED, so each keeps
+ *     its 33% / 75% | 60% (+ its all-in) as sent and only the actor gains the amount — never the played amount alone.
  *  2. HERO'S EARLIER ACTIONS ON THE STREET ARE NARROWED BY THE STRATEGY HE WAS ANSWERED WITH (answeredHeroNode): at a node
  *     where hero acted earlier on this street, on a tree that is not the one his decision there was read on, his range is
  *     multiplied by that answer's strategy for the action he took, not the new tree's. Villains keep the new tree's.
@@ -1053,7 +1054,7 @@ export interface RetreeCarry { from: string | null; seats: ("sent" | "resolved" 
 /**
  * THE TREE FOR A STREET PINNED WITH `played` (the street's first `played.length` wagers, in label order), built by the
  * loop: tree 0 is `base` (the size-free tree); tree j carries tree j−1's menus (as sent / as GTO Wizard resolved them at
- * its nodes up to wager j) with wager j added to its actor's level. Heads-up only (`base.mid` / `base.huGrid` → today's
+ * its nodes up to wager j) with wager j added to its actor's level. Heads-up and three-way (`base.huGrid` → today's
  * pinned input). Pure over its getters.
  */
 export function retreeInputs(a: {
@@ -1064,7 +1065,7 @@ export function retreeInputs(a: {
 }): { input: CustomTreeInput; carry: RetreeCarry | null } {
   const street = (a.base.startingStreet ?? "FLOP") as "FLOP" | "TURN" | "RIVER";
   const plain = { ...a.base, played: { [street]: a.played } } as CustomTreeInput;
-  if (!a.played.length || a.base.mid || a.base.huGrid) return { input: plain, carry: null };
+  if (!a.played.length || a.base.huGrid) return { input: plain, carry: null };
   const wagerAt: number[] = [];
   a.labels.forEach((l, i) => { if (/\(/.test(l)) wagerAt.push(i); });
   let prev: CustomTreeInput = a.base;
@@ -1419,7 +1420,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     let reuse: string | null = null;
     // A RE-TREE CARRIES THE MENUS OF THE TREE BEFORE IT (retree-consistency, 2026-10-08 — retreeInputs): the tree pinned
     // with a set of wagers is the same tree for the walk's own pin and for the "tree hero was asked on" lookup below
-    const retreeOn = heroStreetAsAnsweredOn() && n === 2 && !spec.huGrid;
+    const retreeOn = heroStreetAsAnsweredOn() && !(n === 2 && spec.huGrid);
     const pinnedMemo = new Map<string, { input: CustomTreeInput; carry: RetreeCarry | null }>();
     const pinnedInput = (pl: PlayedWager[]): { input: CustomTreeInput; carry: RetreeCarry | null } => {
       if (!retreeOn) return { input: { ...baseInput, played: { [STREET[k]!]: pl } }, carry: null };
