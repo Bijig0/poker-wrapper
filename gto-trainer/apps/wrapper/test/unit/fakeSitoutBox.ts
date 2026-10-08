@@ -1,6 +1,7 @@
 /**
- * A FAKE TABLE FRAME FOR THE "Sit out next big blind" READ (stackReset.ts, 2026-10-09) — just enough DOM for the
- * REAL page snippet (src/js/stackreset.SITOUT_BB_READ_JS_TMPL.js with launch.FRAME_JS's __frame) to run over: elements
+ * A FAKE TABLE FRAME FOR THE SIT-OUT READS — "Sit out next big blind" (stackReset.ts, 2026-10-09) and "Sit out next
+ * hand" (netguard.ts, the connection guard, ported the same day) — just enough DOM for the REAL page snippet
+ * (src/js/sitout.READ_JS_TMPL.js, aimed at either label, with launch.FRAME_JS's __frame) to run over: elements
  * with text, children, attributes, computed style (display / visibility / opacity), boxes, a Range over an element's
  * contents, `.click()`, and CDP's pointer click hit-testing the boxes. The snippet is evaluated as the page would
  * (new Function over this document), so the test exercises the code that runs live, not a stand-in for it.

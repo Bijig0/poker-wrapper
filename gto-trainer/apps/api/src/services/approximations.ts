@@ -819,7 +819,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "past 250bb GTO Wizard's preflop tree is capped (gtow-preflop-250bb-cap) and the charts stop at 150bb — deeper play is played on approximations",
     fix: "merge claude/stack-reset-undrawn-frame, relaunch the wrapper, then the practice-table check; a decision after it",
     status: "by-design",
-    code: "apps/wrapper/src/stackReset.ts · src/js/stackreset.SITOUT_BB_READ_JS_TMPL.js",
+    code: "apps/wrapper/src/stackReset.ts · src/sitoutBox.ts · src/js/sitout.READ_JS_TMPL.js (shared with the connection guard's \"Sit out next hand\" since 2026-10-09)",
   },
   {
     id: "limp-4bet-menu",

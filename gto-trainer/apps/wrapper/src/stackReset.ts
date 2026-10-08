@@ -42,20 +42,18 @@
  * after the arming STACK_RESET_TICKS times (whatever was or was not pressed in between). /state `stackReset` carries
  * the machine (stackResetBrief).
  */
-import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
 import { C } from "./config";
 import { feedAdd, log } from "./feed";
 import { postJson } from "./http";
-import { js } from "./js";
 import { pyRepr, pyRound, pyStr } from "./py";
-import { PEER_LEAVING_S, S, inAHand, isClientSite, pressBlocked, seams, type StackResetState } from "./state";
+import { PEER_LEAVING_S, S, inAHand, isClientSite, seams, type StackResetState } from "./state";
 import * as TABLES from "./tables";
-import { forgetFrame, framePin, mySel, slotted, type FrameSel } from "./ignition/dom";
+import { forgetFrame, type FrameSel } from "./ignition/dom";
 import { stackBb } from "./ignition/hand";
 import { tapForget } from "./ignition/ws";
-import { ensureVisible, pointIsMyTable } from "./relay";
 import { ignitionSitBackIn } from "./sitback";
+import { sitoutBoxJs, tickSitoutBox } from "./sitoutBox";
 import { markLeaving, noteStackReset, sessionSeams } from "./session";
 
 /** Ticks of the box per reset before it is given up (a box that never takes is not clicked for ever). */
@@ -70,132 +68,18 @@ export const STACK_RESET_RESEAT_S = 600;
  *  this many seconds later — it costs no tick. */
 export const STACK_RESET_MISS_S = 5;
 
-/** Finds "Sit out next big blind" on one table: {ok, found, checked (null = unknown), via, shared, back, seated, x, y
- *  (null when nothing measures), on: 'box'|'label'|null, hidden (matches not shown), idleMs (the frame's last draw)}. */
-export const sitoutBbReadJs = (sel: FrameSel = null) =>
-  slotted(js("stackreset.SITOUT_BB_READ_JS_TMPL"), sel).split("__CLICK__").join("false");
+/** The read of "Sit out next big blind" on one table (sitoutBox.ts sitoutBoxJs): {ok, found, checked (null = unknown),
+ *  via, shared, back, seated, x, y (null when nothing measures), on, hidden, idleMs}. */
+export const sitoutBbReadJs = (sel: FrameSel = null) => sitoutBoxJs("Sit out next big blind", sel);
 /** The same read, then a DOM click on the box (or on the label when no box is ours): {..., domClicked | domClickError}. */
-export const sitoutBbClickJs = (sel: FrameSel = null) =>
-  slotted(js("stackreset.SITOUT_BB_READ_JS_TMPL"), sel).split("__CLICK__").join("true");
-
-/** Why a DOM click may not go to our table now (null = it may): the refusals relay.pointIsMyTable makes before its
- *  point probe — the session lost the server, or (several tables) our frame is not pinned or is gone. The click
- *  snippet then finds OUR frame by its pinned tag (mySel → __frame {tag}) or nothing, never another table's. */
-export function domClickRefusal(): string | null {
-  const blocked = pressBlocked();
-  if (blocked) return blocked;
-  if (TABLES.domSlot() === null) return null;
-  const pin = framePin();
-  if (pin.tag === null) return `table ${pyStr(TABLES.slot())} has not identified its own table in the client yet — refusing`;
-  if (pin.lost !== null) return `table ${pyStr(TABLES.slot())}'s own table (the client's tag ${pin.tag}) is gone — refusing`;
-  return null;
-}
+export const sitoutBbClickJs = (sel: FrameSel = null) => sitoutBoxJs("Sit out next big blind", sel, true);
 
 /** Tick "Sit out next big blind" on OUR table — reads first, presses only when the box reads unticked, or its state is
- *  unreadable and this reset has not pressed it yet (`clickedBefore`). netguard.ignitionSitoutNextHand's pattern.
- *
- *  HOW IT PRESSES (2026-10-09). First a pointer click at the box (else the label) through CDP Input — the press every
- *  pick makes, and those land on a frame Chrome has stopped drawing (session_20261009_052537: every pick of both
- *  tables went through while /state said `drawn:false` for 2,000+ s; hit-testing runs on layout, not paint), guarded
- *  by ensureVisible and pointIsMyTable as before. A DOM click (`.click()` on the box, else the label, inside OUR frame
- *  only — domClickRefusal) is used when there is no point to press (nothing measures), when the page is not rendering
- *  (a parked pointer click never arrives; a DOM click needs no frame), when the point would not land on our table,
- *  and once after a pointer click that left the box reading unticked. `pressed` = a click went out (it counts a
- *  tick); `retry` = nothing went out (the caller tries again later, no tick spent). */
-export async function ignitionSitoutNextBb(clickedBefore: boolean): Promise<Record<string, any>> {
-  const t = await seams.ignitionTarget();
-  if (!t) return { ok: false, retry: true, why: "poker client not open" };
-  const ws = t.webSocketDebuggerUrl;
-  const read = sitoutBbReadJs(mySel());
-  let d: Record<string, any>;
-  try {
-    d = (await cdp.evaluate(ws, read, 6)) || {};
-  } catch (e: any) {
-    return { ok: false, retry: true, why: `table read failed: ${e?.message ?? e}` };
-  }
-  if (!d.ok) return { ok: false, retry: true, why: d.reason || "table not readable" };
-  if (d.back) return { ok: true, state: "already sitting out (I'm back is showing)" };
-  if (!d.found) {
-    return { ok: false, retry: true, idleMs: d.idleMs ?? null,
-             why: "no 'Sit out next big blind' box on the table" + (d.seated ? "" : " - not seated")
-               + (d.hidden ? ` (${d.hidden} hidden by style)` : "") };
-  }
-  if (d.checked === true) return { ok: true, state: "already ticked", via: d.via ?? null };
-  if ((d.checked === null || d.checked === undefined) && clickedBefore) {
-    return { ok: true, state: "clicked earlier (tick state unreadable)", via: d.via ?? null, shared: !!d.shared, html: d.html ?? null };
-  }
-  const domNo = domClickRefusal();
-  const viaDom = async (): Promise<{ sent: boolean; why?: string; target?: string }> => {
-    let c: Record<string, any>;
-    try {
-      c = (await cdp.evaluate(ws, sitoutBbClickJs(mySel()), 6)) || {};
-    } catch (e: any) {
-      return { sent: false, why: `DOM click failed: ${e?.message ?? e}` };
-    }
-    if (!c.found || !c.domClicked) {
-      return { sent: false, why: `DOM click did not go out (${pyStr(c.domClickError ?? c.reason ?? (c.found ? null : "the box is gone"))})` };
-    }
-    return { sent: true, target: String(c.domClicked) };
-  };
-  let method = "";
-  const lk = await TABLES.pressLock();
-  try {
-    const point = typeof d.x === "number" && typeof d.y === "number" && Number.isFinite(d.x) && Number.isFinite(d.y);
-    let noPoint: string | null = point ? null : `nothing to point at (the label measures ${d.w ?? 0} x ${d.h ?? 0})`;
-    if (!noPoint) noPoint = await ensureVisible(ws);
-    if (!noPoint) {
-      const wrong = await pointIsMyTable(ws, d.x, d.y);
-      if (wrong && pressBlocked()) return { ok: false, retry: true, why: wrong };
-      noPoint = wrong;
-    }
-    if (!noPoint) {
-      try {
-        await cdp.dispatchClick(ws, d.x, d.y);
-      } catch (e: any) {
-        return { ok: false, retry: true, why: `click did not go through: ${e?.message ?? e}` };
-      }
-      method = `point (${d.on ?? "label"})`;
-    } else {
-      if (domNo) return { ok: false, retry: true, why: `${noPoint}; no DOM click either: ${domNo}` };
-      const r = await viaDom();
-      if (!r.sent) return { ok: false, retry: true, why: `${noPoint}; ${r.why}` };
-      method = `dom: ${r.target} (${noPoint})`;
-    }
-  } finally {
-    lk.release();
-  }
-  await sleep(0.4);
-  const reread = async (): Promise<Record<string, any>> => {
-    try {
-      return (await cdp.evaluate(ws, read, 6)) || {};
-    } catch {
-      return {};
-    }
-  };
-  let after = await reread();
-  // a pointer click that left the box reading unticked did not land: once more, through the DOM (it read unticked
-  // before and after, so this can only tick it)
-  if (after.checked === false && d.checked === false && method.startsWith("point") && !domNo) {
-    const lk2 = await TABLES.pressLock();
-    let r: { sent: boolean; why?: string; target?: string };
-    try {
-      r = await viaDom();
-    } finally {
-      lk2.release();
-    }
-    if (r.sent) {
-      method += ` → dom: ${r.target}`;
-      await sleep(0.4);
-      after = await reread();
-    }
-  }
-  if (after.checked === false && d.checked === false) {
-    return { ok: false, why: "clicked, but the box still reads unticked", clicked: true, pressed: true, method, html: after.html ?? null };
-  }
-  return { ok: true, clicked: true, pressed: true, method,
-           state: after.checked ? "ticked" : "clicked (tick state unreadable - check the table)",
-           via: d.via ?? null, shared: !!d.shared, html: after.checked ? null : d.html ?? null };
-}
+ *  unreadable and this reset has not pressed it yet (`clickedBefore`). The read, the press and its DOM fallback are
+ *  sitoutBox.ts tickSitoutBox (2026-10-09), shared with the connection guard's "Sit out next hand"; `pressed` = a
+ *  click went out (it counts a tick); `retry` = nothing went out (tried again later, no tick spent). */
+export const ignitionSitoutNextBb = (clickedBefore: boolean): Promise<Record<string, any>> =>
+  tickSitoutBox("Sit out next big blind", clickedBefore);
 
 /** What a test replaces: the tick, the I AM BACK press, the leader, the siblings, the leave, how a slow step runs. */
 export const stackResetSeams = {

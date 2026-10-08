@@ -25,7 +25,6 @@ export const FRAME_JS = () => js("launch.FRAME_JS");
 export const EXTRACT_DEEP_JS = () => js("launch.EXTRACT_DEEP_JS");
 export const TABLE_JS_TMPL = () => js("launch.TABLE_JS_TMPL");
 export const WATCH_JS_TMPL = () => js("launch.WATCH_JS_TMPL");
-export const SITOUT_READ_JS_TMPL = () => js("launch.SITOUT_READ_JS_TMPL");
 export const FIND_INPUT_JS_TMPL = () => js("launch.FIND_INPUT_JS_TMPL");
 export const TOPUP_READ_JS_TMPL = () => js("launch.TOPUP_READ_JS_TMPL");
 export const TOPUP_FILL_JS_TMPL = () => js("launch.TOPUP_FILL_JS_TMPL");
@@ -120,7 +119,6 @@ export const watchJs = (sel: FrameSel = null) => slotted(WATCH_JS_TMPL(), sel);
 export const findInputJs = (sel: FrameSel = null) => slotted(FIND_INPUT_JS_TMPL(), sel);
 export const topupReadJs = (sel: FrameSel = null) => slotted(TOPUP_READ_JS_TMPL(), sel);
 export const topupFillJs = (sel: FrameSel = null) => slotted(TOPUP_FILL_JS_TMPL(), sel);
-export const sitoutReadJs = (sel: FrameSel = null) => slotted(SITOUT_READ_JS_TMPL(), sel);
 
 /**
  * THE CLIENT LOST THE POKER SERVER (measured 2026-09-25 18:09:19, session_20260925_180244 — a wifi drop, every table

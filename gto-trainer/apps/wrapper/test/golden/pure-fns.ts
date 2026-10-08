@@ -22,6 +22,7 @@ import * as DOM from "../../src/ignition/dom";
 import * as HAND from "../../src/ignition/hand";
 import { amt as wsAmt } from "../../src/ignition/ws";
 import * as RELAY from "../../src/relay";
+import { sitoutBoxJs } from "../../src/sitoutBox";
 
 let CATALOGUE: any[] = [];
 const BAL_DIR = mkdtempSync(join(tmpdir(), "golden-pure-bal-"));
@@ -94,7 +95,7 @@ export const FNS_EXTRA: Record<string, (args: any[], rec: any) => unknown> = {
   "launch._find_input_js": ([slot]) => DOM.findInputJs(slot),
   "launch._topup_read_js": ([slot]) => DOM.topupReadJs(slot),
   "launch._topup_fill_js": ([slot]) => DOM.topupFillJs(slot),
-  "launch._sitout_read_js": ([slot]) => DOM.sitoutReadJs(slot),
+  "launch._sitout_read_js": ([slot]) => sitoutBoxJs("Sit out next hand", slot),
   "launch._EXTRACT_DEEP_JS": () => DOM.EXTRACT_DEEP_JS(),
   "launch._point_is_my_table.js": async ([x, y]) => {
     const seen: string[] = [];
