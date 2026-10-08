@@ -41,10 +41,10 @@
  * class → weight), so fastSolve.solvePostflop6maxStrategy reads one shape whichever piece answered.
  */
 import { allInCalls, buildPreflopTokens } from "../feed/buildSolutionUrl/buildSolutionUrl";
-import { bbAmount, TREE_SETTINGS, TREE_SETTINGS_TAG } from "./gtowApi";
+import { bbAmount, pollHangMs, TREE_SETTINGS, TREE_SETTINGS_TAG } from "./gtowApi";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
-import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
+import { gtowSessions, logRoute, type GtowNeed, type GtowSessionId } from "./gtowSessions";
 import { gtowRequests } from "./gtowRequestLog";
 // AN AUTH REFUSAL IS NOT A VERDICT (2026-10-08, services/gtowAuth): one token refresh, the same request once more, else
 // "GTO Wizard auth failed twice" — never cached, never read as a refusal of the line or the tree
@@ -821,15 +821,19 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
   let last = "no GTO Wizard token";
   const H = (tok: string) => ({ Authorization: `Bearer ${tok}`, "Content-Type": "application/json" });
   const tag = (retry: boolean) => (retry ? { nt: NT_AUTH_RETRY } : undefined);
+  const skipped: string[] = [];
   for (const id of candidates) {
     const token = await gtowSessions.tokenFor(id);
-    if (!token) { last = `${id}: no token`; continue; }
+    if (!token) { last = `${id}: no token`; skipped.push(`${id}: no token`); continue; }
+    // [gtow-route] (least-loaded routing, 2026-10-08): which account takes this tree and why — counted on it at once
+    logRoute(id, need, gtowSessions.noteRouted(id, need, candidates, skipped), "tree");
     // an auth refusal (services/gtowAuth): one token refresh and the same POST once more — then the next account
     const t = await sendWithAuthRetry(id, "tree", token, (tok, retry) =>
       gtowRequests.fetch(id, "tree", `${API_BASE}/v4/custom-solutions/custom-trees/`, { method: "POST", headers: H(tok), body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) }, tag(retry)));
     if (t.auth && !t.auth.recovered) {
       gtowSessions.noteAuthFailure(id, t.token, t.auth.detail);
       last = `custom-trees: ${authFailedReason(t.auth)}`;
+      skipped.push(`${id}: auth refused`);
       continue;
     }
     const tr = t.res;
@@ -837,6 +841,7 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       const b = (await tr.text().catch(() => "")).slice(0, 200);
       gtowSessions.noteFailure(id, tr.status, b, need);
       last = `custom-trees ${tr.status}: ${b}`;
+      skipped.push(`${id}: tree ${tr.status}`);
       continue; // a refusal here is this ACCOUNT's, not the tree's — try the next
     }
     const tree = await tr.json();
@@ -845,6 +850,7 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
     if (s.auth && !s.auth.recovered) {
       gtowSessions.noteAuthFailure(id, s.token, s.auth.detail);
       last = `custom-solutions: ${authFailedReason(s.auth)}`;
+      skipped.push(`${id}: auth refused`);
       continue;
     }
     const so = s.res;
@@ -852,6 +858,7 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       const b = (await so.text().catch(() => "")).slice(0, 200);
       gtowSessions.noteFailure(id, so.status, b, need);
       last = `custom-solutions ${so.status}: ${b}`;
+      skipped.push(`${id}: solution ${so.status}`);
       continue;
     }
     const sol = await so.json();
@@ -1097,16 +1104,21 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
   // ONE AUTH ROUND PER READ (services/gtowAuth): the first auth refusal refreshes the token and polls again at once; a
   // later one ends the read with the auth reason — never cached, never a verdict on the line
   let authRound: AuthRound | null = null;
-  const owner = owners.get(real) ?? null;
+  // A SOLVE WITH NO RECORDED OWNER IS PINNED TO ONE ACCOUNT FOR THE READ (2026-10-08): with least-loaded routing the
+  // "best" account can change between two polls, and another account's token 404s the solve
+  const owner = owners.get(real) ?? (await gtowSessions.bestToken({ preflop: true }))?.id ?? null;
   const limit = nodeTimeoutMs();
+  const hangMs = pollHangMs();
   while (Date.now() - t0 < limit) {
     if (stop?.()) return { error: "read abandoned — the tree names this line differently" };
-    const token = owner ? await gtowSessions.tokenFor(owner) : (await gtowSessions.bestToken({ preflop: true }))?.token ?? null;
+    const token = owner ? await gtowSessions.tokenFor(owner) : null;
     if (!token) return { error: `no GTO Wizard token for the session that owns this solve${owner ? ` (${owner})` : ""}` };
     const params = new URLSearchParams({ custom_solution_id: real, preflop_actions: line, flop_actions: "", turn_actions: "", river_actions: "", board: "" });
     let r: Response;
+    // THE HUNG-POLL BOUND (2026-10-08, gtowApi.pollHangMs): a poll gets what is left of the read's clock, at most
+    // POLL_HANG_MS — it used to get 8 s whatever was left
     const poll = (tok: string, retry: boolean) => gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`,
-      { headers: { Authorization: `Bearer ${tok}` }, signal: AbortSignal.timeout(8_000) }, retry ? { nt: NT_AUTH_RETRY } : undefined);
+      { headers: { Authorization: `Bearer ${tok}` }, signal: AbortSignal.timeout(Math.max(1, Math.min(hangMs, limit - (Date.now() - t0)))) }, retry ? { nt: NT_AUTH_RETRY } : undefined);
     try {
       if (authRound) r = await poll(token, false);
       else {

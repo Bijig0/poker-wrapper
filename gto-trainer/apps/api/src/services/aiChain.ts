@@ -1,4 +1,4 @@
-import { bbAmount, gtowApi, postflopNodeTimeoutMs, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
+import { bbAmount, coldTreeMs, gtowApi, postflopNodeTimeoutMs, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
 import { solveStore } from "./solveStore";
 import { isDurableKey } from "./handFacts";
 import { servedActionIndex, servedHeroStrategy, type ServedMix } from "./servedStrategy";
@@ -225,6 +225,9 @@ export interface ChainTrace {
     /** the GTO Wizard session whose solve this is (gtowSessions: primary = Ultra, secondary = Elite) — or "cache":
      *  the tree came from the persistent solve cache (services/gtowSolveCache) and no account was asked for it */
     account?: string | null;
+    /** the `[gtow-route]` reason the account took this street's tree (least-loaded routing, 2026-10-08) — a tree created
+     *  on this call only (a cached tree was routed when it was made) */
+    route?: string;
     /** HOW THIS STREET'S RANGES WERE PRODUCED on this call (2026-09-25, the chain ledger — services/chainPath):
      *  hit = the hand's closed-street memo, resumed = from hero's last node, first = walked for the first time in
      *  this hand, by-design / rebuilt = walked again (the code and why say which rule or which miss) */
@@ -1392,7 +1395,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const readNode = async (solId: string, codesStr: string) => {
       const t = Date.now();
       // the node clock: 12 s heads-up, 15 s on a 3-player tree (menu C, 2026-10-08 — gtowApi.postflopNodeTimeoutMs)
-      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, postflopNodeTimeoutMs(n), "walk");
+      // a hung poll with a cold tree's cost still on the clock comes back `hung` (gtowApi, the hung-poll bound): the walk
+      // re-posts the tree on another account below
+      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, postflopNodeTimeoutMs(n), "walk", { repostMs: coldTreeMs(n) });
       const ms = Date.now() - t;
       const src: NodeSource | "failed" = r.ok ? (r.src ?? (r.cached ? "cache" : "fetched")) : "failed";
       if (src === "fetched" && fetched) {
@@ -1515,7 +1520,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       prov: undefined as ChainTrace["streets"][number]["prov"], leak: null as ChainTrace["streets"][number]["leak"],
       players: seats.map((s) => s.pos), rangesIn: seats.map((s) => r4(s.range)),
       oopIn: r4(seats[0]!.range), ipIn: r4(seats[n - 1]!.range),
-      sent: null as unknown, account: null as string | null,
+      sent: null as unknown, account: null as string | null, route: undefined as string | undefined,
       rangeCheck: undefined as RangeCheck | undefined,
       checks: undefined as CheckResult[] | undefined,
       retree: undefined as RetreeCarry | undefined,
@@ -1537,6 +1542,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     streetRec.solId = String(ens.solId);
     streetRec.created = !!ens.created;
     streetRec.account = ens.session;
+    if (ens.route) streetRec.route = ens.route;
     streetRec.sent = gtowApi.treeRequestSummary(treeInput);
     streetRec.solveMs = Date.now() - tSolve;
     // THE TREE SAYS WHETHER IT WAS REUSED, AND IF NOT, WHY (2026-09-24). The chain's whole economy is that an
@@ -1695,17 +1701,26 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // THE OWNING ACCOUNT HIT ITS DAILY WALL MID-WALK (a 429 on the poll). A solve lives on the account that
       // made it, so it cannot be polled anywhere else — re-create the same tree once; routing now skips the
       // walled account, and the node addresses are identical on the new solve.
-      if (!nq.ok && nq.status === 429 && !rerouted) {
+      // A HUNG POLL (2026-10-08, the hung-poll bound): the owning account's poll got no reply within POLL_HANG_MS and a
+      // cold tree's cost is still on the read's clock — the same tree is re-posted with that account LEFT OUT (no block:
+      // its other solves go on), once; too little time left and gtowApi polls on to the clock, as before.
+      const hung = !nq.ok && !!nq.hung;
+      if (!nq.ok && (nq.status === 429 || hung) && !rerouted) {
         rerouted = true;
+        const from = gtowApi.ownerOf(ens.solId) ?? ens.session;
         gtowApi.forgetSolution(ens.solId);
-        const again = await gtowApi.ensureCustomSolution(treeInput);
+        const again = await gtowApi.ensureCustomSolution(treeInput, hung && from ? { avoid: [from] } : {});
         if (again.ok) {
           ens = again;
           if (again.created) solves++;
           streetRec.solId = String(again.solId);
           streetRec.account = again.session;
-          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}re-created on another account after a 429 mid-walk`;
-          streetRec.leak = { code: "tree:429-reroute", why: `the ${STREET[k]!.toLowerCase()} tree was re-created on another GTO Wizard account after a 429 mid-walk` };
+          if (again.route) streetRec.route = again.route;
+          const why = hung ? `a hung poll on ${from}` : "a 429 mid-walk";
+          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}re-created on another account after ${why}`;
+          streetRec.leak = hung
+            ? { code: "tree:hung-reroute", why: `the ${STREET[k]!.toLowerCase()} tree was re-posted on another GTO Wizard account after a poll on ${from} hung` }
+            : { code: "tree:429-reroute", why: `the ${STREET[k]!.toLowerCase()} tree was re-created on another GTO Wizard account after a 429 mid-walk` };
           recordTree(true);
           ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(ens.solId, codes.join("-")));
         }

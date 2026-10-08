@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { gtowApi } from "../services/gtowApi";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowRequests, type GtowWindow } from "../services/gtowRequestLog";
-import { gtowSessions, type GtowSessionStatus } from "../services/gtowSessions";
+import { dayBudget, gtowSessions, hourBudget, routeMode, type GtowSessionStatus } from "../services/gtowSessions";
 import { gtowSolveCache } from "../services/gtowSolveCache";
 import { REPO } from "../services/repoPaths";
 import {
@@ -83,7 +83,14 @@ export async function accountsPayload() {
   // it saved are requests these meters never had to count
   let cache: ReturnType<typeof gtowSolveCache.summary> | null = null;
   try { cache = gtowSolveCache.summary(); } catch { /* the accounts page never fails on the cache */ }
-  return { ok: true, now, cap: REQUEST_CAP, wallMs: WALL_MS, accounts, combined: { h1: sum("h1"), h24: sum("h24") }, allow: gtowSessions.allowList(), cache };
+  // LEAST-LOADED ROUTING (2026-10-08, services/gtowSessions GTOW_ROUTE): the switch, the soft budgets, and each account's
+  // in-memory counter as routing reads it (every origin; also on accounts[].live.load) — the order a tree would take now
+  const routing = {
+    mode: routeMode(), hourBudget: hourBudget(), dayBudget: dayBudget(),
+    loads: Object.fromEntries(reg.accounts.map((a) => [a.id, gtowSessions.loadOf(a.id)])),
+    order: { headsUp: gtowSessions.route({}), multiway: gtowSessions.route({ multiway: true }), preflop: gtowSessions.route({ preflop: true }) },
+  };
+  return { ok: true, now, cap: REQUEST_CAP, wallMs: WALL_MS, accounts, combined: { h1: sum("h1"), h24: sum("h24") }, allow: gtowSessions.allowList(), cache, routing };
 }
 
 app.get("/", async (c) => c.json(await accountsPayload()));

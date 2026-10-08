@@ -23,7 +23,7 @@
  * JSON out, no DOM scraping.
  */
 
-import { gtowSessions, type GtowNeed, type GtowSessionId } from "./gtowSessions";
+import { gtowSessions, logRoute, type GtowNeed, type GtowSessionId } from "./gtowSessions";
 // EVERY request to api.gtowizard.com goes through the ledger (2026-09-23): GTO Wizard caps REQUESTS, not
 // solves, and a poll loop is many requests — see services/gtowRequestLog.ts.
 import { gtowRequests } from "./gtowRequestLog";
@@ -62,17 +62,54 @@ const NODE_CACHE_MAX = 64;
  * waits for it; and once the solve is ready, a 204 is a missing node — one grace retry, then it is reported as such.
  */
 const FIRST_POLL_MS = Number(process.env.GTOW_FIRST_POLL_MS ?? 600);
+/**
+ * THE HUNG-POLL BOUND (2026-10-08, core-real-4922578514 river: no answer after 19.0 s on a 15 s three-way node clock).
+ * One spot-solution poll was allowed 8 s on its own (AbortSignal.timeout(8_000)), whatever was left of the read's clock:
+ * the chain's prefetch created the solve's readiness probe (a 6 s read), its poll hung 8 s, the walk joined that probe,
+ * then started its own, whose poll hung 8 s again — the read ended 4 s past its clock. Now every poll's signal is the
+ * read's REMAINING clock capped at POLL_HANG_MS (GTOW_POLL_HANG_MS, default 8 s — today's per-poll cap), the token read
+ * and every join on another caller's poll are bounded by it too, and a poll that HANGS (no reply within POLL_HANG_MS)
+ * on a walk read hands the tree to the next account (`hung`) only when a cold tree can be expected to be re-posted and
+ * read there inside what is left (COLD_TREE_MS); otherwise the read keeps polling to its clock — no answer, as before.
+ * Ledger 2026-10-01..08: ~1.4% of polls ended status 0 at ~8.8 s (the cap) — hangs, not slow replies.
+ */
+export const pollHangMs = (env: Record<string, string | undefined> = process.env): number => {
+  const n = Number(env.GTOW_POLL_HANG_MS);
+  return Number.isFinite(n) && n > 0 ? n : 8_000;
+};
+/**
+ * A COLD TREE'S COST, tree + solution POSTs + its first node read, MEDIAN — the 40-hand core menus re-run of 2026-10-08
+ * (721 requests, origin stress500-core-menus): two-seat 3.9 s (p90 6.3), three-seat 6.3 s (p90 11.5). A hung walk read
+ * re-posts its tree on another account only when at least this much of its clock is left.
+ */
+export const COLD_TREE_MS = { hu: 3_900, threeWay: 6_300 } as const;
+export const coldTreeMs = (seats: number): number => (seats >= 3 ? COLD_TREE_MS.threeWay : COLD_TREE_MS.hu);
+
+/** `p`, or `late()` once `ms` has passed — a wait on someone else's work bounded by this caller's own clock. */
+function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
+  if (!(ms > 0)) return Promise.resolve(late());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<T>((res) => { timer = setTimeout(() => res(late()), ms); })]).finally(() => clearTimeout(timer));
+}
 const NO_NODE_GRACE = 1;
 const READY_SET_MAX = 2_000;
 
 /** `store`: served from the persistent solve cache (services/gtowSolveCache) — no request was sent for it */
-type NodeFetchResult = { ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource; store?: boolean } | { ok: false; status: number; error: string; store?: boolean };
+/** `hung` (2026-10-08): a walk read whose poll got no reply within POLL_HANG_MS, with time left to re-post the tree on
+ *  another account (`opts.repostMs`) — the caller re-creates the tree elsewhere (aiChain), as after a 429 */
+type NodeFetchResult = { ok: true; data: any; solveSecs: number; cached: boolean; src: NodeSource; store?: boolean } | { ok: false; status: number; error: string; store?: boolean; hung?: boolean };
 type NodeQuery = { flopActions?: string; turnActions?: string; riverActions?: string; board: string };
 /** `noCache`: neither read nor write the persistent solve cache — a check that must reach GTO Wizard (the poller's
  *  startup probe, the pool-routing script). The in-process caches still apply, as they always have. */
 export interface CacheOpts { noCache?: boolean }
-type SolveMade = { ok: true; solId: string; session: GtowSessionId; stored?: boolean } | { ok: false; status: number; error: string };
-type EnsureResult = { ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string; stored?: boolean } | { ok: false; status: number; error: string };
+/** A node read's options: `repostMs` — when a poll hangs and at least this much of the read's clock is left, return
+ *  `hung` at once (the walk re-posts the tree on another account) instead of polling the hung solve to the clock. */
+export interface NodeReadOpts extends CacheOpts { repostMs?: number }
+/** A tree's options: `avoid` — accounts this tree must not be minted on (a hung solve's owner, the walk's re-post). */
+export interface TreeOpts extends CacheOpts { avoid?: GtowSessionId[] }
+/** `route`: the `[gtow-route]` reason the account took the tree (least-loaded routing, services/gtowSessions) */
+type SolveMade = { ok: true; solId: string; session: GtowSessionId; stored?: boolean; route?: string } | { ok: false; status: number; error: string };
+type EnsureResult = { ok: true; solId: string; created: boolean; session: GtowSessionId; why?: string; stored?: boolean; route?: string } | { ok: false; status: number; error: string };
 
 /** The in-process node cache's key: the solution and the full query. */
 const nodeKeyOf = (solId: string, q: NodeQuery) => JSON.stringify([solId, q.flopActions ?? "", q.turnActions ?? "", q.riverActions ?? "", q.board]);
@@ -124,6 +161,12 @@ class GtowApi {
    * `customNode(solId, …)` stays a two-argument call everywhere it is used.
    */
   private solOwner = new Map<string, GtowSessionId>();
+
+  /** The account a solve this process holds lives on (a stored tree: the one that materialised it), or null. */
+  ownerOf(solId: string): GtowSessionId | null {
+    const o = this.solOwner.get(solId) ?? (isStoredSolId(solId) ? this.solOwner.get(this.realOf.get(solId) ?? "") : undefined);
+    return o && o !== CACHE_SESSION ? o : null;
+  }
 
   startTokenKeeper(intervalMs = 30_000): void {
     gtowSessions.startKeeper(intervalMs);
@@ -557,7 +600,7 @@ class GtowApi {
    * will accept — so the pool is asked for a session that can take it, and a
    * plan refusal walks to the next session rather than failing the spot.
    */
-  private async createCustomSolution(input: CustomTreeInput, opts: CacheOpts = {}): Promise<SolveMade> {
+  private async createCustomSolution(input: CustomTreeInput, opts: TreeOpts = {}): Promise<SolveMade> {
     const body = this.buildCustomTree(input);
     const solution = { actions: "", board: input.board };
     // A TREE THE STORE HOLDS IS NOT CREATED AGAIN (services/gtowSolveCache). It is handed out as the synthetic id
@@ -568,7 +611,7 @@ class GtowApi {
     // POSTFLOP: heads-up belongs to the Elite account, multiway to Ultra.
     // `preflop` is deliberately absent — that flag is the preflop piece's
     // (services/gtowAiPreflop.ts), and it is what sends preflop to Ultra.
-    const made = await this.postCustomSolution(body, solution, { multiway: Boolean(input.mid) });
+    const made = await this.postCustomSolution(body, solution, { multiway: Boolean(input.mid) }, opts.avoid);
     // a fresh solve: every node reply it gives is stored under the tree's key (the tree's row goes in with the first)
     if (made.ok && ck) {
       this.cache.noteTree(ck.key, "post", ck.body);
@@ -590,19 +633,27 @@ class GtowApi {
 
   /** POST a tree and its solution on the first account routing allows (the network half of createCustomSolution, and
    *  what materialising a stored tree sends — the body exactly as stored). */
-  private async postCustomSolution(body: unknown, solution: { actions: string; board: string }, need: GtowNeed): Promise<SolveMade> {
+  private async postCustomSolution(body: unknown, solution: { actions: string; board: string }, need: GtowNeed, avoid: GtowSessionId[] = []): Promise<SolveMade> {
     // Every wall we record is a GUESS about what the API meant. A wrong quota
     // guess would otherwise disable multiway until the next daily reset, so
     // when nothing is routable we still try the walled sessions rather than
     // failing the spot outright — the same last-ditch rule bestToken uses.
+    // THE ORDER IS THE POOL'S (least-loaded routing since 2026-10-08, GTOW_ROUTE), live tokens first; `avoid` drops the
+    // accounts a re-post must not land on (a hung solve's owner) — none left = no answer, never the same account again
     const ids = gtowSessions.route(need);
-    const candidates = gtowSessions.liveFirst(ids.length ? ids : gtowSessions.routeIgnoringBlocks(need));
-    if (!candidates.length) return noSession(need);
+    const candidates = gtowSessions.liveFirst(ids.length ? ids : gtowSessions.routeIgnoringBlocks(need)).filter((id) => !avoid.includes(id));
+    if (!candidates.length) {
+      return avoid.length ? { ok: false, status: 0, error: `no other GTO Wizard account can take this tree (${avoid.join(", ")} left out: its solve hung)` } : noSession(need);
+    }
     let last: { status: number; error: string } | null = null;
+    const skipped: string[] = [];
     const headersOf = (tok: string) => ({ Authorization: `Bearer ${tok}`, "Content-Type": "application/json" });
     for (const id of candidates) {
       const token = await gtowSessions.tokenFor(id);
-      if (!token) { last = { status: 0, error: `${id}: no access token` }; continue; }
+      if (!token) { last = { status: 0, error: `${id}: no access token` }; skipped.push(`${id}: no token`); continue; }
+      // [gtow-route]: which account takes this tree and why (least-loaded / budget / fallback) — counted on it at once
+      const route = gtowSessions.noteRouted(id, need, candidates, skipped);
+      logRoute(id, need, route, avoid.length ? `tree (re-post; ${avoid.join(", ")} left out)` : "tree");
 
       // 1. create the tree (bounded — an unbounded fetch here hung whole
       // solves when the API stalled; nothing upstream can cancel it). An auth refusal: one token refresh, the same POST
@@ -613,10 +664,11 @@ class GtowApi {
           method: "POST", headers: headersOf(tok), body: JSON.stringify(body),
           signal: AbortSignal.timeout(15_000),
         }, retry ? { nt: NT_AUTH_RETRY } : undefined));
-      } catch (e) { last = { status: 0, error: `${id}: custom-trees ${e instanceof Error ? e.message : e}` }; continue; }
+      } catch (e) { last = { status: 0, error: `${id}: custom-trees ${e instanceof Error ? e.message : e}` }; skipped.push(`${id}: tree failed`); continue; }
       if (tr.auth && !tr.auth.recovered) {
         gtowSessions.noteAuthFailure(id, tr.token, tr.auth.detail);
         last = { status: 401, error: `custom-trees: ${authFailedReason(tr.auth)}` };
+        skipped.push(`${id}: auth refused`);
         continue; // next session
       }
       const treeRes = tr.res;
@@ -624,6 +676,7 @@ class GtowApi {
         const msg = (await treeRes.text().catch(() => "")).slice(0, 180);
         gtowSessions.noteFailure(id, treeRes.status, msg, need);
         last = { status: treeRes.status, error: `custom-trees: ${msg}` };
+        skipped.push(`${id}: tree ${treeRes.status}`);
         continue; // next session
       }
       const tree = await treeRes.json();
@@ -637,10 +690,11 @@ class GtowApi {
           method: "POST", headers: headersOf(tok), body: JSON.stringify({ custom_tree_id: treeId, actions: solution.actions, board: solution.board }),
           signal: AbortSignal.timeout(15_000),
         }, retry ? { nt: NT_AUTH_RETRY } : undefined));
-      } catch (e) { last = { status: 0, error: `${id}: custom-solutions ${e instanceof Error ? e.message : e}` }; continue; }
+      } catch (e) { last = { status: 0, error: `${id}: custom-solutions ${e instanceof Error ? e.message : e}` }; skipped.push(`${id}: solution failed`); continue; }
       if (so.auth && !so.auth.recovered) {
         gtowSessions.noteAuthFailure(id, so.token, so.auth.detail);
         last = { status: 401, error: `custom-solutions: ${authFailedReason(so.auth)}` };
+        skipped.push(`${id}: auth refused`);
         continue; // next session
       }
       const solRes = so.res;
@@ -648,13 +702,14 @@ class GtowApi {
         const msg = (await solRes.text().catch(() => "")).slice(0, 180);
         gtowSessions.noteFailure(id, solRes.status, msg, need);
         last = { status: solRes.status, error: `custom-solutions: ${msg}` };
+        skipped.push(`${id}: solution ${solRes.status}`);
         continue; // next session
       }
       const sol = await solRes.json();
       const solId = sol.id ?? sol.custom_solution_id ?? sol.uuid;
       if (!solId) return { ok: false, status: 502, error: "custom-solutions returned no id" };
       gtowSessions.noteSuccess(id, { tree: true });
-      return { ok: true, solId: String(solId), session: id };
+      return { ok: true, solId: String(solId), session: id, route };
     }
     return { ok: false, status: last?.status ?? 401, error: last?.error ?? "Unauthorized after token refresh" };
   }
@@ -678,8 +733,12 @@ class GtowApi {
   private realOf = new Map<string, string>();
   /** the one in-flight materialisation per synthetic id: concurrent misses join it (one tree + one solution POST) */
   private matPending = new Map<string, Promise<SolveMade>>();
+  /** a stored tree re-posted after a hung solve (TreeOpts.avoid): the accounts its next materialisation must not use */
+  private matAvoid = new Map<string, GtowSessionId[]>();
   /** speculative reads (the chain's prefetch) waiting for someone to materialise a stored tree — see customNode */
   private matWaiters = new Map<string, Set<() => void>>();
+  /** seats of each solve this process minted (informational: the hung-poll log line) */
+  private solSeats = new Map<string, number>();
   /** when this process created each solve — the readiness probe waits FIRST_POLL_MS from here */
   private solCreatedAt = new Map<string, number>();
   /** solves whose street root has answered: every node of them is served now, so a 204 means "no such node" */
@@ -797,8 +856,13 @@ class GtowApi {
     if (this.nodeCache.size > NODE_CACHE_MAX) this.nodeCache.delete(this.nodeCache.keys().next().value as string);
   }
 
-  async ensureCustomSolution(input: CustomTreeInput, opts: CacheOpts = {}): Promise<EnsureResult> {
+  async ensureCustomSolution(input: CustomTreeInput, opts: TreeOpts = {}): Promise<EnsureResult> {
     const key = this.treeKey(input);
+    // a re-post after a hung solve: a stored tree's next materialisation leaves the hung account out too
+    if (opts.avoid?.length && this.cache.enabled && !opts.noCache) {
+      const ck = cacheKeyOf("post", this.buildCustomTree(input), { actions: "", board: input.board });
+      if (this.cache.hasTree(ck.key, false)) this.matAvoid.set(storedSolId(ck.key), opts.avoid.slice());
+    }
     const hit = this.treeSolCache.get(key);
     // (a check that must reach GTO Wizard never takes a stored tree, not even one this process already handed out)
     if (hit && !(opts.noCache && isStoredSolId(hit))) {
@@ -829,9 +893,10 @@ class GtowApi {
           why: `served from the persistent solve cache — no request (the in-process cache did not hold it: ${why})` };
       }
       this.solOwner.set(made.solId, made.session);
+      this.solSeats.set(made.solId, input.mid ? 3 : 2);
       this.solCreatedAt.set(made.solId, Date.now());
       if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
-      return { ok: true as const, solId: made.solId, created: true, session: made.session, why };
+      return { ok: true as const, solId: made.solId, created: true, session: made.session, why, ...(made.route ? { route: made.route } : {}) };
     })().finally(() => this.treePending.delete(key));
     this.treePending.set(key, p);
     return p;
@@ -848,7 +913,7 @@ class GtowApi {
     timeoutMs = CUSTOM_SOLVE_TIMEOUT_MS,
     /** who is asking — rides every request this read sends into the ledger (`cl`): walk | prefetch | study */
     caller?: string,
-    opts: CacheOpts = {}
+    opts: NodeReadOpts = {}
   ): Promise<NodeFetchResult> {
     const key = nodeKeyOf(solId, q);
     const mem = this.memNode(solId, q);
@@ -880,10 +945,10 @@ class GtowApi {
         }
         const again = this.memNode(solId, q);
         if (again) return { ok: true, data: again.data, solveSecs: 0, cached: true, src: "cache" };
-        return this.readThrough(solId, q, key, Math.max(0, timeoutMs - (Date.now() - t0)), caller);
+        return this.readThrough(solId, q, key, Math.max(0, timeoutMs - (Date.now() - t0)), caller, opts.repostMs);
       }
     }
-    return this.readThrough(solId, q, key, timeoutMs, caller);
+    return this.readThrough(solId, q, key, timeoutMs, caller, opts.repostMs);
   }
 
   /**
@@ -907,7 +972,7 @@ class GtowApi {
   }
 
   /** The read itself: join a poll already in flight for this node, or start one. */
-  private readThrough(solId: string, q: NodeQuery, key: string, timeoutMs: number, caller: string | undefined): Promise<NodeFetchResult> {
+  private readThrough(solId: string, q: NodeQuery, key: string, timeoutMs: number, caller: string | undefined, repostMs?: number): Promise<NodeFetchResult> {
     const pending = this.nodePending.get(key);
     if (pending) {
       // the same node is already being polled by another request (a warm-up, another panel) — share it. The wait
@@ -915,9 +980,19 @@ class GtowApi {
       // joined poll is a hole in the timeline.
       const node = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
       tmark(`GTO Wizard node [${node || "root"}] joined another request's poll`, `solution ${solId.slice(0, 8)}`);
-      return pending.then((r) => (r.ok ? { ...r, src: "joined" as const } : r));
+      // THE JOIN IS BOUNDED BY THIS CALLER'S CLOCK (2026-10-08, the hung-poll bound): the other request may hold a longer
+      // one (a warm-up). A join that ended in a TIMEOUT while this caller still has time reads the node itself (as the
+      // readiness probe already did — fetchOnSolve), not inherits another caller's shorter clock.
+      const t0 = Date.now();
+      const late = (): NodeFetchResult => ({ ok: false, status: 504, error: `AI solve timed out — waited ${(timeoutMs / 1000).toFixed(1)} s on another request's poll of [${node || "root"}] (solution ${solId.slice(0, 8)})` });
+      return within(pending, timeoutMs, late).then((r) => {
+        if (r.ok) return { ...r, src: "joined" as const };
+        const left = timeoutMs - (Date.now() - t0);
+        if (r.status === 504 && left > CUSTOM_SOLVE_POLL_MS && !this.nodePending.has(key)) return this.readThrough(solId, q, key, left, caller, repostMs);
+        return r;
+      });
     }
-    const p = this.customNodeFetch(solId, q, timeoutMs, caller).finally(() => this.nodePending.delete(key));
+    const p = this.customNodeFetch(solId, q, timeoutMs, caller, repostMs).finally(() => this.nodePending.delete(key));
     this.nodePending.set(key, p);
     return p;
   }
@@ -964,7 +1039,8 @@ class GtowApi {
       }
       const seats = Array.isArray(stored.tree?.players) ? stored.tree.players.length : 2;
       tmark(`GTO Wizard stored tree ${key.slice(0, 8)} materialised`, "a node the solve cache does not hold — creating its solve (tree + solution)");
-      const made = await this.postCustomSolution(stored.tree, stored.solution, { multiway: seats > 2 });
+      const made = await this.postCustomSolution(stored.tree, stored.solution, { multiway: seats > 2 }, this.matAvoid.get(gcId) ?? []);
+      this.matAvoid.delete(gcId);
       if (!made.ok) return made;
       // the real solve is a solve like any other: its owner, its age for the readiness probe, its replies stored
       this.noteSolKey(made.solId, key);
@@ -986,32 +1062,34 @@ class GtowApi {
     return p;
   }
 
-  private async customNodeFetch(solId: string, q: NodeQuery, timeoutMs: number, caller?: string): Promise<NodeFetchResult> {
+  private async customNodeFetch(solId: string, q: NodeQuery, timeoutMs: number, caller?: string, repostMs?: number): Promise<NodeFetchResult> {
     if (isStoredSolId(solId)) {
       // the node's own budget starts once the solve exists — as for a tree created afresh, whose POSTs come before it
       const m = await this.materialise(solId, caller !== "prefetch");
       if (!m.ok) return m;
-      return this.fetchOnSolve(m.solId, q, timeoutMs, caller);
+      return this.fetchOnSolve(m.solId, q, timeoutMs, caller, repostMs);
     }
-    return this.fetchOnSolve(solId, q, timeoutMs, caller);
+    return this.fetchOnSolve(solId, q, timeoutMs, caller, repostMs);
   }
 
   /** A node of a real solve: the readiness probe for the chain's single-street shape, then the poll. */
-  private async fetchOnSolve(solId: string, q: NodeQuery, timeoutMs: number, caller?: string): Promise<NodeFetchResult> {
+  private async fetchOnSolve(solId: string, q: NodeQuery, timeoutMs: number, caller?: string, repostMs?: number): Promise<NodeFetchResult> {
     const t0 = Date.now();
     const deadline = t0 + timeoutMs;
     // anything but the chain's single-street shape keeps the old behaviour: poll until a strategy or the timeout
-    if (!streetRooted(q)) return this.pollNode(solId, q, t0, deadline, "legacy", caller);
+    if (!streetRooted(q)) return this.pollNode(solId, q, t0, deadline, "legacy", caller, repostMs);
     while (!this.solReady.has(solId)) {
       let probe = this.solProbe.get(solId);
       const mine = !probe;
       if (!probe) {
-        probe = this.probeSolution(solId, q.board, deadline, caller).finally(() => this.solProbe.delete(solId));
+        probe = this.probeSolution(solId, q.board, deadline, caller, repostMs).finally(() => this.solProbe.delete(solId));
         this.solProbe.set(solId, probe);
       } else {
         tmark(`GTO Wizard node [${q.riverActions ?? q.turnActions ?? q.flopActions ?? "root"}] waits for the solve's readiness probe`, `solution ${solId.slice(0, 8)}`);
       }
-      const pr = await probe;
+      // a probe another read started runs on ITS clock; this read waits no longer than its own (the hung-poll bound)
+      const pr = mine ? await probe : await within(probe, deadline - Date.now(),
+        (): NodeFetchResult => ({ ok: false, status: 504, error: `AI solve timed out — the solve's readiness probe (another read's) did not answer within this read's ${(timeoutMs / 1000).toFixed(1)} s` }));
       if (this.solReady.has(solId)) {
         if (isRootQuery(q)) return pr.ok ? { ...pr, solveSecs: (Date.now() - t0) / 1000, src: mine ? "fetched" : "joined" } : pr;
         break;
@@ -1021,16 +1099,16 @@ class GtowApi {
       // that caller starts a fresh probe. A wall, a lost token or anything else ends every waiter alike.
       if (pr.ok || pr.status !== 504 || Date.now() >= deadline) return pr;
     }
-    return this.pollNode(solId, q, t0, deadline, "ready", caller);
+    return this.pollNode(solId, q, t0, deadline, "ready", caller, repostMs);
   }
 
   /** Poll a solve's street root until it answers (not before FIRST_POLL_MS after the solve was created). A 200 of any
    *  kind means the solve is served; it is marked ready and the root node cached like any other. */
-  private async probeSolution(solId: string, board: string, deadline: number, caller?: string): Promise<NodeFetchResult> {
+  private async probeSolution(solId: string, board: string, deadline: number, caller?: string, repostMs?: number): Promise<NodeFetchResult> {
     const created = this.solCreatedAt.get(solId);
     const wait = created != null ? created + FIRST_POLL_MS - Date.now() : 0;
-    if (wait > 0) await new Promise((res) => setTimeout(res, wait));
-    return this.pollNode(solId, { board }, Date.now(), deadline, "until-ready", caller);
+    if (wait > 0) await new Promise((res) => setTimeout(res, Math.min(wait, Math.max(0, deadline - Date.now()))));
+    return this.pollNode(solId, { board }, Date.now(), deadline, "until-ready", caller, repostMs);
   }
 
   /**
@@ -1038,9 +1116,10 @@ class GtowApi {
    * marks the solve ready on the first 200. `ready` knows the solve is served, so an empty answer (204, or a 200
    * without action_solutions) gets NO_NODE_GRACE retries and is then reported as a missing node (status 204).
    */
-  private async pollNode(solId: string, q: NodeQuery, t0: number, deadline: number, mode: "legacy" | "until-ready" | "ready", caller?: string): Promise<NodeFetchResult> {
+  private async pollNode(solId: string, q: NodeQuery, t0: number, deadline: number, mode: "legacy" | "until-ready" | "ready", caller?: string, repostMs?: number): Promise<NodeFetchResult> {
     const key = nodeKeyOf(solId, q);
     const line = q.riverActions ?? q.turnActions ?? q.flopActions ?? "";
+    const line0 = () => line || "root";
     let empties = 0;
     const markReady = () => {
       if (mode === "legacy") return;
@@ -1073,21 +1152,35 @@ class GtowApi {
     // a later one (the refreshed token refused too) ends the read with the auth reason — never as a verdict on the line
     let authRound: AuthRound | null = null;
     // The solve lives on the account that minted it: poll it with THAT
-    // session's token, never whichever token happens to be freshest.
-    const owner = this.solOwner.get(solId) ?? null;
+    // session's token, never whichever token happens to be freshest. A solve with no recorded owner (none minted in this
+    // process) is pinned to ONE account for the whole read (2026-10-08): with least-loaded routing the "best" account
+    // can change between two polls, and a solve polled with another account's token 404s.
+    let owner = this.solOwner.get(solId) ?? null;
+    if (!owner) owner = (await within(gtowSessions.bestToken(), deadline - Date.now(), () => null))?.id ?? null;
+    const hangMs = pollHangMs();
+    const timedOutErr = (e: unknown) => /timed? ?out|abort/i.test(e instanceof Error ? `${e.name} ${e.message}` : String(e));
     while (Date.now() < deadline) {
-      const token = owner ? await gtowSessions.tokenFor(owner) : await this.accessToken();
-      if (!token) return { ok: false, status: 0, error: `No access token for the session that owns this solve${owner ? ` (${owner})` : ""} — is it still running with its debug port?` };
-      // per-request bound: the loop's wall-clock ceiling can't fire while a
-      // single fetch hangs inside it — a timed-out poll just retries
+      // the token read is bounded by the read's clock too: an expired token is a CDP sniff (up to 15 s)
+      const token = owner ? await within(gtowSessions.tokenFor(owner), deadline - Date.now(), () => null) : null;
+      if (!token) {
+        if (Date.now() >= deadline) break;
+        return { ok: false, status: 0, error: `No access token for the session that owns this solve${owner ? ` (${owner})` : ""} — is it still running with its debug port?` };
+      }
+      // PER-REQUEST BOUND (2026-10-08, the hung-poll bound): the read's REMAINING clock, capped at POLL_HANG_MS — computed
+      // when the request goes (an auth retry goes later and gets what is left then). A poll used to get 8 s whatever was
+      // left, which is how a 15 s read ended at 19 s.
       let r: Response;
       // the ledger learns what this poll was for: the readiness probe, a read of a served solve, the grace retry of an
       // empty answer, or the old loop — with that, a hand's 204s can be told apart later (solving vs no such node)
       const pm = mode === "legacy" ? "legacy" : mode === "until-ready" ? "probe" : empties ? "retry" : "node";
-      const poll = (tok: string, retry: boolean) => gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, {
-        headers: { Authorization: `Bearer ${tok}` },
-        signal: AbortSignal.timeout(8_000),
-      }, { pm, cl: caller ?? null, ...(retry ? { nt: NT_AUTH_RETRY } : {}) });
+      let reqMs = hangMs;
+      const poll = (tok: string, retry: boolean) => {
+        reqMs = Math.max(1, Math.min(hangMs, deadline - Date.now()));
+        return gtowRequests.fetch(owner, "poll", `${API_BASE}/v4/solutions/spot-solution/?${params}`, {
+          headers: { Authorization: `Bearer ${tok}` },
+          signal: AbortSignal.timeout(reqMs),
+        }, { pm, cl: caller ?? null, ...(retry ? { nt: NT_AUTH_RETRY } : {}) });
+      };
       let sent: Awaited<ReturnType<typeof sendWithAuthRetry>>;
       try {
         // the refresh fits the read's own clock: its deadline, less a second for the retry itself
@@ -1096,7 +1189,22 @@ class GtowApi {
       } catch (e) {
         lastErr = `poll request failed: ${e instanceof Error ? e.message : e}`;
         said.failed++;
-        await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
+        // A HUNG POLL: no reply within the full POLL_HANG_MS (not merely cut by the read's clock). When the caller can
+        // re-post the tree on another account inside what is left (repostMs: a cold tree's cost), say so at once.
+        const hung = reqMs >= hangMs && timedOutErr(e);
+        if (hung) {
+          const left = deadline - Date.now();
+          const line = `${owner ?? "?"} poll of solution ${solId.slice(0, 8)} [${line0()}] hung ${(hangMs / 1000).toFixed(1)} s, ${(Math.max(0, left) / 1000).toFixed(1)} s left on the read`;
+          if (repostMs != null && left >= repostMs) {
+            console.log(`[gtow-hung] ${line} — the tree is re-posted on another account (a cold ${this.solSeats.get(solId) ?? "?"}-seat tree needs ~${(repostMs / 1000).toFixed(1)} s)`);
+            tmark("GTO Wizard poll hung", `${line} — re-post on another account`);
+            return { ok: false, status: 0, hung: true, error: `GTO Wizard poll hung on ${owner ?? "the owning account"} (no reply in ${(hangMs / 1000).toFixed(1)} s) — ${(left / 1000).toFixed(1)} s left, the tree is re-posted on another account` };
+          }
+          console.log(`[gtow-hung] ${line} — ${repostMs != null ? `too little left to re-post (a cold tree needs ~${(repostMs / 1000).toFixed(1)} s): polling on` : "polling on (no re-post for this read)"}`);
+          tmark("GTO Wizard poll hung", line);
+        }
+        if (Date.now() >= deadline) break;
+        await new Promise((res) => setTimeout(res, Math.min(CUSTOM_SOLVE_POLL_MS, Math.max(0, deadline - Date.now()))));
         continue;
       }
       r = sent.res;
@@ -1147,7 +1255,7 @@ class GtowApi {
         // verdict — sendWithAuthRetry above refreshed the token and polled again, or the read ended with the auth reason.
         if (r.status === 400 || r.status === 422) return { ok: false, status: r.status, error: lastErr };
       }
-      await new Promise((res) => setTimeout(res, CUSTOM_SOLVE_POLL_MS));
+      await new Promise((res) => setTimeout(res, Math.min(CUSTOM_SOLVE_POLL_MS, Math.max(0, deadline - Date.now()))));
     }
     const polls = said.notReady + said.failed + said.empty;
     const tally = `${polls} poll${polls === 1 ? "" : "s"}: ${said.notReady} answered 204 (not solved yet)` +

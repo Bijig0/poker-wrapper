@@ -43,9 +43,11 @@
  * refusal corrects it.
  */
 
-import { asActivity, currentStepper, step, timed } from "./answerTrace";
+import { asActivity, currentStepper, step, timed, tmark } from "./answerTrace";
+import { currentRequestScope } from "./requestScope";
 import { loadAccounts, WALL_MS, type GtowTier } from "./gtowAccounts";
 import { isAuthFailure } from "./gtowAuthBody";
+import { gtowLoad, type LoadCounts, type LoadView } from "./gtowLoad";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
@@ -91,6 +93,44 @@ export interface GtowSessionCfg {
   enabled: boolean;
 }
 
+/**
+ * LEAST-LOADED ROUTING (2026-10-08, Brady: "for the same type of work … rotate through all the accounts we have … PER
+ * request, this sort of balances out so that no individual account gets too much and is split evenly"). Agreed with him:
+ * the unit is a TREE — a solve's polls, node reads, node locks and auth retries stay on the account that minted it (a
+ * solve lives on that account; another account's token 404s it) — and "rotate" means the CAPABLE account with the fewest
+ * requests in the trailing hour (round-robin when they are level; self-correcting when the Ultras also carry the
+ * multiway work Elite cannot take). Before it, the pool routed by a fixed PREFERENCE and live-token-first put nearly
+ * everything on `primary` (5,180 of 5,800 requests in 24 h on 2026-10-08 — memory gtow-pool-no-spread).
+ *
+ *   GTOW_ROUTE=balanced (unset) | priority (the old preference order, byte for byte)
+ *   GTOW_HOUR_BUDGET  soft per-account trailing-hour budget, default 1800 (GTO Wizard's wall is 2,250 / rolling hour)
+ *   GTOW_DAY_BUDGET   soft per-account trailing-24 h budget, default 5000 (the DAY throttle tripped near ~6,000-6,600)
+ * An account at or past a budget goes to the END of the list — still used when every other one is worse (never dark).
+ * Walls, plan refusals, signed-out holds and the session allowlist filter exactly as before; live-token-first stays
+ * (a CDP sniff must never delay an answer while a signed-in account is ready). Counts come from services/gtowLoad (in
+ * memory, every origin, no query per route).
+ */
+export type RouteMode = "balanced" | "priority";
+export const routeMode = (env: Record<string, string | undefined> = process.env): RouteMode =>
+  /^priority$/i.test(env.GTOW_ROUTE?.trim() ?? "") ? "priority" : "balanced";
+const envNum = (v: string | undefined, d: number) => { const n = Number(v); return v != null && v.trim() !== "" && Number.isFinite(n) && n > 0 ? n : d; };
+export const hourBudget = (env: Record<string, string | undefined> = process.env): number => envNum(env.GTOW_HOUR_BUDGET, 1_800);
+export const dayBudget = (env: Record<string, string | undefined> = process.env): number => envNum(env.GTOW_DAY_BUDGET, 5_000);
+
+/** One account's load as routing saw it. `count` = what it is ordered by: the trailing hour plus trees just routed. */
+export interface RouteLoad extends LoadCounts { count: number; overHour: boolean; overDay: boolean }
+
+/** route() with its reasons: the order, each account's load, and which accounts are past a soft budget. */
+export interface RouteExplained {
+  mode: RouteMode;
+  ids: GtowSessionId[];
+  loads: Record<GtowSessionId, RouteLoad>;
+  /** accounts that are capable and un-blocked but past a soft budget (moved to the end) */
+  overBudget: GtowSessionId[];
+  hourBudget: number;
+  dayBudget: number;
+}
+
 /** Why a session is not taking work right now. */
 export type BlockKind = "quota" | "plan" | "auth" | "unreachable";
 
@@ -130,6 +170,9 @@ export interface GtowSessionStatus {
    *  showing the SAME account means both clients are signed into one login. */
   account: string | null;
   accountId: string | null;
+  /** least-loaded routing (GTOW_ROUTE): this account's trailing-hour / 24 h requests (every origin) and trees just
+   *  routed to it, against the soft budgets (absent on a pool without a counter) */
+  load?: RouteLoad & { hourBudget: number; dayBudget: number };
   /** Rolled up for the UI: what this session is doing for us right now.
    *  "unknown" = nobody probed, so down and signed-out cannot be told apart. */
   state: "up" | "no-token" | "blocked" | "down" | "off" | "unknown";
@@ -237,8 +280,14 @@ class GtowSessions {
   private keeper: ReturnType<typeof setInterval> | null = null;
   /** the running session's allowlist (Brady, 2026-09-27: per-session, default everything) — null = no restriction */
   private allow: Set<GtowSessionId> | null = null;
+  /** where the trailing-hour counts come from (services/gtowLoad) — none: every account reads 0, i.e. the preference order */
+  private load: LoadView | null;
+  /** env for the route switches (tests pass their own) */
+  private env: Record<string, string | undefined>;
 
-  constructor() {
+  constructor(opts: { load?: LoadView | null; env?: Record<string, string | undefined> } = {}) {
+    this.load = opts.load ?? null;
+    this.env = opts.env ?? process.env;
     this.reload();
   }
 
@@ -352,17 +401,56 @@ class GtowSessions {
    * declaration self-correcting.
    */
   route(need: GtowNeed = {}): GtowSessionId[] {
-    return this.ranked(need)
-      .filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need) && !this.blocked(s))
-      .map((s) => s.cfg.id);
+    return this.explainRoute(need).ids;
   }
 
   /** Every enabled session that could do the work, blocked ones included —
    *  the last-ditch list when `route` came back empty. */
   routeIgnoringBlocks(need: GtowNeed = {}): GtowSessionId[] {
-    return this.ranked(need)
-      .filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need))
-      .map((s) => s.cfg.id);
+    return this.explainRoute(need, true).ids;
+  }
+
+  /** One account's load as routing reads it (all 0 without a counter). */
+  loadOf(id: GtowSessionId, now = Date.now()): RouteLoad {
+    const c = this.load?.counts(id, now) ?? { h1: 0, h24: 0, pending: 0 };
+    const count = c.h1 + c.pending;
+    return { ...c, count, overHour: count >= hourBudget(this.env), overDay: c.h24 >= dayBudget(this.env) };
+  }
+
+  /**
+   * route() and its reasons. PRIORITY: the preference order (`order`, `preflopOrder` for preflop), exactly as before.
+   * BALANCED: the same candidates, in groups — (1) the accounts this KIND of work is for: multiway or preflop work → the
+   * accounts whose plan takes 3+ player trees (cfg.multiway, no plan refusal seen), everything else → every account;
+   * (2) heads-up preflop only: the rest (Elite, which solves a heads-up preflop tree — the last resort it always was);
+   * each group under its soft budgets first, then past them; inside each, fewest requests in the trailing hour (plus
+   * trees just routed) first, ties in the preference order.
+   */
+  explainRoute(need: GtowNeed = {}, ignoreBlocks = false): RouteExplained {
+    const mode = routeMode(this.env);
+    const hb = hourBudget(this.env), db = dayBudget(this.env);
+    const cands = this.ranked(need).filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need) && (ignoreBlocks || !this.blocked(s)));
+    const loads: Record<GtowSessionId, RouteLoad> = {};
+    if (mode === "priority") return { mode, ids: cands.map((s) => s.cfg.id), loads, overBudget: [], hourBudget: hb, dayBudget: db };
+    const now = Date.now();
+    for (const s of cands) loads[s.cfg.id] = this.loadOf(s.cfg.id, now);
+    const forKind = (s: SessionState) => !(need.multiway || need.preflop) || (s.cfg.multiway && !s.multiwayRefused);
+    const over = (s: SessionState) => loads[s.cfg.id]!.overHour || loads[s.cfg.id]!.overDay;
+    const rank = (s: SessionState) => (forKind(s) ? 0 : 2) + (over(s) ? 1 : 0);
+    // ranked() is in preference order and Array.sort is stable: equal loads keep it (round-robin as the counts level)
+    const ids = [...cands].sort((a, b) => rank(a) - rank(b) || loads[a.cfg.id]!.count - loads[b.cfg.id]!.count).map((s) => s.cfg.id);
+    return { mode, ids, loads, overBudget: cands.filter(over).map((s) => s.cfg.id), hourBudget: hb, dayBudget: db };
+  }
+
+  /**
+   * A tree was just routed to `id` (its tree POST is about to go): it is counted on the account at once
+   * (gtowLoad.reserve) so trees posted in the same instant spread, and the `[gtow-route]` reason is returned — which
+   * account took it and why. `order`: the candidates as walked (after live-token-first); `skipped`: why earlier ones
+   * were passed over. Call it BEFORE the request goes, so the reason describes the loads the choice was made on.
+   */
+  noteRouted(id: GtowSessionId, need: GtowNeed, order: GtowSessionId[], skipped: string[] = []): string {
+    const why = routeWhy(id, this.explainRoute(need, true), order, skipped);
+    this.load?.reserve?.(id);
+    return why;
   }
 
   cfg(id: GtowSessionId): GtowSessionCfg | null {
@@ -634,6 +722,8 @@ class GtowSessions {
   }
 
   private async refreshAll(): Promise<void> {
+    // the routing counter's share from OTHER processes (services/gtowLoad) is synced on this timer, not in a route call
+    if (this.load === gtowLoad) step("gtow load sync", () => gtowLoad.ensure(Date.now(), true));
     // the synchronous part of each session's check (until its first await) is a step of the keeper tick
     await Promise.all(this.all().map((s) => step(`session ${s.cfg.id}`, () => this.refreshIfExpiring(s))));
   }
@@ -722,6 +812,7 @@ class GtowSessions {
       lastUsedMs: s.lastUsedMs || null,
       account: s.account?.email ?? null,
       accountId: s.account?.publicId ?? null,
+      ...(this.load ? { load: { ...this.loadOf(s.cfg.id), hourBudget: hourBudget(this.env), dayBudget: dayBudget(this.env) } } : {}),
       state,
       text,
     };
@@ -751,5 +842,30 @@ class GtowSessions {
   }
 }
 
-export const gtowSessions = new GtowSessions();
+/** The `[gtow-route]` reason for an account taking a tree: least-loaded, budget (past its soft budget, every other one
+ *  worse or unavailable), fallback (an account before it in the order had no live token, or refused), or priority. */
+export function routeWhy(id: GtowSessionId, ex: RouteExplained, order: GtowSessionId[], skipped: string[] = []): string {
+  if (ex.mode === "priority") return `priority (GTOW_ROUTE=priority: ${order.join(" > ")})${skipped.length ? `; passed over: ${skipped.join("; ")}` : ""}`;
+  const fmt = (x: GtowSessionId) => { const l = ex.loads[x]; return l ? `${x} ${l.h1}${l.pending ? `+${l.pending}` : ""}/h ${l.h24}/24h` : x; };
+  const head = ex.ids[0];
+  const ahead = ex.ids.slice(0, Math.max(0, ex.ids.indexOf(id)));
+  const why = skipped.length ? `fallback (${skipped.join("; ")})`
+    : id !== head && ahead.length ? `fallback (live token first: ${ahead.join(", ")} had none in hand)`
+    : ex.overBudget.includes(id) ? `budget (every capable account is past a soft budget — hour ${ex.hourBudget} / day ${ex.dayBudget} — this one is the least loaded)`
+    : "least-loaded";
+  const past = ex.overBudget.filter((x) => x !== id);
+  return `${why}; trailing hour: ${ex.ids.map(fmt).join(" · ")}${past.length ? `; past a soft budget: ${past.join(", ")}` : ""}`;
+}
+
+/** The `[gtow-route]` line: api.log, and the answer's own trace (X-Answer-Trace) — which account took a tree and why,
+ *  with the hand and street it was for when the request was made inside an answer (services/requestScope). */
+export function logRoute(id: GtowSessionId, need: GtowNeed, why: string, what = "tree"): void {
+  const sc = currentRequestScope();
+  const kind = `${need.preflop ? "preflop " : ""}${need.multiway ? "multiway" : "heads-up"}`;
+  const at = sc ? `${sc.handKey} ${sc.street ?? "?"} (${sc.origin}) ` : "";
+  console.log(`[gtow-route] ${at}${kind} ${what} -> ${id}: ${why}`);
+  tmark(`[gtow-route] ${kind} ${what} -> ${id}`, why, 400);
+}
+
+export const gtowSessions = new GtowSessions({ load: gtowLoad });
 export { GtowSessions };

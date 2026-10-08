@@ -23,6 +23,7 @@ import type { Database } from "bun:sqlite";
 import { openStore } from "./storePaths";
 import { ensureEventTables } from "../../../../packages/data-root/eventTables";
 import { AUTH_STATUSES, NT_AUTH, NT_AUTH_RETRY, NT_AUTH_TWICE, authNote } from "./gtowAuthBody";
+import { gtowLoad } from "./gtowLoad";
 
 export type GtowRequestKind = "tree" | "solution" | "poll" | "library" | "other";
 
@@ -127,6 +128,8 @@ class GtowRequestLog {
   private origin: string;
   private written = 0;
   private db: Database | null = null;
+  /** this ledger feeds the process's in-memory load counter (services/gtowLoad) — the process's own ledger only */
+  feedsLoad = false;
 
   constructor(path?: string) {
     this.path = path ?? gtowRequestsPath();
@@ -158,8 +161,10 @@ class GtowRequestLog {
       countRequest(row.kind, row.status);
       const rec: GtowRequestRow = { ts: Date.now(), s: row.session ?? "unknown", k: row.kind, st: row.status, o: this.origin,
         ...(scope ? { h: scope.handKey, ...(scope.street ? { sr: scope.street } : {}), go: scope.origin } : {}) };
-      this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd, pm, cl, nt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      const ins = this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd, pm, cl, nt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null, row.pm ?? null, row.cl ?? null, row.nt ?? null);
+      // THE ROUTING COUNTER (services/gtowLoad, least-loaded routing): this request counts on its account at once
+      if (this.feedsLoad) gtowLoad.note(rec.s, rec.ts, Number(ins.lastInsertRowid));
       if (++this.written % LOG_EVERY === 0) {
         const s = this.stats();
         console.log(`[gtow-requests] ${s.last24h.total} in the last 24 h (${Object.entries(s.last24h.bySession).map(([k, v]) => `${k} ${v}`).join(", ")}; ${s.last24h.status429} x 429) · cap ${CAP}`);
@@ -380,6 +385,15 @@ class GtowRequestLog {
     }
   }
 
+  /** The load counter's reads (services/gtowLoad): every row of the trailing window (its seed), every row past an id
+   *  (its sync — a primary-key range, normally a few dozen rows). */
+  loadRows(sinceTs: number): { id: number; s: string; ts: number }[] {
+    return this.open().query<{ id: number; s: string; ts: number }, [number]>("SELECT id, s, ts FROM gtow_requests WHERE ts >= ? ORDER BY id").all(sinceTs);
+  }
+  loadRowsAfter(afterId: number): { id: number; s: string; ts: number }[] {
+    return this.open().query<{ id: number; s: string; ts: number }, [number]>("SELECT id, s, ts FROM gtow_requests WHERE id > ? ORDER BY id LIMIT 20000").all(afterId);
+  }
+
   /** How many requests one account may still send before the stated cap, over the trailing 24 h. */
   headroom(session: string, now = Date.now()): number {
     try {
@@ -421,4 +435,6 @@ export function refusalsIn(db: Database, sinceMs: number): { since: number | nul
 }
 
 export const gtowRequests = new GtowRequestLog();
+gtowRequests.feedsLoad = true;
+gtowLoad.setSource({ seed: (since) => gtowRequests.loadRows(since), after: (id) => gtowRequests.loadRowsAfter(id) });
 export { GtowRequestLog };
