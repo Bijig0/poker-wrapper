@@ -2,7 +2,9 @@ import { pressedAnswerPath } from "../services/chainChecks";
 import { replayChecks, replayText } from "../services/replayCheck";
 import { launchReplay } from "../services/replayScheduler";
 import { offTreeLog } from "../services/offTreeLog";
-import { cachedBehindLive, yieldFirst, yieldToLive } from "../services/livePriority";
+import { cachedBehindLive, forgetCached, yieldFirst, yieldToLive } from "../services/livePriority";
+import { HandsView } from "../services/handsView";
+import { liveForCaches } from "../services/setupLive";
 import { step } from "../services/answerTrace";
 import { loadReport } from "../services/machineLoad";
 import { Hono } from "hono";
@@ -308,10 +310,19 @@ function scheduleAudit(e: Enriched): void {
   auditQueue.unshift(e);
   if (!auditPumping) void pumpAudits();
 }
+/** while a session is live (or the setup page is open) the audits wait — each one is synchronous chart work on the
+ *  answering thread (2026-10-09 10:27Z: one self-request to /api/feed-spot held the loop 23.2 s mid-session) */
+const AUDIT_LIVE_POLL_MS = 30_000;
+let auditHeldNoted = false;
 async function pumpAudits(): Promise<void> {
   auditPumping = true;
   try {
     while (auditQueue.length) {
+      while (liveForCaches()) {
+        if (!auditHeldNoted) { auditHeldNoted = true; console.log(`[audit] ${auditQueue.length} hand audit(s) held while a poker session is live (or the setup page is open)`); }
+        await new Promise((r) => setTimeout(r, AUDIT_LIVE_POLL_MS));
+      }
+      auditHeldNoted = false;
       // after a restart every finished hand is re-audited (~1.2k self-requests back to back): never ahead of a live answer
       await yieldToLive();
       const e = auditQueue.shift()!;
@@ -325,13 +336,40 @@ async function pumpAudits(): Promise<void> {
 /** Audits still queued/running — the page polls while this is > 0. */
 const auditPending = (): number => auditQueued.size;
 
+/**
+ * THE FINISHED HANDS FROM MEMORY (2026-10-09, catalogue-incremental; services/handsView.ts): seeded once off the loop,
+ * synced with the wrapper's writes by two index reads per call. Until it is seeded (or with HANDS_VIEW=off, and under
+ * bun test) the table is read as before.
+ */
+export const handsView = new HandsView<HandRow>(HAND_COLS, FINISHED, (r) => r.status === "done");
+if (process.env.NODE_ENV !== "test" && !/^(off|0|false|no)$/i.test(process.env.HANDS_VIEW?.trim() ?? "")) {
+  handsView.setSource({ path: HANDS_DB, db: () => openDb() });
+  handsView.hold = liveForCaches;
+}
+/** Resolves once the hands view is seeded (true), or false when it is off / failed (the table is read). */
+export const handsViewReady = (): Promise<boolean> => handsView.whenReady();
+
+/** the site hand id in a row's JSON, remembered per row version (a regex over 18 MB of JSON per call otherwise) */
+const cidMemo = new Map<number, { u: number | null; cid: string | null }>();
+function cidOf(r: HandRow): string | null {
+  const hit = cidMemo.get(r.rowid);
+  const u = r.updated_at ?? null;
+  if (hit && hit.u === u) return hit.cid;
+  const cid = r.data.match(/"clientHandId":\s*"(\d+)"/)?.[1] ?? null;
+  cidMemo.set(r.rowid, { u, cid });
+  return cid;
+}
+
 /** FINISHED hands only — every analytic, net and reconciliation reads these. `liveRows` is the hands in play. */
 export const allRows = (): HandRow[] => {
-  const d = openDb();
-  if (!d) return [];
-  const rows = d
-    .query<HandRow, []>(`SELECT ${HAND_COLS} FROM hands WHERE ${FINISHED} ORDER BY rowid`)
-    .all();
+  let rows = handsView.rows();
+  if (!rows) {
+    const d = openDb();
+    if (!d) return [];
+    rows = d
+      .query<HandRow, []>(`SELECT ${HAND_COLS} FROM hands WHERE ${FINISHED} ORDER BY rowid`)
+      .all();
+  }
   // Wrapper restarts / table-close flushes archive the same hand more than
   // once — keep only the LAST row per site hand id (most complete capture).
   const bySite = new Map<string, HandRow>();
@@ -339,8 +377,8 @@ export const allRows = (): HandRow[] => {
   let lastKey: string | null = null;
   for (const r of rows) {
     const key = bodyKey(r);
-    const m = r.data.match(/"clientHandId":\s*"(\d+)"/);
-    if (!m) {
+    const cid = cidOf(r);
+    if (!cid) {
       // No site id: either the pre-id era, or a reopen replay — the wrapper
       // (before 2026-09-03) re-archived the previous hand's WS state under a
       // fresh counter every time a table closed and reopened. The replay's
@@ -354,10 +392,10 @@ export const allRows = (): HandRow[] => {
     // 9000xxx is the wrapper's synthetic id for a State Tester authored
     // state (launch.py _faketable_load) — a few leaked into the archive when
     // test mode was switched off (fixed 2026-09-03). Not played hands.
-    if (/^900\d{4}$/.test(m[1]!)) continue;
-    const prev = bySite.get(m[1]!);
+    if (/^900\d{4}$/.test(cid)) continue;
+    const prev = bySite.get(cid);
     if (prev) out.splice(out.indexOf(prev), 1);
-    bySite.set(m[1]!, r);
+    bySite.set(cid, r);
     out.push(r);
     lastKey = key;
   }
@@ -2548,8 +2586,15 @@ app.get("/balance-live", async (c) => {
  * more than the hands, the rake and the tolerance explain and that has not been
  * marked correct — plus the live read, when it disagrees the same way.
  */
-app.get("/profiles/alerts", async (c) => {
-  const { handsOf } = pricedHandsByProfile();
+/** CACHED, NOT REBUILT WHILE LIVE (2026-10-09, catalogue-incremental): the dashboard asks every 60 s while a tab is
+ *  visible, and each build prices every finished hand — it was open across the 11.3 s freeze of 10:26:48Z mid-session.
+ *  Fresh for a minute; past that the copy is served and rebuilt behind the live answers, and while a session is live (or
+ *  the setup page is open) the copy is served as is. Accepting or un-accepting a reading forgets it. */
+export const PROFILE_ALERTS_KEY = "dashboard/profiles-alerts";
+const PROFILE_ALERTS_TTL_MS = 60_000;
+app.get("/profiles/alerts", async (c) => c.json(await cachedBehindLive(PROFILE_ALERTS_KEY, PROFILE_ALERTS_TTL_MS, profileAlertsBody, { holdWhile: liveForCaches })));
+async function profileAlertsBody() {
+  const { handsOf } = step("priced hands", () => pricedHandsByProfile());
   const acked = balanceAcks();
   const items: { profile: string; kind: string; cents: number; at: number | null; detail: string }[] = [];
   for (const p of accountProfiles()) {
@@ -2567,8 +2612,8 @@ app.get("/profiles/alerts", async (c) => {
     items.push({ profile: live.signedInAs, kind: "live", cents: live.check.unexplainedCents, at: live.at,
       detail: `the client reads ${usdCents(live.check.liveCents)} where the last reading plus the hands say ${usdCents(live.check.expectedCents)}` });
   }
-  return c.json({ ok: true, count: items.length, live: live?.check ? { tier: live.check.tier, agrees: live.check.agrees } : null, items: items.slice(-50).reverse() });
-});
+  return { ok: true, count: items.length, live: live?.check ? { tier: live.check.tier, agrees: live.check.agrees } : null, items: items.slice(-50).reverse() };
+}
 
 const usdCents = (cents: number | null | undefined) => cents == null ? "—" : `${cents < 0 ? "-" : ""}$${(Math.abs(cents) / 100).toFixed(2)}`;
 
@@ -2615,6 +2660,7 @@ app.post("/profiles/:name/accept", async (c) => {
   if (!wanted.length) return c.json({ ok: false, error: body.all ? "nothing is flagged" : "no open flag ends at that reading" }, 404);
   const note = typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 200) : null;
   const accepted = wanted.map((i) => ({ id: i.to.id, ack: acceptReading(name, i.to.id, note, i.unexplainedCents, i.tier) }));
+  forgetCached(PROFILE_ALERTS_KEY);
   return c.json({ ok: true, accepted });
 });
 /**
@@ -2647,12 +2693,15 @@ app.post("/profiles/:name/reset", async (c) => {
   const custom = typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 200) : null;
   const note = custom ?? (fresh ? "reset: marked correct against a fresh reading" : `reset: marked correct against the stored reading (no fresh reading — ${freshError})`);
   const accepted = flagged.map((i) => ({ id: i.to.id, ack: acceptReading(name, i.to.id, note, i.unexplainedCents, i.tier) }));
+  forgetCached(PROFILE_ALERTS_KEY);
   return c.json({ ok: true, fresh, freshError, accepted: accepted.length, baseline: snaps[snaps.length - 1] ?? null });
 });
 app.post("/profiles/:name/unaccept", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { id?: number };
   if (typeof body.id !== "number") return c.json({ ok: false, error: "id required" }, 400);
-  return c.json({ ok: unacceptReading(body.id) });
+  const ok = unacceptReading(body.id);
+  forgetCached(PROFILE_ALERTS_KEY);
+  return c.json({ ok });
 });
 
 /** GET /sessions — declared sessions (newest first) plus the undeclared gap clusters of older hands. */

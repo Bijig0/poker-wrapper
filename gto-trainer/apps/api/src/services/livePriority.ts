@@ -121,6 +121,9 @@ export function peekCached<T>(key: string): { value: T; ageMs: number } | null {
 /** Is a cold build of `key` running (the first value is on its way)? */
 export const coldBuilding = (key: string): boolean => cold.has(key);
 
+/** Forget a key (a write route changed what it shows): the next caller builds it. */
+export function forgetCached(key: string): void { heavy.delete(key); }
+
 /** Replace the cached value (a write route that has just computed the fresh payload). */
 export function setCached<T>(key: string, value: T): void {
   heavy.set(key, { at: clock(), value, refreshing: false });

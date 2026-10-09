@@ -24,7 +24,7 @@ import { POOL_DIR, factoryFile } from "../services/repoPaths";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import {
-  HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, type Enriched,
+  HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, handsViewReady, type Enriched,
 } from "./dashboard";
 import { port } from "../services/ports";
 import { step } from "../services/answerTrace";
@@ -869,7 +869,7 @@ export async function strategiesBody() {
   // THE ANSWER LOG FROM MEMORY (2026-10-09, catalogue-incremental): the realized results and the register's counts read
   // the answer log's incremental view (services/answerView.ts) — seeded once off the loop, wait for it here rather than
   // read the table on the loop ("answer log 32 d 6.4 s"). A view that is off or failed falls back to the SQL path.
-  await answerLog.viewReady();
+  await Promise.all([answerLog.viewReady(), handsViewReady()]);   // (and the finished hands: services/handsView.ts)
   const views = step("evaluate strategies", () => evaluateStrategies());
   const matrix = step("strategy matrix", () => readJson(factoryFile("strategy_matrix.json")));
   const rowById: Record<string, any> = {};
