@@ -587,6 +587,31 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "services/poolFlatFloor.ts applyPoolFlatFloor / poolFlatFloorNote · services/poolTrigger.ts shouldReplace · fastSolve.ts (the flop arrival exit, after the cold-call floor) · scripts/mutation/rangeOracle.ts poolFloorsOf",
   },
   {
+    id: "pool-sbflat-v2",
+    kind: "pool-overlay",
+    lifecycle: "experiment",
+    trigger: "SB_FLAT_TABLE=v2 only: at the flop, the flat floor's (pool-flat-floor) SB who FLATTED an open — one raise in, nobody limped or called before him, no raise or second call after, not all-in for less, the open not an all-in — whose flop-entering range fails the trigger rule (services/poolTrigger: residue under 1%, or under half the cell's rate with the cell's 95% lower bound — now on the cell's IGNITION counts — above it and a different 8-group hand mix). The key: opener × open size (oS <2.25 / oM 2.25-2.75 / oL 2.75+, the call table's oXL → oL) × his stack as dealt (le25 / 25_65 / 65_80 / 80_98 / 98_110 / 110p), or with his VPIP known (≥20 hands seen at this seat this session) × VPIP band (v30 / v30_40 / v40p, shrunk toward Ignition's 28%) × the VPIP cells' own stack band (le75 / 75_90 / 90p) — the builder's two chains, most specific key first",
+    replaces: { gto: "the SB's flop-entering range from the chart walk or the AI tree (and, under pool-flat-floor alone, the CoinPoker call table's poolcall_flat_SB_vs<opener>[_o*]_<le40 | 40_80 | 80p> cell)", with: "the Ignition-first SB-flat cell for his opener, open size, stack band and (when the seat has 20+ hands this session) his VPIP band: P(flat | dealt, hand) water-filled to the cell's NL200 rate, replaced outright. The note's clause: 'now the pool's poolcall_flat_SB_vsBTN_oM_25_65 (sbflat v2: 36.54% of chances, 51 calls measured of 131 Ignition chances, vpip unknown (n=12), … combos; trigger …)'. SB_FLAT_OWN_FACTOR=on: the keys without a vpip at freq_pooled × own_nl200_factor 0.765 (Brady's own NL200 tables) instead of × 0.894, re-water-filled ('sbflat v2 own:')" },
+    data: {
+      source: "poker branch claude/sbflat-ranges a0692acb analysis/pipeline/limp_study/locks_v2/build_sbflat_ranges.py → sbflat_ranges.json (copied byte for byte to services/poolSbFlatRanges.json), evidence sbflat_variables.md / sbflat_report.txt; the scanners sbflat_scan_ignition.py / sbflat_scan_coinpoker.py (--session: each SB's VPIP before the hand); the VPIP live: services/seatStats (fde13cf, session-to-date — see the gap in poolSbFlat's header)",
+      sample: "Ignition NL100 + NL200 ring, every card visible: 10,845 SB-vs-open chances / 1,109 flats (NL200 5,846 / 517; Brady's own histories 5,290 chances, the bought anonymous May sample 5,555) — the cells' rates and the shapes' bias correction; CoinPoker 6-max 3,472,154 chances / 348,559 flats / 88,589 shown — the within-cell effects and the shape. 380 keys. Out of fold: +98.9 ± 24.2 nats against the old cells (+9.1 / 1,000 chances, z 4.1), shape +108 ± 28 over 1,109 flats; the VPIP cells (live-like VPIP) +65.2 ± 22.7 over the stack × size cells; gate range_qa/gate.py --slot call --family flat_SB: BETTER +0.100 [+0.058, +0.142] nats a hand on 1,110 flats (own +0.084, anon NL200 +0.102, anon NL100 +0.118, each BETTER). The v40p cells rest on 156 Ignition chances in all",
+    },
+    offSwitch: { env: "SB_FLAT_TABLE", values: "off (unset) = the call table's cell as before · v2 = this table; SB_FLAT_OWN_FACTOR=on applies own_nl200_factor 0.765 on the keys without a vpip (default off); the flat floor's own switches (POOL_FLAT_FLOOR, POOL_TRIGGER_*) apply", where: "config/local.env, read at every decision" },
+    pathCodes: ["arrival:pool-flat-floor-sbv2"],
+    warn: "(sbflat v2",
+    badge: "SB FLAT RANGE v2 (Ignition 10,845 chances)",
+    owner: "Brady", since: "2026-10-10", reviewBy: "2026-10-24",
+    diagnostic: "bun src/scripts/departuresReport.ts --id pool-sbflat-v2 --since 2026-10-10 · api.log [sbflat] lines (the key, chain + step, vpip, REPLACED | kept, per SB flat the table keyed)",
+    source: "gtow-ai",
+    title: "The SB's flat of an open holds the Ignition-first SB-flat range, keyed by stack, open size and his VPIP",
+    what: "the same replacement as pool-flat-floor for the SB's flat of an open, read on a table built for exactly that node: Ignition's own rates (6 stack bands × 3 open sizes, NL200), and where the wrapper has watched the seat 20+ hands this session, his VPIP band × 3 stack bands × size — a v40p SB flats ~50-60%, a v30 SB at 90bb+ ~5%. The opener moves the shape (hand-group factors) but not the rate. Off by default; the [sbflat] log grows the thin VPIP cells' evidence",
+    why: "the call table's SB cells are CoinPoker levels on 3 stack buckets: at 65-98bb CoinPoker flats ~twice as often as Ignition, a fresh 100bb SB flats least on both sites, and the SB's VPIP explains his flat better than any stack split (sbflat_variables.md); the solver itself 3-bets or folds most of those hands",
+    fix: "nothing on the solver side (an exploit); revisit the own-tables factor when the own NL200 histories double; a 100-hand 5-6-dealt window in seatStats would match the VPIP recipe exactly",
+    status: "by-design",
+    cost: "unmeasured live (built 2026-10-10, branch claude/sbflat-port, not merged); replay gate on session_20261009_155740 in the merge",
+    code: "services/poolSbFlat.ts sbFlatKey / sbFlatRange (+ poolSbFlatRanges.json) · services/poolFlatFloor.ts applyPoolFlatFloor (the SB flat, `seen`) · services/seatStats.ts seatHistoryFor · fastSolve.ts (the flop arrival's flat floor, the [sbflat] line) · scripts/mutation/rangeOracle.ts poolFloorsOf / poolRangeOf",
+  },
+  {
     id: "post-in-as-limp",
     kind: "pool-overlay",
     lifecycle: "experiment",
@@ -1603,7 +1628,7 @@ export const NOT_DEPARTURES: {
     "NOT NEEDED": "a refusal reason: the cold-call lock (or, since 2026-10-09, the limp lock under the trigger rule) was not needed — the unlocked tree gives the action a real share",
   },
   logging: {
-    "answers.seat_stats": "per-seat session VPIP / PFR (services/seatStats, 2026-10-09): every villain seat's hands seen this session for its current occupant (seat + stack continuity — Ignition is anonymous), VPIP and PFR counts, logged on each answer row; not read by any answer — groundwork for a session-VPIP band (memory player-type-study), which would be a departure of its own when keyed in"
+    "answers.seat_stats": "per-seat session VPIP / PFR (services/seatStats, 2026-10-09): every villain seat's hands seen this session for its current occupant (seat + stack continuity — Ignition is anonymous), VPIP and PFR counts, logged on each answer row; the column is not read by any answer — groundwork for a session-VPIP band (memory player-type-study). The in-memory store behind it IS read since 2026-10-10 by one departure, pool-sbflat-v2 (SB_FLAT_TABLE=v2: the SB flatter's VPIP keys the SB-flat table — seatStats.seatHistoryFor), registered there"
   },
 };
 

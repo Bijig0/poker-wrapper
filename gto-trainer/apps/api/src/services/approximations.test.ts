@@ -120,6 +120,12 @@ describe("the answer path emits nothing the register does not account for", () =
     expect(departureForCode("postflop:offtree-soft")?.id).toBe("offtree-soft-range");
     expect(departureForCode("postflop:offtree-lock")?.id).toBe("offtree-node-lock");
     expect(departureForWarning("OFF-TREE RANGE")?.id).toBe("offtree-soft-range");
+    // the SB-flat table v2 (SB_FLAT_TABLE=v2): its own code; its note clause rides inside the flat floor's
+    expect(departureForCode("arrival:pool-flat-floor-sbv2")?.id).toBe("pool-sbflat-v2");
+    expect(departureForCode("arrival:pool-flat-floor-sbv2")?.offSwitch?.env).toBe("SB_FLAT_TABLE");
+    expect(departuresOf(["arrival:pool-flat-floor-sbv2"], "POOL FLAT RANGE: the SB (35bb) flat-called the BTN's open — 0.3 combos on x, now the pool's poolcall_flat_SB_vsBTN_oM_25_65 (sbflat v2: 36.54% of chances")
+      .map((x) => x.id).sort()).toEqual(["pool-flat-floor", "pool-sbflat-v2"]);
+    expect(departuresOf([], "POOL FLAT RANGE: the BB (40bb) defended … now the pool's poolcall_flat_BB_vsCO_40_80 (45.00% of chances").map((x) => x.id)).toEqual(["pool-flat-floor"]);
     expect(departureForCode("street:new-plan")).toBeNull();
     const d = departuresOf(["preflop:charts-cannot-hold"], "LINE FITTED TO THE TREE: … · POOL-LOCKED COLD-CALL: the BB (48bb) cold-called");
     expect(d.map((x) => x.id)).toEqual(["pool-coldcall-lock", "line-fit-borrow"]);

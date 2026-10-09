@@ -1239,7 +1239,8 @@ async function flopArrivalCompute(
       tmark("pool flat floor", note);
       recon = { ...recon, ranges: ff.ranges };
       sixNote = [sixNote, note].filter(Boolean).join(" · ");
-      const code = "arrival:pool-flat-floor";
+      // the SB's flat read on the v2 table carries its own code (register pool-sbflat-v2); the note names both entries
+      const code = ff.applied.some((r) => r.sbflat) ? "arrival:pool-flat-floor-sbv2" : "arrival:pool-flat-floor";
       if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code, why: note.slice(0, 300) };
     }
   }
