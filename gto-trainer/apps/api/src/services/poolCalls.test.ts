@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyLimpCallProduct, applyPoolCallRanges, handGroup, limpCallCalibration, limpCallCalibrationKey, limpCallProduct, limpKeyOf, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
+import { applyLimpCallProduct, applyPoolCallRanges, handGroup, stackBandsOf, limpCallCalibration, limpCallCalibrationKey, limpCallProduct, limpKeyOf, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
 import CALIBRATION from "./poolLimpCallCalibration.json";
 import { applyPoolLimpFloor, limpLockRange, poolLimpFloorNote } from "./poolLimpFloor";
 import { poolFloorsOf, poolRangeOf } from "../scripts/mutation/rangeOracle";
@@ -288,5 +288,32 @@ describe("the Ignition group calibration on top of the product (2026-10-09)", ()
     const f = poolFloorsOf(`x · ${note}`).get("UTG")!;
     expect(f.times).toEqual({ kind: "limp", key: "limp_first_deep", limpTable: "v3", cal: "limpcall_deep_l1" });
     expect(poolRangeOf(f)).toEqual(r.ranges.UTG);
+  });
+});
+
+describe("two stack vocabularies, one number (2026-10-09: pinned, nothing to repair)", () => {
+  test("each table's own convention at every edge: the call table lower-edge inclusive, the limp table and the calibration upper-edge inclusive", () => {
+    const at = (x: number) => { const b = stackBandsOf(x); return [b.call, b.limpCoarse, b.limpFine, b.calibration]; };
+    expect(at(25)).toEqual(["le40", "le60", "le25", "le60"]);
+    expect(at(39.9)).toEqual(["le40", "le60", "25_40", "le60"]);
+    expect(at(40)).toEqual(["40_80", "le60", "25_40", "le60"]);       // the call table's 40-80, the limp table's ≤40
+    expect(at(60)).toEqual(["40_80", "le60", "40_60", "le60"]);
+    expect(at(60.1)).toEqual(["40_80", "60_85", "60_85", "60_85"]);
+    expect(at(80)).toEqual(["80p", "60_85", "60_85", "60_85"]);       // the call table's 80+, the limp table's 60-85
+    expect(at(85)).toEqual(["80p", "60_85", "60_85", "60_85"]);
+    expect(at(85.5)).toEqual(["80p", "deep", "deep", "deep"]);
+    expect(at(NaN)).toEqual([null, null, null, null]);
+    // the shipped call table's own edges agree with the builder's constants (`stk < 40`, `stk < 80`)
+    for (const x of [1, 39.99, 40, 79.99, 80, 300]) expect(stackBandsOf(x).call).toBe(stackBandsOf(x, { ranges: {} }).call);
+  });
+  test("a limp-caller's product is keyed by the ONE stack-as-dealt number on both halves (a 40bb UTG: limp ≤60, call 40-80, calibration le60)", () => {
+    setPoolCallTable({ ...TABLE, ranges: { ...TABLE.ranges, poolcall_limpcall_ALL_l1_40_80: range("limpcall", "ALL", "l1", "40_80", 0.66, W({ AA: 1, "22": 1 })), poolcall_limpcall_ALL_l1_le40: range("limpcall", "ALL", "l1", "le40", 0.8, W({ "72o": 1 })) } });
+    const one = [...BLINDS, pre(1, "call", 1), pre(2, "fold"), pre(3, "raise", 5, true), pre(4, "fold"), pre(5, "fold"), pre(6, "fold"), pre(1, "call", 5)];
+    const r = applyPoolCallRanges({ hand: hand(one, 3), heroPos: "CO", ranges: { UTG: { AA: 1 }, CO: { AA: 1 } }, dealt: dealt({ 1: 40 }) });
+    const u = r.applied.find((x) => x.pos === "UTG")!;
+    expect([u.stack, u.key, u.times?.key, u.times?.cal ?? null]).toEqual([40, "poolcall_limpcall_ALL_l1_40_80", "limp_first_short_le60", null]);
+    expect(limpCallCalibrationKey("limpcall", 40, 1)).toBeNull();      // le60_l1: not an active cell
+    const r39 = applyPoolCallRanges({ hand: hand(one, 3), heroPos: "CO", ranges: { UTG: { AA: 1 }, CO: { AA: 1 } }, dealt: dealt({ 1: 39 }) });
+    expect(r39.applied.find((x) => x.pos === "UTG")!.key).toBe("poolcall_limpcall_ALL_l1_le40");
   });
 });

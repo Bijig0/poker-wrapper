@@ -46,7 +46,7 @@
 import LOCKS from "./poolCallLocks.json";
 import CAL from "./poolLimpCallCalibration.json";
 import { dealtByPos, SEATS6, type Seat6 } from "./hrc6max";
-import { limpLockRange, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
+import { limpCoarseBand, limpFineBand, limpLockRange, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
 import { handGroup } from "./poolTrigger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -168,7 +168,36 @@ function openQual(openTo: number): string | null {
   for (const [k, [lo, hi]] of Object.entries(table.open_edges)) if ((lo == null || openTo >= lo) && (hi == null || openTo < hi)) return k;
   return null;
 }
-const stackBucket = (stack: number): string | null => (!(stack > 0) ? null : stack < 40 ? "le40" : stack < 80 ? "40_80" : "80p");
+/**
+ * TWO STACK VOCABULARIES, ONE NUMBER (2026-10-09, the methodology review: "the limp and call tables use different stack
+ * vocabularies and are now multiplied" in limpCallProduct). Checked, and nothing is wrong in the code — this is the note
+ * and stackBandsOf / its test pin it:
+ *   - the CALL table (poolcalls_measure.bucket): le40 / 40_80 / 80p, LOWER edge inclusive — `stk < 40`, `stk < 80`
+ *     (the JSON's stack_edges [0,40] [40,80] [80,∞) read half-open, which is how the builder cut them);
+ *   - the LIMP table (build_limp_locks_v3.band; locks_v2): le25 / 25_40 / 40_60 / 60_85 / deep, UPPER edge inclusive —
+ *     `s <= 25`, `s <= 40`, `s <= 60`, `s <= 85` (poolLimpFloor.limpFineBand / limpCoarseBand);
+ *   - the limp-call CALIBRATION (build_limpcall_calibration.py): the limp table's le60 / 60_85 / deep.
+ * Each lookup applies its own table's convention, so every key names the cell its stack was measured in. What must
+ * hold is that the PRODUCT's two halves are keyed by the SAME number — the caller's stack AS DEALT (hrc6max.dealtByPos,
+ * the `dealt` the arrival was computed with): applyPoolCallRanges and applyLimpCallProduct read it once per caller and
+ * hand it to poolCallKey, limpKeyOf and limpCallCalibrationKey alike (the limp floor's cell, which applyLimpCallProduct
+ * multiplies, was keyed off the same dealtByPos by applyPoolLimpFloor). At an edge the two tables may disagree about
+ * the neighbourhood — a 40.0bb limp-caller is the limp table's 25-40 / ≤60 and the call table's 40-80; an 80bb one the
+ * limp table's 60-85 and the call table's 80+ — which is each table's own measurement, not a mismatch to repair here
+ * (re-cutting a band is the factory's: both builders would have to move together).
+ */
+export function stackBandsOf(stack: number, t: PoolCallTable = table): { call: string | null; limpCoarse: string | null; limpFine: string | null; calibration: string | null } {
+  if (!(stack > 0)) return { call: null, limpCoarse: null, limpFine: null, calibration: null };
+  // the call table's own edges when it carries them ([lo, hi) as built), else the builder's constants
+  let call: string | null = null;
+  const edges = t.stack_edges;
+  if (edges && Object.keys(edges).length) {
+    for (const [k, [lo, hi]] of Object.entries(edges)) if ((lo == null || stack >= lo) && (hi == null || stack < hi)) { call = k; break; }
+  }
+  call ??= stack < 40 ? "le40" : stack < 80 ? "40_80" : "80p";
+  return { call, limpCoarse: limpCoarseBand(stack) ?? "deep", limpFine: limpFineBand(stack) ?? "deep", calibration: stack <= 60 ? "le60" : stack <= 85 ? "60_85" : "deep" };
+}
+const stackBucket = (stack: number): string | null => stackBandsOf(stack).call;
 
 export interface PoolCallKey { table: "call" | "limp"; key: string }
 
@@ -228,8 +257,8 @@ export function limpCallCalibration(key: string): Record<string, number> | null 
 }
 /** the calibration cell for a limp-caller: line × his stack band (the limp table's) × limpers in the pot — when active */
 export function limpCallCalibrationKey(line: "limpcall" | "sbiso", stack: number, limpersInPot: number): string | null {
-  if (!(stack > 0)) return null;
-  const band = stack <= 60 ? "le60" : stack <= 85 ? "60_85" : "deep";
+  const band = stackBandsOf(stack).calibration;
+  if (!band) return null;
   const key = `${line}_${band}_${limpersInPot >= 2 ? "l2p" : "l1"}`;
   return limpCallCalibration(key) ? key : null;
 }
