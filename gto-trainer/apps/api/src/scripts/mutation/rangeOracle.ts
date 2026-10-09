@@ -35,6 +35,7 @@ import POOL_CALL_LOCKS from "../../services/poolCallLocks.json";
 import { COLD_CALL_FLOOR_COMBOS } from "../../services/poolColdCall";
 import { limpLockRange } from "../../services/poolLimpFloor";
 import { limpCallProduct, poolCallRange } from "../../services/poolCalls";
+import { sbFlatRange } from "../../services/poolSbFlat";
 
 export interface OracleFinding { kind: string; reason: string }
 export interface OracleStats { explained: number; compared: number; refUnwalkable: number }
@@ -91,6 +92,9 @@ export interface PoolFloor {
    *  (a limp-table key) or the floor's "× his limp-call rate <key>" (a call-table key); under v4 the call side is the
    *  Ignition limp-call GROUP rates the note names ("applied as Ignition limp-call group rates <key>"), not the call cell */
   times?: { kind: "limp" | "call"; key: string; limpTable?: "v2" | "v3" | "v4"; cal?: string; group?: string };
+  /** the SB's flat read on the SB-flat table v2 (services/poolSbFlat, 2026-10-10): the note's "(sbflat v2: " / "(sbflat
+   *  v2 own: " after the key — the range is that table's cell (own: × own_nl200_factor, re-water-filled) */
+  sbflat?: { own: boolean };
 }
 export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   const out = new Map<string, PoolFloor>();
@@ -100,7 +104,7 @@ export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   heads.forEach((h, i) => {
     const body = note.slice(h.index! + h[0].length, i + 1 < heads.length ? heads[i + 1]!.index : undefined);
     // the pool-call overlay (services/poolCalls, 2026-10-07) names what the seat did in words; the shape is the floors'
-    const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \((v[34]: )?/g;
+    const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \((v[34]: |sbflat v2(?: own)?: )?/g;
     const ms = [...body.matchAll(re)];
     ms.forEach((e, j) => {
       const kind = h[1] === "LIMP" ? "limp" : h[1] === "CALL" || h[1] === "FLAT" ? "call" : "coldcall";
@@ -113,13 +117,16 @@ export function poolFloorsOf(note: string): Map<string, PoolFloor> {
       const tag = (x: string | undefined): "v2" | "v3" | "v4" => (x ? x.slice(0, 2) as "v3" | "v4" : "v2");
       const extra = { ...(cal ? { cal } : {}), ...(group ? { group } : {}) };
       const times = tl ? { kind: "limp" as const, key: tl[1]!, limpTable: tag(tl[2]), ...extra } : tc ? { kind: "call" as const, key: tc[1]!, ...extra } : undefined;
-      out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: tag(e[4]) } : {}), ...(times ? { times } : {}) });
+      const sbflat = e[4]?.startsWith("sbflat v2") ? { own: e[4].startsWith("sbflat v2 own") } : undefined;
+      out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: tag(e[4]) } : {}), ...(times ? { times } : {}), ...(sbflat ? { sbflat } : {}) });
     });
   });
   return out;
 }
 /** the pool's range for a floor's key, as class weights (null: the key is not in the pool's table) */
 export function poolRangeOf(f: PoolFloor): Record<string, number> | null {
+  // the SB-flat table v2's cell (the own factor as the note says, not as the environment says now)
+  if (f.sbflat) return sbFlatRange(f.key, { own: f.sbflat.own })?.weights ?? null;
   // the call table as the overlay reads it (services/poolCalls — a test's injected table included), not the shipped JSON
   const callTable = { has: (k: string) => poolCallRange({ table: "call", key: k }) != null, get: (k: string) => poolCallRange({ table: "call", key: k })?.weights ?? null };
   const base = (() => {
