@@ -10,11 +10,13 @@ import { COMBOS } from "../utils/comboIndex/comboIndex";
 let P: typeof import("./gtowAiPreflop");
 let F: typeof import("./poolLimpFloor");
 let Pin: typeof import("./preflopPin");
+let Calls: typeof import("./poolCalls");
 let seams0: any;
 beforeAll(async () => {
   P = await import("./gtowAiPreflop");
   F = await import("./poolLimpFloor");
   Pin = await import("./preflopPin");
+  Calls = await import("./poolCalls");
   seams0 = { ...P.poolLockSeams };
 });
 afterEach(() => {
@@ -177,6 +179,8 @@ describe("solvePreflopPoolLocked over its seams", () => {
             : node("HJ", [{ code: "F", p: 0.7705 - (opts.plainLimp ?? 0.0005) }, { code: "C", p: opts.plainLimp ?? 0.0005 }, { code: "R2.5", p: 0.2295 }]))
           : node("HJ", [{ code: "F", p: w.map((x) => (1 - x) * 0.77) }, { code: "C", p: opts.lockHolds === false ? arr(0.0005) : w }, { code: "R2.5", p: w.map((x) => (1 - x) * 0.23) }]);
         if (line === "F-C-F-F-F") return node("BB", [{ code: "X", p: solId === "L" ? 0.55 : 0.92 }, { code: "R4", p: solId === "L" ? 0.45 : 0.08 }]);
+        // the HJ's reply to hero's 4bb iso on the plain tree (the whole-line lock reads it)
+        if (line === "F-C-F-F-F-R4" && solId === "P") return node("HJ", [{ code: "F", p: 0.3 }, { code: "C", p: 0.5 }, { code: "R12", p: 0.2 }]);
         return { error: `NODE_DOES_NOT_EXIST ${line}` };
       },
     });
@@ -255,6 +259,36 @@ describe("solvePreflopPoolLocked over its seams", () => {
       expect(calls.locks).toHaveLength(1);
       expect(r.ok).toBe(true);
     } finally { delete process.env.POOL_LIMP_TRIGGER; }
+  });
+
+  it("HERO_ISO_RESPONSE_LOCK=on: the HJ's reply to hero's iso locked in the SAME POST at the pool's limp-call group rates; off (the default): the limp alone", async () => {
+    const off = rig();
+    await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(off.locks[0]).toHaveLength(1);
+    process.env.HERO_ISO_RESPONSE_LOCK = "on";
+    try {
+      const on = rig();
+      const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+      expect(r.ok).toBe(true);
+      expect(on.locks).toHaveLength(1);                          // one POST
+      expect(on.locks[0]!.map((l: any) => l.action_history)).toEqual([["F"], ["F-C-F-F-F-R4"]]);
+      const reply = on.locks[0]![1];
+      const by = Object.fromEntries(reply.strategy.map((x: any) => [x.action, x.strategy]));
+      const g = Calls.limpCallGroupRates("limpcall_le60_l1")!;   // the 39bb HJ, one limper, LIMP_LOCKS=v4 (the default)
+      const aa = COMBOS.findIndex((c) => c.cls === "AA"), q72 = COMBOS.findIndex((c) => c.cls === "72o");
+      expect(by.C![aa]).toBeCloseTo(g.prem!, 9);
+      expect(by.C![q72]).toBeCloseTo(g["o-junk"]!, 9);
+      expect(by.F![aa] + by.C![aa] + by.R12![aa]).toBeCloseTo(1, 9);
+      expect(by.F![aa] / by.R12![aa]).toBeCloseTo(0.3 / 0.2, 6);  // the rest in the solver's proportions
+      expect(r.ok && r.note).toContain("his reply to hero's iso ('F-C-F-F-F-R4') LOCKED in the same POST to the pool's limp-call rates by hand group (Ignition limp-call group rates limpcall_le60_l1)");
+      // no reply node on the tree: the limp alone, said in the note
+      const none = rig();
+      const orig = P.poolLockSeams.node;
+      P.poolLockSeams.node = async (solId: string, line: string) => (line === "F-C-F-F-F-R4" ? { error: "NODE_DOES_NOT_EXIST" } : orig(solId, line));
+      const r2 = await P.solvePreflopPoolLocked(h(), "BB", target);
+      expect(none.locks[0]).toHaveLength(1);
+      expect(r2.ok && r2.note).toContain("his reply to hero's iso NOT locked (no reply node with a call on the tree)");
+    } finally { delete process.env.HERO_ISO_RESPONSE_LOCK; }
   });
 
   it("a lock that did not hold is no answer (the decision goes on as before)", async () => {
