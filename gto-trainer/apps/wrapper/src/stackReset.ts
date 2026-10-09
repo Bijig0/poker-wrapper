@@ -41,6 +41,11 @@
  * towards STACK_RESET_TICKS. The armed state ends in an abort only on what the table did: hero posting the big blind
  * after the arming STACK_RESET_TICKS times (whatever was or was not pressed in between). /state `stackReset` carries
  * the machine (stackResetBrief).
+ *
+ * THE PANEL SAYS IT (2026-10-09, Brady): the feed line scrolled away, so /state `stackReset.banner` (stackResetBanner)
+ * words the step for the table's panel — "Max deep stack (150 bb) reached at 180 bb — reseating: sitting out at the
+ * next big blind" … "a fresh seat in 42 s" … "Reseated at a fresh table (105 s)" — and GET /tables carries its phase
+ * for the leader's grid (session.ts tableCard).
  */
 import { nowMs, sleep, time } from "./clock";
 import { C } from "./config";
@@ -149,7 +154,7 @@ export async function maybeStackReset(): Promise<void> {
       const st = heroStackBb();
       if (st === null || st < R.bb) return;
       Object.assign(R, { armedHand: S.handNo, stackBb: st, ticks: 0, clicked: false, needTick: true, lastTick: null, bbHands: [],
-                         misses: 0, retryAt: 0.0, lastMissWhy: null });
+                         misses: 0, retryAt: 0.0, lastMissWhy: null, outcome: null });
       setState("armed");
       feedAdd(`DEEP STACK: ${st} bb ≥ ${R.bb} bb — sitting out at the next big blind, then a fresh table of this format`);
       log(`[stack-reset] armed at ${st} bb (hand ${S.handNo})`);
@@ -173,6 +178,7 @@ export async function maybeStackReset(): Promise<void> {
         setState("idle");
         Object.assign(R, { armedHand: 0, stackBb: null, ticks: 0, clicked: false, needTick: false, bbHands: [], oldRid: null, oldTag: null,
                            misses: 0, retryAt: 0.0, lastMissWhy: null });
+        R.outcome = { kind: "done", at: now, hand: S.handNo, why: null, phase: "reseating", waitedS: waited, sitBack: null };
         feedAdd(`Deep stack: seated at a fresh table (${waited} s after leaving the old one)`);
         log(`[stack-reset] done: frame ${pyStr(tag)}, socket ${pyStr(rid)} (${waited} s after the leave)`);
         event("stack-reset-done", { waitedS: waited, tag, rid });
@@ -181,7 +187,7 @@ export async function maybeStackReset(): Promise<void> {
       if (now - R.notBefore > STACK_RESET_RESEAT_S) {
         setState("idle");
         const why = `no new table seated, pinned and bound within ${STACK_RESET_RESEAT_S} s of the wait`;
-        countAbort(why);
+        countAbort(why, "reseating");
         feedAdd("Deep stack: no new table came up for this slot — check the lobby and the leader's panel");
         log(`[stack-reset] gave up waiting for the new table (${STACK_RESET_RESEAT_S} s after the wait)`);
         event("stack-reset-aborted", { why, phase: "reseating" });
@@ -315,7 +321,7 @@ async function abort(why: string): Promise<void> {
   const phase = R.state;
   setState("idle");
   R.needTick = false;
-  countAbort(why);
+  countAbort(why, phase);
   let back: Record<string, any> | null = null;
   if (S.liveStatus.hero === "sitting-out" && !S.disconnect) {
     try {
@@ -324,6 +330,7 @@ async function abort(why: string): Promise<void> {
       back = { ok: false, why: String(e?.message ?? e) };
     }
   }
+  if (R.outcome && back) R.outcome.sitBack = !!back.ok;
   feedAdd(`Deep stack reset given up (${why})` + (back ? (back.ok ? " — pressed I AM BACK" : ` — could NOT press I AM BACK (${pyStr(back.why ?? null)}): press it yourself`) : ""));
   log(`[stack-reset] aborted in ${phase}: ${why}; I AM BACK ${pyRepr(back)}`);
   event("stack-reset-aborted", { why, phase, sitBack: back ? { ok: !!back.ok, why: back.why ?? null } : null });
@@ -335,12 +342,15 @@ async function abort(why: string): Promise<void> {
   }
 }
 
-/** One more abort on the session's count; the reset re-arms no sooner than STACK_RESET_RETRY_HANDS hands from now. */
-function countAbort(why: string): void {
+/** One more abort on the session's count; the reset re-arms no sooner than STACK_RESET_RETRY_HANDS hands from now.
+ *  The panel's banner says so (`outcome`) until the next hand. */
+function countAbort(why: string, phase: StackResetState): void {
   const R = S.stackReset;
   R.aborts += 1;
   R.abortedAt = S.handNo;
   R.lastAbortWhy = why;
+  R.outcome = { kind: R.aborts >= STACK_RESET_MAX_ABORTS ? "off" : "aborted", at: time(), hand: S.handNo, why, phase,
+                waitedS: null, sitBack: null };
 }
 
 /** The abort that reached STACK_RESET_MAX_ABORTS: said once — feed, log, event stack-reset-off. */
@@ -367,7 +377,86 @@ export function stackResetBrief(): Record<string, any> {
     aborts: R.aborts, maxAborts: STACK_RESET_MAX_ABORTS, lastAbortWhy: R.lastAbortWhy,
     abortedHand: R.abortedAt, off: R.aborts >= STACK_RESET_MAX_ABORTS,
     notBefore: R.state === "waiting" || R.state === "reseating" ? R.notBefore : null,
+    banner: stackResetBanner(),
   };
+}
+
+/** How long the panel keeps "Reseated at a fresh table" after the reset is done. */
+export const STACK_RESET_DONE_NOTE_S = 20;
+/** The least time an abort's (or the off's) banner stays, even when the next hand starts sooner. */
+export const STACK_RESET_ABORT_NOTE_S = 20;
+
+/** What the panel's banner says: `phase`, the step; `level`, its colour; `text`, the line; `detail`, the small line
+ *  under it (null = none); `short`, the few words the leader's table grid shows for this table (GET /tables). */
+export type StackResetBanner = {
+  phase: StackResetState | "done" | "aborted" | "off";
+  level: "reset" | "ok" | "bad";
+  text: string;
+  detail: string | null;
+  short: string;
+};
+
+const bbStr = (v: number | null | undefined): string => (v === null || v === undefined || !Number.isFinite(v) ? "?" : String(pyRound(v, 1)));
+
+/**
+ * THE TABLE'S BANNER (Brady, 2026-10-09): from the moment the reset arms until it is done or given up, the panel says,
+ * prominently, that the max deep stack was reached and which step the reset is in — the feed line alone scrolled away.
+ * The threshold and the stack are the session's and the machine's (never a constant). Null when there is nothing to
+ * say: the reset off for the session, or idle with no recent outcome. `done` holds STACK_RESET_DONE_NOTE_S; `aborted` /
+ * `off` hold until the next hand, and at least STACK_RESET_ABORT_NOTE_S.
+ */
+export function stackResetBanner(): StackResetBanner | null {
+  const R = S.stackReset;
+  if (!R.bb) return null;
+  const now = time();
+  switch (R.state) {
+    case "armed": {
+      const detail = R.ticks > 0
+        ? `"Sit out next big blind" pressed (${R.ticks}/${STACK_RESET_TICKS}) — waiting for the big blind to pass`
+          + (R.bbHands.length ? `; the big blind was posted ${R.bbHands.length} time(s) since the arming` : "")
+        : R.misses
+          ? `"Sit out next big blind" not pressed yet (${R.lastMissWhy ?? "no box read"}) — trying again every ${STACK_RESET_MISS_S} s`
+          : `ticking "Sit out next big blind" once you are off the clock`;
+      return { phase: "armed", level: "reset",
+               text: `Max deep stack (${bbStr(R.bb)} bb) reached at ${bbStr(R.stackBb)} bb — reseating: sitting out at the next big blind`,
+               detail, short: "max deep stack — sitting out at the next BB" };
+    }
+    case "sat-out":
+    case "leaving":
+      return { phase: R.state, level: "reset", text: "Max deep stack reached — sat out, leaving the table",
+               detail: R.state === "sat-out" ? "telling the leader, then leaving — do not press I AM BACK"
+                                             : "leaving the table (the client's close, then YES) — do not press I AM BACK",
+               short: "max deep stack — leaving the table" };
+    case "waiting": {
+      const left = Math.max(0, Math.ceil(R.notBefore - now));
+      return { phase: "waiting", level: "reset", text: `Max deep stack reached — left the table, a fresh seat in ${left} s`,
+               detail: "then a fresh table of this session's format at the normal buy-in, in this slot",
+               short: `max deep stack — new seat in ${left} s` };
+    }
+    case "reseating": {
+      const over = Math.max(0, Math.round(now - R.notBefore));
+      return { phase: "reseating", level: "reset", text: "Max deep stack reached — waiting for the new table to seat",
+               detail: `${over} s since the wait ended (given up after ${STACK_RESET_RESEAT_S} s)`, short: "max deep stack — reseating" };
+    }
+    default:
+      break;
+  }
+  const o = R.outcome;
+  if (!o) return null;
+  if (o.kind === "done") {
+    if (now - o.at >= STACK_RESET_DONE_NOTE_S) return null;
+    const w = o.waitedS === null ? "" : ` (${Math.round(o.waitedS)} s)`;
+    return { phase: "done", level: "ok", text: `Reseated at a fresh table${w}`, detail: null, short: `reseated at a fresh table${w}` };
+  }
+  if (S.handNo !== o.hand && now - o.at >= STACK_RESET_ABORT_NOTE_S) return null;
+  const back = o.sitBack === true ? " — pressed I AM BACK" : o.sitBack === false ? " — could NOT press I AM BACK: press it yourself" : "";
+  if (o.kind === "off") {
+    return { phase: "off", level: "bad", text: `Deep stack reset OFF for the rest of this session (${R.aborts} aborts)${back}`,
+             detail: `the last: ${o.why ?? "?"} — deep hands play under the API's 250 bb cap`, short: "deep-stack reset off for the session" };
+  }
+  return { phase: "aborted", level: "bad", text: `Deep stack reset given up${back}`,
+           detail: `${o.why ?? "?"} (while ${o.phase ?? "?"}) — not tried again for ${STACK_RESET_RETRY_HANDS} hands`,
+           short: "deep-stack reset given up" };
 }
 
 /** POST /table/peer-leaving — a sibling table is about to leave its table on purpose: its socket closing is not ours to
