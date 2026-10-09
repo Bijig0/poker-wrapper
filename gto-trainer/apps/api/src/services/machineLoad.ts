@@ -1,5 +1,5 @@
 import os from "node:os";
-import { asActivity, lastLoggedStall, loggedStallsSince, type StallRecord } from "./answerTrace";
+import { asActivity, lastLoggedStall, loggedStallsSince, setStallSummaryExtra, type StallRecord } from "./answerTrace";
 import { refreshSessionLive, sessionLiveCached } from "./sessionLive";
 
 /**
@@ -279,6 +279,16 @@ export class MachineSampler {
 }
 
 export const machineSampler = new MachineSampler();
+
+// The [stall-summary] line carries the machine beside the freezes (2026-10-09): on that day two sessions with the same
+// API code were 2-3% blocked and two others 20%, 92% of it at low CPU (waiting) — the difference was outside the
+// process, and nothing on disk said what the machine was doing. Memory only: the sampler's last samples.
+setStallSummaryExtra(() => {
+  const { cpu, heavy } = machineSampler.state();
+  const pcts = cpu.map((c) => c.pct);
+  const cpuTxt = pcts.length ? `machine cpu ${Math.round(Math.max(...pcts))}% (last samples)` : "machine cpu not sampled";
+  return `${cpuTxt}${heavy.length ? `, heavy: ${heavy.slice(0, 4).map((p) => `${p.name} ${p.pid} ${Math.round(p.cpuPct)}%`).join(", ")}` : ""} · session ${sessionLiveCached().live ? "live" : "not live"}`;
+});
 
 /** GET /api/load's body — memory only (the stall monitor's kept stalls, the sampler's last sample, the cached session). */
 export function loadReport(now = Date.now(), sampler: MachineSampler = machineSampler): LoadReport {

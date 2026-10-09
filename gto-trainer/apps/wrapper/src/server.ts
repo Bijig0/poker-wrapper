@@ -180,6 +180,7 @@ export function buildApp(): Hono {
   app.get("/session", async () => json(200, {
     ok: true, current: S.session.rec, brief: await SESSION.sessionBrief(),
     presets: await SES.presets(!SES.presetsFromApi()), presetsFromApi: SES.presetsFromApi(), catalogueError: SES.presetsError(),
+    catalogueBuilding: SES.presetsBuilding(),
     fakeTable: S.fakeMode,
     lastPreset: (S.sessions.list(1)[0] || {}).preset ?? null,
   }));

@@ -2,7 +2,8 @@ import { pressedAnswerPath } from "../services/chainChecks";
 import { replayChecks, replayText } from "../services/replayCheck";
 import { launchReplay } from "../services/replayScheduler";
 import { offTreeLog } from "../services/offTreeLog";
-import { yieldFirst, yieldToLive } from "../services/livePriority";
+import { cachedBehindLive, yieldFirst, yieldToLive } from "../services/livePriority";
+import { step } from "../services/answerTrace";
 import { loadReport } from "../services/machineLoad";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
@@ -3060,10 +3061,13 @@ async function gtowStatus() {
     sessions,
     /** requests sent to api.gtowizard.com in the trailing 24 h / since 00:00 UTC, per account and kind, against
      *  the cap the 429 body states (services/gtowRequestLog.ts — every process writes the same ledger) */
-    requests: gtowApi.requestStats(),
+    requests: step("ledger stats", () => gtowApi.requestStats()),
   };
 }
-app.get("/gtow-status", async (c) => c.json(await gtowStatus()));
+// Served from a 5 s cache shared by every poller (the dashboard every 20 s, the wrapper's checks), rebuilt OFF the request
+// path behind the live answers (2026-10-09): its ledger stats are five 24 h GROUP BYs on the event loop and it was open
+// across [stall]s of the live session of 2026-10-09. `probeMs` is the build's, not the request's.
+app.get("/gtow-status", async (c) => c.json(await cachedBehindLive("gtow-status", 5_000, gtowStatus)));
 /**
  * GET /gtow-token — the light token check (2026-10-03): is a GTO Wizard token in hand, and a multiway one. The
  * wrapper's chain keeper asks this every 20 s per table; it used to ask /sources/registry, which builds the whole

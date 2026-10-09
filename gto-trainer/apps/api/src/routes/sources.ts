@@ -1,5 +1,5 @@
 import { solveRegister } from "../services/solveRegister";
-import { cachedBehindLive, yieldFirst } from "../services/livePriority";
+import { cachedBehindLive, keepWarm, peekCached, warmBehindLive, yieldFirst } from "../services/livePriority";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -27,6 +27,7 @@ import {
   HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, type Enriched,
 } from "./dashboard";
 import { port } from "../services/ports";
+import { step } from "../services/answerTrace";
 
 /**
  * Sources — the study dashboard's mission control.
@@ -269,7 +270,14 @@ const SOURCE_KEYS: Record<string, string[]> = {
   log: [],
 };
 
-app.get("/registry", async (c) => {
+/**
+ * The registry body (2026-10-09: was the route handler). It builds the whole mission-control page — 30 days of the
+ * answer log, the hands count, a dozen file reads, three network probes — 0.1-3 s of the event loop a call, 12-79 s on a
+ * busy machine; the dashboard polls it every 15 s and the wrapper's preflight asks once per start. Served from
+ * REGISTRY_TTL_MS through cachedBehindLive (stale served at once, rebuilt behind the live answers), warmed at boot and
+ * kept warm while someone reads it (warmSourcesCaches).
+ */
+async function registryBody() {
   const log = answerLog.bySource(30);
   const tally = (src: string) => log.sources[src] ?? { n: 0, p50: null, lastTs: null, byDay: new Array(30).fill(0) };
 
@@ -683,7 +691,7 @@ app.get("/registry", async (c) => {
   for (const card of cards) Object.assign(card, PIECE_OF[card.id] ?? { piece: undefined, role: null });
   attributeCards(cards, { mes, exploit });
 
-  return c.json({
+  return {
     ok: true,
     pieces: PIECES,
     at: Date.now(),
@@ -750,8 +758,10 @@ app.get("/registry", async (c) => {
     tiers: log.tiers,
     cards,
     mes,
-  });
-});
+  };
+}
+const REGISTRY_TTL_MS = 20_000;
+app.get("/registry", async (c) => c.json(await cachedBehindLive("sources/registry", REGISTRY_TTL_MS, registryBody)));
 
 // ------------------------------------------------------------- strategies
 // The wrapper's panel and setup page re-read this every few seconds per open table; recomputing it scans every hand and
@@ -759,18 +769,42 @@ app.get("/registry", async (c) => {
 // 91 s — when the API ran at BelowNormal priority), all on the answering thread. Served from a 5-minute cache that
 // refreshes behind the live answers (services/livePriority); the realized bb/100 it carries can lag by that much.
 const STRATEGIES_TTL_MS = 5 * 60_000;
-app.get("/strategies", async (c) => c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody)));
+// NEVER BUILT ON A CALLER'S TIME (2026-10-09). The first call after a worker boot built the catalogue inside the request
+// (7 s and 24 s on 2026-10-09, and that build was itself one of the freezes) and the setup page's 5 s poll timed out
+// until it landed — "strategy catalogue unreachable" for ~20 s at every session start. Now: warmed at boot and kept warm
+// behind the live answers (warmSourcesCaches, refresh-ahead while someone reads it), a stale copy is always served at
+// once, and while the very first build is still running a caller gets `building: true` at once (the wrapper says
+// "building the strategy catalogue…", not "unreachable"). `?wait=1` waits for the first build instead.
+export const STRATEGIES_BUILDING_ERROR = "the study API is up and building the strategy catalogue (first build after a restart)";
+app.get("/strategies", async (c) => {
+  const hit = peekCached<unknown>("sources/strategies");
+  if (hit || c.req.query("wait") === "1") return c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody));
+  void warmBehindLive("sources/strategies", strategiesBody);
+  return c.json({ ok: false, building: true, error: STRATEGIES_BUILDING_ERROR });
+});
+
+/** Boot: build the strategy catalogue and the registry behind the live answers, right after the port opens, and keep
+ *  them warm (refresh-ahead) while anyone reads them. index.ts calls this once. */
+export function warmSourcesCaches(): void {
+  setTimeout(() => {
+    void warmBehindLive("sources/strategies", strategiesBody).then(() => warmBehindLive("sources/registry", registryBody));
+  }, 2_000);
+  keepWarm("sources/strategies", STRATEGIES_TTL_MS, strategiesBody, { leadMs: 60_000, demandMs: 15 * 60_000 });
+  keepWarm("sources/registry", REGISTRY_TTL_MS, registryBody, { leadMs: 5_000, demandMs: 2 * 60_000 });
+}
 
 /** The whole-hand strategy catalogue: what we can play, whether each is
  *  coherent (safeguards in services/strategies.ts), its winrate row from the
  *  matrix, and hero's realized bb/100 while it was the active mode. */
-function strategiesBody() {
-  const views = evaluateStrategies();
-  const matrix = readJson(factoryFile("strategy_matrix.json"));
+export function strategiesBody() {
+  // each part is step()-timed (services/answerTrace): a [stall] across a build names the slow part
+  // (cold cost measured 2026-10-09: see the commit that added these)
+  const views = step("evaluate strategies", () => evaluateStrategies());
+  const matrix = step("strategy matrix", () => readJson(factoryFile("strategy_matrix.json")));
   const rowById: Record<string, any> = {};
   for (const g of matrix?.groups ?? []) for (const row of g.rows ?? []) rowById[row.id] = { ...row, group: g.title };
   // realized: answers tagged with the mode that was live, joined to hand nets
-  const rows = answerLog.rows(365);
+  const rows = step("answer log 365 d", () => answerLog.rows(365));
   const seen = new Map<string, string>();      // clientHandId -> strategy id
   for (const a of rows) {
     const sid = strategyIdForAnswer(a as any);
@@ -781,10 +815,10 @@ function strategiesBody() {
   const realized: Record<string, { hands: number; netBb: number }> = {};
   // reuse the dashboard's own enrichment + net accounting (same numbers the
   // Analytics tab shows) rather than a second, divergent query
-  const enriched = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
-  const nets = computeNets(enriched);
+  const enriched = step("all hands enriched", () => allRows().map(enrichSync).filter((x): x is Enriched => x != null));
+  const nets = step("hand nets", () => computeNets(enriched));
   const declared = new Map<string, string>();
-  for (const sess of sessionsStore.list(500)) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
+  for (const sess of step("sessions list", () => sessionsStore.list(500))) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
   for (const e of enriched) {
     const sessId = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
     const sid = (sessId && declared.get(sessId)) || (e.clientHandId ? seen.get(e.clientHandId) : null);
@@ -795,7 +829,7 @@ function strategiesBody() {
   }
   // how each strategy answers every spot (services/strategyCoverage.ts), with the register's live counts joined:
   // per row, the fires of the approximations it leans on; per strategy, its HOLES = the register filtered to its sources
-  const approx = Object.keys(STRATEGY_COVERAGE).length ? approximationRows(30) : [];
+  const approx = Object.keys(STRATEGY_COVERAGE).length ? step("approximation rows 30 d", () => approximationRows(30)) : [];
   const brief = (r: (typeof approx)[number]) => ({ id: r.id, title: r.title, what: r.what, fix: r.fix, status: r.status,
     cost: r.cost ?? null, fires: r.fires, measured: r.measured, openRows: r.miss?.rows ?? 0 });
   const coverageOf = (id: string) => {

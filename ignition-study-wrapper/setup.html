@@ -302,7 +302,9 @@ function renderPresets() {
     (SITE === "coinpoker" && !strategies.length ? `<div class="presets-h">No CoinPoker strategy is on offer right now (is the study API up?) — play without answers; every hand is still archived and graded</div>` : "") +
     (SITE === "clubgg" ? `<div class="presets-h">ClubGG is the reader only for now — play without answers; the reader follows every hand off the screen</div>` : "") +
     (strategies.length ? `<div class="presets-h">Play with answers — a whole-hand strategy, the same definitions as the dashboard's Sources → Strategies and the Playthrough picker</div>` + strategies.map(card).join("") : "") +
-    (down ? `<div class="card" style="grid-column:1/-1;border-color:#ff8a80;background:#1c1214"><b style="color:#ff8a80">No strategy can be declared: the strategy catalogue is unreachable.</b>
+    (down && CATALOGUE_BUILDING ? `<div class="card" style="grid-column:1/-1"><b>Building the strategy catalogue…</b>
+        <div class="sub" style="margin-top:4px">The study API is up and building it (its first build after a restart, usually under half a minute). This page re-checks every 5 s and offers the strategies the moment it is ready.</div></div>` : "") +
+    (down && !CATALOGUE_BUILDING ? `<div class="card" style="grid-column:1/-1;border-color:#ff8a80;background:#1c1214"><b style="color:#ff8a80">No strategy can be declared: the strategy catalogue is unreachable.</b>
         <div class="sub" style="margin-top:4px">${esc(CATALOGUE_ERROR || "the study API did not answer")}. The strategies live in the study API; there is no stand-in. Start it (dev-api.cmd / the gto-api launch config) — this page re-checks every 5 s and offers the strategies the moment it is back.</div></div>` : "") +
     `<div class="presets-h">Without answers · rigs</div>` + own.map(card).join("");
   $("presets").querySelectorAll(".preset:not([disabled])").forEach((b) => b.onclick = () => choose(b.dataset.id));
@@ -399,14 +401,16 @@ function renderCggTables() {
 }
 
 // ---- step 2: the table — format, buy-in, profile, window state ----------
-let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null, CATALOGUE_ERROR = null;
+let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null, CATALOGUE_ERROR = null, CATALOGUE_BUILDING = false;
 // the catalogue is the only source of answering modes: keep asking until it is back
 async function watchCatalogue() {
   try {
     const j = await (await fetch("/session")).json();
     const had = Object.values(PRESETS).some((p) => p.strategy), has = Object.values(j.presets || {}).some((p) => p.strategy);
     CATALOGUE_ERROR = j.catalogueError || null;
-    if (had !== has) {
+    const wasBuilding = CATALOGUE_BUILDING;
+    CATALOGUE_BUILDING = !!j.catalogueBuilding;
+    if (had !== has || wasBuilding !== CATALOGUE_BUILDING) {
       PRESETS = j.presets; renderPresets();
       if (SITE === "ignition" && has && (!preset || !PRESETS[preset] || !PRESETS[preset].strategy)) { const first = Object.keys(PRESETS).find((k) => PRESETS[k].strategy && siteOf(PRESETS[k]).includes(SITE)); if (first) choose(first); }
       if (!has && preset && !PRESETS[preset]) { preset = null; cfg = null; $("start").disabled = true; }
@@ -926,7 +930,7 @@ setInterval(() => checkUpdate(false), 30 * 60 * 1000);
 
 (async () => {
   const j = await (await fetch("/session")).json();
-  PRESETS = j.presets; fake = !!j.fakeTable; CATALOGUE_ERROR = j.catalogueError || null;
+  PRESETS = j.presets; fake = !!j.fakeTable; CATALOGUE_ERROR = j.catalogueError || null; CATALOGUE_BUILDING = !!j.catalogueBuilding;
   if (j.current) { location.href = "/panel"; return; }
   setTimeout(watchCatalogue, 5000);
   try { const fj = await (await fetch("/formats")).json(); FORMATS = fj.formats || []; STAKES = fj.stakes || {}; } catch (e) { FORMATS = []; }
