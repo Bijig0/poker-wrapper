@@ -34,6 +34,7 @@ import COLD_CALL_LOCKS from "../../services/poolColdCallLocks.json";
 import POOL_CALL_LOCKS from "../../services/poolCallLocks.json";
 import { COLD_CALL_FLOOR_COMBOS } from "../../services/poolColdCall";
 import { limpLockRange } from "../../services/poolLimpFloor";
+import { limpCallProduct, poolCallRange } from "../../services/poolCalls";
 
 export interface OracleFinding { kind: string; reason: string }
 export interface OracleStats { explained: number; compared: number; refUnwalkable: number }
@@ -86,6 +87,9 @@ export interface PoolFloor {
   /** a limp-table key: the table the answer was read from — the note's "v3: " tag after the key; none = v2 (every note
    *  before 2026-10-09, and LIMP_LOCKS=v2) */
   limpTable?: "v2" | "v3";
+  /** a limp-caller (2026-10-09): the range is the named range × this one — the call overlay's "× his limp range <key>"
+   *  (a limp-table key) or the floor's "× his limp-call rate <key>" (a call-table key) */
+  times?: { kind: "limp" | "call"; key: string; limpTable?: "v2" | "v3" };
 }
 export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   const out = new Map<string, PoolFloor>();
@@ -95,19 +99,33 @@ export function poolFloorsOf(note: string): Map<string, PoolFloor> {
     const body = note.slice(h.index! + h[0].length, i + 1 < heads.length ? heads[i + 1]!.index : undefined);
     // the pool-call overlay (services/poolCalls, 2026-10-07) names what the seat did in words; the shape is the floors'
     const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \((v3: )?/g;
-    for (let e; (e = re.exec(body)); ) {
+    const ms = [...body.matchAll(re)];
+    ms.forEach((e, j) => {
       const kind = h[1] === "LIMP" ? "limp" : h[1] === "CALL" ? "call" : "coldcall";
-      out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: e[4] ? "v3" as const : "v2" as const } : {}) });
-    }
+      // the seat's own clause: up to the next seat's — a limp-caller's "× his …" multiplier sits inside it
+      const seg = body.slice(e.index!, j + 1 < ms.length ? ms[j + 1]!.index : undefined);
+      const tl = /× his limp range (\S+) \((v3: )?/.exec(seg);
+      const tc = tl ? null : /× his limp-call rate (\S+) \(/.exec(seg);
+      const times = tl ? { kind: "limp" as const, key: tl[1]!, limpTable: tl[2] ? "v3" as const : "v2" as const } : tc ? { kind: "call" as const, key: tc[1]! } : undefined;
+      out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: e[4] ? "v3" as const : "v2" as const } : {}), ...(times ? { times } : {}) });
+    });
   });
   return out;
 }
 /** the pool's range for a floor's key, as class weights (null: the key is not in the pool's table) */
 export function poolRangeOf(f: PoolFloor): Record<string, number> | null {
-  // the pool-call overlay's key is this table's or (a plain limp in a two-limper pot) the limp table's
-  if (f.kind === "call" && f.key in POOL_CALL_LOCKS.ranges) return (POOL_CALL_LOCKS.ranges as Record<string, { weights: Record<string, number> }>)[f.key]!.weights;
-  if (f.kind === "limp" || f.kind === "call") return limpLockRange(f.key, f.limpTable ?? "v2")?.weights ?? null;
-  return (COLD_CALL_LOCKS.ranges as Record<string, { weights: Record<string, number> }>)[f.key]?.weights ?? null;
+  // the call table as the overlay reads it (services/poolCalls — a test's injected table included), not the shipped JSON
+  const callTable = { has: (k: string) => poolCallRange({ table: "call", key: k }) != null, get: (k: string) => poolCallRange({ table: "call", key: k })?.weights ?? null };
+  const base = (() => {
+    // the pool-call overlay's key is this table's or (a plain limp in a two-limper pot) the limp table's
+    if (f.kind === "call" && callTable.has(f.key)) return callTable.get(f.key);
+    if (f.kind === "limp" || f.kind === "call") return limpLockRange(f.key, f.limpTable ?? "v2")?.weights ?? null;
+    return (COLD_CALL_LOCKS.ranges as Record<string, { weights: Record<string, number> }>)[f.key]?.weights ?? null;
+  })();
+  if (!base || !f.times) return base;
+  // a limp-caller: the named range × the multiplier the note names (limpCallProduct's rounding, so it is exact)
+  const other = f.times.kind === "limp" ? limpLockRange(f.times.key, f.times.limpTable ?? "v2")?.weights ?? null : callTable.get(f.times.key);
+  return other ? limpCallProduct(f.times.kind === "limp" ? other : base, f.times.kind === "limp" ? base : other) : null;
 }
 const classCombos = (c: string): number => (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12);
 const combosOf = (r: Record<string, number>): number => Object.entries(r).reduce((s, [c, w]) => s + (w > 0 ? w * classCombos(c) : 0), 0);

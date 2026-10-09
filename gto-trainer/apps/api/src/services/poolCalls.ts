@@ -76,6 +76,8 @@ const POSTS = new Set(["post-sb", "post-bb", "post", "post-dead", "ante"]);
 export interface PoolCaller {
   pos: Seat6;
   line: PoolCallLine;
+  /** a limpcall / sbiso caller: the non-blind limps before his own limp (the SB's complete: before it) — his limp-table role */
+  limpsBefore?: number;
   /** index of the call in hand.actions (the last call that set the line) */
   at: number;
   /** flat: the opener's seat */
@@ -107,6 +109,7 @@ export function poolCallersOf(hand: ParsedHand, heroPos: string | null): PoolCal
   const limpers: Seat6[] = [];       // every call before the first raise (the SB's complete included; the BB never calls there)
   let nonBlindLimps = 0;             // the limp table's count (hero's limp included)
   const callers1: Seat6[] = [];      // callers of the first raise (hero's included), in order
+  const limpBefore = new Map<Seat6, number>();   // non-blind limps before each seat's own limp / complete
   (hand.actions ?? []).forEach((a, i) => {
     if (a.street !== "preflop" || POSTS.has(String(a.type))) return;
     const pos = posOf(a.seatId);
@@ -125,6 +128,7 @@ export function poolCallersOf(hand: ParsedHand, heroPos: string | null): PoolCal
     const allIn = a.type === "all-in";
     if (raises === 0) {
       if (pos === "BB") return;                    // the BB's "call" before any raise is his check
+      limpBefore.set(pos, nonBlindLimps);
       if (pos !== hero) {
         put({ pos, line: pos === "SB" ? "limp" : nonBlindLimps >= 2 ? "overlimp" : "limp", at: i, opener: null, before: nonBlindLimps, openTo: 0,
               raisedLater: false, allIn, complete: pos === "SB" });
@@ -137,7 +141,7 @@ export function poolCallersOf(hand: ParsedHand, heroPos: string | null): PoolCal
       const before = callers1.length;
       if (pos !== hero) {
         if (limpers.length) {
-          if (limpers.includes(pos)) put({ pos, line: pos === "SB" ? "sbiso" : "limpcall", at: i, opener, before: limpers.length, openTo: raiseTo, raisedLater: false, allIn, complete: pos === "SB" });
+          if (limpers.includes(pos)) put({ pos, line: pos === "SB" ? "sbiso" : "limpcall", at: i, opener, before: limpers.length, limpsBefore: limpBefore.get(pos) ?? 0, openTo: raiseTo, raisedLater: false, allIn, complete: pos === "SB" });
           else if (pos === "BB") put({ pos, line: "bbiso", at: i, opener, before: limpers.length, openTo: raiseTo, raisedLater: false, allIn, complete: false });
           // a cold call of an iso raise: no range measured — the fitted read stands
         } else {
@@ -161,6 +165,34 @@ function openQual(openTo: number): string | null {
 const stackBucket = (stack: number): string | null => (!(stack > 0) ? null : stack < 40 ? "le40" : stack < 80 ? "40_80" : "80p");
 
 export interface PoolCallKey { table: "call" | "limp"; key: string }
+
+/** The limp table's key for a limper's / the SB completer's own limp: short as poolLimpFloor picks it, deep the `_deep` keys. */
+export function limpKeyOf(limpsBefore: number, complete: boolean, stack: number): string | null {
+  const short = poolLimpKey({ limpsBefore, complete }, stack);
+  if (short) return short;
+  if (!(stack > 0)) return null;
+  const deep = complete
+    ? (limpsBefore >= 3 ? "sbcomplete_b3" : limpsBefore === 0 ? "sbcomplete_fold_deep" : `sbcomplete_b${limpsBefore}_deep`)
+    : (limpsBefore === 0 ? "limp_first_deep" : "overlimp_deep");
+  return limpLockRange(deep) ? deep : null;
+}
+
+/**
+ * A LIMPER'S CALL IS limp × call-given-limp (2026-10-09, Brady: "if YOU think this is a good enough fix, then go for it").
+ * The call table's limpcall / sbiso cells are P(call | he limped and now faces the iso) PER HAND — the build's
+ * P(call | class) = f · P(class | call) / P(class), water-filled over all 1,326 combos so a 72% caller is a 925-combo
+ * "range". That is a node strategy, never a holding: used outright it put a 42bb BTN limp-caller into the flop with 672
+ * combos (live 2026-10-08 22:54) and a 201bb UTG with 738 (2026-10-09 00:05). His flop range is P(limp | hand) ×
+ * P(call | limp, hand): the limp cell times the call cell, hand by hand. Checked against Ignition's own limp-callers with
+ * every card visible (poolcalls_ignition_events.json, 29-135 per cell): the product is closer than the conditional in
+ * every cell (L1 23-32 pts vs 22-67) and closer than the whole limp cell in three of four (the ≤60bb one-limper cell,
+ * n=64, is within noise the other way). Weights rounded to 1e-4 so the mutation oracle rebuilds them exactly.
+ */
+export function limpCallProduct(limp: ClassRange, callGivenLimp: ClassRange): ClassRange {
+  const out: ClassRange = {};
+  for (const [c, w] of Object.entries(limp)) out[c] = Math.round(1e4 * Math.max(0, Number(w)) * Math.max(0, Number(callGivenLimp[c] ?? 0))) / 1e4;
+  return out;
+}
 
 /**
  * The pool range for this caller at this stack: the most specific key built (the header's order). Limp lines go to the
@@ -218,6 +250,8 @@ export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: numb
 
 export interface PoolCallRecord {
   pos: Seat6; line: PoolCallLine; key: string; table: "call" | "limp";
+  /** a limpcall / sbiso caller (2026-10-09): the limp cell his call cell was multiplied by */
+  times?: { key: string; freq: number; n: number; limpTable: LimpLocksVersion };
   /** his stack as dealt (bb) */
   stack: number;
   freq: number; calls: number;
@@ -264,10 +298,20 @@ export function applyPoolCallRanges(a: {
     if (!k) continue;
     const r = poolCallRange(k);
     if (!r) continue;
+    let weights: ClassRange = { ...r.weights };
+    let times: PoolCallRecord["times"];
+    if (k.table === "call" && (c.line === "limpcall" || c.line === "sbiso")) {
+      // his limp cell × the call cell (limpCallProduct); no limp cell for him → the fitted read stands, never the conditional alone
+      const lk = limpKeyOf(c.limpsBefore ?? 0, c.complete, stack);
+      const lr = lk ? limpLockRange(lk) : null;
+      if (!lk || !lr) continue;
+      weights = limpCallProduct(lr.weights as ClassRange, r.weights);
+      times = { key: lk, freq: lr.freq, n: lr.n, limpTable: lr.table };
+    }
     const was = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
-    out[rk] = { ...r.weights };
-    applied.push({ pos: c.pos, line: c.line, key: k.key, table: k.table, stack: Math.round(stack * 10) / 10, freq: r.freq, calls: r.calls, was, now: combosOf(out[rk]), did: didText(c), ...(r.limpTable ? { limpTable: r.limpTable } : {}) });
+    out[rk] = weights;
+    applied.push({ pos: c.pos, line: c.line, key: k.key, table: k.table, stack: Math.round(stack * 10) / 10, freq: r.freq, calls: r.calls, was, now: combosOf(out[rk]), did: didText(c), ...(r.limpTable ? { limpTable: r.limpTable } : {}), ...(times ? { times } : {}) });
   }
   return { ranges: out, applied };
 }
@@ -275,5 +319,46 @@ export function applyPoolCallRanges(a: {
 /** The answer's note (its opening is the register entry's `warn`; the hand page and the mutation oracle parse it). */
 export const poolCallNote = (applied: PoolCallRecord[], source: string | null): string =>
   `POOL CALL RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) ${r.did} — ${r.was} combos on ${source ?? "the preflop tree"}, `
-    + `now the pool's ${r.key} (${limpTableTag(r.limpTable)}${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos)`).join("; ")}`
+    + (r.times
+      // a limp-caller: the call cell is his limp-call RATE; the range is his limp cell × it (the oracle reads both keys back)
+      ? `now the pool's ${r.key} (${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured) × his limp range ${r.times.key} (${limpTableTag(r.times.limpTable)}${(100 * r.times.freq).toFixed(1)}% of hands, n=${r.times.n}) = ${r.now} combos`
+      : `now the pool's ${r.key} (${limpTableTag(r.limpTable)}${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos)`)).join("; ")}`
   + " — the tree cannot hold this line, so the callers hold the pool's measured ranges, not the solver's neighbouring-line ones";
+
+/**
+ * THE FLOOR'S LIMP-CALLERS (2026-10-09): a short limper the limp floor just gave his WHOLE limp cell, who then CALLED
+ * the iso, gets that cell × the pool's limp-call rate for his seat, limpers and stack (the call table's limpcall / sbiso
+ * cell) — the same product applyPoolCallRanges makes on the lines the tree cannot hold, here on every line the floor
+ * runs on (a lone short limper the lock did not answer, the two-limper pots). The floor's record is extended in place
+ * (`times`, `now`) so its note says so and the mutation oracle rebuilds the product. Pure otherwise.
+ */
+export function applyLimpCallProduct(a: {
+  hand: ParsedHand; heroPos: string | null; ranges: Record<string, ClassRange>; dealt?: Record<number, number>;
+  /** the limp floor's records for this arrival — mutated: `times` and `now` on the ones multiplied */
+  floored: { pos: string; now: number; times?: { key: string; freq: number; n: number; base: number } }[];
+}): { ranges: Record<string, ClassRange>; applied: string[] } {
+  if (!a.floored.length) return { ranges: a.ranges, applied: [] };
+  const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
+  const applied: string[] = [];
+  let out = a.ranges;
+  for (const c of poolCallersOf(a.hand, a.heroPos)) {
+    if (c.line !== "limpcall" && c.line !== "sbiso") continue;
+    if (c.raisedLater || c.allIn) continue;
+    const f = a.floored.find((x) => x.pos.toUpperCase() === c.pos && !x.times);
+    if (!f) continue;
+    const rk = Object.keys(out).find((p) => p.toUpperCase() === c.pos);
+    if (!rk) continue;
+    const stack = Number(byPos[c.pos] ?? NaN);
+    const k = poolCallKey(c, stack);
+    if (!k || k.table !== "call") continue;
+    const r = poolCallRange(k);
+    if (!r) continue;
+    const base = combosOf(out[rk]);
+    if (out === a.ranges) out = { ...a.ranges };
+    out[rk] = limpCallProduct(out[rk]!, r.weights);
+    f.times = { key: k.key, freq: r.freq, n: r.calls, base };
+    f.now = combosOf(out[rk]);
+    applied.push(c.pos);
+  }
+  return { ranges: out, applied };
+}

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyPoolCallRanges, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
-import { poolFloorsOf } from "../scripts/mutation/rangeOracle";
+import { applyLimpCallProduct, applyPoolCallRanges, limpCallProduct, limpKeyOf, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
+import { applyPoolLimpFloor, limpLockRange, poolLimpFloorNote } from "./poolLimpFloor";
+import { poolFloorsOf, poolRangeOf } from "../scripts/mutation/rangeOracle";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 /**
@@ -179,5 +180,63 @@ describe("applyPoolCallRanges", () => {
     const r = applyPoolCallRanges({ hand: hand(BRIEF_I_002, 6), heroPos: "BB", ranges: rg, dealt: dealt() });
     expect(r.applied).toEqual([]);
     expect(r.ranges).toBe(rg);
+  });
+});
+
+describe("a limper's call of the iso is limp × call-given-limp (2026-10-09)", () => {
+  const combos = (w: Record<string, number>) => Object.entries(w).reduce((s, [c, x]) => s + x * (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12), 0);
+  test("limpKeyOf: the limp table's role × stack, deep keys included", () => {
+    expect(limpKeyOf(0, false, 30)).toBe("limp_first_short_le60");
+    expect(limpKeyOf(1, false, 30)).toBe("overlimp_short_25_40");
+    expect(limpKeyOf(0, false, 100)).toBe("limp_first_deep");
+    expect(limpKeyOf(2, false, 100)).toBe("overlimp_deep");
+    expect(limpKeyOf(1, true, 100)).toBe("sbcomplete_b1_deep");
+    expect(limpKeyOf(0, true, 40)).toBe("sbcomplete_fold_short_le60");
+  });
+  test("limpCallProduct: hand by hand, rounded to 1e-4, hands the call cell lacks go to 0", () => {
+    expect(limpCallProduct({ AA: 0.5, "22": 0.8, "72o": 0.1 }, { AA: 1, "22": 0.5 })).toEqual({ AA: 0.5, "22": 0.4, "72o": 0 });
+  });
+  test("the call overlay: the UTG who limped (100bb) and called the iso holds limp_first_deep × the limpcall cell, never the cell alone; the BB's iso call is the cell outright", () => {
+    setPoolCallTable(TABLE);
+    const cs = poolCallersOf(hand(ISO, 3), "CO");
+    expect(cs.find((c) => c.pos === "UTG")).toMatchObject({ line: "limpcall", before: 2, limpsBefore: 0 });
+    const r = applyPoolCallRanges({ hand: hand(ISO, 3), heroPos: "CO", ranges: { UTG: { AA: 1 }, CO: { AA: 1 }, BTN: { AA: 1 }, BB: { AA: 1 } }, dealt: dealt() });
+    const deep = limpLockRange("limp_first_deep")!;
+    const u = r.applied.find((x) => x.pos === "UTG")!;
+    expect(u).toMatchObject({ key: "poolcall_limpcall_ALL_l2p", table: "call", times: { key: "limp_first_deep", freq: deep.freq, n: deep.n, limpTable: "v3" } });
+    expect(r.ranges.UTG).toEqual(limpCallProduct(deep.weights as Record<string, number>, { "22": 1 }));
+    expect(u.now).toBeCloseTo(6 * Math.round(1e4 * (deep.weights as Record<string, number>)["22"]!) / 1e4, 2);
+    expect(u.now).toBeLessThan(6);                                              // 22 limps first in well under 100%
+    expect(r.ranges.BB).toEqual({ "33": 1 });                                   // bbiso: no limp of his own — the cell as it is
+    expect(r.ranges.BTN).toEqual({ AA: 1 });                                    // a cold call of the iso: no line
+    const note = poolCallNote(r.applied, "gtow-ai · 6-handed");
+    expect(note).toContain("now the pool's poolcall_limpcall_ALL_l2p (50.00% of chances, 5,000 calls measured) × his limp range limp_first_deep (v3: 3.1% of hands, n=667) = ");
+    // the mutation oracle reads both keys back and rebuilds the product
+    const f = poolFloorsOf(`x · ${note}`).get("UTG")!;
+    expect(f).toEqual({ kind: "call", key: "poolcall_limpcall_ALL_l2p", was: 6, times: { kind: "limp", key: "limp_first_deep", limpTable: "v3" } });
+    expect(poolRangeOf(f)).toEqual(r.ranges.UTG);
+  });
+  test("the floor's limp-caller: a 30bb UTG limps, hero isolates, he calls — the whole cell × his limp-call rate, said in the floor's note", () => {
+    setPoolCallTable(TABLE);
+    // UTG (30bb) limps, HJ limps, hero CO raises 5, BTN / SB fold, BB calls, UTG calls, HJ folds
+    const h = hand(ISO, 3);
+    const d = dealt({ 1: 30 });
+    const fl = applyPoolLimpFloor({ hand: h, heroPos: "CO", ranges: { UTG: { AA: 0.001 }, CO: { AA: 1 }, BB: { AA: 1 } }, chartId: "gtow-ai · 6-handed", dealt: d, planOf: () => null });
+    expect(fl.applied.map((x) => [x.pos, x.key])).toEqual([["UTG", "limp_first_short_le60"]]);
+    const cell = limpLockRange("limp_first_short_le60")!;
+    const base = fl.applied[0]!.now;
+    expect(base).toBeCloseTo(combos(cell.weights as Record<string, number>), 1);
+    const lc = applyLimpCallProduct({ hand: h, heroPos: "CO", ranges: fl.ranges, dealt: d, floored: fl.applied });
+    expect(lc.applied).toEqual(["UTG"]);
+    expect(fl.applied[0]!.times).toEqual({ key: "poolcall_limpcall_ALL_l2p", freq: 0.5, n: 5000, base });
+    expect(lc.ranges.UTG).toEqual(limpCallProduct(cell.weights as Record<string, number>, { "22": 1 }));
+    expect(fl.applied[0]!.now).toBeCloseTo(combos(lc.ranges.UTG!), 2);
+    const note = poolLimpFloorNote(fl.applied, "gtow-ai · 6-handed");
+    expect(note).toContain(`now the pool's limp_first_short_le60 (v3: 26.3% of hands, n=278, ${base} combos) × his limp-call rate poolcall_limpcall_ALL_l2p (50.0% of chances, 5,000 calls) = ${fl.applied[0]!.now} combos`);
+    const f = poolFloorsOf(`x · ${note}`).get("UTG")!;
+    expect(f).toEqual({ kind: "limp", key: "limp_first_short_le60", was: 0.01, limpTable: "v3", times: { kind: "call", key: "poolcall_limpcall_ALL_l2p" } });
+    expect(poolRangeOf(f)).toEqual(lc.ranges.UTG);
+    // a limper who folded to the iso is not at the flop; a limp-raiser keeps the tree's range: nothing multiplied
+    expect(applyLimpCallProduct({ hand: h, heroPos: "CO", ranges: fl.ranges, dealt: d, floored: [] }).applied).toEqual([]);
   });
 });

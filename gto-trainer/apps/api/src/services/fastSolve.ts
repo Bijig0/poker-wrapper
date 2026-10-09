@@ -5,7 +5,7 @@ import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
-import { applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
+import { applyLimpCallProduct, applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -1186,9 +1186,12 @@ async function flopArrivalCompute(
   if (sixMax && shortLimpPoolOn()) {
     const floor = applyPoolLimpFloor({ hand, heroPos, ranges: recon.ranges, chartId: rangeSource, dealt: pinnedDealt, lockedPools: pinPools });
     if (floor.applied.length) {
+      // a floored limper who then CALLED the iso: his whole limp cell × the pool's limp-call rate (poolCalls.applyLimpCallProduct,
+      // 2026-10-09) — the floor's records are extended in place, so the note below says so
+      const lc = applyLimpCallProduct({ hand, heroPos, ranges: floor.ranges, dealt: pinnedDealt, floored: floor.applied });
       const note = poolLimpFloorNote(floor.applied, rangeSource);
       tmark("pool limp floor", note);
-      recon = { ...recon, ranges: floor.ranges };
+      recon = { ...recon, ranges: lc.ranges };
       sixNote = [sixNote, note].filter(Boolean).join(" · ");
       // Brady's rule, so by design (counted clean, named by its own code); a source already rebuilt keeps its own code
       // (the larger story) and the floor's note rides along either way
