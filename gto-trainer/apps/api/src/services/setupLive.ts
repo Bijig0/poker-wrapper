@@ -9,6 +9,8 @@
  * shows the GTO Wizard picker from, the registry its preflight reads. A marked request within SETUP_LIVE_MS (2 min; the
  * page asks at least every 30 s) = the setup page is open. Memory only; the clock is injectable for tests.
  */
+import { sessionLive } from "./sessionLive";
+
 export const SETUP_LIVE_MS = 2 * 60_000;
 export const SETUP_HEADER = "x-poker-setup";
 
@@ -42,6 +44,15 @@ export function noteIfSetup(c: Parameters<typeof isSetupRequest>[0]): boolean {
 /** Was the setup page polling within the last SETUP_LIVE_MS? */
 export function setupOpen(): boolean {
   return lastPollAt > 0 && clock() - lastPollAt <= SETUP_LIVE_MS;
+}
+
+/**
+ * "Live" for the heavy caches (routes/sources.ts: the strategy catalogue, the registry; the answer log's reseed): a poker
+ * session is live — the API's own answer (services/sessionLive.ts, what GET /api/load reports) — OR the setup page is
+ * open (a session is about to be declared). Never a throw.
+ */
+export function liveForCaches(): boolean {
+  try { return sessionLive() || setupOpen(); } catch { return false; }
 }
 
 export function setupState(): { open: boolean; lastPollAt: number | null } {

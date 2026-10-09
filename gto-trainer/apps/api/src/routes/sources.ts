@@ -28,8 +28,7 @@ import {
 } from "./dashboard";
 import { port } from "../services/ports";
 import { step } from "../services/answerTrace";
-import { sessionLive } from "../services/sessionLive";
-import { noteIfSetup, setupOpen } from "../services/setupLive";
+import { liveForCaches, noteIfSetup } from "../services/setupLive";
 
 /**
  * Sources — the study dashboard's mission control.
@@ -803,12 +802,8 @@ export function warmSourcesCaches(): void {
   keepWarm("sources/registry", REGISTRY_TTL_MS, registryBody, { leadMs: 30_000, demandMs: 10 * 60_000, skipWhile: () => liveForCaches() });
 }
 
-/** Is a poker session live — the API's own answer (services/sessionLive.ts, what GET /api/load reports) — OR is the
- *  wrapper's setup page open (services/setupLive.ts: a session is about to be declared; 2026-10-09 the catalogue rebuilt
- *  for 8.9 s on the setup page's poll 85 s before a session started). Never a throw. */
-export function liveForCaches(): boolean {
-  try { return sessionLive() || setupOpen(); } catch { return false; }
-}
+// liveForCaches (services/setupLive.ts): a poker session is live, OR the wrapper's setup page is open — a session is about
+// to be declared (2026-10-09: the catalogue rebuilt for 8.9 s on the setup page's poll 85 s before a session started)
 // the answer log's view reseeds (a full re-read, off the loop) only when neither is the case
 answerLog.viewHold = liveForCaches;
 

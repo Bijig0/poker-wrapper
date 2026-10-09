@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
-import { __resetSetupLive, isSetupRequest, noteIfSetup, setupOpen, SETUP_LIVE_MS } from "./setupLive";
+import { __resetSetupLive, isSetupRequest, liveForCaches, noteIfSetup, setupOpen, SETUP_LIVE_MS } from "./setupLive";
 import { __resetLivePriority, cachedBehindLive, keepWarm } from "./livePriority";
 import { __setSessionLiveReader } from "./sessionLive";
-import { liveForCaches } from "../routes/sources";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
