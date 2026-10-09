@@ -319,6 +319,16 @@ describe("applyPoolLimpFloor", () => {
     expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_le60"]);
   });
 
+  test("a lone SB complete (folded to) is NOT floored — GTO Wizard completes the SB itself (2026-10-09); behind a limper it still is", () => {
+    // folded to the 40bb SB, who completes; hero checks his BB — the SB's flop range stays the tree's
+    const lone = [pre(6, "post-sb", 0.5), pre(1, "post-bb", 1), pre(2, "fold"), pre(3, "fold"), pre(4, "fold"), pre(5, "fold"), pre(6, "call", 0.5), pre(1, "check")];
+    expect(applyPoolLimpFloor({ hand: hand(lone), heroPos: "BB", ranges: { SB: { ...TINY }, BB: { AKs: 1 } }, chartId: "gtow-ai · 3-handed", dealt: dealt({ 6: 40 }), planOf: V2 }).applied).toEqual([]);
+    // the 45bb HJ limps, the 50bb SB completes behind him: both floored, as before
+    const behind = [pre(6, "post-sb", 0.5), pre(1, "post-bb", 1), pre(2, "fold"), pre(3, "call", 1), pre(4, "fold"), pre(5, "fold"), pre(6, "call", 0.5), pre(1, "check")];
+    const r = applyPoolLimpFloor({ hand: hand(behind), heroPos: "BB", ranges: { HJ: { ...TINY }, SB: { ...TINY }, BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: dealt({ 3: 45, 6: 50 }), planOf: V2 });
+    expect(r.applied.map((x) => [x.pos, x.key])).toEqual([["HJ", "limp_first_short_le60"], ["SB", "sbcomplete_b1_short_40_60"]]);
+  });
+
   test("heads-up keeps its tree (the SB's complete is the button's open there)", () => {
     const hu = { heroSeatId: 1, positions: { 1: "BB", 6: "SB" }, actions: [pre(6, "post-sb", 0.5), pre(1, "post-bb", 1), pre(6, "call", 0.5), pre(1, "check")], stacks: {}, committed: {} } as unknown as ParsedHand;
     expect(applyPoolLimpFloor({ hand: hu, heroPos: "BB", ranges: { SB: { ...TINY }, BB: { AKs: 1 } }, chartId: "gtow-ai · 2-handed", dealt: { 1: 100, 6: 30 } }).applied).toEqual([]);

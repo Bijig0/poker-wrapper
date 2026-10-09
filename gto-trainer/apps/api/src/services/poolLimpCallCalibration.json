@@ -1,0 +1,380 @@
+{
+ "built": "2026-10-09",
+ "prior": 50.0,
+ "min_n": 20,
+ "groups": [
+  "prem",
+  "pairs",
+  "Axs",
+  "s-bway",
+  "oth-s",
+  "Axo",
+  "o-bway",
+  "o-junk"
+ ],
+ "source": "poolcalls_ignition_events.json (Ignition NL100+NL200 ring, every card visible, [ME] out) x the shipped poolLimpLocks.v3.json x poolCallLocks.json",
+ "cells": {
+  "limpcall_60_85_l1": {
+   "n": 29,
+   "usable": 29,
+   "active": false,
+   "loo_gain_per_hand": -0.0452,
+   "groups": {
+    "prem": {
+     "obs": 0,
+     "obs_share": 0.0,
+     "prod_share": 0.094,
+     "shrunk_share": 0.0595,
+     "mult": 1.0
+    },
+    "pairs": {
+     "obs": 3,
+     "obs_share": 0.1034,
+     "prod_share": 0.0827,
+     "shrunk_share": 0.0903,
+     "mult": 1.0
+    },
+    "Axs": {
+     "obs": 3,
+     "obs_share": 0.1034,
+     "prod_share": 0.0781,
+     "shrunk_share": 0.0874,
+     "mult": 1.0
+    },
+    "s-bway": {
+     "obs": 2,
+     "obs_share": 0.069,
+     "prod_share": 0.0438,
+     "shrunk_share": 0.0531,
+     "mult": 1.0
+    },
+    "oth-s": {
+     "obs": 8,
+     "obs_share": 0.2759,
+     "prod_share": 0.2465,
+     "shrunk_share": 0.2573,
+     "mult": 1.0
+    },
+    "Axo": {
+     "obs": 5,
+     "obs_share": 0.1724,
+     "prod_share": 0.1672,
+     "shrunk_share": 0.1691,
+     "mult": 1.0
+    },
+    "o-bway": {
+     "obs": 4,
+     "obs_share": 0.1379,
+     "prod_share": 0.1177,
+     "shrunk_share": 0.1251,
+     "mult": 1.0
+    },
+    "o-junk": {
+     "obs": 4,
+     "obs_share": 0.1379,
+     "prod_share": 0.1701,
+     "shrunk_share": 0.1583,
+     "mult": 1.0
+    }
+   }
+  },
+  "limpcall_60_85_l2p": {
+   "n": 7,
+   "usable": 7,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  },
+  "limpcall_deep_l1": {
+   "n": 135,
+   "usable": 135,
+   "active": true,
+   "loo_gain_per_hand": 0.0544,
+   "groups": {
+    "prem": {
+     "obs": 7,
+     "obs_share": 0.0519,
+     "prod_share": 0.1878,
+     "shrunk_share": 0.0886,
+     "mult": 0.4718
+    },
+    "pairs": {
+     "obs": 29,
+     "obs_share": 0.2148,
+     "prod_share": 0.1268,
+     "shrunk_share": 0.191,
+     "mult": 1.5064
+    },
+    "Axs": {
+     "obs": 15,
+     "obs_share": 0.1111,
+     "prod_share": 0.0861,
+     "shrunk_share": 0.1044,
+     "mult": 1.2117
+    },
+    "s-bway": {
+     "obs": 12,
+     "obs_share": 0.0889,
+     "prod_share": 0.083,
+     "shrunk_share": 0.0873,
+     "mult": 1.0521
+    },
+    "oth-s": {
+     "obs": 22,
+     "obs_share": 0.163,
+     "prod_share": 0.1713,
+     "shrunk_share": 0.1652,
+     "mult": 0.9646
+    },
+    "Axo": {
+     "obs": 21,
+     "obs_share": 0.1556,
+     "prod_share": 0.124,
+     "shrunk_share": 0.147,
+     "mult": 1.1861
+    },
+    "o-bway": {
+     "obs": 12,
+     "obs_share": 0.0889,
+     "prod_share": 0.1034,
+     "shrunk_share": 0.0928,
+     "mult": 0.8975
+    },
+    "o-junk": {
+     "obs": 17,
+     "obs_share": 0.1259,
+     "prod_share": 0.1177,
+     "shrunk_share": 0.1237,
+     "mult": 1.0509
+    }
+   }
+  },
+  "limpcall_deep_l2p": {
+   "n": 52,
+   "usable": 52,
+   "active": false,
+   "loo_gain_per_hand": -0.0386,
+   "groups": {
+    "prem": {
+     "obs": 13,
+     "obs_share": 0.25,
+     "prod_share": 0.1981,
+     "shrunk_share": 0.2245,
+     "mult": 1.0
+    },
+    "pairs": {
+     "obs": 7,
+     "obs_share": 0.1346,
+     "prod_share": 0.1414,
+     "shrunk_share": 0.1379,
+     "mult": 1.0
+    },
+    "Axs": {
+     "obs": 5,
+     "obs_share": 0.0962,
+     "prod_share": 0.0914,
+     "shrunk_share": 0.0938,
+     "mult": 1.0
+    },
+    "s-bway": {
+     "obs": 3,
+     "obs_share": 0.0577,
+     "prod_share": 0.0925,
+     "shrunk_share": 0.0748,
+     "mult": 1.0
+    },
+    "oth-s": {
+     "obs": 5,
+     "obs_share": 0.0962,
+     "prod_share": 0.1574,
+     "shrunk_share": 0.1262,
+     "mult": 1.0
+    },
+    "Axo": {
+     "obs": 10,
+     "obs_share": 0.1923,
+     "prod_share": 0.1323,
+     "shrunk_share": 0.1629,
+     "mult": 1.0
+    },
+    "o-bway": {
+     "obs": 5,
+     "obs_share": 0.0962,
+     "prod_share": 0.1149,
+     "shrunk_share": 0.1053,
+     "mult": 1.0
+    },
+    "o-junk": {
+     "obs": 4,
+     "obs_share": 0.0769,
+     "prod_share": 0.0721,
+     "shrunk_share": 0.0746,
+     "mult": 1.0
+    }
+   }
+  },
+  "limpcall_le60_l1": {
+   "n": 64,
+   "usable": 64,
+   "active": false,
+   "loo_gain_per_hand": -0.023,
+   "groups": {
+    "prem": {
+     "obs": 2,
+     "obs_share": 0.0312,
+     "prod_share": 0.0455,
+     "shrunk_share": 0.0375,
+     "mult": 1.0
+    },
+    "pairs": {
+     "obs": 3,
+     "obs_share": 0.0469,
+     "prod_share": 0.0576,
+     "shrunk_share": 0.0516,
+     "mult": 1.0
+    },
+    "Axs": {
+     "obs": 3,
+     "obs_share": 0.0469,
+     "prod_share": 0.0776,
+     "shrunk_share": 0.0603,
+     "mult": 1.0
+    },
+    "s-bway": {
+     "obs": 2,
+     "obs_share": 0.0312,
+     "prod_share": 0.0211,
+     "shrunk_share": 0.0268,
+     "mult": 1.0
+    },
+    "oth-s": {
+     "obs": 22,
+     "obs_share": 0.3438,
+     "prod_share": 0.3441,
+     "shrunk_share": 0.3439,
+     "mult": 1.0
+    },
+    "Axo": {
+     "obs": 9,
+     "obs_share": 0.1406,
+     "prod_share": 0.1436,
+     "shrunk_share": 0.1419,
+     "mult": 1.0
+    },
+    "o-bway": {
+     "obs": 5,
+     "obs_share": 0.0781,
+     "prod_share": 0.1314,
+     "shrunk_share": 0.1015,
+     "mult": 1.0
+    },
+    "o-junk": {
+     "obs": 18,
+     "obs_share": 0.2812,
+     "prod_share": 0.1791,
+     "shrunk_share": 0.2365,
+     "mult": 1.0
+    }
+   }
+  },
+  "limpcall_le60_l2p": {
+   "n": 11,
+   "usable": 11,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  },
+  "sbiso_60_85_l1": {
+   "n": 8,
+   "usable": 8,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  },
+  "sbiso_60_85_l2p": {
+   "n": 1,
+   "usable": 1,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  },
+  "sbiso_deep_l1": {
+   "n": 32,
+   "usable": 32,
+   "active": false,
+   "loo_gain_per_hand": -0.0617,
+   "groups": {
+    "prem": {
+     "obs": 0,
+     "obs_share": 0.0,
+     "prod_share": 0.0204,
+     "shrunk_share": 0.0124,
+     "mult": 1.0
+    },
+    "pairs": {
+     "obs": 5,
+     "obs_share": 0.1562,
+     "prod_share": 0.1344,
+     "shrunk_share": 0.1429,
+     "mult": 1.0
+    },
+    "Axs": {
+     "obs": 3,
+     "obs_share": 0.0938,
+     "prod_share": 0.0847,
+     "shrunk_share": 0.0882,
+     "mult": 1.0
+    },
+    "s-bway": {
+     "obs": 1,
+     "obs_share": 0.0312,
+     "prod_share": 0.0088,
+     "shrunk_share": 0.0176,
+     "mult": 1.0
+    },
+    "oth-s": {
+     "obs": 9,
+     "obs_share": 0.2812,
+     "prod_share": 0.2778,
+     "shrunk_share": 0.2792,
+     "mult": 1.0
+    },
+    "Axo": {
+     "obs": 4,
+     "obs_share": 0.125,
+     "prod_share": 0.2193,
+     "shrunk_share": 0.1825,
+     "mult": 1.0
+    },
+    "o-bway": {
+     "obs": 7,
+     "obs_share": 0.2188,
+     "prod_share": 0.1688,
+     "shrunk_share": 0.1883,
+     "mult": 1.0
+    },
+    "o-junk": {
+     "obs": 3,
+     "obs_share": 0.0938,
+     "prod_share": 0.0858,
+     "shrunk_share": 0.0889,
+     "mult": 1.0
+    }
+   }
+  },
+  "sbiso_deep_l2p": {
+   "n": 6,
+   "usable": 6,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  },
+  "sbiso_le60_l1": {
+   "n": 17,
+   "usable": 17,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  },
+  "sbiso_le60_l2p": {
+   "n": 2,
+   "usable": 2,
+   "active": false,
+   "why": "under 20 observed limp-callers"
+  }
+ }
+}

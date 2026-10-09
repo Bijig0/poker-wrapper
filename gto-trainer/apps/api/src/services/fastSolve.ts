@@ -5,7 +5,7 @@ import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective
 import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
-import { applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
+import { applyLimpCallProduct, applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -1186,9 +1186,12 @@ async function flopArrivalCompute(
   if (sixMax && shortLimpPoolOn()) {
     const floor = applyPoolLimpFloor({ hand, heroPos, ranges: recon.ranges, chartId: rangeSource, dealt: pinnedDealt, lockedPools: pinPools });
     if (floor.applied.length) {
+      // a floored limper who then CALLED the iso: his whole limp cell × the pool's limp-call rate (poolCalls.applyLimpCallProduct,
+      // 2026-10-09) — the floor's records are extended in place, so the note below says so
+      const lc = applyLimpCallProduct({ hand, heroPos, ranges: floor.ranges, dealt: pinnedDealt, floored: floor.applied });
       const note = poolLimpFloorNote(floor.applied, rangeSource);
       tmark("pool limp floor", note);
-      recon = { ...recon, ranges: floor.ranges };
+      recon = { ...recon, ranges: lc.ranges };
       sixNote = [sixNote, note].filter(Boolean).join(" · ");
       // Brady's rule, so by design (counted clean, named by its own code); a source already rebuilt keeps its own code
       // (the larger story) and the floor's note rides along either way
@@ -4169,6 +4172,24 @@ async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string
 export function forgetGapGateWarms(): void { gateWarmed.clear(); }
 
 /**
+ * A LONE SB COMPLETE GOES STRAIGHT TO THE EXACT TREE (2026-10-09, Brady: "route this just to GTO Wizard AI instead, no
+ * need for the incomplete HRC chart, we can go straight to the source"): folded to the SB, who completes; hero's option
+ * in the BB. The 100bb pool3 chart LOCKS the SB's complete to the pool's deep folded-to cell (7.5%, 160 completes) and
+ * the 30/50/75bb equilibrium limp charts hold their own SB node; GTO Wizard completes the SB itself (5-20% of hands,
+ * 70-267 combos — a strategy, read 2026-10-09), so neither stands in for it. Heads-up and 3-handed tables were the exact
+ * tree's already; the ≤85bb pool lock on this spot was dropped the same day (poolLimpFloor.poolLockTarget). Tokens:
+ * every seat folded, then the SB's 'C' (a 4-5 handed table pads to the same six tokens); hero has not acted.
+ */
+export function loneSbComplete(hand: ParsedHand, heroPos: string | null): boolean {
+  if (String(heroPos ?? "").toUpperCase() !== "BB" || !is6Handed(hand, heroPos)) return false;
+  if (hand.actions.some((a) => a.hero && a.street === "preflop" && !/^post/.test(String(a.type)))) return false;
+  const asked = hand.currentNode.toActIsHero ? hand : { ...hand, currentNode: { ...hand.currentNode, toActIsHero: true } };
+  const tokens = buildPreflopTokens(asked, heroPos).map((t) => String(t ?? "").trim().toUpperCase());
+  return tokens.length >= 3 && tokens[tokens.length - 1] === "C" && tokens.slice(0, -1).every((t) => t === "F");
+}
+const sbWarmed = new Map<string, number>();
+
+/**
  * THE POOL-LOCKED TREE IS BUILT WHEN THE LIMP LANDS (2026-10-05): the tree and the lock depend on the line so far and the
  * stacks only, so the tick that sees a short limper no pool chart covers builds both (gtowAiPreflop.solvePreflopPoolLocked
  * warmOnly) — hero's turn then pays one node read. The hand is read as if hero were on the clock (warmGapGate's rule).
@@ -4204,6 +4225,16 @@ export function warmPreflop6max(hand: ParsedHand, heroPos: string | null, strate
   const deadSb = repairDeadSmallBlind(hand);
   if (deadSb.note) { hand = deadSb.hand; heroPos = hand.positions[hand.heroSeatId] ?? heroPos; }
   void warmPoolLimpLock(hand, heroPos).catch(() => { /* a warm-up never fails anything */ });
+  // a lone SB complete: the exact tree is built the tick the complete lands (loneSbComplete), once per hand
+  try {
+    const k = String(hand.clientHandId ?? hand.handId ?? "");
+    if (k && !sbWarmed.has(k) && loneSbComplete(hand, heroPos)) {
+      sbWarmed.set(k, Date.now());
+      if (sbWarmed.size > 300) { const first = sbWarmed.keys().next().value; if (first !== undefined) sbWarmed.delete(first); }
+      console.log(`[lone-sb-complete] hand ${k}: folded to the SB, who completed — pre-building the exact tree`);
+      warmPreflopGtowAi(hand, heroPos);
+    }
+  } catch { /* a warm-up never fails anything */ }
   if (!is6Handed(hand, heroPos)) { warmPreflopGtowAi(hand, heroPos); return; }   // 2-5 seats: the AI piece will answer
   const key = String(hand.clientHandId ?? hand.handId ?? "");
   if (key) void warmGapGate(hand, heroPos, key).catch(() => { /* a warm-up never fails anything */ });
@@ -4509,7 +4540,11 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
   /** THE FIT RULE sent this decision here (utils/fitLine.emptiedGroups): the chart could answer it, by folding the
    *  table's only limper / caller out of hero's line */
   let emptied: FitEmpties | null = null;
-  if (is6Handed(hand, heroPos)) {
+  if (is6Handed(hand, heroPos) && loneSbComplete(hand, heroPos)) {
+    // folded to the SB, who completed: the charts are not asked (loneSbComplete) — the exact tree's SB completes himself
+    why = "folded to the SB, who completed — his complete is the exact tree's own (the 100bb pool3 chart locks it to the pool's deep cell, the shallower limp charts hold an equilibrium SB node), so GTO Wizard AI preflop answers hero's option";
+    pf = { piece: "gtow-ai-preflop", how: "by-design", code: "preflop:lone-sb-complete", why: why.slice(0, 200) };
+  } else if (is6Handed(hand, heroPos)) {
     const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
     if (six && six.ok) return six;
     why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";

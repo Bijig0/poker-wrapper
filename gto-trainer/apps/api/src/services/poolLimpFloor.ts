@@ -121,6 +121,9 @@ export interface PoolLimpFloorRecord {
   now: number;
   /** the table the range came from (LIMP_LOCKS) */
   table: LimpLocksVersion;
+  /** he then CALLED the iso (2026-10-09, services/poolCalls.applyLimpCallProduct): the call cell the whole limp cell
+   *  (`base` combos) was multiplied by — `now` is the product */
+  times?: { key: string; freq: number; n: number; base: number; cal?: string };
 }
 
 const POSTS = new Set(["post-sb", "post-bb", "post", "post-dead", "ante"]);
@@ -210,8 +213,12 @@ export function poolChartCovers(chartId: string | null, l: Pick<PoolLimper, "pos
  * THE GTO WIZARD PREFLOP LOCK'S TARGET (2026-10-05, Brady: "use gto wizard ai preflop, to send in the pool measured range
  * for the original limper, then re-solve the tree from there to give the correct decision for hero"). Which limper, if
  * any, hero's preflop decision should be read against at the pool's range on a node-locked GTO Wizard AI tree:
- *   - a villain who limped (or, from the SB, completed) before any raise, at 85bb or less (his range by his own stack's
- *     bucket, poolLimpKey) — whatever he did after (a limp-raise is solved behind the locked limp);
+ *   - a NON-BLIND villain who limped before any raise, at 85bb or less (his range by his own stack's bucket,
+ *     poolLimpKey) — whatever he did after (a limp-raise is solved behind the locked limp). NOT the SB's complete
+ *     (2026-10-09, Brady: "drop the SB complete from the lock target"): folded to, GTO Wizard completes the SB ITSELF —
+ *     a strategy, 5-20% of hands on specific cards (26.8bb 70 combos, 40bb 116, 52bb 267, 75bb 211), where a non-blind
+ *     limp is residue (0.1-1.6 combos smeared over the deck). The pool's folded-to cell (45% / 30% on 50 / 33 completes)
+ *     replaced a real range with a thin one and made hero check back 66-88 / AJo / ATs; the SB's complete is the solver's;
  *   - EXACTLY ONE non-blind limp in the line, his: GTO Wizard's preflop tree holds one non-SB limper and the SB's complete
  *     (max_allowed_limps 2). Two or more limpers — or hero's own limp before his — are the charts' and the line fit's,
  *     unchanged (Brady 2026-10-05: "this is just an addition to it"). With a non-blind limper AND the SB completing, the
@@ -259,8 +266,8 @@ export function poolLockTarget(a: {
   const limpers = poolLimpersOf(a.hand, a.heroPos);
   const nonBlind = limpers.find((l) => !l.complete);
   if (nonBlindLimps === 1 && !nonBlind) return { ok: false, why: "the one limp is hero's" };
-  const l = nonBlind ?? limpers.find((x) => x.complete);
-  if (!l) return { ok: false, why: "no villain limped" };
+  const l = nonBlind;
+  if (!l) return { ok: false, why: limpers.some((x) => x.complete) ? "only the SB completed — his complete is the solver's (GTO Wizard completes the SB itself; 2026-10-09)" : "no villain limped" };
   const stack = Number(byPos[l.pos] ?? NaN);
   const key = poolLimpKey(l, stack);
   if (!key) return { ok: false, why: `the ${l.pos} limped deep (${Number.isFinite(stack) ? Math.round(stack) : "?"}bb) — the charts' own range` };
@@ -301,6 +308,10 @@ export function applyPoolLimpFloor(a: {
   let out = a.ranges;
   for (const l of poolLimpersOf(a.hand, a.heroPos)) {
     if (l.raisedLater) continue;
+    // a lone SB complete (folded to) is the solver's, at the flop as preflop (2026-10-09, Brady: "drop it of course"):
+    // GTO Wizard completes the SB itself, 5-20% of hands on specific cards — never the sub-combo residue the floor exists
+    // for; the pool's folded-to cell (45% / 30%) would overwrite that real range. His complete BEHIND a limper is still floored
+    if (l.complete && l.limpsBefore === 0) continue;
     const stack = Number(byPos[l.pos] ?? NaN);
     const key = poolLimpKey(l, stack);
     if (!key) continue;
@@ -323,7 +334,10 @@ export function applyPoolLimpFloor(a: {
 /** The answer's note for the replaced limpers. */
 export const poolLimpFloorNote = (applied: PoolLimpFloorRecord[], chartId: string | null): string =>
   `POOL LIMP RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) limped — ${r.was} combos on ${chartId ?? "the preflop tree"}, `
-    + `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`).join("; ")}`
+    + (r.times
+      // he then called the iso: the whole cell × the pool's limp-call rate (the oracle reads both keys back)
+      ? `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.times.base} combos) × his limp-call rate ${r.times.key} (${(100 * r.times.freq).toFixed(1)}% of chances, ${r.times.n.toLocaleString("en-US")} calls)${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
+      : `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`)).join("; ")}`
   + " — no pool-locked tree covers this stack yet";
 
 /** The table tag a note carries right after the key — none for v2 (the notes exactly as before 2026-10-09), "v3: " for
