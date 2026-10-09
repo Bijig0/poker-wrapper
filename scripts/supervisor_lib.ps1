@@ -94,7 +94,7 @@ function Write-SupStamp {
       name = $s.Name; pid = $PID; startedAt = $s.StartedAt.ToString('yyyy-MM-ddTHH:mm:ss'); envReadAt = $s.EnvReadAt.ToString('yyyy-MM-ddTHH:mm:ss')
       protocol = $script:SupProtocol; task = $s.TaskName; files = $files
       reread = [string[]]$(if ($s.Reread) { @($s.EnvPs1, $s.LocalEnv) } else { @() })
-      envKeys = $s.EnvKeys; needsReplace = $s.NeedsReplace; refused = $s.Refused
+      envKeys = $s.EnvKeys; needsReplace = $s.NeedsReplace; refused = $s.Refused; adopted = $s.Adopted
     }
     # WriteAllText = UTF-8 without a BOM (Out-File in PowerShell 5.1 would add one)
     [IO.File]::WriteAllText((Join-Path $s.JobsDir "supervisor-$($s.Name).json"), ($stamp | ConvertTo-Json -Depth 5))
@@ -128,7 +128,7 @@ function Start-SupervisorState {
     JobsDir = $(if ($JobsDir) { $JobsDir } else { Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\data\jobs' })
     EnvPs1 = Get-SupFullPath (Join-Path $env:POKER_ROOT 'config\env.ps1'); LocalEnv = Get-SupFullPath (Join-Path $env:POKER_ROOT 'config\local.env')
     TaskName = $script:SupTaskNames[$Name]; StartedAt = Get-Date; EnvReadAt = Get-Date
-    NeedsReplace = $null; Refused = $null; EnvHashes = $null; EnvKeys = $null
+    NeedsReplace = $null; Refused = $null; EnvHashes = $null; EnvKeys = $null; Adopted = $null
   }
   # what env.ps1 + local.env were when they were read just now (the caller dot-sourced env.ps1 a moment ago)
   $script:SupervisorState.EnvHashes = Get-SupEnvHashes
@@ -191,6 +191,23 @@ function Update-SupervisorConfig {
   $changedKeys = @(@($keys.Keys) + @($s.EnvKeys.Keys) | Select-Object -Unique | Where-Object { $keys[$_] -ne $s.EnvKeys[$_] } | Sort-Object)
   Write-SupLog "config re-read before this start: $($files -join ', ') changed$(if ($changedKeys.Count) { " (local.env keys: $($changedKeys -join ', '))" })"
   $s.EnvHashes = $h; $s.EnvKeys = $keys; $s.NeedsReplace = $null; $s.Refused = $null; $s.EnvReadAt = Get-Date
+  Write-SupStamp
+}
+
+# A worker found already serving the port (.claude\chart-server.ps1 watches it instead of starting one): RE-STAMP, so the
+# stamp names THIS supervisor's pid and the worker it adopted (`adopted`). The worker finds its stamp by the service's
+# name and takes a live stamp pid as its supervisor - its own environment still names the supervisor that started it,
+# often one killed by hand (2026-10-10: an adopted chart server's config watch never ran). It also compares what its
+# environment came from with what this supervisor read (services/supervisorRestart.ts). -WorkerPid 0 (a worker this
+# supervisor starts itself) clears the mark; nothing is written when there is none to clear.
+function Set-SupervisorAdopted {
+  param([int]$WorkerPid = 0)
+  $s = $script:SupervisorState
+  if (-not $s) { return }
+  if (-not $WorkerPid -and -not $s.Adopted) { return }
+  if ($WorkerPid -and $s.Adopted -and [int]$s.Adopted.pid -eq $WorkerPid) { return }
+  $s.Adopted = $(if ($WorkerPid) { [ordered]@{ pid = $WorkerPid; at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss') } } else { $null })
+  if ($WorkerPid) { Write-SupLog "adopted worker pid $WorkerPid - stamp re-written with this supervisor's pid $PID" }
   Write-SupStamp
 }
 

@@ -1,6 +1,6 @@
 import { LoadedCode, bootCheck, uncommittedOf, type CodeStatus } from "./loadedCode";
 import { livePort } from "./ports";
-import { MIN_UPTIME_MS, SUPERVISOR_REPLACE_EXIT, type SupervisorWatch, type WatchCheck } from "./supervisorRestart";
+import { MIN_UPTIME_MS, SUPERVISOR_REPLACE_EXIT, type SupervisorWatch, type WatchCheck, type WatchState } from "./supervisorRestart";
 
 /**
  * A MERGE TO MAIN IS THE DEPLOY (2026-10-03).
@@ -62,6 +62,9 @@ export interface AutoStatus {
   reason?: AutoReason;
   /** supervisors this process asks for on their behalf (the API: the GTO Wizard watchdog), when one is behind */
   others?: Record<string, OtherStatus>;
+  /** this process's own supervisor as its stamp watch sees it: the pid (the stamp's while alive), whether that
+   *  supervisor adopted this worker rather than starting it, and the watch's state ("unknown" = no stamp to go by) */
+  watch?: { pid: number | null; adopted: boolean; state: WatchState };
 }
 
 export interface AutoRestartOpts {
@@ -97,6 +100,7 @@ export class AutoRestart {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private otherStatus: Record<string, OtherStatus> = {};
+  private watch: AutoStatus["watch"] | null = null;
   private readonly o: Required<Omit<AutoRestartOpts, "env" | "supervisor" | "others">> & {
     env: NodeJS.ProcessEnv; supervisor?: SupervisorWatch; others: SupervisorWatch[];
   };
@@ -135,7 +139,8 @@ export class AutoRestart {
       }
     }
     const others = Object.keys(this.otherStatus).length ? { others: { ...this.otherStatus } } : {};
-    return this.state = { state, why, uncommitted, checkedAt: this.o.now(), ...(reason ? { reason } : {}), ...others };
+    const watch = this.watch ? { watch: this.watch } : {};
+    return this.state = { state, why, uncommitted, checkedAt: this.o.now(), ...(reason ? { reason } : {}), ...others, ...watch };
   }
 
   private get autoOff(): boolean { return /^(off|0|false|no)$/i.test((this.o.env.AUTO_RESTART ?? "").trim()); }
@@ -152,14 +157,18 @@ export class AutoRestart {
   private async decide(): Promise<AutoStatus> {
     const { code } = this.o;
     const st: CodeStatus = code.status(true);
-    // this process's own supervisor — only when it IS the one running this process (its stamp carries that pid)
+    // this process's own supervisor: the stamp of its service NAME, whose pid is this process's supervisor while it is
+    // alive — the one that started it or one that ADOPTED it (services/supervisorRestart.ts, "which supervisor is mine")
     const sup = this.o.supervisor && this.o.supervised() ? this.o.supervisor.check() : null;
-    const supBehind = !!sup && sup.state !== "current" && sup.state !== "unknown";
+    this.watch = sup ? { pid: sup.pid ?? null, adopted: !!sup.adopted, state: sup.state } : null;
+    // nobody alive to relaunch this process (the stamp's supervisor and the env's are both gone): it never exits
+    const gone = sup?.state === "gone";
+    const supBehind = !!sup?.need;
     // one busy answer for everything this tick asks (one /session request, not one per supervisor)
     let busyMemo: Promise<string | null> | null = null;
     const busy = () => (busyMemo ??= this.o.busy());
     // the watchdog is asked for only by the install's supervised API (a verify API beside it has no stamp of its own)
-    if (sup && sup.state !== "unknown") await this.decideOthers(busy);
+    if (sup && sup.state !== "unknown" && !gone) await this.decideOthers(busy);
     if (!st.stale) {
       this.failed = null;
       if (!supBehind) return this.set("current", "");
@@ -181,6 +190,7 @@ export class AutoRestart {
     const what = `${committed.length} committed file(s) changed (${names(committed.map((f) => code.rel(f)))})`;
     if (this.autoOff) return this.set("off", `${what}; AUTO_RESTART=off — restart by hand`, uncommitted, "code-changed");
     if (!this.o.supervised()) return this.set("unsupervised", `${what}; ${this.o.byHand}`, uncommitted, "code-changed");
+    if (gone) return this.set("unsupervised", `${what}; ${goneWhy(sup!)}`, uncommitted, "code-changed");
 
     const now = this.o.now();
     const quietFor = now - st.changedAt;
@@ -217,6 +227,7 @@ export class AutoRestart {
     const need = sup.need!;
     const reason: AutoReason = need.kind;
     const what = `the supervisor's ${need.why}`;
+    if (sup.state === "gone") return this.set("supervisor-old", `${what} — ${goneWhy(sup)}`, [], reason);
     if (sup.state === "old") {
       return this.set("supervisor-old", `${what} — this supervisor started before it could restart itself: restart it by hand once (CLAUDE.md, "What is live")`, [], reason);
     }
@@ -280,6 +291,11 @@ export class AutoRestart {
     this.otherStatus = next;
   }
 }
+
+/** A worker whose supervisor is not running: what to do by hand (an exit would leave nothing serving its port). */
+const goneWhy = (sup: WatchCheck): string =>
+  `its supervisor (pid ${sup.pid ?? "?"}) is not running, so nothing would relaunch this process — it keeps running; ` +
+  `start the scheduled task${sup.stamp?.task ? ` "${sup.stamp.task}"` : ""} by hand (CLAUDE.md, "What is live")`;
 
 /**
  * Is a poker session live on this install? Asked of the wrapper's panel (the table leader holds the session).

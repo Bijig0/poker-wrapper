@@ -55,6 +55,19 @@ describe.skipIf(!win)("supervisor_lib.ps1 (PowerShell, dry run)", () => {
     const need = supervisorNeed(portStamp);
     expect(need?.kind).toBe("supervisor-changed");
 
+    // a worker found on the port is adopted: re-stamped with this supervisor's pid and the worker's; cleared again
+    const stampOf = (file: string) => {
+      const d = join(root, file.replace(/\.json$/, ""));
+      mkdirSync(d);
+      copyFileSync(join(root, file), join(d, "supervisor-api.json"));
+      return readStamp("api", d)!;
+    };
+    const adopted = stampOf("stamp-adopted.json");
+    expect(adopted.pid, ctx).toBe(Number(v.P));
+    expect(adopted.adopted?.pid, ctx).toBe(54321);
+    expect(log).toContain(`adopted worker pid 54321 - stamp re-written with this supervisor's pid ${v.P}`);
+    expect(stampOf("stamp-unadopted.json").adopted, ctx).toBeNull();
+
     // guards: too young, exit 3 without a file, a script that does not parse
     expect(v.R1, ctx).toBe("False|False");
     expect(log).toContain("self-replace REFUSED (study-api.ps1 changed): this supervisor started only");

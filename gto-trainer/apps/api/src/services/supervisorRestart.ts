@@ -27,6 +27,17 @@ import { join, resolve } from "node:path";
  * supervisor refuses a request in its own first 2 minutes. A supervisor whose stamp has no protocol 2 (started from
  * an older script) is only reported — it would treat the exit as a crash and relaunch into the same change.
  *
+ * WHICH SUPERVISOR IS MINE (2026-10-10, adopted workers). A worker's environment names the supervisor that STARTED it
+ * (POKER_SUPERVISOR). The chart supervisor ADOPTS a server it finds already listening on its port ("port 8777 already
+ * served by bun#… - watching it"), so after a hand restart of that supervisor the worker's env pid is the old, dead one
+ * while the stamp carries the adopter's: matching the two left the adopted worker's watch "unknown" for good (its
+ * /api/build said `current` through a local.env change, 2026-10-10 02:40). Now the stamp is found by the service's NAME
+ * and its pid is this process's supervisor whenever that pid is alive; the env pid only decides when the stamp's pid
+ * is dead (a live env supervisor = the stamp is not its: unknown; nobody alive = `gone`: nothing would relaunch this
+ * process, so it never exits for a change). The adopter re-stamps on adopt (`adopted` = the worker it watches), and an
+ * adopted worker also compares the config its environment came from (its spawning supervisor's stamp, read at boot)
+ * with what the adopter read: a difference is env-changed too (it runs the old supervisor's local.env).
+ *
  * Same file in the chart factory's checkout (poker) as autoRestart.ts / liveStatus.ts: keep the copies identical.
  */
 
@@ -64,6 +75,8 @@ export interface SupervisorStamp {
   task: string | null;
   /** it refused a re-read or a self-replace because a file would not parse: why, and the files as they were then */
   refused: { why: string; files: Record<string, string> } | null;
+  /** the worker it watches was already serving the port when it looked (it adopted it instead of starting one) */
+  adopted: { pid: number; at: string | null } | null;
 }
 
 export const stampPath = (name: string, jobsDir = JOBS_DIR) => join(jobsDir, `supervisor-${name}.json`);
@@ -89,6 +102,7 @@ export function readStamp(name: string, jobsDir = JOBS_DIR): SupervisorStamp | n
     needsReplace: j.needsReplace ? String(j.needsReplace) : null,
     task: j.task ? String(j.task) : null,
     refused: j.refused && typeof j.refused === "object" && j.refused.why ? { why: String(j.refused.why), files: j.refused.files ?? {} } : null,
+    adopted: j.adopted && typeof j.adopted === "object" && Number(j.adopted.pid) ? { pid: Number(j.adopted.pid), at: j.adopted.at ?? null } : null,
   };
 }
 
@@ -169,6 +183,31 @@ export function supervisorNeed(stamp: SupervisorStamp, hash: (f: string) => stri
   return { kind, files: changed.map(relPath), keys, sig: now.sort().join("|") + (stamp.needsReplace ? `|${stamp.needsReplace}` : ""), why };
 }
 
+/**
+ * An ADOPTED worker: the re-read files (env.ps1 / local.env) as the supervisor that started it had read them (`boot`,
+ * its stamp when this process booted) against what the adopting supervisor read (`stamp`). The worker's environment
+ * is the first; a fresh start by the adopter gets the second — so a difference is an env change for this worker even
+ * when the adopter's stamp matches the disk. A file the boot stamp did not record cannot be told: not counted.
+ */
+export function adoptedNeed(boot: SupervisorStamp, stamp: SupervisorStamp): SupervisorNeed | null {
+  const lc = (o: Record<string, string>) => new Map(Object.entries(o).map(([k, v]) => [k.toLowerCase(), String(v).toLowerCase()]));
+  const was = lc(boot.files), now = lc(stamp.files);
+  const changed = stamp.reread.filter((f) => {
+    const k = f.toLowerCase();
+    return was.has(k) && now.has(k) && was.get(k) !== now.get(k);
+  });
+  if (!changed.length) return null;
+  const keys = changed.some(isLocalEnv) && boot.envKeys && stamp.envKeys ? changedKeys(boot.envKeys, stamp.envKeys) : [];
+  const parts = changed.map((f) => (isLocalEnv(f) && keys.length ? `${relPath(f)} (keys: ${keys.join(", ")})` : relPath(f)));
+  const who = boot.pid === stamp.pid ? `since supervisor pid ${stamp.pid} started this worker (it re-read them, then adopted it)`
+    : `between the supervisor that started this worker (pid ${boot.pid ?? "?"}) and the one that adopted it (pid ${stamp.pid})`;
+  return {
+    kind: "env-changed", files: changed.map(relPath), keys,
+    sig: `adopted|${boot.pid}|${stamp.pid}|` + changed.map((f) => `${f}=${now.get(f.toLowerCase())}`).sort().join("|"),
+    why: `${parts.join(", ")} changed ${who}`,
+  };
+}
+
 /** The supervisor refused exactly the files that are on disk now (a further edit is worth another try). */
 export function stillRefused(stamp: SupervisorStamp, hash: (f: string) => string | null = sha256File): boolean {
   const r = stamp.refused;
@@ -184,6 +223,7 @@ export function pidAlive(pid: number): boolean {
 export type WatchState =
   | "current"   // it read what is on disk
   | "unknown"   // no stamp, a stamp from another process, or it is not running: nothing to ask for
+  | "gone"      // own: the stamp's supervisor is not running and no other is in the env: nothing would relaunch this process
   | "old"       // behind, but its script predates protocol 2: restart it by hand once
   | "settling"  // the change is seconds old: wait for it to be quiet
   | "cooldown"  // a request for this supervisor went out less than COOLDOWN_MS ago (loop guard)
@@ -194,14 +234,22 @@ export interface WatchCheck {
   state: WatchState;
   need: SupervisorNeed | null;
   stamp: SupervisorStamp | null;
+  /** the supervisor this check is about: the stamp's when its pid is alive, else (own) the environment's */
+  pid?: number | null;
+  /** own: this process was not started by that supervisor, or its stamp says it adopted it */
+  adopted?: boolean;
 }
 
 export interface SupervisorWatchOpts {
   name: string;
   jobsDir?: string;
-  /** the supervisor that runs THIS process (POKER_SUPERVISOR): its stamp must carry that pid. Unset = a foreign
-   *  supervisor (the watchdog, asked for by the API): its pid must be alive. */
+  /** set = the stamp is THIS process's supervisor's; returns the pid in its environment (POKER_SUPERVISOR: the one
+   *  that STARTED it). The stamp's pid wins while it is alive — a supervisor that adopted this worker wrote it; the
+   *  env pid only decides when the stamp's pid is dead. Unset = a foreign supervisor (the watchdog, asked for by the
+   *  API): its pid must be alive. */
   ownPid?: () => number | null;
+  /** this process's pid (a stamp's `adopted.pid` names it); tests */
+  selfPid?: number;
   now?: () => number;
   hash?: (f: string) => string | null;
   alive?: (pid: number) => boolean;
@@ -214,30 +262,49 @@ export class SupervisorWatch {
   readonly name: string;
   readonly jobsDir: string;
   private seen: { sig: string; at: number } | null = null;
+  /** own: the stamp of the supervisor that started this process, as it was at boot (what its environment came from) */
+  private readonly boot: SupervisorStamp | null = null;
   private readonly o: Required<Omit<SupervisorWatchOpts, "ownPid" | "jobsDir">> & { ownPid?: () => number | null };
 
   constructor(opts: SupervisorWatchOpts) {
     this.name = opts.name;
     this.jobsDir = opts.jobsDir ?? JOBS_DIR;
-    this.o = { now: Date.now, hash: sha256File, alive: pidAlive, settleMs: 20_000, cooldownMs: COOLDOWN_MS, ...opts };
+    this.o = { now: Date.now, hash: sha256File, alive: pidAlive, settleMs: 20_000, cooldownMs: COOLDOWN_MS, selfPid: process.pid, ...opts };
+    // constructed at boot, moments after the supervisor re-read its config, stamped it and started this worker
+    if (this.o.ownPid) {
+      const s = readStamp(this.name, this.jobsDir);
+      this.boot = s && s.pid && s.pid === this.o.ownPid() ? s : null;
+    }
   }
 
   get own(): boolean { return !!this.o.ownPid; }
 
   check(): WatchCheck {
     const stamp = readStamp(this.name, this.jobsDir);
-    if (!stamp || !stamp.pid) return { state: "unknown", need: null, stamp };
-    if (this.o.ownPid ? stamp.pid !== this.o.ownPid() : !this.o.alive(stamp.pid)) return { state: "unknown", need: null, stamp };
-    const need = supervisorNeed(stamp, this.o.hash);
-    if (!need) { this.seen = null; return { state: "current", need, stamp }; }
-    if (stamp.protocol < SUPERVISOR_PROTOCOL) return { state: "old", need, stamp };
-    if (stillRefused(stamp, this.o.hash)) return { state: "refused", need, stamp };
+    const own = !!this.o.ownPid;
+    const envPid = this.o.ownPid ? this.o.ownPid() : null;
+    // no stamp (or one without a pid): nothing to compare — the environment's supervisor is all that is known
+    if (!stamp || !stamp.pid) return { state: "unknown", need: null, stamp, pid: envPid };
+    if (!this.o.alive(stamp.pid)) {
+      if (!own) return { state: "unknown", need: null, stamp, pid: stamp.pid };
+      // the stamp's supervisor is dead: a live one in the environment is another (that stamp is not its) …
+      if (envPid && envPid !== stamp.pid && this.o.alive(envPid)) return { state: "unknown", need: null, stamp, pid: envPid };
+      // … and with nobody alive, nothing would relaunch this process: reported, never acted on
+      return { state: "gone", need: supervisorNeed(stamp, this.o.hash), stamp, pid: stamp.pid };
+    }
+    // the stamp's pid is alive: that supervisor runs this process — the one that started it, or one that adopted it
+    const adopted = own && (stamp.pid !== envPid || stamp.adopted?.pid === this.o.selfPid);
+    const at = { stamp, pid: stamp.pid, ...(own ? { adopted } : {}) };
+    const need = supervisorNeed(stamp, this.o.hash) ?? (adopted && this.boot ? adoptedNeed(this.boot, stamp) : null);
+    if (!need) { this.seen = null; return { state: "current", need, ...at }; }
+    if (stamp.protocol < SUPERVISOR_PROTOCOL) return { state: "old", need, ...at };
+    if (stillRefused(stamp, this.o.hash)) return { state: "refused", need, ...at };
     const now = this.o.now();
     if (this.seen?.sig !== need.sig) this.seen = { sig: need.sig, at: now };
-    if (now - this.seen.at < this.o.settleMs) return { state: "settling", need, stamp };
+    if (now - this.seen.at < this.o.settleMs) return { state: "settling", need, ...at };
     const last = Number(readJson(lastRequestPath(this.name, this.jobsDir))?.at) || 0;
-    if (now - last < this.o.cooldownMs) return { state: "cooldown", need, stamp };
-    return { state: "ready", need, stamp };
+    if (now - last < this.o.cooldownMs) return { state: "cooldown", need, ...at };
+    return { state: "ready", need, ...at };
   }
 
   /** ms since the last request for this supervisor (Infinity when none) */
