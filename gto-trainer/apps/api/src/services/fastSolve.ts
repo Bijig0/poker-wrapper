@@ -4707,7 +4707,7 @@ function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResul
  * THE POOL-LOCKED LIMPER, ASKED FIRST (2026-10-05; services/poolLimpFloor.poolLockTarget says when,
  * gtowAiPreflop.solvePreflopPoolLocked how). null when it does not apply (the decision is answered as before); an ok
  * answer; or a refusal whose reason the answer that follows carries ("POOL LIMP LOCK FAILED …"). Inside poolLockMs
- * (12 s): a late answer never becomes the hand's pin. Applies only with SHORT_LIMP_POOL=on (the default).
+ * (40 s): a late answer never becomes the hand's pin. Applies only with SHORT_LIMP_POOL=on (the default).
  */
 async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts,
     /** THE TRIGGER DID NOT FIRE (2026-10-09, services/poolTrigger): the reason the answer's path carries */
@@ -4763,7 +4763,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
  * THE POOL'S 3-BET COLD-CALL, ASKED FIRST (2026-10-05; services/poolColdCall.coldCallLockTarget says when,
  * gtowAiPreflop.solvePreflopColdCallLocked how). null when it does not apply — no lone cold-caller, or the exact tree
  * already gives his call a real share (COLD_CALL_NOT_NEEDED); an ok answer; or a refusal whose reason the answer that
- * follows carries ("COLD-CALL LOCK FAILED …"). Inside poolLockMs (12 s). COLD_CALL_POOL=on only (the default).
+ * follows carries ("COLD-CALL LOCK FAILED …"). Inside poolLockMs (40 s). COLD_CALL_POOL=on only (the default).
  */
 async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, dropped: () => boolean = () => false): Promise<FastSolveResult | null> {
   if (coldCallPoolMode() !== "on") return null;
@@ -4854,9 +4854,21 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // THE POOL-LOCKED LIMPER FIRST (2026-10-05, gtowAiPreflop.solvePreflopPoolLocked): a short limper no pool-locked
     // chart covers is read at the pool's range on the exact tree with his limp node-locked; when that does not answer in
     // time the decision goes on exactly as before, and the answer says the lock failed
+    // THE REGULAR ANSWER RUNS BESIDE IT (2026-10-10, when the lock box went 12 s -> 40 s): asked one after the other, a
+    // lock that used its whole box left the plain answer still to solve (40 s + 5-12 s). Now the plain answer is ready
+    // when the lock fails; when the lock answers, its pin is put back after the plain answer's lands (the flop must walk
+    // the locked tree), as for the cold-call lock below.
     let lockSkip: PathReason | null = null;
-    const locked = await poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; });
-    if (locked && locked.ok) return locked;
+    const lockAsked = poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; })
+      .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
+    const regular = solvePreflopSixStrategy(hand, heroPos, opts);
+    regular.catch(() => {});   // awaited below; never an unhandled rejection while the lock is still out
+    const { res: locked, pin: lockPin } = await lockAsked;
+    if (locked && locked.ok) {
+      await regular.catch(() => null);
+      if (lockPin && preflopPinFor(hand) !== lockPin) setPreflopPin(lockPin, hand.heroCards?.join("") ?? null);
+      return locked;
+    }
     // THE POOL'S 3-BET COLD-CALL (2026-10-05, services/poolColdCall): a lone cold-caller of a 3-bet whom the exact tree
     // gives ~0% is read at the pool's range on the exact tree with his call node-locked
     // ONLY WHERE NOTHING ELSE COVERS HIM (Brady 2026-10-05: "we still do the regular check … then once we discover
@@ -4870,7 +4882,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // must walk the locked one when the lock answers
     const ccAsked = locked ? null : poolColdCallLockFirst(hand, heroPos, () => ccDropped)
       .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
-    const r = await solvePreflopSixStrategy(hand, heroPos, opts);
+    const r = await regular;
     let cc: FastSolveResult | null = null;
     if (ccAsked) {
       if (r.ok && r.source !== GTOW_AI_PREFLOP_SOURCE) ccDropped = true;     // the charts hold the line: theirs

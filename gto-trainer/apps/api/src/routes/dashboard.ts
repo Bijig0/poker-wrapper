@@ -46,7 +46,7 @@ import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter, seatActionOnTree } from "../services/gtowAiPreflop";
 import { getPreflopPin, preflopNodeFor, preflopNodesFor } from "../services/preflopPin";
-import { APPROXIMATIONS, departuresOf, departureBadge } from "../services/approximations";
+import { APPROXIMATIONS, departuresOf, departureBadge, departureStatesOf } from "../services/approximations";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
 import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
@@ -1496,17 +1496,20 @@ const POOL_LOCK_ENTRY = (key: string) => (/^coldcall3b_/.test(key) ? "pool-coldc
 function answerPathOf(row: any): any {
   try { return row?.path ? JSON.parse(row.path) : null; } catch { return null; }
 }
-function departuresFor(row: any): ReturnType<typeof departureBadge>[] {
+function departuresFor(row: any): ReturnType<typeof departureStatesOf> {
   if (!row) return [];
   const p = answerPathOf(row);
   const codes = [...(p?.reasons ?? []).map((r: any) => r?.code), p?.arrival?.code, p?.arrival?.first?.code];
-  const out = departuresOf(codes, [row.warning, row.text].filter(Boolean).join(" · "));
+  const warning = [row.warning, row.text].filter(Boolean).join(" · ");
+  // a lock that was TRIED and did not apply (timed out, refused) is marked failed: the answer is base GTO there
+  const states = new Map(departureStatesOf(codes, warning).map((d) => [d.id, d]));
+  const out = departuresOf(codes, warning);
   // a pool-locked limp CHART answered: its id is the only trace (no code, no warning)
   if (/_olimp_pool/.test(String(row.chart ?? ""))) {
     const e = APPROXIMATIONS.find((a) => a.id === "pool-locked-limp-charts");
     if (e && !out.some((x) => x.id === e.id)) out.unshift(e);
   }
-  return out.map(departureBadge);
+  return out.map((a) => states.get(a.id) ?? departureBadge(a));
 }
 function poolSeatsFor(hand: ParsedHand, upto: number, street: string, row: any): PoolSeat[] {
   const out: PoolSeat[] = [];

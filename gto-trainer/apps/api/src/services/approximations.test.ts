@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { APPROXIMATIONS, NOT_DEPARTURES, departureForCode, departureForWarning, departuresOf } from "./approximations";
+import { APPROXIMATIONS, NOT_DEPARTURES, departureForCode, departureForWarning, departuresOf, departureStatesOf } from "./approximations";
 
 const SRC = join(import.meta.dir, "..");
 /** Everything that can compose an answer: all of services/ and utils/ (a hand-picked list missed utils/foldPostIns'
@@ -129,5 +129,21 @@ describe("the answer path emits nothing the register does not account for", () =
     expect(departureForCode("street:new-plan")).toBeNull();
     const d = departuresOf(["preflop:charts-cannot-hold"], "LINE FITTED TO THE TREE: … · POOL-LOCKED COLD-CALL: the BB (48bb) cold-called");
     expect(d.map((x) => x.id)).toEqual(["pool-coldcall-lock", "line-fit-borrow"]);
+  });
+  // hand 4923635257 (2026-10-10): the lock timed out, the answer read the UNLOCKED tree, and the page showed its badge
+  test("a lock that was tried and did not apply is FAILED, not a departure the answer took", () => {
+    const failed = "COLD-CALL LOCK FAILED: the SB (51.6bb) cold-called the 3-bet, but the locked GTO Wizard tree did not answer (no answer inside 12 s) — answered as before · GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not";
+    const s = departureStatesOf(["preflop:fit-empties"], failed);
+    const cc = s.find((x) => x.id === "pool-coldcall-lock");
+    expect(cc?.failed).toBe(true);
+    expect(cc?.failText).toStartWith("COLD-CALL LOCK FAILED: the SB (51.6bb)");
+    expect(cc?.failText).not.toContain("GTO Wizard AI preflop (Ultra)");
+    // the lock that answered: its code (and note) — applied
+    const ok = departureStatesOf(["preflop:pool-coldcall-lock"], "POOL-LOCKED COLD-CALL: the SB (51.6bb) cold-called the 3-bet");
+    expect(ok.find((x) => x.id === "pool-coldcall-lock")?.failed).toBeUndefined();
+    expect(departureStatesOf([], "POOL LIMP LOCK FAILED: the HJ (38bb) limped … (no answer inside 40 s) — answered as before").find((x) => x.id === "pool-limp-lock")?.failed).toBe(true);
+    expect(departureStatesOf(["preflop:pool-limp-lock"], "").find((x) => x.id === "pool-limp-lock")?.failed).toBeUndefined();
+    // every failWarn phrase is one of the entry's own warnAlso (the coverage scan resolves it to the entry)
+    for (const a of APPROXIMATIONS) for (const f of a.failWarn ?? []) expect(a.warnAlso ?? []).toContain(f);
   });
 });

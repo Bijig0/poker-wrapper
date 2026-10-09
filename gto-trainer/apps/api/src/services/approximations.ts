@@ -100,6 +100,10 @@ export interface Approximation {
   warn?: string;
   /** further warning prefixes this entry writes (the coverage test resolves each to its entry; not counted) */
   warnAlso?: string[];
+  /** THE ONES OF `warnAlso` THAT SAY IT DID NOT APPLY (2026-10-10, Brady, hand 4923635257: the cold-call lock timed out,
+   *  the answer was read on the UNLOCKED tree, and the hand page still showed the "POOL COLD-CALL LOCK" badge as if it
+   *  had). An answer that matches the entry only through one of these is shown FAILED (departureStatesOf). */
+  failWarn?: string[];
   /** the short label pages print beside an answer / a seat it applied to ("POOL RANGE — <badge>") */
   badge: string;
   /** who decided it, and when it went in */
@@ -425,6 +429,7 @@ export const APPROXIMATIONS: Approximation[] = [
     offSwitch: { env: "SHORT_LIMP_POOL", values: "on (unset) = lock + floor + short-limper routing · floor = no preflop lock · off = none of them (the table: LIMP_LOCKS=v4 (unset) | v3 | v2; the trigger: POOL_LIMP_TRIGGER=on (unset) | off = structural as before 2026-10-09, with POOL_TRIGGER_K and POOL_TRIGGER_DIVERGENCE=off (unset, since 2026-10-10 — review B1: the bound is on CoinPoker-sized counts, so the evidence test is vacuous) = residue + line guard only | ignition = the arm only on a cell with Ignition's own counts | on = on any counts (study only) — the limp table's cells are not marked Ignition's, so ignition leaves the limp lock on residue; the whole line: HERO_ISO_RESPONSE_LOCK=off (unset) | on — its own entry hero-iso-response-lock)", where: "config/local.env, read at every decision" },
     pathCodes: ["preflop:pool-limp-lock"],
     warnAlso: ["POOL LIMP LOCK FAILED"],
+    failWarn: ["POOL LIMP LOCK FAILED"],
     badge: "POOL LIMP LOCK (pool limp locks v4)",
     owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-23",
     diagnostic: "bun src/scripts/shortLimpPoolReport.ts --since 2026-10-05 · bun src/scripts/departuresReport.ts --id pool-limp-lock",
@@ -457,7 +462,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "no equilibrium tree gives a short limper's call of an iso a pool-like range; a lock is the only way to impose one",
     fix: "a decision after a probe on a real tree and the hero's-view study: keep off, or turn on",
     status: "by-design",
-    cost: "when on: 3-7 more node reads on the parent tree INSIDE the 12 s lock box before the POST (hero's node, then up to 6 folds to the reply node per raise size hero's node offers) — the box's p90 is already 9.3 s (independent review 2026-10-10: 58 live locks since 10-07, 2 past 12 s); and it changes hero's iso answers against every pool-locked limper. Unmeasured",
+    cost: "when on: 3-7 more node reads on the parent tree INSIDE the lock box (POOL_LOCK_MS, 40 s since 2026-10-10) before the POST (hero's node, then up to 6 folds to the reply node per raise size hero's node offers) — the box's p90 is already 9.3 s (independent review 2026-10-10: 58 live locks since 10-07, 2 past 12 s); and it changes hero's iso answers against every pool-locked limper. Unmeasured",
     code: "services/poolIsoResponse.ts heroIsoResponseLockOn / isoResponseRates · gtowAiPreflop.ts isoResponseLocks / solvePreflopPoolLocked",
   },
 
@@ -500,6 +505,7 @@ export const APPROXIMATIONS: Approximation[] = [
     pathCodes: ["preflop:pool-coldcall-lock"],
     warn: "POOL-LOCKED COLD-CALL:",
     warnAlso: ["COLD-CALL LOCK FAILED"],
+    failWarn: ["COLD-CALL LOCK FAILED"],
     badge: "POOL COLD-CALL LOCK (CoinPoker 9.1M hands)",
     owner: "Brady", since: "2026-10-05", reviewBy: "2026-10-19",
     diagnostic: "bun src/scripts/departuresReport.ts --id pool-coldcall-lock --since 2026-10-05",
@@ -509,7 +515,7 @@ export const APPROXIMATIONS: Approximation[] = [
     why: "an equilibrium tree gives a cold-call of a 3-bet ~0% of a range the pool calls with 2-2.5% of the time; every street after it was solved against a seat holding nothing",
     fix: "nothing on the solver side — it is an exploit of how the pool plays; a pool-locked HRC 3-bet tree would make it a chart",
     status: "by-design",
-    cost: "unmeasured live (never seen at a real table as of 2026-10-05); replay gate PASS (hand 4922576846: a 48bb SB cold-calls the CO's 3-bet); 12 s POOL_LOCK_MS box — a refusal or timeout keeps the unlocked answer ('COLD-CALL LOCK FAILED')",
+    cost: "unmeasured live (never seen at a real table as of 2026-10-05); replay gate PASS (hand 4922576846: a 48bb SB cold-calls the CO's 3-bet); 40 s POOL_LOCK_MS box (12 s until 2026-10-10: 5 of 6 live locks timed out at 12.0 s) — a refusal or timeout keeps the unlocked answer ('COLD-CALL LOCK FAILED')",
     code: "services/poolColdCall.ts coldCallersOf / coldCallLockTarget · gtowAiPreflop.ts solvePreflopColdCallLocked · fastSolve.ts poolColdCallLockFirst",
   },
   {
@@ -738,12 +744,13 @@ export const APPROXIMATIONS: Approximation[] = [
     pathCodes: ["preflop:hero-self-lock", "preflop:hero-off-answer"],
     warn: "HERO SELF-LOCK:",
     warnAlso: ["HERO OFF-ANSWER:", "HERO OFF HIS OWN TREE:"],
+    failWarn: ["HERO OFF HIS OWN TREE:"],
     badge: "HERO SELF-LOCK (hero's own off-tree action)",
     owner: "Brady", since: "2026-10-07", reviewBy: "2026-10-21",
     diagnostic: "bun src/scripts/departuresReport.ts --id hero-self-lock --since 2026-10-07 (per-code counts: preflop:hero-off-answer = the hands to REVIEW; api.log [hero-self-lock] lines carry the refusals)",
     source: "gtow-ai-preflop",
     title: "Hero's own off-tree action, node-locked so his hand is in his range",
-    what: "when hero's hand reads 0 everywhere at his node on GTO Wizard's preflop tree, the first of his own nodes on the line whose taken action has 0% for his combo is locked (one POST on the solved tree, 12 s POOL_LOCK_MS box; the rest of each hand spread over the other actions as the solver plays them) and his node is answered from the locked child, which is pinned. A hand hero played that his own range does not hold — the chart that answered that decision gave his class 0% of the action, or the lock's range lacked his class — is answered anyway (Brady: 'we don't wanna lose the hand if we're live') and FLAGGED: 'HERO OFF-ANSWER:' opens the note and the path carries preflop:hero-off-answer as a failed check. A lock that fails, times out or still leaves his hand at 0 is refused ('HERO OFF HIS OWN TREE:', fail kind not-in-range), never answered with an empty mix. The pool-limp and cold-call locked trees refuse the same state (one lock per tree there) and the regular AI answer self-locks instead",
+    what: "when hero's hand reads 0 everywhere at his node on GTO Wizard's preflop tree, the first of his own nodes on the line whose taken action has 0% for his combo is locked (one POST on the solved tree, 40 s POOL_LOCK_MS box; the rest of each hand spread over the other actions as the solver plays them) and his node is answered from the locked child, which is pinned. A hand hero played that his own range does not hold — the chart that answered that decision gave his class 0% of the action, or the lock's range lacked his class — is answered anyway (Brady: 'we don't wanna lose the hand if we're live') and FLAGGED: 'HERO OFF-ANSWER:' opens the note and the path carries preflop:hero-off-answer as a failed check. A lock that fails, times out or still leaves his hand at 0 is refused ('HERO OFF HIS OWN TREE:', fail kind not-in-range), never answered with an empty mix. The pool-limp and cold-call locked trees refuse the same state (one lock per tree there) and the regular AI answer self-locks instead",
     why: "GTO Wizard's preflop tree is an equilibrium: a short UTG never limps there, so after a chart's limp (hero limps / completes ~108 times a week from the limp, 3-max and HU charts) any line the chart cannot hold leaves hero with no range at all",
     fix: "nothing on the solver side while charts that limp feed GTO Wizard's tree; a chart that holds the line answers instead",
     status: "by-design",
@@ -1669,3 +1676,23 @@ export function departuresOf(codes: (string | null | undefined)[], warning?: str
 
 /** The compact form pages and exports carry for an answer (badge + kind + id). */
 export const departureBadge = (a: Approximation) => ({ id: a.id, kind: a.kind, lifecycle: a.lifecycle, badge: a.badge, title: a.title });
+
+/**
+ * departuresOf with each entry's STATE for this answer: `failed` when the answer matches the entry only through one of
+ * its `failWarn` phrases (tried, did not apply — the answer is base GTO there), with `failText` = that part of the warning.
+ * An entry matched by a path code, its `warn`, or any other `warnAlso` APPLIED.
+ */
+export function departureStatesOf(codes: (string | null | undefined)[], warning?: string | null):
+    (ReturnType<typeof departureBadge> & { failed?: true; failText?: string })[] {
+  const raw = warning ?? "";
+  const w = lc(raw);
+  return departuresOf(codes, warning).map((a) => {
+    const fails = (a.failWarn ?? []).filter((x) => w.includes(lc(x)));
+    const applied = codes.some((c) => c && a.pathCodes?.includes(c))
+      || [a.warn, ...(a.warnAlso ?? []).filter((x) => !(a.failWarn ?? []).includes(x))].some((x) => x && w.includes(lc(x)));
+    if (applied || !fails.length) return departureBadge(a);
+    const at = w.indexOf(lc(fails[0]!));
+    const end = raw.indexOf(" · ", at);
+    return { ...departureBadge(a), failed: true as const, failText: raw.slice(at, end < 0 ? undefined : end).slice(0, 400) };
+  });
+}

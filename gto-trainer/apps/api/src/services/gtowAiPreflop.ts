@@ -1692,7 +1692,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       return { ok: false, kind: HERO_OFF_TREE, line, reason: `${head}; ${why}` };
     };
     if (!heroSelfLockOn()) return no("HERO_SELF_LOCK=off, so it is not locked back in — no answer");
-    // inside poolLockMs (12 s); the lock never pins anything itself, so a late one is simply dropped
+    // inside poolLockMs (40 s); the lock never pins anything itself, so a late one is simply dropped
     const ms = poolLockMs();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const r = await Promise.race([
@@ -2249,10 +2249,15 @@ export function poolLimpLockOf(line: string, sols: any[], limpCode: string, w: r
   };
 }
 
-/** How long the pool-locked answer may take before the answer goes on as before (POOL_LOCK_MS; GAP_GATE_AI_MS's 12 s). */
+/** How long the pool-locked answer may take before the answer goes on as before (POOL_LOCK_MS, 40 s).
+ *  40 s, NOT 12 (2026-10-10, Brady: "I don't understand why the lock needs a time lock even … set it to 40 seconds"): a lock
+ *  is two GTO Wizard solves back to back (the table's tree, then the locked child) and the 12 s box borrowed from the gap
+ *  gate cut 5 of 6 live cold-call locks off at 12.0 s (hand 4923635257: QQ answered against the UNLOCKED tree's 0.10% SB
+ *  cold-call, folded 77%). Ignition's clock is 15 s + a 45 s time bank and dipping into the bank is fine. No longer
+ *  falls back to GAP_GATE_AI_MS: the gap gate's box is its own. */
 export const poolLockMs = (): number => {
-  const v = Number(process.env.POOL_LOCK_MS ?? process.env.GAP_GATE_AI_MS);
-  return v > 0 ? v : 12_000;
+  const v = Number(process.env.POOL_LOCK_MS);
+  return v > 0 ? v : 40_000;
 };
 
 // ---------------------------------------------------------------------------
