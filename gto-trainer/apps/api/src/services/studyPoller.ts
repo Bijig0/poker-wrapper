@@ -13,6 +13,7 @@ import { cleanRate, faultPath, headline, NEUTRAL_FAIL_KINDS, VERDICT_LABEL, type
 import { SIX_MAX_STRATEGY_ID, isOnDemandStrategy } from "./strategies";
 import { apiUrl } from "./ports";
 import { withPressNote, type PressEntry } from "./allInPress";
+import { seatStatsJson } from "./seatStats";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
 export interface ChainBanner {
@@ -684,6 +685,8 @@ class StudyPoller {
       line: (sol?.ok === true ? sol.line : sol?.ok === false ? sol.line : null) ?? null,
       solveId: (sol?.ok === true ? sol.solveId : null) ?? null,
       sessionId: full.sessionId ?? null,
+      // PER-SEAT SESSION VPIP / PFR (services/seatStats): what the API has seen of each villain seat this session
+      seatStats: seatStatsJson(full.sessionId ?? null, full.hand as Parameters<typeof seatStatsJson>[1]),
       chain: this.lastChainLine,
       // THE SHORT ALL-IN PRESS (services/allInPress): how an ALLIN in this mix is pressed, when not as the shove
       press: sol?.ok === true && sol.press?.length ? JSON.stringify(sol.press) : null,
@@ -1088,6 +1091,7 @@ class StudyPoller {
       decisionKey: key,
       text: null, pick: null, roll: null, tier: null, warning: null,
       latencyMs, failReason: reason, failKind: kind,
+      seatStats: seatStatsJson(full?.sessionId ?? probe.hand?.sessionId ?? null, (full?.hand ?? probe.hand) as Parameters<typeof seatStatsJson>[1]),
       sessionId: full?.sessionId ?? probe.hand?.sessionId ?? null,
       // a verdict that arrived after hero acted still says how the chain did; a fetch that failed is a fault
       ...((): { pathVerdict: string | null; path: string | null } => {

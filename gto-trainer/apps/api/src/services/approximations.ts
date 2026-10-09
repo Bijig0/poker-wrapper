@@ -1535,6 +1535,8 @@ export const NOT_DEPARTURES: {
   codes: Record<string, string>;
   codePrefixes: Record<string, string>;
   warnings: Record<string, string>;
+  /** what an answer row RECORDS beside the answer that no answer is built from (logging, not strategy) */
+  logging: Record<string, string>;
 } = {
   codes: {
     "preflop:charts-cannot-hold": "routing: the 6-max charts cannot hold the line, so the exact GTO Wizard AI tree answers the same spot (the fit and size snaps that make it happen have their own entries)",
@@ -1578,6 +1580,9 @@ export const NOT_DEPARTURES: {
     "STILL REFINING": "a strategy card advisory (services/strategies), not an answer",
     "ON DEMAND": "a strategy card advisory (services/strategies), not an answer",
     "NOT NEEDED": "a refusal reason: the cold-call lock (or, since 2026-10-09, the limp lock under the trigger rule) was not needed — the unlocked tree gives the action a real share",
+  },
+  logging: {
+    "answers.seat_stats": "per-seat session VPIP / PFR (services/seatStats, 2026-10-09): every villain seat's hands seen this session for its current occupant (seat + stack continuity — Ignition is anonymous), VPIP and PFR counts, logged on each answer row; not read by any answer — groundwork for a session-VPIP band (memory player-type-study), which would be a departure of its own when keyed in"
   },
 };
 

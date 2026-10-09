@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { resolveHand, type ResolveBody } from "../feed/resolveHand/resolveHand";
+import { seatStats } from "../services/seatStats";
 import { handToSpot, type SpotOptions } from "../feed/handToSpot/handToSpot";
 import { renderPanelRows } from "../feed/parsePanelFeed/parsePanelFeed";
 import { fastSolve } from "../services/fastSolve";
@@ -101,6 +102,8 @@ async function handleFastSolve(c: any): Promise<Response> {
   if (!resolved.ok) return c.json({ ok: false, error: resolved.error }, resolved.status as 400 | 409 | 502);
   tmark("hand", `${resolved.hand?.currentNode?.street ?? "?"} · ${(resolved.hand?.actions ?? []).length} actions · toActIsHero=${resolved.hand?.currentNode?.toActIsHero}`);
   const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras } = resolved;
+  // PER-SEAT SESSION VPIP (services/seatStats): the decision's hand too (the probe usually saw it first) — logging only
+  if (hand) seatStats.observe(sessionId ?? null, hand);
 
   if (!hand) {
     return c.json(
