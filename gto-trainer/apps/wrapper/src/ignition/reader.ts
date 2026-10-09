@@ -501,7 +501,11 @@ export async function feedTick(): Promise<void> {
   } catch {
     S.heroClock = null;
   }
-  S.bankSeen = bankStep(S.bankSeen, toActNow, L.timeBank ? String(L.timeBank.text) : null, prevClock, S.heroClock, time());
+  // the bank's start is judged against the last READABLE clock too: an unreadable frame right before the 0 -> 45 jump
+  // must not hide it (a missed start counted the bank twice, and fold-on-no-answer never acted)
+  const prevGood = S.heroClockGood;
+  S.heroClockGood = !toActNow ? null : S.heroClock !== null ? { clock: S.heroClock, at: time() } : prevGood;
+  S.bankSeen = bankStep(S.bankSeen, toActNow, L.timeBank ? String(L.timeBank.text) : null, prevClock ?? prevGood?.clock ?? null, S.heroClock, time());
   L.practice = !!d.practice;
   const cur: Record<string, any> = { seated: true, seats, board, pot, heroHand, toAct: toActNow, heroCards: hc.join(" ") };
 

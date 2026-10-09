@@ -526,6 +526,8 @@ export function bankStep(prev: BankSeen | null, onClock: boolean, offerText: str
   const m = offerText ? /(\d+)/.exec(offerText) : null;
   if (m) return { secs: Number(m[1]), at: now, started: false };
   if (prev && !prev.started && clock !== null && prevClock !== null && clock > prevClock + 1) return { ...prev, started: true };
+  // past the 15 s base clock, the clock can only be the bank (2026-10-10: a start whose jump frame did not read)
+  if (prev && !prev.started && clock !== null && clock > 16) return { ...prev, started: true };
   return prev;
 }
 

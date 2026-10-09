@@ -140,6 +140,10 @@ function fresh() {
     /** Seconds on hero's action clock as the table shows it (Ignition), null when not on the clock / unreadable. Kept
      *  out of liveStatus, which the reader golden compares key by key against the Python recordings. */
     heroClock: null as number | null,
+    /** The last READABLE hero clock of this turn and when it was read (null off the clock). A tick whose seat box does not
+     *  read (heroClock null) is judged from it (relay.heroTimeLeft) — 2026-10-10: one unreadable tick 30 s into a turn
+     *  fired the no-answer backstop while a slow answer (a 40 s pool lock) was still coming. */
+    heroClockGood: null as { clock: number; at: number } | null,
     /** When the reader last READ the strip and set liveStatus.toAct (reader.ts feedTick). A tick that stands down
      *  before that point (table read failed, "table broke", not seated) leaves toAct as it was; hand.ts treats a
      *  reading older than BUTTONS_STALE_S as no buttons. Not in liveStatus (the golden). */

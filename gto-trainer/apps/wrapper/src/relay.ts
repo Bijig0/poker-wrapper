@@ -1222,7 +1222,7 @@ export function noAnswerFoldWhy(age: number): string | null {
   const note = currentNote();
   if (note && age >= NO_ANSWER_NOTE_MIN_S) return `refused — ${note}`;
   const left = heroTimeLeft();
-  if (left !== null && left.total <= NO_ANSWER_CLOCK_S) return `clock nearly out (${left.total} s left)`;
+  if (left !== null && left.total <= NO_ANSWER_CLOCK_S) return `clock nearly out (${left.total} s left${left.estimated ? ", estimated from the last readable clock" : ""})`;
   if (!isClientSite() && S.liveStatus.timeBank && !S.study.timeBank) return "clock nearly out (time bank on offer, set to leave it)";
   // the backstop is for a clock that cannot be read — a readable one (the bank running) is the better judge
   if (left === null && age >= NO_ANSWER_DEADLINE_S) return `no answer after ${fmtFixed(age, 0)} s`;
@@ -1252,11 +1252,20 @@ export function bankOfferS(): number | null {
  *  left" while 45 s of bank was still to come. The handover frame — button gone, clock still 0 — counts the bank
  *  too (dom.bankStep remembers the offer for the turn until the clock jumps). null = the clock cannot be read
  *  (CoinPoker, or no number in the box). */
-export function heroTimeLeft(): { total: number; clock: number; bank: number } | null {
+export function heroTimeLeft(): { total: number; clock: number; bank: number; estimated?: true } | null {
   const clock = heroClockLeft();
   const bank = bankOfferS();
   if (bank !== null && !(S.bankSeen && S.bankSeen.secs === bank && !S.bankSeen.started)) S.bankSeen = { secs: bank, at: time(), started: false };
-  if (clock === null) return null;
+  if (clock === null) {
+    // AN UNREADABLE TICK IS JUDGED FROM THE LAST READABLE ONE (2026-10-10): the clock counts down 1 s a second, and the
+    // bank starts itself at 0 — so a 40 s answer is not given up for one frame the seat box did not read
+    const good = isClientSite() ? null : S.heroClockGood;
+    if (!good || time() - good.at > 90) return null;
+    const raw = good.clock - (time() - good.at);
+    const seen = S.bankSeen;
+    const pending = seen && !seen.started ? seen.secs : 0;
+    return { total: Math.max(0, Math.round(raw + pending)), clock: Math.max(0, Math.round(raw)), bank: pending, estimated: true };
+  }
   if (bank !== null) return { total: clock + bank, clock, bank };
   const seen = S.bankSeen;
   if (seen && !seen.started && clock <= 1) return { total: clock + seen.secs, clock, bank: seen.secs };
@@ -1276,8 +1285,10 @@ export function unplayedAnswerWhy(key: string | null, age: number): string | nul
   const st = S.study;
   const ex = st.lastExec;
   const refused = !!(key && ex && ex.key === key && ex.outcome === "refused");
+  const unregistered = !!(key && ex && ex.key === key && ex.outcome === "unknown");
   const state = st.autoHeld && st.autoHeld.key === key ? `held — ${st.autoHeld.why}`
     : refused ? `refused — ${pyStr((ex.result || {}).reason ?? null)}`
+    : unregistered ? `pressed but never registered by the table — ${pyStr(ex.outcomeWhy ?? null)}`
     : "not played yet";
   const left = heroTimeLeft();
   if (left !== null && left.total <= NO_ANSWER_CLOCK_S) return `clock nearly out (${fmtLeft(left)}) with the answer ${state}`;
@@ -1323,9 +1334,14 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   const age = time() - turn.since;
   // an answer for THIS decision is auto-execute's to play (or to hold) — unless it is not going to be played in time
   const ready = currentAnswer() ? pickReady() : null;
-  // the answer for this decision was pressed: the strip just has not gone yet — never press over it
-  if (ready && !ready.ok && ready.key && st.executed === ready.key) return;
-  const why = ready && ready.ok ? unplayedAnswerWhy(ready.key ?? null, age) : noAnswerFoldWhy(age);
+  // the answer for this decision was pressed: the strip just has not gone yet — never press over it. UNLESS THE PRESS
+  // NEVER REGISTERED (2026-10-10): the verify loop gave up ("unknown": no action from hero after its presses) and the
+  // buttons are still up — `executed` stood this rule aside for the rest of the turn and hero timed out (sit-out risk)
+  // while the panel showed the pick as executed. Then it is an unplayed answer like any other: checked / folded at
+  // the clock rule's moment, never earlier.
+  const unregistered = !!(ready && ready.key && st.executed === ready.key && st.lastExec?.key === ready.key && st.lastExec.outcome === "unknown");
+  if (ready && !ready.ok && ready.key && st.executed === ready.key && !unregistered) return;
+  const why = ready && (ready.ok || unregistered) ? unplayedAnswerWhy(ready.key ?? null, age) : noAnswerFoldWhy(age);
   if (!why) return;
   turn.tries += 1;
   turn.lastTry = time();
