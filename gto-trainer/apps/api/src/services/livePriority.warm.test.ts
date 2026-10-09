@@ -86,6 +86,7 @@ describe("StallSummary (the 5-min [stall-summary] line)", () => {
       "no request open (a timer or background job) 1.8 s ×1, short (<300 ms) 0.2 s ×1");
     expect(s.flush(t)).toBeNull();
     t = Date.UTC(2026, 9, 9, 0, 10, 0);
-    expect(s.flush(t)).toBe("[stall-summary] 00:05–00:10Z: 0 stalls ≥100 ms (0 ≥1 s), blocked 0.0 s of 300.0 s (0%), max 0.0 s");
+    expect(s.flush(t, "machine cpu 64% (last samples) · session live")).toBe("[stall-summary] 00:05–00:10Z: 0 stalls ≥100 ms (0 ≥1 s), " +
+      "blocked 0.0 s of 300.0 s (0%), max 0.0 s · machine cpu 64% (last samples) · session live");
   });
 });

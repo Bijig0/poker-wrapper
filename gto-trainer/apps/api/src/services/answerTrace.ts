@@ -248,7 +248,12 @@ export function startStallMonitor(): void {
     summary.add(late, rec);
   }, STALL_TICK_MS);
   // the 5-min summary also prints for a window with no stall at all (its absence would read as "the API was down")
-  summaryTimer = setInterval(() => { const line = summary.flush(Date.now()); if (line) console.log(line); }, 10_000);
+  summaryTimer = setInterval(() => {
+    let extra: string | undefined;
+    try { extra = summaryExtra?.(); } catch { /* the summary never fails on its extra */ }
+    const line = summary.flush(Date.now(), extra);
+    if (line) console.log(line);
+  }, 10_000);
   (summaryTimer as { unref?: () => void }).unref?.();
   (stallTimer as { unref?: () => void }).unref?.();
 }
@@ -279,8 +284,9 @@ export class StallSummary {
     b.ms += ms; b.n++;
     this.by.set(label, b);
   }
-  /** The line for the window that ended before `now`, once; null while the window is still open. */
-  flush(now: number): string | null {
+  /** The line for the window that ended before `now`, once; null while the window is still open. `extra` is appended
+   *  (the machine's state at the end of the window, services/machineLoad.ts). */
+  flush(now: number, extra?: string): string | null {
     const cur = Math.floor(now / this.windowMs) * this.windowMs;
     if (this.winStart == null) { this.winStart = cur; return null; }
     if (cur <= this.winStart) return null;
@@ -291,13 +297,16 @@ export class StallSummary {
     const line = `[stall-summary] ${hhmm(from)}–${hhmm(to)}Z: ${this.n} stalls ≥${STALL_MIN_MS} ms (${this.nLong} ≥1 s), ` +
       `blocked ${s(this.ms)} s of ${s(this.windowMs)} s (${Math.round((100 * this.ms) / this.windowMs)}%), max ${s(this.max)} s` +
       (this.cpuWallMs ? `, cpu ${Math.round((100 * this.cpuMs) / this.cpuWallMs)}% of the logged blocked time` : "") +
-      (parts.length ? ` · by longest open: ${parts.join(", ")}` : "");
+      (parts.length ? ` · by longest open: ${parts.join(", ")}` : "") + (extra ? ` · ${extra}` : "");
     this.winStart = cur; this.n = 0; this.nLong = 0; this.ms = 0; this.max = 0; this.cpuMs = 0; this.cpuWallMs = 0; this.by.clear();
     return line;
   }
 }
 const summary = new StallSummary();
 let summaryTimer: ReturnType<typeof setInterval> | null = null;
+let summaryExtra: (() => string) | null = null;
+/** What the 5-min summary line appends (services/machineLoad.ts registers the machine's CPU + heavy processes). */
+export function setStallSummaryExtra(fn: (() => string) | null): void { summaryExtra = fn; }
 
 /** Stalls that overlap [fromMs, toMs] (wall clock), oldest first. */
 export function stallsBetween(fromMs: number, toMs: number): { at: number; ms: number }[] {

@@ -27,6 +27,7 @@ import {
   HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, type Enriched,
 } from "./dashboard";
 import { port } from "../services/ports";
+import { step } from "../services/answerTrace";
 
 /**
  * Sources — the study dashboard's mission control.
@@ -795,13 +796,15 @@ export function warmSourcesCaches(): void {
 /** The whole-hand strategy catalogue: what we can play, whether each is
  *  coherent (safeguards in services/strategies.ts), its winrate row from the
  *  matrix, and hero's realized bb/100 while it was the active mode. */
-function strategiesBody() {
-  const views = evaluateStrategies();
-  const matrix = readJson(factoryFile("strategy_matrix.json"));
+export function strategiesBody() {
+  // each part is step()-timed (services/answerTrace): a [stall] across a build names the slow part
+  // (cold cost measured 2026-10-09: see the commit that added these)
+  const views = step("evaluate strategies", () => evaluateStrategies());
+  const matrix = step("strategy matrix", () => readJson(factoryFile("strategy_matrix.json")));
   const rowById: Record<string, any> = {};
   for (const g of matrix?.groups ?? []) for (const row of g.rows ?? []) rowById[row.id] = { ...row, group: g.title };
   // realized: answers tagged with the mode that was live, joined to hand nets
-  const rows = answerLog.rows(365);
+  const rows = step("answer log 365 d", () => answerLog.rows(365));
   const seen = new Map<string, string>();      // clientHandId -> strategy id
   for (const a of rows) {
     const sid = strategyIdForAnswer(a as any);
@@ -812,10 +815,10 @@ function strategiesBody() {
   const realized: Record<string, { hands: number; netBb: number }> = {};
   // reuse the dashboard's own enrichment + net accounting (same numbers the
   // Analytics tab shows) rather than a second, divergent query
-  const enriched = allRows().map(enrichSync).filter((x): x is Enriched => x != null);
-  const nets = computeNets(enriched);
+  const enriched = step("all hands enriched", () => allRows().map(enrichSync).filter((x): x is Enriched => x != null));
+  const nets = step("hand nets", () => computeNets(enriched));
   const declared = new Map<string, string>();
-  for (const sess of sessionsStore.list(500)) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
+  for (const sess of step("sessions list", () => sessionsStore.list(500))) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
   for (const e of enriched) {
     const sessId = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
     const sid = (sessId && declared.get(sessId)) || (e.clientHandId ? seen.get(e.clientHandId) : null);
@@ -826,7 +829,7 @@ function strategiesBody() {
   }
   // how each strategy answers every spot (services/strategyCoverage.ts), with the register's live counts joined:
   // per row, the fires of the approximations it leans on; per strategy, its HOLES = the register filtered to its sources
-  const approx = Object.keys(STRATEGY_COVERAGE).length ? approximationRows(30) : [];
+  const approx = Object.keys(STRATEGY_COVERAGE).length ? step("approximation rows 30 d", () => approximationRows(30)) : [];
   const brief = (r: (typeof approx)[number]) => ({ id: r.id, title: r.title, what: r.what, fix: r.fix, status: r.status,
     cost: r.cost ?? null, fires: r.fires, measured: r.measured, openRows: r.miss?.rows ?? 0 });
   const coverageOf = (id: string) => {

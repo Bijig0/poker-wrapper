@@ -18,13 +18,6 @@ describe("GET /api/gtow/accounts — served from the shared cache", () => {
     expect(await r.json()).toEqual(payload);
     expect(performance.now() - t0).toBeLessThan(200);   // nothing probed, nothing queried
   });
-
-  it("a stale payload is still answered at once (the rebuild runs behind the request)", async () => {
-    let now = 9_000_000;
-    __resetLivePriority(() => now);
-    setCached(ACCOUNTS_CACHE_KEY, { ok: true, marker: "stale" });
-    now += ACCOUNTS_TTL_MS + 1;
-    const r = await app.request("/");
-    expect((await r.json()).marker).toBe("stale");
-  });
+  // (stale-while-revalidate itself is covered in services/livePriority.warm.test.ts: a stale route test here would start a
+  //  REAL payload build in the background that leaks into the next test file's fake GTO Wizard)
 });
