@@ -402,10 +402,11 @@ function renderCggTables() {
 
 // ---- step 2: the table — format, buy-in, profile, window state ----------
 let FORMATS = [], PROFILES_LIST = [], twTimer = null, lastTw = null, CATALOGUE_ERROR = null, CATALOGUE_BUILDING = false;
-// the catalogue is the only source of answering modes: keep asking until it is back
+// the catalogue is the only source of answering modes: keep asking until it is back. `?from=setup` (2026-10-09): while
+// this page asks, the study API treats the machine as about to play and holds its heavy rebuilds (the copy is served)
 async function watchCatalogue() {
   try {
-    const j = await (await fetch("/session")).json();
+    const j = await (await fetch("/session?from=setup")).json();
     const had = Object.values(PRESETS).some((p) => p.strategy), has = Object.values(j.presets || {}).some((p) => p.strategy);
     CATALOGUE_ERROR = j.catalogueError || null;
     const wasBuilding = CATALOGUE_BUILDING;
@@ -686,7 +687,7 @@ async function loadGtowAllow() {
   const el = $("gtow-allow");
   if (!el) return;
   let j = null;
-  try { j = await (await fetch("/session/gtow-accounts")).json(); } catch { /* wrapper or API down: the preflight row says so */ }
+  try { j = await (await fetch("/session/gtow-accounts?from=setup")).json(); } catch { /* wrapper or API down: the preflight row says so */ }
   if (j && j.ok) {
     const ticked = new Set([...el.querySelectorAll("input[type=checkbox]")].filter((x) => x.checked).map((x) => x.value));
     const first = gaAllowSeen === null;
@@ -929,7 +930,7 @@ checkUpdate(false);
 setInterval(() => checkUpdate(false), 30 * 60 * 1000);
 
 (async () => {
-  const j = await (await fetch("/session")).json();
+  const j = await (await fetch("/session?from=setup")).json();
   PRESETS = j.presets; fake = !!j.fakeTable; CATALOGUE_ERROR = j.catalogueError || null; CATALOGUE_BUILDING = !!j.catalogueBuilding;
   if (j.current) { location.href = "/panel"; return; }
   setTimeout(watchCatalogue, 5000);

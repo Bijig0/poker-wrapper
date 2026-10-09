@@ -24,6 +24,8 @@ import { openStore } from "./storePaths";
 import { ensureEventTables } from "../../../../packages/data-root/eventTables";
 import { AUTH_STATUSES, NT_AUTH, NT_AUTH_RETRY, NT_AUTH_TWICE, authNote } from "./gtowAuthBody";
 import { gtowLoad } from "./gtowLoad";
+import { gtowLedgerView } from "./gtowLedgerView";
+import { WALL_SCAN_MS, WALL_SCAN_ROWS, wallFromRows } from "./gtowWall";
 
 export type GtowRequestKind = "tree" | "solution" | "poll" | "library" | "other";
 
@@ -148,6 +150,9 @@ class GtowRequestLog {
     return db;
   }
 
+  /** The ledger's connection (services/gtowLedgerView's on-loop reads: its sync, the seed's fallback). */
+  handle(): Database { return this.open(); }
+
   /** Release the database (tests; a process that is done with the ledger). */
   close(): void {
     try { this.db?.close(); } catch { /* already closed */ }
@@ -164,7 +169,11 @@ class GtowRequestLog {
       const ins = this.open().query("INSERT INTO gtow_requests (ts, s, k, st, o, h, sr, go, q, hd, pm, cl, nt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .run(rec.ts, rec.s, rec.k, rec.st, rec.o, rec.h ?? null, rec.sr ?? null, rec.go ?? null, row.q ?? null, row.hd ?? null, row.pm ?? null, row.cl ?? null, row.nt ?? null);
       // THE ROUTING COUNTER (services/gtowLoad, least-loaded routing): this request counts on its account at once
-      if (this.feedsLoad) gtowLoad.note(rec.s, rec.ts, Number(ins.lastInsertRowid));
+      if (this.feedsLoad) {
+        gtowLoad.note(rec.s, rec.ts, Number(ins.lastInsertRowid));
+        // …and the accounts page's in-memory ledger (services/gtowLedgerView: meters and walls without a query)
+        gtowLedgerView.note({ id: Number(ins.lastInsertRowid), s: rec.s, ts: rec.ts, st: rec.st, o: rec.o });
+      }
       if (++this.written % LOG_EVERY === 0) {
         const s = this.stats();
         console.log(`[gtow-requests] ${s.last24h.total} in the last 24 h (${Object.entries(s.last24h.bySession).map(([k, v]) => `${k} ${v}`).join(", ")}; ${s.last24h.status429} x 429) · cap ${CAP}`);
@@ -339,33 +348,9 @@ class GtowRequestLog {
     try {
       // newest first; only the statuses that say anything about the wall (a 204 or a 400 says nothing)
       const rows = this.open().query<{ ts: number; st: number }, [string, number]>(
-        "SELECT ts, st FROM gtow_requests WHERE s = ? AND ts >= ? AND (st = 429 OR st BETWEEN 200 AND 299) ORDER BY ts DESC, id DESC LIMIT 5000")
-        .all(session, now - 3 * 86_400_000);
-      if (!rows.length) return none;
-      const last429 = rows.find((r) => r.st === 429)?.ts ?? null;
-      const lastOk = rows.find((r) => r.st !== 429)?.ts ?? null;
-      if (!last429) return { ...none, lastOkMs: lastOk };
-      // A wall is a RUN of 429s. One success inside it is a leak, not a lift (Elite, 2026-09-27 09:40 local: a single
-      // 200 fourteen hours in, then 429s for hours more) — the run ends only at two successes in a row.
-      let i = 0, okRun = 0, leaks = 0, since = last429, clearedAt: number | null = null;
-      for (; i < rows.length; i++) {
-        const r = rows[i]!;
-        if (r.st === 429) { since = r.ts; okRun = 0; continue; }
-        okRun++;
-        if (okRun >= 2) break;
-      }
-      const lifted = rows[0]!.st !== 429 && rows.length > 1 && rows[1]!.st !== 429;
-      if (lifted) {
-        // cleared at the first of the two successes that ended the run; leaks = lone successes inside it
-        let j = 0; while (j < rows.length && rows[j]!.st !== 429) j++;
-        clearedAt = rows[Math.max(0, j - 1)]!.ts;
-        for (let k = j; k < rows.length; k++) { const r = rows[k]!; if (r.st === 429) continue; if (rows[k + 1]?.st === 429 && rows[k - 1]?.st === 429) leaks++; else break; }
-        return { walled: false, sinceMs: null, expectedLiftMs: null, last429Ms: last429, lastOkMs: lastOk, clearedAtMs: clearedAt, leaks };
-      }
-      // a leak is a success with a 429 on both sides (or the newest request) — not the pair that ended the run
-      for (let k = 0; k < i; k++) if (rows[k]!.st !== 429 && rows[k + 1]?.st === 429 && (k === 0 || rows[k - 1]!.st === 429)) leaks++;
-      // the newest request itself was a lone success: the wall may be lifting — say so, and still count it walled
-      return { walled: true, sinceMs: since, expectedLiftMs: since + wallMs, last429Ms: last429, lastOkMs: lastOk, clearedAtMs: null, leaks };
+        `SELECT ts, st FROM gtow_requests WHERE s = ? AND ts >= ? AND (st = 429 OR st BETWEEN 200 AND 299) ORDER BY ts DESC, id DESC LIMIT ${WALL_SCAN_ROWS}`)
+        .all(session, now - WALL_SCAN_MS);
+      return wallFromRows(rows, wallMs);
     } catch {
       return none;
     }
@@ -437,4 +422,5 @@ export function refusalsIn(db: Database, sinceMs: number): { since: number | nul
 export const gtowRequests = new GtowRequestLog();
 gtowRequests.feedsLoad = true;
 gtowLoad.setSource({ seed: (since) => gtowRequests.loadRows(since), after: (id) => gtowRequests.loadRowsAfter(id) });
+gtowLedgerView.setSource({ path: gtowRequests.path, db: () => gtowRequests.handle() });
 export { GtowRequestLog };

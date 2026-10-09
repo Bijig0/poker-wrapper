@@ -177,13 +177,17 @@ export function buildApp(): Hono {
   app.get("/session/checks", async () => json(200, await SESSION.sessionChecks()));
   // The panel and /setup poll this every 5 s. A healthy catalogue comes from the 30 s cache (a forced refresh here made
   // the API rebuild its strategy catalogue 12 times a minute per open panel); only an unreachable one is re-asked each time.
-  app.get("/session", async () => json(200, {
+  app.get("/session", async (c) => {
+    // the setup page marks its polls (?from=setup): while it is open the API holds its heavy rebuilds (SES.noteSetupPage)
+    if (qparam(queryOf(c), "from") === "setup") SES.noteSetupPage();
+    return json(200, {
     ok: true, current: S.session.rec, brief: await SESSION.sessionBrief(),
     presets: await SES.presets(!SES.presetsFromApi()), presetsFromApi: SES.presetsFromApi(), catalogueError: SES.presetsError(),
     catalogueBuilding: SES.presetsBuilding(),
     fakeTable: S.fakeMode,
     lastPreset: (S.sessions.list(1)[0] || {}).preset ?? null,
-  }));
+  });
+  });
   app.get("/sessions", async () => {
     const left = await SESSION.leftovers();
     return json(200, { ok: true, sessions: S.sessions.list(50), open: !S.session.id ? left[0] ?? null : null, openAll: left });
@@ -360,9 +364,10 @@ export function buildApp(): Hono {
   });
   /** The GTO Wizard accounts page's payload, passed through for the panel's meter and the setup page's account picker
    *  (2026-09-27): registry, lights, last-hour / last-day meters, walls. Same origin, so the pages need no API URL. */
-  app.get("/session/gtow-accounts", async () => {
+  app.get("/session/gtow-accounts", async (c) => {
+    if (qparam(queryOf(c), "from") === "setup") SES.noteSetupPage();
     try {
-      const r = await fetch(`${SES.API()}/api/gtow/accounts`, { signal: AbortSignal.timeout(12_000) });
+      const r = await fetch(`${SES.API()}/api/gtow/accounts`, { signal: AbortSignal.timeout(12_000), headers: SES.setupHeaders() });
       if (r.status >= 400) throw new Error(`HTTP Error ${r.status}: ${r.statusText}`);
       return send(200, "application/json", new Uint8Array(await r.arrayBuffer()));
     } catch (e: any) {

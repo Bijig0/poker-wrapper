@@ -4,6 +4,19 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import { answersDbPath, openStore, storeWriteFailed } from "./storePaths";
+import { AnswerView } from "./answerView";
+import { pagedSeed, type PagedSeedResult } from "./sqlitePager";
+
+const DAY_MS = 86_400_000;
+/** how far back the in-memory view keeps rows (ANSWER_VIEW_DAYS; the catalogue's yearly rebase reads 365 d) */
+export const ANSWER_VIEW_DAYS_DEFAULT = 400;
+/** the view is rebuilt from the table this often, between sessions — another PROCESS's UPDATE (scripts/rescoreChecks.ts
+ *  rewriting paths) is not seen by the tail read, only by a reseed */
+export const ANSWER_VIEW_RESEED_MS = 6 * 3_600_000;
+/** a seed that failed is not retried sooner than this (the SQL path serves meanwhile) */
+const ANSWER_VIEW_RETRY_MS = 5 * 60_000;
+/** the seed's page: ~1.3 KB a row (paths, chains and mixes), so 500 rows ≈ 650 KB a slice */
+const ANSWER_VIEW_PAGE = 500;
 
 /**
  * Persistent log of every study answer the poller pushed (and every solve
@@ -343,6 +356,32 @@ class AnswerLog {
   private readonly rowsCache = new Map<number, { key: string; rows: LoggedAnswer[] }>();
 
   /**
+   * THE INCREMENTAL VIEW (2026-10-09, catalogue-incremental; services/answerView.ts has the why). When on, rows(days),
+   * bySource, stats, countWarnings and countPathCodes read MEMORY: the view is seeded ONCE off the loop (a Bun Worker
+   * reads the table in pages, services/sqlitePager.ts; each page applied in its own short slice, after the live answers),
+   * add() pushes each new row into it at once, attach() re-reads the row it changed, and a read first takes the rows
+   * another process appended (one `max(id)` primary-key read; normally nothing more). Until the seed lands — or if it
+   * failed — the SQL path below serves, exactly as before. Off under bun test unless a test asks (`{ view: true }`), and
+   * with ANSWER_VIEW=off.
+   */
+  private readonly viewOn: boolean;
+  private readonly viewMaxAgeMs: number;
+  private view: AnswerView | null = null;
+  /** every id <= this has been read into the view (the tail read starts after it) */
+  private viewTailId = 0;
+  private viewSeededAt = 0;
+  private viewFailedAt = 0;
+  private seeding: Promise<boolean> | null = null;
+  /** ids attach() changed while a seed ran: re-read when it lands (the seed may have read them before the change) */
+  private dirtyDuringSeed: Set<number> | null = null;
+  /** the last seed's numbers (the [answer-view] line; tests) */
+  lastSeed: (PagedSeedResult & { at: number; reseed: boolean }) | null = null;
+  /** a reseed waits while this is true (routes/sources.ts sets it: a poker session is live, or the setup page is open) */
+  viewHold: () => boolean = () => false;
+  /** the seed's reader: "auto" = a Worker for a file, the loop for ":memory:" (tests pin one) */
+  viewSeedMode: "auto" | "worker" | "loop" = "auto";
+
+  /**
    * ANSWERS_DB_PATH (2026-09-23, EIP-07 + PF-11): the process-wide singleton below
    * is created at import, so a test that drives the poller wrote into the LIVE
    * data/answers.sqlite — every `bun test studyPoller.test.ts` appended its
@@ -352,9 +391,11 @@ class AnswerLog {
    * answers. Same convention as HANDS_DB_PATH (sessionsStore.ts): tests set the
    * env to a temp file BEFORE importing the services.
    */
-  constructor(path?: string) {
+  constructor(path?: string, opts: { view?: boolean; viewDays?: number } = {}) {
     this.path = path ?? answersDbPath();
     assertTestSafePath(this.path);
+    this.viewOn = opts.view ?? false;
+    this.viewMaxAgeMs = (opts.viewDays ?? ANSWER_VIEW_DAYS_DEFAULT) * DAY_MS;
   }
 
   get dbPath(): string {
@@ -369,6 +410,7 @@ class AnswerLog {
     try { this.db?.close(); } catch { /* already closed */ }
     this.db = null;
     this.rowsCache.clear();
+    this.view = null; this.viewTailId = 0; this.viewSeededAt = 0; this.dirtyDuringSeed = null;
   }
 
   private open(): Database {
@@ -404,7 +446,7 @@ class AnswerLog {
   /** Best-effort append — a logging failure must never break the poller. */
   add(row: AnswerRow): void {
     try {
-      this.open()
+      const res = this.open()
         .query(
           `INSERT INTO answers (ts, wrapper_hand_id, client_hand_id, street, board,
              hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
@@ -427,6 +469,7 @@ class AnswerLog {
           row.pathVerdict ?? null, row.path ?? null, row.chain ?? null, row.press ?? null
         );
       this.writeSeq++;
+      this.pushToView(Number(res.lastInsertRowid));
     } catch (e) {
       storeWriteFailed("answers", e);   // never propagate — but never silent
     }
@@ -443,9 +486,129 @@ class AnswerLog {
         .query("UPDATE answers SET client_hand_id = ?, session_id = COALESCE(session_id, ?), wrapper_hand_id = COALESCE(wrapper_hand_id, ?) WHERE id = ? AND client_hand_id IS NULL")
         .run(clientHandId, sessionId, wrapperHandId, id);
       this.writeSeq++;
+      this.dirtyDuringSeed?.add(id);
+      if (this.view?.has(id)) this.pushToView(id, false);
     } catch (e) {
       storeWriteFailed("answers.attach", e);
     }
+  }
+
+  // ── the incremental view ────────────────────────────────────────────────────────────────────────────────────────
+
+  /** Is the view on for this log, and seeded? */
+  viewState(): { on: boolean; ready: boolean; seeding: boolean; rows: number; seededAt: number | null; lastSeed: AnswerLog["lastSeed"] } {
+    return { on: this.viewOn, ready: this.view != null, seeding: this.seeding != null, rows: this.view?.size ?? 0,
+      seededAt: this.viewSeededAt || null, lastSeed: this.lastSeed };
+  }
+
+  /** Resolves once the view is seeded (true), or the seed failed / the view is off (false: the SQL path serves). Starts
+   *  the seed if none ran yet. The catalogue build awaits this, so it never falls back to a whole-table read. */
+  viewReady(): Promise<boolean> {
+    if (!this.viewOn) return Promise.resolve(false);
+    if (this.view) return Promise.resolve(true);
+    return this.seedView();
+  }
+
+  /** Seed (or reseed) the view off the loop; the current view keeps serving until the new one lands. */
+  seedView(): Promise<boolean> {
+    if (!this.viewOn) return Promise.resolve(false);
+    if (this.seeding) return this.seeding;
+    if (!this.view && this.viewFailedAt && Date.now() - this.viewFailedAt < ANSWER_VIEW_RETRY_MS) return Promise.resolve(false);
+    const reseed = this.view != null;
+    const p = (async () => {
+      try {
+        const db = this.open();   // the DDL, the column migrations and the one-off classification run first, as before
+        const now = Date.now();
+        const cutoff = now - this.viewMaxAgeMs;
+        const v = new AnswerView(this.viewMaxAgeMs);
+        // the view is complete from the cutoff when older rows exist, else it holds the whole table
+        const minTs = db.query<{ m: number | null }, []>("SELECT min(ts) m FROM answers").get()?.m ?? null;
+        if (minTs != null && minTs < cutoff) v.completeSince = cutoff;
+        const startId = db.query<{ m: number | null }, [number]>("SELECT min(id) m FROM answers WHERE ts >= ?").get(cutoff)?.m ?? null;
+        this.dirtyDuringSeed = new Set();
+        let lastId = startId == null ? (db.query<{ m: number | null }, []>("SELECT max(id) m FROM answers").get()?.m ?? 0) : startId - 1;
+        const r: PagedSeedResult = startId == null
+          ? { ok: true, mode: "loop", pages: 0, rows: 0, ms: 0, maxSliceMs: 0 }
+          : await pagedSeed({
+            path: this.path, db: () => this.open(), mode: this.viewSeedMode, pageSize: ANSWER_VIEW_PAGE, derive: "pathCodes",
+            sql: "SELECT * FROM answers WHERE id > $after AND ts >= $cutoff ORDER BY id LIMIT $limit", params: { cutoff },
+            after: lastId,
+            onPage: (rows: LoggedAnswer[], derived?: unknown[]) => {
+              for (let i = 0; i < rows.length; i++) v.upsert(rows[i]!, derived?.[i] as string[] | undefined, now);
+              lastId = Math.max(lastId, rows[rows.length - 1]!.id);
+            },
+          });
+        this.lastSeed = { ...r, at: Date.now(), reseed };
+        if (!r.ok) {
+          this.viewFailedAt = Date.now();
+          console.warn(`[answer-view] seed failed after ${r.rows} rows (${r.error}) — the SQL path keeps serving`);
+          return this.view != null;
+        }
+        // catch up on the loop: rows appended while it ran, and rows attach() changed under it (a few, by primary key)
+        this.viewTailId = lastId;
+        this.syncViewTail(v);
+        for (const id of this.dirtyDuringSeed ?? []) this.readIntoView(v, id);
+        this.view = v;
+        this.viewSeededAt = Date.now();
+        this.viewFailedAt = 0;
+        console.log(`[answer-view] ${reseed ? "reseeded" : "seeded"} ${v.size.toLocaleString()} answers in ${(r.ms / 1000).toFixed(1)} s (${r.mode}, ${r.pages} pages) — longest slice on the loop ${r.maxSliceMs} ms; reads are memory from here`);
+        return true;
+      } catch (e) {
+        this.viewFailedAt = Date.now();
+        console.warn(`[answer-view] seed failed: ${e instanceof Error ? e.message : e} — the SQL path keeps serving`);
+        return this.view != null;
+      } finally {
+        this.dirtyDuringSeed = null;
+      }
+    })();
+    this.seeding = p;
+    void p.finally(() => { if (this.seeding === p) this.seeding = null; });
+    return p;
+  }
+
+  /** The view's rows of the last `days`, or null (view off / not seeded / asked further back than it holds). */
+  private viewWindow(days: number, now = Date.now()): { rows: LoggedAnswer[]; view: AnswerView } | null {
+    if (!this.viewOn) return null;
+    const v = this.view;
+    if (!v) { void this.seedView(); return null; }
+    // a reseed (another process's UPDATEs) only between sessions; the current view serves until the new one lands
+    if (now - this.viewSeededAt > ANSWER_VIEW_RESEED_MS && !this.seeding && !this.viewHoldNow()) void this.seedView();
+    v.evict(now);
+    const since = now - days * DAY_MS;
+    if (!v.covers(since)) return null;
+    try { this.syncViewTail(v); } catch { /* the next read catches up */ }
+    return { rows: v.window(since), view: v };
+  }
+
+  private viewHoldNow(): boolean { try { return this.viewHold(); } catch { return false; } }
+
+  /** Another process's appends: one max(id) read, and the rows past the view's tail when there are any. */
+  private syncViewTail(v: AnswerView): void {
+    const db = this.open();
+    const m = db.query<{ m: number | null }, []>("SELECT max(id) m FROM answers").get()?.m ?? 0;
+    if (m <= this.viewTailId) return;
+    for (;;) {
+      const rows = db.query<LoggedAnswer, [number]>("SELECT * FROM answers WHERE id > ? ORDER BY id LIMIT 1000").all(this.viewTailId);
+      for (const r of rows) v.upsert(r);
+      if (rows.length) this.viewTailId = rows[rows.length - 1]!.id;
+      if (rows.length < 1000) return;
+    }
+  }
+
+  private readIntoView(v: AnswerView, id: number): void {
+    const row = this.open().query<LoggedAnswer, [number]>("SELECT * FROM answers WHERE id = ?").get(id);
+    if (row) v.upsert(row);
+  }
+
+  /** The writer's push: the row just written (or changed) goes into the view at once (one primary-key read). */
+  private pushToView(id: number, isInsert = true): void {
+    const v = this.view;
+    if (!v || !Number.isFinite(id) || id <= 0) return;
+    try {
+      this.readIntoView(v, id);
+      // the tail stays contiguous: a gap (another process wrote in between) is left for the tail read to fill
+      if (isInsert && id === this.viewTailId + 1) this.viewTailId = id;
+    } catch { /* the tail read catches up */ }
   }
 
   /** Charts that actually answered live spots recently, most recent first. */
@@ -502,6 +665,8 @@ class AnswerLog {
   /** Every logged row in the window, oldest first (a fresh array; the rows are shared with the cache — read-only). */
   rows(days = 60): LoggedAnswer[] {
     try {
+      const w = this.viewWindow(days);
+      if (w) return w.rows;
       const db = this.open();
       const now = Date.now();
       const maxId = db.query<{ m: number | null }, []>("SELECT max(id) m FROM answers").get()?.m ?? 0;
@@ -533,7 +698,7 @@ class AnswerLog {
     const out = { sources: {} as Record<string, { n: number; p50: number | null; lastTs: number | null; byDay: number[] }>, tiers: {} as Record<string, number>, failed: 0, provenanceRows: 0 };
     try {
       const since = Date.now() - days * 86_400_000;
-      const rows = this.open()
+      const rows = this.viewWindow(days)?.rows ?? this.open()
         .query<{ ts: number; tier: string | null; source: string | null; latency_ms: number | null; text: string | null; strategy_mode: string | null }, [number]>(
           "SELECT ts, tier, source, latency_ms, text, strategy_mode FROM answers WHERE ts >= ?"
         )
@@ -582,13 +747,14 @@ class AnswerLog {
     if (!needles.length) return out;
     try {
       const since = Date.now() - days * 86_400_000;
-      const rows = this.open()
-        .query<{ ts: number; warning: string | null }, [number]>(
-          "SELECT ts, warning FROM answers WHERE ts >= ? AND text IS NOT NULL AND warning IS NOT NULL AND warning <> ''"
+      const rows = this.viewWindow(days)?.rows ?? this.open()
+        .query<{ ts: number; warning: string | null; text: string | null }, [number]>(
+          "SELECT ts, warning, text FROM answers WHERE ts >= ? AND text IS NOT NULL AND warning IS NOT NULL AND warning <> ''"
         )
         .all(since);
       const lowered = needles.map((x) => [x, x.toLowerCase()] as const);
       for (const r of rows) {
+        if (r.text == null || !r.warning) continue;   // the view holds every row; the SQL above filtered these already
         const w = (r.warning ?? "").toLowerCase();
         for (const [key, needle] of lowered) {
           if (!w.includes(needle)) continue;
@@ -609,6 +775,20 @@ class AnswerLog {
    * ~11,000 answers); remembered for a minute, because the Sources page asks on every visit.
    */
   countPathCodes(days = 30): Record<string, { n: number; lastTs: number | null }> {
+    // from the view: each row's codes were parsed once, when it arrived (in the seed's worker, or by the writer's push)
+    const w = this.viewWindow(days);
+    if (w) {
+      const out: Record<string, { n: number; lastTs: number | null }> = {};
+      for (const r of w.rows) {
+        if (r.text == null) continue;
+        for (const code of w.view.codesOf(r)) {
+          const o = (out[code] ??= { n: 0, lastTs: null });
+          o.n++;
+          if (o.lastTs == null || r.ts > o.lastTs) o.lastTs = r.ts;
+        }
+      }
+      return out;
+    }
     const key = `${this.path}|${days}`;
     const hit = this.pathCodeMemo;
     if (hit && hit.key === key && Date.now() - hit.at < 60_000) return hit.out;
@@ -647,9 +827,8 @@ class AnswerLog {
   /** Latency percentiles + counts per tier, over the last `days`. */
   stats(days = 30): unknown {
     try {
-      const db = this.open();
       const since = Date.now() - days * 86_400_000;
-      const rows = db
+      const rows = this.viewWindow(days)?.rows ?? this.open()
         .query<{ tier: string | null; latency_ms: number | null; text: string | null }, [number]>(
           "SELECT tier, latency_ms, text FROM answers WHERE ts >= ?"
         )
@@ -692,5 +871,10 @@ export function sourceForTier(tier: string | null): string {
   }
 }
 
-export const answerLog = new AnswerLog();
+/** The process's log: the incremental view is on in the API (ANSWER_VIEW=off turns it off), off under bun test (a test
+ *  constructs its own `new AnswerLog(path, { view: true })`). */
+export const answerLog = new AnswerLog(undefined, {
+  view: process.env.NODE_ENV !== "test" && !/^(off|0|false|no)$/i.test(process.env.ANSWER_VIEW?.trim() ?? ""),
+  viewDays: Number(process.env.ANSWER_VIEW_DAYS) > 0 ? Number(process.env.ANSWER_VIEW_DAYS) : undefined,
+});
 export { AnswerLog };

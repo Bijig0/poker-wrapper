@@ -20,6 +20,8 @@ import { join } from "node:path";
 import { gtowApi } from "../services/gtowApi";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowRequests, type GtowWindow } from "../services/gtowRequestLog";
+import { gtowLedgerView } from "../services/gtowLedgerView";
+import { noteIfSetup } from "../services/setupLive";
 import { dayBudget, gtowSessions, hourBudget, routeMode, type GtowSessionStatus } from "../services/gtowSessions";
 import { gtowSolveCache } from "../services/gtowSolveCache";
 import { REPO } from "../services/repoPaths";
@@ -62,17 +64,37 @@ function lightOf(a: GtowAccountEntry, s: AccountView["live"], wall: AccountView[
 const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60_000); return m < 60 ? `${m} min` : `${(m / 60).toFixed(1)} h`; };
 const until = (ms: number) => { const m = Math.round((ms - Date.now()) / 60_000); return m <= 0 ? "about now" : m < 60 ? `in ${m} min` : `in ${(m / 60).toFixed(1)} h`; };
 
+/**
+ * THE ACCOUNTS FILE, READ AT MOST EVERY 30 s (2026-10-09, catalogue-incremental): the payload is rebuilt every 5 s and each
+ * build read and parsed gtow-accounts.json on the loop. Every write route here forgets the copy before it rebuilds, so a
+ * click still answers with the file as it now is; an edit by hand shows within ACCOUNTS_FILE_TTL_MS.
+ */
+export const ACCOUNTS_FILE_TTL_MS = 30_000;
+let accountsFileMemo: { at: number; file: ReturnType<typeof loadAccounts> } | null = null;
+function accountsFile(now = Date.now()): ReturnType<typeof loadAccounts> {
+  if (!accountsFileMemo || now - accountsFileMemo.at >= ACCOUNTS_FILE_TTL_MS || now < accountsFileMemo.at) accountsFileMemo = { at: now, file: loadAccounts() };
+  return accountsFileMemo.file;
+}
+/** Forget the memoised accounts file (a write route changed it). */
+export function forgetAccountsFile(): void { accountsFileMemo = null; }
+
 export async function accountsPayload() {
+  // the meters and walls read the ledger's last three days IN MEMORY (services/gtowLedgerView: seeded once off the loop,
+  // fed by this process's writes, synced with the others' by one primary-key range read); the first build after a boot
+  // waits for the seed; a failed seed reads the table as before
+  const ledger = (await gtowLedgerView.whenReady()) ? gtowLedgerView : gtowRequests;
   const now = Date.now();
-  const reg = step("accounts file", () => loadAccounts());
-  const [statuses, windows] = await Promise.all([gtowSessions.statusProbed(), Promise.resolve(step("ledger windows", () => gtowRequests.windows(now)))]);
+  const reg = step("accounts file", () => accountsFile(now));
+  // statusProbed: each client's DevTools /json/version, async with a 1.5 s timeout — NO token sniff (the token state is
+  // the keeper's last sniff, services/gtowSessions); nothing in it runs synchronously on the loop
+  const [statuses, windows] = await Promise.all([gtowSessions.statusProbed(), Promise.resolve(step("ledger windows", () => ledger.windows(now)))]);
   const accounts: AccountView[] = await Promise.all(reg.accounts.map(async (a) => {
     const live = (statuses.find((x) => x.id === a.id) as AccountView["live"]) ?? null;
-    const wall = step("ledger wall", () => gtowRequests.wallState(a.id, now, WALL_MS));
+    const wall = step("ledger wall", () => ledger.wallState(a.id, now, WALL_MS));
     const info = await accountInfo(a.cdpHost);
     const email = live?.account ?? info?.email ?? a.accountEmail;
     const publicId = live?.accountId ?? info?.publicId ?? a.accountId;
-    if ((email && email !== a.accountEmail) || (publicId && publicId !== a.accountId)) noteAccountFact(a.id, { accountEmail: email, accountId: publicId });
+    if ((email && email !== a.accountEmail) || (publicId && publicId !== a.accountId)) { noteAccountFact(a.id, { accountEmail: email, accountId: publicId }); forgetAccountsFile(); }
     const { light, text } = lightOf(a, live, wall, info);
     return { ...a, accountEmail: email, accountId: publicId, live, wall, windows: windows[a.id] ?? {}, info, light, lightText: text };
   }));
@@ -105,21 +127,25 @@ export async function accountsPayload() {
  * the payload it has just built, so a click is never answered with the state from before it.
  *
  * WHAT A REBUILD DOES ON THE LOOP (checked 2026-10-09): gtowSessions.statusProbed() and accountInfo() are async only
- * (fetch / WebSocket to the clients' DevTools ports, with timeouts — no spawn, no sync I/O); the ledger meters are
- * indexed range reads of gtow_requests (66k rows, ~3 ms); the solve-cache line is gtowSolveCache.summary(), which since
- * 2026-10-09 reads its row COUNTERS (four primary-key reads) instead of counting a 1.5 GB file (6–15 s a call before).
+ * (fetch / WebSocket to the clients' DevTools ports, with timeouts — no spawn, no sync I/O, no token sniff); the solve-cache
+ * line is gtowSolveCache.summary(), which since 2026-10-09 reads its row COUNTERS (four primary-key reads) instead of
+ * counting a 1.5 GB file (6–15 s a call before). MEMORY ONLY SINCE catalogue-incremental (2026-10-09): the ledger meters
+ * and walls were range reads of gtow_requests on the loop — "ledger wall ×3 1.2 s" while a session's disk was busy — and
+ * now come from services/gtowLedgerView (a sync of the other processes' new rows: one primary-key range read, at most
+ * every 5 s); the accounts file is read at most every 30 s. Measured target: ≤ 20 ms of loop per rebuild.
  */
 export const ACCOUNTS_TTL_MS = 5_000;
 export const ACCOUNTS_CACHE_KEY = "gtow/accounts";
 export const cachedAccountsPayload = () => cachedBehindLive(ACCOUNTS_CACHE_KEY, ACCOUNTS_TTL_MS, accountsPayload);
 /** Build the payload now (a write route) and make it the cached one. */
 async function freshPayload() {
+  forgetAccountsFile();   // a write route: the file may have just changed (a probe's solve id, an edit)
   const p = await accountsPayload();
   setCached(ACCOUNTS_CACHE_KEY, p);
   return p;
 }
 
-app.get("/", async (c) => c.json(await cachedAccountsPayload()));
+app.get("/", async (c) => { noteIfSetup(c); return c.json(await cachedAccountsPayload()); });
 
 app.post("/", async (c) => {
   const body = await c.req.json().catch(() => null);
@@ -132,6 +158,7 @@ app.post("/", async (c) => {
     if (clash) return c.json({ ok: false, error: `port ${cdpPort(String(body.cdpHost))} is already ${clash.name}'s (${clash.cdpHost}) — every account needs its own` }, 409);
   }
   const saved = upsertAccount(body);
+  forgetAccountsFile();
   gtowSessions.reload();
   return c.json({ ...(await freshPayload()), saved });
 });
@@ -139,6 +166,7 @@ app.post("/", async (c) => {
 app.delete("/:id", async (c) => {
   const id = c.req.param("id");
   if (!removeAccount(id)) return c.json({ ok: false, error: `no account '${id}'` }, 404);
+  forgetAccountsFile();
   gtowSessions.reload();
   return c.json(await freshPayload());
 });

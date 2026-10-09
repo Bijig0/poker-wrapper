@@ -331,9 +331,12 @@ class GtowSessions {
   private async adoptLedgerWalls(): Promise<void> {
     try {
       const { gtowRequests } = await import("./gtowRequestLog");
+      // the in-memory ledger once it is seeded (services/gtowLedgerView; a reload is an accounts-page write) — else the table
+      const { gtowLedgerView } = await import("./gtowLedgerView");
+      const ledger = gtowLedgerView.ready ? gtowLedgerView : gtowRequests;
       for (const s of this.sessions.values()) {
         if (s.blockedKind) continue;
-        const w = gtowRequests.wallState(s.cfg.id, Date.now(), WALL_MS);
+        const w = ledger.wallState(s.cfg.id, Date.now(), WALL_MS);
         if (!w.walled || !w.expectedLiftMs || w.expectedLiftMs <= Date.now()) continue;
         s.blockedKind = "quota";
         s.blockedUntilMs = w.expectedLiftMs;

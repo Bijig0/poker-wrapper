@@ -604,7 +604,7 @@ export async function enrichGtowRow(pf: any): Promise<void> {
   const row = (pf?.checks || []).find((c: any) => c.id === "gtow");
   if (!row || !Array.isArray(row.sessions)) return;
   try {
-    const raw = await fetchBytes(`${SES.API()}/api/gtow/accounts`, 4);
+    const raw = await fetchBytes(`${SES.API()}/api/gtow/accounts`, 4, SES.setupHeaders());
     const j = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
     if (!j?.ok) return;
     const byId = new Map<string, any>((j.accounts || []).map((a: any) => [a.id, a]));
