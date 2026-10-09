@@ -361,6 +361,16 @@ class AnswerLog {
     return this.path;
   }
 
+  /**
+   * Release the sqlite handle; the next call reopens it. Tests close before removing their temp dir — Windows refuses
+   * to delete a database (and its WAL) that is still open, which is how answers-test-* dirs piled up in %TEMP%.
+   */
+  close(): void {
+    try { this.db?.close(); } catch { /* already closed */ }
+    this.db = null;
+    this.rowsCache.clear();
+  }
+
   private open(): Database {
     if (this.db) return this.db;
     this.db = openStore(this.path); // the central DB (WAL, busy timeout — a held lock must wait, not throw)

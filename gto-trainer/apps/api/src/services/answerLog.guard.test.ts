@@ -1,8 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { testTempDir } from "../test/tempDir";
 import { AnswerLog, answerLog } from "./answerLog";
+
+// removed in afterAll (src/test/tempDir.ts); the log is closed first so Windows lets the sqlite + WAL go
+let tmpLog: AnswerLog | null = null;
+const dir = testTempDir("answers-test-", { release: () => tmpLog?.close() });
 
 // Every full `bun test` used to write the studyPoller fixtures into the live data/answers.sqlite (213 rows of
 // "FLOP — Check 76% · Bet 1.8 (33%) 7%" alone by 2026-09-24): the singleton was built before the one file that
@@ -22,8 +25,8 @@ describe("answerLog under bun test", () => {
 
   it("accepts memory and temp files", () => {
     expect(() => new AnswerLog(":memory:")).not.toThrow();
-    const tmp = join(mkdtempSync(join(tmpdir(), "answers-test-")), "answers.sqlite");
-    const log = new AnswerLog(tmp);
+    const log = new AnswerLog(join(dir, "answers.sqlite"));
+    tmpLog = log;
     log.add({
       ts: Date.now(), wrapperHandId: null, clientHandId: null, street: "flop", board: null, heroCards: null,
       decisionKey: null, text: "FLOP — Check 100%", pick: "Check", roll: 1, tier: null, warning: null,

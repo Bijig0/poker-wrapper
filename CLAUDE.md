@@ -46,6 +46,10 @@ Read README.md first: what each folder is, the three services and their ports, t
   they are rewritten on the way out (`rewritePorts`, only the `:2000` form).
 - **Tests are hermetic**: they must not read untracked data (the chart index, the data parts). Use a fixture
   (`src/services/__fixtures__`) or a test hook (`setIgn25Ids`, `CHART_SETS_PATH`, `MES_TURN_DIR`).
+- **Test temp dirs come from `src/test/tempDir.ts`** (`testTempDir(prefix, { release })`): removed in the file's
+  afterAll after `release` closes the handles (bun test fires no process exit hooks; Windows refuses to delete an open
+  sqlite). Never bare `mkdtempSync` in a test. `KEEP_TEST_TMP=1` keeps them; leftovers from killed runs:
+  `bun src/scripts/sweepTestTemp.ts` (from apps/api).
 - Installer: `bun setup/buildPackage.ts --installer` (needs Inno Setup, `winget install JRSoftware.InnoSetup
   --scope user`). A test install beside a live one: `PokerWrapperSetup.exe /VERYSILENT /NOSERVICES /TASKS=""
   /KEYFILE=<key> /DIR=<scratch>` — `/NOSERVICES` keeps it off the live ports; uninstall with its `unins000.exe`.

@@ -6,11 +6,11 @@
  * probe and the solve are fetch stubs, GTO Wizard's client is a module mock.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { testTempDir } from "../test/tempDir";
 
-process.env.ANSWERS_DB_PATH = join(mkdtempSync(join(tmpdir(), "answers-test-")), "answers.sqlite");
+// The dir goes in afterAll (src/test/tempDir.ts) once the singleton has released the file — it is imported below.
+process.env.ANSWERS_DB_PATH = join(testTempDir("answers-test-", { release: () => answerLog.close() }), "answers.sqlite");
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,6 +25,7 @@ mock.module("./gtowCdp", () => ({
 
 const { studyPoller } = await import("./studyPoller");
 const { CP_RING_ANTE_STRATEGY_ID } = await import("./strategies");
+const { answerLog } = await import("./answerLog");
 
 let originalFetch: typeof fetch;
 let calls: { url: string; body: unknown }[] = [];

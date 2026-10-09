@@ -1,12 +1,14 @@
-import { afterAll, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { testTempDir } from "../test/tempDir";
 import { AnswerLog } from "./answerLog";
 
-const dir = mkdtempSync(join(tmpdir(), "answer-rows-"));
-afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* windows may hold the WAL */ } });
+// Removed in afterAll (src/test/tempDir.ts). The old `try { rmSync } catch { /* windows may hold the WAL */ }` failed
+// on every run — the logs were never closed — and left an answer-rows-* dir per run in %TEMP%.
+const logs: AnswerLog[] = [];
+const dir = testTempDir("answer-rows-", { release: () => logs.forEach((l) => l.close()) });
+const openLog = (name: string) => { const log = new AnswerLog(join(dir, name)); logs.push(log); return log; };
 
 const row = (hand: string | null, text: string | null = "Call 100%") => ({
   ts: Date.now(), wrapperHandId: 1, clientHandId: hand, street: "flop", board: "AsKd2c", heroCards: "QhQd",
@@ -16,7 +18,7 @@ const row = (hand: string | null, text: string | null = "Call 100%") => ({
 
 describe("answerLog.rows — cached per window until something writes (2026-09-26)", () => {
   it("serves the cache between writes, and sees this connection's inserts and attaches", () => {
-    const log = new AnswerLog(join(dir, "a.sqlite"));
+    const log = openLog("a.sqlite");
     log.add(row("4920000001"));
     const a = log.rows(60), b = log.rows(60);
     expect(a.length).toBe(1);
@@ -31,7 +33,7 @@ describe("answerLog.rows — cached per window until something writes (2026-09-2
 
   it("sees another connection's insert (max id moves)", () => {
     const path = join(dir, "b.sqlite");
-    const log = new AnswerLog(path);
+    const log = openLog("b.sqlite");
     log.add(row("4920000003"));
     expect(log.rows(60).length).toBe(1);
     const other = new Database(path);
@@ -41,7 +43,7 @@ describe("answerLog.rows — cached per window until something writes (2026-09-2
   });
 
   it("a caller changing its array leaves the cache alone; windows are cached apart", () => {
-    const log = new AnswerLog(join(dir, "c.sqlite"));
+    const log = openLog("c.sqlite");
     log.add(row("4920000005"));
     log.rows(60).length = 0;
     expect(log.rows(60).length).toBe(1);
@@ -50,7 +52,7 @@ describe("answerLog.rows — cached per window until something writes (2026-09-2
 
   it("a fresh table gets the session index (created after the column migration)", () => {
     const path = join(dir, "d.sqlite");
-    const log = new AnswerLog(path);
+    const log = openLog("d.sqlite");
     log.add(row("4920000006"));
     const db = new Database(path, { readonly: true });
     const names = db.query<{ name: string }, []>("PRAGMA index_list(answers)").all().map((r) => r.name);
