@@ -1959,9 +1959,16 @@ const rangeTag = (pos) => {
     : ` <span class="chip dim" title="the solver's own range (base GTO)">GTO range</span>`;
 };
 const DEP_CLS = { "pool-overlay": "warn", "policy-experiment": "off", approximation: "dim" };
-const depChips = (deps) => (deps || []).length
-  ? `<div class="sub" style="margin-bottom:8px">departs from base GTO: ${deps.map((d) => `<a class="chip ${DEP_CLS[d.kind] || "dim"}" href="/sources/approx" onclick="go('/sources/approx');return false" title="${esc(d.kind)} · ${esc(d.lifecycle)} — ${esc(d.title)} (register entry ${esc(d.id)})">${esc(d.badge)}</a>`).join(" ")}</div>`
-  : "";
+/* A FAILED DEPARTURE (2026-10-10, Brady, hand 4923635257: "it doesn't show the 3b cold call range here"): a lock that was
+   tried and did not apply — timed out or refused — is NOT a departure; the answer read base GTO there. Its chip says
+   FAILED (red), a line says what happened, and every seat's range card reads "GTO range". */
+const depChips = (deps) => {
+  const on = (deps || []).filter((d) => !d.failed), off = (deps || []).filter((d) => d.failed);
+  const chip = (d) => `<a class="chip ${DEP_CLS[d.kind] || "dim"}" href="/sources/approx" onclick="go('/sources/approx');return false" title="${esc(d.kind)} · ${esc(d.lifecycle)} — ${esc(d.title)} (register entry ${esc(d.id)})">${esc(d.badge)}</a>`;
+  const failChip = (d) => `<a class="chip crit" href="/sources/approx" onclick="go('/sources/approx');return false" title="${esc(d.failText || "")} (register entry ${esc(d.id)})">FAILED — ${esc(d.badge)}</a>`;
+  return (on.length ? `<div class="sub" style="margin-bottom:8px">departs from base GTO: ${on.map(chip).join(" ")}</div>` : "")
+    + (off.length ? `<div class="card" style="margin-bottom:8px;border-color:var(--loss);background:var(--loss-soft)">${off.map(failChip).join(" ")}<div class="sub" style="margin-top:4px">NOT APPLIED — this answer was read on base GTO's tree, and every range below is the solver's own: ${off.map((d) => esc(d.failText || "")).join(" · ")}</div></div>` : "");
+};
 async function openAnswerNode(upto) {
   if (!DETAIL) return;
   NV_POOL = null;
@@ -1976,7 +1983,8 @@ async function openAnswerNode(upto) {
   catch (e) { sol.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   if (!j.ok) { sol.innerHTML = `<div class="card warn">${esc(j.error ?? "no node")}</div>`; return; }
   const lg = j.logged;
-  NV_POOL = (j.poolSeats || []).length ? j.poolSeats : null;
+  // a failed lock: label every seat (none is the pool's) so the GTO range the answer used is named as such
+  NV_POOL = (j.poolSeats || []).length ? j.poolSeats : (j.departures || []).some((d) => d.failed) ? [] : null;
   const loggedLine = depChips(j.departures) + (lg ? `<div class="sub" style="margin-bottom:8px">This is the node behind answer <b>#${lg.id}</b> at action ${upto}${lg.tier ? ` · tier <span class="chip">${esc(lg.tier)}</span>` : ""}${lg.line ? " · line as logged live" : " · line rebuilt from the archive (this answer predates line logging)"}</div>` : `<div class="sub" style="margin-bottom:8px">No answer was logged at action ${upto}; this is the node the resolver would use today.</div>`);
   const heroKey = j.heroClass;
   const heroCombo = (j.heroCards || []).filter((c) => /^[2-9TJQKA][shdc]$/.test(c)).join("");
@@ -2729,6 +2737,7 @@ const WHY_MEANS = {
   "solver-timeout": "the fast-solver request passed its deadline",
   "solver-unreachable": "the fast-solver could not be reached at all",
   "solver-bad-response": "it answered, but not with JSON",
+  "gtow-timeout": "GTO Wizard timed out or hit its request limit (a time box, not the spot)",
   "gtow-down": "GTO Wizard was not connected while hero was on the clock",
   "abandoned-stale": "the verdict arrived after hero had already acted",
   "no-probe": "hero acted and the decision was never asked about",

@@ -55,12 +55,16 @@ describe("ChartStore", () => {
     expect(existsSync(join(d, "cold.json.gz.part"))).toBe(false);
   });
 
-  test("a failed download leaves nothing behind and answers unknown", async () => {
+  // 2026-10-10: a failed download THROWS (the server answers 500, the client retries / says unreachable) — it answered
+  // "unknown solution" with 200 before, which the client cached for the life of the process as "no such line"
+  test("a failed download leaves nothing behind and is an error, not an unknown chart", async () => {
     const d = mkdtempSync(join(tmpdir(), "charts-"));
     chart(d, "gone", {}, { body: false });
     const s = store(d, { fetchBody: async (_sid, dest) => { writeFileSync(dest, ""); return false; } });
-    expect(await s.node(q({ source: "gone", line: "" }))).toEqual({ ok: false, error: "unknown solution 'gone'" });
+    await expect(s.node(q({ source: "gone", line: "" }))).rejects.toThrow("could not be fetched");
     expect(existsSync(join(d, "gone.json.gz.part"))).toBe(false);
+    // a chart that is not indexed at all is still "unknown"
+    expect(await s.node(q({ source: "never-indexed", line: "" }))).toEqual({ ok: false, error: "unknown solution 'never-indexed'" });
   });
 
   test("small bodies have their own LRU: walking heads-up rungs never pushes a big tree out", async () => {

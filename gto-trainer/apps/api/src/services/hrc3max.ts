@@ -300,6 +300,9 @@ export const fetchNode: (source: string, line: string) => Promise<HrcNode | null
           `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(source)}&line=${encodeURIComponent(line)}`,
           { signal: AbortSignal.timeout(30000) }
         ), (r) => `HTTP ${r.status}`);
+        // only a 2xx answer is the chart's word on the line (2026-10-10): a 500 (the server could not load the chart —
+        // a failed R2 fetch) was parsed as a refusal and CACHED as "no such line" for the life of the process
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         body = await res.json();
         break;
       } catch {

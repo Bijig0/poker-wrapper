@@ -1692,7 +1692,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       return { ok: false, kind: HERO_OFF_TREE, line, reason: `${head}; ${why}` };
     };
     if (!heroSelfLockOn()) return no("HERO_SELF_LOCK=off, so it is not locked back in — no answer");
-    // inside poolLockMs (12 s); the lock never pins anything itself, so a late one is simply dropped
+    // inside poolLockMs (40 s); the lock never pins anything itself, so a late one is simply dropped
     const ms = poolLockMs();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const r = await Promise.race([
@@ -2249,10 +2249,15 @@ export function poolLimpLockOf(line: string, sols: any[], limpCode: string, w: r
   };
 }
 
-/** How long the pool-locked answer may take before the answer goes on as before (POOL_LOCK_MS; GAP_GATE_AI_MS's 12 s). */
+/** How long the pool-locked answer may take before the answer goes on as before (POOL_LOCK_MS, 40 s).
+ *  40 s, NOT 12 (2026-10-10, Brady: "I don't understand why the lock needs a time lock even … set it to 40 seconds"): a lock
+ *  is two GTO Wizard solves back to back (the table's tree, then the locked child) and the 12 s box borrowed from the gap
+ *  gate cut 5 of 6 live cold-call locks off at 12.0 s (hand 4923635257: QQ answered against the UNLOCKED tree's 0.10% SB
+ *  cold-call, folded 77%). Ignition's clock is 15 s + a 45 s time bank and dipping into the bank is fine. No longer
+ *  falls back to GAP_GATE_AI_MS: the gap gate's box is its own. */
 export const poolLockMs = (): number => {
-  const v = Number(process.env.POOL_LOCK_MS ?? process.env.GAP_GATE_AI_MS);
-  return v > 0 ? v : 12_000;
+  const v = Number(process.env.POOL_LOCK_MS);
+  return v > 0 ? v : 40_000;
 };
 
 // ---------------------------------------------------------------------------
@@ -2855,7 +2860,8 @@ export async function arrivalRangesGtowAi(hand: ParsedHand, heroPos: string | nu
   const heroNote = heroRangeAsAnsweredOn() && shape.heroApiPos && live.includes(shape.heroApiPos)
     ? await heroRangeAsAnswered(hand, sol.solId, tokens, shape, ranges, handPosOf[shape.heroApiPos] ?? shape.heroApiPos).catch((e) => {
         console.log(`[hero-range-as-answered] hand ${hand.clientHandId ?? hand.handId ?? "?"}: threw (${e instanceof Error ? e.message : e}) — the single fit kept`);
-        return null;
+        // said on the answer, not only in api.log (2026-10-10): the range hero enters with is NOT the one he was answered with
+        return `Hero's own range is read on one fit like the others: reading the range he was answered with threw (${String(e instanceof Error ? e.message : e).slice(0, 120)}).`;
       })
     : null;
   const id = `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`;
@@ -2911,7 +2917,13 @@ async function heroRangeAsAnswered(hand: ParsedHand, solId: string, tokens: stri
     return `Hero's own range is read on one fit like the others: ${notPlain}.`;
   }
   const mine = await heroWeightsAsAnswered(solId, tokens, shape);
-  if (!mine) return null;
+  // A DECISION OF HIS COULD NOT BE READ (a node read failed, the line could not be repaired): said on the answer, not
+  // silently kept (2026-10-10, the failed-lock review) — he enters with the single fit's range, not his answered one
+  if (!mine) {
+    if (tokens.some((t, k) => t === "F" && actorsWithAllins(tokens, shape.stacks, shape.positions)[k] === shape.heroApiPos)) return null;
+    console.log(`[hero-range-as-answered] hand ${hand.clientHandId ?? hand.handId ?? "?"}: a decision of his could not be read on the tree — the single fit kept`);
+    return "Hero's own range is read on one fit like the others: a decision of his on the line could not be read on the tree (a node read failed), so the range he was answered with is NOT applied.";
+  }
   const rec = classRangeOfWeights(mine.weights);
   if (!Object.keys(rec).length || sameClassRange(rec, old)) return null;
   // his own hand left out by the blend: the answer gave it 0% of what he did (a manual deviation, a lock the records
@@ -3144,9 +3156,9 @@ export async function walkArrivalRanges(
 const LINE_NOT_IN_TREE = /is not an action|is not offered|NODE_DOES_NOT_EXIST|node in the actions doesn't exist/i;
 /** Hero's own hand is never left out of his range: a class the reduced solve gave nothing is kept at this weight. */
 const HERO_FLOOR = 0.05;
-/** How long a villain caller's read on the exact tree may take before he is kept whole — the forced-bet tree it
- *  replaced had the same 12 s (REDUCED_READ_MS, read at every read: the tests shorten it). */
-const reducedReadMs = (): number => { const v = Number(process.env.REDUCED_READ_MS); return v > 0 ? v : 12_000; };
+/** How long a villain caller's read on the exact tree may take before he is kept whole (REDUCED_READ_MS, read at every
+ *  read: the tests shorten it). 30 s since 2026-10-10 (was 12 s, the forced-bet tree's; 2026-10-10, Brady: a time box that hands hero a less correct answer is a bug; Ignition is 15 s + a 45 s time bank that starts itself). */
+const reducedReadMs = (): number => { const v = Number(process.env.REDUCED_READ_MS); return v > 0 ? v : 30_000; };
 /** The pool chart's SB node behind one limper — its "C" is the pool's complete, as locked (hrc6max POOL_LIMP_CHART). */
 const POOL_SB_COMPLETE_LINE = "F-F-F-C";
 

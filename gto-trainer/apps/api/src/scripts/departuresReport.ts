@@ -12,7 +12,7 @@
  */
 import { Database } from "bun:sqlite";
 import { answersDbPath } from "../services/storePaths";
-import { APPROXIMATIONS, type Approximation } from "../services/approximations";
+import { APPROXIMATIONS, departureState, type Approximation } from "../services/approximations";
 
 const argv = process.argv.slice(2);
 const arg = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
@@ -54,15 +54,21 @@ const actionIndex = (r: Pick<Row, "decision_key">) => { try { const k = JSON.par
 console.log(`DEPARTURES REPORT · answers since ${new Date(SINCE).toISOString().slice(0, 10)} · ${rows.length} answered decisions · ${answersDbPath()}`);
 const today = new Date().toISOString().slice(0, 10);
 for (const a of entries) {
-  const needles = [a.warn, ...(a.warnAlso ?? [])].filter((x): x is string => !!x).map((x) => x.toLowerCase());
+  const needles = [a.warn, ...(a.warnAlso ?? [])].filter((x): x is string => !!x).map((x) => (a.warnCase ? x : x.toLowerCase()));
   const byCode: Row[] = [], byWarn: Row[] = [];
   for (const r of rows) {
     const cs = codesOf(r);
     if ((a.pathCodes ?? []).some((c) => cs.has(c))) byCode.push(r);
-    const w = (r.warning ?? "").toLowerCase();
+    const w = a.warnCase ? (r.warning ?? "") : (r.warning ?? "").toLowerCase();
     if (needles.some((n) => w.includes(n))) byWarn.push(r);
   }
-  const all = [...new Map([...byCode, ...byWarn].map((r) => [r.id, r])).values()].sort((x, y) => y.ts - x.ts);
+  const both = [...new Map([...byCode, ...byWarn].map((r) => [r.id, r])).values()].sort((x, y) => y.ts - x.ts);
+  // TRIED, NOT TAKEN (2026-10-10): a lock that timed out / a gate whose exact tree failed matched the entry too, and was
+  // counted as a firing (pool-coldcall-lock: 6 "decisions", 1 of them locked). Counted apart, listed apart.
+  const stateOf = (r: Row) => { const p = (() => { try { return r.path ? JSON.parse(r.path) : null; } catch { return null; } })();
+    return departureState(a, [...codesOf(r)], r.warning, p?.reasons ?? []); };
+  const failedRows = both.filter((r) => stateOf(r).failed);
+  const all = both.filter((r) => !stateOf(r).failed);
   const hands = new Set(all.map((r) => r.client_hand_id));
   const sw = a.offSwitch ? `${a.offSwitch.env}${/^[A-Z][A-Z0-9_]+$/.test(a.offSwitch.env) ? ` = ${process.env[a.offSwitch.env] ?? "unset (default)"} in this shell` : ""}` : "no switch";
   const due = a.reviewBy ? ` · review by ${a.reviewBy}${a.lifecycle === "experiment" && a.reviewBy < today ? " — OVERDUE" : ""}` : "";
@@ -75,6 +81,10 @@ for (const a of entries) {
   // an entry with several codes (hero-self-lock: the lock, and the off-answer flag to REVIEW): how often each fired
   if ((a.pathCodes?.length ?? 0) > 1) {
     console.log(`  by code: ${a.pathCodes!.map((c) => `${c} ${byCode.filter((r) => codesOf(r).has(c)).length}`).join(" · ")}`);
+  }
+  if (failedRows.length) {
+    console.log(`  FAILED (tried, not applied — base GTO / the chart answered): ${failedRows.length}`);
+    for (const r of failedRows.slice(0, LIST)) console.log(`    ${r.client_hand_id ?? "?"} · ${r.street ?? "?"} · action ${actionIndex(r)} · answer #${r.id} · ${(stateOf(r).failText ?? "").slice(0, 140)}`);
   }
   for (const r of all.slice(0, LIST)) {
     const cs = codesOf(r);

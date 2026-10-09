@@ -1166,6 +1166,15 @@ async function flopArrivalCompute(
       aiFitted = ai.fitted?.folded ?? null;
       sixNote = [six && !six.ok ? `6-max chart could not walk this line (${six.reason})` : null, ai.note].filter(Boolean).join(" · ");
       prov = reducedProv(ai, rebuiltProv("ai-arrival", six && !six.ok ? six.reason : null));
+      // THE PREFLOP ANSWER WAS POOL-LOCKED AND ITS TREE COULD NOT BE RESUMED (2026-10-10, the failed-lock review): the
+      // rebuild above is the PLAIN tree, so the locked seat enters with the solver's range, not the pool's — said, not
+      // silent (a flop floor below may still give him the pool's range; the note of that floor then says so)
+      const lost = pinMiss && pin?.piece === "gtow-ai-preflop" ? ((pin as { poolLocks?: { pos: string; key: string }[] }).poolLocks ?? []) : [];
+      for (const l of lost) {
+        const what = /^coldcall3b_/.test(l.key) ? "POOL COLD-CALL LOCK LOST AT THE FLOP:" : "POOL LIMP LOCK LOST AT THE FLOP:";
+        sixNote = [sixNote, `${what} hero's preflop answer read the ${l.pos} at the pool's ${l.key}, but that locked tree could not be resumed (${String(pinMiss).slice(0, 160)}) — his flop range is the plain tree's`].filter(Boolean).join(" · ");
+        console.log(`[preflop-pin] hand ${preflopPinKey(hand)}: ${what} the ${l.pos} (${l.key}) — ${String(pinMiss).slice(0, 160)}`);
+      }
     }
   }
   if (!recon) {
@@ -1184,6 +1193,8 @@ async function flopArrivalCompute(
   }
   if (!recon.ok) return failA(`range reconstruction: ${recon.reason}`);
   prov ??= { how: "designed", producer: "preflop-db" };
+  /** every seat a floor below gives the pool's range, by the floor's code (the arrival's poolSeats; the hand page labels them) */
+  const poolSeats: { pos: string; code: string }[] = [];
   // THE POOL LIMP FLOOR (services/poolLimpFloor, 2026-10-05): a short limper whose stack no pool-locked tree covers yet
   // enters the flop with the pool's measured limp range, whichever piece produced the rest — said in the answer's note
   if (sixMax && shortLimpPoolOn()) {
@@ -1191,6 +1202,7 @@ async function flopArrivalCompute(
     // the trigger rule kept a limper's own range (services/poolTrigger, POOL_LIMP_TRIGGER): logged, the ranges as walked
     if (floor.kept.length) tmark("pool limp floor kept", floor.kept.map((k) => `the ${k.pos} (${Math.round(k.stack)}bb, ${k.was} combos, ${k.key}): ${k.text}`).join("; "));
     if (floor.applied.length) {
+      for (const r of floor.applied) poolSeats.push({ pos: r.pos, code: "arrival:pool-limp-floor" });
       // a floored limper who then CALLED the iso: his whole limp cell × the pool's limp-call rate (poolCalls.applyLimpCallProduct,
       // 2026-10-09) — the floor's records are extended in place, so the note below says so
       const lc = applyLimpCallProduct({ hand, heroPos, ranges: floor.ranges, dealt: pinnedDealt, floored: floor.applied });
@@ -1208,6 +1220,7 @@ async function flopArrivalCompute(
   if (sixMax && coldCallPoolMode() !== "off") {
     const ccf = applyPoolColdCallFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, lockedPools: pinPools });
     if (ccf.applied.length) {
+      for (const r of ccf.applied) poolSeats.push({ pos: r.pos, code: "arrival:pool-coldcall-floor" });
       const note = poolColdCallFloorNote(ccf.applied, rangeSource);
       tmark("pool cold-call floor", note);
       recon = { ...recon, ranges: ccf.ranges };
@@ -1235,6 +1248,7 @@ async function flopArrivalCompute(
       if (x.r.sbflat) console.log(sbFlatLogLine(hand, x.r.key, x.r.sbflat, x.r.was, x.fired, x.r.text));
     }
     if (ff.applied.length) {
+      for (const r of ff.applied) poolSeats.push({ pos: r.pos, code: r.sbflat ? "arrival:pool-flat-floor-sbv2" : "arrival:pool-flat-floor" });
       const note = poolFlatFloorNote(ff.applied, rangeSource);
       tmark("pool flat floor", note);
       recon = { ...recon, ranges: ff.ranges };
@@ -1255,6 +1269,7 @@ async function flopArrivalCompute(
     }
     const pc = applyPoolCallRanges({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
     if (pc.applied.length) {
+      for (const r of pc.applied) poolSeats.push({ pos: r.pos, code: "arrival:pool-call" });
       const note = poolCallNote(pc.applied, rangeSource);
       tmark("pool call ranges", note);
       recon = { ...recon, ranges: pc.ranges };
@@ -1264,7 +1279,7 @@ async function flopArrivalCompute(
         why: `${prov.code === "arrival:pin-cap" ? "the pinned AI tree cannot hold the line (its caller/limper cap); " : ""}${note.slice(0, 300)}` };
     }
   }
-  return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };
+  return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: poolSeats.length ? { ...prov!, poolSeats } : prov! } };
 }
 
 /** The [sbflat] api.log line: the SB-flat table v2's key for one SB flat, what keyed it, and whether the floor fired. */
@@ -2065,7 +2080,7 @@ async function solvePostflopViaChainOnce(
           board: tk.board, heroComboIdx, rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))),
           ...(behindFlop ? { behind: behindFlop } : {}),
           // a narrowing walk that failed for a transient reason is retried once within this (2026-10-07): the decision's
-          // start + REROOT_NARROW_MS (10 s of the 15 s clock — the re-rooted street's own tree takes ~3-5 s after it)
+          // start + REROOT_NARROW_MS (30 s since 2026-10-10, was 10 s — the re-rooted street's own tree takes ~3-5 s after it)
           deadline: tDecision + rerootNarrowMs(),
         });
         if (!rr.ok) {
@@ -2237,7 +2252,7 @@ async function solvePostflopViaChainOnce(
    * at 7.6 s where the unnarrowed answer was ready at 4.0, and a failed narrowed tree at 13 s). Two paths start
    * together: U, today's unnarrowed hero-vs-aggressor tree, and N, the narrowing walk (multiwayReroot
    * .narrowForLastResort — the re-root's own walks) chained into the narrowed tree. N is served iff its ANSWER is in
-   * by LAST_RESORT_NARROW_MS (6000) from the DECISION'S start (FastSolveOpts.decisionStart, set by fastSolve on entry —
+   * by LAST_RESORT_NARROW_MS (20000 since 2026-10-10, was 6000 — the unnarrowed answer is the less correct one) from the DECISION'S start (FastSolveOpts.decisionStart, set by fastSolve on entry —
    * a seatbelt re-solve gets no fresh budget); otherwise U, the moment it is ready. When too little of the budget is
    * left to try (the fallback after every collapse walk failed), N is not raced at all: it starts detached for the
    * hand's memo when the hand can have a later decision. N always finishes in the background into the hand's memo, so
@@ -2250,7 +2265,7 @@ async function solvePostflopViaChainOnce(
     if (lr.first < 1) { lrNarrowClause = "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)"; return solveTree(plain); }
     if (process.env.LAST_RESORT_NARROW === "0") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)"; return solveTree(plain); }
     const r = await raceNarrowing<AiChainResult>({
-      start: tDecision, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 6000) || 0),
+      start: tDecision, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 20_000) || 0),
       // a later decision of this hand is possible unless hero faces an all-in (call or fold ends his action)
       later: !(lr.bet > 0 && lr.bet >= lr.stack - 0.005),
       narrowing: () => narrowForLastResort({
@@ -2555,7 +2570,12 @@ async function solvePostflopViaChainOnce(
     approx: true,
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
-      ...(rerootAlso.length || press.length || absentAlso.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur), ...absentAlso] } : {}),
+      // A COLLAPSE THAT COULD NOT BE WALKED (2026-10-10, the failed-lock review): the answer is served from the others,
+      // without the full conservative blend (a single collapse over-bets by 8-13 pp) — was warning text only, verdict
+      // possibly "clean" (live 9036 / 9165 / 9166); now a failed reason on the path, FAILED on the hand page
+      ...(rerootAlso.length || press.length || absentAlso.length || walkFails.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur), ...absentAlso,
+        ...(walkFails.length ? [{ v: "failed" as const, code: "postflop:collapse-dropped",
+          text: `${walkFails.length} of ${walkables.length} collapses could not be walked — served from the rest, not the full blend (${walkFails.join("; ")})`.slice(0, 300) }] : [])] } : {}),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,
@@ -2668,8 +2688,9 @@ export function flopFieldMoney(a: {
 
 /** The re-root's narrowing deadline from the decision's start (ms): a transient walk failure is retried within it. */
 export const rerootNarrowMs = (): number => {
-  const v = Number(process.env.REROOT_NARROW_MS ?? 10_000);
-  return Number.isFinite(v) && v >= 0 ? v : 10_000;
+  // 30 s since 2026-10-10 (was 10 s; 2026-10-10, Brady: a time box that hands hero a less correct answer is a bug; Ignition is 15 s + a 45 s time bank that starts itself): a seat that is not narrowed enters with his flop-arrival range
+  const v = Number(process.env.REROOT_NARROW_MS ?? 30_000);
+  return Number.isFinite(v) && v >= 0 ? v : 30_000;
 };
 
 /**
@@ -4154,9 +4175,9 @@ export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, stra
 /** Tests: forget which hands were warmed. */
 export function forgetArrivalWarms(): void { warmedArrivals.clear(); }
 
-/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS; 12 s by Brady's
- *  call, 2026-10-02 — the clock is 15 s, so a chart answer that late leans on the time bank). */
-const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 12_000; };
+/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS; 40 s since
+ *  2026-10-10, was 12 s from 2026-10-02 — 2026-10-10, Brady: a time box that hands hero a less correct answer is a bug; Ignition is 15 s + a 45 s time bank that starts itself). */
+const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 40_000; };
 
 /**
  * THE EXACT TREE IS BUILT WHEN THE RAISE LANDS, NOT WHEN HERO IS ASKED (the gap gate, 2026-10-02). A cold AI preflop
@@ -4648,6 +4669,15 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
           ...(emptied ? { fitEmpties: { ...(chart.fitEmpties ?? emptied), ai: how, aiWhy, aiMs: Date.now() - t0 } } : {}) };
       }
       ai = first === "timeout" ? await asked : first;      // the chart cannot either: the exact tree is all there is
+      // THE LATE ANSWER IS THE ONE SERVED, SO IT IS PINNED (2026-10-10): its own run skipped the pin (gaveUp was set when
+      // the box ran out), which left the hand with no record of its tree — the hand page said "no record", and the flop
+      // resumed from an older pin or none. Read again (every node is cached by now) without the skip, so it pins.
+      if (first === "timeout" && ai.ok) {
+        const again = await solvePreflopGtowAi(hand, heroPos, why, emptied ? { villainLines: true } : {})
+          .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
+        if (again.ok) ai = again;
+        else console.log(`[${tag}] the late AI answer could not be pinned (${again.reason.slice(0, 160)}) — served unpinned`);
+      }
     } else {
       ai = first;
       if (gated) gated = { ...gated, routed: { ...gated.routed!, ai: "answered", aiMs: Date.now() - t0 } };
@@ -4707,7 +4737,7 @@ function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResul
  * THE POOL-LOCKED LIMPER, ASKED FIRST (2026-10-05; services/poolLimpFloor.poolLockTarget says when,
  * gtowAiPreflop.solvePreflopPoolLocked how). null when it does not apply (the decision is answered as before); an ok
  * answer; or a refusal whose reason the answer that follows carries ("POOL LIMP LOCK FAILED …"). Inside poolLockMs
- * (12 s): a late answer never becomes the hand's pin. Applies only with SHORT_LIMP_POOL=on (the default).
+ * (40 s): a late answer never becomes the hand's pin. Applies only with SHORT_LIMP_POOL=on (the default).
  */
 async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts,
     /** THE TRIGGER DID NOT FIRE (2026-10-09, services/poolTrigger): the reason the answer's path carries */
@@ -4763,7 +4793,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
  * THE POOL'S 3-BET COLD-CALL, ASKED FIRST (2026-10-05; services/poolColdCall.coldCallLockTarget says when,
  * gtowAiPreflop.solvePreflopColdCallLocked how). null when it does not apply — no lone cold-caller, or the exact tree
  * already gives his call a real share (COLD_CALL_NOT_NEEDED); an ok answer; or a refusal whose reason the answer that
- * follows carries ("COLD-CALL LOCK FAILED …"). Inside poolLockMs (12 s). COLD_CALL_POOL=on only (the default).
+ * follows carries ("COLD-CALL LOCK FAILED …"). Inside poolLockMs (40 s). COLD_CALL_POOL=on only (the default).
  */
 async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, dropped: () => boolean = () => false): Promise<FastSolveResult | null> {
   if (coldCallPoolMode() !== "on") return null;
@@ -4854,9 +4884,21 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // THE POOL-LOCKED LIMPER FIRST (2026-10-05, gtowAiPreflop.solvePreflopPoolLocked): a short limper no pool-locked
     // chart covers is read at the pool's range on the exact tree with his limp node-locked; when that does not answer in
     // time the decision goes on exactly as before, and the answer says the lock failed
+    // THE REGULAR ANSWER RUNS BESIDE IT (2026-10-10, when the lock box went 12 s -> 40 s): asked one after the other, a
+    // lock that used its whole box left the plain answer still to solve (40 s + 5-12 s). Now the plain answer is ready
+    // when the lock fails; when the lock answers, its pin is put back after the plain answer's lands (the flop must walk
+    // the locked tree), as for the cold-call lock below.
     let lockSkip: PathReason | null = null;
-    const locked = await poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; });
-    if (locked && locked.ok) return locked;
+    const lockAsked = poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; })
+      .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
+    const regular = solvePreflopSixStrategy(hand, heroPos, opts);
+    regular.catch(() => {});   // awaited below; never an unhandled rejection while the lock is still out
+    const { res: locked, pin: lockPin } = await lockAsked;
+    if (locked && locked.ok) {
+      await regular.catch(() => null);
+      if (lockPin && preflopPinFor(hand) !== lockPin) setPreflopPin(lockPin, hand.heroCards?.join("") ?? null);
+      return locked;
+    }
     // THE POOL'S 3-BET COLD-CALL (2026-10-05, services/poolColdCall): a lone cold-caller of a 3-bet whom the exact tree
     // gives ~0% is read at the pool's range on the exact tree with his call node-locked
     // ONLY WHERE NOTHING ELSE COVERS HIM (Brady 2026-10-05: "we still do the regular check … then once we discover
@@ -4870,7 +4912,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // must walk the locked one when the lock answers
     const ccAsked = locked ? null : poolColdCallLockFirst(hand, heroPos, () => ccDropped)
       .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
-    const r = await solvePreflopSixStrategy(hand, heroPos, opts);
+    const r = await regular;
     let cc: FastSolveResult | null = null;
     if (ccAsked) {
       if (r.ok && r.source !== GTOW_AI_PREFLOP_SOURCE) ccDropped = true;     // the charts hold the line: theirs
@@ -4883,7 +4925,9 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     if (cc && cc.ok) return cc;
     const failed: string[] = [];
     for (const x of [locked, cc]) if (x && !x.ok) failed.push(x.reason);
-    const out = failed.length && r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") } : r;
+    // a failed lock's reason rides on the answer, and on a refusal too (the miss queue must see the lock failed first)
+    const out = !failed.length ? r : r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") }
+      : { ...r, reason: `${r.reason} · ${failed.join(" · ")}` };
     // the skipped lock's reason beside whatever answered (the plain AI tree or a chart)
     return lockSkip ? withPreflopAlso(out, lockSkip) : out;
   }
