@@ -34,7 +34,9 @@ export const FORMAT_FALLBACK: Record<string, { formats: string[]; default: strin
 };
 
 const baseConfig = (fmt: string | null, answers: boolean, sources: Record<string, boolean>) => ({
-  answers, sources, recording: true, budget: { hands: null, minutes: null },
+  // recording OFF by default (Brady 2026-10-09): the frame-by-frame JPEG + DOM capture is a debugging aid, ~5 GB a
+  // table per 3-hour session; the WS dumps and poker.sqlite carry everything statistics need. Capture QA turns it on.
+  answers, sources, recording: false, budget: { hands: null, minutes: null },
   autoExecute: false, autoRealMoney: false, autoBudget: { minutes: 30, hands: 50 }, autoDelay: "instant", autoTimeBank: true,
   format: fmt, buyinBb: 100, waitForBb: true, profile: null, tables: 1, site: "ignition",
 });
@@ -50,7 +52,7 @@ export const BASE_PRESETS: Record<string, any> = {
   "capture-qa": {
     label: "Capture QA",
     tagline: "Answers off, frame-by-frame recording on. For checking the reader and the replica against the real client.",
-    config: baseConfig("ign-practice-ring", false, noSources),
+    config: { ...baseConfig("ign-practice-ring", false, noSources), recording: true },
     formats: null, defaultFormat: "ign-practice-ring", requires: ["recording"], sites: ["ignition"],
   },
   "test-rig": {
@@ -178,7 +180,7 @@ export function strategyPreset(s: any): any {
     config: {
       answers: true,
       sources: { exploitPreflop: exploit, mesPostflop: mes, aiChain: true },
-      recording: true, budget: { hands: null, minutes: null },
+      recording: false, budget: { hands: null, minutes: null },
       autoExecute: false, autoRealMoney: false,
       autoBudget: { minutes: 30, hands: 50 },
       autoDelay: "instant",
