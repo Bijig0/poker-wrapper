@@ -47,6 +47,9 @@ export interface ArrivalPath {
   why?: string | null;
   /** on a hit: how the memo's ranges were produced in the first place */
   first?: Omit<ArrivalPath, "first">;
+  /** EVERY seat a pool floor / overlay gave the pool's range at the flop, with that floor's code (2026-10-10: `code` keeps
+   *  only the last floor's, and a rebuilt source none — the hand page labelled 61 of 143 such seats "GTO range") */
+  poolSeats?: { pos: string; code: string }[];
 }
 
 /**

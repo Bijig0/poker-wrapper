@@ -46,7 +46,7 @@ import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter, seatActionOnTree } from "../services/gtowAiPreflop";
 import { getPreflopPin, preflopNodeFor, preflopNodesFor } from "../services/preflopPin";
-import { APPROXIMATIONS, departuresOf, departureBadge, departureStatesOf } from "../services/approximations";
+import { APPROXIMATIONS, departuresOf, departureBadge, departureStatesOf, departureForCode } from "../services/approximations";
 import { solveStore } from "../services/solveStore";
 import { handFacts, type HandDoc } from "../services/handFacts";
 import { handVerdicts, technicalReport, type PathRow } from "../services/chainPath";
@@ -1523,13 +1523,22 @@ function poolSeatsFor(hand: ParsedHand, upto: number, street: string, row: any):
     out.push({ pos: String(l.pos).toUpperCase(), id, badge: badgeOf(id), how: "lock", key: String(l.key), atIndex: rec!.actionIndex });
   }
   if (street !== "preflop") {
+    const add = (pos: string, id: string) => { if (!out.some((s) => s.pos === pos)) out.push({ pos, id, badge: badgeOf(id), how: "floor" }); };
     const a = answerPathOf(row)?.arrival;
+    // EVERY floored seat (2026-10-10): the arrival's poolSeats (answers since), and the answer's own notes — each floor
+    // writes "POOL LIMP / COLD-CALL / FLAT / CALL RANGE: the <seat> (…" — which older answers carry too. The arrival's single
+    // code kept only the LAST floor (a limp floor then pool-call ranges lost the limper) and none at all on a rebuilt
+    // source; the flat floors were not mapped: 61 of 143 pool-ranged flop answers in a week labelled a pool seat "GTO range".
     for (const x of [a, a?.first].filter(Boolean)) {
-      const id = x.code === "arrival:pool-limp-floor" ? "pool-limp-floor" : x.code === "arrival:pool-coldcall-floor" ? "pool-coldcall-floor" : x.code === "arrival:pool-call" ? "pool-call-ranges" : null;
-      if (!id) continue;
-      for (const m of String(x.why ?? "").matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) {
-        if (!out.some((s) => s.pos === m[1])) out.push({ pos: m[1]!, id, badge: badgeOf(id), how: "floor" });
+      for (const s of (x.poolSeats ?? []) as { pos: string; code: string }[]) {
+        const e = departureForCode(s.code);
+        if (e) add(String(s.pos).toUpperCase(), e.id);
       }
+    }
+    const NOTE_ENTRY: Record<string, string> = { LIMP: "pool-limp-floor", "COLD-CALL": "pool-coldcall-floor", FLAT: "pool-flat-floor", CALL: "pool-call-ranges" };
+    for (const seg of String(row?.warning ?? "").matchAll(/POOL (LIMP|COLD-CALL|FLAT|CALL) RANGE: [^·]*/g)) {
+      const id = seg[1] === "FLAT" && /sbflat v2/.test(seg[0]) ? "pool-sbflat-v2" : NOTE_ENTRY[seg[1]!]!;
+      for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) add(m[1]!, id);
     }
   }
   return out;

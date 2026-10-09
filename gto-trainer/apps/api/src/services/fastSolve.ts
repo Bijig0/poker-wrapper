@@ -1184,6 +1184,8 @@ async function flopArrivalCompute(
   }
   if (!recon.ok) return failA(`range reconstruction: ${recon.reason}`);
   prov ??= { how: "designed", producer: "preflop-db" };
+  /** every seat a floor below gives the pool's range, by the floor's code (the arrival's poolSeats; the hand page labels them) */
+  const poolSeats: { pos: string; code: string }[] = [];
   // THE POOL LIMP FLOOR (services/poolLimpFloor, 2026-10-05): a short limper whose stack no pool-locked tree covers yet
   // enters the flop with the pool's measured limp range, whichever piece produced the rest — said in the answer's note
   if (sixMax && shortLimpPoolOn()) {
@@ -1191,6 +1193,7 @@ async function flopArrivalCompute(
     // the trigger rule kept a limper's own range (services/poolTrigger, POOL_LIMP_TRIGGER): logged, the ranges as walked
     if (floor.kept.length) tmark("pool limp floor kept", floor.kept.map((k) => `the ${k.pos} (${Math.round(k.stack)}bb, ${k.was} combos, ${k.key}): ${k.text}`).join("; "));
     if (floor.applied.length) {
+      for (const r of floor.applied) poolSeats.push({ pos: r.pos, code: "arrival:pool-limp-floor" });
       // a floored limper who then CALLED the iso: his whole limp cell × the pool's limp-call rate (poolCalls.applyLimpCallProduct,
       // 2026-10-09) — the floor's records are extended in place, so the note below says so
       const lc = applyLimpCallProduct({ hand, heroPos, ranges: floor.ranges, dealt: pinnedDealt, floored: floor.applied });
@@ -1208,6 +1211,7 @@ async function flopArrivalCompute(
   if (sixMax && coldCallPoolMode() !== "off") {
     const ccf = applyPoolColdCallFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, lockedPools: pinPools });
     if (ccf.applied.length) {
+      for (const r of ccf.applied) poolSeats.push({ pos: r.pos, code: "arrival:pool-coldcall-floor" });
       const note = poolColdCallFloorNote(ccf.applied, rangeSource);
       tmark("pool cold-call floor", note);
       recon = { ...recon, ranges: ccf.ranges };
@@ -1235,6 +1239,7 @@ async function flopArrivalCompute(
       if (x.r.sbflat) console.log(sbFlatLogLine(hand, x.r.key, x.r.sbflat, x.r.was, x.fired, x.r.text));
     }
     if (ff.applied.length) {
+      for (const r of ff.applied) poolSeats.push({ pos: r.pos, code: r.sbflat ? "arrival:pool-flat-floor-sbv2" : "arrival:pool-flat-floor" });
       const note = poolFlatFloorNote(ff.applied, rangeSource);
       tmark("pool flat floor", note);
       recon = { ...recon, ranges: ff.ranges };
@@ -1255,6 +1260,7 @@ async function flopArrivalCompute(
     }
     const pc = applyPoolCallRanges({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
     if (pc.applied.length) {
+      for (const r of pc.applied) poolSeats.push({ pos: r.pos, code: "arrival:pool-call" });
       const note = poolCallNote(pc.applied, rangeSource);
       tmark("pool call ranges", note);
       recon = { ...recon, ranges: pc.ranges };
@@ -1264,7 +1270,7 @@ async function flopArrivalCompute(
         why: `${prov.code === "arrival:pin-cap" ? "the pinned AI tree cannot hold the line (its caller/limper cap); " : ""}${note.slice(0, 300)}` };
     }
   }
-  return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };
+  return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: poolSeats.length ? { ...prov!, poolSeats } : prov! } };
 }
 
 /** The [sbflat] api.log line: the SB-flat table v2's key for one SB flat, what keyed it, and whether the floor fired. */
