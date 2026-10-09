@@ -37,7 +37,7 @@ describe("withinFirstStackBound (the gap gate's first-decision bound)", () => {
 
 describe("poolLimpersOf", () => {
   test("the HJ's call before any raise is a first-in limp; hero's own check is not", () => {
-    expect(poolLimpersOf(hand(HAND_4922555015), "BB")).toEqual([{ pos: "HJ", limpsBefore: 0, complete: false, raisedLater: false }]);
+    expect(poolLimpersOf(hand(HAND_4922555015), "BB")).toEqual([{ pos: "HJ", limpsBefore: 0, complete: false, raisedLater: false, calledLater: false }]);
   });
 
   test("an over-limp counts the limps before it (hero's included), the SB's call is a complete, a limp-raise is marked", () => {
@@ -332,5 +332,35 @@ describe("applyPoolLimpFloor", () => {
   test("heads-up keeps its tree (the SB's complete is the button's open there)", () => {
     const hu = { heroSeatId: 1, positions: { 1: "BB", 6: "SB" }, actions: [pre(6, "post-sb", 0.5), pre(1, "post-bb", 1), pre(6, "call", 0.5), pre(1, "check")], stacks: {}, committed: {} } as unknown as ParsedHand;
     expect(applyPoolLimpFloor({ hand: hu, heroPos: "BB", ranges: { SB: { ...TINY }, BB: { AKs: 1 } }, chartId: "gtow-ai · 2-handed", dealt: { 1: 100, 6: 30 } }).applied).toEqual([]);
+  });
+});
+
+describe("the trigger rule on the floor (2026-10-09, services/poolTrigger — POOL_LIMP_TRIGGER)", () => {
+  afterEach(() => { delete process.env.POOL_LIMP_TRIGGER; });
+  const CLASSES = Object.keys(limpLockRange("limp_first_deep")!.weights);
+  const flat = (w: number) => Object.fromEntries(CLASSES.map((c) => [c, w]));
+  const at76 = dealt({ 3: 76 });
+  test("a 76bb HJ the solver limps 31.6% of the time (the pool 15.1%): his own range is kept, the reason recorded", () => {
+    const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
+    expect(r.applied).toEqual([]);
+    expect(r.kept.map((k) => [k.pos, k.key])).toEqual([["HJ", "limp_first_short_60_85"]]);
+    expect(r.kept[0]!.text).toContain("not under the pool's rate / 2");
+    expect(r.ranges.HJ).toEqual(flat(0.316));
+  });
+  test("residue (2.98 combos on the 30bb limp chart) is still floored", () => {
+    const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: ranges(), chartId: "ign200_6max_D30_olimp", dealt: dealt(), planOf: V2 });
+    expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_le60"]);
+    expect(r.kept).toEqual([]);
+  });
+  test("POOL_LIMP_TRIGGER=off: structural, as before — the real range is floored too", () => {
+    process.env.POOL_LIMP_TRIGGER = "off";
+    const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
+    expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_60_85"]);
+  });
+  test("a limp-caller stays structural (the limp × call product's floor): floored whatever his walked range", () => {
+    const iso = [...HAND_4922555015.slice(0, 7), pre(1, "raise", 4), pre(3, "call", 4)];
+    expect(poolLimpersOf(hand(iso), "BB")[0]!.calledLater).toBe(true);
+    const r = applyPoolLimpFloor({ hand: hand(iso), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
+    expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_60_85"]);
   });
 });

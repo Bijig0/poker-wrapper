@@ -28,6 +28,7 @@ import { dealtByPos, limpStackBucket, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS
 import { hrc6maxDb } from "./hrc6maxDb";
 import { chartStacks6, withinFirstStackBound } from "./treeGap";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
+import { klGroup, poolCiLower, shouldReplace, type TriggerResult } from "./poolTrigger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 /** v3 holds every v2 key (8 copied unchanged, the 8 thin ones re-measured under the same names) plus the finer bands */
@@ -87,6 +88,28 @@ export const shortLimpPoolMode = (): ShortLimpPoolMode => {
 export const shortLimpPoolOn = (): boolean => shortLimpPoolMode() !== "off";
 export const poolLimpLockOn = (): boolean => shortLimpPoolMode() === "on";
 
+/**
+ * THE TRIGGER ON THE LIMP (2026-10-09, services/poolTrigger — the calibrated rule; poker claude/trigger-rule). The lock and
+ * the floor fired on STRUCTURE alone (one non-blind limper ≤85bb, no covering chart) and never asked whether the solver's
+ * own limp was residue. Now the solver's limp share at his node goes through poolTrigger.shouldReplace against the pool
+ * cell's rate: the lock (gtowAiPreflop.solvePreflopPoolLocked) reads it on the PLAIN tree before locking, the floor
+ * (applyPoolLimpFloor) on the walked flop-entering range of a limper who did nothing after the limp. A real limp range
+ * — the CO 76bb limping 31.6% (the pool 15.1%), a 24.8bb BTN at 15.7% (the pool 26.3%), an SB completing behind a limper
+ * 28-44% — is the solver's; the residue (every non-blind limp the study trees hold: 0.01-0.12%) is still replaced.
+ * POOL_LIMP_TRIGGER in the environment, read at every decision: on (unset) = the rule; off = structural, as before.
+ */
+export const poolLimpTriggerOn = (): boolean => !/^(off|0|false|no)$/i.test(String(process.env.POOL_LIMP_TRIGGER ?? "on").trim());
+/** The rule for a limp key: `fSolver` the solver's limp share, `solverAfter` his class range after the limp (for the
+ *  KL test; null = not known). Carries the cell's rate for the caller's note. */
+export function limpTrigger(key: string, fSolver: number | null, solverAfter: ClassRange | null): TriggerResult & { fPool: number | null } {
+  const cell = limpLockRange(key);
+  const t = shouldReplace({
+    fSolver, fPool: cell?.freq ?? null, poolCI: cell ? poolCiLower({ n: cell.n, freq: cell.freq }) : null,
+    groupKL: cell && solverAfter ? klGroup(cell.weights as ClassRange, solverAfter) : null, line: "preflop", reach: null,
+  });
+  return { ...t, fPool: cell?.freq ?? null };
+}
+
 /** A pool range as 1,326 per-combo weights (each combo its class's weight) — the strategy a lock gives the limp. */
 export function poolLimpWeights(key: PoolLimpKey): number[] {
   const w = limpLockRange(key)!.weights;
@@ -107,6 +130,8 @@ export interface PoolLimper {
   complete: boolean;
   /** he raised later in the hand (a limp-raise): his range is not a limp range */
   raisedLater: boolean;
+  /** he CALLED a raise after his limp (a limp-call / the SB's complete-call): his range is limp × call, not the limp */
+  calledLater?: boolean;
 }
 
 export interface PoolLimpFloorRecord {
@@ -125,6 +150,8 @@ export interface PoolLimpFloorRecord {
    *  (`base` combos) was multiplied by — `now` is the product */
   times?: { key: string; freq: number; n: number; base: number; cal?: string };
 }
+/** A limper the floor would have replaced, kept on his walked range because the trigger rule did not fire (2026-10-09). */
+export interface PoolLimpFloorKept { pos: Seat6; key: PoolLimpKey; stack: number; was: number; text: string }
 
 const POSTS = new Set(["post-sb", "post-bb", "post", "post-dead", "ante"]);
 const AGGRESSIVE = new Set(["raise", "bet", "all-in"]);
@@ -154,8 +181,11 @@ export function poolLimpersOf(hand: ParsedHand, heroPos: string | null): PoolLim
       const l = out.find((x) => x.pos === pos);
       if (l) l.raisedLater = true;
     } else if (a.type === "call" && !raised && !acted.has(pos) && pos !== "BB") {
-      if (pos !== hero) out.push({ pos, limpsBefore: limps, complete: pos === "SB", raisedLater: false });
+      if (pos !== hero) out.push({ pos, limpsBefore: limps, complete: pos === "SB", raisedLater: false, calledLater: false });
       if (pos !== "SB") limps++;
+    } else if (a.type === "call" && raised) {
+      const l = out.find((x) => x.pos === pos);
+      if (l) l.calledLater = true;
     }
     acted.add(pos);
   }
@@ -297,14 +327,16 @@ export function applyPoolLimpFloor(a: {
   planOf?: (id: string) => string | null;
   /** limpers the tree the ranges were walked off LOCKED to the pool range (a pool-locked AI pin): kept as walked */
   lockedPools?: readonly { pos: string; key: string }[];
-}): { ranges: Record<string, ClassRange>; applied: PoolLimpFloorRecord[] } {
+}): { ranges: Record<string, ClassRange>; applied: PoolLimpFloorRecord[]; kept: PoolLimpFloorKept[] } {
   const hero = String(a.heroPos ?? "").toUpperCase() as Seat6;
   const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
   // the pool was measured 5-6 handed; a 3-4 handed table is still far closer to it than to an empty range — heads-up
   // (the SB's complete is the button's open there) is a different game and keeps its tree
-  if (!SEATS6.includes(hero) || Object.keys(byPos).length < 3) return { ranges: a.ranges, applied: [] };
+  if (!SEATS6.includes(hero) || Object.keys(byPos).length < 3) return { ranges: a.ranges, applied: [], kept: [] };
   const heroStack = Number(byPos[hero] ?? NaN);
   const applied: PoolLimpFloorRecord[] = [];
+  const kept: PoolLimpFloorKept[] = [];
+  const trigger = poolLimpTriggerOn();
   let out = a.ranges;
   for (const l of poolLimpersOf(a.hand, a.heroPos)) {
     if (l.raisedLater) continue;
@@ -324,11 +356,19 @@ export function applyPoolLimpFloor(a: {
     const lock = limpLockRange(key);
     if (!lock) continue;
     const was = combosOf(out[rk]);
+    // THE TRIGGER (2026-10-09, limpTrigger): a limper who did nothing after the limp enters the flop with the solver's
+    // limp range, so its mass over the 1,326 combos is the solver's limp share — kept when the rule does not fire (the
+    // same verdict the preflop lock reached on the same node: the two never disagree). A limp-caller keeps the structural
+    // floor and the limp × call product (applyLimpCallProduct)
+    if (trigger && !l.calledLater) {
+      const t = limpTrigger(key, was / 1326, out[rk] ?? {});
+      if (!t.fire) { kept.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, was, text: t.text }); continue; }
+    }
     if (out === a.ranges) out = { ...a.ranges };
     out[rk] = { ...(lock.weights as ClassRange) };
     applied.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, freq: lock.freq, n: lock.n, was, now: combosOf(out[rk]), table: lock.table });
   }
-  return { ranges: out, applied };
+  return { ranges: out, applied, kept };
 }
 
 /** The answer's note for the replaced limpers. */

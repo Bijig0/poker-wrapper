@@ -66,7 +66,8 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 // THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
 import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
-import { poolLimpKey, poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
+import { limpTrigger, poolLimpKey, poolLimpRange, poolLimpTriggerOn, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
+import { classRangeOf as classMeansOf } from "./poolTrigger";
 import { coldCallLockBelow, coldCallRange, coldCallWeights, type ColdCallLockTarget } from "./poolColdCall";
 import type { HrcNode } from "./hrc3max";
 import type { PathReason } from "./chainPath";
@@ -354,7 +355,9 @@ export interface HeroSelfLock {
 /** GTO Wizard's own words from a refusal read back as "422: {…"detail": "…"…}" (else the text as it came). */
 const refusalDetail = (error: string): string =>
   /"detail"\s*:\s*"([^"]+)"/.exec(error)?.[1] ?? error.replace(/^\d{3}:\s*/, "").slice(0, 160);
-export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string };
+export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string;
+  /** a pool lock the trigger rule did not fire (POOL_LOCK_SKIPPED): the numbers that decided it */
+  trigger?: { fSolver: number | null; fPool: number | null; text: string } };
 
 const round5 = (x: number) => Math.round(x * 2) / 2;
 const num = (n: number) => String(Math.round(n * 100) / 100);
@@ -2411,6 +2414,18 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
     at = { line: prefix, sols, limp: String(limp.action.code), share: Number(limp.total_frequency ?? NaN) };
   }
   if (!at) return no(`no limp by the ${target.pos} on the line '${line || "root"}'`, line);
+  // THE TRIGGER (services/poolTrigger, 2026-10-09): the plain tree's own limp share against the pool cell — a limp the
+  // solver really plays (not residue, not under half the pool's rate with a different hand mix) is the solver's, and the
+  // plain answer stands (the skip rides on the answer's path: preflop:pool-limp-lock-skipped). POOL_LIMP_TRIGGER=off =
+  // structural, as before. A node without total_frequency: the limp's mean over the deck (his range there is every hand)
+  const limpSol = at.sols.find((a) => String(a?.action?.code ?? "") === at!.limp);
+  const strat = (limpSol?.strategy ?? []) as number[];
+  const fSolver = Number.isFinite(at.share) ? at.share : strat.length === 1326 ? strat.reduce((t, x) => t + Math.max(0, Number(x) || 0), 0) / 1326 : null;
+  const trig = poolLimpTriggerOn() ? limpTrigger(target.key, fSolver, strat.length === 1326 ? classMeansOf(strat) : null) : null;
+  if (trig && !trig.fire) {
+    return { ok: false, kind: POOL_LOCK_SKIPPED, line, trigger: { fSolver, fPool: trig.fPool, text: trig.text },
+      reason: `pool-locked tree: ${COLD_CALL_NOT_NEEDED} the ${target.pos}'s ${target.complete ? "complete" : "limp"} at '${at.line || "root"}' is the solver's own — ${trig.text}` };
+  }
   const w = poolLimpWeights(target.key);
   const lock = poolLimpLockOf(at.line, at.sols, at.limp, w);
   const locked = await poolLockSeams.lock(parent.solId, body, [lock]);
@@ -2457,7 +2472,8 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   const secs = (Date.now() - t0) / 1000;
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
   const note = `POOL-LOCKED LIMPER: the ${target.pos} (${target.stack}bb) ${target.complete ? "completed" : "limped"}` +
-    (Number.isFinite(at.share) ? `, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range,` : "") + ` and no pool-locked chart covers his stack yet — ` +
+    (Number.isFinite(at.share) ? `, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range,` : "") + ` and no pool-locked chart covers his stack yet` +
+    (trig ? ` (trigger ${trig.text})` : "") + ` — ` +
     `GTO Wizard AI preflop solved this table with his ${target.complete ? "complete" : "limp"} LOCKED to the pool's ${target.key} range ` +
     `(${(100 * freq).toFixed(1)}% of hands, n=${n}, ${combos} combos; the rest of each hand folds or raises as the solver plays it) and hero's node re-solved behind it` +
     (target.alsoSb ? `; the SB's complete is the solver's (one lock per tree)` : "") +
@@ -2470,8 +2486,11 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   };
 }
 
-/** The refusal that is not a failure: the unlocked tree already gives the cold-call a real share (no lock needed). */
+/** The refusal that is not a failure: the unlocked tree already gives the cold-call (or, since 2026-10-09, the limp — the
+ *  trigger rule) a real share (no lock needed). */
 export const COLD_CALL_NOT_NEEDED = "NOT NEEDED:";
+/** The pool-locked limper's refusal kind when the trigger rule did not fire (services/poolTrigger): the plain answer stands. */
+export const POOL_LOCK_SKIPPED = "pool-lock-skipped" as const;
 
 /**
  * THE POOL'S 3-BET COLD-CALL, LOCKED (2026-10-05, services/poolColdCall has the why). Hero's preflop answer on the exact

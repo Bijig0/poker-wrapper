@@ -159,8 +159,8 @@ describe("solvePreflopPoolLocked over its seams", () => {
       game: { players: ["UTG", "HJ", "CO", "BTN", "SB", "BB"].map((p) => ({ position: p, is_hero: p === actor })) },
     }, cached: true,
   });
-  /** the fake GTO Wizard: the plain tree (P) and the locked one (L), the HJ limping 0.05% on P */
-  function rig(opts: { lockHolds?: boolean } = {}) {
+  /** the fake GTO Wizard: the plain tree (P) and the locked one (L), the HJ limping 0.05% on P (`plainLimp` overrides) */
+  function rig(opts: { lockHolds?: boolean; plainLimp?: number | number[] } = {}) {
     const calls: { locks: any[][]; reads: string[] } = { locks: [], reads: [] };
     const w = F.poolLimpWeights("limp_first_short_le60");
     Object.assign(P.poolLockSeams, {
@@ -172,7 +172,9 @@ describe("solvePreflopPoolLocked over its seams", () => {
         calls.reads.push(`${solId}:${line}`);
         if (line === "") return node("UTG", [{ code: "F", p: 0.8 }, { code: "R2.5", p: 0.2 }]);
         if (line === "F") return solId === "P"
-          ? node("HJ", [{ code: "F", p: 0.77 }, { code: "C", p: 0.0005 }, { code: "R2.5", p: 0.2295 }])
+          ? (Array.isArray(opts.plainLimp)
+            ? node("HJ", [{ code: "F", p: opts.plainLimp.map((x) => 0.7705 - x) }, { code: "C", p: opts.plainLimp }, { code: "R2.5", p: 0.2295 }])
+            : node("HJ", [{ code: "F", p: 0.7705 - (opts.plainLimp ?? 0.0005) }, { code: "C", p: opts.plainLimp ?? 0.0005 }, { code: "R2.5", p: 0.2295 }]))
           : node("HJ", [{ code: "F", p: w.map((x) => (1 - x) * 0.77) }, { code: "C", p: opts.lockHolds === false ? arr(0.0005) : w }, { code: "R2.5", p: w.map((x) => (1 - x) * 0.23) }]);
         if (line === "F-C-F-F-F") return node("BB", [{ code: "X", p: solId === "L" ? 0.55 : 0.92 }, { code: "R4", p: solId === "L" ? 0.45 : 0.08 }]);
         return { error: `NODE_DOES_NOT_EXIST ${line}` };
@@ -200,6 +202,59 @@ describe("solvePreflopPoolLocked over its seams", () => {
     expect(pin?.piece).toBe("gtow-ai-preflop");
     expect((pin as any).solId).toBe("L");
     expect((pin as any).poolLocks).toEqual([{ pos: "HJ", key: "limp_first_short_le60" }]);
+  });
+
+  it("THE TRIGGER (2026-10-09): residue (0.05%) locks; a limp the plain tree really plays (31.6% vs the pool's 26.3%) is the solver's — no lock, no request past the plain node", async () => {
+    const calls = rig({ plainLimp: 0.316 });
+    const hd = h();
+    const r = await P.solvePreflopPoolLocked(hd, "BB", target);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.kind).toBe(P.POOL_LOCK_SKIPPED);
+    expect(r.trigger?.fSolver).toBeCloseTo(0.316, 6);
+    expect(r.trigger?.fPool).toBeCloseTo(0.26326, 5);
+    expect(r.reason).toContain("NOT NEEDED:");
+    expect(r.reason).toContain("not under the pool's rate / 2");
+    expect(calls.locks).toHaveLength(0);
+    expect(calls.reads.some((x) => x.startsWith("L:"))).toBe(false);
+    expect(Pin.preflopPinFor(hd)).toBeUndefined();
+    // the warm-up asks nothing more either
+    const warm = rig({ plainLimp: 0.316 });
+    expect((await P.solvePreflopPoolLocked(h(), "BB", target, { warmOnly: true })).ok).toBe(false);
+    expect(warm.locks).toHaveLength(0);
+  });
+
+  it("the shape test: a 5% limp (under half the pool's 26.3%) with the POOL'S OWN hand mix is the solver's; a 5% limp of junk is locked", async () => {
+    const w = F.poolLimpWeights("limp_first_short_le60");
+    const same = rig({ plainLimp: w.map((x) => x * 0.19) });
+    const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain("same hand-group mix");
+    expect(same.locks).toHaveLength(0);
+    // the same 5% on offsuit junk only (the 72o-style hands the pool limps least): divergence — locked
+    const junk = COMBOS.map((c) => (c.cls.endsWith("o") && !/[AKQJT]/.test(c.cls) ? 0.0661 / 0.4072 * 0.75 : 0));
+    const mean = junk.reduce((t, x) => t + x, 0) / 1326;
+    expect(mean).toBeGreaterThan(0.01);
+    expect(mean).toBeLessThan(0.13);
+    const div = rig({ plainLimp: junk });
+    expect((await P.solvePreflopPoolLocked(h(), "BB", target)).ok).toBe(true);
+    expect(div.locks).toHaveLength(1);
+  });
+
+  it("the residue lock's note carries the trigger's reading", async () => {
+    rig();
+    const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(r.ok && r.note).toContain("(trigger residue: the solver plays it 0.050% (< 1.00%))");
+  });
+
+  it("POOL_LIMP_TRIGGER=off: structural, as before — the 31.6% limp is locked", async () => {
+    process.env.POOL_LIMP_TRIGGER = "off";
+    try {
+      const calls = rig({ plainLimp: 0.316 });
+      const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+      expect(calls.locks).toHaveLength(1);
+      expect(r.ok).toBe(true);
+    } finally { delete process.env.POOL_LIMP_TRIGGER; }
   });
 
   it("a lock that did not hold is no answer (the decision goes on as before)", async () => {
