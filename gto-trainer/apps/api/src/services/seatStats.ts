@@ -179,7 +179,27 @@ export class SeatStats {
    */
   snapshot(a: { sessionId: string | null | undefined; tableSlot: number | null | undefined; clientHandId?: string | null; heroSeatId?: number | null; positions?: Record<number, string> | null }): SeatStatsRow[] {
     const t = this.tables.get(this.tableKey(a.sessionId, a.tableSlot));
-    if (!t) return [];
+    return t ? this.rowsOf(t, a) : [];
+  }
+
+  /**
+   * THE DECISION PATH'S READ (services/poolSbFlat, 2026-10-10): the same rows for the table whose CURRENT hand is this
+   * one, found by the hand's own key — the flop arrival does not carry the route's session id (hand.sessionId is unset
+   * on a live capture). O(tables ≤ 32), memory only. [] when no table's current hand is this one (the tracker never saw
+   * it: an API restart mid-hand, a replay) — the caller reads that as "no seat history".
+   */
+  forHand(hand: { clientHandId?: string | null; handId?: number | string | null; tableSlot?: number | null; heroSeatId?: number | null; positions?: Record<number, string> | null }): SeatStatsRow[] {
+    const key = String(hand.clientHandId ?? (hand.handId ? `w${hand.handId}` : ""));
+    if (!key) return [];
+    let found: TableState | null = null;
+    for (const [tk, t] of this.tables) {
+      if (t.current?.key !== key) continue;
+      if (!found || tk.endsWith(`|${hand.tableSlot ?? 0}`)) found = t;
+    }
+    return found ? this.rowsOf(found, { clientHandId: key, heroSeatId: hand.heroSeatId ?? null, positions: hand.positions ?? null }) : [];
+  }
+
+  private rowsOf(t: TableState, a: { clientHandId?: string | null; heroSeatId?: number | null; positions?: Record<number, string> | null }): SeatStatsRow[] {
     const cur = t.current && (!a.clientHandId || t.current.key === String(a.clientHandId)) ? t.current : null;
     const positions = cur?.positions ?? a.positions ?? {};
     const hero = cur?.heroSeatId ?? a.heroSeatId ?? null;
@@ -200,6 +220,20 @@ export class SeatStats {
       };
     });
   }
+}
+
+/**
+ * One villain seat's history for the decision path (services/poolSbFlat's VPIP): the counted hands and VPIP hands of
+ * the seat at position `pos` in this hand, its current occupant only (continuity as `snapshot`). null = no history (the
+ * table or the seat never observed). Never throws.
+ */
+export function seatHistoryFor(hand: Parameters<SeatStats["forHand"]>[0] | null | undefined, pos: string, store: SeatStats = seatStats): { n: number; v: number; continuity: SeatContinuity; breaks: number } | null {
+  try {
+    if (!hand) return null;
+    const P = pos.toUpperCase();
+    const row = store.forHand(hand).find((r) => String(r.pos ?? "").toUpperCase() === P);
+    return row ? { n: row.hands, v: row.vpip, continuity: row.continuity, breaks: row.breaks } : null;
+  } catch { return null; }
 }
 
 /** The API's one store (the ingest route and /fast-solver feed it; the study poller reads it into each answer row). */

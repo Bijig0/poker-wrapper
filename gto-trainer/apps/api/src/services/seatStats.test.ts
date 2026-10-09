@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { preflopVoluntary, SeatStats, seatStats, seatStatsJson } from "./seatStats";
+import { preflopVoluntary, SeatStats, seatHistoryFor, seatStats, seatStatsJson } from "./seatStats";
 import { AnswerLog } from "./answerLog";
 import { NOT_DEPARTURES } from "./approximations";
 import { testTempDir } from "../test/tempDir";
@@ -78,6 +78,27 @@ describe("SeatStats", () => {
     s2.observe("S", hand(BLINDS, { key: "b", ended: false }));
     const u = s2.snapshot({ sessionId: "S", tableSlot: 1, clientHandId: "b" }).find((r) => r.seatId === 1)!;
     expect([u.hands, u.partial, u.vpipPct]).toEqual([0, 1, null]);
+  });
+
+  test("THE DECISION PATH'S READ (forHand / seatHistoryFor, services/poolSbFlat): found by the hand's own key, no session id needed", () => {
+    const s = new SeatStats();
+    const sbFlat = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "raise", 2.5), pre(4, "fold"), pre(5, "call", 2.5), pre(6, "fold")];
+    const sbFold = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "raise", 2.5), pre(4, "fold"), pre(5, "fold"), pre(6, "fold")];
+    s.observe("S", hand(sbFlat, { key: "a", end: { 5: 97.5 } }));
+    s.observe("S", hand(sbFold, { key: "b", start: { 5: 97.5 }, end: { 5: 97 } }));
+    s.observe("S", hand(sbFlat, { key: "c", start: { 5: 97 }, end: { 5: 94.5 } }));
+    const cur = hand(BLINDS, { key: "d", start: { 5: 94.5 }, ended: false });
+    s.observe("S", cur);
+    expect(seatHistoryFor({ clientHandId: "d", tableSlot: 1, heroSeatId: 6, positions: POS }, "SB", s)).toEqual({ n: 3, v: 2, continuity: "stack", breaks: 0 });
+    expect(seatHistoryFor({ clientHandId: "d", tableSlot: 1 }, "sb", s)?.n).toBe(3);
+    // the rows are snapshot's own for that table
+    expect(s.forHand({ clientHandId: "d", tableSlot: 1 })).toEqual(s.snapshot({ sessionId: "S", tableSlot: 1, clientHandId: "d" }));
+    // a hand no table is on (never observed, or an earlier hand of the table): no history
+    expect(seatHistoryFor({ clientHandId: "zz", tableSlot: 1 }, "SB", s)).toBeNull();
+    expect(seatHistoryFor({ clientHandId: "c", tableSlot: 1 }, "SB", s)).toBeNull();
+    expect(seatHistoryFor(null, "SB", s)).toBeNull();
+    // hero is never a row
+    expect(seatHistoryFor({ clientHandId: "d", tableSlot: 1 }, "BB", s)).toBeNull();
   });
 
   test("tables and sessions are kept apart; an unknown table is []", () => {
