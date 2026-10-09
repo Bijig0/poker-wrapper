@@ -91,6 +91,9 @@ export interface PoolCaller {
   openTo: number;
   /** he raised later in the preflop (his range is not a calling range) */
   raisedLater: boolean;
+  /** he CALLED again later in the preflop (a 3-bet after his flat: no pool cell for that line — the flat floor leaves
+   *  him; the pin-cap overlay never reaches a raised-again line) */
+  calledLater?: boolean;
   /** his call was an all-in for less */
   allIn: boolean;
   /** the SB's complete (limp line) */
@@ -128,6 +131,7 @@ export function poolCallersOf(hand: ParsedHand, heroPos: string | null): PoolCal
     }
     if (!isCall) return;
     const allIn = a.type === "all-in";
+    if (raises >= 2) { const c = out.find((x) => x.pos === pos); if (c) c.calledLater = true; }
     if (raises === 0) {
       if (pos === "BB") return;                    // the BB's "call" before any raise is his check
       limpBefore.set(pos, nonBlindLimps);
@@ -275,13 +279,15 @@ const combosOf = (r: ClassRange | undefined): number =>
   Math.round(Object.entries(r ?? {}).reduce((s, [c, w]) => s + (Number(w) > 0 ? Number(w) * classCombos(c) : 0), 0) * 100) / 100;
 
 /** a key's range and its measurement, from whichever table holds it */
-export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: number; calls: number; shown: number | null; limpTable?: LimpLocksVersion } | null {
+export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: number; calls: number; shown: number | null; limpTable?: LimpLocksVersion;
+    /** the chances the rate was measured on (the call table's; the limp table's n / freq) — the trigger's evidence */
+    chances?: number } | null {
   if (k.table === "limp") {
     const r = limpLockRange(k.key);
-    return r ? { weights: r.weights, freq: r.freq, calls: r.n, shown: null, limpTable: r.table } : null;
+    return r ? { weights: r.weights, freq: r.freq, calls: r.n, shown: null, limpTable: r.table, ...(r.freq > 0 ? { chances: r.n / r.freq } : {}) } : null;
   }
   const r = table.ranges[k.key];
-  return r ? { weights: r.weights, freq: r.freq, calls: r.calls, shown: r.shown } : null;
+  return r ? { weights: r.weights, freq: r.freq, calls: r.calls, shown: r.shown, ...(r.chances > 0 ? { chances: r.chances } : {}) } : null;
 }
 
 export interface PoolCallRecord {

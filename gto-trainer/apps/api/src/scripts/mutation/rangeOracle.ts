@@ -94,14 +94,15 @@ export interface PoolFloor {
 export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   const out = new Map<string, PoolFloor>();
   // each "POOL … RANGE:" tag to the next (not the note's " · " separators: a GTO Wizard source id carries " · " itself)
-  const heads = [...note.matchAll(/POOL (LIMP|COLD-CALL|CALL) RANGE: /g)];
+  // POOL FLAT RANGE (services/poolFlatFloor, 2026-10-09): a call-table cell, read as the call overlay's
+  const heads = [...note.matchAll(/POOL (LIMP|COLD-CALL|CALL|FLAT) RANGE: /g)];
   heads.forEach((h, i) => {
     const body = note.slice(h.index! + h[0].length, i + 1 < heads.length ? heads[i + 1]!.index : undefined);
     // the pool-call overlay (services/poolCalls, 2026-10-07) names what the seat did in words; the shape is the floors'
     const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \((v3: )?/g;
     const ms = [...body.matchAll(re)];
     ms.forEach((e, j) => {
-      const kind = h[1] === "LIMP" ? "limp" : h[1] === "CALL" ? "call" : "coldcall";
+      const kind = h[1] === "LIMP" ? "limp" : h[1] === "CALL" || h[1] === "FLAT" ? "call" : "coldcall";
       // the seat's own clause: up to the next seat's — a limp-caller's "× his …" multiplier sits inside it
       const seg = body.slice(e.index!, j + 1 < ms.length ? ms[j + 1]!.index : undefined);
       const tl = /× his limp range (\S+) \((v3: )?/.exec(seg);

@@ -6,6 +6,7 @@ import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
 import { applyLimpCallProduct, applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
+import { applyPoolFlatFloor, poolFlatFloorMode, poolFlatFloorNote } from "./poolFlatFloor";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -1212,13 +1213,33 @@ async function flopArrivalCompute(
       if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-coldcall-floor", why: note.slice(0, 300) };
     }
   }
+  // THE POOL FLAT FLOOR (services/poolFlatFloor, 2026-10-09): on every line a chart or the tree holds, a villain who
+  // flat-called an open, over-called it or called the iso from the BB, and whose flop-entering range fails the trigger
+  // rule (residue / far from the pool's — services/poolTrigger), enters the flop with the pool's calling range. The
+  // pin-cap lines are the pool-call overlay's below (structural there, every caller) — this floor stands down on them
+  // while POOL_CALLS is on. A seat a floor above or a pinned lock already gave a pool range keeps it.
+  if (sixMax && poolFlatFloorMode() !== "off" && !(aiFitted && poolCallsMode() !== "off")) {
+    const given = (pinPools ?? []).map((p) => p.pos);
+    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: [^·]*/g)) {
+      for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) given.push(m[1]!);
+    }
+    const ff = applyPoolFlatFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
+    if (ff.kept.length) tmark("pool flat floor kept", ff.kept.map((k) => `the ${k.pos} (${k.was} combos, ${k.key}): ${k.text}`).join("; "));
+    if (ff.applied.length) {
+      const note = poolFlatFloorNote(ff.applied, rangeSource);
+      tmark("pool flat floor", note);
+      recon = { ...recon, ranges: ff.ranges };
+      sixNote = [sixNote, note].filter(Boolean).join(" · ");
+      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-flat-floor", why: note.slice(0, 300) };
+    }
+  }
   // THE POOL CALL RANGES (services/poolCalls, Brady 2026-10-07): the exact tree could not hold the line (a 4-way raised
   // pot, a two-limper pot — arrival:pin-cap) and every seat was read on a FITTED line; the villain CALLERS enter the flop
   // with the pool's measured calling range for their seat, line and stack instead of the solver's neighbouring-line read.
   // Hero's own range, the raisers', and a seat a floor above already gave a pool range keep what they have.
   if (aiFitted && poolCallsMode() !== "off") {
     const given = (pinPools ?? []).map((p) => p.pos);
-    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: [^·]*/g)) {
+    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL|FLAT) RANGE: [^·]*/g)) {
       for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) given.push(m[1]!);
     }
     const pc = applyPoolCallRanges({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
