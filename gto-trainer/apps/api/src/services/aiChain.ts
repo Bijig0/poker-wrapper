@@ -1131,7 +1131,10 @@ export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes"> & Par
     if (s.fromCheckpoint) continue;
     const name = s.street.toLowerCase();
     const narrowed = trace.nodes.filter((x) => x.si === s.si && !x.fromCheckpoint && x.heroAnswered?.strategy);
-    if (!s.retree && !narrowed.length) continue;
+    // A MISS IS SAID TOO (2026-10-10, the failed-lock review): his action was not on the node he was answered on, so this
+    // tree's own strategy narrowed it — before, the note read as if every earlier action had been narrowed as answered
+    const missed = trace.nodes.filter((x) => x.si === s.si && !x.fromCheckpoint && !x.heroAnswered?.strategy && x.heroAnswered?.miss);
+    if (!s.retree && !narrowed.length && !missed.length) continue;
     const parts: string[] = [];
     const w = s.retree?.added ?? (s.played?.length ? s.played[s.played.length - 1] : null);
     const seat = w ? s.players?.[w.seat] ?? `seat ${w.seat}` : null;
@@ -1162,6 +1165,7 @@ export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes"> & Par
       parts.push(`hero's ${h.action.toUpperCase()} narrowed by his answered strategy` +
         (h.combo ? ` (his hand ${h.combo.answered} on the tree he was answered on, ${h.combo.tree} on this one)` : ""));
     }
+    for (const x of missed) parts.push(`hero's ${String(x.heroAnswered!.action).toUpperCase()} NOT narrowed as answered: ${x.heroAnswered!.miss}`);
     out.push(`${RETREE_NOTE_TAG} ${parts.join("; ")}`);
   }
   return out;
