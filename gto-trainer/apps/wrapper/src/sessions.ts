@@ -412,6 +412,15 @@ export async function runPreflight(preset: string, config: any, fakeMode: boolea
       enabled: truthy(x.enabled), tokenLive: truthy(x.tokenLive), trees: x.trees ?? null,
       account: x.account ?? null, accountId: x.accountId ?? null,
     }));
+    // ONE live token is what the check requires (ok = tokenLive above); registered accounts that are down are only a
+    // warning (the setup page paints level "warn" yellow and the check still passes) — Brady 2026-10-09
+    const enabledS = gsess.filter((x) => truthy(x.enabled));
+    const downS = enabledS.filter((x) => !truthy(x.tokenLive));
+    if (truthy(g.tokenLive) && downS.length) {
+      const last = checks[checks.length - 1];
+      last.level = "warn";
+      last.detail += ` · WARNING: ${enabledS.length - downS.length} of ${enabledS.length} accounts up — ${downS.map((x) => pyStr(x.id ?? null)).join(", ")} down (one live token is enough)`;
+    }
   }
   if (req.includes("gtow")) {
     const mw = truthy(g.multiwayLive);
@@ -457,8 +466,9 @@ export async function runPreflight(preset: string, config: any, fakeMode: boolea
   }
   if (truthy(config.answers) && !fakeMode) {
     const nc = await deps.netCached();
-    checks.push({ id: "net", label: CHECK_LABELS.net, required: true, ok: !!nc.ok, detail: nc.detail, probe: nc });
-    if (!req.includes("net")) req.push("net");
+    // OPTIONAL (Brady 2026-10-08): a slow link shows as a warning on the checklist but never blocks a start.
+    // The mid-session guard (netguard.ts) still sits out and ends a session on a bad link.
+    checks.push({ id: "net", label: CHECK_LABELS.net, required: false, ok: !!nc.ok, detail: nc.detail, probe: nc });
   }
   const blockers = checks.filter((c) => c.required && !c.ok);
   return { ok: !blockers.length, checks, blockers: blockers.map((c) => c.label), requires: req };
