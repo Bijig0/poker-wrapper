@@ -445,7 +445,7 @@ export const APPROXIMATIONS: Approximation[] = [
     id: "pool-limp-floor",
     kind: "pool-overlay",
     lifecycle: "experiment",
-    trigger: "at the flop: a villain who limped (or completed) before any raise, never raised, ≤85bb, whose range was not walked off a tree that locked him at his own stack bucket",
+    trigger: "at the flop: a villain who limped (or completed BEHIND a limper) before any raise, never raised, ≤85bb, whose range was not walked off a tree that locked him at his own stack bucket. NOT a lone SB complete since 2026-10-09 (Brady: 'drop it of course', with pool-limp-lock): folded to, GTO Wizard completes the SB itself (5-20% of hands, 70-267 combos) — a real range the pool's folded-to cell (45% / 30% on 50 / 33 completes) was overwriting",
     replaces: { gto: "the limper's flop-entering range from the chart / AI tree (2.98 combos for a 39bb HJ on D30_olimp; 0.6 on GTO Wizard)", with: "the pool's whole limp range for his role and stack bucket (locks_v2), kept whole whatever he did after the limp" },
     data: {
       source: "the same table as pool-limp-lock: poker analysis/pipeline/limp_study/locks_v2/limp_locks_v3.json @ c7335b3a (branch claude/limp-locks-coinpoker; build_limp_locks_v3.py, build_limp_locks_v3.txt) — copied to services/poolLimpLocks.v3.json; LIMP_LOCKS=v2 reads locks_v2.json @ d6a04fd0 (build_locks.py) as services/poolLimpLocks.v2.json",

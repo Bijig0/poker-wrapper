@@ -305,6 +305,10 @@ export function applyPoolLimpFloor(a: {
   let out = a.ranges;
   for (const l of poolLimpersOf(a.hand, a.heroPos)) {
     if (l.raisedLater) continue;
+    // a lone SB complete (folded to) is the solver's, at the flop as preflop (2026-10-09, Brady: "drop it of course"):
+    // GTO Wizard completes the SB itself, 5-20% of hands on specific cards — never the sub-combo residue the floor exists
+    // for; the pool's folded-to cell (45% / 30%) would overwrite that real range. His complete BEHIND a limper is still floored
+    if (l.complete && l.limpsBefore === 0) continue;
     const stack = Number(byPos[l.pos] ?? NaN);
     const key = poolLimpKey(l, stack);
     if (!key) continue;
