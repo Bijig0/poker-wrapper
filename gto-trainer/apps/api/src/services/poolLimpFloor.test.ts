@@ -359,6 +359,15 @@ describe("the trigger rule on the floor (2026-10-09, services/poolTrigger — PO
     const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
     expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_60_85"]);
   });
+  test("a pool-locked limp chart that locked him at ANOTHER bucket (a 39bb HJ on the 100bb pool3 tree: the deep 3.1% range) stays structural — that range is the pool's, not the solver's", () => {
+    const deep = Object.fromEntries(Object.entries(limpLockRange("limp_first_deep")!.weights as Record<string, number>).map(([c, w]) => [c, w]));
+    const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: deep, BB: { AKs: 1 } }, chartId: "ign200_6max_D100_olimp_pool3", dealt: dealt(), planOf: V2 });
+    expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_le60"]);
+    expect(r.kept).toEqual([]);
+    // the same range off the GTO Wizard AI tree (not a pool lock) is judged by the trigger
+    const ai = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: deep, BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: dealt(), planOf: V2 });
+    expect(ai.applied.length + ai.kept.length).toBe(1);
+  });
   test("a limp-caller stays structural (the limp × call product's floor): floored whatever his walked range", () => {
     const iso = [...HAND_4922555015.slice(0, 7), pre(1, "raise", 4), pre(3, "call", 4)];
     expect(poolLimpersOf(hand(iso), "BB")[0]!.calledLater).toBe(true);

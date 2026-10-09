@@ -255,6 +255,14 @@ export function poolChartCovers(chartId: string | null, l: Pick<PoolLimper, "pos
   return withinFirstStackBound(Math.min(table.hero, table.limper), Math.min(st[heroPos], st[l.pos]));
 }
 
+/** Does this chart LOCK his limp node to a pool range (any bucket)? The pool3 trees lock every limp and the SB's
+ *  complete; the pilot and hero-free trees the limps only (as poolChartCovers reads them). */
+export function chartLocksLimp(chartId: string | null, l: Pick<PoolLimper, "complete">): boolean {
+  if (!chartId) return false;
+  if (chartId === POOL_LIMP_CHART || /_olimp_pool3$/.test(chartId)) return true;
+  return (chartId === POOL_LIMP_CHART_SB || /_olimp_poolh$/.test(chartId)) && !l.complete;
+}
+
 /**
  * THE GTO WIZARD PREFLOP LOCK'S TARGET (2026-10-05, Brady: "use gto wizard ai preflop, to send in the pool measured range
  * for the original limper, then re-solve the tree from there to give the correct decision for hero"). Which limper, if
@@ -375,8 +383,10 @@ export function applyPoolLimpFloor(a: {
     // THE TRIGGER (2026-10-09, limpTrigger): a limper who did nothing after the limp enters the flop with the solver's
     // limp range, so its mass over the 1,326 combos is the solver's limp share — kept when the rule does not fire (the
     // same verdict the preflop lock reached on the same node: the two never disagree). A limp-caller keeps the structural
-    // floor and the limp × call product (applyLimpCallProduct)
-    if (trigger && !l.calledLater) {
+    // floor and the limp × call product (applyLimpCallProduct). NOT on a pool-locked limp chart that locks his node
+    // (chartLocksLimp): there his walked range is a POOL lock at the chart's own stack bucket (a 10bb limper on the
+    // 100bb pool3 tree holds the deep 3.1% range), not the solver's — the same-bucket replacement stays structural
+    if (trigger && !l.calledLater && !chartLocksLimp(a.chartId, l)) {
       const t = limpTrigger(key, was / 1326, out[rk] ?? {});
       if (!t.fire) { kept.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, was, text: t.text }); continue; }
     }
