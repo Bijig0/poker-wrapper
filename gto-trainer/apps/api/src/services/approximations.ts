@@ -416,7 +416,7 @@ export const APPROXIMATIONS: Approximation[] = [
     id: "pool-limp-lock",
     kind: "pool-overlay",
     lifecycle: "experiment",
-    trigger: "hero's preflop decision behind ONE short (≤85bb) non-blind limp or an SB complete, before any raise, that no v2 pool-locked chart covers at the limper's stack bucket",
+    trigger: "hero's preflop decision behind ONE short (≤85bb) NON-BLIND limp, before any raise, that no v2 pool-locked chart covers at the limper's stack bucket. NOT a lone SB complete since 2026-10-09 (Brady: 'drop the SB complete from the lock target'): folded to, GTO Wizard completes the SB itself — 5-20% of hands on specific cards (26.8bb 70 combos, 40bb 116, 52bb 267, 75bb 211) — where a non-blind limp on its tree is residue (0.1-1.6 combos over 80-169 classes); the pool's folded-to cells (45% / 30% on 50 / 33 completes) had replaced that strategy and made hero check back 66-88 / AJo / ATs (4 live decisions 10-08/09). Artifacts: claude.ai/artifact/KNkgHgpLxXSUW5fvLFS1GJ (SB ranges), /EmLHmrwC8eUx6Ljesg1SMC (residue vs strategy)",
     replaces: { gto: "the limper's equilibrium limp range (a 38bb HJ limps 0.048% on GTO Wizard) and hero's node on the unlocked tree", with: "the exact GTO Wizard AI tree with the limper's limp node LOCKED to the pool's limp range for his role and stack bucket; hero's node re-solved behind it; the flop walks his range off the locked tree" },
     data: {
       source: "poker analysis/pipeline/limp_study/locks_v2/limp_locks_v3.json @ c7335b3a (branch claude/limp-locks-coinpoker; build_limp_locks_v3.py, build_limp_locks_v3.txt) — copied to services/poolLimpLocks.v3.json; LIMP_LOCKS=v2 reads locks_v2.json @ d6a04fd0 (build_locks.py) as services/poolLimpLocks.v2.json",
