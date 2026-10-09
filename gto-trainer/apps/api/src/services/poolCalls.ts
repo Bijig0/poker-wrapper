@@ -47,6 +47,7 @@ import LOCKS from "./poolCallLocks.json";
 import CAL from "./poolLimpCallCalibration.json";
 import { dealtByPos, SEATS6, type Seat6 } from "./hrc6max";
 import { limpLockRange, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
+import { handGroup } from "./poolTrigger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 export type PoolCallLine = "flat" | "overcall" | "limpcall" | "bbiso" | "sbiso" | "overlimp" | "limp";
@@ -211,15 +212,9 @@ export function limpCallProduct(limp: ClassRange, callGivenLimp: ClassRange, cal
   return out;
 }
 
-/** the builders' eight hand groups (poolcalls_measure.cat, verbatim): the calibration's unit */
-export function handGroup(cls: string): string {
-  if (["AA", "KK", "QQ", "JJ", "AKs", "AKo"].includes(cls)) return "prem";
-  if (cls.length === 2) return "pairs";
-  const a = cls[0]!, b = cls[1]!, s = cls[2];
-  if (a === "A") return s === "s" ? "Axs" : "Axo";
-  if ("TJQK".includes(b)) return s === "s" ? "s-bway" : "o-bway";
-  return s === "s" ? "oth-s" : "o-junk";
-}
+/** the builders' eight hand groups (poolcalls_measure.cat, verbatim): the calibration's unit — kept in poolTrigger (the
+ *  trigger rule's KL test reads the same groups), re-exported here for the callers that always read it from poolCalls */
+export { handGroup };
 type CalCell = { active: boolean; n: number; groups?: Record<string, { mult: number }> };
 /** an ACTIVE calibration cell's multipliers by hand group; null for a cell that is off, thin or unknown */
 export function limpCallCalibration(key: string): Record<string, number> | null {
