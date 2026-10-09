@@ -121,6 +121,9 @@ export interface PoolLimpFloorRecord {
   now: number;
   /** the table the range came from (LIMP_LOCKS) */
   table: LimpLocksVersion;
+  /** he then CALLED the iso (2026-10-09, services/poolCalls.applyLimpCallProduct): the call cell the whole limp cell
+   *  (`base` combos) was multiplied by — `now` is the product */
+  times?: { key: string; freq: number; n: number; base: number; cal?: string };
 }
 
 const POSTS = new Set(["post-sb", "post-bb", "post", "post-dead", "ante"]);
@@ -331,7 +334,10 @@ export function applyPoolLimpFloor(a: {
 /** The answer's note for the replaced limpers. */
 export const poolLimpFloorNote = (applied: PoolLimpFloorRecord[], chartId: string | null): string =>
   `POOL LIMP RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) limped — ${r.was} combos on ${chartId ?? "the preflop tree"}, `
-    + `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`).join("; ")}`
+    + (r.times
+      // he then called the iso: the whole cell × the pool's limp-call rate (the oracle reads both keys back)
+      ? `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.times.base} combos) × his limp-call rate ${r.times.key} (${(100 * r.times.freq).toFixed(1)}% of chances, ${r.times.n.toLocaleString("en-US")} calls)${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
+      : `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`)).join("; ")}`
   + " — no pool-locked tree covers this stack yet";
 
 /** The table tag a note carries right after the key — none for v2 (the notes exactly as before 2026-10-09), "v3: " for
