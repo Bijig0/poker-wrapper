@@ -38,6 +38,7 @@ const baseConfig = (fmt: string | null, answers: boolean, sources: Record<string
   // table per 3-hour session; the WS dumps and poker.sqlite carry everything statistics need. Capture QA turns it on.
   answers, sources, recording: false, budget: { hands: null, minutes: null },
   autoExecute: false, autoRealMoney: false, autoBudget: { minutes: 30, hands: 50 }, autoDelay: "instant", autoTimeBank: true,
+  keepPresent: true,
   format: fmt, buyinBb: 100, waitForBb: true, profile: null, tables: 1, site: "ignition",
 });
 const noSources = { exploitPreflop: false, mesPostflop: false, aiChain: false };
@@ -186,6 +187,7 @@ export function strategyPreset(s: any): any {
       autoDelay: "instant",
       autoTimeBank: true,
       autoTopUp: true,
+      keepPresent: true,
       strategy: s.id, strategyName: s.name ?? null,
       format: s.defaultFormat ?? null, buyinBb: 100, waitForBb: true, profile: null, tables: 1,
       // an ON-DEMAND strategy (the API's catalogue, 2026-09-30) answers only when Solve is pressed and never
@@ -275,7 +277,7 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
       for (const [kk, vv] of Object.entries(v)) base.sources[kk] = truthy(vv);
     } else if (k === "budget" && v && typeof v === "object" && !Array.isArray(v)) {
       for (const [kk, vv] of Object.entries(v)) base.budget[kk] = emptyish(vv) ? null : pyInt(vv);
-    } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "autoSitBackIn", "clearCache"].includes(k)) {
+    } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "autoSitBackIn", "keepPresent", "clearCache"].includes(k)) {
       base[k] = truthy(v);
     } else if (k === "gtowAccounts") {
       // the session's GTO Wizard allowlist (2026-09-27): registry slot ids this session may spend; null = every account

@@ -198,6 +198,9 @@
       <div class="field ign-only"><span class="k">Sat out</span>
         <div class="seg" id="autoSitBackIn"><button data-v="1" class="plain">Sit back in</button><button data-v="0" class="plain">Stay out</button></div>
         <span class="help">A few timed-out decisions and the table sits you out. With this on, the wrapper presses <b>I AM BACK</b> for you (after 2 s, up to 3 tries per sit-out), logged as a <b>sit-back-in</b> session event. It leaves you out while the connection guard has sat you out for a slow link. If you sit out on purpose, choose Stay out — it cannot tell your sit-out from the table's.</span></div>
+      <div class="field"><span class="k">Presence</span>
+        <div class="seg" id="keepPresent"><button data-v="1" class="plain">Keep Windows awake</button><button data-v="0" class="plain">Off</button></div>
+        <span class="help">Windows calls this laptop <b>idle</b> after a few minutes without a keyboard or mouse, and then runs Automatic Maintenance (SSD retrim, Disk Cleanup, the search indexer), the idle Defender scan and the updaters — an unattended auto-play session looks exactly like that, and on 2026-10-09 the burst froze the study API for minutes and the tables timed you out. With this on, the leader wrapper sends one <b>zero-movement mouse event every 50 s</b> while the session runs: the cursor does not move, nothing is clicked, but Windows keeps counting you as present (no idle maintenance, no screen-off, no sleep). Logged once as a <b>presence-keeper</b> session event.</span></div>
       <div class="field ign-only"><span class="k">Deep stack</span>
         <div class="seg" id="stackReset"><button data-v="0" class="plain">Off</button><button data-v="1" class="plain">Sit out and re-seat</button></div>
         <div class="row" id="stack-reset-row" style="display:none;margin-top:6px"><span class="sub">at</span>
@@ -531,6 +534,7 @@ function fillSettings() {
   seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
   seg("autoFoldNoAnswer", cfg.autoFoldNoAnswer ? 1 : 0);
   seg("autoSitBackIn", cfg.autoSitBackIn ? 1 : 0);
+  seg("keepPresent", cfg.keepPresent === false ? 0 : 1);
   seg("stackReset", cfg.stackResetBb > 0 ? 1 : 0);
   $("stack-reset-row").style.display = cfg.stackResetBb > 0 ? "" : "none";
   if (cfg.stackResetBb > 0) $("stack-reset-bb").value = cfg.stackResetBb;
@@ -578,6 +582,7 @@ function readSettings() {
   cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoFoldNoAnswer = cfg.autoExecute && $("autoFoldNoAnswer").querySelector("button.on")?.dataset.v === "1";
   cfg.autoSitBackIn = $("autoSitBackIn").querySelector("button.on")?.dataset.v === "1";
+  cfg.keepPresent = $("keepPresent").querySelector("button.on")?.dataset.v !== "0";
   // the deep-stack reset: sent only when on (absent = off — the wrapper adds no default)
   if ($("stackReset").querySelector("button.on")?.dataset.v === "1") {
     cfg.stackResetBb = Number($("stack-reset-bb").value) || 150;

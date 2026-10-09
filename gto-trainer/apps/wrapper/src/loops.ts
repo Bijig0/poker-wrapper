@@ -13,6 +13,7 @@ import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVeri
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
 import { maybeEndForDisconnect, maybeEndForNetDrop, maybeReseatAfterSiteClose, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
 import { maybeSitBackIn } from "./sitback";
+import { maybeKeepPresent } from "./keepPresent";
 import { maybeStackReset } from "./stackReset";
 import { liveHandTick } from "./archive";
 import { checkSocketStall } from "./ignition/stall";
@@ -76,6 +77,7 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
     await maybeEndForNetDrop();
     await maybeStackReset();
     await maybeSitBackIn();
+    await maybeKeepPresent();
     await maybeGuardBuyPanel();
     await maybeSessionOrphaned();
     await maybeSessionAdopt();

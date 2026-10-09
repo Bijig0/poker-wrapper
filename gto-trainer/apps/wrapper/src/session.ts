@@ -753,6 +753,7 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
     topUp: "autoTopUp" in cfg ? !!cfg.autoTopUp : true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     foldNoAnswer: !!cfg.autoFoldNoAnswer, noAnswerTurn: null, lastNoAnswerFold: null,
     sitBackIn: !!cfg.autoSitBackIn, sitBackTurn: null, lastSitBackIn: null,
+    keepPresent: "keepPresent" in cfg ? !!cfg.keepPresent : true, presenceAt: 0.0, presenceCount: 0, presenceFails: 0,
     topUpDue: null, topUpTrigger: null, stackStable: { text: null, ticks: 0 },
     autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
   });

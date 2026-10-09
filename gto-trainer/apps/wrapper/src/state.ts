@@ -71,6 +71,8 @@ export function freshStudy(): Record<string, any> {
     autoDelay: "instant", autoDue: null, autoRetry: null,
     foldNoAnswer: false, noAnswerTurn: null, lastNoAnswerFold: null,
     sitBackIn: false, sitBackTurn: null, lastSitBackIn: null,
+    // THE PRESENCE KEEPER (keepPresent.ts): zero-movement input every PRESENCE_EVERY_S while live, leader only
+    keepPresent: false, presenceAt: 0.0, presenceCount: 0, presenceFails: 0,
     timeBank: true, timeBankAt: 0.0, lastTimeBank: null, timeBankDecision: null,
     topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     topUpDue: null, topUpTrigger: null,
