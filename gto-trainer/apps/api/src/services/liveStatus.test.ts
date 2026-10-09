@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeBuild, liveStatus, supervisorLine, type ServiceBuild } from "./liveStatus";
+import { describeBuild, liveStatus, supervisorLine, withAutoState, type ServiceBuild } from "./liveStatus";
+import { localEnvKeyHashes } from "./supervisorRestart";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -103,4 +104,59 @@ describe("liveStatus", () => {
       expect(none.services.some((x) => x.name === "factory")).toBe(false);
     } finally { srv.stop(true); }
   }, 30_000);
+});
+
+describe("supervisorLine: supervisors that restart themselves (protocol 2)", () => {
+  /** a supervisor (this test process's pid: alive) that read script + local.env; `over` changes its stamp */
+  function stamped(over: Record<string, unknown> = {}) {
+    const dir = tmp();
+    const script = join(dir, "study-api.ps1"), local = join(dir, "config", "local.env");
+    mkdirSync(join(dir, "config"));
+    writeFileSync(script, "# v1\r\n");
+    writeFileSync(local, "GTOW_POLL_MS=500\r\n");
+    writeFileSync(join(dir, "supervisor-api.json"), JSON.stringify({ name: "api", pid: process.pid, startedAt: "2026-10-10T10:00:00", protocol: 2,
+      files: { [script]: sha(script), [local]: sha(local) }, reread: [local], envKeys: localEnvKeyHashes("GTOW_POLL_MS=500\r\n"), ...over }));
+    return { dir, script, local };
+  }
+
+  test("local.env changed: says which keys, and that it restarts itself — not 'restart the supervisor'", () => {
+    const s = stamped();
+    writeFileSync(s.local, "GTOW_POLL_MS=900\r\n");
+    const line = supervisorLine("api", s.dir, {});
+    expect(line.current).toBe(false);
+    expect(line.selfRestart).toBe(true);
+    expect(line.text).toContain("BEHIND THE DISK");
+    expect(line.text).toContain("(keys: GTOW_POLL_MS)");
+    expect(line.text).toContain("will restart itself when no session is live (AUTO_RESTART)");
+    expect(line.text).not.toContain("restart the supervisor");
+  });
+
+  test("a request waiting is said; AUTO_RESTART=off and an old supervisor still say to do it by hand", () => {
+    const s = stamped();
+    writeFileSync(s.script, "# v2\r\n");
+    writeFileSync(join(s.dir, "supervisor-api.replace.json"), JSON.stringify({ at: 1 }));
+    expect(supervisorLine("api", s.dir, {}).text).toContain("(AUTO_RESTART) · restart requested");
+
+    const off = supervisorLine("api", s.dir, { AUTO_RESTART: "off" });
+    expect(off.selfRestart).toBe(false);
+    expect(off.text).toContain("AUTO_RESTART=off — restart the supervisor by hand");
+
+    const old = stamped({ protocol: undefined });
+    writeFileSync(old.local, "GTOW_POLL_MS=900\r\n");
+    const o = supervisorLine("api", old.dir, {});
+    expect(o.selfRestart).toBe(false);
+    expect(o.text).toContain("restart it by hand once");
+  });
+
+  test("what the restart is doing now is added from the worker's decision", () => {
+    const s = stamped();
+    writeFileSync(s.local, "GTOW_POLL_MS=900\r\n");
+    const line = supervisorLine("api", s.dir, {});
+    const held = withAutoState(line, { state: "held", why: "the supervisor's config/local.env changed; restart held: a poker session is live (s1) — it restarts when the session ends" });
+    expect(held.text).toContain("now: held — a poker session is live (s1) — it restarts when the session ends");
+    expect(withAutoState(line, { state: "settling", why: "x" }).text).toContain("now: restarting within a minute");
+    // a current line is left alone
+    const cur = stamped();
+    expect(withAutoState(supervisorLine("api", cur.dir, {}), { state: "held", why: "restart held: y" }).text).not.toContain("now:");
+  });
 });

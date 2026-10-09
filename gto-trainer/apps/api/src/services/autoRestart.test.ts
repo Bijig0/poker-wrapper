@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AutoRestart, liveSessionReason, type AutoRestartOpts } from "./autoRestart";
 import { LoadedCode } from "./loadedCode";
+import { SupervisorWatch, lastRequestPath, localEnvKeyHashes, requestPath } from "./supervisorRestart";
 
 const dirs: string[] = [];
 const HOUR_AGO = new Date(Date.now() - 3_600_000);
@@ -198,5 +199,205 @@ describe("liveSessionReason", () => {
     const f = (async (u: string) => { asked = u; return new Response(JSON.stringify({ current: null })); }) as unknown as typeof fetch;
     await liveSessionReason({ PORT_OFFSET: "50" }, f);
     expect(asked).toContain(":7750/session");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// THE SUPERVISOR'S CONFIG (2026-10-10): the files in this process's supervisor stamp are watched on the same tick.
+
+const SUP_PID = 4242;
+
+/** A rig whose supervisor (pid 4242, protocol 2) read study-api.ps1, config/env.ps1 and config/local.env. */
+function supRig(o: { stamp?: Record<string, unknown>; env?: NodeJS.ProcessEnv; dirtyFiles?: string[]; others?: boolean } = {}) {
+  const sroot = tree({ "study-api.ps1": "# v1\n", "config/env.ps1": "# env v1\n", "config/local.env": "GTOW_POLL_MS=500\nPORT_OFFSET=0\n" });
+  const jobs = join(sroot, "jobs");
+  mkdirSync(jobs, { recursive: true });
+  const f = { script: join(sroot, "study-api.ps1"), env: join(sroot, "config", "env.ps1"), local: join(sroot, "config", "local.env") };
+  const sha = (file: string) => new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex");
+  const writeStamp = (name: string, pid: number, over: Record<string, unknown> = {}) => writeFileSync(join(jobs, `supervisor-${name}.json`), JSON.stringify({
+    name, pid, startedAt: "2026-10-10T10:00:00", envReadAt: "2026-10-10T10:00:00", protocol: 2, task: `PokerWrapper ${name} - test`,
+    files: { [f.script]: sha(f.script), [f.env]: sha(f.env), [f.local]: sha(f.local) }, reread: [f.env, f.local],
+    envKeys: localEnvKeyHashes(readFileSync(f.local, "utf8")), needsReplace: null, refused: null, ...over,
+  }));
+  writeStamp("api", SUP_PID, o.stamp);
+  const codes: number[] = [];
+  let r: ReturnType<typeof rig>;
+  const supervisor = new SupervisorWatch({ name: "api", jobsDir: jobs, ownPid: () => SUP_PID, now: () => r.s.now });
+  const others = o.others ? [new SupervisorWatch({ name: "gtow", jobsDir: jobs, now: () => r.s.now, alive: (pid) => pid === 777 })] : [];
+  r = rig({ supervisor, others, exit: (c: number) => { codes.push(c); }, env: o.env ?? {}, ...(o.dirtyFiles ? { dirtyFiles: o.dirtyFiles } : {}) });
+  /** the change is seen, then quiet for the settle time */
+  const settle = async () => { await r.auto.tick(); r.s.now += 21_000; return r.auto.tick(); };
+  return { ...r, sroot, jobs, f, codes, writeStamp, settle, sha };
+}
+
+describe("AutoRestart: the supervisor's config", () => {
+  test("nothing changed in the stamp: current, nothing asked", async () => {
+    const r = supRig();
+    expect((await r.auto.tick()).state).toBe("current");
+    expect(r.codes).toEqual([]);
+  });
+
+  test("config/local.env changed: env-changed, a plain exit 0 (the supervisor re-reads it), the loop guard noted", async () => {
+    const r = supRig();
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    const first = await r.auto.tick();
+    expect(first.state).toBe("settling");
+    expect(first.reason).toBe("env-changed");
+    expect(r.codes).toEqual([]);
+    r.s.now += 21_000;
+    const st = await r.auto.tick();
+    expect(st.state).toBe("restarting");
+    expect(st.reason).toBe("env-changed");
+    expect(st.why).toContain("keys: GTOW_POLL_MS");
+    expect(r.codes).toEqual([0]);
+    // no request file: an env change is the supervisor's ordinary re-read
+    expect(existsSync(requestPath("api", r.jobs))).toBe(false);
+    expect(existsSync(lastRequestPath("api", r.jobs))).toBe(true);
+  });
+
+  test("its script changed: supervisor-changed, the request file + exit 3", async () => {
+    const r = supRig();
+    writeFileSync(r.f.script, "# v2\n");
+    const st = await r.settle();
+    expect(st.state).toBe("restarting");
+    expect(st.reason).toBe("supervisor-changed");
+    expect(r.codes).toEqual([3]);
+    const req = JSON.parse(readFileSync(requestPath("api", r.jobs), "utf8"));
+    expect(req.supervisorPid).toBe(SUP_PID);
+    expect(req.kind).toBe("supervisor-changed");
+    expect(req.why).toContain("study-api.ps1 changed");
+  });
+
+  test("a port key in local.env, or a re-read the supervisor refused for the port: supervisor-changed", async () => {
+    const a = supRig();
+    writeFileSync(a.f.local, "GTOW_POLL_MS=500\nPORT_OFFSET=10\n");
+    expect((await a.settle()).reason).toBe("supervisor-changed");
+    expect(a.codes).toEqual([3]);
+
+    const b = supRig({ stamp: { needsReplace: "the port moved (PORT 2000 -> 2010) - only a fresh supervisor may serve it" } });
+    const st = await b.settle();
+    expect(st.reason).toBe("supervisor-changed");
+    expect(st.why).toContain("port moved");
+    expect(b.codes).toEqual([3]);
+  });
+
+  test("a live session holds it; it goes when the session ends", async () => {
+    const r = supRig();
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    r.s.busy = "a poker session is live (s1) — it restarts when the session ends";
+    const held = await r.settle();
+    expect(held.state).toBe("held");
+    expect(held.reason).toBe("env-changed");
+    expect(held.why).toContain("restart held: a poker session is live (s1)");
+    expect(r.codes).toEqual([]);
+    r.s.busy = null;
+    expect((await r.auto.tick()).state).toBe("restarting");
+    expect(r.codes).toEqual([0]);
+  });
+
+  test("a worker up less than 60 s waits, whatever minUptimeMs says", async () => {
+    const r = supRig();
+    (r.code as any).bootAt = r.s.now - 10_000;
+    writeFileSync(r.f.script, "# v2\n");
+    const st = await r.settle();
+    expect(st.state).toBe("settling");
+    expect(st.why).toContain("only just started");
+    expect(r.codes).toEqual([]);
+  });
+
+  test("the loop guard: one config restart per supervisor every 5 min", async () => {
+    const r = supRig();
+    writeFileSync(lastRequestPath("api", r.jobs), JSON.stringify({ at: r.s.now - 60_000 }));
+    writeFileSync(r.f.script, "# v2\n");
+    const st = await r.settle();
+    expect(st.state).toBe("held");
+    expect(st.why).toContain("loop guard");
+    expect(r.codes).toEqual([]);
+    r.s.now += 5 * 60_000;
+    expect((await r.auto.tick()).state).toBe("restarting");
+    expect(r.codes).toEqual([3]);
+  });
+
+  test("AUTO_RESTART=off: reported, never exited", async () => {
+    const r = supRig({ env: { AUTO_RESTART: "off" } });
+    writeFileSync(r.f.script, "# v2\n");
+    const st = await r.settle();
+    expect(st.state).toBe("off");
+    expect(st.why).toContain("restart the supervisor by hand");
+    expect(r.codes).toEqual([]);
+  });
+
+  test("a supervisor from before protocol 2 is only reported: it would relaunch straight into the same change", async () => {
+    const r = supRig({ stamp: { protocol: undefined } });
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    const st = await r.settle();
+    expect(st.state).toBe("supervisor-old");
+    expect(st.why).toContain("restart it by hand once");
+    expect(r.codes).toEqual([]);
+  });
+
+  test("a stamp written by another supervisor than this process's is not ours to act on", async () => {
+    const r = supRig({ stamp: { pid: 999 } });
+    writeFileSync(r.f.script, "# v2\n");
+    expect((await r.settle()).state).toBe("current");
+    expect(r.codes).toEqual([]);
+  });
+
+  test("a change the supervisor refused (a file would not parse) is not asked again until the files change", async () => {
+    const r = supRig();
+    writeFileSync(r.f.script, "function {\n");
+    const now = { [r.f.script]: r.sha(r.f.script), [r.f.env]: r.sha(r.f.env), [r.f.local]: r.sha(r.f.local) };
+    r.writeStamp("api", SUP_PID, { files: { ...now, [r.f.script]: "0".repeat(64) },
+      refused: { why: "a fresh supervisor would not start: study-api.ps1 does not parse", files: now } });
+    const st = await r.settle();
+    expect(st.state).toBe("boot-check-failed");
+    expect(st.why).toContain("does not parse");
+    expect(r.codes).toEqual([]);
+    writeFileSync(r.f.script, "# fixed\n");
+    expect((await r.settle()).state).toBe("restarting");
+    expect(r.codes).toEqual([3]);
+  });
+
+  test("an uncommitted code edit holds the supervisor's change too (a restart would load the edit)", async () => {
+    const r = supRig({ dirtyFiles: ["a.ts"] });
+    r.edit("a.ts");
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    const st = await r.settle();
+    expect(st.state).toBe("uncommitted");
+    expect(st.why).toContain("waits as well");
+    expect(r.codes).toEqual([]);
+  });
+
+  test("a committed code change while the supervisor needs replacing: one exit 3 takes both", async () => {
+    const r = supRig();
+    writeFileSync(r.f.script, "# v2\n");
+    await r.auto.tick();          // the supervisor change is seen
+    r.s.now += 21_000;
+    r.edit("a.ts");               // a commit lands, quiet for a minute
+    const st = await r.auto.tick();
+    expect(st.state).toBe("restarting");
+    expect(st.reason).toBe("supervisor-changed");
+    expect(r.codes).toEqual([3]);
+    expect(existsSync(requestPath("api", r.jobs))).toBe(true);
+  });
+
+  test("the watchdog (no worker of its own): the API writes its request file and never exits for it", async () => {
+    const r = supRig({ others: true });
+    r.writeStamp("gtow", 777, { reread: [] });
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    r.s.busy = "a poker session is live (s1)";
+    await r.auto.tick();
+    r.s.now += 21_000;
+    let st = await r.auto.tick();
+    expect(st.others?.gtow?.state).toBe("held");
+    expect(existsSync(requestPath("gtow", r.jobs))).toBe(false);
+    r.s.busy = null;
+    // the API's own env change goes too (exit 0); the watchdog gets its request file
+    st = await r.auto.tick();
+    expect(st.others?.gtow?.state).toBe("requested");
+    const req = JSON.parse(readFileSync(requestPath("gtow", r.jobs), "utf8"));
+    expect(req.supervisorPid).toBe(777);
+    expect(req.kind).toBe("supervisor-changed");
+    expect(r.codes).toEqual([0]);
   });
 });

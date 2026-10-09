@@ -7,7 +7,14 @@
 #   - runs the TypeScript chart server (gto-trainer\apps\api\src\charts\chartServer.ts) with config\env.ps1's Bun
 #   - restarts 10 s after an exit; a server that is alive but stops answering for 3 probes is killed and restarted
 #   - backs off when boots keep failing, and writes WHY (the server log's tail) into its own log
+#   - re-reads config\env.ps1 + config\local.env before every start (not the port), and replaces itself when the server
+#     asks (data\jobs\supervisor-charts.replace.json): scripts\supervisor_lib.ps1, 2026-10-10. After a Stop-Process of
+#     this powershell its headless conhost can linger and the task refuses a new instance (0x800710E0): stop that
+#     conhost (it has no children) and start the task again (CLAUDE.md, "What is live").
+# the environment as the task handed it over, before config\env.ps1 adds anything: every re-read starts from it
+$SupBaseEnv = [Environment]::GetEnvironmentVariables('Process')
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
+. (Join-Path $PSScriptRoot '..\scripts\supervisor_lib.ps1')
 # NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
 # child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
 # 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
@@ -23,8 +30,10 @@ $out = Join-Path $logDir 'chart-server.log'
 $port = if ($env:HRC_UI_PORT) { [int]$env:HRC_UI_PORT } else { 8777 }
 function Log($m) { Add-Content -Path $sup -Value "[$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')] $m" }
 
+# this script's own file only (its full path, as .claude\study-api.ps1 does): a bare 'chart-server.ps1' match took another
+# checkout's chart supervisor (a second install, a sandbox) for a rival and exited (2026-10-10)
 $others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'chart-server\.ps1' })
+  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like "*$PSCommandPath*" })
 if ($others.Count) { Log "another supervisor is already running (pid $($others.ProcessId -join ', ')) - this one (pid $PID) exits"; exit 0 }
 $server = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\src\charts\chartServer.ts'
 if (-not ($env:BUN -and (Test-Path $server))) { Log "no Bun (config\env.ps1) or no $server - cannot start the chart server"; exit 1 }
@@ -32,10 +41,14 @@ Log "supervisor started (pid $PID) - $env:BUN, cache $env:HRC_UI_DOC_CACHE_MAX t
 # Tells the server it is supervised: a clean exit comes back here, so it may restart ITSELF when a commit changes code
 # it loaded and no session is live (services/autoRestart.ts), and answer POST /api/build/restart.
 $env:POKER_SUPERVISOR = $PID
-# what this supervisor read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
-Write-SupervisorStamp 'charts' @($PSCommandPath)
+# what this supervisor read at start: its script, the lib, config\env.ps1, config\local.env (data\jobs\
+# supervisor-charts.json, protocol 2: re-read before every start, the port excepted; scripts\supervisor_lib.ps1)
+Start-SupervisorState -Name 'charts' -BaseEnv $SupBaseEnv -CodeFiles @($PSCommandPath) -Reread -PortVars @('HRC_UI_PORT') -LogFile $sup `
+  -Keep @{ POKER_SUPERVISOR = "$PID" }
 $fastFails = 0
 while ($true) {
+  # config\env.ps1 + config\local.env as they are NOW (only when one changed; never the port)
+  Update-SupervisorConfig
   # a server already on the port (started by hand) is left alone: watch it instead of fighting it
   $startedAt = Get-Date   # lifetime counts from launch, so a crash during boot reads as a boot failure
   $holder = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -71,10 +84,13 @@ while ($true) {
   $code = 'killed'
   try { if ($p -and $p.HasExited -and $null -ne $p.ExitCode) { $code = $p.ExitCode } } catch { }
   Log "server gone (exit $code) after $lived s"
+  # asked to replace itself (its script, the lib or the port changed; no session live): hand over and leave at once
+  $req = Get-SupervisorReplaceRequest -ExitCode $code
+  if ($req -and (Invoke-SupervisorReplace -Request $req)) { exit 0 }
   if ($lived -lt 15) { $fastFails++ } else { $fastFails = 0 }
   $wait = 10
   # exit 0 = the server left on purpose (its own restart on a commit, or one asked for): nothing to cool down from
-  if ("$code" -eq '0') { $wait = 2 }
+  if ("$code" -eq '0' -or "$code" -eq '3') { $wait = 2 }
   if ($fastFails -ge 3) {
     $wait = [Math]::Min(300, 20 * ($fastFails - 2))
     $tail = ((Get-Content $out -Tail 200 -ErrorAction SilentlyContinue) | Where-Object { $_.Trim() } | Select-Object -Last 5) -join ' | '

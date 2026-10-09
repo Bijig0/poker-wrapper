@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { AutoRestart, liveSessionReason } from "./autoRestart";
 import { liveBusy } from "./livePriority";
 import { LoadedCode } from "./loadedCode";
+import { JOBS_DIR, SupervisorWatch } from "./supervisorRestart";
 
 /**
  * IS THIS API STILL RUNNING THE CODE ON DISK — and what happens about it.
@@ -39,12 +40,19 @@ export function isSupervised(): boolean {
 /** Constructed when index.ts imports routes/build.ts: at boot, before the server listens. */
 export const buildStamp = new LoadedCode({ entry: join(API_ROOT, "index.ts") });
 
+/** The supervisor that runs this process (study-api.ps1 exports its pid), or null for a hand-started one. */
+const supervisorPid = () => Number(process.env.POKER_SUPERVISOR || process.env.STUDY_API_SUPERVISOR) || null;
+
 export const autoRestart = new AutoRestart({
   code: buildStamp,
   name: "api",
   supervised: isSupervised,
   // a live answer in the last minute means a table is being played even if the wrapper's /session could not say so
   busy: async () => (liveBusy(60_000) ? "a live answer was computed within the last minute" : liveSessionReason()),
+  // its own supervisor's script + config/env.ps1 + config/local.env (services/supervisorRestart.ts) ...
+  supervisor: new SupervisorWatch({ name: "api", jobsDir: JOBS_DIR, ownPid: supervisorPid }),
+  // ... and the GTO Wizard watchdog's, which has no worker to notice them: the API writes its request file
+  others: [new SupervisorWatch({ name: "gtow", jobsDir: JOBS_DIR })],
 });
 
 /**

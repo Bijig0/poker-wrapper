@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AutoStatus } from "./autoRestart";
 import type { CodeStatus } from "./loadedCode";
 import { livePort } from "./ports";
+import { SUPERVISOR_PROTOCOL, pidAlive, readStamp, requestPath, stillRefused, supervisorNeed } from "./supervisorRestart";
 
 /**
  * WHAT IS LIVE, in one answer: every long-lived process of this install, which commit it runs, and whether it is
@@ -12,16 +13,17 @@ import { livePort } from "./ports";
  *   services     the API, the chart server, each wrapper table that is up — each answers /build itself — and, on a
  *                machine that also runs the chart factory, its API (FACTORY_API_URL in config/local.env)
  *   supervisors  the PowerShell scripts that keep them alive. A supervisor reads its script, config/env.ps1 and
- *                config/local.env ONCE, at start, so a fix to any of those needs the supervisor restarted, not the
- *                worker. Each writes data/jobs/supervisor-<name>.json (the files it read, hashed) when it starts;
- *                changed = the file on disk no longer matches.
+ *                config/local.env when it starts, and writes data/jobs/supervisor-<name>.json (the files it read,
+ *                hashed); changed = the file on disk no longer matches. Since 2026-10-10 (stamp protocol 2) the API
+ *                and chart supervisors re-read env.ps1 + local.env before every worker start, and every supervisor
+ *                replaces itself when no session is live (services/supervisorRestart.ts) — so "behind" is a state
+ *                that clears by itself, and the line says when.
  *
  * This file is the same in the poker-wrapper repo and the chart factory's (poker): keep the two copies identical.
  */
 
 /** This file's own checkout: <repo>/gto-trainer/apps/api/src/services. */
 const API_DIR = resolve(import.meta.dir, "..", "..");
-const REPO = resolve(API_DIR, "..", "..", "..");
 
 /** What a service answers on its build route (the API: /api/build; charts: /api/build; the wrapper: /build). */
 export interface ServiceBuild extends CodeStatus {
@@ -55,6 +57,8 @@ export interface SupervisorLine {
   changed: string[];
   current: boolean;
   text: string;
+  /** behind, and it will restart itself (stamp protocol 2, AUTO_RESTART on): nothing for a person to do */
+  selfRestart?: boolean;
 }
 
 export interface LiveStatus {
@@ -114,36 +118,43 @@ async function ask(name: string, base: string, port: number, path: string, timeo
   return lineOf(name, port, b as ServiceBuild);
 }
 
-const sha256 = (file: string): string | null => {
-  try { return new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex").toLowerCase(); } catch { return null; }
-};
-
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
-}
-
 /** The supervisors this install runs: stamp name → what it keeps alive. */
 export const SUPERVISORS: Record<string, string> = { api: "the API", charts: "the chart server", gtow: "the GTO Wizard clients" };
 
-export function supervisorLine(name: string, jobsDir = join(API_DIR, "data", "jobs")): SupervisorLine {
-  let j: any;
-  try {
-    // PowerShell 5.1 writes UTF-8 with a BOM
-    j = JSON.parse(readFileSync(join(jobsDir, `supervisor-${name}.json`), "utf8").replace(/^﻿/, ""));
-  } catch {
+export function supervisorLine(name: string, jobsDir = join(API_DIR, "data", "jobs"), env: NodeJS.ProcessEnv = process.env): SupervisorLine {
+  const j = readStamp(name, jobsDir);
+  if (!j) {
     return { name, pid: null, alive: false, startedAt: null, changed: [], current: false,
       text: "no start stamp — it was started before stamps existed (or is not installed); its script and config cannot be checked until it restarts" };
   }
-  const pid = Number(j.pid) || null;
+  const pid = j.pid;
   const alive = pid !== null && pidAlive(pid);
-  const changed: string[] = [];
-  for (const [file, was] of Object.entries<string>(j.files ?? {})) {
-    if (sha256(file) !== String(was).toLowerCase()) changed.push(file.startsWith(REPO) ? file.slice(REPO.length + 1).replace(/\\/g, "/") : file);
-  }
+  const need = supervisorNeed(j);
+  const changed = need ? need.files : [];
+  const off = /^(off|0|false|no)$/i.test((env.AUTO_RESTART ?? "").trim());
+  const refused = !!need && stillRefused(j);
+  const selfRestart = alive && !!need && j.protocol >= SUPERVISOR_PROTOCOL && !off && !refused;
+  const asked = existsSync(requestPath(name, jobsDir)) ? " · restart requested" : "";
+  const tail = !need ? ""
+    : j.protocol < SUPERVISOR_PROTOCOL ? `this supervisor started before it could restart itself — restart it by hand once (CLAUDE.md, "What is live")`
+    : off ? `AUTO_RESTART=off — restart the supervisor by hand (CLAUDE.md, "What is live")`
+    : refused ? `it refused the change and keeps the old one: ${j.refused!.why} — fix the file`
+    : `will restart itself when no session is live (AUTO_RESTART)${asked}`;
   const text = !alive ? `not running (last started ${j.startedAt ?? "?"}, pid ${pid ?? "?"})`
-    : changed.length ? `pid ${pid} · BEHIND THE DISK: ${changed.join(", ")} changed since it started ${j.startedAt ?? "?"} — restart the supervisor (CLAUDE.md, "What is live")`
+    : need ? `pid ${pid} · BEHIND THE DISK: ${need.why} since it started ${j.startedAt ?? "?"} — ${tail}`
     : `pid ${pid} · started ${j.startedAt ?? "?"} · current`;
-  return { name, pid, alive, startedAt: j.startedAt ?? null, changed, current: alive && !changed.length, text };
+  return { name, pid, alive, startedAt: j.startedAt, changed, current: alive && !need, text, ...(need && alive ? { selfRestart } : {}) };
+}
+
+/**
+ * A supervisor line with what its restart is doing right now: the worker it runs decides (the API's / chart server's
+ * auto status, `reason` env-changed / supervisor-changed), and the API decides for the watchdog (`auto.others`).
+ */
+export function withAutoState(line: SupervisorLine, auto: { state: string; why: string } | null | undefined): SupervisorLine {
+  if (line.current || !line.selfRestart || !auto) return line;
+  const held = /restart held: (.*)$/.exec(auto.why)?.[1];
+  const now = auto.state === "held" && held ? `held — ${held}` : auto.state === "settling" ? "restarting within a minute" : auto.state;
+  return { ...line, text: `${line.text} · now: ${now}` };
 }
 
 /** Everything up is current and no supervisor is behind. A supervisor without a stamp is unknown, not behind. */
@@ -175,7 +186,16 @@ export async function liveStatus(self: Self | null = null, env: NodeJS.ProcessEn
   if (factory) services.push(factory);
   // a process on a port of its own (a verify API, a test rig, a CoinPoker panel) still answers for itself
   if (self && !services.some((s) => s.self)) services.push(lineOf(`${self.build.service} :${self.port} (this one)`, self.port, self.build, true));
-  const supervisors = Object.keys(SUPERVISORS).map((n) => supervisorLine(n));
+  // what each restart is doing now: the API's and the chart server's own decisions, the API's for the watchdog
+  const autoOf = (svc: ServiceLine | null | undefined) => {
+    const a = svc?.build?.auto;
+    return a && (a.reason === "env-changed" || a.reason === "supervisor-changed") ? a : null;
+  };
+  const apiLine = services.find((s) => s.name === "api");
+  const decided: Record<string, { state: string; why: string } | null> = {
+    api: autoOf(apiLine), charts: autoOf(services.find((s) => s.name === "charts")), gtow: apiLine?.build?.auto?.others?.gtow ?? null,
+  };
+  const supervisors = Object.keys(SUPERVISORS).map((n) => withAutoState(supervisorLine(n, undefined, env), decided[n]));
   if (factory?.build?.supervisor) supervisors.push({ ...factory.build.supervisor, name: "factory" });
   const head = services.find((s) => s.self)?.build?.head ?? services.map((s) => s.build?.head).find((h) => !!h) ?? null;
   return { head, current: allCurrent(services, supervisors), services, supervisors };

@@ -30,8 +30,13 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# -Only a,b through `powershell -File` arrives as ONE string "a,b": split it (the task passes one id)
+$Only = @($Only | ForEach-Object { "$_" -split ',' } | Where-Object { $_ })
+# the environment as the task handed it over, before config\env.ps1 adds anything (a self-replace hands it on)
+$SupBaseEnv = [Environment]::GetEnvironmentVariables('Process')
 # where everything is: the data root (the registry), the Bun-free PATH additions; the same resolver every launcher uses
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
+. (Join-Path $PSScriptRoot '..\scripts\supervisor_lib.ps1')
 # NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
 # child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
 # 0.2 s reads took 3-4 s, its event loop stalled for seconds with nothing heavy running). Raise this supervisor to
@@ -69,8 +74,12 @@ if (-not $Once -and -not $DryRun) {
         Say 'gtow watchdog already running - exiting'
         exit 0
     }
-    # what this watchdog read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
-    Write-SupervisorStamp 'gtow' @($PSCommandPath)
+    # what this watchdog read at start: its script, the lib, config\env.ps1, config\local.env (data\jobs\supervisor-gtow.json).
+    # It re-reads nothing: any change to those makes the API write data\jobs\supervisor-gtow.replace.json when no
+    # session is live, and the loop below replaces this watchdog (scripts\supervisor_lib.ps1, 2026-10-10). Its children
+    # are the GTO Wizard windows: a self-replace never touches them (no /T, no Stop-Process of a child).
+    Start-SupervisorState -Name 'gtow' -BaseEnv $SupBaseEnv -CodeFiles @($PSCommandPath) -LogFile $logFile `
+      -RelaunchArgs $(if ($Only) { "-Only $($Only -join ',')" } else { '' })
 }
 
 function Get-Targets([int]$port) {
@@ -216,5 +225,16 @@ while ($true) {
         }
     }
     if ($Once) { break }
+    # ASKED TO REPLACE ITSELF (the API wrote the request: this script, the lib, config\env.ps1 or config\local.env changed
+    # and no session is live). The helper starts the task again once this process and its console are gone; after a
+    # Stop-Process (not this clean exit) the headless conhost can linger and the task refuses a new instance
+    # (0x800710E0) - the helper clears such an orphan (no children) or spawns this script directly.
+    if (-not $DryRun) {
+        $req = Get-SupervisorReplaceRequest
+        if ($req -and (Invoke-SupervisorReplace -Request $req)) {
+            try { $mutex.ReleaseMutex() } catch { }
+            exit 0
+        }
+    }
     Start-Sleep -Seconds 60
 }
