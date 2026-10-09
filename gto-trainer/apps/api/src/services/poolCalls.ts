@@ -44,6 +44,7 @@
  * Pure: ranges in, ranges out, and a record of what was replaced.
  */
 import LOCKS from "./poolCallLocks.json";
+import CAL from "./poolLimpCallCalibration.json";
 import { dealtByPos, SEATS6, type Seat6 } from "./hrc6max";
 import { limpLockRange, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -188,10 +189,50 @@ export function limpKeyOf(limpsBefore: number, complete: boolean, stack: number)
  * every cell (L1 23-32 pts vs 22-67) and closer than the whole limp cell in three of four (the ≤60bb one-limper cell,
  * n=64, is within noise the other way). Weights rounded to 1e-4 so the mutation oracle rebuilds them exactly.
  */
-export function limpCallProduct(limp: ClassRange, callGivenLimp: ClassRange): ClassRange {
+export function limpCallProduct(limp: ClassRange, callGivenLimp: ClassRange, calKey?: string | null): ClassRange {
+  const raw: ClassRange = {};
+  for (const [c, w] of Object.entries(limp)) raw[c] = Math.max(0, Number(w)) * Math.max(0, Number(callGivenLimp[c] ?? 0));
+  const cal = calKey ? limpCallCalibration(calKey) : null;
+  if (cal) {
+    // THE IGNITION GROUP CALIBRATION (2026-10-09, Brady: "add the ignition group calibration on top"): the product's
+    // shape is Ignition limps × CoinPoker calls; Ignition's own limp-callers (every card visible) re-weight it by hand
+    // GROUP, shrunk toward the product with a 50-hand prior and shipped only where leave-one-out shows gain
+    // (poolLimpCallCalibration.json — poker locks_v2/build_limpcall_calibration.py). Within a group the shape stays the
+    // product's; the total stays limp rate × call rate (both exact decision counts); a weight past 1 is capped.
+    const before = Object.entries(raw).reduce((t, [c, w]) => t + w * classCombos(c), 0);
+    const scaled: ClassRange = {};
+    for (const [c, w] of Object.entries(raw)) scaled[c] = w * (cal[handGroup(c)] ?? 1);
+    const after = Object.entries(scaled).reduce((t, [c, w]) => t + w * classCombos(c), 0);
+    const k = after > 0 ? before / after : 1;
+    for (const c of Object.keys(raw)) raw[c] = Math.min(1, scaled[c]! * k);
+  }
   const out: ClassRange = {};
-  for (const [c, w] of Object.entries(limp)) out[c] = Math.round(1e4 * Math.max(0, Number(w)) * Math.max(0, Number(callGivenLimp[c] ?? 0))) / 1e4;
+  for (const [c, w] of Object.entries(raw)) out[c] = Math.round(1e4 * w) / 1e4;
   return out;
+}
+
+/** the builders' eight hand groups (poolcalls_measure.cat, verbatim): the calibration's unit */
+export function handGroup(cls: string): string {
+  if (["AA", "KK", "QQ", "JJ", "AKs", "AKo"].includes(cls)) return "prem";
+  if (cls.length === 2) return "pairs";
+  const a = cls[0]!, b = cls[1]!, s = cls[2];
+  if (a === "A") return s === "s" ? "Axs" : "Axo";
+  if ("TJQK".includes(b)) return s === "s" ? "s-bway" : "o-bway";
+  return s === "s" ? "oth-s" : "o-junk";
+}
+type CalCell = { active: boolean; n: number; groups?: Record<string, { mult: number }> };
+/** an ACTIVE calibration cell's multipliers by hand group; null for a cell that is off, thin or unknown */
+export function limpCallCalibration(key: string): Record<string, number> | null {
+  const cell = (CAL.cells as Record<string, CalCell>)[key];
+  if (!cell?.active || !cell.groups) return null;
+  return Object.fromEntries(Object.entries(cell.groups).map(([g, x]) => [g, Number(x.mult)]));
+}
+/** the calibration cell for a limp-caller: line × his stack band (the limp table's) × limpers in the pot — when active */
+export function limpCallCalibrationKey(line: "limpcall" | "sbiso", stack: number, limpersInPot: number): string | null {
+  if (!(stack > 0)) return null;
+  const band = stack <= 60 ? "le60" : stack <= 85 ? "60_85" : "deep";
+  const key = `${line}_${band}_${limpersInPot >= 2 ? "l2p" : "l1"}`;
+  return limpCallCalibration(key) ? key : null;
 }
 
 /**
@@ -250,8 +291,8 @@ export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: numb
 
 export interface PoolCallRecord {
   pos: Seat6; line: PoolCallLine; key: string; table: "call" | "limp";
-  /** a limpcall / sbiso caller (2026-10-09): the limp cell his call cell was multiplied by */
-  times?: { key: string; freq: number; n: number; limpTable: LimpLocksVersion };
+  /** a limpcall / sbiso caller (2026-10-09): the limp cell his call cell was multiplied by, and the Ignition calibration cell on top */
+  times?: { key: string; freq: number; n: number; limpTable: LimpLocksVersion; cal?: string };
   /** his stack as dealt (bb) */
   stack: number;
   freq: number; calls: number;
@@ -305,8 +346,9 @@ export function applyPoolCallRanges(a: {
       const lk = limpKeyOf(c.limpsBefore ?? 0, c.complete, stack);
       const lr = lk ? limpLockRange(lk) : null;
       if (!lk || !lr) continue;
-      weights = limpCallProduct(lr.weights as ClassRange, r.weights);
-      times = { key: lk, freq: lr.freq, n: lr.n, limpTable: lr.table };
+      const cal = limpCallCalibrationKey(c.line, stack, c.before);
+      weights = limpCallProduct(lr.weights as ClassRange, r.weights, cal);
+      times = { key: lk, freq: lr.freq, n: lr.n, limpTable: lr.table, ...(cal ? { cal } : {}) };
     }
     const was = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
@@ -321,7 +363,7 @@ export const poolCallNote = (applied: PoolCallRecord[], source: string | null): 
   `POOL CALL RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) ${r.did} — ${r.was} combos on ${source ?? "the preflop tree"}, `
     + (r.times
       // a limp-caller: the call cell is his limp-call RATE; the range is his limp cell × it (the oracle reads both keys back)
-      ? `now the pool's ${r.key} (${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured) × his limp range ${r.times.key} (${limpTableTag(r.times.limpTable)}${(100 * r.times.freq).toFixed(1)}% of hands, n=${r.times.n}) = ${r.now} combos`
+      ? `now the pool's ${r.key} (${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured) × his limp range ${r.times.key} (${limpTableTag(r.times.limpTable)}${(100 * r.times.freq).toFixed(1)}% of hands, n=${r.times.n})${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
       : `now the pool's ${r.key} (${limpTableTag(r.limpTable)}${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos)`)).join("; ")}`
   + " — the tree cannot hold this line, so the callers hold the pool's measured ranges, not the solver's neighbouring-line ones";
 
@@ -335,7 +377,7 @@ export const poolCallNote = (applied: PoolCallRecord[], source: string | null): 
 export function applyLimpCallProduct(a: {
   hand: ParsedHand; heroPos: string | null; ranges: Record<string, ClassRange>; dealt?: Record<number, number>;
   /** the limp floor's records for this arrival — mutated: `times` and `now` on the ones multiplied */
-  floored: { pos: string; now: number; times?: { key: string; freq: number; n: number; base: number } }[];
+  floored: { pos: string; now: number; times?: { key: string; freq: number; n: number; base: number; cal?: string } }[];
 }): { ranges: Record<string, ClassRange>; applied: string[] } {
   if (!a.floored.length) return { ranges: a.ranges, applied: [] };
   const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
@@ -355,8 +397,9 @@ export function applyLimpCallProduct(a: {
     if (!r) continue;
     const base = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
-    out[rk] = limpCallProduct(out[rk]!, r.weights);
-    f.times = { key: k.key, freq: r.freq, n: r.calls, base };
+    const cal = limpCallCalibrationKey(c.line, stack, c.before);
+    out[rk] = limpCallProduct(out[rk]!, r.weights, cal);
+    f.times = { key: k.key, freq: r.freq, n: r.calls, base, ...(cal ? { cal } : {}) };
     f.now = combosOf(out[rk]);
     applied.push(c.pos);
   }

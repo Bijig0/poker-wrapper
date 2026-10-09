@@ -89,7 +89,7 @@ export interface PoolFloor {
   limpTable?: "v2" | "v3";
   /** a limp-caller (2026-10-09): the range is the named range × this one — the call overlay's "× his limp range <key>"
    *  (a limp-table key) or the floor's "× his limp-call rate <key>" (a call-table key) */
-  times?: { kind: "limp" | "call"; key: string; limpTable?: "v2" | "v3" };
+  times?: { kind: "limp" | "call"; key: string; limpTable?: "v2" | "v3"; cal?: string };
 }
 export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   const out = new Map<string, PoolFloor>();
@@ -106,7 +106,8 @@ export function poolFloorsOf(note: string): Map<string, PoolFloor> {
       const seg = body.slice(e.index!, j + 1 < ms.length ? ms[j + 1]!.index : undefined);
       const tl = /× his limp range (\S+) \((v3: )?/.exec(seg);
       const tc = tl ? null : /× his limp-call rate (\S+) \(/.exec(seg);
-      const times = tl ? { kind: "limp" as const, key: tl[1]!, limpTable: tl[2] ? "v3" as const : "v2" as const } : tc ? { kind: "call" as const, key: tc[1]! } : undefined;
+      const cal = /× Ignition calibration (\S+)/.exec(seg)?.[1];
+      const times = tl ? { kind: "limp" as const, key: tl[1]!, limpTable: tl[2] ? "v3" as const : "v2" as const, ...(cal ? { cal } : {}) } : tc ? { kind: "call" as const, key: tc[1]!, ...(cal ? { cal } : {}) } : undefined;
       out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: e[4] ? "v3" as const : "v2" as const } : {}), ...(times ? { times } : {}) });
     });
   });
@@ -125,7 +126,7 @@ export function poolRangeOf(f: PoolFloor): Record<string, number> | null {
   if (!base || !f.times) return base;
   // a limp-caller: the named range × the multiplier the note names (limpCallProduct's rounding, so it is exact)
   const other = f.times.kind === "limp" ? limpLockRange(f.times.key, f.times.limpTable ?? "v2")?.weights ?? null : callTable.get(f.times.key);
-  return other ? limpCallProduct(f.times.kind === "limp" ? other : base, f.times.kind === "limp" ? base : other) : null;
+  return other ? limpCallProduct(f.times.kind === "limp" ? other : base, f.times.kind === "limp" ? base : other, f.times.cal ?? null) : null;
 }
 const classCombos = (c: string): number => (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12);
 const combosOf = (r: Record<string, number>): number => Object.entries(r).reduce((s, [c, w]) => s + (w > 0 ? w * classCombos(c) : 0), 0);

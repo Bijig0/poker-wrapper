@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyLimpCallProduct, applyPoolCallRanges, limpCallProduct, limpKeyOf, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
+import { applyLimpCallProduct, applyPoolCallRanges, handGroup, limpCallCalibration, limpCallCalibrationKey, limpCallProduct, limpKeyOf, poolCallKey, poolCallNote, poolCallRange, poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls";
+import CALIBRATION from "./poolLimpCallCalibration.json";
 import { applyPoolLimpFloor, limpLockRange, poolLimpFloorNote } from "./poolLimpFloor";
 import { poolFloorsOf, poolRangeOf } from "../scripts/mutation/rangeOracle";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -40,6 +41,7 @@ const TABLE: PoolCallTable = {
     poolcall_overcall_ALL_all: range("overcall", "ALL", null, "all", 0.1, W({ "44": 1 })),
     poolcall_bbiso_BB_l2p: range("bbiso", "BB", "l2p", "all", 0.3, W({ "33": 1 })),
     poolcall_limpcall_ALL_l2p: range("limpcall", "ALL", "l2p", "all", 0.5, W({ "22": 1 })),
+    poolcall_limpcall_ALL_l1: range("limpcall", "ALL", "l1", "all", 0.7, W({ AA: 1, "22": 1, "72o": 1, "76s": 1, KQo: 1 })),
     poolcall_overlimp_ALL_b2p: range("overlimp", "ALL", "b2p", "all", 0.2, W({ J9s: 1 })),
     poolcall_flat_BTN_vsUTG_oS_80p: range("flat", "BTN", "vsUTG", "80p", 0.09, W({ QQ: 1 })),
   },
@@ -238,5 +240,53 @@ describe("a limper's call of the iso is limp × call-given-limp (2026-10-09)", (
     expect(poolRangeOf(f)).toEqual(lc.ranges.UTG);
     // a limper who folded to the iso is not at the flop; a limp-raiser keeps the tree's range: nothing multiplied
     expect(applyLimpCallProduct({ hand: h, heroPos: "CO", ranges: fl.ranges, dealt: d, floored: [] }).applied).toEqual([]);
+  });
+});
+
+describe("the Ignition group calibration on top of the product (2026-10-09)", () => {
+  const combos = (w: Record<string, number>) => Object.entries(w).reduce((s, [c, x]) => s + x * (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12), 0);
+  test("handGroup: the builders' eight groups, verbatim", () => {
+    expect(["AA", "AKo", "99", "A5s", "A5o", "KQs", "KTo", "K9s", "K9o", "76s", "72o"].map(handGroup))
+      .toEqual(["prem", "prem", "pairs", "Axs", "Axo", "s-bway", "o-bway", "oth-s", "o-junk", "oth-s", "o-junk"]);
+  });
+  test("the shipped table: a cell is active only with leave-one-out gain; the deep first-in limper facing the iso alone is, the thin and losing cells are not", () => {
+    const cells = CALIBRATION.cells as Record<string, { active: boolean; n: number; loo_gain_per_hand?: number }>;
+    for (const [k, c] of Object.entries(cells)) if (c.active) expect(c.loo_gain_per_hand ?? 0).toBeGreaterThan(0);
+    expect(cells.limpcall_deep_l1!.active).toBe(true);
+    expect(limpCallCalibrationKey("limpcall", 100, 1)).toBe("limpcall_deep_l1");
+    expect(limpCallCalibrationKey("limpcall", 30, 1)).toBeNull();            // 64 hands, no out-of-sample gain
+    expect(limpCallCalibrationKey("limpcall", 100, 2)).toBeNull();           // 52 hands, no gain
+    expect(limpCallCalibrationKey("sbiso", 100, 1)).toBeNull();
+    const m = limpCallCalibration("limpcall_deep_l1")!;
+    expect(m.prem).toBeLessThan(0.6);                                        // 5% observed premiums vs the product's 19%
+    expect(m.pairs).toBeGreaterThan(1.3);
+  });
+  test("limpCallProduct with a cell: groups re-weighted, the total kept, no weight past 1; without one, unchanged", () => {
+    const limp = { AA: 0.5, "22": 0.5, "72o": 0.5, "76s": 0.5, KQo: 0.5 };
+    const cond = { AA: 1, "22": 1, "72o": 1, "76s": 1, KQo: 1 };
+    const plain = limpCallProduct(limp, cond);
+    const cal = limpCallProduct(limp, cond, "limpcall_deep_l1");
+    const m = limpCallCalibration("limpcall_deep_l1")!;
+    expect(cal.AA / plain.AA).toBeLessThan(cal["22"]! / plain["22"]!);     // premiums down, pairs up
+    expect(Math.abs(combos(cal) - combos(plain))).toBeLessThan(0.05);       // the total survives the re-weighting
+    expect(Object.values(cal).every((v) => v <= 1)).toBe(true);
+    expect(cal["22"]! / plain["22"]! / (cal["76s"]! / plain["76s"]!)).toBeCloseTo(m.pairs / m["oth-s"]!, 2);
+    expect(limpCallProduct(limp, cond, "no-such-cell")).toEqual(plain);
+    expect(limpCallProduct(limp, cond, "limpcall_le60_l1")).toEqual(plain);   // an inactive cell is a no-op
+  });
+  test("the overlay names the cell; the oracle reads it back and rebuilds the calibrated product", () => {
+    setPoolCallTable(TABLE);
+    // UTG (100bb) limps alone, HJ folds, hero CO isolates to 5, everyone folds, UTG calls
+    const one = [...BLINDS, pre(1, "call", 1), pre(2, "fold"), pre(3, "raise", 5, true), pre(4, "fold"), pre(5, "fold"), pre(6, "fold"), pre(1, "call", 5)];
+    const r = applyPoolCallRanges({ hand: hand(one, 3), heroPos: "CO", ranges: { UTG: { AA: 1 }, CO: { AA: 1 } }, dealt: dealt() });
+    const u = r.applied.find((x) => x.pos === "UTG")!;
+    expect(u.times).toMatchObject({ key: "limp_first_deep", cal: "limpcall_deep_l1" });
+    const deep = limpLockRange("limp_first_deep")!;
+    expect(r.ranges.UTG).toEqual(limpCallProduct(deep.weights as Record<string, number>, TABLE.ranges.poolcall_limpcall_ALL_l1!.weights, "limpcall_deep_l1"));
+    const note = poolCallNote(r.applied, "gtow-ai · 6-handed");
+    expect(note).toContain(") × Ignition calibration limpcall_deep_l1 = ");
+    const f = poolFloorsOf(`x · ${note}`).get("UTG")!;
+    expect(f.times).toEqual({ kind: "limp", key: "limp_first_deep", limpTable: "v3", cal: "limpcall_deep_l1" });
+    expect(poolRangeOf(f)).toEqual(r.ranges.UTG);
   });
 });
