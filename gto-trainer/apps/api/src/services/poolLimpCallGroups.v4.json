@@ -1,0 +1,314 @@
+{
+ "_source": "poker analysis/pipeline/limp_study/locks_v2/limpcall_groups_v4.json (build_limp_locks_v4.py, 2026-10-09): P(call | he limped, faces the first raise, hand group) from 1,627 Ignition NL100+NL200 limpers' replies with cards; band mode 1 (3 = le60/60_85/deep cells, 2 = one <=85bb cell shared by le60 and 60_85, 1 = one cell), shrunk toward line x band -> line -> both lines with K=30 pseudo-decisions per group",
+ "_doc": "LIVE: services/poolCalls.ts limpCallProduct(limp, callGivenLimp, calKey) must multiply limp[c] by cells[key].groups[handGroup(c)] (key = `${line}_${stack<=60?'le60':stack<=85?'60_85':'deep'}_${limpersInPot>=2?'l2p':'l1'}`, limpCallCalibrationKey's rule) instead of callGivenLimp[c]; the Ignition calibration then drops out (it re-weighted the same groups).",
+ "groups": [
+  "prem",
+  "pairs",
+  "Axs",
+  "s-bway",
+  "oth-s",
+  "Axo",
+  "o-bway",
+  "o-junk"
+ ],
+ "limpcall_le60_l1": {
+  "groups": {
+   "prem": 0.2763,
+   "pairs": 0.6716,
+   "Axs": 0.6368,
+   "s-bway": 0.646,
+   "oth-s": 0.7144,
+   "Axo": 0.6245,
+   "o-bway": 0.7767,
+   "o-junk": 0.6055
+  },
+  "n": 1007,
+  "calls": 633,
+  "faced_by_group": {
+   "prem": 103,
+   "pairs": 81,
+   "Axs": 65,
+   "s-bway": 54,
+   "oth-s": 238,
+   "Axo": 138,
+   "o-bway": 77,
+   "o-junk": 251
+  },
+  "cell": "limpcall/all/l1"
+ },
+ "limpcall_le60_l2p": {
+  "groups": {
+   "prem": 0.4131,
+   "pairs": 0.6156,
+   "Axs": 0.5816,
+   "s-bway": 0.5392,
+   "oth-s": 0.4953,
+   "Axo": 0.5384,
+   "o-bway": 0.6736,
+   "o-junk": 0.488
+  },
+  "n": 354,
+  "calls": 173,
+  "faced_by_group": {
+   "prem": 42,
+   "pairs": 31,
+   "Axs": 19,
+   "s-bway": 15,
+   "oth-s": 84,
+   "Axo": 46,
+   "o-bway": 34,
+   "o-junk": 83
+  },
+  "cell": "limpcall/all/l2p"
+ },
+ "limpcall_60_85_l1": {
+  "groups": {
+   "prem": 0.2763,
+   "pairs": 0.6716,
+   "Axs": 0.6368,
+   "s-bway": 0.646,
+   "oth-s": 0.7144,
+   "Axo": 0.6245,
+   "o-bway": 0.7767,
+   "o-junk": 0.6055
+  },
+  "n": 1007,
+  "calls": 633,
+  "faced_by_group": {
+   "prem": 103,
+   "pairs": 81,
+   "Axs": 65,
+   "s-bway": 54,
+   "oth-s": 238,
+   "Axo": 138,
+   "o-bway": 77,
+   "o-junk": 251
+  },
+  "cell": "limpcall/all/l1"
+ },
+ "limpcall_60_85_l2p": {
+  "groups": {
+   "prem": 0.4131,
+   "pairs": 0.6156,
+   "Axs": 0.5816,
+   "s-bway": 0.5392,
+   "oth-s": 0.4953,
+   "Axo": 0.5384,
+   "o-bway": 0.6736,
+   "o-junk": 0.488
+  },
+  "n": 354,
+  "calls": 173,
+  "faced_by_group": {
+   "prem": 42,
+   "pairs": 31,
+   "Axs": 19,
+   "s-bway": 15,
+   "oth-s": 84,
+   "Axo": 46,
+   "o-bway": 34,
+   "o-junk": 83
+  },
+  "cell": "limpcall/all/l2p"
+ },
+ "limpcall_deep_l1": {
+  "groups": {
+   "prem": 0.2763,
+   "pairs": 0.6716,
+   "Axs": 0.6368,
+   "s-bway": 0.646,
+   "oth-s": 0.7144,
+   "Axo": 0.6245,
+   "o-bway": 0.7767,
+   "o-junk": 0.6055
+  },
+  "n": 1007,
+  "calls": 633,
+  "faced_by_group": {
+   "prem": 103,
+   "pairs": 81,
+   "Axs": 65,
+   "s-bway": 54,
+   "oth-s": 238,
+   "Axo": 138,
+   "o-bway": 77,
+   "o-junk": 251
+  },
+  "cell": "limpcall/all/l1"
+ },
+ "limpcall_deep_l2p": {
+  "groups": {
+   "prem": 0.4131,
+   "pairs": 0.6156,
+   "Axs": 0.5816,
+   "s-bway": 0.5392,
+   "oth-s": 0.4953,
+   "Axo": 0.5384,
+   "o-bway": 0.6736,
+   "o-junk": 0.488
+  },
+  "n": 354,
+  "calls": 173,
+  "faced_by_group": {
+   "prem": 42,
+   "pairs": 31,
+   "Axs": 19,
+   "s-bway": 15,
+   "oth-s": 84,
+   "Axo": 46,
+   "o-bway": 34,
+   "o-junk": 83
+  },
+  "cell": "limpcall/all/l2p"
+ },
+ "sbiso_le60_l1": {
+  "groups": {
+   "prem": 0.2106,
+   "pairs": 0.7829,
+   "Axs": 0.5009,
+   "s-bway": 0.7156,
+   "oth-s": 0.639,
+   "Axo": 0.4976,
+   "o-bway": 0.7529,
+   "o-junk": 0.315
+  },
+  "n": 167,
+  "calls": 90,
+  "faced_by_group": {
+   "prem": 12,
+   "pairs": 9,
+   "Axs": 10,
+   "s-bway": 2,
+   "oth-s": 41,
+   "Axo": 19,
+   "o-bway": 14,
+   "o-junk": 60
+  },
+  "cell": "sbiso/all/l1"
+ },
+ "sbiso_le60_l2p": {
+  "groups": {
+   "prem": 0.2074,
+   "pairs": 0.7509,
+   "Axs": 0.4717,
+   "s-bway": 0.7156,
+   "oth-s": 0.3277,
+   "Axo": 0.3641,
+   "o-bway": 0.6402,
+   "o-junk": 0.218
+  },
+  "n": 99,
+  "calls": 19,
+  "faced_by_group": {
+   "prem": 3,
+   "pairs": 4,
+   "Axs": 4,
+   "s-bway": 2,
+   "oth-s": 23,
+   "Axo": 15,
+   "o-bway": 3,
+   "o-junk": 45
+  },
+  "cell": "sbiso/all/l2p"
+ },
+ "sbiso_60_85_l1": {
+  "groups": {
+   "prem": 0.2106,
+   "pairs": 0.7829,
+   "Axs": 0.5009,
+   "s-bway": 0.7156,
+   "oth-s": 0.639,
+   "Axo": 0.4976,
+   "o-bway": 0.7529,
+   "o-junk": 0.315
+  },
+  "n": 167,
+  "calls": 90,
+  "faced_by_group": {
+   "prem": 12,
+   "pairs": 9,
+   "Axs": 10,
+   "s-bway": 2,
+   "oth-s": 41,
+   "Axo": 19,
+   "o-bway": 14,
+   "o-junk": 60
+  },
+  "cell": "sbiso/all/l1"
+ },
+ "sbiso_60_85_l2p": {
+  "groups": {
+   "prem": 0.2074,
+   "pairs": 0.7509,
+   "Axs": 0.4717,
+   "s-bway": 0.7156,
+   "oth-s": 0.3277,
+   "Axo": 0.3641,
+   "o-bway": 0.6402,
+   "o-junk": 0.218
+  },
+  "n": 99,
+  "calls": 19,
+  "faced_by_group": {
+   "prem": 3,
+   "pairs": 4,
+   "Axs": 4,
+   "s-bway": 2,
+   "oth-s": 23,
+   "Axo": 15,
+   "o-bway": 3,
+   "o-junk": 45
+  },
+  "cell": "sbiso/all/l2p"
+ },
+ "sbiso_deep_l1": {
+  "groups": {
+   "prem": 0.2106,
+   "pairs": 0.7829,
+   "Axs": 0.5009,
+   "s-bway": 0.7156,
+   "oth-s": 0.639,
+   "Axo": 0.4976,
+   "o-bway": 0.7529,
+   "o-junk": 0.315
+  },
+  "n": 167,
+  "calls": 90,
+  "faced_by_group": {
+   "prem": 12,
+   "pairs": 9,
+   "Axs": 10,
+   "s-bway": 2,
+   "oth-s": 41,
+   "Axo": 19,
+   "o-bway": 14,
+   "o-junk": 60
+  },
+  "cell": "sbiso/all/l1"
+ },
+ "sbiso_deep_l2p": {
+  "groups": {
+   "prem": 0.2074,
+   "pairs": 0.7509,
+   "Axs": 0.4717,
+   "s-bway": 0.7156,
+   "oth-s": 0.3277,
+   "Axo": 0.3641,
+   "o-bway": 0.6402,
+   "o-junk": 0.218
+  },
+  "n": 99,
+  "calls": 19,
+  "faced_by_group": {
+   "prem": 3,
+   "pairs": 4,
+   "Axs": 4,
+   "s-bway": 2,
+   "oth-s": 23,
+   "Axo": 15,
+   "o-bway": 3,
+   "o-junk": 45
+  },
+  "cell": "sbiso/all/l2p"
+ }
+}

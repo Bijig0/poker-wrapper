@@ -5,6 +5,7 @@ import {
 } from "./poolLimpFloor";
 import V2_TABLE from "./poolLimpLocks.v2.json";
 import V3_TABLE from "./poolLimpLocks.v3.json";
+import V4_TABLE from "./poolLimpLocks.v4.json";
 import { poolFloorsOf, poolRangeOf } from "../scripts/mutation/rangeOracle";
 import { withinFirstStackBound } from "./treeGap";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
@@ -92,11 +93,12 @@ describe("limp lock tables v3 / v2 (LIMP_LOCKS)", () => {
   const saved = process.env.LIMP_LOCKS;
   afterEach(() => { if (saved === undefined) delete process.env.LIMP_LOCKS; else process.env.LIMP_LOCKS = saved; });
 
-  test("the switch: unset / v3 / garbage = v3, v2 (any case, padded) = v2 — read at every call", () => {
-    delete process.env.LIMP_LOCKS; expect(limpLocksVersion()).toBe("v3");
+  test("the switch: unset / v4 / garbage = v4 (since 2026-10-09 evening), v3 and v2 (any case, padded) still selectable — read at every call", () => {
+    delete process.env.LIMP_LOCKS; expect(limpLocksVersion()).toBe("v4");
+    process.env.LIMP_LOCKS = "v4"; expect(limpLocksVersion()).toBe("v4");
     process.env.LIMP_LOCKS = "v3"; expect(limpLocksVersion()).toBe("v3");
     process.env.LIMP_LOCKS = " V2 "; expect(limpLocksVersion()).toBe("v2");
-    process.env.LIMP_LOCKS = "v1"; expect(limpLocksVersion()).toBe("v3");
+    process.env.LIMP_LOCKS = "v1"; expect(limpLocksVersion()).toBe("v4");
     process.env.LIMP_LOCKS = "v2";
     expect(poolLimpKey({ limpsBefore: 1, complete: false }, 30)).toBe("overlimp_short_le60");
     delete process.env.LIMP_LOCKS;
@@ -203,7 +205,7 @@ describe("limp lock tables v3 / v2 (LIMP_LOCKS)", () => {
       if (v) process.env.LIMP_LOCKS = v; else delete process.env.LIMP_LOCKS;
       return applyPoolLimpFloor({ hand: hand(acts), heroPos: "BB", ranges: { UTG: { ...TINY }, HJ: { ...TINY }, BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: dealt({ 2: 150, 3: 30 }), planOf: V2 });
     };
-    const a3 = run(undefined), a2 = run("v2");
+    const a3 = run("v3"), a2 = run("v2");
     expect(a3.applied.map((x) => [x.pos, x.key, x.table])).toEqual([["HJ", "overlimp_short_25_40", "v3"]]);
     expect(a2.applied.map((x) => [x.pos, x.key, x.table])).toEqual([["HJ", "overlimp_short_le60", "v2"]]);
     expect(a3.ranges.HJ).toEqual((V3_TABLE.ranges as any).overlimp_short_25_40.weights);
@@ -362,5 +364,34 @@ describe("the trigger rule on the floor (2026-10-09, services/poolTrigger — PO
     expect(poolLimpersOf(hand(iso), "BB")[0]!.calledLater).toBe(true);
     const r = applyPoolLimpFloor({ hand: hand(iso), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
     expect(r.applied.map((x) => x.key)).toEqual(["limp_first_short_60_85"]);
+  });
+});
+
+describe("limp lock table v4 (2026-10-09 evening: group-level shapes, the scoreboard's BETTER in every limp family)", () => {
+  afterEach(() => { delete process.env.LIMP_LOCKS; });
+  test("v4 holds v3's 24 keys and frequencies; only the shapes moved", () => {
+    const v3 = V3_TABLE.ranges as Record<string, { freq: number; n: number; weights: Record<string, number> }>;
+    const v4 = V4_TABLE.ranges as Record<string, { freq: number; n: number; weights: Record<string, number> }>;
+    expect(Object.keys(v4)).toEqual(Object.keys(v3));
+    for (const k of Object.keys(v3)) {
+      expect([v4[k]!.freq, v4[k]!.n]).toEqual([v3[k]!.freq, v3[k]!.n]);
+      expect(Object.keys(v4[k]!.weights).length).toBe(169);
+      expect(limpLockRange(k)!.table).toBe("v4");
+      expect(limpLockRange(k, "v3")!.weights).toEqual(v3[k]!.weights);   // v3 still readable by name
+    }
+    expect(limpLockKeys("v4").length).toBe(24);
+  });
+  test("the floor under the default: a 30bb over-limper gets v4's 25-40bb range, tagged 'v4:', and the oracle rebuilds it from the note", () => {
+    const acts = [pre(6, "post-sb", 0.4), pre(1, "post-bb", 1), pre(2, "call", 1), pre(3, "call", 1), pre(4, "fold"), pre(5, "fold"), pre(6, "fold"), pre(1, "check")];
+    const a4 = applyPoolLimpFloor({ hand: hand(acts), heroPos: "BB", ranges: { UTG: { ...TINY }, HJ: { ...TINY }, BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: dealt({ 2: 150, 3: 30 }), planOf: V2 });
+    expect(a4.applied.map((x) => [x.pos, x.key, x.table])).toEqual([["HJ", "overlimp_short_25_40", "v4"]]);
+    expect(a4.ranges.HJ).toEqual((V4_TABLE.ranges as any).overlimp_short_25_40.weights);
+    const n4 = poolLimpFloorNote(a4.applied, "gtow-ai");
+    expect(n4).toContain("now the pool's overlimp_short_25_40 (v4: ");
+    const f4 = poolFloorsOf(`x · ${n4}`).get("HJ")!;
+    expect([f4.key, f4.limpTable]).toEqual(["overlimp_short_25_40", "v4"]);
+    expect(poolRangeOf(f4)).toEqual(a4.ranges.HJ!);
+    // an answer recorded under v3 still rebuilds v3's range whatever the switch says now
+    expect(poolRangeOf({ kind: "limp", key: "overlimp_short_25_40", was: 0, limpTable: "v3" })).toEqual((V3_TABLE.ranges as any).overlimp_short_25_40.weights);
   });
 });

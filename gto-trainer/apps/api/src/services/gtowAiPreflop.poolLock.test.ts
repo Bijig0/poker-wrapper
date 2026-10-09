@@ -139,8 +139,8 @@ describe("poolLimpLockOf: the lock's strategy", () => {
     }
   });
 
-  it("the pool weights are the class weights per combo", () => {
-    const w = F.poolLimpWeights("limp_first_short_le60");
+  it("the pool weights are the class weights per combo (v3's cell, read by name)", () => {
+    const w = (() => { process.env.LIMP_LOCKS = "v3"; try { return F.poolLimpWeights("limp_first_short_le60"); } finally { delete process.env.LIMP_LOCKS; } })();
     const kts = COMBOS.findIndex((c) => c.cls === "KTs"), aks = COMBOS.findIndex((c) => c.cls === "AKs");
     expect(w[aks]).toBe(1);
     expect(w[kts]).toBeCloseTo(0.0943, 4);

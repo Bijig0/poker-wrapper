@@ -24,6 +24,7 @@
  */
 import LOCKS_V2 from "./poolLimpLocks.v2.json";
 import LOCKS_V3 from "./poolLimpLocks.v3.json";
+import LOCKS_V4 from "./poolLimpLocks.v4.json";
 import { dealtByPos, limpStackBucket, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS6, type Seat6 } from "./hrc6max";
 import { hrc6maxDb } from "./hrc6maxDb";
 import { chartStacks6, withinFirstStackBound } from "./treeGap";
@@ -37,7 +38,7 @@ export type PoolLimpKey = keyof typeof LOCKS_V3.ranges | keyof typeof LOCKS_V2.r
 /** THE TABLE SWITCH (2026-10-09, Brady: the thin Ignition cells replaced by CoinPoker-backed ranges, finer stack bands
  *  with real samples, Ignition-corrected where Ignition has the limps — TEMPORARY until auto-execute collects 30+
  *  Ignition limps per cell). LIMP_LOCKS in the environment, read at every decision:
- *   v3 (unset)  poolLimpLocks.v3.json (poker locks_v2/limp_locks_v3.json, build_limp_locks_v3.py): the 8 cells with 30+
+ *   v3          poolLimpLocks.v3.json (poker locks_v2/limp_locks_v3.json, build_limp_locks_v3.py): the 8 cells with 30+
  *               Ignition limps as v2; the 8 thin ones (n < 30: short over-limps, short SB completes behind limps,
  *               sbcomplete_b2_deep, sbcomplete_b3) from the CoinPoker 9.1M-hand corpus, the frequency anchored on the
  *               nearest Ignition cell with 30+ limps, the shape CoinPoker's showdown limps corrected against Ignition's
@@ -47,23 +48,36 @@ export type PoolLimpKey = keyof typeof LOCKS_V3.ranges | keyof typeof LOCKS_V2.r
  *               2026-10-09, byte for byte.
  *  It changes WHICH range a pool limp key names, never whether the floor / lock fires (SHORT_LIMP_POOL decides that).
  *  The HRC pool-locked limp trees stay solved on locks_v2 (their coverage rule, poolChartCovers, is unchanged). */
-export type LimpLocksVersion = "v2" | "v3";
-export const limpLocksVersion = (): LimpLocksVersion =>
-  String(process.env.LIMP_LOCKS ?? "v3").trim().toLowerCase() === "v2" ? "v2" : "v3";
+/** v4 (2026-10-09, the default — poker locks_v2/limp_locks_v4.json @ b2eaee37, build_limp_locks_v4.py, limp_locks_v4.md):
+ *  v3's 24 keys and frequencies, each cell's SHAPE rebuilt as 8 hand-group shares (Ignition's visible-card limps, ~4,000
+ *  NL100+NL200, shrunk toward the parent with 50 pseudo-hands; a premium cap) × a within-group shape (CoinPoker's or
+ *  Ignition's limps where it scores above group-only, else flat inside the group), gated by the held-out range
+ *  scoreboard: BETTER than v3 and than uniform in every limp family. Ships with the limp-call GROUP product
+ *  (poolCalls.limpCallProduct, poolLimpCallGroups.v4.json, LIMPCALL_PRODUCT). v3 and v2 stay selectable and readable:
+ *  a recorded answer's note tag ("v3: " / "v4: ") names the table it was read from. */
+export type LimpLocksVersion = "v2" | "v3" | "v4";
+export const limpLocksVersion = (): LimpLocksVersion => {
+  const v = String(process.env.LIMP_LOCKS ?? "v4").trim().toLowerCase();
+  return v === "v2" ? "v2" : v === "v3" ? "v3" : "v4";
+};
 type LimpRange = { freq: number; n: number; weights: Record<string, number> };
 const TABLES: Record<LimpLocksVersion, Record<string, LimpRange>> = {
   v2: LOCKS_V2.ranges as unknown as Record<string, LimpRange>,
   v3: LOCKS_V3.ranges as unknown as Record<string, LimpRange>,
+  v4: LOCKS_V4.ranges as unknown as Record<string, LimpRange>,
 };
+/** where a key the named table lacks is looked for next */
+const FALLBACK: Record<LimpLocksVersion, LimpLocksVersion[]> = { v4: ["v3", "v2"], v3: ["v2", "v4"], v2: ["v3", "v4"] };
 /** the keys a table holds (tests, reports) */
 export const limpLockKeys = (version: LimpLocksVersion = limpLocksVersion()): string[] => Object.keys(TABLES[version]);
 /** A key's range from the table the switch names; a key only the other table has (a fine v3 band named by an answer
  *  recorded under v3, read back under v2) from that one. null = no table has it. */
 export function limpLockRange(key: string, version: LimpLocksVersion = limpLocksVersion()): (LimpRange & { table: LimpLocksVersion }) | null {
-  const other: LimpLocksVersion = version === "v3" ? "v2" : "v3";
-  const own = TABLES[version][key];
-  const r = own ?? TABLES[other][key];
-  return r ? { ...r, table: own ? version : other } : null;
+  for (const t of [version, ...FALLBACK[version]]) {
+    const r = TABLES[t][key];
+    if (r) return { ...r, table: t };
+  }
+  return null;
 }
 
 /** THE STACK BANDS (his stack as dealt, bb; the upper edge inclusive, as the tables were measured): the two coarse ones
@@ -148,7 +162,9 @@ export interface PoolLimpFloorRecord {
   table: LimpLocksVersion;
   /** he then CALLED the iso (2026-10-09, services/poolCalls.applyLimpCallProduct): the call cell the whole limp cell
    *  (`base` combos) was multiplied by — `now` is the product */
-  times?: { key: string; freq: number; n: number; base: number; cal?: string };
+  times?: { key: string; freq: number; n: number; base: number; cal?: string;
+    /** v4 (poolCalls.limpCallGroupKey): the cell × the Ignition limp-call GROUP rates of this key, not the call cell */
+    group?: { key: string; n: number } };
 }
 /** A limper the floor would have replaced, kept on his walked range because the trigger rule did not fire (2026-10-09). */
 export interface PoolLimpFloorKept { pos: Seat6; key: PoolLimpKey; stack: number; was: number; text: string }
@@ -203,9 +219,9 @@ export function poolLimpKey(l: Pick<PoolLimper, "limpsBefore" | "complete">, sta
   const base = l.complete
     ? (l.limpsBefore === 0 ? "sbcomplete_fold_short" : `sbcomplete_b${l.limpsBefore}_short`)
     : (l.limpsBefore === 0 ? "limp_first_short" : "overlimp_short");
-  if (version === "v3") {
+  if (version !== "v2") {
     const fine = `${base}_${limpFineBand(stack)}`;
-    if (fine in TABLES.v3) return fine as PoolLimpKey;
+    if (fine in TABLES[version]) return fine as PoolLimpKey;
   }
   return `${base}_${b}` as PoolLimpKey;
 }
@@ -376,10 +392,10 @@ export const poolLimpFloorNote = (applied: PoolLimpFloorRecord[], chartId: strin
   `POOL LIMP RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) limped — ${r.was} combos on ${chartId ?? "the preflop tree"}, `
     + (r.times
       // he then called the iso: the whole cell × the pool's limp-call rate (the oracle reads both keys back)
-      ? `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.times.base} combos) × his limp-call rate ${r.times.key} (${(100 * r.times.freq).toFixed(1)}% of chances, ${r.times.n.toLocaleString("en-US")} calls)${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
+      ? `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.times.base} combos) × his limp-call rate ${r.times.key} (${(100 * r.times.freq).toFixed(1)}% of chances, ${r.times.n.toLocaleString("en-US")} calls${r.times.group ? ` — applied as Ignition limp-call group rates ${r.times.group.key}, n=${r.times.group.n}` : ""})${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
       : `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`)).join("; ")}`
   + " — no pool-locked tree covers this stack yet";
 
 /** The table tag a note carries right after the key — none for v2 (the notes exactly as before 2026-10-09), "v3: " for
  *  v3 (rangeOracle.poolFloorsOf reads it back, so a recorded answer is checked against the table it was answered from). */
-export const limpTableTag = (t: LimpLocksVersion | undefined): string => (t === "v3" ? "v3: " : "");
+export const limpTableTag = (t: LimpLocksVersion | undefined): string => (t === "v3" || t === "v4" ? `${t}: ` : "");

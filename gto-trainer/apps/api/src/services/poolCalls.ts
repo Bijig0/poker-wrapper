@@ -45,8 +45,9 @@
  */
 import LOCKS from "./poolCallLocks.json";
 import CAL from "./poolLimpCallCalibration.json";
+import GROUPS_V4 from "./poolLimpCallGroups.v4.json";
 import { dealtByPos, SEATS6, type Seat6 } from "./hrc6max";
-import { limpCoarseBand, limpFineBand, limpLockRange, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
+import { limpCoarseBand, limpFineBand, limpLockRange, limpLocksVersion, limpTableTag, poolLimpKey, type LimpLocksVersion } from "./poolLimpFloor";
 import { handGroup } from "./poolTrigger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
@@ -223,8 +224,20 @@ export function limpKeyOf(limpsBefore: number, complete: boolean, stack: number)
  * every cell (L1 23-32 pts vs 22-67) and closer than the whole limp cell in three of four (the ≤60bb one-limper cell,
  * n=64, is within noise the other way). Weights rounded to 1e-4 so the mutation oracle rebuilds them exactly.
  */
-export function limpCallProduct(limp: ClassRange, callGivenLimp: ClassRange, calKey?: string | null): ClassRange {
+export function limpCallProduct(limp: ClassRange, callGivenLimp: ClassRange, calKey?: string | null, groupKey?: string | null): ClassRange {
   const raw: ClassRange = {};
+  // THE GROUP PRODUCT (2026-10-09, with the v4 limp tables — poker limp_locks_v4.md): P(call | limp, hand) read at hand-
+  // GROUP level from 1,627 Ignition limpers' replies to the iso (cards of the folders and raisers visible too), shrunk
+  // toward line × band → line → both lines (K = 30): the limp weight × his group's rate. The per-class call cell and the
+  // Ignition calibration (which re-weighted the same groups) drop out. Gate: limpcall +0.376, sbiso +0.506 nats a hand
+  // over v3's product; without it the SB iso-call family is not better than uniform — the table and this ship together
+  const groups = groupKey ? limpCallGroupRates(groupKey) : null;
+  if (groups) {
+    for (const [c, w] of Object.entries(limp)) raw[c] = Math.min(1, Math.max(0, Number(w)) * Math.max(0, groups[handGroup(c)] ?? 0));
+    const out: ClassRange = {};
+    for (const [c, w] of Object.entries(raw)) out[c] = Math.round(1e4 * w) / 1e4;
+    return out;
+  }
   for (const [c, w] of Object.entries(limp)) raw[c] = Math.max(0, Number(w)) * Math.max(0, Number(callGivenLimp[c] ?? 0));
   const cal = calKey ? limpCallCalibration(calKey) : null;
   if (cal) {
@@ -254,6 +267,27 @@ export function limpCallCalibration(key: string): Record<string, number> | null 
   const cell = (CAL.cells as Record<string, CalCell>)[key];
   if (!cell?.active || !cell.groups) return null;
   return Object.fromEntries(Object.entries(cell.groups).map(([g, x]) => [g, Number(x.mult)]));
+}
+type GroupCell = { groups: Record<string, number>; n: number; calls?: number; cell?: string };
+/** a v4 limp-call group cell's rates by hand group; null for a key the table does not have */
+export function limpCallGroupRates(key: string): Record<string, number> | null {
+  const c = (GROUPS_V4 as unknown as Record<string, unknown>)[key] as GroupCell | undefined;
+  return c && typeof c === "object" && c.groups && typeof c.groups === "object" && !Array.isArray(c.groups) ? c.groups : null;
+}
+export const limpCallGroupN = (key: string): number => Number(((GROUPS_V4 as unknown as Record<string, GroupCell>)[key])?.n ?? 0);
+/** LIMPCALL_PRODUCT in the environment, read at every decision: group (unset) = the v4 group product while LIMP_LOCKS is
+ *  v4; class = the per-class call cell (× the v3 calibration) as before, whatever the limp table. v3 / v2 are always class. */
+export type LimpCallProductMode = "group" | "class";
+export const limpCallProductMode = (): LimpCallProductMode =>
+  String(process.env.LIMPCALL_PRODUCT ?? "group").trim().toLowerCase() === "class" ? "class" : "group";
+/** The v4 group cell for a limp-caller (`${line}_${le60|60_85|deep}_${l1|l2p}`, limpCallCalibrationKey's rule without
+ *  its active check) when the group product applies: the limp table read is v4 and LIMPCALL_PRODUCT is not class. */
+export function limpCallGroupKey(line: "limpcall" | "sbiso", stack: number, limpersInPot: number, limpTable: LimpLocksVersion = limpLocksVersion()): string | null {
+  if (limpTable !== "v4" || limpCallProductMode() === "class") return null;
+  const band = stackBandsOf(stack).calibration;
+  if (!band) return null;
+  const key = `${line}_${band}_${limpersInPot >= 2 ? "l2p" : "l1"}`;
+  return limpCallGroupRates(key) ? key : null;
 }
 /** the calibration cell for a limp-caller: line × his stack band (the limp table's) × limpers in the pot — when active */
 export function limpCallCalibrationKey(line: "limpcall" | "sbiso", stack: number, limpersInPot: number): string | null {
@@ -322,7 +356,9 @@ export function poolCallRange(k: PoolCallKey): { weights: ClassRange; freq: numb
 export interface PoolCallRecord {
   pos: Seat6; line: PoolCallLine; key: string; table: "call" | "limp";
   /** a limpcall / sbiso caller (2026-10-09): the limp cell his call cell was multiplied by, and the Ignition calibration cell on top */
-  times?: { key: string; freq: number; n: number; limpTable: LimpLocksVersion; cal?: string };
+  times?: { key: string; freq: number; n: number; limpTable: LimpLocksVersion; cal?: string;
+    /** v4: the Ignition limp-call GROUP rates the limp cell was multiplied by (the call cell is not) */
+    group?: { key: string; n: number } };
   /** his stack as dealt (bb) */
   stack: number;
   freq: number; calls: number;
@@ -376,9 +412,10 @@ export function applyPoolCallRanges(a: {
       const lk = limpKeyOf(c.limpsBefore ?? 0, c.complete, stack);
       const lr = lk ? limpLockRange(lk) : null;
       if (!lk || !lr) continue;
-      const cal = limpCallCalibrationKey(c.line, stack, c.before);
-      weights = limpCallProduct(lr.weights as ClassRange, r.weights, cal);
-      times = { key: lk, freq: lr.freq, n: lr.n, limpTable: lr.table, ...(cal ? { cal } : {}) };
+      const gk = limpCallGroupKey(c.line, stack, c.before, lr.table);
+      const cal = gk ? null : limpCallCalibrationKey(c.line, stack, c.before);
+      weights = limpCallProduct(lr.weights as ClassRange, r.weights, cal, gk);
+      times = { key: lk, freq: lr.freq, n: lr.n, limpTable: lr.table, ...(cal ? { cal } : {}), ...(gk ? { group: { key: gk, n: limpCallGroupN(gk) } } : {}) };
     }
     const was = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
@@ -393,7 +430,7 @@ export const poolCallNote = (applied: PoolCallRecord[], source: string | null): 
   `POOL CALL RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) ${r.did} — ${r.was} combos on ${source ?? "the preflop tree"}, `
     + (r.times
       // a limp-caller: the call cell is his limp-call RATE; the range is his limp cell × it (the oracle reads both keys back)
-      ? `now the pool's ${r.key} (${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured) × his limp range ${r.times.key} (${limpTableTag(r.times.limpTable)}${(100 * r.times.freq).toFixed(1)}% of hands, n=${r.times.n})${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
+      ? `now the pool's ${r.key} (${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured${r.times.group ? ` — applied as Ignition limp-call group rates ${r.times.group.key}, n=${r.times.group.n}` : ""}) × his limp range ${r.times.key} (${limpTableTag(r.times.limpTable)}${(100 * r.times.freq).toFixed(1)}% of hands, n=${r.times.n})${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
       : `now the pool's ${r.key} (${limpTableTag(r.limpTable)}${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos)`)).join("; ")}`
   + " — the tree cannot hold this line, so the callers hold the pool's measured ranges, not the solver's neighbouring-line ones";
 
@@ -407,7 +444,7 @@ export const poolCallNote = (applied: PoolCallRecord[], source: string | null): 
 export function applyLimpCallProduct(a: {
   hand: ParsedHand; heroPos: string | null; ranges: Record<string, ClassRange>; dealt?: Record<number, number>;
   /** the limp floor's records for this arrival — mutated: `times` and `now` on the ones multiplied */
-  floored: { pos: string; now: number; times?: { key: string; freq: number; n: number; base: number; cal?: string } }[];
+  floored: { pos: string; now: number; table?: LimpLocksVersion; times?: { key: string; freq: number; n: number; base: number; cal?: string; group?: { key: string; n: number } } }[];
 }): { ranges: Record<string, ClassRange>; applied: string[] } {
   if (!a.floored.length) return { ranges: a.ranges, applied: [] };
   const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
@@ -427,9 +464,10 @@ export function applyLimpCallProduct(a: {
     if (!r) continue;
     const base = combosOf(out[rk]);
     if (out === a.ranges) out = { ...a.ranges };
-    const cal = limpCallCalibrationKey(c.line, stack, c.before);
-    out[rk] = limpCallProduct(out[rk]!, r.weights, cal);
-    f.times = { key: k.key, freq: r.freq, n: r.calls, base, ...(cal ? { cal } : {}) };
+    const gk = limpCallGroupKey(c.line, stack, c.before, f.table ?? limpLocksVersion());
+    const cal = gk ? null : limpCallCalibrationKey(c.line, stack, c.before);
+    out[rk] = limpCallProduct(out[rk]!, r.weights, cal, gk);
+    f.times = { key: k.key, freq: r.freq, n: r.calls, base, ...(cal ? { cal } : {}), ...(gk ? { group: { key: gk, n: limpCallGroupN(gk) } } : {}) };
     f.now = combosOf(out[rk]);
     applied.push(c.pos);
   }
