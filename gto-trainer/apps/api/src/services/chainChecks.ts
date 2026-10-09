@@ -83,9 +83,9 @@ export const CHECKS: readonly CheckDef[] = [
     build: "built",
     how: "On each street's entering ranges (after hero's class floor): every weight a finite number ≥ 0; every seat keeps weight once the board's cards are removed; every villain keeps a hand that shares no card with hero's; hero's exact combo has weight and is not on the board. Board-card combos inside a range are removed by the solver's own card removal, so what is checked is that something is LEFT after it." },
   { id: 3, group: "inputs", name: "Villain mistake lines",
-    spec: "Villain action under 1% of his range at the node, no hand above 2%: flagged + logged.",
+    spec: "Villain action under 1% of his range at the node, no hand above 2%: flagged + logged. Cumulative (2026-10-09): a villain whose actions since the flop leave under 1% of his flop range while every single action passed: flagged.",
     build: "built",
-    how: "A flag (⚑), never a verdict. GTO Wizard's custom solves are QRE (quantal response equilibrium, since 2025-04-16), so these low frequencies are not solver noise: they are the modelled mistake distribution, and the range after the action is QRE's model of who makes the mistake, not the pool's. Logged with villain's shown hand for a pool range later (/api/dashboard/off-tree)." },
+    how: "A flag (⚑), never a verdict. GTO Wizard's custom solves are QRE (quantal response equilibrium, since 2025-04-16), so these low frequencies are not solver noise: they are the modelled mistake distribution, and the range after the action is QRE's model of who makes the mistake, not the pool's. Logged with villain's shown hand for a pool range later (/api/dashboard/off-tree). THE CUMULATIVE FLAG (2026-10-09, the trigger-rule calibration §3.6 / the range-coverage audit's blind spot): each action judged alone can pass while the line does not — 24.83 → 0.17 combos over X-X-R-C, every step ≥ 1%. Per street, each villain's range now against his flop-entering range (both on the combos the board leaves) = the product of his action shares since the flop; under 1% while he entered the flop with ≥ 1% of hands and none of his steps was itself under 1% → a flag naming the line. Never a replacement: postflop the median villain is at 0.75% of his hands by the river through normal narrowing; replacing anything there needs Ignition postflop cards." },
   { id: 4, group: "inputs", name: "Seats right",
     spec: "OOP by position, GTO Wizard's node agrees on who acts, warm-up seating = live seating.",
     build: "built",
@@ -387,13 +387,40 @@ export function checkRangesSane(a: {
 }
 
 // ── #3 villain mistake lines ────────────────────────────────────────────────────────────────────────────────────
-export function checkMistakeLines(lines: OffTreeLine[], villainActions: number): CheckResult {
+/** A villain whose LINE since the flop is residue while each of its steps passed (#3's cumulative flag). */
+export interface CumulativeLine {
+  seat: string;
+  /** his combos entering the flop and now (both on the combos the board leaves) */
+  flop: number; now: number;
+  /** his action codes since the flop, in order (empty when the capture did not say whose they were) */
+  codes: string[];
+}
+/** 1% of the 1,326 combos: "he entered the flop with a real range" */
+export const CUMULATIVE_FLOP_MIN = 13.26;
+export const CUMULATIVE_SHARE = 0.01;
+/**
+ * The cumulative flag for one villain, or null: his range now is under 1% of what he entered the flop with, he entered
+ * it with ≥ 1% of hands (an arrival residue is the floors' / check #2's business, not this), and none of his steps since
+ * the flop was itself under 1% (that one is already flagged on its own).
+ */
+export function cumulativeOf(a: { seat: string; flopCombos: number; nowCombos: number; codes: string[]; anyStepUnder1: boolean }): CumulativeLine | null {
+  if (a.anyStepUnder1 || !(a.flopCombos >= CUMULATIVE_FLOP_MIN) || !Number.isFinite(a.nowCombos)) return null;
+  if (!(a.nowCombos / a.flopCombos < CUMULATIVE_SHARE)) return null;
+  return { seat: a.seat, flop: Math.round(a.flopCombos * 100) / 100, now: Math.round(a.nowCombos * 100) / 100, codes: a.codes.slice() };
+}
+const cumulativeText = (c: CumulativeLine): string =>
+  `cumulative: ${c.seat} ${c.flop.toFixed(2)} → ${c.now.toFixed(2)} combos${c.codes.length ? ` over ${c.codes.join("-")}` : " since the flop"}` +
+  ` (${pctOf(c.flop > 0 ? c.now / c.flop : 0)} of his flop range — every action ≥1% alone, the line under 1%)`;
+
+export function checkMistakeLines(lines: OffTreeLine[], villainActions: number, cumulative: CumulativeLine[] = []): CheckResult {
+  const cum = cumulative.length ? cumulative.map(cumulativeText).join("; ") : "";
   if (lines.length) {
     return { id: 3, status: "flag", text: lines.map((l) =>
       `${l.seat} ${l.action}${l.betsize != null ? ` ${l.betsize}` : ""}: ${pctOf(l.nodeFreq)} of his range, no hand above ${pctOf(l.maxHand)}` +
       `${l.evGapBb != null ? `, costs him ${l.evGapBb.toFixed(2)}bb` : ""}`).join("; ") +
-      " — a villain mistake line: GTO Wizard's QRE models it as a mistake, so the range after it is QRE's, not the pool's" };
+      " — a villain mistake line: GTO Wizard's QRE models it as a mistake, so the range after it is QRE's, not the pool's" + (cum ? `; ${cum}` : "") };
   }
+  if (cum) return { id: 3, status: "flag", text: `${cum} — a villain line the solver almost never reaches, though no single action of it is under 1%: a flag, the range is kept` };
   if (!villainActions) return na(3, "no villain action walked on this street");
   return pass(3, `${villainActions} villain action${villainActions === 1 ? "" : "s"}, none under 1% of his range at the node`);
 }

@@ -20,7 +20,7 @@ import {
 } from "./offTree";
 import { currentRequestScope } from "./requestScope";
 import {
-  checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime,
+  checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime, cumulativeOf, type CumulativeLine,
   solvePopulation, checkTrees, checkWarmTree, guardCheck, guardChecks, solveTimes, type CheckResult,
 } from "./chainChecks";
 
@@ -1622,6 +1622,37 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       });
       const villainActs = nodes.filter((x) => x.taken != null && x.actor !== heroIdx).length;
       const offs = nodes.filter((x) => x.offTree).map((x) => x.offTree!);
+      // #3 CUMULATIVE (2026-10-09): each villain's range now against his flop-entering range (the spec's), on the combos
+      // the board leaves = the product of his action shares since the flop; a flag when his line is under 1% though no
+      // single step was (chainChecks.cumulativeOf). A walk that starts past the flop (a re-root) has no flop range here
+      const cumulative = (): CumulativeLine[] => {
+        if (first !== 0) return [];
+        const flopOf: Record<string, number[] | undefined> = { [spec.oopPos]: spec.oopRange, [spec.ipPos]: spec.ipRange, ...(spec.midPos ? { [spec.midPos]: spec.midRange } : {}) };
+        const blocked = new Set(cards.slice(0, 3 + k).map(cardIdx));
+        const out: CumulativeLine[] = [];
+        seats.forEach((sv, idx) => {
+          if (idx === heroIdx) return;
+          const f = flopOf[sv.pos];
+          if (!f) return;
+          let fl = 0, nw = 0;
+          for (let i = 0; i < 1326; i++) {
+            const [x, y] = comboCards(i);
+            if (blocked.has(x) || blocked.has(y)) continue;
+            fl += Math.max(0, f[i] ?? 0); nw += Math.max(0, sv.range[i] ?? 0);
+          }
+          // his codes since the flop, from the capture's seats (streetSeats): earlier streets whole, this one as walked
+          const mine: string[] = [];
+          for (let s2 = 0; s2 <= si; s2++) {
+            const tk = spec.streets[s2] ?? [], who = spec.streetSeats?.[s2] ?? [];
+            const upto = s2 === si ? codes.length : tk.length;
+            for (let j = 0; j < upto; j++) if ((who[j] ?? "").toUpperCase() === sv.pos.toUpperCase()) mine.push(tk[j]!);
+          }
+          const anyStepUnder1 = trace.nodes.some((x) => x.offTree?.seat === sv.pos);
+          const line = cumulativeOf({ seat: sv.pos, flopCombos: fl, nowCombos: nw, codes: mine, anyStepUnder1 });
+          if (line) out.push(line);
+        });
+        return out;
+      };
       const trees = factsKey ? handFacts.trees(factsKey).filter((t) => t.k === k && t.first === first && (t.plan ?? null) === plan) : [];
       const warm = trees.filter((t) => t.origin === "warm");
       const ms = streetRec.solveMs + streetRec.walkMs;
@@ -1631,7 +1662,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       const base = solveTimes.median(timeKey);
       const out: CheckResult[] = [
         saneCheck,
-        guardCheck(3, () => checkMistakeLines(offs, villainActs)),
+        guardCheck(3, () => checkMistakeLines(offs, villainActs, cumulative())),
         guardCheck(4, () => checkSeats({ players: streetRec.players, agreed: seatAgreed, unnamed: seatUnnamed, warmSeats: warm[0]?.seats ?? null, origin, dealt: spec.dealt ?? null })),
         guardCheck(6, () => checkLine({ captured, walked: walkedActs })),
         guardCheck(9, () => checkTrees({ street, tree: streetRec.created ? "created" : "cached", leak: streetRec.leak, trees })),

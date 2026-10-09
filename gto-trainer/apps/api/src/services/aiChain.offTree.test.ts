@@ -122,3 +122,27 @@ describe("the soft range after an off-tree villain action", () => {
     expect(s.locks).toHaveLength(0);
   });
 });
+
+describe("check #3 cumulative through the walk (2026-10-09)", () => {
+  it("BB bets the flop 5% and the turn 15% (each ≥1%): at hero's turn node his line is 0.75% of his flop range — flagged on the turn's #3, the range kept", async () => {
+    const bet = (f: number, size: number): Act[] => [
+      { code: "X", name: "Check", strategy: flat(1 - f), evs: flat(1) },
+      { code: `R${size}`, name: "Bet", betsize: size, strategy: flat(f), evs: flat(1) },
+    ];
+    const s = script({
+      "sol-FLOP|": node("BB", bet(0.05, 5)),
+      "sol-FLOP|R5": node("BTN", heroFacing),
+      "sol-TURN|": node("BB", bet(0.15, 12)),
+      "sol-TURN|R12": node("BTN", heroFacing),
+    }); restore = s.restore;
+    const r = await solveAiChain({ ...base, streets: [["R5", "C"], ["R12"]], streetSeats: [["BB", "BTN"], ["BB"]] });
+    expect(r.ok).toBe(true);
+    const turn = r.trace!.streets.find((x: any) => x.street === "TURN" || x.k === 1)!;
+    const c3 = (turn.checks ?? []).find((c) => c.id === 3)!;
+    expect(c3.status).toBe("flag");
+    // 1,128 combos the four board cards leave × 5% × 15% = 8.46
+    expect(c3.text).toStartWith("cumulative: BB 1128.00 → 8.46 combos over R5-R12 (0.75% of his flop range");
+    const flop = r.trace!.streets.find((x: any) => x.street === "FLOP" || x.k === 0)!;
+    expect((flop.checks ?? []).find((c) => c.id === 3)!.status).toBe("pass");   // 5% alone: nothing to say on the flop
+  });
+});
