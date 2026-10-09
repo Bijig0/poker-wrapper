@@ -1337,7 +1337,16 @@ async function fitAiLines(solId: string, tokens: string[], shape: AiPreflopShape
     k === 0 ? [[]] : cands.slice(from).flatMap((c, i) => subsets(k - 1, from + i + 1).map((rest) => [c, ...rest]));
   for (let k = 1; k <= Math.min(maxFolds, cands.length); k++) {
     const tries = subsets(k).slice(0, MAX_FITS).map((folds) => ({ folds, cur: foldSeatsOut(tokens, folds, shape.stacks, shape.positions) }));
-    const walked = await Promise.all(tries.map((t) => repairLine(solId, t.cur, { end: true })));
+    // A WALK THAT FAILED FOR THE NETWORK (not the tree's "is not offered") is asked once more (2026-10-10, the failed-lock
+    // review): dropped silently, the blend ran over the fits that happened to answer — the dropped one could be the most
+    // folding fit, the one that keeps the cold-caller. Still failing: dropped, and said in api.log ([fit-read]).
+    const walked = await Promise.all(tries.map(async (t) => {
+      const r = await repairLine(solId, t.cur, { end: true });
+      if (!("error" in r) || /is not offered|NODE_DOES_NOT_EXIST/i.test(r.error)) return r;
+      const again = await repairLine(solId, t.cur, { end: true });
+      if ("error" in again && !/is not offered|NODE_DOES_NOT_EXIST/i.test(again.error)) console.log(`[fit-read] FAILED fit folding ${t.folds.join("+")}: ${again.error.slice(0, 160)} — left out of the blend`);
+      return again;
+    }));
     const fits = walked.flatMap((r, i) => ("error" in r ? [] : [{ ...r, folds: tries[i]!.folds, tokens: tries[i]!.cur }]));
     if (fits.length) return fits;
     // a real failure (a node that cannot be read), not the tree's cap: folding more will not help
@@ -1388,8 +1397,10 @@ export type AiFitNode = { fit: AiFit; n: { data: any; cached?: boolean; stored?:
 export async function readFitNodes(solId: string, tokens: string[], shape: AiPreflopShape): Promise<AiFitNode[]> {
   const fits = await fitAiLines(solId, tokens, shape);
   const reads = (await Promise.all(fits.map(async (fit): Promise<AiFitNode | null> => {
-    const n = await fetchNode(solId, fit.line);
-    if ("error" in n) return null;
+    // hero's node on a fit: a read that failed is asked once more before the fit is left out of the blend (said in api.log)
+    let n = await fetchNode(solId, fit.line);
+    if ("error" in n) n = await fetchNode(solId, fit.line);
+    if ("error" in n) { console.log(`[fit-read] FAILED hero's node on the fit folding ${fit.folds.join("+")}: ${n.error.slice(0, 160)} — left out of the blend`); return null; }
     const toAct = n.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
     if (shape.heroApiPos && toAct && toAct !== shape.heroApiPos) return null;
     const lines = await villainLinesOf(solId, fit.line ? fit.line.split("-") : [], shape);
