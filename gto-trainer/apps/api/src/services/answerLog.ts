@@ -221,6 +221,9 @@ export const FAIL_KINDS = [
   "line-terminal", "table-shape", "size-too-far", "multiway-unsupported",
   // the solver THREW (a bug, not the spot) — fastSolve turns it into this refusal instead of an HTTP 500 (2026-10-04)
   "solver-error",
+  // GTO Wizard answered too late or refused for load: a solve / poll timed out, or its request limit (429) — 2026-10-10,
+  // ~15 of the 47 "unknown" no-answers since 09-28 were these (a time box, not the spot)
+  "gtow-timeout",
   "unknown",
 ] as const;
 export type FailKind = (typeof FAIL_KINDS)[number];
@@ -280,6 +283,8 @@ export function failKindOf(reason: string | null | undefined): FailKind {
   if (r.includes("no gto wizard session") || r.includes("no gto wizard token") || r.includes("did not return the node in time")
       || r.includes("gto wizard auth failed")) return "gtow-down";
   if (r.includes("unable to connect") || r.includes("unreachable")) return "solver-unreachable";
+  if (r.includes("ai solve timed out") || r.includes("poll request failed") || r.includes("timed out")
+      || r.includes(" 429") || r.includes("request limit") || r.includes("no answer inside")) return "gtow-timeout";
   return "unknown";
 }
 

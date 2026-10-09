@@ -179,6 +179,12 @@ class HandFacts {
 
   /** The hand's facts: memory first, the disk on a miss (and remembered). */
   get(key: string): HandDoc | undefined {
+    const r = this.read(key);
+    return r === "unreadable" ? undefined : r;
+  }
+
+  /** get(), telling "no facts for this hand" from "the disk could not be read" (a locked / busy / corrupt row). */
+  private read(key: string): HandDoc | undefined | "unreadable" {
     if (!key) return undefined;
     const hit = this.mem.get(key);
     if (hit) return hit;
@@ -190,8 +196,9 @@ class HandFacts {
       const doc = JSON.parse(row.doc) as HandDoc;
       this.remember(doc);
       return doc;
-    } catch {
-      return undefined;
+    } catch (e) {
+      console.error(`[hand-facts] hand ${key}: its facts could not be read — ${e instanceof Error ? e.message : e}`);
+      return "unreadable";
     }
   }
 
@@ -208,9 +215,15 @@ class HandFacts {
   /** Apply a change to a hand's facts and write it through. */
   private update(key: string, change: (doc: HandDoc) => void): HandDoc | undefined {
     if (!key) return undefined;
-    const doc: HandDoc = this.get(key) ?? { key, at: Date.now() };
+    // A READ THAT FAILED IS NOT AN EMPTY HAND (2026-10-10, the failed-lock review): a fresh doc written over the stored
+    // row lost the hand's preflop pin and dealt stacks (the next street: arrival:no-pin, new tree keys). Neither written
+    // nor remembered (a remembered partial doc would be written over the row by the next change): the stored row is left
+    // alone and the next read tries the disk again.
+    const prev = this.read(key);
+    const doc: HandDoc = (prev === "unreadable" ? undefined : prev) ?? { key, at: Date.now() };
     change(doc);
     doc.at = Date.now();
+    if (prev === "unreadable") return doc;
     this.remember(doc);
     if (isDurableKey(key)) {
       try {

@@ -1166,6 +1166,15 @@ async function flopArrivalCompute(
       aiFitted = ai.fitted?.folded ?? null;
       sixNote = [six && !six.ok ? `6-max chart could not walk this line (${six.reason})` : null, ai.note].filter(Boolean).join(" · ");
       prov = reducedProv(ai, rebuiltProv("ai-arrival", six && !six.ok ? six.reason : null));
+      // THE PREFLOP ANSWER WAS POOL-LOCKED AND ITS TREE COULD NOT BE RESUMED (2026-10-10, the failed-lock review): the
+      // rebuild above is the PLAIN tree, so the locked seat enters with the solver's range, not the pool's — said, not
+      // silent (a flop floor below may still give him the pool's range; the note of that floor then says so)
+      const lost = pinMiss && pin?.piece === "gtow-ai-preflop" ? ((pin as { poolLocks?: { pos: string; key: string }[] }).poolLocks ?? []) : [];
+      for (const l of lost) {
+        const what = /^coldcall3b_/.test(l.key) ? "POOL COLD-CALL LOCK LOST AT THE FLOP:" : "POOL LIMP LOCK LOST AT THE FLOP:";
+        sixNote = [sixNote, `${what} hero's preflop answer read the ${l.pos} at the pool's ${l.key}, but that locked tree could not be resumed (${String(pinMiss).slice(0, 160)}) — his flop range is the plain tree's`].filter(Boolean).join(" · ");
+        console.log(`[preflop-pin] hand ${preflopPinKey(hand)}: ${what} the ${l.pos} (${l.key}) — ${String(pinMiss).slice(0, 160)}`);
+      }
     }
   }
   if (!recon) {
@@ -2561,7 +2570,12 @@ async function solvePostflopViaChainOnce(
     approx: true,
     warning: sixNote,
     path: classifyPath({ street: cur, arrival: arrivalPath, streets: walks.flatMap((w) => (w.trace?.streets ?? []).map((x: ChainTrace["streets"][number]) => streetPathOf(x, w.kind, w.trace?.nodes ?? []))),
-      ...(rerootAlso.length || press.length || absentAlso.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur), ...absentAlso] } : {}),
+      // A COLLAPSE THAT COULD NOT BE WALKED (2026-10-10, the failed-lock review): the answer is served from the others,
+      // without the full conservative blend (a single collapse over-bets by 8-13 pp) — was warning text only, verdict
+      // possibly "clean" (live 9036 / 9165 / 9166); now a failed reason on the path, FAILED on the hand page
+      ...(rerootAlso.length || press.length || absentAlso.length || walkFails.length ? { postflopAlso: [...rerootAlso, ...pressReasons(press, cur), ...absentAlso,
+        ...(walkFails.length ? [{ v: "failed" as const, code: "postflop:collapse-dropped",
+          text: `${walkFails.length} of ${walkables.length} collapses could not be walked — served from the rest, not the full blend (${walkFails.join("; ")})`.slice(0, 300) }] : [])] } : {}),
       // THE CHAIN'S INVARIANTS against the capture (chainPathChecks); the walk's own ride on its street records
       checks: guardChecks(0, () => chainPathChecks({
         hand, walks, arrival: arrivalPath,
