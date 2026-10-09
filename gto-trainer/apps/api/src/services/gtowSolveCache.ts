@@ -45,6 +45,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import { isAuthFailure } from "./gtowAuthBody";
 import { gtowCachePath, openStore } from "./storePaths";
+import { sessionLive } from "./sessionLive";
+import type { ScanReply, ScanRecent, ScanRows } from "./gtowCacheScanWorker";
 
 export type CacheKind = "pre" | "post";
 
@@ -87,6 +89,10 @@ const MB = 1024 * 1024;
 const FLUSH_MS = 50;
 /** re-check the size cap after this many node writes (a long-running API would otherwise only prune at start) */
 const MAINTAIN_EVERY = 500;
+/** rows one eviction batch may remove (the cap is reached over several flushes, never in one long transaction) */
+const EVICT_BATCH = 2_000;
+/** pages one maintenance pass gives back to the file */
+const VACUUM_PAGES = 4_000;
 const FRESH_MAX = 300;
 const BODIES_MAX = 200;
 const RECENT_MAX = 12;
@@ -227,10 +233,29 @@ const dayOf = (ms: number): string => {
 const gzip = (s: string): Uint8Array => Bun.gzipSync(Buffer.from(s));
 const gunzip = (b: Uint8Array): string => new TextDecoder().decode(Bun.gunzipSync(b as Uint8Array<ArrayBuffer>));
 
+/**
+ * THE ROW COUNTERS (2026-10-09). The cache's size used to be COUNTED: COUNT/SUM over both tables (and a SUM in the size
+ * cap check every 500 writes) — full scans of a 1.5 GB file on the live API's thread, 6–15 s each, every 10 s while the
+ * accounts page or /gtow-status was polled. Now four counters live in gtow_cache_totals (rows_trees, rows_nodes,
+ * rows_neg, rows_bytes), changed in the SAME transaction as every insert, verdict upgrade, age deletion and eviction,
+ * by every process that writes the file. `rows_seeded` says they are valid. A new file starts seeded at zero; a file from
+ * before the counters is counted ONCE by a scan in a Bun Worker (services/gtowCacheScanWorker.ts: its own read-only
+ * connection, its own thread — never this loop), held while a poker session is live; until then the counts read null
+ * ("counting…") and the size cap waits for them.
+ */
+const COUNTERS = ["rows_trees", "rows_nodes", "rows_neg", "rows_bytes"] as const;
+type CounterDelta = { trees: number; nodes: number; neg: number; bytes: number };
+const zeroDelta = (): CounterDelta => ({ trees: 0, nodes: 0, neg: 0, bytes: 0 });
+/** an unseeded file is asked to be counted again at most this often (while a session is live it waits) */
+const SEED_RETRY_MS = 5 * 60_000;
+/** the GET /api/gtow/cache "recent hits" list comes from the worker, memoised this long */
+const RECENT_MEMO_MS = 60_000;
+
 export interface GtowCacheSummary {
   enabled: boolean;
-  trees: number;
-  nodes: number;
+  /** null while the counters are not seeded yet ("counting…") */
+  trees: number | null;
+  nodes: number | null;
   mb: number;
   today: string;
   hitsToday: number;
@@ -261,6 +286,16 @@ export class GtowSolveCache {
   private writesSinceMaintain = 0;
   private summaryAt = 0;
   private summaryMemo: GtowCacheSummary | null = null;
+  /** the counters are valid in the file (rows_seeded) — re-read inside every write transaction */
+  private seeded = false;
+  /** a seeding scan in flight, and what this process wrote while it ran (added to the scan's totals) */
+  private seeding: Promise<boolean> | null = null;
+  private seedDelta: CounterDelta | null = null;
+  private seedTriedAt = 0;
+  private recentMemo: { at: number; recent: ScanRecent[]; refreshing: boolean } | null = null;
+  /** test hooks: the off-loop scan, and whether a session is live */
+  scanOffLoop: (path: string, recent: number) => Promise<ScanReply> = runScanWorker;
+  liveNow: () => boolean = () => { try { return sessionLive(); } catch { return false; } };
   readonly since: Counters = emptyCounters();
 
   constructor(opts: SolveCacheOptions = {}) {
@@ -284,16 +319,16 @@ export class GtowSolveCache {
       // the stored bytes, not the file, so either way it holds. (The WAL switch has already written the header, so the
       // mode only takes with a VACUUM — instant on a file with nothing in it.)
       if (fresh) { db.exec("PRAGMA auto_vacuum = INCREMENTAL"); db.exec("VACUUM"); }
-      this.init(db);
       this.db = db;
+      this.init(db, fresh);
     } catch (e) {
       // the cache is worth having but never worth an answer: a file that cannot be opened leaves memory only
       console.error(`[gtow-cache] cannot open ${this.path} — the solve cache stays in memory for this process: ${e instanceof Error ? e.message : e}`);
       try {
         const db = new Database(":memory:");
-        this.init(db);
         this.db = db;
         this.memoryOnly = true;
+        this.init(db, true);
       } catch {
         this.dbFailed = true;
       }
@@ -301,51 +336,151 @@ export class GtowSolveCache {
     return this.db;
   }
 
-  private init(db: Database): void {
+  private init(db: Database, fresh = false): void {
     db.exec("PRAGMA synchronous=NORMAL");
     db.exec(DDL);
+    // a file with no rows at all is exact at zero (a new file, or one never written): seeded on the spot
+    if (!this.readSeeded(db) && (fresh || !db.query("SELECT 1 FROM gtow_cache_trees LIMIT 1").get())) {
+      const put = db.prepare("INSERT OR REPLACE INTO gtow_cache_totals (name, n) VALUES (?, ?)");
+      db.transaction(() => { for (const c of COUNTERS) put.run(c, 0); put.run("rows_seeded", Date.now()); })();
+    }
+    this.seeded = this.readSeeded(db);
     this.maintain(db, Date.now(), true);
+    if (!this.seeded) this.seedSoon();
   }
 
+  private readSeeded(db: Database): boolean {
+    try { return !!db.query("SELECT 1 FROM gtow_cache_totals WHERE name = 'rows_seeded'").get(); } catch { return false; }
+  }
+
+  /** Add a delta to the counters inside the caller's transaction (only once they are seeded). */
+  private bump(db: Database, d: CounterDelta): void {
+    if (!d.trees && !d.nodes && !d.neg && !d.bytes) return;
+    if (this.readSeeded(db)) {
+      const add = db.prepare("INSERT INTO gtow_cache_totals (name, n) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n");
+      if (d.trees) add.run("rows_trees", d.trees);
+      if (d.nodes) add.run("rows_nodes", d.nodes);
+      if (d.neg) add.run("rows_neg", d.neg);
+      if (d.bytes) add.run("rows_bytes", d.bytes);
+    } else if (this.seedDelta) {
+      this.seedDelta.trees += d.trees; this.seedDelta.nodes += d.nodes; this.seedDelta.neg += d.neg; this.seedDelta.bytes += d.bytes;
+    }
+  }
+
+  /** The counters, or null while unseeded — four primary-key reads of a tiny table, never a scan. */
+  private counters(): ScanRows | null {
+    const db = this.open();
+    if (!db) return null;
+    try {
+      const m = new Map(db.query<{ name: string; n: number }, []>(
+        "SELECT name, n FROM gtow_cache_totals WHERE name IN ('rows_seeded','rows_trees','rows_nodes','rows_neg','rows_bytes')").all().map((r) => [r.name, r.n]));
+      this.seeded = m.has("rows_seeded");
+      if (!this.seeded) return null;
+      return { trees: m.get("rows_trees") ?? 0, nodes: m.get("rows_nodes") ?? 0, negatives: m.get("rows_neg") ?? 0, storedBytes: m.get("rows_bytes") ?? 0 };
+    } catch { return null; }
+  }
+
+  /** Count an unseeded file once, OFF the loop (a Worker), never while a poker session is live. */
+  private seedSoon(): void {
+    if (this.seeded || this.seeding || !this.path || this.path === ":memory:" || this.memoryOnly) return;
+    const now = Date.now();
+    if (now - this.seedTriedAt < SEED_RETRY_MS && this.seedTriedAt) return;
+    this.seedTriedAt = now;
+    if (this.liveNow()) { console.log("[gtow-cache] row counters not seeded yet — the counting scan waits: a poker session is live"); return; }
+    this.flush();
+    this.seedDelta = zeroDelta();
+    this.seeding = this.scanOffLoop(this.path, 0).then((r) => {
+      if (!r.ok) { console.warn(`[gtow-cache] counting scan failed (retried later): ${r.error}`); return false; }
+      const d = this.seedDelta ?? zeroDelta();
+      const db = this.open();
+      if (!db) return false;
+      const put = db.prepare("INSERT OR REPLACE INTO gtow_cache_totals (name, n) VALUES (?, ?)");
+      db.transaction(() => {
+        if (this.readSeeded(db)) return;   // another process seeded it meanwhile
+        put.run("rows_trees", r.rows.trees + d.trees); put.run("rows_nodes", r.rows.nodes + d.nodes);
+        put.run("rows_neg", r.rows.negatives + d.neg); put.run("rows_bytes", r.rows.storedBytes + d.bytes);
+        put.run("rows_seeded", Date.now());
+      })();
+      this.seeded = true;
+      this.summaryMemo = null;
+      console.log(`[gtow-cache] row counters seeded off the loop in ${r.ms} ms: ${r.rows.trees} trees, ${r.rows.nodes} nodes, ${(r.rows.storedBytes / MB).toFixed(1)} MB stored`);
+      return true;
+    }).catch((e) => { console.warn(`[gtow-cache] counting scan failed (retried later): ${e instanceof Error ? e.message : e}`); return false; })
+      .finally(() => { this.seeding = null; this.seedDelta = null; });
+  }
+
+  /** Wait for a seeding scan in flight (tests, scripts). */
+  async whenSeeded(): Promise<boolean> { if (this.seeding) await this.seeding; return this.seeded; }
+
   /**
-   * Retention: rows not hit for `days` go, with the day totals past it; then, while the stored bytes exceed the cap,
-   * the least-recently-hit nodes go (to 90% of it) and the trees left with no node follow them.
+   * Retention: rows not hit for `days` go (at open), with the day totals past it; then, while the stored bytes exceed the
+   * cap, the least-recently-hit nodes go (to 90% of it), a batch of EVICT_BATCH per call, and the trees left with no node
+   * follow them. NO FULL SCAN (2026-10-09): the stored bytes are the rows_bytes counter (unseeded = the cap waits), the
+   * old rows are found through the last_hit_ms indexes, a tree's nodes through the (key, addr) primary key.
    */
   private maintain(db: Database, now: number, atOpen: boolean): void {
     try {
       let freed = 0;
       if (atOpen) {
         const cutoff = now - this.days * DAY_MS;
-        freed += db.query("DELETE FROM gtow_cache_nodes WHERE last_hit_ms < ?").run(cutoff).changes;
-        freed += db.query("DELETE FROM gtow_cache_trees WHERE last_hit_ms < ?").run(cutoff).changes;
-        // the nodes of a tree that went: unreachable without its body
-        freed += db.query("DELETE FROM gtow_cache_nodes WHERE key NOT IN (SELECT key FROM gtow_cache_trees)").run().changes;
-        db.query("DELETE FROM gtow_cache_totals WHERE name LIKE 'd:%' AND name < ?").run(`d:${dayOf(cutoff)}`);
-      }
-      const live = () => (db.query<{ b: number | null }, []>("SELECT (SELECT COALESCE(SUM(bytes),0) FROM gtow_cache_nodes) + (SELECT COALESCE(SUM(bytes),0) FROM gtow_cache_trees) b").get()?.b ?? 0);
-      let total = live();
-      if (total > this.maxBytes) {
-        const target = this.maxBytes * 0.9;
-        const del = db.prepare("DELETE FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
-        // the small columns only (the blobs sit after them), read in full before any row is deleted
-        const oldestFirst = db.query<{ key: string; addr: string; bytes: number }, []>("SELECT key, addr, bytes FROM gtow_cache_nodes ORDER BY last_hit_ms ASC").all();
         db.transaction(() => {
-          for (const r of oldestFirst) {
-            if (total <= target) break;
-            del.run(r.key, r.addr);
-            total -= r.bytes;
-            freed++;
+          const d = zeroDelta();
+          const oldNodes = db.query<{ key: string; addr: string; status: number; bytes: number }, [number]>(
+            "SELECT key, addr, status, bytes FROM gtow_cache_nodes WHERE last_hit_ms < ?").all(cutoff);
+          const oldTrees = db.query<{ key: string; bytes: number }, [number]>("SELECT key, bytes FROM gtow_cache_trees WHERE last_hit_ms < ?").all(cutoff);
+          const delNode = db.prepare("DELETE FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
+          for (const r of oldNodes) { if (delNode.run(r.key, r.addr).changes) { d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; freed++; } }
+          // a tree that went takes its nodes with it (unreachable without its body) — found by the primary key prefix
+          const nodesOf = db.prepare<{ addr: string; status: number; bytes: number }, [string]>("SELECT addr, status, bytes FROM gtow_cache_nodes WHERE key = ?");
+          const delTree = db.prepare("DELETE FROM gtow_cache_trees WHERE key = ?");
+          for (const t of oldTrees) {
+            for (const r of nodesOf.all(t.key)) { if (delNode.run(t.key, r.addr).changes) { d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; freed++; } }
+            if (delTree.run(t.key).changes) { d.trees--; d.bytes -= t.bytes; freed++; }
           }
-          freed += db.query("DELETE FROM gtow_cache_trees WHERE key NOT IN (SELECT DISTINCT key FROM gtow_cache_nodes)").run().changes;
+          db.query("DELETE FROM gtow_cache_totals WHERE name LIKE 'd:%' AND name < ?").run(`d:${dayOf(cutoff)}`);
+          this.bump(db, d);
         })();
-        total = live();
-        this.known.clear();
-        console.log(`[gtow-cache] over its ${(this.maxBytes / MB).toFixed(1)} MB cap — least-recently-hit nodes evicted, ${(total / MB).toFixed(1)} MB kept`);
       }
-      if (freed) db.exec("PRAGMA incremental_vacuum");
+      freed += this.evictBatch(db);
+      if (freed) db.exec(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
     } catch (e) {
       console.error(`[gtow-cache] maintenance failed: ${e instanceof Error ? e.message : e}`);
     }
+  }
+
+  /** One eviction batch while the stored bytes are over the cap (to 90% of it); returns the rows removed. */
+  private evictBatch(db: Database): number {
+    const c = this.counters();
+    if (!c || c.storedBytes <= this.maxBytes) return 0;
+    const target = this.maxBytes * 0.9;
+    let total = c.storedBytes, freed = 0;
+    db.transaction(() => {
+      const d = zeroDelta();
+      // the small columns only (the blobs sit after them), oldest hit first through idx_gtow_cache_nodes_hit
+      const oldest = db.query<{ key: string; addr: string; status: number; bytes: number }, [number]>(
+        "SELECT key, addr, status, bytes FROM gtow_cache_nodes ORDER BY last_hit_ms ASC LIMIT ?").all(EVICT_BATCH);
+      const del = db.prepare("DELETE FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
+      const keys = new Set<string>();
+      for (const r of oldest) {
+        if (total <= target) break;
+        if (!del.run(r.key, r.addr).changes) continue;
+        total -= r.bytes; d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; freed++;
+        keys.add(r.key);
+      }
+      const treeLeft = db.prepare<{ bytes: number }, [string, string]>(
+        "SELECT bytes FROM gtow_cache_trees WHERE key = ? AND NOT EXISTS (SELECT 1 FROM gtow_cache_nodes WHERE key = ?)");
+      const delTree = db.prepare("DELETE FROM gtow_cache_trees WHERE key = ?");
+      for (const k of keys) {
+        const t = treeLeft.get(k, k);
+        if (t && delTree.run(k).changes) { d.trees--; d.bytes -= t.bytes; total -= t.bytes; freed++; }
+      }
+      this.bump(db, d);
+    })();
+    if (freed) {
+      this.known.clear();
+      console.log(`[gtow-cache] over its ${(this.maxBytes / MB).toFixed(1)} MB cap — ${freed} least-recently-hit rows evicted, ${(total / MB).toFixed(1)} MB stored${total > target ? " (more next batch)" : ""}`);
+    }
+    return freed;
   }
 
   // ── trees ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -574,9 +709,19 @@ export class GtowSolveCache {
       const hitTree = db.prepare("UPDATE gtow_cache_trees SET last_hit_ms = MAX(last_hit_ms, ?), hits = hits + ? WHERE key = ?");
       const hitNode = db.prepare("UPDATE gtow_cache_nodes SET last_hit_ms = MAX(last_hit_ms, ?), hits = hits + ? WHERE key = ? AND addr = ?");
       const addTotal = db.prepare("INSERT INTO gtow_cache_totals (name, n) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n");
+      const before = db.prepare<{ status: number; bytes: number }, [string, string]>("SELECT status, bytes FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
       db.transaction(() => {
-        for (const t of treeRows) insTree.run(t.key, t.kind, t.gz.byteLength, t.at, t.at, t.gz);
-        for (const x of nodeRows) insNode.run(x.key, x.addr, x.status, x.gz?.byteLength ?? 0, x.at, x.at, x.gz);
+        // the row counters move with the rows (see COUNTERS): a new tree, a new node, a verdict replaced by a full node
+        const d = zeroDelta();
+        for (const t of treeRows) if (insTree.run(t.key, t.kind, t.gz.byteLength, t.at, t.at, t.gz).changes) { d.trees++; d.bytes += t.gz.byteLength; }
+        for (const x of nodeRows) {
+          const was = before.get(x.key, x.addr);
+          const bytes = x.gz?.byteLength ?? 0;
+          if (!insNode.run(x.key, x.addr, x.status, bytes, x.at, x.at, x.gz).changes) continue;
+          if (!was) { d.nodes++; d.bytes += bytes; if (x.status !== NODE_OK) d.neg++; }
+          else { d.bytes += bytes - was.bytes; if (was.status !== NODE_OK && x.status === NODE_OK) d.neg--; }
+        }
+        this.bump(db, d);
         for (const t of touches) {
           if (t.addr == null) hitTree.run(t.at, t.n, t.key);
           else hitNode.run(t.at, t.n, t.key, t.addr);
@@ -589,6 +734,7 @@ export class GtowSolveCache {
       for (const [name, n] of totals) { const left = (this.totals.get(name) ?? 0) - n; if (left) this.totals.set(name, left); else this.totals.delete(name); }
       this.writesSinceMaintain += nodes.length;
       if (this.writesSinceMaintain >= MAINTAIN_EVERY) { this.writesSinceMaintain = 0; this.maintain(db, Date.now(), false); }
+      if (!this.seeded) this.seedSoon();
     } catch (e) {
       console.error(`[gtow-cache] flush failed (kept for the next one): ${e instanceof Error ? e.message : e}`);
     }
@@ -612,28 +758,13 @@ export class GtowSolveCache {
   private persistedTotals(): Record<string, number> {
     const out: Record<string, number> = {};
     try {
+      // the totals table is a few hundred tiny rows (WITHOUT ROWID) — not the node tables
       for (const r of this.open()?.query<{ name: string; n: number }, []>("SELECT name, n FROM gtow_cache_totals").all() ?? []) out[r.name] = r.n;
     } catch { /* none */ }
     return out;
   }
 
-  /** Everything GET /api/gtow/cache shows. */
-  stats(recent = RECENT_MAX) {
-    this.flush();
-    const db = this.open();
-    const rows = { trees: 0, nodes: 0, negatives: 0, storedBytes: 0 };
-    let top: { tree: string; kind: string; addr: string; status: number; hits: number; lastHitMs: number }[] = [];
-    try {
-      if (db) {
-        const t = db.query<{ n: number; b: number | null }, []>("SELECT COUNT(*) n, SUM(bytes) b FROM gtow_cache_trees").get()!;
-        const n = db.query<{ n: number; neg: number | null; b: number | null }, []>("SELECT COUNT(*) n, SUM(status <> 200) neg, SUM(bytes) b FROM gtow_cache_nodes").get()!;
-        rows.trees = t.n; rows.nodes = n.n; rows.negatives = n.neg ?? 0; rows.storedBytes = (t.b ?? 0) + (n.b ?? 0);
-        top = db.query<{ key: string; kind: string; addr: string; status: number; hits: number; last_hit_ms: number }, [number]>(
-          `SELECT n.key, t.kind, n.addr, n.status, n.hits, n.last_hit_ms FROM gtow_cache_nodes n JOIN gtow_cache_trees t ON t.key = n.key
-           WHERE n.hits > 0 ORDER BY n.last_hit_ms DESC LIMIT ?`).all(recent)
-          .map((r) => ({ tree: r.key.slice(0, 12), kind: r.kind, addr: r.addr, status: r.status, hits: r.hits, lastHitMs: r.last_hit_ms }));
-      }
-    } catch { /* an unreadable store reports empty */ }
+  private statsBody(rows: ScanRows | null, recent: ScanRecent[]) {
     const all = this.persistedTotals();
     const today = dayOf(Date.now());
     return {
@@ -642,6 +773,7 @@ export class GtowSolveCache {
       memoryOnly: this.memoryOnly,
       fileBytes: this.fileBytes(),
       limits: { days: this.days, maxMb: Math.round(this.maxBytes / MB) },
+      /** null while the row counters are not seeded yet ("counting…") */
       rows,
       since: { ...this.since },
       allTime: {
@@ -649,23 +781,87 @@ export class GtowSolveCache {
         materialised: all.materialised ?? 0, stored: all.stored ?? 0, requestsSaved: all.saved ?? 0, bytesServed: all.bytes ?? 0,
       },
       today: { day: today, hits: all[`d:${today}:hits`] ?? 0, requestsSaved: all[`d:${today}:saved`] ?? 0 },
-      recent: top,
+      recent,
     };
   }
 
-  /** The one-line summary the accounts payload carries (memoised 10 s — the GTO Wizard tab polls every 5 s). */
+  /**
+   * Everything GET /api/gtow/cache shows — the row counts from the counters (no scan), the "recent hits" list from
+   * the Worker (memo 60 s, refreshed on demand behind the reply: the first call after a boot answers with an empty list).
+   */
+  statsOffLoop(recent = RECENT_MAX) {
+    this.flush();
+    const rows = this.counters();
+    if (!rows) this.seedSoon();
+    const m = this.recentMemo;
+    if (this.path && this.path !== ":memory:" && !this.memoryOnly && recent > 0 && (!m || (Date.now() - m.at > RECENT_MEMO_MS && !m.refreshing))) {
+      const memo = (this.recentMemo ??= { at: 0, recent: [], refreshing: false });
+      memo.refreshing = true;
+      void this.scanOffLoop(this.path, recent).then((r) => { if (r.ok) { memo.recent = r.recent; memo.at = Date.now(); } })
+        .catch(() => { /* the list stays as it was */ }).finally(() => { memo.refreshing = false; });
+    }
+    return { ...this.statsBody(rows, (this.recentMemo?.recent ?? []).slice(0, recent)), recentAt: this.recentMemo?.at || null };
+  }
+
+  /**
+   * The same, counted IN THIS THREAD (the recent list is a query here) — for tests and scripts only, never the live API:
+   * the counters when seeded, a scan when not.
+   */
+  stats(recent = RECENT_MAX) {
+    this.flush();
+    const db = this.open();
+    let rows = this.counters();
+    let top: ScanRecent[] = [];
+    try {
+      if (db) {
+        if (!rows) {
+          const t = db.query<{ n: number; b: number | null }, []>("SELECT COUNT(*) n, SUM(bytes) b FROM gtow_cache_trees").get()!;
+          const n = db.query<{ n: number; neg: number | null; b: number | null }, []>("SELECT COUNT(*) n, SUM(status <> 200) neg, SUM(bytes) b FROM gtow_cache_nodes").get()!;
+          rows = { trees: t.n, nodes: n.n, negatives: n.neg ?? 0, storedBytes: (t.b ?? 0) + (n.b ?? 0) };
+        }
+        if (recent > 0) top = db.query<{ key: string; kind: string; addr: string; status: number; hits: number; last_hit_ms: number }, [number]>(
+          `SELECT n.key, t.kind, n.addr, n.status, n.hits, n.last_hit_ms FROM gtow_cache_nodes n JOIN gtow_cache_trees t ON t.key = n.key
+           WHERE n.hits > 0 ORDER BY n.last_hit_ms DESC LIMIT ?`).all(recent)
+          .map((r) => ({ tree: r.key.slice(0, 12), kind: r.kind, addr: r.addr, status: r.status, hits: r.hits, lastHitMs: r.last_hit_ms }));
+      }
+    } catch { /* an unreadable store reports empty */ }
+    return this.statsBody(rows ?? { trees: 0, nodes: 0, negatives: 0, storedBytes: 0 }, top);
+  }
+
+  /**
+   * The one-line summary the accounts payload carries (memoised 10 s — the GTO Wizard tab polls every 5 s). NEVER A
+   * SCAN: the row counters (four primary-key reads), the day's totals, the file's size from statSync. Unseeded counters
+   * read null ("counting…") and ask the Worker to count, unless a session is live.
+   */
   summary(): GtowCacheSummary {
     const now = Date.now();
     if (this.summaryMemo && now - this.summaryAt < 10_000) return this.summaryMemo;
-    const s = this.stats(0);
+    const rows = this.counters();
+    if (!rows) this.seedSoon();
+    const all = this.persistedTotals();
+    const today = dayOf(now);
+    const fileBytes = this.fileBytes();
     this.summaryMemo = {
-      enabled: s.enabled, trees: s.rows.trees, nodes: s.rows.nodes,
-      mb: Math.round(((s.fileBytes || s.rows.storedBytes) / MB) * 10) / 10,
-      today: s.today.day, hitsToday: s.today.hits, savedToday: s.today.requestsSaved,
+      enabled: this.enabled, trees: rows?.trees ?? null, nodes: rows?.nodes ?? null,
+      mb: Math.round(((fileBytes || rows?.storedBytes || 0) / MB) * 10) / 10,
+      today, hitsToday: all[`d:${today}:hits`] ?? 0, savedToday: all[`d:${today}:saved`] ?? 0,
     };
     this.summaryAt = now;
     return this.summaryMemo;
   }
+}
+
+/** The counting scan in a Bun Worker (services/gtowCacheScanWorker.ts); a 2-minute bound, then it is given up on. */
+export function runScanWorker(path: string, recent: number): Promise<ScanReply> {
+  return new Promise<ScanReply>((resolveScan) => {
+    let done = false;
+    const w = new Worker(new URL("./gtowCacheScanWorker.ts", import.meta.url).href);
+    const end = (r: ScanReply) => { if (done) return; done = true; clearTimeout(timer); try { w.terminate(); } catch { /* gone */ } resolveScan(r); };
+    const timer = setTimeout(() => end({ ok: false, error: "the counting scan took over 2 min" }), 120_000);
+    w.onmessage = (ev: MessageEvent<ScanReply>) => end(ev.data);
+    w.onerror = (ev: ErrorEvent) => end({ ok: false, error: ev.message || "worker error" });
+    w.postMessage({ path, recent });
+  });
 }
 
 /**

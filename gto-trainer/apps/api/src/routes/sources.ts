@@ -28,6 +28,7 @@ import {
 } from "./dashboard";
 import { port } from "../services/ports";
 import { step } from "../services/answerTrace";
+import { sessionLive } from "../services/sessionLive";
 
 /**
  * Sources — the study dashboard's mission control.
@@ -760,8 +761,12 @@ async function registryBody() {
     mes,
   };
 }
-const REGISTRY_TTL_MS = 20_000;
-app.get("/registry", async (c) => c.json(await cachedBehindLive("sources/registry", REGISTRY_TTL_MS, registryBody)));
+// 5 MIN, AND NOT REBUILT WHILE A SESSION IS LIVE (2026-10-09): at 20 s with refresh-ahead it rebuilt on the live API's
+// thread every 20 s ("cache refresh sources/registry 22.1 s" in the live session's [stall] lines). During a session the
+// copy it has is served as is (a cold one is still built once); the rebuilds resume when the session ends.
+const REGISTRY_TTL_MS = 5 * 60_000;
+const notWhileLive = { holdWhile: () => liveForCaches() };
+app.get("/registry", async (c) => c.json(await cachedBehindLive("sources/registry", REGISTRY_TTL_MS, registryBody, notWhileLive)));
 
 // ------------------------------------------------------------- strategies
 // The wrapper's panel and setup page re-read this every few seconds per open table; recomputing it scans every hand and
@@ -778,7 +783,7 @@ const STRATEGIES_TTL_MS = 5 * 60_000;
 export const STRATEGIES_BUILDING_ERROR = "the study API is up and building the strategy catalogue (first build after a restart)";
 app.get("/strategies", async (c) => {
   const hit = peekCached<unknown>("sources/strategies");
-  if (hit || c.req.query("wait") === "1") return c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody));
+  if (hit || c.req.query("wait") === "1") return c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody, notWhileLive));
   void warmBehindLive("sources/strategies", strategiesBody);
   return c.json({ ok: false, building: true, error: STRATEGIES_BUILDING_ERROR });
 });
@@ -789,9 +794,68 @@ export function warmSourcesCaches(): void {
   setTimeout(() => {
     void warmBehindLive("sources/strategies", strategiesBody).then(() => warmBehindLive("sources/registry", registryBody));
   }, 2_000);
-  keepWarm("sources/strategies", STRATEGIES_TTL_MS, strategiesBody, { leadMs: 60_000, demandMs: 15 * 60_000 });
-  keepWarm("sources/registry", REGISTRY_TTL_MS, registryBody, { leadMs: 5_000, demandMs: 2 * 60_000 });
+  // refresh-ahead only when no session is live (one log line each time a refresh is skipped for that reason)
+  keepWarm("sources/strategies", STRATEGIES_TTL_MS, strategiesBody, { leadMs: 60_000, demandMs: 15 * 60_000, skipWhile: () => liveForCaches() });
+  keepWarm("sources/registry", REGISTRY_TTL_MS, registryBody, { leadMs: 30_000, demandMs: 10 * 60_000, skipWhile: () => liveForCaches() });
 }
+
+/** Is a poker session live — the API's own answer (services/sessionLive.ts, what GET /api/load reports), never a throw. */
+function liveForCaches(): boolean {
+  try { return sessionLive(); } catch { return false; }
+}
+
+// ── realized results per strategy, recomputed for the last 30 days only (2026-10-09) ─────────────────────────────────
+// Every catalogue build enriched EVERY archived hand and read a year of answers ("answer log 365 d", "all hands
+// enriched", "hand nets" in the [stall] lines). Hands older than the window do not change: their totals are kept
+// (REALIZED_MEMO) and a build re-reads only the answers and hands since the memo's cutoff. A full rebuild happens when
+// the memo is empty, or older than a day and no session is live.
+const REALIZED_RECENT_DAYS = 30;
+const REALIZED_REBASE_MS = 24 * 3_600_000;
+const DAY_MS = 86_400_000;
+type Realized = Record<string, { hands: number; netBb: number }>;
+let REALIZED_MEMO: { cutoff: number; builtAt: number; old: Realized } | null = null;
+
+function realizedByStrategy(now = Date.now()): Realized {
+  const rebase = !REALIZED_MEMO || (now - REALIZED_MEMO.builtAt > REALIZED_REBASE_MS && !liveForCaches());
+  const cutoff = rebase ? now - REALIZED_RECENT_DAYS * DAY_MS : REALIZED_MEMO!.cutoff;
+  const days = rebase ? 365 : Math.ceil((now - cutoff) / DAY_MS) + 1;
+  // realized: answers tagged with the mode that was live, joined to hand nets
+  const rows = step(rebase ? "answer log 365 d" : `answer log ${days} d`, () => answerLog.rows(days));
+  const seen = new Map<string, string>();      // clientHandId -> strategy id
+  for (const a of rows) {
+    const sid = strategyIdForAnswer(a as any);
+    const h = (a as any).client_hand_id;
+    if (sid && h && !seen.has(h)) seen.set(h, sid);
+    else if (sid && h && seen.get(h) !== FULL_EXPLOIT_ID && sid === FULL_EXPLOIT_ID) seen.set(h, sid);
+  }
+  // reuse the dashboard's own enrichment + net accounting (same numbers the Analytics tab shows) rather than a second,
+  // divergent query — only the hands since the cutoff unless rebuilding
+  const handRows = step("hands", () => allRows()).filter((r) => rebase || (r.played_at ?? 0) >= cutoff);
+  const enriched = step(rebase ? "all hands enriched" : "recent hands enriched", () => handRows.map(enrichSync).filter((x): x is Enriched => x != null));
+  const nets = step("hand nets", () => computeNets(enriched));
+  const declared = new Map<string, string>();
+  for (const sess of step("sessions list", () => sessionsStore.list(500))) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
+  const old: Realized = {}, recent: Realized = {};
+  for (const e of enriched) {
+    const sessId = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
+    const sid = (sessId && declared.get(sessId)) || (e.clientHandId ? seen.get(e.clientHandId) : null);
+    if (!sid) continue;
+    const bucket = rebase && (e.playedAt ?? 0) < cutoff ? old : recent;
+    const r = (bucket[sid] ??= { hands: 0, netBb: 0 });
+    r.hands++;
+    r.netBb += nets.get(e.dbId) ?? 0;
+  }
+  if (rebase) REALIZED_MEMO = { cutoff, builtAt: now, old };
+  const out: Realized = {};
+  for (const src of [REALIZED_MEMO!.old, recent]) for (const [sid, v] of Object.entries(src)) {
+    const r = (out[sid] ??= { hands: 0, netBb: 0 });
+    r.hands += v.hands; r.netBb += v.netBb;
+  }
+  return out;
+}
+
+/** Tests: forget the realized memo. */
+export function __resetRealizedMemo(): void { REALIZED_MEMO = null; }
 
 /** The whole-hand strategy catalogue: what we can play, whether each is
  *  coherent (safeguards in services/strategies.ts), its winrate row from the
@@ -803,30 +867,7 @@ export function strategiesBody() {
   const matrix = step("strategy matrix", () => readJson(factoryFile("strategy_matrix.json")));
   const rowById: Record<string, any> = {};
   for (const g of matrix?.groups ?? []) for (const row of g.rows ?? []) rowById[row.id] = { ...row, group: g.title };
-  // realized: answers tagged with the mode that was live, joined to hand nets
-  const rows = step("answer log 365 d", () => answerLog.rows(365));
-  const seen = new Map<string, string>();      // clientHandId -> strategy id
-  for (const a of rows) {
-    const sid = strategyIdForAnswer(a as any);
-    const h = (a as any).client_hand_id;
-    if (sid && h && !seen.has(h)) seen.set(h, sid);
-    else if (sid && h && seen.get(h) !== FULL_EXPLOIT_ID && sid === FULL_EXPLOIT_ID) seen.set(h, sid);
-  }
-  const realized: Record<string, { hands: number; netBb: number }> = {};
-  // reuse the dashboard's own enrichment + net accounting (same numbers the
-  // Analytics tab shows) rather than a second, divergent query
-  const enriched = step("all hands enriched", () => allRows().map(enrichSync).filter((x): x is Enriched => x != null));
-  const nets = step("hand nets", () => computeNets(enriched));
-  const declared = new Map<string, string>();
-  for (const sess of step("sessions list", () => sessionsStore.list(500))) { const id = canonicalStrategyId(typeof sess.config?.strategy === "string" ? sess.config.strategy : null); if (id) declared.set(sess.id, id); }
-  for (const e of enriched) {
-    const sessId = typeof e.raw?.sessionId === "string" ? e.raw.sessionId : null;
-    const sid = (sessId && declared.get(sessId)) || (e.clientHandId ? seen.get(e.clientHandId) : null);
-    if (!sid) continue;
-    const r = (realized[sid] ??= { hands: 0, netBb: 0 });
-    r.hands++;
-    r.netBb += nets.get(e.dbId) ?? 0;
-  }
+  const realized = realizedByStrategy();
   // how each strategy answers every spot (services/strategyCoverage.ts), with the register's live counts joined:
   // per row, the fires of the approximations it leans on; per strategy, its HOLES = the register filtered to its sources
   const approx = Object.keys(STRATEGY_COVERAGE).length ? step("approximation rows 30 d", () => approximationRows(30)) : [];

@@ -5059,7 +5059,7 @@ function renderGtowAccounts() {
      restarts and served again with no request — its size and what it saved today (all processes); /api/gtow/cache has the rest */
   const c = j.cache;
   const cacheLine = !c ? "" : !c.enabled ? `<div class="sub" style="margin:8px 0 6px">AI solve cache: <b>off</b> (GTOW_CACHE=off or GTOW_CACHE_DB_PATH=off)</div>`
-    : `<div class="sub" style="margin:8px 0 6px" title="Every GTO Wizard AI tree and node reply (preflop and postflop) is kept in gtow-cache.sqlite beside the central database and served again with no request — a lower bound on requests saved: one per node served, two per tree not created">AI solve cache: <b>${c.trees.toLocaleString()} trees · ${c.nodes.toLocaleString()} nodes · ${c.mb} MB</b> · hits today <b>${c.hitsToday.toLocaleString()}</b> (${c.savedToday.toLocaleString()} requests saved) · <a href="/api/gtow/cache" target="_blank">details</a></div>`;
+    : `<div class="sub" style="margin:8px 0 6px" title="Every GTO Wizard AI tree and node reply (preflop and postflop) is kept in gtow-cache.sqlite beside the central database and served again with no request — a lower bound on requests saved: one per node served, two per tree not created">AI solve cache: <b>${c.trees == null ? "counting…" : `${c.trees.toLocaleString()} trees · ${c.nodes.toLocaleString()} nodes`} · ${c.mb} MB</b> · hits today <b>${c.hitsToday.toLocaleString()}</b> (${c.savedToday.toLocaleString()} requests saved) · <a href="/api/gtow/cache" target="_blank">details</a></div>`;
   $("view-gtow").innerHTML = `<div class="ga-wrap">
     <div class="ga-sum">
       <div><div class="ttl">All enabled accounts · last hour</div>${sum(j.combined.h1)}</div>
