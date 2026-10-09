@@ -50,6 +50,19 @@
   .tcard .ta.none { color: #6b7d8f; font-weight: 400; font-size: 13px; }
   .tcard .ts { font-size: 11.5px; color: #6b7d8f; margin-top: 3px; }
   .tcard .warn { color: #ffce56; }
+  /* a table in the middle of a deep-stack reset (GET /tables stackReset): its step on its card, in the banner's blue */
+  .tcard.reset { border-left-color: #4da3ff; }
+  .tcard .tr { font-size: 12px; font-weight: 700; color: #8ab4f8; margin-top: 3px; }
+  .tcard .tr.bad { color: #ffce56; } .tcard .tr.ok { color: #5ee39a; }
+  /* THE DEEP-STACK RESET BANNER (2026-10-09, Brady): from the moment the reset arms until it is done or given up, the
+     step in plain words — the feed line alone scrolled away. In the page's flow under the health banner (never over the
+     answer or the buttons); two lines always, so a change of step does not move the page. Blue while under way, green
+     for "reseated", amber when given up. From /state stackReset.banner (stackReset.ts stackResetBanner). */
+  #reset-banner { display: none; margin: 0 0 10px; padding: 10px 14px; border-radius: 10px; border: 2px solid #4da3ff; background: #16304f; color: #fff; line-height: 1.35; }
+  #reset-banner .rb-t { font-weight: 700; font-size: 16px; }
+  #reset-banner .rb-d { font-size: 12.5px; opacity: .9; margin-top: 2px; min-height: 1.35em; }
+  #reset-banner.ok { border-color: #5ee39a; background: #123524; }
+  #reset-banner.bad { border-color: #ffce56; background: #6b4a0f; }
   @keyframes spin { to { transform: rotate(360deg); } }
   /* header: title, the two modes, the connection pill */
   .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -261,6 +274,9 @@
   <!-- A MAJOR PIECE DOWN (2026-09-23): the study API, the chart server or GTO Wizard. Red = that layer answers
        nothing; amber = partly. From the wrapper's health thread (state().health), refreshed every 15 s. -->
   <div id="health-banner" style="display:none;margin:0 0 10px;padding:12px 14px;border-radius:10px;font-weight:700;font-size:16px;line-height:1.35"></div>
+  <!-- THE DEEP-STACK RESET (2026-10-09): this table reached the session's max deep stack and is sitting out, leaving,
+       waiting and taking a fresh seat; the step it is in, until it is done or given up (renderStackReset). -->
+  <div id="reset-banner" role="status" aria-live="polite"><div class="rb-t"></div><div class="rb-d"></div></div>
   <div class="top">
     <h1>Poker Wrapper <span id="site-badge" class="badge" style="display:none"></span> <span id="rig-badge" class="badge" style="display:none;background:#1d4e78;color:#cfe0ef">TEST RIG</span></h1>
     <nav class="modes" aria-label="panel mode">
@@ -808,7 +824,8 @@
         if (s) pills.push(`<span class="pill ${s[0]}">${s[1]}</span>`);
         const psig = pills.join("");
         if ($("cs-pills").dataset.sig !== psig) { $("cs-pills").dataset.sig = psig; $("cs-pills").innerHTML = psig; }
-        const who = t.heroStatus === "sitting-out" ? '<span class="folded">Sitting out — press I AM BACK to rejoin</span>'
+        const who = t.heroStatus === "sitting-out" && resetUnderWay() ? '<span class="folded">Sitting out for the deep-stack reset — do not press I AM BACK</span>'
+          : t.heroStatus === "sitting-out" ? '<span class="folded">Sitting out — press I AM BACK to rejoin</span>'
           : t.heroStatus === "waiting-for-bb" ? '<span class="folded">Waiting for the big blind to be dealt in</span>'
           : t.heroFolded ? '<span class="folded">FOLDED — sitting this one out</span>'
           : t.toAct ? '<span class="you">YOUR ACTION</span>'
@@ -1330,6 +1347,25 @@
     el.title = v ? `${txt} — answers may run past the clock: close test runs / wait for the API to settle` : "";
     el.style.display = v ? "" : "none";
   }
+  // THE DEEP-STACK RESET BANNER (2026-10-09): /state stackReset.banner — the wrapper words it (stackReset.ts
+  // stackResetBanner), the panel only shows it; gone when the banner is null or the session has the reset off
+  const RESET_ICON = { reset: "↻", ok: "✓", bad: "⚠" };
+  function renderStackReset(sr) {
+    const el = document.getElementById("reset-banner");
+    const b = sr && sr.banner;
+    const sig = b ? [b.level, b.text, b.detail].join("|") : "";
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    if (!b) { el.style.display = "none"; return; }
+    el.className = b.level === "reset" ? "" : b.level;
+    el.querySelector(".rb-t").textContent = `${RESET_ICON[b.level] || "↻"} ${b.text}`;
+    el.querySelector(".rb-d").textContent = b.detail || "";
+    el.style.display = "block";
+  }
+  // a reset under way has hero sitting out on purpose: I AM BACK would undo it
+  const RESET_UNDER_WAY = new Set(["armed", "sat-out", "leaving", "waiting", "reseating"]);
+  const resetUnderWay = () => !!(LAST_STATE && LAST_STATE.stackReset && LAST_STATE.stackReset.banner
+                                 && RESET_UNDER_WAY.has(LAST_STATE.stackReset.banner.phase));
   function renderHealth(h) {
     const el = document.getElementById("health-banner");
     const issues = (h && h.issues) || [];
@@ -1433,6 +1469,7 @@
       const s = await (await fetch("/state?light=1")).json();
       renderHealth(s.health);
       renderLoad(s.health && s.health.load);
+      renderStackReset(s.stackReset);
       // Self-heal version skew: a long-lived panel window running old page
       // code against a newer server is how "[object Object]" bugs happen.
       if (s.panelVersion) {
@@ -1467,7 +1504,7 @@
   // same answer the big card below shows, so the strip is never a second
   // opinion about the table you are sitting at.
   const cards = (t) => {
-    const cls = (t.closed || !t.reachable) ? "dead" : t.toActIsHero ? "turn" : "";
+    const cls = (t.closed || !t.reachable) ? "dead" : t.toActIsHero ? "turn" : RESET_UNDER_WAY.has(t.stackReset) ? "reset" : "";
     const who = t.me ? "this table" : `:${t.panelPort}`;
     const link = t.me ? "" : `<a href="http://127.0.0.1:${t.panelPort}/panel" target="_blank" title="open this table's own panel">open ↗</a>`;
     // THAT TABLE'S OWN PANEL WINDOW is not on screen (closed, or never reopened when a running table wrapper was
@@ -1495,9 +1532,12 @@
     // actually go wrong — a press landing on the table next door — is refused
     // at the point of pressing (launch._point_is_my_table), not guessed at here.
     const warn = "";
+    // its deep-stack reset's step (GET /tables stackReset / stackResetText): "table 2: reseating" at a glance
+    const rs = t.stackReset && t.stackResetText
+      ? `<div class="tr ${t.stackReset === "done" ? "ok" : t.stackReset === "aborted" || t.stackReset === "off" ? "bad" : ""}">${esc(t.stackResetText)}</div>` : "";
     return `<div class="tcard ${cls}"><div class="th"><b>Table ${t.slot}</b><span>${who}</span>${link}${reopen}${shut}</div>`
       + answer
-      + `<div class="ts">${esc([cardsTxt, t.street, line].filter(Boolean).join(" · "))}</div>${warn}</div>`;
+      + `<div class="ts">${esc([cardsTxt, t.street, line].filter(Boolean).join(" · "))}</div>${rs}${warn}</div>`;
   };
 
   let tblTimer = null;

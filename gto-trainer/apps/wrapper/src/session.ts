@@ -1198,6 +1198,10 @@ function tableCard(st: Record<string, any>, slotN: number, port: number, me: boo
     pick: a && a.pick,
     layout: st.layout ?? null,
     clientWindow: st.layout ?? null,
+    // THE DEEP-STACK RESET'S STEP (2026-10-09): its /state banner's phase ("armed" … "reseating", "done", "aborted",
+    // "off") and few words, so the leader's grid says "table 2: reseating"; null when there is nothing to say
+    stackReset: st.stackReset?.banner?.phase ?? null,
+    stackResetText: st.stackReset?.banner?.short ?? null,
   };
 }
 

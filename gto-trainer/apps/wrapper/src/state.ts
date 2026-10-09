@@ -110,6 +110,12 @@ export function freshStackReset() {
     misses: 0, retryAt: 0.0, lastMissWhy: null as string | null,
     leftAt: 0.0, notBefore: 0.0, oldRid: null as string | null, oldTag: null as string | null,
     abortedAt: null as number | null, aborts: 0, lastAbortWhy: null as string | null,
+    /** HOW THE LAST RESET ENDED (2026-10-09, the panel's banner — stackReset.ts stackResetBanner): `done` (seated at a
+     *  fresh table, `waitedS` after the leave), `aborted` or `off` (the abort that switched it off for the session) with
+     *  its reason, the phase it was in and whether I AM BACK went in; `at` / `hand` say how long the banner keeps it.
+     *  Cleared by the next arming. */
+    outcome: null as { kind: "done" | "aborted" | "off"; at: number; hand: number; why: string | null; phase: StackResetState | null;
+                       waitedS: number | null; sitBack: boolean | null } | null,
     /** sockets the sibling tables said are about to close on purpose (rid → when told) */
     peerLeaving: new Map<string, number>(),
     /** THE LEADER'S NOTES (session.ts noteStackReset): one per table resetting — `matched` once the seat count fell for
