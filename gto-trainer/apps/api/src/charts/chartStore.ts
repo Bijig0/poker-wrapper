@@ -178,7 +178,11 @@ export class ChartStore {
       const ok = await (this.o.fetchBody ?? ((s, d) => this.rcloneFetch(s, d)))(sid, tmp);
       if (!ok || !existsSync(tmp) || statSync(tmp).size === 0) {
         try { unlinkSync(tmp); } catch { /* not there */ }
-        return null;
+        // A FAILED FETCH IS NOT AN UNKNOWN CHART (2026-10-10, the failed-lock review): it answered "unknown solution"
+        // with HTTP 200, which the client cached for the life of the process as "no such line" — the hand moved to
+        // another chart or to GTO Wizard AI, and every later read of that chart did too. Thrown: the server answers
+        // 500, the client retries and then says "unreachable".
+        throw new Error(`the body of indexed chart '${sid}' could not be fetched from ${this.o.remote}`);
       }
       renameSync(tmp, path);
       this.touch(path);                 // just used: not rclone's R2 upload time

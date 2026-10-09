@@ -228,6 +228,18 @@ const mesFamilyOf = (tag: string | null | undefined, pos: string | null | undefi
  *  Mirrors the dashboard's own spotKey/lastNavKey fallback formula. */
 const decisionKey = (r: IngestLikeResponse): string =>
   JSON.stringify([r.hand?.street, r.hand?.board, r.hero?.cards, r.hand?.node?.toCall, (r.hand?.actions ?? []).length]);
+/** THE SAME DECISION, whatever the call amount read (2026-10-10, the failed-lock review): the call amount flickers within
+ *  one decision (rollMemo; routes/fastSolver's probeIdentity compares without it), and every flicker was a NEW key here —
+ *  a second full solve beside the first (a second 40 s pool lock on GTO Wizard), the keep-alive lost, and the first
+ *  verdict dropped as "hero had already acted" when he had not. Street, board, cards and the action count decide. */
+const sameDecision = (a: string | null, b: string | null): boolean => {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  try {
+    const x = JSON.parse(a) as unknown[], y = JSON.parse(b) as unknown[];
+    return JSON.stringify([x[0], x[1], x[2], x[4]]) === JSON.stringify([y[0], y[1], y[2], y[4]]);
+  } catch { return false; }
+};
 
 class StudyPoller {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -559,7 +571,7 @@ class StudyPoller {
       // spot…" for a spot the fast path answers in 0.2s, while the poller
       // reported running, connected, no error: healthy and permanently
       // silent, which is the worst way to fail.
-      if (key === this.lastSolvedKey && this.status.lastAnswer) {
+      if (sameDecision(key, this.lastSolvedKey) && this.status.lastAnswer) {
         // Already navigated GTO Wizard here and it's already showing the
         // right answer — don't reload the same page again every tick. But DO
         // re-push the same text: the panel expires answers 3s after the last
@@ -579,7 +591,7 @@ class StudyPoller {
       // path is HTTP now: a new key starts at once beside the stale one, whose verdict solveSpot drops when it lands
       // (key !== lastProbeKey). At most MAX_INFLIGHT outstanding, so a key churning every tick cannot fan out into a
       // pile of cloud solves; the same key is never solved twice at once.
-      if (this.navs.has(key)) return;
+      if ([...this.navs.keys()].some((k) => sameDecision(k, key))) return;
       if (this.navs.size >= this.MAX_INFLIGHT) {
         // every slot is taken by a solve for another spot: written once per key, with what holds it and for how long
         if (!this.waitLogged.has(key)) {
@@ -637,7 +649,7 @@ class StudyPoller {
     // THE TABLE MOVED BETWEEN THE PROBE AND THE SOLVE'S OWN READ (routes/fastSolver expectKey): nothing was solved for
     // this key, and nothing failed — the next tick probes the table as it is now
     if (full.solution == null && /^The table moved between the probe and the solve/.test(full.deferred ?? "")) return;
-    if (key !== this.lastProbeKey) {
+    if (!sameDecision(key, this.lastProbeKey)) {
       // Hero acted while this solve was still running. Logged WITH the latency:
       // "the chain is too slow for Zone" is only a measurable claim if the
       // abandoned solves are counted, and they never were.
