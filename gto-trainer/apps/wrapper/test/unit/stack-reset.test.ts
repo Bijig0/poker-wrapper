@@ -20,8 +20,8 @@ import {
 } from "../../src/session";
 import { maybeSitBackIn, sitBackSeams } from "../../src/sitback";
 import {
-  STACK_RESET_MAX_ABORTS, STACK_RESET_MISS_S, STACK_RESET_RETRY_HANDS, STACK_RESET_TICKS, heroStackBb, ignitionSitoutNextBb, maybeStackReset,
-  peerLeaving, sitoutBbReadJs, stackResetSeams,
+  STACK_RESET_ABORT_NOTE_S, STACK_RESET_DONE_NOTE_S, STACK_RESET_MAX_ABORTS, STACK_RESET_MISS_S, STACK_RESET_RETRY_HANDS, STACK_RESET_TICKS,
+  heroStackBb, ignitionSitoutNextBb, maybeStackReset, peerLeaving, sitoutBbReadJs, stackResetBanner, stackResetSeams,
 } from "../../src/stackReset";
 import * as cdp from "../../src/cdp";
 import { seams } from "../../src/state";
@@ -596,6 +596,165 @@ test("/state carries stackReset while the session has the reset on (and not othe
     check("  ... the reply schema (src/contract.ts StateReply) takes it", parsed.success, J(parsed.error?.issues?.slice(0, 3)));
     S.stackReset.bb = 0;
     eq("the reset off for the session: no stackReset key (a /state as before)", "stackReset" in (await state(true)), false);
+  } finally {
+    Object.assign(cdp.io, io0);
+    seams.registry = reg0;
+    r.undo();
+  }
+  expect(fails).toEqual([]);
+});
+
+// ---- THE PANEL'S BANNER (2026-10-09, Brady: "Max deep stack (150 bb) reached — reseating now", and the step it is in
+// until a fresh table is seated) — stackResetBanner, carried on /state as stackReset.banner
+
+test("the banner, step by step through a whole reset: armed, sat out, leaving, waiting (counting down), reseating, done", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const r = rig(null);
+  const seen: Record<string, any> = {};
+  const leader0 = stackResetSeams.tellLeader, leave0 = stackResetSeams.leave;
+  stackResetSeams.tellLeader = async (b: any) => { if (b.phase === "pending") seen.satOut = stackResetBanner(); return leader0(b); };
+  stackResetSeams.leave = async () => { seen.leaving = stackResetBanner(); return leave0(); };
+  try {
+    S.stackReset.bb = 150;                     // the session's threshold, never a constant in the text
+    r.stack(149);
+    await r.tick();
+    eq("the reset on, nothing reached: no banner", stackResetBanner(), null);
+    r.stack(180);
+    await r.tick();
+    const armed = stackResetBanner();
+    eq("armed: the threshold and the stack, sitting out at the next big blind",
+       [armed?.phase, armed?.level, armed?.text],
+       ["armed", "reset", "Max deep stack (150 bb) reached at 180 bb — reseating: sitting out at the next big blind"]);
+    eq("  ... the press under it, and the grid's few words", [armed?.detail, armed?.short],
+       [`"Sit out next big blind" pressed (1/${STACK_RESET_TICKS}) — waiting for the big blind to pass`, "max deep stack — sitting out at the next BB"]);
+    S.liveStatus.hero = "sitting-out";
+    await r.tick(5);
+    eq("sat out (the leader being told): sat out, leaving the table", [seen.satOut?.phase, seen.satOut?.text],
+       ["sat-out", "Max deep stack reached — sat out, leaving the table"]);
+    eq("leaving (the leave pressed): the same words", [seen.leaving?.phase, seen.leaving?.text, seen.leaving?.short],
+       ["leaving", "Max deep stack reached — sat out, leaving the table", "max deep stack — leaving the table"]);
+    eq("  ... both say not to press I AM BACK", [seen.satOut?.detail, seen.leaving?.detail].every((d) => /do not press I AM BACK/.test(d ?? "")), true);
+    const w0 = stackResetBanner();
+    eq("left: a fresh seat in the session's wait", [S.stackReset.state, w0?.phase, w0?.text, w0?.short],
+       ["waiting", "waiting", "Max deep stack reached — left the table, a fresh seat in 60 s", "max deep stack — new seat in 60 s"]);
+    setFakeTime(T0 + 5 + 20.4);
+    eq("  ... counting down from notBefore (39.6 s left reads 40)", stackResetBanner()?.text, "Max deep stack reached — left the table, a fresh seat in 40 s");
+    await r.tick(5 + 61);
+    const rs = stackResetBanner();
+    eq("the wait over: waiting for the new table to seat", [rs?.phase, rs?.text, rs?.short],
+       ["reseating", "Max deep stack reached — waiting for the new table to seat", "max deep stack — reseating"]);
+    S.tapBound = "30376.3001";
+    S.liveStatus.hero = "waiting-for-bb";
+    await r.tick(5 + 105);
+    const done = stackResetBanner();
+    eq("seated, bound: done — reseated, with the time since the leave", [S.stackReset.state, done?.phase, done?.level, done?.text, done?.detail],
+       ["idle", "done", "ok", "Reseated at a fresh table (105 s)", null]);
+    setFakeTime(T0 + 5 + 105 + STACK_RESET_DONE_NOTE_S - 1);
+    eq(`  ... still said ${STACK_RESET_DONE_NOTE_S - 1} s later`, stackResetBanner()?.phase, "done");
+    S.handNo += 1;
+    setFakeTime(T0 + 5 + 105 + STACK_RESET_DONE_NOTE_S);
+    eq(`  ... gone after ${STACK_RESET_DONE_NOTE_S} s`, stackResetBanner(), null);
+    r.stack(200);
+    S.liveStatus.hero = "in-hand";
+    await r.tick(500);
+    eq("the next reset arms with a clean slate (no old outcome)", [stackResetBanner()?.phase, S.stackReset.outcome], ["armed", null]);
+  } finally {
+    r.undo();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("the banner: a read that pressed nothing says why; an abort says why and I AM BACK until the next hand; the off says so", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  let r = rig(null, { tickOk: false });
+  try {
+    r.stack(260);
+    await r.tick();
+    eq("armed, no box pressed yet: why, and when it is tried again", stackResetBanner()?.detail,
+       `"Sit out next big blind" not pressed yet (no box) — trying again every ${STACK_RESET_MISS_S} s`);
+  } finally {
+    r.undo();
+  }
+  r = rig(null, { leaderOk: false });
+  try {
+    for (let k = 0; k < STACK_RESET_MAX_ABORTS; k++) {
+      const t0 = 1000 * k;
+      S.liveStatus.hero = "in-hand";
+      r.stack(300);
+      await r.tick(t0);
+      S.liveStatus.hero = "sitting-out";
+      await r.tick(t0 + 1);
+      const b = stackResetBanner();
+      if (k + 1 < STACK_RESET_MAX_ABORTS) {
+        eq(`abort ${k + 1}: given up, I AM BACK pressed`, [b?.phase, b?.level, b?.text], ["aborted", "bad", "Deep stack reset given up — pressed I AM BACK"]);
+        check("  ... the reason and the step it was in", /leader did not answer/.test(b?.detail ?? "") && /while sat-out/.test(b?.detail ?? ""), J(b));
+        S.liveStatus.hero = "in-hand";
+        setFakeTime(T0 + t0 + 1 + 600);
+        eq("  ... still said in the same hand, however long it lasts", stackResetBanner()?.phase, "aborted");
+        S.handNo += 1;
+        setFakeTime(T0 + t0 + 1 + 1);
+        eq(`  ... and in the next hand inside ${STACK_RESET_ABORT_NOTE_S} s`, stackResetBanner()?.phase, "aborted");
+        setFakeTime(T0 + t0 + 1 + STACK_RESET_ABORT_NOTE_S);
+        eq("  ... gone in the next hand after that", stackResetBanner(), null);
+        S.handNo += STACK_RESET_RETRY_HANDS;
+      } else {
+        eq(`abort ${k + 1}: off for the session`, [b?.phase, b?.level, b?.text, b?.short],
+           ["off", "bad", `Deep stack reset OFF for the rest of this session (${STACK_RESET_MAX_ABORTS} aborts) — pressed I AM BACK`,
+            "deep-stack reset off for the session"]);
+      }
+    }
+  } finally {
+    r.undo();
+  }
+  r = rig(null, { leaveOk: false });
+  try {
+    stackResetSeams.sitBack = async () => ({ ok: false, why: "no I AM BACK button" });
+    r.stack(300);
+    await r.tick();
+    S.liveStatus.hero = "sitting-out";
+    await r.tick(2);
+    eq("I AM BACK not pressed: the banner says to press it", stackResetBanner()?.text, "Deep stack reset given up — could NOT press I AM BACK: press it yourself");
+    S.stackReset.bb = 0;
+    eq("the reset off for the session: no banner at all", stackResetBanner(), null);
+  } finally {
+    r.undo();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("/state stackReset.banner is the banner; the reply schema takes every phase", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const r = rig(null);
+  const io0 = { ...cdp.io };
+  const reg0 = seams.registry;
+  try {
+    cdp.io.available = async () => false;
+    seams.registry = () => [];
+    const parse = (st: any) => StateReply.safeParse({ ...st, connected: false, hand: null, studyAnswers: false, site: "ignition", sessionId: r.sid,
+                                                      practice: false, fakeTable: false, pickReady: { ok: false, reason: null } });
+    let st = await state(true);
+    eq("idle, nothing to say: banner null", st.stackReset?.banner, null);
+    check("  ... the schema takes it", parse(st).success, J(parse(st).error?.issues?.slice(0, 3)));
+    r.stack(255);
+    await r.tick();
+    for (const ph of ["armed", "sat-out", "leaving", "waiting", "reseating"] as const) {
+      S.stackReset.state = ph;
+      if (ph === "waiting" || ph === "reseating") S.stackReset.notBefore = time() + 30;
+      st = await state(true);
+      eq(`${ph}: /state carries the banner`, [st.stackReset?.banner?.phase, J(st.stackReset?.banner) === J(stackResetBanner())], [ph, true]);
+      check(`  ... the schema takes ${ph}`, parse(st).success, J(parse(st).error?.issues?.slice(0, 3)));
+    }
+    S.stackReset.state = "idle";
+    for (const kind of ["done", "aborted", "off"] as const) {
+      S.stackReset.outcome = { kind, at: time(), hand: S.handNo, why: kind === "done" ? null : "x", phase: "sat-out",
+                               waitedS: kind === "done" ? 99 : null, sitBack: null };
+      st = await state(true);
+      eq(`${kind}: /state carries it`, st.stackReset?.banner?.phase, kind);
+      check(`  ... the schema takes ${kind}`, parse(st).success, J(parse(st).error?.issues?.slice(0, 3)));
+    }
   } finally {
     Object.assign(cdp.io, io0);
     seams.registry = reg0;

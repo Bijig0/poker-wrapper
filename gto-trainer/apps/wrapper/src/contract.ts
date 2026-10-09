@@ -101,6 +101,12 @@ export const StackResetBrief = obj({
   since: z.number().nullable(), forS: z.number().nullable(), armedHand: z.number().nullable(), stackBb: z.number().nullable(),
   ticks: z.number(), maxTicks: z.number(), misses: z.number(), aborts: z.number(), maxAborts: z.number(), off: z.boolean(),
   lastTick: obj({ at: z.number().nullable(), ok: z.boolean(), why: z.string().nullable(), method: z.string().nullable() }).nullable(),
+  /** the panel's banner (stackReset.ts stackResetBanner): the step in plain words while the reset is under way, then
+   *  how it ended for a while; null when there is nothing to say */
+  banner: obj({
+    phase: z.enum(["armed", "sat-out", "leaving", "waiting", "reseating", "done", "aborted", "off"]),
+    level: z.enum(["reset", "ok", "bad"]), text: z.string(), detail: z.string().nullable(), short: z.string(),
+  }).nullable().optional(),
 });
 
 /** GET /state (light or full): the fields the poller and the panel act on. */
