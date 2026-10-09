@@ -89,10 +89,11 @@ describe("poolLockTarget: which limper, if any", () => {
     expect(t.ok).toBe(false);
   });
 
-  it("the SB alone completing short: the SB, at the complete's range; a short limper plus a short SB: the limper, the SB noted", () => {
+  it("the SB alone completing short: NOT locked (2026-10-09: GTO Wizard completes the SB itself — a strategy, not residue); a short limper plus a short SB: the limper, the SB noted", () => {
     const sb = hand("BB", [["UTG", "fold"], ["HJ", "fold"], ["CO", "fold"], ["BTN", "fold"], ["SB", "call", 0.5]], { SB: 40 });
-    expect(F.poolLockTarget({ hand: sb, heroPos: "BB", chartId: null, dealt: dealt(sb), planOf: V2 }))
-      .toEqual({ ok: true, target: { pos: "SB", key: "sbcomplete_fold_short_le60", stack: 40, complete: true, alsoSb: false } });
+    const t = F.poolLockTarget({ hand: sb, heroPos: "BB", chartId: null, dealt: dealt(sb), planOf: V2 });
+    expect(t.ok).toBe(false);
+    expect((t as { ok: false; why: string }).why).toMatch(/only the SB completed/);
     const both = hand("BB", [["UTG", "fold"], ["HJ", "call", 1], ["CO", "fold"], ["BTN", "fold"], ["SB", "call", 0.5]], { HJ: 45, SB: 50 });
     expect(F.poolLockTarget({ hand: both, heroPos: "BB", chartId: null, dealt: dealt(both), planOf: V2 }))
       .toEqual({ ok: true, target: { pos: "HJ", key: "limp_first_short_le60", stack: 45, complete: false, alsoSb: true } });
