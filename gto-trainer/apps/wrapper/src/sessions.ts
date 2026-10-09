@@ -25,6 +25,23 @@ const getd = (o: any, k: string, d: unknown) => (o && typeof o === "object" && k
 /** 127.0.0.1, NOT localhost: on Windows localhost tries ::1 first and the API listens on IPv4 only. */
 export const API = () => process.env.STUDY_API || apiUrl();
 
+/**
+ * THE SETUP PAGE IS OPEN (2026-10-09, catalogue-incremental). The study API holds its heavy cache rebuilds (the strategy
+ * catalogue, the registry) while a session is live — and now also while the setup page is open, the minutes before a
+ * session is declared (the API's services/setupLive.ts). The page marks its own polls (`/session?from=setup`,
+ * `/session/gtow-accounts?from=setup`); for SETUP_OPEN_MS after the last one, every call this wrapper makes to the API
+ * for it — the catalogue, the registry, the accounts payload — carries `X-Poker-Setup: 1`.
+ */
+export const SETUP_OPEN_MS = 120_000;
+export const SETUP_HEADER = "X-Poker-Setup";
+let setupSeenAt = 0;
+export function noteSetupPage(): void { setupSeenAt = Date.now(); }
+export function setupPageOpen(): boolean { return setupSeenAt > 0 && Date.now() - setupSeenAt < SETUP_OPEN_MS; }
+/** The marker header while the setup page is open, else none. */
+export function setupHeaders(): Record<string, string> { return setupPageOpen() ? { [SETUP_HEADER]: "1" } : {}; }
+/** Tests: forget the setup page. */
+export function __resetSetupPage(): void { setupSeenAt = 0; }
+
 export const STRATEGY_PREFIX = "strategy:";
 const PRACTICE = ["ign-practice-ring", "ign-practice-zone"];
 export const FORMAT_FALLBACK: Record<string, { formats: string[]; default: string }> = {
@@ -69,7 +86,7 @@ async function fetchJson(url: string, timeoutS: number): Promise<any> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutS * 1000);
   try {
-    const r = await fetch(url, { signal: ctl.signal });
+    const r = await fetch(url, { signal: ctl.signal, headers: setupHeaders() });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
   } finally {

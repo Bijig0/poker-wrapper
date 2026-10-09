@@ -25,11 +25,11 @@ export async function fetchJson(url: string, opts: { body?: unknown; timeoutS?: 
 }
 
 /** The raw body of a GET, or null on any failure (urllib's `get` in _health_check). */
-export async function fetchBytes(url: string, timeoutS: number): Promise<Uint8Array | null> {
+export async function fetchBytes(url: string, timeoutS: number, headers?: Record<string, string>): Promise<Uint8Array | null> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutS * 1000);
   try {
-    const r = await fetch(url, { signal: ctl.signal });
+    const r = await fetch(url, headers && Object.keys(headers).length ? { signal: ctl.signal, headers } : { signal: ctl.signal });
     if (!r.ok) return null;
     return new Uint8Array(await r.arrayBuffer());
   } catch {

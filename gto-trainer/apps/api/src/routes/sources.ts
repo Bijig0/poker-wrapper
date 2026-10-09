@@ -24,11 +24,11 @@ import { POOL_DIR, factoryFile } from "../services/repoPaths";
 import { studyPoller } from "../services/studyPoller";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import {
-  HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, type Enriched,
+  HANDS_DB, allRows, enrichSync, computeNets, sessionsOf, handsViewReady, type Enriched,
 } from "./dashboard";
 import { port } from "../services/ports";
 import { step } from "../services/answerTrace";
-import { sessionLive } from "../services/sessionLive";
+import { liveForCaches, noteIfSetup } from "../services/setupLive";
 
 /**
  * Sources — the study dashboard's mission control.
@@ -279,6 +279,7 @@ const SOURCE_KEYS: Record<string, string[]> = {
  * kept warm while someone reads it (warmSourcesCaches).
  */
 async function registryBody() {
+  await answerLog.viewReady();   // the 30-day tallies below read the answer log's view (memory), not the table
   const log = answerLog.bySource(30);
   const tally = (src: string) => log.sources[src] ?? { n: 0, p50: null, lastTs: null, byDay: new Array(30).fill(0) };
 
@@ -766,7 +767,7 @@ async function registryBody() {
 // copy it has is served as is (a cold one is still built once); the rebuilds resume when the session ends.
 const REGISTRY_TTL_MS = 5 * 60_000;
 const notWhileLive = { holdWhile: () => liveForCaches() };
-app.get("/registry", async (c) => c.json(await cachedBehindLive("sources/registry", REGISTRY_TTL_MS, registryBody, notWhileLive)));
+app.get("/registry", async (c) => { noteIfSetup(c); return c.json(await cachedBehindLive("sources/registry", REGISTRY_TTL_MS, registryBody, notWhileLive)); });
 
 // ------------------------------------------------------------- strategies
 // The wrapper's panel and setup page re-read this every few seconds per open table; recomputing it scans every hand and
@@ -782,6 +783,8 @@ const STRATEGIES_TTL_MS = 5 * 60_000;
 // "building the strategy catalogue…", not "unreachable"). `?wait=1` waits for the first build instead.
 export const STRATEGIES_BUILDING_ERROR = "the study API is up and building the strategy catalogue (first build after a restart)";
 app.get("/strategies", async (c) => {
+  // the wrapper marks the setup page's reads (services/setupLive.ts): while it is open the catalogue is held like in a session
+  noteIfSetup(c);
   const hit = peekCached<unknown>("sources/strategies");
   if (hit || c.req.query("wait") === "1") return c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody, notWhileLive));
   void warmBehindLive("sources/strategies", strategiesBody);
@@ -799,10 +802,10 @@ export function warmSourcesCaches(): void {
   keepWarm("sources/registry", REGISTRY_TTL_MS, registryBody, { leadMs: 30_000, demandMs: 10 * 60_000, skipWhile: () => liveForCaches() });
 }
 
-/** Is a poker session live — the API's own answer (services/sessionLive.ts, what GET /api/load reports), never a throw. */
-function liveForCaches(): boolean {
-  try { return sessionLive(); } catch { return false; }
-}
+// liveForCaches (services/setupLive.ts): a poker session is live, OR the wrapper's setup page is open — a session is about
+// to be declared (2026-10-09: the catalogue rebuilt for 8.9 s on the setup page's poll 85 s before a session started)
+// the answer log's view reseeds (a full re-read, off the loop) only when neither is the case
+answerLog.viewHold = liveForCaches;
 
 // ── realized results per strategy, recomputed for the last 30 days only (2026-10-09) ─────────────────────────────────
 // Every catalogue build enriched EVERY archived hand and read a year of answers ("answer log 365 d", "all hands
@@ -860,9 +863,13 @@ export function __resetRealizedMemo(): void { REALIZED_MEMO = null; }
 /** The whole-hand strategy catalogue: what we can play, whether each is
  *  coherent (safeguards in services/strategies.ts), its winrate row from the
  *  matrix, and hero's realized bb/100 while it was the active mode. */
-export function strategiesBody() {
+export async function strategiesBody() {
   // each part is step()-timed (services/answerTrace): a [stall] across a build names the slow part
   // (cold cost measured 2026-10-09: see the commit that added these)
+  // THE ANSWER LOG FROM MEMORY (2026-10-09, catalogue-incremental): the realized results and the register's counts read
+  // the answer log's incremental view (services/answerView.ts) — seeded once off the loop, wait for it here rather than
+  // read the table on the loop ("answer log 32 d 6.4 s"). A view that is off or failed falls back to the SQL path.
+  await Promise.all([answerLog.viewReady(), handsViewReady()]);   // (and the finished hands: services/handsView.ts)
   const views = step("evaluate strategies", () => evaluateStrategies());
   const matrix = step("strategy matrix", () => readJson(factoryFile("strategy_matrix.json")));
   const rowById: Record<string, any> = {};

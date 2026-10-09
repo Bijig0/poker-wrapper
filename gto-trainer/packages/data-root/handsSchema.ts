@@ -43,4 +43,6 @@ export function ensureHandsSchema(db: Database): void {
   if (!cols.has("updated_at")) db.run("ALTER TABLE hands ADD COLUMN updated_at INTEGER");
   db.run("CREATE INDEX IF NOT EXISTS idx_hands_client ON hands(client_hand_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_hands_status ON hands(status, rowid)");
+  // the API's in-memory hands view syncs by "what was written since" (apps/api services/handsView.ts, 2026-10-09)
+  db.run("CREATE INDEX IF NOT EXISTS idx_hands_updated ON hands(updated_at)");
 }
