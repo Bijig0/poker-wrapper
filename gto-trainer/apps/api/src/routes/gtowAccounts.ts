@@ -23,6 +23,8 @@ import { gtowRequests, type GtowWindow } from "../services/gtowRequestLog";
 import { dayBudget, gtowSessions, hourBudget, routeMode, type GtowSessionStatus } from "../services/gtowSessions";
 import { gtowSolveCache } from "../services/gtowSolveCache";
 import { REPO } from "../services/repoPaths";
+import { cachedBehindLive, setCached } from "../services/livePriority";
+import { step } from "../services/answerTrace";
 import {
   accountInfo, cdpHostTakenBy, cdpPort, launchPlan, loadAccounts, noteAccountFact, probeTreeBody, removeAccount, REQUEST_CAP,
   slugOf, upsertAccount, WALL_MS,
@@ -62,11 +64,11 @@ const until = (ms: number) => { const m = Math.round((ms - Date.now()) / 60_000)
 
 export async function accountsPayload() {
   const now = Date.now();
-  const reg = loadAccounts();
-  const [statuses, windows] = await Promise.all([gtowSessions.statusProbed(), Promise.resolve(gtowRequests.windows(now))]);
+  const reg = step("accounts file", () => loadAccounts());
+  const [statuses, windows] = await Promise.all([gtowSessions.statusProbed(), Promise.resolve(step("ledger windows", () => gtowRequests.windows(now)))]);
   const accounts: AccountView[] = await Promise.all(reg.accounts.map(async (a) => {
     const live = (statuses.find((x) => x.id === a.id) as AccountView["live"]) ?? null;
-    const wall = gtowRequests.wallState(a.id, now, WALL_MS);
+    const wall = step("ledger wall", () => gtowRequests.wallState(a.id, now, WALL_MS));
     const info = await accountInfo(a.cdpHost);
     const email = live?.account ?? info?.email ?? a.accountEmail;
     const publicId = live?.accountId ?? info?.publicId ?? a.accountId;
@@ -82,7 +84,7 @@ export async function accountsPayload() {
   // the persistent solve cache in one line (services/gtowSolveCache; the whole of it: GET /api/gtow/cache) — the requests
   // it saved are requests these meters never had to count
   let cache: ReturnType<typeof gtowSolveCache.summary> | null = null;
-  try { cache = gtowSolveCache.summary(); } catch { /* the accounts page never fails on the cache */ }
+  try { cache = step("solve cache summary", () => gtowSolveCache.summary()); } catch { /* the accounts page never fails on the cache */ }
   // LEAST-LOADED ROUTING (2026-10-08, services/gtowSessions GTOW_ROUTE): the switch, the soft budgets, and each account's
   // in-memory counter as routing reads it (every origin; also on accounts[].live.load) — the order a tree would take now
   const routing = {
@@ -93,7 +95,26 @@ export async function accountsPayload() {
   return { ok: true, now, cap: REQUEST_CAP, wallMs: WALL_MS, accounts, combined: { h1: sum("h1"), h24: sum("h24") }, allow: gtowSessions.allowList(), cache, routing };
 }
 
-app.get("/", async (c) => c.json(await accountsPayload()));
+/**
+ * GET / IS MEMORY ONLY (2026-10-09). The setup page polls this every 5 s per table (through the wrapper's
+ * /session/gtow-accounts), the dashboard's GTO Wizard tab every 5 s, and each call ran the ledger's 24 h GROUP BYs and
+ * three 3-day wall scans on the event loop — one call was open across a 27 s freeze and two across a 90 s one on
+ * 2026-10-09. Now the payload is built at most once per ACCOUNTS_TTL_MS for every poller together, OFF the request path
+ * (a stale copy is served at once and ONE rebuild runs behind the live answers, as "cache refresh gtow/accounts" in the
+ * [stall] lines); only the very first call after a boot waits for it. Every write route below replaces the cache with
+ * the payload it has just built, so a click is never answered with the state from before it.
+ */
+export const ACCOUNTS_TTL_MS = 5_000;
+export const ACCOUNTS_CACHE_KEY = "gtow/accounts";
+export const cachedAccountsPayload = () => cachedBehindLive(ACCOUNTS_CACHE_KEY, ACCOUNTS_TTL_MS, accountsPayload);
+/** Build the payload now (a write route) and make it the cached one. */
+async function freshPayload() {
+  const p = await accountsPayload();
+  setCached(ACCOUNTS_CACHE_KEY, p);
+  return p;
+}
+
+app.get("/", async (c) => c.json(await cachedAccountsPayload()));
 
 app.post("/", async (c) => {
   const body = await c.req.json().catch(() => null);
@@ -107,14 +128,14 @@ app.post("/", async (c) => {
   }
   const saved = upsertAccount(body);
   gtowSessions.reload();
-  return c.json({ ...(await accountsPayload()), saved });
+  return c.json({ ...(await freshPayload()), saved });
 });
 
 app.delete("/:id", async (c) => {
   const id = c.req.param("id");
   if (!removeAccount(id)) return c.json({ ok: false, error: `no account '${id}'` }, 404);
   gtowSessions.reload();
-  return c.json(await accountsPayload());
+  return c.json(await freshPayload());
 });
 
 /** Bring one account's client up and wait for a token — the accounts tab's Connect button. */
@@ -148,7 +169,7 @@ app.post("/:id/connect", async (c) => {
     await new Promise((r) => setTimeout(r, 2000));
     live = await gtowApi.forceRefresh(id);
   }
-  return c.json({ ...(await accountsPayload()), launch, connected: live, waitedMs: Date.now() - t0 });
+  return c.json({ ...(await freshPayload()), launch, connected: live, waitedMs: Date.now() - t0 });
 });
 
 app.post("/:id/clear-wall", async (c) => {
@@ -156,7 +177,7 @@ app.post("/:id/clear-wall", async (c) => {
   if (!gtowSessions.cfg(id)) return c.json({ ok: false, error: `no account '${id}'` }, 404);
   gtowSessions.reset(id);
   await gtowApi.forceRefresh(id);
-  return c.json({ ...(await accountsPayload()), cleared: id });
+  return c.json({ ...(await freshPayload()), cleared: id });
 });
 
 app.post("/:id/info", async (c) => {
@@ -164,7 +185,7 @@ app.post("/:id/info", async (c) => {
   const a = loadAccounts().accounts.find((x) => x.id === id);
   if (!a) return c.json({ ok: false, error: `no account '${id}'` }, 404);
   await accountInfo(a.cdpHost, { force: true });
-  return c.json(await accountsPayload());
+  return c.json(await freshPayload());
 });
 
 export interface ProbeResult {
@@ -246,7 +267,7 @@ app.post("/:id/probe", async (c) => {
   const id = c.req.param("id");
   const probe = await probeAccount(id);
   if (!probe) return c.json({ ok: false, error: `no account '${id}'` }, 404);
-  return c.json({ ...(await accountsPayload()), probe });
+  return c.json({ ...(await freshPayload()), probe });
 });
 
 export default app;

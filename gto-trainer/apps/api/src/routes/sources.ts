@@ -1,5 +1,5 @@
 import { solveRegister } from "../services/solveRegister";
-import { cachedBehindLive, yieldFirst } from "../services/livePriority";
+import { cachedBehindLive, keepWarm, peekCached, warmBehindLive, yieldFirst } from "../services/livePriority";
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -269,7 +269,14 @@ const SOURCE_KEYS: Record<string, string[]> = {
   log: [],
 };
 
-app.get("/registry", async (c) => {
+/**
+ * The registry body (2026-10-09: was the route handler). It builds the whole mission-control page — 30 days of the
+ * answer log, the hands count, a dozen file reads, three network probes — 0.1-3 s of the event loop a call, 12-79 s on a
+ * busy machine; the dashboard polls it every 15 s and the wrapper's preflight asks once per start. Served from
+ * REGISTRY_TTL_MS through cachedBehindLive (stale served at once, rebuilt behind the live answers), warmed at boot and
+ * kept warm while someone reads it (warmSourcesCaches).
+ */
+async function registryBody() {
   const log = answerLog.bySource(30);
   const tally = (src: string) => log.sources[src] ?? { n: 0, p50: null, lastTs: null, byDay: new Array(30).fill(0) };
 
@@ -683,7 +690,7 @@ app.get("/registry", async (c) => {
   for (const card of cards) Object.assign(card, PIECE_OF[card.id] ?? { piece: undefined, role: null });
   attributeCards(cards, { mes, exploit });
 
-  return c.json({
+  return {
     ok: true,
     pieces: PIECES,
     at: Date.now(),
@@ -750,8 +757,10 @@ app.get("/registry", async (c) => {
     tiers: log.tiers,
     cards,
     mes,
-  });
-});
+  };
+}
+const REGISTRY_TTL_MS = 20_000;
+app.get("/registry", async (c) => c.json(await cachedBehindLive("sources/registry", REGISTRY_TTL_MS, registryBody)));
 
 // ------------------------------------------------------------- strategies
 // The wrapper's panel and setup page re-read this every few seconds per open table; recomputing it scans every hand and
@@ -759,7 +768,29 @@ app.get("/registry", async (c) => {
 // 91 s — when the API ran at BelowNormal priority), all on the answering thread. Served from a 5-minute cache that
 // refreshes behind the live answers (services/livePriority); the realized bb/100 it carries can lag by that much.
 const STRATEGIES_TTL_MS = 5 * 60_000;
-app.get("/strategies", async (c) => c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody)));
+// NEVER BUILT ON A CALLER'S TIME (2026-10-09). The first call after a worker boot built the catalogue inside the request
+// (7 s and 24 s on 2026-10-09, and that build was itself one of the freezes) and the setup page's 5 s poll timed out
+// until it landed — "strategy catalogue unreachable" for ~20 s at every session start. Now: warmed at boot and kept warm
+// behind the live answers (warmSourcesCaches, refresh-ahead while someone reads it), a stale copy is always served at
+// once, and while the very first build is still running a caller gets `building: true` at once (the wrapper says
+// "building the strategy catalogue…", not "unreachable"). `?wait=1` waits for the first build instead.
+export const STRATEGIES_BUILDING_ERROR = "the study API is up and building the strategy catalogue (first build after a restart)";
+app.get("/strategies", async (c) => {
+  const hit = peekCached<unknown>("sources/strategies");
+  if (hit || c.req.query("wait") === "1") return c.json(await cachedBehindLive("sources/strategies", STRATEGIES_TTL_MS, strategiesBody));
+  void warmBehindLive("sources/strategies", strategiesBody);
+  return c.json({ ok: false, building: true, error: STRATEGIES_BUILDING_ERROR });
+});
+
+/** Boot: build the strategy catalogue and the registry behind the live answers, right after the port opens, and keep
+ *  them warm (refresh-ahead) while anyone reads them. index.ts calls this once. */
+export function warmSourcesCaches(): void {
+  setTimeout(() => {
+    void warmBehindLive("sources/strategies", strategiesBody).then(() => warmBehindLive("sources/registry", registryBody));
+  }, 2_000);
+  keepWarm("sources/strategies", STRATEGIES_TTL_MS, strategiesBody, { leadMs: 60_000, demandMs: 15 * 60_000 });
+  keepWarm("sources/registry", REGISTRY_TTL_MS, registryBody, { leadMs: 5_000, demandMs: 2 * 60_000 });
+}
 
 /** The whole-hand strategy catalogue: what we can play, whether each is
  *  coherent (safeguards in services/strategies.ts), its winrate row from the

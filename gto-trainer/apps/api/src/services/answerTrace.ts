@@ -238,14 +238,66 @@ export function startStallMonitor(): void {
     if (late < STALL_MIN_MS) return;
     stalls.push({ at: now - late, ms: late });
     if (stalls.length > STALL_KEEP) stalls.splice(0, stalls.length - STALL_KEEP);
+    let rec: StallRecord | null = null;
     if (late >= STALL_LOG_MS) {
-      const { line, rec } = describeStall(now - late, late, cpuMs);
+      const d = describeStall(now - late, late, cpuMs);
+      rec = d.rec;
       keep(rec);
-      console.log(line);
+      console.log(d.line);
     }
+    summary.add(late, rec);
   }, STALL_TICK_MS);
+  // the 5-min summary also prints for a window with no stall at all (its absence would read as "the API was down")
+  summaryTimer = setInterval(() => { const line = summary.flush(Date.now()); if (line) console.log(line); }, 10_000);
+  (summaryTimer as { unref?: () => void }).unref?.();
   (stallTimer as { unref?: () => void }).unref?.();
 }
+
+/**
+ * THE STALL RATE, ONE LINE PER 5 MIN (2026-10-09). The [stall] lines say what each freeze was; judging a fix needs the
+ * RATE — on 2026-10-09 07:00–07:35 the loop was blocked 60–80% of every 5-min window and that took a scan of api.log to
+ * see. Every wall-clock 5-min window (…:00, …:05) ends with:
+ *   [stall-summary] 00:00–00:05Z: 31 stalls ≥100 ms (9 ≥1 s), blocked 182.3 s of 300 s (61%), max 27.0 s, cpu 9% of the
+ *   blocked time · by longest open: timer hhCheck 95.2 s ×12, GET /api/gtow/accounts 41.0 s ×5, … · short (<300 ms) 2.1 s ×17
+ * "by longest open" charges each logged stall (≥ STALL_LOG_MS) to the longest activity open across it (its [stall] line's
+ * first name) — an attribution, not proof. Pure accumulator; the monitor feeds it.
+ */
+export const STALL_SUMMARY_MS = 5 * 60_000;
+export class StallSummary {
+  private winStart: number | null = null;
+  private n = 0; private nLong = 0; private ms = 0; private max = 0; private cpuMs = 0; private cpuWallMs = 0;
+  private by = new Map<string, { ms: number; n: number }>();
+  constructor(private windowMs = STALL_SUMMARY_MS, private clock: () => number = () => Date.now()) {}
+  /** One stall of `ms` (a logged one carries its record). */
+  add(ms: number, rec: StallRecord | null): void {
+    if (this.winStart == null) this.winStart = Math.floor(this.clock() / this.windowMs) * this.windowMs;
+    this.n++; this.ms += ms; this.max = Math.max(this.max, ms);
+    if (ms >= 1000) this.nLong++;
+    if (rec?.cpuMs != null) { this.cpuMs += rec.cpuMs; this.cpuWallMs += ms; }
+    const label = rec ? (rec.open[0]?.replace(/ \(.*$/, "") ?? "no request open (a timer or background job)") : `short (<${STALL_LOG_MS} ms)`;
+    const b = this.by.get(label) ?? { ms: 0, n: 0 };
+    b.ms += ms; b.n++;
+    this.by.set(label, b);
+  }
+  /** The line for the window that ended before `now`, once; null while the window is still open. */
+  flush(now: number): string | null {
+    const cur = Math.floor(now / this.windowMs) * this.windowMs;
+    if (this.winStart == null) { this.winStart = cur; return null; }
+    if (cur <= this.winStart) return null;
+    const from = this.winStart, to = from + this.windowMs;
+    const hhmm = (t: number) => new Date(t).toISOString().slice(11, 16);
+    const s = (x: number) => (x / 1000).toFixed(1);
+    const parts = [...this.by.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 6).map(([k, v]) => `${k} ${s(v.ms)} s ×${v.n}`);
+    const line = `[stall-summary] ${hhmm(from)}–${hhmm(to)}Z: ${this.n} stalls ≥${STALL_MIN_MS} ms (${this.nLong} ≥1 s), ` +
+      `blocked ${s(this.ms)} s of ${s(this.windowMs)} s (${Math.round((100 * this.ms) / this.windowMs)}%), max ${s(this.max)} s` +
+      (this.cpuWallMs ? `, cpu ${Math.round((100 * this.cpuMs) / this.cpuWallMs)}% of the logged blocked time` : "") +
+      (parts.length ? ` · by longest open: ${parts.join(", ")}` : "");
+    this.winStart = cur; this.n = 0; this.nLong = 0; this.ms = 0; this.max = 0; this.cpuMs = 0; this.cpuWallMs = 0; this.by.clear();
+    return line;
+  }
+}
+const summary = new StallSummary();
+let summaryTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Stalls that overlap [fromMs, toMs] (wall clock), oldest first. */
 export function stallsBetween(fromMs: number, toMs: number): { at: number; ms: number }[] {

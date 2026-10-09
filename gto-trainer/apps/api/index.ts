@@ -17,7 +17,7 @@ import dashboardRoutes from "./src/routes/dashboard";
 import { chartsReviewRoutes } from "./src/routes/chartsReview";
 import gtowAccountsRoutes from "./src/routes/gtowAccounts";
 import gtowCacheRoutes from "./src/routes/gtowCache";
-import sourcesRoutes from "./src/routes/sources";
+import sourcesRoutes, { warmSourcesCaches } from "./src/routes/sources";
 import missQueueRoutes from "./src/routes/missQueue";
 import { answerReconciler } from "./src/services/answerReconciler";
 import replayRoutes from "./src/routes/replay";
@@ -280,6 +280,11 @@ void adoption.then(() => onBackgroundOwnership(() => {
   // Check #13: once a day, when the table is quiet, replay the live decisions against their recordings (services/replayScheduler.ts).
   if (!dashboardOnly) replayScheduler.start();
 }));
+
+// The strategy catalogue and the Sources registry are built once right after the port opens, behind the live answers,
+// and kept warm while anyone reads them — never on a caller's time (routes/sources.ts warmSourcesCaches, 2026-10-09:
+// "strategy catalogue unreachable" for ~20 s at every session start was the first call building it inline).
+if (process.env.NODE_ENV !== "test") warmSourcesCaches();
 
 export default {
   port,

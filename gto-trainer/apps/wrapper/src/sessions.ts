@@ -78,11 +78,16 @@ async function fetchJson(url: string, timeoutS: number): Promise<any> {
 export async function realFetchStrategies(timeoutS = 6.0): Promise<any[] | null> {
   try {
     const j = await fetchJson(`${API()}/api/dashboard/sources/strategies`, timeoutS);
+    // the API answered but is still on its first build after a restart (routes/sources.ts, 2026-10-09): say so
+    catalogueBuilding = !j.ok && !!j.building;
     return j.ok ? j.strategies ?? null : null;
   } catch {
+    catalogueBuilding = false;
     return null;
   }
 }
+/** the last catalogue read found the API up and building it (not unreachable) */
+let catalogueBuilding = false;
 
 export async function realFetchRegistry(timeoutS = 6.0): Promise<any | null> {
   try {
@@ -201,7 +206,7 @@ export function strategyPreset(s: any): any {
   };
 }
 
-const presetsCache: { at: number; value: Record<string, any> | null; fromApi: boolean; error: string | null; lastGood?: any[]; lastGoodAt?: number } =
+const presetsCache: { at: number; value: Record<string, any> | null; fromApi: boolean; error: string | null; lastGood?: any[]; lastGoodAt?: number; building?: boolean } =
   { at: 0.0, value: null, fromApi: false, error: null };
 
 /** Current modes, strategies first. Cached 30 s; a failed refresh keeps the last good catalogue for 15 min. */
@@ -222,8 +227,12 @@ export async function presets(refresh = false): Promise<Record<string, any>> {
     presetsCache.error = null;
   } else {
     presetsCache.fromApi = false;
-    presetsCache.error = `strategy catalogue unreachable: ${API()}/api/dashboard/sources/strategies`;
+    presetsCache.building = catalogueBuilding;
+    presetsCache.error = catalogueBuilding
+      ? `building the strategy catalogue… the study API on ${API()} is up and building it (first build after a restart, usually under half a minute)`
+      : `strategy catalogue unreachable: ${API()}/api/dashboard/sources/strategies`;
   }
+  if (truthy(strategies)) presetsCache.building = false;
   for (const k of NO_ANSWER_MODES) out[k] = structuredClone(BASE_PRESETS[k]);
   Object.assign(presetsCache, { at: now, value: out });
   return out;
@@ -231,6 +240,8 @@ export async function presets(refresh = false): Promise<Record<string, any>> {
 
 export const presetsFromApi = () => !!presetsCache.fromApi;
 export const presetsError = () => presetsCache.error;
+/** the catalogue is missing because the API is still building it, not because it is unreachable */
+export const presetsBuilding = () => !presetsCache.fromApi && !!presetsCache.building;
 
 export const CHECK_LABELS: Record<string, string> = {
   api: `Study API on :${port("api")}`,

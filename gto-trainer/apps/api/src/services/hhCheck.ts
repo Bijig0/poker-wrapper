@@ -20,6 +20,7 @@ import { hhChecksDbPath, openStore } from "./storePaths";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
 import { asActivity, step } from "./answerTrace";
+import { sessionLive } from "./sessionLive";
 
 export type CheckStatus = "pending" | "match" | "mismatch" | "unavailable";
 export interface HhCheck {
@@ -102,6 +103,24 @@ export class HhCheckStore {
     this.db.query(`INSERT OR REPLACE INTO hh_checks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       c.clientHandId, c.dbId, c.playedAt, c.status, c.throughOk == null ? null : c.throughOk ? 1 : 0,
       JSON.stringify(c.diffs), JSON.stringify(c.through), c.tries, c.nextAt, c.checkedAt, c.error);
+    this.checked?.add(c.clientHandId);
+  }
+  /** Several new checks in ONE transaction (one commit, not one per row). */
+  saveMany(cs: HhCheck[]): void {
+    if (!cs.length) return;
+    this.db.transaction((rows: HhCheck[]) => { for (const c of rows) this.save(c); })(cs);
+  }
+  /**
+   * Every hand that has a check row, as a set held in memory (2026-10-09). The queue used to ask the table once per
+   * finished hand, every tick: "check rows ×3844 5.2 s" every 10 s in the [stall] lines of the live session of
+   * 2026-10-09. Read ONCE (one indexed scan of the primary key), then kept current by save(): this process is the only
+   * writer of hh_checks (the API that owns the checker).
+   */
+  private checked: Set<string> | null = null;
+  /** finished ids whose archived row could not be read (memory only — a restart tries them again) */
+  readonly unreadable = new Set<string>();
+  checkedIds(): Set<string> {
+    return (this.checked ??= new Set(this.db.query<{ c: string }, []>("SELECT client_hand_id AS c FROM hh_checks").all().map((r) => r.c)));
   }
   due(now: number, limit: number): HhCheck[] {
     return this.db.query<Row, [number, number]>("SELECT * FROM hh_checks WHERE status = 'pending' AND next_at <= ? ORDER BY next_at LIMIT ?")
@@ -142,8 +161,12 @@ export async function attempt(prev: HhCheck, deps: Pick<CheckerDeps, "fetchRecor
   return nextCheck({ ...prev, dbId: archived.dbId }, { kind: "compared", diffs, through }, deps.now());
 }
 
-/** Queue every finished hand after the cutoff that has no check yet, then work through what is due. */
-export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
+/** New hands queued per tick at most (each is one archived-hand read + enrich); the rest wait for the next tick. */
+export const MAX_ENQUEUE_PER_TICK = 25;
+
+/** Queue every finished hand after the cutoff that has no check yet (at most `maxEnqueue` a tick, saved in one
+ *  transaction), then work through what is due (at most `maxAttempts`). */
+export async function tick(deps: CheckerDeps, maxAttempts = 5, maxEnqueue = MAX_ENQUEUE_PER_TICK): Promise<void> {
   const { store } = deps;
   // the synchronous steps are timed into the tick's activity (services/answerTrace step()) for the [stall] lines
   const cutoff = Number(step("meta", () => store.meta("cutoffRowid")) ?? NaN);
@@ -156,11 +179,17 @@ export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
   // 10 s) and froze the API until its supervisor killed each new worker as hung. Ids first; only an unchecked hand is
   // read in full.
   if (deps.doneIdsAfter) {
-    for (const id of step("finished ids", () => deps.doneIdsAfter!(cutoff))) {
-      if (step("check rows", () => store.get(id))) continue;
+    // BOUNDED (2026-10-09): the checked set is in memory (one read per process), at most `maxEnqueue` new hands are
+    // read a tick, and they are written in one transaction — no per-hand query or commit in a loop
+    const checked = step("checked ids", () => store.checkedIds());
+    const fresh = step("finished ids", () => deps.doneIdsAfter!(cutoff)).filter((id) => !checked.has(id) && !store.unreadable.has(id));
+    const add: HhCheck[] = [];
+    for (const id of fresh.slice(0, maxEnqueue)) {
       const e = step("read archived hand", () => deps.findArchived(id));
-      if (e) step("save", () => store.save(freshCheck(e, deps.now())));
+      if (e) add.push(freshCheck(e, deps.now()));
+      else store.unreadable.add(id);       // finished but not readable as a hand: not asked again by this process
     }
+    step("save new", () => store.saveMany(add));
   } else {
     for (const e of deps.doneAfter(cutoff)) if (!store.get(e.clientHandId!)) store.save(freshCheck(e, deps.now()));
   }
@@ -173,9 +202,15 @@ export async function tick(deps: CheckerDeps, maxAttempts = 5): Promise<void> {
 let store: HhCheckStore | null = null;
 export const hhCheckStore = (): HhCheckStore => (store ??= new HhCheckStore(hhChecksDbPath()));
 
+/** WHILE A SESSION IS LIVE the check runs at most once a minute, two hands at a time (2026-10-09): it is post-hand
+ *  bookkeeping (the hand page's Actual tab), and every tick is synchronous DB work on the answering thread. */
+export const LIVE_TICK_EVERY_MS = 60_000;
+export const LIVE_MAX_ATTEMPTS = 2;
+
 class HhChecker {
   private timer: ReturnType<typeof setInterval> | null = null;
   private busy = false;
+  private lastRun = 0;
   start(everyMs = 10_000): void {
     if (this.timer) return;
     const deps: CheckerDeps = {
@@ -184,8 +219,11 @@ class HhChecker {
     };
     this.timer = setInterval(() => {
       if (this.busy) return;
+      const live = sessionLive();
+      if (live && Date.now() - this.lastRun < LIVE_TICK_EVERY_MS) return;
       this.busy = true;
-      asActivity("timer hhCheck", () => tick(deps)).catch((e) => console.error(`[hh-check] ${e?.message ?? e}`)).finally(() => { this.busy = false; });
+      this.lastRun = Date.now();
+      asActivity("timer hhCheck", () => tick(deps, live ? LIVE_MAX_ATTEMPTS : 5)).catch((e) => console.error(`[hh-check] ${e?.message ?? e}`)).finally(() => { this.busy = false; });
     }, everyMs);
     this.timer.unref?.();
   }

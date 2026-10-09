@@ -3785,7 +3785,7 @@ async function loadStrategies(id) {
   const el = $("src-strategies");
   if (!STRAT) {
     el.innerHTML = `<div class="card sub">loading…</div>`;
-    try { STRAT = await (await fetch("/api/dashboard/sources/strategies")).json(); }
+    try { STRAT = await (await fetch("/api/dashboard/sources/strategies?wait=1")).json(); }
     catch (e) { el.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   }
   if (id) renderStrategyDetail(id); else renderStrategyCards();
