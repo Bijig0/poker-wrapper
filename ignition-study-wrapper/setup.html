@@ -833,6 +833,8 @@ setInterval(async () => {
 // has no supervisor, so a wrapper left open across a merge says so here and offers the relaunch. The row sits above
 // the preflight list and is not a blocker: an uncommitted edit on disk is somebody's work in progress, not a reason
 // to refuse a session. /build/all answers for the whole install (src/build.ts, the API's services/liveStatus.ts).
+// Since 2026-10-10 a supervisor behind its config (config/local.env, its script) restarts itself too, when no session
+// is live (services/supervisorRestart.ts): its line says so, and the row says it needs nothing pressed.
 let codeTimer = null;
 async function checkCode() {
   const host = $("code-check");
@@ -856,7 +858,11 @@ async function checkCode() {
   // this wrapper's own line is marked `self`: on a test rig's port the line named "wrapper" is the install's, not this one
   const me = (j.services || []).find((x) => x.self);
   const canRelaunch = me && me.build && me.build.stale && !j.sessionActive;
-  host.innerHTML = `<div class="check bad"><span class="dot"></span><span class="l"><b>Not running the current code</b>${behind.map((x) => `<span style="display:block">${esc(x.name)}: ${esc(x.text)}</span>`).join("")}</span>
+  // only supervisors behind, each restarting itself (config/local.env, its script — services/supervisorRestart.ts):
+  // nothing to press, it clears by itself; the lines say what each is waiting for
+  const selfOnly = behind.every((x) => x.selfRestart);
+  const selfNote = selfOnly ? `<span style="display:block">restarts by itself — within about a minute when no session is live, else when the session ends</span>` : "";
+  host.innerHTML = `<div class="check bad"><span class="dot"></span><span class="l"><b>Not running the current code</b>${selfNote}${behind.map((x) => `<span style="display:block">${esc(x.name)}: ${esc(x.text)}</span>`).join("")}</span>
     <span>${canRelaunch ? `<button class="mini" id="code-relaunch">Relaunch wrapper</button>` : `<span class="req">check</span>`}</span></div>`;
   if (canRelaunch) $("code-relaunch").onclick = async () => {
     const b = $("code-relaunch"); b.disabled = true; b.textContent = "relaunching…";

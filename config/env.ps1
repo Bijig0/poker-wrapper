@@ -89,6 +89,9 @@ $env:Path = ((@($extra | Where-Object { $have -notcontains $_ }) + $have) | Wher
 #    to any of them needs the SUPERVISOR restarted, not its worker - and nothing said so. Each supervisor calls this
 #    when it starts; the API compares the hashes with the files on disk (services/liveStatus.ts) and the dashboard
 #    banner, the wrapper's setup page and `bun setup\live.ts` say when one is behind.
+#    Since 2026-10-10 the three supervisors here write a protocol-2 stamp through scripts\supervisor_lib.ps1 instead
+#    (they re-read this file + local.env before every worker start and replace themselves on request); this function
+#    stays for a supervisor that has not moved over (the chart factory's checkout has its own copy).
 function Write-SupervisorStamp([string]$Name, [string[]]$Files) {
   try {
     $dir = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api\data\jobs'

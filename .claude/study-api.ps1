@@ -8,7 +8,17 @@
 # Git auto-detected (or pinned in config\local.env), and a PATH with all of them on it. The scheduled task's PATH has
 # no bun (the npm shim lives in Roaming\npm), and the worker's children (rclone, git) resolve their tools from the
 # worker's PATH, so it gets the same PATH an interactive shell has.
+# CONFIG IS RE-READ BEFORE EVERY WORKER START (2026-10-10, scripts\supervisor_lib.ps1): a config\local.env edit reaches
+# the next worker without restarting this supervisor; the worker restarts itself for one when no session is live. A
+# change to THIS script (or the lib, or the port) makes the worker ask this supervisor to REPLACE ITSELF: after the
+# worker exits it finds data\jobs\supervisor-api.replace.json, starts scripts\supervisor_replace.ps1 detached and exits
+# 0; the helper starts the task again (or this script directly). After a Stop-Process of this powershell its headless
+# conhost can linger and the task refuses a new instance (0x800710E0): stop that conhost (it has no children) and start
+# the task again (CLAUDE.md, "What is live").
+# the environment as the task handed it over, before config\env.ps1 adds anything: every re-read starts from it
+$SupBaseEnv = [Environment]::GetEnvironmentVariables('Process')
 . (Join-Path $PSScriptRoot '..\config\env.ps1')
+. (Join-Path $PSScriptRoot '..\scripts\supervisor_lib.ps1')
 $apiPort = if ($env:PORT) { [int]$env:PORT } else { 2000 }   # this install's API port: 2000 + PORT_OFFSET (config\env.ps1)
 # NORMAL PRIORITY (2026-09-26): a scheduled task starts at BelowNormal (Task Scheduler's default priority 7) and every
 # child inherits it, so on a busy machine this live-answer service lost the CPU to everything else (the study API's
@@ -24,8 +34,9 @@ $root = Join-Path $env:POKER_ROOT 'gto-trainer\apps\api'
 $ProgressPreference = 'SilentlyContinue'
 $sup = Join-Path $root 'data\jobs\supervisor.log'
 $api = Join-Path $root 'data\jobs\api.log'   # the worker's stdout+stderr: where a failed boot says why
-$bun = $env:BUN
-$env:Path = "$env:Path;" + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+# the machine's and the user's PATH after env.ps1's: again after every config re-read (Update-SupervisorConfig)
+$addSystemPath = { $env:Path = "$env:Path;" + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+& $addSystemPath
 # EXPLOIT_CHART arms the pool-exploit preflop overlay. services/fastSolve.ts reads it
 # ONCE per process, so a worker started without it serves the equilibrium chart for
 # every preflop answer, services/strategies.ts marks the 25NL Zone Exploit strategy
@@ -61,10 +72,14 @@ $env:STUDY_API_SUPERVISOR = $PID
 # The same fact under the name every supervisor uses (services/buildStamp.ts isSupervised): a supervised worker restarts
 # ITSELF, by a clean exit, when a commit changes code it loaded and no session is live (services/autoRestart.ts).
 $env:POKER_SUPERVISOR = $PID
-# what this supervisor read at start: its script, config\env.ps1, config\local.env (config\env.ps1 Write-SupervisorStamp)
-Write-SupervisorStamp 'api' @($PSCommandPath)
+# what this supervisor read at start: its script, the lib, config\env.ps1, config\local.env (data\jobs\supervisor-api.json,
+# protocol 2: re-read before every start, the port excepted; scripts\supervisor_lib.ps1)
+Start-SupervisorState -Name 'api' -BaseEnv $SupBaseEnv -CodeFiles @($PSCommandPath) -Reread -PortVars @('PORT') -LogFile $sup `
+  -Keep @{ STUDY_API_SUPERVISOR = "$PID"; POKER_SUPERVISOR = "$PID" } -AfterRead $addSystemPath
 Log "supervisor started (pid $PID) - exploit overlay $(if ($env:EXPLOIT_CHART) { 'ARMED' } else { 'OFF (exploit_ranges_nl25.json missing)' })"
 while ($true) {
+  # config\env.ps1 + config\local.env as they are NOW (only when one changed; never the port - scripts\supervisor_lib.ps1)
+  Update-SupervisorConfig
   # STRAGGLER SWEEP BEFORE EVERY START (2026-09-14). This used to run only in the hang path below,
   # so anything already on :2000 - a worker started by hand, or one this supervisor lost track of -
   # simply kept running alongside the new one. index.ts sets reusePort:true (box runners inherit the
@@ -84,7 +99,7 @@ while ($true) {
       Start-Sleep -Seconds 2
     }
   }
-  $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c', "`"cd /d $root && `"$bun`" index.ts >> data\jobs\api.log 2>&1`"" -WindowStyle Hidden -PassThru
+  $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c', "`"cd /d $root && `"$env:BUN`" index.ts >> data\jobs\api.log 2>&1`"" -WindowStyle Hidden -PassThru
   $startedAt = Get-Date
   Log "worker tree started (cmd pid $($p.Id))"
   # Give it 30 s to come up, but NOTICE an early exit instead of sleeping through it: the old blind
@@ -133,6 +148,12 @@ while ($true) {
     Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'study-api' -and $_.CommandLine -match '-File' })
   Log "worker gone (exit $code) after $lived s - :$apiPort held by$holder - rival supervisors: $($rivals.Count)"
 
+  # ASKED TO REPLACE ITSELF (2026-10-10): the worker left data\jobs\supervisor-api.replace.json (and exited 3) because
+  # this script, the lib or the port changed and no session is live. Hand over to the helper and leave at once - the
+  # helper waits for this process and its console to be gone before it starts the task.
+  $req = Get-SupervisorReplaceRequest -ExitCode $code
+  if ($req -and (Invoke-SupervisorReplace -Request $req)) { exit 0 }
+
   # BOOT-FAILURE BACKOFF (2026-09-14). A worker that never lives 15 s is not failing under load, it
   # is failing to START, and retrying every 10 s can never fix that: one syntax error in a service
   # file failed 46 boots in a row while the reason sat unread in api.log. Slow down, and put the
@@ -141,7 +162,7 @@ while ($true) {
   $wait = 10
   # exit 0 = the worker left on purpose (a restart asked for by the dashboard, or its own auto-restart on a commit):
   # nothing to cool down from, and every second here is a second without answers
-  if ("$code" -eq '0') { $wait = 2 }
+  if ("$code" -eq '0' -or "$code" -eq '3') { $wait = 2 }
   if ($fastFails -ge 3) {
     $wait = [Math]::Min(300, 20 * ($fastFails - 2))
     $tail = ((Get-Content $api -Tail 400 -ErrorAction SilentlyContinue) |

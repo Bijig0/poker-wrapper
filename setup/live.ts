@@ -14,6 +14,10 @@
  *   uncommitted        only uncommitted edits differ — never picked up by themselves: commit them to main
  *   boot-check-failed  the code on disk does not build — the old process keeps serving
  *   unsupervised       nothing would relaunch it (a hand-started process; the wrapper: relaunch it)
+ *   supervisor-old     a supervisor's script / config/local.env changed, and it started before it could restart
+ *                      itself (stamp protocol < 2) — restart it by hand once (CLAUDE.md, "What is live")
+ * A supervisor line marked `>> ` is behind and restarting itself (services/supervisorRestart.ts: a config change is
+ * re-read on the next worker start, a script change replaces the supervisor — both when no session is live).
  * It also lists what is NOT on main — branches with commits main lacks, and uncommitted files in this checkout —
  * because none of that is live either.
  *
@@ -70,14 +74,15 @@ function notOnMain(): string[] {
  */
 const onItsWay = (s: LiveStatus) => s.services.some((x) =>
   (!x.up && (x.name === "api" || x.name === "charts")) ||
-  (x.up && !x.current && !!x.build && ["settling", "restarting", "current"].includes(x.build.auto?.state)));
+  (x.up && !x.current && !!x.build && ["settling", "restarting", "current"].includes(x.build.auto?.state))) ||
+  s.supervisors.some((x) => x.selfRestart && !/now: held/.test(x.text));
 
 function print(s: LiveStatus): void {
   const w = Math.max(...s.services.map((x) => x.name.length), 10);
   console.log(`What is live — ${ROOT} @ ${(git("rev-parse", "--short", "HEAD") ?? s.head?.slice(0, 7) ?? "?")} (${git("rev-parse", "--abbrev-ref", "HEAD") ?? "?"})`);
   for (const x of s.services) console.log(`  ${x.current ? "ok " : x.up ? "OLD" : "-- "} ${x.name.padEnd(w)} :${String(x.port).padEnd(5)} ${x.text}`);
   if (!s.services.some((x) => x.name === "wrapper")) console.log(`  --  ${"wrapper".padEnd(w)}        not running (a launch always loads the code on disk)`);
-  for (const x of s.supervisors) console.log(`  ${x.current ? "ok " : x.pid === null ? "?? " : "OLD"} ${`supervisor: ${x.name}`.padEnd(w + 7)} ${x.text}`);
+  for (const x of s.supervisors) console.log(`  ${x.current ? "ok " : x.pid === null ? "?? " : x.selfRestart ? ">> " : "OLD"} ${`supervisor: ${x.name}`.padEnd(w + 7)} ${x.text}`);
   const off = notOnMain();
   if (off.length) {
     console.log("Not on main, so not live:");

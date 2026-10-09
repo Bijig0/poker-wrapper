@@ -24,6 +24,7 @@ import { CHARTS_DIR, DATA_DIR } from "../services/repoPaths";
 import { ChartStore, optsFromEnv } from "./chartStore";
 import { port } from "../services/ports";
 import { AutoRestart, liveSessionReason } from "../services/autoRestart";
+import { JOBS_DIR, SupervisorWatch } from "../services/supervisorRestart";
 import { LoadedCode } from "../services/loadedCode";
 
 const DIR = CHARTS_DIR;
@@ -66,7 +67,9 @@ if (import.meta.main) {
   // what this process loaded, taken before it serves anything; chart-server.ps1 exports POKER_SUPERVISOR
   const code = new LoadedCode({ entry: import.meta.path });
   const supervised = () => !!process.env.POKER_SUPERVISOR;
-  const auto = new AutoRestart({ code, name: "charts", supervised, busy: () => liveSessionReason() });
+  // its supervisor's script + config/env.ps1 + config/local.env too (services/supervisorRestart.ts)
+  const supervisor = new SupervisorWatch({ name: "charts", jobsDir: JOBS_DIR, ownPid: () => Number(process.env.POKER_SUPERVISOR) || null });
+  const auto = new AutoRestart({ code, name: "charts", supervised, busy: () => liveSessionReason(), supervisor });
   auto.start();
   const build: ChartServerBuild = {
     status: (force) => ({ ok: true, service: "charts", ...code.status(force), supervised: supervised(), auto: auto.status() }),

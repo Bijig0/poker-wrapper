@@ -26,12 +26,25 @@ Read README.md first: what each folder is, the three services and their ports, t
     committed — never picked up automatically), `boot-check-failed` (the code on disk does not bundle; the old process
     keeps serving — fix it), `unsupervised` (a hand-started process, or the wrapper: it has no supervisor, a launch
     always loads the disk, and the setup page offers Relaunch).
-  - **Supervisors are code too**: `.claude/study-api.ps1`, `.claude/chart-server.ps1`, `scripts/gtow_watchdog.ps1`
-    read themselves, `config/env.ps1` and `config/local.env` once. After editing any of those the SUPERVISOR must be
-    restarted (the worker restarting is not enough) — `live.ts` shows `OLD supervisor: <name>`. Recipe, when no
-    session is live: `Stop-Process` that supervisor's powershell (never `/T`: the watchdog's children are the GTO
-    Wizard windows), then `Start-ScheduledTask "PokerWrapper API - <user>"` (`… Charts …`, `… GTO Wizard …`). Never
-    Stop/Start the task while its supervisor is still running.
+  - **Supervisors are code too — and pick up their own changes** (2026-10-10, `scripts/supervisor_lib.ps1`,
+    `services/supervisorRestart.ts`). `.claude/study-api.ps1`, `.claude/chart-server.ps1`, `scripts/gtow_watchdog.ps1`
+    stamp what they read (`data/jobs/supervisor-<name>.json`, protocol 2). The API and chart supervisors RE-READ
+    `config/env.ps1` + `config/local.env` before every worker start (the port excepted), and their worker restarts
+    itself for a local.env change (`reason: env-changed`, plain exit 0) when no session is live. A change to the
+    supervisor's own script / the lib / a port key (`supervisor-changed`) makes the worker write
+    `data/jobs/supervisor-<name>.replace.json` and exit 3; the supervisor then starts `scripts/supervisor_replace.ps1`
+    detached and exits 0 — the helper waits for it and its console to go, `Start-ScheduledTask`s it again, and falls
+    back to spawning the script directly. The watchdog has no worker: the API writes its request file, it checks every
+    minute. Guards: held while a session is live, at most one per supervisor per 5 min, worker up >= 60 s, supervisor
+    up >= 2 min, refused (stamp `refused`, shown as boot-check-failed) when a file would not parse. `AUTO_RESTART=off`
+    stops it (reporting stays). The setup page / `live.ts` say "will restart itself when no session is live".
+    A supervisor started from an older script (no protocol 2) is only reported: restart it by hand ONCE.
+  - By hand, when no session is live: `Stop-Process` that supervisor's powershell (never `/T`: the watchdog's children
+    are the GTO Wizard windows), then `Start-ScheduledTask "PokerWrapper API - <user>"` (`… Charts …`, `… GTO
+    Wizard …`). Never Stop/Start the task while its supervisor is still running. **The task-scheduler trap:** after a
+    `Stop-Process` of a supervisor its headless `conhost.exe` can linger (parent = the task engine, NO children) and
+    the task refuses a new instance (LastTaskResult 0x800710E0) while it reads "Running" — stop that conhost (it has no
+    children) and start the task again. A clean exit (what a self-replace does) takes its conhost with it.
   - Pages (`dashboard.html`, `static/study`, `setup.html`, `panel.html`) are read from disk on every request: an
     edit in the main checkout is live on save, ahead of the routes behind it — land the route first, or in the same
     merge.
