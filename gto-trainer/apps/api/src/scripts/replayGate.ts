@@ -4,8 +4,17 @@
  * collapse / re-root / last resort, the chain and its resume and memo paths) — compared with what was SERVED live.
  *
  *   bun src/scripts/replayGate.ts --session <session id> [--extra-since 2026-09-27] [--data C:/Users/Brady/poker-data]
- *        [--work <temp dir>] [--reuse-copy] [--hands id,id] [--max-hands N] [--env <the live API's local.env>]
+ *        [--work <temp dir>] [--reuse-copy] [--keep-temp] [--hands id,id] [--max-hands N] [--env <the live API's local.env>]
  *   bun src/scripts/replayGate.ts --from 2026-10-03T00:00 --to 2026-10-04T00:00 …
+ *
+ * THE TEMP COPIES GO WHEN THE RUN ENDS (2026-10-09; scripts/replayGateTemp): the work dir's copies (poker.sqlite,
+ * gtow-cache.sqlite, the copied configs — 0.7-1.5 GB a run) are removed in a finally when the run finishes, success,
+ * failure or stop; only the run's reports (replay-gate-<tag>.json, .vs-baseline.json) stay, so `report:` and
+ * --baseline still resolve. --keep-temp keeps the copies for debugging (--reuse-copy implies it: the copy must survive
+ * to be reused). And every run starts by sweeping %TEMP% of the leftovers of earlier runs older than a day — dirs
+ * named replay-gate* / rg*-candidate / rg*-control-* (the names the gate and the hands that drove it used; 47 of
+ * them, ~60 GB, from 2026-10-03 were found on 2026-10-09). The replay itself runs in a CHILD process (--worker) so the
+ * copies' SQLite handles are closed when the parent removes them (Windows will not delete an open file).
  *
  * WHAT IS REPLAYED: every logged decision of the session (or the date range), plus with --extra-since every logged
  * decision since that date in a hand with an all-in (by the action or by the chips: a whole-stack raise) on any street,
@@ -53,6 +62,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fmtGb, isControlWorktreeName, removeGateTemp, sweepGateTemp } from "./replayGateTemp";
 
 // ---- arguments ---------------------------------------------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -76,38 +86,80 @@ const liveSession = (): string | null => {
 };
 { const s = liveSession(); if (s) { console.error(`a poker session is LIVE (${s}) — not replaying; run again when it has ended`); process.exit(2); } }
 
-if (CONTROL) {
+// ---- the parent: sweep the leftovers, run the replay in a child (two under --control), remove the copies -----------
+// The replay itself runs with --worker in a child process: its SQLite handles on the copies are closed by the time
+// this process removes them in the finally (Windows will not delete an open file). The worker never sweeps or cleans.
+const WORKER = flag("worker");
+const KEEP_TEMP = flag("keep-temp") || flag("reuse-copy");
+if (!WORKER) {
   const git = (...a: string[]) => { const r = spawnSync("git", a, { cwd: import.meta.dir, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
-  const top = git("rev-parse", "--show-toplevel");
-  const commit = git("rev-parse", "--short", CONTROL);
-  const dir = join(tmpdir(), `replay-gate-control-${commit}`).replace(/\\/g, "/");
+  let top: string | null = null;        // the checkout's top (git worktrees need it; a run without --control does not)
+  try { top = git("rev-parse", "--show-toplevel"); } catch { /* not a checkout: --control is refused below */ }
   const api = "gto-trainer/apps/api";
-  if (!existsSync(dir)) git("-C", top, "worktree", "add", "--detach", dir, commit);
-  for (const nm of ["gto-trainer/node_modules", `${api}/node_modules`]) {
-    if (existsSync(join(dir, nm)) || !existsSync(join(top, nm))) continue;
-    const r = spawnSync("cmd", ["/c", "mklink", "/J", join(dir, nm), join(top, nm)], { encoding: "utf8" });
-    if (r.status !== 0) throw new Error(`linking ${nm}: ${r.stderr || r.stdout}`);
-  }
-  for (const f of ["replayGate.ts", "replayGateSeam.ts"]) copyFileSync(join(import.meta.dir, f), join(dir, api, "src", "scripts", f));
-  const { withReplaySeam } = await import("./replayGateSeam");
-  const fsPath = join(dir, api, "src", "services", "fastSolve.ts");
-  writeFileSync(fsPath, withReplaySeam(readFileSync(fsPath, "utf8")));
-  const pass = argv.filter((a, i) => !["--control", "--baseline", "--work"].includes(a) && !["--control", "--baseline", "--work"].includes(argv[i - 1] ?? "") && a !== "--keep-control");
-  const workC = `${WORK}-control-${commit}`, workN = `${WORK}-candidate`;
-  console.log(`== control ${commit} (${dir})`);
-  const c = spawnSync("bun", ["src/scripts/replayGate.ts", ...pass, "--work", workC], { cwd: join(dir, api), stdio: "inherit" });
-  if (c.status === 2) process.exit(2);
+  const apiDir = join(import.meta.dir, "..", "..");
   const tag = (SESSION ?? `${FROM}_${TO}`).replace(/[^\w.-]+/g, "_");
-  console.log(`== candidate ${git("rev-parse", "--short", "HEAD")} (this checkout)`);
-  const n = spawnSync("bun", [join(import.meta.dir, "replayGate.ts"), ...pass, "--work", workN, "--baseline", join(workC, `replay-gate-${tag}.json`)], { cwd: join(import.meta.dir, "..", ".."), stdio: "inherit" });
-  if (!flag("keep-control")) {
-    // the node_modules junctions are unlinked FIRST (rmdir without /s removes the link, never the target's files) —
-    // git would otherwise leave them behind, and a recursive delete would follow them into this checkout's packages
-    for (const nm of [`${api}/node_modules`, "gto-trainer/node_modules"]) if (existsSync(join(dir, nm))) spawnSync("cmd", ["/c", "rmdir", join(dir, nm)]);
-    try { git("-C", top, "worktree", "remove", "--force", dir); } catch (e) { console.error(`(the control worktree stays: ${(e as Error).message})`); }
+  // the sweep: earlier runs' work dirs under %TEMP% older than a day, whole (a young one may be another run's)
+  {
+    const s = sweepGateTemp(tmpdir(), { protect: [LIVE_DIR] });
+    if (s.removed.length) console.log(`swept ${s.removed.length} leftover replay-gate dir(s) older than a day from ${tmpdir()} (${fmtGb(s.removed.reduce((n, r) => n + r.bytes, 0))}): ${s.removed.map((r) => r.path.split(/[\\/]/).pop()).join(", ")}`);
+    for (const e of s.skipped) console.error(`(sweep: ${e})`);
+    if (top && s.removed.some((r) => isControlWorktreeName(r.path))) { try { git("-C", top, "worktree", "prune"); } catch { /* best effort */ } }
   }
-  console.log(`\nVERDICT against ${commit}: ${n.status === 0 ? "PASS" : n.status === 2 ? "STOPPED (a session went live)" : "FAIL"}`);
-  process.exit(n.status ?? 1);
+  const dropped = ["--control", "--baseline", "--work"];
+  const pass = argv.filter((a, i) => !dropped.includes(a) && !dropped.includes(argv[i - 1] ?? "") && !["--keep-control", "--keep-temp", "--worker"].includes(a));
+  const child = (script: string, cwd: string, work: string, extra: string[] = []) =>
+    spawnSync("bun", [script, ...pass, "--worker", "--work", work, ...extra], { cwd, stdio: "inherit" });
+  const copies: string[] = [];          // the work dirs this run makes — removed in the finally
+  let controlDir: string | null = null;
+  let status: number | null = null;
+  try {
+    if (CONTROL) {
+      if (!top) throw new Error("--control needs this script to run from a git checkout");
+      const commit = git("rev-parse", "--short", CONTROL);
+      controlDir = join(tmpdir(), `replay-gate-control-${commit}`).replace(/\\/g, "/");
+      try { git("-C", top, "worktree", "prune"); } catch { /* a swept worktree's record would block the add */ }
+      if (!existsSync(controlDir)) git("-C", top, "worktree", "add", "--detach", controlDir, commit);
+      for (const nm of ["gto-trainer/node_modules", `${api}/node_modules`]) {
+        if (existsSync(join(controlDir, nm)) || !existsSync(join(top, nm))) continue;
+        const r = spawnSync("cmd", ["/c", "mklink", "/J", join(controlDir, nm), join(top, nm)], { encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`linking ${nm}: ${r.stderr || r.stdout}`);
+      }
+      for (const f of ["replayGate.ts", "replayGateSeam.ts", "replayGateTemp.ts"]) copyFileSync(join(import.meta.dir, f), join(controlDir, api, "src", "scripts", f));
+      const { withReplaySeam } = await import("./replayGateSeam");
+      const fsPath = join(controlDir, api, "src", "services", "fastSolve.ts");
+      writeFileSync(fsPath, withReplaySeam(readFileSync(fsPath, "utf8")));
+      const workC = `${WORK}-control-${commit}`, workN = `${WORK}-candidate`;
+      copies.push(workC, workN);
+      console.log(`== control ${commit} (${controlDir})`);
+      const c = child("src/scripts/replayGate.ts", join(controlDir, api), workC);
+      if (c.status === 2) status = 2;
+      else {
+        console.log(`== candidate ${git("rev-parse", "--short", "HEAD")} (this checkout)`);
+        const n = child(join(import.meta.dir, "replayGate.ts"), apiDir, workN, ["--baseline", join(workC, `replay-gate-${tag}.json`)]);
+        status = n.status ?? 1;
+        console.log(`\nVERDICT against ${commit}: ${status === 0 ? "PASS" : status === 2 ? "STOPPED (a session went live)" : "FAIL"}`);
+      }
+    } else {
+      copies.push(WORK);
+      status = child(join(import.meta.dir, "replayGate.ts"), apiDir, WORK).status ?? 1;
+    }
+  } finally {
+    if (controlDir && top && !flag("keep-control")) {
+      // the node_modules junctions are unlinked FIRST (rmdir without /s removes the link, never the target's files) —
+      // git would otherwise leave them behind, and a recursive delete would follow them into this checkout's packages
+      for (const nm of [`${api}/node_modules`, "gto-trainer/node_modules"]) if (existsSync(join(controlDir, nm))) spawnSync("cmd", ["/c", "rmdir", join(controlDir, nm)]);
+      try { git("-C", top, "worktree", "remove", "--force", controlDir); } catch (e) { console.error(`(the control worktree stays: ${(e as Error).message})`); }
+    }
+    // the copies go, the reports stay (replay-gate-<tag>.json, .vs-baseline.json — what `report:` named and what a
+    // later --baseline reads); the day-old sweep takes the rest
+    if (KEEP_TEMP) console.log(`(the work copies stay — ${flag("reuse-copy") ? "--reuse-copy" : "--keep-temp"}: ${copies.join(", ")})`);
+    else for (const w of copies) {
+      const r = removeGateTemp(w, { protect: [LIVE_DIR], keep: (n) => /\.json$/i.test(n) });
+      if (r.error) console.error(`(the work copy stays: ${r.error})`);
+      else if (r.bytes || r.kept.length) console.log(`work copy removed: ${w} (${fmtGb(r.bytes)}${r.kept.length ? `; kept ${r.kept.join(", ")}` : ""})`);
+    }
+  }
+  process.exit(status ?? 1);
 }
 
 // ---- the work copy -----------------------------------------------------------------------------------------------
