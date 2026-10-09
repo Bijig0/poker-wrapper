@@ -613,6 +613,23 @@ export async function enrichGtowRow(pf: any): Promise<void> {
       return a ? { ...s, name: a.name, light: a.light, lightText: a.lightText, h1: a.windows?.h1?.n ?? 0, h24: a.windows?.h24?.n ?? 0, cap: j.cap, walled: !!a.wall?.walled } : s;
     });
     row.gtowAllow = j.allow ?? null;
+    // The pool's own tokenLive is memory-only (armed.gtow); the accounts payload PROBES the clients. When the memory has
+    // no token yet but an account is really connected, that account is the one live token the check requires — the rest
+    // being down is a warning, never a blocker (Brady 2026-10-09).
+    const enabled = row.sessions.filter((s: any) => s.enabled !== false);
+    const upN = enabled.filter((s: any) => s.light === "up" || (!s.light && s.tokenLive)).length;
+    if (upN && !row.ok) {
+      row.ok = true;
+      row.detail = enabled.filter((s: any) => s.light === "up").map((s: any) => `${s.name || s.id}: ${s.lightText || "connected"}`).join(" · ");
+      pf.blockers = (pf.blockers || []).filter((b: any) => b !== row.label);
+      pf.ok = !(pf.checks || []).some((c: any) => c.required && !c.ok);
+    }
+    if (upN && upN < enabled.length) {
+      row.level = "warn";
+      const down = enabled.filter((s: any) => !(s.light === "up" || (!s.light && s.tokenLive)));
+      if (!String(row.detail).includes("WARNING"))
+        row.detail += ` · WARNING: ${upN} of ${enabled.length} accounts up — ${down.map((s: any) => s.name || s.id).join(", ")} down (one live token is enough)`;
+    }
   } catch { /* informational */ }
 }
 
