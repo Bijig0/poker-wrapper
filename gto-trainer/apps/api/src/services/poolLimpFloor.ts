@@ -24,10 +24,12 @@
  */
 import LOCKS_V2 from "./poolLimpLocks.v2.json";
 import LOCKS_V3 from "./poolLimpLocks.v3.json";
+import LOCKS_V4 from "./poolLimpLocks.v4.json";
 import { dealtByPos, limpStackBucket, POOL_LIMP_CHART, POOL_LIMP_CHART_SB, SEATS6, type Seat6 } from "./hrc6max";
 import { hrc6maxDb } from "./hrc6maxDb";
 import { chartStacks6, withinFirstStackBound } from "./treeGap";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
+import { klGroup, poolCiLower, shouldReplace, type TriggerResult } from "./poolTrigger";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 /** v3 holds every v2 key (8 copied unchanged, the 8 thin ones re-measured under the same names) plus the finer bands */
@@ -36,7 +38,7 @@ export type PoolLimpKey = keyof typeof LOCKS_V3.ranges | keyof typeof LOCKS_V2.r
 /** THE TABLE SWITCH (2026-10-09, Brady: the thin Ignition cells replaced by CoinPoker-backed ranges, finer stack bands
  *  with real samples, Ignition-corrected where Ignition has the limps — TEMPORARY until auto-execute collects 30+
  *  Ignition limps per cell). LIMP_LOCKS in the environment, read at every decision:
- *   v3 (unset)  poolLimpLocks.v3.json (poker locks_v2/limp_locks_v3.json, build_limp_locks_v3.py): the 8 cells with 30+
+ *   v3          poolLimpLocks.v3.json (poker locks_v2/limp_locks_v3.json, build_limp_locks_v3.py): the 8 cells with 30+
  *               Ignition limps as v2; the 8 thin ones (n < 30: short over-limps, short SB completes behind limps,
  *               sbcomplete_b2_deep, sbcomplete_b3) from the CoinPoker 9.1M-hand corpus, the frequency anchored on the
  *               nearest Ignition cell with 30+ limps, the shape CoinPoker's showdown limps corrected against Ignition's
@@ -46,23 +48,36 @@ export type PoolLimpKey = keyof typeof LOCKS_V3.ranges | keyof typeof LOCKS_V2.r
  *               2026-10-09, byte for byte.
  *  It changes WHICH range a pool limp key names, never whether the floor / lock fires (SHORT_LIMP_POOL decides that).
  *  The HRC pool-locked limp trees stay solved on locks_v2 (their coverage rule, poolChartCovers, is unchanged). */
-export type LimpLocksVersion = "v2" | "v3";
-export const limpLocksVersion = (): LimpLocksVersion =>
-  String(process.env.LIMP_LOCKS ?? "v3").trim().toLowerCase() === "v2" ? "v2" : "v3";
+/** v4 (2026-10-09, the default — poker locks_v2/limp_locks_v4.json @ b2eaee37, build_limp_locks_v4.py, limp_locks_v4.md):
+ *  v3's 24 keys and frequencies, each cell's SHAPE rebuilt as 8 hand-group shares (Ignition's visible-card limps, ~4,000
+ *  NL100+NL200, shrunk toward the parent with 50 pseudo-hands; a premium cap) × a within-group shape (CoinPoker's or
+ *  Ignition's limps where it scores above group-only, else flat inside the group), gated by the held-out range
+ *  scoreboard: BETTER than v3 and than uniform in every limp family. Ships with the limp-call GROUP product
+ *  (poolCalls.limpCallProduct, poolLimpCallGroups.v4.json, LIMPCALL_PRODUCT). v3 and v2 stay selectable and readable:
+ *  a recorded answer's note tag ("v3: " / "v4: ") names the table it was read from. */
+export type LimpLocksVersion = "v2" | "v3" | "v4";
+export const limpLocksVersion = (): LimpLocksVersion => {
+  const v = String(process.env.LIMP_LOCKS ?? "v4").trim().toLowerCase();
+  return v === "v2" ? "v2" : v === "v3" ? "v3" : "v4";
+};
 type LimpRange = { freq: number; n: number; weights: Record<string, number> };
 const TABLES: Record<LimpLocksVersion, Record<string, LimpRange>> = {
   v2: LOCKS_V2.ranges as unknown as Record<string, LimpRange>,
   v3: LOCKS_V3.ranges as unknown as Record<string, LimpRange>,
+  v4: LOCKS_V4.ranges as unknown as Record<string, LimpRange>,
 };
+/** where a key the named table lacks is looked for next */
+const FALLBACK: Record<LimpLocksVersion, LimpLocksVersion[]> = { v4: ["v3", "v2"], v3: ["v2", "v4"], v2: ["v3", "v4"] };
 /** the keys a table holds (tests, reports) */
 export const limpLockKeys = (version: LimpLocksVersion = limpLocksVersion()): string[] => Object.keys(TABLES[version]);
 /** A key's range from the table the switch names; a key only the other table has (a fine v3 band named by an answer
  *  recorded under v3, read back under v2) from that one. null = no table has it. */
 export function limpLockRange(key: string, version: LimpLocksVersion = limpLocksVersion()): (LimpRange & { table: LimpLocksVersion }) | null {
-  const other: LimpLocksVersion = version === "v3" ? "v2" : "v3";
-  const own = TABLES[version][key];
-  const r = own ?? TABLES[other][key];
-  return r ? { ...r, table: own ? version : other } : null;
+  for (const t of [version, ...FALLBACK[version]]) {
+    const r = TABLES[t][key];
+    if (r) return { ...r, table: t };
+  }
+  return null;
 }
 
 /** THE STACK BANDS (his stack as dealt, bb; the upper edge inclusive, as the tables were measured): the two coarse ones
@@ -87,6 +102,31 @@ export const shortLimpPoolMode = (): ShortLimpPoolMode => {
 export const shortLimpPoolOn = (): boolean => shortLimpPoolMode() !== "off";
 export const poolLimpLockOn = (): boolean => shortLimpPoolMode() === "on";
 
+/**
+ * THE TRIGGER ON THE LIMP (2026-10-09, services/poolTrigger — the calibrated rule; poker claude/trigger-rule). The lock and
+ * the floor fired on STRUCTURE alone (one non-blind limper ≤85bb, no covering chart) and never asked whether the solver's
+ * own limp was residue. Now the solver's limp share at his node goes through poolTrigger.shouldReplace against the pool
+ * cell's rate: the lock (gtowAiPreflop.solvePreflopPoolLocked) reads it on the PLAIN tree before locking, the floor
+ * (applyPoolLimpFloor) on the walked flop-entering range of a limper who did nothing after the limp. A real limp range
+ * — the CO 76bb limping 31.6% (the pool 15.1%), a 24.8bb BTN at 15.7% (the pool 26.3%), an SB completing behind a limper
+ * 28-44% — is the solver's; the residue (every non-blind limp the study trees hold: 0.01-0.12%) is still replaced.
+ * POOL_LIMP_TRIGGER in the environment, read at every decision: on (unset) = the rule; off = structural, as before.
+ */
+export const poolLimpTriggerOn = (): boolean => !/^(off|0|false|no)$/i.test(String(process.env.POOL_LIMP_TRIGGER ?? "on").trim());
+/** The rule for a limp key: `fSolver` the solver's limp share, `solverAfter` his class range after the limp (for the
+ *  KL test; null = not known). Carries the cell's rate for the caller's note. */
+export function limpTrigger(key: string, fSolver: number | null, solverAfter: ClassRange | null): TriggerResult & { fPool: number | null } {
+  const cell = limpLockRange(key);
+  const t = shouldReplace({
+    fSolver, fPool: cell?.freq ?? null, poolCI: cell ? poolCiLower({ n: cell.n, freq: cell.freq }) : null,
+    // the limp table's counts: Ignition NL200 on some cells, CoinPoker-backed on v3's re-measured thin ones — not marked
+    // Ignition's, so POOL_TRIGGER_DIVERGENCE=ignition leaves the limp alone (poolTrigger's header)
+    countsFrom: "pool",
+    groupKL: cell && solverAfter ? klGroup(cell.weights as ClassRange, solverAfter) : null, line: "preflop", reach: null,
+  });
+  return { ...t, fPool: cell?.freq ?? null };
+}
+
 /** A pool range as 1,326 per-combo weights (each combo its class's weight) — the strategy a lock gives the limp. */
 export function poolLimpWeights(key: PoolLimpKey): number[] {
   const w = limpLockRange(key)!.weights;
@@ -107,6 +147,8 @@ export interface PoolLimper {
   complete: boolean;
   /** he raised later in the hand (a limp-raise): his range is not a limp range */
   raisedLater: boolean;
+  /** he CALLED a raise after his limp (a limp-call / the SB's complete-call): his range is limp × call, not the limp */
+  calledLater?: boolean;
 }
 
 export interface PoolLimpFloorRecord {
@@ -123,8 +165,12 @@ export interface PoolLimpFloorRecord {
   table: LimpLocksVersion;
   /** he then CALLED the iso (2026-10-09, services/poolCalls.applyLimpCallProduct): the call cell the whole limp cell
    *  (`base` combos) was multiplied by — `now` is the product */
-  times?: { key: string; freq: number; n: number; base: number; cal?: string };
+  times?: { key: string; freq: number; n: number; base: number; cal?: string;
+    /** v4 (poolCalls.limpCallGroupKey): the cell × the Ignition limp-call GROUP rates of this key, not the call cell */
+    group?: { key: string; n: number } };
 }
+/** A limper the floor would have replaced, kept on his walked range because the trigger rule did not fire (2026-10-09). */
+export interface PoolLimpFloorKept { pos: Seat6; key: PoolLimpKey; stack: number; was: number; text: string }
 
 const POSTS = new Set(["post-sb", "post-bb", "post", "post-dead", "ante"]);
 const AGGRESSIVE = new Set(["raise", "bet", "all-in"]);
@@ -154,8 +200,11 @@ export function poolLimpersOf(hand: ParsedHand, heroPos: string | null): PoolLim
       const l = out.find((x) => x.pos === pos);
       if (l) l.raisedLater = true;
     } else if (a.type === "call" && !raised && !acted.has(pos) && pos !== "BB") {
-      if (pos !== hero) out.push({ pos, limpsBefore: limps, complete: pos === "SB", raisedLater: false });
+      if (pos !== hero) out.push({ pos, limpsBefore: limps, complete: pos === "SB", raisedLater: false, calledLater: false });
       if (pos !== "SB") limps++;
+    } else if (a.type === "call" && raised) {
+      const l = out.find((x) => x.pos === pos);
+      if (l) l.calledLater = true;
     }
     acted.add(pos);
   }
@@ -173,9 +222,9 @@ export function poolLimpKey(l: Pick<PoolLimper, "limpsBefore" | "complete">, sta
   const base = l.complete
     ? (l.limpsBefore === 0 ? "sbcomplete_fold_short" : `sbcomplete_b${l.limpsBefore}_short`)
     : (l.limpsBefore === 0 ? "limp_first_short" : "overlimp_short");
-  if (version === "v3") {
+  if (version !== "v2") {
     const fine = `${base}_${limpFineBand(stack)}`;
-    if (fine in TABLES.v3) return fine as PoolLimpKey;
+    if (fine in TABLES[version]) return fine as PoolLimpKey;
   }
   return `${base}_${b}` as PoolLimpKey;
 }
@@ -207,6 +256,14 @@ export function poolChartCovers(chartId: string | null, l: Pick<PoolLimper, "pos
   if (!st) return false;
   if (limpStackBucket(st[l.pos]) !== limpStackBucket(table.limper)) return false;
   return withinFirstStackBound(Math.min(table.hero, table.limper), Math.min(st[heroPos], st[l.pos]));
+}
+
+/** Does this chart LOCK his limp node to a pool range (any bucket)? The pool3 trees lock every limp and the SB's
+ *  complete; the pilot and hero-free trees the limps only (as poolChartCovers reads them). */
+export function chartLocksLimp(chartId: string | null, l: Pick<PoolLimper, "complete">): boolean {
+  if (!chartId) return false;
+  if (chartId === POOL_LIMP_CHART || /_olimp_pool3$/.test(chartId)) return true;
+  return (chartId === POOL_LIMP_CHART_SB || /_olimp_poolh$/.test(chartId)) && !l.complete;
 }
 
 /**
@@ -297,14 +354,16 @@ export function applyPoolLimpFloor(a: {
   planOf?: (id: string) => string | null;
   /** limpers the tree the ranges were walked off LOCKED to the pool range (a pool-locked AI pin): kept as walked */
   lockedPools?: readonly { pos: string; key: string }[];
-}): { ranges: Record<string, ClassRange>; applied: PoolLimpFloorRecord[] } {
+}): { ranges: Record<string, ClassRange>; applied: PoolLimpFloorRecord[]; kept: PoolLimpFloorKept[] } {
   const hero = String(a.heroPos ?? "").toUpperCase() as Seat6;
   const byPos = dealtByPos(a.hand, a.heroPos, a.dealt);
   // the pool was measured 5-6 handed; a 3-4 handed table is still far closer to it than to an empty range — heads-up
   // (the SB's complete is the button's open there) is a different game and keeps its tree
-  if (!SEATS6.includes(hero) || Object.keys(byPos).length < 3) return { ranges: a.ranges, applied: [] };
+  if (!SEATS6.includes(hero) || Object.keys(byPos).length < 3) return { ranges: a.ranges, applied: [], kept: [] };
   const heroStack = Number(byPos[hero] ?? NaN);
   const applied: PoolLimpFloorRecord[] = [];
+  const kept: PoolLimpFloorKept[] = [];
+  const trigger = poolLimpTriggerOn();
   let out = a.ranges;
   for (const l of poolLimpersOf(a.hand, a.heroPos)) {
     if (l.raisedLater) continue;
@@ -324,11 +383,21 @@ export function applyPoolLimpFloor(a: {
     const lock = limpLockRange(key);
     if (!lock) continue;
     const was = combosOf(out[rk]);
+    // THE TRIGGER (2026-10-09, limpTrigger): a limper who did nothing after the limp enters the flop with the solver's
+    // limp range, so its mass over the 1,326 combos is the solver's limp share — kept when the rule does not fire (the
+    // same verdict the preflop lock reached on the same node: the two never disagree). A limp-caller keeps the structural
+    // floor and the limp × call product (applyLimpCallProduct). NOT on a pool-locked limp chart that locks his node
+    // (chartLocksLimp): there his walked range is a POOL lock at the chart's own stack bucket (a 10bb limper on the
+    // 100bb pool3 tree holds the deep 3.1% range), not the solver's — the same-bucket replacement stays structural
+    if (trigger && !l.calledLater && !chartLocksLimp(a.chartId, l)) {
+      const t = limpTrigger(key, was / 1326, out[rk] ?? {});
+      if (!t.fire) { kept.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, was, text: t.text }); continue; }
+    }
     if (out === a.ranges) out = { ...a.ranges };
     out[rk] = { ...(lock.weights as ClassRange) };
     applied.push({ pos: l.pos, key, stack: Math.round(stack * 10) / 10, freq: lock.freq, n: lock.n, was, now: combosOf(out[rk]), table: lock.table });
   }
-  return { ranges: out, applied };
+  return { ranges: out, applied, kept };
 }
 
 /** The answer's note for the replaced limpers. */
@@ -336,10 +405,10 @@ export const poolLimpFloorNote = (applied: PoolLimpFloorRecord[], chartId: strin
   `POOL LIMP RANGE: ${applied.map((r) => `the ${r.pos} (${Math.round(r.stack)}bb) limped — ${r.was} combos on ${chartId ?? "the preflop tree"}, `
     + (r.times
       // he then called the iso: the whole cell × the pool's limp-call rate (the oracle reads both keys back)
-      ? `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.times.base} combos) × his limp-call rate ${r.times.key} (${(100 * r.times.freq).toFixed(1)}% of chances, ${r.times.n.toLocaleString("en-US")} calls)${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
+      ? `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.times.base} combos) × his limp-call rate ${r.times.key} (${(100 * r.times.freq).toFixed(1)}% of chances, ${r.times.n.toLocaleString("en-US")} calls${r.times.group ? ` — applied as Ignition limp-call group rates ${r.times.group.key}, n=${r.times.group.n}` : ""})${r.times.cal ? ` × Ignition calibration ${r.times.cal}` : ""} = ${r.now} combos`
       : `now the pool's ${r.key} (${limpTableTag(r.table)}${(100 * r.freq).toFixed(1)}% of hands, n=${r.n}, ${r.now} combos)`)).join("; ")}`
   + " — no pool-locked tree covers this stack yet";
 
 /** The table tag a note carries right after the key — none for v2 (the notes exactly as before 2026-10-09), "v3: " for
  *  v3 (rangeOracle.poolFloorsOf reads it back, so a recorded answer is checked against the table it was answered from). */
-export const limpTableTag = (t: LimpLocksVersion | undefined): string => (t === "v3" ? "v3: " : "");
+export const limpTableTag = (t: LimpLocksVersion | undefined): string => (t === "v3" || t === "v4" ? `${t}: ` : "");

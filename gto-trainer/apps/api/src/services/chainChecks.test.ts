@@ -6,7 +6,7 @@ import {
   CHECKS, SolveTimes, addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkCode, checkFlopArrival,
   checkFresh, checkHandoff, checkHeroCombo, checkLine, checkMistakeLines, checkMix, checkNodeReads, checkPotStack,
   checkPreflopInRange, checkRake, checkRangesSane, checkReasons, checkSeats, checkSolveTime, checkTrees, checkWarmTree,
-  comboName, coverageReport, dealtSetName, expectedOrder, mergeChecks, sidePotParts, solvePopulation, SOLVE_FLAG_NOTE, type CheckResult, type PathChecks,
+  comboName, coverageReport, cumulativeOf, dealtSetName, expectedOrder, mergeChecks, sidePotParts, solvePopulation, SOLVE_FLAG_NOTE, type CheckResult, type PathChecks,
 } from "./chainChecks";
 import { classifyPath, cleanRate, VERDICT_LABEL } from "./chainPath";
 import { comboIndex } from "../utils/comboIndex/comboIndex";
@@ -153,6 +153,26 @@ describe("#3 villain mistake lines: a flag, never a fail", () => {
   it("no villain action: na; villain actions none off-tree: pass", () => {
     expect(checkMistakeLines([], 0).status).toBe("na");
     expect(checkMistakeLines([], 3).status).toBe("pass");
+  });
+  it("CUMULATIVE (2026-10-09): 24.83 → 0.17 combos over X-X-R-C, every step ≥1% — a flag naming the line, never a fail", () => {
+    const c = cumulativeOf({ seat: "SB", flopCombos: 24.83, nowCombos: 0.17, codes: ["X", "X", "R", "C"], anyStepUnder1: false });
+    expect(c).toEqual({ seat: "SB", flop: 24.83, now: 0.17, codes: ["X", "X", "R", "C"] });
+    const r = checkMistakeLines([], 4, [c!]);
+    expect(r.status).toBe("flag");
+    expect(r.text).toStartWith("cumulative: SB 24.83 → 0.17 combos over X-X-R-C (0.68% of his flop range — every action ≥1% alone, the line under 1%)");
+    // beside a single off-tree action of another seat: both said
+    const both = checkMistakeLines([line], 5, [c!]);
+    expect(both.text).toContain("villain mistake line");
+    expect(both.text).toContain("cumulative: SB 24.83 → 0.17");
+    // the verdict never moves: a flag is not a reason
+    expect(checkReasons({ flop: [r] })).toEqual([]);
+  });
+  it("cumulativeOf: not when the line keeps ≥1%, not when a step was itself under 1% (already flagged), not for an arrival residue", () => {
+    expect(cumulativeOf({ seat: "SB", flopCombos: 24.83, nowCombos: 0.25, codes: [], anyStepUnder1: false })).toBeNull();     // 1.0%
+    expect(cumulativeOf({ seat: "SB", flopCombos: 24.83, nowCombos: 0.17, codes: [], anyStepUnder1: true })).toBeNull();
+    expect(cumulativeOf({ seat: "SB", flopCombos: 10, nowCombos: 0.01, codes: [], anyStepUnder1: false })).toBeNull();      // entered under 1% of hands
+    const noCodes = cumulativeOf({ seat: "CO", flopCombos: 41, nowCombos: 0.3, codes: [], anyStepUnder1: false })!;
+    expect(checkMistakeLines([], 2, [noCodes]).text).toContain("CO 41.00 → 0.30 combos since the flop");
   });
 });
 

@@ -6,6 +6,7 @@ import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
 import { applyLimpCallProduct, applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
+import { applyPoolFlatFloor, poolFlatFloorMode, poolFlatFloorNote } from "./poolFlatFloor";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -54,7 +55,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { menuPotMode, threeWaySizes } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -1185,6 +1186,8 @@ async function flopArrivalCompute(
   // enters the flop with the pool's measured limp range, whichever piece produced the rest — said in the answer's note
   if (sixMax && shortLimpPoolOn()) {
     const floor = applyPoolLimpFloor({ hand, heroPos, ranges: recon.ranges, chartId: rangeSource, dealt: pinnedDealt, lockedPools: pinPools });
+    // the trigger rule kept a limper's own range (services/poolTrigger, POOL_LIMP_TRIGGER): logged, the ranges as walked
+    if (floor.kept.length) tmark("pool limp floor kept", floor.kept.map((k) => `the ${k.pos} (${Math.round(k.stack)}bb, ${k.was} combos, ${k.key}): ${k.text}`).join("; "));
     if (floor.applied.length) {
       // a floored limper who then CALLED the iso: his whole limp cell × the pool's limp-call rate (poolCalls.applyLimpCallProduct,
       // 2026-10-09) — the floor's records are extended in place, so the note below says so
@@ -1210,13 +1213,33 @@ async function flopArrivalCompute(
       if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-coldcall-floor", why: note.slice(0, 300) };
     }
   }
+  // THE POOL FLAT FLOOR (services/poolFlatFloor, 2026-10-09): on every line a chart or the tree holds, a villain who
+  // flat-called an open, over-called it or called the iso from the BB, and whose flop-entering range fails the trigger
+  // rule (residue / far from the pool's — services/poolTrigger), enters the flop with the pool's calling range. The
+  // pin-cap lines are the pool-call overlay's below (structural there, every caller) — this floor stands down on them
+  // while POOL_CALLS is on. A seat a floor above or a pinned lock already gave a pool range keeps it.
+  if (sixMax && poolFlatFloorMode() !== "off" && !(aiFitted && poolCallsMode() !== "off")) {
+    const given = (pinPools ?? []).map((p) => p.pos);
+    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: [^·]*/g)) {
+      for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) given.push(m[1]!);
+    }
+    const ff = applyPoolFlatFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
+    if (ff.kept.length) tmark("pool flat floor kept", ff.kept.map((k) => `the ${k.pos} (${k.was} combos, ${k.key}): ${k.text}`).join("; "));
+    if (ff.applied.length) {
+      const note = poolFlatFloorNote(ff.applied, rangeSource);
+      tmark("pool flat floor", note);
+      recon = { ...recon, ranges: ff.ranges };
+      sixNote = [sixNote, note].filter(Boolean).join(" · ");
+      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-flat-floor", why: note.slice(0, 300) };
+    }
+  }
   // THE POOL CALL RANGES (services/poolCalls, Brady 2026-10-07): the exact tree could not hold the line (a 4-way raised
   // pot, a two-limper pot — arrival:pin-cap) and every seat was read on a FITTED line; the villain CALLERS enter the flop
   // with the pool's measured calling range for their seat, line and stack instead of the solver's neighbouring-line read.
   // Hero's own range, the raisers', and a seat a floor above already gave a pool range keep what they have.
   if (aiFitted && poolCallsMode() !== "off") {
     const given = (pinPools ?? []).map((p) => p.pos);
-    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: [^·]*/g)) {
+    for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL|FLAT) RANGE: [^·]*/g)) {
       for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) given.push(m[1]!);
     }
     const pc = applyPoolCallRanges({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
@@ -4654,13 +4677,23 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     reason: `${why}; ${ai.reason}; no heads-up last resort in the 6-max strategy` };
 }
 
+/** A preflop reason beside the answer's own (chainPath.preflopAlso), the verdict re-classified. A result with no path is
+ *  returned as it is. */
+function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResult {
+  if (!r.path) return r;
+  const { v: _v, verdict: _verdict, reasons: _reasons, ...rest } = r.path;
+  return { ...r, path: classifyPath({ ...rest, preflopAlso: [...(rest.preflopAlso ?? []), reason] }) };
+}
+
 /**
  * THE POOL-LOCKED LIMPER, ASKED FIRST (2026-10-05; services/poolLimpFloor.poolLockTarget says when,
  * gtowAiPreflop.solvePreflopPoolLocked how). null when it does not apply (the decision is answered as before); an ok
  * answer; or a refusal whose reason the answer that follows carries ("POOL LIMP LOCK FAILED …"). Inside poolLockMs
  * (12 s): a late answer never becomes the hand's pin. Applies only with SHORT_LIMP_POOL=on (the default).
  */
-async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts): Promise<FastSolveResult | null> {
+async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts,
+    /** THE TRIGGER DID NOT FIRE (2026-10-09, services/poolTrigger): the reason the answer's path carries */
+    onSkip: (r: PathReason) => void = () => {}): Promise<FastSolveResult | null> {
   if (!poolLimpLockOn()) return null;
   // the chart the picker would answer from: a v2 pool tree that holds the limper at his own range answers as before
   let chartId: string | null = null;
@@ -4678,6 +4711,16 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
   const ms = poolLockMs();
   const first = await Promise.race([asked, new Promise<"timeout">((res) => setTimeout(() => res("timeout"), ms))]);
   const handId = hand.clientHandId ?? hand.handId ?? "?";
+  // THE TRIGGER RULE KEPT THE SOLVER'S LIMP (services/poolTrigger): not a failure — the plain answer stands, and the path
+  // says why (the dashboard shows the solver's share against the pool's)
+  if (first !== "timeout" && !first.ok && first.kind === POOL_LOCK_SKIPPED) {
+    const tr = first.trigger;
+    const pc = (x: number | null | undefined) => (x != null && Number.isFinite(x) ? `${(100 * x).toFixed(2)}%` : "?");
+    const text = `pool limp lock skipped: the ${t.target.pos} (${t.target.stack}bb) ${t.target.complete ? "completed" : "limped"} — the solver ${pc(tr?.fSolver)} vs the pool's ${t.target.key} ${pc(tr?.fPool)}: ${tr?.text ?? first.reason}`;
+    console.log(`[pool-lock] SKIPPED hand ${handId}: ${text}`);
+    onSkip({ v: "by-design", code: "preflop:pool-limp-lock-skipped", text: text.slice(0, 300) });
+    return null;
+  }
   if (first === "timeout" || !first.ok) {
     gaveUp = true;
     const why = first === "timeout" ? `no answer inside ${(ms / 1000).toFixed(0)} s` : first.reason.slice(0, 220);
@@ -4793,7 +4836,8 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // THE POOL-LOCKED LIMPER FIRST (2026-10-05, gtowAiPreflop.solvePreflopPoolLocked): a short limper no pool-locked
     // chart covers is read at the pool's range on the exact tree with his limp node-locked; when that does not answer in
     // time the decision goes on exactly as before, and the answer says the lock failed
-    const locked = await poolLimpLockFirst(hand, heroPos, opts);
+    let lockSkip: PathReason | null = null;
+    const locked = await poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; });
     if (locked && locked.ok) return locked;
     // THE POOL'S 3-BET COLD-CALL (2026-10-05, services/poolColdCall): a lone cold-caller of a 3-bet whom the exact tree
     // gives ~0% is read at the pool's range on the exact tree with his call node-locked
@@ -4821,7 +4865,9 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     if (cc && cc.ok) return cc;
     const failed: string[] = [];
     for (const x of [locked, cc]) if (x && !x.ok) failed.push(x.reason);
-    return failed.length && r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") } : r;
+    const out = failed.length && r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") } : r;
+    // the skipped lock's reason beside whatever answered (the plain AI tree or a chart)
+    return lockSkip ? withPreflopAlso(out, lockSkip) : out;
   }
 
   // 3-handed preflop answers from the asym HRC charts (unless the caller

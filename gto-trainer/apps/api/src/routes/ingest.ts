@@ -3,6 +3,7 @@ import { renderPanelRows, type PanelRow } from "../feed/parsePanelFeed/parsePane
 import { handToSpot, type SpotOptions } from "../feed/handToSpot/handToSpot";
 import { SOLUTION_SETS } from "../services/gtowCdp";
 import { resolveHand } from "../feed/resolveHand/resolveHand";
+import { seatStats } from "../services/seatStats";
 import { warmPreflop6max, warmPostflop6max, warmArrivalCpRing } from "../services/fastSolve";
 
 /**
@@ -98,6 +99,8 @@ app.post("/", async (c) => {
   }
   noteResolveOk();
   const { hand, source, warnings, tableStatus, heroSittingOut, studyAnswersOn, strategyId, sessionId, liveExtras, solveRequest } = resolved;
+  // PER-SEAT SESSION VPIP (services/seatStats): every probe's hand, in memory — logged on each answer row, never read to answer
+  if (hand) seatStats.observe(sessionId ?? null, hand);
 
   // the tree this hand will need is opened now, not at hero's turn (fastSolve.warmPreflop6max)
   if (hand) {

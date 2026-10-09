@@ -10,17 +10,20 @@ import { COMBOS } from "../utils/comboIndex/comboIndex";
 let P: typeof import("./gtowAiPreflop");
 let F: typeof import("./poolLimpFloor");
 let Pin: typeof import("./preflopPin");
+let Calls: typeof import("./poolCalls");
 let seams0: any;
 beforeAll(async () => {
   P = await import("./gtowAiPreflop");
   F = await import("./poolLimpFloor");
   Pin = await import("./preflopPin");
+  Calls = await import("./poolCalls");
   seams0 = { ...P.poolLockSeams };
 });
 afterEach(() => {
   Object.assign(P.poolLockSeams, seams0);
   P.resetAiPreflopMemory();
   delete process.env.SHORT_LIMP_POOL;
+  delete process.env.POOL_TRIGGER_DIVERGENCE;
 });
 
 const POS = { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" } as const;
@@ -139,8 +142,8 @@ describe("poolLimpLockOf: the lock's strategy", () => {
     }
   });
 
-  it("the pool weights are the class weights per combo", () => {
-    const w = F.poolLimpWeights("limp_first_short_le60");
+  it("the pool weights are the class weights per combo (v3's cell, read by name)", () => {
+    const w = (() => { process.env.LIMP_LOCKS = "v3"; try { return F.poolLimpWeights("limp_first_short_le60"); } finally { delete process.env.LIMP_LOCKS; } })();
     const kts = COMBOS.findIndex((c) => c.cls === "KTs"), aks = COMBOS.findIndex((c) => c.cls === "AKs");
     expect(w[aks]).toBe(1);
     expect(w[kts]).toBeCloseTo(0.0943, 4);
@@ -159,8 +162,8 @@ describe("solvePreflopPoolLocked over its seams", () => {
       game: { players: ["UTG", "HJ", "CO", "BTN", "SB", "BB"].map((p) => ({ position: p, is_hero: p === actor })) },
     }, cached: true,
   });
-  /** the fake GTO Wizard: the plain tree (P) and the locked one (L), the HJ limping 0.05% on P */
-  function rig(opts: { lockHolds?: boolean } = {}) {
+  /** the fake GTO Wizard: the plain tree (P) and the locked one (L), the HJ limping 0.05% on P (`plainLimp` overrides) */
+  function rig(opts: { lockHolds?: boolean; plainLimp?: number | number[] } = {}) {
     const calls: { locks: any[][]; reads: string[] } = { locks: [], reads: [] };
     const w = F.poolLimpWeights("limp_first_short_le60");
     Object.assign(P.poolLockSeams, {
@@ -172,9 +175,13 @@ describe("solvePreflopPoolLocked over its seams", () => {
         calls.reads.push(`${solId}:${line}`);
         if (line === "") return node("UTG", [{ code: "F", p: 0.8 }, { code: "R2.5", p: 0.2 }]);
         if (line === "F") return solId === "P"
-          ? node("HJ", [{ code: "F", p: 0.77 }, { code: "C", p: 0.0005 }, { code: "R2.5", p: 0.2295 }])
+          ? (Array.isArray(opts.plainLimp)
+            ? node("HJ", [{ code: "F", p: opts.plainLimp.map((x) => 0.7705 - x) }, { code: "C", p: opts.plainLimp }, { code: "R2.5", p: 0.2295 }])
+            : node("HJ", [{ code: "F", p: 0.7705 - (opts.plainLimp ?? 0.0005) }, { code: "C", p: opts.plainLimp ?? 0.0005 }, { code: "R2.5", p: 0.2295 }]))
           : node("HJ", [{ code: "F", p: w.map((x) => (1 - x) * 0.77) }, { code: "C", p: opts.lockHolds === false ? arr(0.0005) : w }, { code: "R2.5", p: w.map((x) => (1 - x) * 0.23) }]);
         if (line === "F-C-F-F-F") return node("BB", [{ code: "X", p: solId === "L" ? 0.55 : 0.92 }, { code: "R4", p: solId === "L" ? 0.45 : 0.08 }]);
+        // the HJ's reply to hero's 4bb iso on the plain tree (the whole-line lock reads it)
+        if (line === "F-C-F-F-F-R4" && solId === "P") return node("HJ", [{ code: "F", p: 0.3 }, { code: "C", p: 0.5 }, { code: "R12", p: 0.2 }]);
         return { error: `NODE_DOES_NOT_EXIST ${line}` };
       },
     });
@@ -200,6 +207,104 @@ describe("solvePreflopPoolLocked over its seams", () => {
     expect(pin?.piece).toBe("gtow-ai-preflop");
     expect((pin as any).solId).toBe("L");
     expect((pin as any).poolLocks).toEqual([{ pos: "HJ", key: "limp_first_short_le60" }]);
+  });
+
+  it("THE TRIGGER (2026-10-09): residue (0.05%) locks; a limp the plain tree really plays (31.6% vs the pool's 26.3%) is the solver's — no lock, no request past the plain node", async () => {
+    const calls = rig({ plainLimp: 0.316 });
+    const hd = h();
+    const r = await P.solvePreflopPoolLocked(hd, "BB", target);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.kind).toBe(P.POOL_LOCK_SKIPPED);
+    expect(r.trigger?.fSolver).toBeCloseTo(0.316, 6);
+    expect(r.trigger?.fPool).toBeCloseTo(0.26326, 5);
+    expect(r.reason).toContain("NOT NEEDED:");
+    // the divergence arm is off by default (review B1); with it on the same limp is still the solver's
+    expect(r.reason).toContain("the divergence arm is off");
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
+    const on = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(on.ok).toBe(false);
+    expect((on as { reason: string }).reason).toContain("not under the pool's rate / 2");
+    delete process.env.POOL_TRIGGER_DIVERGENCE;
+    expect(calls.locks).toHaveLength(0);
+    expect(calls.reads.some((x) => x.startsWith("L:"))).toBe(false);
+    expect(Pin.preflopPinFor(hd)).toBeUndefined();
+    // the warm-up asks nothing more either
+    const warm = rig({ plainLimp: 0.316 });
+    expect((await P.solvePreflopPoolLocked(h(), "BB", target, { warmOnly: true })).ok).toBe(false);
+    expect(warm.locks).toHaveLength(0);
+  });
+
+  it("the shape test (divergence arm ON): a 5% limp (under half the pool's 26.3%) with the POOL'S OWN hand mix is the solver's; a 5% limp of junk is locked — and not with the arm off (the default)", async () => {
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
+    const w = F.poolLimpWeights("limp_first_short_le60");
+    const same = rig({ plainLimp: w.map((x) => x * 0.19) });
+    const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain("same hand-group mix");
+    expect(same.locks).toHaveLength(0);
+    // the same 5% on offsuit junk only (the 72o-style hands the pool limps least): divergence — locked
+    const junk = COMBOS.map((c) => (c.cls.endsWith("o") && !/[AKQJT]/.test(c.cls) ? 0.0661 / 0.4072 * 0.75 : 0));
+    const mean = junk.reduce((t, x) => t + x, 0) / 1326;
+    expect(mean).toBeGreaterThan(0.01);
+    expect(mean).toBeLessThan(0.13);
+    const div = rig({ plainLimp: junk });
+    expect((await P.solvePreflopPoolLocked(h(), "BB", target)).ok).toBe(true);
+    expect(div.locks).toHaveLength(1);
+    // the default: the divergence arm is off, so the 5% junk limp is the solver's too
+    delete process.env.POOL_TRIGGER_DIVERGENCE;
+    P.resetAiPreflopMemory();
+    const off = rig({ plainLimp: junk });
+    const r2 = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(r2.ok).toBe(false);
+    expect((r2 as { reason: string }).reason).toContain("the divergence arm is off");
+    expect(off.locks).toHaveLength(0);
+  });
+
+  it("the residue lock's note carries the trigger's reading", async () => {
+    rig();
+    const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(r.ok && r.note).toContain("(trigger residue: the solver plays it 0.050% (< 1.00%))");
+  });
+
+  it("POOL_LIMP_TRIGGER=off: structural, as before — the 31.6% limp is locked", async () => {
+    process.env.POOL_LIMP_TRIGGER = "off";
+    try {
+      const calls = rig({ plainLimp: 0.316 });
+      const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+      expect(calls.locks).toHaveLength(1);
+      expect(r.ok).toBe(true);
+    } finally { delete process.env.POOL_LIMP_TRIGGER; }
+  });
+
+  it("HERO_ISO_RESPONSE_LOCK=on: the HJ's reply to hero's iso locked in the SAME POST at the pool's limp-call group rates; off (the default): the limp alone", async () => {
+    const off = rig();
+    await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(off.locks[0]).toHaveLength(1);
+    process.env.HERO_ISO_RESPONSE_LOCK = "on";
+    try {
+      const on = rig();
+      const r = await P.solvePreflopPoolLocked(h(), "BB", target);
+      expect(r.ok).toBe(true);
+      expect(on.locks).toHaveLength(1);                          // one POST
+      expect(on.locks[0]!.map((l: any) => l.action_history)).toEqual([["F"], ["F-C-F-F-F-R4"]]);
+      const reply = on.locks[0]![1];
+      const by = Object.fromEntries(reply.strategy.map((x: any) => [x.action, x.strategy]));
+      const g = Calls.limpCallGroupRates("limpcall_le60_l1")!;   // the 39bb HJ, one limper, LIMP_LOCKS=v4 (the default)
+      const aa = COMBOS.findIndex((c) => c.cls === "AA"), q72 = COMBOS.findIndex((c) => c.cls === "72o");
+      expect(by.C![aa]).toBeCloseTo(g.prem!, 9);
+      expect(by.C![q72]).toBeCloseTo(g["o-junk"]!, 9);
+      expect(by.F![aa] + by.C![aa] + by.R12![aa]).toBeCloseTo(1, 9);
+      expect(by.F![aa] / by.R12![aa]).toBeCloseTo(0.3 / 0.2, 6);  // the rest in the solver's proportions
+      expect(r.ok && r.note).toContain("his reply to hero's iso ('F-C-F-F-F-R4') LOCKED in the same POST to the pool's limp-call rates by hand group (Ignition limp-call group rates limpcall_le60_l1)");
+      // no reply node on the tree: the limp alone, said in the note
+      const none = rig();
+      const orig = P.poolLockSeams.node;
+      P.poolLockSeams.node = async (solId: string, line: string) => (line === "F-C-F-F-F-R4" ? { error: "NODE_DOES_NOT_EXIST" } : orig(solId, line));
+      const r2 = await P.solvePreflopPoolLocked(h(), "BB", target);
+      expect(none.locks[0]).toHaveLength(1);
+      expect(r2.ok && r2.note).toContain("his reply to hero's iso NOT locked (no reply node with a call on the tree)");
+    } finally { delete process.env.HERO_ISO_RESPONSE_LOCK; }
   });
 
   it("a lock that did not hold is no answer (the decision goes on as before)", async () => {

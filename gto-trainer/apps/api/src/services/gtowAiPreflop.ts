@@ -66,7 +66,9 @@ import { dealtBySeat } from "../utils/archivedHand/archivedHand";
 // THE LOCKED HEADS-UP TREE (2026-10-04, utils/lockedHeadsUp): the last resort with the raiser's range imposed by a node lock
 import { planLockedHeadsUp, type LockedPlan, type TreeSeat } from "../utils/lockedHeadsUp/lockedHeadsUp";
 import { nodeGetter, POOL_LIMP_CHART } from "./hrc6max";
-import { poolLimpKey, poolLimpRange, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
+import { limpTrigger, poolLimpKey, poolLimpRange, poolLimpTriggerOn, poolLimpWeights, type PoolLockTarget } from "./poolLimpFloor";
+import { classRangeOf as classMeansOf, handGroup } from "./poolTrigger";
+import { isoResponseRates, heroIsoResponseLockOn } from "./poolIsoResponse";
 import { coldCallLockBelow, coldCallRange, coldCallWeights, type ColdCallLockTarget } from "./poolColdCall";
 import type { HrcNode } from "./hrc3max";
 import type { PathReason } from "./chainPath";
@@ -354,7 +356,9 @@ export interface HeroSelfLock {
 /** GTO Wizard's own words from a refusal read back as "422: {…"detail": "…"…}" (else the text as it came). */
 const refusalDetail = (error: string): string =>
   /"detail"\s*:\s*"([^"]+)"/.exec(error)?.[1] ?? error.replace(/^\d{3}:\s*/, "").slice(0, 160);
-export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string };
+export type AiPreflopOutcome = AiPreflopResult | { ok: false; reason: string; line?: string; kind?: string;
+  /** a pool lock the trigger rule did not fire (POOL_LOCK_SKIPPED): the numbers that decided it */
+  trigger?: { fSolver: number | null; fPool: number | null; text: string } };
 
 const round5 = (x: number) => Math.round(x * 2) / 2;
 const num = (n: number) => String(Math.round(n * 100) / 100);
@@ -2411,9 +2415,25 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
     at = { line: prefix, sols, limp: String(limp.action.code), share: Number(limp.total_frequency ?? NaN) };
   }
   if (!at) return no(`no limp by the ${target.pos} on the line '${line || "root"}'`, line);
+  // THE TRIGGER (services/poolTrigger, 2026-10-09): the plain tree's own limp share against the pool cell — a limp the
+  // solver really plays (not residue, not under half the pool's rate with a different hand mix) is the solver's, and the
+  // plain answer stands (the skip rides on the answer's path: preflop:pool-limp-lock-skipped). POOL_LIMP_TRIGGER=off =
+  // structural, as before. A node without total_frequency: the limp's mean over the deck (his range there is every hand)
+  const limpSol = at.sols.find((a) => String(a?.action?.code ?? "") === at!.limp);
+  const strat = (limpSol?.strategy ?? []) as number[];
+  const fSolver = Number.isFinite(at.share) ? at.share : strat.length === 1326 ? strat.reduce((t, x) => t + Math.max(0, Number(x) || 0), 0) / 1326 : null;
+  const trig = poolLimpTriggerOn() ? limpTrigger(target.key, fSolver, strat.length === 1326 ? classMeansOf(strat) : null) : null;
+  if (trig && !trig.fire) {
+    return { ok: false, kind: POOL_LOCK_SKIPPED, line, trigger: { fSolver, fPool: trig.fPool, text: trig.text },
+      reason: `pool-locked tree: ${COLD_CALL_NOT_NEEDED} the ${target.pos}'s ${target.complete ? "complete" : "limp"} at '${at.line || "root"}' is the solver's own — ${trig.text}` };
+  }
   const w = poolLimpWeights(target.key);
   const lock = poolLimpLockOf(at.line, at.sols, at.limp, w);
-  const locked = await poolLockSeams.lock(parent.solId, body, [lock]);
+  // THE WHOLE LINE (HERO_ISO_RESPONSE_LOCK=on, default off — services/poolIsoResponse): the limper's reply to hero's
+  // iso locked in the SAME POST at the pool's call-given-limp rates by hand group; a reply node that cannot be found or
+  // read leaves the limp lock alone (said in the note)
+  const resp = heroIsoResponseLockOn() && !target.complete ? await isoResponseLocks(parent.solId, shape, tokens, api, target) : null;
+  const locked = await poolLockSeams.lock(parent.solId, body, [lock, ...(resp?.locks ?? [])]);
   if ("error" in locked) return no(locked.error, line);
   if (opts.warmOnly) return no("warmed (no answer read)", line);
   // THE LOCK HELD, OR THERE IS NO ANSWER: the limper's node on the locked solution plays exactly the pool's limp
@@ -2457,21 +2477,90 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   const secs = (Date.now() - t0) / 1000;
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}`;
   const note = `POOL-LOCKED LIMPER: the ${target.pos} (${target.stack}bb) ${target.complete ? "completed" : "limped"}` +
-    (Number.isFinite(at.share) ? `, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range,` : "") + ` and no pool-locked chart covers his stack yet — ` +
+    (Number.isFinite(at.share) ? `, which the exact tree gives ${(100 * at.share).toFixed(2)}% of his range,` : "") + ` and no pool-locked chart covers his stack yet` +
+    (trig ? ` (trigger ${trig.text})` : "") + ` — ` +
     `GTO Wizard AI preflop solved this table with his ${target.complete ? "complete" : "limp"} LOCKED to the pool's ${target.key} range ` +
     `(${(100 * freq).toFixed(1)}% of hands, n=${n}, ${combos} combos; the rest of each hand folds or raises as the solver plays it) and hero's node re-solved behind it` +
     (target.alsoSb ? `; the SB's complete is the solver's (one lock per tree)` : "") +
+    (resp ? (resp.locks.length ? `; his reply to hero's iso (${resp.lines.map((l) => `'${l}'`).join(", ")}) LOCKED in the same POST to the pool's limp-call rates by hand group (${resp.source})` : `; his reply to hero's iso NOT locked (${resp.why})`) : "") +
     `. Tree: ${shapeText}; ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}.` +
     (repaired.changed.length ? ` Sizes snapped to the tree's own: ${repaired.changed.join(", ")}.` : "") +
     (shape.stackCap ? ` ${stackCapNote(shape)}.` : "");
   return {
-    ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|pool:${target.pos}:${target.key}`,
+    ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|pool:${target.pos}:${target.key}${resp?.locks.length ? `|resp:${resp.source}` : ""}`,
     solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note,
   };
 }
 
-/** The refusal that is not a failure: the unlocked tree already gives the cold-call a real share (no lock needed). */
+/**
+ * THE LIMPER'S REPLY TO HERO'S ISO, as node locks on the parent tree (HERO_ISO_RESPONSE_LOCK; services/poolIsoResponse
+ * has the why). The reply nodes: (a) the line already holds hero's iso and the limper's answer — the node where he
+ * answered; (b) hero is to act with no raise yet — for each non-all-in raise hero's node offers, the node after it where
+ * the limper is on the clock (the seats between folding). Each lock: his call at the group rates, the rest of each hand
+ * over fold / raise in the solver's own proportions (poolLimpLockOf). Never throws; no node = no lock, with the reason.
+ */
+async function isoResponseLocks(solId: string, shape: AiPreflopShape, tokens: string[], api: string, target: PoolLockTarget):
+    Promise<{ locks: NodeLock[]; lines: string[]; source: string; why: string }> {
+  const none = (why: string) => ({ locks: [] as NodeLock[], lines: [] as string[], source: "", why });
+  try {
+    // the line on the tree's own sizes (hero's iso as the tree offers it)
+    const rep = await poolLockSeams.repair(solId, tokens);
+    const codes = "error" in rep ? tokens : rep.line.split("-").filter(Boolean);
+    const fr = codes.findIndex((t) => /^R/i.test(t));
+    const limpers = codes.slice(0, fr < 0 ? codes.length : fr).filter((t) => t === "C").length;
+    const rates = isoResponseRates({ pos: target.pos, stack: target.stack, limpersInPot: Math.max(1, limpers) });
+    if (!rates) return none("no pool limp-call rate for his seat and stack");
+    const w = COMBOS.map((c) => Math.max(0, Math.min(1, rates.groups[handGroup(c.cls)] ?? 0)));
+    const actorOf = (n: any): string | null => n?.data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+    const replyAt = async (prefix: string[]): Promise<{ line: string; sols: any[] } | null> => {
+      const cur = prefix.slice();
+      for (let step = 0; step < 6; step++) {
+        const n = await poolLockSeams.node(solId, cur.join("-"));
+        if ("error" in n) return null;
+        const sols = (n.data?.action_solutions ?? []) as any[];
+        if (actorOf(n) === api) return { line: cur.join("-"), sols };
+        const f = sols.find((a) => /^F/i.test(String(a?.action?.code ?? "")));
+        if (!f) return null;
+        cur.push(String(f.action.code));
+      }
+      return null;
+    };
+    const targets: { line: string; sols: any[] }[] = [];
+    if (fr >= 0) {
+      // (a) the iso is on the line: hero's? then the limper's reply after it
+      const iso = await poolLockSeams.node(solId, codes.slice(0, fr).join("-"));
+      if ("error" in iso || actorOf(iso) !== shape.heroApiPos) return none("the first raise of the line is not hero's");
+      const at = await replyAt(codes.slice(0, fr + 1));
+      if (at) targets.push(at);
+    } else {
+      // (b) hero to act: his raise(s) that are not the all-in
+      const hn = await poolLockSeams.node(solId, codes.join("-"));
+      if ("error" in hn || actorOf(hn) !== shape.heroApiPos) return none("hero's node could not be read");
+      for (const a of (hn.data?.action_solutions ?? []) as any[]) {
+        const code = String(a?.action?.code ?? "");
+        if (!/^R/i.test(code) || a?.action?.allin) continue;
+        const at = await replyAt([...codes, code]);
+        if (at) targets.push(at);
+      }
+    }
+    const locks: NodeLock[] = [], lines: string[] = [];
+    for (const t of targets) {
+      const call = t.sols.find((a) => /^C/i.test(String(a?.action?.code ?? "")));
+      if (!call) continue;
+      locks.push(poolLimpLockOf(t.line, t.sols, String(call.action.code), w));
+      lines.push(t.line);
+    }
+    return locks.length ? { locks, lines, source: rates.source, why: "" } : none("no reply node with a call on the tree");
+  } catch (e) {
+    return none(`threw: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+/** The refusal that is not a failure: the unlocked tree already gives the cold-call (or, since 2026-10-09, the limp — the
+ *  trigger rule) a real share (no lock needed). */
 export const COLD_CALL_NOT_NEEDED = "NOT NEEDED:";
+/** The pool-locked limper's refusal kind when the trigger rule did not fire (services/poolTrigger): the plain answer stands. */
+export const POOL_LOCK_SKIPPED = "pool-lock-skipped" as const;
 
 /**
  * THE POOL'S 3-BET COLD-CALL, LOCKED (2026-10-05, services/poolColdCall has the why). Hero's preflop answer on the exact

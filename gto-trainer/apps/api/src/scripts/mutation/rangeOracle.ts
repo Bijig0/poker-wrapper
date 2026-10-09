@@ -86,29 +86,34 @@ export interface PoolFloor {
   kind: "limp" | "coldcall" | "call"; key: string; was: number;
   /** a limp-table key: the table the answer was read from — the note's "v3: " tag after the key; none = v2 (every note
    *  before 2026-10-09, and LIMP_LOCKS=v2) */
-  limpTable?: "v2" | "v3";
+  limpTable?: "v2" | "v3" | "v4";
   /** a limp-caller (2026-10-09): the range is the named range × this one — the call overlay's "× his limp range <key>"
-   *  (a limp-table key) or the floor's "× his limp-call rate <key>" (a call-table key) */
-  times?: { kind: "limp" | "call"; key: string; limpTable?: "v2" | "v3"; cal?: string };
+   *  (a limp-table key) or the floor's "× his limp-call rate <key>" (a call-table key); under v4 the call side is the
+   *  Ignition limp-call GROUP rates the note names ("applied as Ignition limp-call group rates <key>"), not the call cell */
+  times?: { kind: "limp" | "call"; key: string; limpTable?: "v2" | "v3" | "v4"; cal?: string; group?: string };
 }
 export function poolFloorsOf(note: string): Map<string, PoolFloor> {
   const out = new Map<string, PoolFloor>();
   // each "POOL … RANGE:" tag to the next (not the note's " · " separators: a GTO Wizard source id carries " · " itself)
-  const heads = [...note.matchAll(/POOL (LIMP|COLD-CALL|CALL) RANGE: /g)];
+  // POOL FLAT RANGE (services/poolFlatFloor, 2026-10-09): a call-table cell, read as the call overlay's
+  const heads = [...note.matchAll(/POOL (LIMP|COLD-CALL|CALL|FLAT) RANGE: /g)];
   heads.forEach((h, i) => {
     const body = note.slice(h.index! + h[0].length, i + 1 < heads.length ? heads[i + 1]!.index : undefined);
     // the pool-call overlay (services/poolCalls, 2026-10-07) names what the seat did in words; the shape is the floors'
-    const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \((v3: )?/g;
+    const re = /the ([A-Z]+) \(\d+bb\) [^—]*?— ([\d.]+) combos on .*?, now the pool's (\S+) \((v[34]: )?/g;
     const ms = [...body.matchAll(re)];
     ms.forEach((e, j) => {
-      const kind = h[1] === "LIMP" ? "limp" : h[1] === "CALL" ? "call" : "coldcall";
+      const kind = h[1] === "LIMP" ? "limp" : h[1] === "CALL" || h[1] === "FLAT" ? "call" : "coldcall";
       // the seat's own clause: up to the next seat's — a limp-caller's "× his …" multiplier sits inside it
       const seg = body.slice(e.index!, j + 1 < ms.length ? ms[j + 1]!.index : undefined);
-      const tl = /× his limp range (\S+) \((v3: )?/.exec(seg);
+      const tl = /× his limp range (\S+) \((v[34]: )?/.exec(seg);
       const tc = tl ? null : /× his limp-call rate (\S+) \(/.exec(seg);
       const cal = /× Ignition calibration (\S+)/.exec(seg)?.[1];
-      const times = tl ? { kind: "limp" as const, key: tl[1]!, limpTable: tl[2] ? "v3" as const : "v2" as const, ...(cal ? { cal } : {}) } : tc ? { kind: "call" as const, key: tc[1]!, ...(cal ? { cal } : {}) } : undefined;
-      out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: e[4] ? "v3" as const : "v2" as const } : {}), ...(times ? { times } : {}) });
+      const group = /applied as Ignition limp-call group rates ([A-Za-z0-9_]+)/.exec(seg)?.[1];
+      const tag = (x: string | undefined): "v2" | "v3" | "v4" => (x ? x.slice(0, 2) as "v3" | "v4" : "v2");
+      const extra = { ...(cal ? { cal } : {}), ...(group ? { group } : {}) };
+      const times = tl ? { kind: "limp" as const, key: tl[1]!, limpTable: tag(tl[2]), ...extra } : tc ? { kind: "call" as const, key: tc[1]!, ...extra } : undefined;
+      out.set(e[1]!, { kind, key: e[3]!, was: Number(e[2]), ...(kind === "limp" || (kind === "call" && !e[3]!.startsWith("poolcall_")) ? { limpTable: tag(e[4]) } : {}), ...(times ? { times } : {}) });
     });
   });
   return out;
@@ -126,6 +131,11 @@ export function poolRangeOf(f: PoolFloor): Record<string, number> | null {
   if (!base || !f.times) return base;
   // a limp-caller: the named range × the multiplier the note names (limpCallProduct's rounding, so it is exact)
   const other = f.times.kind === "limp" ? limpLockRange(f.times.key, f.times.limpTable ?? "v2")?.weights ?? null : callTable.get(f.times.key);
+  // v4's group product: the limp side × the named group rates (the call cell is not part of it)
+  if (f.times.group) {
+    const limpSide = f.times.kind === "limp" ? other : base;
+    return limpSide ? limpCallProduct(limpSide, {}, null, f.times.group) : null;
+  }
   return other ? limpCallProduct(f.times.kind === "limp" ? other : base, f.times.kind === "limp" ? base : other, f.times.cal ?? null) : null;
 }
 const classCombos = (c: string): number => (c.length === 2 ? 6 : c.endsWith("s") ? 4 : 12);
