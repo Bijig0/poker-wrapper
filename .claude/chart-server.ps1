@@ -55,7 +55,11 @@ while ($true) {
   if ($holder) {
     $p = Get-Process -Id $holder.OwningProcess -ErrorAction SilentlyContinue
     Log "port $port already served by $($p.Name)#$($p.Id) - watching it"
+    # its environment names the supervisor that started it (often one stopped by hand): the stamp names this one, so
+    # its config watch follows this supervisor (scripts\supervisor_lib.ps1 Set-SupervisorAdopted, 2026-10-10)
+    if ($p) { Set-SupervisorAdopted -WorkerPid $p.Id }
   } else {
+    Set-SupervisorAdopted   # a worker of its own: the adopted mark (if any) goes
     $run = "`"`"$env:BUN`" `"$server`" >> `"$out`" 2>&1`""
     $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -WindowStyle Hidden -PassThru -ArgumentList '/c', $run
     Log "server started (cmd pid $($p.Id))"

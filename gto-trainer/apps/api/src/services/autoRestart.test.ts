@@ -208,7 +208,12 @@ describe("liveSessionReason", () => {
 const SUP_PID = 4242;
 
 /** A rig whose supervisor (pid 4242, protocol 2) read study-api.ps1, config/env.ps1 and config/local.env. */
-function supRig(o: { stamp?: Record<string, unknown>; env?: NodeJS.ProcessEnv; dirtyFiles?: string[]; others?: boolean } = {}) {
+function supRig(o: {
+  stamp?: Record<string, unknown>; env?: NodeJS.ProcessEnv; dirtyFiles?: string[]; others?: boolean;
+  /** POKER_SUPERVISOR in this worker's environment (default SUP_PID) and the pids that are alive (default [SUP_PID]) */
+  envPid?: number; live?: number[];
+} = {}) {
+  const live = o.live ?? [SUP_PID];
   const sroot = tree({ "study-api.ps1": "# v1\n", "config/env.ps1": "# env v1\n", "config/local.env": "GTOW_POLL_MS=500\nPORT_OFFSET=0\n" });
   const jobs = join(sroot, "jobs");
   mkdirSync(jobs, { recursive: true });
@@ -222,7 +227,7 @@ function supRig(o: { stamp?: Record<string, unknown>; env?: NodeJS.ProcessEnv; d
   writeStamp("api", SUP_PID, o.stamp);
   const codes: number[] = [];
   let r: ReturnType<typeof rig>;
-  const supervisor = new SupervisorWatch({ name: "api", jobsDir: jobs, ownPid: () => SUP_PID, now: () => r.s.now });
+  const supervisor = new SupervisorWatch({ name: "api", jobsDir: jobs, ownPid: () => o.envPid ?? SUP_PID, now: () => r.s.now, alive: (pid) => live.includes(pid) });
   const others = o.others ? [new SupervisorWatch({ name: "gtow", jobsDir: jobs, now: () => r.s.now, alive: (pid) => pid === 777 })] : [];
   r = rig({ supervisor, others, exit: (c: number) => { codes.push(c); }, env: o.env ?? {}, ...(o.dirtyFiles ? { dirtyFiles: o.dirtyFiles } : {}) });
   /** the change is seen, then quiet for the settle time */
@@ -336,11 +341,61 @@ describe("AutoRestart: the supervisor's config", () => {
     expect(r.codes).toEqual([]);
   });
 
-  test("a stamp written by another supervisor than this process's is not ours to act on", async () => {
+  test("a stamp left by a dead supervisor while this process's own (env) supervisor lives is not ours to act on", async () => {
     const r = supRig({ stamp: { pid: 999 } });
     writeFileSync(r.f.script, "# v2\n");
-    expect((await r.settle()).state).toBe("current");
+    const st = await r.settle();
+    expect(st.state).toBe("current");
+    expect(st.watch).toEqual({ pid: SUP_PID, adopted: false, state: "unknown" });
     expect(r.codes).toEqual([]);
+  });
+
+  test("ADOPTED (live 2026-10-10 02:40): env pid = the old, dead supervisor, stamp pid = the live adopter, behind on local.env → env-changed, exit 0", async () => {
+    // the chart server started at 02:38:20 by the old supervisor (killed by hand), adopted by the new one, pid 26736
+    const r = supRig({ envPid: 11111, live: [26736], stamp: { pid: 26736 } });
+    expect((await r.auto.tick()).watch).toEqual({ pid: 26736, adopted: true, state: "current" });
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    const first = await r.auto.tick();
+    expect([first.state, first.reason]).toEqual(["settling", "env-changed"]);
+    r.s.now += 21_000;
+    const st = await r.auto.tick();
+    expect(st.state).toBe("restarting");
+    expect(st.reason).toBe("env-changed");
+    expect(st.why).toContain("keys: GTOW_POLL_MS");
+    expect(r.codes).toEqual([0]);
+    // the loop guard names the adopter; no request file for an env change
+    expect(JSON.parse(readFileSync(lastRequestPath("api", r.jobs), "utf8")).supervisorPid).toBe(26736);
+    expect(existsSync(requestPath("api", r.jobs))).toBe(false);
+  });
+
+  test("ADOPTED, its script changed: the request file names the adopter's pid (the one it checks against its own)", async () => {
+    const r = supRig({ envPid: 11111, live: [26736], stamp: { pid: 26736 } });
+    writeFileSync(r.f.script, "# v2\n");
+    expect((await r.settle()).state).toBe("restarting");
+    expect(r.codes).toEqual([3]);
+    expect(JSON.parse(readFileSync(requestPath("api", r.jobs), "utf8")).supervisorPid).toBe(26736);
+  });
+
+  test("a DEAD stamp pid with no live supervisor in the env: reported (supervisor-old), never exited — not for config, not for code", async () => {
+    const r = supRig({ envPid: 26736, live: [], stamp: { pid: 26736 } });
+    writeFileSync(r.f.local, "GTOW_POLL_MS=900\nPORT_OFFSET=0\n");
+    const st = await r.settle();
+    expect(st.state).toBe("supervisor-old");
+    expect(st.reason).toBe("env-changed");
+    expect(st.why).toContain("its supervisor (pid 26736) is not running");
+    expect(st.why).toContain('"PokerWrapper api - test"');
+    expect(st.watch).toEqual({ pid: 26736, adopted: false, state: "gone" });
+    // a committed code change would exit into nothing as well: unsupervised, no exit
+    r.edit("a.ts");
+    const code = await r.auto.tick();
+    expect(code.state).toBe("unsupervised");
+    expect(code.why).toContain("is not running");
+    expect(r.codes).toEqual([]);
+    // the old env pid dead too after an adopter died: the same
+    const b = supRig({ envPid: 11111, live: [], stamp: { pid: 26736 } });
+    writeFileSync(b.f.script, "# v2\n");
+    expect((await b.settle()).state).toBe("supervisor-old");
+    expect(b.codes).toEqual([]);
   });
 
   test("a change the supervisor refused (a file would not parse) is not asked again until the files change", async () => {

@@ -30,6 +30,14 @@ Update-SupervisorConfig
 "A3=$env:GTOW_POLL_MS|$env:PORT"
 Copy-Item (Join-Path $jobs 'supervisor-api.json') (Join-Path $Root 'stamp-after-port.json')
 
+# a worker already on the port is adopted: the stamp is re-written with this pid and the worker's; a worker of its own
+# clears the mark
+Set-SupervisorAdopted -WorkerPid 54321
+Copy-Item (Join-Path $jobs 'supervisor-api.json') (Join-Path $Root 'stamp-adopted.json')
+Set-SupervisorAdopted
+Copy-Item (Join-Path $jobs 'supervisor-api.json') (Join-Path $Root 'stamp-unadopted.json')
+"P=$PID"
+
 # a request in this supervisor's first 2 minutes is refused (loop guard)
 Ask
 "R1=$([bool](Get-SupervisorReplaceRequest -ExitCode 3))|$(Test-Path $req)"

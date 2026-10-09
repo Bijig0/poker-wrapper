@@ -39,6 +39,10 @@ Read README.md first: what each folder is, the three services and their ports, t
     up >= 2 min, refused (stamp `refused`, shown as boot-check-failed) when a file would not parse. `AUTO_RESTART=off`
     stops it (reporting stays). The setup page / `live.ts` say "will restart itself when no session is live".
     A supervisor started from an older script (no protocol 2) is only reported: restart it by hand ONCE.
+    A worker finds its stamp by NAME and takes the stamp's pid as its supervisor while that pid is alive — the chart
+    supervisor ADOPTS a server already on its port ("already served … watching it", re-stamped with `adopted`), and
+    that worker's POKER_SUPERVISOR still names the old supervisor. Stamp pid dead and no live one in its env = `gone`:
+    reported (`supervisor-old` / `unsupervised`), never exited. `auto.watch` in `/api/build` shows the link.
   - By hand, when no session is live: `Stop-Process` that supervisor's powershell (never `/T`: the watchdog's children
     are the GTO Wizard windows), then `Start-ScheduledTask "PokerWrapper API - <user>"` (`… Charts …`, `… GTO
     Wizard …`). Never Stop/Start the task while its supervisor is still running. **The task-scheduler trap:** after a
