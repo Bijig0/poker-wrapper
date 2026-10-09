@@ -6,7 +6,9 @@ import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
 import { applyLimpCallProduct, applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
-import { applyPoolFlatFloor, poolFlatFloorMode, poolFlatFloorNote } from "./poolFlatFloor";
+import { applyPoolFlatFloor, poolFlatFloorMode, poolFlatFloorNote, type SbFlatUse } from "./poolFlatFloor";
+import { sbFlatTableMode } from "./poolSbFlat";
+import { seatHistoryFor } from "./seatStats";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
 import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
@@ -1223,14 +1225,22 @@ async function flopArrivalCompute(
     for (const seg of (sixNote ?? "").matchAll(/POOL (?:LIMP|COLD-CALL) RANGE: [^·]*/g)) {
       for (const m of seg[0].matchAll(/the (UTG|HJ|CO|BTN|SB|BB) \(/g)) given.push(m[1]!);
     }
-    const ff = applyPoolFlatFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given });
+    // THE SB-FLAT TABLE v2 (services/poolSbFlat, SB_FLAT_TABLE=v2): the SB's history at this table, from seatStats' memory
+    // (session-to-date for the seat's occupant — never a DB read here); not read at all with the switch off
+    const seen = sbFlatTableMode() === "v2" ? { SB: seatHistoryFor(hand, "SB") } : undefined;
+    const ff = applyPoolFlatFloor({ hand, heroPos, ranges: recon.ranges, dealt: pinnedDealt, skip: given, seen });
     if (ff.kept.length) tmark("pool flat floor kept", ff.kept.map((k) => `the ${k.pos} (${k.was} combos, ${k.key}): ${k.text}`).join("; "));
+    // one [sbflat] api.log line per SB flat the v2 table keyed, fired or kept (the key x outcome log the table's thin VPIP cells grow from)
+    for (const x of [...ff.applied.map((r) => ({ r, fired: true })), ...ff.kept.map((r) => ({ r, fired: false }))]) {
+      if (x.r.sbflat) console.log(sbFlatLogLine(hand, x.r.key, x.r.sbflat, x.r.was, x.fired, x.r.text));
+    }
     if (ff.applied.length) {
       const note = poolFlatFloorNote(ff.applied, rangeSource);
       tmark("pool flat floor", note);
       recon = { ...recon, ranges: ff.ranges };
       sixNote = [sixNote, note].filter(Boolean).join(" · ");
-      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code: "arrival:pool-flat-floor", why: note.slice(0, 300) };
+      const code = "arrival:pool-flat-floor";
+      if (prov.how !== "rebuilt") prov = { how: "by-design", producer: prov.producer, code, why: note.slice(0, 300) };
     }
   }
   // THE POOL CALL RANGES (services/poolCalls, Brady 2026-10-07): the exact tree could not hold the line (a 4-way raised
@@ -1254,6 +1264,13 @@ async function flopArrivalCompute(
     }
   }
   return { ok: true, a: { recon, preTokens, seatOrder, rangeSource, note: sixNote, prov: prov! } };
+}
+
+/** The [sbflat] api.log line: the SB-flat table v2's key for one SB flat, what keyed it, and whether the floor fired. */
+function sbFlatLogLine(hand: ParsedHand, key: string, u: SbFlatUse, was: number, fired: boolean, text: string): string {
+  const f = u.fields;
+  return `[sbflat] hand ${hand.clientHandId ?? hand.handId ?? "?"}: the SB (${f.band ?? "?"}/${f.vband ?? "?"}) flatted the ${f.opener ?? "?"}'s ${u.openTo}bb open (${f.size ?? "?"}) — `
+    + `${key} (${u.chain} step ${u.step}, ${u.vpip}${u.own ? ", own NL200 factor" : ""}) — ${fired ? "REPLACED" : "kept"} (${was} combos walked; ${text})`;
 }
 
 /** hand → its flop arrival, by the preflop inputs it was computed from (derived: dropping it costs a recompute). */

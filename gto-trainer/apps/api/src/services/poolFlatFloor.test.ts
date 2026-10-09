@@ -4,6 +4,8 @@ import { poolCallersOf, setPoolCallTable, type PoolCallTable } from "./poolCalls
 import { poolFloorsOf, poolRangeOf } from "../scripts/mutation/rangeOracle";
 import { departureForCode, departureForWarning } from "./approximations";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
+import { sbFlatRange, sbFlatTable } from "./poolSbFlat";
+import { poolCiLower, shouldReplace, wilsonLower } from "./poolTrigger";
 
 /**
  * THE POOL FLAT FLOOR (services/poolFlatFloor, 2026-10-09): on every line, a flat / over-call / BB iso-call whose walked
@@ -44,7 +46,10 @@ const TABLE: PoolCallTable = {
     poolcall_overcall_SB_b1_80p: cell("overcall", "SB", "b1", "80p", 0.106, flat(0.106)),
   },
 };
-afterEach(() => { setPoolCallTable(null); delete process.env.POOL_FLAT_FLOOR; delete process.env.POOL_TRIGGER_DIVERGENCE; });
+afterEach(() => {
+  setPoolCallTable(null);
+  for (const k of ["POOL_FLAT_FLOOR", "POOL_TRIGGER_DIVERGENCE", "SB_FLAT_TABLE", "SB_FLAT_OWN_FACTOR"]) delete process.env[k];
+});
 
 /** BTN opens 2.5, a 35bb SB flats, hero calls from the BB (a chart arrival) */
 const SB_FLAT_LINE = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "fold"), pre(4, "raise", 2.5), pre(5, "call", 2.5), pre(6, "call", 2.5, true)];
@@ -134,5 +139,96 @@ describe("applyPoolFlatFloor", () => {
     expect(departureForCode("arrival:pool-flat-floor")?.id).toBe("pool-flat-floor");
     expect(departureForWarning("POOL FLAT RANGE")?.id).toBe("pool-flat-floor");
     expect(departureForCode("arrival:pool-flat-floor")?.offSwitch?.env).toBe("POOL_FLAT_FLOOR");
+  });
+});
+
+describe("THE SB-FLAT TABLE v2 (SB_FLAT_TABLE=v2, services/poolSbFlat)", () => {
+  const WALK = { BTN: { AA: 1, AKs: 1 }, SB: { AKs: 0.075 }, BB: { QJs: 1 } };
+  const T = () => sbFlatTable().ranges;
+
+  test("off (unset): the SB's flat takes today's call-table cell, whatever history is passed", () => {
+    setPoolCallTable(TABLE);
+    const r = applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }), seen: { SB: { n: 60, v: 30 } } });
+    expect(r.applied.map((x) => [x.key, x.sbflat])).toEqual([["poolcall_flat_SB_vsBTN_le40", undefined]]);
+  });
+
+  test("v2, no seat history: the 35bb SB vs the BTN's 2.5bb open → poolcall_flat_SB_vsBTN_oM_25_65, the cell's NL200 freq and Ignition counts", () => {
+    setPoolCallTable(TABLE);
+    process.env.SB_FLAT_TABLE = "v2";
+    const r = applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }) });
+    const cell = T()["poolcall_flat_SB_vsBTN_oM_25_65"]!;
+    expect(r.applied.map((x) => [x.pos, x.key, x.was, x.why, x.freq, x.calls])).toEqual([["SB", "poolcall_flat_SB_vsBTN_oM_25_65", 0.3, "residue", cell.freq, cell.calls]]);
+    expect(r.applied[0]!.sbflat).toMatchObject({ chain: "vpip_unknown", step: 0, chances: cell.chances, own: false, openTo: 2.5, vpip: "vpip unknown (no seat history)" });
+    expect(r.ranges.SB).toEqual(cell.weights);
+    expect(r.ranges.BTN).toEqual(WALK.BTN);
+    const note = poolFlatFloorNote(r.applied, "ign200_6max_D30");
+    expect(note).toStartWith("POOL FLAT RANGE: the SB (35bb) flat-called the BTN's open — 0.3 combos on ign200_6max_D30, now the pool's poolcall_flat_SB_vsBTN_oM_25_65 (sbflat v2: "
+      + `${(100 * cell.freq).toFixed(2)}% of chances, ${cell.calls} calls measured of ${cell.chances} Ignition chances, vpip unknown (no seat history), `);
+    expect(note).toContain("trigger residue: the solver plays it 0.023% (< 1.00%)");
+  });
+
+  test("v2 with his VPIP at this table: n = 45, v = 10 → v30, the VPIP cell (vband le75); n = 12 → unknown, said with its n", () => {
+    setPoolCallTable(TABLE);
+    process.env.SB_FLAT_TABLE = "v2";
+    const known = applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }), seen: { SB: { n: 45, v: 10 } } });
+    expect(known.applied[0]!.key).toBe("poolcall_flat_SB_vsBTN_oM_le75_v30");
+    expect(known.applied[0]!.sbflat).toMatchObject({ chain: "vpip_known", step: 0, vpip: "vpip v30 (n=45, v=10, 24.4%)" });
+    expect(known.ranges.SB).toEqual(T()["poolcall_flat_SB_vsBTN_oM_le75_v30"]!.weights);
+    const few = applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }), seen: { SB: { n: 12, v: 3 } } });
+    expect(few.applied[0]!.key).toBe("poolcall_flat_SB_vsBTN_oM_25_65");
+    expect(poolFlatFloorNote(few.applied, null)).toContain(", vpip unknown (n=12), ");
+  });
+
+  test("THE CI READS THE CELL'S IGNITION COUNTS: 12 flats in 41 chances do not exclude a 19% solver flat (kept); CoinPoker-sized counts would have", () => {
+    setPoolCallTable(TABLE);
+    process.env.SB_FLAT_TABLE = "v2";
+    // BTN opens 2.0 (oS), the 40bb SB flats, hero BB calls
+    const acts = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "fold"), pre(4, "raise", 2), pre(5, "call", 2), pre(6, "call", 2, true)];
+    const key = "poolcall_flat_SB_vsBTN_oS_25_65", c = T()[key]!;
+    expect([c.calls, c.chances]).toEqual([12, 41]);
+    const f = 0.19;   // under the pool's 40.8% / 2, above the 95% Wilson lower bound 17.6%
+    expect(f).toBeLessThan(c.freq / 2);
+    expect(f).toBeGreaterThan(wilsonLower(c.calls, c.chances));
+    const r = applyPoolFlatFloor({ hand: hand(acts, 6), heroPos: "BB", ranges: { BTN: { AA: 1 }, SB: flat(f), BB: { AA: 1 } }, dealt: dealt({ 5: 40 }) });
+    expect(r.applied).toEqual([]);
+    expect(r.kept.map((k) => k.key)).toEqual([key]);
+    expect(r.kept[0]!.text).toContain("does not exclude the solver's share");
+    expect(r.kept[0]!.sbflat?.chances).toBe(41);
+    // the same rate on the CoinPoker counts of the cell (cp_calls / cp_chances) clears the evidence test
+    expect(shouldReplace({ fSolver: f, fPool: c.freq, poolCI: poolCiLower({ calls: c.cp_calls, chances: c.cp_chances }), groupKL: null, line: "preflop", reach: f }).text)
+      .not.toContain("does not exclude");
+  });
+
+  test("THE ORACLE ROUND TRIP: poolFloorsOf reads 'sbflat v2' back to the v2 table (and 'sbflat v2 own' with the own factor)", () => {
+    setPoolCallTable(TABLE);
+    process.env.SB_FLAT_TABLE = "v2";
+    const r = applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }), seen: { SB: { n: 45, v: 10 } } });
+    const f = poolFloorsOf(`PREFLOP RANGES FROM THE PIN: x · ${poolFlatFloorNote(r.applied, "gtow-ai · 6-handed")}`);
+    expect([...f]).toEqual([["SB", { kind: "call", key: "poolcall_flat_SB_vsBTN_oM_le75_v30", was: 0.3, sbflat: { own: false } }]]);
+    expect(poolRangeOf(f.get("SB")!)).toEqual(r.ranges.SB!);
+    process.env.SB_FLAT_OWN_FACTOR = "on";
+    const o = applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }) });
+    const note = poolFlatFloorNote(o.applied, null);
+    expect(note).toContain("now the pool's poolcall_flat_SB_vsBTN_oM_25_65 (sbflat v2 own: ");
+    expect(note).toContain("% of chances (own NL200 factor), ");
+    expect(o.applied[0]!.freq).toBeCloseTo(T()["poolcall_flat_SB_vsBTN_oM_25_65"]!.freq_pooled * 0.765, 12);
+    delete process.env.SB_FLAT_OWN_FACTOR;     // the oracle follows the note, not the environment
+    const fo = poolFloorsOf(note).get("SB")!;
+    expect(fo.sbflat).toEqual({ own: true });
+    expect(poolRangeOf(fo)).toEqual(o.ranges.SB!);
+    expect(poolRangeOf(fo)).toEqual(sbFlatRange("poolcall_flat_SB_vsBTN_oM_25_65", { own: true })!.weights);
+  });
+
+  test("v2 is the SB's FLAT only: the BB's over-call behind him keeps the call table; an all-in open keeps today's cell", () => {
+    setPoolCallTable({ ...TABLE, ranges: { ...TABLE.ranges, poolcall_overcall_BB_b1_80p: cell("overcall", "BB", "b1", "80p", 0.326, flat(0.326)) } });
+    process.env.SB_FLAT_TABLE = "v2";
+    // hero UTG opens 2.5, the SB flats, the BB over-calls
+    const acts = [...BLINDS, pre(1, "raise", 2.5, true), pre(2, "fold"), pre(3, "fold"), pre(4, "fold"), pre(5, "call", 2.5), pre(6, "call", 2.5)];
+    const r = applyPoolFlatFloor({ hand: hand(acts, 1), heroPos: "UTG", ranges: { UTG: { AA: 1 }, SB: { AKs: 0.075 }, BB: { KQs: 0.02 } }, dealt: dealt() });
+    expect(r.applied.map((x) => [x.pos, x.key, !!x.sbflat])).toEqual([["SB", "poolcall_flat_SB_vsUTG_oM_98_110", true], ["BB", "poolcall_overcall_BB_b1_80p", false]]);
+    // the BTN jams 30bb, the 35bb SB calls (and the line goes on): outside the v2 node
+    const jam = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "fold"), pre(4, "all-in", 30), pre(5, "call", 30), pre(6, "call", 30, true)];
+    expect(applyPoolFlatFloor({ hand: hand(jam, 6), heroPos: "BB", ranges: WALK, dealt: dealt({ 5: 35 }) }).applied.map((x) => [x.key, !!x.sbflat]))
+      .toEqual([["poolcall_flat_SB_vsBTN_le40", false]]);
   });
 });

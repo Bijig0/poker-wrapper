@@ -42,6 +42,9 @@
  * calibration's gain is +0.5 to +1.0 nats with KL ≥ 0.8). Until then `ignition` is the most it should be set to.
  * THE SHAPE TEST IS REQUIRED: a divergence with no KL (`groupKL` null — the solver's shape is not known) never fires
  * (review S3); the calibration borrowed a KL for such rows rather than skipping the test.
+ * THE FIRST FAMILY WITH IGNITION'S OWN COUNTS (2026-10-10): the SB-flat table v2 (services/poolSbFlat,
+ * SB_FLAT_TABLE=v2) — its cells' calls / chances are Ignition flats / chances (10,845 in all, 3-525 a cell), so the bound
+ * binds there as the rule intended; poolFlatFloor passes them with `countsFrom: "ignition"`.
  *
  * "DEALT": a walked range here is a CLASS range (169 classes, at most 1,326 combos), so a share of his dealt hands is
  * combos / 1,326 — the cold-call floor's 13.26-combo "1% of hands". (The calibration counted at flop entry against
