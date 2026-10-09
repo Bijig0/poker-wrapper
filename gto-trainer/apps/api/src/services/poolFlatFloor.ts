@@ -14,7 +14,9 @@
  * solver's calling share implied by the walk: fSolver = reach = combos / 1,326; fPool = the cell's rate; the evidence
  * = the cell's (calls, chances) Wilson bound; the shape = KL(cell ‖ his walked range) over the 8 hand groups. So a 0.3-
  * combo SB flat (residue) is replaced; a BB defending 40% where the pool defends 45% is not (no divergence); a 16% BB
- * defend against the pool's 49% with a different hand mix is (divergence — the calibration's +1.69 nats a hand).
+ * defend against the pool's 49% with a different hand mix is (divergence — the calibration's +1.69 nats a hand) ONLY
+ * with the divergence arm on: it is OFF by default since 2026-10-10 (poolTrigger's header — the call table's counts
+ * are CoinPoker's, so its evidence test is vacuous), and this floor then fills residue callers only.
  * REPLACED by the cell, not floored, as the pool-call overlay does: the flat cells are P(call | dealt, hand) over all
  * hands — no earlier voluntary action of his to condition on, so the cell IS his holding. NOT here: a limper's call of
  * the iso and the SB completer's (limpcall / sbiso: the limp floor's limp × call product), a plain limp (the limp floor),
@@ -86,7 +88,7 @@ export function applyPoolFlatFloor(a: {
     const was = r2(combosOfRange(walked));
     const f = was / 1326;
     const t = shouldReplace({
-      fSolver: f, fPool: r.freq, poolCI: poolCiLower({ calls: r.calls, chances: r.chances ?? null }),
+      fSolver: f, fPool: r.freq, poolCI: poolCiLower({ calls: r.calls, chances: r.chances ?? null }), countsFrom: "pool",
       groupKL: was > 0 ? klGroup(r.weights, walked) : null, line: "preflop", reach: f,
     });
     if (!t.fire || !t.why) { kept.push({ pos: c.pos, key: k.key, was, text: t.text }); continue; }

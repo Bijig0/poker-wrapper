@@ -23,6 +23,7 @@ afterEach(() => {
   Object.assign(P.poolLockSeams, seams0);
   P.resetAiPreflopMemory();
   delete process.env.SHORT_LIMP_POOL;
+  delete process.env.POOL_TRIGGER_DIVERGENCE;
 });
 
 const POS = { 1: "UTG", 2: "HJ", 3: "CO", 4: "BTN", 5: "SB", 6: "BB" } as const;
@@ -218,7 +219,13 @@ describe("solvePreflopPoolLocked over its seams", () => {
     expect(r.trigger?.fSolver).toBeCloseTo(0.316, 6);
     expect(r.trigger?.fPool).toBeCloseTo(0.26326, 5);
     expect(r.reason).toContain("NOT NEEDED:");
-    expect(r.reason).toContain("not under the pool's rate / 2");
+    // the divergence arm is off by default (review B1); with it on the same limp is still the solver's
+    expect(r.reason).toContain("the divergence arm is off");
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
+    const on = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(on.ok).toBe(false);
+    expect((on as { reason: string }).reason).toContain("not under the pool's rate / 2");
+    delete process.env.POOL_TRIGGER_DIVERGENCE;
     expect(calls.locks).toHaveLength(0);
     expect(calls.reads.some((x) => x.startsWith("L:"))).toBe(false);
     expect(Pin.preflopPinFor(hd)).toBeUndefined();
@@ -228,7 +235,8 @@ describe("solvePreflopPoolLocked over its seams", () => {
     expect(warm.locks).toHaveLength(0);
   });
 
-  it("the shape test: a 5% limp (under half the pool's 26.3%) with the POOL'S OWN hand mix is the solver's; a 5% limp of junk is locked", async () => {
+  it("the shape test (divergence arm ON): a 5% limp (under half the pool's 26.3%) with the POOL'S OWN hand mix is the solver's; a 5% limp of junk is locked — and not with the arm off (the default)", async () => {
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
     const w = F.poolLimpWeights("limp_first_short_le60");
     const same = rig({ plainLimp: w.map((x) => x * 0.19) });
     const r = await P.solvePreflopPoolLocked(h(), "BB", target);
@@ -243,6 +251,14 @@ describe("solvePreflopPoolLocked over its seams", () => {
     const div = rig({ plainLimp: junk });
     expect((await P.solvePreflopPoolLocked(h(), "BB", target)).ok).toBe(true);
     expect(div.locks).toHaveLength(1);
+    // the default: the divergence arm is off, so the 5% junk limp is the solver's too
+    delete process.env.POOL_TRIGGER_DIVERGENCE;
+    P.resetAiPreflopMemory();
+    const off = rig({ plainLimp: junk });
+    const r2 = await P.solvePreflopPoolLocked(h(), "BB", target);
+    expect(r2.ok).toBe(false);
+    expect((r2 as { reason: string }).reason).toContain("the divergence arm is off");
+    expect(off.locks).toHaveLength(0);
   });
 
   it("the residue lock's note carries the trigger's reading", async () => {

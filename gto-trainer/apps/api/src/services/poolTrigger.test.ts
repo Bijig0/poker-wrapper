@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { classRangeOf, combosOfRange, groupShares, handGroup, klGroup, poolCiLower, shouldReplace, triggerParams, TRIGGER_DEFAULTS, wilsonLower, type TriggerInput } from "./poolTrigger";
 import { COMBOS } from "../utils/comboIndex/comboIndex";
 
@@ -42,7 +42,8 @@ describe("klGroup", () => {
   });
 });
 
-describe("shouldReplace — the calibration's cases", () => {
+describe("shouldReplace — the calibration's cases (the divergence arm switched ON: it is off by default, review B1)", () => {
+  beforeEach(() => { process.env.POOL_TRIGGER_DIVERGENCE = "on"; });
   test("RESIDUE: the 21.4bb BTN limps 0.12% on the plain tree (study node 1) — fires, no evidence needed", () => {
     const r = shouldReplace(pre({ fSolver: 0.0012095, fPool: 0.26326, poolCI: null, groupKL: null }));
     expect(r).toMatchObject({ fire: true, why: "residue" });
@@ -80,8 +81,15 @@ describe("shouldReplace — the calibration's cases", () => {
     // no counts at all: no evidence, no divergence firing (the residue arm needs none)
     expect(shouldReplace(pre({ fSolver: 0.08, fPool: 0.3, poolCI: null, groupKL: 1.2 })).fire).toBe(false);
   });
-  test("an unknown shape (no solver range on record): the KL test is skipped, as the calibration did", () => {
-    expect(shouldReplace(pre({ fSolver: 0.05, fPool: 0.26, poolCI: 0.23, groupKL: null })).why).toBe("divergence");
+  test("an unknown shape (no solver range on record): no shape test, so NO divergence firing (review S3)", () => {
+    const r = shouldReplace(pre({ fSolver: 0.05, fPool: 0.26, poolCI: 0.23, groupKL: null }));
+    expect(r).toMatchObject({ fire: false, why: null });
+    expect(r.text).toContain("hand-group mix is not known");
+    expect(shouldReplace(pre({ fSolver: 0.05, fPool: 0.26, poolCI: 0.23, groupKL: NaN })).fire).toBe(false);
+    // the same numbers with a shape that differs: fires
+    expect(shouldReplace(pre({ fSolver: 0.05, fPool: 0.26, poolCI: 0.23, groupKL: 0.5 })).why).toBe("divergence");
+    // the residue arm needs no shape
+    expect(shouldReplace(pre({ fSolver: 0.002, fPool: 0.26, poolCI: 0.23, groupKL: null })).why).toBe("residue");
   });
   test("LINE GUARD: a limp-caller whose preflop line leaves 0.5% of his hands — fires preflop, never postflop", () => {
     expect(shouldReplace(pre({ fSolver: 0.5, fPool: 0.7, poolCI: 0.6, reach: 0.005 }))).toMatchObject({ fire: true, why: "line-guard" });
@@ -96,10 +104,38 @@ describe("shouldReplace — the calibration's cases", () => {
 });
 
 describe("the switches, read at every call", () => {
-  test("defaults", () => {
+  test("defaults: the divergence arm OFF (review B1 — the evidence bound is on CoinPoker's counts)", () => {
     expect(triggerParams()).toEqual(TRIGGER_DEFAULTS);
+    expect(TRIGGER_DEFAULTS.divergence).toBe("off");
+    // unset: a clear 2.7x divergence with a different mix does NOT fire; residue and the line guard still do
+    const r = shouldReplace(pre({ fSolver: 0.0555, fPool: 0.15051, poolCI: 0.14, groupKL: 0.5 }));
+    expect(r.fire).toBe(false);
+    expect(r.text).toContain("divergence arm is off");
+    expect(shouldReplace(pre({ fSolver: 0.162, fPool: 0.488, poolCI: 0.40, groupKL: 0.8, countsFrom: "ignition" })).fire).toBe(false);
+    expect(shouldReplace(pre({ fSolver: 0.001, fPool: 0.15 })).why).toBe("residue");
+    expect(shouldReplace(pre({ fSolver: 0.3, reach: 0.002 })).why).toBe("line-guard");
+    for (const v of ["junk", "", "off", "0"]) { process.env.POOL_TRIGGER_DIVERGENCE = v; expect(triggerParams().divergence).toBe("off"); }
+    for (const v of ["on", "1", "true", "ON"]) { process.env.POOL_TRIGGER_DIVERGENCE = v; expect(triggerParams().divergence).toBe("on"); }
+    process.env.POOL_TRIGGER_DIVERGENCE = "Ignition";
+    expect(triggerParams().divergence).toBe("ignition");
+  });
+  test("POOL_TRIGGER_DIVERGENCE=ignition: the arm runs only on a cell whose counts are Ignition's own", () => {
+    process.env.POOL_TRIGGER_DIVERGENCE = "ignition";
+    const x = { fSolver: 0.0555, fPool: 0.15051, poolCI: 0.14, groupKL: 0.5 };
+    const cp = shouldReplace(pre({ ...x }));                               // CoinPoker-counted (unmarked)
+    expect(cp.fire).toBe(false);
+    expect(cp.text).toContain("not Ignition's");
+    expect(shouldReplace(pre({ ...x, countsFrom: "pool" })).fire).toBe(false);
+    const ig = shouldReplace(pre({ ...x, countsFrom: "ignition" }));
+    expect(ig).toMatchObject({ fire: true, why: "divergence" });
+    expect(ig.text).toContain("on Ignition's counts");
+    // the rest of the arm still applies on Ignition's counts: a thin cell's bound that does not exclude the solver
+    expect(shouldReplace(pre({ fSolver: 0.08, fPool: 0.222, poolCI: wilsonLower(2, 9), groupKL: 1.2, countsFrom: "ignition" })).fire).toBe(false);
+    // and the shape test is required there too (S3)
+    expect(shouldReplace(pre({ ...x, groupKL: null, countsFrom: "ignition" })).fire).toBe(false);
   });
   test("POOL_TRIGGER_K: k = 3 skips a 2.7x divergence that k = 2 fires", () => {
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
     const x = pre({ fSolver: 0.0555, fPool: 0.15051, poolCI: 0.14, groupKL: 0.5 });
     expect(shouldReplace(x).fire).toBe(true);
     process.env.POOL_TRIGGER_K = "3";

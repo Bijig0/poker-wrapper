@@ -21,11 +21,27 @@
  * takes the median villain to 0.75% of his hands by the river (it would fire on 54% of river actions) — postflop the
  * cumulative check is a FLAG on check #3 (chainChecks), never a replacement.
  *
- * THE EVIDENCE TEST'S COUNTS (documented gap): the rule wants Ignition's own count for the cell (the builders are to write
- * `ign: {x, n}` per cell — factory side, not yet). Until they do, the Wilson bound is taken on the cell's OWN counts:
- * the call / cold-call tables' (calls, chances) — CoinPoker-sized, so it almost always passes, which at k = 2 is nearly
- * the same rule (the CI barely binds there; §3.2) — and the limp table's n limps of n / freq chances (Ignition NL200 for
- * the first-in / folded-to cells, CoinPoker-backed for v3's re-measured thin ones).
+ * THE EVIDENCE TEST'S COUNTS — AND WHY THE DIVERGENCE ARM IS OFF BY DEFAULT (2026-10-10, the independent review's B1,
+ * poker handoff/2026-10-10-tonight-review.md). The rule wants IGNITION's own count for the cell. The call / cold-call
+ * tables carry CoinPoker's (median 17,390 chances a cell): a Wilson bound on those is a point estimate, so the EVIDENCE
+ * term reduces to `fSolver < fPool` and the arm fires whenever the solver's share is under half CoinPoker's LEVEL with
+ * KL ≥ 0.3 — and CoinPoker's level is not Ignition's (the calibration's own flat_cold CO vsHJ ≤40bb: pool 22.6% vs
+ * Ignition 12.1% [4.8, 27.3]; the SB-flat study 20.9% vs 10.5% at 80-98bb). Where CoinPoker's level is ~2x Ignition's,
+ * k = 2 fires on a ratio that is ~1 against the real pool, and real solver ranges were being replaced (a 14.6bb BB
+ * defending 14.4% replaced by a 0-40bb cell at 47%). So:
+ *   POOL_TRIGGER_DIVERGENCE=off (unset, the default)  the residue arm and the line guard only (the calibration's own
+ *                                                      stage 1, trigger_rule.md §4)
+ *   POOL_TRIGGER_DIVERGENCE=ignition                  the arm runs ONLY on a cell whose counts are Ignition's own
+ *                                                      (`countsFrom: "ignition"` — today the SB-flat table v2's
+ *                                                      calls / chances); every CoinPoker-counted cell stays off
+ *   POOL_TRIGGER_DIVERGENCE=on                        the arm as calibrated, on any cell's counts (CoinPoker-sized
+ *                                                      included — the vacuous bound above; for a study, not live)
+ * What turns it on for a family: the builders writing Ignition's count per cell (`ign: {x, n}` — calibrate_trigger.py
+ * already computes it) into every table, as the SB-flat table v2 already carries, the callers passing those counts with
+ * `countsFrom: "ignition"`, and the per-family list reviewed (flat_SB, overcall_blind, flat_cold first — where the
+ * calibration's gain is +0.5 to +1.0 nats with KL ≥ 0.8). Until then `ignition` is the most it should be set to.
+ * THE SHAPE TEST IS REQUIRED: a divergence with no KL (`groupKL` null — the solver's shape is not known) never fires
+ * (review S3); the calibration borrowed a KL for such rows rather than skipping the test.
  *
  * "DEALT": a walked range here is a CLASS range (169 classes, at most 1,326 combos), so a share of his dealt hands is
  * combos / 1,326 — the cold-call floor's 13.26-combo "1% of hands". (The calibration counted at flop entry against
@@ -33,7 +49,7 @@
  *
  * THE SWITCHES, read at every decision (config/local.env):
  *   POOL_TRIGGER_K           the divergence ratio k (default 2)
- *   POOL_TRIGGER_DIVERGENCE  on (default) | off — the divergence arm (the calibration's suggested stage 2)
+ *   POOL_TRIGGER_DIVERGENCE  off (default) | ignition | on — the divergence arm (above; the calibration's stage 2)
  *   POOL_TRIGGER_LINE_GUARD  on (default) | off — the preflop line guard
  *   POOL_TRIGGER_ABS / POOL_TRIGGER_KL / POOL_TRIGGER_REACH  the residue floor (0.01), the KL bar (0.3 nats), the
  *                            line-guard floor (0.01) — for a study, not to be tuned live
@@ -44,8 +60,10 @@ import { COMBOS } from "../utils/comboIndex/comboIndex";
 export type TriggerWhy = "residue" | "divergence" | "line-guard" | null;
 export type ClassRange = Record<string, number>;
 
-export interface TriggerParams { abs: number; k: number; z: number; klMin: number; reach: number; divergence: boolean; lineGuard: boolean }
-export const TRIGGER_DEFAULTS: TriggerParams = { abs: 0.01, k: 2, z: 1.96, klMin: 0.3, reach: 0.01, divergence: true, lineGuard: true };
+/** the divergence arm: off (default) · only on Ignition-counted cells · on any cell's counts (the header) */
+export type DivergenceMode = "off" | "ignition" | "on";
+export interface TriggerParams { abs: number; k: number; z: number; klMin: number; reach: number; divergence: DivergenceMode; lineGuard: boolean }
+export const TRIGGER_DEFAULTS: TriggerParams = { abs: 0.01, k: 2, z: 1.96, klMin: 0.3, reach: 0.01, divergence: "off", lineGuard: true };
 
 const envNum = (name: string, dflt: number, ok: (v: number) => boolean): number => {
   const raw = process.env[name];
@@ -54,6 +72,11 @@ const envNum = (name: string, dflt: number, ok: (v: number) => boolean): number 
   return Number.isFinite(v) && ok(v) ? v : dflt;
 };
 const envOn = (name: string): boolean => !/^(off|0|false|no)$/i.test(String(process.env[name] ?? "on").trim());
+/** POOL_TRIGGER_DIVERGENCE: unset / off / anything unknown = off; "ignition"; on|1|true|yes = on */
+const envDivergence = (): DivergenceMode => {
+  const v = String(process.env.POOL_TRIGGER_DIVERGENCE ?? "").trim().toLowerCase();
+  return v === "ignition" ? "ignition" : /^(on|1|true|yes)$/.test(v) ? "on" : "off";
+};
 
 /** The parameters as the environment says now (read at every decision). */
 export function triggerParams(): TriggerParams {
@@ -63,7 +86,7 @@ export function triggerParams(): TriggerParams {
     z: TRIGGER_DEFAULTS.z,
     klMin: envNum("POOL_TRIGGER_KL", TRIGGER_DEFAULTS.klMin, (v) => v >= 0),
     reach: envNum("POOL_TRIGGER_REACH", TRIGGER_DEFAULTS.reach, (v) => v >= 0 && v < 1),
-    divergence: envOn("POOL_TRIGGER_DIVERGENCE"),
+    divergence: envDivergence(),
     lineGuard: envOn("POOL_TRIGGER_LINE_GUARD"),
   };
 }
@@ -146,8 +169,11 @@ export interface TriggerInput {
   fPool: number | null;
   /** the pool rate's 95% Wilson lower bound (poolCiLower; null = no counts → the divergence arm cannot fire) */
   poolCI: number | null;
+  /** whose hands `poolCI`'s counts are: "ignition" = Ignition's own (the SB-flat table v2); anything else = the
+   *  CoinPoker-sized cell counts — the divergence arm runs on those only under POOL_TRIGGER_DIVERGENCE=on */
+  countsFrom?: "ignition" | "pool" | null;
   /** KL(pool cell ‖ the solver's range after the action) over the 8 groups (klGroup; null = the solver's shape is not
-   *  known → the shape test is skipped, as the calibration did for shape-less rows) */
+   *  known → the shape test cannot be run, so the divergence arm does not fire) */
   groupKL: number | null;
   /** where the decision is: the line guard runs preflop only */
   line: "preflop" | "postflop";
@@ -178,12 +204,18 @@ export function shouldReplace(a: TriggerInput, p: TriggerParams = triggerParams(
   if (fSolver == null || !Number.isFinite(fSolver)) return { fire: false, why: null, text: "the solver's share is not known" };
   if (fPool == null || !Number.isFinite(fPool)) return { fire: false, why: null, text: `the solver plays it ${pct(fSolver)}; no pool cell` };
   const vs = `the solver ${pct(fSolver)} vs the pool ${pct(fPool)}`;
-  if (!p.divergence) return { fire: false, why: null, text: `${vs} — the divergence arm is off (POOL_TRIGGER_DIVERGENCE=off)` };
+  if (p.divergence === "off") return { fire: false, why: null, text: `${vs} — the divergence arm is off (POOL_TRIGGER_DIVERGENCE=off)` };
+  if (p.divergence === "ignition" && a.countsFrom !== "ignition") {
+    return { fire: false, why: null, text: `${vs} — the cell's counts are not Ignition's (POOL_TRIGGER_DIVERGENCE=ignition)` };
+  }
   if (!(fSolver < fPool / p.k)) return { fire: false, why: null, text: `${vs}: not under the pool's rate / ${p.k}` };
   if (a.poolCI == null || !Number.isFinite(a.poolCI)) return { fire: false, why: null, text: `${vs}: the pool cell carries no counts (no evidence)` };
   if (!(a.poolCI > fSolver)) return { fire: false, why: null, text: `${vs}: the pool's 95% lower bound ${pct(a.poolCI)} does not exclude the solver's share` };
-  if (a.groupKL != null && Number.isFinite(a.groupKL) && a.groupKL < p.klMin) {
+  if (a.groupKL == null || !Number.isFinite(a.groupKL)) {
+    return { fire: false, why: null, text: `${vs}: the solver's hand-group mix is not known (no shape test, no divergence)` };
+  }
+  if (a.groupKL < p.klMin) {
     return { fire: false, why: null, text: `${vs}: the same hand-group mix (KL ${a.groupKL.toFixed(2)} < ${p.klMin})` };
   }
-  return { fire: true, why: "divergence", text: `divergence: ${vs} (under 1/${p.k}, the pool's lower bound ${pct(a.poolCI)}${a.groupKL != null ? `, KL ${a.groupKL.toFixed(2)}` : ""})` };
+  return { fire: true, why: "divergence", text: `divergence: ${vs} (under 1/${p.k}, the pool's lower bound ${pct(a.poolCI)}${a.countsFrom === "ignition" ? " on Ignition's counts" : ""}, KL ${a.groupKL.toFixed(2)})` };
 }

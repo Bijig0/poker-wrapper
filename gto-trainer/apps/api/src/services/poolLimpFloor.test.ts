@@ -338,7 +338,7 @@ describe("applyPoolLimpFloor", () => {
 });
 
 describe("the trigger rule on the floor (2026-10-09, services/poolTrigger — POOL_LIMP_TRIGGER)", () => {
-  afterEach(() => { delete process.env.POOL_LIMP_TRIGGER; });
+  afterEach(() => { delete process.env.POOL_LIMP_TRIGGER; delete process.env.POOL_TRIGGER_DIVERGENCE; });
   const CLASSES = Object.keys(limpLockRange("limp_first_deep")!.weights);
   const flat = (w: number) => Object.fromEntries(CLASSES.map((c) => [c, w]));
   const at76 = dealt({ 3: 76 });
@@ -346,8 +346,12 @@ describe("the trigger rule on the floor (2026-10-09, services/poolTrigger — PO
     const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
     expect(r.applied).toEqual([]);
     expect(r.kept.map((k) => [k.pos, k.key])).toEqual([["HJ", "limp_first_short_60_85"]]);
-    expect(r.kept[0]!.text).toContain("not under the pool's rate / 2");
+    expect(r.kept[0]!.text).toContain("the divergence arm is off");     // the default (review B1)
     expect(r.ranges.HJ).toEqual(flat(0.316));
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
+    const on = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: { HJ: flat(0.316), BB: { AKs: 1 } }, chartId: "gtow-ai · 6-handed", dealt: at76, planOf: V2 });
+    expect(on.applied).toEqual([]);
+    expect(on.kept[0]!.text).toContain("not under the pool's rate / 2");
   });
   test("residue (2.98 combos on the 30bb limp chart) is still floored", () => {
     const r = applyPoolLimpFloor({ hand: hand(HAND_4922555015), heroPos: "BB", ranges: ranges(), chartId: "ign200_6max_D30_olimp", dealt: dealt(), planOf: V2 });

@@ -73,8 +73,9 @@ describe("applyPoolFlatFloor", () => {
     expect(poolRangeOf(f.get("SB")!)).toEqual(r.ranges.SB!);
   });
 
-  test("a BB defend where the solver plays 40% and the pool 45%: NOT replaced (no divergence); kept with the reason", () => {
+  test("a BB defend where the solver plays 40% and the pool 45%: NOT replaced (no divergence, even with the arm on); kept with the reason", () => {
     setPoolCallTable(TABLE);
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
     // CO opens (hero), the BB defends
     const acts = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "raise", 2.5, true), pre(4, "fold"), pre(5, "fold"), pre(6, "call", 2.5)];
     const r = applyPoolFlatFloor({ hand: hand(acts, 3), heroPos: "CO", ranges: { CO: { AA: 1 }, BB: flat(0.4) }, dealt: dealt() });
@@ -84,8 +85,9 @@ describe("applyPoolFlatFloor", () => {
     expect(r.ranges.BB).toEqual(flat(0.4));
   });
 
-  test("a 29bb BB defending 16% of junk against the pool's 49% of pairs and broadways: replaced on divergence (off: kept)", () => {
+  test("a 29bb BB defending 16% of junk against the pool's 49% of pairs and broadways: replaced on divergence when the arm is on (off, the default: kept)", () => {
     setPoolCallTable(TABLE);
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
     const acts = [...BLINDS, pre(1, "fold"), pre(2, "raise", 2.5, true), pre(3, "fold"), pre(4, "fold"), pre(5, "fold"), pre(6, "call", 2.5)];
     const junk = Object.fromEntries(CLASSES.map((c) => [c, c.endsWith("o") && !/[AKQJT]/.test(c) ? 0.62 : 0]));
     const r = applyPoolFlatFloor({ hand: hand(acts, 2), heroPos: "HJ", ranges: { HJ: { AA: 1 }, BB: junk }, dealt: dealt({ 6: 29 }) });
@@ -93,6 +95,15 @@ describe("applyPoolFlatFloor", () => {
     expect(r.applied[0]!.was / 1326).toBeGreaterThan(0.1);
     process.env.POOL_TRIGGER_DIVERGENCE = "off";
     expect(applyPoolFlatFloor({ hand: hand(acts, 2), heroPos: "HJ", ranges: { HJ: { AA: 1 }, BB: junk }, dealt: dealt({ 6: 29 }) }).applied).toEqual([]);
+    // "ignition": the call table's counts are CoinPoker's, so the arm stays off here too
+    process.env.POOL_TRIGGER_DIVERGENCE = "ignition";
+    const ig = applyPoolFlatFloor({ hand: hand(acts, 2), heroPos: "HJ", ranges: { HJ: { AA: 1 }, BB: junk }, dealt: dealt({ 6: 29 }) });
+    expect(ig.applied).toEqual([]);
+    expect(ig.kept[0]!.text).toContain("not Ignition's");
+    delete process.env.POOL_TRIGGER_DIVERGENCE;
+    const dflt = applyPoolFlatFloor({ hand: hand(acts, 2), heroPos: "HJ", ranges: { HJ: { AA: 1 }, BB: junk }, dealt: dealt({ 6: 29 }) });
+    expect(dflt.applied).toEqual([]);
+    expect(dflt.kept[0]!.text).toContain("divergence arm is off");
   });
 
   test("the BB's call of an iso over one limper (residue) is floored; the limper's own call is NOT this floor's (the limp floor's product)", () => {

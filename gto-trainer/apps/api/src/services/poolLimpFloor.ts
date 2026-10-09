@@ -119,6 +119,9 @@ export function limpTrigger(key: string, fSolver: number | null, solverAfter: Cl
   const cell = limpLockRange(key);
   const t = shouldReplace({
     fSolver, fPool: cell?.freq ?? null, poolCI: cell ? poolCiLower({ n: cell.n, freq: cell.freq }) : null,
+    // the limp table's counts: Ignition NL200 on some cells, CoinPoker-backed on v3's re-measured thin ones — not marked
+    // Ignition's, so POOL_TRIGGER_DIVERGENCE=ignition leaves the limp alone (poolTrigger's header)
+    countsFrom: "pool",
     groupKL: cell && solverAfter ? klGroup(cell.weights as ClassRange, solverAfter) : null, line: "preflop", reach: null,
   });
   return { ...t, fPool: cell?.freq ?? null };
