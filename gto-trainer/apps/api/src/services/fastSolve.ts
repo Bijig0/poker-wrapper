@@ -2065,7 +2065,7 @@ async function solvePostflopViaChainOnce(
           board: tk.board, heroComboIdx, rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))),
           ...(behindFlop ? { behind: behindFlop } : {}),
           // a narrowing walk that failed for a transient reason is retried once within this (2026-10-07): the decision's
-          // start + REROOT_NARROW_MS (10 s of the 15 s clock — the re-rooted street's own tree takes ~3-5 s after it)
+          // start + REROOT_NARROW_MS (30 s since 2026-10-10, was 10 s — the re-rooted street's own tree takes ~3-5 s after it)
           deadline: tDecision + rerootNarrowMs(),
         });
         if (!rr.ok) {
@@ -2237,7 +2237,7 @@ async function solvePostflopViaChainOnce(
    * at 7.6 s where the unnarrowed answer was ready at 4.0, and a failed narrowed tree at 13 s). Two paths start
    * together: U, today's unnarrowed hero-vs-aggressor tree, and N, the narrowing walk (multiwayReroot
    * .narrowForLastResort — the re-root's own walks) chained into the narrowed tree. N is served iff its ANSWER is in
-   * by LAST_RESORT_NARROW_MS (6000) from the DECISION'S start (FastSolveOpts.decisionStart, set by fastSolve on entry —
+   * by LAST_RESORT_NARROW_MS (20000 since 2026-10-10, was 6000 — the unnarrowed answer is the less correct one) from the DECISION'S start (FastSolveOpts.decisionStart, set by fastSolve on entry —
    * a seatbelt re-solve gets no fresh budget); otherwise U, the moment it is ready. When too little of the budget is
    * left to try (the fallback after every collapse walk failed), N is not raced at all: it starts detached for the
    * hand's memo when the hand can have a later decision. N always finishes in the background into the hand's memo, so
@@ -2250,7 +2250,7 @@ async function solvePostflopViaChainOnce(
     if (lr.first < 1) { lrNarrowClause = "the two entering ranges are the flop arrival's (on the flop there is nothing earlier to narrow)"; return solveTree(plain); }
     if (process.env.LAST_RESORT_NARROW === "0") { lrNarrowClause = "the two entering ranges are NOT narrowed by the earlier streets: switched off (LAST_RESORT_NARROW=0)"; return solveTree(plain); }
     const r = await raceNarrowing<AiChainResult>({
-      start: tDecision, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 6000) || 0),
+      start: tDecision, budgetMs: Math.max(0, Number(process.env.LAST_RESORT_NARROW_MS ?? 20_000) || 0),
       // a later decision of this hand is possible unless hero faces an all-in (call or fold ends his action)
       later: !(lr.bet > 0 && lr.bet >= lr.stack - 0.005),
       narrowing: () => narrowForLastResort({
@@ -2668,8 +2668,9 @@ export function flopFieldMoney(a: {
 
 /** The re-root's narrowing deadline from the decision's start (ms): a transient walk failure is retried within it. */
 export const rerootNarrowMs = (): number => {
-  const v = Number(process.env.REROOT_NARROW_MS ?? 10_000);
-  return Number.isFinite(v) && v >= 0 ? v : 10_000;
+  // 30 s since 2026-10-10 (was 10 s; 2026-10-10, Brady: a time box that hands hero a less correct answer is a bug; Ignition is 15 s + a 45 s time bank that starts itself): a seat that is not narrowed enters with his flop-arrival range
+  const v = Number(process.env.REROOT_NARROW_MS ?? 30_000);
+  return Number.isFinite(v) && v >= 0 ? v : 30_000;
 };
 
 /**
@@ -4154,9 +4155,9 @@ export function warmArrivalCpRing(hand: ParsedHand, heroPos: string | null, stra
 /** Tests: forget which hands were warmed. */
 export function forgetArrivalWarms(): void { warmedArrivals.clear(); }
 
-/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS; 12 s by Brady's
- *  call, 2026-10-02 — the clock is 15 s, so a chart answer that late leans on the time bank). */
-const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 12_000; };
+/** How long a gap-gated decision waits for the exact tree before the chart answers (GAP_GATE_AI_MS; 40 s since
+ *  2026-10-10, was 12 s from 2026-10-02 — 2026-10-10, Brady: a time box that hands hero a less correct answer is a bug; Ignition is 15 s + a 45 s time bank that starts itself). */
+const gapGateAiMs = (): number => { const v = Number(process.env.GAP_GATE_AI_MS); return v > 0 ? v : 40_000; };
 
 /**
  * THE EXACT TREE IS BUILT WHEN THE RAISE LANDS, NOT WHEN HERO IS ASKED (the gap gate, 2026-10-02). A cold AI preflop
@@ -4648,6 +4649,15 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
           ...(emptied ? { fitEmpties: { ...(chart.fitEmpties ?? emptied), ai: how, aiWhy, aiMs: Date.now() - t0 } } : {}) };
       }
       ai = first === "timeout" ? await asked : first;      // the chart cannot either: the exact tree is all there is
+      // THE LATE ANSWER IS THE ONE SERVED, SO IT IS PINNED (2026-10-10): its own run skipped the pin (gaveUp was set when
+      // the box ran out), which left the hand with no record of its tree — the hand page said "no record", and the flop
+      // resumed from an older pin or none. Read again (every node is cached by now) without the skip, so it pins.
+      if (first === "timeout" && ai.ok) {
+        const again = await solvePreflopGtowAi(hand, heroPos, why, emptied ? { villainLines: true } : {})
+          .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
+        if (again.ok) ai = again;
+        else console.log(`[${tag}] the late AI answer could not be pinned (${again.reason.slice(0, 160)}) — served unpinned`);
+      }
     } else {
       ai = first;
       if (gated) gated = { ...gated, routed: { ...gated.routed!, ai: "answered", aiMs: Date.now() - t0 } };
@@ -4895,7 +4905,9 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     if (cc && cc.ok) return cc;
     const failed: string[] = [];
     for (const x of [locked, cc]) if (x && !x.ok) failed.push(x.reason);
-    const out = failed.length && r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") } : r;
+    // a failed lock's reason rides on the answer, and on a refusal too (the miss queue must see the lock failed first)
+    const out = !failed.length ? r : r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") }
+      : { ...r, reason: `${r.reason} · ${failed.join(" · ")}` };
     // the skipped lock's reason beside whatever answered (the plain AI tree or a chart)
     return lockSkip ? withPreflopAlso(out, lockSkip) : out;
   }

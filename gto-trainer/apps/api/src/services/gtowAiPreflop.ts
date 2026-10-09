@@ -3149,9 +3149,9 @@ export async function walkArrivalRanges(
 const LINE_NOT_IN_TREE = /is not an action|is not offered|NODE_DOES_NOT_EXIST|node in the actions doesn't exist/i;
 /** Hero's own hand is never left out of his range: a class the reduced solve gave nothing is kept at this weight. */
 const HERO_FLOOR = 0.05;
-/** How long a villain caller's read on the exact tree may take before he is kept whole — the forced-bet tree it
- *  replaced had the same 12 s (REDUCED_READ_MS, read at every read: the tests shorten it). */
-const reducedReadMs = (): number => { const v = Number(process.env.REDUCED_READ_MS); return v > 0 ? v : 12_000; };
+/** How long a villain caller's read on the exact tree may take before he is kept whole (REDUCED_READ_MS, read at every
+ *  read: the tests shorten it). 30 s since 2026-10-10 (was 12 s, the forced-bet tree's; 2026-10-10, Brady: a time box that hands hero a less correct answer is a bug; Ignition is 15 s + a 45 s time bank that starts itself). */
+const reducedReadMs = (): number => { const v = Number(process.env.REDUCED_READ_MS); return v > 0 ? v : 30_000; };
 /** The pool chart's SB node behind one limper — its "C" is the pool's complete, as locked (hrc6max POOL_LIMP_CHART). */
 const POOL_SB_COMPLETE_LINE = "F-F-F-C";
 

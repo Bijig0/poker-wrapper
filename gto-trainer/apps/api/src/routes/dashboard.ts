@@ -1502,7 +1502,7 @@ function departuresFor(row: any): ReturnType<typeof departureStatesOf> {
   const codes = [...(p?.reasons ?? []).map((r: any) => r?.code), p?.arrival?.code, p?.arrival?.first?.code];
   const warning = [row.warning, row.text].filter(Boolean).join(" · ");
   // a lock that was TRIED and did not apply (timed out, refused) is marked failed: the answer is base GTO there
-  const states = new Map(departureStatesOf(codes, warning).map((d) => [d.id, d]));
+  const states = new Map(departureStatesOf(codes, warning, p?.reasons ?? []).map((d) => [d.id, d]));
   const out = departuresOf(codes, warning);
   // a pool-locked limp CHART answered: its id is the only trace (no code, no warning)
   if (/_olimp_pool/.test(String(row.chart ?? ""))) {

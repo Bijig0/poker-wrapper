@@ -844,7 +844,9 @@ class StudyPoller {
         }),
         // Library lookups return in ~1-2s; the far-snap AI escape can take
         // a cloud solve (~5-30s). Generous, but nothing blocks behind it.
-        signal: AbortSignal.timeout(45000),
+        // 55 s since 2026-10-10 (was 45 s): the pool locks and the gap gate wait up to 40 s for the exact tree now, and
+        // the wrapper folds a no-answer only at ~4 s of clock + bank left (relay.ts) — 60 s with a full bank.
+        signal: AbortSignal.timeout(55000),
       });
       const body = (await res.json().catch(() => null)) as FastSolveLikeResponse | null;
       let trace: unknown = null;

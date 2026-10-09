@@ -143,7 +143,19 @@ describe("the answer path emits nothing the register does not account for", () =
     expect(ok.find((x) => x.id === "pool-coldcall-lock")?.failed).toBeUndefined();
     expect(departureStatesOf([], "POOL LIMP LOCK FAILED: the HJ (38bb) limped … (no answer inside 40 s) — answered as before").find((x) => x.id === "pool-limp-lock")?.failed).toBe(true);
     expect(departureStatesOf(["preflop:pool-limp-lock"], "").find((x) => x.id === "pool-limp-lock")?.failed).toBeUndefined();
+    // a gate whose exact tree failed: the chart answered, the gate's own note rides along — FAILED by its code
+    const gg = departureStatesOf(["preflop:gap-gate-ai-failed"], "GAP GATE: 3-bet 1.3x past the tree — THE EXACT TREE FAILED TO ANSWER (no answer inside 40 s), so the chart answers",
+      [{ code: "preflop:gap-gate-ai-failed", text: "GAP GATE: … THE EXACT TREE FAILED TO ANSWER" }]).find((x) => x.id === "gap-gate");
+    expect(gg?.failed).toBe(true);
+    expect(departureStatesOf(["preflop:gap-gate"], "GAP GATE: 3-bet 1.3x past the tree").find((x) => x.id === "gap-gate")?.failed).toBeUndefined();
+    expect(departureStatesOf(["preflop:fit-empties-ai-failed"], "").find((x) => x.id === "rare-line-exact-tree")?.failText).toBe("path code preflop:fit-empties-ai-failed");
+    // "NOT NARROWED" is the re-root's tag in capitals only: a last resort's "ranges NOT narrowed:" and prose are not it
+    const rr = APPROXIMATIONS.find((a) => a.warnAlso?.includes("NOT NARROWED"))!;
+    expect(departuresOf([], "LAST RESORT … ranges NOT narrowed: 0 s of the 6 s narrowing deadline").map((x) => x.id)).not.toContain(rr.id);
+    expect(departuresOf([], "the limper enters … not narrowed. A limper's range is the pool's whole limp range").map((x) => x.id)).not.toContain(rr.id);
+    expect(departuresOf([], "RE-ROOTED at the turn — NOT NARROWED: BTN enters with the flop-arrival range").map((x) => x.id)).toContain(rr.id);
     // every failWarn phrase is one of the entry's own warnAlso (the coverage scan resolves it to the entry)
     for (const a of APPROXIMATIONS) for (const f of a.failWarn ?? []) expect(a.warnAlso ?? []).toContain(f);
+    for (const a of APPROXIMATIONS) for (const f of a.failCodes ?? []) expect(a.pathCodes ?? []).toContain(f);
   });
 });
