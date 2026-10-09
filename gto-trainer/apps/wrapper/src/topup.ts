@@ -45,7 +45,15 @@ export const topupSeams = {
 const TOP_UP_COOLDOWN_S = 20.0;
 const TOP_UP_SETTLE_TICKS = 2;
 /** The small wait before a run's first press, drawn once per window (a test sets it to zero). */
-export const topupTuning = { jitterS: [0.4, 2.0] as [number, number] };
+export const topupTuning = {
+  jitterS: [0.4, 2.0] as [number, number],
+  /** After a close press: the beat before the table is read again (the panel's fold-away animation). */
+  closeSettleS: 0.4,
+  /** After BUY: how long the panel is given to fold away on its own before it is closed (a press that lands while
+   *  the client is already folding it opens it again — the toggle). Polled every pollS. */
+  selfCloseS: 1.0,
+  pollS: 0.25,
+};
 const TOP_UP_CLOSE_DEBOUNCE_S = 1.5;
 
 /** The table's own numbers: hero's stack, the ring max, and the Buy-chips panel when it is open. */
@@ -110,24 +118,116 @@ export function topUpGate(): [boolean, string | null] {
   return [ok, why];
 }
 
-/** Fold the Buy-chips panel back off the action strip (safe to call twice: "Buy chips" is a TOGGLE). */
-export async function closeBuyPanel(): Promise<void> {
-  if (!S.topupPanel.open) return;
-  // closed only when the close press WENT THROUGH (2026-09-25 audit): the flag used to drop first and the result was
-  // ignored, so a refused close left the panel up while every later check believed it gone
+/** Close presses a verified close makes before it gives the panel up for this tick. */
+export const BUY_PANEL_CLOSE_PRESSES = 2;
+/** A stray panel (up off the clock with no buy in flight) is closed at most this often. */
+export const TOP_UP_STRAY_CLOSE_S = 3.0;
+
+/** What the table shows of the Buy-chips panel: true = up, false = not up, null = the table could not be read.
+ *  The run's own read (topUpRead), so the close and the run see the same panel. */
+async function panelSeen(): Promise<boolean | null> {
   try {
-    const r = await seams.act("Buy chips", "button");
-    if (r?.ok) S.topupPanel.open = false;
-    else log(`[top-up] could not close the Buy-chips panel: ${r?.reason ?? "refused"}`);
-  } catch (e: any) {
-    log(`[top-up] could not close the Buy-chips panel: ${e?.message ?? e}`);
+    const r = await topUpRead();
+    if (!r || !r.seated) return null;
+    return !!r.panelOpen;
+  } catch {
+    return null;
   }
 }
 
-/** Hero put on the clock with the panel up: close it NOW and call the run off (the DOM decides, not our flag). */
+export type CloseResult = { closed: boolean; presses: number; seen: boolean | null };
+
+/**
+ * FOLD THE BUY-CHIPS PANEL AWAY — ON THE TABLE'S WORD, NEVER ON OUR BELIEF (2026-10-10, hand 4923627018, table 1:
+ * "Buy chips" is a TOGGLE. The close used to press it whenever our flag said the panel was up — after a BUY the panel
+ * was read the same instant, found still up, and the toggle pressed; where the client had folded the panel on its own
+ * by the time the press landed, the press OPENED it again, and nothing closed it until hero's next clock. Over the
+ * dumps of 2026-10-08..10 the client re-sent PLAY_BUYIN_INFO (allowedMax 0) in 435 hands the wrapper had not asked
+ * for, runs of up to 16 hands with the panel standing over the table; in hand 4923627018 the HJ's raise was drawn
+ * under it, the screen's pot stayed stale, the decision was held for 60 s and the client folded hero.)
+ *
+ * Now: the table is read first — a panel it does not show is NOT pressed (that would open it). A panel it shows is
+ * pressed and read again after a beat; still up (the press collided with the client's own close, or was swallowed)
+ * it is pressed once more. The flag drops only when the table shows the panel gone, or — the table unreadable — when
+ * the press went through, as before. Returns what it did.
+ */
+export async function closeBuyPanel(): Promise<CloseResult> {
+  if (!S.topupPanel.open && !S.liveStatus.buyPanel) return { closed: true, presses: 0, seen: null };
+  let seen = await panelSeen();
+  if (seen === false) {
+    // closed on its own (the client folds it after a BUY it took): a toggle press now would open it
+    Object.assign(S.topupPanel, { open: false, domTicks: 0 });
+    return { closed: true, presses: 0, seen };
+  }
+  let presses = 0;
+  for (let i = 0; i < BUY_PANEL_CLOSE_PRESSES; i++) {
+    // closed only when the close press WENT THROUGH (2026-09-25 audit): the flag used to drop first and the result was
+    // ignored, so a refused close left the panel up while every later check believed it gone
+    try {
+      const r = await seams.act("Buy chips", "button");
+      if (!r?.ok) {
+        log(`[top-up] could not close the Buy-chips panel: ${r?.reason ?? "refused"}`);
+        return { closed: false, presses, seen };
+      }
+    } catch (e: any) {
+      log(`[top-up] could not close the Buy-chips panel: ${e?.message ?? e}`);
+      return { closed: false, presses, seen };
+    }
+    presses += 1;
+    if (seen === null) {
+      // the table unreadable: the press went through, which is all that can be known
+      S.topupPanel.open = false;
+      return { closed: true, presses, seen };
+    }
+    await sleep(topupTuning.closeSettleS);
+    seen = await panelSeen();
+    if (seen !== true) {
+      Object.assign(S.topupPanel, { open: false, domTicks: 0 });
+      return { closed: true, presses, seen };
+    }
+    if (i + 1 < BUY_PANEL_CLOSE_PRESSES) log(`[top-up] the Buy-chips panel is still up after close press ${presses} — pressing again`);
+  }
+  S.topupPanel.open = true;
+  log(`[top-up] the Buy-chips panel is still up after ${presses} close presses — left for the next tick`);
+  return { closed: false, presses, seen: true };
+}
+
+/** One closed-panel line for the feed, the log and the session: what was done, on whose word. */
+function sayPanelClosed(r: CloseResult, why: string, feedText: string): void {
+  const how = r.closed ? (r.presses ? `closed (${r.presses} press${r.presses === 1 ? "" : "es"})` : "already gone — nothing pressed")
+                       : `NOT closed (${r.presses} press${r.presses === 1 ? "" : "es"})`;
+  feedAdd(`${feedText} — ${how}`);
+  log(`[top-up] Buy-chips panel ${why}: ${how}`);
+  if (S.session.id) {
+    S.sessions.event(S.session.id, "buy-panel-closed", { why, closed: r.closed, presses: r.presses, seen: r.seen,
+                                                         hand: S.handNo, handKey: handKey() });
+  }
+}
+
+/**
+ * The panel over the table, from the feed loop every tick.
+ *  - OFF THE CLOCK, no buy in flight: a panel the table has shown on two ticks running is a STRAY (left by a close
+ *    that toggled it open, or by a press the client swallowed) and is folded away now — not at hero's next clock,
+ *    by when a villain's action may have been drawn under it (hand 4923627018). A run that owns the panel
+ *    (topupLocked, the pre-action fuse) is left alone.
+ *  - HERO PUT ON THE CLOCK with the panel up: close it NOW and call the run off (the DOM decides, not our flag).
+ */
 export async function maybeGuardBuyPanel(): Promise<void> {
   if (!(S.liveStatus.buyPanel || S.topupPanel.open)) return;
-  if (!(stripButtonsUp() || S.feedPrev.toAct)) return;
+  if (!(stripButtonsUp() || S.feedPrev.toAct)) {
+    if (S.topupLocked || S.topupPrefold.active) return;
+    if ((S.topupPanel.domTicks ?? 0) < TOP_UP_SETTLE_TICKS) return;
+    if (time() - (S.topupPanel.lastCloseAt ?? 0.0) < TOP_UP_STRAY_CLOSE_S) return;
+    S.topupPanel.lastCloseAt = time();
+    S.topupLocked = true;                            // no run opens the panel under this close
+    try {
+      const r = await closeBuyPanel();
+      sayPanelClosed(r, "stray", "Buy-chips panel was up with no buy in progress");
+    } finally {
+      S.topupLocked = false;
+    }
+    return;
+  }
   // THE ONE SANCTIONED EXCEPTION, with a fuse: a pre-action run holding the clock on purpose
   if (S.topupPrefold.active) {
     if (time() < S.topupPrefold.deadline) return;
@@ -136,12 +236,12 @@ export async function maybeGuardBuyPanel(): Promise<void> {
     log("[top-up] pre-action budget spent; closing the panel so the action can go");
   }
   S.topupAbort = true;
-  // ONE CLOSE PER EPISODE: a re-press every tick toggles it open again
+  // ONE CLOSE PER EPISODE: the close is verified on the table, but a re-press every tick is still noise
   if (time() - (S.topupPanel.lastCloseAt ?? 0.0) < TOP_UP_CLOSE_DEBOUNCE_S) return;
   if (S.liveStatus.buyPanel) S.topupPanel.open = true;
   S.topupPanel.lastCloseAt = time();
-  await closeBuyPanel();
-  feedAdd("Buy-chips panel closed - hero is on the clock");
+  const r = await closeBuyPanel();
+  sayPanelClosed(r, "on-clock", "Buy-chips panel closed - hero is on the clock");
 }
 
 /** Is this pick TERMINAL for hero (read off the PLAN the relay would send)? */
@@ -736,17 +836,26 @@ export async function topUpRun(force = false, amountCents: number | null = null)
         && Math.abs(pyRound(pyFloat(a.replace(/,/g, "")) * 100) - Math.trunc(want)) <= tol)?.[0] ?? null;
       if (receipt) break;
     }
-    const afterRead = await topUpRead();
+    // THE PANEL GETS A BEAT TO FOLD AWAY ON ITS OWN (2026-10-10): a BUY the client takes closes the panel itself, a
+    // moment after the press. Read the same instant it was always "still open", and the toggle pressed into the
+    // client's own close opened it again (closeBuyPanel). So: polled for selfCloseS, closed only when it stays.
+    let afterRead = await topUpRead();
+    const buyAt = time();
+    while (afterRead.panelOpen && time() - buyAt < topupTuning.selfCloseS) {
+      await sleep(topupTuning.pollS);
+      afterRead = await topUpRead();
+    }
     const after = afterRead.stackCents ?? null;
     // LANDED = the stack moved by what was bought, to within half a big blind (it was $1 — 20bb at NL5 — so an unmoved
     // stack read as landed for every buy of $1 or less)
     const landed = after !== null && Math.abs(after - r.stackCents - Math.trunc(want)) <= tol;
     // A PANEL STILL UP AFTER BUY is folded away: the client keeps it open when the BUY did nothing (Max. $0, an amount it
-    // would not take), and left there it stands over the strip for hands
+    // would not take), and left there it stands over the strip for hands — closed on the table's word (closeBuyPanel)
     if (afterRead.panelOpen) {
       S.topupPanel.open = true;
-      log("[top-up] the Buy-chips panel is still open after BUY — closing it");
-      await closeBuyPanel();
+      log(`[top-up] the Buy-chips panel is still open ${fmtFixed(time() - buyAt, 1)} s after BUY — closing it`);
+      const c = await closeBuyPanel();
+      log(`[top-up] after BUY: ${c.closed ? `panel closed (${c.presses} press${c.presses === 1 ? "" : "es"})` : `panel NOT closed (${c.presses} presses)`}`);
     }
     const okNow = !!receipt || landed || !!pend.receiptCents;
     if (S.topupPrefold.active && !okNow) {
