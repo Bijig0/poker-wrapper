@@ -51,9 +51,9 @@ export const FORMAT_FALLBACK: Record<string, { formats: string[]; default: strin
 };
 
 const baseConfig = (fmt: string | null, answers: boolean, sources: Record<string, boolean>) => ({
-  // recording OFF by default (Brady 2026-10-09): the frame-by-frame JPEG + DOM capture is a debugging aid, ~5 GB a
-  // table per 3-hour session; the WS dumps and poker.sqlite carry everything statistics need. Capture QA turns it on.
-  answers, sources, recording: false, budget: { hands: null, minutes: null },
+  // recording ON by default (Brady 2026-10-10, reversing 2026-10-09's OFF): the frame-by-frame JPEG + DOM capture is
+  // ~5 GB a table per 3-hour session, but Replay Review needs it. Switch it off per session on the setup page.
+  answers, sources, recording: true, budget: { hands: null, minutes: null },
   autoExecute: false, autoRealMoney: false, autoBudget: { minutes: 30, hands: 50 }, autoDelay: "instant", autoTimeBank: true,
   keepPresent: true,
   format: fmt, buyinBb: 100, waitForBb: true, profile: null, tables: 1, site: "ignition",
@@ -203,7 +203,7 @@ export function strategyPreset(s: any): any {
     config: {
       answers: true,
       sources: { exploitPreflop: exploit, mesPostflop: mes, aiChain: true },
-      recording: false, budget: { hands: null, minutes: null },
+      recording: true, budget: { hands: null, minutes: null },
       autoExecute: false, autoRealMoney: false,
       autoBudget: { minutes: 30, hands: 50 },
       autoDelay: "instant",
