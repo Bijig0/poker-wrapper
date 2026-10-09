@@ -103,6 +103,11 @@ export async function accountsPayload() {
  * (a stale copy is served at once and ONE rebuild runs behind the live answers, as "cache refresh gtow/accounts" in the
  * [stall] lines); only the very first call after a boot waits for it. Every write route below replaces the cache with
  * the payload it has just built, so a click is never answered with the state from before it.
+ *
+ * WHAT A REBUILD DOES ON THE LOOP (checked 2026-10-09): gtowSessions.statusProbed() and accountInfo() are async only
+ * (fetch / WebSocket to the clients' DevTools ports, with timeouts — no spawn, no sync I/O); the ledger meters are
+ * indexed range reads of gtow_requests (66k rows, ~3 ms); the solve-cache line is gtowSolveCache.summary(), which since
+ * 2026-10-09 reads its row COUNTERS (four primary-key reads) instead of counting a 1.5 GB file (6–15 s a call before).
  */
 export const ACCOUNTS_TTL_MS = 5_000;
 export const ACCOUNTS_CACHE_KEY = "gtow/accounts";

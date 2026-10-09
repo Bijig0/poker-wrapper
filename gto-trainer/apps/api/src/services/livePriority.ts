@@ -63,6 +63,7 @@ const named = <T>(key: string, compute: () => T | Promise<T>) => () => asActivit
 function refreshBehind<T>(key: string, compute: () => T | Promise<T>): void {
   const e = heavy.get(key);
   if (!e || e.refreshing) return;
+  skipping.delete(key);
   e.refreshing = true;
   void (async () => {
     try {
@@ -91,12 +92,23 @@ function coldBuild<T>(key: string, compute: () => T | Promise<T>, behindLive: bo
   return p;
 }
 
-export async function cachedBehindLive<T>(key: string, ttlMs: number, compute: () => T | Promise<T>): Promise<T> {
+export async function cachedBehindLive<T>(key: string, ttlMs: number, compute: () => T | Promise<T>,
+  opts: { holdWhile?: () => boolean } = {}): Promise<T> {
   askedAt.set(key, clock());
   const e = heavy.get(key);
   if (e && clock() - e.at < ttlMs) return e.value as T;
-  if (e) { refreshBehind(key, compute); return e.value as T; }
+  // `holdWhile` (2026-10-09: a poker session is live): the stale copy is served and NOT rebuilt — a rebuild is
+  // synchronous work on the answering thread; only a cold key is still built
+  if (e) { if (!opts.holdWhile?.()) refreshBehind(key, compute); else noteSkip(key); return e.value as T; }
   return coldBuild(key, compute, false);
+}
+
+/** One log line per key each time its refreshes start being skipped (cleared when one runs again). */
+const skipping = new Set<string>();
+function noteSkip(key: string): void {
+  if (skipping.has(key)) return;
+  skipping.add(key);
+  console.log(`[livePriority] ${key}: not rebuilt while a poker session is live — the copy it has is served until the session ends`);
 }
 
 /** The cached value and its age, never computing (null = cold). A read counts as demand for keepWarm. */
@@ -130,12 +142,15 @@ export function warmBehindLive<T>(key: string, compute: () => T | Promise<T>): P
  * Returns a stop function.
  */
 export function keepWarm<T>(key: string, ttlMs: number, compute: () => T | Promise<T>,
-  opts: { leadMs?: number; demandMs?: number; everyMs?: number } = {}): () => void {
+  opts: { leadMs?: number; demandMs?: number; everyMs?: number; skipWhile?: () => boolean } = {}): () => void {
   const leadMs = opts.leadMs ?? Math.min(60_000, ttlMs / 4), demandMs = opts.demandMs ?? 10 * 60_000;
   const t = setInterval(() => {
     const e = heavy.get(key);
     if (!e || clock() - (askedAt.get(key) ?? 0) > demandMs) return;
-    if (clock() - e.at >= ttlMs - leadMs) refreshBehind(key, compute);
+    if (clock() - e.at < ttlMs - leadMs) return;
+    // `skipWhile` (a poker session is live): no refresh-ahead — the copy is served stale until it ends
+    if (opts.skipWhile?.()) { noteSkip(key); return; }
+    refreshBehind(key, compute);
   }, opts.everyMs ?? Math.max(1_000, Math.min(30_000, leadMs / 2)));
   (t as { unref?: () => void }).unref?.();
   return () => clearInterval(t);
@@ -147,7 +162,7 @@ export const liveState = () => ({ inFlight, lastEndAt });
 /** Tests only: reset the counters and swap the clock. */
 export function __resetLivePriority(nowFn?: () => number): void {
   inFlight = 0; lastEndAt = 0; clock = nowFn ?? (() => Date.now());
-  heavy.clear(); cold.clear(); askedAt.clear();
+  heavy.clear(); cold.clear(); askedAt.clear(); skipping.clear();
 }
 
 /** Hono middleware for a heavy read-only page: a GET waits for live answers first (yieldToLive); writes never wait. */
