@@ -55,8 +55,12 @@ for 60 days go at start-up, and the file is held under 2 GB (least-recently-hit 
   `GET /api/gtow/cache` (all-time totals, since start, the most recently hit nodes).
 - **Turn off:** `GTOW_CACHE=off` (or `GTOW_CACHE_DB_PATH=off`) in `config/local.env`, then restart the API. Also for
   a script that must measure GTO Wizard itself (a latency bench); the poller's start-up probe and
-  `scripts/gtowPoolCheck.ts` bypass it on their own. `GTOW_CACHE_DB_PATH` moves the file; `GTOW_CACHE_DAYS` and
-  `GTOW_CACHE_MAX_MB` change the retention. Deleting the file just empties the cache. Under `bun test` it is off.
+  `scripts/gtowPoolCheck.ts` bypass it on their own. `GTOW_CACHE_DB_PATH` moves the file; `GTOW_CACHE_DAYS` (14) and
+  `GTOW_CACHE_MAX_MB` (500) change the retention. Eviction, retention and vacuum run only BETWEEN sessions (the
+  maintenance window, small batches); every row they remove is first moved to the cold archive
+  `<root>\gtow-cache-archive\<YYYY-MM>.sqlite` (append-only; read by the hand page's "open the exact node" and by
+  offline scripts with `GTOW_CACHE_ARCHIVE_READ=1`, never by live answers; `GTOW_CACHE_ARCHIVE=off` deletes instead).
+  Deleting the file just empties the cache. Under `bun test` it is off.
 
 ## Develop
 

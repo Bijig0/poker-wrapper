@@ -29,8 +29,18 @@
  * ask) and poll it as always — and that reply is stored too. So a full hit costs ZERO requests, and a restart never
  * meets a stale solution id: the store holds no GTO Wizard ids at all.
  *
- * RETENTION. At open: rows not hit for GTOW_CACHE_DAYS (60) are deleted, then, while the stored bytes exceed
- * GTOW_CACHE_MAX_MB (2048), the least-recently-hit nodes go (and every so many writes the cap is checked again).
+ * RETENTION (Brady, 2026-10-09): rows not hit for GTOW_CACHE_DAYS (14) are deleted, then, while the stored bytes exceed
+ * GTOW_CACHE_MAX_MB (500), the least-recently-hit nodes go (to 90% of the cap), then the freed pages are given back to
+ * the file. ALL OF IT RUNS IN A MAINTENANCE WINDOW — only while no poker session is live (maintenance()), in batches of
+ * at most MAINT_BUDGET_MS with the live check between them; during a session the cache does point reads, batched appends
+ * and its counters only. (Until 2026-10-09: 60 days / 2048 MB, checked at open and every 500 writes, on any thread
+ * state — and the file had grown to 1.5 GB, all of it under the cap, so nothing was ever evicted.)
+ *
+ * NOTHING EVICTED IS LOST (Brady, 2026-10-09): every row the window removes — expired or evicted, node or tree — is
+ * first copied to the COLD ARCHIVE, <cache dir>/gtow-cache-archive/<YYYY-MM>.sqlite (services/gtowCacheArchive.ts: same
+ * schema, append-only, ATTACHed for the pass and written in the same batches). It is read by point lookups only, after
+ * the hot file: the hand page's "open the exact node" (getNodeArchived) and offline scripts with
+ * GTOW_CACHE_ARCHIVE_READ=1. The live answer path never reads it. GTOW_CACHE_ARCHIVE=off deletes without archiving.
  *
  * OFF: GTOW_CACHE=off, or GTOW_CACHE_DB_PATH=off. Under bun test it is off unless GTOW_CACHE_DB_PATH names a temp
  * file — one test's replies must never answer another's. A file that cannot be opened leaves a memory-only cache.
@@ -47,6 +57,7 @@ import { isAuthFailure } from "./gtowAuthBody";
 import { gtowCachePath, openStore } from "./storePaths";
 import { sessionLive } from "./sessionLive";
 import type { ScanReply, ScanRecent, ScanRows } from "./gtowCacheScanWorker";
+import { archiveDirFor, GtowCacheArchive } from "./gtowCacheArchive";
 
 export type CacheKind = "pre" | "post";
 
@@ -88,11 +99,31 @@ const DAY_MS = 86_400_000;
 const MB = 1024 * 1024;
 const FLUSH_MS = 50;
 /** re-check the size cap after this many node writes (a long-running API would otherwise only prune at start) */
-const MAINTAIN_EVERY = 500;
-/** rows one eviction batch may remove (the cap is reached over several flushes, never in one long transaction) */
-const EVICT_BATCH = 2_000;
-/** pages one maintenance pass gives back to the file */
-const VACUUM_PAGES = 4_000;
+/**
+ * THE MAINTENANCE WINDOW (Brady, 2026-10-09). Retention, eviction to the cap, giving pages back (incremental vacuum), the
+ * WAL checkpoint and the counting scan run only while no poker session is live, in batches of at most MAINT_BUDGET_MS
+ * of this thread (under the 100 ms a [stall] counts, so the stall summary stays quiet), MAINT_YIELD_MS apart, the live
+ * check before every batch. Checked every MAINT_CHECK_MS; a retention sweep at most every RETENTION_EVERY_MS.
+ */
+export const MAINT_BUDGET_MS = 60;
+const MAINT_YIELD_MS = 25;
+const MAINT_CHECK_MS = 5 * 60_000;
+const RETENTION_EVERY_MS = 6 * 3_600_000;
+/** pages per incremental_vacuum step to start from (re-sized after each step to fit the budget) */
+const VACUUM_STEP0 = 256;
+const VACUUM_STEP_MAX = 512;
+const MAINT_WAL_CHECKPOINT_PAGES = 128;
+const MAINT_BATCH_ROWS = 100;
+const MAINT_BATCH_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_CACHE_DAYS = 14;
+export const DEFAULT_CACHE_MAX_MB = 500;
+export interface MaintenanceResult { ran: boolean; why: string; rows: number; freedBytes: number;
+  /** rows copied to the cold archive before they were deleted, and its file */
+  archived: number; archivedTo?: string; filePagesFreed: number; batches: number; ms: number; stoppedBy?: string;
+  /** the longest single batch of each kind (this thread's time: the event loop was held that long) */
+  maxMs: { delete: number; commit: number; vacuum: number; checkpoint: number };
+  /** which batch was the longest (phase, its number in the pass, its rows) */
+  slowest?: { phase: string; batch: number; ms: number; rows: number } }
 const FRESH_MAX = 300;
 const BODIES_MAX = 200;
 const RECENT_MAX = 12;
@@ -157,6 +188,8 @@ export interface SolveCacheOptions {
   maxBytes?: number;
   /** ms between a write and its flush (tests: flush() by hand) */
   flushMs?: number;
+  /** the cold archive's directory (null = no archive); default <cache dir>/gtow-cache-archive (services/gtowCacheArchive) */
+  archiveDir?: string | null;
 }
 
 /** The counters this process has seen since it started (stats().since). */
@@ -283,7 +316,9 @@ export class GtowSolveCache {
   private touches = new Map<string, { key: string; addr: string | null; n: number; at: number }>();
   private totals = new Map<string, number>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private writesSinceMaintain = 0;
+  private maintTimer: ReturnType<typeof setInterval> | null = null;
+  private maintaining: Promise<MaintenanceResult> | null = null;
+  private lastRetention = 0;
   private summaryAt = 0;
   private summaryMemo: GtowCacheSummary | null = null;
   /** the counters are valid in the file (rows_seeded) — re-read inside every write transaction */
@@ -301,11 +336,20 @@ export class GtowSolveCache {
   constructor(opts: SolveCacheOptions = {}) {
     this.path = opts.path ?? null;
     this.enabled = (opts.enabled ?? true) && this.path != null;
-    this.days = opts.days ?? 60;
-    this.maxBytes = opts.maxBytes ?? 2048 * MB;
+    this.days = opts.days ?? DEFAULT_CACHE_DAYS;
+    this.maxBytes = opts.maxBytes ?? DEFAULT_CACHE_MAX_MB * MB;
     this.flushMs = opts.flushMs ?? FLUSH_MS;
     if (this.enabled && this.path) assertTestSafePath(this.path);
+    const archiveDir = opts.archiveDir !== undefined ? opts.archiveDir
+      : this.enabled && this.path && this.path !== ":memory:" ? archiveDirFor(this.path) : null;
+    this.archive = archiveDir ? new GtowCacheArchive(archiveDir, DDL) : null;
+    // offline scripts (replay gate, studies) may opt in to reading the archive after a hot miss; the live API never does
+    this.readArchive = process.env.GTOW_CACHE_ARCHIVE_READ === "1";
   }
+
+  /** the cold archive evicted / expired rows are moved to (null = none) */
+  readonly archive: GtowCacheArchive | null;
+  private readonly readArchive: boolean;
 
   // ── the database ───────────────────────────────────────────────────────────────────────────────────────────────
   private open(): Database | null {
@@ -345,8 +389,18 @@ export class GtowSolveCache {
       db.transaction(() => { for (const c of COUNTERS) put.run(c, 0); put.run("rows_seeded", Date.now()); })();
     }
     this.seeded = this.readSeeded(db);
-    this.maintain(db, Date.now(), true);
     if (!this.seeded) this.seedSoon();
+    this.scheduleMaintenance();
+  }
+
+  /** The maintenance window's timer (a file cache only; the first check a minute after open). Never keeps a process up. */
+  private scheduleMaintenance(): void {
+    if (this.maintTimer || !this.path || this.path === ":memory:" || this.memoryOnly || process.env.NODE_ENV === "test") return;
+    const kick = () => { void this.maintenance().catch((e) => console.error(`[gtow-cache] maintenance failed: ${e instanceof Error ? e.message : e}`)); };
+    const first = setTimeout(kick, 60_000);
+    (first as { unref?: () => void }).unref?.();
+    this.maintTimer = setInterval(kick, MAINT_CHECK_MS);
+    (this.maintTimer as { unref?: () => void }).unref?.();
   }
 
   private readSeeded(db: Database): boolean {
@@ -381,10 +435,10 @@ export class GtowSolveCache {
   }
 
   /** Count an unseeded file once, OFF the loop (a Worker), never while a poker session is live. */
-  private seedSoon(): void {
+  private seedSoon(force = false): void {
     if (this.seeded || this.seeding || !this.path || this.path === ":memory:" || this.memoryOnly) return;
     const now = Date.now();
-    if (now - this.seedTriedAt < SEED_RETRY_MS && this.seedTriedAt) return;
+    if (!force && now - this.seedTriedAt < SEED_RETRY_MS && this.seedTriedAt) return;
     this.seedTriedAt = now;
     if (this.liveNow()) { console.log("[gtow-cache] row counters not seeded yet — the counting scan waits: a poker session is live"); return; }
     this.flush();
@@ -413,74 +467,177 @@ export class GtowSolveCache {
   async whenSeeded(): Promise<boolean> { if (this.seeding) await this.seeding; return this.seeded; }
 
   /**
-   * Retention: rows not hit for `days` go (at open), with the day totals past it; then, while the stored bytes exceed the
-   * cap, the least-recently-hit nodes go (to 90% of it), a batch of EVICT_BATCH per call, and the trees left with no node
-   * follow them. NO FULL SCAN (2026-10-09): the stored bytes are the rows_bytes counter (unseeded = the cap waits), the
-   * old rows are found through the last_hit_ms indexes, a tree's nodes through the (key, addr) primary key.
+   * ONE MAINTENANCE PASS, only while no poker session is live (see MAINT_BUDGET_MS): count the file if its counters are
+   * not seeded (the Worker), the retention sweep (rows not hit for `days`, a tree with its nodes), eviction while the
+   * stored bytes exceed the cap (least-recently-hit nodes to 90% of it, then the trees left with no node), the freed pages
+   * given back to the file (incremental vacuum), a PASSIVE WAL checkpoint. Every batch is a transaction of at most
+   * MAINT_BUDGET_MS that moves the row counters with the rows; between batches the live check — a session that starts
+   * stops the pass (the rest waits for the next window). One line when it starts and one when it ends.
    */
-  private maintain(db: Database, now: number, atOpen: boolean): void {
-    try {
-      let freed = 0;
-      if (atOpen) {
-        const cutoff = now - this.days * DAY_MS;
-        db.transaction(() => {
-          const d = zeroDelta();
-          const oldNodes = db.query<{ key: string; addr: string; status: number; bytes: number }, [number]>(
-            "SELECT key, addr, status, bytes FROM gtow_cache_nodes WHERE last_hit_ms < ?").all(cutoff);
-          const oldTrees = db.query<{ key: string; bytes: number }, [number]>("SELECT key, bytes FROM gtow_cache_trees WHERE last_hit_ms < ?").all(cutoff);
-          const delNode = db.prepare("DELETE FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
-          for (const r of oldNodes) { if (delNode.run(r.key, r.addr).changes) { d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; freed++; } }
-          // a tree that went takes its nodes with it (unreachable without its body) — found by the primary key prefix
-          const nodesOf = db.prepare<{ addr: string; status: number; bytes: number }, [string]>("SELECT addr, status, bytes FROM gtow_cache_nodes WHERE key = ?");
-          const delTree = db.prepare("DELETE FROM gtow_cache_trees WHERE key = ?");
-          for (const t of oldTrees) {
-            for (const r of nodesOf.all(t.key)) { if (delNode.run(t.key, r.addr).changes) { d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; freed++; } }
-            if (delTree.run(t.key).changes) { d.trees--; d.bytes -= t.bytes; freed++; }
-          }
-          db.query("DELETE FROM gtow_cache_totals WHERE name LIKE 'd:%' AND name < ?").run(`d:${dayOf(cutoff)}`);
-          this.bump(db, d);
-        })();
-      }
-      freed += this.evictBatch(db);
-      if (freed) db.exec(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
-    } catch (e) {
-      console.error(`[gtow-cache] maintenance failed: ${e instanceof Error ? e.message : e}`);
-    }
+  async maintenance(): Promise<MaintenanceResult> {
+    if (this.maintaining) return this.maintaining;
+    const res: MaintenanceResult = { ran: false, why: "", rows: 0, archived: 0, freedBytes: 0, filePagesFreed: 0, batches: 0, ms: 0, maxMs: { delete: 0, commit: 0, vacuum: 0, checkpoint: 0 } };
+    const db = this.open();
+    if (!db || this.memoryOnly || !this.path || this.path === ":memory:") return { ...res, why: "no file" };
+    if (this.liveNow()) return { ...res, why: "a poker session is live" };
+    // smaller automatic checkpoints while it runs: a checkpoint fsyncs what it copied, and one over a big WAL held a
+    // commit 477 ms in the 2026-10-09 dry run (1.5 GB → 455 MB); 1000 pages (SQLite's default) comes back after
+    try { db.exec(`PRAGMA wal_autocheckpoint = ${MAINT_WAL_CHECKPOINT_PAGES}`); } catch { /* the default stays */ }
+    this.maintaining = this.runMaintenance(db, res).finally(() => {
+      this.maintaining = null;
+      try { db.exec("PRAGMA wal_autocheckpoint = 1000"); } catch { /* closed */ }
+    });
+    return this.maintaining;
   }
 
-  /** One eviction batch while the stored bytes are over the cap (to 90% of it); returns the rows removed. */
-  private evictBatch(db: Database): number {
-    const c = this.counters();
-    if (!c || c.storedBytes <= this.maxBytes) return 0;
-    const target = this.maxBytes * 0.9;
-    let total = c.storedBytes, freed = 0;
-    db.transaction(() => {
-      const d = zeroDelta();
-      // the small columns only (the blobs sit after them), oldest hit first through idx_gtow_cache_nodes_hit
-      const oldest = db.query<{ key: string; addr: string; status: number; bytes: number }, [number]>(
-        "SELECT key, addr, status, bytes FROM gtow_cache_nodes ORDER BY last_hit_ms ASC LIMIT ?").all(EVICT_BATCH);
-      const del = db.prepare("DELETE FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
-      const keys = new Set<string>();
-      for (const r of oldest) {
-        if (total <= target) break;
-        if (!del.run(r.key, r.addr).changes) continue;
-        total -= r.bytes; d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; freed++;
-        keys.add(r.key);
+  private async runMaintenance(db: Database, res: MaintenanceResult): Promise<MaintenanceResult> {
+    const t0 = Date.now();
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const stop = () => (this.liveNow() ? "a poker session started" : undefined);
+    if (!this.seeded) { this.seedSoon(true); await this.whenSeeded(); }
+    const c0 = this.counters();
+    if (!c0) return { ...res, why: "row counters not seeded yet" };
+    const now = Date.now();
+    const cutoff = now - this.days * DAY_MS;
+    const retention = now - this.lastRetention >= RETENTION_EVERY_MS;
+    const over = c0.storedBytes > this.maxBytes;
+    const free0 = (db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+    if (!retention && !over && !free0) return { ...res, why: "nothing to do" };
+    this.flush();
+    // THE ARCHIVE FIRST: no row leaves the hot file unless it can be copied (an archive that cannot be opened stops the
+    // pass before anything is deleted)
+    let copy: ReturnType<GtowCacheArchive["copiers"]> | null = null;
+    if (this.archive) {
+      try { res.archivedTo = this.archive.attach(db); copy = this.archive.copiers(db); }
+      catch (e) {
+        this.archive.detach(db);
+        console.error(`[gtow-cache] maintenance skipped: the cold archive ${this.archive.dir} cannot be opened — nothing is deleted without it: ${e instanceof Error ? e.message : e}`);
+        return { ...res, why: "the cold archive cannot be opened" };
       }
-      const treeLeft = db.prepare<{ bytes: number }, [string, string]>(
-        "SELECT bytes FROM gtow_cache_trees WHERE key = ? AND NOT EXISTS (SELECT 1 FROM gtow_cache_nodes WHERE key = ?)");
-      const delTree = db.prepare("DELETE FROM gtow_cache_trees WHERE key = ?");
-      for (const k of keys) {
-        const t = treeLeft.get(k, k);
-        if (t && delTree.run(k).changes) { d.trees--; d.bytes -= t.bytes; total -= t.bytes; freed++; }
-      }
-      this.bump(db, d);
-    })();
-    if (freed) {
-      this.known.clear();
-      console.log(`[gtow-cache] over its ${(this.maxBytes / MB).toFixed(1)} MB cap — ${freed} least-recently-hit rows evicted, ${(total / MB).toFixed(1)} MB stored${total > target ? " (more next batch)" : ""}`);
     }
-    return freed;
+    res.ran = true;
+    res.why = [retention ? `retention ${this.days} d` : "", over ? `${(c0.storedBytes / MB).toFixed(0)} MB stored over the ${(this.maxBytes / MB).toFixed(0)} MB cap` : "", free0 ? `${free0} free pages` : ""].filter(Boolean).join(", ");
+    console.log(`[gtow-cache] maintenance start (no session live): ${res.why} — file ${(this.fileBytes() / MB).toFixed(1)} MB, ${c0.trees} trees, ${c0.nodes} nodes, ${(c0.storedBytes / MB).toFixed(1)} MB stored`);
+    const delNode = db.prepare("DELETE FROM gtow_cache_nodes WHERE key = ? AND addr = ?");
+    const delTree = db.prepare("DELETE FROM gtow_cache_trees WHERE key = ?");
+    const nodesOf = db.prepare<{ addr: string; status: number; bytes: number }, [string]>("SELECT addr, status, bytes FROM gtow_cache_nodes WHERE key = ? LIMIT 64");
+    const orphan = db.prepare<{ bytes: number }, [string, string]>("SELECT bytes FROM gtow_cache_trees WHERE key = ? AND NOT EXISTS (SELECT 1 FROM gtow_cache_nodes WHERE key = ?)");
+    /** one transaction of at most MAINT_BUDGET_MS: `step` deletes one unit and returns false when there is no more */
+    let phase = "retention";
+    const batch = (step: (d: CounterDelta, deadline: number) => boolean): boolean => {
+      let more = true;
+      const rows0 = res.rows;
+      const t = performance.now();
+      const deadline = t + MAINT_BUDGET_MS * 0.5;   // the commit gets the rest of the budget
+      let tc = t;
+      db.transaction(() => {
+        const d = zeroDelta();
+        // bounded three ways: time, rows and bytes — the COMMIT is what costs (it writes every page the deletes dirtied,
+        // and a checkpoint may run in it): 2,108 small rows in 30 ms of deletes took a 1.37 s commit in the dry run
+        let units = 0;
+        while ((more = step(d, deadline)) && performance.now() < deadline && ++units < MAINT_BATCH_ROWS && -d.bytes < MAINT_BATCH_BYTES) { /* next unit */ }
+        this.bump(db, d);
+        res.freedBytes -= d.bytes;
+        tc = performance.now();
+      })();
+      const end = performance.now();
+      if (!res.slowest || end - t > res.slowest.ms) res.slowest = { phase, batch: res.batches + 1, ms: Math.round(end - t), rows: res.rows - rows0 };
+      res.maxMs.delete = Math.max(res.maxMs.delete, Math.round(end - t));
+      res.maxMs.commit = Math.max(res.maxMs.commit, Math.round(end - tc));
+      res.batches++;
+      return more;
+    };
+    const dropNode = (d: CounterDelta, key: string, r: { addr: string; status: number; bytes: number }) => {
+      copy?.node(key, r.addr);
+      if (!delNode.run(key, r.addr).changes) return;
+      if (copy) res.archived++;
+      d.nodes--; d.bytes -= r.bytes; if (r.status !== NODE_OK) d.neg--; res.rows++;
+    };
+    const dropTreeIfEmpty = (d: CounterDelta, key: string) => {
+      const t = orphan.get(key, key);
+      if (!t) return;
+      copy?.tree(key);
+      if (delTree.run(key).changes) { d.trees--; d.bytes -= t.bytes; res.rows++; if (copy) res.archived++; }
+    };
+    try {
+    // 1. retention: old nodes, then old trees with whatever nodes they still have
+    if (retention) {
+      const oldNodes = db.prepare<{ key: string; addr: string; status: number; bytes: number }, [number]>(
+        "SELECT key, addr, status, bytes FROM gtow_cache_nodes WHERE last_hit_ms < ? ORDER BY last_hit_ms LIMIT 1");
+      const oldTree = db.prepare<{ key: string; bytes: number }, [number]>("SELECT key, bytes FROM gtow_cache_trees WHERE last_hit_ms < ? ORDER BY last_hit_ms LIMIT 1");
+      for (let more = true; more;) {
+        if ((res.stoppedBy = stop())) break;
+        more = batch((d) => { const r = oldNodes.get(cutoff); if (!r) return false; dropNode(d, r.key, r); dropTreeIfEmpty(d, r.key); return true; });
+        await sleep(MAINT_YIELD_MS);
+      }
+      for (let more = !res.stoppedBy; more;) {
+        if ((res.stoppedBy = stop())) break;
+        more = batch((d) => {
+          const t = oldTree.get(cutoff);
+          if (!t) return false;
+          const ns = nodesOf.all(t.key);
+          for (const r of ns) dropNode(d, t.key, r);
+          if (ns.length < 64) { copy?.tree(t.key); if (delTree.run(t.key).changes) { d.trees--; d.bytes -= t.bytes; res.rows++; if (copy) res.archived++; } }
+          return true;
+        });
+        await sleep(MAINT_YIELD_MS);
+      }
+      if (!res.stoppedBy) {
+        db.query("DELETE FROM gtow_cache_totals WHERE name LIKE 'd:%' AND name < ?").run(`d:${dayOf(cutoff)}`);
+        this.lastRetention = now;
+      }
+    }
+    // 2. eviction to 90% of the cap, least recently hit first
+    const target = this.maxBytes * 0.9;
+    const oldest = db.prepare<{ key: string; addr: string; status: number; bytes: number }, []>(
+      "SELECT key, addr, status, bytes FROM gtow_cache_nodes ORDER BY last_hit_ms LIMIT 1");
+    let stored = this.counters()?.storedBytes ?? 0;
+    phase = "eviction";
+    if (stored > this.maxBytes) {
+      for (let more = true; more && stored > target;) {
+        if ((res.stoppedBy = stop())) break;
+        more = batch((d) => {
+          if (stored + d.bytes <= target) return false;
+          const r = oldest.get();
+          if (!r) return false;
+          dropNode(d, r.key, r); dropTreeIfEmpty(d, r.key);
+          return true;
+        });
+        stored = this.counters()?.storedBytes ?? 0;
+        await sleep(MAINT_YIELD_MS);
+      }
+      this.known.clear();
+    }
+    } finally {
+      this.archive?.detach(db);
+    }
+    // 3. the freed pages back to the file, a step re-sized to fit the budget
+    let pages = VACUUM_STEP0;
+    for (;;) {
+      if ((res.stoppedBy ??= stop())) break;
+      const free = (db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+      if (!free) break;
+      const t = performance.now();
+      db.exec(`PRAGMA incremental_vacuum(${Math.min(free, pages)})`);
+      const took = performance.now() - t;
+      res.maxMs.vacuum = Math.max(res.maxMs.vacuum, Math.round(took));
+      res.filePagesFreed += Math.min(free, pages);
+      res.batches++;
+      // re-size the step to 30% of the budget, growing at most 1.5x a step (a step's cost varies with the WAL checkpoints)
+      pages = Math.max(16, Math.min(VACUUM_STEP_MAX, Math.ceil(pages * 1.5), Math.round(pages * (MAINT_BUDGET_MS * 0.3) / Math.max(1, took))));
+      await sleep(MAINT_YIELD_MS);
+    }
+    // 4. the WAL folded back in (PASSIVE: never waits on a reader)
+    if (!res.stoppedBy) {
+      const t = performance.now();
+      try { db.exec("PRAGMA wal_checkpoint(PASSIVE)"); } catch { /* the next window */ }
+      res.maxMs.checkpoint = Math.round(performance.now() - t);
+    }
+    res.ms = Date.now() - t0;
+    const c1 = this.counters();
+    this.summaryMemo = null;
+    console.log(`[gtow-cache] maintenance end${res.stoppedBy ? ` — STOPPED: ${res.stoppedBy}` : ""}: ${res.rows} rows and ${(res.freedBytes / MB).toFixed(1)} MB freed (${res.archived} archived${res.archivedTo ? ` to ${res.archivedTo}` : ""}), ${res.filePagesFreed} pages (${(res.filePagesFreed * 4096 / MB).toFixed(1)} MB) given back to the file, ${res.batches} batches in ${(res.ms / 1000).toFixed(1)} s (longest: delete ${res.maxMs.delete} ms, of it commit ${res.maxMs.commit} ms, vacuum step ${res.maxMs.vacuum} ms, checkpoint ${res.maxMs.checkpoint} ms) — now ${(this.fileBytes() / MB).toFixed(1)} MB file, ${(((c1?.storedBytes) ?? 0) / MB).toFixed(1)} MB stored`);
+    return res;
   }
 
   // ── trees ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -572,12 +729,29 @@ export class GtowSolveCache {
         const row = this.open()?.query<{ status: number; reply: Uint8Array | null }, [string, string]>(
           "SELECT status, reply FROM gtow_cache_nodes WHERE key = ? AND addr = ?").get(key, addr);
         if (row) got = this.decode(row.status, row.reply ? gunzip(row.reply) : null);
+        else if (this.readArchive && this.archive) {
+          const r = this.archive.lookupNode(key, addr);
+          if (r) got = this.decode(r.status, r.reply ? gunzip(r.reply) : null);
+        }
       }
     } catch {
       got = null;   // a corrupt or unreadable row is a miss: the caller asks GTO Wizard, and the reply replaces it
     }
     if (count) this.countNode(key, addr, got);
     return got;
+  }
+
+  /**
+   * A node from the hot file, else from the COLD ARCHIVE (point lookups, read-only) — for viewing old answers (the hand
+   * page's "open the exact node") and offline scripts. Never counted as a hit or a miss. NOT for the live answer path.
+   */
+  getNodeArchived(key: string, addr: string): StoredNode | null {
+    const hot = this.getNode(key, addr, false);
+    if (hot || !this.archive) return hot;
+    try {
+      const r = this.archive.lookupNode(key, addr);
+      return r ? this.decode(r.status, r.reply ? gunzip(r.reply) : null) : null;
+    } catch { return null; }
   }
 
   /**
@@ -732,8 +906,7 @@ export class GtowSolveCache {
       for (const x of nodes) this.pendingNodes.delete(`${x.key}|${x.addr}`);
       for (const t of touches) this.touches.delete(t.addr == null ? `t|${t.key}` : `n|${t.key}|${t.addr}`);
       for (const [name, n] of totals) { const left = (this.totals.get(name) ?? 0) - n; if (left) this.totals.set(name, left); else this.totals.delete(name); }
-      this.writesSinceMaintain += nodes.length;
-      if (this.writesSinceMaintain >= MAINTAIN_EVERY) { this.writesSinceMaintain = 0; this.maintain(db, Date.now(), false); }
+      // no maintenance here: the cap and retention wait for the maintenance window (no session live)
       if (!this.seeded) this.seedSoon();
     } catch (e) {
       console.error(`[gtow-cache] flush failed (kept for the next one): ${e instanceof Error ? e.message : e}`);
@@ -742,6 +915,8 @@ export class GtowSolveCache {
 
   /** Flush and release the file (tests; a process that is done with the cache). */
   close(): void {
+    if (this.maintTimer) { clearInterval(this.maintTimer); this.maintTimer = null; }
+    this.archive?.close();
     this.flush();
     try { this.db?.close(); } catch { /* already closed */ }
     this.db = null;
@@ -878,7 +1053,7 @@ export function solveCacheFromEnv(env: NodeJS.ProcessEnv = process.env): GtowSol
   if (env.NODE_ENV === "test" && !explicit) return new GtowSolveCache({ enabled: false });
   const path = env === process.env ? gtowCachePath() : explicit ? resolve(explicit) : null;
   if (!path) return new GtowSolveCache({ enabled: false });
-  return new GtowSolveCache({ path, days: num(env.GTOW_CACHE_DAYS, 60), maxBytes: num(env.GTOW_CACHE_MAX_MB, 2048) * MB });
+  return new GtowSolveCache({ path, days: num(env.GTOW_CACHE_DAYS, DEFAULT_CACHE_DAYS), maxBytes: num(env.GTOW_CACHE_MAX_MB, DEFAULT_CACHE_MAX_MB) * MB });
 }
 
 export const gtowSolveCache = solveCacheFromEnv();

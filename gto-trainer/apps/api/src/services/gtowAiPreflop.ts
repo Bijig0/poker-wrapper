@@ -3518,11 +3518,12 @@ export function preflopCacheKeyOf(rec: Pick<AiPreflopPin, "solId" | "shape" | "r
   return cacheKeyOf("pre", treeBody(rec.shape, menus(levels, rec.shape.n, isoSizes(rec.shape, levels, limpsAt))), { actions: "", board: "" }).key;
 }
 
-/** A node getter that reads ONLY the solve cache: never a request, never a solve (the hand page views old answers). */
+/** A node getter that reads ONLY the solve cache: never a request, never a solve (the hand page views old answers). It
+ *  looks in the cold archive after the hot file (2026-10-09: a node the cache evicted or expired is kept there). */
 export function storedPreflopGetter(key: string): (line: string) => Promise<{ data: any; cached: boolean } | { error: string }> {
   return async (line) => {
     if (!solveCache.enabled) return { error: "the GTO Wizard solve cache is off in this process" };
-    const s = solveCache.getNode(key, nodeAddr({ preflop: line }));
+    const s = solveCache.getNodeArchived(key, nodeAddr({ preflop: line }));
     if (s?.status === NODE_OK) return { data: s.data, cached: true };
     if (s?.status === NO_NODE) return { error: `line ends the hand at '${line || "root"}' — no decision node` };
     if (s) return { error: `${-s.status}: ${(s.text ?? "").slice(0, 160)}` };

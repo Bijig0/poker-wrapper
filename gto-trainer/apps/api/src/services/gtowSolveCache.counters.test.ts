@@ -12,7 +12,7 @@ const caches: GtowSolveCache[] = [];
 const dir = testTempDir("gtow-cache-counters-", { release: () => { for (const c of caches) c.close(); } });
 let n = 0;
 const fileOf = () => join(dir, `c${++n}.sqlite`);
-const open = (path: string, opts: { maxBytes?: number } = {}) => { const c = new GtowSolveCache({ path, flushMs: 1, ...opts }); caches.push(c); return c; };
+const open = (path: string, opts: { maxBytes?: number; archiveDir?: string | null } = {}) => { const c = new GtowSolveCache({ path, flushMs: 1, ...opts }); caches.push(c); return c; };
 const node = (pad = 10) => JSON.stringify({ action_solutions: [{ pad: "x".repeat(pad) }] });
 const counters = (path: string) => {
   const db = new Database(path, { readonly: true });
@@ -42,7 +42,7 @@ describe("gtow cache row counters", () => {
     expect(t).toMatchObject({ trees: 2, nodes: 3, negatives: 1 });
   });
 
-  it("age deletion and eviction move the counters with the rows; the cap is read from them", () => {
+  it("age deletion and eviction move the counters with the rows; the cap is read from them", async () => {
     const path = fileOf();
     const c = open(path);
     c.noteTree("old", "post", "{}");
@@ -58,6 +58,8 @@ describe("gtow cache row counters", () => {
     const total = (db.query("SELECT SUM(bytes) b FROM gtow_cache_nodes WHERE key = 'new'").get() as { b: number }).b;
     db.close();
     const c2 = open(path, { maxBytes: Math.round(total * 0.62) });
+    c2.liveNow = () => false;
+    await c2.maintenance();
     expect(c2.summary().trees).toBe(1);
     const t = truth(path);
     expect(counters(path)).toMatchObject({ rows_trees: t.trees, rows_nodes: t.nodes, rows_neg: t.negatives, rows_bytes: t.storedBytes });
@@ -124,5 +126,88 @@ describe("gtow cache row counters", () => {
     const r = await runScanWorker(path, 5);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.rows).toMatchObject({ trees: 1, nodes: 1, negatives: 0 });
+  });
+  // THE MAINTENANCE WINDOW (Brady 2026-10-09): eviction, retention, vacuum and the counting scan only while no session
+  // is live, in batches of at most MAINT_BUDGET_MS with the live check between them
+  const bigFile = (nodes: number) => {
+    const path = fileOf();
+    const a = open(path);
+    a.noteTree("t", "post", "{}");
+    for (let i = 0; i < nodes; i++) a.putNode("t", `n${i}`, NODE_OK, JSON.stringify({ action_solutions: [{ pad: Array.from({ length: 300 }, () => Math.random().toString(36).slice(2)).join("") }] }));
+    a.close();
+    return path;
+  };
+
+  it("writes over the cap are kept until the window: flush never evicts", () => {
+    const path = bigFile(30);
+    const c = open(path, { maxBytes: 10_000 });
+    c.liveNow = () => true;
+    c.noteTree("u", "post", "{}");
+    c.putNode("u", "x", NODE_OK, node(50));
+    c.flush();
+    expect(truth(path).nodes).toBe(31);
+  });
+
+  it("no maintenance while a session is live", async () => {
+    const path = bigFile(30);
+    const c = open(path, { maxBytes: 10_000 });
+    c.liveNow = () => true;
+    const r = await c.maintenance();
+    expect(r).toMatchObject({ ran: false, why: "a poker session is live" });
+    expect(truth(path).nodes).toBe(30);
+  });
+
+  it("a session that starts mid-pass stops it between batches; the counters stay exact; the next window finishes", async () => {
+    const path = bigFile(400);
+    const c = open(path, { maxBytes: 20_000 });
+    let checks = 0;
+    c.liveNow = () => ++checks > 3;            // live from the 4th check on
+    const r1 = await c.maintenance();
+    expect(r1.stoppedBy).toBe("a poker session started");
+    const mid = truth(path);
+    expect(mid.nodes).toBeGreaterThan(0);
+    expect(counters(path)).toMatchObject({ rows_nodes: mid.nodes, rows_bytes: mid.storedBytes });
+    c.liveNow = () => false;
+    const r2 = await c.maintenance();
+    expect(r2.stoppedBy).toBeUndefined();
+    const end = truth(path);
+    expect(end.storedBytes).toBeLessThanOrEqual(20_000);
+    expect(counters(path)).toMatchObject({ rows_nodes: end.nodes, rows_trees: end.trees, rows_bytes: end.storedBytes });
+  });
+
+  // NOTHING EVICTED IS LOST (Brady 2026-10-09): the window moves every row it removes to the cold archive first
+  it("evicted and expired rows are MOVED: present in the month's archive, absent from the hot file, found by the archive lookup", async () => {
+    const path = bigFile(40);
+    const archiveDir = join(dir, `arch${n}`);
+    const c = open(path, { maxBytes: 20_000, archiveDir });
+    c.liveNow = () => false;
+    const r = await c.maintenance();
+    expect(r.ran).toBe(true);
+    expect(r.archived).toBe(r.rows);
+    const hot = new Database(path, { readonly: true });
+    const left = new Set((hot.query("SELECT addr FROM gtow_cache_nodes").all() as { addr: string }[]).map((x) => x.addr));
+    hot.close();
+    const arch = new Database(r.archivedTo!, { readonly: true });
+    const moved = (arch.query("SELECT addr, status, bytes FROM gtow_cache_nodes").all() as { addr: string }[]).map((x) => x.addr);
+    arch.close();
+    expect(moved.length).toBeGreaterThan(0);
+    for (const a of moved) expect(left.has(a)).toBe(false);          // moved, not copied
+    expect(moved.length + left.size).toBe(40);                         // nothing lost
+    const gone = moved[0]!;
+    expect(c.getNode("t", gone, false)).toBeNull();                   // the live path does not see it
+    const back = c.getNodeArchived("t", gone)!;                       // the hand page / offline read path does
+    expect(back.status).toBe(NODE_OK);
+    expect(back.data.action_solutions.length).toBe(1);
+  });
+
+  it("no archive, no deletion: an archive that cannot be opened stops the pass before anything is removed", async () => {
+    const path = bigFile(20);
+    const blocker = join(dir, `notadir${n}`);
+    await Bun.write(blocker, "a file where the archive directory should be");
+    const c = open(path, { maxBytes: 10_000, archiveDir: join(blocker, "sub") });
+    c.liveNow = () => false;
+    const r = await c.maintenance();
+    expect(r).toMatchObject({ ran: false, why: "the cold archive cannot be opened" });
+    expect(truth(path).nodes).toBe(20);
   });
 });

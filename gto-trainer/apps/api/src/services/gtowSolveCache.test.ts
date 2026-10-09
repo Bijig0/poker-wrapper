@@ -176,7 +176,7 @@ describe("the store", () => {
     expect(cacheOn(path).getNode("k", "a")!.data).toEqual(node("R5"));
   });
 
-  it("retention: rows not hit for GTOW_CACHE_DAYS go at open; over the size cap the least-recently-hit nodes go first", () => {
+  it("retention: rows not hit for GTOW_CACHE_DAYS go in the maintenance window; over the size cap the least-recently-hit nodes go first", async () => {
     const path = tempFile();
     const c = cacheOn(path);
     const junk = (n: number) => JSON.stringify({ action_solutions: [{ pad: Array.from({ length: n }, () => Math.random().toString(36).slice(2)).join("") }] });
@@ -195,8 +195,11 @@ describe("the store", () => {
     db.close();
     // a cap that holds ~3 of the 5: the two least-recently hit (n1, n2) go, and the 61-day-old tree with its node
     const c2 = cacheOn(path, { days: 60, maxBytes: Math.round(total * 0.62) });
+    c2.liveNow = () => false;
+    expect(c2.stats().rows!.trees).toBe(2);              // opening deletes nothing: maintenance waits for its window
+    expect((await c2.maintenance()).ran).toBe(true);
     const s = c2.stats();
-    expect(s.rows.trees).toBe(1);
+    expect(s.rows!.trees).toBe(1);
     const db2 = new Database(path, { readonly: true });
     const left = db2.query("SELECT addr FROM gtow_cache_nodes ORDER BY addr").all().map((r: any) => r.addr);
     db2.close();
@@ -204,7 +207,7 @@ describe("the store", () => {
     expect(left).not.toContain("n1");
     expect(left).toContain("n5");
     expect(left.length).toBeLessThanOrEqual(3);
-    expect(s.rows.storedBytes).toBeLessThanOrEqual(total * 0.62);
+    expect(s.rows!.storedBytes).toBeLessThanOrEqual(total * 0.62);
   });
 
   it("is off under bun test unless a temp file is named, off by GTOW_CACHE=off / GTOW_CACHE_DB_PATH=off, and refuses a live path", () => {
