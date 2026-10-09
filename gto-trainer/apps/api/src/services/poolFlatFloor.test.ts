@@ -179,9 +179,10 @@ describe("THE SB-FLAT TABLE v2 (SB_FLAT_TABLE=v2, services/poolSbFlat)", () => {
     expect(poolFlatFloorNote(few.applied, null)).toContain(", vpip unknown (n=12), ");
   });
 
-  test("THE CI READS THE CELL'S IGNITION COUNTS: 12 flats in 41 chances do not exclude a 19% solver flat (kept); CoinPoker-sized counts would have", () => {
+  test("THE CI READS THE CELL'S IGNITION COUNTS (divergence arm on Ignition's counts): 12 flats in 41 chances do not exclude a 19% solver flat (kept); CoinPoker-sized counts would have", () => {
     setPoolCallTable(TABLE);
     process.env.SB_FLAT_TABLE = "v2";
+    process.env.POOL_TRIGGER_DIVERGENCE = "ignition";
     // BTN opens 2.0 (oS), the 40bb SB flats, hero BB calls
     const acts = [...BLINDS, pre(1, "fold"), pre(2, "fold"), pre(3, "fold"), pre(4, "raise", 2), pre(5, "call", 2), pre(6, "call", 2, true)];
     const key = "poolcall_flat_SB_vsBTN_oS_25_65", c = T()[key]!;
@@ -193,10 +194,53 @@ describe("THE SB-FLAT TABLE v2 (SB_FLAT_TABLE=v2, services/poolSbFlat)", () => {
     expect(r.applied).toEqual([]);
     expect(r.kept.map((k) => k.key)).toEqual([key]);
     expect(r.kept[0]!.text).toContain("does not exclude the solver's share");
+    // P1: the bound is the pooled one scaled to the served NL200 rate (× freq / freq_pooled = 0.894)
+    const ci = wilsonLower(c.calls, c.chances) * c.freq / c.freq_pooled;
+    expect(r.kept[0]!.text).toContain(`the pool's 95% lower bound ${(100 * ci).toFixed(2)}%`);
     expect(r.kept[0]!.sbflat?.chances).toBe(41);
-    // the same rate on the CoinPoker counts of the cell (cp_calls / cp_chances) clears the evidence test
-    expect(shouldReplace({ fSolver: f, fPool: c.freq, poolCI: poolCiLower({ calls: c.cp_calls, chances: c.cp_chances }), groupKL: null, line: "preflop", reach: f }).text)
-      .not.toContain("does not exclude");
+    expect(r.kept[0]!.sbflat?.ev).toMatchObject({ key, calls: 12, chances: 41, borrowed: false });
+    // the same rate on the CoinPoker counts of the cell (cp_calls / cp_chances) clears the evidence test (the arm on any counts)
+    process.env.POOL_TRIGGER_DIVERGENCE = "on";
+    const cp = shouldReplace({ fSolver: f, fPool: c.freq, poolCI: poolCiLower({ calls: c.cp_calls, chances: c.cp_chances }), groupKL: 1, line: "preflop", reach: f });
+    expect(cp.text).not.toContain("does not exclude");
+    expect(cp.fire).toBe(true);
+  });
+
+  test("the divergence arm: off by default even on Ignition's counts; POOL_TRIGGER_DIVERGENCE=ignition fires it on the SB-flat v2 cell (Ignition-counted), not on the call table's", () => {
+    setPoolCallTable(TABLE);
+    process.env.SB_FLAT_TABLE = "v2";
+    // the 35bb SB flats 10% of offsuit junk against the cell's 36.5% (Ignition 51 of 131, bound 27.7% scaled)
+    const junk = Object.fromEntries(CLASSES.map((c) => [c, c.endsWith("o") && !/[AKQJT]/.test(c) ? 0.22 : 0]));
+    const run = () => applyPoolFlatFloor({ hand: hand(SB_FLAT_LINE, 6), heroPos: "BB", ranges: { ...WALK, SB: junk }, dealt: dealt({ 5: 35 }) });
+    const f = run();
+    const share = f.kept[0]!.was / 1326;
+    expect(share).toBeGreaterThan(0.01);
+    expect(share).toBeLessThan(T()["poolcall_flat_SB_vsBTN_oM_25_65"]!.freq / 2);
+    expect(f.applied).toEqual([]);
+    expect(f.kept[0]!.text).toContain("divergence arm is off");
+    process.env.POOL_TRIGGER_DIVERGENCE = "ignition";
+    const ig = run();
+    expect(ig.applied.map((x) => [x.key, x.why])).toEqual([["poolcall_flat_SB_vsBTN_oM_25_65", "divergence"]]);
+    expect(ig.applied[0]!.text).toContain("on Ignition's counts");
+    // off the v2 table (SB_FLAT_TABLE unset) the same SB reads the call table: CoinPoker's counts, not fired under ignition
+    delete process.env.SB_FLAT_TABLE;
+    const ct = run();
+    expect(ct.applied).toEqual([]);
+    expect(ct.kept[0]!.text).toContain("not Ignition's");
+  });
+
+  test("P2: a cell with 0 Ignition chances (the 60bb SB at v40p vs the UTG's 2bb open) says so and takes the bound from its first ancestor with ≥ 20 chances", () => {
+    setPoolCallTable(TABLE);
+    process.env.SB_FLAT_TABLE = "v2";
+    const acts = [...BLINDS, pre(1, "raise", 2), pre(2, "fold"), pre(3, "fold"), pre(4, "fold"), pre(5, "call", 2), pre(6, "call", 2, true)];
+    const r = applyPoolFlatFloor({ hand: hand(acts, 6), heroPos: "BB", ranges: { UTG: { AA: 1 }, SB: { AKs: 0.075 }, BB: { QJs: 1 } }, dealt: dealt({ 5: 60 }), seen: { SB: { n: 30, v: 25 } } });
+    expect(r.applied.map((x) => [x.key, x.why])).toEqual([["poolcall_flat_SB_vsUTG_oS_le75_v40p", "residue"]]);
+    expect(r.applied[0]!.sbflat?.ev).toMatchObject({ key: "poolcall_flat_SB_le75_v40p", calls: 29, chances: 47, borrowed: true });
+    expect(r.applied[0]!.sbflat!.ev.ci!).toBeCloseTo(wilsonLower(29, 47), 12);
+    const note = poolFlatFloorNote(r.applied, null);
+    expect(note).toContain("0 calls measured of 0 Ignition chances (its parent's rate — 0 Ignition chances; the evidence bound from poolcall_flat_SB_le75_v40p, 29 of 47), vpip v40p");
+    // the oracle still reads it back
+    expect(poolRangeOf(poolFloorsOf(note).get("SB")!)).toEqual(r.ranges.SB!);
   });
 
   test("THE ORACLE ROUND TRIP: poolFloorsOf reads 'sbflat v2' back to the v2 table (and 'sbflat v2 own' with the own factor)", () => {

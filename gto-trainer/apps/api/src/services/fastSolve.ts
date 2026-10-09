@@ -1270,8 +1270,8 @@ async function flopArrivalCompute(
 /** The [sbflat] api.log line: the SB-flat table v2's key for one SB flat, what keyed it, and whether the floor fired. */
 function sbFlatLogLine(hand: ParsedHand, key: string, u: SbFlatUse, was: number, fired: boolean, text: string): string {
   const f = u.fields;
-  return `[sbflat] hand ${hand.clientHandId ?? hand.handId ?? "?"}: the SB (${f.band ?? "?"}/${f.vband ?? "?"}) flatted the ${f.opener ?? "?"}'s ${u.openTo}bb open (${f.size ?? "?"}) — `
-    + `${key} (${u.chain} step ${u.step}, ${u.vpip}${u.own ? ", own NL200 factor" : ""}) — ${fired ? "REPLACED" : "kept"} (${was} combos walked; ${text})`;
+  return `[sbflat] hand ${hand.clientHandId ?? hand.handId ?? "?"}: the SB (${f.band ?? "?"}/${f.vband ?? "?"}) flatted the ${f.opener ?? "?"}'s ${Math.round(u.openTo * 100) / 100}bb open (${f.size ?? "?"}) — `
+    + `${key} (${u.chain} step ${u.step}, ${u.vpip}${u.own ? ", own NL200 factor" : ""}${u.chances > 0 ? "" : `, 0 Ignition chances — the evidence bound ${u.ev.borrowed ? `from ${u.ev.key} (${u.ev.calls} of ${u.ev.chances})` : "none"}`}) — ${fired ? "REPLACED" : "kept"} (${was} combos walked; ${text})`;
 }
 
 /** hand → its flop arrival, by the preflop inputs it was computed from (derived: dropping it costs a recompute). */

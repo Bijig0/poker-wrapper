@@ -45,6 +45,7 @@
  * table. Register entry pool-sbflat-v2. Pure apart from the table (a test hook swaps it).
  */
 import TABLE_JSON from "./poolSbFlatRanges.json";
+import { wilsonLower } from "./poolTrigger";
 
 export type SbFlatTableMode = "v2" | "off";
 export const sbFlatTableMode = (): SbFlatTableMode => (/^v2$/i.test(String(process.env.SB_FLAT_TABLE ?? "").trim()) ? "v2" : "off");
@@ -220,6 +221,48 @@ export function sbFlatRange(key: string, opts: { own?: boolean } = {}): SbFlatRa
     waterMemo.set(mk, weights);
   }
   return { key, weights: { ...weights }, freq, calls: cell.calls, chances: cell.chances, nl200Calls: cell.nl200_calls, nl200Chances: cell.nl200_chances, own, cell };
+}
+
+/**
+ * THE EVIDENCE BOUND FOR THE TRIGGER (2026-10-10, the independent review's P1 / P2). The served rate is NL200 (`freq` =
+ * freq_pooled × 0.894 off the VPIP keys; = freq_pooled on them; × 0.765 under SB_FLAT_OWN_FACTOR) but the cell's
+ * Ignition counts are NL100 + NL200 pooled, so the Wilson bound is taken on the POOLED counts and scaled by the same
+ * factor as the rate: ci = wilsonLower(calls, chances) × (served freq / freq_pooled). Not the NL200 counts: 46 of the 72
+ * full non-VPIP keys have under 50 NL200 chances and the VPIP keys ≤ 72 — the bound would be null or useless there.
+ * A cell with NO Ignition chances (six VPIP cells, e.g. vsUTG_oS_le75_v40p: its freq is its parent's × the CoinPoker
+ * ratio) takes the bound from the first key after it in its own chain with ≥ SB_FLAT_CI_MIN_CHANCES chances — the
+ * evidence the hierarchy itself rests on — scaled by THAT key's factor; `borrowed` says so (the note names the key).
+ */
+export const SB_FLAT_CI_MIN_CHANCES = 20;
+export interface SbFlatEvidence {
+  /** the scaled 95% lower bound (null: no key in the chain carries counts) */
+  ci: number | null;
+  /** the key whose counts gave it (the key taken, or the ancestor when borrowed) */
+  key: string;
+  calls: number; chances: number;
+  /** served freq / freq_pooled of that key */
+  scale: number;
+  borrowed: boolean;
+}
+export function sbFlatEvidence(k: Pick<SbFlatKey, "key" | "chain" | "step" | "fields">, opts: { own?: boolean } = {}): SbFlatEvidence {
+  const ownOn = opts.own ?? sbFlatOwnFactorOn();
+  const at = (key: string, cell: SbFlatCell, borrowed: boolean): SbFlatEvidence => {
+    const own = ownOn && cell.vpip == null && table.own_nl200_factor > 0;
+    const served = own ? cell.freq_pooled * table.own_nl200_factor : cell.freq;
+    const scale = cell.freq_pooled > 0 ? served / cell.freq_pooled : 1;
+    const lo = wilsonLower(cell.calls, cell.chances);
+    return { ci: Number.isFinite(lo) ? lo * scale : null, key, calls: cell.calls, chances: cell.chances, scale, borrowed };
+  };
+  const cell = table.ranges[k.key];
+  if (!cell) return { ci: null, key: k.key, calls: 0, chances: 0, scale: 1, borrowed: false };
+  if (cell.chances > 0) return at(k.key, cell, false);
+  const chain = table.lookup.chain[k.chain] ?? [];
+  for (let i = k.step + 1; i < chain.length; i++) {
+    const key = fill(chain[i]!, k.fields);
+    const c = key != null ? table.ranges[key] : undefined;
+    if (c && c.chances >= SB_FLAT_CI_MIN_CHANCES) return at(key!, c, true);
+  }
+  return { ci: null, key: k.key, calls: 0, chances: 0, scale: 1, borrowed: false };
 }
 
 /** "vpip v30 (n=45, v=10, 26.7%)" / "vpip unknown (n=12)" / "vpip unknown (no seat history)" — the note's and the log's */

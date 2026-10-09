@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  SB_FLAT_MIN_HANDS, sbFlatBand, sbFlatKey, sbFlatOwnFactorOn, sbFlatRange, sbFlatSize, sbFlatSizeOfQual, sbFlatTable, sbFlatTableMode,
-  sbFlatVband, sbFlatVpip, sbFlatVpipText,
+  SB_FLAT_CI_MIN_CHANCES, SB_FLAT_MIN_HANDS, sbFlatBand, sbFlatEvidence, sbFlatKey, sbFlatOwnFactorOn, sbFlatRange, sbFlatSize, sbFlatSizeOfQual,
+  sbFlatTable, sbFlatTableMode, sbFlatVband, sbFlatVpip, sbFlatVpipText,
 } from "./poolSbFlat";
+import { wilsonLower } from "./poolTrigger";
 
 /**
  * THE SB-FLAT TABLE v2 (services/poolSbFlat, 2026-10-10): the shipped table (poker a0692acb sbflat_ranges.json) and the
@@ -189,5 +190,58 @@ describe("the table and its ranges", () => {
     expect(sbFlatVpipText(sbFlatKey({ seen: { n: 45, v: 10 } }))).toBe("vpip v30 (n=45, v=10, 24.4%)");
     expect(sbFlatVpipText(sbFlatKey({ seen: { n: 12, v: 3 } }))).toBe("vpip unknown (n=12)");
     expect(sbFlatVpipText(sbFlatKey({}))).toBe("vpip unknown (no seat history)");
+  });
+});
+
+describe("THE EVIDENCE BOUND (sbFlatEvidence — the review's P1 / P2)", () => {
+  test("P1: the pooled NL100+NL200 Wilson bound scaled to the served NL200 rate (× 0.894 off the VPIP keys, × 1 on them, × 0.765 / pooled under the own factor)", () => {
+    const k = sbFlatKey({ opener: "BTN", openTo: 2.5, stack: 35 });
+    expect(k.key).toBe(P("vsBTN_oM_25_65"));
+    const c = sbFlatTable().ranges[k.key]!;
+    expect([c.calls, c.chances]).toEqual([51, 131]);
+    const ev = sbFlatEvidence(k);
+    expect(ev).toMatchObject({ key: k.key, calls: 51, chances: 131, borrowed: false });
+    expect(ev.scale).toBeCloseTo(c.freq / c.freq_pooled, 12);
+    expect(ev.scale).toBeCloseTo(0.894, 3);
+    expect(ev.ci!).toBeCloseTo(wilsonLower(51, 131) * c.freq / c.freq_pooled, 12);
+    expect(ev.ci!).toBeLessThan(wilsonLower(51, 131));                     // ~11% lower than the unscaled bound
+    // a VPIP key: no stake factor, the bound as it is
+    const v = sbFlatKey({ opener: "CO", openTo: 2.5, stack: 98, seen: { n: 20, v: 1 } });
+    const cv = sbFlatTable().ranges[v.key]!;
+    expect(cv.vpip).not.toBeNull();
+    expect(sbFlatEvidence(v).scale).toBe(1);
+    expect(sbFlatEvidence(v).ci!).toBeCloseTo(wilsonLower(cv.calls, cv.chances), 12);
+    // the own factor: the bound follows the served rate
+    process.env.SB_FLAT_OWN_FACTOR = "on";
+    expect(sbFlatEvidence(k).scale).toBeCloseTo(0.765, 12);
+    expect(sbFlatEvidence(k, { own: false }).scale).toBeCloseTo(c.freq / c.freq_pooled, 12);
+  });
+  test("P2: a cell with 0 Ignition chances (vsUTG_oS_le75_v40p) borrows the bound of the first key after it in its chain with ≥ 20 chances", () => {
+    const k = sbFlatKey({ opener: "UTG", openTo: 2.0, stack: 60, seen: { n: 30, v: 25 } });
+    expect(k.key).toBe(P("vsUTG_oS_le75_v40p"));
+    expect(sbFlatTable().ranges[k.key]!.chances).toBe(0);
+    const ev = sbFlatEvidence(k);
+    // skipped: oS_le75_v40p (9 chances), vsUTG_le75_v40p (6) — taken: le75_v40p (29 of 47)
+    expect(ev).toMatchObject({ key: P("le75_v40p"), calls: 29, chances: 47, borrowed: true, scale: 1 });
+    expect(ev.ci!).toBeCloseTo(wilsonLower(29, 47), 12);
+    // the rule, on every 0-chance key the chains can reach: the first later key with ≥ 20 chances
+    const t = sbFlatTable();
+    let zero = 0;
+    for (const [key, c] of Object.entries(t.ranges)) {
+      if (c.chances > 0) continue;
+      zero++;
+      const chain = t.lookup.chain.vpip_known;
+      const fields = { opener: c.opener ?? undefined, size: c.size ?? undefined, vband: c.band ?? undefined, vpip: c.vpip ?? undefined } as Record<string, string | undefined>;
+      const step = chain.findIndex((p) => p.replace(/\{(\w+)\}/g, (_m, f: string) => fields[f] ?? "?") === key);
+      expect(step).toBe(0);
+      const e = sbFlatEvidence({ key, chain: "vpip_known", step, fields });
+      expect(e.borrowed).toBe(true);
+      expect(e.chances).toBeGreaterThanOrEqual(SB_FLAT_CI_MIN_CHANCES);
+      expect(e.ci).not.toBeNull();
+    }
+    expect(zero).toBe(6);
+  });
+  test("a key not in the table: no bound", () => {
+    expect(sbFlatEvidence({ key: P("nope"), chain: "vpip_unknown", step: 0, fields: {} })).toMatchObject({ ci: null, borrowed: false });
   });
 });

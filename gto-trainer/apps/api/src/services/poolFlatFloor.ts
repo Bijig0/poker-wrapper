@@ -44,7 +44,7 @@
 import { dealtByPos, type Seat6 } from "./hrc6max";
 import { poolCallKey, poolCallRange, poolCallersOf, type PoolCaller, type PoolCallLine } from "./poolCalls";
 import { combosOfRange, klGroup, poolCiLower, shouldReplace, type ClassRange, type TriggerWhy } from "./poolTrigger";
-import { sbFlatKey, sbFlatRange, sbFlatTableMode, sbFlatVpipText, type SbFlatKey } from "./poolSbFlat";
+import { sbFlatEvidence, sbFlatKey, sbFlatRange, sbFlatTableMode, sbFlatVpipText, type SbFlatEvidence, type SbFlatKey } from "./poolSbFlat";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 
 export type PoolFlatFloorMode = "on" | "off";
@@ -79,6 +79,9 @@ export interface SbFlatUse {
   own: boolean;
   /** the open's raise-to (bb) */
   openTo: number;
+  /** the trigger's evidence bound (poolSbFlat.sbFlatEvidence): scaled to the served rate; borrowed from the first key
+   *  in the chain with ≥ 20 chances when the cell has none */
+  ev: Pick<SbFlatEvidence, "key" | "calls" | "chances" | "borrowed" | "ci">;
 }
 /** A caller the floor looked at and left (the trigger did not fire) — for the log. */
 export interface PoolFlatFloorKept { pos: Seat6; key: string; was: number; text: string; sbflat?: SbFlatUse }
@@ -112,6 +115,7 @@ export function applyPoolFlatFloor(a: {
     let k: { key: string };
     let r: { weights: ClassRange; freq: number; calls: number; chances?: number } | null;
     let sb: SbFlatUse | undefined;
+    let poolCI: number | null;
     if (sbv2 && c.line === "flat" && c.pos === "SB") {
       // THE SB-FLAT TABLE v2: his key from the opener, the open, his stack as dealt and his VPIP at this table
       const sk = sbFlatKey({ opener: c.opener, openTo: c.openTo, stack, seen: a.seen?.SB ?? null });
@@ -119,19 +123,25 @@ export function applyPoolFlatFloor(a: {
       if (!sr) continue;
       k = { key: sk.key };
       r = { weights: sr.weights, freq: sr.freq, calls: sr.calls, chances: sr.chances };   // Ignition's counts: the CI
-      sb = { chain: sk.chain, step: sk.step, fields: sk.fields, vpip: sbFlatVpipText(sk), chances: sr.chances, own: sr.own, openTo: c.openTo };
+      // the evidence bound: Ignition's pooled counts scaled to the served NL200 rate; a 0-chance cell borrows its ancestor's
+      const ev = sbFlatEvidence(sk);
+      poolCI = ev.ci;
+      sb = { chain: sk.chain, step: sk.step, fields: sk.fields, vpip: sbFlatVpipText(sk), chances: sr.chances, own: sr.own, openTo: c.openTo,
+        ev: { key: ev.key, calls: ev.calls, chances: ev.chances, borrowed: ev.borrowed, ci: ev.ci } };
     } else {
       const ck = poolCallKey(c, stack);
       if (!ck || ck.table !== "call") continue;
       k = ck;
       r = poolCallRange(ck);
+      poolCI = r ? poolCiLower({ calls: r.calls, chances: r.chances ?? null }) : null;
     }
     if (!r) continue;
     const walked = out[rk] ?? {};
     const was = r2(combosOfRange(walked));
     const f = was / 1326;
     const t = shouldReplace({
-      fSolver: f, fPool: r.freq, poolCI: poolCiLower({ calls: r.calls, chances: r.chances ?? null }), countsFrom: "pool",
+      // the SB-flat table v2's counts are Ignition's own (POOL_TRIGGER_DIVERGENCE=ignition runs the arm there only)
+      fSolver: f, fPool: r.freq, poolCI, countsFrom: sb ? "ignition" : "pool",
       groupKL: was > 0 ? klGroup(r.weights, walked) : null, line: "preflop", reach: f,
     });
     if (!t.fire || !t.why) { kept.push({ pos: c.pos, key: k.key, was, text: t.text, ...(sb ? { sbflat: sb } : {}) }); continue; }
@@ -154,9 +164,14 @@ function openWasAllIn(hand: ParsedHand): boolean {
   return false;
 }
 
+/** a 0-chance cell: its rate is its parent's, its evidence bound an ancestor's (review P2) */
+const sbEvText = (u: SbFlatUse): string => !(u.chances > 0)
+  ? ` (its parent's rate — 0 Ignition chances; ${u.ev.borrowed ? `the evidence bound from ${u.ev.key}, ${u.ev.calls.toLocaleString("en-US")} of ${u.ev.chances.toLocaleString("en-US")}` : "no evidence bound in its chain"})`
+  : "";
+
 /** the record's clause after "now the pool's <key> (" — the SB-flat table v2's names its table, counts and vpip */
 const cellText = (r: PoolFlatFloorRecord): string => r.sbflat
-  ? `sbflat v2${r.sbflat.own ? " own" : ""}: ${(100 * r.freq).toFixed(2)}% of chances${r.sbflat.own ? " (own NL200 factor)" : ""}, ${r.calls.toLocaleString("en-US")} calls measured of ${r.sbflat.chances.toLocaleString("en-US")} Ignition chances, ${r.sbflat.vpip}, ${r.now} combos; trigger ${r.text}`
+  ? `sbflat v2${r.sbflat.own ? " own" : ""}: ${(100 * r.freq).toFixed(2)}% of chances${r.sbflat.own ? " (own NL200 factor)" : ""}, ${r.calls.toLocaleString("en-US")} calls measured of ${r.sbflat.chances.toLocaleString("en-US")} Ignition chances${sbEvText(r.sbflat)}, ${r.sbflat.vpip}, ${r.now} combos; trigger ${r.text}`
   : `${(100 * r.freq).toFixed(2)}% of chances, ${r.calls.toLocaleString("en-US")} calls measured, ${r.now} combos; trigger ${r.text}`;
 
 /** The answer's note (its opening is the register entry's `warn`; the hand page and the mutation oracle parse it). */
