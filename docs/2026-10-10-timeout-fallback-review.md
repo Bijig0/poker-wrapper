@@ -48,9 +48,12 @@ chart server restart by themselves.
 
 ## Open — not fixed (ranked by gameplay impact)
 
-1. **Postflop node read cap: 12 s heads-up, 15 s 3-way.** Code: `gtowApi.ts:46`, `THREEWAY_NODE_TIMEOUT_MS`. A timeout
-   here means NO answer, so hero folds. It hit 15 of 2,580 live chain lines (0.6%), at 12.0-28.2 s. Brady set these caps
-   on 2026-10-08 ("per-node caps stay as they are"). **Brady's call:** recommend ~30 s.
+1. **Postflop node read cap: 12 s heads-up, 15 s 3-way** (`gtowApi.ts:46`, `THREEWAY_NODE_TIMEOUT_MS`). Corrected
+   2026-10-12 after tracing every live case: a timeout fails ONE attempt, and the poller re-asks at once. 14 of the 16
+   live postflop timeouts in 3 weeks were answered on the re-ask, 10-35 s into the turn (one CoinPoker hand took 44 s).
+   The 2 never answered (4923628100, 4923632605) were network drops: the GTO Wizard poll failed and the table socket
+   stalled and closed, so both sessions ended. Fold-on-no-answer was OFF in both. A 30 s cap would only save a re-ask on
+   ~0.6% of postflop decisions. LOW priority; Brady's 10-08 caps stay.
 2. **The API does not know hero's remaining time bank.** A lock now waits up to 40 s. With a partly spent bank, the
    wrapper can fold at its 4 s mark while the unlocked answer has been ready since ~5 s. Fix: the poller sends the
    clock + bank left; locks and gates wait `min(box, left − 8 s)`.
