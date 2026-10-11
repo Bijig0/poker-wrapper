@@ -2,7 +2,7 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { buildAnswerText, type AnswerAction } from "../feed/buildAnswerText/buildAnswerText";
 import { gtowCdp } from "./gtowCdp";
 import { gtowApi } from "./gtowApi";
-import { answerLog, failKindOf, isFailKind, type FailKind } from "./answerLog";
+import { answerLog, failKindOf, isFailKind, NEVER_ASKED, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
 import { drawRoll, fmtRoll, rollDecision } from "./rollDecision";
@@ -82,7 +82,16 @@ export interface StudyPollerStatus {
   gtoWizardLaunching: boolean;
   /** Why the most recent solve produced no decision — diagnostic breadcrumb
    *  for "no answer" reports. Cleared by the next successful solve. */
-  lastNavFailure: { at: number; street: string | null; reason: string } | null;
+  lastNavFailure: {
+    at: number; street: string | null; reason: string;
+    /** THE DECISION IT WAS FOR, AND WHETHER IT IS THE LAST WORD (2026-10-12, Brady: the panel said "no answer" and the
+     *  answer came a few seconds later). Every failed ATTEMPT used to land here, while the poller asks the same decision
+     *  again (REPEAT_FAIL_LIMIT) — 18 live decisions in 3 weeks showed "no answer — couldn't solve this spot" and were
+     *  answered on the re-ask 3-24 s later; and a failure of the PREVIOUS decision (an abandoned verdict, a capture fault)
+     *  showed on the next one for 15 s (~60). `key` = the decision, `kind` = the fail kind, `attempt` of `of` for a solve
+     *  that failed, `final` = no further ask is coming for it, `current` (read time) = it is the decision hero is on. */
+    key?: string; kind?: string; attempt?: number; of?: number; final?: boolean; current?: boolean;
+  } | null;
   /** Consecutive DIFFERENT decisions that have all failed to navigate — the
    *  wedge signal (see ensureGtoWizardLaunching). Resets on any success. */
   distinctFailureStreak: number;
@@ -228,6 +237,17 @@ const mesFamilyOf = (tag: string | null | undefined, pos: string | null | undefi
  *  Mirrors the dashboard's own spotKey/lastNavKey fallback formula. */
 const decisionKey = (r: IngestLikeResponse): string =>
   JSON.stringify([r.hand?.street, r.hand?.board, r.hero?.cards, r.hand?.node?.toCall, (r.hand?.actions ?? []).length]);
+/** A failed ask in a few words, for the panel: what it hit, not the whole sentence. */
+export function shortFail(reason: string): string {
+  const r = reason.toLowerCase();
+  if (/ai solve timed out|poll hung|timed out|no answer inside/.test(r)) return "GTO Wizard did not answer in time";
+  if (/ 429|request limit/.test(r)) return "GTO Wizard's request limit";
+  if (/unable to connect|unreachable|econn|fetch failed/.test(r)) return "a connection failed";
+  if (/internally inconsistent|capture/.test(r)) return "the table read did not add up yet";
+  if (/not hero's turn/.test(r)) return "the table had not caught up";
+  return reason.length > 90 ? `${reason.slice(0, 87)}…` : reason;
+}
+
 /** THE SAME DECISION, whatever the call amount read (2026-10-10, the failed-lock review): the call amount flickers within
  *  one decision (rollMemo; routes/fastSolver's probeIdentity compares without it), and every flicker was a NEW key here —
  *  a second full solve beside the first (a second 40 s pool lock on GTO Wizard), the keep-alive lost, and the first
@@ -386,7 +406,18 @@ class StudyPoller {
     // Read-time, not tick-time: the tick returns early whenever the panel is
     // unreachable or the switch is off, and a token-readiness field that only
     // updates on the happy path reports "not ready" for a token we're holding.
-    return { ...this.status, tokenReady: gtowApi.hasLiveToken() };
+    const f = this.status.lastNavFailure;
+    // a failure is the panel's business only while hero is on the decision it was for
+    const lastNavFailure = f ? { ...f, current: !!f.key && sameDecision(f.key, this.lastProbeKey) } : null;
+    return { ...this.status, lastNavFailure, tokenReady: gtowApi.hasLiveToken() };
+  }
+
+  /** The asks of the decision hero is on that came back with nothing (any reason): an answer that follows says it was
+   *  answered on a later try, and what the earlier one hit (2026-10-12). */
+  private triesFor: { key: string; n: number; firstAt: number; first: string } | null = null;
+  private noteTry(key: string, reason: string): void {
+    const t = this.triesFor;
+    this.triesFor = t && sameDecision(t.key, key) ? { ...t, n: t.n + 1 } : { key, n: 1, firstAt: Date.now(), first: reason };
   }
 
   private async tick(): Promise<void> {
@@ -729,7 +760,6 @@ class StudyPoller {
         this.deferredSince = { key, at: since };
         if (Date.now() - since < 3000) { await this.push(null); return; }
       }
-      this.status.lastNavFailure = { at: Date.now(), street: full.hand?.street ?? null, reason };
       const rf = this.repeatFail;
       this.repeatFail = rf && rf.key === key && rf.reason === reason
         ? { ...rf, n: rf.n + 1 }
@@ -738,6 +768,9 @@ class StudyPoller {
       // board-incomplete, fastSolve.ts 2026-09-23); log it when it is one of ours, else classify the sentence
       const kind = sol?.ok === false ? (sol as { kind?: unknown }).kind : undefined;
       const fk = isFailKind(kind) ? kind : failKindOf(reason);
+      this.noteTry(key, reason);
+      this.status.lastNavFailure = { at: Date.now(), street: full.hand?.street ?? null, reason, key, kind: fk,
+        attempt: this.repeatFail.n, of: this.REPEAT_FAIL_LIMIT, final: this.repeatFail.n >= this.REPEAT_FAIL_LIMIT };
       const fp = faultPath(full.hand?.street ?? "?", fk, reason);
       const failPath: DecisionPath | null = NEUTRAL_FAIL_KINDS.has(fk) ? null
         : { ...fp, requests: sol?.path?.requests, arrival: sol?.path?.arrival, streets: sol?.path?.streets ?? [] };
@@ -790,6 +823,13 @@ class StudyPoller {
     this.status.distinctFailureStreak = 0;
     this.lastFailedKey = null;
     this.status.lastNavFailure = null;
+    // ANSWERED ON A LATER TRY (2026-10-12): said on the panel beside the answer, and counted (poller_events)
+    const tried = this.triesFor && sameDecision(this.triesFor.key, key) ? this.triesFor : null;
+    this.triesFor = null;
+    const retryNote = tried
+      ? `answered on try ${tried.n + 1} — the first ask failed ${((Date.now() - tried.firstAt) / 1000).toFixed(0)} s ago: ${shortFail(tried.first)}`
+      : null;
+    if (tried) pollerEvent({ url: this.config.assistiveUrl, ev: "answered after retry", key, tries: tried.n + 1, firstFailedMs: Date.now() - tried.firstAt, first: tried.first.slice(0, 200) });
     answerLog.add({
       ...logBase,
       bandLo: rolled.band[0],
@@ -832,7 +872,7 @@ class StudyPoller {
       chain: this.chainBanner(chainPath, full.sessionId ?? null),
       // how the wrapper presses an ALLIN of this mix when it is not the shove (relay.ts pickReady)
       ...(sol.press?.length ? { press: sol.press } : {}),
-    }, [warning, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
+    }, [retryNote, warning, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
       .filter((s): s is string => !!s).join(" · ") || null);
   }
 
@@ -1089,7 +1129,10 @@ class StudyPoller {
     if (this.noAnswerLogged.has(tag)) return;
     if (this.noAnswerLogged.size > 500) this.noAnswerLogged.clear();
     this.noAnswerLogged.add(tag);
-    this.status.lastNavFailure = { at: Date.now(), street: probe.hand?.street ?? null, reason };
+    // none of these is the last word on the decision: the poller asks it again on its next tick (a request that timed
+    // out / failed, GTO Wizard down) — or hero has already left it (abandoned-stale, hand over), and `current` says so
+    this.status.lastNavFailure = { at: Date.now(), street: probe.hand?.street ?? null, reason, key, kind, final: false };
+    if (!NEVER_ASKED.has(kind) && kind !== "abandoned-stale") this.noteTry(key, reason);
     this.noteWedgeSignal(key, kind);
     answerLog.add({
       ts: Date.now(),
