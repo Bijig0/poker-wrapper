@@ -57,13 +57,14 @@ chart server restart by themselves.
 2. **The API does not know hero's remaining time bank.** A lock now waits up to 40 s. With a partly spent bank, the
    wrapper can fold at its 4 s mark while the unlocked answer has been ready since ~5 s. Fix: the poller sends the
    clock + bank left; locks and gates wait `min(box, left − 8 s)`.
-3. **Preflop GTO Wizard has no failover.**
-   - A tree/solution POST that throws is not retried on another account (postflop does this).
-   - A 429 or a hung poll keeps the solution memo pointing at the walled account.
-   - A hung poll is never re-posted. The 35 s request, hand 4923636936, came within 1 s of the 30 s node cap.
-   - The lock POST goes only to the parent's owner.
-
-   Code: `gtowAiPreflop.ts` 829-944, 1113-1181.
+3. **Preflop GTO Wizard failover — FIXED 2026-10-12** (poker-wrapper `claude/preflop-gtow-failover`, merged to main).
+   A tree / solution POST whose request fails moves on to the next account; a poll that hangs (no reply in 8 s) or a
+   429 on the owning account re-posts the solve — tree, solution, locks — on another account when a cold tree fits what
+   is left of the read (`GTOW_PREFLOP_REPOST_MS` 10 s + 3 s a lock), the replacement answering for the old solution id;
+   with no time left after a 429 the tree's memo is forgotten so the next ask posts afresh elsewhere; a failed lock POST
+   is sent once more. Log tags `[gtow-route]`, `[gtow-hung] … preflop solution`, `[gtow-preflop-repost]`. Measured
+   before: 11 of 902 live preflop AI answers with a hung poll, 2 at 35-40 s, 1 past the cut-off (hand 4923636936).
+   CHECK after the next sessions: `[gtow-preflop-repost]` lines — how many rescued, any "NOT re-posted".
 4. **fitAiLine / reduced tree: a network error reads as "the line is not offered".** The arrival goes to the reduced tree
    and the cause is erased (`gtowAiPreflop.ts` 1313, 2842, 2970, 3245-3314). Fix: return `{error}` distinct from "no
    fit"; fail with `arrival:read-failed`.
