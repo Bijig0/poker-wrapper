@@ -1111,8 +1111,17 @@
       $("sa-pick").style.display = "none";
       $("sa-ready").style.display = "none";
     }
+    // "NO ANSWER" ONLY WHEN IT IS THE LAST WORD ON THIS DECISION (2026-10-12, Brady: "it says 'no answer' then the
+    // answer comes out delayed"). Every failed ATTEMPT used to read as no answer for 15 s, while the poller was asking
+    // the same decision again (18 live decisions in 3 weeks answered 3-24 s later), and a failure of the PREVIOUS
+    // decision showed on the next one (~60). The API now says which decision a failure was for (`current`) and whether
+    // another ask is coming (`final`); an older API without those fields reads as before.
     const navFail = saHealth?.lastNavFailure;
-    const freshFail = navFail && (Date.now() - navFail.at) < 15000;
+    const fresh = navFail && (Date.now() - navFail.at) < 15000;
+    const known = navFail && navFail.current !== undefined;
+    const forThis = fresh && (!known || navFail.current);
+    const freshFail = forThis && (!known || navFail.final);
+    const retrying = forThis && known && !navFail.final;
     const od = renderSolve(answer, myTurn, st);
     $("sa-answer").textContent = answer
       ? answer.text.replace(/ · roll \d+ → .*$/, "")
@@ -1121,6 +1130,7 @@
       : !myTurn ? (od ? "on demand — Solve appears on your turn" : "waiting for your turn…")
       : od && !st?.solveRequest && !solveBusy ? "press SOLVE for the equilibrium answer"
       : freshFail ? "no answer — couldn't solve this spot"
+      : retrying ? `try ${navFail.attempt || 1} came back empty (${failShort(navFail)}) — asking again…`
       : od ? "solving your spot live (GTO Wizard AI)…"
       : "solving your spot…";
     // the solve's own caveat when there IS an answer; when there is none, why not
@@ -1187,6 +1197,17 @@
   // THE CHAIN LINE (2026-09-25): the banner says when this answer's ranges were REBUILT (the recovery path ran), when
   // it cost EXTRA REQUESTS (a tree or node GTO Wizard had already served), or that there is NO ANSWER — the clean and
   // by-design paths show nothing. Under it, the session's clean count: hands that reached a postflop decision.
+  /** a failed ask in a few words (the API's studyPoller.shortFail, by kind first) */
+  function failShort(f) {
+    const r = String(f.reason || "").toLowerCase();
+    if (f.kind === "gtow-timeout" || /ai solve timed out|poll hung|timed out/.test(r)) return "GTO Wizard did not answer in time";
+    if (f.kind === "solver-timeout") return "the solve request ran past its limit";
+    if (f.kind === "solver-unreachable" || /unable to connect|unreachable/.test(r)) return "a connection failed";
+    if (f.kind === "gtow-down") return "GTO Wizard not connected";
+    if (f.kind === "capture-fault") return "the table read did not add up yet";
+    const s = String(f.reason || "no reason given");
+    return s.length > 70 ? s.slice(0, 67) + "…" : s;
+  }
   function renderChain(ch, hasAnswer) {
     const box = $("sa-chain"), rate = $("sa-chainrate");
     const v = hasAnswer ? ch?.verdict : null;

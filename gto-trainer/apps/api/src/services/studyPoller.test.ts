@@ -311,6 +311,50 @@ describe("studyPoller", () => {
     expect((pushed[pushed.length - 1]!.body as any).note).toContain("no answer for this spot after");
   });
 
+  // 2026-10-12 (Brady: "it says 'no answer' then the answer comes out delayed"): a failed ATTEMPT is not the last
+  // word — the status says which decision, which try, and that another ask is coming; the answer that follows says so
+  it("a failed first ask is a retry for the panel, not 'no answer' — and the answer says it came on try 2", async () => {
+    ingestResponse = {
+      ok: true, studyAnswersOn: true, hero: { toAct: true, cards: ["Ah", "Kh"] },
+      hand: { street: "flop", board: ["9h", "5s", "2c"], node: { toCall: 0 }, actions: [1, 2] },
+    };
+    fastSolveResponse = { ok: true, hand: { street: "flop" },
+      solution: { ok: false, reason: "6-max strategy postflop: node: AI solve timed out on ultra-2 — 1 poll: 0 answered 204" } };
+    studyPoller.start({ intervalMs: 40 });
+    await wait(20);
+    const f = studyPoller.getStatus().lastNavFailure!;
+    expect(f.attempt).toBe(1);
+    expect(f.of).toBe(3);
+    expect(f.final).toBe(false);
+    expect(f.current).toBe(true);
+    expect(f.kind).toBe("gtow-timeout");
+    fastSolveResponse = { ok: true, hand: { street: "flop" },
+      solution: { ok: true, decision: { action: "Check", frequency: 100 }, actions: [{ action: "Check", frequency: 100 }] } };
+    await wait(60);
+    const body = pushCalls().at(-1)!.body as { pick: string; note: string | null };
+    expect(body.pick).toBe("Check");
+    expect(body.note).toStartWith("answered on try 2 — the first ask failed");
+    expect(body.note).toContain("GTO Wizard did not answer in time");
+    expect(studyPoller.getStatus().lastNavFailure).toBeNull();
+  });
+
+  it("a failure of a decision hero has left is not current", async () => {
+    ingestResponse = {
+      ok: true, studyAnswersOn: true, hero: { toAct: true, cards: ["Ah", "Kh"] },
+      hand: { street: "flop", board: ["9h", "5s", "2c"], node: { toCall: 0 }, actions: [1, 2] },
+    };
+    fastSolveResponse = { ok: true, hand: { street: "flop" }, solution: { ok: false, reason: "no solution for this spot" } };
+    studyPoller.start({ intervalMs: 30 });
+    await wait(20);
+    expect(studyPoller.getStatus().lastNavFailure?.current).toBe(true);
+    // the next decision: the old failure is still the last one, but not this decision's
+    fastSolveResponse = { ok: true, hand: { street: "turn" }, deferred: "The table moved between the probe and the solve" };
+    ingestResponse = { ...(ingestResponse as object), hand: { street: "turn", board: ["9h", "5s", "2c", "Kd"], node: { toCall: 3 }, actions: [1, 2, 3, 4] } };
+    await wait(80);
+    expect(studyPoller.getStatus().lastNavFailure?.reason).toBe("no solution for this spot");
+    expect(studyPoller.getStatus().lastNavFailure?.current).toBe(false);
+  });
+
   it("also answers a preflop decision through the fast path", async () => {
     ingestResponse = {
       ok: true,
