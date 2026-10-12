@@ -81,7 +81,7 @@ export class HandNodeStore {
 
   get(dbId: number, key: string): StoredNode | null {
     try {
-      const r = this.open().query<{ body: Uint8Array; commit_id: string | null; built_at: number }, [number, string]>(
+      const r = this.open().query<{ body: Uint8Array<ArrayBuffer>; commit_id: string | null; built_at: number }, [number, string]>(
         "SELECT body, commit_id, built_at FROM hand_nodes WHERE db_id = ? AND key = ?").get(dbId, key);
       if (!r) return null;
       return { body: JSON.parse(Buffer.from(Bun.gunzipSync(r.body)).toString("utf-8")), commit: r.commit_id, builtAt: r.built_at };

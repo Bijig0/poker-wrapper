@@ -112,7 +112,8 @@ export class HandNodeBuilder {
   }
 }
 
-export const handNodeBuilder = new HandNodeBuilder({
+/** The API worker's own inputs (scripts/buildHandNodes.ts reuses them without the gaps). */
+export const builderDeps: BuilderDeps = {
   store: handNodeStore(),
   live: () => sessionLive(),
   rows: () => handsView.rows(),
@@ -120,4 +121,5 @@ export const handNodeBuilder = new HandNodeBuilder({
   heroIdx: (row) => { const e = enrichSync(row); return e ? heroDecisions(e.hand.actions as any) : null; },
   sleep: (ms) => Bun.sleep(ms),
   now: () => Date.now(),
-});
+};
+export const handNodeBuilder = new HandNodeBuilder(builderDeps);
