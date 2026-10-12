@@ -32,6 +32,7 @@ import { archiveHand, sessionHands } from "./archive";
 import { setDebug } from "./ignition/recorder";
 import { forgetFrame, mySel, slotted, unpinnedTableIssue } from "./ignition/dom";
 import { setAuto } from "./relay";
+import { resetBudget, stopCounting } from "./autoBudget";
 import { applyLayout, chromeWindow, closeBrowser, killProfileWindows, leaderHwnd, otherArea, panelHwnd, targetArea } from "./windows";
 import { chartsUrl, livePort, port } from "../../api/src/services/ports";
 
@@ -772,7 +773,7 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
     sitBackIn: !!cfg.autoSitBackIn, sitBackTurn: null, lastSitBackIn: null,
     keepPresent: "keepPresent" in cfg ? !!cfg.keepPresent : true, presenceAt: 0.0, presenceCount: 0, presenceFails: 0,
     topUpDue: null, topUpTrigger: null, stackStable: { text: null, ticks: 0 },
-    autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+    autoAllowReal: false,
   });
   // THE DEEP-STACK RESET (stackReset.ts): off unless the session declares it — no stackResetBb (every session before
   // 2026-10-03, and the setup page's "Deep stack: Off") or 0 = off; the wait defaults to 60 s. A session starts clean.
@@ -789,14 +790,16 @@ export async function applySessionConfig(cfg: Record<string, any>): Promise<void
   // when Solve is pressed and never auto-executes, whatever else the config declares
   st.onDemand = !!cfg.onDemand;
   st.solveRequest = null;
+  // THE AUTO-EXECUTE BUDGET (autoBudget.ts, 2026-10-12): the session's, practice and real money alike — seeded here
+  // whether or not auto is declared (the panel's checkbox arms against it too)
+  resetBudget(cfg.autoBudget);
   st.autoDeclared = !!cfg.autoExecute && !st.onDemand;
-  st.autoDeclaredReal = !!cfg.autoRealMoney;
-  st.autoDeclaredBudget = { ...(cfg.autoBudget || { minutes: 30, hands: 50 }) };
+  // a declared auto may arm on real money (Brady, 2026-10-12: the declaration plus its budget is the permission);
+  // `autoRealMoney` from older setups is accepted and no longer needed
+  st.autoDeclaredReal = st.autoDeclared;
+  st.autoDeclaredBudget = { ...st.autoBudget };
   if (st.autoDeclared) {
-    const res = setAuto(true, {
-      allowReal: st.autoDeclaredReal, minutes: st.autoDeclaredBudget?.minutes ?? null, hands: st.autoDeclaredBudget?.hands ?? null,
-      reason: "declared at session setup", by: { via: "session setup (declared)" },
-    });
+    const res = setAuto(true, { allowReal: true, reason: "declared at session setup", by: { via: "session setup (declared)" } });
     if (!res.ok) log(`[pick] declared auto not armed yet: ${pyStr(res.error ?? null)}`);
   }
   if (isCp()) {
@@ -1004,7 +1007,8 @@ export async function sessionDisconnected(body: Record<string, any>): Promise<[n
     const slot = body.slot === undefined || body.slot === null ? null : pyInt(body.slot);
     S.disconnect = { at: time(), slot, text: String(body.text || "disconnected"), attempt: body.attempt ?? null, of: body.of ?? null,
                      reconnected: !!body.reconnected, sid: S.session.id, handled: false, via: `table ${pyStr(slot)} told us` };
-    Object.assign(S.study, { auto: false, autoDue: null, autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+    stopCounting();
+    Object.assign(S.study, { auto: false, autoDue: null, autoAllowReal: false,
                              standDownPending: null });
     S.router.cancel = true;
     feedAdd(`DISCONNECTED FROM THE POKER SERVER — table ${pyStr(slot)} lost it. Ending the session; the client is closed so it cannot reconnect`);
@@ -1299,8 +1303,9 @@ export function sessionLeave(body: Record<string, any> | null): [number, Record<
   S.router.cancel = true;
   S.study.on = false;
   S.study.text = null;
+  stopCounting();
   S.study.auto = false;
-  Object.assign(S.study, { autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
+  S.study.autoAllowReal = false;
   setDebug(false);
   S.recPending.on = false;
   S.sessions.event(sid, "table-left", { slot: TABLES.slot(), hands });
@@ -1659,8 +1664,9 @@ export async function sessionEnd(body: Record<string, any>): Promise<Record<stri
   if (live) {
     S.study.on = false;
     S.study.text = null;
+    stopCounting();
     S.study.auto = false;
-    Object.assign(S.study, { autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
+    S.study.autoAllowReal = false;
     setDebug(false);
     S.recPending.on = false;
     S.router.cancel = true;

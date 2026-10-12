@@ -50,14 +50,27 @@ test("a caller that does not name itself is still identified by its headers", as
   expect(ev.by).toMatchObject({ via: "http (no via)", origin: null, ua: "curl/8.9.1" });
 });
 
-test("arming on a real-money table records who granted the allowance too", async () => {
+test("arming on a real-money table records who allowed it, and the budget it armed at", async () => {
   S.liveStatus.practice = false;
   const app = buildApp();
   await app.request("/study-auto", { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:7710" },
     body: JSON.stringify({ auto: true, allowRealMoney: true, minutes: 10, hands: 5, reason: "test", via: "panel checkbox", page: { focused: true, visible: "visible" } }) });
   const ev = events.find(([k]) => k === "study-auto")?.[1];
-  expect(ev.realMoneyAllowance).toMatchObject({ minutes: 10, hands: 5 });
+  expect(ev.realMoney).toBe(true);
+  expect(ev.budget).toMatchObject({ minutesLeft: 10, handsLeft: 5, live: true });
   expect(ev.by).toMatchObject({ via: "panel checkbox", origin: "http://127.0.0.1:7710", page: { focused: true } });
+});
+
+test("Adjust (/study-auto/budget) sets what is left and records who did it", async () => {
+  const app = buildApp();
+  const res = await app.request("/study-auto/budget", { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:7710" },
+    body: JSON.stringify({ minutes: 45, hands: 120, via: "panel budget Adjust", page: { focused: true, visible: "visible" } }) });
+  const j: any = await res.json();
+  expect(j.ok).toBe(true);
+  expect(j.allowance).toMatchObject({ minutesLeft: 45, handsLeft: 120 });
+  const ev = events.find(([k]) => k === "study-auto-budget")?.[1];
+  expect(ev.after).toMatchObject({ minutesLeft: 45, handsLeft: 120 });
+  expect(ev.by).toMatchObject({ via: "panel budget Adjust", origin: "http://127.0.0.1:7710" });
 });
 
 test("the code paths name themselves", () => {

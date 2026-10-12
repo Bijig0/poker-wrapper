@@ -59,6 +59,7 @@ export const Body = {
   studyAuto: obj({ auto: anyVal.optional(), allowRealMoney: anyVal.optional(), minutes: anyVal.optional(), hands: anyVal.optional(),
                    reason: anyVal.optional(), delay: anyVal.optional(), timeBank: anyVal.optional(), topUp: anyVal.optional(),
                    via: anyVal.optional(), page: anyVal.optional() }),
+  studyAutoBudget: obj({ minutes: anyVal.optional(), hands: anyVal.optional(), via: anyVal.optional(), page: anyVal.optional() }),
   debug: obj({ on: anyVal.optional() }),
   recnote: obj({ session: anyVal.optional(), note: anyVal.optional() }),
   any: z.record(z.string(), z.unknown()),
