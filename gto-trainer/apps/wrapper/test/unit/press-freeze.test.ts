@@ -11,8 +11,11 @@
 import { expect, test } from "bun:test";
 import { realTime, setFakeTime, time } from "../../src/clock";
 import { pyJsonDumps } from "../../src/py";
+import * as cdp from "../../src/cdp";
 import { S, resetState, seams } from "../../src/state";
-import { FROZEN_HOLD_WHY, executePick, frameFrozen, maybeAutoAct, maybeVerifyExec, pressMark, pressUncertain } from "../../src/relay";
+import { FROZEN_HOLD_WHY, actuate, executePick, frameFrozen, maybeAutoAct, maybeVerifyExec, pressMark, pressUncertain } from "../../src/relay";
+import { noteFrame } from "../../src/ignition/reader";
+import { FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
 import { checker, J, scratchDirs } from "./helpers";
 
 const T0 = 1_790_000_000;
@@ -205,4 +208,112 @@ test("pressUncertain: only a turn-button click that may still land", () => {
   expect(pressUncertain(p0, true)).toBe(true);                   // raised after a click went out
   pressMark.actionClicksFailed += 1;
   expect(pressUncertain(p0, false)).toBe(true);                  // a click whose reply never came
+});
+
+test("the REAL press code counts only turn-button clicks: typing or a preset that hangs is refused, a hung turn click is uncertain", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  let undo = () => {};
+  const table = () => {
+    undo();
+    const t = new FakeIgnition(RIVER_FACING_BET, { stack: 89.2 });
+    undo = t.install();
+    return t;
+  };
+  const hang = () => { throw new cdp.CdpError("timed out waiting for reply 1"); };
+  try {
+    S.ws.bb = 200;
+    // 1. the QsTh case: the typing sequence (cdpSeq: mouseMoved first) never answers — nothing that acts was sent
+    let t = table();
+    seams.cdpSeq = async () => hang();
+    let p0 = { ...pressMark };
+    let threw = false;
+    try { await actuate({ kind: "raise-to", amount: "2.5", verb: "raise" }); } catch { threw = true; }
+    check("typing hangs: the raise path raises", threw);
+    check("  ... no turn-button click was sent", t.clicks.length === 0 && pressMark.actionClicks === p0.actionClicks, J({ clicks: t.clicks, pm: pressMark }));
+    check("  ... so it is REFUSED (safe to press again)", pressUncertain(p0, threw) === false);
+
+    // 2. the RAISE TO click goes out (the client queues it) and its reply never comes
+    t = table();
+    const click0 = cdp.io.dispatchClick;
+    cdp.io.dispatchClick = async (ws: string, x: number, y: number) => { await click0(ws, x, y); hang(); };
+    p0 = { ...pressMark };
+    let r = await actuate({ kind: "raise-to", amount: "2.5", verb: "raise" });
+    check("a hung RAISE TO click: not ok", r.ok === false, J(r));
+    check("  ... counted as a turn-button click sent and unanswered",
+          pressMark.actionClicks === p0.actionClicks + 1 && pressMark.actionClicksFailed === p0.actionClicksFailed + 1, J(pressMark));
+    check("  ... UNCERTAIN (it may still land)", pressUncertain(p0, false) === true);
+
+    // 3. a sizing PRESET that hangs (the ALL-IN preset before the confirm) acts nothing at the table
+    t = table();
+    const click1 = cdp.io.dispatchClick;
+    cdp.io.dispatchClick = async (ws: string, x: number, y: number) => {
+      const b = RIVER_FACING_BET.buttons.find((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+      if (b && /Selector$/.test(b.qa || "")) hang();
+      await click1(ws, x, y);
+    };
+    p0 = { ...pressMark };
+    r = await actuate({ kind: "action", label: "all-in" });
+    check("a hung preset click: not ok, and no turn button pressed", r.ok === false && t.pressed === null, J({ r, pressed: t.pressed }));
+    check("  ... REFUSED, not uncertain", pressUncertain(p0, false) === false && pressMark.actionClicks === p0.actionClicks, J(pressMark));
+
+    // 4. a turn click whose reply comes: counted as sent, never as unanswered — and it is ok
+    t = table();
+    p0 = { ...pressMark };
+    r = await actuate({ kind: "action", label: "fold" });
+    check("a fold that answers: ok, one click counted, none unanswered",
+          r.ok === true && pressMark.actionClicks === p0.actionClicks + 1 && pressMark.actionClicksFailed === p0.actionClicksFailed, J({ r, pressMark }));
+  } finally {
+    undo();
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("noteFrame: frozen only when the page is visible and the table on screen; each freeze is a session event", () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  const events: [string, any][] = [];
+  const ev0 = S.sessions.event;
+  S.session.id = "session_test";
+  S.sessions.event = ((_sid: string, kind: string, data: any) => { events.push([kind, data]); }) as any;
+  const cap = (draw: any) => ({ seated: true, frameTag: "0", tags: [0], draw });
+  const DRAWN = { beats: 900, idleMs: 16, ageMs: 15000, pageHidden: false, offscreen: false };
+  const STUCK = { beats: 900, idleMs: 4000, ageMs: 15000, pageHidden: false, offscreen: false };
+  try {
+    noteFrame(cap(DRAWN));
+    check("drawn: not frozen, no event", S.frameHealth.frozen === false && events.length === 0, J({ f: S.frameHealth, events }));
+    noteFrame(cap(STUCK));
+    check("stuck while visible + on screen: FROZEN", S.frameHealth.frozen === true);
+    check("  ... one frame-undrawn event", events.length === 1 && events[0]![0] === "frame-undrawn" && events[0]![1].frozen === true, J(events));
+    setFakeTime(T0 + 8);
+    noteFrame(cap(STUCK));
+    check("  ... said once, not every read", events.length === 1, J(events));
+    noteFrame(cap(DRAWN));
+    check("drawn again: not frozen", S.frameHealth.frozen === false);
+    check("  ... a frame-drawn-again event with how long", events.length === 2 && events[1]![0] === "frame-drawn-again" && events[1]![1].forS === 8, J(events));
+    noteFrame(cap({ ...STUCK, pageHidden: true }));
+    check("a hidden page is not a freeze (the press path brings it to front)", S.frameHealth.frozen === false && S.frameHealth.drawn === false);
+    noteFrame(cap({ ...STUCK, offscreen: true }));
+    check("nor a table moved off screen by the lobby", S.frameHealth.frozen === false);
+    noteFrame(cap({ beats: 3, idleMs: 900, ageMs: 900, pageHidden: false, offscreen: false }));
+    check("a heartbeat younger than the idle limit is never a freeze", S.frameHealth.frozen === false);
+    noteFrame({ seated: true, nodes: [] });
+    check("a read without the heartbeat is unknown, never frozen", S.frameHealth.frozen === false && S.frameHealth.drawn === null);
+  } finally {
+    S.sessions.event = ev0;
+    S.session.id = null;
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
 });
