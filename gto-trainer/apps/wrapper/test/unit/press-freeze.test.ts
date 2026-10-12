@@ -180,6 +180,34 @@ test("a press whose turn-button click went out unanswered is UNCERTAIN: the sock
     await tickAt(208);
     check("spot gone: abandoned, one press", calls.length === 1 && (S.study.lastExec || {}).outcome === "abandoned", J({ calls, ex: S.study.lastExec }));
 
+    // 3b. the verifier's OWN retry hangs too: still uncertain, still pending — the socket settles it, never "unknown"
+    calls.length = 0;
+    setFakeTime(T0 + 250);
+    seed();
+    await tickAt(250);                                // the first press: its RAISE TO click unanswered
+    await tickAt(253);                                // drawn throughout, no echo for a full window: the verifier retries…
+    check("the verifier retries a press that never showed", calls.length === 2, J(calls));
+    check("  ... its retry hangs as well: still PENDING, not given up", (S.study.lastExec || {}).outcome === "pending" && S.study.pendingExec !== null,
+          J({ ex: S.study.lastExec, p: S.study.pendingExec }));
+    heroRaised();                                     // …and that click lands late
+    await tickAt(253.4); await tickAt(253.8);
+    check("  ... the late echo confirms it, with no third press", (S.study.lastExec || {}).outcome === "confirmed" && calls.length === 2,
+          J({ ex: S.study.lastExec, calls }));
+
+    // 3c. the table reader stood down while the frame read frozen: a stale freeze never holds the verifier
+    calls.length = 0;
+    setFakeTime(T0 + 270);
+    seed();
+    S.screenReadAt = time();
+    await tickAt(270);
+    S.frameHealth.frozen = true;
+    S.screenReadAt = time() - 30;                     // no table read for 30 s: everything it said is stale
+    check("a stale read is never a freeze", frameFrozen() === false);
+    await tickAt(274);
+    check("  ... the verifier settles the press (the spot is no longer known to be hero's)",
+          S.study.pendingExec === null && (S.study.lastExec || {}).outcome === "abandoned", J(S.study.lastExec));
+    S.screenReadAt = null;
+
     // 4. a press that RAISED after its click went out is uncertain too
     calls.length = 0;
     setFakeTime(T0 + 300);
