@@ -169,6 +169,19 @@ describe("AutoRestart", () => {
     expect(r.s.exits).toBe(0);
   });
 
+  test("an exit that could not happen (a relaunch that did not start) is held and tried again, not stuck at restarting", async () => {
+    let ok = false, tries = 0;
+    const r = rig({ exit: () => { tries++; return ok; } });
+    r.edit("a.ts");
+    const held = await r.auto.tick();
+    expect(held.state).toBe("held");
+    expect(held.why).toContain("it could not be started — trying again");
+    expect(held.why).not.toContain("exiting for the supervisor");
+    ok = true;
+    expect((await r.auto.tick()).state).toBe("restarting");
+    expect(tries).toBe(2);
+  });
+
   test("the log says each state once, not every tick", async () => {
     const r = rig();
     r.edit("a.ts");

@@ -15,6 +15,7 @@ import * as A from "./auth";
 import * as BAL from "./balances";
 import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
+import { behindForStart } from "./build";
 import { C, profileDir } from "./config";
 import { REPO } from "./env";
 import * as F from "./formats";
@@ -1486,6 +1487,13 @@ export async function sessionStart(body: Record<string, any>): Promise<[number, 
     return [409, { ok: false, error: `table ${pyStr(TABLES.slot())} does not declare sessions — start it from table ${TABLES.LEADER} (http://127.0.0.1:${TABLES.leaderPort()}/setup)` }];
   }
   if (S.session.id) return [409, { ok: false, error: `session ${S.session.id} is already running — end it first` }];
+  // never a session on old code (2026-10-13, build.ts): a wrapper behind a committed change relaunches first — quietly,
+  // and only when the code on disk builds (else the session starts on the code it has, and the setup row says why)
+  const behind = await behindForStart();
+  if (behind) {
+    return [409, { ok: false, relaunching: true,
+      error: `the wrapper is loading new code first (${behind.replace(/; .*$/, "")}) — it is back in a few seconds; press Start again` }];
+  }
   const presets = await SES.presets();
   const preset = body.preset in presets ? body.preset : null;
   if (!preset) return [400, { ok: false, error: "unknown preset" }];
