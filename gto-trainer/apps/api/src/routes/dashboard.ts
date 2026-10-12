@@ -31,6 +31,7 @@ import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
 import { REPO, factoryFile } from "../services/repoPaths";
 import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, resolveAllStores, splitStores, wrapperDebugDir } from "../services/storePaths";
 import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
+import { FinishedHandsFeed } from "../services/hhCheckFeed";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -1258,12 +1259,10 @@ export const doneIgnitionHandsAfter = (afterRowid: number): Enriched[] =>
     .map(enrichSync)
     .filter((e): e is Enriched => !!e && isIgnitionHandId(e.clientHandId));
 
-/** The same hands' client ids only — no row data read, nothing enriched (the checker's queue: it enriches just the hands
- *  it has not checked yet; enriching all of them every 10 s froze the API at 3,350 hands, 2026-10-05). */
-export const doneIgnitionHandIdsAfter = (afterRowid: number): string[] =>
-  (openDb()?.query<{ c: string | null }, [number]>(`SELECT client_hand_id AS c FROM hands WHERE rowid > ? AND ${FINISHED} ORDER BY rowid`).all(afterRowid) ?? [])
-    .map((r) => r.c)
-    .filter((c): c is string => !!c && isIgnitionHandId(c));
+/** The checker's queue: the client ids of the Ignition hands finished since its last call (services/hhCheckFeed.ts —
+ *  each finished row once, read from the indexes; asking for every finished hand since the cutoff each tick read every
+ *  one of their rows, the 16-40 s [stall] lines of 2026-10-12 under paging). */
+export const finishedIgnitionIds = new FinishedHandsFeed(openDb, isIgnitionHandId);
 
 /** The newest row id (0 for an empty or missing archive) — the checker's one-time "from here on" cutoff. */
 export const lastArchivedRowid = (): number =>
