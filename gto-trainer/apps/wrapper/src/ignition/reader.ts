@@ -12,6 +12,7 @@ import * as cdp from "../cdp";
 import { time } from "../clock";
 import { C } from "../config";
 import { feedAdd, log } from "../feed";
+import { snippetVersion } from "../js";
 import { keepLast, pyRepr, pyRound, pyStr, sortedNums, truthy } from "../py";
 import { S, inAHand, peerIsLeaving, seams, stackResetLeaving } from "../state";
 import * as TABLES from "../tables";
@@ -332,6 +333,10 @@ export function noteFrame(d: Record<string, any>): boolean {
   F.tags = tags;
   F.dup = S.frame.tag !== null && tags ? tags.filter((t) => String(t) === S.frame.tag).length : 0;
   const dr = d.seated ? d.draw : null;
+  // the page's heartbeat was another version's (src/js.ts) -- after a wrapper relaunch, once per frame
+  if (dr && typeof dr.replaced === "string") {
+    log(`[page-js] table ${pyStr(TABLES.slot() ?? 1)}: replaced the page's draw heartbeat (${dr.replaced}) with ${snippetVersion("launch.TABLE_JS_TMPL")}`);
+  }
   const known = !!dr && typeof dr.idleMs === "number" && typeof dr.ageMs === "number";
   const drawn: boolean | null = known ? !(dr.idleMs > FRAME_IDLE_MS && dr.ageMs > FRAME_IDLE_MS) : null;
   const resumed = F.drawn === false && drawn === true;

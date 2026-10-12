@@ -214,19 +214,73 @@
   // same-origin load REPLACES the frame's document but KEEPS its Window -- the marker stayed, the rAF went with the old
   // document, so every session read "not being drawn" from its first second on (beats stuck at 19-47, live rAF 60/s;
   // repro in Brave: old 50 beats then dead, this one alive). A heartbeat whose document is gone is replaced.
+  // AND IT IS THIS VERSION'S (2026-10-13): installed only when missing, the OLD heartbeat outlived every wrapper
+  // relaunch until the frame reloaded. One of another version is stopped and replaced (src/js.ts); on the same
+  // document its reading (beats, last beat, age) carries over, so the swap neither invents nor hides a stall, and
+  // `replaced` says once that it happened. Ours keeps a handle: {version, doc, n, t0, t, stop()}.
   let draw = null;
   try {
     const fw = tf.contentWindow;
-    if (!fw.__wrapperDraw || fw.__wrapperDraw.doc !== fw.document) {
-      const hb = fw.__wrapperDraw = {n: 0, t0: fw.performance.now(), t: fw.performance.now(), doc: fw.document};
-      const beat = () => { if (fw.__wrapperDraw !== hb) return; hb.n++; hb.t = fw.performance.now(); fw.requestAnimationFrame(beat); };
-      fw.requestAnimationFrame(beat);
+    // The heartbeats before this one kept no handle:
+    //   before 2026-10-12  beat = () => { hb.n++; hb.t = fw.performance.now(); fw.requestAnimationFrame(beat); }
+    //   2026-10-12 ({doc}) the same, first returning once fw.__wrapperDraw is not its own -- it stops by itself.
+    // The first checks nothing. Its write to hb.t comes right before it asks for its next frame, so a setter on that
+    // (orphaned) object marks the moment and that ONE request is not passed on: the loop ends, and nothing is thrown
+    // in the client's page. Every other request passes straight through, and the trap comes off at that call, at our
+    // own first beat (a document runs its callbacks in the order they were asked for: an old beat still alive has run
+    // by then, one whose document was replaced -- the usual case -- never will), or after 5 s at the latest.
+    const quietOld = (old) => {
+      let armed = false, t = old.t;
+      Object.defineProperty(old, 't', {configurable: true, enumerable: true,
+                                       get: () => t, set: v => { t = v; armed = true; }});
+      const own = Object.prototype.hasOwnProperty.call(fw, 'requestAnimationFrame');
+      const orig = fw.requestAnimationFrame;
+      const off = () => {
+        if (fw.requestAnimationFrame !== trap) return;
+        if (own) fw.requestAnimationFrame = orig; else delete fw.requestAnimationFrame;
+      };
+      const trap = function (cb) {
+        if (armed) { armed = false; off(); return 0; }
+        return orig.call(fw, cb);
+      };
+      fw.requestAnimationFrame = trap;
+      return off;
+    };
+    const VERSION = __VERSION__;
+    const old = fw.__wrapperDraw;
+    let replaced = null;
+    if (!old || old.version !== VERSION || old.doc !== fw.document) {
+      const t0 = fw.performance.now();
+      const hb = {version: VERSION, doc: fw.document, n: 0, t0, t: t0, stop: null};
+      let raf = 0, stopped = false, release = null;
+      if (old) {
+        if (old.version !== VERSION) replaced = old.version || 'unversioned';
+        const ok = x => typeof x === 'number' && x >= 0 && x <= t0;
+        if (old.doc === fw.document && typeof old.n === 'number' && ok(old.t0) && ok(old.t)) {
+          hb.n = old.n; hb.t0 = old.t0; hb.t = old.t;
+        }
+        try {
+          if (typeof old.stop === 'function') old.stop();
+          else if (!('doc' in old)) release = quietOld(old);
+        } catch (e) {}
+      }
+      const done = () => { if (release) { const r = release; release = null; r(); } };
+      hb.stop = () => { stopped = true; done(); try { fw.cancelAnimationFrame(raf); } catch (e) {} };
+      const beat = () => {
+        done();
+        if (stopped || fw.__wrapperDraw !== hb) return;     // replaced: stop for good
+        hb.n++; hb.t = fw.performance.now(); raf = fw.requestAnimationFrame(beat);
+      };
+      fw.__wrapperDraw = hb;
+      raf = fw.requestAnimationFrame(beat);
+      if (release) setTimeout(done, 5000);
     }
     const hb = fw.__wrapperDraw, now = fw.performance.now();
     draw = {beats: hb.n, idleMs: Math.round(now - hb.t), ageMs: Math.round(now - hb.t0),
             pageHidden: document.visibilityState !== 'visible',
             offscreen: !(fb.width > 0 && fb.height > 0 && fb.right > 0 && fb.bottom > 0
                          && fb.left < innerWidth && fb.top < innerHeight)};
+    if (replaced) draw.replaced = replaced;
   } catch (e) {}
   return {seated: true, practice: (tf.src || '').includes('playMode=fun'),
           frameTag: tf.getAttribute('data-multitableslot'), tags, draw,
