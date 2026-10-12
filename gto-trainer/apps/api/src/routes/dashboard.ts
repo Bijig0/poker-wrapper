@@ -22,7 +22,7 @@ import { sameAction, heroActionAt } from "../services/adherence";
 import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
 import { fxRate, toAudCents } from "../services/fx";
-import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat } from "../services/strategies";
+import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat, SIX_MAX_STRATEGY_ID } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
 import { chartSetup, type ChartSetup } from "../services/chartSetup";
 import { gtowCdp } from "../services/gtowCdp";
@@ -1631,7 +1631,7 @@ app.get("/answer-node", async (c) => {
       const noNode = (why: string) => c.json({ ...base, kind: "ai-chain",
         note: `This preflop decision was answered by GTO Wizard AI preflop, not a chart, and its node cannot be shown: ${why}.` });
       const rec = preflopNodeFor({ ...hand, clientHandId: hand.clientHandId ?? e.clientHandId ?? undefined }, upto);
-      if (!rec) return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04, and a hand's facts are pruned after 30 days)");
+      if (!rec) return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04; until 2026-10-12 a hand's facts were also pruned after 30 days)");
       if (rec.piece !== "gtow-ai-preflop") return noNode(`the record kept for this decision is a chart's (${rec.chartId}), not an AI tree's`);
       const key = preflopCacheKeyOf(rec);
       if (!key) return noNode("the tree's key in the GTO Wizard solve cache is not known");
@@ -1736,9 +1736,13 @@ app.get("/answer-node", async (c) => {
     // id looked up in the GTOW DB can only ever come back "not stored", so EVERY ring
     // answer's node opened as an empty grid. Same shape as the 3-max branch — the node
     // comes from the baked SQLite when this machine has it, :8777 otherwise.
+    // NO LOGGED ANSWER (2026-10-12, 176 decisions opened on the crawled GTO Wizard library): the stake alone ($2 bb)
+    // sent every NL5 test hand — which plays the NL200 6-max answers — and every hand of a 6-max session at another
+    // stake to "Cash6m500zGeneral". The hand's own strategy decides first, then the stake.
+    const bbUsd = bbUsdOf(e.stakes, e.hand.bbCents);
     const sixMax = logged?.chart
       ? /_6max_/.test(logged.chart)
-      : !threeMax && live.size > 3 && bbUsdOf(e.stakes, e.hand.bbCents) === 2;
+      : !threeMax && live.size > 3 && (bbUsd === 2 || bbUsd === 0.05 || strategyOfHand(e) === SIX_MAX_STRATEGY_ID);
     if (sixMax) {
       const tokens = buildPreflopTokens(t, heroPos);
       const choice = chartFor6max(t, heroPos, tokens);
@@ -1774,7 +1778,9 @@ app.get("/answer-node", async (c) => {
           node
             ? (snapped.length ? `sizes snapped to the tree, as the live answer did: ${snapped.map((x) => `${x.from}→${x.to}`).join(", ")}`
               : loggedLine && usedLine !== loggedLine ? "the logged line was not found; showing the raw line instead" : null)
-            : `this line is not in ${chart}'s tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes`,
+            : logged
+              ? `this line is not in ${chart}'s tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes`
+              : `no answer was logged at this decision, and its line is not on ${chart} — live, a line off the chart goes to GTO Wizard AI preflop; "solve it" runs that (GTO Wizard quota)`,
         ].filter(Boolean).join(" · ") || null,
         browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(chart)}&line=${encodeURIComponent(usedLine ?? rawLine)}`,
       });
@@ -1793,7 +1799,9 @@ app.get("/answer-node", async (c) => {
     return c.json({
       ...base, kind: "gtow", chart: gametype, depth, line: usedLine, rawLine, loggedLine, node,
       ...(withRanges && node && gametype ? await rangesAlong(usedLine, (ln) => preflopDb.rawNode(gametype, depth, ln), node.pos ?? null) : {}),
-      note: node ? null : "this line is not stored in the crawled preflop DB",
+      note: node ? null : logged
+        ? "this line is not stored in the crawled preflop DB"
+        : `no answer was logged at this decision and no chart of this hand's strategy holds it (${gametype ?? "no chart"} is the old crawled library) — live, it would go to GTO Wizard AI preflop; "solve it" runs that (GTO Wizard quota)`,
     });
   }
 

@@ -125,6 +125,16 @@ export class HandNodeStore {
     } catch (e) { storeWriteFailed("hand-nodes", e); }
   }
 
+  /** Every row that drew no node (offline: decodes the whole store) — scripts/buildHandNodes.ts --rebuild-undrawn. */
+  undrawn(): { dbId: number; key: string }[] {
+    const out: { dbId: number; key: string }[] = [];
+    for (const r of this.open().query<{ db_id: number; key: string; body: Uint8Array<ArrayBuffer> }, []>("SELECT db_id, key, body FROM hand_nodes").all()) {
+      try { if (!drewNode(JSON.parse(Buffer.from(Bun.gunzipSync(r.body)).toString("utf-8")))) out.push({ dbId: r.db_id, key: r.key }); }
+      catch { out.push({ dbId: r.db_id, key: r.key }); }
+    }
+    return out;
+  }
+
   /** Rows, bytes and hands built — for GET /api/dashboard/hand-nodes. */
   stats(): { rows: number; bytes: number; hands: number; failedHands: number } {
     try {

@@ -1633,7 +1633,8 @@ async function rlLoad(i, D) {
     if (a?.solve_id != null) { const w = await getJ(solveUrl(a.solve_id, a.client_hand_id, a.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
     const j = await getJ(`/api/dashboard/answer-node?dbId=${D.dbId}&upto=${i}&ranges=1`);
     if (!j.ok) return put({ kind: "none", why: j.error ?? "no node" });
-    if (CHART_NODE_KINDS.has(j.kind)) return put(j.node ? { kind: "chart", j } : { kind: "none", why: j.note ?? "the chart has no node for this line" });
+    // no logged answer and off the chart: live, that line goes to GTO Wizard AI preflop — offer to run it
+    if (CHART_NODE_KINDS.has(j.kind)) return put(j.node ? { kind: "chart", j } : !j.logged ? { kind: "unsolved", j } : { kind: "none", why: j.note ?? "the chart has no node for this line" });
     if (j.kind === "mes") return put({ kind: "mes", j });
     if (j.logged?.solveId != null) { const w = await getJ(solveUrl(j.logged.solveId, D.clientHandId, j.logged.decisionKey ?? j.logged.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
     if (j.kind === "ai-preflop" && j.view?.hero?.strategy) {
@@ -1858,7 +1859,7 @@ function rlGrids(i) {
   if (s.kind === "ai-preflop") return rlPlaceholder("Answered by GTO Wizard AI preflop, which stores no node with the answer.", aiLoad, s.err);
   if (s.kind === "vai") return rlPlaceholder("This hand's preflop was answered by GTO Wizard AI, which stores no nodes.", aiLoad, s.err);
   if (s.kind === "unsolved") {
-    return rlPlaceholder(`No stored solve for this decision${rlAnswer(i).a ? " (answered before solves were stored, or the answer failed)" : ""}.`,
+    return rlPlaceholder(s.j?.note ? esc(s.j.note) : `No stored solve for this decision${rlAnswer(i).a ? " (answered before solves were stored, or the answer failed)" : ""}.`,
       `<button class="mini" onclick="rlSolve(${i}, this)">▶ solve it (live chain)</button> <span class="sub">re-runs the live path on this hand · costs GTO Wizard quota when the trees are not cached</span>`, s.err);
   }
   return rlPlaceholder(`Nothing to draw: ${esc(s.why ?? "unknown reason")}`);
