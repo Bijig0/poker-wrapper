@@ -9,8 +9,17 @@
  *   - a node-lock POST that fails is sent once more on the same account (the parent lives there).
  * The network is a fake fetch keyed on the bearer token (one per account); a hang rejects when the poll's own
  * AbortSignal fires, exactly as a real timed-out request does.
+ *
+ * THE FILE USED TO HANG FOREVER (2026-10-13; `bun test` in apps/api and so setup/regress.ts never finished). Bun 1.3.14
+ * on Windows never fires an AbortSignal.timeout while nothing else holds the event loop open: the loop spins at 100% CPU
+ * and the test's own timeout never fires either. A real hung request holds its socket open, and the API process always
+ * has its server, so live polls are cut off as they should be; the fake's hang held nothing. It now holds a timer, as
+ * the socket would. Every test has its own timeout too (T), which works only because the hang holds that timer.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+
+/** each test's own timeout: the longest (a read polled to its 4 s end, and one poll wait past it) takes ~5 s */
+const T = 15_000;
 
 let P: typeof import("./gtowAiPreflop");
 let gtowSessions: typeof import("./gtowSessions").gtowSessions;
@@ -46,14 +55,17 @@ afterAll(() => {
 });
 
 const realFetch = globalThis.fetch;
+// before EACH test, the first included: a test run on its own (--test-name-pattern) used to get the live 8 s / 30 s
+beforeEach(() => {
+  process.env.GTOW_POLL_HANG_MS = "200";
+  process.env.GTOW_NODE_TIMEOUT_MS = "4000";
+  process.env.GTOW_PREFLOP_REPOST_MS = "500";
+});
 afterEach(() => {
   globalThis.fetch = realFetch;
   P.resetAiPreflopMemory();
   routeIds = ["primary", "secondary"];
   failures = [];
-  process.env.GTOW_POLL_HANG_MS = "200";
-  process.env.GTOW_NODE_TIMEOUT_MS = "4000";
-  process.env.GTOW_PREFLOP_REPOST_MS = "500";
 });
 
 interface Seen { kind: "tree" | "solution" | "lock" | "poll"; acct: string; sol?: string | null; body?: any }
@@ -75,9 +87,11 @@ function fakeGtow(): Fake {
   const f: Fake = { seen: [], hang: new Set(), walled: new Set(), treeFails: new Set(), lockFails: new Map(), ownerOf: new Map() };
   let seq = 0;
   const timeoutErr = () => Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
-  /** a poll that never replies: rejected when its own AbortSignal fires (the read's bound), as a real one is */
+  /** a poll that never replies: rejected when its own AbortSignal fires (the read's bound), as a real one is. `hold`
+   *  stands in for the open socket: without it Bun never fires the signal (see the top of the file). */
   const timedOut = (signal: AbortSignal | null | undefined) => new Promise<Response>((_, rej) => {
-    const fire = () => rej(timeoutErr());
+    const hold = setTimeout(() => {}, 60_000);
+    const fire = () => { clearTimeout(hold); rej(timeoutErr()); };
     if (!signal) return;
     if (signal.aborted) fire(); else signal.addEventListener("abort", fire, { once: true });
   });
@@ -129,7 +143,7 @@ describe("a tree or solution POST that fails", () => {
     expect("error" in n).toBe(false);
     expect(polls(f, "primary")).toBe(0);
     expect(polls(f, "secondary")).toBe(1);
-  });
+  }, T);
 
   it("nobody left: a refusal with the reason, not a throw", async () => {
     const f = fakeGtow();
@@ -137,7 +151,7 @@ describe("a tree or solution POST that fails", () => {
     const r = await P.poolLockSeams.solve("k-all-fail", BODY, { preflop: true });
     expect("error" in r).toBe(true);
     expect((r as { error: string }).error).toMatch(/custom-trees request failed on secondary: The operation timed out/);
-  });
+  }, T);
 });
 
 describe("a poll that hangs on the owning account", () => {
@@ -164,7 +178,7 @@ describe("a poll that hangs on the owning account", () => {
     const same = await P.poolLockSeams.solve("k-hang", BODY, { preflop: true });
     expect((same as { solId: string }).solId).toBe(old);
     expect(trees(f).length).toBe(2);
-  });
+  }, T);
 
   it("re-posts once however many reads hang on it together", async () => {
     const f = fakeGtow();
@@ -174,7 +188,21 @@ describe("a poll that hangs on the owning account", () => {
     const reads = await Promise.all(["", "F", "C", "R2.5"].map((ln) => P.fetchNode(old, ln)));
     expect(reads.every((r) => !("error" in r))).toBe(true);
     expect(trees(f)).toEqual(["primary", "secondary"]);
-  });
+  }, T);
+
+  it("every account hangs: the read still ends on its own clock — no answer, never an endless re-post", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary"); f.hang.add("secondary");
+    const made = await P.poolLockSeams.solve("k-hang-all", BODY, { preflop: true });
+    const t0 = Date.now();
+    const n = await P.fetchNode((made as { solId: string }).solId, "");
+    expect("error" in n).toBe(true);
+    expect((n as { error: string }).error).toMatch(/did not return the node in time/);
+    // the 4 s read, plus the poll wait (POLL_MS 1.2 s) that can start just before its end, plus slack
+    expect(Date.now() - t0).toBeLessThan(4_000 + 1_200 + 1_000);
+    // a re-post needs GTOW_PREFLOP_REPOST_MS of the read left, and only a poll that hung a full POLL_HANG_MS asks for one
+    expect(trees(f).length).toBeLessThanOrEqual(1 + Math.ceil((4_000 - 500) / 200));
+  }, T);
 
   it("with too little of the read left for a cold tree: polls on and ends as before, nothing re-posted", async () => {
     const f = fakeGtow();
@@ -185,7 +213,7 @@ describe("a poll that hangs on the owning account", () => {
     expect("error" in n).toBe(true);
     expect((n as { error: string }).error).toMatch(/did not return the node in time/);
     expect(trees(f)).toEqual(["primary"]);
-  });
+  }, T);
 
   it("a locked chain is re-posted with its locks, on the replacement parent", async () => {
     const f = fakeGtow();
@@ -205,7 +233,7 @@ describe("a poll that hangs on the owning account", () => {
     expect(f.ownerOf.get(newLock.body.parent_solution_id)).toBe("secondary");
     expect(newLock.body.last_node_lock).toEqual(LOCK);
     expect(newParent.body.custom_tree_id).toMatch(/^tree-/);
-  });
+  }, T);
 });
 
 describe("a request wall (429) on the owning account", () => {
@@ -217,7 +245,7 @@ describe("a request wall (429) on the owning account", () => {
     expect("error" in n).toBe(false);
     expect(trees(f)).toEqual(["primary", "secondary"]);
     expect(failures).toEqual([{ id: "primary", status: 429 }]);
-  });
+  }, T);
 
   it("with no time to re-post: the read ends and the tree's memo is forgotten — the next ask posts afresh", async () => {
     const f = fakeGtow();
@@ -235,7 +263,7 @@ describe("a request wall (429) on the owning account", () => {
     expect(trees(f)).toEqual(["primary", "secondary"]);
     const ok = await P.fetchNode((again as { solId: string }).solId, "");
     expect("error" in ok).toBe(false);
-  });
+  }, T);
 });
 
 describe("a node-lock POST that fails", () => {
@@ -250,5 +278,5 @@ describe("a node-lock POST that fails", () => {
     const twice = await P.lockedSolution((parent as { solId: string }).solId, BODY, [{ ...LOCK, action_history: ["F"] }]);
     expect("error" in twice).toBe(true);
     expect((twice as { error: string }).error).toMatch(/failed twice on primary/);
-  });
+  }, T);
 });
