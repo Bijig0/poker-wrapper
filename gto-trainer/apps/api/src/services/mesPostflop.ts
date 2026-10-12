@@ -21,6 +21,7 @@
  */
 import { readFileSync, statSync } from "node:fs";
 import { factoryFile } from "./repoPaths";
+import { fileStamp, sameStamp, type FileStamp } from "./fileStamp";
 import { join } from "node:path";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 
@@ -58,17 +59,34 @@ interface TurnFile {
 }
 // read per call, so a test can point it at a fixture (the files are a data part, not in git)
 const turnDir = () => process.env.MES_TURN_DIR ?? factoryFile("mes_turn");
-const turnCache = new Map<string, TurnFile | null>();
+/**
+ * TURN FILES ARE FOLLOWED (2026-10-13). This cache was keyed by path alone, and a missing file was cached as "none"
+ * for the life of the process — a board extracted after the API started never answered, and a re-extracted one kept
+ * its old nodes. Now each hit stats the file (one syscall, against a 30 MB parse) and re-reads it when its size /
+ * mtime / file id changed; a "none" is looked for again after turnMissRecheckMs (30 s). A read that does not parse (mid-
+ * copy) keeps the copy read before, if any, until the file changes again. A file that is gone is gone.
+ */
+let turnMissRecheckMs = 30_000;
+const turnCache = new Map<string, { tf: TurnFile | null; stamp: FileStamp | null; at: number }>();
 function loadTurn(family: string, board: string): TurnFile | null {
   const key = `${family}_${board}`;
   const path = join(turnDir(), `${key}.turn.json`);
-  if (turnCache.has(path)) return turnCache.get(path)!;
+  const hit = turnCache.get(path);
+  const now = Date.now();
+  if (hit && !hit.stamp && now - hit.at < turnMissRecheckMs) return hit.tf;   // missing, looked for recently
+  const stamp = fileStamp(path);
+  if (hit && sameStamp(stamp, hit.stamp)) { hit.at = now; return hit.tf; }
   let tf: TurnFile | null = null;
-  try { tf = JSON.parse(readFileSync(path, "utf-8")) as TurnFile; } catch { tf = null; }
+  if (stamp) {
+    try { tf = JSON.parse(readFileSync(path, "utf-8")) as TurnFile; } catch { tf = hit?.tf ?? null; }
+  }
+  turnCache.delete(path);
   if (turnCache.size >= 6) turnCache.delete(turnCache.keys().next().value!);
-  turnCache.set(path, tf);
+  turnCache.set(path, { tf, stamp, at: now });
   return tf;
 }
+/** Test hook: how long a missing turn file is remembered as missing (default 30 s). */
+export function setTurnMissRecheckMs(ms: number): void { turnMissRecheckMs = ms; }
 
 
 interface RawNode {
