@@ -1,5 +1,5 @@
 import { timed } from "./answerTrace";
-import { factoryFile } from "./repoPaths";
+import { resolvedRungs } from "./resolvedCharts";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { SNAP_MAX, SNAP_TAU } from "../utils/snapToken/snapToken";
 import { dealtBySeat } from "../utils/archivedHand/archivedHand";
@@ -97,24 +97,18 @@ const ladderTop = (site: Site): number => rungsFor(site)[rungsFor(site).length -
  * error than the missing river betting it fixes. States whose rung has no
  * v2ci chart keep the original asymmetric chart untouched.
  *
- * V2CI_RUNGS is the manifest of what has actually been solved; RESOLVED_OFF=1
- * disables the preference entirely (A/B the generations).
+ * resolved-charts.json is the manifest of what has actually been solved; RESOLVED_OFF=1
+ * disables the preference entirely (A/B the generations). It is FOLLOWED (services/resolvedCharts.ts,
+ * 2026-10-13): a re-export is picked up within seconds — it was read once, at module load, until then.
  */
-function loadV2ciRungs(): Record<string, Set<number>> {
-  const fallback = { ign200: new Set([100]), ign500: new Set<number>() };
-  try {
-    const raw = JSON.parse(require("node:fs").readFileSync(factoryFile("resolved-charts.json"), "utf-8")) as Record<string, number[]>;
-    const out: Record<string, Set<number>> = {};
-    for (const [site, rungs] of Object.entries(raw)) out[site] = new Set(rungs);
-    return Object.keys(out).length ? out : fallback;
-  } catch {
-    return fallback;   // manifest absent = only the hand-verified D100 chart
-  }
+const V2CI_FALLBACK: Record<string, Set<number>> = { ign200: new Set([100]), ign500: new Set<number>() };
+function v2ciRungs(): Record<string, Set<number>> {
+  const r = resolvedRungs();
+  return r && Object.keys(r).length ? r : V2CI_FALLBACK;   // manifest absent = only the hand-verified D100 chart
 }
-const V2CI_RUNGS: Record<string, Set<number>> = loadV2ciRungs();
 
 const v2ciId = (site: string, d: number): string | null =>
-  !process.env.RESOLVED_OFF && V2CI_RUNGS[site]?.has(d)
+  !process.env.RESOLVED_OFF && v2ciRungs()[site]?.has(d)
     ? `${site}_3maxasym2ci_D${d}_s${d}_eq`
     : null;
 

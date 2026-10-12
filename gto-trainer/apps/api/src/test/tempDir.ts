@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** Every prefix a test asks for; the sweep script removes these (and only these) from the OS temp dir. */
-export const TEST_TEMP_PREFIXES = ["answer-rows-", "answers-test-", "gtow-cache-counters-", "answer-view-", "gtow-ledger-view-", "hands-view-", "supervisor-restart-", "runtime-health-"] as const;
+export const TEST_TEMP_PREFIXES = ["answer-rows-", "answers-test-", "gtow-cache-counters-", "answer-view-", "gtow-ledger-view-", "hands-view-", "supervisor-restart-", "runtime-health-", "data-reread-"] as const;
 export type TestTempPrefix = (typeof TEST_TEMP_PREFIXES)[number];
 
 /**
