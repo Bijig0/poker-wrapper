@@ -32,6 +32,35 @@
   #rg-card .rg-h b { font-size: 15px; color: #e8edf2; }
   #rg-card .rg-h.you b { color: #ffce56; }
   #rg-card .rg-mix { margin-top: 6px; font-size: 13.5px; } #rg-card .rg-mix b { color: #e8edf2; }
+  /* THE HAND TRAIL (2026-10-12): chips = the line's actions; a chip with no chart is dimmed (nothing read it) */
+  #tr-card h2 .sub { font-weight: 400; font-size: 12.5px; margin: 0 0 0 8px; text-transform: none; letter-spacing: 0; }
+  #tr-card .tr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0; }
+  #tr-card .tr-st { font-size: 12px; font-weight: 700; letter-spacing: .05em; color: #8fa1b3; min-width: 74px; cursor: pointer; }
+  #tr-card .tr-st.on { color: #e8edf2; }
+  #tr-card .tr-chip { font-size: 13px; padding: 2px 8px; border-radius: 12px; background: #22303d; color: #cfe0ef; cursor: pointer; border: 1px solid transparent; white-space: nowrap; }
+  #tr-card .tr-chip b { color: #e8edf2; font-weight: 700; }
+  #tr-card .tr-chip.hero { background: #3a2f16; color: #ffe39a; } #tr-card .tr-chip.hero b { color: #ffce56; }
+  #tr-card .tr-chip.pending { border-color: #ffce56; }
+  #tr-card .tr-chip.nochart { opacity: .45; cursor: default; }
+  #tr-card .tr-chip.sel { border-color: #5ab0ff; box-shadow: 0 0 0 1px #5ab0ff inset; }
+  #tr-card .tr-note { font-size: 12.5px; color: #8fa1b3; margin: 2px 0 6px; }
+  #tr-card .tr-ans { font-size: 13.5px; margin: 8px 0 2px; flex-basis: 100%; }
+  #tr-card .tr-ans b { color: #e8edf2; }
+  #tr-card .tr-others { font-size: 12.5px; color: #8fa1b3; flex-basis: 100%; margin-top: 4px; }
+  #tr-card .tr-others .tr-chip { font-size: 12px; }
+  #tr-card .rg-wrap { display: flex; flex-wrap: wrap; gap: 4px 22px; align-items: flex-start; }
+  #tr-card .rg-one { min-width: 0; margin-bottom: 6px; }
+  #tr-card .rg-h { font-size: 14px; margin-top: 10px; color: #b9c6d6; }
+  #tr-card .rg-h b { font-size: 15px; color: #e8edf2; }
+  #tr-card .rg-h.you b { color: #ffce56; }
+  #tr-card .rg-mix { margin-top: 6px; font-size: 13.5px; } #tr-card .rg-mix b { color: #e8edf2; }
+  #tr-inputs details { margin-top: 8px; border-top: 1px solid #26303a; padding-top: 6px; }
+  #tr-inputs summary { cursor: pointer; font-size: 12.5px; font-weight: 700; letter-spacing: .05em; color: #8fa1b3; text-transform: uppercase; }
+  #tr-inputs table { border-collapse: collapse; font-size: 13px; margin: 6px 0; width: 100%; }
+  #tr-inputs td { padding: 2px 8px 2px 0; vertical-align: top; }
+  #tr-inputs td:first-child { color: #8fa1b3; white-space: nowrap; width: 1%; }
+  #tr-inputs pre { font: 11.5px/1.35 var(--font-mono); background: #10161c; border: 1px solid #26303a; border-radius: 6px; padding: 8px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  #tr-inputs .tr-sec { font-size: 12.5px; font-weight: 700; color: #b9c6d6; margin: 8px 0 2px; }
   .spin { display: inline-block; animation: spin 1.1s linear infinite; }
   /* ALL FOUR TABLES ON ONE TAB: the leader collects every table's answer (GET
      /tables) so you watch the session from one panel instead of four windows.
@@ -402,6 +431,17 @@
   <div class="card" id="rg-card" style="display:none">
     <h2>Ranges at this node <span id="rg-sub" class="sub"></span></h2>
     <div id="rg-body" class="rg-wrap"></div>
+  </div>
+
+  <!-- THE HAND TRAIL (2026-10-12, Brady, docs/2026-10-12-hand-trail.md): every street's line, each action tied to the
+       chart it was read on; hero's action chart with the action he faces beside it; any other seat on a click; and the
+       inputs exactly as used (the chart's setup, the AI tree, the request sent to GTO Wizard). Ignition — its live row is
+       what the study API reads; CoinPoker keeps "Ranges at this node" above. -->
+  <div class="card ign-only" id="tr-card" style="display:none">
+    <h2>Hand trail <span id="tr-sub" class="sub"></span></h2>
+    <div id="tr-streets"></div>
+    <div id="tr-sel" class="rg-wrap"></div>
+    <div id="tr-inputs"></div>
   </div>
 
   <div class="card ign-only" id="ctl-card">
@@ -1484,6 +1524,267 @@
     if (saFocus) { saFocus = null; requestAnimationFrame(focusStudyAnswers); }   // the press's grids are drawn: bring it all into view
   }
 
+  // ================= the hand trail (2026-10-12) =================
+  // Brady: "per street … the line until the action … hero's range as the main thing shown, his action chart, but per
+  // other individual on that street we can also see their ranges if we select it on the line … the complete config
+  // … that was inputted to get the hero action chart" — and "I am the one … verifying that the stuff sent in is correct":
+  // nothing here grades anything, it shows what the answer was read on. The study API builds it from the hand's live row,
+  // the answer log and the stored solves (GET /api/dashboard/live-trail, never a GTO Wizard request). Fetched once per
+  // new answer and once more when the hand ends; kept until hero's next decision. Ignition only (CoinPoker hands have no
+  // row until they end — its on-demand card above stays). Every click target is a span: no focus, so Enter / Space
+  // still execute the pick. Design: poker-wrapper docs/2026-10-12-hand-trail.md.
+  let trHand = null, trKey = null, trData = null, trSel = null, trBusy = false, trEnded = false, trFoldSet = false, trFailAt = 0;
+  const TR_ST = { preflop: "PREFLOP", flop: "FLOP", turn: "TURN", river: "RIVER" };
+  const trWhole = () => {
+    const o = {};
+    for (let r = 0; r < 13; r++) for (let c = 0; c < 13; c++) {
+      const k = r === c ? RG_RANKS[r] + RG_RANKS[c] : r < c ? RG_RANKS[r] + RG_RANKS[c] + "s" : RG_RANKS[c] + RG_RANKS[r] + "o";
+      o[k] = { w: k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12 };
+    }
+    return o;
+  };
+  const trSecs = (ms) => (ms == null ? "" : ` · ${(ms / 1000).toFixed(1)} s`);
+  // D1: on an auto-execute table the card starts folded, on a manual one open — unless you chose before (remembered)
+  function trDefaultFold(s) {
+    if (trFoldSet) return;
+    trFoldSet = true;
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem("panel.cards") || "{}") || {}; } catch (e) { saved = {}; }
+    if (typeof saved["tr-card"] === "boolean") return;
+    const card = $("tr-card");
+    card.classList.toggle("collapsed", !!s.studyAuto);
+    const btn = card.querySelector(":scope > h2 .cardfold");
+    if (btn) { btn.textContent = s.studyAuto ? "+" : "–"; btn.setAttribute("aria-expanded", s.studyAuto ? "false" : "true"); }
+  }
+  async function renderTrail(s) {
+    const card = $("tr-card");
+    const siteId = s.site && typeof s.site === "object" ? s.site.id : s.site;
+    if (siteId === "coinpoker") { if (card.style.display !== "none") card.style.display = "none"; return; }
+    if (trBusy) return;
+    const hid = s.hand?.clientHandId ?? null;
+    const ref = s.panelAnswerRef;
+    let want = null;
+    // a new answer: its hand's trail, the new decision selected
+    if (ref && ref.decisionKey && ref.clientHandId && (!hid || ref.clientHandId === hid) && (ref.decisionKey !== trKey || ref.clientHandId !== trHand)) {
+      want = { hand: ref.clientHandId, key: ref.decisionKey };
+    // the hand is over (it ended, or the next one began): its trail once more, complete — kept until the next decision
+    } else if (trHand && !trEnded && (hid !== trHand || s.hand?.ended)) {
+      want = { hand: trHand, key: trKey, final: true };
+    }
+    if (!want) return;
+    if (!want.final && trFailAt && Date.now() - trFailAt < 3000) return;    // a failed ask is retried every 3 s, not every tick
+    trBusy = true;
+    let j;
+    try {
+      if (!(await rgLib())) j = { ok: false, error: "the range grids did not load — the study API (:2000) did not serve the renderer" };
+      else j = await (await fetch(`${GTOW_API}/api/dashboard/live-trail?hand=${encodeURIComponent(want.hand)}`)).json();
+    } catch (e) { j = { ok: false, error: `the study API did not answer (${e})` }; } finally { trBusy = false; }
+    if (j && j.off) { card.style.display = "none"; trKey = want.key; trHand = want.hand; return; }
+    if (!j || !j.ok) {
+      trFailAt = Date.now();
+      if (want.final) trEnded = true;
+      if (want.hand !== trHand || !trData) { trData = j || { ok: false, error: "no reply" }; card.style.display = ""; drawTrail(); }
+      return;
+    }
+    trFailAt = 0;
+    if (want.final) trEnded = true;
+    else { trSel = null; trEnded = false; }                                 // a new decision: select it
+    trHand = want.hand; trKey = want.key; trData = j;
+    card.style.display = "";
+    trDefaultFold(s);
+    drawTrail();
+  }
+  // hero's class mix at a node, from its class strategy (preflop) — postflop the decision carries the combo's own row
+  function trClassMix(n, heroKey) {
+    const e = heroKey && n.strategy ? n.strategy[heroKey] : null;
+    if (!e || !(e.w > 0)) return heroKey ? `<span class="sub">${esc(heroKey)} has no weight in the range here</span>` : "";
+    return n.actions.map((a, i) => ({ a, p: (100 * (e.acts[i] || 0)) / e.w })).filter((x) => x.p >= 0.5).sort((x, y) => y.p - x.p)
+      .map((x) => `<b>${esc(x.a)}</b> ${x.p.toFixed(0)}%`).join(" · ");
+  }
+  function trHeroBlock(n, d, j) {
+    const heroKey = rgClassOf(j.heroCards);
+    if (!n.strategy) return `<div class="rg-one"><div class="rg-h you"><b>${esc(n.pos)}</b> you</div><div class="sub">no strategy was read at this node</div></div>`;
+    const mix = d && d.heroMix && d.heroMix.length
+      ? d.heroMix.filter((m) => m.pct >= 0.5).map((m) => `<b>${esc(m.action)}</b> ${Number(m.pct).toFixed(0)}%`).join(" · ") : trClassMix(n, heroKey);
+    const what = n.pending ? " — to act" : n.taken ? ` — took <b>${esc(n.taken)}</b>` : "";
+    return `<div class="rg-one"><div class="rg-h you"><b>${esc(n.pos)}</b> you <span class="sub">— your action chart${what}</span></div>`
+      + classGrid(rgGrid(n.strategy, false), n.actions, heroKey, { combosOff: true, foot: "your class outlined · hover a cell for its mix" })
+      + `<div class="rg-mix">${rgCards(j.heroCards)} ${mix}</div>`
+      + (n.note ? `<div class="sub" style="margin-top:4px">${esc(n.note)}</div>` : "") + `</div>`;
+  }
+  function trSeatBlock(n, title) {
+    if (!n.strategy) return `<div class="rg-one"><div class="rg-h"><b>${esc(n.pos)}</b></div><div class="sub">no chart was read for this action</div></div>`;
+    const took = n.taken ? ` — took <b>${esc(n.taken)}</b>${n.takenPct != null ? ` (${n.takenPct}% of his range)` : ""}` : "";
+    return `<div class="rg-one"><div class="rg-h"><b>${esc(n.pos)}</b> <span class="sub">— ${title || "his action chart"}${took}</span></div>`
+      + classGrid(rgGrid(n.strategy, false), n.actions, null, { combosOff: true, foot: "his range at this decision, split by action · hover a cell for its mix" })
+      + (n.snapped ? `<div class="sub" style="margin-top:4px">size read on the tree: ${esc(n.snapped)}</div>` : "")
+      + (n.note ? `<div class="sub" style="margin-top:4px">${esc(n.note)}</div>` : "") + `</div>`;
+  }
+  function trRangeBlock(pos, range) {
+    const whole = !range || !Object.keys(range).length;
+    return `<div class="rg-one"><div class="rg-h"><b>${esc(pos)}</b> <span class="sub">— ${whole ? "yet to act: his whole range" : "his range arriving at your node"}</span></div>`
+      + classGrid(rgGrid(whole ? trWhole() : range, true), ["in range"], null, { single: true, combosOff: true, foot: "fill = share of the class in range · hover for the weight" }) + `</div>`;
+  }
+  function trAnswerLine(d) {
+    const a = d && d.answer;
+    if (!a) return "";
+    const bits = [a.source, a.tier && a.tier !== a.source ? a.tier : null].filter(Boolean).map(esc).join(" · ");
+    return `<div class="tr-ans">answer: <b>${esc(a.text || "—")}</b> <span class="sub">${bits}${trSecs(a.latencyMs)}${a.verdict ? ` · path ${esc(a.verdict)}` : ""}</span>`
+      + (a.warning ? `<div class="sub" style="margin-top:2px">${esc(a.warning)}</div>` : "") + `</div>`;
+  }
+  function trDrawSel(j) {
+    const st = j.streets.find((x) => x.street === trSel.street);
+    if (!st) return "";
+    const byId = (id) => st.nodes.find((n) => n.id === id) || null;
+    if (trSel.other) {                                                         // another seat's range at hero's node
+      const d = st.decisions.find((x) => x.node === trSel.node);
+      const o = d && d.others.find((x) => x.pos === trSel.other);
+      return o ? trRangeBlock(o.pos, o.range) + `<div class="tr-others"><span class="tr-chip" data-back="1">← back to your decision</span></div>` : "";
+    }
+    const n = trSel.node ? byId(trSel.node) : null;
+    if (!n) return `<div class="sub">${esc(st.note || "no decision of yours was read on this street")}</div>`;
+    const d = st.decisions.find((x) => x.node === n.id);
+    if (!n.hero || !d) {
+      // a seat's action chart; back to the decision it led to
+      const next = st.decisions.find((x) => x.node && byId(x.node) && (byId(x.node).actionIndex ?? 0) > (n.actionIndex ?? 0));
+      return trSeatBlock(n) + (next ? `<div class="tr-others"><span class="tr-chip" data-node="${esc(next.node)}">← your decision after it</span></div>` : "");
+    }
+    // hero's decision: his chart, the action he faces beside it (D3), every other seat at his node one click away
+    const f = d.facing ? byId(d.facing) : null;
+    let html = trHeroBlock(n, d, j) + (f ? trSeatBlock(f, "the action you face — his action chart") : "") + trAnswerLine(d);
+    const others = d.others.filter((o) => !f || o.node !== f.id);
+    if (others.length) {
+      html += `<div class="tr-others">also at your node: ` + others.map((o) => o.node
+        ? `<span class="tr-chip" data-node="${esc(o.node)}"><b>${esc(o.pos)}</b> his action chart</span>`
+        : `<span class="tr-chip" data-other="${esc(o.pos)}"><b>${esc(o.pos)}</b> ${o.range && Object.keys(o.range).length ? "range arriving" : "whole range (yet to act)"}</span>`).join(" ") + `</div>`;
+    }
+    return html;
+  }
+  // ---- the inputs, as used: a table of what a human cross-checks, the raw request beside it ----
+  const trRows = (rows) => `<table>${rows.filter((r) => r && r[1] != null && r[1] !== "").map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>`;
+  const trRaw = (label, obj) => (obj == null ? "" : `<details><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(obj, null, 1))}</pre></details>`);
+  const trSeats = (seats) => (seats || []).map((x) => `${esc(x.pos)} ${x.stackBb ?? "?"}`).join(" · ");
+  const trRake = (r) => (r ? `${r.pct}%, cap ${r.capBb}bb${r.nfnd === true ? ", no flop no drop" : r.nfnd === false ? ", flop or not" : ""}` : "not stated");
+  function trSetupRows(su) {
+    if (!su) return "";
+    return trRows([
+      ["chart", `${esc(su.name)}<div class="sub" style="margin:0">${esc(su.id)}</div>`],
+      ["solver", esc(su.solver)], ["format", su.format ? esc(su.format) : null],
+      ["stacks", trSeats(su.seats) + (su.even === false ? " <span class=\"sub\">(uneven)</span>" : "")],
+      ["blinds / ante", `${su.blinds ? `${su.blinds.sb} / ${su.blinds.bb}` : "—"} · ante ${su.anteBb == null ? "not stated" : su.anteBb === 0 ? "none" : su.anteBb + "bb"}`],
+      ["rake", esc(trRake(su.rake))], ["sizes", (su.sizes || []).map(esc).join(" · ")],
+      ["generation", su.generation ? esc(su.generation) : null], ["from", su.from ? esc(su.from) : null],
+      ["notes", (su.notes || []).length ? su.notes.map(esc).join(" · ") : null],
+    ]);
+  }
+  function trDrawInputs(j) {
+    const st = j.streets.find((x) => x.street === trSel.street);
+    const inp = st && st.inputs;
+    if (!inp) return st && st.note ? "" : "";
+    let body = "";
+    if (st.street === "preflop") {
+      const c = inp.chart;
+      if (c) {
+        body += `<div class="tr-sec">HRC chart${(inp.ai || []).length && (c.answered || []).length ? ` — answered your decision${c.answered.length > 1 ? "s" : ""} #${c.answered.join(", #")}` : ""}</div>` + trSetupRows(c.setup) + trRows([
+          ["line read", c.lineRead != null ? `<code>${esc(c.lineRead || "(root)")}</code>` : null],
+          ["line captured", c.lineCaptured != null ? `<code>${esc(c.lineCaptured || "(root)")}</code>` : null],
+          ["sizes moved onto the tree", c.snapped && c.snapped.length ? c.snapped.map(esc).join(" · ") : "none"],
+          ["walk", c.walkNote ? esc(c.walkNote) : null],
+        ]);
+        for (const r of c.decisions || []) {
+          body += trRows([[`decision #${r.actionIndex}`, `${esc(r.chart)} · depth ${esc(r.depth)} · read <code>${esc(r.line || "(root)")}</code> (captured <code>${esc(r.rawLine || "(root)")}</code>)`
+            + (r.sizeSnaps.length ? ` · snapped: ${r.sizeSnaps.map(esc).join("; ")}` : "") + (r.foldedSeats.length ? ` · folded out: ${r.foldedSeats.map(esc).join(", ")}` : "")]]);
+        }
+      }
+      for (const a of inp.ai || []) {
+        body += `<div class="tr-sec">GTO Wizard AI preflop — decision #${a.actionIndex}</div>` + trSetupRows(a.setup);
+        const t = a.tree;
+        if (t) body += trRows([
+          ["tree", `${esc(t.solId)}${t.cacheKey ? ` <span class="sub">(read back from the solve cache)</span>` : ""}`],
+          ["line read", `<code>${esc(t.line || "(root)")}</code>`], ["line captured", `<code>${esc(t.rawLine || "(root)")}</code>`],
+          ["folded out of the tree", t.reduced && t.reduced.length ? t.reduced.map(esc).join(", ") : null],
+          ["pool locks", t.poolLocks && t.poolLocks.length ? t.poolLocks.map((l) => `${esc(l.pos)} (${esc(l.key)})`).join(" · ") : null],
+          ["last resort", t.lastResort ? esc(t.lastResort) : null], ["hero self-lock", t.heroSelfLock ? esc(t.heroSelfLock) : null],
+        ]) + trRaw("tree shape as built", t.shape);
+        if (a.view) body += `<div class="sub">${esc(a.view)}</div>`;
+      }
+    } else if (inp.kind === "ai-chain") {
+      const s = inp.street || {};
+      const sent = s.sent || null;
+      const STREET = String(st.street).toUpperCase();
+      const sizes = sent && sent.bet_sizes && (sent.bet_sizes.street_bet_sizes || []).find((x) => x.street === STREET);
+      const sizeRows = sizes ? (sizes.position_bet_sizes || []).map((p) => [`sizes ${p.position}`,
+        `bets ${(p.bet_sizes || []).map(esc).join(", ") || "—"} · raises ${(p.raise_sizes || []).map(esc).join(", ") || "—"}${p.type ? ` <span class="sub">(${esc(p.type)})</span>` : ""}`]) : [];
+      const pool = {};
+      for (const ps of inp.poolSeats || []) pool[String(ps.pos).toUpperCase()] = ps.badge;
+      const sp = inp.spec || {};
+      body += trRows([
+        ["solve", `#${esc(inp.solveId)}${inp.solveOfStreet && inp.solveOfStreet !== st.street ? ` <span class="sub">(the ${esc(inp.solveOfStreet)} answer's)</span>` : ""}`],
+        ["tree", `${esc(s.solId || "—")} · ${esc(s.account || "account ?")} · ${s.created ? "solved fresh" : "reused"}${s.solveMs != null ? ` · ${(s.solveMs / 1000).toFixed(1)} s solve` : ""}`],
+        ["board", s.board ? esc(s.board) : null],
+        ["pot in", s.potIn != null ? `${esc(s.potIn)}bb` : null],
+        ["stack in", s.stackIn != null ? `${esc(s.stackIn)}bb` : null],
+        ["rake sent", sp.rakeSent ? `${esc(sp.rakeSent.pct_of_pot)}%, cap ${esc(sp.rakeSent.cap_in_chips)}${sp.rakeDefaulted ? " — GTO Wizard's default (NL500): no rake was in the spec" : ""}` : null],
+        ...sizeRows,
+        ["sizes pinned", s.fixedLevels && s.fixedLevels.length ? s.fixedLevels.map(esc).join(" · ") : null],
+        ["ranges in", (s.players || []).map((p) => { const P = String(p).toUpperCase(); const n = s.combosIn ? s.combosIn[P] : null;
+          return `<b>${esc(P)}</b> ${n != null ? Number(n).toFixed(0) + " combos" : ""} ${pool[P] ? `<span class="badge warn">POOL RANGE — ${esc(pool[P])}</span>` : `<span class="sub">GTO range</span>`}`; }).join(" · ")],
+        ["preflop ranges from", sp.rangeSource ? esc(sp.rangeSource) : null],
+        ["your combo", sp.heroCombo ? esc(sp.heroCombo) : null],
+        ["departures", (inp.departures || []).length ? inp.departures.map((d) => `<span class="badge">${esc(d.badge || d.id)}</span>`).join("") : null],
+      ]) + trRaw(`tree request as sent to GTO Wizard${s.sentFrom === "rebuilt" ? " (rebuilt from the stored solve: this solve predates the recording)" : ""}`, sent);
+    } else {
+      body += `<div class="sub">answered by ${esc(inp.kind)} — no stored solve tree to show</div>`;
+    }
+    return `<details open><summary>Inputs · ${esc(TR_ST[st.street] || st.street)}</summary>${body}</details>`;
+  }
+  function drawTrail() {
+    const j = trData;
+    if (!j) return;
+    if (!j.ok) {
+      $("tr-sub").textContent = `— ${j.error || "no trail for this hand"}`;
+      $("tr-streets").innerHTML = ""; $("tr-sel").innerHTML = ""; $("tr-inputs").innerHTML = "";
+      return;
+    }
+    if (!trSel) {
+      // the latest decision with a node, else the latest street
+      const st = [...j.streets].reverse().find((x) => x.decisions.some((d) => d.node));
+      const d = st && [...st.decisions].reverse().find((x) => x.node);
+      trSel = st && d ? { street: st.street, node: d.node } : { street: j.streets[j.streets.length - 1].street, node: null };
+    }
+    const cur = j.streets.find((x) => x.street === trSel.street);
+    const line = cur ? cur.chips.map((c) => `${c.pos} ${c.label}`).join(", ") : "";
+    $("tr-sub").innerHTML = `${rgCards(j.heroCards)} ${esc(j.heroPos || "")} · ${j.live ? (j.pending ? "your turn" : "in play") : "hand over"}`
+      + ` · ${esc(TR_ST[trSel.street] || "")}: ${esc(line)}`;
+    $("tr-streets").innerHTML = j.streets.map((s) => {
+      const chips = s.chips.map((c) => {
+        const cls = ["tr-chip", c.hero ? "hero" : "", c.pending ? "pending" : "", c.node ? "" : "nochart",
+          trSel.street === s.street && !trSel.other && c.node && c.node === trSel.node ? "sel" : ""].filter(Boolean).join(" ");
+        const tip = c.node ? "show this action's chart" : "no chart was read for this action";
+        return `<span class="${cls}" title="${tip}" ${c.node ? `data-st="${esc(s.street)}" data-node="${esc(c.node)}"` : ""}><b>${esc(c.pos)}</b> ${esc(c.label)}</span>`;
+      }).join("");
+      return `<div class="tr-row"><span class="tr-st ${s.street === trSel.street ? "on" : ""}" data-st="${esc(s.street)}" title="this street's decision and inputs">${TR_ST[s.street] || esc(s.street)}${s.board.length ? " " + rgCards(s.board) : ""}</span>${chips || `<span class="sub">no action yet</span>`}</div>`
+        + (s.note && s.street === trSel.street ? `<div class="tr-note">${esc(s.note)}</div>` : "");
+    }).join("");
+    $("tr-sel").innerHTML = trDrawSel(j);
+    $("tr-inputs").innerHTML = trDrawInputs(j);
+  }
+  // one listener for every chip: a street name selects its last decision, a chip its node, "also at your node" a seat
+  $("tr-card").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-node],[data-st],[data-other],[data-back]");
+    if (!t || !trData || !trData.ok) return;
+    e.stopPropagation();
+    if (t.dataset.back) { trSel = { street: trSel.street, node: trSel.node }; }
+    else if (t.dataset.other) { trSel = { street: trSel.street, node: trSel.node, other: t.dataset.other }; }
+    else if (t.dataset.node) { trSel = { street: t.dataset.st || trSel.street, node: t.dataset.node }; }
+    else if (t.dataset.st) {
+      const st = trData.streets.find((x) => x.street === t.dataset.st);
+      const d = st && [...st.decisions].reverse().find((x) => x.node);
+      trSel = { street: t.dataset.st, node: d ? d.node : null };
+    }
+    drawTrail();
+  });
+
   (async function pollSa() {
     if (!active("game")) { setTimeout(pollSa, 2000); return; }
     try {
@@ -1512,6 +1813,7 @@
       renderSa(a, myTurn, s);
       renderPick(s, a);
       renderRanges(s).catch(() => {});
+      renderTrail(s).catch(() => {});
     } catch (e) { /* server restarting */ }
     setTimeout(pollSa, 1000);
   })();

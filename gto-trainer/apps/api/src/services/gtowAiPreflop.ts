@@ -3679,6 +3679,8 @@ export interface LiveNodeView {
   hero: { pos: string; stack: number | null; actions: string[]; strategy: Record<string, { w: number; acts: number[] }> | null;
           range: Record<string, { w: number }> } | null;
   opponents: LiveNodeSeat[];
+  /** the seats that folded before hero's node, each with his action chart where he folded (the panel's hand trail) */
+  folded?: LiveNodeSeat[];
   note: string | null;
 }
 
@@ -3733,6 +3735,7 @@ export async function livePreflopNodeView(
       const a = lastAction.get(p);
       return a ? { ...seat(p), action: a } : seat(p);
     }),
+    folded: shape.positions.filter((p) => p !== actor && folded.has(p) && lastAction.has(p)).map((p) => ({ ...seat(p), action: lastAction.get(p)! })),
     note: pin.lastResort ? `a locked last-resort tree: ${pin.lastResort} — hero's range at the node is every hand`
       : pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " as dead money" : ", none of their chips in it"}` : null,
   };
