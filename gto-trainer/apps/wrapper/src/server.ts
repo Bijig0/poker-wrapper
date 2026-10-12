@@ -38,7 +38,7 @@ import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
 import { noteAnswerArrived, noteSolveSteps } from "./steps";
 import { peerLeaving } from "./stackReset";
 import * as SESSION from "./session";
-import { buildAll, buildReply, relaunch } from "./build";
+import { buildAll, buildReply, noteUserAction, relaunch } from "./build";
 import { adminOpen, adminPost, adminState, cpReattach } from "./admin";
 import { domDump, shot, state, toolShell } from "./view";
 import { applyLayout, dpiAt, monitors, panelHwnd, slotTitle, targetArea, wantFullscreen } from "./windows";
@@ -120,6 +120,12 @@ export function buildApp(): Hono {
     }
     await next();
     if (origin) c.res.headers.set("Access-Control-Allow-Origin", origin);
+  });
+  // someone DOING something on these pages (any request but a read; /quit is a new instance taking over) holds the
+  // wrapper's own relaunch for a while (build.ts, 2026-10-13): it never pulls the page out from under a click
+  app.use(async (c, next) => {
+    if (c.req.method !== "GET" && c.req.method !== "HEAD" && new URL(c.req.url).pathname !== "/quit") noteUserAction();
+    await next();
   });
   app.onError((e: any) => json(500, { ok: false, error: `${e?.name && e.name !== "Error" ? e.name : "Exception"}: ${e?.message ?? e}` }));
   app.notFound(() => text404());

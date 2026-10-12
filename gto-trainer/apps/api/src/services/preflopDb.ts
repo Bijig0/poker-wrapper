@@ -1,6 +1,6 @@
-import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import type { Database } from "bun:sqlite";
 import { join } from "node:path";
+import { FollowedSqlite } from "./fileStamp";
 import { walkPreflopLine, type WalkNode, type WalkRepair } from "../utils/walkPreflopLine/walkPreflopLine";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 
@@ -40,19 +40,21 @@ interface NodeRow {
 }
 
 class PreflopDb {
-  private db: Database | null = null;
+  /** opened once and kept until 2026-10-13; now reopened when the file is replaced (services/fileStamp.ts) */
+  private readonly db: FollowedSqlite;
   private readonly path: string;
 
   constructor(path?: string) {
     this.path = path ?? join(import.meta.dir, "..", "..", "data", "preflop-db.sqlite");
+    this.db = new FollowedSqlite(() => this.path, 30_000, (m) => console.log(m));
   }
 
   private open(): Database | null {
-    if (this.db) return this.db;
-    if (!existsSync(this.path)) return null;
-    this.db = new Database(this.path, { readonly: true });
-    return this.db;
+    return this.db.get();
   }
+
+  /** Release the handle (tests: Windows will not delete an open file). */
+  close(): void { this.db.close(); }
 
   /** True once the crawler has stored this tree's root. */
   available(gametype: string, depth: number): boolean {

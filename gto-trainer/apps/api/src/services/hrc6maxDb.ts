@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { factoryFile, factoryManifestFile } from "./repoPaths";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { fileStamp, sameStamp, type FileStamp } from "./fileStamp";
 import { join } from "node:path";
 // Python's zlib.compress() is zlib-wrapped deflate, NOT gzip — inflateSync, never gunzipSync.
 import { inflateSync } from "node:zlib";
@@ -94,9 +95,18 @@ export function readChartManifest(): Record<string, ManifestEntry> | null {
   }
 }
 
+/** how often an open bake is stat'ed for a change, and a missing one looked for again */
+const RECHECK_MS = 30_000;
+
 class Hrc6MaxDb {
   private db: Database | null = null;
-  private tried = false;
+  /** the bake file as it was when this handle opened it */
+  private openStamp: FileStamp | null = null;
+  /** when the file was last looked at: an open handle's stat, or the look that found no file */
+  private checkedAt = 0;
+  /** the last look found no file (or HRC6MAX_DB=off) */
+  private absent = false;
+  private recheckMs = RECHECK_MS;
   /** Sources the bake covers. Empty set = no local coverage at all. */
   private baked = new Set<string>();
   private nodeStmt: ReturnType<Database["query"]> | null = null;
@@ -123,35 +133,83 @@ class Hrc6MaxDb {
   private stamps = new Map<string, string>();
 
   /** Opened lazily. A missing file (or HRC6MAX_DB=off) is the normal state on a machine that has not run the bake:
-   *  that is decided once and costs nothing per call. A file that IS there but would not open is a transient — a lock,
-   *  a torn moment — and is retried on the next read: giving up quietly here used to send every 6-max node to :8777
-   *  for the rest of the process. */
+   *  that costs a clock read per call, and the file is looked for again every RECHECK_MS — until 2026-10-13 it was
+   *  decided ONCE, so a bake that landed after the API started (a fresh install pulling its data, a first bake) was
+   *  never read until a restart. A file that IS there but would not open is a transient — a lock, a torn moment — and
+   *  is retried on the next read: giving up quietly here used to send every 6-max node to :8777 for the rest of the
+   *  process.
+   *
+   *  An OPEN bake is stat'ed every RECHECK_MS too, and reopened when its size / mtime / file id changed: where a file
+   *  can be replaced while open (POSIX), the old handle would go on reading the old file for the life of the process.
+   *  On Windows an open SQLite file cannot be replaced (EPERM) and in-place bake writes are seen by the open handle;
+   *  the reopen there just re-reads coverage and schema a little sooner. The new file is opened FIRST: when it will not
+   *  open or read, the old handle keeps serving and the next check tries again. */
   private open(): Database | null {
-    if (this.tried) return this.db;
+    const now = Date.now();
+    if (this.db) {
+      if (now - this.checkedAt < this.recheckMs) return this.db;
+      this.checkedAt = now;
+      const path = dbPath();
+      const stamp = path === "off" ? null : fileStamp(path);
+      if (stamp === null || sameStamp(stamp, this.openStamp)) return this.db;   // unchanged, or gone (keep what is open)
+      return this.attach(path, stamp);
+    }
+    if (this.absent && now - this.checkedAt < this.recheckMs) return null;
+    const wasAbsent = this.absent;
     const path = dbPath();
-    if (path === "off" || !existsSync(path)) { this.tried = true; this.db = null; return null; }
+    const stamp = path === "off" ? null : fileStamp(path);
+    this.checkedAt = now;
+    this.absent = stamp === null;
+    if (!stamp) return null;
+    const db = this.attach(path, stamp);
+    if (db && wasAbsent) console.log(`[hrc6maxDb] ${path} is here now - opened (${this.baked.size} trees)`);
+    return db;
+  }
+
+  /** Open `path` and read its coverage; on success it replaces (and closes) the handle open before, if any. */
+  private attach(path: string, stamp: FileStamp): Database | null {
+    const prev = this.db;
+    const prevStamp = this.openStamp;
+    let db: Database | null = null;
     try {
-      const db = new Database(path, { readonly: true });
+      db = new Database(path, { readonly: true });
       // The bake writes while we read (see the header). WAL keeps reads off the writer's lock; the timeout is the
       // belt for the moments WAL still locks briefly (a checkpoint, the wal-index being rebuilt).
       db.exec("PRAGMA busy_timeout = 5000");
-      this.readCoverage(db);
       // `pruned` (0 close / 1 reach / 2 cut) arrived 2026-09-25; a bake from before it has no such column.
       const hasPruned = (db.query("PRAGMA table_info(nodes)").all() as { name: string }[]).some((c) => c.name === "pruned");
-      this.nodeStmt = db.query(`SELECT pos, terminal, actions, cells${hasPruned ? ", pruned" : ""} FROM nodes WHERE source = ? AND line = ?`);
+      const nodeStmt = db.query(`SELECT pos, terminal, actions, cells${hasPruned ? ", pruned" : ""} FROM nodes WHERE source = ? AND line = ?`);
+      this.trustStmt = null;   // prepared on the old handle: readTrustCoverage keeps one with ??=
+      this.readCoverage(db);
+      this.nodeStmt = nodeStmt;
       this.db = db;
-      this.tried = true;
+      this.openStamp = stamp;
+      if (prev) {
+        try { prev.close(); } catch { /* already gone */ }
+        // a live bake changes the file in place every few seconds: say so only when it is another file
+        if (stamp.ino !== prevStamp?.ino) console.log(`[hrc6maxDb] ${path} was replaced - reopened (${this.baked.size} trees)`);
+      }
     } catch (e) {
-      this.db = null;
-      this.nodeStmt = null;
+      try { db?.close(); } catch { /* never opened */ }
+      if (prev) {
+        // keep serving what was open; its coverage again, since the failed read may have replaced part of it
+        try { this.trustStmt = null; this.readCoverage(prev); } catch { /* the next refresh tries again */ }
+      } else {
+        this.db = null;
+        this.nodeStmt = null;
+      }
       const now = Date.now();
       if (now - this.lastOpenWarn > 60_000) {
         this.lastOpenWarn = now;
-        console.warn(`[hrc6maxDb] could not open ${path}: ${e instanceof Error ? e.message : String(e)} — retrying on the next read`);
+        console.warn(`[hrc6maxDb] could not open ${path}: ${e instanceof Error ? e.message : String(e)} — ` +
+          (prev ? "the open handle keeps serving; trying again at the next check" : "retrying on the next read"));
       }
     }
     return this.db;
   }
+
+  /** Test hook: how often an open bake is stat'ed and a missing one looked for (default RECHECK_MS). */
+  setRecheckMs(ms: number): void { this.recheckMs = ms; }
 
   /** Is there a bake on this machine at all? (The record for ign200_6max_* when there is — see fetchNode6max.) */
   present(): boolean {
@@ -159,17 +217,15 @@ class Hrc6MaxDb {
   }
 
   /**
-   * Drop the handle and the coverage set so the next call re-opens the file.
-   *
-   * The bake ADDS trees. Coverage is read once, at first open, so a re-bake
-   * against a running API would stay invisible until it was restarted — and the
-   * failure mode is quiet (those spots keep going to :8777 and keep paying the
-   * cold open) rather than loud. Call this after re-running the builder.
+   * Drop the handle and the coverage set so the next call re-opens the file (tests; the running API needs no call:
+   * coverage is re-read every COVERAGE_TTL_MS and the file is followed every RECHECK_MS — see open()).
    */
   reload(): void {
     try { this.db?.close(); } catch { /* already gone */ }
     this.db = null;
-    this.tried = false;
+    this.openStamp = null;
+    this.checkedAt = 0;
+    this.absent = false;
     this.baked.clear();
     this.patches = [];
     this.coveredAt = 0;

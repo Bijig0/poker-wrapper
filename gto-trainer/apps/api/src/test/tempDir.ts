@@ -1,3 +1,4 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 /**
  * Temp directories for tests — removed when the file's tests are done.
  *
@@ -15,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** Every prefix a test asks for; the sweep script removes these (and only these) from the OS temp dir. */
-export const TEST_TEMP_PREFIXES = ["answer-rows-", "answers-test-", "gtow-cache-counters-", "answer-view-", "gtow-ledger-view-", "hands-view-", "supervisor-restart-", "runtime-health-", "page-token-"] as const;
+export const TEST_TEMP_PREFIXES = ["answer-rows-", "answers-test-", "gtow-cache-counters-", "answer-view-", "gtow-ledger-view-", "hands-view-", "supervisor-restart-", "runtime-health-", "data-reread-", "page-token-"] as const;
 export type TestTempPrefix = (typeof TEST_TEMP_PREFIXES)[number];
 
 /**

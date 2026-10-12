@@ -1,3 +1,4 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 import { LoadedCode, bootCheck, uncommittedOf, type CodeStatus } from "./loadedCode";
 import { livePort } from "./ports";
 import { MIN_UPTIME_MS, SUPERVISOR_REPLACE_EXIT, type SupervisorWatch, type WatchCheck, type WatchState } from "./supervisorRestart";
@@ -87,8 +88,9 @@ export interface AutoRestartOpts {
   byHand?: string;
   /** a reason not to restart now, or null */
   busy: () => Promise<string | null>;
-  /** exits the process with this code; replaced by tests */
-  exit?: (code: number) => void;
+  /** exits the process with this code; replaced by tests. The wrapper's relaunches it instead, and returns false when
+   *  it could not: the decision is then "held" and tried again next tick, not stuck at "restarting". */
+  exit?: (code: number) => void | boolean;
   check?: (entry: string) => Promise<string | null>;
   dirty?: (repo: string | null, files: string[]) => Promise<Set<string> | null>;
   log?: (line: string) => void;
@@ -156,6 +158,12 @@ export class AutoRestart {
     const others = Object.keys(this.otherStatus).length ? { others: { ...this.otherStatus } } : {};
     const watch = this.watch ? { watch: this.watch } : {};
     return this.state = { state, why, uncommitted, checkedAt: this.o.now(), ...(reason ? { reason } : {}), ...others, ...watch };
+  }
+
+  /** Act on a "restarting" decision: exit (or relaunch) — and when that could not happen, say so and try next tick. */
+  private leave(s: AutoStatus, code: number): AutoStatus {
+    if (this.o.exit(code) !== false) return s;
+    return this.set("held", `${s.why.replace(/; (exiting|asking).*$/, "")}; restart held: it could not be started — trying again`, s.uncommitted, s.reason);
   }
 
   private get autoOff(): boolean { return /^(off|0|false|no)$/i.test((this.o.env.AUTO_RESTART ?? "").trim()); }
@@ -233,12 +241,10 @@ export class AutoRestart {
     // anyway; an env-only change is re-read on the plain relaunch below)
     if (sup?.state === "ready" && sup.need?.kind === "supervisor-changed" && !this.o.supervisor!.request(sup, `${this.o.name} worker pid ${process.pid}`)) {
       const s = this.set("restarting", `${what}, and the supervisor's ${sup.need.why}; asking the supervisor to replace itself`, uncommitted, "supervisor-changed");
-      this.o.exit(SUPERVISOR_REPLACE_EXIT);
-      return s;
+      return this.leave(s, SUPERVISOR_REPLACE_EXIT);
     }
     const s = this.set("restarting", `${what}; exiting for the supervisor to relaunch`, uncommitted, "code-changed");
-    this.o.exit(0);
-    return s;
+    return this.leave(s, 0);
   }
 
   /** The code is current; the supervisor's stamp is not. */
@@ -268,12 +274,10 @@ export class AutoRestart {
     if (err) return this.set("held", `${what}; restart held: ${err}`, [], reason);
     if (need.kind === "env-changed") {
       const s = this.set("restarting", `${what}; exiting for the supervisor to relaunch with the new config`, [], reason);
-      this.o.exit(0);
-      return s;
+      return this.leave(s, 0);
     }
     const s = this.set("restarting", `${what}; asking the supervisor to replace itself (request file + exit ${SUPERVISOR_REPLACE_EXIT})`, [], reason);
-    this.o.exit(SUPERVISOR_REPLACE_EXIT);
-    return s;
+    return this.leave(s, SUPERVISOR_REPLACE_EXIT);
   }
 
   /** Code and supervisor are current; the runtime itself asks to be replaced (services/runtimeHealth.ts). */
@@ -290,8 +294,7 @@ export class AutoRestart {
     if (b) return this.set("held", `${d.why}; restart held: ${b}`, [], reason);
     const s = this.set("restarting", `${d.why}; exiting for the supervisor to relaunch`, [], reason);
     try { this.o.recycled?.(d); } catch { /* the record only guards a loop */ }
-    this.o.exit(0);
-    return s;
+    return this.leave(s, 0);
   }
 
   /** Supervisors without a worker of their own: write their request file when they are behind and free to go. */
