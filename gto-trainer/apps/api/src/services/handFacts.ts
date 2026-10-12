@@ -318,6 +318,15 @@ class HandFacts {
 
   /** Drop the in-memory copy only (tests: proves a restart reads the disk back). */
   dropMemory(): void { this.mem.clear(); }
+
+  /** Let go of the file (tests: the API stopped — nothing holds the database while another connection writes it).
+   *  The next read or write opens it again. */
+  close(): void {
+    if (this.stmts) for (const s of Object.values(this.stmts)) { try { s.finalize(); } catch { /* already gone */ } }
+    try { this.db?.close(); } catch { /* already closed */ }
+    this.stmts = null;
+    this.db = null;
+  }
 }
 
 export const handFacts = new HandFacts();

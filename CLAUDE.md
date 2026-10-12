@@ -24,8 +24,13 @@ Read README.md first: what each folder is, the three services and their ports, t
     "merged, restart held until the session ends" — never just "fixed". `GET :2000/api/build/all` is the same answer.
   - The states it names: `settling` (restarting in seconds), `held` (a session is live), `uncommitted` (edits nobody
     committed — never picked up automatically), `boot-check-failed` (the code on disk does not bundle; the old process
-    keeps serving — fix it), `unsupervised` (a hand-started process, or the wrapper: it has no supervisor, a launch
-    always loads the disk, and the setup page offers Relaunch).
+    keeps serving — fix it), `unsupervised` (a hand-started process; the test rig; an extra table).
+  - **The wrapper relaunches itself** (2026-10-13, `apps/wrapper/src/build.ts`): its first table runs the same
+    decision every 30 s and, after a committed change to its code (or a `config/local.env` change), relaunches QUIETLY
+    — no window moved, shown, focused or opened — when no session is running, nothing was clicked on its pages for
+    2 min, the code builds, and it has not relaunched itself in 5 min. Start on a behind wrapper relaunches it first
+    ("press Start again"), so no session starts on old code. Never the rig (`--fake`) or an extra table;
+    `WRAPPER_SELF_UPDATE=off` reports only. A merge is live in the wrapper about a minute later, between sessions.
   - **Supervisors are code too — and pick up their own changes** (2026-10-10, `scripts/supervisor_lib.ps1`,
     `services/supervisorRestart.ts`). `.claude/study-api.ps1`, `.claude/chart-server.ps1`, `scripts/gtow_watchdog.ps1`
     stamp what they read (`data/jobs/supervisor-<name>.json`, protocol 2). The API and chart supervisors RE-READ
@@ -49,6 +54,14 @@ Read README.md first: what each folder is, the three services and their ports, t
     `Stop-Process` of a supervisor its headless `conhost.exe` can linger (parent = the task engine, NO children) and
     the task refuses a new instance (LastTaskResult 0x800710E0) while it reads "Running" — stop that conhost (it has no
     children) and start the task again. A clean exit (what a self-replace does) takes its conhost with it.
+  - **Code shared with the chart factory** (2026-10-13): the files in `setup/shared-with-factory.json` (the stall
+    monitor, auto-restart, loaded-code stamp, live status, ports, supervisor restart, runtime health, test temp dirs)
+    run in the factory's API (:2100) as copies. Edit them HERE only; each starts with a `SHARED WITH THE CHART
+    FACTORY` line and may import nothing outside the list (`sharedWithFactory.test.ts`). After merging a change to
+    one, the factory is behind: `bun setup/live.ts` shows its line as `SHARED CODE BEHIND` (not current). Finish
+    the change there: `bun scripts/sync_from_wrapper.ts --commit` in the factory checkout (C:\Users\Brady\poker,
+    on its main), and its API restarts itself. Until 2026-10-13 nothing compared the copies and the factory ran the
+    10-03 versions for ten days.
   - **A degraded runtime restarts too** (2026-10-12, `services/runtimeHealth.ts`): an API worker that slept through a
     long lid-close (11-14 h) came back at ~250% CPU with its loop blocked ~75%, until replaced. The worker now replaces
     itself (reason `runtime-degraded`, exit 0, held while a session is live) after a suspend of 30 min or more (logged

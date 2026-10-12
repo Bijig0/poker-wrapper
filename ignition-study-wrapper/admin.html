@@ -34,6 +34,9 @@
   .chk .d { color: #8fa1b3; }
   .chk.bad b { color: #ff9a9a; } .chk.ok b { color: #5ee39a; } .chk.soft b { color: #ffce56; }
 </style>
+<!-- reloads this window by itself when its code changes on disk and nobody is using it: the study API's page-reload.js
+     (async — a stalled API never holds this page up; without the API it simply does not reload by itself) -->
+<script async src="http://127.0.0.1:2000/study/page-reload.js" data-page="wrapper/admin.html"></script>
 </head>
 <body>
 <h1>CoinPoker leader <span class="sub" style="font-weight:400">· tables and panels</span></h1>
@@ -48,7 +51,7 @@
 <h2>Panels <span id="p-count" class="sub" style="text-transform:none;letter-spacing:0"></span></h2>
 <div id="panels" class="grid"></div>
 
-<div id="dlg"><div class="box">
+<div id="dlg" data-reload-hold><div class="box">
   <h3>Open a panel on <span id="dlg-table"></span></h3>
   <div class="sub" id="dlg-sub"></div>
   <h2 style="margin-top:14px">Strategy</h2>
@@ -61,7 +64,7 @@
   </div>
 </div></div>
 
-<div id="dlg-all" style="position:fixed;inset:0;background:rgba(5,8,11,.72);display:none;align-items:center;justify-content:center;padding:16px"><div class="box" style="background:#171d24;border:1px solid #6b2a31;border-radius:14px;padding:16px 18px;width:min(560px,100%)">
+<div id="dlg-all" data-reload-hold style="position:fixed;inset:0;background:rgba(5,8,11,.72);display:none;align-items:center;justify-content:center;padding:16px"><div class="box" style="background:#171d24;border:1px solid #6b2a31;border-radius:14px;padding:16px 18px;width:min(560px,100%)">
   <h3 style="margin:0 0 6px;font-size:17px">End all sessions?</h3>
   <div class="sub">Each panel sits out, lets its hand finish, ends its session and closes its table in the CoinPoker client. Then this window closes.</div>
   <div id="dlg-all-list" style="margin:10px 0"></div>
@@ -72,6 +75,11 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let S = { tables: [], panels: [] }, busy = false;
+// page-reload.js (2026-10-13): never over an action in flight (the two dialogs are marked data-reload-hold); its reload
+// is not a close, so the "Leave site?" guard below lets it through
+let RELOADING = false;
+(window.PageReloadHolds = window.PageReloadHolds || []).push(() => (busy ? "an action is running" : ""));
+window.addEventListener("pagereload", () => { RELOADING = true; });
 const panelName = (p) => p.tag === "main" ? "Main panel" : `Panel ${p.tag}`;
 const labelOf = (room) => (S.tables.find((t) => t.room === room) || {}).label || room;
 
@@ -189,7 +197,7 @@ $("dlg-all-go").onclick = async () => {
 };
 // closing this window with its X ends every session too: ask first (the browser's own "Leave site?" prompt)
 window.addEventListener("beforeunload", (e) => {
-  if (CLOSING_ALL || !S.panels.some((p) => p.site === "coinpoker" && p.sessionId)) return;
+  if (RELOADING || CLOSING_ALL || !S.panels.some((p) => p.site === "coinpoker" && p.sessionId)) return;
   e.preventDefault();
   e.returnValue = "Closing the leader ends every session and closes their CoinPoker tables.";
 });

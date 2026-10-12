@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Replay Review</title>
 <link rel="stylesheet" href="/study/study.css">
+<!-- reloads this tab by itself when its code changes on disk and nobody is using it (page-reload.js) -->
+<script src="/study/page-reload.js" data-page="study/replay-review.html"></script>
 </head>
 <body>
 <header>
@@ -55,6 +57,9 @@ let dom = new Map();
 let i = 0;
 let playing = false;
 let timer = null;
+// the open recording and its position live only in this page: page-reload.js must not reload over them (nor the
+// dashboard's /review tab, which embeds this page and asks it)
+window.PageReload?.hold(() => (name ? "a recording is open in the replayer — reload when you are done with it" : ""));
 const tables = [];   // live renderTable handles, torn down on every redraw
 
 function fail(e) {

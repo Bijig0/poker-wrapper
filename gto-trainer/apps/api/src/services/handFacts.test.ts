@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HandFacts, isDurableKey } from "./handFacts";
 import { emptyCounts } from "./requestScope";
+import { openStore } from "./storePaths";
 import type { ChartPreflopPin } from "./preflopPin";
 
 const dir = mkdtempSync(join(tmpdir(), "hand-facts-"));
@@ -25,11 +26,21 @@ describe("handFacts — the hand's facts, write-through (2026-09-25)", () => {
 
   it("nothing is pruned: a year-old hand's AI preflop record is still read after a restart (2026-10-12)", () => {
     const path = join(dir, "noprune.sqlite");
-    new HandFacts(path).setPreflop("4920000009", pin("4920000009"), "AdKc");
-    const raw = new Database(path);
-    raw.run("UPDATE hand_facts SET ts = ? WHERE hand_key = ?", [Date.now() - 365 * 86_400_000, "4920000009"]);
+    const a = new HandFacts(path);
+    a.setPreflop("4920000009", pin("4920000009"), "AdKc");
+    a.close();                                     // the API stopped: nothing else holds the file while the row is aged
+    // aged through openStore (WAL + busy timeout, as every store opens it): a bare connection has no busy timeout, so
+    // a momentary lock under a loaded full-suite run failed the backdate outright instead of waiting for it
+    const raw = openStore(path);
+    const yearAgo = Date.now() - 365 * 86_400_000;
+    expect(raw.run("UPDATE hand_facts SET ts = ? WHERE hand_key = ?", [yearAgo, "4920000009"]).changes).toBe(1);
     raw.close();
-    expect(new HandFacts(path).get("4920000009")?.heroCards).toBe("AdKc");
+    const b = new HandFacts(path);                 // the API restarted
+    expect(b.get("4920000009")?.heroCards).toBe("AdKc");
+    b.close();
+    const check = new Database(path, { readonly: true });
+    expect((check.query("SELECT ts FROM hand_facts WHERE hand_key = ?").get("4920000009") as { ts: number }).ts).toBe(yearAgo);
+    check.close();
   });
 
   it("every fact survives a restart: a second store on the same file reads it back", () => {

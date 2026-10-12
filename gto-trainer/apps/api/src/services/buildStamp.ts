@@ -1,8 +1,8 @@
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import { AutoRestart, liveSessionReason } from "./autoRestart";
 import { liveBusy } from "./livePriority";
 import { LoadedCode } from "./loadedCode";
+import { pageTokenOf } from "./pageToken";
 import { runtimeHealth } from "./runtimeHealth";
 import { JOBS_DIR, SupervisorWatch } from "./supervisorRestart";
 
@@ -62,11 +62,9 @@ runtimeHealth.setFile(join(JOBS_DIR, "runtime-recycle.json"));
 
 /**
  * The dashboard page is read from disk on every request, so an open tab can be older than the page on disk.
- * This token changes whenever the page file does; the tab compares it with the one it was served.
+ * This token changes whenever the page file does — or a script / stylesheet it loads from here (dashboard.css, the
+ * shared grid, page-reload.js; services/pageToken.ts) — and the tab compares it with the one it was served.
  */
 export function pageToken(): string {
-  try {
-    const st = statSync(join(API_ROOT, "dashboard.html"));
-    return `${st.size}-${Math.round(st.mtimeMs)}`;
-  } catch { return ""; }
+  return pageTokenOf("dashboard.html");
 }
