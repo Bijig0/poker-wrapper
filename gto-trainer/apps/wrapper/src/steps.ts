@@ -292,7 +292,7 @@ export function currentStep(): Step | null {
   }
 
   const note = currentNote();
-  if (note) return mk({ id: "no-answer", phase: "solve", text: `No answer — ${note}`, level: "bad" });
+  if (note) return mk({ id: "no-answer", phase: "solve", text: /^no answer\b/i.test(note) ? note.charAt(0).toUpperCase() + note.slice(1) : `No answer — ${note}`, level: "bad" });
 
   if (st.onDemand && !st.solveRequest) return mk({ id: "press-solve", phase: "solve", text: "Press SOLVE for the equilibrium answer", level: "info" });
 
@@ -302,6 +302,12 @@ export function currentStep(): Step | null {
     const active: SolveStep[] = sv.steps.filter((s: SolveStep) => s.status === "active");
     const cur = active.length ? active[active.length - 1]! : sv.steps[sv.steps.length - 1]!;
     const lanes = active.length > 1 ? active.slice(0, -1).map((s) => `also: ${s.text}`) : [];
+    // a try that came back empty while the poller asks again (its note says so when it stops asking)
+    if (cur.id === "final" && cur.status === "failed") {
+      const why = cur.text.replace(/^No answer on this try \([^)]*\)(?: — )?/, "");
+      return withClock(mk({ id: "try-empty", phase: "solve", text: "This try came back empty — asking again", at: cur.at, tick: true,
+                            level: "warn", detail: why ? [why] : undefined }));
+    }
     return withClock(mk({ id: `solve:${cur.id ?? cur.text}`, phase: "solve", text: cur.text, at: cur.at, tick: cur.status === "active",
                           level: cur.status === "failed" ? "bad" : "info", detail: [...(cur.detail || []), ...lanes],
                           usualMs: cur.usualMs ?? null, slowMs: cur.slowMs ?? null, limitMs: cur.limitMs ?? null }));
@@ -314,9 +320,12 @@ export function currentTrail(): Mark[] {
   const b = box();
   const out: Mark[] = [];
   const sv = b.solve && b.solve.key === b.key ? b.solve : null;
-  for (const s of (sv?.steps || []) as SolveStep[]) {
+  const solveSteps = (sv?.steps || []) as SolveStep[];
+  for (const s of solveSteps) {
     if (s.status === "active") continue;
-    out.push({ text: s.lane ? `${s.lane}: ${s.text}` : s.text, at: s.at, ms: s.endAt ? s.endAt - s.at : null,
+    // the route's opening "Working out your flop spot" says nothing once a real stage followed it
+    if (/^Working out your /.test(s.text) && solveSteps.some((x) => x !== s)) continue;
+    out.push({ text: s.lane ? `${s.lane}: ${s.text}` : s.text, at: s.at, ms: s.id === "final" || !s.endAt ? null : s.endAt - s.at,
                level: s.status === "failed" ? "bad" : s.status === "skipped" ? "info" : "ok" });
   }
   // the API's own "Answered: HRC chart · 0.3 s" names the source — the wrapper's "Answer: CALL · HRC chart" then says the pick only

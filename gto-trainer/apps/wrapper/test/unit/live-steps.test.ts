@@ -179,3 +179,23 @@ test("a retry of the same decision keeps the first try on the trail and says 'tr
   expect(c.detail).toEqual(["Ultra 2", "try 2"]);
   expect(stepsView()!.trail.map((m: any) => m.text)).toEqual(["Try 1: No answer on this try (30.2 s) — GTO Wizard timed out"]);
 });
+
+test("a try that came back empty reads 'asking again'; the poller's final note is not doubled", () => {
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const { h, apiKey } = seed();
+  stepsTick();
+  const t = nowMs();
+  noteSolveSteps({ decisionKey: apiKey, handId: h.handId, run: 1, steps: [
+    { id: "s1", text: "Working out your preflop spot", at: t, endAt: t + 5, status: "done" },
+    { id: "final", text: "No answer on this try (0.4 s) — action \"C\" not offered", at: t + 400, endAt: t + 400, status: "failed" },
+  ] });
+  const c = currentStep()!;
+  expect(c.text).toBe("This try came back empty — asking again");
+  expect(c.detail).toEqual(["action \"C\" not offered"]);
+  expect(stepsView()!.trail.map((m: any) => [m.text, m.ms])).toEqual([["No answer on this try (0.4 s) — action \"C\" not offered", null]]);
+  S.study.note = "no answer for this spot after 3 tries — action \"C\" not offered";
+  S.study.at = time();
+  expect(currentStep()!.text).toBe("No answer for this spot after 3 tries — action \"C\" not offered");
+});
