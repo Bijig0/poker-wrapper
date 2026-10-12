@@ -85,7 +85,7 @@ describe("tick", () => {
       ...depsFor(hands, found),
       findArchived: (id) => { reads.push(id); return hands.findLast((h) => h.clientHandId === id) ?? null; },
       doneAfter: () => { throw new Error("the full pass must not run when the ids pass is given"); },
-      doneIdsAfter: (rowid: number) => hands.filter((h) => h.dbId > rowid).map((h) => h.clientHandId!),
+      newDoneIds: (rowid: number) => hands.filter((h) => h.dbId > rowid).map((h) => h.clientHandId!),
     };
     await tick(deps);                                              // sets the cutoff at 5
     deps.store.save({ ...freshCheck(checked, T0), status: "match", nextAt: null, checkedAt: T0 });   // row 6 already checked

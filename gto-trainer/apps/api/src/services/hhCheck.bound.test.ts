@@ -25,7 +25,7 @@ describe("hhCheck tick, bounded", () => {
       fetchRecord: async () => ({ ok: false, reason: "unreachable", error: "test: no client" }),
       findArchived: (id) => { counts.reads++; return hands.find((h) => h.clientHandId === id) ?? null; },
       doneAfter: () => { throw new Error("the ids pass is given"); },
-      doneIdsAfter: (rowid) => { counts.idsQueries++; return hands.filter((h) => h.dbId > rowid).map((h) => h.clientHandId!); },
+      newDoneIds: (rowid) => { counts.idsQueries++; return hands.filter((h) => h.dbId > rowid).map((h) => h.clientHandId!); },
       lastRowid: () => 5,
       now: () => T0,
     };
