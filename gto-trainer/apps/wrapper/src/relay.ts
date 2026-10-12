@@ -1053,8 +1053,9 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
       S.sessions.event(S.session.id, "study-auto", { on: true, hand: S.handNo, practice, realMoney: !practice, delay: st.autoDelay ?? null,
                                                     reason: opts.reason ?? null, budget: left, by });
     }
+    // a feed line for a real-money arm only (as before 2026-10-12: a practice arm is the panel's own line)
     const bud = !left.bounded ? "" : ` — budget ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left`;
-    feedAdd(`Auto-execute ON${practice ? "" : " — REAL MONEY"}${bud}`);
+    if (!practice) feedAdd(`Auto-execute ON — REAL MONEY${bud}`);
   }
   log(`[pick] auto ON (${practice ? "practice" : "REAL MONEY"}, ${pyStr(st.autoDelay ?? null)}, ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left)`);
   return { ok: true, auto: true, practice, delay: st.autoDelay ?? null, allowance: left };
