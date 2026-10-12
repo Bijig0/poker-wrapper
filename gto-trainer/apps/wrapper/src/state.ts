@@ -62,6 +62,9 @@ export function freshStudy(): Record<string, any> {
     // THE CHAIN LINE (2026-09-25, the API's services/chainPath): this answer's verdict — clean / rebuilt / extra
     // requests / no answer — and the session's clean count, which outlives any one answer
     chain: null, chainSession: null,
+    // LIVE STEPS (steps.ts, 2026-10-12): the decision the step trail is on, when hero's turn on it began, its milestones,
+    // and the API's solve steps for it (POST /panel/steps)
+    steps: null as Record<string, any> | null,
     decisionKey: null, handId: null, solveId: null as number | null, clientHandId: null as string | null,
     // the answer's short all-in press entries (relay.sizedAllInPlan), null = none
     press: null as any[] | null,

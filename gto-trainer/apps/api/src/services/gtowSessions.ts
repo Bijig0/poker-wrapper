@@ -48,6 +48,7 @@ import { currentRequestScope } from "./requestScope";
 import { loadAccounts, WALL_MS, type GtowTier } from "./gtowAccounts";
 import { isAuthFailure } from "./gtowAuthBody";
 import { gtowLoad, type LoadCounts, type LoadView } from "./gtowLoad";
+import { tstepDetail } from "./liveSteps";
 
 const TOKEN_SKEW_MS = 60_000; // treat a token as dead a minute before it expires
 const REFRESH_RETRY_MS = 10_000; // floor between sniff ATTEMPTS on one session
@@ -868,6 +869,8 @@ export function logRoute(id: GtowSessionId, need: GtowNeed, why: string, what = 
   const at = sc ? `${sc.handKey} ${sc.street ?? "?"} (${sc.origin}) ` : "";
   console.log(`[gtow-route] ${at}${kind} ${what} -> ${id}: ${why}`);
   tmark(`[gtow-route] ${kind} ${what} -> ${id}`, why, 400);
+  // LIVE STEPS: the account the stage went to, by its name on the accounts page ("Ultra 2")
+  tstepDetail(gtowSessions.cfg(id)?.label ?? String(id));
 }
 
 export const gtowSessions = new GtowSessions({ load: gtowLoad });

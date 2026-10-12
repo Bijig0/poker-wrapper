@@ -6,6 +6,7 @@ import { renderPanelRows } from "../feed/parsePanelFeed/parsePanelFeed";
 import { fastSolve } from "../services/fastSolve";
 import { SOLUTION_SETS } from "../services/gtowCdp";
 import { runTraced, timed, tmark } from "../services/answerTrace";
+import { StepRun, runWithSteps, sourceName, tstep } from "../services/liveSteps";
 
 /**
  * Fast-solver: the same hand-node input as /ingest, answered without any live
@@ -95,6 +96,7 @@ export function headerJson(v: unknown): string {
 }
 
 async function handleFastSolve(c: any): Promise<Response> {
+  const t0 = Date.now();
   const body = (await c.req.json().catch(() => ({}))) as FastSolverBody;
   const set = SOLUTION_SETS.find((s) => s.id === (body.setId ?? "6max"));
 
@@ -192,7 +194,11 @@ async function handleFastSolve(c: any): Promise<Response> {
     }
   }
 
-  const solution = await timed("fastSolve", () => fastSolve(hand, heroPos, {
+  // LIVE STEPS (2026-10-12, services/liveSteps): a live ask (the poller's, which names its wrapper and its decision) shows
+  // its stages on that table's panel while they run; any other caller solves exactly as before
+  const wrapperUrl = body.live && typeof body.live === "object" && typeof body.live.url === "string" ? body.live.url : null;
+  const run = wrapperUrl && typeof body.expectKey === "string" ? new StepRun(wrapperUrl, body.expectKey, hand.handId) : null;
+  const solveIt = () => timed("fastSolve", () => fastSolve(hand, heroPos, {
     setId: body.setId, depth: body.depth, heroPos,
     // who asked — stamped on every stored AI-chain trace (services/solveStore.ts)
     ...(typeof (body as { origin?: unknown }).origin === "string" ? { origin: (body as { origin: string }).origin } : {}),
@@ -203,6 +209,19 @@ async function handleFastSolve(c: any): Promise<Response> {
     ...((body.strategyId ?? strategyId) ? { strategyId: body.strategyId ?? strategyId } : {}),
     ...(body.strategy === "exploit" || body.strategy === "chart" ? { strategy: body.strategy } : {}),
   }), (s) => `${(s as { ok?: boolean }).ok ? "ok" : "not ok"} · ${(s as { source?: string }).source ?? ""} · ${(s as { tier?: string }).tier ?? ""}`);
+  const solution = run
+    ? await runWithSteps(run, async () => {
+        tstep(`Working out your ${hand.street} spot`);
+        return solveIt();
+      })
+    : await solveIt();
+  if (run) {
+    const s = solution as { ok?: boolean; decision?: unknown; source?: string; reason?: string; path?: { preflop?: { piece?: string; code?: string } } };
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    run.finish(s?.ok === true && s.decision != null
+      ? { ok: true, text: `Answered: ${sourceName(s.source, s.path?.preflop?.code ?? s.path?.preflop?.piece ?? null)} · ${secs} s` }
+      : { ok: false, text: `No answer on this try (${secs} s)${s?.reason ? ` — ${String(s.reason).slice(0, 140)}` : ""}` });
+  }
   return c.json({ ...base, solution });
 }
 

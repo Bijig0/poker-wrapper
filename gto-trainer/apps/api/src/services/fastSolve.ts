@@ -48,6 +48,7 @@ import {
 import { roundContributions } from "../utils/archivedHand/archivedHand";
 import { contestedChips, deadMoney, effectiveStack, foldRound, moneyState, streetChips, streetFromTokens, type MoneyState } from "../utils/tableMoney/tableMoney";
 import { tmark, tspan } from "./answerTrace";
+import { tstep, tstepEnd, withLane, USUAL } from "./liveSteps";
 import { applyRiverMes, type RiverMesInput } from "./riverMes";
 import { HU_SEATS, preflopClosed, preflopPotStack } from "../utils/aiStudyLine/aiStudyLine";
 import { mesPostflopLookup, mesRiverContext } from "./mesPostflop";
@@ -1369,6 +1370,7 @@ async function flopArrivalLive(
     if (r.ok) replayRangeWalks(walks);
     return r;
   }
+  tstep("Getting the preflop ranges into the flop");
   const run = withRangeWalkCapture(() => flopArrivalCompute(hand, heroPos, heroPosName, set, depth, sixMax, huCp, pinnedDealt, cpRing));
   if (key) {
     arrivalPending.set(key, run);
@@ -1756,6 +1758,7 @@ export async function runSeatbelt<T extends { res: FastSolveResult | null; why: 
     return warn(first, `POT CHECK FAILED (#5): ${off} — served anyway (nothing derived was reused, so solving again would give the same tree)`);
   }
   tmark("seatbelt: the tree's pot is not the table's", `${off} — solving again with nothing derived reused`);
+  tstep("Pot didn't match the table → solving again");
   const again = await solveAgain();
   if (!again.res?.ok) return warn(first, `POT CHECK FAILED (#5): ${off} — solving again from the table's state gave no answer, so this one is served`);
   const off2 = potOffOf(again.res);
@@ -2075,6 +2078,7 @@ async function solvePostflopViaChainOnce(
         // acted) THIS street can be dropped again. The ranges entering it are narrowed through the earlier streets
         // by 3-seat walks that each keep hero, every earlier aggressor and some of the callers (the callers left
         // out of a walk are the approximation). Brady 2026-09-22: "let's try solve for it".
+        tstep("Too many players for one tree → narrowing ranges through the earlier streets");
         const rr = await rerootCollapse({
           ordered, heroPos: ordered[heroAt]!, arr, streets, streetSeats: streetSeats as string[][], flopPot, flopStack: fieldStack, amounts: streetAmounts,
           board: tk.board, heroComboIdx, rake: rake6, specOf, allIn: new Set(ordered.filter((p) => allInSeats.has(p.toUpperCase()))),
@@ -2319,9 +2323,11 @@ async function solvePostflopViaChainOnce(
       why: null,
     };
   }
+  if (flopSeats.length > 3) tstep(`Too many players for one tree → solving ${walkables.length} smaller tree${walkables.length === 1 ? "" : "s"}`);
+  // LIVE STEPS: parallel trees each get their own panel lane (services/liveSteps.withLane), so their steps do not close each other's
   const chains = process.env.CHAIN_SERIAL_COLLAPSES === "1"
     ? await (async () => { const out = []; for (const w of walkables) out.push(await solveOne(w)); return out; })()
-    : await Promise.all(walkables.map(solveOne));
+    : await Promise.all(walkables.map((w, i) => (walkables.length > 1 ? withLane(`Tree ${i + 1}`, () => solveOne(w)) : solveOne(w))));
   // THE WALKS ARE STORED AFTER THE BLEND (served-strategy narrowing, 2026-10-08): the reference walk's trace carries the mix
   // that was served (`served`), so the saves wait for it — in the walks' order, as before, one synchronous run
   const pendingSaves: (() => void)[] = [];
@@ -4607,8 +4613,10 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     why = "folded to the SB, who completed — his complete is the exact tree's own (the 100bb pool3 chart locks it to the pool's deep cell, the shallower limp charts hold an equilibrium SB node), so GTO Wizard AI preflop answers hero's option";
     pf = { piece: "gtow-ai-preflop", how: "by-design", code: "preflop:lone-sb-complete", why: why.slice(0, 200) };
   } else if (is6Handed(hand, heroPos)) {
+    tstep("Reading the HRC chart");
     const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
-    if (six && six.ok) return six;
+    if (six && six.ok) { tstepEnd("done", "HRC chart answered"); return six; }
+    tstepEnd("failed", chartMissWords(six));
     why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
     if (six && !six.ok && six.treeGap?.gate.route) gated = six.treeGap;
     if (six && !six.ok && six.fitEmpties) emptied = six.fitEmpties;
@@ -4649,6 +4657,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     const rule = gated ? `GAP GATE: ${gapText(gated.gate.reasons)}`
       : `LINE NOT HELD: the chart has no branch for ${emptied!.groups.map(groupText).join(" and ")}`;
     let gaveUp = false;
+    tstep("Asking GTO Wizard for the exact tree (the chart is the backup)", { limitMs: gapGateAiMs() });
     // check #3 for the exact line (the fit rule only): how often the tree's own villain takes the action the chart lacks
     const asked = solvePreflopGtowAi(hand, heroPos, why, { skipPin: () => gaveUp, ...(emptied ? { villainLines: true } : {}) })
       .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
@@ -4657,6 +4666,8 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
       gaveUp = true;
       const how = first === "timeout" ? "timeout" as const : "failed" as const;
       const aiWhy = first === "timeout" ? `no answer inside ${(gapGateAiMs() / 1000).toFixed(0)} s` : first.reason.slice(0, 200);
+      tstepEnd("failed", first === "timeout" ? `GTO Wizard didn't answer inside ${(gapGateAiMs() / 1000).toFixed(0)} s` : "GTO Wizard couldn't answer the exact tree");
+      tstep("Using the HRC chart instead");
       const chart = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId, { noGate: true, allowEmptied: true });
       console.log(`[${tag}] AI FAILED TO ANSWER (${how}, ${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${aiWhy} — ${rule}`);
       if (chart && chart.ok) {
@@ -4668,6 +4679,8 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
           ...(gated ? { treeGap: { ...gated, routed: { ...gated.routed!, ai: how, aiWhy, aiMs: Date.now() - t0 } } } : {}),
           ...(emptied ? { fitEmpties: { ...(chart.fitEmpties ?? emptied), ai: how, aiWhy, aiMs: Date.now() - t0 } } : {}) };
       }
+      tstepEnd("failed", "The HRC chart can't answer this spot either");
+      if (first === "timeout") tstep("Still waiting for GTO Wizard's exact tree");
       ai = first === "timeout" ? await asked : first;      // the chart cannot either: the exact tree is all there is
       // THE LATE ANSWER IS THE ONE SERVED, SO IT IS PINNED (2026-10-10): its own run skipped the pin (gaveUp was set when
       // the box ran out), which left the hand with no record of its tree — the hand page said "no record", and the flop
@@ -4683,7 +4696,13 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
       if (gated) gated = { ...gated, routed: { ...gated.routed!, ai: "answered", aiMs: Date.now() - t0 } };
       if (emptied) emptied = { ...emptied, ai: "answered", aiMs: Date.now() - t0 };
     }
-  } else ai = await solvePreflopGtowAi(hand, heroPos, why);
+  } else {
+    tstep(pf.code === "preflop:lone-sb-complete" ? "Small blind completed → asking GTO Wizard AI (preflop)"
+      : pf.how === "designed" ? "Short-handed table → asking GTO Wizard AI (preflop)"
+      : pf.how === "rebuilt" ? "HRC chart didn't answer → asking GTO Wizard AI (preflop)"
+      : "Chart doesn't cover this spot → asking GTO Wizard AI (preflop)");
+    ai = await solvePreflopGtowAi(hand, heroPos, why);
+  }
   const asResult = (r: Extract<AiPreflopOutcome, { ok: true }>, approx: boolean, pfPath = pf): FastSolveResult => ({
     ok: true, source: GTOW_AI_PREFLOP_SOURCE, tier: GTOW_AI_PREFLOP_TIER, street: "preflop",
     setId: "gtow-ai-preflop", gametype: `gtow-ai · ${r.shape.n}-handed · ${r.shape.positions.map((p) => `${p}:${r.shape.stacks[p]}`).join("/")}`,
@@ -4696,6 +4715,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
+  tstepEnd("failed", /did not return the node in time/.test(ai.reason) ? "GTO Wizard didn't return the answer in time" : "GTO Wizard AI couldn't answer this spot");
   // HERO OFF HIS OWN TREE (2026-10-07, gtowAiPreflop's self-lock): his hand reads 0 at his node because of an earlier
   // action of his own the tree never takes with it, and the lock that would put it back failed, timed out or is off.
   // Terminal and said as such — no other piece is asked (the reason, unchanged, is what the panel and hand page show).
@@ -4725,6 +4745,22 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     reason: `${why}; ${ai.reason}; no heads-up last resort in the 6-max strategy` };
 }
 
+/** LIVE STEPS (2026-10-12, services/liveSteps): why the chart declined, in a player's words — a panel label, nothing else. */
+function chartMissWords(six: FastSolveResult | null): string {
+  if (!six) return "HRC chart server didn't answer";
+  const r = six.ok ? "" : String(six.reason ?? "");
+  const why = /GAP GATE/.test(r) ? "bet sizes or stacks too far from the chart's"
+    : /LINE NOT HELD/.test(r) ? "line not held (a limper or caller the chart has no branch for)"
+    : /all-in not in the chart/.test(r) ? "that all-in isn't in the chart"
+    : /size past τ/.test(r) ? "that bet size is too far from the chart's"
+    : /UNTRAINED|UNSCORED|NO TRUST SCORE/.test(r) ? "the chart's solve isn't trusted at this spot"
+    : /OFF THE CHART|CHART CHANGED UNDER HERO|has no strategy/.test(r) ? "your hand has no strategy here in the chart"
+    : /belongs to/.test(r) ? "the chart's seat order doesn't match the table"
+    : /inconsistent/.test(r) ? "the hand as read doesn't add up"
+    : "line not held";
+  return `HRC chart doesn't cover this spot — ${why}`;
+}
+
 /** A preflop reason beside the answer's own (chainPath.preflopAlso), the verdict re-classified. A result with no path is
  *  returned as it is. */
 function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResult {
@@ -4752,6 +4788,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
   }
   const t = poolLockTarget({ hand, heroPos, chartId });
   if (!t.ok) return null;
+  tstep(t.target.complete ? "Locking the small blind's complete to the pool's range" : "Locking the limper to the pool's range", { ...USUAL.poolLock, limitMs: poolLockMs() });
   const t0 = Date.now();
   let gaveUp = false;
   const asked = solvePreflopPoolLocked(hand, heroPos, t.target, { skipPin: () => gaveUp })
@@ -4766,6 +4803,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
     const pc = (x: number | null | undefined) => (x != null && Number.isFinite(x) ? `${(100 * x).toFixed(2)}%` : "?");
     const text = `pool limp lock skipped: the ${t.target.pos} (${t.target.stack}bb) ${t.target.complete ? "completed" : "limped"} — the solver ${pc(tr?.fSolver)} vs the pool's ${t.target.key} ${pc(tr?.fPool)}: ${tr?.text ?? first.reason}`;
     console.log(`[pool-lock] SKIPPED hand ${handId}: ${text}`);
+    tstepEnd("skipped", "Solver plays this limp itself — no lock needed");
     onSkip({ v: "by-design", code: "preflop:pool-limp-lock-skipped", text: text.slice(0, 300) });
     return null;
   }
@@ -4773,6 +4811,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
     gaveUp = true;
     const why = first === "timeout" ? `no answer inside ${(ms / 1000).toFixed(0)} s` : first.reason.slice(0, 220);
     console.log(`[pool-lock] FAILED (${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${handId}: the ${t.target.pos} (${t.target.stack}bb, ${t.target.key}) — ${why}`);
+    tstepEnd("failed", first === "timeout" ? `Limper lock didn't answer inside ${(ms / 1000).toFixed(0)} s — using the regular answer` : "Limper lock failed — using the regular answer");
     return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0,
       reason: `POOL LIMP LOCK FAILED: the ${t.target.pos} (${t.target.stack}bb) limped and no pool-locked chart covers him, but the locked GTO Wizard tree did not answer (${why}) — answered as before` };
   }
@@ -4799,6 +4838,7 @@ async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, d
   if (coldCallPoolMode() !== "on") return null;
   const t = coldCallLockTarget({ hand, heroPos });
   if (!t.ok) return null;
+  tstep("Locking the cold-caller to the pool's range", { ...USUAL.poolLock, limitMs: poolLockMs() });
   const t0 = Date.now();
   let gaveUp = false;
   const asked = solvePreflopColdCallLocked(hand, heroPos, t.target, { skipPin: () => gaveUp || dropped() })
@@ -4808,12 +4848,14 @@ async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, d
   const handId = hand.clientHandId ?? hand.handId ?? "?";
   if (first !== "timeout" && !first.ok && first.reason.includes(COLD_CALL_NOT_NEEDED)) {
     console.log(`[coldcall-lock] hand ${handId}: not needed — ${first.reason.slice(0, 160)}`);
+    tstepEnd("skipped", "Solver already plays this cold-call — no lock needed");
     return null;
   }
   if (first === "timeout" || !first.ok) {
     gaveUp = true;
     const why = first === "timeout" ? `no answer inside ${(ms / 1000).toFixed(0)} s` : first.reason.slice(0, 220);
     console.log(`[coldcall-lock] FAILED (${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${handId}: the ${t.target.pos} (${t.target.stack}bb, ${t.target.key}) — ${why}`);
+    tstepEnd("failed", first === "timeout" ? `Cold-caller lock didn't answer inside ${(ms / 1000).toFixed(0)} s — using the regular answer` : "Cold-caller lock failed — using the regular answer");
     return { ok: false, street: "preflop", gametype: "6max-ign200", depth: 0,
       reason: `COLD-CALL LOCK FAILED: the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet, but the locked GTO Wizard tree did not answer (${why}) — answered as before` };
   }
@@ -4889,7 +4931,8 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     // when the lock fails; when the lock answers, its pin is put back after the plain answer's lands (the flop must walk
     // the locked tree), as for the cold-call lock below.
     let lockSkip: PathReason | null = null;
-    const lockAsked = poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; })
+    // LIVE STEPS: each lock shows in its own panel lane (services/liveSteps.withLane), beside the regular answer's steps
+    const lockAsked = withLane("Pool lock", () => poolLimpLockFirst(hand, heroPos, opts, (x) => { lockSkip = x; }))
       .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
     const regular = solvePreflopSixStrategy(hand, heroPos, opts);
     regular.catch(() => {});   // awaited below; never an unhandled rejection while the lock is still out
@@ -4910,7 +4953,7 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     let ccDropped = false;
     // the lock's pin is taken as it lands: the regular answer may pin its unlocked tree after it, and the hand's flop
     // must walk the locked one when the lock answers
-    const ccAsked = locked ? null : poolColdCallLockFirst(hand, heroPos, () => ccDropped)
+    const ccAsked = locked ? null : withLane("Cold-call lock", () => poolColdCallLockFirst(hand, heroPos, () => ccDropped))
       .then((res) => ({ res, pin: res?.ok ? preflopPinFor(hand) : undefined }));
     const r = await regular;
     let cc: FastSolveResult | null = null;

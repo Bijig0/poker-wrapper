@@ -52,6 +52,8 @@ export const Body = {
     // THE SHORT ALL-IN PRESS (2026-10-07, the API's services/allInPress): [{action, kind: "raise-to", amount, verb, why, …}]
     press: anyVal.optional(),
   }),
+  // LIVE STEPS (2026-10-12): the API's solve steps for one decision, pushed while the solve runs (steps.noteSolveSteps)
+  panelSteps: obj({ decisionKey: anyVal.optional(), handId: anyVal.optional(), steps: anyVal.optional(), run: anyVal.optional() }),
   room: obj({ room: anyVal.optional(), preset: anyVal.optional() }),
   adminPanel: obj({ port: anyVal.optional(), action: anyVal.optional(), room: anyVal.optional() }),
   sitout: obj({ on: anyVal.optional(), all: anyVal.optional() }),
