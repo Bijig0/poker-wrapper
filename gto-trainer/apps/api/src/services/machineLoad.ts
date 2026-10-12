@@ -14,7 +14,7 @@ import { refreshSessionLive, sessionLiveCached } from "./sessionLive";
  * CONTRACT (the wrapper is built against it — keep it exactly):
  *   { ok: true, at: ms, verdict: "ok" | "warn" | "heavy", reasons: string[],
  *     loop: { stalls1m, stalls5m, maxMs5m, blockedMs5m, lastStallAt: ms | null },
- *     machine: { cpuPct: number | null, heavy: [{ name, pid, cpuPct }] },
+ *     machine: { cpuPct: number | null, heavy: [{ name, pid, cpuPct }], memFreeMb?: number | null, memTotalMb?: number | null },
  *     sessionLive: boolean }
  *
  * `loop` counts the stall monitor's LOGGED stalls (>= 300 ms, services/answerTrace) that ended in the window.
@@ -25,10 +25,16 @@ import { refreshSessionLive, sessionLiveCached } from "./sessionLive";
  * "bun replayGate.ts"). Both are sampled OFF the request: a timer every SAMPLE_MS starts a child process and awaits
  * it; the endpoint reads memory only — never a file, the DB or a process — and is never gated behind live answers.
  *
+ * `machine.memFreeMb` is the physical memory available now (os.freemem, sampled with the CPU) — added 2026-10-12: the
+ * API froze 10-52 s at 3-16% CPU ("waiting: disk") with 0.4 GB of 32 GB free and 15-32k page-ins/s, and neither the
+ * verdict nor the [stall] lines said the machine was paging.
+ *
  * VERDICT RULE:
- *   heavy — any stall >= 5 s in the last 5 min, OR cpuPct >= 85 sustained (every sample of the last minute, two at least)
- *   warn  — any stall >= 1 s in the last 5 min, OR cpuPct >= 60, OR any heavy process, OR the API's runtime is
- *           degraded (services/runtimeHealth.ts: back from a long sleep, or ~250% CPU with its loop mostly blocked)
+ *   heavy — any stall >= 5 s in the last 5 min, OR cpuPct >= 85 sustained (every sample of the last minute, two at least),
+ *           OR memFreeMb < HEAVY_FREE_MB
+ *   warn  — any stall >= 1 s in the last 5 min, OR cpuPct >= 60, OR any heavy process, OR memFreeMb < WARN_FREE_MB, OR
+ *           the API's runtime is degraded (services/runtimeHealth.ts: back from a long sleep, or ~250% CPU with its loop
+ *           mostly blocked)
  *   ok    — none of these
  * `reasons` holds a plain sentence for every condition that holds (the heavy ones first).
  */
@@ -39,6 +45,9 @@ export const WARN_CPU_PCT = 60;
 /** a process using more than this share of the whole machine is listed */
 export const HEAVY_PROC_PCT = 15;
 export const SUSTAIN_MS = 60_000;
+/** available physical memory under which the machine is paging (heavy) or close to it (warn) */
+export const HEAVY_FREE_MB = 1_024;
+export const WARN_FREE_MB = 2_048;
 export const SAMPLE_MS = 20_000;
 const WINDOW_5M = 5 * 60_000;
 /** a sample older than this is not reported */
@@ -52,9 +61,10 @@ export interface LoadReport {
   verdict: Verdict;
   reasons: string[];
   loop: { stalls1m: number; stalls5m: number; maxMs5m: number; blockedMs5m: number; lastStallAt: number | null };
-  machine: { cpuPct: number | null; heavy: HeavyProc[] };
+  machine: { cpuPct: number | null; heavy: HeavyProc[]; memFreeMb?: number | null; memTotalMb?: number | null };
   sessionLive: boolean;
 }
+export interface MemSample { at: number; freeMb: number; totalMb: number }
 
 // ── pure: the verdict ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -73,7 +83,11 @@ export interface VerdictInput {
   heavy: HeavyProc[];
   /** the API's runtime is degraded (services/runtimeHealth.ts): the sentence, or null */
   degraded?: string | null;
+  /** the last memory sample, if fresh */
+  mem?: MemSample | null;
 }
+
+const gbOf = (mb: number) => `${(mb / 1024).toFixed(1)} GB`;
 
 export function verdictOf(x: VerdictInput): { verdict: Verdict; reasons: string[] } {
   const heavyWhy: string[] = [];
@@ -97,6 +111,11 @@ export function verdictOf(x: VerdictInput): { verdict: Verdict; reasons: string[
     } else if (last.pct >= WARN_CPU_PCT) {
       warnWhy.push(`the machine's CPU is at ${Math.round(last.pct)}%`);
     }
+  }
+  if (x.mem && x.mem.freeMb < WARN_FREE_MB) {
+    const txt = `the machine is short of memory (${gbOf(x.mem.freeMb)} of ${gbOf(x.mem.totalMb)} free)` +
+      (x.mem.freeMb < HEAVY_FREE_MB ? " — it is paging: file reads and the API's own memory wait on the disk" : "");
+    (x.mem.freeMb < HEAVY_FREE_MB ? heavyWhy : warnWhy).push(txt);
   }
   for (const p of x.heavy) warnWhy.push(`${p.name} is using ${Math.round(p.cpuPct)}% CPU`);
   return { verdict: heavyWhy.length ? "heavy" : warnWhy.length ? "warn" : "ok", reasons: [...heavyWhy, ...warnWhy] };
@@ -199,10 +218,16 @@ const cpuTotals = (): { idle: number; all: number } | null => {
   } catch { return null; }
 };
 
+const memory = (): { freeMb: number; totalMb: number } | null => {
+  try { return { freeMb: Math.round(os.freemem() / 2 ** 20), totalMb: Math.round(os.totalmem() / 2 ** 20) }; } catch { return null; }
+};
+
 export interface SamplerDeps {
   cpuTotals: () => { idle: number; all: number } | null;
   processes: () => Promise<{ name: string; pid: number; cpuPct: number }[] | null>;
   commandLines: (pids: number[]) => Promise<Map<number, string>>;
+  /** physical memory available / installed, in MB */
+  memory: () => { freeMb: number; totalMb: number } | null;
   now: () => number;
   selfPid: number;
 }
@@ -211,6 +236,7 @@ export class MachineSampler {
   private cpu: { at: number; pct: number }[] = [];
   private heavy: HeavyProc[] = [];
   private heavyAt = 0;
+  private mem: MemSample | null = null;
   private lastTotals: { idle: number; all: number } | null = null;
   private labels = new Map<number, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -218,7 +244,7 @@ export class MachineSampler {
   private d: SamplerDeps;
 
   constructor(deps: Partial<SamplerDeps> = {}) {
-    this.d = { cpuTotals, processes: sampleProcesses, commandLines, now: Date.now, selfPid: process.pid, ...deps };
+    this.d = { cpuTotals, processes: sampleProcesses, commandLines, memory, now: Date.now, selfPid: process.pid, ...deps };
   }
 
   /**
@@ -238,6 +264,8 @@ export class MachineSampler {
           if (this.cpu.length > 20) this.cpu.splice(0, this.cpu.length - 20);
         }
         if (t) this.lastTotals = t;
+        const m = this.d.memory();
+        if (m) this.mem = { at: this.d.now(), ...m };
         try { refreshSessionLive(); } catch { /* the report keeps the last answer */ }
       });
       const procs = await this.d.processes();
@@ -277,9 +305,9 @@ export class MachineSampler {
   stop(): void { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
 
   /** The samples still fresh at `now` (a sampler that stopped answering reports nothing rather than old numbers). */
-  state(now = this.d.now()): { cpu: { at: number; pct: number }[]; heavy: HeavyProc[] } {
+  state(now = this.d.now()): { cpu: { at: number; pct: number }[]; heavy: HeavyProc[]; mem: MemSample | null } {
     const cpu = this.cpu.filter((c) => c.at >= now - STALE_MS);
-    return { cpu, heavy: this.heavyAt >= now - STALE_MS ? this.heavy : [] };
+    return { cpu, heavy: this.heavyAt >= now - STALE_MS ? this.heavy : [], mem: this.mem && this.mem.at >= now - STALE_MS ? this.mem : null };
   }
 }
 
@@ -289,19 +317,20 @@ export const machineSampler = new MachineSampler();
 // API code were 2-3% blocked and two others 20%, 92% of it at low CPU (waiting) — the difference was outside the
 // process, and nothing on disk said what the machine was doing. Memory only: the sampler's last samples.
 setStallSummaryExtra(() => {
-  const { cpu, heavy } = machineSampler.state();
+  const { cpu, heavy, mem } = machineSampler.state();
   const pcts = cpu.map((c) => c.pct);
   const cpuTxt = pcts.length ? `machine cpu ${Math.round(Math.max(...pcts))}% (last samples)` : "machine cpu not sampled";
-  return `${cpuTxt}${heavy.length ? `, heavy: ${heavy.slice(0, 4).map((p) => `${p.name} ${p.pid} ${Math.round(p.cpuPct)}%`).join(", ")}` : ""} · session ${sessionLiveCached().live ? "live" : "not live"}`;
+  const memTxt = mem ? `, ${gbOf(mem.freeMb)} of ${gbOf(mem.totalMb)} memory free` : "";
+  return `${cpuTxt}${memTxt}${heavy.length ? `, heavy: ${heavy.slice(0, 4).map((p) => `${p.name} ${p.pid} ${Math.round(p.cpuPct)}%`).join(", ")}` : ""} · session ${sessionLiveCached().live ? "live" : "not live"}`;
 });
 
 /** GET /api/load's body — memory only (the stall monitor's kept stalls, the sampler's last sample, the cached session). */
 export function loadReport(now = Date.now(), sampler: MachineSampler = machineSampler): LoadReport {
   const s5 = loggedStallsSince(now - WINDOW_5M);
   const s1 = s5.filter((s) => s.at + s.ms >= now - 60_000);
-  const { cpu, heavy } = sampler.state(now);
+  const { cpu, heavy, mem } = sampler.state(now);
   const deg = runtimeHealth.degraded();
-  const { verdict, reasons } = verdictOf({ now, stalls: s5, cpu, heavy, degraded: deg ? degradedReason(deg) : null });
+  const { verdict, reasons } = verdictOf({ now, stalls: s5, cpu, heavy, mem, degraded: deg ? degradedReason(deg) : null });
   const lastCpu = cpu[cpu.length - 1];
   return {
     ok: true,
@@ -315,7 +344,7 @@ export function loadReport(now = Date.now(), sampler: MachineSampler = machineSa
       blockedMs5m: s5.reduce((m, s) => m + s.ms, 0),
       lastStallAt: lastLoggedStall()?.at ?? null,
     },
-    machine: { cpuPct: lastCpu ? lastCpu.pct : null, heavy },
+    machine: { cpuPct: lastCpu ? lastCpu.pct : null, heavy, memFreeMb: mem?.freeMb ?? null, memTotalMb: mem?.totalMb ?? null },
     sessionLive: sessionLiveCached().live,
   };
 }

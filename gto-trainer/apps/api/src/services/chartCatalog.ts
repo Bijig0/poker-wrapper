@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SOLUTION_SETS } from "./gtowCdp";
 import { CHARTS_DIR, factoryFile } from "./repoPaths";
@@ -331,18 +332,66 @@ export function sidecarFacts(meta: any): SidecarFacts {
   return { format, label, seatStacks, rake, anteBb, sbBb: sbM ? Number(sbM[1]) : null, sizes };
 }
 
-function hrcEntries(): CatalogEntry[] {
+/**
+ * THE SIDECARS ARE READ ONCE (2026-10-12). Every rebuild (TTL_MS = 60 s, and the Sources registry + strategy catalogue
+ * ask on each of theirs) re-read all ~2,700 sidecars and ran two existsSync per chart — ~8,000 synchronous file calls on
+ * the API's one thread. 0.2 s with the files in the OS cache; 23 s measured cold, and 10-52 s freezes in the [stall]
+ * lines ("cache refresh sources/strategies: evaluate strategies 45.8 s", "sources/registry 47 s", cpu 3-16% of the
+ * wall) the night the machine ran out of memory and paged. Now: one readdir per rebuild; a sidecar is parsed when its
+ * name is new; whether its body is on disk comes from the same listing; a sidecar REWRITTEN in place (pullChart
+ * refreshing one) is picked up by an async sweep (sweepSidecars: file reads off the loop) every SWEEP_MS, or at once
+ * with ?refresh=1 (the route awaits a sweep). A sidecar that does not parse (caught mid-write) is not remembered: it is
+ * read again at the next rebuild, as before.
+ */
+const sidecars = new Map<string, any>();   // file name -> parsed sidecar
+const SWEEP_MS = 10 * 60_000;
+let sweptAt = 0;
+let sweeping: Promise<void> | null = null;
+/** bumped by a forced rebuild: a sweep that started before it does not overwrite what it read */
+let readGen = 0;
+
+function readSidecar(f: string): any | null {
+  try { return JSON.parse(readFileSync(join(SOLUTIONS_DIR, f), "utf-8")); } catch { return null; }
+}
+
+/** Re-read every sidecar with async file reads (the loop stays free between them); the next rebuild uses them. */
+export function sweepSidecars(): Promise<void> {
+  if (sweeping) return sweeping;
+  const gen = readGen;
+  const run = async () => {
+    if (!existsSync(SOLUTIONS_DIR)) return;
+    const names = readdirSync(SOLUTIONS_DIR).filter((f) => f.endsWith(".meta.json"));
+    for (let i = 0; i < names.length; i += 32) {
+      await Promise.all(names.slice(i, i + 32).map(async (f) => {
+        let meta: any = null;
+        try { meta = JSON.parse(await readFile(join(SOLUTIONS_DIR, f), "utf-8")); } catch { /* mid-write: keep what we have */ }
+        if (meta && gen === readGen) sidecars.set(f, meta);
+      }));
+    }
+    sweptAt = Date.now();
+    cached = null;   // the next getCatalog rebuilds from the swept sidecars (no file reads)
+  };
+  // cleared from the OUTER promise: a sweep that returns before its first await (no folder, no sidecars) must not
+  // leave `sweeping` latched on a settled promise
+  const p: Promise<void> = run().finally(() => { if (sweeping === p) sweeping = null; });
+  sweeping = p;
+  return p;
+}
+
+/** Tests: drop the built catalog (not the parsed sidecars), as the TTL would. */
+export function __expireCatalog(): void { cached = null; }
+
+function hrcEntries(force = false): CatalogEntry[] {
   if (!existsSync(SOLUTIONS_DIR)) return [];
+  const names = readdirSync(SOLUTIONS_DIR);
+  const present = new Set(names);
   const out: CatalogEntry[] = [];
-  for (const f of readdirSync(SOLUTIONS_DIR)) {
+  for (const f of names) {
     if (!f.endsWith(".meta.json")) continue;
     const base = f.slice(0, -".meta.json".length);
-    let meta: any;
-    try {
-      meta = JSON.parse(readFileSync(join(SOLUTIONS_DIR, f), "utf-8"));
-    } catch {
-      continue; // one bad sidecar shouldn't hide the corpus
-    }
+    if (force || !sidecars.has(f)) { const m = readSidecar(f); if (m) sidecars.set(f, m); }
+    const meta = sidecars.get(f);
+    if (!meta) continue; // one bad sidecar shouldn't hide the corpus (and is read again next time)
     const id = String(meta.id ?? base);
     const dims = parseHrcId(id);
     const facts = sidecarFacts(meta);
@@ -372,11 +421,16 @@ function hrcEntries(): CatalogEntry[] {
       ...(typeof meta.nodes === "number" ? { nodes: meta.nodes } : {}),
       location: `${R2_UI}/${id}.json.gz`,
       // older solutions were written uncompressed (.json) — both count
-      cachedLocally:
-        existsSync(join(SOLUTIONS_DIR, `${base}.json.gz`)) ||
-        existsSync(join(SOLUTIONS_DIR, `${base}.json`)),
+      cachedLocally: present.has(`${base}.json.gz`) || present.has(`${base}.json`),
       routed: routedFor(dims, id),
     });
+  }
+  // a sidecar whose file is gone is forgotten
+  for (const f of sidecars.keys()) if (!present.has(f)) sidecars.delete(f);
+  if (force) { sweptAt = Date.now(); readGen++; }
+  else if (Date.now() - sweptAt > SWEEP_MS) {
+    if (sweptAt === 0) sweptAt = Date.now();   // just read in full: the first sweep is due a SWEEP_MS from now
+    else void sweepSidecars().catch(() => { /* the parsed copies stay */ });
   }
   return out;
 }
@@ -440,7 +494,7 @@ const TTL_MS = 60_000;
 /** Build (or reuse, within TTL) the full catalog. */
 export function getCatalog(force = false): Catalog {
   if (!force && cached && Date.now() - cached.builtAt < TTL_MS) return cached;
-  const entries = [...hrcEntries(), ...gtowEntries()];
+  const entries = [...hrcEntries(force), ...gtowEntries()];
   const byFamily: Record<string, number> = {};
   for (const e of entries) byFamily[e.family] = (byFamily[e.family] ?? 0) + 1;
   cached = {

@@ -15,7 +15,7 @@ function chart(dir: string, id: string, nodes: Record<string, unknown>, { body =
   return doc;
 }
 function store(dir: string, o: Partial<ChartStoreOpts> = {}) {
-  return new ChartStore({ dir, remote: "", bigMax: 2, smallMax: 2, smallBytes: 1024, diskCapBytes: 1e12, pinnedPrefixes: [],
+  return new ChartStore({ dir, remote: "", bigMax: 2, bigBytesMax: 1e12, smallMax: 2, smallBytes: 1024, diskCapBytes: 1e12, pinnedPrefixes: [],
                           preflopDb: join(dir, "none.sqlite"), log: () => {}, ...o });
 }
 const q = (s: Record<string, string>) => new URLSearchParams(s);
@@ -74,6 +74,23 @@ describe("ChartStore", () => {
     const s = store(d, { smallBytes: 1024 });
     for (const id of ["big1", "big2", "hu1", "hu2", "hu3"]) await s.doc(id);
     expect(s.resident()).toEqual({ big: ["big1", "big2"], small: ["hu2", "hu3"] });
+  });
+
+  test("the big LRU is capped by bytes too: oldest out first, the doc just loaded always stays (2026-10-12)", async () => {
+    const d = mkdtempSync(join(tmpdir(), "charts-"));
+    // ~67 KB of JSON each (50 KB of random bytes, base64): two fit a 150 KB budget, three do not
+    for (const id of ["a", "b", "c"]) chart(d, id, {}, { pad: 50_000 });
+    chart(d, "huge", {}, { pad: 200_000 });
+    const s = store(d, { bigMax: 6, bigBytesMax: 150_000 });
+    for (const id of ["a", "b", "c"]) await s.doc(id);
+    expect(s.resident().big).toEqual(["b", "c"]);
+    // one doc over the whole budget is still served and kept - alone
+    await s.doc("huge");
+    expect(s.resident().big).toEqual(["huge"]);
+    const r = s.cacheReport();
+    expect(r.big.docs.map((x) => x.id)).toEqual(["huge"]);
+    expect(r.big.bytes).toBeGreaterThan(200_000);
+    expect(r.big.maxBytes).toBe(150_000);
   });
 
   test("disk eviction drops only R2-confirmed, unpinned, big, not-just-fetched bodies — and nothing when R2 is unlistable", async () => {

@@ -18,6 +18,13 @@ import { join } from "node:path";
  *   - ONE LOAD PER CHART: concurrent asks for a cold chart share one download + parse (server.py 2026-09-24);
  *   - two LRUs: big trees (HRC_UI_DOC_CACHE_MAX, ~600 MB resident each) and small bodies under HRC_UI_SMALL_BODY_BYTES
  *     (HRC_UI_SMALL_DOC_MAX) — a heads-up session walking depth rungs must not push the big trees out;
+ *   - the big LRU is ALSO capped by bytes (HRC_UI_DOC_CACHE_GB of JSON text, default 1; the doc just loaded always
+ *     stays). A parsed doc costs ~4.3x its JSON text resident (measured 2026-10-13: ign200_6max_D100_o2_5, 202 MB of
+ *     JSON = 877 MB RSS after GC), so 1 GB of text is ~4.3 GB of memory. 2026-10-12: the 6-max pool trees are
+ *     133-169 MB gzipped (~1.4 GB of JSON) each; a cap by count alone let this process reach 24 GB private on a 32 GB
+ *     machine — the whole box paged (15-32k page-ins/s) and the study API's loop froze 10-52 s on cold file reads.
+ *     Live 6-max NL200 answers read the baked SQLite, not this server; CoinPoker heads-up bodies (<= 0.2 MB) live in
+ *     the small LRU. GET /api/cache says what is resident and how big;
  *   - the on-disk body cache is capped (HRC_UI_DISK_CACHE_GB) but only ever drops a body R2 is CONFIRMED to hold,
  *     never a small one, never the one just fetched, never the pinned family (HRC_UI_PINNED_PREFIXES).
  */
@@ -31,6 +38,8 @@ export interface ChartStoreOpts {
   /** rclone remote holding the bodies (HRC_UI_REMOTE); "" = no downloads */
   remote: string;
   bigMax: number;
+  /** the big LRU's budget in bytes of JSON text (the doc just loaded is kept even when it alone is over) */
+  bigBytesMax: number;
   smallMax: number;
   smallBytes: number;
   diskCapBytes: number;
@@ -68,6 +77,7 @@ export function optsFromEnv(dir: string, preflopDb: string): ChartStoreOpts {
     dir,
     remote: env.HRC_UI_REMOTE ?? "r2:poker-solve-db/hrc-ui",
     bigMax: Number(env.HRC_UI_DOC_CACHE_MAX ?? 3),
+    bigBytesMax: Number(env.HRC_UI_DOC_CACHE_GB ?? 1) * 2 ** 30,
     smallMax: Number(env.HRC_UI_SMALL_DOC_MAX ?? 300),
     smallBytes: Number(env.HRC_UI_SMALL_BODY_BYTES ?? 256 * 1024),
     diskCapBytes: Number(env.HRC_UI_DISK_CACHE_GB ?? 20) * 2 ** 30,
@@ -85,16 +95,25 @@ export const GTOW_SOLUTION = {
 
 /** A body file: gzip + JSON (a plain .json is read as-is). */
 export function readDoc(path: string): ChartDoc {
+  return readDocSized(path).doc;
+}
+
+/** readDoc plus the size of its JSON text — what the big LRU's byte budget counts. */
+export function readDocSized(path: string): { doc: ChartDoc; bytes: number } {
   const raw = readFileSync(path);
   const text = path.endsWith(".gz") ? new TextDecoder().decode(Bun.gunzipSync(raw)) : raw.toString("utf8");
-  return JSON.parse(text);
+  return { doc: JSON.parse(text), bytes: text.length };
 }
+
+const gb = (n: number) => `${(n / 2 ** 30).toFixed(2)} GB`;
 
 export class ChartStore {
   private index = new Map<string, { body: string; meta: ChartMeta }>();
   private stamp = "";
   private big = new Map<string, ChartDoc>();     // insertion order = LRU order (oldest first)
   private small = new Map<string, ChartDoc>();
+  /** JSON text bytes per resident doc (both LRUs) */
+  private bytes = new Map<string, number>();
   private loading = new Map<string, Promise<ChartDoc | null>>();
   private r2Listing: { at: number; names: Set<string> | null } = { at: 0, names: null };
   private crawl: Database | null = null;
@@ -147,6 +166,18 @@ export class ChartStore {
   /** Test/inspection hook: which docs are resident. */
   resident(): { big: string[]; small: string[] } { return { big: [...this.big.keys()], small: [...this.small.keys()] }; }
 
+  /** GET /api/cache: what is resident, oldest first, with the JSON text size each doc was parsed from. */
+  cacheReport() {
+    const list = (m: Map<string, ChartDoc>) => [...m.keys()].map((id) => ({ id, bytes: this.bytes.get(id) ?? 0 }));
+    const sum = (m: Map<string, ChartDoc>) => [...m.keys()].reduce((n, id) => n + (this.bytes.get(id) ?? 0), 0);
+    return {
+      big: { max: this.o.bigMax, maxBytes: this.o.bigBytesMax, bytes: sum(this.big), docs: list(this.big) },
+      small: { max: this.o.smallMax, bytes: sum(this.small), docs: list(this.small) },
+    };
+  }
+
+  private bigBytes(): number { let n = 0; for (const id of this.big.keys()) n += this.bytes.get(id) ?? 0; return n; }
+
   private cached(sid: string): ChartDoc | null {
     for (const cache of [this.small, this.big]) {
       const d = cache.get(sid);
@@ -191,10 +222,19 @@ export class ChartStore {
       this.touch(path);                 // LRU order on disk = last opened (Windows does not keep atime for us)
     }
     const isSmall = statSync(path).size < this.o.smallBytes;
-    const doc = readDoc(path);
+    const { doc, bytes } = readDocSized(path);
     const [cache, cap] = isSmall ? [this.small, this.o.smallMax] : [this.big, this.o.bigMax];
     cache.set(sid, doc);
-    while (cache.size > cap) cache.delete(cache.keys().next().value!);
+    this.bytes.set(sid, bytes);
+    const evict = () => { const old = cache.keys().next().value!; cache.delete(old); this.bytes.delete(old); return old; };
+    while (cache.size > cap) evict();
+    if (!isSmall) {
+      // the byte budget: oldest first, never the doc just loaded (it is what the caller is about to read)
+      const dropped: string[] = [];
+      while (cache.size > 1 && this.bigBytes() > this.o.bigBytesMax) dropped.push(evict());
+      this.log(`loaded ${sid} (${gb(bytes)} of JSON) - big cache ${cache.size} docs, ${gb(this.bigBytes())} of ${gb(this.o.bigBytesMax)}` +
+               (dropped.length ? `; dropped ${dropped.join(", ")} for the byte budget` : ""));
+    }
     return doc;
   }
 
