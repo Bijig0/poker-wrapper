@@ -56,6 +56,14 @@ describe("verdict rules", () => {
     expect(v.verdict).toBe("heavy");
     expect(v.reasons).toEqual(["the API froze 6.0 s at 12:19", "bun test is using 70% CPU"]);
   });
+
+  it("memory: under 1 GB free is heavy (paging), under 2 GB warns, more says nothing (2026-10-12)", () => {
+    const mem = (freeMb: number) => verdictOf({ now: NOW, stalls: [], cpu: [], heavy: [], mem: { at: NOW, freeMb, totalMb: 32_768 } });
+    expect(mem(457)).toEqual({ verdict: "heavy", reasons: [
+      "the machine is short of memory (0.4 GB of 32.0 GB free) — it is paging: file reads and the API's own memory wait on the disk"] });
+    expect(mem(1_500)).toEqual({ verdict: "warn", reasons: ["the machine is short of memory (1.5 GB of 32.0 GB free)"] });
+    expect(mem(4_500)).toEqual({ verdict: "ok", reasons: [] });
+  });
 });
 
 describe("process sampling", () => {
@@ -97,6 +105,7 @@ describe("GET /api/load", () => {
       cpuTotals: () => totals,
       processes: async () => [{ name: "bun", pid: 77, cpuPct: 40 }, { name: "bun", pid: 1, cpuPct: 20 }, { name: "chrome", pid: 9, cpuPct: 2 }],
       commandLines: async (pids) => new Map(pids.map((p) => [p, "bun test"])),
+      memory: () => ({ freeMb: 8_192, totalMb: 32_768 }),
       selfPid: 1,
     });
     __setSessionLiveReader(() => "session_x", () => now);
@@ -119,12 +128,13 @@ describe("GET /api/load", () => {
         "bun (this API) is using 20% CPU",
       ],
       loop: { stalls1m: 2, stalls5m: 2, maxMs5m: 1_500, blockedMs5m: 1_820, lastStallAt: NOW + 15_000 },
-      machine: { cpuPct: 70, heavy: [{ name: "bun test", pid: 77, cpuPct: 40 }, { name: "bun (this API)", pid: 1, cpuPct: 20 }] },
+      machine: { cpuPct: 70, heavy: [{ name: "bun test", pid: 77, cpuPct: 40 }, { name: "bun (this API)", pid: 1, cpuPct: 20 }],
+        memFreeMb: 8_192, memTotalMb: 32_768 },
       sessionLive: true,
     });
     // samples that stopped arriving are not reported
     const stale = loadReport(now + 10 * 60_000, s);
-    expect(stale.machine).toEqual({ cpuPct: null, heavy: [] });
+    expect(stale.machine).toEqual({ cpuPct: null, heavy: [], memFreeMb: null, memTotalMb: null });
     expect(stale.loop.stalls5m).toBe(0);
     expect(stale.loop.lastStallAt).toBe(NOW + 15_000);
   });
@@ -136,6 +146,6 @@ describe("GET /api/load", () => {
     const j = (await r.json()) as Record<string, unknown>;
     expect(Object.keys(j).sort()).toEqual(["at", "loop", "machine", "ok", "reasons", "sessionLive", "verdict"]);
     expect(Object.keys(j.loop as object).sort()).toEqual(["blockedMs5m", "lastStallAt", "maxMs5m", "stalls1m", "stalls5m"]);
-    expect(Object.keys(j.machine as object).sort()).toEqual(["cpuPct", "heavy"]);
+    expect(Object.keys(j.machine as object).sort()).toEqual(["cpuPct", "heavy", "memFreeMb", "memTotalMb"]);
   });
 });

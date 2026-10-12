@@ -9,13 +9,15 @@
  *   GET /api/progress        liveness, 2 bytes (the API's sources probe)
  *   GET /api/solutions       the chart index: the GTOW crawl + every sidecar
  *   GET /api/preflop/node    ?source=<chart id>&line=<tokens>   (source=gtow: &gametype=&depth= from the crawl SQLite)
+ *   GET /api/cache           what the doc LRUs hold (id + JSON size, oldest first) and the process's memory
  *   GET /api/build           is this process behind the code on disk (services/loadedCode.ts; the API's /api/build shape)
  *   POST /api/build/restart  exit cleanly for the supervisor to relaunch
  *
  * A committed change to the code this server loaded restarts it by itself when no session is live (services/autoRestart.ts).
  *
  * Env: HRC_UI_PORT (8777), CHART_SOLUTIONS_DIR (default data/charts: services/repoPaths.ts, the folder the API's
- * chart catalog reads too), HRC_UI_REMOTE, HRC_UI_DOC_CACHE_MAX, HRC_UI_SMALL_BODY_BYTES, HRC_UI_SMALL_DOC_MAX,
+ * chart catalog reads too), HRC_UI_REMOTE, HRC_UI_DOC_CACHE_MAX, HRC_UI_DOC_CACHE_GB (this server only),
+ * HRC_UI_SMALL_BODY_BYTES, HRC_UI_SMALL_DOC_MAX,
  * HRC_UI_DISK_CACHE_GB, HRC_UI_PINNED_PREFIXES — the same names and defaults as server.py — and HRC_UI_INDEX_SYNC_MIN
  * (30: how often the index is refreshed from R2; 0 = never).
  */
@@ -50,6 +52,10 @@ export function chartServerFetch(store: ChartStore, build?: ChartServerBuild) {
         case "/": case "/index.html": return new Response("chart server (TypeScript)\n", { headers: HEADERS });
         case "/api/progress": return json({});
         case "/api/solutions": return json(store.solutions());
+        case "/api/cache": {
+          const m = process.memoryUsage();
+          return json({ ...store.cacheReport(), process: { rssBytes: m.rss, heapUsedBytes: m.heapUsed } });
+        }
         case "/api/preflop/node": return json(await store.node(url.searchParams));
         default: return json({ error: "not found" }, 404);
       }
@@ -83,7 +89,7 @@ if (import.meta.main) {
   Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: chartServerFetch(store, build), idleTimeout: 255 });
   const n = store.solutions().length - 1;
   console.log(`chart server (TypeScript) -> http://127.0.0.1:${PORT}  ${n} charts indexed in ${DIR} ` +
-              `(loaded lazily, ${opts.bigMax} big + ${opts.smallMax} small cached; bodies from ${opts.remote || "nowhere"})`);
+              `(loaded lazily, ${opts.bigMax} big (at most ${opts.bigBytesMax / 2 ** 30} GB of JSON) + ${opts.smallMax} small cached; bodies from ${opts.remote || "nowhere"})`);
   // the index follows R2: charts the factory lands after this build are listed without a release (chartStore.syncIndex).
   // HRC_UI_INDEX_SYNC_MIN=0 turns it off; the first pass waits a little so a cold start answers first.
   const syncMin = Number(process.env.HRC_UI_INDEX_SYNC_MIN ?? 30);

@@ -23,7 +23,7 @@ import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
 import { fxRate, toAudCents } from "../services/fx";
 import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat, SIX_MAX_STRATEGY_ID } from "../services/strategies";
-import { getCatalog } from "../services/chartCatalog";
+import { getCatalog, sweepSidecars } from "../services/chartCatalog";
 import { chartSetup, type ChartSetup } from "../services/chartSetup";
 import { gtowCdp } from "../services/gtowCdp";
 import { gtowApi, DEFAULT_TREE_RAKE, type CustomTreeInput } from "../services/gtowApi";
@@ -1296,9 +1296,10 @@ app.post("/open-gtow", async (c) => {
 });
 
 /** The chart catalog + which charts recently answered live spots. */
-app.get("/catalog", (c) => {
-  const force = c.req.query("refresh") === "1";
-  const cat = getCatalog(force);
+app.get("/catalog", async (c) => {
+  // ?refresh=1 re-reads every sidecar with async reads (chartCatalog.sweepSidecars), not ~2,700 sync reads on the loop
+  if (c.req.query("refresh") === "1") await sweepSidecars();
+  const cat = getCatalog();
   return c.json({ ok: true, ...cat, recent: answerLog.recentCharts(30) });
 });
 

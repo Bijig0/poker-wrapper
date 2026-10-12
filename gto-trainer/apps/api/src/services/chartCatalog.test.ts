@@ -90,3 +90,58 @@ describe("describeChart", () => {
       .toBe("Open-limp from any position");
   });
 });
+
+/**
+ * The sidecars are read once (2026-10-12): a rebuild re-read all ~2,700 of them and froze the API 10-52 s on a machine
+ * that was paging. SOLUTIONS_DIR is bound at import, so this runs in its own process against a temp folder.
+ */
+describe("sidecar reads", () => {
+  test("parsed once; new names at once; rewrites at the sweep; unreadable retried; deleted dropped; bodies from the listing", () => {
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "catalog-"));
+    try {
+      const dir = join(root, "charts");
+      mkdirSync(dir);
+      const script = join(root, "run.ts");
+      writeFileSync(script, `
+        import { writeFileSync, unlinkSync } from "node:fs";
+        import { join } from "node:path";
+        const dir = process.env.CHART_SOLUTIONS_DIR!;
+        const side = (id: string, label: string) => writeFileSync(join(dir, id + ".meta.json"), JSON.stringify({ id, label }));
+        const { getCatalog, sweepSidecars, __expireCatalog } = await import(${JSON.stringify(join(import.meta.dir, "chartCatalog.ts"))});
+        const hrc = (force = false) => { if (!force) __expireCatalog(); return getCatalog(force).entries
+          .filter((e: any) => e.source === "hrc").map((e: any) => e.id + ":" + e.label + ":" + e.cachedLocally).sort(); };
+        const out: Record<string, string[]> = {};
+        // a sweep over a folder with no sidecars returns before its first await - it must not latch (2026-10-13 review)
+        await sweepSidecars();
+        side("ign200_6max_D100_o2_5", "one"); writeFileSync(join(dir, "ign200_6max_D100_o2_5.json.gz"), "x");
+        side("ign200_6max_D100_o2", "two");
+        writeFileSync(join(dir, "ign200_6max_D125_o2_5.meta.json"), "{ half-writ");
+        out.first = hrc();
+        side("ign200_6max_D100_o2", "two-rewritten");          // in place: a plain rebuild does not read it again
+        side("ign200_6max_D125_o2_5", "fixed");                // was unreadable: read again at the next rebuild
+        side("ign200_6max_D125_o2", "three");                  // new name: read at the next rebuild
+        out.plain = hrc();
+        await sweepSidecars();                                 // the second sweep runs (no latch) and sees the rewrite
+        out.swept = hrc();
+        unlinkSync(join(dir, "ign200_6max_D125_o2.meta.json"));
+        out.deleted = hrc();
+        console.log(JSON.stringify(out));
+      `);
+      const r = Bun.spawnSync([process.execPath, script], { env: { ...process.env, CHART_SOLUTIONS_DIR: dir } });
+      expect({ code: r.exitCode, stderr: r.stderr.toString().trim() }).toEqual({ code: 0, stderr: "" });
+      const out = JSON.parse(r.stdout.toString().trim().split("\n").pop()!);
+      expect(out.first).toEqual(["ign200_6max_D100_o2:two:false", "ign200_6max_D100_o2_5:one:true"]);
+      expect(out.plain).toEqual(["ign200_6max_D100_o2:two:false", "ign200_6max_D100_o2_5:one:true",
+        "ign200_6max_D125_o2:three:false", "ign200_6max_D125_o2_5:fixed:false"]);
+      expect(out.swept).toEqual(["ign200_6max_D100_o2:two-rewritten:false", "ign200_6max_D100_o2_5:one:true",
+        "ign200_6max_D125_o2:three:false", "ign200_6max_D125_o2_5:fixed:false"]);
+      expect(out.deleted).toEqual(["ign200_6max_D100_o2:two-rewritten:false", "ign200_6max_D100_o2_5:one:true",
+        "ign200_6max_D125_o2_5:fixed:false"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
