@@ -762,6 +762,15 @@ const relocating = new Map<string, Promise<{ solId: string } | { error: string }
 const solOfKey = new Map<string, string>();
 const lockedOfKey = new Map<string, string>();
 const bound = (m: Map<string, unknown>, max = 400) => { if (m.size > max) m.delete(m.keys().next().value as string); };
+/** The solve a solution id answers with now: `moved` followed to its END (2026-10-13). A solve re-posted twice — A hung,
+ *  its replacement B hung too, B re-posted as C — was read one hop down (B), so a new read of A polled the account that
+ *  had just hung, for a full POLL_HANG_MS, before relocate() handed it C. (Every replacement is a fresh id, so the chain
+ *  has no cycle; the hop cap is a backstop.) */
+const latest = (solId: string): string => {
+  let id = solId;
+  for (let hop = 0; hop < 64; hop++) { const next = moved.get(id); if (!next) break; id = next; }
+  return id;
+};
 /** A cold preflop tree's cost — tree + solution POSTs + the first node (live slow-answer lines: ~6 s median; 10 s here is
  *  conservative), plus ~3 s per lock in the chain (GTOW_PREFLOP_REPOST_MS). A hang with less than this left polls on. */
 const preflopRepostMs = (solId: string): number => {
@@ -772,22 +781,27 @@ const preflopRepostMs = (solId: string): number => {
 const timedOutErr = (e: unknown) => /timed? ?out|abort/i.test(e instanceof Error ? `${e.name} ${e.message}` : String(e));
 
 /**
- * RE-POST A SOLVE ON ANOTHER ACCOUNT (its tree, its solution and its locks exactly as first posted), the account it hung
- * or walled on left out; once per solve, every read that needs it joins. The replacement answers for the old id
- * (`moved`) and stores its nodes under the old id's cache key. An error when it could not be done (nothing known to
- * re-post, no other account): the read goes on as before.
+ * RE-POST A SOLVE ON ANOTHER ACCOUNT (its tree, its solution and its locks exactly as first posted), every account in
+ * `avoid` left out — the one it hung or walled on and (2026-10-13) every other account the asking read has hung or
+ * walled on; once per solve, every read that needs it joins (on the avoid list of the read that started it). The
+ * replacement answers for the old id (`moved`) and stores its nodes under the old id's cache key. An error when it could
+ * not be done (nothing known to re-post, no other account): the read goes on as before.
  */
-function relocate(solId: string, from: GtowSessionId | null, why: string): Promise<{ solId: string } | { error: string }> {
-  const have = moved.get(solId);
-  if (have) return Promise.resolve({ solId: have });
+function relocate(solId: string, from: GtowSessionId | null, avoid: ReadonlySet<GtowSessionId>, why: string): Promise<{ solId: string } | { error: string }> {
+  if (moved.has(solId)) return Promise.resolve({ solId: latest(solId) });
   const pending = relocating.get(solId);
   if (pending) return pending;
   const rec = posted.get(solId);
   if (!rec) return Promise.resolve({ error: "the tree this solve was posted as is not known in this process — nothing to re-post" });
+  const skip = new Set(avoid);
+  if (from) skip.add(from);
   const t0 = Date.now();
   const p = (async (): Promise<{ solId: string } | { error: string }> => {
     tstep("GTO Wizard account busy → re-posting to another account");
-    const made = await postPreflopSolution(rec.body, rec.need, { actions: "", board: "" }, rec.locks, { avoid: from ? [from] : [] });
+    // a throw (a reply that is not JSON) is this re-post's failure, said as one: the read may have ended already
+    // (relocateIfTime), and its own failure would otherwise leave no line at all
+    const made = await postPreflopSolution(rec.body, rec.need, { actions: "", board: "" }, rec.locks, { avoid: [...skip] })
+      .catch((e: unknown): { error: string } => ({ error: `the re-post threw: ${e instanceof Error ? e.message : e}` }));
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     if ("error" in made) {
       tstepDetail("no other account free — waiting on the first");
@@ -807,18 +821,65 @@ function relocate(solId: string, from: GtowSessionId | null, why: string): Promi
   return p;
 }
 
-/** relocate() when a cold tree fits what is left of the read; else say so and leave the read to poll on. */
-async function relocateIfTime(solId: string, from: GtowSessionId | null, leftMs: number, why: string): Promise<{ solId: string; owner: GtowSessionId | null } | null> {
-  const need = preflopRepostMs(solId);
+/**
+ * relocate() when a cold tree fits what is left of the read and an account the read has not hung or walled on (`avoid`)
+ * can take it. Returns the replacement to poll; "late" when the re-post did not land within the read's clock (callers
+ * test for it BEFORE the truthy replacement); null when none was made (too little time, nobody left, refused) — the read
+ * polls on (on the 429 path it ends, the memo forgotten).
+ *
+ * THE PING-PONG (2026-10-13, gtowAiPreflop.failover.test "every account hangs"): a re-post left out only the account it
+ * hung on THIS time, so when the replacement hung too, the next re-post went straight back to the account that hung
+ * first — routing blocks an account for a status (noteFailure), never for a hang — even with a third account free. Now
+ * every account the read has hung or walled on is left out, and when that leaves nobody the read polls on where it is.
+ * `fallback` (the 429 path: only the accounts that WALLED the read) is what a re-post leaves out instead when `avoid`
+ * leaves nobody — a wall will not lift while the read waits, so polling on is no use there, and an account that only
+ * hung may answer now (reviewed 2026-10-13: without it a hang then a wall ended the read at once where it used to answer).
+ *
+ * THE READ DOES NOT WAIT PAST ITS OWN CLOCK FOR THE RE-POST (2026-10-13): its POSTs get 20 s each, so a re-post onto a
+ * slow account could hold the read well past its end. The read ends on time ("late"); the re-post goes on without it,
+ * and when it lands `moved` hands the replacement to the next ask.
+ */
+async function relocateIfTime(solId: string, from: GtowSessionId | null, avoid: ReadonlySet<GtowSessionId>, leftMs: number,
+    why: string, fallback?: ReadonlySet<GtowSessionId>): Promise<{ solId: string; owner: GtowSessionId | null } | "late" | null> {
   const head = `[gtow-hung] ${from ?? "?"} preflop solution ${solId.slice(0, 8)}: ${why}`;
-  if (leftMs < need) {
+  // A SOLVE ANOTHER READ HAS ALREADY RE-POSTED is followed whatever is left of this read: that costs no request
+  if (moved.has(solId)) {
+    const to = latest(solId);
+    console.log(`${head} — already re-posted as ${to.slice(0, 8)} on ${owners.get(to) ?? "?"} (another read): polled there`);
+    return { solId: to, owner: owners.get(to) ?? null };
+  }
+  // …and one being re-posted is joined (it posts nothing new); only STARTING one needs the time and an account left
+  const joining = relocating.has(solId);
+  const need = preflopRepostMs(solId);
+  if (!joining && leftMs < need) {
     console.log(`${head} — too little left to re-post (a cold preflop tree${posted.get(solId)?.locks.length ? " and its locks" : ""} needs ~${(need / 1000).toFixed(0)} s): polling on`);
     tmark("GTO Wizard poll hung", `${why} — polling on`);
     tstepDetail("poll hung — re-asking");
     return null;
   }
-  console.log(`${head} — re-posted on another account (${(leftMs / 1000).toFixed(1)} s left, a cold tree needs ~${(need / 1000).toFixed(0)} s)`);
-  const r = await relocate(solId, from, why);
+  const rec = posted.get(solId);
+  let skip = avoid;
+  if (!joining && rec && !preflopCandidates(rec.need, avoid).length) {
+    if (fallback && preflopCandidates(rec.need, fallback).length) {
+      console.log(`${head} — every account that could take it has hung or walled on this read (${[...avoid].join(", ")}); a wall does not lift, so the re-post goes to one that only hung`);
+      skip = fallback;
+    } else {
+      console.log(`${head} — every account that could take it has hung or walled on this read (${[...avoid].join(", ")}): polling on`);
+      tmark("GTO Wizard poll hung", `${why} — no other account left, polling on`);
+      tstepDetail("poll hung — re-asking");
+      return null;
+    }
+  }
+  console.log(`${head} — ${joining ? "joining the re-post another read started" : `re-posted on another account (${(leftMs / 1000).toFixed(1)} s left, a cold tree needs ~${(need / 1000).toFixed(0)} s` +
+    `${skip.size > 1 ? `; ${[...skip].join(", ")} left out` : ""})`}`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clock = new Promise<null>((res) => { timer = setTimeout(() => res(null), Math.max(0, leftMs)); });
+  const r = await Promise.race([relocate(solId, from, skip, why), clock]).finally(() => clearTimeout(timer));
+  if (!r) {
+    console.log(`${head} — the re-post did not land in the ${(Math.max(0, leftMs) / 1000).toFixed(1)} s left: the read ends on its clock, the re-post goes on for the next ask`);
+    tmark("GTO Wizard preflop re-post late", `not landed in the ${(Math.max(0, leftMs) / 1000).toFixed(1)} s left on the read`);
+    return "late";
+  }
   if ("error" in r) return null;
   return { solId: r.solId, owner: owners.get(r.solId) ?? null };
 }
@@ -900,16 +961,20 @@ async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Prom
   return p;
 }
 
+/** The accounts a preflop tree may be POSTed to, best first, `avoid` left out. A recorded wall is a guess; when it leaves
+ *  nothing routable, the walled sessions are tried anyway rather than refusing the spot (see gtowApi). */
+function preflopCandidates(need: GtowNeed, avoid: ReadonlySet<GtowSessionId>): GtowSessionId[] {
+  const ids = gtowSessions.route(need).filter((id) => !avoid.has(id));
+  return ids.length ? ids : gtowSessions.routeIgnoringBlocks(need).filter((id) => !avoid.has(id));
+}
+
 /** POST a preflop tree and its solution on the first account routing allows (the network half of ensureSolution, and
  *  what materialising a stored tree sends — the body exactly as stored). Records the owner. */
 async function postPreflopSolution(body: any, need: GtowNeed, solution: { actions: string; board: string }, locks: readonly any[] = [],
     /** `avoid`: the account(s) a re-post must leave out (relocate) */
     opts: { avoid?: readonly GtowSessionId[] } = {}): Promise<{ solId: string } | { error: string }> {
   const avoid = new Set(opts.avoid ?? []);
-  // A recorded wall is a guess; when it leaves nothing routable, try the
-  // walled sessions anyway rather than refusing the spot (see gtowApi).
-  const ids = gtowSessions.route(need).filter((id) => !avoid.has(id));
-  const candidates = ids.length ? ids : gtowSessions.routeIgnoringBlocks(need).filter((id) => !avoid.has(id));
+  const candidates = preflopCandidates(need, avoid);
   if (!candidates.length) {
     if (avoid.size) return { error: `no other GTO Wizard account can take this preflop tree (${[...avoid].join(", ")} left out)` };
     return { error: need.multiway
@@ -1057,7 +1122,7 @@ export async function lockedSolution(parentSolId: string, body: unknown, locks: 
       if ("error" in m) return m;
       parent = m.solId;
     }
-    parent = moved.get(parent) ?? parent;   // a parent re-posted elsewhere (relocate): the locks go on its replacement
+    parent = latest(parent);   // a parent re-posted elsewhere (relocate): the locks go on its (last) replacement
     const owner = owners.get(parent);
     if (!owner) return { error: "node lock: the account that owns the parent solution is not known" };
     const token = await gtowSessions.tokenFor(owner);
@@ -1239,11 +1304,22 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
   let authRound: AuthRound | null = null;
   // A SOLVE WITH NO RECORDED OWNER IS PINNED TO ONE ACCOUNT FOR THE READ (2026-10-08): with least-loaded routing the
   // "best" account can change between two polls, and another account's token 404s the solve
-  // A SOLVE RE-POSTED ELSEWHERE answers for the old id (relocate): polled there, stored under the old id's key
-  real = moved.get(real) ?? real;
+  // A SOLVE RE-POSTED ELSEWHERE answers for the old id (relocate): polled at its last replacement, stored under the old
+  // id's key
+  real = latest(real);
   let owner = owners.get(real) ?? (await gtowSessions.bestToken({ preflop: true }))?.id ?? null;
   const limit = nodeTimeoutMs();
   const hangMs = pollHangMs();
+  // EVERY ACCOUNT THIS READ HAS HUNG OR WALLED ON (2026-10-13): a re-post leaves them all out (relocateIfTime); `walls`,
+  // the ones that walled it (429), are left out even when that leaves nobody but an account that only hung
+  const shunned = new Set<GtowSessionId>();
+  const walls = new Set<GtowSessionId>();
+  // THE WAIT BEFORE THE NEXT POLL, CLIPPED TO THE READ'S CLOCK (2026-10-13): a full POLL_MS begun just before the end
+  // carried the read up to 1.2 s past it, with no poll after the wait to show for it
+  const pause = async () => {
+    const ms = Math.min(POLL_MS, limit - (Date.now() - t0));
+    if (ms > 0) await new Promise((res) => setTimeout(res, ms));
+  };
   while (Date.now() - t0 < limit) {
     if (stop?.()) return { error: "read abandoned — the tree names this line differently" };
     const token = owner ? await gtowSessions.tokenFor(owner) : null;
@@ -1284,12 +1360,14 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
       // solve — tree, solution, locks — is re-posted elsewhere (once, every read that hangs on it joins) and this read
       // goes on there; a speculative (once) read triggers it too, so the real read behind it finds the replacement.
       if (reqMs >= hangMs && timedOutErr(e)) {
+        if (owner) shunned.add(owner);
         const left = limit - (Date.now() - t0);
-        const via = await relocateIfTime(real, owner, left, `poll of [${line || "root"}] hung ${(hangMs / 1000).toFixed(1)} s, ${(Math.max(0, left) / 1000).toFixed(1)} s left on the read`);
+        const via = await relocateIfTime(real, owner, shunned, left, `poll of [${line || "root"}] hung ${(hangMs / 1000).toFixed(1)} s, ${(Math.max(0, left) / 1000).toFixed(1)} s left on the read`);
+        if (via === "late") break;   // the read's clock ran out on the re-post: it ends as a read polled to its end does
         if (via) { real = via.solId; owner = via.owner; continue; }
       }
       if (once) return { error: lastFail };
-      await new Promise((res) => setTimeout(res, POLL_MS));
+      await pause();
       continue;
     }
     // …and the other two rules: tell the pool about a wall it hit, and do not sit out a 429 quota wall
@@ -1334,15 +1412,19 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
         // account when a cold tree fits what is left of the read; else this read ends and the memos that hand out this
         // solve are forgotten, so the next ask posts the tree afresh — through routing, which leaves the walled account
         // out (the memo used to keep every re-ask of the same tree on it)
+        if (owner) { shunned.add(owner); walls.add(owner); }
         const left = limit - (Date.now() - t0);
-        const via = await relocateIfTime(real, owner, left, `${lastFail} — a request wall`);
+        const via = await relocateIfTime(real, owner, shunned, left, `${lastFail} — a request wall`, walls);
+        // the clock ran out on the re-post: it ends as a read polled to its end does, the memo KEPT — the re-post lands
+        // for the next ask (forgetting it would post a third tree beside the one landing)
+        if (via === "late") break;
         if (via) { real = via.solId; owner = via.owner; continue; }
         forgetSolution(real, solId);
         return { error: lastFail };
       }
     } else if (r.status === 204 || r.status === 404) notSolved++;
     if (once) return { error: r.status === 404 ? "no such node (one look)" : lastFail || "the cloud did not return the node in time" };
-    await new Promise((res) => setTimeout(res, POLL_MS));
+    await pause();
   }
   // ("did not return the node in time" is what answerLog's failKind reads)
   return { error: `the cloud did not return the node in time — ${Math.round((Date.now() - t0) / 1000)} s, ` +
