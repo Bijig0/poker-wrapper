@@ -58,7 +58,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { menuPotMode, threeWaySizes } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { repostReason, solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -3109,7 +3109,7 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
     warning: note(r.note), approx: approx || !!rakeNote || !!r.heroSelfLock || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...preflopAlsoOf(r) }),
   });
   const ai = await solvePreflopGtowAi(hand, heroPos, why);
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
@@ -4710,7 +4710,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
     warning: r.note, approx: approx || !!r.heroSelfLock || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...preflopAlsoOf(r) }),
     ...(gated ? { treeGap: gated } : {}),
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
@@ -4763,6 +4763,12 @@ function chartMissWords(six: FastSolveResult | null): string {
 
 /** A preflop reason beside the answer's own (chainPath.preflopAlso), the verdict re-classified. A result with no path is
  *  returned as it is. */
+/** The extra preflop path reasons an AI preflop outcome carries: hero's self-lock, and a solve re-posted mid-read
+ *  (gtowAiPreflop.repostReason, 2026-10-13) — {} when there are none, so a path is built exactly as before. */
+function preflopAlsoOf(r: Extract<AiPreflopOutcome, { ok: true }>): { preflopAlso?: PathReason[] } {
+  const also = [...(r.heroSelfLock ? heroSelfLockReasons(r.heroSelfLock, r.heroClass) : []), ...[repostReason(r.solId)].filter((x): x is PathReason => !!x)];
+  return also.length ? { preflopAlso: also } : {};
+}
 function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResult {
   if (!r.path) return r;
   const { v: _v, verdict: _verdict, reasons: _reasons, ...rest } = r.path;
@@ -4824,7 +4830,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision, warning: r.note,
     approx: r.shape.deadSb || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:pool-lock", how: "by-design", code: "preflop:pool-limp-lock",
-      why: `the ${t.target.pos} (${t.target.stack}bb) limped; no pool-locked chart covers him — his limp locked to ${t.target.key} on the exact tree`.slice(0, 200) } }),
+      why: `the ${t.target.pos} (${t.target.stack}bb) limped; no pool-locked chart covers him — his limp locked to ${t.target.key} on the exact tree`.slice(0, 200) }, ...preflopAlsoOf(r) }),
   };
 }
 
@@ -4868,7 +4874,7 @@ async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, d
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision, warning: r.note,
     approx: r.shape.deadSb || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:coldcall-lock", how: "by-design", code: "preflop:pool-coldcall-lock",
-      why: `the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet at ~0% on the exact tree — his call locked to ${t.target.key}`.slice(0, 200) } }),
+      why: `the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet at ~0% on the exact tree — his call locked to ${t.target.key}`.slice(0, 200) }, ...preflopAlsoOf(r) }),
   };
 }
 

@@ -77,6 +77,8 @@ interface Fake {
   walled: Set<string>;
   /** accounts whose tree POST fails (the request throws) */
   treeFails: Set<string>;
+  /** accounts whose tree POST never replies (its own AbortSignal ends it) */
+  treeHang: Set<string>;
   /** how many lock POSTs on an account still fail before one lands */
   lockFails: Map<string, number>;
   /** solution ids minted per account */
@@ -84,7 +86,7 @@ interface Fake {
 }
 const NODE = { action_solutions: [{ action: { code: "R2.5", type: "RAISE", betsize: "2.5" }, strategy: new Array(1326).fill(1) }] };
 function fakeGtow(): Fake {
-  const f: Fake = { seen: [], hang: new Set(), walled: new Set(), treeFails: new Set(), lockFails: new Map(), ownerOf: new Map() };
+  const f: Fake = { seen: [], hang: new Set(), walled: new Set(), treeFails: new Set(), treeHang: new Set(), lockFails: new Map(), ownerOf: new Map() };
   let seq = 0;
   const timeoutErr = () => Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
   /** a poll that never replies: rejected when its own AbortSignal fires (the read's bound), as a real one is. `hold`
@@ -103,6 +105,7 @@ function fakeGtow(): Fake {
     if (u.pathname.endsWith("/custom-trees/")) {
       f.seen.push({ kind: "tree", acct, body: JSON.parse(init.body) });
       if (f.treeFails.has(acct)) return failed();
+      if (f.treeHang.has(acct)) return timedOut(init?.signal);
       return Response.json({ id: `tree-${++seq}` }, { status: 201 });
     }
     if (u.pathname.endsWith("/custom-solutions/")) {
@@ -278,5 +281,63 @@ describe("a node-lock POST that fails", () => {
     const twice = await P.lockedSolution((parent as { solId: string }).solId, BODY, [{ ...LOCK, action_history: ["F"] }]);
     expect("error" in twice).toBe(true);
     expect((twice as { error: string }).error).toMatch(/failed twice on primary/);
+  }, T);
+});
+
+// ── the 2026-10-13 review of the failover (findings 1-8) ─────────────────────────────────────────────────────────────
+describe("the failover review (2026-10-13)", () => {
+  it("a re-post is bounded by the read's clock: a re-post whose POST hangs gives up, the read ends near its limit", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary");
+    f.treeHang.add("secondary");
+    process.env.GTOW_NODE_TIMEOUT_MS = "6500";
+    const made = await P.poolLockSeams.solve("k-bound", BODY, { preflop: true });
+    const t0 = Date.now();
+    const n = await P.fetchNode((made as { solId: string }).solId, "");
+    const ms = Date.now() - t0;
+    expect("error" in n).toBe(true);
+    // the old code gave the re-post's tree POST its own 20 s: the read ran to ~27 s
+    expect(ms).toBeLessThan(8_000);
+    expect(trees(f)).toEqual(["primary", "secondary"]);
+  }, T);
+
+  it("a re-post never lands back on an account the chain already left", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary");
+    const made = await P.poolLockSeams.solve("k-bounce", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    expect("error" in await P.fetchNode(old, "")).toBe(false);          // A on primary hung → B on secondary
+    f.hang.add("secondary");                                              // now B's account hangs too
+    const n = await P.fetchNode(old, "F");
+    expect("error" in n).toBe(true);                                      // nobody left: polls on, no answer
+    expect(trees(f)).toEqual(["primary", "secondary"]);                   // never a third tree back on primary
+  }, T);
+
+  it("an answer read on a re-posted solve says so (path reason preflop:solve-reposted)", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary");
+    const made = await P.poolLockSeams.solve("k-reason", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    expect(P.repostReason(old)).toBeNull();
+    await P.fetchNode(old, "");
+    const r = P.repostReason(old);
+    expect(r?.code).toBe("preflop:solve-reposted");
+    expect(r?.v).toBe("rebuilt");
+    expect(r?.text).toMatch(/primary → secondary/);
+  }, T);
+
+  it("a lock on a locked parent keeps the parent's locks in the chain a re-post rebuilds", async () => {
+    const f = fakeGtow();
+    const parent = await P.poolLockSeams.solve("k-chain", BODY, { preflop: true });
+    const child = await P.lockedSolution((parent as { solId: string }).solId, BODY, [LOCK]);
+    const grand = await P.lockedSolution((child as { solId: string }).solId, BODY, [{ ...LOCK, action_history: ["F"] }]);
+    expect("solId" in grand).toBe(true);
+    f.hang.add("primary");
+    expect("error" in await P.fetchNode((grand as { solId: string }).solId, "")).toBe(false);
+    // the re-post on secondary: tree, solution, then BOTH locks in order
+    const onSecondary = f.seen.filter((x) => x.acct === "secondary" && x.kind !== "poll");
+    expect(onSecondary.map((x) => x.kind)).toEqual(["tree", "solution", "lock", "lock"]);
+    expect(onSecondary[2]!.body.last_node_lock.action_history).toEqual([]);
+    expect(onSecondary[3]!.body.last_node_lock.action_history).toEqual(["F"]);
   }, T);
 });
