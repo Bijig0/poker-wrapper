@@ -823,8 +823,9 @@ function relocate(solId: string, from: GtowSessionId | null, avoid: ReadonlySet<
 
 /**
  * relocate() when a cold tree fits what is left of the read and an account the read has not hung or walled on (`avoid`)
- * can take it. Returns the replacement to poll; "late" when the re-post did not land within the read's clock; null when
- * none was made (too little time, nobody left, refused) — the read polls on.
+ * can take it. Returns the replacement to poll; "late" when the re-post did not land within the read's clock (callers
+ * test for it BEFORE the truthy replacement); null when none was made (too little time, nobody left, refused) — the read
+ * polls on (on the 429 path it ends, the memo forgotten).
  *
  * THE PING-PONG (2026-10-13, gtowAiPreflop.failover.test "every account hangs"): a re-post left out only the account it
  * hung on THIS time, so when the replacement hung too, the next re-post went straight back to the account that hung

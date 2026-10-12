@@ -390,23 +390,27 @@ describe("a hang and a wall in one read (independent review 2026-10-13)", () => 
 });
 
 describe("a re-post another read made", () => {
-  it("is followed by a read with too little left to re-post itself (it costs no request)", async () => {
+  it("is followed, to the end of its chain, by a read with too little left to re-post itself (it costs no request)", async () => {
     process.env.GTOW_PREFLOP_REPOST_MS = "100000";   // this read can never start a re-post
+    routeIds = ["primary", "secondary", "ultra-2"];
     const f = fakeGtow();
-    f.hang.add("primary");
+    f.hang.add("primary"); f.hang.add("secondary");
     const made = await P.poolLockSeams.solve("k-follow", BODY, { preflop: true });
     const old = (made as { solId: string }).solId;
     const t0 = Date.now();
     const first = P.fetchNode(old, "");               // hangs at 0.2 s, polls on; its next poll hangs again at ~1.6 s
     await sleep(500);
-    process.env.GTOW_PREFLOP_REPOST_MS = "500";        // a second read can, and does
+    process.env.GTOW_PREFLOP_REPOST_MS = "500";        // a second read can, and does — twice: primary → secondary → ultra-2
     expect("error" in (await P.fetchNode(old, "F"))).toBe(false);
     process.env.GTOW_PREFLOP_REPOST_MS = "100000";
     const r = await first;
-    // the first read follows the replacement at its next hang — it used to poll the hung account to its 4 s end
+    // the first read follows the chain at its next hang, to its END (ultra-2: secondary is never polled by it) — it used
+    // to poll the hung account to its 4 s end
     expect("error" in r).toBe(false);
     expect(Date.now() - t0).toBeLessThan(3_000);
-    expect(trees(f)).toEqual(["primary", "secondary"]);
+    expect(trees(f)).toEqual(["primary", "secondary", "ultra-2"]);
+    expect(polls(f, "secondary")).toBe(1);
+    expect(polls(f, "ultra-2")).toBe(2);
   }, T);
 
   it("is joined while still in flight by a read with too little left to start one", async () => {
@@ -459,7 +463,8 @@ describe("the read's clock", () => {
     const n = await P.fetchNode((made as { solId: string }).solId, "");
     const took = Date.now() - t0;
     expect("error" in n).toBe(true);
-    expect((n as { error: string }).error).toMatch(/did not return the node in time — \d+ s, 2 poll\(s\) answered "not solved yet"/);
+    // (2 polls; 1 if the machine stalls the second past the clock — the time bounds below are what this test is about)
+    expect((n as { error: string }).error).toMatch(/did not return the node in time — \d+ s, [12] poll\(s\) answered "not solved yet"/);
     // polls at 0 and 1.2 s, then the wait is cut to the 0.3 s left — it used to wait a full 1.2 s (ending at ~2.4 s)
     expect(took).toBeGreaterThanOrEqual(1_400);
     expect(took).toBeLessThan(1_500 + 500);
