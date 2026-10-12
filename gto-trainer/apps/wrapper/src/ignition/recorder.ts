@@ -1,7 +1,8 @@
 /**
  * THE DEBUG RECORDER — each tick's exact screenshot, the raw DOM capture and what the reader made of it
  * (debug/<session>/f00001.jpg, dom.jsonl, log.jsonl). The ground truth for chasing a misread, and the input the
- * golden replays are built from. Recordings are scratch, not archives: the oldest are pruned past
+ * golden replays are built from. Recordings are scratch, not archives: only the last DEBUG_KEEP_SESSIONS SESSIONS are
+ * kept (Brady, 2026-10-09: "deletes the recordings for the 6th last session") and the oldest are pruned past
  * DEBUG_BUDGET_MB (never the newest two, never one with a note).
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -13,6 +14,8 @@ import { log } from "../feed";
 import { fmtFixed, pyJsonDumps, pyRound } from "../py";
 import { S } from "../state";
 
+const SESSION_FILE = "session.txt";
+
 export function setDebug(on: boolean): Record<string, any> {
   if (on && !S.dbg.on) {
     pruneDebug();
@@ -20,6 +23,13 @@ export function setDebug(on: boolean): Record<string, any> {
     const name = sid && !existsSync(join(DEBUG_DIR(), sid)) ? sid : strftime("session_%Y%m%d_%H%M%S");
     const d = join(DEBUG_DIR(), name);
     mkdirSync(d, { recursive: true });
+    // which session this folder belongs to: every table of a session records its own folder, and the count limit
+    // (pruneDebug) keeps whole sessions, not folders
+    if (sid) {
+      try {
+        writeFileSync(join(d, SESSION_FILE), sid, "utf8");
+      } catch {}
+    }
     S.dbg = { on: true, dir: d, seq: 0 };
     log(`[debug] recording to ${d}`);
   } else if (!on && S.dbg.on) {
@@ -48,11 +58,54 @@ function dirSize(d: string): number {
   return n;
 }
 
+/** The folder's session (session.txt; a folder from before 2026-10-13 is its own session). */
+function sessionOf(base: string, d: string): string {
+  try {
+    const f = join(base, d, SESSION_FILE);
+    if (existsSync(f)) return readFileSync(f, "utf8").trim() || d;
+  } catch {}
+  return d;
+}
+
+/** A folder written to this recently is being recorded right now (another table, the rig beside a live session). */
+const ACTIVE_S = 30 * 60;
+
+/** THE COUNT LIMIT (Brady, 2026-10-09): keep the newest DEBUG_KEEP_SESSIONS sessions' recordings INCLUDING the
+ *  session about to record (S.session.id), so the 6th-last session's folders go — every table's. Never a folder with
+ *  a note, nor one being written to (ACTIVE_S). 0 = no count limit. Returns the folders it removed. */
+export function pruneSessions(base: string, sess: string[], keep: number, current: string | null): string[] {
+  if (!(keep > 0)) return [];
+  // sessions, newest first by their newest folder (folder names are session_<YYYYMMDD_HHMMSS>)
+  const newest = new Map<string, string>();
+  for (const d of sess) {
+    const k = sessionOf(base, d);
+    if (!newest.has(k) || newest.get(k)! < d) newest.set(k, d);
+  }
+  const order = [...newest.keys()].sort((a, b) => (newest.get(a)! < newest.get(b)! ? 1 : -1));
+  const kept = new Set(current ? [current, ...order.filter((k) => k !== current).slice(0, keep - 1)] : order.slice(0, keep));
+  const removed: string[] = [];
+  for (const d of sess) {
+    const k = sessionOf(base, d);
+    if (kept.has(k)) continue;
+    const p = join(base, d);
+    try {
+      if (existsSync(join(p, "note.txt")) || time() - statSync(p).mtimeMs / 1000 < ACTIVE_S) continue;
+      const sz = dirSize(p);
+      rmSync(p, { recursive: true, force: true });
+      removed.push(d);
+      log(`[debug] pruned ${d} (${fmtFixed(sz / 1e6, 0)} MB) — only the last ${keep} sessions' recordings are kept`);
+    } catch {}
+  }
+  return removed;
+}
+
 export function pruneDebug(): void {
   const base = DEBUG_DIR();
   if (!existsSync(base)) return;
-  const sess = readdirSync(base, { withFileTypes: true })
+  let sess = readdirSync(base, { withFileTypes: true })
     .filter((d) => d.isDirectory() && d.name.startsWith("session_")).map((d) => d.name).sort();
+  const gone = new Set(pruneSessions(base, sess, C.DEBUG_KEEP_SESSIONS, S.session.id ?? null));
+  sess = sess.filter((d) => !gone.has(d));
   let total = sess.reduce((s, d) => s + dirSize(join(base, d)), 0);
   const budget = C.DEBUG_BUDGET_MB * 1024 * 1024;
   for (const d of sess.slice(0, -2)) {

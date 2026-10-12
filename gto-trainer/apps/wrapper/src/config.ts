@@ -46,6 +46,7 @@ function load() {
     PROFILE_LEADER: `.profile-leader${rig}`,
     PANEL_TITLE: (rig ? "Poker Wrapper Tool" : "Poker Wrapper") + (slot ? ` ${slot}` : "") + (tag ? ` ${tag}` : ""),
     DEBUG_BUDGET_MB: Number(env.DEBUG_BUDGET_MB || "2000"),
+    DEBUG_KEEP_SESSIONS: Number(env.DEBUG_KEEP_SESSIONS || "5"),   // 0 = no count limit
     NET_PROBE_EVERY_S: Number(env.NET_PROBE_EVERY_S || "45"),
     TOP_UP_PREFOLD: (env.TOP_UP_PREFOLD ?? "1") !== "0",
     TOP_UP_PREFOLD_BUDGET_S: Number(env.TOP_UP_PREFOLD_BUDGET_S || "6.0"),
