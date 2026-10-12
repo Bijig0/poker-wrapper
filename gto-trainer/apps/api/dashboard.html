@@ -9,6 +9,9 @@
 <link rel="stylesheet" href="/dashboard.css">
 <link rel="stylesheet" href="/study/grid169.css">
 <script src="/study/grid169.js"></script>
+<!-- reloads this tab when its code changes on disk, when nobody is using it (static/study/page-reload.js); the token comes
+     from checkBuild's /api/build/all poll below while the tab is visible, and the button stays in #build-alert -->
+<script src="/study/page-reload.js" data-page="dashboard.html" data-feed="1" data-banner="off"></script>
 <script>/* a pinned theme, before first paint (light/dark otherwise follow the OS) */try { const t = localStorage.getItem("sd_theme"); if (t && t !== "auto") document.documentElement.dataset.theme = t; } catch {}</script>
 </head>
 <body>
@@ -5309,9 +5312,17 @@ setInterval(() => {
    for a live session, code that does not build, a wrapper left open across a
    merge — and keeps the button for doing it by hand. /api/build/all answers
    for the whole install; this page itself is read from disk on every request,
-   so an open tab can be older than the page: that is the last line. */
+   so an open tab can be older than the page: that is the last line. Since
+   2026-10-13 the tab also reloads ITSELF (static/study/page-reload.js) — hidden,
+   brought back, or a minute idle, never over typed text or a playing replay —
+   and the button stays for when it is waiting. */
 let BUILD_DISMISSED = "";
 let PAGE_TOKEN = null;
+// what page-reload.js must not reload over: a replay playing, a playthrough walk (its line lives only in this page)
+if (window.PageReload) PageReload.hold(() =>
+  PLAY ? "the hand replay is playing — it reloads once it stops"
+  : PATH.view === "playthrough" && PT.line.length ? "a playthrough walk is open (its line is only in this tab) — reload when you are done"
+  : "");
 
 async function checkBuild() {
   const host = $("build-alert");
@@ -5330,8 +5341,12 @@ async function checkBuild() {
   // the API that served this page: its own line is marked `self` (a verify or factory API is not the line named "api")
   const api = j.services.find((x) => x.self) || j.services.find((x) => x.name === "api");
   const page = api && api.build ? api.build.page : null;
-  if (page && PAGE_TOKEN === null) PAGE_TOKEN = page;
-  const pageOld = !!(page && PAGE_TOKEN && page !== PAGE_TOKEN);
+  // page-reload.js decides (and reloads an idle tab by itself); without it (blocked script) the old compare
+  const PR = window.PageReload;
+  if (page && PR) PR.seen(page);
+  else if (page && PAGE_TOKEN === null) PAGE_TOKEN = page;
+  const pageOld = PR ? PR.changed() : !!(page && PAGE_TOKEN && page !== PAGE_TOKEN);
+  const pageWhy = PR && pageOld && PR.status().why ? ` — ${PR.status().why}` : "";
   const behind = [...j.services.filter((x) => x.up && !x.current), ...(j.supervisors || []).filter((x) => x.pid !== null && !x.current)];
   const sig = behind.map((x) => `${x.name}:${x.build ? x.build.sig : x.text}`).join("|") + (pageOld ? `|page:${page}` : "");
   if ((!behind.length && !pageOld) || sig === BUILD_DISMISSED) { host.innerHTML = ""; return; }
@@ -5346,11 +5361,11 @@ async function checkBuild() {
     <span>⟳ <b>${behind.length ? "Not everything is running the code on disk." : "This page has a newer version."}</b></span>
     <span class="act">
       ${apiButton}
-      ${pageOld ? `<button onclick="location.reload()">Reload page</button>` : ""}
+      ${pageOld ? `<button onclick="window.PageReload ? PageReload.reload() : location.reload()">Reload page</button>` : ""}
       <button class="ghost" title="hide until something else changes" onclick="BUILD_DISMISSED=this.dataset.sig;$('build-alert').innerHTML='';" data-sig="${esc(sig)}">✕</button>
     </span>
     <span class="files" style="flex-basis:100%;white-space:normal">${behind.map((x) => `<span style="display:block"><b>${esc(x.name)}</b> — ${esc(x.text)}</span>`).join("")}${
-      pageOld ? `<span style="display:block"><b>this page</b> — dashboard.html changed on disk after this tab loaded it; reload to get it</span>` : ""}</span></div>`;
+      pageOld ? `<span style="display:block"><b>this page</b> — its code (dashboard.html or a script it loads) changed on disk after this tab loaded it${pageWhy ? esc(pageWhy) : "; reload to get it"}</span>` : ""}</span></div>`;
 }
 
 async function restartApi(btn, held) {

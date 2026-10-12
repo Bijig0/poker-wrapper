@@ -32,6 +32,20 @@ function mtime(p: string): number {
   }
 }
 
+/**
+ * The panel's version: panel.html, and the study API's shared 13x13 grid it pulls in (/study/grid169.js + .css, its
+ * "Ranges at this node") — the newest of the three, so an edit to any of them reloads an open panel (2026-10-13; before,
+ * a grid change reached the panel only when panel.html itself changed). The grid pair is re-read at most every 5 s:
+ * /state?light=1 is the panel's 1 Hz poll.
+ */
+const GRID_FILES = ["grid169.js", "grid169.css"].map((f) => join(import.meta.dir, "..", "..", "api", "static", "study", f));
+let gridSeen = { at: -Infinity, v: 0 };
+function panelVersion(): number {
+  const now = Date.now();
+  if (now - gridSeen.at > 5000) gridSeen = { at: now, v: Math.max(...GRID_FILES.map(mtime)) };
+  return Math.max(mtime(join(C.ROOT, "panel.html")), gridSeen.v);
+}
+
 /** The on-demand keys, added only when they say something (a /state with neither is byte-identical to before — the
  *  reader goldens compare it key by key): `onDemand` while the session's strategy answers only on Solve, and
  *  `solveRequest` while a Solve press still belongs to the decision on screen (relay.currentSolveRequest). */
@@ -78,7 +92,7 @@ async function stateInner(light = false): Promise<Record<string, any>> {
   const [wOpen, wTrigger, wWhy] = topUpWindow();
   const out: Record<string, any> = {
     cdp: await cdp.available(C.CDP_PORT), ignition: null, targets: [],
-    panelVersion: mtime(join(C.ROOT, "panel.html")), setupVersion: mtime(join(C.ROOT, "setup.html")),
+    panelVersion: panelVersion(), setupVersion: mtime(join(C.ROOT, "setup.html")),
     // `load` only when measured (load.ts) — absent otherwise, so the reader goldens stay byte-identical
     health: { issues: S.health.issues, checkedAgo: S.health.at ? pyRound(time() - S.health.at, 1) : null,
               ...(S.health.load ? { load: S.health.load } : {}) },

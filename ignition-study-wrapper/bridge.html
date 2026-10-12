@@ -33,6 +33,9 @@
   .log { font-family: ui-monospace, monospace; font-size: 11.5px; color: #8fa1b3; max-height: 160px; overflow: auto; margin-top: 8px; white-space: pre-wrap; }
   .msg.ok { color: #5ee39a; } .msg.bad { color: #ff8a80; } .msg.warn { color: #ffce56; }
 </style>
+<!-- reloads this window by itself when its code changes on disk and nobody is using it: the study API's page-reload.js
+     (async — a stalled API never holds this page up; without the API it simply does not reload by itself) -->
+<script async src="http://127.0.0.1:2000/study/page-reload.js" data-page="wrapper/bridge.html"></script>
 </head>
 <body>
 <h1 id="h1">Getting to the table</h1>
