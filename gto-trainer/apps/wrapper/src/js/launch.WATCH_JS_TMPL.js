@@ -2,12 +2,25 @@
   const tf = __frame(__SLOT__);
   if (!tf || !tf.contentDocument || !tf.contentWindow) return null;
   const w = tf.contentWindow, d = tf.contentDocument;
-  if (!w.__ignWatch) {
+  // ONE WATCHER PER DOCUMENT, AND IT IS THIS VERSION'S (2026-10-13). It used to
+  // be installed only when missing, so after a wrapper relaunch the page went on
+  // running the OLD watcher until the table's frame reloaded -- and one put in
+  // while the frame was still loading watched the blank document the load then
+  // replaced (the Window stays, as for the draw heartbeat in TABLE_JS). A
+  // watcher of another version or document -- or of none: before this date the
+  // global WAS the bare setInterval id -- is stopped and replaced (src/js.ts).
+  // Its undrained events stay (the same buffer); on the same document the
+  // badges already on the seats count as reported, so a swap neither loses nor
+  // repeats an action. Ours keeps a handle: {version, doc, timer, stop()}. Its
+  // timer is the top page's (this snippet runs there), as the old one's was.
+  const VERSION = __VERSION__;
+  const old = w.__ignWatch;
+  if (!old || old.version !== VERSION || old.doc !== d) {
     // Full match only: the seat stat chips ("ALL-IN · 0%", "CALL · 100%") are
     // permanent fixtures, not actions, and a prefix match swallowed them.
     const BADGE = /^(FOLD|CHECK|CALL|BET|RAISE|ALL[- ]?IN)$/i;
     const MONEY = /^[\d,]+(\.\d+)?(\s*BB)?$/;
-    const buf = [];
+    const buf = Array.isArray(w.__ignBuf) ? w.__ignBuf : [];
     w.__ignBuf = buf;
     // Real action badges animate through low opacities (measured peak 0.31 on
     // some), so only TRUE ghosts (opacity 0 template nodes) may be rejected.
@@ -55,7 +68,23 @@
       return out;
     };
     let prev = {}, lastEmit = {};
-    w.__ignWatch = setInterval(() => {
+    if (old) {
+      try {
+        if (typeof old.stop === 'function') old.stop();
+        else if (typeof old === 'number') clearInterval(old);
+      } catch (e) {}
+      if (old.doc === d) {
+        try { prev = snap(); } catch (e) {}
+      }
+    }
+    const me = {version: VERSION, doc: d, timer: 0, stopped: false,
+                stop: () => { me.stopped = true; clearInterval(me.timer); }};
+    w.__ignWatch = me;
+    me.timer = setInterval(() => {
+      // replaced, our document replaced, or our frame gone: stop for good
+      let live = false;
+      try { live = !me.stopped && w.__ignWatch === me && w.document === d && tf.isConnected !== false; } catch (e) {}
+      if (!live) { me.stop(); return; }
       try {
         const cur = snap(), now = Date.now();
         for (const seat of Object.keys(cur)) {

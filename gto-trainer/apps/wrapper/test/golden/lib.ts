@@ -62,8 +62,11 @@ export function normPy(x: unknown): unknown {
  * table-frame.test.ts).
  */
 const PAGE_JS_REVISIONS: { old: string; new: string }[] = JSON.parse(readFileSync(join(import.meta.dir, "page-js-revisions.json"), "utf8"));
+/** A snippet's version as js() writes it in (src/js.ts withVersion): a hash of the file, so it reads as the token. */
+const SNIPPET_VERSION = /"[A-Za-z]+\.[A-Z_]+@[0-9a-f]{12}"/g;
 export function asRecordedFrame(q: string): string {
   if (typeof q !== "string" || !q.includes("__frame")) return q;
+  q = q.replace(SNIPPET_VERSION, "__VERSION__");
   for (const r of [...PAGE_JS_REVISIONS].reverse()) q = q.split(r.new).join(r.old);
   return q.replace(/__frame\(\{"tag":"(\d+)"\}\)/g, "__frame($1)").replace(/const SLOT = \{"tag":"(\d+)"\};/g, "const SLOT = $1;");
 }
