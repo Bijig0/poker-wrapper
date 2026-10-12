@@ -1,3 +1,4 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 import { LoadedCode, bootCheck, uncommittedOf, type CodeStatus } from "./loadedCode";
 import { livePort } from "./ports";
 import { MIN_UPTIME_MS, SUPERVISOR_REPLACE_EXIT, type SupervisorWatch, type WatchCheck, type WatchState } from "./supervisorRestart";
