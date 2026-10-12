@@ -1,7 +1,6 @@
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, utimesSync,
-  writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileStamp, FollowedSqlite, sameStamp, type FileStamp } from "../services/fileStamp";
 
 /**
  * The HRC chart store behind the TypeScript chart server (chartServer.ts, :8777) — the part of the Python solve-DB
@@ -54,12 +53,6 @@ export interface ChartStoreOpts {
   /** copy the remote's sidecars into `dir`, adding and refreshing only (default: rclone copy --include *.meta.json) */
   syncSidecars?: (dir: string) => Promise<boolean>;
   log?: (msg: string) => void;
-  /** how often a resident doc's body file is stat'ed on a hit (default 1000 ms) — see bodyChanged */
-  bodyCheckMs?: number;
-  /** a changed body is read again only once it has not been written for this long (default 2000 ms) */
-  bodySettleMs?: number;
-  /** how often the open GTOW crawl SQLite is stat'ed for a change (default 30 s) */
-  crawlCheckMs?: number;
 }
 
 const RCLONE = () => process.env.RCLONE || "rclone";
@@ -114,22 +107,6 @@ export function readDocSized(path: string): { doc: ChartDoc; bytes: number } {
 
 const gb = (n: number) => `${(n / 2 ** 30).toFixed(2)} GB`;
 
-/** A gzip body's trailer (CRC32 + length of the data, the file's last 8 bytes): what tells a rewritten body from one
- *  that was only touched. null for a plain .json body or when it cannot be read. */
-function gzTail(path: string, size: number): string | null {
-  if (!path.endsWith(".gz") || size < 8) return null;
-  let fd: number | null = null;
-  try {
-    fd = openSync(path, "r");
-    const b = Buffer.alloc(8);
-    return readSync(fd, b, 0, 8, size - 8) === 8 ? b.toString("hex") : null;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) try { closeSync(fd); } catch { /* closed */ }
-  }
-}
-
 export class ChartStore {
   private index = new Map<string, { body: string; meta: ChartMeta }>();
   private stamp = "";
@@ -137,19 +114,11 @@ export class ChartStore {
   private small = new Map<string, ChartDoc>();
   /** JSON text bytes per resident doc (both LRUs) */
   private bytes = new Map<string, number>();
-  /** each resident doc's body file as it was when read (bodyChanged) */
-  private bodies = new Map<string, { path: string; stamp: FileStamp; tail: string | null; checkedAt: number }>();
   private loading = new Map<string, Promise<ChartDoc | null>>();
   private r2Listing: { at: number; names: Set<string> | null } = { at: 0, names: null };
-  /** the GTOW crawl SQLite, reopened when the file changes (services/fileStamp.ts) */
-  private crawl: FollowedSqlite;
+  private crawl: Database | null = null;
 
-  constructor(private o: ChartStoreOpts) {
-    this.crawl = new FollowedSqlite(() => this.o.preflopDb, o.crawlCheckMs ?? 30_000, (m) => this.log(m));
-  }
-
-  /** Release the crawl handle (tests: Windows will not delete an open file). */
-  close(): void { this.crawl.close(); }
+  constructor(private o: ChartStoreOpts) {}
 
   private log(m: string) { (this.o.log ?? ((s: string) => console.error(s)))(m); }
 
@@ -217,42 +186,10 @@ export class ChartStore {
     return null;
   }
 
-  /**
-   * A RE-CONVERTED BODY IS READ AGAIN (2026-10-13). The LRUs are keyed by chart id, and a body converted again under
-   * the same id (a re-solve, a converter fix) was served from memory until evicted or restarted. On a hit the body
-   * file is stat'ed (at most every bodyCheckMs per chart); when its size / mtime / file id changed, the doc is dropped
-   * and read again through the normal load — once the file has not been written for bodySettleMs (the converter
-   * writes the .json.gz in place over seconds; until then the old doc keeps serving).
-   *   - a body gone from disk (the disk cap evicted it; R2 holds it) is NOT a change: the resident doc stays;
-   *   - a body only TOUCHED (same size and file, same gzip trailer) is not a change either: load() touches every body
-   *     it opens to keep the disk LRU (its own touch is in the stamp), and so do server.py and a second chart server
-   *     on the same folder — re-reading a 1.4 GB tree for that would cost seconds and double its memory.
-   */
-  private bodyChanged(sid: string): boolean {
-    const b = this.bodies.get(sid);
-    if (!b) return false;
-    const now = Date.now();
-    if (now - b.checkedAt < (this.o.bodyCheckMs ?? 1000)) return false;
-    b.checkedAt = now;
-    const st = fileStamp(b.path);
-    if (!st || sameStamp(st, b.stamp)) return false;
-    if (now - st.mtimeMs < (this.o.bodySettleMs ?? 2000)) return false;
-    if (st.size === b.stamp.size && st.ino === b.stamp.ino && b.tail !== null && gzTail(b.path, st.size) === b.tail) {
-      b.stamp = st;
-      return false;
-    }
-    this.small.delete(sid);
-    this.big.delete(sid);
-    this.bytes.delete(sid);
-    this.bodies.delete(sid);
-    this.log(`${sid}: body changed on disk - reading it again`);
-    return true;
-  }
-
   /** Full document for one id, lazily loaded (from disk, else R2) and LRU-cached. Concurrent callers share one load. */
   async doc(sid: string): Promise<ChartDoc | null> {
     const hit = this.cached(sid);
-    if (hit && !this.bodyChanged(sid)) return hit;
+    if (hit) return hit;
     const pending = this.loading.get(sid);
     if (pending) return pending;
     const p = this.load(sid).finally(() => this.loading.delete(sid));
@@ -284,19 +221,12 @@ export class ChartStore {
     } else {
       this.touch(path);                 // LRU order on disk = last opened (Windows does not keep atime for us)
     }
-    const st = statSync(path);   // after the touch: the stamp a later hit compares against
-    const isSmall = st.size < this.o.smallBytes;
+    const isSmall = statSync(path).size < this.o.smallBytes;
     const { doc, bytes } = readDocSized(path);
     const [cache, cap] = isSmall ? [this.small, this.o.smallMax] : [this.big, this.o.bigMax];
     cache.set(sid, doc);
     this.bytes.set(sid, bytes);
-    this.bodies.set(sid, { path, stamp: { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino }, tail: gzTail(path, st.size),
-                           checkedAt: Date.now() });
-    const evict = () => {
-      const old = cache.keys().next().value!;
-      cache.delete(old); this.bytes.delete(old); this.bodies.delete(old);
-      return old;
-    };
+    const evict = () => { const old = cache.keys().next().value!; cache.delete(old); this.bytes.delete(old); return old; };
     while (cache.size > cap) evict();
     if (!isSmall) {
       // the byte budget: oldest first, never the doc just loaded (it is what the caller is about to read)
@@ -402,13 +332,12 @@ export class ChartStore {
     // default: the GTOW crawl SQLite
     const gametype = q.get("gametype") ?? "Cash6m500zGeneral";
     const depth = Number.parseInt(q.get("depth") ?? "100", 10);
-    // opened read-only once and kept until 2026-10-13 — a crawl replaced on disk was never seen; now followed
-    const crawl = existsSync(this.o.preflopDb) ? this.crawl.get() : null;
-    if (!crawl) return { ok: false, error: `preflop DB not found at ${this.o.preflopDb}` };
-    const row = crawl.query("SELECT pos, reach, actions, cells, terminal FROM nodes WHERE gametype=? AND depth=? AND line=?")
+    if (!existsSync(this.o.preflopDb)) return { ok: false, error: `preflop DB not found at ${this.o.preflopDb}` };
+    this.crawl ??= new Database(this.o.preflopDb, { readonly: true });
+    const row = this.crawl.query("SELECT pos, reach, actions, cells, terminal FROM nodes WHERE gametype=? AND depth=? AND line=?")
       .get(gametype, depth, line) as { pos: string; reach: number; actions: string; cells: string; terminal: number } | null;
     if (!row) {
-      const have = crawl.query("SELECT line FROM nodes WHERE gametype=? AND depth=? AND line LIKE ? LIMIT 12")
+      const have = this.crawl.query("SELECT line FROM nodes WHERE gametype=? AND depth=? AND line LIKE ? LIMIT 12")
         .all(gametype, depth, line ? `${line}-%` : "%") as { line: string }[];
       return { ok: false, error: "line not crawled", near: have.map((r) => r.line) };
     }

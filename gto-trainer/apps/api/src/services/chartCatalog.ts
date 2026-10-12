@@ -3,8 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SOLUTION_SETS } from "./gtowCdp";
-import { CHARTS_DIR } from "./repoPaths";
-import { resolvedRungs } from "./resolvedCharts";
+import { CHARTS_DIR, factoryFile } from "./repoPaths";
 
 /**
  * The chart catalog: one structured inventory of every preflop chart this
@@ -231,9 +230,14 @@ export function parseHrcId(id: string): Partial<CatalogEntry> {
 /** Deep rungs that have a re-solved (v2ci) even chart — services/hrc3max.ts prefers one
  *  over EVERY base chart at that rung, uneven ones included, and falls back to the base
  *  generation at every other rung. Read here for the same reason it is read there: which
- *  generation answers is a fact about the manifest, not about the id. Followed (services/resolvedCharts.ts): a
- *  re-export shows at the next catalog rebuild — it was read once, at module load, until 2026-10-13. */
-const v2ciRungs = (): Record<string, Set<number>> => resolvedRungs() ?? {};
+ *  generation answers is a fact about the manifest, not about the id. */
+const v2ciRungs = (): Record<string, Set<number>> => {
+  try {
+    const raw = JSON.parse(readFileSync(factoryFile("resolved-charts.json"), "utf-8")) as Record<string, number[]>;
+    return Object.fromEntries(Object.entries(raw).map(([site, rungs]) => [site, new Set(rungs)]));
+  } catch { return {}; }
+};
+const V2CI = v2ciRungs();
 
 /** How the live study path uses a chart (see fastSolve). */
 const routedFor = (e: Partial<CatalogEntry>, id: string): string | null => {
@@ -242,7 +246,7 @@ const routedFor = (e: Partial<CatalogEntry>, id: string): string | null => {
     if (e.variant === "accept") return "acceptance check";
     if (e.variant === "v2ci") return e.shortSeat === "EQ" || e.site === "ign25" ? "3-handed preflop (live)" : "solved, not picked";
     // base generation: live at every rung the re-solve has not reached
-    return e.depth != null && v2ciRungs()[e.site ?? ""]?.has(e.depth) ? "superseded by the re-solved rung" : "3-handed preflop (live)";
+    return e.depth != null && V2CI[e.site ?? ""]?.has(e.depth) ? "superseded by the re-solved rung" : "3-handed preflop (live)";
   }
   // The ring strategy has answered preflop from this grid since the 2026-09-17 cutover
   // (services/hrc6max.ts). The catalog still said browse-only for all 64 of them.
