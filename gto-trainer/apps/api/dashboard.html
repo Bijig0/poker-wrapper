@@ -633,9 +633,10 @@ function sessTechHtml(t) {
 
 /* ---- Minimize / expand the hand page's cards (2026-10-03, Brady: "the timeline auto minimized … minimize/expand
    functionality to the timeline and other cards"). Every card with a heading gets a ▾/▸ toggle (the heading itself
-   toggles too). The hand card (Timeline / Ranges / Actual / Checks) opens minimized; a choice holds while you page
-   through hands, until the page is reloaded. Cards drawn later (the solve under #solution) are picked up as they land. ---- */
-const FOLD_DEFAULT = { "tl-card": true };
+   toggles too). A choice holds while you page through hands, until the page is reloaded. Cards drawn later (the solve
+   under #solution) are picked up as they land. The hand card (Timeline / Ranges / Actual / Checks) opened minimized
+   until 2026-10-12 — it now opens on the Ranges view, expanded (Brady: "has all the range charts already present"). ---- */
+const FOLD_DEFAULT = {};
 const FOLDS = new Map();   // card key → minimized
 function foldKey(card, head) {
   if (card.id) return card.id;
@@ -681,6 +682,8 @@ async function showDetail(dbId) {
   const j = await (await fetch(`/api/dashboard/hand/${dbId}`)).json();
   if (!j.ok) { v.innerHTML = `<div class="card warn">${esc(j.error)}</div>`; return; }
   DETAIL = j; STEP = j.hand.actions.length; // start at the end (full hand)
+  // every node the page draws, from the database in one request — the Ranges view and the exact node read it (dashJ)
+  DETAIL.bundle = fetch(`/api/dashboard/hand-bundle?dbId=${dbId}`).then((r) => r.json()).catch(() => null);
   csLoad(j); // what each chart of the hand was solved with: the answer cards and the Ranges tab fill in when it lands
   const s = j.summary;
   v.innerHTML = `
@@ -1255,10 +1258,12 @@ const TL_VIEWS = {
     title: `Checks <span class="sub">— how each answer was produced, and the chain's seventeen invariants on it (technical)</span>` },
 };
 const tlViewOf = (v) => (Object.hasOwn(TL_VIEWS, v) ? v : "actions");
-let TL_VIEW = (() => { try { return tlViewOf(localStorage.getItem("tlView")); } catch { return "actions"; } })();
+// RANGES FIRST (2026-10-12, Brady: "has all the range charts already present"): a hand opens on the Ranges view; a
+// different choice is still remembered (its own key, so an older "Timeline" choice does not hide the charts)
+let TL_VIEW = (() => { try { return tlViewOf(localStorage.getItem("tlView2") ?? "ranges"); } catch { return "ranges"; } })();
 function tlView(v) {
   TL_VIEW = tlViewOf(v);
-  try { localStorage.setItem("tlView", TL_VIEW); } catch { /* storage blocked: the choice lasts this page only */ }
+  try { localStorage.setItem("tlView2", TL_VIEW); } catch { /* storage blocked: the choice lasts this page only */ }
   $("tl-seg").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === TL_VIEW));
   for (const [k, view] of Object.entries(TL_VIEWS)) $(view.el).hidden = k !== TL_VIEW;
   const cur = TL_VIEWS[TL_VIEW];
@@ -1613,7 +1618,9 @@ async function rlLoadHand(idx) {
   const heroIdx = idx.filter((i) => h.actions[i].hero);
   const theirs = idx.filter((i) => !h.actions[i].hero);
   for (const i of theirs) if (!D.rl[i] && h.actions[i].street !== "preflop") D.rl[i] = { kind: "vwait" };
-  const pre = theirs.some((i) => h.actions[i].street === "preflop") ? rlLoadPath(false, null, D) : null;
+  // the AI preflop path when it was already built (stored: no quota), else the chart's
+  const pre = theirs.some((i) => h.actions[i].street === "preflop")
+    ? (async () => rlLoadPath(!!(await D.bundle)?.entries?.["preflop-path:ai"]?.ok, null, D))() : null;
   await rlLoadAll(heroIdx);
   if (DETAIL !== D) return;
   rlDeriveVillains(D);
@@ -1626,7 +1633,7 @@ async function rlLoadAll(idx) {
 }
 async function rlLoad(i, D) {
   const put = (s) => { D.rl[i] = s; if (DETAIL === D) rlPaint(i); };
-  const getJ = async (u) => (await fetch(u)).json();
+  const getJ = (u) => dashJ(u, D);
   const { a } = rlAnswer(i);
   put({ loading: true });
   try {
@@ -1685,6 +1692,8 @@ function rlDeriveVillains(D) {
 /** The preflop path: every seat's node along the whole preflop line. A chart walks for free; a hand the GTO Wizard
  *  AI answered preflop needs `ai` (a click), because rebuilding its tree costs quota. It fills every preflop row. */
 async function rlLoadPath(ai, btn, D = DETAIL) {
+  const stored = D.bundle ? (await D.bundle)?.entries?.[ai ? "preflop-path:ai" : "preflop-path"] : null;
+  if (stored?.ok) return rlApplyPath(stored, D, ai);
   if (btn) { btn.disabled = true; btn.textContent = "loading from GTO Wizard…"; }
   let p;
   try {
@@ -1981,7 +1990,7 @@ async function openAnswerNode(upto) {
   try { sol.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
   let j;
   // &ranges=1: the same request as the Ranges view's, so both read the one stored row (routes/dashboard.ts storedNodes)
-  try { j = await (await fetch(`/api/dashboard/answer-node?dbId=${DETAIL.dbId}&upto=${upto}&ranges=1`)).json(); }
+  try { j = await dashJ(`/api/dashboard/answer-node?dbId=${DETAIL.dbId}&upto=${upto}&ranges=1`); }
   catch (e) { sol.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   if (!j.ok) { sol.innerHTML = `<div class="card warn">${esc(j.error ?? "no node")}</div>`; return; }
   const lg = j.logged;
@@ -2123,6 +2132,20 @@ const weightGrid = (agg, heroKey, hue, combos = null, heroCombo = null, board = 
    node plus hero's own row). "walk every node" opens the full chain below. */
 /* A stored chain by the answer's row number AND its stable key (hand + decision key): the server refuses to show
    another hand's chain under this answer — a row number only means something in the file it was written to (hand 973). */
+/* THE HAND'S BUNDLE (routes/dashboard.ts GET /hand-bundle): what a request stands for in it, and the request answered
+   from it — the route itself only for what the bundle does not hold (or holds as an error). */
+function bundleKeyOf(url) {
+  const u = new URL(url, location.origin), p = u.pathname.replace(/^\/api\/dashboard/, ""), q = u.searchParams;
+  if (p === "/preflop-path") return q.get("ai") === "1" ? "preflop-path:ai" : "preflop-path";
+  if (p === "/answer-node" && !q.get("answerId")) return `answer-node:${q.get("upto")}`;
+  const m = /^\/solve\/(\d+)$/.exec(p);
+  return m ? `solve:${m[1]}` : null;
+}
+async function dashJ(url, D = DETAIL) {
+  const k = bundleKeyOf(url);
+  if (k && D?.bundle) { const hit = (await D.bundle)?.entries?.[k]; if (hit && hit.ok !== false) return hit; }
+  return (await fetch(url)).json();
+}
 const solveUrl = (id, hand, key) => {
   const qs = new URLSearchParams({ ...(hand ? { hand: String(hand) } : {}), ...(key ? { key: String(key) } : {}) });
   return `/api/dashboard/solve/${id}${qs.size ? "?" + qs : ""}`;
@@ -2195,7 +2218,7 @@ function solveIoHtml(w, hostId, upto) {
 async function renderWalkthrough(solveId, hostId, upto, hand = null, key = null) {
   const host = $(hostId);
   let w;
-  try { w = await (await fetch(solveUrl(solveId, hand, key))).json(); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return null; }
+  try { w = await dashJ(solveUrl(solveId, hand, key)); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return null; }
   if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return w; }
   const swapped = w.via === "key" && Number(w.row.id) !== Number(solveId)
     ? `<div class="card warn" style="margin-bottom:10px">The solve logged with this answer (#${esc(solveId)}) is not this hand's — that number belongs to another hand's solve in today's store. Showing #${esc(w.row.id)} instead: the newest solve stored for this exact decision (${esc(w.row.origin === "replay" ? "a re-solve with the code of " : "stored ")}${esc(new Date(Number(w.row.ts)).toLocaleString())}).</div>`

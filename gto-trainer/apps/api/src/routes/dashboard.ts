@@ -1558,7 +1558,7 @@ const handFinished = (dbId: number): boolean => {
   try { return !!openDb()?.query<{ x: number }, [number]>(`SELECT 1 AS x FROM hands WHERE rowid = ? AND ${FINISHED}`).get(dbId); }
   catch { return false; }
 };
-const storedNodes = (route: "answer-node" | "preflop-path") => async (c: Context, next: Next) => {
+export const storedNodes = (route: "answer-node" | "preflop-path") => async (c: Context, next: Next) => {
   const q = c.req.query();
   const dbId = Number(q.dbId);
   const key = handNodesOn() && Number.isInteger(dbId) && dbId > 0 ? nodeKeyOf(route, q) : null;
@@ -1583,6 +1583,11 @@ const storedNodes = (route: "answer-node" | "preflop-path") => async (c: Context
 };
 app.use("/answer-node", storedNodes("answer-node"));
 app.use("/preflop-path", storedNodes("preflop-path"));
+
+/** No logged answer: does this hand's preflop read the 6-max ring charts? Its strategy says so, or its stake does —
+ *  NL200, or NL5, the test stake that plays the NL200 answers (memory: test-stake-nl5). Not a 3-max hand, 4+ seats. */
+export const sixMaxWithoutAnswer = (threeMax: boolean, liveSeats: number, bbUsd: number | null, strategy: () => string | null): boolean =>
+  !threeMax && liveSeats > 3 && (bbUsd === 2 || bbUsd === 0.05 || strategy() === SIX_MAX_STRATEGY_ID);
 
 app.get("/answer-node", async (c) => {
   const dbId = Number(c.req.query("dbId"));
@@ -1739,10 +1744,9 @@ app.get("/answer-node", async (c) => {
     // NO LOGGED ANSWER (2026-10-12, 176 decisions opened on the crawled GTO Wizard library): the stake alone ($2 bb)
     // sent every NL5 test hand — which plays the NL200 6-max answers — and every hand of a 6-max session at another
     // stake to "Cash6m500zGeneral". The hand's own strategy decides first, then the stake.
-    const bbUsd = bbUsdOf(e.stakes, e.hand.bbCents);
     const sixMax = logged?.chart
       ? /_6max_/.test(logged.chart)
-      : !threeMax && live.size > 3 && (bbUsd === 2 || bbUsd === 0.05 || strategyOfHand(e) === SIX_MAX_STRATEGY_ID);
+      : sixMaxWithoutAnswer(threeMax, live.size, bbUsdOf(e.stakes, e.hand.bbCents), () => strategyOfHand(e));
     if (sixMax) {
       const tokens = buildPreflopTokens(t, heroPos);
       const choice = chartFor6max(t, heroPos, tokens);
@@ -2231,6 +2235,41 @@ app.get("/live-node", async (c) => {
 });
 
 /** GET /storage — where every record lives (the one data root), what was adopted from the legacy files, any split. */
+/**
+ * GET /hand-bundle?dbId= — EVERYTHING THE HAND PAGE DRAWS, IN ONE REQUEST (2026-10-12, Brady: "the hands details page
+ * requests from our db, and has all the range charts already present"). The Ranges view and the exact-node view asked
+ * one route per decision; here the page gets them at once, keyed the way it asks (dashboard.html bundleKeyOf):
+ *   preflop-path       every seat's preflop node along the line (stored, services/handNodeStore.ts)
+ *   preflop-path:ai    the GTO Wizard AI preflop path — only when someone already built it (it can cost quota)
+ *   answer-node:<i>    hero's node at decision i, with the ranges (stored)
+ *   solve:<id>         each stored postflop chain solve the hand's answers name (services/solveStore.ts)
+ * A row not stored yet (a hand still in play, or one the builder has not reached) is computed and kept on the way.
+ */
+app.get("/hand-bundle", async (c) => {
+  const dbId = Number(c.req.query("dbId"));
+  const d = openDb();
+  if (!d || !Number.isInteger(dbId)) return c.json({ ok: false, error: "dbId required" }, 400);
+  const row = d.query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`).get(dbId);
+  const e = row ? enrichSync(row) : null;
+  if (!e) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
+  const t0 = Date.now();
+  const get = async (url: string) => { try { return await (await app.request(url)).json(); } catch (err) { return { ok: false, error: String(err) }; } };
+  const entries: Record<string, unknown> = {};
+  entries["preflop-path"] = await get(`/preflop-path?dbId=${dbId}`);
+  const ai = handNodesOn() ? handNodeStore().get(dbId, "preflop-path:ai") : null;
+  if (ai) entries["preflop-path:ai"] = ai.body;
+  for (const [i, a] of e.hand.actions.entries()) {
+    if (a.hero && !/^post/.test(a.type)) entries[`answer-node:${i}`] = await get(`/answer-node?dbId=${dbId}&upto=${i}&ranges=1`);
+  }
+  const answers = e.clientHandId ? (answerLog.forHand(e.clientHandId) as any[]) : [];
+  for (const a of answers) {
+    if (a.solve_id == null || entries[`solve:${a.solve_id}`]) continue;
+    const qs = new URLSearchParams({ hand: String(e.clientHandId), ...(a.decision_key ? { key: String(a.decision_key) } : {}) });
+    entries[`solve:${a.solve_id}`] = await get(`/solve/${a.solve_id}?${qs}`);
+  }
+  return c.json({ ok: true, dbId, ms: Date.now() - t0, entries });
+});
+
 /** GET /hand-nodes — the stored hand nodes (services/handNodeStore.ts): rows, bytes, hands built, rebuilds queued. */
 app.get("/hand-nodes", (c) => {
   const store = handNodeStore();
