@@ -210,12 +210,16 @@
   // heartbeat installed in OUR frame measures that directly: idleMs is how long
   // since the frame last drew. Also: the client moves every table off screen
   // while its lobby is in front, and a hidden page draws nothing at all.
+  // ONE HEARTBEAT PER DOCUMENT (2026-10-12): it was installed while the table's frame was still loading, and a
+  // same-origin load REPLACES the frame's document but KEEPS its Window -- the marker stayed, the rAF went with the old
+  // document, so every session read "not being drawn" from its first second on (beats stuck at 19-47, live rAF 60/s;
+  // repro in Brave: old 50 beats then dead, this one alive). A heartbeat whose document is gone is replaced.
   let draw = null;
   try {
     const fw = tf.contentWindow;
-    if (!fw.__wrapperDraw) {
-      const hb = fw.__wrapperDraw = {n: 0, t0: fw.performance.now(), t: fw.performance.now()};
-      const beat = () => { hb.n++; hb.t = fw.performance.now(); fw.requestAnimationFrame(beat); };
+    if (!fw.__wrapperDraw || fw.__wrapperDraw.doc !== fw.document) {
+      const hb = fw.__wrapperDraw = {n: 0, t0: fw.performance.now(), t: fw.performance.now(), doc: fw.document};
+      const beat = () => { if (fw.__wrapperDraw !== hb) return; hb.n++; hb.t = fw.performance.now(); fw.requestAnimationFrame(beat); };
       fw.requestAnimationFrame(beat);
     }
     const hb = fw.__wrapperDraw, now = fw.performance.now();

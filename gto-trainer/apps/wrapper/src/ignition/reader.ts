@@ -311,6 +311,10 @@ function frameShowsCaptureHand(hc: string[]): boolean {
 
 /** A frame that has not drawn for this long is not being drawn (a live one draws every ~16 ms). */
 export const FRAME_IDLE_MS = 1500;
+/** The longest a freeze holds presses (relay.ts frameFrozen): Brave's freezes measured 3-20.5 s (2026-10-10 / 10-12). */
+export const FREEZE_HOLD_MAX_S = 30;
+/** A heartbeat counts as alive once it has beaten this long after it was installed. */
+export const HEARTBEAT_PROVEN_MS = 5000;
 
 /**
  * IS OUR FRAME BEING DRAWN? (2026-09-25) TABLE_JS reports a requestAnimationFrame heartbeat of our own frame (`draw`)
@@ -337,11 +341,40 @@ export function noteFrame(d: Record<string, any>): boolean {
     : dr.pageHidden ? "the client window is not being drawn (minimized, covered, or its screen is off)"
     : dr.offscreen ? "the client has moved this table off screen (its lobby is in front)"
     : "the browser has stopped drawing this table's frame";
+  // FROZEN FAILS OPEN (2026-10-13): a freeze is the frame stopping AFTER this process saw it drawing, and it is held at
+  // most FREEZE_HOLD_MAX_S — a heartbeat that never beat (the old install bug: "not drawn" all session) or one that
+  // died must never hold every press for the rest of a session. Past the cap the hold lets go (said once).
+  // seen DRAWING = the heartbeat beat recently AND its last beat came HEARTBEAT_PROVEN_MS or more after it was installed
+  // (a young one reads drawn by default; the old broken one beat for ~0.3-0.5 s, then never)
+  if (known && dr.idleMs <= FRAME_IDLE_MS && dr.ageMs - dr.idleMs >= HEARTBEAT_PROVEN_MS) F.lastDrawnAt = time();
+  const undrawnVisible = drawn === false && !dr.pageHidden && !dr.offscreen;
+  const sinceDrawn = F.lastDrawnAt !== null ? time() - F.lastDrawnAt : null;
+  const frozen = undrawnVisible && sinceDrawn !== null && sinceDrawn <= FREEZE_HOLD_MAX_S;
+  if (undrawnVisible && F.frozen && !frozen) {
+    const line = `table ${pyStr(TABLES.slot() ?? 1)}'s frame has not been drawn for ${Math.round(sinceDrawn ?? 0)} s — `
+      + "presses are no longer held for it (the browser may still be frozen)";
+    log(`[frame] ${line}`);
+    feedAdd(line);
+    if (S.session.id) S.sessions.event(S.session.id, "frame-freeze-hold-released", { hand: S.handNo, sinceDrawnS: Math.round(sinceDrawn ?? 0) });
+  }
+  F.frozen = frozen;
   const said = drawn === false ? `undrawn:${F.why}` : F.dup > 1 ? `dup:${F.dup}` : "";
   if (said !== F.said) {
     const was = F.said;
+    const wasSince = F.since;
     F.said = said;
     F.since = time();                                  // /state tableFrame.forS: how long the frame has been as it is
+    // EVERY FREEZE ON THE RECORD (2026-10-12): Brave stops producing frames for 3-20 s at a time while the page's
+    // script runs on (session_20261012_211242: 8 s at 21:20, a raise's mouse move never answered). Each one is a
+    // session event with its length, so freezes are counted in every session — not only in a recorded one.
+    if (S.session.id && (said.startsWith("undrawn") || was.startsWith("undrawn"))) {
+      if (said.startsWith("undrawn")) {
+        S.sessions.event(S.session.id, "frame-undrawn", { why: F.why, frozen: F.frozen, hand: S.handNo, idleMs: F.idleMs });
+      } else {
+        S.sessions.event(S.session.id, "frame-drawn-again", { was: was.slice("undrawn:".length), hand: S.handNo,
+                                                              forS: wasSince !== null ? Math.round((time() - wasSince) * 10) / 10 : null });
+      }
+    }
     const table = `table ${pyStr(TABLES.slot() ?? 1)}`;
     const line = drawn === false ? `${table}'s frame is not being drawn: ${F.why} — its board and badges are frozen, reading the table from its socket only`
       : F.dup > 1 ? `${F.dup} frames carry ${table}'s tag in the client — reading the one on screen`
