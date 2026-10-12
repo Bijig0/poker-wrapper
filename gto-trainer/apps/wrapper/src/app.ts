@@ -18,6 +18,7 @@ import * as TABLES from "./tables";
 import * as W from "./win32";
 import * as faketable from "./faketable";
 import { cggFinished, cggLine, cpFinished, cpLine } from "./archive";
+import { QUIET_ARG, startSelfUpdate } from "./build";
 import { portOf } from "./ignition/dom";
 import "./ignition/reader";                    // installs the real ignitionTarget seam
 import "./relay";                              // installs act / raiseTo / cdpSeq
@@ -109,6 +110,9 @@ async function takeover(): Promise<void> {
 
 export async function main(argv: string[]): Promise<void> {
   W.setDpiAware();
+  // the wrapper relaunching ITSELF (build.ts, 2026-10-13): take over and serve, but leave every window as it is — no
+  // table window opened, no panel window shown, moved or brought to the front while the owner is doing something else
+  const quiet = argv.includes(QUIET_ARG);
   try {
     mkdirSync(DEBUG_DIR(), { recursive: true });
     // run-study.pyw wrote "start (purged N caches)"; there are no caches to purge here, so say WHEN and WHO
@@ -149,11 +153,14 @@ export async function main(argv: string[]): Promise<void> {
     bg("chain", chainKeeper);
     bg("net", netGuard);
     log(`[panel] serving on http://127.0.0.1:${C.PANEL_PORT}/panel`);
+    startSelfUpdate();
   }
   const area = targetArea();
   const { w, h, x: ax, y: ay } = area;
   const tableW = Math.trunc(w * C.TABLE_FRAC);
-  if (S.fakeMode || (await cdp.available(C.CDP_PORT))) {
+  if (quiet) {
+    log("[panel] quiet relaunch (the wrapper loading new code by itself) — windows left as they are");
+  } else if (S.fakeMode || (await cdp.available(C.CDP_PORT))) {
     try {
       await openTableWindow();
     } catch (e: any) {
@@ -161,8 +168,8 @@ export async function main(argv: string[]): Promise<void> {
     }
   }
   let hwnd: number | null = null;
-  if (C.HEADLESS) {
-    log("[panel] headless: no panel window");
+  if (C.HEADLESS || quiet) {
+    if (C.HEADLESS) log("[panel] headless: no panel window");
   } else if ((hwnd = panelHwnd())) {
     const a2 = targetArea();
     W.showWindow(hwnd, 9);
