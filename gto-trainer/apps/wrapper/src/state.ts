@@ -250,7 +250,7 @@ function fresh() {
      *  page is visible and the table on screen: the browser itself has stopped producing frames (relay.ts holds presses). */
     frameHealth: {
       tags: null as number[] | null, dup: 0, drawn: null as boolean | null, why: null as string | null,
-      idleMs: null as number | null, since: null as number | null, said: "", frozen: false,
+      idleMs: null as number | null, since: null as number | null, said: "", frozen: false, lastDrawnAt: null as number | null,
     },
     stateHealth: { ticks: 0, events: [] as any[], byKind: new Map<string, number>(), streak: new Map<string, number>(), seen: new TupleSet() },
     modalState: { lastClickAt: 0.0, reported: new Set<string>() },

@@ -12,10 +12,14 @@ import { expect, test } from "bun:test";
 import { realTime, setFakeTime, time } from "../../src/clock";
 import { pyJsonDumps } from "../../src/py";
 import * as cdp from "../../src/cdp";
-import { S, resetState, seams } from "../../src/state";
-import { FROZEN_HOLD_WHY, actuate, executePick, frameFrozen, maybeAutoAct, maybeVerifyExec, pressMark, pressUncertain } from "../../src/relay";
-import { noteFrame } from "../../src/ignition/reader";
-import { FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
+import { CP, S, resetState, seams } from "../../src/state";
+import {
+  FROZEN_HOLD_WHY, actuate, executePick, frameFrozen, maybeAutoAct, maybeFoldNoAnswer, maybeVerifyExec, pressMark, pressUncertain,
+} from "../../src/relay";
+import { handSeams } from "../../src/ignition/hand";
+import { autoLogFor } from "../../src/autoLog";
+import { FREEZE_HOLD_MAX_S, noteFrame } from "../../src/ignition/reader";
+import { BET_SPOT, FakeIgnition, RIVER_FACING_BET } from "./fakeIgnition";
 import { checker, J, scratchDirs } from "./helpers";
 
 const T0 = 1_790_000_000;
@@ -136,6 +140,7 @@ test("a press whose turn-button click went out unanswered is UNCERTAIN: the sock
     check("  ... auto-execute counts it as executed (no timer re-press)", S.study.executed === PKEY);
     check("  ... the verifier holds it, marked uncertain", (S.study.pendingExec || {}).uncertain === true, J(S.study.pendingExec));
     check("  ... the feed says so", S.feed.some((l) => String(l.line).includes("Study pick UNCERTAIN")));
+    check("  ... the hand's auto-execute log says pending, not refused", (autoLogFor(7) || [])[0]?.outcome === "pending", J(autoLogFor(7)));
     S.frameHealth.frozen = true;
     for (const t of [1, 2, 3, 4, 5, 6, 7, 8]) await tickAt(t);
     check("frozen 8 s: nothing pressed again", calls.length === 1, J(calls));
@@ -179,6 +184,21 @@ test("a press whose turn-button click went out unanswered is UNCERTAIN: the sock
     check("  ... the window after the thaw is waited out (a late echo still counts)", (S.study.lastExec || {}).outcome === "pending");
     await tickAt(208);
     check("spot gone: abandoned, one press", calls.length === 1 && (S.study.lastExec || {}).outcome === "abandoned", J({ calls, ex: S.study.lastExec }));
+
+    // 2b. two freezes in one press: the window restarts after EACH thaw, not only the first
+    calls.length = 0;
+    clickHangs = true;
+    setFakeTime(T0 + 150);
+    seed();
+    await tickAt(150);
+    S.frameHealth.frozen = true;  await tickAt(151);
+    S.frameHealth.frozen = false; await tickAt(152);   // first thaw: window to 154.5
+    S.frameHealth.frozen = true;  await tickAt(153);   // frozen again
+    S.frameHealth.frozen = false; await tickAt(154);   // second thaw: window to 156.5
+    await tickAt(155.5);
+    check("a second freeze: the window runs from the SECOND thaw", calls.length === 1, J(calls));
+    await tickAt(156.8);
+    check("  ... then the verifier presses once more", calls.length === 2, J(calls));
 
     // 3b. the verifier's OWN retry hangs too: still uncertain, still pending — the socket settles it, never "unknown"
     calls.length = 0;
@@ -340,6 +360,176 @@ test("noteFrame: frozen only when the page is visible and the table on screen; e
   } finally {
     S.sessions.event = ev0;
     S.session.id = null;
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("freeze FAILS OPEN: a heartbeat never seen drawing never holds; a freeze holds at most FREEZE_HOLD_MAX_S, said once", () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  const events: string[] = [];
+  const ev0 = S.sessions.event;
+  S.session.id = "session_test";
+  S.sessions.event = ((_sid: string, kind: string) => { events.push(kind); }) as any;
+  const cap = (draw: any) => ({ seated: true, frameTag: "0", tags: [0], draw });
+  try {
+    // the old install bug: a few beats, never again — "not drawn" from the first read
+    for (const t of [0, 5, 60, 600]) {
+      setFakeTime(T0 + t);
+      noteFrame(cap({ beats: 22, idleMs: 400000 + t * 1000, ageMs: 400000 + t * 1000, pageHidden: false, offscreen: false }));
+    }
+    check("a heartbeat never seen drawing: never frozen", S.frameHealth.frozen === false && frameFrozen() === false, J(S.frameHealth));
+    resetState();
+    // a YOUNG heartbeat reads drawn by default — that is not "seen drawing"
+    setFakeTime(T0 + 1000);
+    noteFrame(cap({ beats: 3, idleMs: 20, ageMs: 900, pageHidden: false, offscreen: false }));
+    setFakeTime(T0 + 1003);
+    noteFrame(cap({ beats: 3, idleMs: 3000, ageMs: 3900, pageHidden: false, offscreen: false }));
+    check("a heartbeat that died young is not a freeze", S.frameHealth.frozen === false, J(S.frameHealth));
+    resetState();
+    // today's recording: 22 beats in 0.34 s, then dead — read at age 1.8 s (idle 1.46 s, "drawn"), then stuck
+    setFakeTime(T0 + 1500);
+    noteFrame(cap({ beats: 22, idleMs: 1460, ageMs: 1800, pageHidden: false, offscreen: false }));
+    setFakeTime(T0 + 1505);
+    noteFrame(cap({ beats: 22, idleMs: 6460, ageMs: 6800, pageHidden: false, offscreen: false }));
+    check("a heartbeat that beat only in its first half-second is not proven: no hold", S.frameHealth.frozen === false, J(S.frameHealth));
+    resetState();
+    S.session.id = "session_test";
+    S.sessions.event = ((_sid: string, kind: string) => { events.push(kind); }) as any;
+    events.length = 0;
+    setFakeTime(T0 + 2000);
+    noteFrame(cap({ beats: 900, idleMs: 16, ageMs: 15000, pageHidden: false, offscreen: false }));
+    for (const t of [2, 10, 29]) {
+      setFakeTime(T0 + 2000 + t);
+      noteFrame(cap({ beats: 900, idleMs: t * 1000, ageMs: 15000 + t * 1000, pageHidden: false, offscreen: false }));
+    }
+    check("a real freeze holds up to the cap", S.frameHealth.frozen === true && frameFrozen() === true, J(S.frameHealth));
+    const nFeed = S.feed.length;
+    setFakeTime(T0 + 2000 + FREEZE_HOLD_MAX_S + 1);
+    noteFrame(cap({ beats: 900, idleMs: 31000, ageMs: 46000, pageHidden: false, offscreen: false }));
+    check("past the cap: released", S.frameHealth.frozen === false && frameFrozen() === false);
+    check("  ... said in the feed", S.feed.slice(nFeed).some((l) => String(l.line).includes("no longer held")), J(S.feed.slice(nFeed)));
+    check("  ... and as a session event", events.includes("frame-freeze-hold-released"), J(events));
+    setFakeTime(T0 + 2100);
+    noteFrame(cap({ beats: 900, idleMs: 100000, ageMs: 115000, pageHidden: false, offscreen: false }));
+    check("  ... once", events.filter((e) => e === "frame-freeze-hold-released").length === 1, J(events));
+  } finally {
+    S.sessions.event = ev0;
+    S.session.id = null;
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("fold-on-no-answer: a CHECK whose click went out unanswered is never followed by a FOLD click", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  setFakeTime(T0);
+  const log0 = console.log;
+  console.log = () => {};
+  let undo = () => {};
+  try {
+    const t = new FakeIgnition(BET_SPOT, { stack: 89.2 });
+    undo = t.install();
+    const click0 = cdp.io.dispatchClick;
+    cdp.io.dispatchClick = async (ws: string, x: number, y: number) => {
+      await click0(ws, x, y);
+      const b = BET_SPOT.buttons.find((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+      if (b?.qa === "checkButton") throw new cdp.CdpError("timed out waiting for reply 1");
+    };
+    handSeams.override = () => ({ handId: 3, heroSeatId: 1, street: "flop", liveSeats: [1, 2], actions: [], heroCards: [],
+                                   currentNode: { street: "flop", toActIsHero: true, pot: 3, toCall: 0 }, heroFolded: false, ended: false });
+    Object.assign(S.liveStatus, { toAct: true, practice: true, modal: null, buyPanel: null, timeBank: null });
+    Object.assign(S.study, { on: true, auto: true, foldNoAnswer: true, text: null, pick: null, decisionKey: null, handId: null,
+                             executed: null, lastExec: null, pendingExec: null, noAnswerTurn: null });
+    S.heroClock = 3;
+    let threw: unknown = null;
+    try { await maybeFoldNoAnswer(); } catch (e) { threw = e; }
+    check("no escape", threw === null, String(threw));
+    check("CHECK sent, and no FOLD after it", J(t.clicks) === J(["CHECK"]), J(t.clicks));
+  } finally {
+    undo();
+    handSeams.override = null;
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("an uncertain press the verifier abandoned (a notice came up) is fold-on-no-answer's again at the clock", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  const log0 = console.log;
+  console.log = () => {};
+  const act0 = seams.act, raise0 = seams.raiseTo;
+  const calls: string[] = [];
+  seams.raiseTo = async (amount) => {
+    calls.push(`raise_to ${amount}`);
+    pressMark.actionClicks += 1;
+    pressMark.actionClicksFailed += 1;
+    return { ok: false, confirm: { ok: false, reason: "click did not go through: timed out" } };
+  };
+  seams.act = async (label) => { calls.push(`act ${label}`); return { ok: true, clicked: label }; };
+  try {
+    setFakeTime(T0);
+    seed();
+    S.study.foldNoAnswer = true;
+    await maybeAutoAct();
+    check("uncertain", (S.study.lastExec || {}).result?.uncertain === true, J(S.study.lastExec));
+    S.liveStatus.modal = { text: "a notice", harmless: false };
+    setFakeTime(T0 + 3);
+    await maybeVerifyExec();
+    check("  ... abandoned under the notice", (S.study.lastExec || {}).outcome === "abandoned", J(S.study.lastExec));
+    S.liveStatus.modal = null;
+    S.heroClock = 3;
+    setFakeTime(T0 + 10);
+    await maybeFoldNoAnswer();
+    check("hero still on the clock at 3 s: checked by fold-on-no-answer, not left to time out", calls.includes("act check"), J(calls));
+  } finally {
+    seams.act = act0;
+    seams.raiseTo = raise0;
+    console.log = log0;
+    realTime();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("CoinPoker: a press that raises is an ERROR — never retried, never verified, fold-on-no-answer keeps the clock", async () => {
+  const { fails, check } = checker();
+  scratchDirs();
+  resetState();
+  const log0 = console.log;
+  console.log = () => {};
+  const cpAct0 = CP.actuate;
+  let n = 0;
+  try {
+    setFakeTime(T0);
+    seed();
+    S.site.id = "coinpoker";
+    handSeams.override = () => ({ handId: 7, heroSeatId: 1, street: "preflop", liveSeats: [1, 2, 3], heroCards: ["Q♠", "T♥"],
+      actions: [{ seatId: 2, type: "post-sb" }, { seatId: 3, type: "post-bb" }, { seatId: 2, type: "call" }],
+      currentNode: { street: "preflop", toActIsHero: true, pot: 3, toCall: 1 }, heroFolded: false, ended: false });
+    (CP as any).actuate = async () => { n += 1; pressMark.actionClicks += 1; throw new Error("cp socket closed"); };
+    let threw: unknown = null;
+    let r: any = null;
+    try { r = await executePick("auto"); } catch (e) { threw = e; }
+    check("no escape", threw === null, String(threw));
+    check("outcome ERROR (not refused, not uncertain)", (S.study.lastExec || {}).outcome === "error" && !r?.result?.uncertain, J(S.study.lastExec));
+    check("  ... not marked executed, nothing pending", S.study.executed === null && S.study.pendingExec === null);
+    check("  ... pressed once", n === 1, J(n));
+  } finally {
+    (CP as any).actuate = cpAct0;
+    S.site.id = "ignition";
+    handSeams.override = null;
     console.log = log0;
     realTime();
   }

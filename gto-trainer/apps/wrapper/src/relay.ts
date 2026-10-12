@@ -290,11 +290,12 @@ export const FROZEN_HOLD_WHY = "the browser has stopped drawing the table — no
 
 /** A press that did not come back ok: may it still land? `p0` = pressMark before it, `threw` = it raised. A turn-button
  *  click whose reply never came may; so may anything a press that raised had sent. CoinPoker / ClubGG press through
- *  their own actuators, whose clicks are not counted here: a raise there is uncertain, a plain refusal is not. */
+ *  their own actuators, whose clicks are not counted here: a press that raises there is an "error" (executePick) —
+ *  never retried, never verified, as before 2026-10-13, so fold-on-no-answer still owns the clock. */
 export function pressUncertain(p0: { actionClicks: number; actionClicksFailed: number }, threw: boolean): boolean {
   if (pressMark.actionClicksFailed > p0.actionClicksFailed) return true;
   if (!threw) return false;
-  return isCp() || isCgg() || pressMark.actionClicks > p0.actionClicks;
+  return pressMark.actionClicks > p0.actionClicks;
 }
 /** read through a function: TypeScript would narrow the variable to null across the awaited press that sets it */
 const pressRead = (): { offer: string[]; atPress: string | null } | null => lastPressRead;
@@ -910,6 +911,7 @@ export async function maybeVerifyExec(): Promise<void> {
   // it lands when drawing resumes. Nothing is judged "not landed" until the table has drawn again for a full window.
   if (frameFrozen()) {
     p.deadline = Math.max(p.deadline, time() + VERIFY_DEADLINE_S);
+    p.thawedAt = null;                               // every freeze is followed by a full window, not only the first
     if (!p.frozenSaid) {
       p.frozenSaid = true;
       feedAdd(`Study pick ${pyStr(p.pick)}: the table is frozen — waiting for it to draw again before judging the press`);
@@ -939,8 +941,8 @@ export async function maybeVerifyExec(): Promise<void> {
         threw = true;
         res = { ok: false, reason: `the press failed: ${e?.message ?? e}` };
       }
-      const uncertain = !res.ok && pressUncertain(p0, threw);
-      AUTO.notePress(p.key, { ok: !!res.ok, reason: res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null });
+      const uncertain = !res.ok && !isCp() && !isCgg() && pressUncertain(p0, threw);
+      AUTO.notePress(p.key, { ok: !!res.ok || uncertain, reason: res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null });
       feedAdd(`Study pick ${pyStr(p.pick)} did not register — retried (${p.attempts}/${VERIFY_ATTEMPTS})`
               + (res.ok ? "" : uncertain ? `, its click went out unanswered (${pyStr(res.reason ?? null)}) — waiting for the table`
                 : `, refused: ${pyStr(res.reason ?? null)}`));
@@ -982,14 +984,18 @@ export function executePick(source: string, waitedS: number | null = null): Prom
       res = { ok: false, reason: `the press failed: ${threw}`, threw: true };
     }
     const ok = !!res.ok;
-    const uncertain = !ok && pressUncertain(p0, threw !== null);
+    // CoinPoker / ClubGG press through their own actuators: never "uncertain"; a press that raised is an "error" — not
+    // retried, not verified, so fold-on-no-answer keeps the clock as before
+    const ownActuator = isCp() || isCgg();
+    const uncertain = !ok && !ownActuator && pressUncertain(p0, threw !== null);
     if (uncertain) res = { ...res, uncertain: true };
+    const errored = !ok && threw !== null && ownActuator;
     const rec: Record<string, any> = { at: nowMs(), source, pick, plan, ok, result: res, hand: S.handNo, waitedS, key,
-                                       outcome: ok || uncertain ? "pending" : "refused" };
+                                       outcome: ok || uncertain ? "pending" : errored ? "error" : "refused" };
     S.study.lastExec = rec;
     // an ALLIN sized to the tree: what was pressed, recorded beside the press (only then — other records as before)
     const sized = plan.sized ? { as: res.as ?? null, typed: res.typed ?? null, why: res.why ?? res.sizedPress ?? res.reason ?? null } : null;
-    AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null,
+    AUTO.notePress(key, { pick, source, ok: ok || uncertain, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null,
                           ...(sized ? { sized } : {}) });
     const wk = keyFromRelay(key);
     stepMark(wk, ok ? `Pressed ${String(pick ?? "").toUpperCase()}${source === "auto" ? " (auto)" : ""}`
@@ -1430,7 +1436,10 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   // buttons are still up — `executed` stood this rule aside for the rest of the turn and hero timed out (sit-out risk)
   // while the panel showed the pick as executed. Then it is an unplayed answer like any other: checked / folded at
   // the clock rule's moment, never earlier.
-  const unregistered = !!(ready && ready.key && st.executed === ready.key && st.lastExec?.key === ready.key && st.lastExec.outcome === "unknown");
+  // …and an UNCERTAIN press the verifier gave up on (a client notice came up while it waited): if hero is still on the
+  // clock here, its click never landed
+  const unregistered = !!(ready && ready.key && st.executed === ready.key && st.lastExec?.key === ready.key
+    && (st.lastExec.outcome === "unknown" || (st.lastExec.outcome === "abandoned" && st.lastExec.result?.uncertain === true)));
   if (ready && !ready.ok && ready.key && st.executed === ready.key && !unregistered) return;
   const why = ready && (ready.ok || unregistered) ? unplayedAnswerWhy(ready.key ?? null, age) : noAnswerFoldWhy(age);
   if (!why) return;
@@ -1441,11 +1450,21 @@ export async function maybeFoldNoAnswer(): Promise<void> {
   // THE CAPTURE'S HAND MUST BE THE ONE ON OUR TABLE (holeCardsRefusal): a no-answer fold that followed another
   // table's hand folded 9♠9♣ on this one (2026-09-25)
   const guard: ActOpts = { cards: h.heroCards ?? null };
+  // A FAILED PRESS HERE IS A RESULT TOO, and a CHECK whose click went out is never followed by a FOLD click (2026-10-13):
+  // input into a page that is not drawing is queued, so both would land
+  const tryAct = async (label: string): Promise<Record<string, any>> => {
+    try {
+      return await actuate({ kind: "action", label }, guard);
+    } catch (e: any) {
+      return { ok: false, reason: `the press failed: ${e?.message ?? e}` };
+    }
+  };
   let did = "check";
-  let res = await actuate({ kind: "action", label: "check" }, guard);
-  if (!res.ok && !res.wrongHand) {
+  const p0 = { ...pressMark };
+  let res = await tryAct("check");
+  if (!res.ok && !res.wrongHand && pressMark.actionClicks === p0.actionClicks) {
     did = "fold";
-    res = await actuate({ kind: "action", label: "fold" }, guard);
+    res = await tryAct("fold");
   }
   const ok = !!res.ok;
   const rec = { at: nowMs(), hand: S.handNo, clientHandId: S.handIds.get(S.handNo) ?? null, street: h.street ?? null,
