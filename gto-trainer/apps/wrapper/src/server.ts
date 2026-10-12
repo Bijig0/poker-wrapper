@@ -35,6 +35,7 @@ import { tableState } from "./ignition/reader";
 import { recFrame, recLog, recordings, saveNote, setDebug } from "./ignition/recorder";
 import { act, executePick, raiseTo, requestSolve, setAuto, setAutoBudget } from "./relay";
 import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
+import { noteAnswerArrived, noteSolveSteps } from "./steps";
 import { peerLeaving } from "./stackReset";
 import * as SESSION from "./session";
 import { buildAll, buildReply, relaunch } from "./build";
@@ -662,7 +663,14 @@ export function buildApp(): Hono {
         rate: typeof ch.session.rate === "number" ? ch.session.rate : null };
     }
     st.at = time();
+    // LIVE STEPS (2026-10-12): the answer's first push for a decision goes on the decision's trail
+    if (live) noteAnswerArrived(st.handId, st.decisionKey, st.pick, b.source, b.tier);
     return json(200, { ok: true });
+  });
+  // LIVE STEPS (2026-10-12, steps.ts): the API's solve steps for one decision, pushed as each one starts and ends
+  app.post("/panel/steps", async (c) => {
+    const b: any = await body(c, Body.panelSteps);
+    return json(200, noteSolveSteps(b));
   });
   // is this wrapper — and the API and chart server beside it — running the code on disk (src/build.ts)
   app.get("/build", async (c) => json(200, await buildReply(queryOf(c).includes("force=1"))));

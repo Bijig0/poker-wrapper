@@ -1206,6 +1206,9 @@ function tableCard(st: Record<string, any>, slotN: number, port: number, me: boo
     // "off") and few words, so the leader's grid says "table 2: reseating"; null when there is nothing to say
     stackReset: st.stackReset?.banner?.phase ?? null,
     stackResetText: st.stackReset?.banner?.short ?? null,
+    // LIVE STEPS (2026-10-12, steps.ts): what this table is doing right now, so the grid reads "GTO Wizard solving… 6 s"
+    step: st.steps?.current ?? null,
+    stepsNow: st.steps?.now ?? null,
   };
 }
 

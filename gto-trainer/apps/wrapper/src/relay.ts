@@ -23,6 +23,7 @@ import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
 import * as AUTO from "./autoLog";
 import { adjustBudget, budgetState, startCounting, stopCounting } from "./autoBudget";
+import { keyFromRelay, msSinceMark, stepMark, stepMarkRelay } from "./steps";
 
 export const STUDY_ANSWER_TTL_MS = 3000;
 const PICK_TTL_S = STUDY_ANSWER_TTL_MS / 1000;
@@ -828,6 +829,11 @@ export function verifyDone(outcome: string, why: string | null, observed: Record
   const rec = S.study.lastExec;
   if (rec && typeof rec === "object" && rec.key === p.key) Object.assign(rec, { outcome, outcomeWhy: why, observed, attempts: p.attempts ?? null });
   AUTO.noteOutcome(p.key, outcome, why, observed?.did ?? null);
+  const took = p.sentAt ? Math.round((time() - p.sentAt) * 1000) : null;
+  const P = String(p.pick ?? "").toUpperCase();
+  stepMarkRelay(p.key, outcome === "confirmed" ? `✓ ${P} landed on the table`
+    : outcome === "diverged" ? `⚠ ${P} pressed — the table took ${pyStr(why)}`
+    : `⚠ ${P} pressed — never showed on the table (${pyStr(why)})`, outcome === "confirmed" ? "ok" : "bad", took);
   if (outcome === "diverged") feedAdd(`Study pick MIS-EXECUTED — told ${pyStr(p.pick ?? null)}, the table took ${pyStr(why)}`);
   else if (outcome === "unknown") feedAdd(`Study pick UNCONFIRMED — ${pyStr(p.pick ?? null)} was sent, the table never showed it (${pyStr(why)})`);
   else if (outcome === "abandoned") feedAdd(`Study pick unverified — ${pyStr(p.pick ?? null)}: ${pyStr(why)}`);
@@ -917,6 +923,9 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const sized = plan.sized ? { as: res.as ?? null, typed: res.typed ?? null, why: res.why ?? res.sizedPress ?? res.reason ?? null } : null;
     AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null,
                           ...(sized ? { sized } : {}) });
+    const wk = keyFromRelay(key);
+    stepMark(wk, ok ? `Pressed ${String(pick ?? "").toUpperCase()}${source === "auto" ? " (auto)" : ""}`
+                    : `${String(pick ?? "").toUpperCase()} refused: ${pyStr(res.reason ?? "refused")}`, ok ? "info" : "warn", msSinceMark(wk, "Answer: "));
     if (ok) {
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
@@ -1156,6 +1165,7 @@ export async function maybeAutoAct(): Promise<void> {
       st.autoHeld = { key: r.key, why: holdWhy, at: time() };
       feedAdd(`Auto-execute held — ${holdWhy}`);
       AUTO.noteHeld(r.key, holdWhy, r.pick ?? null);
+      stepMarkRelay(r.key, `Held: ${holdWhy}`, "warn");
       if (S.session.id) S.sessions.event(S.session.id, "study-auto-held", { why: holdWhy, hand: S.handNo, pick: r.pick });
     }
     st.autoDue = null;
@@ -1167,6 +1177,7 @@ export async function maybeAutoAct(): Promise<void> {
     st.autoHeld = null;
     heldS = time() - was.at;
     AUTO.noteResumed(r.key, heldS);
+    stepMarkRelay(r.key, "Hold cleared", "info", Math.round(heldS * 1000));
     feedAdd(`Auto-execute resumed — ${String(was.why).replaceAll("line uncertain — ", "")} cleared after ${fmtFixed(time() - was.at, 1)} s`);
     if (S.session.id) {
       S.sessions.event(S.session.id, "study-auto-resumed", { why: was.why, heldS: pyRound(time() - was.at, 1), hand: S.handNo, pick: r.pick });
@@ -1369,6 +1380,7 @@ export async function maybeFoldNoAnswer(): Promise<void> {
                 reason: ok ? null : res.reason ?? null };
   st.lastNoAnswerFold = rec;
   AUTO.noteNoAnswer(ready && ready.ok && ready.key ? ready.key : key, did, ok, why);
+  stepMark(key, ok ? `No answer in time — ${did.toUpperCase()} (${why})` : `No answer in time — ${did.toUpperCase()} could not be pressed (${pyStr(res.reason ?? null)})`, "bad");
   feedAdd(ok ? `No answer — ${did.toUpperCase()} (fold on no-answer): ${why}`
              : `No answer — fold on no-answer could not act (${pyStr(res.reason ?? null)}): ${why}`);
   if (S.session.id) S.sessions.event(S.session.id, "no-answer-fold", rec);
@@ -1395,6 +1407,7 @@ export async function maybeTakeTime(): Promise<Record<string, any> | null> {
   const ok = !!res.ok;
   if (ok) st.timeBankDecision = decision;
   st.lastTimeBank = { at: nowMs(), label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null };
+  if (h) stepMark(decision, ok ? `Time bank ${label} pressed` : `Time bank ${label} not pressed`, ok ? "info" : "warn");
   feedAdd(ok ? `Time bank ${label} pressed (the client starts it when the clock reaches 0)`
              : `Time bank ${label} NOT pressed — ${"reason" in res ? pyStr(res.reason) : "refused"}`);
   if (S.session.id) S.sessions.event(S.session.id, "time-bank", { label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null });
