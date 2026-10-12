@@ -608,7 +608,8 @@ export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): P
     const auto = S.study.execSource === "auto";
     // the actuator keeps its own practice-only check; it lets an auto press through on real money only when we
     // vouch for a LIVE bounded allowance (checked here, at press time — not when it was armed)
-    return CP.actuate(plan, { auto, allowReal: auto && !!S.study.autoAllowReal && autoAllowance().live });
+    const b = autoAllowance();
+    return CP.actuate(plan, { auto, allowReal: auto && !!S.study.autoAllowReal && (!b.bounded || b.live) });
   }
   const g: ActOpts = guard.cards !== undefined ? { cards: guard.cards, strict: guard.strict } : {};
   if (plan.sized) return actuateSizedAllIn(plan, g);
@@ -984,7 +985,7 @@ export function autoTableOk(): [boolean, string | null] {
   if (isCgg()) return [false, "auto-execute is not available on ClubGG (the reader only)"];
   if (S.fakeMode) return [true, null];
   const b = autoAllowance();
-  if (!b.live) {
+  if (b.bounded && !b.live) {
     const why = `auto-execute budget spent (${pyStr(b.minutes)} min / ${pyStr(b.hands)} hands) — Adjust it on the panel to go on`;
     if (S.study.auto) disarmAuto("budget-spent", `Auto-execute OFF — its budget is spent (${pyStr(b.minutesUsed)} min / ${pyStr(b.handsUsed)} hands used). Adjust it on the panel to go on`);
     return [false, why];
@@ -1037,7 +1038,7 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
   }
   if (hasBudget) adjustBudget({ minutes: opts.minutes, hands: opts.hands });
   const b = autoAllowance();
-  if (!S.fakeMode && !b.live) {
+  if (b.bounded && !b.live) {
     if (st.auto) disarmAuto("budget-spent", "Auto-execute OFF — its budget is spent. Adjust it on the panel to go on");
     return { ok: false, auto: false, error: `auto-execute budget spent (${pyStr(b.minutesUsed)} min / ${pyStr(b.handsUsed)} hands used) — Adjust it first`,
              allowance: b };
@@ -1052,7 +1053,7 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
       S.sessions.event(S.session.id, "study-auto", { on: true, hand: S.handNo, practice, realMoney: !practice, delay: st.autoDelay ?? null,
                                                     reason: opts.reason ?? null, budget: left, by });
     }
-    const bud = S.fakeMode ? "" : ` — budget ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left`;
+    const bud = !left.bounded ? "" : ` — budget ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left`;
     feedAdd(`Auto-execute ON${practice ? "" : " — REAL MONEY"}${bud}`);
   }
   log(`[pick] auto ON (${practice ? "practice" : "REAL MONEY"}, ${pyStr(st.autoDelay ?? null)}, ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left)`);
@@ -1075,7 +1076,8 @@ export function maybeAutoArm(): void {
   const st = S.study;
   if (!(st.on && st.autoDeclared && !st.auto)) return;
   if (isCgg() || st.onDemand) return;
-  if (!S.fakeMode && !autoAllowance().live) return;
+  const b = autoAllowance();
+  if (b.bounded && !b.live) return;
   const res = setAuto(true, { allowReal: true, by: { via: "session setup (declared) — armed when a table appeared" } });
   if (res.ok) feedAdd("Auto-execute armed (declared at session setup)");
 }

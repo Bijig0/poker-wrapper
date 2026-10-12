@@ -2,7 +2,9 @@
  * THE AUTO-EXECUTE BUDGET (Brady, 2026-10-12): one budget per session per table, set at session setup, shown on the
  * panel and changed there by Adjust. It replaces the real-money "test allowance" (granted per arming, thrown away on
  * every untick, practice unbounded).
- *   - practice AND real money are both bounded; the fake table is not (the test rig and the stress harnesses);
+ *   - practice AND real money are both bounded; the fake table is not (the test rig and the stress harnesses), nor
+ *     is a process no session config reached (no budget set: unit tests, golden replays) — that reads exactly as
+ *     the old ungranted allowance did, so the recorded /state goldens hold;
  *   - minutes count only WHILE AUTO IS ON, hands are the hands dealt while it is on;
  *   - unticking keeps what is left — ticking again continues it; spent → auto disarms (relay.autoTableOk) and
  *     cannot arm again until Adjust gives it more;
@@ -60,11 +62,12 @@ function used(): { s: number; hands: number } {
            hands: (st.autoUsedHands || 0) + (armed ? Math.max(0, S.handNo - (st.autoArmedHand ?? S.handNo)) : 0) };
 }
 
-/** The budget's state, as the panel shows it. The fake table is unbounded (granted false, as the allowance was). */
+/** The budget's state, as the panel shows it. Unbounded (the fake table, or no session budget set) reads exactly as
+ *  the old ungranted allowance: {granted: false, live: false, minutesLeft: null, handsLeft: null} — no `bounded`. */
 export function budgetState(): Record<string, any> {
-  if (S.fakeMode) return { granted: false, live: false, bounded: false, minutesLeft: null, handsLeft: null };
   const st = S.study;
-  const b = st.autoBudget ?? BUDGET_DEFAULT;
+  if (S.fakeMode || !st.autoBudget) return { granted: false, live: false, minutesLeft: null, handsLeft: null };
+  const b = st.autoBudget;
   const u = used();
   const sLeft = Math.max(0, b.minutes * 60 - u.s);
   const handsLeft = Math.max(0, b.hands - u.hands);

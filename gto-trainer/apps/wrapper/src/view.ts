@@ -118,7 +118,6 @@ async function stateInner(light = false): Promise<Record<string, any>> {
     ...((r) => (r ? { panelAnswerRef: r } : {}))(answerRef()),
     practice: !!(S.fakeMode || L.practice),
     studyAuto: !!st.auto,
-    studyAutoReal: !!st.autoAllowReal,
     studyAutoDelay: st.autoDelay || "instant",
     studyTimeBank: !!st.timeBank,
     studyTopUp: !!st.topUp,
